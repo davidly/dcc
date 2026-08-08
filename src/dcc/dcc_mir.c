@@ -6391,7 +6391,8 @@ static void mir_allocate_registers(const unsigned char *live_in,
                                    const unsigned char *live_out,
                                    struct MirAllocationSummary *summary,
                                    int allow_wide_colors,
-                                   const unsigned char *rematerializable)
+                                   const unsigned char *rematerializable,
+                                   int prioritize_wide)
 {
     int value_count = mir.next_value;
     unsigned char *interference;
@@ -6510,9 +6511,21 @@ static void mir_allocate_registers(const unsigned char *live_in,
         for (candidate = i + 1; candidate < value_count; ++candidate) {
             int left = order[best];
             int right = order[candidate];
+            const struct MirInsn *left_definition =
+                prioritize_wide ? mir_definition(left) : NULL;
+            const struct MirInsn *right_definition =
+                prioritize_wide ? mir_definition(right) : NULL;
+            int left_wide =
+                left_definition != NULL &&
+                type_size(left_definition->type) == 4;
+            int right_wide =
+                right_definition != NULL &&
+                type_size(right_definition->type) == 4;
             if (cross_call[right] > cross_call[left] ||
                 (cross_call[right] == cross_call[left] &&
-                 degree[right] > degree[left]))
+                 (right_wide > left_wide ||
+                  (right_wide == left_wide &&
+                   degree[right] > degree[left]))))
                 best = candidate;
         }
         if (best != i) {
@@ -6803,7 +6816,7 @@ int mir_begin_lazy_parameter_allocation(void)
     mir_lazy_saved_operand_moves = mir.allocation_operand_moves;
     mir_lazy_saved_phi_moves = mir.allocation_phi_moves;
     mir_lazy_allocation_active = 1;
-    mir_allocate_registers(mir.live_in, mir.live_out, &summary, 0, NULL);
+    mir_allocate_registers(mir.live_in, mir.live_out, &summary, 0, NULL, 0);
     return 1;
 }
 
@@ -6889,6 +6902,10 @@ int mir_rematerialized_home_allocation_is_active(void)
  * wide values crossing calls still spill because neither pair is wholly
  * callee-saved.
  *
+ * A bounded hybrid candidate may retain one wide spill alongside
+ * narrow spills. The homed emitter owns width-aware slots and PHI copies;
+ * larger spill sets still fall back to the universal spilled backend.
+ *
  * mir.allocation_colors/allocation_spills/allocation_spill_count are
  * shared, per-function state that other selectors later in the same
  * dispatch chain read if mir_try_emit_homed_scalar_cfg ultimately
@@ -6897,7 +6914,7 @@ int mir_rematerialized_home_allocation_is_active(void)
  * original width-blind coloring exactly, not leave the wide attempt's
  * side effects behind. */
 int mir_probe_wide_colors_for_homed(
-    const unsigned char *rematerializable)
+    const unsigned char *rematerializable, int bounded_hybrid)
 {
     int value_count = mir.next_value;
     int *saved_colors;
@@ -6925,18 +6942,30 @@ int mir_probe_wide_colors_for_homed(
     saved_spill_count = mir.allocation_spill_count;
 
     mir_allocate_registers(mir.live_in, mir.live_out, &summary, 1,
-                           rematerializable);
+                           rematerializable, bounded_hybrid);
 
-    for (value = 0; value < value_count; ++value)
-        if (mir.allocation_spills[value] >= 0) {
-            const struct MirInsn *definition = mir_definition(value);
-            if (definition != NULL && type_size(definition->type) <= 2)
-                ++narrow_spills;
-            else
-                ++wide_spills;
-        }
-    ok = summary.spills == 0;
-    if (summary.spills != 0 && getenv("DCC_MIR_HOMED_REPORT") != NULL)
+    for (value = 0; value < mir.allocation_spill_count; ++value) {
+        int member;
+        int width = 0;
+
+        for (member = 0; member < value_count; ++member)
+            if (mir.allocation_spills[member] == value) {
+                const struct MirInsn *definition = mir_definition(member);
+                int member_width =
+                    definition != NULL ? type_size(definition->type) : 0;
+                if (member_width > width)
+                    width = member_width;
+            }
+        if (width <= 2)
+            ++narrow_spills;
+        else
+            ++wide_spills;
+    }
+    ok = bounded_hybrid
+             ? mir.allocation_spill_count <= 4 && wide_spills <= 1
+             : summary.spills == 0;
+    if (mir.allocation_spill_count != 0 &&
+        getenv("DCC_MIR_HOMED_REPORT") != NULL)
     {
         fprintf(stderr,
                 "; MIR homed-wide-color function=%s narrow-spills=%d "
@@ -7112,7 +7141,7 @@ int mir_verify_and_dump(void)
         }
     } while (changed);
 
-    mir_allocate_registers(live_in, live_out, &allocation, 0, NULL);
+    mir_allocate_registers(live_in, live_out, &allocation, 0, NULL, 0);
 
     if (getenv("DCC_MIR_ALLOCATION_REPORT") != NULL)
         fprintf(stderr,

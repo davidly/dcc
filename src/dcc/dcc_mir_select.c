@@ -2960,6 +2960,8 @@ void mir_end_function(void)
             int measured_boolean_candidate = 0;
             int rematerialized_home_retry_attempted = 0;
             int rematerialized_home_allocation_active = 0;
+            int hybrid_homed_retry_attempted = 0;
+            int hybrid_homed_candidate = 0;
             int address_rematerialization_retry_attempted = 0;
             int address_rematerialization_active = 0;
             int block_cse_address_rematerialization_active = 0;
@@ -2979,6 +2981,8 @@ retry_selection:
                 rematerialized_home_allocation_active = 0;
             }
             rematerialized_home_retry_attempted = 0;
+            hybrid_homed_retry_attempted = 0;
+            hybrid_homed_candidate = 0;
             address_rematerialization_retry_attempted = 0;
             lazy_retry_attempted = 0;
             lazy_allocation_active = 0;
@@ -4378,6 +4382,39 @@ evaluate_generated:
                     mir_end_strict_phi_fallthrough();
                     strict_phi_fallthrough_active = 0;
                 }
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "boolean-phi-cost") &&
+                    !hybrid_homed_retry_attempted &&
+                    !g_speculative_codegen_active) {
+                    FILE *hybrid_candidate = tmpfile();
+                    int hybrid_emitted;
+
+                    hybrid_homed_retry_attempted = 1;
+                    if (hybrid_candidate == NULL)
+                        fatal("cannot create MIR hybrid-home candidate "
+                              "stream");
+                    mir_begin_hybrid_homed_selection();
+                    label_id = mir_label_base;
+                    hybrid_emitted = mir_try_selector(
+                        hybrid_candidate, mir_try_emit_homed_scalar_cfg);
+                    mir_end_hybrid_homed_selection();
+                    if (hybrid_emitted) {
+                        fclose(generated);
+                        generated = hybrid_candidate;
+                        hybrid_candidate = NULL;
+                        selector_name = "hybrid-homed-scalar-cfg";
+                        emitted = 1;
+                        hybrid_homed_candidate = 1;
+                        generated_label_id_after = label_id;
+                        fallback_reason = NULL;
+                        goto evaluate_generated;
+                    }
+                    fclose(hybrid_candidate);
+                }
+                if (fallback_reason != NULL &&
+                    hybrid_homed_candidate &&
+                    !strcmp(fallback_reason, "boolean-phi-cost"))
+                    fallback_reason = NULL;
                 if (fallback_reason != NULL &&
                     !phi_return_forwarding_retry_attempted &&
                     mir_cfg_block_count() <= 10 &&

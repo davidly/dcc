@@ -316,6 +316,7 @@ int mir_strict_phi_fallthrough_was_used(void);
 int mir_emit_constant_to_home(FILE *out, int value, long immediate);
 int mir_emit_hl_to_home(FILE *out, int value);
 int mir_home_spill_offset(int value, int *offset);
+int mir_home_spill_bytes(void);
 void mir_extrn_begin_attempt(void);
 int mir_extrn_should_emit(struct Sym *sym);
 int mir_extrn_should_emit_name(const char *name);
@@ -425,8 +426,10 @@ int mir_lazy_parameter_count(void);
 int mir_lazy_byte_parameter_count(void);
 int mir_lazy_parameter_offset(int value, int *offset, int *type);
 int mir_probe_wide_colors_for_homed(
-    const unsigned char *rematerializable);
+    const unsigned char *rematerializable, int bounded_hybrid);
 int mir_homed_rematerializable_wide_candidate_count(void);
+void mir_begin_hybrid_homed_selection(void);
+void mir_end_hybrid_homed_selection(void);
 void mir_resolve_deferred_metadata(void);
 int mir_extended_integer_constant_conversion_folds(void);
 int mir_scalar_memory_location(const struct MirInsn *insn, int *type,

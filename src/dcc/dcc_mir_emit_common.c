@@ -801,9 +801,43 @@ int mir_homed_string_call_argument(int value)
     return uses == 1;
 }
 
+static int mir_home_spill_width(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    return definition != NULL && type_size(definition->type) == 4 ? 4 : 2;
+}
+
+static int mir_home_spill_slot_width(int spill)
+{
+    int value;
+    int width = 0;
+
+    for (value = 0; value < mir.next_value; ++value)
+        if (mir.allocation_spills[value] == spill &&
+            mir_home_spill_width(value) > width)
+            width = mir_home_spill_width(value);
+    return width;
+}
+
+int mir_home_spill_bytes(void)
+{
+    int bytes = 0;
+    int spill;
+
+    for (spill = 0; spill < mir.allocation_spill_count; ++spill) {
+        int width = mir_home_spill_slot_width(spill);
+        if (width != 0)
+            bytes += width;
+    }
+    return bytes;
+}
+
 int mir_home_spill_offset(int value, int *offset)
 {
     int spill;
+    int bytes;
+    int current;
 
     if (value < 0 || value >= mir.next_value ||
         mir.allocation_spills == NULL)
@@ -811,8 +845,15 @@ int mir_home_spill_offset(int value, int *offset)
     spill = mir.allocation_spills[value];
     if (spill < 0)
         return 0;
+    bytes = mir_effective_local_bytes();
+    for (current = 0; current <= spill; ++current) {
+        int width = mir_home_spill_slot_width(current);
+        if (width == 0)
+            return 0;
+        bytes += width;
+    }
     if (offset != NULL)
-        *offset = -mir_effective_local_bytes() - 2 * (spill + 1);
+        *offset = -bytes;
     return 1;
 }
 
@@ -943,6 +984,8 @@ int mir_emit_hl_to_home(FILE *out, int value)
  * one representation and cannot drift independently. */
 int mir_emit_wide_home_to_hl_de(FILE *out, int value)
 {
+    int offset;
+
     if (mir_is_lazy_parameter(value))
         return mir_emit_lazy_wide_parameter_to_hl_de(out, value);
     switch (mir.allocation_colors[value]) {
@@ -950,23 +993,41 @@ int mir_emit_wide_home_to_hl_de(FILE *out, int value)
     case MIR_COLOR_BC_IY:
         fputs("\tld l,c\n\tld h,b\n\tpush iy\n\tpop de\n", out);
         return 1;
-    default: return 0;
+    default:
+        if (!mir_home_spill_offset(value, &offset))
+            return 0;
+        fprintf(out,
+                "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+                "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+                offset, offset + 1, offset + 2, offset + 3);
+        return 1;
     }
 }
 
 int mir_emit_hl_de_to_wide_home(FILE *out, int value)
 {
+    int offset;
+
     switch (mir.allocation_colors[value]) {
     case MIR_COLOR_HL_DE: return 1;
     case MIR_COLOR_BC_IY:
         fputs("\tld c,l\n\tld b,h\n\tpush de\n\tpop iy\n", out);
         return 1;
-    default: return 0;
+    default:
+        if (!mir_home_spill_offset(value, &offset))
+            return 0;
+        fprintf(out,
+                "\tld (ix%+d),l\n\tld (ix%+d),h\n"
+                "\tld (ix%+d),e\n\tld (ix%+d),d\n",
+                offset, offset + 1, offset + 2, offset + 3);
+        return 1;
     }
 }
 
 int mir_emit_wide_home_to_stack(FILE *out, int value)
 {
+    int offset;
+
     if (mir_is_lazy_parameter(value))
         return mir_emit_lazy_wide_parameter_to_stack(out, value);
     switch (mir.allocation_colors[value]) {
@@ -976,7 +1037,16 @@ int mir_emit_wide_home_to_stack(FILE *out, int value)
     case MIR_COLOR_BC_IY:
         fputs("\tpush iy\n\tpush bc\n", out);
         return 1;
-    default: return 0;
+    default:
+        if (!mir_home_spill_offset(value, &offset))
+            return 0;
+        fputs("\texx\n", out);
+        fprintf(out,
+                "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
+                "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n",
+                offset + 2, offset + 3, offset, offset + 1);
+        fputs("\texx\n", out);
+        return 1;
     }
 }
 
@@ -1358,6 +1428,11 @@ int mir_emit_byte_param_to_home(FILE *out, int value, int offset, int type)
 
 static int mir_emit_push_home(FILE *out, int value)
 {
+    const struct MirInsn *definition = mir_definition(value);
+    int offset;
+
+    if (definition != NULL && type_size(definition->type) == 4)
+        return mir_emit_wide_home_to_stack(out, value);
     if (mir_is_lazy_parameter(value)) {
         fputs("\tpush hl\n", out);
         if (!mir_emit_lazy_parameter_to_color(out, value, MIR_COLOR_HL))
@@ -1370,19 +1445,72 @@ static int mir_emit_push_home(FILE *out, int value)
     case MIR_COLOR_DE: fputs("\tpush de\n", out); return 1;
     case MIR_COLOR_BC: fputs("\tpush bc\n", out); return 1;
     case MIR_COLOR_IY: fputs("\tpush iy\n", out); return 1;
-    default: return 0;
+    default:
+        if (!mir_home_spill_offset(value, &offset))
+            return 0;
+        fputs("\texx\n", out);
+        fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n",
+                offset, offset + 1);
+        fputs("\texx\n", out);
+        return 1;
     }
 }
 
 static int mir_emit_pop_home(FILE *out, int value)
 {
+    const struct MirInsn *definition = mir_definition(value);
+    int offset;
+
+    if (definition != NULL && type_size(definition->type) == 4) {
+        switch (mir.allocation_colors[value]) {
+        case MIR_COLOR_HL_DE:
+            fputs("\tpop hl\n\tpop de\n", out);
+            return 1;
+        case MIR_COLOR_BC_IY:
+            fputs("\tpop bc\n\tpop iy\n", out);
+            return 1;
+        default:
+            if (!mir_home_spill_offset(value, &offset))
+                return 0;
+            fputs("\texx\n", out);
+            fprintf(out,
+                    "\tpop hl\n\tld (ix%+d),l\n\tld (ix%+d),h\n"
+                    "\tpop hl\n\tld (ix%+d),l\n\tld (ix%+d),h\n",
+                    offset, offset + 1, offset + 2, offset + 3);
+            fputs("\texx\n", out);
+            return 1;
+        }
+    }
     switch (mir.allocation_colors[value]) {
     case MIR_COLOR_HL: fputs("\tpop hl\n", out); return 1;
     case MIR_COLOR_DE: fputs("\tpop de\n", out); return 1;
     case MIR_COLOR_BC: fputs("\tpop bc\n", out); return 1;
     case MIR_COLOR_IY: fputs("\tpop iy\n", out); return 1;
-    default: return 0;
+    default:
+        if (!mir_home_spill_offset(value, &offset))
+            return 0;
+        fputs("\texx\n", out);
+        fprintf(out, "\tpop hl\n\tld (ix%+d),l\n\tld (ix%+d),h\n",
+                offset, offset + 1);
+        fputs("\texx\n", out);
+        return 1;
     }
+}
+
+static int mir_homed_values_share_home(int left, int right)
+{
+    int left_spill;
+    int right_spill;
+
+    if (mir.allocation_colors[left] >= 0 ||
+        mir.allocation_colors[right] >= 0)
+        return mir.allocation_colors[left] == mir.allocation_colors[right];
+    if (!mir_home_spill_offset(left, NULL) ||
+        !mir_home_spill_offset(right, NULL))
+        return 0;
+    left_spill = mir.allocation_spills[left];
+    right_spill = mir.allocation_spills[right];
+    return left_spill == right_spill;
 }
 
 int mir_phi_source_for_edge(const struct MirInsn *phi,
@@ -1440,7 +1568,7 @@ int mir_emit_homed_phi_copies(FILE *out, int predecessor,
                                          successor, instruction);
         if (source < 0)
             return 0;
-        if (mir.allocation_colors[source] != mir.allocation_colors[phi->dst]) {
+        if (!mir_homed_values_share_home(source, phi->dst)) {
             if (count >= 256)
                 return 0;
             sources[count] = source;
@@ -1721,7 +1849,7 @@ int mir_emit_stack_byte_param_to_home(FILE *out, int value, int offset,
 void mir_emit_home_prologue(FILE *out, int uses_iy)
 {
     int frame_bytes = mir_effective_local_bytes() +
-        2 * mir.allocation_spill_count;
+        mir_home_spill_bytes();
 
     if (uses_iy) {
         if (mir_iy_home_live_across_caller_clobber())

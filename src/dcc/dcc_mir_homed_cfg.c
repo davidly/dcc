@@ -16,6 +16,7 @@
 static int mir_homed_constant_absolute_access_supported(
     const struct MirInsn *insn);
 static int mir_homed_cfg_used_unary_not_branch;
+static int mir_hybrid_homed_selection;
 static int mir_homed_cfg_frameless;
 
 int mir_homed_cfg_depends_on_unary_not_branch(void)
@@ -204,7 +205,18 @@ static int mir_homed_byte_indirect_count(void)
             !mir_homed_constant_absolute_access_supported(insn))
             ++count;
     }
+
     return count;
+}
+
+void mir_begin_hybrid_homed_selection(void)
+{
+    mir_hybrid_homed_selection = 1;
+}
+
+void mir_end_hybrid_homed_selection(void)
+{
+    mir_hybrid_homed_selection = 0;
 }
 
 static int mir_homed_float_cast_supported(const struct MirInsn *insn)
@@ -233,6 +245,7 @@ static int mir_homed_float_cast_supported(const struct MirInsn *insn)
 static int mir_homed_wide_binary_supported(const struct MirInsn *insn)
 {
     long constant;
+    const struct MirInsn *right;
 
     if (insn->opcode != MIR_BINARY ||
         !mir_homed_wide_type_supported(insn->secondary_offset))
@@ -241,17 +254,23 @@ static int mir_homed_wide_binary_supported(const struct MirInsn *insn)
         return insn->immediate == TOK_EQ || insn->immediate == TOK_NE ||
                insn->immediate == '<' || insn->immediate == '>' ||
                insn->immediate == TOK_LE || insn->immediate == TOK_GE;
-    if (mir_cfg_block_count() != 1 ||
+    if ((!mir_hybrid_homed_selection &&
+         mir_cfg_block_count() != 1) ||
         !mir_homed_wide_type_supported(insn->type))
         return 0;
     if (type_is_float(insn->secondary_offset))
-        return type_is_float(insn->type) &&
+        return mir_cfg_block_count() == 1 &&
+               type_is_float(insn->type) &&
                (insn->immediate == '+' || insn->immediate == '-' ||
                 insn->immediate == '*' || insn->immediate == '/');
+    right = mir_definition(insn->src2);
     return type_is_long(insn->type) &&
            (insn->immediate == '+' || insn->immediate == '-' ||
             insn->immediate == '&' || insn->immediate == '|' ||
             insn->immediate == '^' ||
+            (mir_hybrid_homed_selection &&
+             insn->immediate == '*' && right != NULL &&
+             right->opcode == MIR_CONST) ||
             mir_homed_wide_constant_binary(insn, &constant));
 }
 
@@ -652,6 +671,77 @@ static int mir_emit_homed_wide_named_store(FILE *out,
     return 1;
 }
 
+static int mir_emit_homed_wide_frame_load(FILE *out,
+                                           const struct MirInsn *insn,
+                                           int offset)
+{
+    int instruction = (int)(insn - mir.insns);
+    int dst_color = mir.allocation_colors[insn->dst];
+    int preserve_hl_de =
+        dst_color != MIR_COLOR_HL_DE &&
+        mir_home_color_live_across(instruction, MIR_COLOR_HL_DE);
+    int preserve_bc_iy =
+        dst_color != MIR_COLOR_BC_IY &&
+        mir_home_color_live_across(instruction, MIR_COLOR_BC_IY);
+    int preserve_hl =
+        dst_color != MIR_COLOR_HL_DE &&
+        mir_home_color_live_across(instruction, MIR_COLOR_HL);
+    int preserve_de =
+        dst_color != MIR_COLOR_HL_DE &&
+        mir_home_color_live_across(instruction, MIR_COLOR_DE);
+
+    if (preserve_hl_de) fputs("\tpush de\n\tpush hl\n", out);
+    if (preserve_bc_iy) fputs("\tpush iy\n\tpush bc\n", out);
+    if (preserve_hl) fputs("\tpush hl\n", out);
+    if (preserve_de) fputs("\tpush de\n", out);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+            offset, offset + 1, offset + 2, offset + 3);
+    if (!mir_emit_hl_de_to_wide_home(out, insn->dst))
+        return 0;
+    if (preserve_de) fputs("\tpop de\n", out);
+    if (preserve_hl) fputs("\tpop hl\n", out);
+    if (preserve_bc_iy) fputs("\tpop bc\n\tpop iy\n", out);
+    if (preserve_hl_de) fputs("\tpop hl\n\tpop de\n", out);
+    return 1;
+}
+
+static int mir_emit_homed_wide_frame_store(FILE *out,
+                                            const struct MirInsn *insn,
+                                            int offset)
+{
+    int instruction = (int)(insn - mir.insns);
+    int preserve_hl_de =
+        mir_home_color_live_across(instruction, MIR_COLOR_HL_DE);
+    int preserve_bc_iy =
+        mir_home_color_live_across(instruction, MIR_COLOR_BC_IY);
+    int preserve_hl =
+        mir_home_color_live_across(instruction, MIR_COLOR_HL);
+    int preserve_de =
+        mir_home_color_live_across(instruction, MIR_COLOR_DE);
+    int preserve_bc =
+        mir_home_color_live_across(instruction, MIR_COLOR_BC);
+
+    if (preserve_hl_de) fputs("\tpush de\n\tpush hl\n", out);
+    if (preserve_bc_iy) fputs("\tpush iy\n\tpush bc\n", out);
+    if (preserve_hl) fputs("\tpush hl\n", out);
+    if (preserve_de) fputs("\tpush de\n", out);
+    if (preserve_bc) fputs("\tpush bc\n", out);
+    if (!mir_emit_wide_home_to_hl_de(out, insn->src1))
+        return 0;
+    fprintf(out,
+            "\tld (ix%+d),l\n\tld (ix%+d),h\n"
+            "\tld (ix%+d),e\n\tld (ix%+d),d\n",
+            offset, offset + 1, offset + 2, offset + 3);
+    if (preserve_bc) fputs("\tpop bc\n", out);
+    if (preserve_de) fputs("\tpop de\n", out);
+    if (preserve_hl) fputs("\tpop hl\n", out);
+    if (preserve_bc_iy) fputs("\tpop bc\n\tpop iy\n", out);
+    if (preserve_hl_de) fputs("\tpop hl\n\tpop de\n", out);
+    return 1;
+}
+
 static int mir_emit_homed_constant_absolute_load(
     FILE *out, const struct MirInsn *insn)
 {
@@ -779,11 +869,13 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
     int i;
     int value;
     int accepted = 0;
-    /* Wide integer values are retained only when the pair allocator finds a
-     * zero-spill assignment. This first two-pair slice remains single-block
-     * and helper-free; call clobbers and wide CFG copies are separate work. */
+    /* Ordinary homed selection retains the original zero-spill wide policy.
+     * The final boolean-cost hybrid retry may use one reusable wide slot. */
     int has_wide = 0;
     int wide_return = mir_homed_wide_type_supported(mir.return_type);
+    int *wide_saved_colors = NULL;
+    int *wide_saved_spills = NULL;
+    int wide_saved_spill_count = 0;
 
     mir_homed_cfg_frameless = 0;
     mir_homed_cfg_used_unary_not_branch = 0;
@@ -805,7 +897,11 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     mir.name, mir.return_type, type_size(mir.return_type));
         return mir_homed_reject("return-type");
     }
-    if (mir_homed_byte_indirect_count() > 0 &&
+    if (mir_hybrid_homed_selection &&
+        mir_homed_byte_indirect_count() == 0)
+        return mir_homed_reject("hybrid-shape");
+    if (!mir_hybrid_homed_selection &&
+        mir_homed_byte_indirect_count() > 0 &&
         (mir_cfg_block_count() > 1 || mir.count <= 20))
         return mir_homed_reject("byte-indirect-cost");
     if (mir.allocation_spill_count > 4)
@@ -813,14 +909,18 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
     for (value = 0; value < mir.next_value; ++value)
         if (mir_home_spill_offset(value, NULL)) {
             const struct MirInsn *definition = mir_definition(value);
-            if (definition == NULL || type_size(definition->type) > 2)
+            if (definition == NULL ||
+                (type_size(definition->type) != 1 &&
+                 type_size(definition->type) != 2 &&
+                 (!mir_hybrid_homed_selection ||
+                  !mir_homed_wide_type_supported(definition->type))))
                 return mir_homed_reject("spill-type");
         }
     /* Address-taken locals and the bounded scalar spill slot share the
      * IX-relative frame. Keep both within the selector's signed-byte
      * addressing range. */
     if (mir_effective_local_bytes() +
-            2 * mir.allocation_spill_count > 120)
+            mir_home_spill_bytes() > 120)
         return mir_homed_reject("frame-size");
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
@@ -863,15 +963,25 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             }
             has_wide = 1;
         }
-        if (insn->opcode == MIR_PHI &&
+        if (!mir_hybrid_homed_selection &&
+            insn->opcode == MIR_PHI &&
             (mir_home_spill_offset(insn->dst, NULL) ||
              mir_home_spill_offset(insn->src1, NULL) ||
              mir_home_spill_offset(insn->src2, NULL)))
             return mir_homed_reject("spill-phi");
         if (insn->dst >= 0 && mir.allocation_colors[insn->dst] < 0 &&
             !mir_home_spill_offset(insn->dst, NULL) &&
-            !mir_is_lazy_parameter(insn->dst))
+            !mir_is_lazy_parameter(insn->dst) &&
+            (!mir_hybrid_homed_selection ||
+             !mir_homed_value_is_rematerializable(insn->dst))) {
+            if (getenv("DCC_MIR_HOMED_REPORT") != NULL)
+                fprintf(stderr,
+                        "; MIR homed-uncolored function=%s instruction=%d "
+                        "value=%d opcode=%s type=%d\n",
+                        mir.name, i, insn->dst,
+                        mir_opcode_name(insn->opcode), insn->type);
             return mir_homed_reject("uncolored-value");
+        }
         switch (insn->opcode) {
         case MIR_NOP: case MIR_LABEL: case MIR_PARAM: case MIR_CONST:
         case MIR_FLOAT_CONST:
@@ -903,9 +1013,18 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                        mir_homed_wide_type_supported(source->type) &&
                        type_is_float(memory_type) ==
                            type_is_float(source->type) &&
-                       (memory_storage == SC_GLOBAL ||
-                        memory_storage == SC_EXTERN))))
+                       (mir_hybrid_homed_selection ||
+                        memory_storage == SC_GLOBAL ||
+                        memory_storage == SC_EXTERN)))) {
+                    if (getenv("DCC_MIR_HOMED_REPORT") != NULL)
+                        fprintf(stderr,
+                                "; MIR homed-store-width function=%s "
+                                "instruction=%d memory-type=%d source-type=%d "
+                                "storage=%d object=%d name=%s\n",
+                                mir.name, i, memory_type, source->type,
+                                memory_storage, insn->object, insn->name);
                     return mir_homed_reject("store-width");
+                }
                 if ((memory_storage == SC_LOCAL ||
                      memory_storage == SC_PARAM) &&
                     (memory_offset < -128 ||
@@ -1057,10 +1176,12 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                       mir_homed_wide_type_supported(insn->type) &&
                       type_is_float(memory_type) ==
                           type_is_float(insn->type) &&
-                      (memory_storage == SC_GLOBAL ||
+                      (mir_hybrid_homed_selection ||
+                       memory_storage == SC_GLOBAL ||
                        memory_storage == SC_EXTERN)))
                     return mir_homed_reject("load-width");
-                if (mir_general_comparison_count() > 1 &&
+                if (!mir_hybrid_homed_selection &&
+                    mir_general_comparison_count() > 1 &&
                     (mir_has_phi_instruction() ||
                      mir_cfg_block_count() > 18))
                     return mir_homed_reject("load-comparison-cfg");
@@ -1072,20 +1193,25 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                 int source_type = source != NULL ? source->type : 0;
                 int source_wide = type_size(source_type) == 4;
                 int target_wide = type_size(insn->type) == 4;
-                if ((source_wide || target_wide) &&
+                int unsupported_float =
+                    (type_is_float(source_type) ||
+                     type_is_float(insn->type)) &&
                     (mir_cfg_block_count() != 1 ||
-                     ((type_is_float(source_type) ||
-                        type_is_float(insn->type)) &&
-                       !mir_float_identity_unary(insn) &&
-                       !mir_homed_float_cast_supported(insn)) ||
-                     (insn->immediate != 0 &&
-                       !mir_float_identity_unary(insn) &&
-                       !(source_wide && target_wide &&
-                        (insn->immediate == '+' ||
-                         insn->immediate == '-' ||
-                         insn->immediate == '~')) &&
-                      !(source_wide && !target_wide &&
-                        insn->immediate == '!')))) {
+                     (!mir_float_identity_unary(insn) &&
+                      !mir_homed_float_cast_supported(insn)));
+                int unsupported_operation =
+                    insn->immediate != 0 &&
+                    !mir_float_identity_unary(insn) &&
+                    !(source_wide && target_wide &&
+                      (insn->immediate == '+' ||
+                       insn->immediate == '-' ||
+                       insn->immediate == '~')) &&
+                    !(source_wide && !target_wide &&
+                      insn->immediate == '!');
+                if ((source_wide || target_wide) &&
+                    ((!mir_hybrid_homed_selection &&
+                      mir_cfg_block_count() != 1) ||
+                     unsupported_float || unsupported_operation)) {
                     if (getenv("DCC_MIR_HOMED_REPORT") != NULL)
                         fprintf(stderr,
                                 "; MIR homed-wide-unary function=%s op=%ld "
@@ -1207,7 +1333,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
      * instructions before peephole optimization but increased shipping code
      * size and cycles. Keep that high-interaction class on the established
      * backend; smaller call/phi CFGs retain their existing measured wins. */
-    if (mir_homed_is_large_call_phi_cfg())
+    if (!mir_hybrid_homed_selection &&
+        mir_homed_is_large_call_phi_cfg())
         return mir_homed_reject("large-call-phi-cfg");
     /* Item 20d: a wide long return with no wide value at all (e.g. an
      * implicit-int-promoted narrow expression) still needs the probe, so
@@ -1216,6 +1343,17 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
         unsigned char *rematerializable = NULL;
         int wide_colors_ok;
 
+        wide_saved_colors = (int *)malloc(
+            (size_t)mir.next_value * sizeof(*wide_saved_colors));
+        wide_saved_spills = (int *)malloc(
+            (size_t)mir.next_value * sizeof(*wide_saved_spills));
+        if (wide_saved_colors == NULL || wide_saved_spills == NULL)
+            fatal("out of memory saving homed wide allocation");
+        memcpy(wide_saved_colors, mir.allocation_colors,
+               (size_t)mir.next_value * sizeof(*wide_saved_colors));
+        memcpy(wide_saved_spills, mir.allocation_spills,
+               (size_t)mir.next_value * sizeof(*wide_saved_spills));
+        wide_saved_spill_count = mir.allocation_spill_count;
         if (mir_rematerialized_home_allocation_is_active()) {
             rematerializable = (unsigned char *)calloc(
                 (size_t)mir.next_value, 1);
@@ -1226,10 +1364,14 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     (unsigned char)mir_homed_value_is_rematerializable(value);
         }
         wide_colors_ok =
-            mir_probe_wide_colors_for_homed(rematerializable);
+            mir_probe_wide_colors_for_homed(
+                rematerializable, mir_hybrid_homed_selection);
         free(rematerializable);
-        if (!wide_colors_ok)
+        if (!wide_colors_ok) {
+            free(wide_saved_colors);
+            free(wide_saved_spills);
             return mir_homed_reject("wide-color");
+        }
     }
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].dst >= 0 &&
@@ -1289,17 +1431,23 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                                                 &memory_offset))
                     goto done;
                 if (type_size(memory_type) == 4) {
-                    struct Sym *global = find_global(insn->name);
-                    const char *assembly_name = asm_name_for(
-                        global != NULL ? sym_asm_name(global)
-                                       : mir_declared_link_name(insn->name));
-                    if ((memory_storage == SC_EXTERN ||
-                         (global != NULL && global->needs_extrn)) &&
-                        mir_extrn_should_emit(global))
-                        fprintf(out, "\textrn %s\n", assembly_name);
-                    if (!mir_emit_homed_wide_named_store(
-                            out, insn, assembly_name))
-                        goto done;
+                    if (memory_storage == SC_LOCAL) {
+                        if (!mir_emit_homed_wide_frame_store(
+                                out, insn, memory_offset))
+                            goto done;
+                    } else {
+                        struct Sym *global = find_global(insn->name);
+                        const char *assembly_name = asm_name_for(
+                            global != NULL ? sym_asm_name(global)
+                                           : mir_declared_link_name(insn->name));
+                        if ((memory_storage == SC_EXTERN ||
+                             (global != NULL && global->needs_extrn)) &&
+                            mir_extrn_should_emit(global))
+                            fprintf(out, "\textrn %s\n", assembly_name);
+                        if (!mir_emit_homed_wide_named_store(
+                                out, insn, assembly_name))
+                            goto done;
+                    }
                     break;
                 }
                 memory_offset = mir_homed_frame_offset(
@@ -1353,17 +1501,26 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                                                 &memory_offset))
                     goto done;
                 if (type_size(memory_type) == 4) {
-                    struct Sym *global = find_global(insn->name);
-                    const char *assembly_name = asm_name_for(
-                        global != NULL ? sym_asm_name(global)
-                                       : mir_declared_link_name(insn->name));
-                    if ((memory_storage == SC_EXTERN ||
-                         (global != NULL && global->needs_extrn)) &&
-                        mir_extrn_should_emit(global))
-                        fprintf(out, "\textrn %s\n", assembly_name);
-                    if (!mir_emit_homed_wide_named_load(
-                            out, insn, assembly_name))
-                        goto done;
+                    memory_offset = mir_homed_frame_offset(
+                        memory_storage, memory_offset, uses_iy);
+                    if (memory_storage == SC_LOCAL ||
+                        memory_storage == SC_PARAM) {
+                        if (!mir_emit_homed_wide_frame_load(
+                                out, insn, memory_offset))
+                            goto done;
+                    } else {
+                        struct Sym *global = find_global(insn->name);
+                        const char *assembly_name = asm_name_for(
+                            global != NULL ? sym_asm_name(global)
+                                           : mir_declared_link_name(insn->name));
+                        if ((memory_storage == SC_EXTERN ||
+                             (global != NULL && global->needs_extrn)) &&
+                            mir_extrn_should_emit(global))
+                            fprintf(out, "\textrn %s\n", assembly_name);
+                        if (!mir_emit_homed_wide_named_load(
+                                out, insn, assembly_name))
+                            goto done;
+                    }
                     break;
                 }
                 memory_offset = mir_homed_frame_offset(
@@ -1528,8 +1685,17 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     if (preserve_de) fputs("\tpush de\n", out);
                     if (!mir_emit_home_push(out, insn->src1))
                         goto done;
-                    if (!mir_emit_home_to_hl(out, insn->src2))
-                        goto done;
+                    {
+                        const struct MirInsn *index =
+                            mir_definition(insn->src2);
+                        if (index != NULL && type_size(index->type) == 4) {
+                            if (!mir_emit_wide_home_to_hl_de(
+                                    out, insn->src2))
+                                goto done;
+                        } else if (!mir_emit_home_to_hl(out, insn->src2)) {
+                            goto done;
+                        }
+                    }
                     if (insn->immediate != 1)
                         mir_emit_mul_hl_const(
                             out, (unsigned long)insn->immediate & 0xffffUL);
@@ -1886,7 +2052,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                         goto done;
                     break;
                 }
-                if (mir_direct_branch_for_comparison(i) >= 0)
+                if (type_size(insn->secondary_offset) <= 2 &&
+                    mir_direct_branch_for_comparison(i) >= 0)
                     break;
                 if (mir_homed_constant_binary(insn, &operation, &count)) {
                     if (!mir_emit_homed_constant_binary_instruction(
@@ -1916,6 +2083,9 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                 goto done;
             {
                 int compare_index = mir_compare_definition_for_branch(i);
+                if (compare_index >= 0 &&
+                    type_size(mir.insns[compare_index].secondary_offset) > 2)
+                    compare_index = -1;
                 if (compare_index >= 0) {
                     int false_has_phi = mir_edge_phi_names_predecessor(i, target);
                     int true_has_phi = i + 1 < mir.count &&
@@ -2226,7 +2396,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             mir_emit_home_epilogue(out, uses_iy);
         }
     }
-    if (mir_homed_cfg_depends_on_word_store() &&
+    if (!mir_hybrid_homed_selection &&
+        mir_homed_cfg_depends_on_word_store() &&
         mir_stream_instruction_count(out) >
             mir_stream_instruction_count(mir.capture_stream) - 2 &&
         mir_stream_size(out) * 50L >
@@ -2239,15 +2410,32 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
         mir_stream_instruction_count(out) >
             mir_stream_instruction_count(mir.capture_stream) + 1)
         goto done;
-    if (mir.allocation_spill_count != 0 &&
-        (mir_cfg_block_count() > 4 ||
-         mir_stream_size(out) >= mir_stream_size(mir.capture_stream) ||
-         mir_stream_instruction_count(out) >
-             mir_stream_instruction_count(mir.capture_stream)))
+    if (mir_hybrid_homed_selection) {
+        long generated_size = mir_stream_size(out);
+        long captured_size = mir_stream_size(mir.capture_stream);
+
+        if (generated_size * 100L > captured_size * 105L)
+            goto done;
+    } else if (mir.allocation_spill_count != 0 &&
+               (mir_cfg_block_count() > 4 ||
+                mir_stream_size(out) >=
+                    mir_stream_size(mir.capture_stream) ||
+                mir_stream_instruction_count(out) >
+                    mir_stream_instruction_count(mir.capture_stream))) {
         goto done;
+    }
     mir_homed_cfg_frameless = frameless;
     accepted = 1;
 done:
+    if (!accepted && wide_saved_colors != NULL) {
+        memcpy(mir.allocation_colors, wide_saved_colors,
+               (size_t)mir.next_value * sizeof(*wide_saved_colors));
+        memcpy(mir.allocation_spills, wide_saved_spills,
+               (size_t)mir.next_value * sizeof(*wide_saved_spills));
+        mir.allocation_spill_count = wide_saved_spill_count;
+    }
+    free(wide_saved_colors);
+    free(wide_saved_spills);
     if (!accepted && getenv("DCC_MIR_SELECT_REPORT") != NULL)
         fprintf(stderr,
                 "; MIR home-cfg reject function=%s insn=%d opcode=%s "
