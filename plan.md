@@ -31,12 +31,12 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1992/2060 (96.70%)**
-- Current stack-check coverage: **2108/2179 (96.74%)**
-- HEAD (pending push): T471 admits seven full-mode-clean residual
-  `dynamic-index-base-cost` functions: **+7 ordinary/+8 stack-check**, zero
-  removals. Seven direct interpreter/resource shapes remain. See
-  `## Item T471` in
+- Current ordinary coverage: **2018/2060 (97.96%)**
+- Current stack-check coverage: **2136/2179 (98.03%)**
+- HEAD (pending push): T472 admits 26 full-mode-clean residual
+  `boolean-phi-cost` functions under per-translation-unit count/growth
+  budgets: **+26 ordinary/+28 stack-check**, zero removals. See
+  `## Item T472` in
   `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
@@ -200,6 +200,9 @@ transactional fallback remains in place throughout Phase 1.
   both peep modes together.
 - **T471 halves the dynamic-index residue.** Seven static/FINAL candidates
   pass both modes; seven individually confirmed failures remain.
+- **T472 crosses 98% stack-check coverage.** Individual full-mode
+  classification plus a three-function/8-KiB module budget admits 26 boolean
+  functions without interpreter layout exhaustion.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

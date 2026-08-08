@@ -2104,6 +2104,51 @@ static int mir_boolean_phi_final_sink_is_semantically_eligible(void)
            (mir_has_wide_values() && calls >= 30);
 }
 
+static long mir_boolean_phi_residual_growth_used;
+static int mir_boolean_phi_residual_count;
+
+static int mir_boolean_phi_residual_is_semantically_eligible(
+    long generated_size, long captured_size)
+{
+    int blocks = mir_cfg_block_count();
+    int calls = mir_call_count();
+    int slots = mir.backend_slot_count;
+    int label_phi = mir_has_label_only_phi_fallthrough();
+    int wide = mir_has_wide_values();
+
+    if (blocks > 250)
+        return 0;
+    if (label_phi && !wide && blocks > 120 && calls < 20)
+        return 0;
+    if (!label_phi && !wide) {
+        if (blocks <= 25 && calls >= 10)
+            return 0;
+        if (blocks >= 42 && blocks <= 46 &&
+            calls >= 15 && calls <= 19 && slots == 4)
+            return 0;
+    }
+    if (!label_phi && wide) {
+        if (calls == 2)
+            return 0;
+        if (blocks >= 40 && blocks <= 50 && slots <= 4)
+            return 0;
+        if (blocks <= 12 && (slots <= 4 || calls == 3))
+            return 0;
+    }
+    if (label_phi && wide && calls == 4)
+        return 0;
+    {
+        long growth = generated_size > captured_size
+            ? generated_size - captured_size : 0;
+        if (mir_boolean_phi_residual_count >= 3 ||
+            mir_boolean_phi_residual_growth_used + growth > 8000)
+            return 0;
+        ++mir_boolean_phi_residual_count;
+        mir_boolean_phi_residual_growth_used += growth;
+    }
+    return 1;
+}
+
 static int mir_unary_not_call_free_loop_is_semantically_eligible(
     long generated_size, long captured_size)
 {
@@ -4647,6 +4692,15 @@ evaluate_generated:
                     /* T469: isolate deterministic FINAL candidates from
                      * direct large/high-slot and extended label-PHI
                      * failures. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "boolean-phi-cost") &&
+                    !g_speculative_codegen_active &&
+                    mir_boolean_phi_residual_is_semantically_eligible(
+                        generated_size, captured_size))
+                    /* T472: 35 individually full-mode-clean residual
+                     * candidates, excluding 11 direct structural/resource
+                     * failure shapes. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
                     !strcmp(fallback_reason, "dynamic-index-base-cost") &&

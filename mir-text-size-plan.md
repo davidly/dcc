@@ -17217,6 +17217,26 @@ at most one call. The other seven fail directly.
 - Performance gate: 20 deliberate Phase-1 regressions, 0 improvements;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
 
+## Item T472: budgeted full-mode-clean boolean-PHI residue (+26 ordinary/+28 stack-check, 2026-08-08)
+
+Fresh T471 baseline: **1992/2060 ordinary (96.70%)** and **2108/2179
+stack-check (96.74%)**.
+
+All 46 remaining boolean candidates were classified with the guarded
+true-final diagnostic in full mode: 35 pass individually and 11 fail
+directly. Structural facts exclude the direct failures. Enabling all 35 still
+crossed CP/M/layout boundaries in four interpreter modules, so this residual
+cohort additionally uses a per-translation-unit cap of three functions and
+8 KiB positive assembly-text growth.
+
+- Ordinary: **1992/2060 -> 2018/2060 (97.96%)**, **+26**, zero removals.
+- Stack-check: **2108/2179 -> 2136/2179 (98.03%)**, **+28**, zero removals.
+- Remaining `boolean-phi-cost`: **20 ordinary / 21 stack-check**.
+- Full extended correctness: **314/314 runnable apps + 196/196 extended**,
+  diagnostics and dccpeep pass.
+- Performance gate: 59 deliberate Phase-1 regressions, 2 improvements;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.
+
 ### Next
 
 The safe final acyclic stratum is exhausted. Remaining dynamic-index-base
