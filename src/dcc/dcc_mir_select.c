@@ -2055,6 +2055,20 @@ static int mir_text_size_coverage_is_semantically_eligible(
            generated_size <= captured_size + 2048;
 }
 
+static int mir_text_size_wide_coverage_is_semantically_eligible(
+    long generated_size, long captured_size)
+{
+    return mir_cfg_block_count() <= 64 &&
+           mir_call_count() <= 32 &&
+           !mir.has_vla &&
+           mir_has_wide_values() &&
+           !mir_has_cfg_backedge() &&
+           !mir_has_inline_substitution_call() &&
+           !mir_has_declared_pointer_array() &&
+           !mir_has_label_only_phi_fallthrough() &&
+           generated_size <= captured_size + 2048;
+}
+
 static int mir_is_profiled_vla_single_block_instruction_win(
     long generated_size, long captured_size, int generated_instructions,
     int captured_instructions)
@@ -3863,6 +3877,22 @@ evaluate_generated:
                         /* T437: the complete bounded scalar/acyclic
                          * text-size population passed the full extended
                          * correctness gate as one cohort. */
+                        fallback_reason = NULL;
+                    if (fallback_reason != NULL &&
+                        !strcmp(fallback_reason, "text-size") &&
+                        !strcmp(selector_name, "spilled-scalar-cfg") &&
+                        mir_spilled_cfg_has_wide_mulmod_fusion())
+                        /* T438: the spilled selector now mirrors legacy's
+                         * exact overflow-safe __m1mu fused multiply/modulo
+                         * lowering for three plain unsigned-word sources. */
+                        fallback_reason = NULL;
+                    if (fallback_reason != NULL &&
+                        !strcmp(fallback_reason, "text-size") &&
+                        mir_text_size_wide_coverage_is_semantically_eligible(
+                            generated_size, captured_size))
+                        /* T438: after the parameter-only mulmod fusion fix,
+                         * the complete bounded acyclic wide population
+                         * passed the full extended correctness gate. */
                         fallback_reason = NULL;
                     if (fallback_reason != NULL &&
                         !strcmp(fallback_reason, "boolean-phi-cost") &&

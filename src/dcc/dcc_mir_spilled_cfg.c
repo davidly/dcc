@@ -5675,6 +5675,82 @@ static int mir_float_multiply_is_fused(int multiply_index)
            matched_multiply == multiply_index;
 }
 
+static int mir_plain_u16_widen_source(int value, int *source_value)
+{
+    const struct MirInsn *widen = mir_definition(value);
+    const struct MirInsn *source;
+
+    if (widen == NULL || widen->opcode != MIR_UNARY ||
+        widen->immediate != 0 || type_size(widen->type) != 4 ||
+        type_is_float(widen->type) ||
+        (widen->type & TYPE_UNSIGNED) == 0)
+        return 0;
+    source = mir_definition(widen->src1);
+    if (source == NULL || source->opcode != MIR_PARAM ||
+        type_size(source->type) > 2 ||
+        type_is_float(source->type) || type_ptr_depth(source->type) > 0 ||
+        (source->type & TYPE_UNSIGNED) == 0)
+        return 0;
+    if (source_value != NULL)
+        *source_value = widen->src1;
+    return 1;
+}
+
+static int mir_wide_mulmod_match(int modulo_index, int *multiply_index,
+                                 int *left_value, int *right_value,
+                                 int *modulus_value)
+{
+    const struct MirInsn *modulo;
+    const struct MirInsn *multiply;
+
+    if (modulo_index < 0 || modulo_index >= mir.count)
+        return 0;
+    modulo = &mir.insns[modulo_index];
+    multiply = mir_definition(modulo->src1);
+    if (modulo->opcode != MIR_BINARY || modulo->immediate != '%' ||
+        type_size(modulo->secondary_offset) != 4 ||
+        type_is_float(modulo->secondary_offset) ||
+        (modulo->secondary_offset & TYPE_UNSIGNED) == 0 ||
+        multiply == NULL || multiply->opcode != MIR_BINARY ||
+        multiply->immediate != '*' ||
+        type_size(multiply->secondary_offset) != 4 ||
+        type_is_float(multiply->secondary_offset) ||
+        (multiply->secondary_offset & TYPE_UNSIGNED) == 0 ||
+        mir_value_use_count(multiply->dst) != 1 ||
+        !mir_plain_u16_widen_source(multiply->src1, left_value) ||
+        !mir_plain_u16_widen_source(multiply->src2, right_value) ||
+        !mir_plain_u16_widen_source(modulo->src2, modulus_value))
+        return 0;
+    if (multiply_index != NULL)
+        *multiply_index = (int)(multiply - mir.insns);
+    return 1;
+}
+
+static int mir_wide_multiply_is_fused_mulmod(int multiply_index)
+{
+    int instruction;
+
+    for (instruction = multiply_index + 1;
+         instruction < mir.count; ++instruction) {
+        int matched_multiply;
+        if (mir_wide_mulmod_match(instruction, &matched_multiply,
+                                  NULL, NULL, NULL) &&
+            matched_multiply == multiply_index)
+            return 1;
+    }
+    return 0;
+}
+
+int mir_spilled_cfg_has_wide_mulmod_fusion(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir_wide_mulmod_match(instruction, NULL, NULL, NULL, NULL))
+            return 1;
+    return 0;
+}
+
 static int mir_unary_is_fusable_not_branch(int i)
 {
     const struct MirInsn *candidate;
@@ -8226,13 +8302,38 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             }
             }
             if (type_size(insn->secondary_offset) == 4) {
-                int fuse_skip = mir_binary_is_fusable_comparison(i);
+                int mulmod_left;
+                int mulmod_right;
+                int mulmod_modulus;
                 int stack_forwarded_left =
                     mir_forwarded_wide_stack_value == insn->src1 &&
                     mir_forwarded_wide_stack_consumer == i;
                 int stack_forwarded_right =
                     mir_forwarded_wide_stack_value == insn->src2 &&
                     mir_forwarded_wide_stack_consumer == i;
+                if (mir_wide_multiply_is_fused_mulmod(i)) {
+                    if (stack_forwarded_left || stack_forwarded_right) {
+                        fputs("\tpop hl\n\tpop de\n", out);
+                        mir_forwarded_wide_stack_value = -1;
+                        mir_forwarded_wide_stack_consumer = -1;
+                    }
+                    break;
+                }
+                if (mir_wide_mulmod_match(i, NULL, &mulmod_left,
+                                          &mulmod_right,
+                                          &mulmod_modulus)) {
+                    mir_emit_virtual_load(out, mulmod_left);
+                    fputs("\tpush hl\n", out);
+                    mir_emit_virtual_load(out, mulmod_right);
+                    fputs("\tpush hl\n", out);
+                    mir_emit_virtual_load(out, mulmod_modulus);
+                    fputs("\tld c,l\n\tld b,h\n\tpop de\n\tpop hl\n", out);
+                    mir_emit_runtime_call(out, "__m1mu");
+                    fputs("\tld de,0\n", out);
+                    mir_emit_virtual_store_wide(out, insn->dst);
+                    break;
+                }
+                int fuse_skip = mir_binary_is_fusable_comparison(i);
                 /* Item T395/follow-on: the signed-constant-relational
                  * fast path only ever consumes src2's compile-time
                  * literal value, never a loaded runtime form - skip

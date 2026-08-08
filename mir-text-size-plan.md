@@ -16861,3 +16861,86 @@ The bounded scalar/acyclic text-size vein is exhausted. Re-rank the remaining
 196 by structural exclusion (`backedge`, `VLA`, `wide`, large CFG/call count,
 label-PHI, and >2-KiB growth). The highest-yield next fix should target one
 shared excluded architecture class, not relax the proven T437 boundary.
+
+## Item T438: MIR-native fused mulmod and bounded wide text-size admission (+138 ordinary/+139 stack-check, 2026-08-08)
+
+Fresh T437 baseline: **1249/2050 ordinary (60.93%)** and **1300/2156
+stack-check (60.30%)**. Re-bucketing the 196 remaining ordinary
+`text-size` candidates showed 135 with wide MIR values, including 106 whose
+only T437 exclusion was `wide`.
+
+### Fix the known wide semantic blocker first
+
+`tm1mu.mulmod` is the exact C89 overflow-safe modular-multiply idiom:
+
+```c
+return ((uint32_t)a * (uint32_t)b) % m;
+```
+
+Legacy recognizes three plain unsigned-word sources and calls `__m1mu`;
+generic MIR previously emitted a full 32-bit multiply followed by long
+modulo, which is not semantically equivalent for all edge cases.
+
+Added MIR matching for:
+
+1. two unsigned-word values widened to unsigned long;
+2. one-use wide multiplication;
+3. modulo by a third widened unsigned-word value.
+
+The spilled selector skips the generic multiply and calls `__m1mu` with the
+legacy ABI (HL=a, DE=b, BC=m), then zero-extends HL into the unsigned-long
+result.
+
+### Rejected overreach: loop-local late uses and leaked stack handoffs
+
+The first matcher accepted arbitrary unsigned-word sources. It fixed
+`tm1mu`, but also selected `pihex.powermod16`, whose two mulmods consume
+loop-local `result`/`b` values. That failed badly.
+
+Root cause was twofold:
+
+- skipping the wide multiply did not consume its already-emitted wide
+  stack-forwarding handoff, leaking four bytes on every loop iteration;
+- the fusion reloaded original narrow SSA values at the later modulo
+  instruction even though their MIR lifetimes ended at the earlier widening,
+  so backend slots were uninitialized.
+
+The landed matcher requires all three narrow sources to be stable
+`MIR_PARAM` values and explicitly pops any skipped wide stack handoff.
+`tm1mu.mulmod` then passes forced MIR in both peep/nopeep modes, while
+`pihex.powermod16` stays on its existing path. This is a reusable correctness
+rule: an emission fusion must not invent late SSA uses outside liveness.
+
+### Bounded wide cohort
+
+With the known semantic blocker fixed, tested the remaining wide cohort under
+the same T437 limits:
+
+- at most 64 blocks and 32 calls;
+- no VLA, backedge, inline-substitution call, pointer array, or label-only
+  PHI fallthrough;
+- at most 2,048 bytes generated-text growth;
+- wide MIR values required.
+
+The complete cohort passed full extended correctness. Production now admits
+it via `mir_text_size_wide_coverage_is_semantically_eligible()`.
+
+### Result and validation
+
+- Ordinary: **1249/2050 -> 1387/2058 (67.40%)**, **+138 MIR functions**
+  (one specialized mulmod plus 137 wide-cohort admissions), zero removals.
+- Stack-check: **1300/2156 -> 1439/2164 (66.50%)**, **+139**, zero removals.
+- Remaining `text-size`: **92 ordinary / 108 stack-check**.
+- `pihex` and `tm1mu` focused full-mode checks: PASS.
+- Forced-MIR regression harness: PASS (9/9).
+- Full extended correctness: **314/314 runnable apps**, diagnostics,
+  dccpeep, and extended corpus pass.
+- Performance gate measured 164 deliberate Phase-1 regressions;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.
+
+### Next
+
+The bounded scalar and wide acyclic text-size populations are exhausted.
+Re-bucket the remaining 92: the largest prior signatures were backedges,
+pointer arrays, VLA, and their overlaps. Prefer a shared backedge/VLA fix or
+the confirmed pointer-array encoder bug over widening T437/T438 limits.

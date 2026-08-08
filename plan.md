@@ -31,17 +31,18 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1249/2050 (60.93%)**
-- Current stack-check coverage: **1300/2156 (60.30%)**
-- HEAD (pending push): T437 admits the bounded scalar/acyclic
-  `text-size` cohort, **+149 ordinary/+169 stack-check**, zero removals.
-  The rule requires at most 64 blocks/32 calls, no VLA, wide values,
-  backedge, inline-substitution call, pointer array, or label-only PHI
-  fallthrough, and at most 2 KiB text growth. The complete cohort passes
-  full extended correctness. Accepting callers that need deferred static
-  bodies grows the census denominator by 21 ordinary/25 stack-check rows;
-  these are real newly materialized functions, not losses. Remaining
-  `text-size`: **196 ordinary/213 stack-check**. See `## Item T437` in
+- Current ordinary coverage: **1387/2058 (67.40%)**
+- Current stack-check coverage: **1439/2164 (66.50%)**
+- HEAD (pending push): T438 adds MIR-native `__m1mu` emission for the
+  exact parameter-only `(u32)a * b % m` shape and admits the bounded
+  acyclic wide `text-size` cohort, **+138 ordinary/+139 stack-check**,
+  zero removals. The first broader mulmod fusion was rejected after
+  `pihex.powermod16` exposed two loop hazards: skipped wide stack
+  handoffs leaked stack space and local inputs were reloaded after their
+  MIR lifetimes. The landed specialization consumes any skipped handoff
+  and requires stable unsigned-word parameter sources. The complete wide
+  cohort then passes full extended correctness. Remaining `text-size`:
+  **92 ordinary/108 stack-check**. See `## Item T438` in
   `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
@@ -82,6 +83,13 @@ transactional fallback remains in place throughout Phase 1.
   clean even in combination. Continue by attacking the remaining
   backedge/VLA/wide/large text-size strata separately, not by widening
   this proven boundary.
+- **T438 crosses 67% by fixing, then opening, the wide stratum.**
+  `tm1mu.mulmod` now uses the same overflow-safe `__m1mu` ABI as legacy.
+  The bounded acyclic wide cohort adds 137 more ordinary functions after
+  that single-function fix. The failed `pihex.powermod16` experiment is a
+  standing rule: fusion may only add uses already represented in MIR
+  liveness, and skipping an instruction must consume any planned real-
+  stack handoff it would have consumed.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations
