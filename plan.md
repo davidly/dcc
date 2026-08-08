@@ -31,17 +31,17 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1507/2052 (73.44%)**
-- Current stack-check coverage: **1581/2165 (73.03%)**
-- HEAD (pending push): T444 combines four terminal bounded-acyclic
-  cohorts: `dead-local-suffix-cost` (+5), `absolute-index-cost` (+4),
-  `planned-index-base-cost` (+10), and `planned-stack-cost` (+8), for
-  **+27 ordinary/+40 stack-check**, zero removals. All four pass together
-  in the full extended gate. Consolidated these with T440-T442's three
-  identical cohorts in
-  `mir_reason_uses_bounded_acyclic_coverage()`, making one shared
-  seven-reason policy rather than parallel formulas. See `## Item T444`
-  in `mir-text-size-plan.md`.
+- Current ordinary coverage: **1522/2052 (74.17%)**
+- Current stack-check coverage: **1596/2165 (73.72%)**
+- HEAD (pending push): T445 combines terminal bounded cohorts for
+  `constant-conversion-home-cost` (+1), `dead-store-forwarding-cost`
+  (+2), `indirect-store-address-cost` (+6), and
+  `binary-load-pair-cost` (+6), for **+15 ordinary/+15 stack-check**,
+  zero removals. Binary-load additionally excludes the single-call
+  `pint.emit` resource stratum. Two provisional reasons were rejected:
+  `instruction-count` removed existing `tcodegen.scod/srdy` MIR bodies,
+  and bounded `block-cse-cost` still miscompiled `tpfauto.main`. See
+  `## Item T445` in `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -115,6 +115,10 @@ transactional fallback remains in place throughout Phase 1.
   independently measured small cohorts were combined into one 27-function
   commit and one pre-publication full extended gate. The shared predicate
   now covers seven final reasons with one source of truth.
+- **T445 preserves that cadence while enforcing no-removal discipline.**
+  The first five-reason experiment gained 22 but lost two existing MIR
+  functions; the final four-reason batch gains 15 with zero removals and
+  excludes both identified bad strata.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

@@ -139,11 +139,14 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "functions; unsafe loop/resource shapes remain.",
     "planned-stack-cost": "T444 admitted 8 terminal bounded acyclic "
                  "functions; wumpus/later-retry shapes remain.",
-    "binary-load-pair-cost": "tbcgcol, tvlax fail.",
-    "indirect-store-address-cost": "tlngnarw fails.",
-    "dead-store-forwarding-cost": "cint, forint, cobint fail (all "
-                 "interpreter apps - likely a shared runtime call shape).",
-    "constant-conversion-home-cost": "tregnarw fails.",
+    "binary-load-pair-cost": "T445 admitted 6 terminal bounded functions "
+                 "outside the single-call pint.emit resource stratum.",
+    "indirect-store-address-cost": "T445 admitted 6 terminal bounded "
+                 "acyclic functions; tlngnarw/loop shapes remain.",
+    "dead-store-forwarding-cost": "T445 admitted 2 terminal bounded "
+                 "acyclic functions; interpreter loop failures remain.",
+    "constant-conversion-home-cost": "T445 admitted 1 terminal bounded "
+                 "acyclic function; tregnarw/later strata remain.",
     "block-cse-cost": "tfmaf, tpfauto, tstructv, tvla, wumpus fail. "
                  "tfmaf specifically: 'zero_times_inf_is_nan' - a real "
                  "floating-point edge case wrong beyond the previously "

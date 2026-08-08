@@ -2101,8 +2101,11 @@ static int mir_reason_uses_bounded_acyclic_coverage(const char *reason)
 {
     static const char *const proven[] = {
         "absolute-index-cost",
+        "constant-conversion-home-cost",
+        "dead-store-forwarding-cost",
         "dead-local-suffix-cost",
         "dynamic-index-base-cost",
+        "indirect-store-address-cost",
         "planned-index-base-cost",
         "planned-stack-cost",
         "unary-not-cost",
@@ -2122,6 +2125,14 @@ static int mir_wide_store_coverage_is_semantically_eligible(
     long generated_size, long captured_size)
 {
     return mir_call_count() > 0 &&
+           mir_bounded_acyclic_coverage_is_semantically_eligible(
+               generated_size, captured_size);
+}
+
+static int mir_binary_load_pair_coverage_is_semantically_eligible(
+    long generated_size, long captured_size)
+{
+    return mir_call_count() != 1 &&
            mir_bounded_acyclic_coverage_is_semantically_eligible(
                generated_size, captured_size);
 }
@@ -4156,17 +4167,25 @@ evaluate_generated:
                     mir_reason_uses_bounded_acyclic_coverage(
                         fallback_reason) &&
                     mir_bounded_acyclic_coverage_is_semantically_eligible(
-                        generated_size, captured_size))
-                    /* T440-T444: each listed terminal-reason cohort passed
-                     * independently, and the T444 additions also passed
+                        generated_size, captured_size)) {
+                    /* T440-T445: each listed terminal-reason cohort passed
+                     * independently, and each multi-reason batch also passed
                      * together with all previously landed cohorts. */
                     fallback_reason = NULL;
+                }
                 if (fallback_reason != NULL &&
                     !strcmp(fallback_reason, "wide-store-cost") &&
                     mir_wide_store_coverage_is_semantically_eligible(
                         generated_size, captured_size))
                     /* T443: the terminal bounded acyclic call-containing
                      * wide-store cohort passed the full extended gate. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "binary-load-pair-cost") &&
+                    mir_binary_load_pair_coverage_is_semantically_eligible(
+                        generated_size, captured_size))
+                    /* T445: the terminal bounded binary-load-pair cohort
+                     * excluding its single-call resource stratum passed. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL)
                     emitted = 0;

@@ -17234,3 +17234,50 @@ T443 additionally requires its call-containing stratum.
 This is the optimized migration loop requested by the user: several measured
 small cohorts, one consolidated batch, and one final full extended publication
 gate.
+
+## Item T445: second consolidated bounded batch (+15 ordinary/+15 stack-check, 2026-08-08)
+
+Fresh T444 baseline: **1507/2052 ordinary (73.44%)** and **1581/2165
+stack-check (73.03%)**.
+
+Provisionally added five remaining small terminal reasons to the shared
+bounded-acyclic policy. The census gained 22 functions but lost two existing
+MIR bodies, `tcodegen.scod` and `tcodegen.srdy`. Instrumentation traced the
+removals to speculative `instruction-count` acceptance of `lsr*`, `asr*`,
+`scod`, and `srdy`; that reason was removed.
+
+The remaining four reasons then gained 16 but failed `pint`. The only new pint
+function was `emit` (`binary-load-pair-cost`), another stack-check resource
+boundary. The seven bounded binary-load candidates split cleanly:
+
+- `pint.emit` is the sole one-call shape and fails;
+- the other six are call-free or have at least three calls and pass.
+
+Added `mir_binary_load_pair_coverage_is_semantically_eligible()`, which wraps
+the shared predicate and excludes `mir_call_count() == 1`.
+
+A bounded `block-cse-cost` probe was also rejected: it gained 16 additional
+functions but terminal `tpfauto.main` still produced no output. Block CSE
+therefore remains real architecture work.
+
+The final combined batch:
+
+| reason | ordinary admissions |
+| --- | ---: |
+| `constant-conversion-home-cost` | 1 |
+| `dead-store-forwarding-cost` | 2 |
+| `indirect-store-address-cost` | 6 |
+| `binary-load-pair-cost` | 6 |
+| **combined** | **15** |
+
+- Ordinary: **1507/2052 -> 1522/2052 (74.17%)**, **+15**, zero removals.
+- Stack-check: **1581/2165 -> 1596/2165 (73.72%)**, **+15**, zero removals.
+- Full extended correctness: **314/314 runnable apps**, diagnostics,
+  dccpeep, and extended corpus pass.
+- Forced-MIR regression harness: PASS (9/9).
+- Performance gate: 27 deliberate Phase-1 regressions, 3 improvements;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.
+
+Rejected outcomes are deliberate: `instruction-count` remains closed to
+preserve existing MIR coverage, and `block-cse-cost` remains closed for
+correctness.
