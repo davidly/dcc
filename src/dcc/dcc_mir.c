@@ -70,9 +70,15 @@ static int mir_rematerialized_home_allocation_active;
 static int mir_lazy_allocation_active;
 static int mir_extended_integer_constant_conversion_fold_count;
 static unsigned long mir_inline_live_temp_mask;
+static int mir_inline_temp_ids[MAX_PROTO_PARAMS];
 static const char *mir_inline_local_src_name;
 static const char *mir_inline_local_temp_name;
 static int mir_inline_expand_depth;
+
+struct MirInlineCallScope {
+    unsigned long live_temp_mask;
+    int temp_ids[MAX_PROTO_PARAMS];
+};
 
 static int mir_inline_substitutable(const struct Sym *symbol)
 {
@@ -661,6 +667,30 @@ static void mir_inline_temp_name_for_call(char *dst, int dstsz, int index)
     (void)dstsz;
 }
 
+int mir_inline_temp_slot(const char *name)
+{
+    const char *digit;
+    int slot;
+
+    if (name == NULL || strncmp(name, "#itmp", 5) != 0)
+        return -1;
+    digit = name + 5;
+    if (*digit < '0' || *digit > '9')
+        return -1;
+    slot = 0;
+    do {
+        slot = slot * 10 + (*digit - '0');
+        ++digit;
+    } while (*digit >= '0' && *digit <= '9');
+    return *digit == 0 && slot < MAX_PROTO_PARAMS ? slot : -1;
+}
+
+static int mir_current_inline_temp_id(const char *name)
+{
+    int slot = mir_inline_temp_slot(name);
+    return slot >= 0 ? mir_inline_temp_ids[slot] : 0;
+}
+
 static const struct AstNode *mir_inline_substitution_body(const struct Sym *fn)
 {
     if (fn == NULL)
@@ -955,7 +985,7 @@ static int mir_try_lower_inline_call_common(const struct AstNode *call,
                                             struct Sym *fn_sym,
                                             struct AstNode **out_expr,
                                             struct AstNode **out_stmt,
-                                            unsigned long *saved_live_mask_out)
+                                            struct MirInlineCallScope *scope_out)
 {
     const struct AstNode *src_expr;
     const char *temp_names[MAX_PROTO_PARAMS];
@@ -965,12 +995,13 @@ static int mir_try_lower_inline_call_common(const struct AstNode *call,
     char local_temp_name[64];
     struct Sym *local_temp_symbol;
     unsigned long local_temp_bit;
-    unsigned long saved_live_mask;
     unsigned long current_mask;
+    unsigned long active_mask;
     const char *saved_local_src_name;
     const char *saved_local_temp_name;
+    int slot;
 
-    if (saved_live_mask_out == NULL)
+    if (scope_out == NULL)
         return 0;
     if (out_expr != NULL)
         *out_expr = NULL;
@@ -996,15 +1027,21 @@ static int mir_try_lower_inline_call_common(const struct AstNode *call,
                                     &local_temp_bit))
         return 0;
 
-    saved_live_mask = mir_inline_live_temp_mask;
-    mir_inline_live_temp_mask |= current_mask;
-    if (local_temp_symbol != NULL)
-        mir_inline_live_temp_mask |= local_temp_bit;
+    scope_out->live_temp_mask = mir_inline_live_temp_mask;
+    memcpy(scope_out->temp_ids, mir_inline_temp_ids,
+           sizeof(scope_out->temp_ids));
+    active_mask = current_mask | local_temp_bit;
+    mir_inline_live_temp_mask |= active_mask;
+    for (slot = 0; slot < MAX_PROTO_PARAMS; ++slot)
+        if ((active_mask & (1UL << slot)) != 0)
+            mir_inline_temp_ids[slot] = mir.next_inline_temp_id++;
     mir_emit_planned_inline_arg_temps(call, fn_sym, temp_symbols, temp_types);
     if (local_temp_symbol != NULL && !mir_emit_inline_local_temp(fn_sym, call,
                                                                  temp_names,
                                                                  local_temp_symbol)) {
-        mir_inline_live_temp_mask = saved_live_mask;
+        mir_inline_live_temp_mask = scope_out->live_temp_mask;
+        memcpy(mir_inline_temp_ids, scope_out->temp_ids,
+               sizeof(scope_out->temp_ids));
         return 0;
     }
 
@@ -1027,14 +1064,14 @@ static int mir_try_lower_inline_call_common(const struct AstNode *call,
                                           temp_names);
     mir_inline_local_src_name = saved_local_src_name;
     mir_inline_local_temp_name = saved_local_temp_name;
-    *saved_live_mask_out = saved_live_mask;
     return 1;
 }
 
-static void mir_end_inline_call_scope(unsigned long saved_live_mask)
+static void mir_end_inline_call_scope(const struct MirInlineCallScope *scope)
 {
     mir_inline_expand_depth--;
-    mir_inline_live_temp_mask = saved_live_mask;
+    mir_inline_live_temp_mask = scope->live_temp_mask;
+    memcpy(mir_inline_temp_ids, scope->temp_ids, sizeof(scope->temp_ids));
 }
 
 static int mir_try_lower_inline_call_expr(const struct AstNode *call,
@@ -1043,7 +1080,7 @@ static int mir_try_lower_inline_call_expr(const struct AstNode *call,
 {
     struct AstNode *expr;
     struct AstNode *stmt;
-    unsigned long saved_live_mask;
+    struct MirInlineCallScope scope;
 
     if (out_value == NULL)
         return 0;
@@ -1053,14 +1090,14 @@ static int mir_try_lower_inline_call_expr(const struct AstNode *call,
     expr = NULL;
     stmt = NULL;
     if (!mir_try_lower_inline_call_common(
-            call, fn_sym, &expr, &stmt, &saved_live_mask))
+            call, fn_sym, &expr, &stmt, &scope))
         return 0;
     if (expr == NULL || stmt != NULL) {
-        mir_end_inline_call_scope(saved_live_mask);
+        mir_end_inline_call_scope(&scope);
         return 0;
     }
     *out_value = mir_lower_expr(expr);
-    mir_end_inline_call_scope(saved_live_mask);
+    mir_end_inline_call_scope(&scope);
     return 1;
 }
 
@@ -1069,7 +1106,7 @@ static int mir_try_lower_inline_call_stmt(const struct AstNode *call)
     struct Sym *fn_sym;
     struct AstNode *expr;
     struct AstNode *stmt;
-    unsigned long saved_live_mask;
+    struct MirInlineCallScope scope;
 
     if (call == NULL || call->kind != AST_CALL || call->a == NULL ||
         call->a->kind != AST_IDENT)
@@ -1088,17 +1125,17 @@ static int mir_try_lower_inline_call_stmt(const struct AstNode *call)
     expr = NULL;
     stmt = NULL;
     if (!mir_try_lower_inline_call_common(
-            call, fn_sym, &expr, &stmt, &saved_live_mask))
+            call, fn_sym, &expr, &stmt, &scope))
         return 0;
     if (stmt != NULL)
         mir_lower_stmt(stmt);
     else if (expr != NULL)
         (void)mir_lower_expr(expr);
     else {
-        mir_end_inline_call_scope(saved_live_mask);
+        mir_end_inline_call_scope(&scope);
         return 0;
     }
-    mir_end_inline_call_scope(saved_live_mask);
+    mir_end_inline_call_scope(&scope);
     return 1;
 }
 
@@ -1676,6 +1713,7 @@ static void mir_emit_ident_store(const struct AstNode *ident, int value)
     store->src1 = value;
     store->type = ident->type;
     mir_copy_name(store->name, mir_ident_name(ident));
+    store->inline_temp_id = mir_current_inline_temp_id(store->name);
     store->object = mir_get_object(symbol, store->name);
 }
 
@@ -1969,6 +2007,7 @@ static int mir_lower_expr(const struct AstNode *node)
             ? type_add_ptr(symbol->type)
             : symbol != NULL ? symbol->type : node->type;
         mir_copy_name(insn->name, name);
+        insn->inline_temp_id = mir_current_inline_temp_id(insn->name);
         insn->object = mir_get_object(symbol, insn->name);
         return value;
         }
@@ -3023,6 +3062,10 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
     mir.next_value = 0;
     mir.next_label = 0;
     mir.next_call_id = 0;
+    mir.next_inline_temp_id = 1;
+    mir_inline_live_temp_mask = 0;
+    memset(mir_inline_temp_ids, 0, sizeof(mir_inline_temp_ids));
+    mir_inline_expand_depth = 0;
     mir.flow_depth = 0;
     mir.has_vla = has_vla;
     function_symbol = find_global(name);
@@ -6322,6 +6365,16 @@ static int mir_color_shares_slot(int left, int right)
     return 0;
 }
 
+static int mir_instruction_clobbers_caller_registers(
+    const struct MirInsn *insn)
+{
+    return insn != NULL &&
+           (insn->opcode == MIR_CALL ||
+            insn->opcode == MIR_CALL_AGGREGATE ||
+            (insn->opcode == MIR_BINARY &&
+             (insn->immediate == '/' || insn->immediate == '%')));
+}
+
 static void mir_allocate_registers(const unsigned char *live_in,
                                    const unsigned char *live_out,
                                    struct MirAllocationSummary *summary,
@@ -6383,14 +6436,12 @@ static void mir_allocate_registers(const unsigned char *live_in,
 
         mir_add_live_set_interference(interference, value_count, in);
         mir_add_live_set_interference(interference, value_count, out);
-        if (mir.insns[i].opcode == MIR_CALL ||
-            mir.insns[i].opcode == MIR_CALL_AGGREGATE ||
+        if (mir_instruction_clobbers_caller_registers(&mir.insns[i]) ||
             mir.insns[i].opcode == MIR_OPAQUE) {
             for (value = 0; value < value_count; ++value) {
                 if (!in[value] || !out[value])
                     continue;
-                if (mir.insns[i].opcode == MIR_CALL ||
-                    mir.insns[i].opcode == MIR_CALL_AGGREGATE)
+                if (mir_instruction_clobbers_caller_registers(&mir.insns[i]))
                     cross_call[value] = 1;
                 else
                     cross_opaque[value] = 1;
@@ -7102,6 +7153,8 @@ int mir_verify_and_dump(void)
             fprintf(stderr, " %s", insn->name);
         if (insn->object >= 0)
             fprintf(stderr, " {o%d}", insn->object);
+        if (insn->inline_temp_id != 0)
+            fprintf(stderr, " {it%d}", insn->inline_temp_id);
         if (insn->dst >= 0 && insn->type != 0)
             fprintf(stderr, " type=%d", insn->type);
         if (insn->memory_size > 0)

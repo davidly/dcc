@@ -17249,6 +17249,17 @@ one; the 92-block function remains excluded.
 - Full extended correctness: **314/314 runnable + 196/196 extended**.
 - Performance: 4 deliberate Phase-1 regressions; baselines updated.
 
+## Item T475: model division/remainder helper call clobbers (+1/+1, 2026-08-08)
+
+`tregnarw.lmod` kept loop-invariant `x` in HL across MIR `%`, but emission
+calls `__mods`, which replaces HL with the remainder. Allocation now treats
+integer division/remainder MIR_BINARY instructions as call boundaries, forcing
+call-crossing values into safe homes. `lmod` now returns 4 and is admitted.
+
+- Coverage: **2024/2060 (98.25%)**, **2143/2179 (98.35%)**, zero removals.
+- Full extended correctness: **314/314 runnable + 196/196 extended**.
+- Performance: 11 regressions/5 improvements tracked; baselines updated.
+
 ## Item T474: staged ordinary-module boolean budget (+4 ordinary/+5 stack-check, 2026-08-08)
 
 Fresh T473: **2019/2060 ordinary**, **2137/2179 stack-check**. Inline-sensitive

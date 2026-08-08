@@ -31,11 +31,11 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **2023/2060 (98.20%)**
-- Current stack-check coverage: **2142/2179 (98.30%)**
-- HEAD (pending push): T474 stages a fourth boolean migration in ordinary
-  modules while preserving the three-function inline-sensitive cap:
-  **+4 ordinary/+5 stack-check**, zero removals. See `## Item T474` in
+- Current ordinary coverage: **2024/2060 (98.25%)**
+- Current stack-check coverage: **2143/2179 (98.35%)**
+- HEAD (pending push): T475 models integer division/remainder MIR operations
+  as caller-register-clobbering helper calls, fixing and admitting
+  `tregnarw.lmod`: **+1/+1**, zero removals. See `## Item T475` in
   `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
@@ -207,6 +207,8 @@ transactional fallback remains in place throughout Phase 1.
 - **T474 safely expands ordinary module budgets.** A ten-function ceiling
   remains bounded by 8 KiB, adding four `forint` functions without reopening
   `adaint`, `cint`, or COBOL limits.
+- **T475 fixes helper-call allocation.** Values live across `/` or `%` can no
+  longer remain in caller-clobbered HL/DE/BC.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations
