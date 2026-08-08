@@ -4491,6 +4491,21 @@ evaluate_generated:
                      * tlimits remains on its boolean-PHI retry. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason,
+                            "constant-conversion-home-cost") &&
+                    !g_speculative_codegen_active &&
+                    mir_call_count() > 0)
+                    /* T464: the two call-containing terminal candidates
+                     * pass; retain the isolated call-free lmod failure. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason,
+                            "dead-store-forwarding-cost") &&
+                    !g_speculative_codegen_active)
+                    /* T464: every true-final candidate passed; transient
+                     * pint retains its boolean-PHI reason. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
                     mir_reason_uses_bounded_acyclic_coverage(
                         fallback_reason) &&
                     mir_bounded_acyclic_coverage_is_semantically_eligible(

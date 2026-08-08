@@ -146,10 +146,11 @@ CONFIRMED_UNSAFE_COST_REASONS = {
     "indirect-store-address-cost": "T445/T461 admitted the complete true-"
                  "final reason; blind forcing still intercepts a transient "
                  "tlngnarw retry.",
-    "dead-store-forwarding-cost": "T445 admitted 2 terminal bounded "
-                 "acyclic functions; interpreter loop failures remain.",
-    "constant-conversion-home-cost": "T445 admitted 1 terminal bounded "
-                 "acyclic function; tregnarw/later strata remain.",
+    "dead-store-forwarding-cost": "T445/T464 admitted the complete true-final "
+                 "reason; blind forcing also intercepts transient pint.",
+    "constant-conversion-home-cost": "T445/T464 admitted every current "
+                 "terminal candidate except the isolated call-free lmod "
+                 "failure.",
     "block-cse-cost": "T450 admitted 29 post-PHI functions below 10 KiB "
                  "outside the unique wide/20-call tpfauto failure stratum. "
                  "tpfauto remains a real semantic failure; the other residue "

@@ -17833,3 +17833,23 @@ set without changing that retry.
   diagnostics and dccpeep pass.
 - Performance gate: 26 deliberate Phase-1 regressions, 0 improvements;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
+
+## Item T464: constant-home and dead-store residuals (+5 ordinary/+5 stack-check, 2026-08-08)
+
+Fresh T463 baseline: **1930/2060 ordinary (93.69%)** and **2045/2179
+stack-check (93.85%)**.
+
+The three terminal `constant-conversion-home-cost` functions were tested
+individually. Both call-containing functions pass; the call-free
+`tregnarw.lmod` remains a direct wrong-result failure. Blind dead-store
+forcing exposed one transient `pint` boolean-PHI candidate, while all three
+true-final dead-store candidates pass.
+
+- Ordinary: **1930/2060 -> 1935/2060 (93.93%)**, **+5**, zero removals.
+- Stack-check: **2045/2179 -> 2050/2179 (94.08%)**, **+5**, zero removals.
+- Remaining `constant-conversion-home-cost`: **1 ordinary / 1 stack-check**.
+- Remaining terminal `dead-store-forwarding-cost`: **0**.
+- Full extended correctness: **314/314 runnable apps + 196/196 extended**,
+  diagnostics and dccpeep pass.
+- Performance gate: 17 deliberate Phase-1 regressions, 1 improvement;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.
