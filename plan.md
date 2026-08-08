@@ -31,14 +31,13 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1823/2060 (88.50%)**
-- Current stack-check coverage: **1933/2179 (88.71%)**
-- HEAD (pending push): T456 admits the call-containing <=20-block
-  post-PHI `boolean-phi-cost` cohort: **+13 ordinary/+13 stack-check**,
-  zero removals. The broader reason reached 91% but exposed five direct
-  bad functions and combination-sensitive interpreter/resource layouts;
-  this batch keeps only the independently clean structural stratum. See
-  `## Item T456` in
+- Current ordinary coverage: **1838/2060 (89.22%)**
+- Current stack-check coverage: **1948/2179 (89.40%)**
+- HEAD (pending push): T457 admits every terminal <=6-block
+  `unary-not-cost` candidate: **+15 ordinary/+15 stack-check**, zero
+  removals. The broad reason reached 92% but cascaded into unsafe
+  interpreter candidates; the small-CFG terminal stratum is independently
+  full-extended clean. See `## Item T457` in
   `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
@@ -165,6 +164,9 @@ transactional fallback remains in place throughout Phase 1.
   `factor_call_or_var`, `run_at`, and `parse_source`, plus multi-function
   interpreter/resource interactions. The call-containing <=20-block cohort
   is independently full-extended clean.
+- **T457 opens the repaired small unary-not stratum.** All remaining terminal
+  unary candidates at <=6 blocks/6 KiB pass together, including parser lookup,
+  I/O, chess, and type-test functions.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

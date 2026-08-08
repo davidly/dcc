@@ -2109,6 +2109,13 @@ static int mir_unary_not_call_free_loop_is_semantically_eligible(
            generated_size <= captured_size + 2048;
 }
 
+static int mir_unary_not_repaired_small_is_semantically_eligible(
+    long generated_size)
+{
+    return mir_cfg_block_count() <= 6 &&
+           generated_size <= 6000;
+}
+
 static int mir_text_size_coverage_is_semantically_eligible(
     long generated_size, long captured_size)
 {
@@ -4109,6 +4116,14 @@ evaluate_generated:
                          * of entering alternate retries that can select a
                          * different, unsafe pint layout.
                          */
+                        fallback_reason = NULL;
+                    if (fallback_reason != NULL &&
+                        !strcmp(fallback_reason, "unary-not-cost") &&
+                        !g_speculative_codegen_active &&
+                        mir_unary_not_repaired_small_is_semantically_eligible(
+                            generated_size))
+                        /* T457: take the repaired <=6-block terminal unary
+                         * candidate before unrelated alternate retries. */
                         fallback_reason = NULL;
                     if (fallback_reason != NULL &&
                         !strcmp(fallback_reason, "cfg-backedge"))

@@ -17700,3 +17700,21 @@ enough call traffic to distinguish it from the unsafe call-free pint slice.
   diagnostics and dccpeep pass.
 - Performance gate: 44 deliberate Phase-1 regressions, 0 improvements;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
+
+## Item T457: repaired small unary-not stratum (+15 ordinary/+15 stack-check, 2026-08-08)
+
+Fresh T456 baseline: **1823/2060 ordinary (88.50%)** and **1933/2179
+stack-check (88.71%)**.
+
+Re-forcing all 47 remaining `unary-not-cost` functions reached 92% coverage
+but failed eight interpreter/chess apps after cascading into 76 newly selected
+functions. The terminal <=6-block/6-KiB slice is isolated from those larger
+interactions and includes all 15 remaining small-CFG candidates.
+
+- Ordinary: **1823/2060 -> 1838/2060 (89.22%)**, **+15**, zero removals.
+- Stack-check: **1933/2179 -> 1948/2179 (89.40%)**, **+15**, zero removals.
+- Remaining `unary-not-cost`: **32 ordinary / 32 stack-check**.
+- Full extended correctness: **314/314 runnable apps + 196/196 extended**,
+  diagnostics and dccpeep pass.
+- Performance gate: 35 deliberate Phase-1 regressions, 0 improvements;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.
