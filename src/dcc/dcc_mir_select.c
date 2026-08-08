@@ -1461,6 +1461,20 @@ static int mir_has_wide_values(void)
     return 0;
 }
 
+static int mir_has_wide_integer_object_phi(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_PHI &&
+            mir.insns[instruction].object >= 0 &&
+            type_size(mir.insns[instruction].type) == 4 &&
+            !type_is_float(mir.insns[instruction].type) &&
+            type_ptr_depth(mir.insns[instruction].type) == 0)
+            return 1;
+    return 0;
+}
+
 static int mir_has_format_runtime_call(void)
 {
     int instruction;
@@ -2355,8 +2369,17 @@ static int mir_dynamic_index_base_final_sink_is_semantically_eligible(void)
 {
     int blocks = mir_cfg_block_count();
     int calls = mir_call_count();
+    int bounded_wide_phi_loop =
+        blocks <= 80 &&
+        calls <= 40 &&
+        mir_has_cfg_backedge() &&
+        mir_has_wide_integer_object_phi() &&
+        !mir.has_vla &&
+        !mir_has_inline_substitution_call() &&
+        !mir_has_declared_pointer_array() &&
+        !mir_has_label_only_phi_fallthrough();
 
-    return blocks <= 50 &&
+    return (blocks <= 50 || bounded_wide_phi_loop) &&
            mir.backend_slot_count <= 18 &&
            !(calls <= 3 && mir_has_wide_values() &&
              mir_has_label_only_phi_fallthrough());
@@ -4836,9 +4859,9 @@ evaluate_generated:
                     !g_speculative_codegen_active &&
                     mir.sink_purpose == EMIT_SINK_FINAL &&
                     mir_dynamic_index_base_final_sink_is_semantically_eligible())
-                    /* T469/T490/T492: deterministic bounded FINAL candidates,
-                     * including the repaired 18-slot mixed-division driver,
-                     * pass both modes. */
+                    /* Deterministic bounded FINAL candidates pass both
+                     * modes. Wide integer-PHI loops are eligible only after
+                     * deferred alias repair has preserved their real width. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
                     !strcmp(fallback_reason, "boolean-phi-cost") &&

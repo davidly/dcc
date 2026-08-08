@@ -4988,11 +4988,15 @@ void mir_resolve_deferred_metadata(void)
         named_type = mir_named_type(insn->name);
         if (named_type == 0)
             continue;
+        /* A C99 for-init alias can retarget a merge emitted while the
+         * shadowed outer object's type was visible. */
         if (insn->opcode == MIR_LOAD &&
             mir_declared_is_array_object(insn->name)) {
             insn->opcode = MIR_ADDRESS;
             insn->type = type_add_ptr(named_type);
-        } else if (insn->opcode == MIR_LOAD || insn->opcode == MIR_PARAM)
+        } else if (insn->opcode == MIR_LOAD ||
+                   insn->opcode == MIR_PARAM ||
+                   insn->opcode == MIR_OBJECT_MERGE)
             insn->type = named_type;
         else if (insn->opcode == MIR_ADDRESS)
             insn->type = type_add_ptr(named_type);
