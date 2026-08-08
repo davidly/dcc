@@ -17077,6 +17077,25 @@ final decision point and requires:
 - Performance gate: 17 deliberate Phase-1 regressions, 1 improvement;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
 
+## Item T465: instruction-count and binary-load-pair tail (+3 ordinary/+3 stack-check, 2026-08-08)
+
+Fresh T464 baseline: **1935/2060 ordinary (93.93%)** and **2050/2179
+stack-check (94.08%)**.
+
+Both true-final `instruction-count` candidates pass, but blind reason forcing
+also removed two existing MIR functions; a true-final gate avoids those
+selector changes. Of the two binary-load-pair candidates,
+`too.world_visit` (backedge) passes and `pint.emit` remains a direct failure.
+
+- Ordinary: **1935/2060 -> 1938/2060 (94.08%)**, **+3**, zero removals.
+- Stack-check: **2050/2179 -> 2053/2179 (94.22%)**, **+3**, zero removals.
+- Remaining terminal `instruction-count`: **0**.
+- Remaining `binary-load-pair-cost`: **1 ordinary / 1 stack-check**.
+- Full extended correctness: **314/314 runnable apps + 196/196 extended**,
+  diagnostics and dccpeep pass.
+- Performance gate: 6 deliberate Phase-1 regressions, 1 improvement;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.
+
 ### Next
 
 The safe final acyclic stratum is exhausted. Remaining dynamic-index-base

@@ -31,13 +31,13 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1935/2060 (93.93%)**
-- Current stack-check coverage: **2050/2179 (94.08%)**
-- HEAD (pending push): T464 admits two call-containing
-  `constant-conversion-home-cost` and all three true-final
-  `dead-store-forwarding-cost` candidates: **+5 ordinary/+5 stack-check**,
-  zero removals. It retains the isolated call-free `lmod` failure. See
-  `## Item T464` in
+- Current ordinary coverage: **1938/2060 (94.08%)**
+- Current stack-check coverage: **2053/2179 (94.22%)**
+- HEAD (pending push): T465 admits the safe backedge
+  `binary-load-pair-cost` candidate and both true-final
+  `instruction-count` candidates: **+3 ordinary/+3 stack-check**, zero
+  removals. `pint.emit` remains a direct resource/correctness failure. See
+  `## Item T465` in
   `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
@@ -184,6 +184,8 @@ transactional fallback remains in place throughout Phase 1.
   candidates pass while `tlimits` retains its actual boolean-PHI reason.
 - **T464 consolidates two tiny residuals.** Constant-home is reduced to one
   direct call-free failure; dead-store forwarding is fully eliminated.
+- **T465 closes instruction-count and halves binary-load-pair.** True-final
+  gating avoids the two selector removals seen under blind forcing.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

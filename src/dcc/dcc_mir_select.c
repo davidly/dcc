@@ -4506,6 +4506,19 @@ evaluate_generated:
                      * pint retains its boolean-PHI reason. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "binary-load-pair-cost") &&
+                    !g_speculative_codegen_active &&
+                    mir_has_cfg_backedge())
+                    /* T465: the backedge candidate passes; retain the
+                     * direct pint.emit failure. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "instruction-count") &&
+                    !g_speculative_codegen_active)
+                    /* T465: both true-final candidates pass; final gating
+                     * avoids blind forcing's selector removals. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
                     mir_reason_uses_bounded_acyclic_coverage(
                         fallback_reason) &&
                     mir_bounded_acyclic_coverage_is_semantically_eligible(
