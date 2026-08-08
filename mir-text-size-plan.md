@@ -17426,6 +17426,19 @@ boolean simplifications, and <=40 KiB generated text.
 - The larger stack reserves are tracked Phase-1 resource debt; frame recovery
   remains a Phase-2 requirement.
 
+## Item T490: repaired deterministic float driver (+1/+1, 2026-08-08)
+
+The dynamic-index FINAL gate retained a historical exclusion for the
+13-block/19-call `ttrig.main`. T488's tracked stack reserve removes its final
+resource failure; forced and production peep/nopeep runs now pass. The generic
+bounded FINAL predicate therefore no longer excludes that shape.
+
+- Coverage: **2041/2060 (99.08%)**, **2160/2179 (99.13%)**, zero removals.
+- Remaining `dynamic-index-base-cost`: **4**.
+- Full extended correctness: **314/314 runnable + 196/196 extended**,
+  diagnostics and dccpeep fixtures pass.
+- Performance changes are tracked in the checked baselines.
+
 ## Item T475: model division/remainder helper call clobbers (+1/+1, 2026-08-08)
 
 `tregnarw.lmod` kept loop-invariant `x` in HL across MIR `%`, but emission

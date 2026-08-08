@@ -31,11 +31,10 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **2040/2060 (99.03%)**
-- Current stack-check coverage: **2159/2179 (99.08%)**
-- HEAD (pending push): T488/T489 admit the semantically repaired `ttrig.xsinf`
-  and `cint.next` with explicit Phase-1 stack reserves: **+2/+2**, zero
-  removals. See `mir-text-size-plan.md`.
+- Current ordinary coverage: **2041/2060 (99.08%)**
+- Current stack-check coverage: **2160/2179 (99.13%)**
+- HEAD (pending push): T490 admits `ttrig.main` through the same tracked stack
+  reserve established by T488: **+1/+1**, zero removals.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -244,6 +243,9 @@ transactional fallback remains in place throughout Phase 1.
 - **T489 crosses 99% in both censuses.** The high-boolean-simplification
   parser is admitted with a tracked 768-byte stack reserve; this is explicit
   Phase-1 resource debt for the post-100% frame-recovery campaign.
+- **T490 reduces dynamic-index residue to four.** The deterministic
+  13-block/19-call FINAL float driver passes both modes with T488's tracked
+  reserve and no longer needs its historical exclusion.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

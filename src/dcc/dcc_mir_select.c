@@ -2358,7 +2358,6 @@ static int mir_dynamic_index_base_final_sink_is_semantically_eligible(void)
 
     return blocks <= 50 &&
            mir.backend_slot_count < 18 &&
-           !(blocks == 13 && calls == 19) &&
            !(calls <= 3 && mir_has_wide_values() &&
              mir_has_label_only_phi_fallthrough());
 }
@@ -4782,9 +4781,9 @@ evaluate_generated:
                     !g_speculative_codegen_active &&
                     mir.sink_purpose == EMIT_SINK_FINAL &&
                     mir_dynamic_index_base_final_sink_is_semantically_eligible())
-                    /* T469: isolate deterministic FINAL candidates from
-                     * direct large/high-slot and extended label-PHI
-                     * failures. */
+                    /* T469/T490: deterministic bounded FINAL candidates,
+                     * including the repaired 13-block float driver with its
+                     * tracked stack reserve, pass both modes. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
                     !strcmp(fallback_reason, "boolean-phi-cost") &&
