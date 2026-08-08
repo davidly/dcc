@@ -2411,27 +2411,22 @@ static int mir_block_cse_post_phi_is_semantically_eligible(
            !(mir_has_wide_values() && mir_call_count() == 20);
 }
 
-static int mir_has_unconsumed_inline_temp_overwrite(void)
+static int mir_has_inline_temp_identity_overwrite(void)
 {
-    int pending[MAX_PROTO_PARAMS] = {0};
+    int current_identity[MAX_PROTO_PARAMS] = {0};
     int instruction;
 
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
-        int index;
-        if (strncmp(insn->name, "#itmp", 5) != 0 ||
-            insn->name[5] < '0' || insn->name[5] > '9' ||
-            insn->name[6] != 0)
+        int slot = mir_inline_temp_slot(insn->name);
+        if (slot < 0)
             continue;
-        index = insn->name[5] - '0';
-        if (index >= MAX_PROTO_PARAMS)
-            continue;
-        if (insn->opcode == MIR_STORE) {
-            if (pending[index])
+        if (insn->opcode == MIR_STORE)
+            current_identity[slot] = insn->inline_temp_id;
+        else if (insn->opcode == MIR_LOAD) {
+            if (insn->inline_temp_id == 0 ||
+                current_identity[slot] != insn->inline_temp_id)
                 return 1;
-            pending[index] = 1;
-        } else if (insn->opcode == MIR_LOAD) {
-            pending[index] = 0;
         }
     }
     return 0;
@@ -4744,11 +4739,11 @@ evaluate_generated:
                         fallback_reason = NULL;
                 }
                 if (fallback_reason == NULL &&
-                    mir_has_unconsumed_inline_temp_overwrite())
-                    /* Nested inline expansion reused one #itmp slot before
-                     * the outer value's first load. Keep this semantic shape
-                     * on fallback until MIR gives nesting levels distinct
-                     * temporary identities. */
+                    mir_has_inline_temp_identity_overwrite())
+                    /* T447/T450: each logical inline temp carries its scoped
+                     * identity even when sequential calls reuse one reserved
+                     * frame slot. A load whose identity no longer owns that
+                     * slot proves a real nested overwrite. */
                     fallback_reason = "inline-temp-overlap";
                 if (fallback_reason != NULL)
                     emitted = 0;

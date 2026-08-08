@@ -17260,6 +17260,18 @@ call-crossing values into safe homes. `lmod` now returns 4 and is admitted.
 - Full extended correctness: **314/314 runnable + 196/196 extended**.
 - Performance: 11 regressions/5 improvements tracked; baselines updated.
 
+## Item T476: scoped logical inline-temp identities (+1/+1, 2026-08-08)
+
+Physical `#itmpN` slots are reused by sequential and nested inline
+substitutions. The old pending-store heuristic treated harmless sequential
+reuse and unused/`sizeof` arguments as overlap. MIR stores/loads now carry a
+scoped logical temp identity; only a load whose identity no longer owns the
+slot is rejected.
+
+- Coverage: **2025/2060 (98.30%)**, **2144/2179 (98.39%)**, zero removals.
+- Remaining `inline-temp-overlap`: **0**.
+- Full extended correctness: **314/314 runnable + 196/196 extended**.
+
 ## Item T474: staged ordinary-module boolean budget (+4 ordinary/+5 stack-check, 2026-08-08)
 
 Fresh T473: **2019/2060 ordinary**, **2137/2179 stack-check**. Inline-sensitive

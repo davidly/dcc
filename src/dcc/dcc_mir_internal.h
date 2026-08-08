@@ -89,6 +89,7 @@ struct MirInsn {
     int bit_shift;
     unsigned int bit_mask;
     int secondary_offset;
+    int inline_temp_id;
     char name[64];
     char base_name[64];
 };
@@ -116,6 +117,7 @@ struct MirFunction {
     int next_value;
     int next_label;
     int next_call_id;
+    int next_inline_temp_id;
     int active;
     int sink_purpose;
     int break_labels[MAX_FLOW];
@@ -429,6 +431,7 @@ void mir_resolve_deferred_metadata(void);
 int mir_extended_integer_constant_conversion_folds(void);
 int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
                                       int *storage, int *offset);
+int mir_inline_temp_slot(const char *name);
 const char *mir_sink_name(int purpose);
 void mir_thread_jumps(void);
 int mir_value_number_global_field_loads(void);

@@ -31,11 +31,11 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **2024/2060 (98.25%)**
-- Current stack-check coverage: **2143/2179 (98.35%)**
-- HEAD (pending push): T475 models integer division/remainder MIR operations
-  as caller-register-clobbering helper calls, fixing and admitting
-  `tregnarw.lmod`: **+1/+1**, zero removals. See `## Item T475` in
+- Current ordinary coverage: **2025/2060 (98.30%)**
+- Current stack-check coverage: **2144/2179 (98.39%)**
+- HEAD (pending push): T476 gives scoped logical identities to reused inline
+  temp frame slots, fixing and admitting `tinline.inline_eval_check`:
+  **+1/+1**, zero removals. See `## Item T476` in
   `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
@@ -209,6 +209,8 @@ transactional fallback remains in place throughout Phase 1.
   `adaint`, `cint`, or COBOL limits.
 - **T475 fixes helper-call allocation.** Values live across `/` or `%` can no
   longer remain in caller-clobbered HL/DE/BC.
+- **T476 eliminates inline-temp-overlap fallback.** Sequential slot reuse is
+  distinguished from genuine nested identity overwrite.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations
