@@ -31,12 +31,13 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1861/2060 (90.34%)**
-- Current stack-check coverage: **1971/2179 (90.45%)**
-- HEAD (pending push): T458 admits 23/24 terminal
-  `dead-local-suffix-cost` candidates: **+23 ordinary/+23 stack-check**,
-  zero removals. Only the unique >20-block, <=1-call wide/label CFG remains
-  excluded after direct full-reason validation. See `## Item T458` in
+- Current ordinary coverage: **1883/2060 (91.41%)**
+- Current stack-check coverage: **1994/2179 (91.51%)**
+- HEAD (pending push): T459 eliminates terminal `absolute-index-cost`:
+  **+22 ordinary/+23 stack-check**, zero removals. Broad reason forcing
+  failed only by intercepting transient `pint` boolean-PHI and `tstructv`
+  block-CSE candidates; the true-final absolute-index set passes. See
+  `## Item T459` in
   `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
@@ -169,6 +170,9 @@ transactional fallback remains in place throughout Phase 1.
 - **T458 nearly eliminates dead-local suffix fallback.** Twenty-three wide,
   label-PHI, loop, float, and pointer candidates pass together; only one
   45-block/one-call shape remains.
+- **T459 eliminates terminal absolute-index fallback.** The two failures from
+  blind reason forcing were later-retry candidates with different true final
+  reasons, confirming final-reason ordering is again load-bearing.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

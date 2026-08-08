@@ -4455,6 +4455,13 @@ evaluate_generated:
                      * passed together; transient tpfauto remains block-CSE. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "absolute-index-cost") &&
+                    !g_speculative_codegen_active)
+                    /* T459: every terminal absolute-index candidate passed;
+                     * transient pint/tstructv retries retain their true
+                     * boolean-PHI/block-CSE reasons. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
                     mir_reason_uses_bounded_acyclic_coverage(
                         fallback_reason) &&
                     mir_bounded_acyclic_coverage_is_semantically_eligible(

@@ -17738,3 +17738,22 @@ that structural outlier.
   diagnostics and dccpeep pass.
 - Performance gate: 91 deliberate Phase-1 regressions, 0 improvements;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
+
+## Item T459: complete terminal absolute-index cohort (+22 ordinary/+23 stack-check, 2026-08-08)
+
+Fresh T458 baseline: **1861/2060 ordinary (90.34%)** and **1971/2179
+stack-check (90.45%)**.
+
+Blind `absolute-index-cost` forcing exposed 32 functions and failed
+`pint` plus `tstructv`. Neither failing function has that true final reason:
+`pint.next` remains `boolean-phi-cost`, while `tstructv.main` remains
+`block-cse-cost`. A true-final gate admits exactly the 22 ordinary terminal
+absolute-index candidates without intercepting those later retries.
+
+- Ordinary: **1861/2060 -> 1883/2060 (91.41%)**, **+22**, zero removals.
+- Stack-check: **1971/2179 -> 1994/2179 (91.51%)**, **+23**, zero removals.
+- Remaining terminal `absolute-index-cost`: **0**.
+- Full extended correctness: **314/314 runnable apps + 196/196 extended**,
+  diagnostics and dccpeep pass.
+- Performance gate: 69 deliberate Phase-1 regressions, 1 improvement;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.

@@ -132,8 +132,9 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "stack pressure and ttrig loop failures.",
     "dead-local-suffix-cost": "T444/T458 admitted every current terminal "
                  "candidate except the unique >20-block, <=1-call failure.",
-    "absolute-index-cost": "T444 admitted 4 terminal bounded acyclic "
-                 "functions; pointer/loop/oversized shapes remain.",
+    "absolute-index-cost": "T444/T459 admitted the complete terminal reason. "
+                 "Blind forcing still intercepts unsafe transient pint "
+                 "boolean-PHI and tstructv block-CSE retries.",
     "planned-index-base-cost": "T444 admitted 10 terminal bounded acyclic "
                  "functions; unsafe loop/resource shapes remain.",
     "planned-stack-cost": "T444 admitted 8 terminal bounded acyclic "
