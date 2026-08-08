@@ -17574,6 +17574,25 @@ admits bounded wide integer object-PHI loops after that repair.
   diagnostics and dccpeep fixtures pass.
 - Performance changes are tracked in the checked baselines.
 
+## Item T498: measured larger hybrid call/PHI stratum (+2/+2, 2026-08-08)
+
+The remaining large interpreter candidates were blocked by hybrid's four-spill
+and 5% profitability limits rather than unsupported semantics.
+`cobint.compile_perform` emits correctly with seven spills at 14722 bytes
+versus 12817 legacy; `forint.parse_source` falls into the same bounded
+call/PHI class and is also full-mode clean.
+
+Hybrid emission now permits up to seven spills for <=92-block large call/PHI
+CFGs and applies a 25% Phase-1 size ceiling to that class. The gate remains
+structural and transactional; all other hybrid candidates retain 5%.
+
+- Coverage: **2053/2060 (99.66%)**, **2172/2179 (99.68%)**, zero removals.
+- Remaining `boolean-phi-cost`: **4**.
+- Remaining `unary-not-cost`: **1**.
+- Full extended correctness: **314/314 runnable + 196/196 extended**,
+  diagnostics and dccpeep fixtures pass.
+- The accepted size/performance increase is tracked Phase-2 recovery debt.
+
 ## Item T475: model division/remainder helper call clobbers (+1/+1, 2026-08-08)
 
 `tregnarw.lmod` kept loop-invariant `x` in HL across MIR `%`, but emission

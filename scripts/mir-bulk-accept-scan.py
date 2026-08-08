@@ -115,8 +115,9 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "ABI, admitting three more. T487 admitted the bounded "
                  "four-call FINAL pair. T489 admitted the large parser with a "
                  "tracked stack reserve. T493's bounded hybrid retained-home "
-                 "retry admitted three Pint parser functions. Five direct/"
-                 "allocation or CP/M-resource failures remain.",
+                 "retry admitted three Pint parser functions. T498 admitted "
+                 "the larger Fortran parser. Four direct/allocation or CP/M-"
+                 "resource failures remain.",
     "phi-fallthrough-cost": "T455 fixed real-edge PHI copy ownership, "
                  "NOP-only arm duplication, typed signedness/narrowing "
                  "aliases, and fused wide-constant operands; the complete "
@@ -132,8 +133,8 @@ CONFIRMED_UNSAFE_COST_REASONS = {
     "unary-not-cost": "T441/T452/T457/T467 admitted terminal acyclic, loop, "
                  "small-CFG, FINAL-sink, and 19 isolated DEFERRED-sink "
                  "functions through T470. T495's bounded hybrid retry "
-                 "admitted the zero-spill COB add/sub pair. Two large "
-                 "interpreter/resource functions remain.",
+                 "admitted the zero-spill COB add/sub pair. T498 admitted the "
+                 "larger COB performer. Only pint.run remains.",
     "wide-constant-cost": "T442/T454 admitted the complete terminal reason. "
                  "Blind reason forcing still intercepts tpfauto.main before "
                  "its true block-cse-cost retry.",

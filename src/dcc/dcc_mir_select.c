@@ -2437,8 +2437,8 @@ static int mir_hybrid_homed_retry_is_eligible(const char *reason)
     return !strcmp(reason, "unary-not-cost") &&
            !mir_has_cfg_backedge() &&
            !mir_has_inline_substitution_call() &&
-           mir_cfg_block_count() <= 40 &&
-           mir_call_count() <= 7;
+           mir_cfg_block_count() <= 92 &&
+           mir_call_count() <= 15;
 }
 
 static int mir_wide_store_coverage_is_semantically_eligible(

@@ -31,10 +31,11 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **2051/2060 (99.56%)**
-- Current stack-check coverage: **2170/2179 (99.59%)**
-- HEAD (pending push): T497 preserves typed shadow-object merges and admits
-  `tforsco.main`: **+1/+1**, zero removals.
+- Current ordinary coverage: **2053/2060 (99.66%)**
+- Current stack-check coverage: **2172/2179 (99.68%)**
+- HEAD (pending push): T498 extends bounded hybrid emission to larger
+  call/PHI CFGs, admitting `cobint.compile_perform` and
+  `forint.parse_source`: **+2/+2**, zero removals.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -272,6 +273,9 @@ transactional fallback remains in place throughout Phase 1.
 - **T497 fixes shadowed object-merge types.** Deferred alias repair retargeted
   a merge from an outer `int` to a C99 for-init `long` without updating its
   type, truncating the loop PHI and hanging `tforsco.main`.
+- **T498 opens the measured larger hybrid stratum.** Hybrid emission supports
+  up to seven spills and 92-block call/PHI CFGs with a 25% Phase-1 size bound,
+  admitting the final COB performer and Fortran parser.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

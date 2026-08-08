@@ -920,14 +920,15 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
           mir_cfg_block_count() <= 3 &&
           mir.allocation_spill_count == 0) &&
         !(mir_homed_is_large_call_phi_cfg() &&
-          mir_cfg_block_count() <= 40 &&
-          mir.allocation_spill_count == 0))
+          mir_cfg_block_count() <= 92 &&
+          mir.allocation_spill_count <= 7))
         return mir_homed_reject("hybrid-shape");
     if (!mir_hybrid_homed_selection &&
         mir_homed_byte_indirect_count() > 0 &&
         (mir_cfg_block_count() > 1 || mir.count <= 20))
         return mir_homed_reject("byte-indirect-cost");
-    if (mir.allocation_spill_count > 4)
+    if (mir.allocation_spill_count >
+            (mir_hybrid_homed_selection ? 7 : 4))
         return mir_homed_reject("spill");
     for (value = 0; value < mir.next_value; ++value)
         if (mir_home_spill_offset(value, NULL)) {
@@ -2437,7 +2438,9 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
         long generated_size = mir_stream_size(out);
         long captured_size = mir_stream_size(mir.capture_stream);
 
-        if (generated_size * 100L > captured_size * 105L)
+        if (generated_size * 100L >
+                captured_size *
+                    (mir_homed_is_large_call_phi_cfg() ? 125L : 105L))
             goto done;
     } else if (mir.allocation_spill_count != 0 &&
                (mir_cfg_block_count() > 4 ||
