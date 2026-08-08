@@ -137,8 +137,9 @@ CONFIRMED_UNSAFE_COST_REASONS = {
     "planned-index-base-cost": "T444/T462 admitted the complete true-final "
                  "reason. Blind forcing still perturbs transient/deferred "
                  "tarray, pint, and tlongidx candidates.",
-    "planned-stack-cost": "T444 admitted 8 terminal bounded acyclic "
-                 "functions; wumpus/later-retry shapes remain.",
+    "planned-stack-cost": "T444/T463 admitted the complete true-final "
+                 "reason; blind forcing also exposes a transient tlimits "
+                 "boolean-PHI retry.",
     "binary-load-pair-cost": "T445/T448 admitted 10 functions after fixing "
                  "computed PHI source slots. The single-call pint.emit "
                  "resource stratum remains.",

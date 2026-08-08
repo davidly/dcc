@@ -4485,6 +4485,12 @@ evaluate_generated:
                      * candidates. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "planned-stack-cost") &&
+                    !g_speculative_codegen_active)
+                    /* T463: every true-final candidate passed; transient
+                     * tlimits remains on its boolean-PHI retry. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
                     mir_reason_uses_bounded_acyclic_coverage(
                         fallback_reason) &&
                     mir_bounded_acyclic_coverage_is_semantically_eligible(

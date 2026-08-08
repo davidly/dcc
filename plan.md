@@ -31,13 +31,12 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1923/2060 (93.35%)**
-- Current stack-check coverage: **2038/2179 (93.53%)**
-- HEAD (pending push): T462 eliminates terminal
-  `planned-index-base-cost`: **+11 ordinary/+13 stack-check**, zero
-  removals. Blind forcing failed only through transient/deferred `tarray`,
-  `pint`, and `tlongidx` changes; the true-final cohort passes. See
-  `## Item T462` in
+- Current ordinary coverage: **1930/2060 (93.69%)**
+- Current stack-check coverage: **2045/2179 (93.85%)**
+- HEAD (pending push): T463 eliminates terminal `planned-stack-cost`:
+  **+7 ordinary/+7 stack-check**, zero removals. Blind forcing additionally
+  exposed a transient `tlimits` boolean-PHI retry; the true-final set passes.
+  See `## Item T463` in
   `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
@@ -180,6 +179,8 @@ transactional fallback remains in place throughout Phase 1.
 - **T462 eliminates terminal planned-index-base fallback.** Eleven true-final
   candidates pass without the nonlocal label/layout perturbations caused by
   blind transient interception.
+- **T463 eliminates terminal planned-stack fallback.** Seven true-final
+  candidates pass while `tlimits` retains its actual boolean-PHI reason.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

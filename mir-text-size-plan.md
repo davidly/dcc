@@ -17815,3 +17815,21 @@ that complete set without changing the transient/deferred candidates.
   diagnostics and dccpeep pass.
 - Performance gate: 24 deliberate Phase-1 regressions, 5 improvements;
   `-UpdatePerfBaseline` completed with **314/314 passed**.
+
+## Item T463: complete terminal planned-stack cohort (+7 ordinary/+7 stack-check, 2026-08-08)
+
+Fresh T462 baseline: **1923/2060 ordinary (93.35%)** and **2038/2179
+stack-check (93.53%)**.
+
+Blind forcing exposed eight functions and passed the full extended gate.
+Seven have true-final `planned-stack-cost`; `tlimits.main` remains a
+boolean-PHI candidate. A true-final gate admits the seven-function terminal
+set without changing that retry.
+
+- Ordinary: **1923/2060 -> 1930/2060 (93.69%)**, **+7**, zero removals.
+- Stack-check: **2038/2179 -> 2045/2179 (93.85%)**, **+7**, zero removals.
+- Remaining terminal `planned-stack-cost`: **0**.
+- Full extended correctness: **314/314 runnable apps + 196/196 extended**,
+  diagnostics and dccpeep pass.
+- Performance gate: 26 deliberate Phase-1 regressions, 0 improvements;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.
