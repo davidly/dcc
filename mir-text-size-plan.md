@@ -17593,6 +17593,34 @@ structural and transactional; all other hybrid candidates retain 5%.
   diagnostics and dccpeep fixtures pass.
 - The accepted size/performance increase is tracked Phase-2 recovery debt.
 
+## Item T499: call-bounded regional homes (+1/+1, 2026-08-09)
+
+Whole-function homes kept interpreter values live in callee-saved registers
+or dedicated spill slots across every call. `pint.subprog` was correct but
+exceeded the stack-check TPA limit by 183 linked bytes.
+
+The MIR CFG now records maximal call-free regions and per-value segments.
+Segments use caller-saved homes only where existing liveness proves the color
+free, spill explicitly at region exits, reload lazily after calls, and share
+spill slots when their memory-occupancy intervals do not overlap. Stable
+incoming parameters and object addresses rematerialize instead of receiving
+duplicated homes. A transactional regional selector compacts adjacent
+preservation round trips before final cost/resource evaluation.
+
+`subprog` crosses 14 calls in eight used regions; the final plan uses four
+boundary slots before its post-CSE retry and fits the measured Pint TPA
+limit. `pint.for_stmt` is independently full-mode clean, but selecting both
+changes Pint's optimized linked layout and regresses the checked peep run, so
+the reason-level production gate retains only the multi-block candidate.
+
+- Coverage: **2054/2060 (99.71%)**, **2173/2179 (99.72%)**, zero removals.
+- New MIR function: `pint.subprog`.
+- Remaining `dynamic-index-base-cost`: **1** (`pint.for_stmt`).
+- Full extended correctness: **314/314 runnable + 196/196 extended**,
+  diagnostics and dccpeep fixtures pass.
+- Checked performance has zero regressions; Pint improves by 60 peep and
+  104 nopeep cycles.
+
 ## Item T475: model division/remainder helper call clobbers (+1/+1, 2026-08-08)
 
 `tregnarw.lmod` kept loop-invariant `x` in HL across MIR `%`, but emission

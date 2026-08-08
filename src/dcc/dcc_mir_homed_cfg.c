@@ -915,6 +915,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
         return mir_homed_reject("return-type");
     }
     if (mir_hybrid_homed_selection &&
+        !mir_regional_home_plan_is_active() &&
         mir_homed_byte_indirect_count() == 0 &&
         !(mir_homed_has_wide_values() &&
           mir_cfg_block_count() <= 3 &&
@@ -927,7 +928,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
         mir_homed_byte_indirect_count() > 0 &&
         (mir_cfg_block_count() > 1 || mir.count <= 20))
         return mir_homed_reject("byte-indirect-cost");
-    if (mir.allocation_spill_count >
+    if (!mir_regional_home_plan_is_active() &&
+        mir.allocation_spill_count >
             (mir_hybrid_homed_selection ? 7 : 4))
         return mir_homed_reject("spill");
     for (value = 0; value < mir.next_value; ++value)
@@ -995,6 +997,10 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             return mir_homed_reject("spill-phi");
         if (insn->dst >= 0 && mir.allocation_colors[insn->dst] < 0 &&
             !mir_home_spill_offset(insn->dst, NULL) &&
+            !(mir_regional_home_plan_is_active() &&
+              mir.regional_segment_heads[insn->dst] >= 0) &&
+            mir_regional_rematerialization_kind(insn->dst) ==
+                MIR_REGIONAL_REMAT_NONE &&
             !mir_is_lazy_parameter(insn->dst) &&
             (!mir_hybrid_homed_selection ||
              !mir_homed_value_is_rematerializable(insn->dst))) {
@@ -1408,6 +1414,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
     for (i = 0; i < mir.next_label; ++i)
         labels[i] = new_label();
 
+    mir_regional_begin_emission();
     uses_iy = mir_home_uses_iy();
     frameless = !uses_iy && mir_effective_local_bytes() == 0 &&
                 mir.allocation_spill_count == 0 &&
@@ -1441,6 +1448,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
         int true_label;
         int preserve_hl;
 
+        if (!mir_regional_before_instruction(out, i))
+            goto done;
         switch (insn->opcode) {
         case MIR_NOP: case MIR_PHI:
             break;
@@ -1612,6 +1621,9 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             break;
         case MIR_ADDRESS:
             {
+                if (mir_regional_rematerialization_kind(insn->dst) ==
+                    MIR_REGIONAL_REMAT_ADDRESS)
+                    break;
                 /* Item 16 (mir-migration-plan-to-100pct.md, re-adopting
                  * Item 14 now that Item 15's memset fastcall removes the
                  * MIR_CALL cost gap that caused Item 14's regression):
@@ -1967,6 +1979,9 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
         case MIR_PARAM:
             if (!mir_value_has_use(insn->dst))
                 break;
+            if (mir_regional_rematerialization_kind(insn->dst) ==
+                MIR_REGIONAL_REMAT_PARAMETER)
+                break;
             if (mir_is_lazy_parameter(insn->dst))
                 break;
             object = &mir.objects[insn->object];
@@ -2010,10 +2025,10 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
              * own dead-result skip just below (Item T12) and
              * dcc_mir_spilled_cfg.c's identical MIR_CONST check (Item
              * T18). */
-            if (mir_index_only_constant(insn->dst) ||
-                mir_homed_binary_only_constant(insn->dst) ||
-                mir_homed_wide_binary_only_constant(insn->dst) ||
-                mir_value_only_used_by_dead_stores(insn->dst))
+            if (            mir_index_only_constant(insn->dst) ||
+            mir_homed_binary_only_constant(insn->dst) ||
+            mir_homed_wide_binary_only_constant(insn->dst) ||
+            mir_value_only_used_by_dead_stores(insn->dst))
                 break;
             /* Item 20d: dst may be wide (long) only if mir_probe_wide_
              * colors_for_homed accepted this function - dispatch on the
@@ -2403,6 +2418,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
         if (mir_instruction_has_phi_fallthrough(i, 0) &&
             !mir_emit_homed_phi_copies(out, i, i + 1))
             goto done;
+        mir_regional_after_instruction(i);
     }
     /* A void function that falls off the end (no MIR_RETURN reached as
      * the final instruction - either return_count==0 entirely, or the
@@ -2430,25 +2446,28 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
     /* A two-instruction deficit regressed the narrow-shift candidates.
      * A one-instruction deficit remains allowed because the measured
      * tmirfast/tmirfuse candidates improve in both peep modes. */
-    if (mir_homed_cfg_rematerializes_string_argument() &&
+    if (!mir_regional_home_plan_is_active() &&
+        mir_homed_cfg_rematerializes_string_argument() &&
         mir_stream_instruction_count(out) >
             mir_stream_instruction_count(mir.capture_stream) + 1)
         goto done;
-    if (mir_hybrid_homed_selection) {
-        long generated_size = mir_stream_size(out);
-        long captured_size = mir_stream_size(mir.capture_stream);
+    if (!mir_regional_home_plan_is_active()) {
+        if (mir_hybrid_homed_selection) {
+            long generated_size = mir_stream_size(out);
+            long captured_size = mir_stream_size(mir.capture_stream);
 
-        if (generated_size * 100L >
-                captured_size *
-                    (mir_homed_is_large_call_phi_cfg() ? 125L : 105L))
+            if (generated_size * 100L >
+                    captured_size *
+                        (mir_homed_is_large_call_phi_cfg() ? 125L : 105L))
+                goto done;
+        } else if (mir.allocation_spill_count != 0 &&
+                   (mir_cfg_block_count() > 4 ||
+                    mir_stream_size(out) >=
+                        mir_stream_size(mir.capture_stream) ||
+                    mir_stream_instruction_count(out) >
+                        mir_stream_instruction_count(mir.capture_stream))) {
             goto done;
-    } else if (mir.allocation_spill_count != 0 &&
-               (mir_cfg_block_count() > 4 ||
-                mir_stream_size(out) >=
-                    mir_stream_size(mir.capture_stream) ||
-                mir_stream_instruction_count(out) >
-                    mir_stream_instruction_count(mir.capture_stream))) {
-        goto done;
+        }
     }
     mir_homed_cfg_frameless = frameless;
     accepted = 1;

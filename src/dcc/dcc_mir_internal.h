@@ -180,6 +180,19 @@ struct MirFunction {
      * mir_end_function(), after every selector has had a chance to run. */
     unsigned char *live_in;
     unsigned char *live_out;
+    struct MirRegion *regions;
+    int region_count;
+    int region_capacity;
+    int *instruction_regions;
+    int instruction_region_capacity;
+    struct MirRegionalSegment *regional_segments;
+    int regional_segment_count;
+    int regional_segment_capacity;
+    int *regional_segment_heads;
+    int regional_segment_head_capacity;
+    int regional_spill_slot_count;
+    unsigned char *regional_rematerializable;
+    int regional_rematerializable_capacity;
     int *backend_slots;
     int backend_slot_capacity;
     int backend_slot_count;
@@ -236,6 +249,38 @@ struct MirResolvedNamedAddress {
     int member_depth;
     char base_name[64];
     char leaf_member_name[64];
+};
+
+struct MirRegion {
+    int first;
+    int last;
+    int boundary_after;
+};
+
+enum MirRegionalSegmentFlag {
+    MIR_REGIONAL_LIVE_IN = 1,
+    MIR_REGIONAL_LIVE_OUT = 2,
+    MIR_REGIONAL_DEFINES = 4
+};
+
+enum MirRegionalRematerialization {
+    MIR_REGIONAL_REMAT_NONE,
+    MIR_REGIONAL_REMAT_PARAMETER,
+    MIR_REGIONAL_REMAT_ADDRESS
+};
+
+struct MirRegionalSegment {
+    int value;
+    int region;
+    int first_use;
+    int last_use;
+    int use_count;
+    int available_colors;
+    int allocatable_colors;
+    int color;
+    int spill_slot;
+    int flags;
+    int next_for_value;
 };
 
 enum MirPhysicalColor {
@@ -430,6 +475,16 @@ int mir_probe_wide_colors_for_homed(
 int mir_homed_rematerializable_wide_candidate_count(void);
 void mir_begin_hybrid_homed_selection(void);
 void mir_end_hybrid_homed_selection(void);
+int mir_begin_regional_home_plan(void);
+void mir_end_regional_home_plan(void);
+int mir_regional_home_plan_is_active(void);
+int mir_regional_rematerialization_kind(int value);
+int mir_regional_parameter_location(int value, int *offset, int *type);
+const struct MirRegionalSegment *mir_regional_segment_for(
+    int value, int instruction);
+void mir_regional_begin_emission(void);
+int mir_regional_before_instruction(FILE *out, int instruction);
+void mir_regional_after_instruction(int instruction);
 void mir_resolve_deferred_metadata(void);
 int mir_extended_integer_constant_conversion_folds(void);
 int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
@@ -443,6 +498,7 @@ int mir_global_field_value_numbering_count(void);
 int mir_repeated_named_pointer_load_count(void);
 int mir_eliminate_common_block_expressions(void);
 int mir_common_block_expression_elimination_count(void);
+int mir_eliminate_common_region_expressions(void);
 void mir_simplify_boolean_phi_branches(void);
 int mir_boolean_phi_branch_simplification_count(void);
 void mir_reset_boolean_phi_branch_simplification_count(void);

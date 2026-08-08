@@ -71,6 +71,148 @@ struct MirCandidateResult {
     const char *reason;
 };
 
+static int mir_regional_line_is(const char *line, const char *text)
+{
+    return line != NULL && strcmp(line, text) == 0;
+}
+
+static int mir_regional_full_hl_reload(
+    const char *low, const char *high)
+{
+    return (strncmp(low, "\tld l,(ix", 9) == 0 &&
+            strncmp(high, "\tld h,(ix", 9) == 0) ||
+           (strncmp(low, "\tld l,(iy", 9) == 0 &&
+            strncmp(high, "\tld h,(iy", 9) == 0) ||
+           (mir_regional_line_is(low, "\tld h,b\n") &&
+            mir_regional_line_is(high, "\tld l,c\n"));
+}
+
+static FILE *mir_compact_regional_candidate(FILE *input)
+{
+    char **lines = NULL;
+    int count = 0;
+    int capacity = 0;
+    char buffer[512];
+    FILE *output;
+    int i;
+
+    rewind(input);
+    while (fgets(buffer, sizeof(buffer), input) != NULL) {
+        size_t length = strlen(buffer) + 1;
+        char *copy;
+
+        if (count == capacity) {
+            int next_capacity = capacity == 0 ? 256 : capacity * 2;
+            char **next_lines = (char **)realloc(
+                lines, (size_t)next_capacity * sizeof(*next_lines));
+            if (next_lines == NULL)
+                fatal("out of memory compacting regional MIR output");
+            lines = next_lines;
+            capacity = next_capacity;
+        }
+        copy = (char *)malloc(length);
+        if (copy == NULL)
+            fatal("out of memory compacting regional MIR output");
+        memcpy(copy, buffer, length);
+        lines[count++] = copy;
+    }
+    output = tmpfile();
+    if (output == NULL)
+        fatal("cannot create compacted regional MIR stream");
+    /*
+     * Regional homes expose adjacent preservation sequences assembled by
+     * separate helpers. These exact rewrites preserve registers, stack, and
+     * flags; applying the pass twice reaches the small local fixed point.
+     */
+    for (i = 0; i < count;) {
+        if (i + 6 < count &&
+            mir_regional_line_is(lines[i], "\tpush de\n") &&
+            mir_regional_line_is(lines[i + 1], "\tpop hl\n") &&
+            mir_regional_line_is(lines[i + 2], "\tpush hl\n") &&
+            mir_regional_line_is(lines[i + 3], "\tld h,b\n") &&
+            mir_regional_line_is(lines[i + 4], "\tld l,c\n") &&
+            mir_regional_line_is(lines[i + 5], "\tex de,hl\n") &&
+            mir_regional_line_is(lines[i + 6], "\tpop hl\n")) {
+            fputs("\tpush de\n\tpop hl\n\tld d,b\n\tld e,c\n",
+                  output);
+            i += 7;
+            continue;
+        }
+        if (i + 6 < count &&
+            mir_regional_line_is(lines[i], "\tpush de\n") &&
+            mir_regional_line_is(lines[i + 1], "\tpop hl\n") &&
+            mir_regional_line_is(lines[i + 2], "\tpush hl\n") &&
+            ((strncmp(lines[i + 3], "\tld l,(ix", 9) == 0 &&
+              strncmp(lines[i + 4], "\tld h,(ix", 9) == 0) ||
+             (strncmp(lines[i + 3], "\tld l,(iy", 9) == 0 &&
+              strncmp(lines[i + 4], "\tld h,(iy", 9) == 0)) &&
+            mir_regional_line_is(lines[i + 5], "\tex de,hl\n") &&
+            mir_regional_line_is(lines[i + 6], "\tpop hl\n")) {
+            char low[512];
+            char high[512];
+
+            strcpy(low, lines[i + 3]);
+            strcpy(high, lines[i + 4]);
+            low[4] = 'e';
+            high[4] = 'd';
+            fputs("\tpush de\n\tpop hl\n", output);
+            fputs(low, output);
+            fputs(high, output);
+            i += 7;
+            continue;
+        }
+        if (i + 5 < count &&
+            mir_regional_line_is(lines[i], "\tpush hl\n") &&
+            strncmp(lines[i + 1], "\tld hl,", 7) == 0 &&
+            mir_regional_line_is(lines[i + 2], "\tex de,hl\n") &&
+            mir_regional_line_is(lines[i + 3], "\tpop hl\n") &&
+            mir_regional_line_is(lines[i + 4], "\tpush hl\n") &&
+            mir_regional_line_is(lines[i + 5], "\tpush de\n")) {
+            fputs("\tpush hl\n\tld de,", output);
+            fputs(lines[i + 1] + 7, output);
+            fputs("\tpush de\n", output);
+            i += 6;
+            continue;
+        }
+        if (i + 5 < count &&
+            mir_regional_line_is(lines[i], "\tpop hl\n") &&
+            mir_regional_line_is(lines[i + 1], "\tpush hl\n") &&
+            mir_regional_line_is(lines[i + 2], "\tpush de\n") &&
+            mir_regional_line_is(lines[i + 3], "\tpop hl\n") &&
+            mir_regional_line_is(lines[i + 4], "\tex de,hl\n") &&
+            mir_regional_line_is(lines[i + 5], "\tpop hl\n")) {
+            fputs("\tpop hl\n", output);
+            i += 6;
+            continue;
+        }
+        if (i + 3 < count &&
+            mir_regional_line_is(lines[i], "\tpop hl\n") &&
+            mir_regional_line_is(lines[i + 1], "\tpush hl\n") &&
+            mir_regional_line_is(lines[i + 2], "\tpush de\n") &&
+            mir_regional_line_is(lines[i + 3], "\tpop hl\n")) {
+            fputs("\tpush de\n\tpop hl\n", output);
+            i += 4;
+            continue;
+        }
+        if (i + 3 < count &&
+            mir_regional_line_is(lines[i], "\tpop hl\n") &&
+            mir_regional_line_is(lines[i + 1], "\tpush hl\n") &&
+            mir_regional_full_hl_reload(
+                lines[i + 2], lines[i + 3])) {
+            fputs(lines[i + 2], output);
+            fputs(lines[i + 3], output);
+            i += 4;
+            continue;
+        }
+        fputs(lines[i], output);
+        ++i;
+    }
+    for (i = 0; i < count; ++i)
+        free(lines[i]);
+    free(lines);
+    return output;
+}
+
 static int mir_call_count(void);
 static int mir_has_inline_substitution_call(void);
 static int mir_has_declared_pointer_array(void);
@@ -2441,6 +2583,14 @@ static int mir_hybrid_homed_retry_is_eligible(const char *reason)
            mir_call_count() <= 15;
 }
 
+static int mir_regional_homed_retry_is_eligible(const char *reason)
+{
+    return reason != NULL &&
+           (!strcmp(reason, "boolean-phi-cost") ||
+            !strcmp(reason, "dynamic-index-base-cost") ||
+            !strcmp(reason, "unary-not-cost"));
+}
+
 static int mir_wide_store_coverage_is_semantically_eligible(
     long generated_size, long captured_size)
 {
@@ -2898,6 +3048,16 @@ void mir_end_function(void)
         fprintf(stderr, "MIR completeness failed for function %s\n", mir.name);
         fatal("incomplete MIR coverage");
     }
+    if (verified &&
+        getenv("DCC_MIR_REGIONAL_HOME_REPORT") != NULL) {
+        const char *regional_filter =
+            getenv("DCC_MIR_REGIONAL_HOME_FUNCTION");
+
+        if ((regional_filter == NULL ||
+             !strcmp(regional_filter, mir.name)) &&
+            mir_begin_regional_home_plan())
+            mir_end_regional_home_plan();
+    }
     if (!mir.emit_mode && verified &&
         getenv("DCC_MIR_CANDIDATES") != NULL) {
         FILE *candidate = tmpfile();
@@ -2988,6 +3148,10 @@ void mir_end_function(void)
             int strict_phi_retry_attempted = 0;
             int strict_phi_fallthrough_active = 0;
             int phi_return_forwarding_retry_attempted = 0;
+            int regional_cse_retry_attempted = 0;
+            int regional_cse_active = 0;
+            const char *regional_cse_fallback_reason = NULL;
+            int regional_homed_retry_attempted = 0;
             int block_cse_retry_attempted = 0;
             int block_cse_captured_spills = 0;
             int block_cse_captured_fixed_moves = 0;
@@ -3039,6 +3203,12 @@ retry_selection:
             phi_return_forwarding_retry_attempted = 0;
             mir_end_all_spilled_fallback_optimizations();
             mir_end_strict_phi_fallthrough();
+            if (regional_cse_active) {
+                if (mir_cfg_block_count() <= 2)
+                    mir_begin_all_spilled_fallback_optimizations();
+                else
+                    mir_begin_promoted_local_slot_reuse();
+            }
             if (block_cse_retry_attempted) {
                 /* Address-only same-block CSE is profitable only when the
                  * retained value can stay rematerializable instead of being
@@ -4468,6 +4638,8 @@ evaluate_generated:
                             mir_report_dead_local_suffix();
                             goto retry_selection;
                         }
+                        fallback_reason = "regional-cse-verify";
+                        emitted = 0;
                     }
                 }
                 if (fallback_reason != NULL &&
@@ -4882,16 +5054,109 @@ evaluate_generated:
                      * allocator loop pass both modes. Retain the larger
                      * interpreter/resource and wide failures. */
                     fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !g_speculative_codegen_active &&
+                    !strcmp(fallback_reason, "unary-not-cost") &&
+                    mir.sink_purpose == EMIT_SINK_DEFERRED &&
+                    mir_unary_not_deferred_is_semantically_eligible(
+                        generated_size))
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !regional_cse_retry_attempted &&
+                    !g_speculative_codegen_active &&
+                    !strcmp(fallback_reason,
+                            "dynamic-index-base-cost")) {
+                    int regional_eliminated;
+
+                    regional_cse_retry_attempted = 1;
+                    regional_cse_fallback_reason = fallback_reason;
+                    regional_eliminated =
+                        mir_eliminate_common_region_expressions();
+                    if (regional_eliminated > 0) {
+                        regional_cse_active = 1;
+                        fclose(generated);
+                        generated = NULL;
+                        verified = mir_verify_and_dump();
+                        if (verified) {
+                            mir_compute_dead_local_suffix();
+                            mir_report_dead_local_suffix();
+                            goto retry_selection;
+                        }
+                    }
+                }
+                if (regional_cse_active &&
+                    (generated_size > captured_size ||
+                     generated_instructions > captured_instructions))
+                    fallback_reason = regional_cse_fallback_reason;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason,
+                            "dynamic-index-base-cost") &&
+                    !strcmp(selector_name,
+                            "regional-homed-scalar-cfg") &&
+                    regional_cse_active &&
+                    mir_cfg_block_count() > 2 &&
+                    !g_speculative_codegen_active)
+                    /*
+                     * The multi-block terminal candidate passes stack-check
+                     * peep+nopeep after call-bounded regional homes and
+                     * segment-level spill-slot reuse. The two-block peer is
+                     * correct alone but shifts Pint's optimized linked
+                     * layout when combined, so it remains on fallback.
+                     */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    mir_regional_homed_retry_is_eligible(
+                        fallback_reason) &&
+                    !regional_homed_retry_attempted &&
+                    !mir_has_wide_values() &&
+                    !g_speculative_codegen_active) {
+                    FILE *regional_candidate = tmpfile();
+                    int regional_emitted = 0;
+                    int regional_label_id_after;
+
+                    regional_homed_retry_attempted = 1;
+                    if (regional_candidate == NULL)
+                        fatal("cannot create MIR regional-home candidate "
+                              "stream");
+                    if (mir_begin_regional_home_plan()) {
+                        mir_begin_hybrid_homed_selection();
+                        label_id = mir_label_base;
+                        regional_emitted = mir_try_selector(
+                            regional_candidate,
+                            mir_try_emit_homed_scalar_cfg);
+                        regional_label_id_after = label_id;
+                        mir_end_hybrid_homed_selection();
+                        mir_end_regional_home_plan();
+                        if (regional_emitted) {
+                            FILE *first_compacted =
+                                mir_compact_regional_candidate(
+                                    regional_candidate);
+                            FILE *compacted =
+                                mir_compact_regional_candidate(
+                                    first_compacted);
+                            fclose(regional_candidate);
+                            fclose(first_compacted);
+                            regional_candidate = compacted;
+                            fclose(generated);
+                            generated = regional_candidate;
+                            regional_candidate = NULL;
+                            selector_name =
+                                "regional-homed-scalar-cfg";
+                            emitted = 1;
+                            generated_label_id_after =
+                                regional_label_id_after;
+                            fallback_reason = NULL;
+                            goto evaluate_generated;
+                        }
+                    }
+                    fclose(regional_candidate);
+                }
                 if (fallback_reason != NULL) {
                     const char *forced_final =
                         getenv("DCC_MIR_FORCE_ACCEPT_FINAL_FUNCTION");
                     if (!g_speculative_codegen_active &&
-                        ((forced_final != NULL &&
-                          !strcmp(forced_final, mir.name)) ||
-                         (!strcmp(fallback_reason, "unary-not-cost") &&
-                          mir.sink_purpose == EMIT_SINK_DEFERRED &&
-                          mir_unary_not_deferred_is_semantically_eligible(
-                              generated_size))))
+                        forced_final != NULL &&
+                        !strcmp(forced_final, mir.name))
                         /*
                          * Diagnostic only: unlike
                          * DCC_MIR_FORCE_ACCEPT_FUNCTION, this observes every

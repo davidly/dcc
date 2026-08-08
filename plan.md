@@ -31,11 +31,10 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **2053/2060 (99.66%)**
-- Current stack-check coverage: **2172/2179 (99.68%)**
-- HEAD (pending push): T498 extends bounded hybrid emission to larger
-  call/PHI CFGs, admitting `cobint.compile_perform` and
-  `forint.parse_source`: **+2/+2**, zero removals.
+- Current ordinary coverage: **2054/2060 (99.71%)**
+- Current stack-check coverage: **2173/2179 (99.72%)**
+- HEAD (local only): T499 adds call-bounded regional homes and admits
+  `pint.subprog`: **+1/+1**, zero removals.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -276,6 +275,11 @@ transactional fallback remains in place throughout Phase 1.
 - **T498 opens the measured larger hybrid stratum.** Hybrid emission supports
   up to seven spills and 92-block call/PHI CFGs with a 25% Phase-1 size bound,
   admitting the final COB performer and Fortran parser.
+- **T499 adds real call-boundary live-range splitting.** Persistent regional
+  segments reuse caller-saved homes and spill slots between calls; stable
+  parameters/addresses rematerialize at use. `pint.subprog` now fits the
+  stack-check TPA and passes both modes. Its two-block peer remains fallback
+  because selecting both perturbs Pint's optimized linked layout.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

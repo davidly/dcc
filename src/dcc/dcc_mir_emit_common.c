@@ -884,6 +884,71 @@ static int mir_emit_lazy_parameter_to_color(FILE *out, int value, int color)
     return 1;
 }
 
+static int mir_emit_regional_parameter_to_color(
+    FILE *out, int value, int color)
+{
+    int offset;
+    int type;
+
+    if (!mir_regional_parameter_location(value, &offset, &type))
+        return 0;
+    if (mir_home_uses_iy())
+        offset += 2;
+    if (color == MIR_COLOR_HL) {
+        fprintf(out, "\tld l,(ix%+d)\n", offset);
+        if (type_size(type) == 2)
+            fprintf(out, "\tld h,(ix%+d)\n", offset + 1);
+    } else if (color == MIR_COLOR_DE) {
+        fprintf(out, "\tld e,(ix%+d)\n", offset);
+        if (type_size(type) == 2)
+            fprintf(out, "\tld d,(ix%+d)\n", offset + 1);
+    } else {
+        return 0;
+    }
+    if (type_size(type) == 1)
+        mir_emit_byte_extension(out, color, type);
+    return 1;
+}
+
+static int mir_emit_regional_address_to_hl(FILE *out, int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    struct Sym *global;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (mir_regional_rematerialization_kind(value) !=
+            MIR_REGIONAL_REMAT_ADDRESS ||
+        definition == NULL ||
+        !mir_scalar_memory_location(
+            definition, &memory_type, &memory_storage,
+            &memory_offset))
+        return 0;
+    global = find_global(definition->name);
+    if ((global != NULL && global->storage == SC_FUNC) ||
+        memory_storage == SC_GLOBAL ||
+        memory_storage == SC_EXTERN ||
+        memory_storage == SC_FUNC) {
+        const char *assembly_name = asm_name_for(
+            global != NULL ? sym_asm_name(global)
+                           : mir_declared_link_name(definition->name));
+        if ((memory_storage == SC_EXTERN ||
+             (global != NULL && global->storage == SC_FUNC &&
+              global->needs_extrn)) &&
+            mir_extrn_should_emit(global))
+            fprintf(out, "\textrn %s\n", assembly_name);
+        fprintf(out, "\tld hl,%s\n", assembly_name);
+        return 1;
+    }
+    if (memory_storage == SC_PARAM && mir_home_uses_iy())
+        memory_offset += 2;
+    fputs("\tpush ix\n\tpop hl\n", out);
+    if (memory_offset != 0)
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n", memory_offset);
+    return 1;
+}
+
 static int mir_emit_lazy_wide_parameter_to_hl_de(FILE *out, int value)
 {
     int offset;
@@ -924,6 +989,13 @@ int mir_emit_home_to_hl(FILE *out, int value)
 {
     int offset;
 
+    if (mir_regional_rematerialization_kind(value) ==
+        MIR_REGIONAL_REMAT_PARAMETER)
+        return mir_emit_regional_parameter_to_color(
+            out, value, MIR_COLOR_HL);
+    if (mir_regional_rematerialization_kind(value) ==
+        MIR_REGIONAL_REMAT_ADDRESS)
+        return mir_emit_regional_address_to_hl(out, value);
     if (mir_is_lazy_parameter(value))
         return mir_emit_lazy_parameter_to_color(out, value, MIR_COLOR_HL);
     switch (mir.allocation_colors[value]) {
@@ -944,6 +1016,18 @@ static int mir_emit_home_to_de(FILE *out, int value)
 {
     int offset;
 
+    if (mir_regional_rematerialization_kind(value) ==
+        MIR_REGIONAL_REMAT_PARAMETER)
+        return mir_emit_regional_parameter_to_color(
+            out, value, MIR_COLOR_DE);
+    if (mir_regional_rematerialization_kind(value) ==
+            MIR_REGIONAL_REMAT_ADDRESS) {
+        fputs("\tpush hl\n", out);
+        if (!mir_emit_regional_address_to_hl(out, value))
+            return 0;
+        fputs("\tex de,hl\n\tpop hl\n", out);
+        return 1;
+    }
     if (mir_is_lazy_parameter(value))
         return mir_emit_lazy_parameter_to_color(out, value, MIR_COLOR_DE);
     switch (mir.allocation_colors[value]) {
@@ -1060,6 +1144,23 @@ int mir_emit_home_push(FILE *out, int value)
 
     if (mir_homed_string_call_argument(value)) {
         fprintf(out, "\tld hl,S%ld\n\tpush hl\n", definition->immediate);
+        return 1;
+    }
+    if (mir_regional_rematerialization_kind(value) ==
+        MIR_REGIONAL_REMAT_PARAMETER) {
+        fputs("\tpush hl\n", out);
+        if (!mir_emit_regional_parameter_to_color(
+                out, value, MIR_COLOR_HL))
+            return 0;
+        fputs("\tex (sp),hl\n", out);
+        return 1;
+    }
+    if (mir_regional_rematerialization_kind(value) ==
+        MIR_REGIONAL_REMAT_ADDRESS) {
+        fputs("\tpush hl\n", out);
+        if (!mir_emit_regional_address_to_hl(out, value))
+            return 0;
+        fputs("\tex (sp),hl\n", out);
         return 1;
     }
     if (mir_is_lazy_parameter(value)) {
@@ -1433,6 +1534,23 @@ static int mir_emit_push_home(FILE *out, int value)
 
     if (definition != NULL && type_size(definition->type) == 4)
         return mir_emit_wide_home_to_stack(out, value);
+    if (mir_regional_rematerialization_kind(value) ==
+        MIR_REGIONAL_REMAT_PARAMETER) {
+        fputs("\tpush hl\n", out);
+        if (!mir_emit_regional_parameter_to_color(
+                out, value, MIR_COLOR_HL))
+            return 0;
+        fputs("\tex (sp),hl\n", out);
+        return 1;
+    }
+    if (mir_regional_rematerialization_kind(value) ==
+        MIR_REGIONAL_REMAT_ADDRESS) {
+        fputs("\tpush hl\n", out);
+        if (!mir_emit_regional_address_to_hl(out, value))
+            return 0;
+        fputs("\tex (sp),hl\n", out);
+        return 1;
+    }
     if (mir_is_lazy_parameter(value)) {
         fputs("\tpush hl\n", out);
         if (!mir_emit_lazy_parameter_to_color(out, value, MIR_COLOR_HL))
@@ -2297,6 +2415,7 @@ int mir_emit_homed_compare_false(FILE *out,
     int preserve_hl;
     int preserve_de;
     int is_unsigned;
+    int biased_right_constant;
 
     right_definition = mir_definition(right);
     left_definition = mir_definition(left);
@@ -2356,6 +2475,11 @@ int mir_emit_homed_compare_false(FILE *out,
          mir_type_uses_unsigned_comparison(left_definition->type)) ||
         (right_definition != NULL &&
          mir_type_uses_unsigned_comparison(right_definition->type));
+    biased_right_constant =
+        !is_unsigned &&
+        (operation == '<' || operation == TOK_GE) &&
+        right_definition != NULL &&
+        right_definition->opcode == MIR_CONST;
 
     /* Preserve only values that actually span this comparison. The operands
      * themselves may be clobbered when this is their final use. */
@@ -2371,11 +2495,20 @@ int mir_emit_homed_compare_false(FILE *out,
         fputs("\tpush hl\n", out);
     if (preserve_de)
         fputs("\tpush de\n", out);
-    if (!mir_emit_push_home(out, right) ||
-        !mir_emit_home_to_hl(out, left))
-        return 0;
-    fputs("\tpop de\n", out);
-    if (!is_unsigned && operation != TOK_EQ && operation != TOK_NE)
+    if (biased_right_constant) {
+        if (!mir_emit_home_to_hl(out, left))
+            return 0;
+        fprintf(out, "\tld de,%ld\n",
+                (right_definition->immediate ^ 0x8000L) & 0xffffL);
+        fputs("\tld a,h\n\txor 128\n\tld h,a\n", out);
+    } else {
+        if (!mir_emit_push_home(out, right) ||
+            !mir_emit_home_to_hl(out, left))
+            return 0;
+        fputs("\tpop de\n", out);
+    }
+    if (!biased_right_constant &&
+        !is_unsigned && operation != TOK_EQ && operation != TOK_NE)
         fputs("\tld a,h\n\txor 128\n\tld h,a\n"
               "\tld a,d\n\txor 128\n\tld d,a\n", out);
     fputs("\tor a\n\tsbc hl,de\n", out);

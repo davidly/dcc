@@ -67,6 +67,17 @@ static int mir_rematerialized_saved_fixed_moves;
 static int mir_rematerialized_saved_operand_moves;
 static int mir_rematerialized_saved_phi_moves;
 static int mir_rematerialized_home_allocation_active;
+static int *mir_regional_saved_colors;
+static int *mir_regional_saved_spills;
+static int mir_regional_saved_spill_count;
+static int mir_regional_saved_fixed_moves;
+static int mir_regional_saved_operand_moves;
+static int mir_regional_saved_phi_moves;
+static int mir_regional_home_plan_active;
+static unsigned char *mir_regional_register_valid;
+static int mir_regional_register_valid_capacity;
+static int mir_regional_emission_region = -1;
+static int mir_regional_boundary_pending;
 static int mir_lazy_allocation_active;
 static int mir_extended_integer_constant_conversion_fold_count;
 static unsigned long mir_inline_live_temp_mask;
@@ -3086,6 +3097,9 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
     mir.flow_replay_active = 0;
     mir.label_replay_active = 0;
     mir.object_count = 0;
+    mir.region_count = 0;
+    mir.regional_segment_count = 0;
+    mir.regional_spill_slot_count = 0;
     mir.declared_count = 0;
     mir.alias_count = 0;
     mir.initializer_target = NULL;
@@ -4190,6 +4204,109 @@ int mir_eliminate_common_block_expressions(void)
 int mir_common_block_expression_elimination_count(void)
 {
     return mir_block_cse_count;
+}
+
+static int mir_region_expression_boundary(const struct MirInsn *insn)
+{
+    if (insn == NULL)
+        return 1;
+    switch (insn->opcode) {
+    case MIR_LABEL:
+    case MIR_JUMP:
+    case MIR_BRANCH_FALSE:
+    case MIR_RETURN:
+    case MIR_CALL:
+    case MIR_CALL_AGGREGATE:
+    case MIR_VLA_ALLOC:
+    case MIR_VLA_RESTORE:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int mir_region_expression_supported(const struct MirInsn *insn)
+{
+    return insn != NULL &&
+           (insn->opcode == MIR_LOAD ||
+            insn->opcode == MIR_ADDRESS ||
+            insn->opcode == MIR_MEMBER_ADDRESS ||
+            insn->opcode == MIR_INDEX_ADDRESS);
+}
+
+static int mir_region_expressions_equal(const struct MirInsn *left,
+                                        const struct MirInsn *right)
+{
+    if (left->opcode != MIR_LOAD || right->opcode != MIR_LOAD) {
+        return mir_common_expressions_equal(left, right);
+    }
+    if (left->memory_flags != 0 || right->memory_flags != 0)
+        return 0;
+    return left->src1 == right->src1 &&
+           left->src2 == right->src2 &&
+           left->immediate == right->immediate &&
+           left->object == right->object &&
+           left->type == right->type &&
+           left->secondary_offset == right->secondary_offset &&
+           left->memory_size == right->memory_size &&
+           left->memory_flags == right->memory_flags &&
+           left->bit_width == right->bit_width &&
+           left->bit_shift == right->bit_shift &&
+           left->bit_mask == right->bit_mask &&
+           strcmp(left->name, right->name) == 0 &&
+           strcmp(left->base_name, right->base_name) == 0;
+}
+
+/*
+ * Reuse stable loads and address chains only inside one call-free CFG
+ * region. Unlike whole-block address CSE, this never retains a value across
+ * a call, label, branch, jump, return, or VLA stack boundary; the existing
+ * spilled backend therefore provides the explicit boundary home while the
+ * value remains in SSA inside the region.
+ */
+int mir_eliminate_common_region_expressions(void)
+{
+    int region_start = 0;
+    int eliminated = 0;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        struct MirInsn *insn = &mir.insns[instruction];
+        int previous;
+
+        if (mir_region_expression_boundary(insn)) {
+            region_start = instruction + 1;
+            continue;
+        }
+        if (!mir_region_expression_supported(insn))
+            continue;
+        for (previous = instruction - 1;
+             previous >= region_start; --previous) {
+            struct MirInsn *candidate = &mir.insns[previous];
+
+            if (!mir_region_expression_supported(candidate) ||
+                !mir_region_expressions_equal(candidate, insn) ||
+                (insn->opcode == MIR_LOAD &&
+                 !mir_load_object_is_call_safe(insn->object) &&
+                 !mir_block_local_load_reusable_between(
+                     insn, previous, instruction)))
+                continue;
+            mir_replace_value_uses(insn->dst, candidate->dst);
+            insn->opcode = MIR_NOP;
+            insn->dst = -1;
+            insn->src1 = -1;
+            insn->src2 = -1;
+            ++eliminated;
+            break;
+        }
+    }
+    if (eliminated != 0 &&
+        (getenv("DCC_MIR_CSE_REPORT") != NULL ||
+         getenv("DCC_MIR_REGIONAL_HOME_REPORT") != NULL))
+        fprintf(stderr,
+                "; MIR regional-cse function=%s eliminated=%d\n",
+                mir.name, eliminated);
+    return eliminated;
 }
 
 static int mir_named_type(const char *name)
@@ -6934,6 +7051,1002 @@ void mir_end_rematerialized_home_allocation(void)
 int mir_rematerialized_home_allocation_is_active(void)
 {
     return mir_rematerialized_home_allocation_active;
+}
+
+static int mir_regional_boundary_instruction(int instruction)
+{
+    const struct MirInsn *insn;
+
+    if (instruction < 0 || instruction >= mir.count)
+        return 1;
+    insn = &mir.insns[instruction];
+    return insn->opcode == MIR_LABEL ||
+           insn->opcode == MIR_PHI ||
+           insn->opcode == MIR_JUMP ||
+           insn->opcode == MIR_BRANCH_FALSE ||
+           insn->opcode == MIR_RETURN ||
+           mir_instruction_clobbers_caller_registers(insn);
+}
+
+static void mir_regional_reserve_regions(int count)
+{
+    if (mir.region_capacity < count) {
+        struct MirRegion *new_regions = (struct MirRegion *)realloc(
+            mir.regions, (size_t)count * sizeof(*new_regions));
+        if (new_regions == NULL)
+            fatal("out of memory planning MIR regions");
+        mir.regions = new_regions;
+        mir.region_capacity = count;
+    }
+    if (mir.instruction_region_capacity < mir.count) {
+        int *new_instruction_regions = (int *)realloc(
+            mir.instruction_regions,
+            (size_t)mir.count * sizeof(*new_instruction_regions));
+        if (new_instruction_regions == NULL)
+            fatal("out of memory mapping MIR regions");
+        mir.instruction_regions = new_instruction_regions;
+        mir.instruction_region_capacity = mir.count;
+    }
+}
+
+static void mir_build_call_free_regions(void)
+{
+    int instruction = 0;
+
+    mir_regional_reserve_regions(mir.count > 0 ? mir.count : 1);
+    mir.region_count = 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        mir.instruction_regions[instruction] = -1;
+    instruction = 0;
+    while (instruction < mir.count) {
+        int first;
+        int last;
+        int region;
+
+        while (instruction < mir.count &&
+               mir_regional_boundary_instruction(instruction))
+            ++instruction;
+        if (instruction >= mir.count)
+            break;
+        first = instruction;
+        region = mir.region_count++;
+        while (instruction < mir.count &&
+               !mir_regional_boundary_instruction(instruction)) {
+            mir.instruction_regions[instruction] = region;
+            ++instruction;
+        }
+        last = instruction - 1;
+        mir.regions[region].first = first;
+        mir.regions[region].last = last;
+        mir.regions[region].boundary_after =
+            instruction < mir.count ? instruction : -1;
+    }
+}
+
+static int mir_regional_instruction_use_count(int instruction, int value)
+{
+    const struct MirInsn *insn = &mir.insns[instruction];
+    int count = 0;
+
+    if (insn->opcode == MIR_ARG)
+        return 0;
+    if (insn->src1 == value)
+        ++count;
+    if (insn->src2 == value)
+        ++count;
+    return count;
+}
+
+static int mir_regional_boundary_use_count(int region, int value)
+{
+    int boundary = mir.regions[region].boundary_after;
+    const struct MirInsn *insn;
+    int count = 0;
+
+    if (boundary < 0 || boundary >= mir.count)
+        return 0;
+    insn = &mir.insns[boundary];
+    if (insn->src1 == value)
+        ++count;
+    if (insn->src2 == value)
+        ++count;
+    if (mir_call_uses_value(insn, value))
+        ++count;
+    return count;
+}
+
+static int mir_regional_definition_index(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    return definition != NULL ? (int)(definition - mir.insns) : -1;
+}
+
+static int mir_regional_value_call_crossings(int value)
+{
+    int count = 0;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir_instruction_clobbers_caller_registers(
+                &mir.insns[instruction]) &&
+            mir.live_in[(size_t)instruction * mir.next_value + value] &&
+            mir.live_out[(size_t)instruction * mir.next_value + value])
+            ++count;
+    return count;
+}
+
+static int mir_regional_used_region_count(int value)
+{
+    int count = 0;
+    int definition = mir_regional_definition_index(value);
+    int region;
+
+    for (region = 0; region < mir.region_count; ++region) {
+        int uses = 0;
+        int instruction;
+
+        for (instruction = mir.regions[region].first;
+             instruction <= mir.regions[region].last; ++instruction)
+            uses += mir_regional_instruction_use_count(instruction, value);
+        uses += mir_regional_boundary_use_count(region, value);
+        if (uses != 0 ||
+            (definition >= mir.regions[region].first &&
+             definition <= mir.regions[region].last))
+            ++count;
+    }
+    return count;
+}
+
+static void mir_regional_reserve_segments(int count)
+{
+    if (mir.regional_segment_capacity < count) {
+        int new_capacity =
+            mir.regional_segment_capacity > 0
+                ? mir.regional_segment_capacity : 256;
+        struct MirRegionalSegment *new_segments =
+            NULL;
+
+        while (new_capacity < count)
+            new_capacity *= 2;
+        new_segments = (struct MirRegionalSegment *)realloc(
+            mir.regional_segments,
+            (size_t)new_capacity * sizeof(*new_segments));
+        if (new_segments == NULL)
+            fatal("out of memory planning MIR regional homes");
+        mir.regional_segments = new_segments;
+        mir.regional_segment_capacity = new_capacity;
+    }
+    if (mir.regional_segment_head_capacity < mir.next_value) {
+        int *new_heads = (int *)realloc(
+            mir.regional_segment_heads,
+            (size_t)mir.next_value * sizeof(*new_heads));
+        if (new_heads == NULL)
+            fatal("out of memory indexing MIR regional homes");
+        mir.regional_segment_heads = new_heads;
+        mir.regional_segment_head_capacity = mir.next_value;
+    }
+}
+
+static int mir_regional_add_segment(int value, int region)
+{
+    struct MirRegionalSegment *segment;
+    int index;
+    int definition = mir_regional_definition_index(value);
+    int instruction;
+
+    mir_regional_reserve_segments(
+        mir.regional_segment_count + 1);
+    index = mir.regional_segment_count++;
+    segment = &mir.regional_segments[index];
+    memset(segment, 0, sizeof(*segment));
+    segment->value = value;
+    segment->region = region;
+    segment->first_use = mir.regions[region].last + 1;
+    segment->last_use = -1;
+    segment->color = -1;
+    segment->spill_slot = -1;
+    segment->next_for_value =
+        mir.regional_segment_heads[value];
+    mir.regional_segment_heads[value] = index;
+    if (mir.live_in[(size_t)mir.regions[region].first *
+                    mir.next_value + value])
+        segment->flags |= MIR_REGIONAL_LIVE_IN;
+    if (mir.live_out[(size_t)mir.regions[region].last *
+                     mir.next_value + value])
+        segment->flags |= MIR_REGIONAL_LIVE_OUT;
+    if (definition >= mir.regions[region].first &&
+        definition <= mir.regions[region].last) {
+        segment->flags |= MIR_REGIONAL_DEFINES;
+        segment->first_use = definition;
+        segment->last_use = definition;
+    }
+    for (instruction = mir.regions[region].first;
+         instruction <= mir.regions[region].last; ++instruction) {
+        int uses = mir_regional_instruction_use_count(
+            instruction, value);
+        if (uses == 0)
+            continue;
+        if (segment->first_use > instruction)
+            segment->first_use = instruction;
+        segment->last_use = instruction;
+        segment->use_count += uses;
+    }
+    if (mir_regional_boundary_use_count(region, value)) {
+        if (segment->first_use > mir.regions[region].last)
+            segment->first_use = mir.regions[region].last;
+        if (segment->last_use < mir.regions[region].last)
+            segment->last_use = mir.regions[region].last;
+        ++segment->use_count;
+    }
+    return index;
+}
+
+static int mir_regional_available_colors(
+    int value, int first, int last,
+    const unsigned char *candidate)
+{
+    int available =
+        (1 << MIR_COLOR_HL) |
+        (1 << MIR_COLOR_DE) |
+        (1 << MIR_COLOR_BC);
+    int instruction;
+
+    for (instruction = first; instruction <= last; ++instruction) {
+        int other;
+
+        for (other = 0; other < mir.next_value; ++other) {
+            int color;
+
+            if (other == value ||
+                (candidate != NULL && candidate[other]) ||
+                (!mir.live_in[(size_t)instruction *
+                              mir.next_value + other] &&
+                 !mir.live_out[(size_t)instruction *
+                               mir.next_value + other] &&
+                 mir.insns[instruction].dst != other))
+                continue;
+            color = mir_regional_saved_colors[other];
+            if (color < 0)
+                continue;
+            if (mir_color_shares_slot(color, MIR_COLOR_HL))
+                available &= ~(1 << MIR_COLOR_HL);
+            if (mir_color_shares_slot(color, MIR_COLOR_DE))
+                available &= ~(1 << MIR_COLOR_DE);
+            if (mir_color_shares_slot(color, MIR_COLOR_BC))
+                available &= ~(1 << MIR_COLOR_BC);
+        }
+    }
+    return available;
+}
+
+static void mir_allocate_regional_colors(
+    const unsigned char *candidate)
+{
+    int region;
+
+    for (region = 0; region < mir.region_count; ++region) {
+        int used_colors = 0;
+
+        for (;;) {
+            int best = -1;
+            int segment_index;
+            int color = -1;
+
+            for (segment_index = 0;
+                 segment_index < mir.regional_segment_count;
+                 ++segment_index) {
+                struct MirRegionalSegment *segment =
+                    &mir.regional_segments[segment_index];
+
+                if (segment->region != region ||
+                    segment->color != -1 ||
+                    segment->use_count < 2)
+                    continue;
+                if (best < 0 ||
+                    segment->use_count >
+                        mir.regional_segments[best].use_count)
+                    best = segment_index;
+            }
+            if (best < 0)
+                break;
+            if ((mir.regional_segments[best].allocatable_colors &
+                 ~used_colors & (1 << MIR_COLOR_BC)) != 0)
+                color = MIR_COLOR_BC;
+            else if ((mir.regional_segments[best].allocatable_colors &
+                      ~used_colors & (1 << MIR_COLOR_DE)) != 0)
+                color = MIR_COLOR_DE;
+            else if ((mir.regional_segments[best].allocatable_colors &
+                      ~used_colors & (1 << MIR_COLOR_HL)) != 0)
+                color = MIR_COLOR_HL;
+            if (color >= 0) {
+                mir.regional_segments[best].color = color;
+                used_colors |= 1 << color;
+            } else {
+                mir.regional_segments[best].color = -2;
+            }
+        }
+        {
+            int segment_index;
+            for (segment_index = 0;
+                 segment_index < mir.regional_segment_count;
+                 ++segment_index)
+                if (mir.regional_segments[segment_index].region == region &&
+                    mir.regional_segments[segment_index].color == -2)
+                    mir.regional_segments[segment_index].color = -1;
+        }
+    }
+    (void)candidate;
+}
+
+static void mir_regional_mark_value_occupancy(
+    unsigned char *occupancy, int value,
+    const unsigned char *candidate)
+{
+    unsigned char *row =
+        &occupancy[(size_t)value * mir.count];
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.live_in[(size_t)instruction *
+                        mir.next_value + value] ||
+            mir.live_out[(size_t)instruction *
+                         mir.next_value + value] ||
+            mir.insns[instruction].dst == value ||
+            mir_regional_instruction_use_count(instruction, value) != 0)
+            row[instruction] = 1;
+    if (candidate[value]) {
+        int segment_index =
+            mir.regional_segment_heads[value];
+
+        while (segment_index >= 0) {
+            const struct MirRegionalSegment *segment =
+                &mir.regional_segments[segment_index];
+            const struct MirRegion *region =
+                &mir.regions[segment->region];
+
+            if (segment->color >= 0) {
+                for (instruction = region->first;
+                     instruction <= region->last; ++instruction)
+                    row[instruction] = 0;
+                if ((segment->flags & MIR_REGIONAL_LIVE_IN) != 0)
+                    for (instruction = region->first;
+                         instruction <= segment->first_use;
+                         ++instruction)
+                        row[instruction] = 1;
+                if ((segment->flags & MIR_REGIONAL_LIVE_OUT) != 0)
+                    row[region->boundary_after >= 0
+                            ? region->boundary_after
+                            : segment->last_use] = 1;
+            }
+            segment_index = segment->next_for_value;
+        }
+    }
+}
+
+static int mir_regional_occupancy_conflicts(
+    const unsigned char *left, const unsigned char *right)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (left[instruction] && right[instruction])
+            return 1;
+    return 0;
+}
+
+static int mir_regional_occupancy_nonempty(
+    const unsigned char *occupancy)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (occupancy[instruction])
+            return 1;
+    return 0;
+}
+
+static void mir_allocate_regional_spill_slots(
+    const unsigned char *candidate)
+{
+    unsigned char *occupancy;
+    unsigned char *slot_occupancy;
+    int value;
+    int slot_count = 0;
+
+    occupancy = (unsigned char *)calloc(
+        (size_t)mir.next_value * mir.count, 1);
+    slot_occupancy = (unsigned char *)calloc(
+        (size_t)mir.next_value * mir.count, 1);
+    if (occupancy == NULL || slot_occupancy == NULL)
+        fatal("out of memory allocating regional MIR spills");
+    for (value = 0; value < mir.next_value; ++value)
+        if (mir.regional_rematerializable[value] ==
+                MIR_REGIONAL_REMAT_NONE &&
+            (candidate[value] ||
+             mir_regional_saved_spills[value] >= 0))
+            mir_regional_mark_value_occupancy(
+                occupancy, value, candidate);
+    for (value = 0; value < mir.next_value; ++value) {
+        const unsigned char *value_occupancy =
+            &occupancy[(size_t)value * mir.count];
+        int slot;
+
+        mir.allocation_spills[value] = -1;
+        if (mir.regional_rematerializable[value] !=
+                MIR_REGIONAL_REMAT_NONE)
+            continue;
+        if (!candidate[value] &&
+            mir_regional_saved_spills[value] < 0)
+            continue;
+        if (!mir_regional_occupancy_nonempty(value_occupancy))
+            continue;
+        for (slot = 0; slot < slot_count; ++slot)
+            if (!mir_regional_occupancy_conflicts(
+                    value_occupancy,
+                    &slot_occupancy[(size_t)slot * mir.count]))
+                break;
+        if (slot == slot_count)
+            ++slot_count;
+        mir.allocation_spills[value] = slot;
+        {
+            unsigned char *target =
+                &slot_occupancy[(size_t)slot * mir.count];
+            int instruction;
+
+            for (instruction = 0;
+                 instruction < mir.count; ++instruction)
+                target[instruction] |= value_occupancy[instruction];
+        }
+    }
+    mir.allocation_spill_count = slot_count;
+    mir.regional_spill_slot_count = slot_count;
+    for (value = 0; value < mir.regional_segment_count; ++value)
+        mir.regional_segments[value].spill_slot =
+            mir.allocation_spills[
+                mir.regional_segments[value].value];
+    free(slot_occupancy);
+    free(occupancy);
+}
+
+static void mir_report_regional_home_plan(
+    const unsigned char *candidate)
+{
+    static const char *const homes[] = {
+        "hl", "de", "bc", "iy", "hl:de", "bc:iy"
+    };
+    int region;
+    int segment;
+
+    if (getenv("DCC_MIR_REGIONAL_HOME_REPORT") == NULL)
+        return;
+    fprintf(stderr,
+            "; MIR regional-plan function=%s regions=%d segments=%d "
+            "spill-slots=%d spill-bytes=%d\n",
+            mir.name, mir.region_count,
+            mir.regional_segment_count,
+            mir.regional_spill_slot_count,
+            mir_home_spill_bytes());
+    for (region = 0; region < mir.region_count; ++region)
+        fprintf(stderr,
+                "; MIR regional-region function=%s region=%d first=%d "
+                "last=%d boundary=%d\n",
+                mir.name, region, mir.regions[region].first,
+                mir.regions[region].last,
+                mir.regions[region].boundary_after);
+    for (region = 0; region < mir.next_value; ++region)
+        if (mir.regional_rematerializable[region] !=
+            MIR_REGIONAL_REMAT_NONE)
+            fprintf(stderr,
+                    "; MIR regional-remat function=%s value=%d kind=%s\n",
+                    mir.name, region,
+                    mir.regional_rematerializable[region] ==
+                            MIR_REGIONAL_REMAT_PARAMETER
+                        ? "parameter" : "address");
+    for (segment = 0;
+         segment < mir.regional_segment_count; ++segment) {
+        const struct MirRegionalSegment *item =
+            &mir.regional_segments[segment];
+        fprintf(stderr,
+                "; MIR regional-segment function=%s value=%d region=%d "
+                "first=%d last=%d uses=%d available=%c%c%c "
+                "allocatable=%c%c%c home=%s "
+                "slot=%d flags=%d\n",
+                mir.name, item->value, item->region,
+                item->first_use, item->last_use,
+                item->use_count,
+                (item->available_colors &
+                 (1 << MIR_COLOR_HL)) ? 'h' : '-',
+                (item->available_colors &
+                 (1 << MIR_COLOR_DE)) ? 'd' : '-',
+                (item->available_colors &
+                 (1 << MIR_COLOR_BC)) ? 'b' : '-',
+                (item->allocatable_colors &
+                 (1 << MIR_COLOR_HL)) ? 'h' : '-',
+                (item->allocatable_colors &
+                 (1 << MIR_COLOR_DE)) ? 'd' : '-',
+                (item->allocatable_colors &
+                 (1 << MIR_COLOR_BC)) ? 'b' : '-',
+                item->color >= 0 ? homes[item->color] : "spill",
+                item->spill_slot, item->flags);
+    }
+    (void)candidate;
+}
+
+static int mir_regional_parameter_rematerializable(
+    const struct MirInsn *parameter)
+{
+    int instruction;
+
+    if (parameter == NULL || parameter->opcode != MIR_PARAM ||
+        parameter->dst < 0 || parameter->object < 0 ||
+        parameter->object >= mir.object_count ||
+        mir.objects[parameter->object].storage != SC_PARAM ||
+        type_size(parameter->type) < 1 ||
+        type_size(parameter->type) > 2 ||
+        mir_object_address_taken(parameter->object))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_STORE &&
+            mir.insns[instruction].object == parameter->object)
+            return 0;
+    return 1;
+}
+
+static int mir_regional_address_rematerializable(
+    const struct MirInsn *address)
+{
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    return address != NULL && address->opcode == MIR_ADDRESS &&
+           !mir_declared_is_vla_object(address->name) &&
+           mir_scalar_memory_location(
+               address, &memory_type, &memory_storage,
+               &memory_offset) &&
+           (memory_storage == SC_LOCAL ||
+            memory_storage == SC_PARAM ||
+            memory_storage == SC_GLOBAL ||
+            memory_storage == SC_EXTERN ||
+            memory_storage == SC_FUNC);
+}
+
+/*
+ * Split narrow values only at existing CFG/call boundaries. The verifier's
+ * persisted live_in/live_out matrices define segment entry/exit state; no
+ * second liveness solution is built. Colored segments keep a caller-saved
+ * home locally, while their boundary slot is available to non-overlapping
+ * segments and is restored before the value leaves the region.
+ */
+int mir_begin_regional_home_plan(void)
+{
+    unsigned char *candidate;
+    int value;
+    int region;
+
+    if (mir_regional_home_plan_active ||
+        mir.live_in == NULL || mir.live_out == NULL ||
+        mir.next_value <= 0 || mir.count <= 0)
+        return 0;
+    mir_regional_saved_colors = (int *)malloc(
+        (size_t)mir.next_value * sizeof(*mir_regional_saved_colors));
+    mir_regional_saved_spills = (int *)malloc(
+        (size_t)mir.next_value * sizeof(*mir_regional_saved_spills));
+    candidate = (unsigned char *)calloc(
+        (size_t)mir.next_value, 1);
+    if (mir_regional_saved_colors == NULL ||
+        mir_regional_saved_spills == NULL ||
+        candidate == NULL)
+        fatal("out of memory saving regional MIR allocation");
+    if (mir.regional_rematerializable_capacity < mir.next_value) {
+        unsigned char *new_rematerializable =
+            (unsigned char *)realloc(
+                mir.regional_rematerializable,
+                (size_t)mir.next_value);
+        if (new_rematerializable == NULL)
+            fatal("out of memory planning regional rematerialization");
+        mir.regional_rematerializable = new_rematerializable;
+        mir.regional_rematerializable_capacity = mir.next_value;
+    }
+    memset(mir.regional_rematerializable, 0,
+           (size_t)mir.next_value);
+    memcpy(mir_regional_saved_colors, mir.allocation_colors,
+           (size_t)mir.next_value *
+               sizeof(*mir_regional_saved_colors));
+    memcpy(mir_regional_saved_spills, mir.allocation_spills,
+           (size_t)mir.next_value *
+               sizeof(*mir_regional_saved_spills));
+    mir_regional_saved_spill_count =
+        mir.allocation_spill_count;
+    mir_regional_saved_fixed_moves =
+        mir.allocation_fixed_moves;
+    mir_regional_saved_operand_moves =
+        mir.allocation_operand_moves;
+    mir_regional_saved_phi_moves =
+        mir.allocation_phi_moves;
+    mir_regional_home_plan_active = 1;
+    mir_build_call_free_regions();
+    mir_regional_reserve_segments(
+        mir.next_value > 0 ? mir.next_value : 1);
+    for (value = 0; value < mir.next_value; ++value)
+        mir.regional_segment_heads[value] = -1;
+    mir.regional_segment_count = 0;
+    for (value = 0; value < mir.next_value; ++value) {
+        const struct MirInsn *definition = mir_definition(value);
+        int crosses_call;
+        int used_regions;
+
+        if (definition == NULL)
+            continue;
+        if (mir_regional_parameter_rematerializable(definition)) {
+            mir.regional_rematerializable[value] =
+                MIR_REGIONAL_REMAT_PARAMETER;
+            continue;
+        }
+        if (mir_regional_address_rematerializable(definition)) {
+            mir.regional_rematerializable[value] =
+                MIR_REGIONAL_REMAT_ADDRESS;
+            continue;
+        }
+        crosses_call = mir_regional_value_call_crossings(value);
+        used_regions = mir_regional_used_region_count(value);
+        if (getenv("DCC_MIR_REGIONAL_HOME_REPORT") != NULL &&
+            crosses_call && used_regions >= 2)
+            fprintf(stderr,
+                    "; MIR regional-value function=%s value=%d opcode=%s "
+                    "type=%d size=%d calls=%d regions=%d\n",
+                    mir.name, value,
+                    mir_opcode_name(definition->opcode),
+                    definition->type, type_size(definition->type),
+                    crosses_call, used_regions);
+        if (type_size(definition->type) < 1 ||
+            type_size(definition->type) > 2 ||
+            definition->opcode == MIR_PHI ||
+            !crosses_call || used_regions < 2)
+            continue;
+        candidate[value] = 1;
+    }
+    for (value = 0; value < mir.next_value; ++value) {
+        int definition;
+
+        if (!candidate[value])
+            continue;
+        definition = mir_regional_definition_index(value);
+        for (region = 0; region < mir.region_count; ++region) {
+            int uses = 0;
+            int instruction;
+
+            for (instruction = mir.regions[region].first;
+                 instruction <= mir.regions[region].last;
+                 ++instruction)
+                uses += mir_regional_instruction_use_count(
+                    instruction, value);
+            uses += mir_regional_boundary_use_count(
+                region, value);
+            if (uses != 0 ||
+                (definition >= mir.regions[region].first &&
+                 definition <= mir.regions[region].last))
+                mir_regional_add_segment(value, region);
+        }
+    }
+    for (value = 0;
+         value < mir.regional_segment_count; ++value) {
+        struct MirRegionalSegment *segment =
+            &mir.regional_segments[value];
+        int color_first =
+            (segment->flags & MIR_REGIONAL_LIVE_IN) != 0
+                ? mir.regions[segment->region].first
+                : segment->first_use;
+        int color_last =
+            (segment->flags & MIR_REGIONAL_LIVE_OUT) != 0
+                ? mir.regions[segment->region].last
+                : segment->last_use;
+        segment->available_colors =
+            mir_regional_available_colors(
+                segment->value, color_first,
+                color_last, NULL);
+        segment->allocatable_colors =
+            mir_regional_available_colors(
+                segment->value, color_first,
+                color_last, candidate);
+    }
+    mir_allocate_regional_colors(candidate);
+    mir_allocate_regional_spill_slots(candidate);
+    for (value = 0; value < mir.next_value; ++value)
+        if (candidate[value] ||
+            mir.regional_rematerializable[value] !=
+                MIR_REGIONAL_REMAT_NONE)
+            mir.allocation_colors[value] = -1;
+    mir_report_regional_home_plan(candidate);
+    free(candidate);
+    return mir.regional_segment_count != 0;
+}
+
+void mir_end_regional_home_plan(void)
+{
+    if (!mir_regional_home_plan_active)
+        return;
+    memcpy(mir.allocation_colors, mir_regional_saved_colors,
+           (size_t)mir.next_value *
+               sizeof(*mir_regional_saved_colors));
+    memcpy(mir.allocation_spills, mir_regional_saved_spills,
+           (size_t)mir.next_value *
+               sizeof(*mir_regional_saved_spills));
+    mir.allocation_spill_count =
+        mir_regional_saved_spill_count;
+    mir.allocation_fixed_moves =
+        mir_regional_saved_fixed_moves;
+    mir.allocation_operand_moves =
+        mir_regional_saved_operand_moves;
+    mir.allocation_phi_moves =
+        mir_regional_saved_phi_moves;
+    mir_regional_home_plan_active = 0;
+    mir.region_count = 0;
+    mir.regional_segment_count = 0;
+    mir.regional_spill_slot_count = 0;
+    if (mir.regional_rematerializable != NULL)
+        memset(mir.regional_rematerializable, 0,
+               (size_t)mir.next_value);
+    free(mir_regional_saved_colors);
+    free(mir_regional_saved_spills);
+    mir_regional_saved_colors = NULL;
+    mir_regional_saved_spills = NULL;
+}
+
+int mir_regional_home_plan_is_active(void)
+{
+    return mir_regional_home_plan_active;
+}
+
+const struct MirRegionalSegment *mir_regional_segment_for(
+    int value, int instruction)
+{
+    int region;
+    int segment;
+
+    if (!mir_regional_home_plan_active ||
+        value < 0 || value >= mir.next_value ||
+        instruction < 0 || instruction >= mir.count)
+        return NULL;
+    region = mir.instruction_regions[instruction];
+    if (region < 0)
+        return NULL;
+    segment = mir.regional_segment_heads[value];
+    while (segment >= 0) {
+        if (mir.regional_segments[segment].region == region)
+            return &mir.regional_segments[segment];
+        segment =
+            mir.regional_segments[segment].next_for_value;
+    }
+    return NULL;
+}
+
+int mir_regional_rematerialization_kind(int value)
+{
+    return mir_regional_home_plan_active &&
+           value >= 0 && value < mir.next_value &&
+           mir.regional_rematerializable != NULL
+        ? mir.regional_rematerializable[value]
+        : MIR_REGIONAL_REMAT_NONE;
+}
+
+int mir_regional_parameter_location(int value, int *offset, int *type)
+{
+    const struct MirInsn *definition;
+    const struct MirObject *object;
+
+    if (mir_regional_rematerialization_kind(value) !=
+            MIR_REGIONAL_REMAT_PARAMETER)
+        return 0;
+    definition = mir_definition(value);
+    if (definition == NULL || definition->object < 0 ||
+        definition->object >= mir.object_count)
+        return 0;
+    object = &mir.objects[definition->object];
+    if (offset != NULL)
+        *offset = object->offset;
+    if (type != NULL)
+        *type = object->type;
+    return 1;
+}
+
+static int mir_regional_emit_slot_to_color(
+    FILE *out, int value, int color)
+{
+    int offset;
+
+    if (!mir_home_spill_offset(value, &offset))
+        return 0;
+    switch (color) {
+    case MIR_COLOR_HL:
+        fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+                offset, offset + 1);
+        return 1;
+    case MIR_COLOR_DE:
+        fprintf(out, "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+                offset, offset + 1);
+        return 1;
+    case MIR_COLOR_BC:
+        fprintf(out, "\tld c,(ix%+d)\n\tld b,(ix%+d)\n",
+                offset, offset + 1);
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int mir_regional_emit_color_to_slot(
+    FILE *out, int value, int color)
+{
+    int offset;
+
+    if (!mir_home_spill_offset(value, &offset))
+        return 0;
+    switch (color) {
+    case MIR_COLOR_HL:
+        fprintf(out, "\tld (ix%+d),l\n\tld (ix%+d),h\n",
+                offset, offset + 1);
+        return 1;
+    case MIR_COLOR_DE:
+        fprintf(out, "\tld (ix%+d),e\n\tld (ix%+d),d\n",
+                offset, offset + 1);
+        return 1;
+    case MIR_COLOR_BC:
+        fprintf(out, "\tld (ix%+d),c\n\tld (ix%+d),b\n",
+                offset, offset + 1);
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static void mir_regional_set_region_colors(int region)
+{
+    int value;
+
+    for (value = 0; value < mir.next_value; ++value)
+        if (mir.regional_segment_heads[value] >= 0)
+            mir.allocation_colors[value] = -1;
+    if (region >= 0)
+        for (value = 0; value < mir.next_value; ++value) {
+            int segment = mir.regional_segment_heads[value];
+
+            while (segment >= 0) {
+                if (mir.regional_segments[segment].region == region) {
+                    mir.allocation_colors[value] =
+                        mir.regional_segments[segment].color;
+                    break;
+                }
+                segment =
+                    mir.regional_segments[segment].next_for_value;
+            }
+        }
+}
+
+void mir_regional_begin_emission(void)
+{
+    if (!mir_regional_home_plan_active)
+        return;
+    if (mir_regional_register_valid_capacity < mir.next_value) {
+        unsigned char *new_valid = (unsigned char *)realloc(
+            mir_regional_register_valid,
+            (size_t)mir.next_value);
+        if (new_valid == NULL)
+            fatal("out of memory tracking regional MIR homes");
+        mir_regional_register_valid = new_valid;
+        mir_regional_register_valid_capacity = mir.next_value;
+    }
+    memset(mir_regional_register_valid, 0,
+           (size_t)mir.next_value);
+    mir_regional_emission_region = -1;
+    mir_regional_boundary_pending = 0;
+    mir_regional_set_region_colors(-1);
+}
+
+static int mir_regional_spill_region(
+    FILE *out, int region)
+{
+    int segment;
+
+    if (region < 0)
+        return 1;
+    for (segment = 0;
+         segment < mir.regional_segment_count; ++segment) {
+        const struct MirRegionalSegment *item =
+            &mir.regional_segments[segment];
+
+        if (item->region != region || item->color < 0 ||
+            (item->flags & MIR_REGIONAL_LIVE_OUT) == 0 ||
+            !mir_regional_register_valid[item->value])
+            continue;
+        if (!mir_regional_emit_color_to_slot(
+                out, item->value, item->color))
+            return 0;
+    }
+    return 1;
+}
+
+static int mir_regional_ensure_value(
+    FILE *out, int value, int instruction)
+{
+    const struct MirRegionalSegment *segment;
+
+    if (value < 0 || value >= mir.next_value)
+        return 1;
+    segment = mir_regional_segment_for(value, instruction);
+    if (segment == NULL || segment->color < 0 ||
+        mir_regional_register_valid[value])
+        return 1;
+    if (!mir_regional_emit_slot_to_color(
+            out, value, segment->color))
+        return 0;
+    mir_regional_register_valid[value] = 1;
+    return 1;
+}
+
+int mir_regional_before_instruction(FILE *out, int instruction)
+{
+    const struct MirInsn *insn;
+    int region;
+
+    if (!mir_regional_home_plan_active)
+        return 1;
+    region = instruction >= 0 && instruction < mir.count
+        ? mir.instruction_regions[instruction] : -1;
+    if (region != mir_regional_emission_region) {
+        if (!mir_regional_spill_region(
+                out, mir_regional_emission_region))
+            return 0;
+        if (region < 0 && mir_regional_emission_region >= 0 &&
+            instruction >= 0 && instruction < mir.count &&
+            !mir_instruction_clobbers_caller_registers(
+                &mir.insns[instruction])) {
+            mir_regional_boundary_pending = 1;
+            return 1;
+        }
+        memset(mir_regional_register_valid, 0,
+               (size_t)mir.next_value);
+        mir_regional_emission_region = region;
+        mir_regional_set_region_colors(region);
+    }
+    if (instruction < 0 || instruction >= mir.count ||
+        region < 0)
+        return 1;
+    insn = &mir.insns[instruction];
+    if (insn->opcode == MIR_ARG)
+        return 1;
+    if (!mir_regional_ensure_value(
+            out, insn->src1, instruction) ||
+        !mir_regional_ensure_value(
+            out, insn->src2, instruction))
+        return 0;
+    return 1;
+}
+
+void mir_regional_after_instruction(int instruction)
+{
+    const struct MirInsn *insn;
+    const struct MirRegionalSegment *segment;
+
+    if (!mir_regional_home_plan_active ||
+        instruction < 0 || instruction >= mir.count)
+        return;
+    if (mir_regional_boundary_pending) {
+        memset(mir_regional_register_valid, 0,
+               (size_t)mir.next_value);
+        mir_regional_emission_region = -1;
+        mir_regional_set_region_colors(-1);
+        mir_regional_boundary_pending = 0;
+        return;
+    }
+    insn = &mir.insns[instruction];
+    if (insn->dst < 0 || insn->dst >= mir.next_value)
+        return;
+    segment = mir_regional_segment_for(
+        insn->dst, instruction);
+    if (segment != NULL && segment->color >= 0)
+        mir_regional_register_valid[insn->dst] = 1;
 }
 
 /* Item 20d (mir-migration-plan-to-100pct.md): permanent (non-disposable)
