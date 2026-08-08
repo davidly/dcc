@@ -112,10 +112,10 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "produce wrong output or CP/M memory exhaustion when forced.",
     "phi-fallthrough-cost": "t fails with wrong output (int8_t/int16_t/"
                  "int32_t result mismatches).",
-    "dynamic-index-base-cost": "T440 admitted 13 terminal bounded acyclic "
-                 "functions. Remaining backedge/wide, label-PHI, VLA, "
-                 "pointer/inline, >5-KiB, or later-retry shapes include real "
-                 "wrong-output and CP/M resource failures.",
+    "dynamic-index-base-cost": "T440/T451 admitted 57 terminal functions "
+                 "across bounded acyclic and scalar-loop strata. Remaining "
+                 "wide/backedge, label-PHI, VLA, pointer/inline, oversized, "
+                 "or later-retry shapes include real failures.",
     "unary-not-cost": "T441 admitted 15 terminal bounded acyclic functions. "
                  "The remaining backedge, label-PHI, VLA, pointer/inline, "
                  "oversized, or later-retry shapes include real failures.",

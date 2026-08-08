@@ -2117,6 +2117,21 @@ static int mir_bounded_acyclic_coverage_is_semantically_eligible(
            generated_size <= captured_size + 2048;
 }
 
+static int mir_dynamic_index_base_loop_is_semantically_eligible(
+    long generated_size, long captured_size)
+{
+    return mir_has_cfg_backedge() &&
+           mir_cfg_block_count() <= 64 &&
+           mir_call_count() <= 32 &&
+           !mir.has_vla &&
+           !mir_has_wide_values() &&
+           !mir_has_inline_substitution_call() &&
+           !mir_has_declared_pointer_array() &&
+           !mir_has_label_only_phi_fallthrough() &&
+           generated_size <= 5000 &&
+           generated_size <= captured_size + 2048;
+}
+
 static int mir_reason_uses_bounded_acyclic_coverage(const char *reason)
 {
     static const char *const proven[] = {
@@ -4245,6 +4260,15 @@ evaluate_generated:
                     /* T448: after forcing concrete storage for computed PHI
                      * sources, the bounded small-loop boolean cohort passed. */
                     fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "dynamic-index-base-cost") &&
+                    !g_speculative_codegen_active &&
+                    mir_dynamic_index_base_loop_is_semantically_eligible(
+                        generated_size, captured_size)) {
+                    /* T451: the non-speculative scalar bounded dynamic-index
+                     * loop cohort passed the full extended gate. */
+                    fallback_reason = NULL;
+                }
                 if (fallback_reason != NULL &&
                     mir_reason_uses_bounded_acyclic_coverage(
                         fallback_reason) &&

@@ -31,15 +31,16 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1667/2060 (80.92%)**
-- Current stack-check coverage: **1767/2179 (81.09%)**
-- HEAD (pending push): T450 keeps inline temp masks/depth active through
-  nested lowering (+1), admits three proven oversized/high-call
-  `text-size` functions (+3), and admits the bounded post-PHI block-CSE
-  cohort (+29): **+33 ordinary/+37 stack-check**, zero removals.
-  Block-CSE excludes oversized >10-KiB candidates and the unique
-  wide/20-call `tpfauto.main` failure stratum. See `## Item T450` in
-  `mir-text-size-plan.md`.
+- Current ordinary coverage: **1711/2060 (83.06%)**
+- Current stack-check coverage: **1811/2179 (83.11%)**
+- HEAD (pending push): T451 admits the scalar bounded
+  `dynamic-index-base-cost` loop cohort: **+44 ordinary/+44
+  stack-check**, zero removals. It requires a backedge, <=64 blocks/32
+  calls, no VLA/wide/inline/pointer/label-PHI shape, <=5 KiB generated,
+  and <=2 KiB growth. Admission is non-speculative: wildcard testing
+  showed speculative `pint.find_scope/call_proc` attempts perturb the
+  final program even though final `find_proc/vars` are clean. See
+  `## Item T451` in `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -140,6 +141,9 @@ transactional fallback remains in place throughout Phase 1.
   temp mask had been restored after AST cloning but before lowering, so
   nested calls reused an outer slot. Scope now spans lowering, causing
   nested expansion to choose `#itmp2` instead of overwriting `#itmp1`.
+- **T451 crosses 83% with reason-specific loop admission.** The earlier
+  acyclic dynamic cohort and this scalar loop cohort together remove 57
+  functions while preserving wide/backedge and label-PHI failure strata.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations
