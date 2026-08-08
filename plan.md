@@ -31,11 +31,12 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **2055/2060 (99.76%)**
-- Current stack-check coverage: **2174/2179 (99.77%)**
-- HEAD (local only): T501 stabilizes paired regional calls and admits
-  `pint.for_stmt`: **+1/+1**, zero removals. `dynamic-index-base-cost` is
-  now fully cleared.
+- Current ordinary coverage: **2056/2060 (99.81%)**
+- Current stack-check coverage: **2175/2179 (99.82%)**
+- HEAD (pushed): T502 extends regional homes to wide call-bounded loops
+  and admits `adaint.next`: **+1/+1**, zero removals. Remaining: 3
+  `boolean-phi-cost` (`a1.emulate`, `pint.factor_call_or_var`,
+  `pint.scan_number`), 1 `unary-not-cost` (`pint.run`).
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons

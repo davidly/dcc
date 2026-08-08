@@ -18464,6 +18464,48 @@ existing non-regional path instead of emitting a degenerate boundary.
   (currently 8 wide + 1 narrow spills); the region mechanism so far only
   handles narrow (2-byte) slot reuse.
 
+## Item T502: extended regional homes to wide call-bounded loops, admitting adaint.next (+1/+1, 2026-08-09)
+
+`adaint.next` (an 84-block global-state Ada lexer) was the second of the
+three original "large interpreter" holdouts alongside `a1.emulate` and
+`pint.run`. T499-T501's regional-home mechanism handled narrow (2-byte)
+call-boundary slot reuse; `next` retains several wide (4-byte+) loop
+values across its backedge and calls.
+
+Added `mir_regional_wide_loop_shape_is_semantically_eligible()`: a
+structural predicate requiring wide values, a CFG backedge, 64-96 blocks,
+at most 20 calls, and no VLA/inline-substitution/pointer-array. Gated at a
+20%/21% generated-size/instruction growth ceiling over the AST-captured
+candidate (looser than the narrow bounded-acyclic classes because wide
+boundary copies cost more per region, but still a hard structural cap, not
+a name exception). Also bounded the existing small-function regional
+peephole-style compaction passes in `mir_compact_regional_candidate()` to
+<=32 blocks, since the wide-loop class's boundary-copy shapes do not match
+those patterns and could otherwise misfire.
+
+- Coverage: **2056/2060 (99.81%)**, **2175/2179 (99.82%)**, zero removals.
+- New MIR function: `adaint.next`.
+- Remaining fallbacks: `boolean-phi-cost` (3: `a1.emulate`,
+  `pint.factor_call_or_var`, `pint.scan_number`), `unary-not-cost` (1:
+  `pint.run`).
+- Full extended correctness: **314/314 runnable + 196/196 extended**,
+  diagnostics and dccpeep fixtures pass. All three `adaint` scenarios
+  (e.ada, ttt.ada, sieve.ada) verified byte-identical to baseline in both
+  peep and nopeep modes.
+- Checked performance: `adaint` nopeep improves (cycles -0.04%, size
+  -0.98%); peep cycles regress a negligible **+0.0011%**
+  (1,151,137,912 -> 1,151,150,725), tracked via `-UpdatePerfBaseline` per
+  Phase-1 policy (correctness non-negotiable, performance tracked not
+  gated).
+- `a1.emulate`'s 354-block CFG does not fit this wide-loop class's 96-block
+  ceiling and remains oversized even with the regional mechanism attempted
+  (52,435 vs 26,573 generated-vs-captured bytes at last measurement,
+  actually larger than the pre-regional attempt, since 354 blocks' worth
+  of boundary copies costs more than the narrow slot reuse recovers). It
+  needs its own larger structural class or a different regional strategy
+  (e.g., per-opcode-arm region granularity for a giant switch, rather than
+  whole-function call-boundary splitting).
+
 ## Item T500: confirmed final-seven oversizing is real machine bytes, not a dccpeep gap (investigation only, 2026-08-09)
 
 This investigation directly motivated T499's call-bounded regional homes:
