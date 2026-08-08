@@ -31,19 +31,17 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1480/2052 (72.12%)**
-- Current stack-check coverage: **1541/2165 (71.18%)**
-- HEAD (pending push): T443 admits the terminal bounded acyclic
-  call-containing `wide-store-cost` cohort, **+14 ordinary/+14
-  stack-check**, zero removals. Full-reason forcing failed `pint` and
-  `ttrig`; individual bisection found `pint.calc_code_limit`,
-  `ttrig.logf`, and `ttrig.xsinf` unsafe. The trig failures are
-  backedge/oversized and already excluded. `calc_code_limit` passes
-  without stack checking but crosses pint's stack/resource limit with
-  MIR's larger local frame; it is the proposed cohort's only call-free
-  function. Requiring at least one call retains the other 14. Remaining
-  wide-store: **24 ordinary/26 stack-check**. See `## Item T443` in
-  `mir-text-size-plan.md`.
+- Current ordinary coverage: **1507/2052 (73.44%)**
+- Current stack-check coverage: **1581/2165 (73.03%)**
+- HEAD (pending push): T444 combines four terminal bounded-acyclic
+  cohorts: `dead-local-suffix-cost` (+5), `absolute-index-cost` (+4),
+  `planned-index-base-cost` (+10), and `planned-stack-cost` (+8), for
+  **+27 ordinary/+40 stack-check**, zero removals. All four pass together
+  in the full extended gate. Consolidated these with T440-T442's three
+  identical cohorts in
+  `mir_reason_uses_bounded_acyclic_coverage()`, making one shared
+  seven-reason policy rather than parallel formulas. See `## Item T444`
+  in `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -113,6 +111,10 @@ transactional fallback remains in place throughout Phase 1.
   bounded-acyclic predicate remains the base; `wide-store-cost` further
   requires a call-containing measured shape because its only call-free
   member triggers a stack-check resource failure in pint.
+- **T444 validates the batch-of-10 operating model directly.** Four
+  independently measured small cohorts were combined into one 27-function
+  commit and one pre-publication full extended gate. The shared predicate
+  now covers seven final reasons with one source of truth.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

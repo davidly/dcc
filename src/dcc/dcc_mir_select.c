@@ -2097,6 +2097,27 @@ static int mir_bounded_acyclic_coverage_is_semantically_eligible(
            generated_size <= captured_size + 2048;
 }
 
+static int mir_reason_uses_bounded_acyclic_coverage(const char *reason)
+{
+    static const char *const proven[] = {
+        "absolute-index-cost",
+        "dead-local-suffix-cost",
+        "dynamic-index-base-cost",
+        "planned-index-base-cost",
+        "planned-stack-cost",
+        "unary-not-cost",
+        "wide-constant-cost",
+    };
+    size_t index;
+
+    if (reason == NULL)
+        return 0;
+    for (index = 0; index < sizeof(proven) / sizeof(proven[0]); ++index)
+        if (!strcmp(reason, proven[index]))
+            return 1;
+    return 0;
+}
+
 static int mir_wide_store_coverage_is_semantically_eligible(
     long generated_size, long captured_size)
 {
@@ -4132,25 +4153,13 @@ evaluate_generated:
                      * decision point so all earlier retries retain priority. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
-                    !strcmp(fallback_reason, "dynamic-index-base-cost") &&
+                    mir_reason_uses_bounded_acyclic_coverage(
+                        fallback_reason) &&
                     mir_bounded_acyclic_coverage_is_semantically_eligible(
                         generated_size, captured_size))
-                    /* T440: the terminal bounded acyclic dynamic-index-base
-                     * cohort passed the full extended correctness gate. */
-                    fallback_reason = NULL;
-                if (fallback_reason != NULL &&
-                    !strcmp(fallback_reason, "unary-not-cost") &&
-                    mir_bounded_acyclic_coverage_is_semantically_eligible(
-                        generated_size, captured_size))
-                    /* T441: the terminal bounded acyclic unary-not cohort
-                     * passed the full extended correctness gate. */
-                    fallback_reason = NULL;
-                if (fallback_reason != NULL &&
-                    !strcmp(fallback_reason, "wide-constant-cost") &&
-                    mir_bounded_acyclic_coverage_is_semantically_eligible(
-                        generated_size, captured_size))
-                    /* T442: the terminal bounded acyclic wide-constant
-                     * cohort passed the full extended correctness gate. */
+                    /* T440-T444: each listed terminal-reason cohort passed
+                     * independently, and the T444 additions also passed
+                     * together with all previously landed cohorts. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
                     !strcmp(fallback_reason, "wide-store-cost") &&

@@ -131,10 +131,14 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "call-containing functions. Remaining call-free, backedge, "
                  "label-PHI, oversized, or later-retry shapes include pint "
                  "stack pressure and ttrig loop failures.",
-    "dead-local-suffix-cost": "tabsidm, tunary32 fail.",
-    "absolute-index-cost": "tstructv, tptrlhs fail.",
-    "planned-index-base-cost": "tarray, tlongidx fail.",
-    "planned-stack-cost": "wumpus fails.",
+    "dead-local-suffix-cost": "T444 admitted 5 terminal bounded acyclic "
+                 "functions; oversized tabsidm/tunary32 shapes remain.",
+    "absolute-index-cost": "T444 admitted 4 terminal bounded acyclic "
+                 "functions; pointer/loop/oversized shapes remain.",
+    "planned-index-base-cost": "T444 admitted 10 terminal bounded acyclic "
+                 "functions; unsafe loop/resource shapes remain.",
+    "planned-stack-cost": "T444 admitted 8 terminal bounded acyclic "
+                 "functions; wumpus/later-retry shapes remain.",
     "binary-load-pair-cost": "tbcgcol, tvlax fail.",
     "indirect-store-address-cost": "tlngnarw fails.",
     "dead-store-forwarding-cost": "cint, forint, cobint fail (all "

@@ -17194,3 +17194,43 @@ The resulting 14 functions pass together.
 The safe call-containing acyclic wide-store stratum is exhausted. Remaining
 functions need call-free frame reduction, loop/backedge work, or later-retry
 analysis.
+
+## Item T444: consolidated bounded-acyclic batch (+27 ordinary/+40 stack-check, 2026-08-08)
+
+Fresh T443 baseline: **1480/2052 ordinary (72.12%)** and **1541/2165
+stack-check (71.18%)**.
+
+To preserve the requested batches-of-about-10 cadence, measured four small
+terminal-reason cohorts in one compiler build, each using the shared
+`mir_bounded_acyclic_coverage_is_semantically_eligible()`:
+
+| reason | ordinary admissions |
+| --- | ---: |
+| `dead-local-suffix-cost` | 5 |
+| `absolute-index-cost` | 4 |
+| `planned-index-base-cost` | 10 |
+| `planned-stack-cost` | 8 |
+| **combined** | **27** |
+
+The bounds exclude each reason's T434 failures (oversized, backedge, VLA,
+pointer-array, label-PHI, or resource-sensitive shapes). Enabling all four
+diagnostic cohorts together passed the complete full extended correctness
+gate, specifically checking cross-reason candidate-order interactions.
+
+Consolidated these four reasons with T440-T442's already-proven
+`dynamic-index-base-cost`, `unary-not-cost`, and `wide-constant-cost` in
+`mir_reason_uses_bounded_acyclic_coverage()`. One terminal decision now owns
+the identical seven-reason policy. `wide-store-cost` remains separate because
+T443 additionally requires its call-containing stratum.
+
+- Ordinary: **1480/2052 -> 1507/2052 (73.44%)**, **+27**, zero removals.
+- Stack-check: **1541/2165 -> 1581/2165 (73.03%)**, **+40**, zero removals.
+- Full extended correctness: **314/314 runnable apps**, diagnostics,
+  dccpeep, and extended corpus pass.
+- Forced-MIR regression harness: PASS (9/9).
+- Performance gate: 55 deliberate Phase-1 regressions, 9 improvements;
+  `-UpdatePerfBaseline` completed with **314/314 passed**.
+
+This is the optimized migration loop requested by the user: several measured
+small cohorts, one consolidated batch, and one final full extended publication
+gate.
