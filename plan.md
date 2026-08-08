@@ -27,17 +27,27 @@ target), then a dedicated performance-recovery phase to bring aggregate
 peep-mode cycles back to at/below the pre-MIR legacy baseline. Mixed-mode
 transactional fallback remains in place throughout Phase 1.
 
-- Branch: `perf/unified-regalloc`
+- Working branch: `copilot/regional-home-af23` (local only; do not push)
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **2057/2060 (99.85%)**
-- Current stack-check coverage: **2176/2179 (99.86%)**
-- Current worktree: T503 recovers the dense unsigned-byte switch that MIR
-  lowering had expanded into 153 equality branches and admits
-  `a1.emulate`: **+1/+1**, zero removals. Remaining: 2
-  `boolean-phi-cost` (`pint.factor_call_or_var`, `pint.scan_number`), 1
-  `unary-not-cost` (`pint.run`).
+- Current ordinary coverage: **2059/2060 (99.95%)**
+- Current stack-check coverage: **2178/2179 (99.95%)**
+- T503 recovers the dense unsigned-byte switch that MIR lowering had expanded
+  into 153 equality branches and admits `a1.emulate`: **+1/+1**, zero
+  removals.
+- Local T504 extends regional homes to mixed-width/object-backed segments and
+  admits `pint.factor_call_or_var` plus `pint.scan_number`: **+2/+2**, zero
+  removals. The sole remaining fallback is `pint.run` (`unary-not-cost`).
+- **T504 closes the two smaller Pint holdouts.** `scan_number` is now smaller
+  than captured output; `factor_call_or_var` fits the measured stack-check
+  nopeep TPA boundary by one byte under a structural 3-32-block, <=24-call,
+  117%/122%, <=6000-byte true-final gate.
+- **Re-evaluate `pint.run` after T503 before extending regional homes.** Its
+  pre-T503 regional experiment found only two useful segments across 147
+  regions and grew to 28828 bytes / 2915 instructions, but the bytecode
+  interpreter loop may contain a recoverable switch identity that block count
+  and call-region statistics alone do not reveal.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons

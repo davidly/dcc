@@ -18559,6 +18559,61 @@ the byte-identical legacy capture.
   `pint.factor_call_or_var`, `pint.scan_number`) and `unary-not-cost` (1:
   `pint.run`).
 
+## Item T504: mixed-width regional object homes, admitting two Pint functions (+2/+2, 2026-08-09)
+
+T502 retained one whole-function wide allocation while splitting narrow
+call-crossing values. `pint.scan_number` needed the complementary small-CFG
+case: mixed narrow/wide regional segments, including wide PHIs whose backing
+local already had a stable frame slot. `pint.factor_call_or_var` also carried
+PHI values in duplicated backend slots, leaving its nopeep image above Pint's
+measured TPA boundary.
+
+Regional planning now:
+
+- allocates 1/2-byte and 4-byte segments with overlap-aware single/pair colors;
+- reuses a local/parameter object's real slot when both PHI inputs provably
+  back that same addressable object;
+- excludes regional candidates before preserving T502's wide base allocation,
+  so pair colors and narrow segment colors cannot overlap;
+- rematerializes eligible wide constants/strings and forwards adjacent wide
+  loads, casts, stores, and branch shapes without manufacturing temporary
+  slots; and
+- scopes those regional-only forms so existing speculative static bodies keep
+  their previous selection and the census has zero removals.
+
+`scan_number` clears the ordinary cost gate directly: **2469/250** generated
+bytes/instructions versus **2581/250** captured (stack-check:
+**2498/251** versus **2610/251**). `factor_call_or_var` remains a deliberate
+Phase-1 growth case at **5699/561** versus **4905/460** ordinary
+(stack-check: **5728/562** versus **4934/461**). Its true-final regional-CSE
+admission is structural: final `dynamic-index-base-cost`, regional homed
+selector, 3-32 blocks, at most 24 calls, no VLA/pointer-array, at most 6000
+generated text bytes, and 117%/122% text/instruction ceilings.
+
+A linked BSS-padding probe measured Pint's stack-check nopeep boundary exactly:
+`__BSSE=0x83A8` is the last passing address and `0x83A9` the first failure.
+The final combined image ends at **0x83A7**, one byte inside the limit. All
+`e.pas`, `ttt.pas`, and `sieve.pas` scenarios pass in peep and nopeep modes.
+
+- Combined coverage after T503/T504: **2059/2060 (99.95%)**,
+  **2178/2179 (99.95%)**, zero removals.
+- New MIR functions: `pint.factor_call_or_var`, `pint.scan_number`.
+- Remaining fallback: `pint.run` (`unary-not-cost`).
+- Full extended correctness: **314/314 runnable + 196/196 extended**,
+  diagnostics and dccpeep fixtures pass.
+- Checked performance changes are tracked per Phase-1 policy. Pint grows by
+  256 peep / 128 nopeep bytes with +0.0057% / +0.0021% cycles; `t` improves
+  peep cycles/size but regresses nopeep cycles by 0.25%; `adaint` improves in
+  both modes.
+- Before T503 switch recovery, `pint.run` remained **26455/2328** generated
+  bytes/instructions versus **23277/2046** captured (stack-check:
+  **26484/2329** versus **23306/2047**), across 112 blocks and 37 calls. A
+  regional experiment found only two useful segments across 147 call-free
+  regions; after adding the missing variable-shift form, the homed candidate
+  grew to 28828 bytes / 2915 instructions and placed Pint at
+  `__BSSE=0x8606`, 606 bytes beyond the measured limit. T503 now warrants a
+  fresh dense-switch-shape investigation before choosing the next approach.
+
 ## Item T500: confirmed final-seven oversizing is real machine bytes, not a dccpeep gap (investigation only, 2026-08-09)
 
 This investigation directly motivated T499's call-bounded regional homes:

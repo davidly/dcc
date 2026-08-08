@@ -768,11 +768,20 @@ int mir_try_emit_scalar_dag(FILE *out)
 
 int mir_home_uses_iy(void)
 {
+    int segment;
     int value;
+
     for (value = 0; value < mir.next_value; ++value)
         if (mir.allocation_colors[value] == MIR_COLOR_IY ||
             mir.allocation_colors[value] == MIR_COLOR_BC_IY)
             return 1;
+    if (mir_regional_home_plan_is_active())
+        for (segment = 0;
+             segment < mir.regional_segment_count;
+             ++segment)
+            if (mir.regional_segments[segment].color == MIR_COLOR_IY ||
+                mir.regional_segments[segment].color == MIR_COLOR_BC_IY)
+                return 1;
     return 0;
 }
 
@@ -842,6 +851,8 @@ int mir_home_spill_offset(int value, int *offset)
     if (value < 0 || value >= mir.next_value ||
         mir.allocation_spills == NULL)
         return 0;
+    if (mir_regional_object_home_offset(value, offset))
+        return 1;
     spill = mir.allocation_spills[value];
     if (spill < 0)
         return 0;
@@ -1347,6 +1358,17 @@ int mir_emit_wide_constant_to_home(FILE *out, int value, long immediate)
 {
     long lo = immediate & 0xffffL;
     long hi = (immediate >> 16) & 0xffffL;
+    const struct MirInsn *definition = mir_definition(value);
+    int instruction = definition != NULL
+        ? (int)(definition - mir.insns) : -1;
+    int preserve_hl_de = instruction >= 0 &&
+        mir_home_color_live_across(instruction, MIR_COLOR_HL_DE);
+    int preserve_hl = instruction >= 0 &&
+        mir_home_color_live_across(instruction, MIR_COLOR_HL);
+    int preserve_de = instruction >= 0 &&
+        mir_home_color_live_across(instruction, MIR_COLOR_DE);
+    int offset;
+
     switch (mir.allocation_colors[value]) {
     case MIR_COLOR_HL_DE:
         fprintf(out, "\tld hl,%ld\n\tld de,%ld\n", lo, hi);
@@ -1355,7 +1377,23 @@ int mir_emit_wide_constant_to_home(FILE *out, int value, long immediate)
         fprintf(out, "\tld bc,%ld\n\tld iy,%ld\n", lo, hi);
         return 1;
     default:
-        return 0;
+        if (!mir_home_spill_offset(value, &offset))
+            return 0;
+        if (preserve_hl_de || preserve_de)
+            fputs("\tpush de\n", out);
+        if (preserve_hl_de || preserve_hl)
+            fputs("\tpush hl\n", out);
+        fprintf(out,
+                "\tld hl,%ld\n\tld de,%ld\n"
+                "\tld (ix%+d),l\n\tld (ix%+d),h\n"
+                "\tld (ix%+d),e\n\tld (ix%+d),d\n",
+                lo, hi, offset, offset + 1,
+                offset + 2, offset + 3);
+        if (preserve_hl_de || preserve_hl)
+            fputs("\tpop hl\n", out);
+        if (preserve_hl_de || preserve_de)
+            fputs("\tpop de\n", out);
+        return 1;
     }
 }
 
@@ -1617,18 +1655,24 @@ static int mir_emit_pop_home(FILE *out, int value)
 
 static int mir_homed_values_share_home(int left, int right)
 {
-    int left_spill;
-    int right_spill;
+    int left_offset;
+    int right_offset;
 
+    if (mir_regional_object_home_offset(left, &left_offset) &&
+        mir_regional_object_home_offset(right, &right_offset) &&
+        left_offset == right_offset &&
+        mir_home_spill_width(left) ==
+            mir_home_spill_width(right))
+        return 1;
     if (mir.allocation_colors[left] >= 0 ||
         mir.allocation_colors[right] >= 0)
         return mir.allocation_colors[left] == mir.allocation_colors[right];
-    if (!mir_home_spill_offset(left, NULL) ||
-        !mir_home_spill_offset(right, NULL))
+    if (!mir_home_spill_offset(left, &left_offset) ||
+        !mir_home_spill_offset(right, &right_offset))
         return 0;
-    left_spill = mir.allocation_spills[left];
-    right_spill = mir.allocation_spills[right];
-    return left_spill == right_spill;
+    return left_offset == right_offset &&
+           mir_home_spill_width(left) ==
+               mir_home_spill_width(right);
 }
 
 int mir_phi_source_for_edge(const struct MirInsn *phi,

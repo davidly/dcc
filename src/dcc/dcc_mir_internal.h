@@ -473,6 +473,7 @@ int mir_lazy_parameter_offset(int value, int *offset, int *type);
 int mir_probe_wide_colors_for_homed(
     const unsigned char *rematerializable, int bounded_hybrid);
 int mir_homed_rematerializable_wide_candidate_count(void);
+int mir_homed_value_is_rematerializable(int value);
 void mir_begin_hybrid_homed_selection(void);
 void mir_end_hybrid_homed_selection(void);
 int mir_begin_regional_home_plan(void);
@@ -480,6 +481,8 @@ void mir_end_regional_home_plan(void);
 int mir_regional_home_plan_is_active(void);
 int mir_regional_rematerialization_kind(int value);
 int mir_regional_parameter_location(int value, int *offset, int *type);
+int mir_regional_object_home_offset(int value, int *offset);
+int mir_regional_store_uses_object_home(const struct MirInsn *store);
 const struct MirRegionalSegment *mir_regional_segment_for(
     int value, int instruction);
 void mir_regional_begin_emission(void);

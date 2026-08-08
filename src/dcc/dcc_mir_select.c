@@ -125,6 +125,18 @@ static FILE *mir_compact_regional_candidate(FILE *input)
      * flags; applying the pass twice reaches the small local fixed point.
      */
     for (i = 0; i < count;) {
+        if (i + 1 < count &&
+            ((mir_regional_line_is(lines[i], "\tpush bc\n") &&
+              mir_regional_line_is(lines[i + 1], "\tpop bc\n")) ||
+             (mir_regional_line_is(lines[i], "\tpush de\n") &&
+              mir_regional_line_is(lines[i + 1], "\tpop de\n")) ||
+             (mir_regional_line_is(lines[i], "\tpush hl\n") &&
+              mir_regional_line_is(lines[i + 1], "\tpop hl\n")) ||
+             (mir_regional_line_is(lines[i], "\tpush iy\n") &&
+              mir_regional_line_is(lines[i + 1], "\tpop iy\n")))) {
+            i += 2;
+            continue;
+        }
         if (i + 6 < count &&
             mir_regional_line_is(lines[i], "\tpush de\n") &&
             mir_regional_line_is(lines[i + 1], "\tpop hl\n") &&
@@ -2636,7 +2648,30 @@ static int mir_regional_homed_retry_is_eligible(const char *reason)
     return reason != NULL &&
            (!strcmp(reason, "boolean-phi-cost") ||
             !strcmp(reason, "dynamic-index-base-cost") ||
-            !strcmp(reason, "unary-not-cost"));
+            !strcmp(reason, "unary-not-cost")) &&
+           (mir_call_count() > 0 || mir_cfg_block_count() > 1);
+}
+
+static int mir_regional_bounded_call_phi_is_semantically_eligible(
+    const char *reason, const char *selector_name,
+    int regional_cse_active,
+    long generated_size, long captured_size,
+    int generated_instructions, int captured_instructions)
+{
+    int blocks = mir_cfg_block_count();
+
+    return reason != NULL &&
+           !strcmp(reason, "dynamic-index-base-cost") &&
+           !strcmp(selector_name, "regional-homed-scalar-cfg") &&
+           regional_cse_active &&
+           blocks >= 3 && blocks <= 32 &&
+           mir_call_count() <= 24 &&
+           !mir.has_vla &&
+           !mir_has_declared_pointer_array() &&
+           generated_size <= 6000 &&
+           generated_size * 100L <= captured_size * 117L &&
+           generated_instructions * 100L <=
+               captured_instructions * 122L;
 }
 
 static int mir_regional_wide_loop_shape_is_semantically_eligible(void)
@@ -5191,20 +5226,18 @@ evaluate_generated:
                     (generated_size > captured_size ||
                      generated_instructions > captured_instructions))
                     fallback_reason = regional_cse_fallback_reason;
-                if (fallback_reason != NULL &&
-                    !strcmp(fallback_reason,
-                            "dynamic-index-base-cost") &&
-                    !strcmp(selector_name,
-                            "regional-homed-scalar-cfg") &&
-                    regional_cse_active &&
-                    mir_cfg_block_count() > 2 &&
-                    !g_speculative_codegen_active)
+                if (!g_speculative_codegen_active &&
+                    mir_regional_bounded_call_phi_is_semantically_eligible(
+                        fallback_reason, selector_name,
+                        regional_cse_active,
+                        generated_size, captured_size,
+                        generated_instructions,
+                        captured_instructions))
                     /*
-                     * The multi-block terminal candidate passes stack-check
-                     * peep+nopeep after call-bounded regional homes and
-                     * segment-level spill-slot reuse. The two-block peer is
-                     * correct alone but shifts Pint's optimized linked
-                     * layout when combined, so it remains on fallback.
+                     * Bounded call/PHI CFGs fit after regional homes reuse
+                     * original object slots and compact local preservation
+                     * and branch round trips. Keep hard text, instruction,
+                     * block, call, and absolute-size resource boundaries.
                      */
                     fallback_reason = NULL;
                 if (((fallback_reason != NULL &&
