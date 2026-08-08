@@ -119,7 +119,9 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "functions. Remaining backedge/wide, label-PHI, VLA, "
                  "pointer/inline, >5-KiB, or later-retry shapes include real "
                  "wrong-output and CP/M resource failures.",
-    "unary-not-cost": "adaint fails with wrong output.",
+    "unary-not-cost": "T441 admitted 15 terminal bounded acyclic functions. "
+                 "The remaining backedge, label-PHI, VLA, pointer/inline, "
+                 "oversized, or later-retry shapes include real failures.",
     "wide-constant-cost": "tpfauto fails.",
     "wide-store-cost": "ttrig fails.",
     "dead-local-suffix-cost": "tabsidm, tunary32 fail.",

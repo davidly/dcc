@@ -31,18 +31,17 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **1416/2051 (69.04%)**
-- Current stack-check coverage: **1477/2164 (68.25%)**
-- HEAD (pending push): T440 admits the terminal bounded acyclic
-  `dynamic-index-base-cost` cohort, **+13 ordinary/+13 stack-check**,
-  zero removals. Full-reason bisection found five individually unsafe
-  functions: four wide backedge drivers and one label-only-PHI shape.
-  The first 14-function acyclic cohort failed only when all three pint
-  candidates combined in nopeep mode; every pair passed. A 5,000-byte
-  absolute candidate ceiling excludes only `pint.for_stmt` (5,699
-  bytes), keeping the other 13. Remaining dynamic-index-base: **80
-  ordinary/81 stack-check**. See `## Item T440` in
-  `mir-text-size-plan.md`.
+- Current ordinary coverage: **1431/2052 (69.74%)**
+- Current stack-check coverage: **1492/2165 (68.91%)**
+- HEAD (pending push): T441 admits the terminal bounded acyclic
+  `unary-not-cost` cohort, **+15 ordinary/+15 stack-check**, zero
+  removals. Full-reason forcing failed eight apps, but per-function
+  bisection found only `tchess.find_legal_text_move` individually unsafe;
+  it is a backedge shape and is excluded by the shared T440 predicate.
+  Renamed the predicate to
+  `mir_bounded_acyclic_coverage_is_semantically_eligible()` and reused it
+  for both reasons. Remaining unary-not: **47 ordinary/48 stack-check**.
+  See `## Item T441` in `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -100,6 +99,10 @@ transactional fallback remains in place throughout Phase 1.
   guards (acyclic/no label-PHI/VLA/inline/pointer-array), a 2 KiB growth
   cap, and a 5,000-byte absolute CP/M resource cap. Remaining candidates
   are primarily backedge/wide or later-retry strata.
+- **T441 confirms the shared bounded-acyclic boundary generalizes.** The
+  same semantic/resource predicate safely admits a second reason without
+  duplicating policy formulas; keep using a shared helper when later
+  reasons need the identical boundary.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations
