@@ -112,8 +112,9 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "through T472. T480 fixed NOP/label-only PHI ownership and "
                  "admitted parse_data_line plus decode_stmts. T484-T486 fixed "
                  "virtual-IY ownership, paired divmod slots, and the MinMax "
-                 "ABI, admitting three more. Eleven direct/allocation or "
-                 "CP/M-resource failures remain.",
+                 "ABI, admitting three more. T487 admitted the bounded "
+                 "four-call FINAL pair. Nine direct/allocation or CP/M-"
+                 "resource failures remain.",
     "phi-fallthrough-cost": "T455 fixed real-edge PHI copy ownership, "
                  "NOP-only arm duplication, typed signedness/narrowing "
                  "aliases, and fused wide-constant operands; the complete "

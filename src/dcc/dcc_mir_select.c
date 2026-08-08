@@ -2104,12 +2104,15 @@ static int mir_boolean_phi_repaired_bounded_is_semantically_eligible(
            generated_size <= 15000;
 }
 
-static int mir_boolean_phi_final_sink_is_semantically_eligible(void)
+static int mir_boolean_phi_final_sink_is_semantically_eligible(
+    long generated_size)
 {
     int calls = mir_call_count();
 
-    if (calls <= 2 || calls == 4)
+    if (calls <= 2)
         return 0;
+    if (calls == 4)
+        return mir_cfg_block_count() <= 36 && generated_size <= 10000;
     return mir_cfg_block_count() <= 40 ||
            (mir_has_wide_values() && calls >= 30);
 }
@@ -4729,10 +4732,10 @@ evaluate_generated:
                     !strcmp(fallback_reason, "boolean-phi-cost") &&
                     !g_speculative_codegen_active &&
                     mir.sink_purpose == EMIT_SINK_FINAL &&
-                    mir_boolean_phi_final_sink_is_semantically_eligible())
-                    /* T468: the isolated deterministic FINAL-sink cohort
-                     * excludes two direct failures and two pairwise
-                     * resource/layout interactions. */
+                    mir_boolean_phi_final_sink_is_semantically_eligible(
+                        generated_size))
+                    /* T487: the repaired bounded four-call FINAL pair passes
+                     * both modes; larger and low-call failures stay gated. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
                     !strcmp(fallback_reason, "boolean-phi-cost") &&

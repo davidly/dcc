@@ -31,12 +31,11 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **2036/2060 (98.83%)**
-- Current stack-check coverage: **2155/2179 (98.90%)**
-- HEAD (pending push): T484-T486 fix spilled virtual-IY ownership,
-  fallthrough-edge PHI copies, paired-divmod result storage, and MinMax's
-  packed ABI/word-return contract: **+3/+3**, zero removals. See
-  `mir-text-size-plan.md`.
+- Current ordinary coverage: **2038/2060 (98.93%)**
+- Current stack-check coverage: **2157/2179 (98.99%)**
+- HEAD (pending push): T487 admits the repaired bounded four-call FINAL pair,
+  `tarray.ShowBinaryData` and `tlngnarw.main`: **+2/+2**, zero removals.
+  See `mir-text-size-plan.md`.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -236,6 +235,9 @@ transactional fallback remains in place throughout Phase 1.
 - **T486 makes MinMax transforms transactional and word-correct.** Packed
   frame/call rewrites commit only when both recursive and external call sites
   match, and the shared epilogue restores H for the declared byte return.
+- **T487 closes the bounded four-call FINAL stratum.** The two remaining
+  <=36-block/10-KiB functions pass both modes after the PHI and ownership
+  repairs; larger and low-call resource failures remain gated.
 - **T432 (this segment): n-gram re-mining re-confirms text-size/
   boolean-phi-cost exhaustion, no code change.** Re-ran the T385 n-gram
   mining tool against the current, much more mature populations

@@ -17383,6 +17383,21 @@ low-byte rewrites, preserving the complete declared result for MIR callers.
   diagnostics and dccpeep fixtures pass.
 - Performance changes are tracked in the checked baselines.
 
+## Item T487: bounded four-call FINAL boolean pair (+2/+2, 2026-08-08)
+
+The historical FINAL-sink boolean gate excluded every four-call candidate
+after earlier pairwise failures. Revalidation after T480-T486 shows the two
+remaining bounded shapes are now independently and jointly clean:
+`tarray.ShowBinaryData` and `tlngnarw.main`. The gate admits four-call FINAL
+functions only through the measured <=36-block/10-KiB boundary.
+
+- Ordinary: **2036/2060 -> 2038/2060 (98.93%)**, **+2**, zero removals.
+- Stack-check: **2155/2179 -> 2157/2179 (98.99%)**, **+2**, zero removals.
+- Remaining `boolean-phi-cost`: **9** in each configuration.
+- Full extended correctness: **314/314 runnable + 196/196 extended**,
+  diagnostics and dccpeep fixtures pass.
+- Performance changes are tracked in the checked baselines.
+
 ## Item T475: model division/remainder helper call clobbers (+1/+1, 2026-08-08)
 
 `tregnarw.lmod` kept loop-invariant `x` in HL across MIR `%`, but emission
