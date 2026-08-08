@@ -557,120 +557,87 @@ mandatory secondary regression guard, not an alternate denominator.
 
 ## Immediate next steps
 
-**Coverage is now 2059/2060 ordinary (99.95%) / 2178/2179 stack-check
-(99.95%)**, pushed as commit `74b5dcd`. **Exactly 1 function remains:
-`pint.run` (unary-not-cost)** - literal 100% coverage is one function away.
+**Phase 1 is complete: 100% MIR coverage achieved.** Ordinary
+2060/2060 (100.00%), stack-check 2179/2179 (100.00%), pushed as commit
+`e5cb8d0`. Zero fallback functions of any kind remain in the standard
+corpus. Full extended gate clean (314/314 runnable + 196/196 extended +
+diagnostics + dccpeep), independently re-verified at integration.
 
-**Landed this segment**, all via the same call-bounded regional-home
-architecture (T499-T502) plus two further extensions:
-- `pint.subprog`, `pint.for_stmt`, `adaint.next` (T499-T502): call-boundary
-  live-range splitting, then a wide-value loop class.
-- `a1.emulate` (T503): a *different* insight - its 354-block CFG has low
-  live pressure and mostly arm-local state, so region splitting alone made
-  it worse. The real fix was recognizing MIR's 153-case unsigned-byte
-  equality-chain lowering as a recoverable 256-entry jump-table identity
-  (matching what the legacy AST backend already emitted) and fusing the
-  dispatch epilogue.
+**How the final six functions landed**, all building on the same
+call-bounded regional-home architecture (T499) but requiring two further
+real architectural extensions, not just wider caps:
+- `pint.subprog`, `pint.for_stmt`, `adaint.next` (T499, T501, T502):
+  call-boundary live-range splitting, then a wide-value loop class.
+- `a1.emulate` (T503) and `pint.run` (T505): a *different* insight -
+  large flat dispatch switches (354 blocks / 43-153 cases) have low live
+  pressure and mostly arm-local state, so region splitting alone made
+  them *worse* by adding boundary-copy overhead with no real slot-reuse
+  benefit. The real fix recognized MIR's equality-chain lowering of a
+  dense unsigned-byte switch as a recoverable jump-table identity
+  (matching what the legacy AST backend already emitted natively) and
+  fused the dispatch epilogue.
 - `pint.factor_call_or_var`, `pint.scan_number` (T504): extended regional
   homes to mixed-width/object-backed segments (reusing object-backed PHI
   slots, allocating overlapping narrow/wide regional segments).
 
-**`pint.run` is being actively worked on** (background agent
-`regional-home-pint-resume` in `regional-home-worktree`, branch
-`copilot/regional-home-af23`) using the T503 insight: does `run`'s
-112-block bytecode-interpreter main loop have a similar dense-switch
-identity MIR lowering obscured? A completed pure-regional attempt grew to
-28,828 bytes / 2,915 instructions and exceeded Pint's measured TPA boundary
-by 606 linked bytes - regional splitting alone is not enough here, same as
-it wasn't enough alone for `a1.emulate`.
+**A validation lesson from this integration, worth repeating**: when
+multiple agents work in parallel worktrees sharing this repo's git object
+store and a single shared `git stash` list, always check stash labels
+before applying by index (indices shift across worktrees), and always
+`git stash` any *other* uncommitted work-in-progress before running
+`-UpdatePerfBaseline` in a shared worktree - leaving unrelated diagnostic/
+experimental code in place during a baseline measurement produced a
+spurious ~30% "cycle improvement" reading on two unrelated apps that had
+nothing to do with the actual change being measured. Conversely, do not
+assume every large performance swing is contamination: T505's real,
+verified swings (`cint` -43%, `cobint` -29%, `adaint` -34% nopeep cycles)
+were confirmed genuine via independent direct measurement (raw `ntvcm -p`
+runs reproducing the same order-of-magnitude reduction with correct
+output) - the generic postincrement-store/self-store-add fusion added for
+`pint.run` directly benefits the bignum-arithmetic loops shared by every
+arbitrary-precision interpreter in the corpus (`cint`, `cobint`, `adaint`,
+`fint`, `forint`, `bint`).
 
-**When it lands**: integrate via the same process used for T499-T504 -
-independently rebuild, rerun both censuses with `--compare` against the
-last pushed baseline requiring zero removals, run `pwsh
-./scripts/runall.ps1 -Mode full -Extended` requiring 314/314 + extended +
-diagnostics + dccpeep clean, regenerate `tests/perf_baselines.csv` via
-`-UpdatePerfBaseline` **on a clean rebuild with no other uncommitted
-work-in-progress mixed in** (a real gotcha this segment: an agent's
-uncommitted, diagnostic-toggled experimental code sitting in the same
-worktree during a baseline measurement produced a spurious ~30% "cycle
-improvement" on two unrelated apps that had nothing to do with the actual
-change - always `git stash` any unrelated uncommitted work before running
-`-UpdatePerfBaseline`, then restore it afterward). Document as `## Item
-T505`, commit with the Copilot coauthor trailer, push to
-`origin/perf/unified-regalloc` (do not wait for GitHub Actions).
+## Phase 2: performance recovery (now active)
 
-**The instant `pint.run` lands, ordinary/stack-check coverage reaches
-2060/2060 (100%) and 2179/2179 (100%)** - the literal Phase 1 goal. Pivot
-immediately to the documented Phase 2: bring aggregate peep-mode
-performance back to at/below the pre-MIR legacy baseline (dynamic
-`dccprof` profiling first, per the "Goal and current state" section
-above), since Phase 1 deliberately accepted tracked regressions (e.g.
-`a1`'s +4.40% peep / +2.44% nopeep cycles from T503) in service of reaching
-100% coverage fast.
+The goal is bringing aggregate peep-mode cycles back to at/below the
+pre-MIR legacy baseline, since Phase 1 deliberately accepted tracked
+regressions (notably `a1`'s +4.40% peep / +2.44% nopeep cycles from T503,
+and Pint's +2.60% peep from T505) in service of reaching 100% coverage
+fast. Some Phase-1 work already produced net wins in the same pass (the
+T505 bignum-loop fusion above), so Phase 2 is not starting from a uniform
+deficit.
 
-**Do not repeat these already-falsified approaches**: broad cost-cap
-widening without a measured safe class; whole-function spill coalescing
-alone; broad retained-address CSE; test/stack weakening; name-based
-production exceptions. Historical context for earlier (now superseded)
-coverage milestones and abandoned/falsified approaches from the 44-98%
-climb is preserved below for reference.
-maximal call-free CFG regions, per-region effective homes, explicit
-spill-before-call/reload-after-call boundary state, and segment-level slot
-reuse across non-overlapping regions - and used it to land `pint.subprog`,
-`pint.for_stmt`, and `adaint.next` (see `mir-text-size-plan.md` items T499,
-T501, T502; T500 is a supporting investigation that ruled out a dccpeep-side
-explanation first). This is real, general, structural architecture, not a
-one-off - reuse it for the remaining 4 rather than inventing something new
-per function.
+Suggested approach, per the "Goal and current state" section's original
+Phase 2 plan:
+1. Use `dccprof` dynamic profiling (see the dcc-project skill's
+   "Performance and optimizer work" section) to find where the tracked
+   regressions actually spend cycles - do not guess from static text size.
+2. Prioritize the largest tracked regressions first: `a1` and `pint` are
+   the two known deliberate Phase-1 trade-offs; check `tests/perf_baselines.csv`
+   history via `git log -p -- tests/perf_baselines.csv` for the complete
+   list of every accepted regression across T499-T505 if more turn up.
+3. Prove out any fix with the same full-mode + full-extended-gate
+   discipline used throughout Phase 1 - this is now steady-state
+   optimization work, not coverage-migration work, so the existing
+   dcc-project skill's "Performance and optimizer work" and "Register
+   allocation" sections' hard-won rules apply directly (measure against
+   the corpus, not intuition; watch for dccpeep pattern interactions).
+4. Once aggregate performance is at/below the pre-MIR baseline, the
+   project's stated end state is proving MIR-required mode over the
+   extended corpus and then removing the capture/replay transactional
+   fallback and legacy AST codegen paths in separate cleanup commits (do
+   not attempt this until performance recovery is verified - the
+   transactional fallback is exactly what has made every step of this
+   migration safe to land incrementally).
 
-**Two background efforts are in progress as of this handoff** (both in
-isolated worktrees under this session's `files/` directory, sharing this
-repo's git object store and a single shared `git stash` list - always
-check stash labels before applying by index, since indices shift across
-worktrees):
-- `regional-home-worktree` (branch `copilot/regional-home-af23`): the
-  three Pint functions (`run`, `factor_call_or_var`, `scan_number`).
-  `scan_number` and `factor_call_or_var` had already shrunk somewhat before
-  a merge conflict with the landed wide-loop class; `run` needs "major size
-  recovery" per its own diagnosis (112 blocks, 27,227 vs 23,306
-  generated-vs-captured bytes at last measurement).
-- `regional-home-worktree2` (branch `copilot/regional-home2-af23`):
-  `a1.emulate` alone - 354 blocks, an order of magnitude larger than
-  anything the mechanism has handled so far. Naively applying whole-function
-  region splitting made it *worse* (52,435 vs 26,573 bytes) because a flat
-  opcode-dispatch switch has a fundamentally different liveness shape than a
-  loop or call/PHI CFG: most values are arm-local, only a small "CPU state"
-  set (registers/flags/PC) crosses every arm. The likely right architecture
-  is switch-arm-bounded regions (region edges at arm entry/exit, not just at
-  calls) rather than widening existing call-bounded/wide-loop classes -
-  study the actual liveness shape before choosing an approach.
-
-**When both land (or report back with architectural findings)**: integrate
-each via the same process used for T499-T502 - independently rebuild,
-rerun both censuses with `--compare` against the last pushed baseline
-requiring zero removals, run `pwsh ./scripts/runall.ps1 -Mode full
--Extended` requiring 314/314 + extended + diagnostics + dccpeep clean,
-accept any small deliberate performance deltas via `-UpdatePerfBaseline`
-(correctness is non-negotiable, performance is tracked not gated per the
-2026-08-08 policy pivot above), document as the next `## Item T50x` entry,
-commit with the Copilot coauthor trailer, and push to
-`origin/perf/unified-regalloc` (do not wait for GitHub Actions to complete).
-
-If both remaining agents land their functions, **ordinary/stack-check
-coverage reaches 2060/2060 (100%) and 2179/2179 (100%)** - the literal
-Phase 1 goal. At that point pivot immediately to the documented Phase 2:
-bring aggregate peep-mode performance back to at/below the pre-MIR legacy
-baseline (dynamic `dccprof` profiling first, per the "Goal and current
-state" section above), since Phase 1 accepted tracked regressions in
-service of reaching 100% coverage fast.
-
-**Do not repeat these already-falsified approaches** for any of the
-remaining 4: broad cost-cap widening without a measured safe class; whole-
-function spill coalescing alone (tried and insufficient before T499);
-broad retained-address CSE (miscompiled Pint TTT once); test/stack
-weakening; name-based production exceptions. Historical context for
-earlier (now superseded) coverage milestones and abandoned/falsified
-approaches from the 44-98% climb is preserved below for reference.
+**Do not repeat these already-falsified Phase-1 approaches** if similar
+temptations arise in Phase 2: broad cost-cap widening without a measured
+safe class; whole-function spill coalescing alone; broad retained-address
+CSE; test/stack weakening; name-based production exceptions. Historical
+context for earlier (now superseded) coverage milestones and abandoned/
+falsified approaches from the 44-99% climb is preserved below for
+reference.
 
 ## Latest production cohort
 
