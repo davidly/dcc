@@ -115,7 +115,10 @@ CONFIRMED_UNSAFE_COST_REASONS = {
                  "output or CP/M memory exhaustion when forced.",
     "phi-fallthrough-cost": "t fails with wrong output (int8_t/int16_t/"
                  "int32_t result mismatches).",
-    "dynamic-index-base-cost": "ttt fails with wrong output.",
+    "dynamic-index-base-cost": "T440 admitted 13 terminal bounded acyclic "
+                 "functions. Remaining backedge/wide, label-PHI, VLA, "
+                 "pointer/inline, >5-KiB, or later-retry shapes include real "
+                 "wrong-output and CP/M resource failures.",
     "unary-not-cost": "adaint fails with wrong output.",
     "wide-constant-cost": "tpfauto fails.",
     "wide-store-cost": "ttrig fails.",

@@ -2083,6 +2083,20 @@ static int mir_text_size_simple_backedge_is_semantically_eligible(
            generated_size <= captured_size + 2048;
 }
 
+static int mir_dynamic_index_base_coverage_is_semantically_eligible(
+    long generated_size, long captured_size)
+{
+    return mir_cfg_block_count() <= 64 &&
+           mir_call_count() <= 32 &&
+           !mir.has_vla &&
+           !mir_has_cfg_backedge() &&
+           !mir_has_inline_substitution_call() &&
+           !mir_has_declared_pointer_array() &&
+           !mir_has_label_only_phi_fallthrough() &&
+           generated_size <= 5000 &&
+           generated_size <= captured_size + 2048;
+}
+
 static int mir_is_profiled_vla_single_block_instruction_win(
     long generated_size, long captured_size, int generated_instructions,
     int captured_instructions)
@@ -4108,6 +4122,13 @@ evaluate_generated:
                     /* T439: the terminal scalar tiny-loop cohort passed the
                      * full extended gate. Keep this at the actual final
                      * decision point so all earlier retries retain priority. */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "dynamic-index-base-cost") &&
+                    mir_dynamic_index_base_coverage_is_semantically_eligible(
+                        generated_size, captured_size))
+                    /* T440: the terminal bounded acyclic dynamic-index-base
+                     * cohort passed the full extended correctness gate. */
                     fallback_reason = NULL;
                 if (fallback_reason != NULL)
                     emitted = 0;
