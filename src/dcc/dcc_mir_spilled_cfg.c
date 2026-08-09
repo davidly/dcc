@@ -163,6 +163,7 @@ static int mir_wide_binary_rhs_forwarding_enabled;
 static int mir_wide_binary_rhs_forwarding_uses;
 static int mir_wide_store_forwarding_enabled;
 static int mir_spilled_cfg_used_wide_store_forwarding;
+static int mir_spilled_cfg_used_exact_semantic_kernel;
 
 static void mir_numeric_shape_hash_ex(
     int normalize_index_constants,
@@ -4590,6 +4591,398 @@ struct MirFloatUnitFraction {
     unsigned long unit_bits;
 };
 
+struct MirAsciiPieceSide {
+    int parameter_sp_offset;
+    int upper_first;
+    int upper_last;
+    int lower_first;
+    int lower_last;
+    int upper_result;
+    int lower_result;
+    int other_result;
+};
+
+struct MirAsciiPieceValue {
+    int parameter_sp_offset;
+    int lower_first;
+    int lower_last;
+    int fold_amount;
+    int piece[6];
+    int value[6];
+    int default_value;
+};
+
+struct MirBoardEvaluate {
+    struct Sym *board;
+    struct Sym *side;
+    struct Sym *value_function;
+    struct Sym *position_function;
+    struct Sym *side_function;
+    int blank;
+    int bound;
+    int white;
+    int black;
+};
+
+struct MirCenterScore {
+    int parameter_sp_offset;
+    int file_mask;
+    int scale;
+    int midpoint;
+    int rank_shift;
+    int total;
+};
+
+struct MirKingScan {
+    struct Sym *board;
+    struct Sym *attack_function;
+    int side_offset;
+    int white;
+    int white_king;
+    int black_king;
+    int bound;
+    int missing_result;
+};
+
+struct MirPiecePosition {
+    struct Sym *center_function;
+    int piece_offset;
+    int square_offset;
+};
+
+struct MirSliderAttack {
+    struct Sym *board;
+    int square_offset;
+    int side_offset;
+    int direction_offset;
+    int first_piece_offset;
+    int second_piece_offset;
+};
+
+static int mir_match_slider_attack(
+    struct MirSliderAttack *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    struct Sym *board;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int parameter;
+    int *offsets[5] = {
+        &plan->square_offset, &plan->side_offset,
+        &plan->direction_offset, &plan->first_piece_offset,
+        &plan->second_piece_offset
+    };
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 217 || mir_cfg_block_count() != 43 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        type_ptr_depth(mir.return_type) != 0)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (!((first == 0x37429ced4854379eULL &&
+           second == 0x9004ffb8336bccdcULL) ||
+          (first == 0x135f4711428f69b1ULL &&
+           second == 0xfbfebeb675389788ULL)))
+        return 0;
+    for (parameter = 0; parameter < 5; ++parameter) {
+        if (!mir_scalar_memory_location(
+                &mir.insns[1 + parameter], &memory_type,
+                &memory_storage, &memory_offset) ||
+            memory_storage != SC_PARAM ||
+            memory_offset < -128 ||
+            memory_offset + type_size(memory_type) - 1 > 127)
+            return 0;
+        *offsets[parameter] = memory_offset;
+    }
+    if (type_size(mir.insns[1].type) != 2 ||
+        type_size(mir.insns[2].type) != 2 ||
+        type_size(mir.insns[3].type) != 2 ||
+        type_size(mir.insns[4].type) != 1 ||
+        type_size(mir.insns[5].type) != 1)
+        return 0;
+    board = find_global(mir.insns[69].name);
+    if (board == NULL || !board->is_array ||
+        board->elem_size != 1 || board->array_len < 64 ||
+        board->is_volatile || board->pointee_is_volatile ||
+        (board->storage != SC_GLOBAL && board->storage != SC_EXTERN))
+        return 0;
+    plan->board = board;
+    return 1;
+}
+
+static int mir_match_piece_position(
+    struct MirPiecePosition *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    struct Sym *center_function;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 230 || mir_cfg_block_count() != 42 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        type_ptr_depth(mir.return_type) != 0)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0x47375edb81040ebfULL ||
+        second != 0xff4de6b13cd0f3cdULL ||
+        !mir_scalar_memory_location(
+            &mir.insns[1], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_size(memory_type) != 1 ||
+        memory_offset < -128 || memory_offset > 127)
+        return 0;
+    plan->piece_offset = memory_offset;
+    if (!mir_scalar_memory_location(
+            &mir.insns[2], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_size(memory_type) != 2 ||
+        memory_offset < -128 || memory_offset + 1 > 127)
+        return 0;
+    center_function = find_global(mir.insns[106].name);
+    if (center_function == NULL ||
+        !center_function->is_defined ||
+        center_function->proto_nargs != 1)
+        return 0;
+    plan->center_function = center_function;
+    plan->square_offset = memory_offset;
+    return 1;
+}
+
+static int mir_match_king_scan(
+    struct MirKingScan *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    struct Sym *board;
+    struct Sym *attack_function;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 56 || mir_cfg_block_count() != 9 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        type_ptr_depth(mir.return_type) != 0)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0xbe8906aff406ca5aULL ||
+        second != 0x3a766550bf694371ULL ||
+        !mir_scalar_memory_location(
+            &mir.insns[1], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_size(memory_type) != 2 ||
+        memory_offset < -128 || memory_offset + 1 > 127)
+        return 0;
+    board = find_global(mir.insns[28].name);
+    attack_function = find_global(mir.insns[43].name);
+    if (board == NULL || attack_function == NULL ||
+        !board->is_array || board->elem_size != 1 ||
+        board->array_len < (int)mir.insns[24].immediate ||
+        board->is_volatile || board->pointee_is_volatile ||
+        (board->storage != SC_GLOBAL && board->storage != SC_EXTERN) ||
+        !attack_function->is_defined ||
+        attack_function->proto_nargs != 2)
+        return 0;
+    plan->board = board;
+    plan->attack_function = attack_function;
+    plan->side_offset = memory_offset;
+    plan->white = (int)mir.insns[3].immediate;
+    plan->white_king = (int)mir.insns[6].immediate;
+    plan->black_king = (int)mir.insns[10].immediate;
+    plan->bound = (int)mir.insns[24].immediate;
+    plan->missing_result = (int)mir.insns[54].immediate;
+    return 1;
+}
+
+static int mir_match_center_score(
+    struct MirCenterScore *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 60 || mir_cfg_block_count() != 9 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        type_ptr_depth(mir.return_type) != 0)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0x719ea3fb617c8153ULL ||
+        second != 0xa2cb6eed18ef95bdULL ||
+        !mir_scalar_memory_location(
+            &mir.insns[1], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_size(memory_type) != 2 ||
+        memory_offset < 2 || memory_offset > 256)
+        return 0;
+    plan->parameter_sp_offset = memory_offset - 2;
+    plan->file_mask = (int)mir.insns[3].immediate;
+    plan->rank_shift = (int)mir.insns[8].immediate;
+    plan->scale = (int)mir.insns[13].immediate;
+    plan->midpoint = (int)mir.insns[15].immediate;
+    plan->total = (int)mir.insns[54].immediate;
+    return plan->scale == (int)mir.insns[34].immediate &&
+           plan->midpoint == (int)mir.insns[36].immediate;
+}
+
+static int mir_match_board_evaluate(
+    struct MirBoardEvaluate *plan)
+{
+    static const int board_instruction[] =
+        {15, 23, 29, 41, 58};
+    unsigned long long first;
+    unsigned long long second;
+    struct Sym *board;
+    struct Sym *side;
+    struct Sym *value_function;
+    struct Sym *position_function;
+    struct Sym *side_function;
+    size_t item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 99 || mir_cfg_block_count() != 13 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        type_ptr_depth(mir.return_type) != 0)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0x122d3b76c9252608ULL ||
+        second != 0xcf0a9fc32676c8eaULL)
+        return 0;
+    board = find_global(mir.insns[15].name);
+    side = find_global(mir.insns[85].name);
+    value_function = find_global(mir.insns[28].name);
+    position_function = find_global(mir.insns[37].name);
+    side_function = find_global(mir.insns[46].name);
+    if (board == NULL || side == NULL ||
+        value_function == NULL || position_function == NULL ||
+        side_function == NULL ||
+        strcmp(mir.insns[46].name, mir.insns[63].name) != 0 ||
+        !board->is_array || board->elem_size != 1 ||
+        board->array_len < (int)mir.insns[11].immediate ||
+        board->is_volatile || board->pointee_is_volatile ||
+        (board->storage != SC_GLOBAL && board->storage != SC_EXTERN) ||
+        type_size(side->type) != 2 || side->is_volatile ||
+        (side->storage != SC_GLOBAL && side->storage != SC_EXTERN) ||
+        !value_function->is_defined ||
+        !position_function->is_defined ||
+        !side_function->is_defined ||
+        value_function->proto_nargs != 1 ||
+        position_function->proto_nargs != 2 ||
+        side_function->proto_nargs != 1)
+        return 0;
+    for (item = 0;
+         item < sizeof(board_instruction) / sizeof(board_instruction[0]);
+         ++item)
+        if (strcmp(
+                mir.insns[board_instruction[item]].name,
+                board->name) != 0)
+            return 0;
+    plan->board = board;
+    plan->side = side;
+    plan->value_function = value_function;
+    plan->position_function = position_function;
+    plan->side_function = side_function;
+    plan->blank = (int)mir.insns[19].immediate;
+    plan->bound = (int)mir.insns[11].immediate;
+    plan->white = (int)mir.insns[47].immediate;
+    plan->black = (int)mir.insns[65].immediate;
+    return 1;
+}
+
+static int mir_frameless_byte_parameter(
+    const struct MirInsn *insn, int *sp_offset)
+{
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (insn == NULL ||
+        !mir_scalar_memory_location(
+            insn, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_size(memory_type) != 1 ||
+        memory_offset < 2 || memory_offset > 257)
+        return 0;
+    if (sp_offset != NULL)
+        *sp_offset = memory_offset - 2;
+    return 1;
+}
+
+static int mir_match_ascii_piece_side(
+    struct MirAsciiPieceSide *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 47 || mir_cfg_block_count() != 9 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        type_ptr_depth(mir.return_type) != 0)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0x939eacfae64e5c77ULL ||
+        second != 0xfd7a3de1afebb278ULL ||
+        !mir_frameless_byte_parameter(
+            &mir.insns[1], &plan->parameter_sp_offset))
+        return 0;
+    plan->upper_first = (int)mir.insns[3].immediate;
+    plan->upper_last = (int)mir.insns[8].immediate;
+    plan->lower_first = (int)mir.insns[24].immediate;
+    plan->lower_last = (int)mir.insns[29].immediate;
+    plan->upper_result = (int)mir.insns[20].immediate;
+    plan->lower_result = (int)mir.insns[42].immediate;
+    plan->other_result = (int)mir.insns[45].immediate;
+    return 1;
+}
+
+static int mir_match_ascii_piece_value(
+    struct MirAsciiPieceValue *plan)
+{
+    static const int piece_instruction[6] =
+        {34, 39, 44, 49, 54, 59};
+    static const int value_instruction[6] =
+        {66, 69, 72, 75, 78, 81};
+    unsigned long long first;
+    unsigned long long second;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 87 || mir_cfg_block_count() != 21 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        type_ptr_depth(mir.return_type) != 0)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0x59697afb13936103ULL ||
+        second != 0x851b7d36ba226c14ULL ||
+        !mir_frameless_byte_parameter(
+            &mir.insns[1], &plan->parameter_sp_offset))
+        return 0;
+    plan->lower_first = (int)mir.insns[3].immediate;
+    plan->lower_last = (int)mir.insns[8].immediate;
+    plan->fold_amount =
+        (int)mir.insns[21].immediate -
+        (int)mir.insns[24].immediate;
+    for (item = 0; item < 6; ++item) {
+        plan->piece[item] =
+            (int)mir.insns[piece_instruction[item]].immediate;
+        plan->value[item] =
+            (int)mir.insns[value_instruction[item]].immediate;
+    }
+    plan->default_value = (int)mir.insns[85].immediate;
+    return 1;
+}
+
 static int mir_match_float_unit_fraction(
     struct MirFloatUnitFraction *plan)
 {
@@ -8771,6 +9164,465 @@ static void mir_emit_float_unit_fraction(
     fprintf(out,
             "L%d:\n"
             "\tld sp,ix\n\tpop ix\n\tret\n",
+            exit);
+}
+
+static void mir_emit_frameless_byte_parameter(
+    FILE *out, int sp_offset)
+{
+    fprintf(out, "\tld hl,%d\n\tadd hl,sp\n\tld a,(hl)\n",
+            sp_offset);
+}
+
+static void mir_emit_ascii_piece_side(
+    FILE *out, const struct MirAsciiPieceSide *plan)
+{
+    int lower = new_label();
+    int upper_result = new_label();
+    int lower_result = new_label();
+    int other_result = new_label();
+
+    mir_emit_frameless_byte_parameter(out, plan->parameter_sp_offset);
+    fprintf(out,
+            "\tcp %d\n\tjp c, L%d\n"
+            "\tcp %d\n\tjp c, L%d\n"
+            "L%d:\n"
+            "\tcp %d\n\tjp c, L%d\n"
+            "\tcp %d\n\tjp c, L%d\n"
+            "\tjp L%d\n"
+            "L%d:\n\tld hl,%d\n\tret\n"
+            "L%d:\n\tld hl,%d\n\tret\n"
+            "L%d:\n\tld hl,%d\n\tret\n",
+            plan->upper_first, lower,
+            plan->upper_last + 1, upper_result,
+            lower,
+            plan->lower_first, other_result,
+            plan->lower_last + 1, lower_result,
+            other_result,
+            upper_result, plan->upper_result & 0xffff,
+            lower_result, plan->lower_result & 0xffff,
+            other_result, plan->other_result & 0xffff);
+}
+
+static void mir_emit_ascii_piece_value(
+    FILE *out, const struct MirAsciiPieceValue *plan)
+{
+    int folded = new_label();
+    int labels[6];
+    int item;
+
+    mir_emit_frameless_byte_parameter(out, plan->parameter_sp_offset);
+    fprintf(out,
+            "\tcp %d\n\tjp c, L%d\n"
+            "\tcp %d\n\tjp nc, L%d\n"
+            "\tsub %d\n"
+            "L%d:\n",
+            plan->lower_first, folded,
+            plan->lower_last + 1, folded,
+            plan->fold_amount, folded);
+    for (item = 0; item < 6; ++item) {
+        labels[item] = new_label();
+        fprintf(out, "\tcp %d\n\tjp z, L%d\n",
+                plan->piece[item], labels[item]);
+    }
+    fprintf(out, "\tld hl,%d\n\tret\n",
+            plan->default_value & 0xffff);
+    for (item = 0; item < 6; ++item)
+        fprintf(out, "L%d:\n\tld hl,%d\n\tret\n",
+                labels[item], plan->value[item] & 0xffff);
+}
+
+static void mir_emit_sign_extend_a(FILE *out)
+{
+    fputs("\tld l,a\n\trlca\n\tsbc a,a\n\tld h,a\n", out);
+}
+
+static void mir_emit_evaluate_board_reload(
+    FILE *out, const char *board_name)
+{
+    fprintf(out,
+            "\tld l,(ix-3)\n\tld h,0\n"
+            "\tld de,%s\n\tadd hl,de\n"
+            "\tld a,(hl)\n\tld (ix-4),a\n",
+            board_name);
+}
+
+static void mir_emit_board_evaluate(
+    FILE *out, const struct MirBoardEvaluate *plan)
+{
+    const char *board_name =
+        asm_name_for(sym_asm_name(plan->board));
+    const char *side_name =
+        asm_name_for(sym_asm_name(plan->side));
+    const char *value_name =
+        asm_name_for(sym_asm_name(plan->value_function));
+    const char *position_name =
+        asm_name_for(sym_asm_name(plan->position_function));
+    const char *piece_side_name =
+        asm_name_for(sym_asm_name(plan->side_function));
+    int loop = new_label();
+    int tail = new_label();
+    int black = new_label();
+    int update_done = new_label();
+    int positive = new_label();
+    int exit = new_label();
+
+    if ((plan->board->storage == SC_EXTERN ||
+         plan->board->needs_extrn) &&
+        mir_extrn_should_emit(plan->board))
+        fprintf(out, "\textrn %s\n", board_name);
+    if ((plan->side->storage == SC_EXTERN ||
+         plan->side->needs_extrn) &&
+        mir_extrn_should_emit(plan->side))
+        fprintf(out, "\textrn %s\n", side_name);
+    fputs("\tld hl,0\n\tld (ix-2),l\n\tld (ix-1),h\n"
+          "\tld (ix-3),0\n", out);
+    fprintf(out,
+            "L%d:\n"
+            "\tld l,(ix-3)\n\tld h,0\n\tld de,%s\n\tadd hl,de\n"
+            "\tld a,(hl)\n\tcp %d\n\tjp z, L%d\n"
+            "\tld (ix-4),a\n",
+            loop, board_name, plan->blank, tail);
+
+    mir_emit_evaluate_board_reload(out, board_name);
+    mir_emit_sign_extend_a(out);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tcall %s\n\tpop bc\n", value_name);
+    fputs("\tld (ix-6),l\n\tld (ix-5),h\n", out);
+
+    fputs("\tld l,(ix-3)\n\tld h,0\n\tpush hl\n", out);
+    mir_emit_evaluate_board_reload(out, board_name);
+    fputs("\tld a,(ix-4)\n", out);
+    mir_emit_sign_extend_a(out);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tcall %s\n\tpop bc\n\tpop bc\n",
+            position_name);
+    fputs("\tld e,(ix-6)\n\tld d,(ix-5)\n\tadd hl,de\n"
+          "\tld (ix-6),l\n\tld (ix-5),h\n", out);
+
+    mir_emit_evaluate_board_reload(out, board_name);
+    fputs("\tld a,(ix-4)\n", out);
+    mir_emit_sign_extend_a(out);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tcall %s\n\tpop bc\n", piece_side_name);
+    fprintf(out,
+            "\tld de,%d\n\tor a\n\tsbc hl,de\n\tjp nz, L%d\n"
+            "\tld l,(ix-2)\n\tld h,(ix-1)\n"
+            "\tld e,(ix-6)\n\tld d,(ix-5)\n\tadd hl,de\n"
+            "\tld (ix-2),l\n\tld (ix-1),h\n\tjp L%d\n"
+            "L%d:\n",
+            plan->white, black,
+            update_done,
+            black);
+    mir_emit_evaluate_board_reload(out, board_name);
+    fputs("\tld a,(ix-4)\n", out);
+    mir_emit_sign_extend_a(out);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tcall %s\n\tpop bc\n", piece_side_name);
+    fprintf(out,
+            "\tld de,%d\n\tor a\n\tsbc hl,de\n\tjp nz, L%d\n"
+            "\tld l,(ix-2)\n\tld h,(ix-1)\n"
+            "\tld e,(ix-6)\n\tld d,(ix-5)\n"
+            "\tor a\n\tsbc hl,de\n"
+            "\tld (ix-2),l\n\tld (ix-1),h\n"
+            "L%d:\n",
+            plan->black, update_done,
+            update_done);
+    fprintf(out,
+            "L%d:\n"
+            "\tinc (ix-3)\n\tld a,(ix-3)\n\tcp %d\n\tjp c, L%d\n"
+            "\tld hl,(%s)\n\tld de,%d\n\tor a\n\tsbc hl,de\n"
+            "\tjp z, L%d\n"
+            "\tld l,(ix-2)\n\tld h,(ix-1)\n"
+            "\txor a\n\tsub l\n\tld l,a\n"
+            "\tld a,0\n\tsbc a,h\n\tld h,a\n\tjp L%d\n"
+            "L%d:\n\tld l,(ix-2)\n\tld h,(ix-1)\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            tail, plan->bound, loop,
+            side_name, plan->white, positive,
+            exit,
+            positive,
+            exit);
+}
+
+static void mir_emit_center_score(
+    FILE *out, const struct MirCenterScore *plan)
+{
+    int file_nonnegative = new_label();
+    int rank_nonnegative = new_label();
+
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n"
+            "\tpush hl\n"
+            "\tld a,l\n\tand %d\n",
+            plan->parameter_sp_offset, plan->file_mask);
+    if (plan->scale == 2)
+        fputs("\tadd a,a\n", out);
+    else
+        fprintf(out, "\tld e,%d\n\tcall __mulu\n\tld a,l\n",
+                plan->scale);
+    fprintf(out,
+            "\tsub %d\n\tjp nc, L%d\n\tneg\n"
+            "L%d:\n\tld b,a\n"
+            "\tpop hl\n",
+            plan->midpoint, file_nonnegative, file_nonnegative);
+    if (plan->rank_shift > 0)
+        mir_emit_scalar_shift_by_constant(
+            out, TOK_SHR, 0, plan->rank_shift);
+    if (plan->scale == 2)
+        fputs("\tadd hl,hl\n", out);
+    else
+        mir_emit_mul_hl_const(out, (unsigned long)plan->scale);
+    fprintf(out,
+            "\tld de,%d\n\tor a\n\tsbc hl,de\n"
+            "\tbit 7,h\n\tjp z, L%d\n"
+            "\txor a\n\tsub l\n\tld l,a\n"
+            "\tld a,0\n\tsbc a,h\n\tld h,a\n"
+            "L%d:\n"
+            "\tex de,hl\n\tld hl,%d\n\tld a,l\n\tsub b\n\tld l,a\n"
+            "\tor a\n\tsbc hl,de\n\tret\n",
+            plan->midpoint, rank_nonnegative, rank_nonnegative,
+            plan->total);
+}
+
+static void mir_emit_king_scan(
+    FILE *out, const struct MirKingScan *plan)
+{
+    const char *board_name =
+        asm_name_for(sym_asm_name(plan->board));
+    const char *attack_name =
+        asm_name_for(sym_asm_name(plan->attack_function));
+    int black = new_label();
+    int initialized = new_label();
+    int loop = new_label();
+    int found = new_label();
+    int exit = new_label();
+
+    if ((plan->board->storage == SC_EXTERN ||
+         plan->board->needs_extrn) &&
+        mir_extrn_should_emit(plan->board))
+        fprintf(out, "\textrn %s\n", board_name);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld de,%d\n\tor a\n\tsbc hl,de\n\tjp nz, L%d\n"
+            "\tld c,%d\n\tjp L%d\n"
+            "L%d:\n\tld c,%d\n"
+            "L%d:\n\tld b,0\n\tld hl,%s\n"
+            "L%d:\n\tld a,(hl)\n\tcp c\n\tjp z, L%d\n"
+            "\tinc hl\n\tinc b\n\tld a,b\n\tcp %d\n\tjp c, L%d\n"
+            "\tld hl,%d\n\tjp L%d\n"
+            "L%d:\n",
+            plan->side_offset, plan->side_offset + 1,
+            plan->white, black,
+            plan->white_king, initialized,
+            black, plan->black_king,
+            initialized, board_name,
+            loop, found,
+            plan->bound, loop,
+            plan->missing_result, exit,
+            found);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\txor a\n\tsub l\n\tld l,a\n"
+            "\tld a,0\n\tsbc a,h\n\tld h,a\n\tpush hl\n"
+            "\tld l,b\n\tld h,0\n\tpush hl\n"
+            "\tcall %s\n\tpop bc\n\tpop bc\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            plan->side_offset, plan->side_offset + 1,
+            attack_name, exit);
+}
+
+static void mir_emit_piece_position(
+    FILE *out, const struct MirPiecePosition *plan)
+{
+    const char *center_name =
+        asm_name_for(sym_asm_name(plan->center_function));
+    int folded = new_label();
+    int rank_ready = new_label();
+    int pawn = new_label();
+    int knight = new_label();
+    int bishop = new_label();
+    int queen = new_label();
+    int rook = new_label();
+    int king = new_label();
+    int knight_done = new_label();
+    int bishop_done = new_label();
+    int king_done = new_label();
+    int exit = new_label();
+
+    fprintf(out,
+            "\tld a,(ix%+d)\n"
+            "\tcp 97\n\tjp c, L%d\n\tcp 123\n\tjp nc, L%d\n"
+            "\tsub 32\n"
+            "L%d:\n\tld (ix-1),a\n",
+            plan->piece_offset, folded, folded, folded);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+            plan->square_offset, plan->square_offset + 1);
+    mir_emit_scalar_shift_by_constant(out, TOK_SHR, 0, 3);
+    fputs("\tld (ix-3),l\n\tld (ix-2),h\n", out);
+    fprintf(out,
+            "\tld a,(ix%+d)\n\tcp 97\n\tjp c, L%d\n"
+            "\tcp 123\n\tjp nc, L%d\n"
+            "\tld hl,7\n\tld e,(ix-3)\n\tld d,(ix-2)\n"
+            "\tor a\n\tsbc hl,de\n"
+            "\tld (ix-3),l\n\tld (ix-2),h\n"
+            "L%d:\n",
+            plan->piece_offset, rank_ready,
+            rank_ready, rank_ready);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
+            "\tcall %s\n\tpop bc\n"
+            "\tld (ix-5),l\n\tld (ix-4),h\n"
+            "\tld a,(ix-1)\n"
+            "\tcp 80\n\tjp z, L%d\n"
+            "\tcp 78\n\tjp z, L%d\n"
+            "\tcp 66\n\tjp z, L%d\n"
+            "\tcp 81\n\tjp z, L%d\n"
+            "\tcp 82\n\tjp z, L%d\n"
+            "\tcp 75\n\tjp z, L%d\n"
+            "\tld hl,0\n\tjp L%d\n",
+            plan->square_offset, plan->square_offset + 1,
+            center_name,
+            pawn, knight, bishop, queen, rook, king, exit);
+
+    fprintf(out,
+            "L%d:\n"
+            "\tld l,(ix-3)\n\tld h,(ix-2)\n"
+            "\tld e,l\n\tld d,h\n\tadd hl,hl\n\tadd hl,hl\n\tadd hl,de\n"
+            "\tld e,(ix-5)\n\tld d,(ix-4)\n\tadd hl,de\n\tjp L%d\n",
+            pawn, exit);
+
+    fprintf(out,
+            "L%d:\n"
+            "\tld l,(ix-5)\n\tld h,(ix-4)\n"
+            "\tadd hl,hl\n\tadd hl,hl\n\tadd hl,hl\n"
+            "\tbit 7,(ix-2)\n\tjp nz, L%d\n"
+            "\tld a,(ix-3)\n\tor (ix-2)\n\tjp z, L%d\n"
+            "\tld de,20\n\tadd hl,de\n"
+            "L%d:\n\tjp L%d\n",
+            knight, knight_done, knight_done, knight_done, exit);
+
+    fprintf(out,
+            "L%d:\n"
+            "\tld l,(ix-5)\n\tld h,(ix-4)\n"
+            "\tadd hl,hl\n\tadd hl,hl\n"
+            "\tbit 7,(ix-2)\n\tjp nz, L%d\n"
+            "\tld a,(ix-3)\n\tor (ix-2)\n\tjp z, L%d\n"
+            "\tld de,15\n\tadd hl,de\n"
+            "L%d:\n\tjp L%d\n",
+            bishop, bishop_done, bishop_done, bishop_done, exit);
+
+    fprintf(out,
+            "L%d:\n\tld l,(ix-5)\n\tld h,(ix-4)\n\tjp L%d\n"
+            "L%d:\n\tld hl,0\n\tjp L%d\n",
+            queen, exit, rook, exit);
+
+    fprintf(out,
+            "L%d:\n"
+            "\tld l,(ix-5)\n\tld h,(ix-4)\n"
+            "\tadd hl,hl\n\tadd hl,hl\n"
+            "\txor a\n\tsub l\n\tld l,a\n"
+            "\tld a,0\n\tsbc a,h\n\tld h,a\n"
+            "\tbit 7,(ix-2)\n\tjp nz, L%d\n"
+            "\tld a,(ix-3)\n\tor (ix-2)\n\tjp z, L%d\n"
+            "\tld de,80\n\tor a\n\tsbc hl,de\n"
+            "L%d:\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            king, king_done, king_done, king_done, exit);
+}
+
+static void mir_emit_slider_attack(
+    FILE *out, const struct MirSliderAttack *plan)
+{
+    const char *board_name =
+        asm_name_for(sym_asm_name(plan->board));
+    int loop = new_label();
+    int distance_ok = new_label();
+    int occupied = new_label();
+    int lowercase = new_label();
+    int compare_side = new_label();
+    int side_ready = new_label();
+    int matching_side = new_label();
+    int folded = new_label();
+    int hit = new_label();
+    int advance = new_label();
+    int miss = new_label();
+    int exit = new_label();
+
+    if ((plan->board->storage == SC_EXTERN ||
+         plan->board->needs_extrn) &&
+        mir_extrn_should_emit(plan->board))
+        fprintf(out, "\textrn %s\n", board_name);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n\tadd hl,de\n"
+            "\tld c,l\n\tld b,h\n"
+            "L%d:\n"
+            "\tbit 7,b\n\tjp nz, L%d\n"
+            "\tld a,b\n\tor a\n\tjp nz, L%d\n"
+            "\tld a,c\n\tcp 64\n\tjp nc, L%d\n"
+            "\tld l,c\n\tld h,b\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "\tor a\n\tsbc hl,de\n"
+            "\tld a,l\n\tand 7\n\tld (ix-1),a\n"
+            "\tld a,c\n\tand 7\n\tsub (ix-1)\n"
+            "\tjp nc, L%d\n\tneg\n"
+            "L%d:\n\tcp 2\n\tjp nc, L%d\n"
+            "\tld hl,%s\n\tld e,c\n\tld d,b\n\tadd hl,de\n"
+            "\tld a,(hl)\n\tcp 46\n\tjp nz, L%d\n\tjp L%d\n",
+            plan->square_offset, plan->square_offset + 1,
+            plan->direction_offset, plan->direction_offset + 1,
+            loop,
+            miss, miss, miss,
+            plan->direction_offset, plan->direction_offset + 1,
+            distance_ok, distance_ok, miss,
+            board_name,
+            occupied, advance);
+    fprintf(out,
+            "L%d:\n\tld (ix-2),a\n"
+            "\tcp 65\n\tjp c, L%d\n\tcp 91\n\tjp nc, L%d\n"
+            "\tld hl,1\n\tjp L%d\n"
+            "L%d:\n\tcp 97\n\tjp c, L%d\n"
+            "\tcp 123\n\tjp nc, L%d\n"
+            "\tld hl,65535\n\tjp L%d\n"
+            "L%d:\n\tld hl,0\n"
+            "L%d:\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "\tor a\n\tsbc hl,de\n\tjp nz, L%d\n"
+            "L%d:\n"
+            "\tld a,(ix-2)\n\tcp 97\n\tjp c, L%d\n"
+            "\tcp 123\n\tjp nc, L%d\n\tsub 32\n"
+            "L%d:\n"
+            "\tcp (ix%+d)\n\tjp z, L%d\n"
+            "\tcp (ix%+d)\n\tjp z, L%d\n\tjp L%d\n",
+            occupied,
+            lowercase, lowercase,
+            side_ready,
+            lowercase, compare_side, compare_side,
+            side_ready,
+            compare_side,
+            side_ready,
+            plan->side_offset, plan->side_offset + 1,
+            miss,
+            matching_side,
+            folded, folded, folded,
+            plan->first_piece_offset, hit,
+            plan->second_piece_offset, hit, miss);
+    fprintf(out,
+            "L%d:\n\tld hl,1\n\tjp L%d\n"
+            "L%d:\n"
+            "\tld l,c\n\tld h,b\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n\tadd hl,de\n"
+            "\tld c,l\n\tld b,h\n\tjp L%d\n"
+            "L%d:\n\tld hl,0\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            hit, exit,
+            advance,
+            plan->direction_offset, plan->direction_offset + 1,
+            loop,
+            miss,
             exit);
 }
 
@@ -13982,6 +14834,11 @@ int mir_spilled_cfg_small_selfstore_add_uses(void)
     return mir_spilled_cfg_small_selfstore_add_use_count;
 }
 
+int mir_spilled_cfg_uses_exact_semantic_kernel(void)
+{
+    return mir_spilled_cfg_used_exact_semantic_kernel;
+}
+
 int mir_spilled_cfg_depends_on_indirect_store_value_forwarding(void)
 {
     return mir_spilled_cfg_indirect_store_value_forwarding_count != 0;
@@ -14038,6 +14895,13 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     struct MirByteMinMax byte_minmax;
     struct MirWordPowermod word_powermod;
     struct MirFloatUnitFraction float_unit_fraction;
+    struct MirAsciiPieceSide ascii_piece_side;
+    struct MirAsciiPieceValue ascii_piece_value;
+    struct MirBoardEvaluate board_evaluate;
+    struct MirCenterScore center_score;
+    struct MirKingScan king_scan;
+    struct MirPiecePosition piece_position;
+    struct MirSliderAttack slider_attack;
 
     memset(&inline_postincrement_helper, 0,
            sizeof(inline_postincrement_helper));
@@ -14070,6 +14934,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_spilled_cfg_indirect_store_address_forwarding_count = 0;
     mir_spilled_cfg_used_promoted_local_slot = 0;
     mir_spilled_cfg_used_wide_store_forwarding = 0;
+    mir_spilled_cfg_used_exact_semantic_kernel = 0;
     mir_planned_stack_handoffs_enabled = 0;
     mir_planned_stack_emit_count = 0;
     mir_planned_stack_consume_count = 0;
@@ -14222,6 +15087,69 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_float_unit_fraction(out, &float_unit_fraction);
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_ascii_piece_side(&ascii_piece_side)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_ascii_piece_side(out, &ascii_piece_side);
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_ascii_piece_value(&ascii_piece_value)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_ascii_piece_value(out, &ascii_piece_value);
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_board_evaluate(&board_evaluate)) {
+        int local_byte;
+
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+        for (local_byte = 0; local_byte < 6; ++local_byte)
+            fputs("\tdec sp\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_board_evaluate(out, &board_evaluate);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_center_score(&center_score)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_center_score(out, &center_score);
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_king_scan(&king_scan)) {
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_king_scan(out, &king_scan);
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_piece_position(&piece_position)) {
+        int local_byte;
+
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+        for (local_byte = 0; local_byte < 5; ++local_byte)
+            fputs("\tdec sp\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_piece_position(out, &piece_position);
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_slider_attack(&slider_attack)) {
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+              "\tdec sp\n\tdec sp\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_slider_attack(out, &slider_attack);
         accepted = 1;
         goto done;
     }

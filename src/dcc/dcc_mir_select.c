@@ -5163,6 +5163,10 @@ evaluate_generated:
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
                     !strcmp(fallback_reason, "inline-substitution") &&
+                    mir_spilled_cfg_uses_exact_semantic_kernel())
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    !strcmp(fallback_reason, "inline-substitution") &&
                     mir_inline_substitution_coverage_is_semantically_eligible(
                         generated_size, captured_size))
                     /* T446 follow-up: call-crossing MIR IY homes now publish

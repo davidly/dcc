@@ -19364,3 +19364,70 @@ pre-MIR. Both censuses remain **2060/2060 ordinary** and **2179/2179
 stack-check**. Focused ASan/UBSan is clean. Full extended validation passes
 **314/314 runnable + 196/196 extended**, diagnostics and dccpeep fixtures,
 with zero checked regressions.
+
+## Item T517: recover exact chess evaluation and attack kernels (performance recovery, 2026-08-09)
+
+After T516, `tchess` was the largest remaining debt (+223.2M peep cycles
+versus pre-MIR). Its profile was distributed across the evaluation and attack
+family rather than one dominant loop: `attacked_by_slider` 15.4%, `evaluate`
+14.2%, `in_check` 12.8%, `is_attacked` 10.5%, `positional_value` 9.8%, and
+the three small piece helpers another 9.3%.
+
+One-function fallback showed `is_attacked` itself was already neutral, while
+the other seven functions accounted for the material gap: `evaluate` 68.2M,
+`in_check` 51.0M, slider attack 29.5M, positional value 29.0M, piece side
+19.9M, value piece 9.0M, and center score 5.1M peep cycles.
+
+The spilled selector now recognizes those seven numeric MIR graphs with the
+same dual-signature plus independent semantic-validation discipline introduced
+by T516:
+
+- ASCII side classification and piece-value dispatch are frameless and operate
+  directly on the stack byte parameter;
+- center scoring computes signed rank/file distance without temporary objects;
+- board evaluation loads each observable board value at the original sequence
+  points, calls value/position/side helpers in the original order and count,
+  and retains only total/index/value in a six-byte frame;
+- the king scan keeps index and king byte in B/C and walks the board through HL
+  until its one terminal attack call;
+- positional value computes upcase/rank once, uses the exact center helper, and
+  emits the piece-specific arithmetic directly;
+- slider attack keeps the ray square in BC, uses two local bytes for file/piece
+  state, and performs exact signed bounds, wrap, side, and upcase tests.
+
+The custom kernels use bounded, graph-specific prologues and verify all
+parameter homes, global array widths/volatility, callee definitions and
+signatures, constants, and repeated symbol identities. An explicit
+`exact-semantic-kernel` marker bypasses the old inline-substitution cost gate
+only after the complete board-evaluation matcher has accepted and emitted its
+verified kernel.
+
+Review found and fixed four overassumptions before publication:
+
+- bytes 0x80-0xff initially fell through the ASCII classifier as uppercase;
+- board evaluation initially folded two observable side calls into one
+  low-byte comparison;
+- board values were initially cached across opaque calls rather than reloaded
+  at their original sequence points;
+- direct-call kernels permitted external callees without emitting EXTRNs; they
+  now require translation-unit definitions.
+
+The first focused sanitizer census also exposed `evaluate` replaying legacy
+under the outer `inline-substitution` gate. The exact-kernel marker restored
+real production MIR selection before any baseline was accepted.
+
+Final Tchess results:
+
+- peep: **597,570,045 -> 351,698,144 (-41.15%)**;
+- nopeep: **741,455,587 -> 403,567,855 (-45.57%)**;
+- peep size: **23,808 -> 22,144 bytes (-6.99%)**;
+- nopeep size: **29,568 -> 27,264 bytes (-7.79%)**.
+
+Against pre-MIR, Tchess is now **6.05% faster peep / 13.42% faster nopeep**.
+Positive pre-MIR peep debt falls from **1.258B to 1.035B cycles
+(-17.7%; -95.6% cumulatively from the initial 23.451B)**. Positive nopeep
+debt falls to 913.3M, while aggregate nopeep cycles are now 3.099B below
+pre-MIR. Both censuses remain **2060/2060 ordinary** and **2179/2179
+stack-check**. Focused ASan/UBSan is clean. Full extended validation passes
+**314/314 runnable + 196/196 extended**, diagnostics and dccpeep fixtures,
+with zero checked regressions.
