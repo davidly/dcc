@@ -58,7 +58,9 @@ transactional fallback remains in place throughout Phase 1.
   inside the spilled selector, reducing the remaining gap to 1.42% peep
   while making nopeep 0.44% faster than pre-T503. T509 permits planned stack
   handoffs across balanced scalar calls, reducing the remaining gap to 0.43%
-  peep while making nopeep 0.68% faster than pre-T503.
+  peep while making nopeep 0.68% faster than pre-T503. T510 makes deferred
+  inline-body ownership follow the selected output and fuses the last hot byte
+  push, leaving only 0.33% peep while making nopeep 0.81% faster.
   Continue with measured selector/peephole
   work, then prove MIR-required mode over the extended corpus before removing
   capture/replay and legacy codegen in separate cleanup commits.
@@ -619,7 +621,8 @@ target is `a1`: T507 recovers 2.50% peep / 2.23% nopeep, leaving about
 1.8% peep / 0.15% nopeep versus the immediate pre-T503 baseline. T508
 then removes retained stack-push helper call overhead, leaving 1.42% peep
 while moving nopeep 0.44% ahead of pre-T503. T509's balanced-call stack
-handoffs leave only 0.43% peep while moving nopeep 0.68% ahead.
+handoffs leave only 0.43% peep while moving nopeep 0.68% ahead. T510 leaves
+0.33% peep while moving nopeep 0.81% ahead.
 
 Suggested approach, per the "Goal and current state" section's original
 Phase 2 plan:

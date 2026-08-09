@@ -6844,7 +6844,9 @@ static int mir_match_inline_indexed_stack_store(
         return 0;
     body = callee->inline_stmt_body != NULL
         ? callee->inline_stmt_body : callee->inline_stmt_expr;
-    if (body != NULL && body->kind == AST_EXPR_STMT)
+    if (body != NULL && body->kind == AST_ASSIGN)
+        assignment = body;
+    else if (body != NULL && body->kind == AST_EXPR_STMT)
         assignment = body->a;
     else if (body != NULL && body->kind == AST_COMPOUND &&
              body->list_len == 2 &&

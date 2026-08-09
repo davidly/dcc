@@ -18834,6 +18834,40 @@ metrics across the corpus with no regressions.
 - Full extended correctness: **314/314 runnable + 196/196 extended**,
   diagnostics and dccpeep fixtures pass, with zero checked regressions.
 
+## Item T510: mark deferred inline bodies from the selected output (performance recovery, 2026-08-09)
+
+T508 fused both `push_word` call sites inside `a1.emulate`, but the one hot
+byte `push` call remained because its captured `inline_stmt_expr` is the raw
+assignment node rather than an `AST_EXPR_STMT` wrapper. Extending the matcher
+to that wrapper initially saved the call but grew peep size by 128 bytes:
+deferred-body ownership scanned the original MIR calls and still emitted the
+now-unreachable `push` helper body.
+
+`mir_mark_selected_inline_call_bodies_needed()` is intended to mark a buffered
+static-inline body only when the **winning output** still carries a call, but
+it previously inferred that from the unmodified MIR stream. It now scans the
+selected temporary assembly stream for the callee's exact direct `call`
+instruction before marking the body needed, preserving the stream position.
+This is the authoritative ownership boundary: selector fusions that remove
+every call can also remove the fallback helper body; retained calls still mark
+it exactly as before.
+
+The indexed-stack helper matcher now accepts a raw `AST_ASSIGN` wrapper in
+addition to `AST_EXPR_STMT`/two-statement compound wrappers. With three
+actually fused calls, T503's giant-switch text proxy receives the same narrowly
+counted dynamic-vs-static allowance as its instruction proxy: 122% instead of
+121%. Every other giant-switch candidate retains 121%.
+
+- `a1` peep cycles: **16,111,200 -> 16,094,731 (-0.10%)**.
+- `a1` nopeep cycles: **18,223,699 -> 18,200,350 (-0.13%)**.
+- `a1` nopeep size: **25,344 -> 25,216 bytes (-128)**; the earlier peep size
+  regression disappears completely.
+- Versus immediate pre-T503, peep is now only 0.33% slower
+  (16,042,377) while nopeep is 0.81% faster (18,348,908).
+- Both censuses remain **2060/2060 ordinary** and **2179/2179 stack-check**.
+- Full extended correctness: **314/314 runnable + 196/196 extended**,
+  diagnostics and dccpeep fixtures pass, with zero checked regressions.
+
 ## Item T500: confirmed final-seven oversizing is real machine bytes, not a dccpeep gap (investigation only, 2026-08-09)
 
 This investigation directly motivated T499's call-bounded regional homes:

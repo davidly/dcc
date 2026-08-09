@@ -1475,7 +1475,30 @@ static int mir_has_inline_substitution_call(void)
     return 0;
 }
 
-static void mir_mark_selected_inline_call_bodies_needed(void)
+static int mir_selected_stream_has_direct_call(
+    FILE *selected, const char *assembly_name)
+{
+    char line[512];
+    char target[128];
+    long position;
+    int found = 0;
+
+    if (selected == NULL || assembly_name == NULL)
+        return 0;
+    position = ftell(selected);
+    rewind(selected);
+    while (fgets(line, sizeof(line), selected) != NULL)
+        if (sscanf(line, " call %127s", target) == 1 &&
+            strcmp(target, assembly_name) == 0) {
+            found = 1;
+            break;
+        }
+    if (position >= 0)
+        fseek(selected, position, SEEK_SET);
+    return found;
+}
+
+static void mir_mark_selected_inline_call_bodies_needed(FILE *selected)
 {
     int i;
 
@@ -1495,7 +1518,9 @@ static void mir_mark_selected_inline_call_bodies_needed(void)
             insn->name[0] == 0)
             continue;
         callee = find_global(insn->name);
-        if (callee != NULL)
+        if (callee != NULL &&
+            mir_selected_stream_has_direct_call(
+                selected, asm_name_for(sym_asm_name(callee))))
             callee->deferred_body_needed = 1;
     }
 }
@@ -2104,7 +2129,9 @@ static int mir_dense_byte_switch_is_semantically_eligible(
         mir.sink_purpose == EMIT_SINK_FINAL &&
         frame_bytes <= 120 &&
         generated_size <= captured_size + 8192 &&
-        generated_size * 100L <= captured_size * 121L &&
+        generated_size * 100L <=
+            captured_size *
+                (inline_indexed_stack_store >= 3 ? 122L : 121L) &&
         generated_instructions * 100L <=
             captured_instructions *
                 (inline_indexed_stack_store >= 2 ? 117L : 116L);
@@ -5368,7 +5395,7 @@ evaluate_generated:
             }
         }
         if (emitted)
-            mir_mark_selected_inline_call_bodies_needed();
+            mir_mark_selected_inline_call_bodies_needed(generated);
         selected_hash = mir_copy_selected_stream(
             emitted ? generated : mir.capture_stream, destination);
         if (generated != NULL)
