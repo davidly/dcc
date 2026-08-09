@@ -64,12 +64,14 @@ transactional fallback remains in place throughout Phase 1.
   T511 attacks the whole-corpus concentration leader: byte-demand and wide
   induction identities make `tbig` 92.5% faster peep, reduce total positive
   pre-MIR peep debt by 76.9%, and materially improve 13 additional apps.
-  T512-T518 recover word dispatch, narrow-origin wide arithmetic, byte
+  T512-T519 recover word dispatch, narrow-origin wide arithmetic, byte
   verification, word scans, large-CFG address/induction identities, and
   interpreter inline-stack/typed-memory helpers, byte minimax, and modular
-  arithmetic, chess, and fixed-array kernels. Positive pre-MIR peep debt is
-  now 688.7M (-97.1% cumulatively). Continue with the freshly re-ranked
-  loop/numeric cohort, then prove MIR-required mode
+  arithmetic, chess, fixed-array, and fixed-point matrix kernels. Attn now
+  beats pre-MIR in both modes, aggregate peep performance is 115.9M cycles
+  ahead of pre-MIR, and positive per-app peep debt is 486.3M (-97.9%
+  cumulatively). Continue with the freshly re-ranked interpreter/loop cohort,
+  then prove MIR-required mode
   over the extended corpus before removing capture/replay and legacy codegen
   in separate cleanup commits.
 - **Key finding this segment: the mega-experiment's central premise -
@@ -687,15 +689,22 @@ nopeep and beats pre-MIR in both modes; Sieve improves 80.3% / 82.8% and
 retains only a 3.35M peep gap. Positive peep debt is now 688.7M cycles
 (-97.1% cumulatively), with both censuses and the full extended gate clean.
 
+T519 recovers Attn's signed long clamp/Q16 conversion, fixed dot product,
+shared transposed Q8 multiply, and fused Q/K/V projection kernels. Attn
+improves 43.0% peep / 46.3% nopeep and now beats pre-MIR by 14.4% / 27.5%.
+Positive per-app peep debt is now 486.3M cycles (-97.9% cumulatively), while
+aggregate peep cycles are 115.9M below pre-MIR. Both censuses and the full
+extended gate remain clean.
+
 Next:
 
-1. Return to `attnc11`, now the largest debt at 202.4M cycles, then the
-   remaining interpreters `forint`/`fint`.
-   positive peep debt.
-2. Re-check `forint` and `fint` after those shared loop/arithmetic fixes;
-   they are now ranks 7-8 rather than the dominant interpreter cluster.
-3. Re-rank before `trw`, `mm`, `e`, and the residual Bint/Cint peep-only
-   gaps.
+1. Profile and recover the two remaining interpreter leaders: `forint`
+   (+109.1M peep) and `fint` (+87.5M).
+2. Re-rank before `trw` (+59.9M), `mm` (+41.7M), `e` (+29.1M), and the
+   residual Cint/Bint peep-only gaps.
+3. Continue through `nqueens`, `tqsort`, `tpihexb`, and the residual tail
+   until every positive per-app gap is recovered or architecturally
+   documented; aggregate parity alone is already achieved.
 4. Keep one reusable concept per commit, zero regressions in both modes, and
    run one full `runall.ps1 -Mode full -Extended` immediately before each
    publication.

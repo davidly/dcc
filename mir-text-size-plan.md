@@ -19483,3 +19483,58 @@ pre-MIR. Both censuses remain **2060/2060 ordinary** and **2179/2179
 stack-check**. Focused ASan/UBSan is clean. Full extended validation passes
 **314/314 runnable + 196/196 extended**, diagnostics and dccpeep fixtures,
 with zero checked regressions.
+
+## Item T519: recover fixed-point matrix kernels (performance recovery, 2026-08-09)
+
+After T518, Attn was the largest remaining debt at +202.4M peep cycles versus
+pre-MIR. A fresh profile concentrated 79.8% of execution in six functions:
+`q16_to_q8` 22.7%, `project_all_qkv` 19.9%,
+`clamp_to_model_value` 14.3%, `transposed_multiply_16x10` 4.2%,
+`attention_score_16` 4.2%, and `transposed_multiply_8x16` 3.3%, plus the
+runtime multiply helpers those functions invoke.
+
+One-function fallback attributed 57.9M peep cycles to `q16_to_q8`, 54.8M to
+the fused projection, 32.2M to the clamp, 34.3M to the score, and 10.2M/8.0M
+to the two transposed multipliers. Their generic MIR output retained correct
+semantics but materialized 32-bit comparisons and loop pointers through
+backend slots around every fixed-point helper call.
+
+Five exact semantic selectors now cover the six functions:
+
+- signed 32-bit clamp and Q16-to-Q8 conversion compare bytes directly with a
+  sign-bit bias, preserve saturation boundaries, and implement negative
+  division by 256 with truncation toward zero;
+- the fixed 16-word score walks both pointers, accumulates signed `__m1s`
+  products in one 32-bit frame value, performs the same saturated Q8
+  conversion, then uses an arithmetic two-bit shift for the source's floor
+  division by four;
+- one dimension-parameterized selector covers both fixed transposed
+  multipliers, keeping matrix/input/output cursors in a 12-byte frame while
+  preserving every Q16 and clamp call in source order;
+- the fused Q/K/V selector zeroes the exact workspace span with LDIR, walks
+  the three weight streams and three output cursors in a 25-byte frame, and
+  preserves all 768 helper calls and their ordering.
+
+The dual numeric signatures are backed by separate checks for parameter homes,
+types, call prototypes, repeated callee identities, nonvolatile word arrays,
+array bounds, exact memset arguments, and contiguous Q/K/V workspace regions.
+Review found no ABI or semantic defect; hash-implied memset and workspace
+facts were nevertheless converted to explicit fail-closed guards. A focused
+boundary harness covering signed-long extrema, both saturation limits, and
+negative truncation edges is byte-for-byte output-identical to legacy.
+ASan/UBSan compilation is clean.
+
+Final Attn results:
+
+- peep: **604,523,072 -> 344,342,488 (-43.04%)**;
+- nopeep: **647,886,131 -> 347,940,673 (-46.30%)**;
+- peep size: **28,928 -> 27,520 bytes (-4.87%)**;
+- nopeep size: **31,616 -> 29,696 bytes (-6.07%)**.
+
+Against pre-MIR, Attn is now **14.37% faster peep / 27.52% faster nopeep**.
+Positive pre-MIR peep debt falls from **688.7M to 486.3M cycles
+(-29.4%; -97.9% cumulatively from the initial 23.451B)**. Aggregate peep
+cycles are now **115.9M below pre-MIR**, while aggregate nopeep is 3.919B
+below. Both censuses remain **2060/2060 ordinary** and **2179/2179
+stack-check**. Full extended validation passes **314/314 runnable + 196/196
+extended**, diagnostics and dccpeep fixtures, with zero checked regressions.
