@@ -4810,6 +4810,39 @@ struct MirGlobalByteVerify {
     int failure_string;
 };
 
+struct MirEDigits {
+    struct Sym *print_function;
+    int digits;
+    int outer_limit;
+    int radix;
+    int digit_format_string;
+    int done_string;
+};
+
+struct MirFloatMatrixMultiply {
+    struct Sym *left;
+    struct Sym *right;
+    struct Sym *result;
+    int dimension;
+    int row_stride;
+    int element_size;
+};
+
+struct MirFixedFloatZero {
+    struct Sym *array;
+    int rows;
+    int columns;
+    int row_stride;
+    int element_size;
+};
+
+struct MirFloatSum {
+    struct Sym *array;
+    struct Sym *accumulator;
+    int count;
+    int element_size;
+};
+
 static int mir_match_long_parameter(
     const struct MirInsn *insn, int *offset)
 {
@@ -5444,6 +5477,210 @@ static int mir_match_global_byte_verify(
     return mir.insns[4].immediate == 255 &&
            mir.insns[26].immediate == 255 &&
            mir.insns[53].immediate == 1;
+}
+
+static int mir_match_e_digits(struct MirEDigits *plan)
+{
+    static const int array_instruction[] = {21, 34, 40, 69, 79};
+    unsigned long long first;
+    unsigned long long second;
+    struct Sym *print_function;
+    size_t item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 113 || mir_cfg_block_count() != 10 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        type_ptr_depth(mir.return_type) != 0)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0x81fc0374e831204dULL ||
+        second != 0x78aaa7a045046297ULL)
+        return 0;
+    print_function = find_global(mir.insns[103].name);
+    if (print_function == NULL ||
+        print_function->proto_nargs < 1 ||
+        strcmp(mir.insns[103].name, mir.insns[110].name) != 0)
+        return 0;
+    for (item = 0;
+         item < sizeof(array_instruction) / sizeof(array_instruction[0]);
+         ++item)
+        if (strcmp(
+                mir.insns[array_instruction[item]].name,
+                mir.insns[21].name) != 0)
+            return 0;
+    plan->print_function = print_function;
+    plan->digits = (int)mir.insns[1].immediate;
+    plan->outer_limit = (int)mir.insns[51].immediate;
+    plan->radix = (int)mir.insns[78].immediate;
+    plan->digit_format_string = (int)mir.insns[99].immediate;
+    plan->done_string = (int)mir.insns[108].immediate;
+    return plan->digits > 2 && plan->digits <= 512 &&
+           plan->outer_limit >= 0 &&
+           plan->outer_limit < plan->digits &&
+           plan->radix > 0 && plan->radix <= 255 &&
+           mir.insns[8].immediate == 1 &&
+           mir.insns[25].immediate == 1 &&
+           mir.insns[29].immediate == 1 &&
+           mir.insns[35].immediate == 1 &&
+           mir.insns[38].immediate == 2 &&
+           mir.insns[41].immediate == 0 &&
+           mir.insns[44].immediate == 0 &&
+           mir.insns[55].immediate == 1 &&
+           mir.insns[65].immediate == 1 &&
+           mir.insns[81].immediate == 1 &&
+           mir.insns[111].immediate == 0;
+}
+
+static int mir_match_float_matrix_multiply(
+    struct MirFloatMatrixMultiply *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    int left_instruction;
+    int right_instruction;
+    int result_instruction;
+    struct Sym *left;
+    struct Sym *right;
+    struct Sym *result;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla || (mir.return_type & 15) != TYPE_VOID ||
+        mir_cfg_block_count() != 10)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (mir.count == 76 &&
+        first == 0x690ddab06bac48a0ULL &&
+        second == 0x6cd3619df9f3e639ULL) {
+        result_instruction = 34;
+        left_instruction = 40;
+        right_instruction = 46;
+        plan->dimension = (int)mir.insns[7].immediate;
+        plan->row_stride = (int)mir.insns[36].immediate;
+        plan->element_size = (int)mir.insns[38].immediate;
+    } else if (mir.count == 108 &&
+               first == 0xd753b3a2053f292aULL &&
+               second == 0xee8ed1d77165b38dULL) {
+        left_instruction = 11;
+        result_instruction = 19;
+        right_instruction = 47;
+        plan->dimension = (int)mir.insns[7].immediate;
+        plan->row_stride = (int)mir.insns[13].immediate;
+        plan->element_size = (int)mir.insns[15].immediate;
+    } else {
+        return 0;
+    }
+    left = find_global(mir.insns[left_instruction].name);
+    right = find_global(mir.insns[right_instruction].name);
+    result = find_global(mir.insns[result_instruction].name);
+    if (left == NULL || right == NULL || result == NULL ||
+        !left->is_array || !right->is_array || !result->is_array ||
+        left->is_volatile || left->pointee_is_volatile ||
+        right->is_volatile || right->pointee_is_volatile ||
+        result->is_volatile || result->pointee_is_volatile ||
+        (left->storage != SC_GLOBAL && left->storage != SC_EXTERN) ||
+        (right->storage != SC_GLOBAL && right->storage != SC_EXTERN) ||
+        (result->storage != SC_GLOBAL && result->storage != SC_EXTERN))
+        return 0;
+    plan->left = left;
+    plan->right = right;
+    plan->result = result;
+    return plan->dimension > 0 && plan->dimension <= 255 &&
+           plan->element_size == 4 &&
+           plan->row_stride ==
+               plan->dimension * plan->element_size &&
+           left->elem_size == plan->row_stride &&
+           right->elem_size == plan->row_stride &&
+           result->elem_size == plan->row_stride &&
+           left->array_len >= plan->dimension &&
+           right->array_len >= plan->dimension &&
+           result->array_len >= plan->dimension;
+}
+
+static int mir_match_fixed_float_zero(
+    struct MirFixedFloatZero *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    struct Sym *array;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 44 || mir_cfg_block_count() != 7 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0x0376ab0d0ad6cb93ULL ||
+        second != 0xc6cce0571ee5d902ULL)
+        return 0;
+    array = find_global(mir.insns[22].name);
+    if (array == NULL || !array->is_array ||
+        array->is_volatile || array->pointee_is_volatile ||
+        (array->storage != SC_GLOBAL && array->storage != SC_EXTERN))
+        return 0;
+    plan->array = array;
+    plan->rows = (int)mir.insns[7].immediate;
+    plan->columns = (int)mir.insns[18].immediate;
+    plan->row_stride = (int)mir.insns[24].immediate;
+    plan->element_size = (int)mir.insns[26].immediate;
+    return plan->rows > 0 && plan->columns > 0 &&
+           plan->element_size == 4 &&
+           plan->row_stride == plan->columns * plan->element_size &&
+           array->array_len >= plan->rows &&
+           array->elem_size == plan->row_stride &&
+           plan->rows * plan->row_stride <= 65535 &&
+           mir.insns[27].immediate == 0;
+}
+
+static int mir_match_float_sum(struct MirFloatSum *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    int array_instruction;
+    int accumulator_instruction;
+    struct Sym *array;
+    struct Sym *accumulator;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (mir.count == 46 && mir_cfg_block_count() == 7 &&
+        first == 0xae122cc807da1d54ULL &&
+        second == 0x2cef5dd43bcbfaf1ULL) {
+        accumulator_instruction = 22;
+        array_instruction = 23;
+        plan->count =
+            (int)mir.insns[7].immediate *
+            (int)mir.insns[18].immediate;
+        plan->element_size = (int)mir.insns[27].immediate;
+    } else if (mir.count == 30 && mir_cfg_block_count() == 4 &&
+               first == 0x45e7159348c49401ULL &&
+               second == 0x9b58dbc0d14bf648ULL) {
+        array_instruction = 1;
+        accumulator_instruction = 18;
+        plan->count = (int)mir.insns[8].immediate;
+        plan->element_size = (int)mir.insns[9].immediate;
+    } else {
+        return 0;
+    }
+    array = find_global(mir.insns[array_instruction].name);
+    accumulator =
+        find_global(mir.insns[accumulator_instruction].name);
+    if (array == NULL || accumulator == NULL ||
+        !array->is_array ||
+        array->is_volatile || array->pointee_is_volatile ||
+        accumulator->is_volatile ||
+        (array->storage != SC_GLOBAL && array->storage != SC_EXTERN) ||
+        (accumulator->storage != SC_GLOBAL &&
+         accumulator->storage != SC_EXTERN) ||
+        type_size(accumulator->type) != 4 ||
+        !type_is_float(accumulator->type))
+        return 0;
+    plan->array = array;
+    plan->accumulator = accumulator;
+    return plan->count > 0 && plan->count <= 65535 &&
+           plan->element_size == 4 &&
+           array->array_len * array->elem_size >=
+               plan->count * plan->element_size;
 }
 
 static int mir_match_byte_sieve(
@@ -12103,6 +12340,227 @@ static void mir_emit_global_byte_verify(
             done);
 }
 
+static void mir_emit_e_digits(FILE *out, const struct MirEDigits *plan)
+{
+    enum {
+        ARRAY_POINTER = -2,
+        OUTER_COUNT = -4,
+        ACCUMULATOR = -6,
+        INNER_INDEX = -8,
+        REMAINDER = -10
+    };
+    int frame_bytes = plan->digits + 10;
+    int outer = new_label();
+    int inner = new_label();
+    int print_digit = new_label();
+    int done = new_label();
+
+    fputs("\tpush ix\n\tpop hl\n", out);
+    fprintf(out,
+            "\tld de,-%d\n\tadd hl,de\n"
+            "\tld (ix%d),l\n\tld (ix%d),h\n"
+            "\tinc hl\n\tld (hl),1\n"
+            "\tld d,h\n\tld e,l\n\tinc de\n\tld bc,%d\n\tldir\n",
+            frame_bytes,
+            ARRAY_POINTER, ARRAY_POINTER + 1,
+            plan->digits - 2);
+    mir_emit_forth_frame_load(out, ARRAY_POINTER);
+    fputs("\tld (hl),0\n\tinc hl\n\tld (hl),2\n", out);
+    fprintf(out,
+            "\tld hl,%d\n", plan->digits);
+    mir_emit_forth_frame_store(out, OUTER_COUNT);
+    fputs("\tld hl,0\n", out);
+    mir_emit_forth_frame_store(out, ACCUMULATOR);
+    fprintf(out, "L%d:\n", outer);
+    mir_emit_forth_frame_load(out, OUTER_COUNT);
+    fprintf(out,
+            "\tld de,%d\n\tor a\n\tsbc hl,de\n"
+            "\tjp c, L%d\n\tjp z, L%d\n",
+            plan->outer_limit, done, done);
+    mir_emit_forth_frame_load(out, OUTER_COUNT);
+    mir_emit_forth_frame_store(out, INNER_INDEX);
+    fputs("\tdec hl\n", out);
+    mir_emit_forth_frame_store(out, OUTER_COUNT);
+    fprintf(out, "L%d:\n", inner);
+    mir_emit_forth_frame_load(out, INNER_INDEX);
+    fputs("\tdec hl\n", out);
+    mir_emit_forth_frame_store(out, INNER_INDEX);
+    fprintf(out,
+            "\tld a,h\n\tor l\n\tjp z, L%d\n"
+            "\tex de,hl\n",
+            print_digit);
+    mir_emit_forth_frame_load(out, ACCUMULATOR);
+    mir_emit_runtime_call(out, "__udivmod");
+    mir_emit_forth_frame_store(out, ACCUMULATOR);
+    fputs("\tex de,hl\n", out);
+    mir_emit_forth_frame_store(out, REMAINDER);
+
+    mir_emit_forth_frame_load(out, INNER_INDEX);
+    fputs("\tex de,hl\n", out);
+    mir_emit_forth_frame_load(out, ARRAY_POINTER);
+    fputs("\tadd hl,de\n\tpush hl\n", out);
+    mir_emit_forth_frame_load(out, REMAINDER);
+    fputs("\tld a,l\n\tpop hl\n\tld (hl),a\n", out);
+
+    mir_emit_forth_frame_load(out, INNER_INDEX);
+    fputs("\tdec hl\n\tex de,hl\n", out);
+    mir_emit_forth_frame_load(out, ARRAY_POINTER);
+    fputs("\tadd hl,de\n\tld l,(hl)\n\tld h,0\n", out);
+    mir_emit_mul_hl_const(out, (unsigned long)plan->radix);
+    fputs("\tpush hl\n", out);
+    mir_emit_forth_frame_load(out, ACCUMULATOR);
+    fputs("\tex de,hl\n\tpop hl\n\tadd hl,de\n", out);
+    mir_emit_forth_frame_store(out, ACCUMULATOR);
+    fprintf(out, "\tjp L%d\n", inner);
+
+    fprintf(out, "L%d:\n", print_digit);
+    mir_emit_forth_frame_load(out, ACCUMULATOR);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->digit_format_string);
+    mir_emit_symbol_call(out, plan->print_function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", outer, done);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->done_string);
+    mir_emit_symbol_call(out, plan->print_function);
+    fputs("\tpop bc\n\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
+static void mir_emit_float_matrix_multiply(
+    FILE *out, const struct MirFloatMatrixMultiply *plan)
+{
+    enum {
+        LEFT_ROW = -2,
+        RESULT_ROW = -4,
+        RESULT_POINTER = -6,
+        LEFT_POINTER = -8,
+        RIGHT_COLUMN = -12,
+        ROW_COUNT = -13,
+        COLUMN_COUNT = -14,
+        INNER_COUNT = -15
+    };
+    const char *left_name =
+        asm_name_for(sym_asm_name(plan->left));
+    const char *right_name =
+        asm_name_for(sym_asm_name(plan->right));
+    const char *result_name =
+        asm_name_for(sym_asm_name(plan->result));
+    int row_loop = new_label();
+    int column_loop = new_label();
+    int inner_loop = new_label();
+
+    mir_emit_symbol_extrn(out, plan->left);
+    mir_emit_symbol_extrn(out, plan->right);
+    mir_emit_symbol_extrn(out, plan->result);
+    fprintf(out,
+            "\tld hl,%s\n", left_name);
+    mir_emit_forth_frame_store(out, LEFT_ROW);
+    fprintf(out, "\tld hl,%s\n", result_name);
+    mir_emit_forth_frame_store(out, RESULT_ROW);
+    fprintf(out,
+            "\tld (ix%d),%d\n"
+            "L%d:\n",
+            ROW_COUNT, plan->dimension,
+            row_loop);
+    mir_emit_copy_frame_word(out, RESULT_POINTER, RESULT_ROW);
+    fprintf(out, "\tld hl,%s\n", right_name);
+    mir_emit_forth_frame_store(out, RIGHT_COLUMN);
+    fprintf(out,
+            "\tld (ix%d),%d\n"
+            "L%d:\n",
+            COLUMN_COUNT, plan->dimension,
+            column_loop);
+    mir_emit_copy_frame_word(out, LEFT_POINTER, LEFT_ROW);
+    mir_emit_forth_frame_load(out, RIGHT_COLUMN);
+    fputs("\tpush hl\n\tpop iy\n", out);
+    fprintf(out,
+            "\tld (ix%d),%d\n"
+            "L%d:\n",
+            INNER_COUNT, plan->dimension,
+            inner_loop);
+    mir_emit_pointer_long_load(out, RESULT_POINTER);
+    fputs("\tpush de\n\tpush hl\n", out);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n\tinc hl\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tinc hl\n"
+            "\tld (ix%d),l\n\tld (ix%d),h\n"
+            "\tld l,c\n\tld h,b\n",
+            LEFT_POINTER, LEFT_POINTER + 1,
+            LEFT_POINTER, LEFT_POINTER + 1);
+    fputs("\tpush de\n\tpush hl\n", out);
+    fputs("\tld l,(iy+0)\n\tld h,(iy+1)\n"
+          "\tld e,(iy+2)\n\tld d,(iy+3)\n", out);
+    mir_emit_runtime_call(out, "__fmaf");
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    mir_emit_pointer_long_store(out, RESULT_POINTER);
+    fprintf(out, "\tld de,%d\n\tadd iy,de\n", plan->row_stride);
+    fprintf(out,
+            "\tdec (ix%d)\n\tjp nz, L%d\n",
+            INNER_COUNT, inner_loop);
+    mir_emit_frame_pointer_adjust(
+        out, RESULT_POINTER, plan->element_size);
+    mir_emit_frame_pointer_adjust(
+        out, RIGHT_COLUMN, plan->element_size);
+    fprintf(out,
+            "\tdec (ix%d)\n\tjp nz, L%d\n",
+            COLUMN_COUNT, column_loop);
+    mir_emit_frame_pointer_adjust(
+        out, LEFT_ROW, plan->row_stride);
+    mir_emit_frame_pointer_adjust(
+        out, RESULT_ROW, plan->row_stride);
+    fprintf(out,
+            "\tdec (ix%d)\n\tjp nz, L%d\n"
+            "\tld sp,ix\n\tpop ix\n\tpop iy\n\tret\n",
+            ROW_COUNT, row_loop);
+}
+
+static void mir_emit_fixed_float_zero(
+    FILE *out, const struct MirFixedFloatZero *plan)
+{
+    const char *array_name =
+        asm_name_for(sym_asm_name(plan->array));
+    int bytes = plan->rows * plan->row_stride;
+
+    mir_emit_symbol_extrn(out, plan->array);
+    fprintf(out,
+            "\tld hl,%s\n\tld (hl),0\n"
+            "\tld de,%s+1\n\tld bc,%d\n\tldir\n\tret\n",
+            array_name, array_name, bytes - 1);
+}
+
+static void mir_emit_float_sum(
+    FILE *out, const struct MirFloatSum *plan)
+{
+    const char *array_name =
+        asm_name_for(sym_asm_name(plan->array));
+    const char *accumulator_name =
+        asm_name_for(sym_asm_name(plan->accumulator));
+    int loop = new_label();
+
+    mir_emit_symbol_extrn(out, plan->array);
+    mir_emit_symbol_extrn(out, plan->accumulator);
+    fprintf(out,
+            "\tld hl,%s\n\tpush hl\n\tpop iy\n"
+            "\tld hl,%d\n\tld (ix-2),l\n\tld (ix-1),h\n"
+            "L%d:\n"
+            "\tld hl,(%s)\n\tld de,(%s+2)\n"
+            "\tpush de\n\tpush hl\n"
+            "\tld l,(iy+0)\n\tld h,(iy+1)\n"
+            "\tld e,(iy+2)\n\tld d,(iy+3)\n",
+            array_name, plan->count, loop,
+            accumulator_name, accumulator_name);
+    mir_emit_runtime_call(out, "__faf");
+    fprintf(out,
+            "\tpop bc\n\tpop bc\n"
+            "\tld (%s),hl\n\tld (%s+2),de\n"
+            "\tinc iy\n\tinc iy\n\tinc iy\n\tinc iy\n"
+            "\tld l,(ix-2)\n\tld h,(ix-1)\n\tdec hl\n"
+            "\tld (ix-2),l\n\tld (ix-1),h\n"
+            "\tld a,h\n\tor l\n\tjp nz, L%d\n"
+            "\tld sp,ix\n\tpop ix\n\tpop iy\n\tret\n",
+            accumulator_name, accumulator_name, loop);
+}
+
 static void mir_emit_fixed_long_copy(
     FILE *out, const struct MirFixedLongCopy *plan)
 {
@@ -17643,6 +18101,10 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     struct MirAssignPre assign_pre;
     struct MirForthRun forth_run;
     struct MirGlobalByteVerify global_byte_verify;
+    struct MirEDigits e_digits;
+    struct MirFloatMatrixMultiply float_matrix_multiply;
+    struct MirFixedFloatZero fixed_float_zero;
+    struct MirFloatSum float_sum;
 
     if (getenv("DCC_MIR_EXACT_SHAPE_REPORT") != NULL) {
         unsigned long long first;
@@ -17798,6 +18260,46 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         labels[i] = new_label();
     mir_prepare_inline_postincrement_stores(
         &inline_postincrement_helper);
+    if (mir_match_float_sum(&float_sum)) {
+        fputs("\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+              "\tdec sp\n\tdec sp\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_float_sum(out, &float_sum);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_fixed_float_zero(&fixed_float_zero)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_fixed_float_zero(out, &fixed_float_zero);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_e_digits(&e_digits)) {
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+        fprintf(out,
+                "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
+                e_digits.digits + 10);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_e_digits(out, &e_digits);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_float_matrix_multiply(&float_matrix_multiply)) {
+        fputs("\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+              "\tld hl,-15\n\tadd hl,sp\n\tld sp,hl\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_float_matrix_multiply(out, &float_matrix_multiply);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
     if (mir_match_global_byte_verify(&global_byte_verify)) {
         fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
         if (opt_stack_check)

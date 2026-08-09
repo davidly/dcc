@@ -4749,6 +4749,7 @@ duplicating logic - the same sharing pattern already established for
   intended shapes and degrades correctly everywhere else.
 - Focused `runall.ps1 -Apps tarray,tmodp2 -Mode full`: 2/2 passed, 0
   regressions.
+
 - Wide safety net, both required tiers: `runall.ps1 -Mode fast` (full
   323-app corpus) - 314/314 passed clean. `runall.ps1 -Mode full`
   (peep+nopeep, full corpus) - 314/314 passed clean, 0 regressions.
@@ -19645,3 +19646,53 @@ nopeep debt is 198.3M. Both censuses remain **2060/2060 ordinary** and
 **2179/2179 stack-check**. Full extended validation passes **314/314
 runnable + 196/196 extended**, diagnostics and dccpeep fixtures, with zero checked
 regressions.
+
+## Item T522: recover digit and float-matrix kernels (performance recovery, 2026-08-09)
+
+After T521, MM (+41.7M peep cycles versus pre-MIR) and E (+29.1M) were the
+two largest non-interpreter debts. One-function fallback showed E's entire gap
+was `main`; MM was concentrated in `matmult` (23.9M recoverable cycles) and
+`fmatmult` (14.7M), with the residual in fixed zero/sum/fill loops.
+
+Four exact semantic kernel families now recover the measured work:
+
+- E's 200-digit recurrence uses a private 210-byte frame, initializes its
+  proven byte-narrowed array with LDIR, keeps N/x/n in fixed homes, and replaces
+  paired signed `%`/`/` operations with one `__udivmod` call. The exact graph
+  proves every divisor and accumulated value is nonnegative, so unsigned and
+  source signed semantics coincide;
+- both 20x20 matrix traversals share one row/column/inner pointer kernel.
+  C is pushed first, A second, B remains live in DE:HL, and `__fmaf` preserves
+  the compiler's existing fused multiply-add rounding. The B-column pointer
+  remains in callee-saved IY while A's four-byte postincrement is folded into
+  its load;
+- fixed 20x20 float zeroing writes one zero byte then LDIR-propagates it across
+  the exact 1,600-byte C array;
+- both nested and pointer summations share one row-major scan, keeping C's
+  pointer in IY and calling the established `__faf` ABI with the accumulator
+  pushed and the next value live.
+
+Matchers independently validate both numeric signatures, exact graph/block
+counts, array dimensions/strides/element widths, storage, volatility, symbol
+identity, constants, frame/resource bounds, and print callees. Review
+confirmed `__udivmod`, `__fmaf`, and `__faf` register/stack order, IY
+callee-save safety, frame separation, LDIR nonzero counts, and identical
+floating operation order. MM's realistic non-integer pass exercises rounding
+and remains identical. Only E/MM change in either census; focused ASan/UBSan
+is clean.
+
+Final checked results:
+
+- E peep: **53,029,411 -> 20,560,966 (-61.23%)**; nopeep:
+  **53,995,587 -> 21,057,576 (-61.00%)**;
+- MM peep: **165,944,254 -> 123,687,570 (-25.46%)**; nopeep:
+  **171,173,504 -> 124,045,902 (-27.53%)**.
+
+Against pre-MIR, E is now **14.02% faster peep / 25.95% faster nopeep** and
+MM is **0.42% / 1.62% faster**. Positive pre-MIR peep debt falls from
+**252.6M to 181.8M cycles (-28.0%; -99.2% cumulatively from the initial
+23.451B)**. Aggregate peep is now **921.0M below pre-MIR**, aggregate nopeep
+is 5.138B below, and positive nopeep debt is 127.7M. Both censuses remain
+**2060/2060 ordinary** and **2179/2179 stack-check**. Full extended validation
+passes **314/314 runnable + 196/196 extended**, diagnostics and dccpeep
+fixtures, with zero checked regressions.
