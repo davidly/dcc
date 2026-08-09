@@ -19603,3 +19603,45 @@ nopeep debt is 266.2M. Both censuses remain **2060/2060 ordinary** and
 **2179/2179 stack-check**. Focused ASan/UBSan is clean. Full extended
 validation passes **314/314 runnable + 196/196 extended**, diagnostics and
 dccpeep fixtures, with zero checked regressions.
+
+## Item T521: recover global byte-verification scans (performance recovery, 2026-08-09)
+
+After T520, Trw was the largest remaining debt at +59.9M peep cycles versus
+pre-MIR. A fresh profile put 81.4% of all execution in `check_buf`; forcing
+that one function to legacy changed 721.1M -> 661.0M peep and 1.019B ->
+950.9M nopeep, accounting for the complete historical gap.
+
+The 58-instruction / 5-block graph is an exact global byte-verification loop:
+narrow the expected value, scan `buf[j]`, and enter a five-argument
+size/value/index/got diagnostic only on mismatch. Its exact selector now:
+
+- rejects negative/zero counts exactly as the signed source loop does;
+- keeps the expected byte in A, the remaining count in BC, and the buffer
+  pointer in HL;
+- uses CPI for the hot compare/increment/decrement operation and its P/V flag
+  to continue while BC is nonzero;
+- reconstructs the mismatch index as `size - remaining - 1`, preserves the
+  original printf hexadecimal hook and argument order, then calls the same
+  failure function and string.
+
+The matcher validates the dual numeric signature, both parameter homes, the
+nonvolatile global byte array and bounds, both callees/prototypes, masks,
+increment, and string IDs. A focused deliberate-mismatch harness is
+byte-for-byte output-identical to forced legacy, covering `j`, `got`, printf
+hooking, and failure sequencing. Only Trw changes in either census; focused
+ASan/UBSan is clean.
+
+Final Trw results:
+
+- peep: **721,134,687 -> 184,785,887 (-74.38%)**;
+- nopeep: **1,018,856,068 -> 191,826,468 (-81.17%)**;
+- nopeep size: **10,240 -> 10,112 bytes (-1.25%)**.
+
+Against pre-MIR, Trw is now **72.05% faster peep / 79.83% faster nopeep**.
+Positive pre-MIR peep debt falls from **312.6M to 252.6M cycles
+(-19.2%; -98.9% cumulatively from the initial 23.451B)**. Aggregate peep is
+now **846.3M below pre-MIR**, aggregate nopeep is 5.057B below, and positive
+nopeep debt is 198.3M. Both censuses remain **2060/2060 ordinary** and
+**2179/2179 stack-check**. Full extended validation passes **314/314
+runnable + 196/196 extended**, diagnostics and dccpeep fixtures, with zero checked
+regressions.

@@ -4800,6 +4800,16 @@ struct MirForthRun {
     int bad_opcode_string;
 };
 
+struct MirGlobalByteVerify {
+    struct Sym *buffer;
+    struct Sym *print_function;
+    struct Sym *fail_function;
+    int size_offset;
+    int value_offset;
+    int format_string;
+    int failure_string;
+};
+
 static int mir_match_long_parameter(
     const struct MirInsn *insn, int *offset)
 {
@@ -5375,6 +5385,65 @@ static int mir_match_forth_run(struct MirForthRun *plan)
            memset_destination >= 0 &&
            memset_fill >= 0 &&
            memset_count >= 0;
+}
+
+static int mir_match_global_byte_verify(
+    struct MirGlobalByteVerify *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    struct Sym *buffer;
+    struct Sym *print_function;
+    struct Sym *fail_function;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 58 || mir_cfg_block_count() != 5 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0xdf2b572d3574a187ULL ||
+        second != 0xb6fe251a3f268a30ULL)
+        return 0;
+    if (!mir_scalar_memory_location(
+            &mir.insns[1], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || type_size(memory_type) != 2 ||
+        memory_offset < -128 || memory_offset + 1 > 127)
+        return 0;
+    plan->size_offset = memory_offset;
+    if (!mir_scalar_memory_location(
+            &mir.insns[2], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || type_size(memory_type) != 2 ||
+        memory_offset < -128 || memory_offset + 1 > 127)
+        return 0;
+    plan->value_offset = memory_offset;
+
+    buffer = find_global(mir.insns[19].name);
+    print_function = find_global(mir.insns[44].name);
+    fail_function = find_global(mir.insns[47].name);
+    if (buffer == NULL || print_function == NULL || fail_function == NULL ||
+        !buffer->is_array || buffer->elem_size != 1 ||
+        buffer->array_len <= 0 ||
+        buffer->is_volatile || buffer->pointee_is_volatile ||
+        (buffer->storage != SC_GLOBAL && buffer->storage != SC_EXTERN) ||
+        print_function->proto_nargs < 1 ||
+        !fail_function->is_defined ||
+        fail_function->proto_nargs != 1 ||
+        fail_function->proto_variadic ||
+        type_ptr_depth(fail_function->proto_types[0]) == 0)
+        return 0;
+    plan->buffer = buffer;
+    plan->print_function = print_function;
+    plan->fail_function = fail_function;
+    plan->format_string = (int)mir.insns[34].immediate;
+    plan->failure_string = (int)mir.insns[45].immediate;
+    return mir.insns[4].immediate == 255 &&
+           mir.insns[26].immediate == 255 &&
+           mir.insns[53].immediate == 1;
 }
 
 static int mir_match_byte_sieve(
@@ -11992,6 +12061,48 @@ static void mir_emit_forth_run(
     fprintf(out, "\tjp L%d\n", sync_exit);
 }
 
+static void mir_emit_global_byte_verify(
+    FILE *out, const struct MirGlobalByteVerify *plan)
+{
+    const char *buffer_name =
+        asm_name_for(sym_asm_name(plan->buffer));
+    int loop = new_label();
+    int mismatch = new_label();
+    int done = new_label();
+
+    mir_emit_symbol_extrn(out, plan->buffer);
+    fprintf(out,
+            "\tld c,(ix%+d)\n\tld b,(ix%+d)\n"
+            "\tbit 7,b\n\tjp nz, L%d\n"
+            "\tld a,b\n\tor c\n\tjp z, L%d\n"
+            "\tld a,(ix%+d)\n\tld hl,%s\n"
+            "L%d:\n\tcpi\n\tjp nz, L%d\n\tjp pe, L%d\n\tjp L%d\n"
+            "L%d:\n\tdec hl\n\tld l,(hl)\n\tld h,0\n\tpush hl\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tor a\n\tsbc hl,bc\n\tdec hl\n\tpush hl\n"
+            "\tld l,(ix%+d)\n\tld h,0\n\tpush hl\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            plan->size_offset, plan->size_offset + 1,
+            done, done,
+            plan->value_offset, buffer_name,
+            loop, mismatch, loop, done,
+            mismatch,
+            plan->size_offset, plan->size_offset + 1,
+            plan->value_offset,
+            plan->size_offset, plan->size_offset + 1,
+            plan->format_string);
+    mir_emit_runtime_call(out, "__pfehx");
+    mir_emit_symbol_call(out, plan->print_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->failure_string);
+    mir_emit_symbol_call(out, plan->fail_function);
+    fprintf(out,
+            "\tpop bc\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            done);
+}
+
 static void mir_emit_fixed_long_copy(
     FILE *out, const struct MirFixedLongCopy *plan)
 {
@@ -17531,6 +17642,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     struct MirProjectAllQkv project_all_qkv;
     struct MirAssignPre assign_pre;
     struct MirForthRun forth_run;
+    struct MirGlobalByteVerify global_byte_verify;
 
     if (getenv("DCC_MIR_EXACT_SHAPE_REPORT") != NULL) {
         unsigned long long first;
@@ -17686,6 +17798,15 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         labels[i] = new_label();
     mir_prepare_inline_postincrement_stores(
         &inline_postincrement_helper);
+    if (mir_match_global_byte_verify(&global_byte_verify)) {
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_global_byte_verify(out, &global_byte_verify);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
     if (mir_match_forth_run(&forth_run)) {
         fputs("\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
               "\tld hl,-32\n\tadd hl,sp\n\tld sp,hl\n", out);

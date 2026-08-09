@@ -64,13 +64,13 @@ transactional fallback remains in place throughout Phase 1.
   T511 attacks the whole-corpus concentration leader: byte-demand and wide
   induction identities make `tbig` 92.5% faster peep, reduce total positive
   pre-MIR peep debt by 76.9%, and materially improve 13 additional apps.
-  T512-T520 recover word dispatch, narrow-origin wide arithmetic, byte
+  T512-T521 recover word dispatch, narrow-origin wide arithmetic, byte
   verification, word scans, large-CFG address/induction identities, and
   interpreter inline-stack/typed-memory helpers, byte minimax, and modular
   arithmetic, chess, fixed-array, fixed-point matrix, and the remaining
   interpreter kernels. Fint and Attn now beat pre-MIR in both modes, aggregate
-  peep performance is 309.9M cycles ahead of pre-MIR, and positive per-app
-  peep debt is 312.6M (-98.7% cumulatively). Continue with the freshly
+  peep performance is 846.3M cycles ahead of pre-MIR, and positive per-app
+  peep debt is 252.6M (-98.9% cumulatively). Continue with the freshly
   re-ranked file/loop cohort,
   then prove MIR-required mode
   over the extended corpus before removing capture/replay and legacy codegen
@@ -705,10 +705,15 @@ Forth VM that keeps its instruction pointer in IY. Fint improves 22.1% peep /
 Positive peep debt is now 312.6M cycles (-98.7% cumulatively), aggregate peep
 is 309.9M below pre-MIR, and both censuses/full extended remain clean.
 
+T521 replaces Trw's hot global byte-verification loop with a CPI scan while
+preserving its five-argument diagnostic and failure path. Trw improves 74.4%
+peep / 81.2% nopeep and now beats pre-MIR by 72.0% / 79.8%. Positive peep
+debt is 252.6M cycles (-98.9% cumulatively), aggregate peep is 846.3M below
+pre-MIR, and both censuses/full extended remain clean.
+
 Next:
 
-1. Profile and recover `trw` (+59.9M), then the numeric pair `mm` (+41.7M)
-   and `e` (+29.1M).
+1. Profile and recover the numeric pair `mm` (+41.7M) and `e` (+29.1M).
 2. Re-rank the residual Cint (+28.5M), Bint (+25.5M), and Forint (+22.8M)
    peep-only gaps after those shared file/loop fixes.
 3. Continue through `nqueens`, `tqsort`, `tpihexb`, and the residual tail
