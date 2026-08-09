@@ -64,10 +64,11 @@ transactional fallback remains in place throughout Phase 1.
   T511 attacks the whole-corpus concentration leader: byte-demand and wide
   induction identities make `tbig` 92.5% faster peep, reduce total positive
   pre-MIR peep debt by 76.9%, and materially improve 13 additional apps.
-  T512-T514 recover word dispatch, narrow-origin wide arithmetic, byte
-  verification, word scans, and large-CFG address/induction identities.
-  Positive pre-MIR peep debt is now 2.929B (-87.5% cumulatively). Continue
-  with the freshly re-ranked interpreter cohort, then prove MIR-required mode
+  T512-T515 recover word dispatch, narrow-origin wide arithmetic, byte
+  verification, word scans, large-CFG address/induction identities, and
+  interpreter inline-stack/typed-memory helpers. Positive pre-MIR peep debt
+  is now 1.743B (-92.6% cumulatively). Continue with the freshly re-ranked
+  loop/numeric cohort, then prove MIR-required mode
   over the extended corpus before removing capture/replay and legacy codegen
   in separate cleanup commits.
 - **Key finding this segment: the mega-experiment's central premise -
@@ -661,15 +662,22 @@ apps. Positive pre-MIR peep debt is now 2.929B cycles (-87.5% cumulatively);
 aggregate nopeep cycles are already 413.8M below pre-MIR. Both censuses and
 the full extended gate remain clean.
 
+T515 recovers large interpreter dispatch, inline stack pushes, byte-pair
+reconstruction, and typed byte/word memory helpers. `bint`, `cobint`,
+`adaint`, and `cint` improve 33.8-44.9% peep and 36.4-49.8% nopeep.
+Ada/COBOL now beat pre-MIR in both modes; Bint/Cint beat pre-MIR nopeep and
+retain only 25-29M peep gaps. Positive pre-MIR peep debt is now 1.743B
+(-92.6% cumulatively), with both censuses and the full extended gate clean.
+
 Next:
 
-1. Profile and attribute the four leading interpreter debts: `bint`,
-   `cobint`, `adaint`, and `cint`. Together they represent 1.240B cycles,
-   42.3% of all remaining positive peep debt.
-2. Extend the measured shared cause, if any, across `forint` and `fint`
-   without weakening the 42-case dispatch floor.
-3. Re-rank before moving to the loop/numeric leaders: `ttt`, `pihex`,
-   `tchess`, `catalan`, `attnc11`, and `sieve`.
+1. Profile and attribute the new loop/numeric leaders: `ttt`, `pihex`,
+   `tchess`, `catalan`, `attnc11`, and `sieve`. Together they represent
+   1.260B cycles, 72.3% of remaining positive peep debt.
+2. Re-check `forint` and `fint` after those shared loop/arithmetic fixes;
+   they are now ranks 7-8 rather than the dominant interpreter cluster.
+3. Re-rank before `trw`, `mm`, `e`, and the residual Bint/Cint peep-only
+   gaps.
 4. Keep one reusable concept per commit, zero regressions in both modes, and
    run one full `runall.ps1 -Mode full -Extended` immediately before each
    publication.

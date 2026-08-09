@@ -19181,3 +19181,103 @@ nopeep debt remains offset by larger wins. Both censuses remain
 **2060/2060 ordinary** and **2179/2179 stack-check**. Focused ASan/UBSan is
 clean. Full extended validation passes **314/314 runnable + 196/196 extended**,
 diagnostics and dccpeep fixtures, with zero checked regressions.
+
+## Item T515: recover interpreter dispatch, inline stacks, and typed memory helpers (performance recovery, 2026-08-09)
+
+After T514, the four largest debts were the remaining interpreter family:
+`bint` (+333.4M peep cycles versus pre-MIR), `cobint` (+330.9M), `adaint`
+(+289.1M), and `cint` (+287.2M). Together they held **1.240B cycles / 42.3%**
+of all remaining positive peep debt.
+
+Dynamic profiles and one-function legacy fallback isolated the debt:
+
+- `bint`: `run` 76.2% and `pushv` 19.5%; reverting `run` alone changed
+  685.5M -> 352.4M peep cycles;
+- `cobint`: `exec_range` 73.7%, `vpush` 16.4%, and `var_set` 6.0%;
+  reverting `exec_range` alone changed 1.089B -> 760.6M;
+- `adaint`: `run` 59.7%, `pushv` 27.3%, and `mem_set_word` 8.8%;
+  reverting `run` alone changed 755.8M -> 467.4M;
+- `cint`: `run` 72.7%, `pushv` 12.8%, and `mem_set_word` 9.8%;
+  reverting `run` alone changed 683.8M -> 397.6M.
+
+The common root cause was retained inline-substitution boundaries and their
+temporary SSA traffic inside large interpreter dispatch loops. Legacy inlined
+the stack and typed-memory helpers, while MIR emitted 17-29 calls to a push
+helper per loop plus repeated frame-slot reconstruction of byte pairs,
+postincrement indices, conditional byte/word loads, and stores. Dense switch
+recovery alone was insufficient: forcing Bint's new 30-case table improved it
+only to 504.8M peep because 17 hot push calls remained.
+
+The spilled selector now transactionally recovers the measured identities:
+
+- dense byte/word dispatch accepts 30+ cases only in 100+ block CFGs; the
+  production gate still requires a bounded 96-128 block interpreter shape,
+  direct condition, profitable stack-helper recovery, and generated
+  size/instruction counts no larger than captured output;
+- static inline `array[index++] = value`, global pointer postincrement, and
+  global-state pointer-member push helpers emit directly. Repeated indexed
+  pushes share one tail thunk, avoiding 15 copies of the same body without a
+  call/return cost;
+- adjacent byte loads that reconstruct a word now load the base/index once
+  and pass the word directly to the recovered push;
+- four-argument byte/word memory-store helpers collapse their proven affine
+  `base + index*width + lane` stores;
+- local-pointer typed byte/word store helpers and their conditional typed-load
+  counterpart resolve the object once, test its width once, then store/load
+  directly;
+- a named global/member scalar used only by an immediate zero branch bypasses
+  its backend spill while retaining existing edge-specific PHI copies;
+- `base[pc++]` feeding a dense dispatch preserves the incremented SSA value
+  for case-body uses but keeps the old index in HL for address formation,
+  removing the redundant old-value/address slots;
+- a measured 42-case postincrement-index dispatch class has its own bounded
+  production acceptance gate.
+
+Every matcher proves exact AST/MIR shape, scalar width, nonvolatile memory,
+single-use or exact-use closure, stable symbol/field identity, argument
+association, continuation identity for the shared tail thunk, and unchanged
+CFG/PHI edges. Casts are accepted only when they preserve the low bytes the
+emitter consumes. No source or function names participate.
+
+Rejected and repaired experiments:
+
+- broad 30-case matching initially did not affect Bint because its unsigned
+  byte condition still hit the old generic 32-case floor; the final rule is
+  uniformly scoped by 100+ CFG blocks;
+- broad per-site push fusion caused 128-384 byte linked-size regressions; the
+  shared indexed tail thunk removes the duplication;
+- a BC-free member-pointer push exposed a slotless-HL forwarding hazard; the
+  repaired form was correct but 13-15M cycles slower, so the measured BC form
+  remains;
+- the first postincrement dispatch fusion rejected a legitimate increment
+  value with four case-body uses; the final form writes that SSA value to its
+  backend home before skipping the matched header;
+- inlining only scalar typed stores retained the out-of-line helper and did
+  not recover size; complete structural coverage plus the shared push thunk
+  removes both calls and dead bodies;
+- review found and fixed continuation, cast, volatile-read, and skipped-value
+  overacceptance before publication.
+
+Final checked results:
+
+- `bint` peep: **685,505,640 -> 377,649,635 (-44.91%)**; nopeep:
+  **806,507,734 -> 456,726,008 (-43.37%)**;
+- `cobint` peep: **1,089,295,093 -> 720,958,123 (-33.81%)**; nopeep:
+  **1,347,233,100 -> 856,356,247 (-36.44%)**;
+- `adaint` peep: **755,844,832 -> 461,137,338 (-38.99%)**; nopeep:
+  **925,513,278 -> 492,248,903 (-46.81%)**;
+- `cint` peep: **683,762,405 -> 425,136,432 (-37.82%)**; nopeep:
+  **969,219,473 -> 486,780,984 (-49.78%)**.
+
+Against pre-MIR, `adaint` is now **1.21% faster peep / 16.57% faster
+nopeep**, and `cobint` is **4.94% / 14.91% faster**. `bint` and `cint`
+retain only **7.24% / 7.19% peep** gaps while beating pre-MIR nopeep by
+**5.11% / 16.29%**. `a1` also improves another 0.10% in both modes.
+
+Positive pre-MIR peep debt falls from **2.929B to 1.743B cycles
+(-40.5%; -92.6% cumulatively from the initial 23.451B)**. Positive nopeep
+debt falls to 1.662B, while aggregate nopeep cycles are now 2.170B below
+pre-MIR. Both censuses remain **2060/2060 ordinary** and **2179/2179
+stack-check**. Focused ASan/UBSan is clean. Full extended validation passes
+**314/314 runnable + 196/196 extended**, diagnostics and dccpeep fixtures,
+with zero checked regressions.

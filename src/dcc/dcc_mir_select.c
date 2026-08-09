@@ -2110,6 +2110,8 @@ static int mir_dense_byte_switch_is_semantically_eligible(
     int width = mir_spilled_cfg_dense_byte_switch_width();
     int direct_condition =
         mir_spilled_cfg_dense_byte_switch_uses_direct_condition();
+    int postincrement_index =
+        mir_spilled_cfg_dense_byte_switch_uses_postincrement_index();
     int inline_postincrement =
         mir_spilled_cfg_inline_postincrement_uses();
     int inline_indexed_stack_store =
@@ -2136,7 +2138,7 @@ static int mir_dense_byte_switch_is_semantically_eligible(
             captured_instructions *
                 (inline_indexed_stack_store >= 2 ? 117L : 116L);
     int compact = common &&
-        cases >= 32 && cases <= 64 &&
+        cases >= 30 && cases <= 64 &&
         width >= cases && width <= 64 &&
         direct_condition &&
         inline_postincrement >= 8 &&
@@ -2146,7 +2148,18 @@ static int mir_dense_byte_switch_is_semantically_eligible(
         frame_bytes <= 64 &&
         generated_size <= captured_size &&
         generated_instructions <= captured_instructions;
-    int eligible = giant || compact;
+    int indexed = common &&
+        postincrement_index &&
+        cases >= 42 && cases <= 64 &&
+        width == cases &&
+        direct_condition &&
+        inline_postincrement >= 8 &&
+        blocks >= 100 && blocks <= 128 &&
+        calls <= 48 &&
+        frame_bytes <= 80 &&
+        generated_size <= captured_size &&
+        generated_instructions <= captured_instructions;
+    int eligible = giant || compact || indexed;
 
     if (mir_spilled_cfg_depends_on_dense_byte_switch() &&
         getenv("DCC_MIR_SWITCH_REPORT") != NULL)
@@ -2154,14 +2167,16 @@ static int mir_dense_byte_switch_is_semantically_eligible(
                 "; MIR dense-switch-gate function=%s eligible=%d "
                 "blocks=%d calls=%d backedge=%d vla=%d inline=%d "
                 "pointer-array=%d frame=%d cases=%d width=%d "
-                "direct-condition=%d inline-postincrement=%d "
+                "direct-condition=%d postincrement-index=%d "
+                "inline-postincrement=%d "
                 "inline-indexed-stack-store=%d small-selfstore-add=%d "
                 "generated-bytes=%ld "
                 "captured-bytes=%ld generated-insns=%d "
                 "captured-insns=%d\n",
                 mir.name, eligible, blocks, calls, has_backedge,
                 mir.has_vla, has_inline, has_pointer_array, frame_bytes,
-                cases, width, direct_condition, inline_postincrement,
+                cases, width, direct_condition, postincrement_index,
+                inline_postincrement,
                 inline_indexed_stack_store, small_selfstore_add,
                 generated_size, captured_size, generated_instructions,
                 captured_instructions);
