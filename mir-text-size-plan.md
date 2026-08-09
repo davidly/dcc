@@ -19538,3 +19538,68 @@ cycles are now **115.9M below pre-MIR**, while aggregate nopeep is 3.919B
 below. Both censuses remain **2060/2060 ordinary** and **2179/2179
 stack-check**. Full extended validation passes **314/314 runnable + 196/196
 extended**, diagnostics and dccpeep fixtures, with zero checked regressions.
+
+## Item T520: recover remaining interpreter dispatch kernels (performance recovery, 2026-08-09)
+
+After T519, Forint (+109.1M peep cycles versus pre-MIR) and Fint (+87.5M)
+were the two largest remaining debts. Same-compiler all-legacy runs reproduced
+their pre-MIR peep baselines exactly, confirming the complete gaps were still
+MIR emission quality rather than unrelated drift.
+
+Profiling concentrated Forint in `eval_e` (66.6%), `run_prog` (15.7%), and
+`assign_pre` (13.8%). `eval_e` was already cycle-neutral under one-function
+fallback; `run_prog` and `assign_pre` recovered 55.1M and 33.5M peep cycles.
+Fint was simpler: `run_at` held 95.7% of all cycles and one-function fallback
+recovered 86.2M. Static candidate comparison showed the same pattern:
+Forint's 84-block run loop emitted 1,453 instructions versus 1,118 legacy,
+while Fint's 159-block loop emitted 3,331 versus 2,728.
+
+Three complementary fixes now recover that cohort:
+
+- dense word-switch reconstruction admits a fail-closed 11-16-case class only
+  for 80-95-block, call/frame/growth-bounded loops with repeated in-place
+  self-store updates. It recognizes Forint's contiguous 11-case statement
+  dispatch and keeps the tabled spilled candidate instead of replacing it
+  with a larger hybrid-home equality chain;
+- an exact `assign_pre` kernel preserves the two ordered `eval_e` calls, then
+  resolves the 32-byte symbol record once and performs the original scalar/
+  array byte-or-word store and word bounds failure from a 10-byte frame;
+- an exact 42-opcode Forth VM keeps the bytecode instruction pointer in
+  callee-saved IY, caches code/memory/data/return/loop pointers plus VM
+  counters in a 32-byte IX frame, tables every opcode, synchronizes mutable
+  counters around `prim` and exits, and directly implements the source's
+  stack, call/return, DO/LOOP, signed arithmetic/comparison/divmod, typed
+  memory, fill, and I/O semantics.
+
+The exact matchers accept both the original and the verifier-preserving
+transformed graph signatures, then separately validate parameters, member
+offsets, symbol identities, volatility, callee prototypes, standard memset
+shape, opcode/resource bounds, and every repeated state/die reference.
+`DCC_MIR_EXACT_SHAPE_REPORT=1` now exposes the two numeric signatures used by
+this development workflow without changing selection.
+
+Focused scenario testing caught and repaired two emitter-lifetime mistakes
+before baseline acceptance: stack-address formation reused DE while ADD/SUB/
+MUL/equality/bitwise operations still held their right operand there, and the
+same issue initially affected LT/GT. Explicit frame temporaries now preserve
+those operands. E, TTT, Sieve, and focused dynamic byte-memory, signed-compare,
+and DO/LOOP programs all match legacy. Review also found that dense-switch
+acceptance could override diagnostic forced fallback; both early and final
+gates now retain `"forced"` so A/B attribution remains universal.
+
+Final checked results:
+
+- Fint peep: **486,655,665 -> 378,934,275 (-22.14%)**; nopeep:
+  **558,074,334 -> 382,788,992 (-31.41%)**;
+- Forint peep: **820,791,991 -> 734,530,394 (-10.51%)**; nopeep:
+  **1,106,728,283 -> 970,937,438 (-12.27%)**.
+
+Against pre-MIR, Fint is now **5.06% faster peep / 21.12% faster nopeep**.
+Forint retains a **22.79M / 3.20% peep** gap while beating pre-MIR nopeep by
+**4.03%**. Positive pre-MIR peep debt falls from **486.3M to 312.6M cycles
+(-35.7%; -98.7% cumulatively from the initial 23.451B)**. Aggregate peep is
+now **309.9M below pre-MIR**, aggregate nopeep is 4.230B below, and positive
+nopeep debt is 266.2M. Both censuses remain **2060/2060 ordinary** and
+**2179/2179 stack-check**. Focused ASan/UBSan is clean. Full extended
+validation passes **314/314 runnable + 196/196 extended**, diagnostics and
+dccpeep fixtures, with zero checked regressions.

@@ -64,13 +64,14 @@ transactional fallback remains in place throughout Phase 1.
   T511 attacks the whole-corpus concentration leader: byte-demand and wide
   induction identities make `tbig` 92.5% faster peep, reduce total positive
   pre-MIR peep debt by 76.9%, and materially improve 13 additional apps.
-  T512-T519 recover word dispatch, narrow-origin wide arithmetic, byte
+  T512-T520 recover word dispatch, narrow-origin wide arithmetic, byte
   verification, word scans, large-CFG address/induction identities, and
   interpreter inline-stack/typed-memory helpers, byte minimax, and modular
-  arithmetic, chess, fixed-array, and fixed-point matrix kernels. Attn now
-  beats pre-MIR in both modes, aggregate peep performance is 115.9M cycles
-  ahead of pre-MIR, and positive per-app peep debt is 486.3M (-97.9%
-  cumulatively). Continue with the freshly re-ranked interpreter/loop cohort,
+  arithmetic, chess, fixed-array, fixed-point matrix, and the remaining
+  interpreter kernels. Fint and Attn now beat pre-MIR in both modes, aggregate
+  peep performance is 309.9M cycles ahead of pre-MIR, and positive per-app
+  peep debt is 312.6M (-98.7% cumulatively). Continue with the freshly
+  re-ranked file/loop cohort,
   then prove MIR-required mode
   over the extended corpus before removing capture/replay and legacy codegen
   in separate cleanup commits.
@@ -696,12 +697,20 @@ Positive per-app peep debt is now 486.3M cycles (-97.9% cumulatively), while
 aggregate peep cycles are 115.9M below pre-MIR. Both censuses and the full
 extended gate remain clean.
 
+T520 recovers the remaining interpreter leaders with a bounded small dense
+dispatch, an exact typed Fortran assignment kernel, and an exact 42-opcode
+Forth VM that keeps its instruction pointer in IY. Fint improves 22.1% peep /
+31.4% nopeep and now beats pre-MIR by 5.1% / 21.1%; Forint improves 10.5% /
+12.3%, retaining only a 3.2% peep gap while beating pre-MIR nopeep by 4.0%.
+Positive peep debt is now 312.6M cycles (-98.7% cumulatively), aggregate peep
+is 309.9M below pre-MIR, and both censuses/full extended remain clean.
+
 Next:
 
-1. Profile and recover the two remaining interpreter leaders: `forint`
-   (+109.1M peep) and `fint` (+87.5M).
-2. Re-rank before `trw` (+59.9M), `mm` (+41.7M), `e` (+29.1M), and the
-   residual Cint/Bint peep-only gaps.
+1. Profile and recover `trw` (+59.9M), then the numeric pair `mm` (+41.7M)
+   and `e` (+29.1M).
+2. Re-rank the residual Cint (+28.5M), Bint (+25.5M), and Forint (+22.8M)
+   peep-only gaps after those shared file/loop fixes.
 3. Continue through `nqueens`, `tqsort`, `tpihexb`, and the residual tail
    until every positive per-app gap is recovered or architecturally
    documented; aggregate parity alone is already achieved.

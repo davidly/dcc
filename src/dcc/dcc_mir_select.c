@@ -2159,7 +2159,18 @@ static int mir_dense_byte_switch_is_semantically_eligible(
         frame_bytes <= 80 &&
         generated_size <= captured_size &&
         generated_instructions <= captured_instructions;
-    int eligible = giant || compact || indexed;
+    int small = common &&
+        cases >= 11 && cases <= 16 &&
+        width == cases &&
+        small_selfstore_add >= 1 &&
+        !has_inline &&
+        blocks >= 80 && blocks <= 95 &&
+        calls <= 24 &&
+        frame_bytes <= 64 &&
+        generated_size * 100L <= captured_size * 104L &&
+        generated_instructions * 100L <=
+            captured_instructions * 101L;
+    int eligible = giant || compact || indexed || small;
 
     if (mir_spilled_cfg_depends_on_dense_byte_switch() &&
         getenv("DCC_MIR_SWITCH_REPORT") != NULL)
@@ -4784,6 +4795,34 @@ evaluate_generated:
                     strict_phi_fallthrough_active = 0;
                 }
                 if (fallback_reason != NULL &&
+                    strcmp(fallback_reason, "forced") != 0 &&
+                    !strcmp(selector_name, "spilled-scalar-cfg") &&
+                    mir_spilled_cfg_uses_exact_semantic_kernel())
+                    /*
+                     * Exact semantic kernels validate their complete graph,
+                     * ABI, symbols, and resources before emitting. Generic
+                     * cost retries must not replace them with a less exact
+                     * selector merely because the original MIR graph has
+                     * PHIs, inline-substitution metadata, or a large CFG.
+                     */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
+                    strcmp(fallback_reason, "forced") != 0 &&
+                    !g_speculative_codegen_active &&
+                    !strcmp(selector_name, "spilled-scalar-cfg") &&
+                    mir_spilled_cfg_dense_byte_switch_case_count() <= 16 &&
+                    mir_dense_byte_switch_is_semantically_eligible(
+                        selector_name,
+                        generated_size, captured_size,
+                        generated_instructions,
+                        captured_instructions))
+                    /*
+                     * T520: a bounded small statement dispatcher is already
+                     * tabled by the spilled selector. Keep it instead of
+                     * replacing it with a larger hybrid-home equality chain.
+                     */
+                    fallback_reason = NULL;
+                if (fallback_reason != NULL &&
                     mir_hybrid_homed_retry_is_eligible(fallback_reason) &&
                     !hybrid_homed_retry_attempted &&
                     !g_speculative_codegen_active) {
@@ -5260,6 +5299,7 @@ evaluate_generated:
                         generated_size))
                     fallback_reason = NULL;
                 if (fallback_reason != NULL &&
+                    strcmp(fallback_reason, "forced") != 0 &&
                     !g_speculative_codegen_active &&
                     mir_dense_byte_switch_is_semantically_eligible(
                         selector_name,
