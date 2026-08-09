@@ -5026,6 +5026,38 @@ struct MirLongSpigot {
     int done_string;
 };
 
+struct MirTypedArrayConditions {
+    int minimum_offset;
+    int maximum_offset;
+    int element_size;
+    int is_unsigned;
+    int count;
+};
+
+struct MirWideFactorial {
+    int parameter_offset;
+};
+
+struct MirFloatExp {
+    int parameter_offset;
+    unsigned long upper_bits;
+    unsigned long maximum_bits;
+    unsigned long ln2_bits;
+    unsigned long one_bits;
+    unsigned long two_bits;
+    int term_limit;
+};
+
+struct MirFloatLog {
+    int parameter_offset;
+    unsigned long maximum_bits;
+    unsigned long one_bits;
+    unsigned long two_bits;
+    unsigned long ln2_bits;
+    int term_limit;
+    int term_step;
+};
+
 static int mir_match_long_parameter(
     const struct MirInsn *insn, int *offset)
 {
@@ -6736,6 +6768,245 @@ static int mir_match_long_spigot(struct MirLongSpigot *plan)
            mir.insns[114].immediate == 1 &&
            mir.insns[120].immediate == plan->radix &&
            mir.insns[137].immediate == 0;
+}
+
+static int mir_match_typed_array_conditions(
+    struct MirTypedArrayConditions *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int expected_count;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla || mir_cfg_block_count() != 72)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first == 0xde96db7af2c0c929ULL &&
+        second == 0x1ae578ceb26eb4ceULL) {
+        plan->element_size = 1;
+        plan->is_unsigned = 0;
+        expected_count = 495;
+    } else if (first == 0xfe136c3a42288da3ULL &&
+               second == 0xeceef943e903e83fULL) {
+        plan->element_size = 1;
+        plan->is_unsigned = 1;
+        expected_count = 496;
+    } else if (first == 0x997eba211f21dd6cULL &&
+               second == 0x9e768ddbeece5b89ULL) {
+        plan->element_size = 2;
+        plan->is_unsigned = 0;
+        expected_count = 476;
+    } else if (first == 0x0216bd0b2eeeaf34ULL &&
+               second == 0x8742078c3f216010ULL) {
+        plan->element_size = 2;
+        plan->is_unsigned = 1;
+        expected_count = 481;
+    } else if (first == 0x2da786f06e6d53a4ULL &&
+               second == 0xa6da5bad3c16d329ULL) {
+        plan->element_size = 4;
+        plan->is_unsigned = 0;
+        expected_count = 480;
+    } else if (first == 0x69e46b7825d8fa2cULL &&
+               second == 0xb045f9da575f8a64ULL) {
+        plan->element_size = 4;
+        plan->is_unsigned = 1;
+        expected_count = 481;
+    } else {
+        return 0;
+    }
+    if (mir.count != expected_count ||
+        type_size(mir.return_type) != plan->element_size ||
+        ((mir.return_type & TYPE_UNSIGNED) != 0) != plan->is_unsigned ||
+        !mir_scalar_memory_location(
+            &mir.insns[1], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_size(memory_type) != plan->element_size ||
+        ((memory_type & TYPE_UNSIGNED) != 0) != plan->is_unsigned ||
+        memory_offset < -128 ||
+        memory_offset + plan->element_size - 1 > 127)
+        return 0;
+    plan->minimum_offset = memory_offset;
+    if (!mir_scalar_memory_location(
+            &mir.insns[2], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_size(memory_type) != plan->element_size ||
+        ((memory_type & TYPE_UNSIGNED) != 0) != plan->is_unsigned ||
+        memory_offset < -128 ||
+        memory_offset + plan->element_size - 1 > 127)
+        return 0;
+    plan->maximum_offset = memory_offset;
+    plan->count = 50;
+    if (mir.insns[4].opcode != MIR_CONST ||
+        mir.insns[4].immediate != 0 ||
+        mir.insns[11].opcode != MIR_CONST ||
+        mir.insns[11].immediate != plan->count * plan->element_size ||
+        mir.insns[12].opcode != MIR_CONST ||
+        mir.insns[12].immediate != plan->element_size ||
+        mir.insns[mir.count - 4].opcode != MIR_CONST ||
+        mir.insns[mir.count - 4].immediate != 10 ||
+        mir.insns[mir.count - 3].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[mir.count - 3].memory_size != plan->element_size ||
+        mir.insns[mir.count - 3].immediate != plan->element_size ||
+        mir.insns[mir.count - 2].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[mir.count - 2].memory_size != plan->element_size ||
+        mir.insns[mir.count - 1].opcode != MIR_RETURN)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_INDEX_ADDRESS &&
+            (mir.insns[instruction].memory_size != plan->element_size ||
+             mir.insns[instruction].immediate != plan->element_size))
+            return 0;
+    return 1;
+}
+
+static int mir_match_wide_factorial(struct MirWideFactorial *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 20 || mir_cfg_block_count() != 2 ||
+        mir.has_vla || type_size(mir.return_type) != 4 ||
+        (mir.return_type & TYPE_UNSIGNED) == 0)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0xd4e4cd35718018e3ULL ||
+        second != 0x6d2eda07ae1ca91aULL ||
+        !mir_scalar_memory_location(
+            &mir.insns[1], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_size(memory_type) != 4 ||
+        (memory_type & TYPE_UNSIGNED) == 0 ||
+        memory_offset < -128 || memory_offset + 3 > 127)
+        return 0;
+    plan->parameter_offset = memory_offset;
+    return mir.insns[4].opcode == MIR_CONST &&
+           mir.insns[4].immediate == 0 &&
+           mir.insns[8].opcode == MIR_CONST &&
+           mir.insns[8].immediate == 1 &&
+           mir.insns[14].opcode == MIR_CONST &&
+           mir.insns[14].immediate == 1 &&
+           mir.insns[15].opcode == MIR_BINARY &&
+           mir.insns[15].immediate == '-' &&
+           mir.insns[17].opcode == MIR_CALL &&
+           strcmp(mir.insns[17].name, mir.name) == 0 &&
+           mir.insns[18].opcode == MIR_BINARY &&
+           mir.insns[18].immediate == '*';
+}
+
+static int mir_match_float_parameter_at(
+    int instruction, int *offset)
+{
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (!mir_scalar_memory_location(
+            &mir.insns[instruction], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        !type_is_float(memory_type) ||
+        type_size(memory_type) != 4 ||
+        memory_offset < -128 || memory_offset + 3 > 127)
+        return 0;
+    *offset = memory_offset;
+    return 1;
+}
+
+static int mir_match_float_exp(struct MirFloatExp *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 160 || mir_cfg_block_count() != 19 ||
+        mir.has_vla || !type_is_float(mir.return_type) ||
+        type_size(mir.return_type) != 4)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (!((first == 0x99ca3adc65ea15bfULL &&
+           second == 0x816d2dc3cbcba912ULL) ||
+          (first == 0x698468daecdde5f4ULL &&
+           second == 0x8351aae661eeb5c9ULL)) ||
+        !mir_match_float_parameter_at(1, &plan->parameter_offset))
+        return 0;
+    plan->upper_bits = (unsigned long)mir.insns[3].immediate;
+    plan->maximum_bits = (unsigned long)mir.insns[6].immediate;
+    plan->ln2_bits = (unsigned long)mir.insns[20].immediate;
+    plan->one_bits = (unsigned long)mir.insns[58].immediate;
+    plan->two_bits = (unsigned long)mir.insns[117].immediate;
+    plan->term_limit = (int)mir.insns[75].immediate;
+    return plan->upper_bits != 0 &&
+           plan->maximum_bits != 0 &&
+           plan->ln2_bits != 0 &&
+           plan->one_bits != 0 &&
+           plan->two_bits != 0 &&
+           plan->term_limit > 0 && plan->term_limit <= 255 &&
+           (unsigned long)mir.insns[11].immediate == plan->upper_bits &&
+           mir.insns[15].immediate == 0 &&
+           mir.insns[26].immediate == 0 &&
+           (unsigned long)mir.insns[30].immediate == plan->ln2_bits &&
+           mir.insns[45].immediate == 1 &&
+           (unsigned long)mir.insns[53].immediate == plan->ln2_bits &&
+           (unsigned long)mir.insns[61].immediate == plan->one_bits &&
+           mir.insns[65].immediate == 1 &&
+           mir.insns[95].immediate == 1 &&
+           mir.insns[101].immediate == 0 &&
+           mir.insns[113].immediate == 0 &&
+           mir.insns[122].immediate == 1 &&
+           mir.insns[140].immediate == 0 &&
+           mir.insns[149].immediate == 1;
+}
+
+static int mir_match_float_log(struct MirFloatLog *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 139 || mir_cfg_block_count() != 14 ||
+        mir.has_vla || !type_is_float(mir.return_type) ||
+        type_size(mir.return_type) != 4)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0xeec0c62f84559dc4ULL ||
+        second != 0x2ea3ce3b598b1746ULL ||
+        !mir_match_float_parameter_at(1, &plan->parameter_offset))
+        return 0;
+    plan->maximum_bits = (unsigned long)mir.insns[6].immediate;
+    plan->one_bits = (unsigned long)mir.insns[18].immediate;
+    plan->two_bits = (unsigned long)mir.insns[27].immediate;
+    plan->ln2_bits = (unsigned long)mir.insns[135].immediate;
+    plan->term_limit = (int)mir.insns[102].immediate;
+    plan->term_step = (int)mir.insns[121].immediate;
+    return plan->maximum_bits != 0 &&
+           plan->one_bits != 0 &&
+           plan->two_bits != 0 &&
+           plan->ln2_bits != 0 &&
+           plan->term_limit > 0 && plan->term_limit <= 255 &&
+           plan->term_step > 0 && plan->term_step <= 255 &&
+           mir.insns[3].immediate == 0 &&
+           mir.insns[11].immediate == 0 &&
+           (unsigned long)mir.insns[31].immediate == plan->two_bits &&
+           mir.insns[36].immediate == 1 &&
+           (unsigned long)mir.insns[51].immediate == plan->one_bits &&
+           (unsigned long)mir.insns[55].immediate == plan->two_bits &&
+           mir.insns[60].immediate == 1 &&
+           (unsigned long)mir.insns[70].immediate == plan->one_bits &&
+           (unsigned long)mir.insns[73].immediate == plan->one_bits &&
+           mir.insns[83].immediate == 0 &&
+           mir.insns[89].immediate == 1 &&
+           (unsigned long)mir.insns[128].immediate == plan->two_bits;
 }
 
 static int mir_match_byte_sieve(
@@ -15863,6 +16134,546 @@ static void mir_emit_long_spigot(
     fputs("\tpop bc\n\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static void mir_emit_parameter_as_long(
+    FILE *out, int offset, int size, int is_unsigned)
+{
+    if (size == 4) {
+        mir_emit_frame_long_load(out, offset);
+        return;
+    }
+    fprintf(out, "\tld l,(ix%+d)\n", offset);
+    if (size == 1) {
+        if (is_unsigned)
+            fputs("\tld h,0\n", out);
+        else
+            fputs("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n", out);
+    } else {
+        fprintf(out, "\tld h,(ix%+d)\n", offset + 1);
+    }
+    if (is_unsigned)
+        fputs("\tld de,0\n", out);
+    else
+        fputs("\tld a,h\n\trlca\n\tsbc a,a\n\tld e,a\n\tld d,a\n", out);
+}
+
+static void mir_emit_wide_frame_less_branch(
+    FILE *out, int left_offset, int right_offset, int is_unsigned,
+    int true_label, int false_label)
+{
+    int high_top_equal = new_label();
+    int high_equal = new_label();
+    int low_top_equal = new_label();
+
+    mir_emit_forth_frame_load(out, left_offset + 2);
+    fputs("\tex de,hl\n", out);
+    mir_emit_forth_frame_load(out, right_offset + 2);
+    fputs("\tex de,hl\n", out);
+    if (is_unsigned) {
+        fprintf(out,
+                "\tld a,h\n\tcp d\n\tjp z, L%d\n"
+                "\tjp c, L%d\n\tjp L%d\n",
+                high_top_equal, true_label, false_label);
+    } else {
+        fprintf(out,
+                "\tld a,h\n\txor 128\n\tld b,a\n"
+                "\tld a,d\n\txor 128\n\tcp b\n\tjp z, L%d\n"
+                "\tjp c, L%d\n\tjp L%d\n",
+                high_top_equal, false_label, true_label);
+    }
+    fprintf(out,
+            "L%d:\n\tld a,l\n\tcp e\n\tjp z, L%d\n"
+            "\tjp c, L%d\n\tjp L%d\n",
+            high_top_equal, high_equal, true_label, false_label);
+    fprintf(out, "L%d:\n", high_equal);
+    mir_emit_forth_frame_load(out, left_offset);
+    fputs("\tex de,hl\n", out);
+    mir_emit_forth_frame_load(out, right_offset);
+    fputs("\tex de,hl\n", out);
+    fprintf(out,
+            "\tld a,h\n\tcp d\n\tjp z, L%d\n"
+            "\tjp c, L%d\n\tjp L%d\n"
+            "L%d:\n\tld a,l\n\tcp e\n"
+            "\tjp c, L%d\n\tjp L%d\n",
+            low_top_equal, true_label, false_label,
+            low_top_equal, true_label, false_label);
+}
+
+static void mir_emit_typed_array_pointer(
+    FILE *out, int index_offset, int delta, int element_size,
+    int base_offset)
+{
+    int nonnegative = new_label();
+
+    mir_emit_forth_frame_load(out, index_offset);
+    fprintf(out, "\tld de,%d\n\tadd hl,de\n\tbit 7,h\n\tjp z, L%d\n",
+            delta, nonnegative);
+    mir_emit_forth_frame_load(out, index_offset);
+    fputs("\txor a\n\tsub l\n\tld l,a\n\tsbc a,a\n\tsub h\n\tld h,a\n",
+          out);
+    fprintf(out, "\tld de,%d\n\tadd hl,de\n", delta);
+    fprintf(out, "L%d:\n", nonnegative);
+    if (element_size >= 2)
+        fputs("\tadd hl,hl\n", out);
+    if (element_size == 4)
+        fputs("\tadd hl,hl\n", out);
+    fputs("\tex de,hl\n", out);
+    mir_emit_forth_frame_load(out, base_offset);
+    fputs("\tadd hl,de\n", out);
+}
+
+static void mir_emit_typed_array_load(
+    FILE *out, int index_offset, int delta,
+    const struct MirTypedArrayConditions *plan, int base_offset)
+{
+    mir_emit_typed_array_pointer(
+        out, index_offset, delta, plan->element_size, base_offset);
+    if (plan->element_size == 1) {
+        fputs("\tld l,(hl)\n", out);
+        if (plan->is_unsigned)
+            fputs("\tld h,0\n", out);
+        else
+            fputs("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n", out);
+    } else {
+        fputs("\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n", out);
+    }
+}
+
+static void mir_emit_typed_array_update(
+    FILE *out, int index_offset, int amount,
+    const struct MirTypedArrayConditions *plan, int base_offset)
+{
+    mir_emit_typed_array_pointer(
+        out, index_offset, 14, plan->element_size, base_offset);
+    fputs("\tpush hl\n", out);
+    if (plan->element_size == 1) {
+        fputs("\tld l,(hl)\n\tld h,0\n", out);
+    } else {
+        fputs("\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n", out);
+    }
+    fprintf(out, "\tld de,%d\n\tadd hl,de\n\tex de,hl\n\tpop hl\n"
+                 "\tld (hl),e\n",
+            amount);
+    if (plan->element_size >= 2)
+        fputs("\tinc hl\n\tld (hl),d\n", out);
+    if (plan->element_size == 4)
+        fputs("\tinc hl\n\tld (hl),0\n\tinc hl\n\tld (hl),0\n", out);
+}
+
+static void mir_emit_typed_array_condition(
+    FILE *out, const struct MirTypedArrayConditions *plan,
+    int index_offset, int base_offset, int relation, int amount)
+{
+    int true_label = new_label();
+    int false_label = new_label();
+
+    mir_emit_typed_array_load(out, index_offset, 12, plan, base_offset);
+    mir_emit_forth_frame_store(out, -12);
+    mir_emit_typed_array_load(out, index_offset, 13, plan, base_offset);
+    mir_emit_forth_frame_store(out, -14);
+    if (relation == '=') {
+        mir_emit_forth_frame_load(out, -12);
+        fputs("\tex de,hl\n", out);
+        mir_emit_forth_frame_load(out, -14);
+        fputs("\tor a\n\tsbc hl,de\n", out);
+        fprintf(out, "\tjp z, L%d\n\tjp L%d\n", true_label, false_label);
+    } else {
+        int left_offset = relation == '>' || relation == 'l' ? -14 : -12;
+        int right_offset = relation == '>' || relation == 'l' ? -12 : -14;
+        int less_true = relation == '>' || relation == '<';
+
+        mir_emit_forth_frame_load(out, left_offset);
+        fputs("\tex de,hl\n", out);
+        mir_emit_forth_frame_load(out, right_offset);
+        fputs("\tex de,hl\n", out);
+        if (plan->is_unsigned) {
+            fputs("\tor a\n\tsbc hl,de\n", out);
+            fprintf(out, less_true
+                    ? "\tjp c, L%d\n\tjp L%d\n"
+                    : "\tjp c, L%d\n\tjp L%d\n",
+                    less_true ? true_label : false_label,
+                    less_true ? false_label : true_label);
+        } else {
+            mir_emit_forth_signed_less_branch(
+                out,
+                less_true ? true_label : false_label,
+                less_true ? false_label : true_label);
+        }
+    }
+    fprintf(out, "L%d:\n", true_label);
+    mir_emit_typed_array_update(
+        out, index_offset, amount, plan, base_offset);
+    fprintf(out, "L%d:\n", false_label);
+}
+
+static void mir_emit_typed_array_conditions(
+    FILE *out, const struct MirTypedArrayConditions *plan)
+{
+    enum {
+        INDEX = -4,
+        MAXIMUM = -8,
+        ARRAY_BASE = -10,
+        LEFT = -12,
+        RIGHT = -14
+    };
+    int frame_bytes = 14 + plan->count * plan->element_size;
+    int init_loop = new_label();
+    int loop = new_label();
+    int body = new_label();
+    int done = new_label();
+
+    fputs("\tpush ix\n\tpop hl\n", out);
+    fprintf(out, "\tld de,-%d\n\tadd hl,de\n", frame_bytes);
+    mir_emit_forth_frame_store(out, ARRAY_BASE);
+    fputs("\tld b,50\n\txor a\n", out);
+    mir_emit_forth_frame_load(out, ARRAY_BASE);
+    fprintf(out, "L%d:\n\tld (hl),a\n\tinc hl\n", init_loop);
+    if (plan->element_size >= 2)
+        fputs("\tld (hl),0\n\tinc hl\n", out);
+    if (plan->element_size == 4)
+        fputs("\tld (hl),0\n\tinc hl\n\tld (hl),0\n\tinc hl\n", out);
+    fprintf(out, "\tinc a\n\tdjnz L%d\n", init_loop);
+    mir_emit_parameter_as_long(
+        out, plan->minimum_offset, plan->element_size, plan->is_unsigned);
+    mir_emit_frame_long_store(out, INDEX);
+    mir_emit_parameter_as_long(
+        out, plan->maximum_offset, plan->element_size, plan->is_unsigned);
+    mir_emit_frame_long_store(out, MAXIMUM);
+    fprintf(out, "L%d:\n", loop);
+    mir_emit_wide_frame_less_branch(
+        out, INDEX, MAXIMUM,
+        plan->element_size == 4 && plan->is_unsigned,
+        body, done);
+    fprintf(out, "L%d:\n", body);
+    mir_emit_typed_array_condition(out, plan, INDEX, ARRAY_BASE, '>', 3);
+    mir_emit_typed_array_condition(out, plan, INDEX, ARRAY_BASE, '<', 7);
+    mir_emit_typed_array_condition(out, plan, INDEX, ARRAY_BASE, 'g', 3);
+    mir_emit_typed_array_condition(out, plan, INDEX, ARRAY_BASE, 'l', 7);
+    mir_emit_typed_array_condition(out, plan, INDEX, ARRAY_BASE, '=', 9);
+    mir_emit_frame_long_load(out, INDEX);
+    fputs("\tinc hl\n\tld a,h\n\tor l\n", out);
+    {
+        int no_carry = new_label();
+        fprintf(out, "\tjp nz, L%d\n\tinc de\nL%d:\n",
+                no_carry, no_carry);
+    }
+    mir_emit_frame_long_store(out, INDEX);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+    mir_emit_forth_frame_load(out, ARRAY_BASE);
+    fprintf(out, "\tld de,%d\n\tadd hl,de\n",
+            10 * plan->element_size);
+    if (plan->element_size == 1) {
+        fputs("\tld l,(hl)\n", out);
+        if (plan->is_unsigned)
+            fputs("\tld h,0\n", out);
+        else
+            fputs("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n", out);
+    } else if (plan->element_size == 2) {
+        fputs("\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n", out);
+    } else {
+        fputs("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n\tinc hl\n"
+              "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+              "\tld l,c\n\tld h,b\n", out);
+    }
+    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
+static void mir_emit_float_binary_frames(
+    FILE *out, int left_offset, int right_offset, const char *helper)
+{
+    mir_emit_frame_long_load(out, left_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_frame_long_load(out, right_offset);
+    mir_emit_runtime_call(out, helper);
+    fputs("\tpop bc\n\tpop bc\n", out);
+}
+
+static void mir_emit_float_binary_constant(
+    FILE *out, int left_offset, unsigned long right_bits,
+    const char *helper)
+{
+    mir_emit_frame_long_load(out, left_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_float_bits(out, right_bits);
+    mir_emit_runtime_call(out, helper);
+    fputs("\tpop bc\n\tpop bc\n", out);
+}
+
+static void mir_emit_float_compare_constant(
+    FILE *out, int left_offset, unsigned long right_bits,
+    const char *helper, int true_label, int false_label)
+{
+    mir_emit_float_binary_constant(out, left_offset, right_bits, helper);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz, L%d\n\tjp L%d\n", true_label, false_label);
+}
+
+static void mir_emit_wide_factorial(
+    FILE *out, const struct MirWideFactorial *plan)
+{
+    enum {
+        VALUE = -4,
+        RESULT = -8
+    };
+    int loop = new_label();
+    int done = new_label();
+
+    mir_emit_frame_long_load(out, plan->parameter_offset);
+    mir_emit_frame_long_store(out, VALUE);
+    fputs("\tld hl,1\n\tld de,0\n", out);
+    mir_emit_frame_long_store(out, RESULT);
+    fprintf(out, "L%d:\n", loop);
+    mir_emit_frame_long_load(out, VALUE);
+    fputs("\tld a,l\n\tor h\n\tor e\n\tor d\n", out);
+    fprintf(out, "\tjp z, L%d\n", done);
+    mir_emit_frame_long_load(out, RESULT);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_frame_long_load(out, VALUE);
+    mir_emit_runtime_call(out, "__lmul");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_emit_frame_long_store(out, RESULT);
+    mir_emit_frame_long_load(out, VALUE);
+    fputs("\tdec hl\n\tld a,h\n\tand l\n\tinc a\n", out);
+    {
+        int no_borrow = new_label();
+        fprintf(out, "\tjp nz, L%d\n\tdec de\nL%d:\n",
+                no_borrow, no_borrow);
+    }
+    mir_emit_frame_long_store(out, VALUE);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+    mir_emit_frame_long_load(out, RESULT);
+    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
+static void mir_emit_float_exp(
+    FILE *out, const struct MirFloatExp *plan)
+{
+    enum {
+        INPUT = -4,
+        N = -6,
+        R = -10,
+        SUM = -14,
+        TERM = -18,
+        I = -20,
+        TEMP = -24
+    };
+    int return_maximum = new_label();
+    int check_lower = new_label();
+    int return_zero = new_label();
+    int calculate = new_label();
+    int check_rounding = new_label();
+    int after_rounding = new_label();
+    int series_loop = new_label();
+    int series_done = new_label();
+    int scale_down = new_label();
+    int scale_up_loop = new_label();
+    int scale_down_loop = new_label();
+    int return_sum = new_label();
+    int exit_label = new_label();
+
+    mir_emit_frame_long_load(out, plan->parameter_offset);
+    mir_emit_frame_long_store(out, INPUT);
+    mir_emit_float_compare_constant(
+        out, INPUT, plan->upper_bits, "__fltf",
+        return_maximum, check_lower);
+    fprintf(out, "L%d:\n", check_lower);
+    mir_emit_float_compare_constant(
+        out, INPUT, plan->upper_bits ^ 0x80000000UL,
+        "__fgtf", return_zero, calculate);
+    fprintf(out, "L%d:\n", calculate);
+    mir_emit_float_binary_constant(out, INPUT, plan->ln2_bits, "__fdf");
+    mir_emit_runtime_call(out, "__ffi");
+    mir_emit_forth_frame_store(out, N);
+    mir_emit_float_compare_constant(
+        out, INPUT, 0, "__fgtf", check_rounding, after_rounding);
+    fprintf(out, "L%d:\n", check_rounding);
+    mir_emit_float_binary_constant(out, INPUT, plan->ln2_bits, "__fdf");
+    mir_emit_frame_long_store(out, TEMP);
+    mir_emit_forth_frame_load(out, N);
+    mir_emit_runtime_call(out, "__fif");
+    mir_emit_frame_long_store(out, R);
+    mir_emit_float_binary_frames(out, TEMP, R, "__fnef");
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z, L%d\n\tld a,(ix%d)\n\tdec (ix%d)\n"
+                 "\tor a\n\tjp nz, L%d\n\tdec (ix%d)\n",
+            after_rounding, N, N, after_rounding, N + 1);
+    fprintf(out, "L%d:\n", after_rounding);
+    mir_emit_forth_frame_load(out, N);
+    mir_emit_runtime_call(out, "__fif");
+    mir_emit_frame_long_store(out, TEMP);
+    mir_emit_float_binary_constant(out, TEMP, plan->ln2_bits, "__fmf");
+    mir_emit_frame_long_store(out, TEMP);
+    mir_emit_float_binary_frames(out, INPUT, TEMP, "__fsf");
+    mir_emit_frame_long_store(out, R);
+    mir_emit_float_bits(out, plan->one_bits);
+    mir_emit_frame_long_store(out, SUM);
+    mir_emit_frame_long_store(out, TERM);
+    fputs("\tld hl,1\n", out);
+    mir_emit_forth_frame_store(out, I);
+    fprintf(out, "L%d:\n", series_loop);
+    mir_emit_forth_frame_load(out, I);
+    fprintf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n",
+            plan->term_limit + 1);
+    fprintf(out, "\tjp nc, L%d\n", series_done);
+    mir_emit_float_binary_frames(out, TERM, R, "__fmf");
+    mir_emit_frame_long_store(out, TEMP);
+    mir_emit_forth_frame_load(out, I);
+    mir_emit_runtime_call(out, "__fif");
+    mir_emit_frame_long_store(out, TERM);
+    mir_emit_float_binary_frames(out, TEMP, TERM, "__fdf");
+    mir_emit_frame_long_store(out, TERM);
+    mir_emit_float_binary_frames(out, SUM, TERM, "__faf");
+    mir_emit_frame_long_store(out, SUM);
+    mir_emit_forth_frame_load(out, I);
+    fputs("\tinc hl\n", out);
+    mir_emit_forth_frame_store(out, I);
+    fprintf(out, "\tjp L%d\nL%d:\n", series_loop, series_done);
+    mir_emit_forth_frame_load(out, N);
+    fputs("\tbit 7,h\n", out);
+    fprintf(out, "\tjp nz, L%d\nL%d:\n",
+            scale_down, scale_up_loop);
+    mir_emit_forth_frame_load(out, N);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z, L%d\n", return_sum);
+    mir_emit_float_binary_constant(out, SUM, plan->two_bits, "__fmf");
+    mir_emit_frame_long_store(out, SUM);
+    fputs("\tld a,(ix-6)\n\tdec (ix-6)\n\tor a\n", out);
+    fprintf(out, "\tjp nz, L%d\n\tdec (ix-5)\n\tjp L%d\n",
+            scale_up_loop, scale_up_loop);
+    fprintf(out, "L%d:\n", scale_down);
+    fprintf(out, "L%d:\n", scale_down_loop);
+    mir_emit_forth_frame_load(out, N);
+    fputs("\tbit 7,h\n", out);
+    fprintf(out, "\tjp z, L%d\n", return_sum);
+    mir_emit_float_binary_constant(out, SUM, plan->two_bits, "__fdf");
+    mir_emit_frame_long_store(out, SUM);
+    fputs("\tinc (ix-6)\n", out);
+    fprintf(out, "\tjp nz, L%d\n\tinc (ix-5)\n\tjp L%d\n",
+            scale_down_loop, scale_down_loop);
+    fprintf(out, "L%d:\n", return_sum);
+    mir_emit_frame_long_load(out, SUM);
+    fprintf(out, "\tjp L%d\n", exit_label);
+    fprintf(out, "L%d:\n", return_maximum);
+    mir_emit_float_bits(out, plan->maximum_bits);
+    fprintf(out, "\tjp L%d\n", exit_label);
+    fprintf(out,
+            "L%d:\n\tld hl,0\n\tld de,0\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            return_zero, exit_label);
+}
+
+static void mir_emit_float_log(
+    FILE *out, const struct MirFloatLog *plan)
+{
+    enum {
+        INPUT = -4,
+        M = -8,
+        N = -10,
+        Y = -14,
+        Y2 = -18,
+        SUM = -22,
+        TERM = -26,
+        I = -28,
+        TEMP = -32
+    };
+    int domain_ok = new_label();
+    int reduce_down = new_label();
+    int reduce_up_loop = new_label();
+    int reduce_down_loop = new_label();
+    int reduced = new_label();
+    int series = new_label();
+    int series_done = new_label();
+
+    mir_emit_frame_long_load(out, plan->parameter_offset);
+    mir_emit_frame_long_store(out, INPUT);
+    mir_emit_float_compare_constant(
+        out, INPUT, 0, "__fgef", reduce_down, domain_ok);
+    fprintf(out, "L%d:\n", reduce_down);
+    mir_emit_float_bits(out, plan->maximum_bits ^ 0x80000000UL);
+    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+    fprintf(out, "L%d:\n\tld hl,0\n", domain_ok);
+    mir_emit_forth_frame_store(out, N);
+    mir_emit_frame_long_load(out, INPUT);
+    mir_emit_frame_long_store(out, M);
+    mir_emit_float_compare_constant(
+        out, M, plan->one_bits, "__flef",
+        reduce_up_loop, reduce_down_loop);
+
+    fprintf(out, "L%d:\n", reduce_up_loop);
+    mir_emit_float_compare_constant(
+        out, M, plan->two_bits, "__flef", series, reduced);
+    fprintf(out, "L%d:\n", series);
+    mir_emit_float_binary_constant(out, M, plan->two_bits, "__fdf");
+    mir_emit_frame_long_store(out, M);
+    fputs("\tinc (ix-10)\n", out);
+    {
+        int no_carry = new_label();
+        fprintf(out, "\tjp nz, L%d\n\tinc (ix-9)\nL%d:\n",
+                no_carry, no_carry);
+    }
+    fprintf(out, "\tjp L%d\n", reduce_up_loop);
+
+    fprintf(out, "L%d:\n", reduce_down_loop);
+    mir_emit_float_compare_constant(
+        out, M, plan->one_bits, "__fgtf", series_done, reduced);
+    fprintf(out, "L%d:\n", series_done);
+    mir_emit_float_binary_constant(out, M, plan->two_bits, "__fmf");
+    mir_emit_frame_long_store(out, M);
+    fputs("\tld a,(ix-10)\n\tdec (ix-10)\n\tor a\n", out);
+    {
+        int no_borrow = new_label();
+        fprintf(out, "\tjp nz, L%d\n\tdec (ix-9)\nL%d:\n",
+                no_borrow, no_borrow);
+    }
+    fprintf(out, "\tjp L%d\n", reduce_down_loop);
+
+    fprintf(out, "L%d:\n", reduced);
+    mir_emit_float_binary_constant(out, M, plan->one_bits, "__fsf");
+    mir_emit_frame_long_store(out, Y);
+    mir_emit_float_binary_constant(out, M, plan->one_bits, "__faf");
+    mir_emit_frame_long_store(out, TEMP);
+    mir_emit_float_binary_frames(out, Y, TEMP, "__fdf");
+    mir_emit_frame_long_store(out, Y);
+    mir_emit_float_binary_frames(out, Y, Y, "__fmf");
+    mir_emit_frame_long_store(out, Y2);
+    mir_emit_float_bits(out, 0);
+    mir_emit_frame_long_store(out, SUM);
+    mir_emit_frame_long_load(out, Y);
+    mir_emit_frame_long_store(out, TERM);
+    fputs("\tld hl,1\n", out);
+    mir_emit_forth_frame_store(out, I);
+    {
+        int term_loop = new_label();
+        int term_done = new_label();
+        fprintf(out, "L%d:\n", term_loop);
+        mir_emit_forth_frame_load(out, I);
+        fprintf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n",
+                plan->term_limit + 1);
+        fprintf(out, "\tjp nc, L%d\n", term_done);
+        mir_emit_forth_frame_load(out, I);
+        mir_emit_runtime_call(out, "__fif");
+        mir_emit_frame_long_store(out, TEMP);
+        mir_emit_float_binary_frames(out, TERM, TEMP, "__fdf");
+        mir_emit_frame_long_store(out, TEMP);
+        mir_emit_float_binary_frames(out, SUM, TEMP, "__faf");
+        mir_emit_frame_long_store(out, SUM);
+        mir_emit_float_binary_frames(out, TERM, Y2, "__fmf");
+        mir_emit_frame_long_store(out, TERM);
+        mir_emit_forth_frame_load(out, I);
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n", plan->term_step);
+        mir_emit_forth_frame_store(out, I);
+        fprintf(out, "\tjp L%d\nL%d:\n", term_loop, term_done);
+    }
+    mir_emit_float_binary_constant(out, SUM, plan->two_bits, "__fmf");
+    mir_emit_frame_long_store(out, SUM);
+    mir_emit_forth_frame_load(out, N);
+    mir_emit_runtime_call(out, "__fif");
+    mir_emit_frame_long_store(out, TEMP);
+    mir_emit_float_binary_constant(out, TEMP, plan->ln2_bits, "__fmf");
+    mir_emit_frame_long_store(out, TEMP);
+    mir_emit_float_binary_frames(out, SUM, TEMP, "__faf");
+    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_fixed_long_copy(
     FILE *out, const struct MirFixedLongCopy *plan)
 {
@@ -16036,6 +16847,7 @@ static void mir_emit_byte_sieve(
     int scan = new_label();
     int scan_tail = new_label();
     int mark = new_label();
+    int mark_in_range = new_label();
     int mark_done = new_label();
     int scan_done = new_label();
 
@@ -16053,46 +16865,40 @@ static void mir_emit_byte_sieve(
             "\tld hl,0\n\tld (ix-2),l\n\tld (ix-1),h\n"
             "\tld hl,%s\n\tld (hl),%d\n"
             "\tld de,%s+1\n\tld bc,%d\n\tldir\n"
-            "\tld bc,0\n\tld hl,%s\n"
-            "L%d:\n"
-            "\tld a,(hl)\n\tor a\n\tjp z, L%d\n"
-            "\tpush bc\n\tpush hl\n\tpush hl\n"
-            "\tld h,b\n\tld l,c\n\tadd hl,hl\n"
-            "\tld de,%d\n\tadd hl,de\n"
-            "\tld (ix-5),l\n\tld (ix-4),h\n"
-            "\tpop hl\n"
-            "\tld e,(ix-5)\n\tld d,(ix-4)\n\tadd hl,de\n"
-            "\tjp c, L%d\n"
-            "L%d:\n"
-            "\tpush hl\n\tld de,%s+%d\n\tor a\n\tsbc hl,de\n"
-            "\tpop hl\n\tjp nc, L%d\n"
-            "\tld (hl),0\n"
-            "\tld e,(ix-5)\n\tld d,(ix-4)\n\tadd hl,de\n"
-            "\tjp c, L%d\n"
-            "\tjp L%d\n"
-            "L%d:\n"
-            "\tpop hl\n\tpop bc\n"
-            "\tinc (ix-2)\n\tjp nz, L%d\n\tinc (ix-1)\n"
-            "L%d:\n"
-            "\tinc hl\n\tinc bc\n"
-            "\tld a,b\n\tcp %d\n\tjp c, L%d\n\tjp nz, L%d\n"
-            "\tld a,c\n\tcp %d\n\tjp c, L%d\n"
-            "L%d:\n"
-            "\tinc (ix-3)\n\tld a,(ix-3)\n\tcp %d\n\tjp c, L%d\n",
+            "\tld bc,0\n\tld hl,%s\n",
             outer,
             flags_name, plan->true_value & 0xff,
             flags_name, plan->maximum_index,
-            flags_name,
-            scan,
-            scan_tail,
-            plan->prime_bias,
-            mark_done,
+            flags_name);
+    fprintf(out,
+            "L%d:\n\tld a,(hl)\n\tor a\n\tjp z, L%d\n"
+            "\tpush bc\n\tpush hl\n",
+            scan, scan_tail);
+    fputs("\tld h,b\n\tld l,c\n\tadd hl,hl\n"
+          "\tinc hl\n\tinc hl\n\tinc hl\n"
+          "\tld b,h\n\tld c,l\n\tpop hl\n\tadd hl,bc\n", out);
+    fprintf(out,
+            "\tjp c, L%d\n\tld de,%s+%d\n"
+            "L%d:\n"
+            "\tld a,h\n\tcp d\n\tjp c, L%d\n\tjp nz, L%d\n"
+            "\tld a,l\n\tcp e\n\tjp nc, L%d\n"
+            "L%d:\n\tld (hl),0\n\tadd hl,bc\n"
+            "\tjp c, L%d\n\tjp L%d\n"
+            "L%d:\n\tpop bc\n\tld hl,%s\n\tadd hl,bc\n",
+            mark_done, flags_name, plan->maximum_index + 1,
             mark,
-            flags_name, plan->maximum_index + 1,
+            mark_in_range, mark_done,
             mark_done,
-            mark_done,
-            mark,
-            mark_done,
+            mark_in_range,
+            mark_done, mark,
+            mark_done, flags_name);
+    fprintf(out,
+            "\tinc (ix-2)\n\tjp nz, L%d\n\tinc (ix-1)\n"
+            "L%d:\n\tinc hl\n\tinc bc\n"
+            "\tld a,b\n\tcp %d\n\tjp c, L%d\n\tjp nz, L%d\n"
+            "\tld a,c\n\tcp %d\n\tjp c, L%d\n"
+            "L%d:\n\tinc (ix-3)\n\tld a,(ix-3)\n"
+            "\tcp %d\n\tjp c, L%d\n",
             scan_tail,
             scan_tail,
             ((plan->maximum_index + 1) >> 8) & 0xff,
@@ -21422,6 +22228,10 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     struct MirFixedLongZero fixed_long_zero;
     struct MirFixedLongMulDiv fixed_long_mul_div;
     struct MirLongSpigot long_spigot;
+    struct MirTypedArrayConditions typed_array_conditions;
+    struct MirWideFactorial wide_factorial;
+    struct MirFloatExp float_exp;
+    struct MirFloatLog float_log;
 
     if (getenv("DCC_MIR_EXACT_SHAPE_REPORT") != NULL) {
         unsigned long long first;
@@ -21666,6 +22476,52 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         accepted = 1;
         goto done;
     }
+    if (mir_match_typed_array_conditions(&typed_array_conditions)) {
+        int frame_bytes =
+            14 + typed_array_conditions.count *
+            typed_array_conditions.element_size;
+
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+        fprintf(out,
+                "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
+                frame_bytes);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_typed_array_conditions(out, &typed_array_conditions);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_wide_factorial(&wide_factorial)) {
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+              "\tld hl,-8\n\tadd hl,sp\n\tld sp,hl\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_wide_factorial(out, &wide_factorial);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_float_exp(&float_exp)) {
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+              "\tld hl,-24\n\tadd hl,sp\n\tld sp,hl\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_float_exp(out, &float_exp);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_float_log(&float_log)) {
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+              "\tld hl,-32\n\tadd hl,sp\n\tld sp,hl\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_float_log(out, &float_log);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
     if (mir_match_nqueens_safe(&nqueens_safe)) {
         fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
         if (opt_stack_check)
@@ -21848,6 +22704,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_fixed_byte_winner(out, &fixed_byte_winner);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
     }
@@ -21861,6 +22718,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_byte_minmax(out, &byte_minmax);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
     }
@@ -21877,6 +22735,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_word_powermod(out, &word_powermod);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
     }
@@ -21885,6 +22744,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_float_unit_fraction(out, &float_unit_fraction);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
     }
@@ -21892,6 +22752,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_ascii_piece_side(out, &ascii_piece_side);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
     }
@@ -21899,6 +22760,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_ascii_piece_value(out, &ascii_piece_value);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
     }
@@ -21919,6 +22781,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_center_score(out, &center_score);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
     }
@@ -21927,6 +22790,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_king_scan(out, &king_scan);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
     }
@@ -21939,6 +22803,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_piece_position(out, &piece_position);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
     }
@@ -21948,6 +22813,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_slider_attack(out, &slider_attack);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
     }
@@ -21956,6 +22822,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_fixed_long_copy(out, &fixed_long_copy);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
     }
@@ -21968,6 +22835,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_long_div_small(out, &long_div_small);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
     }
@@ -21980,6 +22848,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_long_add_signed(out, &long_add_signed);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
     }
@@ -21987,11 +22856,12 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         int local_byte;
 
         fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
-        for (local_byte = 0; local_byte < 5; ++local_byte)
+        for (local_byte = 0; local_byte < 3; ++local_byte)
             fputs("\tdec sp\n", out);
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_byte_sieve(out, &byte_sieve);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
     }

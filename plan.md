@@ -31,8 +31,8 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **2066/2066 (100.00%)**
-- Current stack-check coverage: **2182/2182 (100.00%)**
+- Current ordinary coverage: **2067/2067 (100.00%)**
+- Current stack-check coverage: **2183/2183 (100.00%)**
 - T503 recovers the dense unsigned-byte switch that MIR lowering had expanded
   into 153 equality branches and admits `a1.emulate`: **+1/+1**, zero
   removals.
@@ -64,14 +64,14 @@ transactional fallback remains in place throughout Phase 1.
   T511 attacks the whole-corpus concentration leader: byte-demand and wide
   induction identities make `tbig` 92.5% faster peep, reduce total positive
   pre-MIR peep debt by 76.9%, and materially improve 13 additional apps.
-  T512-T527 recover word dispatch, narrow-origin wide arithmetic, byte
+  T512-T528 recover word dispatch, narrow-origin wide arithmetic, byte
   verification, word scans, large-CFG address/induction identities, and
   interpreter inline-stack/typed-memory helpers, byte minimax, and modular
   arithmetic, chess, fixed-array, fixed-point matrix, and the remaining
-  interpreter and long-tail loop kernels. The initial VLA, file, fixed-long,
-  and spigot tail now also beats pre-MIR, aggregate peep performance is
-  1.359B cycles ahead of pre-MIR, and positive per-app peep debt is 24.1M
-  (-99.9% cumulatively). Continue with the freshly re-ranked residual cohort,
+  interpreter and long-tail loop kernels. Sieve and the typed condition
+  families now also beat pre-MIR, aggregate peep performance is 1.378B
+  cycles ahead of pre-MIR, and positive per-app peep debt is 16.3M
+  (-99.9% cumulatively). Continue with systemic emitter/allocation recovery,
   then prove MIR-required mode
   over the extended corpus before removing capture/replay and legacy codegen
   in separate cleanup commits.
@@ -756,17 +756,32 @@ and three checked bodies, all MIR, so coverage is now 2066/2066 ordinary and
 cumulatively), aggregate peep is 1.359B below pre-MIR, and both censuses/full
 extended remain clean.
 
+T528 normalizes exact-stream ownership across every older exact matcher, then
+recovers Sieve's byte mark loop, six signed/unsigned typed condition kernels,
+and Ttrig's uint32 factorial plus float exp/log kernels. Review found and fixed
+the negative `ab(i + C)` arm (`-i + C`, not `-(i + C)`); full-width edge and
+float-bit harnesses are output-identical to forced legacy. Sieve improves
+41.3% peep / 41.7% nopeep, `t` improves 81.2% / 82.3%, and Ttrig improves
+5.9% / 6.9%. Sieve and `t` beat pre-MIR in both modes; Ttrig's remaining gap
+is 1.80M / 1.70M cycles. Exact ownership exposes `catalan.add_signed` in both
+censuses with no removals, producing 2067/2067 ordinary and 2183/2183
+stack-check coverage. Positive peep debt is 16.3M cycles, aggregate peep is
+1.378B below pre-MIR, and both censuses/full extended remain clean.
+
 Next:
 
-1. Recover the next ten debt leaders: `tstring`, `ttrig`, `sieve`, `t`,
-   `a1`, `primes`, `tptrcnd`, `tarray6`, `tptrrhs`, and `tmodp2`.
-2. Continue through the re-ranked residual tail until
-   every positive per-app gap is recovered or architecturally documented;
-   aggregate parity alone is already achieved.
-3. Keep one reusable concept per commit, zero regressions in both modes, and
+1. Run parallel, isolated worktree lanes for spill/wide-result chaining,
+   loop/address planning, dccpeep canonical recovery, and performance/cost
+   measurement; the main session remains the sole integrator.
+2. Target the proven systemic causes: eager IX-slot materialization, lost
+   DE:HL helper chaining, missing loop/address registerization, generic call
+   staging, and boolean materialization. Exact kernels are containment only.
+3. Re-rank after every integrated systemic batch until every positive per-app
+   gap is recovered; aggregate parity alone is already achieved.
+4. Keep one reusable concept per commit, zero regressions in both modes, and
    run one full `runall.ps1 -Mode full -Extended` immediately before each
    publication.
-4. Remove capture/replay only after aggregate parity and MIR-required
+5. Remove capture/replay only after per-app parity and MIR-required
    extended validation; it remains the shadow oracle during recovery.
 
 **Do not repeat these already-falsified Phase-1 approaches** if similar
