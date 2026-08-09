@@ -18665,6 +18665,62 @@ than captured. Every matcher and admission remains transactional.
   `cint`, `cobint`, `tstr`, and others; the remaining non-Pint regressions are
   <=0.57% cycles or 1.47% size.
 
+## Item T506: fuse inlined Pint stack predecrement loads (performance recovery, 2026-08-09)
+
+Phase 2 started with a direct peep-optimized `.MAC` diff between normal MIR
+emission and `DCC_MIR_FORCE_FALLBACK_FUNCTION=run`. Although T505's final
+`pint.run` body was already smaller than legacy (21,720 bytes / 1,933
+instructions versus 23,277 / 2,046), its peep path remained 2.60% slower.
+The opcode histogram exposed the difference: MIR emitted 60 `sbc` operations
+and only one `dec`, while legacy emitted nine `sbc` operations and 104
+`dec`s.
+
+The repeated source shape is `popv()`:
+
+```c
+return *(stp = stp - 1);
+```
+
+Pointer scaling lowered each inline copy to `stp - (1 * INT_BYTES)`, followed
+by a matching store to `stp` and an immediate 16-bit dereference. The legacy
+peephole path recognized this as `ld hl,(stp) / dec hl / dec hl /
+ld (stp),hl / load`; MIR's extra value/slot boundaries hid that shape.
+
+The spilled selector now:
+
+- evaluates only pure, bounded constant MIR expressions when matching an
+  adjustment amount (needed for `1 * INT_BYTES`);
+- transactionally recognizes a global/extern pointer subtraction whose only
+  uses are a matching self-store and an immediately following plain 16-bit
+  dereference, with only MIR NOP placeholders between them;
+- emits the pointer load, bounded `dec hl` chain, matching pointer store, and
+  dereference as one unit; and
+- emits/stages the loaded result under the dereference's original MIR
+  instruction index so slot and register-forwarding bookkeeping remains
+  correct.
+
+An initial broader constant-expression self-store adjustment also matched
+local pointer offsets in `tc89comp` and regressed its peep path by 0.10%.
+That experiment was rejected. General self-store adjustments retain their
+original direct-constant scope; recursive constant matching is restricted to
+the proven global-pointer predecrement-load fusion. This restored
+`tc89comp` exactly while retaining the complete Pint gain.
+
+- Pint peep cycles: **264,893,675 -> 253,462,670 (-4.32%)**.
+- Pint nopeep cycles: **299,176,326 -> 284,587,746 (-4.88%)**.
+- Pint peep size: **30,848 -> 30,720 bytes (-128)**.
+- Pint nopeep size: **33,280 -> 33,152 bytes (-128)**.
+- The peep result is better than both the immediate pre-T505 baseline
+  (258,174,171) and the older published baseline at `45cf3f0`
+  (257,193,161); nopeep extends T505's already-large win.
+- The final `run` histogram has 104 `dec`, eight `sbc`, and 21 push/pop pairs,
+  closely matching legacy's decrement shape while keeping MIR's compact
+  switch and substantially lower stack traffic.
+- `tchess` also improves slightly in both modes.
+- Both censuses remain **2060/2060 ordinary** and **2179/2179 stack-check**.
+- Full extended correctness: **314/314 runnable + 196/196 extended**,
+  diagnostics and dccpeep fixtures pass, with zero checked regressions.
+
 ## Item T500: confirmed final-seven oversizing is real machine bytes, not a dccpeep gap (investigation only, 2026-08-09)
 
 This investigation directly motivated T499's call-bounded regional homes:

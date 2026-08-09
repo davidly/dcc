@@ -38,8 +38,11 @@ static int mir_fused_compare_is_const_zero_rhs(int compare_index);
 static int mir_fused_compare_is_signed_zero_sign_test(int compare_index);
 static const char *mir_wide_runtime_helper(const struct MirInsn *insn);
 static int mir_value_is_selfstore_incdec_source(int value);
-static int mir_binary_is_selfstore_small_add(
+static int mir_binary_is_selfstore_small_adjust(
     int index, int *store_index, int *amount);
+static int mir_binary_is_selfstore_global_predecrement_load(
+    int index, int *store_index, int *load_index, int *amount);
+static int mir_value_only_used_by_selfstore_adjust_amount(int value);
 int mir_store_is_dead(int instruction);
 static int mir_divmod_partner(int instruction);
 static int mir_call_has_odd_argument_bytes(const struct MirInsn *call);
@@ -4294,6 +4297,8 @@ static int mir_prepare_backend_slots(void)
                                         (fused_away != NULL && fused_away[value]) ||
                                         mir_value_is_selfstore_incdec(value) ||
                                         mir_value_is_selfstore_incdec_source(value) ||
+                                        mir_value_only_used_by_selfstore_adjust_amount(
+                                            value) ||
                                         ((type_size(definition->type) == 2 ||
                                             type_size(definition->type) == 4) &&
                                          mir_load_is_single_call_argument(value,
@@ -7853,19 +7858,45 @@ static int mir_binary_is_selfstore_incdec(int index, int *store_index)
     return 1;
 }
 
-static int mir_binary_is_selfstore_small_add(
+static int mir_integer_constant_expression(
+    int value, long *result, int depth)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    long left;
+    long right;
+
+    if (definition == NULL || result == NULL || depth > 8)
+        return 0;
+    if (definition->opcode == MIR_CONST) {
+        *result = definition->immediate;
+        return 1;
+    }
+    if (definition->opcode != MIR_BINARY ||
+        type_size(definition->secondary_offset) > 2 ||
+        !mir_integer_constant_expression(
+            definition->src1, &left, depth + 1) ||
+        !mir_integer_constant_expression(
+            definition->src2, &right, depth + 1))
+        return 0;
+    return mir_fold_constant_binary(
+        definition->immediate, left, right,
+        definition->secondary_offset, result);
+}
+
+static int mir_binary_is_selfstore_small_adjust(
     int index, int *store_index, int *amount)
 {
     const struct MirInsn *insn = &mir.insns[index];
     const struct MirInsn *left_definition;
     const struct MirInsn *right_definition;
+    long constant_amount;
     int memory_type, memory_storage, memory_offset;
     int uses = 0;
     int found_store = -1;
     int scan;
 
     if (insn->opcode != MIR_BINARY ||
-        insn->immediate != '+' ||
+        (insn->immediate != '+' && insn->immediate != '-') ||
         type_size(insn->secondary_offset) != 2)
         return 0;
     right_definition = mir_definition(insn->src2);
@@ -7874,6 +7905,7 @@ static int mir_binary_is_selfstore_small_add(
         right_definition->immediate < 2 ||
         right_definition->immediate > 255)
         return 0;
+    constant_amount = right_definition->immediate;
     left_definition = mir_definition(insn->src1);
     if (left_definition == NULL ||
         left_definition->memory_flags != 0 ||
@@ -7905,8 +7937,112 @@ static int mir_binary_is_selfstore_small_add(
     if (store_index != NULL)
         *store_index = found_store;
     if (amount != NULL)
-        *amount = (int)right_definition->immediate;
+        *amount = insn->immediate == '-'
+            ? -(int)constant_amount
+            : (int)constant_amount;
     return 1;
+}
+
+static int mir_binary_is_selfstore_global_predecrement_load(
+    int index, int *store_index, int *load_index, int *amount)
+{
+    const struct MirInsn *insn = &mir.insns[index];
+    const struct MirInsn *left_definition;
+    const struct MirInsn *load = NULL;
+    long constant_amount;
+    int memory_type, memory_storage, memory_offset;
+    int found_store = -1;
+    int found_load = -1;
+    int instruction;
+
+    if (insn->opcode != MIR_BINARY || insn->immediate != '-' ||
+        type_size(insn->secondary_offset) != 2 ||
+        !mir_integer_constant_expression(
+            insn->src2, &constant_amount, 0) ||
+        constant_amount < 1 || constant_amount > 8)
+        return 0;
+    left_definition = mir_definition(insn->src1);
+    if (left_definition == NULL ||
+        left_definition->memory_flags != 0 ||
+        !mir_scalar_memory_location(
+            left_definition, &memory_type,
+            &memory_storage, &memory_offset) ||
+        (memory_storage != SC_GLOBAL &&
+         memory_storage != SC_EXTERN) ||
+        type_ptr_depth(memory_type) == 0 ||
+        type_size(memory_type) != 2)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *use = &mir.insns[instruction];
+
+        if (use->src1 != insn->dst && use->src2 != insn->dst &&
+            !mir_call_uses_value(use, insn->dst))
+            continue;
+        if (use->opcode == MIR_STORE &&
+            use->src1 == insn->dst &&
+            use->memory_flags == 0 &&
+            mir_same_scalar_memory_location(left_definition, use)) {
+            if (found_store >= 0)
+                return 0;
+            found_store = instruction;
+            continue;
+        }
+        if (use->opcode == MIR_LOAD_INDIRECT &&
+            use->src1 == insn->dst &&
+            use->memory_flags == 0 &&
+            use->bit_width == 0 &&
+            type_size(use->type) == 2) {
+            if (found_load >= 0)
+                return 0;
+            found_load = instruction;
+            load = use;
+            continue;
+        }
+        return 0;
+    }
+    if (found_store <= index || found_load <= found_store ||
+        load == NULL ||
+        constant_amount != type_size(load->type))
+        return 0;
+    for (instruction = index + 1;
+         instruction < found_load; ++instruction)
+        if (instruction != found_store &&
+            mir.insns[instruction].opcode != MIR_NOP)
+            return 0;
+    if (store_index != NULL)
+        *store_index = found_store;
+    if (load_index != NULL)
+        *load_index = found_load;
+    if (amount != NULL)
+        *amount = (int)constant_amount;
+    return 1;
+}
+
+static int mir_value_only_used_by_selfstore_adjust_amount(int value)
+{
+    int instruction;
+    int uses = 0;
+    int sole_user = -1;
+    int amount;
+    int store_index;
+    int load_index;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->src1 != value && insn->src2 != value &&
+            !mir_call_uses_value(insn, value))
+            continue;
+        if (insn->opcode != MIR_BINARY || insn->src2 != value)
+            return 0;
+        sole_user = instruction;
+        ++uses;
+    }
+    return uses == 1 &&
+           (mir_binary_is_selfstore_small_adjust(
+                sole_user, &store_index, &amount) ||
+            mir_binary_is_selfstore_global_predecrement_load(
+                sole_user, &store_index, &load_index, &amount));
 }
 
 /* Value-indexed wrapper around mir_binary_is_selfstore_incdec for slot-
@@ -7917,15 +8053,19 @@ int mir_value_is_selfstore_incdec(int value)
 {
     const struct MirInsn *definition = mir_definition(value);
     int amount;
+    int load_index;
     int store_index;
 
     if (definition == NULL || definition->opcode != MIR_BINARY)
         return 0;
     return mir_binary_is_selfstore_incdec((int)(definition - mir.insns),
                                           &store_index) ||
-           mir_binary_is_selfstore_small_add(
+           mir_binary_is_selfstore_small_adjust(
                (int)(definition - mir.insns),
-               &store_index, &amount);
+               &store_index, &amount) ||
+           mir_binary_is_selfstore_global_predecrement_load(
+               (int)(definition - mir.insns),
+               &store_index, &load_index, &amount);
 }
 
 /* Item T36 (mir-text-size-plan.md): true iff `value`'s sole use anywhere
@@ -7967,11 +8107,14 @@ static int mir_value_is_selfstore_incdec_source(int value)
         return 0;
     {
         int amount;
+        int load_index;
         int store_index;
         return mir_binary_is_selfstore_incdec(
                    sole_user, &store_index) ||
-               mir_binary_is_selfstore_small_add(
-                   sole_user, &store_index, &amount);
+               mir_binary_is_selfstore_small_adjust(
+                   sole_user, &store_index, &amount) ||
+               mir_binary_is_selfstore_global_predecrement_load(
+                   sole_user, &store_index, &load_index, &amount);
     }
 }
 
@@ -8029,10 +8172,11 @@ static void mir_emit_selfstore_incdec_global(FILE *out,
     fprintf(out, "\tld (%s),hl\n", assembly_name);
 }
 
-static void mir_emit_selfstore_small_add(
+static void mir_emit_selfstore_small_adjust(
     FILE *out, const struct MirInsn *definition,
     int storage, int offset, int amount)
 {
+    int magnitude = amount < 0 ? -amount : amount;
     int done = new_label();
 
     if (storage == SC_GLOBAL || storage == SC_EXTERN) {
@@ -8044,12 +8188,20 @@ static void mir_emit_selfstore_small_add(
         if (storage == SC_EXTERN &&
             mir_extrn_should_emit(global))
             fprintf(out, "\textrn %s\n", assembly_name);
-        fprintf(out,
-                "\tld a,(%s)\n\tadd a,%d\n\tld (%s),a\n"
-                "\tjp nc, L%d\n\tld a,(%s+1)\n\tinc a\n"
-                "\tld (%s+1),a\nL%d:\n",
-                assembly_name, amount, assembly_name,
-                done, assembly_name, assembly_name, done);
+        if (amount > 0)
+            fprintf(out,
+                    "\tld a,(%s)\n\tadd a,%d\n\tld (%s),a\n"
+                    "\tjp nc, L%d\n\tld a,(%s+1)\n\tinc a\n"
+                    "\tld (%s+1),a\nL%d:\n",
+                    assembly_name, magnitude, assembly_name,
+                    done, assembly_name, assembly_name, done);
+        else
+            fprintf(out,
+                    "\tld a,(%s)\n\tsub %d\n\tld (%s),a\n"
+                    "\tjp nc, L%d\n\tld a,(%s+1)\n\tdec a\n"
+                    "\tld (%s+1),a\nL%d:\n",
+                    assembly_name, magnitude, assembly_name,
+                    done, assembly_name, assembly_name, done);
         return;
     }
     if (!mir_frame_word_uses_short_ix(offset)) {
@@ -8058,10 +8210,42 @@ static void mir_emit_selfstore_small_add(
         mir_emit_frame_word_store(out, offset);
         return;
     }
-    fprintf(out,
-            "\tld a,(ix%+d)\n\tadd a,%d\n\tld (ix%+d),a\n"
-            "\tjp nc, L%d\n\tinc (ix%+d)\nL%d:\n",
-            offset, amount, offset, done, offset + 1, done);
+    if (amount > 0)
+        fprintf(out,
+                "\tld a,(ix%+d)\n\tadd a,%d\n\tld (ix%+d),a\n"
+                "\tjp nc, L%d\n\tinc (ix%+d)\nL%d:\n",
+                offset, magnitude, offset, done, offset + 1, done);
+    else
+        fprintf(out,
+                "\tld a,(ix%+d)\n\tsub %d\n\tld (ix%+d),a\n"
+                "\tjp nc, L%d\n\tdec (ix%+d)\nL%d:\n",
+                offset, magnitude, offset, done, offset + 1, done);
+}
+
+static void mir_emit_selfstore_global_predecrement_load(
+    FILE *out, const struct MirInsn *definition,
+    int storage, int amount, int load_instruction)
+{
+    struct Sym *global = find_global(definition->name);
+    const char *assembly_name = asm_name_for(
+        global != NULL ? sym_asm_name(global)
+                       : mir_declared_link_name(definition->name));
+    int saved_instruction = mir_emit_instruction_index;
+    int step;
+
+    if (storage == SC_EXTERN &&
+        mir_extrn_should_emit(global))
+        fprintf(out, "\textrn %s\n", assembly_name);
+    fprintf(out, "\tld hl,(%s)\n", assembly_name);
+    for (step = 0; step < amount; ++step)
+        fputs("\tdec hl\n", out);
+    fprintf(out, "\tld (%s),hl\n"
+                 "\tld a,(hl)\n\tinc hl\n"
+                 "\tld h,(hl)\n\tld l,a\n",
+            assembly_name);
+    mir_emit_instruction_index = load_instruction;
+    mir_emit_virtual_store(out, mir.insns[load_instruction].dst);
+    mir_emit_instruction_index = saved_instruction;
 }
 
 static int mir_scalar_cfg_preflight_reject(const char *reason, int instruction)
@@ -8883,6 +9067,22 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             }
             break;
         case MIR_LOAD_INDIRECT:
+            {
+            const struct MirInsn *address_definition =
+                mir_definition(insn->src1);
+            if (address_definition != NULL &&
+                address_definition->opcode == MIR_BINARY) {
+                int amount;
+                int load_index;
+                int store_index;
+
+                if (mir_binary_is_selfstore_global_predecrement_load(
+                        (int)(address_definition - mir.insns),
+                        &store_index, &load_index, &amount) &&
+                    load_index == i)
+                    break;
+            }
+            }
             if (mir_indirect_load_is_single_stable_pointer_call_argument(
                     insn->dst, 2))
                 break;
@@ -8925,12 +9125,17 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             const struct MirInsn *producer = mir_definition(insn->src1);
             if (producer != NULL && producer->opcode == MIR_BINARY) {
                 int producer_index = (int)(producer - mir.insns);
+                int predecrement_load_index;
                 int small_add_amount;
                 int selfstore_store_index;
                 if ((mir_binary_is_selfstore_incdec(
                          producer_index, &selfstore_store_index) ||
-                     mir_binary_is_selfstore_small_add(
+                     mir_binary_is_selfstore_small_adjust(
                          producer_index, &selfstore_store_index,
+                         &small_add_amount) ||
+                     mir_binary_is_selfstore_global_predecrement_load(
+                         producer_index, &selfstore_store_index,
+                         &predecrement_load_index,
                          &small_add_amount)) &&
                     selfstore_store_index == i)
                     break;
@@ -9350,8 +9555,11 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             {
             int small_add_amount;
             int selfstore_store_index;
+            int predecrement_load_index;
             int multiply_index;
             int addend_value;
+            if (mir_value_only_used_by_selfstore_adjust_amount(insn->dst))
+                break;
             if (mir_float_multiply_is_fused(i))
                 break;
             if (mir_float_madd_match(i, &multiply_index, &addend_value)) {
@@ -9408,7 +9616,26 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                                               insn->immediate == '+');
                 break;
             }
-            if (mir_binary_is_selfstore_small_add(
+            if (mir_binary_is_selfstore_global_predecrement_load(
+                    i, &selfstore_store_index,
+                    &predecrement_load_index,
+                    &small_add_amount)) {
+                int memory_type, memory_storage, memory_offset;
+                const struct MirInsn *definition =
+                    mir_definition(insn->src1);
+
+                if (definition == NULL ||
+                    !mir_scalar_memory_location(
+                        definition, &memory_type,
+                        &memory_storage, &memory_offset))
+                    goto done;
+                mir_emit_selfstore_global_predecrement_load(
+                    out, definition, memory_storage,
+                    small_add_amount,
+                    predecrement_load_index);
+                break;
+            }
+            if (mir_binary_is_selfstore_small_adjust(
                     i, &selfstore_store_index,
                     &small_add_amount)) {
                 int memory_type, memory_storage, memory_offset;
@@ -9420,10 +9647,11 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                         definition, &memory_type,
                         &memory_storage, &memory_offset))
                     goto done;
-                mir_emit_selfstore_small_add(
+                mir_emit_selfstore_small_adjust(
                     out, definition, memory_storage,
                     memory_offset, small_add_amount);
-                ++mir_spilled_cfg_small_selfstore_add_use_count;
+                if (small_add_amount > 0)
+                    ++mir_spilled_cfg_small_selfstore_add_use_count;
                 break;
             }
             }

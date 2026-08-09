@@ -49,8 +49,10 @@ transactional fallback remains in place throughout Phase 1.
   and small self-store-add forms reduce it to 21720/1933 versus 23277/2046
   captured. Both censuses are 100% with zero removals; the full extended gate
   is clean.
-- **Phase 2 is now active.** Recover the tracked peep regressions (notably Pint
-  +2.60% and the earlier `a1` +4.40%) with profile-guided selector/peephole
+- **Phase 2 is now active.** T506 has already recovered Pint's tracked
+  +2.60% peep regression and moved it beyond both pre-T505 and older published
+  baselines; recover the remaining `a1` +4.40% regression with measured
+  selector/peephole
   work, then prove MIR-required mode over the extended corpus before removing
   capture/replay and legacy codegen in separate cleanup commits.
 - **Key finding this segment: the mega-experiment's central premise -
@@ -602,11 +604,11 @@ arbitrary-precision interpreter in the corpus (`cint`, `cobint`, `adaint`,
 
 The goal is bringing aggregate peep-mode cycles back to at/below the
 pre-MIR legacy baseline, since Phase 1 deliberately accepted tracked
-regressions (notably `a1`'s +4.40% peep / +2.44% nopeep cycles from T503,
-and Pint's +2.60% peep from T505) in service of reaching 100% coverage
-fast. Some Phase-1 work already produced net wins in the same pass (the
-T505 bignum-loop fusion above), so Phase 2 is not starting from a uniform
-deficit.
+regressions in service of reaching 100% coverage fast. T506 recovered
+Pint's T505 regression immediately: peep cycles improve 4.32% from the
+100%-coverage baseline and now beat both the immediate pre-T505 and older
+published baselines; nopeep improves another 4.88%. The remaining named
+target is `a1`'s +4.40% peep / +2.44% nopeep regression from T503.
 
 Suggested approach, per the "Goal and current state" section's original
 Phase 2 plan:
