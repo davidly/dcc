@@ -18989,3 +18989,76 @@ Focused ASan/UBSan compilation found no memory/undefined-behavior errors
 (known compiler-lifetime leaks excluded). Full extended validation passes
 **314/314 runnable + 196/196 extended**, diagnostics and dccpeep fixtures,
 with zero checked regressions.
+
+## Item T512: recover word dispatch and narrow-origin wide arithmetic (performance recovery, 2026-08-09)
+
+The post-T511 ranking put `fint` first (+679M peep debt) and `attnc11`
+second (+555M). Dynamic profiles showed two independent concentrated causes.
+
+### Contiguous 16-bit interpreter dispatch
+
+`fint.run_at` consumed 98.0% of Fint's cycles. One-function fallback reduced
+the app from 1.078B to 400.4M peep cycles. Its 42 contiguous opcodes were still
+an equality chain because dense-switch recovery required an unsigned-byte
+condition, while the source uses `int op`.
+
+Dense recovery now accepts bounded 16-bit integer conditions. It emits a
+high-byte nonzero guard before the existing low-byte range check, so negative
+and >255 values reach default rather than aliasing a table entry. Direct
+member-load recovery reads either one or two bytes according to the condition
+width. The measured profitability floor for word conditions is 42 cases:
+42-case Fint/Cint are non-regressing, while forced 41-case Ada and 34-case COBOL
+dispatches regressed slightly and remain on their established output.
+
+- Fint peep: **1,078,418,225 -> 486,655,665 (-54.87%)**.
+- Fint nopeep: **1,175,262,274 -> 558,074,334 (-52.51%)**.
+- Fint size: **34,176 -> 33,664 peep**, **38,400 -> 37,760 nopeep**.
+
+### Deferred fixed-point constants and 16x16 multiplication
+
+`attnc11` was dominated by Q8/Q16 conversion and matrix loops. MIR lowering
+attempted eager constant folding before deferred casts became constants, so
+`(long)32767 * 256L` remained runtime wide arithmetic. A post-deferred fold
+now handles only the measured fixed-point `wide_constant * 256` class and tags
+its provenance. Only tagged results may elide their backend slot when consumed
+by the existing signed-wide-constant comparator; this prevents unrelated
+Ada/COBOL constant placement changes.
+
+Matrix loops also widened two signed 16-bit operands and then called generic
+32x32 `__lmul`; legacy uses register-ABI `__m1s`. The spilled selector now:
+
+- proves both widening nodes are representation-compatible and single-use;
+- keeps the original narrow sources concrete (stable named word home or an
+  independently live source slot);
+- emits BC/HL arguments to `__m1s` or `__m1u`;
+- preserves the existing fused `__m1mu` multiply/modulo selector's priority.
+
+- attnc11 peep: **957,484,490 -> 604,523,072 (-36.86%)**.
+- attnc11 nopeep: **995,227,819 -> 647,886,131 (-34.90%)**.
+- attnc11 size: **30,208 -> 28,928 peep**, **32,640 -> 31,616 nopeep**.
+
+Shared wins include:
+
+- `pihex`: -8.02% peep / -9.81% nopeep;
+- `tm1mu`: -6.59% / -7.89%;
+- `tlongopt`: -2.78% / -2.85%;
+- `tbufex`: -2.15% / -2.44%;
+- `trw2`: -0.25% / -0.22%.
+
+Rejected experiments:
+
+- direct wide constant-shift forwarding miscompiled Attn's weight-loading
+  path and was fully removed;
+- broad word-switch admission regressed 41/34-case dispatches;
+- broad post-deferred folding perturbed Ada/COBOL, so provenance and the
+  fixed-point scale shape are mandatory;
+- the first `__m1s` attempt read a slotless temp through impossible `ix-203`;
+  named-home bounds and independent source-liveness checks fixed it;
+- a per-value full-function mulmod scan made Fint compilation cubic and was
+  removed; emission arbitration alone preserves `__m1mu` priority.
+
+Positive pre-MIR peep debt falls again from **5.409B to 4.333B cycles
+(-19.9%; -81.5% cumulatively from the initial 23.451B)**. Both censuses remain
+**2060/2060 ordinary** and **2179/2179 stack-check**. Focused ASan/UBSan is
+clean. Full extended validation passes **314/314 runnable + 196/196 extended**,
+diagnostics and dccpeep fixtures, with zero checked regressions.

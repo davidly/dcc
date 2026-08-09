@@ -5733,6 +5733,57 @@ void mir_resolve_deferred_metadata(void)
             }
         }
     }
+    /*
+     * Cast/conversion repair above can turn both operands of an already-built
+     * wide binary into MIR_CONST only after mir_lower_expr's eager constant
+     * fold has passed. Fold the measured fixed-point scale class now so
+     * selectors see the same single constant legacy AST emission sees for
+     * expressions such as `(long)32767 * 256L`; other deferred expressions
+     * retain their established output until separately profiled.
+     */
+    for (i = 0; i < mir.count; ++i) {
+        struct MirInsn *insn = &mir.insns[i];
+        struct MirInsn *left;
+        struct MirInsn *right;
+        long folded;
+        int left_value;
+        int right_value;
+
+        if (insn->opcode != MIR_BINARY ||
+            insn->immediate != '*' ||
+            type_size(insn->secondary_offset) != 4 ||
+            type_is_float(insn->secondary_offset) ||
+            insn->src1 < 0 || insn->src2 < 0)
+            continue;
+        left = mir_mutable_definition(insn->src1);
+        right = mir_mutable_definition(insn->src2);
+        if (left == NULL || right == NULL ||
+            left->opcode != MIR_CONST || right->opcode != MIR_CONST)
+            continue;
+        if (left->immediate != 256 && right->immediate != 256)
+            continue;
+        if (!mir_fold_constant_binary(
+                insn->immediate, left->immediate,
+                right->immediate, insn->secondary_offset, &folded))
+            continue;
+        left_value = insn->src1;
+        right_value = insn->src2;
+        insn->opcode = MIR_CONST;
+        insn->src1 = -1;
+        insn->src2 = -1;
+        insn->immediate = folded;
+        insn->secondary_offset = 0;
+        insn->memory_flags |= MIR_MEMORY_FLAG_DEFERRED_WIDE_CONST;
+        if (mir_value_use_count(left_value) == 0) {
+            left->opcode = MIR_NOP;
+            left->dst = -1;
+        }
+        if (right_value != left_value &&
+            mir_value_use_count(right_value) == 0) {
+            right->opcode = MIR_NOP;
+            right->dst = -1;
+        }
+    }
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].opcode == MIR_STORE_INDIRECT &&
             mir.insns[i].memory_size > 4)

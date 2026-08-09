@@ -637,15 +637,22 @@ wins include `fileops` (-58% to -60%), `tlmul` (-26% to -28%), `tm1mu`
 to 5.409B cycles (-76.9%). Both censuses remain 100%; the full extended gate
 is clean.
 
+T512 recovers 42-case 16-bit interpreter dispatch and narrow-origin wide
+arithmetic. Fint improves 54.9% peep / 52.5% nopeep; attnc11 improves 36.9% /
+34.9%. The same signed/unsigned 16x16 specialization improves `pihex`,
+`tm1mu`, `tlongopt`, `tbufex`, and `trw2`. Positive pre-MIR peep debt is now
+4.333B cycles (-81.5% cumulatively from the initial 23.451B), with both
+censuses and the full extended gate clean.
+
 Next:
 
-1. Re-rank after T511 (do not follow the stale pre-T511 list).
+1. Re-rank after T512 (do not follow the stale pre-T512 list).
 2. Profile and attribute the new leader cohort:
-   `fint`, `attnc11`, `tm`, `trw2`, `tstr`, `pihex`, `cobint`, `bint`,
-   `adaint`, `cint`.
-3. Cluster by measured shared cause before editing. The interpreter subset
-   should be investigated together; `tm`/`trw2`/`tstr`/`pihex` may separate
-   into loop, I/O, and wide-arithmetic causes.
+   `tm`, `trw2`, `tstr`, `cobint`, `bint`, `adaint`, `cint`, `ttt`,
+   `pihex`, `tchess`, `catalan`, `attnc11`.
+3. Cluster by measured shared cause before editing. `tm` is now the largest
+   percentage and absolute non-I/O gap; `trw2`/`tstr` form the next I/O/string
+   cohort; the remaining interpreters should be grouped separately.
 4. Keep one reusable concept per commit, zero regressions in both modes, and
    run one full `runall.ps1 -Mode full -Extended` immediately before each
    publication.
