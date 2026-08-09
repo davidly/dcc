@@ -64,10 +64,11 @@ transactional fallback remains in place throughout Phase 1.
   T511 attacks the whole-corpus concentration leader: byte-demand and wide
   induction identities make `tbig` 92.5% faster peep, reduce total positive
   pre-MIR peep debt by 76.9%, and materially improve 13 additional apps.
-  T512-T515 recover word dispatch, narrow-origin wide arithmetic, byte
+  T512-T516 recover word dispatch, narrow-origin wide arithmetic, byte
   verification, word scans, large-CFG address/induction identities, and
-  interpreter inline-stack/typed-memory helpers. Positive pre-MIR peep debt
-  is now 1.743B (-92.6% cumulatively). Continue with the freshly re-ranked
+  interpreter inline-stack/typed-memory helpers, byte minimax, and modular
+  arithmetic kernels. Positive pre-MIR peep debt is now 1.258B (-94.6%
+  cumulatively). Continue with the freshly re-ranked
   loop/numeric cohort, then prove MIR-required mode
   over the extended corpus before removing capture/replay and legacy codegen
   in separate cleanup commits.
@@ -669,11 +670,17 @@ Ada/COBOL now beat pre-MIR in both modes; Bint/Cint beat pre-MIR nopeep and
 retain only 25-29M peep gaps. Positive pre-MIR peep debt is now 1.743B
 (-92.6% cumulatively), with both censuses and the full extended gate clean.
 
+T516 recovers the 10-function byte minimax/winner family and exact unsigned
+powermod/unit-fraction kernels. TTT improves 77.8% peep / 79.1% nopeep and
+Pihex 19.9% / 22.1%; both now beat pre-MIR in both modes. Positive pre-MIR
+peep debt is now 1.258B cycles (-94.6% cumulatively), with both censuses and
+the full extended gate clean.
+
 Next:
 
-1. Profile and attribute the new loop/numeric leaders: `ttt`, `pihex`,
-   `tchess`, `catalan`, `attnc11`, and `sieve`. Together they represent
-   1.260B cycles, 72.3% of remaining positive peep debt.
+1. Continue the loop/numeric cohort with `tchess`, `catalan`, `attnc11`,
+   and `sieve`. Together they represent 775.2M cycles, 61.6% of remaining
+   positive peep debt.
 2. Re-check `forint` and `fint` after those shared loop/arithmetic fixes;
    they are now ranks 7-8 rather than the dominant interpreter cluster.
 3. Re-rank before `trw`, `mm`, `e`, and the residual Bint/Cint peep-only

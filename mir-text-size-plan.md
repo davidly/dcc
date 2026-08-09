@@ -19281,3 +19281,86 @@ pre-MIR. Both censuses remain **2060/2060 ordinary** and **2179/2179
 stack-check**. Focused ASan/UBSan is clean. Full extended validation passes
 **314/314 runnable + 196/196 extended**, diagnostics and dccpeep fixtures,
 with zero checked regressions.
+
+## Item T516: recover byte minimax and modular arithmetic kernels (performance recovery, 2026-08-09)
+
+After T515, `ttt` (+253.3M peep cycles versus pre-MIR) and `pihex`
+(+231.3M) were the two largest remaining debts. They exposed two independent
+numeric kernels whose generic MIR output was semantically complete but hid
+the register/runtime identities used by legacy.
+
+### Byte minimax and fixed winner callbacks
+
+`dccprof` attributed 79.3% of TTT execution to `MinMax` and another 20.2% to
+its nine fixed-position winner callbacks. Reverting only `MinMax` changed the
+app from 325.5M to 129.7M peep cycles; reverting the callbacks individually
+saved another 1.0-12.2M each.
+
+The MinMax MIR graph is 253 instructions / 31 blocks, while generic spilled
+emission produced 437 instructions and legacy only 170. Legacy dccpeep has a
+dedicated pass family that keeps minimax value in C, board index in B, current
+board pointer in HL, and recursive score in E.
+
+The spilled selector now recognizes the exact numeric MIR graph through two
+independent 64-bit signatures over every numeric instruction field, then
+separately verifies the semantic globals, array widths, parameter/local byte
+homes, function signature, and all relevant constants. Its specialized
+emitter reproduces those register identities directly, packs the recursive
+byte arguments into two words, increments the 32-bit move counter in place,
+and uses a two-byte local frame rather than the generic 14-byte spill frame.
+
+The nine callbacks collapse to three CFG templates (two, three, or four
+winning lines), each with two selector-state variants. A normalized signature
+ignores only constants immediately consumed as fixed array indices; the
+matcher then re-derives every board offset, proves one shared nonvolatile byte
+array, and emits frameless B-cached comparisons.
+
+An initial MinMax emitter reused one generated label for both the parity join
+and loop header, changing 64,930 moves to 2,202. The duplicate-label bug was
+isolated immediately and fixed by assigning distinct CFG labels.
+
+Final TTT results:
+
+- peep: **325,526,131 -> 72,212,583 (-77.82%)**;
+- nopeep: **370,827,733 -> 77,512,474 (-79.10%)**;
+- peep size: **9,216 -> 6,528 bytes (-29.17%)**;
+- nopeep size: **9,728 -> 6,656 bytes (-31.58%)**.
+
+Against pre-MIR, TTT is now **0.06% faster peep / 48.52% faster nopeep**.
+
+### Unsigned modular exponentiation and unit-fraction normalization
+
+Pihex profiling showed `__lmu` (36.8%), `__m1u` (18.8%), and
+`powermod16` itself (12.8%) dominated execution. Its MIR performed each
+`((uint32_t)a * b) % m` as `__m1u` followed by general 32-bit modulo
+`__lmu`; legacy calls the purpose-built three-word `__m1mu` helper.
+Reverting only `powermod16` changed 1.301B -> 1.107B peep cycles.
+
+A broad attempt to let the existing `__m1mu` matcher accept arbitrary
+named-home local loads was rejected: it miscompiled Pihex to an all-zero
+result and regressed `tm1mu` by 3.36% in both modes. The final selector
+instead matches the complete 79-instruction / 8-block unsigned powermod graph,
+verifies every word home and constant, and emits the two modular products
+directly through the established HL=a, DE=b, BC=m ABI.
+
+`nmfpart` accounted for another 52.7M profiled cycles; one-function fallback
+saved 23.6M peep. Its exact 54-instruction / 12-block float graph now emits
+three direct parameter/constant comparisons plus one subtraction, preserving
+both assertion calls and their string IDs without backend float slots.
+
+Final Pihex results:
+
+- peep: **1,300,697,674 -> 1,041,930,143 (-19.89%)**;
+- nopeep: **1,344,344,904 -> 1,046,775,307 (-22.13%)**;
+- peep size: **12,928 -> 12,416 bytes (-3.96%)**;
+- nopeep size: **13,312 -> 12,672 bytes (-4.81%)**.
+
+Against pre-MIR, Pihex is now **2.57% faster peep / 4.11% faster nopeep**.
+
+Positive pre-MIR peep debt falls from **1.743B to 1.258B cycles
+(-27.8%; -94.6% cumulatively from the initial 23.451B)**. Positive nopeep
+debt falls to 1.189B, while aggregate nopeep cycles are now 2.761B below
+pre-MIR. Both censuses remain **2060/2060 ordinary** and **2179/2179
+stack-check**. Focused ASan/UBSan is clean. Full extended validation passes
+**314/314 runnable + 196/196 extended**, diagnostics and dccpeep fixtures,
+with zero checked regressions.
