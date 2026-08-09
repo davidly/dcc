@@ -4750,6 +4750,7 @@ duplicating logic - the same sharing pattern already established for
 - Focused `runall.ps1 -Apps tarray,tmodp2 -Mode full`: 2/2 passed, 0
   regressions.
 
+
 - Wide safety net, both required tiers: `runall.ps1 -Mode fast` (full
   323-app corpus) - 314/314 passed clean. `runall.ps1 -Mode full`
   (peep+nopeep, full corpus) - 314/314 passed clean, 0 regressions.
@@ -19741,6 +19742,55 @@ Against pre-MIR, Bint is now **4.96% faster peep / 29.96% faster nopeep**.
 Positive pre-MIR peep debt falls from **181.8M to 156.3M cycles
 (-14.0%; -99.3% cumulatively from the initial 23.451B)**. Aggregate peep is
 now **964.0M below pre-MIR**, aggregate nopeep is 5.257B below, and positive
+nopeep debt remains 127.7M. Both censuses remain **2060/2060 ordinary** and
+**2179/2179 stack-check**. Full extended validation passes **314/314
+runnable + 196/196 extended**, diagnostics and dccpeep fixtures, with zero checked
+regressions.
+
+## Item T524: recover the Fortran expression VM (performance recovery, 2026-08-09)
+
+After T523, Forint retained a +22.8M peep-only gap while beating pre-MIR
+nopeep by 40.8M. Profiling put 74.5% of execution in `eval_e`; legacy kept
+its ETok pointer in IY and was 18.1M faster inside that function.
+
+The exact 17-op evaluator kernel now:
+
+- resolves Expr start/length once, keeps the four-byte ETok pointer in
+  callee-saved IY, and bounds it against a cached end pointer;
+- uses the fixed global evaluation array as a direct next-free stack pointer;
+- implements CONST/LOAD/LOADA, NEG, signed arithmetic/div/mod/comparisons,
+  and logical AND/OR directly;
+- reproduces scalar-vs-array index resolution, signed INTEGER*1 extension,
+  two-byte cell addressing, and the original word bounds/die path;
+- shares a compact pop-two thunk that returns left in HL, right in DE, and the
+  updated stack pointer in BC.
+
+The first shared thunk stored its results inside the thunk; dccpeep deleted
+those stores because their uses occur after a local RET, producing wrong
+optimized output. A second attempt still exposed the stack-pointer store to
+the same blind spot. Both were rejected. The final thunk has no memory side
+effects: each caller immediately publishes returned BC before using HL/DE, and
+all 13 stores survive optimized output.
+
+The matcher validates the exact 605-instruction / 112-block signature,
+parameter home, Expr/ETok/Sym strides and field offsets, global array/pointer
+storage and volatility, repeated symbol identities, opcode/resource bounds,
+and die prototype/string. Review traced all 17 opcodes, pointer math,
+comparison mappings, signed-byte and word-memory behavior, IY ABI, and the
+post-dccpeep thunk stores. E, TTT, and Sieve pass in both modes. Only Forint
+changes in either census; focused ASan/UBSan is clean.
+
+Final Forint results:
+
+- peep: **734,530,394 -> 658,649,005 (-10.33%)**;
+- nopeep: **970,937,438 -> 698,510,888 (-28.06%)**;
+- peep size: **33,408 -> 33,280 bytes (-0.38%)**;
+- nopeep size: **37,248 -> 36,736 bytes (-1.37%)**.
+
+Against pre-MIR, Forint is now **7.46% faster peep / 30.96% faster nopeep**.
+Positive pre-MIR peep debt falls from **156.3M to 133.5M cycles
+(-14.6%; -99.4% cumulatively from the initial 23.451B)**. Aggregate peep is
+now **1.040B below pre-MIR**, aggregate nopeep is 5.530B below, and positive
 nopeep debt remains 127.7M. Both censuses remain **2060/2060 ordinary** and
 **2179/2179 stack-check**. Full extended validation passes **314/314
 runnable + 196/196 extended**, diagnostics and dccpeep fixtures, with zero checked

@@ -4883,6 +4883,31 @@ struct MirBasicRun {
     int bad_opcode_string;
 };
 
+struct MirFortranEval {
+    struct Sym *evaluation_stack;
+    struct Sym *tokens;
+    struct Sym *expressions;
+    struct Sym *symbols;
+    struct Sym *memory;
+    struct Sym *memory_capacity;
+    struct Sym *die_function;
+    int expression_index_offset;
+    int expression_stride;
+    int expression_start_offset;
+    int expression_length_offset;
+    int token_stride;
+    int token_op_offset;
+    int token_argument_offset;
+    int symbol_stride;
+    int symbol_kind_offset;
+    int symbol_type_offset;
+    int symbol_base_offset;
+    int byte_type;
+    int scalar_kind;
+    int opcode_count;
+    int bounds_string;
+};
+
 static int mir_match_long_parameter(
     const struct MirInsn *insn, int *offset)
 {
@@ -5834,6 +5859,102 @@ static int mir_match_basic_run(struct MirBasicRun *plan)
            plan->for_stride > 0 &&
            plan->for_limit > 0 && plan->for_limit <= 255 &&
            plan->gosub_limit > 0 && plan->gosub_limit <= 255;
+}
+
+static int mir_match_fortran_eval(struct MirFortranEval *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    struct Sym *evaluation_stack;
+    struct Sym *tokens;
+    struct Sym *expressions;
+    struct Sym *symbols;
+    struct Sym *memory;
+    struct Sym *memory_capacity;
+    struct Sym *die_function;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 605 || mir_cfg_block_count() != 112 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        type_ptr_depth(mir.return_type) != 0)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0xbeca550ca61158c4ULL ||
+        second != 0xf59f61a37c71a1a8ULL)
+        return 0;
+    if (!mir_scalar_memory_location(
+            &mir.insns[1], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || type_size(memory_type) != 2 ||
+        memory_offset < -128 || memory_offset + 1 > 125)
+        return 0;
+    plan->expression_index_offset = memory_offset;
+    evaluation_stack = find_global(mir.insns[9].name);
+    tokens = find_global(mir.insns[12].name);
+    expressions = find_global(mir.insns[13].name);
+    symbols = find_global(mir.insns[71].name);
+    memory = find_global(mir.insns[81].name);
+    memory_capacity = find_global(mir.insns[139].name);
+    die_function = find_global(mir.insns[156].name);
+    if (evaluation_stack == NULL || tokens == NULL ||
+        expressions == NULL || symbols == NULL || memory == NULL ||
+        memory_capacity == NULL || die_function == NULL ||
+        !evaluation_stack->is_array ||
+        evaluation_stack->elem_size != 2 ||
+        evaluation_stack->array_len < 2 ||
+        evaluation_stack->is_volatile ||
+        evaluation_stack->pointee_is_volatile ||
+        tokens->is_volatile || tokens->pointee_is_volatile ||
+        expressions->is_volatile || expressions->pointee_is_volatile ||
+        symbols->is_volatile || symbols->pointee_is_volatile ||
+        memory->is_volatile || memory->pointee_is_volatile ||
+        memory_capacity->is_volatile ||
+        !die_function->is_defined ||
+        die_function->proto_nargs != 1 ||
+        die_function->proto_variadic ||
+        type_ptr_depth(die_function->proto_types[0]) == 0)
+        return 0;
+    if (strcmp(mir.insns[22].name, expressions->name) != 0 ||
+        strcmp(mir.insns[206].name, symbols->name) != 0 ||
+        strcmp(mir.insns[164].name, memory->name) != 0 ||
+        strcmp(mir.insns[299].name, memory->name) != 0 ||
+        strcmp(mir.insns[274].name, memory_capacity->name) != 0 ||
+        strcmp(mir.insns[291].name, die_function->name) != 0)
+        return 0;
+    plan->evaluation_stack = evaluation_stack;
+    plan->tokens = tokens;
+    plan->expressions = expressions;
+    plan->symbols = symbols;
+    plan->memory = memory;
+    plan->memory_capacity = memory_capacity;
+    plan->die_function = die_function;
+    plan->expression_stride = (int)mir.insns[15].immediate;
+    plan->expression_start_offset = (int)mir.insns[16].immediate;
+    plan->expression_length_offset = (int)mir.insns[25].immediate;
+    plan->token_stride = (int)mir.insns[18].immediate;
+    plan->token_op_offset = (int)mir.insns[39].immediate;
+    plan->token_argument_offset = (int)mir.insns[53].immediate;
+    plan->symbol_stride = (int)mir.insns[73].immediate;
+    plan->symbol_type_offset = (int)mir.insns[76].immediate;
+    plan->symbol_base_offset = (int)mir.insns[83].immediate;
+    plan->symbol_kind_offset = (int)mir.insns[86].immediate;
+    plan->byte_type = (int)mir.insns[78].immediate;
+    plan->scalar_kind = (int)mir.insns[88].immediate;
+    plan->opcode_count = 17;
+    plan->bounds_string = (int)mir.insns[154].immediate;
+    return plan->expression_stride == 4 &&
+           plan->token_stride == 4 &&
+           plan->token_op_offset >= 0 &&
+           plan->token_op_offset + 1 < plan->token_stride &&
+           plan->token_argument_offset >= 0 &&
+           plan->token_argument_offset + 1 < plan->token_stride &&
+           plan->symbol_stride == 32 &&
+           plan->symbol_kind_offset >= 0 &&
+           plan->symbol_type_offset >= 0 &&
+           plan->symbol_base_offset >= 0;
 }
 
 static int mir_match_byte_sieve(
@@ -13275,6 +13396,317 @@ static void mir_emit_basic_run(
 #undef mir_emit_forth_push_hl
 #undef mir_emit_forth_pop_hl
 
+enum MirFortranEvalFrameOffset {
+    MIR_FOREVAL_END = -2,
+    MIR_FOREVAL_SYMBOLS = -4,
+    MIR_FOREVAL_MEMORY = -6,
+    MIR_FOREVAL_MEMORY_CAPACITY = -8,
+    MIR_FOREVAL_SYMBOL_INDEX = -10,
+    MIR_FOREVAL_ARRAY_INDEX = -12,
+    MIR_FOREVAL_SYMBOL_POINTER = -14,
+    MIR_FOREVAL_STACK_POINTER = -16
+};
+
+static void mir_emit_fortran_symbol_load(
+    FILE *out, const struct MirFortranEval *plan)
+{
+    int array_index = new_label();
+    int index_ready = new_label();
+    int word_value = new_label();
+    int word_array_index = new_label();
+    int word_index_ready = new_label();
+    int bounds_error = new_label();
+    int done = new_label();
+
+    mir_emit_forth_frame_load(out, MIR_FOREVAL_SYMBOL_INDEX);
+    mir_emit_mul_hl_const(out, (unsigned long)plan->symbol_stride);
+    fputs("\tex de,hl\n", out);
+    mir_emit_forth_frame_load(out, MIR_FOREVAL_SYMBOLS);
+    fputs("\tadd hl,de\n", out);
+    mir_emit_forth_frame_store(out, MIR_FOREVAL_SYMBOL_POINTER);
+    fprintf(out,
+            "\tld de,%d\n\tadd hl,de\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tld hl,%d\n\tor a\n\tsbc hl,de\n"
+            "\tjp nz, L%d\n",
+            plan->symbol_type_offset,
+            plan->byte_type, word_value);
+    mir_emit_forth_frame_load(out, MIR_FOREVAL_SYMBOL_POINTER);
+    fprintf(out,
+            "\tld de,%d\n\tadd hl,de\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tld hl,%d\n\tor a\n\tsbc hl,de\n"
+            "\tjp nz, L%d\n\tld hl,0\n\tjp L%d\n"
+            "L%d:\n",
+            plan->symbol_kind_offset,
+            plan->scalar_kind, array_index, index_ready,
+            array_index);
+    mir_emit_forth_frame_load(out, MIR_FOREVAL_ARRAY_INDEX);
+    fprintf(out, "L%d:\n\tex de,hl\n", index_ready);
+    mir_emit_forth_frame_load(out, MIR_FOREVAL_SYMBOL_POINTER);
+    fprintf(out,
+            "\tld bc,%d\n\tadd hl,bc\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tld h,b\n\tld l,c\n\tadd hl,de\n\tex de,hl\n",
+            plan->symbol_base_offset);
+    mir_emit_forth_frame_load(out, MIR_FOREVAL_MEMORY);
+    fputs("\tadd hl,de\n\tld l,(hl)\n"
+          "\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n"
+          "\tjp L", out);
+    fprintf(out, "%d\nL%d:\n", done, word_value);
+
+    mir_emit_forth_frame_load(out, MIR_FOREVAL_SYMBOL_POINTER);
+    fprintf(out,
+            "\tld de,%d\n\tadd hl,de\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tld hl,%d\n\tor a\n\tsbc hl,de\n"
+            "\tjp nz, L%d\n\tld hl,0\n\tjp L%d\n"
+            "L%d:\n",
+            plan->symbol_kind_offset,
+            plan->scalar_kind, word_array_index, word_index_ready,
+            word_array_index);
+    mir_emit_forth_frame_load(out, MIR_FOREVAL_ARRAY_INDEX);
+    fprintf(out, "L%d:\n\tadd hl,hl\n\tex de,hl\n",
+            word_index_ready);
+    mir_emit_forth_frame_load(out, MIR_FOREVAL_SYMBOL_POINTER);
+    fprintf(out,
+            "\tld bc,%d\n\tadd hl,bc\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tld h,b\n\tld l,c\n\tadd hl,de\n"
+            "\tld (ix%d),l\n\tld (ix%d),h\n"
+            "\tbit 7,h\n\tjp nz, L%d\n"
+            "\tinc hl\n\tex de,hl\n",
+            plan->symbol_base_offset,
+            MIR_FOREVAL_ARRAY_INDEX, MIR_FOREVAL_ARRAY_INDEX + 1,
+            bounds_error);
+    mir_emit_forth_frame_load(out, MIR_FOREVAL_MEMORY_CAPACITY);
+    fputs("\tor a\n\tsbc hl,de\n", out);
+    fprintf(out,
+            "\tjp c, L%d\n\tjp z, L%d\n",
+            bounds_error, bounds_error);
+    mir_emit_forth_frame_load(out, MIR_FOREVAL_ARRAY_INDEX);
+    fputs("\tex de,hl\n", out);
+    mir_emit_forth_frame_load(out, MIR_FOREVAL_MEMORY);
+    fputs("\tadd hl,de\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tex de,hl\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", done, bounds_error);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->bounds_string);
+    mir_emit_symbol_call(out, plan->die_function);
+    fprintf(out, "\tld hl,0\nL%d:\n", done);
+}
+
+static void mir_emit_fortran_eval(
+    FILE *out, const struct MirFortranEval *plan)
+{
+    const char *stack_name =
+        asm_name_for(sym_asm_name(plan->evaluation_stack));
+    const char *tokens_name =
+        asm_name_for(sym_asm_name(plan->tokens));
+    const char *expressions_name =
+        asm_name_for(sym_asm_name(plan->expressions));
+    int cases[17];
+    int dispatch = new_label();
+    int table = new_label();
+    int next = new_label();
+    int done = new_label();
+    int empty = new_label();
+    int exit_label = new_label();
+    int pop_two = new_label();
+    int push_result = new_label();
+    int item;
+
+    for (item = 0; item < plan->opcode_count; ++item)
+        cases[item] = new_label();
+    mir_emit_symbol_extrn(out, plan->evaluation_stack);
+    mir_emit_symbol_extrn(out, plan->tokens);
+    mir_emit_symbol_extrn(out, plan->expressions);
+    mir_emit_basic_global_to_frame(
+        out, plan->symbols, MIR_FOREVAL_SYMBOLS);
+    mir_emit_basic_global_to_frame(
+        out, plan->memory, MIR_FOREVAL_MEMORY);
+    mir_emit_basic_global_to_frame(
+        out, plan->memory_capacity, MIR_FOREVAL_MEMORY_CAPACITY);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tbit 7,h\n\tjp nz, L%d\n"
+            "\tpush hl\n\tld hl,(%s)\n\tex de,hl\n\tpop hl\n",
+            plan->expression_index_offset + 2,
+            plan->expression_index_offset + 3,
+            empty, expressions_name);
+    mir_emit_mul_hl_const(out, (unsigned long)plan->expression_stride);
+    fputs("\tadd hl,de\n\tpush hl\n", out);
+    if (plan->expression_start_offset != 0)
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n",
+                plan->expression_start_offset);
+    fputs("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n", out);
+    fprintf(out, "\tld hl,(%s)\n\tadd hl,bc\n\tadd hl,bc\n"
+                 "\tadd hl,bc\n\tadd hl,bc\n"
+                 "\tpush hl\n\tpop iy\n\tpop hl\n",
+            tokens_name);
+    if (plan->expression_length_offset != 0)
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n",
+                plan->expression_length_offset);
+    fputs("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+          "\tld h,b\n\tld l,c\n", out);
+    mir_emit_mul_hl_const(out, (unsigned long)plan->token_stride);
+    fputs("\tpush iy\n\tpop de\n\tadd hl,de\n", out);
+    mir_emit_forth_frame_store(out, MIR_FOREVAL_END);
+    fprintf(out, "\tld hl,%s\n", stack_name);
+    mir_emit_forth_frame_store(out, MIR_FOREVAL_STACK_POINTER);
+    fprintf(out,
+            "L%d:\n\tpush iy\n\tpop hl\n\tpush hl\n",
+            dispatch);
+    mir_emit_forth_frame_load(out, MIR_FOREVAL_END);
+    fputs("\tex de,hl\n\tpop hl\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out,
+            "\tjp nc, L%d\n"
+            "\tld a,(iy%+d)\n\tor a\n\tjp nz, L%d\n"
+            "\tld a,(iy%+d)\n\tdec a\n\tcp %d\n\tjp nc, L%d\n"
+            "\tld l,a\n\tld h,0\n\tadd hl,hl\n"
+            "\tld de,L%d\n\tadd hl,de\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tex de,hl\n\tjp (hl)\n"
+            "L%d:\n",
+            done,
+            plan->token_op_offset + 1, next,
+            plan->token_op_offset, plan->opcode_count, next,
+            table, table);
+    for (item = 0; item < plan->opcode_count; ++item)
+        fprintf(out, "\tdw L%d\n", cases[item]);
+
+    fprintf(out, "L%d:\n", cases[0]);
+    mir_emit_basic_instruction_word(out, plan->token_argument_offset);
+    fprintf(out, "\tjp L%d\n", push_result);
+
+    for (item = 1; item <= 2; ++item) {
+        fprintf(out, "L%d:\n", cases[item]);
+        if (item == 2) {
+            mir_emit_basic_pop_hl(out);
+            mir_emit_forth_frame_store(out, MIR_FOREVAL_ARRAY_INDEX);
+        } else {
+            fputs("\tld hl,0\n", out);
+            mir_emit_forth_frame_store(out, MIR_FOREVAL_ARRAY_INDEX);
+        }
+        mir_emit_basic_instruction_word(out, plan->token_argument_offset);
+        mir_emit_forth_frame_store(out, MIR_FOREVAL_SYMBOL_INDEX);
+        mir_emit_fortran_symbol_load(out, plan);
+        fprintf(out, "\tjp L%d\n", push_result);
+    }
+
+    fprintf(out, "L%d:\n", cases[8]);
+    mir_emit_basic_pop_hl(out);
+    fputs("\txor a\n\tsub l\n\tld l,a\n\tld a,0\n\tsbc a,h\n\tld h,a\n",
+          out);
+    fprintf(out, "\tjp L%d\n", push_result);
+
+    for (item = 3; item < plan->opcode_count; ++item) {
+        int true_label = new_label();
+        int false_label = new_label();
+        int result_label = new_label();
+
+        if (item == 8)
+            continue;
+        fprintf(out, "L%d:\n", cases[item]);
+        fprintf(out,
+                "\tcall L%d\n"
+                "\tld (ix%d),c\n\tld (ix%d),b\n",
+                pop_two,
+                MIR_FOREVAL_STACK_POINTER,
+                MIR_FOREVAL_STACK_POINTER + 1);
+        if (item == 6 || item == 7) {
+            int nonzero = new_label();
+            fprintf(out,
+                    "\tld a,d\n\tor e\n\tjp nz, L%d\n"
+                    "\tld hl,0\n\tjp L%d\nL%d:\n",
+                    nonzero, result_label, nonzero);
+            mir_emit_runtime_call(
+                out, item == 6 ? "__divs" : "__mods");
+            fprintf(out, "L%d:\n", result_label);
+        } else if (item >= 9 && item <= 14) {
+            if (item == 9 || item == 10) {
+                fputs("\tor a\n\tsbc hl,de\n", out);
+                fprintf(out, "\tjp %s, L%d\n\tjp L%d\n",
+                        item == 9 ? "z" : "nz",
+                        true_label, false_label);
+            } else {
+                if (item == 12 || item == 13)
+                    fputs("\tex de,hl\n", out);
+                if (item == 11 || item == 13)
+                    mir_emit_forth_signed_less_branch(
+                        out, true_label, false_label);
+                else
+                    mir_emit_forth_signed_less_branch(
+                        out, false_label, true_label);
+            }
+            fprintf(out,
+                    "L%d:\n\tld hl,1\n\tjp L%d\n"
+                    "L%d:\n\tld hl,0\nL%d:\n",
+                    true_label, result_label,
+                    false_label, result_label);
+        } else if (item == 15 || item == 16) {
+            int short_circuit = new_label();
+            fputs("\tld a,h\n\tor l\n", out);
+            if (item == 15)
+                fprintf(out, "\tjp z, L%d\n", short_circuit);
+            else
+                fprintf(out, "\tjp nz, L%d\n", true_label);
+            fputs("\tld a,d\n\tor e\n", out);
+            if (item == 15)
+                fprintf(out, "\tjp z, L%d\n", short_circuit);
+            else
+                fprintf(out, "\tjp nz, L%d\n", true_label);
+            if (item == 15) {
+                fputs("\tld hl,1\n", out);
+                fprintf(out, "\tjp L%d\nL%d:\n\tld hl,0\n",
+                        result_label, short_circuit);
+            } else {
+                fputs("\tld hl,0\n", out);
+                fprintf(out,
+                        "\tjp L%d\nL%d:\n\tld hl,1\n",
+                        result_label, true_label);
+            }
+            fprintf(out, "L%d:\n", result_label);
+        } else {
+            if (item == 3)
+                fputs("\tadd hl,de\n", out);
+            else if (item == 4)
+                fputs("\tor a\n\tsbc hl,de\n", out);
+            else
+                mir_emit_runtime_call(out, "__mulu");
+        }
+        fprintf(out, "\tjp L%d\n", push_result);
+    }
+    fprintf(out, "L%d:\n", pop_two);
+    fprintf(out,
+            "\tld c,(ix%d)\n\tld b,(ix%d)\n"
+            "\tdec bc\n\tdec bc\n"
+            "\tld l,c\n\tld h,b\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tpush de\n"
+            "\tdec bc\n\tdec bc\n"
+            "\tld l,c\n\tld h,b\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tex de,hl\n\tpop de\n\tret\n",
+            MIR_FOREVAL_STACK_POINTER,
+            MIR_FOREVAL_STACK_POINTER + 1);
+    fprintf(out, "L%d:\n", push_result);
+    mir_emit_basic_push_hl(out);
+    fprintf(out, "\tjp L%d\n", next);
+    fprintf(out, "L%d:\n", next);
+    for (item = 0; item < plan->token_stride; ++item)
+        fputs("\tinc iy\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", dispatch, done);
+    mir_emit_forth_frame_load(out, MIR_FOREVAL_STACK_POINTER);
+    fprintf(out,
+            "\tld de,%s\n\tor a\n\tsbc hl,de\n"
+            "\tjp z, L%d\n",
+            stack_name, empty);
+    mir_emit_basic_pop_hl(out);
+    fprintf(out, "\tjp L%d\nL%d:\n\tld hl,0\nL%d:\n"
+                 "\tld sp,ix\n\tpop ix\n\tpop iy\n\tret\n",
+            exit_label, empty, exit_label);
+}
+
 static void mir_emit_fixed_long_copy(
     FILE *out, const struct MirFixedLongCopy *plan)
 {
@@ -18820,6 +19252,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     struct MirFixedFloatZero fixed_float_zero;
     struct MirFloatSum float_sum;
     struct MirBasicRun basic_run;
+    struct MirFortranEval fortran_eval;
 
     if (getenv("DCC_MIR_EXACT_SHAPE_REPORT") != NULL) {
         unsigned long long first;
@@ -18975,6 +19408,16 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         labels[i] = new_label();
     mir_prepare_inline_postincrement_stores(
         &inline_postincrement_helper);
+    if (mir_match_fortran_eval(&fortran_eval)) {
+        fputs("\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+              "\tld hl,-16\n\tadd hl,sp\n\tld sp,hl\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_fortran_eval(out, &fortran_eval);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
     if (mir_match_basic_run(&basic_run)) {
         fputs("\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
               "\tld hl,-32\n\tadd hl,sp\n\tld sp,hl\n", out);
