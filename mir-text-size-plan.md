@@ -18914,3 +18914,78 @@ current whole-lifetime-homing MIR backend on these large interpreter CFGs.
 Regional live-range splitting (or equivalent regional homing) remains the
 correct next architecture step; further dccpeep pattern work on these
 shapes is a secondary lever at best, not a substitute.
+
+## Item T511: recover byte-demand and wide induction identities (performance recovery, 2026-08-09)
+
+The current-vs-legacy shadow ranking showed `tbig` alone accounted for
+76.8% of all positive peep-cycle debt. A full checked `dccprof` run attributed
+95.7% of its 19.49B cycles to two functions:
+
+- `check_record`: 10.05B cycles (51.5%);
+- `fill_record`: 8.61B cycles (44.2%).
+
+One-function fallback measurements closed the attribution exactly:
+`fill_record` saved 8.193B cycles, `check_record` 9.463B, `main` 220.7M, and
+`get_stamp` 134.5M; together they explained all but about 2.5K cycles of the
+18.011B pre-MIR debt.
+
+The common cause was not dccpeep itself. MIR retained full 32-bit arithmetic
+after the result was demanded only as a byte:
+
+```c
+b[i] = (char)((rec + i) & 0xff);
+b[0] = (char)((rec >> 24) & 0xff);
+```
+
+That generated wide shifts/adds/masks plus backend spills, hiding the byte
+counter, invariant byte, and walking pointer identities that legacy exposed.
+The spilled selector now transactionally recognizes closed, single-use MIR
+slices and emits the demanded representation directly:
+
+- byte-indexed store/compare loops keep the pointer, counter, and invariant
+  byte in BC, E, and H;
+- wide-to-byte stores select the exact source byte lane;
+- four adjacent masked byte loads pack directly into DE:HL;
+- `(wide & constant) ==/!= 0` branches test only masked bytes, preserving
+  edge-specific PHI copies;
+- `wide_phi + 1` updates the PHI's existing two-unit backend slot in place
+  and removes only its backedge identity copy (the initial copy remains);
+- four-byte named `++` updates the authoritative object directly and later
+  SSA uses reload that home;
+- an immediately consumed wide RHS reload is deferred only in the measured
+  large-frame masked-loop class, avoiding an IY snapshot/reload without
+  perturbing smaller interpreter functions.
+
+Slot planning uses the same matcher results as emission, so fused definitions
+cannot retain dead backend slots. The matchers require exact widths, bounded
+control flow, nonvolatile/unaliased storage where applicable, closed use
+ranges, and unchanged branch semantics; no app or function names participate.
+
+Two broader experiments were rejected:
+
+- globally reusing object-backed PHI homes was peep-neutral and regressed
+  `tbig` nopeep by 1.28B cycles;
+- broadly enabling same-slot PHI cleanup skipped a required initial-edge copy,
+  let `rec` run past 65535, and timed out. Only the proven in-place increment's
+  backedge identity is removed.
+
+Final checked results:
+
+- `tbig` peep: **19,493,936,425 -> 1,462,690,127 (-92.50%)**;
+- `tbig` nopeep: **20,408,476,105 -> 1,428,152,252 (-93.00%)**;
+- peep size: **15,488 -> 13,568 bytes (-1,920)**;
+- nopeep size: **16,128 -> 13,952 bytes (-2,176)**.
+
+Against the published pre-MIR baseline (`45cf3f0`), `tbig` is now **1.34%
+faster peep** and **61.90% faster nopeep**. Shared secondary wins include
+`fileops` (-58.48%/-59.87%), `tlmul` (-27.61%/-25.93%), `tm1mu`
+(-5.74%/-6.42%), and `t` (-5.49%/-5.10%), with smaller improvements in
+`tap`, `tphi`, `tptrarr`, `tvlaparm`, `tlmod`, `tforsco`, `primes`, `forint`,
+and stack-check-only `tbcreld`.
+
+Positive pre-MIR peep debt falls from **23.451B to 5.409B cycles (-76.9%)**.
+Both censuses remain **2060/2060 ordinary** and **2179/2179 stack-check**.
+Focused ASan/UBSan compilation found no memory/undefined-behavior errors
+(known compiler-lifetime leaks excluded). Full extended validation passes
+**314/314 runnable + 196/196 extended**, diagnostics and dccpeep fixtures,
+with zero checked regressions.

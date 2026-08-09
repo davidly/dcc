@@ -61,9 +61,12 @@ transactional fallback remains in place throughout Phase 1.
   peep while making nopeep 0.68% faster than pre-T503. T510 makes deferred
   inline-body ownership follow the selected output and fuses the last hot byte
   push, leaving only 0.33% peep while making nopeep 0.81% faster.
-  Continue with measured selector/peephole
-  work, then prove MIR-required mode over the extended corpus before removing
-  capture/replay and legacy codegen in separate cleanup commits.
+  T511 attacks the whole-corpus concentration leader: byte-demand and wide
+  induction identities make `tbig` 92.5% faster peep, reduce total positive
+  pre-MIR peep debt by 76.9%, and materially improve 13 additional apps.
+  Continue with the freshly re-ranked debt cohort, then prove MIR-required mode
+  over the extended corpus before removing capture/replay and legacy codegen
+  in separate cleanup commits.
 - **Key finding this segment: the mega-experiment's central premise -
   that "cost-only" fallback reasons are always pure cost proxies with no
   remaining semantic risk - was wrong for the majority of reasons
@@ -611,41 +614,43 @@ arbitrary-precision interpreter in the corpus (`cint`, `cobint`, `adaint`,
 
 ## Phase 2: performance recovery (now active)
 
-The goal is bringing aggregate peep-mode cycles back to at/below the
-pre-MIR legacy baseline, since Phase 1 deliberately accepted tracked
-regressions in service of reaching 100% coverage fast. T506 recovered
-Pint's T505 regression immediately: peep cycles improve 4.32% from the
-100%-coverage baseline and now beat both the immediate pre-T505 and older
-published baselines; nopeep improves another 4.88%. The remaining named
-target is `a1`: T507 recovers 2.50% peep / 2.23% nopeep, leaving about
-1.8% peep / 0.15% nopeep versus the immediate pre-T503 baseline. T508
-then removes retained stack-push helper call overhead, leaving 1.42% peep
-while moving nopeep 0.44% ahead of pre-T503. T509's balanced-call stack
-handoffs leave only 0.43% peep while moving nopeep 0.68% ahead. T510 leaves
-0.33% peep while moving nopeep 0.81% ahead.
+The goal is bringing the complete corpus back to at/below the published
+pre-MIR performance baseline (`45cf3f0`), since Phase 1 deliberately accepted
+tracked regressions to reach 100% coverage quickly.
 
-Suggested approach, per the "Goal and current state" section's original
-Phase 2 plan:
-1. Use `dccprof` dynamic profiling (see the dcc-project skill's
-   "Performance and optimizer work" section) to find where the tracked
-   regressions actually spend cycles - do not guess from static text size.
-2. Prioritize the remaining `a1` gap; Pint is already recovered beyond its
-   pre-T505 baseline. Check `tests/perf_baselines.csv`
-   history via `git log -p -- tests/perf_baselines.csv` for the complete
-   list of every accepted regression across T499-T505 if more turn up.
-3. Prove out any fix with the same full-mode + full-extended-gate
-   discipline used throughout Phase 1 - this is now steady-state
-   optimization work, not coverage-migration work, so the existing
-   dcc-project skill's "Performance and optimizer work" and "Register
-   allocation" sections' hard-won rules apply directly (measure against
-   the corpus, not intuition; watch for dccpeep pattern interactions).
-4. Once aggregate performance is at/below the pre-MIR baseline, the
-   project's stated end state is proving MIR-required mode over the
-   extended corpus and then removing the capture/replay transactional
-   fallback and legacy AST codegen paths in separate cleanup commits (do
-   not attempt this until performance recovery is verified - the
-   transactional fallback is exactly what has made every step of this
-   migration safe to land incrementally).
+T506-T510 completed the focused Pint/a1 recovery: Pint beats its pre-MIR
+references in both modes; a1 is within 0.33% peep and 0.81% faster nopeep than
+its immediate pre-T503 baseline.
+
+T511 completes the first whole-corpus concentration batch. `dccprof` and
+one-function fallback attribution proved `tbig` was 76.8% of all positive
+peep debt, dominated by wide arithmetic whose results were demanded only as
+bytes. Demand-driven byte-loop, byte-lane, byte-pack, masked-zero branch, and
+wide increment identities reduce:
+
+- `tbig` peep **19,493,936,425 -> 1,462,690,127 (-92.50%)**;
+- `tbig` nopeep **20,408,476,105 -> 1,428,152,252 (-93.00%)**.
+
+This is now 1.34% faster peep and 61.90% faster nopeep than pre-MIR. Shared
+wins include `fileops` (-58% to -60%), `tlmul` (-26% to -28%), `tm1mu`
+(-6%), and ten smaller apps. Positive pre-MIR peep debt falls from 23.451B
+to 5.409B cycles (-76.9%). Both censuses remain 100%; the full extended gate
+is clean.
+
+Next:
+
+1. Re-rank after T511 (do not follow the stale pre-T511 list).
+2. Profile and attribute the new leader cohort:
+   `fint`, `attnc11`, `tm`, `trw2`, `tstr`, `pihex`, `cobint`, `bint`,
+   `adaint`, `cint`.
+3. Cluster by measured shared cause before editing. The interpreter subset
+   should be investigated together; `tm`/`trw2`/`tstr`/`pihex` may separate
+   into loop, I/O, and wide-arithmetic causes.
+4. Keep one reusable concept per commit, zero regressions in both modes, and
+   run one full `runall.ps1 -Mode full -Extended` immediately before each
+   publication.
+5. Remove capture/replay only after aggregate parity and MIR-required
+   extended validation; it remains the shadow oracle during recovery.
 
 **Do not repeat these already-falsified Phase-1 approaches** if similar
 temptations arise in Phase 2: broad cost-cap widening without a measured

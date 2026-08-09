@@ -42,6 +42,19 @@ static int mir_binary_is_selfstore_small_adjust(
     int index, int *store_index, int *amount);
 static int mir_binary_is_selfstore_global_predecrement_load(
     int index, int *store_index, int *load_index, int *amount);
+/*
+ * A loop-carried `wide_phi + 1` can update the PHI's existing two-unit slot
+ * in place. The result aliases that slot and its backedge copy is therefore
+ * an identity; the initial edge still performs its required copy.
+ */
+static int mir_binary_is_wide_phi_increment(
+    int index, int *phi_value, int *store_index);
+static int mir_value_is_wide_phi_increment_result(int value);
+/* T511 wide counterpart: update an unaliased four-byte named object in
+ * place, then let later SSA uses reload the now-authoritative named home. */
+static int mir_binary_is_selfstore_wide_increment(
+    int index, int *store_index, int *memory_offset);
+static int mir_value_is_selfstore_wide_increment_result(int value);
 static int mir_value_only_used_by_selfstore_adjust_amount(int value);
 static int mir_value_is_dense_byte_switch_condition(int value);
 static int mir_single_call_argument(int call_instruction, int *value);
@@ -61,6 +74,23 @@ static int mir_value_has_phi_use(int value);
 static int mir_pointer_value_has_single_safe_named_home_use(int value);
 static void mir_emit_hl_offset_from_ix(FILE *out, int offset);
 static int mir_narrow_store_preserves_hl_value(int instruction);
+static int mir_phi_copies_are_empty(int predecessor, int successor);
+struct MirLowByteIndexLoop;
+static int mir_match_low_byte_index_loop(
+    int instruction, struct MirLowByteIndexLoop *plan);
+static int mir_low_byte_loop_value_used_outside(
+    int value, int first, int last);
+static int mir_low_byte_loop_next_effective(int instruction);
+struct MirWideByteStore;
+static int mir_match_wide_byte_store(
+    int instruction, struct MirWideByteStore *plan);
+struct MirWideBytePackReturn;
+static int mir_match_wide_byte_pack_return(
+    int instruction, struct MirWideBytePackReturn *plan);
+struct MirWideMaskZeroBranch;
+static int mir_match_wide_mask_zero_branch(
+    int instruction, struct MirWideMaskZeroBranch *plan);
+static int mir_function_has_wide_mask_zero_branch(void);
 static int mir_forward_skip_last_skipped_dead_store;
 static int mir_spilled_cfg_used_dead_store_forwarding;
 static int mir_spilled_cfg_used_constant_absolute;
@@ -1181,6 +1211,81 @@ static int mir_value_requires_odd_call_cleanup_slot(int value)
            (definition->opcode == MIR_CALL ||
             definition->opcode == MIR_CALL_AGGREGATE) &&
            mir_call_has_odd_argument_bytes(definition);
+}
+
+static int mir_binary_is_wide_phi_increment(
+    int index, int *phi_value, int *store_index)
+{
+    const struct MirInsn *insn;
+    const struct MirInsn *phi;
+    const struct MirInsn *one;
+    int found_store = -1;
+    int instruction;
+
+    if (index < 0 || index >= mir.count)
+        return 0;
+    insn = &mir.insns[index];
+    if (insn->opcode != MIR_BINARY || insn->immediate != '+' ||
+        type_size(insn->secondary_offset) != 4)
+        return 0;
+    phi = mir_definition(insn->src1);
+    one = mir_definition(insn->src2);
+    if (phi == NULL || phi->opcode != MIR_PHI ||
+        type_size(phi->type) != 4 || phi->src2 != insn->dst ||
+        phi->object < 0 ||
+        one == NULL || one->opcode != MIR_CONST ||
+        one->immediate != 1)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *use = &mir.insns[instruction];
+
+        if (use->src1 != insn->dst && use->src2 != insn->dst &&
+            !mir_call_uses_value(use, insn->dst))
+            continue;
+        if (use == phi && phi->src2 == insn->dst)
+            continue;
+        if (use->opcode == MIR_STORE && use->src1 == insn->dst &&
+            use->object == phi->object) {
+            if (found_store >= 0)
+                return 0;
+            found_store = instruction;
+            continue;
+        }
+        return 0;
+    }
+    if (found_store <= index)
+        return 0;
+    if (!mir_object_is_fully_promoted(phi->object) &&
+        !mir_store_is_dead(found_store))
+        return 0;
+    for (instruction = index + 1;
+         instruction < found_store; ++instruction)
+        if (mir.insns[instruction].opcode != MIR_NOP)
+            return 0;
+    for (instruction = index + 1;
+         instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].src1 == phi->dst ||
+            mir.insns[instruction].src2 == phi->dst ||
+            mir_call_uses_value(&mir.insns[instruction], phi->dst))
+            return 0;
+    if (phi_value != NULL)
+        *phi_value = phi->dst;
+    if (store_index != NULL)
+        *store_index = found_store;
+    return 1;
+}
+
+static int mir_value_is_wide_phi_increment_result(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int phi_value;
+    int store_index;
+
+    return definition != NULL &&
+           definition->opcode == MIR_BINARY &&
+           mir_binary_is_wide_phi_increment(
+               (int)(definition - mir.insns),
+               &phi_value, &store_index);
 }
 
 int mir_address_rematerialization_candidate_count(void)
@@ -3405,6 +3510,41 @@ static int mir_direct_named_home_location(const struct MirInsn *definition,
         type_size(memory_type) == type_size(definition->type);
 }
 
+/*
+ * Large frames use IY for spill slots. In the measured masked-wide loop
+ * class, snapshotting an adjacent named RHS into that spill area and loading
+ * it back at the next instruction is pure overhead; defer the load to the
+ * binary consumer without reordering its operands.
+ */
+static int mir_wide_load_is_immediate_binary_rhs(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    const struct MirInsn *consumer;
+    int definition_index;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (mir_effective_local_bytes() + mir.aggregate_temp_bytes <= 140 ||
+        !mir_function_has_wide_mask_zero_branch() ||
+        definition == NULL || definition->opcode != MIR_LOAD ||
+        type_size(definition->type) != 4 ||
+        (definition->memory_flags & 1) != 0 ||
+        mir_value_use_count(value) != 1 ||
+        !mir_scalar_memory_location(definition, &memory_type,
+                                    &memory_storage, &memory_offset) ||
+        (memory_storage != SC_LOCAL && memory_storage != SC_PARAM) ||
+        type_size(memory_type) != 4)
+        return 0;
+    definition_index = (int)(definition - mir.insns);
+    if (definition_index + 1 >= mir.count)
+        return 0;
+    consumer = &mir.insns[definition_index + 1];
+    return consumer->opcode == MIR_BINARY &&
+           consumer->src2 == value &&
+           type_size(consumer->secondary_offset) == 4;
+}
+
 static int mir_pointer_value_is_aggregate_address(int value)
 {
     int instruction;
@@ -3532,7 +3672,9 @@ static int mir_value_has_direct_named_home(int value)
     definition = mir_definition(value);
     if (definition == NULL ||
         (definition->opcode != MIR_PARAM && definition->opcode != MIR_LOAD))
-        return 0;
+        return mir_value_is_selfstore_wide_increment_result(value);
+    if (mir_wide_load_is_immediate_binary_rhs(value))
+        return 1;
     if (type_is_struct_object(definition->type) ||
         (type_size(definition->type) != 1 &&
          type_size(definition->type) != 2 &&
@@ -4045,6 +4187,1180 @@ static int mir_seed_promoted_local_slots(int *slot_end, int slot_capacity)
     return slot_count;
 }
 
+/*
+ * T511: recover byte-demand identities before the generic spilled walk
+ * materializes their wide intermediates. Each matcher below proves a closed
+ * MIR slice (single-use values, bounded control flow, exact memory widths)
+ * and records every consumed definition so slot planning and emission skip
+ * the same values. The emitted forms are ordinary Z80 identities: indexed
+ * byte loops, byte lanes of a long, four-byte big-endian packing, and a
+ * masked-wide zero branch. No source/app names participate.
+ */
+enum MirLowByteIndexLoopKind {
+    MIR_LOW_BYTE_INDEX_STORE = 1,
+    MIR_LOW_BYTE_INDEX_COMPARE = 2
+};
+
+struct MirLowByteIndexLoop {
+    int kind;
+    int skip_through;
+    int header_label;
+    int continue_label;
+    int initial;
+    int limit;
+    int index_object;
+    int base_offset;
+    int invariant_offset;
+    int component_count;
+    int components[48];
+};
+
+struct MirWideByteStore {
+    int skip_through;
+    int base_offset;
+    int source_offset;
+    int byte_offset;
+    int component_count;
+    int components[12];
+};
+
+struct MirWideBytePackReturn {
+    int skip_through;
+    int base_offset;
+    int shifts[4];
+    int component_count;
+    int components[64];
+};
+
+struct MirWideMaskZeroBranch {
+    int source_value;
+    int source_offset;
+    int source_is_direct;
+    unsigned long mask;
+    int comparison;
+    int branch_instruction;
+    int component_count;
+    int components[6];
+};
+
+static int mir_wide_mask_zero_add_component(
+    struct MirWideMaskZeroBranch *plan, int instruction)
+{
+    int component;
+
+    if (instruction < 0 || instruction >= mir.count)
+        return 0;
+    for (component = 0; component < plan->component_count; ++component)
+        if (plan->components[component] == instruction)
+            return 1;
+    if (plan->component_count >=
+        (int)(sizeof(plan->components) / sizeof(plan->components[0])))
+        return 0;
+    plan->components[plan->component_count++] = instruction;
+    return 1;
+}
+
+static int mir_wide_mask_zero_has_component(
+    const struct MirWideMaskZeroBranch *plan, int instruction)
+{
+    int component;
+
+    for (component = 0; component < plan->component_count; ++component)
+        if (plan->components[component] == instruction)
+            return 1;
+    return 0;
+}
+
+static int mir_match_wide_mask_zero_branch(
+    int instruction, struct MirWideMaskZeroBranch *plan)
+{
+    const struct MirInsn *first;
+    const struct MirInsn *mask = NULL;
+    const struct MirInsn *mask_constant;
+    const struct MirInsn *compare;
+    const struct MirInsn *zero;
+    const struct MirInsn *branch;
+    const struct MirInsn *source;
+    int mask_instruction = -1;
+    int compare_instruction;
+    int branch_instruction;
+    int source_value;
+    int scan;
+    int first_instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (instruction < 0 || instruction >= mir.count)
+        return 0;
+    first = &mir.insns[instruction];
+    if (first->opcode != MIR_CONST || type_size(first->type) != 4)
+        return 0;
+    for (scan = instruction + 1;
+         scan < mir.count && scan <= instruction + 8; ++scan)
+        if (mir.insns[scan].opcode == MIR_BINARY &&
+            mir.insns[scan].immediate == '&' &&
+            type_size(mir.insns[scan].secondary_offset) == 4) {
+            mask = &mir.insns[scan];
+            mask_instruction = scan;
+            break;
+        }
+    if (mask == NULL || mir_value_use_count(mask->dst) != 1)
+        return 0;
+    mask_constant = mir_definition(mask->src2);
+    source_value = mask->src1;
+    if (mask_constant == NULL ||
+        mask_constant->opcode != MIR_CONST) {
+        mask_constant = mir_definition(mask->src1);
+        source_value = mask->src2;
+    }
+    if (mask_constant == NULL ||
+        mask_constant->opcode != MIR_CONST ||
+        type_size(mask_constant->type) != 4 ||
+        ((unsigned long)mask_constant->immediate & 0xffffffffUL) == 0 ||
+        mir_value_use_count(mask_constant->dst) != 1 ||
+        mir_definition(source_value) == NULL ||
+        type_size(mir_definition(source_value)->type) != 4)
+        return 0;
+    compare_instruction =
+        mir_low_byte_loop_next_effective(mask_instruction);
+    if (compare_instruction >= mir.count)
+        return 0;
+    compare = &mir.insns[compare_instruction];
+    if (compare->opcode != MIR_BINARY ||
+        (compare->immediate != TOK_EQ &&
+         compare->immediate != TOK_NE) ||
+        mir_value_use_count(compare->dst) != 1)
+        return 0;
+    zero = mir_definition(compare->src1);
+    if (compare->src2 == mask->dst) {
+        /* zero remains src1 */
+    } else if (compare->src1 == mask->dst) {
+        zero = mir_definition(compare->src2);
+    } else {
+        return 0;
+    }
+    if (zero == NULL || zero->opcode != MIR_CONST ||
+        type_size(zero->type) != 4 ||
+        ((unsigned long)zero->immediate & 0xffffffffUL) != 0 ||
+        mir_value_use_count(zero->dst) != 1)
+        return 0;
+    branch_instruction =
+        mir_low_byte_loop_next_effective(compare_instruction);
+    if (branch_instruction >= mir.count)
+        return 0;
+    branch = &mir.insns[branch_instruction];
+    if (branch->opcode != MIR_BRANCH_FALSE ||
+        branch->src1 != compare->dst ||
+        mir_find_label(branch->label) < 0)
+        return 0;
+    first_instruction = (int)(mask_constant - mir.insns);
+    if ((int)(zero - mir.insns) < first_instruction)
+        first_instruction = (int)(zero - mir.insns);
+    if (first_instruction != instruction)
+        return 0;
+
+    plan->source_value = source_value;
+    source = mir_definition(source_value);
+    if (source != NULL &&
+        (int)(source - mir.insns) >= instruction &&
+        (int)(source - mir.insns) <= branch_instruction) {
+        int source_type;
+        int source_storage;
+        int source_offset;
+
+        if (source->opcode != MIR_LOAD ||
+            mir_value_use_count(source->dst) != 1 ||
+            !mir_scalar_memory_location(
+                source, &source_type, &source_storage, &source_offset) ||
+            type_size(source_type) != 4 ||
+            (source_storage != SC_LOCAL &&
+             source_storage != SC_PARAM) ||
+            source_offset < -128 || source_offset + 3 > 127 ||
+            !mir_wide_mask_zero_add_component(
+                plan, (int)(source - mir.insns)))
+            return 0;
+        plan->source_is_direct = 1;
+        plan->source_offset = source_offset;
+    }
+    plan->mask =
+        (unsigned long)mask_constant->immediate & 0xffffffffUL;
+    plan->comparison = (int)compare->immediate;
+    plan->branch_instruction = branch_instruction;
+    if (!mir_wide_mask_zero_add_component(
+            plan, (int)(mask_constant - mir.insns)) ||
+        !mir_wide_mask_zero_add_component(
+            plan, (int)(zero - mir.insns)) ||
+        !mir_wide_mask_zero_add_component(plan, mask_instruction) ||
+        !mir_wide_mask_zero_add_component(plan, compare_instruction) ||
+        !mir_wide_mask_zero_add_component(plan, branch_instruction))
+        return 0;
+    for (scan = instruction; scan <= branch_instruction; ++scan)
+        if (!mir_wide_mask_zero_has_component(plan, scan) &&
+            mir.insns[scan].opcode != MIR_NOP)
+            return 0;
+    return 1;
+}
+
+static int mir_function_has_wide_mask_zero_branch(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        struct MirWideMaskZeroBranch plan;
+
+        if (mir_match_wide_mask_zero_branch(instruction, &plan))
+            return 1;
+    }
+    return 0;
+}
+
+static int mir_wide_byte_pack_add_component(
+    struct MirWideBytePackReturn *plan, int instruction)
+{
+    int component;
+
+    if (instruction < 0 || instruction >= mir.count)
+        return 0;
+    for (component = 0; component < plan->component_count; ++component)
+        if (plan->components[component] == instruction)
+            return 1;
+    if (plan->component_count >=
+        (int)(sizeof(plan->components) / sizeof(plan->components[0])))
+        return 0;
+    plan->components[plan->component_count++] = instruction;
+    return 1;
+}
+
+static int mir_wide_byte_pack_has_component(
+    const struct MirWideBytePackReturn *plan, int instruction)
+{
+    int component;
+
+    for (component = 0; component < plan->component_count; ++component)
+        if (plan->components[component] == instruction)
+            return 1;
+    return 0;
+}
+
+static int mir_collect_wide_byte_pack_terms(
+    int value, struct MirWideBytePackReturn *plan, int depth)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    const struct MirInsn *shift_count = NULL;
+    const struct MirInsn *mask;
+    const struct MirInsn *mask_constant;
+    const struct MirInsn *widen;
+    const struct MirInsn *load;
+    const struct MirInsn *index;
+    const struct MirInsn *index_constant;
+    const struct MirInsn *base;
+    int shift = 0;
+    int masked_value;
+    int byte_offset;
+    int base_type;
+    int base_storage;
+    int base_offset;
+
+    if (definition == NULL || depth > 8)
+        return 0;
+    if (definition->opcode == MIR_BINARY &&
+        definition->immediate == '|' &&
+        type_size(definition->secondary_offset) == 4) {
+        if (!mir_wide_byte_pack_add_component(
+                plan, (int)(definition - mir.insns)))
+            return 0;
+        return mir_collect_wide_byte_pack_terms(
+                   definition->src1, plan, depth + 1) &&
+               mir_collect_wide_byte_pack_terms(
+                   definition->src2, plan, depth + 1);
+    }
+    if (definition->opcode == MIR_BINARY &&
+        definition->immediate == TOK_SHL &&
+        type_size(definition->secondary_offset) == 4) {
+        shift_count = mir_definition(definition->src2);
+        if (shift_count == NULL || shift_count->opcode != MIR_CONST ||
+            (shift_count->immediate != 8 &&
+             shift_count->immediate != 16 &&
+             shift_count->immediate != 24))
+            return 0;
+        shift = (int)shift_count->immediate;
+        masked_value = definition->src1;
+        if (!mir_wide_byte_pack_add_component(
+                plan, (int)(definition - mir.insns)) ||
+            !mir_wide_byte_pack_add_component(
+                plan, (int)(shift_count - mir.insns)))
+            return 0;
+    } else {
+        masked_value = value;
+    }
+    mask = mir_definition(masked_value);
+    if (mask == NULL || mask->opcode != MIR_BINARY ||
+        mask->immediate != '&' || type_size(mask->secondary_offset) != 4)
+        return 0;
+    mask_constant = mir_definition(mask->src1);
+    value = mask->src2;
+    if (mask_constant == NULL || mask_constant->opcode != MIR_CONST ||
+        ((unsigned long)mask_constant->immediate & 0xffffffffUL) != 255UL) {
+        mask_constant = mir_definition(mask->src2);
+        value = mask->src1;
+    }
+    if (mask_constant == NULL || mask_constant->opcode != MIR_CONST ||
+        ((unsigned long)mask_constant->immediate & 0xffffffffUL) != 255UL)
+        return 0;
+    widen = mir_definition(value);
+    if (widen == NULL || widen->opcode != MIR_UNARY ||
+        widen->immediate != 0 || type_size(widen->type) != 4)
+        return 0;
+    load = mir_definition(widen->src1);
+    if (load == NULL || load->opcode != MIR_LOAD_INDIRECT ||
+        load->memory_size != 1 || load->bit_width != 0)
+        return 0;
+    index = mir_definition(load->src1);
+    if (index == NULL || index->opcode != MIR_INDEX_ADDRESS ||
+        index->immediate != 1)
+        return 0;
+    index_constant = mir_definition(index->src2);
+    base = mir_definition(index->src1);
+    if (index_constant == NULL ||
+        index_constant->opcode != MIR_CONST ||
+        index_constant->immediate < 0 ||
+        index_constant->immediate > 3 ||
+        base == NULL ||
+        !mir_scalar_memory_location(base, &base_type, &base_storage,
+                                    &base_offset) ||
+        type_ptr_depth(base_type) == 0 || type_size(base_type) != 2 ||
+        (base_storage != SC_LOCAL && base_storage != SC_PARAM) ||
+        base_offset < -128 || base_offset + 1 > 127)
+        return 0;
+    byte_offset = (int)index_constant->immediate;
+    if (plan->shifts[byte_offset] >= 0 ||
+        (plan->base_offset != 32767 &&
+         plan->base_offset != base_offset))
+        return 0;
+    plan->base_offset = base_offset;
+    plan->shifts[byte_offset] = shift;
+    return mir_wide_byte_pack_add_component(
+               plan, (int)(mask - mir.insns)) &&
+           mir_wide_byte_pack_add_component(
+               plan, (int)(mask_constant - mir.insns)) &&
+           mir_wide_byte_pack_add_component(
+               plan, (int)(widen - mir.insns)) &&
+           mir_wide_byte_pack_add_component(
+               plan, (int)(load - mir.insns)) &&
+           mir_wide_byte_pack_add_component(
+               plan, (int)(index - mir.insns)) &&
+           mir_wide_byte_pack_add_component(
+               plan, (int)(index_constant - mir.insns));
+}
+
+static int mir_match_wide_byte_pack_return(
+    int instruction, struct MirWideBytePackReturn *plan)
+{
+    const struct MirInsn *first;
+    const struct MirInsn *ret = NULL;
+    int return_instruction = -1;
+    int scan;
+    int offset;
+
+    memset(plan, 0, sizeof(*plan));
+    plan->base_offset = 32767;
+    for (offset = 0; offset < 4; ++offset)
+        plan->shifts[offset] = -1;
+    if (instruction < 0 || instruction >= mir.count)
+        return 0;
+    first = &mir.insns[instruction];
+    if (first->opcode != MIR_INDEX_ADDRESS)
+        return 0;
+    for (scan = instruction + 1; scan < mir.count; ++scan) {
+        if (mir.insns[scan].opcode == MIR_LABEL ||
+            mir.insns[scan].opcode == MIR_JUMP ||
+            mir.insns[scan].opcode == MIR_BRANCH_FALSE)
+            return 0;
+        if (mir.insns[scan].opcode == MIR_RETURN) {
+            ret = &mir.insns[scan];
+            return_instruction = scan;
+            break;
+        }
+    }
+    if (ret == NULL || ret->src1 < 0 ||
+        !mir_collect_wide_byte_pack_terms(ret->src1, plan, 0))
+        return 0;
+    for (offset = 0; offset < 4; ++offset)
+        if (plan->shifts[offset] != 24 - 8 * offset)
+            return 0;
+    if (!mir_wide_byte_pack_has_component(plan, instruction) ||
+        !mir_wide_byte_pack_add_component(plan, return_instruction))
+        return 0;
+    plan->skip_through = return_instruction;
+    for (scan = instruction; scan <= return_instruction; ++scan) {
+        const struct MirInsn *insn = &mir.insns[scan];
+
+        if (mir_wide_byte_pack_has_component(plan, scan) ||
+            insn->opcode == MIR_NOP)
+            continue;
+        if (insn->opcode == MIR_STORE &&
+            insn->src1 >= 0 &&
+            mir_object_is_fully_promoted(insn->object)) {
+            const struct MirInsn *source = mir_definition(insn->src1);
+
+            if (source != NULL &&
+                mir_wide_byte_pack_has_component(
+                    plan, (int)(source - mir.insns))) {
+                if (!mir_wide_byte_pack_add_component(plan, scan))
+                    return 0;
+                continue;
+            }
+        }
+        return 0;
+    }
+    for (scan = 0; scan < plan->component_count; ++scan) {
+        const struct MirInsn *component =
+            &mir.insns[plan->components[scan]];
+
+        if (component->dst >= 0 &&
+            mir_low_byte_loop_value_used_outside(
+                component->dst, instruction, return_instruction))
+            return 0;
+    }
+    return 1;
+}
+
+static int mir_wide_byte_store_add_component(
+    struct MirWideByteStore *plan, int instruction)
+{
+    int component;
+
+    if (instruction < 0 || instruction >= mir.count)
+        return 0;
+    for (component = 0; component < plan->component_count; ++component)
+        if (plan->components[component] == instruction)
+            return 1;
+    if (plan->component_count >=
+        (int)(sizeof(plan->components) / sizeof(plan->components[0])))
+        return 0;
+    plan->components[plan->component_count++] = instruction;
+    return 1;
+}
+
+static int mir_wide_byte_store_has_component(
+    const struct MirWideByteStore *plan, int instruction)
+{
+    int component;
+
+    for (component = 0; component < plan->component_count; ++component)
+        if (plan->components[component] == instruction)
+            return 1;
+    return 0;
+}
+
+static int mir_match_wide_byte_store(
+    int instruction, struct MirWideByteStore *plan)
+{
+    const struct MirInsn *index;
+    const struct MirInsn *index_constant;
+    const struct MirInsn *base;
+    const struct MirInsn *store = NULL;
+    const struct MirInsn *conversion;
+    const struct MirInsn *mask;
+    const struct MirInsn *mask_constant;
+    const struct MirInsn *lane;
+    const struct MirInsn *shift_count = NULL;
+    const struct MirInsn *source;
+    int base_type;
+    int base_storage;
+    int base_offset;
+    int source_type;
+    int source_storage;
+    int source_offset;
+    int store_instruction = -1;
+    int lane_value;
+    int source_value;
+    int shift = 0;
+    int scan;
+
+    memset(plan, 0, sizeof(*plan));
+    if (instruction < 0 || instruction >= mir.count)
+        return 0;
+    index = &mir.insns[instruction];
+    if (index->opcode != MIR_INDEX_ADDRESS || index->immediate != 1 ||
+        mir_value_use_count(index->dst) != 1)
+        return 0;
+    index_constant = mir_definition(index->src2);
+    base = mir_definition(index->src1);
+    if (index_constant == NULL ||
+        index_constant->opcode != MIR_CONST ||
+        index_constant->immediate < 0 ||
+        index_constant->immediate > 3 ||
+        mir_value_use_count(index_constant->dst) != 1 ||
+        base == NULL ||
+        !mir_scalar_memory_location(base, &base_type, &base_storage,
+                                    &base_offset) ||
+        type_ptr_depth(base_type) == 0 || type_size(base_type) != 2 ||
+        (base_storage != SC_LOCAL && base_storage != SC_PARAM) ||
+        base_offset < -128 || base_offset + 1 > 127)
+        return 0;
+    for (scan = instruction + 1; scan < mir.count; ++scan) {
+        if (mir.insns[scan].opcode == MIR_LABEL ||
+            mir.insns[scan].opcode == MIR_JUMP ||
+            mir.insns[scan].opcode == MIR_BRANCH_FALSE ||
+            mir.insns[scan].opcode == MIR_RETURN)
+            break;
+        if (mir.insns[scan].opcode == MIR_STORE_INDIRECT &&
+            mir.insns[scan].src1 == index->dst) {
+            store = &mir.insns[scan];
+            store_instruction = scan;
+            break;
+        }
+    }
+    if (store == NULL || store->memory_size != 1 ||
+        store->bit_width != 0)
+        return 0;
+    conversion = mir_definition(store->src2);
+    if (conversion == NULL || conversion->opcode != MIR_UNARY ||
+        conversion->immediate != 0 || type_size(conversion->type) != 1 ||
+        mir_value_use_count(conversion->dst) != 1)
+        return 0;
+    mask = mir_definition(conversion->src1);
+    if (mask == NULL || mask->opcode != MIR_BINARY ||
+        mask->immediate != '&' || type_size(mask->secondary_offset) != 4 ||
+        mir_value_use_count(mask->dst) != 1)
+        return 0;
+    mask_constant = mir_definition(mask->src1);
+    lane_value = mask->src2;
+    if (mask_constant == NULL || mask_constant->opcode != MIR_CONST ||
+        ((unsigned long)mask_constant->immediate & 0xffffffffUL) != 255UL) {
+        mask_constant = mir_definition(mask->src2);
+        lane_value = mask->src1;
+    }
+    if (mask_constant == NULL || mask_constant->opcode != MIR_CONST ||
+        ((unsigned long)mask_constant->immediate & 0xffffffffUL) != 255UL ||
+        mir_value_use_count(mask_constant->dst) != 1)
+        return 0;
+    lane = mir_definition(lane_value);
+    source_value = lane_value;
+    if (lane != NULL && lane->opcode == MIR_BINARY &&
+        lane->immediate == TOK_SHR &&
+        type_size(lane->secondary_offset) == 4 &&
+        mir_value_use_count(lane->dst) == 1) {
+        shift_count = mir_definition(lane->src2);
+        if (shift_count == NULL || shift_count->opcode != MIR_CONST ||
+            (shift_count->immediate != 8 &&
+             shift_count->immediate != 16 &&
+             shift_count->immediate != 24) ||
+            mir_value_use_count(shift_count->dst) != 1)
+            return 0;
+        shift = (int)shift_count->immediate;
+        source_value = lane->src1;
+    } else {
+        lane = NULL;
+    }
+    source = mir_definition(source_value);
+    if (source == NULL || type_size(source->type) != 4 ||
+        !mir_scalar_memory_location(source, &source_type, &source_storage,
+                                    &source_offset) ||
+        type_size(source_type) != 4 ||
+        (source_storage != SC_LOCAL && source_storage != SC_PARAM) ||
+        source_offset < -128 || source_offset + shift / 8 > 127)
+        return 0;
+
+    plan->skip_through = store_instruction;
+    plan->base_offset = base_offset;
+    plan->source_offset = source_offset + shift / 8;
+    plan->byte_offset = (int)index_constant->immediate;
+    if (!mir_wide_byte_store_add_component(plan, instruction) ||
+        !mir_wide_byte_store_add_component(
+            plan, (int)(conversion - mir.insns)) ||
+        !mir_wide_byte_store_add_component(
+            plan, (int)(mask - mir.insns)) ||
+        !mir_wide_byte_store_add_component(
+            plan, (int)(mask_constant - mir.insns)) ||
+        !mir_wide_byte_store_add_component(plan, store_instruction))
+        return 0;
+    if (lane != NULL &&
+        (!mir_wide_byte_store_add_component(
+             plan, (int)(lane - mir.insns)) ||
+         !mir_wide_byte_store_add_component(
+             plan, (int)(shift_count - mir.insns))))
+        return 0;
+    for (scan = instruction; scan <= store_instruction; ++scan) {
+        const struct MirInsn *insn = &mir.insns[scan];
+
+        if (mir_wide_byte_store_has_component(plan, scan) ||
+            insn->opcode == MIR_NOP)
+            continue;
+        return 0;
+    }
+    for (scan = 0; scan < plan->component_count; ++scan) {
+        const struct MirInsn *component =
+            &mir.insns[plan->components[scan]];
+
+        if (component->dst >= 0 &&
+            mir_low_byte_loop_value_used_outside(
+                component->dst, instruction, store_instruction))
+            return 0;
+    }
+    return 1;
+}
+
+static int mir_low_byte_loop_add_component(
+    struct MirLowByteIndexLoop *plan, int instruction)
+{
+    int component;
+
+    if (instruction < 0 || instruction >= mir.count)
+        return 0;
+    for (component = 0; component < plan->component_count; ++component)
+        if (plan->components[component] == instruction)
+            return 1;
+    if (plan->component_count >=
+        (int)(sizeof(plan->components) / sizeof(plan->components[0])))
+        return 0;
+    plan->components[plan->component_count++] = instruction;
+    return 1;
+}
+
+static int mir_low_byte_loop_has_component(
+    const struct MirLowByteIndexLoop *plan, int instruction)
+{
+    int component;
+
+    for (component = 0; component < plan->component_count; ++component)
+        if (plan->components[component] == instruction)
+            return 1;
+    return 0;
+}
+
+static int mir_low_byte_loop_next_effective(int instruction)
+{
+    int next = instruction + 1;
+
+    while (next < mir.count) {
+        const struct MirInsn *insn = &mir.insns[next];
+
+        if (insn->opcode == MIR_NOP) {
+            ++next;
+            continue;
+        }
+        if (insn->opcode == MIR_LOAD && insn->memory_flags == 0 &&
+            insn->dst >= 0 && !mir_value_has_use(insn->dst)) {
+            ++next;
+            continue;
+        }
+        break;
+    }
+    return next;
+}
+
+static int mir_low_byte_loop_value_used_outside(
+    int value, int first, int last)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (instruction >= first && instruction <= last)
+            continue;
+        if (insn->src1 == value || insn->src2 == value)
+            return 1;
+        if ((insn->opcode == MIR_CALL ||
+             insn->opcode == MIR_CALL_AGGREGATE) &&
+            mir_call_uses_value(insn, value))
+            return 1;
+    }
+    return 0;
+}
+
+static int mir_low_byte_loop_add_projection(
+    int value, int index_value, struct MirLowByteIndexLoop *plan)
+{
+    const struct MirInsn *conversion = mir_definition(value);
+    const struct MirInsn *byte_conversion;
+    const struct MirInsn *mask;
+    const struct MirInsn *mask_constant;
+    const struct MirInsn *addition;
+    const struct MirInsn *widen;
+    const struct MirInsn *invariant;
+    int conversion_index = -1;
+    int byte_conversion_index;
+    int mask_index;
+    int constant_index;
+    int addition_index;
+    int widen_index;
+    int invariant_type;
+    int invariant_storage;
+    int invariant_offset;
+    int addition_value;
+    int widen_value;
+    int invariant_value;
+
+    if (conversion != NULL && conversion->opcode == MIR_UNARY &&
+        conversion->immediate == 0 && type_size(conversion->type) == 2) {
+        const struct MirInsn *source = mir_definition(conversion->src1);
+
+        if (source == NULL || type_size(source->type) != 1 ||
+            mir_value_use_count(conversion->dst) != 1)
+            return 0;
+        conversion_index = (int)(conversion - mir.insns);
+        value = conversion->src1;
+        conversion = source;
+    }
+    byte_conversion = conversion;
+    if (byte_conversion == NULL ||
+        byte_conversion->opcode != MIR_UNARY ||
+        byte_conversion->immediate != 0 ||
+        type_size(byte_conversion->type) != 1 ||
+        mir_value_use_count(byte_conversion->dst) != 1)
+        return 0;
+    mask = mir_definition(byte_conversion->src1);
+    if (mask == NULL || mask->opcode != MIR_BINARY ||
+        mask->immediate != '&' || type_size(mask->secondary_offset) != 4 ||
+        mir_value_use_count(mask->dst) != 1)
+        return 0;
+    mask_constant = mir_definition(mask->src1);
+    addition_value = mask->src2;
+    if (mask_constant == NULL || mask_constant->opcode != MIR_CONST ||
+        ((unsigned long)mask_constant->immediate & 0xffffffffUL) != 255UL) {
+        mask_constant = mir_definition(mask->src2);
+        addition_value = mask->src1;
+    }
+    if (mask_constant == NULL || mask_constant->opcode != MIR_CONST ||
+        ((unsigned long)mask_constant->immediate & 0xffffffffUL) != 255UL ||
+        mir_value_use_count(mask_constant->dst) != 1)
+        return 0;
+    addition = mir_definition(addition_value);
+    if (addition == NULL || addition->opcode != MIR_BINARY ||
+        addition->immediate != '+' ||
+        type_size(addition->secondary_offset) != 4 ||
+        mir_value_use_count(addition->dst) != 1)
+        return 0;
+    widen_value = addition->src1;
+    invariant_value = addition->src2;
+    widen = mir_definition(widen_value);
+    if (widen == NULL || widen->opcode != MIR_UNARY ||
+        widen->immediate != 0 || type_size(widen->type) != 4 ||
+        widen->src1 != index_value) {
+        widen_value = addition->src2;
+        invariant_value = addition->src1;
+        widen = mir_definition(widen_value);
+    }
+    if (widen == NULL || widen->opcode != MIR_UNARY ||
+        widen->immediate != 0 || type_size(widen->type) != 4 ||
+        widen->src1 != index_value ||
+        mir_value_use_count(widen->dst) != 1)
+        return 0;
+    invariant = mir_definition(invariant_value);
+    if (invariant == NULL || type_size(invariant->type) != 4 ||
+        !mir_scalar_memory_location(invariant, &invariant_type,
+                                    &invariant_storage,
+                                    &invariant_offset) ||
+        type_size(invariant_type) != 4 ||
+        (invariant_storage != SC_LOCAL &&
+         invariant_storage != SC_PARAM) ||
+        invariant_offset < -128 || invariant_offset > 127)
+        return 0;
+
+    byte_conversion_index = (int)(byte_conversion - mir.insns);
+    mask_index = (int)(mask - mir.insns);
+    constant_index = (int)(mask_constant - mir.insns);
+    addition_index = (int)(addition - mir.insns);
+    widen_index = (int)(widen - mir.insns);
+    if ((conversion_index >= 0 &&
+         !mir_low_byte_loop_add_component(plan, conversion_index)) ||
+        !mir_low_byte_loop_add_component(plan, byte_conversion_index) ||
+        !mir_low_byte_loop_add_component(plan, mask_index) ||
+        !mir_low_byte_loop_add_component(plan, constant_index) ||
+        !mir_low_byte_loop_add_component(plan, addition_index) ||
+        !mir_low_byte_loop_add_component(plan, widen_index))
+        return 0;
+    plan->invariant_offset = invariant_offset;
+    return 1;
+}
+
+static int mir_low_byte_loop_promotes_value(
+    int value, int source_value, struct MirLowByteIndexLoop *plan)
+{
+    const struct MirInsn *conversion;
+
+    if (value == source_value)
+        return 1;
+    conversion = mir_definition(value);
+    if (conversion == NULL || conversion->opcode != MIR_UNARY ||
+        conversion->immediate != 0 || conversion->src1 != source_value ||
+        type_size(conversion->type) != 2 ||
+        mir_value_use_count(conversion->dst) != 1)
+        return 0;
+    return mir_low_byte_loop_add_component(
+        plan, (int)(conversion - mir.insns));
+}
+
+static int mir_low_byte_loop_match_body(
+    int first, int latch, int index_value, struct MirLowByteIndexLoop *plan)
+{
+    int instruction;
+
+    for (instruction = first; instruction < latch; ++instruction) {
+        const struct MirInsn *index = &mir.insns[instruction];
+        const struct MirInsn *base;
+        int base_type;
+        int base_storage;
+        int base_offset;
+        int use;
+
+        if (index->opcode != MIR_INDEX_ADDRESS ||
+            index->src2 != index_value || index->immediate != 1 ||
+            mir_value_use_count(index->dst) != 1)
+            continue;
+        base = mir_definition(index->src1);
+        if (base == NULL ||
+            !mir_scalar_memory_location(base, &base_type, &base_storage,
+                                        &base_offset) ||
+            type_ptr_depth(base_type) == 0 ||
+            type_size(base_type) != 2 ||
+            (base_storage != SC_LOCAL && base_storage != SC_PARAM) ||
+            base_offset < -128 || base_offset + 1 > 127)
+            continue;
+
+        use = instruction + 1;
+        while (use < latch && mir.insns[use].opcode == MIR_NOP)
+            ++use;
+        if (use >= latch ||
+            mir.insns[use].opcode != MIR_STORE_INDIRECT ||
+            mir.insns[use].src1 != index->dst)
+            for (use = instruction + 1; use < latch; ++use)
+                if (mir.insns[use].opcode == MIR_STORE_INDIRECT &&
+                    mir.insns[use].src1 == index->dst)
+                    break;
+        if (use < latch && mir.insns[use].opcode == MIR_STORE_INDIRECT &&
+            mir.insns[use].src1 == index->dst &&
+            mir.insns[use].memory_size == 1 &&
+            mir.insns[use].bit_width == 0) {
+            struct MirLowByteIndexLoop candidate = *plan;
+
+            if (!mir_low_byte_loop_add_projection(
+                    mir.insns[use].src2, index_value, &candidate))
+                continue;
+            candidate.kind = MIR_LOW_BYTE_INDEX_STORE;
+            candidate.base_offset = base_offset;
+            if (!mir_low_byte_loop_add_component(&candidate, instruction) ||
+                !mir_low_byte_loop_add_component(&candidate, use))
+                continue;
+            if ((int)(base - mir.insns) >= first &&
+                !mir_low_byte_loop_add_component(
+                    &candidate, (int)(base - mir.insns)))
+                continue;
+            *plan = candidate;
+            return 1;
+        }
+        use = instruction + 1;
+        while (use < latch && mir.insns[use].opcode == MIR_NOP)
+            ++use;
+        if (use >= latch ||
+            mir.insns[use].opcode != MIR_LOAD_INDIRECT ||
+            mir.insns[use].src1 != index->dst)
+            for (use = instruction + 1; use < latch; ++use)
+                if (mir.insns[use].opcode == MIR_LOAD_INDIRECT &&
+                    mir.insns[use].src1 == index->dst)
+                    break;
+        if (use < latch && mir.insns[use].opcode == MIR_LOAD_INDIRECT &&
+            mir.insns[use].src1 == index->dst &&
+            mir.insns[use].memory_size == 1 &&
+            mir.insns[use].bit_width == 0 &&
+            mir_value_use_count(mir.insns[use].dst) == 1) {
+            int compare_index;
+
+            for (compare_index = use + 1;
+                 compare_index < latch; ++compare_index) {
+                const struct MirInsn *compare =
+                    &mir.insns[compare_index];
+                int projection_value;
+                int loaded_value;
+                int branch_index;
+                int continue_instruction;
+                int mismatch_const;
+                int mismatch_return;
+                struct MirLowByteIndexLoop candidate = *plan;
+
+                if (compare->opcode != MIR_BINARY ||
+                    compare->immediate != TOK_NE ||
+                    mir_value_use_count(compare->dst) != 1)
+                    continue;
+                loaded_value = compare->src1;
+                projection_value = compare->src2;
+                if (!mir_low_byte_loop_promotes_value(
+                        loaded_value, mir.insns[use].dst, &candidate)) {
+                    loaded_value = compare->src2;
+                    projection_value = compare->src1;
+                    candidate = *plan;
+                    if (!mir_low_byte_loop_promotes_value(
+                            loaded_value, mir.insns[use].dst, &candidate))
+                        continue;
+                }
+                if (!mir_low_byte_loop_add_projection(
+                        projection_value, index_value, &candidate))
+                    continue;
+                branch_index = mir_low_byte_loop_next_effective(
+                    compare_index);
+                if (branch_index >= latch ||
+                    mir.insns[branch_index].opcode != MIR_BRANCH_FALSE ||
+                    mir.insns[branch_index].src1 != compare->dst)
+                    continue;
+                continue_instruction =
+                    mir_find_label(mir.insns[branch_index].label);
+                if (continue_instruction <= branch_index ||
+                    continue_instruction > latch ||
+                    !mir_phi_copies_are_empty(
+                        branch_index, continue_instruction))
+                    continue;
+                mismatch_const =
+                    mir_low_byte_loop_next_effective(branch_index);
+                mismatch_return =
+                    mir_low_byte_loop_next_effective(mismatch_const);
+                if (mismatch_const >= continue_instruction ||
+                    mismatch_return >= continue_instruction ||
+                    type_size(mir.return_type) != 2 ||
+                    mir.insns[mismatch_const].opcode != MIR_CONST ||
+                    type_size(mir.insns[mismatch_const].type) != 2 ||
+                    mir.insns[mismatch_const].immediate != 0 ||
+                    mir.insns[mismatch_return].opcode != MIR_RETURN ||
+                    mir.insns[mismatch_return].src1 !=
+                        mir.insns[mismatch_const].dst)
+                    continue;
+                while (continue_instruction < latch &&
+                       (mir.insns[continue_instruction].opcode == MIR_LABEL ||
+                        mir.insns[continue_instruction].opcode == MIR_NOP)) {
+                    if (mir.insns[continue_instruction].opcode == MIR_LABEL &&
+                        !mir_low_byte_loop_add_component(
+                            &candidate, continue_instruction))
+                        break;
+                    ++continue_instruction;
+                }
+                if (continue_instruction != latch)
+                    continue;
+                candidate.kind = MIR_LOW_BYTE_INDEX_COMPARE;
+                candidate.base_offset = base_offset;
+                candidate.continue_label =
+                    mir.insns[branch_index].label;
+                if (!mir_low_byte_loop_add_component(
+                        &candidate, instruction) ||
+                    !mir_low_byte_loop_add_component(&candidate, use) ||
+                    !mir_low_byte_loop_add_component(
+                        &candidate, compare_index) ||
+                    !mir_low_byte_loop_add_component(
+                        &candidate, branch_index) ||
+                    !mir_low_byte_loop_add_component(
+                        &candidate, mismatch_const) ||
+                    !mir_low_byte_loop_add_component(
+                        &candidate, mismatch_return))
+                    continue;
+                if ((int)(base - mir.insns) >= first &&
+                    !mir_low_byte_loop_add_component(
+                        &candidate, (int)(base - mir.insns)))
+                    continue;
+                *plan = candidate;
+                return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+static int mir_match_low_byte_index_loop(
+    int instruction, struct MirLowByteIndexLoop *plan)
+{
+    const struct MirInsn *initial;
+    const struct MirInsn *store;
+    const struct MirInsn *header;
+    const struct MirInsn *phi = NULL;
+    const struct MirInsn *condition;
+    const struct MirInsn *limit;
+    const struct MirInsn *promote;
+    const struct MirInsn *branch;
+    const struct MirInsn *one;
+    const struct MirInsn *increment;
+    const struct MirInsn *update_store;
+    const struct MirInsn *jump;
+    int store_instruction;
+    int header_instruction;
+    int phi_instruction = -1;
+    int condition_instruction;
+    int branch_instruction;
+    int latch_instruction;
+    int one_instruction;
+    int increment_instruction;
+    int update_store_instruction;
+    int jump_instruction;
+    int exit_instruction;
+    int index_type;
+    int index_storage;
+    int index_offset;
+    int scan;
+
+    memset(plan, 0, sizeof(*plan));
+    plan->continue_label = -1;
+    plan->invariant_offset = 0;
+    if (instruction < 0 || instruction >= mir.count)
+        return 0;
+    initial = &mir.insns[instruction];
+    if (initial->opcode != MIR_CONST || initial->dst < 0 ||
+        mir_value_use_count(initial->dst) != 2 ||
+        initial->immediate < 0 || initial->immediate > 254)
+        return 0;
+    store_instruction = mir_low_byte_loop_next_effective(instruction);
+    if (store_instruction >= mir.count)
+        return 0;
+    store = &mir.insns[store_instruction];
+    if (store->opcode != MIR_STORE || store->src1 != initial->dst ||
+        store->object < 0 || store->memory_size != 1)
+        return 0;
+    header_instruction =
+        mir_low_byte_loop_next_effective(store_instruction);
+    if (header_instruction >= mir.count)
+        return 0;
+    header = &mir.insns[header_instruction];
+    if (header->opcode != MIR_LABEL)
+        return 0;
+    for (scan = header_instruction + 1;
+         scan < mir.count && scan <= header_instruction + 8; ++scan)
+        if (mir.insns[scan].opcode == MIR_PHI &&
+            mir.insns[scan].object == store->object &&
+            mir.insns[scan].src1 == initial->dst) {
+            phi = &mir.insns[scan];
+            phi_instruction = scan;
+            break;
+        }
+    if (phi == NULL || type_size(phi->type) != 1 ||
+        !mir_scalar_memory_location(phi, &index_type, &index_storage,
+                                    &index_offset) ||
+        type_size(index_type) != 1 ||
+        (index_storage != SC_LOCAL && index_storage != SC_PARAM) ||
+        index_offset < -128 || index_offset > 127)
+        return 0;
+
+    branch_instruction = -1;
+    for (scan = phi_instruction + 1;
+         scan < mir.count && scan <= phi_instruction + 8; ++scan)
+        if (mir.insns[scan].opcode == MIR_BRANCH_FALSE) {
+            branch_instruction = scan;
+            break;
+        }
+    if (branch_instruction < 0)
+        return 0;
+    branch = &mir.insns[branch_instruction];
+    condition = mir_definition(branch->src1);
+    if (condition == NULL || condition->opcode != MIR_BINARY ||
+        condition->immediate != '<' ||
+        mir_value_use_count(condition->dst) != 1)
+        return 0;
+    condition_instruction = (int)(condition - mir.insns);
+    promote = mir_definition(condition->src1);
+    limit = mir_definition(condition->src2);
+    if (promote == NULL || promote->opcode != MIR_UNARY ||
+        promote->immediate != 0 || promote->src1 != phi->dst ||
+        type_size(promote->type) != 2 ||
+        mir_value_use_count(promote->dst) != 1 ||
+        limit == NULL || limit->opcode != MIR_CONST ||
+        limit->immediate <= initial->immediate ||
+        limit->immediate > 255 ||
+        (((index_type & TYPE_UNSIGNED) == 0) &&
+         limit->immediate > 127) ||
+        mir_value_use_count(limit->dst) != 1)
+        return 0;
+    exit_instruction = mir_find_label(branch->label);
+    latch_instruction = mir_find_label(phi->phi_pred2);
+    if (exit_instruction <= branch_instruction ||
+        latch_instruction <= branch_instruction ||
+        latch_instruction >= exit_instruction ||
+        !mir_phi_copies_are_empty(branch_instruction, exit_instruction))
+        return 0;
+
+    one_instruction = mir_low_byte_loop_next_effective(latch_instruction);
+    increment_instruction =
+        mir_low_byte_loop_next_effective(one_instruction);
+    update_store_instruction =
+        mir_low_byte_loop_next_effective(increment_instruction);
+    jump_instruction =
+        mir_low_byte_loop_next_effective(update_store_instruction);
+    if (jump_instruction >= exit_instruction)
+        return 0;
+    one = &mir.insns[one_instruction];
+    increment = &mir.insns[increment_instruction];
+    update_store = &mir.insns[update_store_instruction];
+    jump = &mir.insns[jump_instruction];
+    if (one->opcode != MIR_CONST || one->immediate != 1 ||
+        mir_value_use_count(one->dst) != 1 ||
+        increment->opcode != MIR_BINARY || increment->immediate != '+' ||
+        increment->src1 != phi->dst || increment->src2 != one->dst ||
+        increment->dst != phi->src2 ||
+        type_size(increment->secondary_offset) != 1 ||
+        update_store->opcode != MIR_STORE ||
+        update_store->src1 != increment->dst ||
+        update_store->object != store->object ||
+        jump->opcode != MIR_JUMP || jump->label != header->label)
+        return 0;
+    for (scan = phi_instruction + 1;
+         scan < branch_instruction; ++scan)
+        if (mir.insns[scan].opcode == MIR_PHI)
+            return 0;
+
+    plan->skip_through = jump_instruction;
+    plan->header_label = header->label;
+    plan->initial = (int)initial->immediate;
+    plan->limit = (int)limit->immediate;
+    plan->index_object = store->object;
+    if (!mir_low_byte_loop_add_component(plan, instruction) ||
+        !mir_low_byte_loop_add_component(plan, store_instruction) ||
+        !mir_low_byte_loop_add_component(plan, header_instruction) ||
+        !mir_low_byte_loop_add_component(plan, phi_instruction) ||
+        !mir_low_byte_loop_add_component(
+            plan, (int)(promote - mir.insns)) ||
+        !mir_low_byte_loop_add_component(
+            plan, (int)(limit - mir.insns)) ||
+        !mir_low_byte_loop_add_component(plan, condition_instruction) ||
+        !mir_low_byte_loop_add_component(plan, branch_instruction) ||
+        !mir_low_byte_loop_add_component(plan, latch_instruction) ||
+        !mir_low_byte_loop_add_component(plan, one_instruction) ||
+        !mir_low_byte_loop_add_component(plan, increment_instruction) ||
+        !mir_low_byte_loop_add_component(plan, update_store_instruction) ||
+        !mir_low_byte_loop_add_component(plan, jump_instruction) ||
+        !mir_low_byte_loop_match_body(
+            branch_instruction + 1, latch_instruction, phi->dst, plan))
+        return 0;
+
+    for (scan = instruction; scan <= plan->skip_through; ++scan) {
+        const struct MirInsn *insn = &mir.insns[scan];
+
+        if (mir_low_byte_loop_has_component(plan, scan) ||
+            insn->opcode == MIR_NOP)
+            continue;
+        if (insn->opcode == MIR_LOAD && insn->memory_flags == 0 &&
+            insn->dst >= 0 && !mir_value_has_use(insn->dst))
+            continue;
+        return 0;
+    }
+    for (scan = 0; scan < mir.count; ++scan) {
+        const struct MirInsn *insn = &mir.insns[scan];
+
+        if (scan >= instruction && scan <= plan->skip_through)
+            continue;
+        if (insn->object == plan->index_object &&
+            (insn->opcode == MIR_LOAD || insn->opcode == MIR_STORE ||
+             insn->opcode == MIR_PARAM ||
+             insn->opcode == MIR_OBJECT_MERGE ||
+             insn->opcode == MIR_PHI))
+            return 0;
+    }
+    for (scan = 0; scan < plan->component_count; ++scan) {
+        const struct MirInsn *component =
+            &mir.insns[plan->components[scan]];
+
+        if (component->dst >= 0 &&
+            mir_low_byte_loop_value_used_outside(
+                component->dst, instruction, plan->skip_through))
+            return 0;
+    }
+    return 1;
+}
+
 static int mir_prepare_backend_slots(void)
 {
     int *first;
@@ -4125,10 +5441,10 @@ static int mir_prepare_backend_slots(void)
         if (stack_interval_occupied == NULL)
             fatal("out of memory planning MIR stack handoffs");
     }
+    fused_away = (char *)calloc((size_t)mir.next_value, 1);
+    if (fused_away == NULL)
+        fatal("out of memory computing MIR fused-value set");
     if (mir_backend_slots_skip_fused_comparisons) {
-        fused_away = (char *)calloc((size_t)mir.next_value, 1);
-        if (fused_away == NULL)
-            fatal("out of memory computing MIR fused-comparison set");
         for (i = 0; i < mir.count; ++i) {
             int skip = mir_binary_is_fusable_comparison(i);
             if (skip > 0)
@@ -4142,6 +5458,59 @@ static int mir_prepare_backend_slots(void)
                 if (mir_float_madd_match(i, &multiply_index, NULL))
                     fused_away[mir.insns[multiply_index].dst] = 1;
             }
+        }
+    }
+    for (i = 0; i < mir.count; ++i) {
+        struct MirLowByteIndexLoop loop;
+        int component;
+
+        if (!mir_match_low_byte_index_loop(i, &loop))
+            continue;
+        for (component = 0; component < loop.component_count; ++component) {
+            int value = mir.insns[loop.components[component]].dst;
+
+            if (value >= 0)
+                fused_away[value] = 2;
+        }
+    }
+    for (i = 0; i < mir.count; ++i) {
+        struct MirWideByteStore store;
+        int component;
+
+        if (!mir_match_wide_byte_store(i, &store))
+            continue;
+        for (component = 0; component < store.component_count; ++component) {
+            int value = mir.insns[store.components[component]].dst;
+
+            if (value >= 0)
+                fused_away[value] = 2;
+        }
+    }
+    for (i = 0; i < mir.count; ++i) {
+        struct MirWideBytePackReturn pack;
+        int component;
+
+        if (!mir_match_wide_byte_pack_return(i, &pack))
+            continue;
+        for (component = 0; component < pack.component_count; ++component) {
+            int value = mir.insns[pack.components[component]].dst;
+
+            if (value >= 0)
+                fused_away[value] = 2;
+        }
+    }
+    for (i = 0; i < mir.count; ++i) {
+        struct MirWideMaskZeroBranch branch;
+        int component;
+
+        if (!mir_match_wide_mask_zero_branch(i, &branch))
+            continue;
+        for (component = 0; component < branch.component_count;
+             ++component) {
+            int value = mir.insns[branch.components[component]].dst;
+
+            if (value >= 0)
+                fused_away[value] = 2;
         }
     }
     for (value = 0; value < mir.next_value; ++value) {
@@ -4289,11 +5658,28 @@ static int mir_prepare_backend_slots(void)
                 const struct MirInsn *definition = mir_definition(value);
                 int units = mir_definition_is_wide(definition) ? 2 : 1;
                 int reusable_source = -1;
+                int wide_phi_source = -1;
                 int force_slot =
                     mir_value_requires_phi_slot(value) ||
                     mir_value_requires_divmod_slot(value) ||
                     mir_value_requires_odd_call_cleanup_slot(value);
                 ++mir_slot_report_requested_count;
+                if (fused_away[value] == 2)
+                    continue;
+                if (units == 2 && definition != NULL &&
+                    definition->opcode == MIR_BINARY &&
+                    mir_binary_is_wide_phi_increment(
+                        i, &wide_phi_source, NULL) &&
+                    wide_phi_source >= 0 &&
+                    mir.backend_slots[wide_phi_source] >= 0) {
+                    int unit;
+
+                    slot = mir.backend_slots[wide_phi_source];
+                    mir.backend_slots[value] = slot;
+                    for (unit = 0; unit < units; ++unit)
+                        slot_end[slot + unit] = last[value];
+                    continue;
+                }
                 if (!force_slot &&
                     (last[value] <= first[value] ||
                                         (definition != NULL &&
@@ -4310,7 +5696,7 @@ static int mir_prepare_backend_slots(void)
                                         mir_index_only_constant(value) ||
                                         mir_value_only_used_by_constant_absolute_address(value) ||
                                         mir_multiply_by_small_constant(value) ||
-                                        (fused_away != NULL && fused_away[value]) ||
+                                        fused_away[value] == 1 ||
                                         mir_value_is_selfstore_incdec(value) ||
                                         mir_value_is_selfstore_incdec_source(value) ||
                                         mir_value_only_used_by_selfstore_adjust_amount(
@@ -5330,7 +6716,20 @@ static void mir_emit_virtual_load_wide(FILE *out, int value)
          * convention below, so this mirrors the original MIR_PARAM binding
          * site's load form exactly rather than reusing mir_virtual_offset.
          * Also mirrors the IY-relative fast path hot loops rely on. */
-        int object_offset = mir.objects[definition->object].offset;
+        int object_offset;
+        int object_storage;
+        int selfstore_store_index;
+        if (getenv("DCC_MIR_PERF_RECOVERY_REPORT") != NULL &&
+            mir_wide_load_is_immediate_binary_rhs(value))
+            fprintf(stderr,
+                    "; MIR perf-recovery function=%s feature=wide-rhs-load\n",
+                    mir.name);
+        if (!mir_direct_named_home_location(
+                definition, &object_storage, &object_offset) &&
+            !mir_binary_is_selfstore_wide_increment(
+                (int)(definition - mir.insns),
+                &selfstore_store_index, &object_offset))
+            fatal("missing direct wide MIR named-home offset");
         int object_iy_offset = object_offset + mir_effective_local_bytes() +
                                 mir.aggregate_temp_bytes;
         if (mir_virtual_iy_base && object_iy_offset >= -128 &&
@@ -5521,6 +6920,79 @@ static void mir_emit_virtual_iy_epilogue(FILE *out)
     fputs("\tpop iy\n\tld sp,ix\n\tpop ix\n\texx\n\tret\n", out);
 }
 
+static void mir_emit_low_byte_index_loop(
+    FILE *out, const int *labels, const struct MirLowByteIndexLoop *loop)
+{
+    if (getenv("DCC_MIR_LOW_BYTE_INDEX_LOOP_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR low-byte-index-loop function=%s kind=%s "
+                "initial=%d limit=%d\n",
+                mir.name,
+                loop->kind == MIR_LOW_BYTE_INDEX_STORE
+                    ? "store" : "compare",
+                loop->initial, loop->limit);
+    fprintf(out,
+            "\tld c,(ix%+d)\n\tld b,(ix%+d)\n",
+            loop->base_offset, loop->base_offset + 1);
+    if (loop->initial != 0)
+        fprintf(out,
+                "\tld hl,%d\n\tadd hl,bc\n\tld b,h\n\tld c,l\n",
+                loop->initial);
+    fprintf(out,
+            "\tld e,%d\n\tld h,(ix%+d)\nL%d:\n"
+            "\tld a,h\n\tadd a,e\n",
+            loop->initial, loop->invariant_offset,
+            labels[loop->header_label]);
+    if (loop->kind == MIR_LOW_BYTE_INDEX_STORE) {
+        fputs("\tld (bc),a\n\tinc bc\n", out);
+    } else {
+        fprintf(out,
+                "\tld d,a\n\tld a,(bc)\n\tcp d\n\tinc bc\n"
+                "\tjp z, L%d\n\tld hl,0\n",
+                labels[loop->continue_label]);
+        mir_emit_virtual_iy_epilogue(out);
+        fprintf(out, "L%d:\n", labels[loop->continue_label]);
+    }
+    fprintf(out,
+            "\tinc e\n\tld a,e\n\tcp %d\n\tjp c, L%d\n",
+            loop->limit, labels[loop->header_label]);
+}
+
+static void mir_emit_wide_byte_store(
+    FILE *out, const struct MirWideByteStore *store)
+{
+    int offset;
+
+    if (getenv("DCC_MIR_LOW_BYTE_INDEX_LOOP_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR wide-byte-store function=%s byte-offset=%d\n",
+                mir.name, store->byte_offset);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+            store->base_offset, store->base_offset + 1);
+    for (offset = 0; offset < store->byte_offset; ++offset)
+        fputs("\tinc hl\n", out);
+    fprintf(out, "\tld a,(ix%+d)\n\tld (hl),a\n",
+            store->source_offset);
+}
+
+static void mir_emit_wide_byte_pack_return(
+    FILE *out, const struct MirWideBytePackReturn *pack)
+{
+    if (getenv("DCC_MIR_LOW_BYTE_INDEX_LOOP_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR wide-byte-pack-return function=%s\n",
+                mir.name);
+    fprintf(out,
+            "\tld c,(ix%+d)\n\tld b,(ix%+d)\n"
+            "\tld a,(bc)\n\tld d,a\n\tinc bc\n"
+            "\tld a,(bc)\n\tld e,a\n\tinc bc\n"
+            "\tld a,(bc)\n\tld h,a\n\tinc bc\n"
+            "\tld a,(bc)\n\tld l,a\n",
+            pack->base_offset, pack->base_offset + 1);
+    mir_emit_virtual_iy_epilogue(out);
+}
+
 static void mir_emit_restore_virtual_iy(FILE *out)
 {
     if (!mir_virtual_iy_base)
@@ -5676,6 +7148,60 @@ static int mir_emit_conditional_branch_with_phi_copies(
         !mir_emit_spilled_phi_copies(out, predecessor, fallthrough))
         return 0;
     return 1;
+}
+
+static int mir_emit_wide_mask_zero_branch(
+    FILE *out, const int *labels,
+    const struct MirWideMaskZeroBranch *plan)
+{
+    static const char registers[4] = { 'l', 'h', 'e', 'd' };
+    const struct MirInsn *branch =
+        &mir.insns[plan->branch_instruction];
+    const char *true_condition =
+        plan->comparison == TOK_EQ ? "z" : "nz";
+    int target = mir_find_label(branch->label);
+    int first = 1;
+    int flags_set = 0;
+    int byte;
+
+    if (target < 0)
+        return 0;
+    if (plan->source_is_direct)
+        fprintf(out,
+                "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+                "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+                plan->source_offset, plan->source_offset + 1,
+                plan->source_offset + 2, plan->source_offset + 3);
+    else
+        mir_emit_virtual_load_wide(out, plan->source_value);
+    for (byte = 0; byte < 4; ++byte) {
+        unsigned int mask =
+            (unsigned int)((plan->mask >> (8 * byte)) & 0xffUL);
+
+        if (mask == 0)
+            continue;
+        if (!first)
+            fputs("\tld c,a\n", out);
+        fprintf(out, "\tld a,%c\n", registers[byte]);
+        if (mask != 255)
+            fprintf(out, "\tand %u\n", mask);
+        if (mask != 255)
+            flags_set = 1;
+        if (!first) {
+            fputs("\tor c\n", out);
+            flags_set = 1;
+        }
+        first = 0;
+    }
+    if (!flags_set)
+        fputs("\tor a\n", out);
+    if (getenv("DCC_MIR_LOW_BYTE_INDEX_LOOP_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR wide-mask-zero-branch function=%s mask=%lu\n",
+                mir.name, plan->mask);
+    return mir_emit_conditional_branch_with_phi_copies(
+        out, labels, true_condition, plan->branch_instruction,
+        target, branch->label);
 }
 
 /* Item 1 (mir-migration-plan-100): when a scalar comparison feeds nothing
@@ -6668,7 +8194,8 @@ static int mir_collect_phi_copies_for_edge(int predecessor, int successor,
                                          successor, instruction);
         if (source < 0)
             return -1;
-        if (mir_phi_slot_cleanup_enabled &&
+        if ((mir_phi_slot_cleanup_enabled ||
+             mir_value_is_wide_phi_increment_result(source)) &&
             mir_phi_copy_is_slot_identity(source, phi->dst)) {
             ++instruction;
             continue;
@@ -8078,6 +9605,91 @@ static int mir_same_scalar_memory_location(const struct MirInsn *a,
  * This makes the fusion's real-world hit population the population of
  * dead-after-increment locals (e.g. "x++;" as the last touch of x before
  * an unrelated return), confirmed narrow by census (see Execution Log). */
+static int mir_binary_is_selfstore_wide_increment(
+    int index, int *store_index, int *memory_offset)
+{
+    const struct MirInsn *insn = &mir.insns[index];
+    const struct MirInsn *left_definition;
+    const struct MirInsn *right_definition;
+    int memory_type, memory_storage, offset;
+    int found_store = -1;
+    int last_use = index;
+    int instruction;
+
+    if (insn->opcode != MIR_BINARY || insn->immediate != '+' ||
+        type_size(insn->secondary_offset) != 4)
+        return 0;
+    right_definition = mir_definition(insn->src2);
+    left_definition = mir_definition(insn->src1);
+    if (right_definition == NULL ||
+        right_definition->opcode != MIR_CONST ||
+        right_definition->immediate != 1 ||
+        left_definition == NULL ||
+        left_definition->opcode != MIR_LOAD ||
+        left_definition->memory_flags != 0 ||
+        mir_value_use_count(left_definition->dst) != 1 ||
+        !mir_scalar_memory_location(
+            left_definition, &memory_type,
+            &memory_storage, &offset) ||
+        type_size(memory_type) != 4 ||
+        (memory_storage != SC_LOCAL &&
+         memory_storage != SC_PARAM) ||
+        offset < -128 || offset + 3 > 127 ||
+        (left_definition->object >= 0 &&
+         mir_object_address_taken(left_definition->object)))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *use = &mir.insns[instruction];
+
+        if (use->src1 != insn->dst && use->src2 != insn->dst &&
+            !mir_call_uses_value(use, insn->dst))
+            continue;
+        if (instruction > last_use)
+            last_use = instruction;
+        if (use->opcode == MIR_STORE &&
+            use->src1 == insn->dst &&
+            mir_same_scalar_memory_location(left_definition, use)) {
+            if (found_store >= 0)
+                return 0;
+            found_store = instruction;
+        }
+    }
+    if (found_store <= index)
+        return 0;
+    for (instruction = index + 1;
+         instruction < found_store; ++instruction)
+        if (mir.insns[instruction].opcode != MIR_NOP)
+            return 0;
+    for (instruction = found_store + 1;
+         instruction <= last_use; ++instruction) {
+        const struct MirInsn *candidate = &mir.insns[instruction];
+
+        if (candidate->opcode == MIR_STORE &&
+            mir_same_scalar_memory_location(
+                left_definition, candidate))
+            return 0;
+    }
+    if (store_index != NULL)
+        *store_index = found_store;
+    if (memory_offset != NULL)
+        *memory_offset = offset;
+    return 1;
+}
+
+static int mir_value_is_selfstore_wide_increment_result(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int offset;
+    int store_index;
+
+    return definition != NULL &&
+           definition->opcode == MIR_BINARY &&
+           mir_binary_is_selfstore_wide_increment(
+               (int)(definition - mir.insns),
+               &store_index, &offset);
+}
+
+/* The original 16-bit self-store matcher described by Item 31 above. */
 static int mir_binary_is_selfstore_incdec(int index, int *store_index)
 {
     const struct MirInsn *insn = &mir.insns[index];
@@ -8291,6 +9903,8 @@ static int mir_value_only_used_by_selfstore_adjust_amount(int value)
     int uses = 0;
     int sole_user = -1;
     int amount;
+    int memory_offset;
+    int phi_value;
     int store_index;
     int load_index;
 
@@ -8306,7 +9920,11 @@ static int mir_value_only_used_by_selfstore_adjust_amount(int value)
         ++uses;
     }
     return uses == 1 &&
-           (mir_binary_is_selfstore_small_adjust(
+           (mir_binary_is_selfstore_wide_increment(
+                sole_user, &store_index, &memory_offset) ||
+            mir_binary_is_wide_phi_increment(
+                sole_user, &phi_value, &store_index) ||
+            mir_binary_is_selfstore_small_adjust(
                 sole_user, &store_index, &amount) ||
             mir_binary_is_selfstore_global_predecrement_load(
                 sole_user, &store_index, &load_index, &amount));
@@ -8321,12 +9939,16 @@ int mir_value_is_selfstore_incdec(int value)
     const struct MirInsn *definition = mir_definition(value);
     int amount;
     int load_index;
+    int memory_offset;
     int store_index;
 
     if (definition == NULL || definition->opcode != MIR_BINARY)
         return 0;
     return mir_binary_is_selfstore_incdec((int)(definition - mir.insns),
                                           &store_index) ||
+           mir_binary_is_selfstore_wide_increment(
+               (int)(definition - mir.insns),
+               &store_index, &memory_offset) ||
            mir_binary_is_selfstore_small_adjust(
                (int)(definition - mir.insns),
                &store_index, &amount) ||
@@ -8375,9 +9997,12 @@ static int mir_value_is_selfstore_incdec_source(int value)
     {
         int amount;
         int load_index;
+        int memory_offset;
         int store_index;
         return mir_binary_is_selfstore_incdec(
                    sole_user, &store_index) ||
+               mir_binary_is_selfstore_wide_increment(
+                   sole_user, &store_index, &memory_offset) ||
                mir_binary_is_selfstore_small_adjust(
                    sole_user, &store_index, &amount) ||
                mir_binary_is_selfstore_global_predecrement_load(
@@ -8413,6 +10038,59 @@ static void mir_emit_selfstore_incdec(FILE *out, int offset, int is_inc)
         fprintf(out, "\tdec (ix%+d)\n", offset + 1);
     }
     fprintf(out, "L%d:\n", done);
+}
+
+static int mir_emit_wide_phi_increment(FILE *out, int phi_value)
+{
+    int offset = mir_virtual_offset(phi_value);
+    int iy_offset = mir_virtual_iy_offset(phi_value);
+    const char *base = "ix";
+    int low = offset;
+    int high_low = offset - 2;
+    int done;
+
+    if (mir_virtual_iy_base && iy_offset - 2 >= -128 &&
+        iy_offset + 1 <= 127) {
+        base = "iy";
+        low = iy_offset;
+        high_low = iy_offset - 2;
+    } else if (offset - 2 < -128 || offset + 1 > 127) {
+        return 0;
+    }
+    done = new_label();
+    if (getenv("DCC_MIR_PERF_RECOVERY_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR perf-recovery function=%s feature=wide-phi-inc\n",
+                mir.name);
+    fprintf(out,
+            "\tinc (%s%+d)\n\tjp nz, L%d\n"
+            "\tinc (%s%+d)\n\tjp nz, L%d\n"
+            "\tinc (%s%+d)\n\tjp nz, L%d\n"
+            "\tinc (%s%+d)\nL%d:\n",
+            base, low, done,
+            base, low + 1, done,
+            base, high_low, done,
+            base, high_low + 1, done);
+    return 1;
+}
+
+static void mir_emit_wide_named_increment(FILE *out, int offset)
+{
+    int done = new_label();
+
+    if (getenv("DCC_MIR_PERF_RECOVERY_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR perf-recovery function=%s feature=wide-named-inc\n",
+                mir.name);
+    fprintf(out,
+            "\tinc (ix%+d)\n\tjp nz, L%d\n"
+            "\tinc (ix%+d)\n\tjp nz, L%d\n"
+            "\tinc (ix%+d)\n\tjp nz, L%d\n"
+            "\tinc (ix%+d)\nL%d:\n",
+            offset, done,
+            offset + 1, done,
+            offset + 2, done,
+            offset + 3, done);
 }
 
 /* Item T36 (mir-text-size-plan.md): the global/extern counterpart of
@@ -9164,6 +10842,22 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             break;
             }
         case MIR_CONST:
+            {
+            struct MirWideMaskZeroBranch wide_mask_branch;
+            struct MirLowByteIndexLoop low_byte_loop;
+            if (mir_match_wide_mask_zero_branch(
+                    i, &wide_mask_branch)) {
+                if (!mir_emit_wide_mask_zero_branch(
+                        out, labels, &wide_mask_branch))
+                    goto done;
+                i = wide_mask_branch.branch_instruction;
+                continue;
+            }
+            if (mir_match_low_byte_index_loop(i, &low_byte_loop)) {
+                mir_emit_low_byte_index_loop(out, labels, &low_byte_loop);
+                i = low_byte_loop.skip_through;
+                continue;
+            }
             if (!mir_value_has_use(insn->dst) ||
                 mir_scalar_constant_is_rematerializable(insn->dst) ||
                 mir_wide_constant_is_rematerializable(insn->dst) ||
@@ -9183,6 +10877,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 mir_emit_virtual_store(out, insn->dst);
             }
             break;
+            }
         case MIR_FLOAT_CONST:
             if (mir_call_only_constant(insn->dst) ||
                 mir_wide_constant_is_rematerializable(insn->dst))
@@ -9240,8 +10935,20 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             break;
         case MIR_INDEX_ADDRESS:
             {
+            struct MirWideBytePackReturn wide_byte_pack;
+            struct MirWideByteStore wide_byte_store;
             const struct MirInsn *index_definition =
                 mir_definition(insn->src2);
+            if (mir_match_wide_byte_pack_return(i, &wide_byte_pack)) {
+                mir_emit_wide_byte_pack_return(out, &wide_byte_pack);
+                i = wide_byte_pack.skip_through;
+                continue;
+            }
+            if (mir_match_wide_byte_store(i, &wide_byte_store)) {
+                mir_emit_wide_byte_store(out, &wide_byte_store);
+                i = wide_byte_store.skip_through;
+                continue;
+            }
             if (mir_value_only_used_by_constant_absolute_address(insn->dst))
                 break;
             if (mir_address_is_rematerializable(insn->dst))
@@ -9398,11 +11105,23 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             const struct MirInsn *producer = mir_definition(insn->src1);
             if (producer != NULL && producer->opcode == MIR_BINARY) {
                 int producer_index = (int)(producer - mir.insns);
+                int phi_value;
+                int wide_phi_store_index;
+                int wide_selfstore_offset;
+                int wide_selfstore_store_index;
                 int predecrement_load_index;
                 int small_add_amount;
                 int selfstore_store_index;
-                if ((mir_binary_is_selfstore_incdec(
-                         producer_index, &selfstore_store_index) ||
+                if ((mir_binary_is_wide_phi_increment(
+                        producer_index, &phi_value,
+                        &wide_phi_store_index) &&
+                     wide_phi_store_index == i) ||
+                    (mir_binary_is_selfstore_wide_increment(
+                         producer_index, &wide_selfstore_store_index,
+                         &wide_selfstore_offset) &&
+                     wide_selfstore_store_index == i) ||
+                    ((mir_binary_is_selfstore_incdec(
+                        producer_index, &selfstore_store_index) ||
                      mir_binary_is_selfstore_small_adjust(
                          producer_index, &selfstore_store_index,
                          &small_add_amount) ||
@@ -9410,7 +11129,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                          producer_index, &selfstore_store_index,
                          &predecrement_load_index,
                          &small_add_amount)) &&
-                    selfstore_store_index == i)
+                    selfstore_store_index == i))
                     break;
             }
             if (mir_object_is_fully_promoted(insn->object) ||
@@ -9829,6 +11548,9 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             int small_add_amount;
             int selfstore_store_index;
             int predecrement_load_index;
+            int wide_phi_source;
+            int wide_selfstore_offset;
+            int wide_selfstore_store_index;
             int multiply_index;
             int addend_value;
             if (mir_value_only_used_by_selfstore_adjust_amount(insn->dst))
@@ -9847,6 +11569,18 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 mir_emit_virtual_store_wide(out, insn->dst);
                 break;
             }
+            if (mir_binary_is_selfstore_wide_increment(
+                    i, &wide_selfstore_store_index,
+                    &wide_selfstore_offset)) {
+                mir_emit_wide_named_increment(
+                    out, wide_selfstore_offset);
+                break;
+            }
+            if (mir_binary_is_wide_phi_increment(
+                    i, &wide_phi_source, NULL) &&
+                mir_emit_wide_phi_increment(
+                    out, wide_phi_source))
+                break;
             if (mir_binary_is_selfstore_incdec(i, &selfstore_store_index)) {
                 int memory_type, memory_storage, memory_offset;
                 mir_scalar_memory_location(mir_definition(insn->src1),
