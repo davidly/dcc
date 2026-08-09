@@ -19431,3 +19431,55 @@ pre-MIR. Both censuses remain **2060/2060 ordinary** and **2179/2179
 stack-check**. Focused ASan/UBSan is clean. Full extended validation passes
 **314/314 runnable + 196/196 extended**, diagnostics and dccpeep fixtures,
 with zero checked regressions.
+
+## Item T518: recover fixed long-array and byte-sieve kernels (performance recovery, 2026-08-09)
+
+After T517, Catalan (+218.2M peep cycles versus pre-MIR) and Sieve (+131.4M)
+were two of the three largest remaining debts. Both are fixed-size array
+programs whose MIR graphs expose exact loop semantics but generic emission
+recomputed indices and spilled every induction/carry value.
+
+Catalan profiling attributed 37.4% to `add_signed`, 17.8% to `div_small`, and
+4.0% to `copy`, with the long multiply/divide helpers accounting for most of
+the rest. One-function fallback saved 158.6M, 50.1M, and 9.0M peep cycles
+respectively.
+
+Three exact semantic selectors now emit:
+
+- fixed 31-long copy as one 124-byte LDIR;
+- long division as a pointer walk with a 32-bit remainder home, direct
+  `__lmul` / `__lds` / `__lms` ABI calls, and carry-safe pointer increments;
+- backward signed long add/subtract with explicit DE:HL carry/borrow, base
+  10000 reduction, one-byte carry, and carry-safe pointer decrements.
+
+Sieve profiling was 99.9% `main`; whole-function fallback exactly restored its
+27.997M pre-MIR peep baseline. Its 119-instruction MIR graph now emits:
+
+- LDIR initialization of all 8,191 flag bytes;
+- one BC/HL linear scan;
+- a pointer-stepped composite-mark loop;
+- the original final printf call and string ID.
+
+Review found one 16-bit-address hazard: a pointer step could wrap and compare
+below the absolute one-past array address even though numeric `k` was already
+out of range. Carry from both initial and repeated pointer additions now
+terminates the mark loop before any wrapped write.
+
+Final results:
+
+- Catalan peep: **879,640,002 -> 543,868,113 (-38.17%)**; nopeep:
+  **910,173,945 -> 547,324,661 (-39.87%)**;
+- Sieve peep: **159,383,326 -> 31,349,985 (-80.33%)**; nopeep:
+  **190,425,858 -> 32,826,015 (-82.76%)**.
+
+Against pre-MIR, Catalan is **17.77% faster peep / 20.33% faster nopeep**.
+Sieve retains only a **3.35M / 11.97% peep** gap while beating pre-MIR
+nopeep by **67.85%**.
+
+Positive pre-MIR peep debt falls from **1.035B to 688.7M cycles
+(-33.5%; -97.1% cumulatively from the initial 23.451B)**. Positive nopeep
+debt falls to 601.8M, while aggregate nopeep cycles are now 3.619B below
+pre-MIR. Both censuses remain **2060/2060 ordinary** and **2179/2179
+stack-check**. Focused ASan/UBSan is clean. Full extended validation passes
+**314/314 runnable + 196/196 extended**, diagnostics and dccpeep fixtures,
+with zero checked regressions.

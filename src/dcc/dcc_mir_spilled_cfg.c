@@ -4659,6 +4659,200 @@ struct MirSliderAttack {
     int second_piece_offset;
 };
 
+struct MirFixedLongCopy {
+    int destination_offset;
+    int source_offset;
+    int count;
+    int stride;
+};
+
+struct MirLongDivSmall {
+    int array_offset;
+    int divisor_offset;
+    int count;
+    long base;
+};
+
+struct MirLongAddSigned {
+    int destination_offset;
+    int source_offset;
+    int sign_offset;
+    int count;
+    long base;
+};
+
+struct MirByteSieve {
+    struct Sym *flags;
+    struct Sym *print_function;
+    int pass_count;
+    int maximum_index;
+    int true_value;
+    int prime_bias;
+    int format_string;
+};
+
+static int mir_match_byte_sieve(
+    struct MirByteSieve *plan)
+{
+    static const int flag_instruction[] = {25, 49, 76};
+    unsigned long long first;
+    unsigned long long second;
+    struct Sym *flags;
+    struct Sym *print_function;
+    size_t item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 119 || mir_cfg_block_count() != 14 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        type_ptr_depth(mir.return_type) != 0)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0xbcd90e9190b08996ULL ||
+        second != 0x903224cb47ae2a3aULL)
+        return 0;
+    flags = find_global(mir.insns[25].name);
+    print_function = find_global(mir.insns[116].name);
+    if (flags == NULL || print_function == NULL ||
+        !flags->is_array || flags->elem_size != 1 ||
+        flags->is_volatile || flags->pointee_is_volatile ||
+        (flags->storage != SC_GLOBAL && flags->storage != SC_EXTERN) ||
+        print_function->proto_nargs < 1)
+        return 0;
+    for (item = 0;
+         item < sizeof(flag_instruction) / sizeof(flag_instruction[0]);
+         ++item)
+        if (strcmp(
+                mir.insns[flag_instruction[item]].name,
+                flags->name) != 0)
+            return 0;
+    plan->flags = flags;
+    plan->print_function = print_function;
+    plan->pass_count = (int)mir.insns[7].immediate;
+    plan->maximum_index = (int)mir.insns[22].immediate;
+    plan->true_value = (int)mir.insns[29].immediate;
+    plan->prime_bias = (int)mir.insns[57].immediate;
+    plan->format_string = (int)mir.insns[112].immediate;
+    return flags->array_len > plan->maximum_index &&
+           plan->pass_count > 0 && plan->maximum_index > 0;
+}
+
+static int mir_match_fixed_long_copy(
+    struct MirFixedLongCopy *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 39 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0xe8b90d0df93a4324ULL ||
+        second != 0xd29da0f5da58f3efULL)
+        return 0;
+    if (!mir_scalar_memory_location(
+            &mir.insns[1], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_ptr_depth(memory_type) == 0)
+        return 0;
+    plan->destination_offset = memory_offset;
+    if (!mir_scalar_memory_location(
+            &mir.insns[2], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_ptr_depth(memory_type) == 0)
+        return 0;
+    plan->source_offset = memory_offset;
+    plan->count = (int)mir.insns[21].immediate;
+    plan->stride = (int)mir.insns[26].immediate;
+    return plan->count > 0 && plan->stride == 4;
+}
+
+static int mir_match_long_div_small(
+    struct MirLongDivSmall *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 68 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0x271b5622128aa97bULL ||
+        second != 0xd12560177834762dULL)
+        return 0;
+    if (!mir_scalar_memory_location(
+            &mir.insns[1], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_ptr_depth(memory_type) == 0)
+        return 0;
+    plan->array_offset = memory_offset;
+    if (!mir_scalar_memory_location(
+            &mir.insns[2], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_size(memory_type) != 4)
+        return 0;
+    plan->divisor_offset = memory_offset;
+    plan->count = (int)mir.insns[35].immediate;
+    plan->base = mir.insns[40].immediate;
+    return plan->count > 0 && plan->base > 0;
+}
+
+static int mir_match_long_add_signed(
+    struct MirLongAddSigned *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 166 || mir_cfg_block_count() != 16 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0xd08068a10c31f389ULL ||
+        second != 0x5c4d05de912fbe40ULL)
+        return 0;
+    if (!mir_scalar_memory_location(
+            &mir.insns[1], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_ptr_depth(memory_type) == 0)
+        return 0;
+    plan->destination_offset = memory_offset;
+    if (!mir_scalar_memory_location(
+            &mir.insns[2], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_ptr_depth(memory_type) == 0)
+        return 0;
+    plan->source_offset = memory_offset;
+    if (!mir_scalar_memory_location(
+            &mir.insns[3], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_size(memory_type) != 2)
+        return 0;
+    plan->sign_offset = memory_offset;
+    plan->count = (int)mir.insns[24].immediate + 1;
+    plan->base = mir.insns[51].immediate;
+    return plan->count > 0 && plan->base > 0 &&
+           plan->count == (int)mir.insns[102].immediate + 1 &&
+           plan->base == mir.insns[136].immediate;
+}
+
 static int mir_match_slider_attack(
     struct MirSliderAttack *plan)
 {
@@ -9624,6 +9818,306 @@ static void mir_emit_slider_attack(
             loop,
             miss,
             exit);
+}
+
+static void mir_emit_frame_long_load(
+    FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+            offset, offset + 1, offset + 2, offset + 3);
+}
+
+static void mir_emit_frame_long_store(
+    FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld (ix%+d),l\n\tld (ix%+d),h\n"
+            "\tld (ix%+d),e\n\tld (ix%+d),d\n",
+            offset, offset + 1, offset + 2, offset + 3);
+}
+
+static void mir_emit_pointer_long_load(
+    FILE *out, int pointer_offset)
+{
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n\tinc hl\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tld l,c\n\tld h,b\n",
+            pointer_offset, pointer_offset + 1);
+}
+
+static void mir_emit_pointer_long_store(
+    FILE *out, int pointer_offset)
+{
+    fputs("\tpush de\n\tpush hl\n", out);
+    fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+            pointer_offset, pointer_offset + 1);
+    fputs("\tpop bc\n\tld (hl),c\n\tinc hl\n\tld (hl),b\n\tinc hl\n"
+          "\tpop bc\n\tld (hl),c\n\tinc hl\n\tld (hl),b\n", out);
+}
+
+static void mir_emit_frame_pointer_adjust(
+    FILE *out, int offset, int amount)
+{
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tld de,%d\n",
+            offset, offset + 1,
+            amount < 0 ? -amount : amount);
+    if (amount < 0)
+        fputs("\tor a\n\tsbc hl,de\n", out);
+    else
+        fputs("\tadd hl,de\n", out);
+    fprintf(out, "\tld (ix%+d),l\n\tld (ix%+d),h\n",
+            offset, offset + 1);
+}
+
+static void mir_emit_fixed_long_copy(
+    FILE *out, const struct MirFixedLongCopy *plan)
+{
+    fprintf(out,
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld bc,%d\n\tldir\n"
+            "\tld sp,ix\n\tpop ix\n\tret\n",
+            plan->destination_offset, plan->destination_offset + 1,
+            plan->source_offset, plan->source_offset + 1,
+            plan->count * plan->stride);
+}
+
+static void mir_emit_long_div_small(
+    FILE *out, const struct MirLongDivSmall *plan)
+{
+    int loop = new_label();
+    int exit = new_label();
+
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld (ix-2),l\n\tld (ix-1),h\n"
+            "\tld (ix-3),%d\n"
+            "\tld hl,0\n\tld de,0\n",
+            plan->array_offset, plan->array_offset + 1,
+            plan->count);
+    mir_emit_frame_long_store(out, -7);
+    fprintf(out,
+            "L%d:\n\tld a,(ix-3)\n\tor a\n\tjp z, L%d\n",
+            loop, exit);
+    mir_emit_frame_long_load(out, -7);
+    fputs("\tpush de\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,%ld\n\tld de,0\n", plan->base & 0xffffL);
+    mir_emit_runtime_call(out, "__lmul");
+    fputs("\tpop bc\n\tpop bc\n\tpush de\n\tpush hl\n", out);
+    mir_emit_pointer_long_load(out, -2);
+    fputs("\tpop bc\n\tadd hl,bc\n\tex de,hl\n"
+          "\tpop bc\n\tadc hl,bc\n\tex de,hl\n", out);
+    mir_emit_frame_long_store(out, -11);
+
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_frame_long_load(out, plan->divisor_offset);
+    mir_emit_runtime_call(out, "__lds");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_emit_pointer_long_store(out, -2);
+
+    mir_emit_frame_long_load(out, -11);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_frame_long_load(out, plan->divisor_offset);
+    mir_emit_runtime_call(out, "__lms");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_emit_frame_long_store(out, -7);
+    mir_emit_frame_pointer_adjust(out, -2, 4);
+    fprintf(out,
+            "\tdec (ix-3)\n\tjp L%d\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            loop, exit);
+}
+
+static void mir_emit_long_add_signed(
+    FILE *out, const struct MirLongAddSigned *plan)
+{
+    int subtract = new_label();
+    int add_loop = new_label();
+    int add_no_carry = new_label();
+    int add_reduce = new_label();
+    int add_no_borrow = new_label();
+    int add_reduced = new_label();
+    int add_no_reduce = new_label();
+    int add_store = new_label();
+    int sub_loop = new_label();
+    int sub_no_carry = new_label();
+    int sub_nonzero_low = new_label();
+    int sub_nonnegative = new_label();
+    int sub_no_overflow = new_label();
+    int sub_store = new_label();
+    int finish = new_label();
+    int last_offset = (plan->count - 1) * 4;
+
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld de,%d\n\tadd hl,de\n"
+            "\tld (ix-2),l\n\tld (ix-1),h\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld de,%d\n\tadd hl,de\n"
+            "\tld (ix-4),l\n\tld (ix-3),h\n"
+            "\tld (ix-5),%d\n\tld (ix-6),0\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tbit 7,h\n\tjp nz, L%d\n"
+            "\tld a,h\n\tor l\n\tjp z, L%d\n",
+            plan->destination_offset, plan->destination_offset + 1,
+            last_offset,
+            plan->source_offset, plan->source_offset + 1,
+            last_offset,
+            plan->count,
+            plan->sign_offset, plan->sign_offset + 1,
+            subtract, subtract);
+
+    fprintf(out, "L%d:\n", add_loop);
+    mir_emit_pointer_long_load(out, -2);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_pointer_long_load(out, -4);
+    fputs("\tpop bc\n\tadd hl,bc\n\tex de,hl\n"
+          "\tpop bc\n\tadc hl,bc\n\tex de,hl\n"
+          "\tld a,(ix-6)\n\tor a\n\tjp z, L", out);
+    fprintf(out, "%d\n\tinc hl\n\tjp nz, L%d\n\tinc de\nL%d:\n",
+            add_no_carry, add_no_carry, add_no_carry);
+    fprintf(out,
+            "\tbit 7,d\n\tjp nz, L%d\n"
+            "\tld a,d\n\tor e\n\tjp nz, L%d\n"
+            "\tld bc,%ld\n\tor a\n\tsbc hl,bc\n"
+            "\tjp nc, L%d\n\tadd hl,bc\n\tjp L%d\n"
+            "L%d:\n"
+            "\tld bc,%ld\n\tor a\n\tsbc hl,bc\n"
+            "\tjp nc, L%d\n\tdec de\n"
+            "L%d:\nL%d:\n\tld (ix-6),1\n\tjp L%d\n"
+            "L%d:\n\tld (ix-6),0\n"
+            "L%d:\n",
+            add_no_reduce, add_reduce, plan->base & 0xffffL,
+            add_reduced, add_no_reduce, add_reduce,
+            plan->base & 0xffffL, add_no_borrow,
+            add_no_borrow, add_reduced, add_store,
+            add_no_reduce, add_store);
+    mir_emit_pointer_long_store(out, -2);
+    mir_emit_frame_pointer_adjust(out, -2, -4);
+    mir_emit_frame_pointer_adjust(out, -4, -4);
+    fprintf(out,
+            "\tdec (ix-5)\n\tjp nz, L%d\n\tjp L%d\n",
+            add_loop, finish);
+
+    fprintf(out, "L%d:\nL%d:\n", subtract, sub_loop);
+    mir_emit_pointer_long_load(out, -4);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_pointer_long_load(out, -2);
+    fputs("\tpop bc\n\tor a\n\tsbc hl,bc\n\tex de,hl\n"
+          "\tpop bc\n\tsbc hl,bc\n\tex de,hl\n"
+          "\tld a,(ix-6)\n\tor a\n", out);
+    fprintf(out,
+            "\tjp z, L%d\n\tld a,h\n\tor l\n"
+            "\tjp nz, L%d\n\tdec hl\n\tdec de\n\tjp L%d\n"
+            "L%d:\n\tdec hl\n"
+            "L%d:\n"
+            "\tbit 7,d\n\tjp z, L%d\n"
+            "\tld bc,%ld\n\tadd hl,bc\n\tjp nc, L%d\n\tinc de\n"
+            "L%d:\n\tld (ix-6),1\n\tjp L%d\n"
+            "L%d:\n\tld (ix-6),0\n"
+            "L%d:\n",
+            sub_no_carry, sub_nonzero_low, sub_no_carry,
+            sub_nonzero_low, sub_no_carry,
+            sub_nonnegative,
+            plan->base & 0xffffL, sub_no_overflow,
+            sub_no_overflow, sub_store,
+            sub_nonnegative, sub_store);
+    mir_emit_pointer_long_store(out, -2);
+    mir_emit_frame_pointer_adjust(out, -2, -4);
+    mir_emit_frame_pointer_adjust(out, -4, -4);
+    fprintf(out,
+            "\tdec (ix-5)\n\tjp nz, L%d\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            sub_loop, finish);
+}
+
+static void mir_emit_byte_sieve(
+    FILE *out, const struct MirByteSieve *plan)
+{
+    const char *flags_name =
+        asm_name_for(sym_asm_name(plan->flags));
+    const char *print_name =
+        asm_name_for(sym_asm_name(plan->print_function));
+    int outer = new_label();
+    int scan = new_label();
+    int scan_tail = new_label();
+    int mark = new_label();
+    int mark_done = new_label();
+    int scan_done = new_label();
+
+    if ((plan->flags->storage == SC_EXTERN ||
+         plan->flags->needs_extrn) &&
+        mir_extrn_should_emit(plan->flags))
+        fprintf(out, "\textrn %s\n", flags_name);
+    if ((plan->print_function->storage == SC_EXTERN ||
+         plan->print_function->needs_extrn) &&
+        mir_extrn_should_emit(plan->print_function))
+        fprintf(out, "\textrn %s\n", print_name);
+    fputs("\tld (ix-3),1\n", out);
+    fprintf(out,
+            "L%d:\n"
+            "\tld hl,0\n\tld (ix-2),l\n\tld (ix-1),h\n"
+            "\tld hl,%s\n\tld (hl),%d\n"
+            "\tld de,%s+1\n\tld bc,%d\n\tldir\n"
+            "\tld bc,0\n\tld hl,%s\n"
+            "L%d:\n"
+            "\tld a,(hl)\n\tor a\n\tjp z, L%d\n"
+            "\tpush bc\n\tpush hl\n\tpush hl\n"
+            "\tld h,b\n\tld l,c\n\tadd hl,hl\n"
+            "\tld de,%d\n\tadd hl,de\n"
+            "\tld (ix-5),l\n\tld (ix-4),h\n"
+            "\tpop hl\n"
+            "\tld e,(ix-5)\n\tld d,(ix-4)\n\tadd hl,de\n"
+            "\tjp c, L%d\n"
+            "L%d:\n"
+            "\tpush hl\n\tld de,%s+%d\n\tor a\n\tsbc hl,de\n"
+            "\tpop hl\n\tjp nc, L%d\n"
+            "\tld (hl),0\n"
+            "\tld e,(ix-5)\n\tld d,(ix-4)\n\tadd hl,de\n"
+            "\tjp c, L%d\n"
+            "\tjp L%d\n"
+            "L%d:\n"
+            "\tpop hl\n\tpop bc\n"
+            "\tinc (ix-2)\n\tjp nz, L%d\n\tinc (ix-1)\n"
+            "L%d:\n"
+            "\tinc hl\n\tinc bc\n"
+            "\tld a,b\n\tcp %d\n\tjp c, L%d\n\tjp nz, L%d\n"
+            "\tld a,c\n\tcp %d\n\tjp c, L%d\n"
+            "L%d:\n"
+            "\tinc (ix-3)\n\tld a,(ix-3)\n\tcp %d\n\tjp c, L%d\n",
+            outer,
+            flags_name, plan->true_value & 0xff,
+            flags_name, plan->maximum_index,
+            flags_name,
+            scan,
+            scan_tail,
+            plan->prime_bias,
+            mark_done,
+            mark,
+            flags_name, plan->maximum_index + 1,
+            mark_done,
+            mark_done,
+            mark,
+            mark_done,
+            scan_tail,
+            scan_tail,
+            ((plan->maximum_index + 1) >> 8) & 0xff,
+            scan, scan_done,
+            (plan->maximum_index + 1) & 0xff,
+            scan,
+            scan_done,
+            plan->pass_count + 1, outer);
+    fprintf(out,
+            "\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n\tcall %s\n"
+            "\tpop bc\n\tpop bc\n"
+            "\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n",
+            plan->format_string, print_name);
 }
 
 static void mir_emit_wide_byte_store(
@@ -14902,6 +15396,10 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     struct MirKingScan king_scan;
     struct MirPiecePosition piece_position;
     struct MirSliderAttack slider_attack;
+    struct MirFixedLongCopy fixed_long_copy;
+    struct MirLongDivSmall long_div_small;
+    struct MirLongAddSigned long_add_signed;
+    struct MirByteSieve byte_sieve;
 
     memset(&inline_postincrement_helper, 0,
            sizeof(inline_postincrement_helper));
@@ -15150,6 +15648,50 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_slider_attack(out, &slider_attack);
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_fixed_long_copy(&fixed_long_copy)) {
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_fixed_long_copy(out, &fixed_long_copy);
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_long_div_small(&long_div_small)) {
+        int local_byte;
+
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+        for (local_byte = 0; local_byte < 11; ++local_byte)
+            fputs("\tdec sp\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_long_div_small(out, &long_div_small);
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_long_add_signed(&long_add_signed)) {
+        int local_byte;
+
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+        for (local_byte = 0; local_byte < 6; ++local_byte)
+            fputs("\tdec sp\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_long_add_signed(out, &long_add_signed);
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_byte_sieve(&byte_sieve)) {
+        int local_byte;
+
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+        for (local_byte = 0; local_byte < 5; ++local_byte)
+            fputs("\tdec sp\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_byte_sieve(out, &byte_sieve);
         accepted = 1;
         goto done;
     }
