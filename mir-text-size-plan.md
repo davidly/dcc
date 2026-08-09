@@ -19115,3 +19115,69 @@ Positive pre-MIR peep debt falls from **4.333B to 3.727B cycles
 **2060/2060 ordinary** and **2179/2179 stack-check**. Focused ASan/UBSan is
 clean. Full extended validation passes **314/314 runnable + 196/196 extended**,
 diagnostics and dccpeep fixtures, with zero checked regressions.
+
+## Item T514: recover word scans and large-CFG address/induction identities (performance recovery, 2026-08-09)
+
+After T513, `tstr` (+386.2M peep cycles versus pre-MIR) and `trw2`
+(+361.6M) were the two largest non-interpreter debts. Dynamic profiling
+showed `tstr.wcsrchr` consumed 52.6% of the app and `tstr.wcslen` another
+10.2%. Both repeatedly advanced a 16-bit string pointer through an IX slot;
+legacy retained the pointer in BC.
+
+The spilled selector now recognizes two closed zero-terminated word-scan
+forms:
+
+- a length scan that advances a word pointer by two and writes the final
+  pointer back for the existing tail subtraction;
+- a last-match scan that additionally compares each word and saves the
+  pointer of the most recent match.
+
+BC carries the pointer for the complete loop. The matcher requires a local or
+parameter pointer with an encodable frame home, an exact two-byte indirect
+load, a zero terminator, a closed `+2` backedge, empty exit-edge PHI copies,
+and no unrecognized instructions in the loop body. The optional comparison
+and saved pointer must also have concrete word homes. No source or function
+names participate.
+
+`trw2` exposed two independent large-CFG identities:
+
+- a dynamic index rooted at a global/extern array now scales the index in HL,
+  loads the absolute symbol into DE, and adds it directly, rather than first
+  materializing and spilling the base address;
+- an object-backed 16-bit PHI updated by exactly `+1` or `-1` aliases the
+  result to the PHI slot and updates that slot in place. Only its proven
+  backedge identity copy and matching dead/promoted store are removed.
+
+Both identities are currently restricted to CFGs with at least 40 blocks.
+The base-address fold additionally requires that every use of the base is a
+supported dynamic index. The PHI adjustment requires a unique matching store,
+no later use of the old PHI value, and no other use of the adjustment result.
+
+Broader rollout was implemented and rejected. Enabling dynamic absolute
+indexing or narrow-PHI updates on small CFGs miscompiled Pint and regressed
+`nqueens`; the 40-block scope preserves the measured `trw2` win while
+restoring both apps. One intermediate census appeared to lose
+`attnc11.make_targets`, but differential assembly confirmed that its emitted
+body remained MIR; this was report timing, not transactional fallback.
+
+Final checked results:
+
+- `tstr` peep: **1,988,917,124 -> 1,399,727,657 (-29.62%)**;
+- `tstr` nopeep: **2,315,020,876 -> 1,458,382,821 (-37.00%)**;
+- `trw2` peep: **2,465,756,355 -> 2,063,011,576 (-16.33%)**;
+- `trw2` nopeep: **3,329,433,405 -> 2,661,855,201 (-20.05%)**.
+
+Against pre-MIR, `tstr` is now **12.66% faster peep / 28.87% faster
+nopeep**, and `trw2` is **1.96% / 2.86% faster**. Shared wins include
+`trwold` (-15.47% peep / -18.70% nopeep for this batch), `tforsco`
+(-6.79%/-7.35%), `cobint` (-0.94%/-0.81%), and smaller improvements in
+`tchess`, `tarray`, `tqsort`, `tstring`, `tinlinfb`, `tptrcnd`,
+`tptrdiff`, `cint`, and `forint`.
+
+Positive pre-MIR peep debt falls from **3.727B to 2.929B cycles
+(-21.4%; -87.5% cumulatively from the initial 23.451B)**. Aggregate
+nopeep cycles are now 413.8M below pre-MIR, although 3.051B of positive
+nopeep debt remains offset by larger wins. Both censuses remain
+**2060/2060 ordinary** and **2179/2179 stack-check**. Focused ASan/UBSan is
+clean. Full extended validation passes **314/314 runnable + 196/196 extended**,
+diagnostics and dccpeep fixtures, with zero checked regressions.

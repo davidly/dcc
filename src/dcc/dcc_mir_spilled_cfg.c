@@ -51,6 +51,9 @@ static int mir_binary_is_selfstore_global_predecrement_load(
 static int mir_binary_is_wide_phi_increment(
     int index, int *phi_value, int *store_index);
 static int mir_value_is_wide_phi_increment_result(int value);
+static int mir_binary_is_narrow_phi_adjust(
+    int index, int *phi_value, int *store_index);
+static int mir_value_is_narrow_phi_adjust_result(int value);
 /* T511 wide counterpart: update an unaliased four-byte named object in
  * place, then let later SSA uses reload the now-authoritative named home. */
 static int mir_binary_is_selfstore_wide_increment(
@@ -104,10 +107,14 @@ static int mir_match_byte_verify_loop(
     int instruction, struct MirByteVerifyLoop *plan);
 static int mir_match_byte_verify_value_prefix(
     int instruction, struct MirByteVerifyLoop *plan);
+struct MirWordScanLoop;
+static int mir_match_word_scan_loop(
+    int instruction, struct MirWordScanLoop *plan);
 static int mir_emit_named_word_load_to_hl(
     FILE *out, const struct MirInsn *load);
 static int mir_same_scalar_memory_location(
     const struct MirInsn *a, const struct MirInsn *b);
+static int mir_value_only_used_by_dynamic_absolute_index(int value);
 static int mir_forward_skip_last_skipped_dead_store;
 static int mir_spilled_cfg_used_dead_store_forwarding;
 static int mir_spilled_cfg_used_constant_absolute;
@@ -221,6 +228,66 @@ static int mir_emit_named_address_root_to_hl(FILE *out,
         mir_emit_hl_offset_from_ix(out, memory_offset);
     }
     return 1;
+}
+
+static int mir_dynamic_absolute_index_base(
+    const struct MirInsn *index, const struct MirInsn **base_out,
+    const char **assembly_name_out)
+{
+    const struct MirInsn *base;
+    const struct MirInsn *index_value;
+    struct Sym *global;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (mir_cfg_block_count() < 40 ||
+        index == NULL || index->opcode != MIR_INDEX_ADDRESS ||
+        index->base_name[0] != 0 || index->src1 < 0 ||
+        index->src2 < 0 || index->immediate <= 0)
+        return 0;
+    base = mir_definition(index->src1);
+    index_value = mir_definition(index->src2);
+    if (base == NULL || base->opcode != MIR_ADDRESS ||
+        base->name[0] == 0 || index_value == NULL ||
+        index_value->opcode == MIR_CONST ||
+        !mir_scalar_memory_location(
+            base, &memory_type, &memory_storage, &memory_offset) ||
+        (memory_storage != SC_GLOBAL &&
+         memory_storage != SC_EXTERN) ||
+        memory_offset != 0)
+        return 0;
+    global = find_global(base->name);
+    if (base_out != NULL)
+        *base_out = base;
+    if (assembly_name_out != NULL)
+        *assembly_name_out = asm_name_for(
+            global != NULL ? sym_asm_name(global)
+                           : mir_declared_link_name(base->name));
+    return 1;
+}
+
+static int mir_value_only_used_by_dynamic_absolute_index(int value)
+{
+    const struct MirInsn *base = mir_definition(value);
+    int instruction;
+    int uses = 0;
+
+    if (base == NULL || base->opcode != MIR_ADDRESS)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *use = &mir.insns[instruction];
+
+        if (use->src1 != value && use->src2 != value &&
+            !mir_call_uses_value(use, value))
+            continue;
+        if (use->opcode != MIR_INDEX_ADDRESS ||
+            use->src1 != value ||
+            !mir_dynamic_absolute_index_base(use, NULL, NULL))
+            return 0;
+        ++uses;
+    }
+    return uses > 0;
 }
 
 static int mir_emit_address_value_to_hl(FILE *out, int value)
@@ -1328,6 +1395,84 @@ static int mir_value_is_wide_phi_increment_result(int value)
     return definition != NULL &&
            definition->opcode == MIR_BINARY &&
            mir_binary_is_wide_phi_increment(
+               (int)(definition - mir.insns),
+               &phi_value, &store_index);
+}
+
+static int mir_binary_is_narrow_phi_adjust(
+    int index, int *phi_value, int *store_index)
+{
+    const struct MirInsn *insn;
+    const struct MirInsn *phi;
+    const struct MirInsn *one;
+    int found_store = -1;
+    int instruction;
+
+    if (mir_cfg_block_count() < 40 ||
+        index < 0 || index >= mir.count)
+        return 0;
+    insn = &mir.insns[index];
+    if (insn->opcode != MIR_BINARY ||
+        (insn->immediate != '+' && insn->immediate != '-') ||
+        type_size(insn->secondary_offset) != 2 ||
+        type_ptr_depth(insn->secondary_offset) != 0)
+        return 0;
+    phi = mir_definition(insn->src1);
+    one = mir_definition(insn->src2);
+    if (phi == NULL || phi->opcode != MIR_PHI ||
+        type_size(phi->type) != 2 || phi->src2 != insn->dst ||
+        phi->object < 0 ||
+        one == NULL || one->opcode != MIR_CONST ||
+        one->immediate != 1)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *use = &mir.insns[instruction];
+
+        if (use->src1 != insn->dst && use->src2 != insn->dst &&
+            !mir_call_uses_value(use, insn->dst))
+            continue;
+        if (use == phi && phi->src2 == insn->dst)
+            continue;
+        if (use->opcode == MIR_STORE &&
+            use->src1 == insn->dst &&
+            use->object == phi->object) {
+            if (found_store >= 0)
+                return 0;
+            found_store = instruction;
+            continue;
+        }
+        return 0;
+    }
+    if (found_store <= index ||
+        (!mir_object_is_fully_promoted(phi->object) &&
+         !mir_store_is_dead(found_store)))
+        return 0;
+    for (instruction = index + 1;
+         instruction < found_store; ++instruction)
+        if (mir.insns[instruction].opcode != MIR_NOP)
+            return 0;
+    for (instruction = index + 1;
+         instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].src1 == phi->dst ||
+            mir.insns[instruction].src2 == phi->dst ||
+            mir_call_uses_value(&mir.insns[instruction], phi->dst))
+            return 0;
+    if (phi_value != NULL)
+        *phi_value = phi->dst;
+    if (store_index != NULL)
+        *store_index = found_store;
+    return 1;
+}
+
+static int mir_value_is_narrow_phi_adjust_result(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int phi_value;
+    int store_index;
+
+    return definition != NULL &&
+           definition->opcode == MIR_BINARY &&
+           mir_binary_is_narrow_phi_adjust(
                (int)(definition - mir.insns),
                &phi_value, &store_index);
 }
@@ -4300,6 +4445,21 @@ struct MirByteVerifyLoop {
     int index_object;
 };
 
+enum MirWordScanLoopKind {
+    MIR_WORD_SCAN_LENGTH = 1,
+    MIR_WORD_SCAN_LAST_MATCH = 2
+};
+
+struct MirWordScanLoop {
+    int kind;
+    int skip_through;
+    int header_label;
+    int exit_label;
+    int pointer_offset;
+    int comparison_offset;
+    int last_match_offset;
+};
+
 static int mir_conversion_from_value(
     int value, int source_value, int width)
 {
@@ -4704,6 +4864,292 @@ static int mir_match_byte_verify_value_prefix(
             return 1;
     }
     return 0;
+}
+
+static int mir_match_word_pointer_increment(
+    int first, int last, const struct MirInsn *pointer,
+    int header_label, int *increment_start, int *jump_index)
+{
+    int instruction;
+
+    for (instruction = first; instruction < last; ++instruction) {
+        const struct MirInsn *load = &mir.insns[instruction];
+        const struct MirInsn *amount;
+        const struct MirInsn *increment;
+        const struct MirInsn *store;
+        const struct MirInsn *jump;
+        int amount_index;
+        int increment_index;
+        int store_index;
+        int candidate_jump;
+
+        if (load->opcode != MIR_LOAD ||
+            !mir_same_scalar_memory_location(pointer, load))
+            continue;
+        amount_index =
+            mir_low_byte_loop_next_effective(instruction);
+        increment_index =
+            mir_low_byte_loop_next_effective(amount_index);
+        store_index =
+            mir_low_byte_loop_next_effective(increment_index);
+        if (store_index >= last)
+            continue;
+        amount = &mir.insns[amount_index];
+        increment = &mir.insns[increment_index];
+        store = &mir.insns[store_index];
+        if (amount->opcode != MIR_CONST ||
+            amount->immediate != 2 ||
+            increment->opcode != MIR_BINARY ||
+            increment->immediate != '+' ||
+            increment->src1 != load->dst ||
+            increment->src2 != amount->dst ||
+            store->opcode != MIR_STORE ||
+            store->src1 != increment->dst ||
+            !mir_same_scalar_memory_location(pointer, store))
+            continue;
+        candidate_jump =
+            mir_low_byte_loop_next_effective(store_index);
+        while (candidate_jump < last &&
+               mir.insns[candidate_jump].opcode == MIR_LABEL)
+            candidate_jump =
+                mir_low_byte_loop_next_effective(candidate_jump);
+        if (candidate_jump >= last)
+            continue;
+        jump = &mir.insns[candidate_jump];
+        if (jump->opcode != MIR_JUMP ||
+            jump->label != header_label)
+            continue;
+        if (increment_start != NULL)
+            *increment_start = instruction;
+        if (jump_index != NULL)
+            *jump_index = candidate_jump;
+        return 1;
+    }
+    return 0;
+}
+
+static int mir_match_word_scan_loop(
+    int instruction, struct MirWordScanLoop *plan)
+{
+    const struct MirInsn *header;
+    const struct MirInsn *pointer = NULL;
+    const struct MirInsn *word_load = NULL;
+    const struct MirInsn *zero_compare = NULL;
+    const struct MirInsn *exit_branch = NULL;
+    int word_load_index = -1;
+    int exit_branch_index = -1;
+    int exit_index;
+    int increment_start;
+    int jump_index;
+    int pointer_offset;
+    int scan;
+
+    memset(plan, 0, sizeof(*plan));
+    if (instruction < 0 || instruction >= mir.count)
+        return 0;
+    header = &mir.insns[instruction];
+    if (header->opcode != MIR_LABEL)
+        return 0;
+    for (scan = instruction + 1;
+         scan < mir.count && scan <= instruction + 10; ++scan) {
+        const struct MirInsn *candidate = &mir.insns[scan];
+        int next;
+
+        if (candidate->opcode != MIR_LOAD ||
+            type_ptr_depth(candidate->type) == 0 ||
+            !mir_byte_verify_location(
+                candidate, 2, &pointer_offset))
+            continue;
+        next = mir_low_byte_loop_next_effective(scan);
+        if (next < mir.count &&
+            mir.insns[next].opcode == MIR_LOAD_INDIRECT &&
+            mir.insns[next].src1 == candidate->dst &&
+            mir.insns[next].memory_size == 2) {
+            pointer = candidate;
+            word_load = &mir.insns[next];
+            word_load_index = next;
+            break;
+        }
+    }
+    if (pointer == NULL || word_load == NULL)
+        return 0;
+    for (scan = word_load_index + 1;
+         scan < mir.count && scan <= word_load_index + 8; ++scan) {
+        const struct MirInsn *candidate = &mir.insns[scan];
+        int other;
+        const struct MirInsn *constant;
+        int branch_index;
+
+        if (candidate->opcode != MIR_BINARY ||
+            candidate->immediate != TOK_NE ||
+            type_size(candidate->secondary_offset) != 2)
+            continue;
+        if (candidate->src1 == word_load->dst)
+            other = candidate->src2;
+        else if (candidate->src2 == word_load->dst)
+            other = candidate->src1;
+        else
+            continue;
+        constant = mir_definition(other);
+        if (constant == NULL || constant->opcode != MIR_CONST ||
+            (constant->immediate & 0xffffL) != 0)
+            continue;
+        branch_index =
+            mir_low_byte_loop_next_effective(scan);
+        if (branch_index >= mir.count ||
+            mir.insns[branch_index].opcode != MIR_BRANCH_FALSE ||
+            mir.insns[branch_index].src1 != candidate->dst)
+            continue;
+        zero_compare = candidate;
+        exit_branch = &mir.insns[branch_index];
+        exit_branch_index = branch_index;
+        break;
+    }
+    if (zero_compare == NULL || exit_branch == NULL)
+        return 0;
+    exit_index = mir_find_label(exit_branch->label);
+    if (exit_index <= exit_branch_index ||
+        !mir_phi_copies_are_empty(
+            exit_branch_index, exit_index) ||
+        !mir_match_word_pointer_increment(
+            exit_branch_index + 1, exit_index, pointer,
+            header->label, &increment_start, &jump_index))
+        return 0;
+
+    plan->kind = MIR_WORD_SCAN_LENGTH;
+    for (scan = exit_branch_index + 1;
+         scan < increment_start; ++scan)
+        if (mir.insns[scan].opcode != MIR_NOP) {
+            plan->kind = MIR_WORD_SCAN_LAST_MATCH;
+            break;
+        }
+    if (plan->kind == MIR_WORD_SCAN_LAST_MATCH) {
+        const struct MirInsn *match_pointer = NULL;
+        const struct MirInsn *match_word = NULL;
+        const struct MirInsn *match_compare = NULL;
+        const struct MirInsn *match_branch = NULL;
+        const struct MirInsn *saved_pointer = NULL;
+        const struct MirInsn *save = NULL;
+        int match_pointer_index = -1;
+        int match_word_index = -1;
+        int match_compare_index = -1;
+        int match_branch_index = -1;
+        int save_index = -1;
+        int comparison_offset;
+        int last_match_offset;
+
+        for (scan = exit_branch_index + 1;
+             scan < increment_start; ++scan) {
+            const struct MirInsn *candidate = &mir.insns[scan];
+            int next;
+
+            if (candidate->opcode != MIR_LOAD ||
+                !mir_same_scalar_memory_location(
+                    pointer, candidate))
+                continue;
+            next = mir_low_byte_loop_next_effective(scan);
+            if (next < increment_start &&
+                mir.insns[next].opcode == MIR_LOAD_INDIRECT &&
+                mir.insns[next].src1 == candidate->dst &&
+                mir.insns[next].memory_size == 2) {
+                match_pointer = candidate;
+                match_pointer_index = scan;
+                match_word = &mir.insns[next];
+                match_word_index = next;
+                break;
+            }
+        }
+        if (match_pointer == NULL || match_word == NULL)
+            return 0;
+        for (scan = match_word_index + 1;
+             scan < increment_start; ++scan) {
+            const struct MirInsn *candidate = &mir.insns[scan];
+            int other;
+            int branch_index;
+
+            if (candidate->opcode != MIR_BINARY ||
+                candidate->immediate != TOK_EQ ||
+                type_size(candidate->secondary_offset) != 2)
+                continue;
+            if (candidate->src1 == match_word->dst)
+                other = candidate->src2;
+            else if (candidate->src2 == match_word->dst)
+                other = candidate->src1;
+            else
+                continue;
+            if (!mir_byte_verify_location(
+                    mir_definition(other), 2,
+                    &comparison_offset))
+                continue;
+            branch_index =
+                mir_low_byte_loop_next_effective(scan);
+            if (branch_index >= increment_start ||
+                mir.insns[branch_index].opcode != MIR_BRANCH_FALSE ||
+                mir.insns[branch_index].src1 != candidate->dst)
+                continue;
+            match_compare = candidate;
+            match_compare_index = scan;
+            match_branch = &mir.insns[branch_index];
+            match_branch_index = branch_index;
+            break;
+        }
+        if (match_compare == NULL || match_branch == NULL)
+            return 0;
+        for (scan = match_branch_index + 1;
+             scan < increment_start; ++scan) {
+            const struct MirInsn *candidate = &mir.insns[scan];
+            int next;
+
+            if (candidate->opcode != MIR_LOAD ||
+                !mir_same_scalar_memory_location(
+                    pointer, candidate))
+                continue;
+            next = mir_low_byte_loop_next_effective(scan);
+            if (next < increment_start &&
+                mir.insns[next].opcode == MIR_STORE &&
+                mir.insns[next].src1 == candidate->dst &&
+                mir_byte_verify_location(
+                    &mir.insns[next], 2,
+                    &last_match_offset)) {
+                saved_pointer = candidate;
+                save = &mir.insns[next];
+                save_index = next;
+                break;
+            }
+        }
+        if (saved_pointer == NULL || save == NULL ||
+            mir_find_label(match_branch->label) < save_index ||
+            mir_find_label(match_branch->label) > increment_start)
+            return 0;
+        for (scan = exit_branch_index + 1;
+             scan < increment_start; ++scan) {
+            const struct MirInsn *candidate = &mir.insns[scan];
+
+            if (candidate->opcode == MIR_NOP ||
+                candidate->opcode == MIR_LABEL ||
+                scan == match_pointer_index ||
+                scan == match_word_index ||
+                scan == match_compare_index ||
+                scan == match_branch_index ||
+                candidate == saved_pointer ||
+                candidate == save)
+                continue;
+            return 0;
+        }
+        plan->comparison_offset = comparison_offset;
+        plan->last_match_offset = last_match_offset;
+    }
+    if (plan->kind == MIR_WORD_SCAN_LENGTH) {
+        for (scan = exit_branch_index + 1;
+             scan < increment_start; ++scan)
+            if (mir.insns[scan].opcode != MIR_NOP)
+                return 0;
+    }
+    plan->skip_through = jump_index;
+    plan->header_label = header->label;
+    plan->exit_label = exit_branch->label;
+    plan->pointer_offset = pointer_offset;
+    return 1;
 }
 
 static int mir_wide_mask_zero_add_component(
@@ -6122,6 +6568,7 @@ static int mir_prepare_backend_slots(void)
                 int units = mir_definition_is_wide(definition) ? 2 : 1;
                 int reusable_source = -1;
                 int wide_phi_source = -1;
+                int narrow_phi_source = -1;
                 int force_slot =
                     mir_value_requires_phi_slot(value) ||
                     mir_value_requires_divmod_slot(value) ||
@@ -6143,6 +6590,17 @@ static int mir_prepare_backend_slots(void)
                         slot_end[slot + unit] = last[value];
                     continue;
                 }
+                if (units == 1 && definition != NULL &&
+                    definition->opcode == MIR_BINARY &&
+                    mir_binary_is_narrow_phi_adjust(
+                        i, &narrow_phi_source, NULL) &&
+                    narrow_phi_source >= 0 &&
+                    mir.backend_slots[narrow_phi_source] >= 0) {
+                    slot = mir.backend_slots[narrow_phi_source];
+                    mir.backend_slots[value] = slot;
+                    slot_end[slot] = last[value];
+                    continue;
+                }
                 if (!force_slot &&
                     (last[value] <= first[value] ||
                                         (definition != NULL &&
@@ -6162,6 +6620,7 @@ static int mir_prepare_backend_slots(void)
                                         mir_binary_only_constant(value) ||
                                         mir_index_only_constant(value) ||
                                         mir_value_only_used_by_constant_absolute_address(value) ||
+                                        mir_value_only_used_by_dynamic_absolute_index(value) ||
                                         mir_multiply_by_small_constant(value) ||
                                         fused_away[value] == 1 ||
                                         mir_value_is_selfstore_incdec(value) ||
@@ -7490,6 +7949,45 @@ static void mir_emit_byte_verify_loop(
             loop->value_source_offset,
             loop->pointer_offset, loop->pointer_offset + 1,
             body_label, mismatch_fallthrough_label);
+}
+
+static void mir_emit_word_scan_loop(
+    FILE *out, const int *labels, const struct MirWordScanLoop *loop)
+{
+    int done_label = new_label();
+    int next_label = new_label();
+
+    fprintf(out,
+            "\tld c,(ix%+d)\n\tld b,(ix%+d)\n"
+            "L%d:\n"
+            "\tld l,c\n\tld h,b\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tex de,hl\n\tld a,h\n\tor l\n"
+            "\tjp z, L%d\n",
+            loop->pointer_offset, loop->pointer_offset + 1,
+            labels[loop->header_label], done_label);
+    if (loop->kind == MIR_WORD_SCAN_LAST_MATCH) {
+        fprintf(out,
+                "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+                "\tor a\n\tsbc hl,de\n\tjp nz, L%d\n"
+                "\tld (ix%+d),c\n\tld (ix%+d),b\n"
+                "L%d:\n",
+                loop->comparison_offset,
+                loop->comparison_offset + 1,
+                next_label,
+                loop->last_match_offset,
+                loop->last_match_offset + 1,
+                next_label);
+    }
+    fprintf(out,
+            "\tinc bc\n\tinc bc\n\tjp L%d\n"
+            "L%d:\n",
+            labels[loop->header_label], done_label);
+    if (loop->kind == MIR_WORD_SCAN_LENGTH)
+        fprintf(out,
+                "\tld (ix%+d),c\n\tld (ix%+d),b\n",
+                loop->pointer_offset, loop->pointer_offset + 1);
+    fprintf(out, "\tjp L%d\n", labels[loop->exit_label]);
 }
 
 static void mir_emit_wide_byte_store(
@@ -8832,7 +9330,8 @@ static int mir_collect_phi_copies_for_edge(int predecessor, int successor,
         if (source < 0)
             return -1;
         if ((mir_phi_slot_cleanup_enabled ||
-             mir_value_is_wide_phi_increment_result(source)) &&
+             mir_value_is_wide_phi_increment_result(source) ||
+             mir_value_is_narrow_phi_adjust_result(source)) &&
             mir_phi_copy_is_slot_identity(source, phi->dst)) {
             ++instruction;
             continue;
@@ -10087,6 +10586,45 @@ static int mir_emit_constant_absolute_address_value(
     return 1;
 }
 
+static int mir_emit_dynamic_absolute_index(
+    FILE *out, const struct MirInsn *insn)
+{
+    const struct MirInsn *base;
+    const char *assembly_name;
+    struct Sym *global;
+
+    if (!mir_dynamic_absolute_index_base(
+            insn, &base, &assembly_name))
+        return 0;
+    global = find_global(base->name);
+    if ((global == NULL || global->needs_extrn) &&
+        mir_extrn_should_emit_name(assembly_name))
+        fprintf(out, "\textrn %s\n", assembly_name);
+    if (getenv("DCC_MIR_PERF_RECOVERY_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR perf-recovery function=%s "
+                "feature=dynamic-absolute-index\n",
+                mir.name);
+    mir_emit_virtual_load(out, insn->src2);
+    if (insn->immediate == 2)
+        fputs("\tadd hl,hl\n", out);
+    else if (insn->immediate > 2) {
+        unsigned long multiplier =
+            (unsigned long)insn->immediate & 0xffffUL;
+
+        if (mir_mul_const_fast_path_eligible(
+                multiplier, insn->dst))
+            mir_emit_mul_hl_const(out, multiplier);
+        else {
+            fprintf(out, "\tld de,%ld\n", insn->immediate);
+            mir_emit_runtime_call(out, "__mulu");
+        }
+    }
+    fprintf(out, "\tld de,%s\n\tadd hl,de\n", assembly_name);
+    mir_emit_virtual_store(out, insn->dst);
+    return 1;
+}
+
 static int mir_emit_constant_absolute_load(
     FILE *out, const struct MirInsn *insn)
 {
@@ -10561,6 +11099,7 @@ static int mir_value_only_used_by_selfstore_adjust_amount(int value)
     int sole_user = -1;
     int amount;
     int memory_offset;
+    int narrow_phi_value;
     int phi_value;
     int store_index;
     int load_index;
@@ -10579,6 +11118,8 @@ static int mir_value_only_used_by_selfstore_adjust_amount(int value)
     return uses == 1 &&
            (mir_binary_is_selfstore_wide_increment(
                 sole_user, &store_index, &memory_offset) ||
+            mir_binary_is_narrow_phi_adjust(
+                sole_user, &narrow_phi_value, &store_index) ||
             mir_binary_is_wide_phi_increment(
                 sole_user, &phi_value, &store_index) ||
             mir_binary_is_selfstore_small_adjust(
@@ -10728,6 +11269,45 @@ static int mir_emit_wide_phi_increment(FILE *out, int phi_value)
             base, low + 1, done,
             base, high_low, done,
             base, high_low + 1, done);
+    return 1;
+}
+
+static int mir_emit_narrow_phi_adjust(
+    FILE *out, int phi_value, int is_increment)
+{
+    int offset = mir_virtual_offset(phi_value);
+    int iy_offset = mir_virtual_iy_offset(phi_value);
+    const char *base = "ix";
+    int low = offset;
+    int done;
+
+    if (mir_virtual_iy_base && iy_offset >= -128 &&
+        iy_offset + 1 <= 127) {
+        base = "iy";
+        low = iy_offset;
+    } else if (offset < -128 || offset + 1 > 127) {
+        return 0;
+    }
+    done = new_label();
+    if (getenv("DCC_MIR_PERF_RECOVERY_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR perf-recovery function=%s "
+                "feature=narrow-phi-adjust op=%c\n",
+                mir.name, is_increment ? '+' : '-');
+    if (is_increment) {
+        fprintf(out,
+                "\tinc (%s%+d)\n\tjp nz, L%d\n"
+                "\tinc (%s%+d)\nL%d:\n",
+                base, low, done,
+                base, low + 1, done);
+    } else {
+        fprintf(out,
+                "\tld a,(%s%+d)\n\tdec (%s%+d)\n"
+                "\tor a\n\tjp nz, L%d\n"
+                "\tdec (%s%+d)\nL%d:\n",
+                base, low, base, low,
+                done, base, low + 1, done);
+    }
     return 1;
 }
 
@@ -11330,6 +11910,15 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         case MIR_NOP:
             break;
         case MIR_LABEL:
+            {
+            struct MirWordScanLoop word_scan_loop;
+
+            if (mir_match_word_scan_loop(i, &word_scan_loop)) {
+                mir_emit_word_scan_loop(
+                    out, labels, &word_scan_loop);
+                i = word_scan_loop.skip_through;
+                continue;
+            }
             if (insn->label < 0 || insn->label >= mir.next_label)
                 goto done;
             /* Item T61 (mir-text-size-plan.md): skip printing a label
@@ -11338,6 +11927,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             if (mir_label_is_jump_target(insn->label))
                 fprintf(out, "L%d:\n", labels[insn->label]);
             break;
+            }
         case MIR_PHI:
             break;
         case MIR_PARAM:
@@ -11570,6 +12160,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 break;
             if (mir_value_only_used_by_constant_absolute_address(insn->dst))
                 break;
+            if (mir_value_only_used_by_dynamic_absolute_index(insn->dst))
+                break;
             if (mir_address_is_rematerializable(insn->dst))
                 break;
             {
@@ -11625,6 +12217,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             if (mir_address_is_rematerializable(insn->dst))
                 break;
             if (mir_emit_constant_absolute_address_value(out, insn))
+                break;
+            if (mir_emit_dynamic_absolute_index(out, insn))
                 break;
             if (insn->base_name[0] != 0) {
                 int stride_type;
@@ -11777,13 +12371,18 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             if (producer != NULL && producer->opcode == MIR_BINARY) {
                 int producer_index = (int)(producer - mir.insns);
                 int phi_value;
+                int narrow_phi_store_index;
                 int wide_phi_store_index;
                 int wide_selfstore_offset;
                 int wide_selfstore_store_index;
                 int predecrement_load_index;
                 int small_add_amount;
                 int selfstore_store_index;
-                if ((mir_binary_is_wide_phi_increment(
+                if ((mir_binary_is_narrow_phi_adjust(
+                        producer_index, &phi_value,
+                        &narrow_phi_store_index) &&
+                     narrow_phi_store_index == i) ||
+                    (mir_binary_is_wide_phi_increment(
                         producer_index, &phi_value,
                         &wide_phi_store_index) &&
                      wide_phi_store_index == i) ||
@@ -12221,6 +12820,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
             int small_add_amount;
             int selfstore_store_index;
             int predecrement_load_index;
+            int narrow_phi_source;
             int wide_phi_source;
             int wide_selfstore_offset;
             int wide_selfstore_store_index;
@@ -12274,6 +12874,12 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                     out, wide_selfstore_offset);
                 break;
             }
+            if (mir_binary_is_narrow_phi_adjust(
+                    i, &narrow_phi_source, NULL) &&
+                mir_emit_narrow_phi_adjust(
+                    out, narrow_phi_source,
+                    insn->immediate == '+'))
+                break;
             if (mir_binary_is_wide_phi_increment(
                     i, &wide_phi_source, NULL) &&
                 mir_emit_wide_phi_increment(

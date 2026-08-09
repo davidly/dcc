@@ -64,7 +64,10 @@ transactional fallback remains in place throughout Phase 1.
   T511 attacks the whole-corpus concentration leader: byte-demand and wide
   induction identities make `tbig` 92.5% faster peep, reduce total positive
   pre-MIR peep debt by 76.9%, and materially improve 13 additional apps.
-  Continue with the freshly re-ranked debt cohort, then prove MIR-required mode
+  T512-T514 recover word dispatch, narrow-origin wide arithmetic, byte
+  verification, word scans, and large-CFG address/induction identities.
+  Positive pre-MIR peep debt is now 2.929B (-87.5% cumulatively). Continue
+  with the freshly re-ranked interpreter cohort, then prove MIR-required mode
   over the extended corpus before removing capture/replay and legacy codegen
   in separate cleanup commits.
 - **Key finding this segment: the mega-experiment's central premise -
@@ -650,14 +653,23 @@ both modes. Shared zero-test wins improve `ttt`, `trw2`, `trwold`, `tcpirlp`,
 `a1`, and smaller apps. Positive pre-MIR peep debt is now 3.727B cycles
 (-84.1% cumulatively), with both censuses and the full extended gate clean.
 
+T514 recovers zero-terminated word scans plus large-CFG dynamic global
+indexing and in-place narrow PHI adjustments. `tstr` improves 29.6% peep /
+37.0% nopeep and `trw2` improves 16.3% / 20.1%; both now beat pre-MIR in
+both modes. Shared wins include `trwold`, `tforsco`, `cobint`, and 11 smaller
+apps. Positive pre-MIR peep debt is now 2.929B cycles (-87.5% cumulatively);
+aggregate nopeep cycles are already 413.8M below pre-MIR. Both censuses and
+the full extended gate remain clean.
+
 Next:
 
-1. Re-rank after T513 (do not follow the stale pre-T513 list).
-2. Profile and attribute the new leader cohort:
-   `tstr`, `trw2`, `cobint`, `bint`, `adaint`, `cint`, `ttt`, `pihex`,
-   `tchess`, `catalan`, `attnc11`.
-3. Profile `tstr` and `trw2` as the I/O/string leaders, then return to the
-   remaining interpreter cohort by shared measured cause.
+1. Profile and attribute the four leading interpreter debts: `bint`,
+   `cobint`, `adaint`, and `cint`. Together they represent 1.240B cycles,
+   42.3% of all remaining positive peep debt.
+2. Extend the measured shared cause, if any, across `forint` and `fint`
+   without weakening the 42-case dispatch floor.
+3. Re-rank before moving to the loop/numeric leaders: `ttt`, `pihex`,
+   `tchess`, `catalan`, `attnc11`, and `sieve`.
 4. Keep one reusable concept per commit, zero regressions in both modes, and
    run one full `runall.ps1 -Mode full -Extended` immediately before each
    publication.
