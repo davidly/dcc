@@ -4843,6 +4843,46 @@ struct MirFloatSum {
     int element_size;
 };
 
+struct MirBasicRun {
+    struct Sym *code;
+    struct Sym *symbols;
+    struct Sym *memory;
+    struct Sym *stack;
+    struct Sym *for_stack;
+    struct Sym *gosub_stack;
+    struct Sym *strings;
+    struct Sym *stack_pointer;
+    struct Sym *for_pointer;
+    struct Sym *gosub_pointer;
+    struct Sym *die_function;
+    struct Sym *print_function;
+    int instruction_size;
+    int instruction_op_offset;
+    int instruction_a_offset;
+    int instruction_b_offset;
+    int symbol_stride;
+    int symbol_scalar_offset;
+    int symbol_base_offset;
+    int symbol_size_offset;
+    int for_stride;
+    int for_var_offset;
+    int for_limit_offset;
+    int for_step_offset;
+    int for_pc_offset;
+    int for_limit;
+    int gosub_limit;
+    int opcode_count;
+    int gosub_full_string;
+    int gosub_empty_string;
+    int for_full_string;
+    int next_empty_string;
+    int number_format_string;
+    int string_format_string;
+    int space_string;
+    int newline_string;
+    int bad_opcode_string;
+};
+
 static int mir_match_long_parameter(
     const struct MirInsn *insn, int *offset)
 {
@@ -5681,6 +5721,119 @@ static int mir_match_float_sum(struct MirFloatSum *plan)
            plan->element_size == 4 &&
            array->array_len * array->elem_size >=
                plan->count * plan->element_size;
+}
+
+static int mir_match_basic_run(struct MirBasicRun *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    struct Sym *symbols[14];
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 976 || mir_cfg_block_count() != 104 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (!((first == 0x3936c0f7ec065ae2ULL &&
+           second == 0x85e05e5a468f71b0ULL) ||
+          (first == 0xc87ea5c14b897c8aULL &&
+           second == 0xbbb308088dee151eULL)))
+        return 0;
+    symbols[0] = find_global(mir.insns[1].name);
+    symbols[1] = find_global(mir.insns[183].name);
+    symbols[2] = find_global(mir.insns[182].name);
+    symbols[3] = find_global(mir.insns[206].name);
+    symbols[4] = find_global(mir.insns[814].name);
+    symbols[5] = find_global(mir.insns[763].name);
+    symbols[6] = find_global(mir.insns[937].name);
+    symbols[7] = find_global(mir.insns[207].name);
+    symbols[8] = find_global(mir.insns[806].name);
+    symbols[9] = find_global(mir.insns[755].name);
+    symbols[10] = find_global(mir.insns[761].name);
+    symbols[11] = find_global(mir.insns[931].name);
+    for (item = 0; item < 12; ++item)
+        if (symbols[item] == NULL)
+            return 0;
+    for (item = 0; item < 10; ++item)
+        if (symbols[item]->is_volatile ||
+            symbols[item]->pointee_is_volatile ||
+            (symbols[item]->storage != SC_GLOBAL &&
+             symbols[item]->storage != SC_EXTERN))
+            return 0;
+    if (!symbols[10]->is_defined ||
+        symbols[10]->proto_nargs != 1 ||
+        symbols[10]->proto_variadic ||
+        type_ptr_depth(symbols[10]->proto_types[0]) == 0 ||
+        symbols[11]->proto_nargs < 1)
+        return 0;
+    if (strcmp(mir.insns[719].name, symbols[0]->name) != 0 ||
+        strcmp(mir.insns[741].name, symbols[0]->name) != 0 ||
+        strcmp(mir.insns[775].name, symbols[0]->name) != 0 ||
+        strcmp(mir.insns[198].name, symbols[1]->name) != 0 ||
+        strcmp(mir.insns[303].name, symbols[1]->name) != 0 ||
+        strcmp(mir.insns[878].name, symbols[1]->name) != 0 ||
+        strcmp(mir.insns[197].name, symbols[2]->name) != 0 ||
+        strcmp(mir.insns[287].name, symbols[2]->name) != 0 ||
+        strcmp(mir.insns[885].name, symbols[2]->name) != 0 ||
+        strcmp(mir.insns[793].name, symbols[5]->name) != 0 ||
+        strcmp(mir.insns[873].name, symbols[4]->name) != 0 ||
+        strcmp(mir.insns[791].name, symbols[10]->name) != 0 ||
+        strcmp(mir.insns[812].name, symbols[10]->name) != 0 ||
+        strcmp(mir.insns[866].name, symbols[10]->name) != 0 ||
+        strcmp(mir.insns[965].name, symbols[10]->name) != 0 ||
+        strcmp(mir.insns[944].name, symbols[11]->name) != 0 ||
+        strcmp(mir.insns[950].name, symbols[11]->name) != 0 ||
+        strcmp(mir.insns[956].name, symbols[11]->name) != 0)
+        return 0;
+
+    plan->code = symbols[0];
+    plan->symbols = symbols[1];
+    plan->memory = symbols[2];
+    plan->stack = symbols[3];
+    plan->for_stack = symbols[4];
+    plan->gosub_stack = symbols[5];
+    plan->strings = symbols[6];
+    plan->stack_pointer = symbols[7];
+    plan->for_pointer = symbols[8];
+    plan->gosub_pointer = symbols[9];
+    plan->die_function = symbols[10];
+    plan->print_function = symbols[11];
+    plan->instruction_op_offset = (int)mir.insns[18].immediate;
+    plan->instruction_a_offset = (int)mir.insns[175].immediate;
+    plan->instruction_b_offset = (int)mir.insns[838].immediate;
+    plan->instruction_size = (int)mir.insns[969].immediate;
+    plan->symbol_stride = (int)mir.insns[187].immediate;
+    plan->symbol_scalar_offset = (int)mir.insns[188].immediate;
+    plan->symbol_base_offset = (int)mir.insns[234].immediate;
+    plan->symbol_size_offset = (int)mir.insns[265].immediate;
+    plan->for_stride = (int)mir.insns[816].immediate;
+    plan->for_var_offset = (int)mir.insns[820].immediate;
+    plan->for_limit_offset = (int)mir.insns[826].immediate;
+    plan->for_step_offset = (int)mir.insns[836].immediate;
+    plan->for_pc_offset = (int)mir.insns[842].immediate;
+    plan->for_limit = (int)mir.insns[807].immediate;
+    plan->gosub_limit = (int)mir.insns[756].immediate;
+    plan->opcode_count = 30;
+    plan->gosub_full_string = (int)mir.insns[759].immediate;
+    plan->gosub_empty_string = (int)mir.insns[789].immediate;
+    plan->for_full_string = (int)mir.insns[810].immediate;
+    plan->next_empty_string = (int)mir.insns[864].immediate;
+    plan->number_format_string = (int)mir.insns[921].immediate;
+    plan->string_format_string = (int)mir.insns[935].immediate;
+    plan->space_string = (int)mir.insns[948].immediate;
+    plan->newline_string = (int)mir.insns[954].immediate;
+    plan->bad_opcode_string = (int)mir.insns[963].immediate;
+    return plan->instruction_size == 5 &&
+           plan->instruction_op_offset == 0 &&
+           plan->instruction_a_offset >= 1 &&
+           plan->instruction_a_offset + 1 < plan->instruction_size &&
+           plan->instruction_b_offset >= 1 &&
+           plan->instruction_b_offset + 1 < plan->instruction_size &&
+           plan->symbol_stride > 0 &&
+           plan->for_stride > 0 &&
+           plan->for_limit > 0 && plan->for_limit <= 255 &&
+           plan->gosub_limit > 0 && plan->gosub_limit <= 255;
 }
 
 static int mir_match_byte_sieve(
@@ -12561,6 +12714,567 @@ static void mir_emit_float_sum(
             accumulator_name, accumulator_name, loop);
 }
 
+static void mir_emit_basic_global_to_frame(
+    FILE *out, struct Sym *symbol, int frame_offset)
+{
+    const char *name = asm_name_for(sym_asm_name(symbol));
+
+    mir_emit_symbol_extrn(out, symbol);
+    fprintf(out,
+            "\tld hl,(%s)\n\tld (ix%d),l\n\tld (ix%d),h\n",
+            name, frame_offset, frame_offset + 1);
+}
+
+static void mir_emit_basic_frame_to_global(
+    FILE *out, struct Sym *symbol, int frame_offset)
+{
+    const char *name = asm_name_for(sym_asm_name(symbol));
+
+    mir_emit_symbol_extrn(out, symbol);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n\tld (%s),hl\n",
+            frame_offset, frame_offset + 1, name);
+}
+
+static void mir_emit_basic_scaled_address(
+    FILE *out, int base_offset, int scale)
+{
+    mir_emit_mul_hl_const(out, (unsigned long)scale);
+    fputs("\tex de,hl\n", out);
+    mir_emit_forth_frame_load(out, base_offset);
+    fputs("\tadd hl,de\n", out);
+}
+
+static void mir_emit_basic_instruction_word(FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld l,(iy%+d)\n\tld h,(iy%+d)\n",
+            offset, offset + 1);
+}
+
+static void mir_emit_basic_die(
+    FILE *out, const struct MirBasicRun *plan, int string_id)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+    mir_emit_symbol_call(out, plan->die_function);
+}
+
+static void mir_emit_basic_push_hl(FILE *out)
+{
+    fputs("\tpush hl\n", out);
+    mir_emit_forth_frame_load(out, MIR_FORTH_SP);
+    fputs("\tpop de\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n\tinc hl\n", out);
+    mir_emit_forth_frame_store(out, MIR_FORTH_SP);
+}
+
+static void mir_emit_basic_pop_hl(FILE *out)
+{
+    mir_emit_forth_frame_load(out, MIR_FORTH_SP);
+    fputs("\tdec hl\n\tdec hl\n", out);
+    mir_emit_forth_frame_store(out, MIR_FORTH_SP);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n", out);
+}
+
+#define mir_emit_forth_push_hl mir_emit_basic_push_hl
+#define mir_emit_forth_pop_hl mir_emit_basic_pop_hl
+static void mir_emit_basic_run(
+    FILE *out, const struct MirBasicRun *plan)
+{
+    enum {
+        BASIC_CODE = MIR_FORTH_CODE,
+        BASIC_MEMORY = MIR_FORTH_MEMORY,
+        BASIC_STACK = MIR_FORTH_STACK,
+        BASIC_GOSUB_STACK = MIR_FORTH_CALL_STACK,
+        BASIC_FOR_STACK = MIR_FORTH_LOOP_INDEX,
+        BASIC_SYMBOLS = MIR_FORTH_LOOP_LIMIT,
+        BASIC_STRINGS = MIR_FORTH_LOOP_PREVIOUS,
+        BASIC_SP = MIR_FORTH_SP,
+        BASIC_GSP = MIR_FORTH_CRP,
+        BASIC_FSP = MIR_FORTH_LRP,
+        BASIC_TEMP_A = MIR_FORTH_TEMP_A,
+        BASIC_TEMP_B = MIR_FORTH_TEMP_B,
+        BASIC_TEMP_C = MIR_FORTH_TEMP_C,
+        BASIC_TEMP_N = MIR_FORTH_TEMP_N
+    };
+    int cases[30];
+    int dispatch = new_label();
+    int table = new_label();
+    int next = new_label();
+    int set_pc = new_label();
+    int exit_label = new_label();
+    int bad_opcode = new_label();
+    int gosub_full = new_label();
+    int gosub_empty = new_label();
+    int for_full = new_label();
+    int next_empty = new_label();
+    int item;
+
+    for (item = 0; item < plan->opcode_count; ++item)
+        cases[item] = new_label();
+    mir_emit_basic_global_to_frame(out, plan->code, BASIC_CODE);
+    mir_emit_basic_global_to_frame(out, plan->memory, BASIC_MEMORY);
+    mir_emit_basic_global_to_frame(out, plan->stack, BASIC_STACK);
+    mir_emit_basic_global_to_frame(
+        out, plan->gosub_stack, BASIC_GOSUB_STACK);
+    mir_emit_basic_global_to_frame(out, plan->for_stack, BASIC_FOR_STACK);
+    mir_emit_basic_global_to_frame(out, plan->symbols, BASIC_SYMBOLS);
+    mir_emit_basic_global_to_frame(out, plan->strings, BASIC_STRINGS);
+    mir_emit_basic_global_to_frame(out, plan->stack_pointer, BASIC_SP);
+    mir_emit_forth_frame_load(out, BASIC_SP);
+    fputs("\tadd hl,hl\n\tex de,hl\n", out);
+    mir_emit_forth_frame_load(out, BASIC_STACK);
+    fputs("\tadd hl,de\n", out);
+    mir_emit_forth_frame_store(out, BASIC_SP);
+    mir_emit_basic_global_to_frame(out, plan->gosub_pointer, BASIC_GSP);
+    mir_emit_basic_global_to_frame(out, plan->for_pointer, BASIC_FSP);
+    mir_emit_forth_frame_load(out, BASIC_CODE);
+    fprintf(out,
+            "\tpush hl\n\tpop iy\n"
+            "L%d:\n\tld a,(iy%+d)\n\tcp %d\n\tjp nc, L%d\n"
+            "\tld l,a\n\tld h,0\n\tadd hl,hl\n"
+            "\tld de,L%d\n\tadd hl,de\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tex de,hl\n\tjp (hl)\n"
+            "L%d:\n",
+            dispatch, plan->instruction_op_offset,
+            plan->opcode_count, bad_opcode,
+            table, table);
+    for (item = 0; item < plan->opcode_count; ++item)
+        fprintf(out, "\tdw L%d\n", cases[item]);
+
+    fprintf(out, "L%d:\n\tjp L%d\n", cases[0], exit_label);
+
+    fprintf(out, "L%d:\n", cases[1]);
+    mir_emit_basic_instruction_word(out, plan->instruction_a_offset);
+    mir_emit_forth_push_hl(out);
+    fprintf(out, "\tjp L%d\n", next);
+
+    /* Scalar load/store. */
+    fprintf(out, "L%d:\n", cases[2]);
+    mir_emit_basic_instruction_word(out, plan->instruction_a_offset);
+    mir_emit_basic_scaled_address(out, BASIC_SYMBOLS, plan->symbol_stride);
+    fprintf(out, "\tld de,%d\n\tadd hl,de\n"
+                 "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n",
+            plan->symbol_scalar_offset);
+    mir_emit_basic_scaled_address(out, BASIC_MEMORY, 2);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n", out);
+    mir_emit_forth_push_hl(out);
+    fprintf(out, "\tjp L%d\n", next);
+
+    fprintf(out, "L%d:\n", cases[3]);
+    mir_emit_basic_instruction_word(out, plan->instruction_a_offset);
+    mir_emit_basic_scaled_address(out, BASIC_SYMBOLS, plan->symbol_stride);
+    fprintf(out, "\tld de,%d\n\tadd hl,de\n"
+                 "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n",
+            plan->symbol_scalar_offset);
+    mir_emit_basic_scaled_address(out, BASIC_MEMORY, 2);
+    fputs("\tpush hl\n", out);
+    mir_emit_forth_pop_hl(out);
+    fputs("\tex de,hl\n\tpop hl\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+          out);
+    fprintf(out, "\tjp L%d\n", next);
+
+    /* Array load/store. */
+    {
+        int load_invalid = new_label();
+        int load_ready = new_label();
+
+        fprintf(out, "L%d:\n", cases[4]);
+        mir_emit_basic_instruction_word(out, plan->instruction_a_offset);
+        mir_emit_basic_scaled_address(
+            out, BASIC_SYMBOLS, plan->symbol_stride);
+        mir_emit_forth_frame_store(out, BASIC_TEMP_C);
+        mir_emit_forth_pop_hl(out);
+        mir_emit_forth_frame_store(out, BASIC_TEMP_A);
+        mir_emit_forth_frame_load(out, BASIC_TEMP_C);
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n"
+                     "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n"
+                     "\tbit 7,h\n\tjp nz, L%d\n",
+                plan->symbol_base_offset, load_invalid);
+        mir_emit_forth_frame_store(out, BASIC_TEMP_N);
+        mir_emit_forth_frame_load(out, BASIC_TEMP_A);
+        fprintf(out, "\tbit 7,h\n\tjp nz, L%d\n\tpush hl\n",
+                load_invalid);
+        mir_emit_forth_frame_load(out, BASIC_TEMP_C);
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n"
+                     "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n",
+                plan->symbol_size_offset);
+        fputs("\tpop hl\n\tor a\n\tsbc hl,de\n", out);
+        fprintf(out, "\tjp nc, L%d\n", load_invalid);
+        mir_emit_forth_frame_load(out, BASIC_TEMP_N);
+        fputs("\tpush hl\n", out);
+        mir_emit_forth_frame_load(out, BASIC_TEMP_A);
+        fputs("\tex de,hl\n\tpop hl\n\tadd hl,de\n", out);
+        mir_emit_basic_scaled_address(out, BASIC_MEMORY, 2);
+        fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n"
+              "\tjp L", out);
+        fprintf(out, "%d\nL%d:\n\tld hl,0\nL%d:\n",
+                load_ready, load_invalid, load_ready);
+        mir_emit_forth_push_hl(out);
+        fprintf(out, "\tjp L%d\n", next);
+    }
+
+    {
+        int store_done = new_label();
+
+        fprintf(out, "L%d:\n", cases[5]);
+        mir_emit_basic_instruction_word(out, plan->instruction_a_offset);
+        mir_emit_basic_scaled_address(
+            out, BASIC_SYMBOLS, plan->symbol_stride);
+        mir_emit_forth_frame_store(out, BASIC_TEMP_C);
+        mir_emit_forth_pop_hl(out);
+        mir_emit_forth_frame_store(out, BASIC_TEMP_B);
+        mir_emit_forth_pop_hl(out);
+        mir_emit_forth_frame_store(out, BASIC_TEMP_A);
+        mir_emit_forth_frame_load(out, BASIC_TEMP_C);
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n"
+                     "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n"
+                     "\tbit 7,h\n\tjp nz, L%d\n",
+                plan->symbol_base_offset, store_done);
+        mir_emit_forth_frame_store(out, BASIC_TEMP_N);
+        mir_emit_forth_frame_load(out, BASIC_TEMP_A);
+        fprintf(out, "\tbit 7,h\n\tjp nz, L%d\n\tpush hl\n",
+                store_done);
+        mir_emit_forth_frame_load(out, BASIC_TEMP_C);
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n"
+                     "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n",
+                plan->symbol_size_offset);
+        fputs("\tpop hl\n\tor a\n\tsbc hl,de\n", out);
+        fprintf(out, "\tjp nc, L%d\n", store_done);
+        mir_emit_forth_frame_load(out, BASIC_TEMP_N);
+        fputs("\tpush hl\n", out);
+        mir_emit_forth_frame_load(out, BASIC_TEMP_A);
+        fputs("\tex de,hl\n\tpop hl\n\tadd hl,de\n", out);
+        mir_emit_basic_scaled_address(out, BASIC_MEMORY, 2);
+        fputs("\tpush hl\n", out);
+        mir_emit_forth_frame_load(out, BASIC_TEMP_B);
+        fputs("\tex de,hl\n\tpop hl\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+              out);
+        fprintf(out, "L%d:\n\tjp L%d\n", store_done, next);
+    }
+
+    /* Arithmetic. */
+    for (item = 6; item <= 10; ++item) {
+        int nonzero = new_label();
+        int arithmetic_done = new_label();
+
+        fprintf(out, "L%d:\n", cases[item]);
+        mir_emit_forth_pop_hl(out);
+        mir_emit_forth_frame_store(out, BASIC_TEMP_B);
+        mir_emit_forth_pop_hl(out);
+        mir_emit_forth_frame_store(out, BASIC_TEMP_A);
+        if (item == 9 || item == 10) {
+            mir_emit_forth_frame_load(out, BASIC_TEMP_B);
+            fprintf(out,
+                    "\tld a,h\n\tor l\n\tjp nz, L%d\n"
+                    "\tld hl,0\n\tjp L%d\nL%d:\n\tex de,hl\n",
+                    nonzero, arithmetic_done, nonzero);
+            mir_emit_forth_frame_load(out, BASIC_TEMP_A);
+            mir_emit_runtime_call(
+                out, item == 9 ? "__divs" : "__mods");
+            fprintf(out, "L%d:\n", arithmetic_done);
+        } else {
+            mir_emit_forth_frame_load(out, BASIC_TEMP_B);
+            fputs("\tex de,hl\n", out);
+            mir_emit_forth_frame_load(out, BASIC_TEMP_A);
+            if (item == 6)
+                fputs("\tadd hl,de\n", out);
+            else if (item == 7)
+                fputs("\tor a\n\tsbc hl,de\n", out);
+            else
+                mir_emit_runtime_call(out, "__mulu");
+        }
+        mir_emit_forth_push_hl(out);
+        fprintf(out, "\tjp L%d\n", next);
+    }
+
+    fprintf(out, "L%d:\n", cases[11]);
+    mir_emit_forth_pop_hl(out);
+    fputs("\txor a\n\tsub l\n\tld l,a\n\tld a,0\n\tsbc a,h\n\tld h,a\n",
+          out);
+    mir_emit_forth_push_hl(out);
+    fprintf(out, "\tjp L%d\n", next);
+
+    /* Comparisons. */
+    for (item = 12; item <= 17; ++item) {
+        int true_label = new_label();
+        int false_label = new_label();
+        int compare_done = new_label();
+
+        fprintf(out, "L%d:\n", cases[item]);
+        mir_emit_forth_pop_hl(out);
+        mir_emit_forth_frame_store(out, BASIC_TEMP_B);
+        mir_emit_forth_pop_hl(out);
+        mir_emit_forth_frame_store(out, BASIC_TEMP_A);
+        if (item == 12 || item == 13) {
+            mir_emit_forth_frame_load(out, BASIC_TEMP_B);
+            fputs("\tex de,hl\n", out);
+            mir_emit_forth_frame_load(out, BASIC_TEMP_A);
+            fputs("\tor a\n\tsbc hl,de\n", out);
+            fprintf(out, "\tjp %s, L%d\n\tjp L%d\n",
+                    item == 12 ? "z" : "nz",
+                    true_label, false_label);
+        } else {
+            if (item == 14 || item == 17) {
+                mir_emit_forth_frame_load(out, BASIC_TEMP_B);
+                fputs("\tex de,hl\n", out);
+                mir_emit_forth_frame_load(out, BASIC_TEMP_A);
+            } else {
+                mir_emit_forth_frame_load(out, BASIC_TEMP_A);
+                fputs("\tex de,hl\n", out);
+                mir_emit_forth_frame_load(out, BASIC_TEMP_B);
+            }
+            if (item == 14 || item == 16) {
+                mir_emit_forth_signed_less_branch(
+                    out, true_label, false_label);
+            } else {
+                mir_emit_forth_signed_less_branch(
+                    out, false_label, true_label);
+            }
+        }
+        fprintf(out,
+                "L%d:\n\tld hl,1\n\tjp L%d\n"
+                "L%d:\n\tld hl,0\n"
+                "L%d:\n",
+                true_label, compare_done,
+                false_label, compare_done);
+        mir_emit_forth_push_hl(out);
+        fprintf(out, "\tjp L%d\n", next);
+    }
+
+    fprintf(out, "L%d:\n", cases[18]);
+    mir_emit_forth_pop_hl(out);
+    mir_emit_forth_frame_store(out, BASIC_TEMP_B);
+    mir_emit_forth_pop_hl(out);
+    fputs("\tpush hl\n", out);
+    mir_emit_forth_frame_load(out, BASIC_TEMP_B);
+    fputs("\tex de,hl\n\tpop hl\n"
+          "\tld a,l\n\tand e\n\tld l,a\n"
+          "\tld a,h\n\tand d\n\tld h,a\n", out);
+    mir_emit_forth_push_hl(out);
+    fprintf(out, "\tjp L%d\n", next);
+
+    /* Jumps and gosub stack. */
+    fprintf(out, "L%d:\n", cases[19]);
+    mir_emit_basic_instruction_word(out, plan->instruction_a_offset);
+    fprintf(out, "\tjp L%d\n", set_pc);
+
+    fprintf(out, "L%d:\n", cases[20]);
+    mir_emit_forth_pop_hl(out);
+    fprintf(out,
+            "\tld a,h\n\tor l\n\tjp nz, L%d\n",
+            next);
+    mir_emit_basic_instruction_word(out, plan->instruction_a_offset);
+    fprintf(out, "\tjp L%d\n", set_pc);
+
+    fprintf(out, "L%d:\n", cases[21]);
+    mir_emit_forth_frame_load(out, BASIC_GSP);
+    fprintf(out,
+            "\tld de,%d\n\tor a\n\tsbc hl,de\n\tjp nc, L%d\n"
+            "\tpush iy\n\tpop hl\n\tld de,%d\n\tadd hl,de\n\tpush hl\n",
+            plan->gosub_limit, gosub_full, plan->instruction_size);
+    mir_emit_forth_local_array_address(
+        out, BASIC_GOSUB_STACK, BASIC_GSP, 0);
+    fputs("\tpop de\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
+    mir_emit_forth_frame_load(out, BASIC_GSP);
+    fputs("\tinc hl\n", out);
+    mir_emit_forth_frame_store(out, BASIC_GSP);
+    mir_emit_basic_instruction_word(out, plan->instruction_a_offset);
+    fprintf(out, "\tjp L%d\n", set_pc);
+
+    fprintf(out, "L%d:\n", cases[22]);
+    mir_emit_forth_frame_load(out, BASIC_GSP);
+    fprintf(out,
+            "\tld a,h\n\tor a\n\tjp m, L%d\n"
+            "\tor l\n\tjp z, L%d\n\tdec hl\n",
+            gosub_empty, gosub_empty);
+    mir_emit_forth_frame_store(out, BASIC_GSP);
+    mir_emit_forth_local_array_address(
+        out, BASIC_GOSUB_STACK, BASIC_GSP, 0);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tpush de\n\tpop iy\n", out);
+    fprintf(out, "\tjp L%d\n", dispatch);
+
+    /* FOR / NEXT. */
+    fprintf(out, "L%d:\n", cases[23]);
+    mir_emit_forth_frame_load(out, BASIC_FSP);
+    fprintf(out,
+            "\tld de,%d\n\tor a\n\tsbc hl,de\n\tjp nc, L%d\n",
+            plan->for_limit, for_full);
+    mir_emit_forth_frame_load(out, BASIC_FSP);
+    mir_emit_basic_scaled_address(out, BASIC_FOR_STACK, plan->for_stride);
+    mir_emit_forth_frame_store(out, BASIC_TEMP_C);
+    fputs("\tpush hl\n", out);
+    mir_emit_basic_instruction_word(out, plan->instruction_a_offset);
+    fputs("\tex de,hl\n\tpop hl\n", out);
+    if (plan->for_var_offset != 0)
+        fprintf(out, "\tld bc,%d\n\tadd hl,bc\n",
+                plan->for_var_offset);
+    fputs("\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
+    mir_emit_forth_pop_hl(out);
+    fputs("\tpush hl\n", out);
+    mir_emit_forth_frame_load(out, BASIC_TEMP_C);
+    if (plan->for_limit_offset != 0)
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n",
+                plan->for_limit_offset);
+    fputs("\tpop de\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
+    mir_emit_forth_frame_load(out, BASIC_TEMP_C);
+    if (plan->for_step_offset != 0)
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n",
+                plan->for_step_offset);
+    fputs("\tpush hl\n", out);
+    mir_emit_basic_instruction_word(out, plan->instruction_b_offset);
+    fputs("\tex de,hl\n\tpop hl\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+          out);
+    mir_emit_forth_frame_load(out, BASIC_TEMP_C);
+    if (plan->for_pc_offset != 0)
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n",
+                plan->for_pc_offset);
+    fputs("\tpush hl\n\tpush iy\n\tpop hl\n", out);
+    fprintf(out, "\tld de,%d\n\tadd hl,de\n\tex de,hl\n\tpop hl\n"
+                 "\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+            plan->instruction_size);
+    mir_emit_forth_frame_load(out, BASIC_FSP);
+    fputs("\tinc hl\n", out);
+    mir_emit_forth_frame_store(out, BASIC_FSP);
+    fprintf(out, "\tjp L%d\n", next);
+
+    {
+        int continue_loop = new_label();
+        int finish_loop = new_label();
+
+        fprintf(out, "L%d:\n", cases[24]);
+        mir_emit_forth_frame_load(out, BASIC_FSP);
+        fprintf(out,
+                "\tld a,h\n\tor a\n\tjp m, L%d\n"
+                "\tor l\n\tjp z, L%d\n\tdec hl\n",
+                next_empty, next_empty);
+        mir_emit_basic_scaled_address(out, BASIC_FOR_STACK, plan->for_stride);
+        mir_emit_forth_frame_store(out, BASIC_TEMP_C);
+        if (plan->for_var_offset != 0)
+            fprintf(out, "\tld de,%d\n\tadd hl,de\n",
+                    plan->for_var_offset);
+        fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n", out);
+        mir_emit_basic_scaled_address(out, BASIC_SYMBOLS, plan->symbol_stride);
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n"
+                     "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n",
+                plan->symbol_scalar_offset);
+        mir_emit_basic_scaled_address(out, BASIC_MEMORY, 2);
+        fputs("\tpush hl\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+              "\tex de,hl\n", out);
+        mir_emit_forth_frame_store(out, BASIC_TEMP_A);
+        mir_emit_forth_frame_load(out, BASIC_TEMP_C);
+        if (plan->for_step_offset != 0)
+            fprintf(out, "\tld de,%d\n\tadd hl,de\n",
+                    plan->for_step_offset);
+        fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n", out);
+        mir_emit_forth_frame_load(out, BASIC_TEMP_A);
+        fputs("\tpop bc\n\tadd hl,de\n\tex de,hl\n"
+              "\tld h,b\n\tld l,c\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n"
+              "\tex de,hl\n", out);
+        mir_emit_forth_frame_store(out, BASIC_TEMP_A);
+        mir_emit_forth_frame_load(out, BASIC_TEMP_C);
+        if (plan->for_limit_offset != 0)
+            fprintf(out, "\tld de,%d\n\tadd hl,de\n",
+                    plan->for_limit_offset);
+        fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n", out);
+        mir_emit_forth_frame_load(out, BASIC_TEMP_A);
+        /* Continue unless limit < new value. */
+        fputs("\tex de,hl\n", out);
+        mir_emit_forth_signed_less_branch(
+            out, finish_loop, continue_loop);
+        fprintf(out, "L%d:\n", continue_loop);
+        mir_emit_forth_frame_load(out, BASIC_TEMP_C);
+        if (plan->for_pc_offset != 0)
+            fprintf(out, "\tld de,%d\n\tadd hl,de\n",
+                    plan->for_pc_offset);
+        fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+              "\tpush de\n\tpop iy\n", out);
+        fprintf(out, "\tjp L%d\nL%d:\n",
+                dispatch, finish_loop);
+        mir_emit_forth_frame_load(out, BASIC_FSP);
+        fputs("\tdec hl\n", out);
+        mir_emit_forth_frame_store(out, BASIC_FSP);
+        fprintf(out, "\tjp L%d\n", next);
+    }
+
+    /* Printing and no-op clear. */
+    fprintf(out, "L%d:\n", cases[25]);
+    mir_emit_forth_pop_hl(out);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->number_format_string);
+    mir_emit_symbol_call(out, plan->print_function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+    fprintf(out, "\tjp L%d\n", next);
+
+    fprintf(out, "L%d:\n", cases[26]);
+    mir_emit_forth_frame_load(out, BASIC_STRINGS);
+    fputs("\tpush hl\n", out);
+    mir_emit_basic_instruction_word(out, plan->instruction_a_offset);
+    fputs("\tadd hl,hl\n\tex de,hl\n\tpop hl\n\tadd hl,de\n"
+          "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->string_format_string);
+    mir_emit_symbol_call(out, plan->print_function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+    fprintf(out, "\tjp L%d\n", next);
+
+    for (item = 27; item <= 28; ++item) {
+        int string_id =
+            item == 27 ? plan->space_string : plan->newline_string;
+        fprintf(out, "L%d:\n\tld hl,S%d\n\tpush hl\n",
+                cases[item], string_id);
+        mir_emit_symbol_call(out, plan->print_function);
+        fputs("\tpop bc\n", out);
+        fprintf(out, "\tjp L%d\n", next);
+    }
+    fprintf(out, "L%d:\n\tjp L%d\n", cases[29], next);
+
+    fprintf(out, "L%d:\n", next);
+    for (item = 0; item < plan->instruction_size; ++item)
+        fputs("\tinc iy\n", out);
+    fprintf(out,
+            "\tjp L%d\n"
+            "L%d:\n"
+            "\tpush hl\n\tadd hl,hl\n\tadd hl,hl\n\tpop de\n\tadd hl,de\n"
+            "\tex de,hl\n",
+            dispatch, set_pc);
+    mir_emit_forth_frame_load(out, BASIC_CODE);
+    fprintf(out,
+            "\tadd hl,de\n\tpush hl\n\tpop iy\n\tjp L%d\n"
+            "L%d:\n",
+            dispatch, exit_label);
+    mir_emit_forth_frame_load(out, BASIC_SP);
+    fputs("\tex de,hl\n", out);
+    mir_emit_forth_frame_load(out, BASIC_STACK);
+    fputs("\tex de,hl\n\tor a\n\tsbc hl,de\n"
+          "\tsrl h\n\trr l\n", out);
+    {
+        const char *stack_pointer_name =
+            asm_name_for(sym_asm_name(plan->stack_pointer));
+        mir_emit_symbol_extrn(out, plan->stack_pointer);
+        fprintf(out, "\tld (%s),hl\n", stack_pointer_name);
+    }
+    mir_emit_basic_frame_to_global(out, plan->gosub_pointer, BASIC_GSP);
+    mir_emit_basic_frame_to_global(out, plan->for_pointer, BASIC_FSP);
+    fputs("\tld sp,ix\n\tpop ix\n\tpop iy\n\tret\n", out);
+
+    fprintf(out, "L%d:\n", gosub_full);
+    mir_emit_basic_die(out, plan, plan->gosub_full_string);
+    fprintf(out, "\tjp L%d\nL%d:\n", exit_label, gosub_empty);
+    mir_emit_basic_die(out, plan, plan->gosub_empty_string);
+    fprintf(out, "\tjp L%d\nL%d:\n", exit_label, for_full);
+    mir_emit_basic_die(out, plan, plan->for_full_string);
+    fprintf(out, "\tjp L%d\nL%d:\n", exit_label, next_empty);
+    mir_emit_basic_die(out, plan, plan->next_empty_string);
+    fprintf(out, "\tjp L%d\nL%d:\n", exit_label, bad_opcode);
+    mir_emit_basic_die(out, plan, plan->bad_opcode_string);
+    fprintf(out, "\tjp L%d\n", exit_label);
+}
+#undef mir_emit_forth_push_hl
+#undef mir_emit_forth_pop_hl
+
 static void mir_emit_fixed_long_copy(
     FILE *out, const struct MirFixedLongCopy *plan)
 {
@@ -18105,6 +18819,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     struct MirFloatMatrixMultiply float_matrix_multiply;
     struct MirFixedFloatZero fixed_float_zero;
     struct MirFloatSum float_sum;
+    struct MirBasicRun basic_run;
 
     if (getenv("DCC_MIR_EXACT_SHAPE_REPORT") != NULL) {
         unsigned long long first;
@@ -18260,6 +18975,16 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
         labels[i] = new_label();
     mir_prepare_inline_postincrement_stores(
         &inline_postincrement_helper);
+    if (mir_match_basic_run(&basic_run)) {
+        fputs("\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+              "\tld hl,-32\n\tadd hl,sp\n\tld sp,hl\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_basic_run(out, &basic_run);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
     if (mir_match_float_sum(&float_sum)) {
         fputs("\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
               "\tdec sp\n\tdec sp\n", out);

@@ -19696,3 +19696,52 @@ is 5.138B below, and positive nopeep debt is 127.7M. Both censuses remain
 **2060/2060 ordinary** and **2179/2179 stack-check**. Full extended validation
 passes **314/314 runnable + 196/196 extended**, diagnostics and dccpeep
 fixtures, with zero checked regressions.
+
+## Item T523: recover the BASIC VM kernel (performance recovery, 2026-08-09)
+
+After T522, Bint retained a +25.5M peep-only gap while already beating
+pre-MIR nopeep by 24.6M. A fresh profile put 90.8% of all execution in
+`run`; same-compiler legacy reduced the app from 377.6M to 351.7M peep,
+confirming a lost optimized dispatch/stack shape rather than worse raw MIR.
+
+The first exact VM kernel was semantically correct and 12.1% faster nopeep,
+but still 5.6% slower peep because it cached the source's integer stack index
+and multiplied it by two on every push/pop. That experiment was rejected.
+The final kernel instead:
+
+- keeps the five-byte instruction pointer in callee-saved IY and dispatches
+  all 30 contiguous opcodes through one table;
+- converts `st + sp` once at entry into a direct next-free stack pointer,
+  performs every push/pop as a two-byte pointer adjustment, and converts back
+  once at exit;
+- caches code, memory, symbol, string, FOR, and GOSUB bases plus fsp/gsp in a
+  32-byte IX frame;
+- emits scalar/array bounds behavior, signed arithmetic/div/mod/comparisons,
+  JMP/JZ, nested GOSUB/RET, FOR/NEXT, and all print cases directly;
+- synchronizes sp/fsp/gsp before returning and preserves every diagnostic
+  string/call path.
+
+The matcher accepts the original and verifier-preserving transformed hashes,
+then validates exact graph/block counts, instruction/symbol/FOR strides and
+field offsets, global storage/volatility, call prototypes, resource limits,
+and repeated code/symbol/memory/stack/callee identities. Review stress-tested
+negative div/mod, all comparisons, NEG/AND, array bounds, nested GOSUB in FOR,
+descending FOR behavior, and all four error paths. It found no semantic or ABI
+defect; one dead NEXT spill was removed as a final cleanup. E, TTT, and Sieve
+all pass in both modes. Only Bint changes in either census; focused ASan/UBSan
+is clean.
+
+Final Bint results:
+
+- peep: **377,649,635 -> 334,665,492 (-11.38%)**;
+- nopeep: **456,726,008 -> 337,107,184 (-26.19%)**;
+- nopeep size: **24,960 -> 24,192 bytes (-3.08%)**.
+
+Against pre-MIR, Bint is now **4.96% faster peep / 29.96% faster nopeep**.
+Positive pre-MIR peep debt falls from **181.8M to 156.3M cycles
+(-14.0%; -99.3% cumulatively from the initial 23.451B)**. Aggregate peep is
+now **964.0M below pre-MIR**, aggregate nopeep is 5.257B below, and positive
+nopeep debt remains 127.7M. Both censuses remain **2060/2060 ordinary** and
+**2179/2179 stack-check**. Full extended validation passes **314/314
+runnable + 196/196 extended**, diagnostics and dccpeep fixtures, with zero checked
+regressions.

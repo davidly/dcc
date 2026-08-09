@@ -64,13 +64,13 @@ transactional fallback remains in place throughout Phase 1.
   T511 attacks the whole-corpus concentration leader: byte-demand and wide
   induction identities make `tbig` 92.5% faster peep, reduce total positive
   pre-MIR peep debt by 76.9%, and materially improve 13 additional apps.
-  T512-T522 recover word dispatch, narrow-origin wide arithmetic, byte
+  T512-T523 recover word dispatch, narrow-origin wide arithmetic, byte
   verification, word scans, large-CFG address/induction identities, and
   interpreter inline-stack/typed-memory helpers, byte minimax, and modular
   arithmetic, chess, fixed-array, fixed-point matrix, and the remaining
   interpreter kernels. Fint and Attn now beat pre-MIR in both modes, aggregate
-  peep performance is 921.0M cycles ahead of pre-MIR, and positive per-app
-  peep debt is 181.8M (-99.2% cumulatively). Continue with the freshly
+  peep performance is 964.0M cycles ahead of pre-MIR, and positive per-app
+  peep debt is 156.3M (-99.3% cumulatively). Continue with the freshly
   re-ranked file/loop cohort,
   then prove MIR-required mode
   over the extended corpus before removing capture/replay and legacy codegen
@@ -717,12 +717,17 @@ MM 25.5% / 27.5%; both now beat pre-MIR in both modes. Positive peep debt is
 181.8M cycles (-99.2% cumulatively), aggregate peep is 921.0M below pre-MIR,
 and both censuses/full extended remain clean.
 
+T523 recovers Bint's complete 30-opcode VM with an IY instruction pointer and
+a direct next-free operand-stack pointer. Bint improves 11.4% peep / 26.2%
+nopeep and now beats pre-MIR by 5.0% / 30.0%. Positive peep debt is 156.3M
+cycles (-99.3% cumulatively), aggregate peep is 964.0M below pre-MIR, and
+both censuses/full extended remain clean.
+
 Next:
 
-1. Re-profile the residual Cint (+28.5M), Bint (+25.5M), and Forint (+22.8M)
-   peep-only gaps for one shared interpreter cleanup.
-2. Re-rank `nqueens`, `tqsort`, `tpihexb`, `tvlax`, and `ln2` after that
-   cleanup.
+1. Recover the remaining Cint (+28.5M) and Forint (+22.8M) peep-only VM
+   gaps with the same direct-pointer discipline.
+2. Re-rank `nqueens`, `tqsort`, `tpihexb`, `tvlax`, and `ln2` after that.
 3. Continue through `nqueens`, `tqsort`, `tpihexb`, and the residual tail
    until every positive per-app gap is recovered or architecturally
    documented; aggregate parity alone is already achieved.
