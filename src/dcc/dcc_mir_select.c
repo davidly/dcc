@@ -2087,6 +2087,8 @@ static int mir_dense_byte_switch_is_semantically_eligible(
         mir_spilled_cfg_dense_byte_switch_uses_direct_condition();
     int inline_postincrement =
         mir_spilled_cfg_inline_postincrement_uses();
+    int inline_indexed_stack_store =
+        mir_spilled_cfg_inline_indexed_stack_store_uses();
     int small_selfstore_add =
         mir_spilled_cfg_small_selfstore_add_uses();
     int common =
@@ -2104,7 +2106,8 @@ static int mir_dense_byte_switch_is_semantically_eligible(
         generated_size <= captured_size + 8192 &&
         generated_size * 100L <= captured_size * 121L &&
         generated_instructions * 100L <=
-            captured_instructions * 116L;
+            captured_instructions *
+                (inline_indexed_stack_store >= 2 ? 117L : 116L);
     int compact = common &&
         cases >= 32 && cases <= 64 &&
         width >= cases && width <= 64 &&
@@ -2125,13 +2128,14 @@ static int mir_dense_byte_switch_is_semantically_eligible(
                 "blocks=%d calls=%d backedge=%d vla=%d inline=%d "
                 "pointer-array=%d frame=%d cases=%d width=%d "
                 "direct-condition=%d inline-postincrement=%d "
-                "small-selfstore-add=%d generated-bytes=%ld "
+                "inline-indexed-stack-store=%d small-selfstore-add=%d "
+                "generated-bytes=%ld "
                 "captured-bytes=%ld generated-insns=%d "
                 "captured-insns=%d\n",
                 mir.name, eligible, blocks, calls, has_backedge,
                 mir.has_vla, has_inline, has_pointer_array, frame_bytes,
                 cases, width, direct_condition, inline_postincrement,
-                small_selfstore_add,
+                inline_indexed_stack_store, small_selfstore_add,
                 generated_size, captured_size, generated_instructions,
                 captured_instructions);
     return eligible;

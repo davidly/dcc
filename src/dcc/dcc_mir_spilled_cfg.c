@@ -44,6 +44,7 @@ static int mir_binary_is_selfstore_global_predecrement_load(
     int index, int *store_index, int *load_index, int *amount);
 static int mir_value_only_used_by_selfstore_adjust_amount(int value);
 static int mir_value_is_dense_byte_switch_condition(int value);
+static int mir_single_call_argument(int call_instruction, int *value);
 int mir_store_is_dead(int instruction);
 static int mir_divmod_partner(int instruction);
 static int mir_call_has_odd_argument_bytes(const struct MirInsn *call);
@@ -81,6 +82,7 @@ static int mir_spilled_cfg_dense_switch_minimum;
 static int mir_spilled_cfg_dense_switch_maximum;
 static int mir_spilled_cfg_dense_switch_direct_condition;
 static int mir_spilled_cfg_inline_postincrement_use_count;
+static int mir_spilled_cfg_inline_indexed_stack_store_use_count;
 static int mir_spilled_cfg_small_selfstore_add_use_count;
 static int mir_address_rematerialization_enabled;
 static int mir_block_cse_address_rematerialization_enabled;
@@ -6708,6 +6710,15 @@ struct MirInlinePostincrementStore {
     int continuation_label;
 };
 
+struct MirInlineIndexedStackStore {
+    struct Sym *callee;
+    struct Sym *base;
+    struct Sym *state;
+    struct FieldDef *index_field;
+    int base_offset;
+    int width;
+};
+
 static const struct AstNode *mir_inline_single_statement_expr(
     const struct Sym *callee)
 {
@@ -6725,6 +6736,210 @@ static const struct AstNode *mir_inline_single_statement_expr(
         body->list[0]->kind == AST_EXPR_STMT)
         body = body->list[0]->a;
     return body;
+}
+
+static const struct AstNode *mir_inline_unwrap_cast(
+    const struct AstNode *node)
+{
+    while (node != NULL && node->kind == AST_CAST)
+        node = node->a;
+    return node;
+}
+
+static struct Sym *mir_inline_ident_symbol(const struct AstNode *node)
+{
+    if (node == NULL || node->kind != AST_IDENT)
+        return NULL;
+    if (node->sym != NULL)
+        return node->sym;
+    return node->sval != NULL ? find_global(node->sval) : NULL;
+}
+
+static int mir_inline_member_decrement(
+    const struct AstNode *update, int required_kind,
+    struct Sym **state_out, struct FieldDef **field_out)
+{
+    const struct AstNode *member;
+    struct Sym *state;
+    struct FieldDef *field;
+    int struct_id;
+
+    if (update == NULL || update->kind != required_kind ||
+        update->op != TOK_DEC || update->a == NULL ||
+        update->a->kind != AST_MEMBER || update->a->op != '.')
+        return 0;
+    member = update->a;
+    state = mir_inline_ident_symbol(member->a);
+    if (state == NULL ||
+        (state->storage != SC_GLOBAL && state->storage != SC_EXTERN) ||
+        state->is_volatile || type_ptr_depth(state->type) != 0)
+        return 0;
+    struct_id = base_struct_id_from_type(state->type);
+    field = struct_id >= 0 && member->sval != NULL
+        ? find_field_def(struct_id, member->sval) : NULL;
+    if (field == NULL || field->is_volatile ||
+        field->bit_width > 0 || type_size(field->type) != 1)
+        return 0;
+    if (state_out != NULL)
+        *state_out = state;
+    if (field_out != NULL)
+        *field_out = field;
+    return 1;
+}
+
+static int mir_inline_same_member_decrement(
+    const struct AstNode *update, int required_kind,
+    const struct Sym *state, const struct FieldDef *field)
+{
+    struct Sym *candidate_state;
+    struct FieldDef *candidate_field;
+
+    return mir_inline_member_decrement(
+               update, required_kind,
+               &candidate_state, &candidate_field) &&
+           candidate_state == state && candidate_field == field;
+}
+
+static int mir_match_inline_indexed_stack_store(
+    const struct MirInsn *call,
+    struct MirInlineIndexedStackStore *helper)
+{
+    const struct AstNode *body;
+    const struct AstNode *assignment;
+    const struct AstNode *dereference;
+    const struct AstNode *address;
+    const struct AstNode *base_plus_offset;
+    const struct AstNode *base_ident;
+    const struct AstNode *update;
+    const struct AstNode *second_update = NULL;
+    const struct AstNode *value;
+    struct Sym *callee;
+    struct Sym *base;
+    struct Sym *state;
+    struct FieldDef *index_field;
+    int width;
+
+    if (call == NULL || call->opcode != MIR_CALL ||
+        (call->memory_flags &
+         MIR_CALL_FLAG_INLINE_SUBSTITUTABLE) == 0 ||
+        (call->type & 15) != TYPE_VOID)
+        return 0;
+    callee = find_global(call->name);
+    if (callee == NULL || !callee->is_static || !callee->is_inline ||
+        callee->proto_nargs != 1 || callee->has_inline_local ||
+        callee->inline_param_use_count[0] != 1)
+        return 0;
+    body = callee->inline_stmt_body != NULL
+        ? callee->inline_stmt_body : callee->inline_stmt_expr;
+    if (body != NULL && body->kind == AST_EXPR_STMT)
+        assignment = body->a;
+    else if (body != NULL && body->kind == AST_COMPOUND &&
+             body->list_len == 2 &&
+             body->list[0] != NULL &&
+             body->list[0]->kind == AST_EXPR_STMT &&
+             body->list[1] != NULL &&
+             body->list[1]->kind == AST_EXPR_STMT) {
+        assignment = body->list[0]->a;
+        second_update = body->list[1]->a;
+    } else
+        return 0;
+    if (assignment == NULL || assignment->kind != AST_ASSIGN ||
+        assignment->op != '=' || assignment->a == NULL ||
+        assignment->a->kind != AST_UNARY ||
+        assignment->a->op != '*' || assignment->b == NULL)
+        return 0;
+    dereference = assignment->a;
+    value = assignment->b;
+    if (value->kind != AST_IDENT ||
+        value->sval == NULL ||
+        strcmp(value->sval, callee->inline_param_names[0]) != 0)
+        return 0;
+    address = mir_inline_unwrap_cast(dereference->a);
+    if (address == NULL || address->kind != AST_BINARY ||
+        address->op != '+' || address->a == NULL ||
+        address->b == NULL)
+        return 0;
+    base_plus_offset = address->a;
+    update = address->b;
+    if (base_plus_offset->kind != AST_BINARY ||
+        base_plus_offset->op != '+' ||
+        base_plus_offset->a == NULL ||
+        base_plus_offset->b == NULL ||
+        base_plus_offset->b->kind != AST_INT_LIT ||
+        base_plus_offset->b->ival < 0 ||
+        base_plus_offset->b->ival > 65535)
+        return 0;
+    base_ident = mir_inline_unwrap_cast(base_plus_offset->a);
+    base = mir_inline_ident_symbol(base_ident);
+    if (base == NULL ||
+        (base->storage != SC_GLOBAL && base->storage != SC_EXTERN) ||
+        !base->is_array || base->is_volatile ||
+        base->elem_size != 1)
+        return 0;
+    width = type_size(dereference->type);
+    if (width == 1) {
+        if (second_update != NULL ||
+            !mir_inline_member_decrement(
+                update, AST_POSTFIX, &state, &index_field))
+            return 0;
+    } else if (width == 2) {
+        if (!mir_inline_member_decrement(
+                update, AST_UNARY, &state, &index_field) ||
+            !mir_inline_same_member_decrement(
+                second_update, AST_POSTFIX, state, index_field))
+            return 0;
+    } else
+        return 0;
+    if (helper != NULL) {
+        helper->callee = callee;
+        helper->base = base;
+        helper->state = state;
+        helper->index_field = index_field;
+        helper->base_offset = (int)base_plus_offset->b->ival;
+        helper->width = width;
+    }
+    return 1;
+}
+
+static int mir_call_uses_inline_indexed_stack_store(
+    int call_instruction, int *argument,
+    struct MirInlineIndexedStackStore *helper)
+{
+    return call_instruction >= 0 && call_instruction < mir.count &&
+           mir_match_inline_indexed_stack_store(
+               &mir.insns[call_instruction], helper) &&
+           mir_single_call_argument(call_instruction, argument);
+}
+
+static void mir_emit_inline_indexed_stack_store(
+    FILE *out, const struct MirInlineIndexedStackStore *helper)
+{
+    const char *base_name =
+        asm_name_for(sym_asm_name(helper->base));
+    const char *state_name =
+        asm_name_for(sym_asm_name(helper->state));
+
+    if ((helper->base->storage == SC_EXTERN ||
+         helper->base->needs_extrn) &&
+        mir_extrn_should_emit(helper->base))
+        fprintf(out, "\textrn %s\n", base_name);
+    if ((helper->state->storage == SC_EXTERN ||
+         helper->state->needs_extrn) &&
+        mir_extrn_should_emit(helper->state))
+        fprintf(out, "\textrn %s\n", state_name);
+    fputs("\tex de,hl\n", out);
+    fprintf(out, "\tld a,(%s%+d)\n",
+            state_name, helper->index_field->offset);
+    if (helper->width == 2)
+        fputs("\tdec a\n", out);
+    fputs("\tld l,a\n\tld h,0\n\tdec a\n", out);
+    fprintf(out, "\tld (%s%+d),a\n",
+            state_name, helper->index_field->offset);
+    fprintf(out, "\tld bc,%s%+d\n\tadd hl,bc\n"
+                 "\tld (hl),e\n",
+            base_name, helper->base_offset);
+    if (helper->width == 2)
+        fputs("\tinc hl\n\tld (hl),d\n", out);
 }
 
 static int mir_match_inline_postincrement_store(
@@ -8429,6 +8644,11 @@ int mir_spilled_cfg_inline_postincrement_uses(void)
     return mir_spilled_cfg_inline_postincrement_use_count;
 }
 
+int mir_spilled_cfg_inline_indexed_stack_store_uses(void)
+{
+    return mir_spilled_cfg_inline_indexed_stack_store_use_count;
+}
+
 int mir_spilled_cfg_small_selfstore_add_uses(void)
 {
     return mir_spilled_cfg_small_selfstore_add_use_count;
@@ -8509,6 +8729,7 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
     mir_spilled_cfg_dense_switch_maximum = -1;
     mir_spilled_cfg_dense_switch_direct_condition = 0;
     mir_spilled_cfg_inline_postincrement_use_count = 0;
+    mir_spilled_cfg_inline_indexed_stack_store_use_count = 0;
     mir_spilled_cfg_small_selfstore_add_use_count = 0;
     mir_spilled_cfg_indirect_store_value_forwarding_count = 0;
     mir_spilled_cfg_branch_condition_forwarding_count = 0;
@@ -10091,7 +10312,17 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                 int s1_value, s2_value, n_value;
                 int fn_value, dearg_value;
                 int inline_continuation_label;
+                struct MirInlineIndexedStackStore inline_indexed_store;
                 const char *rtl_name;
+                if (!is_indirect &&
+                    mir_call_uses_inline_indexed_stack_store(
+                        i, &s_value, &inline_indexed_store)) {
+                    mir_emit_spilled_arg_to_hl(out, s_value);
+                    mir_emit_inline_indexed_stack_store(
+                        out, &inline_indexed_store);
+                    ++mir_spilled_cfg_inline_indexed_stack_store_use_count;
+                    break;
+                }
                 if (!is_indirect &&
                     mir_call_uses_inline_postincrement_store(
                         &inline_postincrement_helper, i, &s_value,

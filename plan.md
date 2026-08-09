@@ -53,7 +53,10 @@ transactional fallback remains in place throughout Phase 1.
   +2.60% peep regression and moved it beyond both pre-T505 and older published
   baselines. T507 removes `a1.emulate`'s dead recovered-switch slot stores,
   recovering 2.50% peep / 2.23% nopeep; the remaining `a1` gap is about
-  1.8% peep and 0.15% nopeep versus the immediate pre-T503 baseline.
+  1.8% peep and 0.15% nopeep versus the immediate pre-T503 baseline. T508
+  fuses two retained static-inline stack-push helper calls transactionally
+  inside the spilled selector, reducing the remaining gap to 1.42% peep
+  while making nopeep 0.44% faster than pre-T503.
   Continue with measured selector/peephole
   work, then prove MIR-required mode over the extended corpus before removing
   capture/replay and legacy codegen in separate cleanup commits.
@@ -611,7 +614,9 @@ Pint's T505 regression immediately: peep cycles improve 4.32% from the
 100%-coverage baseline and now beat both the immediate pre-T505 and older
 published baselines; nopeep improves another 4.88%. The remaining named
 target is `a1`: T507 recovers 2.50% peep / 2.23% nopeep, leaving about
-1.8% peep / 0.15% nopeep versus the immediate pre-T503 baseline.
+1.8% peep / 0.15% nopeep versus the immediate pre-T503 baseline. T508
+then removes retained stack-push helper call overhead, leaving 1.42% peep
+while moving nopeep 0.44% ahead of pre-T503.
 
 Suggested approach, per the "Goal and current state" section's original
 Phase 2 plan:

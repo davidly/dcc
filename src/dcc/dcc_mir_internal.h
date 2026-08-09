@@ -541,6 +541,7 @@ int mir_spilled_cfg_dense_byte_switch_case_count(void);
 int mir_spilled_cfg_dense_byte_switch_width(void);
 int mir_spilled_cfg_dense_byte_switch_uses_direct_condition(void);
 int mir_spilled_cfg_inline_postincrement_uses(void);
+int mir_spilled_cfg_inline_indexed_stack_store_uses(void);
 int mir_spilled_cfg_small_selfstore_add_uses(void);
 void mir_begin_general_rhs_stack_forwarding(void);
 void mir_end_general_rhs_stack_forwarding(void);

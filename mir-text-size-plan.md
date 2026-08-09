@@ -18758,6 +18758,51 @@ recovered switch consumes it directly.
 - Full extended correctness: **314/314 runnable + 196/196 extended**,
   diagnostics and dccpeep fixtures pass, with zero checked regressions.
 
+## Item T508: fuse retained a1 stack-push helper calls inside the spilled selector (performance recovery, 2026-08-09)
+
+Matched profiles of the real `HELLO.BAS` workload showed that after T507 the
+remaining pre-T503 gap split into about 200k cycles inside `emulate()` and 72k
+cycles in static-inline helpers `push_word`/`push`. The legacy backend had
+substituted those helpers into the opcode arms; accepted MIR retained real
+calls because call-free void helpers are intentionally excluded from MIR-side
+AST replay after `tinlnpar.mem_store` measured a 0.10% peep regression.
+
+A first attempt to widen that replay gate to helpers containing `++/--`
+restored the exact old a1 numbers only because both `a1.emulate` and
+`pint.run` fell back to legacy (coverage dropped to 2058/2060 and
+2177/2179). That experiment was rejected and fully reverted.
+
+The spilled selector instead matches the captured static-inline helper body
+without changing MIR lowering. The matcher accepts only:
+
+- a one-argument static inline `void` helper;
+- a nonvolatile global byte array plus a constant byte offset;
+- a nonvolatile byte member of a nonvolatile global struct as the index;
+- either `*(byte *)(base + offset + member--) = argument`, or
+  `*(word *)(base + offset + --member) = argument; member--;`; and
+- one use of the helper argument.
+
+At the call site the selector emits the argument load, exact pre/post
+decrement semantics, indexed byte/word store, and no call. Plain store-only
+helpers remain behind the existing gate, so `tinlnpar` is byte- and
+performance-identical.
+
+Because the direct body is statically 16 instructions longer than two helper
+calls but dynamically removes call/prologue/epilogue execution, T503's giant
+switch admission proxy receives a narrowly structural allowance: 117% instead
+of 116% instruction growth only when at least two indexed-stack helper calls
+were actually fused. All other giant-switch candidates retain 116%.
+
+- `a1` peep cycles: **16,328,813 -> 16,269,887 (-0.36%)**.
+- `a1` nopeep cycles: **18,377,159 -> 18,268,274 (-0.59%)**.
+- Versus immediate pre-T503: peep remains 1.42% slower
+  (16,042,377); nopeep is now 0.44% faster (18,348,908).
+- Size is unchanged from T507 (22,656 peep / 25,344 nopeep) because the
+  buffered fallback helper bodies are still needed elsewhere in the file.
+- Both censuses remain **2060/2060 ordinary** and **2179/2179 stack-check**.
+- Full extended correctness: **314/314 runnable + 196/196 extended**,
+  diagnostics and dccpeep fixtures pass, with zero checked regressions.
+
 ## Item T500: confirmed final-seven oversizing is real machine bytes, not a dccpeep gap (investigation only, 2026-08-09)
 
 This investigation directly motivated T499's call-bounded regional homes:
