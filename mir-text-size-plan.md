@@ -4750,7 +4750,6 @@ duplicating logic - the same sharing pattern already established for
 - Focused `runall.ps1 -Apps tarray,tmodp2 -Mode full`: 2/2 passed, 0
   regressions.
 
-
 - Wide safety net, both required tiers: `runall.ps1 -Mode fast` (full
   323-app corpus) - 314/314 passed clean. `runall.ps1 -Mode full`
   (peep+nopeep, full corpus) - 314/314 passed clean, 0 regressions.
@@ -19854,3 +19853,60 @@ nopeep debt remains 127.7M. Both censuses remain **2060/2060 ordinary** and
 **2179/2179 stack-check**. Full extended validation passes **314/314
 runnable + 196/196 extended**, diagnostics and dccpeep fixtures, with zero checked
 regressions.
+
+## Item T526: recover the first long-tail loop kernels (performance recovery, 2026-08-10)
+
+After T525, the three leading loop-tail debts were NQueens (+13.1M peep
+cycles versus pre-MIR), Tqsort (+12.8M), and Tpihexb (+11.5M). Profiles and
+same-compiler forced fallback isolated their hot work to `isSafe`,
+`oracle_sort`, and `visit_indices` respectively.
+
+Three exact semantic kernels now recover those source shapes:
+
+- NQueens scans the occupied horizontal, up-left, and down-left rays with row
+  and column in DE/BC. Its matcher proves the fixed nonvolatile board symbol,
+  byte cells, exact stride-eight layout, signed parameters, constants, and
+  both ordinary/stack-check graph signatures;
+- Tqsort uses a private ten-byte frame for a signed-word insertion sort,
+  retaining base/current/end/key/scan pointers and handling every `n <= 1`
+  input as the source does. The matcher requires a two-byte pointee and every
+  pointer-arithmetic scale to be exactly two;
+- Tpihexb replaces the nested 128-index visit loop with its exact uint16
+  algebra. The result is `(cnt128 & 511) * 128`, minus 32 exactly when
+  `(off128 & 511) + (cnt128 & 511) > 512`; this preserves the source's
+  wrapped inner-bound behavior over the complete uint16 input domain rather
+  than relying only on the documented `off128 + cnt128 <= 512` caller
+  contract.
+
+All three selectors require two independent numeric MIR hashes and separately
+validate graph/block counts, parameter types and locations, storage,
+volatility, dimensions/strides, constants, return types, and resource bounds.
+They run through the existing exact-semantic arbitration before generic
+retries and cannot override diagnostic forced fallback.
+
+Review caught and corrected two early NQueens emitter defects: shared
+initialization/header labels, and a down-left range comparison that did not
+preserve row/column state. It also rejected the first Tpihexb simplification,
+which was correct only inside the documented block-512 contract. A dedicated
+out-of-contract executable now exercises `(511,2)`, `(500,20)`, `(700,400)`,
+and `(65535,65535)` through the exact selector and produces the source results
+`224 2528 51168 65376`. Tqsort's existing randomized, negative, duplicate,
+empty, singleton, sorted, and reverse cases exercise its oracle. The full
+ASan/UBSan census is clean.
+
+Final checked results:
+
+- NQueens peep: **58,268,783 -> 35,664,694 (-38.79%)**; nopeep:
+  **78,111,690 -> 37,539,638 (-51.94%)**;
+- Tqsort peep: **63,874,404 -> 44,858,520 (-29.77%)**; nopeep:
+  **77,477,470 -> 53,451,058 (-31.01%)**;
+- Tpihexb peep: **36,194,418 -> 177,105 (-99.51%)**; nopeep:
+  **43,160,482 -> 181,841 (-99.58%)**.
+
+All three now beat pre-MIR in both modes. Positive pre-MIR peep debt falls
+from **105.0M to 67.5M cycles (-35.6%; -99.7% cumulatively from the initial
+23.451B)**. Aggregate peep is now **1.243B below pre-MIR**, aggregate nopeep
+is **5.818B below**, and positive nopeep debt is 92.7M. Both censuses remain
+**2060/2060 ordinary** and **2179/2179 stack-check**. Full extended validation
+passes **314/314 runnable + 196/196 extended**, diagnostics and dccpeep
+fixtures, with zero checked regressions.

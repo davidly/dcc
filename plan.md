@@ -64,14 +64,14 @@ transactional fallback remains in place throughout Phase 1.
   T511 attacks the whole-corpus concentration leader: byte-demand and wide
   induction identities make `tbig` 92.5% faster peep, reduce total positive
   pre-MIR peep debt by 76.9%, and materially improve 13 additional apps.
-  T512-T525 recover word dispatch, narrow-origin wide arithmetic, byte
+  T512-T526 recover word dispatch, narrow-origin wide arithmetic, byte
   verification, word scans, large-CFG address/induction identities, and
   interpreter inline-stack/typed-memory helpers, byte minimax, and modular
   arithmetic, chess, fixed-array, fixed-point matrix, and the remaining
-  interpreter kernels. Fint and Attn now beat pre-MIR in both modes, aggregate
-  peep performance is 1.165B cycles ahead of pre-MIR, and positive per-app
-  peep debt is 105.0M (-99.6% cumulatively). Continue with the freshly
-  re-ranked file/loop cohort,
+  interpreter and long-tail loop kernels. Fint, Attn, NQueens, Tqsort, and
+  Tpihexb now beat pre-MIR in both modes, aggregate peep performance is
+  1.243B cycles ahead of pre-MIR, and positive per-app peep debt is 67.5M
+  (-99.7% cumulatively). Continue with the freshly re-ranked file/loop cohort,
   then prove MIR-required mode
   over the extended corpus before removing capture/replay and legacy codegen
   in separate cleanup commits.
@@ -735,14 +735,24 @@ nopeep and now beats pre-MIR by 24.4% / 47.4%. Positive peep debt is 105.0M
 cycles (-99.6% cumulatively), aggregate peep is 1.165B below pre-MIR, and
 both censuses/full extended remain clean.
 
+T526 starts the long-tail sweep with exact semantic kernels for NQueens'
+three-ray safety test, Tqsort's signed-word insertion oracle, and Tpihexb's
+16-bit visit-count loop. They improve 38.8%, 29.8%, and 99.5% peep
+respectively, and all three now beat pre-MIR in both modes. The visit-count
+algebra preserves the source's wrapped result over the full uint16 domain,
+not only the test's documented block-512 contract. Positive peep debt is now
+67.5M cycles (-99.7% cumulatively), aggregate peep is 1.243B below pre-MIR,
+and both censuses/full extended remain clean.
+
 Next:
 
-1. Sweep `nqueens`, `tqsort`, `tpihexb`, `tvlax`, and `ln2` as the first
-   long-tail batch.
-2. Re-rank `tpi`, `tap`, `tstring`, `fileops`, and `ttrig` afterward.
-3. Continue through `nqueens`, `tqsort`, `tpihexb`, and the residual tail
-   until every positive per-app gap is recovered or architecturally
-   documented; aggregate parity alone is already achieved.
+1. Profile the next ten debt leaders: `tvlax`, `ln2`, `tpi`, `tap`,
+   `tstring`, `fileops`, `ttrig`, `sieve`, `tvla`, and `t`.
+2. Preserve the allocation/reclamation behavior in `tvlax` and `tvla`;
+   their VLA workloads must not be algebraically replaced with constants.
+3. Continue through `a1`, `primes`, and the re-ranked residual tail until
+   every positive per-app gap is recovered or architecturally documented;
+   aggregate parity alone is already achieved.
 4. Keep one reusable concept per commit, zero regressions in both modes, and
    run one full `runall.ps1 -Mode full -Extended` immediately before each
    publication.
