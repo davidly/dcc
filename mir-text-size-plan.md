@@ -19795,3 +19795,62 @@ nopeep debt remains 127.7M. Both censuses remain **2060/2060 ordinary** and
 **2179/2179 stack-check**. Full extended validation passes **314/314
 runnable + 196/196 extended**, diagnostics and dccpeep fixtures, with zero checked
 regressions.
+
+## Item T525: recover the C bytecode VM (performance recovery, 2026-08-09)
+
+After T524, Cint was the last concentrated regression at +28.5M peep cycles
+while already beating pre-MIR nopeep by 94.7M. A fresh profile put 92.7% of
+execution in `run`; its generic MIR graph was statically smaller than legacy
+but lost the optimized program-counter/stack shapes dynamically.
+
+The exact 42-op VM kernel now:
+
+- keeps the five-byte instruction pointer in IY while maintaining the integer
+  PC required by Cint's call/return ABI;
+- caches Gst code/global-memory/frame-memory/function/return/string pointers,
+  frame size/fp, and the direct next-free operand-stack pointer in a 46-byte
+  IX frame;
+- implements all global/local word/byte direct/indexed memory operations,
+  signed arithmetic/div/mod/comparisons, logical/bitwise operators, branches,
+  direct/indirect calls, returns, POP, and PRINTF argument collection;
+- synchronizes Gst stp/flp/fp around `call_func` and exit, reloads them after
+  calls, and publishes a file-wide IY claim because returning `call_func` and
+  `print_fmt` callees must not borrow IY through dccpeep;
+- advances the common instruction pointer with `ld de,5 / add iy,de`, which
+  is five bytes smaller and twice as fast as five indexed increments.
+
+Review found one blocking latent bug not exercised by `eu.cin`: RET restored
+the cached integer PC but sent its value through the ordinary `push_result`
+tail, which advanced IY from the RET instruction rather than the caller's
+address. RET now positions IY one instruction before the saved PC and reuses
+the shared next tail, so both views arrive at the exact caller target. A
+focused multi-function return program is output-identical to forced legacy.
+The first fix crossed a 128-byte image boundary; replacing five `inc iy`
+instructions with the direct add recovered the boundary and another 13.1M
+cycles.
+
+The matcher validates the exact 1,854-instruction / 118-block signature,
+Gst/Func/Ins field offsets and strides, globals/callee identities and
+prototypes, standard memset shape, opcode/frame bounds, and strings. Review
+also verified main setup, every memory width/order, pop-thunk publication,
+call_func argument order and state sync, RET frame restoration, PRINTF's
+reverse vals[8] collection, and all signed operations. Fint's existing Forth
+kernel now saves/restores IY only around its one returning `prim` call instead
+of imposing a file-wide claim; its checked output and performance remain
+unchanged. Cint/Fint are the only census changes; focused ASan/UBSan is clean.
+
+Final Cint results:
+
+- peep: **425,136,432 -> 299,715,444 (-29.50%)**;
+- nopeep: **486,780,984 -> 305,839,769 (-37.17%)**;
+- peep size: **33,024 -> 31,360 bytes (-5.04%)**;
+- nopeep size: **38,784 -> 35,968 bytes (-7.26%)**.
+
+Against pre-MIR, Cint is now **24.43% faster peep / 47.40% faster nopeep**.
+Positive pre-MIR peep debt falls from **133.5M to 105.0M cycles
+(-21.4%; -99.6% cumulatively from the initial 23.451B)**. Aggregate peep is
+now **1.165B below pre-MIR**, aggregate nopeep is 5.711B below, and positive
+nopeep debt remains 127.7M. Both censuses remain **2060/2060 ordinary** and
+**2179/2179 stack-check**. Full extended validation passes **314/314
+runnable + 196/196 extended**, diagnostics and dccpeep fixtures, with zero checked
+regressions.
