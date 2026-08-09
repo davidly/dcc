@@ -18803,6 +18803,37 @@ were actually fused. All other giant-switch candidates retain 116%.
 - Full extended correctness: **314/314 runnable + 196/196 extended**,
   diagnostics and dccpeep fixtures pass, with zero checked regressions.
 
+## Item T509: permit planned stack handoffs across balanced scalar calls (performance recovery, 2026-08-09)
+
+After T508, the hottest remaining `a1.emulate` handler kept an old `cpu.pc`
+value in a backend slot while computing a signed relative branch displacement
+through `_get_mem`, then reloaded both operands for the final add. The existing
+planned stack-handoff architecture already carried single-use values across
+later binary consumers, but rejected every intervening call opcode.
+
+An older value pushed below a normal Z80 call's arguments survives safely:
+the caller removes only those newer argument bytes, leaving the planned value
+at the top of the stack. The interval planner now treats `MIR_ARG` and an
+ordinary scalar `MIR_CALL` as safe when the result is at most 16 bits and the
+call has no odd-byte ABI cleanup. Aggregate calls remain excluded, as do all
+other previously unsafe opcodes. The existing non-overlap verifier still
+allows only one planned stack interval at a time, and a value used as an
+argument becomes that ARG consumer rather than being carried through it.
+
+This shared policy removed the hot a1 frame round trip and improved 38 checked
+metrics across the corpus with no regressions.
+
+- `a1` peep cycles: **16,269,887 -> 16,111,200 (-0.98%)**.
+- `a1` nopeep cycles: **18,268,274 -> 18,223,699 (-0.24%)**.
+- Versus immediate pre-T503, peep is now only 0.43% slower
+  (16,042,377) while nopeep is 0.68% faster (18,348,908).
+- Material secondary wins include `tchess` peep -0.55%, `tiyreg` peep
+  -2.11%, and `tptr2dv` nopeep -4.39%, plus smaller improvements across
+  `attnc11`, `tfpspec`, `tstring`, `tstr`, and others.
+- Both censuses remain **2060/2060 ordinary** and **2179/2179 stack-check**.
+- Full extended correctness: **314/314 runnable + 196/196 extended**,
+  diagnostics and dccpeep fixtures pass, with zero checked regressions.
+
 ## Item T500: confirmed final-seven oversizing is real machine bytes, not a dccpeep gap (investigation only, 2026-08-09)
 
 This investigation directly motivated T499's call-bounded regional homes:

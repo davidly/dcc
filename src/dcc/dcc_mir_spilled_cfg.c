@@ -3812,6 +3812,21 @@ static int mir_planned_stack_interval_opcode_safe(int opcode)
     }
 }
 
+static int mir_planned_stack_interval_instruction_safe(int instruction)
+{
+    const struct MirInsn *insn;
+
+    if (instruction < 0 || instruction >= mir.count)
+        return 0;
+    insn = &mir.insns[instruction];
+    if (insn->opcode == MIR_ARG)
+        return 1;
+    if (insn->opcode == MIR_CALL)
+        return type_size(insn->type) <= 2 &&
+               !mir_call_has_odd_argument_bytes(insn);
+    return mir_planned_stack_interval_opcode_safe(insn->opcode);
+}
+
 static int mir_planned_stack_store_address_consumer(
     int value, int producer, int consumer)
 {
@@ -3837,8 +3852,7 @@ static int mir_planned_stack_store_address_consumer(
          ++instruction) {
         if (mir.insns[instruction].opcode == MIR_ARG)
             continue;
-        if (!mir_planned_stack_interval_opcode_safe(
-                mir.insns[instruction].opcode))
+        if (!mir_planned_stack_interval_instruction_safe(instruction))
             return 0;
     }
     return 1;
@@ -3896,8 +3910,7 @@ static int mir_planned_stack_consumer(int value, int producer,
     if (!store_address_consumer)
         for (instruction = producer + 1;
              instruction < consumer; ++instruction)
-            if (!mir_planned_stack_interval_opcode_safe(
-                    mir.insns[instruction].opcode))
+            if (!mir_planned_stack_interval_instruction_safe(instruction))
                 return -1;
     for (instruction = producer; instruction <= consumer; ++instruction)
         if (occupied[instruction])
