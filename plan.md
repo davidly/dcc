@@ -49,10 +49,12 @@ transactional fallback remains in place throughout Phase 1.
   and small self-store-add forms reduce it to 21720/1933 versus 23277/2046
   captured. Both censuses are 100% with zero removals; the full extended gate
   is clean.
-- **Phase 2 is now active.** T506 has already recovered Pint's tracked
+- **Phase 2 is now active.** T506 has recovered Pint's tracked
   +2.60% peep regression and moved it beyond both pre-T505 and older published
-  baselines; recover the remaining `a1` +4.40% regression with measured
-  selector/peephole
+  baselines. T507 removes `a1.emulate`'s dead recovered-switch slot stores,
+  recovering 2.50% peep / 2.23% nopeep; the remaining `a1` gap is about
+  1.8% peep and 0.15% nopeep versus the immediate pre-T503 baseline.
+  Continue with measured selector/peephole
   work, then prove MIR-required mode over the extended corpus before removing
   capture/replay and legacy codegen in separate cleanup commits.
 - **Key finding this segment: the mega-experiment's central premise -
@@ -608,15 +610,16 @@ regressions in service of reaching 100% coverage fast. T506 recovered
 Pint's T505 regression immediately: peep cycles improve 4.32% from the
 100%-coverage baseline and now beat both the immediate pre-T505 and older
 published baselines; nopeep improves another 4.88%. The remaining named
-target is `a1`'s +4.40% peep / +2.44% nopeep regression from T503.
+target is `a1`: T507 recovers 2.50% peep / 2.23% nopeep, leaving about
+1.8% peep / 0.15% nopeep versus the immediate pre-T503 baseline.
 
 Suggested approach, per the "Goal and current state" section's original
 Phase 2 plan:
 1. Use `dccprof` dynamic profiling (see the dcc-project skill's
    "Performance and optimizer work" section) to find where the tracked
    regressions actually spend cycles - do not guess from static text size.
-2. Prioritize the largest tracked regressions first: `a1` and `pint` are
-   the two known deliberate Phase-1 trade-offs; check `tests/perf_baselines.csv`
+2. Prioritize the remaining `a1` gap; Pint is already recovered beyond its
+   pre-T505 baseline. Check `tests/perf_baselines.csv`
    history via `git log -p -- tests/perf_baselines.csv` for the complete
    list of every accepted regression across T499-T505 if more turn up.
 3. Prove out any fix with the same full-mode + full-extended-gate

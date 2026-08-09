@@ -43,6 +43,7 @@ static int mir_binary_is_selfstore_small_adjust(
 static int mir_binary_is_selfstore_global_predecrement_load(
     int index, int *store_index, int *load_index, int *amount);
 static int mir_value_only_used_by_selfstore_adjust_amount(int value);
+static int mir_value_is_dense_byte_switch_condition(int value);
 int mir_store_is_dead(int instruction);
 static int mir_divmod_partner(int instruction);
 static int mir_call_has_odd_argument_bytes(const struct MirInsn *call);
@@ -4299,6 +4300,8 @@ static int mir_prepare_backend_slots(void)
                                         mir_value_is_selfstore_incdec_source(value) ||
                                         mir_value_only_used_by_selfstore_adjust_amount(
                                             value) ||
+                                        mir_value_is_dense_byte_switch_condition(
+                                            value) ||
                                         ((type_size(definition->type) == 2 ||
                                             type_size(definition->type) == 4) &&
                                          mir_load_is_single_call_argument(value,
@@ -7303,6 +7306,40 @@ static int mir_store_feeds_dense_byte_switch(
            mir_match_dense_byte_switch(next, &dispatch) &&
            dispatch.condition == value &&
            dispatch.condition_in_hl;
+}
+
+static int mir_value_is_dense_byte_switch_condition(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    struct MirDenseByteSwitch dispatch;
+    int definition_index;
+    int store;
+    int next;
+
+    if (definition == NULL ||
+        definition->opcode != MIR_LOAD_INDIRECT ||
+        type_size(definition->type) != 1)
+        return 0;
+    definition_index = (int)(definition - mir.insns);
+    store = definition_index + 1;
+    while (store < mir.count &&
+           mir.insns[store].opcode == MIR_NOP)
+        ++store;
+    if (store >= mir.count ||
+        mir.insns[store].opcode != MIR_STORE ||
+        mir.insns[store].src1 != value ||
+        !mir_narrow_store_preserves_hl(store, value))
+        return 0;
+    next = store + 1;
+    while (next < mir.count &&
+           mir.insns[next].opcode == MIR_NOP)
+        ++next;
+    if (next >= mir.count ||
+        !mir_match_dense_byte_switch(next, &dispatch) ||
+        dispatch.condition != value ||
+        !dispatch.condition_in_hl)
+        return 0;
+    return mir_value_use_count(value) == dispatch.case_count + 1;
 }
 
 /* Fuse the dispatch loop's common `word += byte_table[index]` epilogue so

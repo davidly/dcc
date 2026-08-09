@@ -18721,6 +18721,43 @@ the proven global-pointer predecrement-load fusion. This restored
 - Full extended correctness: **314/314 runnable + 196/196 extended**,
   diagnostics and dccpeep fixtures pass, with zero checked regressions.
 
+## Item T507: elide the recovered a1 switch condition's dead backend slot (performance recovery, 2026-08-09)
+
+T503 recovered `a1.emulate`'s 153-case byte switch as a 256-entry jump table
+and kept the fetched opcode in HL through the named byte store to local `op`.
+Backend-slot planning still ran before that recovered identity was visible,
+so the same opcode value (`v5`) received backend slot 0 despite having exactly
+154 uses: the one named `op` store plus the 153 comparisons T503 removes.
+The dispatch preamble consequently stored the opcode twice every emulated
+instruction:
+
+```text
+ld (ix-82),l
+ld (ix-81),h
+ld (ix-33),l
+```
+
+The spilled slot planner now recognizes only a byte `MIR_LOAD_INDIRECT` whose
+next real instruction is one HL-preserving named store, followed by a
+transactionally matched dense byte switch using that exact value, and whose
+complete use count is `case_count + 1`. Such a value needs no backend slot:
+the definition remains in HL, the named byte store preserves it, and the
+recovered switch consumes it directly.
+
+- The duplicate wide slot store disappears; the named `op` byte store and
+  jump-table dispatch are unchanged.
+- `a1` peep cycles: **16,747,535 -> 16,328,813 (-2.50%)**.
+- `a1` nopeep cycles: **18,795,881 -> 18,377,159 (-2.23%)**.
+- Nopeep is now within 0.15% of the immediate pre-T503 baseline
+  (18,348,908); peep's remaining gap is about 1.8%
+  (16,042,377 pre-T503).
+- The frame size does not shrink because backend slot 0 is reused by later
+  values, but two memory writes are removed from every 6502 dispatch
+  iteration.
+- Both censuses remain **2060/2060 ordinary** and **2179/2179 stack-check**.
+- Full extended correctness: **314/314 runnable + 196/196 extended**,
+  diagnostics and dccpeep fixtures pass, with zero checked regressions.
+
 ## Item T500: confirmed final-seven oversizing is real machine bytes, not a dccpeep gap (investigation only, 2026-08-09)
 
 This investigation directly motivated T499's call-bounded regional homes:
