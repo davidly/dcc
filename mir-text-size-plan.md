@@ -19062,3 +19062,56 @@ Positive pre-MIR peep debt falls again from **5.409B to 4.333B cycles
 **2060/2060 ordinary** and **2179/2179 stack-check**. Focused ASan/UBSan is
 clean. Full extended validation passes **314/314 runnable + 196/196 extended**,
 diagnostics and dccpeep fixtures, with zero checked regressions.
+
+## Item T513: recover byte verification loops and symmetric zero tests (performance recovery, 2026-08-09)
+
+After T512, `tm` became the largest single debt (+516.4M peep, +512.8%).
+`dccprof` attributed 89.9% of its 617.1M cycles to `chkmem`; reverting only
+that function restored the app to 100.9M peep / 447.4M nopeep, essentially
+the pre-MIR profile.
+
+The legacy loop is a Z80 `cpi` identity, while MIR emitted scalar pointer,
+counter, byte-load, compare, and two spill updates per byte. The spilled
+selector now recognizes a closed byte-verification loop:
+
+- zero-based 16-bit induction PHI and stable 16-bit count;
+- stable byte pointer incremented by one;
+- invariant low-byte value from `(word & 0xff)`;
+- `*pointer != value` cold failure block;
+- no pointer/index uses after the loop.
+
+It emits a direct `cpi` loop with BC=count, HL=pointer, A=value. The original
+cold mismatch block remains selected normally. On mismatch, the emitter backs
+HL up to the failing byte and reconstructs the exact induction PHI value
+before falling through; if the standard non-returning error path returned,
+the original continuation/backedge would therefore remain semantically valid.
+The initial hot path avoids that cold recovery state entirely.
+
+The invariant `(value & 0xff)` slice is also recovered transactionally:
+its dead wide computation/store is skipped and A loads the proven source low
+byte directly. The matcher contains no source names and checks every consumed
+MIR instruction, use, width, memory location, CFG edge, and post-loop use.
+
+A second reusable fix normalizes fused `0 == value` / `0 != value`
+comparisons. Equality is symmetric, so the right value is consumed directly
+in HL and tested without materializing zero or subtracting. A const-vs-const
+edge initially reloaded a slotless constant and broke `tlimits`; constants
+are now materialized directly, while forwarded runtime values retain their
+balanced pop.
+
+Final checked results:
+
+- `tm` peep: **617,070,042 -> 100,544,142 (-83.71%)**;
+- `tm` nopeep: **704,264,182 -> 104,294,482 (-85.19%)**.
+
+Against pre-MIR, tm is **0.15% faster peep** and **76.66% faster nopeep**.
+Shared zero-test wins include `ttt` (-5.03%/-1.86%), `trw2`
+(-2.43%/-0.91%), `trwold` (-2.28%/-0.84%), `tcpirlp` (-6.97%/-7.68%),
+`a1` (-0.55%/-0.25%), plus smaller `pihex`, `fileops`, `tm1mu`, `tcrcfix`,
+and `tdowhile` improvements.
+
+Positive pre-MIR peep debt falls from **4.333B to 3.727B cycles
+(-14.0%; -84.1% cumulatively from the initial 23.451B)**. Both censuses remain
+**2060/2060 ordinary** and **2179/2179 stack-check**. Focused ASan/UBSan is
+clean. Full extended validation passes **314/314 runnable + 196/196 extended**,
+diagnostics and dccpeep fixtures, with zero checked regressions.

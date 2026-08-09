@@ -644,15 +644,20 @@ arithmetic. Fint improves 54.9% peep / 52.5% nopeep; attnc11 improves 36.9% /
 4.333B cycles (-81.5% cumulatively from the initial 23.451B), with both
 censuses and the full extended gate clean.
 
+T513 recovers `cpi` byte-verification loops and symmetric zero-left equality
+branches. `tm` improves 83.7% peep / 85.2% nopeep and now beats pre-MIR in
+both modes. Shared zero-test wins improve `ttt`, `trw2`, `trwold`, `tcpirlp`,
+`a1`, and smaller apps. Positive pre-MIR peep debt is now 3.727B cycles
+(-84.1% cumulatively), with both censuses and the full extended gate clean.
+
 Next:
 
-1. Re-rank after T512 (do not follow the stale pre-T512 list).
+1. Re-rank after T513 (do not follow the stale pre-T513 list).
 2. Profile and attribute the new leader cohort:
-   `tm`, `trw2`, `tstr`, `cobint`, `bint`, `adaint`, `cint`, `ttt`,
-   `pihex`, `tchess`, `catalan`, `attnc11`.
-3. Cluster by measured shared cause before editing. `tm` is now the largest
-   percentage and absolute non-I/O gap; `trw2`/`tstr` form the next I/O/string
-   cohort; the remaining interpreters should be grouped separately.
+   `tstr`, `trw2`, `cobint`, `bint`, `adaint`, `cint`, `ttt`, `pihex`,
+   `tchess`, `catalan`, `attnc11`.
+3. Profile `tstr` and `trw2` as the I/O/string leaders, then return to the
+   remaining interpreter cohort by shared measured cause.
 4. Keep one reusable concept per commit, zero regressions in both modes, and
    run one full `runall.ps1 -Mode full -Extended` immediately before each
    publication.
