@@ -953,6 +953,12 @@ int regalloc_buffer_finalize(FILE *f, struct Sym *bc_cand, struct Sym *e_cand,
         return 1;
     }
 
+    if (strstr(buf, MIR_EXACT_KERNEL_MARKER) != NULL) {
+        free(buf);
+        fclose(rewritten);
+        return 0;
+    }
+
     if (buf_has_unsafe_call(buf)) {
         free(buf);
         fclose(rewritten);
@@ -1270,6 +1276,9 @@ int try_loop_scoped_regalloc_first(const char *name, int type,
     int saved_stack_check;
     int c;
     int errors_before;
+    int exact_mir;
+    char *buf;
+    long size;
 
     if (strcmp(name, "main") == 0)
         return 0;
@@ -1299,7 +1308,17 @@ int try_loop_scoped_regalloc_first(const char *name, int type,
     opt_stack_check = saved_stack_check;
     emit_sink_restore(&saved_sink);
 
+    exact_mir = 0;
     if (g_diag_error_count == errors_before && g_loop_regalloc_bc_claimed) {
+        buf = dcc_read_stream_text(
+            scratch, &size,
+            "cannot read speculative loop-scoped-first temp file");
+        exact_mir = strstr(buf, MIR_EXACT_KERNEL_MARKER) != NULL;
+        free(buf);
+        rewind(scratch);
+    }
+    if (g_diag_error_count == errors_before &&
+        g_loop_regalloc_bc_claimed && !exact_mir) {
         check_undefined_user_labels();
         if (plain_static_body_can_be_buffered(s, name)) {
             s->deferred_body_file = scratch;
@@ -1591,7 +1610,8 @@ int try_speculative_iy_regalloc_function_body(const char *name, int type,
     if (g_diag_error_count == errors_before && !g_regalloc_address_escaped) {
         buf = dcc_read_stream_text(scratch, &size,
                                    "cannot read speculative iy-regalloc temp file");
-        ok = !buf_has_foreign_iy_use(buf);
+        ok = strstr(buf, MIR_EXACT_KERNEL_MARKER) == NULL &&
+             !buf_has_foreign_iy_use(buf);
         free(buf);
     }
     if (getenv("DCC_TRACE_IY") != NULL)

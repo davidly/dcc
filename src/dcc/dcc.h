@@ -166,6 +166,10 @@
 #define SC_EXTERN      5
 #define SC_REGISTER    6   /* unused; reserved */
 
+/* Prevent legacy speculative register allocation from rewriting a
+ * transactionally selected exact MIR stream. */
+#define MIR_EXACT_KERNEL_MARKER ";@dcc.mir exact-kernel"
+
 /* ------------------------------------------------------------------------- *
  * Lexer token kinds. Single-character tokens use their ASCII code; multi-byte
  * tokens and keywords use the numbered values below (>= 256).

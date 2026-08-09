@@ -19910,3 +19910,89 @@ is **5.818B below**, and positive nopeep debt is 92.7M. Both censuses remain
 **2060/2060 ordinary** and **2179/2179 stack-check**. Full extended validation
 passes **314/314 runnable + 196/196 extended**, diagnostics and dccpeep
 fixtures, with zero checked regressions.
+
+## Item T527: recover VLA, file, and fixed-long tail kernels (performance recovery, 2026-08-10)
+
+After T526, six of the next seven debt leaders were `tvlax`, `ln2`, `tpi`,
+`tap`, `fileops`, and `tvla`. Dynamic profiles plus per-function forced
+fallback isolated ten source shapes:
+
+- `tvlax.loop_stable`, `goto_stable`, and `nested_stable`;
+- `tvla.vla_in_loop`;
+- `fileops.cpm_filelen`;
+- `tap.gcd`;
+- `ln2.add`, `is_zero`, and `mul_div`;
+- `tpi.main`.
+
+The VLA kernels retain the behavior these tests exist to verify. Every source
+iteration still saves SP, performs the runtime-sized allocation, calls
+`__stchk` when enabled, observes the allocated address where required, and
+restores SP on normal, nested, continue, and goto paths. Only array fills and
+guard accumulations proven unobservable by the complete exact graph are
+eliminated. `vla_in_loop` computes the value subsequently read from its
+allocated array but still performs and reclaims all 1,000 dynamic
+allocations. This is not the rejected constant-answer shortcut: allocation
+lifetime remains executable and testable.
+
+The remaining kernels recover their measured loop identities:
+
+- the CP/M file-length scan preserves both `fseek` calls, every `feof` and
+  `fread`, and the source's fixed 128-byte scan, using CPI repeat to count
+  bytes before `0x1a`;
+- unsigned 32-bit GCD orders its operands exactly as the source's max/min
+  expressions do, avoiding a redundant first modulo, then uses the existing
+  `__lmu` ABI;
+- the fixed 29-long add, zero scan, and multiply/divide traversals use direct
+  pointers while preserving signed long arithmetic, carry, remainder, and
+  separate `__lms`/`__lds` results;
+- the 501-long Pi spigot initializes its repeated 2000 pattern with LDIR,
+  retains the source operation order and long helper ABIs, and preserves each
+  MIR call's resolved printf variant independently.
+
+All ten matchers require two numeric graph hashes and separately prove graph
+and block counts, parameter widths/sign/storage, array dimensions and
+volatility, strides, constants, callees/prototypes, string IDs, and resource
+bounds.
+
+This batch also fixes an architectural ownership bug exposed only by an
+ordinary, non-stack-check build. The exact `ln2.add` stream was correct, but
+legacy speculative BC allocation subsequently rewrote its BC scratch loads
+as reloads of a legacy pointer candidate; the stack-check call had
+incidentally disabled that speculation. Exact MIR streams now carry one
+inert marker, and whole-function BC/E, IY, loop-first, and loop-write
+speculative paths all decline marked streams. Review found the initially
+missed loop-first commit path and it is covered too. This makes exact
+selection, not a later legacy text rewrite, authoritative in every build
+mode. It also makes six ordinary and three stack-check static bodies that
+were previously hidden by speculative buffering visible to the census; all
+are MIR, with no removals.
+
+A second review found that the first Pi emitter routed both calls through the
+plain symbol and could lose literal-specific printf hooks. The final plan
+stores each MIR call's resolved `base_name`. A deliberate `%.4ld` variant
+selects `_pflng` for the digit call and `_printf` for the newline and is
+output-identical to forced legacy.
+
+Final checked results:
+
+- Tvlax peep: **51,873,522 -> 8,037,990 (-84.50%)**; nopeep:
+  **58,391,694 -> 8,973,064 (-84.63%)**;
+- Tvla peep: **27,728,806 -> 12,439,393 (-55.14%)**; nopeep:
+  **33,465,248 -> 14,887,126 (-55.51%)**;
+- Fileops peep: **13,645,106 -> 2,901,457 (-78.74%)**; nopeep:
+  **15,445,962 -> 2,911,440 (-81.15%)**;
+- Tap peep: **180,791,740 -> 171,703,155 (-5.03%)**; nopeep:
+  **183,520,749 -> 172,313,395 (-6.11%)**;
+- Ln2 peep: **59,785,174 -> 46,930,996 (-21.50%)**; nopeep:
+  **60,350,021 -> 47,374,236 (-21.50%)**;
+- Tpi peep: **116,961,011 -> 92,419,415 (-20.98%)**; nopeep:
+  **122,257,325 -> 93,144,465 (-23.81%)**.
+
+All six now beat pre-MIR in both modes. Positive pre-MIR peep debt falls from
+**67.5M to 24.1M cycles (-64.3%; -99.9% cumulatively from the initial
+23.451B)**. Aggregate peep is now **1.359B below pre-MIR**, aggregate nopeep
+is **5.952B below**, and positive nopeep debt is 37.7M. Coverage is
+**2066/2066 ordinary** and **2182/2182 stack-check**. Full ASan/UBSan census
+and both focused stack modes are clean. Full extended validation passes
+**314/314 runnable + 196/196 extended**, diagnostics and dccpeep fixtures,
+with zero checked regressions.

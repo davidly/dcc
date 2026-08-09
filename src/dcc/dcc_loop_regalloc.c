@@ -847,6 +847,10 @@ static int loop_regalloc_write_candidate_safe(FILE *f, struct Sym *cand)
         free(buf);
         return 1;
     }
+    if (strstr(buf, MIR_EXACT_KERNEL_MARKER) != NULL) {
+        free(buf);
+        return 0;
+    }
     rewind(f);
 
     if (buf_has_unsafe_call(buf)) {

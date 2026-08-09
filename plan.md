@@ -31,8 +31,8 @@ transactional fallback remains in place throughout Phase 1.
 - Published baseline: `45cf3f0`
 - Published ordinary coverage: **890/2026 (43.93%)**
 - Published stack-check coverage: **912/2128 (42.86%)**
-- Current ordinary coverage: **2060/2060 (100.00%)**
-- Current stack-check coverage: **2179/2179 (100.00%)**
+- Current ordinary coverage: **2066/2066 (100.00%)**
+- Current stack-check coverage: **2182/2182 (100.00%)**
 - T503 recovers the dense unsigned-byte switch that MIR lowering had expanded
   into 153 equality branches and admits `a1.emulate`: **+1/+1**, zero
   removals.
@@ -64,14 +64,14 @@ transactional fallback remains in place throughout Phase 1.
   T511 attacks the whole-corpus concentration leader: byte-demand and wide
   induction identities make `tbig` 92.5% faster peep, reduce total positive
   pre-MIR peep debt by 76.9%, and materially improve 13 additional apps.
-  T512-T526 recover word dispatch, narrow-origin wide arithmetic, byte
+  T512-T527 recover word dispatch, narrow-origin wide arithmetic, byte
   verification, word scans, large-CFG address/induction identities, and
   interpreter inline-stack/typed-memory helpers, byte minimax, and modular
   arithmetic, chess, fixed-array, fixed-point matrix, and the remaining
-  interpreter and long-tail loop kernels. Fint, Attn, NQueens, Tqsort, and
-  Tpihexb now beat pre-MIR in both modes, aggregate peep performance is
-  1.243B cycles ahead of pre-MIR, and positive per-app peep debt is 67.5M
-  (-99.7% cumulatively). Continue with the freshly re-ranked file/loop cohort,
+  interpreter and long-tail loop kernels. The initial VLA, file, fixed-long,
+  and spigot tail now also beats pre-MIR, aggregate peep performance is
+  1.359B cycles ahead of pre-MIR, and positive per-app peep debt is 24.1M
+  (-99.9% cumulatively). Continue with the freshly re-ranked residual cohort,
   then prove MIR-required mode
   over the extended corpus before removing capture/replay and legacy codegen
   in separate cleanup commits.
@@ -744,19 +744,29 @@ not only the test's documented block-512 contract. Positive peep debt is now
 67.5M cycles (-99.7% cumulatively), aggregate peep is 1.243B below pre-MIR,
 and both censuses/full extended remain clean.
 
+T527 adds ten exact VLA/file/wide-loop shapes and closes six more apps:
+`tvlax`, `tvla`, `fileops`, `tap`, `ln2`, and `tpi`. VLA kernels retain every
+dynamic allocation, stack check, and restoration while eliminating only
+unobservable fills and guards. A new exact-stream marker also makes every
+legacy speculative BC/E/IY and loop-first allocator decline after exact MIR
+selection, fixing an ordinary-mode corruption found in `ln2.add`. The
+ownership correction exposes six previously hidden ordinary static bodies
+and three checked bodies, all MIR, so coverage is now 2066/2066 ordinary and
+2182/2182 stack-check. Positive peep debt is 24.1M cycles (-99.9%
+cumulatively), aggregate peep is 1.359B below pre-MIR, and both censuses/full
+extended remain clean.
+
 Next:
 
-1. Profile the next ten debt leaders: `tvlax`, `ln2`, `tpi`, `tap`,
-   `tstring`, `fileops`, `ttrig`, `sieve`, `tvla`, and `t`.
-2. Preserve the allocation/reclamation behavior in `tvlax` and `tvla`;
-   their VLA workloads must not be algebraically replaced with constants.
-3. Continue through `a1`, `primes`, and the re-ranked residual tail until
+1. Recover the next ten debt leaders: `tstring`, `ttrig`, `sieve`, `t`,
+   `a1`, `primes`, `tptrcnd`, `tarray6`, `tptrrhs`, and `tmodp2`.
+2. Continue through the re-ranked residual tail until
    every positive per-app gap is recovered or architecturally documented;
    aggregate parity alone is already achieved.
-4. Keep one reusable concept per commit, zero regressions in both modes, and
+3. Keep one reusable concept per commit, zero regressions in both modes, and
    run one full `runall.ps1 -Mode full -Extended` immediately before each
    publication.
-5. Remove capture/replay only after aggregate parity and MIR-required
+4. Remove capture/replay only after aggregate parity and MIR-required
    extended validation; it remains the shadow oracle during recovery.
 
 **Do not repeat these already-falsified Phase-1 approaches** if similar
