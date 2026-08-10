@@ -11616,6 +11616,22 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
             }
             if (!helper_rhs_pair &&
                 mir_forwarded_wide_stack_consumer == helper_consumer &&
+                consumer->src1 == mir_forwarded_wide_stack_value &&
+                consumer->src2 == value &&
+                (consumer->immediate == TOK_EQ ||
+                 consumer->immediate == TOK_NE ||
+                 consumer->immediate == '<' ||
+                 consumer->immediate == '>' ||
+                 consumer->immediate == TOK_LE ||
+                 consumer->immediate == TOK_GE) &&
+                mir_forward_skip_target(mir_emit_instruction_index) ==
+                    helper_consumer) {
+                mir_forwarded_wide_value = value;
+                mir_forwarded_wide_instruction = helper_consumer - 1;
+                return;
+            }
+            if (!helper_rhs_pair &&
+                mir_forwarded_wide_stack_consumer == helper_consumer &&
                 consumer->src1 == value &&
                 consumer->src2 == mir_forwarded_wide_stack_value &&
                 mir_forward_skip_target(mir_emit_instruction_index) ==
