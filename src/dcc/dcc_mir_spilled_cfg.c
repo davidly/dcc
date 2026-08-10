@@ -4106,6 +4106,132 @@ static int mir_wide_helper_rhs_pair_slot_forwardable(
                value, instruction, NULL);
 }
 
+struct MirNestedWideAdd {
+    int narrow_source;
+    int outer_lhs;
+    int wide_rhs;
+    int result;
+    int inner_instruction;
+    int outer_instruction;
+    int return_instruction;
+};
+
+static int mir_match_nested_wide_add(
+    int instruction, struct MirNestedWideAdd *plan)
+{
+    const struct MirInsn *inner;
+    const struct MirInsn *narrow;
+    const struct MirInsn *outer;
+    const struct MirInsn *outer_lhs;
+    const struct MirInsn *return_insn;
+    const struct MirInsn *store;
+    const struct MirInsn *wide_rhs;
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+
+    if (mir_cfg_block_count() != 1 ||
+        instruction < 0 || instruction + 6 >= mir.count)
+        return 0;
+    narrow = &mir.insns[instruction];
+    inner = &mir.insns[instruction + 1];
+    outer = &mir.insns[instruction + 2];
+    store = &mir.insns[instruction + 4];
+    return_insn = &mir.insns[instruction + 6];
+    if (narrow->opcode != MIR_UNARY || narrow->immediate != 0 ||
+        type_size(narrow->type) != 4 ||
+        inner->opcode != MIR_BINARY || inner->immediate != '+' ||
+        inner->src1 != narrow->dst ||
+        type_size(inner->secondary_offset) != 4 ||
+        outer->opcode != MIR_BINARY || outer->immediate != '+' ||
+        outer->src2 != inner->dst ||
+        type_size(outer->secondary_offset) != 4 ||
+        mir.insns[instruction + 3].opcode != MIR_NOP ||
+        store->opcode != MIR_STORE || store->src1 != outer->dst ||
+        mir.insns[instruction + 5].opcode != MIR_NOP ||
+        return_insn->opcode != MIR_RETURN ||
+        return_insn->src1 != outer->dst)
+        return 0;
+    outer_lhs = mir_definition(outer->src1);
+    wide_rhs = mir_definition(inner->src2);
+    if (mir_definition(narrow->src1) == NULL ||
+        mir_definition(narrow->src1)->opcode != MIR_PARAM ||
+        type_size(mir_definition(narrow->src1)->type) > 2 ||
+        outer_lhs == NULL || outer_lhs->opcode != MIR_PARAM ||
+        type_size(outer_lhs->type) != 4 ||
+        wide_rhs == NULL || wide_rhs->opcode != MIR_PARAM ||
+        type_size(wide_rhs->type) != 4 ||
+        store->object != outer_lhs->object ||
+        !mir_scalar_memory_location(
+            outer_lhs, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < -128 ||
+        memory_offset + 3 > 127)
+        return 0;
+    if (plan != NULL) {
+        plan->narrow_source = narrow->src1;
+        plan->outer_lhs = outer->src1;
+        plan->wide_rhs = inner->src2;
+        plan->result = outer->dst;
+        plan->inner_instruction = instruction + 1;
+        plan->outer_instruction = instruction + 2;
+        plan->return_instruction = instruction + 6;
+    }
+    return 1;
+}
+
+static int mir_nested_wide_add_slot_forwardable(
+    int value, int units, int instruction)
+{
+    struct MirNestedWideAdd plan;
+    int candidate;
+
+    (void)instruction;
+    if (units != 2)
+        return 0;
+    for (candidate = 0; candidate < mir.count; ++candidate)
+        if (mir_match_nested_wide_add(candidate, &plan) &&
+            (value == plan.outer_lhs ||
+             value == mir.insns[candidate].dst ||
+             value == mir.insns[plan.inner_instruction].dst ||
+             value == plan.result))
+            return 1;
+    return 0;
+}
+
+static int mir_nested_wide_add_source_parameter(int value)
+{
+    struct MirNestedWideAdd plan;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir_match_nested_wide_add(instruction, &plan) &&
+            value == plan.outer_lhs)
+            return 1;
+    return 0;
+}
+
+static int mir_emit_nested_wide_add_parameter(
+    FILE *out, int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+
+    if (definition == NULL || definition->opcode != MIR_PARAM ||
+        !mir_scalar_memory_location(
+            definition, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || type_size(memory_type) != 4 ||
+        memory_offset < -128 || memory_offset + 3 > 127)
+        return 0;
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+            memory_offset, memory_offset + 1,
+            memory_offset + 2, memory_offset + 3);
+    return 1;
+}
+
 static int mir_wide_signed_const_lhs_slot_forwardable(
     int value, int units, int instruction)
 {
@@ -10643,6 +10769,8 @@ static int mir_prepare_backend_slots(void)
                                             value, units, i) ||
                                         mir_wide_helper_lhs_slot_forwardable(value, units, i) ||
                                         mir_wide_helper_rhs_pair_slot_forwardable(
+                                            value, units, i) ||
+                                        mir_nested_wide_add_slot_forwardable(
                                             value, units, i) ||
                                         mir_call_argument_slot_forwardable(value, units, i) ||
                                         mir_indirect_load_de_slot_forwardable(
@@ -24003,6 +24131,9 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                 mir_runtime_stride_index_consumer ==
                     mir_emit_instruction_index + 1)
                 break;
+            if (insn->opcode == MIR_PARAM &&
+                mir_nested_wide_add_source_parameter(insn->dst))
+                break;
             if ((insn->opcode == MIR_PARAM || insn->opcode == MIR_LOAD) &&
                 mir_value_has_direct_named_home(insn->dst))
                 /* mir-migration-plan-next10 (extended by Item T27 to also
@@ -24857,6 +24988,35 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
             }
             break;
         case MIR_UNARY:
+            {
+            struct MirNestedWideAdd nested_add;
+
+            if (mir_match_nested_wide_add(i, &nested_add)) {
+                const struct MirInsn *source =
+                    mir_definition(nested_add.narrow_source);
+
+                if (!mir_emit_nested_wide_add_parameter(
+                        out, nested_add.outer_lhs))
+                    goto done;
+                fputs("\tpush de\n\tpush hl\n", out);
+                mir_emit_virtual_load(out, nested_add.narrow_source);
+                if (source == NULL ||
+                    !mir_emit_cast(out, source->type, insn->type))
+                    goto done;
+                fputs("\tpush de\n\tpush hl\n", out);
+                mir_emit_virtual_load_wide(out, nested_add.wide_rhs);
+                if (!mir_emit_wide_operation(
+                        out, &mir.insns[nested_add.inner_instruction]) ||
+                    !mir_emit_wide_operation(
+                        out, &mir.insns[nested_add.outer_instruction]))
+                    goto done;
+                mir_forwarded_wide_value = nested_add.result;
+                mir_forwarded_wide_instruction =
+                    nested_add.return_instruction - 1;
+                i = nested_add.return_instruction - 1;
+                continue;
+            }
+            }
             /* mir-text-size Item T12: every unary op here (cast, +, -, ~,
              * !) is a pure value transform with no side effect beyond
              * producing insn->dst - if that result has no use (the common
