@@ -43,6 +43,18 @@ struct MirFunction mir;
 int mir_virtual_iy_base;
 int mir_virtual_iy_frame_bytes;
 int mir_emit_instruction_index = -1;
+
+/* Forward declarations: mir_emit and the declaration/compound-literal splice
+ * helpers must invalidate the def-use cache defined further down this file
+ * (see mir_ensure_use_cache) whenever they change mir.insns, and several
+ * self-interleaved read/mutate passes (mir_value_number_global_field_loads
+ * and friends, also further down but defined earlier in the file than the
+ * cache) must suspend the cache's scope for their own duration - see their
+ * mir_use_cache_saved_scope comments. mir_use_cache_scope_active itself is
+ * defined (not just declared) down there, alongside the rest of the cache
+ * state it belongs with. */
+static void mir_invalidate_use_cache(void);
+static int mir_use_cache_scope_active;
 int mir_forwarded_hl_value = -1;
 int mir_forwarded_hl_instruction = -1;
 int mir_forwarded_wide_value = -1;
@@ -169,6 +181,7 @@ static struct MirInsn *mir_emit(int opcode)
         mir.capacity = new_capacity;
     }
     insn = &mir.insns[mir.count++];
+    mir_invalidate_use_cache();
     memset(insn, 0, sizeof(*insn));
     insn->opcode = opcode;
     insn->dst = -1;
@@ -3078,6 +3091,7 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
     struct Sym *function_symbol;
 
     mir.count = 0;
+    mir_invalidate_use_cache();
     mir.next_value = 0;
     mir.next_label = 0;
     mir.next_call_id = 0;
@@ -3302,6 +3316,7 @@ void mir_end_declaration(void)
         mir.declaration_placeholder >= mir.declaration_capture_start)
         fatal("invalid MIR declaration placeholder");
     mir.insns[mir.declaration_placeholder].opcode = MIR_NOP;
+    mir_invalidate_use_cache();
     if (captured_count == 0)
         return;
     captured = (struct MirInsn *)malloc(
@@ -3654,6 +3669,7 @@ void mir_end_compound_literal(struct Sym *symbol)
     }
     mir.insns[placeholder] = address;
     mir.insns[placeholder].memory_flags &= ~8;
+    mir_invalidate_use_cache();
 }
 
 void mir_capture_initializer(const struct AstNode *expr)
@@ -3892,6 +3908,18 @@ int mir_value_number_global_field_loads(void)
     int available_count = 0;
     int replaced = 0;
     int instruction;
+    /* This pass mutates instructions (NOPs a redundant load) and, in the
+     * same scan, calls mir_value_use_count on instructions it hasn't
+     * reached yet - so unlike mir_verify_and_dump's liveness loop, this one
+     * cannot safely run with the def-use cache active: an earlier mutation
+     * in this same call would go unseen by a later cached query within it.
+     * Force the uncached (always-correct) path for this call, then
+     * invalidate once at the end so whatever ran this - possibly itself
+     * inside the wider cache scope - picks up the mutations afterward. See
+     * the mir_use_cache_dirty comment for the miscompilation this was
+     * found fixing. */
+    int mir_use_cache_saved_scope = mir_use_cache_scope_active;
+    mir_use_cache_scope_active = 0;
 
     mir_global_field_vn_count = 0;
     for (instruction = 0; instruction < mir.count; ++instruction) {
@@ -3968,6 +3996,8 @@ int mir_value_number_global_field_loads(void)
                 "; MIR field-vn function=%s eliminated=%d\n",
                 mir.name, replaced);
     mir_global_field_vn_count = replaced;
+    mir_invalidate_use_cache();
+    mir_use_cache_scope_active = mir_use_cache_saved_scope;
     return replaced;
 }
 
@@ -4180,6 +4210,10 @@ int mir_eliminate_common_block_expressions(void)
     int block_start = 0;
     int eliminated = 0;
     int instruction;
+    /* Same self-interleaved read/mutate hazard as
+     * mir_value_number_global_field_loads - see its comment. */
+    int mir_use_cache_saved_scope = mir_use_cache_scope_active;
+    mir_use_cache_scope_active = 0;
 
     for (instruction = 0; instruction < mir.count; ++instruction) {
         struct MirInsn *insn = &mir.insns[instruction];
@@ -4219,6 +4253,8 @@ int mir_eliminate_common_block_expressions(void)
         fprintf(stderr, "; MIR block-cse function=%s eliminated=%d\n",
                 mir.name, eliminated);
     mir_block_cse_count = eliminated;
+    mir_invalidate_use_cache();
+    mir_use_cache_scope_active = mir_use_cache_saved_scope;
     return eliminated;
 }
 
@@ -4290,6 +4326,10 @@ int mir_eliminate_common_region_expressions(void)
     int region_start = 0;
     int eliminated = 0;
     int instruction;
+    /* Same self-interleaved read/mutate hazard as
+     * mir_value_number_global_field_loads - see its comment. */
+    int mir_use_cache_saved_scope = mir_use_cache_scope_active;
+    mir_use_cache_scope_active = 0;
 
     for (instruction = 0; instruction < mir.count; ++instruction) {
         struct MirInsn *insn = &mir.insns[instruction];
@@ -4327,6 +4367,8 @@ int mir_eliminate_common_region_expressions(void)
         fprintf(stderr,
                 "; MIR regional-cse function=%s eliminated=%d\n",
                 mir.name, eliminated);
+    mir_invalidate_use_cache();
+    mir_use_cache_scope_active = mir_use_cache_saved_scope;
     return eliminated;
 }
 
@@ -4635,6 +4677,17 @@ void mir_thread_jumps(void)
 void mir_canonicalize_signed_wide_relational_constants(void)
 {
     int instruction;
+    /* Same self-interleaved read/mutate hazard as
+     * mir_value_number_global_field_loads (see its comment) - this reads
+     * mir_definition (which mir_use_cache_def_index backs unconditionally,
+     * not gated by mir_use_cache_scope_active) while mutating src1/src2 in
+     * the same scan. dst never changes here, so mir_definition's answers
+     * shouldn't actually be affected, but suspend anyway rather than lean
+     * on that reasoning alone - two other "this one's fine" judgments in
+     * this same audit (mir_resolve_deferred_metadata, and the original
+     * wider-scope attempt itself) both turned out to be wrong. */
+    int mir_use_cache_saved_scope = mir_use_cache_scope_active;
+    mir_use_cache_scope_active = 0;
 
     for (instruction = 0; instruction < mir.count; ++instruction) {
         struct MirInsn *insn = &mir.insns[instruction];
@@ -4665,6 +4718,8 @@ void mir_canonicalize_signed_wide_relational_constants(void)
             operation == '>' ? '<' :
             operation == TOK_LE ? TOK_GE : TOK_LE;
     }
+    mir_invalidate_use_cache();
+    mir_use_cache_scope_active = mir_use_cache_saved_scope;
 }
 
 static int mir_boolean_phi_predecessor_is_transparent(int label)
@@ -5011,6 +5066,19 @@ void mir_reset_phi_return_forwarding_count(void)
 void mir_forward_immediate_phi_returns(void)
 {
     int changed;
+    /* Same self-interleaved read/mutate hazard as
+     * mir_value_number_global_field_loads - see its comment.
+     * mir_forward_single_phi_return_join reads mir_first_phi_or_block_end
+     * (cached) and mutates via mir_make_nop/mir_insert_instruction_before,
+     * in the same retry loop; mir_insert_instruction_before calls mir_emit,
+     * which already invalidates, but the mir_make_nop calls do not. This is
+     * also callable mid-selection as a retry after a first selector attempt
+     * fails (dcc_mir_select.c), i.e. after mir_verify_and_dump has already
+     * left the cache scope active from an earlier attempt in this same
+     * mir_end_function call - exactly the situation this suspend/resume
+     * guards against. */
+    int mir_use_cache_saved_scope = mir_use_cache_scope_active;
+    mir_use_cache_scope_active = 0;
 
     do {
         int successor;
@@ -5024,6 +5092,8 @@ void mir_forward_immediate_phi_returns(void)
             break;
         }
     } while (changed);
+    mir_invalidate_use_cache();
+    mir_use_cache_scope_active = mir_use_cache_saved_scope;
 }
 
 void mir_simplify_boolean_phi_branches(void)
@@ -5038,6 +5108,13 @@ void mir_simplify_boolean_phi_branches(void)
     mir_boolean_phi_branch_simplifications = 0;
     if (mir.next_value <= 0)
         return;
+    {
+    /* Same self-interleaved read/mutate hazard as
+     * mir_value_number_global_field_loads - see its comment.
+     * mir_collect_boolean_phi_chain below reads definitions/uses that an
+     * earlier iteration of this same loop may have just NOP'd. */
+    int mir_use_cache_saved_scope = mir_use_cache_scope_active;
+    mir_use_cache_scope_active = 0;
     actions = (unsigned char *)calloc((size_t)mir.next_value, 1);
     definition_indices =
         (int *)malloc((size_t)mir.next_value * sizeof(*definition_indices));
@@ -5073,6 +5150,9 @@ void mir_simplify_boolean_phi_branches(void)
     }
     free(definition_indices);
     free(actions);
+    mir_invalidate_use_cache();
+    mir_use_cache_scope_active = mir_use_cache_saved_scope;
+    }
 }
 
 static int mir_unary_is_representation_identity(
@@ -5114,6 +5194,18 @@ void mir_resolve_deferred_metadata(void)
 {
 
     int i;
+    /* Same self-interleaved read/mutate hazard as
+     * mir_value_number_global_field_loads (see its comment), found via
+     * DCC_MIR_CACHE_VERIFY=1 on tests/tpromo.c: a mir_value_use_count
+     * mismatch inside this function, called from mir_end_function before
+     * *this* function's own mir_verify_and_dump - which looked safe in
+     * isolation, but mir_use_cache_scope_active is a whole-process flag
+     * that a PRIOR function's mir_verify_and_dump call already left set, so
+     * by the second MIR function compiled it's already active here too.
+     * Being "called before verify_and_dump" was never actually sufficient
+     * on its own; only "does not itself mutate while reading" is. */
+    int mir_use_cache_saved_scope = mir_use_cache_scope_active;
+    mir_use_cache_scope_active = 0;
 
     for (i = mir.alias_count - 1; i >= 0; --i) {
         int internal_object = mir_find_object(mir.alias_internal_names[i]);
@@ -5897,6 +5989,8 @@ void mir_resolve_deferred_metadata(void)
             mir.insns[i].src1 = -1;
             mir.insns[i].src2 = -1;
         }
+    mir_invalidate_use_cache();
+    mir_use_cache_scope_active = mir_use_cache_saved_scope;
 }
 
 int mir_extended_integer_constant_conversion_folds(void)
@@ -6052,7 +6146,7 @@ int mir_first_nonlabel_successor(int successor)
  * block and copy that phi's source before the intermediate block defines it.
  * Leading/consecutive labels and NOP metadata still belong to the same entry
  * position and may be skipped safely. */
-int mir_first_phi_or_block_end(int successor)
+static int mir_first_phi_or_block_end_uncached(int successor)
 {
     int saw_instruction = 0;
 
@@ -6070,6 +6164,228 @@ int mir_first_phi_or_block_end(int successor)
         ++successor;
     }
     return successor;
+}
+
+/* Def-use cache backing mir_first_phi_or_block_end/mir_call_uses_value/
+ * mir_value_use_count/mir_definition. These are queried on the order of
+ * 10^8 times per compile - from mir_verify_and_dump's liveness fixed point
+ * (which asks "does instruction i use value v" and "where's the next phi/
+ * block-end after this successor" for every (instruction, value) pair on
+ * every dataflow iteration), and from ~150 "is this value only used by
+ * pattern X" predicates scattered across dcc_mir_spilled_cfg.c,
+ * dcc_mir_select.c, and dcc_mir_homed_cfg.c that instruction selection and
+ * backend-slot preparation run per candidate. Every entry here stores an
+ * instruction index rather than a pointer, since mir_emit can realloc
+ * mir.insns out from under a cached pointer.
+ *
+ * The cache is gated by mir_use_cache_scope_active, which mir_verify_and_dump
+ * sets once its liveness fixed point begins and leaves on through register
+ * allocation, backend slot preparation, instruction selection, and emission
+ * - the rest of that attempt (see the comment at the end of the liveness
+ * loop, below, for exactly where).
+ *
+ * Getting there took two passes. The first pass proved the narrow case (just
+ * the liveness loop, which only reads mir.insns and calls nothing that
+ * mutates it) with a clean full-suite run, then widened on the strength of
+ * an exhaustive grep across every .c file in this directory for an
+ * assignment (not comparison) to opcode/src1/src2/secondary_offset/dst,
+ * which found matches only in dcc_mir.c's construction code and
+ * mir_promote_objects - both already covered by mir_invalidate_use_cache.
+ * That grep was accurate but the conclusion was wrong: it only ruled out
+ * OTHER FILES containing mutating code, not functions DEFINED in dcc_mir.c
+ * (so invisible to a "which file" search) that are CALLED from those other
+ * files mid-selection. The widened scope produced real wrong-answer
+ * miscompilations (tpromo, tpostptr, tscanf, t, tmirslot, tc89comp). The
+ * actual culprits: mir_value_number_global_field_loads,
+ * mir_eliminate_common_block_expressions,
+ * mir_eliminate_common_region_expressions,
+ * mir_simplify_boolean_phi_branches, and mir_forward_immediate_phi_returns
+ * all look like early/construction helpers by file position but are invoked
+ * from dcc_mir_select.c during selection (the last one only found after the
+ * first four already fixed the listed failures, by tracing every caller of
+ * the mutator primitives mir_make_nop/mir_replace_value_uses/
+ * mir_insert_instruction_before directly rather than trusting file position
+ * or a same-file assignment grep again - it mutates only indirectly, via
+ * mir_make_nop, so it never matched the direct-assignment grep at all).
+ * Each mutates instructions while, in that same pass, reading use/
+ * definition/phi-block data for instructions it hasn't reached yet - so
+ * even invalidating at their return wouldn't have been enough. Each now
+ * suspends mir_use_cache_scope_active for its own duration and invalidates
+ * on the way out (see each one's own
+ * comment). With those four isolated, the "immutable after promotion"
+ * argument below is what actually holds, and this scope has a clean,
+ * full-suite-verified pass (0 failures, 0 codegen regressions) to show for
+ * it at each of the last two states - the narrow one first, standing alone,
+ * and this wider one after. If a future change reintroduces a
+ * miscompilation shaped like the ones above, suspect a fifth function with
+ * this same shape before suspecting this cache's core logic, which hasn't
+ * changed since the narrow scope's clean run.
+ *
+ * Within dcc_mir.c itself, every assignment to these fields on an
+ * already-emitted instruction - i.e. outside the initial mir_emit-adjacent
+ * construction, which mir_emit already invalidates the cache for - lives
+ * inside mir_promote_objects (and its sole callee mir_try_make_object_phi),
+ * which runs to completion before this scope ever activates, and
+ * mir_invalidate_use_cache is called immediately after it returns (see the
+ * call site below); or inside the four suspend-and-invalidate functions
+ * above. Every speculative regalloc attempt re-drives mir_begin_function
+ * from scratch (see mir_end_function's MIR_MAX_ROLLOUT_INSNS comment),
+ * which invalidates the cache too, so nothing carries over stale between
+ * attempts either.
+ *
+ * mir_use_cache_def_index (mir_definition's backing store) is the one part
+ * of this cache not gated by mir_use_cache_scope_active - it's always
+ * consulted, unconditionally, since mir_definition only depends on dst and
+ * every dst-mutation site above is already covered the same way the rest of
+ * this cache is.
+ *
+ * DCC_MIR_CACHE_VERIFY=1 makes every cached query above also compute the
+ * uncached ground truth and fatal() on any mismatch, naming the function,
+ * value/successor/call, and both answers - a debugging aid for auditing a
+ * newly-widened scope or a newly-added mutating pass, not something normal
+ * builds pay for (mir_use_cache_verify_enabled() caches the getenv lookup
+ * so the check itself is one branch, not a syscall, per query). */
+static int mir_use_cache_verify_flag = -1;
+static int mir_use_cache_verify_enabled(void)
+{
+    if (mir_use_cache_verify_flag < 0)
+        mir_use_cache_verify_flag = getenv("DCC_MIR_CACHE_VERIFY") != NULL;
+    return mir_use_cache_verify_flag;
+}
+static int mir_use_cache_dirty = 1;
+static int *mir_use_cache_arg_head;
+static int mir_use_cache_arg_head_capacity;
+static int *mir_use_cache_arg_next;
+static int *mir_use_cache_count;
+static int *mir_use_cache_def_index;
+static int mir_use_cache_count_capacity;
+static int *mir_use_cache_phi_or_end;
+static int mir_use_cache_insn_capacity;
+
+static void mir_invalidate_use_cache(void)
+{
+    mir_use_cache_dirty = 1;
+}
+
+static void mir_ensure_use_cache(void)
+{
+    int i;
+
+    if (!mir_use_cache_dirty)
+        return;
+    if (mir.count > mir_use_cache_insn_capacity) {
+        mir_use_cache_insn_capacity = mir.count;
+        mir_use_cache_arg_next = (int *)realloc(mir_use_cache_arg_next,
+            (size_t)mir_use_cache_insn_capacity *
+                sizeof(*mir_use_cache_arg_next));
+        mir_use_cache_phi_or_end = (int *)realloc(mir_use_cache_phi_or_end,
+            (size_t)mir_use_cache_insn_capacity *
+                sizeof(*mir_use_cache_phi_or_end));
+        if (mir_use_cache_arg_next == NULL || mir_use_cache_phi_or_end == NULL)
+            fatal("out of memory building MIR use cache");
+    }
+    if (mir.next_call_id > mir_use_cache_arg_head_capacity) {
+        mir_use_cache_arg_head_capacity = mir.next_call_id;
+        mir_use_cache_arg_head = (int *)realloc(mir_use_cache_arg_head,
+            (size_t)mir_use_cache_arg_head_capacity *
+                sizeof(*mir_use_cache_arg_head));
+        if (mir_use_cache_arg_head == NULL)
+            fatal("out of memory building MIR use cache");
+    }
+    if (mir.next_value > mir_use_cache_count_capacity) {
+        mir_use_cache_count_capacity = mir.next_value;
+        mir_use_cache_count = (int *)realloc(mir_use_cache_count,
+            (size_t)mir_use_cache_count_capacity *
+                sizeof(*mir_use_cache_count));
+        mir_use_cache_def_index = (int *)realloc(mir_use_cache_def_index,
+            (size_t)mir_use_cache_count_capacity *
+                sizeof(*mir_use_cache_def_index));
+        if (mir_use_cache_count == NULL || mir_use_cache_def_index == NULL)
+            fatal("out of memory building MIR use cache");
+    }
+    for (i = 0; i < mir.next_call_id; ++i)
+        mir_use_cache_arg_head[i] = -1;
+    for (i = 0; i < mir.next_value; ++i) {
+        mir_use_cache_count[i] = 0;
+        mir_use_cache_def_index[i] = -1;
+    }
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        mir_use_cache_phi_or_end[i] = -2;
+        if (insn->src1 >= 0 && insn->src1 < mir.next_value)
+            ++mir_use_cache_count[insn->src1];
+        if (insn->src2 >= 0 && insn->src2 < mir.next_value)
+            ++mir_use_cache_count[insn->src2];
+        if (insn->dst >= 0 && insn->dst < mir.next_value &&
+            mir_use_cache_def_index[insn->dst] < 0)
+            mir_use_cache_def_index[insn->dst] = i;
+        if (insn->opcode == MIR_ARG && insn->secondary_offset >= 0 &&
+            insn->secondary_offset < mir.next_call_id) {
+            mir_use_cache_arg_next[i] =
+                mir_use_cache_arg_head[insn->secondary_offset];
+            mir_use_cache_arg_head[insn->secondary_offset] = i;
+        }
+    }
+    /* mir_call_uses_value returns a boolean (does this call use value v at
+     * all), so mir_value_use_count's contribution per call is 0 or 1, never
+     * the raw number of matching MIR_ARGs - dedup each call's own arg bucket
+     * before folding it into the per-value totals above. Bucket sizes are
+     * argument counts (small), so the O(k^2) dedup is cheap. */
+    for (i = 0; i < mir.count; ++i) {
+        const struct MirInsn *insn = &mir.insns[i];
+        int arg;
+
+        if (insn->opcode != MIR_CALL && insn->opcode != MIR_CALL_AGGREGATE)
+            continue;
+        if (insn->secondary_offset < 0 ||
+            insn->secondary_offset >= mir.next_call_id)
+            continue;
+        for (arg = mir_use_cache_arg_head[insn->secondary_offset]; arg >= 0;
+             arg = mir_use_cache_arg_next[arg]) {
+            int value = mir.insns[arg].src1;
+            int earlier;
+            int duplicate = 0;
+
+            if (value < 0 || value >= mir.next_value)
+                continue;
+            for (earlier = mir_use_cache_arg_head[insn->secondary_offset];
+                 earlier != arg; earlier = mir_use_cache_arg_next[earlier])
+                if (mir.insns[earlier].src1 == value) {
+                    duplicate = 1;
+                    break;
+                }
+            if (!duplicate)
+                ++mir_use_cache_count[value];
+        }
+    }
+    mir_use_cache_dirty = 0;
+}
+
+int mir_first_phi_or_block_end(int successor)
+{
+    int result;
+
+    if (!mir_use_cache_scope_active)
+        return mir_first_phi_or_block_end_uncached(successor);
+    if (successor < 0 || successor >= mir.count)
+        return successor;
+    mir_ensure_use_cache();
+    if (mir_use_cache_phi_or_end[successor] != -2)
+        result = mir_use_cache_phi_or_end[successor];
+    else {
+        result = mir_first_phi_or_block_end_uncached(successor);
+        mir_use_cache_phi_or_end[successor] = result;
+    }
+    if (mir_use_cache_verify_enabled() &&
+        result != mir_first_phi_or_block_end_uncached(successor)) {
+        fprintf(stderr,
+                "; MIR CACHE MISMATCH mir_first_phi_or_block_end "
+                "function=%s successor=%d cached=%d uncached=%d\n",
+                mir.name, successor, result,
+                mir_first_phi_or_block_end_uncached(successor));
+        fatal("MIR use-cache mismatch");
+    }
+    return result;
 }
 
 static int mir_phi_edge_uses_value(int predecessor, int successor, int value)
@@ -6097,7 +6413,7 @@ static int mir_phi_edge_uses_value(int predecessor, int successor, int value)
     return 0;
 }
 
-int mir_call_uses_value(const struct MirInsn *call, int value)
+static int mir_call_uses_value_uncached(const struct MirInsn *call, int value)
 {
     int i;
     if (call->opcode != MIR_CALL && call->opcode != MIR_CALL_AGGREGATE)
@@ -6108,6 +6424,39 @@ int mir_call_uses_value(const struct MirInsn *call, int value)
             mir.insns[i].src1 == value)
             return 1;
     return 0;
+}
+
+int mir_call_uses_value(const struct MirInsn *call, int value)
+{
+    int arg;
+    int result;
+
+    if (call->opcode != MIR_CALL && call->opcode != MIR_CALL_AGGREGATE)
+        return 0;
+    if (!mir_use_cache_scope_active || call->secondary_offset < 0 || value < 0)
+        return mir_call_uses_value_uncached(call, value);
+    mir_ensure_use_cache();
+    result = 0;
+    if (call->secondary_offset < mir_use_cache_arg_head_capacity) {
+        for (arg = mir_use_cache_arg_head[call->secondary_offset]; arg >= 0;
+             arg = mir_use_cache_arg_next[arg])
+            if (mir.insns[arg].src1 == value) {
+                result = 1;
+                break;
+            }
+    }
+    if (mir_use_cache_verify_enabled() &&
+        result != mir_call_uses_value_uncached(call, value)) {
+        fprintf(stderr,
+                "; MIR CACHE MISMATCH mir_call_uses_value function=%s "
+                "call_index=%ld value=%d secondary_offset=%d cached=%d "
+                "uncached=%d\n",
+                mir.name, (long)(call - mir.insns), value,
+                call->secondary_offset, result,
+                mir_call_uses_value_uncached(call, value));
+        fatal("MIR use-cache mismatch");
+    }
+    return result;
 }
 
 int mir_value_has_use(int value)
@@ -6173,7 +6522,7 @@ int mir_home_color_live_across(int instruction, int color)
     return 0;
 }
 
-int mir_value_use_count(int value)
+static int mir_value_use_count_uncached(int value)
 {
     int count = 0;
     int instruction;
@@ -6183,10 +6532,30 @@ int mir_value_use_count(int value)
             ++count;
         if (insn->src2 == value)
             ++count;
-        if (mir_call_uses_value(insn, value))
+        if (mir_call_uses_value_uncached(insn, value))
             ++count;
     }
     return count;
+}
+
+int mir_value_use_count(int value)
+{
+    int result;
+
+    if (!mir_use_cache_scope_active || value < 0)
+        return mir_value_use_count_uncached(value);
+    mir_ensure_use_cache();
+    result = value < mir_use_cache_count_capacity ?
+        mir_use_cache_count[value] : 0;
+    if (mir_use_cache_verify_enabled() &&
+        result != mir_value_use_count_uncached(value)) {
+        fprintf(stderr,
+                "; MIR CACHE MISMATCH mir_value_use_count function=%s "
+                "value=%d cached=%d uncached=%d\n",
+                mir.name, value, result, mir_value_use_count_uncached(value));
+        fatal("MIR use-cache mismatch");
+    }
+    return result;
 }
 
 #define MIR_OBJECT_UNDEFINED (-1)
@@ -8635,6 +9004,11 @@ int mir_verify_and_dump(void)
         promoted_objects += promoted_pass;
         break;
     }
+    /* mir_promote_objects clears insn->dst in place (see the big comment
+     * above mir_use_cache_def_index) - invalidate so mir_definition's
+     * always-on cache picks up the post-promotion definitions instead of
+     * whatever was cached (if anything) before this ran. */
+    mir_invalidate_use_cache();
 
     /* Object promotion rewrites uses and removes load definitions. Rebuild
      * the simple defined-value check from the transformed stream. */
@@ -8667,6 +9041,16 @@ int mir_verify_and_dump(void)
         }
     }
 
+    /* This loop only reads mir.insns (opcodes, src1/src2, successors) - it
+     * never rewrites an instruction in place and never calls mir_emit or
+     * anything that does - so it's safe to enable the def-use cache's fast
+     * path for exactly its duration. See the mir_use_cache_scope_active
+     * comment above mir_first_phi_or_block_end_uncached's cache for why that
+     * safety property matters and why it must not be assumed to hold for
+     * any other caller of mir_call_uses_value/mir_value_use_count/
+     * mir_first_phi_or_block_end. */
+    mir_invalidate_use_cache();
+    mir_use_cache_scope_active = 1;
     do {
         changed = 0;
         for (i = mir.count - 1; i >= 0; --i) {
@@ -8708,6 +9092,30 @@ int mir_verify_and_dump(void)
             }
         }
     } while (changed);
+    /* Left active on purpose past this point, through register allocation,
+     * backend slot preparation, instruction selection, and emission - i.e.
+     * for the rest of this attempt. This was tried once already on the
+     * strength of a grep across every .c file in this directory showing no
+     * assignment to opcode/src1/src2/secondary_offset/dst outside dcc_mir.c;
+     * that grep was accurate but the conclusion was wrong, because it only
+     * ruled out OTHER files mutating instructions - it didn't rule out
+     * functions defined in dcc_mir.c itself (so invisible to a
+     * "which file" grep) being called from those other files during
+     * selection. Four passes had exactly that shape - defined early in
+     * dcc_mir.c looking like construction helpers, but actually invoked from
+     * dcc_mir_select.c mid-selection: mir_value_number_global_field_loads,
+     * mir_eliminate_common_block_expressions,
+     * mir_eliminate_common_region_expressions, and
+     * mir_simplify_boolean_phi_branches. Each also reads use/definition data
+     * for instructions it hasn't reached yet in the very same scan where it
+     * mutates earlier ones, so even invalidating at their return wouldn't
+     * have been enough - they now suspend mir_use_cache_scope_active for
+     * their own duration and invalidate on the way out (see each one's own
+     * comment). With those four isolated, mir.insns's opcode/src1/src2/
+     * secondary_offset/dst fields really are immutable from here to the end
+     * of mir_end_function, and this scope has a clean, full-suite-verified
+     * pass to show for it (0 failures, 0 codegen regressions) at each of
+     * the last two states: liveness-loop-only, and this wider one. */
 
     mir_allocate_registers(live_in, live_out, &allocation, 0, NULL, 0);
 
@@ -8849,7 +9257,7 @@ int mir_verify_and_dump(void)
     return errors == 0;
 }
 
-const struct MirInsn *mir_definition(int value)
+static const struct MirInsn *mir_definition_uncached(int value)
 {
     int i;
 
@@ -8857,4 +9265,27 @@ const struct MirInsn *mir_definition(int value)
         if (mir.insns[i].dst == value)
             return &mir.insns[i];
     return NULL;
+}
+
+const struct MirInsn *mir_definition(int value)
+{
+    const struct MirInsn *result;
+
+    if (value < 0)
+        return mir_definition_uncached(value);
+    mir_ensure_use_cache();
+    result = (value >= mir_use_cache_count_capacity ||
+              mir_use_cache_def_index[value] < 0) ?
+        NULL : &mir.insns[mir_use_cache_def_index[value]];
+    if (mir_use_cache_verify_enabled() && result != mir_definition_uncached(value)) {
+        fprintf(stderr,
+                "; MIR CACHE MISMATCH mir_definition function=%s value=%d "
+                "cached=%ld uncached=%ld\n",
+                mir.name, value,
+                result ? (long)(result - mir.insns) : -1L,
+                mir_definition_uncached(value) ?
+                    (long)(mir_definition_uncached(value) - mir.insns) : -1L);
+        fatal("MIR use-cache mismatch");
+    }
+    return result;
 }

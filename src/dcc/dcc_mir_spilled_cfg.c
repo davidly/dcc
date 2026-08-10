@@ -2849,6 +2849,12 @@ int mir_store_is_dead(int instruction)
     if (object < 0 || object >= mir.object_count ||
         mir_object_address_taken(object))
         return 0;
+    /* mir.count is always a small non-negative instruction count, but
+     * without an explicit check GCC's range analysis can't rule out the
+     * full negative int range folding into a huge size_t here, and warns
+     * accordingly (-Walloc-size-larger-than=). */
+    if (mir.count < 0)
+        fatal("negative MIR instruction count");
     live_in = (unsigned char *)calloc((size_t)mir.count, 1);
     live_out = (unsigned char *)calloc((size_t)mir.count, 1);
     if (mir.count && (live_in == NULL || live_out == NULL))
