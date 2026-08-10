@@ -112,6 +112,7 @@ static int mir_runtime_stride_store_slot_forwardable(
 static int mir_value_has_direct_named_home(int value);
 static int mir_pointer_difference_pow2_shift(
     const struct MirInsn *insn);
+static int mir_wide_constant_is_call_comparison_rhs(int value);
 static int mir_call_result_direct_reload_indirect_store_target(int value);
 static int mir_value_currently_uses_stack_handoff(int value, int instruction);
 static int mir_planned_stack_matches_consumer(int value, int instruction);
@@ -160,6 +161,7 @@ static int mir_spilled_cfg_used_unsigned_wide_constant_relational;
 static int mir_spilled_cfg_used_signed_wide_constant_relational;
 static int mir_spilled_cfg_used_indirect_incdec;
 static int mir_spilled_cfg_used_pointer_difference_shift;
+static int mir_spilled_cfg_used_wide_call_constant_comparison;
 static int mir_spilled_cfg_used_unary_not_branch_fusion;
 static int mir_spilled_cfg_used_planned_stack_handoff;
 static int mir_spilled_cfg_used_planned_index_base_handoff;
@@ -1572,6 +1574,8 @@ static int mir_wide_constant_is_rematerializable(int value)
         type_size(definition->type) != 4)
         return 0;
     if (mir_cfg_block_count() == 1)
+        return 1;
+    if (mir_wide_constant_is_call_comparison_rhs(value))
         return 1;
     if (mir_value_use_count(value) == 1)
         for (instruction = 0; instruction < mir.count; ++instruction) {
@@ -4146,6 +4150,75 @@ static int mir_wide_helper_rhs_pair_slot_forwardable(
     return units == 2 &&
            mir_wide_helper_rhs_pair_consumer(
                value, instruction, NULL);
+}
+
+static int mir_wide_call_constant_comparison_consumer(
+    int value, int instruction, int *consumer_out)
+{
+    const struct MirInsn *constant;
+    const struct MirInsn *consumer;
+    const struct MirInsn *definition = mir_definition(value);
+    int consumer_index;
+    int operation;
+    int scan;
+
+    if (definition == NULL || definition->opcode != MIR_CALL ||
+        type_size(definition->type) != 4 ||
+        mir_value_use_count(value) != 1)
+        return 0;
+    consumer_index = -1;
+    for (scan = instruction + 1; scan < mir.count; ++scan) {
+        const struct MirInsn *insn = &mir.insns[scan];
+
+        if (insn->src1 == value || insn->src2 == value ||
+            mir_call_uses_value(insn, value)) {
+            consumer_index = scan;
+            break;
+        }
+        if (insn->opcode != MIR_NOP && insn->opcode != MIR_CONST &&
+            insn->opcode != MIR_FLOAT_CONST)
+            return 0;
+    }
+    if (consumer_index < 0)
+        return 0;
+    consumer = &mir.insns[consumer_index];
+    operation = (int)consumer->immediate;
+    constant = mir_definition(consumer->src2);
+    if (consumer->opcode != MIR_BINARY ||
+        consumer->src1 != value ||
+        type_size(consumer->secondary_offset) != 4 ||
+        (operation != TOK_EQ && operation != TOK_NE &&
+         operation != '<' && operation != '>' &&
+         operation != TOK_LE && operation != TOK_GE) ||
+        constant == NULL ||
+        (constant->opcode != MIR_CONST &&
+         constant->opcode != MIR_FLOAT_CONST) ||
+        type_size(constant->type) != 4)
+        return 0;
+    if (consumer_out != NULL)
+        *consumer_out = consumer_index;
+    return 1;
+}
+
+static int mir_wide_constant_is_call_comparison_rhs(int value)
+{
+    int instruction;
+
+    if (mir_value_use_count(value) != 1)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *consumer = &mir.insns[instruction];
+        const struct MirInsn *left;
+
+        if (consumer->src2 != value)
+            continue;
+        left = mir_definition(consumer->src1);
+        return left != NULL &&
+               mir_wide_call_constant_comparison_consumer(
+                   consumer->src1,
+                   (int)(left - mir.insns), NULL);
+    }
+    return 0;
 }
 
 struct MirNestedWideAdd {
@@ -10814,6 +10887,9 @@ static int mir_prepare_backend_slots(void)
                                         mir_wide_helper_lhs_slot_forwardable(value, units, i) ||
                                         mir_wide_helper_rhs_pair_slot_forwardable(
                                             value, units, i) ||
+                                        (units == 2 &&
+                                         mir_wide_call_constant_comparison_consumer(
+                                             value, i, NULL)) ||
                                         mir_nested_wide_add_slot_forwardable(
                                             value, units, i) ||
                                         mir_call_argument_slot_forwardable(value, units, i) ||
@@ -12125,6 +12201,20 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
             value, 2, mir_emit_instruction_index)) {
         mir_forwarded_wide_value = value;
         mir_forwarded_wide_instruction = mir_emit_instruction_index;
+        return;
+    }
+    if (!force_slot_store &&
+        mir_wide_call_constant_comparison_consumer(
+            value, mir_emit_instruction_index, &helper_consumer)) {
+        if (mir_forwarded_wide_stack_value >= 0 ||
+            mir_pending_planned_stack_consumer() >= 0) {
+            mir_planned_stack_invalid = 1;
+            return;
+        }
+        mir_spilled_cfg_used_wide_call_constant_comparison = 1;
+        fputs("\tpush de\n\tpush hl\n", out);
+        mir_forwarded_wide_stack_value = value;
+        mir_forwarded_wide_stack_consumer = helper_consumer;
         return;
     }
     helper_rhs_pair = mir_wide_helper_rhs_pair_consumer(
@@ -23181,6 +23271,11 @@ int mir_spilled_cfg_depends_on_pointer_difference_shift(void)
     return mir_spilled_cfg_used_pointer_difference_shift;
 }
 
+int mir_spilled_cfg_depends_on_wide_call_constant_comparison(void)
+{
+    return mir_spilled_cfg_used_wide_call_constant_comparison;
+}
+
 /* T394 (mir-text-size-plan.md): unlike signed wide relational compares
  * against a constant (which legacy inlines via the sign-flip + 32-bit
  * subtract trick, with the C+1/C-1 adjustment for '>'/'<='), legacy's own
@@ -23405,6 +23500,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     mir_spilled_cfg_used_signed_wide_constant_relational = 0;
     mir_spilled_cfg_used_indirect_incdec = 0;
     mir_spilled_cfg_used_pointer_difference_shift = 0;
+    mir_spilled_cfg_used_wide_call_constant_comparison = 0;
     mir_spilled_cfg_used_unary_not_branch_fusion = 0;
     mir_spilled_cfg_used_planned_stack_handoff = 0;
     mir_spilled_cfg_used_planned_index_base_handoff = 0;

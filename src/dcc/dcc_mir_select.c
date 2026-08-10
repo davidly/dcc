@@ -4702,6 +4702,13 @@ static int mir_final_cost_policy_rejects(
             (long)generated_instructions * 100L >
                 (long)captured_instructions * 140L)
             reject = 1;
+        if (!reject && policy_version >= 68 &&
+            mir_spilled_cfg_depends_on_wide_call_constant_comparison() &&
+            ((mir_cfg_block_count() <= 2 &&
+              generated_instructions >= captured_instructions) ||
+             (long)generated_instructions * 100L >
+                 (long)captured_instructions * 135L))
+            reject = 1;
         if (getenv("DCC_MIR_FINAL_COST_REPORT") != NULL)
             fprintf(stderr,
                     "; MIR final-register function=%s selector=%s "
