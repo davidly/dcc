@@ -2807,6 +2807,17 @@ static int pass_word_load_push_de_call_mir(void)
         if (call_line >= nlines ||
             !peep_call_uses_stack_args_only(lines[call_line]))
             continue;
+        {
+            char call_text[MAX_LINE];
+            const char *callee;
+
+            strip_peep_comment_copy(call_text, lines[call_line]);
+            callee = strncmp(call_text, "call ", 5) == 0
+                ? call_text + 5 : "";
+            if (!strcmp(callee, "_free") ||
+                is_local_func_label(callee))
+                continue;
+        }
 
         replace1_tagged(i, "ld e,(hl)", "word_load_push_de_call_mir");
         replace1_tagged(i + 2, "ld d,(hl)", "word_load_push_de_call_mir");
