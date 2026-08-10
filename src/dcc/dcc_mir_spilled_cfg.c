@@ -5731,6 +5731,10 @@ struct MirExecChild {
     int tail_format_string;
 };
 
+struct MirWideBitcast {
+    int parameter_sp_offset;
+};
+
 enum MirWordScanLoopKind {
     MIR_WORD_SCAN_LENGTH = 1,
     MIR_WORD_SCAN_LAST_MATCH = 2
@@ -6454,6 +6458,58 @@ static int mir_match_exec_child(struct MirExecChild *plan)
     plan->child_argument_string = (int)mir.insns[110].immediate;
     plan->argument_failure_string = (int)mir.insns[116].immediate;
     plan->pass_string = (int)mir.insns[130].immediate;
+    return 1;
+}
+
+static int mir_match_wide_bitcast(struct MirWideBitcast *plan)
+{
+    int first_offset;
+    int first_storage;
+    int first_type;
+    int parameter_offset;
+    int second_offset;
+    int second_storage;
+    int second_type;
+    const struct MirInsn *load;
+    const struct MirInsn *parameter;
+    const struct MirInsn *store;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 10 || mir_cfg_block_count() != 1 ||
+        mir.has_vla || type_size(mir.return_type) != 4)
+        return 0;
+    parameter = &mir.insns[1];
+    store = &mir.insns[5];
+    load = &mir.insns[8];
+    if (!mir_match_long_parameter(parameter, &parameter_offset) ||
+        mir.insns[2].opcode != MIR_ADDRESS ||
+        mir.insns[3].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[3].src1 != mir.insns[2].dst ||
+        store->opcode != MIR_STORE_INDIRECT ||
+        store->src1 != mir.insns[3].dst ||
+        store->src2 != parameter->dst ||
+        store->memory_size != 4 ||
+        mir.insns[6].opcode != MIR_ADDRESS ||
+        mir.insns[7].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[7].src1 != mir.insns[6].dst ||
+        load->opcode != MIR_LOAD_INDIRECT ||
+        load->src1 != mir.insns[7].dst ||
+        load->memory_size != 4 ||
+        mir.insns[9].opcode != MIR_RETURN ||
+        mir.insns[9].src1 != load->dst ||
+        !mir_scalar_memory_location(
+            &mir.insns[2], &first_type, &first_storage,
+            &first_offset) ||
+        !mir_scalar_memory_location(
+            &mir.insns[6], &second_type, &second_storage,
+            &second_offset) ||
+        first_storage != SC_LOCAL ||
+        second_storage != first_storage ||
+        second_offset != first_offset ||
+        mir.insns[3].immediate != 0 ||
+        mir.insns[7].immediate != 0)
+        return 0;
+    plan->parameter_sp_offset = parameter_offset - 2;
     return 1;
 }
 
@@ -13780,6 +13836,17 @@ static void mir_emit_exec_child(
             "\tpop bc\n\tld hl,0\n"
             "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
             epilogue);
+}
+
+static void mir_emit_wide_bitcast(
+    FILE *out, const struct MirWideBitcast *plan)
+{
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n\tinc hl\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tld l,c\n\tld h,b\n\tret\n",
+            plan->parameter_sp_offset);
 }
 
 static void mir_emit_bitset_access(
@@ -24516,6 +24583,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     struct MirVlaLoopResult vla_loop_result;
     struct MirFileLength file_length;
     struct MirExecChild exec_child;
+    struct MirWideBitcast wide_bitcast;
     struct MirWideGcd wide_gcd;
     struct MirFixedLongAdd fixed_long_add;
     struct MirFixedLongZero fixed_long_zero;
@@ -24730,6 +24798,14 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_exec_child(out, &exec_child);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_wide_bitcast(&wide_bitcast)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_wide_bitcast(out, &wide_bitcast);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
