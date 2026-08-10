@@ -1,9 +1,6 @@
 tbios start
-BIOS const: 0
+BIOS const: call completed
+BIOS const direct/fnptr agree: yes
 Hi!
-BIOS reader: 26
-BIOS const raw hl: -250
-BIOS reader raw hl: -235
-BIOS const via fnptr: 0
-BIOS const raw hl via fnptr: -250
+BIOS const raw hl direct/fnptr agree: yes
 tbios completed with great success

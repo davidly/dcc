@@ -115,15 +115,19 @@ resolved_DCC=$(resolve_tool_override "${DCC-}")
 resolved_DCCPEEP=$(resolve_tool_override "${DCCPEEP-}")
 resolved_DCCRTLSTRIP=$(resolve_tool_override "${DCCRTLSTRIP-}")
 resolved_M80C=$(resolve_tool_override "${M80C-}")
+resolved_L80C=$(resolve_tool_override "${L80C-}")
 resolved_DCC_RUNTIME=$(resolve_tool_override "${DCC_RUNTIME-}")
 resolved_DCC_HOME=$(resolve_tool_override "${DCC_HOME-}")
 
-# The repository normally keeps the native assembler beside scripts/.  Use
-# that executable automatically when M80C was not exported into this script.
-# This is deliberately absolute because ma.sh invokes it after cd'ing into a
-# per-test build directory.
+# The repository normally keeps the native assembler/linker beside scripts/.
+# Use those executables automatically when M80C/L80C were not exported into
+# this script. This is deliberately absolute because ma.sh invokes them
+# after cd'ing into a per-test build directory.
 if [ -z "$resolved_M80C" ] && [ -x "$repo_root/m80c" ]; then
     resolved_M80C="$repo_root/m80c"
+fi
+if [ -z "$resolved_L80C" ] && [ -x "$repo_root/l80c" ]; then
+    resolved_L80C="$repo_root/l80c"
 fi
 
 # Also normalize an inherited bare/relative value that names the repository
@@ -133,9 +137,17 @@ case "$resolved_M80C" in
     '' ) ;;
     m80c|./m80c) resolved_M80C="$repo_root/m80c" ;;
 esac
+case "$resolved_L80C" in
+    '' ) ;;
+    l80c|./l80c) resolved_L80C="$repo_root/l80c" ;;
+esac
 
 if [ -n "$resolved_M80C" ] && [ ! -x "$resolved_M80C" ]; then
     echo "native assembler is not executable: $resolved_M80C" >&2
+    exit 2
+fi
+if [ -n "$resolved_L80C" ] && [ ! -x "$resolved_L80C" ]; then
+    echo "native linker is not executable: $resolved_L80C" >&2
     exit 2
 fi
 
@@ -500,6 +512,7 @@ run_one_app() {
         [ -n "$resolved_DCCPEEP" ] && build_env+=("DCCPEEP=$resolved_DCCPEEP")
         [ -n "$resolved_DCCRTLSTRIP" ] && build_env+=("DCCRTLSTRIP=$resolved_DCCRTLSTRIP")
         [ -n "$resolved_M80C" ] && build_env+=("M80C=$resolved_M80C")
+        [ -n "$resolved_L80C" ] && build_env+=("L80C=$resolved_L80C")
         [ -n "$resolved_DCC_RUNTIME" ] && build_env+=("DCC_RUNTIME=$resolved_DCC_RUNTIME")
         [ -n "$resolved_DCC_HOME" ] && build_env+=("DCC_HOME=$resolved_DCC_HOME")
         if [ "$no_stack_check" -eq 1 ]; then

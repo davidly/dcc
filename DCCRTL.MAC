@@ -53,8 +53,14 @@ start:
         ; The first subtraction already produces __hlimit, so it is stored
         ; here and NOT recomputed below - keeping this wrap-safe check within
         ; a couple of cycles of the old single-compare version.
-        ld      hl,0
-        add     hl,sp           ; HL = entry SP
+
+        ; The default stack is in the ccp (or wherever an emulator wants it).
+        ; Set the stack to the bdos vector. The first push will decrement sp then write.
+        ; don't reserve a return address because start will warm boot, not return.
+
+        ld      hl, (0006h)     ; HL now holds the raw BDOS entry address
+        ld      sp, hl          ; Custom stack is now active at top of TPA
+       
         ld      de,__stack_size
         or      a
         sbc     hl,de           ; HL = SP - __stack_size (candidate __hlimit)
@@ -858,25 +864,69 @@ gchr_eof:
 
         public  __kbht
 __kbht:
-        ; int kbhit(void) - BDOS 11: console status
-        ; returns 0xFF if a key is ready, 0 otherwise
-        ld      c,11
+        ; int kbhit(void) - kbhit()/getch() both go through BDOS function 6
+        ; (Direct Console I/O) exclusively, never function 1 or 11. CP/M's
+        ; documentation warns against mixing direct console I/O (fn 6) with
+        ; the buffered/"cooked" console primitives (fn 1, fn 10, and fn 11's
+        ; status), since they go through a different path in some BIOS/
+        ; emulator implementations and can disagree about console state -
+        ; some emulators end up with kbhit() reporting a key ready via fn 11
+        ; while a subsequent fn 6 read blocks or returns something else.
+        ;
+        ; Function 6 with E=FFh is itself both a poll AND a destructive
+        ; read: if a key is ready it returns it in A immediately, consuming
+        ; it. So kbhit() has nowhere to "put back" a character it finds -
+        ; it stashes it in __kbpc (with __kbpf marking it valid) instead,
+        ; and getch() below drains that pending byte first before polling
+        ; fn 6 itself. This makes kbhit() non-destructive from the caller's
+        ; point of view: a character it already fetched stays visible here
+        ; (and to getch()) until getch() actually consumes it.
+        ld      a,(__kbpf)
+        or      a
+        jr      nz,__kbht_yes
+        ld      c,6
+        ld      e,0ffh
         call    5
-        ld      l,a
-        ld      h,0
+        or      a
+        jr      z,__kbht_no
+        ld      (__kbpc),a
+        ld      a,1
+        ld      (__kbpf),a
+__kbht_yes:
+        ld      hl,0ffffh
         ret
+__kbht_no:
+        ld      hl,0
+        ret
+
+; Shared with __gtch (getch) below - kept inside __kbht's own block (rather
+; than before "public __kbht", which would instead bundle it into whatever
+; unrelated function precedes __kbht here) so that using kbhit() alone never
+; pulls in getch(), and using getch() alone only pulls in this small shared
+; block, not some unrelated third function.
+__kbpf: db      0               ; 1 if __kbpc holds a character kbhit() already consumed from BDOS
+__kbpc: db      0               ; the pending character, valid only when __kbpf is 1
 
         public  __gtch
 __gtch:
-        ; int getch(void) - BDOS 6: direct console input without echo
-        ; BDOS 6 with E=FFh returns 0 when no key ready; poll until non-zero
+        ; int getch(void) - direct console input without echo, via BDOS fn 6
+        ; only (see __kbht above). Serves a pending character a prior
+        ; kbhit() already fetched, if any; otherwise polls fn 6 itself.
         call    __cflush        ; show any pending prompt before blocking
+        ld      a,(__kbpf)
+        or      a
+        jr      z,__gtch_poll
+        xor     a
+        ld      (__kbpf),a
+        ld      a,(__kbpc)
+        jr      __gtch_ret
 __gtch_poll:
         ld      c,6
         ld      e,0ffh
         call    5
         or      a
         jr      z,__gtch_poll
+__gtch_ret:
         ld      l,a
         ld      h,0
         ret
@@ -6532,6 +6582,18 @@ opslot:
         inc     hl
         ld      (hl),a
 
+        ; Default __fdlen[__slot] to 0 (correct for O_CREAT/O_TRUNC); the
+        ; "open existing" path below overwrites this with the real size.
+        call    __lenp
+        xor     a
+        ld      (hl),a
+        inc     hl
+        ld      (hl),a
+        inc     hl
+        ld      (hl),a
+        inc     hl
+        ld      (hl),a
+
         ld      a,(__slot)
         call    __fcbp
         push    hl
@@ -6566,6 +6628,8 @@ opclr:
         call    5
         cp      0ffh
         jr      z,opfail_noent
+        call    __rdsz          ; directory is authoritative right after
+                                 ; open: capture the real length now
         jr      opok
 
 opmake:
@@ -6608,6 +6672,41 @@ _close:
         jr      c,clok
         cp      MAXFD
         jr      nc,clbad
+
+        ; If this fd belongs to a still-registered tmpfile() (see _tmpfile /
+        ; __tmpf_cleanup below), clear its __tmpf_fd[] slot now so
+        ; __tmpf_cleanup doesn't try to close (and unlink) it again at exit.
+        ; Closing an already-closed fd a second time is harmless on most
+        ; CP/M BDOS implementations, but not guaranteed - at least one
+        ; emulator treats a double BDOS close as a hard error.
+        ; __tmpf_hook is 0 unless _tmpfile was ever called (same idiom as
+        ; _exit's tmpfile-cleanup check above), so this costs ~8 bytes in
+        ; programs that never call tmpfile and only scans __tmpf_fd in ones
+        ; that do. LD r,r' doesn't touch flags, so the zero check survives
+        ; the round trip through D while A (the fd) is borrowed.
+        ld      d,a                     ; stash fd - about to reuse A
+        ld      hl,(__tmpf_hook)
+        ld      a,h
+        or      l
+        ld      a,d                     ; restore fd; flags unaffected by LD
+        jr      z,tmpf_cl_done
+        push    bc
+        push    hl
+        ld      hl,__tmpf_fd
+        ld      b,NTMP
+tmpf_cl_scan:
+        cp      (hl)
+        jr      z,tmpf_cl_clear
+        inc     hl
+        djnz    tmpf_cl_scan
+        jr      tmpf_cl_pop
+tmpf_cl_clear:
+        ld      (hl),0
+tmpf_cl_pop:
+        pop     hl
+        pop     bc
+tmpf_cl_done:
+
         sub     FIRSTFD
         ld      (__slot),a
         call    __fcbp
@@ -6824,7 +6923,7 @@ wrloop:
         ld      hl,(__rwrem)
         ld      a,h
         or      l
-        jp      z,wrdone
+        jp      z,wrfdone
         call    __setrr
         call    __chunk
 
@@ -6892,6 +6991,11 @@ wrcopy:
         call    __advio
         jp      wrloop
 
+wrfdone:
+        ; A real file write completed: __offp may now be past the length
+        ; recorded in __fdlen (BDOS fn 35 can't be trusted for this - see
+        ; the comment at _lseek's SEEK_END handling), so extend it here.
+        call    __extln
 wrdone:
         ld      hl,(__rwcnt)
         pop     ix
@@ -7017,56 +7121,39 @@ lsret:
         ret
 
 lsend:
-        ; SEEK_END: use BDOS fn 35 to get size in 128-byte records,
-        ; then convert to byte offset and add full 32-bit delta.
-        ld      a,(__slot)
-        call    __fcbp
-        ex      de,hl
-        ld      c,35
-        call    5
-
-        ld      a,(__slot)
-        call    __fcbp
-        ld      de,33
-        add     hl,de
+        ; SEEK_END: base off __fdlen (kept accurate by __extln on every
+        ; write, and initialized via __rdsz at open time) rather than
+        ; querying BDOS fn 35 here directly - fn 35 only reflects the
+        ; on-disk directory as of the file's last close, which is stale
+        ; for a file that has been written to since it was opened.
+        call    __lenp
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        inc     hl
         ld      c,(hl)
         inc     hl
-        ld      b,(hl)          ; BC = 16-bit record count
-
-        ; BC * 128 -> A:HL, where A is byte 2 and byte 3 is zero.
-        ld      l,c
-        ld      h,b
-        xor     a
-        add     hl,hl
-        rla
-        add     hl,hl
-        rla
-        add     hl,hl
-        rla
-        add     hl,hl
-        rla
-        add     hl,hl
-        rla
-        add     hl,hl
-        rla
-        add     hl,hl
-        rla
+        ld      b,(hl)          ; DE = length low word, BC = length high word
 
         ; Add offset low word.
+        ex      de,hl           ; HL = length low word
         ld      e,(ix+6)
         ld      d,(ix+7)
-        add     hl,de
+        add     hl,de           ; HL = result low word, carry set as needed
+        ex      de,hl           ; DE = result low word
 
-        ; Add offset high bytes plus carry from low word.
-        adc     a,(ix+8)
-        ld      b,a             ; result byte 2
-
-        ld      a,0
-        adc     a,(ix+9)
-        ld      c,a             ; result byte 3
+        ; Add offset high word plus carry from the low word.
+        ld      l,(ix+8)
+        ld      h,(ix+9)
+        ld      a,c
+        adc     a,l
+        ld      c,a             ; result byte 2
+        ld      a,b
+        adc     a,h
+        ld      b,a             ; result byte 3
 
         push    bc
-        push    hl
+        push    de
 
         call    __offp
 
@@ -7076,9 +7163,9 @@ lsend:
         ld      (hl),d
         inc     hl
         pop     bc
-        ld      (hl),b
-        inc     hl
         ld      (hl),c
+        inc     hl
+        ld      (hl),b
         jr      lsret
 
 lsbadfd:
@@ -7179,6 +7266,71 @@ __offp:
         add     hl,hl           ; *4 bytes per offset
         ld      de,__fdoff
         add     hl,de
+        ret
+
+; __slot -> HL = 32-bit tracked-length dword (see __fdlen)
+__lenp:
+        ld      a,(__slot)
+        ld      h,0
+        ld      l,a
+        add     hl,hl
+        add     hl,hl           ; *4 bytes per length entry
+        ld      de,__fdlen
+        add     hl,de
+        ret
+
+; Query BDOS fn 35 (compute file size) for __slot's FCB, convert the
+; record count to a byte length, and store it in __fdlen[__slot]. Only
+; accurate for a file whose directory entry is up to date - i.e. right
+; after opening an existing (previously closed) file, which is the only
+; place this is called from.
+__rdsz:
+        ld      a,(__slot)
+        call    __fcbp
+        ex      de,hl
+        ld      c,35
+        call    5
+
+        ld      a,(__slot)
+        call    __fcbp
+        ld      de,33
+        add     hl,de
+        ld      c,(hl)
+        inc     hl
+        ld      b,(hl)          ; BC = 16-bit record count
+
+        ; BC * 128 -> A:HL, where A is byte 2 and byte 3 is zero (max
+        ; record count 0FFFFh * 128 fits comfortably in 23 bits).
+        ld      l,c
+        ld      h,b
+        xor     a
+        add     hl,hl
+        rla
+        add     hl,hl
+        rla
+        add     hl,hl
+        rla
+        add     hl,hl
+        rla
+        add     hl,hl
+        rla
+        add     hl,hl
+        rla
+        add     hl,hl
+        rla
+
+        push    af
+        push    hl
+        call    __lenp
+        pop     de              ; DE = low word
+        ld      (hl),e
+        inc     hl
+        ld      (hl),d
+        inc     hl
+        pop     af
+        ld      (hl),a
+        inc     hl
+        ld      (hl),0
         ret
 
 ; A = slot 0..3, returns HL = FCB
@@ -7328,6 +7480,54 @@ __advio:
         ld      a,(hl)
         adc     a,0
         ld      (hl),a
+        ret
+
+; Extend __fdlen[__slot] to __offp[__slot] if a write has moved the
+; current offset past the previously tracked length. Unsigned 32-bit
+; compare, most-significant byte first; only a strictly-greater offset
+; updates the length, so writes that overwrite existing data in place
+; never touch it. IX/IY are saved/restored so this is safe to call from
+; inside _write's ix-based stack frame.
+__extln:
+        push    ix
+        push    iy
+        call    __offp
+        push    hl
+        pop     ix              ; IX = &__offp[__slot][0]
+        call    __lenp
+        push    hl
+        pop     iy              ; IY = &__fdlen[__slot][0]
+
+        ld      a,(ix+3)
+        cp      (iy+3)
+        jr      nz,extln_diff
+        ld      a,(ix+2)
+        cp      (iy+2)
+        jr      nz,extln_diff
+        ld      a,(ix+1)
+        cp      (iy+1)
+        jr      nz,extln_diff
+        ld      a,(ix+0)
+        cp      (iy+0)
+        jr      nz,extln_diff
+        jr      extln_done      ; equal: nothing to extend
+
+extln_diff:
+        jr      c,extln_done    ; offset byte < length byte at the first
+                                 ; (most significant) difference: offset
+                                 ; is less than length, nothing to extend
+        ld      a,(ix+0)
+        ld      (iy+0),a
+        ld      a,(ix+1)
+        ld      (iy+1),a
+        ld      a,(ix+2)
+        ld      (iy+2),a
+        ld      a,(ix+3)
+        ld      (iy+3),a
+
+extln_done:
+        pop     iy
+        pop     ix
         ret
 
 __zerdm:
@@ -7516,7 +7716,7 @@ __rnfcb:        ds      32
 ; that so much as opened a file, even when rename() itself was never
 ; called. Confirmed via tests/tfio.c, tests/texfile.c, tests/wumpus.c -
 ; none call rename(), all three linked _rename's body anyway.
-        public  __rdcv,__rdck,__fdeof,__fderr,__fduse,__fdoff
+        public  __rdcv,__rdck,__fdeof,__fderr,__fduse,__fdoff,__fdlen
 ; Read sector cache: records which 128-byte file record currently resides in
 ; the shared __dma buffer, so consecutive small reads of the same record
 ; (e.g. fgets reading one byte at a time) skip the BDOS random read entirely.
@@ -7528,6 +7728,14 @@ __fderr:        ds      NFILES  ; error flag per slot
 __fduse:
         ds      NFILES
 __fdoff:
+        ds      NFILES*4
+
+; Length dcc tracks for each open file, independent of BDOS fn 35 (which
+; only reflects the on-disk directory as of the file's last close, and is
+; stale for a file being written to in the current session). Initialized
+; from fn 35 at open time (the directory *is* authoritative then - see
+; __rdsz) and kept current by __extln on every write.
+__fdlen:
         ds      NFILES*4
 
         public  __fcbs

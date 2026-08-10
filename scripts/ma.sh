@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
     cat <<'EOF'
-usage: dcc-ma name [full|fast|nopeep] [--build-dir DIR] [--source-path FILE] [--emulator COMMAND] [--emulated-m80]
+usage: dcc-ma name [full|fast|nopeep] [--build-dir DIR] [--source-path FILE] [--emulator COMMAND] [--emulated-m80] [--emulated-l80]
     dcc-ma --help
 
 examples:
@@ -12,6 +12,7 @@ examples:
   DCC_STACK_SIZE=1024 dcc-ma sieve fast
   DCC_ARGS="-DDEBUG=1" NTVCM_ARGS="-p -s:4000000" dcc-ma hello fast
   dcc-ma sieve fast --emulated-m80   # assemble with real M80.COM under ntvcm instead of native m80c
+  dcc-ma sieve fast --emulated-l80   # link with real L80.COM under ntvcm instead of native l80c
 
 build modes:
     fast       run dccpeep after dcc (default)
@@ -27,12 +28,19 @@ script options:
     --emulator COMMAND  emulator command used for CP/M tools (default: ntvcm)
     --emulated-m80      assemble with real M80.COM under ntvcm instead of
                         native m80c (default); same as DCC_USE_EMULATED_M80=1
+    --emulated-l80      link with real L80.COM under ntvcm instead of native
+                        l80c (default); same as DCC_USE_EMULATED_L80=1. Real
+                        L80 runs inside ntvcm's emulated 64K CP/M address
+                        space, so its own symbol/relocation workspace can run
+                        out of memory on large nopeep builds well before the
+                        target program itself would not fit - l80c has no
+                        such ceiling.
     --mode MODE         full, fast, or nopeep
     --help, -h          show this help
 
 dcc pipeline:
-    dcc -> dccpeep (fast mode) -> m80c -> dccrtlstrip -> m80c -> ntvcm L80
-    (or ntvcm M80.COM in place of m80c, with --emulated-m80)
+    dcc -> dccpeep (fast mode) -> m80c -> dccrtlstrip -> m80c -> l80c
+    (or ntvcm M80.COM/L80.COM in place of m80c/l80c, with --emulated-m80/--emulated-l80)
 
 dcc options controlled by this helper:
     dcc option                  how to set it
@@ -62,7 +70,9 @@ tool and asset overrides:
     DCC, DCCPEEP, DCCRTLSTRIP   host tool paths or command names
     M80C                        native assembler command (default: m80c); used unless
                                  --emulated-m80/DCC_USE_EMULATED_M80=1 selects real M80.COM
-    NTVCM, M80, L80             emulator and CP/M tool command names (M80/emulator path only)
+    L80C                        native linker command (default: l80c); used unless
+                                 --emulated-l80/DCC_USE_EMULATED_L80=1 selects real L80.COM
+    NTVCM, M80, L80             emulator and CP/M tool command names (M80/L80 emulated-path only)
     DCC_HOME                    package/install root for bin/, include/, lib/, m80.com, l80.com
     DCC_LIB                     extra runtime/tool asset roots, path-separator separated
     DCC_RUNTIME                 explicit DCCRTL.MAC path
@@ -98,6 +108,7 @@ build_dir="build"
 source_path=""
 emulator="ntvcm"
 use_emulated_m80="${DCC_USE_EMULATED_M80:-0}"
+use_emulated_l80="${DCC_USE_EMULATED_L80:-0}"
 
 while [ $# -gt 0 ]; do
     case "$1" in
@@ -122,6 +133,10 @@ while [ $# -gt 0 ]; do
             ;;
         --emulated-m80|-EmulatedM80)
             use_emulated_m80=1
+            shift
+            ;;
+        --emulated-l80|-EmulatedL80)
+            use_emulated_l80=1
             shift
             ;;
         --mode|-Mode)
@@ -181,8 +196,26 @@ add_path_list() {
 
 resolve_command() {
     local command_value="$1"
-    if command -v "$command_value" >/dev/null 2>&1; then
-        command -v "$command_value"
+    local found
+    if found="$(command -v "$command_value" 2>/dev/null)"; then
+        case "$found" in
+            /*)
+                # already absolute
+                printf '%s' "$found"
+                ;;
+            *)
+                # command -v can return a path relative to the CURRENT
+                # directory (e.g. "./m80c", when "." is on $PATH). Some
+                # callers cache that string and invoke it later from a
+                # different cwd (e.g. after `cd "$build_dir"`), where the
+                # same relative path can resolve to something else entirely
+                # - such as build/m80c/, m80c's own leftover object-file
+                # directory, giving a baffling "is a directory" error.
+                # Canonicalize to absolute here so the result stays valid
+                # regardless of any later `cd`.
+                printf '%s' "$(cd "$(dirname "$found")" && pwd)/$(basename "$found")"
+                ;;
+        esac
     else
         printf '%s' "$command_value"
     fi
@@ -248,10 +281,17 @@ run_one() {
     local M80="${M80:-m80}"
     local M80C="${M80C:-m80c}"
     local L80="${L80:-l80}"
-    # Resolved once, outside the "cd $build_dir" subshell used for the
-    # assembly steps below, same as DCC/DCCPEEP/DCCRTLSTRIP above.
-    local m80c_resolved
+    local L80C="${L80C:-l80c}"
+    # Resolved once here, then invoked later from inside the "cd $build_dir"
+    # subshells used for the assembly/link steps below - unlike
+    # DCC/DCCPEEP/DCCRTLSTRIP above, which resolve_command resolves right
+    # at their own call site, before any cd. That's only safe because
+    # resolve_command always returns an absolute path now; it used to be
+    # able to return a cwd-relative one (e.g. "./m80c", when "." is on
+    # $PATH), which broke here once the cwd changed underneath it.
+    local m80c_resolved l80c_resolved
     m80c_resolved="$(resolve_command "$M80C")"
+    l80c_resolved="$(resolve_command "$L80C")"
 
     mkdir -p "$build_dir"
 
@@ -405,7 +445,7 @@ run_one() {
         if [ "$use_emulated_m80" = "1" ]; then
             "$(resolve_command "$NTVCM")" "${ntvcm_args[@]+${ntvcm_args[@]}}" "$M80" "=${upper_base}.MAC" /X /O /Z /L
         else
-            "$m80c_resolved" "=${upper_base}.MAC" /X /O /Z /L
+            "$m80c_resolved" "=${upper_base}.MAC" /X /O /Z /L /C
         fi
     )
 
@@ -422,9 +462,13 @@ run_one() {
         if [ "$use_emulated_m80" = "1" ]; then
             "$(resolve_command "$NTVCM")" "${ntvcm_args[@]+${ntvcm_args[@]}}" "$M80" "=RTLMIN.MAC" /X /O /Z
         else
-            "$m80c_resolved" "=RTLMIN.MAC" /X /O /Z
+            "$m80c_resolved" "=RTLMIN.MAC" /X /O /Z /C
         fi
-        "$(resolve_command "$NTVCM")" "${ntvcm_args[@]+${ntvcm_args[@]}}" "$L80" "/P:100,RTLMIN,${upper_base},${upper_base}/N/E/Y"
+        if [ "$use_emulated_l80" = "1" ]; then
+            "$(resolve_command "$NTVCM")" "${ntvcm_args[@]+${ntvcm_args[@]}}" "$L80" "/P:100,RTLMIN,${upper_base},${upper_base}/N/E/Y"
+        else
+            "$l80c_resolved" "/P:100,RTLMIN,${upper_base},${upper_base}/N/E/Y"
+        fi
     )
 
     local lower_com

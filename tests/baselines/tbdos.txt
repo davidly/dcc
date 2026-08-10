@@ -3,11 +3,9 @@ command tail len: 0
 command tail: ''
 Hi!
 BDOS 9 string output works
-BDOS version raw: 34
-BDOS version major=2 minor=2
-BDOS version raw (bdoshl): 34
-BDOS version major=2 minor=2 (bdoshl)
-BDOS version raw (bdoshl via fnptr): 34
-Console status: 0
-Direct console poll: 0
+BDOS major version recognized (2 or 3): yes
+bdos()/bdoshl() agree: yes
+bdoshl() direct/fnptr agree: yes
+Console status: call completed
+Direct console poll: call completed
 tbdos completed with great success

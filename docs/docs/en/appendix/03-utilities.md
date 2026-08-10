@@ -75,7 +75,7 @@ dcc-ma cobint --mode fast --build-dir mybuild
 - `DCC_INCLUDE` — extra include directories, separated by the host path separator
 - `DCC_LIB` — extra runtime/tool asset roots, separated by the host path separator
 - `DCC_RUNTIME` — explicit path to `DCCRTL.MAC`
-- `DCC`, `DCCPEEP`, `DCCRTLSTRIP`, `NTVCM`, `M80`, `L80` — Tool paths
+- `DCC`, `DCCPEEP`, `DCCRTLSTRIP`, `NTVCM`, `M80`, `M80C`, `L80`, `L80C` — Tool paths
 
 Run `dcc-ma -Help` on Windows or `dcc-ma --help` on Linux/macOS for the full option map, including which
 `dcc` options are owned by the helper pipeline.
@@ -93,16 +93,22 @@ or environment variables first, then from the local checkout or `PATH`.
 | `dccpeep` | Peephole optimizer | Host command that rewrites generated `.MAC` files when `dcc-peep=true` |
 | `dccrtlstrip` | Runtime stripper | Host command that scans app `.MAC` files and writes a reduced runtime; see [DCCRTL strip appendix](01-dccrtlstrip.md) |
 | `DCCRTL.MAC` | Runtime source | Full CP/M runtime consumed by `dccrtlstrip` |
-| `ntvcm` | CP/M emulator | Runs CP/M tools such as M80 and L80, and runs the final `.COM` programs |
-| `m80.com` | CP/M assembler | Assembles app and runtime `.MAC` files to `.REL` files under `ntvcm` |
-| `l80.com` | CP/M linker | Links `RTLMIN.REL` and app `.REL` files into a `.COM` executable under `ntvcm` |
+| `m80c` | Native assembler | Host command, LINK-80-`.REL`-compatible; default assembler, no `ntvcm` needed |
+| `l80c` | Native linker | Host command, consumes the same `.REL` format; default linker, no `ntvcm` needed |
+| `ntvcm` | CP/M emulator | Only needed for the real M80/L80 fallback path, and to run the final `.COM` programs |
+| `m80.com` | CP/M assembler | Real Microsoft assembler; assembles `.MAC` to `.REL` under `ntvcm` when `dcc-use-emulated-m80=true` |
+| `l80.com` | CP/M linker | Real Microsoft linker; links `.REL` files to `.COM` under `ntvcm` when `dcc-use-emulated-l80=true` |
 
 ## Build Pipeline Helper (`dccmake`)
 
 `dccmake` is the lower-level build helper used by the test runner and by
 repeatable local builds. It compiles one or more C source files, optionally runs
-`dccpeep`, strips the runtime with `dccrtlstrip`, assembles with M80 under
-`ntvcm`, and links the final `.COM` with L80.
+`dccpeep`, strips the runtime with `dccrtlstrip`, then assembles and links with
+native `m80c`/`l80c` by default (or the real M80/L80 under `ntvcm` when
+`dcc-use-emulated-m80`/`dcc-use-emulated-l80` is set - real L80 runs inside
+`ntvcm`'s emulated 64K CP/M address space, so its own symbol/relocation
+workspace can run out of memory on large `nopeep` builds well before the
+target program itself would not fit; `l80c` has no such ceiling).
 
 Use `dccmake` directly when you want one command that owns the whole DCC C
 Compiler pipeline but still lets you choose the exact source files, output name,
@@ -212,9 +218,13 @@ dccmake dcc-peep=false
 | `dcc-tool` | `DCC`, local `dcc`, or `dcc` | DCC compiler command |
 | `dccpeep-tool` | `DCCPEEP`, local `dccpeep`, or `dccpeep` | Peephole optimizer command |
 | `dccrtlstrip-tool` | `DCCRTLSTRIP`, local `dccrtlstrip`, or `dccrtlstrip` | Runtime stripper command |
-| `ntvcm-tool` | `NTVCM` or `ntvcm` | Emulator command used to run M80 and L80 |
-| `m80-command` | `M80` or `m80` | CP/M assembler command passed to `ntvcm` |
-| `l80-command` | `L80` or `l80` | CP/M linker command passed to `ntvcm` |
+| `ntvcm-tool` | `NTVCM` or `ntvcm` | Emulator command used to run M80/L80 (only when either is emulated) |
+| `m80-command` | `M80` or `m80` | CP/M assembler command passed to `ntvcm`; emulated-M80 path only |
+| `m80c-tool` | `M80C`, local `m80c`, or `m80c` | Native host assembler command (default, no `ntvcm`) |
+| `dcc-use-emulated-m80` | `false` | Assemble with real `M80.COM` under `ntvcm` instead of native `m80c` |
+| `l80-command` | `L80` or `l80` | CP/M linker command passed to `ntvcm`; emulated-L80 path only |
+| `l80c-tool` | `L80C`, local `l80c`, or `l80c` | Native host linker command (default, no `ntvcm`) |
+| `dcc-use-emulated-l80` | `false` | Link with real `L80.COM` under `ntvcm` instead of native `l80c` |
 
 With all four float/long settings at their default `false`, `dccmake` passes no
 formatted-I/O override to dcc and adds no forced keep root to `dccrtlstrip`.

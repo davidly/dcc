@@ -40,6 +40,15 @@ extern uint8_t * get_mem();
 
 #define set_byte( addr, value ) * (uint8_t *) get_mem( addr ) = value
 
+/* Real 6502 hardware fetches a pointer's low byte from addr and its high byte from
+   (addr with only the low 8 bits incremented, no carry into the high byte) -- it never
+   crosses a page boundary. Required for zero-page indirect modes ((a8,x) and (a8),y
+   wrap within page 0 when the pointer address is $xxFF) and is also the source of the
+   famous JMP ($xxFF) indirect bug. get_word() must not be used for these pointer
+   fetches; this replicates the hardware quirk instead. */
+#define get_word_pagewrap( addr ) ( (uint16_t) get_byte( addr ) | \
+    ( (uint16_t) get_byte( ( (addr) & 0xff00 ) | ( ( (addr) + 1 ) & 0xff ) ) << 8 ) )
+
 struct MOS_6502
 {
     uint8_t a, x, y, sp;
@@ -79,7 +88,15 @@ void soft_reset() { g_State |= stateSoftReset; }
 
 uint8_t m_0000[ 0x4000 ];
 
-#define APPLE1_28K /* dcc built with nopeep only has space for 28K. With peep 32K fits */
+/* 32K now fits in both fast (peep) and nopeep builds: l80c (the native,
+   host-resident linker, default since dcc gained one) removed the ceiling
+   that used to force nopeep down to 28K. That ceiling was never really
+   about this 32K guest RAM footprint - it was real L80.COM's own
+   symbol/relocation workspace running out of memory, inside ntvcm's
+   emulated 64K CP/M address space, while linking the larger, un-peepholed
+   nopeep build. l80c runs as a normal host process with no such 64K
+   table, so both build modes fit 32K now. */
+#define APPLE1_32K
 
 #if defined( APPLE1_24K )
     uint8_t m_4000[ 0x2000 ];
@@ -485,7 +502,7 @@ void emulate()
             }
             case 0x01: case 0x21: case 0x41: case 0x61: case 0xc1: case 0xe1:          /* ora/and/eor/adc/cmp/sbc (a8, x) */
             {
-                op_math( op, get_byte( get_word( get_byte( cpu.pc + 1 ) + cpu.x ) ) );
+                op_math( op, get_byte( get_word_pagewrap( (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.x ) ) ) );
                 break;
             }
             case 0x05: case 0x25: case 0x45: case 0x65: case 0xc5: case 0xe5:          /* ora/and/eor/adc/cmp/sbc a8 */
@@ -505,7 +522,7 @@ void emulate()
             }
             case 0x11: case 0x31: case 0x51: case 0x71: case 0xd1: case 0xf1:          /* ora/and/eor/adc/cmp/sbc (a8), y */
             {
-                op_math( op, get_byte( cpu.y + get_word( get_byte( cpu.pc + 1 ) ) ) );
+                op_math( op, get_byte( cpu.y + get_word_pagewrap( get_byte( cpu.pc + 1 ) ) ) );
                 break;
             }
             case 0x15: case 0x35: case 0x55: case 0x75: case 0xd5: case 0xf5:          /* ora/and/eor/adc/cmp/sbc a8, x */  
@@ -525,7 +542,7 @@ void emulate()
             }
             case 0x06: case 0x26: case 0x46: case 0x66: { address = get_byte( cpu.pc + 1 ); goto _rot_complete; }             /* asl/rol/lsr/ror a8 */
             case 0x0e: case 0x2e: case 0x4e: case 0x6e: { address = get_word( cpu.pc + 1 ); goto _rot_complete; }             /* asl/rol/lsr/ror a16 */
-            case 0x16: case 0x36: case 0x56: case 0x76: { address = ( cpu.x + get_byte( cpu.pc + 1 ) ); goto _rot_complete; } /* asl/rol/lsr/ror a8, x */
+            case 0x16: case 0x36: case 0x56: case 0x76: { address = (uint8_t) ( cpu.x + get_byte( cpu.pc + 1 ) ); goto _rot_complete; } /* asl/rol/lsr/ror a8, x */
             case 0x1e: case 0x3e: case 0x5e: case 0x7e:                                                                       /* asl/rol/lsr/ror a16, x */
             {
                 address = cpu.x + get_word( cpu.pc + 1 );
@@ -588,12 +605,12 @@ _op_rts:
             }
             case 0x68: { cpu.a = pop(); set_nz( cpu.a ); break; }                                  /* pla NZ */
             case 0x6a: case 0x4a: case 0x2a: case 0x0a: { cpu.a = op_rotate( op, cpu.a ); break; } /* asl, rol, lsr, ror */
-            case 0x6c: { cpu.pc = get_word( get_word( cpu.pc + 1 ) ); continue; }                  /* jmp (a16) */
+            case 0x6c: { cpu.pc = get_word_pagewrap( get_word( cpu.pc + 1 ) ); continue; }         /* jmp (a16) */
             case 0x78: { cpu.fInterruptDisable = true; break; }                                    /* sei */
-            case 0x81: { address = get_word( (uint8_t) ( cpu.x + get_byte( cpu.pc + 1 ) ) ); goto _st_complete; } /* stx (a8, x) */
+            case 0x81: { address = get_word_pagewrap( (uint8_t) ( cpu.x + get_byte( cpu.pc + 1 ) ) ); goto _st_complete; } /* sta (a8, x) */
             case 0x84: case 0x85: case 0x86: { address = get_byte( cpu.pc + 1 ); goto _st_complete; }             /* sty/sta/stx a8 */
             case 0x8c: case 0x8d: case 0x8e: { address = get_word( cpu.pc + 1 ); goto _st_complete; }             /* sty/sta/stx a16 */
-            case 0x91: { address = cpu.y + get_word( get_byte( cpu.pc + 1 ) ); goto _st_complete; }               /* sta (a8), y */
+            case 0x91: { address = cpu.y + get_word_pagewrap( get_byte( cpu.pc + 1 ) ); goto _st_complete; }      /* sta (a8), y */
             case 0x94: case 0x95: { address = (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.x ); goto _st_complete; }  /* sta/sty a8, x */
             case 0x96: { address = (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.y ); goto _st_complete; }             /* stx a8, y */
             case 0x99: { address = get_word( cpu.pc + 1 ) + cpu.y; goto _st_complete; }                           /* sta a16, y */
@@ -611,10 +628,10 @@ _st_complete:
             case 0x98: { cpu.a = cpu.y; set_nz( cpu.a ); break; }                      /* tya */
             case 0x9a: { cpu.sp = cpu.x; break; }                                      /* txs no flags set */
             case 0xa0: case 0xa2: case 0xa9: { address = cpu.pc + 1; goto _ld_complete; }                         /* ldy/ldx/lda #d8 */
-            case 0xa1: { address = get_word( (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.x ) ); goto _ld_complete; } /* lda (a8, x) */
+            case 0xa1: { address = get_word_pagewrap( (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.x ) ); goto _ld_complete; } /* lda (a8, x) */
             case 0xa4 : case 0xa5: case  0xa6: { address = get_byte( cpu.pc + 1 ); goto _ld0_complete; }          /* ldy/lda/ldx a8 */
             case 0xac: case 0xad: case 0xae:{ address = get_word( cpu.pc + 1 ); goto _ld_complete; }              /* ldy/lda/ldx a16 */
-            case 0xb1: { address = cpu.y + get_word( (uint16_t) get_byte( cpu.pc + 1 ) ); goto _ld_complete; }    /* lda (a8), y */
+            case 0xb1: { address = cpu.y + get_word_pagewrap( (uint16_t) get_byte( cpu.pc + 1 ) ); goto _ld_complete; }    /* lda (a8), y */
             case 0xb4: case 0xb5: { address = (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.x ); goto _ld0_complete; } /* ldy/lda a8, x */
             case 0xb6: { address = (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.y ); goto _ld0_complete; }            /* ldx a8, y */
             case 0xb9 : case 0xbe: { address = get_word( cpu.pc + 1 ) + cpu.y; goto _ld_complete; }               /* lda/ldx a16, y */
@@ -703,23 +720,16 @@ static void usage( err ) char * err;
 {
     if ( err )
         printf( "error: %s\n", err );
-    printf( "Apple 1: emulates a 6502 Apple 1" );
-    printf( "usage: a1 <arguments> [hexfile>]\n" );
-    printf( "  arguments:\n" );
-    printf( "   -a       address at which pc is set, e.g. /a:0x1000\n" );
-    printf( "            overrides default of 0xff00 or the first address in the hex file.\n" );
-    printf( "   -h       use hooks instead of woz monitor for console I/O\n" );
-    printf( "   -l:file  loads file as keyboard input. e.g.: -l:estdin.bas\n" );
-    printf( "   -x       exit when control transfers to the monitor (when the app is done)\n" );
-    printf( "   hexfile  file loaded before emulator starts\n" );
-    printf( "            .hex files must be in Apple 1 or Intel format.\n" );
-    printf( "   -- control keys\n" );
-    printf( "        ^c        gracefully exit the emulator\n" );
-    printf( "        ^l        load a file into the keyboard input stream. This is\n" );
-    printf( "                  likely an Apple 1 format .hex for monitor or .bas for BASIC\n" );
-    printf( "        ^q        quit the emulator at the next app keyboard read\n" );
-    printf( "        ^r        soft reset via the 6502's 0xfffc reset vector\n" );
-    printf( "        ^break    forcibly exit the app\n" );
+
+    printf( "Apple 1 6502 emulator\n"
+            "usage: a1 [args] [hexfile]\n"
+            "  -a:addr   set pc, default 0xff00 or hex file's first address\n"
+            "  -h        use hooks instead of woz monitor for I/O\n"
+            "  -l:file   load file as keyboard input\n"
+            "  -x        exit when control returns to the monitor\n"
+            "  hexfile   Apple 1 or Intel format hex file to load first\n"
+            "  keys: ^c exit, ^l load file, ^q quit on next read,\n"
+            "        ^r soft reset, ^break force exit\n" );
     exit( -1 );
 }
 
@@ -1099,9 +1109,10 @@ uint8_t m_load( address ) uint16_t address;
             }
         }
 
-        ch = (char) kbhit();
-        if ( 0 != ch )
+        if ( kbhit() )
         {
+            ch = (char) getch();
+
             if ( 0xa == ch )
                 ch = 0xd;
 
@@ -1139,7 +1150,12 @@ uint8_t m_load( address ) uint16_t address;
             ch = kbd_char;
         }
         else
-            ch = (char) kbhit();
+        {
+            if ( kbhit() )
+                ch = (char) getch();
+            else
+                ch = 0;
+        }
 
         if ( 0 != ch )
         {
@@ -1204,27 +1220,15 @@ uint16_t hextoui( p ) char * p;
     return result;
 }
 
-static uint8_t read_byte( p ) char * p;
-{
-    uint8_t result;
-    char save;
-    save = p[ 2 ];
-    p[ 2 ] = 0;
-
-    result = (uint8_t) hextoui( p );
-    p[ 2 ] = save;
-    return result;
-}
-
-static uint16_t read_word( p ) char * p;
+static uint16_t read_hex( p, len ) char * p; uint8_t len;
 {
     uint16_t result;
     char save;
-    save = p[ 4 ];
-    p[ 4 ] = 0;
+    save = p[ len ];
+    p[ len ] = 0;
 
     result = hextoui( p );
-    p[ 4 ] = save;
+    p[ len ] = save;
     return result;
 }
 
@@ -1244,9 +1248,9 @@ static bool load_intel( fp ) FILE * fp;
             if ( ':' != buf[ 0 ] )
                 usage( "error: input Intel HEX file is malformed" );
 
-            reclen = read_byte( buf + 1 );
-            offset = read_word( buf + 3 );
-            rectyp = read_byte( buf + 7 );
+            reclen = (uint8_t) read_hex( buf + 1, 2 );
+            offset = read_hex( buf + 3, 4 );
+            rectyp = (uint8_t) read_hex( buf + 7, 2 );
 
             if ( 1 == rectyp ) 
                 break;
@@ -1259,7 +1263,7 @@ static bool load_intel( fp ) FILE * fp;
                 if ( feof( fp ) )
                     usage( "malformed input file" );
 
-                val = read_byte( buf + ( 2 * x ) + 9 );
+                val = (uint8_t) read_hex( buf + ( 2 * x ) + 9, 2 );
                 set_byte( offset + x, val );
             }
         }

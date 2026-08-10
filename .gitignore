@@ -19,6 +19,8 @@
 /dccmake.exe
 /m80c
 /m80c.exe
+/l80c
+/l80c.exe
 /build
 /test_dcc.txt
 /test_dccu.txt

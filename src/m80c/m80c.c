@@ -58,6 +58,7 @@ struct Expr {
 typedef struct Sym Sym;
 struct Sym {
     char *name;
+    char *orig_name; /* pre-mangling C spelling, for static functions only - see record_static_name() */
     long value;
     int type;
     int defined;
@@ -108,6 +109,7 @@ struct ByteVec {
 typedef struct Asm Asm;
 struct Asm {
     char src[MAXNAME], rel[MAXNAME], prn[MAXNAME], symfile[MAXNAME], dbgfile[MAXNAME], linkfile[MAXNAME];
+    char pending_static_name[MAXNAME]; /* set by record_static_name(), consumed by the next define_label() */
     int want_rel, want_prn, want_sym, z80, list_hex, init_ds;
     int pass, errors, warnings;
     FILE *fp, *lst;
@@ -678,6 +680,31 @@ static int emit_z80_ld(Asm *a,char **av,int n) {
         emitb(a,0xf9);
         return 1;
     }
+    /* I/R special-register transfers. These must be recognized before the
+    generic register forms below: reg8() doesn't know I or R, so without
+    this LD I,A/LD R,A fall through to "unknown opcode" while LD A,I/
+    LD A,R are worse - they're silently misassembled as LD A,n with n
+    evaluated from the undefined symbol I/R, i.e. LD A,0. */
+    if(streqi(av[0],"I") && streqi(av[1],"A")) {
+        emitb(a,0xed);
+        emitb(a,0x47);
+        return 1;
+    }
+    if(streqi(av[0],"R") && streqi(av[1],"A")) {
+        emitb(a,0xed);
+        emitb(a,0x4f);
+        return 1;
+    }
+    if(streqi(av[0],"A") && streqi(av[1],"I")) {
+        emitb(a,0xed);
+        emitb(a,0x57);
+        return 1;
+    }
+    if(streqi(av[0],"A") && streqi(av[1],"R")) {
+        emitb(a,0xed);
+        emitb(a,0x5f);
+        return 1;
+    }
     /* Register forms involving (HL)/M must come before absolute-memory forms. */ r1=reg8(av[0]);
     r2=reg8(av[1]);
     if(r1>=0 && r2>=0) {
@@ -832,6 +859,14 @@ static int assemble_op(Asm *a,char *op,char *args) {
         if(streqi(av[0],"DE")&&streqi(av[1],"HL")) O1(0xeb);
         if(streqi(av[0],"AF")&&streqi(av[1],"AF'")) O1(0x08);
         if(streqi(av[0],"(SP)")&&streqi(av[1],"HL")) O1(0xe3);
+        if(streqi(av[0],"(SP)")&&streqi(av[1],"IX")) {
+            emitb(a,0xdd);
+            O1(0xe3);
+        }
+        if(streqi(av[0],"(SP)")&&streqi(av[1],"IY")) {
+            emitb(a,0xfd);
+            O1(0xe3);
+        }
     }
     if(streqi(op,"EXX")) O1(0xd9);
     if(streqi(op,"NEG")) O2(0xed,0x44);
@@ -845,6 +880,14 @@ static int assemble_op(Asm *a,char *op,char *args) {
     if(streqi(op,"CPIR")) O2(0xed,0xb1);
     if(streqi(op,"CPD")) O2(0xed,0xa9);
     if(streqi(op,"CPDR")) O2(0xed,0xb9);
+    if(streqi(op,"INI")) O2(0xed,0xa2);
+    if(streqi(op,"IND")) O2(0xed,0xaa);
+    if(streqi(op,"OUTI")) O2(0xed,0xa3);
+    if(streqi(op,"OUTD")) O2(0xed,0xab);
+    if(streqi(op,"INIR")) O2(0xed,0xb2);
+    if(streqi(op,"INDR")) O2(0xed,0xba);
+    if(streqi(op,"OTIR")) O2(0xed,0xb3);
+    if(streqi(op,"OTDR")) O2(0xed,0xbb);
     if(streqi(op,"LD")||streqi(op,"MOV")||streqi(op,"MVI")||streqi(op,"LXI")) {
         if(streqi(op,"MOV")&&n==2) {
             r=reg8(av[0]);
@@ -1149,6 +1192,16 @@ static int assemble_op(Asm *a,char *op,char *args) {
         O1(0xc7+((int)e.v&7)*8);
     }
     if(streqi(op,"IN")) {
+        /* IN r,(C) must be recognized before the generic 2-operand forms
+        below: without this, "(C)" is evaluated as an expression (the
+        undefined symbol C, defaulting to 0), so IN A,(C) silently
+        misassembled as IN A,(0) and IN B/D/E/H/L,(C) fell through to
+        "unknown opcode" (reg8() rejected them since the fallback only
+        special-cased "A"). */
+        if(n==2 && streqi(av[1],"(C)")) {
+            r=reg8(av[0]);
+            if(r>=0) O2(0xed,0x40+(r<<3));
+        }
         if(n==1) {
             e=eval(a,av[0]);
             O2(0xdb,(int)e.v);
@@ -1159,6 +1212,15 @@ static int assemble_op(Asm *a,char *op,char *args) {
         }
     }
     if(streqi(op,"OUT")) {
+        /* OUT (C),r must be recognized before the generic 2-operand form
+        below: that form unconditionally evaluates av[0] as the port
+        expression regardless of what av[0] actually is, so every
+        OUT (C),r silently misassembled as OUT (0),A - the r operand
+        was never even inspected. */
+        if(n==2 && streqi(av[0],"(C)")) {
+            r=reg8(av[1]);
+            if(r>=0) O2(0xed,0x41+(r<<3));
+        }
         if(n==1) {
             e=eval(a,av[0]);
             O2(0xd3,(int)e.v);
@@ -1204,6 +1266,29 @@ static int assemble_op(Asm *a,char *op,char *args) {
 #undef O2
     return 0;
 }
+/* dcc always emits "; static function <name>" immediately before a static
+ * function's (mangled, e.g. _Z0001) label - see emit_function_prologue() in
+ * dcc_func.c. Capture <name> here so the next define_label() can attach it
+ * to that symbol; write_sym() then prefers it over the mangled name. This
+ * only ever fires for that exact dcc-emitted comment, not arbitrary user
+ * comments, so it can't misfire on hand-written .MAC input. */
+static void record_static_name(Asm *a,const char *orig) {
+    static const char prefix[]="; static function";
+    const char *p=orig;
+    const char *name;
+    size_t n;
+    while(*p && isspace((unsigned char)*p)) p++;
+    if(strncmp(p,prefix,sizeof(prefix)-1)!=0 || !isspace((unsigned char)p[sizeof(prefix)-1]))
+        return;
+    p+=sizeof(prefix)-1;
+    while(*p && isspace((unsigned char)*p)) p++;
+    name=p;
+    n=0;
+    while(name[n] && !isspace((unsigned char)name[n]) && n+1<sizeof(a->pending_static_name)) n++;
+    if(0==n) return;
+    memcpy(a->pending_static_name,name,n);
+    a->pending_static_name[n]=0;
+}
 static void define_label(Asm *a,const char *name,int pub) {
     Sym *s=sym_find(a,name,1);
     if(a->pass==1 || s->is_set) {
@@ -1212,6 +1297,11 @@ static void define_label(Asm *a,const char *name,int pub) {
         s->defined=1;
     }
     if(pub) s->is_public=1;
+    if(a->pending_static_name[0]) {
+        free(s->orig_name);
+        s->orig_name=xstrdup(a->pending_static_name);
+        a->pending_static_name[0]=0;
+    }
 }
 static void record_debug_line(Asm *a,const char *orig) {
     const char *p=orig;
@@ -1499,6 +1589,7 @@ static void parse_line(Asm *a,char *line,char *orig) {
     if(a->pass==2) {
         record_debug_line(a,orig);
         record_debug_info(a,orig);
+        record_static_name(a,orig);
     }
     p=line;
     bol_label=(*p && !isspace((unsigned char)*p));
@@ -1739,10 +1830,6 @@ static int rel_entry_rank(const char *name) {
     for(i=0;ord[i];i++) if(strcmp(sig,ord[i])==0) return i;
     return 9999;
 }
-static int rel_def_rank(const char *name) {
-    (void)name;
-    return 0;
-}
 static int symptr_m80_cmp(const void *pa,const void *pb) {
     const Sym *a=*(const Sym * const *)pa;
     const Sym *b=*(const Sym * const *)pb;
@@ -1865,6 +1952,19 @@ static void write_rel(Asm *a) {
     rel_pad_128(&r);
     fclose(f);
 }
+static const char *debug_segment_name(int type) {
+    if(type==T_CODE || type==SEG_CODE) return "code";
+    if(type==T_DATA || type==SEG_DATA) return "data";
+    return "absolute";
+}
+/* RELFIX30: /C's per-module .SYM now carries each symbol's segment (code/
+ * data/absolute), not just its module-relative value. Local (non-PUBLIC,
+ * non-EXTRN) symbols have no address of their own in the linked .REL - the
+ * assembler resolves and inlines them at assembly time, so their names
+ * never reach the linker - but l80c's -C-enabled build can read this file
+ * alongside the .REL to relocate and merge them into its own .SYM, and the
+ * segment column is what makes that relocation (module base + value)
+ * possible without guessing. */
 static void write_sym(Asm *a) {
     FILE *f;
     int h;
@@ -1878,17 +1978,13 @@ static void write_sym(Asm *a) {
     for(h=0;h<SYMHASH;h++) {
         for(s=a->syms[h];s;s=s->next) {
             if(s->defined) {
-                fprintf(f,"%-8s %04lX %s%s\n",s->name,s->value&0xffff,
+                fprintf(f,"%-8s %04lX %-8s %s%s\n",s->orig_name?s->orig_name:s->name,s->value&0xffff,
+                    debug_segment_name(s->type),
                     s->is_public?"PUBLIC ":"",s->is_extern?"EXTRN":"");
             }
         }
     }
     fclose(f);
-}
-static const char *debug_segment_name(int type) {
-    if(type==T_CODE || type==SEG_CODE) return "code";
-    if(type==T_DATA || type==SEG_DATA) return "data";
-    return "absolute";
 }
 static void write_debug(Asm *a) {
     FILE *f;
