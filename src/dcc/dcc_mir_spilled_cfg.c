@@ -4143,7 +4143,9 @@ static int mir_match_nested_wide_add(
         inner->opcode != MIR_BINARY || inner->immediate != '+' ||
         inner->src1 != narrow->dst ||
         type_size(inner->secondary_offset) != 4 ||
-        outer->opcode != MIR_BINARY || outer->immediate != '+' ||
+        outer->opcode != MIR_BINARY ||
+        (outer->immediate != '+' && outer->immediate != '&' &&
+         outer->immediate != '/' && outer->immediate != '%') ||
         outer->src2 != inner->dst ||
         type_size(outer->secondary_offset) != 4 ||
         mir.insns[instruction + 3].opcode != MIR_NOP ||
