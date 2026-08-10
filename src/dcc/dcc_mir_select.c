@@ -3884,25 +3884,41 @@ static int mir_has_declared_register_object(void)
     return mir.has_declared_register_object;
 }
 
+static int mir_register_policy_version(const char *policy)
+{
+    char *end;
+    long version;
+
+    if (strncmp(policy, "register-v", 10))
+        return 0;
+    version = strtol(policy + 10, &end, 10);
+    if (*end != 0 || version < 1 || version > 8)
+        return -1;
+    return (int)version;
+}
+
 static int mir_final_cost_policy_rejects(
     const char *selector_name, FILE *generated, FILE *captured,
     long generated_size, long captured_size,
     int generated_instructions, int captured_instructions)
 {
     const char *policy = getenv("DCC_MIR_FINAL_COST_POLICY");
+    int policy_version;
 
     if (policy == NULL || policy[0] == 0)
-        policy = "register-v6";
+        policy = "register-v8";
     if (!strcmp(policy, "off"))
         return 0;
+    policy_version = mir_register_policy_version(policy);
+    if (policy_version < 0)
+        fatal("unknown DCC_MIR_FINAL_COST_POLICY");
     if (g_speculative_codegen_active) {
         const char *filter =
             getenv("DCC_MIR_SPECULATIVE_REGISTER_FUNCTION");
         int generated_claim;
         int captured_claim;
 
-        if ((strcmp(policy, "register-v5") &&
-             strcmp(policy, "register-v6")) ||
+        if (policy_version < 5 ||
             strcmp(selector_name, "spilled-scalar-cfg") ||
             (filter != NULL && filter[0] != 0 &&
              strcmp(filter, mir.name)) ||
@@ -3926,12 +3942,7 @@ static int mir_final_cost_policy_rejects(
         return captured_claim && !generated_claim &&
                generated_size * 100L > captured_size * 135L;
     }
-    if (!strcmp(policy, "register-v1") ||
-        !strcmp(policy, "register-v2") ||
-        !strcmp(policy, "register-v3") ||
-        !strcmp(policy, "register-v4") ||
-        !strcmp(policy, "register-v5") ||
-        !strcmp(policy, "register-v6")) {
+    if (policy_version > 0) {
         int generated_claim;
         int captured_claim;
         int reject;
@@ -3945,12 +3956,7 @@ static int mir_final_cost_policy_rejects(
         captured_claim =
             mir_stream_contains_text(captured, ";@dcc.reg claim=");
         reject = captured_claim && !generated_claim;
-        if (!reject &&
-            (!strcmp(policy, "register-v2") ||
-             !strcmp(policy, "register-v3") ||
-             !strcmp(policy, "register-v4") ||
-             !strcmp(policy, "register-v5") ||
-             !strcmp(policy, "register-v6"))) {
+        if (!reject && policy_version >= 2) {
             int blocks = mir_cfg_block_count();
 
             reject =
@@ -3962,16 +3968,27 @@ static int mir_final_cost_policy_rejects(
                   generated_size > captured_size * 2L &&
                   generated_instructions > captured_instructions * 2));
         }
-        if (!reject &&
-            (!strcmp(policy, "register-v5") ||
-             !strcmp(policy, "register-v6")) &&
+        if (!reject && policy_version >= 5 &&
             mir_has_declared_register_object() &&
             (!mir_stream_contains_text(generated, MIR_PHI_SLOT_MARKER) ||
              generated_size * 100L > captured_size * 120L))
             reject = 1;
-        if (!reject && !strcmp(policy, "register-v6") &&
+        if (!reject && policy_version >= 6 &&
             mir_has_declared_multidimensional_pointer_array() &&
             generated_size > captured_size)
+            reject = 1;
+        if (!reject && policy_version >= 7 &&
+            mir_has_declared_pointer_array() &&
+            generated_size > 10000 &&
+            generated_size > captured_size)
+            reject = 1;
+        if (!reject && policy_version >= 8 &&
+            mir.sink_purpose == EMIT_SINK_DEFERRED &&
+            mir_has_cfg_backedge() && mir_has_wide_values() &&
+            mir_call_count() == 0 &&
+            generated_size > 10000 &&
+            generated_size > captured_size &&
+            generated_size <= captured_size * 2L)
             reject = 1;
         if (getenv("DCC_MIR_FINAL_COST_REPORT") != NULL)
             fprintf(stderr,
@@ -3979,16 +3996,9 @@ static int mir_final_cost_policy_rejects(
                     "generated-claim=%d captured-claim=%d reject=%d\n",
                     mir.name, selector_name,
                     generated_claim, captured_claim, reject);
-        if (reject ||
-            (strcmp(policy, "register-v3") &&
-             strcmp(policy, "register-v4") &&
-            strcmp(policy, "register-v5") &&
-            strcmp(policy, "register-v6")))
+        if (reject || policy_version < 3)
             return reject;
-        policy = (!strcmp(policy, "register-v4") ||
-                 !strcmp(policy, "register-v5") ||
-                 !strcmp(policy, "register-v6"))
-            ? "cost-v4" : "cost-v3";
+        policy = policy_version >= 4 ? "cost-v4" : "cost-v3";
     }
     if (!strcmp(policy, "cost-v3") ||
         !strcmp(policy, "cost-v4")) {
