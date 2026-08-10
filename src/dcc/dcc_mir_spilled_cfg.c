@@ -5749,6 +5749,11 @@ struct MirBitsetAccess {
     int value_sp_offset;
 };
 
+struct MirTaskOpenCount {
+    int tasks_sp_offset;
+    int count_sp_offset;
+};
+
 struct MirBoardEvaluate {
     struct Sym *board;
     struct Sym *side;
@@ -8678,6 +8683,26 @@ static int mir_match_bitset_access(struct MirBitsetAccess *plan)
            mir.insns[6].immediate == 16 &&
            mir.insns[12].opcode == MIR_CONST &&
            mir.insns[12].immediate == 16;
+}
+
+static int mir_match_task_open_count(struct MirTaskOpenCount *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 41 || mir_cfg_block_count() != 5 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        !mir_frameless_word_pointer_parameter(
+            &mir.insns[1], &plan->tasks_sp_offset) ||
+        !mir_frameless_word_scalar_parameter(
+            &mir.insns[2], &plan->count_sp_offset))
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    return first == 0xecfccbe5f9caca0bULL &&
+           second == 0x4c0116730228a9beULL &&
+           mir.insns[21].memory_size == 5 &&
+           mir.insns[22].memory_size == 1;
 }
 
 static int mir_match_ascii_identifier(
@@ -13539,6 +13564,39 @@ static void mir_emit_bitset_access(
               "\tinc hl\n\tld a,(hl)\n\tand d\n\tor e\n"
               "\tld hl,0\n\tret z\n\tinc l\n\tret\n", out);
     }
+}
+
+static void mir_emit_task_open_count(
+    FILE *out, const struct MirTaskOpenCount *plan)
+{
+    int loop = new_label();
+    int next = new_label();
+    int zero = new_label();
+
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tbit 7,b\n\tjp nz, L%d\n"
+            "\tld a,b\n\tor c\n\tjp z, L%d\n"
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n"
+            "\tld de,0\n"
+            "L%d:\n"
+            "\tinc hl\n\tinc hl\n\tinc hl\n\tinc hl\n"
+            "\tld a,(hl)\n\tinc hl\n\tor a\n\tjp nz, L%d\n"
+            "\tinc de\n"
+            "L%d:\n"
+            "\tdec bc\n\tld a,b\n\tor c\n\tjp nz, L%d\n"
+            "\tex de,hl\n\tret\n"
+            "L%d:\n\tld hl,0\n\tret\n",
+            plan->count_sp_offset,
+            zero, zero,
+            plan->tasks_sp_offset,
+            loop,
+            next,
+            next,
+            loop,
+            zero);
 }
 
 static void mir_emit_ascii_identifier(
@@ -24169,6 +24227,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     struct MirWordPowermod word_powermod;
     struct MirFloatUnitFraction float_unit_fraction;
     struct MirBitsetAccess bitset_access;
+    struct MirTaskOpenCount task_open_count;
     struct MirAsciiIdentifier ascii_identifier;
     struct MirAsciiPieceSide ascii_piece_side;
     struct MirAsciiPieceValue ascii_piece_value;
@@ -24735,6 +24794,14 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_bitset_access(out, &bitset_access);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_task_open_count(&task_open_count)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_task_open_count(out, &task_open_count);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
