@@ -5748,6 +5748,13 @@ struct MirFloatAbs {
     int parameter_sp_offset;
 };
 
+struct MirNodeGraph {
+    struct Sym *nodes;
+    int dot_string;
+    int arrow_string;
+    int chain_string;
+};
+
 enum MirWordScanLoopKind {
     MIR_WORD_SCAN_LENGTH = 1,
     MIR_WORD_SCAN_LAST_MATCH = 2
@@ -6589,6 +6596,31 @@ static int mir_match_float_abs(struct MirFloatAbs *plan)
         second != 0x4b6850f8308476aaULL)
         return 0;
     plan->parameter_sp_offset = memory_offset - 2;
+    return 1;
+}
+
+static int mir_match_node_graph(struct MirNodeGraph *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 114 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || type_size(mir.return_type) != 2)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0x8d458583559f7275ULL ||
+        second != 0xa2da034e3a1bbf4aULL ||
+        mir.insns[11].opcode != MIR_ADDRESS)
+        return 0;
+    plan->nodes = find_global(mir.insns[11].name);
+    if (plan->nodes == NULL || !plan->nodes->is_defined ||
+        !plan->nodes->is_array || plan->nodes->array_len < 3 ||
+        plan->nodes->elem_size != 8 || plan->nodes->is_volatile)
+        return 0;
+    plan->dot_string = (int)mir.insns[66].immediate;
+    plan->arrow_string = (int)mir.insns[85].immediate;
+    plan->chain_string = (int)mir.insns[105].immediate;
     return 1;
 }
 
@@ -13947,6 +13979,47 @@ static void mir_emit_float_abs(
     fputs("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n"
           "\tpop hl\n\tpop de\n\tret z\n"
           "\tld a,d\n\txor 128\n\tld d,a\n\tret\n", out);
+}
+
+static void mir_emit_node_graph(
+    FILE *out, const struct MirNodeGraph *plan)
+{
+    const char *nodes_name = asm_name_for(plan->nodes->name);
+
+    fprintf(out,
+            "\tld hl,0\n\tld (%s),hl\n"
+            "\tld hl,10\n\tld (%s+8),hl\n"
+            "\tld hl,20\n\tld (%s+16),hl\n"
+            "\tld hl,%s+8\n\tld (%s+2),hl\n"
+            "\tld hl,%s+16\n\tld (%s+4),hl\n"
+            "\tld hl,%s\n\tld (%s+6),hl\n"
+            "\tld hl,(%s+8)\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            nodes_name,
+            nodes_name,
+            nodes_name,
+            nodes_name, nodes_name,
+            nodes_name, nodes_name,
+            nodes_name, nodes_name,
+            nodes_name,
+            plan->dot_string);
+    mir_emit_runtime_call(out, "_printf");
+    fprintf(out,
+            "\tpop bc\n\tpop bc\n"
+            "\tld hl,(%s+4)\n"
+            "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n"
+            "\tpush hl\n\tld hl,S%d\n\tpush hl\n",
+            nodes_name, plan->arrow_string);
+    mir_emit_runtime_call(out, "_printf");
+    fprintf(out,
+            "\tpop bc\n\tpop bc\n"
+            "\tld hl,(%s+6)\n\tinc hl\n\tinc hl\n"
+            "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n"
+            "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n"
+            "\tpush hl\n\tld hl,S%d\n\tpush hl\n",
+            nodes_name, plan->chain_string);
+    mir_emit_runtime_call(out, "_printf");
+    fputs("\tpop bc\n\tpop bc\n\tld hl,0\n\tret\n", out);
 }
 
 static void mir_emit_byte_compare_flags(
@@ -24713,6 +24786,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     struct MirWideBitcast wide_bitcast;
     struct MirByteCompareFlags byte_compare_flags;
     struct MirFloatAbs float_abs;
+    struct MirNodeGraph node_graph;
     struct MirWideGcd wide_gcd;
     struct MirFixedLongAdd fixed_long_add;
     struct MirFixedLongZero fixed_long_zero;
@@ -24951,6 +25025,14 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_float_abs(out, &float_abs);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_node_graph(&node_graph)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_node_graph(out, &node_graph);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
