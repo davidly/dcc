@@ -2767,6 +2767,59 @@ static int pass_word_load_push_de_call(void)
 }
 
 /*
+ * MIR-shape counterpart of pass_word_load_push_de_call just above. The MIR
+ * backend loads the same by-reference word through hl/a rather than
+ * directly into de - hl is still the source pointer when the low byte is
+ * read, and there's no "ld l,(hl)" that wouldn't clobber that pointer
+ * before the high byte's read, so it stages the low byte through a first:
+ *
+ *   ld a,(hl)
+ *   inc hl
+ *   ld h,(hl)
+ *   ld l,a
+ *   push hl
+ *   call _func
+ *
+ * de doesn't have that problem - it's a different register pair than the
+ * source pointer hl, so both bytes can load into it directly with no
+ * scratch needed, one instruction shorter overall. Same precondition as
+ * the pass above and for the same reason: only safe when de's transient
+ * value isn't part of the call's own ABI. */
+static int pass_word_load_push_de_call_mir(void)
+{
+    int i;
+    int changed = 0;
+    int call_line;
+
+    for (i = 0; i + 5 < nlines; ++i) {
+        if (!eq(i,     "ld a,(hl)")) continue;
+        if (!eq(i + 1, "inc hl")) continue;
+        if (!eq(i + 2, "ld h,(hl)")) continue;
+        if (!eq(i + 3, "ld l,a")) continue;
+        if (!eq(i + 4, "push hl")) continue;
+
+        /* The call may be preceded by an extrn declaration for its own
+         * first reference, same as pass_long_load_push_no_ex_call handles
+         * elsewhere in this file. */
+        call_line = i + 5;
+        if (call_line < nlines && strncmp(lines[call_line], "extrn ", 6) == 0)
+            call_line++;
+        if (call_line >= nlines ||
+            !peep_call_uses_stack_args_only(lines[call_line]))
+            continue;
+
+        replace1_tagged(i, "ld e,(hl)", "word_load_push_de_call_mir");
+        replace1_tagged(i + 2, "ld d,(hl)", "word_load_push_de_call_mir");
+        replace1_tagged(i + 3, "push de", "word_load_push_de_call_mir");
+        delete_n(i + 4, 1);
+        changed = 1;
+        if (i > 0) --i;
+    }
+
+    return changed;
+}
+
+/*
  * A 32-bit value loaded from memory is often pushed immediately as a long or
  * float stack argument:
  *
@@ -3037,6 +3090,106 @@ static int pass_signed_cmp_const_low0(void)
 
         replace1_tagged(i, "ld a,h", "signed_cmp_const_low0");
         replace1(i + 1, "xor 80h");
+        sprintf(line, "cp %d", ((imm >> 8) ^ 0x80) & 255);
+        replace1(i + 2, line);
+        delete_n(i + 3, 6);
+        changed = 1;
+        if (i > 0)
+            --i;
+    }
+
+    return changed;
+}
+
+/*
+ * MIR-shape counterpart of pass_signed_cmp_const_low0 just above, for the
+ * no-swap case: unlike the ex-de,hl-swapped shape
+ * pass_signed_cmp_const_bias_fold_mir handles, when the MIR backend
+ * happens to load the variable operand into HL first (the constant lands
+ * directly in DE, no swap needed), the shape matches legacy's own exactly
+ * except for decimal `xor 128` instead of hex `xor 80h` - "or a" is still
+ * present before the sbc, because at the point in the fixed-point loop
+ * where this pass runs, pass_elim_redundant_carry_clear (which would
+ * otherwise prove the preceding xor already clears carry and drop it)
+ * hasn't had its turn yet.
+ *
+ *     ld de,IMM            ld a,h
+ *     ld a,h               xor 128
+ *     xor 128         ==>  cp (IMM>>8)^0x80
+ *     ld h,a               jp nc,L / jp c,L   (unchanged)
+ *     ld a,d
+ *     xor 128
+ *     ld d,a
+ *     or a
+ *     sbc hl,de
+ *     jp nc,L / jp c,L
+ *
+ * Same precondition as the pass above: IMM's low byte must be 0, so the
+ * 16-bit subtract's outcome is fully determined by the high byte alone.
+ * H already holds the variable here (no ex de,hl in this shape, so no
+ * operand-role swap to account for - see pass_signed_cmp_const_bias_fold_
+ * mir's comment for what happens when there is one, and why this pass
+ * deliberately doesn't try to also handle that case - matching a shape
+ * with a swap in it to this pass's fold would need the same carry-flag
+ * re-derivation that fold's comment describes, not a copy-paste of this
+ * one).
+ */
+static int pass_signed_cmp_const_low0_mir(void)
+{
+    int i;
+    int changed;
+    int imm;
+    char line[128];
+
+    changed = 0;
+
+    for (i = 0; i + 8 < nlines; ++i) {
+        if (!peep_parse_ld_de_signed(lines[i], &imm))
+            continue;
+        if (imm <= 0 || imm > 32767 || (imm & 255) != 0)
+            continue;
+        if (!eq(i + 1, "ld a,h"))
+            continue;
+        if (!eq(i + 2, "xor 128"))
+            continue;
+        if (!eq(i + 3, "ld h,a"))
+            continue;
+        if (!eq(i + 4, "ld a,d"))
+            continue;
+        if (!eq(i + 5, "xor 128"))
+            continue;
+        if (!eq(i + 6, "ld d,a"))
+            continue;
+        /* Unlike the shape pass_signed_cmp_const_bias_fold_mir handles
+         * (which never has one, since the last xor before it already
+         * clears carry - see that pass's own comment), this shape still
+         * has "or a" here: at the point in the fixed-point loop where this
+         * pass runs, no other pass has removed it yet. Confirmed by
+         * tracing an actual compile - an earlier version of this pattern
+         * omitted "or a" on the assumption it wouldn't be present (based
+         * on inspecting only the fully-converged final output, where a
+         * later, separate pass had already removed it), and as a result
+         * never matched anything at all in the pipeline's actual running
+         * order. */
+        if (!eq(i + 7, "or a"))
+            continue;
+        if (!eq(i + 8, "sbc hl,de"))
+            continue;
+        if (i + 9 >= nlines)
+            continue;
+        /* jp_to_jr runs once, as the very last cleanup step after this
+         * whole fixed-point loop has already converged (see its own call
+         * site), so at the point this pass actually runs the branch is
+         * still in "jp" form - "jr" is accepted too regardless, in case a
+         * future reordering changes that. */
+        if (strncmp(lines[i + 9], "jp nc,", 6) != 0 &&
+            strncmp(lines[i + 9], "jp c,", 5) != 0 &&
+            strncmp(lines[i + 9], "jr nc,", 6) != 0 &&
+            strncmp(lines[i + 9], "jr c,", 5) != 0)
+            continue;
+
+        replace1_tagged(i, "ld a,h", "signed_cmp_const_low0_mir");
+        replace1(i + 1, "xor 128");
         sprintf(line, "cp %d", ((imm >> 8) ^ 0x80) & 255);
         replace1(i + 2, line);
         delete_n(i + 3, 6);
@@ -3851,6 +4004,102 @@ static int pass_signed_cmp_const_bias_fold(void)
         replace1_tagged(i, line, "signed_cmp_const_bias_fold");
         /* Keep the H bias at i+1..i+3; delete the D bias triple at i+4..i+6. */
         delete_n(i + 4, 3);
+        changed = 1;
+        if (i > 0)
+            --i;
+    }
+
+    return changed;
+}
+
+/*
+ * MIR-shape counterpart of pass_signed_cmp_const_bias_fold just above. The
+ * MIR backend materializes both operands into registers before comparing,
+ * rather than folding the sign-bias into a compile-time constant the way
+ * legacy's codegen does, so a signed comparison against a constant comes
+ * out as:
+ *
+ *     ld de,IMM            ld de,BIASED_IMM
+ *     ex de,hl             ex de,hl
+ *     ld a,h          ==>  ld a,d
+ *     xor 128              xor 128
+ *     ld h,a               ld d,a
+ *     ld a,d               or a
+ *     xor 128              sbc hl,de
+ *     ld d,a
+ *     or a
+ *     sbc hl,de
+ *
+ * instead of the already-biased-constant form the pass above recognizes.
+ * Two differences keep that pass from matching this shape at all: the
+ * extra `ex de,hl`, and `xor 128` vs `xor 80h` - the identical value (0x80,
+ * the sign bit), but a decimal literal here instead of the hex literal
+ * that pass's string match requires.
+ *
+ * The ex de,hl means the two bias triples bias the OPPOSITE operands from
+ * what their register names suggest at a glance, and from what the
+ * legacy-shape pass above folds: ld de,IMM / ex de,hl puts the constant in
+ * HL and the variable in DE, so the H-bias triple (ld a,h/xor 128/ld h,a)
+ * biases the CONSTANT, and the D-bias triple biases the VARIABLE. A first
+ * version of this pass got that backwards - kept the (pointless, foldable)
+ * H-bias and deleted the (required, runtime) D-bias, silently miscomputing
+ * every such comparison. Confirmed via tests/tstring.c: `argc > 1 ? ... :
+ * ...` failed with cascading garbage output starting at the very next
+ * memcpy/memcmp test, caught by the full suite (not by hand-tracing the
+ * fold's logic closely enough the first time, which is exactly why the
+ * fix below was re-verified against the fold's actual operand each was
+ * biasing, not just pattern-matched against the sibling pass's shape).
+ *
+ * Correct fold: pre-bias the constant in the ld de line, before the swap
+ * (constant known at compile time, so its own bias can happen there);
+ * delete the now-redundant H-bias triple; leave the ex de,hl and the
+ * D-bias triple untouched, since the D-bias operates on the variable and
+ * must still happen at runtime. Does not attempt to also remove the ex
+ * de,hl - doing that would require swapping sbc hl,de's operand order too,
+ * which flips the sense of every flag the branch after it tests; not
+ * worth the risk for one more instruction when this already saves 3 per
+ * site (the H-bias triple), matching the sibling pass's own savings.
+ */
+static int pass_signed_cmp_const_bias_fold_mir(void)
+{
+    int i;
+    int changed;
+    int imm;
+    unsigned int biased;
+    char line[128];
+
+    changed = 0;
+
+    for (i = 0; i + 9 < nlines; ++i) {
+        if (!peep_parse_ld_de_signed(lines[i], &imm))
+            continue;
+        if (!eq(i + 1, "ex de,hl"))
+            continue;
+        if (!eq(i + 2, "ld a,h"))
+            continue;
+        if (!eq(i + 3, "xor 128"))
+            continue;
+        if (!eq(i + 4, "ld h,a"))
+            continue;
+        if (!eq(i + 5, "ld a,d"))
+            continue;
+        if (!eq(i + 6, "xor 128"))
+            continue;
+        if (!eq(i + 7, "ld d,a"))
+            continue;
+        if (!eq(i + 8, "or a"))
+            continue;
+        if (!eq(i + 9, "sbc hl,de"))
+            continue;
+
+        biased = ((unsigned int)imm ^ 0x8000u) & 0xffffu;
+        sprintf(line, "ld de,%u", biased);
+        replace1_tagged(i, line, "signed_cmp_const_bias_fold_mir");
+        /* Delete only the now-redundant H-bias triple (i+2..i+4), which
+         * biases the constant this fold already pre-biased above. Leave
+         * ex de,hl (i+1) and the D-bias triple (i+5..i+7, which biases the
+         * variable and must still run at runtime) untouched. */
+        delete_n(i + 2, 3); /* ld a,h / xor 128 / ld h,a */
         changed = 1;
         if (i > 0)
             --i;
@@ -5628,6 +5877,93 @@ static int peep_parse_ld_hl_ix_pair(int i, int *n)
 
     *n = lo;
     return 1;
+}
+
+/* Parse the two-line "ld (ix-N),l" / "ld (ix-(N-1)),h" shape dcc's own
+ * codegen always emits for a 16-bit ix-relative local's word store - the
+ * store-side counterpart of peep_parse_ld_hl_ix_pair just above. *n is the
+ * low byte's offset magnitude (N). Returns 1 and implicitly consumes lines
+ * i and i+1 on success. */
+static int peep_parse_st_hl_ix_pair(int i, int *n)
+{
+    char tmp[MAX_LINE];
+    const char *p;
+    int lo;
+    char hpat[32];
+
+    strip_peep_comment_copy(tmp, lines[i]);
+    if (strncmp(tmp, "ld (ix-", 7) != 0)
+        return 0;
+    p = tmp + 7;
+    if (*p < '0' || *p > '9')
+        return 0;
+    lo = 0;
+    while (*p >= '0' && *p <= '9')
+        lo = lo * 10 + (*p++ - '0');
+    if (strcmp(p, "),l") != 0 || lo <= 1)
+        return 0;
+
+    if (i + 1 >= nlines)
+        return 0;
+    sprintf(hpat, "ld (ix-%d),h", lo - 1);
+    if (!eq(i + 1, hpat))
+        return 0;
+
+    *n = lo;
+    return 1;
+}
+
+/*
+ * mir-text-size: a phi merge into a homed local can be reached by more than
+ * one alias label immediately preceding the same merge point (e.g. an
+ * empty `else` arm whose only content is materializing a constant before
+ * falling through several consecutive labels into the merge). Each such
+ * alias label independently re-resolves and re-emits the identical reload-
+ * then-store copy, producing this exact 4-line block twice back to back:
+ *
+ *   ld l,(ix-M)      ld l,(ix-M)
+ *   ld h,(ix-(M-1))  ld h,(ix-(M-1))
+ *   ld (ix-N),l  ==>  (deleted - dead repeat of the block on the left)
+ *   ld (ix-(N-1)),h
+ *
+ * The second occurrence is pure waste: it reloads and re-stores the exact
+ * same value to the exact same destination with nothing in between that
+ * could have changed it. Fixing this at its source (the MIR emitter that
+ * decides which edges need a phi copy) was tried and reverted - it also
+ * changes the byte counts the backend's own candidate-selection cost model
+ * compares, which shifted which of several competing code-generation
+ * strategies won for unrelated constructs elsewhere in the same function,
+ * regressing some apps while improving others (confirmed via full-suite
+ * measurement, not a hypothetical). Collapsing the duplicate here instead,
+ * strictly after the backend has already committed to its output, cannot
+ * perturb any selection decision - dccpeep only ever cleans up text that
+ * already "won".
+ */
+static int pass_dedup_ix_pair_reload_store(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 7 < nlines; ++i) {
+        int load_off, store_off;
+        int load_off2, store_off2;
+
+        if (!peep_parse_ld_hl_ix_pair(i, &load_off))
+            continue;
+        if (!peep_parse_st_hl_ix_pair(i + 2, &store_off))
+            continue;
+        if (!peep_parse_ld_hl_ix_pair(i + 4, &load_off2))
+            continue;
+        if (!peep_parse_st_hl_ix_pair(i + 6, &store_off2))
+            continue;
+        if (load_off != load_off2 || store_off != store_off2)
+            continue;
+
+        delete_n(i + 4, 4);
+        changed = 1;
+    }
+
+    return changed;
 }
 
 /* Is ix-offset `off` (the low byte; off-1 is the paired high byte) written
@@ -9368,11 +9704,13 @@ int main(int argc, char **argv)
         { "pass_byte_minmax_patterns", pass_byte_minmax_patterns, 0 },
         { "pass_dead_hl_load_before_ldhl", pass_dead_hl_load_before_ldhl, 0 },
         { "pass_word_load_push_de_call", pass_word_load_push_de_call, 0 },
+        { "pass_word_load_push_de_call_mir", pass_word_load_push_de_call_mir, 0 },
         { "pass_long_load_push_no_ex_call", pass_long_load_push_no_ex_call, 0 },
         { "pass_elim_loop_back_signed_bias", pass_elim_loop_back_signed_bias, 0 },
         { "pass_cp_zero_to_or_a", pass_cp_zero_to_or_a, 0 },
         { "pass_hl_cmp_zero_to_or_hl", pass_hl_cmp_zero_to_or_hl, 0 },
         { "pass_signed_cmp_const_low0", pass_signed_cmp_const_low0, 0 },
+        { "pass_signed_cmp_const_low0_mir", pass_signed_cmp_const_low0_mir, 0 },
         { "pass_zeroext_byte_cmp_const", pass_zeroext_byte_cmp_const, 0 },
         { "pass_byte_cmp_push_pop_hl", pass_byte_cmp_push_pop_hl, 0 },
         { "pass_word_switch_cmp_avoid_push_pop", pass_word_switch_cmp_avoid_push_pop, 0 },
@@ -9381,6 +9719,7 @@ int main(int argc, char **argv)
         { "pass_minmax_score_b_cache", pass_minmax_score_b_cache, 0 },
         { "pass_minmax_save_board_addr", pass_minmax_save_board_addr, 0 },
         { "pass_elim_redundant_ld_a_reg", pass_elim_redundant_ld_a_reg, 0 },
+        { "pass_dedup_ix_pair_reload_store", pass_dedup_ix_pair_reload_store, 0 },
         { "pass_minmax_elim_label_reload", pass_minmax_elim_label_reload, 0 },
         { "pass_elim_c_reload_after_store", pass_elim_c_reload_after_store, 0 },
         { "pass_and1_ix_to_bit", pass_and1_ix_to_bit, 0 },
@@ -9515,6 +9854,13 @@ int main(int argc, char **argv)
      * fold to -Ot where trading shared code size for fewer inline instructions
      * is the goal. */
     if (!peep_context.options.optimize_size && RUN_PASS(pass_signed_cmp_const_bias_fold))
+        RUN_PASS(pass_labels);
+    /* MIR-shape counterpart of the fold just above - see that pass's
+     * comment for what differs and why neither pattern matches the other's
+     * shape. Same placement (once, post-convergence, time-mode only) for
+     * the same reason: it must not run before loop-recognizing structural
+     * passes have had a chance to see the un-folded comparison. */
+    if (!peep_context.options.optimize_size && RUN_PASS(pass_signed_cmp_const_bias_fold_mir))
         RUN_PASS(pass_labels);
     if (!peep_context.options.optimize_size && RUN_PASS(pass_signed_zero_branch))
         RUN_PASS(pass_labels);
