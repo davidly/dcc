@@ -2347,6 +2347,7 @@ static int mir_lower_expr(const struct AstNode *node)
         insn->immediate = node->op;
         if (node->op == '-' && left_is_pointer && right_is_pointer) {
             int stride = mir_pointer_arithmetic_stride(node->a);
+            mir.has_pointer_difference = 1;
             if (stride > 1) {
                 int divisor = mir_new_value();
                 int difference = mir_new_value();
@@ -3082,6 +3083,7 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
     mir.next_call_id = 0;
     mir.next_inline_temp_id = 1;
     mir.has_indirect_incdec = 0;
+    mir.has_pointer_difference = 0;
     mir_inline_live_temp_mask = 0;
     memset(mir_inline_temp_ids, 0, sizeof(mir_inline_temp_ids));
     mir_inline_expand_depth = 0;

@@ -123,6 +123,7 @@ struct MirFunction {
     int active;
     int sink_purpose;
     int has_indirect_incdec;
+    int has_pointer_difference;
     int break_labels[MAX_FLOW];
     int continue_labels[MAX_FLOW];
     int flow_depth;
