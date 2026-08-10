@@ -533,6 +533,7 @@ int mir_spilled_cfg_depends_on_wide_constant_rematerialization(void);
 int mir_spilled_cfg_depends_only_on_unsigned_wide_constant_relational(void);
 int mir_spilled_cfg_has_wide_mulmod_fusion(void);
 int mir_spilled_cfg_has_divmod_pair(void);
+int mir_spilled_cfg_divmod_has_dead_result(void);
 int mir_spilled_cfg_depends_on_unary_not_branch_fusion(void);
 int mir_spilled_cfg_depends_on_planned_stack_handoff(void);
 int mir_spilled_cfg_depends_on_planned_index_base_handoff(void);

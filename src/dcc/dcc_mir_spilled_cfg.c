@@ -10916,6 +10916,23 @@ int mir_spilled_cfg_has_divmod_pair(void)
     return 0;
 }
 
+int mir_spilled_cfg_divmod_has_dead_result(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        int partner = mir_divmod_partner(instruction);
+
+        if (partner > instruction &&
+            (mir_value_only_used_by_dead_stores(
+                 mir.insns[instruction].dst) ||
+             mir_value_only_used_by_dead_stores(
+                 mir.insns[partner].dst)))
+            return 1;
+    }
+    return 0;
+}
+
 static void mir_emit_virtual_load_wide(FILE *out, int value)
 {
     const struct MirInsn *definition = mir_definition(value);
