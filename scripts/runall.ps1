@@ -970,13 +970,32 @@ function Invoke-ComRunAndCompare {
         }
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
-        if ($RunStdin) {
-            $process.StandardInput.Write($RunStdin)
-            if (-not $RunStdin.EndsWith("`n")) {
-                $process.StandardInput.Write("`n")
+        try {
+            if ($RunStdin) {
+                $process.StandardInput.Write($RunStdin)
+                if (-not $RunStdin.EndsWith("`n")) {
+                    $process.StandardInput.Write("`n")
+                }
             }
+            $process.StandardInput.Close()
         }
-        $process.StandardInput.Close()
+        catch {
+            $closedPipe = $false
+            for ($currentException = $_.Exception;
+                 $null -ne $currentException;
+                 $currentException = $currentException.InnerException) {
+                if ($currentException -is [System.IO.IOException]) {
+                    $closedPipe = $true
+                    break
+                }
+            }
+            if (-not $closedPipe) {
+                throw
+            }
+            # The child closed stdin after it had enough input. Continue to
+            # judge the run by its exit code and captured output.
+            try { $process.StandardInput.Dispose() } catch { }
+        }
         if (-not $process.WaitForExit($RunTimeout * 1000)) {
             Stop-ProcessTree -Process $process
             $process.WaitForExit()
