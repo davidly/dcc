@@ -2337,6 +2337,19 @@ static int mir_has_large_volatile_array(void)
     return 0;
 }
 
+static int mir_has_fixed_local_multidimensional_array(void)
+{
+    int i;
+
+    for (i = 0; i < mir.declared_count; ++i)
+        if (mir.declared_storage[i] == SC_LOCAL &&
+            mir.declared_dim_counts[i] > 1 &&
+            !mir.declared_is_vla[i] &&
+            !mir.declared_dynamic_strides[i])
+            return 1;
+    return 0;
+}
+
 /* Item T63 (mir-text-size-plan.md): counts conditional tests in the
  * function, used to flag a chained if/else-if shape (2+ separate
  * MIR_BRANCH_FALSE instructions) as opposed to a single if/else (only
@@ -3949,7 +3962,7 @@ static int mir_register_policy_version(const char *policy)
     if (strncmp(policy, "register-v", 10))
         return 0;
     version = strtol(policy + 10, &end, 10);
-    if (*end != 0 || version < 1 || version > 31)
+    if (*end != 0 || version < 1 || version > 32)
         return -1;
     return (int)version;
 }
@@ -3963,7 +3976,7 @@ static int mir_final_cost_policy_rejects(
     int policy_version;
 
     if (policy == NULL || policy[0] == 0)
-        policy = "register-v31";
+        policy = "register-v32";
     if (!strcmp(policy, "off"))
         return 0;
     policy_version = mir_register_policy_version(policy);
@@ -4213,6 +4226,11 @@ static int mir_final_cost_policy_rejects(
             generated_size * 100L > captured_size * 150L &&
             (long)generated_instructions * 100L >
                 (long)captured_instructions * 130L)
+            reject = 1;
+        if (!reject && policy_version >= 32 &&
+            mir_has_fixed_local_multidimensional_array() &&
+            generated_size > captured_size &&
+            generated_instructions > captured_instructions)
             reject = 1;
         if (getenv("DCC_MIR_FINAL_COST_REPORT") != NULL)
             fprintf(stderr,
