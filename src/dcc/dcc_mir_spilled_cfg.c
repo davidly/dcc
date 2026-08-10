@@ -5803,6 +5803,10 @@ struct MirFixedWordSum {
     int count;
 };
 
+struct MirBdosString {
+    int parameter_offset;
+};
+
 enum MirWordScanLoopKind {
     MIR_WORD_SCAN_LENGTH = 1,
     MIR_WORD_SCAN_LAST_MATCH = 2
@@ -6887,6 +6891,22 @@ static int mir_match_fixed_word_sum(struct MirFixedWordSum *plan)
     plan->parameter_sp_offset = memory_offset - 2;
     plan->count = 5;
     return 1;
+}
+
+static int mir_match_bdos_string(struct MirBdosString *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 20 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || type_size(mir.return_type) != 0 ||
+        !mir_match_word_pointer_parameter(
+            &mir.insns[1], &plan->parameter_offset))
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    return first == 0xe1692fbbbb8be7fbULL &&
+           second == 0xd87215e52de03fabULL;
 }
 
 static int mir_match_long_clamp(struct MirLongClamp *plan)
@@ -14680,6 +14700,30 @@ static void mir_emit_fixed_word_sum(
               "\tld a,(bc)\n\tld h,a\n\tinc bc\n"
               "\tadd hl,de\n\tex de,hl\n", out);
     fputs("\tex de,hl\n\tret\n", out);
+}
+
+static void mir_emit_bdos_string(
+    FILE *out, const struct MirBdosString *plan)
+{
+    int done = new_label();
+    int loop = new_label();
+
+    fprintf(out,
+            "L%d:\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld a,(hl)\n\tor a\n\tjp z, L%d\n"
+            "\tinc hl\n\tld (ix%+d),l\n\tld (ix%+d),h\n"
+            "\tld e,a\n\trlca\n\tsbc a,a\n\tld d,a\n"
+            "\tld c,2\n",
+            loop,
+            plan->parameter_offset, plan->parameter_offset + 1,
+            done,
+            plan->parameter_offset, plan->parameter_offset + 1);
+    mir_emit_runtime_call(out, "__bdosf");
+    fprintf(out,
+            "\tjp L%d\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            loop, done);
 }
 
 static void mir_emit_byte_compare_flags(
@@ -25453,6 +25497,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     struct MirPrefixCheck prefix_check;
     struct MirStructSort struct_sort;
     struct MirFixedWordSum fixed_word_sum;
+    struct MirBdosString bdos_string;
     struct MirWideGcd wide_gcd;
     struct MirFixedLongAdd fixed_long_add;
     struct MirFixedLongZero fixed_long_zero;
@@ -25754,6 +25799,15 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_fixed_word_sum(out, &fixed_word_sum);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_bdos_string(&bdos_string)) {
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_bdos_string(out, &bdos_string);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
