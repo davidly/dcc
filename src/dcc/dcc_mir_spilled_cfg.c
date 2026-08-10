@@ -21449,6 +21449,31 @@ static int mir_wide_narrow_multiply_match(
     return 1;
 }
 
+static int mir_fold_narrow_multiply_constants(
+    const struct MirInsn *left, const struct MirInsn *right,
+    int is_unsigned, unsigned long *bits_out)
+{
+    unsigned long left_bits;
+    unsigned long right_bits;
+
+    if (left == NULL || right == NULL ||
+        left->opcode != MIR_CONST || right->opcode != MIR_CONST)
+        return 0;
+    left_bits = (unsigned long)left->immediate & 0xffffUL;
+    right_bits = (unsigned long)right->immediate & 0xffffUL;
+    if (is_unsigned) {
+        *bits_out = left_bits * right_bits;
+    } else {
+        long left_value = (left_bits & 0x8000UL) != 0
+            ? (long)left_bits - 65536L : (long)left_bits;
+        long right_value = (right_bits & 0x8000UL) != 0
+            ? (long)right_bits - 65536L : (long)right_bits;
+
+        *bits_out = (unsigned long)(left_value * right_value);
+    }
+    return 1;
+}
+
 static int mir_value_is_wide_narrow_multiply_widen(int value)
 {
     int instruction;
@@ -28502,16 +28527,25 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                     mir_definition(narrow_multiply_left);
                 const struct MirInsn *right =
                     mir_definition(narrow_multiply_right);
+                unsigned long constant_bits;
 
-                if (!mir_narrow_multiply_has_named_word_home(left) ||
-                    !mir_emit_named_word_load_to_hl(out, left))
-                    mir_emit_virtual_load(out, narrow_multiply_left);
-                fputs("\tld c,l\n\tld b,h\n", out);
-                if (!mir_narrow_multiply_has_named_word_home(right) ||
-                    !mir_emit_named_word_load_to_hl(out, right))
-                    mir_emit_virtual_load(out, narrow_multiply_right);
-                mir_emit_runtime_call(
-                    out, narrow_multiply_unsigned ? "__m1u" : "__m1s");
+                if (mir_fold_narrow_multiply_constants(
+                        left, right, narrow_multiply_unsigned,
+                        &constant_bits)) {
+                    fprintf(out, "\tld hl,%lu\n\tld de,%lu\n",
+                            constant_bits & 0xffffUL,
+                            (constant_bits >> 16) & 0xffffUL);
+                } else {
+                    if (!mir_narrow_multiply_has_named_word_home(left) ||
+                        !mir_emit_named_word_load_to_hl(out, left))
+                        mir_emit_virtual_load(out, narrow_multiply_left);
+                    fputs("\tld c,l\n\tld b,h\n", out);
+                    if (!mir_narrow_multiply_has_named_word_home(right) ||
+                        !mir_emit_named_word_load_to_hl(out, right))
+                        mir_emit_virtual_load(out, narrow_multiply_right);
+                    mir_emit_runtime_call(
+                        out, narrow_multiply_unsigned ? "__m1u" : "__m1s");
+                }
                 mir_emit_virtual_store_wide(out, insn->dst);
                 break;
             }
