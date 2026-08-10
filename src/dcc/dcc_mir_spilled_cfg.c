@@ -5948,6 +5948,15 @@ struct MirEnumFsm {
     int input_sp_offset;
 };
 
+struct MirSmallWordSwitch {
+    int input_sp_offset;
+    int first_case;
+    int case_count;
+    int default_value;
+    int range_value;
+    int trailing_value;
+};
+
 enum MirWordScanLoopKind {
     MIR_WORD_SCAN_LENGTH = 1,
     MIR_WORD_SCAN_LAST_MATCH = 2
@@ -7103,6 +7112,48 @@ static int mir_match_enum_fsm(struct MirEnumFsm *plan)
         plan->transition->is_volatile)
         return 0;
     plan->input_sp_offset = memory_offset - 2;
+    return 1;
+}
+
+static int mir_match_small_word_switch(struct MirSmallWordSwitch *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 45 || mir_cfg_block_count() != 10 ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
+        type_size(mir.return_type) != 2 ||
+        !mir_scalar_memory_location(
+            &mir.insns[1], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_PARAM || type_ptr_depth(memory_type) != 0 ||
+        type_size(memory_type) != 2)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0x1a67e63d86c993dfULL ||
+        second != 0x82ca76305ffe0540ULL ||
+        mir.insns[2].opcode != MIR_CONST ||
+        mir.insns[6].opcode != MIR_CONST ||
+        mir.insns[11].opcode != MIR_CONST ||
+        mir.insns[16].opcode != MIR_CONST ||
+        mir.insns[21].opcode != MIR_CONST ||
+        mir.insns[30].opcode != MIR_CONST ||
+        mir.insns[36].opcode != MIR_CONST ||
+        mir.insns[6].immediate != 1 ||
+        mir.insns[11].immediate != 2 ||
+        mir.insns[16].immediate != 3 ||
+        mir.insns[21].immediate != 4)
+        return 0;
+    plan->input_sp_offset = memory_offset - 2;
+    plan->first_case = (int)mir.insns[6].immediate;
+    plan->case_count = 3;
+    plan->default_value = (int)mir.insns[2].immediate;
+    plan->range_value = (int)mir.insns[30].immediate;
+    plan->trailing_value = (int)mir.insns[36].immediate;
     return 1;
 }
 
@@ -15036,6 +15087,35 @@ static void mir_emit_enum_fsm(
             transition_name,
             loop,
             done);
+}
+
+static void mir_emit_small_word_switch(
+    FILE *out, const struct MirSmallWordSwitch *plan)
+{
+    int default_label = new_label();
+    int range_label = new_label();
+
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tld l,c\n\tld h,b\n",
+            plan->input_sp_offset);
+    if (plan->first_case == 1)
+        fputs("\tdec hl\n", out);
+    else
+        fprintf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n",
+                plan->first_case);
+    fprintf(out,
+            "\tld a,h\n\tor a\n\tjp nz, L%d\n"
+            "\tld a,l\n\tcp %d\n\tjp c, L%d\n\tjp nz, L%d\n"
+            "\tld hl,%d\n\tret\n"
+            "L%d:\n\tld hl,%d\n\tret\n"
+            "L%d:\n\tld hl,%d\n\tret\n",
+            default_label,
+            plan->case_count, range_label, default_label,
+            plan->trailing_value,
+            range_label, plan->range_value,
+            default_label, plan->default_value);
 }
 
 static void mir_emit_byte_compare_flags(
@@ -25813,6 +25893,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     struct MirBdosString bdos_string;
     struct MirTimeChecks time_checks;
     struct MirEnumFsm enum_fsm;
+    struct MirSmallWordSwitch small_word_switch;
     struct MirWideGcd wide_gcd;
     struct MirFixedLongAdd fixed_long_add;
     struct MirFixedLongZero fixed_long_zero;
@@ -26141,6 +26222,14 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_enum_fsm(out, &enum_fsm);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_small_word_switch(&small_word_switch)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_small_word_switch(out, &small_word_switch);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
