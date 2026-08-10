@@ -9764,7 +9764,9 @@ static int mir_match_indirect_incdec(
     ret = &mir.insns[instruction + 4];
     if (load->opcode != MIR_LOAD_INDIRECT ||
         load->bit_width != 0 ||
-        (load->memory_size != 1 && load->memory_size != 2) ||
+        (load->memory_size != 1 &&
+         load->memory_size != 2 &&
+         load->memory_size != 4) ||
         type_size(load->type) != load->memory_size ||
         type_is_bool(load->type) ||
         constant->opcode != MIR_CONST ||
@@ -9785,6 +9787,8 @@ static int mir_match_indirect_incdec(
         (ret->src1 != load->dst && ret->src1 != binary->dst))
         return 0;
     returns_adjusted = ret->src1 == binary->dst;
+    if (load->memory_size == 4 && returns_adjusted)
+        return 0;
     for (scan = 0; scan < mir.count; ++scan) {
         const struct MirInsn *use = &mir.insns[scan];
 
@@ -9849,8 +9853,43 @@ static void mir_emit_indirect_incdec_normalize(FILE *out, int type)
 static void mir_emit_indirect_incdec(
     FILE *out, const struct MirIndirectIncDec *plan)
 {
+    int adjust_label;
+
     mir_spilled_cfg_used_indirect_incdec = 1;
     mir_emit_virtual_load(out, plan->address_value);
+    if (plan->memory_size == 4) {
+        fputs("\tld b,h\n\tld c,l\n"
+              "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+              "\tinc hl\n\tld a,(hl)\n\tinc hl\n"
+              "\tld h,(hl)\n\tld l,a\n\tex de,hl\n",
+              out);
+        if (!plan->returns_adjusted)
+            fputs("\tpush de\n\tpush hl\n", out);
+        adjust_label = new_label();
+        if (plan->decrement)
+            fprintf(out,
+                    "\tld a,h\n\tor l\n\tdec hl\n"
+                    "\tjp nz, L%d\n\tdec de\nL%d:\n",
+                    adjust_label, adjust_label);
+        else
+            fprintf(out,
+                    "\tinc hl\n\tld a,h\n\tor l\n"
+                    "\tjp nz, L%d\n\tinc de\nL%d:\n",
+                    adjust_label, adjust_label);
+        fputs("\tpush hl\n\tld h,b\n\tld l,c\n\tpop bc\n"
+              "\tld (hl),c\n\tinc hl\n\tld (hl),b\n"
+              "\tinc hl\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+              out);
+        if (!plan->returns_adjusted)
+            fputs("\tpop hl\n\tpop de\n", out);
+        else
+            fputs("\tld h,b\n\tld l,c\n", out);
+        mir_emit_instruction_index = plan->store_instruction;
+        mir_forwarded_wide_value = plan->returns_adjusted
+            ? plan->adjusted_value : plan->old_value;
+        mir_forwarded_wide_instruction = plan->store_instruction;
+        return;
+    }
     fputs("\tpush hl\n", out);
     if (plan->memory_size == 1) {
         fputs("\tld l,(hl)\n", out);
