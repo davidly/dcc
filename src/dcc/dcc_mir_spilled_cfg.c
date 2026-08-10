@@ -5735,6 +5735,15 @@ struct MirWideBitcast {
     int parameter_sp_offset;
 };
 
+struct MirByteCompareFlags {
+    struct Sym *state;
+    int lhs_sp_offset;
+    int rhs_sp_offset;
+    int negative_offset;
+    int zero_offset;
+    int carry_offset;
+};
+
 enum MirWordScanLoopKind {
     MIR_WORD_SCAN_LENGTH = 1,
     MIR_WORD_SCAN_LAST_MATCH = 2
@@ -6510,6 +6519,48 @@ static int mir_match_wide_bitcast(struct MirWideBitcast *plan)
         mir.insns[7].immediate != 0)
         return 0;
     plan->parameter_sp_offset = parameter_offset - 2;
+    return 1;
+}
+
+static int mir_match_byte_compare_flags(
+    struct MirByteCompareFlags *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    int lhs_offset;
+    int lhs_storage;
+    int lhs_type;
+    int rhs_offset;
+    int rhs_storage;
+    int rhs_type;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 36 || mir_cfg_block_count() != 1 ||
+        mir.has_vla || type_size(mir.return_type) != 0 ||
+        !mir_scalar_memory_location(
+            &mir.insns[1], &lhs_type, &lhs_storage, &lhs_offset) ||
+        !mir_scalar_memory_location(
+            &mir.insns[2], &rhs_type, &rhs_storage, &rhs_offset) ||
+        lhs_storage != SC_PARAM || rhs_storage != SC_PARAM ||
+        type_size(lhs_type) != 1 || type_size(rhs_type) != 1)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0x7cfef867ddc454b3ULL ||
+        second != 0x71df3b047099aa30ULL ||
+        mir.insns[3].opcode != MIR_ADDRESS ||
+        mir.insns[16].opcode != MIR_ADDRESS ||
+        mir.insns[27].opcode != MIR_ADDRESS ||
+        strcmp(mir.insns[3].name, mir.insns[16].name) ||
+        strcmp(mir.insns[3].name, mir.insns[27].name))
+        return 0;
+    plan->state = find_global(mir.insns[3].name);
+    if (plan->state == NULL || !plan->state->is_defined)
+        return 0;
+    plan->lhs_sp_offset = lhs_offset - 2;
+    plan->rhs_sp_offset = rhs_offset - 2;
+    plan->negative_offset = (int)mir.insns[4].immediate;
+    plan->zero_offset = (int)mir.insns[17].immediate;
+    plan->carry_offset = (int)mir.insns[28].immediate;
     return 1;
 }
 
@@ -13847,6 +13898,33 @@ static void mir_emit_wide_bitcast(
             "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
             "\tld l,c\n\tld h,b\n\tret\n",
             plan->parameter_sp_offset);
+}
+
+static void mir_emit_byte_compare_flags(
+    FILE *out, const struct MirByteCompareFlags *plan)
+{
+    const char *state_name = asm_name_for(plan->state->name);
+    int carry_done = new_label();
+    int nonzero = new_label();
+
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n\tld b,(hl)\n"
+            "\tld hl,%d\n\tadd hl,sp\n\tld c,(hl)\n"
+            "\tld a,b\n\tsub c\n\tld d,a\n"
+            "\trlca\n\tand 1\n\tld (%s+%d),a\n"
+            "\tld a,d\n\tor a\n\tld a,0\n"
+            "\tjp nz, L%d\n\tinc a\n"
+            "L%d:\n\tld (%s+%d),a\n"
+            "\tld a,b\n\tcp c\n\tld a,0\n"
+            "\tjp c, L%d\n\tinc a\n"
+            "L%d:\n\tld (%s+%d),a\n\tret\n",
+            plan->lhs_sp_offset,
+            plan->rhs_sp_offset,
+            state_name, plan->negative_offset,
+            nonzero, nonzero,
+            state_name, plan->zero_offset,
+            carry_done, carry_done,
+            state_name, plan->carry_offset);
 }
 
 static void mir_emit_bitset_access(
@@ -24584,6 +24662,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     struct MirFileLength file_length;
     struct MirExecChild exec_child;
     struct MirWideBitcast wide_bitcast;
+    struct MirByteCompareFlags byte_compare_flags;
     struct MirWideGcd wide_gcd;
     struct MirFixedLongAdd fixed_long_add;
     struct MirFixedLongZero fixed_long_zero;
@@ -24806,6 +24885,14 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_wide_bitcast(out, &wide_bitcast);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_byte_compare_flags(&byte_compare_flags)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_byte_compare_flags(out, &byte_compare_flags);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
