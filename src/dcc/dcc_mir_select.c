@@ -3949,7 +3949,7 @@ static int mir_register_policy_version(const char *policy)
     if (strncmp(policy, "register-v", 10))
         return 0;
     version = strtol(policy + 10, &end, 10);
-    if (*end != 0 || version < 1 || version > 30)
+    if (*end != 0 || version < 1 || version > 31)
         return -1;
     return (int)version;
 }
@@ -3963,7 +3963,7 @@ static int mir_final_cost_policy_rejects(
     int policy_version;
 
     if (policy == NULL || policy[0] == 0)
-        policy = "register-v30";
+        policy = "register-v31";
     if (!strcmp(policy, "off"))
         return 0;
     policy_version = mir_register_policy_version(policy);
@@ -3976,7 +3976,6 @@ static int mir_final_cost_policy_rejects(
         int captured_claim;
 
         if (policy_version < 5 ||
-            strcmp(selector_name, "spilled-scalar-cfg") ||
             (filter != NULL && filter[0] != 0 &&
              strcmp(filter, mir.name)) ||
             mir_stream_contains_text(generated, MIR_EXACT_KERNEL_MARKER))
@@ -3996,6 +3995,14 @@ static int mir_final_cost_policy_rejects(
                     generated_size, captured_size, mir_cfg_block_count(),
                     mir_stream_contains_text(
                         generated, MIR_PHI_SLOT_MARKER));
+        if (!strcmp(selector_name, "homed-scalar-cfg"))
+            return policy_version >= 31 &&
+                   captured_claim && !generated_claim &&
+                   mir_cfg_block_count() <= 4 &&
+                   (long)generated_instructions * 100L >
+                       (long)captured_instructions * 105L;
+        if (strcmp(selector_name, "spilled-scalar-cfg"))
+            return 0;
         return captured_claim && !generated_claim &&
                (generated_size * 100L > captured_size * 135L ||
                 (policy_version >= 20 &&
@@ -6627,6 +6634,19 @@ evaluate_generated:
                     }
                     fclose(regional_candidate);
                 }
+                if (g_speculative_codegen_active &&
+                    getenv("DCC_MIR_FINAL_COST_REPORT") != NULL)
+                    fprintf(stderr,
+                            "; MIR speculative-final function=%s "
+                            "selector=%s reason=%s generated-bytes=%ld "
+                            "captured-bytes=%ld generated-insns=%d "
+                            "captured-insns=%d blocks=%d\n",
+                            mir.name, selector_name,
+                            fallback_reason != NULL
+                                ? fallback_reason : "accepted",
+                            generated_size, captured_size,
+                            generated_instructions, captured_instructions,
+                            mir_cfg_block_count());
                 if (fallback_reason == NULL &&
                     mir_final_cost_policy_rejects(
                         selector_name, generated, mir.capture_stream,
