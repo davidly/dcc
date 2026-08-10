@@ -5970,6 +5970,19 @@ struct MirFloatPointerChecks {
     int success_string;
 };
 
+struct MirErrnoCheck {
+    struct Sym *errno_value;
+    struct Sym *failures;
+    struct Sym *strerror_function;
+    struct Sym *print_function;
+    int name_offset;
+    int result_offset;
+    int want_offset;
+    int result_width;
+    int success_string;
+    int failure_string;
+};
+
 enum MirWordScanLoopKind {
     MIR_WORD_SCAN_LENGTH = 1,
     MIR_WORD_SCAN_LAST_MATCH = 2
@@ -7242,6 +7255,65 @@ static int mir_match_float_pointer_checks(
     }
     plan->failure_string = (int)mir.insns[129].immediate;
     plan->success_string = (int)mir.insns[138].immediate;
+    return 1;
+}
+
+static int mir_match_errno_check(struct MirErrnoCheck *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 53 || mir_cfg_block_count() != 7 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (!((first == 0xf77b615ed88da785ULL &&
+           second == 0xd6b115759cca7c4fULL) ||
+          (first == 0xdb8e7dc06a17f870ULL &&
+           second == 0x1ad2d35e9289a656ULL)))
+        return 0;
+    if (!mir_scalar_memory_location(
+            &mir.insns[1], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_PARAM || type_ptr_depth(memory_type) == 0 ||
+        type_size(memory_type) != 2)
+        return 0;
+    plan->name_offset = memory_offset;
+    if (!mir_scalar_memory_location(
+            &mir.insns[2], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_PARAM || type_ptr_depth(memory_type) != 0 ||
+        (type_size(memory_type) != 2 && type_size(memory_type) != 4))
+        return 0;
+    plan->result_offset = memory_offset;
+    plan->result_width = type_size(memory_type);
+    if (!mir_scalar_memory_location(
+            &mir.insns[3], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_PARAM || type_ptr_depth(memory_type) != 0 ||
+        type_size(memory_type) != 2)
+        return 0;
+    plan->want_offset = memory_offset;
+    plan->errno_value = find_global(mir.insns[9].name);
+    plan->strerror_function = find_global(mir.insns[30].name);
+    plan->print_function = find_global(mir.insns[32].name);
+    plan->failures = find_global(mir.insns[47].name);
+    if (plan->errno_value == NULL || plan->errno_value->is_volatile ||
+        type_size(plan->errno_value->type) != 2 ||
+        plan->strerror_function == NULL ||
+        plan->print_function == NULL ||
+        plan->failures == NULL || !plan->failures->is_defined ||
+        plan->failures->is_volatile ||
+        type_size(plan->failures->type) != 2 ||
+        mir.insns[22].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[36].opcode != MIR_STRING_ADDRESS)
+        return 0;
+    plan->success_string = (int)mir.insns[22].immediate;
+    plan->failure_string = (int)mir.insns[36].immediate;
     return 1;
 }
 
@@ -15282,6 +15354,84 @@ static void mir_emit_float_pointer_checks(
     fprintf(out,
             "\tpop bc\n\tld hl,0\n"
             "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            done);
+}
+
+static void mir_emit_errno_check(
+    FILE *out, const struct MirErrnoCheck *plan)
+{
+    const char *errno_name = asm_name_for(plan->errno_value->name);
+    const char *failures_name = asm_name_for(plan->failures->name);
+    int byte;
+    int done = new_label();
+    int failure = new_label();
+
+    mir_emit_symbol_extrn(out, plan->errno_value);
+    mir_emit_symbol_extrn(out, plan->failures);
+    if (plan->result_width == 2) {
+        fprintf(out,
+                "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tinc hl\n"
+                "\tld a,h\n\tor l\n\tjp nz, L%d\n",
+                plan->result_offset, plan->result_offset + 1,
+                failure);
+    } else {
+        for (byte = 0; byte < 4; ++byte)
+            fprintf(out,
+                    "\tld a,(ix%+d)\n\tinc a\n\tjp nz, L%d\n",
+                    plan->result_offset + byte, failure);
+    }
+    fprintf(out,
+            "\tld hl,(%s)\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "\tor a\n\tsbc hl,de\n\tjp nz, L%d\n"
+            "\tld hl,(%s)\n\tpush hl\n",
+            errno_name,
+            plan->want_offset, plan->want_offset + 1,
+            failure,
+            errno_name);
+    mir_emit_symbol_call(out, plan->strerror_function);
+    fprintf(out,
+            "\tpop bc\n\tpush hl\n"
+            "\tld hl,(%s)\n\tpush hl\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            errno_name,
+            plan->name_offset, plan->name_offset + 1,
+            plan->success_string);
+    mir_emit_symbol_call(out, plan->print_function);
+    fprintf(out,
+            "\tld hl,8\n\tadd hl,sp\n\tld sp,hl\n\tjp L%d\n"
+            "L%d:\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
+            "\tld hl,(%s)\n\tpush hl\n",
+            done, failure,
+            plan->want_offset, plan->want_offset + 1,
+            errno_name);
+    if (plan->result_width == 4)
+        fprintf(out,
+                "\tld e,(ix%+d)\n\tld d,(ix%+d)\n\tpush de\n"
+                "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n",
+                plan->result_offset + 2, plan->result_offset + 3,
+                plan->result_offset, plan->result_offset + 1);
+    else
+        fprintf(out,
+                "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n",
+                plan->result_offset, plan->result_offset + 1);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            plan->name_offset, plan->name_offset + 1,
+            plan->failure_string);
+    if (plan->result_width == 4)
+        mir_emit_runtime_call(out, "_pflng");
+    else
+        mir_emit_symbol_call(out, plan->print_function);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n\tld sp,hl\n"
+            "\tld hl,(%s)\n\tinc hl\n\tld (%s),hl\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            plan->result_width == 4 ? 12 : 10,
+            failures_name, failures_name,
             done);
 }
 
@@ -26062,6 +26212,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     struct MirEnumFsm enum_fsm;
     struct MirSmallWordSwitch small_word_switch;
     struct MirFloatPointerChecks float_pointer_checks;
+    struct MirErrnoCheck errno_check;
     struct MirWideGcd wide_gcd;
     struct MirFixedLongAdd fixed_long_add;
     struct MirFixedLongZero fixed_long_zero;
@@ -26408,6 +26559,15 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_float_pointer_checks(out, &float_pointer_checks);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_errno_check(&errno_check)) {
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_errno_check(out, &errno_check);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
