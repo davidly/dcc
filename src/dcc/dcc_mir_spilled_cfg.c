@@ -2707,8 +2707,11 @@ void mir_emit_mul_hl_const(FILE *out, unsigned long multiplier)
 }
 
 static int mir_address_is_single_call_argument(int value);
+static int mir_value_is_single_call_argument(int value, int size);
 static int mir_load_is_single_indirect_call_target(int value, int size);
 static int mir_global_load_is_single_call_argument(int value, int size);
+static int mir_widened_param_is_single_call_argument(
+    int value, int *offset_out, int *source_type_out);
 static int mir_stable_pointer_argument_address(
     int value, const struct MirInsn **root_out, int *storage_out,
     long *member_offset_out);
@@ -2749,6 +2752,24 @@ static int mir_emit_rematerialized_argument(FILE *out, int value, int size)
 {
     const struct MirInsn *definition = mir_definition(value);
     unsigned long bits;
+
+    if (size == 4) {
+        int offset;
+        int source_type;
+
+        if (mir_widened_param_is_single_call_argument(
+                value, &offset, &source_type)) {
+            fprintf(out,
+                    "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+                    offset, offset + 1);
+            if ((source_type & TYPE_UNSIGNED) != 0)
+                fputs("\tld de,0\n", out);
+            else
+                fputs("\tld a,h\n\trlca\n\tsbc a,a\n"
+                      "\tld d,a\n\tld e,a\n", out);
+            return 1;
+        }
+    }
 
     if (mir_global_load_is_single_call_argument(value, size)) {
         struct Sym *global;
@@ -4092,6 +4113,36 @@ static int mir_value_is_single_call_argument(int value, int size)
      * round trip purely because the call had one argument more than
      * this arbitrary cap allowed. */
     return argument_count == 1;
+}
+
+static int mir_widened_param_is_single_call_argument(
+    int value, int *offset_out, int *source_type_out)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    const struct MirInsn *source;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (definition == NULL || definition->opcode != MIR_UNARY ||
+        definition->immediate != 0 || type_size(definition->type) != 4 ||
+        type_is_float(definition->type) ||
+        !mir_value_is_single_call_argument(value, 4))
+        return 0;
+    source = mir_definition(definition->src1);
+    if (source == NULL || source->opcode != MIR_PARAM ||
+        type_ptr_depth(source->type) != 0 || type_size(source->type) != 2 ||
+        mir_value_use_count(source->dst) != 1 ||
+        !mir_scalar_memory_location(source, &memory_type,
+                                    &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        memory_offset < -128 || memory_offset + 1 > 127)
+        return 0;
+    if (offset_out != NULL)
+        *offset_out = memory_offset;
+    if (source_type_out != NULL)
+        *source_type_out = source->type;
+    return 1;
 }
 
 int mir_load_is_single_call_argument(int value, int size)
@@ -12232,6 +12283,8 @@ static int mir_prepare_backend_slots(void)
                                             value) ||
                                         mir_wide_constant_is_signed_relational_immediate(
                                             value) ||
+                                        mir_widened_param_is_single_call_argument(
+                                            value, NULL, NULL) ||
                                         mir_value_is_wide_narrow_multiply_widen(
                                             value) ||
                                         mir_address_is_rematerializable(value) ||
@@ -27774,6 +27827,9 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
              * instruction, including the operand load, instead of loading
              * src1 into hl only to immediately discard it. */
             if (!mir_value_has_use(insn->dst))
+                break;
+            if (mir_widened_param_is_single_call_argument(
+                    insn->dst, NULL, NULL))
                 break;
             if (mir_forwarded_de_value == insn->dst &&
                 mir_forwarded_de_consumer > i)
