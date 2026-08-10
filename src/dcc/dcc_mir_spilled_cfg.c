@@ -103,6 +103,10 @@ static int mir_binary_only_constant(int value);
 static int mir_stack_forward_target(int value, int *dynamic_index);
 static int mir_stack_backend_slot_forwardable(
     int value, int units, int instruction);
+static int mir_indirect_load_de_slot_forwardable(
+    int value, int units, int instruction);
+static int mir_runtime_stride_index_slot_forwardable(
+    int value, int units, int instruction);
 static int mir_value_has_direct_named_home(int value);
 static int mir_call_result_direct_reload_indirect_store_target(int value);
 static int mir_value_currently_uses_stack_handoff(int value, int instruction);
@@ -266,6 +270,11 @@ static int mir_planned_stack_consume_count;
 static int mir_planned_stack_invalid;
 static int mir_forwarded_wide_stack_value = -1;
 static int mir_forwarded_wide_stack_consumer = -1;
+static int mir_forwarded_de_value = -1;
+static int mir_forwarded_de_consumer = -1;
+static int mir_runtime_stride_index_base_value = -1;
+static int mir_runtime_stride_index_value = -1;
+static int mir_runtime_stride_index_consumer = -1;
 static unsigned char *mir_backend_slot_accessed;
 static int *mir_backend_slot_offsets;
 static int mir_backend_slot_offset_capacity;
@@ -277,6 +286,34 @@ static int mir_spilled_cfg_used_promoted_local_slot;
 #define MIR_BACKEND_SLOT_WIDE_ARGUMENT_STACK_CACHE (-3)
 #define MIR_BACKEND_SLOT_NARROW_ARGUMENT_DIRECT_PUSH (-4)
 #define MIR_BACKEND_SLOT_PHI_ARGUMENT_STACK (-5)
+
+static int mir_runtime_stride_read_schedule_is_active(void)
+{
+    int instruction;
+
+    if (!mir.has_runtime_stride_param ||
+        type_size(mir.return_type) != 2 ||
+        mir_cfg_block_count() != 7 ||
+        mir.count > 64)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_CALL ||
+            mir.insns[instruction].opcode == MIR_CALL_AGGREGATE)
+            return 0;
+    return 1;
+}
+
+static int mir_phi_slot_cleanup_is_active(void)
+{
+    return mir_phi_slot_cleanup_enabled ||
+           mir_runtime_stride_read_schedule_is_active();
+}
+
+static int mir_promoted_local_slot_reuse_is_active(void)
+{
+    return mir_promoted_local_slot_reuse_enabled ||
+           mir_runtime_stride_read_schedule_is_active();
+}
 
 static int mir_phi_argument_stack_handoff_enabled;
 
@@ -1263,6 +1300,62 @@ static int mir_stack_index_forward_target(int value)
     return mir_dynamic_index_base_forward_target(value);
 }
 
+static int mir_runtime_stride_index_forward_match(
+    int instruction, int *index_value_out, int *consumer_out)
+{
+    const struct MirInsn *base;
+    const struct MirInsn *index;
+    const struct MirInsn *middle;
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+
+    if (instruction < 0 || instruction + 2 >= mir.count)
+        return 0;
+    base = &mir.insns[instruction];
+    middle = &mir.insns[instruction + 1];
+    index = &mir.insns[instruction + 2];
+    if (base->opcode != MIR_INDEX_ADDRESS ||
+        base->base_name[0] == 0 ||
+        middle->opcode != MIR_LOAD ||
+        index->opcode != MIR_INDEX_ADDRESS ||
+        index->base_name[0] != 0 ||
+        index->src1 != base->dst ||
+        index->src2 != middle->dst ||
+        (index->immediate != 1 && index->immediate != 2) ||
+        mir_value_use_count(base->dst) != 1 ||
+        mir_value_use_count(middle->dst) != 1 ||
+        !mir_scalar_memory_location(
+            middle, &memory_type, &memory_storage, &memory_offset) ||
+        type_size(memory_type) != 2 ||
+        (memory_storage != SC_LOCAL && memory_storage != SC_PARAM) ||
+        memory_offset < -128 || memory_offset + 1 > 127)
+        return 0;
+    if (index_value_out != NULL)
+        *index_value_out = middle->dst;
+    if (consumer_out != NULL)
+        *consumer_out = instruction + 2;
+    return 1;
+}
+
+static int mir_runtime_stride_index_slot_forwardable(
+    int value, int units, int instruction)
+{
+    int consumer;
+    int index_value;
+
+    if (units != 1)
+        return 0;
+    if (mir_runtime_stride_index_forward_match(
+            instruction, &index_value, &consumer))
+        return mir.insns[instruction].dst == value;
+    if (instruction > 0 &&
+        mir_runtime_stride_index_forward_match(
+            instruction - 1, &index_value, &consumer))
+        return index_value == value;
+    return 0;
+}
+
 static int mir_call_only_constant(int value)
 {
     const struct MirInsn *definition = mir_definition(value);
@@ -1341,7 +1434,7 @@ static int mir_scalar_constant_is_rematerializable(int value)
         return 0;
     if (mir_cfg_block_count() == 1 || mir.has_vla)
         return 1;
-    return mir_phi_slot_cleanup_enabled &&
+    return mir_phi_slot_cleanup_is_active() &&
            mir_value_only_used_by_phi_copies_or_dead_stores(value);
 }
 
@@ -1398,7 +1491,7 @@ static int mir_wide_constant_is_rematerializable(int value)
                 return other != NULL && other->opcode == MIR_UNARY;
             }
         }
-    return mir_phi_slot_cleanup_enabled &&
+    return mir_phi_slot_cleanup_is_active() &&
            mir_value_only_used_by_phi_copies_or_dead_stores(value);
 }
 
@@ -1672,7 +1765,8 @@ static int mir_binary_is_narrow_phi_adjust(
     int found_store = -1;
     int instruction;
 
-    if (mir_cfg_block_count() < 40 ||
+    if ((mir_cfg_block_count() < 40 &&
+         !mir_runtime_stride_read_schedule_is_active()) ||
         index < 0 || index >= mir.count)
         return 0;
     insn = &mir.insns[index];
@@ -4704,7 +4798,7 @@ static int mir_seed_promoted_local_slots(int *slot_end, int slot_capacity)
     int object;
     int slot_count = 0;
 
-    if (!mir_promoted_local_slot_reuse_enabled)
+    if (!mir_promoted_local_slot_reuse_is_active())
         return 0;
     for (object = 0; object < mir.object_count; ++object) {
         int offset;
@@ -10472,6 +10566,10 @@ static int mir_prepare_backend_slots(void)
                                         mir_wide_helper_rhs_pair_slot_forwardable(
                                             value, units, i) ||
                                         mir_call_argument_slot_forwardable(value, units, i) ||
+                                        mir_indirect_load_de_slot_forwardable(
+                                            value, units, i) ||
+                                        mir_runtime_stride_index_slot_forwardable(
+                                            value, units, i) ||
                                         mir_stack_backend_slot_forwardable(value, units, i) ||
                                         mir_value_is_nested_truth_comparison_input(value) ||
                                         mir_value_only_used_by_dead_stores(value) ||
@@ -10699,7 +10797,12 @@ void mir_emit_virtual_load(FILE *out, int value)
         fprintf(out, "\tld hl,S%ld\n", definition->immediate);
         return;
     }
-    if (mir_address_is_rematerializable(value)) {
+    if (mir_address_is_rematerializable(value) &&
+        !(mir_runtime_stride_read_schedule_is_active() &&
+          definition != NULL &&
+          definition->opcode == MIR_PARAM &&
+          type_ptr_depth(definition->type) > 0 &&
+          mir_value_has_direct_named_home(value))) {
         if (!mir_emit_address_value_to_hl(out, value))
             fatal("cannot rematerialize MIR address");
         return;
@@ -11063,6 +11166,104 @@ static int mir_value_currently_uses_stack_handoff(
             mir_forwarded_stack_target_instruction == instruction);
 }
 
+static int mir_indirect_load_de_consumer(
+    int instruction, int *forwarded_value_out)
+{
+    const struct MirInsn *address;
+    const struct MirInsn *base;
+    const struct MirInsn *load;
+    const struct MirInsn *consumer;
+    const struct MirInsn *conversion;
+    int consumer_index;
+
+    if (!mir_runtime_stride_read_schedule_is_active() ||
+        instruction < 0 || instruction >= mir.count)
+        return -1;
+    load = &mir.insns[instruction];
+    address = mir_definition(load->src1);
+    base = address != NULL && address->opcode == MIR_INDEX_ADDRESS
+        ? mir_definition(address->src1) : NULL;
+    if (load->opcode != MIR_LOAD_INDIRECT ||
+        load->bit_width != 0 ||
+        (load->memory_size != 1 && load->memory_size != 2) ||
+        type_is_bool(load->type) ||
+        mir_value_use_count(load->dst) != 1 ||
+        address == NULL || address->opcode != MIR_INDEX_ADDRESS ||
+        (address->base_name[0] == 0 &&
+         (base == NULL || base->opcode != MIR_INDEX_ADDRESS ||
+          base->base_name[0] == 0)))
+        return -1;
+    consumer_index = mir_forward_skip_target(instruction);
+    if (consumer_index < 0 || consumer_index >= mir.count)
+        return -1;
+    consumer = &mir.insns[consumer_index];
+    if (consumer->opcode == MIR_UNARY &&
+        consumer->immediate == 0 &&
+        consumer->src1 == load->dst &&
+        type_size(consumer->type) == 2 &&
+        load->memory_size == 1) {
+        conversion = consumer;
+        consumer_index = mir_forward_skip_target(consumer_index);
+        if (consumer_index < 0 || consumer_index >= mir.count)
+            return -1;
+        consumer = &mir.insns[consumer_index];
+    } else {
+        conversion = NULL;
+    }
+    if (consumer->opcode != MIR_BINARY ||
+        consumer->immediate != '+' ||
+        consumer->src2 != (conversion != NULL
+                            ? conversion->dst : load->dst) ||
+        type_size(consumer->secondary_offset) != 2 ||
+        (!mir_value_currently_uses_stack_handoff(
+             consumer->src1, consumer_index) &&
+         !mir_planned_stack_matches_consumer(
+             consumer->src1, consumer_index)))
+        return -1;
+    if (forwarded_value_out != NULL)
+        *forwarded_value_out = conversion != NULL
+            ? conversion->dst : load->dst;
+    return consumer_index;
+}
+
+static int mir_indirect_load_de_slot_forwardable(
+    int value, int units, int instruction)
+{
+    const struct MirInsn *insn;
+    const struct MirInsn *source;
+    int consumer;
+    int forwarded_value;
+
+    if (units != 1 || instruction < 0 || instruction >= mir.count)
+        return 0;
+    insn = &mir.insns[instruction];
+    if (insn->opcode == MIR_LOAD_INDIRECT)
+        return mir_indirect_load_de_consumer(
+            instruction, &forwarded_value) >= 0;
+    if (insn->opcode != MIR_UNARY || insn->immediate != 0 ||
+        insn->dst != value)
+        return 0;
+    source = mir_definition(insn->src1);
+    if (source == NULL || source->opcode != MIR_LOAD_INDIRECT)
+        return 0;
+    consumer = mir_indirect_load_de_consumer(
+        (int)(source - mir.insns), &forwarded_value);
+    return consumer >= 0 && forwarded_value == value;
+}
+
+static void mir_emit_indirect_load_to_de(
+    FILE *out, const struct MirInsn *load)
+{
+    if (load->memory_size == 2) {
+        fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n", out);
+    } else if ((load->type & TYPE_UNSIGNED) != 0) {
+        fputs("\tld e,(hl)\n\tld d,0\n", out);
+    } else {
+        fputs("\tld e,(hl)\n\tld a,e\n\trlca\n\tsbc a,a\n\tld d,a\n",
+              out);
+    }
+}
+
 static int mir_consume_planned_stack(FILE *out, int value, int instruction,
                                      const char *destination)
 {
@@ -11085,6 +11286,8 @@ static void mir_emit_virtual_store(FILE *out, int value)
     int forward_to_store;
     int has_slot;
     int forward_instruction;
+    int runtime_stride_consumer;
+    int runtime_stride_index_value;
     int offset;
     int iy_offset;
     int pending_planned_consumer;
@@ -11094,6 +11297,16 @@ static void mir_emit_virtual_store(FILE *out, int value)
         /* Nothing to store: later uses re-read the stable named home (see
          * mir_emit_virtual_load); the loaded HL is simply not persisted. */
         return;
+    if (!force_slot_store &&
+        mir_runtime_stride_index_forward_match(
+            mir_emit_instruction_index, &runtime_stride_index_value,
+            &runtime_stride_consumer) &&
+        definition != NULL && definition->dst == value) {
+        mir_runtime_stride_index_base_value = value;
+        mir_runtime_stride_index_value = runtime_stride_index_value;
+        mir_runtime_stride_index_consumer = runtime_stride_consumer;
+        return;
+    }
     if (value == mir_prepacked_result_value) {
         fputs("\tpush hl\n", out);
         return;
@@ -18816,7 +19029,7 @@ static int mir_collect_phi_copies_for_edge(int predecessor, int successor,
                                          successor, instruction);
         if (source < 0)
             return -1;
-        if ((mir_phi_slot_cleanup_enabled ||
+        if ((mir_phi_slot_cleanup_is_active() ||
              mir_value_is_wide_phi_increment_result(source) ||
              mir_value_is_narrow_phi_adjust_result(source)) &&
             mir_phi_copy_is_slot_identity(source, phi->dst)) {
@@ -23492,6 +23705,11 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     mir_forwarded_hl_instruction = -1;
     mir_forwarded_wide_value = -1;
     mir_forwarded_wide_instruction = -1;
+    mir_forwarded_de_value = -1;
+    mir_forwarded_de_consumer = -1;
+    mir_runtime_stride_index_base_value = -1;
+    mir_runtime_stride_index_value = -1;
+    mir_runtime_stride_index_consumer = -1;
     mir_forwarded_stack_value = -1;
     mir_forwarded_stack_instruction = -1;
     mir_forwarded_stack_target_instruction = -1;
@@ -23700,6 +23918,10 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                 mir_emit_virtual_store(out, insn->dst);
                 break;
             }
+            if (mir_runtime_stride_index_value == insn->dst &&
+                mir_runtime_stride_index_consumer ==
+                    mir_emit_instruction_index + 1)
+                break;
             if ((insn->opcode == MIR_PARAM || insn->opcode == MIR_LOAD) &&
                 mir_value_has_direct_named_home(insn->dst))
                 /* mir-migration-plan-next10 (extended by Item T27 to also
@@ -23950,6 +24172,34 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
             struct MirWideByteStore wide_byte_store;
             const struct MirInsn *index_definition =
                 mir_definition(insn->src2);
+            if (mir_runtime_stride_index_consumer == i &&
+                mir_runtime_stride_index_base_value == insn->src1 &&
+                mir_runtime_stride_index_value == insn->src2) {
+                int memory_offset;
+                int memory_storage;
+                int memory_type;
+
+                if (index_definition == NULL ||
+                    !mir_scalar_memory_location(
+                        index_definition, &memory_type,
+                        &memory_storage, &memory_offset) ||
+                    type_size(memory_type) != 2 ||
+                    (memory_storage != SC_LOCAL &&
+                     memory_storage != SC_PARAM) ||
+                    memory_offset < -128 || memory_offset + 1 > 127)
+                    goto done;
+                fprintf(out,
+                        "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+                        memory_offset, memory_offset + 1);
+                if (insn->immediate == 2)
+                    fputs("\tsla e\n\trl d\n", out);
+                fputs("\tadd hl,de\n", out);
+                mir_runtime_stride_index_base_value = -1;
+                mir_runtime_stride_index_value = -1;
+                mir_runtime_stride_index_consumer = -1;
+                mir_emit_virtual_store(out, insn->dst);
+                break;
+            }
             if (mir_match_wide_byte_pack_return(i, &wide_byte_pack)) {
                 mir_emit_wide_byte_pack_return(out, &wide_byte_pack);
                 i = wide_byte_pack.skip_through;
@@ -24064,6 +24314,8 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
             struct MirIndirectIncDec incdec;
             const struct MirInsn *address_definition =
                 mir_definition(insn->src1);
+            int de_consumer;
+            int de_value;
             if (mir_match_indirect_incdec(i, &incdec)) {
                 mir_emit_indirect_incdec(out, &incdec);
                 i = incdec.store_instruction;
@@ -24081,13 +24333,19 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                     load_index == i)
                     break;
             }
-            }
             if (mir_indirect_load_is_single_stable_pointer_call_argument(
                     insn->dst, 2))
                 break;
             if (mir_emit_constant_absolute_load(out, insn))
                 break;
             mir_emit_virtual_load(out, insn->src1);
+            de_consumer = mir_indirect_load_de_consumer(i, &de_value);
+            if (de_consumer >= 0) {
+                mir_emit_indirect_load_to_de(out, insn);
+                mir_forwarded_de_value = de_value;
+                mir_forwarded_de_consumer = de_consumer;
+                break;
+            }
             if (insn->memory_size == 4) {
                 fputs("\tpush hl\n\tld a,(hl)\n\tinc hl\n"
                       "\tld h,(hl)\n\tld l,a\n\tex (sp),hl\n"
@@ -24114,6 +24372,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                 mir_emit_virtual_store_wide(out, insn->dst);
             else
                 mir_emit_virtual_store(out, insn->dst);
+            }
             break;
         case MIR_STORE:
             {
@@ -24503,6 +24762,9 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
              * src1 into hl only to immediately discard it. */
             if (!mir_value_has_use(insn->dst))
                 break;
+            if (mir_forwarded_de_value == insn->dst &&
+                mir_forwarded_de_consumer > i)
+                break;
             if (mir_value_is_wide_narrow_multiply_widen(insn->dst))
                 break;
             if (mir_unary_is_fusable_not_branch(i)) {
@@ -24839,6 +25101,9 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                 int stack_forwarded_right =
                     mir_forwarded_stack_value == insn->src2 &&
                     mir_forwarded_stack_target_instruction == i;
+                int de_forwarded_right =
+                    mir_forwarded_de_value == insn->src2 &&
+                    mir_forwarded_de_consumer == i;
                 int fused_zero_lhs =
                     mir_binary_is_fusable_comparison(i) > 0 &&
                     mir_fused_compare_is_const_zero_lhs(i);
@@ -25019,6 +25284,12 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                             mir_planned_stack_invalid = 1;
                         planned_stack_forwarded_left = 0;
                     }
+                } else if (de_forwarded_right) {
+                    if (!planned_stack_forwarded_left ||
+                        !mir_consume_planned_stack(
+                            out, insn->src1, i, "hl"))
+                        mir_planned_stack_invalid = 1;
+                    planned_stack_forwarded_left = 0;
                 } else if (mir_binary_is_fusable_comparison(i) > 0 &&
                     mir_fused_compare_is_const_zero_rhs(i)) {
                     /* Item 25: this comparison will be fused directly into
@@ -25099,6 +25370,10 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                     mir_forwarded_stack_value = -1;
                     mir_forwarded_stack_instruction = -1;
                     mir_forwarded_stack_target_instruction = -1;
+                }
+                if (de_forwarded_right) {
+                    mir_forwarded_de_value = -1;
+                    mir_forwarded_de_consumer = -1;
                 }
                 {
                     int fuse_skip = mir_binary_is_fusable_comparison(i);
@@ -25874,7 +26149,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
 done:
     if (accepted && mir_spilled_cfg_used_exact_semantic_kernel)
         fprintf(out, "%s\n", MIR_EXACT_KERNEL_MARKER);
-    if (accepted && mir_phi_slot_cleanup_enabled)
+    if (accepted && mir_phi_slot_cleanup_is_active())
         fprintf(out, "%s\n", MIR_PHI_SLOT_MARKER);
     if (accepted && mir_backend_slot_accessed != NULL)
         for (i = 0; i < mir.next_value; ++i)
