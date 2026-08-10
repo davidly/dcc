@@ -952,6 +952,13 @@ static int mir_can_forward_hl_to_next(int value)
      * mir_forward_skip_target already looked straight through it. */
     if (skipped_label && next->opcode != MIR_RETURN)
         return 0;
+    if (next->opcode == MIR_LOAD_INDIRECT) {
+        struct MirIndirectIncDec incdec;
+
+        if (mir_match_indirect_incdec(next_instruction, &incdec) &&
+            incdec.address_value == value)
+            return mir_forward_note_success();
+    }
     /* MIR_RETURN may be reached via a non-adjacent skip (see
      * mir_forward_skip_target above), so the forwarded value's home must
      * still be live at that point. VLA frames can reuse/shrink stack space
@@ -9767,7 +9774,8 @@ static int mir_match_indirect_incdec(
         (binary->immediate != '+' && binary->immediate != '-') ||
         binary->src1 != load->dst ||
         binary->src2 != constant->dst ||
-        type_size(binary->secondary_offset) != load->memory_size ||
+        (binary->secondary_offset != 0 &&
+         type_size(binary->secondary_offset) != load->memory_size) ||
         store->opcode != MIR_STORE_INDIRECT ||
         store->src1 != load->src1 ||
         store->src2 != binary->dst ||
@@ -9804,6 +9812,14 @@ static int mir_match_indirect_incdec(
                    use->src1 == binary->dst)))
                 return 0;
         }
+        if (use->src1 == load->src1 || use->src2 == load->src1 ||
+            mir_call_uses_value(use, load->src1)) {
+            if (!((scan == instruction &&
+                   use->src1 == load->src1) ||
+                  (scan == instruction + 3 &&
+                   use->src1 == load->src1)))
+                return 0;
+        }
     }
     plan->load_instruction = instruction;
     plan->constant_instruction = instruction + 1;
@@ -9834,8 +9850,7 @@ static void mir_emit_indirect_incdec(
     FILE *out, const struct MirIndirectIncDec *plan)
 {
     mir_spilled_cfg_used_indirect_incdec = 1;
-    if (!mir_emit_address_value_to_hl(out, plan->address_value))
-        mir_emit_virtual_load(out, plan->address_value);
+    mir_emit_virtual_load(out, plan->address_value);
     fputs("\tpush hl\n", out);
     if (plan->memory_size == 1) {
         fputs("\tld l,(hl)\n", out);
@@ -9847,7 +9862,8 @@ static void mir_emit_indirect_incdec(
     if (!plan->returns_adjusted)
         fputs("\tpush hl\n", out);
     fputs(plan->decrement ? "\tdec hl\n" : "\tinc hl\n", out);
-    mir_emit_indirect_incdec_normalize(out, plan->type);
+    if (plan->returns_adjusted)
+        mir_emit_indirect_incdec_normalize(out, plan->type);
     fputs("\tex de,hl\n", out);
     if (!plan->returns_adjusted)
         fputs("\tpop hl\n\tex (sp),hl\n", out);
@@ -10027,6 +10043,7 @@ static int mir_prepare_backend_slots(void)
         fused_away[incdec.old_value] = 2;
         fused_away[mir.insns[incdec.constant_instruction].dst] = 2;
         fused_away[incdec.adjusted_value] = 2;
+        fused_away[incdec.address_value] = 2;
     }
     for (value = 0; value < mir.next_value; ++value) {
         first[value] = mir.count;
