@@ -681,13 +681,25 @@ function Invoke-ProcessWithTimeout {
         if (-not $process.Start()) { throw "failed to start $FilePath" }
         $stdoutTask = $process.StandardOutput.ReadToEndAsync()
         $stderrTask = $process.StandardError.ReadToEndAsync()
-        if ($StandardInput) {
-            $process.StandardInput.Write($StandardInput)
-            if (-not $StandardInput.EndsWith("`n")) {
-                $process.StandardInput.Write("`n")
+        try {
+            if ($StandardInput) {
+                $process.StandardInput.Write($StandardInput)
+                if (-not $StandardInput.EndsWith("`n")) {
+                    $process.StandardInput.Write("`n")
+                }
             }
+            $process.StandardInput.Close()
         }
-        $process.StandardInput.Close()
+        catch {
+            $inputException = $_.Exception
+            if ($inputException -isnot [System.IO.IOException] -and
+                $inputException.InnerException -isnot [System.IO.IOException]) {
+                throw
+            }
+            # The child closed stdin first. Its exit code and captured output
+            # below still determine whether the run succeeded.
+            try { $process.StandardInput.Dispose() } catch { }
+        }
         $timedOut = $TimeoutSeconds -gt 0 -and
             -not $process.WaitForExit($TimeoutSeconds * 1000)
         if ($timedOut) {
