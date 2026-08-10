@@ -26946,8 +26946,13 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                     mir_emit_virtual_store(out, insn->dst);
             } else {
                 int divmod_partner = mir_divmod_partner(i);
+                const struct MirInsn *left_definition =
+                    mir_definition(insn->src1);
                 const struct MirInsn *right_definition =
                     mir_definition(insn->src2);
+                unsigned long left_multiplier = left_definition != NULL
+                    ? (unsigned long)left_definition->immediate & 0xffffUL
+                    : 0;
                 unsigned long multiplier = right_definition != NULL
                     ? (unsigned long)right_definition->immediate & 0xffffUL
                     : 0;
@@ -27017,6 +27022,22 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                     ++mir_fuse_report_fused_count;
                     ++i;
                     continue;
+                }
+                if (insn->immediate == '*' &&
+                    mir_cfg_block_count() == 1 &&
+                    mir.count == 6 &&
+                    left_definition != NULL &&
+                    left_definition->opcode == MIR_CONST &&
+                    mir_mul_const_fast_path_eligible(
+                        left_multiplier, insn->dst) &&
+                    !stack_forwarded_left &&
+                    !planned_stack_forwarded_left &&
+                    !stack_forwarded_right &&
+                    !de_forwarded_right) {
+                    mir_emit_virtual_load(out, insn->src2);
+                    mir_emit_mul_hl_const(out, left_multiplier);
+                    mir_emit_virtual_store(out, insn->dst);
+                    break;
                 }
                 if (fused_zero_lhs) {
                     const struct MirInsn *zero_lhs_right =
