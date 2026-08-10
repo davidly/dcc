@@ -123,6 +123,19 @@ def parse_args() -> argparse.Namespace:
         "up to core count). Use -j1 for strictly sequential, deterministic "
         "progress-line ordering (e.g. when diagnosing a single hang).",
     )
+    parser.add_argument(
+        "--bloat-threshold",
+        type=float,
+        metavar="PERCENT",
+        help="rank accepted MIR functions whose generated assembly exceeds "
+        "captured legacy assembly by more than this percentage",
+    )
+    parser.add_argument(
+        "--bloat-limit",
+        type=int,
+        default=40,
+        help="maximum bloat rows to print; 0 prints every row (default: 40)",
+    )
     return parser.parse_args()
 
 
@@ -270,6 +283,50 @@ def print_summary(rows: list[dict[str, str]]) -> None:
     print(f"\nCoverage: {emitted}/{len(rows)} functions ({percent:.2f}%)")
 
 
+def print_bloat_report(
+    rows: list[dict[str, str]], threshold: float, limit: int
+) -> None:
+    ranked: list[tuple[float, dict[str, str]]] = []
+    for row in rows:
+        if row["result"] != "mir":
+            continue
+        generated = int(row["generated_bytes"])
+        captured = int(row["captured_bytes"])
+        if captured <= 0:
+            continue
+        growth = (generated - captured) * 100.0 / captured
+        if growth > threshold:
+            ranked.append((growth, row))
+    ranked.sort(
+        key=lambda item: (
+            -item[0],
+            item[1]["app"],
+            item[1]["function"],
+        )
+    )
+    selectors = collections.Counter(row["selector"] for _, row in ranked)
+    apps = {row["app"] for _, row in ranked}
+    print(f"\nAccepted MIR bloat > {threshold:g}%")
+    print(f"  functions: {len(ranked)}")
+    print(f"  apps: {len(apps)}")
+    for selector, count in selectors.most_common():
+        print(f"  {count:5d}  {selector}")
+    if not ranked:
+        return
+    print(
+        "\n"
+        f"{'app':16s} {'function':32s} {'selector':27s} "
+        f"{'generated':>9s} {'captured':>9s} {'growth':>9s}"
+    )
+    visible = ranked if limit == 0 else ranked[: max(limit, 0)]
+    for growth, row in visible:
+        print(
+            f"{row['app']:16s} {row['function'][:32]:32s} "
+            f"{row['selector']:27s} {int(row['generated_bytes']):9d} "
+            f"{int(row['captured_bytes']):9d} {growth:8.1f}%"
+        )
+
+
 def compare_rows(
     old: dict[tuple[str, str], dict[str, str]],
     new: dict[tuple[str, str], dict[str, str]],
@@ -414,6 +471,8 @@ def main() -> int:
         write_matrix_rows(matrix_path, matrix_rows)
         print(f"Wrote {matrix_path} ({len(matrix_rows)} candidates)")
     print_summary(rows)
+    if args.bloat_threshold is not None:
+        print_bloat_report(rows, args.bloat_threshold, args.bloat_limit)
 
     regressions = 0
     if args.compare:
