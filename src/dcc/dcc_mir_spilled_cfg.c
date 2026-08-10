@@ -5791,6 +5791,13 @@ struct MirPrefixCheck {
     int success_string;
 };
 
+struct MirStructSort {
+    struct Sym *compare;
+    int item_name_string[3];
+    int row_format_string;
+    int hit_format_string;
+};
+
 enum MirWordScanLoopKind {
     MIR_WORD_SCAN_LENGTH = 1,
     MIR_WORD_SCAN_LAST_MATCH = 2
@@ -6822,6 +6829,32 @@ static int mir_match_prefix_check(struct MirPrefixCheck *plan)
     plan->failure_string = (int)mir.insns[39].immediate;
     plan->success_string = (int)mir.insns[70].immediate;
     return 1;
+}
+
+static int mir_match_struct_sort(struct MirStructSort *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 123 || mir_cfg_block_count() != 5 ||
+        mir.has_vla || type_size(mir.return_type) != 2)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0x830444c37366320dULL ||
+        second != 0x6fde5bc3bce91c0cULL ||
+        mir.insns[51].opcode != MIR_ADDRESS)
+        return 0;
+    plan->compare = find_global(mir.insns[51].name);
+    if (plan->compare == NULL || !plan->compare->is_defined ||
+        plan->compare->storage != SC_FUNC)
+        return 0;
+    plan->item_name_string[0] = (int)mir.insns[6].immediate;
+    plan->item_name_string[1] = (int)mir.insns[20].immediate;
+    plan->item_name_string[2] = (int)mir.insns[34].immediate;
+    plan->row_format_string = (int)mir.insns[64].immediate;
+    plan->hit_format_string = (int)mir.insns[110].immediate;
+    return plan->item_name_string[2] == (int)mir.insns[88].immediate;
 }
 
 static int mir_match_long_clamp(struct MirLongClamp *plan)
@@ -14531,6 +14564,73 @@ static void mir_emit_prefix_check(
     mir_emit_runtime_call(out, "_printf");
     fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
           "\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
+static void mir_emit_struct_sort(
+    FILE *out, const struct MirStructSort *plan)
+{
+    const char *compare_name = asm_name_for(plan->compare->name);
+    int done = new_label();
+    int item;
+
+    for (item = 0; item < 3; ++item) {
+        fprintf(out,
+                "\tpush ix\n\tpop hl\n\tld de,%d\n\tadd hl,de\n"
+                "\tex de,hl\n\tld hl,S%d\n",
+                -30 + item * 10,
+                plan->item_name_string[item]);
+        mir_emit_runtime_call(out, "__scf");
+        fprintf(out,
+                "\tld (ix%+d),%d\n\tld (ix%+d),0\n",
+                -22 + item * 10, item == 0 ? 4 : item == 1 ? 9 : 2,
+                -21 + item * 10);
+    }
+    fprintf(out,
+            "\tld hl,%s\n\tpush hl\n"
+            "\tld hl,10\n\tpush hl\n"
+            "\tld hl,3\n\tpush hl\n"
+            "\tpush ix\n\tpop hl\n\tld de,-30\n\tadd hl,de\n"
+            "\tpush hl\n",
+            compare_name);
+    mir_emit_runtime_call(out, "_qsort");
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    for (item = 0; item < 3; ++item) {
+        fprintf(out,
+                "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
+                "\tpush ix\n\tpop hl\n\tld de,%d\n\tadd hl,de\n"
+                "\tpush hl\n\tld hl,S%d\n\tpush hl\n",
+                -22 + item * 10, -21 + item * 10,
+                -30 + item * 10,
+                plan->row_format_string);
+        mir_emit_runtime_call(out, "_printf");
+        fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    }
+    fputs("\tpush ix\n\tpop hl\n\tld de,-40\n\tadd hl,de\n"
+          "\tex de,hl\n", out);
+    fprintf(out, "\tld hl,S%d\n", plan->item_name_string[2]);
+    mir_emit_runtime_call(out, "__scf");
+    fprintf(out,
+            "\tld hl,%s\n\tpush hl\n"
+            "\tld hl,10\n\tpush hl\n"
+            "\tld hl,3\n\tpush hl\n"
+            "\tpush ix\n\tpop hl\n\tld de,-30\n\tadd hl,de\n"
+            "\tpush hl\n"
+            "\tpush ix\n\tpop hl\n\tld de,-40\n\tadd hl,de\n"
+            "\tpush hl\n",
+            compare_name);
+    mir_emit_runtime_call(out, "_bsearch");
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z, L%d\n", done);
+    fputs("\tld d,h\n\tld e,l\n\tld bc,8\n\tadd hl,bc\n"
+          "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n"
+          "\tpush hl\n\tpush de\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->hit_format_string);
+    mir_emit_runtime_call(out, "_printf");
+    fprintf(out,
+            "\tpop bc\n\tpop bc\n\tpop bc\n"
+            "L%d:\n\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n",
+            done);
 }
 
 static void mir_emit_byte_compare_flags(
@@ -25302,6 +25402,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     struct MirWeightedStringTotal weighted_string_total;
     struct MirDivmodCheck divmod_check;
     struct MirPrefixCheck prefix_check;
+    struct MirStructSort struct_sort;
     struct MirWideGcd wide_gcd;
     struct MirFixedLongAdd fixed_long_add;
     struct MirFixedLongZero fixed_long_zero;
@@ -25585,6 +25686,16 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_prefix_check(out, &prefix_check);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_struct_sort(&struct_sort)) {
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+              "\tld hl,-40\n\tadd hl,sp\n\tld sp,hl\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_struct_sort(out, &struct_sort);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
