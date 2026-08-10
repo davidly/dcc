@@ -1547,6 +1547,17 @@ static int mir_value_requires_odd_call_cleanup_slot(int value)
            mir_call_has_odd_argument_bytes(definition);
 }
 
+static int mir_spilled_cfg_has_call(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_CALL ||
+            mir.insns[instruction].opcode == MIR_CALL_AGGREGATE)
+            return 1;
+    return 0;
+}
+
 static int mir_wide_constant_is_signed_relational_immediate(int value)
 {
     const struct MirInsn *definition = mir_definition(value);
@@ -1554,9 +1565,14 @@ static int mir_wide_constant_is_signed_relational_immediate(int value)
     int uses = 0;
 
     if (definition == NULL || definition->opcode != MIR_CONST ||
-        type_size(definition->type) != 4 ||
-        (definition->memory_flags &
-         MIR_MEMORY_FLAG_DEFERRED_WIDE_CONST) == 0)
+        type_size(definition->type) != 4)
+        return 0;
+    if ((definition->memory_flags &
+         MIR_MEMORY_FLAG_DEFERRED_WIDE_CONST) == 0 &&
+        (mir_cfg_block_count() != 2 ||
+         mir_spilled_cfg_has_call() ||
+         mir.local_bytes != 0 ||
+         (mir.return_type & 15) != TYPE_INT))
         return 0;
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *use = &mir.insns[instruction];
