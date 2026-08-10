@@ -1821,6 +1821,8 @@ static int mir_lower_incdec(const struct AstNode *operand, int operation,
 
     if (operand == NULL)
         return -1;
+    if (operand->kind != AST_IDENT)
+        mir.has_indirect_incdec = 1;
     operand_type = operand->type;
     if (operand->kind == AST_IDENT) {
         struct Sym *symbol = operand->sym != NULL
@@ -3079,6 +3081,7 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
     mir.next_label = 0;
     mir.next_call_id = 0;
     mir.next_inline_temp_id = 1;
+    mir.has_indirect_incdec = 0;
     mir_inline_live_temp_mask = 0;
     memset(mir_inline_temp_ids, 0, sizeof(mir_inline_temp_ids));
     mir_inline_expand_depth = 0;
