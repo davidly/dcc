@@ -1564,6 +1564,8 @@ void gen_local_decl_after_type(int base)
             mir_note_declared_alias(source_name, s);
             emit_debug_variable(s);
         }
+        if (narrowed_as_counter)
+            mir_note_narrowed_for_counter();
         g_ptr_array_dim_count = 0;
         g_ptr_array_elem_size = 0;
 

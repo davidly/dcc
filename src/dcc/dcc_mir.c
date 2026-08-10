@@ -3084,6 +3084,7 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
     mir.next_inline_temp_id = 1;
     mir.has_indirect_incdec = 0;
     mir.has_pointer_difference = 0;
+    mir.has_narrowed_for_counter = 0;
     mir_inline_live_temp_mask = 0;
     memset(mir_inline_temp_ids, 0, sizeof(mir_inline_temp_ids));
     mir_inline_expand_depth = 0;
@@ -3240,6 +3241,12 @@ void mir_note_declared_symbol(struct Sym *symbol)
     mir.declared_proto_nargs[i] = symbol->proto_nargs;
     memcpy(mir.declared_proto_types[i], symbol->proto_types,
            sizeof(mir.declared_proto_types[i]));
+}
+
+void mir_note_narrowed_for_counter(void)
+{
+    if (mir.active)
+        mir.has_narrowed_for_counter = 1;
 }
 
 void mir_note_declared_alias(const char *source_name, struct Sym *symbol)

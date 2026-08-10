@@ -32,6 +32,7 @@ void mir_begin_label_replay(const char *name);
 void mir_end_label_replay(void);
 void mir_note_declared_symbol(struct Sym *symbol);
 void mir_note_declared_alias(const char *source_name, struct Sym *symbol);
+void mir_note_narrowed_for_counter(void);
 void mir_end_function(void);
 
 #endif
