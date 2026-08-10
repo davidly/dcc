@@ -5983,6 +5983,14 @@ struct MirErrnoCheck {
     int failure_string;
 };
 
+struct MirCyclicByteFill {
+    struct Sym *buffer;
+    int count;
+    int first_byte;
+    int modulus;
+    int skip_through;
+};
+
 enum MirWordScanLoopKind {
     MIR_WORD_SCAN_LENGTH = 1,
     MIR_WORD_SCAN_LAST_MATCH = 2
@@ -7314,6 +7322,109 @@ static int mir_match_errno_check(struct MirErrnoCheck *plan)
         return 0;
     plan->success_string = (int)mir.insns[22].immediate;
     plan->failure_string = (int)mir.insns[36].immediate;
+    return 1;
+}
+
+static int mir_match_cyclic_byte_fill(
+    int instruction, struct MirCyclicByteFill *plan)
+{
+    const struct MirInsn *load;
+    const struct MirInsn *limit;
+    const struct MirInsn *compare;
+    const struct MirInsn *branch;
+    const struct MirInsn *address;
+    const struct MirInsn *index_load;
+    const struct MirInsn *index;
+    const struct MirInsn *first_byte;
+    const struct MirInsn *value_load;
+    const struct MirInsn *modulus;
+    const struct MirInsn *remainder;
+    const struct MirInsn *add;
+    const struct MirInsn *narrow;
+    const struct MirInsn *store;
+    const struct MirInsn *increment_load;
+    const struct MirInsn *one;
+    const struct MirInsn *increment;
+    const struct MirInsn *increment_store;
+    const struct MirInsn *jump;
+
+    memset(plan, 0, sizeof(*plan));
+    if (instruction < 0 || instruction + 19 >= mir.count)
+        return 0;
+    load = &mir.insns[instruction];
+    limit = &mir.insns[instruction + 1];
+    compare = &mir.insns[instruction + 2];
+    branch = &mir.insns[instruction + 3];
+    address = &mir.insns[instruction + 4];
+    index_load = &mir.insns[instruction + 5];
+    index = &mir.insns[instruction + 6];
+    first_byte = &mir.insns[instruction + 7];
+    value_load = &mir.insns[instruction + 8];
+    modulus = &mir.insns[instruction + 9];
+    remainder = &mir.insns[instruction + 10];
+    add = &mir.insns[instruction + 11];
+    narrow = &mir.insns[instruction + 12];
+    store = &mir.insns[instruction + 13];
+    increment_load = &mir.insns[instruction + 15];
+    one = &mir.insns[instruction + 16];
+    increment = &mir.insns[instruction + 17];
+    increment_store = &mir.insns[instruction + 18];
+    jump = &mir.insns[instruction + 19];
+    if (load->opcode != MIR_LOAD || load->object < 0 ||
+        limit->opcode != MIR_CONST || limit->immediate <= 0 ||
+        limit->immediate > 65535 ||
+        compare->opcode != MIR_BINARY || compare->immediate != '<' ||
+        compare->src1 != load->dst || compare->src2 != limit->dst ||
+        branch->opcode != MIR_BRANCH_FALSE ||
+        branch->src1 != compare->dst ||
+        address->opcode != MIR_ADDRESS || address->name[0] == 0 ||
+        index_load->opcode != MIR_LOAD ||
+        index_load->object != load->object ||
+        index->opcode != MIR_INDEX_ADDRESS ||
+        index->src1 != address->dst || index->src2 != index_load->dst ||
+        index->immediate != 1 || index->memory_size != 1 ||
+        first_byte->opcode != MIR_CONST ||
+        first_byte->immediate < 0 || first_byte->immediate > 255 ||
+        value_load->opcode != MIR_LOAD ||
+        value_load->object != load->object ||
+        modulus->opcode != MIR_CONST || modulus->immediate <= 1 ||
+        modulus->immediate > 255 ||
+        remainder->opcode != MIR_BINARY || remainder->immediate != '%' ||
+        remainder->src1 != value_load->dst ||
+        remainder->src2 != modulus->dst ||
+        add->opcode != MIR_BINARY || add->immediate != '+' ||
+        add->src1 != first_byte->dst || add->src2 != remainder->dst ||
+        narrow->opcode != MIR_UNARY || narrow->immediate != 0 ||
+        narrow->src1 != add->dst || type_size(narrow->type) != 1 ||
+        store->opcode != MIR_STORE_INDIRECT ||
+        store->src1 != index->dst || store->src2 != narrow->dst ||
+        store->memory_size != 1 ||
+        mir.insns[instruction + 14].opcode != MIR_LABEL ||
+        increment_load->opcode != MIR_LOAD ||
+        increment_load->object != load->object ||
+        one->opcode != MIR_CONST || one->immediate != 1 ||
+        increment->opcode != MIR_BINARY || increment->immediate != '+' ||
+        increment->src1 != increment_load->dst ||
+        increment->src2 != one->dst ||
+        increment_store->opcode != MIR_STORE ||
+        increment_store->object != load->object ||
+        increment_store->src1 != increment->dst ||
+        jump->opcode != MIR_JUMP ||
+        mir_find_label(jump->label) >= instruction ||
+        mir_find_label(branch->label) != instruction + 20)
+        return 0;
+    plan->buffer = find_global(address->name);
+    if (plan->buffer == NULL || !plan->buffer->is_defined ||
+        !plan->buffer->is_array || plan->buffer->is_volatile ||
+        plan->buffer->array_len < limit->immediate ||
+        plan->buffer->elem_size != 1)
+        return 0;
+    plan->count = (int)limit->immediate;
+    plan->first_byte = (int)first_byte->immediate;
+    plan->modulus = (int)modulus->immediate;
+    if (plan->first_byte + plan->modulus > 256)
+        return 0;
+    plan->skip_through = instruction + 19;
     return 1;
 }
 
@@ -15433,6 +15544,25 @@ static void mir_emit_errno_check(
             plan->result_width == 4 ? 12 : 10,
             failures_name, failures_name,
             done);
+}
+
+static void mir_emit_cyclic_byte_fill(
+    FILE *out, const struct MirCyclicByteFill *plan)
+{
+    const char *buffer_name = asm_name_for(sym_asm_name(plan->buffer));
+    int loop = new_label();
+    int next = new_label();
+
+    mir_emit_symbol_extrn(out, plan->buffer);
+    fprintf(out,
+            "\tld hl,%s\n\tld bc,%d\n\tld e,%d\n"
+            "L%d:\n\tld a,e\n\tld (hl),a\n\tinc hl\n\tinc e\n"
+            "\tld a,e\n\tcp %d\n\tjp nz, L%d\n\tld e,%d\n"
+            "L%d:\n\tdec bc\n\tld a,b\n\tor c\n\tjp nz, L%d\n",
+            buffer_name, plan->count, plan->first_byte,
+            loop, plan->first_byte + plan->modulus,
+            next, plan->first_byte,
+            next, loop);
 }
 
 static void mir_emit_byte_compare_flags(
@@ -27140,11 +27270,17 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         struct MirInlineWordLoadPush inline_word_load_push;
         struct MirNamedZeroBranch named_zero_branch;
         struct MirFixedArrayInit fixed_array_init;
+        struct MirCyclicByteFill cyclic_byte_fill;
 
         mir_emit_instruction_index = i;
         if (constant_control_reachable != NULL &&
             !constant_control_reachable[i])
             continue;
+        if (mir_match_cyclic_byte_fill(i, &cyclic_byte_fill)) {
+            mir_emit_cyclic_byte_fill(out, &cyclic_byte_fill);
+            i = cyclic_byte_fill.skip_through;
+            continue;
+        }
         if (i == 0 &&
             mir_match_fixed_array_init(&fixed_array_init)) {
             mir_emit_fixed_array_init(out, &fixed_array_init);
