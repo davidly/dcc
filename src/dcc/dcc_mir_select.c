@@ -3884,6 +3884,36 @@ static int mir_final_cost_policy_rejects(
         policy = "register-v5";
     if (!strcmp(policy, "off"))
         return 0;
+    if (g_speculative_codegen_active) {
+        const char *filter =
+            getenv("DCC_MIR_SPECULATIVE_REGISTER_FUNCTION");
+        int generated_claim;
+        int captured_claim;
+
+        if (strcmp(policy, "register-v5") ||
+            strcmp(selector_name, "spilled-scalar-cfg") ||
+            (filter != NULL && filter[0] != 0 &&
+             strcmp(filter, mir.name)) ||
+            mir_stream_contains_text(generated, MIR_EXACT_KERNEL_MARKER))
+            return 0;
+        generated_claim =
+            mir_stream_contains_text(generated, ";@dcc.reg claim=");
+        captured_claim =
+            mir_stream_contains_text(captured, ";@dcc.reg claim=");
+        if (getenv("DCC_MIR_FINAL_COST_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR speculative-register function=%s selector=%s "
+                    "generated-claim=%d captured-claim=%d "
+                    "generated-bytes=%ld captured-bytes=%ld blocks=%d "
+                    "phi-slot=%d\n",
+                    mir.name, selector_name,
+                    generated_claim, captured_claim,
+                    generated_size, captured_size, mir_cfg_block_count(),
+                    mir_stream_contains_text(
+                        generated, MIR_PHI_SLOT_MARKER));
+        return captured_claim && !generated_claim &&
+               generated_size * 100L > captured_size * 135L;
+    }
     if (!strcmp(policy, "register-v1") ||
         !strcmp(policy, "register-v2") ||
         !strcmp(policy, "register-v3") ||
@@ -6349,7 +6379,6 @@ evaluate_generated:
                     fclose(regional_candidate);
                 }
                 if (fallback_reason == NULL &&
-                    !g_speculative_codegen_active &&
                     mir_final_cost_policy_rejects(
                         selector_name, generated, mir.capture_stream,
                         generated_size, captured_size,
