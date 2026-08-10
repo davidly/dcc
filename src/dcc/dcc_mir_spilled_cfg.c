@@ -25301,8 +25301,13 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
             dense_switch_handoff =
                 mir_store_feeds_dense_byte_switch(i, insn->src1);
             if (!dense_switch_handoff &&
-                !(mir_wide_store_forwarding_enabled &&
-                  type_size(memory_type) == 4))
+                !(type_size(memory_type) == 4 &&
+                  (mir_wide_store_forwarding_enabled ||
+                   (producer != NULL &&
+                    mir_cfg_block_count() == 1 &&
+                    mir.local_bytes >= 256 &&
+                    (producer->opcode == MIR_CONST ||
+                     producer->opcode == MIR_FLOAT_CONST)))))
                 mir_emit_virtual_load(out, insn->src1);
             {
             int narrow_hl_preserving_store = 0;
