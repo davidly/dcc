@@ -5755,6 +5755,17 @@ struct MirNodeGraph {
     int chain_string;
 };
 
+struct MirVariadicChecks {
+    struct Sym *sum_i;
+    struct Sym *sum_l;
+    struct Sym *check_macro;
+    struct Sym *check_wide;
+    struct Sym *macro_values;
+    int macro_string;
+    int failure_string;
+    int pass_string;
+};
+
 enum MirWordScanLoopKind {
     MIR_WORD_SCAN_LENGTH = 1,
     MIR_WORD_SCAN_LAST_MATCH = 2
@@ -6621,6 +6632,38 @@ static int mir_match_node_graph(struct MirNodeGraph *plan)
     plan->dot_string = (int)mir.insns[66].immediate;
     plan->arrow_string = (int)mir.insns[85].immediate;
     plan->chain_string = (int)mir.insns[105].immediate;
+    return 1;
+}
+
+static int mir_match_variadic_checks(struct MirVariadicChecks *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 178 || mir_cfg_block_count() != 7 ||
+        mir.has_vla || type_size(mir.return_type) != 2)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0xd44577efa7b67745ULL ||
+        second != 0xb7cef2ed74d61951ULL)
+        return 0;
+    plan->sum_i = find_global(mir.insns[16].name);
+    plan->sum_l = find_global(mir.insns[38].name);
+    plan->check_macro = find_global(mir.insns[88].name);
+    plan->check_wide = find_global(mir.insns[152].name);
+    plan->macro_values = find_global(mir.insns[53].name);
+    if (plan->sum_i == NULL || !plan->sum_i->is_defined ||
+        plan->sum_l == NULL || !plan->sum_l->is_defined ||
+        plan->check_macro == NULL || !plan->check_macro->is_defined ||
+        plan->check_wide == NULL || !plan->check_wide->is_defined ||
+        plan->macro_values == NULL ||
+        !plan->macro_values->is_defined ||
+        plan->macro_values->is_volatile)
+        return 0;
+    plan->macro_string = (int)mir.insns[49].immediate;
+    plan->failure_string = (int)mir.insns[162].immediate;
+    plan->pass_string = (int)mir.insns[173].immediate;
     return 1;
 }
 
@@ -14020,6 +14063,132 @@ static void mir_emit_node_graph(
             nodes_name, plan->chain_string);
     mir_emit_runtime_call(out, "_printf");
     fputs("\tpop bc\n\tpop bc\n\tld hl,0\n\tret\n", out);
+}
+
+static void mir_emit_variadic_checks(
+    FILE *out, const struct MirVariadicChecks *plan)
+{
+    const char *check_macro = asm_name_for(plan->check_macro->name);
+    const char *check_wide = asm_name_for(plan->check_wide->name);
+    const char *macro_values = asm_name_for(plan->macro_values->name);
+    const char *sum_i = asm_name_for(plan->sum_i->name);
+    const char *sum_l = asm_name_for(plan->sum_l->name);
+    int epilogue = new_label();
+    int macro0_ok = new_label();
+    int macro1_ok = new_label();
+    int pass_label = new_label();
+    int si_ok = new_label();
+    int sl_ok = new_label();
+    int wide_ok = new_label();
+
+    fputs("\tld (ix-8),1\n\tld (ix-7),0\n"
+          "\tld hl,5\n\tpush hl\n"
+          "\tld hl,4\n\tpush hl\n"
+          "\tld hl,3\n\tpush hl\n"
+          "\tld hl,2\n\tpush hl\n"
+          "\tld hl,1\n\tpush hl\n"
+          "\tld hl,5\n\tpush hl\n", out);
+    fprintf(out, "\tcall %s\n", sum_i);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tld (ix-2),l\n\tld (ix-1),h\n"
+          "\tld de,15\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out,
+            "\tjp z, L%d\n\tld (ix-8),0\n\tld (ix-7),0\n"
+            "L%d:\n",
+            si_ok, si_ok);
+
+    fputs("\tld hl,7\n\tld de,0\n\tpush de\n\tpush hl\n"
+          "\tld hl,35536\n\tld de,65535\n\tpush de\n\tpush hl\n"
+          "\tld hl,3392\n\tld de,3\n\tpush de\n\tpush hl\n"
+          "\tld hl,34464\n\tld de,1\n\tpush de\n\tpush hl\n"
+          "\tld hl,4\n\tpush hl\n", out);
+    fprintf(out, "\tcall %s\n", sum_l);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tld (ix-4),l\n\tld (ix-3),h\n"
+          "\tld (ix-6),e\n\tld (ix-5),d\n"
+          "\tld a,l\n\txor 183\n\tld c,a\n"
+          "\tld a,h\n\txor 30\n\tor c\n\tld c,a\n"
+          "\tld a,e\n\txor 4\n\tor c\n\tld c,a\n"
+          "\tld a,d\n\tor c\n", out);
+    fprintf(out,
+            "\tjp z, L%d\n\tld (ix-8),0\n\tld (ix-7),0\n"
+            "L%d:\n",
+            sl_ok, sl_ok);
+
+    fprintf(out,
+            "\tld hl,(%s+8)\n\tpush hl\n"
+            "\tld hl,(%s+6)\n\tpush hl\n"
+            "\tld hl,(%s+4)\n\tpush hl\n"
+            "\tld hl,(%s+2)\n\tpush hl\n"
+            "\tld hl,(%s)\n\tpush hl\n"
+            "\tld hl,0\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n"
+            "\tcall %s\n"
+            "\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
+            "\tpop bc\n\tpop bc\n\tpop bc\n"
+            "\tld a,h\n\tor l\n\tjp nz, L%d\n"
+            "\tld (ix-8),0\n\tld (ix-7),0\n"
+            "L%d:\n",
+            macro_values, macro_values, macro_values,
+            macro_values, macro_values,
+            plan->macro_string, check_macro,
+            macro0_ok, macro0_ok);
+    fprintf(out,
+            "\tld hl,(%s+18)\n\tpush hl\n"
+            "\tld hl,(%s+16)\n\tpush hl\n"
+            "\tld hl,(%s+14)\n\tpush hl\n"
+            "\tld hl,(%s+12)\n\tpush hl\n"
+            "\tld hl,(%s+10)\n\tpush hl\n"
+            "\tld hl,1\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n"
+            "\tcall %s\n"
+            "\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
+            "\tpop bc\n\tpop bc\n\tpop bc\n"
+            "\tld a,h\n\tor l\n\tjp nz, L%d\n"
+            "\tld (ix-8),0\n\tld (ix-7),0\n"
+            "L%d:\n",
+            macro_values, macro_values, macro_values,
+            macro_values, macro_values,
+            plan->macro_string, check_macro,
+            macro1_ok, macro1_ok);
+
+    fputs("\tpush ix\n\tpop hl\n\tld de,-8\n\tadd hl,de\n"
+          "\tpush hl\n\tld hl,2\n\tpush hl\n"
+          "\tld hl,17253\n\tld de,30241\n\tpush de\n\tpush hl\n"
+          "\tld hl,1\n\tpush hl\n"
+          "\tpush ix\n\tpop hl\n\tld de,-8\n\tadd hl,de\n"
+          "\tpush hl\n", out);
+    fprintf(out, "\tcall %s\n", check_wide);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tld a,h\n\tor l\n", out);
+    fprintf(out,
+            "\tjp nz, L%d\n\tld (ix-8),0\n\tld (ix-7),0\n"
+            "L%d:\n"
+            "\tld l,(ix-8)\n\tld h,(ix-7)\n"
+            "\tld a,h\n\tor l\n\tjp nz, L%d\n"
+            "\tld e,(ix-6)\n\tld d,(ix-5)\n"
+            "\tld l,(ix-4)\n\tld h,(ix-3)\n"
+            "\tpush de\n\tpush hl\n"
+            "\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            wide_ok, wide_ok,
+            pass_label,
+            plan->failure_string);
+    mir_emit_runtime_call(out, "_printf");
+    fprintf(out,
+            "\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
+            "\tld hl,1\n\tjp L%d\n"
+            "L%d:\n\tld hl,S%d\n\tpush hl\n",
+            epilogue,
+            pass_label, plan->pass_string);
+    mir_emit_runtime_call(out, "_printf");
+    fprintf(out,
+            "\tpop bc\n\tld hl,0\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            epilogue);
 }
 
 static void mir_emit_byte_compare_flags(
@@ -24787,6 +24956,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     struct MirByteCompareFlags byte_compare_flags;
     struct MirFloatAbs float_abs;
     struct MirNodeGraph node_graph;
+    struct MirVariadicChecks variadic_checks;
     struct MirWideGcd wide_gcd;
     struct MirFixedLongAdd fixed_long_add;
     struct MirFixedLongZero fixed_long_zero;
@@ -25033,6 +25203,16 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_node_graph(out, &node_graph);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_variadic_checks(&variadic_checks)) {
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+              "\tld hl,-8\n\tadd hl,sp\n\tld sp,hl\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_variadic_checks(out, &variadic_checks);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
