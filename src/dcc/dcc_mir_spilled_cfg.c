@@ -1356,6 +1356,7 @@ static int mir_string_address_is_rematerializable(int value)
 static int mir_wide_constant_is_rematerializable(int value)
 {
     const struct MirInsn *definition = mir_definition(value);
+    int instruction;
 
     if (definition == NULL ||
         (definition->opcode != MIR_CONST &&
@@ -1364,6 +1365,39 @@ static int mir_wide_constant_is_rematerializable(int value)
         return 0;
     if (mir_cfg_block_count() == 1)
         return 1;
+    if (mir_value_use_count(value) == 1)
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+            const struct MirInsn *conversion = &mir.insns[instruction];
+            int consumer;
+
+            if (conversion->opcode != MIR_UNARY ||
+                conversion->src1 != value ||
+                type_size(conversion->type) != 4 ||
+                mir_value_use_count(conversion->dst) != 1)
+                continue;
+            for (consumer = instruction + 1;
+                 consumer < mir.count; ++consumer) {
+                const struct MirInsn *compare = &mir.insns[consumer];
+                const struct MirInsn *other;
+                int other_value;
+
+                if (compare->src1 != conversion->dst &&
+                    compare->src2 != conversion->dst)
+                    continue;
+                if (compare->opcode != MIR_BINARY ||
+                    (compare->immediate != TOK_EQ &&
+                     compare->immediate != TOK_NE &&
+                     compare->immediate != '<' &&
+                     compare->immediate != '>' &&
+                     compare->immediate != TOK_LE &&
+                     compare->immediate != TOK_GE))
+                    return 0;
+                other_value = compare->src1 == conversion->dst
+                    ? compare->src2 : compare->src1;
+                other = mir_definition(other_value);
+                return other != NULL && other->opcode == MIR_UNARY;
+            }
+        }
     return mir_phi_slot_cleanup_enabled &&
            mir_value_only_used_by_phi_copies_or_dead_stores(value);
 }
@@ -3738,10 +3772,18 @@ static int mir_wide_helper_lhs_consumer(int value, int instruction,
     for (consumer_index = instruction + 1;
          consumer_index < mir.count; ++consumer_index) {
         const struct MirInsn *consumer = &mir.insns[consumer_index];
+        int operation;
+
         if (consumer->src1 != value && consumer->src2 != value &&
             !mir_call_uses_value(consumer, value))
             continue;
-        if (consumer->opcode != MIR_BINARY || consumer->src1 != value ||
+        operation = (int)consumer->immediate;
+        if (consumer->opcode != MIR_BINARY ||
+            (consumer->src1 != value &&
+             !(consumer->src2 == value &&
+               (operation == TOK_EQ || operation == TOK_NE ||
+                operation == '<' || operation == '>' ||
+                operation == TOK_LE || operation == TOK_GE))) ||
             type_size(consumer->secondary_offset) != 4 ||
             mir_wide_runtime_helper(consumer) == NULL)
             return 0;
@@ -3774,15 +3816,37 @@ static int mir_wide_helper_lhs_span_is_safe(int producer, int consumer)
 
 static int mir_wide_helper_handoff_supported(const struct MirInsn *consumer)
 {
+    const struct MirInsn *left;
+    const struct MirInsn *right;
     int operation;
 
     if (consumer == NULL || consumer->opcode != MIR_BINARY)
         return 0;
     operation = (int)consumer->immediate;
+    if (operation == TOK_EQ || operation == TOK_NE ||
+        operation == '<' || operation == '>' ||
+        operation == TOK_LE || operation == TOK_GE) {
+        left = mir_definition(consumer->src1);
+        right = mir_definition(consumer->src2);
+        return left != NULL && left->opcode == MIR_UNARY &&
+               right != NULL && right->opcode == MIR_UNARY;
+    }
+
     if (type_is_float(consumer->secondary_offset))
         return operation == '+' || operation == '-' ||
                operation == '*' || operation == '/';
     return operation == '*' || operation == '/' || operation == '%';
+}
+
+static int mir_swap_wide_comparison_operator(int operation)
+{
+    switch (operation) {
+    case '<': return '>';
+    case '>': return '<';
+    case TOK_LE: return TOK_GE;
+    case TOK_GE: return TOK_LE;
+    default: return operation;
+    }
 }
 
 static int mir_wide_helper_lhs_slot_forwardable(int value, int units,
@@ -11437,6 +11501,21 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
         mir_wide_helper_handoff_supported(&mir.insns[helper_consumer]) &&
         mir_wide_helper_lhs_span_is_safe(
             mir_emit_instruction_index, helper_consumer)) {
+        if (mir_forwarded_wide_stack_value >= 0) {
+            const struct MirInsn *consumer = &mir.insns[helper_consumer];
+
+            if (mir_forwarded_wide_stack_consumer == helper_consumer &&
+                consumer->src1 == value &&
+                consumer->src2 == mir_forwarded_wide_stack_value &&
+                mir_forward_skip_target(mir_emit_instruction_index) ==
+                    helper_consumer) {
+                mir_forwarded_wide_value = value;
+                mir_forwarded_wide_instruction = helper_consumer - 1;
+                return;
+            }
+            mir_planned_stack_invalid = 1;
+            return;
+        }
         int pending_consumer = mir_pending_planned_stack_consumer();
         if (pending_consumer >= 0 && helper_consumer >= pending_consumer)
             mir_planned_stack_invalid = 1;
@@ -24511,6 +24590,8 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
             }
             }
             if (type_size(insn->secondary_offset) == 4) {
+                struct MirInsn swapped_comparison;
+                const struct MirInsn *operation_insn = insn;
                 int mulmod_left;
                 int mulmod_right;
                 int mulmod_modulus;
@@ -24520,6 +24601,19 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                 int stack_forwarded_right =
                     mir_forwarded_wide_stack_value == insn->src2 &&
                     mir_forwarded_wide_stack_consumer == i;
+                if (stack_forwarded_right &&
+                    (insn->immediate == TOK_EQ ||
+                     insn->immediate == TOK_NE ||
+                     insn->immediate == '<' ||
+                     insn->immediate == '>' ||
+                     insn->immediate == TOK_LE ||
+                     insn->immediate == TOK_GE)) {
+                    swapped_comparison = *insn;
+                    swapped_comparison.immediate =
+                        mir_swap_wide_comparison_operator(
+                            (int)insn->immediate);
+                    operation_insn = &swapped_comparison;
+                }
                 if (mir_wide_multiply_is_fused_mulmod(i)) {
                     if (stack_forwarded_left || stack_forwarded_right) {
                         fputs("\tpop hl\n\tpop de\n", out);
@@ -24564,7 +24658,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                 }
                 if (!stack_forwarded_right && !signed_const_relational_fastpath)
                     mir_emit_virtual_load_wide(out, insn->src2);
-                if (!mir_emit_wide_operation(out, insn))
+                if (!mir_emit_wide_operation(out, operation_insn))
                     goto done;
                 if (stack_forwarded_left || stack_forwarded_right) {
                     mir_forwarded_wide_stack_value = -1;
