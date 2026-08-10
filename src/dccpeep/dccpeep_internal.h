@@ -354,6 +354,7 @@ int pass_global_board_const_offsets(void);
 /* Loop-scoped registerization passes (peep_pass_loops.c). */
 int pass_byte_loop_counter_to_reg_c(void);
 int pass_word_loop_var_to_reg_bc(void);
+int pass_narrow_bc_loop_bound_to_reg_c(void);
 int pass_byte_loop_var_to_reg_c(void);
 int pass_byte_for_counter_to_reg_c(void);
 int pass_byte_for_counter_to_reg_e(void);

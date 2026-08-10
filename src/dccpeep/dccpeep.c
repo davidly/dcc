@@ -9807,6 +9807,7 @@ int main(int argc, char **argv)
         { "pass_cache_global_word_reload", pass_cache_global_word_reload, 0 },
         { "pass_cache_global_word_reload_de", pass_cache_global_word_reload_de, 0 },
         { "pass_word_loop_var_to_reg_bc", pass_word_loop_var_to_reg_bc, 0 },
+        { "pass_narrow_bc_loop_bound_to_reg_c", pass_narrow_bc_loop_bound_to_reg_c, 0 },
         { "pass_byte_loop_var_to_reg_c", pass_byte_loop_var_to_reg_c, 0 },
         { "pass_labels", pass_labels, 0 },
     };
