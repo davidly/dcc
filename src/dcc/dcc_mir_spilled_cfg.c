@@ -3876,6 +3876,20 @@ static int mir_wide_helper_lhs_slot_forwardable(int value, int units,
         mir_wide_helper_lhs_span_is_safe(instruction, consumer);
 }
 
+static int mir_wide_signed_const_lhs_slot_forwardable(
+    int value, int units, int instruction)
+{
+    const struct MirInsn *consumer;
+
+    if (units != 2 || mir_value_use_count(value) != 1 ||
+        instruction < 0 || instruction + 1 >= mir.count)
+        return 0;
+    consumer = &mir.insns[instruction + 1];
+    return consumer->opcode == MIR_BINARY &&
+           consumer->src1 == value &&
+           mir_wide_operation_is_signed_const_relational(consumer);
+}
+
 /* Item T59 (mir-text-size-plan.md): mir_prepare_backend_slots' own
  * reservation pass only recognized mir_load_is_single_call_argument (a
  * MIR_LOAD whose sole use is exactly one call argument, restricted to
@@ -10395,6 +10409,8 @@ static int mir_prepare_backend_slots(void)
                                         mir_address_is_single_call_argument(value) ||
                                         mir_backend_slot_forwardable(value, units, i) ||
                                         mir_wide_backend_slot_forwardable(value, units, i) ||
+                                        mir_wide_signed_const_lhs_slot_forwardable(
+                                            value, units, i) ||
                                         mir_wide_helper_lhs_slot_forwardable(value, units, i) ||
                                         mir_call_argument_slot_forwardable(value, units, i) ||
                                         mir_stack_backend_slot_forwardable(value, units, i) ||
@@ -11509,6 +11525,13 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
             fputs("\texx\n", out);
         mir_cached_wide_call_value = value;
         mir_cached_wide_call_instruction = call_instruction;
+        return;
+    }
+    if (!force_slot_store &&
+        mir_wide_signed_const_lhs_slot_forwardable(
+            value, 2, mir_emit_instruction_index)) {
+        mir_forwarded_wide_value = value;
+        mir_forwarded_wide_instruction = mir_emit_instruction_index;
         return;
     }
     if (!force_slot_store &&

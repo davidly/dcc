@@ -4923,6 +4923,7 @@ void mir_end_function(void)
     }
     mir_thread_jumps();
     mir_resolve_deferred_metadata();
+    mir_canonicalize_signed_wide_relational_constants();
     mir_reset_boolean_phi_branch_simplification_count();
     verified = mir_verify_and_dump();
     if (verified) {

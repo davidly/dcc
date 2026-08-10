@@ -504,6 +504,7 @@ int mir_inline_temp_slot(const char *name);
 int mir_iy_home_live_across_caller_clobber(void);
 const char *mir_sink_name(int purpose);
 void mir_thread_jumps(void);
+void mir_canonicalize_signed_wide_relational_constants(void);
 int mir_value_number_global_field_loads(void);
 int mir_global_field_value_numbering_count(void);
 int mir_repeated_named_pointer_load_count(void);

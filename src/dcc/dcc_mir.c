@@ -4632,6 +4632,41 @@ void mir_thread_jumps(void)
 }
 #undef MIR_THREAD_JUMPS_MAX_CHAIN
 
+void mir_canonicalize_signed_wide_relational_constants(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        struct MirInsn *insn = &mir.insns[instruction];
+        const struct MirInsn *left;
+        const struct MirInsn *right;
+        int operation;
+        int source;
+
+        if (insn->opcode != MIR_BINARY ||
+            type_size(insn->secondary_offset) != 4 ||
+            type_is_float(insn->secondary_offset) ||
+            (insn->secondary_offset & TYPE_UNSIGNED) != 0)
+            continue;
+        operation = (int)insn->immediate;
+        if (operation != '<' && operation != '>' &&
+            operation != TOK_LE && operation != TOK_GE)
+            continue;
+        left = mir_definition(insn->src1);
+        right = mir_definition(insn->src2);
+        if (left == NULL || left->opcode != MIR_CONST ||
+            (right != NULL && right->opcode == MIR_CONST))
+            continue;
+        source = insn->src1;
+        insn->src1 = insn->src2;
+        insn->src2 = source;
+        insn->immediate =
+            operation == '<' ? '>' :
+            operation == '>' ? '<' :
+            operation == TOK_LE ? TOK_GE : TOK_LE;
+    }
+}
+
 static int mir_boolean_phi_predecessor_is_transparent(int label)
 {
     int instruction = mir_find_label(label);
