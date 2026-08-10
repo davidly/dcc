@@ -14539,7 +14539,7 @@ static void mir_emit_variadic_checks(
             wide_ok, wide_ok,
             pass_label,
             plan->failure_string);
-    mir_emit_runtime_call(out, "_printf");
+    mir_emit_runtime_call(out, "_pflng");
     fprintf(out,
             "\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
             "\tld hl,1\n\tjp L%d\n"
@@ -14670,6 +14670,7 @@ static void mir_emit_prefix_check(
             failures_name, failures_name,
             plan->tag_offset, plan->tag_offset + 1,
             plan->failure_string);
+    mir_emit_runtime_call(out, "__pfehx");
     mir_emit_runtime_call(out, "_printf");
     fprintf(out,
             "\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
