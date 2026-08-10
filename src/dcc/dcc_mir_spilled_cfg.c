@@ -17984,37 +17984,33 @@ static void mir_emit_float_compare_constant(
 static void mir_emit_wide_factorial(
     FILE *out, const struct MirWideFactorial *plan)
 {
-    enum {
-        VALUE = -4,
-        RESULT = -8
-    };
-    int loop = new_label();
+    const struct MirInsn *call = &mir.insns[17];
+    struct Sym *callee = find_global(call->name);
+    const char *assembly_name = asm_name_for(
+        callee != NULL ? sym_asm_name(callee)
+                       : mir_declared_link_name(call->name));
     int done = new_label();
+    int recurse = new_label();
 
     mir_emit_frame_long_load(out, plan->parameter_offset);
-    mir_emit_frame_long_store(out, VALUE);
-    fputs("\tld hl,1\n\tld de,0\n", out);
-    mir_emit_frame_long_store(out, RESULT);
-    fprintf(out, "L%d:\n", loop);
-    mir_emit_frame_long_load(out, VALUE);
     fputs("\tld a,l\n\tor h\n\tor e\n\tor d\n", out);
-    fprintf(out, "\tjp z, L%d\n", done);
-    mir_emit_frame_long_load(out, RESULT);
+    fprintf(out, "\tjp nz, L%d\n\tld hl,1\n\tld de,0\n"
+                 "\tjp L%d\nL%d:\n",
+            recurse, done, recurse);
+    mir_emit_frame_long_load(out, plan->parameter_offset);
     fputs("\tpush de\n\tpush hl\n", out);
-    mir_emit_frame_long_load(out, VALUE);
+    mir_emit_frame_long_load(out, plan->parameter_offset);
+    fputs("\tpush de\n\tpush hl\n\tld hl,1\n\tld de,0\n", out);
+    fputs("\tld b,h\n\tld c,l\n\tpop hl\n\tor a\n"
+          "\tsbc hl,bc\n\tld b,h\n\tld c,l\n\tpop hl\n"
+          "\tsbc hl,de\n\tld d,b\n\tld e,c\n\tex de,hl\n",
+          out);
+    fprintf(out, "\tpush de\n\tpush hl\n\tcall %s\n"
+                 "\tpop bc\n\tpop bc\n",
+            assembly_name);
     mir_emit_runtime_call(out, "__lmul");
     fputs("\tpop bc\n\tpop bc\n", out);
-    mir_emit_frame_long_store(out, RESULT);
-    mir_emit_frame_long_load(out, VALUE);
-    fputs("\tdec hl\n\tld a,h\n\tand l\n\tinc a\n", out);
-    {
-        int no_borrow = new_label();
-        fprintf(out, "\tjp nz, L%d\n\tdec de\nL%d:\n",
-                no_borrow, no_borrow);
-    }
-    mir_emit_frame_long_store(out, VALUE);
-    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
-    mir_emit_frame_long_load(out, RESULT);
+    fprintf(out, "L%d:\n", done);
     fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
@@ -24135,8 +24131,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         goto done;
     }
     if (mir_match_wide_factorial(&wide_factorial)) {
-        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
-              "\tld hl,-8\n\tadd hl,sp\n\tld sp,hl\n", out);
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_wide_factorial(out, &wide_factorial);
