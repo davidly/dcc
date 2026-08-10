@@ -28,6 +28,25 @@
 #include "dcc_mir.h"
 #include "dcc_mir_internal.h"
 
+struct MirIndirectIncDec {
+    int load_instruction;
+    int constant_instruction;
+    int binary_instruction;
+    int store_instruction;
+    int return_instruction;
+    int address_value;
+    int old_value;
+    int adjusted_value;
+    int memory_size;
+    int type;
+    int decrement;
+    int returns_adjusted;
+};
+
+static int mir_match_indirect_incdec(
+    int instruction, struct MirIndirectIncDec *plan);
+static void mir_emit_indirect_incdec(
+    FILE *out, const struct MirIndirectIncDec *plan);
 static int mir_binary_is_fusable_comparison(int i);
 static int mir_value_is_nested_truth_comparison_input(int value);
 static int mir_float_madd_match(int add_index, int *multiply_index,
@@ -131,6 +150,7 @@ static int mir_spilled_cfg_used_dynamic_index_base_forwarding;
 static int mir_spilled_cfg_used_wide_constant_rematerialization;
 static int mir_spilled_cfg_used_unsigned_wide_constant_relational;
 static int mir_spilled_cfg_used_signed_wide_constant_relational;
+static int mir_spilled_cfg_used_indirect_incdec;
 static int mir_spilled_cfg_used_unary_not_branch_fusion;
 static int mir_spilled_cfg_used_planned_stack_handoff;
 static int mir_spilled_cfg_used_planned_index_base_handoff;
@@ -9711,6 +9731,142 @@ static int mir_match_low_byte_index_loop(
     return 1;
 }
 
+static int mir_match_indirect_incdec(
+    int instruction, struct MirIndirectIncDec *plan)
+{
+    const struct MirInsn *load;
+    const struct MirInsn *constant;
+    const struct MirInsn *binary;
+    const struct MirInsn *store;
+    const struct MirInsn *ret;
+    int returns_adjusted;
+    int scan;
+
+    /*
+     * First rollout: isolated update helpers only. Multi-block functions can
+     * execute this shape in very hot paths where the surrounding MIR register
+     * schedule outweighs its local instruction saving (cint/cobint emit).
+     */
+    if (mir_cfg_block_count() != 1 ||
+        instruction < 0 || instruction + 4 >= mir.count)
+        return 0;
+    load = &mir.insns[instruction];
+    constant = &mir.insns[instruction + 1];
+    binary = &mir.insns[instruction + 2];
+    store = &mir.insns[instruction + 3];
+    ret = &mir.insns[instruction + 4];
+    if (load->opcode != MIR_LOAD_INDIRECT ||
+        load->bit_width != 0 ||
+        (load->memory_size != 1 && load->memory_size != 2) ||
+        type_size(load->type) != load->memory_size ||
+        type_is_bool(load->type) ||
+        constant->opcode != MIR_CONST ||
+        constant->immediate != 1 ||
+        constant->dst < 0 ||
+        binary->opcode != MIR_BINARY ||
+        (binary->immediate != '+' && binary->immediate != '-') ||
+        binary->src1 != load->dst ||
+        binary->src2 != constant->dst ||
+        type_size(binary->secondary_offset) != load->memory_size ||
+        store->opcode != MIR_STORE_INDIRECT ||
+        store->src1 != load->src1 ||
+        store->src2 != binary->dst ||
+        store->bit_width != 0 ||
+        store->memory_size != load->memory_size ||
+        ret->opcode != MIR_RETURN ||
+        (ret->src1 != load->dst && ret->src1 != binary->dst))
+        return 0;
+    returns_adjusted = ret->src1 == binary->dst;
+    for (scan = 0; scan < mir.count; ++scan) {
+        const struct MirInsn *use = &mir.insns[scan];
+
+        if (use->src1 == load->dst || use->src2 == load->dst ||
+            mir_call_uses_value(use, load->dst)) {
+            if (!((scan == instruction + 2 &&
+                   use->src1 == load->dst) ||
+                  (!returns_adjusted &&
+                   scan == instruction + 4 &&
+                   use->src1 == load->dst)))
+                return 0;
+        }
+        if (use->src1 == constant->dst ||
+            use->src2 == constant->dst ||
+            mir_call_uses_value(use, constant->dst))
+            if (!(scan == instruction + 2 &&
+                  use->src2 == constant->dst))
+                return 0;
+        if (use->src1 == binary->dst || use->src2 == binary->dst ||
+            mir_call_uses_value(use, binary->dst)) {
+            if (!((scan == instruction + 3 &&
+                   use->src2 == binary->dst) ||
+                  (returns_adjusted &&
+                   scan == instruction + 4 &&
+                   use->src1 == binary->dst)))
+                return 0;
+        }
+    }
+    plan->load_instruction = instruction;
+    plan->constant_instruction = instruction + 1;
+    plan->binary_instruction = instruction + 2;
+    plan->store_instruction = instruction + 3;
+    plan->return_instruction = instruction + 4;
+    plan->address_value = load->src1;
+    plan->old_value = load->dst;
+    plan->adjusted_value = binary->dst;
+    plan->memory_size = load->memory_size;
+    plan->type = load->type;
+    plan->decrement = binary->immediate == '-';
+    plan->returns_adjusted = returns_adjusted;
+    return 1;
+}
+
+static void mir_emit_indirect_incdec_normalize(FILE *out, int type)
+{
+    if (type_size(type) != 1)
+        return;
+    if ((type & TYPE_UNSIGNED) != 0)
+        fputs("\tld h,0\n", out);
+    else
+        mir_emit_signed_byte_extend(out);
+}
+
+static void mir_emit_indirect_incdec(
+    FILE *out, const struct MirIndirectIncDec *plan)
+{
+    mir_spilled_cfg_used_indirect_incdec = 1;
+    if (!mir_emit_address_value_to_hl(out, plan->address_value))
+        mir_emit_virtual_load(out, plan->address_value);
+    fputs("\tpush hl\n", out);
+    if (plan->memory_size == 1) {
+        fputs("\tld l,(hl)\n", out);
+        mir_emit_indirect_incdec_normalize(out, plan->type);
+    } else {
+        fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n",
+              out);
+    }
+    if (!plan->returns_adjusted)
+        fputs("\tpush hl\n", out);
+    fputs(plan->decrement ? "\tdec hl\n" : "\tinc hl\n", out);
+    mir_emit_indirect_incdec_normalize(out, plan->type);
+    fputs("\tex de,hl\n", out);
+    if (!plan->returns_adjusted)
+        fputs("\tpop hl\n\tex (sp),hl\n", out);
+    else
+        fputs("\tpop hl\n", out);
+    if (plan->memory_size == 1)
+        fputs("\tld (hl),e\n", out);
+    else
+        fputs("\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
+    if (!plan->returns_adjusted)
+        fputs("\tpop hl\n", out);
+    else
+        fputs("\tex de,hl\n", out);
+    mir_emit_instruction_index = plan->store_instruction;
+    mir_forwarded_hl_value = plan->returns_adjusted
+        ? plan->adjusted_value : plan->old_value;
+    mir_forwarded_hl_instruction = plan->store_instruction;
+}
+
 static int mir_prepare_backend_slots(void)
 {
     int *first;
@@ -9862,6 +10018,15 @@ static int mir_prepare_backend_slots(void)
             if (value >= 0)
                 fused_away[value] = 2;
         }
+    }
+    for (i = 0; i < mir.count; ++i) {
+        struct MirIndirectIncDec incdec;
+
+        if (!mir_match_indirect_incdec(i, &incdec))
+            continue;
+        fused_away[incdec.old_value] = 2;
+        fused_away[mir.insns[incdec.constant_instruction].dst] = 2;
+        fused_away[incdec.adjusted_value] = 2;
     }
     for (value = 0; value < mir.next_value; ++value) {
         first[value] = mir.count;
@@ -22176,6 +22341,11 @@ int mir_spilled_cfg_depends_on_wide_constant_rematerialization(void)
     return mir_spilled_cfg_used_wide_constant_rematerialization;
 }
 
+int mir_spilled_cfg_depends_on_indirect_incdec(void)
+{
+    return mir_spilled_cfg_used_indirect_incdec;
+}
+
 /* T394 (mir-text-size-plan.md): unlike signed wide relational compares
  * against a constant (which legacy inlines via the sign-flip + 32-bit
  * subtract trick, with the C+1/C-1 adjustment for '>'/'<='), legacy's own
@@ -22398,6 +22568,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     mir_spilled_cfg_used_wide_constant_rematerialization = 0;
     mir_spilled_cfg_used_unsigned_wide_constant_relational = 0;
     mir_spilled_cfg_used_signed_wide_constant_relational = 0;
+    mir_spilled_cfg_used_indirect_incdec = 0;
     mir_spilled_cfg_used_unary_not_branch_fusion = 0;
     mir_spilled_cfg_used_planned_stack_handoff = 0;
     mir_spilled_cfg_used_planned_index_base_handoff = 0;
@@ -23624,8 +23795,14 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
             break;
         case MIR_LOAD_INDIRECT:
             {
+            struct MirIndirectIncDec incdec;
             const struct MirInsn *address_definition =
                 mir_definition(insn->src1);
+            if (mir_match_indirect_incdec(i, &incdec)) {
+                mir_emit_indirect_incdec(out, &incdec);
+                i = incdec.store_instruction;
+                break;
+            }
             if (address_definition != NULL &&
                 address_definition->opcode == MIR_BINARY) {
                 int amount;

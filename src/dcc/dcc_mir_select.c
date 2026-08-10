@@ -4203,7 +4203,10 @@ static int mir_final_cost_policy_rejects(
         if (!reject && policy_version >= 18 &&
             mir.has_indirect_incdec &&
             mir_cfg_block_count() == 1 &&
-            generated_size > captured_size)
+            generated_size > captured_size &&
+            !(mir_spilled_cfg_depends_on_indirect_incdec() &&
+              generated_size <= captured_size + 8 &&
+              generated_instructions < captured_instructions))
             reject = 1;
         if (!reject && policy_version >= 19 &&
             mir.sink_purpose == EMIT_SINK_DEFERRED &&

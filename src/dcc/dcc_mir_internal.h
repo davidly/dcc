@@ -532,6 +532,7 @@ int mir_spilled_cfg_depends_on_dynamic_index_base_forwarding(void);
 int mir_spilled_cfg_depends_on_direct_byte_param(void);
 int mir_spilled_cfg_depends_on_constant_index_absolute(void);
 int mir_spilled_cfg_depends_on_wide_constant_rematerialization(void);
+int mir_spilled_cfg_depends_on_indirect_incdec(void);
 int mir_spilled_cfg_depends_only_on_unsigned_wide_constant_relational(void);
 int mir_spilled_cfg_has_wide_mulmod_fusion(void);
 int mir_spilled_cfg_has_divmod_pair(void);
