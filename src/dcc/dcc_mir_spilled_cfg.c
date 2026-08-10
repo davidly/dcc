@@ -11779,6 +11779,59 @@ static int mir_prepare_backend_slots(void)
                     slot_end[slot] = last[value];
                     continue;
                 }
+                /* A genuine MIR_PHI (as opposed to the MIR_BINARY-
+                 * implementing-a-phi-update shapes just above) gets no
+                 * special treatment here otherwise - its destination
+                 * just falls through to a fresh slot below, distinct
+                 * from either source's own, even when a source's only
+                 * use in the entire function is feeding this one phi.
+                 * mir_coalesce_solitary_phi_sources (dccpeep's post-hoc
+                 * retrofit attempt, reverted) and a direct liveness
+                 * narrowing (also reverted) both tried to close this
+                 * from the outside and each regressed dozens of
+                 * unrelated apps - see their own removed comments in
+                 * git history - by perturbing decisions already made
+                 * (or about to be made) for OTHER values from the same
+                 * shared first[]/last[] numbers or from an
+                 * already-consulted slot. Deciding it right here instead
+                 * touches neither: the phi destination has not been
+                 * assigned anything yet (nothing downstream has
+                 * consulted its slot), and reusing an eligible source's
+                 * slot changes that source's own entry not at all - only
+                 * this one new value's assignment is affected, exactly
+                 * like the two narrower MIR_BINARY cases just above already
+                 * establish this pattern is safe for. Confirmed via
+                 * tests/cobint.c and tests/adaint.c's shared interpreter-
+                 * dispatch shape (a ternary whose result flows into
+                 * exactly one later use), which motivated this in the
+                 * first place. */
+                if (definition != NULL && definition->opcode == MIR_PHI) {
+                    int phi_source = definition->src1;
+                    int phi_source_slot = -1;
+
+                    if (phi_source >= 0 && phi_source != value &&
+                        mir.backend_slots[phi_source] >= 0 &&
+                        mir_value_use_count(phi_source) == 1 &&
+                        mir_value_is_wide(phi_source) == (units == 2))
+                        phi_source_slot = mir.backend_slots[phi_source];
+                    if (phi_source_slot < 0) {
+                        phi_source = definition->src2;
+                        if (phi_source >= 0 && phi_source != value &&
+                            mir.backend_slots[phi_source] >= 0 &&
+                            mir_value_use_count(phi_source) == 1 &&
+                            mir_value_is_wide(phi_source) == (units == 2))
+                            phi_source_slot = mir.backend_slots[phi_source];
+                    }
+                    if (phi_source_slot >= 0) {
+                        int unit;
+
+                        mir.backend_slots[value] = phi_source_slot;
+                        for (unit = 0; unit < units; ++unit)
+                            if (slot_end[phi_source_slot + unit] < last[value])
+                                slot_end[phi_source_slot + unit] = last[value];
+                        continue;
+                    }
+                }
                 if (!force_slot &&
                     (last[value] <= first[value] ||
                                         (definition != NULL &&
