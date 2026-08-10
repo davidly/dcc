@@ -692,8 +692,16 @@ function Invoke-ProcessWithTimeout {
         }
         catch {
             $inputException = $_.Exception
-            if ($inputException -isnot [System.IO.IOException] -and
-                $inputException.InnerException -isnot [System.IO.IOException]) {
+            $closedPipe = $false
+            for ($currentException = $inputException;
+                 $null -ne $currentException;
+                 $currentException = $currentException.InnerException) {
+                if ($currentException -is [System.IO.IOException]) {
+                    $closedPipe = $true
+                    break
+                }
+            }
+            if (-not $closedPipe) {
                 throw
             }
             # The child closed stdin first. Its exit code and captured output
@@ -817,8 +825,12 @@ function Invoke-DccMakeBuild {
     }
 
     $dccmakeSw = [System.Diagnostics.Stopwatch]::StartNew()
+    # RunTimeout primarily bounds target execution. Large translation units
+    # such as a1 can legitimately spend around 30 seconds in dcc on a 4-core
+    # CI runner, so retain hang protection without sharing that tight limit.
+    $buildTimeoutSeconds = [Math]::Max($TimeoutSeconds, 60)
     $buildResult = Invoke-ProcessWithTimeout -FilePath $dccmake -Arguments $args `
-        -WorkingDirectory (Get-Location).Path -TimeoutSeconds $TimeoutSeconds
+        -WorkingDirectory (Get-Location).Path -TimeoutSeconds $buildTimeoutSeconds
     $dccmakeSw.Stop()
     $buildOut = @($buildResult.Output -split "`r?`n")
     $exitCode = $buildResult.ExitCode
@@ -841,7 +853,7 @@ function Invoke-DccMakeBuild {
     }
     if (-not $Quiet) { $buildOut | Write-Host }
     if ($buildResult.TimedOut) {
-        if (-not $Quiet) { Write-Warning "dccmake timed out for $Name ($Mode) after ${TimeoutSeconds}s" }
+        if (-not $Quiet) { Write-Warning "dccmake timed out for $Name ($Mode) after ${buildTimeoutSeconds}s" }
         return $false
     }
     if ($exitCode -ne 0) {
