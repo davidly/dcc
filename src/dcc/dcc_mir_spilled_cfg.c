@@ -110,6 +110,8 @@ static int mir_runtime_stride_index_slot_forwardable(
 static int mir_runtime_stride_store_slot_forwardable(
     int value, int units, int instruction);
 static int mir_value_has_direct_named_home(int value);
+static int mir_bool_call_named_home(
+    int value, int *store_instruction_out, int *offset_out);
 static int mir_pointer_difference_pow2_shift(
     const struct MirInsn *insn);
 static int mir_wide_constant_is_call_comparison_rhs(int value);
@@ -1472,6 +1474,94 @@ static int mir_constant_false_branch_consumer(int value)
         consumer = instruction;
     }
     return consumer;
+}
+
+struct MirBooleanReturnSuffix {
+    int left_value;
+    int right_value;
+    int result_value;
+    int return_instruction;
+};
+
+static int mir_match_boolean_return_suffix(
+    int instruction, struct MirBooleanReturnSuffix *plan)
+{
+    const struct MirInsn *branch_left;
+    const struct MirInsn *branch_right;
+    const struct MirInsn *false_value;
+    const struct MirInsn *join;
+    const struct MirInsn *left_definition;
+    const struct MirInsn *negate;
+    const struct MirInsn *phi;
+    const struct MirInsn *ret;
+    const struct MirInsn *right_not;
+    const struct MirInsn *right_definition;
+    const struct MirInsn *to_join;
+    const struct MirInsn *true_value;
+
+    if (instruction < 0 || instruction + 12 >= mir.count)
+        return 0;
+    branch_left = &mir.insns[instruction];
+    right_not = &mir.insns[instruction + 2];
+    branch_right = &mir.insns[instruction + 3];
+    true_value = &mir.insns[instruction + 5];
+    to_join = &mir.insns[instruction + 6];
+    false_value = &mir.insns[instruction + 8];
+    join = &mir.insns[instruction + 9];
+    phi = &mir.insns[instruction + 10];
+    negate = &mir.insns[instruction + 11];
+    ret = &mir.insns[instruction + 12];
+    left_definition = mir_definition(branch_left->src1);
+    right_definition = mir_definition(right_not->src1);
+    if (branch_left->opcode != MIR_BRANCH_FALSE ||
+        mir.insns[instruction + 1].opcode != MIR_NOP ||
+        right_not->opcode != MIR_UNARY || right_not->immediate != '!' ||
+        branch_right->opcode != MIR_BRANCH_FALSE ||
+        branch_right->src1 != right_not->dst ||
+        branch_right->label != branch_left->label ||
+        mir.insns[instruction + 4].opcode != MIR_LABEL ||
+        true_value->opcode != MIR_CONST || true_value->immediate != 1 ||
+        to_join->opcode != MIR_JUMP ||
+        mir.insns[instruction + 7].opcode != MIR_LABEL ||
+        mir.insns[instruction + 7].label != branch_left->label ||
+        false_value->opcode != MIR_CONST || false_value->immediate != 0 ||
+        join->opcode != MIR_LABEL || join->label != to_join->label ||
+        phi->opcode != MIR_PHI ||
+        phi->src1 != true_value->dst ||
+        phi->src2 != false_value->dst ||
+        negate->opcode != MIR_UNARY || negate->immediate != '!' ||
+        negate->src1 != phi->dst ||
+        ret->opcode != MIR_RETURN || ret->src1 != negate->dst ||
+        left_definition == NULL || right_definition == NULL ||
+        !type_is_bool(left_definition->type) ||
+        !type_is_bool(right_definition->type))
+        return 0;
+    if (plan != NULL) {
+        plan->left_value = branch_left->src1;
+        plan->right_value = right_not->src1;
+        plan->result_value = negate->dst;
+        plan->return_instruction = instruction + 12;
+    }
+    return 1;
+}
+
+static int mir_boolean_return_slot_forwardable(
+    int value, int units, int instruction)
+{
+    struct MirBooleanReturnSuffix plan;
+    int start;
+
+    (void)instruction;
+    if (units != 1)
+        return 0;
+    for (start = 0; start < mir.count; ++start)
+        if (mir_match_boolean_return_suffix(start, &plan) &&
+            (value == mir.insns[start + 5].dst ||
+             value == mir.insns[start + 8].dst ||
+             value == mir.insns[start + 10].dst ||
+             value == plan.result_value))
+            return 1;
+    return 0;
 }
 
 static int mir_call_only_constant(int value)
@@ -3626,6 +3716,61 @@ static void mir_emit_prepacked_byte_check_argument(
     mir_prepacked_skip_through = trigger_instruction + 4;
 }
 
+static void mir_emit_prepacked_bool_arguments(
+    FILE *out, int trigger_instruction)
+{
+    const struct MirInsn *arg_a;
+    const struct MirInsn *arg_b;
+    const struct MirInsn *call;
+    const struct MirInsn *convert_a;
+    const struct MirInsn *convert_b;
+    const struct MirInsn *prefix_arg;
+    int bool_offset;
+    int bool_store;
+
+    if (mir_prepacked_call_instruction >= 0 ||
+        trigger_instruction < 2 ||
+        trigger_instruction + 5 >= mir.count)
+        return;
+    prefix_arg = &mir.insns[trigger_instruction - 2];
+    convert_a = &mir.insns[trigger_instruction];
+    arg_a = &mir.insns[trigger_instruction + 1];
+    convert_b = &mir.insns[trigger_instruction + 3];
+    arg_b = &mir.insns[trigger_instruction + 4];
+    call = &mir.insns[trigger_instruction + 5];
+    if (prefix_arg->opcode != MIR_ARG || prefix_arg->immediate != 0 ||
+        mir.insns[trigger_instruction - 1].opcode != MIR_NOP ||
+        convert_a->opcode != MIR_UNARY || convert_a->immediate != 0 ||
+        type_size(convert_a->type) != 2 ||
+        arg_a->opcode != MIR_ARG || arg_a->src1 != convert_a->dst ||
+        arg_a->immediate != 1 ||
+        mir.insns[trigger_instruction + 2].opcode != MIR_NOP ||
+        convert_b->opcode != MIR_UNARY || convert_b->immediate != 0 ||
+        type_size(convert_b->type) != 2 ||
+        arg_b->opcode != MIR_ARG || arg_b->src1 != convert_b->dst ||
+        arg_b->immediate != 2 ||
+        call->opcode != MIR_CALL ||
+        prefix_arg->secondary_offset != call->secondary_offset ||
+        arg_a->secondary_offset != call->secondary_offset ||
+        arg_b->secondary_offset != call->secondary_offset ||
+        !mir_call_uses_generic_stack_arguments(trigger_instruction + 5) ||
+        !mir_bool_call_named_home(
+            convert_a->src1, &bool_store, &bool_offset) ||
+        bool_store >= trigger_instruction ||
+        !mir_bool_call_named_home(
+            convert_b->src1, &bool_store, &bool_offset) ||
+        bool_store >= trigger_instruction)
+        return;
+    mir_emit_virtual_load(out, convert_b->src1);
+    fputs("\tpush hl\n", out);
+    mir_emit_virtual_load(out, convert_a->src1);
+    fputs("\tpush hl\n", out);
+    mir_prepacked_call_instruction = trigger_instruction + 5;
+    mir_prepacked_after_argument = 0;
+    mir_prepacked_result_value = -1;
+    mir_prepacked_skip_through = trigger_instruction + 4;
+}
+
 static int mir_definition_is_wide(const struct MirInsn *definition)
 {
     if (definition == NULL)
@@ -4851,6 +4996,50 @@ static int mir_value_has_direct_named_home(int value)
     }
     if (local_home)
         mir_spilled_cfg_used_stable_pointer_local_home = 1;
+    return 1;
+}
+
+static int mir_bool_call_named_home(
+    int value, int *store_instruction_out, int *offset_out)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    const struct MirInsn *store;
+    int definition_instruction;
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+    int store_instruction;
+    int instruction;
+
+    if (definition == NULL || definition->opcode != MIR_CALL ||
+        !type_is_bool(definition->type) ||
+        mir_cfg_block_count() != 4)
+        return 0;
+    definition_instruction = (int)(definition - mir.insns);
+    store_instruction = definition_instruction + 1;
+    while (store_instruction < mir.count &&
+           mir.insns[store_instruction].opcode == MIR_NOP)
+        ++store_instruction;
+    if (store_instruction < 0 || store_instruction >= mir.count)
+        return 0;
+    store = &mir.insns[store_instruction];
+    if (store->opcode != MIR_STORE || store->src1 != value ||
+        store->object < 0 || (store->memory_flags & 1) != 0 ||
+        !mir_scalar_memory_location(
+            store, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_LOCAL || type_size(memory_type) != 1 ||
+        memory_offset < -128 || local_name_address_taken_in_function(
+            store->name))
+        return 0;
+    for (instruction = store_instruction + 1;
+         instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_STORE &&
+            mir.insns[instruction].object == store->object)
+            return 0;
+    if (store_instruction_out != NULL)
+        *store_instruction_out = store_instruction;
+    if (offset_out != NULL)
+        *offset_out = memory_offset;
     return 1;
 }
 
@@ -11002,6 +11191,10 @@ static int mir_prepare_backend_slots(void)
                                             value, units, i) ||
                                         mir_constant_false_branch_consumer(
                                             value) >= 0 ||
+                                        mir_bool_call_named_home(
+                                            value, NULL, NULL) ||
+                                        mir_boolean_return_slot_forwardable(
+                                            value, units, i) ||
                                         mir_stack_backend_slot_forwardable(value, units, i) ||
                                         mir_value_is_nested_truth_comparison_input(value) ||
                                         mir_value_only_used_by_dead_stores(value) ||
@@ -11205,6 +11398,8 @@ static int mir_prepare_backend_slots(void)
 void mir_emit_virtual_load(FILE *out, int value)
 {
     const struct MirInsn *definition = mir_definition(value);
+    int bool_offset;
+    int bool_store_instruction;
     int offset;
     int iy_offset;
     if (mir_forwarded_hl_value == value &&
@@ -11219,6 +11414,12 @@ void mir_emit_virtual_load(FILE *out, int value)
          * instead of reusing HL when available. */
         mir_forwarded_hl_value = -1;
         mir_forwarded_hl_instruction = -1;
+        return;
+    }
+    if (mir_bool_call_named_home(
+            value, &bool_store_instruction, &bool_offset) &&
+        mir_emit_instruction_index > bool_store_instruction) {
+        fprintf(out, "\tld l,(ix%+d)\n\tld h,0\n", bool_offset);
         return;
     }
     if (mir_scalar_constant_is_rematerializable(value)) {
@@ -11765,6 +11966,7 @@ static void mir_emit_virtual_store(FILE *out, int value)
                            definition->opcode == MIR_PHI;
     int dynamic_index_forward;
     int direct_reload_storeind_target;
+    int bool_store_instruction;
     int forward_to_store;
     int has_slot;
     int forward_instruction;
@@ -11776,6 +11978,16 @@ static void mir_emit_virtual_store(FILE *out, int value)
     int pending_planned_consumer;
     if (mir_value_requires_phi_slot(value))
         force_slot_store = 1;
+    if (!force_slot_store &&
+        mir_bool_call_named_home(
+            value, &bool_store_instruction, NULL) &&
+        definition != NULL &&
+        mir_emit_instruction_index ==
+            (int)(definition - mir.insns)) {
+        mir_forwarded_hl_value = value;
+        mir_forwarded_hl_instruction = bool_store_instruction - 1;
+        return;
+    }
     if (mir_value_has_direct_named_home(value))
         /* Nothing to store: later uses re-read the stable named home (see
          * mir_emit_virtual_load); the loaded HL is simply not persisted. */
@@ -24313,6 +24525,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         mir_emit_instruction_index = i;
         mir_emit_prepacked_constant_arguments(out, i);
         mir_emit_prepacked_byte_check_argument(out, i);
+        mir_emit_prepacked_bool_arguments(out, i);
         if (i <= mir_prepacked_skip_through)
             continue;
         if (insn->opcode == MIR_LOAD &&
@@ -24966,6 +25179,26 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
             int memory_offset;
             int dense_switch_handoff;
             const struct MirInsn *producer = mir_definition(insn->src1);
+            {
+            int bool_offset;
+            int bool_store_instruction;
+
+            if (producer != NULL &&
+                mir_bool_call_named_home(
+                    insn->src1, &bool_store_instruction,
+                    &bool_offset) &&
+                bool_store_instruction == i) {
+                int normalized = new_label();
+
+                mir_emit_virtual_load(out, insn->src1);
+                fputs("\tld a,h\n\tor l\n\tld hl,0\n", out);
+                fprintf(out,
+                        "\tjp z, L%d\n\tinc hl\nL%d:\n"
+                        "\tld (ix%+d),l\n",
+                        normalized, normalized, bool_offset);
+                break;
+            }
+            }
             if (producer != NULL && producer->opcode == MIR_BINARY) {
                 int producer_index = (int)(producer - mir.insns);
                 int phi_value;
@@ -26644,6 +26877,30 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                     mir_definition(insn->src1);
                 if (target < 0)
                     goto done;
+                {
+                struct MirBooleanReturnSuffix suffix;
+
+                if (mir_match_boolean_return_suffix(i, &suffix)) {
+                    int done_label = new_label();
+                    int true_label = new_label();
+
+                    mir_emit_virtual_load(out, suffix.left_value);
+                    fputs("\tld a,h\n\tor l\n", out);
+                    fprintf(out, "\tjp z, L%d\n", true_label);
+                    mir_emit_virtual_load(out, suffix.right_value);
+                    fputs("\tld a,h\n\tor l\n", out);
+                    fprintf(out,
+                            "\tjp nz, L%d\n\tld hl,0\n"
+                            "\tjp L%d\nL%d:\n\tld hl,1\nL%d:\n",
+                            true_label, done_label,
+                            true_label, done_label);
+                    mir_forwarded_hl_value = suffix.result_value;
+                    mir_forwarded_hl_instruction =
+                        suffix.return_instruction - 1;
+                    i = suffix.return_instruction - 1;
+                    continue;
+                }
+                }
                 if (condition != NULL &&
                     condition->opcode == MIR_CONST &&
                     condition->immediate == 0 &&
