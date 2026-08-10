@@ -3902,7 +3902,7 @@ static int mir_register_policy_version(const char *policy)
     if (strncmp(policy, "register-v", 10))
         return 0;
     version = strtol(policy + 10, &end, 10);
-    if (*end != 0 || version < 1 || version > 9)
+    if (*end != 0 || version < 1 || version > 10)
         return -1;
     return (int)version;
 }
@@ -3916,7 +3916,7 @@ static int mir_final_cost_policy_rejects(
     int policy_version;
 
     if (policy == NULL || policy[0] == 0)
-        policy = "register-v9";
+        policy = "register-v10";
     if (!strcmp(policy, "off"))
         return 0;
     policy_version = mir_register_policy_version(policy);
@@ -4004,6 +4004,14 @@ static int mir_final_cost_policy_rejects(
             mir_has_cfg_backedge() &&
             mir_call_count() == 0 &&
             mir_has_declared_multidimensional_array())
+            reject = 1;
+        if (!reject && policy_version >= 10 &&
+            mir_cfg_block_count() >= 32 &&
+            mir_cfg_block_count() <= 64 &&
+            mir_call_count() == 0 && !mir_has_wide_values() &&
+            generated_size * 100L > captured_size * 120L &&
+            (long)generated_instructions * 100L >
+                (long)captured_instructions * 105L)
             reject = 1;
         if (getenv("DCC_MIR_FINAL_COST_REPORT") != NULL)
             fprintf(stderr,
