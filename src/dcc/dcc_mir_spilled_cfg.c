@@ -5766,6 +5766,12 @@ struct MirVariadicChecks {
     int pass_string;
 };
 
+struct MirWeightedStringTotal {
+    struct Sym *total;
+    int text_sp_offset;
+    int weight_sp_offset;
+};
+
 enum MirWordScanLoopKind {
     MIR_WORD_SCAN_LENGTH = 1,
     MIR_WORD_SCAN_LAST_MATCH = 2
@@ -6664,6 +6670,46 @@ static int mir_match_variadic_checks(struct MirVariadicChecks *plan)
     plan->macro_string = (int)mir.insns[49].immediate;
     plan->failure_string = (int)mir.insns[162].immediate;
     plan->pass_string = (int)mir.insns[173].immediate;
+    return 1;
+}
+
+static int mir_match_weighted_string_total(
+    struct MirWeightedStringTotal *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    int text_offset;
+    int text_storage;
+    int text_type;
+    int weight_offset;
+    int weight_storage;
+    int weight_type;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 13 || mir_cfg_block_count() != 1 ||
+        mir.has_vla || type_size(mir.return_type) != 0 ||
+        !mir_scalar_memory_location(
+            &mir.insns[1], &text_type, &text_storage, &text_offset) ||
+        !mir_scalar_memory_location(
+            &mir.insns[2], &weight_type, &weight_storage,
+            &weight_offset) ||
+        text_storage != SC_PARAM || weight_storage != SC_PARAM ||
+        type_ptr_depth(text_type) == 0 ||
+        type_size(text_type) != 2 ||
+        type_ptr_depth(weight_type) != 0 ||
+        type_size(weight_type) != 2)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0x02a10023a49f5885ULL ||
+        second != 0xd162a3a3e1c584d1ULL ||
+        mir.insns[3].opcode != MIR_LOAD)
+        return 0;
+    plan->total = find_global(mir.insns[3].name);
+    if (plan->total == NULL || !plan->total->is_defined ||
+        plan->total->is_volatile || type_size(plan->total->type) != 2)
+        return 0;
+    plan->text_sp_offset = text_offset - 2;
+    plan->weight_sp_offset = weight_offset - 2;
     return 1;
 }
 
@@ -14242,6 +14288,28 @@ static void mir_emit_variadic_checks(
             "\tpop bc\n\tld hl,0\n"
             "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
             epilogue);
+}
+
+static void mir_emit_weighted_string_total(
+    FILE *out, const struct MirWeightedStringTotal *plan)
+{
+    const char *total_name = asm_name_for(plan->total->name);
+
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n"
+            "\tpush hl\n",
+            plan->text_sp_offset);
+    mir_emit_runtime_call(out, "__slen");
+    fprintf(out,
+            "\tpop bc\n\tld d,h\n\tld e,l\n"
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n",
+            plan->weight_sp_offset);
+    mir_emit_runtime_call(out, "__mulu");
+    fprintf(out,
+            "\tld de,(%s)\n\tadd hl,de\n\tld (%s),hl\n\tret\n",
+            total_name, total_name);
 }
 
 static void mir_emit_byte_compare_flags(
@@ -25010,6 +25078,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     struct MirFloatAbs float_abs;
     struct MirNodeGraph node_graph;
     struct MirVariadicChecks variadic_checks;
+    struct MirWeightedStringTotal weighted_string_total;
     struct MirWideGcd wide_gcd;
     struct MirFixedLongAdd fixed_long_add;
     struct MirFixedLongZero fixed_long_zero;
@@ -25266,6 +25335,14 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_variadic_checks(out, &variadic_checks);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_weighted_string_total(&weighted_string_total)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_weighted_string_total(out, &weighted_string_total);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
