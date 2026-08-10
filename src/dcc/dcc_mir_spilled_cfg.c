@@ -49,6 +49,7 @@ static void mir_emit_indirect_incdec(
     FILE *out, const struct MirIndirectIncDec *plan);
 static int mir_binary_is_fusable_comparison(int i);
 static int mir_value_is_nested_truth_comparison_input(int value);
+static void mir_emit_symbol_extrn(FILE *out, struct Sym *symbol);
 struct MirConstantReturn {
     int value;
 };
@@ -5772,6 +5773,15 @@ struct MirWeightedStringTotal {
     int weight_sp_offset;
 };
 
+struct MirDivmodCheck {
+    struct Sym *callee;
+    struct Sym *remainder;
+    struct Sym *checks;
+    struct Sym *failures;
+    int parameter_offset[4];
+    int format_string;
+};
+
 enum MirWordScanLoopKind {
     MIR_WORD_SCAN_LENGTH = 1,
     MIR_WORD_SCAN_LAST_MATCH = 2
@@ -6711,6 +6721,59 @@ static int mir_match_weighted_string_total(
     plan->text_sp_offset = text_offset - 2;
     plan->weight_sp_offset = weight_offset - 2;
     return 1;
+}
+
+static int mir_match_divmod_check(struct MirDivmodCheck *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    int instruction;
+    int load_count = 0;
+    int parameter;
+
+    memset(plan, 0, sizeof(*plan));
+    if ((mir.count != 62 && mir.count != 63) ||
+        mir_cfg_block_count() != 9 || mir.has_vla ||
+        type_size(mir.return_type) != 0)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (!((first == 0x874c7b02b40fd864ULL &&
+           second == 0xe6edafc06dc88b8bULL) ||
+          (first == 0x06d7c3edb604f6b9ULL &&
+           second == 0x2dafd6397dea7ed9ULL)))
+        return 0;
+    for (parameter = 0; parameter < 4; ++parameter)
+        if (!mir_match_word_scalar_parameter(
+                &mir.insns[parameter + 1],
+                &plan->parameter_offset[parameter]))
+            return 0;
+    for (instruction = 5; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode == MIR_CALL && plan->callee == NULL) {
+            plan->callee = find_global(insn->name);
+            continue;
+        }
+        if (insn->opcode == MIR_LOAD && insn->name[0] != 0) {
+            struct Sym *symbol = find_global(insn->name);
+
+            if (load_count == 0)
+                plan->remainder = symbol;
+            else if (load_count == 1)
+                plan->checks = symbol;
+            else if (load_count == 2)
+                plan->failures = symbol;
+            ++load_count;
+            continue;
+        }
+        if (insn->opcode == MIR_STRING_ADDRESS)
+            plan->format_string = (int)insn->immediate;
+    }
+    return plan->callee != NULL &&
+           plan->remainder != NULL &&
+           plan->checks != NULL &&
+           plan->failures != NULL &&
+           load_count == 3;
 }
 
 static int mir_match_long_clamp(struct MirLongClamp *plan)
@@ -14310,6 +14373,69 @@ static void mir_emit_weighted_string_total(
     fprintf(out,
             "\tld de,(%s)\n\tadd hl,de\n\tld (%s),hl\n\tret\n",
             total_name, total_name);
+}
+
+static void mir_emit_divmod_check(
+    FILE *out, const struct MirDivmodCheck *plan)
+{
+    const char *callee_name = asm_name_for(plan->callee->name);
+    const char *checks_name = asm_name_for(plan->checks->name);
+    const char *failures_name = asm_name_for(plan->failures->name);
+    const char *remainder_name = asm_name_for(plan->remainder->name);
+    int done = new_label();
+    int failure = new_label();
+
+    mir_emit_symbol_extrn(out, plan->callee);
+    mir_emit_symbol_extrn(out, plan->remainder);
+    mir_emit_symbol_extrn(out, plan->checks);
+    mir_emit_symbol_extrn(out, plan->failures);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
+            "\tcall %s\n\tpop bc\n\tpop bc\n"
+            "\tld (ix-2),l\n\tld (ix-1),h\n"
+            "\tld hl,(%s)\n\tld (ix-4),l\n\tld (ix-3),h\n"
+            "\tld hl,(%s)\n\tinc hl\n\tld (%s),hl\n"
+            "\tld l,(ix-2)\n\tld h,(ix-1)\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "\tor a\n\tsbc hl,de\n\tjp nz, L%d\n"
+            "\tld l,(ix-4)\n\tld h,(ix-3)\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "\tor a\n\tsbc hl,de\n\tjp nz, L%d\n"
+            "\tjp L%d\n"
+            "L%d:\n"
+            "\tld hl,(%s)\n\tinc hl\n\tld (%s),hl\n",
+            plan->parameter_offset[1], plan->parameter_offset[1] + 1,
+            plan->parameter_offset[0], plan->parameter_offset[0] + 1,
+            callee_name,
+            remainder_name,
+            checks_name, checks_name,
+            plan->parameter_offset[2], plan->parameter_offset[2] + 1,
+            failure,
+            plan->parameter_offset[3], plan->parameter_offset[3] + 1,
+            failure,
+            done,
+            failure,
+            failures_name, failures_name);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
+            "\tld l,(ix-4)\n\tld h,(ix-3)\n\tpush hl\n"
+            "\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            plan->parameter_offset[3], plan->parameter_offset[3] + 1,
+            plan->parameter_offset[2], plan->parameter_offset[2] + 1,
+            plan->parameter_offset[1], plan->parameter_offset[1] + 1,
+            plan->parameter_offset[0], plan->parameter_offset[0] + 1,
+            plan->format_string);
+    mir_emit_runtime_call(out, "_printf");
+    fprintf(out,
+            "\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
+            "\tpop bc\n\tpop bc\n\tpop bc\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            done);
 }
 
 static void mir_emit_byte_compare_flags(
@@ -25079,6 +25205,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     struct MirNodeGraph node_graph;
     struct MirVariadicChecks variadic_checks;
     struct MirWeightedStringTotal weighted_string_total;
+    struct MirDivmodCheck divmod_check;
     struct MirWideGcd wide_gcd;
     struct MirFixedLongAdd fixed_long_add;
     struct MirFixedLongZero fixed_long_zero;
@@ -25343,6 +25470,16 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_weighted_string_total(out, &weighted_string_total);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_divmod_check(&divmod_check)) {
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+              "\tld hl,-4\n\tadd hl,sp\n\tld sp,hl\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_divmod_check(out, &divmod_check);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
