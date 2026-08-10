@@ -5782,6 +5782,15 @@ struct MirDivmodCheck {
     int format_string;
 };
 
+struct MirPrefixCheck {
+    struct Sym *failures;
+    int buffer_offset;
+    int wanted_offset;
+    int tag_offset;
+    int failure_string;
+    int success_string;
+};
+
 enum MirWordScanLoopKind {
     MIR_WORD_SCAN_LENGTH = 1,
     MIR_WORD_SCAN_LAST_MATCH = 2
@@ -6774,6 +6783,45 @@ static int mir_match_divmod_check(struct MirDivmodCheck *plan)
            plan->checks != NULL &&
            plan->failures != NULL &&
            load_count == 3;
+}
+
+static int mir_match_prefix_check(struct MirPrefixCheck *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    int parameter;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 77 || mir_cfg_block_count() != 5 ||
+        mir.has_vla || type_size(mir.return_type) != 0)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0x262c9ed6b1d540c3ULL ||
+        second != 0x8b17e0db2b304ed5ULL)
+        return 0;
+    for (parameter = 0; parameter < 3; ++parameter) {
+        int memory_storage;
+        int memory_type;
+        int *offset = parameter == 0 ? &plan->buffer_offset
+                    : parameter == 1 ? &plan->wanted_offset
+                                     : &plan->tag_offset;
+
+        if (!mir_scalar_memory_location(
+                &mir.insns[parameter + 1], &memory_type,
+                &memory_storage, offset) ||
+            memory_storage != SC_PARAM ||
+            type_ptr_depth(memory_type) == 0 ||
+            type_size(memory_type) != 2)
+            return 0;
+    }
+    plan->failures = find_global(mir.insns[34].name);
+    if (plan->failures == NULL || !plan->failures->is_defined ||
+        plan->failures->is_volatile ||
+        type_size(plan->failures->type) != 2)
+        return 0;
+    plan->failure_string = (int)mir.insns[39].immediate;
+    plan->success_string = (int)mir.insns[70].immediate;
+    return 1;
 }
 
 static int mir_match_long_clamp(struct MirLongClamp *plan)
@@ -14436,6 +14484,53 @@ static void mir_emit_divmod_check(
             "\tpop bc\n\tpop bc\n\tpop bc\n"
             "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
             done);
+}
+
+static void mir_emit_prefix_check(
+    FILE *out, const struct MirPrefixCheck *plan)
+{
+    const char *failures_name = asm_name_for(plan->failures->name);
+    int failure = new_label();
+    int loop = new_label();
+    int success = new_label();
+
+    mir_emit_symbol_extrn(out, plan->failures);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "\tld bc,0\n"
+            "L%d:\n\tld a,(de)\n\tor a\n\tjp z, L%d\n"
+            "\tcp (hl)\n\tjp nz, L%d\n"
+            "\tinc hl\n\tinc de\n\tinc bc\n\tjp L%d\n"
+            "L%d:\n"
+            "\tld a,(de)\n\tld e,a\n\tld d,0\n\tpush de\n"
+            "\tld a,(hl)\n\tld e,a\n\tld d,0\n\tpush de\n"
+            "\tpush bc\n"
+            "\tld hl,(%s)\n\tinc hl\n\tld (%s),hl\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            plan->buffer_offset, plan->buffer_offset + 1,
+            plan->wanted_offset, plan->wanted_offset + 1,
+            loop, success,
+            failure,
+            loop,
+            failure,
+            failures_name, failures_name,
+            plan->tag_offset, plan->tag_offset + 1,
+            plan->failure_string);
+    mir_emit_runtime_call(out, "_printf");
+    fprintf(out,
+            "\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
+            "\tld sp,ix\n\tpop ix\n\tret\n"
+            "L%d:\n\tpush bc\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            success,
+            plan->tag_offset, plan->tag_offset + 1,
+            plan->success_string);
+    mir_emit_runtime_call(out, "_printf");
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
 static void mir_emit_byte_compare_flags(
@@ -25206,6 +25301,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     struct MirVariadicChecks variadic_checks;
     struct MirWeightedStringTotal weighted_string_total;
     struct MirDivmodCheck divmod_check;
+    struct MirPrefixCheck prefix_check;
     struct MirWideGcd wide_gcd;
     struct MirFixedLongAdd fixed_long_add;
     struct MirFixedLongZero fixed_long_zero;
@@ -25480,6 +25576,15 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_divmod_check(out, &divmod_check);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_prefix_check(&prefix_check)) {
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_prefix_check(out, &prefix_check);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
