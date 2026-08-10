@@ -2310,6 +2310,7 @@ if ($TimingBreakdown) {
     $sumRunMs = 0.0; $sumAppElapsedMs = 0.0
     $sumDccmakeSelfTotal = 0.0; $sumDccmakePsInvoke = 0.0; $sumRunPs = 0.0
     $asmModes = @{}
+    $linkModes = @{}
     foreach ($r in $results) {
         $sumAppElapsedMs += $r.Elapsed.TotalMilliseconds
         foreach ($buildModeKey in @($r.Timing.Keys)) {
@@ -2318,6 +2319,7 @@ if ($TimingBreakdown) {
                 $sumDcc += $t.dcc; $sumPeep += $t.peep; $sumAsm += $t.asm
                 $sumRtlstrip += $t.rtlstrip; $sumLink += $t.link; $sumDccOther += $t.other
                 if ($t.asmMode) { $asmModes[$t.asmMode] = $true }
+                if ($t.linkMode) { $linkModes[$t.linkMode] = $true }
                 if ($t.total) { $sumDccmakeSelfTotal += $t.total }
                 if ($t.psInvokeMs) { $sumDccmakePsInvoke += $t.psInvokeMs }
             }
@@ -2331,6 +2333,7 @@ if ($TimingBreakdown) {
     $accountedMs = $sumDcc + $sumPeep + $sumAsm + $sumRtlstrip + $sumLink + $sumDccOther + $sumRunMs
     $scriptOverheadMs = [math]::Max($sumAppElapsedMs - $accountedMs, 0)
     $asmModeLabel = if ($asmModes.Count -eq 0) { "unknown" } elseif ($asmModes.Count -gt 1) { "MIXED: $($asmModes.Keys -join ', ')" } else { [string]$asmModes.Keys }
+    $linkModeLabel = if ($linkModes.Count -eq 0) { "unknown" } elseif ($linkModes.Count -gt 1) { "MIXED: $($linkModes.Keys -join ', ')" } else { [string]$linkModes.Keys }
     # dccmake/ntvcm's own SELF-reported timing (dcc/peep/.../total, and
     # ntvcm's own "elapsed milliseconds") is measured from inside those
     # processes - it excludes the actual OS process-create/exec cost and
@@ -2353,6 +2356,7 @@ if ($TimingBreakdown) {
     Write-Host ("    {0,-16} {1}" -f "  m80 mode:", $asmModeLabel) -ForegroundColor $(if ($asmModeLabel -eq "native") { "DarkGray" } else { "Yellow" })
     Write-TimingRow "dccrtlstrip" $sumRtlstrip $sumAppElapsedMs
     Write-TimingRow "L80 link" $sumLink $sumAppElapsedMs
+    Write-Host ("    {0,-16} {1}" -f "  l80 mode:", $linkModeLabel) -ForegroundColor $(if ($linkModeLabel -eq "native") { "DarkGray" } else { "Yellow" })
     Write-TimingRow "dccmake other" $sumDccOther $sumAppElapsedMs
     Write-TimingRow "ntvcm run" $sumRunMs $sumAppElapsedMs
     Write-TimingRow "dccmake spawn" $dccmakeInvokeOverheadMs $sumAppElapsedMs
