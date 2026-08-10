@@ -3949,7 +3949,7 @@ static int mir_register_policy_version(const char *policy)
     if (strncmp(policy, "register-v", 10))
         return 0;
     version = strtol(policy + 10, &end, 10);
-    if (*end != 0 || version < 1 || version > 25)
+    if (*end != 0 || version < 1 || version > 26)
         return -1;
     return (int)version;
 }
@@ -3963,7 +3963,7 @@ static int mir_final_cost_policy_rejects(
     int policy_version;
 
     if (policy == NULL || policy[0] == 0)
-        policy = "register-v25";
+        policy = "register-v26";
     if (!strcmp(policy, "off"))
         return 0;
     policy_version = mir_register_policy_version(policy);
@@ -4001,7 +4001,11 @@ static int mir_final_cost_policy_rejects(
                 (policy_version >= 20 &&
                  mir_cfg_block_count() <= 5 &&
                  generated_size * 100L > captured_size * 105L &&
-                 mir_stream_contains_text(captured, " kind=ro ")));
+                 mir_stream_contains_text(captured, " kind=ro ")) ||
+                (policy_version >= 26 &&
+                 mir_cfg_block_count() <= 4 &&
+                 generated_size * 100L > captured_size * 120L &&
+                 mir_stream_contains_text(captured, " kind=rw ")));
     }
     if (policy_version > 0) {
         int generated_claim;
