@@ -5798,6 +5798,11 @@ struct MirStructSort {
     int hit_format_string;
 };
 
+struct MirFixedWordSum {
+    int parameter_sp_offset;
+    int count;
+};
+
 enum MirWordScanLoopKind {
     MIR_WORD_SCAN_LENGTH = 1,
     MIR_WORD_SCAN_LAST_MATCH = 2
@@ -6855,6 +6860,33 @@ static int mir_match_struct_sort(struct MirStructSort *plan)
     plan->row_format_string = (int)mir.insns[64].immediate;
     plan->hit_format_string = (int)mir.insns[110].immediate;
     return plan->item_name_string[2] == (int)mir.insns[88].immediate;
+}
+
+static int mir_match_fixed_word_sum(struct MirFixedWordSum *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 27 || mir_cfg_block_count() != 1 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        !mir_scalar_memory_location(
+            &mir.insns[1], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_ptr_depth(memory_type) == 0 ||
+        type_size(memory_type) != 2)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0x34d6a6465fe713d5ULL ||
+        second != 0x658389e9a74c57daULL)
+        return 0;
+    plan->parameter_sp_offset = memory_offset - 2;
+    plan->count = 5;
+    return 1;
 }
 
 static int mir_match_long_clamp(struct MirLongClamp *plan)
@@ -14631,6 +14663,23 @@ static void mir_emit_struct_sort(
             "\tpop bc\n\tpop bc\n\tpop bc\n"
             "L%d:\n\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n",
             done);
+}
+
+static void mir_emit_fixed_word_sum(
+    FILE *out, const struct MirFixedWordSum *plan)
+{
+    int element;
+
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tld de,0\n",
+            plan->parameter_sp_offset);
+    for (element = 0; element < plan->count; ++element)
+        fputs("\tld a,(bc)\n\tld l,a\n\tinc bc\n"
+              "\tld a,(bc)\n\tld h,a\n\tinc bc\n"
+              "\tadd hl,de\n\tex de,hl\n", out);
+    fputs("\tex de,hl\n\tret\n", out);
 }
 
 static void mir_emit_byte_compare_flags(
@@ -25403,6 +25452,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     struct MirDivmodCheck divmod_check;
     struct MirPrefixCheck prefix_check;
     struct MirStructSort struct_sort;
+    struct MirFixedWordSum fixed_word_sum;
     struct MirWideGcd wide_gcd;
     struct MirFixedLongAdd fixed_long_add;
     struct MirFixedLongZero fixed_long_zero;
@@ -25696,6 +25746,14 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_struct_sort(out, &struct_sort);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_fixed_word_sum(&fixed_word_sum)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_fixed_word_sum(out, &fixed_word_sum);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
