@@ -2215,6 +2215,143 @@ int stride_parse_ld_r_ix_neg(const char *s, char r, int *n); /* forward */
  * that essentially never occurs in practice. */
 #define MAX_ELIM_IX_EPILOGUES 64
 
+static int ix_pair_only_dead_push_stores(
+    int off, int func_start, int func_end)
+{
+    char pat_hi[24];
+    char pat_lo[24];
+    int found = 0;
+    int i;
+
+    sprintf(pat_lo, "(ix%+d)", off);
+    sprintf(pat_hi, "(ix%+d)", off + 1);
+    for (i = func_start; i < func_end; ++i) {
+        int store_off;
+
+        if (strstr(lines[i], pat_lo) == NULL &&
+            strstr(lines[i], pat_hi) == NULL)
+            continue;
+        if (i + 2 < func_end &&
+            peep_parse_st_ix_pair(lines[i], lines[i + 1], &store_off) &&
+            store_off == off && eq(i + 2, "push hl")) {
+            found = 1;
+            ++i;
+            continue;
+        }
+        return 0;
+    }
+    return found;
+}
+
+static int ix_pair_store_dead_after_push(
+    int store_line, int off, int func_start, int func_end)
+{
+    static unsigned char visited[MAX_LINES];
+    static int queue[MAX_LINES];
+    char pat_hi[24];
+    char pat_lo[24];
+    const PeepFlowLine *start_flow;
+    int head = 0;
+    int tail = 0;
+    int successor;
+
+    sprintf(pat_lo, "(ix%+d)", off);
+    sprintf(pat_hi, "(ix%+d)", off + 1);
+    memset(visited, 0, (size_t)nlines);
+    start_flow = peep_flow_line(store_line + 2);
+    if (start_flow == NULL)
+        return 0;
+    for (successor = 0;
+         successor < start_flow->successor_count; ++successor)
+        queue[tail++] = start_flow->successors[successor];
+
+    while (head < tail) {
+        const PeepFlowLine *flow;
+        const PeepLineInfo *info;
+        int i = queue[head++];
+        int store_off;
+
+        if (i < func_start || i >= func_end || visited[i])
+            continue;
+        visited[i] = 1;
+        info = peep_line_info(i);
+        if (info != NULL && info->kind == PEEP_LINE_OPAQUE)
+            return 0;
+        if (strstr(lines[i], pat_lo) != NULL ||
+            strstr(lines[i], pat_hi) != NULL) {
+            if (i + 1 < func_end &&
+                peep_parse_st_ix_pair(
+                    lines[i], lines[i + 1], &store_off) &&
+                store_off == off)
+                continue;
+            return 0;
+        }
+        flow = peep_flow_line(i);
+        if (flow == NULL)
+            return 0;
+        for (successor = 0;
+             successor < flow->successor_count; ++successor) {
+            if (tail >= MAX_LINES)
+                return 0;
+            queue[tail++] = flow->successors[successor];
+        }
+    }
+    return 1;
+}
+
+static int function_has_frame_address_escape(int func_start, int func_end)
+{
+    int i;
+
+    for (i = func_start; i < func_end; ++i) {
+        const PeepLineInfo *info = peep_line_info(i);
+        long unused_offset;
+
+        if (info != NULL && info->kind == PEEP_LINE_OPAQUE)
+            return 1;
+        if (scan_ix_frame_addr(i, &unused_offset))
+            return 1;
+        if (eq(i, "add hl,sp"))
+            return 1;
+    }
+    return 0;
+}
+
+/*
+ * MIR stack-forwarded PHI arguments leave their incoming constants in HL,
+ * push that value on the edge, and never read the temporary IX slot that the
+ * correctness-first backend assigned. Remove those write-only pairs only
+ * after selection is final.
+ */
+static int pass_remove_dead_phi_argument_slots(void)
+{
+    int changed = 0;
+    int i;
+
+    for (i = 0; i + 2 < nlines; ++i) {
+        int func_end;
+        int func_start;
+        int off;
+
+        if (!peep_parse_st_ix_pair(lines[i], lines[i + 1], &off) ||
+            !eq(i + 2, "push hl"))
+            continue;
+        find_function_bounds_any(i, &func_start, &func_end);
+        if (function_has_frame_address_escape(func_start, func_end) ||
+            (!ix_pair_only_dead_push_stores(
+                 off, func_start, func_end) &&
+             !ix_pair_store_dead_after_push(
+                 i, off, func_start, func_end)))
+            continue;
+        delete_n(i, 2);
+        changed = 1;
+        if (i > 0)
+            --i;
+    }
+
+    return changed;
+}
+
 static int pass_elim_ix_frame(void)
 {
     int i, j;
@@ -9493,6 +9630,8 @@ int main(int argc, char **argv)
      * local, so a single pass suffices; pass_labels tidies up. */
     if (RUN_PASS(pass_cache_ix_spill_via_iy))
         RUN_PASS(pass_labels);
+
+    RUN_PASS(pass_remove_dead_phi_argument_slots);
 
     /* Run frame elimination after all other passes have converged, then
      * clean up any newly unreferenced labels created by the removal.
