@@ -3845,7 +3845,10 @@ static int mir_wide_helper_handoff_supported(const struct MirInsn *consumer)
         left = mir_definition(consumer->src1);
         right = mir_definition(consumer->src2);
         return left != NULL && left->opcode == MIR_UNARY &&
-               right != NULL && right->opcode == MIR_UNARY;
+               right != NULL &&
+               (right->opcode == MIR_UNARY ||
+                (right->opcode == MIR_BINARY &&
+                 type_is_float(right->type)));
     }
 
     if (type_is_float(consumer->secondary_offset))
@@ -3865,6 +3868,52 @@ static int mir_swap_wide_comparison_operator(int operation)
     }
 }
 
+static int mir_wide_helper_rhs_pair_consumer(
+    int value, int instruction, int *consumer_out)
+{
+    const struct MirInsn *consumer;
+    const struct MirInsn *left;
+    const struct MirInsn *outer_consumer;
+    int left_consumer;
+    int left_instruction;
+    int outer_consumer_index;
+
+    if (value < 0 || mir_value_use_count(value) != 1 ||
+        instruction < 0 || instruction + 1 >= mir.count)
+        return 0;
+    consumer = &mir.insns[instruction + 1];
+    if (consumer->opcode != MIR_BINARY ||
+        consumer->src2 != value ||
+        !mir_wide_helper_handoff_supported(consumer))
+        return 0;
+    left = mir_definition(consumer->src1);
+    if (left == NULL)
+        return 0;
+    left_instruction = (int)(left - mir.insns);
+    if (!mir_wide_helper_lhs_consumer(
+            consumer->src1, left_instruction, &left_consumer) ||
+        left_consumer != instruction + 1 ||
+        !mir_wide_helper_lhs_span_is_safe(
+            left_instruction, instruction + 1))
+        return 0;
+    if (!mir_wide_helper_lhs_consumer(
+            consumer->dst, instruction + 1, &outer_consumer_index))
+        return 0;
+    outer_consumer = &mir.insns[outer_consumer_index];
+    if (outer_consumer->opcode != MIR_BINARY ||
+        (outer_consumer->immediate != TOK_EQ &&
+         outer_consumer->immediate != TOK_NE &&
+         outer_consumer->immediate != '<' &&
+         outer_consumer->immediate != '>' &&
+         outer_consumer->immediate != TOK_LE &&
+         outer_consumer->immediate != TOK_GE) ||
+        outer_consumer->src2 != consumer->dst)
+        return 0;
+    if (consumer_out != NULL)
+        *consumer_out = instruction + 1;
+    return 1;
+}
+
 static int mir_wide_helper_lhs_slot_forwardable(int value, int units,
                                                  int instruction)
 {
@@ -3874,6 +3923,14 @@ static int mir_wide_helper_lhs_slot_forwardable(int value, int units,
         mir_wide_helper_lhs_consumer(value, instruction, &consumer) &&
         mir_wide_helper_handoff_supported(&mir.insns[consumer]) &&
         mir_wide_helper_lhs_span_is_safe(instruction, consumer);
+}
+
+static int mir_wide_helper_rhs_pair_slot_forwardable(
+    int value, int units, int instruction)
+{
+    return units == 2 &&
+           mir_wide_helper_rhs_pair_consumer(
+               value, instruction, NULL);
 }
 
 static int mir_wide_signed_const_lhs_slot_forwardable(
@@ -10412,6 +10469,8 @@ static int mir_prepare_backend_slots(void)
                                         mir_wide_signed_const_lhs_slot_forwardable(
                                             value, units, i) ||
                                         mir_wide_helper_lhs_slot_forwardable(value, units, i) ||
+                                        mir_wide_helper_rhs_pair_slot_forwardable(
+                                            value, units, i) ||
                                         mir_call_argument_slot_forwardable(value, units, i) ||
                                         mir_stack_backend_slot_forwardable(value, units, i) ||
                                         mir_value_is_nested_truth_comparison_input(value) ||
@@ -11494,6 +11553,7 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
                            definition->opcode == MIR_PHI;
     int has_slot;
     int helper_consumer;
+    int helper_rhs_pair;
     int offset;
     int iy_offset;
     /* Item T35 (mir-text-size-plan.md): mirrors mir_emit_virtual_store's
@@ -11534,16 +11594,28 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
         mir_forwarded_wide_instruction = mir_emit_instruction_index;
         return;
     }
+    helper_rhs_pair = mir_wide_helper_rhs_pair_consumer(
+        value, mir_emit_instruction_index, &helper_consumer);
     if (!force_slot_store &&
-        mir_wide_helper_lhs_consumer(
-            value, mir_emit_instruction_index, &helper_consumer) &&
-        mir_wide_helper_handoff_supported(&mir.insns[helper_consumer]) &&
-        mir_wide_helper_lhs_span_is_safe(
-            mir_emit_instruction_index, helper_consumer)) {
+        (helper_rhs_pair ||
+         (mir_wide_helper_lhs_consumer(
+              value, mir_emit_instruction_index, &helper_consumer) &&
+          mir_wide_helper_handoff_supported(&mir.insns[helper_consumer]) &&
+          mir_wide_helper_lhs_span_is_safe(
+              mir_emit_instruction_index, helper_consumer)))) {
         if (mir_forwarded_wide_stack_value >= 0) {
             const struct MirInsn *consumer = &mir.insns[helper_consumer];
 
-            if (mir_forwarded_wide_stack_consumer == helper_consumer &&
+            if (helper_rhs_pair &&
+                mir_forwarded_wide_stack_consumer == helper_consumer &&
+                consumer->src1 == mir_forwarded_wide_stack_value &&
+                consumer->src2 == value) {
+                mir_forwarded_wide_value = value;
+                mir_forwarded_wide_instruction = helper_consumer - 1;
+                return;
+            }
+            if (!helper_rhs_pair &&
+                mir_forwarded_wide_stack_consumer == helper_consumer &&
                 consumer->src1 == value &&
                 consumer->src2 == mir_forwarded_wide_stack_value &&
                 mir_forward_skip_target(mir_emit_instruction_index) ==
@@ -11552,6 +11624,10 @@ static void mir_emit_virtual_store_wide(FILE *out, int value)
                 mir_forwarded_wide_instruction = helper_consumer - 1;
                 return;
             }
+            mir_planned_stack_invalid = 1;
+            return;
+        }
+        if (helper_rhs_pair) {
             mir_planned_stack_invalid = 1;
             return;
         }
