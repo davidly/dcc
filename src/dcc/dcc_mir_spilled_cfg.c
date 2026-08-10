@@ -62,14 +62,12 @@ static int mir_binary_is_selfstore_small_adjust(
     int index, int *store_index, int *amount);
 static int mir_binary_is_selfstore_global_predecrement_load(
     int index, int *store_index, int *load_index, int *amount);
-/*
- * A loop-carried `wide_phi + 1` can update the PHI's existing two-unit slot
- * in place. The result aliases that slot and its backedge copy is therefore
- * an identity; the initial edge still performs its required copy.
- */
+/* A loop-carried wide update can reuse the PHI's two-unit slot in place. */
+static int mir_binary_is_wide_phi_update(
+    int index, int *phi_value, int *store_index);
 static int mir_binary_is_wide_phi_increment(
     int index, int *phi_value, int *store_index);
-static int mir_value_is_wide_phi_increment_result(int value);
+static int mir_value_is_wide_phi_update_result(int value);
 static int mir_binary_is_narrow_phi_adjust(
     int index, int *phi_value, int *store_index);
 static int mir_value_is_narrow_phi_adjust_result(int value);
@@ -1965,14 +1963,16 @@ static int mir_wide_constant_is_signed_relational_immediate(int value)
     return uses == 1;
 }
 
-static int mir_binary_is_wide_phi_increment(
+static int mir_binary_is_wide_phi_update(
     int index, int *phi_value, int *store_index)
 {
     const struct MirInsn *insn;
     const struct MirInsn *phi;
-    const struct MirInsn *one;
+    const struct MirInsn *right;
+    int backedge = -1;
     int found_store = -1;
     int instruction;
+    int phi_instruction;
 
     if (index < 0 || index >= mir.count)
         return 0;
@@ -1981,13 +1981,12 @@ static int mir_binary_is_wide_phi_increment(
         type_size(insn->secondary_offset) != 4)
         return 0;
     phi = mir_definition(insn->src1);
-    one = mir_definition(insn->src2);
+    right = mir_definition(insn->src2);
     if (phi == NULL || phi->opcode != MIR_PHI ||
         type_size(phi->type) != 4 || phi->src2 != insn->dst ||
-        phi->object < 0 ||
-        one == NULL || one->opcode != MIR_CONST ||
-        one->immediate != 1)
+        phi->object < 0 || insn->src2 == phi->dst)
         return 0;
+    phi_instruction = (int)(phi - mir.insns);
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *use = &mir.insns[instruction];
 
@@ -2014,12 +2013,41 @@ static int mir_binary_is_wide_phi_increment(
          instruction < found_store; ++instruction)
         if (mir.insns[instruction].opcode != MIR_NOP)
             return 0;
-    for (instruction = index + 1;
-         instruction < mir.count; ++instruction)
+    if (right != NULL && right->opcode == MIR_CONST &&
+        right->immediate == 1) {
+        for (instruction = index + 1;
+             instruction < mir.count; ++instruction)
+            if (mir.insns[instruction].src1 == phi->dst ||
+                mir.insns[instruction].src2 == phi->dst ||
+                mir_call_uses_value(&mir.insns[instruction], phi->dst))
+                return 0;
+        if (phi_value != NULL)
+            *phi_value = phi->dst;
+        if (store_index != NULL)
+            *store_index = found_store;
+        return 1;
+    }
+    for (instruction = index + 1; instruction < mir.count; ++instruction) {
+        const struct MirInsn *after = &mir.insns[instruction];
+
         if (mir.insns[instruction].src1 == phi->dst ||
             mir.insns[instruction].src2 == phi->dst ||
             mir_call_uses_value(&mir.insns[instruction], phi->dst))
             return 0;
+        if (after->opcode == MIR_JUMP) {
+            int target = mir_find_label(after->label);
+
+            if (target < 0 || target > phi_instruction)
+                return 0;
+            backedge = instruction;
+            break;
+        }
+        if (after->opcode == MIR_BRANCH_FALSE ||
+            after->opcode == MIR_RETURN)
+            return 0;
+    }
+    if (backedge < 0)
+        return 0;
     if (phi_value != NULL)
         *phi_value = phi->dst;
     if (store_index != NULL)
@@ -2027,7 +2055,22 @@ static int mir_binary_is_wide_phi_increment(
     return 1;
 }
 
-static int mir_value_is_wide_phi_increment_result(int value)
+static int mir_binary_is_wide_phi_increment(
+    int index, int *phi_value, int *store_index)
+{
+    const struct MirInsn *insn;
+    const struct MirInsn *one;
+
+    if (!mir_binary_is_wide_phi_update(
+            index, phi_value, store_index))
+        return 0;
+    insn = &mir.insns[index];
+    one = mir_definition(insn->src2);
+    return one != NULL && one->opcode == MIR_CONST &&
+           one->immediate == 1;
+}
+
+static int mir_value_is_wide_phi_update_result(int value)
 {
     const struct MirInsn *definition = mir_definition(value);
     int phi_value;
@@ -2035,7 +2078,7 @@ static int mir_value_is_wide_phi_increment_result(int value)
 
     return definition != NULL &&
            definition->opcode == MIR_BINARY &&
-           mir_binary_is_wide_phi_increment(
+           mir_binary_is_wide_phi_update(
                (int)(definition - mir.insns),
                &phi_value, &store_index);
 }
@@ -11178,7 +11221,7 @@ static int mir_prepare_backend_slots(void)
                 }
                 if (units == 2 && definition != NULL &&
                     definition->opcode == MIR_BINARY &&
-                    mir_binary_is_wide_phi_increment(
+                    mir_binary_is_wide_phi_update(
                         i, &wide_phi_source, NULL) &&
                     wide_phi_source >= 0 &&
                     mir.backend_slots[wide_phi_source] >= 0) {
@@ -11187,7 +11230,8 @@ static int mir_prepare_backend_slots(void)
                     slot = mir.backend_slots[wide_phi_source];
                     mir.backend_slots[value] = slot;
                     for (unit = 0; unit < units; ++unit)
-                        slot_end[slot + unit] = last[value];
+                        if (slot_end[slot + unit] < last[value])
+                            slot_end[slot + unit] = last[value];
                     continue;
                 }
                 if (units == 1 && definition != NULL &&
@@ -19860,7 +19904,7 @@ static int mir_collect_phi_copies_for_edge(int predecessor, int successor,
         if (source < 0)
             return -1;
         if ((mir_phi_slot_cleanup_is_active() ||
-             mir_value_is_wide_phi_increment_result(source) ||
+             mir_value_is_wide_phi_update_result(source) ||
              mir_value_is_narrow_phi_adjust_result(source)) &&
             mir_phi_copy_is_slot_identity(source, phi->dst)) {
             ++instruction;
@@ -25307,7 +25351,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                         producer_index, &phi_value,
                         &narrow_phi_store_index) &&
                      narrow_phi_store_index == i) ||
-                    (mir_binary_is_wide_phi_increment(
+                    (mir_binary_is_wide_phi_update(
                         producer_index, &phi_value,
                         &wide_phi_store_index) &&
                      wide_phi_store_index == i) ||
