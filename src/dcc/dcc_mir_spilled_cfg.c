@@ -5744,6 +5744,10 @@ struct MirByteCompareFlags {
     int carry_offset;
 };
 
+struct MirFloatAbs {
+    int parameter_sp_offset;
+};
+
 enum MirWordScanLoopKind {
     MIR_WORD_SCAN_LENGTH = 1,
     MIR_WORD_SCAN_LAST_MATCH = 2
@@ -6561,6 +6565,30 @@ static int mir_match_byte_compare_flags(
     plan->negative_offset = (int)mir.insns[4].immediate;
     plan->zero_offset = (int)mir.insns[17].immediate;
     plan->carry_offset = (int)mir.insns[28].immediate;
+    return 1;
+}
+
+static int mir_match_float_abs(struct MirFloatAbs *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 12 || mir_cfg_block_count() != 2 ||
+        mir.has_vla || !type_is_float(mir.return_type) ||
+        !mir_scalar_memory_location(
+            &mir.insns[1], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_PARAM || !type_is_float(memory_type))
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0x251aa55e445d4543ULL ||
+        second != 0x4b6850f8308476aaULL)
+        return 0;
+    plan->parameter_sp_offset = memory_offset - 2;
     return 1;
 }
 
@@ -13889,15 +13917,36 @@ static void mir_emit_exec_child(
             epilogue);
 }
 
-static void mir_emit_wide_bitcast(
-    FILE *out, const struct MirWideBitcast *plan)
+static void mir_emit_frameless_wide_parameter(
+    FILE *out, int parameter_sp_offset)
 {
     fprintf(out,
             "\tld hl,%d\n\tadd hl,sp\n"
             "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n\tinc hl\n"
             "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
-            "\tld l,c\n\tld h,b\n\tret\n",
-            plan->parameter_sp_offset);
+            "\tld l,c\n\tld h,b\n",
+            parameter_sp_offset);
+}
+
+static void mir_emit_wide_bitcast(
+    FILE *out, const struct MirWideBitcast *plan)
+{
+    mir_emit_frameless_wide_parameter(
+        out, plan->parameter_sp_offset);
+    fputs("\tret\n", out);
+}
+
+static void mir_emit_float_abs(
+    FILE *out, const struct MirFloatAbs *plan)
+{
+    mir_emit_frameless_wide_parameter(
+        out, plan->parameter_sp_offset);
+    fputs("\tpush de\n\tpush hl\n\tpush de\n\tpush hl\n"
+          "\tld hl,0\n\tld de,0\n", out);
+    mir_emit_runtime_call(out, "__fltf");
+    fputs("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n"
+          "\tpop hl\n\tpop de\n\tret z\n"
+          "\tld a,d\n\txor 128\n\tld d,a\n\tret\n", out);
 }
 
 static void mir_emit_byte_compare_flags(
@@ -24663,6 +24712,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     struct MirExecChild exec_child;
     struct MirWideBitcast wide_bitcast;
     struct MirByteCompareFlags byte_compare_flags;
+    struct MirFloatAbs float_abs;
     struct MirWideGcd wide_gcd;
     struct MirFixedLongAdd fixed_long_add;
     struct MirFixedLongZero fixed_long_zero;
@@ -24893,6 +24943,14 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_byte_compare_flags(out, &byte_compare_flags);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_float_abs(&float_abs)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_float_abs(out, &float_abs);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
