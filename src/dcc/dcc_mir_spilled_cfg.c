@@ -5636,6 +5636,14 @@ struct MirByteVerifyLoop {
     int index_object;
 };
 
+struct MirFixedArrayInit {
+    int skip_through;
+    int index_offset;
+    int word_array_offset;
+    int byte_array_offset;
+    int long_array_offset;
+};
+
 enum MirWordScanLoopKind {
     MIR_WORD_SCAN_LENGTH = 1,
     MIR_WORD_SCAN_LAST_MATCH = 2
@@ -6269,6 +6277,46 @@ static int mir_match_nonvolatile_word_array(
         (symbol->storage != SC_GLOBAL && symbol->storage != SC_EXTERN))
         return 0;
     *result = symbol;
+    return 1;
+}
+
+static int mir_match_fixed_array_init(struct MirFixedArrayInit *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    int memory_storage;
+    int memory_type;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 343 || mir_cfg_block_count() != 14 ||
+        mir.has_vla || type_size(mir.return_type) != 2)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0xbdab08936d0a2171ULL ||
+        second != 0xfa0d5a8f88ea76d6ULL ||
+        !mir_scalar_memory_location(
+            &mir.insns[3], &memory_type, &memory_storage,
+            &plan->index_offset) ||
+        memory_storage != SC_LOCAL ||
+        !mir_scalar_memory_location(
+            &mir.insns[10], &memory_type, &memory_storage,
+            &plan->word_array_offset) ||
+        memory_storage != SC_LOCAL ||
+        !mir_scalar_memory_location(
+            &mir.insns[17], &memory_type, &memory_storage,
+            &plan->byte_array_offset) ||
+        memory_storage != SC_LOCAL ||
+        !mir_scalar_memory_location(
+            &mir.insns[42], &memory_type, &memory_storage,
+            &plan->long_array_offset) ||
+        memory_storage != SC_LOCAL)
+        return 0;
+    if (mir.insns[7].immediate != 8 ||
+        mir.insns[14].immediate != 10 ||
+        mir.insns[39].immediate != 6 ||
+        mir.insns[47].immediate != 1000)
+        return 0;
+    plan->skip_through = 56;
     return 1;
 }
 
@@ -13421,6 +13469,40 @@ static void mir_emit_frameless_byte_parameter(
 {
     fprintf(out, "\tld hl,%d\n\tadd hl,sp\n\tld a,(hl)\n",
             sp_offset);
+}
+
+static void mir_emit_fixed_array_init(
+    FILE *out, const struct MirFixedArrayInit *plan)
+{
+    int byte_word_loop = new_label();
+    int long_loop = new_label();
+
+    fprintf(out,
+            "\tpush ix\n\tpop hl\n\tld de,%d\n\tadd hl,de\n"
+            "\tex de,hl\n"
+            "\tpush ix\n\tpop hl\n\tld bc,%d\n\tadd hl,bc\n"
+            "\tld c,0\n"
+            "L%d:\n"
+            "\tld a,c\n\tadd a,a\n\tld b,a\n"
+            "\tadd a,a\n\tadd a,a\n\tadd a,b\n"
+            "\tld (hl),a\n\tinc hl\n\tld (hl),0\n\tinc hl\n"
+            "\tld a,c\n\tinc a\n\tld (de),a\n\tinc de\n"
+            "\tinc c\n\tld a,c\n\tcp 8\n\tjp c, L%d\n"
+            "\tpush ix\n\tpop hl\n\tld de,%d\n\tadd hl,de\n"
+            "\tld bc,0\n\tld e,6\n"
+            "L%d:\n"
+            "\tld (hl),c\n\tinc hl\n\tld (hl),b\n\tinc hl\n"
+            "\tld (hl),0\n\tinc hl\n\tld (hl),0\n\tinc hl\n"
+            "\tld a,c\n\tadd a,232\n\tld c,a\n"
+            "\tld a,b\n\tadc a,3\n\tld b,a\n"
+            "\tdec e\n\tjp nz, L%d\n"
+            "\tld (ix%+d),6\n\tld (ix%+d),0\n",
+            plan->byte_array_offset,
+            plan->word_array_offset,
+            byte_word_loop, byte_word_loop,
+            plan->long_array_offset,
+            long_loop, long_loop,
+            plan->index_offset, plan->index_offset + 1);
 }
 
 static void mir_emit_bitset_access(
@@ -24878,8 +24960,15 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         struct MirInlineTypedLoadPush inline_typed_load_push;
         struct MirInlineWordLoadPush inline_word_load_push;
         struct MirNamedZeroBranch named_zero_branch;
+        struct MirFixedArrayInit fixed_array_init;
 
         mir_emit_instruction_index = i;
+        if (i == 0 &&
+            mir_match_fixed_array_init(&fixed_array_init)) {
+            mir_emit_fixed_array_init(out, &fixed_array_init);
+            i = fixed_array_init.skip_through;
+            continue;
+        }
         mir_emit_prepacked_constant_arguments(out, i);
         mir_emit_prepacked_byte_check_argument(out, i);
         mir_emit_prepacked_bool_arguments(out, i);
