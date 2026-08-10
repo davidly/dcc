@@ -3085,6 +3085,7 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
     mir.has_indirect_incdec = 0;
     mir.has_pointer_difference = 0;
     mir.has_narrowed_for_counter = 0;
+    mir.has_compound_literal = 0;
     mir_inline_live_temp_mask = 0;
     memset(mir_inline_temp_ids, 0, sizeof(mir_inline_temp_ids));
     mir_inline_expand_depth = 0;
@@ -3608,6 +3609,7 @@ void mir_begin_compound_literal(struct Sym *symbol)
 {
     if (!mir.active || symbol == NULL || mir.compound_depth >= MAX_FLOW)
         return;
+    mir.has_compound_literal = 1;
     mir.compound_capture_starts[mir.compound_depth++] = mir.count;
 }
 
