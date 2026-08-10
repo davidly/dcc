@@ -256,6 +256,113 @@ static int mir_spilled_cfg_used_promoted_local_slot;
 #define MIR_BACKEND_SLOT_CALL_CACHE (-2)
 #define MIR_BACKEND_SLOT_WIDE_ARGUMENT_STACK_CACHE (-3)
 #define MIR_BACKEND_SLOT_NARROW_ARGUMENT_DIRECT_PUSH (-4)
+#define MIR_BACKEND_SLOT_PHI_ARGUMENT_STACK (-5)
+
+static int mir_phi_argument_stack_handoff_enabled;
+
+static int mir_phi_first_call_argument_candidate(int value)
+{
+    const struct MirInsn *phi = mir_definition(value);
+    int phi_instruction;
+    int argument_instruction = -1;
+    int call_instruction = -1;
+    int call_id = -1;
+    int argument_index = -1;
+    int argument_count = 0;
+    int instruction;
+
+    if (phi == NULL || phi->opcode != MIR_PHI ||
+        type_size(phi->type) <= 0 || type_size(phi->type) > 2)
+        return -1;
+    phi_instruction = (int)(phi - mir.insns);
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode == MIR_ARG && insn->src1 == value) {
+            if (argument_instruction >= 0)
+                return -1;
+            argument_instruction = instruction;
+            call_id = insn->secondary_offset;
+            argument_index = (int)insn->immediate;
+            continue;
+        }
+        if (insn->src1 == value || insn->src2 == value)
+            return -1;
+    }
+    if (argument_instruction != phi_instruction + 1)
+        return -1;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode == MIR_ARG &&
+            insn->secondary_offset == call_id)
+            ++argument_count;
+        if ((insn->opcode == MIR_CALL ||
+             insn->opcode == MIR_CALL_AGGREGATE) &&
+            insn->secondary_offset == call_id) {
+            if (call_instruction >= 0 ||
+                insn->opcode != MIR_CALL)
+                return -1;
+            call_instruction = instruction;
+        }
+    }
+    if (call_instruction != argument_instruction + 1 ||
+        argument_count <= 0 ||
+        argument_index != argument_count - 1)
+        return -1;
+    /*
+     * A single PHI at this join is load-bearing: each incoming edge may
+     * pre-push exactly one first ABI argument without needing simultaneous
+     * PHI-copy ordering or a path-sensitive stack plan.
+     */
+    instruction = phi_instruction - 1;
+    while (instruction >= 0 && mir.insns[instruction].opcode == MIR_NOP)
+        --instruction;
+    if (instruction >= 0 && mir.insns[instruction].opcode == MIR_PHI)
+        return -1;
+    instruction = phi_instruction + 1;
+    while (instruction < mir.count &&
+           (mir.insns[instruction].opcode == MIR_NOP ||
+            mir.insns[instruction].opcode == MIR_ARG))
+        ++instruction;
+    if (instruction != call_instruction)
+        return -1;
+    return call_instruction;
+}
+
+static int mir_phi_first_call_argument_target(int value)
+{
+    return mir_phi_argument_stack_handoff_enabled
+        ? mir_phi_first_call_argument_candidate(value) : -1;
+}
+
+static int mir_phi_argument_is_prepacked(int value, int call_instruction)
+{
+    return value >= 0 && value < mir.next_value &&
+           mir.backend_slots != NULL &&
+           mir.backend_slots[value] ==
+               MIR_BACKEND_SLOT_PHI_ARGUMENT_STACK &&
+           mir_phi_first_call_argument_target(value) == call_instruction;
+}
+
+static int mir_has_phi_first_call_argument_candidate(void)
+{
+    int blocks = mir_cfg_block_count();
+    int value;
+
+    /*
+     * Stage the first production rollout on large validation/driver CFGs.
+     * The internal baseline race still protects every candidate in this
+     * range; smaller and very large CFG strata can be widened independently
+     * after their complete populations are measured.
+     */
+    if (blocks < 50 || blocks > 96)
+        return 0;
+    for (value = 0; value < mir.next_value; ++value)
+        if (mir_phi_first_call_argument_candidate(value) >= 0)
+            return 1;
+    return 0;
+}
 
 static int mir_virtual_offset(int value)
 {
@@ -9903,6 +10010,8 @@ static int mir_prepare_backend_slots(void)
                 int reusable_source = -1;
                 int wide_phi_source = -1;
                 int narrow_phi_source = -1;
+                int phi_argument_call =
+                    mir_phi_first_call_argument_target(value);
                 int force_slot =
                     mir_value_requires_phi_slot(value) ||
                     mir_value_requires_divmod_slot(value) ||
@@ -9910,6 +10019,11 @@ static int mir_prepare_backend_slots(void)
                 ++mir_slot_report_requested_count;
                 if (fused_away[value] == 2)
                     continue;
+                if (phi_argument_call >= 0) {
+                    mir.backend_slots[value] =
+                        MIR_BACKEND_SLOT_PHI_ARGUMENT_STACK;
+                    continue;
+                }
                 if (units == 2 && definition != NULL &&
                     definition->opcode == MIR_BINARY &&
                     mir_binary_is_wide_phi_increment(
@@ -21023,6 +21137,19 @@ static int mir_emit_spilled_phi_copies(FILE *out, int predecessor,
 
     if (copy_count < 0)
         return 0;
+    for (copy = 0; copy < copy_count; ++copy)
+        if (destinations[copy] >= 0 &&
+            destinations[copy] < mir.next_value &&
+            mir.backend_slots != NULL &&
+            mir.backend_slots[destinations[copy]] ==
+                MIR_BACKEND_SLOT_PHI_ARGUMENT_STACK) {
+            if (copy_count != 1 ||
+                mir_value_is_wide(sources[copy]))
+                return 0;
+            mir_emit_virtual_load(out, sources[copy]);
+            fputs("\tpush hl\n", out);
+            return 1;
+        }
     /* Item T9 (mir-text-size-plan.md): the general push-all-sources-then-
      * pop-all-destinations-in-reverse shape below exists to let several
      * simultaneous phi copies swap through each other safely (a later
@@ -22191,7 +22318,7 @@ int mir_spilled_cfg_indirect_store_address_forwarding_uses(void)
     return mir_spilled_cfg_indirect_store_address_forwarding_count;
 }
 
-int mir_try_emit_spilled_scalar_cfg(FILE *out)
+static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
 {
     int *labels;
     int frame_bytes;
@@ -24881,6 +25008,11 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
                             fputs("\tpush de\n\tpush hl\n", out);
                         argument_bytes += 4;
                     } else {
+                        if (mir_phi_argument_is_prepacked(
+                                arg->src1, i)) {
+                            argument_bytes += 2;
+                            continue;
+                        }
                         if (!mir_emit_cached_call_argument_to_stack(
                                 out, arg->src1)) {
                             if (!mir_emit_cached_call_argument(
@@ -25370,4 +25502,94 @@ done:
                     ? mir_opcode_name(mir.insns[i].opcode) : "preflight");
     free(labels);
     return accepted;
+}
+
+static void mir_copy_spilled_candidate(FILE *source, FILE *destination)
+{
+    char buffer[4096];
+    size_t count;
+
+    if (fflush(source) != 0 || fseek(source, 0, SEEK_SET) != 0)
+        fatal("cannot rewind MIR spilled candidate");
+    while ((count = fread(buffer, 1, sizeof(buffer), source)) != 0)
+        if (fwrite(buffer, 1, count, destination) != count)
+            fatal("cannot copy MIR spilled candidate");
+    if (ferror(source))
+        fatal("cannot read MIR spilled candidate");
+}
+
+int mir_try_emit_spilled_scalar_cfg(FILE *out)
+{
+    FILE *baseline;
+    FILE *phi_candidate;
+    int label_base;
+    int baseline_label_end;
+    int baseline_emitted;
+    int phi_emitted;
+    long baseline_size;
+    long phi_size;
+    int baseline_instructions;
+    int phi_instructions;
+
+    mir_phi_argument_stack_handoff_enabled = 0;
+    if (!mir_has_phi_first_call_argument_candidate())
+        return mir_emit_spilled_scalar_cfg_candidate(out);
+    baseline = tmpfile();
+    phi_candidate = tmpfile();
+    if (baseline == NULL || phi_candidate == NULL)
+        fatal("cannot create MIR PHI-argument candidate stream");
+    label_base = label_id;
+    mir_extrn_begin_attempt();
+    mir_phi_argument_stack_handoff_enabled = 1;
+    phi_emitted = mir_emit_spilled_scalar_cfg_candidate(phi_candidate);
+    mir_phi_argument_stack_handoff_enabled = 0;
+    label_id = label_base;
+    mir_extrn_begin_attempt();
+    baseline_emitted = mir_emit_spilled_scalar_cfg_candidate(baseline);
+    baseline_label_end = label_id;
+    baseline_size = baseline_emitted
+        ? mir_stream_size(baseline) : -1;
+    phi_size = phi_emitted
+        ? mir_stream_size(phi_candidate) : -1;
+    baseline_instructions = baseline_emitted
+        ? mir_stream_instruction_count(baseline) : -1;
+    phi_instructions = phi_emitted
+        ? mir_stream_instruction_count(phi_candidate) : -1;
+    if (phi_emitted &&
+        (!baseline_emitted ||
+         (phi_size < baseline_size &&
+          phi_instructions < baseline_instructions))) {
+        if (getenv("DCC_MIR_PHI_ARGUMENT_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR phi-argument function=%s selected=handoff "
+                    "baseline-bytes=%ld handoff-bytes=%ld "
+                    "baseline-insns=%d handoff-insns=%d\n",
+                    mir.name, baseline_size, phi_size,
+                    baseline_instructions, phi_instructions);
+        fclose(phi_candidate);
+        fclose(baseline);
+        label_id = label_base;
+        mir_extrn_begin_attempt();
+        mir_phi_argument_stack_handoff_enabled = 1;
+        phi_emitted = mir_emit_spilled_scalar_cfg_candidate(out);
+        mir_phi_argument_stack_handoff_enabled = 0;
+        return phi_emitted;
+    }
+    fclose(phi_candidate);
+    if (!baseline_emitted) {
+        fclose(baseline);
+        label_id = label_base;
+        return 0;
+    }
+    if (getenv("DCC_MIR_PHI_ARGUMENT_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR phi-argument function=%s selected=baseline "
+                "baseline-bytes=%ld handoff-bytes=%ld "
+                "baseline-insns=%d handoff-insns=%d\n",
+                mir.name, baseline_size, phi_size,
+                baseline_instructions, phi_instructions);
+    mir_copy_spilled_candidate(baseline, out);
+    fclose(baseline);
+    label_id = baseline_label_end;
+    return 1;
 }
