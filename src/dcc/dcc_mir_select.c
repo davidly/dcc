@@ -3954,6 +3954,16 @@ static int mir_has_float_scalar_value(void)
     return 0;
 }
 
+static int mir_has_member_address(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_MEMBER_ADDRESS)
+            return 1;
+    return 0;
+}
+
 static int mir_register_policy_version(const char *policy)
 {
     char *end;
@@ -3962,7 +3972,7 @@ static int mir_register_policy_version(const char *policy)
     if (strncmp(policy, "register-v", 10))
         return 0;
     version = strtol(policy + 10, &end, 10);
-    if (*end != 0 || version < 1 || version > 44)
+    if (*end != 0 || version < 1 || version > 45)
         return -1;
     return (int)version;
 }
@@ -3976,7 +3986,7 @@ static int mir_final_cost_policy_rejects(
     int policy_version;
 
     if (policy == NULL || policy[0] == 0)
-        policy = "register-v44";
+        policy = "register-v45";
     if (!strcmp(policy, "off"))
         return 0;
     policy_version = mir_register_policy_version(policy);
@@ -4354,6 +4364,16 @@ static int mir_final_cost_policy_rejects(
             mir.has_compound_literal &&
             mir_cfg_block_count() == 1 &&
             generated_size * 100L > captured_size * 120L &&
+            (long)generated_instructions * 100L >
+                (long)captured_instructions * 120L)
+            reject = 1;
+        if (!reject && policy_version >= 45 &&
+            mir.sink_purpose == EMIT_SINK_DEFERRED &&
+            mir_has_member_address() &&
+            !mir_has_label_only_phi_fallthrough() &&
+            mir_cfg_block_count() <= 16 &&
+            mir.backend_slot_count >= 3 &&
+            generated_size * 100L > captured_size * 130L &&
             (long)generated_instructions * 100L >
                 (long)captured_instructions * 120L)
             reject = 1;
