@@ -1438,6 +1438,39 @@ static int mir_runtime_stride_store_slot_forwardable(
     return 0;
 }
 
+static int mir_constant_false_branch_consumer(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int blocks = mir_cfg_block_count();
+    int consumer = -1;
+    int instruction;
+
+    if (blocks <= 2)
+        return -1;
+    if (blocks <= 32)
+        for (instruction = 0; instruction < mir.count; ++instruction)
+            if (type_is_float(mir.insns[instruction].type) ||
+                (mir.insns[instruction].opcode == MIR_BINARY &&
+                 type_is_float(
+                     mir.insns[instruction].secondary_offset)))
+                return -1;
+    if (definition == NULL || definition->opcode != MIR_CONST ||
+        definition->immediate != 0)
+        return -1;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->src1 != value && insn->src2 != value &&
+            !mir_call_uses_value(insn, value))
+            continue;
+        if (consumer >= 0 || insn->opcode != MIR_BRANCH_FALSE ||
+            insn->src1 != value)
+            return -1;
+        consumer = instruction;
+    }
+    return consumer;
+}
+
 static int mir_call_only_constant(int value)
 {
     const struct MirInsn *definition = mir_definition(value);
@@ -10784,6 +10817,8 @@ static int mir_prepare_backend_slots(void)
                                             value, units, i) ||
                                         mir_runtime_stride_store_slot_forwardable(
                                             value, units, i) ||
+                                        mir_constant_false_branch_consumer(
+                                            value) >= 0 ||
                                         mir_stack_backend_slot_forwardable(value, units, i) ||
                                         mir_value_is_nested_truth_comparison_input(value) ||
                                         mir_value_only_used_by_dead_stores(value) ||
@@ -24411,6 +24446,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                 mir_wide_constant_is_rematerializable(insn->dst) ||
                 mir_wide_constant_is_signed_relational_immediate(
                     insn->dst) ||
+                mir_constant_false_branch_consumer(insn->dst) >= 0 ||
                 mir_call_only_constant(insn->dst) ||
                 mir_binary_only_constant(insn->dst) ||
                 mir_multiply_by_small_constant(insn->dst) ||
@@ -26400,6 +26436,19 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                     mir_definition(insn->src1);
                 if (target < 0)
                     goto done;
+                if (condition != NULL &&
+                    condition->opcode == MIR_CONST &&
+                    condition->immediate == 0 &&
+                    mir_constant_false_branch_consumer(
+                        insn->src1) == i) {
+                    if (!mir_emit_spilled_phi_copies(
+                            out, i, target))
+                        goto done;
+                    if (!mir_target_is_noop_fallthrough(i, target))
+                        fprintf(out, "\tjp L%d\n",
+                                labels[insn->label]);
+                    break;
+                }
                 if (mir_value_is_wide(insn->src1)) {
                     mir_emit_virtual_load_wide(out, insn->src1);
                     if (condition != NULL && type_is_float(condition->type))
