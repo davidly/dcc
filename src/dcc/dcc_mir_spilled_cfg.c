@@ -107,6 +107,8 @@ static int mir_indirect_load_de_slot_forwardable(
     int value, int units, int instruction);
 static int mir_runtime_stride_index_slot_forwardable(
     int value, int units, int instruction);
+static int mir_runtime_stride_store_slot_forwardable(
+    int value, int units, int instruction);
 static int mir_value_has_direct_named_home(int value);
 static int mir_call_result_direct_reload_indirect_store_target(int value);
 static int mir_value_currently_uses_stack_handoff(int value, int instruction);
@@ -287,12 +289,61 @@ static int mir_spilled_cfg_used_promoted_local_slot;
 #define MIR_BACKEND_SLOT_NARROW_ARGUMENT_DIRECT_PUSH (-4)
 #define MIR_BACKEND_SLOT_PHI_ARGUMENT_STACK (-5)
 
-static int mir_runtime_stride_read_schedule_is_active(void)
+static int mir_runtime_stride_store_match(
+    int instruction, int *memory_offset_out, int *store_instruction_out)
+{
+    const struct MirInsn *increment;
+    const struct MirInsn *index;
+    const struct MirInsn *indirect;
+    const struct MirInsn *load;
+    const struct MirInsn *one;
+    const struct MirInsn *store;
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+
+    if (instruction < 0 || instruction + 5 >= mir.count)
+        return 0;
+    index = &mir.insns[instruction];
+    load = &mir.insns[instruction + 1];
+    one = &mir.insns[instruction + 2];
+    increment = &mir.insns[instruction + 3];
+    store = &mir.insns[instruction + 4];
+    indirect = &mir.insns[instruction + 5];
+    if (index->opcode != MIR_INDEX_ADDRESS ||
+        load->opcode != MIR_LOAD ||
+        one->opcode != MIR_CONST || one->immediate != 1 ||
+        increment->opcode != MIR_BINARY ||
+        increment->immediate != '+' ||
+        increment->src1 != load->dst ||
+        increment->src2 != one->dst ||
+        type_size(increment->secondary_offset) != 2 ||
+        store->opcode != MIR_STORE ||
+        store->src1 != increment->dst ||
+        store->object != load->object ||
+        indirect->opcode != MIR_STORE_INDIRECT ||
+        indirect->src1 != index->dst ||
+        indirect->src2 != load->dst ||
+        indirect->memory_size != 2 ||
+        indirect->bit_width != 0 ||
+        !mir_scalar_memory_location(
+            load, &memory_type, &memory_storage, &memory_offset) ||
+        type_size(memory_type) != 2 ||
+        (memory_storage != SC_LOCAL && memory_storage != SC_PARAM) ||
+        memory_offset < -128 || memory_offset + 1 > 127)
+        return 0;
+    if (memory_offset_out != NULL)
+        *memory_offset_out = memory_offset;
+    if (store_instruction_out != NULL)
+        *store_instruction_out = instruction + 5;
+    return 1;
+}
+
+static int mir_runtime_stride_schedule_is_active(void)
 {
     int instruction;
 
     if (!mir.has_runtime_stride_param ||
-        type_size(mir.return_type) != 2 ||
         mir_cfg_block_count() != 7 ||
         mir.count > 64)
         return 0;
@@ -300,19 +351,27 @@ static int mir_runtime_stride_read_schedule_is_active(void)
         if (mir.insns[instruction].opcode == MIR_CALL ||
             mir.insns[instruction].opcode == MIR_CALL_AGGREGATE)
             return 0;
-    return 1;
+    if (type_size(mir.return_type) == 2)
+        return 1;
+    if ((mir.return_type & 15) == TYPE_VOID)
+        for (instruction = 0;
+             instruction + 5 < mir.count; ++instruction)
+            if (mir_runtime_stride_store_match(
+                    instruction, NULL, NULL))
+                return 1;
+    return 0;
 }
 
 static int mir_phi_slot_cleanup_is_active(void)
 {
     return mir_phi_slot_cleanup_enabled ||
-           mir_runtime_stride_read_schedule_is_active();
+           mir_runtime_stride_schedule_is_active();
 }
 
 static int mir_promoted_local_slot_reuse_is_active(void)
 {
     return mir_promoted_local_slot_reuse_enabled ||
-           mir_runtime_stride_read_schedule_is_active();
+           mir_runtime_stride_schedule_is_active();
 }
 
 static int mir_phi_argument_stack_handoff_enabled;
@@ -1344,7 +1403,8 @@ static int mir_runtime_stride_index_slot_forwardable(
     int consumer;
     int index_value;
 
-    if (units != 1)
+    if (units != 1 ||
+        !mir_runtime_stride_schedule_is_active())
         return 0;
     if (mir_runtime_stride_index_forward_match(
             instruction, &index_value, &consumer))
@@ -1353,6 +1413,25 @@ static int mir_runtime_stride_index_slot_forwardable(
         mir_runtime_stride_index_forward_match(
             instruction - 1, &index_value, &consumer))
         return index_value == value;
+    return 0;
+}
+
+static int mir_runtime_stride_store_slot_forwardable(
+    int value, int units, int instruction)
+{
+    int first;
+    int start;
+
+    if (units != 1 ||
+        !mir_runtime_stride_schedule_is_active())
+        return 0;
+    first = instruction - 3;
+    if (first < 0)
+        first = 0;
+    for (start = first; start <= instruction; ++start)
+        if (mir_runtime_stride_store_match(start, NULL, NULL) &&
+            mir.insns[instruction].dst == value)
+            return 1;
     return 0;
 }
 
@@ -1766,7 +1845,7 @@ static int mir_binary_is_narrow_phi_adjust(
     int instruction;
 
     if ((mir_cfg_block_count() < 40 &&
-         !mir_runtime_stride_read_schedule_is_active()) ||
+         !mir_runtime_stride_schedule_is_active()) ||
         index < 0 || index >= mir.count)
         return 0;
     insn = &mir.insns[index];
@@ -10570,6 +10649,8 @@ static int mir_prepare_backend_slots(void)
                                             value, units, i) ||
                                         mir_runtime_stride_index_slot_forwardable(
                                             value, units, i) ||
+                                        mir_runtime_stride_store_slot_forwardable(
+                                            value, units, i) ||
                                         mir_stack_backend_slot_forwardable(value, units, i) ||
                                         mir_value_is_nested_truth_comparison_input(value) ||
                                         mir_value_only_used_by_dead_stores(value) ||
@@ -10798,7 +10879,7 @@ void mir_emit_virtual_load(FILE *out, int value)
         return;
     }
     if (mir_address_is_rematerializable(value) &&
-        !(mir_runtime_stride_read_schedule_is_active() &&
+        !(mir_runtime_stride_schedule_is_active() &&
           definition != NULL &&
           definition->opcode == MIR_PARAM &&
           type_ptr_depth(definition->type) > 0 &&
@@ -11176,7 +11257,7 @@ static int mir_indirect_load_de_consumer(
     const struct MirInsn *conversion;
     int consumer_index;
 
-    if (!mir_runtime_stride_read_schedule_is_active() ||
+    if (!mir_runtime_stride_schedule_is_active() ||
         instruction < 0 || instruction >= mir.count)
         return -1;
     load = &mir.insns[instruction];
@@ -24194,6 +24275,29 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                 if (insn->immediate == 2)
                     fputs("\tsla e\n\trl d\n", out);
                 fputs("\tadd hl,de\n", out);
+                {
+                int memory_offset;
+                int store_instruction;
+
+                if (mir_runtime_stride_store_match(
+                        i, &memory_offset, &store_instruction)) {
+                    int increment_done = new_label();
+
+                    fprintf(out,
+                            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+                            "\tinc (ix%+d)\n\tjp nz, L%d\n"
+                            "\tinc (ix%+d)\nL%d:\n"
+                            "\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+                            memory_offset, memory_offset + 1,
+                            memory_offset, increment_done,
+                            memory_offset + 1, increment_done);
+                    mir_runtime_stride_index_base_value = -1;
+                    mir_runtime_stride_index_value = -1;
+                    mir_runtime_stride_index_consumer = -1;
+                    i = store_instruction;
+                    continue;
+                }
+                }
                 mir_runtime_stride_index_base_value = -1;
                 mir_runtime_stride_index_value = -1;
                 mir_runtime_stride_index_consumer = -1;
