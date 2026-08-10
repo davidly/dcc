@@ -164,6 +164,7 @@ static int mir_spilled_cfg_used_signed_wide_constant_relational;
 static int mir_spilled_cfg_used_indirect_incdec;
 static int mir_spilled_cfg_used_pointer_difference_shift;
 static int mir_spilled_cfg_used_wide_call_constant_comparison;
+static int mir_spilled_cfg_used_local_constant_byte_store;
 static int mir_spilled_cfg_used_unary_not_branch_fusion;
 static int mir_spilled_cfg_used_planned_stack_handoff;
 static int mir_spilled_cfg_used_planned_index_base_handoff;
@@ -1560,6 +1561,79 @@ static int mir_boolean_return_slot_forwardable(
              value == mir.insns[start + 8].dst ||
              value == mir.insns[start + 10].dst ||
              value == plan.result_value))
+            return 1;
+    return 0;
+}
+
+struct MirLocalConstantByteStore {
+    int displacement;
+    int value;
+    int store_instruction;
+};
+
+static int mir_match_local_constant_byte_store(
+    int instruction, struct MirLocalConstantByteStore *plan)
+{
+    const struct MirInsn *address;
+    const struct MirInsn *index;
+    const struct MirInsn *index_constant;
+    const struct MirInsn *store;
+    const struct MirInsn *value;
+    int displacement;
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+
+    if (mir_cfg_block_count() != 3 ||
+        instruction < 0 || instruction + 5 >= mir.count)
+        return 0;
+    address = &mir.insns[instruction];
+    index_constant = &mir.insns[instruction + 1];
+    index = &mir.insns[instruction + 2];
+    value = &mir.insns[instruction + 4];
+    store = &mir.insns[instruction + 5];
+    if (address->opcode != MIR_ADDRESS ||
+        index_constant->opcode != MIR_CONST ||
+        index->opcode != MIR_INDEX_ADDRESS ||
+        index->src1 != address->dst ||
+        index->src2 != index_constant->dst ||
+        mir.insns[instruction + 3].opcode != MIR_NOP ||
+        value->opcode != MIR_CONST ||
+        store->opcode != MIR_STORE_INDIRECT ||
+        store->src1 != index->dst ||
+        store->src2 != value->dst ||
+        store->memory_size != 1 || store->bit_width != 0 ||
+        !mir_scalar_memory_location(
+            address, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_LOCAL)
+        return 0;
+    displacement = memory_offset +
+        (int)(index_constant->immediate * index->immediate);
+    if (displacement < -128 || displacement > 127)
+        return 0;
+    if (plan != NULL) {
+        plan->displacement = displacement;
+        plan->value = (int)value->immediate & 0xff;
+        plan->store_instruction = instruction + 5;
+    }
+    return 1;
+}
+
+static int mir_local_constant_byte_store_slot_forwardable(
+    int value, int units, int instruction)
+{
+    struct MirLocalConstantByteStore plan;
+    int start;
+
+    if (units != 1)
+        return 0;
+    for (start = instruction - 4; start <= instruction; ++start)
+        if (start >= 0 &&
+            mir_match_local_constant_byte_store(start, &plan) &&
+            (value == mir.insns[start].dst ||
+             value == mir.insns[start + 1].dst ||
+             value == mir.insns[start + 2].dst ||
+             value == mir.insns[start + 4].dst))
             return 1;
     return 0;
 }
@@ -11194,6 +11268,8 @@ static int mir_prepare_backend_slots(void)
                                         mir_bool_call_named_home(
                                             value, NULL, NULL) ||
                                         mir_boolean_return_slot_forwardable(
+                                            value, units, i) ||
+                                        mir_local_constant_byte_store_slot_forwardable(
                                             value, units, i) ||
                                         mir_stack_backend_slot_forwardable(value, units, i) ||
                                         mir_value_is_nested_truth_comparison_input(value) ||
@@ -23589,6 +23665,11 @@ int mir_spilled_cfg_depends_on_wide_call_constant_comparison(void)
     return mir_spilled_cfg_used_wide_call_constant_comparison;
 }
 
+int mir_spilled_cfg_depends_on_local_constant_byte_store(void)
+{
+    return mir_spilled_cfg_used_local_constant_byte_store;
+}
+
 /* T394 (mir-text-size-plan.md): unlike signed wide relational compares
  * against a constant (which legacy inlines via the sign-flip + 32-bit
  * subtract trick, with the C+1/C-1 adjustment for '>'/'<='), legacy's own
@@ -23814,6 +23895,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     mir_spilled_cfg_used_indirect_incdec = 0;
     mir_spilled_cfg_used_pointer_difference_shift = 0;
     mir_spilled_cfg_used_wide_call_constant_comparison = 0;
+    mir_spilled_cfg_used_local_constant_byte_store = 0;
     mir_spilled_cfg_used_unary_not_branch_fusion = 0;
     mir_spilled_cfg_used_planned_stack_handoff = 0;
     mir_spilled_cfg_used_planned_index_base_handoff = 0;
@@ -24901,6 +24983,17 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
             mir_emit_virtual_store(out, insn->dst);
             break;
         case MIR_ADDRESS:
+            {
+            struct MirLocalConstantByteStore byte_store;
+
+            if (mir_match_local_constant_byte_store(i, &byte_store)) {
+                mir_spilled_cfg_used_local_constant_byte_store = 1;
+                fprintf(out, "\tld (ix%+d),%d\n",
+                        byte_store.displacement, byte_store.value);
+                i = byte_store.store_instruction;
+                continue;
+            }
+            }
             if (mir_address_is_single_call_argument(insn->dst))
                 break;
             if (mir_value_only_used_by_constant_absolute_address(insn->dst))
