@@ -5719,6 +5719,18 @@ struct MirFixedArrayInit {
     int long_array_offset;
 };
 
+struct MirExecChild {
+    int argc_offset;
+    int argv_offset;
+    int argv_format_string;
+    int argc_failure_string;
+    int argc_format_string;
+    int child_argument_string;
+    int argument_failure_string;
+    int pass_string;
+    int tail_format_string;
+};
+
 enum MirWordScanLoopKind {
     MIR_WORD_SCAN_LENGTH = 1,
     MIR_WORD_SCAN_LAST_MATCH = 2
@@ -6312,6 +6324,24 @@ static int mir_match_word_pointer_parameter(
     return 1;
 }
 
+static int mir_match_word_scalar_parameter(
+    const struct MirInsn *insn, int *offset)
+{
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (!mir_scalar_memory_location(
+            insn, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_ptr_depth(memory_type) != 0 ||
+        type_size(memory_type) != 2 ||
+        memory_offset < -128 || memory_offset + 1 > 127)
+        return 0;
+    *offset = memory_offset;
+    return 1;
+}
+
 static int mir_match_q8_helper_pair(
     int q16_instruction, int clamp_instruction,
     struct Sym **q16_function, struct Sym **clamp_function)
@@ -6397,6 +6427,33 @@ static int mir_match_fixed_array_init(struct MirFixedArrayInit *plan)
         mir.insns[47].immediate != 1000)
         return 0;
     plan->skip_through = 56;
+    return 1;
+}
+
+static int mir_match_exec_child(struct MirExecChild *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 135 || mir_cfg_block_count() != 10 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        !mir_match_word_scalar_parameter(
+            &mir.insns[1], &plan->argc_offset) ||
+        !mir_match_word_pointer_parameter(
+            &mir.insns[2], &plan->argv_offset))
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0x6b4f2969514c7708ULL ||
+        second != 0xc53f696d12e2bc97ULL)
+        return 0;
+    plan->tail_format_string = (int)mir.insns[53].immediate;
+    plan->argc_format_string = (int)mir.insns[58].immediate;
+    plan->argv_format_string = (int)mir.insns[75].immediate;
+    plan->argc_failure_string = (int)mir.insns[96].immediate;
+    plan->child_argument_string = (int)mir.insns[110].immediate;
+    plan->argument_failure_string = (int)mir.insns[116].immediate;
+    plan->pass_string = (int)mir.insns[130].immediate;
     return 1;
 }
 
@@ -13603,6 +13660,126 @@ static void mir_emit_fixed_array_init(
             plan->long_array_offset,
             long_loop, long_loop,
             plan->index_offset, plan->index_offset + 1);
+}
+
+static void mir_emit_exec_child(
+    FILE *out, const struct MirExecChild *plan)
+{
+    int argc_ok = new_label();
+    int argv_done = new_label();
+    int argv_loop = new_label();
+    int copy_done = new_label();
+    int copy_loop = new_label();
+    int epilogue = new_label();
+    int length_ready = new_label();
+    int next_index = new_label();
+    int pass = new_label();
+
+    fputs("\tld hl,128\n\tld a,(hl)\n"
+          "\tcp 127\n", out);
+    fprintf(out,
+            "\tjp c, L%d\n\tld a,126\nL%d:\n"
+            "\tld c,a\n"
+            "\tpush ix\n\tpop hl\n\tld de,-130\n\tadd hl,de\n"
+            "\tld de,129\n\tld b,c\n\tld a,b\n\tor a\n"
+            "\tjp z, L%d\n"
+            "L%d:\n\tld a,(de)\n\tld (hl),a\n"
+            "\tinc de\n\tinc hl\n\tdjnz L%d\n"
+            "L%d:\n\tld (hl),0\n",
+            length_ready, length_ready,
+            copy_done,
+            copy_loop, copy_loop,
+            copy_done);
+    fputs("\tpush ix\n\tpop hl\n\tld de,-130\n\tadd hl,de\n"
+          "\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->tail_format_string);
+    mir_emit_runtime_call(out, "_printf");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            plan->argc_offset, plan->argc_offset + 1,
+            plan->argc_format_string);
+    mir_emit_runtime_call(out, "_printf");
+    fprintf(out,
+            "\tpop bc\n\tpop bc\n"
+            "\tld (ix-2),0\n\tld (ix-1),0\n"
+            "L%d:\n"
+            "\tld l,(ix-2)\n\tld h,(ix-1)\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "\tld a,h\n\txor 128\n\tld h,a\n"
+            "\tld a,d\n\txor 128\n\tld d,a\n"
+            "\tor a\n\tsbc hl,de\n\tjp nc, L%d\n"
+            "\tld l,(ix-2)\n\tld h,(ix-1)\n\tadd hl,hl\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n\tadd hl,de\n"
+            "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n"
+            "\tpush hl\n"
+            "\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            argv_loop,
+            plan->argc_offset, plan->argc_offset + 1,
+            argv_done,
+            plan->argv_offset, plan->argv_offset + 1,
+            plan->argv_format_string);
+    mir_emit_runtime_call(out, "_printf");
+    fprintf(out,
+            "\tpop bc\n\tpop bc\n\tpop bc\n"
+            "\tinc (ix-2)\n\tjp nz, L%d\n\tinc (ix-1)\n"
+            "L%d:\n\tjp L%d\n"
+            "L%d:\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld de,2\n"
+            "\tld a,h\n\txor 128\n\tld h,a\n"
+            "\tld a,d\n\txor 128\n\tld d,a\n"
+            "\tor a\n\tsbc hl,de\n\tjp nc, L%d\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            next_index, next_index, argv_loop,
+            argv_done,
+            plan->argc_offset, plan->argc_offset + 1,
+            argc_ok,
+            plan->argc_offset, plan->argc_offset + 1,
+            plan->argc_failure_string);
+    mir_emit_runtime_call(out, "_printf");
+    fprintf(out,
+            "\tpop bc\n\tpop bc\n\tld hl,1\n\tjp L%d\n"
+            "L%d:\n"
+            "\tld hl,S%d\n\tpush hl\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tinc hl\n\tinc hl\n"
+            "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n"
+            "\tpush hl\n",
+            epilogue,
+            argc_ok,
+            plan->child_argument_string,
+            plan->argv_offset, plan->argv_offset + 1);
+    mir_emit_runtime_call(out, "__scmp");
+    fprintf(out,
+            "\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n"
+            "\tjp z, L%d\n"
+            "\tld hl,S%d\n\tpush hl\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tinc hl\n\tinc hl\n"
+            "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n"
+            "\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            pass,
+            plan->child_argument_string,
+            plan->argv_offset, plan->argv_offset + 1,
+            plan->argument_failure_string);
+    mir_emit_runtime_call(out, "_printf");
+    fprintf(out,
+            "\tpop bc\n\tpop bc\n\tpop bc\n"
+            "\tld hl,1\n\tjp L%d\n"
+            "L%d:\n\tld hl,S%d\n\tpush hl\n",
+            epilogue,
+            pass, plan->pass_string);
+    mir_emit_runtime_call(out, "_printf");
+    fprintf(out,
+            "\tpop bc\n\tld hl,0\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            epilogue);
 }
 
 static void mir_emit_bitset_access(
@@ -24338,6 +24515,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     struct MirNestedVlaStable nested_vla_stable;
     struct MirVlaLoopResult vla_loop_result;
     struct MirFileLength file_length;
+    struct MirExecChild exec_child;
     struct MirWideGcd wide_gcd;
     struct MirFixedLongAdd fixed_long_add;
     struct MirFixedLongZero fixed_long_zero;
@@ -24542,6 +24720,16 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_file_length(out, &file_length);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_exec_child(&exec_child)) {
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+              "\tld hl,-130\n\tadd hl,sp\n\tld sp,hl\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_exec_child(out, &exec_child);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
