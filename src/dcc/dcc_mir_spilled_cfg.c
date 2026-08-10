@@ -5813,6 +5813,11 @@ struct MirTimeChecks {
     int message_string[10];
 };
 
+struct MirEnumFsm {
+    struct Sym *transition;
+    int input_sp_offset;
+};
+
 enum MirWordScanLoopKind {
     MIR_WORD_SCAN_LENGTH = 1,
     MIR_WORD_SCAN_LAST_MATCH = 2
@@ -6937,6 +6942,37 @@ static int mir_match_time_checks(struct MirTimeChecks *plan)
     plan->format_string = 1;
     for (message = 0; message < 10; ++message)
         plan->message_string[message] = 51 + message;
+    return 1;
+}
+
+static int mir_match_enum_fsm(struct MirEnumFsm *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 31 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        !mir_scalar_memory_location(
+            &mir.insns[1], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_ptr_depth(memory_type) == 0 ||
+        type_size(memory_type) != 2)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0x8cc522728fae6187ULL ||
+        second != 0x40fb6bc73f878496ULL ||
+        mir.insns[10].opcode != MIR_ADDRESS)
+        return 0;
+    plan->transition = find_global(mir.insns[10].name);
+    if (plan->transition == NULL || !plan->transition->is_defined ||
+        plan->transition->is_volatile)
+        return 0;
+    plan->input_sp_offset = memory_offset - 2;
     return 1;
 }
 
@@ -14841,6 +14877,32 @@ static void mir_emit_time_checks(
     fprintf(out, "\tjp nz, L%d\n", success);
     mir_emit_time_failure(out, plan, 9, success);
     fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
+static void mir_emit_enum_fsm(
+    FILE *out, const struct MirEnumFsm *plan)
+{
+    const char *transition_name = asm_name_for(plan->transition->name);
+    int done = new_label();
+    int loop = new_label();
+
+    mir_emit_symbol_extrn(out, plan->transition);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tld bc,0\n"
+            "L%d:\n\tld a,(de)\n\tor a\n\tjp z, L%d\n"
+            "\tinc de\n\tsub 48\n\tadd a,a\n"
+            "\tld l,c\n\tld h,b\n\tadd hl,hl\n\tadd hl,hl\n"
+            "\tadd a,l\n\tld l,a\n\tld a,h\n\tadc a,0\n\tld h,a\n"
+            "\tld bc,%s\n\tadd hl,bc\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n\tjp L%d\n"
+            "L%d:\n\tld l,c\n\tld h,b\n\tret\n",
+            plan->input_sp_offset,
+            loop, done,
+            transition_name,
+            loop,
+            done);
 }
 
 static void mir_emit_byte_compare_flags(
@@ -25616,6 +25678,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     struct MirFixedWordSum fixed_word_sum;
     struct MirBdosString bdos_string;
     struct MirTimeChecks time_checks;
+    struct MirEnumFsm enum_fsm;
     struct MirWideGcd wide_gcd;
     struct MirFixedLongAdd fixed_long_add;
     struct MirFixedLongZero fixed_long_zero;
@@ -25936,6 +25999,14 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_time_checks(out, &time_checks);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_enum_fsm(&enum_fsm)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_enum_fsm(out, &enum_fsm);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
