@@ -512,6 +512,7 @@ int mir_eliminate_common_block_expressions(void);
 int mir_common_block_expression_elimination_count(void);
 int mir_eliminate_common_region_expressions(void);
 void mir_simplify_boolean_phi_branches(void);
+int mir_boolean_phi_branch_candidate_count(void);
 int mir_boolean_phi_branch_simplification_count(void);
 void mir_reset_boolean_phi_branch_simplification_count(void);
 void mir_forward_immediate_phi_returns(void);

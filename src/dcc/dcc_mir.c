@@ -4812,6 +4812,36 @@ static void mir_make_nop(struct MirInsn *insn)
 
 static int mir_boolean_phi_branch_simplifications;
 
+int mir_boolean_phi_branch_candidate_count(void)
+{
+    unsigned char *actions;
+    int *definition_indices;
+    int branch_index;
+    int count = 0;
+
+    if (mir.next_value <= 0)
+        return 0;
+    actions = (unsigned char *)calloc((size_t)mir.next_value, 1);
+    definition_indices =
+        (int *)malloc((size_t)mir.next_value * sizeof(*definition_indices));
+    if (actions == NULL || definition_indices == NULL)
+        fatal("out of memory counting MIR boolean phis");
+    for (branch_index = 0; branch_index < mir.count; ++branch_index) {
+        const struct MirInsn *branch = &mir.insns[branch_index];
+
+        if (branch->opcode != MIR_BRANCH_FALSE)
+            continue;
+        memset(actions, 0, (size_t)mir.next_value);
+        if (mir_collect_boolean_phi_chain(
+                branch->src1, -1, actions, definition_indices, 0) &&
+            actions[branch->src1] == 1)
+            ++count;
+    }
+    free(definition_indices);
+    free(actions);
+    return count;
+}
+
 int mir_boolean_phi_branch_simplification_count(void)
 {
     return mir_boolean_phi_branch_simplifications;

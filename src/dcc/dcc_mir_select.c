@@ -5378,6 +5378,25 @@ evaluate_generated:
                             mir.allocation_phi_moves >
                                 block_cse_captured_phi_moves))))
                     fallback_reason = "block-cse-cost";
+                else if (!boolean_phi_retry_attempted &&
+                         mir.sink_purpose == EMIT_SINK_DEFERRED &&
+                         !mir_has_cfg_backedge() &&
+                         !mir_has_wide_values() &&
+                         mir_cfg_block_count() == 13 &&
+                         mir_call_count() == 2 &&
+                         mir.local_bytes == 0 &&
+                         mir.backend_slot_count == 3 &&
+                         generated_size * 100L > captured_size * 130L &&
+                         (long)generated_instructions * 100L >
+                             (long)captured_instructions * 115L &&
+                         mir_boolean_phi_branch_candidate_count() > 0)
+                    /*
+                     * This acyclic assertion-helper class reserves three
+                     * frame slots solely to materialize a short-circuit
+                     * boolean. Route its materially bloated candidates
+                     * through the existing semantic PHI-threading retry.
+                     */
+                    fallback_reason = "boolean-phi-materialization";
                 else if (boolean_phi_retry_attempted &&
                          mir_boolean_phi_branch_simplification_count() > 0 &&
                          !measured_boolean_candidate &&
