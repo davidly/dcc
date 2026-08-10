@@ -49,6 +49,9 @@ static void mir_emit_indirect_incdec(
     FILE *out, const struct MirIndirectIncDec *plan);
 static int mir_binary_is_fusable_comparison(int i);
 static int mir_value_is_nested_truth_comparison_input(int value);
+struct MirConstantReturn {
+    int value;
+};
 static int mir_float_madd_match(int add_index, int *multiply_index,
                                 int *addend_value);
 static int mir_unary_is_fusable_not_branch(int i);
@@ -2269,6 +2272,78 @@ int mir_fold_constant_compare(int op, long left, long right,
     default: return 0;
     }
     return 1;
+}
+
+static int mir_match_constant_return(struct MirConstantReturn *plan)
+{
+    unsigned char *known;
+    long *values;
+    int instruction;
+    int return_count = 0;
+    int result = 0;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count < 100 || mir_cfg_block_count() != 1 ||
+        mir.has_vla || type_size(mir.return_type) > 2)
+        return 0;
+    known = (unsigned char *)calloc((size_t)mir.next_value, 1);
+    values = (long *)calloc((size_t)mir.next_value, sizeof(*values));
+    if (known == NULL || values == NULL)
+        fatal("out of memory evaluating MIR constant return");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        long folded;
+
+        switch (insn->opcode) {
+        case MIR_LABEL:
+        case MIR_NOP:
+            break;
+        case MIR_CONST:
+            if (insn->dst < 0 || insn->dst >= mir.next_value)
+                goto not_constant;
+            known[insn->dst] = 1;
+            values[insn->dst] = insn->immediate;
+            break;
+        case MIR_BINARY:
+            if (insn->dst < 0 || insn->dst >= mir.next_value ||
+                insn->src1 < 0 || insn->src1 >= mir.next_value ||
+                insn->src2 < 0 || insn->src2 >= mir.next_value ||
+                !known[insn->src1] || !known[insn->src2])
+                goto not_constant;
+            if (!mir_fold_constant_binary(
+                    (int)insn->immediate,
+                    values[insn->src1], values[insn->src2],
+                    insn->secondary_offset, &folded) &&
+                !mir_fold_constant_compare(
+                    (int)insn->immediate,
+                    values[insn->src1], values[insn->src2],
+                    insn->secondary_offset, &folded))
+                goto not_constant;
+            known[insn->dst] = 1;
+            values[insn->dst] = folded;
+            break;
+        case MIR_RETURN:
+            if (insn->src1 < 0 || insn->src1 >= mir.next_value ||
+                !known[insn->src1])
+                goto not_constant;
+            result = (int)values[insn->src1] & 0xffff;
+            ++return_count;
+            break;
+        default:
+            goto not_constant;
+        }
+    }
+    free(values);
+    free(known);
+    if (return_count != 1)
+        return 0;
+    plan->value = result;
+    return 1;
+
+not_constant:
+    free(values);
+    free(known);
+    return 0;
 }
 
 static int mir_binary_only_constant(int value)
@@ -24226,6 +24301,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     struct MirByteMinMax byte_minmax;
     struct MirWordPowermod word_powermod;
     struct MirFloatUnitFraction float_unit_fraction;
+    struct MirConstantReturn constant_return;
     struct MirBitsetAccess bitset_access;
     struct MirTaskOpenCount task_open_count;
     struct MirAsciiIdentifier ascii_identifier;
@@ -24786,6 +24862,15 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_float_unit_fraction(out, &float_unit_fraction);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_constant_return(&constant_return)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        fprintf(out, "\tld hl,%d\n\tret\n",
+                constant_return.value);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
