@@ -269,6 +269,7 @@ static int mir_constant_argument_prepacking_enabled;
 static int mir_prepacked_call_instruction = -1;
 static int mir_prepacked_after_argument = -1;
 static int mir_prepacked_result_value = -1;
+static int mir_prepacked_skip_through = -1;
 static int mir_constant_argument_prepack_count;
 static int mir_promoted_local_slot_reuse_enabled;
 static int mir_phi_slot_cleanup_enabled;
@@ -3523,6 +3524,106 @@ static void mir_emit_prepacked_constant_arguments(
     mir_prepacked_after_argument = cached_argument;
     mir_prepacked_result_value = value;
     ++mir_constant_argument_prepack_count;
+}
+
+static void mir_emit_prepacked_byte_check_argument(
+    FILE *out, int trigger_instruction)
+{
+    const struct MirInsn *actual;
+    const struct MirInsn *actual_arg;
+    const struct MirInsn *base;
+    const struct MirInsn *call;
+    const struct MirInsn *expected;
+    const struct MirInsn *expected_arg;
+    const struct MirInsn *index;
+    const struct MirInsn *index_constant;
+    const struct MirInsn *prefix_arg;
+    const struct MirInsn *root = NULL;
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+    int scan;
+
+    if (mir_prepacked_call_instruction >= 0 ||
+        mir_cfg_block_count() != 1 ||
+        trigger_instruction <= 0 ||
+        trigger_instruction + 7 >= mir.count)
+        return;
+    prefix_arg = &mir.insns[trigger_instruction - 1];
+    base = &mir.insns[trigger_instruction];
+    index_constant = &mir.insns[trigger_instruction + 1];
+    index = &mir.insns[trigger_instruction + 2];
+    actual = &mir.insns[trigger_instruction + 3];
+    actual_arg = &mir.insns[trigger_instruction + 4];
+    expected_arg = &mir.insns[trigger_instruction + 6];
+    call = &mir.insns[trigger_instruction + 7];
+    expected = mir_definition(expected_arg->src1);
+    if (prefix_arg->opcode != MIR_ARG || prefix_arg->immediate != 0 ||
+        base->opcode != MIR_LOAD ||
+        index_constant->opcode != MIR_CONST ||
+        index->opcode != MIR_INDEX_ADDRESS ||
+        index->src1 != base->dst ||
+        index->src2 != index_constant->dst ||
+        actual->opcode != MIR_LOAD_INDIRECT ||
+        actual->src1 != index->dst ||
+        actual->memory_size != 1 ||
+        actual_arg->opcode != MIR_ARG ||
+        actual_arg->src1 != actual->dst ||
+        actual_arg->immediate != 1 ||
+        mir.insns[trigger_instruction + 5].opcode != MIR_NOP ||
+        expected_arg->opcode != MIR_ARG ||
+        expected_arg->immediate != 2 ||
+        call->opcode != MIR_CALL ||
+        prefix_arg->secondary_offset != call->secondary_offset ||
+        actual_arg->secondary_offset != call->secondary_offset ||
+        expected_arg->secondary_offset != call->secondary_offset ||
+        !mir_call_uses_generic_stack_arguments(
+            trigger_instruction + 7) ||
+        expected == NULL || expected->opcode != MIR_PARAM ||
+        type_size(expected->type) != 1 ||
+        mir_value_use_count(expected->dst) != 2 ||
+        mir_value_use_count(actual->dst) != 2 ||
+        !mir_scalar_memory_location(
+            expected, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < -128)
+        return;
+    for (scan = 0; scan < trigger_instruction; ++scan) {
+        const struct MirInsn *store = &mir.insns[scan];
+        const struct MirInsn *alias;
+
+        if (store->opcode != MIR_STORE ||
+            !mir_same_scalar_memory_location(store, base))
+            continue;
+        alias = mir_definition(store->src1);
+        if (alias != NULL && alias->opcode == MIR_UNARY &&
+            alias->immediate == 0)
+            root = mir_definition(alias->src1);
+    }
+    if (root == NULL || root->opcode != MIR_LOAD ||
+        type_ptr_depth(root->type) == 0 ||
+        !mir_scalar_memory_location(
+            root, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < -128 ||
+        memory_offset + 1 > 127)
+        return;
+    mir_emit_virtual_load(out, expected->dst);
+    fputs("\tpush hl\n", out);
+    if (!mir_emit_named_word_load_to_hl(out, root))
+        fatal("cannot reload prepacked byte-check root");
+    memory_offset =
+        (int)(index_constant->immediate * index->immediate);
+    while (memory_offset-- > 0)
+        fputs("\tinc hl\n", out);
+    fputs("\tld l,(hl)\n", out);
+    if ((actual->type & TYPE_UNSIGNED) != 0)
+        fputs("\tld h,0\n", out);
+    else
+        mir_emit_signed_byte_extend(out);
+    fputs("\tpush hl\n", out);
+    mir_prepacked_call_instruction = trigger_instruction + 7;
+    mir_prepacked_after_argument = 0;
+    mir_prepacked_result_value = -1;
+    mir_prepacked_skip_through = trigger_instruction + 4;
 }
 
 static int mir_definition_is_wide(const struct MirInsn *definition)
@@ -24175,6 +24276,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     mir_prepacked_call_instruction = -1;
     mir_prepacked_after_argument = -1;
     mir_prepacked_result_value = -1;
+    mir_prepacked_skip_through = -1;
     mir_constant_argument_prepack_count = 0;
     /* mir-text-size Item T14: a function with more than one MIR_RETURN
      * currently duplicates the full epilogue (ix/iy/sp restore + ret,
@@ -24210,6 +24312,9 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
 
         mir_emit_instruction_index = i;
         mir_emit_prepacked_constant_arguments(out, i);
+        mir_emit_prepacked_byte_check_argument(out, i);
+        if (i <= mir_prepacked_skip_through)
+            continue;
         if (insn->opcode == MIR_LOAD &&
             mir_match_inline_word_load_push(
                 i, &inline_postincrement_helper,
@@ -26346,6 +26451,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                     mir_prepacked_call_instruction = -1;
                     mir_prepacked_after_argument = -1;
                     mir_prepacked_result_value = -1;
+                    mir_prepacked_skip_through = -1;
                 }
             }
             break;
