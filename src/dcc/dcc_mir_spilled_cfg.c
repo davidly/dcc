@@ -11377,6 +11377,34 @@ static int mir_value_currently_uses_stack_handoff(
             mir_forwarded_stack_target_instruction == instruction);
 }
 
+static int mir_scaled_index_rhs_can_stay_in_hl(int value)
+{
+    struct MirIndirectIncDec incdec;
+    const struct MirInsn *consumer;
+    const struct MirInsn *definition;
+    int consumer_index;
+
+    if (mir_cfg_block_count() != 1 ||
+        mir_emit_instruction_index < 0 ||
+        mir_emit_instruction_index + 1 >= mir.count)
+        return 0;
+    definition = mir_definition(value);
+    consumer_index = mir_emit_instruction_index + 1;
+    consumer = &mir.insns[consumer_index];
+    return definition != NULL &&
+           definition->opcode == MIR_BINARY &&
+           consumer->opcode == MIR_BINARY &&
+           consumer->immediate == '+' &&
+           type_ptr_depth(consumer->type) > 0 &&
+           consumer->src2 == value &&
+           mir_match_indirect_incdec(
+               consumer_index + 1, &incdec) &&
+           incdec.address_value == consumer->dst &&
+           mir_planned_stack_matches_consumer(
+               consumer->src1, consumer_index) &&
+           mir_planned_stack_is_emitted(consumer->src1);
+}
+
 static int mir_indirect_load_de_consumer(
     int instruction, int *forwarded_value_out)
 {
@@ -11516,6 +11544,12 @@ static void mir_emit_virtual_store(FILE *out, int value)
         mir_runtime_stride_index_base_value = value;
         mir_runtime_stride_index_value = runtime_stride_index_value;
         mir_runtime_stride_index_consumer = runtime_stride_consumer;
+        return;
+    }
+    if (!force_slot_store &&
+        mir_scaled_index_rhs_can_stay_in_hl(value)) {
+        mir_forwarded_hl_value = value;
+        mir_forwarded_hl_instruction = mir_emit_instruction_index;
         return;
     }
     if (value == mir_prepacked_result_value) {
