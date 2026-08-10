@@ -24951,6 +24951,8 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                 mir_call_only_constant(insn->dst) ||
                 mir_binary_only_constant(insn->dst) ||
                 mir_multiply_by_small_constant(insn->dst) ||
+                mir_value_only_used_by_selfstore_adjust_amount(
+                    insn->dst) ||
                 mir_value_only_used_by_dead_stores(insn->dst) ||
                 mir_value_only_used_by_dead_unary(insn->dst) ||
                 mir_index_only_constant(insn->dst))
