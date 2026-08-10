@@ -50,6 +50,7 @@ static void mir_emit_indirect_incdec(
 static int mir_binary_is_fusable_comparison(int i);
 static int mir_value_is_nested_truth_comparison_input(int value);
 static void mir_emit_symbol_extrn(FILE *out, struct Sym *symbol);
+static void mir_emit_symbol_call(FILE *out, struct Sym *symbol);
 struct MirConstantReturn {
     int value;
 };
@@ -5957,6 +5958,18 @@ struct MirSmallWordSwitch {
     int trailing_value;
 };
 
+struct MirFloatPointerChecks {
+    struct Sym *identity_function;
+    struct Sym *check_function;
+    struct Sym *print_function;
+    struct Sym *failures;
+    int array_offset;
+    int name_string[4];
+    int expected[4][4];
+    int failure_string;
+    int success_string;
+};
+
 enum MirWordScanLoopKind {
     MIR_WORD_SCAN_LENGTH = 1,
     MIR_WORD_SCAN_LAST_MATCH = 2
@@ -7154,6 +7167,81 @@ static int mir_match_small_word_switch(struct MirSmallWordSwitch *plan)
     plan->default_value = (int)mir.insns[2].immediate;
     plan->range_value = (int)mir.insns[30].immediate;
     plan->trailing_value = (int)mir.insns[36].immediate;
+    return 1;
+}
+
+static int mir_match_float_pointer_checks(
+    struct MirFloatPointerChecks *plan)
+{
+    static const int name_instruction[4] = { 51, 70, 89, 108 };
+    static const int pointer_instruction[4] = { 54, 73, 92, 111 };
+    static const int expected_instruction[4][4] = {
+        { 58, 61, 64, 67 },
+        { 77, 80, 83, 86 },
+        { 96, 99, 102, 105 },
+        { 115, 118, 121, 124 }
+    };
+    unsigned long long first;
+    unsigned long long second;
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+    int item;
+    int byte;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 143 || mir_cfg_block_count() != 2 ||
+        mir.local_bytes != 22 || mir.has_vla ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        type_size(mir.return_type) != 2 ||
+        !mir_scalar_memory_location(
+            &mir.insns[4], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_LOCAL || memory_offset != -16)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0xd2ab3c74bc16e1bcULL ||
+        second != 0xb1e48891d8777c1dULL ||
+        mir.insns[28].opcode != MIR_CALL ||
+        mir.insns[45].opcode != MIR_CALL ||
+        strcmp(mir.insns[28].name, mir.insns[45].name) != 0 ||
+        mir.insns[69].opcode != MIR_CALL ||
+        mir.insns[133].opcode != MIR_CALL ||
+        mir.insns[140].opcode != MIR_CALL)
+        return 0;
+    plan->identity_function = find_global(mir.insns[28].name);
+    plan->check_function = find_global(mir.insns[69].name);
+    plan->print_function = find_global(mir.insns[133].name);
+    plan->failures = find_global(mir.insns[3].name);
+    if (plan->identity_function == NULL ||
+        !plan->identity_function->is_defined ||
+        plan->check_function == NULL || !plan->check_function->is_defined ||
+        plan->print_function == NULL ||
+        plan->failures == NULL || !plan->failures->is_defined ||
+        plan->failures->is_volatile ||
+        type_size(plan->failures->type) != 2)
+        return 0;
+    plan->array_offset = memory_offset;
+    for (item = 0; item < 4; ++item) {
+        if (mir.insns[name_instruction[item]].opcode !=
+                MIR_STRING_ADDRESS ||
+            mir.insns[pointer_instruction[item]].opcode != MIR_CONST ||
+            mir.insns[pointer_instruction[item]].immediate != item * 4)
+            return 0;
+        plan->name_string[item] =
+            (int)mir.insns[name_instruction[item]].immediate;
+        for (byte = 0; byte < 4; ++byte) {
+            const struct MirInsn *expected =
+                &mir.insns[expected_instruction[item][byte]];
+
+            if (expected->opcode != MIR_CONST ||
+                expected->immediate < 0 || expected->immediate > 255)
+                return 0;
+            plan->expected[item][byte] = (int)expected->immediate;
+        }
+    }
+    plan->failure_string = (int)mir.insns[129].immediate;
+    plan->success_string = (int)mir.insns[138].immediate;
     return 1;
 }
 
@@ -15116,6 +15204,85 @@ static void mir_emit_small_word_switch(
             plan->trailing_value,
             range_label, plan->range_value,
             default_label, plan->default_value);
+}
+
+static void mir_emit_float_identity_store(
+    FILE *out, const struct MirFloatPointerChecks *plan,
+    int source_offset, int destination_offset)
+{
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "\tpush de\n\tpush hl\n",
+            source_offset, source_offset + 1,
+            source_offset + 2, source_offset + 3);
+    mir_emit_symbol_call(out, plan->identity_function);
+    fprintf(out,
+            "\tpop bc\n\tpop bc\n"
+            "\tld (ix%+d),l\n\tld (ix%+d),h\n"
+            "\tld (ix%+d),e\n\tld (ix%+d),d\n",
+            destination_offset, destination_offset + 1,
+            destination_offset + 2, destination_offset + 3);
+}
+
+static void mir_emit_float_pointer_check(
+    FILE *out, const struct MirFloatPointerChecks *plan, int item)
+{
+    int byte;
+
+    for (byte = 3; byte >= 0; --byte)
+        fprintf(out, "\tld hl,%d\n\tpush hl\n",
+                plan->expected[item][byte]);
+    fputs("\tpush ix\n\tpop hl\n", out);
+    mir_emit_hl_offset_from_ix(out, plan->array_offset + item * 4);
+    fprintf(out, "\tpush hl\n\tld hl,S%d\n\tpush hl\n",
+            plan->name_string[item]);
+    mir_emit_symbol_call(out, plan->check_function);
+    fputs("\tld hl,12\n\tadd hl,sp\n\tld sp,hl\n", out);
+}
+
+static void mir_emit_float_pointer_checks(
+    FILE *out, const struct MirFloatPointerChecks *plan)
+{
+    const char *failures_name = asm_name_for(plan->failures->name);
+    static const unsigned char initial_bytes[3][4] = {
+        { 0, 0, 128, 63 },
+        { 0, 0, 32, 64 },
+        { 0, 0, 64, 192 }
+    };
+    int done = new_label();
+    int success = new_label();
+    int item;
+    int byte;
+
+    mir_emit_symbol_extrn(out, plan->failures);
+    fprintf(out, "\tld hl,0\n\tld (%s),hl\n",
+            failures_name);
+    for (item = 0; item < 3; ++item)
+        for (byte = 0; byte < 4; ++byte)
+            fprintf(out, "\tld (ix%+d),%u\n",
+                    plan->array_offset + item * 4 + byte,
+                    (unsigned)initial_bytes[item][byte]);
+    mir_emit_float_identity_store(
+        out, plan, plan->array_offset + 4, plan->array_offset + 12);
+    mir_emit_float_identity_store(
+        out, plan, plan->array_offset + 8, plan->array_offset + 8);
+    for (item = 0; item < 4; ++item)
+        mir_emit_float_pointer_check(out, plan, item);
+    fprintf(out,
+            "\tld hl,(%s)\n\tld a,h\n\tor l\n\tjp z, L%d\n"
+            "\tpush hl\n\tld hl,S%d\n\tpush hl\n",
+            failures_name, success, plan->failure_string);
+    mir_emit_symbol_call(out, plan->print_function);
+    fprintf(out,
+            "\tpop bc\n\tpop bc\n\tld hl,1\n\tjp L%d\n"
+            "L%d:\n\tld hl,S%d\n\tpush hl\n",
+            done, success, plan->success_string);
+    mir_emit_symbol_call(out, plan->print_function);
+    fprintf(out,
+            "\tpop bc\n\tld hl,0\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            done);
 }
 
 static void mir_emit_byte_compare_flags(
@@ -25894,6 +26061,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     struct MirTimeChecks time_checks;
     struct MirEnumFsm enum_fsm;
     struct MirSmallWordSwitch small_word_switch;
+    struct MirFloatPointerChecks float_pointer_checks;
     struct MirWideGcd wide_gcd;
     struct MirFixedLongAdd fixed_long_add;
     struct MirFixedLongZero fixed_long_zero;
@@ -26230,6 +26398,16 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_small_word_switch(out, &small_word_switch);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_float_pointer_checks(&float_pointer_checks)) {
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+              "\tld hl,-16\n\tadd hl,sp\n\tld sp,hl\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_float_pointer_checks(out, &float_pointer_checks);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
