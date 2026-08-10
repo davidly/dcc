@@ -3972,7 +3972,7 @@ static int mir_register_policy_version(const char *policy)
     if (strncmp(policy, "register-v", 10))
         return 0;
     version = strtol(policy + 10, &end, 10);
-    if (*end != 0 || version < 1 || version > 53)
+    if (*end != 0 || version < 1 || version > 54)
         return -1;
     return (int)version;
 }
@@ -3986,7 +3986,7 @@ static int mir_final_cost_policy_rejects(
     int policy_version;
 
     if (policy == NULL || policy[0] == 0)
-        policy = "register-v53";
+        policy = "register-v54";
     if (!strcmp(policy, "off"))
         return 0;
     policy_version = mir_register_policy_version(policy);
@@ -4469,6 +4469,18 @@ static int mir_final_cost_policy_rejects(
             generated_size * 100L > captured_size * 115L &&
             (long)generated_instructions * 100L >
                 (long)captured_instructions * 115L)
+            reject = 1;
+        if (!reject && policy_version >= 54 &&
+            mir.sink_purpose == EMIT_SINK_FINAL &&
+            mir_spilled_cfg_depends_on_dynamic_index_base_forwarding() &&
+            mir_has_cfg_backedge() && !mir_has_wide_values() &&
+            mir_cfg_block_count() >= 24 &&
+            mir_cfg_block_count() <= 31 &&
+            mir_call_count() >= 24 &&
+            mir_call_count() <= 29 &&
+            mir.backend_slot_count <= 3 &&
+            mir_boolean_phi_branch_simplification_count() > 0 &&
+            generated_size <= captured_size)
             reject = 1;
         if (getenv("DCC_MIR_FINAL_COST_REPORT") != NULL)
             fprintf(stderr,
