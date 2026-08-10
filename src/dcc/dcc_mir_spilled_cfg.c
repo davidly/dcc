@@ -110,6 +110,8 @@ static int mir_runtime_stride_index_slot_forwardable(
 static int mir_runtime_stride_store_slot_forwardable(
     int value, int units, int instruction);
 static int mir_value_has_direct_named_home(int value);
+static int mir_pointer_difference_pow2_shift(
+    const struct MirInsn *insn);
 static int mir_call_result_direct_reload_indirect_store_target(int value);
 static int mir_value_currently_uses_stack_handoff(int value, int instruction);
 static int mir_planned_stack_matches_consumer(int value, int instruction);
@@ -157,6 +159,7 @@ static int mir_spilled_cfg_used_wide_constant_rematerialization;
 static int mir_spilled_cfg_used_unsigned_wide_constant_relational;
 static int mir_spilled_cfg_used_signed_wide_constant_relational;
 static int mir_spilled_cfg_used_indirect_incdec;
+static int mir_spilled_cfg_used_pointer_difference_shift;
 static int mir_spilled_cfg_used_unary_not_branch_fusion;
 static int mir_spilled_cfg_used_planned_stack_handoff;
 static int mir_spilled_cfg_used_planned_index_base_handoff;
@@ -11405,6 +11408,28 @@ static int mir_scaled_index_rhs_can_stay_in_hl(int value)
            mir_planned_stack_is_emitted(consumer->src1);
 }
 
+static int mir_pointer_difference_can_stay_in_hl(
+    int value, int *consumer_out)
+{
+    const struct MirInsn *consumer;
+    const struct MirInsn *constant;
+    int consumer_index;
+
+    if (mir_emit_instruction_index < 0 ||
+        mir_emit_instruction_index + 2 >= mir.count)
+        return 0;
+    constant = &mir.insns[mir_emit_instruction_index + 1];
+    consumer_index = mir_emit_instruction_index + 2;
+    consumer = &mir.insns[consumer_index];
+    if (constant->opcode != MIR_CONST ||
+        consumer->src1 != value ||
+        mir_pointer_difference_pow2_shift(consumer) <= 0)
+        return 0;
+    if (consumer_out != NULL)
+        *consumer_out = consumer_index;
+    return 1;
+}
+
 static int mir_indirect_load_de_consumer(
     int instruction, int *forwarded_value_out)
 {
@@ -11527,6 +11552,7 @@ static void mir_emit_virtual_store(FILE *out, int value)
     int forward_instruction;
     int runtime_stride_consumer;
     int runtime_stride_index_value;
+    int pointer_difference_consumer;
     int offset;
     int iy_offset;
     int pending_planned_consumer;
@@ -11550,6 +11576,14 @@ static void mir_emit_virtual_store(FILE *out, int value)
         mir_scaled_index_rhs_can_stay_in_hl(value)) {
         mir_forwarded_hl_value = value;
         mir_forwarded_hl_instruction = mir_emit_instruction_index;
+        return;
+    }
+    if (!force_slot_store &&
+        mir_pointer_difference_can_stay_in_hl(
+            value, &pointer_difference_consumer)) {
+        mir_forwarded_hl_value = value;
+        mir_forwarded_hl_instruction =
+            pointer_difference_consumer - 1;
         return;
     }
     if (value == mir_prepacked_result_value) {
@@ -18806,6 +18840,37 @@ int mir_ulong_log2_pow2(unsigned long v)
     return n;
 }
 
+static int mir_pointer_difference_pow2_shift(
+    const struct MirInsn *insn)
+{
+    const struct MirInsn *difference;
+    const struct MirInsn *left;
+    const struct MirInsn *right;
+    const struct MirInsn *scale;
+    int shift;
+
+    if (insn == NULL || insn->opcode != MIR_BINARY ||
+        insn->immediate != '/' ||
+        type_size(insn->secondary_offset) != 2)
+        return -1;
+    difference = mir_definition(insn->src1);
+    scale = mir_definition(insn->src2);
+    if (difference == NULL || difference->opcode != MIR_BINARY ||
+        difference->immediate != '-' ||
+        scale == NULL || scale->opcode != MIR_CONST ||
+        scale->immediate <= 1)
+        return -1;
+    left = mir_definition(difference->src1);
+    right = mir_definition(difference->src2);
+    if (left == NULL || right == NULL ||
+        type_ptr_depth(left->type) == 0 ||
+        type_ptr_depth(right->type) == 0)
+        return -1;
+    shift = mir_ulong_log2_pow2(
+        (unsigned long)scale->immediate);
+    return shift > 0 ? shift : -1;
+}
+
 /* AND one 16-bit register pair (hi_reg:lo_reg) with a compile-time word
  * mask in place, without a temporary register pair: a byte that is
  * all-ones in the mask is left untouched, a byte that is all-zero
@@ -23070,6 +23135,11 @@ int mir_spilled_cfg_depends_on_indirect_incdec(void)
     return mir_spilled_cfg_used_indirect_incdec;
 }
 
+int mir_spilled_cfg_depends_on_pointer_difference_shift(void)
+{
+    return mir_spilled_cfg_used_pointer_difference_shift;
+}
+
 /* T394 (mir-text-size-plan.md): unlike signed wide relational compares
  * against a constant (which legacy inlines via the sign-flip + 32-bit
  * subtract trick, with the C+1/C-1 adjustment for '>'/'<='), legacy's own
@@ -23293,6 +23363,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     mir_spilled_cfg_used_unsigned_wide_constant_relational = 0;
     mir_spilled_cfg_used_signed_wide_constant_relational = 0;
     mir_spilled_cfg_used_indirect_incdec = 0;
+    mir_spilled_cfg_used_pointer_difference_shift = 0;
     mir_spilled_cfg_used_unary_not_branch_fusion = 0;
     mir_spilled_cfg_used_planned_stack_handoff = 0;
     mir_spilled_cfg_used_planned_index_base_handoff = 0;
@@ -25414,6 +25485,8 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                  * path) need to know this to skip DE's own runtime
                  * xor-128 flip and only flip HL's sign bit. */
                 int de_holds_biased_constant = 0;
+                int pointer_difference_shift =
+                    mir_pointer_difference_pow2_shift(insn);
                 if (planned_stack_forwarded_left &&
                     (divmod_partner >= 0 ||
                      (insn->immediate == '*' &&
@@ -25465,6 +25538,24 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                            !planned_stack_forwarded_left &&
                            !planned_stack_left_in_hl)
                     mir_emit_virtual_load(out, insn->src1);
+                if (pointer_difference_shift > 0) {
+                    mir_spilled_cfg_used_pointer_difference_shift = 1;
+                    if (stack_forwarded_left) {
+                        fputs("\tpop hl\n", out);
+                        mir_forwarded_stack_value = -1;
+                        mir_forwarded_stack_instruction = -1;
+                        mir_forwarded_stack_target_instruction = -1;
+                    } else if (planned_stack_forwarded_left) {
+                        if (!mir_consume_planned_stack(
+                                out, insn->src1, i, "hl"))
+                            mir_planned_stack_invalid = 1;
+                        planned_stack_forwarded_left = 0;
+                    }
+                    mir_emit_scalar_shift_by_constant(
+                        out, TOK_SHR, 0, pointer_difference_shift);
+                    mir_emit_virtual_store(out, insn->dst);
+                    break;
+                }
                 if (divmod_partner >= 0) {
                     const struct MirInsn *other = &mir.insns[divmod_partner];
                     int modulo_value = insn->immediate == '%' ? insn->dst

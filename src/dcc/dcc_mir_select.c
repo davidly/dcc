@@ -4221,7 +4221,10 @@ static int mir_final_cost_policy_rejects(
         if (!reject && policy_version >= 21 &&
             mir.has_pointer_difference &&
             mir_cfg_block_count() == 1 &&
-            generated_size > captured_size)
+            generated_size > captured_size &&
+            !(mir_spilled_cfg_depends_on_pointer_difference_shift() &&
+              generated_size <= captured_size + 10 &&
+              generated_instructions < captured_instructions))
             reject = 1;
         if (!reject && policy_version >= 22 &&
             mir.is_variadic_function &&
