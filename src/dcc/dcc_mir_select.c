@@ -1283,6 +1283,8 @@ long mir_stream_size(FILE *stream)
              * no Z80 bytes. Do not let its symbol text choose a different
              * selector through the assembly-text cost proxy. */
             size -= (long)strlen(line);
+        else if (strstr(line, MIR_PHI_SLOT_MARKER) == line)
+            size -= (long)strlen(line);
     if (fseek(stream, position, SEEK_SET) != 0)
         return -1;
     return size;
@@ -3866,6 +3868,11 @@ static int mir_stream_contains_text(FILE *stream, const char *needle)
     return found;
 }
 
+static int mir_has_declared_register_object(void)
+{
+    return mir.has_declared_register_object;
+}
+
 static int mir_final_cost_policy_rejects(
     const char *selector_name, FILE *generated, FILE *captured,
     long generated_size, long captured_size,
@@ -3874,13 +3881,14 @@ static int mir_final_cost_policy_rejects(
     const char *policy = getenv("DCC_MIR_FINAL_COST_POLICY");
 
     if (policy == NULL || policy[0] == 0)
-        policy = "register-v4";
+        policy = "register-v5";
     if (!strcmp(policy, "off"))
         return 0;
     if (!strcmp(policy, "register-v1") ||
         !strcmp(policy, "register-v2") ||
         !strcmp(policy, "register-v3") ||
-        !strcmp(policy, "register-v4")) {
+        !strcmp(policy, "register-v4") ||
+        !strcmp(policy, "register-v5")) {
         int generated_claim;
         int captured_claim;
         int reject;
@@ -3897,7 +3905,8 @@ static int mir_final_cost_policy_rejects(
         if (!reject &&
             (!strcmp(policy, "register-v2") ||
              !strcmp(policy, "register-v3") ||
-             !strcmp(policy, "register-v4"))) {
+             !strcmp(policy, "register-v4") ||
+             !strcmp(policy, "register-v5"))) {
             int blocks = mir_cfg_block_count();
 
             reject =
@@ -3909,6 +3918,11 @@ static int mir_final_cost_policy_rejects(
                   generated_size > captured_size * 2L &&
                   generated_instructions > captured_instructions * 2));
         }
+        if (!reject && !strcmp(policy, "register-v5") &&
+            mir_has_declared_register_object() &&
+            (!mir_stream_contains_text(generated, MIR_PHI_SLOT_MARKER) ||
+             generated_size * 100L > captured_size * 120L))
+            reject = 1;
         if (getenv("DCC_MIR_FINAL_COST_REPORT") != NULL)
             fprintf(stderr,
                     "; MIR final-register function=%s selector=%s "
@@ -3917,9 +3931,12 @@ static int mir_final_cost_policy_rejects(
                     generated_claim, captured_claim, reject);
         if (reject ||
             (strcmp(policy, "register-v3") &&
-             strcmp(policy, "register-v4")))
+             strcmp(policy, "register-v4") &&
+             strcmp(policy, "register-v5")))
             return reject;
-        policy = !strcmp(policy, "register-v4") ? "cost-v4" : "cost-v3";
+        policy = (!strcmp(policy, "register-v4") ||
+                  !strcmp(policy, "register-v5"))
+            ? "cost-v4" : "cost-v3";
     }
     if (!strcmp(policy, "cost-v3") ||
         !strcmp(policy, "cost-v4")) {

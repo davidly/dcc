@@ -25267,6 +25267,8 @@ int mir_try_emit_spilled_scalar_cfg(FILE *out)
 done:
     if (accepted && mir_spilled_cfg_used_exact_semantic_kernel)
         fprintf(out, "%s\n", MIR_EXACT_KERNEL_MARKER);
+    if (accepted && mir_phi_slot_cleanup_enabled)
+        fprintf(out, "%s\n", MIR_PHI_SLOT_MARKER);
     if (accepted && mir_backend_slot_accessed != NULL)
         for (i = 0; i < mir.next_value; ++i)
             if (mir.backend_slots[i] >= 0 &&

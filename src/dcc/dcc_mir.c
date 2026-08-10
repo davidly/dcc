@@ -573,6 +573,8 @@ static int mir_get_object(const struct Sym *sym, const char *name)
     struct MirObject *object;
     int index;
 
+    if (sym != NULL && sym->is_register)
+        mir.has_declared_register_object = 1;
     if (!mir_object_eligible(sym))
         return -1;
     index = mir_find_object(name);
@@ -588,6 +590,7 @@ static int mir_get_object(const struct Sym *sym, const char *name)
     object->type = sym->type;
     object->offset = sym->offset;
     object->entry_value = -1;
+    object->is_register = sym->is_register;
     return index;
 }
 
@@ -3099,6 +3102,7 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
     mir.flow_replay_active = 0;
     mir.label_replay_active = 0;
     mir.object_count = 0;
+    mir.has_declared_register_object = 0;
     mir.region_count = 0;
     mir.regional_segment_count = 0;
     mir.regional_spill_slot_count = 0;

@@ -101,6 +101,7 @@ struct MirObject {
     int type;
     int offset;
     int entry_value;
+    int is_register;
 };
 
 struct MirSwitchContext {
@@ -207,6 +208,7 @@ struct MirFunction {
     EmitSink saved_sink;
     struct MirObject objects[256];
     int object_count;
+    int has_declared_register_object;
     char declared_names[MAX_LOCALS][64];
     int declared_types[MAX_LOCALS];
     int declared_storage[MAX_LOCALS];

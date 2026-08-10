@@ -169,6 +169,7 @@
 /* Prevent legacy speculative register allocation from rewriting a
  * transactionally selected exact MIR stream. */
 #define MIR_EXACT_KERNEL_MARKER ";@dcc.mir exact-kernel"
+#define MIR_PHI_SLOT_MARKER ";@dcc.mir phi-slot"
 
 /* ------------------------------------------------------------------------- *
  * Lexer token kinds. Single-character tokens use their ASCII code; multi-byte
