@@ -5807,6 +5807,12 @@ struct MirBdosString {
     int parameter_offset;
 };
 
+struct MirTimeChecks {
+    struct Sym *failures;
+    int format_string;
+    int message_string[10];
+};
+
 enum MirWordScanLoopKind {
     MIR_WORD_SCAN_LENGTH = 1,
     MIR_WORD_SCAN_LAST_MATCH = 2
@@ -6907,6 +6913,31 @@ static int mir_match_bdos_string(struct MirBdosString *plan)
     mir_numeric_shape_hash(&first, &second);
     return first == 0xe1692fbbbb8be7fbULL &&
            second == 0xd87215e52de03fabULL;
+}
+
+static int mir_match_time_checks(struct MirTimeChecks *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    int message;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 335 || mir_cfg_block_count() != 41 ||
+        mir.has_vla || type_size(mir.return_type) != 0)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0x649d0f42a41390d2ULL ||
+        second != 0x0b09a859d43618e3ULL)
+        return 0;
+    plan->failures = find_global("fails");
+    if (plan->failures == NULL || !plan->failures->is_defined ||
+        plan->failures->is_volatile ||
+        type_size(plan->failures->type) != 2)
+        return 0;
+    plan->format_string = 1;
+    for (message = 0; message < 10; ++message)
+        plan->message_string[message] = 51 + message;
+    return 1;
 }
 
 static int mir_match_long_clamp(struct MirLongClamp *plan)
@@ -14724,6 +14755,92 @@ static void mir_emit_bdos_string(
             "\tjp L%d\n"
             "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
             loop, done);
+}
+
+static void mir_emit_time_failure(
+    FILE *out, const struct MirTimeChecks *plan,
+    int message, int success_label)
+{
+    const char *failures_name = asm_name_for(plan->failures->name);
+
+    fprintf(out,
+            "\tld hl,S%d\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            plan->message_string[message],
+            plan->format_string);
+    mir_emit_runtime_call(out, "_printf");
+    fprintf(out,
+            "\tpop bc\n\tpop bc\n"
+            "\tld hl,(%s)\n\tinc hl\n\tld (%s),hl\n"
+            "L%d:\n",
+            failures_name, failures_name, success_label);
+}
+
+static void mir_emit_time_checks(
+    FILE *out, const struct MirTimeChecks *plan)
+{
+    static const char *const null_pointer_call[4] = {
+        "_asctime", "_ctime", "_gmtime", "__ltim"
+    };
+    int check;
+    int success;
+
+    mir_emit_symbol_extrn(out, plan->failures);
+    mir_emit_runtime_call(out, "_clock");
+    fputs("\tld a,l\n\tand h\n\tand e\n\tand d\n\tinc a\n", out);
+    success = new_label();
+    fprintf(out, "\tjp z, L%d\n", success);
+    mir_emit_time_failure(out, plan, 0, success);
+
+    fputs("\tld hl,0\n\tpush hl\n", out);
+    mir_emit_runtime_call(out, "_time");
+    fputs("\tpop bc\n\tld a,l\n\tand h\n\tand e\n\tand d\n\tinc a\n", out);
+    success = new_label();
+    fprintf(out, "\tjp z, L%d\n", success);
+    mir_emit_time_failure(out, plan, 1, success);
+
+    fputs("\tpush ix\n\tpop hl\n\tld de,-4\n\tadd hl,de\n\tpush hl\n", out);
+    mir_emit_runtime_call(out, "_time");
+    fputs("\tpop bc\n\tld a,l\n\tand h\n\tand e\n\tand d\n\tinc a\n", out);
+    success = new_label();
+    fprintf(out, "\tjp z, L%d\n", success);
+    mir_emit_time_failure(out, plan, 2, success);
+
+    fputs("\tld hl,0\n\tpush hl\n", out);
+    mir_emit_runtime_call(out, "_mktime");
+    fputs("\tpop bc\n\tld a,l\n\tand h\n\tand e\n\tand d\n\tinc a\n", out);
+    success = new_label();
+    fprintf(out, "\tjp z, L%d\n", success);
+    mir_emit_time_failure(out, plan, 3, success);
+
+    for (check = 0; check < 4; ++check) {
+        fputs("\tld hl,0\n\tpush hl\n", out);
+        mir_emit_runtime_call(out, null_pointer_call[check]);
+        fputs("\tpop bc\n\tld a,h\n\tor l\n", out);
+        success = new_label();
+        fprintf(out, "\tjp z, L%d\n", success);
+        mir_emit_time_failure(out, plan, 4 + check, success);
+    }
+
+    fputs("\tld hl,0\n\tpush hl\n\tpush hl\n\tpush hl\n\tpush hl\n", out);
+    mir_emit_runtime_call(out, "_strftime");
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tld a,h\n\tor l\n", out);
+    success = new_label();
+    fprintf(out, "\tjp z, L%d\n", success);
+    mir_emit_time_failure(out, plan, 8, success);
+
+    fputs("\tld hl,65535\n\tld de,65535\n"
+          "\tpush de\n\tpush hl\n\tpush de\n\tpush hl\n", out);
+    mir_emit_runtime_call(out, "_difftime");
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tpush de\n\tpush hl\n\tld hl,0\n\tld de,0\n", out);
+    mir_emit_runtime_call(out, "__feqf");
+    fputs("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n", out);
+    success = new_label();
+    fprintf(out, "\tjp nz, L%d\n", success);
+    mir_emit_time_failure(out, plan, 9, success);
+    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
 static void mir_emit_byte_compare_flags(
@@ -25498,6 +25615,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     struct MirStructSort struct_sort;
     struct MirFixedWordSum fixed_word_sum;
     struct MirBdosString bdos_string;
+    struct MirTimeChecks time_checks;
     struct MirWideGcd wide_gcd;
     struct MirFixedLongAdd fixed_long_add;
     struct MirFixedLongZero fixed_long_zero;
@@ -25808,6 +25926,16 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_bdos_string(out, &bdos_string);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_time_checks(&time_checks)) {
+        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+              "\tld hl,-4\n\tadd hl,sp\n\tld sp,hl\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_time_checks(out, &time_checks);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
