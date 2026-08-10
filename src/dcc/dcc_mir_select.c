@@ -3894,6 +3894,30 @@ static int mir_has_declared_register_object(void)
     return mir.has_declared_register_object;
 }
 
+static int mir_has_repeated_global_pointer_load(void)
+{
+    int first;
+
+    for (first = 0; first < mir.count; ++first) {
+        const struct MirInsn *load = &mir.insns[first];
+        const struct Sym *global;
+        int next;
+
+        if (load->opcode != MIR_LOAD || load->name[0] == 0 ||
+            type_ptr_depth(load->type) == 0)
+            continue;
+        global = find_global(load->name);
+        if (global == NULL || global->is_array ||
+            type_ptr_depth(global->type) == 0)
+            continue;
+        for (next = first + 1; next < mir.count; ++next)
+            if (mir.insns[next].opcode == MIR_LOAD &&
+                !strcmp(mir.insns[next].name, load->name))
+                return 1;
+    }
+    return 0;
+}
+
 static int mir_register_policy_version(const char *policy)
 {
     char *end;
@@ -3902,7 +3926,7 @@ static int mir_register_policy_version(const char *policy)
     if (strncmp(policy, "register-v", 10))
         return 0;
     version = strtol(policy + 10, &end, 10);
-    if (*end != 0 || version < 1 || version > 12)
+    if (*end != 0 || version < 1 || version > 13)
         return -1;
     return (int)version;
 }
@@ -3916,7 +3940,7 @@ static int mir_final_cost_policy_rejects(
     int policy_version;
 
     if (policy == NULL || policy[0] == 0)
-        policy = "register-v12";
+        policy = "register-v13";
     if (!strcmp(policy, "off"))
         return 0;
     policy_version = mir_register_policy_version(policy);
@@ -4030,6 +4054,13 @@ static int mir_final_cost_policy_rejects(
             mir_call_count() == 0 && !mir_has_wide_values() &&
             generated_size * 100L > captured_size * 103L &&
             generated_instructions > captured_instructions)
+            reject = 1;
+        if (!reject && policy_version >= 13 &&
+            mir.sink_purpose == EMIT_SINK_DEFERRED &&
+            mir_cfg_block_count() <= 6 &&
+            mir_call_count() == 0 &&
+            mir_has_repeated_global_pointer_load() &&
+            generated_size * 100L > captured_size * 105L)
             reject = 1;
         if (getenv("DCC_MIR_FINAL_COST_REPORT") != NULL)
             fprintf(stderr,
