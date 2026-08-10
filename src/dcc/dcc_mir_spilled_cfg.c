@@ -5730,6 +5730,17 @@ struct MirAsciiIdentifier {
     int digit_last;
 };
 
+enum MirBitsetAccessKind {
+    MIR_BITSET_ADD = 1,
+    MIR_BITSET_HAS = 2
+};
+
+struct MirBitsetAccess {
+    int kind;
+    int set_sp_offset;
+    int value_sp_offset;
+};
+
 struct MirBoardEvaluate {
     struct Sym *board;
     struct Sym *side;
@@ -8567,6 +8578,58 @@ static int mir_frameless_word_pointer_parameter(
     if (sp_offset != NULL)
         *sp_offset = memory_offset - 2;
     return 1;
+}
+
+static int mir_frameless_word_scalar_parameter(
+    const struct MirInsn *insn, int *sp_offset)
+{
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (insn == NULL ||
+        !mir_scalar_memory_location(
+            insn, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_size(memory_type) != 2 ||
+        type_ptr_depth(memory_type) != 0 ||
+        memory_offset < 2 || memory_offset > 257)
+        return 0;
+    if (sp_offset != NULL)
+        *sp_offset = memory_offset - 2;
+    return 1;
+}
+
+static int mir_match_bitset_access(struct MirBitsetAccess *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+
+    memset(plan, 0, sizeof(*plan));
+    if ((mir.count != 18 && mir.count != 20) ||
+        mir_cfg_block_count() != 1 || mir.has_vla ||
+        !mir_frameless_word_pointer_parameter(
+            &mir.insns[1], &plan->set_sp_offset) ||
+        !mir_frameless_word_scalar_parameter(
+            &mir.insns[2], &plan->value_sp_offset))
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (mir.count == 18 &&
+        first == 0x1ee52ed585f00284ULL &&
+        second == 0x169d9568016bb5b2ULL &&
+        type_size(mir.return_type) == 0)
+        plan->kind = MIR_BITSET_ADD;
+    else if (mir.count == 20 &&
+             first == 0x96e506ce6c8c080fULL &&
+             second == 0x4b28327e8bd1a95aULL &&
+             type_size(mir.return_type) == 2)
+        plan->kind = MIR_BITSET_HAS;
+    else
+        return 0;
+    return mir.insns[6].opcode == MIR_CONST &&
+           mir.insns[6].immediate == 16 &&
+           mir.insns[12].opcode == MIR_CONST &&
+           mir.insns[12].immediate == 16;
 }
 
 static int mir_match_ascii_identifier(
@@ -13358,6 +13421,42 @@ static void mir_emit_frameless_byte_parameter(
 {
     fprintf(out, "\tld hl,%d\n\tadd hl,sp\n\tld a,(hl)\n",
             sp_offset);
+}
+
+static void mir_emit_bitset_access(
+    FILE *out, const struct MirBitsetAccess *plan)
+{
+    int mask_loop = new_label();
+    int mask_ready = new_label();
+
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tld a,e\n\tand 15\n\tld b,a\n"
+            "\tld a,e\n\tand 240\n\tld e,a\n"
+            "\tsra d\n\trr e\n"
+            "\tsra d\n\trr e\n"
+            "\tsra d\n\trr e\n"
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n"
+            "\tadd hl,de\n\tex de,hl\n"
+            "\tld hl,1\n\tld a,b\n\tor a\n\tjp z, L%d\n"
+            "L%d:\n\tadd hl,hl\n\tdjnz L%d\n"
+            "L%d:\n\tex de,hl\n",
+            plan->value_sp_offset,
+            plan->set_sp_offset,
+            mask_ready,
+            mask_loop, mask_loop,
+            mask_ready);
+    if (plan->kind == MIR_BITSET_ADD) {
+        fputs("\tld a,(hl)\n\tor e\n\tld (hl),a\n"
+              "\tinc hl\n\tld a,(hl)\n\tor d\n\tld (hl),a\n"
+              "\tret\n", out);
+    } else {
+        fputs("\tld a,(hl)\n\tand e\n\tld e,a\n"
+              "\tinc hl\n\tld a,(hl)\n\tand d\n\tor e\n"
+              "\tld hl,0\n\tret z\n\tinc l\n\tret\n", out);
+    }
 }
 
 static void mir_emit_ascii_identifier(
@@ -23987,6 +24086,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     struct MirByteMinMax byte_minmax;
     struct MirWordPowermod word_powermod;
     struct MirFloatUnitFraction float_unit_fraction;
+    struct MirBitsetAccess bitset_access;
     struct MirAsciiIdentifier ascii_identifier;
     struct MirAsciiPieceSide ascii_piece_side;
     struct MirAsciiPieceValue ascii_piece_value;
@@ -24545,6 +24645,14 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_float_unit_fraction(out, &float_unit_fraction);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_bitset_access(&bitset_access)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_bitset_access(out, &bitset_access);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
