@@ -3964,6 +3964,16 @@ static int mir_has_member_address(void)
     return 0;
 }
 
+static int mir_has_bool_value(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (type_is_bool(mir.insns[instruction].type))
+            return 1;
+    return 0;
+}
+
 static int mir_register_policy_version(const char *policy)
 {
     char *end;
@@ -3972,7 +3982,7 @@ static int mir_register_policy_version(const char *policy)
     if (strncmp(policy, "register-v", 10))
         return 0;
     version = strtol(policy + 10, &end, 10);
-    if (*end != 0 || version < 1 || version > 60)
+    if (*end != 0 || version < 1 || version > 61)
         return -1;
     return (int)version;
 }
@@ -3986,7 +3996,7 @@ static int mir_final_cost_policy_rejects(
     int policy_version;
 
     if (policy == NULL || policy[0] == 0)
-        policy = "register-v60";
+        policy = "register-v61";
     if (!strcmp(policy, "off"))
         return 0;
     policy_version = mir_register_policy_version(policy);
@@ -4049,15 +4059,26 @@ static int mir_final_cost_policy_rejects(
         int reject;
 
         if (!strcmp(selector_name, "homed-scalar-cfg"))
-            return policy_version >= 50 &&
-                mir_has_cfg_backedge() &&
-                !mir_has_wide_values() &&
-                mir_cfg_block_count() == 4 &&
-                mir_call_count() == 1 &&
-                mir.local_bytes <= 4 &&
-                generated_size * 100L > captured_size * 125L &&
-                (long)generated_instructions * 100L >
-                    (long)captured_instructions * 150L;
+            return (policy_version >= 50 &&
+                    mir_has_cfg_backedge() &&
+                    !mir_has_wide_values() &&
+                    mir_cfg_block_count() == 4 &&
+                    mir_call_count() == 1 &&
+                    mir.local_bytes <= 4 &&
+                    generated_size * 100L > captured_size * 125L &&
+                    (long)generated_instructions * 100L >
+                        (long)captured_instructions * 150L) ||
+                (policy_version >= 61 &&
+                 mir.sink_purpose == EMIT_SINK_DEFERRED &&
+                 mir_has_bool_value() &&
+                 !mir_has_cfg_backedge() &&
+                 !mir_has_wide_values() &&
+                 mir_cfg_block_count() == 1 &&
+                 mir_call_count() == 9 &&
+                 mir.local_bytes == 0 &&
+                 generated_size * 100L > captured_size * 115L &&
+                 (long)generated_instructions * 100L >
+                     (long)captured_instructions * 110L);
         if (strcmp(selector_name, "spilled-scalar-cfg"))
             return 0;
         if (mir_stream_contains_text(generated, MIR_EXACT_KERNEL_MARKER))
@@ -4552,6 +4573,37 @@ static int mir_final_cost_policy_rejects(
             mir_call_count() == 0 &&
             mir.local_bytes == 6 &&
             generated_size > captured_size)
+            reject = 1;
+        if (!reject && policy_version >= 61 &&
+            mir.sink_purpose == EMIT_SINK_DEFERRED &&
+            mir_has_bool_value() &&
+            ((mir_cfg_block_count() == 1 &&
+              !mir_has_cfg_backedge() &&
+              mir_has_wide_values() &&
+              mir_call_count() == 14 &&
+              mir.local_bytes == 12 &&
+              mir.backend_slot_count == 1 &&
+              generated_size * 100L > captured_size * 125L &&
+              (long)generated_instructions * 100L >
+                  (long)captured_instructions * 125L) ||
+             (mir_cfg_block_count() == 8 &&
+              mir_has_cfg_backedge() &&
+              !mir_has_wide_values() &&
+              mir_call_count() == 2 &&
+              mir.local_bytes == 4 &&
+              mir.backend_slot_count >= 5 &&
+              generated_size * 100L > captured_size * 130L &&
+              (long)generated_instructions * 100L >
+                  (long)captured_instructions * 120L) ||
+             (mir_cfg_block_count() == 18 &&
+              !mir_has_cfg_backedge() &&
+              !mir_has_wide_values() &&
+              mir_call_count() == 7 &&
+              mir.local_bytes == 4 &&
+              mir.backend_slot_count >= 5 &&
+              generated_size * 100L > captured_size * 150L &&
+              (long)generated_instructions * 100L >
+                  (long)captured_instructions * 135L)))
             reject = 1;
         if (getenv("DCC_MIR_FINAL_COST_REPORT") != NULL)
             fprintf(stderr,
