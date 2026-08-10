@@ -18018,13 +18018,11 @@ static void mir_emit_float_exp(
     FILE *out, const struct MirFloatExp *plan)
 {
     enum {
-        INPUT = -4,
         N = -6,
         R = -10,
         SUM = -14,
         TERM = -18,
-        I = -20,
-        TEMP = -24
+        I = -20
     };
     int return_maximum = new_label();
     int check_lower = new_label();
@@ -18040,39 +18038,45 @@ static void mir_emit_float_exp(
     int return_sum = new_label();
     int exit_label = new_label();
 
-    mir_emit_frame_long_load(out, plan->parameter_offset);
-    mir_emit_frame_long_store(out, INPUT);
     mir_emit_float_compare_constant(
-        out, INPUT, plan->upper_bits, "__fltf",
+        out, plan->parameter_offset, plan->upper_bits, "__fltf",
         return_maximum, check_lower);
     fprintf(out, "L%d:\n", check_lower);
     mir_emit_float_compare_constant(
-        out, INPUT, plan->upper_bits ^ 0x80000000UL,
+        out, plan->parameter_offset,
+        plan->upper_bits ^ 0x80000000UL,
         "__fgtf", return_zero, calculate);
     fprintf(out, "L%d:\n", calculate);
-    mir_emit_float_binary_constant(out, INPUT, plan->ln2_bits, "__fdf");
+    mir_emit_float_binary_constant(
+        out, plan->parameter_offset, plan->ln2_bits, "__fdf");
     mir_emit_runtime_call(out, "__ffi");
     mir_emit_forth_frame_store(out, N);
     mir_emit_float_compare_constant(
-        out, INPUT, 0, "__fgtf", check_rounding, after_rounding);
+        out, plan->parameter_offset, 0, "__fgtf",
+        check_rounding, after_rounding);
     fprintf(out, "L%d:\n", check_rounding);
-    mir_emit_float_binary_constant(out, INPUT, plan->ln2_bits, "__fdf");
-    mir_emit_frame_long_store(out, TEMP);
+    mir_emit_float_binary_constant(
+        out, plan->parameter_offset, plan->ln2_bits, "__fdf");
+    fputs("\tpush de\n\tpush hl\n", out);
     mir_emit_forth_frame_load(out, N);
     mir_emit_runtime_call(out, "__fif");
-    mir_emit_frame_long_store(out, R);
-    mir_emit_float_binary_frames(out, TEMP, R, "__fnef");
+    mir_emit_runtime_call(out, "__fnef");
+    fputs("\tpop bc\n\tpop bc\n", out);
     fputs("\tld a,h\n\tor l\n", out);
     fprintf(out, "\tjp z, L%d\n\tld a,(ix%d)\n\tdec (ix%d)\n"
                  "\tor a\n\tjp nz, L%d\n\tdec (ix%d)\n",
             after_rounding, N, N, after_rounding, N + 1);
     fprintf(out, "L%d:\n", after_rounding);
+    mir_emit_frame_long_load(out, plan->parameter_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
     mir_emit_forth_frame_load(out, N);
     mir_emit_runtime_call(out, "__fif");
-    mir_emit_frame_long_store(out, TEMP);
-    mir_emit_float_binary_constant(out, TEMP, plan->ln2_bits, "__fmf");
-    mir_emit_frame_long_store(out, TEMP);
-    mir_emit_float_binary_frames(out, INPUT, TEMP, "__fsf");
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_float_bits(out, plan->ln2_bits);
+    mir_emit_runtime_call(out, "__fmf");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_emit_runtime_call(out, "__fsf");
+    fputs("\tpop bc\n\tpop bc\n", out);
     mir_emit_frame_long_store(out, R);
     mir_emit_float_bits(out, plan->one_bits);
     mir_emit_frame_long_store(out, SUM);
@@ -18085,11 +18089,11 @@ static void mir_emit_float_exp(
             plan->term_limit + 1);
     fprintf(out, "\tjp nc, L%d\n", series_done);
     mir_emit_float_binary_frames(out, TERM, R, "__fmf");
-    mir_emit_frame_long_store(out, TEMP);
+    fputs("\tpush de\n\tpush hl\n", out);
     mir_emit_forth_frame_load(out, I);
     mir_emit_runtime_call(out, "__fif");
-    mir_emit_frame_long_store(out, TERM);
-    mir_emit_float_binary_frames(out, TEMP, TERM, "__fdf");
+    mir_emit_runtime_call(out, "__fdf");
+    fputs("\tpop bc\n\tpop bc\n", out);
     mir_emit_frame_long_store(out, TERM);
     mir_emit_float_binary_frames(out, SUM, TERM, "__faf");
     mir_emit_frame_long_store(out, SUM);
@@ -24141,7 +24145,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     }
     if (mir_match_float_exp(&float_exp)) {
         fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
-              "\tld hl,-24\n\tadd hl,sp\n\tld sp,hl\n", out);
+              "\tld hl,-20\n\tadd hl,sp\n\tld sp,hl\n", out);
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_float_exp(out, &float_exp);
