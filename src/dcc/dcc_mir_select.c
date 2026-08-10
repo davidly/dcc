@@ -2315,6 +2315,16 @@ static int mir_has_declared_multidimensional_pointer_array(void)
     return 0;
 }
 
+static int mir_has_declared_multidimensional_array(void)
+{
+    int i;
+
+    for (i = 0; i < mir.declared_count; ++i)
+        if (mir.declared_dim_counts[i] > 1)
+            return 1;
+    return 0;
+}
+
 /* Item T63 (mir-text-size-plan.md): counts conditional tests in the
  * function, used to flag a chained if/else-if shape (2+ separate
  * MIR_BRANCH_FALSE instructions) as opposed to a single if/else (only
@@ -3892,7 +3902,7 @@ static int mir_register_policy_version(const char *policy)
     if (strncmp(policy, "register-v", 10))
         return 0;
     version = strtol(policy + 10, &end, 10);
-    if (*end != 0 || version < 1 || version > 8)
+    if (*end != 0 || version < 1 || version > 9)
         return -1;
     return (int)version;
 }
@@ -3906,7 +3916,7 @@ static int mir_final_cost_policy_rejects(
     int policy_version;
 
     if (policy == NULL || policy[0] == 0)
-        policy = "register-v8";
+        policy = "register-v9";
     if (!strcmp(policy, "off"))
         return 0;
     policy_version = mir_register_policy_version(policy);
@@ -3989,6 +3999,11 @@ static int mir_final_cost_policy_rejects(
             generated_size > 10000 &&
             generated_size > captured_size &&
             generated_size <= captured_size * 2L)
+            reject = 1;
+        if (!reject && policy_version >= 9 &&
+            mir_has_cfg_backedge() &&
+            mir_call_count() == 0 &&
+            mir_has_declared_multidimensional_array())
             reject = 1;
         if (getenv("DCC_MIR_FINAL_COST_REPORT") != NULL)
             fprintf(stderr,
