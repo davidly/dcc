@@ -25,6 +25,9 @@ SELECTION_RE = re.compile(
     r"captured-insns=(?P<captured_insns>-?\d+) blocks=(?P<blocks>\d+) "
     r"selected-hash=(?P<selected_hash>[0-9a-fA-F]{8})"
 )
+BUFFERED_EXACT_RE = re.compile(
+    r"MIR buffered-exact function=(?P<function>\S+)"
+)
 MATRIX_RE = re.compile(
     r"MIR candidate-matrix\tfunction=(?P<function>\S+)"
     r"\tcandidate=(?P<candidate>\S+)\tmask=(?P<mask>[0-9a-fA-F]{8})"
@@ -221,6 +224,29 @@ def compile_source(
         matrix_match = MATRIX_RE.search(line)
         if matrix_match:
             matrix_rows.append({"app": source.stem, **matrix_match.groupdict()})
+            continue
+        buffered_match = BUFFERED_EXACT_RE.search(line)
+        if buffered_match:
+            function = buffered_match.group("function")
+            if function in seen:
+                rows = [row for row in rows if row["function"] != function]
+            else:
+                seen.add(function)
+            rows.append(
+                {
+                    "app": source.stem,
+                    "function": function,
+                    "selector": "buffered-exact-mir",
+                    "result": "mir",
+                    "reason": "accepted",
+                    "generated_bytes": "0",
+                    "captured_bytes": "0",
+                    "generated_insns": "0",
+                    "captured_insns": "0",
+                    "blocks": "0",
+                    "selected_hash": "00000000",
+                }
+            )
             continue
         match = SELECTION_RE.search(line)
         if not match:

@@ -198,8 +198,11 @@ int try_speculative_noix_function_body(const char *name, int type,
     int saved_stack_check;
     int generated_stack_check;
     int implicit_zero_return;
+    int exact_mir;
     int c;
     int errors_before;
+    char *buf;
+    long size;
 
     implicit_zero_return = strcmp(name, "main") == 0 &&
                             (type & 15) == TYPE_INT && type_ptr_depth(type) == 0;
@@ -251,6 +254,15 @@ int try_speculative_noix_function_body(const char *name, int type,
     opt_stack_check = saved_stack_check;
     emit_sink_restore(&saved_sink);
 
+    exact_mir = 0;
+    if (g_diag_error_count == errors_before) {
+        buf = dcc_read_stream_text(
+            scratch, &size,
+            "cannot read speculative no-ix-frame temp file");
+        exact_mir = strstr(buf, MIR_EXACT_KERNEL_MARKER) != NULL;
+        free(buf);
+        rewind(scratch);
+    }
     /* check_undefined_user_labels() is deliberately not called above: if
      * this attempt is about to be discarded, calling it here would both
      * double-report a genuine undefined-label error (the caller's normal
@@ -263,6 +275,8 @@ int try_speculative_noix_function_body(const char *name, int type,
      * falling back. */
     if (g_diag_error_count == errors_before && !tmpfile_unsafe_for_noix(scratch)) {
         check_undefined_user_labels();
+        if (exact_mir && getenv("DCC_MIR_SELECT_REPORT") != NULL)
+            fprintf(stderr, "; MIR buffered-exact function=%s\n", name);
         rewind(scratch);
         while ((c = fgetc(scratch)) != EOF)
             fputc(c, g_emit_sink.stream);

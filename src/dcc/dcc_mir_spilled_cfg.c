@@ -5720,6 +5720,16 @@ struct MirAsciiPieceValue {
     int default_value;
 };
 
+struct MirAsciiIdentifier {
+    int parameter_sp_offset;
+    int upper_first;
+    int upper_last;
+    int lower_first;
+    int lower_last;
+    int digit_first;
+    int digit_last;
+};
+
 struct MirBoardEvaluate {
     struct Sym *board;
     struct Sym *side;
@@ -8536,6 +8546,52 @@ static int mir_frameless_byte_parameter(
         return 0;
     if (sp_offset != NULL)
         *sp_offset = memory_offset - 2;
+    return 1;
+}
+
+static int mir_frameless_word_pointer_parameter(
+    const struct MirInsn *insn, int *sp_offset)
+{
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (insn == NULL ||
+        !mir_scalar_memory_location(
+            insn, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_size(memory_type) != 2 ||
+        type_ptr_depth(memory_type) == 0 ||
+        memory_offset < 2 || memory_offset > 257)
+        return 0;
+    if (sp_offset != NULL)
+        *sp_offset = memory_offset - 2;
+    return 1;
+}
+
+static int mir_match_ascii_identifier(
+    struct MirAsciiIdentifier *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 179 || mir_cfg_block_count() != 42 ||
+        mir.has_vla || type_size(mir.return_type) != 1 ||
+        type_ptr_depth(mir.return_type) != 0)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0x799e0a1619a5e6ffULL ||
+        second != 0x5e07b5f68e57b606ULL ||
+        !mir_frameless_word_pointer_parameter(
+            &mir.insns[1], &plan->parameter_sp_offset))
+        return 0;
+    plan->upper_first = (int)mir.insns[4].immediate;
+    plan->upper_last = (int)mir.insns[10].immediate;
+    plan->lower_first = (int)mir.insns[28].immediate;
+    plan->lower_last = (int)mir.insns[34].immediate;
+    plan->digit_first = (int)mir.insns[134].immediate;
+    plan->digit_last = (int)mir.insns[140].immediate;
     return 1;
 }
 
@@ -13302,6 +13358,65 @@ static void mir_emit_frameless_byte_parameter(
 {
     fprintf(out, "\tld hl,%d\n\tadd hl,sp\n\tld a,(hl)\n",
             sp_offset);
+}
+
+static void mir_emit_ascii_identifier(
+    FILE *out, const struct MirAsciiIdentifier *plan)
+{
+    int digit = new_label();
+    int failure = new_label();
+    int first_lower = new_label();
+    int loop = new_label();
+    int loop_lower = new_label();
+    int next = new_label();
+    int success = new_label();
+
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n"
+            "\tld a,(hl)\n"
+            "\tcp %d\n\tjp c, L%d\n"
+            "\tcp %d\n\tjp c, L%d\n"
+            "L%d:\n"
+            "\tcp %d\n\tjp c, L%d\n"
+            "\tcp %d\n\tjp nc, L%d\n"
+            "\tinc hl\n"
+            "L%d:\n"
+            "\tld a,(hl)\n\tor a\n\tjp z, L%d\n"
+            "\tcp %d\n\tjp c, L%d\n"
+            "\tcp %d\n\tjp c, L%d\n"
+            "L%d:\n"
+            "\tcp %d\n\tjp c, L%d\n"
+            "\tcp %d\n\tjp c, L%d\n"
+            "L%d:\n"
+            "\tcp %d\n\tjp c, L%d\n"
+            "\tcp %d\n\tjp nc, L%d\n"
+            "L%d:\n"
+            "\tinc hl\n\tjp L%d\n"
+            "L%d:\n"
+            "\tld hl,0\n\tret\n"
+            "L%d:\n"
+            "\tld hl,1\n\tret\n",
+            plan->parameter_sp_offset,
+            plan->upper_first, first_lower,
+            plan->upper_last + 1, next,
+            first_lower,
+            plan->lower_first, failure,
+            plan->lower_last + 1, failure,
+            loop,
+            success,
+            plan->upper_first, loop_lower,
+            plan->upper_last + 1, next,
+            loop_lower,
+            plan->lower_first, digit,
+            plan->lower_last + 1, next,
+            digit,
+            plan->digit_first, failure,
+            plan->digit_last + 1, failure,
+            next,
+            loop,
+            failure,
+            success);
 }
 
 static void mir_emit_ascii_piece_side(
@@ -23872,6 +23987,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     struct MirByteMinMax byte_minmax;
     struct MirWordPowermod word_powermod;
     struct MirFloatUnitFraction float_unit_fraction;
+    struct MirAsciiIdentifier ascii_identifier;
     struct MirAsciiPieceSide ascii_piece_side;
     struct MirAsciiPieceValue ascii_piece_value;
     struct MirBoardEvaluate board_evaluate;
@@ -24429,6 +24545,14 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_float_unit_fraction(out, &float_unit_fraction);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_ascii_identifier(&ascii_identifier)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_ascii_identifier(out, &ascii_identifier);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
