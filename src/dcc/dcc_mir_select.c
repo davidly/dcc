@@ -1349,27 +1349,771 @@ static unsigned long mir_stream_hash(FILE *stream)
     return hash;
 }
 
+/* ===================================================================
+ * Diagnostic-only cost-v1 machine-cost policy
+ * (DCC_MIR_SPILLED_POLICY=cost-v1).
+ *
+ * With DCC_MIR_SPILLED_POLICY unset (the default), none of this code
+ * changes behaviour: mir_spilled_policy_is_cost_v1() below is the only
+ * caller-visible entry point besides the candidate-matrix diagnostic
+ * suffix (itself only non-empty when the policy is active), so ordinary
+ * codegen, DCC_MIR_CANDIDATE_MATRIX=1 output, and the base census/
+ * candidate-matrix files are all byte-identical to base f129be0.
+ *
+ * cost-v1 estimates real Z80 machine cost - nominal T-states from parsed
+ * opcode/addressing forms, runtime-helper call surcharge, and real
+ * opcode byte size - instead of the raw assembly-text byte/instruction-
+ * count proxies the rest of this file uses. It only ever scores streams
+ * mir_build_spilled_candidate() itself produced (the same ten fixed
+ * spilled-candidate feature masks mir_report_spilled_candidate_matrix
+ * already builds for diagnostics): it never builds, inspects, or scores
+ * mir.capture_stream (the legacy AST-backend output).
+ *
+ * IMPORTANT - production selection was tried and falsified, then
+ * removed: an earlier revision also adopted the lowest-scored candidate
+ * into real codegen whenever the policy was active. Measuring that
+ * override against the rhs-control train cohort (61 apps, see
+ * .../perf-systemic/cost-sonnet5/) found a real regression in
+ * tests/tfpcall.c's main() (+158 peep cycles, +128 peep bytes, +160
+ * nopeep cycles), because the ordinary retry chain elsewhere in this
+ * file already reaches, via its own additional retry/promotion paths,
+ * a smaller/faster stream than any of these ten fixed masks - so
+ * limiting a selector to only these ten can regress away from a real,
+ * already-accepted win no cost-formula weighting can recover. Per this
+ * project's falsification policy ("any cycle/size regression" rejects
+ * the candidate), no production override is wired in. What remains
+ * below is diagnostic-only: the cost estimator plus an extension of
+ * DCC_MIR_CANDIDATE_MATRIX=1's existing report with each of the ten
+ * candidates' cost components and (only when the policy is also
+ * active) which one it would have scored lowest - never a change to
+ * real codegen.
+ * =================================================================== */
+
+/* The one shared, fixed candidate universe both the existing candidate-
+ * matrix diagnostic and the cost-v1 selector below draw from - each
+ * entry's array index is also cost-v1's final tie-break ordinal. */
+static const struct MirSpilledCandidateTableEntry {
+    const char *name;
+    unsigned long features;
+} mir_spilled_candidate_table[] = {
+    {"baseline", 0},
+    {"rhs-forward", MIR_SPILLED_FEATURES_RHS},
+    {"store-address", MIR_SPILLED_FEATURES_STORE_ADDRESS},
+    {"wide-binary-lhs", MIR_SPILLED_FEATURES_WIDE_LHS},
+    {"stable-pointer-argument", MIR_SPILLED_FEATURES_STABLE_ARG},
+    {"global-argument", MIR_SPILLED_FEATURES_GLOBAL_ARG},
+    {"stack-argument", MIR_SPILLED_FEATURES_CALL_STACK},
+    {"promoted-local-slot", MIR_SPILLED_FEATURES_PROMOTED_LOCAL},
+    {"all", MIR_SPILLED_FEATURES_ALL},
+    {"phi-slot", MIR_SPILLED_FEATURES_PHI_SLOT}
+};
+#define MIR_SPILLED_CANDIDATE_TABLE_COUNT \
+    (int)(sizeof(mir_spilled_candidate_table) / \
+          sizeof(mir_spilled_candidate_table[0]))
+
+static int mir_spilled_policy_is_cost_v1(void)
+{
+    const char *policy = getenv("DCC_MIR_SPILLED_POLICY");
+    return policy != NULL && !strcmp(policy, "cost-v1");
+}
+
+/* Runtime-helper call surcharge tiers (T-states), added on top of the
+ * `call` instruction's own ordinary emitted cost, only for calls whose
+ * target is one of DCCRTL's plain "extrn NAME\ncall NAME\n" runtime
+ * helpers (see the comment above mir_extrn_should_emit_name). An
+ * identical helper-call set on two candidates contributes an identical
+ * surcharge to both scores and therefore cannot change their relative
+ * ranking; the surcharge only matters when candidates differ in which,
+ * or how many, helpers they call. */
+#define MIR_COST_HELPER_CHEAP_TSTATES    32.0
+#define MIR_COST_HELPER_MULSHIFT_TSTATES 96.0
+#define MIR_COST_HELPER_DIVMOD_TSTATES  256.0
+#define MIR_COST_HELPER_FLOAT_TSTATES   512.0
+
+/* Forward/backedge branch-taken priors. On real Z80 hardware JP cc,nn's
+ * timing is a fixed 10 T-states regardless of outcome, so these priors
+ * never change a JP instruction's own cost - they only classify which
+ * instructions lie inside a detected loop body (a backward branch) or a
+ * conditionally-skipped span (a forward branch) for the depth-weighting
+ * below, and blend DJNZ's own taken(13T)/not-taken(8T) asymmetry (DJNZ
+ * is this backend's only branch with outcome-dependent timing; it is
+ * always a backward loop branch here). Recorded as named constants,
+ * not folded into arithmetic, so an offline replay can grid-search or
+ * falsify them independently, per the systemic-performance-manifest. */
+#define MIR_COST_BACKEDGE_TAKEN_NUM 7
+#define MIR_COST_BACKEDGE_TAKEN_DEN 8
+#define MIR_COST_FORWARD_TAKEN_NUM 1
+#define MIR_COST_FORWARD_TAKEN_DEN 2
+/* E[iterations] under the backedge prior is DEN/(DEN-NUM) = 8/(8-7) = 8:
+ * exactly the existing "8^loop_depth" block-weight convention already
+ * used elsewhere in this file (e.g. mir_cfg_block_count() callers), so
+ * cost-v1 reuses that constant rather than inventing a second one. */
+#define MIR_COST_LOOP_DEPTH_CAP 3
+
+struct MirCostComponents {
+    double tstates;         /* depth/skip-weighted nominal T-state sum */
+    double helper_tstates;  /* depth/skip-weighted runtime-helper surcharge */
+    long bytes;             /* real, unweighted Z80 opcode byte size */
+    double score;           /* tstates + helper_tstates + 0.25*bytes */
+    int max_loop_depth;     /* diagnostic only; not used in the score */
+};
+
+static int mir_cost_v1_is_reg8(const char *s)
+{
+    return s[0] != 0 && s[1] == 0 &&
+           (s[0] == 'a' || s[0] == 'b' || s[0] == 'c' || s[0] == 'd' ||
+            s[0] == 'e' || s[0] == 'h' || s[0] == 'l');
+}
+
+static int mir_cost_v1_is_numeric(const char *s)
+{
+    if (s[0] == 0)
+        return 0;
+    if (s[0] == '-')
+        ++s;
+    return s[0] >= '0' && s[0] <= '9';
+}
+
+static int mir_cost_v1_has_ix_iy(const char *s)
+{
+    return strstr(s, "(ix") != NULL || strstr(s, "(iy") != NULL;
+}
+
+static int mir_cost_v1_has_hl_indirect(const char *s)
+{
+    return strstr(s, "(hl)") != NULL;
+}
+
+static int mir_cost_v1_has_bc_de_indirect(const char *s)
+{
+    return strstr(s, "(bc)") != NULL || strstr(s, "(de)") != NULL;
+}
+
+static int mir_cost_v1_has_sp_indirect(const char *s)
+{
+    return strstr(s, "(sp)") != NULL;
+}
+
+/* An extended/direct-address operand: "(LABEL)", "(LABEL+n)" or
+ * "(1234)" - a parenthesised address that is not one of the register-
+ * indirect forms above. */
+static int mir_cost_v1_has_extended_address(const char *s)
+{
+    if (strchr(s, '(') == NULL)
+        return 0;
+    return !mir_cost_v1_has_ix_iy(s) && !mir_cost_v1_has_hl_indirect(s) &&
+           !mir_cost_v1_has_bc_de_indirect(s) &&
+           !mir_cost_v1_has_sp_indirect(s);
+}
+
+static void mir_cost_v1_split(
+    const char *text, char *op1, size_t op1_size,
+    char *op2, size_t op2_size)
+{
+    const char *comma = strchr(text, ',');
+    size_t length;
+
+    op1[0] = 0;
+    op2[0] = 0;
+    if (comma == NULL) {
+        length = strlen(text);
+        if (length >= op1_size)
+            length = op1_size - 1;
+        memcpy(op1, text, length);
+        op1[length] = 0;
+        return;
+    }
+    length = (size_t)(comma - text);
+    if (length >= op1_size)
+        length = op1_size - 1;
+    memcpy(op1, text, length);
+    op1[length] = 0;
+    ++comma;
+    while (*comma == ' ')
+        ++comma;
+    length = strlen(comma);
+    if (length >= op2_size)
+        length = op2_size - 1;
+    memcpy(op2, comma, length);
+    op2[length] = 0;
+}
+
+/* DCCRTL runtime-helper name classification. The exact helper names
+ * this backend calls (from the "extrn NAME\ncall NAME\n" sites; see
+ * the comment above mir_extrn_should_emit_name) are: __bdosf, __bhf,
+ * __bhlf, __biosf, __call_hl, __chf, __cmpf, __divs, __divu, __faf,
+ * __fdf, __feqf, __ffi, __ffl, __ffu, __fful, __fgef, __fgtf, __fif,
+ * __flef, __flf, __fltf, __fmaf, __fmf, __fnef, __fsf, __fuf, __fulf,
+ * __icf, __lds, __ldu, __les, __leu, __lgs, __lgu, __lks, __lku,
+ * __lms, __lmu, __lmul, __lts, __ltu, __m1mu, __m1s, __m1u, __mcf,
+ * __mhf, __mods, __modu, __msf, __mulu, __pfehx, __pfeoc, __rcf,
+ * __scf, __sdivmod, __slf, __ssf, __stchk, __udivmod. This
+ * classification is deliberately coarse - divide/modulus and multiply
+ * helpers are matched by name substring, "__f*" is float support, and
+ * every other helper (fastcall ABI glue, comparisons, BDOS/BIOS trampo-
+ * lines, stack-check) is "cheap" - and is recorded here, next to the
+ * exact name list, so a replay can audit or retune it. */
+static double mir_cost_v1_helper_tstates(const char *name)
+{
+    if (name == NULL || name[0] != '_' || name[1] != '_')
+        return 0.0;
+    if (strstr(name, "div") != NULL || strstr(name, "mod") != NULL)
+        return MIR_COST_HELPER_DIVMOD_TSTATES;
+    if (strstr(name, "mul") != NULL || !strncmp(name, "__m1", 4))
+        return MIR_COST_HELPER_MULSHIFT_TSTATES;
+    if (name[2] == 'f')
+        return MIR_COST_HELPER_FLOAT_TSTATES;
+    return MIR_COST_HELPER_CHEAP_TSTATES;
+}
+
+/* Nominal Z80 cost of one already-trimmed instruction line (mnemonic
+ * plus operand text, no leading tab/trailing newline). Timings are the
+ * documented Zilog Z80 nominal T-state/byte-length values for each
+ * opcode/addressing form; djnz's own taken/not-taken asymmetry is
+ * blended by whichever prior applies to its own branch direction
+ * (passed in by the caller once the label map is known). branch_target
+ * receives a borrowed pointer (into `rest`) for jp/djnz label operands,
+ * or NULL; call_target receives a borrowed pointer for `call` operands. */
+static void mir_cost_v1_instruction_cost(
+    const char *mnemonic, const char *rest, double djnz_taken_tstates,
+    double *tstates, int *bytes, const char **branch_target,
+    const char **call_target)
+{
+    char op1[64];
+    char op2[64];
+
+    *branch_target = NULL;
+    *call_target = NULL;
+    mir_cost_v1_split(rest, op1, sizeof(op1), op2, sizeof(op2));
+
+    if (!strcmp(mnemonic, "ld")) {
+        const char *reg = NULL;
+        int reg_is_op1 = 0;
+
+        if (mir_cost_v1_has_extended_address(op1)) {
+            reg = op2;
+        } else if (mir_cost_v1_has_extended_address(op2)) {
+            reg = op1;
+            reg_is_op1 = 1;
+        }
+        if (reg != NULL) {
+            (void)reg_is_op1;
+            if (!strcmp(reg, "a")) { *tstates = 13; *bytes = 3; return; }
+            if (!strcmp(reg, "hl")) { *tstates = 16; *bytes = 3; return; }
+            if (!strcmp(reg, "ix") || !strcmp(reg, "iy")) {
+                *tstates = 20; *bytes = 4; return;
+            }
+            *tstates = 20; *bytes = 4; return; /* bc/de/sp, ED-prefixed */
+        }
+        if (mir_cost_v1_has_ix_iy(op1) || mir_cost_v1_has_ix_iy(op2)) {
+            const char *other = mir_cost_v1_has_ix_iy(op1) ? op2 : op1;
+            *tstates = 19;
+            *bytes = mir_cost_v1_is_numeric(other) ? 4 : 3;
+            return;
+        }
+        if (!strcmp(op1, "sp") && !strcmp(op2, "hl")) {
+            *tstates = 6; *bytes = 1; return;
+        }
+        if (!strcmp(op1, "sp") && (!strcmp(op2, "ix") || !strcmp(op2, "iy"))) {
+            *tstates = 10; *bytes = 2; return;
+        }
+        if (mir_cost_v1_has_hl_indirect(op1) || mir_cost_v1_has_hl_indirect(op2)) {
+            const char *other = mir_cost_v1_has_hl_indirect(op1) ? op2 : op1;
+            *tstates = mir_cost_v1_is_numeric(other) ? 10 : 7;
+            *bytes = mir_cost_v1_is_numeric(other) ? 2 : 1;
+            return;
+        }
+        if (mir_cost_v1_has_bc_de_indirect(op1) ||
+            mir_cost_v1_has_bc_de_indirect(op2)) {
+            *tstates = 7; *bytes = 1; return;
+        }
+        if (mir_cost_v1_is_reg8(op1)) {
+            if (mir_cost_v1_is_reg8(op2)) { *tstates = 4; *bytes = 1; }
+            else { *tstates = 7; *bytes = 2; }
+            return;
+        }
+        if (!strcmp(op1, "bc") || !strcmp(op1, "de") ||
+            !strcmp(op1, "hl") || !strcmp(op1, "sp")) {
+            *tstates = 10; *bytes = 3; return;
+        }
+        if (!strcmp(op1, "ix") || !strcmp(op1, "iy")) {
+            *tstates = 14; *bytes = 4; return;
+        }
+        *tstates = 7; *bytes = 2; /* conservative default LD form */
+        return;
+    }
+    if (!strcmp(mnemonic, "add") || !strcmp(mnemonic, "adc") ||
+        !strcmp(mnemonic, "sbc")) {
+        if (!strcmp(op1, "a")) {
+            if (mir_cost_v1_is_reg8(op2)) { *tstates = 4; *bytes = 1; }
+            else if (mir_cost_v1_has_ix_iy(op2)) { *tstates = 19; *bytes = 3; }
+            else if (mir_cost_v1_has_hl_indirect(op2)) {
+                *tstates = 7; *bytes = 1;
+            } else { *tstates = 7; *bytes = 2; }
+            return;
+        }
+        if (!strcmp(op1, "hl")) {
+            if (!strcmp(mnemonic, "add")) { *tstates = 11; *bytes = 1; }
+            else { *tstates = 15; *bytes = 2; }
+            return;
+        }
+        if (!strcmp(op1, "ix") || !strcmp(op1, "iy")) {
+            *tstates = 15; *bytes = 2; return;
+        }
+        *tstates = 8; *bytes = 2;
+        return;
+    }
+    if (!strcmp(mnemonic, "sub") || !strcmp(mnemonic, "and") ||
+        !strcmp(mnemonic, "or") || !strcmp(mnemonic, "xor") ||
+        !strcmp(mnemonic, "cp")) {
+        const char *x = op1;
+
+        if (mir_cost_v1_is_reg8(x)) { *tstates = 4; *bytes = 1; }
+        else if (mir_cost_v1_has_ix_iy(x)) { *tstates = 19; *bytes = 3; }
+        else if (mir_cost_v1_has_hl_indirect(x)) { *tstates = 7; *bytes = 1; }
+        else { *tstates = 7; *bytes = 2; }
+        return;
+    }
+    if (!strcmp(mnemonic, "inc") || !strcmp(mnemonic, "dec")) {
+        const char *x = op1;
+
+        if (mir_cost_v1_is_reg8(x)) { *tstates = 4; *bytes = 1; }
+        else if (mir_cost_v1_has_ix_iy(x)) { *tstates = 23; *bytes = 3; }
+        else if (mir_cost_v1_has_hl_indirect(x)) { *tstates = 11; *bytes = 1; }
+        else if (!strcmp(x, "bc") || !strcmp(x, "de") ||
+                 !strcmp(x, "hl") || !strcmp(x, "sp")) {
+            *tstates = 6; *bytes = 1;
+        } else if (!strcmp(x, "ix") || !strcmp(x, "iy")) {
+            *tstates = 10; *bytes = 2;
+        } else { *tstates = 8; *bytes = 2; }
+        return;
+    }
+    if (!strcmp(mnemonic, "push")) {
+        if (!strcmp(op1, "ix") || !strcmp(op1, "iy")) {
+            *tstates = 15; *bytes = 2;
+        } else { *tstates = 11; *bytes = 1; }
+        return;
+    }
+    if (!strcmp(mnemonic, "pop")) {
+        if (!strcmp(op1, "ix") || !strcmp(op1, "iy")) {
+            *tstates = 14; *bytes = 2;
+        } else { *tstates = 10; *bytes = 1; }
+        return;
+    }
+    if (!strcmp(mnemonic, "ex")) {
+        if (mir_cost_v1_has_sp_indirect(rest)) {
+            if (strstr(rest, "ix") != NULL || strstr(rest, "iy") != NULL) {
+                *tstates = 23; *bytes = 2;
+            } else { *tstates = 19; *bytes = 1; }
+        } else { *tstates = 4; *bytes = 1; }
+        return;
+    }
+    if (!strcmp(mnemonic, "jp")) {
+        const char *comma;
+
+        if (!strcmp(rest, "(hl)")) { *tstates = 4; *bytes = 1; return; }
+        if (!strcmp(rest, "(ix)") || !strcmp(rest, "(iy)")) {
+            *tstates = 8; *bytes = 2; return;
+        }
+        *tstates = 10; *bytes = 3;
+        comma = strchr(rest, ',');
+        if (comma != NULL) {
+            *branch_target = comma + 1;
+            while (**branch_target == ' ')
+                ++*branch_target;
+        } else {
+            *branch_target = rest;
+        }
+        return;
+    }
+    if (!strcmp(mnemonic, "call")) {
+        *tstates = 17; *bytes = 3;
+        *call_target = (strchr(rest, ',') != NULL)
+            ? strchr(rest, ',') + 1 : rest;
+        while (**call_target == ' ')
+            ++*call_target;
+        return;
+    }
+    if (!strcmp(mnemonic, "ret")) {
+        *tstates = 10; *bytes = 1;
+        return;
+    }
+    if (!strcmp(mnemonic, "djnz")) {
+        *tstates = djnz_taken_tstates;
+        *bytes = 2;
+        *branch_target = rest;
+        return;
+    }
+    if (!strcmp(mnemonic, "bit") || !strcmp(mnemonic, "set") ||
+        !strcmp(mnemonic, "res")) {
+        int is_bit = !strcmp(mnemonic, "bit");
+
+        if (mir_cost_v1_is_reg8(op2)) { *tstates = 8; *bytes = 2; }
+        else if (mir_cost_v1_has_ix_iy(op2)) {
+            *tstates = is_bit ? 20 : 23; *bytes = 4;
+        } else if (mir_cost_v1_has_hl_indirect(op2)) {
+            *tstates = is_bit ? 12 : 15; *bytes = 2;
+        } else { *tstates = 8; *bytes = 2; }
+        return;
+    }
+    if (!strcmp(mnemonic, "rl") || !strcmp(mnemonic, "rr") ||
+        !strcmp(mnemonic, "rlc") || !strcmp(mnemonic, "rrc") ||
+        !strcmp(mnemonic, "sla") || !strcmp(mnemonic, "sra") ||
+        !strcmp(mnemonic, "srl") || !strcmp(mnemonic, "sll")) {
+        if (mir_cost_v1_is_reg8(op1)) { *tstates = 8; *bytes = 2; }
+        else if (mir_cost_v1_has_ix_iy(op1)) { *tstates = 23; *bytes = 4; }
+        else if (mir_cost_v1_has_hl_indirect(op1)) { *tstates = 15; *bytes = 2; }
+        else { *tstates = 8; *bytes = 2; }
+        return;
+    }
+    if (!strcmp(mnemonic, "rlca") || !strcmp(mnemonic, "rrca") ||
+        !strcmp(mnemonic, "rla") || !strcmp(mnemonic, "rra") ||
+        !strcmp(mnemonic, "cpl") || !strcmp(mnemonic, "daa") ||
+        !strcmp(mnemonic, "scf") || !strcmp(mnemonic, "ccf") ||
+        !strcmp(mnemonic, "nop") || !strcmp(mnemonic, "halt") ||
+        !strcmp(mnemonic, "di") || !strcmp(mnemonic, "ei") ||
+        !strcmp(mnemonic, "exx")) {
+        *tstates = 4; *bytes = 1;
+        return;
+    }
+    if (!strcmp(mnemonic, "neg") || !strcmp(mnemonic, "im")) {
+        *tstates = 8; *bytes = 2;
+        return;
+    }
+    if (!strcmp(mnemonic, "ldi") || !strcmp(mnemonic, "ldd") ||
+        !strcmp(mnemonic, "cpi") || !strcmp(mnemonic, "cpd")) {
+        *tstates = 16; *bytes = 2;
+        return;
+    }
+    if (!strcmp(mnemonic, "ldir") || !strcmp(mnemonic, "lddr") ||
+        !strcmp(mnemonic, "cpir") || !strcmp(mnemonic, "cpdr")) {
+        /* The exact BC repeat count is a compile-time constant emitted
+         * immediately before every ldir/cpir/lddr/cpdr in this backend
+         * ("ld bc,%d\n\tldir\n" etc.); the caller resolves it by peeking
+         * at the previous instruction line and passes the resulting
+         * tstates in through djnz_taken_tstates's slot is NOT reused
+         * here - see mir_estimate_stream_cost's own lookback instead.
+         * This fallback (unresolved count) assumes ~8 iterations,
+         * consistent with the loop-depth 8x convention above. */
+        *tstates = 21.0 * 7 + 16;
+        *bytes = 2;
+        return;
+    }
+    /* Conservative default for any unrecognised mnemonic: never crash,
+     * never silently contribute zero cost. */
+    *tstates = 8;
+    *bytes = 2;
+}
+
+/* Parses `stream` (an already-emitted MIR candidate's Z80 assembly
+ * text) into real per-instruction nominal T-states, real opcode byte
+ * lengths, and a runtime-helper surcharge, weighting each instruction's
+ * dynamic execution frequency by 8^loop_depth (backward branches,
+ * capped at MIR_COST_LOOP_DEPTH_CAP) and 0.5^skip_depth (forward
+ * conditional branches) using the priors above. Code bytes are a
+ * static size metric and are therefore summed unweighted. */
+static void mir_estimate_stream_cost(
+    FILE *stream, struct MirCostComponents *out)
+{
+    char buffer[512];
+    char **owned = NULL;
+    char **trimmed = NULL;
+    int count = 0, capacity = 0;
+    struct mir_cost_v1_label { char *name; int line; } *labels = NULL;
+    int label_count = 0, label_capacity = 0;
+    int *diff_loop = NULL;
+    int *diff_skip = NULL;
+    long position;
+    int i;
+    static const double djnz_backedge_tstates =
+        (double)MIR_COST_BACKEDGE_TAKEN_NUM * 13.0 / MIR_COST_BACKEDGE_TAKEN_DEN +
+        (double)(MIR_COST_BACKEDGE_TAKEN_DEN - MIR_COST_BACKEDGE_TAKEN_NUM) *
+            8.0 / MIR_COST_BACKEDGE_TAKEN_DEN;
+    static const double djnz_forward_tstates =
+        (double)MIR_COST_FORWARD_TAKEN_NUM * 13.0 / MIR_COST_FORWARD_TAKEN_DEN +
+        (double)(MIR_COST_FORWARD_TAKEN_DEN - MIR_COST_FORWARD_TAKEN_NUM) *
+            8.0 / MIR_COST_FORWARD_TAKEN_DEN;
+
+    out->tstates = 0.0;
+    out->helper_tstates = 0.0;
+    out->bytes = 0;
+    out->score = 0.0;
+    out->max_loop_depth = 0;
+
+    position = ftell(stream);
+    if (position < 0 || fseek(stream, 0, SEEK_SET) != 0)
+        return;
+
+    while (fgets(buffer, sizeof(buffer), stream) != NULL) {
+        char *copy;
+        char *text, *end;
+
+        if (count == capacity) {
+            int next_capacity = capacity == 0 ? 256 : capacity * 2;
+            char **next_owned = (char **)realloc(
+                owned, (size_t)next_capacity * sizeof(*next_owned));
+            char **next_trimmed = (char **)realloc(
+                trimmed, (size_t)next_capacity * sizeof(*next_trimmed));
+            if (next_owned == NULL || next_trimmed == NULL)
+                fatal("out of memory estimating MIR candidate cost");
+            owned = next_owned;
+            trimmed = next_trimmed;
+            capacity = next_capacity;
+        }
+        copy = (char *)malloc(strlen(buffer) + 1);
+        if (copy == NULL)
+            fatal("out of memory estimating MIR candidate cost");
+        strcpy(copy, buffer);
+        text = copy;
+        while (*text == ' ' || *text == '\t')
+            ++text;
+        end = text + strlen(text);
+        while (end > text && (end[-1] == '\n' || end[-1] == '\r' ||
+                              end[-1] == ' ' || end[-1] == '\t'))
+            --end;
+        *end = 0;
+        owned[count] = copy;
+        trimmed[count] = text;
+        ++count;
+    }
+    fseek(stream, position, SEEK_SET);
+
+    for (i = 0; i < count; ++i) {
+        size_t length = strlen(trimmed[i]);
+
+        if (length > 0 && trimmed[i][length - 1] == ':') {
+            char *name = (char *)malloc(length);
+
+            if (name == NULL)
+                fatal("out of memory estimating MIR candidate cost");
+            memcpy(name, trimmed[i], length - 1);
+            name[length - 1] = 0;
+            if (label_count == label_capacity) {
+                int next_capacity = label_capacity == 0 ? 64 : label_capacity * 2;
+                struct mir_cost_v1_label *next_labels =
+                    (struct mir_cost_v1_label *)realloc(
+                        labels, (size_t)next_capacity * sizeof(*labels));
+                if (next_labels == NULL)
+                    fatal("out of memory estimating MIR candidate cost");
+                labels = next_labels;
+                label_capacity = next_capacity;
+            }
+            labels[label_count].name = name;
+            labels[label_count].line = i;
+            ++label_count;
+        }
+    }
+
+    diff_loop = (int *)calloc((size_t)count + 1, sizeof(*diff_loop));
+    diff_skip = (int *)calloc((size_t)count + 1, sizeof(*diff_skip));
+    if (diff_loop == NULL || diff_skip == NULL)
+        fatal("out of memory estimating MIR candidate cost");
+
+    for (i = 0; i < count; ++i) {
+        const char *text = trimmed[i];
+        size_t length = strlen(text);
+        char mnemonic[16];
+        const char *rest;
+        const char *space;
+        const char *target;
+        const char *comma;
+        int j;
+
+        if (length == 0 || text[0] == ';' || text[length - 1] == ':' ||
+            !strncmp(text, "extrn ", 6) || !strncmp(text, "public ", 7) ||
+            !strncmp(text, "cseg", 4) || !strncmp(text, "dseg", 4) ||
+            !strncmp(text, "db ", 3) || !strncmp(text, "dw ", 3) ||
+            !strncmp(text, "ds ", 3) || !strncmp(text, "equ ", 4))
+            continue;
+        space = strchr(text, ' ');
+        length = space != NULL ? (size_t)(space - text) : strlen(text);
+        if (length >= sizeof(mnemonic))
+            length = sizeof(mnemonic) - 1;
+        memcpy(mnemonic, text, length);
+        mnemonic[length] = 0;
+        rest = space != NULL ? space + 1 : "";
+        if (strcmp(mnemonic, "jp") != 0 && strcmp(mnemonic, "djnz") != 0)
+            continue;
+        if (!strcmp(rest, "(hl)") || !strcmp(rest, "(ix)") ||
+            !strcmp(rest, "(iy)"))
+            continue;
+        comma = strchr(rest, ',');
+        target = comma != NULL ? comma + 1 : rest;
+        while (*target == ' ')
+            ++target;
+        for (j = 0; j < label_count; ++j) {
+            if (!strcmp(target, labels[j].name)) {
+                int target_line = labels[j].line;
+
+                if (target_line <= i) {
+                    diff_loop[target_line] += 1;
+                    if (i + 1 <= count)
+                        diff_loop[i + 1] -= 1;
+                } else if (target_line > i + 1) {
+                    diff_skip[i + 1] += 1;
+                    diff_skip[target_line] -= 1;
+                }
+                break;
+            }
+        }
+    }
+
+    {
+        static const double loop_pow[MIR_COST_LOOP_DEPTH_CAP + 1] = {
+            1.0, 8.0, 64.0, 512.0
+        };
+        int loop_depth = 0, skip_depth = 0;
+
+        for (i = 0; i < count; ++i) {
+            const char *text = trimmed[i];
+            size_t length = strlen(text);
+            char mnemonic[16];
+            const char *rest;
+            const char *space;
+            double tstates = 0.0;
+            int bytes = 0;
+            const char *branch_target;
+            const char *call_target;
+            double weight;
+            int clamped_loop_depth;
+            int k;
+
+            loop_depth += diff_loop[i];
+            skip_depth += diff_skip[i];
+            if (length == 0 || text[0] == ';' || text[length - 1] == ':' ||
+                !strncmp(text, "extrn ", 6) || !strncmp(text, "public ", 7) ||
+                !strncmp(text, "cseg", 4) || !strncmp(text, "dseg", 4) ||
+                !strncmp(text, "db ", 3) || !strncmp(text, "dw ", 3) ||
+                !strncmp(text, "ds ", 3) || !strncmp(text, "equ ", 4))
+                continue;
+            space = strchr(text, ' ');
+            length = space != NULL ? (size_t)(space - text) : strlen(text);
+            if (length >= sizeof(mnemonic))
+                length = sizeof(mnemonic) - 1;
+            memcpy(mnemonic, text, length);
+            mnemonic[length] = 0;
+            rest = space != NULL ? space + 1 : "";
+
+            clamped_loop_depth = loop_depth;
+            if (clamped_loop_depth > MIR_COST_LOOP_DEPTH_CAP)
+                clamped_loop_depth = MIR_COST_LOOP_DEPTH_CAP;
+            if (clamped_loop_depth < 0)
+                clamped_loop_depth = 0;
+            if (clamped_loop_depth > out->max_loop_depth)
+                out->max_loop_depth = clamped_loop_depth;
+            weight = loop_pow[clamped_loop_depth];
+            for (k = 0; k < skip_depth && k < 32; ++k)
+                weight *= 0.5;
+
+            if (!strcmp(mnemonic, "ldir") || !strcmp(mnemonic, "cpir") ||
+                !strcmp(mnemonic, "lddr") || !strcmp(mnemonic, "cpdr")) {
+                int resolved = 0;
+
+                if (i > 0) {
+                    const char *prev = trimmed[i - 1];
+
+                    if (!strncmp(prev, "ld bc,", 6) &&
+                        mir_cost_v1_is_numeric(prev + 6)) {
+                        long n = atol(prev + 6);
+
+                        if (n >= 1) {
+                            tstates = 21.0 * (double)(n - 1) + 16.0;
+                            resolved = 1;
+                        } else if (n == 0) {
+                            tstates = 16.0;
+                            resolved = 1;
+                        }
+                    }
+                }
+                if (!resolved)
+                    mir_cost_v1_instruction_cost(
+                        mnemonic, rest, 0.0, &tstates, &bytes,
+                        &branch_target, &call_target);
+                bytes = 2;
+            } else if (!strcmp(mnemonic, "djnz")) {
+                double djnz_cost;
+                int backward = 1;
+
+                for (k = 0; k < label_count; ++k)
+                    if (!strcmp(rest, labels[k].name)) {
+                        backward = labels[k].line <= i;
+                        break;
+                    }
+                djnz_cost = backward ? djnz_backedge_tstates :
+                                        djnz_forward_tstates;
+                mir_cost_v1_instruction_cost(
+                    mnemonic, rest, djnz_cost, &tstates, &bytes,
+                    &branch_target, &call_target);
+            } else {
+                mir_cost_v1_instruction_cost(
+                    mnemonic, rest, 0.0, &tstates, &bytes,
+                    &branch_target, &call_target);
+            }
+
+            out->tstates += tstates * weight;
+            out->bytes += bytes;
+            if (!strcmp(mnemonic, "call")) {
+                char target[64];
+                const char *t;
+                size_t tlen;
+
+                mir_cost_v1_instruction_cost(
+                    mnemonic, rest, 0.0, &tstates, &bytes,
+                    &branch_target, &call_target);
+                t = call_target != NULL ? call_target : "";
+                tlen = strlen(t);
+                if (tlen >= sizeof(target))
+                    tlen = sizeof(target) - 1;
+                memcpy(target, t, tlen);
+                target[tlen] = 0;
+                out->helper_tstates +=
+                    mir_cost_v1_helper_tstates(target) * weight;
+            }
+        }
+    }
+
+    for (i = 0; i < label_count; ++i)
+        free(labels[i].name);
+    free(labels);
+    free(diff_loop);
+    free(diff_skip);
+    for (i = 0; i < count; ++i)
+        free(owned[i]);
+    free(owned);
+    free(trimmed);
+
+    out->score = out->tstates + out->helper_tstates + 0.25 * (double)out->bytes;
+}
+
+/* NOTE: an earlier revision of this file also carried
+ * mir_build_and_score_cost_v1_candidates()/mir_select_cost_v1_spilled_
+ * candidate(), a production-path override that adopted the lowest
+ * cost-v1-scored candidate among mir_spilled_candidate_table into the
+ * real generated stream whenever DCC_MIR_SPILLED_POLICY=cost-v1 was set.
+ * Falsification on the rhs-control train cohort (61 apps) found it
+ * regressed tests/tfpcall.c's main() (+158 peep cycles, +128 peep
+ * bytes, +160 nopeep cycles): the ordinary accept/reject retry chain
+ * above already reaches, through its own additional retry/promotion
+ * paths (beyond the ten named masks below), a smaller/faster stream
+ * (4080 bytes/362 insns) than any of the ten fixed candidates (best of
+ * which, phi-slot, is 4108 bytes/367 insns) - so a selector limited to
+ * those ten can regress away from a real, already-accepted win, and no
+ * cost-formula weighting can fix a missing search-space member. Per
+ * this task's rejection criteria ("any cycle/size regression" rejects
+ * the policy), that override was removed; only the cost estimator and
+ * the read-only DCC_MIR_CANDIDATE_MATRIX=1 diagnostic extension below
+ * are retained, since default (env-unset) codegen was already proven
+ * byte-identical to f129be0 and remains so with no override wired in. */
+
 static void mir_report_spilled_candidate_matrix(int label_base)
 {
-    static const struct {
-        const char *name;
-        unsigned long features;
-    } candidates[] = {
-        {"baseline", 0},
-        {"rhs-forward", MIR_SPILLED_FEATURES_RHS},
-        {"store-address", MIR_SPILLED_FEATURES_STORE_ADDRESS},
-        {"wide-binary-lhs", MIR_SPILLED_FEATURES_WIDE_LHS},
-        {"stable-pointer-argument", MIR_SPILLED_FEATURES_STABLE_ARG},
-        {"global-argument", MIR_SPILLED_FEATURES_GLOBAL_ARG},
-        {"stack-argument", MIR_SPILLED_FEATURES_CALL_STACK},
-        {"promoted-local-slot", MIR_SPILLED_FEATURES_PROMOTED_LOCAL},
-        {"all", MIR_SPILLED_FEATURES_ALL},
-        {"phi-slot", MIR_SPILLED_FEATURES_PHI_SLOT}
-    };
     int label_id_save = label_id;
     int mir_count_save = mir.count;
     struct MirInsn *insns_save;
     int i;
+    int cost_active = mir_spilled_policy_is_cost_v1();
+    int best_index = -1;
+    double best_score = 0.0;
 
     insns_save = (struct MirInsn *)malloc(
         (size_t)mir_count_save * sizeof(*insns_save));
@@ -1377,23 +2121,39 @@ static void mir_report_spilled_candidate_matrix(int label_base)
         fatal("cannot save MIR candidate-matrix instructions");
     memcpy(insns_save, mir.insns,
            (size_t)mir_count_save * sizeof(*insns_save));
-    for (i = 0;
-         i < (int)(sizeof(candidates) / sizeof(candidates[0])); ++i) {
+    for (i = 0; i < MIR_SPILLED_CANDIDATE_TABLE_COUNT; ++i) {
         struct MirCandidateDescriptor candidate;
         struct MirCandidateResult result;
         unsigned long hash = 0;
+        struct MirCostComponents cost;
+        char cost_suffix[160];
 
+        cost_suffix[0] = 0;
+        memset(&cost, 0, sizeof(cost));
         if (mir.count != mir_count_save)
             fatal("MIR candidate-matrix changed instruction count");
         memcpy(mir.insns, insns_save,
                (size_t)mir_count_save * sizeof(*insns_save));
         mir_init_spilled_candidate(
-            &candidate, candidates[i].name,
+            &candidate, mir_spilled_candidate_table[i].name,
             "cannot create MIR candidate-matrix stream",
-            candidates[i].features);
+            mir_spilled_candidate_table[i].features);
         mir_build_spilled_candidate(&candidate, &result, label_base);
-        if (result.emitted)
+        if (result.emitted) {
             hash = mir_stream_hash(result.stream);
+            if (cost_active) {
+                mir_estimate_stream_cost(result.stream, &cost);
+                if (best_index < 0 || cost.score < best_score) {
+                    best_index = i;
+                    best_score = cost.score;
+                }
+                snprintf(cost_suffix, sizeof(cost_suffix),
+                        "\tcost-score=%.3f\tcost-tstates=%.3f"
+                        "\tcost-helper-tstates=%.3f\tcost-bytes=%ld",
+                        cost.score, cost.tstates, cost.helper_tstates,
+                        cost.bytes);
+            }
+        }
         fprintf(stderr,
                 "; MIR candidate-matrix\tfunction=%s\tcandidate=%s"
                 "\tmask=%08lx\temitted=%d\treason=%s\tbytes=%ld"
@@ -1402,7 +2162,7 @@ static void mir_report_spilled_candidate_matrix(int label_base)
                 "\tinline-substitution=%d\tpointer-array=%d"
                 "\tboolean-simplifications=%d"
                 "\tlabel-phi-fallthrough=%d\twide-values=%d"
-                "\thash=%08lx\n",
+                "\thash=%08lx%s\n",
                 mir.name, result.descriptor->name,
                 result.descriptor->spilled_features, result.emitted,
                 result.reason, result.generated_size,
@@ -1413,9 +2173,15 @@ static void mir_report_spilled_candidate_matrix(int label_base)
                 mir_has_declared_pointer_array(),
                 mir_boolean_phi_branch_simplification_count(),
                 mir_has_label_only_phi_fallthrough(), mir_has_wide_values(),
-                hash);
+                hash, cost_suffix);
         mir_close_candidate_result(&result);
     }
+    if (cost_active && best_index >= 0)
+        fprintf(stderr,
+                "; MIR candidate-matrix-selected\tfunction=%s"
+                "\tcandidate=%s\tscore=%.3f\n",
+                mir.name, mir_spilled_candidate_table[best_index].name,
+                best_score);
     if (mir.count != mir_count_save)
         fatal("MIR candidate-matrix changed instruction count");
     memcpy(mir.insns, insns_save,
@@ -5451,6 +6217,23 @@ evaluate_generated:
                  * entirely) on fallback - so no discarded candidate can
                  * ever shift a later function's label numbering. */
                 label_id = emitted ? generated_label_id_after : mir_label_base;
+                /* cost-v1 falsification result (see the block comment above
+                 * mir_spilled_candidate_table): a production-path override
+                 * that reconsidered only the ten named spilled-candidate
+                 * masks was measured on the rhs-control train cohort and
+                 * found to regress tests/tfpcall.c's main() (+158 peep
+                 * cycles, +128 peep bytes, +160 nopeep cycles) because the
+                 * ordinary retry chain above had already, through its own
+                 * additional retry/promotion paths, reached a smaller/
+                 * faster stream (4080 bytes/362 insns) than any of the ten
+                 * fixed masks (best of which, phi-slot, is 4108 bytes/367
+                 * insns) - so selecting only among those ten can regress
+                 * away from a real, already-accepted win no cost-formula
+                 * weighting can recover. No production override is wired
+                 * in as a result; DCC_MIR_SPILLED_POLICY=cost-v1 therefore
+                 * only affects DCC_MIR_CANDIDATE_MATRIX=1 diagnostic
+                 * output (see mir_report_spilled_candidate_matrix below),
+                 * never real codegen. */
             }
         }
         if (emitted)
