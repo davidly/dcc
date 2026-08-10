@@ -3545,6 +3545,8 @@ static int mir_regional_homed_retry_is_eligible(const char *reason)
            (!strcmp(reason, "boolean-phi-cost") ||
             !strcmp(reason, "dynamic-index-base-cost") ||
             !strcmp(reason, "unary-not-cost")) &&
+           !(mir_boolean_phi_branch_simplification_count() > 0 &&
+            mir_has_label_only_phi_fallthrough()) &&
            (mir_call_count() > 0 || mir_cfg_block_count() > 1);
 }
 
