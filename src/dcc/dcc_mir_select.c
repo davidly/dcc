@@ -3848,6 +3848,112 @@ static int mir_is_profiled_compact_homed_cfg(
         generated_instructions <= captured_instructions + 4;
 }
 
+static int mir_stream_contains_text(FILE *stream, const char *needle)
+{
+    char line[512];
+    long position = ftell(stream);
+    int found = 0;
+
+    if (position < 0 || fseek(stream, 0, SEEK_SET) != 0)
+        return 0;
+    while (fgets(line, sizeof(line), stream) != NULL)
+        if (strstr(line, needle) != NULL) {
+            found = 1;
+            break;
+        }
+    if (fseek(stream, position, SEEK_SET) != 0)
+        return 0;
+    return found;
+}
+
+static int mir_final_cost_policy_rejects(
+    const char *selector_name, FILE *generated, FILE *captured,
+    long generated_size, long captured_size,
+    int generated_instructions, int captured_instructions)
+{
+    const char *policy = getenv("DCC_MIR_FINAL_COST_POLICY");
+
+    if (policy == NULL || policy[0] == 0)
+        policy = "register-v2";
+    if (!strcmp(policy, "off"))
+        return 0;
+    if (!strcmp(policy, "register-v1") ||
+        !strcmp(policy, "register-v2")) {
+        int generated_claim;
+        int captured_claim;
+        int reject;
+
+        if (strcmp(selector_name, "spilled-scalar-cfg"))
+            return 0;
+        if (mir_stream_contains_text(generated, MIR_EXACT_KERNEL_MARKER))
+            return 0;
+        generated_claim =
+            mir_stream_contains_text(generated, ";@dcc.reg claim=");
+        captured_claim =
+            mir_stream_contains_text(captured, ";@dcc.reg claim=");
+        reject = captured_claim && !generated_claim;
+        if (!reject && !strcmp(policy, "register-v2")) {
+            int blocks = mir_cfg_block_count();
+
+            reject =
+                ((blocks >= 2 && blocks <= 5 && captured_size < 1024 &&
+                  generated_size * 100L > captured_size * 130L &&
+                  (long)generated_instructions * 100L >
+                      (long)captured_instructions * 130L) ||
+                 (blocks > 64 &&
+                  generated_size > captured_size * 2L &&
+                  generated_instructions > captured_instructions * 2));
+        }
+        if (getenv("DCC_MIR_FINAL_COST_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR final-register function=%s selector=%s "
+                    "generated-claim=%d captured-claim=%d reject=%d\n",
+                    mir.name, selector_name,
+                    generated_claim, captured_claim, reject);
+        return reject;
+    }
+    if (!strcmp(policy, "cost-v2")) {
+        struct MirCostComponents generated_cost;
+        struct MirCostComponents captured_cost;
+
+        if (strcmp(selector_name, "spilled-scalar-cfg"))
+            return 0;
+        mir_estimate_stream_cost(generated, &generated_cost);
+        mir_estimate_stream_cost(captured, &captured_cost);
+        if (getenv("DCC_MIR_FINAL_COST_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR final-cost function=%s selector=%s "
+                    "generated=%.3f captured=%.3f generated-tstates=%.3f "
+                    "captured-tstates=%.3f generated-helpers=%.3f "
+                    "captured-helpers=%.3f generated-bytes=%ld "
+                    "captured-bytes=%ld\n",
+                    mir.name, selector_name,
+                    generated_cost.score, captured_cost.score,
+                    generated_cost.tstates, captured_cost.tstates,
+                    generated_cost.helper_tstates,
+                    captured_cost.helper_tstates,
+                    generated_cost.bytes, captured_cost.bytes);
+        return generated_cost.score > captured_cost.score * 1.02;
+    }
+    if (strcmp(policy, "legacy-v1"))
+        fatal("unknown DCC_MIR_FINAL_COST_POLICY");
+    /*
+     * Diagnostic policy: the coverage-first rollout deliberately accepts
+     * structurally safe spilled candidates after their earlier cost gates.
+     * Reject only when both available proxies say the final candidate is
+     * materially worse than the captured legacy output. Keep homed and exact
+     * specialized selectors outside this first policy because their extra
+     * text can buy register residency and lower dynamic cost.
+     */
+    return !strcmp(selector_name, "spilled-scalar-cfg") &&
+           !mir_spilled_cfg_uses_exact_semantic_kernel() &&
+           generated_size > captured_size &&
+           generated_instructions > captured_instructions &&
+           generated_size * 100L > captured_size * 102L &&
+           (long)generated_instructions * 100L >
+               (long)captured_instructions * 102L;
+}
+
 static int mir_try_emit_z80(FILE *out)
 {
     const struct MirInsn *return_insn = NULL;
@@ -6187,6 +6293,13 @@ evaluate_generated:
                     }
                     fclose(regional_candidate);
                 }
+                if (fallback_reason == NULL &&
+                    !g_speculative_codegen_active &&
+                    mir_final_cost_policy_rejects(
+                        selector_name, generated, mir.capture_stream,
+                        generated_size, captured_size,
+                        generated_instructions, captured_instructions))
+                    fallback_reason = "final-cost-policy";
                 if (fallback_reason != NULL) {
                     const char *forced_final =
                         getenv("DCC_MIR_FORCE_ACCEPT_FINAL_FUNCTION");
