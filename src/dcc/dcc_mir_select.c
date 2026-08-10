@@ -2304,6 +2304,17 @@ static int mir_has_declared_pointer_array(void)
     return 0;
 }
 
+static int mir_has_declared_multidimensional_pointer_array(void)
+{
+    int i;
+
+    for (i = 0; i < mir.declared_count; ++i)
+        if (type_ptr_depth(mir.declared_types[i]) > 0 &&
+            mir.declared_dim_counts[i] > 1)
+            return 1;
+    return 0;
+}
+
 /* Item T63 (mir-text-size-plan.md): counts conditional tests in the
  * function, used to flag a chained if/else-if shape (2+ separate
  * MIR_BRANCH_FALSE instructions) as opposed to a single if/else (only
@@ -3881,7 +3892,7 @@ static int mir_final_cost_policy_rejects(
     const char *policy = getenv("DCC_MIR_FINAL_COST_POLICY");
 
     if (policy == NULL || policy[0] == 0)
-        policy = "register-v5";
+        policy = "register-v6";
     if (!strcmp(policy, "off"))
         return 0;
     if (g_speculative_codegen_active) {
@@ -3890,7 +3901,8 @@ static int mir_final_cost_policy_rejects(
         int generated_claim;
         int captured_claim;
 
-        if (strcmp(policy, "register-v5") ||
+        if ((strcmp(policy, "register-v5") &&
+             strcmp(policy, "register-v6")) ||
             strcmp(selector_name, "spilled-scalar-cfg") ||
             (filter != NULL && filter[0] != 0 &&
              strcmp(filter, mir.name)) ||
@@ -3918,7 +3930,8 @@ static int mir_final_cost_policy_rejects(
         !strcmp(policy, "register-v2") ||
         !strcmp(policy, "register-v3") ||
         !strcmp(policy, "register-v4") ||
-        !strcmp(policy, "register-v5")) {
+        !strcmp(policy, "register-v5") ||
+        !strcmp(policy, "register-v6")) {
         int generated_claim;
         int captured_claim;
         int reject;
@@ -3936,7 +3949,8 @@ static int mir_final_cost_policy_rejects(
             (!strcmp(policy, "register-v2") ||
              !strcmp(policy, "register-v3") ||
              !strcmp(policy, "register-v4") ||
-             !strcmp(policy, "register-v5"))) {
+             !strcmp(policy, "register-v5") ||
+             !strcmp(policy, "register-v6"))) {
             int blocks = mir_cfg_block_count();
 
             reject =
@@ -3948,10 +3962,16 @@ static int mir_final_cost_policy_rejects(
                   generated_size > captured_size * 2L &&
                   generated_instructions > captured_instructions * 2));
         }
-        if (!reject && !strcmp(policy, "register-v5") &&
+        if (!reject &&
+            (!strcmp(policy, "register-v5") ||
+             !strcmp(policy, "register-v6")) &&
             mir_has_declared_register_object() &&
             (!mir_stream_contains_text(generated, MIR_PHI_SLOT_MARKER) ||
              generated_size * 100L > captured_size * 120L))
+            reject = 1;
+        if (!reject && !strcmp(policy, "register-v6") &&
+            mir_has_declared_multidimensional_pointer_array() &&
+            generated_size > captured_size)
             reject = 1;
         if (getenv("DCC_MIR_FINAL_COST_REPORT") != NULL)
             fprintf(stderr,
@@ -3962,10 +3982,12 @@ static int mir_final_cost_policy_rejects(
         if (reject ||
             (strcmp(policy, "register-v3") &&
              strcmp(policy, "register-v4") &&
-             strcmp(policy, "register-v5")))
+            strcmp(policy, "register-v5") &&
+            strcmp(policy, "register-v6")))
             return reject;
         policy = (!strcmp(policy, "register-v4") ||
-                  !strcmp(policy, "register-v5"))
+                 !strcmp(policy, "register-v5") ||
+                 !strcmp(policy, "register-v6"))
             ? "cost-v4" : "cost-v3";
     }
     if (!strcmp(policy, "cost-v3") ||
