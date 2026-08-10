@@ -25,7 +25,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--baseline-file",
         default="tests/perf_baselines.csv",
-        help="baseline CSV path in the worktree and reference",
+        help="baseline CSV path in the reference (default: tests/perf_baselines.csv)",
+    )
+    parser.add_argument(
+        "--current-file",
+        help=(
+            "current measurement CSV; defaults to --baseline-file "
+            "(use a temporary runall -UpdatePerfBaseline file for fresh results)"
+        ),
     )
     parser.add_argument(
         "--threshold",
@@ -146,7 +153,8 @@ def main() -> int:
     args = parse_args()
     try:
         reference = load_reference(args.reference, args.baseline_file)
-        current = load_worktree(Path(args.baseline_file))
+        current_path = Path(args.current_file or args.baseline_file)
+        current = load_worktree(current_path)
         rows, added, removed = build_rows(reference, current)
     except (OSError, ValueError) as error:
         print(f"error: {error}", file=sys.stderr)
@@ -172,7 +180,7 @@ def main() -> int:
     ]
 
     print(
-        f"Compared {len(rows)} apps: current {args.baseline_file} vs "
+        f"Compared {len(rows)} apps: current {current_path} vs "
         f"{args.reference}"
     )
     print(
