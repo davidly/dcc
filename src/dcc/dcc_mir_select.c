@@ -3874,11 +3874,13 @@ static int mir_final_cost_policy_rejects(
     const char *policy = getenv("DCC_MIR_FINAL_COST_POLICY");
 
     if (policy == NULL || policy[0] == 0)
-        policy = "register-v2";
+        policy = "register-v4";
     if (!strcmp(policy, "off"))
         return 0;
     if (!strcmp(policy, "register-v1") ||
-        !strcmp(policy, "register-v2")) {
+        !strcmp(policy, "register-v2") ||
+        !strcmp(policy, "register-v3") ||
+        !strcmp(policy, "register-v4")) {
         int generated_claim;
         int captured_claim;
         int reject;
@@ -3892,7 +3894,10 @@ static int mir_final_cost_policy_rejects(
         captured_claim =
             mir_stream_contains_text(captured, ";@dcc.reg claim=");
         reject = captured_claim && !generated_claim;
-        if (!reject && !strcmp(policy, "register-v2")) {
+        if (!reject &&
+            (!strcmp(policy, "register-v2") ||
+             !strcmp(policy, "register-v3") ||
+             !strcmp(policy, "register-v4"))) {
             int blocks = mir_cfg_block_count();
 
             reject =
@@ -3910,7 +3915,40 @@ static int mir_final_cost_policy_rejects(
                     "generated-claim=%d captured-claim=%d reject=%d\n",
                     mir.name, selector_name,
                     generated_claim, captured_claim, reject);
-        return reject;
+        if (reject ||
+            (strcmp(policy, "register-v3") &&
+             strcmp(policy, "register-v4")))
+            return reject;
+        policy = !strcmp(policy, "register-v4") ? "cost-v4" : "cost-v3";
+    }
+    if (!strcmp(policy, "cost-v3") ||
+        !strcmp(policy, "cost-v4")) {
+        struct MirCostComponents generated_cost;
+        struct MirCostComponents captured_cost;
+        double threshold = 1.30;
+
+        if (strcmp(selector_name, "spilled-scalar-cfg") ||
+            mir_cfg_block_count() > 64 ||
+            mir_stream_contains_text(generated, MIR_EXACT_KERNEL_MARKER))
+            return 0;
+        if (mir.sink_purpose != EMIT_SINK_FINAL) {
+            if (strcmp(policy, "cost-v4") ||
+                mir.sink_purpose != EMIT_SINK_DEFERRED ||
+                mir_cfg_block_count() <= 1 ||
+                (mir_has_cfg_backedge() && mir_has_wide_values()) ||
+                generated_size * 100L <= captured_size * 130L)
+                return 0;
+            threshold = 2.00;
+        }
+        mir_estimate_stream_cost(generated, &generated_cost);
+        mir_estimate_stream_cost(captured, &captured_cost);
+        if (getenv("DCC_MIR_FINAL_COST_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR final-cost-v3 function=%s selector=%s "
+                    "generated=%.3f captured=%.3f\n",
+                    mir.name, selector_name,
+                    generated_cost.score, captured_cost.score);
+        return generated_cost.score > captured_cost.score * threshold;
     }
     if (!strcmp(policy, "cost-v2")) {
         struct MirCostComponents generated_cost;
