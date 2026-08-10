@@ -1797,25 +1797,38 @@ static int pass_const_divmod_helpers(void)
 }
 
 
+/* Every caller passes either a string literal (a handful of chars) or a
+ * name out of original_extrn_names[MAX_ORIGINAL_EXTRNS][64], which
+ * strncpy(..., name, 63) already truncates to 63 chars - so "extrn "/
+ * "call " (<=6 chars) plus name plus the nul always fits well inside
+ * want's MAX_LINE (512) bytes. GCC can't see that bound through the
+ * const char * parameter, so -Wformat-truncation flags a truncation that
+ * can't actually happen; suppressed locally rather than widening `name`'s
+ * type or growing want past what any real caller can produce. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
+
 static int peep_is_exact_extrn_for(const char *line, const char *name)
 {
     char clean[MAX_LINE];
-    char want[64];
+    char want[MAX_LINE];
 
     strip_peep_comment_copy(clean, line);
-    sprintf(want, "extrn %s", name);
+    snprintf(want, sizeof(want), "extrn %s", name);
     return strcmp(clean, want) == 0;
 }
 
 static int peep_is_exact_call_for(const char *line, const char *name)
 {
     char clean[MAX_LINE];
-    char want[64];
+    char want[MAX_LINE];
 
     strip_peep_comment_copy(clean, line);
-    sprintf(want, "call %s", name);
+    snprintf(want, sizeof(want), "call %s", name);
     return strcmp(clean, want) == 0;
 }
+
+#pragma GCC diagnostic pop
 
 static int peep_line_is_divmod_extrn(const char *line)
 {
@@ -1999,8 +2012,14 @@ static void pass_fix_missing_extrns(void)
             continue;
 
         {
-            char line[80];
-            sprintf(line, "extrn %s", name);
+            /* name is original_extrn_names[k], already bounded to 63
+             * chars - see the -Wformat-truncation comment above
+             * peep_is_exact_extrn_for for why this can't truncate. */
+            char line[MAX_LINE];
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
+            snprintf(line, sizeof(line), "extrn %s", name);
+#pragma GCC diagnostic pop
             insert_line(0, line);
         }
     }
