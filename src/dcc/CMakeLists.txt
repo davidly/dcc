@@ -57,6 +57,11 @@ set(DCC_SOURCES
     dcc_ast_gen_cond.c      # AST condition and branch emitters
     dcc_ast_gen_stmt.c      # AST statement/switch/for emitters
     dcc_mir.c               # analysis-only virtual-register MIR prototype
+    dcc_mir_emit_common.c
+    dcc_mir_homed_cfg.c
+    dcc_mir_select.c
+    dcc_mir_spilled_cfg.c
+    dcc_mir_target.c        # shadow Z80 constraints and template costs
 )
 
 add_executable(dcc ${DCC_SOURCES} dcc.h dcc_ast_gen_internal.h

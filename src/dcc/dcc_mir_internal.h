@@ -309,6 +309,65 @@ enum MirPhysicalColor {
     MIR_COLOR_COUNT
 };
 
+enum MirZ80RegisterUnit {
+    MIR_Z80_A = 1u << 0,
+    MIR_Z80_B = 1u << 1,
+    MIR_Z80_C = 1u << 2,
+    MIR_Z80_D = 1u << 3,
+    MIR_Z80_E = 1u << 4,
+    MIR_Z80_H = 1u << 5,
+    MIR_Z80_L = 1u << 6,
+    MIR_Z80_IYH = 1u << 7,
+    MIR_Z80_IYL = 1u << 8,
+    MIR_Z80_FLAGS = 1u << 9,
+    MIR_Z80_BC = MIR_Z80_B | MIR_Z80_C,
+    MIR_Z80_DE = MIR_Z80_D | MIR_Z80_E,
+    MIR_Z80_HL = MIR_Z80_H | MIR_Z80_L,
+    MIR_Z80_IY = MIR_Z80_IYH | MIR_Z80_IYL,
+    MIR_Z80_CALLER_CLOBBERS =
+        MIR_Z80_A | MIR_Z80_BC | MIR_Z80_DE | MIR_Z80_HL |
+        MIR_Z80_FLAGS
+};
+
+enum MirTargetTemplateKind {
+    MIR_TARGET_PSEUDO,
+    MIR_TARGET_MATERIALIZE,
+    MIR_TARGET_ADDRESS,
+    MIR_TARGET_LOAD,
+    MIR_TARGET_STORE,
+    MIR_TARGET_UNARY,
+    MIR_TARGET_BINARY,
+    MIR_TARGET_ARGUMENT,
+    MIR_TARGET_CALL,
+    MIR_TARGET_BRANCH,
+    MIR_TARGET_RETURN,
+    MIR_TARGET_VLA,
+    MIR_TARGET_AGGREGATE,
+    MIR_TARGET_VARIADIC,
+    MIR_TARGET_UNSUPPORTED
+};
+
+enum MirTargetConstraintFlag {
+    MIR_TARGET_FLAG_WIDE = 1u << 0,
+    MIR_TARGET_FLAG_BYTE = 1u << 1,
+    MIR_TARGET_FLAG_MEMORY = 1u << 2,
+    MIR_TARGET_FLAG_CALL = 1u << 3,
+    MIR_TARGET_FLAG_EDGE = 1u << 4,
+    MIR_TARGET_FLAG_REMATERIALIZABLE = 1u << 5
+};
+
+struct MirTargetConstraint {
+    int template_kind;
+    unsigned required_input1;
+    unsigned required_input2;
+    unsigned required_output;
+    unsigned clobbers;
+    unsigned allowed_colors;
+    unsigned flags;
+    int minimum_tstates;
+    int minimum_bytes;
+};
+
 extern struct MirFunction mir;
 extern int mir_virtual_iy_base;
 extern int mir_virtual_iy_frame_bytes;
@@ -608,6 +667,9 @@ int mir_value_has_use(int value);
 int mir_value_has_use_after(int value, int instruction);
 int mir_value_use_count(int value);
 int mir_verify_and_dump(void);
+int mir_target_constraint_for_insn(
+    const struct MirInsn *insn, struct MirTargetConstraint *out);
+void mir_target_report_shadow_plan(void);
 const struct MirInsn *mir_definition(int value);
 struct MirInsn *mir_mutable_definition(int value);
 int mir_load_is_single_call_argument(int value, int size);

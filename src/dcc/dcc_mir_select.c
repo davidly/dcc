@@ -4955,6 +4955,7 @@ void mir_end_function(void)
     if (verified) {
         mir_compute_dead_local_suffix();
         mir_report_dead_local_suffix();
+        mir_target_report_shadow_plan();
     }
     if (mir.opaque_count != 0 &&
         getenv("DCC_MIR_REQUIRE_COMPLETE") != NULL) {
