@@ -436,6 +436,8 @@ struct MirFloatTangentRational {
 struct MirRecursiveWideProduct {
     struct Sym *function;
     int parameter_stack_offset;
+    int operation;
+    int base_result;
 };
 
 struct MirRecursiveWideTreeSum {
@@ -6638,7 +6640,8 @@ static int mir_match_recursive_wide_product(
         comparison->src2 != parameter->dst ||
         mir.insns[6].src1 != comparison->dst ||
         mir.insns[6].label != mir.insns[10].label ||
-        base_value->immediate != 1 ||
+        (base_value->immediate != 0 &&
+         base_value->immediate != 1) ||
         type_size(base_value->type) != 4 ||
         mir.insns[9].src1 != base_value->dst ||
         decrement->immediate != '-' ||
@@ -6647,7 +6650,8 @@ static int mir_match_recursive_wide_product(
         !mir_machine_single_call_argument(
             call, &call_argument) ||
         call_argument != decrement->dst ||
-        product->immediate != '*' ||
+        (product->immediate != '*' &&
+         product->immediate != '+') ||
         product->src1 != parameter->dst ||
         product->src2 != call->dst ||
         type_size(product->type) != 4 ||
@@ -6669,6 +6673,8 @@ static int mir_match_recursive_wide_product(
         memory_storage != SC_PARAM || memory_offset < 2)
         return 0;
     plan->parameter_stack_offset = memory_offset - 2;
+    plan->operation = (int)product->immediate;
+    plan->base_result = (int)base_value->immediate;
     return 1;
 }
 
@@ -18292,15 +18298,22 @@ static void mir_emit_recursive_wide_product(
     mir_emit_wide_parameter(out, plan->parameter_stack_offset);
     fprintf(out,
             "\tld a,d\n\tor e\n\tor h\n\tor l\n\tjp nz,L%d\n"
-            "\tld hl,1\n\tld de,0\n\tret\n"
+            "\tld hl,%d\n\tld de,0\n\tret\n"
             "L%d:\n\tpush de\n\tpush hl\n"
             "\tld bc,1\n\tor a\n\tsbc hl,bc\n\tjp nc,L%d\n"
             "\tdec de\nL%d:\n\tpush de\n\tpush hl\n",
-            recurse, recurse, decremented, decremented);
+            recurse, plan->base_result,
+            recurse, decremented, decremented);
     mir_machine_emit_symbol_call(out, plan->function);
     fputs("\tpop bc\n\tpop bc\n", out);
-    mir_emit_runtime_call(out, "__lmul");
-    fputs("\tpop bc\n\tpop bc\n\tret\n", out);
+    if (plan->operation == '*') {
+        mir_emit_runtime_call(out, "__lmul");
+        fputs("\tpop bc\n\tpop bc\n", out);
+    } else {
+        fputs("\tpop bc\n\tadd hl,bc\n\tex de,hl\n"
+              "\tpop bc\n\tadc hl,bc\n\tex de,hl\n", out);
+    }
+    fputs("\tret\n", out);
 }
 
 static void mir_emit_recursive_tree_pointer(
