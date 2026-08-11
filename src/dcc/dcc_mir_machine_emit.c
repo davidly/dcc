@@ -2739,6 +2739,160 @@ static int mir_match_record_append(struct MirRecordAppend *plan)
     return 1;
 }
 
+static int mir_match_direct_record_append(
+    struct MirRecordAppend *plan)
+{
+    static const int expected_opcodes[40] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM,
+        MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_INDEX_ADDRESS, MIR_MEMBER_ADDRESS, MIR_NOP,
+        MIR_STORE_INDIRECT,
+        MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_INDEX_ADDRESS, MIR_MEMBER_ADDRESS, MIR_NOP,
+        MIR_STORE_INDIRECT,
+        MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_INDEX_ADDRESS, MIR_MEMBER_ADDRESS, MIR_NOP,
+        MIR_STORE_INDIRECT,
+        MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT
+    };
+    static const int array_root_index[3] = { 4, 14, 24 };
+    static const int array_member_index[3] = { 5, 15, 25 };
+    static const int array_load_index[3] = { 6, 16, 26 };
+    static const int cursor_root_index[3] = { 7, 17, 27 };
+    static const int cursor_member_index[3] = { 8, 18, 28 };
+    static const int cursor_load_index[3] = { 9, 19, 29 };
+    static const int address_index[3] = { 10, 20, 30 };
+    static const int field_member_index[3] = { 11, 21, 31 };
+    static const int field_store_index[3] = { 13, 23, 33 };
+    const struct MirInsn *root;
+    const struct MirInsn *increment_root;
+    const struct MirInsn *increment_member;
+    const struct MirInsn *increment_load;
+    const struct MirInsn *increment;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+    int field;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir_cfg_block_count() != 1 || mir.count != 40 ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return 0;
+    root = &mir.insns[array_root_index[0]];
+    if (!mir_machine_named_nonvolatile(root) ||
+        !mir_scalar_memory_location(
+            root, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        type_size(memory_type) != 2)
+        return 0;
+    plan->root = find_global(root->name);
+    plan->root_offset = memory_offset;
+    if (plan->root == NULL || plan->root->is_volatile)
+        return 0;
+    for (field = 0; field < 3; ++field) {
+        const struct MirInsn *parameter = &mir.insns[1 + field];
+        const struct MirInsn *array_root =
+            &mir.insns[array_root_index[field]];
+        const struct MirInsn *array_member =
+            &mir.insns[array_member_index[field]];
+        const struct MirInsn *array_load =
+            &mir.insns[array_load_index[field]];
+        const struct MirInsn *cursor_root =
+            &mir.insns[cursor_root_index[field]];
+        const struct MirInsn *cursor_member =
+            &mir.insns[cursor_member_index[field]];
+        const struct MirInsn *cursor_load =
+            &mir.insns[cursor_load_index[field]];
+        const struct MirInsn *address =
+            &mir.insns[address_index[field]];
+        const struct MirInsn *member =
+            &mir.insns[field_member_index[field]];
+        const struct MirInsn *store =
+            &mir.insns[field_store_index[field]];
+
+        if (!mir_machine_same_location(root, array_root) ||
+            !mir_machine_same_location(root, cursor_root) ||
+            array_member->src1 != array_root->dst ||
+            array_member->memory_size != 2 ||
+            array_load->src1 != array_member->dst ||
+            array_load->memory_size != 2 ||
+            array_load->bit_width != 0 ||
+            (array_load->memory_flags & (1 | 8)) != 0 ||
+            cursor_member->src1 != cursor_root->dst ||
+            cursor_member->memory_size != 2 ||
+            cursor_load->src1 != cursor_member->dst ||
+            cursor_load->memory_size != 2 ||
+            cursor_load->bit_width != 0 ||
+            (cursor_load->memory_flags & (1 | 8)) != 0 ||
+            address->src1 != array_load->dst ||
+            address->src2 != cursor_load->dst ||
+            address->immediate <= 0 ||
+            address->immediate > 32767 ||
+            address->memory_size != address->immediate ||
+            member->src1 != address->dst ||
+            member->memory_size != 2 ||
+            store->src1 != member->dst ||
+            store->src2 != parameter->dst ||
+            store->memory_size != 2 ||
+            store->bit_width != 0 ||
+            (store->memory_flags & (1 | 8)) != 0 ||
+            type_size(parameter->type) != 2 ||
+            type_is_float(parameter->type) ||
+            type_ptr_depth(parameter->type) != 0 ||
+            (parameter->type & 15) == TYPE_BOOL ||
+            !mir_machine_parameter_value_offset(
+                parameter->dst,
+                &plan->parameter_stack_offsets[field]))
+            return 0;
+        if (field == 0) {
+            plan->array_member_offset =
+                (int)array_member->immediate;
+            plan->cursor_member_offset =
+                (int)cursor_member->immediate;
+            plan->stride = (int)address->immediate;
+        } else if (array_member->immediate !=
+                       plan->array_member_offset ||
+                   cursor_member->immediate !=
+                       plan->cursor_member_offset ||
+                   address->immediate != plan->stride) {
+            return 0;
+        }
+        plan->field_offsets[field] = (int)member->immediate;
+    }
+    increment_root = &mir.insns[34];
+    increment_member = &mir.insns[35];
+    increment_load = &mir.insns[36];
+    increment = &mir.insns[38];
+    if (!mir_machine_same_location(root, increment_root) ||
+        increment_member->src1 != increment_root->dst ||
+        increment_member->memory_size != 2 ||
+        increment_member->immediate !=
+            plan->cursor_member_offset ||
+        increment_load->src1 != increment_member->dst ||
+        increment_load->memory_size != 2 ||
+        increment_load->bit_width != 0 ||
+        (increment_load->memory_flags & (1 | 8)) != 0 ||
+        increment->immediate != '+' ||
+        increment->src1 != increment_load->dst ||
+        !mir_machine_constant_equals(increment->src2, 1) ||
+        mir.insns[39].src1 != increment_member->dst ||
+        mir.insns[39].src2 != increment->dst ||
+        mir.insns[39].memory_size != 2 ||
+        mir.insns[39].bit_width != 0 ||
+        (mir.insns[39].memory_flags & (1 | 8)) != 0)
+        return 0;
+    return 1;
+}
+
 static int mir_machine_flat_load(
     int value, int *stack_offset, long *offset,
     int *width, int *is_unsigned)
@@ -7027,6 +7181,45 @@ static void mir_emit_record_append(
           out);
 }
 
+static void mir_emit_direct_record_append(
+    FILE *out, const struct MirRecordAppend *plan)
+{
+    int field;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (field = 0; field < 3; ++field) {
+        mir_machine_emit_global_word(
+            out, plan->root, plan->root_offset);
+        mir_machine_emit_hl_offset(
+            out, plan->array_member_offset, 0);
+        fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n",
+              out);
+        mir_machine_emit_global_word(
+            out, plan->root, plan->root_offset);
+        mir_machine_emit_hl_offset(
+            out, plan->cursor_member_offset, 0);
+        fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n",
+              out);
+        mir_emit_mul_hl_const(out, (unsigned long)plan->stride);
+        fputs("\tpop de\n\tadd hl,de\n", out);
+        mir_machine_emit_hl_offset(
+            out, plan->field_offsets[field], 0);
+        fprintf(out,
+                "\tpush hl\n\tld hl,%d\n\tadd hl,sp\n"
+                "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+                "\tpop hl\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+                plan->parameter_stack_offsets[field] + 2);
+    }
+    mir_machine_emit_global_word(
+        out, plan->root, plan->root_offset);
+    mir_machine_emit_hl_offset(
+        out, plan->cursor_member_offset, 0);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tinc de\n"
+          "\tdec hl\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n\tret\n",
+          out);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -7253,6 +7446,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_record_append(&record_append)) {
         mir_emit_record_append(out, &record_append);
+        return 1;
+    }
+    if (mir_match_direct_record_append(&record_append)) {
+        mir_emit_direct_record_append(out, &record_append);
         return 1;
     }
     if (mir_match_indexed_member_write(
