@@ -5329,6 +5329,14 @@ evaluate_generated:
                          !strcmp(forced_function, mir.name)))
                         fallback_reason = "forced";
                 }
+                if (mir_prelegacy_scheduled_attempt_active) {
+                    if (fallback_reason == NULL &&
+                        (generated_size < 0 || captured_size < 0 ||
+                         generated_instructions < 0 ||
+                         captured_instructions < 0))
+                        fallback_reason = "measurement";
+                    goto prelegacy_final_cost;
+                }
                 if (boolean_phi_retry_attempted &&
                     mir_boolean_phi_branch_simplification_count() > 0 &&
                     mir_boolean_phi_profile_is_semantically_eligible() &&
@@ -7207,6 +7215,7 @@ evaluate_generated:
                     }
                     fclose(regional_candidate);
                 }
+prelegacy_final_cost:
                 if (g_speculative_codegen_active &&
                     getenv("DCC_MIR_FINAL_COST_REPORT") != NULL)
                     fprintf(stderr,
