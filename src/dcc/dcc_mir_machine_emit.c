@@ -288,6 +288,16 @@ struct MirFloatMemberScaleAdd {
     int returns_value;
 };
 
+struct MirGlobalArrayFma {
+    struct Sym *root;
+    int root_offset;
+    int index_stack_offset;
+    int left_stack_offset;
+    int right_stack_offset;
+    int addend_stack_offset;
+    int stride;
+};
+
 struct MirByteMismatchReport {
     struct Sym *counter;
     int counter_offset;
@@ -3900,6 +3910,97 @@ static int mir_match_float_member_scale_add(
     plan->source_offset = (int)source->immediate;
     plan->scale_bits =
         (unsigned long)scale->immediate & 0xffffffffUL;
+    return 1;
+}
+
+static int mir_match_global_array_fma(
+    struct MirGlobalArrayFma *plan)
+{
+    static const int expected_opcodes[24] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP, MIR_STORE_INDIRECT,
+        MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_NOP, MIR_NOP, MIR_BINARY, MIR_BINARY, MIR_STORE_INDIRECT,
+        MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_RETURN
+    };
+    const struct MirInsn *left = &mir.insns[1];
+    const struct MirInsn *right = &mir.insns[2];
+    const struct MirInsn *addend = &mir.insns[3];
+    const struct MirInsn *index = &mir.insns[4];
+    const struct MirInsn *root = &mir.insns[5];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+    int *offsets[4] = {
+        &plan->left_stack_offset, &plan->right_stack_offset,
+        &plan->addend_stack_offset, &plan->index_stack_offset
+    };
+    const struct MirInsn *parameters[4] = {
+        left, right, addend, index
+    };
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 24 || mir_cfg_block_count() != 1 ||
+        mir.has_vla || !type_is_float(mir.return_type) ||
+        type_size(mir.return_type) != 4)
+        return mir_machine_reject("global-array-fma", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject("global-array-fma", "opcode");
+    for (instruction = 0; instruction < 4; ++instruction) {
+        if (!mir_scalar_memory_location(
+                parameters[instruction],
+                &memory_type, &memory_storage, &memory_offset) ||
+            memory_storage != SC_PARAM || memory_offset < 2)
+            return mir_machine_reject(
+                "global-array-fma", "parameter");
+        *offsets[instruction] = memory_offset - 2;
+    }
+    if (!type_is_float(left->type) || type_size(left->type) != 4 ||
+        !type_is_float(right->type) || type_size(right->type) != 4 ||
+        !type_is_float(addend->type) || type_size(addend->type) != 4 ||
+        type_ptr_depth(index->type) != 0 ||
+        type_size(index->type) != 2 ||
+        !mir_scalar_memory_location(
+            root, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL)
+        return mir_machine_reject("global-array-fma", "types");
+    plan->root = find_global(root->name);
+    plan->root_offset = memory_offset;
+    plan->stride = (int)mir.insns[7].immediate;
+    if (plan->root == NULL || plan->root->is_volatile ||
+        plan->stride != 4 ||
+        mir.insns[7].src1 != root->dst ||
+        mir.insns[7].src2 != index->dst ||
+        mir.insns[7].memory_size != 4 ||
+        mir.insns[9].src1 != mir.insns[7].dst ||
+        mir.insns[9].src2 != addend->dst ||
+        mir.insns[9].memory_size != 4)
+        return mir_machine_reject("global-array-fma", "initial-store");
+    if (strcmp(mir.insns[10].name, root->name) ||
+        mir.insns[12].src1 != mir.insns[10].dst ||
+        mir.insns[12].src2 != index->dst ||
+        mir.insns[12].immediate != plan->stride ||
+        mir.insns[13].src1 != mir.insns[12].dst ||
+        mir.insns[13].memory_size != 4 ||
+        mir.insns[16].immediate != '*' ||
+        mir.insns[16].src1 != left->dst ||
+        mir.insns[16].src2 != right->dst ||
+        mir.insns[17].immediate != '+' ||
+        mir.insns[17].src1 != mir.insns[13].dst ||
+        mir.insns[17].src2 != mir.insns[16].dst ||
+        mir.insns[18].src1 != mir.insns[12].dst ||
+        mir.insns[18].src2 != mir.insns[17].dst ||
+        mir.insns[18].memory_size != 4 ||
+        strcmp(mir.insns[19].name, root->name) ||
+        mir.insns[21].src1 != mir.insns[19].dst ||
+        mir.insns[21].src2 != index->dst ||
+        mir.insns[21].immediate != plan->stride ||
+        mir.insns[22].src1 != mir.insns[21].dst ||
+        mir.insns[22].memory_size != 4 ||
+        mir.insns[23].src1 != mir.insns[22].dst)
+        return mir_machine_reject("global-array-fma", "fma");
     return 1;
 }
 
@@ -18003,6 +18104,35 @@ static void mir_emit_float_member_scale_add(
           "\tld a,d\n\tld (bc),a\n\tret\n", out);
 }
 
+static void mir_emit_global_array_fma(
+    FILE *out, const struct MirGlobalArrayFma *plan)
+{
+    fprintf(out,
+            ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n"
+            "\tpush iy\n",
+            mir.name);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n",
+            plan->index_stack_offset + 2);
+    mir_emit_mul_hl_const(out, (unsigned long)plan->stride);
+    mir_machine_emit_global_address_de(
+        out, plan->root, plan->root_offset);
+    fputs("\tadd hl,de\n\tpush hl\n\tpop iy\n", out);
+    mir_emit_wide_parameter(out, plan->addend_stack_offset + 2);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_wide_parameter(out, plan->left_stack_offset + 6);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_wide_parameter(out, plan->right_stack_offset + 10);
+    mir_emit_runtime_call(out, "__fmaf");
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tld (iy+0),l\n\tld (iy+1),h\n"
+          "\tld (iy+2),e\n\tld (iy+3),d\n"
+          "\tpop iy\n;@dcc.reg free=iy\n\tret\n", out);
+}
+
 static void mir_emit_byte_mismatch_report(
     FILE *out, const struct MirByteMismatchReport *plan)
 {
@@ -20531,6 +20661,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirRecordAppend record_append;
     struct MirMixedWideSum mixed_wide_sum;
     struct MirFloatMemberScaleAdd float_member_scale_add;
+    struct MirGlobalArrayFma global_array_fma;
     struct MirByteMismatchReport byte_mismatch_report;
     struct MirByteArithmeticReports byte_arithmetic_reports;
     struct MirByteBitwiseReport byte_bitwise_report;
@@ -20924,6 +21055,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &float_member_scale_add)) {
         mir_emit_float_member_scale_add(
             out, &float_member_scale_add);
+        return 1;
+    }
+    if (mir_match_global_array_fma(&global_array_fma)) {
+        mir_emit_global_array_fma(out, &global_array_fma);
         return 1;
     }
     if (mir_match_byte_mismatch_report(

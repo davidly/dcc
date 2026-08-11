@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `8cb8449`
-  (`schedule fixed-stride global calls`).
-- Current candidate coverage: **1950/2185 (89.24%)**.
-- Remaining fallback population: **235 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `8eded20`
+  (`schedule compact call sum reports`).
+- Current candidate coverage: **1951/2185 (89.29%)**.
+- Remaining fallback population: **234 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
   fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
@@ -190,6 +190,9 @@ current execution plan and handoff.
 - Compact call-sum reports now preserve intermediate results on the evaluation
   stack across one- and zero-argument calls, then pass the final sum directly
   to the report call. This admits `tasmcoll.main` with a dual-mode gain.
+- Dynamic global-array FMA updates now keep the selected element address in IY,
+  feed the three float operands directly to `__fmaf`, store the result once,
+  and return it without a reload. This admits `tfmadd.array_case`.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -197,7 +200,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 235 final-cost fallbacks,
+- Current next priority: repeated causes in the 234 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
