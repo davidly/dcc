@@ -574,6 +574,18 @@ struct MirFixedRandomWordFill {
     int modulus;
 };
 
+struct MirGlobalByteCopyState {
+    struct Sym *source;
+    struct Sym *destination;
+    struct Sym *state[3];
+    int source_offset;
+    int destination_offset;
+    int state_offsets[3];
+    int state_widths[3];
+    int state_values[3];
+    int count;
+};
+
 struct MirConstantLoopCheck {
     struct Sym *function;
     int string_id;
@@ -9801,6 +9813,132 @@ static int mir_match_fixed_random_word_fill(
         mir.insns[23].label != mir.insns[4].label)
         return mir_machine_reject(
             "fixed-random-word-fill", "increment");
+    return 1;
+}
+
+static int mir_match_global_byte_copy_state(
+    struct MirGlobalByteCopyState *plan)
+{
+    static const int expected_opcodes[42] = {
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_PHI,
+        MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_ADDRESS, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_STORE_INDIRECT, MIR_LABEL,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL,
+        MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_NOP,
+        MIR_STORE, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_CONST, MIR_STORE
+    };
+    static const int state_constants[3] = { 26, 30, 40 };
+    static const int state_stores[3] = { 28, 32, 41 };
+    const struct MirInsn *index_phi = &mir.insns[5];
+    const struct MirInsn *destination = &mir.insns[11];
+    const struct MirInsn *source = &mir.insns[14];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+    int state;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 42 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return mir_machine_reject(
+            "global-byte-copy-state", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "global-byte-copy-state", "opcode");
+    if (!mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[3]) ||
+        index_phi->src1 != mir.insns[2].dst ||
+        index_phi->src2 != mir.insns[22].dst ||
+        index_phi->phi_pred1 != mir.insns[0].label ||
+        index_phi->phi_pred2 != mir.insns[19].label ||
+        mir.insns[7].immediate <= 0 ||
+        mir.insns[7].immediate > 255 ||
+        mir.insns[8].immediate != 0 ||
+        mir.insns[8].src1 != index_phi->dst ||
+        mir.insns[9].immediate != '<' ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[9].src2 != mir.insns[7].dst ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        mir.insns[10].label != mir.insns[25].label)
+        return mir_machine_reject(
+            "global-byte-copy-state", "loop");
+    plan->count = (int)mir.insns[7].immediate;
+    if (!mir_scalar_memory_location(
+            destination, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        mir.insns[13].src1 != destination->dst ||
+        mir.insns[13].src2 != index_phi->dst ||
+        mir.insns[13].immediate != 1 ||
+        mir.insns[13].memory_size != 1)
+        return mir_machine_reject(
+            "global-byte-copy-state", "destination");
+    plan->destination = find_global(destination->name);
+    plan->destination_offset = memory_offset;
+    if (!mir_scalar_memory_location(
+            source, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        mir.insns[16].src1 != source->dst ||
+        mir.insns[16].src2 != index_phi->dst ||
+        mir.insns[16].immediate != 1 ||
+        mir.insns[16].memory_size != 1 ||
+        mir.insns[17].src1 != mir.insns[16].dst ||
+        mir.insns[17].memory_size != 1 ||
+        (mir.insns[17].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[18].src1 != mir.insns[13].dst ||
+        mir.insns[18].src2 != mir.insns[17].dst ||
+        mir.insns[18].memory_size != 1 ||
+        (mir.insns[18].memory_flags & (1 | 8)) != 0)
+        return mir_machine_reject(
+            "global-byte-copy-state", "source");
+    plan->source = find_global(source->name);
+    plan->source_offset = memory_offset;
+    if (plan->source == NULL || plan->destination == NULL ||
+        plan->source->is_volatile || plan->destination->is_volatile ||
+        plan->source == plan->destination)
+        return mir_machine_reject(
+            "global-byte-copy-state", "copy-symbols");
+    if (!mir_machine_constant_equals(mir.insns[21].dst, 1) ||
+        mir.insns[22].immediate != '+' ||
+        mir.insns[22].src1 != index_phi->dst ||
+        mir.insns[22].src2 != mir.insns[21].dst ||
+        mir.insns[23].object != mir.insns[3].object ||
+        mir.insns[23].src1 != mir.insns[22].dst ||
+        mir.insns[24].label != mir.insns[4].label)
+        return mir_machine_reject(
+            "global-byte-copy-state", "increment");
+    for (state = 0; state < 3; ++state) {
+        const struct MirInsn *store =
+            &mir.insns[state_stores[state]];
+        long value;
+
+        if (!mir_machine_constant_value(
+                mir.insns[state_constants[state]].dst, &value, 0) ||
+            !mir_machine_named_nonvolatile(store) ||
+            !mir_scalar_memory_location(
+                store, &memory_type, &memory_storage, &memory_offset) ||
+            memory_storage != SC_GLOBAL ||
+            (type_size(memory_type) != 1 &&
+             type_size(memory_type) != 2) ||
+            store->src1 !=
+                mir.insns[state_constants[state]].dst)
+            return mir_machine_reject(
+                "global-byte-copy-state", "state");
+        plan->state[state] = find_global(store->name);
+        plan->state_offsets[state] = memory_offset;
+        plan->state_widths[state] = type_size(memory_type);
+        plan->state_values[state] =
+            (int)((unsigned long)value &
+                  (plan->state_widths[state] == 1
+                       ? 0xffUL : 0xffffUL));
+        if (plan->state[state] == NULL ||
+            plan->state[state]->is_volatile)
+            return mir_machine_reject(
+                "global-byte-copy-state", "state-symbol");
+    }
     return 1;
 }
 
@@ -19247,6 +19385,35 @@ static void mir_emit_fixed_random_word_fill(
     fputs("\tpop iy\n;@dcc.reg free=iy\n\tret\n", out);
 }
 
+static void mir_emit_global_byte_copy_state(
+    FILE *out, const struct MirGlobalByteCopyState *plan)
+{
+    int state;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_address_de(
+        out, plan->source, plan->source_offset);
+    fputs("\tex de,hl\n", out);
+    mir_machine_emit_global_address_de(
+        out, plan->destination, plan->destination_offset);
+    fprintf(out, "\tld bc,%d\n\tldir\n", plan->count);
+    for (state = 0; state < 3; ++state) {
+        if (plan->state_widths[state] == 1) {
+            fprintf(out, "\tld a,%d\n", plan->state_values[state]);
+            mir_machine_emit_global_byte_a(
+                out, plan->state[state],
+                plan->state_offsets[state], 1);
+        } else {
+            fprintf(out, "\tld hl,%d\n", plan->state_values[state]);
+            mir_machine_emit_global_word_store(
+                out, plan->state[state],
+                plan->state_offsets[state]);
+        }
+    }
+    fputs("\tret\n", out);
+}
+
 static void mir_emit_constant_loop_check(
     FILE *out, const struct MirConstantLoopCheck *plan)
 {
@@ -20101,6 +20268,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirVariableByteStepSum variable_byte_step_sum;
     struct MirFixedReverseWordCopy fixed_reverse_word_copy;
     struct MirFixedRandomWordFill fixed_random_word_fill;
+    struct MirGlobalByteCopyState global_byte_copy_state;
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
@@ -20645,6 +20813,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &fixed_random_word_fill)) {
         mir_emit_fixed_random_word_fill(
             out, &fixed_random_word_fill);
+        return 1;
+    }
+    if (mir_match_global_byte_copy_state(
+            &global_byte_copy_state)) {
+        mir_emit_global_byte_copy_state(
+            out, &global_byte_copy_state);
         return 1;
     }
     if (mir_match_constant_loop_check(&constant_loop_check)) {
