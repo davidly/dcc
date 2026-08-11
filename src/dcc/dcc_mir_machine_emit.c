@@ -262,6 +262,14 @@ struct MirMixedWideSum {
     int parameter_is_unsigned[4];
 };
 
+struct MirFloatMemberScaleAdd {
+    int parameter_stack_offset;
+    int destination_offset;
+    int source_offset;
+    unsigned long scale_bits;
+    int returns_value;
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -297,6 +305,8 @@ static int mir_machine_constant_value(
     int value, long *constant_out, int depth);
 static int mir_machine_parameter_value_offset(
     int value, int *stack_offset);
+static int mir_machine_pointee_is_volatile(
+    const struct MirInsn *parameter);
 static void mir_machine_emit_global_address_de(
     FILE *out, struct Sym *symbol, int offset);
 static void mir_machine_emit_global_word(
@@ -2981,6 +2991,99 @@ static int mir_match_mixed_wide_sum(
         plan->parameter_is_unsigned[parameter] =
             (parameters[parameter]->type & TYPE_UNSIGNED) != 0;
     }
+    return 1;
+}
+
+static int mir_match_float_member_scale_add(
+    struct MirFloatMemberScaleAdd *plan)
+{
+    const struct MirInsn *parameter;
+    const struct MirInsn *destination;
+    const struct MirInsn *destination_load;
+    const struct MirInsn *source;
+    const struct MirInsn *source_load;
+    const struct MirInsn *scale;
+    const struct MirInsn *product;
+    const struct MirInsn *sum;
+    const struct MirInsn *store;
+    int expected_count;
+
+    memset(plan, 0, sizeof(*plan));
+    plan->returns_value =
+        (mir.return_type & 15) != TYPE_VOID;
+    expected_count = plan->returns_value ? 13 : 12;
+    if (mir_cfg_block_count() != 1 ||
+        mir.count != expected_count ||
+        (plan->returns_value &&
+         (type_size(mir.return_type) != 4 ||
+          !type_is_float(mir.return_type))))
+        return 0;
+    if (mir.insns[0].opcode != MIR_LABEL ||
+        mir.insns[1].opcode != MIR_PARAM ||
+        mir.insns[2].opcode != MIR_NOP ||
+        mir.insns[3].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[4].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[5].opcode != MIR_NOP ||
+        mir.insns[6].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[7].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[8].opcode != MIR_FLOAT_CONST ||
+        mir.insns[9].opcode != MIR_BINARY ||
+        mir.insns[10].opcode != MIR_BINARY ||
+        mir.insns[11].opcode != MIR_STORE_INDIRECT ||
+        (plan->returns_value &&
+         mir.insns[12].opcode != MIR_RETURN))
+        return 0;
+    parameter = &mir.insns[1];
+    destination = &mir.insns[3];
+    destination_load = &mir.insns[4];
+    source = &mir.insns[6];
+    source_load = &mir.insns[7];
+    scale = &mir.insns[8];
+    product = &mir.insns[9];
+    sum = &mir.insns[10];
+    store = &mir.insns[11];
+    if (type_size(parameter->type) != 2 ||
+        type_ptr_depth(parameter->type) == 0 ||
+        type_is_float(parameter->type) ||
+        mir_machine_pointee_is_volatile(parameter) ||
+        destination->src1 != parameter->dst ||
+        destination->memory_size != 4 ||
+        destination_load->src1 != destination->dst ||
+        destination_load->memory_size != 4 ||
+        destination_load->bit_width != 0 ||
+        !type_is_float(destination_load->type) ||
+        (destination_load->memory_flags & (1 | 8)) != 0 ||
+        source->src1 != parameter->dst ||
+        source->memory_size != 4 ||
+        source_load->src1 != source->dst ||
+        source_load->memory_size != 4 ||
+        source_load->bit_width != 0 ||
+        !type_is_float(source_load->type) ||
+        (source_load->memory_flags & (1 | 8)) != 0 ||
+        !type_is_float(scale->type) ||
+        product->immediate != '*' ||
+        product->src1 != source_load->dst ||
+        product->src2 != scale->dst ||
+        !type_is_float(product->type) ||
+        sum->immediate != '+' ||
+        sum->src1 != destination_load->dst ||
+        sum->src2 != product->dst ||
+        !type_is_float(sum->type) ||
+        store->src1 != destination->dst ||
+        store->src2 != sum->dst ||
+        store->memory_size != 4 ||
+        store->bit_width != 0 ||
+        (store->memory_flags & (1 | 8)) != 0 ||
+        (plan->returns_value &&
+         mir.insns[12].src1 != sum->dst) ||
+        !mir_machine_parameter_value_offset(
+            parameter->dst,
+            &plan->parameter_stack_offset))
+        return 0;
+    plan->destination_offset = (int)destination->immediate;
+    plan->source_offset = (int)source->immediate;
+    plan->scale_bits =
+        (unsigned long)scale->immediate & 0xffffffffUL;
     return 1;
 }
 
@@ -7353,6 +7456,43 @@ static void mir_emit_mixed_wide_sum(
     fputs("\tret\n", out);
 }
 
+static void mir_emit_float_member_scale_add(
+    FILE *out, const struct MirFloatMemberScaleAdd *plan)
+{
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n",
+            plan->parameter_stack_offset);
+    mir_machine_emit_hl_offset(
+        out, plan->destination_offset, 0);
+    fputs("\tpush hl\n"
+          "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+          "\tinc hl\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tld l,c\n\tld h,b\n\tpush de\n\tpush hl\n",
+          out);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n",
+            plan->parameter_stack_offset + 6);
+    mir_machine_emit_hl_offset(out, plan->source_offset, 0);
+    fputs("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+          "\tinc hl\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tld l,c\n\tld h,b\n\tpush de\n\tpush hl\n",
+          out);
+    fprintf(out,
+            "\tld hl,%lu\n\tld de,%lu\n",
+            plan->scale_bits & 0xffffUL,
+            (plan->scale_bits >> 16) & 0xffffUL);
+    mir_emit_runtime_call(out, "__fmaf");
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tld a,l\n\tld (bc),a\n\tinc bc\n"
+          "\tld a,h\n\tld (bc),a\n\tinc bc\n"
+          "\tld a,e\n\tld (bc),a\n\tinc bc\n"
+          "\tld a,d\n\tld (bc),a\n\tret\n", out);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -7405,6 +7545,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirScaledWideDivisionCall scaled_wide_division_call;
     struct MirRecordAppend record_append;
     struct MirMixedWideSum mixed_wide_sum;
+    struct MirFloatMemberScaleAdd float_member_scale_add;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -7588,6 +7729,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_mixed_wide_sum(&mixed_wide_sum)) {
         mir_emit_mixed_wide_sum(out, &mixed_wide_sum);
+        return 1;
+    }
+    if (mir_match_float_member_scale_add(
+            &float_member_scale_add)) {
+        mir_emit_float_member_scale_add(
+            out, &float_member_scale_add);
         return 1;
     }
     if (mir_match_indexed_member_write(
