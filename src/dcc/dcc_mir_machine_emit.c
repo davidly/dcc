@@ -626,6 +626,13 @@ struct MirRecordNameSearch {
     int name_stack_offset;
 };
 
+struct MirSequentialUnaryReports {
+    struct Sym *helper;
+    struct Sym *print_function;
+    int parameter_stack_offsets[5];
+    int string_id;
+};
+
 #define MIR_MACHINE_SWITCH_RESULT_LIMIT 64
 
 struct MirConstantResultSwitch {
@@ -9469,6 +9476,81 @@ static int mir_match_record_name_search(
     return 1;
 }
 
+static int mir_match_sequential_unary_reports(
+    struct MirSequentialUnaryReports *plan)
+{
+    int arguments[6];
+    int parameter;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 29 || mir_cfg_block_count() != 1 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID ||
+        mir.insns[0].opcode != MIR_LABEL ||
+        mir.insns[6].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[7].opcode != MIR_ARG ||
+        mir.insns[7].src1 != mir.insns[6].dst ||
+        mir.insns[28].opcode != MIR_CALL)
+        return 0;
+    for (parameter = 0; parameter < 5; ++parameter) {
+        int base = 1 + parameter;
+        int call_base = 8 + parameter * 4;
+        struct Sym *helper;
+
+        if (mir.insns[base].opcode != MIR_PARAM ||
+            (mir.insns[base].type & 15) != TYPE_BOOL ||
+            !mir_machine_parameter_value_offset(
+                mir.insns[base].dst,
+                &plan->parameter_stack_offsets[parameter]) ||
+            mir.insns[call_base].opcode != MIR_NOP ||
+            mir.insns[call_base + 1].opcode != MIR_ARG ||
+            mir.insns[call_base + 1].src1 != mir.insns[base].dst ||
+            mir.insns[call_base + 2].opcode != MIR_CALL ||
+            !mir_call_uses_value(
+                &mir.insns[call_base + 2],
+                mir.insns[base].dst) ||
+            mir.insns[call_base + 3].opcode != MIR_ARG ||
+            mir.insns[call_base + 3].src1 !=
+                mir.insns[call_base + 2].dst)
+            return 0;
+        helper = find_global(mir.insns[call_base + 2].name);
+        if (helper == NULL || !helper->is_defined ||
+            helper->storage != SC_FUNC ||
+            helper->is_funcptr || helper->is_noreturn ||
+            !helper->has_proto || helper->proto_nargs != 1 ||
+            helper->proto_variadic ||
+            helper->proto_types[0] !=
+                mir.insns[call_base + 1].type ||
+            (helper->type & 15) != TYPE_CHAR ||
+            mir.insns[call_base + 2].memory_flags != 0)
+            return 0;
+        if (parameter == 0)
+            plan->helper = helper;
+        else if (plan->helper != helper)
+            return 0;
+    }
+    if (!mir_machine_six_call_arguments(
+            &mir.insns[28], arguments) ||
+        arguments[0] != mir.insns[6].dst)
+        return 0;
+    for (parameter = 0; parameter < 5; ++parameter)
+        if (arguments[parameter + 1] !=
+            mir.insns[10 + parameter * 4].dst)
+            return 0;
+    plan->print_function = find_global(mir.insns[28].name);
+    if (plan->print_function == NULL ||
+        strcmp(mir.insns[28].name, "printf") ||
+        (mir.insns[28].memory_flags & MIR_CALL_FLAG_VARIADIC) == 0 ||
+        (mir.insns[28].memory_flags &
+         MIR_CALL_FLAG_FORMAT_RUNTIME) != 0)
+        return 0;
+    plan->string_id = (int)mir.insns[6].immediate;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_OPAQUE)
+            return 0;
+    return 1;
+}
+
 static int mir_machine_constant_return_for_label(
     int label, int *result)
 {
@@ -16430,6 +16512,29 @@ static void mir_emit_record_name_search(
             not_found, done);
 }
 
+static void mir_emit_sequential_unary_reports(
+    FILE *out, const struct MirSequentialUnaryReports *plan)
+{
+    int parameter;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (parameter = 4; parameter >= 0; --parameter) {
+        fprintf(out,
+                "\tld hl,%d\n\tadd hl,sp\n"
+                "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n",
+                plan->parameter_stack_offsets[parameter] +
+                    (4 - parameter) * 2);
+        mir_machine_emit_symbol_call(out, plan->helper);
+        fputs("\tpop bc\n\tpush hl\n", out);
+    }
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    for (parameter = 0; parameter < 6; ++parameter)
+        fputs("\tpop bc\n", out);
+    fputs("\tret\n", out);
+}
+
 static void mir_emit_constant_function(FILE *out, int result)
 {
     if (opt_stack_check)
@@ -16615,6 +16720,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConditionalBool conditional_bool;
     struct MirClearedRecordAppend cleared_record_append;
     struct MirRecordNameSearch record_name_search;
+    struct MirSequentialUnaryReports sequential_unary_reports;
     struct MirConstantResultSwitch constant_result_switch;
     struct MirLocalByteFillSumPrint local_byte_fill_sum_print;
     struct MirIndexedMemberWrite indexed_member_write;
@@ -16701,6 +16807,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_record_name_search(&record_name_search)) {
         mir_emit_record_name_search(out, &record_name_search);
+        return 1;
+    }
+    if (mir_match_sequential_unary_reports(
+            &sequential_unary_reports)) {
+        mir_emit_sequential_unary_reports(
+            out, &sequential_unary_reports);
         return 1;
     }
     if (mir_match_affine_pointer_constant_return(&constant)) {
