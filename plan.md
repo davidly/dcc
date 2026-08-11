@@ -3,7 +3,32 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
-## 2026-08-08 policy pivot (read this first)
+## 2026-08-12 current checkpoint (read this first)
+
+- Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
+- Published HEAD: `3560572` (`complete MIR emission for a1`).
+- Production coverage: **1874/2182 (85.88%)**.
+- Remaining fallback population: **308 `final-cost-policy`**, with no other
+  fallback reason.
+- `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
+  **12.98% faster nopeep**, with no checked size regression.
+- The release gate is clean: 314 runnable apps, diagnostics, 22 dccpeep
+  fixtures, and the extended suite pass in both peep/nopeep modes.
+- Large-CFG MIR now uses depth-three LIFO stack handoffs, typed compact byte
+  slots, call-bounded store-address forwarding, single-use unary forwarding,
+  and direct `+1/+2` increments. Tagged byte-slot cleanup and final liveness
+  narrowing in dccpeep preserve larger canonical passes.
+- Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
+  is 393 text bytes and 97 instructions smaller than captured output but
+  regresses 11.49% peep and 5.48% nopeep dynamically.
+- Current next priority: repeated causes in the 308 final-cost fallbacks,
+  followed by calibrated replacement of `register-v69`. Maintain zero
+  correctness, performance, and coverage regressions.
+
+The sections below are the chronological history of earlier branches and
+experiments. Where they conflict with this checkpoint, this checkpoint wins.
+
+## Historical 2026-08-08 policy pivot
 
 8 days moved ordinary coverage only 43.93% -> 45.11%. The user directed a
 bold pivot: **the goal is 100% MIR coverage, reached fast; performance is
