@@ -332,6 +332,19 @@ struct MirExactFloatMismatchReport {
     char call_name[64];
 };
 
+struct MirFloatToleranceReport {
+    struct Sym *checks;
+    int checks_offset;
+    struct Sym *failures;
+    int failures_offset;
+    int name_stack_offset;
+    int got_stack_offset;
+    int want_stack_offset;
+    unsigned long epsilon_bits;
+    int string_id;
+    char call_name[64];
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -4135,6 +4148,171 @@ static int mir_match_exact_float_mismatch_report(
                  : asm_name_for(sym_asm_name(function)));
     plan->runtime_flags =
         call->memory_flags & MIR_CALL_FLAG_FORMAT_RUNTIME;
+    plan->string_id = (int)string->immediate;
+    return 1;
+}
+
+static int mir_match_float_tolerance_report(
+    struct MirFloatToleranceReport *plan)
+{
+    static const int expected_opcodes[31] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_NOP, MIR_NOP, MIR_BINARY, MIR_ARG, MIR_CALL,
+        MIR_FLOAT_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_ARG,
+        MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_LABEL
+    };
+    const struct MirInsn *name;
+    const struct MirInsn *got;
+    const struct MirInsn *want;
+    const struct MirInsn *checks_load;
+    const struct MirInsn *checks_increment;
+    const struct MirInsn *checks_store;
+    const struct MirInsn *difference;
+    const struct MirInsn *fabs_call;
+    const struct MirInsn *epsilon;
+    const struct MirInsn *comparison;
+    const struct MirInsn *failures_load;
+    const struct MirInsn *failures_increment;
+    const struct MirInsn *failures_store;
+    const struct MirInsn *string;
+    const struct MirInsn *name_load;
+    const struct MirInsn *report_call;
+    struct Sym *fabs_function;
+    struct Sym *report_function;
+    int fabs_argument;
+    int report_arguments[4];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir_cfg_block_count() != 2 || mir.count != 31 ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return 0;
+    name = &mir.insns[1];
+    got = &mir.insns[2];
+    want = &mir.insns[3];
+    checks_load = &mir.insns[4];
+    checks_increment = &mir.insns[6];
+    checks_store = &mir.insns[7];
+    difference = &mir.insns[10];
+    fabs_call = &mir.insns[12];
+    epsilon = &mir.insns[13];
+    comparison = &mir.insns[14];
+    failures_load = &mir.insns[16];
+    failures_increment = &mir.insns[18];
+    failures_store = &mir.insns[19];
+    string = &mir.insns[20];
+    name_load = &mir.insns[22];
+    report_call = &mir.insns[28];
+    if (type_size(name->type) != 2 ||
+        type_ptr_depth(name->type) == 0 ||
+        !type_is_float(got->type) ||
+        type_size(got->type) != 4 ||
+        !type_is_float(want->type) ||
+        type_size(want->type) != 4 ||
+        difference->immediate != '-' ||
+        difference->src1 != got->dst ||
+        difference->src2 != want->dst ||
+        !type_is_float(difference->type) ||
+        !mir_machine_single_call_argument(
+            fabs_call, &fabs_argument) ||
+        fabs_argument != difference->dst ||
+        strcmp(fabs_call->name, "fabsf") ||
+        !type_is_float(fabs_call->type) ||
+        !type_is_float(epsilon->type) ||
+        comparison->immediate != '>' ||
+        comparison->src1 != fabs_call->dst ||
+        comparison->src2 != epsilon->dst ||
+        type_size(comparison->type) != 2 ||
+        mir.insns[15].src1 != comparison->dst ||
+        mir.insns[15].label != mir.insns[30].label ||
+        !mir_machine_same_location(name, name_load) ||
+        !mir_machine_four_call_arguments(
+            report_call, report_arguments) ||
+        report_arguments[0] != string->dst ||
+        report_arguments[1] != name_load->dst ||
+        report_arguments[2] != got->dst ||
+        report_arguments[3] != want->dst ||
+        (report_call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) !=
+            MIR_CALL_FLAG_VARIADIC)
+        return 0;
+    fabs_function = find_global(fabs_call->name);
+    report_function = find_global(report_call->name);
+    if (fabs_function == NULL || fabs_function->is_defined ||
+        (fabs_call->memory_flags & MIR_CALL_FLAG_VARIADIC) != 0 ||
+        (fabs_call->base_name[0] != 0 &&
+         strcmp(fabs_call->base_name,
+                asm_name_for(sym_asm_name(fabs_function)))) ||
+        strcmp(report_call->name, "printf") ||
+        report_function == NULL || report_function->is_defined)
+        return 0;
+    if (!mir_machine_named_nonvolatile(checks_load) ||
+        !mir_machine_same_location(checks_load, checks_store) ||
+        !mir_scalar_memory_location(
+            checks_load, &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        type_size(memory_type) != 2 ||
+        checks_increment->immediate != '+' ||
+        checks_increment->src1 != checks_load->dst ||
+        type_size(checks_increment->type) != 2 ||
+        !mir_machine_constant_equals(checks_increment->src2, 1) ||
+        checks_store->src1 != checks_increment->dst ||
+        checks_store->memory_size != 2)
+        return 0;
+    plan->checks = find_global(checks_load->name);
+    plan->checks_offset = memory_offset;
+    if (!mir_machine_named_nonvolatile(failures_load) ||
+        !mir_machine_same_location(
+            failures_load, failures_store) ||
+        !mir_scalar_memory_location(
+            failures_load, &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        type_size(memory_type) != 2 ||
+        failures_increment->immediate != '+' ||
+        failures_increment->src1 != failures_load->dst ||
+        type_size(failures_increment->type) != 2 ||
+        !mir_machine_constant_equals(
+            failures_increment->src2, 1) ||
+        failures_store->src1 != failures_increment->dst ||
+        failures_store->memory_size != 2)
+        return 0;
+    plan->failures = find_global(failures_load->name);
+    plan->failures_offset = memory_offset;
+    if (plan->checks == NULL || plan->checks->is_volatile ||
+        plan->failures == NULL || plan->failures->is_volatile ||
+        !mir_machine_parameter_value_offset(
+            name->dst, &plan->name_stack_offset))
+        return 0;
+    if (!mir_scalar_memory_location(
+            got, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2)
+        return 0;
+    plan->got_stack_offset = memory_offset - 2;
+    if (!mir_scalar_memory_location(
+            want, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2)
+        return 0;
+    plan->want_stack_offset = memory_offset - 2;
+    snprintf(plan->call_name, sizeof(plan->call_name), "%s",
+             report_call->base_name[0] != 0
+                 ? report_call->base_name
+                 : asm_name_for(sym_asm_name(report_function)));
+    plan->epsilon_bits =
+        (unsigned long)epsilon->immediate & 0xffffffffUL;
     plan->string_id = (int)string->immediate;
     return 1;
 }
@@ -8872,6 +9050,50 @@ static void mir_emit_exact_float_mismatch_report(
           "\tpop bc\n\tpop bc\n\tpop bc\n\tret\n", out);
 }
 
+static void mir_emit_float_tolerance_report(
+    FILE *out, const struct MirFloatToleranceReport *plan)
+{
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_word(
+        out, plan->checks, plan->checks_offset);
+    fputs("\tinc hl\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->checks, plan->checks_offset);
+    mir_emit_wide_parameter(out, plan->got_stack_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_wide_parameter(out, plan->want_stack_offset + 4);
+    mir_emit_runtime_call(out, "__fsf");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_emit_runtime_call(out, "__fabs");
+    fputs("\tpush de\n\tpush hl\n", out);
+    fprintf(out,
+            "\tld hl,%lu\n\tld de,%lu\n",
+            plan->epsilon_bits & 0xffffUL,
+            (plan->epsilon_bits >> 16) & 0xffffUL);
+    mir_emit_runtime_call(out, "__fltf");
+    fputs("\tpop bc\n\tpop bc\n"
+          "\tld a,h\n\tor l\n\tret z\n", out);
+    mir_machine_emit_global_word(
+        out, plan->failures, plan->failures_offset);
+    fputs("\tinc hl\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->failures, plan->failures_offset);
+    mir_emit_wide_parameter(out, plan->want_stack_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_wide_parameter(out, plan->got_stack_offset + 4);
+    fputs("\tpush de\n\tpush hl\n", out);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            plan->name_stack_offset + 8,
+            plan->string_id);
+    mir_emit_runtime_call(out, plan->call_name);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tpop bc\n\tpop bc\n\tpop bc\n\tret\n", out);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -8932,6 +9154,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirGuardedGlobalPop guarded_global_pop;
     struct MirFloatMemberScalarCompare float_member_scalar_compare;
     struct MirExactFloatMismatchReport exact_float_mismatch_report;
+    struct MirFloatToleranceReport float_tolerance_report;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -9157,6 +9380,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &exact_float_mismatch_report)) {
         mir_emit_exact_float_mismatch_report(
             out, &exact_float_mismatch_report);
+        return 1;
+    }
+    if (mir_match_float_tolerance_report(
+            &float_tolerance_report)) {
+        mir_emit_float_tolerance_report(
+            out, &float_tolerance_report);
         return 1;
     }
     if (mir_match_indexed_member_write(
