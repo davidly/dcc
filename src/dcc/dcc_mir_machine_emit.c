@@ -592,6 +592,12 @@ struct MirConditionalFloatCompareLong {
     int nonpositive_value;
 };
 
+struct MirConditionalBool {
+    int condition_stack_offset;
+    int true_value;
+    int false_value;
+};
+
 #define MIR_MACHINE_SWITCH_RESULT_LIMIT 64
 
 struct MirConstantResultSwitch {
@@ -9114,6 +9120,48 @@ static int mir_match_conditional_float_compare_long(
     return 1;
 }
 
+static int mir_match_conditional_bool(struct MirConditionalBool *plan)
+{
+    static const int expected_opcodes[14] = {
+        MIR_LABEL, MIR_PARAM, MIR_NOP, MIR_BRANCH_FALSE, MIR_CONST,
+        MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_LABEL,
+        MIR_PHI, MIR_UNARY, MIR_RETURN
+    };
+    long false_value;
+    int instruction;
+    long true_value;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 14 || mir_cfg_block_count() != 5 ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_BOOL)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return 0;
+    if (!mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->condition_stack_offset) ||
+        mir.insns[3].src1 != mir.insns[1].dst ||
+        mir.insns[3].label != mir.insns[7].label ||
+        !mir_machine_constant_value(
+            mir.insns[4].dst, &true_value, 0) ||
+        mir.insns[6].label != mir.insns[10].label ||
+        !mir_machine_constant_value(
+            mir.insns[8].dst, &false_value, 0) ||
+        mir.insns[11].src1 != mir.insns[4].dst ||
+        mir.insns[11].src2 != mir.insns[8].dst ||
+        mir.insns[11].phi_pred1 != mir.insns[5].label ||
+        mir.insns[11].phi_pred2 != mir.insns[9].label ||
+        mir.insns[12].immediate != 0 ||
+        mir.insns[12].src1 != mir.insns[11].dst ||
+        (mir.insns[12].type & 15) != TYPE_BOOL ||
+        mir.insns[13].src1 != mir.insns[12].dst)
+        return 0;
+    plan->true_value = true_value != 0;
+    plan->false_value = false_value != 0;
+    return 1;
+}
+
 static int mir_machine_constant_return_for_label(
     int label, int *result)
 {
@@ -15953,6 +16001,26 @@ static void mir_emit_conditional_float_compare_long(
     mir_emit_word_as_long_return(out, plan->nonpositive_value);
 }
 
+static void mir_emit_conditional_bool(
+    FILE *out, const struct MirConditionalBool *plan)
+{
+    int false_arm = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    if (plan->true_value == plan->false_value) {
+        fprintf(out, "\tld hl,%d\n\tret\n", plan->true_value);
+        return;
+    }
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n\tor (hl)\n\tjp z,L%d\n"
+            "\tld hl,%d\n\tret\n"
+            "L%d:\n\tld hl,%d\n\tret\n",
+            plan->condition_stack_offset, false_arm,
+            plan->true_value, false_arm, plan->false_value);
+}
+
 static void mir_emit_constant_function(FILE *out, int result)
 {
     if (opt_stack_check)
@@ -16135,6 +16203,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConditionalPointerFloatLong conditional_pointer_float_long;
     struct MirNestedMemberFloatLong nested_member_float_long;
     struct MirConditionalFloatCompareLong conditional_float_compare_long;
+    struct MirConditionalBool conditional_bool;
     struct MirConstantResultSwitch constant_result_switch;
     struct MirLocalByteFillSumPrint local_byte_fill_sum_print;
     struct MirIndexedMemberWrite indexed_member_write;
@@ -16207,6 +16276,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_float_compare_long)) {
         mir_emit_conditional_float_compare_long(
             out, &conditional_float_compare_long);
+        return 1;
+    }
+    if (mir_match_conditional_bool(&conditional_bool)) {
+        mir_emit_conditional_bool(out, &conditional_bool);
         return 1;
     }
     if (mir_match_affine_pointer_constant_return(&constant)) {
