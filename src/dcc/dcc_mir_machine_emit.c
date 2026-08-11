@@ -548,6 +548,12 @@ struct MirNestedWordLongSelect {
     int third_is_parameter;
 };
 
+struct MirFloatIntTruth {
+    int float_stack_offset;
+    int int_stack_offset;
+    int operation;
+};
+
 #define MIR_MACHINE_SWITCH_RESULT_LIMIT 64
 
 struct MirConstantResultSwitch {
@@ -8681,6 +8687,95 @@ static int mir_match_nested_word_long_select(
     return 1;
 }
 
+static int mir_match_float_int_truth(struct MirFloatIntTruth *plan)
+{
+    static const int and_opcodes[24] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_NOP, MIR_BRANCH_FALSE,
+        MIR_NOP, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+        MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE,
+        MIR_CONST, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_CONST,
+        MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_RETURN
+    };
+    static const int or_opcodes[32] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_NOP, MIR_BRANCH_FALSE,
+        MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_NOP,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_CONST, MIR_LABEL, MIR_PHI, MIR_LABEL, MIR_JUMP, MIR_LABEL,
+        MIR_PHI, MIR_BRANCH_FALSE, MIR_CONST, MIR_LABEL, MIR_JUMP,
+        MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_RETURN
+    };
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if ((mir.count != 24 && mir.count != 32) ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_size(mir.return_type) != 2 ||
+        mir_cfg_block_count() != (mir.count == 24 ? 8 : 12))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            (mir.count == 24
+                ? and_opcodes[instruction]
+                : or_opcodes[instruction]))
+            return 0;
+    if (!mir_scalar_memory_location(
+            &mir.insns[1], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        !type_is_float(memory_type) ||
+        type_size(memory_type) != 4 ||
+        memory_offset < 2 ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[2].dst, &plan->int_stack_offset))
+        return 0;
+    plan->float_stack_offset = memory_offset - 2;
+    if (mir.count == 24) {
+        if (mir.insns[4].src1 != mir.insns[1].dst ||
+            mir.insns[4].label != mir.insns[10].label ||
+            mir.insns[6].src1 != mir.insns[2].dst ||
+            mir.insns[6].label != mir.insns[10].label ||
+            !mir_machine_constant_equals(mir.insns[8].dst, 1) ||
+            !mir_machine_constant_equals(mir.insns[11].dst, 0) ||
+            mir.insns[13].src1 != mir.insns[8].dst ||
+            mir.insns[13].src2 != mir.insns[11].dst ||
+            mir.insns[14].src1 != mir.insns[13].dst ||
+            mir.insns[14].label != mir.insns[18].label ||
+            !mir_machine_constant_equals(mir.insns[15].dst, 1) ||
+            !mir_machine_constant_equals(mir.insns[19].dst, 0) ||
+            mir.insns[22].src1 != mir.insns[15].dst ||
+            mir.insns[22].src2 != mir.insns[19].dst ||
+            mir.insns[23].src1 != mir.insns[22].dst)
+            return 0;
+        plan->operation = '&';
+        return 1;
+    }
+    if (mir.insns[4].src1 != mir.insns[1].dst ||
+        mir.insns[4].label != mir.insns[8].label ||
+        !mir_machine_constant_equals(mir.insns[6].dst, 1) ||
+        mir.insns[10].src1 != mir.insns[2].dst ||
+        mir.insns[10].label != mir.insns[14].label ||
+        !mir_machine_constant_equals(mir.insns[12].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[15].dst, 0) ||
+        mir.insns[17].src1 != mir.insns[12].dst ||
+        mir.insns[17].src2 != mir.insns[15].dst ||
+        mir.insns[21].src1 != mir.insns[6].dst ||
+        mir.insns[21].src2 != mir.insns[17].dst ||
+        mir.insns[22].src1 != mir.insns[21].dst ||
+        mir.insns[22].label != mir.insns[26].label ||
+        !mir_machine_constant_equals(mir.insns[23].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[27].dst, 0) ||
+        mir.insns[30].src1 != mir.insns[23].dst ||
+        mir.insns[30].src2 != mir.insns[27].dst ||
+        mir.insns[31].src1 != mir.insns[30].dst)
+        return 0;
+    plan->operation = '|';
+    return 1;
+}
+
 static int mir_machine_constant_return_for_label(
     int label, int *result)
 {
@@ -15357,6 +15452,42 @@ static void mir_emit_nested_word_long_select(
             selected);
 }
 
+static void mir_emit_float_int_truth(
+    FILE *out, const struct MirFloatIntTruth *plan)
+{
+    int false_result = new_label();
+    int true_result = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n\tor (hl)\n\tinc hl\n"
+            "\tor (hl)\n\tld c,a\n\tinc hl\n\tld a,(hl)\n"
+            "\tand 127\n\tor c\n",
+            plan->float_stack_offset);
+    if (plan->operation == '&')
+        fprintf(out, "\tjp z,L%d\n", false_result);
+    else
+        fprintf(out, "\tjp nz,L%d\n", true_result);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n\tor (hl)\n",
+            plan->int_stack_offset);
+    if (plan->operation == '&')
+        fprintf(out, "\tjp z,L%d\n", false_result);
+    else
+        fprintf(out, "\tjp nz,L%d\n", true_result);
+    if (plan->operation == '|')
+        fprintf(out, "L%d:\n", false_result);
+    fprintf(out, "\tld hl,%d\n\tret\n",
+            plan->operation == '&' ? 1 : 0);
+    if (plan->operation == '&')
+        fprintf(out, "L%d:\n\tld hl,0\n\tret\n", false_result);
+    else
+        fprintf(out, "L%d:\n\tld hl,1\n\tret\n", true_result);
+}
+
 static void mir_emit_constant_function(FILE *out, int result)
 {
     if (opt_stack_check)
@@ -15534,6 +15665,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirWideConstantEqual wide_constant_equal;
     struct MirFloatTruthOnce float_truth_once;
     struct MirNestedWordLongSelect nested_word_long_select;
+    struct MirFloatIntTruth float_int_truth;
     struct MirConstantResultSwitch constant_result_switch;
     struct MirLocalByteFillSumPrint local_byte_fill_sum_print;
     struct MirIndexedMemberWrite indexed_member_write;
@@ -15578,6 +15710,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &nested_word_long_select)) {
         mir_emit_nested_word_long_select(
             out, &nested_word_long_select);
+        return 1;
+    }
+    if (mir_match_float_int_truth(&float_int_truth)) {
+        mir_emit_float_int_truth(out, &float_int_truth);
         return 1;
     }
     if (mir_match_affine_pointer_constant_return(&constant)) {
