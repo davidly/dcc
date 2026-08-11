@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `c051907`
-  (`schedule recursive wide tree sums`).
-- Current candidate coverage: **1945/2185 (89.02%)**.
-- Remaining fallback population: **240 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `1e71248`
+  (`generalize recursive wide recurrences`).
+- Current candidate coverage: **1947/2185 (89.11%)**.
+- Remaining fallback population: **238 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
   fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
@@ -177,6 +177,10 @@ current execution plan and handoff.
 - Recursive wide linear recurrences now share the product scheduler and select
   either the long multiply helper or an inline carry-preserving addition.
   This admits `triangle.triangle`, improving 23.56% peep / 24.54% nopeep.
+- Fixed attention sample kernels now reverse-copy word arrays with IY and fill
+  a word array from a no-argument producer while retaining the destination
+  pointer across calls. This admits `attnc11.make_targets/generate_sample`
+  and reduces the linked nopeep image by 128 bytes.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -184,7 +188,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 240 final-cost fallbacks,
+- Current next priority: repeated causes in the 238 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 

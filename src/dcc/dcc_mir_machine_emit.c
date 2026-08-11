@@ -557,6 +557,23 @@ struct MirVariableByteStepSum {
     int has_double_step;
 };
 
+struct MirFixedReverseWordCopy {
+    struct Sym *source;
+    struct Sym *destination;
+    int source_offset;
+    int destination_offset;
+    int count;
+};
+
+struct MirFixedRandomWordFill {
+    struct Sym *destination;
+    struct Sym *random_function;
+    struct Sym *finish_function;
+    int destination_offset;
+    int count;
+    int modulus;
+};
+
 struct MirConstantLoopCheck {
     struct Sym *function;
     int string_id;
@@ -1630,6 +1647,19 @@ static int mir_machine_three_call_arguments(
         ++count;
     }
     return count == 3;
+}
+
+static int mir_machine_call_has_no_arguments(
+    const struct MirInsn *call)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_ARG &&
+            mir.insns[instruction].secondary_offset ==
+                call->secondary_offset)
+            return 0;
+    return 1;
 }
 
 static int mir_machine_two_call_arguments(
@@ -9573,6 +9603,204 @@ static int mir_match_alias_byte_step_sum(
         mir.insns[58].src1 != sum_phi->dst)
         return mir_machine_reject(
             "alias-byte-step-sum", "step");
+    return 1;
+}
+
+static int mir_match_fixed_reverse_word_copy(
+    struct MirFixedReverseWordCopy *plan)
+{
+    static const int expected_opcodes[31] = {
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_PHI,
+        MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_ADDRESS, MIR_NOP,
+        MIR_NOP, MIR_CONST, MIR_NOP, MIR_UNARY, MIR_BINARY,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_STORE_INDIRECT, MIR_LABEL,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL
+    };
+    const struct MirInsn *index_phi = &mir.insns[5];
+    const struct MirInsn *destination = &mir.insns[11];
+    const struct MirInsn *source = &mir.insns[14];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 31 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return mir_machine_reject(
+            "fixed-reverse-word-copy", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "fixed-reverse-word-copy", "opcode");
+    if (!mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[3]) ||
+        mir.insns[3].memory_size != 1 ||
+        index_phi->src1 != mir.insns[2].dst ||
+        index_phi->src2 != mir.insns[27].dst ||
+        index_phi->phi_pred1 != mir.insns[0].label ||
+        index_phi->phi_pred2 != mir.insns[24].label ||
+        mir.insns[7].immediate <= 0 ||
+        mir.insns[7].immediate > 127 ||
+        mir.insns[8].immediate != 0 ||
+        mir.insns[8].src1 != index_phi->dst ||
+        mir.insns[9].immediate != '<' ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[9].src2 != mir.insns[7].dst ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        mir.insns[10].label != mir.insns[30].label)
+        return mir_machine_reject(
+            "fixed-reverse-word-copy", "loop");
+    plan->count = (int)mir.insns[7].immediate;
+    if (!mir_scalar_memory_location(
+            destination, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        destination->type == 0 ||
+        mir.insns[13].src1 != destination->dst ||
+        mir.insns[13].src2 != index_phi->dst ||
+        mir.insns[13].immediate != 2 ||
+        mir.insns[13].memory_size != 2)
+        return mir_machine_reject(
+            "fixed-reverse-word-copy", "destination");
+    plan->destination = find_global(destination->name);
+    plan->destination_offset = memory_offset;
+    if (plan->destination == NULL ||
+        plan->destination->is_volatile)
+        return mir_machine_reject(
+            "fixed-reverse-word-copy", "destination-symbol");
+    if (!mir_scalar_memory_location(
+            source, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        mir.insns[17].immediate != plan->count - 1 ||
+        mir.insns[19].immediate != 0 ||
+        mir.insns[19].src1 != index_phi->dst ||
+        mir.insns[20].immediate != '-' ||
+        mir.insns[20].src1 != mir.insns[17].dst ||
+        mir.insns[20].src2 != mir.insns[19].dst ||
+        mir.insns[21].src1 != source->dst ||
+        mir.insns[21].src2 != mir.insns[20].dst ||
+        mir.insns[21].immediate != 2 ||
+        mir.insns[21].memory_size != 2 ||
+        mir.insns[22].src1 != mir.insns[21].dst ||
+        mir.insns[22].memory_size != 2 ||
+        (mir.insns[22].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[23].src1 != mir.insns[13].dst ||
+        mir.insns[23].src2 != mir.insns[22].dst ||
+        mir.insns[23].memory_size != 2 ||
+        (mir.insns[23].memory_flags & (1 | 8)) != 0)
+        return mir_machine_reject(
+            "fixed-reverse-word-copy", "source");
+    plan->source = find_global(source->name);
+    plan->source_offset = memory_offset;
+    if (plan->source == NULL || plan->source->is_volatile ||
+        plan->source == plan->destination)
+        return mir_machine_reject(
+            "fixed-reverse-word-copy", "source-symbol");
+    if (!mir_machine_constant_equals(mir.insns[26].dst, 1) ||
+        mir.insns[27].immediate != '+' ||
+        mir.insns[27].src1 != index_phi->dst ||
+        mir.insns[27].src2 != mir.insns[26].dst ||
+        mir.insns[28].object != mir.insns[3].object ||
+        mir.insns[28].src1 != mir.insns[27].dst ||
+        mir.insns[29].label != mir.insns[4].label)
+        return mir_machine_reject(
+            "fixed-reverse-word-copy", "increment");
+    return 1;
+}
+
+static int mir_match_fixed_random_word_fill(
+    struct MirFixedRandomWordFill *plan)
+{
+    static const int expected_opcodes[26] = {
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_PHI,
+        MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_CALL, MIR_CONST,
+        MIR_BINARY, MIR_STORE_INDIRECT, MIR_LABEL, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_CALL
+    };
+    const struct MirInsn *index_phi = &mir.insns[5];
+    const struct MirInsn *destination = &mir.insns[11];
+    const struct MirInsn *random_call = &mir.insns[14];
+    const struct MirInsn *finish_call = &mir.insns[25];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 26 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return mir_machine_reject(
+            "fixed-random-word-fill", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "fixed-random-word-fill", "opcode");
+    if (!mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[3]) ||
+        mir.insns[3].memory_size != 1 ||
+        index_phi->src1 != mir.insns[2].dst ||
+        index_phi->src2 != mir.insns[21].dst ||
+        index_phi->phi_pred1 != mir.insns[0].label ||
+        index_phi->phi_pred2 != mir.insns[18].label ||
+        mir.insns[7].immediate <= 0 ||
+        mir.insns[7].immediate > 127 ||
+        mir.insns[8].immediate != 0 ||
+        mir.insns[8].src1 != index_phi->dst ||
+        mir.insns[9].immediate != '<' ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[9].src2 != mir.insns[7].dst ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        mir.insns[10].label != mir.insns[24].label)
+        return mir_machine_reject(
+            "fixed-random-word-fill", "loop");
+    plan->count = (int)mir.insns[7].immediate;
+    if (!mir_scalar_memory_location(
+            destination, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        mir.insns[13].src1 != destination->dst ||
+        mir.insns[13].src2 != index_phi->dst ||
+        mir.insns[13].immediate != 2 ||
+        mir.insns[13].memory_size != 2 ||
+        !mir_machine_call_has_no_arguments(random_call) ||
+        random_call->type != mir.insns[16].type ||
+        mir.insns[15].immediate <= 1 ||
+        mir.insns[15].immediate > 32767 ||
+        mir.insns[16].immediate != '%' ||
+        mir.insns[16].src1 != random_call->dst ||
+        mir.insns[16].src2 != mir.insns[15].dst ||
+        mir.insns[17].src1 != mir.insns[13].dst ||
+        mir.insns[17].src2 != mir.insns[16].dst ||
+        mir.insns[17].memory_size != 2 ||
+        (mir.insns[17].memory_flags & (1 | 8)) != 0)
+        return mir_machine_reject(
+            "fixed-random-word-fill", "body");
+    plan->destination = find_global(destination->name);
+    plan->destination_offset = memory_offset;
+    plan->random_function = find_global(random_call->name);
+    plan->finish_function = find_global(finish_call->name);
+    plan->modulus = (int)mir.insns[15].immediate;
+    if (plan->destination == NULL ||
+        plan->destination->is_volatile ||
+        plan->random_function == NULL ||
+        !plan->random_function->is_defined ||
+        plan->finish_function == NULL ||
+        !plan->finish_function->is_defined ||
+        plan->random_function->is_funcptr ||
+        plan->finish_function->is_funcptr ||
+        !mir_machine_call_has_no_arguments(finish_call))
+        return mir_machine_reject(
+            "fixed-random-word-fill", "symbols");
+    if (!mir_machine_constant_equals(mir.insns[20].dst, 1) ||
+        mir.insns[21].immediate != '+' ||
+        mir.insns[21].src1 != index_phi->dst ||
+        mir.insns[21].src2 != mir.insns[20].dst ||
+        mir.insns[22].object != mir.insns[3].object ||
+        mir.insns[22].src1 != mir.insns[21].dst ||
+        mir.insns[23].label != mir.insns[4].label)
+        return mir_machine_reject(
+            "fixed-random-word-fill", "increment");
     return 1;
 }
 
@@ -18964,6 +19192,61 @@ static void mir_emit_variable_byte_step_sum(
             loop, done);
 }
 
+static void mir_emit_fixed_reverse_word_copy(
+    FILE *out, const struct MirFixedReverseWordCopy *plan)
+{
+    int loop = new_label();
+
+    fprintf(out,
+            ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n"
+            "\tpush iy\n",
+            mir.name);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_address_de(
+        out, plan->source,
+        plan->source_offset + (plan->count - 1) * 2);
+    fputs("\tpush de\n\tpop iy\n", out);
+    mir_machine_emit_global_address_de(
+        out, plan->destination, plan->destination_offset);
+    fprintf(out,
+            "\tld c,%d\n"
+            "L%d:\n\tld a,(iy+0)\n\tld (de),a\n\tinc de\n"
+            "\tld a,(iy+1)\n\tld (de),a\n\tinc de\n"
+            "\tdec iy\n\tdec iy\n\tdec c\n\tjp nz,L%d\n"
+            "\tpop iy\n;@dcc.reg free=iy\n\tret\n",
+            plan->count, loop, loop);
+}
+
+static void mir_emit_fixed_random_word_fill(
+    FILE *out, const struct MirFixedRandomWordFill *plan)
+{
+    int loop = new_label();
+
+    fprintf(out,
+            ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n"
+            "\tpush iy\n",
+            mir.name);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_address_de(
+        out, plan->destination, plan->destination_offset);
+    fputs("\tpush de\n\tpop iy\n", out);
+    fprintf(out, "L%d:\n", loop);
+    mir_machine_emit_symbol_call(out, plan->random_function);
+    fprintf(out, "\tld de,%d\n", plan->modulus);
+    mir_emit_runtime_call(out, "__mods");
+    fputs("\tld (iy+0),l\n\tld (iy+1),h\n\tinc iy\n\tinc iy\n"
+          "\tpush iy\n\tpop hl\n", out);
+    mir_machine_emit_global_address_de(
+        out, plan->destination,
+        plan->destination_offset + plan->count * 2);
+    fputs("\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp nz,L%d\n", loop);
+    mir_machine_emit_symbol_call(out, plan->finish_function);
+    fputs("\tpop iy\n;@dcc.reg free=iy\n\tret\n", out);
+}
+
 static void mir_emit_constant_loop_check(
     FILE *out, const struct MirConstantLoopCheck *plan)
 {
@@ -19816,6 +20099,8 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirDynamicRowScan dynamic_row_scan;
     struct MirByteMismatchScan byte_mismatch_scan;
     struct MirVariableByteStepSum variable_byte_step_sum;
+    struct MirFixedReverseWordCopy fixed_reverse_word_copy;
+    struct MirFixedRandomWordFill fixed_random_word_fill;
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
@@ -20348,6 +20633,18 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &variable_byte_step_sum)) {
         mir_emit_variable_byte_step_sum(
             out, &variable_byte_step_sum);
+        return 1;
+    }
+    if (mir_match_fixed_reverse_word_copy(
+            &fixed_reverse_word_copy)) {
+        mir_emit_fixed_reverse_word_copy(
+            out, &fixed_reverse_word_copy);
+        return 1;
+    }
+    if (mir_match_fixed_random_word_fill(
+            &fixed_random_word_fill)) {
+        mir_emit_fixed_random_word_fill(
+            out, &fixed_random_word_fill);
         return 1;
     }
     if (mir_match_constant_loop_check(&constant_loop_check)) {
