@@ -1,0 +1,37 @@
+	cseg
+
+_dead:
+;@dcc.mir inline-simple-store
+	ld hl,123
+	push hl
+	call _sink
+	pop bc
+	ret
+
+_live:
+;@dcc.mir inline-simple-store
+	ld hl,456
+	ld c,l ; peep: hl_bc_hl_copyback
+	ld b,h
+	ld a,c
+	ret
+
+_fastcall:
+;@dcc.mir inline-simple-store
+	ld hl,789
+	ld c,l ; peep: hl_bc_hl_copyback
+	ld b,h
+	call __mhf
+	ret
+
+_conditional:
+;@dcc.mir inline-simple-store
+	ld hl,999
+	ld c,l ; peep: hl_bc_hl_copyback
+	ld b,h
+	call z,_sink
+	ld a,c
+	ret
+
+_sink:
+	ret

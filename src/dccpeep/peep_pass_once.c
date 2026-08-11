@@ -1427,6 +1427,78 @@ static int try_byte_zero_test_at(int i)
     return 0;
 }
 
+static int bc_dead_before_use(int start)
+{
+    int j;
+
+    for (j = start; j < nlines; ++j) {
+        const PeepLineInfo *info = peep_line_info(j);
+        char clean[MAX_LINE];
+
+        if (info == NULL || info->kind == PEEP_LINE_LABEL ||
+            info->kind == PEEP_LINE_OPAQUE)
+            return 0;
+        if (info->kind == PEEP_LINE_DIRECTIVE) {
+            strip_peep_comment_lower_copy(clean, lines[j]);
+            if (strncmp(clean, "extrn ", 6) == 0)
+                continue;
+            return 0;
+        }
+        if (info->kind != PEEP_LINE_INSTRUCTION)
+            continue;
+        strip_peep_comment_lower_copy(clean, lines[j]);
+        if (strncmp(clean, "call _", 6) == 0 &&
+            clean[6] != '_' &&
+            strchr(clean + 5, ',') == NULL)
+            return 1;
+        if (strcmp(clean, "ret") == 0)
+            return 1;
+        if ((info->effects.reads &
+             (PEEP_REG_B | PEEP_REG_C)) != 0)
+            return 0;
+        if ((info->effects.writes &
+             (PEEP_REG_B | PEEP_REG_C)) ==
+            (PEEP_REG_B | PEEP_REG_C))
+            return 1;
+        if (info->effects.control_flow || info->effects.unknown)
+            return 0;
+    }
+    return 0;
+}
+
+static int function_has_inline_simple_store_marker(int line)
+{
+    int start;
+    int end;
+    int i;
+
+    find_function_bounds_any(line, &start, &end);
+    for (i = start; i < end; ++i)
+        if (strstr(lines[i], ";@dcc.mir inline-simple-store") != NULL)
+            return 1;
+    return 0;
+}
+
+static int try_hl_bc_hl_roundtrip_at(int i)
+{
+    if (i + 3 >= nlines ||
+        !function_has_inline_simple_store_marker(i) ||
+        !eq(i, "ld c,l") || !eq(i + 1, "ld b,h") ||
+        !eq(i + 2, "ld l,c") || !eq(i + 3, "ld h,b"))
+        return 0;
+    if (peep_registers_dead_after(
+            i + 3, PEEP_REG_B | PEEP_REG_C) ||
+        bc_dead_before_use(i + 4)) {
+        delete_n(i, 4);
+    } else {
+        replace1_tagged(
+            i, "ld c,l",
+            "hl_bc_hl_copyback");
+        delete_n(i + 2, 2);
+    }
+    return 1;
+}
+
 int pass_once(void)
 {
     int i;
@@ -1437,6 +1509,12 @@ int pass_once(void)
     changed = 0;
 
     for (i = 0; i < nlines; i++) {
+        if (try_hl_bc_hl_roundtrip_at(i)) {
+            changed = 1;
+            if (i > 0) i--;
+            continue;
+        }
+
         if (try_global_moves_postinc_at(i)) {
             changed = 1;
             if (i > 0) i--;
@@ -1753,4 +1831,3 @@ int pass_once(void)
 
     return changed;
 }
-

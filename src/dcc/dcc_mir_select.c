@@ -5258,6 +5258,7 @@ retry_selection:
                         mir_cfg_block_count() <= 4)) ||
                      mir_stream_size(spilled_candidate) <
                          mir_stream_size(generated) ||
+                     mir_spilled_cfg_inline_simple_indexed_store_uses() > 0 ||
                      (mir.allocation_spill_count != 0 &&
                       mir_stream_instruction_count(spilled_candidate) <
                           mir_stream_instruction_count(generated)))) {
