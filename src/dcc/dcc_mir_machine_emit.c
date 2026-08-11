@@ -150,6 +150,18 @@ struct MirWideNarrowDivision {
     int is_unsigned;
 };
 
+struct MirAggregateSumField {
+    int offset;
+    int width;
+    int is_unsigned;
+};
+
+struct MirAggregateFieldSum {
+    int parameter_stack_offset;
+    int field_count;
+    struct MirAggregateSumField fields[4];
+};
+
 static void mir_machine_emit_hl_offset(
     FILE *out, int offset, int preserve_bc);
 
@@ -3109,6 +3121,174 @@ static int mir_match_wide_narrow_division(
     return 1;
 }
 
+static int mir_machine_aggregate_sum_leaf(
+    int value, struct MirAggregateFieldSum *plan)
+{
+    const struct MirInsn *conversions[8];
+    const struct MirInsn *load;
+    const struct MirInsn *member;
+    const struct MirInsn *root;
+    int conversion_count = 0;
+    int current_type;
+    int current_width;
+    int is_unsigned;
+    int conversion;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    while ((load = mir_definition(value)) != NULL &&
+           load->opcode == MIR_UNARY) {
+        if (load->immediate != 0 || conversion_count >= 8)
+            return 0;
+        conversions[conversion_count++] = load;
+        value = load->src1;
+    }
+    load = mir_definition(value);
+    if (load == NULL || load->opcode != MIR_LOAD_INDIRECT ||
+        (load->memory_size != 1 && load->memory_size != 2 &&
+         load->memory_size != 4) ||
+        load->bit_width != 0 ||
+        type_ptr_depth(load->type) != 0 ||
+        type_is_float(load->type) ||
+        (load->type & 15) == TYPE_BOOL ||
+        (load->memory_flags & (1 | 8)) != 0)
+        return 0;
+    current_type = load->type;
+    current_width = type_size(current_type);
+    is_unsigned = (current_type & TYPE_UNSIGNED) != 0;
+    for (conversion = conversion_count - 1;
+         conversion >= 0; --conversion) {
+        int target_type = conversions[conversion]->type;
+        int target_width = type_size(target_type);
+
+        if (type_ptr_depth(target_type) != 0 ||
+            type_is_float(target_type) ||
+            (target_type & 15) == TYPE_BOOL ||
+            target_width < current_width ||
+            (target_width != current_width && target_width != 4))
+            return 0;
+        if (target_width == current_width) {
+            current_type = target_type;
+            is_unsigned =
+                (current_type & TYPE_UNSIGNED) != 0;
+        } else {
+            current_type = target_type;
+            current_width = target_width;
+        }
+    }
+    if (current_width != 4 || plan->field_count >= 4)
+        return 0;
+    member = mir_definition(load->src1);
+    root = member != NULL
+        ? mir_definition(member->src1) : NULL;
+    if (member == NULL || member->opcode != MIR_MEMBER_ADDRESS ||
+        member->bit_width != 0 ||
+        (member->memory_flags & (1 | 8)) != 0 ||
+        root == NULL || root->opcode != MIR_ADDRESS ||
+        !mir_scalar_memory_location(
+            root, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        member->immediate < -128 ||
+        member->immediate + load->memory_size - 1 > 127)
+        return 0;
+    if (plan->field_count == 0)
+        plan->parameter_stack_offset = memory_offset - 2;
+    else if (plan->parameter_stack_offset != memory_offset - 2)
+        return 0;
+    if (plan->parameter_stack_offset < 0)
+        return 0;
+    plan->fields[plan->field_count].offset =
+        (int)member->immediate;
+    plan->fields[plan->field_count].width =
+        load->memory_size;
+    plan->fields[plan->field_count].is_unsigned =
+        is_unsigned;
+    ++plan->field_count;
+    return 1;
+}
+
+static int mir_machine_collect_aggregate_sum(
+    int value, struct MirAggregateFieldSum *plan, int depth)
+{
+    const struct MirInsn *definition;
+
+    if (depth > 8)
+        return 0;
+    definition = mir_definition(value);
+    if (definition != NULL && definition->opcode == MIR_BINARY &&
+        definition->immediate == '+' &&
+        type_size(definition->type) == 4 &&
+        !type_is_float(definition->type))
+        return mir_machine_collect_aggregate_sum(
+                   definition->src1, plan, depth + 1) &&
+               mir_machine_collect_aggregate_sum(
+                   definition->src2, plan, depth + 1);
+    return mir_machine_aggregate_sum_leaf(value, plan);
+}
+
+static int mir_match_aggregate_field_sum(
+    struct MirAggregateFieldSum *plan)
+{
+    const struct MirInsn *return_insn = NULL;
+    int parameter_count = 0;
+    int address_count = 0;
+    int member_count = 0;
+    int load_count = 0;
+    int binary_count = 0;
+    int return_count = 0;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla || mir_cfg_block_count() != 1 ||
+        type_size(mir.return_type) != 4 ||
+        type_is_float(mir.return_type))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        switch (insn->opcode) {
+        case MIR_NOP:
+        case MIR_LABEL:
+            break;
+        case MIR_PARAM:
+            ++parameter_count;
+            break;
+        case MIR_ADDRESS:
+            ++address_count;
+            break;
+        case MIR_MEMBER_ADDRESS:
+            ++member_count;
+            break;
+        case MIR_LOAD_INDIRECT:
+            ++load_count;
+            break;
+        case MIR_UNARY:
+            if (insn->immediate != 0)
+                return 0;
+            break;
+        case MIR_BINARY:
+            if (insn->immediate != '+')
+                return 0;
+            ++binary_count;
+            break;
+        case MIR_RETURN:
+            ++return_count;
+            return_insn = insn;
+            break;
+        default:
+            return 0;
+        }
+    }
+    return parameter_count == 1 &&
+           address_count == 3 && member_count == 3 &&
+           load_count == 3 && binary_count == 2 &&
+           return_count == 1 && return_insn != NULL &&
+           mir_machine_collect_aggregate_sum(
+               return_insn->src1, plan, 0) &&
+           plan->field_count == 3;
+}
+
 static int mir_match_nested_row_store(struct MirNestedRowStore *plan)
 {
     const struct MirInsn *value_store = NULL;
@@ -3676,6 +3856,73 @@ static void mir_emit_wide_narrow_division(
     fputs("\tpop bc\n\tpop bc\n\tret\n", out);
 }
 
+static void mir_machine_emit_extension_byte(
+    FILE *out, const struct MirAggregateSumField *field)
+{
+    if (field->is_unsigned) {
+        fputs("\tld c,0\n", out);
+    } else {
+        int nonnegative = new_label();
+        int ready = new_label();
+
+        fprintf(out,
+                "\tbit 7,c\n\tjp z,L%d\n"
+                "\tld c,255\n\tjp L%d\n"
+                "L%d:\n\tld c,0\nL%d:\n",
+                nonnegative, ready, nonnegative, ready);
+    }
+}
+
+static void mir_machine_emit_aggregate_sum_field(
+    FILE *out, const struct MirAggregateSumField *field)
+{
+    int offset = field->offset;
+
+    fputs("\tld c,(iy", out);
+    fprintf(out, "%+d)\n", offset);
+    fputs("\tld a,l\n\tadd a,c\n\tld l,a\n", out);
+    if (field->width >= 2) {
+        fprintf(out, "\tld c,(iy%+d)\n", offset + 1);
+        fputs("\tld a,h\n\tadc a,c\n\tld h,a\n", out);
+    } else {
+        mir_machine_emit_extension_byte(out, field);
+        fputs("\tld a,h\n\tadc a,c\n\tld h,a\n", out);
+    }
+    if (field->width >= 4) {
+        fprintf(out, "\tld c,(iy%+d)\n", offset + 2);
+        fputs("\tld a,e\n\tadc a,c\n\tld e,a\n", out);
+        fprintf(out, "\tld c,(iy%+d)\n", offset + 3);
+        fputs("\tld a,d\n\tadc a,c\n\tld d,a\n", out);
+    } else {
+        if (field->width == 2)
+            mir_machine_emit_extension_byte(out, field);
+        fputs("\tld a,e\n\tadc a,c\n\tld e,a\n"
+              "\tld a,d\n\tadc a,c\n\tld d,a\n", out);
+    }
+}
+
+static void mir_emit_aggregate_field_sum(
+    FILE *out, const struct MirAggregateFieldSum *plan)
+{
+    int field;
+
+    fprintf(out,
+            ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n"
+            "\tpush iy\n",
+            mir.name);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tpush hl\n\tpop iy\n"
+            "\tld hl,0\n\tld de,0\n",
+            plan->parameter_stack_offset + 2);
+    for (field = 0; field < plan->field_count; ++field)
+        mir_machine_emit_aggregate_sum_field(
+            out, &plan->fields[field]);
+    fputs("\tpop iy\n\tret\n", out);
+}
+
 static void mir_emit_nested_row_store(
     FILE *out, const struct MirNestedRowStore *plan)
 {
@@ -3775,6 +4022,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirWideMemberUpdate wide_member_update;
     struct MirSignedMemberProduct signed_member_product;
     struct MirWideNarrowDivision wide_narrow_division;
+    struct MirAggregateFieldSum aggregate_field_sum;
     long constant;
 
     if (mir_match_affine_pointer_constant_return(&constant)) {
@@ -3853,6 +4101,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &wide_narrow_division)) {
         mir_emit_wide_narrow_division(
             out, &wide_narrow_division);
+        return 1;
+    }
+    if (mir_match_aggregate_field_sum(
+            &aggregate_field_sum)) {
+        mir_emit_aggregate_field_sum(
+            out, &aggregate_field_sum);
         return 1;
     }
 
