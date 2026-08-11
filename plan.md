@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `39b5f49`
-  (`fold escaped local identity arrays`).
-- Current candidate coverage: **1932/2185 (88.42%)**.
-- Remaining fallback population: **253 `final-cost-policy`**, with no other
+- Published HEAD before this batch: `97a728b`
+  (`schedule registerized wraparound boolean loops`).
+- Current candidate coverage: **1934/2185 (88.51%)**.
+- Remaining fallback population: **251 `final-cost-policy`**, with no other
   fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -140,6 +140,11 @@ current execution plan and handoff.
   index, and wide live count in IY, DE, BC, and shadow BC. Replacing two signed
   modulo helpers per iteration admits `tptrarr.step` and improves the app
   83.76% peep / 85.30% nopeep (83.72% / 85.29% faster than main).
+- Reduced sine/cosine polynomial kernels now preserve the established FMA
+  chains while using one compact x2 slot; cosine tracks quadrant sign in one
+  byte and applies it without a final float multiply. This admits
+  `ttrig.sinf/cosf` with a small 0.05% dual-mode app gain; float runtime
+  helpers remain the dominant stretch ceiling.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -147,7 +152,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 253 final-cost fallbacks,
+- Current next priority: repeated causes in the 251 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
