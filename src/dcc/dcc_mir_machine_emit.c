@@ -524,7 +524,7 @@ struct MirSliceWordSum {
     int count_offset;
 };
 
-#define MIR_MACHINE_SWITCH_RESULT_LIMIT 16
+#define MIR_MACHINE_SWITCH_RESULT_LIMIT 64
 
 struct MirConstantResultSwitch {
     int parameter_stack_offset;
