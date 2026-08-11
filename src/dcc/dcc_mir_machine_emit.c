@@ -536,6 +536,14 @@ struct MirByteMismatchScan {
     int count;
 };
 
+struct MirVariableByteStepSum {
+    int first_stack_offset;
+    int step_stack_offset;
+    int bound;
+    int double_step_value;
+    int has_double_step;
+};
+
 struct MirConstantLoopCheck {
     struct Sym *function;
     int string_id;
@@ -9071,6 +9079,261 @@ static int mir_match_byte_mismatch_scan(
         mir.insns[41].src1 != mir.insns[40].dst)
         return mir_machine_reject(
             "byte-mismatch-scan", "result");
+    return 1;
+}
+
+static int mir_match_variable_byte_step_sum(
+    struct MirVariableByteStepSum *plan)
+{
+    static const int expected_opcodes[41] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_CONST, MIR_STORE, MIR_NOP,
+        MIR_NOP, MIR_UNARY, MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_STORE,
+        MIR_LABEL, MIR_NOP, MIR_NOP, MIR_PHI, MIR_PHI, MIR_NOP, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP,
+        MIR_UNARY, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP,
+        MIR_NOP, MIR_UNARY, MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_NOP,
+        MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_RETURN
+    };
+    const struct MirInsn *first = &mir.insns[1];
+    const struct MirInsn *step = &mir.insns[2];
+    const struct MirInsn *sum_phi = &mir.insns[15];
+    const struct MirInsn *value_phi = &mir.insns[16];
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 41 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_size(mir.return_type) != 2)
+        return mir_machine_reject(
+            "variable-byte-step-sum", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "variable-byte-step-sum", "opcode");
+    if (type_ptr_depth(first->type) != 0 ||
+        type_size(first->type) != 1 ||
+        (first->type & TYPE_UNSIGNED) == 0 ||
+        type_ptr_depth(step->type) != 0 ||
+        type_size(step->type) != 1 ||
+        (step->type & TYPE_UNSIGNED) == 0 ||
+        !mir_machine_parameter_value_offset(
+            first->dst, &plan->first_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            step->dst, &plan->step_stack_offset))
+        return mir_machine_reject(
+            "variable-byte-step-sum", "parameters");
+    if (!mir_machine_constant_equals(mir.insns[3].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[4]) ||
+        mir.insns[4].memory_size != 2 ||
+        mir.insns[4].src1 != mir.insns[3].dst ||
+        mir.insns[7].immediate != 0 ||
+        mir.insns[7].src1 != first->dst ||
+        mir.insns[8].immediate != 0 ||
+        mir.insns[8].src1 != step->dst ||
+        mir.insns[9].immediate != '+' ||
+        mir.insns[9].src1 != mir.insns[7].dst ||
+        mir.insns[9].src2 != mir.insns[8].dst ||
+        mir.insns[10].immediate != 0 ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        type_size(mir.insns[10].type) != 1 ||
+        !mir_machine_unobservable_local_store(&mir.insns[11]) ||
+        mir.insns[11].memory_size != 1 ||
+        mir.insns[11].src1 != mir.insns[10].dst)
+        return mir_machine_reject(
+            "variable-byte-step-sum", "initializers");
+    if (sum_phi->src1 != mir.insns[3].dst ||
+        sum_phi->src2 != mir.insns[25].dst ||
+        sum_phi->phi_pred1 != mir.insns[0].label ||
+        sum_phi->phi_pred2 != mir.insns[28].label ||
+        value_phi->src1 != mir.insns[10].dst ||
+        value_phi->src2 != mir.insns[34].dst ||
+        value_phi->phi_pred1 != mir.insns[0].label ||
+        value_phi->phi_pred2 != mir.insns[28].label ||
+        type_size(value_phi->type) != 1 ||
+        (value_phi->type & TYPE_UNSIGNED) == 0)
+        return mir_machine_reject(
+            "variable-byte-step-sum", "phis");
+    if (mir.insns[18].immediate <= 0 ||
+        mir.insns[18].immediate > 255 ||
+        mir.insns[19].immediate != 0 ||
+        mir.insns[19].src1 != value_phi->dst ||
+        mir.insns[20].immediate != '<' ||
+        mir.insns[20].src1 != mir.insns[19].dst ||
+        mir.insns[20].src2 != mir.insns[18].dst ||
+        mir.insns[21].src1 != mir.insns[20].dst ||
+        mir.insns[21].label != mir.insns[38].label)
+        return mir_machine_reject(
+            "variable-byte-step-sum", "condition");
+    plan->bound = (int)mir.insns[18].immediate;
+    if (mir.insns[24].immediate != 0 ||
+        mir.insns[24].src1 != value_phi->dst ||
+        mir.insns[25].immediate != '+' ||
+        mir.insns[25].src1 != sum_phi->dst ||
+        mir.insns[25].src2 != mir.insns[24].dst ||
+        mir.insns[27].object != mir.insns[4].object ||
+        mir.insns[27].src1 != mir.insns[25].dst ||
+        mir.insns[31].immediate != 0 ||
+        mir.insns[31].src1 != value_phi->dst ||
+        mir.insns[32].immediate != 0 ||
+        mir.insns[32].src1 != step->dst ||
+        mir.insns[33].immediate != '+' ||
+        mir.insns[33].src1 != mir.insns[31].dst ||
+        mir.insns[33].src2 != mir.insns[32].dst ||
+        mir.insns[34].immediate != 0 ||
+        mir.insns[34].src1 != mir.insns[33].dst ||
+        type_size(mir.insns[34].type) != 1 ||
+        mir.insns[36].object != mir.insns[11].object ||
+        mir.insns[36].src1 != mir.insns[34].dst ||
+        mir.insns[37].label != mir.insns[12].label ||
+        mir.insns[40].src1 != sum_phi->dst)
+        return mir_machine_reject(
+            "variable-byte-step-sum", "body");
+    return 1;
+}
+
+static int mir_match_alias_byte_step_sum(
+    struct MirVariableByteStepSum *plan)
+{
+    static const int expected_opcodes[59] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_ADDRESS, MIR_NOP, MIR_STORE,
+        MIR_CONST, MIR_STORE, MIR_NOP, MIR_NOP, MIR_UNARY, MIR_UNARY,
+        MIR_BINARY, MIR_UNARY, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP,
+        MIR_LOAD, MIR_PHI, MIR_LOAD, MIR_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_LOAD, MIR_UNARY, MIR_BINARY,
+        MIR_NOP, MIR_STORE, MIR_LOAD, MIR_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_LOAD_INDIRECT, MIR_NOP, MIR_UNARY,
+        MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT, MIR_LABEL,
+        MIR_NOP, MIR_LABEL, MIR_LOAD, MIR_NOP, MIR_UNARY, MIR_UNARY,
+        MIR_BINARY, MIR_UNARY, MIR_NOP, MIR_STORE, MIR_JUMP, MIR_LABEL,
+        MIR_NOP, MIR_RETURN
+    };
+    const struct MirInsn *first = &mir.insns[1];
+    const struct MirInsn *step = &mir.insns[2];
+    const struct MirInsn *alias_store = &mir.insns[5];
+    const struct MirInsn *sum_store = &mir.insns[7];
+    const struct MirInsn *value_store = &mir.insns[14];
+    const struct MirInsn *sum_phi = &mir.insns[19];
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 59 || mir_cfg_block_count() != 5 ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_size(mir.return_type) != 2)
+        return mir_machine_reject(
+            "alias-byte-step-sum", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "alias-byte-step-sum", "opcode");
+    if (type_size(first->type) != 1 ||
+        (first->type & TYPE_UNSIGNED) == 0 ||
+        type_size(step->type) != 1 ||
+        (step->type & TYPE_UNSIGNED) == 0 ||
+        !mir_machine_parameter_value_offset(
+            first->dst, &plan->first_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            step->dst, &plan->step_stack_offset))
+        return mir_machine_reject(
+            "alias-byte-step-sum", "parameters");
+    if (mir.insns[3].src1 >= 0 ||
+        !mir_machine_unobservable_local_store(alias_store) ||
+        alias_store->src1 != mir.insns[3].dst ||
+        alias_store->memory_size != 2 ||
+        !mir_machine_constant_equals(mir.insns[6].dst, 0) ||
+        !mir_machine_unobservable_local_store(sum_store) ||
+        sum_store->src1 != mir.insns[6].dst ||
+        sum_store->memory_size != 2 ||
+        mir.insns[10].immediate != 0 ||
+        mir.insns[10].src1 != first->dst ||
+        mir.insns[11].immediate != 0 ||
+        mir.insns[11].src1 != step->dst ||
+        mir.insns[12].immediate != '+' ||
+        mir.insns[12].src1 != mir.insns[10].dst ||
+        mir.insns[12].src2 != mir.insns[11].dst ||
+        mir.insns[13].immediate != 0 ||
+        mir.insns[13].src1 != mir.insns[12].dst ||
+        type_size(mir.insns[13].type) != 1 ||
+        value_store->src1 != mir.insns[13].dst ||
+        value_store->memory_size != 1)
+        return mir_machine_reject(
+            "alias-byte-step-sum", "initializers");
+    if (!mir_machine_same_location(value_store, &mir.insns[18]) ||
+        !mir_machine_same_location(value_store, &mir.insns[20]) ||
+        !mir_machine_same_location(value_store, &mir.insns[26]) ||
+        !mir_machine_same_location(value_store, &mir.insns[31]) ||
+        !mir_machine_same_location(value_store, &mir.insns[47]) ||
+        sum_phi->src1 != mir.insns[6].dst ||
+        sum_phi->src2 != mir.insns[28].dst ||
+        sum_phi->phi_pred1 != mir.insns[0].label ||
+        sum_phi->phi_pred2 != mir.insns[46].label)
+        return mir_machine_reject(
+            "alias-byte-step-sum", "state");
+    if (mir.insns[21].immediate <= 0 ||
+        mir.insns[21].immediate > 255 ||
+        mir.insns[22].immediate != 0 ||
+        mir.insns[22].src1 != mir.insns[20].dst ||
+        mir.insns[23].immediate != '<' ||
+        mir.insns[23].src1 != mir.insns[22].dst ||
+        mir.insns[23].src2 != mir.insns[21].dst ||
+        mir.insns[24].src1 != mir.insns[23].dst ||
+        mir.insns[24].label != mir.insns[56].label)
+        return mir_machine_reject(
+            "alias-byte-step-sum", "condition");
+    plan->bound = (int)mir.insns[21].immediate;
+    if (mir.insns[27].immediate != 0 ||
+        mir.insns[27].src1 != mir.insns[26].dst ||
+        mir.insns[28].immediate != '+' ||
+        mir.insns[28].src1 != sum_phi->dst ||
+        mir.insns[28].src2 != mir.insns[27].dst ||
+        mir.insns[30].object != sum_store->object ||
+        mir.insns[30].src1 != mir.insns[28].dst ||
+        mir.insns[33].immediate != 0 ||
+        mir.insns[33].src1 != mir.insns[31].dst ||
+        mir.insns[34].immediate != TOK_EQ ||
+        mir.insns[34].src1 != mir.insns[33].dst ||
+        mir.insns[34].src2 != mir.insns[32].dst ||
+        mir.insns[35].src1 != mir.insns[34].dst ||
+        mir.insns[35].label != mir.insns[44].label)
+        return mir_machine_reject(
+            "alias-byte-step-sum", "sum-guard");
+    plan->double_step_value = (int)mir.insns[32].immediate;
+    plan->has_double_step = 1;
+    if (!mir_machine_same_location(alias_store, &mir.insns[36]) ||
+        mir.insns[37].src1 != mir.insns[36].dst ||
+        mir.insns[37].memory_size != 1 ||
+        (mir.insns[37].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[39].immediate != 0 ||
+        mir.insns[39].src1 != mir.insns[37].dst ||
+        mir.insns[40].immediate != 0 ||
+        mir.insns[40].src1 != step->dst ||
+        mir.insns[41].immediate != '+' ||
+        mir.insns[41].src1 != mir.insns[39].dst ||
+        mir.insns[41].src2 != mir.insns[40].dst ||
+        mir.insns[42].immediate != 0 ||
+        mir.insns[42].src1 != mir.insns[41].dst ||
+        mir.insns[43].src1 != mir.insns[36].dst ||
+        mir.insns[43].src2 != mir.insns[42].dst ||
+        mir.insns[43].memory_size != 1 ||
+        (mir.insns[43].memory_flags & (1 | 8)) != 0)
+        return mir_machine_reject(
+            "alias-byte-step-sum", "alias-update");
+    if (mir.insns[49].immediate != 0 ||
+        mir.insns[49].src1 != mir.insns[47].dst ||
+        mir.insns[50].immediate != 0 ||
+        mir.insns[50].src1 != step->dst ||
+        mir.insns[51].immediate != '+' ||
+        mir.insns[51].src1 != mir.insns[49].dst ||
+        mir.insns[51].src2 != mir.insns[50].dst ||
+        mir.insns[52].immediate != 0 ||
+        mir.insns[52].src1 != mir.insns[51].dst ||
+        !mir_machine_same_location(value_store, &mir.insns[54]) ||
+        mir.insns[54].src1 != mir.insns[52].dst ||
+        mir.insns[55].label != mir.insns[15].label ||
+        mir.insns[58].src1 != sum_phi->dst)
+        return mir_machine_reject(
+            "alias-byte-step-sum", "step");
     return 1;
 }
 
@@ -18354,6 +18617,35 @@ static void mir_emit_byte_mismatch_scan(
             loop, mismatch, loop, mismatch, plan->count);
 }
 
+static void mir_emit_variable_byte_step_sum(
+    FILE *out, const struct MirVariableByteStepSum *plan)
+{
+    int done = new_label();
+    int loop = new_label();
+    int normal_step = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n\tld a,(hl)\n"
+            "\tld hl,%d\n\tadd hl,sp\n\tld c,(hl)\n"
+            "\tadd a,c\n\tld b,a\n\tld de,0\n"
+            "L%d:\n\tld a,b\n\tcp %d\n\tjp nc,L%d\n"
+            "\tld l,b\n\tld h,0\n\tadd hl,de\n\tex de,hl\n",
+            plan->first_stack_offset,
+            plan->step_stack_offset,
+            loop, plan->bound, done);
+    if (plan->has_double_step)
+        fprintf(out,
+                "\tld a,b\n\tcp %d\n\tjp nz,L%d\n"
+                "\tadd a,c\n\tld b,a\nL%d:\n",
+                plan->double_step_value, normal_step, normal_step);
+    fprintf(out,
+            "\tld a,b\n\tadd a,c\n\tld b,a\n\tjp L%d\n"
+            "L%d:\n\tex de,hl\n\tret\n",
+            loop, done);
+}
+
 static void mir_emit_constant_loop_check(
     FILE *out, const struct MirConstantLoopCheck *plan)
 {
@@ -19204,6 +19496,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirPalindromeScan palindrome_scan;
     struct MirDynamicRowScan dynamic_row_scan;
     struct MirByteMismatchScan byte_mismatch_scan;
+    struct MirVariableByteStepSum variable_byte_step_sum;
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
@@ -19720,6 +20013,14 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &byte_mismatch_scan)) {
         mir_emit_byte_mismatch_scan(
             out, &byte_mismatch_scan);
+        return 1;
+    }
+    if (mir_match_variable_byte_step_sum(
+            &variable_byte_step_sum) ||
+        mir_match_alias_byte_step_sum(
+            &variable_byte_step_sum)) {
+        mir_emit_variable_byte_step_sum(
+            out, &variable_byte_step_sum);
         return 1;
     }
     if (mir_match_constant_loop_check(&constant_loop_check)) {

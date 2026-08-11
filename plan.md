@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `0cc641e`
-  (`schedule float tolerance failures`).
-- Current candidate coverage: **1940/2185 (88.79%)**.
-- Remaining fallback population: **245 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `811ede3`
+  (`schedule global byte check sequences`).
+- Current candidate coverage: **1942/2185 (88.88%)**.
+- Remaining fallback population: **243 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
   fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
@@ -164,6 +164,11 @@ current execution plan and handoff.
   loads to exact symbols/offsets and push check arguments without virtual
   homes. This admits `tbool.check_globals`, improving `tbool` 0.64% peep /
   0.75% nopeep and removing the final homed-backend fallback.
+- Variable-step byte reductions now hold the narrowed induction value in B,
+  its step in C, and the word accumulator in DE. The alias-aware form proves
+  the local pointer cannot escape and folds its conditional extra update.
+  This admits `tpeepal.byte_loop_cache/byte_loop_alias`, improving the app
+  1.38% peep / 1.83% nopeep.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -171,7 +176,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 245 final-cost fallbacks,
+- Current next priority: repeated causes in the 243 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
