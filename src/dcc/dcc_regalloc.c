@@ -199,6 +199,7 @@ int try_speculative_noix_function_body(const char *name, int type,
     int generated_stack_check;
     int implicit_zero_return;
     int exact_mir;
+    int speculation_safe_mir;
     int c;
     int errors_before;
     char *buf;
@@ -255,11 +256,14 @@ int try_speculative_noix_function_body(const char *name, int type,
     emit_sink_restore(&saved_sink);
 
     exact_mir = 0;
+    speculation_safe_mir = 0;
     if (g_diag_error_count == errors_before) {
         buf = dcc_read_stream_text(
             scratch, &size,
             "cannot read speculative no-ix-frame temp file");
         exact_mir = strstr(buf, MIR_EXACT_KERNEL_MARKER) != NULL;
+        speculation_safe_mir =
+            strstr(buf, MIR_SPECULATION_SAFE_MARKER) != NULL;
         free(buf);
         rewind(scratch);
     }
@@ -273,7 +277,18 @@ int try_speculative_noix_function_body(const char *name, int type,
      * function's first version produced by forgetting to reset nulabels
      * (and the rest of the per-function codegen state below) before
      * falling back. */
-    if (g_diag_error_count == errors_before && !tmpfile_unsafe_for_noix(scratch)) {
+    /*
+     * Legacy no-IX emission cannot address parameters across a push because
+     * it has no SP-delta model.  A marked exact MIR kernel is different: its
+     * dedicated emitter owns every push and adjusts later SP-relative loads
+     * explicitly, while the exact marker prevents any legacy register
+     * allocator from rewriting the stream.  A distinct marker narrows this
+     * exception to the audited speculation-safe selector rather than every
+     * existing exact MIR kernel.
+     */
+    if (g_diag_error_count == errors_before &&
+        (speculation_safe_mir ||
+         !tmpfile_unsafe_for_noix(scratch))) {
         check_undefined_user_labels();
         if (exact_mir && getenv("DCC_MIR_SELECT_REPORT") != NULL)
             fprintf(stderr, "; MIR buffered-exact function=%s\n", name);

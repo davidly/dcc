@@ -143,6 +143,13 @@ struct MirSignedMemberProduct {
     unsigned long scale;
 };
 
+struct MirWideNarrowDivision {
+    int wide_stack_offset;
+    int narrow_stack_offset;
+    int operation;
+    int is_unsigned;
+};
+
 static void mir_machine_emit_hl_offset(
     FILE *out, int offset, int preserve_bc);
 
@@ -3004,6 +3011,104 @@ static int mir_match_signed_member_product(
     return 1;
 }
 
+static int mir_match_wide_narrow_division(
+    struct MirWideNarrowDivision *plan)
+{
+    const struct MirInsn *wide_parameter = NULL;
+    const struct MirInsn *narrow_parameter = NULL;
+    const struct MirInsn *widen = NULL;
+    const struct MirInsn *binary = NULL;
+    const struct MirInsn *return_insn = NULL;
+    int parameter_count = 0;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla || mir_cfg_block_count() != 1 ||
+        mir.count != 8 || type_size(mir.return_type) != 4 ||
+        type_is_float(mir.return_type))
+        return mir_machine_reject(
+            "wide-narrow-division", "preflight");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        switch (insn->opcode) {
+        case MIR_NOP:
+        case MIR_LABEL:
+            break;
+        case MIR_PARAM:
+            ++parameter_count;
+            if (type_size(insn->type) == 4)
+                wide_parameter = insn;
+            else if (type_size(insn->type) == 2)
+                narrow_parameter = insn;
+            else
+                return mir_machine_reject(
+                    "wide-narrow-division", "parameter-width");
+            break;
+        case MIR_UNARY:
+            if (widen != NULL)
+                return mir_machine_reject(
+                    "wide-narrow-division", "unary-count");
+            widen = insn;
+            break;
+        case MIR_BINARY:
+            if (binary != NULL)
+                return mir_machine_reject(
+                    "wide-narrow-division", "binary-count");
+            binary = insn;
+            break;
+        case MIR_RETURN:
+            if (return_insn != NULL)
+                return mir_machine_reject(
+                    "wide-narrow-division", "return-count");
+            return_insn = insn;
+            break;
+        default:
+            return mir_machine_reject(
+                "wide-narrow-division", "opcode");
+        }
+    }
+    if (parameter_count != 2 ||
+        wide_parameter == NULL || narrow_parameter == NULL ||
+        widen == NULL || widen->immediate != 0 ||
+        widen->src1 != narrow_parameter->dst ||
+        type_size(widen->type) != 4 ||
+        type_is_float(widen->type) ||
+        ((widen->type & TYPE_UNSIGNED) != 0) !=
+            ((narrow_parameter->type & TYPE_UNSIGNED) != 0) ||
+        binary == NULL ||
+        (binary->immediate != '/' && binary->immediate != '%') ||
+        binary->src1 != wide_parameter->dst ||
+        binary->src2 != widen->dst ||
+        type_size(binary->type) != 4 ||
+        type_is_float(binary->type) ||
+        ((binary->type & TYPE_UNSIGNED) != 0) !=
+            ((wide_parameter->type & TYPE_UNSIGNED) != 0) ||
+        ((binary->type & TYPE_UNSIGNED) != 0) !=
+            ((widen->type & TYPE_UNSIGNED) != 0) ||
+        return_insn == NULL ||
+        return_insn->src1 != binary->dst)
+        return mir_machine_reject(
+            "wide-narrow-division", "shape");
+    if (!mir_machine_wide_parameter_offset(
+            wide_parameter->dst, &plan->wide_stack_offset))
+        return mir_machine_reject(
+            "wide-narrow-division", "wide-parameter");
+    if (!mir_machine_parameter_offset(
+            narrow_parameter->dst, &plan->narrow_stack_offset))
+        return mir_machine_reject(
+            "wide-narrow-division", "narrow-parameter");
+    plan->operation = (int)binary->immediate;
+    plan->is_unsigned =
+        (binary->type & TYPE_UNSIGNED) != 0;
+    if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR machine function=%s "
+                "template=wide-narrow-division accept\n",
+                mir.name);
+    return 1;
+}
+
 static int mir_match_nested_row_store(struct MirNestedRowStore *plan)
 {
     const struct MirInsn *value_store = NULL;
@@ -3540,6 +3645,37 @@ static void mir_emit_signed_member_product(
     fputs("\tpop bc\n\tpop bc\n\tret\n", out);
 }
 
+static void mir_emit_wide_narrow_division(
+    FILE *out, const struct MirWideNarrowDivision *plan)
+{
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tinc hl\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tld l,c\n\tld h,b\n"
+            "\tpush de\n\tpush hl\n",
+            plan->wide_stack_offset);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tld l,c\n\tld h,b\n\tld de,0\n",
+            plan->narrow_stack_offset + 4);
+    if (!plan->is_unsigned) {
+        int extended = new_label();
+
+        fprintf(out,
+                "\tbit 7,h\n\tjp z,L%d\n\tdec de\nL%d:\n",
+                extended, extended);
+    }
+    mir_emit_runtime_call(
+        out, plan->operation == '%'
+                 ? (plan->is_unsigned ? "__lmu" : "__lms")
+                 : (plan->is_unsigned ? "__ldu" : "__lds"));
+    fputs("\tpop bc\n\tpop bc\n\tret\n", out);
+}
+
 static void mir_emit_nested_row_store(
     FILE *out, const struct MirNestedRowStore *plan)
 {
@@ -3612,6 +3748,18 @@ static void mir_emit_indexed_word_sum(
           "\tld l,c\n\tld h,b\n\tadd hl,de\n\tret\n", out);
 }
 
+int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
+{
+    struct MirWideNarrowDivision plan;
+
+    if (!mir_match_wide_narrow_division(&plan))
+        return 0;
+    fprintf(out, "%s\n", MIR_EXACT_KERNEL_MARKER);
+    fprintf(out, "%s\n", MIR_SPECULATION_SAFE_MARKER);
+    mir_emit_wide_narrow_division(out, &plan);
+    return 1;
+}
+
 int mir_try_emit_scheduled_machine_cfg(FILE *out)
 {
     struct MirIndexedWordSum indexed_word_sum;
@@ -3626,6 +3774,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFixedArrayReduction fixed_array_reduction;
     struct MirWideMemberUpdate wide_member_update;
     struct MirSignedMemberProduct signed_member_product;
+    struct MirWideNarrowDivision wide_narrow_division;
     long constant;
 
     if (mir_match_affine_pointer_constant_return(&constant)) {
@@ -3698,6 +3847,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &signed_member_product)) {
         mir_emit_signed_member_product(
             out, &signed_member_product);
+        return 1;
+    }
+    if (mir_match_wide_narrow_division(
+            &wide_narrow_division)) {
+        mir_emit_wide_narrow_division(
+            out, &wide_narrow_division);
         return 1;
     }
 

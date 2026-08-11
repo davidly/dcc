@@ -5167,9 +5167,11 @@ retry_selection:
                 generated_label_id_after = label_id;
             } else {
                 label_id = mir_label_base;
-                emitted = !g_speculative_codegen_active &&
-                    mir_try_selector(
-                        generated, mir_try_emit_scheduled_machine_cfg);
+                emitted = mir_try_selector(
+                    generated,
+                    g_speculative_codegen_active
+                        ? mir_try_emit_speculation_safe_machine_cfg
+                        : mir_try_emit_scheduled_machine_cfg);
                 generated_label_id_after = label_id;
                 if (emitted)
                     selector_name = "scheduled-machine-cfg";
