@@ -188,6 +188,13 @@ struct MirConstantPrints {
     long values[16];
 };
 
+struct MirCallSumPrint {
+    struct Sym *value_functions[4];
+    struct Sym *print_function;
+    int arguments[2];
+    int string_id;
+};
+
 struct MirPointerDifferencePrints {
     struct Sym *function;
     int count;
@@ -855,6 +862,8 @@ static void mir_machine_emit_float_bits(
     FILE *out, unsigned long bits);
 static void mir_machine_emit_global_byte_a(
     FILE *out, struct Sym *symbol, int offset, int is_store);
+static int mir_machine_single_call_argument(
+    const struct MirInsn *call, int *argument);
 
 static int mir_machine_reject(const char *template_name, const char *reason)
 {
@@ -1940,6 +1949,88 @@ static int mir_match_constant_prints(struct MirConstantPrints *plan)
          instruction < mir.count; ++instruction)
         if (mir.insns[instruction].opcode != MIR_NOP)
             return 0;
+    return 1;
+}
+
+static int mir_match_call_sum_print(struct MirCallSumPrint *plan)
+{
+    static const int expected_opcodes[21] = {
+        MIR_LABEL, MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST, MIR_ARG,
+        MIR_CALL, MIR_BINARY, MIR_CALL, MIR_BINARY, MIR_CALL, MIR_BINARY,
+        MIR_NOP, MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_ARG,
+        MIR_CALL, MIR_CONST, MIR_RETURN
+    };
+    static const int call_indices[4] = { 3, 6, 8, 10 };
+    int print_arguments[2];
+    int call_argument;
+    long first_argument;
+    long second_argument;
+    int call;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 21 || mir_cfg_block_count() != 1 ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_size(mir.return_type) != 2)
+        return mir_machine_reject("call-sum-print", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject("call-sum-print", "opcode");
+    if (!mir_machine_constant_value(
+            mir.insns[1].dst, &first_argument, 0) ||
+        !mir_machine_constant_value(
+            mir.insns[4].dst, &second_argument, 0) ||
+        !mir_machine_single_call_argument(
+            &mir.insns[3], &call_argument) ||
+        call_argument != mir.insns[1].dst ||
+        !mir_machine_single_call_argument(
+            &mir.insns[6], &call_argument) ||
+        call_argument != mir.insns[4].dst ||
+        !mir_machine_call_has_no_arguments(&mir.insns[8]) ||
+        !mir_machine_call_has_no_arguments(&mir.insns[10]))
+        return mir_machine_reject("call-sum-print", "arguments");
+    plan->arguments[0] = (int)(first_argument & 0xffffL);
+    plan->arguments[1] = (int)(second_argument & 0xffffL);
+    for (call = 0; call < 4; ++call) {
+        const struct MirInsn *call_insn =
+            &mir.insns[call_indices[call]];
+
+        plan->value_functions[call] =
+            find_global(call_insn->name);
+        if (plan->value_functions[call] == NULL ||
+            !plan->value_functions[call]->is_defined ||
+            plan->value_functions[call]->is_funcptr ||
+            plan->value_functions[call]->is_noreturn ||
+            type_size(call_insn->type) != 2)
+            return mir_machine_reject(
+                "call-sum-print", "value-function");
+    }
+    if (mir.insns[7].immediate != '+' ||
+        mir.insns[7].src1 != mir.insns[3].dst ||
+        mir.insns[7].src2 != mir.insns[6].dst ||
+        mir.insns[9].immediate != '+' ||
+        mir.insns[9].src1 != mir.insns[7].dst ||
+        mir.insns[9].src2 != mir.insns[8].dst ||
+        mir.insns[11].immediate != '+' ||
+        mir.insns[11].src1 != mir.insns[9].dst ||
+        mir.insns[11].src2 != mir.insns[10].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[13]) ||
+        mir.insns[13].src1 != mir.insns[11].dst)
+        return mir_machine_reject("call-sum-print", "sum");
+    if (!mir_machine_two_call_arguments(
+            &mir.insns[18], print_arguments) ||
+        print_arguments[0] != mir.insns[14].dst ||
+        print_arguments[1] != mir.insns[11].dst ||
+        !mir_machine_constant_equals(mir.insns[19].dst, 0) ||
+        mir.insns[20].src1 != mir.insns[19].dst)
+        return mir_machine_reject("call-sum-print", "print");
+    plan->print_function = find_global(mir.insns[18].name);
+    plan->string_id = (int)mir.insns[14].immediate;
+    if (plan->print_function == NULL ||
+        plan->print_function->is_funcptr ||
+        plan->string_id < 0)
+        return mir_machine_reject("call-sum-print", "print-function");
     return 1;
 }
 
@@ -13612,6 +13703,35 @@ static void mir_emit_constant_prints(
     fputs("\tld hl,0\n\tret\n", out);
 }
 
+static void mir_emit_call_sum_print(
+    FILE *out, const struct MirCallSumPrint *plan)
+{
+    int call;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (call = 0; call < 4; ++call) {
+        if (call < 2)
+            fprintf(out, "\tld hl,%d\n\tpush hl\n",
+                    plan->arguments[call]);
+        mir_machine_emit_symbol_call(
+            out, plan->value_functions[call]);
+        if (call < 2)
+            fputs("\tpop bc\n", out);
+        if (call == 0)
+            fputs("\tpush hl\n", out);
+        else {
+            fputs("\tpop de\n\tadd hl,de\n", out);
+            if (call != 3)
+                fputs("\tpush hl\n", out);
+        }
+    }
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    fputs("\tpop bc\n\tpop bc\n\tld hl,0\n\tret\n", out);
+}
+
 static void mir_emit_pointer_difference_prints(
     FILE *out, const struct MirPointerDifferencePrints *plan)
 {
@@ -20397,6 +20517,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirAggregateFieldSum aggregate_field_sum;
     struct MirConstantChecks constant_checks;
     struct MirConstantPrints constant_prints;
+    struct MirCallSumPrint call_sum_print;
     struct MirPointerDifferencePrints pointer_difference_prints;
     struct MirByteComparisonPrint byte_comparison_print;
     struct MirConstantBufferCallPrint constant_buffer_call_print;
@@ -20715,6 +20836,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_constant_prints(&constant_prints)) {
         mir_emit_constant_prints(out, &constant_prints);
+        return 1;
+    }
+    if (mir_match_call_sum_print(&call_sum_print)) {
+        mir_emit_call_sum_print(out, &call_sum_print);
         return 1;
     }
     if (mir_match_pointer_difference_prints(
