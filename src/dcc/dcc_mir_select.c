@@ -5166,6 +5166,18 @@ retry_selection:
                                            mir_try_emit_general_rollout);
                 generated_label_id_after = label_id;
             } else {
+                label_id = mir_label_base;
+                emitted = !g_speculative_codegen_active &&
+                    mir_try_selector(
+                        generated, mir_try_emit_scheduled_machine_cfg);
+                generated_label_id_after = label_id;
+                if (emitted)
+                    selector_name = "scheduled-machine-cfg";
+            }
+            if (!emitted && (emit_filter == NULL ||
+                             emit_filter[0] == 0) &&
+                (general_filter == NULL || general_filter[0] == 0) &&
+                getenv("DCC_MIR_EMIT_GENERAL") == NULL) {
                 /* Phase 8 Item 78/79: mir_try_emit_general_rollout (backed
                  * by mir_try_emit_homed_scalar_dag) was previously
                  * reachable only via the DCC_MIR_EMIT_GENERAL diagnostic

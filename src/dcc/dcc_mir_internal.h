@@ -617,6 +617,7 @@ void mir_forward_immediate_phi_returns(void);
 int mir_phi_return_forwarding_count_value(void);
 void mir_reset_phi_return_forwarding_count(void);
 int mir_try_emit_homed_scalar_cfg(FILE *out);
+int mir_try_emit_scheduled_machine_cfg(FILE *out);
 int mir_homed_cfg_depends_on_unary_not_branch(void);
 int mir_homed_cfg_was_frameless(void);
 int mir_cfg_block_count(void);

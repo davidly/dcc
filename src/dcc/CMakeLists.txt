@@ -59,6 +59,7 @@ set(DCC_SOURCES
     dcc_mir.c               # analysis-only virtual-register MIR prototype
     dcc_mir_emit_common.c
     dcc_mir_homed_cfg.c
+    dcc_mir_machine_emit.c # scheduled Z80 machine-template emission
     dcc_mir_select.c
     dcc_mir_schedule.c      # shadow sparse live-segment scheduler
     dcc_mir_spilled_cfg.c
