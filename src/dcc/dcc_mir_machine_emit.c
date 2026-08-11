@@ -170,6 +170,17 @@ struct MirConstantChecks {
     long expected[16];
 };
 
+struct MirIndexedMemberWrite {
+    struct Sym *root;
+    int root_offset;
+    int pointer_member_offset;
+    int index_member_offset;
+    int stride;
+    int address_adjust;
+    int element_member_offset;
+    int value_stack_offset;
+};
+
 static void mir_machine_emit_hl_offset(
     FILE *out, int offset, int preserve_bc);
 static int mir_machine_named_nonvolatile(
@@ -2583,13 +2594,15 @@ static int mir_match_word_memory_stack_push(
 static int mir_machine_named_nonvolatile(const struct MirInsn *insn)
 {
     int declared;
+    struct Sym *global;
 
     if (insn == NULL || (insn->memory_flags & (1 | 8)) != 0)
         return 0;
     for (declared = 0; declared < mir.declared_count; ++declared)
         if (!strcmp(mir.declared_names[declared], insn->name))
             return !mir.declared_is_volatile[declared];
-    return 0;
+    global = find_global(insn->name);
+    return global != NULL && !global->is_volatile;
 }
 
 static int mir_machine_value_object(int value)
@@ -2788,7 +2801,7 @@ static int mir_match_fixed_array_reduction(
                 return 0;
             break;
         case MIR_STORE:
-            if (!mir_machine_named_nonvolatile(insn))
+            if (!mir_machine_unobservable_local_store(insn))
                 return 0;
             ++store_count;
             break;
@@ -3268,7 +3281,7 @@ static int mir_match_signed_member_product(
             ++load_count;
             break;
         case MIR_STORE:
-            if (!mir_machine_named_nonvolatile(insn))
+            if (!mir_machine_unobservable_local_store(insn))
                 return 0;
             ++store_count;
             break;
@@ -3600,6 +3613,180 @@ static int mir_match_aggregate_field_sum(
            plan->field_count == 3;
 }
 
+static int mir_match_indexed_member_write(
+    struct MirIndexedMemberWrite *plan)
+{
+    const struct MirInsn *store_indirect = NULL;
+    const struct MirInsn *member;
+    const struct MirInsn *local_load;
+    const struct MirInsn *address;
+    const struct MirInsn *addition;
+    const struct MirInsn *scaled;
+    const struct MirInsn *pointer_load;
+    const struct MirInsn *index_load;
+    struct MirStateMember pointer_member;
+    struct MirStateMember index_member;
+    long adjust = 0;
+    long stride;
+    int parameter_count = 0;
+    int load_count = 0;
+    int store_count = 0;
+    int member_count = 0;
+    int load_indirect_count = 0;
+    int binary_count = 0;
+    int store_indirect_count = 0;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla || mir_cfg_block_count() != 1 ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return mir_machine_reject(
+            "indexed-member-write", "preflight");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        switch (insn->opcode) {
+        case MIR_NOP:
+        case MIR_LABEL:
+        case MIR_CONST:
+            break;
+        case MIR_PARAM:
+            ++parameter_count;
+            break;
+        case MIR_LOAD:
+            if (!mir_machine_named_nonvolatile(insn))
+                return mir_machine_reject(
+                    "indexed-member-write", "load");
+            ++load_count;
+            break;
+        case MIR_STORE:
+            if (!mir_machine_unobservable_local_store(insn))
+                return mir_machine_reject(
+                    "indexed-member-write", "store");
+            ++store_count;
+            break;
+        case MIR_MEMBER_ADDRESS:
+            if (insn->bit_width != 0 ||
+                (insn->memory_flags & (1 | 8)) != 0)
+                return mir_machine_reject(
+                    "indexed-member-write", "member");
+            ++member_count;
+            break;
+        case MIR_LOAD_INDIRECT:
+            if (insn->memory_size != 2 ||
+                insn->bit_width != 0 ||
+                (insn->memory_flags & (1 | 8)) != 0)
+                return mir_machine_reject(
+                    "indexed-member-write", "load-indirect");
+            ++load_indirect_count;
+            break;
+        case MIR_BINARY:
+            ++binary_count;
+            break;
+        case MIR_STORE_INDIRECT:
+            if (insn->memory_size != 2 ||
+                insn->bit_width != 0 ||
+                (insn->memory_flags & (1 | 8)) != 0)
+                return mir_machine_reject(
+                    "indexed-member-write", "store-indirect");
+            ++store_indirect_count;
+            store_indirect = insn;
+            break;
+        default:
+            return mir_machine_reject(
+                "indexed-member-write", "opcode");
+        }
+    }
+    if (parameter_count != 1 || load_count != 3 ||
+        store_count != 1 || member_count != 3 ||
+        load_indirect_count != 2 ||
+        (binary_count != 2 && binary_count != 4) ||
+        store_indirect_count != 1 || store_indirect == NULL)
+        return mir_machine_reject(
+            "indexed-member-write", "counts");
+    member = mir_definition(store_indirect->src1);
+    local_load = member != NULL
+        ? mir_definition(member->src1) : NULL;
+    address = local_load != NULL
+        ? mir_machine_resolve_local_alias(local_load->dst) : NULL;
+    if (member == NULL || member->opcode != MIR_MEMBER_ADDRESS ||
+        local_load == NULL || local_load->opcode != MIR_LOAD ||
+        address == NULL)
+        return mir_machine_reject(
+            "indexed-member-write", "destination");
+    if (address->opcode == MIR_BINARY &&
+        address->immediate == '-') {
+        if (binary_count != 4)
+            return 0;
+        if (!mir_machine_constant_value(
+                address->src2, &adjust, 0) ||
+            adjust < 0 || adjust > 32767)
+            return 0;
+        addition = mir_definition(address->src1);
+    } else {
+        if (binary_count != 2)
+            return 0;
+        addition = address;
+    }
+    if (addition == NULL || addition->opcode != MIR_BINARY ||
+        addition->immediate != '+')
+        return mir_machine_reject(
+            "indexed-member-write", "addition");
+    pointer_load = mir_definition(addition->src1);
+    scaled = mir_definition(addition->src2);
+    if (pointer_load == NULL ||
+        pointer_load->opcode != MIR_LOAD_INDIRECT ||
+        scaled == NULL || scaled->opcode != MIR_BINARY ||
+        scaled->immediate != '*') {
+        pointer_load = mir_definition(addition->src2);
+        scaled = mir_definition(addition->src1);
+    }
+    if (pointer_load == NULL ||
+        pointer_load->opcode != MIR_LOAD_INDIRECT ||
+        scaled == NULL || scaled->opcode != MIR_BINARY ||
+        scaled->immediate != '*' ||
+        !mir_machine_constant_value(
+            scaled->src2, &stride, 0)) {
+        const struct MirInsn *constant =
+            scaled != NULL ? mir_definition(scaled->src1) : NULL;
+        if (constant == NULL || constant->opcode != MIR_CONST ||
+            !mir_machine_constant_value(
+                scaled->src1, &stride, 0))
+            return mir_machine_reject(
+                "indexed-member-write", "scale");
+        index_load = mir_definition(scaled->src2);
+    } else {
+        index_load = mir_definition(scaled->src1);
+    }
+    if (stride <= 0 || stride > 32767 ||
+        index_load == NULL ||
+        index_load->opcode != MIR_LOAD_INDIRECT ||
+        !mir_machine_state_member_address(
+            pointer_load->src1, &pointer_member) ||
+        !mir_machine_state_member_address(
+            index_load->src1, &index_member) ||
+        pointer_member.root != index_member.root ||
+        pointer_member.root_offset !=
+            index_member.root_offset ||
+        !mir_machine_parameter_value_offset(
+            store_indirect->src2,
+            &plan->value_stack_offset))
+        return mir_machine_reject(
+            "indexed-member-write", "components");
+    plan->root = pointer_member.root;
+    plan->root_offset =
+        pointer_member.root_offset;
+    plan->pointer_member_offset =
+        pointer_member.member_offset;
+    plan->index_member_offset =
+        index_member.member_offset;
+    plan->stride = (int)stride;
+    plan->address_adjust = (int)adjust;
+    plan->element_member_offset =
+        (int)member->immediate;
+    return 1;
+}
+
 static int mir_match_nested_row_store(struct MirNestedRowStore *plan)
 {
     const struct MirInsn *value_store = NULL;
@@ -3627,12 +3814,20 @@ static int mir_match_nested_row_store(struct MirNestedRowStore *plan)
         case MIR_PARAM:
         case MIR_CONST:
         case MIR_ADDRESS:
-        case MIR_LOAD:
-        case MIR_STORE:
         case MIR_MEMBER_ADDRESS:
         case MIR_LOAD_INDIRECT:
         case MIR_INDEX_ADDRESS:
         case MIR_BINARY:
+            break;
+        case MIR_LOAD:
+            if (!mir_machine_named_nonvolatile(insn))
+                return mir_machine_reject(
+                    "nested-row-store", "load");
+            break;
+        case MIR_STORE:
+            if (!mir_machine_unobservable_local_store(insn))
+                return mir_machine_reject(
+                    "nested-row-store", "store");
             break;
         case MIR_STORE_INDIRECT:
             if (++store_count > 2)
@@ -4234,6 +4429,37 @@ static void mir_emit_aggregate_field_sum(
     fputs("\tpop iy\n\tret\n", out);
 }
 
+static void mir_emit_indexed_member_write(
+    FILE *out, const struct MirIndexedMemberWrite *plan)
+{
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_word(
+        out, plan->root, plan->root_offset);
+    fputs("\tld c,l\n\tld b,h\n"
+          "\tld l,c\n\tld h,b\n", out);
+    mir_machine_emit_hl_offset(
+        out, plan->pointer_member_offset, 1);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tpush de\n\tld l,c\n\tld h,b\n", out);
+    mir_machine_emit_hl_offset(
+        out, plan->index_member_offset, 0);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tld l,e\n\tld h,d\n", out);
+    mir_emit_mul_hl_const(out, (unsigned long)plan->stride);
+    fputs("\tpop de\n\tadd hl,de\n", out);
+    mir_machine_emit_hl_offset(
+        out, plan->element_member_offset -
+             plan->address_adjust, 0);
+    fputs("\tpush hl\n", out);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tpop hl\n\tld (hl),e\n\tinc hl\n"
+            "\tld (hl),d\n\tret\n",
+            plan->value_stack_offset + 2);
+}
+
 static void mir_emit_nested_row_store(
     FILE *out, const struct MirNestedRowStore *plan)
 {
@@ -4308,13 +4534,20 @@ static void mir_emit_indexed_word_sum(
 
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
-    struct MirWideNarrowDivision plan;
+    struct MirWideNarrowDivision division;
+    struct MirIndexedMemberWrite write;
 
-    if (!mir_match_wide_narrow_division(&plan))
+    if (mir_match_wide_narrow_division(&division)) {
+        fprintf(out, "%s\n", MIR_EXACT_KERNEL_MARKER);
+        fprintf(out, "%s\n", MIR_SPECULATION_SAFE_MARKER);
+        mir_emit_wide_narrow_division(out, &division);
+        return 1;
+    }
+    if (!mir_match_indexed_member_write(&write))
         return 0;
     fprintf(out, "%s\n", MIR_EXACT_KERNEL_MARKER);
     fprintf(out, "%s\n", MIR_SPECULATION_SAFE_MARKER);
-    mir_emit_wide_narrow_division(out, &plan);
+    mir_emit_indexed_member_write(out, &write);
     return 1;
 }
 
@@ -4335,6 +4568,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirWideNarrowDivision wide_narrow_division;
     struct MirAggregateFieldSum aggregate_field_sum;
     struct MirConstantChecks constant_checks;
+    struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
     if (mir_match_affine_pointer_constant_return(&constant)) {
@@ -4423,6 +4657,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_constant_checks(&constant_checks)) {
         mir_emit_constant_checks(out, &constant_checks);
+        return 1;
+    }
+    if (mir_match_indexed_member_write(
+            &indexed_member_write)) {
+        mir_emit_indexed_member_write(
+            out, &indexed_member_write);
         return 1;
     }
 
