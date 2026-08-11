@@ -186,6 +186,14 @@ struct MirPointerDifferencePrints {
     long right_constant[16];
 };
 
+struct MirByteComparisonPrint {
+    struct Sym *function;
+    int left_stack_offset;
+    int right_stack_offset;
+    int is_unsigned;
+    int string_id;
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -217,6 +225,8 @@ static int mir_machine_named_nonvolatile(
     const struct MirInsn *insn);
 static int mir_machine_constant_equals(
     int value, long expected);
+static int mir_machine_parameter_value_offset(
+    int value, int *stack_offset);
 static void mir_machine_emit_global_address_de(
     FILE *out, struct Sym *symbol, int offset);
 static void mir_machine_emit_global_word(
@@ -945,6 +955,31 @@ static int mir_machine_two_call_arguments(
     return count == 2;
 }
 
+static int mir_machine_six_call_arguments(
+    const struct MirInsn *call, int arguments[6])
+{
+    int count = 0;
+    int instruction;
+    int argument;
+
+    for (argument = 0; argument < 6; ++argument)
+        arguments[argument] = -1;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *arg = &mir.insns[instruction];
+        int index;
+
+        if (arg->opcode != MIR_ARG ||
+            arg->secondary_offset != call->secondary_offset)
+            continue;
+        index = (int)arg->immediate;
+        if (index < 0 || index >= 6 || arguments[index] >= 0)
+            return 0;
+        arguments[index] = arg->src1;
+        ++count;
+    }
+    return count == 6;
+}
+
 static int mir_match_constant_checks(struct MirConstantChecks *plan)
 {
     int instruction;
@@ -1243,6 +1278,186 @@ static int mir_match_pointer_difference_prints(
     return 1;
 }
 
+static int mir_machine_comparison_parameter(
+    int value, int *parameter_value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    const struct MirInsn *conversions[8];
+    int conversion_count = 0;
+    int current_type;
+    int conversion;
+
+    while (definition != NULL &&
+           definition->opcode == MIR_UNARY &&
+           definition->immediate == 0) {
+        if (conversion_count >= 8)
+            return 0;
+        conversions[conversion_count++] = definition;
+        value = definition->src1;
+        definition = mir_definition(value);
+    }
+    if (definition == NULL || definition->opcode != MIR_PARAM ||
+        type_size(definition->type) != 1 ||
+        type_ptr_depth(definition->type) != 0 ||
+        type_is_float(definition->type) ||
+        (definition->type & 15) == TYPE_BOOL)
+        return 0;
+    current_type = definition->type;
+    for (conversion = conversion_count - 1;
+         conversion >= 0; --conversion) {
+        int target_type = conversions[conversion]->type;
+        int source_width = type_size(current_type);
+        int target_width = type_size(target_type);
+
+        if (type_ptr_depth(target_type) != 0 ||
+            type_is_float(target_type) ||
+            (target_type & 15) == TYPE_BOOL)
+            return 0;
+        if (source_width == 1 && target_width == 1) {
+            if (target_type != current_type)
+                return 0;
+        } else if (source_width == 1 && target_width == 2) {
+            if ((target_type & 15) != TYPE_INT ||
+                (target_type & TYPE_UNSIGNED) != 0)
+                return 0;
+        } else if (source_width == 2 && target_width == 2) {
+            if (target_type != current_type)
+                return 0;
+        } else {
+            return 0;
+        }
+        current_type = target_type;
+    }
+    if (type_size(current_type) != 2 ||
+        (current_type & TYPE_UNSIGNED) != 0)
+        return 0;
+    *parameter_value = definition->dst;
+    return 1;
+}
+
+static int mir_machine_match_comparison_argument(
+    int value, int operation, int left_parameter,
+    int right_parameter)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int left;
+    int right;
+
+    while (definition != NULL &&
+           definition->opcode == MIR_UNARY &&
+           definition->immediate == 0) {
+        if (type_ptr_depth(definition->type) != 0 ||
+            type_is_float(definition->type) ||
+            type_size(definition->type) > 2)
+            return 0;
+        value = definition->src1;
+        definition = mir_definition(value);
+    }
+    return definition != NULL &&
+           definition->opcode == MIR_BINARY &&
+           definition->immediate == operation &&
+           mir_machine_comparison_parameter(
+               definition->src1, &left) &&
+           mir_machine_comparison_parameter(
+               definition->src2, &right) &&
+           left == left_parameter && right == right_parameter;
+}
+
+static int mir_match_byte_comparison_print(
+    struct MirByteComparisonPrint *plan)
+{
+    const struct MirInsn *parameters[2] = { NULL, NULL };
+    const struct MirInsn *call = NULL;
+    int parameter_count = 0;
+    int call_count = 0;
+    int store_count = 0;
+    int binary_count = 0;
+    int instruction;
+    int arguments[6];
+    const struct MirInsn *string;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla || mir_cfg_block_count() != 1 ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        switch (insn->opcode) {
+        case MIR_NOP:
+        case MIR_LABEL:
+        case MIR_STRING_ADDRESS:
+        case MIR_ARG:
+        case MIR_UNARY:
+            break;
+        case MIR_PARAM:
+            if (parameter_count >= 2 ||
+                type_size(insn->type) != 1 ||
+                type_is_float(insn->type) ||
+                type_ptr_depth(insn->type) != 0 ||
+                (insn->type & 15) == TYPE_BOOL)
+                return 0;
+            parameters[parameter_count++] = insn;
+            break;
+        case MIR_BINARY:
+            ++binary_count;
+            break;
+        case MIR_STORE:
+            if (!mir_machine_unobservable_local_store(insn))
+                return 0;
+            ++store_count;
+            break;
+        case MIR_CALL:
+            if (++call_count != 1 ||
+                strcmp(insn->name, "printf") ||
+                (insn->memory_flags &
+                 MIR_CALL_FLAG_FORMAT_RUNTIME) != 0)
+                return 0;
+            call = insn;
+            break;
+        default:
+            return 0;
+        }
+    }
+    if (parameter_count != 2 || binary_count != 5 ||
+        store_count != 5 || call_count != 1 || call == NULL ||
+        ((parameters[0]->type & TYPE_UNSIGNED) != 0) !=
+            ((parameters[1]->type & TYPE_UNSIGNED) != 0) ||
+        !mir_machine_six_call_arguments(call, arguments))
+        return 0;
+    string = mir_definition(arguments[0]);
+    plan->function = find_global(call->name);
+    if (string == NULL || string->opcode != MIR_STRING_ADDRESS ||
+        plan->function == NULL ||
+        (call->base_name[0] != 0 &&
+         strcmp(call->base_name,
+                asm_name_for(sym_asm_name(plan->function)))) ||
+        !mir_machine_match_comparison_argument(
+            arguments[1], '<', parameters[0]->dst,
+            parameters[1]->dst) ||
+        !mir_machine_match_comparison_argument(
+            arguments[2], TOK_LE, parameters[0]->dst,
+            parameters[1]->dst) ||
+        !mir_machine_match_comparison_argument(
+            arguments[3], TOK_EQ, parameters[0]->dst,
+            parameters[1]->dst) ||
+        !mir_machine_match_comparison_argument(
+            arguments[4], TOK_GE, parameters[0]->dst,
+            parameters[1]->dst) ||
+        !mir_machine_match_comparison_argument(
+            arguments[5], '>', parameters[0]->dst,
+            parameters[1]->dst) ||
+        !mir_machine_parameter_value_offset(
+            parameters[0]->dst, &plan->left_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            parameters[1]->dst, &plan->right_stack_offset))
+        return 0;
+    plan->is_unsigned =
+        (parameters[0]->type & TYPE_UNSIGNED) != 0;
+    plan->string_id = (int)string->immediate;
+    return plan->function != NULL;
+}
+
 static int mir_machine_flat_load(
     int value, int *stack_offset, long *offset,
     int *width, int *is_unsigned)
@@ -1440,6 +1655,69 @@ static void mir_emit_pointer_difference_prints(
         fputs("\tpop bc\n\tpop bc\n", out);
     }
     fputs("\tld hl,0\n\tret\n", out);
+}
+
+static void mir_machine_emit_byte_comparison_push(
+    FILE *out, const struct MirByteComparisonPrint *plan,
+    int operation, int swap, int pushed_words)
+{
+    int left_offset = swap
+        ? plan->right_stack_offset : plan->left_stack_offset;
+    int right_offset = swap
+        ? plan->left_stack_offset : plan->right_stack_offset;
+    int true_label = new_label();
+    int end_label = new_label();
+
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n\tld c,(hl)\n"
+            "\tld hl,%d\n\tadd hl,sp\n\tld e,(hl)\n",
+            left_offset + pushed_words * 2,
+            right_offset + pushed_words * 2);
+    if (plan->is_unsigned) {
+        fputs("\tld b,0\n\tld d,0\n", out);
+    } else {
+        fputs("\tld a,c\n\trlca\n\tsbc a,a\n\tld b,a\n"
+              "\tld a,e\n\trlca\n\tsbc a,a\n\tld d,a\n", out);
+    }
+    if (operation == TOK_EQ) {
+        fputs("\tld a,c\n\txor e\n\tld l,a\n"
+              "\tld a,b\n\txor d\n\tor l\n", out);
+        fprintf(out, "\tjp z,L%d\n", true_label);
+    } else {
+        if (!plan->is_unsigned)
+            fputs("\tld a,b\n\txor 128\n\tld b,a\n"
+                  "\tld a,d\n\txor 128\n\tld d,a\n", out);
+        fputs("\tld a,c\n\tsub e\n\tld a,b\n\tsbc a,d\n", out);
+        fprintf(out, operation == '<'
+                    ? "\tjp c,L%d\n" : "\tjp nc,L%d\n",
+                true_label);
+    }
+    fprintf(out,
+            "\tld hl,0\n\tjp L%d\n"
+            "L%d:\n\tld hl,1\nL%d:\n\tpush hl\n",
+            end_label, true_label, end_label);
+}
+
+static void mir_emit_byte_comparison_print(
+    FILE *out, const struct MirByteComparisonPrint *plan)
+{
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_byte_comparison_push(
+        out, plan, '<', 1, 0);
+    mir_machine_emit_byte_comparison_push(
+        out, plan, TOK_GE, 0, 1);
+    mir_machine_emit_byte_comparison_push(
+        out, plan, TOK_EQ, 0, 2);
+    mir_machine_emit_byte_comparison_push(
+        out, plan, TOK_GE, 1, 3);
+    mir_machine_emit_byte_comparison_push(
+        out, plan, '<', 0, 4);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->string_id);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tpop bc\n\tpop bc\n\tpop bc\n\tret\n", out);
 }
 
 static void mir_emit_flat_array_checks(
@@ -5263,6 +5541,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantChecks constant_checks;
     struct MirConstantPrints constant_prints;
     struct MirPointerDifferencePrints pointer_difference_prints;
+    struct MirByteComparisonPrint byte_comparison_print;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -5374,6 +5653,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &pointer_difference_prints)) {
         mir_emit_pointer_difference_prints(
             out, &pointer_difference_prints);
+        return 1;
+    }
+    if (mir_match_byte_comparison_print(
+            &byte_comparison_print)) {
+        mir_emit_byte_comparison_print(
+            out, &byte_comparison_print);
         return 1;
     }
     if (mir_match_indexed_member_write(
