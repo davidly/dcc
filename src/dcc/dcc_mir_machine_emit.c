@@ -170,6 +170,22 @@ struct MirConstantChecks {
     long expected[16];
 };
 
+struct MirConstantPrints {
+    struct Sym *function;
+    int count;
+    int strings[16];
+    long values[16];
+};
+
+struct MirPointerDifferencePrints {
+    struct Sym *function;
+    int count;
+    int strings[16];
+    struct Sym *left[16];
+    struct Sym *right[16];
+    long right_constant[16];
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -199,6 +215,12 @@ static void mir_machine_emit_hl_offset(
     FILE *out, int offset, int preserve_bc);
 static int mir_machine_named_nonvolatile(
     const struct MirInsn *insn);
+static int mir_machine_constant_equals(
+    int value, long expected);
+static void mir_machine_emit_global_address_de(
+    FILE *out, struct Sym *symbol, int offset);
+static void mir_machine_emit_global_word(
+    FILE *out, struct Sym *symbol, int offset);
 
 static int mir_machine_reject(const char *template_name, const char *reason)
 {
@@ -900,6 +922,29 @@ static int mir_machine_three_call_arguments(
     return count == 3;
 }
 
+static int mir_machine_two_call_arguments(
+    const struct MirInsn *call, int arguments[2])
+{
+    int count = 0;
+    int instruction;
+
+    arguments[0] = arguments[1] = -1;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *arg = &mir.insns[instruction];
+        int index;
+
+        if (arg->opcode != MIR_ARG ||
+            arg->secondary_offset != call->secondary_offset)
+            continue;
+        index = (int)arg->immediate;
+        if (index < 0 || index >= 2 || arguments[index] >= 0)
+            return 0;
+        arguments[index] = arg->src1;
+        ++count;
+    }
+    return count == 2;
+}
+
 static int mir_match_constant_checks(struct MirConstantChecks *plan)
 {
     int instruction;
@@ -990,6 +1035,212 @@ static int mir_match_constant_checks(struct MirConstantChecks *plan)
         }
     }
     return plan->count > 0 && plan->function != NULL;
+}
+
+static int mir_match_constant_prints(struct MirConstantPrints *plan)
+{
+    int instruction;
+    int return_count = 0;
+    int return_position = -1;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla || mir_cfg_block_count() != 1 ||
+        type_size(mir.return_type) != 2)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        switch (insn->opcode) {
+        case MIR_NOP:
+        case MIR_LABEL:
+        case MIR_CONST:
+        case MIR_STRING_ADDRESS:
+        case MIR_ADDRESS:
+        case MIR_UNARY:
+        case MIR_BINARY:
+        case MIR_INDEX_ADDRESS:
+        case MIR_ARG:
+            break;
+        case MIR_LOAD:
+            if (!mir_machine_named_nonvolatile(insn))
+                return 0;
+            break;
+        case MIR_STORE:
+            if (!mir_machine_unobservable_local_store(insn))
+                return 0;
+            break;
+        case MIR_CALL:
+            {
+                int arguments[2];
+                const struct MirInsn *string;
+                const struct MirInsn *numeric;
+                struct MirMachineForm value;
+                struct Sym *function;
+
+                if (plan->count >= 16 ||
+                    !mir_machine_two_call_arguments(
+                        insn, arguments))
+                    return 0;
+                string = mir_definition(arguments[0]);
+                numeric = mir_definition(arguments[1]);
+                function = find_global(insn->name);
+                if (string == NULL ||
+                    string->opcode != MIR_STRING_ADDRESS ||
+                    numeric == NULL ||
+                    type_size(numeric->type) != 2 ||
+                    type_is_float(numeric->type) ||
+                    strcmp(insn->name, "printf") ||
+                    (insn->memory_flags &
+                     MIR_CALL_FLAG_FORMAT_RUNTIME) != 0 ||
+                    function == NULL ||
+                    (plan->function != NULL &&
+                     plan->function != function) ||
+                    !mir_machine_pointer_form(
+                        arguments[1], instruction, &value, 0) ||
+                    value.kind != MIR_MACHINE_FORM_INTEGER)
+                    return 0;
+                plan->function = function;
+                plan->strings[plan->count] =
+                    (int)string->immediate;
+                plan->values[plan->count] =
+                    value.value & 0xffffL;
+                ++plan->count;
+            }
+            break;
+        case MIR_RETURN:
+            if (++return_count != 1 ||
+                !mir_machine_constant_equals(
+                    insn->src1, 0))
+                return 0;
+            return_position = instruction;
+            break;
+        default:
+            return 0;
+        }
+    }
+    if (plan->count == 0 || plan->function == NULL ||
+        return_count != 1)
+        return 0;
+    for (instruction = return_position + 1;
+         instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != MIR_NOP)
+            return 0;
+    return 1;
+}
+
+static int mir_match_pointer_difference_prints(
+    struct MirPointerDifferencePrints *plan)
+{
+    int instruction;
+    int return_count = 0;
+    int return_position = -1;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla || mir_cfg_block_count() != 1 ||
+        type_size(mir.return_type) != 2)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        switch (insn->opcode) {
+        case MIR_NOP:
+        case MIR_LABEL:
+        case MIR_CONST:
+        case MIR_STRING_ADDRESS:
+        case MIR_ADDRESS:
+        case MIR_ARG:
+            break;
+        case MIR_LOAD:
+            if (!mir_machine_named_nonvolatile(insn))
+                return 0;
+            break;
+        case MIR_BINARY:
+            if (insn->immediate != '-' ||
+                type_size(insn->type) != 2)
+                return 0;
+            break;
+        case MIR_CALL:
+            {
+                int arguments[2];
+                const struct MirInsn *string;
+                const struct MirInsn *difference;
+                const struct MirInsn *left;
+                const struct MirInsn *right;
+                struct Sym *function;
+                struct Sym *left_symbol;
+                struct Sym *right_symbol = NULL;
+                long right_constant = 0;
+
+                if (plan->count >= 16 ||
+                    !mir_machine_two_call_arguments(
+                        insn, arguments))
+                    return 0;
+                string = mir_definition(arguments[0]);
+                difference = mir_definition(arguments[1]);
+                function = find_global(insn->name);
+                if (string == NULL ||
+                    string->opcode != MIR_STRING_ADDRESS ||
+                    difference == NULL ||
+                    difference->opcode != MIR_BINARY ||
+                    difference->immediate != '-' ||
+                    type_size(difference->type) != 2 ||
+                    strcmp(insn->name, "printf") ||
+                    (insn->memory_flags &
+                     MIR_CALL_FLAG_FORMAT_RUNTIME) != 0 ||
+                    function == NULL ||
+                    (plan->function != NULL &&
+                     plan->function != function))
+                    return 0;
+                left = mir_definition(difference->src1);
+                right = mir_definition(difference->src2);
+                left_symbol = left != NULL &&
+                              left->opcode == MIR_LOAD
+                    ? find_global(left->name) : NULL;
+                if (left_symbol == NULL ||
+                    left_symbol->is_volatile ||
+                    type_size(left_symbol->type) != 2)
+                    return 0;
+                if (right != NULL &&
+                    right->opcode == MIR_ADDRESS) {
+                    right_symbol = find_global(right->name);
+                    if (right_symbol == NULL)
+                        return 0;
+                } else if (right == NULL ||
+                           right->opcode != MIR_CONST ||
+                           type_size(right->type) != 2) {
+                    return 0;
+                } else {
+                    right_constant =
+                        right->immediate & 0xffffL;
+                }
+                plan->function = function;
+                plan->strings[plan->count] =
+                    (int)string->immediate;
+                plan->left[plan->count] = left_symbol;
+                plan->right[plan->count] = right_symbol;
+                plan->right_constant[plan->count] =
+                    right_constant;
+                ++plan->count;
+            }
+            break;
+        case MIR_RETURN:
+            if (++return_count != 1 ||
+                !mir_machine_constant_equals(insn->src1, 0))
+                return 0;
+            return_position = instruction;
+            break;
+        default:
+            return 0;
+        }
+    }
+    if (plan->count == 0 || plan->function == NULL ||
+        return_count != 1)
+        return 0;
+    for (instruction = return_position + 1;
+         instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != MIR_NOP)
+            return 0;
+    return 1;
 }
 
 static int mir_machine_flat_load(
@@ -1146,6 +1397,49 @@ static void mir_emit_constant_checks(
         fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
     }
     fputs("\tret\n", out);
+}
+
+static void mir_emit_constant_prints(
+    FILE *out, const struct MirConstantPrints *plan)
+{
+    int call;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (call = 0; call < plan->count; ++call) {
+        fprintf(out,
+                "\tld hl,%ld\n\tpush hl\n"
+                "\tld hl,S%d\n\tpush hl\n",
+                plan->values[call], plan->strings[call]);
+        mir_machine_emit_symbol_call(out, plan->function);
+        fputs("\tpop bc\n\tpop bc\n", out);
+    }
+    fputs("\tld hl,0\n\tret\n", out);
+}
+
+static void mir_emit_pointer_difference_prints(
+    FILE *out, const struct MirPointerDifferencePrints *plan)
+{
+    int call;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (call = 0; call < plan->count; ++call) {
+        mir_machine_emit_global_word(
+            out, plan->left[call], 0);
+        if (plan->right[call] != NULL)
+            mir_machine_emit_global_address_de(
+                out, plan->right[call], 0);
+        else
+            fprintf(out, "\tld de,%ld\n",
+                    plan->right_constant[call]);
+        fputs("\tor a\n\tsbc hl,de\n\tpush hl\n", out);
+        fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+                plan->strings[call]);
+        mir_machine_emit_symbol_call(out, plan->function);
+        fputs("\tpop bc\n\tpop bc\n", out);
+    }
+    fputs("\tld hl,0\n\tret\n", out);
 }
 
 static void mir_emit_flat_array_checks(
@@ -4967,6 +5261,8 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirWideNarrowDivision wide_narrow_division;
     struct MirAggregateFieldSum aggregate_field_sum;
     struct MirConstantChecks constant_checks;
+    struct MirConstantPrints constant_prints;
+    struct MirPointerDifferencePrints pointer_difference_prints;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -5068,6 +5364,16 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_constant_checks(&constant_checks)) {
         mir_emit_constant_checks(out, &constant_checks);
+        return 1;
+    }
+    if (mir_match_constant_prints(&constant_prints)) {
+        mir_emit_constant_prints(out, &constant_prints);
+        return 1;
+    }
+    if (mir_match_pointer_difference_prints(
+            &pointer_difference_prints)) {
+        mir_emit_pointer_difference_prints(
+            out, &pointer_difference_prints);
         return 1;
     }
     if (mir_match_indexed_member_write(
