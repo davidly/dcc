@@ -470,6 +470,13 @@ struct MirPalindromeScan {
     int parameter_stack_offset;
 };
 
+struct MirDynamicRowScan {
+    struct Sym *table;
+    int row_stride;
+    int element_stride;
+    int count;
+};
+
 #define MIR_MACHINE_SWITCH_RESULT_LIMIT 16
 
 struct MirConstantResultSwitch {
@@ -7478,6 +7485,126 @@ static int mir_match_palindrome_scan(struct MirPalindromeScan *plan)
     return 1;
 }
 
+static int mir_match_dynamic_row_scan(struct MirDynamicRowScan *plan)
+{
+    static const int expected_opcodes[35] = {
+        MIR_LABEL, MIR_CONST, MIR_STORE, MIR_ADDRESS, MIR_NOP, MIR_STORE,
+        MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_LOAD, MIR_PHI,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD,
+        MIR_CONST, MIR_INDEX_ADDRESS, MIR_ADDRESS, MIR_LOAD,
+        MIR_INDEX_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_STORE_INDIRECT, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_RETURN
+    };
+    const struct MirInsn *column_phi;
+    const struct MirInsn *table_address;
+    int address_offset;
+    int address_storage;
+    int address_type;
+    int instruction;
+    int row_offset;
+    int row_storage;
+    int row_type;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 35 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_size(mir.return_type) != 2)
+        return mir_machine_reject("dynamic-row-scan", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject("dynamic-row-scan", "opcode");
+    column_phi = &mir.insns[11];
+    table_address = &mir.insns[19];
+    if (!mir_scalar_memory_location(
+            &mir.insns[2], &row_type, &row_storage, &row_offset) ||
+        !mir_scalar_memory_location(
+            &mir.insns[3], &address_type, &address_storage,
+            &address_offset) ||
+        row_storage != SC_LOCAL || address_storage != row_storage ||
+        address_offset != row_offset)
+        return mir_machine_reject(
+            "dynamic-row-scan", "setup-location");
+    if (!mir_machine_constant_equals(mir.insns[1].dst, 0) ||
+        mir.insns[2].memory_size != 2 ||
+        (mir.insns[2].memory_flags & (1 | 8)) != 0)
+        return mir_machine_reject("dynamic-row-scan", "setup-row");
+    if (mir.insns[5].src1 != mir.insns[3].dst ||
+        mir.insns[5].memory_size != 2 ||
+        (mir.insns[5].memory_flags & (1 | 8)) != 0)
+        return mir_machine_reject(
+            "dynamic-row-scan", "setup-pointer");
+    if (!mir_machine_constant_equals(mir.insns[6].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[8]) ||
+        mir.insns[8].memory_size != 2)
+        return mir_machine_reject(
+            "dynamic-row-scan", "setup-column");
+    if (!mir_machine_same_location(&mir.insns[2], &mir.insns[10]) ||
+        column_phi->src1 != mir.insns[6].dst ||
+        column_phi->src2 != mir.insns[29].dst ||
+        column_phi->phi_pred1 != mir.insns[0].label ||
+        column_phi->phi_pred2 != mir.insns[26].label ||
+        type_ptr_depth(column_phi->type) != 0 ||
+        (column_phi->type & 15) != TYPE_INT ||
+        type_size(column_phi->type) != 2 ||
+        mir.insns[13].immediate <= 0 ||
+        mir.insns[13].immediate > 255 ||
+        mir.insns[14].immediate != '<' ||
+        mir.insns[14].src1 != column_phi->dst ||
+        mir.insns[14].src2 != mir.insns[13].dst ||
+        mir.insns[15].src1 != mir.insns[14].dst ||
+        mir.insns[15].label != mir.insns[32].label)
+        return mir_machine_reject("dynamic-row-scan", "loop");
+    if (!mir_machine_same_location(&mir.insns[5], &mir.insns[16]) ||
+        !mir_machine_constant_equals(mir.insns[17].dst, 0) ||
+        mir.insns[18].src1 != mir.insns[16].dst ||
+        mir.insns[18].src2 != mir.insns[17].dst ||
+        mir.insns[18].immediate != 2 ||
+        mir.insns[18].memory_size != 2 ||
+        table_address->memory_flags != 0 ||
+        !mir_machine_same_location(&mir.insns[2], &mir.insns[20]) ||
+        mir.insns[21].src1 != table_address->dst ||
+        mir.insns[21].src2 != mir.insns[20].dst ||
+        mir.insns[21].immediate <= 0 ||
+        mir.insns[21].memory_size <= 0 ||
+        mir.insns[23].src1 != mir.insns[21].dst ||
+        mir.insns[23].src2 != column_phi->dst ||
+        mir.insns[23].immediate <= 0 ||
+        mir.insns[23].memory_size != 2)
+        return mir_machine_reject("dynamic-row-scan", "addresses");
+    if (mir.insns[24].src1 != mir.insns[23].dst ||
+        mir.insns[24].memory_size != 2 ||
+        (mir.insns[24].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[25].src1 != mir.insns[18].dst ||
+        mir.insns[25].src2 != mir.insns[24].dst ||
+        mir.insns[25].memory_size != 2 ||
+        (mir.insns[25].memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_constant_equals(mir.insns[28].dst, 1) ||
+        mir.insns[29].immediate != '+' ||
+        mir.insns[29].src1 != column_phi->dst ||
+        mir.insns[29].src2 != mir.insns[28].dst ||
+        !mir_machine_same_location(&mir.insns[8], &mir.insns[30]) ||
+        mir.insns[30].src1 != mir.insns[29].dst ||
+        mir.insns[31].label != mir.insns[9].label ||
+        !mir_machine_same_location(&mir.insns[2], &mir.insns[33]) ||
+        mir.insns[34].src1 != mir.insns[33].dst)
+        return mir_machine_reject("dynamic-row-scan", "body");
+    plan->table = find_global(table_address->name);
+    if (plan->table == NULL || !plan->table->is_defined ||
+        plan->table->is_volatile)
+        return mir_machine_reject("dynamic-row-scan", "table");
+    plan->row_stride = (int)mir.insns[21].immediate;
+    plan->element_stride = (int)mir.insns[23].immediate;
+    plan->count = (int)mir.insns[13].immediate;
+    if ((plan->row_stride & (plan->row_stride - 1)) != 0 ||
+        plan->row_stride > 32767 ||
+        plan->element_stride > 127 ||
+        plan->count * plan->element_stride > 255)
+        return mir_machine_reject("dynamic-row-scan", "bounds");
+    return 1;
+}
+
 static int mir_machine_constant_return_for_label(
     int label, int *result)
 {
@@ -13679,6 +13806,30 @@ static void mir_emit_palindrome_scan(
             different, loop, same, different);
 }
 
+static void mir_emit_dynamic_row_scan(
+    FILE *out, const struct MirDynamicRowScan *plan)
+{
+    int loop = new_label();
+    int step;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out, "\tld de,0\n\tld bc,0\nL%d:\n"
+                 "\tld h,d\n\tld l,e\n", loop);
+    for (step = 1; step < plan->row_stride; step <<= 1)
+        fputs("\tadd hl,hl\n", out);
+    fputs("\tadd hl,bc\n", out);
+    mir_machine_emit_global_address_de(out, plan->table, 0);
+    fputs("\tadd hl,de\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n",
+          out);
+    for (step = 0; step < plan->element_stride; ++step)
+        fputs("\tinc bc\n", out);
+    fprintf(out,
+            "\tld a,c\n\tcp %d\n\tjp nz,L%d\n"
+            "\tex de,hl\n\tret\n",
+            plan->count * plan->element_stride, loop);
+}
+
 static void mir_emit_constant_result_switch(
     FILE *out, const struct MirConstantResultSwitch *plan)
 {
@@ -13837,6 +13988,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantByteFill constant_byte_fill;
     struct MirAffineByteFill affine_byte_fill;
     struct MirPalindromeScan palindrome_scan;
+    struct MirDynamicRowScan dynamic_row_scan;
     struct MirConstantResultSwitch constant_result_switch;
     struct MirLocalByteFillSumPrint local_byte_fill_sum_print;
     struct MirIndexedMemberWrite indexed_member_write;
@@ -14158,6 +14310,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_palindrome_scan(&palindrome_scan)) {
         mir_emit_palindrome_scan(out, &palindrome_scan);
+        return 1;
+    }
+    if (mir_match_dynamic_row_scan(&dynamic_row_scan)) {
+        mir_emit_dynamic_row_scan(out, &dynamic_row_scan);
         return 1;
     }
     if (mir_match_constant_result_switch(
