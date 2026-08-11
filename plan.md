@@ -7,8 +7,8 @@ current execution plan and handoff.
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
 - Published HEAD: `3560572` (`complete MIR emission for a1`).
-- Production coverage: **1882/2182 (86.25%)**.
-- Remaining fallback population: **300 `final-cost-policy`**, with no other
+- Production coverage: **1883/2182 (86.30%)**.
+- Remaining fallback population: **299 `final-cost-policy`**, with no other
   fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -36,6 +36,8 @@ current execution plan and handoff.
   0.66% peep / 4.87% nopeep.
 - The constant byte-fill scheduler admits `tecreg.fill_bytes`, using HL/A/B
   instead of a frame induction slot. It improves 5.74% peep / 28.07% nopeep.
+- The local fill+sum+print scheduler admits `tecreg.main`, completing that app's
+  MIR coverage and improving it 43.37% peep / 59.46% nopeep.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
