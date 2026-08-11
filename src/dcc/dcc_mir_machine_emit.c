@@ -401,6 +401,17 @@ struct MirReducedFloatPolynomial {
     unsigned long coefficients[3];
 };
 
+struct MirFloatTangentRational {
+    struct Sym *remainder_function;
+    int parameter_stack_offset;
+    unsigned long pi_bits;
+    unsigned long half_pi_bits;
+    unsigned long quarter_pi_bits;
+    unsigned long one_bits;
+    unsigned long fifteen_bits;
+    unsigned long six_bits;
+};
+
 struct MirRecursiveWideProduct {
     struct Sym *function;
     int parameter_stack_offset;
@@ -6160,6 +6171,247 @@ static int mir_match_float_sine_polynomial(
         mir.insns[80].src1 != mir.insns[79].dst)
         return mir_machine_reject(
             "float-sine-polynomial", "polynomial");
+    return 1;
+}
+
+static int mir_match_float_tangent_rational(
+    struct MirFloatTangentRational *plan)
+{
+    static const int expected_opcodes[114] = {
+        MIR_LABEL, MIR_PARAM, MIR_CONST, MIR_STORE, MIR_NOP, MIR_ARG,
+        MIR_FLOAT_CONST, MIR_ARG, MIR_CALL, MIR_STORE, MIR_NOP,
+        MIR_FLOAT_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_NOP,
+        MIR_FLOAT_CONST, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP, MIR_JUMP,
+        MIR_LABEL, MIR_NOP, MIR_FLOAT_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_FLOAT_CONST, MIR_BINARY, MIR_NOP,
+        MIR_STORE, MIR_NOP, MIR_LABEL, MIR_LABEL, MIR_LOAD,
+        MIR_FLOAT_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_FLOAT_CONST, MIR_LOAD, MIR_BINARY, MIR_NOP, MIR_STORE,
+        MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_JUMP, MIR_LABEL,
+        MIR_LOAD, MIR_FLOAT_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_FLOAT_CONST, MIR_UNARY, MIR_LOAD, MIR_BINARY, MIR_NOP,
+        MIR_STORE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_LABEL,
+        MIR_LABEL, MIR_LOAD, MIR_LOAD, MIR_BINARY, MIR_STORE, MIR_LOAD,
+        MIR_FLOAT_CONST, MIR_NOP, MIR_BINARY, MIR_BINARY, MIR_STORE,
+        MIR_FLOAT_CONST, MIR_FLOAT_CONST, MIR_NOP, MIR_BINARY, MIR_BINARY,
+        MIR_STORE, MIR_NOP, MIR_FLOAT_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_FLOAT_CONST, MIR_RETURN, MIR_LABEL, MIR_NOP, MIR_NOP,
+        MIR_BINARY, MIR_STORE, MIR_LOAD, MIR_BRANCH_FALSE, MIR_NOP,
+        MIR_FLOAT_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_FLOAT_CONST,
+        MIR_RETURN, MIR_LABEL, MIR_FLOAT_CONST, MIR_NOP, MIR_BINARY,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_LABEL, MIR_PHI, MIR_RETURN
+    };
+    static const int reduced_accesses[] = {
+        9, 19, 23, 28, 32, 36, 42, 45, 52, 59, 62, 69, 70, 73
+    };
+    const struct MirInsn *x = &mir.insns[1];
+    const struct MirInsn *call = &mir.insns[8];
+    const struct MirInsn *invert_store = &mir.insns[3];
+    const struct MirInsn *reduced_store = &mir.insns[9];
+    int arguments[2];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 114 || mir_cfg_block_count() != 12 ||
+        mir.has_vla || !type_is_float(mir.return_type) ||
+        type_size(mir.return_type) != 4)
+        return mir_machine_reject(
+            "float-tangent-rational", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "float-tangent-rational", "opcode");
+    if (!type_is_float(x->type) || type_size(x->type) != 4 ||
+        !mir_scalar_memory_location(
+            x, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2 ||
+        memory_offset > 125)
+        return mir_machine_reject(
+            "float-tangent-rational", "parameter");
+    plan->parameter_stack_offset = memory_offset - 2;
+    if (!mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+        !mir_machine_unobservable_local_store(invert_store) ||
+        invert_store->memory_size != 2 ||
+        invert_store->src1 != mir.insns[2].dst ||
+        !mir_machine_unobservable_local_store(reduced_store) ||
+        reduced_store->memory_size != 4 ||
+        reduced_store->src1 != call->dst ||
+        reduced_store->object < 0)
+        return mir_machine_reject(
+            "float-tangent-rational", "initializers");
+    for (instruction = 0;
+         instruction < (int)(sizeof(reduced_accesses) /
+                             sizeof(reduced_accesses[0]));
+         ++instruction) {
+        const struct MirInsn *access =
+            &mir.insns[reduced_accesses[instruction]];
+
+        if (access->object != reduced_store->object ||
+            (access->memory_flags & (1 | 8)) != 0)
+            return mir_machine_reject(
+                "float-tangent-rational", "reduced-access");
+    }
+    if (!mir_machine_two_call_arguments(call, arguments) ||
+        arguments[0] != x->dst ||
+        arguments[1] != mir.insns[6].dst ||
+        !type_is_float(call->type) ||
+        type_size(call->type) != 4 ||
+        call->memory_flags != 0)
+        return mir_machine_reject(
+            "float-tangent-rational", "call");
+    plan->remainder_function = find_global(call->name);
+    if (plan->remainder_function == NULL ||
+        plan->remainder_function->storage != SC_FUNC ||
+        plan->remainder_function->is_funcptr ||
+        plan->remainder_function->is_noreturn)
+        return mir_machine_reject(
+            "float-tangent-rational", "call-symbol");
+    plan->pi_bits =
+        (unsigned long)mir.insns[6].immediate & 0xffffffffUL;
+    plan->half_pi_bits =
+        (unsigned long)mir.insns[11].immediate & 0xffffffffUL;
+    plan->quarter_pi_bits =
+        (unsigned long)mir.insns[37].immediate & 0xffffffffUL;
+    plan->fifteen_bits =
+        (unsigned long)mir.insns[74].immediate & 0xffffffffUL;
+    plan->six_bits =
+        (unsigned long)mir.insns[80].immediate & 0xffffffffUL;
+    plan->one_bits =
+        (unsigned long)mir.insns[105].immediate & 0xffffffffUL;
+    if (plan->pi_bits !=
+            ((unsigned long)mir.insns[16].immediate & 0xffffffffUL) ||
+        plan->pi_bits !=
+            ((unsigned long)mir.insns[29].immediate & 0xffffffffUL) ||
+        plan->half_pi_bits !=
+            ((unsigned long)mir.insns[24].immediate & 0xffffffffUL) ||
+        plan->half_pi_bits !=
+            ((unsigned long)mir.insns[41].immediate & 0xffffffffUL) ||
+        plan->half_pi_bits !=
+            ((unsigned long)mir.insns[57].immediate & 0xffffffffUL) ||
+        plan->quarter_pi_bits !=
+            ((unsigned long)mir.insns[53].immediate & 0xffffffffUL) ||
+        plan->fifteen_bits !=
+            ((unsigned long)mir.insns[79].immediate & 0xffffffffUL) ||
+        mir.insns[86].immediate != 0 ||
+        mir.insns[89].immediate != 0 ||
+        mir.insns[99].immediate != 0 ||
+        mir.insns[102].immediate != 0)
+        return mir_machine_reject(
+            "float-tangent-rational", "constants");
+    if (mir.insns[25].immediate != '-' ||
+        mir.insns[25].src1 != mir.insns[24].dst ||
+        mir.insns[54].immediate != '-' ||
+        mir.insns[54].src1 != mir.insns[53].dst ||
+        mir.insns[58].immediate != '-' ||
+        mir.insns[58].src1 != mir.insns[57].dst)
+        return mir_machine_reject(
+            "float-tangent-rational", "negations");
+    if (mir.insns[12].immediate != '>' ||
+        mir.insns[12].src1 != call->dst ||
+        mir.insns[12].src2 != mir.insns[11].dst ||
+        mir.insns[13].src1 != mir.insns[12].dst ||
+        mir.insns[13].label != mir.insns[22].label ||
+        mir.insns[17].immediate != '-' ||
+        mir.insns[17].src1 != call->dst ||
+        mir.insns[17].src2 != mir.insns[16].dst ||
+        mir.insns[19].src1 != mir.insns[17].dst ||
+        mir.insns[21].label != mir.insns[35].label ||
+        mir.insns[26].immediate != '<' ||
+        mir.insns[26].src1 != call->dst ||
+        mir.insns[26].src2 != mir.insns[25].dst ||
+        mir.insns[27].src1 != mir.insns[26].dst ||
+        mir.insns[27].label != mir.insns[34].label ||
+        mir.insns[30].immediate != '+' ||
+        mir.insns[30].src1 != call->dst ||
+        mir.insns[30].src2 != mir.insns[29].dst ||
+        mir.insns[32].src1 != mir.insns[30].dst)
+        return mir_machine_reject(
+            "float-tangent-rational", "period-reduction");
+    if (mir.insns[38].immediate != '>' ||
+        mir.insns[38].src1 != mir.insns[36].dst ||
+        mir.insns[38].src2 != mir.insns[37].dst ||
+        mir.insns[39].src1 != mir.insns[38].dst ||
+        mir.insns[39].label != mir.insns[51].label ||
+        mir.insns[43].immediate != '-' ||
+        mir.insns[43].src1 != mir.insns[41].dst ||
+        mir.insns[43].src2 != mir.insns[42].dst ||
+        mir.insns[45].src1 != mir.insns[43].dst ||
+        !mir_machine_constant_equals(mir.insns[46].dst, 1) ||
+        mir.insns[48].object != invert_store->object ||
+        mir.insns[48].src1 != mir.insns[46].dst ||
+        mir.insns[50].label != mir.insns[68].label ||
+        mir.insns[55].immediate != '<' ||
+        mir.insns[55].src1 != mir.insns[52].dst ||
+        mir.insns[55].src2 != mir.insns[54].dst ||
+        mir.insns[56].src1 != mir.insns[55].dst ||
+        mir.insns[56].label != mir.insns[67].label ||
+        mir.insns[60].immediate != '-' ||
+        mir.insns[60].src1 != mir.insns[58].dst ||
+        mir.insns[60].src2 != mir.insns[59].dst ||
+        mir.insns[62].src1 != mir.insns[60].dst ||
+        !mir_machine_constant_equals(mir.insns[63].dst, 1) ||
+        mir.insns[65].object != invert_store->object ||
+        mir.insns[65].src1 != mir.insns[63].dst)
+        return mir_machine_reject(
+            "float-tangent-rational", "quadrants");
+    if (mir.insns[71].immediate != '*' ||
+        mir.insns[71].src1 != mir.insns[69].dst ||
+        mir.insns[71].src2 != mir.insns[70].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[72]) ||
+        mir.insns[72].src1 != mir.insns[71].dst ||
+        mir.insns[76].immediate != '-' ||
+        mir.insns[76].src1 != mir.insns[74].dst ||
+        mir.insns[76].src2 != mir.insns[71].dst ||
+        mir.insns[77].immediate != '*' ||
+        mir.insns[77].src1 != mir.insns[73].dst ||
+        mir.insns[77].src2 != mir.insns[76].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[78]) ||
+        mir.insns[78].src1 != mir.insns[77].dst ||
+        mir.insns[82].immediate != '*' ||
+        mir.insns[82].src1 != mir.insns[80].dst ||
+        mir.insns[82].src2 != mir.insns[71].dst ||
+        mir.insns[83].immediate != '-' ||
+        mir.insns[83].src1 != mir.insns[79].dst ||
+        mir.insns[83].src2 != mir.insns[82].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[84]) ||
+        mir.insns[84].src1 != mir.insns[83].dst)
+        return mir_machine_reject(
+            "float-tangent-rational", "rational");
+    if (mir.insns[87].immediate != TOK_EQ ||
+        mir.insns[87].src1 != mir.insns[83].dst ||
+        mir.insns[87].src2 != mir.insns[86].dst ||
+        mir.insns[88].src1 != mir.insns[87].dst ||
+        mir.insns[88].label != mir.insns[91].label ||
+        mir.insns[90].src1 != mir.insns[89].dst ||
+        mir.insns[94].immediate != '/' ||
+        mir.insns[94].src1 != mir.insns[77].dst ||
+        mir.insns[94].src2 != mir.insns[83].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[95]) ||
+        mir.insns[95].src1 != mir.insns[94].dst ||
+        mir.insns[96].object != invert_store->object ||
+        mir.insns[97].src1 != mir.insns[96].dst ||
+        mir.insns[97].label != mir.insns[111].label ||
+        mir.insns[100].immediate != TOK_EQ ||
+        mir.insns[100].src1 != mir.insns[94].dst ||
+        mir.insns[100].src2 != mir.insns[99].dst ||
+        mir.insns[101].src1 != mir.insns[100].dst ||
+        mir.insns[101].label != mir.insns[104].label ||
+        mir.insns[103].src1 != mir.insns[102].dst ||
+        mir.insns[107].immediate != '/' ||
+        mir.insns[107].src1 != mir.insns[105].dst ||
+        mir.insns[107].src2 != mir.insns[94].dst ||
+        mir.insns[109].src1 != mir.insns[107].dst ||
+        mir.insns[112].src1 != mir.insns[94].dst ||
+        mir.insns[112].src2 != mir.insns[107].dst ||
+        mir.insns[112].phi_pred1 != mir.insns[91].label ||
+        mir.insns[112].phi_pred2 != mir.insns[104].label ||
+        mir.insns[113].src1 != mir.insns[112].dst)
+        return mir_machine_reject(
+            "float-tangent-rational", "result");
     return 1;
 }
 
@@ -16795,6 +17047,143 @@ static void mir_emit_reduced_float_polynomial(
     fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static void mir_emit_float_tangent_rational(
+    FILE *out, const struct MirFloatTangentRational *plan)
+{
+    int after_period = new_label();
+    int after_quadrant = new_label();
+    int check_lower_period = new_label();
+    int check_lower_quadrant = new_label();
+    int done = new_label();
+    int nonzero_denominator = new_label();
+    int nonzero_result = new_label();
+    int x_offset = plan->parameter_stack_offset + 2;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-5\n\tadd hl,sp\n\tld sp,hl\n"
+          "\tld (ix-5),0\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+
+    mir_machine_emit_float_bits(out, plan->pi_bits);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->remainder_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_ix_wide_store(out, x_offset);
+
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, plan->half_pi_bits);
+    mir_emit_runtime_call(out, "__fltf");
+    fputs("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", check_lower_period);
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, plan->pi_bits);
+    mir_emit_runtime_call(out, "__fsf");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_ix_wide_store(out, x_offset);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            after_period, check_lower_period);
+
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(
+        out, plan->half_pi_bits ^ 0x80000000UL);
+    mir_emit_runtime_call(out, "__fgtf");
+    fputs("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", after_period);
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, plan->pi_bits);
+    mir_emit_runtime_call(out, "__faf");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_ix_wide_store(out, x_offset);
+
+    fprintf(out, "L%d:\n", after_period);
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, plan->quarter_pi_bits);
+    mir_emit_runtime_call(out, "__fltf");
+    fputs("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", check_lower_quadrant);
+    mir_machine_emit_float_bits(out, plan->half_pi_bits);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    mir_emit_runtime_call(out, "__fsf");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_ix_wide_store(out, x_offset);
+    fprintf(out,
+            "\tld (ix-5),1\n\tjp L%d\n"
+            "L%d:\n",
+            after_quadrant, check_lower_quadrant);
+
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(
+        out, plan->quarter_pi_bits ^ 0x80000000UL);
+    mir_emit_runtime_call(out, "__fgtf");
+    fputs("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", after_quadrant);
+    mir_machine_emit_float_bits(
+        out, plan->half_pi_bits ^ 0x80000000UL);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    mir_emit_runtime_call(out, "__fsf");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_ix_wide_store(out, x_offset);
+    fprintf(out, "\tld (ix-5),1\nL%d:\n", after_quadrant);
+
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    mir_emit_runtime_call(out, "__fmf");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_ix_wide_store(out, -4);
+
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, plan->fifteen_bits);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, -4);
+    mir_emit_runtime_call(out, "__fsf");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_emit_runtime_call(out, "__fmf");
+    fputs("\tpop bc\n\tpop bc\n\tpush de\n\tpush hl\n", out);
+
+    mir_machine_emit_float_bits(out, plan->fifteen_bits);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, plan->six_bits);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, -4);
+    mir_emit_runtime_call(out, "__fmf");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_emit_runtime_call(out, "__fsf");
+    fputs("\tpop bc\n\tpop bc\n"
+          "\tld a,d\n\tand 127\n\tor e\n\tor h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n", nonzero_denominator);
+    fputs("\tpop bc\n\tpop bc\n\tld hl,0\n\tld de,0\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", done, nonzero_denominator);
+
+    mir_emit_runtime_call(out, "__fdf");
+    fputs("\tpop bc\n\tpop bc\n\tld a,(ix-5)\n\tor a\n", out);
+    fprintf(out, "\tjp z,L%d\n", done);
+    fputs("\tld a,d\n\tand 127\n\tor e\n\tor h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tld hl,0\n\tld de,0\n"
+                 "\tjp L%d\nL%d:\n",
+            nonzero_result, done, nonzero_result);
+    mir_machine_emit_ix_wide_store(out, -4);
+    mir_machine_emit_float_bits(out, plan->one_bits);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, -4);
+    mir_emit_runtime_call(out, "__fdf");
+    fputs("\tpop bc\n\tpop bc\n", out);
+
+    fprintf(out, "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n", done);
+}
+
 static void mir_emit_recursive_wide_product(
     FILE *out, const struct MirRecursiveWideProduct *plan)
 {
@@ -18134,6 +18523,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantFloatConditional constant_float_conditional;
     struct MirConditionalGlobalFloatLoad conditional_global_float_load;
     struct MirReducedFloatPolynomial reduced_float_polynomial;
+    struct MirFloatTangentRational float_tangent_rational;
     struct MirRecursiveWideProduct recursive_wide_product;
     struct MirByteRotateFlags byte_rotate_flags;
     struct MirStatusUnpack status_unpack;
@@ -18564,6 +18954,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &reduced_float_polynomial)) {
         mir_emit_reduced_float_polynomial(
             out, &reduced_float_polynomial);
+        return 1;
+    }
+    if (mir_match_float_tangent_rational(
+            &float_tangent_rational)) {
+        mir_emit_float_tangent_rational(
+            out, &float_tangent_rational);
         return 1;
     }
     if (mir_match_recursive_wide_product(
