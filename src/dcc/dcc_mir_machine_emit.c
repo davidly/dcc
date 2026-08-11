@@ -47,6 +47,21 @@ struct MirFixedParamMutations {
     struct MirFixedMutation mutations[8];
 };
 
+struct MirGlobalAppendStore {
+    int parameter_stack_offset;
+    int field_offset;
+    int width;
+};
+
+struct MirGlobalAppend {
+    struct Sym *root;
+    int array_offset;
+    int count_offset;
+    int element_stride;
+    int store_count;
+    struct MirGlobalAppendStore stores[8];
+};
+
 static void mir_machine_emit_hl_offset(
     FILE *out, int offset, int preserve_bc);
 
@@ -950,6 +965,197 @@ static void mir_emit_fixed_param_mutations(
     fputs("\tret\n", out);
 }
 
+static int mir_machine_global_member(
+    int value, struct Sym **root_out, int *offset_out)
+{
+    const struct MirInsn *member = mir_definition(value);
+    const struct MirInsn *root;
+    struct Sym *symbol;
+
+    if (member == NULL || member->opcode != MIR_MEMBER_ADDRESS ||
+        (member->memory_flags & (1 | 8)) != 0)
+        return 0;
+    root = mir_machine_resolve_local_alias(member->src1);
+    if (root == NULL || root->opcode != MIR_ADDRESS)
+        return 0;
+    symbol = find_global(root->name);
+    if (symbol == NULL || !symbol->is_defined || symbol->is_volatile)
+        return 0;
+    *root_out = symbol;
+    *offset_out = (int)member->immediate;
+    return 1;
+}
+
+static int mir_machine_parameter_value_offset(
+    int value, int *stack_offset)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    if (definition != NULL && definition->opcode == MIR_UNARY &&
+        definition->immediate == 0) {
+        value = definition->src1;
+        definition = mir_definition(value);
+    }
+    return definition != NULL && definition->opcode == MIR_PARAM &&
+           mir_machine_parameter_offset(value, stack_offset);
+}
+
+static int mir_machine_match_global_append_store(
+    const struct MirInsn *store, struct MirGlobalAppend *plan,
+    struct MirGlobalAppendStore *append_store)
+{
+    const struct MirInsn *destination;
+    const struct MirInsn *index;
+    const struct MirInsn *array_member;
+    const struct MirInsn *count_load;
+    struct Sym *array_root;
+    struct Sym *count_root;
+    int array_offset;
+    int count_offset;
+    int field_offset = 0;
+
+    if (store == NULL || store->opcode != MIR_STORE_INDIRECT ||
+        (store->memory_size != 1 && store->memory_size != 2) ||
+        (store->memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_parameter_value_offset(
+            store->src2, &append_store->parameter_stack_offset))
+        return 0;
+    destination = mir_definition(store->src1);
+    if (destination != NULL &&
+        destination->opcode == MIR_MEMBER_ADDRESS) {
+        if ((destination->memory_flags & (1 | 8)) != 0)
+            return 0;
+        field_offset = (int)destination->immediate;
+        destination = mir_definition(destination->src1);
+    }
+    if (destination == NULL ||
+        destination->opcode != MIR_INDEX_ADDRESS ||
+        (destination->memory_flags & 1) != 0 ||
+        (destination->immediate != 1 &&
+         destination->immediate != 2 &&
+         destination->immediate != 4 &&
+         destination->immediate != 8))
+        return 0;
+    index = destination;
+    array_member = mir_definition(index->src1);
+    count_load = mir_definition(index->src2);
+    if (array_member == NULL ||
+        array_member->opcode != MIR_MEMBER_ADDRESS ||
+        count_load == NULL ||
+        count_load->opcode != MIR_LOAD_INDIRECT ||
+        count_load->memory_size != 2 ||
+        (count_load->memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_global_member(
+            array_member->dst, &array_root, &array_offset) ||
+        !mir_machine_global_member(
+            count_load->src1, &count_root, &count_offset) ||
+        array_root != count_root)
+        return 0;
+    if (plan->root == NULL) {
+        plan->root = array_root;
+        plan->array_offset = array_offset;
+        plan->count_offset = count_offset;
+        plan->element_stride = (int)index->immediate;
+    } else if (plan->root != array_root ||
+               plan->array_offset != array_offset ||
+               plan->count_offset != count_offset ||
+               plan->element_stride != (int)index->immediate) {
+        return 0;
+    }
+    append_store->field_offset = field_offset;
+    append_store->width = store->memory_size;
+    return 1;
+}
+
+static int mir_machine_match_global_increment(
+    const struct MirInsn *store, struct Sym **root_out, int *offset_out)
+{
+    const struct MirInsn *add;
+    const struct MirInsn *load;
+    const struct MirInsn *one;
+    struct Sym *store_root;
+    struct Sym *load_root;
+    int store_offset;
+    int load_offset;
+
+    if (store == NULL || store->opcode != MIR_STORE_INDIRECT ||
+        store->memory_size != 2 ||
+        (store->memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_global_member(
+            store->src1, &store_root, &store_offset))
+        return 0;
+    add = mir_definition(store->src2);
+    if (add == NULL || add->opcode != MIR_BINARY ||
+        add->immediate != '+')
+        return 0;
+    load = mir_definition(add->src1);
+    one = mir_definition(add->src2);
+    if (load == NULL || load->opcode != MIR_LOAD_INDIRECT ||
+        load->memory_size != 2 ||
+        (load->memory_flags & (1 | 8)) != 0 ||
+        one == NULL || one->opcode != MIR_CONST ||
+        one->immediate != 1 ||
+        !mir_machine_global_member(
+            load->src1, &load_root, &load_offset) ||
+        load_root != store_root || load_offset != store_offset)
+        return 0;
+    *root_out = store_root;
+    *offset_out = store_offset;
+    return 1;
+}
+
+static int mir_match_global_append(struct MirGlobalAppend *plan)
+{
+    struct Sym *increment_root = NULL;
+    int increment_offset = 0;
+    int increment_count = 0;
+    int seen_increment = 0;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla || mir_cfg_block_count() != 1 ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        switch (insn->opcode) {
+        case MIR_NOP:
+        case MIR_LABEL:
+        case MIR_PARAM:
+        case MIR_CONST:
+        case MIR_ADDRESS:
+        case MIR_MEMBER_ADDRESS:
+        case MIR_INDEX_ADDRESS:
+        case MIR_UNARY:
+        case MIR_BINARY:
+            break;
+        case MIR_LOAD_INDIRECT:
+            if ((insn->memory_flags & (1 | 8)) != 0)
+                return 0;
+            break;
+        case MIR_STORE_INDIRECT:
+            if (mir_machine_match_global_increment(
+                    insn, &increment_root, &increment_offset)) {
+                ++increment_count;
+                seen_increment = 1;
+            } else {
+                if (seen_increment || plan->store_count >= 8 ||
+                    !mir_machine_match_global_append_store(
+                        insn, plan, &plan->stores[plan->store_count]))
+                    return 0;
+                ++plan->store_count;
+            }
+            break;
+        default:
+            return 0;
+        }
+    }
+    return plan->root != NULL && plan->store_count > 0 &&
+           increment_count == 1 && increment_root == plan->root &&
+           increment_offset == plan->count_offset;
+}
+
 static int mir_match_nested_row_store(struct MirNestedRowStore *plan)
 {
     const struct MirInsn *value_store = NULL;
@@ -1071,6 +1277,90 @@ static void mir_machine_emit_global_word(
         fprintf(out, "\tld hl,(%s%+d)\n", name, offset);
 }
 
+static void mir_machine_emit_global_address_de(
+    FILE *out, struct Sym *symbol, int offset)
+{
+    const char *name = asm_name_for(sym_asm_name(symbol));
+
+    if ((symbol->storage == SC_EXTERN || symbol->needs_extrn) &&
+        mir_extrn_should_emit(symbol))
+        fprintf(out, "\textrn %s\n", name);
+    if (offset == 0)
+        fprintf(out, "\tld de,%s\n", name);
+    else
+        fprintf(out, "\tld de,%s%+d\n", name, offset);
+}
+
+static void mir_machine_emit_global_word_store(
+    FILE *out, struct Sym *symbol, int offset)
+{
+    const char *name = asm_name_for(sym_asm_name(symbol));
+
+    if (offset == 0)
+        fprintf(out, "\tld (%s),hl\n", name);
+    else
+        fprintf(out, "\tld (%s%+d),hl\n", name, offset);
+}
+
+static void mir_machine_emit_bc_offset(FILE *out, int offset)
+{
+    if (offset == 0)
+        return;
+    if (offset >= -4 && offset <= 4) {
+        const char *instruction = offset > 0 ? "\tinc bc\n" : "\tdec bc\n";
+        int count = offset > 0 ? offset : -offset;
+
+        while (count-- > 0)
+            fputs(instruction, out);
+        return;
+    }
+    fprintf(out, "\tld hl,%d\n\tadd hl,bc\n"
+                 "\tld b,h\n\tld c,l\n", offset & 0xffff);
+}
+
+static void mir_machine_emit_parameter_store_to_bc(
+    FILE *out, const struct MirGlobalAppendStore *store)
+{
+    fprintf(out, "\tld hl,%d\n\tadd hl,sp\n",
+            store->parameter_stack_offset);
+    if (store->width == 1) {
+        fputs("\tld a,(hl)\n\tld (bc),a\n", out);
+    } else {
+        fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+              "\tld a,e\n\tld (bc),a\n\tinc bc\n"
+              "\tld a,d\n\tld (bc),a\n", out);
+    }
+}
+
+static void mir_emit_global_append(
+    FILE *out, const struct MirGlobalAppend *plan)
+{
+    int current_offset = 0;
+    int store;
+
+    mir_machine_emit_global_word(out, plan->root, plan->count_offset);
+    for (store = 1; store < plan->element_stride; store <<= 1)
+        fputs("\tadd hl,hl\n", out);
+    mir_machine_emit_global_address_de(
+        out, plan->root, plan->array_offset);
+    fputs("\tadd hl,de\n\tld c,l\n\tld b,h\n", out);
+    for (store = 0; store < plan->store_count; ++store) {
+        const struct MirGlobalAppendStore *append_store =
+            &plan->stores[store];
+
+        mir_machine_emit_bc_offset(
+            out, append_store->field_offset - current_offset);
+        mir_machine_emit_parameter_store_to_bc(out, append_store);
+        current_offset = append_store->field_offset +
+            (append_store->width == 2 ? 1 : 0);
+    }
+    mir_machine_emit_global_word(out, plan->root, plan->count_offset);
+    fputs("\tinc hl\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->root, plan->count_offset);
+    fputs("\tret\n", out);
+}
+
 static void mir_emit_nested_row_store(
     FILE *out, const struct MirNestedRowStore *plan)
 {
@@ -1149,6 +1439,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirNestedRowStore nested_row_store;
     struct MirFlatArrayChecks flat_array_checks;
     struct MirFixedParamMutations fixed_param_mutations;
+    struct MirGlobalAppend global_append;
     long constant;
 
     if (mir_match_affine_pointer_constant_return(&constant)) {
@@ -1171,6 +1462,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_fixed_param_mutations(out, &fixed_param_mutations);
+        return 1;
+    }
+    if (mir_match_global_append(&global_append)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_global_append(out, &global_append);
         return 1;
     }
 
