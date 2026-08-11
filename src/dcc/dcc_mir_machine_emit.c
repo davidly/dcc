@@ -297,6 +297,12 @@ struct MirByteBitwiseReport {
     char call_name[64];
 };
 
+struct MirVariadicSum {
+    int count_stack_offset;
+    int first_argument_stack_offset;
+    int value_width;
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -3559,6 +3565,115 @@ static int mir_match_byte_bitwise_report(
     plan->string_id = (int)string->immediate;
     plan->runtime_flags =
         call->memory_flags & MIR_CALL_FLAG_FORMAT_RUNTIME;
+    return 1;
+}
+
+static int mir_match_variadic_sum(struct MirVariadicSum *plan)
+{
+    static const int expected_opcodes[32] = {
+        MIR_LABEL, MIR_PARAM, MIR_CONST, MIR_NOP, MIR_STORE,
+        MIR_VA_START, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL,
+        MIR_NOP, MIR_PHI, MIR_PHI, MIR_NOP, MIR_NOP,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_VA_ARG,
+        MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL,
+        MIR_VA_END, MIR_NOP, MIR_RETURN
+    };
+    const struct MirInsn *count;
+    const struct MirInsn *initial_total;
+    const struct MirInsn *total_store;
+    const struct MirInsn *va_start;
+    const struct MirInsn *initial_index;
+    const struct MirInsn *index_store;
+    const struct MirInsn *total_phi;
+    const struct MirInsn *index_phi;
+    const struct MirInsn *comparison;
+    const struct MirInsn *va_arg;
+    const struct MirInsn *sum;
+    const struct MirInsn *loop_total_store;
+    const struct MirInsn *increment;
+    const struct MirInsn *loop_index_store;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir_cfg_block_count() != 4 || mir.count != 32)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return 0;
+    count = &mir.insns[1];
+    initial_total = &mir.insns[2];
+    total_store = &mir.insns[4];
+    va_start = &mir.insns[5];
+    initial_index = &mir.insns[6];
+    index_store = &mir.insns[8];
+    total_phi = &mir.insns[11];
+    index_phi = &mir.insns[12];
+    comparison = &mir.insns[15];
+    va_arg = &mir.insns[18];
+    sum = &mir.insns[19];
+    loop_total_store = &mir.insns[21];
+    increment = &mir.insns[25];
+    loop_index_store = &mir.insns[26];
+    plan->value_width = type_size(initial_total->type);
+    if (type_size(count->type) != 2 ||
+        (count->type & TYPE_UNSIGNED) != 0 ||
+        type_is_float(count->type) ||
+        type_ptr_depth(count->type) != 0 ||
+        (plan->value_width != 2 && plan->value_width != 4) ||
+        type_is_float(initial_total->type) ||
+        initial_total->immediate != 0 ||
+        !mir_machine_unobservable_local_store(total_store) ||
+        total_store->src1 != initial_total->dst ||
+        va_start->secondary_offset < 2 ||
+        !mir_machine_named_nonvolatile(va_start) ||
+        initial_index->immediate != 0 ||
+        type_size(initial_index->type) != 2 ||
+        !mir_machine_unobservable_local_store(index_store) ||
+        index_store->src1 != initial_index->dst ||
+        total_phi->src1 != initial_total->dst ||
+        total_phi->phi_pred1 != mir.insns[0].label ||
+        total_phi->phi_pred2 != mir.insns[22].label ||
+        index_phi->src1 != initial_index->dst ||
+        index_phi->phi_pred1 != mir.insns[0].label ||
+        index_phi->phi_pred2 != mir.insns[22].label ||
+        type_size(total_phi->type) != plan->value_width ||
+        type_size(index_phi->type) != 2 ||
+        comparison->immediate != '<' ||
+        comparison->src1 != index_phi->dst ||
+        comparison->src2 != count->dst ||
+        type_size(comparison->type) != 2 ||
+        mir.insns[16].src1 != comparison->dst ||
+        mir.insns[16].label != mir.insns[28].label ||
+        type_size(va_arg->type) != plan->value_width ||
+        va_arg->secondary_offset != plan->value_width ||
+        !mir_machine_named_nonvolatile(va_arg) ||
+        strcmp(va_start->name, va_arg->name) ||
+        strcmp(va_start->name, mir.insns[29].name) ||
+        !mir_machine_named_nonvolatile(&mir.insns[29]) ||
+        sum->immediate != '+' ||
+        sum->src1 != total_phi->dst ||
+        sum->src2 != va_arg->dst ||
+        type_size(sum->type) != plan->value_width ||
+        !mir_machine_same_location(
+            total_store, loop_total_store) ||
+        loop_total_store->src1 != sum->dst ||
+        total_phi->src2 != sum->dst ||
+        increment->immediate != '+' ||
+        increment->src1 != index_phi->dst ||
+        !mir_machine_constant_equals(increment->src2, 1) ||
+        !mir_machine_same_location(
+            index_store, loop_index_store) ||
+        loop_index_store->src1 != increment->dst ||
+        index_phi->src2 != increment->dst ||
+        mir.insns[27].label != mir.insns[9].label ||
+        mir.insns[31].src1 != total_phi->dst ||
+        !mir_machine_parameter_value_offset(
+            count->dst, &plan->count_stack_offset))
+        return 0;
+    plan->first_argument_stack_offset =
+        va_start->secondary_offset - 2;
     return 1;
 }
 
@@ -8124,6 +8239,59 @@ static void mir_emit_byte_bitwise_report(
           "\tpop bc\n\tpop bc\n\tpop bc\n\tret\n", out);
 }
 
+static void mir_emit_variadic_sum(
+    FILE *out, const struct MirVariadicSum *plan)
+{
+    int loop = new_label();
+    int done = new_label();
+    int byte;
+
+    fprintf(out,
+            ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n"
+            "\tpush iy\n",
+            mir.name);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tld hl,%d\n\tadd hl,sp\n\tpush hl\n\tpop iy\n",
+            plan->count_stack_offset + 2,
+            plan->first_argument_stack_offset + 2);
+    if (plan->value_width == 2)
+        fputs("\tld de,0\n", out);
+    else
+        fputs("\tld hl,0\n\tld de,0\n", out);
+    fprintf(out,
+            "\tld a,b\n\tor a\n\tjp m,L%d\n"
+            "\tor c\n\tjp z,L%d\n"
+            "L%d:\n",
+            done, done, loop);
+    if (plan->value_width == 2) {
+        fputs("\tld l,(iy+0)\n\tld h,(iy+1)\n"
+              "\tex de,hl\n\tadd hl,de\n\tex de,hl\n",
+              out);
+    } else {
+        for (byte = 0; byte < 4; ++byte) {
+            const char registers[] = { 'l', 'h', 'e', 'd' };
+            fprintf(out,
+                    "\tld a,%c\n\t%s a,(iy+%d)\n\tld %c,a\n",
+                    registers[byte],
+                    byte == 0 ? "add" : "adc",
+                    byte, registers[byte]);
+        }
+    }
+    for (byte = 0; byte < plan->value_width; ++byte)
+        fputs("\tinc iy\n", out);
+    fprintf(out,
+            "\tdec bc\n\tld a,b\n\tor c\n\tjp nz,L%d\n"
+            "L%d:\n",
+            loop, done);
+    if (plan->value_width == 2)
+        fputs("\tld l,e\n\tld h,d\n", out);
+    fputs("\tpop iy\n\tret\n", out);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -8180,6 +8348,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirByteMismatchReport byte_mismatch_report;
     struct MirByteArithmeticReports byte_arithmetic_reports;
     struct MirByteBitwiseReport byte_bitwise_report;
+    struct MirVariadicSum variadic_sum;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -8385,6 +8554,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_byte_bitwise_report(&byte_bitwise_report)) {
         mir_emit_byte_bitwise_report(out, &byte_bitwise_report);
+        return 1;
+    }
+    if (mir_match_variadic_sum(&variadic_sum)) {
+        mir_emit_variadic_sum(out, &variadic_sum);
         return 1;
     }
     if (mir_match_indexed_member_write(
