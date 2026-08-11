@@ -8,6 +8,201 @@ struct MirIndexedWordSum {
     int right_offset;
 };
 
+enum MirMachineFormKind {
+    MIR_MACHINE_FORM_INTEGER = 1,
+    MIR_MACHINE_FORM_POINTER = 2
+};
+
+struct MirMachineForm {
+    int kind;
+    long value;
+    int storage;
+    int offset;
+    int pointer_terms;
+};
+
+static int mir_machine_same_location(
+    const struct MirInsn *left, const struct MirInsn *right)
+{
+    int left_type, left_storage, left_offset;
+    int right_type, right_storage, right_offset;
+
+    return mir_scalar_memory_location(
+               left, &left_type, &left_storage, &left_offset) &&
+           mir_scalar_memory_location(
+               right, &right_type, &right_storage, &right_offset) &&
+           left_storage == right_storage &&
+           left_offset == right_offset &&
+           type_size(left_type) == type_size(right_type);
+}
+
+static int mir_machine_pointer_form(
+    int value, int before, struct MirMachineForm *form, int depth)
+{
+    const struct MirInsn *definition;
+    int definition_index;
+
+    if (depth > 32)
+        return 0;
+    definition = mir_definition(value);
+    if (definition == NULL)
+        return 0;
+    definition_index = (int)(definition - mir.insns);
+    if (definition_index >= before)
+        return 0;
+    if (definition->opcode == MIR_CONST) {
+        form->kind = MIR_MACHINE_FORM_INTEGER;
+        form->value = definition->immediate;
+        form->storage = 0;
+        form->offset = 0;
+        form->pointer_terms = 0;
+        return 1;
+    }
+    if (definition->opcode == MIR_ADDRESS) {
+        int memory_type;
+        int memory_storage;
+        int memory_offset;
+
+        if (!mir_scalar_memory_location(
+                definition, &memory_type, &memory_storage,
+                &memory_offset) ||
+            (memory_storage != SC_LOCAL &&
+             memory_storage != SC_GLOBAL) ||
+            mir_declared_is_vla_object(definition->name))
+            return 0;
+        form->kind = MIR_MACHINE_FORM_POINTER;
+        form->value = 0;
+        form->storage = memory_storage;
+        form->offset = memory_offset;
+        form->pointer_terms = 1;
+        return 1;
+    }
+    if (definition->opcode == MIR_LOAD) {
+        int instruction;
+        const struct MirInsn *stored = NULL;
+
+        for (instruction = 0; instruction < definition_index; ++instruction) {
+            const struct MirInsn *candidate = &mir.insns[instruction];
+
+            if (candidate->opcode == MIR_CALL ||
+                candidate->opcode == MIR_CALL_AGGREGATE ||
+                candidate->opcode == MIR_STORE_INDIRECT)
+                return 0;
+            if (candidate->opcode == MIR_STORE &&
+                mir_machine_same_location(candidate, definition))
+                stored = candidate;
+        }
+        return stored != NULL &&
+               mir_machine_pointer_form(
+                   stored->src1, (int)(stored - mir.insns),
+                   form, depth + 1);
+    }
+    if (definition->opcode == MIR_UNARY &&
+        definition->immediate == 0)
+        return mir_machine_pointer_form(
+            definition->src1, definition_index, form, depth + 1);
+    if (definition->opcode == MIR_BINARY &&
+        (definition->immediate == '+' ||
+         definition->immediate == '-')) {
+        struct MirMachineForm left;
+        struct MirMachineForm right;
+
+        if (!mir_machine_pointer_form(
+                definition->src1, definition_index,
+                &left, depth + 1) ||
+            !mir_machine_pointer_form(
+                definition->src2, definition_index,
+                &right, depth + 1))
+            return 0;
+        if (left.kind == MIR_MACHINE_FORM_INTEGER &&
+            right.kind == MIR_MACHINE_FORM_INTEGER) {
+            form->kind = MIR_MACHINE_FORM_INTEGER;
+            form->value = definition->immediate == '+'
+                ? left.value + right.value
+                : left.value - right.value;
+            form->storage = 0;
+            form->offset = 0;
+            form->pointer_terms =
+                left.pointer_terms + right.pointer_terms;
+            return 1;
+        }
+        if (definition->immediate == '+' &&
+            left.kind == MIR_MACHINE_FORM_INTEGER &&
+            right.kind == MIR_MACHINE_FORM_POINTER) {
+            *form = right;
+            form->value += left.value;
+            form->pointer_terms += left.pointer_terms;
+            return 1;
+        }
+        if (left.kind == MIR_MACHINE_FORM_POINTER &&
+            right.kind == MIR_MACHINE_FORM_INTEGER) {
+            *form = left;
+            form->value += definition->immediate == '+'
+                ? right.value : -right.value;
+            form->pointer_terms += right.pointer_terms;
+            return 1;
+        }
+        if (definition->immediate == '-' &&
+            left.kind == MIR_MACHINE_FORM_POINTER &&
+            right.kind == MIR_MACHINE_FORM_POINTER &&
+            left.storage == right.storage &&
+            left.offset == right.offset) {
+            form->kind = MIR_MACHINE_FORM_INTEGER;
+            form->value = left.value - right.value;
+            form->storage = 0;
+            form->offset = 0;
+            form->pointer_terms =
+                left.pointer_terms + right.pointer_terms;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int mir_match_affine_pointer_constant_return(long *value_out)
+{
+    const struct MirInsn *return_insn = NULL;
+    struct MirMachineForm form;
+    int return_count = 0;
+    int instruction;
+
+    if (mir.has_vla || mir_cfg_block_count() != 1 ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        type_size(mir.return_type) != 2 ||
+        type_is_float(mir.return_type))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        switch (insn->opcode) {
+        case MIR_NOP:
+        case MIR_LABEL:
+        case MIR_CONST:
+        case MIR_ADDRESS:
+        case MIR_LOAD:
+        case MIR_STORE:
+        case MIR_UNARY:
+        case MIR_BINARY:
+            break;
+        case MIR_RETURN:
+            return_insn = insn;
+            ++return_count;
+            break;
+        default:
+            return 0;
+        }
+    }
+    if (return_count != 1 || return_insn == NULL ||
+        !mir_machine_pointer_form(
+            return_insn->src1, (int)(return_insn - mir.insns),
+            &form, 0) ||
+        form.kind != MIR_MACHINE_FORM_INTEGER ||
+        form.pointer_terms < 2)
+        return 0;
+    *value_out = form.value & 0xffffL;
+    return 1;
+}
+
 static int mir_machine_scalar_pointer_parameter(
     const struct MirInsn *parameter, int *stack_offset)
 {
@@ -164,6 +359,14 @@ static void mir_emit_indexed_word_sum(
 int mir_try_emit_scheduled_machine_cfg(FILE *out)
 {
     struct MirIndexedWordSum indexed_word_sum;
+    long constant;
+
+    if (mir_match_affine_pointer_constant_return(&constant)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        fprintf(out, "\tld hl,%ld\n\tret\n", constant);
+        return 1;
+    }
 
     if (!mir_match_indexed_word_sum(&indexed_word_sum))
         return 0;
