@@ -206,6 +206,11 @@ struct MirVlaEndpointReduction {
     int adjustment;
 };
 
+struct MirMaskedWideProductHigh {
+    int parameter_stack_offset;
+    unsigned int multiplier;
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -1852,6 +1857,134 @@ static int mir_match_vla_endpoint_reduction(
         (int)(unsigned short)(
             (unsigned long)(unsigned short)last_value -
             (unsigned long)(unsigned short)first_value);
+    return 1;
+}
+
+static int mir_match_masked_wide_product_high(
+    struct MirMaskedWideProductHigh *plan)
+{
+    const struct MirInsn *parameter = NULL;
+    const struct MirInsn *return_insn = NULL;
+    const struct MirInsn *shift;
+    const struct MirInsn *multiply;
+    const struct MirInsn *masked;
+    const struct MirInsn *multiplier;
+    const struct MirInsn *mask;
+    int parameter_count = 0;
+    int return_count = 0;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int masked_value;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir_cfg_block_count() != 1 ||
+        type_size(mir.return_type) != 4 ||
+        type_is_float(mir.return_type) ||
+        type_ptr_depth(mir.return_type) != 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        switch (insn->opcode) {
+        case MIR_LABEL:
+        case MIR_NOP:
+        case MIR_CONST:
+            break;
+        case MIR_PARAM:
+            if (++parameter_count != 1)
+                return 0;
+            parameter = insn;
+            break;
+        case MIR_BINARY:
+            break;
+        case MIR_RETURN:
+            if (++return_count != 1)
+                return 0;
+            return_insn = insn;
+            break;
+        default:
+            return 0;
+        }
+    }
+    if (parameter_count != 1 || return_count != 1 ||
+        parameter == NULL || return_insn == NULL ||
+        type_size(parameter->type) != 4 ||
+        type_is_float(parameter->type) ||
+        type_ptr_depth(parameter->type) != 0)
+        return 0;
+    shift = mir_definition(return_insn->src1);
+    if (shift == NULL || shift->opcode != MIR_BINARY ||
+        shift->immediate != TOK_SHR ||
+        type_size(shift->type) != 4 ||
+        !mir_machine_constant_equals(shift->src2, 16))
+        return 0;
+    multiply = mir_definition(shift->src1);
+    if (multiply == NULL || multiply->opcode != MIR_BINARY ||
+        multiply->immediate != '*' ||
+        type_size(multiply->type) != 4)
+        return 0;
+    masked = mir_definition(multiply->src1);
+    multiplier = mir_definition(multiply->src2);
+    if (masked == NULL || masked->opcode != MIR_BINARY ||
+        masked->immediate != '&') {
+        masked = mir_definition(multiply->src2);
+        multiplier = mir_definition(multiply->src1);
+    }
+    if (masked == NULL || masked->opcode != MIR_BINARY ||
+        masked->immediate != '&' ||
+        type_size(masked->type) != 4 ||
+        multiplier == NULL ||
+        multiplier->opcode != MIR_CONST ||
+        type_size(multiplier->type) != 4 ||
+        multiplier->immediate <= 0 ||
+        multiplier->immediate > 32768)
+        return 0;
+    if (masked->src1 == parameter->dst) {
+        masked_value = masked->src2;
+    } else if (masked->src2 == parameter->dst) {
+        masked_value = masked->src1;
+    } else {
+        return 0;
+    }
+    mask = mir_definition(masked_value);
+    if (mask == NULL || type_size(mask->type) != 4)
+        return 0;
+    if (mask->opcode != MIR_CONST || mask->immediate != 65535) {
+        const struct MirInsn *left;
+        const struct MirInsn *right;
+
+        if (mask->opcode != MIR_BINARY ||
+            mask->immediate != '-')
+            return 0;
+        left = mir_definition(mask->src1);
+        right = mir_definition(mask->src2);
+        if (left == NULL || left->opcode != MIR_CONST ||
+            type_size(left->type) != 4 ||
+            left->immediate != 65536 ||
+            right == NULL || right->opcode != MIR_CONST ||
+            type_size(right->type) != 4 ||
+            right->immediate != 1)
+            return 0;
+    }
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode == MIR_BINARY &&
+            insn != shift && insn != multiply &&
+            insn != masked && insn != mask)
+            return 0;
+    }
+    if (!mir_scalar_memory_location(
+            parameter, &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_size(memory_type) != 4 ||
+        memory_offset < 2)
+        return 0;
+    plan->parameter_stack_offset = memory_offset - 2;
+    plan->multiplier = (unsigned int)multiplier->immediate;
     return 1;
 }
 
@@ -5940,6 +6073,18 @@ static void mir_emit_vla_endpoint_reduction(
     fprintf(out, "L%d:\n\tret\n", done);
 }
 
+static void mir_emit_masked_wide_product_high(
+    FILE *out, const struct MirMaskedWideProductHigh *plan)
+{
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tld hl,%u\n",
+            plan->parameter_stack_offset, plan->multiplier);
+    mir_emit_runtime_call(out, "__m1u");
+    fputs("\tld l,e\n\tld h,d\n\tld de,0\n\tret\n", out);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -5984,6 +6129,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirByteComparisonPrint byte_comparison_print;
     struct MirConstantBufferCallPrint constant_buffer_call_print;
     struct MirVlaEndpointReduction vla_endpoint_reduction;
+    struct MirMaskedWideProductHigh masked_wide_product_high;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -6115,6 +6261,14 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_vla_endpoint_reduction(
             out, &vla_endpoint_reduction);
+        return 1;
+    }
+    if (mir_match_masked_wide_product_high(
+            &masked_wide_product_high)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_masked_wide_product_high(
+            out, &masked_wide_product_high);
         return 1;
     }
     if (mir_match_indexed_member_write(
