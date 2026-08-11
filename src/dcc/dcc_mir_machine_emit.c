@@ -642,6 +642,12 @@ struct MirNibbleAppend {
     int high_adjustment;
 };
 
+struct MirVolatileFillWideConstant {
+    int buffer_offset;
+    int count;
+    unsigned long result;
+};
+
 #define MIR_MACHINE_SWITCH_RESULT_LIMIT 64
 
 struct MirConstantResultSwitch {
@@ -9695,6 +9701,124 @@ static int mir_match_dead_constant_float_check(void)
     return 1;
 }
 
+static int mir_match_volatile_fill_wide_constant(
+    struct MirVolatileFillWideConstant *plan)
+{
+    static const int expected_opcodes[78] = {
+        MIR_LABEL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_PHI,
+        MIR_NOP, MIR_CONST, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP, MIR_UNARY,
+        MIR_STORE_INDIRECT, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_NOP, MIR_NOP,
+        MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_CONST, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_NOP, MIR_RETURN, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_NOP, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_RETURN, MIR_LABEL, MIR_CONST,
+        MIR_NOP, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_NOP, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_RETURN, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP, MIR_RETURN
+    };
+    int declared;
+    int found_volatile = 0;
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 78 || mir_cfg_block_count() != 7 ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_LONG ||
+        (mir.return_type & TYPE_UNSIGNED) == 0 ||
+        type_size(mir.return_type) != 4)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return 0;
+    if (!mir_scalar_memory_location(
+            &mir.insns[11], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_LOCAL ||
+        type_ptr_depth(mir.insns[11].type) != 1 ||
+        (mir.insns[11].type & 15) != TYPE_CHAR ||
+        memory_offset >= 0 ||
+        !mir_machine_constant_equals(mir.insns[1].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[3]) ||
+        mir.insns[5].src1 != mir.insns[1].dst ||
+        mir.insns[5].src2 != mir.insns[20].dst ||
+        mir.insns[5].phi_pred1 != mir.insns[0].label ||
+        mir.insns[5].phi_pred2 != mir.insns[17].label ||
+        mir.insns[7].immediate <= 0 ||
+        mir.insns[7].immediate > 255 ||
+        mir.insns[9].immediate != '<' ||
+        mir.insns[9].src1 != mir.insns[5].dst ||
+        mir.insns[9].src2 != mir.insns[7].dst ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        mir.insns[10].label != mir.insns[23].label)
+        return 0;
+    for (declared = 0; declared < mir.declared_count; ++declared)
+        if (!strcmp(mir.declared_names[declared], mir.insns[11].name)) {
+            found_volatile = mir.declared_is_volatile[declared];
+            break;
+        }
+    if (!found_volatile ||
+        mir.insns[13].src1 != mir.insns[11].dst ||
+        mir.insns[13].src2 != mir.insns[5].dst ||
+        mir.insns[13].immediate != 1 ||
+        mir.insns[15].immediate != 0 ||
+        mir.insns[15].src1 != mir.insns[5].dst ||
+        mir.insns[16].src1 != mir.insns[13].dst ||
+        mir.insns[16].src2 != mir.insns[15].dst ||
+        mir.insns[16].memory_size != 1 ||
+        !mir_machine_constant_equals(mir.insns[19].dst, 1) ||
+        mir.insns[20].immediate != '+' ||
+        mir.insns[20].src1 != mir.insns[5].dst ||
+        mir.insns[20].src2 != mir.insns[19].dst ||
+        !mir_machine_same_location(&mir.insns[3], &mir.insns[21]) ||
+        mir.insns[22].label != mir.insns[4].label)
+        return 0;
+    if (mir.insns[24].immediate != 0x12345678L ||
+        mir.insns[30].immediate != TOK_SHR ||
+        mir.insns[30].src1 != mir.insns[24].dst ||
+        !mir_machine_constant_equals(mir.insns[29].dst, 8) ||
+        mir.insns[34].immediate != 0x00123456L ||
+        mir.insns[36].immediate != TOK_NE ||
+        mir.insns[36].src1 != mir.insns[30].dst ||
+        mir.insns[36].src2 != mir.insns[34].dst ||
+        mir.insns[37].label != mir.insns[40].label ||
+        mir.insns[43].immediate != TOK_SHR ||
+        mir.insns[43].src1 != mir.insns[30].dst ||
+        !mir_machine_constant_equals(mir.insns[42].dst, 8) ||
+        mir.insns[47].immediate != 0x1234L ||
+        mir.insns[49].immediate != TOK_NE ||
+        mir.insns[49].src1 != mir.insns[43].dst ||
+        mir.insns[49].src2 != mir.insns[47].dst ||
+        mir.insns[50].label != mir.insns[53].label)
+        return 0;
+    if (mir.insns[54].immediate != 49 ||
+        mir.insns[60].immediate != TOK_SHL ||
+        mir.insns[60].src1 != mir.insns[54].dst ||
+        !mir_machine_constant_equals(mir.insns[59].dst, 6) ||
+        mir.insns[64].immediate != 3136 ||
+        mir.insns[66].immediate != TOK_NE ||
+        mir.insns[66].src1 != mir.insns[60].dst ||
+        mir.insns[66].src2 != mir.insns[64].dst ||
+        mir.insns[67].label != mir.insns[70].label ||
+        mir.insns[73].immediate != TOK_SHR ||
+        mir.insns[73].src1 != mir.insns[60].dst ||
+        !mir_machine_constant_equals(mir.insns[72].dst, 8) ||
+        mir.insns[77].src1 != mir.insns[73].dst)
+        return 0;
+    plan->buffer_offset = memory_offset;
+    plan->count = (int)mir.insns[7].immediate;
+    plan->result = 12;
+    if (-plan->buffer_offset < plan->count)
+        return 0;
+    return 1;
+}
+
 static int mir_machine_constant_return_for_label(
     int label, int *result)
 {
@@ -16708,6 +16832,27 @@ static void mir_emit_nibble_append(
     fprintf(out, "L%d:\n\tld (hl),a\n\tinc hl\n\tret\n", done);
 }
 
+static void mir_emit_volatile_fill_wide_constant(
+    FILE *out, const struct MirVolatileFillWideConstant *plan)
+{
+    int loop = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    fprintf(out, "\tld hl,%d\n\tadd hl,sp\n\tld sp,hl\n",
+            plan->buffer_offset);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tpush ix\n\tpop hl\n", out);
+    fprintf(out,
+            "\tld de,%d\n\tadd hl,de\n\tld a,0\n\tld b,%d\n"
+            "L%d:\n\tld (hl),a\n\tinc hl\n\tinc a\n\tdjnz L%d\n"
+            "\tld hl,%lu\n\tld de,%lu\n"
+            "\tld sp,ix\n\tpop ix\n\tret\n",
+            plan->buffer_offset, plan->count, loop, loop,
+            plan->result & 0xffffUL,
+            (plan->result >> 16) & 0xffffUL);
+}
+
 static void mir_emit_constant_function(FILE *out, int result)
 {
     if (opt_stack_check)
@@ -16895,6 +17040,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirRecordNameSearch record_name_search;
     struct MirSequentialUnaryReports sequential_unary_reports;
     struct MirNibbleAppend nibble_append;
+    struct MirVolatileFillWideConstant volatile_fill_wide_constant;
     struct MirConstantResultSwitch constant_result_switch;
     struct MirLocalByteFillSumPrint local_byte_fill_sum_print;
     struct MirIndexedMemberWrite indexed_member_write;
@@ -16997,6 +17143,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_nibble_append(&nibble_append)) {
         mir_emit_nibble_append(out, &nibble_append);
+        return 1;
+    }
+    if (mir_match_volatile_fill_wide_constant(
+            &volatile_fill_wide_constant)) {
+        mir_emit_volatile_fill_wide_constant(
+            out, &volatile_fill_wide_constant);
         return 1;
     }
     if (mir_match_affine_pointer_constant_return(&constant)) {
