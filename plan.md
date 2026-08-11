@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `9d03ffc`
-  (`schedule fixed attention sample loops`).
-- Current candidate coverage: **1948/2185 (89.15%)**.
-- Remaining fallback population: **237 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `49f5fa2`
+  (`schedule fixed global copy state`).
+- Current candidate coverage: **1949/2185 (89.20%)**.
+- Remaining fallback population: **236 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
   fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
@@ -184,6 +184,9 @@ current execution plan and handoff.
 - Fixed global byte copies with constant scalar-state tails now use LDIR and
   direct byte/word stores. This admits `tchess.init_board`, replacing its
   loop and frame traffic with 13 machine instructions.
+- Fixed-stride global call loops now keep the induction value in IY and derive
+  each pointer argument directly from its global base and byte stride. This
+  admits `attnc11.project_logits` with a dual-mode cycle reduction.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -191,7 +194,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 237 final-cost fallbacks,
+- Current next priority: repeated causes in the 236 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 

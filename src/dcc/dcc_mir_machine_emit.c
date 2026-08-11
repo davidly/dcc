@@ -586,6 +586,19 @@ struct MirGlobalByteCopyState {
     int count;
 };
 
+struct MirFixedGlobalStrideCall {
+    struct Sym *function;
+    struct Sym *fixed;
+    struct Sym *first;
+    struct Sym *second;
+    int fixed_offset;
+    int first_offset;
+    int second_offset;
+    int first_stride;
+    int second_stride;
+    int count;
+};
+
 struct MirConstantLoopCheck {
     struct Sym *function;
     int string_id;
@@ -9939,6 +9952,131 @@ static int mir_match_global_byte_copy_state(
             return mir_machine_reject(
                 "global-byte-copy-state", "state-symbol");
     }
+    return 1;
+}
+
+static int mir_match_fixed_global_stride_call(
+    struct MirFixedGlobalStrideCall *plan)
+{
+    static const int expected_opcodes[35] = {
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_PHI,
+        MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_CONST, MIR_UNARY,
+        MIR_BINARY, MIR_INDEX_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_NOP,
+        MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_INDEX_ADDRESS, MIR_ARG,
+        MIR_CALL, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_JUMP, MIR_LABEL
+    };
+    const struct MirInsn *index_phi = &mir.insns[5];
+    const struct MirInsn *fixed = &mir.insns[11];
+    const struct MirInsn *first = &mir.insns[13];
+    const struct MirInsn *second = &mir.insns[20];
+    const struct MirInsn *call = &mir.insns[27];
+    int arguments[3];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 35 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return mir_machine_reject(
+            "fixed-global-stride-call", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "fixed-global-stride-call", "opcode");
+    if (!mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[3]) ||
+        index_phi->src1 != mir.insns[2].dst ||
+        index_phi->src2 != mir.insns[31].dst ||
+        index_phi->phi_pred1 != mir.insns[0].label ||
+        index_phi->phi_pred2 != mir.insns[28].label ||
+        mir.insns[7].immediate <= 0 ||
+        mir.insns[7].immediate > 255 ||
+        mir.insns[8].immediate != 0 ||
+        mir.insns[8].src1 != index_phi->dst ||
+        mir.insns[9].immediate != '<' ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[9].src2 != mir.insns[7].dst ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        mir.insns[10].label != mir.insns[34].label)
+        return mir_machine_reject(
+            "fixed-global-stride-call", "loop");
+    plan->count = (int)mir.insns[7].immediate;
+    if (!mir_scalar_memory_location(
+            fixed, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL)
+        return mir_machine_reject(
+            "fixed-global-stride-call", "fixed");
+    plan->fixed = find_global(fixed->name);
+    plan->fixed_offset = memory_offset;
+    if (!mir_scalar_memory_location(
+            first, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        mir.insns[16].immediate != 0 ||
+        mir.insns[16].src1 != index_phi->dst ||
+        mir.insns[17].immediate != '*' ||
+        mir.insns[17].src1 != mir.insns[16].dst ||
+        mir.insns[17].src2 != mir.insns[15].dst ||
+        mir.insns[18].src1 != first->dst ||
+        mir.insns[18].src2 != mir.insns[17].dst ||
+        mir.insns[18].immediate <= 0 ||
+        mir.insns[18].memory_size != 2)
+        return mir_machine_reject(
+            "fixed-global-stride-call", "first");
+    plan->first = find_global(first->name);
+    plan->first_offset = memory_offset;
+    plan->first_stride =
+        (int)(mir.insns[15].immediate * mir.insns[18].immediate);
+    if (!mir_scalar_memory_location(
+            second, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        mir.insns[23].immediate != 0 ||
+        mir.insns[23].src1 != index_phi->dst ||
+        mir.insns[24].immediate != '*' ||
+        mir.insns[24].src1 != mir.insns[23].dst ||
+        mir.insns[24].src2 != mir.insns[22].dst ||
+        mir.insns[25].src1 != second->dst ||
+        mir.insns[25].src2 != mir.insns[24].dst ||
+        mir.insns[25].immediate <= 0 ||
+        mir.insns[25].memory_size != 2)
+        return mir_machine_reject(
+            "fixed-global-stride-call", "second");
+    plan->second = find_global(second->name);
+    plan->second_offset = memory_offset;
+    plan->second_stride =
+        (int)(mir.insns[22].immediate * mir.insns[25].immediate);
+    if (plan->fixed == NULL || plan->first == NULL ||
+        plan->second == NULL ||
+        plan->fixed->is_volatile || plan->first->is_volatile ||
+        plan->second->is_volatile ||
+        plan->first_stride <= 0 || plan->first_stride > 32767 ||
+        plan->second_stride <= 0 || plan->second_stride > 32767 ||
+        !mir_machine_three_call_arguments(call, arguments) ||
+        arguments[0] != fixed->dst ||
+        arguments[1] != mir.insns[18].dst ||
+        arguments[2] != mir.insns[25].dst)
+        return mir_machine_reject(
+            "fixed-global-stride-call", "arguments");
+    plan->function = find_global(call->name);
+    if (plan->function == NULL || !plan->function->is_defined ||
+        plan->function->is_funcptr || plan->function->is_noreturn ||
+        (call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0)
+        return mir_machine_reject(
+            "fixed-global-stride-call", "function");
+    if (!mir_machine_constant_equals(mir.insns[30].dst, 1) ||
+        mir.insns[31].immediate != '+' ||
+        mir.insns[31].src1 != index_phi->dst ||
+        mir.insns[31].src2 != mir.insns[30].dst ||
+        mir.insns[32].object != mir.insns[3].object ||
+        mir.insns[32].src1 != mir.insns[31].dst ||
+        mir.insns[33].label != mir.insns[4].label)
+        return mir_machine_reject(
+            "fixed-global-stride-call", "increment");
     return 1;
 }
 
@@ -19414,6 +19552,45 @@ static void mir_emit_global_byte_copy_state(
     fputs("\tret\n", out);
 }
 
+static void mir_emit_stride_global_argument(
+    FILE *out, struct Sym *symbol, int offset, int stride)
+{
+    fputs("\tpush iy\n\tpop hl\n", out);
+    mir_emit_mul_hl_const(out, (unsigned long)stride);
+    mir_machine_emit_global_address_de(out, symbol, offset);
+    fputs("\tadd hl,de\n\tpush hl\n", out);
+}
+
+static void mir_emit_fixed_global_stride_call(
+    FILE *out, const struct MirFixedGlobalStrideCall *plan)
+{
+    int loop = new_label();
+
+    fprintf(out,
+            ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n"
+            "\tpush iy\n",
+            mir.name);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tld iy,0\n", out);
+    fprintf(out, "L%d:\n", loop);
+    mir_emit_stride_global_argument(
+        out, plan->second, plan->second_offset,
+        plan->second_stride);
+    mir_emit_stride_global_argument(
+        out, plan->first, plan->first_offset,
+        plan->first_stride);
+    mir_machine_emit_global_address_de(
+        out, plan->fixed, plan->fixed_offset);
+    fputs("\tpush de\n", out);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tinc iy\n"
+          "\tpush iy\n\tpop hl\n\tld a,l\n", out);
+    fprintf(out, "\tcp %d\n\tjp nz,L%d\n"
+                 "\tpop iy\n;@dcc.reg free=iy\n\tret\n",
+            plan->count, loop);
+}
+
 static void mir_emit_constant_loop_check(
     FILE *out, const struct MirConstantLoopCheck *plan)
 {
@@ -20269,6 +20446,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFixedReverseWordCopy fixed_reverse_word_copy;
     struct MirFixedRandomWordFill fixed_random_word_fill;
     struct MirGlobalByteCopyState global_byte_copy_state;
+    struct MirFixedGlobalStrideCall fixed_global_stride_call;
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
@@ -20819,6 +20997,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &global_byte_copy_state)) {
         mir_emit_global_byte_copy_state(
             out, &global_byte_copy_state);
+        return 1;
+    }
+    if (mir_match_fixed_global_stride_call(
+            &fixed_global_stride_call)) {
+        mir_emit_fixed_global_stride_call(
+            out, &fixed_global_stride_call);
         return 1;
     }
     if (mir_match_constant_loop_check(&constant_loop_check)) {
