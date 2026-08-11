@@ -438,6 +438,17 @@ struct MirRecursiveWideProduct {
     int parameter_stack_offset;
 };
 
+struct MirRecursiveWideTreeSum {
+    struct Sym *function;
+    int parameter_stack_offset;
+    int value_offset;
+    int value_width;
+    int value_is_unsigned;
+    int value_first;
+    int left_offset;
+    int right_offset;
+};
+
 struct MirByteRotateFlags {
     struct Sym *state;
     int operation_stack_offset;
@@ -6658,6 +6669,228 @@ static int mir_match_recursive_wide_product(
         memory_storage != SC_PARAM || memory_offset < 2)
         return 0;
     plan->parameter_stack_offset = memory_offset - 2;
+    return 1;
+}
+
+static int mir_match_recursive_wide_tree_sum(
+    struct MirRecursiveWideTreeSum *plan)
+{
+    static const int expected_opcodes[26] = {
+        MIR_LABEL, MIR_PARAM, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST, MIR_RETURN, MIR_LABEL,
+        MIR_NOP, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL,
+        MIR_BINARY, MIR_NOP, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_ARG, MIR_CALL, MIR_BINARY, MIR_RETURN
+    };
+    const struct MirInsn *parameter = &mir.insns[1];
+    const struct MirInsn *value_member = &mir.insns[11];
+    const struct MirInsn *left_member = &mir.insns[14];
+    const struct MirInsn *right_member = &mir.insns[20];
+    const struct MirInsn *left_call = &mir.insns[17];
+    const struct MirInsn *right_call = &mir.insns[23];
+    int left_argument;
+    int right_argument;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 26 || mir_cfg_block_count() != 2 ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
+        type_size(mir.return_type) != 4 ||
+        type_is_float(mir.return_type))
+        return mir_machine_reject(
+            "recursive-wide-tree-sum", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "recursive-wide-tree-sum", "opcode");
+    if (type_ptr_depth(parameter->type) != 1 ||
+        !mir_scalar_memory_location(
+            parameter, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2 ||
+        mir.insns[4].immediate != TOK_EQ ||
+        mir.insns[4].src1 != parameter->dst ||
+        !mir_machine_constant_equals(mir.insns[4].src2, 0) ||
+        mir.insns[5].src1 != mir.insns[4].dst ||
+        mir.insns[5].label != mir.insns[9].label ||
+        !mir_machine_constant_equals(mir.insns[7].dst, 0) ||
+        type_size(mir.insns[7].type) != 4 ||
+        mir.insns[8].src1 != mir.insns[7].dst)
+        return mir_machine_reject(
+            "recursive-wide-tree-sum", "base-case");
+    plan->parameter_stack_offset = memory_offset - 2;
+    if (value_member->src1 != parameter->dst ||
+        value_member->memory_size != 4 ||
+        left_member->src1 != parameter->dst ||
+        left_member->memory_size != 2 ||
+        right_member->src1 != parameter->dst ||
+        right_member->memory_size != 2 ||
+        mir.insns[12].src1 != value_member->dst ||
+        mir.insns[12].memory_size != 4 ||
+        (mir.insns[12].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[15].src1 != left_member->dst ||
+        mir.insns[15].memory_size != 2 ||
+        (mir.insns[15].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[21].src1 != right_member->dst ||
+        mir.insns[21].memory_size != 2 ||
+        (mir.insns[21].memory_flags & (1 | 8)) != 0)
+        return mir_machine_reject(
+            "recursive-wide-tree-sum", "members");
+    plan->value_offset = (int)value_member->immediate;
+    plan->value_width = 4;
+    plan->value_first = 1;
+    plan->left_offset = (int)left_member->immediate;
+    plan->right_offset = (int)right_member->immediate;
+    if (!mir_machine_single_call_argument(
+            left_call, &left_argument) ||
+        !mir_machine_single_call_argument(
+            right_call, &right_argument) ||
+        left_argument != mir.insns[15].dst ||
+        right_argument != mir.insns[21].dst ||
+        strcmp(left_call->name, mir.name) ||
+        strcmp(right_call->name, mir.name) ||
+        left_call->type != mir.return_type ||
+        right_call->type != mir.return_type ||
+        (left_call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+        (right_call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0)
+        return mir_machine_reject(
+            "recursive-wide-tree-sum", "calls");
+    plan->function = find_global(left_call->name);
+    if (plan->function == NULL ||
+        !plan->function->is_defined ||
+        plan->function != find_global(right_call->name) ||
+        plan->function->is_funcptr ||
+        plan->function->is_noreturn)
+        return mir_machine_reject(
+            "recursive-wide-tree-sum", "call-symbol");
+    if (mir.insns[18].immediate != '+' ||
+        mir.insns[18].src1 != mir.insns[12].dst ||
+        mir.insns[18].src2 != left_call->dst ||
+        type_size(mir.insns[18].type) != 4 ||
+        mir.insns[24].immediate != '+' ||
+        mir.insns[24].src1 != mir.insns[18].dst ||
+        mir.insns[24].src2 != right_call->dst ||
+        type_size(mir.insns[24].type) != 4 ||
+        mir.insns[25].src1 != mir.insns[24].dst)
+        return mir_machine_reject(
+            "recursive-wide-tree-sum", "sum");
+    return 1;
+}
+
+static int mir_match_recursive_word_member_tree_sum(
+    struct MirRecursiveWideTreeSum *plan)
+{
+    static const int expected_opcodes[27] = {
+        MIR_LABEL, MIR_PARAM, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST, MIR_RETURN, MIR_LABEL,
+        MIR_NOP, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL,
+        MIR_NOP, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY,
+        MIR_BINARY, MIR_NOP, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG,
+        MIR_CALL, MIR_BINARY, MIR_RETURN
+    };
+    const struct MirInsn *parameter = &mir.insns[1];
+    const struct MirInsn *left_member = &mir.insns[11];
+    const struct MirInsn *value_member = &mir.insns[16];
+    const struct MirInsn *right_member = &mir.insns[21];
+    const struct MirInsn *left_call = &mir.insns[14];
+    const struct MirInsn *right_call = &mir.insns[24];
+    int left_argument;
+    int right_argument;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 27 || mir_cfg_block_count() != 2 ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
+        type_size(mir.return_type) != 4 ||
+        type_is_float(mir.return_type))
+        return mir_machine_reject(
+            "recursive-word-member-tree-sum", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "recursive-word-member-tree-sum", "opcode");
+    if (type_ptr_depth(parameter->type) != 1 ||
+        !mir_scalar_memory_location(
+            parameter, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2 ||
+        mir.insns[4].immediate != TOK_EQ ||
+        mir.insns[4].src1 != parameter->dst ||
+        !mir_machine_constant_equals(mir.insns[4].src2, 0) ||
+        mir.insns[5].src1 != mir.insns[4].dst ||
+        mir.insns[5].label != mir.insns[9].label ||
+        !mir_machine_constant_equals(mir.insns[7].dst, 0) ||
+        type_size(mir.insns[7].type) != 4 ||
+        mir.insns[8].src1 != mir.insns[7].dst)
+        return mir_machine_reject(
+            "recursive-word-member-tree-sum", "base-case");
+    plan->parameter_stack_offset = memory_offset - 2;
+    if (left_member->src1 != parameter->dst ||
+        left_member->memory_size != 2 ||
+        value_member->src1 != parameter->dst ||
+        value_member->memory_size != 2 ||
+        right_member->src1 != parameter->dst ||
+        right_member->memory_size != 2 ||
+        mir.insns[12].src1 != left_member->dst ||
+        mir.insns[12].memory_size != 2 ||
+        (mir.insns[12].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[17].src1 != value_member->dst ||
+        mir.insns[17].memory_size != 2 ||
+        (mir.insns[17].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[18].immediate != 0 ||
+        mir.insns[18].src1 != mir.insns[17].dst ||
+        type_size(mir.insns[18].type) != 4 ||
+        mir.insns[22].src1 != right_member->dst ||
+        mir.insns[22].memory_size != 2 ||
+        (mir.insns[22].memory_flags & (1 | 8)) != 0)
+        return mir_machine_reject(
+            "recursive-word-member-tree-sum", "members");
+    plan->left_offset = (int)left_member->immediate;
+    plan->value_offset = (int)value_member->immediate;
+    plan->right_offset = (int)right_member->immediate;
+    plan->value_width = 2;
+    plan->value_is_unsigned =
+        (mir.insns[17].type & TYPE_UNSIGNED) != 0;
+    if (!mir_machine_single_call_argument(
+            left_call, &left_argument) ||
+        !mir_machine_single_call_argument(
+            right_call, &right_argument) ||
+        left_argument != mir.insns[12].dst ||
+        right_argument != mir.insns[22].dst ||
+        strcmp(left_call->name, mir.name) ||
+        strcmp(right_call->name, mir.name) ||
+        left_call->type != mir.return_type ||
+        right_call->type != mir.return_type)
+        return mir_machine_reject(
+            "recursive-word-member-tree-sum", "calls");
+    plan->function = find_global(left_call->name);
+    if (plan->function == NULL ||
+        !plan->function->is_defined ||
+        plan->function != find_global(right_call->name) ||
+        plan->function->is_funcptr ||
+        plan->function->is_noreturn)
+        return mir_machine_reject(
+            "recursive-word-member-tree-sum", "call-symbol");
+    if (mir.insns[19].immediate != '+' ||
+        mir.insns[19].src1 != left_call->dst ||
+        mir.insns[19].src2 != mir.insns[18].dst ||
+        type_size(mir.insns[19].type) != 4 ||
+        mir.insns[25].immediate != '+' ||
+        mir.insns[25].src1 != mir.insns[19].dst ||
+        mir.insns[25].src2 != right_call->dst ||
+        type_size(mir.insns[25].type) != 4 ||
+        mir.insns[26].src1 != mir.insns[25].dst)
+        return mir_machine_reject(
+            "recursive-word-member-tree-sum", "sum");
     return 1;
 }
 
@@ -18070,6 +18303,78 @@ static void mir_emit_recursive_wide_product(
     fputs("\tpop bc\n\tpop bc\n\tret\n", out);
 }
 
+static void mir_emit_recursive_tree_pointer(
+    FILE *out, const struct MirRecursiveWideTreeSum *plan,
+    int pushed_bytes)
+{
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n",
+            plan->parameter_stack_offset + pushed_bytes);
+}
+
+static void mir_emit_recursive_tree_value(
+    FILE *out, const struct MirRecursiveWideTreeSum *plan,
+    int pushed_bytes)
+{
+    mir_emit_recursive_tree_pointer(out, plan, pushed_bytes);
+    mir_machine_emit_hl_offset(out, plan->value_offset, 0);
+    if (plan->value_width == 4) {
+        fputs("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+              "\tinc hl\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+              "\tld l,c\n\tld h,b\n", out);
+    } else {
+        fputs("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+              "\tld h,b\n\tld l,c\n", out);
+        if (plan->value_is_unsigned)
+            fputs("\tld de,0\n", out);
+        else
+            fputs("\tld a,b\n\trlca\n\tsbc a,a\n"
+                  "\tld d,a\n\tld e,a\n", out);
+    }
+}
+
+static void mir_emit_recursive_wide_tree_sum(
+    FILE *out, const struct MirRecursiveWideTreeSum *plan)
+{
+    int nonnull = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_emit_recursive_tree_pointer(out, plan, 0);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out,
+            "\tjp nz,L%d\n\tld hl,0\n\tld de,0\n\tret\nL%d:\n",
+            nonnull, nonnull);
+
+    if (plan->value_first) {
+        mir_machine_emit_hl_offset(out, plan->value_offset, 0);
+        fputs("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+              "\tinc hl\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+              "\tld l,c\n\tld h,b\n\tpush de\n\tpush hl\n", out);
+    }
+    mir_emit_recursive_tree_pointer(
+        out, plan, plan->value_first ? 4 : 0);
+    mir_machine_emit_hl_offset(out, plan->left_offset, 0);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n", out);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n", out);
+    if (!plan->value_first) {
+        fputs("\tpush de\n\tpush hl\n", out);
+        mir_emit_recursive_tree_value(out, plan, 4);
+    }
+    fputs("\tpop bc\n\tadd hl,bc\n\tex de,hl\n"
+          "\tpop bc\n\tadc hl,bc\n\tex de,hl\n"
+          "\tpush de\n\tpush hl\n", out);
+    mir_emit_recursive_tree_pointer(out, plan, 4);
+    mir_machine_emit_hl_offset(out, plan->right_offset, 0);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n", out);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n"
+          "\tpop bc\n\tadd hl,bc\n\tex de,hl\n"
+          "\tpop bc\n\tadc hl,bc\n\tex de,hl\n\tret\n", out);
+}
+
 static void mir_emit_byte_rotate_flags(
     FILE *out, const struct MirByteRotateFlags *plan)
 {
@@ -19482,6 +19787,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirReducedFloatPolynomial reduced_float_polynomial;
     struct MirFloatTangentRational float_tangent_rational;
     struct MirRecursiveWideProduct recursive_wide_product;
+    struct MirRecursiveWideTreeSum recursive_wide_tree_sum;
     struct MirByteRotateFlags byte_rotate_flags;
     struct MirStatusUnpack status_unpack;
     struct MirStatusPack status_pack;
@@ -19945,6 +20251,14 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &recursive_wide_product)) {
         mir_emit_recursive_wide_product(
             out, &recursive_wide_product);
+        return 1;
+    }
+    if (mir_match_recursive_wide_tree_sum(
+            &recursive_wide_tree_sum) ||
+        mir_match_recursive_word_member_tree_sum(
+            &recursive_wide_tree_sum)) {
+        mir_emit_recursive_wide_tree_sum(
+            out, &recursive_wide_tree_sum);
         return 1;
     }
     if (mir_match_byte_rotate_flags(&byte_rotate_flags)) {

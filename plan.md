@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `811ede3`
-  (`schedule global byte check sequences`).
-- Current candidate coverage: **1942/2185 (88.88%)**.
-- Remaining fallback population: **243 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `68075bb`
+  (`schedule variable-step byte reductions`).
+- Current candidate coverage: **1944/2185 (88.97%)**.
+- Remaining fallback population: **241 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
   fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
@@ -169,6 +169,11 @@ current execution plan and handoff.
   the local pointer cannot escape and folds its conditional extra update.
   This admits `tpeepal.byte_loop_cache/byte_loop_alias`, improving the app
   1.38% peep / 1.83% nopeep.
+- Recursive binary-tree sums now keep wide partial sums on the evaluation
+  stack across child calls and inline carry-preserving long additions. Both
+  native-wide and sign-extended word members are supported, admitting
+  `tclit.sum_tree` and `too.bst_inorder_sum`; `tclit` improves 4.20%/5.24%
+  and `too` 1.84%/2.11%.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -176,7 +181,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 243 final-cost fallbacks,
+- Current next priority: repeated causes in the 241 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
