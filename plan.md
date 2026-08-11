@@ -7,8 +7,8 @@ current execution plan and handoff.
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
 - Published HEAD: `3560572` (`complete MIR emission for a1`).
-- Production coverage: **1877/2182 (86.02%)**.
-- Remaining fallback population: **305 `final-cost-policy`**, with no other
+- Production coverage: **1878/2182 (86.07%)**.
+- Remaining fallback population: **304 `final-cost-policy`**, with no other
   fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -27,6 +27,9 @@ current execution plan and handoff.
 - The structurally profiled VLA wide-truncation loop admits
   `tvla.vla_long_rhs_store` after forced dual-mode A/B proved it faster and
   smaller; the predicate is terminal, hashless, and matches one candidate.
+- The structurally profiled variadic macro-validation loop admits
+  `tvariad.check_macro_values`; forced and production full-mode runs improve
+  about 5% in both modes and reduce linked size.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.

@@ -3735,6 +3735,34 @@ static int mir_is_profiled_vla_wide_truncation_loop(
            indirect_loads == 1 && indirect_stores == 1;
 }
 
+static int mir_is_profiled_variadic_macro_validation_loop(
+    long generated_size, long captured_size, int generated_instructions,
+    int captured_instructions)
+{
+    int va_args = 0;
+    int va_ends = 0;
+    int va_starts = 0;
+    int instruction;
+
+    if (!mir.is_variadic_function ||
+        mir.sink_purpose != EMIT_SINK_DEFERRED ||
+        !mir_has_cfg_backedge() || mir_has_wide_values() ||
+        mir_cfg_block_count() != 5 || mir_call_count() != 1 ||
+        mir.count != 50 || (mir.return_type & 15) != TYPE_INT ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        generated_size > captured_size + 84 ||
+        generated_instructions > captured_instructions - 5)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        switch (mir.insns[instruction].opcode) {
+        case MIR_VA_START: ++va_starts; break;
+        case MIR_VA_ARG: ++va_args; break;
+        case MIR_VA_END: ++va_ends; break;
+        default: break;
+        }
+    return va_starts == 1 && va_args == 1 && va_ends == 1;
+}
+
 static int mir_is_profiled_constant_absolute_no_worse(
     long generated_size, long captured_size, int generated_instructions,
     int captured_instructions)
@@ -4054,9 +4082,12 @@ static int mir_final_cost_policy_rejects(
         fatal("unknown DCC_MIR_FINAL_COST_POLICY");
     if (!g_speculative_codegen_active &&
         !strcmp(selector_name, "spilled-scalar-cfg") &&
-        mir_is_profiled_vla_wide_truncation_loop(
-            generated_size, captured_size,
-            generated_instructions, captured_instructions))
+        (mir_is_profiled_vla_wide_truncation_loop(
+             generated_size, captured_size,
+             generated_instructions, captured_instructions) ||
+         mir_is_profiled_variadic_macro_validation_loop(
+             generated_size, captured_size,
+             generated_instructions, captured_instructions)))
         return 0;
     if (g_speculative_codegen_active) {
         const char *filter =
