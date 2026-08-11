@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `0503cd6`
-  (`fold global byte countdown loops`).
-- Current candidate coverage: **1897/2183 (86.90%)**.
-- Remaining fallback population: **286 `final-cost-policy`**, with no other
+- Published HEAD before this batch: `6f5acbd`
+  (`fold bounded constant MIR functions`).
+- Current candidate coverage: **1898/2183 (86.94%)**.
+- Remaining fallback population: **285 `final-cost-policy`**, with no other
   fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -69,6 +69,9 @@ current execution plan and handoff.
   with PHIs under target integer semantics and emits only the proven result.
   It admits `tnarwin.sumten` plus `tregnarw.lres/lmod/lbig`; the latter app
   improves 70.01% peep / 73.32% nopeep.
+- The conditional string reporter retains the name pointer in BC, selects the
+  result string once, and pushes printf arguments directly. It admits
+  `tstr2.report_test` and improves both modes.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -76,7 +79,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 286 final-cost fallbacks,
+- Current next priority: repeated causes in the 285 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 

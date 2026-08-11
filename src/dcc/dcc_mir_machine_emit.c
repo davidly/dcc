@@ -487,6 +487,15 @@ struct MirGlobalByteCountdown {
     int parameter_stack_offset;
 };
 
+struct MirConditionalStringReport {
+    struct Sym *function;
+    int name_stack_offset;
+    int condition_stack_offset;
+    int format_string_id;
+    int true_string_id;
+    int false_string_id;
+};
+
 #define MIR_MACHINE_SWITCH_RESULT_LIMIT 16
 
 struct MirConstantResultSwitch {
@@ -7831,6 +7840,74 @@ static int mir_match_global_byte_countdown(
     return 1;
 }
 
+static int mir_match_conditional_string_report(
+    struct MirConditionalStringReport *plan)
+{
+    static const int expected_opcodes[19] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_LOAD, MIR_ARG, MIR_NOP, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS,
+        MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_STRING_ADDRESS, MIR_LABEL,
+        MIR_LABEL, MIR_PHI, MIR_ARG, MIR_CALL
+    };
+    int arguments[3];
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 19 || mir_cfg_block_count() != 5 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return 0;
+    if (type_ptr_depth(mir.insns[1].type) != 1 ||
+        (mir.insns[1].type & 15) != TYPE_CHAR ||
+        type_ptr_depth(mir.insns[2].type) != 0 ||
+        (mir.insns[2].type & 15) != TYPE_INT ||
+        type_size(mir.insns[2].type) != 2 ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[2].dst, &plan->condition_stack_offset) ||
+        !mir_scalar_memory_location(
+            &mir.insns[5], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_ptr_depth(memory_type) != 1 ||
+        (memory_type & 15) != TYPE_CHAR ||
+        !mir_machine_same_location(&mir.insns[1], &mir.insns[5]))
+        return 0;
+    plan->name_stack_offset = memory_offset - 2;
+    if (plan->name_stack_offset < 0 ||
+        mir.insns[4].src1 != mir.insns[3].dst ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        mir.insns[8].src1 != mir.insns[2].dst ||
+        mir.insns[8].label != mir.insns[12].label ||
+        mir.insns[11].label != mir.insns[15].label ||
+        mir.insns[16].src1 != mir.insns[9].dst ||
+        mir.insns[16].src2 != mir.insns[13].dst ||
+        mir.insns[16].phi_pred1 != mir.insns[10].label ||
+        mir.insns[16].phi_pred2 != mir.insns[14].label ||
+        mir.insns[17].src1 != mir.insns[16].dst ||
+        !mir_machine_three_call_arguments(
+            &mir.insns[18], arguments) ||
+        arguments[0] != mir.insns[3].dst ||
+        arguments[1] != mir.insns[5].dst ||
+        arguments[2] != mir.insns[16].dst)
+        return 0;
+    plan->function = find_global(mir.insns[18].name);
+    if (plan->function == NULL ||
+        strcmp(mir.insns[18].name, "printf") ||
+        (mir.insns[18].memory_flags & MIR_CALL_FLAG_VARIADIC) == 0 ||
+        (mir.insns[18].memory_flags &
+         MIR_CALL_FLAG_FORMAT_RUNTIME) != 0)
+        return 0;
+    plan->format_string_id = (int)mir.insns[3].immediate;
+    plan->true_string_id = (int)mir.insns[9].immediate;
+    plan->false_string_id = (int)mir.insns[13].immediate;
+    return 1;
+}
+
 static int mir_machine_constant_return_for_label(
     int label, int *result)
 {
@@ -14256,6 +14333,32 @@ static void mir_emit_global_byte_countdown(
           "\tadd hl,de\n\tadd hl,hl\n\tadd hl,bc\n\tret\n", out);
 }
 
+static void mir_emit_conditional_string_report(
+    FILE *out, const struct MirConditionalStringReport *plan)
+{
+    int selected = new_label();
+    int false_string = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n\tor (hl)\n"
+            "\tjp z,L%d\n\tld hl,S%d\n\tjp L%d\n"
+            "L%d:\n\tld hl,S%d\n"
+            "L%d:\n\tpush hl\n\tpush bc\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            plan->name_stack_offset,
+            plan->condition_stack_offset,
+            false_string, plan->true_string_id, selected,
+            false_string, plan->false_string_id,
+            selected, plan->format_string_id);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tret\n", out);
+}
+
 static void mir_emit_constant_function(FILE *out, int result)
 {
     if (opt_stack_check)
@@ -14424,6 +14527,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirDynamicRowScan dynamic_row_scan;
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
+    struct MirConditionalStringReport conditional_string_report;
     struct MirConstantResultSwitch constant_result_switch;
     struct MirLocalByteFillSumPrint local_byte_fill_sum_print;
     struct MirIndexedMemberWrite indexed_member_write;
@@ -14760,6 +14864,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &global_byte_countdown)) {
         mir_emit_global_byte_countdown(
             out, &global_byte_countdown);
+        return 1;
+    }
+    if (mir_match_conditional_string_report(
+            &conditional_string_report)) {
+        mir_emit_conditional_string_report(
+            out, &conditional_string_report);
         return 1;
     }
     if (mir_machine_evaluate_constant_function(
