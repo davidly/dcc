@@ -13,9 +13,11 @@ struct MirScheduleBlock {
 
 static int mir_schedule_is_call(const struct MirInsn *insn)
 {
+    struct MirTargetConstraint constraint;
+
     return insn != NULL &&
-           (insn->opcode == MIR_CALL ||
-            insn->opcode == MIR_CALL_AGGREGATE);
+           mir_target_constraint_for_insn(insn, &constraint) &&
+           (constraint.flags & MIR_TARGET_FLAG_CALL) != 0;
 }
 
 static unsigned mir_schedule_allowed_colors(int value)
@@ -268,6 +270,8 @@ static void mir_schedule_append_segment(
     segment->first_point = first;
     segment->last_point = last;
     segment->use_count = uses;
+    segment->color = -1;
+    segment->spill_slot = -1;
     segment->allowed_colors = mir_schedule_allowed_colors(value);
     segment->flags = flags;
     if (mir_schedule_is_rematerializable(value))
@@ -373,6 +377,10 @@ static int mir_schedule_build_segments(
             if (!live_in && !live_out && !defined[value] &&
                 uses[value] == 0 && edge_uses[value] == 0)
                 continue;
+            if (!live_in && !live_out && uses[value] == 0 &&
+                edge_uses[value] == 0 &&
+                mir_schedule_allowed_colors(value) == 0)
+                continue;
             if (live_in) {
                 flags |= MIR_SCHEDULE_LIVE_IN;
                 if (first[value] > blocks[block].first)
@@ -413,6 +421,326 @@ static int mir_schedule_build_segments(
     return segment_count;
 }
 
+static unsigned mir_schedule_color_units(int color)
+{
+    switch (color) {
+    case MIR_COLOR_HL: return MIR_Z80_HL;
+    case MIR_COLOR_DE: return MIR_Z80_DE;
+    case MIR_COLOR_BC: return MIR_Z80_BC;
+    case MIR_COLOR_IY: return MIR_Z80_IY;
+    case MIR_COLOR_HL_DE: return MIR_Z80_HL | MIR_Z80_DE;
+    case MIR_COLOR_BC_IY: return MIR_Z80_BC | MIR_Z80_IY;
+    default: return 0;
+    }
+}
+
+static int mir_schedule_segments_overlap(
+    const struct MirLiveSegment *left,
+    const struct MirLiveSegment *right)
+{
+    return left->first_point <= right->last_point &&
+           right->first_point <= left->last_point;
+}
+
+static int mir_schedule_color_available(
+    const struct MirLiveSegment *segments, int segment_count,
+    int candidate, int color)
+{
+    const struct MirLiveSegment *item = &segments[candidate];
+    unsigned units = mir_schedule_color_units(color);
+    int other;
+
+    if ((item->allowed_colors & (1u << color)) == 0)
+        return 0;
+    if ((item->flags & MIR_SCHEDULE_CROSSES_CALL) != 0) {
+        if ((item->flags & MIR_SCHEDULE_WIDE) != 0 ||
+            color != MIR_COLOR_IY)
+            return 0;
+    }
+    for (other = 0; other < segment_count; ++other) {
+        const struct MirLiveSegment *conflict = &segments[other];
+
+        if (other == candidate || conflict->block != item->block ||
+            conflict->color < 0 ||
+            !mir_schedule_segments_overlap(item, conflict))
+            continue;
+        if ((units &
+             mir_schedule_color_units(conflict->color)) != 0)
+            return 0;
+    }
+    return 1;
+}
+
+static int mir_schedule_color_affinity(
+    const struct MirLiveSegment *segments, int segment_count,
+    int candidate, int color)
+{
+    const struct MirLiveSegment *segment = &segments[candidate];
+    unsigned units = mir_schedule_color_units(color);
+    int score = color == MIR_COLOR_IY ||
+                color == MIR_COLOR_BC_IY ? -2 : 0;
+    int instruction;
+    int other;
+
+    for (instruction = segment->first_point;
+         instruction <= segment->last_point; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        struct MirTargetConstraint constraint;
+
+        if (!mir_target_constraint_for_insn(insn, &constraint))
+            continue;
+        if (insn->src1 == segment->value &&
+            constraint.required_input1 == units)
+            score += 8;
+        if (insn->src2 == segment->value &&
+            constraint.required_input2 == units)
+            score += 8;
+        if (insn->dst == segment->value &&
+            constraint.required_output == units)
+            score += 6;
+    }
+    for (other = 0; other < segment_count; ++other)
+        if (other != candidate &&
+            segments[other].value == segment->value &&
+            segments[other].color == color)
+            score +=
+                (segments[other].flags &
+                 MIR_SCHEDULE_CROSSES_CALL) != 0 ? 4 : 12;
+    return score;
+}
+
+static void mir_schedule_allocate_segments(
+    struct MirLiveSegment *segments, int segment_count,
+    struct MirScheduleSummary *summary)
+{
+    static const int narrow_preference[] = {
+        MIR_COLOR_BC, MIR_COLOR_DE, MIR_COLOR_HL, MIR_COLOR_IY
+    };
+    static const int wide_preference[] = {
+        MIR_COLOR_HL_DE, MIR_COLOR_BC_IY
+    };
+    int spill_slot = 0;
+    int remaining = segment_count;
+
+    while (remaining > 0) {
+        int best = -1;
+        int best_score = -1;
+        int segment;
+
+        for (segment = 0; segment < segment_count; ++segment) {
+            const struct MirLiveSegment *item = &segments[segment];
+            int length;
+            int score;
+
+            if (item->color != -1 || item->spill_slot != -1)
+                continue;
+            length = item->last_point - item->first_point + 1;
+            score = item->use_count * 32 - length;
+            if ((item->flags & (MIR_SCHEDULE_LIVE_IN |
+                                MIR_SCHEDULE_LIVE_OUT)) != 0)
+                score += 16;
+            if (best < 0 || score > best_score) {
+                best = segment;
+                best_score = score;
+            }
+        }
+        if (best < 0)
+            break;
+        if ((segments[best].flags &
+             MIR_SCHEDULE_REMATERIALIZABLE) != 0 &&
+            segments[best].use_count <= 1) {
+            segments[best].color = -2;
+            ++summary->rematerialized_segments;
+        } else {
+            const int *preference;
+            int preference_count;
+            int preference_index;
+            int selected_color = -1;
+            int selected_affinity = -32767;
+
+            if ((segments[best].flags & MIR_SCHEDULE_WIDE) != 0) {
+                preference = wide_preference;
+                preference_count =
+                    (int)(sizeof(wide_preference) /
+                          sizeof(wide_preference[0]));
+            } else {
+                preference = narrow_preference;
+                preference_count =
+                    (int)(sizeof(narrow_preference) /
+                          sizeof(narrow_preference[0]));
+            }
+            for (preference_index = 0;
+                 preference_index < preference_count;
+                 ++preference_index) {
+                int color = preference[preference_index];
+                int affinity;
+
+                if (!mir_schedule_color_available(
+                        segments, segment_count, best, color))
+                    continue;
+                affinity = mir_schedule_color_affinity(
+                    segments, segment_count, best, color);
+                if (selected_color < 0 ||
+                    affinity > selected_affinity) {
+                    selected_color = color;
+                    selected_affinity = affinity;
+                }
+            }
+            if (selected_color >= 0) {
+                segments[best].color = selected_color;
+                ++summary->colored_segments;
+                if (selected_color == MIR_COLOR_IY ||
+                    selected_color == MIR_COLOR_BC_IY)
+                    ++summary->iy_segments;
+            }
+            if (segments[best].color == -1) {
+                if ((segments[best].flags &
+                     MIR_SCHEDULE_REMATERIALIZABLE) != 0) {
+                    segments[best].color = -2;
+                    ++summary->rematerialized_segments;
+                } else {
+                    segments[best].spill_slot = spill_slot++;
+                    ++summary->spilled_segments;
+                }
+            }
+        }
+        --remaining;
+    }
+}
+
+static const struct MirLiveSegment *mir_schedule_find_segment(
+    const struct MirLiveSegment *segments, int segment_count,
+    int block, int value)
+{
+    int low = 0;
+    int high = segment_count;
+
+    while (low < high) {
+        int middle = low + (high - low) / 2;
+        const struct MirLiveSegment *item = &segments[middle];
+
+        if (item->block < block ||
+            (item->block == block && item->value < value))
+            low = middle + 1;
+        else
+            high = middle;
+    }
+    if (low < segment_count &&
+        segments[low].block == block &&
+        segments[low].value == value)
+        return &segments[low];
+    return NULL;
+}
+
+static int mir_schedule_location_differs(
+    const struct MirLiveSegment *left,
+    const struct MirLiveSegment *right)
+{
+    if (left == NULL || right == NULL)
+        return 0;
+    if (left->color != right->color)
+        return 1;
+    if (left->color < 0 &&
+        left->spill_slot != right->spill_slot)
+        return 1;
+    return 0;
+}
+
+static int mir_schedule_count_split_moves(
+    const struct MirScheduleBlock *blocks, int block_count,
+    const int *instruction_blocks,
+    const struct MirLiveSegment *segments, int segment_count)
+{
+    int moves = 0;
+    int block;
+
+    for (block = 0; block < block_count; ++block) {
+        const struct MirInsn *terminator =
+            &mir.insns[blocks[block].last];
+        int successor;
+
+        for (successor = 0;
+             successor < terminator->successor_count; ++successor) {
+            int target_instruction = terminator->successors[successor];
+            int target_block;
+            int segment;
+
+            if (target_instruction < 0 ||
+                target_instruction >= mir.count)
+                continue;
+            target_block = instruction_blocks[target_instruction];
+            if (target_block == block)
+                continue;
+            for (segment = 0; segment < segment_count; ++segment) {
+                const struct MirLiveSegment *source =
+                    &segments[segment];
+                const struct MirLiveSegment *target;
+
+                if (source->block != block ||
+                    (source->flags & MIR_SCHEDULE_LIVE_OUT) == 0)
+                    continue;
+                target = mir_schedule_find_segment(
+                    segments, segment_count,
+                    target_block, source->value);
+                if (target != NULL &&
+                    (target->flags & MIR_SCHEDULE_LIVE_IN) != 0 &&
+                    mir_schedule_location_differs(source, target))
+                    ++moves;
+            }
+        }
+    }
+    return moves;
+}
+
+static int mir_schedule_count_boundary_moves(
+    const int *instruction_blocks,
+    const struct MirLiveSegment *segments, int segment_count)
+{
+    int moves = 0;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        struct MirTargetConstraint constraint;
+        const struct MirInsn *insn = &mir.insns[instruction];
+        const struct MirLiveSegment *segment;
+        int block = instruction_blocks[instruction];
+
+        if (!mir_target_constraint_for_insn(insn, &constraint))
+            continue;
+        if (insn->src1 >= 0 && constraint.required_input1 != 0) {
+            segment = mir_schedule_find_segment(
+                segments, segment_count, block, insn->src1);
+            if (segment == NULL ||
+                (segment->color < 0 && segment->color != -2) ||
+                (segment->color >= 0 &&
+                mir_schedule_color_units(segment->color) !=
+                    constraint.required_input1))
+                ++moves;
+        }
+        if (insn->src2 >= 0 && constraint.required_input2 != 0) {
+            segment = mir_schedule_find_segment(
+                segments, segment_count, block, insn->src2);
+            if (segment == NULL ||
+                (segment->color < 0 && segment->color != -2) ||
+                (segment->color >= 0 &&
+                mir_schedule_color_units(segment->color) !=
+                    constraint.required_input2))
+                ++moves;
+        }
+        if (insn->dst >= 0 && constraint.required_output != 0) {
+            segment = mir_schedule_find_segment(
+                segments, segment_count, block, insn->dst);
+            if (segment == NULL ||
+                (segment->color < 0 && segment->color != -2) ||
+                (segment->color >= 0 &&
+                mir_schedule_color_units(segment->color) !=
+                    constraint.required_output))
+                ++moves;
+        }
+    }
+    return moves;
+}
+
 int mir_build_shadow_schedule(struct MirScheduleSummary *summary)
 {
     struct MirScheduleBlock *blocks;
@@ -443,6 +771,15 @@ int mir_build_shadow_schedule(struct MirScheduleSummary *summary)
             summary->segments = 0;
         }
         summary->maximum_pressure = mir_schedule_maximum_pressure();
+        mir_schedule_allocate_segments(
+            segments, summary->segments, summary);
+        summary->split_moves =
+            mir_schedule_count_split_moves(
+                blocks, block_count, instruction_blocks,
+                segments, summary->segments);
+        summary->boundary_moves =
+            mir_schedule_count_boundary_moves(
+                instruction_blocks, segments, summary->segments);
     }
     for (instruction = 0; instruction < mir.count; ++instruction) {
         struct MirTargetConstraint constraint;
@@ -482,11 +819,16 @@ void mir_schedule_report_shadow_plan(void)
         fprintf(stderr,
                 "; MIR schedule-plan function=%s valid=%d blocks=%d "
                 "segments=%d edges=%d phi-edge-uses=%d call-splits=%d "
-                "fixed=%d pressure=%d unsupported=%d\n",
+                "fixed=%d pressure=%d colored=%d remat=%d spills=%d "
+                "iy=%d boundary-moves=%d split-moves=%d unsupported=%d\n",
                 mir.name, valid, summary.blocks, summary.segments,
                 summary.cfg_edges, summary.phi_edge_uses,
                 summary.call_splits, summary.fixed_constraints,
-                summary.maximum_pressure, summary.unsupported);
+                summary.maximum_pressure, summary.colored_segments,
+                summary.rematerialized_segments,
+                summary.spilled_segments, summary.iy_segments,
+                summary.boundary_moves, summary.split_moves,
+                summary.unsupported);
     if (!valid && getenv("DCC_MIR_SCHEDULE_REQUIRE") != NULL)
         fatal("cannot build MIR shadow schedule");
 }

@@ -384,6 +384,8 @@ struct MirLiveSegment {
     int first_point;
     int last_point;
     int use_count;
+    int color;
+    int spill_slot;
     unsigned allowed_colors;
     unsigned flags;
 };
@@ -396,6 +398,12 @@ struct MirScheduleSummary {
     int call_splits;
     int fixed_constraints;
     int maximum_pressure;
+    int colored_segments;
+    int rematerialized_segments;
+    int spilled_segments;
+    int iy_segments;
+    int boundary_moves;
+    int split_moves;
     int unsupported;
 };
 
