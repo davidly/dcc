@@ -126,6 +126,8 @@ static int mir_call_result_direct_reload_indirect_store_target(int value);
 static int mir_value_currently_uses_stack_handoff(int value, int instruction);
 static int mir_planned_stack_matches_consumer(int value, int instruction);
 static int mir_planned_stack_is_emitted(int value);
+static int mir_consume_planned_stack(
+    FILE *out, int value, int instruction, const char *destination);
 static int mir_value_has_phi_use(int value);
 static int mir_pointer_value_has_single_safe_named_home_use(int value);
 static void mir_emit_hl_offset_from_ix(FILE *out, int offset);
@@ -5663,6 +5665,10 @@ static int mir_planned_stack_consumer(int value, int producer)
     if (!((consumer_insn->opcode == MIR_BINARY &&
            consumer_insn->src1 == value &&
            type_size(consumer_insn->secondary_offset) <= 2) ||
+          (consumer_insn->opcode == MIR_UNARY &&
+           consumer_insn->src1 == value &&
+           type_size(consumer_insn->type) <= 2 &&
+           mir_cfg_block_count() >= 300) ||
           (consumer_insn->opcode == MIR_INDEX_ADDRESS &&
            consumer_insn->src1 == value &&
            consumer_insn->base_name[0] == 0 &&
@@ -12912,6 +12918,14 @@ void mir_emit_virtual_load(FILE *out, int value)
     int bool_store_instruction;
     int offset;
     int iy_offset;
+    if (mir_planned_stack_matches_consumer(
+            value, mir_emit_instruction_index) &&
+        mir_planned_stack_is_emitted(value)) {
+        if (!mir_consume_planned_stack(
+                out, value, mir_emit_instruction_index, "hl"))
+            mir_planned_stack_invalid = 1;
+        return;
+    }
     if (mir_forwarded_hl_value == value &&
         mir_forwarded_hl_instruction + 1 == mir_emit_instruction_index) {
         /* This check must precede the param-direct branch below: the
