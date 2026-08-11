@@ -345,6 +345,16 @@ struct MirFloatToleranceReport {
     char call_name[64];
 };
 
+struct MirFloatByteReport {
+    struct Sym *failures;
+    int failures_offset;
+    int name_stack_offset;
+    int value_stack_offset;
+    int expected_stack_offsets[4];
+    int string_id;
+    char call_name[64];
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -1636,6 +1646,31 @@ static int mir_match_byte_comparison_print(
         (parameters[0]->type & TYPE_UNSIGNED) != 0;
     plan->string_id = (int)string->immediate;
     return plan->function != NULL;
+}
+
+static int mir_machine_ten_call_arguments(
+    const struct MirInsn *call, int arguments[10])
+{
+    int count = 0;
+    int instruction;
+    int argument;
+
+    for (argument = 0; argument < 10; ++argument)
+        arguments[argument] = -1;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *arg = &mir.insns[instruction];
+        int index;
+
+        if (arg->opcode != MIR_ARG ||
+            arg->secondary_offset != call->secondary_offset)
+            continue;
+        index = (int)arg->immediate;
+        if (index < 0 || index >= 10 || arguments[index] >= 0)
+            return 0;
+        arguments[index] = arg->src1;
+        ++count;
+    }
+    return count == 10;
 }
 
 static int mir_machine_single_call_argument(
@@ -4313,6 +4348,301 @@ static int mir_match_float_tolerance_report(
                  : asm_name_for(sym_asm_name(report_function)));
     plan->epsilon_bits =
         (unsigned long)epsilon->immediate & 0xffffffffUL;
+    plan->string_id = (int)string->immediate;
+    return 1;
+}
+
+static int mir_machine_phi_merge(
+    int phi_index, int true_value_index, int false_value_index,
+    int true_label_index, int false_label_index)
+{
+    const struct MirInsn *phi = &mir.insns[phi_index];
+
+    return phi->opcode == MIR_PHI &&
+           phi->src1 == mir.insns[true_value_index].dst &&
+           phi->src2 == mir.insns[false_value_index].dst &&
+           phi->phi_pred1 == mir.insns[true_label_index].label &&
+           phi->phi_pred2 == mir.insns[false_label_index].label;
+}
+
+static int mir_machine_boolean_merge(
+    int phi_index, int true_value_index, int false_value_index,
+    int true_label_index, int false_label_index)
+{
+    return mir_machine_phi_merge(
+               phi_index, true_value_index, false_value_index,
+               true_label_index, false_label_index) &&
+           mir_machine_constant_equals(
+               mir.insns[true_value_index].dst, 1) &&
+           mir_machine_constant_equals(
+               mir.insns[false_value_index].dst, 0);
+}
+
+static int mir_match_float_byte_report(
+    struct MirFloatByteReport *plan)
+{
+    static const int expected_opcodes[134] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_PARAM,
+        MIR_PARAM, MIR_PARAM, MIR_ADDRESS, MIR_NOP, MIR_UNARY,
+        MIR_STORE, MIR_LOAD, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_NOP, MIR_UNARY, MIR_UNARY,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST,
+        MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_UNARY,
+        MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL,
+        MIR_PHI, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_PHI,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+        MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_NOP, MIR_UNARY, MIR_UNARY,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST,
+        MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI,
+        MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_PHI,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+        MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_NOP, MIR_UNARY, MIR_UNARY,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST,
+        MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI,
+        MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_PHI,
+        MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD,
+        MIR_ARG, MIR_LOAD, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_ARG, MIR_LOAD, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_LOAD,
+        MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG,
+        MIR_LOAD, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_ARG, MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG, MIR_NOP,
+        MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_NOP, MIR_LABEL
+    };
+    static const int hot_pointer_load_index[4] = {
+        11, 24, 49, 74
+    };
+    static const int hot_index_index[4] = {
+        13, 26, 51, 76
+    };
+    static const int hot_byte_index[4] = {
+        14, 27, 52, 77
+    };
+    static const int expected_conversion_index[4] = {
+        17, 30, 55, 80
+    };
+    static const int comparison_index[4] = {
+        18, 31, 56, 81
+    };
+    static const int cold_pointer_load_index[4] = {
+        99, 104, 109, 114
+    };
+    static const int cold_index_index[4] = {
+        101, 106, 111, 116
+    };
+    static const int cold_byte_index[4] = {
+        102, 107, 112, 117
+    };
+    const struct MirInsn *name;
+    const struct MirInsn *value;
+    const struct MirInsn *expected[4];
+    const struct MirInsn *value_address;
+    const struct MirInsn *pointer_conversion;
+    const struct MirInsn *pointer_store;
+    const struct MirInsn *string;
+    const struct MirInsn *name_load;
+    const struct MirInsn *call;
+    const struct MirInsn *failures_load;
+    const struct MirInsn *failures_increment;
+    const struct MirInsn *failures_store;
+    struct Sym *function;
+    int arguments[10];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int byte;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir_cfg_block_count() != 23 || mir.count != 134 ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return mir_machine_reject("float-byte-report", "preflight");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject("float-byte-report", "opcodes");
+    name = &mir.insns[1];
+    value = &mir.insns[2];
+    for (byte = 0; byte < 4; ++byte)
+        expected[byte] = &mir.insns[3 + byte];
+    value_address = &mir.insns[7];
+    pointer_conversion = &mir.insns[9];
+    pointer_store = &mir.insns[10];
+    if (type_size(name->type) != 2 ||
+        type_ptr_depth(name->type) == 0 ||
+        !type_is_float(value->type) ||
+        type_size(value->type) != 4 ||
+        strcmp(value_address->name, value->name) ||
+        pointer_conversion->immediate != 0 ||
+        pointer_conversion->src1 != value_address->dst ||
+        type_ptr_depth(pointer_conversion->type) == 0 ||
+        !mir_machine_unobservable_local_store(pointer_store) ||
+        pointer_store->src1 != pointer_conversion->dst)
+        return mir_machine_reject("float-byte-report", "setup");
+    for (byte = 0; byte < 4; ++byte) {
+        const struct MirInsn *pointer_load =
+            &mir.insns[hot_pointer_load_index[byte]];
+        const struct MirInsn *index =
+            &mir.insns[hot_index_index[byte]];
+        const struct MirInsn *actual =
+            &mir.insns[hot_byte_index[byte]];
+        const struct MirInsn *actual_conversion =
+            &mir.insns[hot_byte_index[byte] + 2];
+        const struct MirInsn *expected_conversion =
+            &mir.insns[expected_conversion_index[byte]];
+        const struct MirInsn *comparison =
+            &mir.insns[comparison_index[byte]];
+        const struct MirInsn *cold_pointer_load =
+            &mir.insns[cold_pointer_load_index[byte]];
+        const struct MirInsn *cold_index =
+            &mir.insns[cold_index_index[byte]];
+        const struct MirInsn *cold_actual =
+            &mir.insns[cold_byte_index[byte]];
+
+        if (type_size(expected[byte]->type) != 1 ||
+            (expected[byte]->type & TYPE_UNSIGNED) == 0 ||
+            !mir_machine_same_location(
+                pointer_store, pointer_load) ||
+            !mir_machine_constant_equals(index->src2, byte) ||
+            index->src1 != pointer_load->dst ||
+            index->immediate != 1 ||
+            index->memory_size != 1 ||
+            actual->src1 != index->dst ||
+            actual->memory_size != 1 ||
+            type_size(actual->type) != 1 ||
+            (actual->type & TYPE_UNSIGNED) == 0 ||
+            actual->bit_width != 0 ||
+            (actual->memory_flags & (1 | 8)) != 0 ||
+            actual_conversion->immediate != 0 ||
+            actual_conversion->src1 != actual->dst ||
+            type_size(actual_conversion->type) != 2 ||
+            (actual_conversion->type & TYPE_UNSIGNED) != 0 ||
+            expected_conversion->immediate != 0 ||
+            expected_conversion->src1 != expected[byte]->dst ||
+            type_size(expected_conversion->type) != 2 ||
+            (expected_conversion->type & TYPE_UNSIGNED) != 0 ||
+            comparison->immediate != TOK_NE ||
+            comparison->src1 !=
+                mir.insns[hot_byte_index[byte] + 2].dst ||
+            comparison->src2 != expected_conversion->dst ||
+            !mir_machine_same_location(
+                pointer_store, cold_pointer_load) ||
+            !mir_machine_constant_equals(
+                cold_index->src2, byte) ||
+            cold_index->src1 != cold_pointer_load->dst ||
+            cold_index->immediate != 1 ||
+            cold_index->memory_size != 1 ||
+            cold_actual->src1 != cold_index->dst ||
+            cold_actual->memory_size != 1 ||
+            type_size(cold_actual->type) != 1 ||
+            (cold_actual->type & TYPE_UNSIGNED) == 0 ||
+            cold_actual->bit_width != 0 ||
+            (cold_actual->memory_flags & (1 | 8)) != 0)
+            return mir_machine_reject("float-byte-report", "bytes");
+    }
+    if (mir.insns[19].src1 != mir.insns[18].dst ||
+        mir.insns[19].label != mir.insns[23].label ||
+        mir.insns[22].label != mir.insns[42].label ||
+        mir.insns[32].src1 != mir.insns[31].dst ||
+        mir.insns[32].label != mir.insns[36].label ||
+        mir.insns[35].label != mir.insns[38].label)
+        return mir_machine_reject("float-byte-report", "control-01-edges");
+    if (!mir_machine_boolean_merge(39, 34, 37, 33, 36))
+        return mir_machine_reject("float-byte-report", "control-01-phi1");
+    if (mir.insns[41].label != mir.insns[42].label ||
+        mir.insns[44].src1 != mir.insns[43].dst ||
+        mir.insns[44].label != mir.insns[48].label)
+        return mir_machine_reject("float-byte-report", "control-01-join");
+    if (!mir_machine_phi_merge(43, 21, 39, 20, 40))
+        return mir_machine_reject("float-byte-report", "control-01-phi2");
+    if (mir.insns[47].label != mir.insns[67].label ||
+        mir.insns[57].src1 != mir.insns[56].dst ||
+        mir.insns[57].label != mir.insns[61].label ||
+        mir.insns[60].label != mir.insns[63].label ||
+        !mir_machine_boolean_merge(64, 59, 62, 58, 61) ||
+        mir.insns[66].label != mir.insns[67].label ||
+        !mir_machine_phi_merge(68, 46, 64, 45, 65) ||
+        mir.insns[69].src1 != mir.insns[68].dst ||
+        mir.insns[69].label != mir.insns[73].label)
+        return mir_machine_reject("float-byte-report", "control-2");
+    if (mir.insns[72].label != mir.insns[92].label ||
+        mir.insns[82].src1 != mir.insns[81].dst ||
+        mir.insns[82].label != mir.insns[86].label ||
+        mir.insns[85].label != mir.insns[88].label ||
+        !mir_machine_boolean_merge(89, 84, 87, 83, 86) ||
+        mir.insns[91].label != mir.insns[92].label ||
+        !mir_machine_phi_merge(93, 71, 89, 70, 90) ||
+        mir.insns[94].src1 != mir.insns[93].dst ||
+        mir.insns[94].label != mir.insns[133].label)
+        return mir_machine_reject("float-byte-report", "control-3");
+    string = &mir.insns[95];
+    name_load = &mir.insns[97];
+    call = &mir.insns[127];
+    if (!mir_machine_same_location(name, name_load) ||
+        !mir_machine_ten_call_arguments(call, arguments) ||
+        arguments[0] != string->dst ||
+        arguments[1] != name_load->dst)
+        return mir_machine_reject("float-byte-report", "call-prefix");
+    for (byte = 0; byte < 4; ++byte)
+        if (arguments[2 + byte] !=
+                mir.insns[cold_byte_index[byte]].dst ||
+            arguments[6 + byte] != expected[byte]->dst)
+            return mir_machine_reject("float-byte-report", "call-arguments");
+    if ((call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) !=
+            MIR_CALL_FLAG_VARIADIC)
+        return mir_machine_reject("float-byte-report", "call-flags");
+    function = find_global(call->name);
+    if (strcmp(call->name, "printf") ||
+        function == NULL || function->is_defined)
+        return mir_machine_reject("float-byte-report", "call-symbol");
+    failures_load = &mir.insns[128];
+    failures_increment = &mir.insns[130];
+    failures_store = &mir.insns[131];
+    if (!mir_machine_named_nonvolatile(failures_load) ||
+        !mir_machine_same_location(
+            failures_load, failures_store) ||
+        !mir_scalar_memory_location(
+            failures_load, &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        type_size(memory_type) != 2 ||
+        failures_increment->immediate != '+' ||
+        failures_increment->src1 != failures_load->dst ||
+        type_size(failures_increment->type) != 2 ||
+        !mir_machine_constant_equals(
+            failures_increment->src2, 1) ||
+        failures_store->src1 != failures_increment->dst ||
+        failures_store->memory_size != 2)
+        return mir_machine_reject("float-byte-report", "counter");
+    plan->failures = find_global(failures_load->name);
+    plan->failures_offset = memory_offset;
+    if (plan->failures == NULL || plan->failures->is_volatile ||
+        !mir_machine_parameter_value_offset(
+            name->dst, &plan->name_stack_offset))
+        return mir_machine_reject("float-byte-report", "symbols");
+    if (!mir_scalar_memory_location(
+            value, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2)
+        return mir_machine_reject("float-byte-report", "value-parameter");
+    plan->value_stack_offset = memory_offset - 2;
+    for (byte = 0; byte < 4; ++byte) {
+        if (!mir_machine_parameter_value_offset(
+                expected[byte]->dst,
+                &plan->expected_stack_offsets[byte]))
+            return mir_machine_reject(
+                "float-byte-report", "expected-parameters");
+    }
+    snprintf(plan->call_name, sizeof(plan->call_name), "%s",
+             call->base_name[0] != 0
+                 ? call->base_name
+                 : asm_name_for(sym_asm_name(function)));
     plan->string_id = (int)string->immediate;
     return 1;
 }
@@ -9094,6 +9424,62 @@ static void mir_emit_float_tolerance_report(
           "\tpop bc\n\tpop bc\n\tpop bc\n\tret\n", out);
 }
 
+static void mir_emit_float_byte_report(
+    FILE *out, const struct MirFloatByteReport *plan)
+{
+    int mismatch = new_label();
+    int pushed_words = 0;
+    int byte;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n\tld b,h\n\tld c,l\n",
+            plan->value_stack_offset);
+    for (byte = 0; byte < 4; ++byte) {
+        fprintf(out,
+                "\tld a,(bc)\n\tinc bc\n"
+                "\tld hl,%d\n\tadd hl,sp\n"
+                "\tcp (hl)\n\tjp nz,L%d\n",
+                plan->expected_stack_offsets[byte], mismatch);
+    }
+    fputs("\tret\n", out);
+    fprintf(out, "L%d:\n", mismatch);
+    for (byte = 3; byte >= 0; --byte) {
+        mir_emit_byte_parameter_word(
+            out,
+            plan->expected_stack_offsets[byte] +
+                pushed_words * 2,
+            1);
+        fputs("\tpush hl\n", out);
+        ++pushed_words;
+    }
+    for (byte = 3; byte >= 0; --byte) {
+        fprintf(out,
+                "\tld hl,%d\n\tadd hl,sp\n",
+                plan->value_stack_offset + pushed_words * 2);
+        mir_machine_emit_hl_offset(out, byte, 0);
+        fputs("\tld a,(hl)\n\tld l,a\n\tld h,0\n\tpush hl\n",
+              out);
+        ++pushed_words;
+    }
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            plan->name_stack_offset + pushed_words * 2,
+            plan->string_id);
+    mir_emit_runtime_call(out, plan->call_name);
+    for (pushed_words = 0; pushed_words < 10; ++pushed_words)
+        fputs("\tpop bc\n", out);
+    mir_machine_emit_global_word(
+        out, plan->failures, plan->failures_offset);
+    fputs("\tinc hl\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->failures, plan->failures_offset);
+    fputs("\tret\n", out);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -9155,6 +9541,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFloatMemberScalarCompare float_member_scalar_compare;
     struct MirExactFloatMismatchReport exact_float_mismatch_report;
     struct MirFloatToleranceReport float_tolerance_report;
+    struct MirFloatByteReport float_byte_report;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -9386,6 +9773,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &float_tolerance_report)) {
         mir_emit_float_tolerance_report(
             out, &float_tolerance_report);
+        return 1;
+    }
+    if (mir_match_float_byte_report(&float_byte_report)) {
+        mir_emit_float_byte_report(out, &float_byte_report);
         return 1;
     }
     if (mir_match_indexed_member_write(
