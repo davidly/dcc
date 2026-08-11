@@ -464,6 +464,9 @@ struct MirAffineByteFill {
     int pointer_stack_offset;
     int base_stack_offset;
     int count;
+    int value_from_parameter;
+    int initial_value;
+    int step;
 };
 
 struct MirPalindromeScan {
@@ -7306,6 +7309,89 @@ static int mir_match_affine_byte_fill(struct MirAffineByteFill *plan)
     if (mir.insns[11].immediate <= 0 || mir.insns[11].immediate > 255)
         return 0;
     plan->count = (int)mir.insns[11].immediate;
+    plan->value_from_parameter = 1;
+    plan->step = 1;
+    return 1;
+}
+
+static int mir_match_scaled_byte_fill(struct MirAffineByteFill *plan)
+{
+    static const int expected_opcodes[29] = {
+        MIR_LABEL, MIR_PARAM, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL,
+        MIR_NOP, MIR_PHI, MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP,
+        MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT,
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP,
+        MIR_LABEL
+    };
+    const struct MirInsn *parameter;
+    const struct MirInsn *index_phi;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 29 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return 0;
+    parameter = &mir.insns[1];
+    index_phi = &mir.insns[7];
+    if (type_ptr_depth(parameter->type) != 1 ||
+        (parameter->type & 15) != TYPE_CHAR ||
+        mir_machine_pointee_is_volatile(parameter) ||
+        !mir_machine_parameter_value_offset(
+            parameter->dst, &plan->pointer_stack_offset) ||
+        !mir_machine_constant_equals(mir.insns[3].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[4]) ||
+        mir.insns[4].memory_size != 1)
+        return 0;
+    if (index_phi->src1 != mir.insns[3].dst ||
+        index_phi->src2 != mir.insns[25].dst ||
+        index_phi->phi_pred1 != mir.insns[0].label ||
+        index_phi->phi_pred2 != mir.insns[22].label ||
+        (index_phi->type & TYPE_UNSIGNED) == 0 ||
+        type_size(index_phi->type) != 1 ||
+        mir.insns[10].immediate != 0 ||
+        mir.insns[10].src1 != index_phi->dst ||
+        mir.insns[11].immediate != '<' ||
+        mir.insns[11].src1 != mir.insns[10].dst ||
+        mir.insns[11].src2 != mir.insns[9].dst ||
+        mir.insns[12].src1 != mir.insns[11].dst ||
+        mir.insns[12].label != mir.insns[28].label)
+        return 0;
+    if (mir.insns[15].src1 != parameter->dst ||
+        mir.insns[15].src2 != index_phi->dst ||
+        mir.insns[15].immediate != 1 ||
+        mir.insns[15].memory_size != 1 ||
+        mir.insns[18].immediate != 0 ||
+        mir.insns[18].src1 != index_phi->dst ||
+        mir.insns[19].immediate != '*' ||
+        mir.insns[19].src1 != mir.insns[18].dst ||
+        mir.insns[19].src2 != mir.insns[17].dst ||
+        mir.insns[20].immediate != 0 ||
+        mir.insns[20].src1 != mir.insns[19].dst ||
+        type_size(mir.insns[20].type) != 1 ||
+        mir.insns[21].src1 != mir.insns[15].dst ||
+        mir.insns[21].src2 != mir.insns[20].dst ||
+        mir.insns[21].memory_size != 1 ||
+        (mir.insns[21].memory_flags & (1 | 8)) != 0)
+        return 0;
+    if (!mir_machine_constant_equals(mir.insns[24].dst, 1) ||
+        mir.insns[25].immediate != '+' ||
+        mir.insns[25].src1 != index_phi->dst ||
+        mir.insns[25].src2 != mir.insns[24].dst ||
+        !mir_machine_same_location(&mir.insns[4], &mir.insns[26]) ||
+        mir.insns[26].src1 != mir.insns[25].dst ||
+        mir.insns[27].label != mir.insns[5].label ||
+        mir.insns[9].immediate <= 0 ||
+        mir.insns[9].immediate > 255 ||
+        mir.insns[17].immediate <= 0 ||
+        mir.insns[17].immediate > 255)
+        return 0;
+    plan->count = (int)mir.insns[9].immediate;
+    plan->initial_value = 0;
+    plan->step = (int)mir.insns[17].immediate;
     return 1;
 }
 
@@ -14227,15 +14313,23 @@ static void mir_emit_affine_byte_fill(
 
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
+    if (plan->value_from_parameter)
+        fprintf(out,
+                "\tld hl,%d\n\tadd hl,sp\n\tld a,(hl)\n",
+                plan->base_stack_offset);
+    else
+        fprintf(out, "\tld a,%d\n", plan->initial_value);
     fprintf(out,
-            "\tld hl,%d\n\tadd hl,sp\n\tld a,(hl)\n"
             "\tld hl,%d\n\tadd hl,sp\n"
             "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n"
             "\tld b,%d\n"
-            "L%d:\n\tld (hl),a\n\tinc hl\n\tinc a\n"
-            "\tdjnz L%d\n\tret\n",
-            plan->base_stack_offset, plan->pointer_stack_offset,
-            plan->count, loop, loop);
+            "L%d:\n\tld (hl),a\n\tinc hl\n",
+            plan->pointer_stack_offset, plan->count, loop);
+    if (plan->step == 1)
+        fputs("\tinc a\n", out);
+    else
+        fprintf(out, "\tadd a,%d\n", plan->step);
+    fprintf(out, "\tdjnz L%d\n\tret\n", loop);
 }
 
 static void mir_emit_wide_left_shift_count(FILE *out)
@@ -14841,6 +14935,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
         return 1;
     }
     if (mir_match_affine_byte_fill(&affine_byte_fill)) {
+        mir_emit_affine_byte_fill(out, &affine_byte_fill);
+        return 1;
+    }
+    if (mir_match_scaled_byte_fill(&affine_byte_fill)) {
         mir_emit_affine_byte_fill(out, &affine_byte_fill);
         return 1;
     }
