@@ -194,6 +194,13 @@ struct MirByteComparisonPrint {
     int string_id;
 };
 
+struct MirConstantBufferCallPrint {
+    struct Sym *pack_function;
+    char print_name[64];
+    int string_id;
+    unsigned char bytes[4];
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -1458,6 +1465,180 @@ static int mir_match_byte_comparison_print(
     return plan->function != NULL;
 }
 
+static int mir_machine_single_call_argument(
+    const struct MirInsn *call, int *argument)
+{
+    int count = 0;
+    int instruction;
+
+    *argument = -1;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *arg = &mir.insns[instruction];
+
+        if (arg->opcode != MIR_ARG ||
+            arg->secondary_offset != call->secondary_offset)
+            continue;
+        if (arg->immediate != 0 || *argument >= 0)
+            return 0;
+        *argument = arg->src1;
+        ++count;
+    }
+    return count == 1;
+}
+
+static int mir_match_constant_buffer_call_print(
+    struct MirConstantBufferCallPrint *plan)
+{
+    const struct MirInsn *pack_call = NULL;
+    const struct MirInsn *print_call = NULL;
+    char root_name[64] = "";
+    int root_offset = 0;
+    int stores = 0;
+    unsigned seen = 0;
+    int calls = 0;
+    int return_count = 0;
+    int returned = 0;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla || mir_cfg_block_count() != 1 ||
+        type_size(mir.return_type) != 2)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (returned && insn->opcode != MIR_NOP)
+            return 0;
+        switch (insn->opcode) {
+        case MIR_NOP:
+        case MIR_LABEL:
+        case MIR_CONST:
+        case MIR_ADDRESS:
+        case MIR_INDEX_ADDRESS:
+        case MIR_ARG:
+        case MIR_STRING_ADDRESS:
+            break;
+        case MIR_STORE_INDIRECT:
+            {
+                const struct MirInsn *index =
+                    mir_definition(insn->src1);
+                const struct MirInsn *root;
+                const struct MirInsn *subscript;
+                const struct MirInsn *value =
+                    mir_definition(insn->src2);
+                int memory_type;
+                int memory_storage;
+                int memory_offset;
+                int lane;
+
+                if (calls != 0 || insn->memory_size != 1 ||
+                    insn->bit_width != 0 ||
+                    (insn->memory_flags & (1 | 8)) != 0 ||
+                    index == NULL ||
+                    index->opcode != MIR_INDEX_ADDRESS ||
+                    index->immediate != 1 ||
+                    value == NULL || value->opcode != MIR_CONST)
+                    return 0;
+                root = mir_definition(index->src1);
+                subscript = mir_definition(index->src2);
+                if (root == NULL || root->opcode != MIR_ADDRESS ||
+                    subscript == NULL ||
+                    subscript->opcode != MIR_CONST ||
+                    !mir_scalar_memory_location(
+                        root, &memory_type, &memory_storage,
+                        &memory_offset) ||
+                    memory_storage != SC_LOCAL ||
+                    subscript->immediate < 0 ||
+                    subscript->immediate >= 4)
+                    return 0;
+                lane = (int)subscript->immediate;
+                if ((seen & (1U << lane)) != 0)
+                    return 0;
+                if (stores == 0) {
+                    int declared;
+
+                    for (declared = 0;
+                         declared < mir.declared_count; ++declared)
+                        if (!strcmp(
+                                mir.declared_names[declared],
+                                root->name))
+                            break;
+                    if (declared == mir.declared_count ||
+                        mir.declared_is_volatile[declared])
+                        return 0;
+                    snprintf(root_name, sizeof(root_name), "%s",
+                             root->name);
+                    root_offset = memory_offset;
+                } else if (strcmp(root_name, root->name) ||
+                           root_offset != memory_offset) {
+                    return 0;
+                }
+                plan->bytes[lane] =
+                    (unsigned char)value->immediate;
+                seen |= 1U << lane;
+                ++stores;
+            }
+            break;
+        case MIR_CALL:
+            if (stores != 4)
+                return 0;
+            if (++calls == 1)
+                pack_call = insn;
+            else if (calls == 2)
+                print_call = insn;
+            else
+                return 0;
+            break;
+        case MIR_RETURN:
+            if (calls != 2 || ++return_count != 1 ||
+                !mir_machine_constant_equals(insn->src1, 0))
+                return 0;
+            returned = 1;
+            break;
+        default:
+            return 0;
+        }
+    }
+    if (stores != 4 || calls != 2 ||
+        return_count != 1 || pack_call == NULL ||
+        print_call == NULL || seen != 15U)
+        return 0;
+    {
+        int pack_argument;
+        int print_arguments[2];
+        const struct MirInsn *pack_address;
+        const struct MirInsn *print_string;
+
+        if (!mir_machine_single_call_argument(
+                pack_call, &pack_argument) ||
+            !mir_machine_two_call_arguments(
+                print_call, print_arguments))
+            return 0;
+        pack_address = mir_definition(pack_argument);
+        print_string = mir_definition(print_arguments[0]);
+        if (pack_address == NULL ||
+            pack_address->opcode != MIR_ADDRESS ||
+            strcmp(pack_address->name, root_name) ||
+            type_size(pack_call->type) != 4 ||
+            type_is_float(pack_call->type) ||
+            print_string == NULL ||
+            print_string->opcode != MIR_STRING_ADDRESS ||
+            print_arguments[1] != pack_call->dst ||
+            strcmp(print_call->base_name, "_pflng") ||
+            (print_call->memory_flags &
+             MIR_CALL_FLAG_FORMAT_RUNTIME) != 0)
+            return 0;
+        plan->pack_function = find_global(pack_call->name);
+        if (plan->pack_function == NULL)
+            return 0;
+        snprintf(plan->print_name,
+                 sizeof(plan->print_name), "%s",
+                 print_call->base_name);
+        plan->string_id = (int)print_string->immediate;
+    }
+    return 1;
+}
+
 static int mir_machine_flat_load(
     int value, int *stack_offset, long *offset,
     int *width, int *is_unsigned)
@@ -1718,6 +1899,35 @@ static void mir_emit_byte_comparison_print(
     mir_machine_emit_symbol_call(out, plan->function);
     fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
           "\tpop bc\n\tpop bc\n\tpop bc\n\tret\n", out);
+}
+
+static void mir_emit_constant_buffer_call_print(
+    FILE *out, const struct MirConstantBufferCallPrint *plan)
+{
+    unsigned int first =
+        (unsigned int)plan->bytes[0] |
+        ((unsigned int)plan->bytes[1] << 8);
+    unsigned int second =
+        (unsigned int)plan->bytes[2] |
+        ((unsigned int)plan->bytes[3] << 8);
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%u\n\tpush hl\n"
+            "\tld hl,%u\n\tpush hl\n"
+            "\tld hl,0\n\tadd hl,sp\n\tpush hl\n",
+            second, first);
+    mir_machine_emit_symbol_call(out, plan->pack_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tpush de\n\tpush hl\n", out);
+    fprintf(out,
+            "\tld hl,S%d\n\tpush hl\n"
+            "\textrn %s\n\tcall %s\n"
+            "\tpop bc\n\tpop bc\n\tpop bc\n"
+            "\tld hl,0\n\tret\n",
+            plan->string_id,
+            plan->print_name, plan->print_name);
 }
 
 static void mir_emit_flat_array_checks(
@@ -5542,6 +5752,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantPrints constant_prints;
     struct MirPointerDifferencePrints pointer_difference_prints;
     struct MirByteComparisonPrint byte_comparison_print;
+    struct MirConstantBufferCallPrint constant_buffer_call_print;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -5659,6 +5870,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &byte_comparison_print)) {
         mir_emit_byte_comparison_print(
             out, &byte_comparison_print);
+        return 1;
+    }
+    if (mir_match_constant_buffer_call_print(
+            &constant_buffer_call_print)) {
+        mir_emit_constant_buffer_call_print(
+            out, &constant_buffer_call_print);
         return 1;
     }
     if (mir_match_indexed_member_write(
