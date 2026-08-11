@@ -5594,8 +5594,38 @@ static int mir_planned_stack_store_address_consumer(
     return 1;
 }
 
-static int mir_planned_stack_consumer(int value, int producer,
-                                      const unsigned char *occupied)
+static int mir_planned_stack_interval_fits(int producer, int consumer)
+{
+    int depth = 1;
+    int value;
+
+    for (value = 0; value < mir.next_value; ++value) {
+        const struct MirInsn *definition;
+        int existing_consumer = mir.planned_stack_consumers[value];
+        int existing_producer;
+
+        if (existing_consumer < 0)
+            continue;
+        definition = mir_definition(value);
+        if (definition == NULL)
+            return 0;
+        existing_producer = (int)(definition - mir.insns);
+        if (existing_consumer < producer)
+            continue;
+        if (existing_producer < producer &&
+            consumer < existing_consumer) {
+            if (mir_cfg_block_count() < 300)
+                return 0;
+            if (++depth > 3)
+                return 0;
+            continue;
+        }
+        return 0;
+    }
+    return 1;
+}
+
+static int mir_planned_stack_consumer(int value, int producer)
 {
     const struct MirInsn *definition;
     const struct MirInsn *consumer_insn;
@@ -5648,49 +5678,66 @@ static int mir_planned_stack_consumer(int value, int producer,
              instruction < consumer; ++instruction)
             if (!mir_planned_stack_interval_instruction_safe(instruction))
                 return -1;
-    for (instruction = producer; instruction <= consumer; ++instruction)
-        if (occupied[instruction])
-            return -1;
+    if (!mir_planned_stack_interval_fits(producer, consumer))
+        return -1;
     return consumer;
 }
 
 static void mir_verify_planned_stack_handoffs(void)
 {
-    int last_consumer = -1;
-    int instruction;
+    int depth;
+    int other;
     int value;
 
     if (!mir_planned_stack_handoffs_enabled)
         return;
-    for (instruction = 0; instruction < mir.count; ++instruction) {
+    for (value = 0; value < mir.next_value; ++value) {
         const struct MirInsn *definition;
         int producer;
+        int consumer = mir.planned_stack_consumers[value];
 
-        value = mir.planned_stack_values[instruction];
-        if (value < 0)
+        if (consumer < 0)
             continue;
-        if (value >= mir.next_value ||
-            mir.planned_stack_consumers[value] != instruction)
+        if (consumer >= mir.count ||
+            mir.planned_stack_values[consumer] != value)
             fatal("inconsistent MIR planned stack handoff");
         definition = mir_definition(value);
         if (definition == NULL)
             fatal("missing MIR planned stack producer");
         producer = (int)(definition - mir.insns);
-        /* Batch 22 deliberately selects a stricter-than-laminar policy:
-         * planned intervals may neither cross nor nest nor share an
-         * endpoint. This guarantees at most one planned value is pending
-         * at any instruction; its plan tables and emitted bit remain
-         * authoritative independently of ad-hoc stack forwarding. */
-        if (producer <= last_consumer || producer >= instruction)
+        if (producer >= consumer)
             fatal("overlapping MIR planned stack handoffs");
-        last_consumer = instruction;
-    }
-    for (value = 0; value < mir.next_value; ++value) {
-        instruction = mir.planned_stack_consumers[value];
-        if (instruction >= 0 &&
-            (instruction >= mir.count ||
-             mir.planned_stack_values[instruction] != value))
-            fatal("inconsistent MIR planned stack consumer");
+        depth = 1;
+        for (other = 0; other < mir.next_value; ++other) {
+            const struct MirInsn *other_definition;
+            int other_consumer;
+            int other_producer;
+
+            if (other == value)
+                continue;
+            other_consumer = mir.planned_stack_consumers[other];
+            if (other_consumer < 0)
+                continue;
+            other_definition = mir_definition(other);
+            if (other_definition == NULL)
+                fatal("missing MIR planned stack producer");
+            other_producer =
+                (int)(other_definition - mir.insns);
+            if (consumer < other_producer ||
+                other_consumer < producer)
+                continue;
+            if (other_producer < producer &&
+                consumer < other_consumer) {
+                ++depth;
+                continue;
+            }
+            if (producer < other_producer &&
+                other_consumer < consumer)
+                continue;
+            fatal("crossing MIR planned stack handoffs");
+        }
+        if (depth > 3)
+            fatal("excessive MIR planned stack depth");
     }
 }
 
@@ -12204,7 +12251,6 @@ static int mir_prepare_backend_slots(void)
     int *last;
     int *slot_end;
     char *fused_away = NULL;
-    unsigned char *stack_interval_occupied = NULL;
     int planned_narrow_cache_call = -1;
     int planned_wide_cache_call = -1;
     int slot_capacity;
@@ -12271,12 +12317,6 @@ static int mir_prepare_backend_slots(void)
             fatal("out of memory computing MIR backend slot offsets");
         mir_backend_slot_offsets = new_offsets;
         mir_backend_slot_offset_capacity = slot_capacity;
-    }
-    if (mir_planned_stack_handoffs_enabled) {
-        stack_interval_occupied =
-            (unsigned char *)calloc((size_t)mir.count, 1);
-        if (stack_interval_occupied == NULL)
-            fatal("out of memory planning MIR stack handoffs");
     }
     fused_away = (char *)calloc((size_t)mir.next_value, 1);
     if (fused_away == NULL)
@@ -12690,16 +12730,10 @@ static int mir_prepare_backend_slots(void)
                     continue;
                 }
                 stack_consumer = force_slot ? -1 :
-                    mir_planned_stack_consumer(
-                        value, i, stack_interval_occupied);
+                    mir_planned_stack_consumer(value, i);
                 if (stack_consumer >= 0) {
-                    int instruction;
-
                     mir.planned_stack_consumers[value] = stack_consumer;
                     mir.planned_stack_values[stack_consumer] = value;
-                    for (instruction = i;
-                         instruction <= stack_consumer; ++instruction)
-                        stack_interval_occupied[instruction] = 1;
                     continue;
                 }
                 /*
@@ -12857,7 +12891,6 @@ static int mir_prepare_backend_slots(void)
                         mir_value_use_count(value));
             }
     free(fused_away);
-    free(stack_interval_occupied);
     free(slot_end);
     free(last);
     free(first);
@@ -13245,12 +13278,15 @@ static int mir_planned_stack_is_emitted(int value)
 
 static int mir_pending_planned_stack_consumer(void)
 {
+    int consumer = -1;
     int value;
 
     for (value = 0; value < mir.next_value; ++value)
-        if (mir_planned_stack_is_emitted(value))
-            return mir_planned_stack_target(value);
-    return -1;
+        if (mir_planned_stack_is_emitted(value) &&
+            (consumer < 0 ||
+             mir_planned_stack_target(value) < consumer))
+            consumer = mir_planned_stack_target(value);
+    return consumer;
 }
 
 static int mir_stack_forward_nests_with_planned_left(
@@ -13428,7 +13464,8 @@ static int mir_consume_planned_stack(FILE *out, int value, int instruction,
                                      const char *destination)
 {
     if (!mir_planned_stack_matches_consumer(value, instruction) ||
-        !mir_planned_stack_is_emitted(value))
+        !mir_planned_stack_is_emitted(value) ||
+        mir_pending_planned_stack_consumer() != instruction)
         return 0;
     fprintf(out, "\tpop %s\n", destination);
     mir.planned_stack_emitted[value] = 0;
