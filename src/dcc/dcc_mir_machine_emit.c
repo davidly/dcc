@@ -110,7 +110,8 @@ struct MirPointerStack {
 
 enum MirByteMemoryStackKind {
     MIR_BYTE_MEMORY_STACK_PUSH = 1,
-    MIR_BYTE_MEMORY_STACK_POP = 2
+    MIR_BYTE_MEMORY_STACK_POP = 2,
+    MIR_BYTE_MEMORY_STACK_PUSH_WORD = 3
 };
 
 struct MirByteMemoryStack {
@@ -1966,7 +1967,8 @@ static int mir_machine_global_address_offset(
 static int mir_machine_byte_cursor_update(
     const struct MirInsn *store, int operation,
     struct Sym **root_out, int *offset_out,
-    int *old_value, int *new_value)
+    int *old_value, int *new_value,
+    const struct MirInsn **load_out)
 {
     const struct MirInsn *binary;
     const struct MirInsn *load;
@@ -2002,6 +2004,8 @@ static int mir_machine_byte_cursor_update(
     *offset_out = store_offset;
     *old_value = load->dst;
     *new_value = binary->dst;
+    if (load_out != NULL)
+        *load_out = load;
     return 1;
 }
 
@@ -2099,7 +2103,7 @@ static int mir_match_byte_memory_stack(
         if (!mir_machine_byte_cursor_update(
                 cursor_store, '-', &plan->cursor_root,
                 &plan->cursor_offset, &old_cursor,
-                &new_cursor) ||
+                &new_cursor, NULL) ||
             !mir_machine_byte_stack_address(
                 element_store->src1, old_cursor,
                 &plan->memory_root, &plan->memory_offset) ||
@@ -2119,7 +2123,7 @@ static int mir_match_byte_memory_stack(
         if (!mir_machine_byte_cursor_update(
                 cursor_store, '+', &plan->cursor_root,
                 &plan->cursor_offset, &old_cursor,
-                &new_cursor) ||
+                &new_cursor, NULL) ||
             element_load == NULL ||
             element_load->opcode != MIR_LOAD_INDIRECT ||
             element_load->memory_size != 1 ||
@@ -2135,6 +2139,95 @@ static int mir_match_byte_memory_stack(
     }
     return plan->memory_root != NULL &&
            plan->cursor_root != NULL;
+}
+
+static int mir_match_word_memory_stack_push(
+    struct MirByteMemoryStack *plan)
+{
+    const struct MirInsn *cursor_stores[2] = { NULL, NULL };
+    const struct MirInsn *element_store = NULL;
+    const struct MirInsn *second_load = NULL;
+    struct Sym *first_cursor_root;
+    struct Sym *second_cursor_root;
+    int first_cursor_offset;
+    int second_cursor_offset;
+    int first_old;
+    int first_new;
+    int second_old;
+    int second_new;
+    int cursor_store_count = 0;
+    int parameter_count = 0;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla || mir_cfg_block_count() != 1 ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        switch (insn->opcode) {
+        case MIR_NOP:
+        case MIR_LABEL:
+        case MIR_CONST:
+        case MIR_ADDRESS:
+        case MIR_MEMBER_ADDRESS:
+        case MIR_UNARY:
+        case MIR_BINARY:
+            break;
+        case MIR_PARAM:
+            ++parameter_count;
+            break;
+        case MIR_LOAD_INDIRECT:
+            if ((insn->memory_flags & (1 | 8)) != 0 ||
+                insn->bit_width != 0)
+                return 0;
+            break;
+        case MIR_STORE_INDIRECT:
+            if ((insn->memory_flags & (1 | 8)) != 0 ||
+                insn->bit_width != 0)
+                return 0;
+            if (mir_definition(insn->src1) != NULL &&
+                mir_definition(insn->src1)->opcode ==
+                    MIR_MEMBER_ADDRESS) {
+                if (cursor_store_count >= 2)
+                    return 0;
+                cursor_stores[cursor_store_count++] = insn;
+            } else {
+                if (element_store != NULL)
+                    return 0;
+                element_store = insn;
+            }
+            break;
+        default:
+            return 0;
+        }
+    }
+    if (parameter_count != 1 || cursor_store_count != 2 ||
+        element_store == NULL ||
+        !mir_machine_byte_cursor_update(
+            cursor_stores[0], '-', &first_cursor_root,
+            &first_cursor_offset, &first_old, &first_new, NULL) ||
+        !mir_machine_byte_cursor_update(
+            cursor_stores[1], '-', &second_cursor_root,
+            &second_cursor_offset, &second_old, &second_new,
+            &second_load) ||
+        first_cursor_root != second_cursor_root ||
+        first_cursor_offset != second_cursor_offset ||
+        cursor_stores[0] >= element_store ||
+        element_store >= second_load ||
+        second_load >= cursor_stores[1] ||
+        element_store->memory_size != 2 ||
+        !mir_machine_byte_stack_address(
+            element_store->src1, first_new,
+            &plan->memory_root, &plan->memory_offset) ||
+        !mir_machine_parameter_value_offset(
+            element_store->src2, &plan->value_stack_offset))
+        return 0;
+    plan->kind = MIR_BYTE_MEMORY_STACK_PUSH_WORD;
+    plan->cursor_root = first_cursor_root;
+    plan->cursor_offset = first_cursor_offset;
+    return 1;
 }
 
 static int mir_match_nested_row_store(struct MirNestedRowStore *plan)
@@ -2509,13 +2602,15 @@ static void mir_emit_byte_memory_stack(
     mir_machine_emit_global_byte_a(
         out, plan->cursor_root, plan->cursor_offset, 0);
     fputs("\tld e,a\n", out);
-    if (plan->kind == MIR_BYTE_MEMORY_STACK_PUSH)
+    if (plan->kind == MIR_BYTE_MEMORY_STACK_PUSH ||
+        plan->kind == MIR_BYTE_MEMORY_STACK_PUSH_WORD)
         fputs("\tdec a\n", out);
     else
         fputs("\tinc a\n", out);
     mir_machine_emit_global_byte_a(
         out, plan->cursor_root, plan->cursor_offset, 1);
-    if (plan->kind == MIR_BYTE_MEMORY_STACK_POP)
+    if (plan->kind == MIR_BYTE_MEMORY_STACK_POP ||
+        plan->kind == MIR_BYTE_MEMORY_STACK_PUSH_WORD)
         fputs("\tld e,a\n", out);
     fputs("\tld d,0\n", out);
     mir_machine_emit_global_address_hl(
@@ -2527,8 +2622,21 @@ static void mir_emit_byte_memory_stack(
                      "\tld a,(hl)\n\tpop hl\n"
                      "\tld (hl),a\n\tret\n",
                 plan->value_stack_offset + 2);
-    } else {
+    } else if (plan->kind == MIR_BYTE_MEMORY_STACK_POP) {
         fputs("\tld a,(hl)\n\tld l,a\n\tld h,0\n\tret\n", out);
+    } else {
+        fputs("\tpush hl\n", out);
+        fprintf(out, "\tld hl,%d\n\tadd hl,sp\n"
+                     "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+                     "\tpop hl\n\tld (hl),e\n\tinc hl\n"
+                     "\tld (hl),d\n",
+                plan->value_stack_offset + 2);
+        mir_machine_emit_global_byte_a(
+            out, plan->cursor_root, plan->cursor_offset, 0);
+        fputs("\tdec a\n", out);
+        mir_machine_emit_global_byte_a(
+            out, plan->cursor_root, plan->cursor_offset, 1);
+        fputs("\tret\n", out);
     }
 }
 
@@ -2664,6 +2772,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
         return 1;
     }
     if (mir_match_byte_memory_stack(&byte_memory_stack)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_byte_memory_stack(out, &byte_memory_stack);
+        return 1;
+    }
+    if (mir_match_word_memory_stack_push(&byte_memory_stack)) {
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_byte_memory_stack(out, &byte_memory_stack);
