@@ -188,6 +188,13 @@ struct MirSignedMemberSquareScaleDiv {
     unsigned long divisor;
 };
 
+struct MirSignedMemberScalePair {
+    int pointer_stack_offset;
+    int value_stack_offset;
+    int member_offsets[2];
+    unsigned long divisor;
+};
+
 static void mir_machine_emit_hl_offset(
     FILE *out, int offset, int preserve_bc);
 static int mir_machine_named_nonvolatile(
@@ -3504,6 +3511,178 @@ static int mir_match_signed_member_square_scale_div(
     return 1;
 }
 
+static int mir_machine_signed_parameter_widen(
+    int value, int *stack_offset)
+{
+    const struct MirInsn *widen = mir_definition(value);
+    const struct MirInsn *parameter;
+
+    if (widen == NULL || widen->opcode != MIR_UNARY ||
+        widen->immediate != 0 ||
+        type_size(widen->type) != 4 ||
+        type_is_float(widen->type) ||
+        (widen->type & TYPE_UNSIGNED) != 0)
+        return 0;
+    parameter = mir_definition(widen->src1);
+    return parameter != NULL &&
+           parameter->opcode == MIR_PARAM &&
+           type_size(parameter->type) == 2 &&
+           (parameter->type & TYPE_UNSIGNED) == 0 &&
+           mir_machine_parameter_offset(
+               parameter->dst, stack_offset);
+}
+
+static int mir_machine_member_scale_store(
+    const struct MirInsn *store, int *pointer_stack_offset,
+    int *value_stack_offset, int *member_offset,
+    unsigned long *divisor_out)
+{
+    const struct MirInsn *destination;
+    const struct MirInsn *narrow;
+    const struct MirInsn *division;
+    const struct MirInsn *multiply;
+    const struct MirInsn *divisor;
+    int source_pointer_offset;
+    int source_member_offset;
+    int value_offset;
+
+    if (store == NULL || store->opcode != MIR_STORE_INDIRECT ||
+        store->memory_size != 2 || store->bit_width != 0 ||
+        (store->memory_flags & (1 | 8)) != 0)
+        return 0;
+    destination = mir_definition(store->src1);
+    narrow = mir_definition(store->src2);
+    if (destination == NULL ||
+        destination->opcode != MIR_MEMBER_ADDRESS ||
+        destination->bit_width != 0 ||
+        (destination->memory_flags & (1 | 8)) != 0 ||
+        narrow == NULL || narrow->opcode != MIR_UNARY ||
+        narrow->immediate != 0 ||
+        type_size(narrow->type) != 2 ||
+        (narrow->type & TYPE_UNSIGNED) != 0)
+        return 0;
+    division = mir_definition(narrow->src1);
+    if (division == NULL || division->opcode != MIR_BINARY ||
+        division->immediate != '/' ||
+        type_size(division->type) != 4 ||
+        type_is_float(division->type) ||
+        (division->type & TYPE_UNSIGNED) != 0)
+        return 0;
+    multiply = mir_definition(division->src1);
+    divisor = mir_definition(division->src2);
+    if (multiply == NULL || multiply->opcode != MIR_BINARY ||
+        multiply->immediate != '*' ||
+        type_size(multiply->type) != 4 ||
+        type_is_float(multiply->type) ||
+        (multiply->type & TYPE_UNSIGNED) != 0 ||
+        divisor == NULL || divisor->opcode != MIR_CONST ||
+        type_size(divisor->type) != 4 ||
+        (divisor->type & TYPE_UNSIGNED) != 0)
+        return 0;
+    if (!mir_machine_signed_member_load(
+            multiply->src1, &source_pointer_offset,
+            &source_member_offset) ||
+        !mir_machine_signed_parameter_widen(
+            multiply->src2, &value_offset)) {
+        if (!mir_machine_signed_member_load(
+                multiply->src2, &source_pointer_offset,
+                &source_member_offset) ||
+            !mir_machine_signed_parameter_widen(
+                multiply->src1, &value_offset))
+            return 0;
+    }
+    if (!mir_machine_parameter_alias_offset(
+            destination->src1, pointer_stack_offset, 0) ||
+        *pointer_stack_offset != source_pointer_offset ||
+        destination->immediate != source_member_offset)
+        return 0;
+    *value_stack_offset = value_offset;
+    *member_offset = source_member_offset;
+    *divisor_out = (unsigned long)divisor->immediate;
+    return *divisor_out != 0;
+}
+
+static int mir_match_signed_member_scale_pair(
+    struct MirSignedMemberScalePair *plan)
+{
+    const struct MirInsn *stores[2] = { NULL, NULL };
+    int store_count = 0;
+    int parameter_count = 0;
+    int load_count = 0;
+    int named_store_count = 0;
+    int member_count = 0;
+    int load_indirect_count = 0;
+    int unary_count = 0;
+    int binary_count = 0;
+    int constant_count = 0;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla || mir_cfg_block_count() != 1 ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        switch (insn->opcode) {
+        case MIR_NOP:
+        case MIR_LABEL:
+            break;
+        case MIR_PARAM: ++parameter_count; break;
+        case MIR_CONST: ++constant_count; break;
+        case MIR_LOAD:
+            if (!mir_machine_named_nonvolatile(insn))
+                return 0;
+            ++load_count;
+            break;
+        case MIR_STORE:
+            if (!mir_machine_unobservable_local_store(insn))
+                return 0;
+            ++named_store_count;
+            break;
+        case MIR_MEMBER_ADDRESS: ++member_count; break;
+        case MIR_LOAD_INDIRECT: ++load_indirect_count; break;
+        case MIR_UNARY: ++unary_count; break;
+        case MIR_BINARY: ++binary_count; break;
+        case MIR_STORE_INDIRECT:
+            if (store_count >= 2)
+                return 0;
+            stores[store_count++] = insn;
+            break;
+        default:
+            return 0;
+        }
+    }
+    if (parameter_count != 2 || load_count != 5 ||
+        named_store_count != 1 || member_count != 4 ||
+        load_indirect_count != 2 || unary_count != 6 ||
+        binary_count != 4 || constant_count != 2 ||
+        store_count != 2)
+        return 0;
+    for (instruction = 0; instruction < 2; ++instruction) {
+        int pointer_offset;
+        int value_offset;
+        unsigned long divisor;
+
+        if (!mir_machine_member_scale_store(
+                stores[instruction], &pointer_offset,
+                &value_offset, &plan->member_offsets[instruction],
+                &divisor))
+            return 0;
+        if (instruction == 0) {
+            plan->pointer_stack_offset = pointer_offset;
+            plan->value_stack_offset = value_offset;
+            plan->divisor = divisor;
+        } else if (plan->pointer_stack_offset != pointer_offset ||
+                   plan->value_stack_offset != value_offset ||
+                   plan->divisor != divisor) {
+            return 0;
+        }
+    }
+    return plan->member_offsets[0] !=
+           plan->member_offsets[1];
+}
+
 static int mir_match_wide_narrow_division(
     struct MirWideNarrowDivision *plan)
 {
@@ -4512,6 +4691,42 @@ static void mir_emit_signed_member_square_scale_div(
     fputs("\tpop bc\n\tpop bc\n\tret\n", out);
 }
 
+static void mir_emit_signed_member_scale_pair(
+    FILE *out, const struct MirSignedMemberScalePair *plan)
+{
+    int member;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (member = 0; member < 2; ++member) {
+        mir_machine_emit_parameter_member_word(
+            out, plan->pointer_stack_offset,
+            plan->member_offsets[member], "c", "b", 0);
+        fprintf(out,
+                "\tld hl,%d\n\tadd hl,sp\n"
+                "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+                "\tex de,hl\n",
+                plan->value_stack_offset);
+        mir_emit_runtime_call(out, "__m1s");
+        fputs("\tpush de\n\tpush hl\n", out);
+        fprintf(out, "\tld hl,%lu\n\tld de,%lu\n",
+                plan->divisor & 0xffffUL,
+                (plan->divisor >> 16) & 0xffffUL);
+        mir_emit_runtime_call(out, "__lds");
+        fputs("\tpop bc\n\tpop bc\n\tpush hl\n", out);
+        fprintf(out,
+                "\tld hl,%d\n\tadd hl,sp\n"
+                "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+                "\tex de,hl\n",
+                plan->pointer_stack_offset + 2);
+        mir_machine_emit_hl_offset(
+            out, plan->member_offsets[member], 0);
+        fputs("\tpop de\n\tld (hl),e\n\tinc hl\n"
+              "\tld (hl),d\n", out);
+    }
+    fputs("\tret\n", out);
+}
+
 static void mir_emit_wide_narrow_division(
     FILE *out, const struct MirWideNarrowDivision *plan)
 {
@@ -4748,6 +4963,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirSignedMemberProduct signed_member_product;
     struct MirSignedMemberSquareScaleDiv
         signed_member_square_scale_div;
+    struct MirSignedMemberScalePair signed_member_scale_pair;
     struct MirWideNarrowDivision wide_narrow_division;
     struct MirAggregateFieldSum aggregate_field_sum;
     struct MirConstantChecks constant_checks;
@@ -4830,6 +5046,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &signed_member_square_scale_div)) {
         mir_emit_signed_member_square_scale_div(
             out, &signed_member_square_scale_div);
+        return 1;
+    }
+    if (mir_match_signed_member_scale_pair(
+            &signed_member_scale_pair)) {
+        mir_emit_signed_member_scale_pair(
+            out, &signed_member_scale_pair);
         return 1;
     }
     if (mir_match_wide_narrow_division(
