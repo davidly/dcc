@@ -8,9 +8,22 @@
  * just return whatever BDOS's random-read call hands back. So a buffer-
  * sized fread() on a short file can return far more bytes than the file's
  * own reported length, all silently valid as far as fread()'s return count
- * is concerned. Any code that reads a short file into a fixed buffer
- * assuming "bytes read" means "meaningful content" - a very ordinary
- * pattern - will pick up this trailing padding.
+ * is concerned.
+ *
+ * This is a real, known limitation - but deliberately NOT "fixed" at the
+ * RTL level, and this test still documents the unfixed behavior rather
+ * than asserting the theoretically-correct one. An earlier attempt made
+ * __rdsz itself trim __fdlen to the exact byte count (scanning the last
+ * record for trailing 0x1A, same idea as the append-mode fix in
+ * __apseek) and bounded _read() by it. Both parts had to be reverted:
+ * a single genuine trailing ^Z byte a program deliberately writes as
+ * real text-file-EOF data (the classic CP/M convention - see fileops.c's
+ * own cpm_filelen helper, which does exactly this scan itself on top of
+ * the *un*trimmed length) is indistinguishable on disk from __zerdm's
+ * unwritten-tail padding, so unconditionally trimming __fdlen silently
+ * ate real data fileops.c's own test depends on seeing. __apseek's own
+ * narrower trim (used only to position "a" mode's append point, never
+ * touching the shared __fdlen) is where that idea actually landed safely.
  */
 #include <stdio.h>
 

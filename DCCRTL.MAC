@@ -6617,13 +6617,32 @@ opclr:
         ;   O_CREAT = 0100 octal = 0040h
         ;   O_TRUNC = 01000 octal = 0200h
         ;   O_RDWR  = 2, which must NOT truncate.
-        ld      a,(ix+6)
-        and     40h             ; O_CREAT low byte
-        jr      nz,opmake
         ld      a,(ix+7)
         and     2               ; O_TRUNC high byte
-        jr      nz,opmake
+        jr      nz,opmake       ; "w": always delete + recreate
 
+        ld      a,(ix+6)
+        and     40h             ; O_CREAT low byte
+        jr      z,opexist       ; neither set ("r"): must already exist
+
+        ; O_CREAT without O_TRUNC ("a"): per C89 7.9.5.3, appended output
+        ; must go after any existing content, not overwrite it - so if the
+        ; file is already there, keep it and position at its end rather
+        ; than falling into opmake's unconditional delete+recreate (which
+        ; is correct only for "w"/O_TRUNC, and used to also run for "a").
+        ; Nothing to delete when creating fresh, so that path skips
+        ; straight to fn 22 via opmake_new.
+        push    de
+        ld      c,15            ; open existing
+        call    5
+        pop     de
+        cp      0ffh
+        jr      z,opmake_new    ; doesn't exist yet: create fresh
+        call    __rdsz          ; capture the real length
+        call    __apseek        ; position the offset at end-of-file
+        jr      opok
+
+opexist:
         ld      c,15            ; open existing
         call    5
         cp      0ffh
@@ -6637,6 +6656,7 @@ opmake:
         ld      c,19            ; delete old, ignore status
         call    5
         pop     de
+opmake_new:
         ld      c,22            ; make new
         call    5
         cp      0ffh
@@ -7279,11 +7299,176 @@ __lenp:
         add     hl,de
         ret
 
+; Positions a freshly (re)opened existing file at end-of-file for _open's
+; "a" (append) path, per C89 7.9.5.3. __fdlen[__slot] must already be
+; current (call __rdsz first) - but __rdsz deliberately only stores the
+; record-rounded length (see its own comment on why), so this does its
+; own narrower trim scoped to just the append starting position: read the
+; last record and count the *trailing* run of 0x1A bytes back from its
+; end (the classic CP/M C runtime convention - __zerdm pads any
+; partial-record write's untouched tail with Ctrl-Z specifically so this
+; is recoverable), then position __fdoff[__slot] at record-rounded-length
+; minus that count instead of at the raw record boundary. A trailing run
+; (not just "any 0x1A anywhere") is deliberate - it leaves an embedded,
+; non-trailing 0x1A (real data in the middle of a record, as in
+; tctrlz.c) alone, only stripping padding actually at the tail.
+; __fdlen itself is never touched here - unlike this one append-
+; positioning use, ftell()/fread() must keep reporting/serving the
+; record-rounded view (see __rdsz's comment on why trimming there breaks
+; existing software that does its own explicit ^Z scan on top of it).
+__apseek:
+        call    __lenp          ; HL -> __fdlen[slot]
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        inc     hl
+        ld      c,(hl)
+        inc     hl
+        ld      b,(hl)          ; BCDE = 32-bit record-rounded length, E=lsb
+
+        ld      a,b
+        or      c
+        or      d
+        or      e
+        jr      z,apseek_setoff ; length 0: nothing to trim, offset = 0
+
+        push    bc
+        push    de              ; save the untrimmed length for later
+
+        ; length-128 (always safe: length is a nonzero multiple of 128,
+        ; so this never underflows) is the start of the last record -
+        ; temporarily park it in __fdoff so __setrr can position the FCB
+        ; there for the read below.
+        ld      a,e
+        sub     128
+        ld      e,a
+        ld      a,d
+        sbc     a,0
+        ld      d,a
+        ld      a,c
+        sbc     a,0
+        ld      c,a
+        ld      a,b
+        sbc     a,0
+        ld      b,a
+
+        push    bc
+        push    de
+        call    __offp
+        pop     de
+        pop     bc
+        ld      (hl),e
+        inc     hl
+        ld      (hl),d
+        inc     hl
+        ld      (hl),c
+        inc     hl
+        ld      (hl),b
+
+        call    __setrr
+
+        ld      de,__dma
+        ld      c,26            ; set DMA
+        call    5
+        ld      a,(__slot)
+        call    __fcbp
+        ex      de,hl
+        ld      c,33            ; random read
+        call    5
+        ld      e,a             ; stash read status (DE's FCB-address use is done)
+
+        ; The read clobbers whatever the shared read-sector cache thought
+        ; was resident; invalidate it rather than leave it pointing at
+        ; data that's no longer really there.
+        xor     a
+        ld      (__rdcv),a
+
+        ld      a,e             ; restore read status
+        or      a
+        jr      z,apseek_doscan ; read succeeded: trim the trailing padding
+
+        ; Read failed: fall back to the full record-rounded length -
+        ; never overwrites real data, just doesn't trim to the exact end.
+        pop     de
+        pop     bc
+        jr      apseek_write
+
+apseek_doscan:
+        ld      hl,__dma+127
+        ld      b,0
+apseek_scan:
+        ld      a,(hl)
+        cp      1ah
+        jr      nz,apseek_scandone
+        inc     b
+        ld      a,b
+        cp      128
+        jr      z,apseek_scandone
+        dec     hl
+        jr      apseek_scan
+apseek_scandone:
+        ; B holds the trailing 0x1A count (0-128) here - subtract it from
+        ; the saved untrimmed length's low word (E) while B still holds
+        ; it, before popping BC clobbers B with the length's high word.
+        pop     de              ; DE = untrimmed length, low word
+        ld      a,e
+        sub     b
+        ld      e,a
+        ld      a,d
+        sbc     a,0
+        ld      d,a             ; DE = trimmed low word; borrow in carry
+        pop     bc              ; BC = untrimmed length, high word
+        ld      a,c
+        sbc     a,0
+        ld      c,a
+        ld      a,b
+        sbc     a,0
+        ld      b,a             ; BCDE = final trimmed length
+
+apseek_write:
+        push    bc
+        push    de
+        call    __offp
+        pop     de
+        pop     bc
+        ld      (hl),e
+        inc     hl
+        ld      (hl),d
+        inc     hl
+        ld      (hl),c
+        inc     hl
+        ld      (hl),b
+        ret
+
+apseek_setoff:
+        call    __offp
+        xor     a
+        ld      (hl),a
+        inc     hl
+        ld      (hl),a
+        inc     hl
+        ld      (hl),a
+        inc     hl
+        ld      (hl),a
+        ret
+
 ; Query BDOS fn 35 (compute file size) for __slot's FCB, convert the
 ; record count to a byte length, and store it in __fdlen[__slot]. Only
 ; accurate for a file whose directory entry is up to date - i.e. right
 ; after opening an existing (previously closed) file, which is the only
 ; place this is called from.
+;
+; Deliberately just the record-rounded length (record_count*128), not
+; trimmed for trailing Ctrl-Z padding: CP/M's own directory only tracks
+; whole records, and existing software (see fileops.c's cpm_filelen
+; helper) already does its own trailing-^Z scan on top of this exact
+; convention to recover exact text-file length - a single genuine
+; trailing ^Z byte the program wrote as real data is indistinguishable
+; on disk from __zerdm's own unwritten-tail padding, so trimming here
+; unconditionally would silently eat real data other code expects to see
+; (confirmed against fileops.c). __apseek does its own narrower,
+; single-purpose trim scan for the one place this matters (positioning
+; "a" mode's append point) instead of changing this shared length.
 __rdsz:
         ld      a,(__slot)
         call    __fcbp
@@ -7552,6 +7737,37 @@ mfspc:
         inc     hl
         djnz    mfspc
         pop     hl
+
+        ; A single letter followed by ':' is a drive prefix (e.g. "A:" or
+        ; "b:"). BDOS FCB drive byte is 1-based (1=A, 2=B, ... 16=P), 0
+        ; meaning "default/current drive" (already what's stored above).
+        ; Recognize and consume it here so a prefixed path still resolves
+        ; the same file a bare name would - without this, the letter and
+        ; colon were previously copied as literal (and for the colon,
+        ; invalid) FCB name bytes, addressing a garbled filename instead
+        ; of the named drive at all.
+        ld      a,(hl)
+        or      a
+        jr      z,mfnoprefix    ; empty string: nothing to check
+        inc     hl
+        ld      a,(hl)
+        dec     hl
+        cp      ':'
+        jr      nz,mfnoprefix
+        ld      a,(hl)
+        call    __upa
+        cp      'A'
+        jr      c,mfnoprefix
+        cp      'P'+1
+        jr      nc,mfnoprefix
+        sub     'A'-1           ; 1=A, 2=B, ... 16=P
+        push    hl
+        ld      hl,(__mffcb)
+        ld      (hl),a
+        pop     hl
+        inc     hl
+        inc     hl              ; skip past "X:"
+mfnoprefix:
 
         ld      de,(__mffcb)
         inc     de              ; name field
