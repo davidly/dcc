@@ -648,6 +648,15 @@ struct MirVolatileFillWideConstant {
     unsigned long result;
 };
 
+struct MirSingleSignedDivCheck {
+    struct Sym *check_function;
+    int numerator_stack_offset;
+    int denominator_stack_offset;
+    int expected_stack_offset;
+    int label_stack_offset;
+    int operation;
+};
+
 #define MIR_MACHINE_SWITCH_RESULT_LIMIT 64
 
 struct MirConstantResultSwitch {
@@ -9819,6 +9828,91 @@ static int mir_match_volatile_fill_wide_constant(
     return 1;
 }
 
+static int mir_match_single_signed_div_check(
+    struct MirSingleSignedDivCheck *plan)
+{
+    const struct MirInsn *call;
+    const struct MirInsn *label_load;
+    const struct MirInsn *result;
+    const struct MirInsn *other;
+    int arguments[3];
+    int expected_parameter;
+    int instruction;
+    int label_parameter;
+
+    memset(plan, 0, sizeof(*plan));
+    if ((mir.count != 23 && mir.count != 22) ||
+        mir_cfg_block_count() != 1 || mir.has_vla ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    if (mir.count == 23) {
+        result = &mir.insns[8];
+        other = &mir.insns[13];
+        expected_parameter = 3;
+        label_parameter = 5;
+        label_load = &mir.insns[20];
+        call = &mir.insns[22];
+    } else {
+        result = &mir.insns[12];
+        other = &mir.insns[7];
+        expected_parameter = 3;
+        label_parameter = 4;
+        label_load = &mir.insns[19];
+        call = &mir.insns[21];
+    }
+    if (mir.insns[0].opcode != MIR_LABEL ||
+        mir.insns[1].opcode != MIR_PARAM ||
+        mir.insns[2].opcode != MIR_PARAM ||
+        result->opcode != MIR_BINARY ||
+        other->opcode != MIR_BINARY ||
+        (result->immediate != '%' && result->immediate != '/') ||
+        (other->immediate != '%' && other->immediate != '/') ||
+        result->immediate == other->immediate ||
+        result->src1 != mir.insns[1].dst ||
+        result->src2 != mir.insns[2].dst ||
+        other->src1 != mir.insns[1].dst ||
+        other->src2 != mir.insns[2].dst ||
+        type_ptr_depth(result->type) != 0 ||
+        (result->type & 15) != TYPE_INT ||
+        (result->type & TYPE_UNSIGNED) != 0 ||
+        label_load->opcode != MIR_LOAD ||
+        !mir_machine_same_location(
+            &mir.insns[label_parameter], label_load) ||
+        call->opcode != MIR_CALL ||
+        !mir_machine_three_call_arguments(call, arguments) ||
+        arguments[0] != result->dst ||
+        arguments[1] != mir.insns[expected_parameter].dst ||
+        arguments[2] != label_load->dst)
+        return 0;
+    if (!mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->numerator_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[2].dst, &plan->denominator_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[expected_parameter].dst,
+            &plan->expected_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[label_parameter].dst,
+            &plan->label_stack_offset))
+        return 0;
+    plan->check_function = find_global(call->name);
+    if (plan->check_function == NULL ||
+        !plan->check_function->is_defined ||
+        plan->check_function->storage != SC_FUNC ||
+        plan->check_function->is_funcptr ||
+        plan->check_function->is_noreturn ||
+        !plan->check_function->has_proto ||
+        plan->check_function->proto_nargs != 3 ||
+        plan->check_function->proto_variadic ||
+        call->memory_flags != 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_OPAQUE)
+            return 0;
+    plan->operation = (int)result->immediate;
+    return 1;
+}
+
 static int mir_machine_constant_return_for_label(
     int label, int *result)
 {
@@ -16853,6 +16947,34 @@ static void mir_emit_volatile_fill_wide_constant(
             (plan->result >> 16) & 0xffffUL);
 }
 
+static void mir_emit_single_signed_div_check(
+    FILE *out, const struct MirSingleSignedDivCheck *plan)
+{
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tld h,b\n\tld l,c\n",
+            plan->numerator_stack_offset,
+            plan->denominator_stack_offset);
+    mir_emit_runtime_call(
+        out, plan->operation == '%' ? "__mods" : "__divs");
+    fputs("\tld c,l\n\tld b,h\n", out);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n"
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n"
+            "\tpush bc\n",
+            plan->label_stack_offset,
+            plan->expected_stack_offset + 2);
+    mir_machine_emit_symbol_call(out, plan->check_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tret\n", out);
+}
+
 static void mir_emit_constant_function(FILE *out, int result)
 {
     if (opt_stack_check)
@@ -17041,6 +17163,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirSequentialUnaryReports sequential_unary_reports;
     struct MirNibbleAppend nibble_append;
     struct MirVolatileFillWideConstant volatile_fill_wide_constant;
+    struct MirSingleSignedDivCheck single_signed_div_check;
     struct MirConstantResultSwitch constant_result_switch;
     struct MirLocalByteFillSumPrint local_byte_fill_sum_print;
     struct MirIndexedMemberWrite indexed_member_write;
@@ -17149,6 +17272,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &volatile_fill_wide_constant)) {
         mir_emit_volatile_fill_wide_constant(
             out, &volatile_fill_wide_constant);
+        return 1;
+    }
+    if (mir_match_single_signed_div_check(
+            &single_signed_div_check)) {
+        mir_emit_single_signed_div_check(
+            out, &single_signed_div_check);
         return 1;
     }
     if (mir_match_affine_pointer_constant_return(&constant)) {
