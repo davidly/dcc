@@ -1,6 +1,7 @@
 /* dcc_mir_machine_emit.c - Z80 emission from scheduled MIR templates. */
 
 #include "dcc_mir_internal.h"
+#include <stdint.h>
 
 struct MirIndexedWordSum {
     int parameter_stack_offset;
@@ -9635,6 +9636,65 @@ static int mir_match_nibble_append(struct MirNibbleAppend *plan)
     return 1;
 }
 
+static int mir_match_dead_constant_float_check(void)
+{
+    static const int expected_opcodes[24] = {
+        MIR_LABEL, MIR_LABEL, MIR_FLOAT_CONST, MIR_FLOAT_CONST,
+        MIR_BINARY, MIR_UNARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_NOP, MIR_LABEL, MIR_NOP,
+        MIR_LABEL, MIR_CONST, MIR_BRANCH_FALSE, MIR_JUMP, MIR_LABEL
+    };
+    uint32_t left_bits;
+    uint32_t right_bits;
+    float left;
+    float right;
+    int comparison;
+    int instruction;
+
+    if (mir.count != 24 || mir_cfg_block_count() != 5 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return 0;
+    if (!type_is_float(mir.insns[2].type) ||
+        mir.insns[3].type != mir.insns[2].type ||
+        mir.insns[4].src1 != mir.insns[2].dst ||
+        mir.insns[4].src2 != mir.insns[3].dst ||
+        (mir.insns[4].immediate != TOK_EQ &&
+         mir.insns[4].immediate != TOK_NE &&
+         mir.insns[4].immediate != '<' &&
+         mir.insns[4].immediate != '>' &&
+         mir.insns[4].immediate != TOK_LE &&
+         mir.insns[4].immediate != TOK_GE) ||
+        mir.insns[5].immediate != '!' ||
+        mir.insns[5].src1 != mir.insns[4].dst ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        mir_find_label(mir.insns[6].label) != 17 ||
+        !mir_machine_constant_equals(mir.insns[20].dst, 0) ||
+        mir.insns[21].src1 != mir.insns[20].dst ||
+        mir_find_label(mir.insns[21].label) != 23 ||
+        mir.insns[22].label != mir.insns[1].label)
+        return 0;
+    left_bits = (uint32_t)mir.insns[2].immediate;
+    right_bits = (uint32_t)mir.insns[3].immediate;
+    memcpy(&left, &left_bits, sizeof(left));
+    memcpy(&right, &right_bits, sizeof(right));
+    switch (mir.insns[4].immediate) {
+    case TOK_EQ: comparison = left == right; break;
+    case TOK_NE: comparison = left != right; break;
+    case '<': comparison = left < right; break;
+    case '>': comparison = left > right; break;
+    case TOK_LE: comparison = left <= right; break;
+    case TOK_GE: comparison = left >= right; break;
+    default: return 0;
+    }
+    if (!comparison)
+        return 0;
+    return 1;
+}
+
 static int mir_machine_constant_return_for_label(
     int label, int *result)
 {
@@ -16841,6 +16901,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     long constant;
     int constant_function_result;
 
+    if (mir_match_dead_constant_float_check()) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        fputs("\tret\n", out);
+        return 1;
+    }
     if (mir_match_word_range_bool(&word_range_bool)) {
         mir_emit_word_range_bool(out, &word_range_bool);
         return 1;
