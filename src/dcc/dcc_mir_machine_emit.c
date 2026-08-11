@@ -445,6 +445,12 @@ struct MirByteArraySum {
     int count_stack_offset;
 };
 
+struct MirWraparoundBoolStep {
+    int count_stack_offset;
+    int current_stack_offset;
+    int next_stack_offset;
+};
+
 struct MirFixedRowWordSum {
     int rows_stack_offset;
     int array_stack_offset;
@@ -7099,6 +7105,203 @@ static int mir_match_byte_array_sum(struct MirByteArraySum *plan)
         mir.insns[32].label != mir.insns[9].label ||
         mir.insns[35].src1 != sum_phi->dst)
         return 0;
+    return 1;
+}
+
+static int mir_match_wraparound_bool_step(
+    struct MirWraparoundBoolStep *plan)
+{
+    static const int expected_opcodes[94] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_NOP, MIR_CONST,
+        MIR_STORE, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP, MIR_BINARY, MIR_NOP,
+        MIR_BINARY, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_STORE,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP,
+        MIR_BINARY, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_STORE,
+        MIR_NOP, MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP, MIR_NOP, MIR_BINARY,
+        MIR_UNARY, MIR_STORE_INDIRECT, MIR_NOP, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_BRANCH_FALSE, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_RETURN
+    };
+    const struct MirInsn *count = &mir.insns[1];
+    const struct MirInsn *current = &mir.insns[2];
+    const struct MirInsn *next = &mir.insns[3];
+    const struct MirInsn *index_phi = &mir.insns[37];
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 94 || mir_cfg_block_count() != 5 ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        type_is_float(mir.return_type) ||
+        type_size(mir.return_type) != 4)
+        return mir_machine_reject("wraparound-bool-step", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "wraparound-bool-step", "opcode");
+    if (type_ptr_depth(count->type) != 0 ||
+        (count->type & 15) != TYPE_INT ||
+        (count->type & TYPE_UNSIGNED) != 0 ||
+        type_size(count->type) != 2 ||
+        type_ptr_depth(current->type) != 1 ||
+        (current->type & 15) != TYPE_BOOL ||
+        type_size(current->type) != 2 ||
+        type_ptr_depth(next->type) != 1 ||
+        (next->type & 15) != TYPE_BOOL ||
+        type_size(next->type) != 2 ||
+        mir_machine_pointee_is_volatile(current) ||
+        mir_machine_pointee_is_volatile(next) ||
+        !mir_machine_parameter_value_offset(
+            count->dst, &plan->count_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            current->dst, &plan->current_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            next->dst, &plan->next_stack_offset))
+        return mir_machine_reject(
+            "wraparound-bool-step", "parameters");
+    if (!mir_machine_constant_equals(mir.insns[5].dst, 0) ||
+        type_size(mir.insns[5].type) != 4 ||
+        !mir_machine_unobservable_local_store(&mir.insns[6]) ||
+        mir.insns[6].memory_size != 4 ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        !mir_machine_constant_equals(mir.insns[30].dst, 0) ||
+        type_size(mir.insns[30].type) != 2 ||
+        !mir_machine_unobservable_local_store(&mir.insns[31]) ||
+        mir.insns[31].memory_size != 2 ||
+        mir.insns[31].src1 != mir.insns[30].dst)
+        return mir_machine_reject(
+            "wraparound-bool-step", "initializers");
+    if (index_phi->src1 != mir.insns[30].dst ||
+        index_phi->src2 != mir.insns[88].dst ||
+        index_phi->phi_pred1 != mir.insns[0].label ||
+        index_phi->phi_pred2 != mir.insns[85].label ||
+        type_size(index_phi->type) != 2 ||
+        (index_phi->type & TYPE_UNSIGNED) != 0 ||
+        mir.insns[42].immediate != '<' ||
+        mir.insns[42].src1 != index_phi->dst ||
+        mir.insns[42].src2 != count->dst ||
+        type_size(mir.insns[42].secondary_offset) != 2 ||
+        (mir.insns[42].secondary_offset & TYPE_UNSIGNED) != 0 ||
+        mir.insns[43].src1 != mir.insns[42].dst ||
+        mir.insns[43].label != mir.insns[91].label)
+        return mir_machine_reject(
+            "wraparound-bool-step", "loop");
+    if (!mir_machine_constant_equals(mir.insns[47].dst, 1) ||
+        mir.insns[48].immediate != '-' ||
+        mir.insns[48].src1 != index_phi->dst ||
+        mir.insns[48].src2 != mir.insns[47].dst ||
+        mir.insns[50].immediate != '+' ||
+        mir.insns[50].src1 != mir.insns[48].dst ||
+        mir.insns[50].src2 != count->dst ||
+        mir.insns[52].immediate != '%' ||
+        mir.insns[52].src1 != mir.insns[50].dst ||
+        mir.insns[52].src2 != count->dst ||
+        mir.insns[53].src1 != current->dst ||
+        mir.insns[53].src2 != mir.insns[52].dst ||
+        mir.insns[53].immediate != 1 ||
+        mir.insns[53].memory_size != 1 ||
+        mir.insns[54].src1 != mir.insns[53].dst ||
+        mir.insns[54].memory_size != 1 ||
+        (mir.insns[54].memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_unobservable_local_store(&mir.insns[55]) ||
+        mir.insns[55].memory_size != 1 ||
+        mir.insns[55].src1 != mir.insns[54].dst)
+        return mir_machine_reject(
+            "wraparound-bool-step", "left");
+    if (!mir_machine_constant_equals(mir.insns[59].dst, 1) ||
+        mir.insns[60].immediate != '+' ||
+        mir.insns[60].src1 != index_phi->dst ||
+        mir.insns[60].src2 != mir.insns[59].dst ||
+        mir.insns[62].immediate != '%' ||
+        mir.insns[62].src1 != mir.insns[60].dst ||
+        mir.insns[62].src2 != count->dst ||
+        mir.insns[63].src1 != current->dst ||
+        mir.insns[63].src2 != mir.insns[62].dst ||
+        mir.insns[63].immediate != 1 ||
+        mir.insns[63].memory_size != 1 ||
+        mir.insns[64].src1 != mir.insns[63].dst ||
+        mir.insns[64].memory_size != 1 ||
+        (mir.insns[64].memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_unobservable_local_store(&mir.insns[65]) ||
+        mir.insns[65].memory_size != 1 ||
+        mir.insns[65].src1 != mir.insns[64].dst)
+        return mir_machine_reject(
+            "wraparound-bool-step", "right");
+    if (mir.insns[68].src1 != next->dst ||
+        mir.insns[68].src2 != index_phi->dst ||
+        mir.insns[68].immediate != 1 ||
+        mir.insns[68].memory_size != 1 ||
+        mir.insns[71].immediate != '^' ||
+        ((mir.insns[71].src1 != mir.insns[54].dst ||
+          mir.insns[71].src2 != mir.insns[64].dst) &&
+         (mir.insns[71].src1 != mir.insns[64].dst ||
+          mir.insns[71].src2 != mir.insns[54].dst)) ||
+        mir.insns[72].immediate != 0 ||
+        mir.insns[72].src1 != mir.insns[71].dst ||
+        mir.insns[73].src1 != mir.insns[68].dst ||
+        mir.insns[73].src2 != mir.insns[72].dst ||
+        mir.insns[73].memory_size != 1 ||
+        (mir.insns[73].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[76].src1 != next->dst ||
+        mir.insns[76].src2 != index_phi->dst ||
+        mir.insns[76].immediate != 1 ||
+        mir.insns[76].memory_size != 1 ||
+        mir.insns[77].src1 != mir.insns[76].dst ||
+        mir.insns[77].memory_size != 1 ||
+        (mir.insns[77].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[78].src1 != mir.insns[77].dst ||
+        mir.insns[78].label != mir.insns[83].label)
+        return mir_machine_reject(
+            "wraparound-bool-step", "store");
+    if (mir.insns[6].object < 0 ||
+        mir.insns[79].object != mir.insns[6].object ||
+        type_size(mir.insns[79].type) != 4 ||
+        (mir.insns[79].memory_flags & (1 | 8)) != 0)
+        return mir_machine_reject(
+            "wraparound-bool-step", "live-load");
+    if (!mir_machine_constant_equals(mir.insns[80].dst, 1) ||
+        type_size(mir.insns[80].type) != 4)
+        return mir_machine_reject(
+            "wraparound-bool-step", "live-one");
+    if (mir.insns[81].immediate != '+' ||
+        mir.insns[81].src1 != mir.insns[79].dst ||
+        mir.insns[81].src2 != mir.insns[80].dst ||
+        type_size(mir.insns[81].type) != 4)
+        return mir_machine_reject(
+            "wraparound-bool-step", "live-add");
+    if (mir.insns[82].object != mir.insns[6].object ||
+        mir.insns[82].memory_size != 4 ||
+        (mir.insns[82].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[82].src1 != mir.insns[81].dst)
+        return mir_machine_reject(
+            "wraparound-bool-step", "live-store");
+    if (
+        !mir_machine_constant_equals(mir.insns[87].dst, 1) ||
+        mir.insns[88].immediate != '+' ||
+        mir.insns[88].src1 != index_phi->dst ||
+        mir.insns[88].src2 != mir.insns[87].dst ||
+        mir.insns[31].object < 0 ||
+        mir.insns[89].object != mir.insns[31].object ||
+        mir.insns[89].memory_size != 2 ||
+        (mir.insns[89].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[89].src1 != mir.insns[88].dst ||
+        mir.insns[90].label != mir.insns[32].label)
+        return mir_machine_reject(
+            "wraparound-bool-step", "index-update");
+    if (
+        mir.insns[92].object != mir.insns[6].object ||
+        type_size(mir.insns[92].type) != 4 ||
+        (mir.insns[92].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[93].src1 != mir.insns[92].dst)
+        return mir_machine_reject(
+            "wraparound-bool-step", "result");
     return 1;
 }
 
@@ -16279,6 +16482,73 @@ static void mir_emit_byte_array_sum(
             exit, done, exit);
 }
 
+static void mir_emit_wraparound_bool_step(
+    FILE *out, const struct MirWraparoundBoolStep *plan)
+{
+    int done = new_label();
+    int exit = new_label();
+    int left_ready = new_label();
+    int loop = new_label();
+    int no_increment = new_label();
+    int right_ready = new_label();
+    int zero = new_label();
+
+    fprintf(out,
+            ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n"
+            "\tpush iy\n",
+            mir.name);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tbit 7,b\n\tjp nz,L%d\n"
+            "\tld a,b\n\tor c\n\tjp z,L%d\n"
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tpush bc\n\tpop iy\n"
+            "\tld bc,0\n\texx\n\tld bc,0\n\texx\n"
+            "L%d:\n"
+            "\tld h,b\n\tld l,c\n"
+            "\tld a,b\n\tor c\n\tjp nz,L%d\n"
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n"
+            "\tld h,(hl)\n\tld l,a\n"
+            "L%d:\n"
+            "\tdec hl\n\tadd hl,de\n"
+            "\tld a,(hl)\n\tex af,af'\n"
+            "\tinc bc\n"
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tcp c\n\tjp nz,L%d\n"
+            "\tinc hl\n\tld a,(hl)\n\tcp b\n\tjp nz,L%d\n"
+            "\tld bc,0\n"
+            "L%d:\n"
+            "\tld h,b\n\tld l,c\n\tadd hl,de\n"
+            "\tld a,(hl)\n\tld h,a\n\tex af,af'\n\txor h\n"
+            "\tld (iy+0),a\n\tinc iy\n"
+            "\tor a\n\tjp z,L%d\n"
+            "\texx\n\tinc bc\n\texx\n"
+            "L%d:\n"
+            "\tld a,b\n\tor c\n\tjp nz,L%d\n"
+            "L%d:\n"
+            "\texx\n\tpush bc\n\texx\n\tpop hl\n"
+            "\tld de,0\n\tjp L%d\n"
+            "L%d:\n\tld de,0\n\tld hl,0\n"
+            "L%d:\n\tpop iy\n"
+            ";@dcc.reg free=iy\n\tret\n",
+            plan->count_stack_offset + 2, zero, zero,
+            plan->current_stack_offset + 2,
+            plan->next_stack_offset + 2,
+            loop, left_ready,
+            plan->count_stack_offset + 2, left_ready,
+            plan->count_stack_offset + 2,
+            right_ready, right_ready, right_ready,
+            no_increment, no_increment, loop,
+            done, exit, zero, exit);
+}
+
 static void mir_emit_fixed_row_word_sum(
     FILE *out, const struct MirFixedRowWordSum *plan)
 {
@@ -17265,6 +17535,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirByteMathFlags byte_math_flags;
     struct MirByteRangeUnion byte_range_union;
     struct MirByteArraySum byte_array_sum;
+    struct MirWraparoundBoolStep wraparound_bool_step;
     struct MirFixedRowWordSum fixed_row_word_sum;
     struct MirFixedWideZero fixed_wide_zero;
     struct MirConstantByteFill constant_byte_fill;
@@ -17709,6 +17980,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_byte_array_sum(&byte_array_sum)) {
         mir_emit_byte_array_sum(out, &byte_array_sum);
+        return 1;
+    }
+    if (mir_match_wraparound_bool_step(
+            &wraparound_bool_step)) {
+        mir_emit_wraparound_bool_step(
+            out, &wraparound_bool_step);
         return 1;
     }
     if (mir_match_fixed_row_word_sum(&fixed_row_word_sum)) {
