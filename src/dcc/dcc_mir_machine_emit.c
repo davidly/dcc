@@ -655,6 +655,18 @@ static int mir_machine_fold_integer_binary(
     modulus = mask + 1ULL;
     lhs = (unsigned long long)(unsigned long)left & mask;
     rhs = (unsigned long long)(unsigned long)right & mask;
+    if (operation == '&') {
+        bits = lhs & rhs;
+        goto convert_result;
+    }
+    if (operation == '|') {
+        bits = lhs | rhs;
+        goto convert_result;
+    }
+    if (operation == '^') {
+        bits = lhs ^ rhs;
+        goto convert_result;
+    }
     if (is_unsigned) {
         switch (operation) {
         case '+': bits = lhs + rhs; break;
@@ -703,6 +715,7 @@ static int mir_machine_fold_integer_binary(
         }
         bits = (unsigned long long)signed_value;
     }
+convert_result:
     bits &= mask;
     if (is_unsigned)
         *result = (long)(unsigned long)bits;
@@ -8415,7 +8428,10 @@ static int mir_machine_evaluate_constant_function(int *result)
 {
     struct Sym *function = find_global(mir.name);
     long *values = NULL;
+    long *objects = NULL;
     unsigned char *value_known = NULL;
+    unsigned char *object_known = NULL;
+    int object_capacity = mir.object_count > 0 ? mir.object_count : 1;
     int value_capacity = mir.next_value > 0 ? mir.next_value : 1;
     int current_label = -1;
     int predecessor_label = -1;
@@ -8426,8 +8442,8 @@ static int mir_machine_evaluate_constant_function(int *result)
 
     if (function == NULL || !function->is_defined ||
         function->storage != SC_FUNC || function->is_static ||
-        !function->has_proto || function->proto_nargs != 0 ||
-        function->proto_variadic ||
+        (function->has_proto &&
+         (function->proto_nargs != 0 || function->proto_variadic)) ||
         mir.sink_purpose != EMIT_SINK_FINAL ||
         mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
         (mir.return_type & 15) != TYPE_INT ||
@@ -8435,9 +8451,13 @@ static int mir_machine_evaluate_constant_function(int *result)
         mir_cfg_block_count() < 2)
         return 0;
     values = (long *)calloc((size_t)value_capacity, sizeof(*values));
+    objects = (long *)calloc((size_t)object_capacity, sizeof(*objects));
     value_known = (unsigned char *)calloc(
         (size_t)value_capacity, sizeof(*value_known));
-    if (values == NULL || value_known == NULL)
+    object_known = (unsigned char *)calloc(
+        (size_t)object_capacity, sizeof(*object_known));
+    if (values == NULL || objects == NULL ||
+        value_known == NULL || object_known == NULL)
         goto done;
     while (instruction >= 0 && instruction < mir.count &&
            steps++ < 100000) {
@@ -8464,8 +8484,22 @@ static int mir_machine_evaluate_constant_function(int *result)
         case MIR_STORE:
             if (insn->src1 < 0 || insn->src1 >= value_capacity ||
                 !value_known[insn->src1] ||
+                insn->object < 0 || insn->object >= mir.object_count ||
                 !mir_machine_unobservable_local_store(insn))
                 goto done;
+            objects[insn->object] = values[insn->src1];
+            object_known[insn->object] = 1;
+            ++instruction;
+            break;
+        case MIR_LOAD:
+            if (insn->dst < 0 || insn->dst >= value_capacity ||
+                insn->object < 0 || insn->object >= mir.object_count ||
+                mir.objects[insn->object].storage != SC_LOCAL ||
+                insn->memory_flags != 0 ||
+                !object_known[insn->object])
+                goto done;
+            values[insn->dst] = objects[insn->object];
+            value_known[insn->dst] = 1;
             ++instruction;
             break;
         case MIR_PHI:
@@ -8558,7 +8592,9 @@ static int mir_machine_evaluate_constant_function(int *result)
         }
     }
 done:
+    free(object_known);
     free(value_known);
+    free(objects);
     free(values);
     return ok;
 }
