@@ -4966,6 +4966,7 @@ void mir_end_function(void)
         mir.active = 0;
         return;
     }
+    mir_prune_constant_unreachable();
     mir_thread_jumps();
     mir_resolve_deferred_metadata();
     mir_canonicalize_signed_wide_relational_constants();

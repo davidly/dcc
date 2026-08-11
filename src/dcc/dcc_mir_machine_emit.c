@@ -418,6 +418,7 @@ static void mir_machine_emit_hl_offset(
     FILE *out, int offset, int preserve_bc);
 static int mir_machine_named_nonvolatile(
     const struct MirInsn *insn);
+static int mir_machine_name_nonvolatile(const char *name);
 static int mir_machine_constant_equals(
     int value, long expected);
 static int mir_machine_constant_value(
@@ -843,6 +844,97 @@ static int mir_match_affine_pointer_constant_return(long *value_out)
         form.pointer_terms < 2)
         return 0;
     *value_out = form.value & 0xffffL;
+    return 1;
+}
+
+static int mir_match_local_constant_store_return(long *value_out)
+{
+    const struct MirInsn *store = NULL;
+    const struct MirInsn *load = NULL;
+    const struct MirInsn *return_insn = NULL;
+    struct MirMachineForm store_address;
+    struct MirMachineForm load_address;
+    struct MirMachineForm value;
+    int instruction;
+
+    if (mir.has_vla || mir_cfg_block_count() > 2 ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        type_size(mir.return_type) != 2 ||
+        type_is_float(mir.return_type))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        switch (insn->opcode) {
+        case MIR_NOP:
+        case MIR_LABEL:
+        case MIR_CONST:
+        case MIR_ADDRESS:
+        case MIR_INDEX_ADDRESS:
+        case MIR_UNARY:
+        case MIR_BINARY:
+            break;
+        case MIR_JUMP:
+            break;
+        case MIR_STORE_INDIRECT:
+            if (store != NULL || insn->memory_size != 2 ||
+                insn->bit_width != 0 ||
+                (insn->memory_flags & (1 | 8)) != 0)
+                return 0;
+            store = insn;
+            break;
+        case MIR_LOAD_INDIRECT:
+            if (load != NULL || insn->memory_size != 2 ||
+                insn->bit_width != 0 ||
+                (insn->memory_flags & (1 | 8)) != 0)
+                return 0;
+            load = insn;
+            break;
+        case MIR_RETURN:
+            if (return_insn != NULL)
+                return 0;
+            return_insn = insn;
+            break;
+        default:
+            return 0;
+        }
+    }
+    if (store == NULL || load == NULL || return_insn == NULL ||
+        store >= load || load >= return_insn ||
+        return_insn->src1 != load->dst ||
+        !mir_machine_pointer_form(
+            store->src1, (int)(store - mir.insns),
+            &store_address, 0) ||
+        !mir_machine_pointer_form(
+            load->src1, (int)(load - mir.insns),
+            &load_address, 0) ||
+        store_address.kind != MIR_MACHINE_FORM_POINTER ||
+        load_address.kind != MIR_MACHINE_FORM_POINTER ||
+        store_address.storage != SC_LOCAL ||
+        load_address.storage != SC_LOCAL ||
+        store_address.offset != load_address.offset ||
+        store_address.value != load_address.value ||
+        strcmp(store_address.name, load_address.name) ||
+        !mir_machine_name_nonvolatile(store_address.name) ||
+        !mir_machine_pointer_form(
+            store->src2, (int)(store - mir.insns),
+            &value, 0) ||
+        value.kind != MIR_MACHINE_FORM_INTEGER)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_JUMP) {
+            int target;
+
+            for (target = instruction + 1;
+                 target < mir.count; ++target)
+                if (mir.insns[target].opcode == MIR_LABEL &&
+                    mir.insns[target].label ==
+                        mir.insns[instruction].label)
+                    break;
+            if (target >= mir.count || &mir.insns[target] > store)
+                return 0;
+        }
+    *value_out = value.value & 0xffffL;
     return 1;
 }
 
@@ -7057,6 +7149,20 @@ static int mir_machine_named_nonvolatile(const struct MirInsn *insn)
     return global != NULL && !global->is_volatile;
 }
 
+static int mir_machine_name_nonvolatile(const char *name)
+{
+    int declared;
+    struct Sym *global;
+
+    if (name == NULL || name[0] == '\0')
+        return 0;
+    for (declared = 0; declared < mir.declared_count; ++declared)
+        if (!strcmp(mir.declared_names[declared], name))
+            return !mir.declared_is_volatile[declared];
+    global = find_global(name);
+    return global != NULL && !global->is_volatile;
+}
+
 static int mir_machine_value_object(int value)
 {
     const struct MirInsn *definition = mir_definition(value);
@@ -10351,6 +10457,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     long constant;
 
     if (mir_match_affine_pointer_constant_return(&constant)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        fprintf(out, "\tld hl,%ld\n\tret\n", constant);
+        return 1;
+    }
+    if (mir_match_local_constant_store_return(&constant)) {
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         fprintf(out, "\tld hl,%ld\n\tret\n", constant);

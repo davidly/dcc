@@ -596,6 +596,7 @@ void mir_regional_begin_emission(void);
 int mir_regional_before_instruction(FILE *out, int instruction);
 void mir_regional_after_instruction(int instruction);
 void mir_resolve_deferred_metadata(void);
+int mir_prune_constant_unreachable(void);
 int mir_extended_integer_constant_conversion_folds(void);
 int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
                                       int *storage, int *offset);

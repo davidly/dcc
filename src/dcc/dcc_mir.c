@@ -4812,6 +4812,139 @@ static void mir_make_nop(struct MirInsn *insn)
     insn->successor_count = 0;
 }
 
+int mir_prune_constant_unreachable(void)
+{
+    unsigned char *reachable;
+    int *queue;
+    int queue_head = 0;
+    int queue_tail = 0;
+    int changed = 0;
+    int constant_branch_count = 0;
+    int constant_branch_index = -1;
+    int instruction;
+
+    if (mir.count <= 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_PHI)
+            return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_BRANCH_FALSE) {
+            const struct MirInsn *condition =
+                mir_definition(mir.insns[instruction].src1);
+
+            if (condition != NULL &&
+                condition->opcode == MIR_CONST) {
+                ++constant_branch_count;
+                constant_branch_index = instruction;
+            }
+        }
+    if (constant_branch_count != 1 || constant_branch_index > 4)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_JUMP ||
+            mir.insns[instruction].opcode == MIR_BRANCH_FALSE) {
+            int target;
+
+            if (mir.insns[instruction].label < 0)
+                return 0;
+            for (target = 0; target < mir.count; ++target)
+                if (mir.insns[target].opcode == MIR_LABEL &&
+                    mir.insns[target].label ==
+                        mir.insns[instruction].label)
+                    break;
+            if (target >= mir.count)
+                return 0;
+        }
+    reachable = (unsigned char *)calloc((size_t)mir.count, 1);
+    queue = (int *)malloc((size_t)mir.count * sizeof(*queue));
+    if (reachable == NULL || queue == NULL)
+        fatal("out of memory pruning constant MIR branches");
+    reachable[0] = 1;
+    queue[queue_tail++] = 0;
+    while (queue_head < queue_tail) {
+        const struct MirInsn *insn =
+            &mir.insns[queue[queue_head++]];
+        int index = (int)(insn - mir.insns);
+        int successors[2];
+        int successor_count = 0;
+        int successor;
+
+        if (insn->opcode == MIR_RETURN) {
+            successor_count = 0;
+        } else if (insn->opcode == MIR_JUMP) {
+            successors[successor_count++] = insn->label;
+        } else if (insn->opcode == MIR_BRANCH_FALSE) {
+            const struct MirInsn *condition =
+                mir_definition(insn->src1);
+
+            if (condition != NULL &&
+                condition->opcode == MIR_CONST) {
+                if (condition->immediate == 0)
+                    successors[successor_count++] = insn->label;
+                else if (index + 1 < mir.count)
+                    successors[successor_count++] = -1;
+            } else {
+                successors[successor_count++] = insn->label;
+                if (index + 1 < mir.count)
+                    successors[successor_count++] = -1;
+            }
+        } else if (index + 1 < mir.count) {
+            successors[successor_count++] = -1;
+        }
+        for (successor = 0; successor < successor_count; ++successor) {
+            int next = index + 1;
+
+            if (successors[successor] >= 0) {
+                for (next = 0; next < mir.count; ++next)
+                    if (mir.insns[next].opcode == MIR_LABEL &&
+                        mir.insns[next].label ==
+                            successors[successor])
+                        break;
+                if (next >= mir.count) {
+                    free(reachable);
+                    free(queue);
+                    return 0;
+                }
+            }
+            if (!reachable[next]) {
+                reachable[next] = 1;
+                queue[queue_tail++] = next;
+            }
+        }
+    }
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        struct MirInsn *insn = &mir.insns[instruction];
+
+        if (!reachable[instruction]) {
+            mir_make_nop(insn);
+            changed = 1;
+        } else if (insn->opcode == MIR_BRANCH_FALSE) {
+            const struct MirInsn *condition =
+                mir_definition(insn->src1);
+
+            if (condition != NULL &&
+                condition->opcode == MIR_CONST) {
+                if (condition->immediate == 0) {
+                    insn->opcode = MIR_JUMP;
+                    insn->dst = -1;
+                    insn->src1 = -1;
+                    insn->src2 = -1;
+                    insn->successor_count = 0;
+                } else {
+                    mir_make_nop(insn);
+                }
+                changed = 1;
+            }
+        }
+    }
+    free(reachable);
+    free(queue);
+    if (changed)
+        mir_invalidate_use_cache();
+    return changed;
+}
+
 static int mir_boolean_phi_branch_simplifications;
 
 int mir_boolean_phi_branch_candidate_count(void)
