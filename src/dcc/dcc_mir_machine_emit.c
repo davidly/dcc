@@ -382,6 +382,13 @@ struct MirConstantFloatConditional {
     unsigned long false_bits;
 };
 
+struct MirConditionalGlobalFloatLoad {
+    struct Sym *root;
+    int condition_stack_offset;
+    int true_offset;
+    int false_offset;
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -5101,6 +5108,190 @@ static int mir_match_constant_float_conditional(
         plan->false_bits =
             (unsigned long)integer_constant->immediate & 0xffffffffUL;
     }
+    return 1;
+}
+
+static int mir_match_conditional_global_float_load(
+    struct MirConditionalGlobalFloatLoad *plan)
+{
+    const struct MirInsn *condition;
+    const struct MirInsn *branch;
+    const struct MirInsn *true_root;
+    const struct MirInsn *true_index;
+    const struct MirInsn *true_member = NULL;
+    const struct MirInsn *true_label;
+    const struct MirInsn *jump;
+    const struct MirInsn *false_label;
+    const struct MirInsn *false_root;
+    const struct MirInsn *false_index;
+    const struct MirInsn *false_member = NULL;
+    const struct MirInsn *false_pred;
+    const struct MirInsn *join;
+    const struct MirInsn *phi;
+    const struct MirInsn *pointer_store;
+    const struct MirInsn *pointer_load;
+    const struct MirInsn *element_address;
+    const struct MirInsn *element_load;
+    const struct MirInsn *conversion;
+    const struct MirInsn *return_insn;
+    const struct MirInsn *true_row_constant;
+    const struct MirInsn *false_row_constant;
+    const struct MirInsn *final_index_constant;
+    int has_member;
+    int tail;
+    long long true_offset;
+    long long false_offset;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    memset(plan, 0, sizeof(*plan));
+    has_member = mir.count == 26;
+    if (mir_cfg_block_count() != 5 ||
+        (!has_member && mir.count != 24) ||
+        type_size(mir.return_type) != 4 ||
+        mir.insns[0].opcode != MIR_LABEL ||
+        mir.insns[1].opcode != MIR_PARAM ||
+        mir.insns[2].opcode != MIR_NOP ||
+        mir.insns[3].opcode != MIR_BRANCH_FALSE)
+        return 0;
+    condition = &mir.insns[1];
+    branch = &mir.insns[3];
+    true_root = &mir.insns[4];
+    true_index = &mir.insns[6];
+    if (has_member) {
+        true_member = &mir.insns[7];
+        true_label = &mir.insns[8];
+        jump = &mir.insns[9];
+        false_label = &mir.insns[10];
+        false_root = &mir.insns[11];
+        false_index = &mir.insns[13];
+        false_member = &mir.insns[14];
+        false_pred = &mir.insns[15];
+        join = &mir.insns[16];
+        phi = &mir.insns[17];
+        tail = 18;
+    } else {
+        true_label = &mir.insns[7];
+        jump = &mir.insns[8];
+        false_label = &mir.insns[9];
+        false_root = &mir.insns[10];
+        false_index = &mir.insns[12];
+        false_pred = &mir.insns[13];
+        join = &mir.insns[14];
+        phi = &mir.insns[15];
+        tail = 16;
+    }
+    pointer_store = &mir.insns[tail + 1];
+    pointer_load = &mir.insns[tail + 2];
+    element_address = &mir.insns[tail + 4];
+    element_load = &mir.insns[tail + 5];
+    conversion = &mir.insns[tail + 6];
+    return_insn = &mir.insns[tail + 7];
+    true_row_constant = mir_definition(true_index->src2);
+    false_row_constant = mir_definition(false_index->src2);
+    final_index_constant = mir_definition(element_address->src2);
+    if (mir.insns[tail].opcode != MIR_NOP ||
+        pointer_store->opcode != MIR_STORE ||
+        pointer_load->opcode != MIR_LOAD ||
+        mir.insns[tail + 3].opcode != MIR_CONST ||
+        element_address->opcode != MIR_INDEX_ADDRESS ||
+        element_load->opcode != MIR_LOAD_INDIRECT ||
+        conversion->opcode != MIR_UNARY ||
+        return_insn->opcode != MIR_RETURN ||
+        true_root->opcode != MIR_ADDRESS ||
+        mir.insns[5].opcode != MIR_CONST ||
+        true_index->opcode != MIR_INDEX_ADDRESS ||
+        true_label->opcode != MIR_LABEL ||
+        jump->opcode != MIR_JUMP ||
+        false_label->opcode != MIR_LABEL ||
+        false_root->opcode != MIR_ADDRESS ||
+        mir.insns[has_member ? 12 : 11].opcode != MIR_CONST ||
+        false_index->opcode != MIR_INDEX_ADDRESS ||
+        false_pred->opcode != MIR_LABEL ||
+        join->opcode != MIR_LABEL ||
+        phi->opcode != MIR_PHI)
+        return 0;
+    if (has_member &&
+        (true_member->opcode != MIR_MEMBER_ADDRESS ||
+         false_member->opcode != MIR_MEMBER_ADDRESS ||
+         true_member->src1 != true_index->dst ||
+         false_member->src1 != false_index->dst ||
+         true_member->immediate != false_member->immediate))
+        return 0;
+    if (strcmp(true_root->name, false_root->name) ||
+        true_row_constant == NULL ||
+        true_row_constant->opcode != MIR_CONST ||
+        true_row_constant->immediate < 0 ||
+        true_row_constant->immediate > 32767 ||
+        false_row_constant == NULL ||
+        false_row_constant->opcode != MIR_CONST ||
+        false_row_constant->immediate < 0 ||
+        false_row_constant->immediate > 32767 ||
+        true_index->src1 != true_root->dst ||
+        false_index->src1 != false_root->dst ||
+        true_index->immediate <= 0 ||
+        true_index->immediate != false_index->immediate ||
+        branch->src1 != condition->dst ||
+        branch->label != false_label->label ||
+        jump->label != join->label ||
+        phi->src1 !=
+            (has_member ? true_member->dst : true_index->dst) ||
+        phi->src2 !=
+            (has_member ? false_member->dst : false_index->dst) ||
+        phi->phi_pred1 != true_label->label ||
+        phi->phi_pred2 != false_pred->label ||
+        !mir_machine_unobservable_local_store(pointer_store) ||
+        pointer_store->src1 != phi->dst ||
+        !mir_machine_same_location(pointer_store, pointer_load) ||
+        element_address->src1 != pointer_load->dst ||
+        final_index_constant == NULL ||
+        final_index_constant->opcode != MIR_CONST ||
+        final_index_constant->immediate < 0 ||
+        final_index_constant->immediate > 32767 ||
+        element_address->immediate != 4 ||
+        element_load->src1 != element_address->dst ||
+        element_load->memory_size != 4 ||
+        element_load->bit_width != 0 ||
+        !type_is_float(element_load->type) ||
+        (element_load->memory_flags & (1 | 8)) != 0 ||
+        conversion->immediate != 0 ||
+        conversion->src1 != element_load->dst ||
+        type_size(conversion->type) != 4 ||
+        type_is_float(conversion->type) ||
+        (conversion->type & TYPE_UNSIGNED) != 0 ||
+        (mir.return_type & TYPE_UNSIGNED) != 0 ||
+        return_insn->src1 != conversion->dst ||
+        type_size(condition->type) != 2 ||
+        !mir_machine_parameter_value_offset(
+            condition->dst, &plan->condition_stack_offset))
+        return 0;
+    plan->root = find_global(true_root->name);
+    if (plan->root == NULL || plan->root->is_volatile ||
+        !mir_scalar_memory_location(
+            true_root, &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_GLOBAL)
+        return 0;
+    true_offset =
+        (long long)memory_offset +
+        (long long)true_row_constant->immediate *
+            (long long)true_index->immediate +
+        (has_member ? true_member->immediate : 0) +
+        (long long)final_index_constant->immediate *
+            (long long)element_address->immediate;
+    false_offset =
+        (long long)memory_offset +
+        (long long)false_row_constant->immediate *
+            (long long)false_index->immediate +
+        (has_member ? false_member->immediate : 0) +
+        (long long)final_index_constant->immediate *
+            (long long)element_address->immediate;
+    if (true_offset < -32768 || true_offset > 32767 ||
+        false_offset < -32768 || false_offset > 32767)
+        return 0;
+    plan->true_offset = (int)true_offset;
+    plan->false_offset = (int)false_offset;
     return 1;
 }
 
@@ -10058,6 +10249,38 @@ static void mir_emit_constant_float_conditional(
         plan->false_integer_width, plan->false_bits);
 }
 
+static void mir_emit_global_float_to_long_return(
+    FILE *out, const struct MirConditionalGlobalFloatLoad *plan,
+    int offset)
+{
+    mir_machine_emit_global_address_de(out, plan->root, offset);
+    fputs("\tex de,hl\n"
+          "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+          "\tinc hl\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tld l,c\n\tld h,b\n", out);
+    mir_emit_runtime_call(out, "__ffl");
+    fputs("\tret\n", out);
+}
+
+static void mir_emit_conditional_global_float_load(
+    FILE *out, const struct MirConditionalGlobalFloatLoad *plan)
+{
+    int false_arm = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n\tor (hl)\n"
+            "\tjp z,L%d\n",
+            plan->condition_stack_offset, false_arm);
+    mir_emit_global_float_to_long_return(
+        out, plan, plan->true_offset);
+    fprintf(out, "L%d:\n", false_arm);
+    mir_emit_global_float_to_long_return(
+        out, plan, plan->false_offset);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -10123,6 +10346,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirRelativeToleranceCall relative_tolerance_call;
     struct MirFixedFloatGridFill fixed_float_grid_fill;
     struct MirConstantFloatConditional constant_float_conditional;
+    struct MirConditionalGlobalFloatLoad conditional_global_float_load;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -10376,6 +10600,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &constant_float_conditional)) {
         mir_emit_constant_float_conditional(
             out, &constant_float_conditional);
+        return 1;
+    }
+    if (mir_match_conditional_global_float_load(
+            &conditional_global_float_load)) {
+        mir_emit_conditional_global_float_load(
+            out, &conditional_global_float_load);
         return 1;
     }
     if (mir_match_indexed_member_write(
