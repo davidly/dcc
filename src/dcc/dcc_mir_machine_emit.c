@@ -657,6 +657,13 @@ struct MirSingleSignedDivCheck {
     int operation;
 };
 
+struct MirLocalIdentityArrayResult {
+    struct Sym *escaped_pointer;
+    int escaped_pointer_offset;
+    int array_offset;
+    int result;
+};
+
 #define MIR_MACHINE_SWITCH_RESULT_LIMIT 64
 
 struct MirConstantResultSwitch {
@@ -9913,6 +9920,112 @@ static int mir_match_single_signed_div_check(
     return 1;
 }
 
+static int mir_match_local_identity_array_result(
+    struct MirLocalIdentityArrayResult *plan)
+{
+    static const int expected_opcodes[32] = {
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_PHI,
+        MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP, MIR_UNARY,
+        MIR_STORE_INDIRECT, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_ADDRESS, MIR_NOP, MIR_STORE,
+        MIR_LOAD, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_RETURN
+    };
+    int instruction;
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+    long selected_index;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 32 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
+        type_size(mir.return_type) != 2)
+        return mir_machine_reject("local-identity-array", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject("local-identity-array", "opcode");
+    if (!mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[3]) ||
+        mir.insns[5].src1 != mir.insns[2].dst ||
+        mir.insns[5].src2 != mir.insns[20].dst ||
+        mir.insns[5].phi_pred1 != mir.insns[0].label ||
+        mir.insns[5].phi_pred2 != mir.insns[17].label ||
+        mir.insns[7].immediate <= 0 ||
+        mir.insns[7].immediate > 32767 ||
+        mir.insns[8].immediate != 0 ||
+        mir.insns[8].src1 != mir.insns[5].dst ||
+        mir.insns[9].immediate != '<' ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[9].src2 != mir.insns[7].dst ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        mir.insns[10].label != mir.insns[23].label)
+        return mir_machine_reject("local-identity-array", "loop");
+    if (!mir_machine_named_nonvolatile(&mir.insns[11]) ||
+        !mir_scalar_memory_location(
+            &mir.insns[11], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_LOCAL || memory_offset >= 0 ||
+        mir.insns[13].src1 != mir.insns[11].dst ||
+        mir.insns[13].src2 != mir.insns[5].dst ||
+        mir.insns[13].immediate != 2 ||
+        mir.insns[13].memory_size != 2 ||
+        mir.insns[15].immediate != 0 ||
+        mir.insns[15].src1 != mir.insns[5].dst ||
+        mir.insns[16].src1 != mir.insns[13].dst ||
+        mir.insns[16].src2 != mir.insns[15].dst ||
+        mir.insns[16].memory_size != 2 ||
+        (mir.insns[16].memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_constant_equals(mir.insns[19].dst, 1) ||
+        mir.insns[20].immediate != '+' ||
+        mir.insns[20].src1 != mir.insns[5].dst ||
+        mir.insns[20].src2 != mir.insns[19].dst ||
+        !mir_machine_same_location(&mir.insns[3], &mir.insns[21]) ||
+        mir.insns[22].label != mir.insns[4].label)
+        return mir_machine_reject("local-identity-array", "store");
+    plan->array_offset = memory_offset;
+    if (strcmp(mir.insns[11].name, mir.insns[24].name) ||
+        !mir_machine_named_nonvolatile(&mir.insns[26]) ||
+        !mir_scalar_memory_location(
+            &mir.insns[26], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        type_ptr_depth(memory_type) != 1 ||
+        mir.insns[26].src1 != mir.insns[24].dst ||
+        !mir_machine_same_location(&mir.insns[26], &mir.insns[27]))
+        return mir_machine_reject(
+            "local-identity-array", "result-alias");
+    plan->escaped_pointer = find_global(mir.insns[26].name);
+    if (plan->escaped_pointer == NULL ||
+        !plan->escaped_pointer->is_defined ||
+        plan->escaped_pointer->is_volatile)
+        return mir_machine_reject(
+            "local-identity-array", "result-global");
+    plan->escaped_pointer_offset = memory_offset;
+    if (!mir_machine_constant_value(
+            mir.insns[28].dst, &selected_index, 0) ||
+        selected_index < 0 ||
+        selected_index >= mir.insns[7].immediate ||
+        mir.insns[29].src1 != mir.insns[27].dst ||
+        mir.insns[29].src2 != mir.insns[28].dst ||
+        mir.insns[29].immediate != 2)
+        return mir_machine_reject(
+            "local-identity-array", "result-index");
+    if (
+        mir.insns[30].src1 != mir.insns[29].dst ||
+        mir.insns[30].memory_size != 2 ||
+        (mir.insns[30].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[31].src1 != mir.insns[30].dst)
+        return mir_machine_reject("local-identity-array", "result");
+    plan->result = (int)selected_index;
+    if (-plan->array_offset <
+        (int)mir.insns[7].immediate * 2)
+        return mir_machine_reject(
+            "local-identity-array", "result-frame");
+    return 1;
+}
+
 static int mir_machine_constant_return_for_label(
     int label, int *result)
 {
@@ -16975,6 +17088,23 @@ static void mir_emit_single_signed_div_check(
     fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tret\n", out);
 }
 
+static void mir_emit_local_identity_array_result(
+    FILE *out, const struct MirLocalIdentityArrayResult *plan)
+{
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    fprintf(out, "\tld hl,%d\n\tadd hl,sp\n\tld sp,hl\n",
+            plan->array_offset);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tpush ix\n\tpop hl\n", out);
+    mir_machine_emit_hl_offset(out, plan->array_offset, 0);
+    mir_machine_emit_global_word_store(
+        out, plan->escaped_pointer, plan->escaped_pointer_offset);
+    fprintf(out,
+            "\tld hl,%d\n\tld sp,ix\n\tpop ix\n\tret\n",
+            plan->result);
+}
+
 static void mir_emit_constant_function(FILE *out, int result)
 {
     if (opt_stack_check)
@@ -17164,6 +17294,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirNibbleAppend nibble_append;
     struct MirVolatileFillWideConstant volatile_fill_wide_constant;
     struct MirSingleSignedDivCheck single_signed_div_check;
+    struct MirLocalIdentityArrayResult local_identity_array_result;
     struct MirConstantResultSwitch constant_result_switch;
     struct MirLocalByteFillSumPrint local_byte_fill_sum_print;
     struct MirIndexedMemberWrite indexed_member_write;
@@ -17174,6 +17305,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         fputs("\tret\n", out);
+        return 1;
+    }
+    if (mir_match_local_identity_array_result(
+            &local_identity_array_result)) {
+        mir_emit_local_identity_array_result(
+            out, &local_identity_array_result);
         return 1;
     }
     if (mir_match_word_range_bool(&word_range_bool)) {
