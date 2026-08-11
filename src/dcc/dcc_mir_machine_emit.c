@@ -225,6 +225,13 @@ struct MirWideEqualAddSelect {
     unsigned long fallback_value;
 };
 
+struct MirWideCallMemberAccumulate {
+    struct Sym *function;
+    int argument_stack_offset;
+    int object_stack_offset;
+    int member_offset;
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -2291,6 +2298,98 @@ static int mir_match_wide_equal_add_select(
         (unsigned long)match_constant->immediate & 0xffffffffUL;
     plan->fallback_value =
         (unsigned long)fallback_constant->immediate & 0xffffffffUL;
+    return 1;
+}
+
+static int mir_match_wide_call_member_accumulate(
+    struct MirWideCallMemberAccumulate *plan)
+{
+    static const int expected_opcodes[11] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_NOP,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_LOAD,
+        MIR_ARG, MIR_CALL, MIR_BINARY, MIR_STORE_INDIRECT
+    };
+    const struct MirInsn *argument_parameter;
+    const struct MirInsn *object_parameter;
+    const struct MirInsn *member;
+    const struct MirInsn *load;
+    const struct MirInsn *argument_load;
+    const struct MirInsn *call;
+    const struct MirInsn *addition;
+    const struct MirInsn *store;
+    int call_argument;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir_cfg_block_count() != 1 || mir.count != 11 ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return 0;
+    argument_parameter = &mir.insns[1];
+    object_parameter = &mir.insns[2];
+    member = &mir.insns[4];
+    load = &mir.insns[5];
+    argument_load = &mir.insns[6];
+    call = &mir.insns[8];
+    addition = &mir.insns[9];
+    store = &mir.insns[10];
+    if (type_size(argument_parameter->type) != 2 ||
+        type_ptr_depth(argument_parameter->type) == 0 ||
+        type_is_float(argument_parameter->type) ||
+        type_size(object_parameter->type) != 2 ||
+        type_ptr_depth(object_parameter->type) == 0 ||
+        type_is_float(object_parameter->type) ||
+        member->src1 != object_parameter->dst ||
+        member->memory_size != 4 ||
+        member->immediate < -128 ||
+        member->immediate + 3 > 127 ||
+        load->src1 != member->dst ||
+        load->memory_size != 4 ||
+        load->bit_width != 0 ||
+        type_size(load->type) != 4 ||
+        type_is_float(load->type) ||
+        (load->memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_same_location(
+            argument_parameter, argument_load) ||
+        !mir_machine_single_call_argument(
+            call, &call_argument) ||
+        call_argument != argument_load->dst ||
+        type_size(call->type) != 4 ||
+        type_is_float(call->type) ||
+        (call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+        addition->immediate != '+' ||
+        type_size(addition->type) != 4 ||
+        !((addition->src1 == load->dst &&
+           addition->src2 == call->dst) ||
+          (addition->src2 == load->dst &&
+           addition->src1 == call->dst)) ||
+        store->src1 != member->dst ||
+        store->src2 != addition->dst ||
+        store->memory_size != 4 ||
+        store->bit_width != 0 ||
+        (store->memory_flags & (1 | 8)) != 0)
+        return 0;
+    plan->function = find_global(call->name);
+    if (plan->function == NULL ||
+        !plan->function->is_defined ||
+        (call->base_name[0] != 0 &&
+         strcmp(call->base_name,
+                asm_name_for(
+                    sym_asm_name(plan->function)))))
+        return 0;
+    if (!mir_machine_parameter_value_offset(
+            argument_parameter->dst,
+            &plan->argument_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            object_parameter->dst,
+            &plan->object_stack_offset))
+        return 0;
+    plan->member_offset = (int)member->immediate;
     return 1;
 }
 
@@ -6457,6 +6556,35 @@ static void mir_emit_wide_equal_add_select(
             (plan->fallback_value >> 16) & 0xffffUL);
 }
 
+static void mir_emit_wide_call_member_accumulate(
+    FILE *out, const struct MirWideCallMemberAccumulate *plan)
+{
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tex de,hl\n\tld de,%d\n\tadd hl,de\n"
+            "\tpush hl\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tinc hl\n\tld a,(hl)\n\tinc hl\n"
+            "\tld h,(hl)\n\tld l,a\n\tex de,hl\n"
+            "\tpush de\n\tpush hl\n"
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tpush de\n",
+            plan->object_stack_offset,
+            plan->member_offset,
+            plan->argument_stack_offset + 6);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n\tpop bc\n\tadd hl,bc\n"
+          "\tex de,hl\n\tpop bc\n\tadc hl,bc\n\tex de,hl\n"
+          "\tld b,d\n\tld c,e\n\tpop de\n\tex de,hl\n"
+          "\tld (hl),e\n\tinc hl\n\tld (hl),d\n\tinc hl\n"
+          "\tld (hl),c\n\tinc hl\n\tld (hl),b\n\tret\n",
+          out);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -6504,6 +6632,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirMaskedWideProductHigh masked_wide_product_high;
     struct MirWideEqualSelect wide_equal_select;
     struct MirWideEqualAddSelect wide_equal_add_select;
+    struct MirWideCallMemberAccumulate wide_call_member_accumulate;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -6657,6 +6786,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_wide_equal_add_select(
             out, &wide_equal_add_select);
+        return 1;
+    }
+    if (mir_match_wide_call_member_accumulate(
+            &wide_call_member_accumulate)) {
+        mir_emit_wide_call_member_accumulate(
+            out, &wide_call_member_accumulate);
         return 1;
     }
     if (mir_match_indexed_member_write(
