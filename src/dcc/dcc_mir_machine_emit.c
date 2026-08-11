@@ -7265,6 +7265,82 @@ static int mir_match_affine_byte_fill(struct MirAffineByteFill *plan)
     return 1;
 }
 
+static int mir_match_wide_left_shift_count(void)
+{
+    static const int expected_opcodes[30] = {
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_CONST, MIR_STORE,
+        MIR_LABEL, MIR_PHI, MIR_PHI, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP,
+        MIR_STORE, MIR_NOP, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_NOP,
+        MIR_RETURN
+    };
+    const struct MirInsn *wide_phi;
+    const struct MirInsn *count_phi;
+    int instruction;
+
+    if (mir.count != 30 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_size(mir.return_type) != 2)
+        return 0;
+    wide_phi = &mir.insns[7];
+    count_phi = &mir.insns[8];
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return 0;
+    if (!mir_machine_constant_equals(mir.insns[2].dst, 1) ||
+        type_ptr_depth(mir.insns[2].type) != 0 ||
+        (mir.insns[2].type & 15) != TYPE_LONG ||
+        (mir.insns[2].type & TYPE_UNSIGNED) == 0 ||
+        type_size(mir.insns[2].type) != 4 ||
+        !mir_machine_unobservable_local_store(&mir.insns[3]) ||
+        mir.insns[3].memory_size != 4 ||
+        !mir_machine_constant_equals(mir.insns[4].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[5]) ||
+        mir.insns[5].memory_size != 2)
+        return 0;
+    if (wide_phi->src1 != mir.insns[2].dst ||
+        wide_phi->src2 != mir.insns[21].dst ||
+        wide_phi->phi_pred1 != mir.insns[0].label ||
+        wide_phi->phi_pred2 != mir.insns[25].label ||
+        wide_phi->type != mir.insns[2].type ||
+        count_phi->src1 != mir.insns[4].dst ||
+        count_phi->src2 != mir.insns[17].dst ||
+        count_phi->phi_pred1 != mir.insns[0].label ||
+        count_phi->phi_pred2 != mir.insns[25].label ||
+        type_ptr_depth(count_phi->type) != 0 ||
+        (count_phi->type & 15) != TYPE_INT ||
+        type_size(count_phi->type) != 2)
+        return 0;
+    if (!mir_machine_constant_equals(mir.insns[12].dst, 0) ||
+        mir.insns[12].type != wide_phi->type ||
+        mir.insns[13].immediate != TOK_NE ||
+        mir.insns[13].src1 != mir.insns[12].dst ||
+        mir.insns[13].src2 != wide_phi->dst ||
+        mir.insns[14].src1 != mir.insns[13].dst ||
+        mir.insns[14].label != mir.insns[27].label ||
+        !mir_machine_constant_equals(mir.insns[16].dst, 1) ||
+        mir.insns[17].immediate != '+' ||
+        mir.insns[17].src1 != count_phi->dst ||
+        mir.insns[17].src2 != mir.insns[16].dst ||
+        !mir_machine_same_location(&mir.insns[5], &mir.insns[18]) ||
+        mir.insns[18].src1 != mir.insns[17].dst)
+        return 0;
+    if (!mir_machine_constant_equals(mir.insns[20].dst, 1) ||
+        mir.insns[20].type != wide_phi->type ||
+        mir.insns[21].immediate != TOK_SHL ||
+        mir.insns[21].src1 != wide_phi->dst ||
+        mir.insns[21].src2 != mir.insns[20].dst ||
+        mir.insns[21].type != wide_phi->type ||
+        !mir_machine_same_location(&mir.insns[3], &mir.insns[23]) ||
+        mir.insns[23].src1 != mir.insns[21].dst ||
+        mir.insns[26].label != mir.insns[6].label ||
+        mir.insns[29].src1 != count_phi->dst)
+        return 0;
+    return 1;
+}
+
 static int mir_machine_constant_return_for_label(
     int label, int *result)
 {
@@ -13421,6 +13497,22 @@ static void mir_emit_affine_byte_fill(
             plan->count, loop, loop);
 }
 
+static void mir_emit_wide_left_shift_count(FILE *out)
+{
+    int done = new_label();
+    int loop = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,1\n\tld de,0\n\tld bc,0\n"
+            "L%d:\n\tld a,d\n\tor e\n\tor h\n\tor l\n"
+            "\tjp z,L%d\n\tinc bc\n\tadd hl,hl\n"
+            "\trl e\n\trl d\n\tjp L%d\n"
+            "L%d:\n\tld h,b\n\tld l,c\n\tret\n",
+            loop, done, loop, done);
+}
+
 static void mir_emit_constant_result_switch(
     FILE *out, const struct MirConstantResultSwitch *plan)
 {
@@ -13891,6 +13983,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_affine_byte_fill(&affine_byte_fill)) {
         mir_emit_affine_byte_fill(out, &affine_byte_fill);
+        return 1;
+    }
+    if (mir_match_wide_left_shift_count()) {
+        mir_emit_wide_left_shift_count(out);
         return 1;
     }
     if (mir_match_constant_result_switch(

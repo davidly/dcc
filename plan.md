@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `d73c9f1`
-  (`schedule affine byte fill loops`).
-- Current candidate coverage: **1888/2182 (86.53%)**.
-- Remaining fallback population: **294 `final-cost-policy`**, with no other
+- Published HEAD before this batch: `02f3ad4`
+  (`schedule terminal constant switches`).
+- Current candidate coverage: **1889/2182 (86.57%)**.
+- Remaining fallback population: **293 `final-cost-policy`**, with no other
   fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -49,6 +49,9 @@ current execution plan and handoff.
   local fallthrough updates while rejecting parameter-dependent tail control.
   It admits `tc89swjt.swdn`, `tc89swjt.swft`, and `tdead.ds_sw`;
   `tc89swjt` improves 7.87% peep / 9.42% nopeep.
+- The wide left-shift counter keeps the unsigned long in DE:HL and the loop
+  count in BC. It admits `tcrcfix.crc_t_bits_probe`, improving that app 7.53%
+  peep / 6.70% nopeep and shrinking both linked modes.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -56,7 +59,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 294 final-cost fallbacks,
+- Current next priority: repeated causes in the 293 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
