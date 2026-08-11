@@ -64,7 +64,10 @@ enum PeepRegisterMask {
     PEEP_REG_L  = 1u << 6,
     PEEP_REG_IX = 1u << 7,
     PEEP_REG_IY = 1u << 8,
-    PEEP_REG_SP = 1u << 9
+    PEEP_REG_SP = 1u << 9,
+    PEEP_REG_BC = PEEP_REG_B | PEEP_REG_C,
+    PEEP_REG_DE = PEEP_REG_D | PEEP_REG_E,
+    PEEP_REG_HL = PEEP_REG_H | PEEP_REG_L
 };
 
 enum PeepFlagMask {
@@ -310,6 +313,11 @@ int label_name_at(int i, char *out);
 int line_is_label_name(int i, const char *name);
 int peep_is_public_line(const char *s);
 int bc_regalloc_claimed_before(int at);
+int peep_register_claimed_in_range(unsigned mask, int begin, int end);
+int peep_register_claimed_from(unsigned mask, int at);
+int peep_register_claimed_in_file(unsigned mask);
+int peep_register_available_in_range(
+    unsigned mask, int begin, int end, const char *own_tag);
 /* Interval forms of the same question. dcc publishes its own BC claims as
  * paired "@dcc.reg claim=bc" / "@dcc.reg free=bc" directives, so ownership
  * is a set of intervals rather than a single "claimed from here onward"

@@ -5196,6 +5196,177 @@ static int line_is_regalloc_bc_release(const char *line)
     return strstr(line, "@dcc.reg free=bc") != NULL;
 }
 
+static unsigned peep_register_name_mask(const char *name, size_t length)
+{
+    if (length == 1) {
+        switch (name[0]) {
+        case 'a': return PEEP_REG_A;
+        case 'b': return PEEP_REG_B;
+        case 'c': return PEEP_REG_C;
+        case 'd': return PEEP_REG_D;
+        case 'e': return PEEP_REG_E;
+        case 'h': return PEEP_REG_H;
+        case 'l': return PEEP_REG_L;
+        default: return 0;
+        }
+    }
+    if (length == 2 && !strncmp(name, "bc", 2))
+        return PEEP_REG_BC;
+    if (length == 2 && !strncmp(name, "de", 2))
+        return PEEP_REG_DE;
+    if (length == 2 && !strncmp(name, "hl", 2))
+        return PEEP_REG_HL;
+    if (length == 2 && !strncmp(name, "ix", 2))
+        return PEEP_REG_IX;
+    if (length == 2 && !strncmp(name, "iy", 2))
+        return PEEP_REG_IY;
+    if (length == 2 && !strncmp(name, "sp", 2))
+        return PEEP_REG_SP;
+    if (length == 5 && !strncmp(name, "hl:de", 5))
+        return PEEP_REG_HL | PEEP_REG_DE;
+    if (length == 5 && !strncmp(name, "bc:iy", 5))
+        return PEEP_REG_BC | PEEP_REG_IY;
+    return 0;
+}
+
+static unsigned peep_register_directive_mask(
+    const char *line, const char *directive)
+{
+    const char *name = strstr(line, directive);
+    const char *end;
+
+    if (name == NULL)
+        return 0;
+    name += strlen(directive);
+    end = name;
+    while ((*end >= 'a' && *end <= 'z') || *end == ':')
+        ++end;
+    return peep_register_name_mask(name, (size_t)(end - name));
+}
+
+int peep_register_claimed_in_range(unsigned mask, int begin, int end)
+{
+    int func_start, func_end;
+    unsigned live = 0;
+    int i;
+
+    if (mask == 0)
+        return 0;
+    if (begin < 0)
+        begin = 0;
+    if (end > nlines)
+        end = nlines;
+    if (begin >= end)
+        return 0;
+    find_function_bounds_any(begin, &func_start, &func_end);
+    if (func_end < end)
+        end = func_end;
+    for (i = func_start; i < end; ++i) {
+        unsigned released = peep_register_directive_mask(
+            lines[i], "@dcc.reg free=");
+        unsigned claimed = peep_register_directive_mask(
+            lines[i], "@dcc.reg claim=");
+
+        live &= ~released;
+        live |= claimed;
+        if ((mask & PEEP_REG_BC) != 0 &&
+            claimed == 0 &&
+            line_is_regalloc_bc_priming(lines[i]))
+            live |= PEEP_REG_BC;
+        if ((live & mask) != 0 && i >= begin) {
+            if (getenv("DCCPEEP_REGISTER_REPORT") != NULL)
+                fprintf(stderr,
+                        "register-blocked reason=claim mask=%x "
+                        "begin=%d end=%d line=%d live=%x\n",
+                        mask, begin, end, i, live);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int peep_register_claimed_from(unsigned mask, int at)
+{
+    int func_start, func_end;
+
+    find_function_bounds_any(at, &func_start, &func_end);
+    return peep_register_claimed_in_range(mask, at, func_end);
+}
+
+int peep_register_claimed_in_file(unsigned mask)
+{
+    int i;
+
+    for (i = 0; i < nlines; ++i)
+        if ((peep_register_directive_mask(
+                 lines[i], "@dcc.reg claim=") & mask) != 0)
+            return 1;
+    return 0;
+}
+
+static void peep_report_register_directives(void)
+{
+    int i;
+
+    if (getenv("DCCPEEP_REGISTER_REPORT") == NULL)
+        return;
+    for (i = 0; i < nlines; ++i) {
+        unsigned claimed = peep_register_directive_mask(
+            lines[i], "@dcc.reg claim=");
+        unsigned released = peep_register_directive_mask(
+            lines[i], "@dcc.reg free=");
+
+        if (claimed != 0)
+            fprintf(stderr,
+                    "register-claim action=claim line=%d mask=%x\n",
+                    i, claimed);
+        if (released != 0)
+            fprintf(stderr,
+                    "register-claim action=free line=%d mask=%x\n",
+                    i, released);
+    }
+}
+
+int peep_register_available_in_range(
+    unsigned mask, int begin, int end, const char *own_tag)
+{
+    int i;
+
+    if (peep_register_claimed_in_range(mask, begin, end))
+        return 0;
+    if (begin < 0)
+        begin = 0;
+    if (end > nlines)
+        end = nlines;
+    for (i = begin; i < end; ++i) {
+        const PeepLineInfo *info;
+
+        if (own_tag != NULL && strstr(lines[i], own_tag) != NULL)
+            continue;
+        info = peep_line_info(i);
+        if (info == NULL || info->kind != PEEP_LINE_INSTRUCTION)
+            continue;
+        if (info->effects.unknown) {
+            if (getenv("DCCPEEP_REGISTER_REPORT") != NULL)
+                fprintf(stderr,
+                        "register-blocked reason=unknown mask=%x "
+                        "begin=%d end=%d line=%d\n",
+                        mask, begin, end, i);
+            return 0;
+        }
+        if (((info->effects.reads | info->effects.writes) & mask) != 0) {
+            if (getenv("DCCPEEP_REGISTER_REPORT") != NULL)
+                fprintf(stderr,
+                        "register-blocked reason=liveness mask=%x "
+                        "begin=%d end=%d line=%d reads=%x writes=%x\n",
+                        mask, begin, end, i,
+                        info->effects.reads, info->effects.writes);
+            return 0;
+        }
+    }
+    return 1;
+}
+
 /* Does dcc's own compiler-side BC reservation cover ANY line in
  * [begin,end)?
  *
@@ -5219,32 +5390,8 @@ static int line_is_regalloc_bc_release(const char *line)
  * unclaimed remainder. */
 int bc_regalloc_claimed_in_range(int begin, int end)
 {
-    int func_start, func_end;
-    int i, live;
-
-    if (begin < 0)
-        begin = 0;
-    if (end > nlines)
-        end = nlines;
-    if (begin >= end)
-        return 0;
-
-    find_function_bounds_any(begin, &func_start, &func_end);
-    if (func_end < end)
-        end = func_end;
-
-    live = 0;
-    for (i = func_start; i < end; i++) {
-        if (line_is_regalloc_bc_release(lines[i])) {
-            live = 0;
-            continue;
-        }
-        if (line_is_regalloc_bc_priming(lines[i]))
-            live = 1;
-        if (live && i >= begin)
-            return 1;
-    }
-    return 0;
+    return peep_register_claimed_in_range(
+        PEEP_REG_BC, begin, end);
 }
 
 /* Point form of the range query above, kept for the callers whose affected
@@ -5269,10 +5416,7 @@ int bc_regalloc_claimed_before(int at)
  * `at` no longer counts - which is the whole point of the free directive. */
 int bc_regalloc_claimed_from(int at)
 {
-    int func_start, func_end;
-
-    find_function_bounds_any(at, &func_start, &func_end);
-    return bc_regalloc_claimed_in_range(at, func_end);
+    return peep_register_claimed_from(PEEP_REG_BC, at);
 }
 
 /* Is line `k` inside a dcc BC claim that dcc explicitly RELEASES - i.e. one
@@ -5341,13 +5485,7 @@ int line_in_released_bc_claim(int k)
  * always visible here by the time any pass asks. */
 int dcc_iy_claimed_in_file(void)
 {
-    int i;
-
-    for (i = 0; i < nlines; i++) {
-        if (strstr(lines[i], "@dcc.reg claim=iy") != NULL)
-            return 1;
-    }
-    return 0;
+    return peep_register_claimed_in_file(PEEP_REG_IY);
 }
 
 static int global_write_count_in_file(const char *name)
@@ -9699,6 +9837,7 @@ int main(int argc, char **argv)
     }
 
     read_file(infile);
+    peep_report_register_directives();
     capture_original_extrns();
 
     /* Needed by both pass_byte_loop_counter_to_reg_iyl (undocumented-Z80
