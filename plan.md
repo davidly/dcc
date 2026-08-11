@@ -7,8 +7,8 @@ current execution plan and handoff.
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
 - Published HEAD: `3560572` (`complete MIR emission for a1`).
-- Production coverage: **1874/2182 (85.88%)**.
-- Remaining fallback population: **308 `final-cost-policy`**, with no other
+- Production coverage: **1875/2182 (85.93%)**.
+- Remaining fallback population: **307 `final-cost-policy`**, with no other
   fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -18,9 +18,16 @@ current execution plan and handoff.
   slots, call-bounded store-address forwarding, single-use unary forwarding,
   and direct `+1/+2` increments. Tagged byte-slot cleanup and final liveness
   narrowing in dccpeep preserve larger canonical passes.
+- The scheduled byte-array reduction keeps the pointer in BC, the accumulator
+  in DE, and the endpoint in callee-saved IY. `treg.sumarray` is newly MIR and
+  improves **7.33% peep / 8.65% nopeep**.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
+- The other statically smaller candidates are also false wins:
+  `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
+  `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
+  (+28.46%/+31.34%).
 - Current next priority: repeated causes in the 308 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
