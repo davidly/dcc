@@ -136,6 +136,13 @@ struct MirWideMemberUpdate {
     int operation;
 };
 
+struct MirSignedMemberProduct {
+    int pointer_stack_offset;
+    int left_member_offset;
+    int right_member_offset;
+    unsigned long scale;
+};
+
 static void mir_machine_emit_hl_offset(
     FILE *out, int offset, int preserve_bc);
 
@@ -2817,6 +2824,186 @@ static int mir_match_wide_member_update(
     return 1;
 }
 
+static int mir_machine_parameter_alias_offset(
+    int value, int *stack_offset, int depth)
+{
+    const struct MirInsn *definition;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (depth > 8)
+        return 0;
+    definition = mir_definition(value);
+    if (definition == NULL)
+        return 0;
+    if (definition->opcode == MIR_PARAM)
+        return mir_machine_parameter_offset(
+            value, stack_offset);
+    if (definition->opcode == MIR_LOAD) {
+        const struct MirInsn *alias;
+
+        if (mir_scalar_memory_location(
+                definition, &memory_type, &memory_storage,
+                &memory_offset) &&
+            memory_storage == SC_PARAM &&
+            type_ptr_depth(memory_type) > 0) {
+            *stack_offset = memory_offset - 2;
+            return *stack_offset >= 0;
+        }
+        alias = mir_machine_resolve_local_alias(value);
+        return alias != NULL &&
+               mir_machine_parameter_alias_offset(
+                   alias->dst, stack_offset, depth + 1);
+    }
+    if (mir_machine_transparent_pointer_unary(definition))
+        return mir_machine_parameter_alias_offset(
+            definition->src1, stack_offset, depth + 1);
+    return 0;
+}
+
+static int mir_machine_signed_member_load(
+    int value, int *pointer_stack_offset, int *member_offset)
+{
+    const struct MirInsn *widen = mir_definition(value);
+    const struct MirInsn *load;
+    const struct MirInsn *member;
+
+    if (widen == NULL || widen->opcode != MIR_UNARY ||
+        widen->immediate != 0 ||
+        type_size(widen->type) != 4 ||
+        type_is_float(widen->type))
+        return 0;
+    load = mir_definition(widen->src1);
+    if (load == NULL || load->opcode != MIR_LOAD_INDIRECT ||
+        load->memory_size != 2 || load->bit_width != 0 ||
+        type_size(load->type) != 2 ||
+        type_ptr_depth(load->type) != 0 ||
+        type_is_float(load->type) ||
+        (load->type & TYPE_UNSIGNED) != 0 ||
+        (load->memory_flags & (1 | 8)) != 0 ||
+        (member = mir_definition(load->src1)) == NULL ||
+        member->opcode != MIR_MEMBER_ADDRESS ||
+        member->bit_width != 0 ||
+        (member->memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_parameter_alias_offset(
+            member->src1, pointer_stack_offset, 0) ||
+        member->immediate < -32768 ||
+        member->immediate > 32767)
+        return 0;
+    *member_offset = (int)member->immediate;
+    return 1;
+}
+
+static int mir_match_signed_member_product(
+    struct MirSignedMemberProduct *plan)
+{
+    const struct MirInsn *return_insn = NULL;
+    const struct MirInsn *scaled;
+    const struct MirInsn *multiply;
+    const struct MirInsn *scale;
+    const struct MirInsn *parameter = NULL;
+    int parameter_count = 0;
+    int load_count = 0;
+    int store_count = 0;
+    int member_count = 0;
+    int load_indirect_count = 0;
+    int unary_count = 0;
+    int binary_count = 0;
+    int return_count = 0;
+    int instruction;
+    int right_stack_offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla || mir_cfg_block_count() != 1 ||
+        type_size(mir.return_type) != 4 ||
+        type_is_float(mir.return_type) ||
+        mir.count != 17)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        switch (insn->opcode) {
+        case MIR_NOP:
+        case MIR_LABEL:
+        case MIR_CONST:
+            break;
+        case MIR_PARAM:
+            ++parameter_count;
+            parameter = insn;
+            break;
+        case MIR_LOAD:
+            if (!mir_machine_named_nonvolatile(insn))
+                return 0;
+            ++load_count;
+            break;
+        case MIR_STORE:
+            if (!mir_machine_named_nonvolatile(insn))
+                return 0;
+            ++store_count;
+            break;
+        case MIR_MEMBER_ADDRESS:
+            if (insn->bit_width != 0 ||
+                (insn->memory_flags & (1 | 8)) != 0)
+                return 0;
+            ++member_count;
+            break;
+        case MIR_LOAD_INDIRECT:
+            if (insn->memory_size != 2 ||
+                insn->bit_width != 0 ||
+                (insn->memory_flags & (1 | 8)) != 0)
+                return 0;
+            ++load_indirect_count;
+            break;
+        case MIR_UNARY:
+            ++unary_count;
+            break;
+        case MIR_BINARY:
+            ++binary_count;
+            break;
+        case MIR_RETURN:
+            ++return_count;
+            return_insn = insn;
+            break;
+        default:
+            return 0;
+        }
+    }
+    if (parameter_count != 1 || parameter == NULL ||
+        type_ptr_depth(parameter->type) == 0 ||
+        mir_machine_pointee_is_volatile(parameter) ||
+        load_count != 3 || store_count != 1 ||
+        member_count != 2 || load_indirect_count != 2 ||
+        unary_count != 2 || binary_count != 2 ||
+        return_count != 1 || return_insn == NULL)
+        return 0;
+    scaled = mir_definition(return_insn->src1);
+    if (scaled == NULL || scaled->opcode != MIR_BINARY ||
+        scaled->immediate != '*' ||
+        type_size(scaled->type) != 4 ||
+        type_is_float(scaled->type))
+        return 0;
+    multiply = mir_definition(scaled->src1);
+    scale = mir_definition(scaled->src2);
+    if (multiply == NULL || multiply->opcode != MIR_BINARY ||
+        multiply->immediate != '*' ||
+        type_size(multiply->type) != 4 ||
+        type_is_float(multiply->type) ||
+        scale == NULL || scale->opcode != MIR_CONST ||
+        type_size(scale->type) != 4)
+        return 0;
+    if (!mir_machine_signed_member_load(
+            multiply->src1, &plan->pointer_stack_offset,
+            &plan->left_member_offset) ||
+        !mir_machine_signed_member_load(
+            multiply->src2, &right_stack_offset,
+            &plan->right_member_offset) ||
+        right_stack_offset != plan->pointer_stack_offset)
+        return 0;
+    plan->scale = (unsigned long)scale->immediate;
+    return 1;
+}
+
 static int mir_match_nested_row_store(struct MirNestedRowStore *plan)
 {
     const struct MirInsn *value_store = NULL;
@@ -3316,6 +3503,43 @@ static void mir_emit_wide_member_update(
     fputs("\tret\n", out);
 }
 
+static void mir_machine_emit_parameter_member_word(
+    FILE *out, int stack_offset, int member_offset,
+    const char *low_register, const char *high_register,
+    int preserve_bc)
+{
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tex de,hl\n",
+            stack_offset);
+    mir_machine_emit_hl_offset(
+        out, member_offset, preserve_bc);
+    fprintf(out, "\tld %s,(hl)\n\tinc hl\n\tld %s,(hl)\n",
+            low_register, high_register);
+}
+
+static void mir_emit_signed_member_product(
+    FILE *out, const struct MirSignedMemberProduct *plan)
+{
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_parameter_member_word(
+        out, plan->pointer_stack_offset,
+        plan->left_member_offset, "c", "b", 0);
+    mir_machine_emit_parameter_member_word(
+        out, plan->pointer_stack_offset,
+        plan->right_member_offset, "e", "d", 1);
+    fputs("\tex de,hl\n", out);
+    mir_emit_runtime_call(out, "__m1s");
+    fputs("\tpush de\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,%lu\n\tld de,%lu\n",
+            plan->scale & 0xffffUL,
+            (plan->scale >> 16) & 0xffffUL);
+    mir_emit_runtime_call(out, "__lmul");
+    fputs("\tpop bc\n\tpop bc\n\tret\n", out);
+}
+
 static void mir_emit_nested_row_store(
     FILE *out, const struct MirNestedRowStore *plan)
 {
@@ -3401,6 +3625,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirByteMemoryStack byte_memory_stack;
     struct MirFixedArrayReduction fixed_array_reduction;
     struct MirWideMemberUpdate wide_member_update;
+    struct MirSignedMemberProduct signed_member_product;
     long constant;
 
     if (mir_match_affine_pointer_constant_return(&constant)) {
@@ -3467,6 +3692,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_wide_member_update(&wide_member_update)) {
         mir_emit_wide_member_update(out, &wide_member_update);
+        return 1;
+    }
+    if (mir_match_signed_member_product(
+            &signed_member_product)) {
+        mir_emit_signed_member_product(
+            out, &signed_member_product);
         return 1;
     }
 
