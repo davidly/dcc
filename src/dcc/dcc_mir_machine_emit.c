@@ -554,7 +554,8 @@ static int mir_machine_flat_load(
         load->immediate == 0)
         load = mir_definition(load->src1);
     if (load == NULL || load->opcode != MIR_LOAD_INDIRECT ||
-        (load->memory_size != 1 && load->memory_size != 2) ||
+        (load->memory_size != 1 && load->memory_size != 2 &&
+         load->memory_size != 4) ||
         (load->memory_flags & (1 | 8)) != 0 ||
         !mir_machine_parameter_address(
             load->src1, stack_offset, offset, 0))
@@ -636,8 +637,9 @@ static int mir_match_flat_array_checks(struct MirFlatArrayChecks *plan)
                     actual_offset != expected_offset ||
                     actual_width != expected_width ||
                     actual_unsigned != expected_unsigned ||
-                    actual_offset < -128 ||
-                    actual_offset + actual_width - 1 > 127)
+                    (actual_width < 4 &&
+                     (actual_offset < -128 ||
+                      actual_offset + actual_width - 1 > 127)))
                     return 0;
                 if (call_count == 0) {
                     plan->check_function = find_global(insn->name);
@@ -699,6 +701,25 @@ static void mir_emit_flat_array_checks(
                     "\tld l,(iy%+d)\n\tld h,(iy%+d)\n",
                     plan->offsets[check],
                     plan->offsets[check] + 1);
+        } else if (plan->width == 4) {
+            if (plan->offsets[check] >= -128 &&
+                plan->offsets[check] + 3 <= 127) {
+                fprintf(out,
+                        "\tld l,(iy%+d)\n\tld h,(iy%+d)\n"
+                        "\tld e,(iy%+d)\n\tld d,(iy%+d)\n",
+                        plan->offsets[check],
+                        plan->offsets[check] + 1,
+                        plan->offsets[check] + 2,
+                        plan->offsets[check] + 3);
+            } else {
+                fputs("\tpush iy\n\tpop hl\n", out);
+                fprintf(out,
+                        "\tld de,%d\n\tadd hl,de\n"
+                        "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+                        "\tinc hl\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+                        "\tld l,c\n\tld h,b\n",
+                        plan->offsets[check]);
+            }
         } else if (plan->is_unsigned) {
             fprintf(out,
                     "\tld l,(iy%+d)\n\tld h,0\n",
@@ -709,12 +730,15 @@ static void mir_emit_flat_array_checks(
                     "\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n",
                     plan->offsets[check]);
         }
-        fprintf(out,
-                "\tpush hl\n\tpush hl\n"
-                "\tld hl,S%d\n\tpush hl\n",
-                plan->strings[check]);
+        if (plan->width == 4)
+            fputs("\tpush de\n\tpush hl\n\tpush de\n\tpush hl\n", out);
+        else
+            fputs("\tpush hl\n\tpush hl\n", out);
+        fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[check]);
         mir_machine_emit_symbol_call(out, plan->check_function);
         fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
+        if (plan->width == 4)
+            fputs("\tpop bc\n\tpop bc\n", out);
     }
     fputs("\tpop iy\n\tret\n", out);
 }
