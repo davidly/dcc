@@ -403,6 +403,22 @@ struct MirByteRotateFlags {
     int zero_offset;
 };
 
+struct MirStatusUnpack {
+    struct Sym *memory;
+    int memory_offset;
+    struct Sym *state;
+    int stack_offset;
+    int flag_offsets[6];
+    int masks[6];
+};
+
+struct MirStatusPack {
+    struct Sym *state;
+    int flag_offsets[6];
+    int masks[6];
+    struct Sym *function;
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -5749,6 +5765,268 @@ static int mir_match_byte_rotate_flags(
     return 1;
 }
 
+static int mir_match_status_unpack(struct MirStatusUnpack *plan)
+{
+    static const int expected_opcodes[62] = {
+        MIR_LABEL, MIR_ADDRESS, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT, MIR_BINARY,
+        MIR_LOAD_INDIRECT, MIR_STORE,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_NOP, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_NOP, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_NOP, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_NOP, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_NOP, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_NOP, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT
+    };
+    static const int expected_masks[6] = { 128, 64, 8, 4, 2, 1 };
+    const struct MirInsn *memory_root;
+    const struct MirInsn *memory_base;
+    const struct MirInsn *stack_member;
+    const struct MirInsn *stack_load;
+    const struct MirInsn *stack_increment;
+    const struct MirInsn *stack_store;
+    const struct MirInsn *element_address;
+    const struct MirInsn *element_load;
+    const struct MirInsn *local_store;
+    struct Sym *state;
+    struct Sym *member_state;
+    int member_offset;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int flag;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir_cfg_block_count() != 1 || mir.count != 62 ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return 0;
+        else if ((mir.insns[instruction].opcode ==
+                      MIR_LOAD_INDIRECT ||
+                  mir.insns[instruction].opcode ==
+                      MIR_STORE_INDIRECT) &&
+                 (mir.insns[instruction].memory_size != 1 ||
+                  mir.insns[instruction].bit_width != 0 ||
+                  (mir.insns[instruction].memory_flags & (1 | 8)) != 0))
+            return 0;
+    memory_root = &mir.insns[1];
+    memory_base = &mir.insns[4];
+    stack_member = &mir.insns[6];
+    stack_load = &mir.insns[7];
+    stack_increment = &mir.insns[9];
+    stack_store = &mir.insns[10];
+    element_address = &mir.insns[11];
+    element_load = &mir.insns[12];
+    local_store = &mir.insns[13];
+    if (!mir_scalar_memory_location(
+            memory_root, &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        memory_base->immediate != '+' ||
+        memory_base->src1 != memory_root->dst ||
+        !mir_machine_constant_equals(memory_base->src2, 256) ||
+        !mir_machine_global_byte_member(
+            5, 6, &state, &plan->stack_offset) ||
+        stack_load->src1 != stack_member->dst ||
+        (stack_load->type & TYPE_UNSIGNED) == 0 ||
+        type_size(stack_load->type) != 1 ||
+        stack_increment->immediate != '+' ||
+        stack_increment->src1 != stack_load->dst ||
+        (stack_increment->type & TYPE_UNSIGNED) == 0 ||
+        type_size(stack_increment->type) != 1 ||
+        (stack_increment->secondary_offset & TYPE_UNSIGNED) == 0 ||
+        type_size(stack_increment->secondary_offset) != 1 ||
+        !mir_machine_constant_equals(stack_increment->src2, 1) ||
+        stack_store->src1 != stack_member->dst ||
+        stack_store->src2 != stack_increment->dst ||
+        element_address->immediate != '+' ||
+        element_address->src1 != memory_base->dst ||
+        element_address->src2 != stack_increment->dst ||
+        element_load->src1 != element_address->dst ||
+        !mir_machine_unobservable_local_store(local_store) ||
+        local_store->src1 != element_load->dst)
+        return 0;
+    plan->memory = find_global(memory_root->name);
+    plan->state = state;
+    if (plan->memory == NULL || plan->memory->is_volatile ||
+        memory_offset < -32768 || memory_offset > 32511)
+        return 0;
+    plan->memory_offset = memory_offset + 256;
+    for (flag = 0; flag < 6; ++flag) {
+        int base = 14 + flag * 8;
+        const struct MirInsn *member = &mir.insns[base + 1];
+        const struct MirInsn *constant = &mir.insns[base + 3];
+        const struct MirInsn *source = &mir.insns[base + 4];
+        const struct MirInsn *masked = &mir.insns[base + 5];
+        const struct MirInsn *converted = &mir.insns[base + 6];
+        const struct MirInsn *store = &mir.insns[base + 7];
+
+        if (!mir_machine_global_byte_member(
+                base, base + 1,
+                &member_state, &member_offset) ||
+            member_state != state ||
+            (member->type & 15) != TYPE_BOOL ||
+            constant->immediate != expected_masks[flag] ||
+            source->immediate != 0 ||
+            source->src1 != element_load->dst ||
+            masked->immediate != '&' ||
+            masked->src1 != source->dst ||
+            masked->src2 != constant->dst ||
+            converted->immediate != 0 ||
+            converted->src1 != masked->dst ||
+            (converted->type & 15) != TYPE_BOOL ||
+            store->src1 != member->dst ||
+            store->src2 != converted->dst)
+            return 0;
+        plan->flag_offsets[flag] = member_offset;
+        plan->masks[flag] = expected_masks[flag];
+    }
+    return 1;
+}
+
+static int mir_match_status_pack(struct MirStatusPack *plan)
+{
+    static const int expected_opcodes[79] = {
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST, MIR_UNARY,
+        MIR_BINARY, MIR_UNARY, MIR_NOP, MIR_STORE, MIR_LABEL,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_CONST, MIR_UNARY,
+        MIR_BINARY, MIR_UNARY, MIR_NOP, MIR_STORE, MIR_LABEL,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_CONST, MIR_UNARY,
+        MIR_BINARY, MIR_UNARY, MIR_NOP, MIR_STORE, MIR_LABEL,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_CONST, MIR_UNARY,
+        MIR_BINARY, MIR_UNARY, MIR_NOP, MIR_STORE, MIR_LABEL,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_CONST, MIR_UNARY,
+        MIR_BINARY, MIR_UNARY, MIR_NOP, MIR_STORE, MIR_LABEL,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_CONST, MIR_UNARY,
+        MIR_BINARY, MIR_UNARY, MIR_NOP, MIR_STORE, MIR_LABEL,
+        MIR_LOAD, MIR_ARG, MIR_CALL
+    };
+    static const int expected_masks[6] = { 128, 64, 8, 4, 2, 1 };
+    const struct MirInsn *initial_value = &mir.insns[2];
+    const struct MirInsn *initial_store = &mir.insns[3];
+    const struct MirInsn *final_load = &mir.insns[76];
+    const struct MirInsn *argument = &mir.insns[77];
+    const struct MirInsn *call = &mir.insns[78];
+    struct Sym *state = NULL;
+    int packed_value;
+    int flag;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir_cfg_block_count() != 7 || mir.count != 79 ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return 0;
+    if (initial_value->immediate != 48 ||
+        (initial_value->type & TYPE_UNSIGNED) == 0 ||
+        !mir_machine_unobservable_local_store(initial_store) ||
+        initial_store->src1 != initial_value->dst)
+        return 0;
+    packed_value = initial_value->dst;
+    for (flag = 0; flag < 6; ++flag) {
+        int base = 4 + flag * 12;
+        const struct MirInsn *member = &mir.insns[base + 1];
+        const struct MirInsn *load = &mir.insns[base + 2];
+        const struct MirInsn *branch = &mir.insns[base + 3];
+        const struct MirInsn *packed_load = &mir.insns[base + 4];
+        const struct MirInsn *constant = &mir.insns[base + 5];
+        const struct MirInsn *source = &mir.insns[base + 6];
+        const struct MirInsn *combined = &mir.insns[base + 7];
+        const struct MirInsn *converted = &mir.insns[base + 8];
+        const struct MirInsn *store = &mir.insns[base + 10];
+        const struct MirInsn *label = &mir.insns[base + 11];
+        struct Sym *member_state;
+        int member_offset;
+        int packed_source = packed_value;
+
+        if (!mir_machine_global_byte_member(
+                base, base + 1,
+                &member_state, &member_offset) ||
+            (state != NULL && member_state != state) ||
+            (member->type & 15) != TYPE_BOOL ||
+            load->src1 != member->dst ||
+            (load->type & 15) != TYPE_BOOL ||
+            load->memory_size != 1 ||
+            (load->memory_flags & (1 | 8)) != 0 ||
+            branch->src1 != load->dst ||
+            branch->label != label->label ||
+            (flag == 0 ?
+                 packed_load->opcode != MIR_NOP :
+                 (!mir_machine_same_location(
+                      initial_store, packed_load) ||
+                  !mir_machine_named_nonvolatile(packed_load))) ||
+            constant->immediate != expected_masks[flag] ||
+            source->immediate != 0 ||
+            combined->immediate != '|' ||
+            combined->src2 != constant->dst ||
+            converted->immediate != 0 ||
+            converted->src1 != combined->dst ||
+            (converted->type & TYPE_UNSIGNED) == 0 ||
+            !mir_machine_same_location(initial_store, store) ||
+            !mir_machine_named_nonvolatile(store) ||
+            store->src1 != converted->dst)
+            return 0;
+        if (flag != 0)
+            packed_source = packed_load->dst;
+        if (source->src1 != packed_source ||
+            combined->src1 != source->dst)
+            return 0;
+        state = member_state;
+        plan->flag_offsets[flag] = member_offset;
+        plan->masks[flag] = expected_masks[flag];
+        packed_value = converted->dst;
+    }
+    plan->state = state;
+    plan->function = find_global(call->name);
+    if (!mir_machine_same_location(initial_store, final_load) ||
+        !mir_machine_named_nonvolatile(final_load) ||
+        (final_load->type & TYPE_UNSIGNED) == 0 ||
+        type_size(final_load->type) != 1 ||
+        final_load->dst != argument->src1 ||
+        argument->immediate != 0 ||
+        argument->secondary_offset != call->secondary_offset ||
+        (argument->type & TYPE_UNSIGNED) == 0 ||
+        type_size(argument->type) != 1 ||
+        type_ptr_depth(argument->type) != 0 ||
+        plan->function == NULL || !plan->function->is_defined ||
+        plan->function->storage != SC_FUNC ||
+        plan->function->is_funcptr ||
+        plan->function->is_noreturn ||
+        !plan->function->has_proto ||
+        plan->function->proto_nargs != 1 ||
+        plan->function->proto_variadic ||
+        plan->function->proto_types[0] != argument->type ||
+        (call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+        (call->base_name[0] != 0 &&
+         strcmp(call->base_name,
+                asm_name_for(sym_asm_name(plan->function)))))
+        return 0;
+    return 1;
+}
+
 static int mir_machine_flat_load(
     int value, int *stack_offset, long *offset,
     int *width, int *is_unsigned)
@@ -10833,6 +11111,65 @@ static void mir_emit_byte_rotate_flags(
     fputs("\tld l,c\n\tld h,0\n\tret\n", out);
 }
 
+static void mir_emit_status_unpack(
+    FILE *out, const struct MirStatusUnpack *plan)
+{
+    int flag;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_byte_a(
+        out, plan->state, plan->stack_offset, 0);
+    fputs("\tinc a\n", out);
+    mir_machine_emit_global_byte_a(
+        out, plan->state, plan->stack_offset, 1);
+    fputs("\tld l,a\n\tld h,0\n", out);
+    mir_machine_emit_global_address_de(
+        out, plan->memory, plan->memory_offset);
+    fputs("\tadd hl,de\n\tld c,(hl)\n", out);
+    for (flag = 0; flag < 6; ++flag) {
+        int clear = new_label();
+
+        fprintf(out, "\tbit %d,c\n\tld a,0\n\tjp z,L%d\n\tinc a\nL%d:\n",
+                plan->masks[flag] == 128 ? 7 :
+                plan->masks[flag] == 64 ? 6 :
+                plan->masks[flag] == 8 ? 3 :
+                plan->masks[flag] == 4 ? 2 :
+                plan->masks[flag] == 2 ? 1 : 0,
+                clear, clear);
+        mir_machine_emit_global_byte_a(
+            out, plan->state, plan->flag_offsets[flag], 1);
+    }
+    fputs("\tret\n", out);
+}
+
+static void mir_emit_status_pack(
+    FILE *out, const struct MirStatusPack *plan)
+{
+    int flag;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tld c,48\n", out);
+    for (flag = 0; flag < 6; ++flag) {
+        int clear = new_label();
+
+        mir_machine_emit_global_byte_a(
+            out, plan->state, plan->flag_offsets[flag], 0);
+        fprintf(out, "\tor a\n\tjp z,L%d\n\tset %d,c\nL%d:\n",
+                clear,
+                plan->masks[flag] == 128 ? 7 :
+                plan->masks[flag] == 64 ? 6 :
+                plan->masks[flag] == 8 ? 3 :
+                plan->masks[flag] == 4 ? 2 :
+                plan->masks[flag] == 2 ? 1 : 0,
+                clear);
+    }
+    fputs("\tld l,c\n\tld h,0\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n\tret\n", out);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -10901,6 +11238,8 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConditionalGlobalFloatLoad conditional_global_float_load;
     struct MirRecursiveWideProduct recursive_wide_product;
     struct MirByteRotateFlags byte_rotate_flags;
+    struct MirStatusUnpack status_unpack;
+    struct MirStatusPack status_pack;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -11176,6 +11515,14 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_byte_rotate_flags(&byte_rotate_flags)) {
         mir_emit_byte_rotate_flags(out, &byte_rotate_flags);
+        return 1;
+    }
+    if (mir_match_status_unpack(&status_unpack)) {
+        mir_emit_status_unpack(out, &status_unpack);
+        return 1;
+    }
+    if (mir_match_status_pack(&status_pack)) {
+        mir_emit_status_pack(out, &status_pack);
         return 1;
     }
     if (mir_match_indexed_member_write(
