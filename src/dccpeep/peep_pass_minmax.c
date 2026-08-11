@@ -1168,6 +1168,95 @@ int pass_reuse_board_addr_for_zero_store(void)
  *   L221:
  *   ld a,e          ; ← eliminated (A=E from before jp nz)
  */
+static int minmax_label_has_single_predecessor(
+    int jump_line, int label_line, const char *label)
+{
+    int function_start;
+    int function_end;
+    int line;
+    int predecessor = -1;
+    int predecessor_count = 0;
+    int label_length = (int)strlen(label);
+    int previous;
+    char clean[MAX_LINE];
+    char target[128];
+
+    if (is_global_asm_label_line(label_line))
+        return 0;
+    if ((label_line > 0 && starts_label(lines[label_line - 1])) ||
+        (label_line + 1 < nlines &&
+         starts_label(lines[label_line + 1])))
+        return 0;
+    find_function_bounds_any(
+        label_line, &function_start, &function_end);
+    for (line = function_start; line < function_end; ++line) {
+        const PeepFlowLine *flow = peep_flow_line(line);
+        int successor;
+
+        if (flow == NULL)
+            return 0;
+        for (successor = 0;
+             successor < flow->successor_count;
+             ++successor)
+            if (flow->successors[successor] == label_line) {
+                predecessor = line;
+                ++predecessor_count;
+            }
+    }
+    if (predecessor_count != 1 || predecessor != jump_line)
+        return 0;
+    previous = label_line - 1;
+    while (previous >= 0 && is_blank_or_comment(lines[previous]))
+        --previous;
+    if (previous < 0)
+        return 0;
+    strip_peep_comment_lower_copy(clean, lines[previous]);
+    if (!peep_parse_jp_uncond_label(clean, target) &&
+        strcmp(clean, "ret") != 0 &&
+        strcmp(clean, "reti") != 0 &&
+        strcmp(clean, "retn") != 0)
+        return 0;
+    for (line = 0; line < nlines; ++line) {
+        const char *found;
+        const char *source;
+
+        if (line == jump_line || line == label_line ||
+            (user_asm_original[line] == NULL &&
+             starts_label(lines[line])))
+            continue;
+        source = user_asm_original[line] != NULL
+            ? user_asm_original[line] : lines[line];
+        found = source;
+        while (found != NULL) {
+            int match = 1;
+            int character;
+            char before;
+            char after;
+
+            for (character = 0; character < label_length;
+                 ++character)
+                if (tolower((unsigned char)found[character]) !=
+                    tolower((unsigned char)label[character])) {
+                    match = 0;
+                    break;
+                }
+            if (!match) {
+                if (*found == 0)
+                    break;
+                ++found;
+                continue;
+            }
+            before = found > source ? found[-1] : 0;
+            after = found[label_length];
+            if (!isalnum((unsigned char)before) && before != '_' &&
+                !isalnum((unsigned char)after) && after != '_')
+                return 0;
+            ++found;
+        }
+    }
+    return 1;
+}
+
 int pass_minmax_elim_label_reload(void)
 {
     int i, j, k, changed = 0;
@@ -1195,9 +1284,9 @@ int pass_minmax_elim_label_reload(void)
                 for (k = j + 1; k < nlines && k < j + 25; k++) {
                     if (!line_is_label_name(k, lab))
                         continue;
-                    /* Skip any consecutive labels */
-                    while (k + 1 < nlines && starts_label(lines[k + 1]))
-                        k++;
+                    if (!minmax_label_has_single_predecessor(
+                            j, k, lab))
+                        break;
                     /* If the next instruction after the label is ld a,r (same r) */
                     if (k + 1 < nlines) {
                         strip_peep_comment_copy(tmp2, lines[k + 1]);

@@ -419,6 +419,20 @@ struct MirStatusPack {
     struct Sym *function;
 };
 
+struct MirByteMathFlags {
+    int op_stack_offset;
+    int rhs_stack_offset;
+    struct Sym *state;
+    int accumulator_offset;
+    int negative_offset;
+    int overflow_offset;
+    int decimal_offset;
+    int zero_offset;
+    int carry_offset;
+    struct Sym *compare_function;
+    struct Sym *decimal_function;
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -5523,6 +5537,37 @@ static int mir_machine_global_byte_member(
     return 1;
 }
 
+static int mir_machine_global_byte_access(
+    int root_index, int member_index, int access_index,
+    int opcode, struct Sym **symbol_out, int *offset_out)
+{
+    const struct MirInsn *member = &mir.insns[member_index];
+    const struct MirInsn *access = &mir.insns[access_index];
+
+    return mir_machine_global_byte_member(
+               root_index, member_index, symbol_out, offset_out) &&
+           member->bit_width == 0 &&
+           (member->memory_flags & (1 | 8)) == 0 &&
+           access->opcode == opcode &&
+           access->src1 == member->dst &&
+           access->memory_size == 1 &&
+           access->bit_width == 0 &&
+           (access->memory_flags & (1 | 8)) == 0;
+}
+
+static int mir_machine_same_global_byte_access(
+    int root_index, int member_index, int access_index,
+    int opcode, struct Sym *symbol, int offset)
+{
+    struct Sym *access_symbol;
+    int access_offset;
+
+    return mir_machine_global_byte_access(
+               root_index, member_index, access_index, opcode,
+               &access_symbol, &access_offset) &&
+           access_symbol == symbol && access_offset == offset;
+}
+
 static int mir_match_byte_rotate_flags(
     struct MirByteRotateFlags *plan)
 {
@@ -6023,6 +6068,496 @@ static int mir_match_status_pack(struct MirStatusPack *plan)
         (call->base_name[0] != 0 &&
          strcmp(call->base_name,
                 asm_name_for(sym_asm_name(plan->function)))))
+        return 0;
+    return 1;
+}
+
+static int mir_match_byte_math_flags(struct MirByteMathFlags *plan)
+{
+    static const int expected_opcodes[220] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_NOP, MIR_CONST, MIR_UNARY,
+        MIR_BINARY, MIR_UNARY, MIR_NOP, MIR_STORE, MIR_CONST, MIR_NOP,
+        MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_NOP,
+        MIR_ARG, MIR_CALL, MIR_RETURN, MIR_NOP,
+        MIR_LABEL, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_BRANCH_FALSE, MIR_CONST, MIR_LOAD, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_CONST, MIR_LOAD, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST,
+        MIR_LABEL, MIR_PHI, MIR_LABEL, MIR_JUMP, MIR_LABEL,
+        MIR_PHI, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+        MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE,
+        MIR_LOAD, MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CALL, MIR_RETURN,
+        MIR_NOP, MIR_LABEL, MIR_CONST, MIR_LOAD, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_CONST, MIR_LOAD, MIR_UNARY, MIR_BINARY,
+        MIR_UNARY, MIR_STORE, MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP,
+        MIR_LABEL, MIR_CONST, MIR_LOAD, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_UNARY, MIR_LOAD, MIR_UNARY, MIR_BINARY,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY,
+        MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP, MIR_UNARY, MIR_NOP,
+        MIR_STORE, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_NOP, MIR_BINARY, MIR_UNARY,
+        MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_LOAD, MIR_UNARY,
+        MIR_UNARY, MIR_BINARY, MIR_CONST, MIR_BINARY, MIR_UNARY,
+        MIR_BRANCH_FALSE, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_NOP, MIR_UNARY, MIR_UNARY, MIR_BINARY,
+        MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST,
+        MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI,
+        MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_NOP,
+        MIR_STORE_INDIRECT, MIR_NOP, MIR_JUMP, MIR_LABEL, MIR_CONST,
+        MIR_LOAD, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_LOAD,
+        MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT, MIR_JUMP,
+        MIR_LABEL, MIR_CONST, MIR_LOAD, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_LOAD, MIR_UNARY, MIR_BINARY, MIR_UNARY,
+        MIR_STORE_INDIRECT, MIR_JUMP, MIR_LABEL, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_LOAD, MIR_UNARY,
+        MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT, MIR_LABEL, MIR_LABEL,
+        MIR_LABEL, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_UNARY,
+        MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_UNARY, MIR_UNARY, MIR_STORE_INDIRECT
+    };
+    static const int edge_pairs[][2] = {
+        { 14, 24 }, { 28, 58 }, { 33, 37 }, { 36, 52 },
+        { 42, 46 }, { 45, 48 }, { 51, 52 }, { 54, 58 },
+        { 57, 60 }, { 62, 70 }, { 75, 86 }, { 91, 158 },
+        { 133, 147 }, { 143, 147 }, { 146, 149 },
+        { 157, 201 }, { 163, 174 }, { 173, 200 },
+        { 179, 190 }, { 189, 199 }
+    };
+    const struct MirInsn *op = &mir.insns[1];
+    const struct MirInsn *rhs = &mir.insns[2];
+    const struct MirInsn *op_store = &mir.insns[9];
+    const struct MirInsn *rhs_store = &mir.insns[81];
+    const struct MirInsn *result_store = &mir.insns[110];
+    const struct MirInsn *compare_call = &mir.insns[21];
+    const struct MirInsn *decimal_call = &mir.insns[67];
+    int arguments[2];
+    int edge;
+    int instruction;
+    struct Sym *state;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 220 || mir_cfg_block_count() != 26 ||
+        (mir.return_type & 15) != TYPE_VOID || mir.has_vla)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode != expected_opcodes[instruction])
+            return 0;
+        if ((insn->opcode == MIR_LOAD_INDIRECT ||
+             insn->opcode == MIR_STORE_INDIRECT) &&
+            (insn->memory_size != 1 || insn->bit_width != 0 ||
+             (insn->memory_flags & (1 | 8)) != 0))
+            return 0;
+    }
+    for (edge = 0;
+         edge < (int)(sizeof(edge_pairs) / sizeof(edge_pairs[0]));
+         ++edge)
+        if (mir.insns[edge_pairs[edge][0]].label !=
+            mir.insns[edge_pairs[edge][1]].label)
+            return 0;
+    if ((op->type & 15) != TYPE_CHAR ||
+        (op->type & TYPE_UNSIGNED) == 0 ||
+        type_ptr_depth(op->type) != 0 ||
+        rhs->type != op->type ||
+        !mir_machine_parameter_value_offset(
+            op->dst, &plan->op_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            rhs->dst, &plan->rhs_stack_offset) ||
+        plan->op_stack_offset != 2 ||
+        plan->rhs_stack_offset != 4 ||
+        !mir_machine_same_location(op, op_store) ||
+        !mir_machine_named_nonvolatile(op_store) ||
+        mir.insns[5].immediate != 0 ||
+        mir.insns[5].src1 != op->dst ||
+        mir.insns[6].immediate != '&' ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        !mir_machine_constant_equals(mir.insns[6].src2, 224) ||
+        mir.insns[7].immediate != 0 ||
+        mir.insns[7].src1 != mir.insns[6].dst ||
+        mir.insns[7].type != op->type ||
+        op_store->src1 != mir.insns[7].dst)
+        return 0;
+
+    if (mir.insns[12].immediate != 0 ||
+        mir.insns[12].src1 != mir.insns[7].dst ||
+        mir.insns[13].immediate != TOK_EQ ||
+        !mir_machine_constant_equals(mir.insns[13].src1, 192) ||
+        mir.insns[13].src2 != mir.insns[12].dst ||
+        mir.insns[14].src1 != mir.insns[13].dst ||
+        !mir_machine_global_byte_access(
+            15, 16, 17, MIR_LOAD_INDIRECT,
+            &state, &plan->accumulator_offset) ||
+        (mir.insns[16].type & TYPE_UNSIGNED) == 0 ||
+        (mir.insns[16].type & 15) != TYPE_CHAR ||
+        mir.insns[17].type != op->type ||
+        !mir_machine_two_call_arguments(compare_call, arguments) ||
+        arguments[0] != mir.insns[17].dst ||
+        arguments[1] != rhs->dst ||
+        mir.insns[18].type != op->type ||
+        mir.insns[20].type != rhs->type)
+        return 0;
+    plan->state = state;
+    plan->compare_function = find_global(compare_call->name);
+    if (plan->compare_function == NULL ||
+        (compare_call->type & 15) != TYPE_VOID ||
+        !plan->compare_function->is_defined ||
+        plan->compare_function->storage != SC_FUNC ||
+        plan->compare_function->is_funcptr ||
+        plan->compare_function->is_noreturn ||
+        (compare_call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+        (compare_call->base_name[0] != 0 &&
+         strcmp(compare_call->base_name,
+                asm_name_for(sym_asm_name(
+                    plan->compare_function)))) ||
+        (plan->compare_function->has_proto &&
+         (plan->compare_function->proto_nargs != 2 ||
+          plan->compare_function->proto_variadic ||
+          plan->compare_function->proto_types[0] !=
+              mir.insns[18].type ||
+          plan->compare_function->proto_types[1] !=
+              mir.insns[20].type)))
+        return 0;
+
+    if (!mir_machine_global_byte_access(
+            25, 26, 27, MIR_LOAD_INDIRECT,
+            &state, &plan->decimal_offset) ||
+        state != plan->state ||
+        (mir.insns[26].type & 15) != TYPE_BOOL ||
+        (mir.insns[27].type & 15) != TYPE_BOOL ||
+        mir.insns[28].src1 != mir.insns[27].dst ||
+        !mir_machine_same_location(op_store, &mir.insns[30]) ||
+        !mir_machine_same_location(op_store, &mir.insns[39]) ||
+        !mir_machine_named_nonvolatile(&mir.insns[30]) ||
+        !mir_machine_named_nonvolatile(&mir.insns[39]) ||
+        mir.insns[31].immediate != 0 ||
+        mir.insns[31].src1 != mir.insns[30].dst ||
+        mir.insns[32].immediate != TOK_EQ ||
+        !mir_machine_constant_equals(mir.insns[32].src1, 224) ||
+        mir.insns[32].src2 != mir.insns[31].dst ||
+        mir.insns[33].src1 != mir.insns[32].dst ||
+        !mir_machine_constant_equals(mir.insns[35].dst, 1) ||
+        mir.insns[40].immediate != 0 ||
+        mir.insns[40].src1 != mir.insns[39].dst ||
+        mir.insns[41].immediate != TOK_EQ ||
+        !mir_machine_constant_equals(mir.insns[41].src1, 96) ||
+        mir.insns[41].src2 != mir.insns[40].dst ||
+        mir.insns[42].src1 != mir.insns[41].dst ||
+        !mir_machine_constant_equals(mir.insns[44].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[47].dst, 0) ||
+        mir.insns[49].src1 != mir.insns[44].dst ||
+        mir.insns[49].src2 != mir.insns[47].dst ||
+        mir.insns[49].phi_pred1 != mir.insns[43].label ||
+        mir.insns[49].phi_pred2 != mir.insns[46].label ||
+        mir.insns[53].src1 != mir.insns[35].dst ||
+        mir.insns[53].src2 != mir.insns[49].dst ||
+        mir.insns[53].phi_pred1 != mir.insns[34].label ||
+        mir.insns[53].phi_pred2 != mir.insns[50].label ||
+        mir.insns[54].src1 != mir.insns[53].dst ||
+        !mir_machine_constant_equals(mir.insns[56].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[59].dst, 0) ||
+        mir.insns[61].src1 != mir.insns[56].dst ||
+        mir.insns[61].src2 != mir.insns[59].dst ||
+        mir.insns[61].phi_pred1 != mir.insns[55].label ||
+        mir.insns[61].phi_pred2 != mir.insns[58].label ||
+        mir.insns[62].src1 != mir.insns[61].dst ||
+        !mir_machine_same_location(op_store, &mir.insns[63]) ||
+        !mir_machine_same_location(rhs, &mir.insns[65]) ||
+        !mir_machine_named_nonvolatile(&mir.insns[63]) ||
+        !mir_machine_named_nonvolatile(&mir.insns[65]) ||
+        !mir_machine_two_call_arguments(decimal_call, arguments) ||
+        arguments[0] != mir.insns[63].dst ||
+        arguments[1] != mir.insns[65].dst ||
+        mir.insns[64].type != op->type ||
+        mir.insns[66].type != rhs->type)
+        return 0;
+    plan->decimal_function = find_global(decimal_call->name);
+    if (plan->decimal_function == NULL ||
+        (decimal_call->type & 15) != TYPE_VOID ||
+        !plan->decimal_function->is_defined ||
+        plan->decimal_function->storage != SC_FUNC ||
+        plan->decimal_function->is_funcptr ||
+        plan->decimal_function->is_noreturn ||
+        (decimal_call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+        (decimal_call->base_name[0] != 0 &&
+         strcmp(decimal_call->base_name,
+                asm_name_for(sym_asm_name(
+                    plan->decimal_function)))) ||
+        (plan->decimal_function->has_proto &&
+         (plan->decimal_function->proto_nargs != 2 ||
+          plan->decimal_function->proto_variadic ||
+          plan->decimal_function->proto_types[0] !=
+              mir.insns[64].type ||
+          plan->decimal_function->proto_types[1] !=
+              mir.insns[66].type)))
+        return 0;
+
+    if (!mir_machine_same_location(op_store, &mir.insns[72]) ||
+        !mir_machine_named_nonvolatile(&mir.insns[72]) ||
+        mir.insns[73].immediate != 0 ||
+        mir.insns[73].src1 != mir.insns[72].dst ||
+        mir.insns[74].immediate != TOK_EQ ||
+        !mir_machine_constant_equals(mir.insns[74].src1, 224) ||
+        mir.insns[74].src2 != mir.insns[73].dst ||
+        mir.insns[75].src1 != mir.insns[74].dst ||
+        !mir_machine_same_location(rhs, &mir.insns[77]) ||
+        !mir_machine_named_nonvolatile(&mir.insns[77]) ||
+        mir.insns[78].immediate != 0 ||
+        mir.insns[78].src1 != mir.insns[77].dst ||
+        mir.insns[79].immediate != '-' ||
+        !mir_machine_constant_equals(mir.insns[79].src1, 255) ||
+        mir.insns[79].src2 != mir.insns[78].dst ||
+        mir.insns[80].immediate != 0 ||
+        mir.insns[80].src1 != mir.insns[79].dst ||
+        mir.insns[80].type != rhs->type ||
+        !mir_machine_same_location(rhs, rhs_store) ||
+        !mir_machine_named_nonvolatile(rhs_store) ||
+        rhs_store->src1 != mir.insns[80].dst ||
+        !mir_machine_same_location(op_store, &mir.insns[84]) ||
+        !mir_machine_named_nonvolatile(&mir.insns[84]) ||
+        !mir_machine_constant_equals(mir.insns[84].src1, 96) ||
+        !mir_machine_same_location(op_store, &mir.insns[88]) ||
+        !mir_machine_named_nonvolatile(&mir.insns[88]) ||
+        mir.insns[89].immediate != 0 ||
+        mir.insns[89].src1 != mir.insns[88].dst ||
+        mir.insns[90].immediate != TOK_EQ ||
+        !mir_machine_constant_equals(mir.insns[90].src1, 96) ||
+        mir.insns[90].src2 != mir.insns[89].dst ||
+        mir.insns[91].src1 != mir.insns[90].dst)
+        return 0;
+
+    if (!mir_machine_same_global_byte_access(
+            93, 94, 95, MIR_LOAD_INDIRECT, plan->state,
+            plan->accumulator_offset) ||
+        (mir.insns[95].type & TYPE_UNSIGNED) == 0 ||
+        mir.insns[96].immediate != 0 ||
+        mir.insns[96].src1 != mir.insns[95].dst ||
+        type_size(mir.insns[96].type) != 2 ||
+        (mir.insns[96].type & TYPE_UNSIGNED) == 0 ||
+        !mir_machine_same_location(rhs, &mir.insns[97]) ||
+        !mir_machine_named_nonvolatile(&mir.insns[97]) ||
+        mir.insns[98].immediate != 0 ||
+        mir.insns[98].src1 != mir.insns[97].dst ||
+        mir.insns[98].type != mir.insns[96].type ||
+        mir.insns[99].immediate != '+' ||
+        mir.insns[99].src1 != mir.insns[96].dst ||
+        mir.insns[99].src2 != mir.insns[98].dst ||
+        !mir_machine_global_byte_access(
+            100, 101, 102, MIR_LOAD_INDIRECT,
+            &state, &plan->carry_offset) ||
+        state != plan->state ||
+        (mir.insns[101].type & 15) != TYPE_BOOL ||
+        (mir.insns[102].type & 15) != TYPE_BOOL ||
+        mir.insns[103].immediate != 0 ||
+        mir.insns[103].src1 != mir.insns[102].dst ||
+        type_size(mir.insns[103].type) != 2 ||
+        (mir.insns[103].type & TYPE_UNSIGNED) == 0 ||
+        mir.insns[104].immediate != '+' ||
+        mir.insns[104].src1 != mir.insns[99].dst ||
+        mir.insns[104].src2 != mir.insns[103].dst ||
+        type_size(mir.insns[104].type) != 2 ||
+        (mir.insns[104].type & TYPE_UNSIGNED) == 0 ||
+        !mir_machine_unobservable_local_store(&mir.insns[106]) ||
+        mir.insns[106].src1 != mir.insns[104].dst ||
+        mir.insns[108].immediate != 0 ||
+        mir.insns[108].src1 != mir.insns[104].dst ||
+        mir.insns[108].type != rhs->type ||
+        !mir_machine_unobservable_local_store(result_store) ||
+        result_store->src1 != mir.insns[108].dst)
+        return 0;
+
+    if (!mir_machine_same_global_byte_access(
+            111, 112, 120, MIR_STORE_INDIRECT,
+            plan->state, plan->carry_offset) ||
+        !mir_machine_constant_equals(mir.insns[113].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[115].dst, 65280) ||
+        mir.insns[116].immediate != '&' ||
+        mir.insns[116].src1 != mir.insns[104].dst ||
+        mir.insns[116].src2 != mir.insns[115].dst ||
+        mir.insns[118].immediate != TOK_NE ||
+        mir.insns[118].src1 != mir.insns[113].dst ||
+        mir.insns[118].src2 != mir.insns[116].dst ||
+        mir.insns[119].immediate != 0 ||
+        mir.insns[119].src1 != mir.insns[118].dst ||
+        (mir.insns[119].type & 15) != TYPE_BOOL ||
+        mir.insns[120].src2 != mir.insns[119].dst ||
+        !mir_machine_global_byte_access(
+            121, 122, 151, MIR_STORE_INDIRECT,
+            &state, &plan->overflow_offset) ||
+        state != plan->state ||
+        (mir.insns[122].type & 15) != TYPE_BOOL ||
+        !mir_machine_same_global_byte_access(
+            123, 124, 125, MIR_LOAD_INDIRECT,
+            plan->state, plan->accumulator_offset) ||
+        !mir_machine_same_location(rhs, &mir.insns[126]) ||
+        !mir_machine_named_nonvolatile(&mir.insns[126]) ||
+        mir.insns[127].immediate != 0 ||
+        mir.insns[127].src1 != mir.insns[125].dst ||
+        mir.insns[128].immediate != 0 ||
+        mir.insns[128].src1 != mir.insns[126].dst ||
+        mir.insns[129].immediate != '^' ||
+        mir.insns[129].src1 != mir.insns[127].dst ||
+        mir.insns[129].src2 != mir.insns[128].dst ||
+        mir.insns[131].immediate != '&' ||
+        mir.insns[131].src1 != mir.insns[129].dst ||
+        !mir_machine_constant_equals(mir.insns[131].src2, 128) ||
+        mir.insns[132].immediate != '!' ||
+        mir.insns[132].src1 != mir.insns[131].dst ||
+        mir.insns[133].src1 != mir.insns[132].dst ||
+        !mir_machine_same_global_byte_access(
+            134, 135, 136, MIR_LOAD_INDIRECT,
+            plan->state, plan->accumulator_offset) ||
+        mir.insns[138].immediate != 0 ||
+        mir.insns[138].src1 != mir.insns[136].dst ||
+        mir.insns[139].immediate != 0 ||
+        mir.insns[139].src1 != mir.insns[108].dst ||
+        mir.insns[140].immediate != '^' ||
+        mir.insns[140].src1 != mir.insns[138].dst ||
+        mir.insns[140].src2 != mir.insns[139].dst ||
+        mir.insns[142].immediate != '&' ||
+        mir.insns[142].src1 != mir.insns[140].dst ||
+        !mir_machine_constant_equals(mir.insns[142].src2, 128) ||
+        mir.insns[143].src1 != mir.insns[142].dst ||
+        !mir_machine_constant_equals(mir.insns[145].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[148].dst, 0) ||
+        mir.insns[150].src1 != mir.insns[145].dst ||
+        mir.insns[150].src2 != mir.insns[148].dst ||
+        mir.insns[150].phi_pred1 != mir.insns[144].label ||
+        mir.insns[150].phi_pred2 != mir.insns[147].label ||
+        mir.insns[151].src2 != mir.insns[150].dst ||
+        !mir_machine_same_global_byte_access(
+            152, 153, 155, MIR_STORE_INDIRECT,
+            plan->state, plan->accumulator_offset) ||
+        mir.insns[155].src2 != mir.insns[108].dst)
+        return 0;
+
+    if (!mir_machine_same_location(op_store, &mir.insns[160]) ||
+        !mir_machine_named_nonvolatile(&mir.insns[160]) ||
+        mir.insns[161].immediate != 0 ||
+        mir.insns[161].src1 != mir.insns[160].dst ||
+        mir.insns[162].immediate != TOK_EQ ||
+        !mir_machine_constant_equals(mir.insns[162].src1, 0) ||
+        mir.insns[162].src2 != mir.insns[161].dst ||
+        mir.insns[163].src1 != mir.insns[162].dst ||
+        !mir_machine_same_global_byte_access(
+            165, 166, 167, MIR_LOAD_INDIRECT,
+            plan->state, plan->accumulator_offset) ||
+        !mir_machine_same_location(rhs, &mir.insns[168]) ||
+        !mir_machine_named_nonvolatile(&mir.insns[168]) ||
+        mir.insns[169].immediate != 0 ||
+        mir.insns[169].src1 != mir.insns[168].dst ||
+        mir.insns[170].immediate != '|' ||
+        mir.insns[170].src1 != mir.insns[167].dst ||
+        mir.insns[170].src2 != mir.insns[169].dst ||
+        mir.insns[171].immediate != 0 ||
+        mir.insns[171].src1 != mir.insns[170].dst ||
+        !mir_machine_same_global_byte_access(
+            165, 166, 172, MIR_STORE_INDIRECT,
+            plan->state, plan->accumulator_offset) ||
+        mir.insns[172].src2 != mir.insns[171].dst ||
+        !mir_machine_same_location(op_store, &mir.insns[176]) ||
+        !mir_machine_named_nonvolatile(&mir.insns[176]) ||
+        mir.insns[177].immediate != 0 ||
+        mir.insns[177].src1 != mir.insns[176].dst ||
+        mir.insns[178].immediate != TOK_EQ ||
+        !mir_machine_constant_equals(mir.insns[178].src1, 32) ||
+        mir.insns[178].src2 != mir.insns[177].dst ||
+        mir.insns[179].src1 != mir.insns[178].dst)
+        return 0;
+    if (!mir_machine_same_global_byte_access(
+            181, 182, 183, MIR_LOAD_INDIRECT,
+            plan->state, plan->accumulator_offset) ||
+        !mir_machine_same_location(rhs, &mir.insns[184]) ||
+        !mir_machine_named_nonvolatile(&mir.insns[184]) ||
+        mir.insns[185].immediate != 0 ||
+        mir.insns[185].src1 != mir.insns[184].dst ||
+        mir.insns[186].immediate != '&' ||
+        mir.insns[186].src1 != mir.insns[183].dst ||
+        mir.insns[186].src2 != mir.insns[185].dst ||
+        mir.insns[187].immediate != 0 ||
+        mir.insns[187].src1 != mir.insns[186].dst ||
+        !mir_machine_same_global_byte_access(
+            181, 182, 188, MIR_STORE_INDIRECT,
+            plan->state, plan->accumulator_offset) ||
+        mir.insns[188].src2 != mir.insns[187].dst ||
+        !mir_machine_same_global_byte_access(
+            191, 192, 193, MIR_LOAD_INDIRECT,
+            plan->state, plan->accumulator_offset) ||
+        !mir_machine_same_location(rhs, &mir.insns[194]) ||
+        !mir_machine_named_nonvolatile(&mir.insns[194]) ||
+        mir.insns[195].immediate != 0 ||
+        mir.insns[195].src1 != mir.insns[194].dst ||
+        mir.insns[196].immediate != '^' ||
+        mir.insns[196].src1 != mir.insns[193].dst ||
+        mir.insns[196].src2 != mir.insns[195].dst ||
+        mir.insns[197].immediate != 0 ||
+        mir.insns[197].src1 != mir.insns[196].dst ||
+        !mir_machine_same_global_byte_access(
+            191, 192, 198, MIR_STORE_INDIRECT,
+            plan->state, plan->accumulator_offset) ||
+        mir.insns[198].src2 != mir.insns[197].dst)
+        return 0;
+
+    if (!mir_machine_global_byte_access(
+            202, 203, 211, MIR_STORE_INDIRECT,
+            &state, &plan->negative_offset) ||
+        state != plan->state ||
+        (mir.insns[203].type & 15) != TYPE_BOOL ||
+        !mir_machine_same_global_byte_access(
+            204, 205, 206, MIR_LOAD_INDIRECT,
+            plan->state, plan->accumulator_offset) ||
+        mir.insns[208].immediate != 0 ||
+        mir.insns[208].src1 != mir.insns[206].dst ||
+        mir.insns[209].immediate != '&' ||
+        mir.insns[209].src1 != mir.insns[208].dst ||
+        !mir_machine_constant_equals(mir.insns[209].src2, 128) ||
+        mir.insns[210].immediate != 0 ||
+        mir.insns[210].src1 != mir.insns[209].dst ||
+        (mir.insns[210].type & 15) != TYPE_BOOL ||
+        mir.insns[211].src2 != mir.insns[210].dst ||
+        !mir_machine_global_byte_access(
+            212, 213, 219, MIR_STORE_INDIRECT,
+            &state, &plan->zero_offset) ||
+        state != plan->state ||
+        (mir.insns[213].type & 15) != TYPE_BOOL ||
+        !mir_machine_same_global_byte_access(
+            214, 215, 216, MIR_LOAD_INDIRECT,
+            plan->state, plan->accumulator_offset) ||
+        mir.insns[217].immediate != '!' ||
+        mir.insns[217].src1 != mir.insns[216].dst ||
+        mir.insns[218].immediate != 0 ||
+        mir.insns[218].src1 != mir.insns[217].dst ||
+        (mir.insns[218].type & 15) != TYPE_BOOL ||
+        mir.insns[219].src2 != mir.insns[218].dst)
+        return 0;
+
+    if (plan->accumulator_offset == plan->negative_offset ||
+        plan->accumulator_offset == plan->overflow_offset ||
+        plan->accumulator_offset == plan->decimal_offset ||
+        plan->accumulator_offset == plan->zero_offset ||
+        plan->accumulator_offset == plan->carry_offset ||
+        plan->negative_offset == plan->overflow_offset ||
+        plan->negative_offset == plan->decimal_offset ||
+        plan->negative_offset == plan->zero_offset ||
+        plan->negative_offset == plan->carry_offset ||
+        plan->overflow_offset == plan->decimal_offset ||
+        plan->overflow_offset == plan->zero_offset ||
+        plan->overflow_offset == plan->carry_offset ||
+        plan->decimal_offset == plan->zero_offset ||
+        plan->decimal_offset == plan->carry_offset ||
+        plan->zero_offset == plan->carry_offset)
         return 0;
     return 1;
 }
@@ -11170,6 +11705,100 @@ static void mir_emit_status_pack(
     fputs("\tpop bc\n\tret\n", out);
 }
 
+static void mir_emit_byte_math_flags(
+    FILE *out, const struct MirByteMathFlags *plan)
+{
+    int compare = new_label();
+    int non_decimal = new_label();
+    int decimal = new_label();
+    int not_subtract = new_label();
+    int addition = new_label();
+    int logic_or = new_label();
+    int logic_and = new_label();
+    int logic_xor = new_label();
+    int carry_ready = new_label();
+    int flags = new_label();
+    int nonzero = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n\tld a,(hl)\n"
+            "\tand 224\n\tld b,a\n"
+            "\tld hl,%d\n\tadd hl,sp\n\tld c,(hl)\n"
+            "\tld a,b\n\tcp 192\n\tjp z,L%d\n",
+            plan->op_stack_offset, plan->rhs_stack_offset, compare);
+    mir_machine_emit_global_byte_a(
+        out, plan->state, plan->decimal_offset, 0);
+    fprintf(out,
+            "\tor a\n\tjp z,L%d\n"
+            "\tld a,b\n\tcp 224\n\tjp z,L%d\n"
+            "\tcp 96\n\tjp z,L%d\n"
+            "L%d:\n\tld a,b\n\tcp 224\n\tjp nz,L%d\n"
+            "\tld a,c\n\tcpl\n\tld c,a\n\tjp L%d\n"
+            "L%d:\n\tld a,b\n\tcp 96\n\tjp z,L%d\n"
+            "\tor a\n\tjp z,L%d\n"
+            "\tcp 32\n\tjp z,L%d\n\tjp L%d\n",
+            non_decimal, decimal, decimal, non_decimal, not_subtract,
+            addition, not_subtract, addition, logic_or, logic_and,
+            logic_xor);
+
+    fprintf(out, "L%d:\n", addition);
+    mir_machine_emit_global_byte_a(
+        out, plan->state, plan->carry_offset, 0);
+    fprintf(out, "\tor a\n\tjp z,L%d\n\tscf\nL%d:\n",
+            carry_ready, carry_ready);
+    mir_machine_emit_global_byte_a(
+        out, plan->state, plan->accumulator_offset, 0);
+    fputs("\tadc a,c\n\tpush af\n\tpop de\n"
+          "\tld a,e\n\tand 1\n", out);
+    mir_machine_emit_global_byte_a(
+        out, plan->state, plan->carry_offset, 1);
+    fputs("\tld a,e\n\trrca\n\trrca\n\tand 1\n", out);
+    mir_machine_emit_global_byte_a(
+        out, plan->state, plan->overflow_offset, 1);
+    fprintf(out, "\tld c,d\n\tjp L%d\n", flags);
+
+    fprintf(out, "L%d:\n", logic_or);
+    mir_machine_emit_global_byte_a(
+        out, plan->state, plan->accumulator_offset, 0);
+    fprintf(out, "\tor c\n\tld c,a\n\tjp L%d\n", flags);
+    fprintf(out, "L%d:\n", logic_and);
+    mir_machine_emit_global_byte_a(
+        out, plan->state, plan->accumulator_offset, 0);
+    fprintf(out, "\tand c\n\tld c,a\n\tjp L%d\n", flags);
+    fprintf(out, "L%d:\n", logic_xor);
+    mir_machine_emit_global_byte_a(
+        out, plan->state, plan->accumulator_offset, 0);
+    fputs("\txor c\n\tld c,a\n", out);
+
+    fprintf(out, "L%d:\n\tld a,c\n", flags);
+    mir_machine_emit_global_byte_a(
+        out, plan->state, plan->accumulator_offset, 1);
+    fputs("\tld a,c\n\trlca\n\tld a,0\n\tadc a,0\n", out);
+    mir_machine_emit_global_byte_a(
+        out, plan->state, plan->negative_offset, 1);
+    fputs("\tld a,c\n\tor a\n\tld a,0\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tinc a\nL%d:\n",
+            nonzero, nonzero);
+    mir_machine_emit_global_byte_a(
+        out, plan->state, plan->zero_offset, 1);
+    fputs("\tret\n", out);
+
+    fprintf(out, "L%d:\n\tld l,c\n\tld h,0\n\tpush hl\n",
+            compare);
+    mir_machine_emit_global_byte_a(
+        out, plan->state, plan->accumulator_offset, 0);
+    fputs("\tld l,a\n\tld h,0\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->compare_function);
+    fputs("\tpop bc\n\tpop bc\n\tret\n", out);
+
+    fprintf(out, "L%d:\n\tld l,c\n\tld h,0\n\tpush hl\n"
+                 "\tld l,b\n\tld h,0\n\tpush hl\n", decimal);
+    mir_machine_emit_symbol_call(out, plan->decimal_function);
+    fputs("\tpop bc\n\tpop bc\n\tret\n", out);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -11240,6 +11869,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirByteRotateFlags byte_rotate_flags;
     struct MirStatusUnpack status_unpack;
     struct MirStatusPack status_pack;
+    struct MirByteMathFlags byte_math_flags;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -11523,6 +12153,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_status_pack(&status_pack)) {
         mir_emit_status_pack(out, &status_pack);
+        return 1;
+    }
+    if (mir_match_byte_math_flags(&byte_math_flags)) {
+        mir_emit_byte_math_flags(out, &byte_math_flags);
         return 1;
     }
     if (mir_match_indexed_member_write(
