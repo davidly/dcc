@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `523c251`
-  (`schedule float truth combinators`).
-- Current candidate coverage: **1917/2185 (87.73%)**.
-- Remaining fallback population: **268 `final-cost-policy`**, with no other
+- Published HEAD before this batch: `8911ceb`
+  (`schedule conditional float long arms`).
+- Current candidate coverage: **1920/2185 (87.87%)**.
+- Remaining fallback population: **265 `final-cost-policy`**, with no other
   fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -103,6 +103,9 @@ current execution plan and handoff.
 - Conditional float-to-long emission keeps the constant arm direct and invokes
   `__faf` or a validated float-returning callee only on the false arm. It
   admits `tctxflt.cond_compound/cond_callarm`.
+- Conditional global-pointer, nested member, and float-comparison schedules
+  complete `tctxflt` MIR coverage. The app is 3.40% peep / 3.65% nopeep
+  faster than main and both linked images are smaller.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -110,7 +113,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 268 final-cost fallbacks,
+- Current next priority: repeated causes in the 265 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 

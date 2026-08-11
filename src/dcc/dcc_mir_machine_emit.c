@@ -568,6 +568,30 @@ struct MirConditionalFloatLong {
     int kind;
 };
 
+struct MirConditionalPointerFloatLong {
+    struct Sym *true_root;
+    struct Sym *false_pointer;
+    int condition_stack_offset;
+    int element_offset;
+};
+
+struct MirNestedMemberFloatLong {
+    int first_condition_stack_offset;
+    int second_condition_stack_offset;
+    int pointer_stack_offset;
+    int member_offset;
+    int first_value;
+    int second_value;
+};
+
+struct MirConditionalFloatCompareLong {
+    int condition_stack_offset;
+    int float_stack_offset;
+    int true_value;
+    int positive_value;
+    int nonpositive_value;
+};
+
 #define MIR_MACHINE_SWITCH_RESULT_LIMIT 64
 
 struct MirConstantResultSwitch {
@@ -8891,6 +8915,205 @@ static int mir_match_conditional_float_long(
     return 1;
 }
 
+static int mir_match_conditional_pointer_float_long(
+    struct MirConditionalPointerFloatLong *plan)
+{
+    static const int expected_opcodes[20] = {
+        MIR_LABEL, MIR_PARAM, MIR_NOP, MIR_BRANCH_FALSE, MIR_ADDRESS,
+        MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_LABEL, MIR_LABEL,
+        MIR_PHI, MIR_NOP, MIR_STORE, MIR_LOAD, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY, MIR_RETURN
+    };
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 20 || mir_cfg_block_count() != 5 ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_LONG ||
+        type_size(mir.return_type) != 4)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return 0;
+    if (!mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->condition_stack_offset) ||
+        mir.insns[3].src1 != mir.insns[1].dst ||
+        mir.insns[3].label != mir.insns[7].label ||
+        type_ptr_depth(mir.insns[4].type) != 1 ||
+        type_ptr_depth(mir.insns[8].type) != 1 ||
+        mir.insns[6].label != mir.insns[10].label ||
+        mir.insns[11].src1 != mir.insns[4].dst ||
+        mir.insns[11].src2 != mir.insns[8].dst ||
+        mir.insns[11].phi_pred1 != mir.insns[5].label ||
+        mir.insns[11].phi_pred2 != mir.insns[9].label ||
+        mir.insns[13].src1 != mir.insns[11].dst ||
+        !mir_machine_same_location(&mir.insns[13], &mir.insns[14]) ||
+        mir.insns[16].src1 != mir.insns[14].dst ||
+        mir.insns[16].src2 != mir.insns[15].dst ||
+        mir.insns[16].immediate != 4 ||
+        mir.insns[16].memory_size != 4 ||
+        mir.insns[17].src1 != mir.insns[16].dst ||
+        !type_is_float(mir.insns[17].type) ||
+        mir.insns[17].memory_size != 4 ||
+        (mir.insns[17].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[18].immediate != 0 ||
+        mir.insns[18].src1 != mir.insns[17].dst ||
+        (mir.insns[18].type & 15) != TYPE_LONG ||
+        mir.insns[19].src1 != mir.insns[18].dst ||
+        mir.insns[15].immediate < 0 ||
+        mir.insns[15].immediate > 8191)
+        return 0;
+    plan->true_root = find_global(mir.insns[4].name);
+    plan->false_pointer = find_global(mir.insns[8].name);
+    if (plan->true_root == NULL || !plan->true_root->is_defined ||
+        plan->true_root->is_volatile ||
+        plan->false_pointer == NULL ||
+        !plan->false_pointer->is_defined ||
+        plan->false_pointer->is_volatile)
+        return 0;
+    plan->element_offset = (int)mir.insns[15].immediate * 4;
+    return 1;
+}
+
+static int mir_match_nested_member_float_long(
+    struct MirNestedMemberFloatLong *plan)
+{
+    static const int expected_opcodes[29] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_NOP,
+        MIR_BRANCH_FALSE, MIR_CONST, MIR_UNARY, MIR_LABEL, MIR_JUMP,
+        MIR_LABEL, MIR_NOP, MIR_BRANCH_FALSE, MIR_CONST, MIR_UNARY,
+        MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_LABEL,
+        MIR_LABEL, MIR_PHI, MIR_UNARY, MIR_RETURN
+    };
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 29 || mir_cfg_block_count() != 9 ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_LONG ||
+        type_size(mir.return_type) != 4)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return 0;
+    if (!mir_machine_parameter_value_offset(
+            mir.insns[1].dst,
+            &plan->first_condition_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[2].dst,
+            &plan->second_condition_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[3].dst, &plan->pointer_stack_offset) ||
+        mir.insns[5].src1 != mir.insns[1].dst ||
+        mir.insns[5].label != mir.insns[10].label ||
+        !mir_machine_constant_equals(mir.insns[6].dst, 1) ||
+        mir.insns[7].immediate != 0 ||
+        !type_is_float(mir.insns[7].type) ||
+        mir.insns[9].label != mir.insns[25].label ||
+        mir.insns[12].src1 != mir.insns[2].dst ||
+        mir.insns[12].label != mir.insns[17].label ||
+        !mir_machine_constant_equals(mir.insns[13].dst, 2) ||
+        mir.insns[14].immediate != 0 ||
+        !type_is_float(mir.insns[14].type) ||
+        mir.insns[16].label != mir.insns[22].label)
+        return 0;
+    if (mir.insns[19].src1 != mir.insns[3].dst ||
+        mir.insns[19].immediate < 0 ||
+        mir.insns[19].immediate > 32767 ||
+        mir.insns[19].memory_size != 4 ||
+        mir.insns[20].src1 != mir.insns[19].dst ||
+        !type_is_float(mir.insns[20].type) ||
+        mir.insns[20].memory_size != 4 ||
+        (mir.insns[20].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[23].src1 != mir.insns[14].dst ||
+        mir.insns[23].src2 != mir.insns[20].dst ||
+        mir.insns[23].phi_pred1 != mir.insns[15].label ||
+        mir.insns[23].phi_pred2 != mir.insns[21].label ||
+        mir.insns[26].src1 != mir.insns[7].dst ||
+        mir.insns[26].src2 != mir.insns[23].dst ||
+        mir.insns[26].phi_pred1 != mir.insns[8].label ||
+        mir.insns[26].phi_pred2 != mir.insns[24].label ||
+        mir.insns[27].immediate != 0 ||
+        (mir.insns[27].type & 15) != TYPE_LONG ||
+        mir.insns[28].src1 != mir.insns[27].dst)
+        return 0;
+    plan->first_value = 1;
+    plan->second_value = 2;
+    plan->member_offset = (int)mir.insns[19].immediate;
+    return 1;
+}
+
+static int mir_match_conditional_float_compare_long(
+    struct MirConditionalFloatCompareLong *plan)
+{
+    static const int expected_opcodes[26] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_NOP, MIR_BRANCH_FALSE,
+        MIR_CONST, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_NOP,
+        MIR_FLOAT_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST,
+        MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_LABEL,
+        MIR_PHI, MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_UNARY, MIR_RETURN
+    };
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+    int instruction;
+    long nonpositive_value;
+    long positive_value;
+    long true_value;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 26 || mir_cfg_block_count() != 9 ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_LONG ||
+        type_size(mir.return_type) != 4)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return 0;
+    if (!mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->condition_stack_offset) ||
+        !mir_scalar_memory_location(
+            &mir.insns[2], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        !type_is_float(memory_type) ||
+        type_size(memory_type) != 4 ||
+        memory_offset < 2 ||
+        mir.insns[4].src1 != mir.insns[1].dst ||
+        mir.insns[4].label != mir.insns[8].label ||
+        !mir_machine_constant_value(
+            mir.insns[5].dst, &true_value, 0) ||
+        true_value < -32768 || true_value > 65535 ||
+        mir.insns[7].label != mir.insns[22].label ||
+        mir.insns[10].immediate != 0 ||
+        mir.insns[11].immediate != '>' ||
+        mir.insns[11].src1 != mir.insns[2].dst ||
+        mir.insns[11].src2 != mir.insns[10].dst ||
+        mir.insns[12].src1 != mir.insns[11].dst ||
+        mir.insns[12].label != mir.insns[16].label)
+        return 0;
+    if (!mir_machine_constant_value(
+            mir.insns[13].dst, &positive_value, 0) ||
+        positive_value < -32768 || positive_value > 65535 ||
+        !mir_machine_constant_value(
+            mir.insns[17].dst, &nonpositive_value, 0) ||
+        nonpositive_value < -32768 || nonpositive_value > 65535 ||
+        mir.insns[20].src1 != mir.insns[13].dst ||
+        mir.insns[20].src2 != mir.insns[17].dst ||
+        mir.insns[23].src1 != mir.insns[5].dst ||
+        mir.insns[23].src2 != mir.insns[20].dst ||
+        mir.insns[24].immediate != 0 ||
+        (mir.insns[24].type & 15) != TYPE_LONG ||
+        mir.insns[25].src1 != mir.insns[24].dst)
+        return 0;
+    plan->float_stack_offset = memory_offset - 2;
+    plan->true_value = (int)true_value;
+    plan->positive_value = (int)positive_value;
+    plan->nonpositive_value = (int)nonpositive_value;
+    return 1;
+}
+
 static int mir_machine_constant_return_for_label(
     int label, int *result)
 {
@@ -15638,6 +15861,98 @@ static void mir_emit_conditional_float_long(
     fputs("\tret\n", out);
 }
 
+static void mir_emit_word_as_long_return(FILE *out, int value)
+{
+    fprintf(out,
+            "\tld hl,%d\n\tld a,h\n\trlca\n\tsbc a,a\n"
+            "\tld e,a\n\tld d,a\n\tret\n",
+            value);
+}
+
+static void mir_emit_conditional_pointer_float_long(
+    FILE *out, const struct MirConditionalPointerFloatLong *plan)
+{
+    int false_arm = new_label();
+    int selected = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n\tor (hl)\n\tjp z,L%d\n",
+            plan->condition_stack_offset, false_arm);
+    mir_machine_emit_global_address_de(
+        out, plan->true_root, plan->element_offset);
+    fprintf(out, "\tex de,hl\n\tjp L%d\nL%d:\n",
+            selected, false_arm);
+    mir_machine_emit_global_word(out, plan->false_pointer, 0);
+    if (plan->element_offset != 0)
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n",
+                plan->element_offset);
+    fprintf(out, "L%d:\n", selected);
+    fputs("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+          "\tinc hl\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tld l,c\n\tld h,b\n", out);
+    mir_emit_runtime_call(out, "__ffl");
+    fputs("\tret\n", out);
+}
+
+static void mir_emit_nested_member_float_long(
+    FILE *out, const struct MirNestedMemberFloatLong *plan)
+{
+    int second = new_label();
+    int third = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n\tor (hl)\n\tjp z,L%d\n",
+            plan->first_condition_stack_offset, second);
+    mir_emit_word_as_long_return(out, plan->first_value);
+    fprintf(out,
+            "L%d:\n\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n\tor (hl)\n\tjp z,L%d\n",
+            second, plan->second_condition_stack_offset, third);
+    mir_emit_word_as_long_return(out, plan->second_value);
+    fprintf(out,
+            "L%d:\n\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n",
+            third, plan->pointer_stack_offset);
+    if (plan->member_offset != 0)
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n",
+                plan->member_offset);
+    fputs("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+          "\tinc hl\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tld l,c\n\tld h,b\n", out);
+    mir_emit_runtime_call(out, "__ffl");
+    fputs("\tret\n", out);
+}
+
+static void mir_emit_conditional_float_compare_long(
+    FILE *out, const struct MirConditionalFloatCompareLong *plan)
+{
+    int false_arm = new_label();
+    int nonpositive = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n\tor (hl)\n\tjp z,L%d\n",
+            plan->condition_stack_offset, false_arm);
+    mir_emit_word_as_long_return(out, plan->true_value);
+    fprintf(out, "L%d:\n", false_arm);
+    mir_emit_wide_parameter(out, plan->float_stack_offset);
+    fputs("\tpush de\n\tpush hl\n\tld hl,0\n\tld de,0\n", out);
+    mir_emit_runtime_call(out, "__fltf");
+    fputs("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", nonpositive);
+    mir_emit_word_as_long_return(out, plan->positive_value);
+    fprintf(out, "L%d:\n", nonpositive);
+    mir_emit_word_as_long_return(out, plan->nonpositive_value);
+}
+
 static void mir_emit_constant_function(FILE *out, int result)
 {
     if (opt_stack_check)
@@ -15817,6 +16132,9 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirNestedWordLongSelect nested_word_long_select;
     struct MirFloatIntTruth float_int_truth;
     struct MirConditionalFloatLong conditional_float_long;
+    struct MirConditionalPointerFloatLong conditional_pointer_float_long;
+    struct MirNestedMemberFloatLong nested_member_float_long;
+    struct MirConditionalFloatCompareLong conditional_float_compare_long;
     struct MirConstantResultSwitch constant_result_switch;
     struct MirLocalByteFillSumPrint local_byte_fill_sum_print;
     struct MirIndexedMemberWrite indexed_member_write;
@@ -15871,6 +16189,24 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_float_long)) {
         mir_emit_conditional_float_long(
             out, &conditional_float_long);
+        return 1;
+    }
+    if (mir_match_conditional_pointer_float_long(
+            &conditional_pointer_float_long)) {
+        mir_emit_conditional_pointer_float_long(
+            out, &conditional_pointer_float_long);
+        return 1;
+    }
+    if (mir_match_nested_member_float_long(
+            &nested_member_float_long)) {
+        mir_emit_nested_member_float_long(
+            out, &nested_member_float_long);
+        return 1;
+    }
+    if (mir_match_conditional_float_compare_long(
+            &conditional_float_compare_long)) {
+        mir_emit_conditional_float_compare_long(
+            out, &conditional_float_compare_long);
         return 1;
     }
     if (mir_match_affine_pointer_constant_return(&constant)) {
