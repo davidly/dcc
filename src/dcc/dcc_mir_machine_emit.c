@@ -232,6 +232,14 @@ struct MirWideCallMemberAccumulate {
     int member_offset;
 };
 
+struct MirWideDifferenceCall {
+    struct Sym *function;
+    int left_stack_offset;
+    int right_stack_offset;
+    int left_is_unsigned;
+    int right_is_unsigned;
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -2390,6 +2398,86 @@ static int mir_match_wide_call_member_accumulate(
             &plan->object_stack_offset))
         return 0;
     plan->member_offset = (int)member->immediate;
+    return 1;
+}
+
+static int mir_match_wide_difference_call(
+    struct MirWideDifferenceCall *plan)
+{
+    static const int expected_opcodes[11] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_NOP, MIR_UNARY,
+        MIR_NOP, MIR_UNARY, MIR_BINARY, MIR_ARG, MIR_CALL,
+        MIR_RETURN
+    };
+    const struct MirInsn *left_parameter;
+    const struct MirInsn *right_parameter;
+    const struct MirInsn *left_conversion;
+    const struct MirInsn *right_conversion;
+    const struct MirInsn *difference;
+    const struct MirInsn *call;
+    int call_argument;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir_cfg_block_count() != 1 || mir.count != 11)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return 0;
+    left_parameter = &mir.insns[1];
+    right_parameter = &mir.insns[2];
+    left_conversion = &mir.insns[4];
+    right_conversion = &mir.insns[6];
+    difference = &mir.insns[7];
+    call = &mir.insns[9];
+    if (type_size(left_parameter->type) != 2 ||
+        type_is_float(left_parameter->type) ||
+        type_ptr_depth(left_parameter->type) != 0 ||
+        (left_parameter->type & 15) == TYPE_BOOL ||
+        type_size(right_parameter->type) != 2 ||
+        type_is_float(right_parameter->type) ||
+        type_ptr_depth(right_parameter->type) != 0 ||
+        (right_parameter->type & 15) == TYPE_BOOL ||
+        left_conversion->immediate != 0 ||
+        left_conversion->src1 != left_parameter->dst ||
+        type_size(left_conversion->type) != 4 ||
+        type_is_float(left_conversion->type) ||
+        right_conversion->immediate != 0 ||
+        right_conversion->src1 != right_parameter->dst ||
+        type_size(right_conversion->type) != 4 ||
+        type_is_float(right_conversion->type) ||
+        difference->immediate != '-' ||
+        difference->src1 != left_conversion->dst ||
+        difference->src2 != right_conversion->dst ||
+        type_size(difference->type) != 4 ||
+        type_is_float(difference->type) ||
+        !mir_machine_single_call_argument(
+            call, &call_argument) ||
+        call_argument != difference->dst ||
+        (call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+        mir.insns[10].src1 != call->dst)
+        return 0;
+    plan->function = find_global(call->name);
+    if (plan->function == NULL ||
+        !plan->function->is_defined ||
+        (call->base_name[0] != 0 &&
+         strcmp(call->base_name,
+                asm_name_for(
+                    sym_asm_name(plan->function)))) ||
+        !mir_machine_parameter_value_offset(
+            left_parameter->dst,
+            &plan->left_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            right_parameter->dst,
+            &plan->right_stack_offset))
+        return 0;
+    plan->left_is_unsigned =
+        (left_parameter->type & TYPE_UNSIGNED) != 0;
+    plan->right_is_unsigned =
+        (right_parameter->type & TYPE_UNSIGNED) != 0;
     return 1;
 }
 
@@ -6585,6 +6673,41 @@ static void mir_emit_wide_call_member_accumulate(
           out);
 }
 
+static void mir_emit_widened_parameter(
+    FILE *out, int stack_offset, int is_unsigned)
+{
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n",
+            stack_offset);
+    if (is_unsigned) {
+        fputs("\tld de,0\n", out);
+    } else {
+        fputs("\tld a,h\n\trlca\n\tsbc a,a\n"
+              "\tld e,a\n\tld d,a\n", out);
+    }
+}
+
+static void mir_emit_wide_difference_call(
+    FILE *out, const struct MirWideDifferenceCall *plan)
+{
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_emit_widened_parameter(
+        out, plan->left_stack_offset,
+        plan->left_is_unsigned);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_widened_parameter(
+        out, plan->right_stack_offset + 4,
+        plan->right_is_unsigned);
+    fputs("\tld b,d\n\tld c,e\n\tex de,hl\n\tpop hl\n"
+          "\tor a\n\tsbc hl,de\n\tex de,hl\n\tpop hl\n"
+          "\tsbc hl,bc\n\tex de,hl\n"
+          "\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n\tpop bc\n\tret\n", out);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -6633,6 +6756,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirWideEqualSelect wide_equal_select;
     struct MirWideEqualAddSelect wide_equal_add_select;
     struct MirWideCallMemberAccumulate wide_call_member_accumulate;
+    struct MirWideDifferenceCall wide_difference_call;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -6792,6 +6916,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &wide_call_member_accumulate)) {
         mir_emit_wide_call_member_accumulate(
             out, &wide_call_member_accumulate);
+        return 1;
+    }
+    if (mir_match_wide_difference_call(
+            &wide_difference_call)) {
+        mir_emit_wide_difference_call(
+            out, &wide_difference_call);
         return 1;
     }
     if (mir_match_indexed_member_write(
