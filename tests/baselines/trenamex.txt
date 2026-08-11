@@ -1,0 +1,5 @@
+REPORT rename() onto existing destination returned 0
+REPORT RXOLD.TMP still exists: 0
+REPORT RXNEW.TMP content after rename: [old content]
+PASS at_least_one_name_survives: 1
+trenamex ok

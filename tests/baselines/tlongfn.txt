@@ -1,0 +1,6 @@
+REPORT file1 immediately after creation: [AAA]
+PASS file1_initial_content: 1
+REPORT file1 name after file2 created: [BBB]
+PASS truncation_collision_observed: 1
+REPORT VERYLONG.TXT direct content: [BBB]
+tlongfn ok

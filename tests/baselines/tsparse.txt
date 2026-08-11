@@ -1,0 +1,7 @@
+REPORT reported length after gap write: 5120
+REPORT length is exact (5001): 0, rounded to 128 (5120): 1
+REPORT bytes actually read from offset 0: 300
+REPORT gap fill byte value: 0x00 (uniform)
+REPORT byte at offset 5000: 90 ('Z')
+PASS written_byte_survives: 90
+tsparse ok

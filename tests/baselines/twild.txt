@@ -1,0 +1,9 @@
+PASS wa1_exists_before: 1
+PASS wa2_exists_before: 1
+PASS wa3_exists_before: 1
+REPORT unlink("WA?.TMP") returned -1
+REPORT WA1.TMP exists after: 1
+REPORT WA2.TMP exists after: 1
+REPORT WA3.TMP exists after: 1
+PASS untouched_files_still_intact: 1
+twild ok

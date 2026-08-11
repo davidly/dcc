@@ -1,0 +1,11 @@
+REPORT ftell(SEEK_END) reports: 128
+FAIL reported_length_is_exact: got 128 expected 3
+REPORT fread request 64 returned: 64 bytes
+FAIL fread_bounded_by_reported_length: got 64 expected 3
+REPORT byte 3 (first byte past the 3 written): 0x1a
+REPORT buf[3] = 0x1a
+REPORT buf[4] = 0x1a
+REPORT buf[5] = 0x1a
+REPORT buf[6] = 0x1a
+REPORT buf[7] = 0x1a
+tpadread FAILED 2

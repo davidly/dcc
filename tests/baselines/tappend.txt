@@ -1,0 +1,5 @@
+readback after first append: [ABCDE..........]
+FAIL append_result: got [ABCDE..........] expected [1234567890ABCDE]
+readback after second append: [Z...............]
+FAIL second_append_result: got [Z...............] expected [1234567890ABCDEZ]
+tappend FAILED 2

@@ -1,0 +1,5 @@
+REPORT A:TDRV.TMP read back: [<open failed>]
+FAIL a_prefix_opens_same_file: got 0 expected 1
+REPORT TDRV2.TMP read back: [<open failed>]
+FAIL unprefixed_sees_prefixed_create: got 0 expected 1
+tdrive FAILED 2
