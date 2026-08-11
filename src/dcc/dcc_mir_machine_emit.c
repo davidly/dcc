@@ -372,6 +372,16 @@ struct MirFixedFloatGridFill {
     unsigned long divisor_bits;
 };
 
+struct MirConstantFloatConditional {
+    int condition_stack_offset;
+    int true_is_float;
+    int true_integer_width;
+    unsigned long true_bits;
+    int false_is_float;
+    int false_integer_width;
+    unsigned long false_bits;
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -4973,6 +4983,124 @@ static int mir_match_fixed_float_grid_fill(
         return 0;
     plan->divisor_bits =
         (unsigned long)divisor->immediate & 0xffffffffUL;
+    return 1;
+}
+
+static int mir_match_constant_float_conditional(
+    struct MirConstantFloatConditional *plan)
+{
+    const struct MirInsn *condition;
+    const struct MirInsn *branch;
+    const struct MirInsn *true_value;
+    const struct MirInsn *false_value;
+    const struct MirInsn *true_label;
+    const struct MirInsn *false_label;
+    const struct MirInsn *false_pred;
+    const struct MirInsn *jump;
+    const struct MirInsn *join;
+    const struct MirInsn *phi;
+    const struct MirInsn *conversion;
+    const struct MirInsn *return_insn;
+    const struct MirInsn *integer_constant;
+    const struct MirInsn *integer_conversion;
+    const struct MirInsn *float_constant;
+    int integer_is_true;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir_cfg_block_count() != 5 || mir.count != 15 ||
+        type_size(mir.return_type) != 4 ||
+        type_is_float(mir.return_type) ||
+        mir.insns[0].opcode != MIR_LABEL ||
+        mir.insns[1].opcode != MIR_PARAM ||
+        mir.insns[2].opcode != MIR_NOP ||
+        mir.insns[3].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[11].opcode != MIR_LABEL ||
+        mir.insns[12].opcode != MIR_PHI ||
+        mir.insns[13].opcode != MIR_UNARY ||
+        mir.insns[14].opcode != MIR_RETURN)
+        return 0;
+    condition = &mir.insns[1];
+    branch = &mir.insns[3];
+    join = &mir.insns[11];
+    phi = &mir.insns[12];
+    conversion = &mir.insns[13];
+    return_insn = &mir.insns[14];
+    if (type_size(condition->type) != 2)
+        return 0;
+    if (mir.insns[4].opcode == MIR_CONST) {
+        integer_is_true = 1;
+        integer_constant = &mir.insns[4];
+        integer_conversion = &mir.insns[5];
+        true_value = integer_conversion;
+        true_label = &mir.insns[6];
+        jump = &mir.insns[7];
+        false_label = &mir.insns[8];
+        float_constant = &mir.insns[9];
+        false_value = float_constant;
+        false_pred = &mir.insns[10];
+    } else if (mir.insns[4].opcode == MIR_FLOAT_CONST) {
+        integer_is_true = 0;
+        float_constant = &mir.insns[4];
+        true_value = float_constant;
+        true_label = &mir.insns[5];
+        jump = &mir.insns[6];
+        false_label = &mir.insns[7];
+        integer_constant = &mir.insns[8];
+        integer_conversion = &mir.insns[9];
+        false_value = integer_conversion;
+        false_pred = &mir.insns[10];
+    } else {
+        return 0;
+    }
+    if (true_label->opcode != MIR_LABEL ||
+        jump->opcode != MIR_JUMP ||
+        false_label->opcode != MIR_LABEL ||
+        false_pred->opcode != MIR_LABEL ||
+        integer_constant->opcode != MIR_CONST ||
+        (type_size(integer_constant->type) != 2 &&
+         type_size(integer_constant->type) != 4) ||
+        type_is_float(integer_constant->type) ||
+        (integer_constant->type & TYPE_UNSIGNED) != 0 ||
+        integer_conversion->opcode != MIR_UNARY ||
+        integer_conversion->immediate != 0 ||
+        integer_conversion->src1 != integer_constant->dst ||
+        !type_is_float(integer_conversion->type) ||
+        float_constant->opcode != MIR_FLOAT_CONST ||
+        !type_is_float(float_constant->type) ||
+        branch->src1 != condition->dst ||
+        branch->label != false_label->label ||
+        jump->label != join->label ||
+        phi->src1 != true_value->dst ||
+        phi->src2 != false_value->dst ||
+        phi->phi_pred1 != true_label->label ||
+        phi->phi_pred2 != false_pred->label ||
+        !type_is_float(phi->type) ||
+        conversion->immediate != 0 ||
+        conversion->src1 != phi->dst ||
+        type_size(conversion->type) != 4 ||
+        type_is_float(conversion->type) ||
+        (conversion->type & TYPE_UNSIGNED) != 0 ||
+        return_insn->src1 != conversion->dst ||
+        !mir_machine_parameter_value_offset(
+            condition->dst, &plan->condition_stack_offset))
+        return 0;
+    plan->true_is_float = !integer_is_true;
+    plan->false_is_float = integer_is_true;
+    if (integer_is_true) {
+        plan->true_integer_width =
+            type_size(integer_constant->type);
+        plan->true_bits =
+            (unsigned long)integer_constant->immediate & 0xffffffffUL;
+        plan->false_bits =
+            (unsigned long)float_constant->immediate & 0xffffffffUL;
+    } else {
+        plan->true_bits =
+            (unsigned long)float_constant->immediate & 0xffffffffUL;
+        plan->false_integer_width =
+            type_size(integer_constant->type);
+        plan->false_bits =
+            (unsigned long)integer_constant->immediate & 0xffffffffUL;
+    }
     return 1;
 }
 
@@ -9888,6 +10016,48 @@ static void mir_emit_fixed_float_grid_fill(
             plan->outer_bound, loop);
 }
 
+static void mir_emit_constant_float_arm(
+    FILE *out, int is_float, int integer_width,
+    unsigned long bits)
+{
+    if (is_float) {
+        fprintf(out,
+                "\tld hl,%lu\n\tld de,%lu\n",
+                bits & 0xffffUL, (bits >> 16) & 0xffffUL);
+    } else if (integer_width == 2) {
+        fprintf(out, "\tld hl,%lu\n", bits & 0xffffUL);
+        mir_emit_runtime_call(out, "__fif");
+    } else {
+        fprintf(out,
+                "\tld hl,%lu\n\tld de,%lu\n",
+                bits & 0xffffUL, (bits >> 16) & 0xffffUL);
+        mir_emit_runtime_call(out, "__flf");
+    }
+    mir_emit_runtime_call(out, "__ffl");
+    fputs("\tret\n", out);
+}
+
+static void mir_emit_constant_float_conditional(
+    FILE *out, const struct MirConstantFloatConditional *plan)
+{
+    int false_arm = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n\tor (hl)\n"
+            "\tjp z,L%d\n",
+            plan->condition_stack_offset, false_arm);
+    mir_emit_constant_float_arm(
+        out, plan->true_is_float,
+        plan->true_integer_width, plan->true_bits);
+    fprintf(out, "L%d:\n", false_arm);
+    mir_emit_constant_float_arm(
+        out, plan->false_is_float,
+        plan->false_integer_width, plan->false_bits);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -9952,6 +10122,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFloatByteReport float_byte_report;
     struct MirRelativeToleranceCall relative_tolerance_call;
     struct MirFixedFloatGridFill fixed_float_grid_fill;
+    struct MirConstantFloatConditional constant_float_conditional;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -10199,6 +10370,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &fixed_float_grid_fill)) {
         mir_emit_fixed_float_grid_fill(
             out, &fixed_float_grid_fill);
+        return 1;
+    }
+    if (mir_match_constant_float_conditional(
+            &constant_float_conditional)) {
+        mir_emit_constant_float_conditional(
+            out, &constant_float_conditional);
         return 1;
     }
     if (mir_match_indexed_member_write(
