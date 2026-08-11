@@ -47,12 +47,18 @@ int main(void)
     chki("wa3_exists_before", exists("WA3.TMP"), 1);
 
     /* Intent: delete only "WA1.TMP". A literal '?' reaching BDOS fn 19
-     * unescaped can instead match WA1/WA2/WA3 all at once - or, as ntvcm
-     * turned out to do, match nothing and just fail. Neither "deletes
-     * extra files" nor "silently does nothing to an ambiguous pattern" is
-     * really "correct" for a caller who named one specific file, so this
-     * is reported rather than hard-asserted - the interesting part is
-     * whether every emulator agrees with ntvcm here or not. */
+     * unescaped instead matches WA1/WA2/WA3 all at once - "WA?.TMP" is
+     * ambiguous over all three, since each differs from the others only
+     * in that one character, so none of them is really "untouched" by
+     * the pattern. Real CP/M BDOS fn 19 deletes every directory entry an
+     * ambiguous FCB matches in a single call, and that's what a correct
+     * implementation must do here too: all three go away, not just the
+     * one the caller had in mind. (An earlier revision of this test
+     * asserted the opposite - that WA2/WA3 must survive - which happened
+     * to hold only because ntvcm's fn 19 used to hand wildcard patterns
+     * straight to the host's literal-match unlink() and silently fail to
+     * delete anything at all; that bug is fixed now, see ntvcm's
+     * DeleteMatchingFiles.) */
     r = unlink("WA?.TMP");
     printf("REPORT unlink(\"WA?.TMP\") returned %d\n", r);
 
@@ -60,10 +66,10 @@ int main(void)
     printf("REPORT WA2.TMP exists after: %d\n", exists("WA2.TMP"));
     printf("REPORT WA3.TMP exists after: %d\n", exists("WA3.TMP"));
 
-    /* The one thing that must hold everywhere: this must not silently
-     * corrupt/lose track of files it didn't touch at all. */
-    chki("untouched_files_still_intact",
-         exists("WA2.TMP") && exists("WA3.TMP"), 1);
+    /* All three are ambiguously matched by "WA?.TMP", so a correct
+     * wildcard delete removes all three. */
+    chki("all_matched_files_deleted",
+         exists("WA1.TMP") || exists("WA2.TMP") || exists("WA3.TMP"), 0);
 
     unlink("WA1.TMP");
     unlink("WA2.TMP");
