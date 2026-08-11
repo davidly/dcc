@@ -355,6 +355,14 @@ struct MirFloatByteReport {
     char call_name[64];
 };
 
+struct MirRelativeToleranceCall {
+    struct Sym *function;
+    int name_stack_offset;
+    int got_stack_offset;
+    int want_stack_offset;
+    unsigned long scale_bits;
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -4644,6 +4652,126 @@ static int mir_match_float_byte_report(
                  ? call->base_name
                  : asm_name_for(sym_asm_name(function)));
     plan->string_id = (int)string->immediate;
+    return 1;
+}
+
+static int mir_match_relative_tolerance_call(
+    struct MirRelativeToleranceCall *plan)
+{
+    static const int expected_opcodes[31] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM,
+        MIR_NOP, MIR_FLOAT_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_NOP, MIR_UNARY, MIR_LABEL, MIR_JUMP,
+        MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_LABEL, MIR_PHI,
+        MIR_STORE, MIR_LOAD, MIR_ARG, MIR_NOP, MIR_ARG,
+        MIR_NOP, MIR_ARG, MIR_FLOAT_CONST, MIR_FLOAT_CONST,
+        MIR_NOP, MIR_BINARY, MIR_BINARY, MIR_ARG, MIR_CALL
+    };
+    const struct MirInsn *name;
+    const struct MirInsn *got;
+    const struct MirInsn *want;
+    const struct MirInsn *zero;
+    const struct MirInsn *comparison;
+    const struct MirInsn *negation;
+    const struct MirInsn *absolute_phi;
+    const struct MirInsn *absolute_store;
+    const struct MirInsn *name_load;
+    const struct MirInsn *scale;
+    const struct MirInsn *second_scale;
+    const struct MirInsn *product;
+    const struct MirInsn *sum;
+    const struct MirInsn *call;
+    int arguments[4];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir_cfg_block_count() != 5 || mir.count != 31 ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return 0;
+    name = &mir.insns[1];
+    got = &mir.insns[2];
+    want = &mir.insns[3];
+    zero = &mir.insns[5];
+    comparison = &mir.insns[6];
+    negation = &mir.insns[9];
+    absolute_phi = &mir.insns[16];
+    absolute_store = &mir.insns[17];
+    name_load = &mir.insns[18];
+    scale = &mir.insns[24];
+    second_scale = &mir.insns[25];
+    product = &mir.insns[27];
+    sum = &mir.insns[28];
+    call = &mir.insns[30];
+    if (type_size(name->type) != 2 ||
+        type_ptr_depth(name->type) == 0 ||
+        !type_is_float(got->type) || type_size(got->type) != 4 ||
+        !type_is_float(want->type) || type_size(want->type) != 4 ||
+        !type_is_float(zero->type) || zero->immediate != 0 ||
+        comparison->immediate != '<' ||
+        comparison->src1 != want->dst ||
+        comparison->src2 != zero->dst ||
+        mir.insns[7].src1 != comparison->dst ||
+        mir.insns[7].label != mir.insns[12].label ||
+        negation->immediate != '-' ||
+        negation->src1 != want->dst ||
+        !type_is_float(negation->type) ||
+        mir.insns[11].label != mir.insns[15].label ||
+        absolute_phi->src1 != negation->dst ||
+        absolute_phi->src2 != want->dst ||
+        absolute_phi->phi_pred1 != mir.insns[10].label ||
+        absolute_phi->phi_pred2 != mir.insns[14].label ||
+        !type_is_float(absolute_phi->type) ||
+        !mir_machine_unobservable_local_store(absolute_store) ||
+        absolute_store->src1 != absolute_phi->dst ||
+        !mir_machine_same_location(name, name_load) ||
+        !type_is_float(scale->type) ||
+        !type_is_float(second_scale->type) ||
+        scale->immediate != second_scale->immediate ||
+        product->immediate != '*' ||
+        product->src1 != second_scale->dst ||
+        product->src2 != absolute_phi->dst ||
+        !type_is_float(product->type) ||
+        sum->immediate != '+' ||
+        sum->src1 != scale->dst ||
+        sum->src2 != product->dst ||
+        !type_is_float(sum->type) ||
+        !mir_machine_four_call_arguments(call, arguments) ||
+        arguments[0] != name_load->dst ||
+        arguments[1] != got->dst ||
+        arguments[2] != want->dst ||
+        arguments[3] != sum->dst)
+        return 0;
+    plan->function = find_global(call->name);
+    if (plan->function == NULL || !plan->function->is_defined ||
+        (call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+        (call->base_name[0] != 0 &&
+         strcmp(call->base_name,
+                asm_name_for(
+                    sym_asm_name(plan->function)))) ||
+        !mir_machine_parameter_value_offset(
+            name->dst, &plan->name_stack_offset))
+        return 0;
+    if (!mir_scalar_memory_location(
+            got, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2)
+        return 0;
+    plan->got_stack_offset = memory_offset - 2;
+    if (!mir_scalar_memory_location(
+            want, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2)
+        return 0;
+    plan->want_stack_offset = memory_offset - 2;
+    plan->scale_bits =
+        (unsigned long)scale->immediate & 0xffffffffUL;
     return 1;
 }
 
@@ -9480,6 +9608,46 @@ static void mir_emit_float_byte_report(
     fputs("\tret\n", out);
 }
 
+static void mir_emit_relative_tolerance_call(
+    FILE *out, const struct MirRelativeToleranceCall *plan)
+{
+    int nonnegative = new_label();
+    int ready = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%lu\n\tld de,%lu\n"
+            "\tpush de\n\tpush hl\n\tpush de\n\tpush hl\n",
+            plan->scale_bits & 0xffffUL,
+            (plan->scale_bits >> 16) & 0xffffUL);
+    mir_emit_wide_parameter(out, plan->want_stack_offset + 8);
+    fputs("\tpush de\n\tpush hl\n\tld hl,0\n\tld de,0\n", out);
+    mir_emit_runtime_call(out, "__fgtf");
+    fputs("\tpop bc\n\tpop bc\n"
+          "\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", nonnegative);
+    mir_emit_wide_parameter(out, plan->want_stack_offset + 8);
+    fputs("\tld a,d\n\txor 128\n\tld d,a\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", ready, nonnegative);
+    mir_emit_wide_parameter(out, plan->want_stack_offset + 8);
+    fprintf(out, "L%d:\n", ready);
+    mir_emit_runtime_call(out, "__fmaf");
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tpush de\n\tpush hl\n", out);
+    mir_emit_wide_parameter(out, plan->want_stack_offset + 4);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_wide_parameter(out, plan->got_stack_offset + 8);
+    fputs("\tpush de\n\tpush hl\n", out);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n",
+            plan->name_stack_offset + 12);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tpop bc\n\tpop bc\n\tpop bc\n\tret\n", out);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -9542,6 +9710,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirExactFloatMismatchReport exact_float_mismatch_report;
     struct MirFloatToleranceReport float_tolerance_report;
     struct MirFloatByteReport float_byte_report;
+    struct MirRelativeToleranceCall relative_tolerance_call;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -9777,6 +9946,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_float_byte_report(&float_byte_report)) {
         mir_emit_float_byte_report(out, &float_byte_report);
+        return 1;
+    }
+    if (mir_match_relative_tolerance_call(
+            &relative_tolerance_call)) {
+        mir_emit_relative_tolerance_call(
+            out, &relative_tolerance_call);
         return 1;
     }
     if (mir_match_indexed_member_write(
