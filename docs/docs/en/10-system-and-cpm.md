@@ -83,6 +83,107 @@ The standard-library reference now has dedicated pages for
 file-related failures, and `assert` writes its diagnostic through `stderr` before
 terminating with `exit(1)`.
 
+## File I/O and CP/M BDOS conventions
+
+CP/M 2.2's BDOS file model is much simpler than POSIX/C89 assume, and DCCRTL's
+`fopen`/`read`/`write`/etc. are built directly on it rather than emulating a
+richer filesystem underneath. The differences below aren't DCCRTL bugs — they
+follow from what BDOS itself can express — but they can surprise code ported
+from a hosted C library. Every point here has been cross-checked against
+several independent CP/M emulators (ntvcm, tnylpo, cpmemu, zxcc, iz-cpm,
+z88dk's cpm, RunCPM, and Takeda Toshiya's cpm.exe) and, where noted, differs
+between them.
+
+### File length is tracked in 128-byte records, not bytes
+
+CP/M has no byte-granular length field; a directory entry only knows how many
+128-byte records a file occupies. A file whose true length isn't a multiple of
+128 is still stored as a whole number of records, and the untouched tail of the
+last record — the padding between the real data and the record boundary — is
+written as Ctrl-Z (0x1A) bytes when that record is first created (there's no
+"old data" to merge a partial write with). That padding is genuine, readable,
+on-disk data: `fread()` isn't bounded by the tracked length the way a POSIX
+`read()` would be, so a large-enough `fread()` on a short file can return the
+trailing 0x1A padding right along with the real bytes, even though `ftell()`
+reports the shorter, record-rounded length. This is deliberately left as
+documented behavior rather than "fixed" by trimming the tracked length at the
+runtime level — doing that breaks the classic CP/M convention (used by real
+programs, and by this repo's own `fileops.c` test) of writing a single
+trailing Ctrl-Z as the real end-of-text-file marker, which is indistinguishable
+on disk from unwritten padding. See `tests/tpadread.c` for a worked repro and
+`tests/tctrlz.c` for the Ctrl-Z-as-text-EOF convention in `fgets`/`fread`.
+
+Practical implications:
+
+- Don't assume `fread(buf, 1, sizeof(buf), f)` stops exactly at a text file's
+  logical end; check for the file's own EOF convention (Ctrl-Z) if you rely on
+  padding not leaking into the buffer.
+- `ftell()`/`fseek(f, 0, SEEK_END)` report the record-rounded length, not
+  necessarily the exact byte count your program last wrote.
+- `fopen(path, "a")`'s append position is computed by scanning the last record
+  backward for a run of trailing Ctrl-Z bytes and starting the append right
+  after the real data, so appending doesn't itself introduce fresh padding
+  in the middle of a file — but a pre-existing trailing Ctrl-Z written as real
+  text-EOF data can still shift where "end" is judged to be, same caveat as
+  above.
+
+### Record-count overflow at exactly 8 MB
+
+BDOS function 35 (compute file size) returns the record count in a 16-bit
+register pair. CP/M 2.2's own maximum file size, 8 MB, is exactly 65536
+records — one past what a 16-bit count can represent — so an exactly-8-MB file
+reports a record count of 0, which looks like an empty file if read naively.
+DCCRTL treats this as the one legitimate reason `__fdlen` can be genuinely
+larger than what a raw record-count register pair reported; see `tests/tbig.c`
+for sequential and random I/O across that boundary.
+
+### `unlink()` and `rename()` on ambiguous (wildcard) names
+
+An FCB filename or extension byte can be `?`, which BDOS treats as "match any
+character in this position" for delete (function 19) and rename (function 23).
+DCCRTL's `__mkfcb` copies `?`/`*` characters through unchanged, so a literal
+`?` reaching `unlink()`/`rename()` — typed deliberately or arriving from
+unsanitized input — deletes or renames **every** file the pattern matches, not
+just one. `"WA?.TMP"` for example matches `WA1.TMP`, `WA2.TMP`, and `WA3.TMP`
+all at once; there's no way to single one out once a wildcard character is
+present. See `tests/twild.c`.
+
+`rename()` onto an already-existing destination name is a genuine behavioral
+split across emulators, not a bug in either camp: ntvcm, cpmemu, zxcc, z88dk's
+cpm, and RunCPM silently overwrite the destination, while tnylpo and cpm.exe
+reject the rename outright (nonzero return, original name and content
+untouched). The CP/M 2.2 BDOS spec doesn't clearly mandate one behavior over
+the other for this case, and DCCRTL doesn't paper over the difference — check
+`rename()`'s return value, or `unlink()` the destination first if your program
+needs one specific outcome regardless of which BDOS implementation it runs
+under. See `tests/trenamex.c`.
+
+### Drive-letter prefixes
+
+`fopen("A:FILE.TXT", ...)` and similar are supported: a leading `A`-`P`
+(case-insensitive) followed by `:` is parsed into the FCB's drive byte, and the
+rest of the name follows normal 8.3 rules. There is no directory/path concept
+beyond this single-letter drive prefix — CP/M has no subdirectories at all (see
+[`dirent.h`](#direnth--directory-enumeration) above).
+
+### 8.3 filenames and truncation collisions
+
+Every filename is 8 characters plus a 3-character extension, uppercased, with
+no further validation. A longer host-supplied or generated name is silently
+truncated to fit; two different names that happen to truncate to the same 8.3
+form collide and refer to the same underlying CP/M file, with no error raised
+at creation time. See `tests/tlongfn.c`.
+
+### No atomic append, no `O_APPEND`-style write positioning
+
+BDOS has no equivalent of POSIX's `O_APPEND` (every write goes to wherever the
+FCB's current record pointer is, and nothing serializes that against other
+processes). `fopen(path, "a")` computes the append position once, at open
+time; it does not re-seek to end before every subsequent write the way a true
+`O_APPEND` descriptor would if another process extended the file in between.
+Programs that share or alternate writes to the same file across processes must
+coordinate at a higher level.
+
 ## CP/M extensions
 
 The runtime exposes the raw CP/M BDOS entry point for things the standard

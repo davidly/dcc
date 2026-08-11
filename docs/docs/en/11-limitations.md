@@ -42,7 +42,12 @@ and the single source-of-truth runtime.
   CP/M 3.0 BDOS 108 for the process exit code.
 - **CP/M text files are not byte-stream hosted files.** Text input follows CP/M
   Ctrl-Z EOF conventions, and stdio is intentionally smaller than hosted C
-  stdio.
+  stdio. File length is tracked in 128-byte records rather than exact bytes,
+  wildcard `unlink()`/`rename()` can match more than one file, and there is no
+  subdirectory/path concept beyond a single drive-letter prefix — see
+  [File I/O and CP/M BDOS conventions](10-system-and-cpm.md#file-io-and-cpm-bdos-conventions)
+  for the full list of C89/POSIX deviations this causes and why they aren't
+  "fixed" at the runtime level.
 - **Public symbols are significant to only 6 characters.** M80/L80 keep the
   first 6 characters of an external symbol, and DCC C Compiler's leading `_` uses one, so
   every non-`static` function and global must be unique within its first 5

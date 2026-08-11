@@ -31,12 +31,15 @@ pseudo-streams plus five concurrent real file streams.
 ## File streams
 
 `fopen` looks at the first mode character: `"r"` opens an existing file, `"w"`
-creates/truncates a file, and `"a"` creates the file if needed. The optional
-`"+"` and `"b"` characters are accepted but do not change the runtime behavior;
-`"a"` does not automatically seek to end, so call `fseek(fp, 0L, SEEK_END)` if
-you need append positioning. CP/M has no atomic append operation, so programs
-that share or alternate writes to the same file must coordinate at a higher
-level.
+creates/truncates a file, and `"a"` opens the file if it exists (preserving its
+content) or creates it if not, and positions the stream at the true end of the
+existing data before the first write — same as C89 requires. The optional
+`"+"` and `"b"` characters are accepted but do not change the runtime behavior.
+CP/M has no atomic append operation, so programs that share or alternate writes
+to the same file must coordinate at a higher level. See
+[File I/O and CP/M BDOS conventions](../10-system-and-cpm.md#file-io-and-cpm-bdos-conventions)
+for how record-granularity storage affects exactly where that "true end"
+lands.
 
 For a complete program, see the worked
 [file-reading example](../12-examples.md#reading-a-text-file-line-by-line).
