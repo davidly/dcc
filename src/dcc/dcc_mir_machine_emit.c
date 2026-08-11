@@ -311,6 +311,14 @@ struct MirGuardedGlobalPop {
     struct Sym *guard_function;
 };
 
+struct MirFloatMemberScalarCompare {
+    int pointer_stack_offset;
+    int scalar_stack_offset;
+    int member_offset;
+    int scalar_width;
+    int member_is_left;
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -3775,6 +3783,175 @@ static int mir_match_guarded_global_pop(
             &plan->array_offset) ||
         memory_storage != SC_GLOBAL)
         return 0;
+    return 1;
+}
+
+static int mir_match_float_member_scalar_compare(
+    struct MirFloatMemberScalarCompare *plan)
+{
+    const struct MirInsn *parameters[2];
+    const struct MirInsn *member = NULL;
+    const struct MirInsn *member_load = NULL;
+    const struct MirInsn *conversion = NULL;
+    const struct MirInsn *comparison = NULL;
+    const struct MirInsn *branch = NULL;
+    const struct MirInsn *returns[2];
+    const struct MirInsn *target = NULL;
+    const struct MirInsn *pointer_parameter;
+    const struct MirInsn *scalar_parameter;
+    const struct MirInsn *true_constant;
+    const struct MirInsn *false_constant;
+    int parameter_count = 0;
+    int label_count = 0;
+    int nop_count = 0;
+    int constant_count = 0;
+    int return_count = 0;
+    int instruction;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int left;
+    int right;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir_cfg_block_count() != 2 || mir.count != 15 ||
+        type_size(mir.return_type) != 2)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        switch (insn->opcode) {
+        case MIR_LABEL:
+            ++label_count;
+            break;
+        case MIR_PARAM:
+            if (parameter_count >= 2)
+                return 0;
+            parameters[parameter_count++] = insn;
+            break;
+        case MIR_NOP:
+            ++nop_count;
+            break;
+        case MIR_MEMBER_ADDRESS:
+            if (member != NULL)
+                return 0;
+            member = insn;
+            break;
+        case MIR_LOAD_INDIRECT:
+            if (member_load != NULL)
+                return 0;
+            member_load = insn;
+            break;
+        case MIR_UNARY:
+            if (conversion != NULL)
+                return 0;
+            conversion = insn;
+            break;
+        case MIR_BINARY:
+            if (comparison != NULL)
+                return 0;
+            comparison = insn;
+            break;
+        case MIR_BRANCH_FALSE:
+            if (branch != NULL)
+                return 0;
+            branch = insn;
+            break;
+        case MIR_CONST:
+            ++constant_count;
+            break;
+        case MIR_RETURN:
+            if (return_count >= 2)
+                return 0;
+            returns[return_count++] = insn;
+            break;
+        default:
+            return 0;
+        }
+    }
+    if (parameter_count != 2 || label_count != 2 ||
+        nop_count != 2 || constant_count != 2 ||
+        return_count != 2 || member == NULL ||
+        member_load == NULL || conversion == NULL ||
+        comparison == NULL || branch == NULL ||
+        comparison > branch || branch > returns[0] ||
+        returns[0] > returns[1])
+        return 0;
+    if (type_ptr_depth(parameters[0]->type) > 0) {
+        pointer_parameter = parameters[0];
+        scalar_parameter = parameters[1];
+    } else if (type_ptr_depth(parameters[1]->type) > 0) {
+        pointer_parameter = parameters[1];
+        scalar_parameter = parameters[0];
+    } else {
+        return 0;
+    }
+    plan->scalar_width = type_size(scalar_parameter->type);
+    if (type_size(pointer_parameter->type) != 2 ||
+        mir_machine_pointee_is_volatile(pointer_parameter) ||
+        (plan->scalar_width != 2 && plan->scalar_width != 4) ||
+        type_ptr_depth(scalar_parameter->type) != 0 ||
+        type_is_float(scalar_parameter->type) ||
+        (scalar_parameter->type & TYPE_UNSIGNED) != 0 ||
+        member->src1 != pointer_parameter->dst ||
+        member->memory_size != 4 ||
+        member_load->src1 != member->dst ||
+        member_load->memory_size != 4 ||
+        member_load->bit_width != 0 ||
+        !type_is_float(member_load->type) ||
+        (member_load->memory_flags & (1 | 8)) != 0 ||
+        conversion->immediate != 0 ||
+        conversion->src1 != scalar_parameter->dst ||
+        !type_is_float(conversion->type) ||
+        type_size(conversion->type) != 4)
+        return 0;
+    if (comparison->immediate == '<') {
+        left = comparison->src1;
+        right = comparison->src2;
+    } else if (comparison->immediate == '>') {
+        left = comparison->src2;
+        right = comparison->src1;
+    } else {
+        return 0;
+    }
+    if (!((left == member_load->dst &&
+           right == conversion->dst) ||
+          (left == conversion->dst &&
+           right == member_load->dst)) ||
+        type_size(comparison->type) != 2 ||
+        branch->src1 != comparison->dst)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_LABEL &&
+            mir.insns[instruction].label == branch->label) {
+            if (target != NULL)
+                return 0;
+            target = &mir.insns[instruction];
+        }
+    true_constant = mir_definition(returns[0]->src1);
+    false_constant = mir_definition(returns[1]->src1);
+    if (target == NULL || target <= returns[0] ||
+        target >= returns[1] ||
+        true_constant == NULL ||
+        true_constant->opcode != MIR_CONST ||
+        true_constant->immediate != 1 ||
+        false_constant == NULL ||
+        false_constant->opcode != MIR_CONST ||
+        false_constant->immediate != 0 ||
+        !mir_scalar_memory_location(
+            pointer_parameter, &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2)
+        return 0;
+    plan->pointer_stack_offset = memory_offset - 2;
+    if (!mir_scalar_memory_location(
+            scalar_parameter, &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2)
+        return 0;
+    plan->scalar_stack_offset = memory_offset - 2;
+    plan->member_offset = (int)member->immediate;
+    plan->member_is_left = left == member_load->dst;
     return 1;
 }
 
@@ -8422,6 +8599,57 @@ static void mir_emit_guarded_global_pop(
           "\tld d,(hl)\n\tex de,hl\n\tret\n", out);
 }
 
+static void mir_emit_float_member_operand(
+    FILE *out, const struct MirFloatMemberScalarCompare *plan,
+    int pushed_bytes)
+{
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n",
+            plan->pointer_stack_offset + pushed_bytes);
+    mir_machine_emit_hl_offset(out, plan->member_offset, 0);
+    fputs("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+          "\tinc hl\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tld l,c\n\tld h,b\n", out);
+}
+
+static void mir_emit_float_scalar_operand(
+    FILE *out, const struct MirFloatMemberScalarCompare *plan,
+    int pushed_bytes)
+{
+    if (plan->scalar_width == 2) {
+        fprintf(out,
+                "\tld hl,%d\n\tadd hl,sp\n"
+                "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n",
+                plan->scalar_stack_offset + pushed_bytes);
+        mir_emit_runtime_call(out, "__fif");
+    } else {
+        mir_emit_wide_parameter(
+            out, plan->scalar_stack_offset + pushed_bytes);
+        mir_emit_runtime_call(out, "__flf");
+    }
+}
+
+static void mir_emit_float_member_scalar_compare(
+    FILE *out, const struct MirFloatMemberScalarCompare *plan)
+{
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    if (plan->member_is_left)
+        mir_emit_float_member_operand(out, plan, 0);
+    else
+        mir_emit_float_scalar_operand(out, plan, 0);
+    fputs("\tpush de\n\tpush hl\n", out);
+    if (plan->member_is_left)
+        mir_emit_float_scalar_operand(out, plan, 4);
+    else
+        mir_emit_float_member_operand(out, plan, 4);
+    mir_emit_runtime_call(out, "__fgtf");
+    fputs("\tpop bc\n\tpop bc\n"
+          "\tld a,h\n\tor l\n\tld hl,0\n\tret z\n"
+          "\tinc hl\n\tret\n", out);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -8480,6 +8708,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
     struct MirGuardedGlobalPop guarded_global_pop;
+    struct MirFloatMemberScalarCompare float_member_scalar_compare;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -8693,6 +8922,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_guarded_global_pop(&guarded_global_pop)) {
         mir_emit_guarded_global_pop(out, &guarded_global_pop);
+        return 1;
+    }
+    if (mir_match_float_member_scalar_compare(
+            &float_member_scalar_compare)) {
+        mir_emit_float_member_scalar_compare(
+            out, &float_member_scalar_compare);
         return 1;
     }
     if (mir_match_indexed_member_write(
