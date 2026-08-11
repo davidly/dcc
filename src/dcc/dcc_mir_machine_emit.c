@@ -29,6 +29,24 @@ struct MirFlatArrayChecks {
     int strings[16];
 };
 
+enum MirFixedMutationKind {
+    MIR_FIXED_MUTATION_SET = 1,
+    MIR_FIXED_MUTATION_ADD = 2
+};
+
+struct MirFixedMutation {
+    int kind;
+    int offset;
+    int width;
+    unsigned long value;
+};
+
+struct MirFixedParamMutations {
+    int parameter_stack_offset;
+    int count;
+    struct MirFixedMutation mutations[8];
+};
+
 static void mir_machine_emit_hl_offset(
     FILE *out, int offset, int preserve_bc);
 
@@ -743,6 +761,195 @@ static void mir_emit_flat_array_checks(
     fputs("\tpop iy\n\tret\n", out);
 }
 
+static int mir_machine_constant_bits(
+    int value, int width, unsigned long *bits)
+{
+    const struct MirInsn *constant = mir_definition(value);
+
+    if (constant == NULL ||
+        (constant->opcode != MIR_CONST &&
+         constant->opcode != MIR_FLOAT_CONST) ||
+        type_size(constant->type) != width)
+        return 0;
+    *bits = (unsigned long)constant->immediate;
+    if (width == 1)
+        *bits &= 0xffUL;
+    else if (width == 2)
+        *bits &= 0xffffUL;
+    return 1;
+}
+
+static int mir_machine_match_fixed_mutation(
+    const struct MirInsn *store, struct MirFixedMutation *mutation,
+    int *parameter_stack_offset)
+{
+    const struct MirInsn *value;
+    int stack_offset;
+    long offset;
+    unsigned long bits;
+
+    if (store == NULL || store->opcode != MIR_STORE_INDIRECT ||
+        (store->memory_size != 1 && store->memory_size != 2 &&
+         store->memory_size != 4) ||
+        (store->memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_parameter_address(
+            store->src1, &stack_offset, &offset, 0) ||
+        offset < -32768 || offset > 32767)
+        return 0;
+    if (*parameter_stack_offset < 0)
+        *parameter_stack_offset = stack_offset;
+    else if (*parameter_stack_offset != stack_offset)
+        return 0;
+    value = mir_definition(store->src2);
+    if (mir_machine_constant_bits(
+            store->src2, store->memory_size, &bits)) {
+        mutation->kind = MIR_FIXED_MUTATION_SET;
+    } else if (value != NULL && value->opcode == MIR_BINARY &&
+               value->immediate == '+') {
+        const struct MirInsn *load = mir_definition(value->src1);
+        int load_stack;
+        long load_offset;
+
+        if (load == NULL || load->opcode != MIR_LOAD_INDIRECT ||
+            load->memory_size != store->memory_size ||
+            (load->memory_flags & (1 | 8)) != 0 ||
+            !mir_machine_parameter_address(
+                load->src1, &load_stack, &load_offset, 0) ||
+            load_stack != stack_offset || load_offset != offset ||
+            !mir_machine_constant_bits(
+                value->src2, store->memory_size, &bits))
+            return 0;
+        mutation->kind = MIR_FIXED_MUTATION_ADD;
+    } else {
+        return 0;
+    }
+    mutation->offset = (int)offset;
+    mutation->width = store->memory_size;
+    mutation->value = bits;
+    return 1;
+}
+
+static int mir_match_fixed_param_mutations(
+    struct MirFixedParamMutations *plan)
+{
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    plan->parameter_stack_offset = -1;
+    if (mir.has_vla || mir_cfg_block_count() != 1 ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        switch (insn->opcode) {
+        case MIR_NOP:
+        case MIR_LABEL:
+        case MIR_PARAM:
+        case MIR_CONST:
+        case MIR_FLOAT_CONST:
+        case MIR_INDEX_ADDRESS:
+        case MIR_BINARY:
+            break;
+        case MIR_LOAD:
+        case MIR_LOAD_INDIRECT:
+            if ((insn->memory_flags & (1 | 8)) != 0)
+                return 0;
+            break;
+        case MIR_STORE_INDIRECT:
+            if (plan->count >= 8 ||
+                !mir_machine_match_fixed_mutation(
+                    insn, &plan->mutations[plan->count],
+                    &plan->parameter_stack_offset))
+                return 0;
+            ++plan->count;
+            break;
+        default:
+            return 0;
+        }
+    }
+    return plan->count > 0 && plan->parameter_stack_offset >= 0;
+}
+
+static void mir_machine_emit_parameter_address(
+    FILE *out, int stack_offset, int offset)
+{
+    fprintf(out, "\tld hl,%d\n\tadd hl,sp\n", stack_offset);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tex de,hl\n", out);
+    mir_machine_emit_hl_offset(out, offset, 0);
+}
+
+static void mir_machine_emit_store_hl_to_bc(FILE *out)
+{
+    fputs("\tld a,l\n\tld (bc),a\n\tinc bc\n"
+          "\tld a,h\n\tld (bc),a\n", out);
+}
+
+static void mir_machine_emit_fixed_mutation(
+    FILE *out, const struct MirFixedParamMutations *plan,
+    const struct MirFixedMutation *mutation)
+{
+    mir_machine_emit_parameter_address(
+        out, plan->parameter_stack_offset, mutation->offset);
+    if (mutation->kind == MIR_FIXED_MUTATION_SET) {
+        if (mutation->width == 1) {
+            fprintf(out, "\tld (hl),%lu\n", mutation->value & 0xffUL);
+        } else if (mutation->width == 2) {
+            fprintf(out,
+                    "\tld (hl),%lu\n\tinc hl\n\tld (hl),%lu\n",
+                    mutation->value & 0xffUL,
+                    (mutation->value >> 8) & 0xffUL);
+        } else {
+            int byte;
+            for (byte = 0; byte < 4; ++byte) {
+                fprintf(out, "\tld (hl),%lu\n",
+                        (mutation->value >> (byte * 8)) & 0xffUL);
+                if (byte != 3)
+                    fputs("\tinc hl\n", out);
+            }
+        }
+        return;
+    }
+    fputs("\tpush hl\n", out);
+    if (mutation->width == 1) {
+        fputs("\tpop hl\n\tld a,(hl)\n", out);
+        fprintf(out, "\tadd a,%lu\n\tld (hl),a\n",
+                mutation->value & 0xffUL);
+    } else if (mutation->width == 2) {
+        fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n", out);
+        fprintf(out, "\tld hl,%lu\n\tadd hl,de\n",
+                mutation->value & 0xffffUL);
+        fputs("\tpop bc\n", out);
+        mir_machine_emit_store_hl_to_bc(out);
+    } else if (mutation->width == 4) {
+        fputs("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+              "\tinc hl\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+              "\tld l,c\n\tld h,b\n", out);
+        fprintf(out,
+                "\tld bc,%lu\n\tadd hl,bc\n\tex de,hl\n"
+                "\tld bc,%lu\n\tadc hl,bc\n\tex de,hl\n"
+                "\tpop bc\n",
+                mutation->value & 0xffffUL,
+                (mutation->value >> 16) & 0xffffUL);
+        fputs("\tld a,l\n\tld (bc),a\n\tinc bc\n"
+              "\tld a,h\n\tld (bc),a\n\tinc bc\n"
+              "\tld a,e\n\tld (bc),a\n\tinc bc\n"
+              "\tld a,d\n\tld (bc),a\n", out);
+    }
+}
+
+static void mir_emit_fixed_param_mutations(
+    FILE *out, const struct MirFixedParamMutations *plan)
+{
+    int mutation;
+
+    for (mutation = 0; mutation < plan->count; ++mutation)
+        mir_machine_emit_fixed_mutation(
+            out, plan, &plan->mutations[mutation]);
+    fputs("\tret\n", out);
+}
+
 static int mir_match_nested_row_store(struct MirNestedRowStore *plan)
 {
     const struct MirInsn *value_store = NULL;
@@ -941,6 +1148,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirIndexedWordSum indexed_word_sum;
     struct MirNestedRowStore nested_row_store;
     struct MirFlatArrayChecks flat_array_checks;
+    struct MirFixedParamMutations fixed_param_mutations;
     long constant;
 
     if (mir_match_affine_pointer_constant_return(&constant)) {
@@ -957,6 +1165,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_flat_array_checks(&flat_array_checks)) {
         mir_emit_flat_array_checks(out, &flat_array_checks);
+        return 1;
+    }
+    if (mir_match_fixed_param_mutations(&fixed_param_mutations)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_fixed_param_mutations(out, &fixed_param_mutations);
         return 1;
     }
 
