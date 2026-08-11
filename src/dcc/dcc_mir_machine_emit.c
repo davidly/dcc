@@ -62,6 +62,24 @@ struct MirGlobalAppend {
     struct MirGlobalAppendStore stores[8];
 };
 
+struct MirNestedAppendStore {
+    int parameter_stack_offset;
+    int array_member_offset;
+    int element_stride;
+    int width;
+};
+
+struct MirNestedAppend {
+    struct Sym *root;
+    int root_pointer_offset;
+    int row_stride;
+    int row_index_value;
+    int row_index_stack_offset;
+    int count_member_offset;
+    int store_count;
+    struct MirNestedAppendStore stores[8];
+};
+
 static void mir_machine_emit_hl_offset(
     FILE *out, int offset, int preserve_bc);
 
@@ -806,6 +824,7 @@ static int mir_machine_match_fixed_mutation(
     if (store == NULL || store->opcode != MIR_STORE_INDIRECT ||
         (store->memory_size != 1 && store->memory_size != 2 &&
          store->memory_size != 4) ||
+        store->bit_width != 0 ||
         (store->memory_flags & (1 | 8)) != 0 ||
         !mir_machine_parameter_address(
             store->src1, &stack_offset, &offset, 0) ||
@@ -827,6 +846,7 @@ static int mir_machine_match_fixed_mutation(
 
         if (load == NULL || load->opcode != MIR_LOAD_INDIRECT ||
             load->memory_size != store->memory_size ||
+            load->bit_width != 0 ||
             (load->memory_flags & (1 | 8)) != 0 ||
             !mir_machine_parameter_address(
                 load->src1, &load_stack, &load_offset, 0) ||
@@ -1016,6 +1036,7 @@ static int mir_machine_match_global_append_store(
 
     if (store == NULL || store->opcode != MIR_STORE_INDIRECT ||
         (store->memory_size != 1 && store->memory_size != 2) ||
+        store->bit_width != 0 ||
         (store->memory_flags & (1 | 8)) != 0 ||
         !mir_machine_parameter_value_offset(
             store->src2, &append_store->parameter_stack_offset))
@@ -1044,6 +1065,7 @@ static int mir_machine_match_global_append_store(
         count_load == NULL ||
         count_load->opcode != MIR_LOAD_INDIRECT ||
         count_load->memory_size != 2 ||
+        count_load->bit_width != 0 ||
         (count_load->memory_flags & (1 | 8)) != 0 ||
         !mir_machine_global_member(
             array_member->dst, &array_root, &array_offset) ||
@@ -1080,6 +1102,7 @@ static int mir_machine_match_global_increment(
 
     if (store == NULL || store->opcode != MIR_STORE_INDIRECT ||
         store->memory_size != 2 ||
+        store->bit_width != 0 ||
         (store->memory_flags & (1 | 8)) != 0 ||
         !mir_machine_global_member(
             store->src1, &store_root, &store_offset))
@@ -1092,6 +1115,7 @@ static int mir_machine_match_global_increment(
     one = mir_definition(add->src2);
     if (load == NULL || load->opcode != MIR_LOAD_INDIRECT ||
         load->memory_size != 2 ||
+        load->bit_width != 0 ||
         (load->memory_flags & (1 | 8)) != 0 ||
         one == NULL || one->opcode != MIR_CONST ||
         one->immediate != 1 ||
@@ -1154,6 +1178,198 @@ static int mir_match_global_append(struct MirGlobalAppend *plan)
     return plan->root != NULL && plan->store_count > 0 &&
            increment_count == 1 && increment_root == plan->root &&
            increment_offset == plan->count_offset;
+}
+
+static int mir_machine_match_nested_append_store(
+    const struct MirInsn *store, struct MirNestedAppend *plan,
+    struct MirNestedAppendStore *append_store)
+{
+    const struct MirInsn *destination;
+    const struct MirInsn *array_member;
+    const struct MirInsn *count_load;
+    struct MirRowMemberAddress array_address;
+    struct MirRowMemberAddress count_address;
+
+    if (store == NULL || store->opcode != MIR_STORE_INDIRECT ||
+        (store->memory_size != 1 && store->memory_size != 2) ||
+        store->bit_width != 0 ||
+        (store->memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_parameter_value_offset(
+            store->src2, &append_store->parameter_stack_offset))
+        return 0;
+    destination = mir_definition(store->src1);
+    if (destination == NULL ||
+        destination->opcode != MIR_INDEX_ADDRESS ||
+        (destination->memory_flags & 1) != 0 ||
+        (destination->immediate != 1 &&
+         destination->immediate != 2 &&
+         destination->immediate != 4 &&
+         destination->immediate != 8))
+        return 0;
+    array_member = mir_definition(destination->src1);
+    count_load = mir_definition(destination->src2);
+    if (array_member == NULL ||
+        array_member->opcode != MIR_MEMBER_ADDRESS ||
+        count_load == NULL ||
+        count_load->opcode != MIR_LOAD_INDIRECT ||
+        count_load->memory_size != 2 ||
+        count_load->bit_width != 0 ||
+        (count_load->memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_row_member_address(
+            array_member->dst, &array_address) ||
+        !mir_machine_row_member_address(
+            count_load->src1, &count_address) ||
+        !mir_machine_same_row(&array_address, &count_address))
+        return 0;
+    if (plan->root == NULL) {
+        plan->root = array_address.root;
+        plan->root_pointer_offset =
+            array_address.root_pointer_offset;
+        plan->row_stride = array_address.row_stride;
+        plan->row_index_value = array_address.index_value;
+        plan->count_member_offset = count_address.member_offset;
+    } else if (plan->root != array_address.root ||
+               plan->root_pointer_offset !=
+                   array_address.root_pointer_offset ||
+               plan->row_stride != array_address.row_stride ||
+               plan->row_index_value !=
+                   array_address.index_value ||
+               plan->count_member_offset !=
+                   count_address.member_offset) {
+        return 0;
+    }
+    append_store->array_member_offset =
+        array_address.member_offset;
+    append_store->element_stride = (int)destination->immediate;
+    append_store->width = store->memory_size;
+    return 1;
+}
+
+static int mir_machine_match_nested_increment(
+    const struct MirInsn *store, struct MirRowMemberAddress *address)
+{
+    const struct MirInsn *add;
+    const struct MirInsn *load;
+    const struct MirInsn *one;
+
+    if (store == NULL || store->opcode != MIR_STORE_INDIRECT ||
+        store->memory_size != 2 ||
+        store->bit_width != 0 ||
+        (store->memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_row_member_address(store->src1, address))
+        return 0;
+    add = mir_definition(store->src2);
+    if (add == NULL || add->opcode != MIR_BINARY ||
+        add->immediate != '+')
+        return 0;
+    load = mir_definition(add->src1);
+    one = mir_definition(add->src2);
+    return load != NULL && load->opcode == MIR_LOAD_INDIRECT &&
+           load->src1 == store->src1 &&
+           load->memory_size == 2 &&
+           load->bit_width == 0 &&
+           (load->memory_flags & (1 | 8)) == 0 &&
+           one != NULL && one->opcode == MIR_CONST &&
+           one->immediate == 1;
+}
+
+static int mir_machine_local_pointer_alias(
+    const struct MirInsn *insn)
+{
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int declared;
+
+    if (!mir_scalar_memory_location(
+            insn, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_LOCAL ||
+        type_ptr_depth(memory_type) == 0 ||
+        type_size(memory_type) != 2 ||
+        (insn->memory_flags & (1 | 8)) != 0)
+        return 0;
+    for (declared = 0; declared < mir.declared_count; ++declared)
+        if (!strcmp(mir.declared_names[declared], insn->name))
+            break;
+    if (declared == mir.declared_count ||
+        mir.declared_is_volatile[declared])
+        return 0;
+    if (insn->opcode == MIR_LOAD)
+        return 1;
+    if (insn->opcode == MIR_STORE) {
+        const struct MirInsn *source = mir_definition(insn->src1);
+        return source != NULL && source->opcode == MIR_ADDRESS;
+    }
+    return 0;
+}
+
+static int mir_match_nested_append(struct MirNestedAppend *plan)
+{
+    struct MirRowMemberAddress increment_address;
+    int increment_count = 0;
+    int seen_increment = 0;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    memset(&increment_address, 0, sizeof(increment_address));
+    if (mir.has_vla || mir_cfg_block_count() != 1 ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        switch (insn->opcode) {
+        case MIR_NOP:
+        case MIR_LABEL:
+        case MIR_PARAM:
+        case MIR_CONST:
+        case MIR_ADDRESS:
+        case MIR_MEMBER_ADDRESS:
+        case MIR_INDEX_ADDRESS:
+        case MIR_UNARY:
+        case MIR_BINARY:
+            break;
+        case MIR_LOAD:
+        case MIR_STORE:
+            if (!mir_machine_local_pointer_alias(insn))
+                return 0;
+            break;
+        case MIR_LOAD_INDIRECT:
+            if ((insn->memory_flags & (1 | 8)) != 0)
+                return 0;
+            break;
+        case MIR_STORE_INDIRECT:
+            if (mir_machine_match_nested_increment(
+                    insn, &increment_address)) {
+                ++increment_count;
+                seen_increment = 1;
+            } else {
+                if (seen_increment || plan->store_count >= 8 ||
+                    !mir_machine_match_nested_append_store(
+                        insn, plan,
+                        &plan->stores[plan->store_count]))
+                    return 0;
+                ++plan->store_count;
+            }
+            break;
+        default:
+            return 0;
+        }
+    }
+    if (plan->root == NULL || plan->store_count == 0 ||
+        increment_count != 1 ||
+        increment_address.root != plan->root ||
+        increment_address.root_pointer_offset !=
+            plan->root_pointer_offset ||
+        increment_address.row_stride != plan->row_stride ||
+        increment_address.index_value != plan->row_index_value ||
+        increment_address.member_offset !=
+            plan->count_member_offset ||
+        !mir_machine_parameter_offset(
+            increment_address.index_value,
+            &plan->row_index_stack_offset))
+        return 0;
+    return 1;
 }
 
 static int mir_match_nested_row_store(struct MirNestedRowStore *plan)
@@ -1361,6 +1577,54 @@ static void mir_emit_global_append(
     fputs("\tret\n", out);
 }
 
+static void mir_emit_nested_append(
+    FILE *out, const struct MirNestedAppend *plan)
+{
+    int done = new_label();
+    int store;
+
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tld l,e\n\tld h,d\n",
+            plan->row_index_stack_offset);
+    mir_emit_mul_hl_const(out, (unsigned long)plan->row_stride);
+    fputs("\tld c,l\n\tld b,h\n", out);
+    mir_machine_emit_global_word(
+        out, plan->root, plan->root_pointer_offset);
+    fputs("\tadd hl,bc\n\tld c,l\n\tld b,h\n", out);
+    for (store = 0; store < plan->store_count; ++store) {
+        const struct MirNestedAppendStore *append_store =
+            &plan->stores[store];
+        struct MirGlobalAppendStore parameter_store;
+
+        fputs("\tld l,c\n\tld h,b\n", out);
+        mir_machine_emit_hl_offset(
+            out, plan->count_member_offset, 1);
+        fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+              "\tld l,e\n\tld h,d\n", out);
+        mir_emit_mul_hl_const(
+            out, (unsigned long)append_store->element_stride);
+        mir_machine_emit_hl_offset(
+            out, append_store->array_member_offset, 1);
+        fputs("\tadd hl,bc\n\tpush bc\n"
+              "\tld c,l\n\tld b,h\n", out);
+        parameter_store.parameter_stack_offset =
+            append_store->parameter_stack_offset + 2;
+        parameter_store.field_offset = 0;
+        parameter_store.width = append_store->width;
+        mir_machine_emit_parameter_store_to_bc(
+            out, &parameter_store);
+        fputs("\tpop bc\n", out);
+    }
+    fputs("\tld l,c\n\tld h,b\n", out);
+    mir_machine_emit_hl_offset(
+        out, plan->count_member_offset, 0);
+    fputs("\tinc (hl)\n", out);
+    fprintf(out, "\tjp nz, L%d\n\tinc hl\n\tinc (hl)\nL%d:\n\tret\n",
+            done, done);
+}
+
 static void mir_emit_nested_row_store(
     FILE *out, const struct MirNestedRowStore *plan)
 {
@@ -1440,6 +1704,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFlatArrayChecks flat_array_checks;
     struct MirFixedParamMutations fixed_param_mutations;
     struct MirGlobalAppend global_append;
+    struct MirNestedAppend nested_append;
     long constant;
 
     if (mir_match_affine_pointer_constant_return(&constant)) {
@@ -1468,6 +1733,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_global_append(out, &global_append);
+        return 1;
+    }
+    if (mir_match_nested_append(&nested_append)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_nested_append(out, &nested_append);
         return 1;
     }
 
