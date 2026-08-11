@@ -482,6 +482,11 @@ struct MirConstantLoopCheck {
     int string_id;
 };
 
+struct MirGlobalByteCountdown {
+    struct Sym *value;
+    int parameter_stack_offset;
+};
+
 #define MIR_MACHINE_SWITCH_RESULT_LIMIT 16
 
 struct MirConstantResultSwitch {
@@ -7707,6 +7712,111 @@ static int mir_match_constant_loop_check(
     return 1;
 }
 
+static int mir_match_global_byte_countdown(
+    struct MirGlobalByteCountdown *plan)
+{
+    static const int expected_opcodes[36] = {
+        MIR_LABEL, MIR_PARAM, MIR_LOAD, MIR_LOAD, MIR_BINARY, MIR_LOAD,
+        MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP, MIR_STORE,
+        MIR_LABEL, MIR_NOP, MIR_PHI, MIR_PHI, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_NOP,
+        MIR_LOAD, MIR_BINARY, MIR_LOAD, MIR_BINARY, MIR_LOAD, MIR_BINARY,
+        MIR_RETURN
+    };
+    const struct MirInsn *parameter;
+    const struct MirInsn *sum_phi;
+    const struct MirInsn *count_phi;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 36 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_size(mir.return_type) != 2)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return 0;
+    parameter = &mir.insns[1];
+    sum_phi = &mir.insns[14];
+    count_phi = &mir.insns[15];
+    if (type_ptr_depth(parameter->type) != 0 ||
+        (parameter->type & 15) != TYPE_CHAR ||
+        (parameter->type & TYPE_UNSIGNED) == 0 ||
+        !mir_machine_parameter_value_offset(
+            parameter->dst, &plan->parameter_stack_offset) ||
+        !mir_machine_named_nonvolatile(&mir.insns[2]) ||
+        type_ptr_depth(mir.insns[2].type) != 0 ||
+        (mir.insns[2].type & 15) != TYPE_INT ||
+        type_size(mir.insns[2].type) != 2 ||
+        !mir_machine_same_location(&mir.insns[2], &mir.insns[3]) ||
+        !mir_machine_same_location(&mir.insns[2], &mir.insns[5]))
+        return 0;
+    if (mir.insns[4].immediate != '+' ||
+        mir.insns[4].src1 != mir.insns[2].dst ||
+        mir.insns[4].src2 != mir.insns[3].dst ||
+        mir.insns[6].immediate != '+' ||
+        mir.insns[6].src1 != mir.insns[4].dst ||
+        mir.insns[6].src2 != mir.insns[5].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[8]) ||
+        mir.insns[8].src1 != mir.insns[6].dst ||
+        mir.insns[8].memory_size != 2 ||
+        !mir_machine_unobservable_local_store(&mir.insns[11]) ||
+        mir.insns[11].src1 != parameter->dst ||
+        mir.insns[11].memory_size != 1)
+        return 0;
+    if (sum_phi->src1 != mir.insns[6].dst ||
+        sum_phi->src2 != mir.insns[23].dst ||
+        sum_phi->phi_pred1 != mir.insns[0].label ||
+        sum_phi->phi_pred2 != mir.insns[25].label ||
+        type_ptr_depth(sum_phi->type) != 0 ||
+        (sum_phi->type & 15) != TYPE_INT ||
+        type_size(sum_phi->type) != 2 ||
+        count_phi->src1 != parameter->dst ||
+        count_phi->src2 != mir.insns[18].dst ||
+        count_phi->phi_pred1 != mir.insns[0].label ||
+        count_phi->phi_pred2 != mir.insns[25].label ||
+        (count_phi->type & TYPE_UNSIGNED) == 0 ||
+        type_size(count_phi->type) != 1)
+        return 0;
+    if (!mir_machine_constant_equals(mir.insns[17].dst, 1) ||
+        mir.insns[18].immediate != '-' ||
+        mir.insns[18].src1 != count_phi->dst ||
+        mir.insns[18].src2 != mir.insns[17].dst ||
+        !mir_machine_same_location(&mir.insns[11], &mir.insns[19]) ||
+        mir.insns[19].src1 != mir.insns[18].dst ||
+        mir.insns[20].src1 != mir.insns[18].dst ||
+        mir.insns[20].label != mir.insns[27].label ||
+        !mir_machine_constant_equals(mir.insns[22].dst, 1) ||
+        mir.insns[23].immediate != '+' ||
+        mir.insns[23].src1 != sum_phi->dst ||
+        mir.insns[23].src2 != mir.insns[22].dst ||
+        !mir_machine_same_location(&mir.insns[8], &mir.insns[24]) ||
+        mir.insns[24].src1 != mir.insns[23].dst ||
+        mir.insns[26].label != mir.insns[12].label)
+        return 0;
+    if (!mir_machine_same_location(&mir.insns[2], &mir.insns[29]) ||
+        mir.insns[30].immediate != '+' ||
+        mir.insns[30].src1 != sum_phi->dst ||
+        mir.insns[30].src2 != mir.insns[29].dst ||
+        !mir_machine_same_location(&mir.insns[2], &mir.insns[31]) ||
+        mir.insns[32].immediate != '+' ||
+        mir.insns[32].src1 != mir.insns[30].dst ||
+        mir.insns[32].src2 != mir.insns[31].dst ||
+        !mir_machine_same_location(&mir.insns[2], &mir.insns[33]) ||
+        mir.insns[34].immediate != '+' ||
+        mir.insns[34].src1 != mir.insns[32].dst ||
+        mir.insns[34].src2 != mir.insns[33].dst ||
+        mir.insns[35].src1 != mir.insns[34].dst)
+        return 0;
+    plan->value = find_global(mir.insns[2].name);
+    if (plan->value == NULL || !plan->value->is_defined ||
+        plan->value->is_volatile)
+        return 0;
+    return 1;
+}
+
 static int mir_machine_constant_return_for_label(
     int label, int *result)
 {
@@ -13944,6 +14054,20 @@ static void mir_emit_constant_loop_check(
     fputs("\tpop bc\n\tpop bc\n\tret\n", out);
 }
 
+static void mir_emit_global_byte_countdown(
+    FILE *out, const struct MirGlobalByteCountdown *plan)
+{
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n\tld a,(hl)\n"
+            "\tdec a\n\tld c,a\n\tld b,0\n",
+            plan->parameter_stack_offset);
+    mir_machine_emit_global_word(out, plan->value, 0);
+    fputs("\tld d,h\n\tld e,l\n\tadd hl,hl\n"
+          "\tadd hl,de\n\tadd hl,hl\n\tadd hl,bc\n\tret\n", out);
+}
+
 static void mir_emit_constant_result_switch(
     FILE *out, const struct MirConstantResultSwitch *plan)
 {
@@ -14104,6 +14228,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirPalindromeScan palindrome_scan;
     struct MirDynamicRowScan dynamic_row_scan;
     struct MirConstantLoopCheck constant_loop_check;
+    struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConstantResultSwitch constant_result_switch;
     struct MirLocalByteFillSumPrint local_byte_fill_sum_print;
     struct MirIndexedMemberWrite indexed_member_write;
@@ -14433,6 +14558,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_constant_loop_check(&constant_loop_check)) {
         mir_emit_constant_loop_check(out, &constant_loop_check);
+        return 1;
+    }
+    if (mir_match_global_byte_countdown(
+            &global_byte_countdown)) {
+        mir_emit_global_byte_countdown(
+            out, &global_byte_countdown);
         return 1;
     }
     if (mir_match_constant_result_switch(

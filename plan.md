@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `16a48b3`
-  (`schedule registerized dynamic row scans`).
-- Current candidate coverage: **1892/2182 (86.71%)**.
-- Remaining fallback population: **290 `final-cost-policy`**, with no other
+- Published HEAD before this batch: `dc7291f`
+  (`fold bounded MIR loop checks`).
+- Current candidate coverage: **1893/2182 (86.76%)**.
+- Remaining fallback population: **289 `final-cost-policy`**, with no other
   fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -62,6 +62,9 @@ current execution plan and handoff.
   predicate before preserving only the observable check call. It admits
   `treg.test_register_int`, bringing `treg` to 9.91% peep / 12.10% nopeep
   faster than main.
+- The global byte countdown collapses the modulo-256 induction count and six
+  stable global loads into one register expression. It admits
+  `tbcgcol.global_bc_across_byte_loop`, improving both modes.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -69,7 +72,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 290 final-cost fallbacks,
+- Current next priority: repeated causes in the 289 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
