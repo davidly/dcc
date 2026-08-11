@@ -368,6 +368,37 @@ struct MirTargetConstraint {
     int minimum_bytes;
 };
 
+enum MirScheduleSegmentFlag {
+    MIR_SCHEDULE_LIVE_IN = 1u << 0,
+    MIR_SCHEDULE_LIVE_OUT = 1u << 1,
+    MIR_SCHEDULE_DEFINES = 1u << 2,
+    MIR_SCHEDULE_CROSSES_CALL = 1u << 3,
+    MIR_SCHEDULE_PHI_EDGE = 1u << 4,
+    MIR_SCHEDULE_REMATERIALIZABLE = 1u << 5,
+    MIR_SCHEDULE_WIDE = 1u << 6
+};
+
+struct MirLiveSegment {
+    int value;
+    int block;
+    int first_point;
+    int last_point;
+    int use_count;
+    unsigned allowed_colors;
+    unsigned flags;
+};
+
+struct MirScheduleSummary {
+    int blocks;
+    int segments;
+    int cfg_edges;
+    int phi_edge_uses;
+    int call_splits;
+    int fixed_constraints;
+    int maximum_pressure;
+    int unsupported;
+};
+
 extern struct MirFunction mir;
 extern int mir_virtual_iy_base;
 extern int mir_virtual_iy_frame_bytes;
@@ -670,6 +701,8 @@ int mir_verify_and_dump(void);
 int mir_target_constraint_for_insn(
     const struct MirInsn *insn, struct MirTargetConstraint *out);
 void mir_target_report_shadow_plan(void);
+int mir_build_shadow_schedule(struct MirScheduleSummary *summary);
+void mir_schedule_report_shadow_plan(void);
 const struct MirInsn *mir_definition(int value);
 struct MirInsn *mir_mutable_definition(int value);
 int mir_load_is_single_call_argument(int value, int size);

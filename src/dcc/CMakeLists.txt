@@ -60,6 +60,7 @@ set(DCC_SOURCES
     dcc_mir_emit_common.c
     dcc_mir_homed_cfg.c
     dcc_mir_select.c
+    dcc_mir_schedule.c      # shadow sparse live-segment scheduler
     dcc_mir_spilled_cfg.c
     dcc_mir_target.c        # shadow Z80 constraints and template costs
 )
