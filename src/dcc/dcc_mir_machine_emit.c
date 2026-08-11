@@ -256,6 +256,12 @@ struct MirRecordAppend {
     int parameter_stack_offsets[3];
 };
 
+struct MirMixedWideSum {
+    int parameter_stack_offsets[4];
+    int parameter_widths[4];
+    int parameter_is_unsigned[4];
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -2890,6 +2896,91 @@ static int mir_match_direct_record_append(
         mir.insns[39].bit_width != 0 ||
         (mir.insns[39].memory_flags & (1 | 8)) != 0)
         return 0;
+    return 1;
+}
+
+static int mir_match_mixed_wide_sum(
+    struct MirMixedWideSum *plan)
+{
+    static const int expected_opcodes[16] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_PARAM,
+        MIR_NOP, MIR_UNARY, MIR_NOP, MIR_BINARY, MIR_NOP,
+        MIR_NOP, MIR_BINARY, MIR_NOP, MIR_UNARY, MIR_BINARY,
+        MIR_RETURN
+    };
+    const struct MirInsn *parameters[4];
+    const struct MirInsn *first_conversion;
+    const struct MirInsn *first_add;
+    const struct MirInsn *second_add;
+    const struct MirInsn *last_conversion;
+    const struct MirInsn *last_add;
+    int parameter;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir_cfg_block_count() != 1 || mir.count != 16 ||
+        type_size(mir.return_type) != 4 ||
+        type_is_float(mir.return_type) ||
+        type_ptr_depth(mir.return_type) != 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return 0;
+    for (parameter = 0; parameter < 4; ++parameter)
+        parameters[parameter] = &mir.insns[1 + parameter];
+    first_conversion = &mir.insns[6];
+    first_add = &mir.insns[8];
+    second_add = &mir.insns[11];
+    last_conversion = &mir.insns[13];
+    last_add = &mir.insns[14];
+    if (type_size(parameters[0]->type) != 2 ||
+        type_size(parameters[1]->type) != 4 ||
+        type_size(parameters[2]->type) != 4 ||
+        type_size(parameters[3]->type) != 2 ||
+        first_conversion->immediate != 0 ||
+        first_conversion->src1 != parameters[0]->dst ||
+        type_size(first_conversion->type) != 4 ||
+        first_add->immediate != '+' ||
+        first_add->src1 != first_conversion->dst ||
+        first_add->src2 != parameters[1]->dst ||
+        type_size(first_add->type) != 4 ||
+        second_add->immediate != '+' ||
+        second_add->src1 != first_add->dst ||
+        second_add->src2 != parameters[2]->dst ||
+        type_size(second_add->type) != 4 ||
+        last_conversion->immediate != 0 ||
+        last_conversion->src1 != parameters[3]->dst ||
+        type_size(last_conversion->type) != 4 ||
+        last_add->immediate != '+' ||
+        last_add->src1 != second_add->dst ||
+        last_add->src2 != last_conversion->dst ||
+        type_size(last_add->type) != 4 ||
+        mir.insns[15].src1 != last_add->dst)
+        return 0;
+    for (parameter = 0; parameter < 4; ++parameter) {
+        int memory_type;
+        int memory_storage;
+        int memory_offset;
+
+        if (type_is_float(parameters[parameter]->type) ||
+            type_ptr_depth(parameters[parameter]->type) != 0 ||
+            (parameters[parameter]->type & 15) == TYPE_BOOL ||
+            !mir_scalar_memory_location(
+                parameters[parameter], &memory_type,
+                &memory_storage, &memory_offset) ||
+            memory_storage != SC_PARAM ||
+            type_size(memory_type) !=
+                type_size(parameters[parameter]->type) ||
+            memory_offset < 2)
+            return 0;
+        plan->parameter_stack_offsets[parameter] =
+            memory_offset - 2;
+        plan->parameter_widths[parameter] =
+            type_size(parameters[parameter]->type);
+        plan->parameter_is_unsigned[parameter] =
+            (parameters[parameter]->type & TYPE_UNSIGNED) != 0;
+    }
     return 1;
 }
 
@@ -7220,6 +7311,48 @@ static void mir_emit_direct_record_append(
           out);
 }
 
+static void mir_emit_wide_parameter(
+    FILE *out, int stack_offset)
+{
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tinc hl\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tld l,c\n\tld h,b\n",
+            stack_offset);
+}
+
+static void mir_emit_add_mixed_wide_parameter(
+    FILE *out, int stack_offset, int width, int is_unsigned)
+{
+    fputs("\tpush de\n\tpush hl\n", out);
+    if (width == 2)
+        mir_emit_widened_parameter(
+            out, stack_offset + 4, is_unsigned);
+    else
+        mir_emit_wide_parameter(out, stack_offset + 4);
+    fputs("\tpop bc\n\tadd hl,bc\n\tex de,hl\n"
+          "\tpop bc\n\tadc hl,bc\n\tex de,hl\n", out);
+}
+
+static void mir_emit_mixed_wide_sum(
+    FILE *out, const struct MirMixedWideSum *plan)
+{
+    int parameter;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_emit_widened_parameter(
+        out, plan->parameter_stack_offsets[0],
+        plan->parameter_is_unsigned[0]);
+    for (parameter = 1; parameter < 4; ++parameter)
+        mir_emit_add_mixed_wide_parameter(
+            out, plan->parameter_stack_offsets[parameter],
+            plan->parameter_widths[parameter],
+            plan->parameter_is_unsigned[parameter]);
+    fputs("\tret\n", out);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -7271,6 +7404,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirWideDifferenceCall wide_difference_call;
     struct MirScaledWideDivisionCall scaled_wide_division_call;
     struct MirRecordAppend record_append;
+    struct MirMixedWideSum mixed_wide_sum;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -7450,6 +7584,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_direct_record_append(&record_append)) {
         mir_emit_direct_record_append(out, &record_append);
+        return 1;
+    }
+    if (mir_match_mixed_wide_sum(&mixed_wide_sum)) {
+        mir_emit_mixed_wide_sum(out, &mixed_wide_sum);
         return 1;
     }
     if (mir_match_indexed_member_write(
