@@ -217,6 +217,14 @@ struct MirWideEqualSelect {
     unsigned long fallback_value;
 };
 
+struct MirWideEqualAddSelect {
+    int wide_stack_offset;
+    int narrow_stack_offset;
+    int narrow_is_unsigned;
+    unsigned long match_value;
+    unsigned long fallback_value;
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -2108,6 +2116,177 @@ static int mir_match_wide_equal_select(
         memory_offset < 2)
         return 0;
     plan->parameter_stack_offset = memory_offset - 2;
+    plan->match_value =
+        (unsigned long)match_constant->immediate & 0xffffffffUL;
+    plan->fallback_value =
+        (unsigned long)fallback_constant->immediate & 0xffffffffUL;
+    return 1;
+}
+
+static int mir_match_wide_equal_add_select(
+    struct MirWideEqualAddSelect *plan)
+{
+    const struct MirInsn *parameters[2];
+    const struct MirInsn *comparison = NULL;
+    const struct MirInsn *addition = NULL;
+    const struct MirInsn *conversion = NULL;
+    const struct MirInsn *branch = NULL;
+    const struct MirInsn *true_return = NULL;
+    const struct MirInsn *fallback_return = NULL;
+    const struct MirInsn *match_constant;
+    const struct MirInsn *fallback_constant;
+    const struct MirInsn *target_label = NULL;
+    const struct MirInsn *wide_parameter;
+    const struct MirInsn *narrow_parameter;
+    int parameter_count = 0;
+    int binary_count = 0;
+    int branch_count = 0;
+    int return_count = 0;
+    int label_count = 0;
+    int unary_count = 0;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir_cfg_block_count() != 2 ||
+        type_size(mir.return_type) != 4 ||
+        type_is_float(mir.return_type) ||
+        type_ptr_depth(mir.return_type) != 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        switch (insn->opcode) {
+        case MIR_NOP:
+        case MIR_CONST:
+            break;
+        case MIR_LABEL:
+            ++label_count;
+            break;
+        case MIR_PARAM:
+            if (parameter_count >= 2)
+                return 0;
+            parameters[parameter_count++] = insn;
+            break;
+        case MIR_UNARY:
+            if (++unary_count != 1)
+                return 0;
+            conversion = insn;
+            break;
+        case MIR_BINARY:
+            if (++binary_count == 1)
+                comparison = insn;
+            else if (binary_count == 2)
+                addition = insn;
+            else
+                return 0;
+            break;
+        case MIR_BRANCH_FALSE:
+            if (++branch_count != 1)
+                return 0;
+            branch = insn;
+            break;
+        case MIR_RETURN:
+            if (++return_count == 1)
+                true_return = insn;
+            else if (return_count == 2)
+                fallback_return = insn;
+            else
+                return 0;
+            break;
+        default:
+            return 0;
+        }
+    }
+    if (parameter_count != 2 || binary_count != 2 ||
+        unary_count != 1 || branch_count != 1 ||
+        return_count != 2 || label_count != 2 ||
+        comparison == NULL || addition == NULL ||
+        conversion == NULL || branch == NULL ||
+        true_return == NULL || fallback_return == NULL ||
+        comparison > branch || branch > conversion ||
+        conversion > addition || addition > true_return ||
+        true_return > fallback_return)
+        return 0;
+    if (type_size(parameters[0]->type) == 4) {
+        wide_parameter = parameters[0];
+        narrow_parameter = parameters[1];
+    } else if (type_size(parameters[1]->type) == 4) {
+        wide_parameter = parameters[1];
+        narrow_parameter = parameters[0];
+    } else {
+        return 0;
+    }
+    if (type_is_float(wide_parameter->type) ||
+        type_ptr_depth(wide_parameter->type) != 0 ||
+        type_size(narrow_parameter->type) != 2 ||
+        type_is_float(narrow_parameter->type) ||
+        type_ptr_depth(narrow_parameter->type) != 0 ||
+        (narrow_parameter->type & 15) == TYPE_BOOL)
+        return 0;
+    match_constant =
+        comparison->src1 == wide_parameter->dst
+        ? mir_definition(comparison->src2) :
+          comparison->src2 == wide_parameter->dst
+        ? mir_definition(comparison->src1) : NULL;
+    fallback_constant = mir_definition(fallback_return->src1);
+    if (match_constant == NULL ||
+        match_constant->opcode != MIR_CONST ||
+        type_size(match_constant->type) != 4 ||
+        comparison->immediate != TOK_EQ ||
+        type_size(comparison->type) != 2 ||
+        branch->src1 != comparison->dst ||
+        conversion->opcode != MIR_UNARY ||
+        conversion->immediate != 0 ||
+        conversion->src1 != narrow_parameter->dst ||
+        type_size(conversion->type) != 4 ||
+        addition->opcode != MIR_BINARY ||
+        addition->immediate != '+' ||
+        type_size(addition->type) != 4 ||
+        !((addition->src1 == wide_parameter->dst &&
+           addition->src2 == conversion->dst) ||
+          (addition->src2 == wide_parameter->dst &&
+           addition->src1 == conversion->dst)) ||
+        true_return->src1 != addition->dst ||
+        fallback_constant == NULL ||
+        fallback_constant->opcode != MIR_CONST ||
+        type_size(fallback_constant->type) != 4 ||
+        branch->label <= 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_LABEL &&
+            mir.insns[instruction].label == branch->label) {
+            if (target_label != NULL)
+                return 0;
+            target_label = &mir.insns[instruction];
+        }
+    if (target_label == NULL ||
+        target_label <= true_return ||
+        target_label >= fallback_return ||
+        match_constant >= comparison ||
+        fallback_constant <= target_label ||
+        fallback_constant >= fallback_return)
+        return 0;
+    if (!mir_scalar_memory_location(
+            wide_parameter, &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_size(memory_type) != 4 ||
+        memory_offset < 2)
+        return 0;
+    plan->wide_stack_offset = memory_offset - 2;
+    if (!mir_scalar_memory_location(
+            narrow_parameter, &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_size(memory_type) != 2 ||
+        memory_offset < 2)
+        return 0;
+    plan->narrow_stack_offset = memory_offset - 2;
+    plan->narrow_is_unsigned =
+        (narrow_parameter->type & TYPE_UNSIGNED) != 0;
     plan->match_value =
         (unsigned long)match_constant->immediate & 0xffffffffUL;
     plan->fallback_value =
@@ -6212,25 +6391,65 @@ static void mir_emit_masked_wide_product_high(
     fputs("\tld l,e\n\tld h,d\n\tld de,0\n\tret\n", out);
 }
 
-static void mir_emit_wide_equal_select(
-    FILE *out, const struct MirWideEqualSelect *plan)
+static void mir_emit_wide_stack_equality_branch(
+    FILE *out, int stack_offset, unsigned long value,
+    int fallback)
 {
-    int fallback = new_label();
-
     fprintf(out,
             "\tld hl,%d\n\tadd hl,sp\n"
             "\tld a,(hl)\n\txor %lu\n\tld c,a\n\tinc hl\n"
             "\tld a,(hl)\n\txor %lu\n\tor c\n\tld c,a\n\tinc hl\n"
             "\tld a,(hl)\n\txor %lu\n\tor c\n\tld c,a\n\tinc hl\n"
-            "\tld a,(hl)\n\txor %lu\n\tor c\n\tjp nz,L%d\n"
+            "\tld a,(hl)\n\txor %lu\n\tor c\n\tjp nz,L%d\n",
+            stack_offset,
+            value & 0xffUL,
+            (value >> 8) & 0xffUL,
+            (value >> 16) & 0xffUL,
+            (value >> 24) & 0xffUL,
+            fallback);
+}
+
+static void mir_emit_wide_equal_select(
+    FILE *out, const struct MirWideEqualSelect *plan)
+{
+    int fallback = new_label();
+
+    mir_emit_wide_stack_equality_branch(
+        out, plan->parameter_stack_offset,
+        plan->match_value, fallback);
+    fprintf(out,
             "\tld hl,%lu\n\tld de,%lu\n\tret\n"
             "L%d:\n\tld hl,%lu\n\tld de,%lu\n\tret\n",
-            plan->parameter_stack_offset,
-            plan->match_value & 0xffUL,
-            (plan->match_value >> 8) & 0xffUL,
-            (plan->match_value >> 16) & 0xffUL,
-            (plan->match_value >> 24) & 0xffUL,
+            plan->match_value & 0xffffUL,
+            (plan->match_value >> 16) & 0xffffUL,
             fallback,
+            plan->fallback_value & 0xffffUL,
+            (plan->fallback_value >> 16) & 0xffffUL);
+}
+
+static void mir_emit_wide_equal_add_select(
+    FILE *out, const struct MirWideEqualAddSelect *plan)
+{
+    int fallback = new_label();
+    int extended = new_label();
+
+    mir_emit_wide_stack_equality_branch(
+        out, plan->wide_stack_offset,
+        plan->match_value, fallback);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tld l,c\n\tld h,b\n\tld de,0\n",
+            plan->narrow_stack_offset);
+    if (!plan->narrow_is_unsigned)
+        fprintf(out,
+                "\tld a,h\n\tor a\n\tjp p,L%d\n"
+                "\tdec de\nL%d:\n",
+                extended, extended);
+    fprintf(out,
+            "\tld bc,%lu\n\tadd hl,bc\n\tex de,hl\n"
+            "\tld bc,%lu\n\tadc hl,bc\n\tex de,hl\n\tret\n"
+            "L%d:\n\tld hl,%lu\n\tld de,%lu\n\tret\n",
             plan->match_value & 0xffffUL,
             (plan->match_value >> 16) & 0xffffUL,
             fallback,
@@ -6284,6 +6503,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirVlaEndpointReduction vla_endpoint_reduction;
     struct MirMaskedWideProductHigh masked_wide_product_high;
     struct MirWideEqualSelect wide_equal_select;
+    struct MirWideEqualAddSelect wide_equal_add_select;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -6429,6 +6649,14 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_wide_equal_select(out, &wide_equal_select);
+        return 1;
+    }
+    if (mir_match_wide_equal_add_select(
+            &wide_equal_add_select)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_wide_equal_add_select(
+            out, &wide_equal_add_select);
         return 1;
     }
     if (mir_match_indexed_member_write(
