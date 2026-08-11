@@ -270,6 +270,16 @@ struct MirFloatMemberScaleAdd {
     int returns_value;
 };
 
+struct MirByteMismatchReport {
+    struct Sym *counter;
+    int counter_offset;
+    int name_stack_offset;
+    int got_stack_offset;
+    int expected_stack_offset;
+    int string_id;
+    char call_name[64];
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -1033,6 +1043,31 @@ static int mir_machine_two_call_arguments(
         ++count;
     }
     return count == 2;
+}
+
+static int mir_machine_four_call_arguments(
+    const struct MirInsn *call, int arguments[4])
+{
+    int count = 0;
+    int instruction;
+    int argument;
+
+    for (argument = 0; argument < 4; ++argument)
+        arguments[argument] = -1;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *arg = &mir.insns[instruction];
+        int index;
+
+        if (arg->opcode != MIR_ARG ||
+            arg->secondary_offset != call->secondary_offset)
+            continue;
+        index = (int)arg->immediate;
+        if (index < 0 || index >= 4 || arguments[index] >= 0)
+            return 0;
+        arguments[index] = arg->src1;
+        ++count;
+    }
+    return count == 4;
 }
 
 static int mir_machine_six_call_arguments(
@@ -3084,6 +3119,131 @@ static int mir_match_float_member_scale_add(
     plan->source_offset = (int)source->immediate;
     plan->scale_bits =
         (unsigned long)scale->immediate & 0xffffffffUL;
+    return 1;
+}
+
+static int mir_match_byte_mismatch_report(
+    struct MirByteMismatchReport *plan)
+{
+    static const int expected_opcodes[27] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM,
+        MIR_NOP, MIR_NOP, MIR_UNARY, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_LOAD, MIR_ARG, MIR_NOP, MIR_UNARY, MIR_ARG,
+        MIR_NOP, MIR_UNARY, MIR_ARG, MIR_CALL,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_NOP,
+        MIR_LABEL
+    };
+    const struct MirInsn *name_parameter;
+    const struct MirInsn *got_parameter;
+    const struct MirInsn *expected_parameter;
+    const struct MirInsn *got_comparison;
+    const struct MirInsn *expected_comparison;
+    const struct MirInsn *comparison;
+    const struct MirInsn *string;
+    const struct MirInsn *name_load;
+    const struct MirInsn *got_argument;
+    const struct MirInsn *expected_argument;
+    const struct MirInsn *call;
+    const struct MirInsn *counter_load;
+    const struct MirInsn *increment;
+    const struct MirInsn *counter_store;
+    struct Sym *function;
+    int arguments[4];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir_cfg_block_count() != 2 || mir.count != 27 ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return 0;
+    name_parameter = &mir.insns[1];
+    got_parameter = &mir.insns[2];
+    expected_parameter = &mir.insns[3];
+    got_comparison = &mir.insns[6];
+    expected_comparison = &mir.insns[7];
+    comparison = &mir.insns[8];
+    string = &mir.insns[10];
+    name_load = &mir.insns[12];
+    got_argument = &mir.insns[15];
+    expected_argument = &mir.insns[18];
+    call = &mir.insns[20];
+    counter_load = &mir.insns[21];
+    increment = &mir.insns[23];
+    counter_store = &mir.insns[24];
+    if (type_size(name_parameter->type) != 2 ||
+        type_ptr_depth(name_parameter->type) == 0 ||
+        type_size(got_parameter->type) != 1 ||
+        (got_parameter->type & TYPE_UNSIGNED) == 0 ||
+        type_size(expected_parameter->type) != 1 ||
+        (expected_parameter->type & TYPE_UNSIGNED) == 0 ||
+        got_comparison->immediate != 0 ||
+        got_comparison->src1 != got_parameter->dst ||
+        type_size(got_comparison->type) != 2 ||
+        expected_comparison->immediate != 0 ||
+        expected_comparison->src1 != expected_parameter->dst ||
+        type_size(expected_comparison->type) != 2 ||
+        comparison->immediate != TOK_NE ||
+        comparison->src1 != got_comparison->dst ||
+        comparison->src2 != expected_comparison->dst ||
+        mir.insns[9].src1 != comparison->dst ||
+        mir.insns[9].label != mir.insns[26].label ||
+        !mir_machine_same_location(name_parameter, name_load) ||
+        got_argument->immediate != 0 ||
+        got_argument->src1 != got_parameter->dst ||
+        type_size(got_argument->type) != 2 ||
+        expected_argument->immediate != 0 ||
+        expected_argument->src1 != expected_parameter->dst ||
+        type_size(expected_argument->type) != 2 ||
+        !mir_machine_four_call_arguments(call, arguments) ||
+        arguments[0] != string->dst ||
+        arguments[1] != name_load->dst ||
+        arguments[2] != got_argument->dst ||
+        arguments[3] != expected_argument->dst ||
+        (call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) !=
+            MIR_CALL_FLAG_VARIADIC)
+        return 0;
+    function = find_global(call->name);
+    if (strcmp(call->name, "printf") ||
+        function == NULL || function->is_defined)
+        return 0;
+    snprintf(plan->call_name, sizeof(plan->call_name), "%s",
+             call->base_name[0] != 0
+                 ? call->base_name
+                 : asm_name_for(sym_asm_name(function)));
+    if (!mir_machine_named_nonvolatile(counter_load) ||
+        !mir_machine_same_location(
+            counter_load, counter_store) ||
+        !mir_scalar_memory_location(
+            counter_load, &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        type_size(memory_type) != 2 ||
+        increment->immediate != '+' ||
+        increment->src1 != counter_load->dst ||
+        !mir_machine_constant_equals(increment->src2, 1) ||
+        counter_store->src1 != increment->dst)
+        return 0;
+    plan->counter = find_global(counter_load->name);
+    if (plan->counter == NULL || plan->counter->is_volatile ||
+        !mir_machine_parameter_value_offset(
+            name_parameter->dst, &plan->name_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            got_parameter->dst, &plan->got_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            expected_parameter->dst,
+            &plan->expected_stack_offset))
+        return 0;
+    plan->counter_offset = memory_offset;
+    plan->string_id = (int)string->immediate;
     return 1;
 }
 
@@ -7493,6 +7653,35 @@ static void mir_emit_float_member_scale_add(
           "\tld a,d\n\tld (bc),a\n\tret\n", out);
 }
 
+static void mir_emit_byte_mismatch_report(
+    FILE *out, const struct MirByteMismatchReport *plan)
+{
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n\tld a,(hl)\n"
+            "\tld hl,%d\n\tadd hl,sp\n\tcp (hl)\n\tret z\n"
+            "\tld l,(hl)\n\tld h,0\n\tpush hl\n"
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld l,(hl)\n\tld h,0\n\tpush hl\n"
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            plan->got_stack_offset,
+            plan->expected_stack_offset,
+            plan->got_stack_offset + 2,
+            plan->name_stack_offset + 4,
+            plan->string_id);
+    mir_emit_runtime_call(out, plan->call_name);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_global_word(
+        out, plan->counter, plan->counter_offset);
+    fputs("\tinc hl\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->counter, plan->counter_offset);
+    fputs("\tret\n", out);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -7546,6 +7735,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirRecordAppend record_append;
     struct MirMixedWideSum mixed_wide_sum;
     struct MirFloatMemberScaleAdd float_member_scale_add;
+    struct MirByteMismatchReport byte_mismatch_report;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -7735,6 +7925,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &float_member_scale_add)) {
         mir_emit_float_member_scale_add(
             out, &float_member_scale_add);
+        return 1;
+    }
+    if (mir_match_byte_mismatch_report(
+            &byte_mismatch_report)) {
+        mir_emit_byte_mismatch_report(
+            out, &byte_mismatch_report);
         return 1;
     }
     if (mir_match_indexed_member_write(
