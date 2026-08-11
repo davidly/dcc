@@ -460,6 +460,12 @@ struct MirConstantByteFill {
     int value;
 };
 
+struct MirAffineByteFill {
+    int pointer_stack_offset;
+    int base_stack_offset;
+    int count;
+};
+
 struct MirLocalByteFillSumPrint {
     struct Sym *fill_function;
     struct Sym *print_function;
@@ -467,6 +473,8 @@ struct MirLocalByteFillSumPrint {
     int count;
     int string_id;
     int element_is_unsigned;
+    int fill_has_value;
+    int fill_value;
 };
 
 struct MirIndexedMemberWrite {
@@ -7167,6 +7175,86 @@ static int mir_match_constant_byte_fill(struct MirConstantByteFill *plan)
     return 1;
 }
 
+static int mir_match_affine_byte_fill(struct MirAffineByteFill *plan)
+{
+    static const int expected_opcodes[31] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_NOP, MIR_CONST, MIR_STORE,
+        MIR_LABEL, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_CONST, MIR_UNARY,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_NOP, MIR_NOP, MIR_UNARY, MIR_BINARY, MIR_UNARY,
+        MIR_STORE_INDIRECT, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_JUMP, MIR_LABEL
+    };
+    const struct MirInsn *pointer = &mir.insns[1];
+    const struct MirInsn *base = &mir.insns[2];
+    const struct MirInsn *index_phi = &mir.insns[9];
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 31 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return 0;
+    if (type_ptr_depth(pointer->type) != 1 ||
+        (pointer->type & 15) != TYPE_CHAR ||
+        mir_machine_pointee_is_volatile(pointer) ||
+        (base->type & 15) != TYPE_INT ||
+        type_ptr_depth(base->type) != 0 ||
+        !mir_machine_parameter_value_offset(
+            pointer->dst, &plan->pointer_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            base->dst, &plan->base_stack_offset) ||
+        plan->pointer_stack_offset != 2 ||
+        plan->base_stack_offset != 4 ||
+        !mir_machine_constant_equals(mir.insns[4].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[5]) ||
+        mir.insns[5].memory_size != 1)
+        return 0;
+    if ((index_phi->type & TYPE_UNSIGNED) == 0 ||
+        type_size(index_phi->type) != 1 ||
+        index_phi->src1 != mir.insns[4].dst ||
+        index_phi->src2 != mir.insns[27].dst ||
+        index_phi->phi_pred1 != mir.insns[0].label ||
+        index_phi->phi_pred2 != mir.insns[24].label ||
+        mir.insns[12].immediate != 0 ||
+        mir.insns[12].src1 != index_phi->dst ||
+        mir.insns[13].immediate != '<' ||
+        mir.insns[13].src1 != mir.insns[12].dst ||
+        mir.insns[13].src2 != mir.insns[11].dst ||
+        mir.insns[14].src1 != mir.insns[13].dst ||
+        mir.insns[14].label != mir.insns[30].label ||
+        mir.insns[17].src1 != pointer->dst ||
+        mir.insns[17].src2 != index_phi->dst ||
+        mir.insns[17].immediate != 1 ||
+        mir.insns[17].memory_size != 1 ||
+        mir.insns[20].immediate != 0 ||
+        mir.insns[20].src1 != index_phi->dst ||
+        mir.insns[21].immediate != '+' ||
+        mir.insns[21].src1 != base->dst ||
+        mir.insns[21].src2 != mir.insns[20].dst ||
+        mir.insns[22].immediate != 0 ||
+        mir.insns[22].src1 != mir.insns[21].dst ||
+        type_size(mir.insns[22].type) != 1 ||
+        mir.insns[23].src1 != mir.insns[17].dst ||
+        mir.insns[23].src2 != mir.insns[22].dst ||
+        mir.insns[23].memory_size != 1 ||
+        (mir.insns[23].memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_constant_equals(mir.insns[26].dst, 1) ||
+        mir.insns[27].immediate != '+' ||
+        mir.insns[27].src1 != index_phi->dst ||
+        mir.insns[27].src2 != mir.insns[26].dst ||
+        !mir_machine_same_location(&mir.insns[5], &mir.insns[28]) ||
+        mir.insns[28].src1 != mir.insns[27].dst ||
+        mir.insns[29].label != mir.insns[6].label)
+        return 0;
+    if (mir.insns[11].immediate <= 0 || mir.insns[11].immediate > 255)
+        return 0;
+    plan->count = (int)mir.insns[11].immediate;
+    return 1;
+}
+
 static int mir_match_local_byte_fill_sum_print(
     struct MirLocalByteFillSumPrint *plan)
 {
@@ -7319,6 +7407,130 @@ static int mir_match_local_byte_fill_sum_print(
     plan->count = (int)mir.insns[14].immediate;
     plan->element_is_unsigned =
         (mir.insns[22].type & TYPE_UNSIGNED) != 0;
+    return 1;
+}
+
+static int mir_match_local_affine_fill_sum_print(
+    struct MirLocalByteFillSumPrint *plan)
+{
+    static const int expected_opcodes[43] = {
+        MIR_LABEL, MIR_ADDRESS, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_STORE,
+        MIR_LABEL, MIR_PHI, MIR_PHI, MIR_NOP, MIR_CONST, MIR_UNARY,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_ADDRESS, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY, MIR_BINARY,
+        MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_NOP, MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN
+    };
+    const struct MirInsn *buffer = &mir.insns[1];
+    const struct MirInsn *total_phi = &mir.insns[13];
+    const struct MirInsn *index_phi = &mir.insns[14];
+    int arguments[2];
+    int memory_storage;
+    int memory_type;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 43 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_INT)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return 0;
+    if (!mir_scalar_memory_location(
+            buffer, &memory_type, &memory_storage,
+            &plan->buffer_offset) ||
+        memory_storage != SC_LOCAL ||
+        type_ptr_depth(buffer->type) != 1 ||
+        (buffer->type & 15) != TYPE_CHAR ||
+        mir_declared_is_vla_object(buffer->name) ||
+        !mir_machine_two_call_arguments(&mir.insns[5], arguments) ||
+        arguments[0] != buffer->dst ||
+        arguments[1] != mir.insns[3].dst ||
+        mir.insns[3].immediate < -32768 ||
+        mir.insns[3].immediate > 65535)
+        return 0;
+    plan->fill_function = find_global(mir.insns[5].name);
+    if (plan->fill_function == NULL ||
+        !plan->fill_function->is_defined ||
+        plan->fill_function->storage != SC_FUNC ||
+        plan->fill_function->is_funcptr ||
+        plan->fill_function->is_noreturn ||
+        !plan->fill_function->has_proto ||
+        plan->fill_function->proto_nargs != 2 ||
+        plan->fill_function->proto_variadic ||
+        plan->fill_function->proto_types[0] != mir.insns[2].type ||
+        plan->fill_function->proto_types[1] != mir.insns[4].type ||
+        (mir.insns[5].memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME |
+          MIR_CALL_FLAG_INLINE_SUBSTITUTABLE)) != 0)
+        return 0;
+    if (!mir_machine_constant_equals(mir.insns[6].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[8]) ||
+        !mir_machine_constant_equals(mir.insns[10].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[11]) ||
+        total_phi->src1 != mir.insns[6].dst ||
+        total_phi->src2 != mir.insns[26].dst ||
+        total_phi->phi_pred1 != mir.insns[0].label ||
+        total_phi->phi_pred2 != mir.insns[29].label ||
+        index_phi->src1 != mir.insns[10].dst ||
+        index_phi->src2 != mir.insns[32].dst ||
+        index_phi->phi_pred1 != mir.insns[0].label ||
+        index_phi->phi_pred2 != mir.insns[29].label ||
+        (index_phi->type & TYPE_UNSIGNED) == 0 ||
+        type_size(index_phi->type) != 1)
+        return 0;
+    if (mir.insns[17].src1 != index_phi->dst ||
+        mir.insns[18].immediate != '<' ||
+        mir.insns[18].src1 != mir.insns[17].dst ||
+        mir.insns[18].src2 != mir.insns[16].dst ||
+        mir.insns[19].src1 != mir.insns[18].dst ||
+        mir.insns[19].label != mir.insns[35].label ||
+        !mir_machine_same_location(buffer, &mir.insns[21]) ||
+        mir.insns[23].src1 != mir.insns[21].dst ||
+        mir.insns[23].src2 != index_phi->dst ||
+        mir.insns[23].immediate != 1 ||
+        mir.insns[24].src1 != mir.insns[23].dst ||
+        mir.insns[24].memory_size != 1 ||
+        (mir.insns[24].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[25].src1 != mir.insns[24].dst ||
+        mir.insns[26].immediate != '+' ||
+        mir.insns[26].src1 != total_phi->dst ||
+        mir.insns[26].src2 != mir.insns[25].dst ||
+        !mir_machine_same_location(&mir.insns[8], &mir.insns[28]) ||
+        mir.insns[28].src1 != mir.insns[26].dst)
+        return 0;
+    if (!mir_machine_constant_equals(mir.insns[31].dst, 1) ||
+        mir.insns[32].immediate != '+' ||
+        mir.insns[32].src1 != index_phi->dst ||
+        mir.insns[32].src2 != mir.insns[31].dst ||
+        !mir_machine_same_location(&mir.insns[11], &mir.insns[33]) ||
+        mir.insns[33].src1 != mir.insns[32].dst ||
+        mir.insns[34].label != mir.insns[12].label ||
+        !mir_machine_two_call_arguments(&mir.insns[40], arguments) ||
+        arguments[0] != mir.insns[36].dst ||
+        arguments[1] != total_phi->dst ||
+        !mir_machine_constant_equals(mir.insns[41].dst, 0) ||
+        mir.insns[42].src1 != mir.insns[41].dst)
+        return 0;
+    plan->print_function = find_global(mir.insns[40].name);
+    if (plan->print_function == NULL ||
+        strcmp(mir.insns[40].name, "printf") ||
+        (mir.insns[40].memory_flags & MIR_CALL_FLAG_VARIADIC) == 0 ||
+        (mir.insns[40].memory_flags & MIR_CALL_FLAG_FORMAT_RUNTIME) != 0 ||
+        plan->buffer_offset >= 0 ||
+        mir.insns[16].immediate <= 0 ||
+        mir.insns[16].immediate > 255 ||
+        -plan->buffer_offset < mir.insns[16].immediate)
+        return 0;
+    plan->fill_has_value = 1;
+    plan->fill_value = (int)mir.insns[3].immediate & 0xffff;
+    plan->string_id = (int)mir.insns[36].immediate;
+    plan->count = (int)mir.insns[16].immediate;
+    plan->element_is_unsigned =
+        (mir.insns[24].type & TYPE_UNSIGNED) != 0;
     return 1;
 }
 
@@ -12696,6 +12908,24 @@ static void mir_emit_constant_byte_fill(
             plan->count, loop, loop);
 }
 
+static void mir_emit_affine_byte_fill(
+    FILE *out, const struct MirAffineByteFill *plan)
+{
+    int loop = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n\tld a,(hl)\n"
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n"
+            "\tld b,%d\n"
+            "L%d:\n\tld (hl),a\n\tinc hl\n\tinc a\n"
+            "\tdjnz L%d\n\tret\n",
+            plan->base_stack_offset, plan->pointer_stack_offset,
+            plan->count, loop, loop);
+}
+
 static void mir_emit_local_byte_fill_sum_print(
     FILE *out, const struct MirLocalByteFillSumPrint *plan)
 {
@@ -12706,11 +12936,17 @@ static void mir_emit_local_byte_fill_sum_print(
             plan->buffer_offset);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
+    if (plan->fill_has_value)
+        fprintf(out, "\tld hl,%d\n\tpush hl\n",
+                plan->fill_value);
     fputs("\tpush ix\n\tpop hl\n", out);
     fprintf(out, "\tld de,%d\n\tadd hl,de\n\tpush hl\n",
             plan->buffer_offset);
     mir_machine_emit_symbol_call(out, plan->fill_function);
-    fputs("\tpop bc\n\tpush ix\n\tpop hl\n", out);
+    fputs("\tpop bc\n", out);
+    if (plan->fill_has_value)
+        fputs("\tpop bc\n", out);
+    fputs("\tpush ix\n\tpop hl\n", out);
     fprintf(out,
             "\tld de,%d\n\tadd hl,de\n\tld de,0\n\tld b,%d\n"
             "L%d:\n",
@@ -12814,6 +13050,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFixedRowWordSum fixed_row_word_sum;
     struct MirFixedWideZero fixed_wide_zero;
     struct MirConstantByteFill constant_byte_fill;
+    struct MirAffineByteFill affine_byte_fill;
     struct MirLocalByteFillSumPrint local_byte_fill_sum_print;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
@@ -13124,7 +13361,17 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
         mir_emit_constant_byte_fill(out, &constant_byte_fill);
         return 1;
     }
+    if (mir_match_affine_byte_fill(&affine_byte_fill)) {
+        mir_emit_affine_byte_fill(out, &affine_byte_fill);
+        return 1;
+    }
     if (mir_match_local_byte_fill_sum_print(
+            &local_byte_fill_sum_print)) {
+        mir_emit_local_byte_fill_sum_print(
+            out, &local_byte_fill_sum_print);
+        return 1;
+    }
+    if (mir_match_local_affine_fill_sum_print(
             &local_byte_fill_sum_print)) {
         mir_emit_local_byte_fill_sum_print(
             out, &local_byte_fill_sum_print);
