@@ -280,6 +280,14 @@ struct MirByteMismatchReport {
     char call_name[64];
 };
 
+struct MirByteArithmeticReports {
+    int left_stack_offset;
+    int right_stack_offset;
+    int is_unsigned;
+    int string_ids[3];
+    char call_name[64];
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -3244,6 +3252,168 @@ static int mir_match_byte_mismatch_report(
         return 0;
     plan->counter_offset = memory_offset;
     plan->string_id = (int)string->immediate;
+    return 1;
+}
+
+static int mir_match_byte_arithmetic_reports(
+    struct MirByteArithmeticReports *plan)
+{
+    static const int expected_opcodes[60] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_NOP, MIR_NOP,
+        MIR_UNARY, MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_STORE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_UNARY, MIR_ARG,
+        MIR_NOP, MIR_UNARY, MIR_ARG, MIR_NOP, MIR_UNARY,
+        MIR_ARG, MIR_CALL,
+        MIR_NOP, MIR_NOP, MIR_UNARY, MIR_UNARY, MIR_BINARY,
+        MIR_UNARY, MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_NOP, MIR_UNARY, MIR_ARG, MIR_NOP, MIR_UNARY,
+        MIR_ARG, MIR_NOP, MIR_UNARY, MIR_ARG, MIR_CALL,
+        MIR_NOP, MIR_NOP, MIR_UNARY, MIR_UNARY, MIR_BINARY,
+        MIR_UNARY, MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_NOP, MIR_UNARY, MIR_ARG, MIR_NOP, MIR_UNARY,
+        MIR_ARG, MIR_NOP, MIR_UNARY, MIR_ARG, MIR_CALL
+    };
+    static const int left_conversion_index[3] = { 5, 24, 43 };
+    static const int right_conversion_index[3] = { 6, 25, 44 };
+    static const int binary_index[3] = { 7, 26, 45 };
+    static const int truncation_index[3] = { 8, 27, 46 };
+    static const int store_index[3] = { 9, 28, 47 };
+    static const int string_index[3] = { 10, 29, 48 };
+    static const int print_left_index[3] = { 13, 32, 51 };
+    static const int print_right_index[3] = { 16, 35, 54 };
+    static const int print_result_index[3] = { 19, 38, 57 };
+    static const int call_index[3] = { 21, 40, 59 };
+    static const int operations[3] = { '*', '%', '/' };
+    const struct MirInsn *left;
+    const struct MirInsn *right;
+    const struct MirInsn *first_store;
+    struct Sym *function = NULL;
+    int report;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir_cfg_block_count() != 1 || mir.count != 60 ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return 0;
+    left = &mir.insns[1];
+    right = &mir.insns[2];
+    if (type_size(left->type) != 1 ||
+        type_size(right->type) != 1 ||
+        type_is_float(left->type) ||
+        type_is_float(right->type) ||
+        type_ptr_depth(left->type) != 0 ||
+        type_ptr_depth(right->type) != 0 ||
+        (left->type & 15) == TYPE_BOOL ||
+        (right->type & 15) == TYPE_BOOL ||
+        ((left->type & TYPE_UNSIGNED) != 0) !=
+            ((right->type & TYPE_UNSIGNED) != 0) ||
+        !mir_machine_parameter_value_offset(
+            left->dst, &plan->left_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            right->dst, &plan->right_stack_offset))
+        return 0;
+    plan->is_unsigned =
+        (left->type & TYPE_UNSIGNED) != 0;
+    if (plan->is_unsigned)
+        return 0;
+    first_store = &mir.insns[store_index[0]];
+    for (report = 0; report < 3; ++report) {
+        const struct MirInsn *left_conversion =
+            &mir.insns[left_conversion_index[report]];
+        const struct MirInsn *right_conversion =
+            &mir.insns[right_conversion_index[report]];
+        const struct MirInsn *binary =
+            &mir.insns[binary_index[report]];
+        const struct MirInsn *truncation =
+            &mir.insns[truncation_index[report]];
+        const struct MirInsn *store =
+            &mir.insns[store_index[report]];
+        const struct MirInsn *string =
+            &mir.insns[string_index[report]];
+        const struct MirInsn *print_left =
+            &mir.insns[print_left_index[report]];
+        const struct MirInsn *print_right =
+            &mir.insns[print_right_index[report]];
+        const struct MirInsn *print_result =
+            &mir.insns[print_result_index[report]];
+        const struct MirInsn *call =
+            &mir.insns[call_index[report]];
+        struct Sym *call_function;
+        int arguments[4];
+        int arithmetic_unsigned;
+
+        arithmetic_unsigned =
+            (binary->type & TYPE_UNSIGNED) != 0;
+        if (left_conversion->immediate != 0 ||
+            left_conversion->src1 != left->dst ||
+            type_size(left_conversion->type) != 2 ||
+            (left_conversion->type & TYPE_UNSIGNED) != 0 ||
+            right_conversion->immediate != 0 ||
+            right_conversion->src1 != right->dst ||
+            type_size(right_conversion->type) != 2 ||
+            (right_conversion->type & TYPE_UNSIGNED) != 0 ||
+            arithmetic_unsigned ||
+            binary->immediate != operations[report] ||
+            binary->src1 != left_conversion->dst ||
+            binary->src2 != right_conversion->dst ||
+            type_size(binary->type) != 2 ||
+            truncation->immediate != 0 ||
+            truncation->src1 != binary->dst ||
+            type_size(truncation->type) != 1 ||
+            (truncation->type & 15) == TYPE_BOOL ||
+            ((truncation->type & TYPE_UNSIGNED) != 0) !=
+                plan->is_unsigned ||
+            !mir_machine_unobservable_local_store(store) ||
+            store->src1 != truncation->dst ||
+            (report > 0 &&
+             !mir_machine_same_location(first_store, store)) ||
+            print_left->immediate != 0 ||
+            print_left->src1 != left->dst ||
+            type_size(print_left->type) != 2 ||
+            ((print_left->type & TYPE_UNSIGNED) != 0) !=
+                plan->is_unsigned ||
+            print_right->immediate != 0 ||
+            print_right->src1 != right->dst ||
+            type_size(print_right->type) != 2 ||
+            ((print_right->type & TYPE_UNSIGNED) != 0) !=
+                plan->is_unsigned ||
+            print_result->immediate != 0 ||
+            print_result->src1 != truncation->dst ||
+            type_size(print_result->type) != 2 ||
+            ((print_result->type & TYPE_UNSIGNED) != 0) !=
+                plan->is_unsigned ||
+            !mir_machine_four_call_arguments(call, arguments) ||
+            arguments[0] != string->dst ||
+            arguments[1] != print_left->dst ||
+            arguments[2] != print_right->dst ||
+            arguments[3] != print_result->dst ||
+            (call->memory_flags &
+             (MIR_CALL_FLAG_VARIADIC |
+              MIR_CALL_FLAG_FORMAT_RUNTIME)) !=
+                MIR_CALL_FLAG_VARIADIC)
+            return 0;
+        call_function = find_global(call->name);
+        if (strcmp(call->name, "printf") ||
+            call_function == NULL || call_function->is_defined)
+            return 0;
+        if (function == NULL) {
+            function = call_function;
+            snprintf(plan->call_name, sizeof(plan->call_name), "%s",
+                     call->base_name[0] != 0
+                         ? call->base_name
+                         : asm_name_for(
+                               sym_asm_name(call_function)));
+        } else if (function != call_function ||
+                   (call->base_name[0] != 0 &&
+                    strcmp(plan->call_name, call->base_name))) {
+            return 0;
+        }
+        plan->string_ids[report] = (int)string->immediate;
+    }
     return 1;
 }
 
@@ -7682,6 +7852,80 @@ static void mir_emit_byte_mismatch_report(
     fputs("\tret\n", out);
 }
 
+static void mir_emit_byte_parameter_word(
+    FILE *out, int stack_offset, int is_unsigned)
+{
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n\tld a,(hl)\n\tld l,a\n",
+            stack_offset);
+    if (is_unsigned)
+        fputs("\tld h,0\n", out);
+    else
+        fputs("\trlca\n\tsbc a,a\n\tld h,a\n", out);
+}
+
+static void mir_emit_byte_binary_operands(
+    FILE *out, const struct MirByteArithmeticReports *plan)
+{
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n\tld c,(hl)\n",
+            plan->left_stack_offset);
+    if (plan->is_unsigned) {
+        fputs("\tld b,0\n", out);
+    } else {
+        fputs("\tld a,c\n\trlca\n\tsbc a,a\n\tld b,a\n", out);
+    }
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n\tld e,(hl)\n",
+            plan->right_stack_offset);
+    if (plan->is_unsigned) {
+        fputs("\tld d,0\n", out);
+    } else {
+        fputs("\tld a,e\n\trlca\n\tsbc a,a\n\tld d,a\n", out);
+    }
+    fputs("\tld l,c\n\tld h,b\n", out);
+}
+
+static void mir_emit_byte_arithmetic_reports(
+    FILE *out, const struct MirByteArithmeticReports *plan)
+{
+    static const char *signed_helpers[3] = {
+        "__mulu", "__mods", "__divs"
+    };
+    static const char *unsigned_helpers[3] = {
+        "__mulu", "__modu", "__divu"
+    };
+    const char *const *helpers = plan->is_unsigned
+        ? unsigned_helpers : signed_helpers;
+    int report;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (report = 0; report < 3; ++report) {
+        mir_emit_byte_binary_operands(out, plan);
+        mir_emit_runtime_call(out, helpers[report]);
+        fputs("\tld a,l\n\tld l,a\n", out);
+        if (plan->is_unsigned)
+            fputs("\tld h,0\n", out);
+        else
+            fputs("\trlca\n\tsbc a,a\n\tld h,a\n", out);
+        fputs("\tpush hl\n", out);
+        mir_emit_byte_parameter_word(
+            out, plan->right_stack_offset + 2,
+            plan->is_unsigned);
+        fputs("\tpush hl\n", out);
+        mir_emit_byte_parameter_word(
+            out, plan->left_stack_offset + 4,
+            plan->is_unsigned);
+        fprintf(out,
+                "\tpush hl\n\tld hl,S%d\n\tpush hl\n",
+                plan->string_ids[report]);
+        mir_emit_runtime_call(out, plan->call_name);
+        fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    }
+    fputs("\tret\n", out);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -7736,6 +7980,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirMixedWideSum mixed_wide_sum;
     struct MirFloatMemberScaleAdd float_member_scale_add;
     struct MirByteMismatchReport byte_mismatch_report;
+    struct MirByteArithmeticReports byte_arithmetic_reports;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -7931,6 +8176,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &byte_mismatch_report)) {
         mir_emit_byte_mismatch_report(
             out, &byte_mismatch_report);
+        return 1;
+    }
+    if (mir_match_byte_arithmetic_reports(
+            &byte_arithmetic_reports)) {
+        mir_emit_byte_arithmetic_reports(
+            out, &byte_arithmetic_reports);
         return 1;
     }
     if (mir_match_indexed_member_write(
