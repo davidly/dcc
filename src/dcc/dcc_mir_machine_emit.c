@@ -201,6 +201,11 @@ struct MirConstantBufferCallPrint {
     unsigned char bytes[4];
 };
 
+struct MirVlaEndpointReduction {
+    int parameter_stack_offset;
+    int adjustment;
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -232,6 +237,8 @@ static int mir_machine_named_nonvolatile(
     const struct MirInsn *insn);
 static int mir_machine_constant_equals(
     int value, long expected);
+static int mir_machine_constant_value(
+    int value, long *constant_out, int depth);
 static int mir_machine_parameter_value_offset(
     int value, int *stack_offset);
 static void mir_machine_emit_global_address_de(
@@ -1636,6 +1643,215 @@ static int mir_match_constant_buffer_call_print(
                  print_call->base_name);
         plan->string_id = (int)print_string->immediate;
     }
+    return 1;
+}
+
+static int mir_match_vla_endpoint_reduction(
+    struct MirVlaEndpointReduction *plan)
+{
+    static const int expected_opcodes[42] = {
+        MIR_LABEL, MIR_PARAM, MIR_VLA_SAVE, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_VLA_ALLOC, MIR_LOAD,
+        MIR_STORE, MIR_LOAD, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_CONST, MIR_BINARY, MIR_BINARY,
+        MIR_STORE, MIR_LOAD, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_CONST, MIR_STORE_INDIRECT, MIR_LOAD, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_INDEX_ADDRESS, MIR_CONST,
+        MIR_STORE_INDIRECT, MIR_LOAD, MIR_LOAD, MIR_BINARY,
+        MIR_CONST, MIR_BINARY, MIR_NOP, MIR_LOAD,
+        MIR_LOAD_INDIRECT, MIR_BINARY, MIR_LOAD,
+        MIR_LOAD_INDIRECT, MIR_BINARY, MIR_RETURN
+    };
+    const struct MirInsn *parameter;
+    const struct MirInsn *size;
+    const struct MirInsn *allocation;
+    const struct MirInsn *p_store;
+    const struct MirInsn *q_store;
+    const struct MirInsn *q_address;
+    const struct MirInsn *last_index;
+    const struct MirInsn *first_store;
+    const struct MirInsn *last_store;
+    const struct MirInsn *difference;
+    const struct MirInsn *scaled_difference;
+    const struct MirInsn *q_load;
+    const struct MirInsn *p_load;
+    const struct MirInsn *sum;
+    const struct MirInsn *result;
+    const struct MirInsn *first_constant;
+    const struct MirInsn *last_constant;
+    long first_value;
+    long last_value;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (!mir.has_vla || mir_cfg_block_count() != 1 ||
+        mir.count != 42 || type_size(mir.return_type) != 2)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode != expected_opcodes[instruction])
+            return 0;
+        if ((insn->opcode == MIR_LOAD ||
+             insn->opcode == MIR_STORE) &&
+            !mir_machine_named_nonvolatile(insn))
+            return 0;
+        if ((insn->opcode == MIR_LOAD_INDIRECT ||
+             insn->opcode == MIR_STORE_INDIRECT) &&
+            ((insn->memory_flags & (1 | 8)) != 0 ||
+             insn->bit_width != 0))
+            return 0;
+        if (insn->opcode == MIR_CALL ||
+            insn->opcode == MIR_CALL_AGGREGATE ||
+            insn->opcode == MIR_ARG ||
+            insn->opcode == MIR_BRANCH_FALSE ||
+            insn->opcode == MIR_JUMP ||
+            insn->opcode == MIR_PHI ||
+            insn->opcode == MIR_OPAQUE)
+            return 0;
+    }
+    parameter = &mir.insns[1];
+    size = &mir.insns[5];
+    allocation = &mir.insns[6];
+    p_store = &mir.insns[8];
+    q_address = &mir.insns[15];
+    q_store = &mir.insns[16];
+    first_store = &mir.insns[21];
+    last_store = &mir.insns[28];
+    difference = &mir.insns[31];
+    scaled_difference = &mir.insns[33];
+    q_load = &mir.insns[36];
+    sum = &mir.insns[37];
+    p_load = &mir.insns[39];
+    result = &mir.insns[40];
+    last_index = &mir.insns[25];
+    first_constant = mir_definition(first_store->src2);
+    last_constant = mir_definition(last_store->src2);
+    if (allocation->name[0] == '\0' ||
+        mir.insns[7].name[0] == '\0' ||
+        mir.insns[9].name[0] == '\0' ||
+        mir.insns[17].name[0] == '\0' ||
+        mir.insns[22].name[0] == '\0' ||
+        mir.insns[0].opcode != MIR_LABEL ||
+        parameter->opcode != MIR_PARAM ||
+        type_size(parameter->type) != 2 ||
+        mir.insns[2].opcode != MIR_VLA_SAVE ||
+        size->opcode != MIR_BINARY || size->immediate != '*' ||
+        size->src1 != parameter->dst ||
+        !mir_machine_constant_equals(size->src2, 2) ||
+        allocation->opcode != MIR_VLA_ALLOC ||
+        allocation->src1 != size->dst ||
+        allocation->memory_size != 2 ||
+        p_store->opcode != MIR_STORE ||
+        !mir_machine_unobservable_local_store(p_store) ||
+        mir.insns[7].opcode != MIR_LOAD ||
+        p_store->src1 != mir.insns[7].dst ||
+        q_store->opcode != MIR_STORE ||
+        !mir_machine_unobservable_local_store(q_store) ||
+        mir_machine_same_location(p_store, q_store) ||
+        q_address->opcode != MIR_BINARY ||
+        q_address->immediate != '+' ||
+        q_store->src1 != q_address->dst ||
+        mir.insns[9].opcode != MIR_LOAD ||
+        q_address->src1 != mir.insns[9].dst ||
+        !mir_machine_same_location(
+            &mir.insns[7], &mir.insns[9]) ||
+        strcmp(allocation->name, mir.insns[7].name) ||
+        strcmp(allocation->name, mir.insns[9].name) ||
+        mir.insns[12].opcode != MIR_BINARY ||
+        mir.insns[12].immediate != '-' ||
+        mir.insns[12].src1 != parameter->dst ||
+        !mir_machine_constant_equals(mir.insns[12].src2, 1) ||
+        mir.insns[14].opcode != MIR_BINARY ||
+        mir.insns[14].immediate != '*' ||
+        mir.insns[14].src1 != mir.insns[12].dst ||
+        !mir_machine_constant_equals(mir.insns[14].src2, 2) ||
+        q_address->src2 != mir.insns[14].dst)
+        return 0;
+    if (first_store->opcode != MIR_STORE_INDIRECT ||
+        first_store->memory_size != 2 ||
+    first_constant == NULL ||
+    first_constant->opcode != MIR_CONST ||
+    type_size(first_constant->type) != 2 ||
+    mir.insns[17].opcode != MIR_LOAD ||
+    !mir_machine_same_location(
+        &mir.insns[7], &mir.insns[17]) ||
+        strcmp(allocation->name, mir.insns[17].name) ||
+        mir.insns[19].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[19].src1 != mir.insns[17].dst ||
+        !mir_machine_constant_equals(mir.insns[19].src2, 0) ||
+        mir.insns[19].immediate != 2 ||
+        mir.insns[19].memory_size != 2 ||
+        first_store->src1 != mir.insns[19].dst ||
+        last_store->opcode != MIR_STORE_INDIRECT ||
+        last_store->memory_size != 2 ||
+        last_constant == NULL ||
+        last_constant->opcode != MIR_CONST ||
+        type_size(last_constant->type) != 2 ||
+        mir.insns[22].opcode != MIR_LOAD ||
+        !mir_machine_same_location(
+            &mir.insns[7], &mir.insns[22]) ||
+        strcmp(allocation->name, mir.insns[22].name) ||
+        last_index->opcode != MIR_BINARY ||
+        last_index->immediate != '-' ||
+        last_index->src1 != parameter->dst ||
+        !mir_machine_constant_equals(last_index->src2, 1) ||
+        mir.insns[26].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[26].src1 != mir.insns[22].dst ||
+        mir.insns[26].src2 != last_index->dst ||
+        mir.insns[26].immediate != 2 ||
+        mir.insns[26].memory_size != 2 ||
+        last_store->src1 != mir.insns[26].dst)
+        return 0;
+    if (difference->opcode != MIR_BINARY ||
+    type_size(difference->type) != 2 ||
+        difference->immediate != '-' ||
+        mir.insns[29].opcode != MIR_LOAD ||
+        mir.insns[30].opcode != MIR_LOAD ||
+        difference->src1 != mir.insns[29].dst ||
+        difference->src2 != mir.insns[30].dst ||
+        scaled_difference->opcode != MIR_BINARY ||
+        type_size(scaled_difference->type) != 2 ||
+        scaled_difference->immediate != '/' ||
+        scaled_difference->src1 != difference->dst ||
+        !mir_machine_constant_equals(
+            scaled_difference->src2, 2) ||
+        q_load->opcode != MIR_LOAD_INDIRECT ||
+        q_load->memory_size != 2 ||
+        type_size(q_load->type) != 2 ||
+        q_load->src1 != mir.insns[35].dst ||
+        mir.insns[34].opcode != MIR_NOP ||
+        mir.insns[35].opcode != MIR_LOAD ||
+        !mir_machine_same_location(q_store, &mir.insns[35]) ||
+        sum->opcode != MIR_BINARY || sum->immediate != '+' ||
+        type_size(sum->type) != 2 ||
+        sum->src1 != scaled_difference->dst ||
+        sum->src2 != q_load->dst ||
+        p_load->opcode != MIR_LOAD_INDIRECT ||
+        p_load->memory_size != 2 ||
+        type_size(p_load->type) != 2 ||
+        p_load->src1 != mir.insns[38].dst ||
+        mir.insns[38].opcode != MIR_LOAD ||
+        !mir_machine_same_location(p_store, &mir.insns[38]) ||
+        result->opcode != MIR_BINARY || result->immediate != '-' ||
+        type_size(result->type) != 2 ||
+        result->src1 != sum->dst || result->src2 != p_load->dst ||
+        mir.insns[41].opcode != MIR_RETURN ||
+        mir.insns[41].src1 != result->dst ||
+        !mir_machine_same_location(
+            p_store, &mir.insns[30]) ||
+        !mir_machine_same_location(
+            q_store, &mir.insns[29]))
+        return 0;
+    if (!mir_machine_parameter_value_offset(
+            parameter->dst, &plan->parameter_stack_offset))
+        return 0;
+    first_value = first_constant->immediate;
+    last_value = last_constant->immediate;
+    plan->adjustment =
+        (int)(unsigned short)(
+            (unsigned long)(unsigned short)last_value -
+            (unsigned long)(unsigned short)first_value);
     return 1;
 }
 
@@ -5710,6 +5926,20 @@ static void mir_emit_indexed_word_sum(
           "\tld l,c\n\tld h,b\n\tadd hl,de\n\tret\n", out);
 }
 
+static void mir_emit_vla_endpoint_reduction(
+    FILE *out, const struct MirVlaEndpointReduction *plan)
+{
+    int done = new_label();
+
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n"
+            "\tdec hl\n\tld a,h\n\tor l\n\tjp z,L%d\n",
+            plan->parameter_stack_offset, done);
+    mir_machine_emit_hl_offset(out, plan->adjustment, 0);
+    fprintf(out, "L%d:\n\tret\n", done);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -5753,6 +5983,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirPointerDifferencePrints pointer_difference_prints;
     struct MirByteComparisonPrint byte_comparison_print;
     struct MirConstantBufferCallPrint constant_buffer_call_print;
+    struct MirVlaEndpointReduction vla_endpoint_reduction;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -5876,6 +6107,14 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &constant_buffer_call_print)) {
         mir_emit_constant_buffer_call_print(
             out, &constant_buffer_call_print);
+        return 1;
+    }
+    if (mir_match_vla_endpoint_reduction(
+            &vla_endpoint_reduction)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_vla_endpoint_reduction(
+            out, &vla_endpoint_reduction);
         return 1;
     }
     if (mir_match_indexed_member_write(
