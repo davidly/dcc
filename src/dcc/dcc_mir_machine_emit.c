@@ -628,6 +628,11 @@ static int mir_machine_fold_integer_binary(
                 return 0;
             bits = lhs / rhs;
             break;
+        case '%':
+            if (rhs == 0)
+                return 0;
+            bits = lhs % rhs;
+            break;
         default:
             return 0;
         }
@@ -645,7 +650,16 @@ static int mir_machine_fold_integer_binary(
         case '/':
             if (signed_rhs == 0)
                 return 0;
+            if (signed_lhs == -(long long)sign && signed_rhs == -1)
+                return 0;
             signed_value = signed_lhs / signed_rhs;
+            break;
+        case '%':
+            if (signed_rhs == 0)
+                return 0;
+            if (signed_lhs == -(long long)sign && signed_rhs == -1)
+                return 0;
+            signed_value = signed_lhs % signed_rhs;
             break;
         default:
             return 0;
@@ -7844,6 +7858,180 @@ static int mir_machine_constant_return_for_label(
     return 1;
 }
 
+static int mir_machine_fold_constant_comparison(
+    const struct MirInsn *insn, long left, long right, long *result)
+{
+    int operand_type = insn->secondary_offset != 0
+        ? insn->secondary_offset : insn->type;
+    long lhs;
+    long rhs;
+
+    if (!mir_machine_convert_integer(left, operand_type, &lhs) ||
+        !mir_machine_convert_integer(right, operand_type, &rhs))
+        return 0;
+    switch (insn->immediate) {
+    case TOK_EQ: *result = lhs == rhs; return 1;
+    case TOK_NE: *result = lhs != rhs; return 1;
+    case '<': *result = lhs < rhs; return 1;
+    case '>': *result = lhs > rhs; return 1;
+    case TOK_LE: *result = lhs <= rhs; return 1;
+    case TOK_GE: *result = lhs >= rhs; return 1;
+    default: return 0;
+    }
+}
+
+static int mir_machine_evaluate_constant_function(int *result)
+{
+    struct Sym *function = find_global(mir.name);
+    long *values = NULL;
+    unsigned char *value_known = NULL;
+    int value_capacity = mir.next_value > 0 ? mir.next_value : 1;
+    int current_label = -1;
+    int predecessor_label = -1;
+    int instruction = 0;
+    int saw_backedge = 0;
+    int steps = 0;
+    int ok = 0;
+
+    if (function == NULL || !function->is_defined ||
+        function->storage != SC_FUNC || function->is_static ||
+        !function->has_proto || function->proto_nargs != 0 ||
+        function->proto_variadic ||
+        mir.sink_purpose != EMIT_SINK_FINAL ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_size(mir.return_type) != 2 ||
+        mir_cfg_block_count() < 2)
+        return 0;
+    values = (long *)calloc((size_t)value_capacity, sizeof(*values));
+    value_known = (unsigned char *)calloc(
+        (size_t)value_capacity, sizeof(*value_known));
+    if (values == NULL || value_known == NULL)
+        goto done;
+    while (instruction >= 0 && instruction < mir.count &&
+           steps++ < 100000) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int source;
+        int target;
+
+        switch (insn->opcode) {
+        case MIR_LABEL:
+            predecessor_label = current_label;
+            current_label = insn->label;
+            ++instruction;
+            break;
+        case MIR_NOP:
+            ++instruction;
+            break;
+        case MIR_CONST:
+            if (insn->dst < 0 || insn->dst >= value_capacity)
+                goto done;
+            values[insn->dst] = insn->immediate;
+            value_known[insn->dst] = 1;
+            ++instruction;
+            break;
+        case MIR_STORE:
+            if (insn->src1 < 0 || insn->src1 >= value_capacity ||
+                !value_known[insn->src1] ||
+                !mir_machine_unobservable_local_store(insn))
+                goto done;
+            ++instruction;
+            break;
+        case MIR_PHI:
+            if (predecessor_label == insn->phi_pred1)
+                source = insn->src1;
+            else if (predecessor_label == insn->phi_pred2)
+                source = insn->src2;
+            else
+                goto done;
+            if (insn->dst < 0 || insn->dst >= value_capacity ||
+                source < 0 || source >= value_capacity ||
+                !value_known[source])
+                goto done;
+            values[insn->dst] = values[source];
+            value_known[insn->dst] = 1;
+            ++instruction;
+            break;
+        case MIR_UNARY:
+            if (insn->immediate != 0 ||
+                insn->dst < 0 || insn->dst >= value_capacity ||
+                insn->src1 < 0 || insn->src1 >= value_capacity ||
+                !value_known[insn->src1] ||
+                !mir_machine_convert_integer(
+                    values[insn->src1], insn->type,
+                    &values[insn->dst]))
+                goto done;
+            value_known[insn->dst] = 1;
+            ++instruction;
+            break;
+        case MIR_BINARY:
+            if (insn->dst < 0 || insn->dst >= value_capacity ||
+                insn->src1 < 0 || insn->src1 >= value_capacity ||
+                insn->src2 < 0 || insn->src2 >= value_capacity ||
+                !value_known[insn->src1] ||
+                !value_known[insn->src2])
+                goto done;
+            if (insn->immediate == TOK_EQ ||
+                insn->immediate == TOK_NE ||
+                insn->immediate == '<' ||
+                insn->immediate == '>' ||
+                insn->immediate == TOK_LE ||
+                insn->immediate == TOK_GE) {
+                if (!mir_machine_fold_constant_comparison(
+                        insn, values[insn->src1],
+                        values[insn->src2], &values[insn->dst]))
+                    goto done;
+            } else if (!mir_machine_fold_integer_binary(
+                           (int)insn->immediate,
+                           values[insn->src1], values[insn->src2],
+                           insn->type, &values[insn->dst])) {
+                goto done;
+            }
+            value_known[insn->dst] = 1;
+            ++instruction;
+            break;
+        case MIR_BRANCH_FALSE:
+            if (insn->src1 < 0 || insn->src1 >= value_capacity ||
+                !value_known[insn->src1])
+                goto done;
+            if (values[insn->src1] == 0) {
+                target = mir_find_label(insn->label);
+                if (target < 0)
+                    goto done;
+                if (target < instruction)
+                    saw_backedge = 1;
+                instruction = target;
+            } else {
+                ++instruction;
+            }
+            break;
+        case MIR_JUMP:
+            target = mir_find_label(insn->label);
+            if (target < 0)
+                goto done;
+            if (target < instruction)
+                saw_backedge = 1;
+            instruction = target;
+            break;
+        case MIR_RETURN:
+            if (!saw_backedge ||
+                insn->src1 < 0 || insn->src1 >= value_capacity ||
+                !value_known[insn->src1])
+                goto done;
+            *result = (int)((unsigned long)values[insn->src1] &
+                            0xffffUL);
+            ok = 1;
+            goto done;
+        default:
+            goto done;
+        }
+    }
+done:
+    free(value_known);
+    free(values);
+    return ok;
+}
+
 static int mir_machine_evaluate_constant_flow(
     int condition, int parameter_value,
     int first_dispatch_branch, int last_dispatch_branch,
@@ -14068,6 +14256,13 @@ static void mir_emit_global_byte_countdown(
           "\tadd hl,de\n\tadd hl,hl\n\tadd hl,bc\n\tret\n", out);
 }
 
+static void mir_emit_constant_function(FILE *out, int result)
+{
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out, "\tld hl,%d\n\tret\n", result);
+}
+
 static void mir_emit_constant_result_switch(
     FILE *out, const struct MirConstantResultSwitch *plan)
 {
@@ -14233,6 +14428,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirLocalByteFillSumPrint local_byte_fill_sum_print;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
+    int constant_function_result;
 
     if (mir_match_affine_pointer_constant_return(&constant)) {
         if (opt_stack_check)
@@ -14564,6 +14760,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &global_byte_countdown)) {
         mir_emit_global_byte_countdown(
             out, &global_byte_countdown);
+        return 1;
+    }
+    if (mir_machine_evaluate_constant_function(
+            &constant_function_result)) {
+        mir_emit_constant_function(
+            out, constant_function_result);
         return 1;
     }
     if (mir_match_constant_result_switch(
