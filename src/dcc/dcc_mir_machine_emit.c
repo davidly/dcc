@@ -363,6 +363,15 @@ struct MirRelativeToleranceCall {
     unsigned long scale_bits;
 };
 
+struct MirFixedFloatGridFill {
+    struct Sym *root;
+    int root_offset;
+    int outer_bound;
+    int inner_bound;
+    int add_constant;
+    unsigned long divisor_bits;
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -4772,6 +4781,198 @@ static int mir_match_relative_tolerance_call(
     plan->want_stack_offset = memory_offset - 2;
     plan->scale_bits =
         (unsigned long)scale->immediate & 0xffffffffUL;
+    return 1;
+}
+
+static int mir_match_fixed_float_grid_fill(
+    struct MirFixedFloatGridFill *plan)
+{
+    static const int expected_opcodes[50] = {
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL,
+        MIR_PHI, MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL,
+        MIR_NOP, MIR_NOP, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD, MIR_INDEX_ADDRESS, MIR_NOP, MIR_LOAD, MIR_UNARY,
+        MIR_BINARY, MIR_CONST, MIR_BINARY, MIR_UNARY,
+        MIR_FLOAT_CONST, MIR_BINARY, MIR_STORE_INDIRECT, MIR_LABEL,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP,
+        MIR_LABEL, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_JUMP, MIR_LABEL
+    };
+    const struct MirInsn *initial_outer;
+    const struct MirInsn *outer_store;
+    const struct MirInsn *outer_phi;
+    const struct MirInsn *outer_bound;
+    const struct MirInsn *outer_conversion;
+    const struct MirInsn *outer_comparison;
+    const struct MirInsn *initial_inner;
+    const struct MirInsn *inner_store;
+    const struct MirInsn *inner_load;
+    const struct MirInsn *inner_bound;
+    const struct MirInsn *inner_comparison;
+    const struct MirInsn *root;
+    const struct MirInsn *row_address;
+    const struct MirInsn *element_index;
+    const struct MirInsn *element_address;
+    const struct MirInsn *expression_outer;
+    const struct MirInsn *expression_inner;
+    const struct MirInsn *first_sum;
+    const struct MirInsn *add_constant;
+    const struct MirInsn *second_sum;
+    const struct MirInsn *conversion;
+    const struct MirInsn *divisor;
+    const struct MirInsn *division;
+    const struct MirInsn *element_store;
+    const struct MirInsn *inner_increment;
+    const struct MirInsn *inner_loop_store;
+    const struct MirInsn *outer_increment;
+    const struct MirInsn *outer_loop_store;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    long maximum_add_constant;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir_cfg_block_count() != 7 || mir.count != 50 ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return 0;
+    initial_outer = &mir.insns[2];
+    outer_store = &mir.insns[3];
+    outer_phi = &mir.insns[5];
+    outer_bound = &mir.insns[7];
+    outer_conversion = &mir.insns[8];
+    outer_comparison = &mir.insns[9];
+    initial_inner = &mir.insns[11];
+    inner_store = &mir.insns[13];
+    inner_load = &mir.insns[17];
+    inner_bound = &mir.insns[18];
+    inner_comparison = &mir.insns[19];
+    root = &mir.insns[21];
+    row_address = &mir.insns[23];
+    element_index = &mir.insns[24];
+    element_address = &mir.insns[25];
+    expression_inner = &mir.insns[27];
+    expression_outer = &mir.insns[28];
+    first_sum = &mir.insns[29];
+    add_constant = &mir.insns[30];
+    second_sum = &mir.insns[31];
+    conversion = &mir.insns[32];
+    divisor = &mir.insns[33];
+    division = &mir.insns[34];
+    element_store = &mir.insns[35];
+    inner_increment = &mir.insns[39];
+    inner_loop_store = &mir.insns[40];
+    outer_increment = &mir.insns[46];
+    outer_loop_store = &mir.insns[47];
+    if (initial_outer->immediate != 0 ||
+        type_size(initial_outer->type) != 1 ||
+        (initial_outer->type & TYPE_UNSIGNED) == 0 ||
+        !mir_machine_unobservable_local_store(outer_store) ||
+        outer_store->src1 != initial_outer->dst ||
+        outer_phi->src1 != initial_outer->dst ||
+        outer_phi->src2 != outer_increment->dst ||
+        outer_phi->phi_pred1 != mir.insns[0].label ||
+        outer_phi->phi_pred2 != mir.insns[43].label ||
+        type_size(outer_phi->type) != 1 ||
+        outer_conversion->immediate != 0 ||
+        outer_conversion->src1 != outer_phi->dst ||
+        type_size(outer_conversion->type) != 2 ||
+        outer_comparison->immediate != '<' ||
+        outer_comparison->src1 != outer_conversion->dst ||
+        outer_comparison->src2 != outer_bound->dst ||
+        mir.insns[10].src1 != outer_comparison->dst ||
+        mir.insns[10].label != mir.insns[49].label ||
+        initial_inner->immediate != 0 ||
+        type_size(initial_inner->type) != 2 ||
+        !mir_machine_unobservable_local_store(inner_store) ||
+        inner_store->src1 != initial_inner->dst ||
+        !mir_machine_same_location(inner_store, inner_load) ||
+        inner_comparison->immediate != '<' ||
+        inner_comparison->src1 != inner_load->dst ||
+        inner_comparison->src2 != inner_bound->dst ||
+        mir.insns[20].src1 != inner_comparison->dst ||
+        mir.insns[20].label != mir.insns[42].label)
+        return 0;
+    plan->outer_bound = (int)outer_bound->immediate;
+    plan->inner_bound = (int)inner_bound->immediate;
+    if (outer_bound->opcode != MIR_CONST ||
+        inner_bound->opcode != MIR_CONST ||
+        plan->outer_bound <= 0 || plan->outer_bound > 255 ||
+        plan->inner_bound <= 0 || plan->inner_bound > 255)
+        return 0;
+    plan->root = find_global(root->name);
+    if (plan->root == NULL || plan->root->is_volatile ||
+        !mir_scalar_memory_location(
+            root, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        row_address->src1 != root->dst ||
+        row_address->src2 != outer_phi->dst ||
+        row_address->immediate !=
+            plan->inner_bound * 4L ||
+        element_index->opcode != MIR_LOAD ||
+        !mir_machine_same_location(inner_store, element_index) ||
+        element_address->src1 != row_address->dst ||
+        element_address->src2 != element_index->dst ||
+        element_address->immediate != 4 ||
+        expression_outer->immediate != 0 ||
+        expression_outer->src1 != outer_phi->dst ||
+        expression_inner->opcode != MIR_LOAD ||
+        !mir_machine_same_location(
+            inner_store, expression_inner) ||
+        first_sum->immediate != '+' ||
+        first_sum->src1 != expression_outer->dst ||
+        first_sum->src2 != expression_inner->dst ||
+        add_constant->opcode != MIR_CONST ||
+        second_sum->immediate != '+' ||
+        second_sum->src1 != first_sum->dst ||
+        second_sum->src2 != add_constant->dst ||
+        conversion->immediate != 0 ||
+        conversion->src1 != second_sum->dst ||
+        !type_is_float(conversion->type) ||
+        !type_is_float(divisor->type) ||
+        division->immediate != '/' ||
+        division->src1 != conversion->dst ||
+        division->src2 != divisor->dst ||
+        !type_is_float(division->type) ||
+        element_store->src1 != element_address->dst ||
+        element_store->src2 != division->dst ||
+        element_store->memory_size != 4 ||
+        element_store->bit_width != 0 ||
+        (element_store->memory_flags & (1 | 8)) != 0)
+        return 0;
+    plan->root_offset = memory_offset;
+    maximum_add_constant =
+        255L - (plan->outer_bound - 1L) -
+        (plan->inner_bound - 1L);
+    if (add_constant->immediate < 0 ||
+        add_constant->immediate > maximum_add_constant)
+        return 0;
+    plan->add_constant = (int)add_constant->immediate;
+    if (inner_increment->immediate != '+' ||
+        !mir_machine_same_location(
+            inner_store, &mir.insns[37]) ||
+        inner_increment->src1 != mir.insns[37].dst ||
+        !mir_machine_constant_equals(inner_increment->src2, 1) ||
+        !mir_machine_same_location(
+            inner_store, inner_loop_store) ||
+        inner_loop_store->src1 != inner_increment->dst ||
+        mir.insns[41].label != mir.insns[14].label ||
+        outer_increment->immediate != '+' ||
+        outer_increment->src1 != outer_phi->dst ||
+        !mir_machine_constant_equals(outer_increment->src2, 1) ||
+        !mir_machine_same_location(
+            outer_store, outer_loop_store) ||
+        outer_loop_store->src1 != outer_increment->dst ||
+        mir.insns[48].label != mir.insns[4].label)
+        return 0;
+    plan->divisor_bits =
+        (unsigned long)divisor->immediate & 0xffffffffUL;
     return 1;
 }
 
@@ -9648,6 +9849,45 @@ static void mir_emit_relative_tolerance_call(
           "\tpop bc\n\tpop bc\n\tpop bc\n\tret\n", out);
 }
 
+static void mir_emit_fixed_float_grid_fill(
+    FILE *out, const struct MirFixedFloatGridFill *plan)
+{
+    int loop = new_label();
+
+    fprintf(out,
+            ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n"
+            "\tpush iy\n",
+            mir.name);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_address_de(
+        out, plan->root, plan->root_offset);
+    fputs("\tpush de\n\tpop iy\n\tld bc,0\n", out);
+    fprintf(out, "L%d:\n", loop);
+    fprintf(out,
+            "\tld a,b\n\tadd a,c\n\tadd a,%d\n"
+            "\tld l,a\n\tld h,0\n\tpush bc\n",
+            plan->add_constant);
+    mir_emit_runtime_call(out, "__fif");
+    fputs("\tpush de\n\tpush hl\n", out);
+    fprintf(out,
+            "\tld hl,%lu\n\tld de,%lu\n",
+            plan->divisor_bits & 0xffffUL,
+            (plan->divisor_bits >> 16) & 0xffffUL);
+    mir_emit_runtime_call(out, "__fdf");
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tld (iy+0),l\n\tld (iy+1),h\n"
+          "\tld (iy+2),e\n\tld (iy+3),d\n"
+          "\tinc iy\n\tinc iy\n\tinc iy\n\tinc iy\n"
+          "\tinc c\n", out);
+    fprintf(out,
+            "\tld a,c\n\tcp %d\n\tjp c,L%d\n"
+            "\tld c,0\n\tinc b\n\tld a,b\n\tcp %d\n"
+            "\tjp c,L%d\n\tpop iy\n\tret\n",
+            plan->inner_bound, loop,
+            plan->outer_bound, loop);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -9711,6 +9951,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFloatToleranceReport float_tolerance_report;
     struct MirFloatByteReport float_byte_report;
     struct MirRelativeToleranceCall relative_tolerance_call;
+    struct MirFixedFloatGridFill fixed_float_grid_fill;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -9952,6 +10193,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &relative_tolerance_call)) {
         mir_emit_relative_tolerance_call(
             out, &relative_tolerance_call);
+        return 1;
+    }
+    if (mir_match_fixed_float_grid_fill(
+            &fixed_float_grid_fill)) {
+        mir_emit_fixed_float_grid_fill(
+            out, &fixed_float_grid_fill);
         return 1;
     }
     if (mir_match_indexed_member_write(
