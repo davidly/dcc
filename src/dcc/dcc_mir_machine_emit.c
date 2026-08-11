@@ -433,6 +433,12 @@ struct MirByteMathFlags {
     struct Sym *decimal_function;
 };
 
+struct MirByteRangeUnion {
+    int stack_offset;
+    int lower[3];
+    int upper[3];
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -6562,6 +6568,158 @@ static int mir_match_byte_math_flags(struct MirByteMathFlags *plan)
     return 1;
 }
 
+static int mir_match_byte_range_union(struct MirByteRangeUnion *plan)
+{
+    static const int expected_opcodes[88] = {
+        MIR_LABEL, MIR_PARAM, MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_CONST, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_UNARY,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST, MIR_UNARY,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+        MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE,
+        MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL,
+        MIR_PHI, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_PHI,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL,
+        MIR_PHI, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+        MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_LABEL, MIR_JUMP,
+        MIR_LABEL, MIR_PHI, MIR_RETURN
+    };
+    static const int lower_constants[3] = { 3, 25, 59 };
+    static const int lower_unaries[3] = { 4, 26, 60 };
+    static const int lower_binaries[3] = { 5, 27, 61 };
+    static const int lower_branches[3] = { 6, 28, 62 };
+    static const int upper_constants[3] = { 8, 30, 64 };
+    static const int upper_unaries[3] = { 9, 31, 65 };
+    static const int upper_binaries[3] = { 10, 32, 66 };
+    static const int upper_branches[3] = { 11, 33, 67 };
+    static const int parameter_nops[6] = { 2, 7, 24, 29, 58, 63 };
+    static const int edge_pairs[][2] = {
+        { 6, 15 }, { 11, 15 }, { 14, 17 }, { 19, 23 },
+        { 22, 51 }, { 28, 37 }, { 33, 37 }, { 36, 39 },
+        { 41, 45 }, { 44, 47 }, { 50, 51 }, { 53, 57 },
+        { 56, 85 }, { 62, 71 }, { 67, 71 }, { 70, 73 },
+        { 75, 79 }, { 78, 81 }, { 84, 85 }
+    };
+    const struct MirInsn *parameter = &mir.insns[1];
+    int edge;
+    int instruction;
+    int range;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 88 || mir_cfg_block_count() != 24 ||
+        (mir.return_type & 15) != TYPE_BOOL || mir.has_vla ||
+        (parameter->type & 15) != TYPE_CHAR ||
+        type_size(parameter->type) != 1 ||
+        type_ptr_depth(parameter->type) != 0 ||
+        !mir_machine_parameter_value_offset(
+            parameter->dst, &plan->stack_offset) ||
+        plan->stack_offset != 2)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return 0;
+    for (instruction = 0; instruction < 6; ++instruction)
+        if (mir.insns[parameter_nops[instruction]].object !=
+            parameter->object)
+            return 0;
+    for (edge = 0;
+         edge < (int)(sizeof(edge_pairs) / sizeof(edge_pairs[0]));
+         ++edge)
+        if (mir.insns[edge_pairs[edge][0]].label !=
+            mir.insns[edge_pairs[edge][1]].label)
+            return 0;
+    for (range = 0; range < 3; ++range) {
+        const struct MirInsn *lower_constant =
+            &mir.insns[lower_constants[range]];
+        const struct MirInsn *lower_unary =
+            &mir.insns[lower_unaries[range]];
+        const struct MirInsn *lower_binary =
+            &mir.insns[lower_binaries[range]];
+        const struct MirInsn *upper_constant =
+            &mir.insns[upper_constants[range]];
+        const struct MirInsn *upper_unary =
+            &mir.insns[upper_unaries[range]];
+        const struct MirInsn *upper_binary =
+            &mir.insns[upper_binaries[range]];
+
+        if (lower_unary->immediate != 0 ||
+            lower_unary->src1 != parameter->dst ||
+            lower_binary->immediate != TOK_GE ||
+            lower_binary->src1 != lower_unary->dst ||
+            lower_binary->src2 != lower_constant->dst ||
+            mir.insns[lower_branches[range]].src1 !=
+                lower_binary->dst ||
+            upper_unary->immediate != 0 ||
+            upper_unary->src1 != parameter->dst ||
+            upper_binary->immediate != TOK_LE ||
+            upper_binary->src1 != upper_unary->dst ||
+            upper_binary->src2 != upper_constant->dst ||
+            mir.insns[upper_branches[range]].src1 !=
+                upper_binary->dst ||
+            lower_constant->immediate < 0 ||
+            lower_constant->immediate > 127 ||
+            upper_constant->immediate <
+                lower_constant->immediate ||
+            upper_constant->immediate > 127)
+            return 0;
+        plan->lower[range] = (int)lower_constant->immediate;
+        plan->upper[range] = (int)upper_constant->immediate;
+    }
+    if (!mir_machine_constant_equals(mir.insns[13].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[16].dst, 0) ||
+        mir.insns[18].src1 != mir.insns[13].dst ||
+        mir.insns[18].src2 != mir.insns[16].dst ||
+        mir.insns[18].phi_pred1 != mir.insns[12].label ||
+        mir.insns[18].phi_pred2 != mir.insns[15].label ||
+        mir.insns[19].src1 != mir.insns[18].dst ||
+        !mir_machine_constant_equals(mir.insns[21].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[35].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[38].dst, 0) ||
+        mir.insns[40].src1 != mir.insns[35].dst ||
+        mir.insns[40].src2 != mir.insns[38].dst ||
+        mir.insns[40].phi_pred1 != mir.insns[34].label ||
+        mir.insns[40].phi_pred2 != mir.insns[37].label ||
+        mir.insns[41].src1 != mir.insns[40].dst ||
+        !mir_machine_constant_equals(mir.insns[43].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[46].dst, 0) ||
+        mir.insns[48].src1 != mir.insns[43].dst ||
+        mir.insns[48].src2 != mir.insns[46].dst ||
+        mir.insns[48].phi_pred1 != mir.insns[42].label ||
+        mir.insns[48].phi_pred2 != mir.insns[45].label ||
+        mir.insns[52].src1 != mir.insns[21].dst ||
+        mir.insns[52].src2 != mir.insns[48].dst ||
+        mir.insns[52].phi_pred1 != mir.insns[20].label ||
+        mir.insns[52].phi_pred2 != mir.insns[49].label ||
+        mir.insns[53].src1 != mir.insns[52].dst ||
+        !mir_machine_constant_equals(mir.insns[55].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[69].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[72].dst, 0) ||
+        mir.insns[74].src1 != mir.insns[69].dst ||
+        mir.insns[74].src2 != mir.insns[72].dst ||
+        mir.insns[74].phi_pred1 != mir.insns[68].label ||
+        mir.insns[74].phi_pred2 != mir.insns[71].label ||
+        mir.insns[75].src1 != mir.insns[74].dst ||
+        !mir_machine_constant_equals(mir.insns[77].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[80].dst, 0) ||
+        mir.insns[82].src1 != mir.insns[77].dst ||
+        mir.insns[82].src2 != mir.insns[80].dst ||
+        mir.insns[82].phi_pred1 != mir.insns[76].label ||
+        mir.insns[82].phi_pred2 != mir.insns[79].label ||
+        mir.insns[86].src1 != mir.insns[55].dst ||
+        mir.insns[86].src2 != mir.insns[82].dst ||
+        mir.insns[86].phi_pred1 != mir.insns[54].label ||
+        mir.insns[86].phi_pred2 != mir.insns[83].label ||
+        mir.insns[87].src1 != mir.insns[86].dst)
+        return 0;
+    return 1;
+}
+
 static int mir_machine_flat_load(
     int value, int *stack_offset, long *offset,
     int *width, int *is_unsigned)
@@ -11799,6 +11957,27 @@ static void mir_emit_byte_math_flags(
     fputs("\tpop bc\n\tpop bc\n\tret\n", out);
 }
 
+static void mir_emit_byte_range_union(
+    FILE *out, const struct MirByteRangeUnion *plan)
+{
+    int accepted = new_label();
+    int range;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n\tld c,(hl)\n",
+            plan->stack_offset);
+    for (range = 0; range < 3; ++range)
+        fprintf(out,
+                "\tld a,c\n\tsub %d\n\tcp %d\n\tjp c,L%d\n",
+                plan->lower[range],
+                plan->upper[range] - plan->lower[range] + 1,
+                accepted);
+    fputs("\tld hl,0\n\tret\n", out);
+    fprintf(out, "L%d:\n\tld hl,1\n\tret\n", accepted);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -11870,6 +12049,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirStatusUnpack status_unpack;
     struct MirStatusPack status_pack;
     struct MirByteMathFlags byte_math_flags;
+    struct MirByteRangeUnion byte_range_union;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -12157,6 +12337,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_byte_math_flags(&byte_math_flags)) {
         mir_emit_byte_math_flags(out, &byte_math_flags);
+        return 1;
+    }
+    if (mir_match_byte_range_union(&byte_range_union)) {
+        mir_emit_byte_range_union(out, &byte_range_union);
         return 1;
     }
     if (mir_match_indexed_member_write(
