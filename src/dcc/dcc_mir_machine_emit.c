@@ -596,6 +596,7 @@ struct MirConditionalBool {
     int condition_stack_offset;
     int true_value;
     int false_value;
+    int result_type;
 };
 
 struct MirClearedRecordAppend {
@@ -9161,7 +9162,9 @@ static int mir_match_conditional_bool(struct MirConditionalBool *plan)
     memset(plan, 0, sizeof(*plan));
     if (mir.count != 14 || mir_cfg_block_count() != 5 ||
         mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
-        (mir.return_type & 15) != TYPE_BOOL)
+        type_is_float(mir.return_type) ||
+        (type_size(mir.return_type) != 1 &&
+         type_size(mir.return_type) != 2))
         return 0;
     for (instruction = 0; instruction < mir.count; ++instruction)
         if (mir.insns[instruction].opcode != expected_opcodes[instruction])
@@ -9181,11 +9184,22 @@ static int mir_match_conditional_bool(struct MirConditionalBool *plan)
         mir.insns[11].phi_pred2 != mir.insns[9].label ||
         mir.insns[12].immediate != 0 ||
         mir.insns[12].src1 != mir.insns[11].dst ||
-        (mir.insns[12].type & 15) != TYPE_BOOL ||
+        mir.insns[12].type != mir.return_type ||
         mir.insns[13].src1 != mir.insns[12].dst)
         return 0;
-    plan->true_value = true_value != 0;
-    plan->false_value = false_value != 0;
+    plan->result_type = mir.return_type;
+    if ((mir.return_type & 15) == TYPE_BOOL) {
+        plan->true_value = true_value != 0;
+        plan->false_value = false_value != 0;
+    } else {
+        if (!mir_machine_convert_integer(
+                true_value, mir.return_type, &true_value) ||
+            !mir_machine_convert_integer(
+                false_value, mir.return_type, &false_value))
+            return 0;
+        plan->true_value = (int)true_value;
+        plan->false_value = (int)false_value;
+    }
     return 1;
 }
 
