@@ -5571,7 +5571,8 @@ static int mir_planned_stack_store_address_consumer(
     const struct MirInsn *store;
     int instruction;
 
-    if (!mir_indirect_store_address_forwarding_enabled ||
+    if ((!mir_indirect_store_address_forwarding_enabled &&
+         mir_cfg_block_count() < 300) ||
         consumer < 0 || consumer >= mir.count)
         return 0;
     store = &mir.insns[consumer];
@@ -12914,6 +12915,9 @@ static int mir_prepare_backend_slots(void)
 void mir_emit_virtual_load(FILE *out, int value)
 {
     const struct MirInsn *definition = mir_definition(value);
+    int compact_byte_slot =
+        mir_cfg_block_count() >= 300 && definition != NULL &&
+        type_size(definition->type) == 1;
     int bool_offset;
     int bool_store_instruction;
     int offset;
@@ -13018,18 +13022,40 @@ void mir_emit_virtual_load(FILE *out, int value)
     offset = mir_virtual_offset(value);
     iy_offset = mir_virtual_iy_offset(value);
     if (mir_virtual_iy_base && iy_offset >= -128 && iy_offset + 1 <= 127) {
-        fprintf(out, "\tld l,(iy%+d)\n\tld h,(iy%+d)\n",
-                iy_offset, iy_offset + 1);
+        fprintf(out, "\tld l,(iy%+d)\n", iy_offset);
+        if (compact_byte_slot) {
+            if ((definition->type & TYPE_UNSIGNED) != 0 ||
+                type_is_bool(definition->type))
+                fputs("\tld h,0\n", out);
+            else
+                mir_emit_signed_byte_extend(out);
+        } else
+            fprintf(out, "\tld h,(iy%+d)\n", iy_offset + 1);
         return;
     }
     if (offset >= -128 && offset + 1 <= 127) {
-        fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
-                offset, offset + 1);
+        fprintf(out, "\tld l,(ix%+d)\n", offset);
+        if (compact_byte_slot) {
+            if ((definition->type & TYPE_UNSIGNED) != 0 ||
+                type_is_bool(definition->type))
+                fputs("\tld h,0\n", out);
+            else
+                mir_emit_signed_byte_extend(out);
+        } else
+            fprintf(out, "\tld h,(ix%+d)\n", offset + 1);
     } else {
         fputs("\tpush ix\n\tpop hl\n", out);
-        fprintf(out, "\tld de,%d\n\tadd hl,de\n"
-                     "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n",
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n\tld a,(hl)\n",
                 offset);
+        if (compact_byte_slot) {
+            fputs("\tld l,a\n", out);
+            if ((definition->type & TYPE_UNSIGNED) != 0 ||
+                type_is_bool(definition->type))
+                fputs("\tld h,0\n", out);
+            else
+                mir_emit_signed_byte_extend(out);
+        } else
+            fputs("\tinc hl\n\tld h,(hl)\n\tld l,a\n", out);
     }
 }
 
@@ -13487,9 +13513,42 @@ static int mir_consume_planned_stack(FILE *out, int value, int instruction,
     return 1;
 }
 
+static int mir_compact_byte_unary_first_use(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int instruction = mir_emit_instruction_index + 1;
+
+    if (mir_cfg_block_count() < 300 || definition == NULL ||
+        type_size(definition->type) != 1)
+        return -1;
+    while (instruction < mir.count) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode == MIR_NOP) {
+            ++instruction;
+            continue;
+        }
+        if (insn->opcode == MIR_CONST &&
+            mir_binary_only_constant(insn->dst)) {
+            ++instruction;
+            continue;
+        }
+        break;
+    }
+    if (instruction >= mir.count ||
+        mir.insns[instruction].opcode != MIR_UNARY ||
+        mir.insns[instruction].src1 != value ||
+        type_size(mir.insns[instruction].type) > 2)
+        return -1;
+    return instruction;
+}
+
 static void mir_emit_virtual_store(FILE *out, int value)
 {
     const struct MirInsn *definition = mir_definition(value);
+    int compact_byte_slot =
+        mir_cfg_block_count() >= 300 && definition != NULL &&
+        type_size(definition->type) == 1;
     int force_slot_store = definition != NULL &&
                            definition->opcode == MIR_PHI;
     int dynamic_index_forward;
@@ -13498,6 +13557,7 @@ static void mir_emit_virtual_store(FILE *out, int value)
     int forward_to_store;
     int has_slot;
     int forward_instruction;
+    int compact_unary_consumer;
     int runtime_stride_consumer;
     int runtime_stride_index_value;
     int pointer_difference_consumer;
@@ -13598,6 +13658,15 @@ static void mir_emit_virtual_store(FILE *out, int value)
             mir_spilled_cfg_used_planned_index_base_handoff = 1;
         mir.planned_stack_emitted[value] = 1;
         ++mir_planned_stack_emit_count;
+        return;
+    }
+    compact_unary_consumer =
+        mir_compact_byte_unary_first_use(value);
+    if (!force_slot_store && compact_unary_consumer >= 0 &&
+        mir_value_use_count(value) == 1) {
+        mir_forwarded_hl_value = value;
+        mir_forwarded_hl_instruction =
+            compact_unary_consumer - 1;
         return;
     }
     has_slot = value >= 0 && value < mir.next_value &&
@@ -13717,11 +13786,15 @@ static void mir_emit_virtual_store(FILE *out, int value)
         mir_forward_store_target_is_narrow(forward_instruction);
     if (mir_virtual_iy_base && iy_offset >= -128 && iy_offset + 1 <= 127) {
         fprintf(out, "\tld (iy%+d),l\n", iy_offset);
-        if (!forward_to_narrow_store)
+        if (!compact_byte_slot && !forward_to_narrow_store)
             fprintf(out, "\tld (iy%+d),h\n", iy_offset + 1);
         if (forward_to_store) {
             mir_forwarded_hl_value = value;
             mir_forwarded_hl_instruction = forward_instruction - 1;
+        } else if (compact_unary_consumer >= 0) {
+            mir_forwarded_hl_value = value;
+            mir_forwarded_hl_instruction =
+                compact_unary_consumer - 1;
         } else if (mir_can_forward_hl_to_call_argument_first_use(value)) {
             mir_forwarded_hl_value = value;
             mir_forwarded_hl_instruction =
@@ -13730,12 +13803,19 @@ static void mir_emit_virtual_store(FILE *out, int value)
         return;
     }
     if (offset >= -128 && offset + 1 <= 127) {
-        fprintf(out, "\tld (ix%+d),l\n", offset);
-        if (!forward_to_narrow_store)
+        fprintf(out, compact_byte_slot
+                    ? "\tld (ix%+d),l ;@dcc.mir byte-slot\n"
+                    : "\tld (ix%+d),l\n",
+                offset);
+        if (!compact_byte_slot && !forward_to_narrow_store)
             fprintf(out, "\tld (ix%+d),h\n", offset + 1);
         if (forward_to_store) {
             mir_forwarded_hl_value = value;
             mir_forwarded_hl_instruction = forward_instruction - 1;
+        } else if (compact_unary_consumer >= 0) {
+            mir_forwarded_hl_value = value;
+            mir_forwarded_hl_instruction =
+                compact_unary_consumer - 1;
         } else if (mir_can_forward_hl_to_call_argument_first_use(value)) {
             /* Item T82 (mir-text-size-plan.md): safe only for this
              * in-range form - the out-of-range branch below moves the
@@ -13747,9 +13827,10 @@ static void mir_emit_virtual_store(FILE *out, int value)
         }
     } else {
         fputs("\tex de,hl\n\tpush ix\n\tpop hl\n", out);
-        fprintf(out, "\tld bc,%d\n\tadd hl,bc\n"
-                     "\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+        fprintf(out, "\tld bc,%d\n\tadd hl,bc\n\tld (hl),e\n",
                 offset);
+        if (!compact_byte_slot)
+            fputs("\tinc hl\n\tld (hl),d\n", out);
         if (forward_to_store) {
             mir_forwarded_hl_value = value;
             mir_forwarded_hl_instruction = forward_instruction - 1;
@@ -28979,6 +29060,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                  * path) need to know this to skip DE's own runtime
                  * xor-128 flip and only flip HL's sign bit. */
                 int de_holds_biased_constant = 0;
+                int small_positive_increment = 0;
                 int pointer_difference_shift =
                     mir_pointer_difference_pow2_shift(insn);
                 if (planned_stack_forwarded_left &&
@@ -29240,8 +29322,15 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                            mir_binary_only_constant(insn->src2)) {
                     const struct MirInsn *constant =
                         mir_definition(insn->src2);
-                    fprintf(out, "\tld de,%ld\n",
-                            constant->immediate & 0xffffL);
+                    if (mir_cfg_block_count() >= 300 &&
+                        insn->immediate == '+' &&
+                        (constant->immediate == 1 ||
+                         constant->immediate == 2))
+                        small_positive_increment =
+                            (int)constant->immediate;
+                    else
+                        fprintf(out, "\tld de,%ld\n",
+                                constant->immediate & 0xffffL);
                 } else {
                     /* Item T15: when stack_forwarded_left, the left
                      * operand was already pushed at its definition site
@@ -29303,6 +29392,10 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                      * DE) - DE already holds the biased value. */
                     mir_emit_scalar_compare_biased_right(
                         out, (int)insn->immediate);
+                } else if (small_positive_increment != 0) {
+                    fputs("\tinc hl\n", out);
+                    if (small_positive_increment == 2)
+                        fputs("\tinc hl\n", out);
                 } else if (!mir_emit_scalar_operation(out, insn))
                     goto done;
                 mir_emit_virtual_store(out, insn->dst);

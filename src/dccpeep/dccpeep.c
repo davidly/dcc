@@ -3682,14 +3682,14 @@ static int pass_bc_pair_load_to_de(void)
 /* Returns 1 if instruction s is safe to skip over when checking whether a
  * reload of HL from (ix+off_lo)/(ix+off_hi) is redundant.  An instruction
  * is safe when it neither modifies L/H nor writes to the two stored slots. */
-static int hl_store_reload_safe_intervening(const char *s, int off_lo, int off_hi)
+static int hl_store_reload_safe_intervening(
+    const char *s, int off_lo, int off_hi)
 {
     char tmp[MAX_LINE];
     char store_lo[64], store_hi[64];
 
     strip_peep_comment_copy(tmp, s);
-    if (starts_label(tmp))          return 0; /* label: unknown incoming HL */
-    /* Instructions that write to L or H */
+    if (starts_label(tmp))          return 0;
     if (strncmp(tmp, "ld l,",   5) == 0) return 0;
     if (strncmp(tmp, "ld h,",   5) == 0) return 0;
     if (strncmp(tmp, "ld hl,",  6) == 0) return 0;
@@ -3702,7 +3702,6 @@ static int hl_store_reload_safe_intervening(const char *s, int off_lo, int off_h
     if (strcmp (tmp, "ex de,hl")    == 0) return 0;
     if (strcmp (tmp, "ex (sp),hl")  == 0) return 0;
     if (strcmp (tmp, "exx")         == 0) return 0;
-    /* Jumps/calls: would need dataflow analysis */
     if (strncmp(tmp, "jp ",   3) == 0) return 0;
     if (strncmp(tmp, "jr ",   3) == 0) return 0;
     if (strncmp(tmp, "call ", 5) == 0) return 0;
@@ -3714,6 +3713,20 @@ static int hl_store_reload_safe_intervening(const char *s, int off_lo, int off_h
     if (strncmp(tmp, store_lo, strlen(store_lo)) == 0) return 0;
     if (strncmp(tmp, store_hi, strlen(store_hi)) == 0) return 0;
     return 1;
+}
+
+static int byte_slot_reload_safe_intervening(int line)
+{
+    const PeepLineInfo *info = peep_line_info(line);
+
+    return info != NULL &&
+           (info->kind == PEEP_LINE_INSTRUCTION ||
+            info->kind == PEEP_LINE_BLANK ||
+            info->kind == PEEP_LINE_COMMENT) &&
+           !info->effects.unknown &&
+           !info->effects.control_flow &&
+           (info->effects.writes & PEEP_REG_HL) == 0 &&
+           (info->effects.memory_written & PEEP_MEM_FRAME) == 0;
 }
 
 static int pass_remove_ix_store_reload_hl(void)
@@ -3734,7 +3747,34 @@ static int pass_remove_ix_store_reload_hl(void)
                 }
                 break;
             }
-            if (!hl_store_reload_safe_intervening(lines[j], off, off + 1))
+            if (!hl_store_reload_safe_intervening(
+                    lines[j], off, off + 1))
+                break;
+        }
+    }
+    for (i = 0; i + 1 < nlines; ++i) {
+        char clean[MAX_LINE];
+        char *end;
+
+        if (strstr(lines[i], ";@dcc.mir byte-slot") == NULL)
+            continue;
+        strip_peep_comment_copy(clean, lines[i]);
+        if (strncmp(clean, "ld (ix", 6) != 0)
+            continue;
+        off = (int)strtol(clean + 6, &end, 10);
+        if (*end != ')' || end[1] != ',' ||
+            end[2] != 'l' || end[3] != 0)
+            continue;
+        sprintf(expected_lo, "ld l,(ix%+d)", off);
+        for (j = i + 1; j < nlines && j <= i + 10; ++j) {
+            if (eq(j, expected_lo)) {
+                delete_n(j, 1);
+                changed = 1;
+                if (i > 0)
+                    --i;
+                break;
+            }
+            if (!byte_slot_reload_safe_intervening(j))
                 break;
         }
     }
@@ -9439,6 +9479,67 @@ static int pass_elim_redundant_ld_h_zero(void)
     return changed;
 }
 
+static int function_has_mir_byte_slots(int line)
+{
+    int end;
+    int start;
+    int scan;
+
+    find_function_bounds_any(line, &start, &end);
+    for (scan = start; scan < end; ++scan)
+        if (strstr(lines[scan], ";@dcc.mir byte-slot") != NULL)
+            return 1;
+    return 0;
+}
+
+static int pass_narrow_dead_h_constant(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i < nlines; ++i) {
+        const PeepLineInfo *info = peep_line_info(i);
+        char replacement[32];
+        const char *low_register;
+        const char *tag;
+        unsigned high_register;
+
+        if (!function_has_mir_byte_slots(i) ||
+            info == NULL || info->opcode != PEEP_OPCODE_LD ||
+            info->left.kind != PEEP_OPERAND_REGISTER ||
+            info->right.kind != PEEP_OPERAND_IMMEDIATE ||
+            !info->right.immediate_valid)
+            continue;
+        if (info->left.registers == PEEP_REG_HL) {
+            low_register = "l";
+            high_register = PEEP_REG_H;
+            tag = "narrow_dead_h_const";
+        } else if (info->left.registers == PEEP_REG_DE) {
+            low_register = "e";
+            high_register = PEEP_REG_D;
+            tag = "narrow_dead_d_const";
+        } else if (info->left.registers == PEEP_REG_BC) {
+            low_register = "c";
+            high_register = PEEP_REG_B;
+            tag = "narrow_dead_b_const";
+        } else
+            continue;
+        if (!peep_registers_dead_after(i, high_register))
+            continue;
+        snprintf(replacement, sizeof(replacement), "ld %s,%ld",
+                 low_register, info->right.immediate & 255L);
+        replace1_tagged(i, replacement, tag);
+        changed = 1;
+    }
+    for (i = 0; i + 1 < nlines; ++i)
+        if ((eq(i, "ld l,a") && eq(i + 1, "ld a,l")) ||
+            (eq(i, "ld h,a") && eq(i + 1, "ld a,h"))) {
+            delete_n(i + 1, 1);
+            changed = 1;
+        }
+    return changed;
+}
+
 /* Parse an IX offset string (e.g. "+8", "-2") to an integer. */
 
 
@@ -10205,6 +10306,7 @@ int main(int argc, char **argv)
      * it shrinks code and can bring more branches into jr range. */
     RUN_PASS(pass_dup_ix_load_to_reg_copy);
     RUN_PASS(pass_fold_const_sign_extend);
+    RUN_PASS(pass_narrow_dead_h_constant);
     do {
         changed = 0;
         if (RUN_PASS(pass_elim_dead_register_loads))
