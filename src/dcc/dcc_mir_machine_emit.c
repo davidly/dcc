@@ -394,6 +394,15 @@ struct MirRecursiveWideProduct {
     int parameter_stack_offset;
 };
 
+struct MirByteRotateFlags {
+    struct Sym *state;
+    int operation_stack_offset;
+    int value_stack_offset;
+    int carry_offset;
+    int negative_offset;
+    int zero_offset;
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -5471,6 +5480,275 @@ static int mir_match_recursive_wide_product(
     return 1;
 }
 
+static int mir_machine_global_byte_member(
+    int root_index, int member_index,
+    struct Sym **symbol_out, int *offset_out)
+{
+    const struct MirInsn *root = &mir.insns[root_index];
+    const struct MirInsn *member = &mir.insns[member_index];
+    struct Sym *symbol;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (root->opcode != MIR_ADDRESS ||
+        member->opcode != MIR_MEMBER_ADDRESS ||
+        member->src1 != root->dst ||
+        member->memory_size != 1 ||
+        !mir_scalar_memory_location(
+            root, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL)
+        return 0;
+    symbol = find_global(root->name);
+    if (symbol == NULL || symbol->is_volatile)
+        return 0;
+    *symbol_out = symbol;
+    *offset_out = memory_offset + (int)member->immediate;
+    return 1;
+}
+
+static int mir_match_byte_rotate_flags(
+    struct MirByteRotateFlags *plan)
+{
+    static const int expected_opcodes[139] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_NOP, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_UNARY,
+        MIR_NOP, MIR_STORE, MIR_CONST, MIR_NOP, MIR_UNARY,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_NOP,
+        MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_UNARY, MIR_STORE,
+        MIR_NOP, MIR_JUMP, MIR_LABEL,
+        MIR_CONST, MIR_NOP, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_CONST, MIR_NOP, MIR_UNARY,
+        MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_UNARY, MIR_STORE,
+        MIR_NOP, MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_NOP,
+        MIR_STORE, MIR_LABEL, MIR_NOP, MIR_JUMP,
+        MIR_LABEL, MIR_CONST, MIR_NOP, MIR_UNARY,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_NOP, MIR_CONST, MIR_UNARY,
+        MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_UNARY, MIR_STORE,
+        MIR_NOP, MIR_JUMP, MIR_LABEL, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_NOP, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_UNARY,
+        MIR_STORE, MIR_NOP, MIR_BRANCH_FALSE, MIR_NOP,
+        MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_UNARY,
+        MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP,
+        MIR_LABEL, MIR_LABEL, MIR_LABEL, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_LOAD, MIR_CONST, MIR_UNARY,
+        MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_LOAD, MIR_UNARY, MIR_UNARY,
+        MIR_STORE_INDIRECT, MIR_LOAD, MIR_RETURN
+    };
+    const struct MirInsn *operation;
+    const struct MirInsn *value;
+    struct Sym *state;
+    struct Sym *member_state;
+    int carry_offset;
+    int member_offset;
+    static const int boolean_member_index[8] = {
+        17, 39, 44, 76, 92, 97, 124, 132
+    };
+    static const int boolean_value_index[8] = {
+        22, 40, 49, 81, 93, 102, 129, 135
+    };
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir_cfg_block_count() != 12 || mir.count != 139 ||
+        type_size(mir.return_type) != 1)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return 0;
+    operation = &mir.insns[1];
+    value = &mir.insns[2];
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if ((mir.insns[instruction].opcode == MIR_LOAD_INDIRECT ||
+             mir.insns[instruction].opcode == MIR_STORE_INDIRECT) &&
+            (mir.insns[instruction].memory_size != 1 ||
+             mir.insns[instruction].bit_width != 0 ||
+             (mir.insns[instruction].memory_flags & (1 | 8)) != 0))
+            return 0;
+    if (type_size(operation->type) != 1 ||
+        (operation->type & TYPE_UNSIGNED) == 0 ||
+        type_size(value->type) != 1 ||
+        (value->type & TYPE_UNSIGNED) == 0 ||
+        !mir_machine_parameter_value_offset(
+            operation->dst, &plan->operation_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            value->dst, &plan->value_stack_offset) ||
+        !mir_machine_constant_equals(mir.insns[6].src2, 224) ||
+        mir.insns[6].immediate != '&' ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        mir.insns[5].src1 != operation->dst ||
+        mir.insns[7].src1 != mir.insns[6].dst ||
+        !mir_machine_same_location(operation, &mir.insns[9]) ||
+        mir.insns[9].src1 != mir.insns[7].dst ||
+        !mir_machine_constant_equals(mir.insns[13].src1, 0) ||
+        mir.insns[13].immediate != TOK_EQ ||
+        mir.insns[13].src2 != mir.insns[12].dst ||
+        mir.insns[12].src1 != mir.insns[7].dst ||
+        mir.insns[14].src1 != mir.insns[13].dst ||
+        mir.insns[14].label != mir.insns[31].label ||
+        !mir_machine_constant_equals(mir.insns[35].src1, 32) ||
+        mir.insns[35].immediate != TOK_EQ ||
+        mir.insns[35].src2 != mir.insns[34].dst ||
+        mir.insns[34].src1 != mir.insns[7].dst ||
+        mir.insns[36].src1 != mir.insns[35].dst ||
+        mir.insns[36].label != mir.insns[68].label ||
+        !mir_machine_constant_equals(mir.insns[72].src1, 64) ||
+        mir.insns[72].immediate != TOK_EQ ||
+        mir.insns[72].src2 != mir.insns[71].dst ||
+        mir.insns[71].src1 != mir.insns[7].dst ||
+        mir.insns[73].src1 != mir.insns[72].dst ||
+        mir.insns[73].label != mir.insns[90].label)
+        return 0;
+    if (!mir_machine_global_byte_member(
+            16, 17, &state, &carry_offset))
+        return 0;
+#define SAME_MEMBER(root_i, member_i, expected_offset) \
+    (mir_machine_global_byte_member( \
+         (root_i), (member_i), &member_state, &member_offset) && \
+     member_state == state && member_offset == (expected_offset))
+    if (!SAME_MEMBER(38, 39, carry_offset) ||
+        !SAME_MEMBER(43, 44, carry_offset) ||
+        !SAME_MEMBER(75, 76, carry_offset) ||
+        !SAME_MEMBER(91, 92, carry_offset) ||
+        !SAME_MEMBER(96, 97, carry_offset) ||
+        !mir_machine_global_byte_member(
+            123, 124, &member_state, &plan->negative_offset) ||
+        member_state != state ||
+        !mir_machine_global_byte_member(
+            131, 132, &member_state, &plan->zero_offset) ||
+        member_state != state)
+        return 0;
+#undef SAME_MEMBER
+    for (instruction = 0; instruction < 8; ++instruction)
+        if ((mir.insns[boolean_member_index[instruction]].type & 15) !=
+                TYPE_BOOL ||
+            (mir.insns[boolean_value_index[instruction]].type & 15) !=
+                TYPE_BOOL)
+            return 0;
+    if (!mir_machine_constant_equals(mir.insns[21].src1, 128) ||
+        mir.insns[21].immediate != '&' ||
+        mir.insns[21].src2 != mir.insns[20].dst ||
+        mir.insns[20].src1 != value->dst ||
+        mir.insns[22].src1 != mir.insns[21].dst ||
+        mir.insns[23].src1 != mir.insns[17].dst ||
+        mir.insns[23].src2 != mir.insns[22].dst ||
+        mir.insns[26].immediate != TOK_SHL ||
+        mir.insns[26].src1 != value->dst ||
+        !mir_machine_constant_equals(mir.insns[26].src2, 1) ||
+        mir.insns[27].src1 != mir.insns[26].dst ||
+        !mir_machine_same_location(value, &mir.insns[28]) ||
+        mir.insns[28].src1 != mir.insns[27].dst ||
+        mir.insns[30].label != mir.insns[122].label)
+        return 0;
+    if (mir.insns[40].src1 != mir.insns[39].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[42]) ||
+        mir.insns[42].src1 != mir.insns[40].dst ||
+        !mir_machine_constant_equals(mir.insns[48].src1, 128) ||
+        mir.insns[48].immediate != '&' ||
+        mir.insns[48].src2 != mir.insns[47].dst ||
+        mir.insns[47].src1 != value->dst ||
+        mir.insns[49].src1 != mir.insns[48].dst ||
+        mir.insns[50].src1 != mir.insns[44].dst ||
+        mir.insns[50].src2 != mir.insns[49].dst ||
+        mir.insns[53].immediate != TOK_SHL ||
+        mir.insns[53].src1 != value->dst ||
+        !mir_machine_constant_equals(mir.insns[53].src2, 1) ||
+        mir.insns[54].src1 != mir.insns[53].dst ||
+        !mir_machine_same_location(value, &mir.insns[55]) ||
+        mir.insns[55].src1 != mir.insns[54].dst ||
+        mir.insns[57].src1 != mir.insns[40].dst ||
+        mir.insns[57].label != mir.insns[121].label ||
+        mir.insns[60].immediate != 0 ||
+        mir.insns[60].src1 != mir.insns[54].dst ||
+        mir.insns[61].immediate != '|' ||
+        mir.insns[61].src1 != mir.insns[60].dst ||
+        !mir_machine_constant_equals(mir.insns[61].src2, 1) ||
+        mir.insns[62].immediate != 0 ||
+        mir.insns[62].src1 != mir.insns[61].dst ||
+        !mir_machine_same_location(value, &mir.insns[64]) ||
+        mir.insns[64].src1 != mir.insns[62].dst ||
+        mir.insns[67].label != mir.insns[121].label)
+        return 0;
+    if (mir.insns[80].immediate != '&' ||
+        mir.insns[80].src1 != mir.insns[79].dst ||
+        !mir_machine_constant_equals(mir.insns[80].src2, 1) ||
+        mir.insns[79].src1 != value->dst ||
+        mir.insns[81].src1 != mir.insns[80].dst ||
+        mir.insns[82].src1 != mir.insns[76].dst ||
+        mir.insns[82].src2 != mir.insns[81].dst ||
+        mir.insns[85].immediate != TOK_SHR ||
+        mir.insns[85].src1 != value->dst ||
+        !mir_machine_constant_equals(mir.insns[85].src2, 1) ||
+        mir.insns[86].src1 != mir.insns[85].dst ||
+        !mir_machine_same_location(value, &mir.insns[87]) ||
+        mir.insns[87].src1 != mir.insns[86].dst ||
+        mir.insns[89].label != mir.insns[120].label)
+        return 0;
+    if (mir.insns[93].src1 != mir.insns[92].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[95]) ||
+        mir.insns[95].src1 != mir.insns[93].dst ||
+        mir.insns[101].immediate != '&' ||
+        mir.insns[101].src1 != mir.insns[100].dst ||
+        !mir_machine_constant_equals(mir.insns[101].src2, 1) ||
+        mir.insns[100].src1 != value->dst ||
+        mir.insns[102].src1 != mir.insns[101].dst ||
+        mir.insns[103].src1 != mir.insns[97].dst ||
+        mir.insns[103].src2 != mir.insns[102].dst ||
+        mir.insns[106].immediate != TOK_SHR ||
+        mir.insns[106].src1 != value->dst ||
+        !mir_machine_constant_equals(mir.insns[106].src2, 1) ||
+        mir.insns[107].src1 != mir.insns[106].dst ||
+        !mir_machine_same_location(value, &mir.insns[108]) ||
+        mir.insns[108].src1 != mir.insns[107].dst ||
+        mir.insns[110].src1 != mir.insns[93].dst ||
+        mir.insns[110].label != mir.insns[118].label ||
+        mir.insns[113].immediate != 0 ||
+        mir.insns[113].src1 != mir.insns[107].dst ||
+        mir.insns[114].immediate != '|' ||
+        mir.insns[114].src1 != mir.insns[113].dst ||
+        !mir_machine_constant_equals(mir.insns[114].src2, 128) ||
+        mir.insns[115].immediate != 0 ||
+        mir.insns[115].src1 != mir.insns[114].dst ||
+        !mir_machine_same_location(value, &mir.insns[117]) ||
+        mir.insns[117].src1 != mir.insns[115].dst)
+        return 0;
+    if (mir.insns[30].label != mir.insns[122].label ||
+        mir.insns[67].label != mir.insns[121].label ||
+        mir.insns[89].label != mir.insns[120].label ||
+        !mir_machine_same_location(value, &mir.insns[125]) ||
+        mir.insns[128].immediate != '&' ||
+        mir.insns[128].src1 != mir.insns[127].dst ||
+        !mir_machine_constant_equals(mir.insns[128].src2, 128) ||
+        mir.insns[129].src1 != mir.insns[128].dst ||
+        mir.insns[130].src1 != mir.insns[124].dst ||
+        mir.insns[130].src2 != mir.insns[129].dst ||
+        !mir_machine_same_location(value, &mir.insns[133]) ||
+        mir.insns[134].immediate != '!' ||
+        mir.insns[134].src1 != mir.insns[133].dst ||
+        mir.insns[135].src1 != mir.insns[134].dst ||
+        mir.insns[136].src1 != mir.insns[132].dst ||
+        mir.insns[136].src2 != mir.insns[135].dst ||
+        !mir_machine_same_location(value, &mir.insns[137]) ||
+        mir.insns[138].src1 != mir.insns[137].dst)
+        return 0;
+    plan->state = state;
+    plan->carry_offset = carry_offset;
+    return 1;
+}
+
 static int mir_machine_flat_load(
     int value, int *stack_offset, long *offset,
     int *width, int *is_unsigned)
@@ -10493,6 +10771,68 @@ static void mir_emit_recursive_wide_product(
     fputs("\tpop bc\n\tpop bc\n\tret\n", out);
 }
 
+static void mir_emit_byte_rotate_flags(
+    FILE *out, const struct MirByteRotateFlags *plan)
+{
+    int asl = new_label();
+    int rol = new_label();
+    int lsr = new_label();
+    int rol_ready = new_label();
+    int ror_ready = new_label();
+    int flags = new_label();
+    int nonzero = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n\tld a,(hl)\n"
+            "\tand 224\n\tld b,a\n"
+            "\tld hl,%d\n\tadd hl,sp\n\tld c,(hl)\n"
+            "\tld a,b\n\tor a\n\tjp z,L%d\n"
+            "\tcp 32\n\tjp z,L%d\n"
+            "\tcp 64\n\tjp z,L%d\n",
+            plan->operation_stack_offset,
+            plan->value_stack_offset,
+            asl, rol, lsr);
+    mir_machine_emit_global_byte_a(
+        out, plan->state, plan->carry_offset, 0);
+    fprintf(out,
+            "\tor a\n\tjp z,L%d\n\tscf\nL%d:\n\trr c\n",
+            ror_ready, ror_ready);
+    fputs("\tld a,0\n\tadc a,0\n", out);
+    mir_machine_emit_global_byte_a(
+        out, plan->state, plan->carry_offset, 1);
+    fprintf(out, "\tjp L%d\n", flags);
+    fprintf(out, "L%d:\n\tsla c\n", asl);
+    fputs("\tld a,0\n\tadc a,0\n", out);
+    mir_machine_emit_global_byte_a(
+        out, plan->state, plan->carry_offset, 1);
+    fprintf(out, "\tjp L%d\n", flags);
+    fprintf(out, "L%d:\n", rol);
+    mir_machine_emit_global_byte_a(
+        out, plan->state, plan->carry_offset, 0);
+    fprintf(out,
+            "\tor a\n\tjp z,L%d\n\tscf\nL%d:\n\trl c\n",
+            rol_ready, rol_ready);
+    fputs("\tld a,0\n\tadc a,0\n", out);
+    mir_machine_emit_global_byte_a(
+        out, plan->state, plan->carry_offset, 1);
+    fprintf(out, "\tjp L%d\n", flags);
+    fprintf(out, "L%d:\n\tsrl c\n", lsr);
+    fputs("\tld a,0\n\tadc a,0\n", out);
+    mir_machine_emit_global_byte_a(
+        out, plan->state, plan->carry_offset, 1);
+    fprintf(out, "L%d:\n", flags);
+    fputs("\tld a,c\n\trlca\n\tld a,0\n\tadc a,0\n", out);
+    mir_machine_emit_global_byte_a(
+        out, plan->state, plan->negative_offset, 1);
+    fputs("\tld a,c\n\tor a\n\tld a,0\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tinc a\nL%d:\n", nonzero, nonzero);
+    mir_machine_emit_global_byte_a(
+        out, plan->state, plan->zero_offset, 1);
+    fputs("\tld l,c\n\tld h,0\n\tret\n", out);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -10560,6 +10900,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantFloatConditional constant_float_conditional;
     struct MirConditionalGlobalFloatLoad conditional_global_float_load;
     struct MirRecursiveWideProduct recursive_wide_product;
+    struct MirByteRotateFlags byte_rotate_flags;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -10831,6 +11172,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &recursive_wide_product)) {
         mir_emit_recursive_wide_product(
             out, &recursive_wide_product);
+        return 1;
+    }
+    if (mir_match_byte_rotate_flags(&byte_rotate_flags)) {
+        mir_emit_byte_rotate_flags(out, &byte_rotate_flags);
         return 1;
     }
     if (mir_match_indexed_member_write(
