@@ -477,6 +477,11 @@ struct MirDynamicRowScan {
     int count;
 };
 
+struct MirConstantLoopCheck {
+    struct Sym *function;
+    int string_id;
+};
+
 #define MIR_MACHINE_SWITCH_RESULT_LIMIT 16
 
 struct MirConstantResultSwitch {
@@ -7605,6 +7610,103 @@ static int mir_match_dynamic_row_scan(struct MirDynamicRowScan *plan)
     return 1;
 }
 
+static int mir_match_constant_loop_check(
+    struct MirConstantLoopCheck *plan)
+{
+    static const int expected_opcodes[35] = {
+        MIR_LABEL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST,
+        MIR_STORE, MIR_LABEL, MIR_PHI, MIR_PHI, MIR_NOP, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP,
+        MIR_UNARY, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_CALL
+    };
+    const struct MirInsn *sum_phi;
+    const struct MirInsn *index_phi;
+    int arguments[2];
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 35 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return 0;
+    sum_phi = &mir.insns[8];
+    index_phi = &mir.insns[9];
+    if (!mir_machine_constant_equals(mir.insns[1].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[3]) ||
+        mir.insns[3].memory_size != 2 ||
+        !mir_machine_constant_equals(mir.insns[5].dst, 1) ||
+        !mir_machine_unobservable_local_store(&mir.insns[6]) ||
+        mir.insns[6].memory_size != 1)
+        return 0;
+    if (sum_phi->src1 != mir.insns[1].dst ||
+        sum_phi->src2 != mir.insns[18].dst ||
+        sum_phi->phi_pred1 != mir.insns[0].label ||
+        sum_phi->phi_pred2 != mir.insns[21].label ||
+        type_ptr_depth(sum_phi->type) != 0 ||
+        (sum_phi->type & 15) != TYPE_INT ||
+        type_size(sum_phi->type) != 2 ||
+        index_phi->src1 != mir.insns[5].dst ||
+        index_phi->src2 != mir.insns[24].dst ||
+        index_phi->phi_pred1 != mir.insns[0].label ||
+        index_phi->phi_pred2 != mir.insns[21].label ||
+        (index_phi->type & TYPE_UNSIGNED) == 0 ||
+        type_size(index_phi->type) != 1)
+        return 0;
+    if (!mir_machine_constant_equals(mir.insns[11].dst, 10) ||
+        mir.insns[12].immediate != 0 ||
+        mir.insns[12].src1 != index_phi->dst ||
+        mir.insns[13].immediate != TOK_LE ||
+        mir.insns[13].src1 != mir.insns[12].dst ||
+        mir.insns[13].src2 != mir.insns[11].dst ||
+        mir.insns[14].src1 != mir.insns[13].dst ||
+        mir.insns[14].label != mir.insns[27].label)
+        return 0;
+    if (mir.insns[17].immediate != 0 ||
+        mir.insns[17].src1 != index_phi->dst ||
+        mir.insns[18].immediate != '+' ||
+        mir.insns[18].src1 != sum_phi->dst ||
+        mir.insns[18].src2 != mir.insns[17].dst ||
+        !mir_machine_same_location(&mir.insns[3], &mir.insns[20]) ||
+        mir.insns[20].src1 != mir.insns[18].dst ||
+        !mir_machine_constant_equals(mir.insns[23].dst, 1) ||
+        mir.insns[24].immediate != '+' ||
+        mir.insns[24].src1 != index_phi->dst ||
+        mir.insns[24].src2 != mir.insns[23].dst ||
+        !mir_machine_same_location(&mir.insns[6], &mir.insns[25]) ||
+        mir.insns[25].src1 != mir.insns[24].dst ||
+        mir.insns[26].label != mir.insns[7].label)
+        return 0;
+    if (!mir_machine_constant_equals(mir.insns[29].dst, 55) ||
+        mir.insns[30].immediate != TOK_EQ ||
+        mir.insns[30].src1 != sum_phi->dst ||
+        mir.insns[30].src2 != mir.insns[29].dst ||
+        mir.insns[31].src1 != mir.insns[30].dst ||
+        mir.insns[33].src1 != mir.insns[32].dst ||
+        !mir_machine_two_call_arguments(&mir.insns[34], arguments) ||
+        arguments[0] != mir.insns[30].dst ||
+        arguments[1] != mir.insns[32].dst)
+        return 0;
+    plan->function = find_global(mir.insns[34].name);
+    if (plan->function == NULL || !plan->function->is_defined ||
+        plan->function->storage != SC_FUNC ||
+        plan->function->is_funcptr ||
+        plan->function->is_noreturn ||
+        !plan->function->has_proto ||
+        plan->function->proto_nargs != 2 ||
+        plan->function->proto_variadic ||
+        plan->function->proto_types[0] != mir.insns[31].type ||
+        plan->function->proto_types[1] != mir.insns[33].type ||
+        mir.insns[34].memory_flags != 0)
+        return 0;
+    plan->string_id = (int)mir.insns[32].immediate;
+    return 1;
+}
+
 static int mir_machine_constant_return_for_label(
     int label, int *result)
 {
@@ -13830,6 +13932,18 @@ static void mir_emit_dynamic_row_scan(
             plan->count * plan->element_stride, loop);
 }
 
+static void mir_emit_constant_loop_check(
+    FILE *out, const struct MirConstantLoopCheck *plan)
+{
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n"
+                 "\tld hl,1\n\tpush hl\n",
+            plan->string_id);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n\tpop bc\n\tret\n", out);
+}
+
 static void mir_emit_constant_result_switch(
     FILE *out, const struct MirConstantResultSwitch *plan)
 {
@@ -13989,6 +14103,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirAffineByteFill affine_byte_fill;
     struct MirPalindromeScan palindrome_scan;
     struct MirDynamicRowScan dynamic_row_scan;
+    struct MirConstantLoopCheck constant_loop_check;
     struct MirConstantResultSwitch constant_result_switch;
     struct MirLocalByteFillSumPrint local_byte_fill_sum_print;
     struct MirIndexedMemberWrite indexed_member_write;
@@ -14314,6 +14429,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_dynamic_row_scan(&dynamic_row_scan)) {
         mir_emit_dynamic_row_scan(out, &dynamic_row_scan);
+        return 1;
+    }
+    if (mir_match_constant_loop_check(&constant_loop_check)) {
+        mir_emit_constant_loop_check(out, &constant_loop_check);
         return 1;
     }
     if (mir_match_constant_result_switch(
