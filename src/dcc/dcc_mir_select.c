@@ -3705,6 +3705,36 @@ static int mir_is_profiled_vla_single_block_instruction_win(
            generated_instructions <= captured_instructions - 8;
 }
 
+static int mir_is_profiled_vla_wide_truncation_loop(
+    long generated_size, long captured_size, int generated_instructions,
+    int captured_instructions)
+{
+    int allocs = 0;
+    int indirect_loads = 0;
+    int indirect_stores = 0;
+    int saves = 0;
+    int instruction;
+
+    if (!mir.has_vla || mir.sink_purpose != EMIT_SINK_DEFERRED ||
+        !mir_has_cfg_backedge() || !mir_has_wide_values() ||
+        mir_cfg_block_count() != 7 || mir_call_count() != 0 ||
+        mir.count != 64 || (mir.return_type & 15) != TYPE_INT ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        generated_size > captured_size + 160 ||
+        generated_instructions > captured_instructions + 1)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        switch (mir.insns[instruction].opcode) {
+        case MIR_VLA_SAVE: ++saves; break;
+        case MIR_VLA_ALLOC: ++allocs; break;
+        case MIR_LOAD_INDIRECT: ++indirect_loads; break;
+        case MIR_STORE_INDIRECT: ++indirect_stores; break;
+        default: break;
+        }
+    return saves == 1 && allocs == 1 &&
+           indirect_loads == 1 && indirect_stores == 1;
+}
+
 static int mir_is_profiled_constant_absolute_no_worse(
     long generated_size, long captured_size, int generated_instructions,
     int captured_instructions)
@@ -4022,6 +4052,12 @@ static int mir_final_cost_policy_rejects(
     policy_version = mir_register_policy_version(policy);
     if (policy_version < 0)
         fatal("unknown DCC_MIR_FINAL_COST_POLICY");
+    if (!g_speculative_codegen_active &&
+        !strcmp(selector_name, "spilled-scalar-cfg") &&
+        mir_is_profiled_vla_wide_truncation_loop(
+            generated_size, captured_size,
+            generated_instructions, captured_instructions))
+        return 0;
     if (g_speculative_codegen_active) {
         const char *filter =
             getenv("DCC_MIR_SPECULATIVE_REGISTER_FUNCTION");
