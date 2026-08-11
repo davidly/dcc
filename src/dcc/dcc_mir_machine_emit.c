@@ -449,6 +449,11 @@ struct MirFixedRowWordSum {
     int array_stack_offset;
 };
 
+struct MirFixedWideZero {
+    int parameter_stack_offset;
+    int count;
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -6985,6 +6990,84 @@ static int mir_match_fixed_row_word_sum(struct MirFixedRowWordSum *plan)
     return 1;
 }
 
+static int mir_match_fixed_wide_zero(struct MirFixedWideZero *plan)
+{
+    static const int expected_opcodes[42] = {
+        MIR_LABEL, MIR_PARAM, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL,
+        MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_CONST, MIR_RETURN, MIR_LABEL, MIR_LABEL, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_RETURN
+    };
+    const struct MirInsn *parameter = &mir.insns[1];
+    const struct MirInsn *index_phi = &mir.insns[7];
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 42 || mir_cfg_block_count() != 5 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_INT ||
+        type_ptr_depth(mir.return_type) != 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return 0;
+    if (type_ptr_depth(parameter->type) != 1 ||
+        (parameter->type & 15) != TYPE_LONG ||
+        mir_machine_pointee_is_volatile(parameter) ||
+        !mir_machine_parameter_value_offset(
+            parameter->dst, &plan->parameter_stack_offset) ||
+        plan->parameter_stack_offset != 2 ||
+        !mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[4]) ||
+        mir.insns[4].memory_size != 2 ||
+        mir.insns[4].src1 != mir.insns[2].dst)
+        return 0;
+    if ((index_phi->type & 15) != TYPE_INT ||
+        (index_phi->type & TYPE_UNSIGNED) != 0 ||
+        index_phi->src1 != mir.insns[2].dst ||
+        index_phi->src2 != mir.insns[36].dst ||
+        index_phi->phi_pred1 != mir.insns[0].label ||
+        index_phi->phi_pred2 != mir.insns[33].label ||
+        mir.insns[20].immediate != '<' ||
+        mir.insns[20].src1 != index_phi->dst ||
+        mir.insns[20].src2 != mir.insns[19].dst ||
+        mir.insns[21].src1 != mir.insns[20].dst ||
+        mir.insns[21].label != mir.insns[39].label ||
+        mir.insns[24].src1 != parameter->dst ||
+        mir.insns[24].src2 != index_phi->dst ||
+        mir.insns[24].immediate != 4 ||
+        mir.insns[24].memory_size != 4 ||
+        mir.insns[25].src1 != mir.insns[24].dst ||
+        mir.insns[25].memory_size != 4 ||
+        (mir.insns[25].memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_constant_equals(mir.insns[27].dst, 0) ||
+        mir.insns[28].immediate != TOK_NE ||
+        mir.insns[28].src1 != mir.insns[25].dst ||
+        mir.insns[28].src2 != mir.insns[27].dst ||
+        mir.insns[29].src1 != mir.insns[28].dst ||
+        mir.insns[29].label != mir.insns[32].label ||
+        !mir_machine_constant_equals(mir.insns[30].dst, 0) ||
+        mir.insns[31].src1 != mir.insns[30].dst ||
+        !mir_machine_constant_equals(mir.insns[35].dst, 1) ||
+        mir.insns[36].immediate != '+' ||
+        mir.insns[36].src1 != index_phi->dst ||
+        mir.insns[36].src2 != mir.insns[35].dst ||
+        !mir_machine_same_location(&mir.insns[4], &mir.insns[37]) ||
+        mir.insns[37].src1 != mir.insns[36].dst ||
+        mir.insns[38].label != mir.insns[5].label ||
+        !mir_machine_constant_equals(mir.insns[40].dst, 1) ||
+        mir.insns[41].src1 != mir.insns[40].dst)
+        return 0;
+    if (mir.insns[19].immediate <= 0 ||
+        mir.insns[19].immediate > 255)
+        return 0;
+    plan->count = (int)mir.insns[19].immediate;
+    return 1;
+}
+
 static int mir_machine_flat_load(
     int value, int *stack_offset, long *offset,
     int *width, int *is_unsigned)
@@ -12315,6 +12398,34 @@ static void mir_emit_fixed_row_word_sum(
             exit, done, exit);
 }
 
+static void mir_emit_fixed_wide_zero(
+    FILE *out, const struct MirFixedWideZero *plan)
+{
+    int done = new_label();
+    int loop = new_label();
+    int nonzero = new_label();
+
+    fprintf(out,
+            ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n"
+            "\tpush iy\n",
+            mir.name);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tpush de\n\tpop iy\n\tld b,%d\n"
+            "L%d:\n\tld a,(iy+0)\n\tor (iy+1)\n"
+            "\tor (iy+2)\n\tor (iy+3)\n\tjp nz,L%d\n"
+            "\tinc iy\n\tinc iy\n\tinc iy\n\tinc iy\n"
+            "\tdjnz L%d\n\tld hl,1\n\tjp L%d\n"
+            "L%d:\n\tld hl,0\n"
+            "L%d:\n\tpop iy\n"
+            ";@dcc.reg free=iy\n\tret\n",
+            plan->parameter_stack_offset + 2, plan->count,
+            loop, nonzero, loop, done, nonzero, done);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -12389,6 +12500,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirByteRangeUnion byte_range_union;
     struct MirByteArraySum byte_array_sum;
     struct MirFixedRowWordSum fixed_row_word_sum;
+    struct MirFixedWideZero fixed_wide_zero;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -12688,6 +12800,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_fixed_row_word_sum(&fixed_row_word_sum)) {
         mir_emit_fixed_row_word_sum(out, &fixed_row_word_sum);
+        return 1;
+    }
+    if (mir_match_fixed_wide_zero(&fixed_wide_zero)) {
+        mir_emit_fixed_wide_zero(out, &fixed_wide_zero);
         return 1;
     }
     if (mir_match_indexed_member_write(

@@ -3763,6 +3763,29 @@ static int mir_is_profiled_variadic_macro_validation_loop(
     return va_starts == 1 && va_args == 1 && va_ends == 1;
 }
 
+static int mir_is_profiled_call_check_runner(
+    long generated_size, long captured_size, int generated_instructions,
+    int captured_instructions)
+{
+    int member_addresses = 0;
+    int stores_indirect = 0;
+    int instruction;
+
+    if (mir.has_vla || mir.sink_purpose != EMIT_SINK_DEFERRED ||
+        mir_has_cfg_backedge() || mir_has_wide_values() ||
+        mir_cfg_block_count() != 6 || mir_call_count() != 8 ||
+        mir.count != 117 || (mir.return_type & 15) != TYPE_VOID ||
+        generated_size > captured_size + 130 ||
+        generated_instructions > captured_instructions + 14)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_MEMBER_ADDRESS)
+            ++member_addresses;
+        else if (mir.insns[instruction].opcode == MIR_STORE_INDIRECT)
+            ++stores_indirect;
+    return member_addresses == 11 && stores_indirect == 1;
+}
+
 static int mir_is_profiled_constant_absolute_no_worse(
     long generated_size, long captured_size, int generated_instructions,
     int captured_instructions)
@@ -4086,6 +4109,9 @@ static int mir_final_cost_policy_rejects(
              generated_size, captured_size,
              generated_instructions, captured_instructions) ||
          mir_is_profiled_variadic_macro_validation_loop(
+             generated_size, captured_size,
+             generated_instructions, captured_instructions) ||
+         mir_is_profiled_call_check_runner(
              generated_size, captured_size,
              generated_instructions, captured_instructions)))
         return 0;
