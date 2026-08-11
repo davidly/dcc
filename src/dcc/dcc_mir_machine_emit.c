@@ -129,6 +129,13 @@ struct MirFixedArrayReduction {
     int element_is_unsigned;
 };
 
+struct MirWideMemberUpdate {
+    int pointer_stack_offset;
+    int value_stack_offset;
+    int member_offset;
+    int operation;
+};
+
 static void mir_machine_emit_hl_offset(
     FILE *out, int offset, int preserve_bc);
 
@@ -2684,6 +2691,132 @@ static int mir_match_fixed_array_reduction(
            (int)(return_insn - mir.insns);
 }
 
+static int mir_machine_wide_parameter_offset(
+    int value, int *stack_offset)
+{
+    const struct MirInsn *parameter = mir_definition(value);
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (parameter == NULL || parameter->opcode != MIR_PARAM ||
+        type_size(parameter->type) != 4 ||
+        type_is_float(parameter->type) ||
+        !mir_scalar_memory_location(
+            parameter, &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_size(memory_type) != 4 ||
+        type_is_float(memory_type))
+        return 0;
+    *stack_offset = memory_offset - 2;
+    return *stack_offset >= 0;
+}
+
+static int mir_machine_pointee_is_volatile(
+    const struct MirInsn *parameter)
+{
+    int declared;
+
+    if (parameter == NULL || parameter->opcode != MIR_PARAM)
+        return 1;
+    for (declared = 0; declared < mir.declared_count; ++declared)
+        if (!strcmp(
+                mir.declared_names[declared], parameter->name))
+            return mir.declared_pointee_is_volatile[declared];
+    return 1;
+}
+
+static int mir_match_wide_member_update(
+    struct MirWideMemberUpdate *plan)
+{
+    const struct MirInsn *store = NULL;
+    const struct MirInsn *member;
+    const struct MirInsn *load;
+    const struct MirInsn *binary;
+    const struct MirInsn *pointer_parameter;
+    int parameter_count = 0;
+    int load_count = 0;
+    int binary_count = 0;
+    int store_count = 0;
+    int instruction;
+    long member_offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla || mir_cfg_block_count() != 1 ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        switch (insn->opcode) {
+        case MIR_NOP:
+        case MIR_LABEL:
+        case MIR_MEMBER_ADDRESS:
+            break;
+        case MIR_PARAM:
+            ++parameter_count;
+            break;
+        case MIR_LOAD_INDIRECT:
+            if (insn->memory_size != 4 ||
+                insn->bit_width != 0 ||
+                type_is_float(insn->type) ||
+                (insn->memory_flags & (1 | 8)) != 0)
+                return 0;
+            ++load_count;
+            break;
+        case MIR_BINARY:
+            ++binary_count;
+            break;
+        case MIR_STORE_INDIRECT:
+            if (insn->memory_size != 4 ||
+                insn->bit_width != 0 ||
+                (insn->memory_flags & (1 | 8)) != 0)
+                return 0;
+            ++store_count;
+            store = insn;
+            break;
+        default:
+            return 0;
+        }
+    }
+    if (parameter_count != 2 || load_count != 1 ||
+        binary_count != 1 || store_count != 1 ||
+        store == NULL)
+        return 0;
+    member = mir_definition(store->src1);
+    binary = mir_definition(store->src2);
+    if (member == NULL || member->opcode != MIR_MEMBER_ADDRESS ||
+        member->bit_width != 0 ||
+        (member->memory_flags & (1 | 8)) != 0 ||
+        binary == NULL || binary->opcode != MIR_BINARY ||
+        (binary->immediate != '+' && binary->immediate != '-') ||
+        type_size(binary->type) != 4 ||
+        type_is_float(binary->type))
+        return 0;
+    load = mir_definition(binary->src1);
+    pointer_parameter = mir_definition(member->src1);
+    if (load == NULL || load->opcode != MIR_LOAD_INDIRECT ||
+        load->src1 != member->dst ||
+        load->memory_size != 4 || load->bit_width != 0 ||
+        type_is_float(load->type) ||
+        (load->memory_flags & (1 | 8)) != 0 ||
+        mir_machine_pointee_is_volatile(pointer_parameter) ||
+        !mir_machine_parameter_address(
+            member->src1, &plan->pointer_stack_offset,
+            &member_offset, 0) ||
+        member_offset != 0 ||
+        !mir_machine_wide_parameter_offset(
+            binary->src2, &plan->value_stack_offset))
+        return 0;
+    if (member->immediate < -32768 ||
+        member->immediate > 32767)
+        return 0;
+    plan->member_offset = (int)member->immediate;
+    plan->operation = (int)binary->immediate;
+    return 1;
+}
+
 static int mir_match_nested_row_store(struct MirNestedRowStore *plan)
 {
     const struct MirInsn *value_store = NULL;
@@ -3151,6 +3284,38 @@ static void mir_emit_fixed_array_reduction(
     fprintf(out, "\tdjnz L%d\n\tex de,hl\n\tret\n", loop);
 }
 
+static void mir_emit_wide_member_update(
+    FILE *out, const struct MirWideMemberUpdate *plan)
+{
+    int byte;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tex de,hl\n",
+            plan->pointer_stack_offset);
+    mir_machine_emit_hl_offset(
+        out, plan->member_offset, 0);
+    fputs("\tex de,hl\n", out);
+    fprintf(out, "\tld hl,%d\n\tadd hl,sp\n",
+            plan->value_stack_offset);
+    for (byte = 0; byte < 4; ++byte) {
+        fputs("\tld a,(de)\n", out);
+        if (plan->operation == '+')
+            fputs(byte == 0 ? "\tadd a,(hl)\n" :
+                              "\tadc a,(hl)\n", out);
+        else
+            fputs(byte == 0 ? "\tsub (hl)\n" :
+                              "\tsbc a,(hl)\n", out);
+        fputs("\tld (de),a\n", out);
+        if (byte != 3)
+            fputs("\tinc de\n\tinc hl\n", out);
+    }
+    fputs("\tret\n", out);
+}
+
 static void mir_emit_nested_row_store(
     FILE *out, const struct MirNestedRowStore *plan)
 {
@@ -3235,6 +3400,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirPointerStack pointer_stack;
     struct MirByteMemoryStack byte_memory_stack;
     struct MirFixedArrayReduction fixed_array_reduction;
+    struct MirWideMemberUpdate wide_member_update;
     long constant;
 
     if (mir_match_affine_pointer_constant_return(&constant)) {
@@ -3297,6 +3463,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_fixed_array_reduction(&fixed_array_reduction)) {
         mir_emit_fixed_array_reduction(out, &fixed_array_reduction);
+        return 1;
+    }
+    if (mir_match_wide_member_update(&wide_member_update)) {
+        mir_emit_wide_member_update(out, &wide_member_update);
         return 1;
     }
 

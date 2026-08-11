@@ -226,6 +226,7 @@ struct MirFunction {
     int declared_is_vla[MAX_LOCALS];
     int declared_is_array[MAX_LOCALS];
     int declared_is_volatile[MAX_LOCALS];
+    int declared_pointee_is_volatile[MAX_LOCALS];
     int declared_dynamic_strides[MAX_LOCALS];
     char declared_runtime_stride_names[MAX_LOCALS][64];
     int declared_is_const[MAX_LOCALS];

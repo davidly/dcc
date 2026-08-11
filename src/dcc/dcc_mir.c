@@ -3244,6 +3244,8 @@ void mir_note_declared_symbol(struct Sym *symbol)
     mir.declared_is_vla[i] = symbol->is_vla;
     mir.declared_is_array[i] = symbol->is_array;
     mir.declared_is_volatile[i] = symbol->is_volatile;
+    mir.declared_pointee_is_volatile[i] =
+        symbol->pointee_is_volatile;
     mir.declared_dynamic_strides[i] = symbol->runtime_stride_name[0] != 0;
     mir_copy_name(mir.declared_runtime_stride_names[i],
                   symbol->runtime_stride_name);
