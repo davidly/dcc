@@ -240,6 +240,12 @@ struct MirWideDifferenceCall {
     int right_is_unsigned;
 };
 
+struct MirScaledWideDivisionCall {
+    struct Sym *function;
+    int numerator_stack_offset;
+    int denominator_stack_offset;
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -2478,6 +2484,95 @@ static int mir_match_wide_difference_call(
         (left_parameter->type & TYPE_UNSIGNED) != 0;
     plan->right_is_unsigned =
         (right_parameter->type & TYPE_UNSIGNED) != 0;
+    return 1;
+}
+
+static int mir_match_scaled_wide_division_call(
+    struct MirScaledWideDivisionCall *plan)
+{
+    static const int expected_opcodes[13] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_NOP, MIR_UNARY,
+        MIR_CONST, MIR_BINARY, MIR_NOP, MIR_UNARY, MIR_BINARY,
+        MIR_ARG, MIR_CALL, MIR_RETURN
+    };
+    const struct MirInsn *numerator;
+    const struct MirInsn *denominator;
+    const struct MirInsn *wide_numerator;
+    const struct MirInsn *product;
+    const struct MirInsn *wide_denominator;
+    const struct MirInsn *division;
+    const struct MirInsn *call;
+    int call_argument;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir_cfg_block_count() != 1 || mir.count != 13)
+        return mir_machine_reject(
+            "scaled-wide-division-call", "preflight");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "scaled-wide-division-call", "opcodes");
+    numerator = &mir.insns[1];
+    denominator = &mir.insns[2];
+    wide_numerator = &mir.insns[4];
+    product = &mir.insns[6];
+    wide_denominator = &mir.insns[8];
+    division = &mir.insns[9];
+    call = &mir.insns[11];
+    if (type_size(numerator->type) != 2 ||
+        (numerator->type & TYPE_UNSIGNED) != 0 ||
+        type_is_float(numerator->type) ||
+        type_ptr_depth(numerator->type) != 0 ||
+        (numerator->type & 15) == TYPE_BOOL ||
+        type_size(denominator->type) != 2 ||
+        (denominator->type & TYPE_UNSIGNED) != 0 ||
+        type_is_float(denominator->type) ||
+        type_ptr_depth(denominator->type) != 0 ||
+        (denominator->type & 15) == TYPE_BOOL ||
+        wide_numerator->immediate != 0 ||
+        wide_numerator->src1 != numerator->dst ||
+        type_size(wide_numerator->type) != 4 ||
+        (wide_numerator->type & TYPE_UNSIGNED) != 0 ||
+        product->immediate != '*' ||
+        product->src1 != wide_numerator->dst ||
+        !mir_machine_constant_equals(product->src2, 256) ||
+        type_size(product->type) != 4 ||
+        (product->type & TYPE_UNSIGNED) != 0 ||
+        wide_denominator->immediate != 0 ||
+        wide_denominator->src1 != denominator->dst ||
+        type_size(wide_denominator->type) != 4 ||
+        (wide_denominator->type & TYPE_UNSIGNED) != 0 ||
+        division->immediate != '/' ||
+        division->src1 != product->dst ||
+        division->src2 != wide_denominator->dst ||
+        type_size(division->type) != 4 ||
+        (division->type & TYPE_UNSIGNED) != 0 ||
+        !mir_machine_single_call_argument(
+            call, &call_argument) ||
+        call_argument != division->dst ||
+        (call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+        mir.insns[12].src1 != call->dst)
+        return mir_machine_reject(
+            "scaled-wide-division-call", "shape");
+    plan->function = find_global(call->name);
+    if (plan->function == NULL ||
+        !plan->function->is_defined ||
+        (call->base_name[0] != 0 &&
+         strcmp(call->base_name,
+                asm_name_for(
+                    sym_asm_name(plan->function)))) ||
+        !mir_machine_parameter_value_offset(
+            numerator->dst,
+            &plan->numerator_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            denominator->dst,
+            &plan->denominator_stack_offset))
+        return mir_machine_reject(
+            "scaled-wide-division-call", "call-or-parameters");
     return 1;
 }
 
@@ -6708,6 +6803,26 @@ static void mir_emit_wide_difference_call(
     fputs("\tpop bc\n\tpop bc\n\tret\n", out);
 }
 
+static void mir_emit_scaled_wide_division_call(
+    FILE *out, const struct MirScaledWideDivisionCall *plan)
+{
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n\tld e,(hl)\n"
+            "\tld h,a\n\tld l,0\n"
+            "\tld a,e\n\trlca\n\tsbc a,a\n\tld d,a\n",
+            plan->numerator_stack_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_widened_parameter(
+        out, plan->denominator_stack_offset + 4, 0);
+    mir_emit_runtime_call(out, "__lds");
+    fputs("\tpop bc\n\tpop bc\n\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n\tpop bc\n\tret\n", out);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -6757,6 +6872,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirWideEqualAddSelect wide_equal_add_select;
     struct MirWideCallMemberAccumulate wide_call_member_accumulate;
     struct MirWideDifferenceCall wide_difference_call;
+    struct MirScaledWideDivisionCall scaled_wide_division_call;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -6922,6 +7038,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &wide_difference_call)) {
         mir_emit_wide_difference_call(
             out, &wide_difference_call);
+        return 1;
+    }
+    if (mir_match_scaled_wide_division_call(
+            &scaled_wide_division_call)) {
+        mir_emit_scaled_wide_division_call(
+            out, &scaled_wide_division_call);
         return 1;
     }
     if (mir_match_indexed_member_write(
