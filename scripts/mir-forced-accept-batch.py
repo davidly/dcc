@@ -4,7 +4,7 @@
 Proving a near-miss fallback candidate is a real (not just textually smaller)
 win today means, for each candidate, a separate round trip:
 
-    DCC_MIR_FORCE_ACCEPT_FUNCTION=<function> \
+    DCC_MIR_FORCE_ACCEPT_FINAL_FUNCTION=<function> \
         pwsh ./scripts/runall.ps1 -Apps <app> -Mode full -RunTimeout 30
 
 one app/function at a time. Since each candidate's forced-accept build+run is
@@ -182,7 +182,7 @@ def run_one_candidate(
     log_fd, log_path = tempfile.mkstemp(prefix=f"mir-fab-{app}-{function}-", suffix=".log", dir=scratch_root)
     result.log_path = log_path
     env = dict(os.environ)
-    env["DCC_MIR_FORCE_ACCEPT_FUNCTION"] = function
+    env["DCC_MIR_FORCE_ACCEPT_FINAL_FUNCTION"] = function
     cmd = [
         "pwsh", "./scripts/runall.ps1",
         "-Apps", app, "-Mode", "full",

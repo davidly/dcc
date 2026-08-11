@@ -499,6 +499,19 @@ struct MirConditionalStringReport {
     int false_string_id;
 };
 
+struct MirWordRangeBool {
+    int parameter_stack_offset;
+    int lower;
+    int upper;
+};
+
+struct MirAsciiUpper {
+    int parameter_stack_offset;
+    int lower;
+    int upper;
+    int adjustment;
+};
+
 #define MIR_MACHINE_SWITCH_RESULT_LIMIT 16
 
 struct MirConstantResultSwitch {
@@ -7994,6 +8007,138 @@ static int mir_match_conditional_string_report(
     return 1;
 }
 
+static int mir_match_word_range_bool(struct MirWordRangeBool *plan)
+{
+    static const int expected_opcodes[18] = {
+        MIR_LABEL, MIR_PARAM, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+        MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_RETURN
+    };
+    const struct MirInsn *parameter;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 18 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
+        ((mir.return_type & 15) != TYPE_INT &&
+         (mir.return_type & 15) != TYPE_BOOL))
+        return mir_machine_reject("word-range-bool", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject("word-range-bool", "opcode");
+    parameter = &mir.insns[1];
+    if (type_ptr_depth(parameter->type) != 0 ||
+        (parameter->type & 15) != TYPE_INT ||
+        (parameter->type & TYPE_UNSIGNED) != 0 ||
+        type_size(parameter->type) != 2 ||
+        !mir_machine_parameter_value_offset(
+            parameter->dst, &plan->parameter_stack_offset) ||
+        mir.insns[4].immediate != TOK_GE ||
+        mir.insns[4].src1 != parameter->dst ||
+        mir.insns[4].src2 != mir.insns[3].dst ||
+        mir.insns[5].src1 != mir.insns[4].dst ||
+        mir.insns[5].label != mir.insns[13].label ||
+        mir.insns[8].immediate != '<' ||
+        mir.insns[8].src1 != parameter->dst ||
+        mir.insns[8].src2 != mir.insns[7].dst ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[9].label != mir.insns[13].label)
+        return mir_machine_reject("word-range-bool", "comparisons");
+    if (!mir_machine_constant_equals(mir.insns[11].dst, 1) ||
+        mir.insns[12].label != mir.insns[15].label ||
+        !mir_machine_constant_equals(mir.insns[14].dst, 0) ||
+        mir.insns[16].src1 != mir.insns[11].dst ||
+        mir.insns[16].src2 != mir.insns[14].dst ||
+        mir.insns[16].phi_pred1 != mir.insns[10].label ||
+        mir.insns[16].phi_pred2 != mir.insns[13].label ||
+        mir.insns[17].src1 != mir.insns[16].dst ||
+        mir.insns[3].immediate != 0 ||
+        mir.insns[7].immediate <= 0 ||
+        mir.insns[7].immediate > 255)
+        return mir_machine_reject("word-range-bool", "result");
+    plan->lower = 0;
+    plan->upper = (int)mir.insns[7].immediate;
+    return 1;
+}
+
+static int mir_match_ascii_upper(struct MirAsciiUpper *plan)
+{
+    static const int expected_opcodes[31] = {
+        MIR_LABEL, MIR_PARAM, MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_CONST, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE, MIR_NOP,
+        MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_CONST, MIR_BINARY,
+        MIR_UNARY, MIR_RETURN, MIR_LABEL, MIR_NOP, MIR_RETURN
+    };
+    const struct MirInsn *parameter;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 31 || mir_cfg_block_count() != 5 ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_CHAR ||
+        type_size(mir.return_type) != 1)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return 0;
+    parameter = &mir.insns[1];
+    if (type_ptr_depth(parameter->type) != 0 ||
+        (parameter->type & 15) != TYPE_CHAR ||
+        type_size(parameter->type) != 1 ||
+        !mir_machine_parameter_value_offset(
+            parameter->dst, &plan->parameter_stack_offset) ||
+        mir.insns[4].immediate != 0 ||
+        mir.insns[4].src1 != parameter->dst ||
+        mir.insns[5].immediate != TOK_GE ||
+        mir.insns[5].src1 != mir.insns[4].dst ||
+        mir.insns[5].src2 != mir.insns[3].dst ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        mir.insns[6].label != mir.insns[15].label)
+        return 0;
+    if (mir.insns[9].immediate != 0 ||
+        mir.insns[9].src1 != parameter->dst ||
+        mir.insns[10].immediate != TOK_LE ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        mir.insns[10].src2 != mir.insns[8].dst ||
+        mir.insns[11].src1 != mir.insns[10].dst ||
+        mir.insns[11].label != mir.insns[15].label ||
+        !mir_machine_constant_equals(mir.insns[13].dst, 1) ||
+        mir.insns[14].label != mir.insns[17].label ||
+        !mir_machine_constant_equals(mir.insns[16].dst, 0) ||
+        mir.insns[18].src1 != mir.insns[13].dst ||
+        mir.insns[18].src2 != mir.insns[16].dst ||
+        mir.insns[18].phi_pred1 != mir.insns[12].label ||
+        mir.insns[18].phi_pred2 != mir.insns[15].label ||
+        mir.insns[19].src1 != mir.insns[18].dst ||
+        mir.insns[19].label != mir.insns[28].label)
+        return 0;
+    if (mir.insns[22].immediate != 0 ||
+        mir.insns[22].src1 != parameter->dst ||
+        mir.insns[23].immediate != '-' ||
+        mir.insns[23].src1 != mir.insns[22].dst ||
+        mir.insns[23].src2 != mir.insns[21].dst ||
+        mir.insns[25].immediate != '+' ||
+        mir.insns[25].src1 != mir.insns[23].dst ||
+        mir.insns[25].src2 != mir.insns[24].dst ||
+        mir.insns[26].immediate != 0 ||
+        mir.insns[26].src1 != mir.insns[25].dst ||
+        mir.insns[27].src1 != mir.insns[26].dst ||
+        mir.insns[30].src1 != parameter->dst)
+        return 0;
+    plan->lower = (int)mir.insns[3].immediate;
+    plan->upper = (int)mir.insns[8].immediate;
+    plan->adjustment =
+        (int)mir.insns[24].immediate - (int)mir.insns[21].immediate;
+    if (plan->lower < 0 || plan->lower > 255 ||
+        plan->upper < plan->lower || plan->upper > 255 ||
+        plan->adjustment < -255 || plan->adjustment > 255)
+        return 0;
+    return 1;
+}
+
 static int mir_machine_constant_return_for_label(
     int label, int *result)
 {
@@ -14453,6 +14598,43 @@ static void mir_emit_conditional_string_report(
     fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tret\n", out);
 }
 
+static void mir_emit_word_range_bool(
+    FILE *out, const struct MirWordRangeBool *plan)
+{
+    int outside = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld a,(hl)\n\tor a\n"
+            "\tjp nz,L%d\n\tld a,e\n\tcp %d\n\tjp nc,L%d\n"
+            "\tld hl,1\n\tret\nL%d:\n\tld hl,0\n\tret\n",
+            plan->parameter_stack_offset,
+            outside, plan->upper, outside, outside);
+}
+
+static void mir_emit_ascii_upper(
+    FILE *out, const struct MirAsciiUpper *plan)
+{
+    int result = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n\tld a,(hl)\n"
+            "\tcp %d\n\tjp c,L%d\n\tcp %d\n\tjp nc,L%d\n",
+            plan->parameter_stack_offset,
+            plan->lower, result, plan->upper + 1, result);
+    if (plan->adjustment < 0)
+        fprintf(out, "\tsub %d\n", -plan->adjustment);
+    else if (plan->adjustment > 0)
+        fprintf(out, "\tadd a,%d\n", plan->adjustment);
+    fprintf(out,
+            "L%d:\n\tld l,a\n\trlca\n\tsbc a,a\n\tld h,a\n\tret\n",
+            result);
+}
+
 static void mir_emit_constant_function(FILE *out, int result)
 {
     if (opt_stack_check)
@@ -14622,12 +14804,22 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirWordRangeBool word_range_bool;
+    struct MirAsciiUpper ascii_upper;
     struct MirConstantResultSwitch constant_result_switch;
     struct MirLocalByteFillSumPrint local_byte_fill_sum_print;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
     int constant_function_result;
 
+    if (mir_match_word_range_bool(&word_range_bool)) {
+        mir_emit_word_range_bool(out, &word_range_bool);
+        return 1;
+    }
+    if (mir_match_ascii_upper(&ascii_upper)) {
+        mir_emit_ascii_upper(out, &ascii_upper);
+        return 1;
+    }
     if (mir_match_affine_pointer_constant_return(&constant)) {
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");

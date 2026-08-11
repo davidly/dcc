@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `65986bf`
-  (`schedule conditional string reports`).
-- Current candidate coverage: **1899/2183 (86.99%)**.
-- Remaining fallback population: **284 `final-cost-policy`**, with no other
+- Published HEAD before this batch: `502c055`
+  (`generalize affine byte fill schedules`).
+- Current candidate coverage: **1901/2183 (87.08%)**.
+- Remaining fallback population: **282 `final-cost-policy`**, with no other
   fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -75,6 +75,9 @@ current execution plan and handoff.
 - The affine byte-fill plan now supports a constant initial A and fixed byte
   step as well as a parameter base. It admits `tptrixld.fill`, improving
   21.13% peep / 25.06% nopeep.
+- Frameless signed-word range and ASCII uppercase helpers admit
+  `tchess.on_board` and `tchess.upiece`. The forced-accept batch tool now
+  exercises the terminal cost override rather than the obsolete earlier gate.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -82,7 +85,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 284 final-cost fallbacks,
+- Current next priority: repeated causes in the 282 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
