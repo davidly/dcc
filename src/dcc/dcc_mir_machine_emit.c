@@ -389,6 +389,11 @@ struct MirConditionalGlobalFloatLoad {
     int false_offset;
 };
 
+struct MirRecursiveWideProduct {
+    struct Sym *function;
+    int parameter_stack_offset;
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -5384,6 +5389,85 @@ static int mir_match_conditional_global_float_load(
         return 0;
     plan->true_offset = (int)true_offset;
     plan->false_offset = (int)false_offset;
+    return 1;
+}
+
+static int mir_match_recursive_wide_product(
+    struct MirRecursiveWideProduct *plan)
+{
+    static const int expected_opcodes[20] = {
+        MIR_LABEL, MIR_PARAM, MIR_NOP, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST, MIR_RETURN,
+        MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_ARG, MIR_CALL, MIR_BINARY, MIR_RETURN
+    };
+    const struct MirInsn *parameter;
+    const struct MirInsn *comparison;
+    const struct MirInsn *base_value;
+    const struct MirInsn *decrement;
+    const struct MirInsn *call;
+    const struct MirInsn *product;
+    int call_argument;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir_cfg_block_count() != 2 || mir.count != 20 ||
+        type_size(mir.return_type) != 4 ||
+        type_is_float(mir.return_type))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return 0;
+    parameter = &mir.insns[1];
+    comparison = &mir.insns[5];
+    base_value = &mir.insns[8];
+    decrement = &mir.insns[15];
+    call = &mir.insns[17];
+    product = &mir.insns[18];
+    if (type_size(parameter->type) != 4 ||
+        type_is_float(parameter->type) ||
+        type_ptr_depth(parameter->type) != 0 ||
+        (parameter->type & TYPE_UNSIGNED) != 0 ||
+        comparison->immediate != TOK_EQ ||
+        !mir_machine_constant_equals(comparison->src1, 0) ||
+        comparison->src2 != parameter->dst ||
+        mir.insns[6].src1 != comparison->dst ||
+        mir.insns[6].label != mir.insns[10].label ||
+        base_value->immediate != 1 ||
+        type_size(base_value->type) != 4 ||
+        mir.insns[9].src1 != base_value->dst ||
+        decrement->immediate != '-' ||
+        decrement->src1 != parameter->dst ||
+        !mir_machine_constant_equals(decrement->src2, 1) ||
+        !mir_machine_single_call_argument(
+            call, &call_argument) ||
+        call_argument != decrement->dst ||
+        product->immediate != '*' ||
+        product->src1 != parameter->dst ||
+        product->src2 != call->dst ||
+        type_size(product->type) != 4 ||
+        mir.insns[19].src1 != product->dst)
+        return 0;
+    plan->function = find_global(call->name);
+    if (plan->function == NULL || !plan->function->is_defined ||
+        strcmp(call->name, mir.name) ||
+        (call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+        (call->base_name[0] != 0 &&
+         strcmp(call->base_name,
+                asm_name_for(
+                    sym_asm_name(plan->function)))) ||
+        !mir_scalar_memory_location(
+            parameter, &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2)
+        return 0;
+    plan->parameter_stack_offset = memory_offset - 2;
     return 1;
 }
 
@@ -10387,6 +10471,28 @@ static void mir_emit_conditional_global_float_load(
         out, plan, plan->false_offset);
 }
 
+static void mir_emit_recursive_wide_product(
+    FILE *out, const struct MirRecursiveWideProduct *plan)
+{
+    int recurse = new_label();
+    int decremented = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_emit_wide_parameter(out, plan->parameter_stack_offset);
+    fprintf(out,
+            "\tld a,d\n\tor e\n\tor h\n\tor l\n\tjp nz,L%d\n"
+            "\tld hl,1\n\tld de,0\n\tret\n"
+            "L%d:\n\tpush de\n\tpush hl\n"
+            "\tld bc,1\n\tor a\n\tsbc hl,bc\n\tjp nc,L%d\n"
+            "\tdec de\nL%d:\n\tpush de\n\tpush hl\n",
+            recurse, recurse, decremented, decremented);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_emit_runtime_call(out, "__lmul");
+    fputs("\tpop bc\n\tpop bc\n\tret\n", out);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -10453,6 +10559,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFixedFloatGridFill fixed_float_grid_fill;
     struct MirConstantFloatConditional constant_float_conditional;
     struct MirConditionalGlobalFloatLoad conditional_global_float_load;
+    struct MirRecursiveWideProduct recursive_wide_product;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -10718,6 +10825,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_global_float_load)) {
         mir_emit_conditional_global_float_load(
             out, &conditional_global_float_load);
+        return 1;
+    }
+    if (mir_match_recursive_wide_product(
+            &recursive_wide_product)) {
+        mir_emit_recursive_wide_product(
+            out, &recursive_wide_product);
         return 1;
     }
     if (mir_match_indexed_member_write(
