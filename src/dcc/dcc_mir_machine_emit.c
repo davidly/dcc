@@ -633,6 +633,14 @@ struct MirSequentialUnaryReports {
     int string_id;
 };
 
+struct MirNibbleAppend {
+    int pointer_stack_offset;
+    int value_stack_offset;
+    int threshold;
+    int low_adjustment;
+    int high_adjustment;
+};
+
 #define MIR_MACHINE_SWITCH_RESULT_LIMIT 64
 
 struct MirConstantResultSwitch {
@@ -9551,6 +9559,82 @@ static int mir_match_sequential_unary_reports(
     return 1;
 }
 
+static int mir_match_nibble_append(struct MirNibbleAppend *plan)
+{
+    static const int expected_opcodes[32] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_UNARY,
+        MIR_BINARY, MIR_CONST, MIR_BINARY, MIR_LABEL, MIR_LABEL, MIR_PHI,
+        MIR_UNARY, MIR_STORE_INDIRECT, MIR_LOAD, MIR_RETURN
+    };
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 32 || mir_cfg_block_count() != 5 ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 1 ||
+        (mir.return_type & 15) != TYPE_CHAR)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return 0;
+    if (!mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->pointer_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[2].dst, &plan->value_stack_offset) ||
+        !mir_machine_same_location(&mir.insns[1], &mir.insns[3]) ||
+        mir.insns[5].immediate != '+' ||
+        mir.insns[5].src1 != mir.insns[3].dst ||
+        mir.insns[5].src2 != mir.insns[4].dst ||
+        !mir_machine_constant_equals(mir.insns[4].dst, 1) ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        !mir_machine_same_location(&mir.insns[3], &mir.insns[6]) ||
+        mir.insns[9].immediate != 0 ||
+        mir.insns[9].src1 != mir.insns[2].dst ||
+        mir.insns[10].immediate != TOK_LE ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        mir.insns[10].src2 != mir.insns[8].dst ||
+        mir.insns[11].src1 != mir.insns[10].dst ||
+        mir.insns[11].label != mir.insns[18].label)
+        return 0;
+    if (mir.insns[14].immediate != 0 ||
+        mir.insns[14].src1 != mir.insns[2].dst ||
+        mir.insns[15].immediate != '+' ||
+        mir.insns[15].src1 != mir.insns[14].dst ||
+        mir.insns[15].src2 != mir.insns[13].dst ||
+        mir.insns[17].label != mir.insns[26].label ||
+        mir.insns[21].immediate != 0 ||
+        mir.insns[21].src1 != mir.insns[2].dst ||
+        mir.insns[22].immediate != '-' ||
+        mir.insns[22].src1 != mir.insns[21].dst ||
+        mir.insns[22].src2 != mir.insns[20].dst ||
+        mir.insns[24].immediate != '+' ||
+        mir.insns[24].src1 != mir.insns[22].dst ||
+        mir.insns[24].src2 != mir.insns[23].dst ||
+        mir.insns[27].src1 != mir.insns[15].dst ||
+        mir.insns[27].src2 != mir.insns[24].dst ||
+        mir.insns[28].immediate != 0 ||
+        mir.insns[28].src1 != mir.insns[27].dst ||
+        type_size(mir.insns[28].type) != 1 ||
+        mir.insns[29].src1 != mir.insns[3].dst ||
+        mir.insns[29].src2 != mir.insns[28].dst ||
+        mir.insns[29].memory_size != 1 ||
+        (mir.insns[29].memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_same_location(&mir.insns[6], &mir.insns[30]) ||
+        mir.insns[31].src1 != mir.insns[30].dst)
+        return 0;
+    plan->threshold = (int)mir.insns[8].immediate + 1;
+    plan->low_adjustment = (int)mir.insns[13].immediate;
+    plan->high_adjustment =
+        (int)mir.insns[23].immediate - (int)mir.insns[20].immediate;
+    if (plan->threshold <= 0 || plan->threshold > 256 ||
+        plan->low_adjustment < -255 || plan->low_adjustment > 255 ||
+        plan->high_adjustment < -255 || plan->high_adjustment > 255)
+        return 0;
+    return 1;
+}
+
 static int mir_machine_constant_return_for_label(
     int label, int *result)
 {
@@ -16535,6 +16619,35 @@ static void mir_emit_sequential_unary_reports(
     fputs("\tret\n", out);
 }
 
+static void mir_emit_nibble_append(
+    FILE *out, const struct MirNibbleAppend *plan)
+{
+    int done = new_label();
+    int ready = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n\tld c,(hl)\n"
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n"
+            "\tld a,c\n\tcp %d\n",
+            plan->value_stack_offset,
+            plan->pointer_stack_offset, plan->threshold);
+    if (plan->high_adjustment < 0)
+        fprintf(out, "\tjp c,L%d\n\tsub %d\n\tjp L%d\n",
+                ready, -plan->high_adjustment, done);
+    else
+        fprintf(out, "\tjp c,L%d\n\tadd a,%d\n\tjp L%d\n",
+                ready, plan->high_adjustment, done);
+    fprintf(out, "L%d:\n", ready);
+    if (plan->low_adjustment < 0)
+        fprintf(out, "\tsub %d\n", -plan->low_adjustment);
+    else if (plan->low_adjustment > 0)
+        fprintf(out, "\tadd a,%d\n", plan->low_adjustment);
+    fprintf(out, "L%d:\n\tld (hl),a\n\tinc hl\n\tret\n", done);
+}
+
 static void mir_emit_constant_function(FILE *out, int result)
 {
     if (opt_stack_check)
@@ -16721,6 +16834,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirClearedRecordAppend cleared_record_append;
     struct MirRecordNameSearch record_name_search;
     struct MirSequentialUnaryReports sequential_unary_reports;
+    struct MirNibbleAppend nibble_append;
     struct MirConstantResultSwitch constant_result_switch;
     struct MirLocalByteFillSumPrint local_byte_fill_sum_print;
     struct MirIndexedMemberWrite indexed_member_write;
@@ -16813,6 +16927,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &sequential_unary_reports)) {
         mir_emit_sequential_unary_reports(
             out, &sequential_unary_reports);
+        return 1;
+    }
+    if (mir_match_nibble_append(&nibble_append)) {
+        mir_emit_nibble_append(out, &nibble_append);
         return 1;
     }
     if (mir_match_affine_pointer_constant_return(&constant)) {
