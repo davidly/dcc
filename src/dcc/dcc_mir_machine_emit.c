@@ -48,6 +48,16 @@ struct MirFixedParamMutations {
     struct MirFixedMutation mutations[8];
 };
 
+struct MirGlobalByteChecks {
+    struct Sym *check_function;
+    struct Sym *symbols[16];
+    int offsets[16];
+    int expected[16];
+    int strings[16];
+    int is_unsigned[16];
+    int count;
+};
+
 struct MirGlobalAppendStore {
     int parameter_stack_offset;
     int field_offset;
@@ -780,6 +790,8 @@ static void mir_machine_emit_global_word(
     FILE *out, struct Sym *symbol, int offset);
 static void mir_machine_emit_float_bits(
     FILE *out, unsigned long bits);
+static void mir_machine_emit_global_byte_a(
+    FILE *out, struct Sym *symbol, int offset, int is_store);
 
 static int mir_machine_reject(const char *template_name, const char *reason)
 {
@@ -12393,6 +12405,157 @@ static int mir_match_flat_array_checks(struct MirFlatArrayChecks *plan)
     return call_count >= 2;
 }
 
+static int mir_machine_global_byte_value(
+    int value, struct Sym **symbol_out, int *offset_out,
+    int *is_unsigned_out)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    const struct MirInsn *address;
+    const struct MirInsn *root;
+    struct Sym *symbol;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    long index;
+
+    if (definition != NULL && definition->opcode == MIR_UNARY &&
+        definition->immediate == 0)
+        definition = mir_definition(definition->src1);
+    if (definition == NULL)
+        return 0;
+    if (definition->opcode == MIR_LOAD) {
+        if (!mir_machine_named_nonvolatile(definition) ||
+            !mir_scalar_memory_location(
+                definition, &memory_type, &memory_storage,
+                &memory_offset) ||
+            memory_storage != SC_GLOBAL ||
+            type_size(memory_type) != 1)
+            return 0;
+        symbol = find_global(definition->name);
+        if (symbol == NULL || symbol->is_volatile)
+            return 0;
+        *symbol_out = symbol;
+        *offset_out = memory_offset;
+        *is_unsigned_out =
+            type_is_bool(definition->type) ||
+            (definition->type & TYPE_UNSIGNED) != 0;
+        return 1;
+    }
+    if (definition->opcode != MIR_LOAD_INDIRECT ||
+        definition->memory_size != 1 ||
+        definition->bit_width != 0 ||
+        (definition->memory_flags & (1 | 8)) != 0)
+        return 0;
+    address = mir_definition(definition->src1);
+    if (address == NULL ||
+        (address->memory_flags & (1 | 8)) != 0)
+        return 0;
+    if (address->opcode == MIR_MEMBER_ADDRESS) {
+        root = mir_definition(address->src1);
+        index = address->immediate;
+    } else if (address->opcode == MIR_INDEX_ADDRESS &&
+               address->immediate > 0 &&
+               mir_machine_constant_value(address->src2, &index, 0)) {
+        root = mir_definition(address->src1);
+        index *= address->immediate;
+    } else {
+        return 0;
+    }
+    if (root == NULL || root->opcode != MIR_ADDRESS ||
+        !mir_scalar_memory_location(
+            root, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        index < -32768 || index > 32767)
+        return 0;
+    symbol = find_global(root->name);
+    if (symbol == NULL || symbol->is_volatile)
+        return 0;
+    *symbol_out = symbol;
+    *offset_out = memory_offset + (int)index;
+    *is_unsigned_out =
+        type_is_bool(definition->type) ||
+        (definition->type & TYPE_UNSIGNED) != 0;
+    return 1;
+}
+
+static int mir_match_global_byte_checks(
+    struct MirGlobalByteChecks *plan)
+{
+    int call_count = 0;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla || mir_cfg_block_count() != 1 ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return mir_machine_reject("global-byte-checks", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        switch (insn->opcode) {
+        case MIR_NOP:
+        case MIR_LABEL:
+        case MIR_CONST:
+        case MIR_STRING_ADDRESS:
+        case MIR_ADDRESS:
+        case MIR_MEMBER_ADDRESS:
+        case MIR_INDEX_ADDRESS:
+        case MIR_LOAD:
+        case MIR_LOAD_INDIRECT:
+        case MIR_UNARY:
+        case MIR_ARG:
+            break;
+        case MIR_CALL:
+            {
+                const struct MirInsn *string;
+                long expected;
+                int arguments[3];
+
+                if (call_count >= 16 ||
+                    !mir_machine_three_call_arguments(
+                        insn, arguments) ||
+                    !mir_machine_global_byte_value(
+                        arguments[0],
+                        &plan->symbols[call_count],
+                        &plan->offsets[call_count],
+                        &plan->is_unsigned[call_count]) ||
+                    !mir_machine_constant_value(
+                        arguments[1], &expected, 0))
+                    return mir_machine_reject(
+                        "global-byte-checks", "arguments");
+                string = mir_definition(arguments[2]);
+                if (string == NULL ||
+                    string->opcode != MIR_STRING_ADDRESS ||
+                    expected < -32768 || expected > 65535)
+                    return mir_machine_reject(
+                        "global-byte-checks", "expected");
+                if (call_count == 0) {
+                    plan->check_function = find_global(insn->name);
+                    if (plan->check_function == NULL ||
+                        !plan->check_function->is_defined ||
+                        plan->check_function->is_funcptr ||
+                        plan->check_function->is_noreturn)
+                        return mir_machine_reject(
+                            "global-byte-checks", "function");
+                } else if (plan->check_function !=
+                           find_global(insn->name)) {
+                    return mir_machine_reject(
+                        "global-byte-checks", "mixed-functions");
+                }
+                plan->expected[call_count] =
+                    (int)((unsigned long)expected & 0xffffUL);
+                plan->strings[call_count] = (int)string->immediate;
+                ++call_count;
+            }
+            break;
+        default:
+            return mir_machine_reject(
+                "global-byte-checks", "opcode");
+        }
+    }
+    plan->count = call_count;
+    return call_count >= 2;
+}
+
 static void mir_machine_emit_symbol_call(
     FILE *out, struct Sym *symbol)
 {
@@ -12622,6 +12785,31 @@ static void mir_emit_flat_array_checks(
             fputs("\tpop bc\n\tpop bc\n", out);
     }
     fputs("\tpop iy\n\tret\n", out);
+}
+
+static void mir_emit_global_byte_checks(
+    FILE *out, const struct MirGlobalByteChecks *plan)
+{
+    int check;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (check = 0; check < plan->count; ++check) {
+        fprintf(out, "\tld hl,S%d\n\tpush hl\n"
+                     "\tld hl,%d\n\tpush hl\n",
+                plan->strings[check], plan->expected[check]);
+        mir_machine_emit_global_byte_a(
+            out, plan->symbols[check], plan->offsets[check], 0);
+        fputs("\tld l,a\n", out);
+        if (plan->is_unsigned[check])
+            fputs("\tld h,0\n", out);
+        else
+            fputs("\trlca\n\tsbc a,a\n\tld h,a\n", out);
+        fputs("\tpush hl\n", out);
+        mir_machine_emit_symbol_call(out, plan->check_function);
+        fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    }
+    fputs("\tret\n", out);
 }
 
 static int mir_machine_constant_bits(
@@ -18955,6 +19143,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirIndexedWordSum indexed_word_sum;
     struct MirNestedRowStore nested_row_store;
     struct MirFlatArrayChecks flat_array_checks;
+    struct MirGlobalByteChecks global_byte_checks;
     struct MirFixedParamMutations fixed_param_mutations;
     struct MirGlobalAppend global_append;
     struct MirNestedAppend nested_append;
@@ -19189,6 +19378,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_flat_array_checks(&flat_array_checks)) {
         mir_emit_flat_array_checks(out, &flat_array_checks);
+        return 1;
+    }
+    if (mir_match_global_byte_checks(
+            &global_byte_checks)) {
+        mir_emit_global_byte_checks(
+            out, &global_byte_checks);
         return 1;
     }
     if (mir_match_fixed_param_mutations(&fixed_param_mutations)) {

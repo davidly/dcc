@@ -6,10 +6,11 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `87961c4`
-  (`schedule compact scalar control kernels`).
-- Current candidate coverage: **1939/2185 (88.74%)**.
-- Remaining fallback population: **246 `final-cost-policy`**, with no other
+- Published HEAD before this batch: `0cc641e`
+  (`schedule float tolerance failures`).
+- Current candidate coverage: **1940/2185 (88.79%)**.
+- Remaining fallback population: **245 `final-cost-policy`**, all selected by
+  the spilled scalar backend and with no other fallback reason.
   fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -159,6 +160,10 @@ current execution plan and handoff.
   normalize its sign without a frame spill, and branch directly to the
   string-only failure report. This admits `tclit.check_float`, improving
   `tclit` 2.87% peep / 2.89% nopeep and moving it ahead of main.
+- Global byte-check sequences now resolve direct, indexed, and member byte
+  loads to exact symbols/offsets and push check arguments without virtual
+  homes. This admits `tbool.check_globals`, improving `tbool` 0.64% peep /
+  0.75% nopeep and removing the final homed-backend fallback.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -166,7 +171,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 246 final-cost fallbacks,
+- Current next priority: repeated causes in the 245 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
