@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `16e9a5f`
-  (`schedule tangent rational reductions`).
-- Current candidate coverage: **1938/2185 (88.70%)**.
-- Remaining fallback population: **247 `final-cost-policy`**, with no other
+- Published HEAD before this batch: `87961c4`
+  (`schedule compact scalar control kernels`).
+- Current candidate coverage: **1939/2185 (88.74%)**.
+- Remaining fallback population: **246 `final-cost-policy`**, with no other
   fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -155,6 +155,10 @@ current execution plan and handoff.
   pointer, expected byte, endpoint, and index derivation in registers,
   admitting `tctresc.find_mismatch` and improving that app 1.61% peep /
   14.01% nopeep.
+- Float-tolerance failure checks now keep the subtraction result in DE:HL,
+  normalize its sign without a frame spill, and branch directly to the
+  string-only failure report. This admits `tclit.check_float`, improving
+  `tclit` 2.87% peep / 2.89% nopeep and moving it ahead of main.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -162,7 +166,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 247 final-cost fallbacks,
+- Current next priority: repeated causes in the 246 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
