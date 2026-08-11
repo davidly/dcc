@@ -303,6 +303,14 @@ struct MirVariadicSum {
     int value_width;
 };
 
+struct MirGuardedGlobalPop {
+    struct Sym *cursor;
+    int cursor_offset;
+    struct Sym *array;
+    int array_offset;
+    struct Sym *guard_function;
+};
+
 struct MirIndexedMemberWrite {
     struct Sym *root;
     int root_offset;
@@ -3674,6 +3682,99 @@ static int mir_match_variadic_sum(struct MirVariadicSum *plan)
         return 0;
     plan->first_argument_stack_offset =
         va_start->secondary_offset - 2;
+    return 1;
+}
+
+static int mir_match_guarded_global_pop(
+    struct MirGuardedGlobalPop *plan)
+{
+    static const int expected_opcodes[15] = {
+        MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_CALL, MIR_LABEL, MIR_ADDRESS,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_RETURN
+    };
+    const struct MirInsn *first_cursor;
+    const struct MirInsn *comparison;
+    const struct MirInsn *call;
+    const struct MirInsn *array;
+    const struct MirInsn *second_cursor;
+    const struct MirInsn *decrement;
+    const struct MirInsn *cursor_store;
+    const struct MirInsn *address;
+    const struct MirInsn *load;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir_cfg_block_count() != 2 || mir.count != 15 ||
+        type_size(mir.return_type) != 2)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return 0;
+    first_cursor = &mir.insns[1];
+    comparison = &mir.insns[3];
+    call = &mir.insns[5];
+    array = &mir.insns[7];
+    second_cursor = &mir.insns[8];
+    decrement = &mir.insns[10];
+    cursor_store = &mir.insns[11];
+    address = &mir.insns[12];
+    load = &mir.insns[13];
+    if (!mir_machine_named_nonvolatile(first_cursor) ||
+        !mir_machine_same_location(
+            first_cursor, second_cursor) ||
+        !mir_machine_same_location(
+            first_cursor, cursor_store) ||
+        !mir_scalar_memory_location(
+            first_cursor, &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        type_size(memory_type) != 2 ||
+        type_ptr_depth(memory_type) != 0 ||
+        type_is_float(memory_type) ||
+        (memory_type & TYPE_UNSIGNED) != 0 ||
+        mir_type_uses_unsigned_comparison(
+            comparison->secondary_offset) ||
+        comparison->immediate != TOK_LE ||
+        comparison->src1 != first_cursor->dst ||
+        !mir_machine_constant_equals(comparison->src2, 0) ||
+        mir.insns[4].src1 != comparison->dst ||
+        mir.insns[4].label != mir.insns[6].label ||
+        call->name[0] == '\0' ||
+        array->name[0] == '\0' ||
+        address->src1 != array->dst ||
+        address->src2 != decrement->dst ||
+        address->immediate != 2 ||
+        address->memory_size != 2 ||
+        decrement->immediate != '-' ||
+        decrement->src1 != second_cursor->dst ||
+        !mir_machine_constant_equals(decrement->src2, 1) ||
+        cursor_store->src1 != decrement->dst ||
+        load->src1 != address->dst ||
+        load->memory_size != 2 ||
+        load->bit_width != 0 ||
+        (load->memory_flags & (1 | 8)) != 0 ||
+        mir.insns[14].src1 != load->dst)
+        return 0;
+    plan->cursor = find_global(first_cursor->name);
+    plan->array = find_global(array->name);
+    plan->guard_function = find_global(call->name);
+    if (plan->cursor == NULL || plan->cursor->is_volatile ||
+        plan->array == NULL || plan->array->is_volatile ||
+        plan->guard_function == NULL ||
+        !plan->guard_function->is_defined)
+        return 0;
+    plan->cursor_offset = memory_offset;
+    if (!mir_scalar_memory_location(
+            array, &memory_type, &memory_storage,
+            &plan->array_offset) ||
+        memory_storage != SC_GLOBAL)
+        return 0;
     return 1;
 }
 
@@ -8292,6 +8393,35 @@ static void mir_emit_variadic_sum(
     fputs("\tpop iy\n\tret\n", out);
 }
 
+static void mir_emit_guarded_global_pop(
+    FILE *out, const struct MirGuardedGlobalPop *plan)
+{
+    int guard = new_label();
+    int after_guard = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_word(
+        out, plan->cursor, plan->cursor_offset);
+    fprintf(out,
+            "\tld a,h\n\tor a\n\tjp m,L%d\n"
+            "\tor l\n\tjp nz,L%d\n"
+            "L%d:\n",
+            guard, after_guard, guard);
+    mir_machine_emit_symbol_call(out, plan->guard_function);
+    fprintf(out, "L%d:\n", after_guard);
+    mir_machine_emit_global_word(
+        out, plan->cursor, plan->cursor_offset);
+    fputs("\tdec hl\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->cursor, plan->cursor_offset);
+    fputs("\tadd hl,hl\n", out);
+    mir_machine_emit_global_address_de(
+        out, plan->array, plan->array_offset);
+    fputs("\tadd hl,de\n\tld e,(hl)\n\tinc hl\n"
+          "\tld d,(hl)\n\tex de,hl\n\tret\n", out);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -8349,6 +8479,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirByteArithmeticReports byte_arithmetic_reports;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
+    struct MirGuardedGlobalPop guarded_global_pop;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
 
@@ -8558,6 +8689,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_variadic_sum(&variadic_sum)) {
         mir_emit_variadic_sum(out, &variadic_sum);
+        return 1;
+    }
+    if (mir_match_guarded_global_pop(&guarded_global_pop)) {
+        mir_emit_guarded_global_pop(out, &guarded_global_pop);
         return 1;
     }
     if (mir_match_indexed_member_write(
