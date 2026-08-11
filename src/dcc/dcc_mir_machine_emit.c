@@ -80,6 +80,21 @@ struct MirNestedAppend {
     struct MirNestedAppendStore stores[8];
 };
 
+enum MirIndexedStackKind {
+    MIR_INDEXED_STACK_PUSH = 1,
+    MIR_INDEXED_STACK_POP = 2
+};
+
+struct MirIndexedStack {
+    int kind;
+    struct Sym *root;
+    int root_offset;
+    int base_member_offset;
+    int index_member_offset;
+    int element_width;
+    int value_stack_offset;
+};
+
 static void mir_machine_emit_hl_offset(
     FILE *out, int offset, int preserve_bc);
 
@@ -1372,6 +1387,249 @@ static int mir_match_nested_append(struct MirNestedAppend *plan)
     return 1;
 }
 
+struct MirStateMember {
+    struct Sym *root;
+    int root_offset;
+    int member_offset;
+};
+
+static int mir_machine_state_member_address(
+    int value, struct MirStateMember *member_out)
+{
+    const struct MirInsn *member = mir_definition(value);
+    const struct MirInsn *root_load;
+    struct Sym *root;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (member == NULL || member->opcode != MIR_MEMBER_ADDRESS ||
+        member->bit_width != 0 ||
+        (member->memory_flags & (1 | 8)) != 0)
+        return 0;
+    root_load = mir_definition(member->src1);
+    if (root_load == NULL || root_load->opcode != MIR_LOAD ||
+        type_ptr_depth(root_load->type) == 0 ||
+        type_size(root_load->type) != 2 ||
+        (root_load->memory_flags & (1 | 8)) != 0 ||
+        !mir_scalar_memory_location(
+            root_load, &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_GLOBAL)
+        return 0;
+    root = find_global(root_load->name);
+    if (root == NULL || !root->is_defined || root->is_volatile)
+        return 0;
+    member_out->root = root;
+    member_out->root_offset = memory_offset;
+    member_out->member_offset = (int)member->immediate;
+    return 1;
+}
+
+static int mir_machine_same_state_member(
+    const struct MirStateMember *left,
+    const struct MirStateMember *right)
+{
+    return left->root == right->root &&
+           left->root_offset == right->root_offset &&
+           left->member_offset == right->member_offset;
+}
+
+static int mir_machine_index_update(
+    const struct MirInsn *store, int operation,
+    struct MirStateMember *member_out, int *old_value,
+    int *new_value)
+{
+    const struct MirInsn *binary;
+    const struct MirInsn *load;
+    const struct MirInsn *one;
+    struct MirStateMember loaded_member;
+
+    if (store == NULL || store->opcode != MIR_STORE_INDIRECT ||
+        store->memory_size != 2 || store->bit_width != 0 ||
+        (store->memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_state_member_address(
+            store->src1, member_out))
+        return 0;
+    binary = mir_definition(store->src2);
+    if (binary == NULL || binary->opcode != MIR_BINARY ||
+        binary->immediate != operation)
+        return 0;
+    load = mir_definition(binary->src1);
+    one = mir_definition(binary->src2);
+    if (load == NULL || load->opcode != MIR_LOAD_INDIRECT ||
+        load->memory_size != 2 || load->bit_width != 0 ||
+        (load->memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_state_member_address(
+            load->src1, &loaded_member) ||
+        !mir_machine_same_state_member(
+            member_out, &loaded_member) ||
+        one == NULL || one->opcode != MIR_CONST ||
+        one->immediate != 1)
+        return 0;
+    *old_value = load->dst;
+    *new_value = binary->dst;
+    return 1;
+}
+
+static int mir_machine_indexed_stack_address(
+    int value, struct MirStateMember *base_member,
+    int *index_value, int *element_width)
+{
+    const struct MirInsn *index = mir_definition(value);
+    const struct MirInsn *base_load;
+
+    if (index == NULL || index->opcode != MIR_INDEX_ADDRESS ||
+        index->immediate != 2 ||
+        (index->memory_flags & 1) != 0)
+        return 0;
+    base_load = mir_definition(index->src1);
+    if (base_load == NULL ||
+        base_load->opcode != MIR_LOAD_INDIRECT ||
+        base_load->memory_size != 2 ||
+        base_load->bit_width != 0 ||
+        type_ptr_depth(base_load->type) == 0 ||
+        (base_load->memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_state_member_address(
+            base_load->src1, base_member))
+        return 0;
+    *index_value = index->src2;
+    *element_width = (int)index->immediate;
+    return 1;
+}
+
+static int mir_match_indexed_stack(struct MirIndexedStack *plan)
+{
+    const struct MirInsn *index_store = NULL;
+    const struct MirInsn *element_store = NULL;
+    const struct MirInsn *return_insn = NULL;
+    const struct MirInsn *element_load;
+    struct MirStateMember index_member;
+    struct MirStateMember base_member;
+    int old_index = -1;
+    int new_index = -1;
+    int address_index = -1;
+    int parameter_count = 0;
+    int store_count = 0;
+    int return_count = 0;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    memset(&index_member, 0, sizeof(index_member));
+    memset(&base_member, 0, sizeof(base_member));
+    if (mir.has_vla || mir_cfg_block_count() != 1)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        switch (insn->opcode) {
+        case MIR_NOP:
+        case MIR_LABEL:
+        case MIR_CONST:
+        case MIR_MEMBER_ADDRESS:
+        case MIR_INDEX_ADDRESS:
+        case MIR_BINARY:
+            break;
+        case MIR_PARAM:
+            ++parameter_count;
+            break;
+        case MIR_LOAD:
+            if ((insn->memory_flags & (1 | 8)) != 0)
+                return 0;
+            break;
+        case MIR_LOAD_INDIRECT:
+            if ((insn->memory_flags & (1 | 8)) != 0 ||
+                insn->bit_width != 0)
+                return 0;
+            break;
+        case MIR_STORE_INDIRECT:
+            if ((insn->memory_flags & (1 | 8)) != 0 ||
+                insn->bit_width != 0)
+                return 0;
+            ++store_count;
+            if (mir_definition(insn->src1) != NULL &&
+                mir_definition(insn->src1)->opcode ==
+                    MIR_INDEX_ADDRESS)
+                element_store = insn;
+            else
+                index_store = insn;
+            break;
+        case MIR_RETURN:
+            ++return_count;
+            return_insn = insn;
+            break;
+        default:
+            return 0;
+        }
+    }
+    if (store_count == 2 && parameter_count == 1 &&
+        return_count == 0 && element_store != NULL &&
+        index_store != NULL &&
+        (mir.return_type & 15) == TYPE_VOID) {
+        plan->kind = MIR_INDEXED_STACK_PUSH;
+        if (!mir_machine_index_update(
+                index_store, '+', &index_member,
+                &old_index, &new_index) ||
+            !mir_machine_indexed_stack_address(
+                element_store->src1, &base_member,
+                &address_index, &plan->element_width) ||
+            address_index != old_index ||
+            index_store >= element_store ||
+            element_store->memory_size != plan->element_width ||
+            !mir_machine_parameter_value_offset(
+                element_store->src2,
+                &plan->value_stack_offset))
+            return 0;
+    } else if (store_count == 1 && parameter_count == 0 &&
+               return_count == 1 && index_store != NULL &&
+               return_insn != NULL &&
+               type_size(mir.return_type) == 2) {
+        plan->kind = MIR_INDEXED_STACK_POP;
+        element_load = mir_definition(return_insn->src1);
+        if (!mir_machine_index_update(
+                index_store, '-', &index_member,
+                &old_index, &new_index) ||
+            element_load == NULL ||
+            element_load->opcode != MIR_LOAD_INDIRECT ||
+            element_load->bit_width != 0 ||
+            (element_load->memory_flags & (1 | 8)) != 0 ||
+            !mir_machine_indexed_stack_address(
+                element_load->src1, &base_member,
+                &address_index, &plan->element_width) ||
+            address_index != new_index ||
+            index_store >= element_load ||
+            element_load->memory_size != plan->element_width ||
+            type_size(mir.return_type) != plan->element_width)
+            return 0;
+    } else {
+        return 0;
+    }
+    if (index_member.root != base_member.root ||
+        index_member.root_offset != base_member.root_offset)
+        return 0;
+    plan->root = index_member.root;
+    plan->root_offset = index_member.root_offset;
+    plan->base_member_offset = base_member.member_offset;
+    plan->index_member_offset = index_member.member_offset;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int memory_type;
+        int memory_storage;
+        int memory_offset;
+
+        if (insn->opcode != MIR_LOAD)
+            continue;
+        if (!mir_scalar_memory_location(
+                insn, &memory_type, &memory_storage,
+                &memory_offset) ||
+            memory_storage != SC_GLOBAL ||
+            memory_offset != plan->root_offset ||
+            find_global(insn->name) != plan->root)
+            return 0;
+    }
+    return 1;
+}
+
 static int mir_match_nested_row_store(struct MirNestedRowStore *plan)
 {
     const struct MirInsn *value_store = NULL;
@@ -1625,6 +1883,51 @@ static void mir_emit_nested_append(
             done, done);
 }
 
+static void mir_machine_emit_indexed_stack_base(
+    FILE *out, const struct MirIndexedStack *plan)
+{
+    mir_machine_emit_global_word(
+        out, plan->root, plan->root_offset);
+    fputs("\tld c,l\n\tld b,h\n"
+          "\tld l,c\n\tld h,b\n", out);
+    mir_machine_emit_hl_offset(
+        out, plan->base_member_offset, 1);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tpush de\n\tld l,c\n\tld h,b\n", out);
+    mir_machine_emit_hl_offset(
+        out, plan->index_member_offset, 0);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n", out);
+}
+
+static void mir_emit_indexed_stack(
+    FILE *out, const struct MirIndexedStack *plan)
+{
+    if (plan->kind == MIR_INDEXED_STACK_PUSH) {
+        fprintf(out,
+                "\tld hl,%d\n\tadd hl,sp\n"
+                "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+                "\tpush de\n",
+                plan->value_stack_offset);
+    }
+    mir_machine_emit_indexed_stack_base(out, plan);
+    if (plan->kind == MIR_INDEXED_STACK_PUSH)
+        fputs("\tinc de\n", out);
+    else
+        fputs("\tdec de\n", out);
+    fputs("\tld (hl),d\n\tdec hl\n\tld (hl),e\n", out);
+    if (plan->kind == MIR_INDEXED_STACK_PUSH)
+        fputs("\tdec de\n", out);
+    fputs("\tld l,e\n\tld h,d\n\tadd hl,hl\n"
+          "\tpop de\n\tadd hl,de\n", out);
+    if (plan->kind == MIR_INDEXED_STACK_PUSH) {
+        fputs("\tpop de\n\tld (hl),e\n\tinc hl\n"
+              "\tld (hl),d\n\tret\n", out);
+    } else {
+        fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+              "\tex de,hl\n\tret\n", out);
+    }
+}
+
 static void mir_emit_nested_row_store(
     FILE *out, const struct MirNestedRowStore *plan)
 {
@@ -1705,6 +2008,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFixedParamMutations fixed_param_mutations;
     struct MirGlobalAppend global_append;
     struct MirNestedAppend nested_append;
+    struct MirIndexedStack indexed_stack;
     long constant;
 
     if (mir_match_affine_pointer_constant_return(&constant)) {
@@ -1739,6 +2043,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_nested_append(out, &nested_append);
+        return 1;
+    }
+    if (mir_match_indexed_stack(&indexed_stack)) {
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_indexed_stack(out, &indexed_stack);
         return 1;
     }
 
