@@ -60,6 +60,12 @@ struct Sym *find_bc_regalloc_candidate(int params_end);
  * disqualified from - and only to word-sized read-only parameters. */
 struct Sym *find_iy_regalloc_candidate(int params_end);
 int function_qualifies_for_speculative_iy_regalloc(const char *name);
+int try_prelegacy_scheduled_mir_function_body(
+    const char *name, int type, int local_bytes, struct Sym *s,
+    long body_start_pos, long body_start_tok_start,
+    int body_start_line, int body_start_tok_line,
+    struct Token body_start_tok, int body_start_nlocals,
+    int body_start_local_size);
 int try_speculative_iy_regalloc_function_body(const char *name, int type,
                                              int local_bytes, struct Sym *s,
                                              struct Sym *iy_cand,

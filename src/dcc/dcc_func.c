@@ -3742,6 +3742,14 @@ void parse_function_or_global(int base_type)
                     g_inline_body_buffering--;
                     emit_sink_restore(&saved_sink);
                 } else if (!opt_debug &&
+                           try_prelegacy_scheduled_mir_function_body(
+                               name, type, current_local_bytes, s,
+                               _ls.posi, _ls.tok_start_pos, _ls.line_no,
+                               _ls.tok_line, _ls.tok,
+                               saved_nlocals, saved_local_size)) {
+                    /* Scheduled MIR owned the whole function before any
+                     * legacy frame/register-allocation retry. */
+                } else if (!opt_debug &&
                            function_qualifies_for_speculative_noix(name, current_local_bytes) &&
                            try_speculative_noix_function_body(name, type, current_local_bytes, s,
                                                                _ls.posi, _ls.tok_start_pos, _ls.line_no,

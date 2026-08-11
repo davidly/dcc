@@ -24,6 +24,7 @@
 #endif
 
 #include "dcc.h"
+#include "dcc_mir.h"
 #include "dcc_regalloc_internal.h"
 #include "dcc_ast.h"
 #ifdef _WIN32
@@ -1552,6 +1553,93 @@ static int buf_has_foreign_iy_use(const char *buf)
         p = nl + 1;
     }
 
+    return 0;
+}
+
+/*
+ * Give an audited scheduled MIR kernel ownership of the complete function
+ * before any legacy no-IX/register-allocation retry establishes a competing
+ * frame convention. The replay is transactional, but its MIR policy is the
+ * ordinary FINAL/DEFERRED scheduled policy rather than a VERIFY or legacy
+ * speculation policy. A decline restores the exact pre-attempt label state,
+ * so merely probing a function cannot perturb later code placement.
+ */
+int try_prelegacy_scheduled_mir_function_body(
+    const char *name, int type, int local_bytes, struct Sym *s,
+    long body_start_pos, long body_start_tok_start,
+    int body_start_line, int body_start_tok_line,
+    struct Token body_start_tok, int body_start_nlocals,
+    int body_start_local_size)
+{
+    FILE *scratch;
+    EmitSink saved_sink;
+    int saved_stack_check;
+    int saved_label_id;
+    int saved_return_label;
+    int errors_before;
+    int selected;
+    int character;
+    int sink_purpose;
+
+    scratch = tmpfile();
+    if (scratch == NULL)
+        fatal("cannot create pre-legacy scheduled MIR temp file");
+
+    saved_stack_check = opt_stack_check;
+    saved_label_id = label_id;
+    saved_return_label = current_return_label;
+    sink_purpose = plain_static_body_can_be_buffered(s, name)
+        ? EMIT_SINK_DEFERRED : g_emit_sink.purpose;
+    saved_sink = emit_sink_push(scratch, sink_purpose);
+    opt_stack_check = s->stack_check_enabled;
+    g_inline_body_buffering++;
+    g_buffering_epoch++;
+    reset_function_codegen_state(s);
+    label_id = saved_label_id;
+    current_return_label = saved_return_label;
+    mir_begin_prelegacy_scheduled_attempt();
+
+    errors_before = g_diag_error_count;
+    asm_suppress_depth++;
+    emit_function_prologue(name, local_bytes, 0);
+    gen_compound();
+    emit_function_epilogue(
+        strcmp(name, "main") == 0 &&
+        (type & 15) == TYPE_INT &&
+        type_ptr_depth(type) == 0);
+    asm_suppress_depth--;
+    selected = mir_end_prelegacy_scheduled_attempt();
+    g_inline_body_buffering--;
+    opt_stack_check = saved_stack_check;
+    emit_sink_restore(&saved_sink);
+
+    if (selected && g_diag_error_count == errors_before) {
+        check_undefined_user_labels();
+        if (g_diag_error_count != errors_before)
+            selected = 0;
+    }
+    if (selected) {
+        if (plain_static_body_can_be_buffered(s, name)) {
+            if (s->deferred_body_file != NULL)
+                fatal("duplicate deferred pre-legacy MIR body");
+            s->deferred_body_file = scratch;
+        } else {
+            rewind(scratch);
+            while ((character = fgetc(scratch)) != EOF)
+                fputc(character, g_emit_sink.stream);
+            fclose(scratch);
+        }
+        return 1;
+    }
+
+    fclose(scratch);
+    speculative_body_discard_rewind(
+        s, body_start_pos, body_start_tok_start,
+        body_start_line, body_start_tok_line,
+        body_start_tok, body_start_nlocals,
+        body_start_local_size);
+    label_id = saved_label_id;
+    current_return_label = saved_return_label;
     return 0;
 }
 

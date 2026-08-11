@@ -14,6 +14,24 @@
 #include "dcc_mir.h"
 #include "dcc_mir_internal.h"
 
+static int mir_prelegacy_scheduled_attempt_active;
+static int mir_prelegacy_scheduled_attempt_selected;
+
+void mir_begin_prelegacy_scheduled_attempt(void)
+{
+    mir_prelegacy_scheduled_attempt_active = 1;
+    mir_prelegacy_scheduled_attempt_selected = 0;
+}
+
+int mir_end_prelegacy_scheduled_attempt(void)
+{
+    int selected = mir_prelegacy_scheduled_attempt_selected;
+
+    mir_prelegacy_scheduled_attempt_active = 0;
+    mir_prelegacy_scheduled_attempt_selected = 0;
+    return selected;
+}
+
 #define MIR_SPILLED_FEATURE_RHS_STACK             (1UL << 0)
 #define MIR_SPILLED_FEATURE_STORE_VALUE           (1UL << 1)
 #define MIR_SPILLED_FEATURE_BRANCH_CONDITION      (1UL << 2)
@@ -4938,7 +4956,8 @@ void mir_end_function(void)
          * emitted five different "captured-bytes" values (424/311/370/370/
          * 311) for the one function, none reliably the real committed
          * size. */
-        if (mir.report_mode && !g_speculative_codegen_active)
+        if (mir.report_mode && !g_speculative_codegen_active &&
+            !mir_prelegacy_scheduled_attempt_active)
             fprintf(stderr, "; MIR emit function=%s result=oversized-fallback\n",
                     mir.name);
         fclose(mir.capture_stream);
@@ -5175,6 +5194,12 @@ retry_selection:
                 generated_label_id_after = label_id;
                 if (emitted)
                     selector_name = "scheduled-machine-cfg";
+            }
+            if (mir_prelegacy_scheduled_attempt_active) {
+                if (emitted)
+                    goto evaluate_generated;
+                label_id = mir_label_base;
+                goto copy_selected_output;
             }
             if (!emitted && (emit_filter == NULL ||
                              emit_filter[0] == 0) &&
@@ -7250,20 +7275,26 @@ evaluate_generated:
                  * never real codegen. */
             }
         }
+copy_selected_output:
+        if (mir_prelegacy_scheduled_attempt_active)
+            mir_prelegacy_scheduled_attempt_selected = emitted;
         if (emitted)
             mir_mark_selected_inline_call_bodies_needed(generated);
         selected_hash = mir_copy_selected_stream(
             emitted ? generated : mir.capture_stream, destination);
         if (generated != NULL)
             fclose(generated);
-        if (mir.report_mode && !g_speculative_codegen_active)
+        if (mir.report_mode && !g_speculative_codegen_active &&
+            (!mir_prelegacy_scheduled_attempt_active || emitted))
             fprintf(stderr, "; MIR emit function=%s result=%s\n",
                 mir.name, emitted ? "mir" : "fallback");
         /* See the oversized-fallback report above: a buffered/speculative
          * legacy attempt's generated/captured sizes describe codegen that
          * is discarded and never reaches the real output, so it must not
          * be reported to the census or DCC_MIR_SELECT_REPORT consumers. */
-        if (getenv("DCC_MIR_SELECT_REPORT") != NULL && !g_speculative_codegen_active)
+        if (getenv("DCC_MIR_SELECT_REPORT") != NULL &&
+            !g_speculative_codegen_active &&
+            (!mir_prelegacy_scheduled_attempt_active || emitted))
             fprintf(stderr,
                     "; MIR selection function=%s selector=%s result=%s "
                     "reason=%s generated-bytes=%ld captured-bytes=%ld "
@@ -7275,6 +7306,7 @@ evaluate_generated:
                     captured_instructions, mir_cfg_block_count(),
                     selected_hash, mir_sink_name(mir.sink_purpose));
         if (verified && !g_speculative_codegen_active &&
+            !mir_prelegacy_scheduled_attempt_active &&
             getenv("DCC_MIR_CANDIDATE_MATRIX") != NULL)
             mir_report_spilled_candidate_matrix(candidate_matrix_label_base);
         fclose(mir.capture_stream);
