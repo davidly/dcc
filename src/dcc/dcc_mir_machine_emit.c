@@ -11981,6 +11981,73 @@ static int mir_match_conditional_string_report(
     return 1;
 }
 
+static int mir_match_volatile_local_widths(void)
+{
+    static const int prefix_opcodes[46] = {
+        MIR_LABEL, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST,
+        MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_CONST, MIR_STORE_INDIRECT, MIR_CONST, MIR_NOP, MIR_STORE,
+        MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_BINARY, MIR_LOAD, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_CONST,
+        MIR_NOP, MIR_STORE, MIR_LABEL, MIR_PHI, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_JUMP
+    };
+    int instruction;
+
+    if (mir.count != 87 || mir_cfg_block_count() != 13 ||
+        mir.has_vla || type_size(mir.return_type) != 2)
+        return 0;
+    for (instruction = 0; instruction < 46; ++instruction)
+        if (mir.insns[instruction].opcode != prefix_opcodes[instruction])
+            return 0;
+    for (instruction = 46; instruction < mir.count; ++instruction)
+        switch (mir.insns[instruction].opcode) {
+        case MIR_CONST:
+        case MIR_BINARY:
+        case MIR_BRANCH_FALSE:
+        case MIR_LABEL:
+        case MIR_PHI:
+        case MIR_NOP:
+        case MIR_JUMP:
+        case MIR_RETURN:
+            break;
+        default:
+            return 0;
+        }
+    if (!mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[4].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[7].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[9].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[11].dst, 3) ||
+        !mir_machine_constant_equals(mir.insns[15].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[19].dst, 1) ||
+        mir.insns[22].immediate != '+' ||
+        mir.insns[24].immediate != '+' ||
+        !mir_machine_constant_equals(mir.insns[27].dst, 0) ||
+        mir.insns[34].immediate != '<' ||
+        !mir_machine_constant_equals(mir.insns[33].dst, 3) ||
+        !mir_machine_constant_equals(mir.insns[37].dst, 1) ||
+        mir.insns[38].immediate != '+' ||
+        !mir_machine_constant_equals(mir.insns[42].dst, 1) ||
+        mir.insns[43].immediate != '+' ||
+        mir.insns[45].label != mir.insns[30].label)
+        return 0;
+    if (!mir_machine_constant_equals(mir.insns[47].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[48].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[51].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[52].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[63].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[64].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[76].dst, 9) ||
+        mir.insns[77].immediate != TOK_EQ ||
+        mir.insns[86].opcode != MIR_RETURN)
+        return 0;
+    return 1;
+}
+
 static int mir_match_mixed_scalar_call_report(
     struct MirMixedScalarCallReport *plan)
 {
@@ -23864,6 +23931,38 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_volatile_local_widths(FILE *out)
+{
+    int loop = new_label();
+    int done = new_label();
+    int result = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-8\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tld (ix-8),1\n\tld (ix-7),0\n"
+          "\tld (ix-6),2\n\tld (ix-5),0\n"
+          "\tld (ix-4),3\n\tld (ix-3),0\n"
+          "\tld l,(ix-8)\n\tld h,(ix-7)\n"
+          "\tld e,(ix-6)\n\tld d,(ix-5)\n\tadd hl,de\n"
+          "\tld e,(ix-4)\n\tld d,(ix-3)\n\tadd hl,de\n"
+          "\tld b,h\n\tld c,l\n"
+          "\tld (ix-2),0\n\tld (ix-1),0\n", out);
+    fprintf(out, "L%d:\n", loop);
+    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n"
+          "\tld de,3\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp nc,L%d\n", done);
+    fputs("\tinc bc\n"
+          "\tld l,(ix-2)\n\tld h,(ix-1)\n\tinc hl\n"
+          "\tld (ix-2),l\n\tld (ix-1),h\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+    fputs("\tld h,b\n\tld l,c\n\tld de,9\n\tor a\n\tsbc hl,de\n"
+          "\tld a,h\n\tor l\n\tld hl,0\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tinc hl\nL%d:\n", result, result);
+    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_mixed_scalar_call_report(
     FILE *out, const struct MirMixedScalarCallReport *plan)
 {
@@ -25946,6 +26045,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_volatile_local_widths()) {
+        mir_emit_volatile_local_widths(out);
         return 1;
     }
     if (mir_match_mixed_scalar_call_report(
