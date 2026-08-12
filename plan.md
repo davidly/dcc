@@ -6,11 +6,34 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Base HEAD for this batch: `13ec15f`
-  (`dcc MIR: schedule bounded symbol searches`).
-- Current candidate coverage: **2107/2185 (96.43%)**.
-- Remaining fallback population: **78 `final-cost-policy`**, all selected by
+- Base HEAD for this batch: `0401e79`
+  (`dcc MIR: schedule bounded whitespace scans`).
+- Current candidate coverage: **2108/2185 (96.48%)**.
+- Remaining fallback population: **77 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The strict name-free action-dispatch scheduler admits
+  `forint.decode_action`. The two requested 11-block graphs do not support one
+  safe shared emitter family: `decode_action` is a local-free two-parameter
+  branch dispatcher, while `parse_decls` is a bounded global-table loop with a
+  162-byte local buffer. The higher-value old gap was therefore selected
+  (`decode_action` +936 bytes versus `parse_decls` +688 under stack check).
+  The matcher validates the complete 80-instruction graph, both pointer
+  parameters, three short-circuited prefix calls, the initial/default, GOTO,
+  RETURN, and target-label stores, the label parser call, the separator search,
+  the three-argument assignment decoder call, and all four source return
+  paths. The emitter reloads parameters from a stable IX frame around every
+  call, performs the default action write before classification, retains the
+  GOTO action write before parsing its target, and uses no IY. Non-stack
+  selected output is 1,135 text bytes / 108 instructions versus 1,307 / 123
+  captured; stack-check output is 1,164 / 109 versus 1,336 / 124. Against
+  forced fallback, `forint` improves from 658,293,779 to 658,293,675 peep
+  cycles (-104) and from 698,125,957 to 698,119,833 nopeep cycles (-6,124);
+  peep linked size is unchanged at 33,152 bytes and nopeep falls from 36,736
+  to 36,608 bytes (-128 / -0.35%). A separately renamed `action_dispatch`
+  clone selects with identical stack-check metrics. No app/function name,
+  hash, baseline exception, or IY allocation participates in selection. The
+  fresh stack-check census is 2108/2185 with exactly this one new function and
+  no regression.
 - The strict name-free whitespace-scan scheduler admits `cint.skip_ws`. It
   matches the complete 60-instruction, eight-block MIR graph, proves the
   signed 32-bit source-cursor bound, preserves the unsigned-byte helper call
