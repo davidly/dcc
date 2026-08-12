@@ -2088,6 +2088,60 @@ struct MirSoftmaxSchedule {
     int length_stack_offset;
 };
 
+struct MirBackwardLocation {
+    struct Sym *root;
+    int offset;
+};
+
+enum MirBackwardLocationKind {
+    MIR_BACKWARD_ATTENTION_OUTPUT_GRADIENTS,
+    MIR_BACKWARD_LOGIT_GRADIENTS,
+    MIR_BACKWARD_LOGITS,
+    MIR_BACKWARD_TARGETS,
+    MIR_BACKWARD_OUTPUT_WEIGHT_GRADIENTS,
+    MIR_BACKWARD_ATTENTION_OUTPUT,
+    MIR_BACKWARD_OUTPUT_WEIGHTS,
+    MIR_BACKWARD_VALUE_STATE_GRADIENTS,
+    MIR_BACKWARD_ATTENTION_SCORE_GRADIENTS,
+    MIR_BACKWARD_ATTENTION_WORKSPACE,
+    MIR_BACKWARD_QUERY_STATE_GRADIENTS,
+    MIR_BACKWARD_GRADIENT_COLUMN,
+    MIR_BACKWARD_KEY_STATE_GRADIENTS,
+    MIR_BACKWARD_EMBEDDING_GRADIENTS,
+    MIR_BACKWARD_QUERY_WEIGHTS,
+    MIR_BACKWARD_QUERY_WEIGHT_GRADIENTS,
+    MIR_BACKWARD_EMBEDDINGS,
+    MIR_BACKWARD_KEY_WEIGHTS,
+    MIR_BACKWARD_KEY_WEIGHT_GRADIENTS,
+    MIR_BACKWARD_VALUE_WEIGHTS,
+    MIR_BACKWARD_VALUE_WEIGHT_GRADIENTS,
+    MIR_BACKWARD_TOKENS,
+    MIR_BACKWARD_TOKEN_GRADIENTS,
+    MIR_BACKWARD_POSITION_GRADIENTS,
+    MIR_BACKWARD_LOCATION_COUNT
+};
+
+enum MirBackwardFunctionKind {
+    MIR_BACKWARD_CLEAR_FUNCTION,
+    MIR_BACKWARD_COPY_FUNCTION,
+    MIR_BACKWARD_SOFTMAX_FUNCTION,
+    MIR_BACKWARD_CLAMP_FUNCTION,
+    MIR_BACKWARD_OUTER_PRODUCT_FUNCTION,
+    MIR_BACKWARD_MATRIX_MULTIPLY_FUNCTION,
+    MIR_BACKWARD_DOT_PRODUCT_FUNCTION,
+    MIR_BACKWARD_SCALED_ADD_FUNCTION,
+    MIR_BACKWARD_Q16_FUNCTION,
+    MIR_BACKWARD_SHIFT_FUNCTION,
+    MIR_BACKWARD_TRANSPOSE_FUNCTION,
+    MIR_BACKWARD_MATRIX_ADD_FUNCTION,
+    MIR_BACKWARD_FUNCTION_COUNT
+};
+
+struct MirBackwardPassSchedule {
+    struct MirBackwardLocation locations[MIR_BACKWARD_LOCATION_COUNT];
+    struct Sym *functions[MIR_BACKWARD_FUNCTION_COUNT];
+};
+
 struct MirSymbolFindSchedule {
     struct Sym *symbols_root;
     struct Sym *count_root;
@@ -2220,6 +2274,8 @@ static int mir_machine_only_root_loads(
     struct Sym *root, int root_offset);
 static int mir_machine_single_call_argument(
     const struct MirInsn *call, int *argument);
+static int mir_machine_resolve_direct_call(
+    const struct MirInsn *call, struct Sym **function);
 
 static int mir_machine_reject(const char *template_name, const char *reason)
 {
@@ -30415,6 +30471,393 @@ static int mir_match_softmax_schedule(
     return 1;
 }
 
+static char mir_backward_opcode_code(int opcode)
+{
+    switch (opcode) {
+    case MIR_LABEL: return 'L';
+    case MIR_ADDRESS: return 'A';
+    case MIR_NOP: return 'N';
+    case MIR_ARG: return 'G';
+    case MIR_CONST: return 'C';
+    case MIR_BINARY: return 'B';
+    case MIR_CALL: return 'K';
+    case MIR_STORE: return 'S';
+    case MIR_PHI: return 'P';
+    case MIR_BRANCH_FALSE: return 'F';
+    case MIR_INDEX_ADDRESS: return 'I';
+    case MIR_LOAD_INDIRECT: return 'D';
+    case MIR_STORE_INDIRECT: return 'T';
+    case MIR_LOAD: return 'R';
+    case MIR_UNARY: return 'U';
+    case MIR_JUMP: return 'J';
+    default: return 0;
+    }
+}
+
+static int mir_backward_call_arguments(
+    const struct MirInsn *call, int count, int arguments[5])
+{
+    switch (count) {
+    case 1:
+        return mir_machine_single_call_argument(
+            call, &arguments[0]);
+    case 2:
+        return mir_machine_two_call_arguments(call, arguments);
+    case 3:
+        return mir_machine_three_call_arguments(call, arguments);
+    case 4:
+        return mir_machine_four_call_arguments(call, arguments);
+    case 5:
+        return mir_machine_five_call_arguments(call, arguments);
+    default:
+        return 0;
+    }
+}
+
+static int mir_backward_pointer_abi(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           type_size(type) == 2 && !type_is_float(type);
+}
+
+static int mir_backward_word_abi(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           type_size(type) == 2 && !type_is_float(type);
+}
+
+static int mir_backward_count_abi(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           type_size(type) == 1 && !type_is_float(type) &&
+           (type & TYPE_UNSIGNED) != 0;
+}
+
+static int mir_backward_long_abi(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           type_size(type) == 4 && !type_is_float(type) &&
+           (type & TYPE_UNSIGNED) == 0;
+}
+
+static int mir_match_backward_function_abi(
+    int kind, const struct Sym *function)
+{
+    const int *types = function->proto_types;
+
+    switch (kind) {
+    case MIR_BACKWARD_CLEAR_FUNCTION:
+        return mir_backward_pointer_abi(types[0]) &&
+               mir_backward_word_abi(types[1]) &&
+               mir_backward_word_abi(types[2]);
+    case MIR_BACKWARD_COPY_FUNCTION:
+        return mir_backward_pointer_abi(types[0]) &&
+               mir_backward_pointer_abi(types[1]) &&
+               mir_backward_word_abi(types[2]);
+    case MIR_BACKWARD_SOFTMAX_FUNCTION:
+        return mir_backward_pointer_abi(types[0]) &&
+               mir_backward_count_abi(types[1]);
+    case MIR_BACKWARD_CLAMP_FUNCTION:
+    case MIR_BACKWARD_Q16_FUNCTION:
+        return mir_backward_long_abi(types[0]);
+    case MIR_BACKWARD_OUTER_PRODUCT_FUNCTION:
+    case MIR_BACKWARD_MATRIX_MULTIPLY_FUNCTION:
+    case MIR_BACKWARD_TRANSPOSE_FUNCTION:
+    case MIR_BACKWARD_MATRIX_ADD_FUNCTION:
+        return mir_backward_pointer_abi(types[0]) &&
+               mir_backward_pointer_abi(types[1]) &&
+               mir_backward_pointer_abi(types[2]) &&
+               mir_backward_count_abi(types[3]) &&
+               mir_backward_count_abi(types[4]);
+    case MIR_BACKWARD_DOT_PRODUCT_FUNCTION:
+        return mir_backward_pointer_abi(types[0]) &&
+               mir_backward_pointer_abi(types[1]) &&
+               mir_backward_count_abi(types[2]);
+    case MIR_BACKWARD_SCALED_ADD_FUNCTION:
+        return mir_backward_word_abi(types[0]) &&
+               mir_backward_pointer_abi(types[1]) &&
+               mir_backward_pointer_abi(types[2]) &&
+               mir_backward_count_abi(types[3]);
+    case MIR_BACKWARD_SHIFT_FUNCTION:
+        return mir_backward_word_abi(types[0]) &&
+               mir_backward_word_abi(types[1]);
+    default:
+        return 0;
+    }
+}
+
+static int mir_match_backward_pass_schedule(
+    struct MirBackwardPassSchedule *plan)
+{
+    static const char expected_opcodes[] =
+        "LANGCGNNCCNBNGKCNSLPNCBFANGANCBINGCCNBNGKAGNCGKAANIDIAANIDIDCBTCNSLNNRCB"
+        "FARIARIDUCBGKTLRCBSJLAGANCBIGAGNCGNCGKAGAGANCBIGNCGNCGKNLNCBSJLANGCGNNCC"
+        "NBNGKCNSLPNNCBFCNSLNNNRCBFANCBRBIANNNNCRCBBIGANCBIGNCGKTANNNNCNCBBRBIDGA"
+        "NCBIGARCBIGNCGKNLRCBSJLLNCBSJLCNSLPNNNCBFANNNNCNCBBIGANCBIGNCGKNSCNSLNNN"
+        "NRCBFANCBRBIDSRUNUBGKNSANNNNCNCBBRBIDSRUNUBGKNSANCBRBINGCGKTNLRCBSJLNLNC"
+        "BSJLCNSLPNNNNNCBFANNCIGANCBIGANCBIGNCGNCGKLNCBSJLCNSLNNPNNNCBFCNSLNNNNNR"
+        "CBFARIARCBNBIDTLRCBSJLACIGAGANCBIGNCGNCGKNLNCBSJLANGANGNNCCNBNGKCNSLPNNN"
+        "NNCBFNCBNSAGANIGANIGNCGNCGKAGANIGANIGNCGNCGKAGANIGANIGNCGNCGKAGANIGANIGN"
+        "CGNCGKAGANIGANIGNCGNCGKAGANIGANIGNCGNCGKNLNCBSJLCNSLPNNNNPNCBFNCBNSANIDN"
+        "SCNSLNNNNNNNRCBFANRBIDSANCBRBISRRDURUBGKTANRBIDSANCBRBISRRDURUBGKTNLRCBS"
+        "JLNLNCBSJL";
+    static const long expected_constants[101] = {
+        0, 128, 2, 0, 8, 10, 10, 2, 10, 256, 0, 10,
+        128, 1, 16, 16, 10, 16, 16, 10, 1, 0, 128, 2,
+        0, 8, 0, 8, 8, 256, 16, 16, 16, 384, 8, 16,
+        16, 16, 1, 1, 0, 8, 384, 8, 8, 8, 0, 8,
+        8, 384, 8, 8, 2, 1, 1, 0, 8, 128, 8, 16,
+        8, 16, 1, 0, 8, 0, 8, 8, 1, 0, 16, 8,
+        16, 1, 128, 2, 0, 8, 16, 16, 16, 16, 16, 16,
+        16, 16, 16, 16, 16, 16, 16, 1, 0, 8, 16, 0,
+        16, 16, 16, 1, 1
+    };
+    static const unsigned char expected_constant_types[101] = {
+        2, 2, 2, 2, 2, 2, 2, 2, 33, 2, 2, 2, 4, 2, 2, 33, 33, 2, 33, 33,
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 33, 2, 2, 2, 2, 33, 2, 2,
+        2, 2, 2, 2, 2, 33, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+        33, 33, 2, 2, 2, 2, 2, 2, 2, 2, 2, 33, 33, 2, 2, 2, 2, 2, 2, 33,
+        33, 33, 33, 33, 33, 33, 33, 33, 33, 33, 33, 2, 2, 2, 2, 2, 2, 2,
+        2, 2, 2
+    };
+    static const unsigned char expected_binary_ops[70] = {
+        42, 60, 42, 42, 45, 60, 42, 43, 42, 42, 43, 42, 60, 60, 42, 43,
+        42, 43, 42, 42, 43, 43, 42, 42, 43, 43, 60, 42, 43, 42, 60, 42,
+        43, 45, 42, 43, 43, 42, 42, 43, 43, 43, 60, 42, 42, 43, 60, 60,
+        42, 43, 43, 42, 43, 42, 60, 42, 43, 60, 42, 60, 43, 42, 43, 43,
+        43, 42, 43, 43, 43, 43
+    };
+    static const unsigned char expected_binary_types[70] = {
+        2, 2, 2, 2, 2, 2, 4, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 4, 2, 2, 2, 4, 2, 2,
+        2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+        2, 2, 2, 4, 2, 2, 2, 4, 2, 2
+    };
+    static const unsigned char expected_locations[61] = {
+        0, 1, 2, 1, 1, 3, 1, 3, 1, 1, 4, 5, 1, 6, 1, 0, 7, 8, 9, 0,
+        9, 0, 7, 9, 8, 8, 9, 8, 9, 8, 10, 11, 8, 9, 11, 12, 13, 0, 14, 10,
+        13, 15, 16, 10, 17, 12, 13, 18, 16, 12, 19, 7, 13, 20, 16, 7, 21,
+        13, 22, 13, 23
+    };
+    static const struct {
+        int instruction;
+        int function;
+        int type;
+        int count;
+        int arguments[5];
+    } expected_calls[24] = {
+        {14, 0, 19, 3, {1, 4, 11, -1, -1}},
+        {40, 1, 19, 3, {24, 31, 37, -1, -1}},
+        {46, 2, 3, 2, {41, 44, -1, -1, -1}},
+        {84, 3, 2, 1, {82, -1, -1, -1, -1}},
+        {109, 4, 3, 5, {93, 99, 101, 104, 107}},
+        {126, 5, 3, 5, {110, 112, 118, 121, 124}},
+        {148, 0, 19, 3, {135, 138, 145, -1, -1}},
+        {198, 6, 2, 3, {187, 193, 196, -1, -1}},
+        {230, 7, 3, 4, {213, 219, 225, 228, -1}},
+        {278, 6, 2, 3, {267, 273, 276, -1, -1}},
+        {308, 3, 2, 1, {306, -1, -1, -1, -1}},
+        {332, 8, 2, 1, {330, -1, -1, -1, -1}},
+        {346, 9, 2, 2, {332, 344, -1, -1, -1}},
+        {401, 10, 3, 5, {381, 387, 393, 396, 399}},
+        {472, 10, 3, 5, {456, 458, 464, 467, 470}},
+        {495, 1, 19, 3, {481, 484, 492, -1, -1}},
+        {530, 11, 3, 5, {514, 518, 522, 525, 528}},
+        {547, 4, 3, 5, {531, 535, 539, 542, 545}},
+        {564, 11, 3, 5, {548, 552, 556, 559, 562}},
+        {581, 4, 3, 5, {565, 569, 573, 576, 579}},
+        {598, 11, 3, 5, {582, 586, 590, 593, 596}},
+        {615, 4, 3, 5, {599, 603, 607, 610, 613}},
+        {687, 3, 2, 1, {685, -1, -1, -1, -1}},
+        {712, 3, 2, 1, {710, -1, -1, -1, -1}}
+    };
+    static const struct {
+        int instruction;
+        int source;
+        int label;
+    } expected_branches[12] = {
+        {23, 22, 134}, {72, 71, 92}, {158, 157, 245},
+        {169, 168, 238}, {256, 255, 363}, {292, 291, 355},
+        {376, 375, 408}, {421, 420, 480}, {434, 433, 453},
+        {508, 507, 623}, {637, 636, 729}, {663, 662, 721}
+    };
+    static const struct {
+        int instruction;
+        int label;
+    } expected_jumps[12] = {
+        {91, 66}, {133, 18}, {237, 162}, {244, 152},
+        {354, 284}, {362, 249}, {407, 367}, {452, 425},
+        {479, 412}, {622, 499}, {720, 652}, {728, 627}
+    };
+    static const struct {
+        int instruction;
+        int source1;
+        int source2;
+        int predecessor1;
+        int predecessor2;
+    } expected_phis[8] = {
+        {19, 15, 131, 0, 128},
+        {153, 149, 242, 134, 239},
+        {250, 246, 360, 245, 357},
+        {368, 364, 405, 363, 402},
+        {415, 409, 477, 408, 474},
+        {500, 496, 620, 480, 617},
+        {628, 624, 726, 623, 723},
+        {633, 511, 640, 623, 723}
+    };
+    int constant = 0;
+    int binary = 0;
+    int location = 0;
+    int instruction;
+    int call;
+    int edge;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla || mir.count != 730 ||
+        mir_cfg_block_count() != 37 ||
+        (mir.return_type & 15) != TYPE_VOID ||
+        mir.aggregate_temp_bytes != 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        char code = mir_backward_opcode_code(insn->opcode);
+
+        if (code == 0 || code != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "backward-pass-schedule", "opcodes");
+        if (insn->opcode == MIR_CONST) {
+            if (constant >= 101 ||
+                insn->type != expected_constant_types[constant] ||
+                !mir_machine_constant_equals(
+                    insn->dst, expected_constants[constant]))
+                return mir_machine_reject(
+                    "backward-pass-schedule", "constants");
+            ++constant;
+        } else if (insn->opcode == MIR_BINARY) {
+            if (binary >= 70 ||
+                insn->immediate != expected_binary_ops[binary] ||
+                insn->type != expected_binary_types[binary] ||
+                insn->secondary_offset !=
+                    expected_binary_types[binary])
+                return mir_machine_reject(
+                    "backward-pass-schedule", "binary-operations");
+            ++binary;
+        } else if (insn->opcode == MIR_ADDRESS) {
+            struct MirBackwardLocation *expected;
+            struct Sym *root;
+            long offset;
+            int slot;
+
+            if (location >= 61 ||
+                !mir_machine_global_address_offset(
+                    insn->dst, &root, &offset, 0) ||
+                offset < -32768 || offset > 32767)
+                return mir_machine_reject(
+                    "backward-pass-schedule", "locations");
+            slot = expected_locations[location++];
+            expected = &plan->locations[slot];
+            if (expected->root == NULL) {
+                expected->root = root;
+                expected->offset = (int)offset;
+            } else if (expected->root != root ||
+                       expected->offset != (int)offset) {
+                return mir_machine_reject(
+                    "backward-pass-schedule", "location-aliases");
+            }
+        } else if ((insn->opcode == MIR_INDEX_ADDRESS ||
+                    insn->opcode == MIR_LOAD_INDIRECT ||
+                    insn->opcode == MIR_STORE_INDIRECT) &&
+                   (insn->memory_size != 2 ||
+                    (insn->memory_flags & (1 | 8)) != 0)) {
+            return mir_machine_reject(
+                "backward-pass-schedule", "memory-width");
+        } else if (insn->opcode == MIR_INDEX_ADDRESS &&
+                   (insn->immediate != 2 ||
+                    !mir_match_matrix_product_pointer_type(
+                        insn->type))) {
+            return mir_machine_reject(
+                "backward-pass-schedule", "strides");
+        }
+    }
+    if (constant != 101 || binary != 70 || location != 61)
+        return mir_machine_reject(
+            "backward-pass-schedule", "instruction-counts");
+
+    for (call = 0; call < 24; ++call) {
+        const struct MirInsn *insn =
+            &mir.insns[expected_calls[call].instruction];
+        struct Sym *function;
+        int arguments[5] = {-1, -1, -1, -1, -1};
+        int argument;
+
+        if (insn->type != expected_calls[call].type ||
+            (insn->memory_flags &
+             (MIR_CALL_FLAG_VARIADIC |
+              MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+            (function = find_global(insn->name)) == NULL ||
+            function->storage != SC_FUNC ||
+            function->is_funcptr || function->is_noreturn ||
+            !function->has_proto || function->proto_variadic ||
+            function->proto_nargs != expected_calls[call].count ||
+            !mir_match_backward_function_abi(
+                expected_calls[call].function, function) ||
+            (insn->base_name[0] != 0 &&
+             strcmp(insn->base_name,
+                    asm_name_for(sym_asm_name(function)))) ||
+            !mir_backward_call_arguments(
+                insn, expected_calls[call].count, arguments))
+            return mir_machine_reject(
+                "backward-pass-schedule", "calls");
+        if (plan->functions[expected_calls[call].function] == NULL)
+            plan->functions[expected_calls[call].function] = function;
+        else if (plan->functions[expected_calls[call].function] !=
+                 function)
+            return mir_machine_reject(
+                "backward-pass-schedule", "call-relationships");
+        for (argument = 0;
+             argument < expected_calls[call].count;
+             ++argument)
+            if (mir_definition(arguments[argument]) !=
+                &mir.insns[expected_calls[call].arguments[argument]])
+                return mir_machine_reject(
+                    "backward-pass-schedule", "call-arguments");
+    }
+
+    for (edge = 0; edge < 12; ++edge) {
+        const struct MirInsn *branch =
+            &mir.insns[expected_branches[edge].instruction];
+
+        if (mir_definition(branch->src1) !=
+                &mir.insns[expected_branches[edge].source] ||
+            branch->label !=
+                mir.insns[expected_branches[edge].label].label)
+            return mir_machine_reject(
+                "backward-pass-schedule", "branches");
+    }
+    for (edge = 0; edge < 12; ++edge)
+        if (mir.insns[expected_jumps[edge].instruction].label !=
+            mir.insns[expected_jumps[edge].label].label)
+            return mir_machine_reject(
+                "backward-pass-schedule", "jumps");
+    for (edge = 0; edge < 8; ++edge) {
+        const struct MirInsn *phi =
+            &mir.insns[expected_phis[edge].instruction];
+
+        if (mir_definition(phi->src1) !=
+                &mir.insns[expected_phis[edge].source1] ||
+            mir_definition(phi->src2) !=
+                &mir.insns[expected_phis[edge].source2] ||
+            phi->phi_pred1 !=
+                mir.insns[expected_phis[edge].predecessor1].label ||
+            phi->phi_pred2 !=
+                mir.insns[expected_phis[edge].predecessor2].label ||
+            !mir_match_matrix_product_word_type(phi->type))
+            return mir_machine_reject(
+                "backward-pass-schedule", "phis");
+    }
+    return 1;
+}
+
 static int mir_match_symbol_find_schedule(
     struct MirSymbolFindSchedule *plan)
 {
@@ -48017,6 +48460,596 @@ static void mir_emit_softmax_schedule(
             normalization_loop, done);
 }
 
+static void mir_emit_backward_address_hl(
+    FILE *out, const struct MirBackwardPassSchedule *plan,
+    int location, int byte_offset)
+{
+    const struct MirBackwardLocation *global =
+        &plan->locations[location];
+
+    mir_machine_emit_global_address_de(
+        out, global->root, global->offset + byte_offset);
+    fputs("\tex de,hl\n", out);
+}
+
+static void mir_emit_backward_push_address(
+    FILE *out, const struct MirBackwardPassSchedule *plan,
+    int location, int byte_offset)
+{
+    mir_emit_backward_address_hl(
+        out, plan, location, byte_offset);
+    fputs("\tpush hl\n", out);
+}
+
+static void mir_emit_backward_cleanup(FILE *out, int words)
+{
+    while (words-- > 0)
+        fputs("\tpop bc\n", out);
+}
+
+static void mir_emit_backward_byte_index_address(
+    FILE *out, const struct MirBackwardPassSchedule *plan,
+    int location, int byte_offset, int outer_frame_offset,
+    int outer_scale, int inner_frame_offset, int inner_scale)
+{
+    if (outer_frame_offset != 0) {
+        fprintf(out,
+                "\tld l,(ix%+d)\n\tld h,0\n",
+                outer_frame_offset);
+        mir_emit_mul_hl_const(out, (unsigned long)outer_scale);
+    } else {
+        fputs("\tld hl,0\n", out);
+    }
+    if (inner_frame_offset != 0) {
+        fprintf(out,
+                "\tld c,(ix%+d)\n\tld b,0\n",
+                inner_frame_offset);
+        if (inner_scale == 2)
+            fputs("\tsla c\n\trl b\n", out);
+        else if (inner_scale != 1) {
+            fputs("\tpush hl\n\tld l,c\n\tld h,b\n", out);
+            mir_emit_mul_hl_const(
+                out, (unsigned long)inner_scale);
+            fputs("\tld c,l\n\tld b,h\n\tpop hl\n", out);
+        }
+        fputs("\tadd hl,bc\n", out);
+    }
+    mir_machine_emit_global_address_de(
+        out, plan->locations[location].root,
+        plan->locations[location].offset + byte_offset);
+    fputs("\tadd hl,de\n", out);
+}
+
+static void mir_emit_backward_word_index_address(
+    FILE *out, const struct MirBackwardPassSchedule *plan,
+    int location, int byte_offset, int word_frame_offset,
+    int word_scale, int inner_frame_offset)
+{
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+            word_frame_offset, word_frame_offset + 1);
+    mir_emit_mul_hl_const(out, (unsigned long)word_scale);
+    if (inner_frame_offset != 0)
+        fprintf(out,
+                "\tld c,(ix%+d)\n\tld b,0\n"
+                "\tsla c\n\trl b\n\tadd hl,bc\n",
+                inner_frame_offset);
+    mir_machine_emit_global_address_de(
+        out, plan->locations[location].root,
+        plan->locations[location].offset + byte_offset);
+    fputs("\tadd hl,de\n", out);
+}
+
+static void mir_emit_backward_load_word(FILE *out)
+{
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tex de,hl\n", out);
+}
+
+static void mir_emit_backward_sign_extend(FILE *out)
+{
+    fputs("\tld a,h\n\trlca\n\tsbc a,a\n"
+          "\tld d,a\n\tld e,a\n", out);
+}
+
+static void mir_emit_backward_combine_long(
+    FILE *out, int subtract)
+{
+    fputs("\tld c,l\n\tld b,h\n\tpop hl\n", out);
+    if (subtract)
+        fputs("\tor a\n\tsbc hl,bc\n", out);
+    else
+        fputs("\tadd hl,bc\n", out);
+    fputs("\tex (sp),hl\n", out);
+    if (subtract)
+        fputs("\tsbc hl,de\n", out);
+    else
+        fputs("\tadc hl,de\n", out);
+    fputs("\tex de,hl\n\tpop hl\n", out);
+}
+
+static void mir_emit_backward_long_call(
+    FILE *out, struct Sym *function)
+{
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, function);
+    mir_emit_backward_cleanup(out, 2);
+}
+
+static void mir_emit_backward_clear(
+    FILE *out, const struct MirBackwardPassSchedule *plan,
+    int location, int bytes)
+{
+    fprintf(out, "\tld hl,%d\n\tpush hl\n"
+                 "\tld hl,0\n\tpush hl\n", bytes);
+    mir_emit_backward_push_address(out, plan, location, 0);
+    mir_machine_emit_symbol_call(
+        out, plan->functions[MIR_BACKWARD_CLEAR_FUNCTION]);
+    mir_emit_backward_cleanup(out, 3);
+}
+
+static void mir_emit_backward_copy(
+    FILE *out, const struct MirBackwardPassSchedule *plan,
+    int destination, int source, int bytes)
+{
+    fprintf(out, "\tld hl,%d\n\tpush hl\n", bytes);
+    mir_emit_backward_push_address(out, plan, source, 0);
+    mir_emit_backward_push_address(out, plan, destination, 0);
+    mir_machine_emit_symbol_call(
+        out, plan->functions[MIR_BACKWARD_COPY_FUNCTION]);
+    mir_emit_backward_cleanup(out, 3);
+}
+
+static void mir_emit_backward_clamped_add(
+    FILE *out, const struct MirBackwardPassSchedule *plan,
+    int destination, int destination_byte_offset,
+    int destination_outer_frame, int destination_outer_scale,
+    int source, int source_byte_offset,
+    int source_outer_frame, int source_outer_scale,
+    int inner_frame)
+{
+    mir_emit_backward_byte_index_address(
+        out, plan, source, source_byte_offset,
+        source_outer_frame, source_outer_scale,
+        inner_frame, 2);
+    mir_emit_backward_load_word(out);
+    fputs("\tld (ix-4),l\n\tld (ix-3),h\n", out);
+
+    mir_emit_backward_byte_index_address(
+        out, plan, destination, destination_byte_offset,
+        destination_outer_frame, destination_outer_scale,
+        inner_frame, 2);
+    fputs("\tpush hl\n", out);
+    mir_emit_backward_load_word(out);
+    mir_emit_backward_sign_extend(out);
+    fputs("\tpush de\n\tpush hl\n"
+          "\tld l,(ix-4)\n\tld h,(ix-3)\n", out);
+    mir_emit_backward_sign_extend(out);
+    mir_emit_backward_combine_long(out, 0);
+    mir_emit_backward_long_call(
+        out, plan->functions[MIR_BACKWARD_CLAMP_FUNCTION]);
+    fputs("\tpop de\n\tld a,l\n\tld (de),a\n"
+          "\tinc de\n\tld a,h\n\tld (de),a\n", out);
+}
+
+static void mir_emit_backward_pass_schedule(
+    FILE *out, const struct MirBackwardPassSchedule *plan)
+{
+    int step1 = new_label();
+    int step1_scale = new_label();
+    int step1_scale_done = new_label();
+    int step2_outer = new_label();
+    int step2_inner = new_label();
+    int step2_inner_done = new_label();
+    int step2_row_done = new_label();
+    int step3_outer = new_label();
+    int step3_inner = new_label();
+    int step3_inner_done = new_label();
+    int step4_query = new_label();
+    int step4_key = new_label();
+    int step4_copy = new_label();
+    int step4_copy_done = new_label();
+    int step5 = new_label();
+    int step6_outer = new_label();
+    int step6_inner = new_label();
+    int done = new_label();
+    int shift;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-6\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+
+    mir_emit_backward_clear(
+        out, plan, MIR_BACKWARD_ATTENTION_OUTPUT_GRADIENTS, 256);
+    fputs("\txor a\n\tld (ix-1),a\n", out);
+    fprintf(out, "L%d:\n", step1);
+    fputs("\tld a,(ix-1)\n\tcp 8\n", out);
+    fprintf(out, "\tjp z,L%d\n", step2_outer);
+
+    fputs("\tld hl,20\n\tpush hl\n", out);
+    mir_emit_backward_byte_index_address(
+        out, plan, MIR_BACKWARD_LOGITS, 0, -1, 20, 0, 0);
+    fputs("\tpush hl\n", out);
+    mir_emit_backward_push_address(
+        out, plan, MIR_BACKWARD_LOGIT_GRADIENTS, 0);
+    mir_machine_emit_symbol_call(
+        out, plan->functions[MIR_BACKWARD_COPY_FUNCTION]);
+    mir_emit_backward_cleanup(out, 3);
+
+    fputs("\tld hl,10\n\tpush hl\n", out);
+    mir_emit_backward_push_address(
+        out, plan, MIR_BACKWARD_LOGIT_GRADIENTS, 0);
+    mir_machine_emit_symbol_call(
+        out, plan->functions[MIR_BACKWARD_SOFTMAX_FUNCTION]);
+    mir_emit_backward_cleanup(out, 2);
+
+    mir_emit_backward_byte_index_address(
+        out, plan, MIR_BACKWARD_TARGETS, 0, -1, 2, 0, 0);
+    mir_emit_backward_load_word(out);
+    fputs("\tadd hl,hl\n", out);
+    mir_machine_emit_global_address_de(
+        out, plan->locations[MIR_BACKWARD_LOGIT_GRADIENTS].root,
+        plan->locations[MIR_BACKWARD_LOGIT_GRADIENTS].offset);
+    fputs("\tadd hl,de\n\tpush hl\n", out);
+    mir_emit_backward_load_word(out);
+    fputs("\tld de,256\n\tor a\n\tsbc hl,de\n"
+          "\tpop de\n\tld a,l\n\tld (de),a\n"
+          "\tinc de\n\tld a,h\n\tld (de),a\n"
+          "\txor a\n\tld (ix-2),a\n", out);
+
+    fprintf(out, "L%d:\n", step1_scale);
+    fputs("\tld a,(ix-2)\n\tcp 10\n", out);
+    fprintf(out, "\tjp z,L%d\n", step1_scale_done);
+    mir_emit_backward_byte_index_address(
+        out, plan, MIR_BACKWARD_LOGIT_GRADIENTS, 0,
+        -2, 2, 0, 0);
+    fputs("\tpush hl\n", out);
+    mir_emit_backward_load_word(out);
+    mir_emit_backward_sign_extend(out);
+    for (shift = 0; shift < 7; ++shift)
+        fputs("\tadd hl,hl\n\trl e\n\trl d\n", out);
+    mir_emit_backward_long_call(
+        out, plan->functions[MIR_BACKWARD_CLAMP_FUNCTION]);
+    fputs("\tpop de\n\tld a,l\n\tld (de),a\n"
+          "\tinc de\n\tld a,h\n\tld (de),a\n"
+          "\tinc (ix-2)\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            step1_scale, step1_scale_done);
+
+    fputs("\tld hl,10\n\tpush hl\n"
+          "\tld hl,16\n\tpush hl\n", out);
+    mir_emit_backward_push_address(
+        out, plan, MIR_BACKWARD_LOGIT_GRADIENTS, 0);
+    mir_emit_backward_byte_index_address(
+        out, plan, MIR_BACKWARD_ATTENTION_OUTPUT, 0,
+        -1, 32, 0, 0);
+    fputs("\tpush hl\n", out);
+    mir_emit_backward_push_address(
+        out, plan, MIR_BACKWARD_OUTPUT_WEIGHT_GRADIENTS, 0);
+    mir_machine_emit_symbol_call(
+        out, plan->functions[MIR_BACKWARD_OUTER_PRODUCT_FUNCTION]);
+    mir_emit_backward_cleanup(out, 5);
+
+    fputs("\tld hl,10\n\tpush hl\n"
+          "\tld hl,16\n\tpush hl\n", out);
+    mir_emit_backward_byte_index_address(
+        out, plan, MIR_BACKWARD_ATTENTION_OUTPUT_GRADIENTS, 0,
+        -1, 32, 0, 0);
+    fputs("\tpush hl\n", out);
+    mir_emit_backward_push_address(
+        out, plan, MIR_BACKWARD_LOGIT_GRADIENTS, 0);
+    mir_emit_backward_push_address(
+        out, plan, MIR_BACKWARD_OUTPUT_WEIGHTS, 0);
+    mir_machine_emit_symbol_call(
+        out, plan->functions[MIR_BACKWARD_MATRIX_MULTIPLY_FUNCTION]);
+    mir_emit_backward_cleanup(out, 5);
+    fputs("\tinc (ix-1)\n", out);
+    fprintf(out, "\tjp L%d\n", step1);
+
+    fprintf(out, "L%d:\n", step2_outer);
+    mir_emit_backward_clear(
+        out, plan, MIR_BACKWARD_VALUE_STATE_GRADIENTS, 256);
+    fputs("\txor a\n\tld (ix-1),a\n", out);
+    fprintf(out, "L%d:\n", step2_inner_done);
+    fputs("\tld a,(ix-1)\n\tcp 8\n", out);
+    fprintf(out, "\tjp z,L%d\n\txor a\n\tld (ix-2),a\n",
+            step3_outer);
+    fprintf(out, "L%d:\n", step2_inner);
+    fputs("\tld a,(ix-2)\n\tcp 8\n", out);
+    fprintf(out, "\tjp z,L%d\n", step2_row_done);
+
+    mir_emit_backward_byte_index_address(
+        out, plan, MIR_BACKWARD_ATTENTION_SCORE_GRADIENTS, 0,
+        -1, 16, -2, 2);
+    fputs("\tpush hl\n\tld hl,16\n\tpush hl\n", out);
+    mir_emit_backward_byte_index_address(
+        out, plan, MIR_BACKWARD_ATTENTION_OUTPUT_GRADIENTS, 0,
+        -1, 32, 0, 0);
+    fputs("\tpush hl\n", out);
+    mir_emit_backward_byte_index_address(
+        out, plan, MIR_BACKWARD_ATTENTION_WORKSPACE, 512,
+        -2, 32, 0, 0);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(
+        out, plan->functions[MIR_BACKWARD_DOT_PRODUCT_FUNCTION]);
+    mir_emit_backward_cleanup(out, 3);
+    fputs("\tpop de\n\tld a,l\n\tld (de),a\n"
+          "\tinc de\n\tld a,h\n\tld (de),a\n", out);
+
+    mir_emit_backward_byte_index_address(
+        out, plan, MIR_BACKWARD_ATTENTION_WORKSPACE, 768,
+        -1, 16, -2, 2);
+    mir_emit_backward_load_word(out);
+    fputs("\tld (ix-4),l\n\tld (ix-3),h\n"
+          "\tld hl,16\n\tpush hl\n", out);
+    mir_emit_backward_byte_index_address(
+        out, plan, MIR_BACKWARD_VALUE_STATE_GRADIENTS, 0,
+        -2, 32, 0, 0);
+    fputs("\tpush hl\n", out);
+    mir_emit_backward_byte_index_address(
+        out, plan, MIR_BACKWARD_ATTENTION_OUTPUT_GRADIENTS, 0,
+        -1, 32, 0, 0);
+    fputs("\tpush hl\n\tld l,(ix-4)\n\tld h,(ix-3)\n"
+          "\tpush hl\n", out);
+    mir_machine_emit_symbol_call(
+        out, plan->functions[MIR_BACKWARD_SCALED_ADD_FUNCTION]);
+    mir_emit_backward_cleanup(out, 4);
+    fputs("\tinc (ix-2)\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n\tinc (ix-1)\n\tjp L%d\n",
+            step2_inner, step2_row_done, step2_inner_done);
+
+    fprintf(out, "L%d:\n", step3_outer);
+    fputs("\txor a\n\tld (ix-1),a\n", out);
+    {
+        int step3_rows = new_label();
+
+        fprintf(out, "L%d:\n", step3_rows);
+        fputs("\tld a,(ix-1)\n\tcp 8\n", out);
+        fprintf(out, "\tjp z,L%d\n", step4_query);
+        fputs("\tld hl,8\n\tpush hl\n", out);
+        mir_emit_backward_byte_index_address(
+            out, plan, MIR_BACKWARD_ATTENTION_SCORE_GRADIENTS, 0,
+            -1, 16, 0, 0);
+        fputs("\tpush hl\n", out);
+        mir_emit_backward_byte_index_address(
+            out, plan, MIR_BACKWARD_ATTENTION_WORKSPACE, 768,
+            -1, 16, 0, 0);
+        fputs("\tpush hl\n", out);
+        mir_machine_emit_symbol_call(
+            out, plan->functions[MIR_BACKWARD_DOT_PRODUCT_FUNCTION]);
+        mir_emit_backward_cleanup(out, 3);
+        fputs("\tld (ix-6),l\n\tld (ix-5),h\n"
+              "\txor a\n\tld (ix-2),a\n", out);
+        fprintf(out, "L%d:\n", step3_inner);
+        fputs("\tld a,(ix-2)\n\tcp 8\n", out);
+        fprintf(out, "\tjp z,L%d\n", step3_inner_done);
+
+        mir_emit_backward_byte_index_address(
+            out, plan, MIR_BACKWARD_ATTENTION_SCORE_GRADIENTS, 0,
+            -1, 16, -2, 2);
+        mir_emit_backward_load_word(out);
+        mir_emit_backward_sign_extend(out);
+        fputs("\tpush de\n\tpush hl\n"
+              "\tld l,(ix-6)\n\tld h,(ix-5)\n", out);
+        mir_emit_backward_sign_extend(out);
+        mir_emit_backward_combine_long(out, 1);
+        mir_emit_backward_long_call(
+            out, plan->functions[MIR_BACKWARD_CLAMP_FUNCTION]);
+        fputs("\tld (ix-4),l\n\tld (ix-3),h\n", out);
+
+        mir_emit_backward_byte_index_address(
+            out, plan, MIR_BACKWARD_ATTENTION_WORKSPACE, 768,
+            -1, 16, -2, 2);
+        mir_emit_backward_load_word(out);
+        fputs("\tld c,(ix-4)\n\tld b,(ix-3)\n", out);
+        mir_emit_runtime_call(out, "__m1s");
+        mir_emit_backward_long_call(
+            out, plan->functions[MIR_BACKWARD_Q16_FUNCTION]);
+        fputs("\tld (ix-4),l\n\tld (ix-3),h\n", out);
+
+        mir_emit_backward_byte_index_address(
+            out, plan, MIR_BACKWARD_ATTENTION_SCORE_GRADIENTS, 0,
+            -1, 16, -2, 2);
+        fputs("\tpush hl\n\tld hl,2\n\tpush hl\n"
+              "\tld l,(ix-4)\n\tld h,(ix-3)\n\tpush hl\n", out);
+        mir_machine_emit_symbol_call(
+            out, plan->functions[MIR_BACKWARD_SHIFT_FUNCTION]);
+        mir_emit_backward_cleanup(out, 2);
+        fputs("\tpop de\n\tld a,l\n\tld (de),a\n"
+              "\tinc de\n\tld a,h\n\tld (de),a\n"
+              "\tinc (ix-2)\n", out);
+        fprintf(out, "\tjp L%d\nL%d:\n\tinc (ix-1)\n\tjp L%d\n",
+                step3_inner, step3_inner_done, step3_rows);
+    }
+
+    fprintf(out, "L%d:\n", step4_query);
+    fputs("\txor a\n\tld (ix-1),a\n", out);
+    {
+        int query_loop = new_label();
+
+        fprintf(out, "L%d:\n", query_loop);
+        fputs("\tld a,(ix-1)\n\tcp 8\n", out);
+        fprintf(out, "\tjp z,L%d\n", step4_key);
+        fputs("\tld hl,16\n\tpush hl\n"
+              "\tld hl,8\n\tpush hl\n", out);
+        mir_emit_backward_byte_index_address(
+            out, plan, MIR_BACKWARD_QUERY_STATE_GRADIENTS, 0,
+            -1, 32, 0, 0);
+        fputs("\tpush hl\n", out);
+        mir_emit_backward_byte_index_address(
+            out, plan, MIR_BACKWARD_ATTENTION_SCORE_GRADIENTS, 0,
+            -1, 16, 0, 0);
+        fputs("\tpush hl\n", out);
+        mir_emit_backward_push_address(
+            out, plan, MIR_BACKWARD_ATTENTION_WORKSPACE, 256);
+        mir_machine_emit_symbol_call(
+            out, plan->functions[MIR_BACKWARD_TRANSPOSE_FUNCTION]);
+        mir_emit_backward_cleanup(out, 5);
+        fputs("\tinc (ix-1)\n", out);
+        fprintf(out, "\tjp L%d\n", query_loop);
+    }
+
+    fprintf(out, "L%d:\n", step4_key);
+    fputs("\txor a\n\tld (ix-2),a\n", out);
+    {
+        int key_loop = new_label();
+
+        fprintf(out, "L%d:\n", key_loop);
+        fputs("\tld a,(ix-2)\n\tcp 8\n", out);
+        fprintf(out, "\tjp z,L%d\n\txor a\n\tld (ix-1),a\n",
+                step5);
+        fprintf(out, "L%d:\n", step4_copy);
+        fputs("\tld a,(ix-1)\n\tcp 8\n", out);
+        fprintf(out, "\tjp z,L%d\n", step4_copy_done);
+        mir_emit_backward_byte_index_address(
+            out, plan, MIR_BACKWARD_ATTENTION_SCORE_GRADIENTS, 0,
+            -1, 16, -2, 2);
+        mir_emit_backward_load_word(out);
+        fputs("\tpush hl\n", out);
+        mir_emit_backward_byte_index_address(
+            out, plan, MIR_BACKWARD_GRADIENT_COLUMN, 0,
+            -1, 2, 0, 0);
+        fputs("\tpop de\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n"
+              "\tinc (ix-1)\n", out);
+        fprintf(out, "\tjp L%d\nL%d:\n",
+                step4_copy, step4_copy_done);
+        fputs("\tld hl,16\n\tpush hl\n"
+              "\tld hl,8\n\tpush hl\n", out);
+        mir_emit_backward_byte_index_address(
+            out, plan, MIR_BACKWARD_KEY_STATE_GRADIENTS, 0,
+            -2, 32, 0, 0);
+        fputs("\tpush hl\n", out);
+        mir_emit_backward_push_address(
+            out, plan, MIR_BACKWARD_GRADIENT_COLUMN, 0);
+        mir_emit_backward_push_address(
+            out, plan, MIR_BACKWARD_ATTENTION_WORKSPACE, 0);
+        mir_machine_emit_symbol_call(
+            out, plan->functions[MIR_BACKWARD_TRANSPOSE_FUNCTION]);
+        mir_emit_backward_cleanup(out, 5);
+        fputs("\tinc (ix-2)\n", out);
+        fprintf(out, "\tjp L%d\n", key_loop);
+    }
+
+    fprintf(out, "L%d:\n", step5);
+    mir_emit_backward_copy(
+        out, plan, MIR_BACKWARD_EMBEDDING_GRADIENTS,
+        MIR_BACKWARD_ATTENTION_OUTPUT_GRADIENTS, 256);
+    fputs("\txor a\n\tld (ix-1),a\n", out);
+    {
+        int projection_loop = new_label();
+
+        fprintf(out, "L%d:\n", projection_loop);
+        fputs("\tld a,(ix-1)\n\tcp 8\n", out);
+        fprintf(out, "\tjp z,L%d\n", step6_outer);
+
+#define MIR_BACKWARD_EMIT_MATRIX_CALL(function_slot, matrix_slot, input_slot, output_slot) \
+        fputs("\tld hl,16\n\tpush hl\n" \
+              "\tld hl,16\n\tpush hl\n", out); \
+        mir_emit_backward_byte_index_address( \
+            out, plan, output_slot, 0, -1, 32, 0, 0); \
+        fputs("\tpush hl\n", out); \
+        mir_emit_backward_byte_index_address( \
+            out, plan, input_slot, 0, -1, 32, 0, 0); \
+        fputs("\tpush hl\n", out); \
+        mir_emit_backward_push_address(out, plan, matrix_slot, 0); \
+        mir_machine_emit_symbol_call(out, plan->functions[function_slot]); \
+        mir_emit_backward_cleanup(out, 5)
+
+        MIR_BACKWARD_EMIT_MATRIX_CALL(
+            MIR_BACKWARD_MATRIX_ADD_FUNCTION,
+            MIR_BACKWARD_QUERY_WEIGHTS,
+            MIR_BACKWARD_QUERY_STATE_GRADIENTS,
+            MIR_BACKWARD_EMBEDDING_GRADIENTS);
+        MIR_BACKWARD_EMIT_MATRIX_CALL(
+            MIR_BACKWARD_OUTER_PRODUCT_FUNCTION,
+            MIR_BACKWARD_QUERY_WEIGHT_GRADIENTS,
+            MIR_BACKWARD_EMBEDDINGS,
+            MIR_BACKWARD_QUERY_STATE_GRADIENTS);
+        MIR_BACKWARD_EMIT_MATRIX_CALL(
+            MIR_BACKWARD_MATRIX_ADD_FUNCTION,
+            MIR_BACKWARD_KEY_WEIGHTS,
+            MIR_BACKWARD_KEY_STATE_GRADIENTS,
+            MIR_BACKWARD_EMBEDDING_GRADIENTS);
+        MIR_BACKWARD_EMIT_MATRIX_CALL(
+            MIR_BACKWARD_OUTER_PRODUCT_FUNCTION,
+            MIR_BACKWARD_KEY_WEIGHT_GRADIENTS,
+            MIR_BACKWARD_EMBEDDINGS,
+            MIR_BACKWARD_KEY_STATE_GRADIENTS);
+        MIR_BACKWARD_EMIT_MATRIX_CALL(
+            MIR_BACKWARD_MATRIX_ADD_FUNCTION,
+            MIR_BACKWARD_VALUE_WEIGHTS,
+            MIR_BACKWARD_VALUE_STATE_GRADIENTS,
+            MIR_BACKWARD_EMBEDDING_GRADIENTS);
+        MIR_BACKWARD_EMIT_MATRIX_CALL(
+            MIR_BACKWARD_OUTER_PRODUCT_FUNCTION,
+            MIR_BACKWARD_VALUE_WEIGHT_GRADIENTS,
+            MIR_BACKWARD_EMBEDDINGS,
+            MIR_BACKWARD_VALUE_STATE_GRADIENTS);
+#undef MIR_BACKWARD_EMIT_MATRIX_CALL
+
+        fputs("\tinc (ix-1)\n", out);
+        fprintf(out, "\tjp L%d\n", projection_loop);
+    }
+
+    fprintf(out, "L%d:\n", step6_outer);
+    fputs("\txor a\n\tld (ix-1),a\n", out);
+    {
+        int embedding_outer = new_label();
+
+        fprintf(out, "L%d:\n", embedding_outer);
+        fputs("\tld a,(ix-1)\n\tcp 8\n", out);
+        fprintf(out, "\tjp z,L%d\n", done);
+        mir_emit_backward_byte_index_address(
+            out, plan, MIR_BACKWARD_TOKENS, 0,
+            -1, 2, 0, 0);
+        mir_emit_backward_load_word(out);
+        fputs("\tld (ix-6),l\n\tld (ix-5),h\n"
+              "\txor a\n\tld (ix-2),a\n", out);
+        fprintf(out, "L%d:\n", step6_inner);
+        fputs("\tld a,(ix-2)\n\tcp 16\n", out);
+        {
+            int embedding_inner_done = new_label();
+
+            fprintf(out, "\tjp z,L%d\n", embedding_inner_done);
+
+            mir_emit_backward_byte_index_address(
+                out, plan, MIR_BACKWARD_EMBEDDING_GRADIENTS, 0,
+                -1, 32, -2, 2);
+            mir_emit_backward_load_word(out);
+            fputs("\tld (ix-4),l\n\tld (ix-3),h\n", out);
+            mir_emit_backward_word_index_address(
+                out, plan, MIR_BACKWARD_TOKEN_GRADIENTS, 0,
+                -6, 32, -2);
+            fputs("\tpush hl\n", out);
+            mir_emit_backward_load_word(out);
+            mir_emit_backward_sign_extend(out);
+            fputs("\tpush de\n\tpush hl\n"
+                  "\tld l,(ix-4)\n\tld h,(ix-3)\n", out);
+            mir_emit_backward_sign_extend(out);
+            mir_emit_backward_combine_long(out, 0);
+            mir_emit_backward_long_call(
+                out, plan->functions[MIR_BACKWARD_CLAMP_FUNCTION]);
+            fputs("\tpop de\n\tld a,l\n\tld (de),a\n"
+                  "\tinc de\n\tld a,h\n\tld (de),a\n", out);
+
+            mir_emit_backward_clamped_add(
+                out, plan,
+                MIR_BACKWARD_POSITION_GRADIENTS, 0, -1, 32,
+                MIR_BACKWARD_EMBEDDING_GRADIENTS, 0, -1, 32,
+                -2);
+            fputs("\tinc (ix-2)\n", out);
+            fprintf(out, "\tjp L%d\nL%d:\n\tinc (ix-1)\n\tjp L%d\n",
+                    step6_inner, embedding_inner_done,
+                    embedding_outer);
+        }
+    }
+
+    fprintf(out,
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            done);
+}
+
 static void mir_emit_buffered_declaration_address(
     FILE *out, const struct MirBufferedDeclarationSchedule *plan)
 {
@@ -48501,6 +49534,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
         buffered_declaration_schedule;
     struct MirMatrixProductSchedule matrix_product_schedule;
     struct MirSoftmaxSchedule softmax_schedule;
+    struct MirBackwardPassSchedule backward_pass_schedule;
     struct MirSymbolFindSchedule symbol_find_schedule;
     struct MirLocalIdentityArrayResult local_identity_array_result;
     struct MirConstantResultSwitch constant_result_switch;
@@ -48692,6 +49726,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_softmax_schedule(&softmax_schedule)) {
         mir_emit_softmax_schedule(out, &softmax_schedule);
+        return 1;
+    }
+    if (mir_match_backward_pass_schedule(
+            &backward_pass_schedule)) {
+        mir_emit_backward_pass_schedule(
+            out, &backward_pass_schedule);
         return 1;
     }
     if (mir_match_symbol_find_schedule(&symbol_find_schedule)) {

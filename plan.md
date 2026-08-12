@@ -6,10 +6,39 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Base HEAD for this batch: `8ffc669`.
-- Current candidate coverage: **2113/2185 (96.70%)**.
-- Remaining fallback population: **72 `final-cost-policy`**, all selected by
+- Base HEAD for this batch: `2d29faf`.
+- Current candidate coverage: **2114/2185 (96.75%)**.
+- Remaining fallback population: **71 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The strict name-free backward-orchestration scheduler now admits the
+  730-instruction, 37-block `attnc11.backward_pass` graph. Its exact structural
+  gate validates the full opcode/control-flow sequence, all 101 typed
+  constants, all global-location alias relationships, every two-byte indexed
+  stride, all 24 direct calls and argument-definition order, each helper
+  prototype/long-value ABI, and every loop branch, backedge, and PHI. The
+  emitter composes the already-landed softmax, matrix multiply/add, transposed
+  multiply, outer-product, dot-product, scaled-add, Q16 conversion, shift, and
+  clamp helpers instead of reproducing their arithmetic. It preserves the six
+  backward stages and every gradient update in source order, including the
+  in-place score-gradient rewrite, the distinct row-dot checkpoint across its
+  inner loop, and the second embedding-gradient reload after the token-gradient
+  store. A six-byte IX frame holds only counters and scalar checkpoints; no IY
+  is used. Non-stack selected/captured metrics are 9,802/12,121 bytes and
+  942/1,069 instructions; stack-check metrics are 9,831/12,150 bytes and
+  943/1,070 instructions. `attnc11` passes full peep/nopeep. Against forcing
+  only this function back, cycles remain exactly 339,250,960 peep /
+  342,162,991 nopeep, while linked size falls from 23,680 to 23,424 bytes peep
+  (-256) and from 25,344 to 24,960 bytes nopeep (-384). A separately renamed
+  edge harness selects with the same stack-check metrics and produces
+  byte-identical selected/forced-fallback program output for signed extrema,
+  boundary target indices, in-place softmax and score updates, sequential
+  token/position accumulation, and all six gradient stages. It improves from
+  46,649,233 to 46,625,765 peep cycles (-23,468 / -0.0503%) and from
+  47,232,446 to 47,136,389 nopeep cycles (-96,057 / -0.2034%); linked sizes
+  fall 19,200 to 18,944 bytes peep and 20,736 to 20,352 bytes nopeep. No
+  app/function name, hash, performance-baseline change, or IY allocation
+  participates in selection. The regression-gated stack-check census advances
+  from 2113/2185 to 2114/2185 with exactly this function and no removal.
 - The shared strict name-free matrix-product scheduler now also admits the
   141-instruction, 19-block `attnc11.matrix_vector_add` graph. The new variant
   proves all five parameter types and stack positions, unsigned byte row and
