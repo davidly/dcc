@@ -140,6 +140,13 @@ struct MirFixedArrayReduction {
     int element_is_unsigned;
 };
 
+struct MirFixedArrayAffineFill {
+    struct Sym *function;
+    int pointer_stack_offset;
+    int base_stack_offset;
+    int element_width;
+};
+
 struct MirWideMemberUpdate {
     int pointer_stack_offset;
     int value_stack_offset;
@@ -23656,6 +23663,348 @@ static int mir_machine_wide_parameter_offset(
 }
 
 static int mir_machine_pointee_is_volatile(
+    const struct MirInsn *parameter);
+
+static int mir_match_fixed_array_affine_fill(
+    struct MirFixedArrayAffineFill *plan)
+{
+    const struct MirInsn *pointer;
+    const struct MirInsn *base;
+    const struct MirInsn *call = NULL;
+    const struct MirInsn *store_indirect = NULL;
+    const struct MirInsn *outer_phi = NULL;
+    const struct MirInsn *previous_index = NULL;
+    int index_objects[6];
+    int init_positions[6];
+    int compare_positions[6];
+    int branch_positions[6];
+    int increment_positions[6];
+    int exit_positions[6];
+    int header_labels[6];
+    int init_values[6];
+    int increment_values[6];
+    int arguments[6];
+    int parameter_count = 0;
+    int label_count = 0;
+    int phi_count = 0;
+    int binary_count = 0;
+    int branch_count = 0;
+    int jump_count = 0;
+    int index_count = 0;
+    int argument_count = 0;
+    int call_count = 0;
+    int store_count = 0;
+    int store_indirect_count = 0;
+    int instruction;
+    int loop;
+
+    memset(plan, 0, sizeof(*plan));
+    for (loop = 0; loop < 6; ++loop) {
+        index_objects[loop] = -1;
+        init_positions[loop] = -1;
+        compare_positions[loop] = -1;
+        branch_positions[loop] = -1;
+        increment_positions[loop] = -1;
+        exit_positions[loop] = -1;
+        header_labels[loop] = -1;
+        init_values[loop] = -1;
+        increment_values[loop] = -1;
+    }
+    if (mir.has_vla || mir_cfg_block_count() != 19 ||
+        (mir.return_type & 15) != TYPE_VOID ||
+        mir.count < 150 || mir.count > 160 ||
+        mir.insns[0].opcode != MIR_LABEL ||
+        mir.insns[1].opcode != MIR_PARAM ||
+        mir.insns[2].opcode != MIR_PARAM)
+        return 0;
+    pointer = &mir.insns[1];
+    base = &mir.insns[2];
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        switch (insn->opcode) {
+        case MIR_NOP:
+            break;
+        case MIR_LABEL:
+            ++label_count;
+            break;
+        case MIR_PARAM:
+            ++parameter_count;
+            break;
+        case MIR_CONST:
+            if (insn->immediate < 0 || insn->immediate > 2)
+                return 0;
+            break;
+        case MIR_LOAD:
+            if (!mir_machine_named_nonvolatile(insn))
+                return 0;
+            break;
+        case MIR_STORE:
+            if (!mir_machine_unobservable_local_store(insn))
+                return 0;
+            ++store_count;
+            break;
+        case MIR_PHI:
+            outer_phi = insn;
+            ++phi_count;
+            break;
+        case MIR_UNARY:
+            if (insn->immediate != 0)
+                return 0;
+            break;
+        case MIR_BINARY:
+            ++binary_count;
+            break;
+        case MIR_BRANCH_FALSE:
+            ++branch_count;
+            break;
+        case MIR_JUMP:
+            ++jump_count;
+            break;
+        case MIR_INDEX_ADDRESS:
+            if (index_count >= 6 ||
+                (index_count == 0
+                     ? insn->src1 != pointer->dst
+                     : previous_index == NULL ||
+                       insn->src1 != previous_index->dst))
+                return 0;
+            index_objects[index_count] =
+                mir_machine_value_object(insn->src2);
+            if (index_objects[index_count] < 0)
+                return 0;
+            previous_index = insn;
+            ++index_count;
+            break;
+        case MIR_ARG:
+            ++argument_count;
+            break;
+        case MIR_CALL:
+            call = insn;
+            ++call_count;
+            break;
+        case MIR_STORE_INDIRECT:
+            if (insn->bit_width != 0 ||
+                (insn->memory_flags & (1 | 8)) != 0)
+                return 0;
+            store_indirect = insn;
+            ++store_indirect_count;
+            break;
+        default:
+            return 0;
+        }
+    }
+    if (parameter_count != 2 || label_count != 19 ||
+        phi_count != 1 || binary_count != 13 ||
+        branch_count != 6 || jump_count != 6 ||
+        index_count != 6 || argument_count != 6 ||
+        call_count != 1 || store_count != 12 ||
+        store_indirect_count != 1 ||
+        call == NULL || store_indirect == NULL ||
+        outer_phi == NULL || previous_index == NULL ||
+        type_ptr_depth(pointer->type) != 1 ||
+        mir_machine_pointee_is_volatile(pointer) ||
+        type_ptr_depth(base->type) != 0 ||
+        type_is_float(base->type) ||
+        type_ptr_depth(call->type) != 0 ||
+        type_size(call->type) != 2 ||
+        type_is_float(call->type) ||
+        (call->type & TYPE_UNSIGNED) != 0 ||
+        (call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+        store_indirect->src1 != previous_index->dst ||
+        (store_indirect->memory_size != 1 &&
+         store_indirect->memory_size != 2 &&
+         store_indirect->memory_size != 4))
+        return 0;
+    plan->element_width = store_indirect->memory_size;
+    if ((pointer->type & 15) !=
+            (plan->element_width == 1
+                 ? TYPE_CHAR
+                 : plan->element_width == 2
+                       ? TYPE_INT : TYPE_LONG) ||
+        type_size(base->type) !=
+            (plan->element_width == 4 ? 4 : 2) ||
+        (base->type & TYPE_UNSIGNED) != 0)
+        return 0;
+    previous_index = NULL;
+    index_count = 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode != MIR_INDEX_ADDRESS)
+            continue;
+        if (insn->src1 !=
+                (previous_index == NULL
+                     ? pointer->dst : previous_index->dst) ||
+            insn->immediate !=
+                plan->element_width * (1 << (5 - index_count)) ||
+            insn->memory_size != plan->element_width)
+            return 0;
+        previous_index = insn;
+        ++index_count;
+    }
+    if (!mir_machine_six_call_arguments(call, arguments))
+        return 0;
+    for (loop = 0; loop < 6; ++loop)
+        if (mir_machine_value_object(arguments[loop]) !=
+            index_objects[loop])
+            return 0;
+    {
+        const struct MirInsn *stored =
+            mir_definition(store_indirect->src2);
+        const struct MirInsn *addition;
+        const struct MirInsn *converted_call = NULL;
+
+        if (plan->element_width == 1) {
+            if (stored == NULL || stored->opcode != MIR_UNARY ||
+                stored->immediate != 0 ||
+                type_size(stored->type) != 1)
+                return 0;
+            addition = mir_definition(stored->src1);
+        } else {
+            addition = stored;
+        }
+        if (addition == NULL || addition->opcode != MIR_BINARY ||
+            addition->immediate != '+' ||
+            type_size(addition->type) !=
+                (plan->element_width == 4 ? 4 : 2))
+            return 0;
+        if (plan->element_width == 4) {
+            int call_value;
+
+            if (addition->src1 == base->dst)
+                call_value = addition->src2;
+            else if (addition->src2 == base->dst)
+                call_value = addition->src1;
+            else
+                return 0;
+            converted_call = mir_definition(call_value);
+            if (converted_call == NULL ||
+                converted_call->opcode != MIR_UNARY ||
+                converted_call->immediate != 0 ||
+                converted_call->src1 != call->dst ||
+                type_size(converted_call->type) != 4 ||
+                type_is_float(converted_call->type) ||
+                (converted_call->type & TYPE_UNSIGNED) != 0)
+                return 0;
+        } else if (!((addition->src1 == base->dst &&
+                      addition->src2 == call->dst) ||
+                     (addition->src2 == base->dst &&
+                      addition->src1 == call->dst))) {
+            return 0;
+        }
+    }
+    plan->function = find_global(call->name);
+    if (plan->function == NULL ||
+        !plan->function->is_defined ||
+        (call->base_name[0] != 0 &&
+         strcmp(call->base_name,
+                asm_name_for(
+                    sym_asm_name(plan->function)))) ||
+        !mir_machine_parameter_value_offset(
+            pointer->dst, &plan->pointer_stack_offset))
+        return 0;
+    if (plan->element_width == 4) {
+        if (!mir_machine_wide_parameter_offset(
+                base->dst, &plan->base_stack_offset))
+            return 0;
+    } else if (!mir_machine_parameter_value_offset(
+                   base->dst, &plan->base_stack_offset)) {
+        return 0;
+    }
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode == MIR_STORE) {
+            const struct MirInsn *value = mir_definition(insn->src1);
+            int object_loop = -1;
+
+            for (loop = 0; loop < 6; ++loop)
+                if (index_objects[loop] == insn->object)
+                    object_loop = loop;
+            if (object_loop < 0)
+                return 0;
+            if (mir_machine_constant_equals(insn->src1, 0)) {
+                if (init_positions[object_loop] >= 0)
+                    return 0;
+                init_positions[object_loop] = instruction;
+                init_values[object_loop] = insn->src1;
+            } else {
+                if (increment_positions[object_loop] >= 0 ||
+                    value == NULL || value->opcode != MIR_BINARY ||
+                    value->immediate != '+' ||
+                    mir_machine_value_object(value->src1) !=
+                        insn->object ||
+                    !mir_machine_constant_equals(value->src2, 1))
+                    return 0;
+                increment_positions[object_loop] = instruction;
+                increment_values[object_loop] = value->dst;
+            }
+        } else if (insn->opcode == MIR_BINARY &&
+                   insn->immediate == '<') {
+            int object = mir_machine_value_object(insn->src1);
+
+            for (loop = 0; loop < 6; ++loop)
+                if (index_objects[loop] == object)
+                    break;
+            if (loop == 6 || compare_positions[loop] >= 0 ||
+                !mir_machine_constant_equals(insn->src2, 2) ||
+                !mir_machine_find_branch_for_value(
+                    insn->dst, &branch_positions[loop]) ||
+                !mir_machine_find_header_before(
+                    instruction, &header_labels[loop]))
+                return 0;
+            compare_positions[loop] = instruction;
+        }
+    }
+    if (outer_phi->object != index_objects[0] ||
+        outer_phi->src1 != init_values[0] ||
+        outer_phi->src2 != increment_values[0] ||
+        outer_phi->phi_pred1 != mir.insns[0].label)
+        return 0;
+    for (loop = 0; loop < 6; ++loop) {
+        int jump;
+
+        if (init_positions[loop] < 0 ||
+            compare_positions[loop] < 0 ||
+            branch_positions[loop] != compare_positions[loop] + 1 ||
+            increment_positions[loop] < 0)
+            return 0;
+        jump = increment_positions[loop] + 1;
+        if (jump >= mir.count ||
+            mir.insns[jump].opcode != MIR_JUMP ||
+            mir.insns[jump].label != header_labels[loop])
+            return 0;
+        exit_positions[loop] =
+            mir_find_label(mir.insns[branch_positions[loop]].label);
+        if (exit_positions[loop] <= jump)
+            return 0;
+        if (loop == 0) {
+            if (init_positions[loop] >= compare_positions[loop])
+                return 0;
+        } else if (branch_positions[loop - 1] >=
+                       init_positions[loop] ||
+                   init_positions[loop] >=
+                       compare_positions[loop]) {
+            return 0;
+        }
+    }
+    if (branch_positions[5] >=
+            (int)(call - mir.insns) ||
+        (int)(call - mir.insns) >=
+            (int)(store_indirect - mir.insns) ||
+        (int)(store_indirect - mir.insns) >=
+            increment_positions[5])
+        return 0;
+    for (loop = 5; loop > 0; --loop)
+        if (exit_positions[loop] >=
+            increment_positions[loop - 1])
+            return 0;
+    return 1;
+}
+
+static int mir_machine_pointee_is_volatile(
     const struct MirInsn *parameter)
 {
     int declared;
@@ -25174,6 +25523,71 @@ static void mir_emit_fixed_array_reduction(
                 sign_done, sign_done);
     }
     fprintf(out, "\tdjnz L%d\n\tex de,hl\n\tret\n", loop);
+}
+
+static void mir_emit_fixed_array_affine_fill(
+    FILE *out, const struct MirFixedArrayAffineFill *plan)
+{
+    int loop = new_label();
+    int sign_done = new_label();
+    int argument;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-3\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld a,(ix+%d)\n\tld (ix-3),a\n"
+            "\tld a,(ix+%d)\n\tld (ix-2),a\n"
+            "\txor a\n\tld (ix-1),a\n"
+            "L%d:\n\tld c,(ix-1)\n",
+            plan->pointer_stack_offset + 2,
+            plan->pointer_stack_offset + 3,
+            loop);
+    for (argument = 0; argument < 6; ++argument) {
+        fputs("\tld a,c\n\tand 1\n"
+              "\tld l,a\n\tld h,0\n\tpush hl\n", out);
+        if (argument != 5)
+            fputs("\tsrl c\n", out);
+    }
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    if (plan->element_width == 4) {
+        fprintf(out,
+                "\tld de,0\n\tbit 7,h\n\tjp z,L%d\n\tdec de\n"
+                "L%d:\n"
+                "\tld a,l\n\tadd a,(ix+%d)\n\tld l,a\n"
+                "\tld a,h\n\tadc a,(ix+%d)\n\tld h,a\n"
+                "\tld a,e\n\tadc a,(ix+%d)\n\tld e,a\n"
+                "\tld a,d\n\tadc a,(ix+%d)\n\tld d,a\n"
+                "\tld c,(ix-3)\n\tld b,(ix-2)\n"
+                "\tld a,l\n\tld (bc),a\n\tinc bc\n"
+                "\tld a,h\n\tld (bc),a\n\tinc bc\n"
+                "\tld a,e\n\tld (bc),a\n\tinc bc\n"
+                "\tld a,d\n\tld (bc),a\n\tinc bc\n",
+                sign_done, sign_done,
+                plan->base_stack_offset + 2,
+                plan->base_stack_offset + 3,
+                plan->base_stack_offset + 4,
+                plan->base_stack_offset + 5);
+    } else {
+        fprintf(out,
+                "\tld e,(ix+%d)\n\tld d,(ix+%d)\n"
+                "\tadd hl,de\n"
+                "\tld c,(ix-3)\n\tld b,(ix-2)\n"
+                "\tld a,l\n\tld (bc),a\n\tinc bc\n",
+                plan->base_stack_offset + 2,
+                plan->base_stack_offset + 3);
+        if (plan->element_width == 2)
+            fputs("\tld a,h\n\tld (bc),a\n\tinc bc\n", out);
+    }
+    fprintf(out,
+            "\tld (ix-3),c\n\tld (ix-2),b\n"
+            "\tld a,(ix-1)\n\tinc a\n\tld (ix-1),a\n"
+            "\tcp 64\n\tjp nz,L%d\n"
+            "\tld sp,ix\n\tpop ix\n\tret\n",
+            loop);
 }
 
 static void mir_emit_wide_member_update(
@@ -31330,6 +31744,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirPointerStack pointer_stack;
     struct MirByteMemoryStack byte_memory_stack;
     struct MirFixedArrayReduction fixed_array_reduction;
+    struct MirFixedArrayAffineFill fixed_array_affine_fill;
     struct MirWideMemberUpdate wide_member_update;
     struct MirSignedMemberProduct signed_member_product;
     struct MirSignedMemberSquareScaleDiv
@@ -31701,6 +32116,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_fixed_array_reduction(&fixed_array_reduction)) {
         mir_emit_fixed_array_reduction(out, &fixed_array_reduction);
+        return 1;
+    }
+    if (mir_match_fixed_array_affine_fill(
+            &fixed_array_affine_fill)) {
+        mir_emit_fixed_array_affine_fill(
+            out, &fixed_array_affine_fill);
         return 1;
     }
     if (mir_match_wide_member_update(&wide_member_update)) {
