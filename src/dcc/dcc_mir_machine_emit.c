@@ -5688,6 +5688,170 @@ static int mir_match_float_tolerance_report(
     return 1;
 }
 
+static int mir_match_inline_float_tolerance_report(
+    struct MirFloatToleranceReport *plan)
+{
+    static const int tail_opcodes[20] = {
+        MIR_LABEL, MIR_LOAD, MIR_FLOAT_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_ARG,
+        MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_NOP, MIR_LABEL
+    };
+    const struct MirInsn *difference = &mir.insns[6];
+    const struct MirInsn *difference_store;
+    const struct MirInsn *zero;
+    const struct MirInsn *got;
+    const struct MirInsn *want;
+    const struct MirInsn *name;
+    const struct MirInsn *epsilon = &mir.insns[19];
+    const struct MirInsn *comparison = &mir.insns[20];
+    const struct MirInsn *string = &mir.insns[22];
+    const struct MirInsn *name_load = &mir.insns[24];
+    const struct MirInsn *call = &mir.insns[30];
+    const struct MirInsn *failures_load = &mir.insns[31];
+    const struct MirInsn *failures_increment = &mir.insns[33];
+    const struct MirInsn *failures_store = &mir.insns[34];
+    struct Sym *report_function;
+    int arguments[4];
+    int memory_type, memory_storage, memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 37 || mir_cfg_block_count() != 3 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID ||
+        mir.insns[0].opcode != MIR_LABEL ||
+        mir.insns[1].opcode != MIR_PARAM ||
+        mir.insns[2].opcode != MIR_PARAM ||
+        mir.insns[3].opcode != MIR_PARAM ||
+        difference->opcode != MIR_BINARY ||
+        difference->immediate != '-' ||
+        !type_is_float(difference->type) ||
+        type_size(difference->type) != 4)
+        return mir_machine_reject(
+            "inline-float-tolerance-report", "shape");
+    for (instruction = 17; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            tail_opcodes[instruction - 17])
+            return mir_machine_reject(
+                "inline-float-tolerance-report", "tail-opcode");
+    got = mir_definition(difference->src1);
+    want = mir_definition(difference->src2);
+    if (got == NULL || want == NULL ||
+        got->opcode != MIR_PARAM || want->opcode != MIR_PARAM ||
+        !type_is_float(got->type) || type_size(got->type) != 4 ||
+        !type_is_float(want->type) || type_size(want->type) != 4)
+        return mir_machine_reject(
+            "inline-float-tolerance-report", "operands");
+    if (&mir.insns[1] != got && &mir.insns[1] != want)
+        name = &mir.insns[1];
+    else if (&mir.insns[2] != got && &mir.insns[2] != want)
+        name = &mir.insns[2];
+    else
+        name = &mir.insns[3];
+    if (type_size(name->type) != 2 ||
+        type_ptr_depth(name->type) == 0)
+        return mir_machine_reject(
+            "inline-float-tolerance-report", "name");
+    difference_store =
+        mir.insns[7].opcode == MIR_STORE
+            ? &mir.insns[7] : &mir.insns[8];
+    zero = mir_definition(mir.insns[11].src2);
+    if (zero != NULL && zero->opcode == MIR_UNARY &&
+        zero->immediate == 0)
+        zero = mir_definition(zero->src1);
+    if (difference_store->opcode != MIR_STORE ||
+        difference_store->src1 != difference->dst ||
+        difference_store->memory_size != 4 ||
+        (difference_store->memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_unobservable_local_store(difference_store) ||
+        mir.insns[11].opcode != MIR_BINARY ||
+        mir.insns[11].immediate != '<' ||
+        mir.insns[11].src1 != difference->dst ||
+        (zero == NULL ||
+         !((zero->opcode == MIR_FLOAT_CONST &&
+            (((unsigned long)zero->immediate & 0x7fffffffUL) == 0)) ||
+           (zero->opcode == MIR_CONST && zero->immediate == 0))) ||
+        mir.insns[12].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[12].src1 != mir.insns[11].dst ||
+        mir.insns[12].label != mir.insns[17].label ||
+        mir.insns[14].opcode != MIR_UNARY ||
+        mir.insns[14].immediate != '-' ||
+        mir.insns[14].src1 != difference->dst ||
+        mir.insns[16].opcode != MIR_STORE ||
+        mir.insns[16].src1 != mir.insns[14].dst ||
+        mir.insns[16].memory_size != 4 ||
+        (mir.insns[16].memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_same_location(
+            difference_store, &mir.insns[16]) ||
+        !mir_machine_same_location(
+            difference_store, &mir.insns[18]))
+        return mir_machine_reject(
+            "inline-float-tolerance-report", "absolute");
+    if (!type_is_float(epsilon->type) ||
+        type_size(epsilon->type) != 4 ||
+        comparison->immediate != '>' ||
+        comparison->src1 != mir.insns[18].dst ||
+        comparison->src2 != epsilon->dst ||
+        mir.insns[21].src1 != comparison->dst ||
+        mir.insns[21].label != mir.insns[36].label ||
+        !mir_machine_same_location(name, name_load) ||
+        !mir_machine_four_call_arguments(call, arguments) ||
+        arguments[0] != string->dst ||
+        arguments[1] != name_load->dst ||
+        arguments[2] != got->dst ||
+        arguments[3] != want->dst ||
+        (call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != MIR_CALL_FLAG_VARIADIC)
+        return mir_machine_reject(
+            "inline-float-tolerance-report", "report");
+    report_function = find_global(call->name);
+    if (strcmp(call->name, "printf") ||
+        report_function == NULL || report_function->is_defined)
+        return mir_machine_reject(
+            "inline-float-tolerance-report", "print-function");
+    if (!mir_machine_named_nonvolatile(failures_load) ||
+        !mir_machine_same_location(failures_load, failures_store) ||
+        !mir_scalar_memory_location(
+            failures_load, &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_GLOBAL || type_size(memory_type) != 2 ||
+        failures_increment->immediate != '+' ||
+        failures_increment->src1 != failures_load->dst ||
+        !mir_machine_constant_equals(failures_increment->src2, 1) ||
+        failures_store->src1 != failures_increment->dst ||
+        failures_store->memory_size != 2)
+        return mir_machine_reject(
+            "inline-float-tolerance-report", "failure-count");
+    plan->failures = find_global(failures_load->name);
+    plan->failures_offset = memory_offset;
+    if (plan->failures == NULL || plan->failures->is_volatile ||
+        !mir_machine_parameter_value_offset(
+            name->dst, &plan->name_stack_offset))
+        return mir_machine_reject(
+            "inline-float-tolerance-report", "parameters");
+    if (!mir_scalar_memory_location(
+            got, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2)
+        return mir_machine_reject(
+            "inline-float-tolerance-report", "got");
+    plan->got_stack_offset = memory_offset - 2;
+    if (!mir_scalar_memory_location(
+            want, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2)
+        return mir_machine_reject(
+            "inline-float-tolerance-report", "want");
+    plan->want_stack_offset = memory_offset - 2;
+    snprintf(plan->call_name, sizeof(plan->call_name), "%s",
+             call->base_name[0] != 0
+                 ? call->base_name
+                 : asm_name_for(sym_asm_name(report_function)));
+    plan->epsilon_bits =
+        (unsigned long)epsilon->immediate & 0xffffffffUL;
+    plan->string_id = (int)string->immediate;
+    return 1;
+}
+
 static int mir_machine_phi_merge(
     int phi_index, int true_value_index, int false_value_index,
     int true_label_index, int false_label_index)
@@ -19855,11 +20019,13 @@ static void mir_emit_float_tolerance_report(
 {
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    mir_machine_emit_global_word(
-        out, plan->checks, plan->checks_offset);
-    fputs("\tinc hl\n", out);
-    mir_machine_emit_global_word_store(
-        out, plan->checks, plan->checks_offset);
+    if (plan->checks != NULL) {
+        mir_machine_emit_global_word(
+            out, plan->checks, plan->checks_offset);
+        fputs("\tinc hl\n", out);
+        mir_machine_emit_global_word_store(
+            out, plan->checks, plan->checks_offset);
+    }
     mir_emit_wide_parameter(out, plan->got_stack_offset);
     fputs("\tpush de\n\tpush hl\n", out);
     mir_emit_wide_parameter(out, plan->want_stack_offset + 4);
@@ -22731,6 +22897,8 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
         return 1;
     }
     if (mir_match_float_tolerance_report(
+            &float_tolerance_report) ||
+        mir_match_inline_float_tolerance_report(
             &float_tolerance_report)) {
         mir_emit_float_tolerance_report(
             out, &float_tolerance_report);
