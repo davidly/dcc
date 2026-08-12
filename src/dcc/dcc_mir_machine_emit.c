@@ -913,6 +913,11 @@ struct MirFileLineLoop {
     int stream_value;
 };
 
+struct MirWideHash33 {
+    int parameter_stack_offset;
+    int multiplier;
+};
+
 struct MirAsciiUpper {
     int parameter_stack_offset;
     int width;
@@ -11999,6 +12004,56 @@ static int mir_match_conditional_string_report(
     plan->format_string_id = (int)mir.insns[3].immediate;
     plan->true_string_id = (int)mir.insns[9].immediate;
     plan->false_string_id = (int)mir.insns[13].immediate;
+    return 1;
+}
+
+static int mir_match_wide_hash33(struct MirWideHash33 *plan)
+{
+    const struct MirInsn *parameter = &mir.insns[1];
+    const struct MirInsn *hash_phi = &mir.insns[7];
+    int type, storage, offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 32 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || type_size(mir.return_type) != 4 ||
+        !mir_machine_constant_equals(mir.insns[3].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[4]) ||
+        hash_phi->opcode != MIR_PHI ||
+        hash_phi->src1 != mir.insns[3].dst ||
+        hash_phi->src2 != mir.insns[24].dst ||
+        mir.insns[9].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[9].memory_size != 1 ||
+        !mir_machine_constant_equals(mir.insns[10].dst, 0) ||
+        mir.insns[12].immediate != TOK_NE ||
+        mir.insns[12].src1 != mir.insns[11].dst ||
+        mir.insns[12].src2 != mir.insns[10].dst ||
+        mir.insns[13].src1 != mir.insns[12].dst ||
+        mir.insns[13].label != mir.insns[29].label)
+        return mir_machine_reject("wide-hash33", "shape");
+    plan->multiplier = (int)mir.insns[15].immediate;
+    if (plan->multiplier != 33 ||
+        mir.insns[16].immediate != '*' ||
+        mir.insns[16].src1 != hash_phi->dst ||
+        mir.insns[16].src2 != mir.insns[15].dst ||
+        mir.insns[19].immediate != '+' ||
+        mir.insns[19].src1 != mir.insns[17].dst ||
+        !mir_machine_constant_equals(mir.insns[18].dst, 1) ||
+        mir.insns[20].src1 != mir.insns[19].dst ||
+        !mir_machine_same_location(parameter, &mir.insns[17]) ||
+        mir.insns[21].src1 != mir.insns[17].dst ||
+        mir.insns[24].immediate != '+' ||
+        mir.insns[24].src1 != mir.insns[16].dst ||
+        mir.insns[24].src2 != mir.insns[23].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[26]) ||
+        mir.insns[28].label != mir.insns[5].label ||
+        mir.insns[31].src1 != hash_phi->dst)
+        return mir_machine_reject("wide-hash33", "flow");
+    if (!mir_scalar_memory_location(
+            parameter, &type, &storage, &offset) ||
+        storage != SC_PARAM || offset < 2)
+        return mir_machine_reject("wide-hash33", "parameter");
+    plan->parameter_stack_offset = offset - 2;
     return 1;
 }
 
@@ -24093,6 +24148,39 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_wide_hash33(
+    FILE *out, const struct MirWideHash33 *plan)
+{
+    int loop = new_label();
+    int done = new_label();
+    int shift;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tdec sp\n\tdec sp\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
+            "\tld (ix-2),l\n\tld (ix-1),h\n"
+            "\tld hl,0\n\tld de,0\n"
+            "L%d:\n\tld c,(ix-2)\n\tld b,(ix-1)\n"
+            "\tld a,(bc)\n\tor a\n\tjp z,L%d\n"
+            "\tinc bc\n\tld (ix-2),c\n\tld (ix-1),b\n"
+            "\tpush de\n\tpush hl\n",
+            plan->parameter_stack_offset + 2,
+            plan->parameter_stack_offset + 3,
+            loop, done);
+    for (shift = 0; shift < 5; ++shift)
+        fputs("\tadd hl,hl\n\trl e\n\trl d\n", out);
+    fputs("\tpop bc\n\tadd hl,bc\n\tex de,hl\n"
+          "\tpop bc\n\tadc hl,bc\n\tex de,hl\n"
+          "\tld c,a\n\tld b,0\n\tadd hl,bc\n\tex de,hl\n"
+          "\tld bc,0\n\tadc hl,bc\n\tex de,hl\n", out);
+    fprintf(out,
+            "\tjp L%d\nL%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            loop, done);
+}
+
 static void mir_emit_file_buffer_address(
     FILE *out, const struct MirFileLineLoop *plan)
 {
@@ -25640,6 +25728,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirWideHash33 wide_hash33;
     struct MirFileLineLoop file_line_loop;
     struct MirScopedTempAlloc scoped_temp_alloc;
     struct MirMixedScalarCallReport mixed_scalar_call_report;
@@ -26287,6 +26376,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_wide_hash33(&wide_hash33)) {
+        mir_emit_wide_hash33(out, &wide_hash33);
         return 1;
     }
     if (mir_match_file_line_loop(&file_line_loop)) {
