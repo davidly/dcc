@@ -6,7 +6,7 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Base HEAD for this architecture refactor: `62ea25e`.
+- Base HEAD for the current architecture refactor: `b708c28`.
 - Current candidate coverage: **2126/2185 (97.30%)**.
 - Remaining fallback population: **59 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
@@ -45,6 +45,27 @@ current execution plan and handoff.
   selector order, labels, metrics, selected hashes, and runtime-validation
   sets are unchanged. Canonical and CMake builds pass, and `attnc11` passes
   full peep/nopeep correctness and checked performance with no baseline update.
+- The third machine-emitter architecture pivot starts from `b708c28` and
+  extracts the landed comment and whitespace scanners, interpreter action
+  decoder, buffered declaration parser, and bounded symbol search into
+  `dcc_mir_machine_scanners.c`. The new **2,294-line** module owns all five
+  plans, matchers, emitters, and 31 `static` family helpers; its two-phase
+  `mir_try_emit_scanner_kernels` dispatch keeps the first four selectors before
+  attention and the symbol search after float reports, exactly preserving the
+  production order. `nm` reports only that dispatch as defined global code,
+  with no read-only or writable data symbol. `dcc_mir_machine_emit.c` falls
+  from **49,780 to 47,689 lines**. The function-only internal contract grows
+  from **36 to 46 lines** with five indispensable shared helper prototypes
+  (pointer/word type matching, local-buffer matching, HL offset emission, and
+  global-word store emission) plus the dispatch prototype; there is no global
+  declaration or shared mutable state. Normal **2037/2102 (96.91%)** and
+  stack-check **2126/2185 (97.30%)** censuses are byte-identical before/after,
+  including labels, metrics, selectors, selected hashes, and validation sets
+  (SHA-256 `0e98c2f843d5fa45bbc29b0ed274e4e119956e3ea6b44e1a59854622b397a7c5`
+  and `30f5edd85cc3a04332d8e8a95b20159ffd4760233f4988f8ba7ba43cae66c48a`).
+  Canonical and CMake builds pass; `fint`, `cint`, `bint`, and `forint` pass
+  full peep/nopeep validation with zero checked regression and no baseline
+  update.
 - Architecture rule for subsequent machine-family extractions: add **zero
   shared variables or mutable state**. Each module owns its plan structs,
   static arrays/constants, counters, candidate state, matchers, emitters, and
@@ -63,6 +84,9 @@ current execution plan and handoff.
   python3 scripts/audit-c-module-exports.py \
     src/dcc/dcc_mir_machine_attention.c \
     --allow-function mir_try_emit_attention_kernels
+  python3 scripts/audit-c-module-exports.py \
+    src/dcc/dcc_mir_machine_scanners.c \
+    --allow-function mir_try_emit_scanner_kernels
   ```
 - Two strict name-free scheduled families admit the genuine nine-block
   call/check/report mains in `tfmaddr` and `tfpraw`. The float report family
