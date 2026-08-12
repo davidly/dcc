@@ -781,6 +781,19 @@ struct MirSequentialScalarCallReport {
     int string_id;
 };
 
+struct MirStringCheckReport {
+    struct Sym *checks;
+    struct Sym *failures;
+    struct Sym *compare_function;
+    struct Sym *print_function;
+    int checks_offset;
+    int failures_offset;
+    int name_stack_offset;
+    int got_stack_offset;
+    int want_stack_offset;
+    int string_id;
+};
+
 struct MirAsciiUpper {
     int parameter_stack_offset;
     int width;
@@ -11870,6 +11883,132 @@ static int mir_match_conditional_string_report(
     return 1;
 }
 
+static int mir_match_string_check_report(struct MirStringCheckReport *plan)
+{
+    static const int expected_opcodes[47] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_LOAD, MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CALL, MIR_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+        MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_LABEL, MIR_JUMP,
+        MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD,
+        MIR_ARG, MIR_CALL, MIR_NOP, MIR_LABEL
+    };
+    const struct MirInsn *name = &mir.insns[1];
+    const struct MirInsn *got = &mir.insns[2];
+    const struct MirInsn *want = &mir.insns[3];
+    const struct MirInsn *checks_load = &mir.insns[4];
+    const struct MirInsn *checks_store = &mir.insns[7];
+    const struct MirInsn *compare_call = &mir.insns[20];
+    const struct MirInsn *failures_load = &mir.insns[36];
+    const struct MirInsn *failures_store = &mir.insns[39];
+    const struct MirInsn *print_call = &mir.insns[44];
+    int compare_arguments[2];
+    int print_arguments[2];
+    int memory_type, memory_storage, memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 47 || mir_cfg_block_count() != 9 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return mir_machine_reject("string-check-report", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject("string-check-report", "opcode");
+    if (type_ptr_depth(name->type) == 0 ||
+        type_ptr_depth(got->type) == 0 ||
+        type_ptr_depth(want->type) == 0 ||
+        !mir_machine_parameter_value_offset(
+            name->dst, &plan->name_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            got->dst, &plan->got_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            want->dst, &plan->want_stack_offset))
+        return mir_machine_reject("string-check-report", "parameters");
+    if (!mir_machine_named_nonvolatile(checks_load) ||
+        !mir_machine_same_location(checks_load, checks_store) ||
+        !mir_scalar_memory_location(
+            checks_load, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL || type_size(memory_type) != 2 ||
+        !mir_machine_constant_equals(mir.insns[5].dst, 1) ||
+        mir.insns[6].immediate != '+' ||
+        mir.insns[6].src1 != checks_load->dst ||
+        mir.insns[6].src2 != mir.insns[5].dst ||
+        checks_store->src1 != mir.insns[6].dst ||
+        checks_store->memory_size != 2)
+        return mir_machine_reject("string-check-report", "checks");
+    plan->checks = find_global(checks_load->name);
+    plan->checks_offset = memory_offset;
+    if (plan->checks == NULL || plan->checks->is_volatile ||
+        !mir_machine_same_location(got, &mir.insns[8]) ||
+        !mir_machine_constant_equals(mir.insns[9].dst, 0) ||
+        mir.insns[10].immediate != TOK_EQ ||
+        mir.insns[10].src1 != mir.insns[8].dst ||
+        mir.insns[10].src2 != mir.insns[9].dst ||
+        mir.insns[11].src1 != mir.insns[10].dst ||
+        mir.insns[11].label != mir.insns[15].label ||
+        !mir_machine_constant_equals(mir.insns[13].dst, 1) ||
+        mir.insns[14].label != mir.insns[33].label)
+        return mir_machine_reject("string-check-report", "null-check");
+    if (!mir_machine_same_location(got, &mir.insns[16]) ||
+        !mir_machine_same_location(want, &mir.insns[18]) ||
+        !mir_machine_two_call_arguments(
+            compare_call, compare_arguments) ||
+        compare_arguments[0] != mir.insns[16].dst ||
+        compare_arguments[1] != mir.insns[18].dst ||
+        !mir_machine_constant_equals(mir.insns[21].dst, 0) ||
+        mir.insns[22].immediate != TOK_NE ||
+        mir.insns[22].src1 != compare_call->dst ||
+        mir.insns[22].src2 != mir.insns[21].dst ||
+        mir.insns[23].src1 != mir.insns[22].dst ||
+        mir.insns[23].label != mir.insns[27].label ||
+        !mir_machine_boolean_merge(30, 25, 28, 24, 27) ||
+        mir.insns[26].label != mir.insns[29].label ||
+        mir.insns[32].label != mir.insns[33].label ||
+        !mir_machine_phi_merge(34, 13, 30, 12, 31) ||
+        mir.insns[35].src1 != mir.insns[34].dst ||
+        mir.insns[35].label != mir.insns[46].label)
+        return mir_machine_reject("string-check-report", "compare");
+    plan->compare_function = find_global(compare_call->name);
+    if (plan->compare_function == NULL ||
+        plan->compare_function->is_defined ||
+        plan->compare_function->is_funcptr ||
+        (compare_call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0)
+        return mir_machine_reject("string-check-report", "compare-symbol");
+    if (!mir_machine_named_nonvolatile(failures_load) ||
+        !mir_machine_same_location(failures_load, failures_store) ||
+        !mir_scalar_memory_location(
+            failures_load, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL || type_size(memory_type) != 2 ||
+        !mir_machine_constant_equals(mir.insns[37].dst, 1) ||
+        mir.insns[38].immediate != '+' ||
+        mir.insns[38].src1 != failures_load->dst ||
+        mir.insns[38].src2 != mir.insns[37].dst ||
+        failures_store->src1 != mir.insns[38].dst ||
+        failures_store->memory_size != 2 ||
+        !mir_machine_same_location(name, &mir.insns[42]) ||
+        !mir_machine_two_call_arguments(print_call, print_arguments) ||
+        print_arguments[0] != mir.insns[40].dst ||
+        print_arguments[1] != mir.insns[42].dst ||
+        strcmp(print_call->name, "printf") ||
+        (print_call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != MIR_CALL_FLAG_VARIADIC)
+        return mir_machine_reject("string-check-report", "failure");
+    plan->failures = find_global(failures_load->name);
+    plan->print_function = find_global(print_call->name);
+    plan->failures_offset = memory_offset;
+    plan->string_id = (int)mir.insns[40].immediate;
+    if (plan->failures == NULL || plan->failures->is_volatile ||
+        plan->print_function == NULL || plan->print_function->is_defined)
+        return mir_machine_reject("string-check-report", "symbols");
+    return 1;
+}
+
 static int mir_match_sequential_scalar_call_report(
     struct MirSequentialScalarCallReport *plan)
 {
@@ -22543,6 +22682,50 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_string_check_report(
+    FILE *out, const struct MirStringCheckReport *plan)
+{
+    int failure = new_label();
+    int done = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_word(
+        out, plan->checks, plan->checks_offset);
+    fputs("\tinc hl\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->checks, plan->checks_offset);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n\tor (hl)\n"
+            "\tjp z,L%d\n",
+            plan->got_stack_offset, failure);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n",
+            plan->want_stack_offset);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n",
+            plan->got_stack_offset + 2);
+    mir_machine_emit_symbol_call(out, plan->compare_function);
+    fputs("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\nL%d:\n", done, failure);
+    mir_machine_emit_global_word(
+        out, plan->failures, plan->failures_offset);
+    fputs("\tinc hl\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->failures, plan->failures_offset);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            plan->name_stack_offset, plan->string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+    fprintf(out, "L%d:\n\tret\n", done);
+}
+
 static void mir_emit_sequential_scalar_call_report(
     FILE *out, const struct MirSequentialScalarCallReport *plan)
 {
@@ -23599,6 +23782,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirStringCheckReport string_check_report;
     struct MirSequentialScalarCallReport sequential_scalar_call_report;
     struct MirFloatNanBits float_nan_bits;
     struct MirRandomUniqueInit random_unique_init;
@@ -24232,6 +24416,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_string_check_report(&string_check_report)) {
+        mir_emit_string_check_report(out, &string_check_report);
         return 1;
     }
     if (mir_match_sequential_scalar_call_report(
