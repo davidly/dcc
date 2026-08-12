@@ -67,8 +67,10 @@ start:
         jr      c,mem_low       ; SP < __stack_size: underflow, TPA too small
         ld      (__hlimit),hl   ; commit __hlimit (validated just below)
         ld      de,__hstart
-        or      a
-        sbc     hl,de           ; carry iff candidate __hlimit < __hstart
+        sbc     hl,de           ; carry iff candidate __hlimit < __hstart; carry
+                                 ; is already 0 here from the "jr c,mem_low" not
+                                 ; taken above, and no flag-affecting instruction
+                                 ; runs in between
         jr      nc,mem_ok       ; __hlimit >= __hstart: enough room
 mem_low:
         ld      de,mem_low_msg
@@ -87,8 +89,10 @@ mem_ok:
         ; Zero BSS (C89: uninitialized globals must be zero at startup)
         ld      hl,__bsse
         ld      de,__bssb
-        or      a
-        sbc     hl,de           ; HL = __bsse - __bssb = BSS length
+        sbc     hl,de           ; HL = __bsse - __bssb = BSS length; carry is
+                                 ; already 0 here (mem_ok: is reached only via
+                                 ; "jr nc,mem_ok" above, and nothing in between
+                                 ; touches flags)
         ld      b,h
         ld      c,l
         ld      a,b
@@ -3023,8 +3027,7 @@ qs_inner:
         ; pprev = pj - gapb
         ld      hl,(__qs_pj)
         ld      de,(__qs_gapb)
-        or      a
-        sbc     hl,de
+        sbc     hl,de           ; carry already 0 (fell through "jr c,qs_idone" above)
         ld      (__qs_pprev),hl
         ; compare(pprev, pj): push pj (b), push pprev (a)
         ld      hl,(__qs_pj)
@@ -5015,8 +5018,8 @@ pf_f_done:
         ld      hl,(pf_bufptr)
         ld      (hl),0
         ld      de,pf_fwbuf
-        or      a
-        sbc     hl,de           ; HL = length
+        sbc     hl,de           ; HL = length; carry already 0 (the "or a" that
+                                 ; tested pf_width above already cleared it)
         ld      a,l
 
         ; Restore the real sink/bufptr now that the length is captured.
@@ -8339,8 +8342,8 @@ __mmu_loop:
                                   ; and (mod-65536 wraparound) HL - m already
                                   ; equals the correct reduced value
         ld      bc,(__mmu_m)
-        or      a
-        sbc     hl,bc            ; trial acc-m
+        sbc     hl,bc            ; trial acc-m; carry already 0 (fell through
+                                 ; "jr c,__mmu_dbl_ge" above)
         jr      nc,__mmu_dbl_done  ; >= m: keep reduced value
         add     hl,bc            ; < m: undo, keep acc as-is
         jr      __mmu_dbl_done
@@ -8356,8 +8359,7 @@ __mmu_dbl_done:
         add     hl,bc            ; acc += a0
         jr      c,__mmu_add_ge
         ld      bc,(__mmu_m)
-        or      a
-        sbc     hl,bc
+        sbc     hl,bc           ; carry already 0 (fell through "jr c,__mmu_add_ge" above)
         jr      nc,__mmu_no_add
         add     hl,bc
         jr      __mmu_no_add
@@ -8738,8 +8740,8 @@ ldqr_bit:
         sla     a                       ; dividend bit7 -> carry; bit0 = 0 (quotient slot)
         adc     hl,hl                   ; HL = (HL<<1) | bit; carry = 16-bit overflow
         jr      c,ldqr_sub1             ; overflow: must subtract, quotient bit = 1
-        or      a                       ; clear carry (leaves A unchanged)
-        sbc     hl,de                   ; trial HL -= divisor
+        sbc     hl,de                   ; trial HL -= divisor; carry already 0
+                                         ; (fell through "jr c,ldqr_sub1" above)
         jr      nc,ldqr_one1            ; HL >= divisor: keep, quotient bit = 1
         add     hl,de                   ; restore: HL < divisor, quotient bit = 0
         jr      ldqr_cont1
@@ -8752,8 +8754,8 @@ ldqr_cont1:
         sla     a                       ; dividend bit7 -> carry; bit0 = 0 (quotient slot)
         adc     hl,hl                   ; HL = (HL<<1) | bit; carry = 16-bit overflow
         jr      c,ldqr_sub              ; overflow: must subtract, quotient bit = 1
-        or      a                       ; clear carry (leaves A unchanged)
-        sbc     hl,de                   ; trial HL -= divisor
+        sbc     hl,de                   ; trial HL -= divisor; carry already 0
+                                         ; (fell through "jr c,ldqr_sub" above)
         jr      nc,ldqr_one             ; HL >= divisor: keep, quotient bit = 1
         add     hl,de                   ; restore: HL < divisor, quotient bit = 0
         jr      ldqr_cont
@@ -9476,8 +9478,8 @@ rl_try_grow_top:
         jp      c,rl_do_alloc           ; address wrap -> cannot grow here
         push    hl
         ld      de,(__hlimit)
-        or      a
-        sbc     hl,de                   ; new_end - hlimit
+        sbc     hl,de                   ; new_end - hlimit; carry already 0
+                                         ; (fell through "jp c,rl_do_alloc" above)
         pop     hl                      ; HL = new_end
         jr      c,rl_grow_ok            ; new_end < hlimit
         jr      z,rl_grow_ok            ; new_end == hlimit
@@ -9838,8 +9840,8 @@ mh_extend:
         ; itself can wrap when the CP/M stack starts near FFFFh.
         push    hl              ; preserve validated new_brk for commit below
         ld      de,(__hlimit)
-        or      a
-        sbc     hl,de           ; carry if end < limit, z if end == limit
+        sbc     hl,de           ; carry if end < limit, z if end == limit; carry
+                                 ; already 0 (fell through "jp c,mh_oom" above)
         jr      c,mh_extend_ok
         jr      z,mh_extend_ok
         pop     hl
@@ -10990,8 +10992,8 @@ tf_cl_lp:
         push    hl                      ; save &__tmpf_fd[slot] for later restore
         ; slot = HL - __tmpf_fd
         ld      de,__tmpf_fd
-        or      a
-        sbc     hl,de                   ; HL = slot (0..NTMP-1)
+        sbc     hl,de                   ; HL = slot (0..NTMP-1); carry already 0
+                                         ; (the "xor a" above already cleared it)
         ; &__tmpf_nm[slot] = __tmpf_nm + slot * TN_NSZ (slot << 4)
         add     hl,hl
         add     hl,hl
@@ -15302,8 +15304,8 @@ FD_ANZ:
         ld      a,(BEXP)
         ld      e,a
         ld      d,0
-        or      a
-        sbc     hl,de
+        sbc     hl,de           ; carry already 0 (the "or a" testing BEXP above
+                                 ; already cleared it)
         ld      de,127
         add     hl,de
         bit     7,h
@@ -15873,8 +15875,9 @@ fmd_ynrm_done:
         ; if xexp < yexp (signed): |x| < |y| -> remainder is x unchanged
         ld      hl,(__fmd_xexp)
         ld      de,(__fmd_yexp)
-        or      a
-        sbc     hl,de                   ; range fits 16-bit signed, no overflow
+        sbc     hl,de                   ; range fits 16-bit signed, no overflow;
+                                         ; carry already 0 (the "xor a" above
+                                         ; already cleared it)
         bit     7,h
         jr      z,FMDMOD_LOOP           ; xexp >= yexp
         ld      l,(ix+4)
@@ -15896,8 +15899,8 @@ FMDMOD_LOOP:
         jr      nz,FMDMOD_SUB
         ld      hl,(__fmd_xlo)
         ld      de,(__fmd_ylo)
-        or      a
-        sbc     hl,de
+        sbc     hl,de                   ; carry already 0 (fell through both
+                                         ; "jr c,FMDMOD_NOSUB" and "jr nz,FMDMOD_SUB" above)
         jr      c,FMDMOD_NOSUB
 FMDMOD_SUB:
         ld      hl,(__fmd_xlo)
