@@ -226,6 +226,15 @@ struct MirFlaggedRecordAppend {
     int false_value;
 };
 
+struct MirRecordWildcardMatch {
+    int left_stack_offset;
+    int right_stack_offset;
+    int first_offset;
+    int second_offset;
+    int wildcard_offset;
+    int wildcard_value;
+};
+
 struct MirWideMemberUpdate {
     int pointer_stack_offset;
     int value_stack_offset;
@@ -25441,6 +25450,92 @@ static int mir_match_flagged_record_append(
     return 1;
 }
 
+static int mir_match_record_wildcard(
+    struct MirRecordWildcardMatch *plan)
+{
+    static const int member_indices[7] = {
+        4, 7, 14, 17, 32, 35, 46
+    };
+    const struct MirInsn *left = &mir.insns[1];
+    const struct MirInsn *right = &mir.insns[2];
+    int member_offsets[7];
+    long wildcard_value;
+    int member;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla || mir.count != 72 ||
+        mir_cfg_block_count() != 14 ||
+        type_size(mir.return_type) != 2 ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        left->opcode != MIR_PARAM ||
+        right->opcode != MIR_PARAM ||
+        type_ptr_depth(left->type) != 1 ||
+        type_ptr_depth(right->type) != 1 ||
+        mir_machine_pointee_is_volatile(left) ||
+        mir_machine_pointee_is_volatile(right) ||
+        !mir_machine_parameter_value_offset(
+            left->dst, &plan->left_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            right->dst, &plan->right_stack_offset))
+        return 0;
+    for (member = 0; member < 7; ++member) {
+        const struct MirInsn *address =
+            &mir.insns[member_indices[member]];
+        const struct MirInsn *load =
+            &mir.insns[member_indices[member] + 1];
+
+        if (address->opcode != MIR_MEMBER_ADDRESS ||
+            address->memory_size != 1 ||
+            address->immediate < 0 ||
+            address->immediate > 127 ||
+            load->opcode != MIR_LOAD_INDIRECT ||
+            load->src1 != address->dst ||
+            load->memory_size != 1 ||
+            load->bit_width != 0 ||
+            (load->memory_flags & (1 | 8)) != 0)
+            return 0;
+        member_offsets[member] =
+            (int)address->immediate;
+    }
+    if (mir.insns[4].src1 != left->dst ||
+        mir.insns[7].src1 != right->dst ||
+        member_offsets[0] != member_offsets[1] ||
+        mir.insns[11].opcode != MIR_BINARY ||
+        mir.insns[11].immediate != TOK_EQ ||
+        mir.insns[12].src1 != mir.insns[11].dst ||
+        mir.insns[14].src1 != left->dst ||
+        mir.insns[17].src1 != right->dst ||
+        member_offsets[2] != member_offsets[3] ||
+        mir.insns[21].opcode != MIR_BINARY ||
+        mir.insns[21].immediate != TOK_EQ ||
+        mir.insns[22].src1 != mir.insns[21].dst ||
+        mir.insns[32].src1 != left->dst ||
+        mir.insns[35].src1 != right->dst ||
+        member_offsets[4] != member_offsets[5] ||
+        mir.insns[39].opcode != MIR_BINARY ||
+        mir.insns[39].immediate != TOK_EQ ||
+        mir.insns[40].src1 != mir.insns[39].dst ||
+        mir.insns[46].src1 != right->dst ||
+        member_offsets[6] != member_offsets[4] ||
+        !mir_machine_constant_value(
+            mir.insns[48].dst,
+            &wildcard_value, 0) ||
+        wildcard_value < -128 ||
+        wildcard_value > 255 ||
+        mir.insns[50].opcode != MIR_BINARY ||
+        mir.insns[50].immediate != TOK_EQ ||
+        mir.insns[50].src2 != mir.insns[48].dst ||
+        mir.insns[71].opcode != MIR_RETURN)
+        return 0;
+    plan->first_offset = member_offsets[0];
+    plan->second_offset = member_offsets[2];
+    plan->wildcard_offset = member_offsets[4];
+    plan->wildcard_value = (int)wildcard_value & 255;
+    return plan->first_offset == 0 &&
+           plan->second_offset == 1 &&
+           plan->wildcard_offset == 4;
+}
+
 static int mir_machine_pointee_is_volatile(
     const struct MirInsn *parameter)
 {
@@ -27455,6 +27550,41 @@ static void mir_emit_flagged_record_append(
             plan->field_offsets[6],
             plan->field_offsets[7],
             done);
+}
+
+static void mir_emit_record_wildcard(
+    FILE *out, const struct MirRecordWildcardMatch *plan)
+{
+    int false_result = new_label();
+    int true_result = new_label();
+    int done = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tld a,(bc)\n\tld h,a\n\tld a,(de)\n"
+            "\tcp h\n\tjp nz,L%d\n"
+            "\tinc bc\n\tinc de\n"
+            "\tld a,(bc)\n\tld h,a\n\tld a,(de)\n"
+            "\tcp h\n\tjp nz,L%d\n"
+            "\tinc bc\n\tinc bc\n\tinc bc\n"
+            "\tinc de\n\tinc de\n\tinc de\n"
+            "\tld a,(bc)\n\tld h,a\n\tld a,(de)\n"
+            "\tcp h\n\tjp z,L%d\n\tcp %d\n"
+            "\tjp nz,L%d\n"
+            "L%d:\n\tld hl,1\n\tjp L%d\n"
+            "L%d:\n\tld hl,0\n"
+            "L%d:\n\tret\n",
+            plan->left_stack_offset,
+            plan->right_stack_offset,
+            false_result, false_result,
+            true_result, plan->wildcard_value,
+            false_result, true_result, done,
+            false_result, done);
 }
 
 static void mir_emit_wide_member_update(
@@ -33617,6 +33747,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFourByteFailureCheck four_byte_failure_check;
     struct MirFloatSpecialCheck float_special_check;
     struct MirFlaggedRecordAppend flagged_record_append;
+    struct MirRecordWildcardMatch record_wildcard;
     struct MirWideMemberUpdate wide_member_update;
     struct MirSignedMemberProduct signed_member_product;
     struct MirSignedMemberSquareScaleDiv
@@ -34024,6 +34155,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &flagged_record_append)) {
         mir_emit_flagged_record_append(
             out, &flagged_record_append);
+        return 1;
+    }
+    if (mir_match_record_wildcard(
+            &record_wildcard)) {
+        mir_emit_record_wildcard(
+            out, &record_wildcard);
         return 1;
     }
     if (mir_match_wide_member_update(&wide_member_update)) {
