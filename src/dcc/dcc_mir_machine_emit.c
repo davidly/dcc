@@ -955,6 +955,30 @@ struct MirFloatTangentRational {
     unsigned long six_bits;
 };
 
+struct MirFloatAtanPolynomial {
+    int parameter_stack_offset;
+    unsigned long zero_bits;
+    unsigned long one_bits;
+    unsigned long large_bound_bits;
+    unsigned long small_bound_bits;
+    unsigned long half_pi_bits;
+    unsigned long quarter_pi_bits;
+    unsigned long coefficients[4];
+};
+
+struct MirFloatTaylorSine {
+    struct Sym *remainder_function;
+    struct Sym *power_function;
+    struct Sym *factorial_function;
+    struct Sym *iteration_bound;
+    int parameter_stack_offset;
+    unsigned long zero_bits;
+    unsigned long one_bits;
+    unsigned long two_pi_bits;
+    unsigned long pi_bits;
+    unsigned long half_pi_bits;
+};
+
 struct MirRecursiveWideProduct {
     struct Sym *function;
     int parameter_stack_offset;
@@ -12407,6 +12431,415 @@ static int mir_match_float_sine_polynomial(
         mir.insns[80].src1 != mir.insns[79].dst)
         return mir_machine_reject(
             "float-sine-polynomial", "polynomial");
+    return 1;
+}
+
+static int mir_match_float_atan_polynomial(
+    struct MirFloatAtanPolynomial *plan)
+{
+    static const int expected_opcodes[88] = {
+        MIR_LABEL, MIR_PARAM, MIR_FLOAT_CONST, MIR_STORE,
+        MIR_FLOAT_CONST, MIR_STORE, MIR_NOP, MIR_FLOAT_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_FLOAT_CONST, MIR_UNARY,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_UNARY, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_LABEL, MIR_LOAD, MIR_FLOAT_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_FLOAT_CONST, MIR_NOP,
+        MIR_STORE, MIR_FLOAT_CONST, MIR_UNARY, MIR_LOAD, MIR_BINARY,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_JUMP, MIR_LABEL, MIR_LOAD,
+        MIR_FLOAT_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_FLOAT_CONST,
+        MIR_NOP, MIR_STORE, MIR_LOAD, MIR_FLOAT_CONST, MIR_BINARY,
+        MIR_LOAD, MIR_FLOAT_CONST, MIR_BINARY, MIR_BINARY, MIR_NOP,
+        MIR_STORE, MIR_NOP, MIR_LABEL, MIR_LABEL, MIR_LOAD, MIR_LOAD,
+        MIR_BINARY, MIR_STORE, MIR_LOAD, MIR_LOAD, MIR_NOP, MIR_BINARY,
+        MIR_FLOAT_CONST, MIR_UNARY, MIR_NOP, MIR_FLOAT_CONST, MIR_NOP,
+        MIR_FLOAT_CONST, MIR_UNARY, MIR_NOP, MIR_FLOAT_CONST, MIR_BINARY,
+        MIR_BINARY, MIR_BINARY, MIR_BINARY, MIR_BINARY, MIR_BINARY,
+        MIR_BINARY, MIR_BINARY, MIR_STORE, MIR_LOAD, MIR_LOAD, MIR_NOP,
+        MIR_BINARY, MIR_BINARY, MIR_RETURN
+    };
+    static const int x_accesses[] = {
+        1, 6, 14, 17, 20, 30, 33, 37, 44, 47,
+        52, 56, 57, 60, 61
+    };
+    const struct MirInsn *x = &mir.insns[1];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 88 || mir_cfg_block_count() != 6 ||
+        mir.has_vla || !type_is_float(mir.return_type) ||
+        type_size(mir.return_type) != 4)
+        return mir_machine_reject(
+            "float-atan-polynomial", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "float-atan-polynomial", "opcode");
+    if (!type_is_float(x->type) || type_size(x->type) != 4 ||
+        !mir_scalar_memory_location(
+            x, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2 ||
+        memory_offset > 125 || x->object < 0)
+        return mir_machine_reject(
+            "float-atan-polynomial", "parameter");
+    plan->parameter_stack_offset = memory_offset - 2;
+    for (instruction = 0;
+         instruction < (int)(sizeof(x_accesses) /
+                             sizeof(x_accesses[0]));
+         ++instruction) {
+        const struct MirInsn *access =
+            &mir.insns[x_accesses[instruction]];
+
+        if (access->object != x->object ||
+            (access->memory_flags & (1 | 8)) != 0)
+            return mir_machine_reject(
+                "float-atan-polynomial", "parameter-access");
+    }
+    if (!mir_machine_unobservable_local_store(&mir.insns[3]) ||
+        mir.insns[3].memory_size != 4 ||
+        mir.insns[3].src1 != mir.insns[2].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[5]) ||
+        mir.insns[5].memory_size != 4 ||
+        mir.insns[5].src1 != mir.insns[4].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[59]) ||
+        mir.insns[59].memory_size != 4 ||
+        mir.insns[59].src1 != mir.insns[58].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[81]) ||
+        mir.insns[81].memory_size != 4 ||
+        mir.insns[81].src1 != mir.insns[80].dst)
+        return mir_machine_reject(
+            "float-atan-polynomial", "locals");
+    plan->one_bits =
+        (unsigned long)mir.insns[2].immediate & 0xffffffffUL;
+    plan->zero_bits =
+        (unsigned long)mir.insns[4].immediate & 0xffffffffUL;
+    plan->large_bound_bits =
+        (unsigned long)mir.insns[21].immediate & 0xffffffffUL;
+    plan->half_pi_bits =
+        (unsigned long)mir.insns[25].immediate & 0xffffffffUL;
+    plan->small_bound_bits =
+        (unsigned long)mir.insns[38].immediate & 0xffffffffUL;
+    plan->quarter_pi_bits =
+        (unsigned long)mir.insns[41].immediate & 0xffffffffUL;
+    if (plan->one_bits !=
+            ((unsigned long)mir.insns[10].immediate & 0xffffffffUL) ||
+        plan->one_bits !=
+            ((unsigned long)mir.insns[28].immediate & 0xffffffffUL) ||
+        plan->one_bits !=
+            ((unsigned long)mir.insns[45].immediate & 0xffffffffUL) ||
+        plan->one_bits !=
+            ((unsigned long)mir.insns[48].immediate & 0xffffffffUL) ||
+        plan->zero_bits !=
+            ((unsigned long)mir.insns[7].immediate & 0xffffffffUL) ||
+        mir.insns[11].immediate != '-' ||
+        mir.insns[11].src1 != mir.insns[10].dst ||
+        mir.insns[15].immediate != '-' ||
+        mir.insns[15].src1 != x->dst ||
+        mir.insns[29].immediate != '-' ||
+        mir.insns[29].src1 != mir.insns[28].dst)
+        return mir_machine_reject(
+            "float-atan-polynomial", "constants");
+    if (mir.insns[8].immediate != '<' ||
+        mir.insns[8].src1 != x->dst ||
+        mir.insns[8].src2 != mir.insns[7].dst ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[13].src1 != mir.insns[11].dst ||
+        mir.insns[17].src1 != mir.insns[15].dst ||
+        mir.insns[22].immediate != '>' ||
+        mir.insns[22].src1 != mir.insns[20].dst ||
+        mir.insns[22].src2 != mir.insns[21].dst ||
+        mir.insns[23].src1 != mir.insns[22].dst ||
+        mir.insns[27].src1 != mir.insns[25].dst ||
+        mir.insns[31].immediate != '/' ||
+        mir.insns[31].src1 != mir.insns[29].dst ||
+        mir.insns[31].src2 != mir.insns[30].dst ||
+        mir.insns[33].src1 != mir.insns[31].dst ||
+        mir.insns[35].label != mir.insns[55].label ||
+        mir.insns[39].immediate != '>' ||
+        mir.insns[39].src1 != mir.insns[37].dst ||
+        mir.insns[39].src2 != mir.insns[38].dst ||
+        mir.insns[40].src1 != mir.insns[39].dst ||
+        mir.insns[43].src1 != mir.insns[41].dst ||
+        mir.insns[46].immediate != '-' ||
+        mir.insns[46].src1 != mir.insns[44].dst ||
+        mir.insns[46].src2 != mir.insns[45].dst ||
+        mir.insns[49].immediate != '+' ||
+        mir.insns[49].src1 != mir.insns[47].dst ||
+        mir.insns[49].src2 != mir.insns[48].dst ||
+        mir.insns[50].immediate != '/' ||
+        mir.insns[50].src1 != mir.insns[46].dst ||
+        mir.insns[50].src2 != mir.insns[49].dst ||
+        mir.insns[52].src1 != mir.insns[50].dst)
+        return mir_machine_reject(
+            "float-atan-polynomial", "reduction");
+    plan->coefficients[0] =
+        ((unsigned long)mir.insns[64].immediate ^
+         0x80000000UL) & 0xffffffffUL;
+    plan->coefficients[1] =
+        (unsigned long)mir.insns[67].immediate & 0xffffffffUL;
+    plan->coefficients[2] =
+        ((unsigned long)mir.insns[69].immediate ^
+         0x80000000UL) & 0xffffffffUL;
+    plan->coefficients[3] =
+        (unsigned long)mir.insns[72].immediate & 0xffffffffUL;
+    if (mir.insns[58].immediate != '*' ||
+        mir.insns[58].src1 != mir.insns[56].dst ||
+        mir.insns[58].src2 != mir.insns[57].dst ||
+        mir.insns[63].immediate != '*' ||
+        mir.insns[63].src1 != mir.insns[61].dst ||
+        mir.insns[63].src2 != mir.insns[58].dst ||
+        mir.insns[65].immediate != '-' ||
+        mir.insns[65].src1 != mir.insns[64].dst ||
+        mir.insns[70].immediate != '-' ||
+        mir.insns[70].src1 != mir.insns[69].dst ||
+        mir.insns[73].immediate != '*' ||
+        mir.insns[73].src1 != mir.insns[58].dst ||
+        mir.insns[73].src2 != mir.insns[72].dst ||
+        mir.insns[74].immediate != '+' ||
+        mir.insns[74].src1 != mir.insns[70].dst ||
+        mir.insns[74].src2 != mir.insns[73].dst ||
+        mir.insns[75].immediate != '*' ||
+        mir.insns[75].src1 != mir.insns[58].dst ||
+        mir.insns[75].src2 != mir.insns[74].dst ||
+        mir.insns[76].immediate != '+' ||
+        mir.insns[76].src1 != mir.insns[67].dst ||
+        mir.insns[76].src2 != mir.insns[75].dst ||
+        mir.insns[77].immediate != '*' ||
+        mir.insns[77].src1 != mir.insns[58].dst ||
+        mir.insns[77].src2 != mir.insns[76].dst ||
+        mir.insns[78].immediate != '+' ||
+        mir.insns[78].src1 != mir.insns[65].dst ||
+        mir.insns[78].src2 != mir.insns[77].dst ||
+        mir.insns[79].immediate != '*' ||
+        mir.insns[79].src1 != mir.insns[63].dst ||
+        mir.insns[79].src2 != mir.insns[78].dst ||
+        mir.insns[80].immediate != '+' ||
+        mir.insns[80].src1 != mir.insns[60].dst ||
+        mir.insns[80].src2 != mir.insns[79].dst ||
+        mir.insns[85].immediate != '+' ||
+        mir.insns[85].src1 != mir.insns[83].dst ||
+        mir.insns[85].src2 != mir.insns[80].dst ||
+        mir.insns[86].immediate != '*' ||
+        mir.insns[86].src1 != mir.insns[82].dst ||
+        mir.insns[86].src2 != mir.insns[85].dst ||
+        mir.insns[87].src1 != mir.insns[86].dst)
+        return mir_machine_reject(
+            "float-atan-polynomial", "polynomial");
+    return 1;
+}
+
+static int mir_match_float_taylor_sine(
+    struct MirFloatTaylorSine *plan)
+{
+    static const int expected_opcodes[119] = {
+        MIR_LABEL, MIR_PARAM, MIR_FLOAT_CONST, MIR_STORE, MIR_CONST,
+        MIR_STORE, MIR_NOP, MIR_ARG, MIR_FLOAT_CONST, MIR_ARG, MIR_CALL,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_FLOAT_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_FLOAT_CONST, MIR_BINARY, MIR_NOP,
+        MIR_STORE, MIR_LABEL, MIR_LOAD, MIR_FLOAT_CONST, MIR_UNARY,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD, MIR_FLOAT_CONST,
+        MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_LOAD,
+        MIR_FLOAT_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_FLOAT_CONST, MIR_LOAD, MIR_BINARY, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_FLOAT_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_FLOAT_CONST,
+        MIR_UNARY, MIR_LOAD, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_LABEL, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL,
+        MIR_NOP, MIR_PHI, MIR_PHI, MIR_PHI, MIR_NOP, MIR_LOAD, MIR_UNARY,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP, MIR_LOAD, MIR_ARG,
+        MIR_CONST, MIR_NOP, MIR_UNARY, MIR_BINARY, MIR_CONST, MIR_BINARY,
+        MIR_UNARY, MIR_ARG, MIR_CALL, MIR_UNARY, MIR_BINARY, MIR_CONST,
+        MIR_NOP, MIR_UNARY, MIR_BINARY, MIR_CONST, MIR_BINARY, MIR_UNARY,
+        MIR_ARG, MIR_CALL, MIR_UNARY, MIR_BINARY, MIR_BINARY, MIR_NOP,
+        MIR_STORE, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP,
+        MIR_STORE, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_RETURN
+    };
+    static const int x_accesses[] = {
+        1, 6, 12, 13, 17, 21, 23, 28, 32, 34, 40,
+        43, 47, 54, 57, 65, 76
+    };
+    const struct MirInsn *x = &mir.insns[1];
+    int arguments[2];
+    int factorial_argument;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 119 || mir_cfg_block_count() != 10 ||
+        mir.has_vla || !type_is_float(mir.return_type) ||
+        type_size(mir.return_type) != 4)
+        return mir_machine_reject(
+            "float-taylor-sine", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "float-taylor-sine", "opcode");
+    if (!type_is_float(x->type) || type_size(x->type) != 4 ||
+        !mir_scalar_memory_location(
+            x, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2 ||
+        memory_offset > 125 || x->object < 0)
+        return mir_machine_reject(
+            "float-taylor-sine", "parameter");
+    plan->parameter_stack_offset = memory_offset - 2;
+    for (instruction = 0;
+         instruction < (int)(sizeof(x_accesses) /
+                             sizeof(x_accesses[0]));
+         ++instruction) {
+        const struct MirInsn *access =
+            &mir.insns[x_accesses[instruction]];
+
+        if (access->object != x->object ||
+            (access->memory_flags & (1 | 8)) != 0)
+            return mir_machine_reject(
+                "float-taylor-sine", "parameter-access");
+    }
+    if (!mir_machine_unobservable_local_store(&mir.insns[3]) ||
+        mir.insns[3].memory_size != 4 ||
+        mir.insns[3].src1 != mir.insns[2].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[5]) ||
+        mir.insns[5].memory_size != 2 ||
+        mir.insns[5].src1 != mir.insns[4].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[63]) ||
+        mir.insns[63].memory_size != 1 ||
+        mir.insns[63].src1 != mir.insns[62].dst)
+        return mir_machine_reject(
+            "float-taylor-sine", "locals");
+    if (!mir_machine_two_call_arguments(
+            &mir.insns[10], arguments) ||
+        arguments[0] != x->dst ||
+        arguments[1] != mir.insns[8].dst ||
+        (plan->remainder_function =
+             find_global(mir.insns[10].name)) == NULL ||
+        !mir_machine_two_call_arguments(
+            &mir.insns[86], arguments) ||
+        arguments[0] != mir.insns[76].dst ||
+        arguments[1] != mir.insns[84].dst ||
+        (plan->power_function =
+             find_global(mir.insns[86].name)) == NULL ||
+        !mir_machine_single_call_argument(
+            &mir.insns[97], &factorial_argument) ||
+        factorial_argument != mir.insns[95].dst ||
+        (plan->factorial_function =
+             find_global(mir.insns[97].name)) == NULL)
+        return mir_machine_reject(
+            "float-taylor-sine", "calls");
+    plan->iteration_bound =
+        find_global(mir.insns[70].name);
+    if (mir.insns[70].opcode != MIR_LOAD ||
+        plan->iteration_bound == NULL ||
+        plan->iteration_bound->is_volatile ||
+        type_ptr_depth(plan->iteration_bound->type) != 0 ||
+        type_size(plan->iteration_bound->type) != 2)
+        return mir_machine_reject(
+            "float-taylor-sine", "bound");
+    plan->zero_bits =
+        (unsigned long)mir.insns[2].immediate & 0xffffffffUL;
+    plan->two_pi_bits =
+        (unsigned long)mir.insns[8].immediate & 0xffffffffUL;
+    plan->pi_bits =
+        (unsigned long)mir.insns[14].immediate & 0xffffffffUL;
+    plan->half_pi_bits =
+        (unsigned long)mir.insns[35].immediate & 0xffffffffUL;
+    plan->one_bits = 0x3f800000UL;
+    if (plan->two_pi_bits !=
+            ((unsigned long)mir.insns[18].immediate & 0xffffffffUL) ||
+        plan->two_pi_bits !=
+            ((unsigned long)mir.insns[29].immediate & 0xffffffffUL) ||
+        plan->pi_bits !=
+            ((unsigned long)mir.insns[24].immediate & 0xffffffffUL) ||
+        plan->pi_bits !=
+            ((unsigned long)mir.insns[39].immediate & 0xffffffffUL) ||
+        plan->pi_bits !=
+            ((unsigned long)mir.insns[52].immediate & 0xffffffffUL) ||
+        plan->half_pi_bits !=
+            ((unsigned long)mir.insns[48].immediate & 0xffffffffUL) ||
+        !mir_machine_constant_equals(mir.insns[4].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[62].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[78].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[82].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[89].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[93].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[105].dst, 65535) ||
+        !mir_machine_constant_equals(mir.insns[112].dst, 1))
+        return mir_machine_reject(
+            "float-taylor-sine", "constants");
+    if (mir.insns[12].src1 != mir.insns[10].dst ||
+        mir.insns[15].immediate != '>' ||
+        mir.insns[15].src1 != mir.insns[10].dst ||
+        mir.insns[15].src2 != mir.insns[14].dst ||
+        mir.insns[19].immediate != '-' ||
+        mir.insns[19].src1 != mir.insns[10].dst ||
+        mir.insns[19].src2 != mir.insns[18].dst ||
+        mir.insns[21].src1 != mir.insns[19].dst ||
+        mir.insns[25].immediate != '-' ||
+        mir.insns[25].src1 != mir.insns[24].dst ||
+        mir.insns[26].immediate != '<' ||
+        mir.insns[26].src1 != mir.insns[23].dst ||
+        mir.insns[26].src2 != mir.insns[25].dst ||
+        mir.insns[30].immediate != '+' ||
+        mir.insns[30].src1 != mir.insns[28].dst ||
+        mir.insns[30].src2 != mir.insns[29].dst ||
+        mir.insns[32].src1 != mir.insns[30].dst ||
+        mir.insns[36].immediate != '>' ||
+        mir.insns[36].src1 != mir.insns[34].dst ||
+        mir.insns[36].src2 != mir.insns[35].dst ||
+        mir.insns[41].immediate != '-' ||
+        mir.insns[41].src1 != mir.insns[39].dst ||
+        mir.insns[41].src2 != mir.insns[40].dst ||
+        mir.insns[43].src1 != mir.insns[41].dst ||
+        mir.insns[49].immediate != '-' ||
+        mir.insns[49].src1 != mir.insns[48].dst ||
+        mir.insns[50].immediate != '<' ||
+        mir.insns[50].src1 != mir.insns[47].dst ||
+        mir.insns[50].src2 != mir.insns[49].dst ||
+        mir.insns[53].immediate != '-' ||
+        mir.insns[53].src1 != mir.insns[52].dst ||
+        mir.insns[55].immediate != '-' ||
+        mir.insns[55].src1 != mir.insns[53].dst ||
+        mir.insns[55].src2 != mir.insns[54].dst ||
+        mir.insns[57].src1 != mir.insns[55].dst)
+        return mir_machine_reject(
+            "float-taylor-sine", "reduction");
+    if (mir.insns[72].immediate != TOK_LE ||
+        mir.insns[81].immediate != '*' ||
+        mir.insns[81].src1 != mir.insns[78].dst ||
+        mir.insns[81].src2 != mir.insns[80].dst ||
+        mir.insns[83].immediate != '-' ||
+        mir.insns[83].src1 != mir.insns[81].dst ||
+        mir.insns[83].src2 != mir.insns[82].dst ||
+        mir.insns[88].immediate != '*' ||
+        mir.insns[88].src1 != mir.insns[87].dst ||
+        mir.insns[88].src2 != mir.insns[86].dst ||
+        mir.insns[92].immediate != '*' ||
+        mir.insns[92].src1 != mir.insns[89].dst ||
+        mir.insns[92].src2 != mir.insns[91].dst ||
+        mir.insns[94].immediate != '-' ||
+        mir.insns[94].src1 != mir.insns[92].dst ||
+        mir.insns[94].src2 != mir.insns[93].dst ||
+        mir.insns[99].immediate != '/' ||
+        mir.insns[99].src1 != mir.insns[88].dst ||
+        mir.insns[99].src2 != mir.insns[98].dst ||
+        mir.insns[100].immediate != '+' ||
+        mir.insns[100].src1 != mir.insns[66].dst ||
+        mir.insns[100].src2 != mir.insns[99].dst ||
+        mir.insns[102].src1 != mir.insns[100].dst ||
+        mir.insns[106].immediate != '*' ||
+        mir.insns[106].src1 != mir.insns[67].dst ||
+        mir.insns[106].src2 != mir.insns[105].dst ||
+        mir.insns[108].src1 != mir.insns[106].dst ||
+        mir.insns[113].immediate != '+' ||
+        mir.insns[115].label != mir.insns[64].label ||
+        mir.insns[118].src1 != mir.insns[66].dst)
+        return mir_machine_reject(
+            "float-taylor-sine", "loop");
     return 1;
 }
 
@@ -33008,6 +33441,261 @@ static void mir_emit_reduced_float_polynomial(
     fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static void mir_emit_float_atan_polynomial(
+    FILE *out, const struct MirFloatAtanPolynomial *plan)
+{
+    int after_sign = new_label();
+    int check_small_bound = new_label();
+    int reduced = new_label();
+    int result_sign = new_label();
+    int x_offset = plan->parameter_stack_offset + 2;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-9\n\tadd hl,sp\n\tld sp,hl\n"
+          "\tld (ix-9),0\n"
+          "\tld (ix-4),0\n\tld (ix-3),0\n"
+          "\tld (ix-2),0\n\tld (ix-1),0\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, plan->zero_bits);
+    mir_emit_runtime_call(out, "__fgtf");
+    fputs("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", after_sign);
+    fprintf(out,
+            "\tld a,(ix%+d)\n\txor 128\n"
+            "\tld (ix%+d),a\n\tld (ix-9),1\n"
+            "L%d:\n",
+            x_offset + 3, x_offset + 3, after_sign);
+
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(
+        out, plan->large_bound_bits);
+    mir_emit_runtime_call(out, "__fltf");
+    fputs("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", check_small_bound);
+    mir_machine_emit_float_bits(out, plan->half_pi_bits);
+    mir_machine_emit_ix_wide_store(out, -4);
+    mir_machine_emit_float_bits(
+        out, plan->one_bits ^ 0x80000000UL);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    mir_emit_runtime_call(out, "__fdf");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_ix_wide_store(out, x_offset);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            reduced, check_small_bound);
+
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(
+        out, plan->small_bound_bits);
+    mir_emit_runtime_call(out, "__fltf");
+    fputs("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", reduced);
+    mir_machine_emit_float_bits(out, plan->quarter_pi_bits);
+    mir_machine_emit_ix_wide_store(out, -4);
+
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, plan->one_bits);
+    mir_emit_runtime_call(out, "__fsf");
+    fputs("\tpop bc\n\tpop bc\n\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, plan->one_bits);
+    mir_emit_runtime_call(out, "__faf");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_emit_runtime_call(out, "__fdf");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_ix_wide_store(out, x_offset);
+
+    fprintf(out, "L%d:\n", reduced);
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    mir_emit_runtime_call(out, "__fmf");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_ix_wide_store(out, -8);
+
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, -8);
+    mir_emit_runtime_call(out, "__fmf");
+    fputs("\tpop bc\n\tpop bc\n\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, plan->coefficients[0]);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, -8);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, plan->coefficients[1]);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, -8);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, plan->coefficients[2]);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, -8);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, plan->coefficients[3]);
+    mir_emit_runtime_call(out, "__fmaf");
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    mir_emit_runtime_call(out, "__fmaf");
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    mir_emit_runtime_call(out, "__fmaf");
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    mir_emit_runtime_call(out, "__fmaf");
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, -4);
+    mir_emit_runtime_call(out, "__faf");
+    fputs("\tpop bc\n\tpop bc\n"
+          "\tld a,(ix-9)\n\tor a\n", out);
+    fprintf(out,
+            "\tjp z,L%d\n\tld a,d\n\txor 128\n\tld d,a\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            result_sign, result_sign);
+}
+
+static void mir_emit_float_taylor_sine(
+    FILE *out, const struct MirFloatTaylorSine *plan)
+{
+    int check_lower_period = new_label();
+    int check_upper_quadrant = new_label();
+    int check_lower_quadrant = new_label();
+    int reduced = new_label();
+    int loop = new_label();
+    int loop_body = new_label();
+    int loop_done = new_label();
+    int positive_term = new_label();
+    int x_offset = plan->parameter_stack_offset + 2;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-8\n\tadd hl,sp\n\tld sp,hl\n"
+          "\tld (ix-4),0\n\tld (ix-3),0\n"
+          "\tld (ix-2),0\n\tld (ix-1),0\n"
+          "\tld (ix-5),0\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+
+    mir_machine_emit_float_bits(out, plan->two_pi_bits);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(
+        out, plan->remainder_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_ix_wide_store(out, x_offset);
+
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, plan->pi_bits);
+    mir_emit_runtime_call(out, "__fltf");
+    fputs("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", check_lower_period);
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, plan->two_pi_bits);
+    mir_emit_runtime_call(out, "__fsf");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_ix_wide_store(out, x_offset);
+
+    fprintf(out, "L%d:\n", check_lower_period);
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(
+        out, plan->pi_bits ^ 0x80000000UL);
+    mir_emit_runtime_call(out, "__fgtf");
+    fputs("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", check_upper_quadrant);
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, plan->two_pi_bits);
+    mir_emit_runtime_call(out, "__faf");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_ix_wide_store(out, x_offset);
+
+    fprintf(out, "L%d:\n", check_upper_quadrant);
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, plan->half_pi_bits);
+    mir_emit_runtime_call(out, "__fltf");
+    fputs("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", check_lower_quadrant);
+    mir_machine_emit_float_bits(out, plan->pi_bits);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    mir_emit_runtime_call(out, "__fsf");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_ix_wide_store(out, x_offset);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            reduced, check_lower_quadrant);
+
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(
+        out, plan->half_pi_bits ^ 0x80000000UL);
+    mir_emit_runtime_call(out, "__fgtf");
+    fputs("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", reduced);
+    mir_machine_emit_float_bits(
+        out, plan->pi_bits ^ 0x80000000UL);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    mir_emit_runtime_call(out, "__fsf");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_ix_wide_store(out, x_offset);
+
+    fprintf(out, "L%d:\n\tld (ix-6),1\nL%d:\n",
+            reduced, loop);
+    mir_machine_emit_global_word(
+        out, plan->iteration_bound, 0);
+    fputs("\tex de,hl\n\tld l,(ix-6)\n\tld h,0\n"
+          "\tor a\n\tsbc hl,de\n", out);
+    fprintf(out,
+            "\tjp c,L%d\n\tjp z,L%d\n\tjp L%d\n"
+            "L%d:\n",
+            loop_body, loop_body, loop_done, loop_body);
+
+    fputs("\tld l,(ix-6)\n\tld h,0\n"
+          "\tadd hl,hl\n\tdec hl\n", out);
+    mir_emit_runtime_call(out, "__fif");
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, x_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(
+        out, plan->power_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tld a,(ix-5)\n\tor a\n", out);
+    fprintf(out,
+            "\tjp z,L%d\n\tld a,d\n\txor 128\n\tld d,a\n"
+            "L%d:\n\tpush de\n\tpush hl\n",
+            positive_term, positive_term);
+
+    fputs("\tld l,(ix-6)\n\tld h,0\n"
+          "\tadd hl,hl\n\tdec hl\n\tld de,0\n"
+          "\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(
+        out, plan->factorial_function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_emit_runtime_call(out, "__fulf");
+    mir_emit_runtime_call(out, "__fdf");
+    fputs("\tpop bc\n\tpop bc\n\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, -4);
+    mir_emit_runtime_call(out, "__faf");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_ix_wide_store(out, -4);
+    fputs("\tld a,(ix-5)\n\txor 1\n\tld (ix-5),a\n"
+          "\tinc (ix-6)\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            loop, loop_done);
+    mir_machine_emit_ix_wide_load(out, -4);
+    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_float_tangent_rational(
     FILE *out, const struct MirFloatTangentRational *plan)
 {
@@ -36645,6 +37333,8 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantFloatConditional constant_float_conditional;
     struct MirConditionalGlobalFloatLoad conditional_global_float_load;
     struct MirReducedFloatPolynomial reduced_float_polynomial;
+    struct MirFloatAtanPolynomial float_atan_polynomial;
+    struct MirFloatTaylorSine float_taylor_sine;
     struct MirFloatTangentRational float_tangent_rational;
     struct MirRecursiveFrameFill recursive_frame_fill;
     struct MirRecursiveWideProduct recursive_wide_product;
@@ -37472,6 +38162,18 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &reduced_float_polynomial)) {
         mir_emit_reduced_float_polynomial(
             out, &reduced_float_polynomial);
+        return 1;
+    }
+    if (mir_match_float_atan_polynomial(
+            &float_atan_polynomial)) {
+        mir_emit_float_atan_polynomial(
+            out, &float_atan_polynomial);
+        return 1;
+    }
+    if (mir_match_float_taylor_sine(
+            &float_taylor_sine)) {
+        mir_emit_float_taylor_sine(
+            out, &float_taylor_sine);
         return 1;
     }
     if (mir_match_float_tangent_rational(

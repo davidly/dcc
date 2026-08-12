@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `c3431fd`
-  (`dcc MIR: schedule fixed K&R call checks`).
-- Current candidate coverage: **2087/2185 (95.51%)**.
-- Remaining fallback population: **98 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `f1220af`
+  (`dcc MIR: schedule deterministic initializer checks`).
+- Current candidate coverage: **2089/2185 (95.61%)**.
+- Remaining fallback population: **96 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -705,6 +705,10 @@ current execution plan and handoff.
   comparison family, checker call and returned load before eliding private
   aggregate storage. This admits `tc89ini2.sum_local`, improving
   **23.07%/26.13%** and shrinking both images by more than 12%.
+- The existing register-framed float polynomial family now covers atan range
+  reduction and fixed Taylor sine loops. Four-deep `__fmaf` Horner chaining
+  and a one-byte alternating-sign state admit `ttrig.atanf` and
+  `ttrig.xsinf`, improving the app **1.19%/1.22%** and shrinking both images.
 - A compact register schedule for `pint.alloc_temp` was rejected despite 50
   fewer instructions and one smaller sector because program placement still
   regressed **0.26%/0.16%**; no padding or baseline movement was retained.
@@ -722,7 +726,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 98 final-cost fallbacks,
+- Current next priority: repeated causes in the 96 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
