@@ -856,6 +856,14 @@ struct MirGlobalLastRecordKind {
     int wanted;
 };
 
+struct MirLocalByteFillCall {
+    struct Sym *function;
+    int count;
+    int fill_value;
+    int patch_offset;
+    int patch_value;
+};
+
 struct MirAsciiUpper {
     int parameter_stack_offset;
     int width;
@@ -11942,6 +11950,101 @@ static int mir_match_conditional_string_report(
     plan->format_string_id = (int)mir.insns[3].immediate;
     plan->true_string_id = (int)mir.insns[9].immediate;
     plan->false_string_id = (int)mir.insns[13].immediate;
+    return 1;
+}
+
+static int mir_match_local_byte_fill_call(struct MirLocalByteFillCall *plan)
+{
+    static const int expected_opcodes[41] = {
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_PHI,
+        MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST,
+        MIR_STORE_INDIRECT, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST, MIR_STORE_INDIRECT,
+        MIR_ADDRESS, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CONST,
+        MIR_NOP, MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN
+    };
+    const struct MirInsn *index_phi = &mir.insns[5];
+    const struct MirInsn *call = &mir.insns[38];
+    int arguments[3];
+    int type, storage, offset;
+    int type2, storage2, offset2;
+    long patch_index;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 41 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || type_size(mir.return_type) != 2)
+        return mir_machine_reject("local-byte-fill-call", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject("local-byte-fill-call", "opcode");
+    if (!mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[3]) ||
+        index_phi->src1 != mir.insns[2].dst ||
+        index_phi->src2 != mir.insns[20].dst ||
+        index_phi->phi_pred1 != mir.insns[0].label ||
+        index_phi->phi_pred2 != mir.insns[17].label ||
+        mir.insns[9].immediate != '<' ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[9].src2 != mir.insns[7].dst ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        mir.insns[10].label != mir.insns[23].label)
+        return mir_machine_reject("local-byte-fill-call", "loop");
+    plan->count = (int)mir.insns[7].immediate;
+    plan->fill_value = (int)mir.insns[15].immediate & 0xff;
+    if (plan->count <= 0 || plan->count > 255 ||
+        !mir_scalar_memory_location(
+            &mir.insns[11], &type, &storage, &offset) ||
+        storage != SC_LOCAL || offset != -plan->count ||
+        mir.insns[13].src1 != mir.insns[11].dst ||
+        mir.insns[13].src2 != index_phi->dst ||
+        mir.insns[13].immediate != 1 ||
+        mir.insns[16].src1 != mir.insns[13].dst ||
+        mir.insns[16].src2 != mir.insns[15].dst ||
+        mir.insns[16].memory_size != 1 ||
+        !mir_machine_constant_equals(mir.insns[19].dst, 1) ||
+        mir.insns[20].immediate != '+' ||
+        mir.insns[20].src1 != index_phi->dst ||
+        mir.insns[20].src2 != mir.insns[19].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[21]) ||
+        mir.insns[22].label != mir.insns[4].label)
+        return mir_machine_reject("local-byte-fill-call", "fill");
+    if (!mir_scalar_memory_location(
+            &mir.insns[24], &type2, &storage2, &offset2) ||
+        storage2 != storage || offset2 != offset ||
+        !mir_machine_constant_value(
+            mir.insns[25].dst, &patch_index, 0) ||
+        patch_index < 0 || patch_index >= plan->count ||
+        mir.insns[26].src1 != mir.insns[24].dst ||
+        mir.insns[26].src2 != mir.insns[25].dst ||
+        mir.insns[26].immediate != 1 ||
+        mir.insns[29].src1 != mir.insns[26].dst ||
+        mir.insns[29].src2 != mir.insns[28].dst ||
+        mir.insns[29].memory_size != 1)
+        return mir_machine_reject("local-byte-fill-call", "patch");
+    plan->patch_offset = (int)patch_index;
+    plan->patch_value = (int)mir.insns[28].immediate & 0xff;
+    if (!mir_scalar_memory_location(
+            &mir.insns[30], &type2, &storage2, &offset2) ||
+        storage2 != storage || offset2 != offset ||
+        !mir_machine_three_call_arguments(call, arguments) ||
+        arguments[0] != mir.insns[30].dst ||
+        arguments[1] != mir.insns[33].dst ||
+        arguments[2] != mir.insns[35].dst ||
+        mir.insns[33].immediate != plan->fill_value ||
+        mir.insns[35].immediate != plan->count ||
+        !mir_machine_constant_equals(mir.insns[39].dst, 0) ||
+        mir.insns[40].src1 != mir.insns[39].dst)
+        return mir_machine_reject("local-byte-fill-call", "call");
+    plan->function = find_global(call->name);
+    if (plan->function == NULL || !plan->function->is_defined ||
+        plan->function->is_funcptr ||
+        (call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0)
+        return mir_machine_reject("local-byte-fill-call", "function");
     return 1;
 }
 
@@ -23476,6 +23579,32 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_local_byte_fill_call(
+    FILE *out, const struct MirLocalByteFillCall *plan)
+{
+    int loop = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    fprintf(out, "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n", plan->count);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tpush ix\n\tpop hl\n\tld de,-%d\n\tadd hl,de\n"
+            "\tld a,%d\n\tld b,%d\n"
+            "L%d:\n\tld (hl),a\n\tinc hl\n\tdjnz L%d\n"
+            "\tld (ix%+d),%d\n"
+            "\tld hl,%d\n\tpush hl\n"
+            "\tld hl,%d\n\tpush hl\n"
+            "\tpush ix\n\tpop hl\n\tld de,-%d\n\tadd hl,de\n\tpush hl\n",
+            plan->count, plan->fill_value, plan->count,
+            loop, loop,
+            -plan->count + plan->patch_offset, plan->patch_value,
+            plan->count, plan->fill_value, plan->count);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_global_last_record_kind(
     FILE *out, const struct MirGlobalLastRecordKind *plan)
 {
@@ -24787,6 +24916,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirLocalByteFillCall local_byte_fill_call;
     struct MirGlobalLastRecordKind global_last_record_kind;
     struct MirAggregateByteFillReturn aggregate_byte_fill_return;
     struct MirFixedCallReductionReport fixed_call_reduction_report;
@@ -25428,6 +25558,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_local_byte_fill_call(&local_byte_fill_call)) {
+        mir_emit_local_byte_fill_call(out, &local_byte_fill_call);
         return 1;
     }
     if (mir_match_global_last_record_kind(
