@@ -543,6 +543,15 @@ struct MirExtraLiteralChecks {
     unsigned long float_bits;
 };
 
+struct MirScaledVectorAdd {
+    struct Sym *convert_function;
+    struct Sym *clamp_function;
+    int scalar_stack_offset;
+    int source_stack_offset;
+    int destination_stack_offset;
+    int length_stack_offset;
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -6889,6 +6898,56 @@ static int mir_match_extra_literal_checks(
         plan->pick_pair_function == NULL ||
         plan->pair_function == NULL)
         return mir_machine_reject("extra-literal-checks", "functions");
+    return 1;
+}
+
+static int mir_match_scaled_vector_add(struct MirScaledVectorAdd *plan)
+{
+    int argument;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 56 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID ||
+        mir.insns[1].opcode != MIR_PARAM ||
+        mir.insns[2].opcode != MIR_PARAM ||
+        mir.insns[3].opcode != MIR_PARAM ||
+        mir.insns[4].opcode != MIR_PARAM ||
+        !mir_machine_constant_equals(mir.insns[6].dst, 0) ||
+        mir.insns[13].opcode != MIR_PHI ||
+        mir.insns[18].immediate != '<' ||
+        mir.insns[19].src1 != mir.insns[18].dst ||
+        !mir_machine_constant_equals(mir.insns[21].dst, 2) ||
+        mir.insns[22].immediate != '+' ||
+        mir.insns[24].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[30].immediate != '*' ||
+        !mir_machine_single_call_argument(
+            &mir.insns[32], &argument) ||
+        argument != mir.insns[30].dst ||
+        !mir_machine_constant_equals(mir.insns[35].dst, 2) ||
+        mir.insns[36].immediate != '+' ||
+        mir.insns[41].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[45].immediate != '+' ||
+        !mir_machine_single_call_argument(
+            &mir.insns[47], &argument) ||
+        argument != mir.insns[45].dst ||
+        mir.insns[48].opcode != MIR_STORE_INDIRECT ||
+        !mir_machine_constant_equals(mir.insns[51].dst, 1) ||
+        mir.insns[52].immediate != '+' ||
+        mir.insns[54].label != mir.insns[8].label)
+        return mir_machine_reject("scaled-vector-add", "shape");
+    plan->convert_function = find_global(mir.insns[32].name);
+    plan->clamp_function = find_global(mir.insns[47].name);
+    if (plan->convert_function == NULL ||
+        plan->clamp_function == NULL ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->scalar_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[2].dst, &plan->source_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[3].dst, &plan->destination_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[4].dst, &plan->length_stack_offset))
+        return mir_machine_reject("scaled-vector-add", "parameters");
     return 1;
 }
 
@@ -26092,6 +26151,65 @@ static void mir_emit_extra_literal_checks(
     fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static void mir_emit_scaled_vector_add(
+    FILE *out, const struct MirScaledVectorAdd *plan)
+{
+    int loop = new_label();
+    int done = new_label();
+
+    fprintf(out,
+            ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n"
+            "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+            "\tld hl,-7\n\tadd hl,sp\n\tld sp,hl\n",
+            mir.name);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tpush hl\n\tpop iy\n"
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
+            "\tld (ix-2),l\n\tld (ix-1),h\n"
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
+            "\tld (ix-4),l\n\tld (ix-3),h\n"
+            "\tld a,(ix+%d)\n\tld (ix-5),a\n"
+            "L%d:\n\tld a,(ix-5)\n\tor a\n\tjp z,L%d\n"
+            "\tld l,(ix-2)\n\tld h,(ix-1)\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n\tinc hl\n"
+            "\tld (ix-2),l\n\tld (ix-1),h\n"
+            "\tpush iy\n\tpop hl\n",
+            plan->scalar_stack_offset + 4,
+            plan->scalar_stack_offset + 5,
+            plan->source_stack_offset + 4,
+            plan->source_stack_offset + 5,
+            plan->destination_stack_offset + 4,
+            plan->destination_stack_offset + 5,
+            plan->length_stack_offset + 4,
+            loop, done);
+    mir_emit_runtime_call(out, "__m1s");
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->convert_function);
+    fputs("\tpop bc\n\tpop bc\n"
+          "\tld (ix-7),l\n\tld (ix-6),h\n"
+          "\tld l,(ix-4)\n\tld h,(ix-3)\n"
+          "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tinc hl\n"
+          "\tld (ix-4),l\n\tld (ix-3),h\n"
+          "\tex de,hl\n\tld a,h\n\trlca\n\tsbc a,a\n"
+          "\tld d,a\n\tld e,a\n"
+          "\tld c,(ix-7)\n\tld b,(ix-6)\n"
+          "\tld a,b\n\trlca\n\tsbc a,a\n"
+          "\tadd hl,bc\n\tld c,a\n\tld b,a\n"
+          "\tex de,hl\n\tadc hl,bc\n\tex de,hl\n"
+          "\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->clamp_function);
+    fputs("\tpop bc\n\tpop bc\n\tex de,hl\n"
+          "\tld l,(ix-4)\n\tld h,(ix-3)\n\tdec hl\n\tdec hl\n"
+          "\tld (hl),e\n\tinc hl\n\tld (hl),d\n"
+          "\tdec (ix-5)\n", out);
+    fprintf(out,
+            "\tjp L%d\nL%d:\n\tld sp,ix\n\tpop ix\n\tpop iy\n"
+            ";@dcc.reg free=iy\n\tret\n",
+            loop, done);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -29815,6 +29933,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirCpmFileSize cpm_file_size;
     struct MirBlockLiteralChecks block_literal_checks;
     struct MirExtraLiteralChecks extra_literal_checks;
+    struct MirScaledVectorAdd scaled_vector_add;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -30383,6 +30502,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_extra_literal_checks(&extra_literal_checks)) {
         mir_emit_extra_literal_checks(out, &extra_literal_checks);
+        return 1;
+    }
+    if (mir_match_scaled_vector_add(&scaled_vector_add)) {
+        mir_emit_scaled_vector_add(out, &scaled_vector_add);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
