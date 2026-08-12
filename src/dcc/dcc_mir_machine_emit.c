@@ -510,6 +510,18 @@ struct MirAggregateReturnReport {
     unsigned long pair_values[2];
 };
 
+struct MirCpmFileSize {
+    struct Sym *initialize_function;
+    struct Sym *bdos_function;
+    int parameter_stack_offset;
+    int fcb_offset;
+    int frame_size;
+    int low_record_offset;
+    int high_record_offset;
+    int bdos_function_number;
+    int record_shift;
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -6580,6 +6592,72 @@ static int mir_match_aggregate_return_report(
         plan->nested_function == NULL ||
         plan->print_name[0] == 0)
         return mir_machine_reject("aggregate-return-report", "functions");
+    return 1;
+}
+
+static int mir_match_cpm_file_size(struct MirCpmFileSize *plan)
+{
+    int arguments[2];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    long function_number;
+    long record_shift;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 44 || mir_cfg_block_count() != 2 ||
+        mir.has_vla || type_size(mir.return_type) != 4 ||
+        mir.insns[1].opcode != MIR_PARAM ||
+        !mir_machine_constant_equals(mir.insns[3].dst, 0) ||
+        mir.insns[5].opcode != MIR_ADDRESS ||
+        !mir_machine_two_call_arguments(
+            &mir.insns[10], arguments) ||
+        arguments[0] != mir.insns[5].dst ||
+        arguments[1] != mir.insns[8].dst ||
+        !mir_machine_constant_value(
+            mir.insns[11].dst, &function_number, 0) ||
+        !mir_machine_two_call_arguments(
+            &mir.insns[16], arguments) ||
+        arguments[0] != mir.insns[11].dst ||
+        arguments[1] != mir.insns[13].dst ||
+        !mir_machine_constant_equals(mir.insns[18].dst, 0) ||
+        mir.insns[20].immediate != TOK_EQ ||
+        mir.insns[21].src1 != mir.insns[20].dst ||
+        mir.insns[23].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[24].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[24].memory_size != 1 ||
+        mir.insns[27].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[28].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[28].memory_size != 1 ||
+        !mir_machine_constant_equals(mir.insns[30].dst, 8) ||
+        mir.insns[31].immediate != TOK_SHL ||
+        mir.insns[32].immediate != '+' ||
+        !mir_machine_constant_value(
+            mir.insns[38].dst, &record_shift, 0) ||
+        mir.insns[39].immediate != TOK_SHL ||
+        mir.insns[43].src1 != mir.insns[39].dst ||
+        !mir_scalar_memory_location(
+            &mir.insns[5], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_LOCAL || memory_offset >= 0 ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->parameter_stack_offset))
+        return mir_machine_reject("cpm-file-size", "shape");
+    plan->initialize_function = find_global(mir.insns[10].name);
+    plan->bdos_function = find_global(mir.insns[16].name);
+    plan->fcb_offset = memory_offset;
+    plan->frame_size = -memory_offset;
+    plan->low_record_offset = (int)mir.insns[23].immediate;
+    plan->high_record_offset = (int)mir.insns[27].immediate;
+    plan->bdos_function_number = (int)function_number;
+    plan->record_shift = (int)record_shift;
+    if (plan->initialize_function == NULL ||
+        plan->bdos_function == NULL ||
+        plan->frame_size <= 0 || plan->frame_size > 120 ||
+        plan->low_record_offset < 0 ||
+        plan->high_record_offset < 0 ||
+        plan->record_shift <= 0 || plan->record_shift > 15)
+        return mir_machine_reject("cpm-file-size", "layout");
     return 1;
 }
 
@@ -25626,6 +25704,45 @@ static void mir_emit_aggregate_return_report(
     fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static void mir_emit_cpm_file_size(
+    FILE *out, const struct MirCpmFileSize *plan)
+{
+    int success = new_label();
+    int done = new_label();
+    int shift;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    fprintf(out,
+            "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
+            plan->frame_size);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tpush hl\n",
+            plan->parameter_stack_offset + 2,
+            plan->parameter_stack_offset + 3);
+    mir_emit_local_address(out, plan->fcb_offset);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->initialize_function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_emit_local_address(out, plan->fcb_offset);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+            plan->bdos_function_number);
+    mir_machine_emit_symbol_call(out, plan->bdos_function);
+    fputs("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n", out);
+    fprintf(out,
+            "\tjp z,L%d\n\tld de,0\n\tld hl,0\n\tjp L%d\n"
+            "L%d:\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tld de,0\n",
+            success, done, success,
+            plan->fcb_offset + plan->low_record_offset,
+            plan->fcb_offset + plan->high_record_offset);
+    for (shift = 0; shift < plan->record_shift; ++shift)
+        fputs("\tadd hl,hl\n\trl e\n\trl d\n", out);
+    fprintf(out, "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n", done);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -29346,6 +29463,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFixedPointReport fixed_point_report;
     struct MirAggregateSignNormalize aggregate_sign_normalize;
     struct MirAggregateReturnReport aggregate_return_report;
+    struct MirCpmFileSize cpm_file_size;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -29901,6 +30019,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &aggregate_return_report)) {
         mir_emit_aggregate_return_report(
             out, &aggregate_return_report);
+        return 1;
+    }
+    if (mir_match_cpm_file_size(&cpm_file_size)) {
+        mir_emit_cpm_file_size(out, &cpm_file_size);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(

@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `9355a9d`
-  (`write normalized aggregates directly`).
-- Current candidate coverage: **2023/2185 (92.59%)**.
-- Remaining fallback population: **162 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `4a3aeea`
+  (`schedule aggregate return reports`).
+- Current candidate coverage: **2024/2185 (92.63%)**.
+- Remaining fallback population: **161 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -487,6 +487,10 @@ current execution plan and handoff.
   long report arguments to the mapped formatter. This admits `tsretret.main`,
   eliminating the app's last fallback; cumulative gains reach 7.68% peep /
   8.42% nopeep.
+- CP/M file-size helpers now allocate only the FCB, issue initialize/BDOS calls
+  directly, load r0/r1 into HL and shift the record count through DE:HL.
+  This admits `cpmenumd.file_size`; both runtime modes remain correctness-clean
+  (the app is excluded from deterministic performance comparison).
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -494,7 +498,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 162 final-cost fallbacks,
+- Current next priority: repeated causes in the 161 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
