@@ -675,6 +675,8 @@ struct MirConstexprWideChecks {
     unsigned long values[5];
 };
 
+struct MirPackedBitDecode { int parameter_stack_offset; };
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -7802,6 +7804,20 @@ static int mir_match_constexpr_wide_checks(struct MirConstexprWideChecks *p)
            !mir_machine_pointer_form(a[2],calls[i],&e,0))return 0;
         p->strings[i]=(int)s->immediate;p->values[i]=(unsigned long)e.value;}
     p->function=find_global(mir.insns[7].name);return p->function!=NULL;
+}
+
+static int mir_match_packed_bit_decode(struct MirPackedBitDecode *p)
+{
+    int mt,ms,mo;
+    memset(p,0,sizeof(*p));
+    if(mir.count!=25||mir_cfg_block_count()!=5||mir.has_vla||
+       type_size(mir.return_type)!=4||mir.insns[1].opcode!=MIR_PARAM||
+       mir.insns[3].bit_mask!=15||mir.insns[7].bit_mask!=112||
+       mir.insns[9].immediate!=TOK_SHL||mir.insns[12].bit_mask!=128||
+       mir.insns[16].immediate!='-'||mir.insns[24].src1!=mir.insns[23].dst||
+       !mir_scalar_memory_location(&mir.insns[1],&mt,&ms,&mo)||ms!=SC_PARAM)
+        return 0;
+    p->parameter_stack_offset=mo-2;return 1;
 }
 
 static int mir_match_pointer_word_sum_until_zero(
@@ -27539,6 +27555,20 @@ static void mir_emit_constexpr_wide_checks(FILE*out,const struct MirConstexprWid
     fputs("\tret\n",out);
 }
 
+static void mir_emit_packed_bit_decode(FILE*out,const struct MirPackedBitDecode*p)
+{
+    int shift=new_label(),shift_done=new_label(),positive=new_label();
+    if(opt_stack_check)mir_emit_runtime_call(out,"__stchk");
+    fprintf(out,"\tld hl,%d\n\tadd hl,sp\n\tld a,(hl)\n\tld c,a\n"
+                "\tand 15\n\tld l,a\n\tld h,0\n\tld a,c\n"
+                "\trrca\n\trrca\n\trrca\n\trrca\n\tand 7\n\tld b,a\n"
+                "\tld a,b\n\tor a\n\tjp z,L%d\nL%d:\n\tadd hl,hl\n\tdjnz L%d\n"
+                "L%d:\n\tbit 7,c\n\tjp z,L%d\n"
+                "\txor a\n\tsub l\n\tld l,a\n\tsbc a,a\n\tsub h\n\tld h,a\n"
+                "\tld de,65535\n\tret\nL%d:\n\tld de,0\n\tret\n",
+            p->parameter_stack_offset,shift_done,shift,shift,shift_done,positive,positive);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -31285,6 +31315,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirManyByte4Checks many_byte4_checks;
     struct MirPointerDifferenceMain pointer_difference_main;
     struct MirConstexprWideChecks constexpr_wide_checks;
+    struct MirPackedBitDecode packed_bit_decode;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -31947,6 +31978,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_constexpr_wide_checks(&constexpr_wide_checks)) {
         mir_emit_constexpr_wide_checks(out, &constexpr_wide_checks);
+        return 1;
+    }
+    if (mir_match_packed_bit_decode(&packed_bit_decode)) {
+        mir_emit_packed_bit_decode(out, &packed_bit_decode);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
