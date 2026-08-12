@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `45f12be`
-  (`dcc MIR: schedule fixed sieve builders`).
-- Current candidate coverage: **2084/2185 (95.38%)**.
-- Remaining fallback population: **101 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `fa2027e`
+  (`dcc MIR: schedule fixed wrapper initializers`).
+- Current candidate coverage: **2085/2185 (95.42%)**.
+- Remaining fallback population: **100 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -692,6 +692,11 @@ current execution plan and handoff.
   pointers without IY. This admits the identical `tptrcnd.init_wrapper` and
   `tptrrhs.init_wrapper` graphs, improving those apps by **87.96%/87.62%**
   and **79.31%/75.44%** respectively with no image regression.
+- Static-inline proof helpers are now shared across MIR selectors. A fixed
+  inline-fold runner proves its four-argument byte/word setter AST before
+  replacing call-shaped MIR with direct global stores, admitting
+  `tinline.inline_fold_check` and improving the app **2.18%/2.44%** while
+  shrinking both images.
 - A direct `too.expected_area` dispatcher was rejected after repeated-call
   tests exposed incorrect signed divmod cache/register handling; it is absent.
 - A binary-search replacement for `too.isqrt_l` was rejected after focused
@@ -706,7 +711,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 101 final-cost fallbacks,
+- Current next priority: repeated causes in the 100 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 

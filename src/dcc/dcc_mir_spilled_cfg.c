@@ -22607,7 +22607,7 @@ static const struct AstNode *mir_inline_single_statement_expr(
     return body;
 }
 
-static const struct AstNode *mir_inline_unwrap_cast(
+const struct AstNode *mir_inline_unwrap_cast(
     const struct AstNode *node)
 {
     while (node != NULL && node->kind == AST_CAST)
@@ -22635,7 +22635,7 @@ static const struct AstNode *mir_inline_unwrap_integer_representation_cast(
     return node;
 }
 
-static struct Sym *mir_inline_ident_symbol(const struct AstNode *node)
+struct Sym *mir_inline_ident_symbol(const struct AstNode *node)
 {
     if (node == NULL || node->kind != AST_IDENT)
         return NULL;
@@ -22644,7 +22644,7 @@ static struct Sym *mir_inline_ident_symbol(const struct AstNode *node)
     return node->sval != NULL ? find_global(node->sval) : NULL;
 }
 
-static int mir_inline_is_parameter(
+int mir_inline_is_parameter(
     const struct AstNode *node, const struct Sym *callee, int parameter)
 {
     const char *name;
@@ -22660,7 +22660,7 @@ static int mir_inline_is_parameter(
            !strcmp(name, callee->inline_param_names[parameter]);
 }
 
-static int mir_inline_is_parameter_low_bytes(
+int mir_inline_is_parameter_low_bytes(
     const struct AstNode *node, const struct Sym *callee,
     int parameter, int width)
 {
@@ -23212,7 +23212,7 @@ static int mir_inline_affine_index(
     return 1;
 }
 
-static int mir_inline_value_byte_lane(
+int mir_inline_value_byte_lane(
     const struct AstNode *node, const struct Sym *callee, int lane)
 {
     const struct AstNode *constant;

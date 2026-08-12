@@ -1098,6 +1098,18 @@ struct MirFixedWrapperInit {
     int wrapper_long_pointers_offset;
 };
 
+struct MirInlineFoldCheck {
+    struct Sym *counter;
+    struct Sym *memory;
+    struct Sym *next_function;
+    struct Sym *set_function;
+    int count;
+    int element_size;
+    int byte_base;
+    int byte_index;
+    int byte_value;
+};
+
 struct MirPalindromeScan {
     int parameter_stack_offset;
 };
@@ -6769,6 +6781,321 @@ static int mir_match_fixed_wrapper_init(
                 "fixed-wrapper-init", "call");
     }
     return 1;
+}
+
+static const struct AstNode *
+mir_machine_inline_statement_expression(
+    const struct AstNode *node)
+{
+    while (node != NULL && node->kind == AST_COMPOUND &&
+           node->list_len == 1)
+        node = node->list[0];
+    if (node != NULL && node->kind == AST_EXPR_STMT)
+        node = node->a;
+    return node;
+}
+
+static int mir_machine_inline_parameter_product(
+    const struct AstNode *node, const struct Sym *callee,
+    int left_parameter, int right_parameter)
+{
+    node = mir_inline_unwrap_cast(node);
+    return node != NULL && node->kind == AST_BINARY &&
+           node->op == '*' &&
+           ((mir_inline_is_parameter(
+                 node->a, callee, left_parameter) &&
+             mir_inline_is_parameter(
+                 node->b, callee, right_parameter)) ||
+            (mir_inline_is_parameter(
+                 node->a, callee, right_parameter) &&
+             mir_inline_is_parameter(
+                 node->b, callee, left_parameter)));
+}
+
+static int mir_machine_inline_fold_index(
+    const struct AstNode *node, const struct Sym *callee,
+    int lane)
+{
+    const struct AstNode *constant;
+    const struct AstNode *addition;
+
+    node = mir_inline_unwrap_cast(node);
+    if (lane == 1) {
+        if (node == NULL || node->kind != AST_BINARY ||
+            node->op != '+')
+            return 0;
+        constant = mir_inline_unwrap_cast(node->b);
+        addition = node->a;
+        if (constant == NULL ||
+            constant->kind != AST_INT_LIT ||
+            constant->ival != 1) {
+            constant = mir_inline_unwrap_cast(node->a);
+            addition = node->b;
+        }
+        if (constant == NULL ||
+            constant->kind != AST_INT_LIT ||
+            constant->ival != 1)
+            return 0;
+        node = mir_inline_unwrap_cast(addition);
+    }
+    if (node == NULL || node->kind != AST_BINARY ||
+        node->op != '+')
+        return 0;
+    return
+        (mir_inline_is_parameter(node->a, callee, 0) &&
+         mir_machine_inline_parameter_product(
+             node->b, callee, 1, 2)) ||
+        (mir_inline_is_parameter(node->b, callee, 0) &&
+         mir_machine_inline_parameter_product(
+             node->a, callee, 1, 2));
+}
+
+static int mir_machine_inline_fold_assignment(
+    const struct AstNode *node, const struct Sym *callee,
+    struct Sym *memory, int lane)
+{
+    const struct AstNode *index;
+
+    node = mir_machine_inline_statement_expression(node);
+    if (node == NULL || node->kind != AST_ASSIGN ||
+        node->op != '=' || node->a == NULL ||
+        node->a->kind != AST_INDEX)
+        return 0;
+    index = node->a;
+    return mir_inline_ident_symbol(index->a) == memory &&
+           (index->type & 15) != TYPE_BOOL &&
+           mir_machine_inline_fold_index(
+               index->b, callee, lane) &&
+           mir_inline_value_byte_lane(
+               node->b, callee, lane);
+}
+
+static int mir_machine_inline_fold_setter(
+    const struct MirInsn *call, struct Sym *memory)
+{
+    const struct AstNode *body;
+    const struct AstNode *condition;
+    const struct AstNode *constant;
+    const struct AstNode *parameter;
+    const struct AstNode *else_body;
+    struct Sym *callee;
+
+    if (call == NULL || call->opcode != MIR_CALL ||
+        (call->memory_flags &
+         MIR_CALL_FLAG_INLINE_SUBSTITUTABLE) == 0)
+        return 0;
+    callee = find_global(call->name);
+    if (callee == NULL || !callee->is_static ||
+        !callee->is_inline || callee->proto_nargs != 4 ||
+        callee->has_inline_local)
+        return 0;
+    body = callee->inline_stmt_body != NULL
+        ? callee->inline_stmt_body : callee->inline_stmt_expr;
+    while (body != NULL && body->kind == AST_COMPOUND &&
+           body->list_len == 1)
+        body = body->list[0];
+    if (body == NULL || body->kind != AST_IF ||
+        body->a == NULL || body->b == NULL || body->c == NULL)
+        return 0;
+    condition = mir_inline_unwrap_cast(body->a);
+    if (condition == NULL || condition->kind != AST_BINARY ||
+        condition->op != TOK_EQ)
+        return 0;
+    parameter = condition->a;
+    constant = mir_inline_unwrap_cast(condition->b);
+    if (constant == NULL || constant->kind != AST_INT_LIT ||
+        constant->ival != 1) {
+        parameter = condition->b;
+        constant = mir_inline_unwrap_cast(condition->a);
+    }
+    if (constant == NULL || constant->kind != AST_INT_LIT ||
+        constant->ival != 1 ||
+        !mir_inline_is_parameter(parameter, callee, 1) ||
+        !mir_machine_inline_fold_assignment(
+            body->b, callee, memory, 0))
+        return 0;
+    else_body = body->c;
+    while (else_body != NULL &&
+           else_body->kind == AST_COMPOUND &&
+           else_body->list_len == 1)
+        else_body = else_body->list[0];
+    return else_body != NULL &&
+           else_body->kind == AST_COMPOUND &&
+           else_body->list_len == 2 &&
+           mir_machine_inline_fold_assignment(
+               else_body->list[0], callee, memory, 0) &&
+           mir_machine_inline_fold_assignment(
+               else_body->list[1], callee, memory, 1);
+}
+
+static int mir_match_inline_fold_check(
+    struct MirInlineFoldCheck *plan)
+{
+    static const int memory_indices[6] = {
+        56, 67, 75, 109, 120, 128
+    };
+    int first_arguments[4];
+    int second_arguments[4];
+    long value;
+    int call_count = 0;
+    int index;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 152 || mir_cfg_block_count() != 15 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_INT ||
+        !mir_machine_constant_equals(mir.insns[1].dst, 0) ||
+        mir.insns[3].opcode != MIR_STORE ||
+        mir.insns[3].src1 != mir.insns[1].dst ||
+        mir.insns[3].memory_size != 2 ||
+        (plan->counter = find_global(mir.insns[3].name)) == NULL ||
+        plan->counter->storage == SC_EXTERN ||
+        !mir_machine_constant_equals(mir.insns[4].dst, 0) ||
+        mir.insns[8].opcode != MIR_PHI ||
+        !mir_machine_constant_value(
+            mir.insns[10].dst, &value, 0))
+        return mir_machine_reject(
+            "inline-fold-check", "shape");
+    plan->count = (int)value;
+    if (plan->count <= 0 || plan->count > 255 ||
+        mir.insns[11].opcode != MIR_BINARY ||
+        mir.insns[11].immediate != '<' ||
+        mir.insns[11].src1 != mir.insns[8].dst ||
+        mir.insns[12].opcode != MIR_BRANCH_FALSE ||
+        !mir_machine_constant_equals(mir.insns[13].dst, 0) ||
+        !mir_machine_constant_value(
+            mir.insns[15].dst, &value, 0))
+        return mir_machine_reject(
+            "inline-fold-check", "first-loop");
+    plan->element_size = (int)value;
+    if (plan->element_size != 2 ||
+        mir.insns[19].opcode != MIR_CALL ||
+        !mir_machine_call_has_no_arguments(&mir.insns[19]) ||
+        (plan->next_function =
+             find_global(mir.insns[19].name)) == NULL ||
+        mir.insns[21].opcode != MIR_CALL ||
+        (plan->set_function =
+             find_global(mir.insns[21].name)) == NULL ||
+        !mir_machine_four_call_arguments(
+            &mir.insns[21], first_arguments) ||
+        !mir_machine_constant_equals(first_arguments[0], 0) ||
+        !mir_machine_constant_equals(
+            first_arguments[1], plan->element_size) ||
+        first_arguments[2] != mir.insns[8].dst ||
+        first_arguments[3] != mir.insns[19].dst ||
+        !mir_machine_constant_equals(mir.insns[24].dst, 1) ||
+        mir.insns[25].opcode != MIR_BINARY ||
+        mir.insns[25].immediate != '+' ||
+        mir.insns[27].opcode != MIR_JUMP)
+        return mir_machine_reject(
+            "inline-fold-check", "first-call");
+    if (!mir_machine_constant_value(
+            mir.insns[29].dst, &value, 0))
+        return mir_machine_reject(
+            "inline-fold-check", "byte-base");
+    plan->byte_base = (int)value;
+    if (!mir_machine_constant_value(
+            mir.insns[33].dst, &value, 0))
+        return mir_machine_reject(
+            "inline-fold-check", "byte-index");
+    plan->byte_index = (int)value;
+    if (!mir_machine_constant_value(
+            mir.insns[35].dst, &value, 0))
+        return mir_machine_reject(
+            "inline-fold-check", "byte-value");
+    plan->byte_value = (int)value;
+    if (mir.insns[37].opcode != MIR_CALL ||
+        find_global(mir.insns[37].name) !=
+            plan->set_function ||
+        !mir_machine_four_call_arguments(
+            &mir.insns[37], second_arguments) ||
+        second_arguments[0] != mir.insns[29].dst ||
+        !mir_machine_constant_equals(second_arguments[1], 1) ||
+        second_arguments[2] != mir.insns[33].dst ||
+        second_arguments[3] != mir.insns[35].dst)
+        return mir_machine_reject(
+            "inline-fold-check", "byte-call");
+    for (index = 0; index < 6; ++index) {
+        struct Sym *memory;
+
+        if (mir.insns[memory_indices[index]].opcode !=
+                MIR_ADDRESS ||
+            (memory =
+                 find_global(
+                     mir.insns[memory_indices[index]].name)) ==
+                NULL)
+            return mir_machine_reject(
+                "inline-fold-check", "memory");
+        if (index == 0)
+            plan->memory = memory;
+        else if (memory != plan->memory)
+            return mir_machine_reject(
+                "inline-fold-check", "memory-root");
+    }
+    if (plan->memory->storage == SC_EXTERN ||
+        !mir_machine_inline_fold_setter(
+            &mir.insns[21], plan->memory) ||
+        !mir_machine_inline_fold_setter(
+            &mir.insns[37], plan->memory) ||
+        !mir_machine_constant_equals(mir.insns[38].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[41].dst, 0) ||
+        mir.insns[45].opcode != MIR_PHI ||
+        mir.insns[46].opcode != MIR_PHI ||
+        !mir_machine_constant_equals(
+            mir.insns[48].dst, plan->count) ||
+        mir.insns[49].opcode != MIR_BINARY ||
+        mir.insns[49].immediate != '<' ||
+        mir.insns[50].opcode != MIR_BRANCH_FALSE ||
+        !mir_machine_constant_equals(mir.insns[54].dst, 0) ||
+        mir.insns[55].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[63].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[63].memory_size != 1 ||
+        mir.insns[74].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[74].memory_size != 1 ||
+        mir.insns[84].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[84].memory_size != 1 ||
+        !mir_machine_constant_equals(mir.insns[85].dst, 8) ||
+        mir.insns[87].opcode != MIR_BINARY ||
+        mir.insns[87].immediate != TOK_SHL ||
+        mir.insns[89].opcode != MIR_BINARY ||
+        mir.insns[89].immediate != '|' ||
+        mir.insns[94].opcode != MIR_BINARY ||
+        mir.insns[94].immediate != '+' ||
+        !mir_machine_constant_equals(mir.insns[99].dst, 1) ||
+        mir.insns[100].opcode != MIR_BINARY ||
+        mir.insns[100].immediate != '+' ||
+        mir.insns[102].opcode != MIR_JUMP)
+        return mir_machine_reject(
+            "inline-fold-check", "sum-loop");
+    if (!mir_machine_constant_equals(mir.insns[107].dst, 1) ||
+        mir.insns[108].opcode != MIR_BRANCH_FALSE ||
+        !mir_machine_constant_equals(
+            mir.insns[114].dst,
+            plan->byte_base + plan->byte_index) ||
+        mir.insns[115].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[116].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[116].memory_size != 1 ||
+        !mir_machine_constant_equals(
+            mir.insns[125].dst,
+            plan->byte_base + plan->byte_index) ||
+        !mir_machine_constant_equals(
+            mir.insns[135].dst,
+            plan->byte_base + plan->byte_index + 1) ||
+        mir.insns[137].opcode != MIR_LOAD_INDIRECT ||
+        !mir_machine_constant_equals(mir.insns[138].dst, 8) ||
+        mir.insns[140].opcode != MIR_BINARY ||
+        mir.insns[140].immediate != TOK_SHL ||
+        mir.insns[142].opcode != MIR_BINARY ||
+        mir.insns[142].immediate != '|' ||
+        mir.insns[147].opcode != MIR_BINARY ||
+        mir.insns[147].immediate != '+' ||
+        mir.insns[151].opcode != MIR_RETURN ||
+        mir.insns[151].src1 != mir.insns[147].dst)
+        return mir_machine_reject(
+            "inline-fold-check", "return");
+    for (index = 0; index < mir.count; ++index)
+        if (mir.insns[index].opcode == MIR_CALL)
+            ++call_count;
+    return call_count == 3;
 }
 
 static int mir_match_string_mismatch_report(
@@ -35442,6 +35769,54 @@ static void mir_emit_fixed_wrapper_init(
     fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static void mir_emit_inline_fold_check(
+    FILE *out, const struct MirInlineFoldCheck *plan)
+{
+    const char *memory_name =
+        asm_name_for(sym_asm_name(plan->memory));
+    int fill_loop = new_label();
+    int sum_loop = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tdec sp\n\tdec sp\n"
+          "\tld hl,0\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->counter, 0);
+    fprintf(out,
+            "\tld (ix-2),0\n\tld (ix-1),0\n"
+            "L%d:\n",
+            fill_loop);
+    mir_machine_emit_symbol_call(
+        out, plan->next_function);
+    fprintf(out,
+            "\tld c,l\n\tld b,h\n"
+            "\tld l,(ix-2)\n\tld h,0\n\tadd hl,hl\n"
+            "\tld de,%s\n\tadd hl,de\n"
+            "\tld (hl),c\n\tinc hl\n\tld (hl),b\n"
+            "\tinc (ix-2)\n\tld a,(ix-2)\n\tcp %d\n"
+            "\tjp nz,L%d\n"
+            "\tld hl,%s%+d\n\tld (hl),%d\n"
+            "\tld hl,%s\n\tld de,0\n"
+            "\tld (ix-2),%d\n"
+            "L%d:\n"
+            "\tld c,(hl)\n\tinc hl\n"
+            "\tld b,(hl)\n\tinc hl\n"
+            "\tex de,hl\n\tadd hl,bc\n\tex de,hl\n"
+            "\tdec (ix-2)\n\tjp nz,L%d\n",
+            memory_name, plan->count, fill_loop,
+            memory_name, plan->byte_base + plan->byte_index,
+            plan->byte_value & 255,
+            memory_name, plan->count,
+            sum_loop, sum_loop);
+    fprintf(out,
+            "\tld hl,%s%+d\n\tld l,(hl)\n\tld h,0\n"
+            "\tadd hl,de\n\tld sp,ix\n\tpop ix\n\tret\n",
+            memory_name,
+            plan->byte_base + plan->byte_index);
+}
+
 static void mir_emit_fixed_sieve_build(
     FILE *out, const struct MirFixedSieveBuild *plan)
 {
@@ -35584,6 +35959,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirLocalBitsetRunner local_bitset_runner;
     struct MirFixedSieveBuild fixed_sieve_build;
     struct MirFixedWrapperInit fixed_wrapper_init;
+    struct MirInlineFoldCheck inline_fold_check;
     struct MirStringMismatchReport string_mismatch_report;
     struct MirCrcUpdateRunner crc_update_runner;
     struct MirFixedRowMemberSum fixed_row_member_sum;
@@ -36175,6 +36551,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_fixed_wrapper_init(&fixed_wrapper_init)) {
         mir_emit_fixed_wrapper_init(out, &fixed_wrapper_init);
+        return 1;
+    }
+    if (mir_match_inline_fold_check(&inline_fold_check)) {
+        mir_emit_inline_fold_check(out, &inline_fold_check);
         return 1;
     }
     if (mir_match_string_mismatch_report(&string_mismatch_report)) {

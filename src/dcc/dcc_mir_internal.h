@@ -601,6 +601,19 @@ int mir_extended_integer_constant_conversion_folds(void);
 int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
                                       int *storage, int *offset);
 int mir_inline_temp_slot(const char *name);
+const struct AstNode *mir_inline_unwrap_cast(
+    const struct AstNode *node);
+struct Sym *mir_inline_ident_symbol(
+    const struct AstNode *node);
+int mir_inline_is_parameter(
+    const struct AstNode *node,
+    const struct Sym *callee, int parameter);
+int mir_inline_is_parameter_low_bytes(
+    const struct AstNode *node,
+    const struct Sym *callee, int parameter, int width);
+int mir_inline_value_byte_lane(
+    const struct AstNode *node,
+    const struct Sym *callee, int lane);
 int mir_iy_home_live_across_caller_clobber(void);
 const char *mir_sink_name(int purpose);
 void mir_thread_jumps(void);
