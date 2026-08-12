@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `d506f4e`
-  (`schedule recursive frame fills`).
-- Current candidate coverage: **1964/2185 (89.89%)**.
-- Remaining fallback population: **221 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `647a2e1`
+  (`schedule adjacent member checks`).
+- Current candidate coverage: **1967/2185 (90.02%)**.
+- Remaining fallback population: **218 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -232,6 +232,11 @@ current execution plan and handoff.
   BC, load each aggregate pointer directly from its frameless parameter, and
   compare the two adjacent word members without PHI materialization. This
   admits `wumpus.hpit` and `wumpus.hbat` with no app-level regression.
+- Wide bitcast call scheduling now handles three float parameters as well as
+  two: it pushes their raw bits directly in reverse ABI order and returns the
+  wide result without materializing four local unions. This admits
+  `tfmaddr.fmaddr` plus `tfmaf.fmadd_/fmaf_`; both apps beat the stretch goal
+  at 10.62%/10.73% and 13.17%/13.29% faster in peep/nopeep modes.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -239,7 +244,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 221 final-cost fallbacks,
+- Current next priority: repeated causes in the 218 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 

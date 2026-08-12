@@ -300,8 +300,8 @@ struct MirGlobalArrayFma {
 
 struct MirWideBitcastCall {
     struct Sym *function;
-    int first_stack_offset;
-    int second_stack_offset;
+    int stack_offsets[3];
+    int argument_count;
 };
 
 struct MirWideShiftCompare {
@@ -4121,24 +4121,30 @@ static int mir_match_wide_bitcast_call(
             first, &memory_type, &memory_storage, &memory_offset) ||
         memory_storage != SC_PARAM || memory_offset < 2)
         return mir_machine_reject("wide-bitcast-call", "first");
-    plan->first_stack_offset = memory_offset - 2;
+    plan->stack_offsets[0] = memory_offset - 2;
     if (!type_is_float(second->type) || type_size(second->type) != 4 ||
         !mir_scalar_memory_location(
             second, &memory_type, &memory_storage, &memory_offset) ||
         memory_storage != SC_PARAM || memory_offset < 2)
         return mir_machine_reject("wide-bitcast-call", "second");
-    plan->second_stack_offset = memory_offset - 2;
+    plan->stack_offsets[1] = memory_offset - 2;
     if (mir.insns[6].src2 != first->dst ||
         mir.insns[10].src2 != second->dst ||
+        (mir.insns[6].memory_flags & (1 | 8)) != 0 ||
+        (mir.insns[10].memory_flags & (1 | 8)) != 0 ||
         mir.insns[15].memory_size != 4 ||
+        (mir.insns[15].memory_flags & (1 | 8)) != 0 ||
         mir.insns[19].memory_size != 4 ||
+        (mir.insns[19].memory_flags & (1 | 8)) != 0 ||
         !mir_machine_two_call_arguments(call, arguments) ||
         arguments[0] != mir.insns[15].dst ||
         arguments[1] != mir.insns[19].dst ||
         type_size(call->type) != 4 ||
         type_is_float(call->type) ||
         mir.insns[22].src2 != call->dst ||
+        (mir.insns[22].memory_flags & (1 | 8)) != 0 ||
         mir.insns[25].memory_size != 4 ||
+        (mir.insns[25].memory_flags & (1 | 8)) != 0 ||
         !type_is_float(mir.insns[25].type) ||
         mir.insns[26].src1 != mir.insns[25].dst)
         return mir_machine_reject("wide-bitcast-call", "flow");
@@ -4151,6 +4157,112 @@ static int mir_match_wide_bitcast_call(
          (MIR_CALL_FLAG_VARIADIC |
           MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0)
         return mir_machine_reject("wide-bitcast-call", "function");
+    plan->argument_count = 2;
+    return 1;
+}
+
+static int mir_match_wide_bitcast_call3(
+    struct MirWideBitcastCall *plan)
+{
+    static const int expected_opcodes[36] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_NOP, MIR_STORE_INDIRECT, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_NOP, MIR_STORE_INDIRECT, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_NOP, MIR_STORE_INDIRECT, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL, MIR_STORE_INDIRECT,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_RETURN
+    };
+    const int parameter_indices[3] = { 1, 2, 3 };
+    const int store_root_indices[3] = { 4, 8, 12 };
+    const int store_member_indices[3] = { 5, 9, 13 };
+    const int store_indices[3] = { 7, 11, 15 };
+    const int load_root_indices[3] = { 18, 22, 26 };
+    const int load_member_indices[3] = { 19, 23, 27 };
+    const int load_indices[3] = { 20, 24, 28 };
+    const struct MirInsn *call = &mir.insns[30];
+    int arguments[3];
+    int memory_type, memory_storage, memory_offset;
+    int argument, instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 36 || mir_cfg_block_count() != 1 ||
+        mir.has_vla || !type_is_float(mir.return_type) ||
+        type_size(mir.return_type) != 4)
+        return mir_machine_reject("wide-bitcast-call3", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject("wide-bitcast-call3", "opcode");
+    for (argument = 0; argument < 3; ++argument) {
+        const struct MirInsn *parameter =
+            &mir.insns[parameter_indices[argument]];
+        const struct MirInsn *store_root =
+            &mir.insns[store_root_indices[argument]];
+        const struct MirInsn *store_member =
+            &mir.insns[store_member_indices[argument]];
+        const struct MirInsn *load_root =
+            &mir.insns[load_root_indices[argument]];
+        const struct MirInsn *load_member =
+            &mir.insns[load_member_indices[argument]];
+        const struct MirInsn *load =
+            &mir.insns[load_indices[argument]];
+
+        if (!type_is_float(parameter->type) ||
+            type_size(parameter->type) != 4 ||
+            !mir_scalar_memory_location(
+                parameter, &memory_type, &memory_storage,
+                &memory_offset) ||
+            memory_storage != SC_PARAM || memory_offset < 2 ||
+            strcmp(store_root->name, load_root->name) ||
+            store_member->src1 != store_root->dst ||
+            load_member->src1 != load_root->dst ||
+            store_member->immediate != load_member->immediate ||
+            mir.insns[store_indices[argument]].src1 !=
+                store_member->dst ||
+            mir.insns[store_indices[argument]].src2 != parameter->dst ||
+            mir.insns[store_indices[argument]].memory_size != 4 ||
+            (mir.insns[store_indices[argument]].memory_flags &
+             (1 | 8)) != 0 ||
+            load->src1 != load_member->dst ||
+            load->memory_size != 4 ||
+            (load->memory_flags & (1 | 8)) != 0 ||
+            type_is_float(load->type) ||
+            type_size(load->type) != 4)
+            return mir_machine_reject(
+                "wide-bitcast-call3", "argument");
+        plan->stack_offsets[argument] = memory_offset - 2;
+    }
+    if (!mir_machine_three_call_arguments(call, arguments))
+        return mir_machine_reject("wide-bitcast-call3", "call-arguments");
+    for (argument = 0; argument < 3; ++argument)
+        if (arguments[argument] !=
+            mir.insns[load_indices[argument]].dst)
+            return mir_machine_reject(
+                "wide-bitcast-call3", "call-order");
+    if (type_size(call->type) != 4 || type_is_float(call->type) ||
+        mir.insns[17].src1 != mir.insns[16].dst ||
+        mir.insns[31].src1 != mir.insns[17].dst ||
+        mir.insns[31].src2 != call->dst ||
+        mir.insns[31].memory_size != 4 ||
+        (mir.insns[31].memory_flags & (1 | 8)) != 0 ||
+        strcmp(mir.insns[16].name, mir.insns[32].name) ||
+        mir.insns[33].src1 != mir.insns[32].dst ||
+        mir.insns[17].immediate != mir.insns[33].immediate ||
+        mir.insns[34].src1 != mir.insns[33].dst ||
+        mir.insns[34].memory_size != 4 ||
+        (mir.insns[34].memory_flags & (1 | 8)) != 0 ||
+        !type_is_float(mir.insns[34].type) ||
+        mir.insns[35].src1 != mir.insns[34].dst)
+        return mir_machine_reject("wide-bitcast-call3", "result");
+    plan->function = find_global(call->name);
+    if (plan->function == NULL || !plan->function->is_defined ||
+        plan->function->is_funcptr || plan->function->is_noreturn ||
+        (call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC | MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0)
+        return mir_machine_reject("wide-bitcast-call3", "function");
+    plan->argument_count = 3;
     return 1;
 }
 
@@ -19234,14 +19346,22 @@ static void mir_emit_global_array_fma(
 static void mir_emit_wide_bitcast_call(
     FILE *out, const struct MirWideBitcastCall *plan)
 {
+    int argument;
+    int pushed_bytes = 0;
+
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    mir_emit_wide_parameter(out, plan->second_stack_offset);
-    fputs("\tpush de\n\tpush hl\n", out);
-    mir_emit_wide_parameter(out, plan->first_stack_offset + 4);
-    fputs("\tpush de\n\tpush hl\n", out);
+    for (argument = plan->argument_count - 1;
+         argument >= 0; --argument) {
+        mir_emit_wide_parameter(
+            out, plan->stack_offsets[argument] + pushed_bytes);
+        fputs("\tpush de\n\tpush hl\n", out);
+        pushed_bytes += 4;
+    }
     mir_machine_emit_symbol_call(out, plan->function);
-    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tret\n", out);
+    for (argument = 0; argument < plan->argument_count; ++argument)
+        fputs("\tpop bc\n\tpop bc\n", out);
+    fputs("\tret\n", out);
 }
 
 static void mir_emit_wide_shift_compare(
@@ -22549,7 +22669,8 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
         mir_emit_global_array_fma(out, &global_array_fma);
         return 1;
     }
-    if (mir_match_wide_bitcast_call(&wide_bitcast_call)) {
+    if (mir_match_wide_bitcast_call(&wide_bitcast_call) ||
+        mir_match_wide_bitcast_call3(&wide_bitcast_call)) {
         mir_emit_wide_bitcast_call(out, &wide_bitcast_call);
         return 1;
     }
