@@ -674,6 +674,17 @@ struct MirRandomWideFill {
     int count_stack_offset;
 };
 
+struct MirFixedByteBoardCall {
+    struct Sym *board;
+    struct Sym *function;
+    int board_offset;
+    int position_stack_offset;
+    int count;
+    int clear_value;
+    int selected_value;
+    int arguments[3];
+};
+
 struct MirConstantLoopCheck {
     struct Sym *function;
     int string_id;
@@ -10995,6 +11006,115 @@ static int mir_match_random_wide_fill(
     return 1;
 }
 
+static int mir_match_fixed_byte_board_call(
+    struct MirFixedByteBoardCall *plan)
+{
+    static const int expected_opcodes[46] = {
+        MIR_LABEL, MIR_PARAM, MIR_NOP, MIR_CONST, MIR_STORE,
+        MIR_LABEL, MIR_NOP, MIR_PHI, MIR_NOP, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST,
+        MIR_STORE_INDIRECT, MIR_LABEL, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST,
+        MIR_STORE_INDIRECT, MIR_NOP, MIR_CONST, MIR_ARG, MIR_NOP,
+        MIR_CONST, MIR_ARG, MIR_NOP, MIR_CONST, MIR_ARG, MIR_NOP,
+        MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN
+    };
+    const struct MirInsn *position = &mir.insns[1];
+    int call_arguments[4];
+    int memory_type, memory_storage, memory_offset;
+    int argument, instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 46 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_size(position->type) != 1 ||
+        type_ptr_depth(position->type) != 0)
+        return mir_machine_reject("fixed-byte-board-call", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "fixed-byte-board-call", "opcode");
+    if (!mir_machine_parameter_value_offset(
+            position->dst, &plan->position_stack_offset) ||
+        !mir_machine_constant_equals(mir.insns[3].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[4]) ||
+        mir.insns[4].memory_size != 1 ||
+        mir.insns[7].src1 != mir.insns[3].dst ||
+        mir.insns[7].src2 != mir.insns[22].dst ||
+        mir.insns[7].phi_pred1 != mir.insns[0].label ||
+        mir.insns[7].phi_pred2 != mir.insns[19].label ||
+        mir.insns[9].immediate <= 0 ||
+        mir.insns[9].immediate > 255 ||
+        mir.insns[10].immediate != 0 ||
+        mir.insns[10].src1 != mir.insns[7].dst ||
+        mir.insns[11].immediate != '<' ||
+        mir.insns[11].src1 != mir.insns[10].dst ||
+        mir.insns[11].src2 != mir.insns[9].dst ||
+        mir.insns[12].src1 != mir.insns[11].dst ||
+        mir.insns[12].label != mir.insns[25].label ||
+        mir.insns[15].src2 != mir.insns[7].dst ||
+        mir.insns[15].immediate != 1 ||
+        mir.insns[18].src1 != mir.insns[15].dst ||
+        mir.insns[18].src2 != mir.insns[17].dst ||
+        mir.insns[18].memory_size != 1 ||
+        !mir_machine_constant_equals(mir.insns[21].dst, 1) ||
+        mir.insns[22].immediate != '+' ||
+        mir.insns[22].src1 != mir.insns[7].dst ||
+        mir.insns[22].src2 != mir.insns[21].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[23]) ||
+        mir.insns[23].src1 != mir.insns[22].dst ||
+        mir.insns[24].label != mir.insns[5].label)
+        return mir_machine_reject("fixed-byte-board-call", "loop");
+    if (!mir_scalar_memory_location(
+            &mir.insns[13], &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        mir.insns[15].src1 != mir.insns[13].dst ||
+        type_size(memory_type) != 1)
+        return mir_machine_reject("fixed-byte-board-call", "board");
+    plan->count = (int)mir.insns[9].immediate;
+    plan->clear_value = (int)mir.insns[17].immediate & 0xff;
+    plan->board = find_global(mir.insns[13].name);
+    plan->board_offset = memory_offset;
+    if (plan->board == NULL || plan->board->is_volatile ||
+        mir.insns[26].opcode != MIR_ADDRESS ||
+        strcmp(mir.insns[26].name, mir.insns[13].name) ||
+        mir.insns[28].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[28].src1 != mir.insns[26].dst ||
+        mir.insns[28].src2 != position->dst ||
+        mir.insns[30].opcode != MIR_CONST ||
+        mir.insns[31].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[31].src1 != mir.insns[28].dst ||
+        mir.insns[31].src2 != mir.insns[30].dst)
+        return mir_machine_reject("fixed-byte-board-call", "selected");
+    plan->selected_value = (int)mir.insns[30].immediate & 0xff;
+    if (mir.insns[43].opcode != MIR_CALL ||
+        !mir_machine_four_call_arguments(
+            &mir.insns[43], call_arguments))
+        return mir_machine_reject("fixed-byte-board-call", "call");
+    for (argument = 0; argument < 3; ++argument) {
+        long value;
+        if (!mir_machine_constant_value(
+                call_arguments[argument], &value, 0))
+            return mir_machine_reject(
+                "fixed-byte-board-call", "call-constant");
+        plan->arguments[argument] = (int)value & 0xffff;
+    }
+    if (call_arguments[3] != position->dst ||
+        !mir_machine_constant_equals(mir.insns[44].dst, 0) ||
+        mir.insns[45].opcode != MIR_RETURN ||
+        mir.insns[45].src1 != mir.insns[44].dst)
+        return mir_machine_reject("fixed-byte-board-call", "return");
+    plan->function = find_global(mir.insns[43].name);
+    if (plan->function == NULL || !plan->function->is_defined ||
+        plan->function->is_funcptr)
+        return mir_machine_reject("fixed-byte-board-call", "function");
+    return 1;
+}
+
 static int mir_match_constant_loop_check(
     struct MirConstantLoopCheck *plan)
 {
@@ -20846,6 +20966,37 @@ static void mir_emit_random_wide_fill(
             loop, done);
 }
 
+static void mir_emit_fixed_byte_board_call(
+    FILE *out, const struct MirFixedByteBoardCall *plan)
+{
+    int loop = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_address_de(
+        out, plan->board, plan->board_offset);
+    fprintf(out,
+            "\tex de,hl\n\tld a,%d\n\tld b,%d\n"
+            "L%d:\n\tld (hl),a\n\tinc hl\n\tdjnz L%d\n"
+            "\tld hl,%d\n\tadd hl,sp\n\tld c,(hl)\n\tld b,0\n",
+            plan->clear_value, plan->count, loop, loop,
+            plan->position_stack_offset);
+    mir_machine_emit_global_address_de(
+        out, plan->board, plan->board_offset);
+    fputs("\tld h,b\n\tld l,c\n\tadd hl,de\n", out);
+    fprintf(out, "\tld (hl),%d\n\tpush bc\n",
+            plan->selected_value);
+    fprintf(out,
+            "\tld hl,%d\n\tpush hl\n"
+            "\tld hl,%d\n\tpush hl\n"
+            "\tld hl,%d\n\tpush hl\n",
+            plan->arguments[2],
+            plan->arguments[1], plan->arguments[0]);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tld hl,0\n\tret\n", out);
+}
+
 static void mir_emit_constant_loop_check(
     FILE *out, const struct MirConstantLoopCheck *plan)
 {
@@ -21711,6 +21862,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFixedGlobalStrideCall fixed_global_stride_call;
     struct MirFixedPredictionLoop fixed_prediction_loop;
     struct MirRandomWideFill random_wide_fill;
+    struct MirFixedByteBoardCall fixed_byte_board_call;
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
@@ -22311,6 +22463,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_random_wide_fill(&random_wide_fill)) {
         mir_emit_random_wide_fill(out, &random_wide_fill);
+        return 1;
+    }
+    if (mir_match_fixed_byte_board_call(
+            &fixed_byte_board_call)) {
+        mir_emit_fixed_byte_board_call(
+            out, &fixed_byte_board_call);
         return 1;
     }
     if (mir_match_constant_loop_check(&constant_loop_check)) {

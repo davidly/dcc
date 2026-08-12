@@ -1012,6 +1012,51 @@ int pass_minmax_pack_call(void)
                 changed = 1;
                 find_solution_changed = 1;
             }
+
+            /*
+             * The scheduled MIR backend keeps FindSolution frameless.  Its
+             * normal ABI call already has position in C and zero in B:
+             *
+             *   push bc; ld hl,0; push hl; ld hl,9; push hl;
+             *   ld hl,2; push hl; call _MinMax; pop bc (x4)
+             *
+             * Repack the same four byte arguments after MinMax's frame has
+             * been translated, just as above.
+             */
+            peep_in_function_range(
+                "_FindSolution:", &fs_start, &fs_end);
+            for (i = fs_start; i + 11 < fs_end; i++) {
+                int j, npopcnt;
+
+                if (!eq(i,     "push bc"))       continue;
+                if (!eq(i + 1, "ld hl,0"))       continue;
+                if (!eq(i + 2, "push hl"))       continue;
+                if (!eq(i + 3, "ld hl,9"))       continue;
+                if (!eq(i + 4, "push hl"))       continue;
+                if (!eq(i + 5, "ld hl,2"))       continue;
+                if (!eq(i + 6, "push hl"))       continue;
+                if (!eq(i + 7, "call _MinMax"))  continue;
+                j = i + 8;
+                npopcnt = 0;
+                while (j < fs_end && eq(j, "pop bc")) {
+                    ++j;
+                    ++npopcnt;
+                }
+                if (npopcnt != 4) continue;
+
+                replace1_tagged(i, "ld b,c", "pack_args_fs_mir");
+                replace1(i + 1, "ld c,0");
+                replace1(i + 2, "push bc");
+                replace1(i + 3, "ld h,9");
+                replace1(i + 4, "ld l,2");
+                replace1(i + 5, "push hl");
+                replace1(i + 6, "call _MinMax");
+                replace1(i + 7, "pop af");
+                replace1(i + 8, "pop af");
+                delete_n(i + 9, j - (i + 9));
+                changed = 1;
+                find_solution_changed = 1;
+            }
         }
     }
 
