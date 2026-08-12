@@ -502,6 +502,16 @@ struct MirFixedRecordSortCheck {
     int failure_string_id;
 };
 
+struct MirLocalBitsetRunner {
+    struct Sym *add_function;
+    struct Sym *has_function;
+    struct Sym *print_function;
+    int set_offset;
+    int add_values[2];
+    int query_values[3];
+    int string_id;
+};
+
 struct MirStringMismatchReport {
     struct Sym *print_function;
     struct Sym *failure_count;
@@ -6196,6 +6206,130 @@ static int mir_match_fixed_record_sort_check(
     plan->failure_function = find_global(failure_call->name);
     return plan->failure_function != NULL &&
            plan->failure_function->is_defined;
+}
+
+static int mir_match_local_bitset_runner(
+    struct MirLocalBitsetRunner *plan)
+{
+    static const int add_calls[2] = { 10, 16 };
+    static const int print_queries[3] = { 24, 31, 38 };
+    static const int return_queries[3] = { 46, 53, 69 };
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int second_type;
+    int second_storage;
+    int second_offset;
+    int arguments[4];
+    int call;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 80 || mir_cfg_block_count() != 7 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_INT ||
+        !mir_machine_constant_equals(mir.insns[1].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[3].dst, 0) ||
+        mir.insns[2].opcode != MIR_STORE ||
+        mir.insns[2].src1 != mir.insns[1].dst ||
+        mir.insns[4].opcode != MIR_STORE ||
+        mir.insns[4].src1 != mir.insns[3].dst ||
+        mir.insns[2].memory_size != 2 ||
+        mir.insns[4].memory_size != 2 ||
+        (mir.insns[2].memory_flags & (1 | 8)) != 0 ||
+        (mir.insns[4].memory_flags & (1 | 8)) != 0 ||
+        !mir_scalar_memory_location(
+            &mir.insns[2], &memory_type,
+            &memory_storage, &memory_offset) ||
+        !mir_scalar_memory_location(
+            &mir.insns[4], &second_type,
+            &second_storage, &second_offset) ||
+        memory_storage != SC_LOCAL ||
+        second_storage != SC_LOCAL ||
+        second_offset != memory_offset + 2 ||
+        memory_offset >= 0)
+        return mir_machine_reject(
+            "local-bitset-runner", "setup");
+    plan->set_offset = memory_offset;
+    for (call = 0; call < 2; ++call) {
+        int args[2];
+        const struct MirInsn *invoke =
+            &mir.insns[add_calls[call]];
+
+        if (!mir_machine_two_call_arguments(invoke, args) ||
+            mir_definition(args[0]) == NULL ||
+            mir_definition(args[0])->opcode != MIR_ADDRESS ||
+            mir_definition(args[1]) == NULL ||
+            mir_definition(args[1])->opcode != MIR_CONST)
+            return mir_machine_reject(
+                "local-bitset-runner", "add");
+        plan->add_values[call] =
+            (int)mir_definition(args[1])->immediate;
+        if (call == 0)
+            plan->add_function =
+                find_global(invoke->name);
+        else if (plan->add_function !=
+                 find_global(invoke->name))
+            return mir_machine_reject(
+                "local-bitset-runner", "add-function");
+    }
+    if (plan->add_function == NULL ||
+        !plan->add_function->is_defined)
+        return mir_machine_reject(
+            "local-bitset-runner", "add-symbol");
+    for (call = 0; call < 3; ++call) {
+        int args[2];
+        const struct MirInsn *invoke =
+            &mir.insns[print_queries[call]];
+
+        if (!mir_machine_two_call_arguments(invoke, args) ||
+            !mir_machine_constant_equals(
+                args[1],
+                call == 0 ? 3 : call == 1 ? 4 : 20))
+            return mir_machine_reject(
+                "local-bitset-runner", "print-query");
+        plan->query_values[call] =
+            call == 0 ? 3 : call == 1 ? 4 : 20;
+        if (call == 0)
+            plan->has_function =
+                find_global(invoke->name);
+        else if (plan->has_function !=
+                 find_global(invoke->name))
+            return mir_machine_reject(
+                "local-bitset-runner", "query-function");
+    }
+    if (plan->has_function == NULL ||
+        !plan->has_function->is_defined ||
+        !mir_machine_four_call_arguments(
+            &mir.insns[40], arguments) ||
+        arguments[0] != mir.insns[17].dst ||
+        arguments[1] != mir.insns[24].dst ||
+        arguments[2] != mir.insns[31].dst ||
+        arguments[3] != mir.insns[38].dst)
+        return mir_machine_reject(
+            "local-bitset-runner", "report");
+    plan->print_function =
+        find_global(mir.insns[40].name);
+    plan->string_id =
+        (int)mir.insns[17].immediate;
+    if (plan->print_function == NULL)
+        return mir_machine_reject(
+            "local-bitset-runner", "print-symbol");
+    for (call = 0; call < 3; ++call) {
+        int args[2];
+
+        if (!mir_machine_two_call_arguments(
+                &mir.insns[return_queries[call]], args) ||
+            !mir_machine_constant_equals(
+                args[1], plan->query_values[call]) ||
+            find_global(
+                mir.insns[return_queries[call]].name) !=
+                plan->has_function)
+            return mir_machine_reject(
+                "local-bitset-runner", "return-query");
+    }
+    return mir.insns[47].opcode == MIR_BRANCH_FALSE &&
+           mir.insns[55].opcode == MIR_BRANCH_FALSE &&
+           mir.insns[70].opcode == MIR_BRANCH_FALSE &&
+           mir.insns[79].opcode == MIR_RETURN;
 }
 
 static int mir_match_string_mismatch_report(
@@ -29258,6 +29392,71 @@ static void mir_emit_fixed_record_sort_check(
             scan_loop, done);
 }
 
+static void mir_emit_local_bitset_call(
+    FILE *out, const struct MirLocalBitsetRunner *plan,
+    struct Sym *function, int value)
+{
+    fprintf(out, "\tld hl,%d\n\tpush hl\n", value);
+    fputs("\tpush ix\n\tpop hl\n", out);
+    fprintf(out, "\tld de,%d\n\tadd hl,de\n",
+            plan->set_offset);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+}
+
+static void mir_emit_local_bitset_runner(
+    FILE *out, const struct MirLocalBitsetRunner *plan)
+{
+    int true_result = new_label();
+    int done = new_label();
+    int query;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-4\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld (ix%+d),0\n\tld (ix%+d),0\n"
+            "\tld (ix%+d),0\n\tld (ix%+d),0\n",
+            plan->set_offset, plan->set_offset + 1,
+            plan->set_offset + 2, plan->set_offset + 3);
+    for (query = 0; query < 2; ++query)
+        mir_emit_local_bitset_call(
+            out, plan, plan->add_function,
+            plan->add_values[query]);
+    for (query = 2; query >= 0; --query) {
+        mir_emit_local_bitset_call(
+            out, plan, plan->has_function,
+            plan->query_values[query]);
+        fputs("\tpush hl\n", out);
+    }
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->string_id);
+    mir_machine_emit_symbol_call(
+        out, plan->print_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    mir_emit_local_bitset_call(
+        out, plan, plan->has_function,
+        plan->query_values[0]);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjr z,L%d\n", true_result);
+    mir_emit_local_bitset_call(
+        out, plan, plan->has_function,
+        plan->query_values[1]);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjr nz,L%d\n", true_result);
+    mir_emit_local_bitset_call(
+        out, plan, plan->has_function,
+        plan->query_values[2]);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out,
+            "\tjr z,L%d\n\tld hl,0\n\tjr L%d\n"
+            "L%d:\n\tld hl,1\nL%d:\n"
+            "\tld sp,ix\n\tpop ix\n\tret\n",
+            true_result, done, true_result, done);
+}
+
 static void mir_emit_string_mismatch_report(
     FILE *out, const struct MirStringMismatchReport *plan)
 {
@@ -34466,6 +34665,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirVariadicJoinReport variadic_join_report;
     struct MirVariadicStringJoin variadic_string_join;
     struct MirFixedRecordSortCheck fixed_record_sort_check;
+    struct MirLocalBitsetRunner local_bitset_runner;
     struct MirStringMismatchReport string_mismatch_report;
     struct MirCrcUpdateRunner crc_update_runner;
     struct MirFixedRowMemberSum fixed_row_member_sum;
@@ -35044,6 +35244,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &fixed_record_sort_check)) {
         mir_emit_fixed_record_sort_check(
             out, &fixed_record_sort_check);
+        return 1;
+    }
+    if (mir_match_local_bitset_runner(&local_bitset_runner)) {
+        mir_emit_local_bitset_runner(out, &local_bitset_runner);
         return 1;
     }
     if (mir_match_string_mismatch_report(&string_mismatch_report)) {
