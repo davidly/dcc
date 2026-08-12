@@ -481,6 +481,15 @@ struct MirVariadicJoinReport {
     int separator;
 };
 
+struct MirVariadicStringJoin {
+    int destination_stack_offset;
+    int separator_stack_offset;
+    int count_stack_offset;
+    int first_variadic_frame_offset;
+    char copy_call_name[64];
+    char length_call_name[64];
+};
+
 struct MirStringMismatchReport {
     struct Sym *print_function;
     struct Sym *failure_count;
@@ -5919,6 +5928,116 @@ static int mir_match_variadic_join_report(
         plan->print_function == NULL ||
         plan->buffer_size < 16 || plan->buffer_size > 120)
         return mir_machine_reject("variadic-join-report", "symbols");
+    return 1;
+}
+
+static int mir_match_variadic_string_join(
+    struct MirVariadicStringJoin *plan)
+{
+    static const int expected_opcodes[74] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_NOP,
+        MIR_CONST, MIR_STORE, MIR_VA_START, MIR_NOP, MIR_NOP,
+        MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_LOAD, MIR_LOAD,
+        MIR_NOP, MIR_PHI, MIR_PHI, MIR_NOP, MIR_NOP, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_VA_ARG, MIR_STORE, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD, MIR_NOP,
+        MIR_BINARY, MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_LOAD, MIR_ARG, MIR_CALL, MIR_UNARY, MIR_BINARY, MIR_NOP,
+        MIR_STORE, MIR_NOP, MIR_LABEL, MIR_LOAD, MIR_LOAD, MIR_BINARY,
+        MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CALL, MIR_LOAD, MIR_LOAD,
+        MIR_ARG, MIR_CALL, MIR_UNARY, MIR_BINARY, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_JUMP, MIR_LABEL, MIR_VA_END, MIR_NOP, MIR_UNARY, MIR_RETURN
+    };
+    const struct MirInsn *destination = &mir.insns[1];
+    const struct MirInsn *separator = &mir.insns[2];
+    const struct MirInsn *count = &mir.insns[3];
+    const struct MirInsn *copy1 = &mir.insns[36];
+    const struct MirInsn *length1 = &mir.insns[40];
+    const struct MirInsn *copy2 = &mir.insns[53];
+    const struct MirInsn *length2 = &mir.insns[57];
+    struct Sym *function;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    function = find_global(mir.name);
+    if (function == NULL || !function->proto_variadic ||
+        mir.count != 74 || mir_cfg_block_count() != 5 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_INT)
+        return mir_machine_reject(
+            "variadic-string-join", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "variadic-string-join", "opcode");
+    if (type_ptr_depth(destination->type) != 1 ||
+        (destination->type & 15) != TYPE_CHAR ||
+        type_ptr_depth(separator->type) != 1 ||
+        (separator->type & 15) != TYPE_CHAR ||
+        type_ptr_depth(count->type) != 0 ||
+        type_size(count->type) != 2 ||
+        !mir_machine_parameter_value_offset(
+            destination->dst,
+            &plan->destination_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            separator->dst,
+            &plan->separator_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            count->dst,
+            &plan->count_stack_offset) ||
+        mir.insns[7].secondary_offset < 2 ||
+        mir.insns[7].secondary_offset > 127 ||
+        mir.insns[24].secondary_offset != 2)
+        return mir_machine_reject(
+            "variadic-string-join", "parameters");
+    plan->first_variadic_frame_offset =
+        mir.insns[7].secondary_offset;
+    if (!mir_machine_constant_equals(mir.insns[5].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[6]) ||
+        !mir_machine_constant_equals(mir.insns[10].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[12]) ||
+        mir.insns[17].src1 != mir.insns[5].dst ||
+        mir.insns[17].src2 != mir.insns[59].dst ||
+        mir.insns[17].phi_pred1 != mir.insns[0].label ||
+        mir.insns[17].phi_pred2 != mir.insns[63].label ||
+        mir.insns[18].src1 != mir.insns[10].dst ||
+        mir.insns[18].src2 != mir.insns[66].dst ||
+        mir.insns[18].phi_pred1 != mir.insns[0].label ||
+        mir.insns[18].phi_pred2 != mir.insns[63].label ||
+        mir.insns[21].immediate != '<' ||
+        mir.insns[21].src1 != mir.insns[18].dst ||
+        mir.insns[21].src2 != count->dst ||
+        mir.insns[22].label != mir.insns[69].label ||
+        mir.insns[25].src1 != mir.insns[24].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[25]) ||
+        mir.insns[28].immediate != '>' ||
+        mir.insns[28].src1 != mir.insns[18].dst ||
+        !mir_machine_constant_equals(mir.insns[28].src2, 0) ||
+        mir.insns[29].label != mir.insns[46].label)
+        return mir_machine_reject(
+            "variadic-string-join", "flow");
+    if (strcmp(copy1->name, copy2->name) ||
+        strcmp(length1->name, length2->name) ||
+        (copy1->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+        (length1->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0)
+        return mir_machine_reject(
+            "variadic-string-join", "calls");
+    if ((strcmp(copy1->name, "strcpy") &&
+         strcmp(copy1->base_name, "__scf")) ||
+        (strcmp(length1->name, "strlen") &&
+         strcmp(length1->base_name, "__slf")) ||
+        mir.insns[70].opcode != MIR_VA_END ||
+        mir.insns[72].src1 != mir.insns[17].dst ||
+        mir.insns[73].src1 != mir.insns[72].dst)
+        return mir_machine_reject(
+            "variadic-string-join", "runtime");
+    strcpy(plan->copy_call_name, "__scf");
+    strcpy(plan->length_call_name, "__slf");
     return 1;
 }
 
@@ -28828,6 +28947,84 @@ static void mir_emit_variadic_join_report(
           "\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static void mir_emit_variadic_string_join(
+    FILE *out, const struct MirVariadicStringJoin *plan)
+{
+    int loop = new_label();
+    int no_separator = new_label();
+    int done = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-8\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tld hl,0\n\tld (ix-2),l\n\tld (ix-1),h\n"
+          "\tld (ix-4),l\n\tld (ix-3),h\n"
+          "\tpush ix\n\tpop hl\n", out);
+    fprintf(out,
+            "\tld de,%d\n\tadd hl,de\n"
+            "\tld (ix-6),l\n\tld (ix-5),h\n"
+            "\tld a,(ix+%d)\n\tbit 7,a\n\tjp nz,L%d\n"
+            "L%d:\n"
+            "\tld l,(ix-4)\n\tld h,(ix-3)\n"
+            "\tld e,(ix+%d)\n\tld d,(ix+%d)\n"
+            "\tor a\n\tsbc hl,de\n\tjp z,L%d\n"
+            "\tld l,(ix-6)\n\tld h,(ix-5)\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tinc hl\n"
+            "\tld (ix-6),l\n\tld (ix-5),h\n"
+            "\tld (ix-8),e\n\tld (ix-7),d\n"
+            "\tld a,(ix-4)\n\tor (ix-3)\n\tjp z,L%d\n",
+            plan->first_variadic_frame_offset,
+            plan->count_stack_offset + 3, done,
+            loop,
+            plan->count_stack_offset + 2,
+            plan->count_stack_offset + 3,
+            done, no_separator);
+    fprintf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
+            "\tld e,(ix-2)\n\tld d,(ix-1)\n"
+            "\tadd hl,de\n\tex de,hl\n"
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n",
+            plan->destination_stack_offset + 2,
+            plan->destination_stack_offset + 3,
+            plan->separator_stack_offset + 2,
+            plan->separator_stack_offset + 3);
+    mir_emit_runtime_call(out, plan->copy_call_name);
+    fprintf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n",
+            plan->separator_stack_offset + 2,
+            plan->separator_stack_offset + 3);
+    mir_emit_runtime_call(out, plan->length_call_name);
+    fputs("\tld e,(ix-2)\n\tld d,(ix-1)\n"
+          "\tadd hl,de\n\tld (ix-2),l\n\tld (ix-1),h\n", out);
+    fprintf(out, "L%d:\n", no_separator);
+    fprintf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
+            "\tld e,(ix-2)\n\tld d,(ix-1)\n"
+            "\tadd hl,de\n\tex de,hl\n"
+            "\tld l,(ix-8)\n\tld h,(ix-7)\n",
+            plan->destination_stack_offset + 2,
+            plan->destination_stack_offset + 3);
+    mir_emit_runtime_call(out, plan->copy_call_name);
+    fputs("\tld l,(ix-8)\n\tld h,(ix-7)\n", out);
+    mir_emit_runtime_call(out, plan->length_call_name);
+    fputs("\tld e,(ix-2)\n\tld d,(ix-1)\n"
+          "\tadd hl,de\n\tld (ix-2),l\n\tld (ix-1),h\n"
+          "\tinc (ix-4)\n", out);
+    {
+        int no_carry = new_label();
+
+        fprintf(out,
+                "\tjp nz,L%d\n\tinc (ix-3)\nL%d:\n",
+                no_carry, no_carry);
+    }
+    fprintf(out,
+            "\tjp L%d\nL%d:\n"
+            "\tld l,(ix-2)\n\tld h,(ix-1)\n"
+            "\tld sp,ix\n\tpop ix\n\tret\n",
+            loop, done);
+}
+
 static void mir_emit_string_mismatch_report(
     FILE *out, const struct MirStringMismatchReport *plan)
 {
@@ -34034,6 +34231,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFixedByteScanChecks fixed_byte_scan_checks;
     struct MirTwoConstantChecks two_constant_checks;
     struct MirVariadicJoinReport variadic_join_report;
+    struct MirVariadicStringJoin variadic_string_join;
     struct MirStringMismatchReport string_mismatch_report;
     struct MirCrcUpdateRunner crc_update_runner;
     struct MirFixedRowMemberSum fixed_row_member_sum;
@@ -34602,6 +34800,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_variadic_join_report(&variadic_join_report)) {
         mir_emit_variadic_join_report(out, &variadic_join_report);
+        return 1;
+    }
+    if (mir_match_variadic_string_join(&variadic_string_join)) {
+        mir_emit_variadic_string_join(out, &variadic_string_join);
         return 1;
     }
     if (mir_match_string_mismatch_report(&string_mismatch_report)) {
