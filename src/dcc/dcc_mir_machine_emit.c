@@ -411,6 +411,15 @@ struct MirFixedRowMemberSum {
     int member_offset;
 };
 
+struct MirRecursiveAggregateChain {
+    struct Sym *normalize_function;
+    struct Sym *recursive_function;
+    int aggregate_size;
+    int member_offset;
+    int depth_stack_offset;
+    int value_stack_offset;
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -5590,6 +5599,71 @@ static int mir_match_fixed_row_member_sum(
         !mir_machine_parameter_value_offset(
             mir.insns[2].dst, &plan->rows_stack_offset))
         return mir_machine_reject("fixed-row-member-sum", "layout");
+    return 1;
+}
+
+static int mir_match_recursive_aggregate_chain(
+    struct MirRecursiveAggregateChain *plan)
+{
+    int recursive_arguments[2];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 27 || mir_cfg_block_count() != 2 ||
+        mir.has_vla || mir.insns[1].opcode != MIR_PARAM ||
+        mir.insns[2].opcode != MIR_PARAM ||
+        !mir_machine_constant_equals(mir.insns[4].dst, 0) ||
+        mir.insns[5].immediate != TOK_EQ ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        mir.insns[7].opcode != MIR_ADDRESS ||
+        mir.insns[8].opcode != MIR_ARG ||
+        mir.insns[8].src1 != mir.insns[7].dst ||
+        mir.insns[9].opcode != MIR_CALL_AGGREGATE ||
+        mir.insns[9].memory_size != 8 ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        mir.insns[12].opcode != MIR_ADDRESS ||
+        mir.insns[13].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[13].src1 != mir.insns[12].dst ||
+        mir.insns[14].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[14].memory_size != 4 ||
+        !mir_machine_constant_equals(mir.insns[16].dst, 1) ||
+        mir.insns[17].immediate != '+' ||
+        mir.insns[18].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[18].src1 != mir.insns[13].dst ||
+        mir.insns[18].src2 != mir.insns[17].dst ||
+        !mir_machine_constant_equals(mir.insns[20].dst, 1) ||
+        mir.insns[21].immediate != '-' ||
+        !mir_machine_two_call_arguments(
+            &mir.insns[25], recursive_arguments) ||
+        recursive_arguments[0] != mir.insns[21].dst ||
+        recursive_arguments[1] != mir.insns[23].dst ||
+        mir.insns[25].opcode != MIR_CALL_AGGREGATE ||
+        mir.insns[25].memory_size != mir.insns[9].memory_size ||
+        mir.insns[26].src1 != mir.insns[25].dst)
+        return mir_machine_reject(
+            "recursive-aggregate-chain", "shape");
+    plan->normalize_function = find_global(mir.insns[9].name);
+    plan->recursive_function = find_global(mir.insns[25].name);
+    plan->aggregate_size = mir.insns[9].memory_size;
+    plan->member_offset = (int)mir.insns[13].immediate;
+    if (plan->normalize_function == NULL ||
+        plan->recursive_function == NULL ||
+        plan->aggregate_size != 8 ||
+        plan->member_offset < 0 ||
+        plan->member_offset + 4 > plan->aggregate_size ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->depth_stack_offset) ||
+        !mir_scalar_memory_location(
+            &mir.insns[2], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_size(memory_type) != plan->aggregate_size ||
+        plan->depth_stack_offset != 4 ||
+        (plan->value_stack_offset = memory_offset - 2) != 6)
+        return mir_machine_reject(
+            "recursive-aggregate-chain", "abi");
     return 1;
 }
 
@@ -24064,6 +24138,81 @@ static void mir_emit_fixed_row_member_sum(
             loop, done);
 }
 
+static void mir_emit_recursive_chain_add(
+    FILE *out, const struct MirRecursiveAggregateChain *plan)
+{
+    int member = plan->value_stack_offset + 2 + plan->member_offset;
+
+    fprintf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
+            "\tadd hl,bc\n"
+            "\tld (ix+%d),l\n\tld (ix+%d),h\n"
+            "\tld e,(ix+%d)\n\tld d,(ix+%d)\n"
+            "\tex de,hl\n\tld bc,0\n\tadc hl,bc\n"
+            "\tld (ix+%d),l\n\tld (ix+%d),h\n",
+            member, member + 1,
+            member, member + 1,
+            member + 2, member + 3,
+            member + 2, member + 3);
+}
+
+static void mir_emit_recursive_chain_value_copy(
+    FILE *out, const struct MirRecursiveAggregateChain *plan)
+{
+    int copy = new_label();
+
+    fprintf(out,
+            "\tpush ix\n\tpop de\n\tld hl,%d\n\tadd hl,de\n"
+            "\tex de,hl\n"
+            "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n"
+            "\tld hl,0\n\tadd hl,sp\n\tld b,%d\n"
+            "L%d:\n\tld a,(de)\n\tld (hl),a\n"
+            "\tinc de\n\tinc hl\n\tdjnz L%d\n",
+            plan->value_stack_offset + 2,
+            plan->aggregate_size,
+            plan->aggregate_size,
+            copy, copy);
+}
+
+static void mir_emit_recursive_aggregate_chain(
+    FILE *out, const struct MirRecursiveAggregateChain *plan)
+{
+    int normalize = new_label();
+    int recursive = new_label();
+    int done = new_label();
+    int argument;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld c,(ix+%d)\n\tld b,(ix+%d)\n"
+            "\tld a,b\n\tor c\n\tjp z,L%d\n"
+            "\tbit 7,b\n\tjp nz,L%d\n",
+            plan->depth_stack_offset + 2,
+            plan->depth_stack_offset + 3,
+            normalize, recursive);
+    mir_emit_recursive_chain_add(out, plan);
+    fprintf(out, "L%d:\n", normalize);
+    mir_emit_recursive_chain_value_copy(out, plan);
+    fputs("\tld l,(ix+4)\n\tld h,(ix+5)\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->normalize_function);
+    for (argument = 0; argument < 5; ++argument)
+        fputs("\tpop bc\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n\tld bc,1\n", done, recursive);
+    mir_emit_recursive_chain_add(out, plan);
+    mir_emit_recursive_chain_value_copy(out, plan);
+    fprintf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tdec hl\n\tpush hl\n"
+            "\tld l,(ix+4)\n\tld h,(ix+5)\n\tpush hl\n",
+            plan->depth_stack_offset + 2,
+            plan->depth_stack_offset + 3);
+    mir_machine_emit_symbol_call(out, plan->recursive_function);
+    for (argument = 0; argument < 6; ++argument)
+        fputs("\tpop bc\n", out);
+    fprintf(out, "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n", done);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -27773,6 +27922,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirStringMismatchReport string_mismatch_report;
     struct MirCrcUpdateRunner crc_update_runner;
     struct MirFixedRowMemberSum fixed_row_member_sum;
+    struct MirRecursiveAggregateChain recursive_aggregate_chain;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -28264,6 +28414,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_fixed_row_member_sum(&fixed_row_member_sum)) {
         mir_emit_fixed_row_member_sum(out, &fixed_row_member_sum);
+        return 1;
+    }
+    if (mir_match_recursive_aggregate_chain(
+            &recursive_aggregate_chain)) {
+        mir_emit_recursive_aggregate_chain(
+            out, &recursive_aggregate_chain);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
