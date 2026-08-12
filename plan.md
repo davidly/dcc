@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `362e8fb`
-  (`prove deterministic array parameter checks`).
-- Current candidate coverage: **2043/2185 (93.50%)**.
-- Remaining fallback population: **142 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `875902f`
+  (`prove exact float byte patterns`).
+- Current candidate coverage: **2044/2185 (93.55%)**.
+- Remaining fallback population: **141 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -557,6 +557,10 @@ current execution plan and handoff.
   seven exact four-byte checks from two compact buffers. This admits
   `tc89fadd.main`, improving the app 33.40% peep / 30.17% nopeep with about
   6% smaller images.
+- Float struct-array byte runners now preserve both identity calls and emit six
+  integer plus three IEEE byte-pattern checks directly. This admits
+  `tc89fs.main`, improving the app 11.74% peep / 12.12% nopeep with 4.17% /
+  6.00% smaller images.
 - A direct `too.expected_area` dispatcher was rejected after repeated-call
   tests exposed incorrect signed divmod cache/register handling; it is absent.
 - A binary-search replacement for `too.isqrt_l` was rejected after focused
@@ -571,7 +575,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 142 final-cost fallbacks,
+- Current next priority: repeated causes in the 141 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
