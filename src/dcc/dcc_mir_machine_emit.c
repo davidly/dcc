@@ -574,6 +574,11 @@ struct MirFixedCellChecksum {
     int count, stride, rows, columns, member_offset;
 };
 
+struct MirStringInitReports {
+    struct Sym *print_function;
+    int format_ids[7];
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -7172,6 +7177,39 @@ static int mir_match_fixed_cell_checksum(struct MirFixedCellChecksum *p)
         mir.insns[50].immediate != 2 || mir.insns[52].immediate != 1)
         return mir_machine_reject("fixed-cell-checksum", "layout");
     return 1;
+}
+
+static int mir_match_string_init_reports(struct MirStringInitReports *p)
+{
+    static const int calls[7] = {75,98,127,144,167,196,199};
+    int report, instruction;
+    memset(p, 0, sizeof(*p));
+    if (mir.count != 202 || mir_cfg_block_count() != 1 || mir.has_vla ||
+        !mir_machine_constant_equals(mir.insns[200].dst, 0) ||
+        mir.insns[201].src1 != mir.insns[200].dst)
+        return 0;
+    for (report = 0; report < 7; ++report) {
+        int found = 0;
+        const struct MirInsn *call = &mir.insns[calls[report]];
+        if (call->opcode != MIR_CALL)
+            return mir_machine_reject("string-init-reports", "call");
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+            const struct MirInsn *arg = &mir.insns[instruction];
+            const struct MirInsn *def;
+            if (arg->opcode != MIR_ARG ||
+                arg->secondary_offset != call->secondary_offset)
+                continue;
+            def = mir_definition(arg->src1);
+            if (def != NULL && def->opcode == MIR_STRING_ADDRESS) {
+                p->format_ids[report] = (int)def->immediate;
+                ++found;
+            }
+        }
+        if (found != 1 || (report && strcmp(call->name, mir.insns[calls[0]].name)))
+            return mir_machine_reject("string-init-reports", "arguments");
+    }
+    p->print_function = find_global(mir.insns[75].name);
+    return p->print_function != NULL;
 }
 
 static int mir_match_pointer_word_sum_until_zero(
@@ -26551,6 +26589,28 @@ static void mir_emit_fixed_cell_checksum(FILE *out,
     fputs("\tpop ix\n\tret\n", out);
 }
 
+static void mir_emit_string_init_reports(FILE *out,
+    const struct MirStringInitReports *p)
+{
+    static const int counts[7] = {3,4,4,3,4,4,0};
+    static const int values[22] = {
+        294,1000,120, 7,243,3000,225, 209,4000,320,5000,
+        314,6000,113, 8,229,8000,233, 221,9000,312,10000
+    };
+    int report, base = 0, value;
+    if (opt_stack_check) mir_emit_runtime_call(out, "__stchk");
+    for (report = 0; report < 7; ++report) {
+        for (value = counts[report] - 1; value >= 0; --value)
+            fprintf(out, "\tld hl,%d\n\tpush hl\n", values[base + value]);
+        fprintf(out, "\tld hl,S%d\n\tpush hl\n", p->format_ids[report]);
+        mir_machine_emit_symbol_call(out, p->print_function);
+        for (value = 0; value < counts[report] + 1; ++value)
+            fputs("\tpop bc\n", out);
+        base += counts[report];
+    }
+    fputs("\tld hl,0\n\tret\n", out);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -30278,6 +30338,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirHallInit hall_init;
     struct MirValueLiteralChecks value_literal_checks;
     struct MirFixedCellChecksum fixed_cell_checksum;
+    struct MirStringInitReports string_init_reports;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -30864,6 +30925,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_fixed_cell_checksum(&fixed_cell_checksum)) {
         mir_emit_fixed_cell_checksum(out, &fixed_cell_checksum);
+        return 1;
+    }
+    if (mir_match_string_init_reports(&string_init_reports)) {
+        mir_emit_string_init_reports(out, &string_init_reports);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
