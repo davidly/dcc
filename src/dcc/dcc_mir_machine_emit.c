@@ -2263,6 +2263,37 @@ struct MirFloatReportSchedule {
     int variant;
 };
 
+#define MIR_RAW_CONVERSION_BOOL_CHECKS 26
+#define MIR_RAW_CONVERSION_WIDE_CHECKS 14
+
+struct MirRawConversionCheck {
+    struct Sym *value_function;
+    unsigned long input;
+    unsigned long conversion_input;
+    unsigned long expected;
+    int input_width;
+    int conversion_width;
+    int name_string_id;
+};
+
+struct MirRawConversionCheckSchedule {
+    struct MirRawConversionCheck
+        boolean_checks[MIR_RAW_CONVERSION_BOOL_CHECKS];
+    struct MirRawConversionCheck
+        wide_checks[MIR_RAW_CONVERSION_WIDE_CHECKS];
+    struct Sym *boolean_check_function;
+    struct Sym *wide_check_function;
+    struct Sym *print_function;
+    struct Sym *checks_root;
+    struct Sym *failures_root;
+    int checks_offset;
+    int failures_offset;
+    int summary_string_id;
+    int result_string_id;
+    int success_string_id;
+    int failure_string_id;
+};
+
 struct MirSymbolFindSchedule {
     struct Sym *symbols_root;
     struct Sym *count_root;
@@ -32927,6 +32958,15 @@ static int mir_match_float_report_schedule(
                plan->check_function_uses[0] == 14 &&
                plan->check_function_uses[1] == 1) {
         plan->variant = MIR_FLOAT_REPORT_FMA_BITS;
+    } else if (mir.count == 195 &&
+               plan->check_count == 9 &&
+               call_count == 41 &&
+               plan->snapshot_count == 0 &&
+               plan->setup_count == 0 &&
+               plan->output_count == 0 &&
+               check_function_count == 1 &&
+               plan->check_function_uses[0] == 9) {
+        plan->variant = MIR_FLOAT_REPORT_FMA_BITS;
     } else {
         goto done;
     }
@@ -32951,6 +32991,413 @@ done:
     if (!accepted)
         return mir_machine_reject(
             "float-report-schedule", "shape");
+    return 1;
+}
+
+static int mir_raw_conversion_check_function(
+    const struct MirInsn *call, int width, struct Sym **expected,
+    int arguments[MIR_FLOAT_REPORT_MAX_CALL_ARGS])
+{
+    struct Sym *function = find_global(call->name);
+
+    if (function == NULL || !function->is_defined ||
+        function->is_funcptr || function->is_noreturn ||
+        !function->has_proto || function->proto_variadic ||
+        function->proto_nargs != 3 ||
+        type_ptr_depth(function->proto_types[0]) != 1 ||
+        (function->proto_types[0] & 15) != TYPE_CHAR ||
+        type_size(function->proto_types[0]) != 2 ||
+        type_ptr_depth(function->proto_types[1]) != 0 ||
+        type_ptr_depth(function->proto_types[2]) != 0 ||
+        type_is_float(function->proto_types[1]) ||
+        type_is_float(function->proto_types[2]) ||
+        type_size(function->proto_types[1]) != width ||
+        type_size(function->proto_types[2]) != width ||
+        (call->type & 15) != TYPE_VOID ||
+        call->memory_flags != 0 ||
+        !mir_match_math_symbol_target(call, function) ||
+        !mir_float_report_call_arguments(call, 3, arguments) ||
+        (*expected != NULL && *expected != function))
+        return 0;
+    *expected = function;
+    return 1;
+}
+
+static int mir_raw_conversion_value_function(
+    const struct MirInsn *call, int input_width, int result_width,
+    int *argument_value, struct Sym **function_out)
+{
+    struct Sym *function = find_global(call->name);
+    int arguments[MIR_FLOAT_REPORT_MAX_CALL_ARGS];
+
+    if (function == NULL || !function->is_defined ||
+        function->is_funcptr || function->is_noreturn ||
+        !function->has_proto || function->proto_variadic ||
+        function->proto_nargs != 1 ||
+        type_ptr_depth(function->proto_types[0]) != 0 ||
+        type_is_float(function->proto_types[0]) ||
+        type_size(function->proto_types[0]) != input_width ||
+        type_ptr_depth(call->type) != 0 ||
+        type_is_float(call->type) ||
+        type_size(call->type) != result_width ||
+        type_ptr_depth(function->type) != 0 ||
+        type_is_float(function->type) ||
+        type_size(function->type) != result_width ||
+        call->memory_flags != 0 ||
+        !mir_match_math_symbol_target(call, function) ||
+        !mir_float_report_call_arguments(
+            call, 1, arguments))
+        return 0;
+    *argument_value = arguments[0];
+    *function_out = function;
+    return 1;
+}
+
+static int mir_raw_conversion_segment_calls(
+    int start, int *first_call, int *second_call)
+{
+    int instruction;
+
+    *first_call = -1;
+    *second_call = -1;
+    for (instruction = start; instruction < mir.count; ++instruction) {
+        if (mir.insns[instruction].opcode != MIR_CALL)
+            continue;
+        if (*first_call < 0)
+            *first_call = instruction;
+        else {
+            *second_call = instruction;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int mir_raw_conversion_allowed_boolean_prefix(
+    int start, int end)
+{
+    int instruction;
+
+    for (instruction = start; instruction <= end; ++instruction)
+        switch (mir.insns[instruction].opcode) {
+        case MIR_STRING_ADDRESS:
+        case MIR_ARG:
+        case MIR_CONST:
+        case MIR_NOP:
+        case MIR_CALL:
+            break;
+        default:
+            return 0;
+        }
+    return 1;
+}
+
+static int mir_raw_conversion_allowed_wide_prefix(
+    int start, int end)
+{
+    int instruction;
+
+    for (instruction = start; instruction <= end; ++instruction)
+        switch (mir.insns[instruction].opcode) {
+        case MIR_ADDRESS:
+        case MIR_MEMBER_ADDRESS:
+        case MIR_STRING_ADDRESS:
+        case MIR_ARG:
+        case MIR_CONST:
+        case MIR_NOP:
+        case MIR_UNARY:
+        case MIR_BINARY:
+        case MIR_STORE_INDIRECT:
+        case MIR_LOAD_INDIRECT:
+        case MIR_CALL:
+            break;
+        default:
+            return 0;
+        }
+    return 1;
+}
+
+static int mir_match_raw_conversion_boolean_check(
+    struct MirRawConversionCheckSchedule *plan,
+    struct MirRawConversionCheck *check, int start, int *next)
+{
+    const struct MirInsn *value_call;
+    const struct MirInsn *check_call;
+    const struct MirInsn *name;
+    const struct MirInsn *input;
+    const struct MirInsn *expected;
+    struct Sym *value_function;
+    int check_arguments[MIR_FLOAT_REPORT_MAX_CALL_ARGS];
+    int value_argument;
+    int first_call;
+    int second_call;
+    long input_value;
+    long expected_value;
+
+    if (!mir_raw_conversion_segment_calls(
+            start, &first_call, &second_call) ||
+        !mir_raw_conversion_allowed_boolean_prefix(
+            start, second_call))
+        return 0;
+    value_call = &mir.insns[first_call];
+    check_call = &mir.insns[second_call];
+    if (!mir_raw_conversion_check_function(
+            check_call, 2, &plan->boolean_check_function,
+            check_arguments) ||
+        !mir_raw_conversion_value_function(
+            value_call, 4, 2, &value_argument, &value_function) ||
+        check_arguments[1] != value_call->dst)
+        return 0;
+    name = mir_definition(check_arguments[0]);
+    input = mir_definition(value_argument);
+    expected = mir_definition(check_arguments[2]);
+    if (name == NULL || name->opcode != MIR_STRING_ADDRESS ||
+        input == NULL ||
+        type_is_float(input->type) ||
+        !mir_machine_evaluate_constant(
+            input->dst, &input_value, 0) ||
+        type_ptr_depth(input->type) != 0 ||
+        type_size(input->type) != 4 ||
+        expected == NULL ||
+        type_is_float(expected->type) ||
+        !mir_machine_evaluate_constant(
+            expected->dst, &expected_value, 0) ||
+        type_ptr_depth(expected->type) != 0 ||
+        type_size(expected->type) != 2)
+        return 0;
+    check->value_function = value_function;
+    check->input = (unsigned long)input_value & 0xffffffffUL;
+    check->expected = (unsigned long)expected_value & 0xffffUL;
+    check->input_width = 4;
+    check->name_string_id = (int)name->immediate;
+    *next = second_call + 1;
+    return 1;
+}
+
+static int mir_match_raw_conversion_wide_check(
+    struct MirRawConversionCheckSchedule *plan,
+    struct MirRawConversionCheck *check, int start, int *next)
+{
+    const struct MirInsn *value_call;
+    const struct MirInsn *check_call;
+    const struct MirInsn *name;
+    const struct MirInsn *input;
+    const struct MirInsn *expected_load;
+    const struct MirInsn *expected_member;
+    const struct MirInsn *expected_base;
+    const struct MirInsn *store = NULL;
+    const struct MirInsn *stored_member;
+    const struct MirInsn *stored_base;
+    const struct MirInsn *conversion;
+    const struct MirInsn *conversion_input;
+    struct Sym *value_function;
+    int check_arguments[MIR_FLOAT_REPORT_MAX_CALL_ARGS];
+    int value_argument;
+    int first_call;
+    int second_call;
+    int instruction;
+    int input_width;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    long input_value;
+    long conversion_value;
+
+    if (!mir_raw_conversion_segment_calls(
+            start, &first_call, &second_call) ||
+        !mir_raw_conversion_allowed_wide_prefix(
+            start, second_call) ||
+        !mir_raw_conversion_check_function(
+            &mir.insns[second_call], 4,
+            &plan->wide_check_function, check_arguments))
+        return 0;
+    value_call = &mir.insns[first_call];
+    check_call = &mir.insns[second_call];
+    input = NULL;
+    input_width = 0;
+    if (mir_raw_conversion_value_function(
+            value_call, 2, 4, &value_argument, &value_function))
+        input_width = 2;
+    else if (mir_raw_conversion_value_function(
+                 value_call, 4, 4, &value_argument, &value_function))
+        input_width = 4;
+    if (input_width == 0 ||
+        check_arguments[1] != value_call->dst)
+        return 0;
+    name = mir_definition(check_arguments[0]);
+    input = mir_definition(value_argument);
+    expected_load = mir_definition(check_arguments[2]);
+    if (name == NULL || name->opcode != MIR_STRING_ADDRESS ||
+        input == NULL ||
+        !mir_machine_evaluate_constant(
+            input->dst, &input_value, 0) ||
+        type_size(input->type) != input_width ||
+        expected_load == NULL ||
+        expected_load->opcode != MIR_LOAD_INDIRECT ||
+        expected_load->memory_size != 4 ||
+        type_is_float(expected_load->type) ||
+        type_size(expected_load->type) != 4)
+        return 0;
+    expected_member = mir_definition(expected_load->src1);
+    expected_base = expected_member != NULL
+        ? mir_definition(expected_member->src1) : NULL;
+    if (expected_member == NULL ||
+        expected_member->opcode != MIR_MEMBER_ADDRESS ||
+        expected_member->immediate != 0 ||
+        expected_base == NULL ||
+        expected_base->opcode != MIR_ADDRESS ||
+        !mir_scalar_memory_location(
+            expected_base, &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_LOCAL)
+        return 0;
+    for (instruction = start; instruction < first_call; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_STORE_INDIRECT) {
+            if (store != NULL)
+                return 0;
+            store = &mir.insns[instruction];
+        }
+    if (store == NULL || store->memory_size != 4)
+        return 0;
+    stored_member = mir_definition(store->src1);
+    stored_base = stored_member != NULL
+        ? mir_definition(stored_member->src1) : NULL;
+    conversion = mir_definition(store->src2);
+    conversion_input = conversion != NULL
+        ? mir_definition(conversion->src1) : NULL;
+    if (stored_member == NULL ||
+        stored_member->opcode != MIR_MEMBER_ADDRESS ||
+        stored_member->immediate != 0 ||
+        stored_base == NULL ||
+        stored_base->opcode != MIR_ADDRESS ||
+        !mir_machine_same_location(expected_base, stored_base) ||
+        conversion == NULL || conversion->opcode != MIR_UNARY ||
+        conversion->immediate != 0 ||
+        !type_is_float(conversion->type) ||
+        type_size(conversion->type) != 4 ||
+        conversion_input == NULL ||
+        type_is_float(conversion_input->type) ||
+        (type_size(conversion_input->type) != 2 &&
+         type_size(conversion_input->type) != 4) ||
+        !mir_machine_evaluate_constant(
+            conversion_input->dst, &conversion_value, 0) ||
+        (((unsigned long)input_value) &
+         (input_width == 2 ? 0xffffUL : 0xffffffffUL)) !=
+        (((unsigned long)conversion_value) &
+         (input_width == 2 ? 0xffffUL : 0xffffffffUL)))
+        return 0;
+    check->value_function = value_function;
+    check->input = (unsigned long)input_value &
+        (input_width == 2 ? 0xffffUL : 0xffffffffUL);
+    check->conversion_input =
+        (unsigned long)conversion_value &
+        (type_size(conversion_input->type) == 2
+             ? 0xffffUL : 0xffffffffUL);
+    check->input_width = input_width;
+    check->conversion_width = type_size(conversion_input->type);
+    check->name_string_id = (int)name->immediate;
+    *next = (int)(check_call - mir.insns) + 1;
+    return 1;
+}
+
+static int mir_match_raw_conversion_check_schedule(
+    struct MirRawConversionCheckSchedule *plan)
+{
+    struct MirFloatReportSchedule tail;
+    struct Sym *boolean_functions[4] = {NULL, NULL, NULL, NULL};
+    struct Sym *wide_functions[2] = {NULL, NULL};
+    static const int boolean_uses[4] = {6, 7, 6, 7};
+    int cursor = 1;
+    int check;
+    int group;
+    int use;
+    int call_count = 0;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    memset(&tail, 0, sizeof(tail));
+    if (mir.count != 519 || mir_cfg_block_count() != 9 ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
+        !mir_match_final_call_integer_type(mir.return_type, 2) ||
+        mir.insns[0].opcode != MIR_LABEL)
+        return mir_machine_reject(
+            "raw-conversion-check-schedule", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_CALL)
+            ++call_count;
+    if (call_count != 82)
+        return mir_machine_reject(
+            "raw-conversion-check-schedule", "call-count");
+    check = 0;
+    for (group = 0; group < 4; ++group)
+        for (use = 0; use < boolean_uses[group]; ++use) {
+            if (!mir_match_raw_conversion_boolean_check(
+                    plan, &plan->boolean_checks[check],
+                    cursor, &cursor))
+                return mir_machine_reject(
+                    "raw-conversion-check-schedule",
+                    "boolean-check");
+            if (use == 0)
+                boolean_functions[group] =
+                    plan->boolean_checks[check].value_function;
+            else if (boolean_functions[group] !=
+                     plan->boolean_checks[check].value_function)
+                return mir_machine_reject(
+                    "raw-conversion-check-schedule",
+                    "boolean-group");
+            ++check;
+        }
+    for (group = 0; group < 4; ++group) {
+        int previous;
+
+        for (previous = 0; previous < group; ++previous)
+            if (boolean_functions[group] ==
+                boolean_functions[previous])
+                return mir_machine_reject(
+                    "raw-conversion-check-schedule",
+                    "boolean-functions");
+    }
+    for (check = 0;
+         check < MIR_RAW_CONVERSION_WIDE_CHECKS; ++check) {
+        group = check / 7;
+        if (!mir_match_raw_conversion_wide_check(
+                plan, &plan->wide_checks[check],
+                cursor, &cursor))
+            return mir_machine_reject(
+                "raw-conversion-check-schedule", "wide-check");
+        if (check % 7 == 0)
+            wide_functions[group] =
+                plan->wide_checks[check].value_function;
+        else if (wide_functions[group] !=
+                 plan->wide_checks[check].value_function)
+            return mir_machine_reject(
+                "raw-conversion-check-schedule", "wide-group");
+        if (plan->wide_checks[check].input_width !=
+            (group == 0 ? 2 : 4))
+            return mir_machine_reject(
+                "raw-conversion-check-schedule", "wide-width");
+    }
+    if (wide_functions[0] == wide_functions[1] ||
+        plan->boolean_check_function == NULL ||
+        plan->wide_check_function == NULL ||
+        plan->boolean_check_function == plan->wide_check_function)
+        return mir_machine_reject(
+            "raw-conversion-check-schedule", "functions");
+    while (cursor < mir.count &&
+           mir.insns[cursor].opcode == MIR_NOP)
+        ++cursor;
+    if (!mir_match_float_report_tail(&tail, cursor))
+        return mir_machine_reject(
+            "raw-conversion-check-schedule", "tail");
+    plan->print_function = tail.print_function;
+    plan->checks_root = tail.checks_root;
+    plan->failures_root = tail.failures_root;
+    plan->checks_offset = tail.checks_offset;
+    plan->failures_offset = tail.failures_offset;
+    plan->summary_string_id = tail.summary_string_id;
+    plan->result_string_id = tail.result_string_id;
+    plan->success_string_id = tail.success_string_id;
+    plan->failure_string_id = tail.failure_string_id;
     return 1;
 }
 
@@ -52044,6 +52491,94 @@ static void mir_emit_float_report_schedule(
     }
 }
 
+static void mir_emit_raw_conversion_check_schedule(
+    FILE *out, const struct MirRawConversionCheckSchedule *plan)
+{
+    int failure_string = new_label();
+    int result_ready = new_label();
+    int return_success = new_label();
+    int check;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (check = 0;
+         check < MIR_RAW_CONVERSION_BOOL_CHECKS; ++check) {
+        const struct MirRawConversionCheck *item =
+            &plan->boolean_checks[check];
+
+        mir_emit_final_call_constant(out, item->expected, 2);
+        mir_emit_final_call_constant(out, item->input, 4);
+        mir_machine_emit_symbol_call(out, item->value_function);
+        mir_emit_final_call_cleanup(out, 2);
+        fputs("\tpush hl\n", out);
+        fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+                item->name_string_id);
+        mir_machine_emit_symbol_call(
+            out, plan->boolean_check_function);
+        mir_emit_final_call_cleanup(out, 3);
+    }
+    for (check = 0;
+         check < MIR_RAW_CONVERSION_WIDE_CHECKS; ++check) {
+        const struct MirRawConversionCheck *item =
+            &plan->wide_checks[check];
+
+        if (item->conversion_width == 2) {
+            fprintf(out, "\tld hl,%lu\n",
+                    item->conversion_input & 0xffffUL);
+            mir_emit_runtime_call(out, "__fif");
+        } else {
+            mir_machine_emit_float_bits(
+                out, item->conversion_input);
+            mir_emit_runtime_call(out, "__flf");
+        }
+        fputs("\tpush de\n\tpush hl\n", out);
+        mir_emit_final_call_constant(
+            out, item->input, item->input_width);
+        mir_machine_emit_symbol_call(out, item->value_function);
+        mir_emit_final_call_cleanup(
+            out, item->input_width / 2);
+        fputs("\tpush de\n\tpush hl\n", out);
+        fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+                item->name_string_id);
+        mir_machine_emit_symbol_call(
+            out, plan->wide_check_function);
+        mir_emit_final_call_cleanup(out, 5);
+    }
+
+    mir_machine_emit_global_word(
+        out, plan->failures_root, plan->failures_offset);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_global_word(
+        out, plan->checks_root, plan->checks_offset);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->summary_string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    mir_emit_final_call_cleanup(out, 3);
+
+    mir_machine_emit_global_word(
+        out, plan->failures_root, plan->failures_offset);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out,
+            "\tjr nz,L%d\n\tld hl,S%d\n\tpush hl\n"
+            "\tjr L%d\nL%d:\n\tld hl,S%d\n\tpush hl\n"
+            "L%d:\n\tld hl,S%d\n\tpush hl\n",
+            failure_string, plan->success_string_id,
+            result_ready, failure_string,
+            plan->failure_string_id, result_ready,
+            plan->result_string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    mir_emit_final_call_cleanup(out, 2);
+
+    mir_machine_emit_global_word(
+        out, plan->failures_root, plan->failures_offset);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out,
+            "\tjr z,L%d\n\tld hl,1\n\tret\n"
+            "L%d:\n\tld hl,0\n\tret\n",
+            return_success, return_success);
+}
+
 static void mir_emit_buffered_declaration_address(
     FILE *out, const struct MirBufferedDeclarationSchedule *plan)
 {
@@ -52533,6 +53068,8 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFormatBufferSchedule format_buffer_schedule;
     struct MirAtofSchedule atof_schedule;
     struct MirFloatReportSchedule float_report_schedule;
+    struct MirRawConversionCheckSchedule
+        raw_conversion_check_schedule;
     struct MirSymbolFindSchedule symbol_find_schedule;
     struct MirLocalIdentityArrayResult local_identity_array_result;
     struct MirConstantResultSwitch constant_result_switch;
@@ -52747,6 +53284,16 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     if (mir_match_atof_schedule(&atof_schedule)) {
         mir_emit_atof_schedule(out, &atof_schedule);
         return 1;
+    }
+    if (mir_match_raw_conversion_check_schedule(
+            &raw_conversion_check_schedule)) {
+        mir_emit_raw_conversion_check_schedule(
+            out, &raw_conversion_check_schedule);
+        if (mir_stream_size(out) <
+            mir_stream_size(mir.capture_stream))
+            return 1;
+        return mir_machine_reject(
+            "raw-conversion-check-schedule", "text-cost");
     }
     if (mir_match_float_report_schedule(
             &float_report_schedule)) {

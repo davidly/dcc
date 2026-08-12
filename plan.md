@@ -6,10 +6,39 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Base HEAD for this batch: `c71806a`.
-- Current candidate coverage: **2124/2185 (97.21%)**.
-- Remaining fallback population: **61 `final-cost-policy`**, all selected by
+- Base HEAD for this batch: `d59f80e`.
+- Current candidate coverage: **2126/2185 (97.30%)**.
+- Remaining fallback population: **59 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- Two strict name-free scheduled families admit the genuine nine-block
+  call/check/report mains in `tfmaddr` and `tfpraw`. The float report family
+  now accepts the fully proved nine-check, 195-instruction, 41-call,
+  single-checker/no-local profile used by `tfmaddr.main`; the emitted and
+  captured 42-call assembly sequences are identical. A new raw-conversion
+  checker family accounts for all 519 instructions and 82 MIR calls in
+  `tfpraw.main`: four distinct one-wide-argument predicate groups with
+  6/7/6/7 uses, 26 boolean checks, two distinct seven-use conversion groups,
+  14 wide checks through one reused union location, and the canonical
+  check/failure summary, PASS/FAIL selection, and nonzero return. It emits
+  each proved int/long-to-float conversion through the original `__fif` or
+  `__flf` helper before the matching wrapper/check call. Its selected and
+  captured 97-call assembly sequences are identical. Both families use no IY
+  and retain a family-local strict-smaller gate. Ordinary selected/captured
+  metrics are 4,189/4,331 bytes and 434/447 instructions for `tfmaddr`, and
+  7,085/11,101 bytes and 729/1,152 instructions for `tfpraw`; stack-check
+  metrics are 4,218/4,360 and 435/448, and 7,114/11,130 and 730/1,153.
+  Full peep/nopeep validation passes. Selected versus forced-main-fallback
+  results are `tfmaddr` 81,247/81,247 peep cycles and 81,247/81,373 nopeep,
+  with 6,912/6,912 and 6,912/7,040 bytes; and `tfpraw` 81,057/84,309 and
+  81,561/84,874 cycles, with 7,424/7,936 and 7,424/8,064 bytes. Deliberate
+  one-check mismatch harnesses produce byte-identical failure text, summary,
+  `RESULT: FAIL`, and nonzero return in selected/fallback peep and nopeep
+  runs. No baseline changed. Forced final spilled output remains a real loss
+  for the other fresh nine-block residuals: `tstrconv.main` regresses both
+  modes by 0.25-0.43% and 512-640 bytes, while `tlog.frexpf` regresses
+  3.11-3.29% and 384 bytes. They remain on fallback. The regression-gated
+  stack census advances from 2124/2185 to 2126/2185 with exactly
+  `tfmaddr.main` and `tfpraw.main`, and no removal.
 - Three strict variants of the float call/report family now admit the remaining
   nine-block mains in `tasinfsp`, `tfmodfsp`, and `tfmaf`. They retain the
   complete existing recursive expression proof and add exact structural
