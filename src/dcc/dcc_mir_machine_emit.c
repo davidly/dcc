@@ -10806,6 +10806,113 @@ static int mir_match_fixed_prediction_count(
     return 1;
 }
 
+static int mir_match_fixed_prediction_check(
+    struct MirFixedPredictionLoop *plan)
+{
+    static const int expected_opcodes[51] = {
+        MIR_LABEL, MIR_CALL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP,
+        MIR_CONST, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_PHI, MIR_NOP,
+        MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_ADDRESS,
+        MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_INDEX_ADDRESS,
+        MIR_ARG, MIR_NOP, MIR_CONST, MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_ARG,
+        MIR_CALL, MIR_LOAD, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST,
+        MIR_STORE, MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_RETURN
+    };
+    const struct MirInsn *index_phi = &mir.insns[10];
+    const struct MirInsn *call = &mir.insns[29];
+    int arguments[3];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 51 || mir_cfg_block_count() != 5 ||
+        mir.has_vla || !type_is_bool(mir.return_type))
+        return mir_machine_reject("fixed-prediction-check", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "fixed-prediction-check", "opcode");
+    if (!mir_machine_call_has_no_arguments(&mir.insns[1]) ||
+        !mir_machine_constant_equals(mir.insns[3].dst, 1) ||
+        !mir_machine_unobservable_local_store(&mir.insns[4]) ||
+        !mir_machine_constant_equals(mir.insns[6].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[7]) ||
+        index_phi->src1 != mir.insns[6].dst ||
+        index_phi->src2 != mir.insns[45].dst ||
+        index_phi->phi_pred1 != mir.insns[0].label ||
+        index_phi->phi_pred2 != mir.insns[42].label ||
+        mir.insns[12].immediate <= 0 ||
+        mir.insns[14].immediate != '<' ||
+        mir.insns[14].src1 != mir.insns[13].dst ||
+        mir.insns[14].src2 != mir.insns[12].dst ||
+        mir.insns[15].label != mir.insns[48].label)
+        return mir_machine_reject(
+            "fixed-prediction-check", "loop");
+    plan->count = (int)mir.insns[12].immediate;
+    plan->columns = (int)mir.insns[18].immediate;
+    plan->returns_bool = 1;
+    plan->prefix_function = find_global(mir.insns[1].name);
+    if (plan->count <= 0 || plan->count > 255 ||
+        plan->columns <= 0 || plan->columns > 255 ||
+        plan->prefix_function == NULL ||
+        !plan->prefix_function->is_defined ||
+        !mir_scalar_memory_location(
+            &mir.insns[16], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        mir.insns[20].immediate != '*' ||
+        mir.insns[21].src1 != mir.insns[16].dst ||
+        mir.insns[21].src2 != mir.insns[20].dst ||
+        mir.insns[21].immediate != 2)
+        return mir_machine_reject(
+            "fixed-prediction-check", "logits");
+    plan->logits = find_global(mir.insns[16].name);
+    plan->logits_offset = memory_offset;
+    if (!mir_machine_three_call_arguments(call, arguments) ||
+        arguments[0] != mir.insns[21].dst ||
+        arguments[1] != mir.insns[24].dst ||
+        arguments[2] != mir.insns[26].dst ||
+        mir.insns[24].immediate != plan->columns)
+        return mir_machine_reject(
+            "fixed-prediction-check", "call");
+    plan->maximum_function = find_global(call->name);
+    if (plan->maximum_function == NULL ||
+        !plan->maximum_function->is_defined ||
+        !mir_scalar_memory_location(
+            &mir.insns[31], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        mir.insns[33].src1 != mir.insns[31].dst ||
+        mir.insns[33].src2 != index_phi->dst ||
+        mir.insns[33].immediate != 2 ||
+        mir.insns[34].src1 != mir.insns[33].dst ||
+        mir.insns[35].immediate != TOK_NE ||
+        mir.insns[35].src1 != mir.insns[30].dst ||
+        mir.insns[35].src2 != mir.insns[34].dst ||
+        mir.insns[36].label != mir.insns[40].label)
+        return mir_machine_reject(
+            "fixed-prediction-check", "target");
+    plan->targets = find_global(mir.insns[31].name);
+    plan->targets_offset = memory_offset;
+    if (!mir_machine_constant_equals(mir.insns[38].dst, 0) ||
+        mir.insns[39].object != mir.insns[4].object ||
+        !mir_machine_constant_equals(mir.insns[44].dst, 1) ||
+        mir.insns[45].immediate != '+' ||
+        mir.insns[45].src1 != index_phi->dst ||
+        mir.insns[47].label != mir.insns[8].label ||
+        mir.insns[49].object != mir.insns[4].object ||
+        mir.insns[50].src1 != mir.insns[49].dst ||
+        plan->logits == NULL || plan->targets == NULL ||
+        plan->logits->is_volatile || plan->targets->is_volatile)
+        return mir_machine_reject(
+            "fixed-prediction-check", "result");
+    return 1;
+}
+
 static int mir_match_constant_loop_check(
     struct MirConstantLoopCheck *plan)
 {
@@ -20550,6 +20657,7 @@ static void mir_emit_fixed_global_stride_call(
 static void mir_emit_fixed_prediction_count(
     FILE *out, const struct MirFixedPredictionLoop *plan)
 {
+    int after_update = new_label();
     int different = new_label();
     int loop = new_label();
 
@@ -20558,8 +20666,14 @@ static void mir_emit_fixed_prediction_count(
             "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
             "\tdec sp\n\tdec sp\n",
             mir.name);
+    if (plan->returns_bool)
+        fputs("\tdec sp\n", out);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
+    if (plan->prefix_function != NULL)
+        mir_machine_emit_symbol_call(out, plan->prefix_function);
+    if (plan->returns_bool)
+        fputs("\tld (ix-3),1\n", out);
     fputs("\tld iy,0\n", out);
     fprintf(out, "L%d:\n"
                  "\tpush ix\n\tpop hl\n\tdec hl\n\tdec hl\n\tpush hl\n"
@@ -20578,20 +20692,31 @@ static void mir_emit_fixed_prediction_count(
           "\tld a,b\n\tcp d\n", out);
     fprintf(out, "\tjp nz,L%d\n\tld a,c\n\tcp e\n\tjp nz,L%d\n",
             different, different);
-    mir_machine_emit_global_word(out, plan->hits, plan->hits_offset);
-    fputs("\tinc hl\n", out);
-    mir_machine_emit_global_word_store(
-        out, plan->hits, plan->hits_offset);
+    if (plan->returns_bool) {
+        fprintf(out, "\tjp L%d\n", after_update);
+    } else {
+        mir_machine_emit_global_word(out, plan->hits, plan->hits_offset);
+        fputs("\tinc hl\n", out);
+        mir_machine_emit_global_word_store(
+            out, plan->hits, plan->hits_offset);
+    }
     fprintf(out, "L%d:\n", different);
-    mir_machine_emit_global_word(out, plan->total, plan->total_offset);
-    fputs("\tinc hl\n", out);
-    mir_machine_emit_global_word_store(
-        out, plan->total, plan->total_offset);
+    if (plan->returns_bool)
+        fputs("\tld (ix-3),0\n", out);
+    else {
+        mir_machine_emit_global_word(out, plan->total, plan->total_offset);
+        fputs("\tinc hl\n", out);
+        mir_machine_emit_global_word_store(
+            out, plan->total, plan->total_offset);
+    }
+    if (plan->returns_bool)
+        fprintf(out, "L%d:\n", after_update);
     fputs("\tinc iy\n\tpush iy\n\tpop hl\n\tld a,l\n", out);
-    fprintf(out, "\tcp %d\n\tjp nz,L%d\n"
-                 "\tld sp,ix\n\tpop ix\n\tpop iy\n"
-                 ";@dcc.reg free=iy\n\tret\n",
-            plan->count, loop);
+    fprintf(out, "\tcp %d\n\tjp nz,L%d\n", plan->count, loop);
+    if (plan->returns_bool)
+        fputs("\tld l,(ix-3)\n\tld h,0\n", out);
+    fputs("\tld sp,ix\n\tpop ix\n\tpop iy\n"
+          ";@dcc.reg free=iy\n\tret\n", out);
 }
 
 static void mir_emit_constant_loop_check(
@@ -22049,6 +22174,8 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
         return 1;
     }
     if (mir_match_fixed_prediction_count(
+            &fixed_prediction_loop) ||
+        mir_match_fixed_prediction_check(
             &fixed_prediction_loop)) {
         mir_emit_fixed_prediction_count(
             out, &fixed_prediction_loop);
