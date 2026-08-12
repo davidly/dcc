@@ -6612,6 +6612,40 @@ opclr:
         call    __mkfcb
         pop     de
 
+        ; Reject a wildcard character ('?' or '*') in the parsed name/ext
+        ; whenever this open could create a new directory entry (O_CREAT or
+        ; O_TRUNC - "w" or "a"). BDOS make (fn 22) never validates the FCB;
+        ; it just copies it into an empty directory slot, so letting a
+        ; wildcard through would silently create a real, permanent file
+        ; whose name contains that literal byte - and since delete/search
+        ; (fn 19/17/18) correctly treat '?'/'*' as pattern characters, not
+        ; literal ones, such a file can never be matched/deleted again
+        ; through the normal wildcard-aware path. Plain "r" mode (opexist
+        ; below) is intentionally left unchecked: CP/M's own spec never
+        ; promises anything for an ambiguous FCB passed to open, so that
+        ; case is left as documented, implementation-defined behavior
+        ; rather than a new restriction.
+        ld      a,(ix+7)
+        and     2
+        jr      nz,opwscn       ; O_TRUNC set: check
+        ld      a,(ix+6)
+        and     40h
+        jr      z,opnowc        ; neither set ("r"): no create risk, skip
+opwscn:
+        ld      h,d
+        ld      l,e
+        inc     hl              ; HL = fcb+1 (name field)
+        ld      b,11
+opwsc1:
+        ld      a,(hl)
+        cp      '?'
+        jr      z,opwbad
+        cp      '*'
+        jr      z,opwbad
+        inc     hl
+        djnz    opwsc1
+opnowc:
+
         ; Create/truncate only if O_CREAT or O_TRUNC is set.
         ; Test uses:
         ;   O_CREAT = 0100 octal = 0040h
@@ -6675,6 +6709,9 @@ opfail_noent:
         jr      opfail_common
 opfail_nospc:
         call    __nospc
+        jr      opfail_common
+opwbad:
+        call    __einval
 opfail_common:
         ld      a,(__slot)
         call    __usep
@@ -7772,12 +7809,22 @@ mfnoprefix:
         ld      de,(__mffcb)
         inc     de              ; name field
         ld      b,8
+        ; '?' is a real BDOS wildcard and is passed through unchanged
+        ; (matches genuine CP/M semantics - see search/delete). '*' has no
+        ; meaning to BDOS itself; only the CCP's own filename parser (and
+        ; virtually every historic CP/M C runtime) expands it to fill the
+        ; rest of the current field with '?'. Do the same here so C-level
+        ; callers get the shell-glob-style "*" behavior they expect,
+        ; consistently across every emulator rather than only the ones
+        ; that happen to do their own host-level glob expansion.
 mfnam:
         ld      a,(hl)
         or      a
         ret     z
         cp      '.'
         jr      z,mfdot
+        cp      '*'
+        jr      z,mfnmst
         call    __upa
         ld      (de),a
         inc     de
@@ -7791,6 +7838,13 @@ mfskp:
         jr      z,mfdot
         inc     hl
         jr      mfskp
+mfnmst:
+        ld      a,'?'
+mfnmfl:
+        ld      (de),a
+        inc     de
+        djnz    mfnmfl
+        jr      mfskp           ; skip any trailing source chars up to '.'
 mfdot:
         inc     hl
         push    hl
@@ -7804,11 +7858,20 @@ mfext:
         ld      a,(hl)
         or      a
         ret     z
+        cp      '*'
+        jr      z,mfexst
         call    __upa
         ld      (de),a
         inc     de
         inc     hl
         djnz    mfext
+        ret
+mfexst:
+        ld      a,'?'
+mfexfl:
+        ld      (de),a
+        inc     de
+        djnz    mfexfl
         ret
 
 __upa:
@@ -12383,8 +12446,9 @@ lj_ix:          dw      0
 ;
 ; This is intentionally small and CP/M-2.2-oriented.  opendir("."),
 ; opendir("*.*"), and opendir("A:") enumerate all files on the selected
-; drive.  Other path strings are accepted but treated as wildcard scans;
-; CP/M has no hierarchical directories.
+; drive.  A specific pattern (e.g. opendir("*.C") or opendir("T?.TMP"))
+; filters the scan the same way unlink()/rename() do - via __mkfcb's
+; '?'/'*' handling.  CP/M has no hierarchical directories.
 ; ============================================================
         public  _dopn
 _dopn:
@@ -12399,40 +12463,34 @@ _dopn:
         ld      (hl),0
         ldir
 
-        ; Optional drive letter: "A:" -> 1, "B:" -> 2, ...
+        ; Parse the caller's path/pattern into the FCB: optional "X:"
+        ; drive prefix, then name/ext with '?' passed through as a
+        ; wildcard and '*' expanded to fill the rest of the field with
+        ; '?' - identical to what unlink()/rename() already do.
         ld      l,(ix+4)
         ld      h,(ix+5)
-        ld      a,(hl)
-        or      a
-        jr      z,__drod0
-        inc     hl
-        ld      b,(hl)
-        dec     hl
-        ld      a,b
-        cp      ':'
-        jr      nz,__drod0
-        ld      a,(hl)
-        cp      'a'
-        jr      c,__drod1
-        cp      'z'+1
-        jr      nc,__drod1
-        sub     20h
-__drod1:
-        cp      'A'
-        jr      c,__drod0
-        cp      'Z'+1
-        jr      nc,__drod0
-        sub     'A'-1
-        ld      (__drfcb),a
-__drod0:
+        ld      de,__drfcb
+        call    __mkfcb
 
-        ; Wildcard name/ext: ???????????
+        ; If nothing was actually specified - empty string, ".", or a bare
+        ; "X:" drive prefix - __mkfcb leaves the whole 11-byte name/ext as
+        ; spaces (it never matches a real file); fall back to a full
+        ; "match everything" wildcard scan, same as an explicit "*.*".
+        ld      hl,__drfcb+1
+        ld      b,11
+__drchk:
+        ld      a,(hl)
+        cp      ' '
+        jr      nz,__drgo
+        inc     hl
+        djnz    __drchk
         ld      hl,__drfcb+1
         ld      b,11
 __drofq:
         ld      (hl),'?'
         inc     hl
         djnz    __drofq
+__drgo:
 
         ; Set DMA buffer.
         ld      c,26

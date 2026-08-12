@@ -1,0 +1,3 @@
+PASS fopen_w_wildcard_rejected: 1
+PASS no_ghost_file_created: 0
+tmakewc ok

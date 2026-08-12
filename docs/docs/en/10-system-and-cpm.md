@@ -50,8 +50,8 @@ selected drive.
 
 | Function | Summary |
 | --- | --- |
-| `DIR *opendir(const char *path)` | Begin a scan (`"."`, `"*.*"`, or `"A:"`). |
-| `struct dirent *readdir(DIR *dirp)` | Next entry, or `NULL` at the end. |
+| `DIR *opendir(const char *path)` | Begin a scan. `"."`, `"*.*"`, and a bare `"A:"` enumerate every file; a specific pattern (`"*.C"`, `"T?.TMP"`) filters the scan the same way `unlink()` does. |
+| `struct dirent *readdir(DIR *dirp)` | Next matching entry, or `NULL` at the end. |
 | `int closedir(DIR *dirp)` | End the scan. |
 
 `struct dirent` has a single member, `char d_name[13]`, holding the 8.3 name.
@@ -137,26 +137,61 @@ DCCRTL treats this as the one legitimate reason `__fdlen` can be genuinely
 larger than what a raw record-count register pair reported; see `tests/tbig.c`
 for sequential and random I/O across that boundary.
 
-### `unlink()` and `rename()` on ambiguous (wildcard) names
+### Only search (fn 17/18) and delete (fn 19) officially support wildcards
 
-An FCB filename or extension byte can be `?`, which BDOS treats as "match any
-character in this position" for delete (function 19) and rename (function 23).
-DCCRTL's `__mkfcb` copies `?`/`*` characters through unchanged, so a literal
-`?` reaching `unlink()`/`rename()` — typed deliberately or arriving from
-unsanitized input — deletes or renames **every** file the pattern matches, not
-just one. `"WA?.TMP"` for example matches `WA1.TMP`, `WA2.TMP`, and `WA3.TMP`
-all at once; there's no way to single one out once a wildcard character is
-present. See `tests/twild.c`.
+Per the documented CP/M 2.2 Interface Guide, `?` in an FCB byte means "match
+any character in this position" — but only for `opendir`/`readdir` (BDOS 17/18,
+search first/next) and `unlink` (BDOS 19, delete). `fopen`/`open` (BDOS 15,
+open), `fopen(path, "w")`/`fopen(path, "a")`-on-a-new-file (BDOS 22, make), and
+`rename` (BDOS 23) are silent on the subject — the spec never promises
+anything for an ambiguous FCB passed to them, and behavior there is either
+implementation-defined or deliberately blocked at the DCCRTL level (see below).
 
-`rename()` onto an already-existing destination name is a genuine behavioral
-split across emulators, not a bug in either camp: ntvcm, cpmemu, zxcc, z88dk's
-cpm, and RunCPM silently overwrite the destination, while tnylpo and cpm.exe
-reject the rename outright (nonzero return, original name and content
-untouched). The CP/M 2.2 BDOS spec doesn't clearly mandate one behavior over
-the other for this case, and DCCRTL doesn't paper over the difference — check
-`rename()`'s return value, or `unlink()` the destination first if your program
-needs one specific outcome regardless of which BDOS implementation it runs
-under. See `tests/trenamex.c`.
+`__mkfcb` passes a `?` through unchanged, matching real BDOS wildcard
+semantics: `unlink("WA?.TMP")` deletes **every** file the pattern matches, not
+just one (`WA1.TMP`, `WA2.TMP`, and `WA3.TMP` all at once, for example), and
+`opendir("T?.TMP")`/`readdir()` filters to exactly the files that match. There
+is no way to single out one file once a wildcard character is present. See
+`tests/twild.c` and `tests/tdirpat.c`.
+
+A literal `*`, unlike `?`, has no meaning to BDOS itself — only `?` is a real
+wildcard at the BDOS level. The familiar shell-glob convention where `*`
+matches any run of characters is implemented by the CCP's own command-line
+parser (and by virtually every historic CP/M C runtime library), which expands
+`*` by filling the rest of the current field with `?` before the FCB ever
+reaches BDOS. `__mkfcb` does the same: a `*` in the name or extension fills
+the remainder of that field with `?`, so `unlink("*.BAK")`,
+`opendir("*.C")`, etc. behave the way C code typically expects, consistently
+across every DCCRTL target rather than only on hosts whose emulator happens to
+do its own glob expansion. See `tests/tstar.c`.
+
+`rename()` with an ambiguous FCB (either the old or new name) is rejected
+outright (nonzero return, nothing renamed) — this is correct, spec-compliant
+behavior, not a limitation worth working around. (CP/M 2.2's own BDOS source
+technically loops over ambiguous *old*-name matches the same way delete does,
+but that's undocumented, and it would just copy the new name's bytes verbatim
+— `?` and all — into every match, producing garbage entries rather than any
+kind of sensible template substitution; no tested BDOS implementation actually
+does this.) See `tests/trenwild.c`.
+
+`fopen()`/`open()` for **reading** an ambiguous name is genuinely
+implementation-defined: real BDOS's open call happens to reuse the same
+directory-search primitive delete uses internally, with no explicit check
+against an ambiguous FCB, so on some implementations it silently opens
+whatever the first matching directory entry happens to be, while others
+reject it outright. Don't rely on this either way. See `tests/tfopenw.c`.
+
+`fopen()`/`open()` for **creating** a file (`"w"`, or `"a"` on a file that
+doesn't exist yet) is different: DCCRTL explicitly rejects a `?` or `*` in the
+parsed name/ext before making any BDOS call at all, returning failure (`NULL`
+from `fopen`, `-1` from `open`, `errno = EINVAL`). BDOS's make call never
+validates the FCB it's given — it just copies it into an empty directory slot
+— so letting a wildcard through would silently create a real, permanent file
+whose name contains that literal character, and such a file can never again be
+matched by a wildcard-aware `unlink()`/`opendir()` scan (which correctly treat
+`?`/`*` as pattern characters, not literal ones). Rejecting it up front avoids
+creating a file with no portable way to clean it back up. See
+`tests/tmakewc.c`.
 
 ### Drive-letter prefixes
 

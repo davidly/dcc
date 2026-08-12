@@ -1,0 +1,8 @@
+PASS ambiguous_rename_rejected: 1
+PASS rw1_untouched: 1
+PASS rw2_untouched: 1
+PASS rw3_untouched: 1
+PASS rb1_not_created: 0
+PASS rb2_not_created: 0
+PASS rb3_not_created: 0
+trenwild ok
