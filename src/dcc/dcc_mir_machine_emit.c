@@ -826,6 +826,12 @@ struct MirFixedAllocationRunner {
     int string_id;
 };
 
+struct MirStringPutcharLoop {
+    struct Sym *function;
+    int condition_string_id;
+    int string_id;
+};
+
 struct MirAsciiUpper {
     int parameter_stack_offset;
     int width;
@@ -11912,6 +11918,105 @@ static int mir_match_conditional_string_report(
     plan->format_string_id = (int)mir.insns[3].immediate;
     plan->true_string_id = (int)mir.insns[9].immediate;
     plan->false_string_id = (int)mir.insns[13].immediate;
+    return 1;
+}
+
+static int mir_match_string_putchar_loop(
+    struct MirStringPutcharLoop *plan)
+{
+    static const int expected_opcodes[44] = {
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_STRING_ADDRESS, MIR_STORE, MIR_STRING_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_NOP,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_JUMP, MIR_LABEL,
+        MIR_LABEL, MIR_PHI, MIR_LOAD, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BRANCH_FALSE,
+        MIR_LOAD, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY,
+        MIR_ARG, MIR_CALL, MIR_NOP, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_NOP,
+        MIR_LABEL, MIR_CONST, MIR_RETURN
+    };
+    const struct MirInsn *call = &mir.insns[35];
+    int call_argument;
+    long numerator;
+    long denominator;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 44 || mir_cfg_block_count() != 7 ||
+        mir.has_vla || type_size(mir.return_type) != 2)
+        return mir_machine_reject("string-putchar-loop", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject("string-putchar-loop", "opcode");
+    numerator = (long)((unsigned long)mir.insns[2].immediate & 0xffffUL);
+    denominator = (long)((unsigned long)mir.insns[3].immediate & 0xffffUL);
+    if (numerator >= 32768)
+        numerator -= 65536;
+    if (denominator >= 32768)
+        denominator -= 65536;
+    if (mir.insns[2].opcode != MIR_CONST ||
+        mir.insns[3].opcode != MIR_CONST ||
+        mir.insns[4].immediate != '/' ||
+        mir.insns[4].src1 != mir.insns[2].dst ||
+        mir.insns[4].src2 != mir.insns[3].dst ||
+        denominator == 0 || numerator / denominator != -1 ||
+        !mir_machine_unobservable_local_store(&mir.insns[5]) ||
+        mir.insns[5].src1 != mir.insns[4].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[7]) ||
+        mir.insns[7].src1 != mir.insns[6].dst ||
+        !mir_machine_constant_equals(mir.insns[9].dst, 1) ||
+        mir.insns[10].src1 != mir.insns[8].dst ||
+        mir.insns[10].src2 != mir.insns[9].dst ||
+        mir.insns[10].immediate != 1 ||
+        mir.insns[11].src1 != mir.insns[10].dst ||
+        (mir.insns[11].memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_constant_equals(mir.insns[12].dst, 0) ||
+        mir.insns[14].immediate != '<' ||
+        mir.insns[14].src1 != mir.insns[11].dst ||
+        mir.insns[14].src2 != mir.insns[12].dst ||
+        mir.insns[15].src1 != mir.insns[14].dst ||
+        mir.insns[15].label != mir.insns[18].label ||
+        mir.insns[17].label != mir.insns[41].label)
+        return mir_machine_reject("string-putchar-loop", "condition");
+    if (mir.insns[20].src1 != mir.insns[4].dst ||
+        mir.insns[20].src2 != mir.insns[24].dst ||
+        mir.insns[20].phi_pred1 != mir.insns[18].label ||
+        mir.insns[20].phi_pred2 != mir.insns[37].label ||
+        !mir_machine_same_location(&mir.insns[7], &mir.insns[21]) ||
+        !mir_machine_constant_equals(mir.insns[23].dst, 1) ||
+        mir.insns[24].immediate != '+' ||
+        mir.insns[24].src1 != mir.insns[20].dst ||
+        mir.insns[24].src2 != mir.insns[23].dst ||
+        !mir_machine_same_location(&mir.insns[5], &mir.insns[25]) ||
+        mir.insns[25].src1 != mir.insns[24].dst ||
+        mir.insns[26].src1 != mir.insns[21].dst ||
+        mir.insns[26].src2 != mir.insns[24].dst ||
+        mir.insns[26].immediate != 1 ||
+        mir.insns[27].src1 != mir.insns[26].dst ||
+        mir.insns[28].src1 != mir.insns[27].dst ||
+        mir.insns[28].label != mir.insns[39].label)
+        return mir_machine_reject("string-putchar-loop", "loop");
+    if (!mir_machine_same_location(&mir.insns[7], &mir.insns[29]) ||
+        mir.insns[31].src1 != mir.insns[29].dst ||
+    mir.insns[31].src2 != mir.insns[24].dst ||
+        mir.insns[31].immediate != 1 ||
+        mir.insns[32].src1 != mir.insns[31].dst ||
+        mir.insns[33].src1 != mir.insns[32].dst ||
+        !mir_machine_single_call_argument(call, &call_argument) ||
+        call_argument != mir.insns[33].dst ||
+        mir.insns[38].label != mir.insns[19].label ||
+        !mir_machine_constant_equals(mir.insns[42].dst, 0) ||
+        mir.insns[43].src1 != mir.insns[42].dst)
+        return mir_machine_reject("string-putchar-loop", "call");
+    plan->function = find_global(call->name);
+    if (plan->function == NULL || plan->function->storage != SC_FUNC ||
+        plan->function->is_funcptr ||
+        (call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0)
+        return mir_machine_reject("string-putchar-loop", "function");
+    plan->condition_string_id = (int)mir.insns[8].immediate;
+    plan->string_id = (int)mir.insns[6].immediate;
     return 1;
 }
 
@@ -23065,6 +23170,33 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_string_putchar_loop(
+    FILE *out, const struct MirStringPutcharLoop *plan)
+{
+    int loop = new_label();
+    int done = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tdec sp\n\tdec sp\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,S%d\n\tld (ix-2),l\n\tld (ix-1),h\n"
+            "\tld a,(S%d+1)\n\tand 128\n\tjp nz,L%d\n"
+            "L%d:\n\tld l,(ix-2)\n\tld h,(ix-1)\n"
+            "\tld a,(hl)\n\tor a\n\tjp z,L%d\n"
+            "\tinc hl\n\tld (ix-2),l\n\tld (ix-1),h\n"
+            "\tld l,a\n\trlca\n\tsbc a,a\n\tld h,a\n\tpush hl\n",
+            plan->string_id, plan->condition_string_id,
+            done, loop, done);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n", out);
+    fprintf(out,
+            "\tjp L%d\nL%d:\n\tld hl,0\n"
+            "\tld sp,ix\n\tpop ix\n\tret\n",
+            loop, done);
+}
+
 static void mir_emit_fixed_allocation_runner(
     FILE *out, const struct MirFixedAllocationRunner *plan)
 {
@@ -24267,6 +24399,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirStringPutcharLoop string_putchar_loop;
     struct MirFixedAllocationRunner fixed_allocation_runner;
     struct MirFloatModuloNormalize float_modulo_normalize;
     struct MirNoArgTestRunner noarg_test_runner;
@@ -24904,6 +25037,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_string_putchar_loop(&string_putchar_loop)) {
+        mir_emit_string_putchar_loop(out, &string_putchar_loop);
         return 1;
     }
     if (mir_match_fixed_allocation_runner(
