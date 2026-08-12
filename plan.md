@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `cf7734a`
-  (`schedule compact hall initialization`).
-- Current candidate coverage: **2031/2185 (92.95%)**.
-- Remaining fallback population: **154 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `8a69884`
+  (`prove local bitfield checks`).
+- Current candidate coverage: **2032/2185 (93.00%)**.
+- Remaining fallback population: **153 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -516,6 +516,10 @@ current execution plan and handoff.
   after validating a strict one-block bitfield-only graph. This admits
   `tc89bit.tbone` and `tbtwo`, improving the app 10.02% peep / 11.18% nopeep
   with 13.46% / 15.09% smaller images.
+- Nested compound-literal trees now use an exact eight-check proof path,
+  including both recursive sum results. This admits
+  `tclit.check_nested_literals`; cumulative app gains reach 17.91% peep /
+  19.00% nopeep with 10.67% / 12.99% smaller images.
 - A binary-search replacement for `too.isqrt_l` was rejected after focused
   boundary tests exposed incorrect small-input results; it is absent.
 - A candidate `pint.add_sym` schedule was rejected after it remained 0.26%
@@ -528,7 +532,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 154 final-cost fallbacks,
+- Current next priority: repeated causes in the 153 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 

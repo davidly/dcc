@@ -2531,6 +2531,42 @@ static int mir_match_local_bitfield_checks(struct MirConstantChecks *plan)
             (mir.count == 127 && plan->count == 9));
 }
 
+static int mir_match_nested_literal_checks(struct MirConstantChecks *plan)
+{
+    static const int calls[8] = { 70, 82, 94, 104, 114, 126, 138, 148 };
+    static const int values[8] = { 1, 20, 300, 321, 7, 40, 500, 547 };
+    int check;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 149 || mir_cfg_block_count() != 1 || mir.has_vla ||
+        (mir.return_type & 15) != TYPE_VOID ||
+        mir.insns[97].opcode != MIR_CALL || mir.insns[141].opcode != MIR_CALL ||
+        strcmp(mir.insns[97].name, mir.insns[141].name))
+        return 0;
+    for (check = 0; check < 8; ++check) {
+        int args[3];
+        const struct MirInsn *string;
+        struct MirMachineForm expected;
+        struct Sym *function;
+        if (!mir_machine_three_call_arguments(&mir.insns[calls[check]], args) ||
+            (string = mir_definition(args[2])) == NULL ||
+            string->opcode != MIR_STRING_ADDRESS ||
+            !mir_machine_pointer_form(args[1], calls[check], &expected, 0) ||
+            expected.kind != MIR_MACHINE_FORM_INTEGER ||
+            (expected.value & 0xffffL) != values[check] ||
+            (function = find_global(mir.insns[calls[check]].name)) == NULL ||
+            (plan->function != NULL && plan->function != function))
+            return mir_machine_reject("nested-literal-checks", "call");
+        plan->function = function;
+        plan->strings[check] = (int)string->immediate;
+        plan->actual[check] = values[check];
+        plan->expected[check] = values[check];
+    }
+    plan->count = 8;
+    plan->name_last = 1;
+    return plan->function != NULL;
+}
+
 static int mir_match_constant_prints(struct MirConstantPrints *plan)
 {
     int instruction;
@@ -30421,7 +30457,8 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_constant_checks(&constant_checks) ||
         mir_match_local_boolean_checks(&constant_checks) ||
-        mir_match_local_bitfield_checks(&constant_checks)) {
+    mir_match_local_bitfield_checks(&constant_checks) ||
+    mir_match_nested_literal_checks(&constant_checks)) {
         mir_emit_constant_checks(out, &constant_checks);
         return 1;
     }
