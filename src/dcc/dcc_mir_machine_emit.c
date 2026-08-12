@@ -664,6 +664,11 @@ struct MirManyByte4Checks {
     int count, string_ids[32], bytes[32][4], start_string, final_string;
 };
 
+struct MirPointerDifferenceMain {
+    struct Sym *length_function, *distance_function, *print_function;
+    int failure_strings[2], summary_strings[2];
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -7760,6 +7765,24 @@ static int mir_match_many_byte4_checks(struct MirManyByte4Checks *p)
     if(p->print_function==NULL||prints!=3)
         return mir_machine_reject("many-byte4-checks","prints");
     return 1;
+}
+
+static int mir_match_pointer_difference_main(struct MirPointerDifferenceMain *p)
+{
+    memset(p,0,sizeof(*p));
+    if(mir.count!=90||mir_cfg_block_count()!=4||mir.has_vla||
+       mir.insns[24].opcode!=MIR_CALL||mir.insns[33].opcode!=MIR_CALL||
+       mir.insns[51].opcode!=MIR_CALL||mir.insns[65].opcode!=MIR_CALL||
+       mir.insns[36].opcode!=MIR_CALL||mir.insns[67].opcode!=MIR_CALL||
+       mir.insns[80].opcode!=MIR_CALL||mir.insns[87].opcode!=MIR_CALL)return 0;
+    p->length_function=find_global(mir.insns[24].name);
+    p->distance_function=find_global(mir.insns[51].name);
+    p->print_function=find_global(mir.insns[36].name);
+    p->failure_strings[0]=(int)mir.insns[29].immediate;
+    p->failure_strings[1]=(int)mir.insns[55].immediate;
+    p->summary_strings[0]=(int)mir.insns[76].immediate;
+    p->summary_strings[1]=(int)mir.insns[85].immediate;
+    return p->length_function&&p->distance_function&&p->print_function;
 }
 
 static int mir_match_pointer_word_sum_until_zero(
@@ -27458,6 +27481,36 @@ static void mir_emit_many_byte4_checks(FILE*out,const struct MirManyByte4Checks*
     fputs("\tpop bc\n\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n",out);
 }
 
+static void mir_emit_pointer_difference_main(FILE*out,
+    const struct MirPointerDifferenceMain*p)
+{
+    int length_ok=new_label(),distance_ok=new_label(),success=new_label(),done=new_label();
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n\tld hl,-30\n\tadd hl,sp\n\tld sp,hl\n",out);
+    if(opt_stack_check)mir_emit_runtime_call(out,"__stchk");
+    fputs("\tld (ix-30),0\n\tld (ix-29),0\n"
+          "\tld (ix-8),97\n\tld (ix-7),0\n\tld (ix-6),98\n\tld (ix-5),0\n"
+          "\tld (ix-4),0\n\tld (ix-3),0\n",out);
+    mir_emit_local_address(out,-8);fputs("\tpush hl\n",out);
+    mir_machine_emit_symbol_call(out,p->length_function);fputs("\tpop bc\n\tld de,2\n\tor a\n\tsbc hl,de\n",out);
+    fprintf(out,"\tjp z,L%d\n",length_ok);
+    mir_emit_local_address(out,-8);fputs("\tpush hl\n",out);mir_machine_emit_symbol_call(out,p->length_function);
+    fputs("\tpop bc\n\tpush hl\n",out);fprintf(out,"\tld hl,S%d\n\tpush hl\n",p->failure_strings[0]);
+    mir_machine_emit_symbol_call(out,p->print_function);fputs("\tpop bc\n\tpop bc\n\tinc (ix-30)\n",out);
+    fprintf(out,"L%d:\n",length_ok);
+    mir_emit_local_address(out,-12);fputs("\tpush hl\n",out);mir_emit_local_address(out,-28);fputs("\tpush hl\n",out);
+    mir_machine_emit_symbol_call(out,p->distance_function);fputs("\tpop bc\n\tpop bc\n\tld de,4\n\tor a\n\tsbc hl,de\n",out);
+    fprintf(out,"\tjp z,L%d\n",distance_ok);
+    mir_emit_local_address(out,-12);fputs("\tpush hl\n",out);mir_emit_local_address(out,-28);fputs("\tpush hl\n",out);
+    mir_machine_emit_symbol_call(out,p->distance_function);fputs("\tpop bc\n\tpop bc\n\tpush hl\n",out);
+    fprintf(out,"\tld hl,S%d\n\tpush hl\n",p->failure_strings[1]);mir_machine_emit_symbol_call(out,p->print_function);
+    fputs("\tpop bc\n\tpop bc\n\tinc (ix-30)\n",out);
+    fprintf(out,"L%d:\n\tld a,(ix-30)\n\tor a\n\tjp z,L%d\n",distance_ok,success);
+    fputs("\tld l,(ix-30)\n\tld h,0\n\tpush hl\n",out);fprintf(out,"\tld hl,S%d\n\tpush hl\n",p->summary_strings[0]);
+    mir_machine_emit_symbol_call(out,p->print_function);fputs("\tpop bc\n\tpop bc\n\tld hl,1\n",out);fprintf(out,"\tjp L%d\nL%d:\n",done,success);
+    fprintf(out,"\tld hl,S%d\n\tpush hl\n",p->summary_strings[1]);mir_machine_emit_symbol_call(out,p->print_function);
+    fputs("\tpop bc\n\tld hl,0\n",out);fprintf(out,"L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",done);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -31202,6 +31255,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirPrefixUpdateChecks prefix_update_checks;
     struct MirManyWideChecks many_wide_checks;
     struct MirManyByte4Checks many_byte4_checks;
+    struct MirPointerDifferenceMain pointer_difference_main;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -31856,6 +31910,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_many_byte4_checks(&many_byte4_checks)) {
         mir_emit_many_byte4_checks(out, &many_byte4_checks);
+        return 1;
+    }
+    if (mir_match_pointer_difference_main(&pointer_difference_main)) {
+        mir_emit_pointer_difference_main(out, &pointer_difference_main);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(

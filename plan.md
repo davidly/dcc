@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `f3c66ae`
-  (`prove wide bit checks`).
-- Current candidate coverage: **2051/2185 (93.87%)**.
-- Remaining fallback population: **134 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `2268b8a`
+  (`prove float storage byte checks`).
+- Current candidate coverage: **2052/2185 (93.91%)**.
+- Remaining fallback population: **133 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -588,6 +588,10 @@ current execution plan and handoff.
   labels from MIR, preserve the start/success reports and use one buffer.
   This admits `tc89flta.main`, improving the app 22.08% peep / 21.74% nopeep
   with smaller images.
+- Pointer-difference orchestration now preserves both scaling helper calls and
+  complete failure behavior in a compact 30-byte frame. This admits
+  `tptrdiff.main`, improving the app 1.02% peep / 1.77% nopeep and shrinking
+  the nopeep image.
 - A direct `too.expected_area` dispatcher was rejected after repeated-call
   tests exposed incorrect signed divmod cache/register handling; it is absent.
 - A binary-search replacement for `too.isqrt_l` was rejected after focused
@@ -602,7 +606,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 134 final-cost fallbacks,
+- Current next priority: repeated causes in the 133 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
