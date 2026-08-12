@@ -1206,8 +1206,9 @@ __slf:
         ld      d,h             ; DE = original s
         ld      bc,0ffffh
         xor     a
-        cpir
-        or      a
+        cpir                    ; carry is unaffected by cpir and was already
+                                 ; cleared by "xor a" above, so sbc below is a
+                                 ; clean subtract without an "or a" to re-clear it
         sbc     hl,de           ; bytes scanned including NUL
         dec     hl
         ret
