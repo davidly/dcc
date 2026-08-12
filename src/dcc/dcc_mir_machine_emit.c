@@ -429,6 +429,15 @@ struct MirFixedCallSpillRunner {
     int expected_total;
 };
 
+struct MirFixedByteCopyChecks {
+    struct Sym *check_function;
+    char source_assembly_name[128];
+    char destination_assembly_name[128];
+    int message_string_ids[2];
+    int count;
+    int start_value;
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -5765,6 +5774,106 @@ static int mir_match_fixed_call_spill_runner(
         plan->buffer_assembly_name[0] == 0 ||
         plan->count <= 0 || plan->count > 32)
         return mir_machine_reject("fixed-call-spill-runner", "symbols");
+    return 1;
+}
+
+static int mir_match_fixed_byte_copy_checks(
+    struct MirFixedByteCopyChecks *plan)
+{
+    int arguments[2];
+    int declaration;
+    long count;
+    long start_value;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 97 || mir_cfg_block_count() != 10 ||
+        mir.has_vla ||
+        !mir_machine_constant_equals(mir.insns[1].dst, 0) ||
+        mir.insns[5].opcode != MIR_PHI ||
+        !mir_machine_constant_value(mir.insns[7].dst, &count, 0) ||
+        mir.insns[8].immediate != '<' ||
+        mir.insns[12].opcode != MIR_INDEX_ADDRESS ||
+        !mir_machine_constant_value(
+            mir.insns[13].dst, &start_value, 0) ||
+        mir.insns[15].immediate != '+' ||
+        mir.insns[17].opcode != MIR_STORE_INDIRECT ||
+        !mir_machine_constant_equals(mir.insns[20].dst, 1) ||
+        mir.insns[21].immediate != '+' ||
+        mir.insns[23].label != mir.insns[4].label ||
+        mir.insns[25].opcode != MIR_ADDRESS ||
+        mir.insns[28].opcode != MIR_ADDRESS ||
+        !mir_machine_constant_equals(mir.insns[31].dst, 0) ||
+        mir.insns[35].opcode != MIR_PHI ||
+        !mir_machine_constant_equals(mir.insns[37].dst, count) ||
+        mir.insns[38].immediate != '<' ||
+        !mir_machine_constant_equals(mir.insns[41].dst, 1) ||
+        mir.insns[42].immediate != '+' ||
+        !mir_machine_constant_equals(mir.insns[45].dst, 1) ||
+        mir.insns[46].immediate != '+' ||
+        mir.insns[48].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[49].opcode != MIR_STORE_INDIRECT ||
+        !mir_machine_constant_equals(mir.insns[52].dst, 1) ||
+        mir.insns[53].immediate != '+' ||
+        mir.insns[55].label != mir.insns[34].label ||
+        !mir_machine_constant_equals(mir.insns[57].dst, 0) ||
+        mir.insns[61].opcode != MIR_PHI ||
+        !mir_machine_constant_equals(mir.insns[63].dst, count) ||
+        mir.insns[64].immediate != '<' ||
+        mir.insns[66].opcode != MIR_ADDRESS ||
+        strcmp(mir.insns[66].name, mir.insns[28].name) ||
+        mir.insns[68].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[69].opcode != MIR_LOAD_INDIRECT ||
+        !mir_machine_constant_equals(
+            mir.insns[70].dst, start_value) ||
+        mir.insns[72].immediate != '+' ||
+        mir.insns[76].immediate != TOK_EQ ||
+        !mir_machine_two_call_arguments(
+            &mir.insns[80], arguments) ||
+        arguments[0] != mir.insns[76].dst ||
+        arguments[1] != mir.insns[78].dst ||
+        !mir_machine_constant_equals(mir.insns[83].dst, 1) ||
+        mir.insns[84].immediate != '+' ||
+        mir.insns[86].label != mir.insns[60].label)
+        return mir_machine_reject("fixed-byte-copy-checks", "loops");
+    if (mir.insns[88].opcode != MIR_LOAD ||
+        mir.insns[89].opcode != MIR_ADDRESS ||
+        strcmp(mir.insns[89].name, mir.insns[25].name) ||
+        !mir_machine_constant_equals(mir.insns[90].dst, count) ||
+        mir.insns[91].immediate != '+' ||
+        mir.insns[92].immediate != TOK_EQ ||
+        !mir_machine_two_call_arguments(
+            &mir.insns[96], arguments) ||
+        arguments[0] != mir.insns[92].dst ||
+        arguments[1] != mir.insns[94].dst)
+        return mir_machine_reject("fixed-byte-copy-checks", "final-check");
+    plan->check_function = find_global(mir.insns[80].name);
+    plan->message_string_ids[0] = (int)mir.insns[78].immediate;
+    plan->message_string_ids[1] = (int)mir.insns[94].immediate;
+    plan->count = (int)count;
+    plan->start_value = (int)start_value;
+    for (declaration = 0; declaration < mir.declared_count; ++declaration) {
+        if (!strcmp(
+                mir.declared_names[declaration],
+                mir.insns[10].name))
+            snprintf(plan->source_assembly_name,
+                     sizeof(plan->source_assembly_name), "%s",
+                     asm_name_for(
+                         mir.declared_link_names[declaration]));
+        if (!strcmp(
+                mir.declared_names[declaration],
+                mir.insns[28].name))
+            snprintf(plan->destination_assembly_name,
+                     sizeof(plan->destination_assembly_name), "%s",
+                     asm_name_for(
+                         mir.declared_link_names[declaration]));
+    }
+    if (plan->check_function == NULL ||
+        plan->source_assembly_name[0] == 0 ||
+        plan->destination_assembly_name[0] == 0 ||
+        plan->count <= 0 || plan->count > 32 ||
+        plan->start_value < 0 ||
+        plan->start_value + plan->count > 256)
+        return mir_machine_reject("fixed-byte-copy-checks", "symbols");
     return 1;
 }
 
@@ -24375,6 +24484,66 @@ static void mir_emit_fixed_call_spill_runner(
           ";@dcc.reg free=iy\n\tret\n", out);
 }
 
+static void mir_emit_fixed_byte_copy_check(
+    FILE *out, const struct MirFixedByteCopyChecks *plan, int element)
+{
+    int unequal = new_label();
+
+    fprintf(out,
+            "\tld hl,S%d\n\tpush hl\n"
+            "\tld hl,%s+%d\n\tld a,(hl)\n\tcp %d\n"
+            "\tld hl,0\n\tjp nz,L%d\n\tinc hl\n"
+            "L%d:\n\tpush hl\n",
+            plan->message_string_ids[0],
+            plan->destination_assembly_name, element,
+            plan->start_value + element,
+            unequal, unequal);
+    mir_machine_emit_symbol_call(out, plan->check_function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+}
+
+static void mir_emit_fixed_byte_copy_checks(
+    FILE *out, const struct MirFixedByteCopyChecks *plan)
+{
+    int copy = new_label();
+    int unequal = new_label();
+    int element;
+
+    fprintf(out,
+            ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n"
+            "\tpush iy\n",
+            mir.name);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out, "\tld hl,%s\n", plan->source_assembly_name);
+    for (element = 0; element < plan->count; ++element) {
+        fprintf(out, "\tld (hl),%d\n", plan->start_value + element);
+        if (element + 1 != plan->count)
+            fputs("\tinc hl\n", out);
+    }
+    fprintf(out,
+            "\tld hl,%s\n\tpush hl\n\tpop iy\n"
+            "\tld hl,%s\n\tld b,%d\n"
+            "L%d:\n\tld a,(iy+0)\n\tld (hl),a\n"
+            "\tinc iy\n\tinc hl\n\tdjnz L%d\n",
+            plan->source_assembly_name,
+            plan->destination_assembly_name, plan->count,
+            copy, copy);
+    for (element = 0; element < plan->count; ++element)
+        mir_emit_fixed_byte_copy_check(out, plan, element);
+    fprintf(out,
+            "\tld hl,S%d\n\tpush hl\n"
+            "\tpush iy\n\tpop hl\n\tld de,%s+%d\n"
+            "\tor a\n\tsbc hl,de\n\tld hl,0\n"
+            "\tjp nz,L%d\n\tinc hl\nL%d:\n\tpush hl\n",
+            plan->message_string_ids[1],
+            plan->source_assembly_name, plan->count,
+            unequal, unequal);
+    mir_machine_emit_symbol_call(out, plan->check_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop iy\n"
+          ";@dcc.reg free=iy\n\tret\n", out);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -28086,6 +28255,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFixedRowMemberSum fixed_row_member_sum;
     struct MirRecursiveAggregateChain recursive_aggregate_chain;
     struct MirFixedCallSpillRunner fixed_call_spill_runner;
+    struct MirFixedByteCopyChecks fixed_byte_copy_checks;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -28589,6 +28759,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &fixed_call_spill_runner)) {
         mir_emit_fixed_call_spill_runner(
             out, &fixed_call_spill_runner);
+        return 1;
+    }
+    if (mir_match_fixed_byte_copy_checks(
+            &fixed_byte_copy_checks)) {
+        mir_emit_fixed_byte_copy_checks(
+            out, &fixed_byte_copy_checks);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
