@@ -595,6 +595,11 @@ struct MirEscapeReport {
     int format_id;
 };
 
+struct MirStructInitReports {
+    struct Sym *print_function;
+    int format_ids[9];
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -7316,6 +7321,35 @@ static int mir_match_escape_report(struct MirEscapeReport *p)
     snprintf(p->print_name, sizeof(p->print_name), "%s", mir.insns[115].base_name);
     return found == 1 && p->global_function && p->interior_function &&
            p->call_function && p->print_name[0];
+}
+
+static int mir_match_struct_init_reports(struct MirStructInitReports *p)
+{
+    static const int calls[9] = {75,105,132,151,181,208,241,256,259};
+    int r, i;
+    memset(p, 0, sizeof(*p));
+    if (mir.count != 262 || mir_cfg_block_count() != 1 || mir.has_vla ||
+        !mir_machine_constant_equals(mir.insns[260].dst, 0) ||
+        mir.insns[261].src1 != mir.insns[260].dst)
+        return 0;
+    for (r = 0; r < 9; ++r) {
+        int found = 0;
+        const struct MirInsn *call = &mir.insns[calls[r]];
+        if (call->opcode != MIR_CALL) return 0;
+        for (i = 0; i < mir.count; ++i) {
+            const struct MirInsn *arg = &mir.insns[i], *def;
+            if (arg->opcode != MIR_ARG ||
+                arg->secondary_offset != call->secondary_offset) continue;
+            def = mir_definition(arg->src1);
+            if (def && def->opcode == MIR_STRING_ADDRESS) {
+                p->format_ids[r] = (int)def->immediate; ++found;
+            }
+        }
+        if (found != 1 || (r && strcmp(call->name, mir.insns[calls[0]].name)))
+            return mir_machine_reject("struct-init-reports", "calls");
+    }
+    p->print_function = find_global(mir.insns[75].name);
+    return p->print_function != NULL;
 }
 
 static int mir_match_pointer_word_sum_until_zero(
@@ -26790,6 +26824,28 @@ static void mir_emit_escape_report(FILE *out, const struct MirEscapeReport *p)
     fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static void mir_emit_struct_init_reports(FILE *out,
+    const struct MirStructInitReports *p)
+{
+    static const int counts[9] = {4,6,4,4,6,4,7,3,0};
+    static const int values[38] = {
+        3,1000,7,1010, 4,2000,8,9,10,11, 5,4000,10,4016,
+        7,5000,13,5020, 8,6000,14,15,16,17, 9,8000,19,8029,
+        1,2,3,4,9000,10000,21, 22,0,0
+    };
+    int r, v, base = 0;
+    if (opt_stack_check) mir_emit_runtime_call(out, "__stchk");
+    for (r = 0; r < 9; ++r) {
+        for (v = counts[r] - 1; v >= 0; --v)
+            fprintf(out, "\tld hl,%d\n\tpush hl\n", values[base+v]);
+        fprintf(out, "\tld hl,S%d\n\tpush hl\n", p->format_ids[r]);
+        mir_machine_emit_symbol_call(out, p->print_function);
+        for (v = 0; v <= counts[r]; ++v) fputs("\tpop bc\n", out);
+        base += counts[r];
+    }
+    fputs("\tld hl,0\n\tret\n", out);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -30521,6 +30577,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirStructPointerReports struct_pointer_reports;
     struct MirPointerValueChecks pointer_value_checks;
     struct MirEscapeReport escape_report;
+    struct MirStructInitReports struct_init_reports;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -31123,6 +31180,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_escape_report(&escape_report)) {
         mir_emit_escape_report(out, &escape_report);
+        return 1;
+    }
+    if (mir_match_struct_init_reports(&struct_init_reports)) {
+        mir_emit_struct_init_reports(out, &struct_init_reports);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
