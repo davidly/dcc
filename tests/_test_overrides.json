@@ -114,6 +114,7 @@
     { "name": "tbool", "requires-non-msvc-host-compiler": true },
     { "name": "tc99apar", "requires-non-msvc-host-compiler": true },
     { "name": "tpfinf", "requires-non-msvc-host-compiler": true },
-    { "name": "ttrace", "ignore": true }
+    { "name": "ttrace", "ignore": true },
+    { "name": "texecdp", "stack_size": 2048 }
   ]
 }

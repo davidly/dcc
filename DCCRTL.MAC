@@ -20539,6 +20539,29 @@ __xmain:
         ld      (__xpath),hl
         ld      (__xctls),de
 
+        ; Build and open a low-memory FCB while the caller stack is active.
+        ; A failed exec must return without disturbing that stack.
+        ld      hl,__xfcbb
+        ld      de,__xfcbb+1
+        ld      bc,35
+        xor     a
+        ld      (hl),a
+        ldir
+        ld      hl,(__xpath)
+        ld      de,__xpbuf
+        call    __xacom
+        ld      de,__xfcbb
+        ld      hl,__xpbuf
+        call    __mkfcb
+        ld      de,__xfcbb
+        ld      c,15
+        call    5
+        cp      0ffh
+        jr      nz,xm_open
+        ld      hl,0ffffh       ; open failed
+        ret
+
+xm_open:
         ; Compute trampoline base: BDOS entry - (36 FCB bytes + 31 code bytes)
         ld      hl,(0006h)      ; HL = BDOS entry point (word at 0006h)
         ld      bc,67           ; 36 (FCB) + 31 (code) = trampoline block size
@@ -20546,33 +20569,17 @@ __xmain:
         sbc     hl,bc           ; HL = tramp_base = BDOS - 67
         ld      (__xbase),hl
 
-        ; Zero FCB area (36 bytes) at tramp_base
-        ex      de,hl           ; DE = tramp_base
-        ld      b,36
-xm_clr:
-        xor     a
-        ld      (de),a
-        inc     de
-        djnz    xm_clr
+        ; Keep calls and BDOS workspace below the high-memory FCB.
+        ld      bc,16
+        or      a
+        sbc     hl,bc
+        ld      sp,hl
 
-        ; Copy path to __xpbuf, appending ".COM" if no '.' in name
-        ld      hl,(__xpath)
-        ld      de,__xpbuf
-        call    __xacom
-
-        ; Build FCB at tramp_base from the path in __xpbuf
+        ; Copy the opened FCB above the now-safe stack.
+        ld      hl,__xfcbb
         ld      de,(__xbase)
-        ld      hl,__xpbuf
-        call    __mkfcb
-
-        ; Pre-check: open the file (BDOS fn 15); return -1 if not found
-        ld      de,(__xbase)
-        ld      c,15
-        call    5
-        cp      0ffh
-        jr      nz,xm_ok
-        ld      hl,0ffffh       ; open failed
-        ret
+        ld      bc,36
+        ldir
 
 xm_ok:
         ; Patch trampoline template: write FCB address into the ld de,0 immediate
@@ -20802,6 +20809,7 @@ xwc_dn:
 ; ---- exec/execv scratch data ----
 __xbase:        dw      0       ; trampoline base address (= FCB address)
 __xtrep:        dw      0       ; trampoline entry = __xbase + FCBSIZE
+__xfcbb:        ds      36      ; low-memory FCB used for the open pre-check
 __xpath:        dw      0       ; saved path argument
 __xctls:        dw      0       ; saved cmdtail argument
 __xpbuf:        ds      16      ; path scratch buffer (8+1+3+NUL = 13 max)
