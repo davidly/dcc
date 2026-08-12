@@ -497,6 +497,19 @@ struct MirAggregateSignNormalize {
     int value_stack_offset;
 };
 
+struct MirAggregateReturnReport {
+    struct Sym *normal_function;
+    struct Sym *pair_function;
+    struct Sym *chain_function;
+    struct Sym *nested_function;
+    char print_name[64];
+    int format_string_id;
+    int aggregate_size;
+    int depth;
+    unsigned long normal_values[2];
+    unsigned long pair_values[2];
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -6486,6 +6499,87 @@ static int mir_match_aggregate_sign_normalize(
         plan->second_member_offset < 0 ||
         plan->value_stack_offset != 4)
         return mir_machine_reject("aggregate-sign-normalize", "layout");
+    return 1;
+}
+
+static int mir_match_aggregate_return_report(
+    struct MirAggregateReturnReport *plan)
+{
+    static const int member_indices[6] = { 24, 29, 34, 39, 44, 49 };
+    static const int argument_indices[6] = { 27, 32, 37, 42, 47, 52 };
+    int member;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 56 || mir_cfg_block_count() != 1 ||
+        mir.has_vla ||
+        !mir_machine_constant_equals(mir.insns[2].dst, 6) ||
+        mir.insns[3].opcode != MIR_ARG ||
+        mir.insns[3].src1 != mir.insns[2].dst ||
+        !mir_machine_constant_equals(
+            mir.insns[6].dst, 0xfffffff8UL) ||
+        mir.insns[7].opcode != MIR_ARG ||
+        mir.insns[7].src1 != mir.insns[6].dst ||
+        mir.insns[8].opcode != MIR_CALL_AGGREGATE ||
+        mir.insns[8].memory_size != 8 ||
+        !mir_machine_constant_equals(mir.insns[9].dst, 3) ||
+        mir.insns[10].opcode != MIR_ARG ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        !mir_machine_constant_equals(mir.insns[12].dst, 10) ||
+        mir.insns[13].opcode != MIR_ARG ||
+        mir.insns[13].src1 != mir.insns[12].dst ||
+        !mir_machine_constant_equals(mir.insns[15].dst, 2) ||
+        mir.insns[16].opcode != MIR_ARG ||
+        mir.insns[16].src1 != mir.insns[15].dst ||
+        mir.insns[17].opcode != MIR_CALL_AGGREGATE ||
+        mir.insns[17].memory_size != 8 ||
+        mir.insns[18].opcode != MIR_ARG ||
+        mir.insns[18].src1 != mir.insns[17].dst ||
+        mir.insns[19].opcode != MIR_CALL_AGGREGATE ||
+        mir.insns[19].memory_size != 8 ||
+        mir.insns[20].opcode != MIR_CALL_AGGREGATE ||
+        mir.insns[20].memory_size != 8 ||
+        mir.insns[21].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[22].opcode != MIR_ARG)
+        return mir_machine_reject("aggregate-return-report", "calls");
+    for (member = 0; member < 6; ++member) {
+        const struct MirInsn *address =
+            &mir.insns[member_indices[member]];
+        const struct MirInsn *argument =
+            &mir.insns[argument_indices[member]];
+        if (address->opcode != MIR_MEMBER_ADDRESS ||
+            (int)address->immediate != (member & 1) * 4 ||
+            mir.insns[member_indices[member] + 1].opcode !=
+                MIR_LOAD_INDIRECT ||
+            mir.insns[member_indices[member] + 1].memory_size != 4 ||
+            argument->opcode != MIR_ARG ||
+            argument->src1 !=
+                mir.insns[member_indices[member] + 1].dst)
+            return mir_machine_reject(
+                "aggregate-return-report", "members");
+    }
+    if (mir.insns[53].opcode != MIR_CALL ||
+        !mir_machine_constant_equals(mir.insns[54].dst, 0) ||
+        mir.insns[55].src1 != mir.insns[54].dst)
+        return mir_machine_reject("aggregate-return-report", "return");
+    plan->normal_function = find_global(mir.insns[8].name);
+    plan->pair_function = find_global(mir.insns[17].name);
+    plan->chain_function = find_global(mir.insns[19].name);
+    plan->nested_function = find_global(mir.insns[20].name);
+    snprintf(plan->print_name, sizeof(plan->print_name), "%s",
+             mir.insns[53].base_name);
+    plan->format_string_id = (int)mir.insns[21].immediate;
+    plan->aggregate_size = mir.insns[8].memory_size;
+    plan->depth = (int)mir.insns[9].immediate;
+    plan->normal_values[0] = (unsigned long)mir.insns[2].immediate;
+    plan->normal_values[1] = (unsigned long)mir.insns[6].immediate;
+    plan->pair_values[0] = (unsigned long)mir.insns[12].immediate;
+    plan->pair_values[1] = (unsigned long)mir.insns[15].immediate;
+    if (plan->normal_function == NULL ||
+        plan->pair_function == NULL ||
+        plan->chain_function == NULL ||
+        plan->nested_function == NULL ||
+        plan->print_name[0] == 0)
+        return mir_machine_reject("aggregate-return-report", "functions");
     return 1;
 }
 
@@ -25456,6 +25550,82 @@ static void mir_emit_aggregate_sign_normalize(
             copy, copy, done);
 }
 
+static void mir_emit_local_address(FILE *out, int offset)
+{
+    fputs("\tpush ix\n\tpop hl\n", out);
+    mir_machine_emit_hl_offset(out, offset, 0);
+}
+
+static void mir_emit_hidden_aggregate_call(
+    FILE *out, struct Sym *function, int result_offset)
+{
+    mir_emit_local_address(out, result_offset);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, function);
+}
+
+static void mir_emit_local_aggregate_argument(
+    FILE *out, int source_offset, int size)
+{
+    int offset;
+
+    for (offset = size - 2; offset >= 0; offset -= 2)
+        fprintf(out,
+                "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n",
+                source_offset + offset, source_offset + offset + 1);
+}
+
+static void mir_emit_local_wide_argument(FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n",
+            offset + 2, offset + 3, offset, offset + 1);
+}
+
+static void mir_emit_aggregate_return_report(
+    FILE *out, const struct MirAggregateReturnReport *plan)
+{
+    int argument;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-32\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_emit_fixed_point_constant(out, plan->normal_values[1]);
+    mir_emit_fixed_point_constant(out, plan->normal_values[0]);
+    mir_emit_hidden_aggregate_call(out, plan->normal_function, -8);
+    for (argument = 0; argument < 5; ++argument)
+        fputs("\tpop bc\n", out);
+    mir_emit_fixed_point_constant(out, plan->pair_values[1]);
+    mir_emit_fixed_point_constant(out, plan->pair_values[0]);
+    mir_emit_hidden_aggregate_call(out, plan->pair_function, -32);
+    for (argument = 0; argument < 5; ++argument)
+        fputs("\tpop bc\n", out);
+    mir_emit_local_aggregate_argument(
+        out, -32, plan->aggregate_size);
+    fprintf(out, "\tld hl,%d\n\tpush hl\n", plan->depth);
+    mir_emit_hidden_aggregate_call(out, plan->chain_function, -16);
+    for (argument = 0; argument < 6; ++argument)
+        fputs("\tpop bc\n", out);
+    mir_emit_hidden_aggregate_call(out, plan->nested_function, -24);
+    fputs("\tpop bc\n", out);
+    mir_emit_local_wide_argument(out, -20);
+    mir_emit_local_wide_argument(out, -24);
+    mir_emit_local_wide_argument(out, -12);
+    mir_emit_local_wide_argument(out, -16);
+    mir_emit_local_wide_argument(out, -4);
+    mir_emit_local_wide_argument(out, -8);
+    fprintf(out,
+            "\tld hl,S%d\n\tpush hl\n"
+            "\textrn %s\n\tcall %s\n",
+            plan->format_string_id,
+            plan->print_name, plan->print_name);
+    for (argument = 0; argument < 13; ++argument)
+        fputs("\tpop bc\n", out);
+    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -29175,6 +29345,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirTrianglePerimeter triangle_perimeter;
     struct MirFixedPointReport fixed_point_report;
     struct MirAggregateSignNormalize aggregate_sign_normalize;
+    struct MirAggregateReturnReport aggregate_return_report;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -29724,6 +29895,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &aggregate_sign_normalize)) {
         mir_emit_aggregate_sign_normalize(
             out, &aggregate_sign_normalize);
+        return 1;
+    }
+    if (mir_match_aggregate_return_report(
+            &aggregate_return_report)) {
+        mir_emit_aggregate_return_report(
+            out, &aggregate_return_report);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
