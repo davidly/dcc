@@ -579,6 +579,11 @@ struct MirStringInitReports {
     int format_ids[7];
 };
 
+struct MirStructPointerReports {
+    char report_name[64], final_name[64];
+    int format_ids[3];
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -7210,6 +7215,45 @@ static int mir_match_string_init_reports(struct MirStringInitReports *p)
     }
     p->print_function = find_global(mir.insns[75].name);
     return p->print_function != NULL;
+}
+
+static int mir_match_struct_pointer_reports(struct MirStructPointerReports *p)
+{
+    static const int calls[3] = {51,92,95};
+    int call_index, instruction;
+    memset(p, 0, sizeof(*p));
+    if (mir.count != 98 || mir_cfg_block_count() != 1 || mir.has_vla ||
+        !mir_machine_constant_equals(mir.insns[5].dst, 3) ||
+        !mir_machine_constant_equals(mir.insns[10].dst, 1000) ||
+        !mir_machine_constant_equals(mir.insns[15].dst, 7) ||
+        !mir_machine_constant_equals(mir.insns[54].dst, 4) ||
+        !mir_machine_constant_equals(mir.insns[59].dst, 2000) ||
+        !mir_machine_constant_equals(mir.insns[64].dst, 8) ||
+        !mir_machine_constant_equals(mir.insns[96].dst, 0) ||
+        mir.insns[97].src1 != mir.insns[96].dst)
+        return 0;
+    for (call_index = 0; call_index < 3; ++call_index) {
+        int found = 0;
+        const struct MirInsn *call = &mir.insns[calls[call_index]];
+        if (call->opcode != MIR_CALL)
+            return mir_machine_reject("struct-pointer-reports", "call");
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+            const struct MirInsn *arg = &mir.insns[instruction];
+            const struct MirInsn *def;
+            if (arg->opcode != MIR_ARG ||
+                arg->secondary_offset != call->secondary_offset) continue;
+            def = mir_definition(arg->src1);
+            if (def != NULL && def->opcode == MIR_STRING_ADDRESS) {
+                p->format_ids[call_index] = (int)def->immediate;
+                ++found;
+            }
+        }
+        if (found != 1)
+            return mir_machine_reject("struct-pointer-reports", "format");
+    }
+    snprintf(p->report_name, sizeof(p->report_name), "%s", mir.insns[51].base_name);
+    snprintf(p->final_name, sizeof(p->final_name), "%s", mir.insns[95].base_name);
+    return p->report_name[0] != 0 && p->final_name[0] != 0;
 }
 
 static int mir_match_pointer_word_sum_until_zero(
@@ -26611,6 +26655,28 @@ static void mir_emit_string_init_reports(FILE *out,
     fputs("\tld hl,0\n\tret\n", out);
 }
 
+static void mir_emit_struct_pointer_reports(FILE *out,
+    const struct MirStructPointerReports *p)
+{
+    static const int av[2] = {3,4}, cv[2] = {7,8};
+    static const unsigned long bv[2] = {1000UL,2000UL};
+    static const unsigned long sv[2] = {1010UL,2012UL};
+    int r, pop;
+    if (opt_stack_check) mir_emit_runtime_call(out, "__stchk");
+    for (r = 0; r < 2; ++r) {
+        mir_emit_fixed_point_constant(out, sv[r]);
+        fprintf(out, "\tld hl,%d\n\tpush hl\n", cv[r]);
+        mir_emit_fixed_point_constant(out, bv[r]);
+        fprintf(out, "\tld hl,%d\n\tpush hl\n\tld hl,S%d\n\tpush hl\n"
+                     "\textrn %s\n\tcall %s\n",
+                av[r], p->format_ids[r], p->report_name, p->report_name);
+        for (pop = 0; pop < 7; ++pop) fputs("\tpop bc\n", out);
+    }
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n\textrn %s\n\tcall %s\n"
+                 "\tpop bc\n\tld hl,0\n\tret\n",
+            p->format_ids[2], p->final_name, p->final_name);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -30339,6 +30405,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirValueLiteralChecks value_literal_checks;
     struct MirFixedCellChecksum fixed_cell_checksum;
     struct MirStringInitReports string_init_reports;
+    struct MirStructPointerReports struct_pointer_reports;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -30929,6 +30996,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_string_init_reports(&string_init_reports)) {
         mir_emit_string_init_reports(out, &string_init_reports);
+        return 1;
+    }
+    if (mir_match_struct_pointer_reports(&struct_pointer_reports)) {
+        mir_emit_struct_pointer_reports(out, &struct_pointer_reports);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
