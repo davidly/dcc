@@ -27,6 +27,29 @@ current execution plan and handoff.
   hash, or runtime-validation changes; stack coverage remains
   **2126/2185 (97.30%)**. All 11 affected apps pass full peep/nopeep validation
   with no checked performance regression and no baseline update.
+- The second machine-emitter architecture pivot starts from `8ff8f65` and
+  extracts the complete strict attention-kernel family
+  (`transposed_matrix_vector_multiply`, `add_outer_product`, `softmax`,
+  `matrix_vector_add`, and `backward_pass`) into
+  `dcc_mir_machine_attention.c`. The new **2,637-line** module owns all three
+  plans, strict matchers, emitters, family helpers, selector order, and its
+  single dispatch entry; it has 44 `static` helpers and `nm` reports only
+  `mir_try_emit_attention_kernels` as a defined global symbol, with no writable
+  storage symbol. `dcc_mir_machine_emit.c` falls from **52,387 to 49,780
+  lines**. The function-only internal contract grows from **27 to 36 lines**:
+  four indispensable shared helper prototypes (parameter offset, pointee
+  volatility, global-address resolution, and global-address DE emission) plus
+  the one family dispatch prototype, and no global declaration.
+  Normal **2037/2102 (96.91%)** and stack-check **2126/2185 (97.30%)**
+  censuses are byte-identical before/after under `--fail-on-regression`, so all
+  selector order, labels, metrics, selected hashes, and runtime-validation
+  sets are unchanged. Canonical and CMake builds pass, and `attnc11` passes
+  full peep/nopeep correctness and checked performance with no baseline update.
+- Architecture rule for subsequent machine-family extractions: add **zero
+  shared variables or mutable state**. Each module owns its plan structs,
+  static arrays/constants, counters, candidate state, matchers, emitters, and
+  selector ordering locally; it exports only one family dispatch entry, and
+  `dcc_mir_machine_internal.h` remains a function-prototype-only contract.
 - Two strict name-free scheduled families admit the genuine nine-block
   call/check/report mains in `tfmaddr` and `tfpraw`. The float report family
   now accepts the fully proved nine-check, 195-instruction, 41-call,
