@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `d1e29ab`
-  (`schedule string result switches`).
-- Current candidate coverage: **2070/2185 (94.74%)**.
-- Remaining fallback population: **115 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `c5fde0b`
+  (`compact redundant MIR exchanges`).
+- Current candidate coverage: **2073/2185 (94.87%)**.
+- Remaining fallback population: **112 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -647,6 +647,15 @@ current execution plan and handoff.
   improves 38 already-active apps in both modes without widening coverage;
   `tasinfsp.main` remains correctly rejected after forced A/B showed it still
   loses 0.79% peep / 0.78% nopeep and linked size.
+- Terminal final-cost candidates now receive the existing constant-prepack /
+  direct-push stack-argument retry only for three measured structural strata.
+  This admits `taninit.chk_str`, `tc89c2.test_strtod`, and
+  `tvla.vla_ptr2d_deref_chain_contexts`; all three improve both modes and the
+  latter two shrink both images.
+- The broad terminal-stack probe remains opt-in. It was rejected after
+  `bint`, `forint`, and `pint` introduced small cycle/sector regressions and
+  after `tasinfsp`, `tctype`, `tmulpow2`, `tstdlib`, and `tarray` failed one
+  or more dual-mode guardrails.
 - A direct `too.expected_area` dispatcher was rejected after repeated-call
   tests exposed incorrect signed divmod cache/register handling; it is absent.
 - A binary-search replacement for `too.isqrt_l` was rejected after focused
@@ -661,7 +670,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 115 final-cost fallbacks,
+- Current next priority: repeated causes in the 112 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
