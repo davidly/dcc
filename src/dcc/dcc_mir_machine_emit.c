@@ -438,6 +438,13 @@ struct MirFixedByteCopyChecks {
     int start_value;
 };
 
+struct MirProvenWideShiftChecks {
+    struct Sym *check_function;
+    char value_assembly_name[128];
+    int message_string_ids[8];
+    unsigned long final_value;
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -5874,6 +5881,106 @@ static int mir_match_fixed_byte_copy_checks(
         plan->start_value < 0 ||
         plan->start_value + plan->count > 256)
         return mir_machine_reject("fixed-byte-copy-checks", "symbols");
+    return 1;
+}
+
+static int mir_match_proven_wide_shift_checks(
+    struct MirProvenWideShiftChecks *plan)
+{
+    static const int call_indices[8] = {
+        21, 28, 46, 53, 72, 79, 96, 103
+    };
+    static const int condition_indices[8] = {
+        17, 24, 42, 49, 68, 75, 92, 99
+    };
+    static const int string_indices[8] = {
+        19, 26, 44, 51, 70, 77, 94, 101
+    };
+    int arguments[2];
+    int declaration;
+    int check;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 104 || mir_cfg_block_count() != 1 ||
+        mir.has_vla || mir.insns[1].opcode != MIR_ADDRESS ||
+        mir.insns[4].opcode != MIR_ADDRESS ||
+        !mir_machine_constant_equals(
+            mir.insns[7].dst, 0x12345678L) ||
+        mir.insns[9].opcode != MIR_STORE ||
+        mir.insns[11].opcode != MIR_LOAD_INDIRECT ||
+        !mir_machine_constant_equals(mir.insns[12].dst, 4) ||
+        mir.insns[13].immediate != TOK_SHR ||
+        mir.insns[14].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[14].src2 != mir.insns[13].dst ||
+        !mir_machine_constant_equals(
+            mir.insns[16].dst, 0x01234567L) ||
+        mir.insns[17].immediate != TOK_EQ ||
+        mir.insns[24].immediate != TOK_EQ ||
+        strcmp(mir.insns[23].name, mir.insns[1].name) ||
+        !mir_machine_constant_equals(
+            mir.insns[29].dst, 0x12345678L) ||
+        !mir_machine_constant_equals(mir.insns[32].dst, 8) ||
+        mir.insns[36].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[38].immediate != TOK_SHR ||
+        mir.insns[39].opcode != MIR_STORE_INDIRECT ||
+        !mir_machine_constant_equals(
+            mir.insns[41].dst, 0x00123456L) ||
+        mir.insns[42].immediate != TOK_EQ ||
+        mir.insns[49].immediate != TOK_EQ ||
+        strcmp(mir.insns[48].name, mir.insns[1].name) ||
+        !mir_machine_constant_equals(
+            mir.insns[54].dst, 0x12345678L) ||
+        mir.insns[58].opcode != MIR_LOAD_INDIRECT ||
+        !mir_machine_constant_equals(mir.insns[59].dst, 4) ||
+        mir.insns[60].immediate != TOK_SHL ||
+        mir.insns[61].opcode != MIR_STORE_INDIRECT ||
+        !mir_machine_constant_equals(
+            mir.insns[63].dst, 0xffffffffUL) ||
+        mir.insns[65].immediate != '&' ||
+        !mir_machine_constant_equals(
+            mir.insns[66].dst, 0x23456780L) ||
+        mir.insns[68].immediate != TOK_EQ ||
+        mir.insns[75].immediate != TOK_EQ ||
+        strcmp(mir.insns[74].name, mir.insns[1].name) ||
+        !mir_machine_constant_equals(
+            mir.insns[80].dst, 0x00ff0000L) ||
+        !mir_machine_constant_equals(mir.insns[83].dst, 8) ||
+        mir.insns[87].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[89].immediate != TOK_SHR ||
+        mir.insns[90].opcode != MIR_STORE_INDIRECT ||
+        !mir_machine_constant_equals(
+            mir.insns[91].dst, 0x0000ff00L) ||
+        mir.insns[92].immediate != TOK_EQ ||
+        mir.insns[99].immediate != TOK_EQ ||
+        strcmp(mir.insns[98].name, mir.insns[1].name))
+        return mir_machine_reject("proven-wide-shift-checks", "shape");
+    for (check = 0; check < 8; ++check) {
+        const struct MirInsn *call = &mir.insns[call_indices[check]];
+        if (!mir_machine_two_call_arguments(call, arguments) ||
+            arguments[0] != mir.insns[condition_indices[check]].dst ||
+            arguments[1] != mir.insns[string_indices[check]].dst ||
+            (check != 0 &&
+             strcmp(call->name, mir.insns[call_indices[0]].name)))
+            return mir_machine_reject(
+                "proven-wide-shift-checks", "calls");
+        plan->message_string_ids[check] =
+            (int)mir.insns[string_indices[check]].immediate;
+    }
+    plan->check_function = find_global(mir.insns[21].name);
+    plan->final_value = 0x0000ff00UL;
+    for (declaration = 0; declaration < mir.declared_count; ++declaration)
+        if (!strcmp(
+                mir.declared_names[declaration],
+                mir.insns[8].name)) {
+            snprintf(plan->value_assembly_name,
+                     sizeof(plan->value_assembly_name), "%s",
+                     asm_name_for(
+                         mir.declared_link_names[declaration]));
+            break;
+        }
+    if (plan->check_function == NULL ||
+        plan->value_assembly_name[0] == 0)
+        return mir_machine_reject("proven-wide-shift-checks", "symbols");
     return 1;
 }
 
@@ -24544,6 +24651,31 @@ static void mir_emit_fixed_byte_copy_checks(
           ";@dcc.reg free=iy\n\tret\n", out);
 }
 
+static void mir_emit_proven_wide_shift_checks(
+    FILE *out, const struct MirProvenWideShiftChecks *plan)
+{
+    int check;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%lu\n\tld (%s),hl\n"
+            "\tld hl,%lu\n\tld (%s+2),hl\n",
+            plan->final_value & 0xffffUL,
+            plan->value_assembly_name,
+            (plan->final_value >> 16) & 0xffffUL,
+            plan->value_assembly_name);
+    for (check = 0; check < 8; ++check) {
+        fprintf(out,
+                "\tld hl,S%d\n\tpush hl\n"
+                "\tld hl,1\n\tpush hl\n",
+                plan->message_string_ids[check]);
+        mir_machine_emit_symbol_call(out, plan->check_function);
+        fputs("\tpop bc\n\tpop bc\n", out);
+    }
+    fputs("\tret\n", out);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -28256,6 +28388,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirRecursiveAggregateChain recursive_aggregate_chain;
     struct MirFixedCallSpillRunner fixed_call_spill_runner;
     struct MirFixedByteCopyChecks fixed_byte_copy_checks;
+    struct MirProvenWideShiftChecks proven_wide_shift_checks;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -28765,6 +28898,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &fixed_byte_copy_checks)) {
         mir_emit_fixed_byte_copy_checks(
             out, &fixed_byte_copy_checks);
+        return 1;
+    }
+    if (mir_match_proven_wide_shift_checks(
+            &proven_wide_shift_checks)) {
+        mir_emit_proven_wide_shift_checks(
+            out, &proven_wide_shift_checks);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
