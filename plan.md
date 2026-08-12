@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `0a57f08`
-  (`schedule postfix decrement runners`).
-- Current candidate coverage: **2082/2185 (95.29%)**.
-- Remaining fallback population: **103 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `45f12be`
+  (`dcc MIR: schedule fixed sieve builders`).
+- Current candidate coverage: **2084/2185 (95.38%)**.
+- Remaining fallback population: **101 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -687,6 +687,11 @@ current execution plan and handoff.
 - Fixed sieve builders now clear through an HL cursor and mark multiples with
   four compile-time prime-stride loops. This admits `tnestfor.build_sieve`,
   improving **20.58% peep / 23.14% nopeep** while shrinking both images.
+- Fixed nested-wrapper initializers now compute the shared signed base product
+  once, fill aggregate fields through register cursors, and install derived
+  pointers without IY. This admits the identical `tptrcnd.init_wrapper` and
+  `tptrrhs.init_wrapper` graphs, improving those apps by **87.96%/87.62%**
+  and **79.31%/75.44%** respectively with no image regression.
 - A direct `too.expected_area` dispatcher was rejected after repeated-call
   tests exposed incorrect signed divmod cache/register handling; it is absent.
 - A binary-search replacement for `too.isqrt_l` was rejected after focused
@@ -701,7 +706,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 103 final-cost fallbacks,
+- Current next priority: repeated causes in the 101 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 

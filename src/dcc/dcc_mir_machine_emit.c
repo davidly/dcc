@@ -1068,6 +1068,36 @@ struct MirFixedSieveBuild {
     int limit;
 };
 
+struct MirFixedWrapperInit {
+    int pointer_stack_offset;
+    int base_stack_offset;
+    int node_count;
+    int leaf_count;
+    int element_count;
+    int row_count;
+    int column_count;
+    int node_stride;
+    int leaf_stride;
+    int value_offset;
+    int array_offset;
+    int char_value_offset;
+    int char_array_offset;
+    int long_value_offset;
+    int long_array_offset;
+    int leaf_pointer_offset;
+    int int_pointer_offset;
+    int char_pointer_offset;
+    int long_pointer_offset;
+    int matrix_offset;
+    int char_matrix_offset;
+    int long_matrix_offset;
+    int wrapper_node_pointer_offset;
+    int wrapper_leaf_pointers_offset;
+    int wrapper_int_pointers_offset;
+    int wrapper_char_pointers_offset;
+    int wrapper_long_pointers_offset;
+};
+
 struct MirPalindromeScan {
     int parameter_stack_offset;
 };
@@ -6470,6 +6500,274 @@ static int mir_match_fixed_sieve_build(
         mir.insns[96].label != mir.insns[44].label)
         return mir_machine_reject(
             "fixed-sieve-build", "flow");
+    return 1;
+}
+
+static int mir_machine_member_layout(
+    int insn_index, int *offset, int size)
+{
+    const struct MirInsn *member = &mir.insns[insn_index];
+
+    if (member->opcode != MIR_MEMBER_ADDRESS ||
+        member->immediate < 0 ||
+        member->immediate > 32767 ||
+        member->memory_size != size)
+        return 0;
+    *offset = (int)member->immediate;
+    return 1;
+}
+
+static int mir_match_fixed_wrapper_init(
+    struct MirFixedWrapperInit *plan)
+{
+    static const int constant_indices[] = {
+        10, 22, 35, 40, 43, 56, 61, 64, 66,
+        80, 84, 89, 92, 104, 119, 124, 129,
+        144, 149, 154, 156, 172, 176, 181, 187,
+        216, 230, 244, 249, 254, 268, 273, 278,
+        280, 295, 299, 304, 310, 339, 354, 414,
+        425, 436, 453, 463, 468, 473, 484, 489,
+        494, 505, 510, 515, 522
+    };
+    static const long constant_values[] = {
+        2, 3, 100, 10, 1, 20, 3, 2, 127,
+        1000, 100, 10, 3, 4, 100, 10, 20,
+        20, 5, 30, 127, 1000, 100, 10, 40,
+        2, 3, 100, 10, 200, 20, 5, 60,
+        127, 1000, 100, 10, 300, 1, 0, 3,
+        1, 1, 4, 1, 3, 3, 1, 3,
+        3, 1, 3, 3, 1
+    };
+    const struct MirInsn *pointer = &mir.insns[1];
+    const struct MirInsn *base = &mir.insns[2];
+    int index;
+
+    memset(plan, 0, sizeof(*plan));
+    if (sizeof(constant_indices) /
+            sizeof(constant_indices[0]) !=
+        sizeof(constant_values) /
+            sizeof(constant_values[0]) ||
+        mir.count != 527 || mir_cfg_block_count() != 22 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID ||
+        pointer->opcode != MIR_PARAM ||
+        type_ptr_depth(pointer->type) != 1 ||
+        mir_machine_pointee_is_volatile(pointer) ||
+        base->opcode != MIR_PARAM ||
+        type_size(base->type) != 2 ||
+        !mir_machine_parameter_value_offset(
+            pointer->dst, &plan->pointer_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            base->dst, &plan->base_stack_offset))
+        return mir_machine_reject(
+            "fixed-wrapper-init", "shape");
+    for (index = 0;
+         index < (int)(sizeof(constant_indices) /
+                       sizeof(constant_indices[0]));
+         ++index) {
+        if (!mir_machine_constant_equals(
+                mir.insns[constant_indices[index]].dst,
+                constant_values[index]))
+            return mir_machine_reject(
+                "fixed-wrapper-init", "constant");
+    }
+    plan->node_count = 2;
+    plan->leaf_count = 3;
+    plan->element_count = 4;
+    plan->row_count = 2;
+    plan->column_count = 3;
+    plan->node_stride = 155;
+    plan->leaf_stride = 35;
+    if (!mir_machine_member_layout(
+            32, &plan->value_offset, 2) ||
+        !mir_machine_member_layout(
+            114, &plan->array_offset, 8) ||
+        !mir_machine_member_layout(
+            53, &plan->char_value_offset, 1) ||
+        !mir_machine_member_layout(
+            139, &plan->char_array_offset, 4) ||
+        !mir_machine_member_layout(
+            77, &plan->long_value_offset, 4) ||
+        !mir_machine_member_layout(
+            167, &plan->long_array_offset, 16) ||
+        !mir_machine_member_layout(
+            333, &plan->leaf_pointer_offset, 2) ||
+        !mir_machine_member_layout(
+            346, &plan->int_pointer_offset, 2) ||
+        !mir_machine_member_layout(
+            361, &plan->char_pointer_offset, 2) ||
+        !mir_machine_member_layout(
+            376, &plan->long_pointer_offset, 2) ||
+        !mir_machine_member_layout(
+            237, &plan->matrix_offset, 12) ||
+        !mir_machine_member_layout(
+            261, &plan->char_matrix_offset, 6) ||
+        !mir_machine_member_layout(
+            288, &plan->long_matrix_offset, 24) ||
+        !mir_machine_member_layout(
+            396, &plan->wrapper_node_pointer_offset, 2) ||
+        !mir_machine_member_layout(
+            419, &plan->wrapper_leaf_pointers_offset, 6) ||
+        !mir_machine_member_layout(
+            457, &plan->wrapper_int_pointers_offset, 8) ||
+        !mir_machine_member_layout(
+            478, &plan->wrapper_char_pointers_offset, 8) ||
+        !mir_machine_member_layout(
+            499, &plan->wrapper_long_pointers_offset, 8))
+        return mir_machine_reject(
+            "fixed-wrapper-init", "layout");
+    if (plan->value_offset != 0 ||
+        plan->array_offset != 2 ||
+        plan->char_value_offset != 10 ||
+        plan->char_array_offset != 11 ||
+        plan->long_value_offset != 15 ||
+        plan->long_array_offset != 19 ||
+        plan->leaf_pointer_offset != 105 ||
+        plan->int_pointer_offset != 107 ||
+        plan->char_pointer_offset != 109 ||
+        plan->long_pointer_offset != 111 ||
+        plan->matrix_offset != 113 ||
+        plan->char_matrix_offset != 125 ||
+        plan->long_matrix_offset != 131 ||
+        plan->wrapper_node_pointer_offset != 310 ||
+        plan->wrapper_leaf_pointers_offset != 312 ||
+        plan->wrapper_int_pointers_offset != 318 ||
+        plan->wrapper_char_pointers_offset != 326 ||
+        plan->wrapper_long_pointers_offset != 334)
+        return mir_machine_reject(
+            "fixed-wrapper-init", "layout-offset");
+    if (mir.insns[26].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[26].memory_size !=
+            plan->node_count * plan->node_stride ||
+        mir.insns[28].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[28].immediate != plan->node_stride ||
+        mir.insns[29].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[29].memory_size !=
+            plan->leaf_count * plan->leaf_stride ||
+        mir.insns[31].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[31].immediate != plan->leaf_stride ||
+        mir.insns[45].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[45].src1 != mir.insns[32].dst ||
+        mir.insns[45].src2 != mir.insns[44].dst ||
+        mir.insns[45].memory_size != 2 ||
+        mir.insns[69].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[69].src1 != mir.insns[53].dst ||
+        mir.insns[69].src2 != mir.insns[68].dst ||
+        mir.insns[69].memory_size != 1 ||
+        mir.insns[94].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[94].src1 != mir.insns[77].dst ||
+        mir.insns[94].src2 != mir.insns[93].dst ||
+        mir.insns[94].memory_size != 4 ||
+        mir.insns[116].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[116].immediate != 2 ||
+        mir.insns[131].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[131].src1 != mir.insns[116].dst ||
+        mir.insns[131].src2 != mir.insns[130].dst ||
+        mir.insns[131].memory_size != 2 ||
+        mir.insns[141].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[141].immediate != 1 ||
+        mir.insns[159].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[159].src1 != mir.insns[141].dst ||
+        mir.insns[159].src2 != mir.insns[158].dst ||
+        mir.insns[159].memory_size != 1 ||
+        mir.insns[169].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[169].immediate != 4 ||
+        mir.insns[189].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[189].src1 != mir.insns[169].dst ||
+        mir.insns[189].src2 != mir.insns[188].dst ||
+        mir.insns[189].memory_size != 4 ||
+        mir.insns[239].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[239].immediate !=
+            plan->column_count * 2 ||
+        mir.insns[241].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[241].immediate != 2 ||
+        mir.insns[256].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[256].src1 != mir.insns[241].dst ||
+        mir.insns[256].src2 != mir.insns[255].dst ||
+        mir.insns[256].memory_size != 2 ||
+        mir.insns[263].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[263].immediate != plan->column_count ||
+        mir.insns[265].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[265].immediate != 1 ||
+        mir.insns[283].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[283].src1 != mir.insns[265].dst ||
+        mir.insns[283].src2 != mir.insns[282].dst ||
+        mir.insns[283].memory_size != 1 ||
+        mir.insns[290].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[290].immediate !=
+            plan->column_count * 4 ||
+        mir.insns[292].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[292].immediate != 4 ||
+        mir.insns[312].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[312].src1 != mir.insns[292].dst ||
+        mir.insns[312].src2 != mir.insns[311].dst ||
+        mir.insns[312].memory_size != 4)
+        return mir_machine_reject(
+            "fixed-wrapper-init", "nested-storage");
+    if (mir.insns[12].opcode != MIR_BINARY ||
+        mir.insns[12].immediate != '<' ||
+        mir.insns[13].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[23].opcode != MIR_BINARY ||
+        mir.insns[23].immediate != '<' ||
+        mir.insns[24].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[105].opcode != MIR_BINARY ||
+        mir.insns[105].immediate != '<' ||
+        mir.insns[106].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[217].opcode != MIR_BINARY ||
+        mir.insns[217].immediate != '<' ||
+        mir.insns[218].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[231].opcode != MIR_BINARY ||
+        mir.insns[231].immediate != '<' ||
+        mir.insns[232].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[341].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[341].src1 != mir.insns[333].dst ||
+        mir.insns[341].src2 != mir.insns[340].dst ||
+        mir.insns[356].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[356].src1 != mir.insns[346].dst ||
+        mir.insns[356].src2 != mir.insns[355].dst ||
+        mir.insns[371].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[371].src1 != mir.insns[361].dst ||
+        mir.insns[371].src2 != mir.insns[370].dst ||
+        mir.insns[386].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[386].src1 != mir.insns[376].dst ||
+        mir.insns[386].src2 != mir.insns[385].dst ||
+        mir.insns[391].opcode != MIR_BINARY ||
+        mir.insns[391].immediate != '+' ||
+        mir.insns[393].opcode != MIR_JUMP ||
+        mir.insns[401].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[401].src1 != mir.insns[396].dst ||
+        mir.insns[401].src2 != mir.insns[400].dst ||
+        mir.insns[416].opcode != MIR_BINARY ||
+        mir.insns[416].immediate != '<' ||
+        mir.insns[417].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[432].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[432].src1 != mir.insns[421].dst ||
+        mir.insns[432].src2 != mir.insns[431].dst ||
+        mir.insns[437].opcode != MIR_BINARY ||
+        mir.insns[437].immediate != '+' ||
+        mir.insns[439].opcode != MIR_JUMP ||
+        mir.insns[454].opcode != MIR_BINARY ||
+        mir.insns[454].immediate != '<' ||
+        mir.insns[455].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[476].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[476].src1 != mir.insns[459].dst ||
+        mir.insns[476].src2 != mir.insns[475].dst ||
+        mir.insns[497].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[497].src1 != mir.insns[480].dst ||
+        mir.insns[497].src2 != mir.insns[496].dst ||
+        mir.insns[518].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[518].src1 != mir.insns[501].dst ||
+        mir.insns[518].src2 != mir.insns[517].dst ||
+        mir.insns[523].opcode != MIR_BINARY ||
+        mir.insns[523].immediate != '+' ||
+        mir.insns[525].opcode != MIR_JUMP ||
+        mir.insns[526].opcode != MIR_LABEL)
+        return mir_machine_reject(
+            "fixed-wrapper-init", "flow");
+    for (index = 0; index < mir.count; ++index) {
+        if (mir.insns[index].opcode == MIR_CALL)
+            return mir_machine_reject(
+                "fixed-wrapper-init", "call");
+    }
     return 1;
 }
 
@@ -34885,6 +35183,265 @@ static void mir_emit_local_byte_fill_sum_print(
           "\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static void mir_fixed_wrapper_load_pointer(
+    FILE *out, const struct MirFixedWrapperInit *plan,
+    int offset)
+{
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+            plan->pointer_stack_offset + 2,
+            plan->pointer_stack_offset + 3);
+    mir_machine_emit_hl_offset(out, offset, 0);
+}
+
+static void mir_fixed_wrapper_load_word(
+    FILE *out, const struct MirFixedWrapperInit *plan,
+    int constant)
+{
+    fprintf(out,
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "\tld a,e\n\tadd a,%d\n\tld e,a\n"
+            "\tld a,d\n\tadc a,%d\n\tld d,a\n",
+            plan->base_stack_offset + 2,
+            plan->base_stack_offset + 3,
+            constant & 255, (constant >> 8) & 255);
+}
+
+static void mir_fixed_wrapper_store_word_loop(
+    FILE *out, const struct MirFixedWrapperInit *plan,
+    int constant, int count)
+{
+    mir_fixed_wrapper_load_word(out, plan, constant);
+    if (count == 1) {
+        fputs("\tld (hl),e\n\tinc hl\n"
+              "\tld (hl),d\n\tinc hl\n", out);
+        return;
+    }
+    {
+        int loop = new_label();
+
+        fprintf(out,
+                "\tld b,%d\n"
+                "L%d:\n\tld (hl),e\n\tinc hl\n"
+                "\tld (hl),d\n\tinc hl\n\tinc de\n"
+                "\tdjnz L%d\n",
+                count, loop, loop);
+    }
+}
+
+static void mir_fixed_wrapper_store_char_loop(
+    FILE *out, const struct MirFixedWrapperInit *plan,
+    int constant, int count)
+{
+    fprintf(out,
+            "\tld a,(ix%+d)\n\tadd a,%d\n\tand 127\n",
+            plan->base_stack_offset + 2,
+            constant & 255);
+    if (count == 1) {
+        fputs("\tld (hl),a\n\tinc hl\n", out);
+        return;
+    }
+    {
+        int loop = new_label();
+
+        fprintf(out,
+                "\tld b,%d\n"
+                "L%d:\n\tld (hl),a\n\tinc hl\n"
+                "\tinc a\n\tand 127\n\tdjnz L%d\n",
+                count, loop, loop);
+    }
+}
+
+static void mir_fixed_wrapper_load_long(
+    FILE *out, int constant)
+{
+    fprintf(out,
+            "\tld c,(ix-4)\n\tld b,(ix-3)\n"
+            "\tld e,(ix-2)\n\tld d,(ix-1)\n"
+            "\tld a,c\n\tadd a,%d\n\tld c,a\n"
+            "\tld a,b\n\tadc a,%d\n\tld b,a\n"
+            "\tld a,e\n\tadc a,0\n\tld e,a\n"
+            "\tld a,d\n\tadc a,0\n\tld d,a\n",
+            constant & 255, (constant >> 8) & 255);
+}
+
+static void mir_fixed_wrapper_store_long_loop(
+    FILE *out, int constant, int count)
+{
+    int loop = new_label();
+    int no_high_increment = new_label();
+
+    mir_fixed_wrapper_load_long(out, constant);
+    if (count > 1)
+        fprintf(out, "\tld (ix-5),%d\n", count);
+    fprintf(out,
+            "L%d:\n\tld (hl),c\n\tinc hl\n"
+            "\tld (hl),b\n\tinc hl\n"
+            "\tld (hl),e\n\tinc hl\n"
+            "\tld (hl),d\n\tinc hl\n",
+            loop);
+    if (count > 1) {
+        fprintf(out,
+                "\tinc bc\n\tld a,b\n\tor c\n"
+                "\tjp nz,L%d\n\tinc de\n"
+                "L%d:\n\tdec (ix-5)\n\tjp nz,L%d\n",
+                no_high_increment, no_high_increment, loop);
+    }
+}
+
+static void mir_fixed_wrapper_store_pointer(
+    FILE *out, const struct MirFixedWrapperInit *plan,
+    int destination_offset, int source_offset)
+{
+    mir_fixed_wrapper_load_pointer(
+        out, plan, destination_offset);
+    fprintf(out,
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+            plan->pointer_stack_offset + 2,
+            plan->pointer_stack_offset + 3);
+    if (source_offset != 0)
+        fprintf(out,
+                "\tld a,e\n\tadd a,%d\n\tld e,a\n"
+                "\tld a,d\n\tadc a,%d\n\tld d,a\n",
+                source_offset & 255,
+                (source_offset >> 8) & 255);
+    fputs("\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
+}
+
+static void mir_emit_fixed_wrapper_init(
+    FILE *out, const struct MirFixedWrapperInit *plan)
+{
+    int node;
+    int leaf;
+    int row;
+    int index;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-5\n\tadd hl,sp\n\tld sp,hl\n", out);
+    fprintf(out,
+            "\tld c,(ix%+d)\n\tld b,(ix%+d)\n"
+            "\tld hl,1000\n",
+            plan->base_stack_offset + 2,
+            plan->base_stack_offset + 3);
+    mir_emit_runtime_call(out, "__m1s");
+    fputs("\tld (ix-4),l\n\tld (ix-3),h\n"
+          "\tld (ix-2),e\n\tld (ix-1),d\n", out);
+
+    for (node = 0; node < plan->node_count; ++node) {
+        int node_offset = node * plan->node_stride;
+
+        for (leaf = 0;
+             leaf < plan->leaf_count; ++leaf) {
+            int leaf_offset =
+                node_offset + leaf * plan->leaf_stride;
+
+            mir_fixed_wrapper_load_pointer(
+                out, plan, leaf_offset);
+            mir_fixed_wrapper_store_word_loop(
+                out, plan,
+                node * 100 + leaf * 10 + 1, 1);
+            mir_fixed_wrapper_store_word_loop(
+                out, plan,
+                node * 100 + leaf * 10 + 20,
+                plan->element_count);
+            mir_fixed_wrapper_store_char_loop(
+                out, plan,
+                node * 20 + leaf * 3 + 2, 1);
+            mir_fixed_wrapper_store_char_loop(
+                out, plan,
+                node * 20 + leaf * 5 + 30,
+                plan->element_count);
+            mir_fixed_wrapper_store_long_loop(
+                out, node * 100 + leaf * 10 + 3, 1);
+            mir_fixed_wrapper_store_long_loop(
+                out, node * 100 + leaf * 10 + 40,
+                plan->element_count);
+        }
+        for (row = 0; row < plan->row_count; ++row) {
+            mir_fixed_wrapper_load_pointer(
+                out, plan,
+                node_offset + plan->matrix_offset +
+                    row * plan->column_count * 2);
+            mir_fixed_wrapper_store_word_loop(
+                out, plan,
+                node * 100 + row * 10 + 200,
+                plan->column_count);
+            mir_fixed_wrapper_load_pointer(
+                out, plan,
+                node_offset + plan->char_matrix_offset +
+                    row * plan->column_count);
+            mir_fixed_wrapper_store_char_loop(
+                out, plan,
+                node * 20 + row * 5 + 60,
+                plan->column_count);
+            mir_fixed_wrapper_load_pointer(
+                out, plan,
+                node_offset + plan->long_matrix_offset +
+                    row * plan->column_count * 4);
+            mir_fixed_wrapper_store_long_loop(
+                out, node * 100 + row * 10 + 300,
+                plan->column_count);
+        }
+        mir_fixed_wrapper_store_pointer(
+            out, plan,
+            node_offset + plan->leaf_pointer_offset,
+            node_offset + plan->leaf_stride);
+        mir_fixed_wrapper_store_pointer(
+            out, plan,
+            node_offset + plan->int_pointer_offset,
+            node_offset + plan->matrix_offset +
+                plan->column_count * 2);
+        mir_fixed_wrapper_store_pointer(
+            out, plan,
+            node_offset + plan->char_pointer_offset,
+            node_offset + plan->char_matrix_offset +
+                plan->column_count);
+        mir_fixed_wrapper_store_pointer(
+            out, plan,
+            node_offset + plan->long_pointer_offset,
+            node_offset + plan->long_matrix_offset +
+                plan->column_count * 4);
+    }
+    mir_fixed_wrapper_store_pointer(
+        out, plan, plan->wrapper_node_pointer_offset, 0);
+    for (index = 0; index < plan->leaf_count; ++index) {
+        int source_offset =
+            (index & 1) * plan->node_stride +
+            index * plan->leaf_stride;
+
+        mir_fixed_wrapper_store_pointer(
+            out, plan,
+            plan->wrapper_leaf_pointers_offset + index * 2,
+            source_offset);
+    }
+    for (index = 0; index < plan->element_count; ++index) {
+        int node_offset =
+            (index & 1) * plan->node_stride;
+        int leaf_offset =
+            node_offset +
+            (index % plan->leaf_count) * plan->leaf_stride;
+
+        mir_fixed_wrapper_store_pointer(
+            out, plan,
+            plan->wrapper_int_pointers_offset + index * 2,
+            leaf_offset + plan->array_offset +
+                (index & 3) * 2);
+        mir_fixed_wrapper_store_pointer(
+            out, plan,
+            plan->wrapper_char_pointers_offset + index * 2,
+            leaf_offset + plan->char_array_offset +
+                (index & 3));
+        mir_fixed_wrapper_store_pointer(
+            out, plan,
+            plan->wrapper_long_pointers_offset + index * 2,
+            leaf_offset + plan->long_array_offset +
+                (index & 3) * 4);
+    }
+    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_fixed_sieve_build(
     FILE *out, const struct MirFixedSieveBuild *plan)
 {
@@ -35026,6 +35583,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFixedRecordSortCheck fixed_record_sort_check;
     struct MirLocalBitsetRunner local_bitset_runner;
     struct MirFixedSieveBuild fixed_sieve_build;
+    struct MirFixedWrapperInit fixed_wrapper_init;
     struct MirStringMismatchReport string_mismatch_report;
     struct MirCrcUpdateRunner crc_update_runner;
     struct MirFixedRowMemberSum fixed_row_member_sum;
@@ -35613,6 +36171,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_fixed_sieve_build(&fixed_sieve_build)) {
         mir_emit_fixed_sieve_build(out, &fixed_sieve_build);
+        return 1;
+    }
+    if (mir_match_fixed_wrapper_init(&fixed_wrapper_init)) {
+        mir_emit_fixed_wrapper_init(out, &fixed_wrapper_init);
         return 1;
     }
     if (mir_match_string_mismatch_report(&string_mismatch_report)) {
