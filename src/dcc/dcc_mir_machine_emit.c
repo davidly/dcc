@@ -176,6 +176,7 @@ struct MirAggregateFieldSum {
 struct MirConstantChecks {
     struct Sym *function;
     int count;
+    int name_last;
     int strings[16];
     long actual[16];
     long expected[16];
@@ -2371,6 +2372,76 @@ static int mir_match_constant_checks(struct MirConstantChecks *plan)
         }
     }
     return plan->count > 0 && plan->function != NULL;
+}
+
+static int mir_match_local_boolean_checks(struct MirConstantChecks *plan)
+{
+    static const int call_indices[14] = {
+        56, 63, 71, 79, 87, 94, 101,
+        112, 123, 134, 145, 155, 165, 175
+    };
+    static const int actual_indices[14] = {
+        50, 57, 65, 73, 81, 88, 95,
+        106, 117, 128, 139, 149, 159, 169
+    };
+    static const int values[14] = {
+        1, 1, 0, 1, 0, 1, 0,
+        0, 1, 1, 0, 1, 85, 0
+    };
+    int check;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 176 || mir_cfg_block_count() != 1 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID ||
+        !mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[5].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[8].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[14].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[20].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[27].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[33].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[38].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[43].dst, 85) ||
+        !mir_machine_constant_equals(mir.insns[48].dst, 0))
+        return mir_machine_reject("local-boolean-checks", "setup");
+    for (check = 0; check < 14; ++check) {
+        const struct MirInsn *call = &mir.insns[call_indices[check]];
+        const struct MirInsn *actual =
+            &mir.insns[actual_indices[check]];
+        const struct MirInsn *string;
+        struct MirMachineForm expected;
+        struct Sym *function;
+        int arguments[3];
+
+        if (!mir_machine_three_call_arguments(call, arguments))
+            return mir_machine_reject(
+                "local-boolean-checks", "arguments");
+        if (arguments[0] != actual->dst)
+            return mir_machine_reject(
+                "local-boolean-checks", "actual");
+        if (
+            !mir_machine_pointer_form(
+                arguments[1], call_indices[check], &expected, 0) ||
+            expected.kind != MIR_MACHINE_FORM_INTEGER ||
+            (expected.value & 0xffffL) != values[check])
+            return mir_machine_reject(
+                "local-boolean-checks", "arguments");
+        string = mir_definition(arguments[2]);
+        function = find_global(call->name);
+        if (string == NULL ||
+            string->opcode != MIR_STRING_ADDRESS ||
+            function == NULL ||
+            (plan->function != NULL && plan->function != function))
+            return mir_machine_reject(
+                "local-boolean-checks", "call");
+        plan->function = function;
+        plan->strings[check] = (int)string->immediate;
+        plan->actual[check] = values[check];
+        plan->expected[check] = values[check];
+    }
+    plan->count = 14;
+    plan->name_last = 1;
+    return plan->function != NULL;
 }
 
 static int mir_match_constant_prints(struct MirConstantPrints *plan)
@@ -20300,13 +20371,23 @@ static void mir_emit_constant_checks(
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
     for (check = 0; check < plan->count; ++check) {
-        fprintf(out,
-                "\tld hl,%ld\n\tpush hl\n"
-                "\tld hl,%ld\n\tpush hl\n"
-                "\tld hl,S%d\n\tpush hl\n",
-                plan->expected[check],
-                plan->actual[check],
-                plan->strings[check]);
+        if (plan->name_last) {
+            fprintf(out,
+                    "\tld hl,S%d\n\tpush hl\n"
+                    "\tld hl,%ld\n\tpush hl\n"
+                    "\tld hl,%ld\n\tpush hl\n",
+                    plan->strings[check],
+                    plan->expected[check],
+                    plan->actual[check]);
+        } else {
+            fprintf(out,
+                    "\tld hl,%ld\n\tpush hl\n"
+                    "\tld hl,%ld\n\tpush hl\n"
+                    "\tld hl,S%d\n\tpush hl\n",
+                    plan->expected[check],
+                    plan->actual[check],
+                    plan->strings[check]);
+        }
         mir_machine_emit_symbol_call(out, plan->function);
         fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
     }
@@ -29794,7 +29875,8 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             out, &aggregate_field_sum);
         return 1;
     }
-    if (mir_match_constant_checks(&constant_checks)) {
+    if (mir_match_constant_checks(&constant_checks) ||
+        mir_match_local_boolean_checks(&constant_checks)) {
         mir_emit_constant_checks(out, &constant_checks);
         return 1;
     }
