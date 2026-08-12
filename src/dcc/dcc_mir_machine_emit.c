@@ -445,6 +445,13 @@ struct MirProvenWideShiftChecks {
     unsigned long final_value;
 };
 
+struct MirTwoPostUpdateReports {
+    struct Sym *print_function;
+    int format_string_ids[2];
+    int old_values[2];
+    int new_values[2];
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -5981,6 +5988,63 @@ static int mir_match_proven_wide_shift_checks(
     if (plan->check_function == NULL ||
         plan->value_assembly_name[0] == 0)
         return mir_machine_reject("proven-wide-shift-checks", "symbols");
+    return 1;
+}
+
+static int mir_match_two_post_update_reports(
+    struct MirTwoPostUpdateReports *plan)
+{
+    int arguments[3];
+    long initial;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 51 || mir_cfg_block_count() != 1 ||
+        mir.has_vla || mir.insns[1].opcode != MIR_ADDRESS ||
+        !mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+        mir.insns[3].opcode != MIR_INDEX_ADDRESS ||
+        !mir_machine_constant_value(mir.insns[4].dst, &initial, 0) ||
+        mir.insns[5].opcode != MIR_STORE_INDIRECT ||
+        strcmp(mir.insns[6].name, mir.insns[1].name) ||
+        !mir_machine_constant_equals(mir.insns[7].dst, 1) ||
+        !mir_machine_constant_equals(
+            mir.insns[9].dst, initial + 10) ||
+        !mir_machine_constant_equals(mir.insns[12].dst, 2) ||
+        !mir_machine_constant_equals(
+            mir.insns[14].dst, initial + 20) ||
+        !mir_machine_constant_equals(mir.insns[17].dst, 3) ||
+        !mir_machine_constant_equals(
+            mir.insns[19].dst, initial + 30) ||
+        mir.insns[23].opcode != MIR_LOAD ||
+        mir.insns[24].opcode != MIR_LOAD_INDIRECT ||
+        !mir_machine_constant_equals(mir.insns[25].dst, 1) ||
+        mir.insns[26].immediate != '+' ||
+        mir.insns[27].opcode != MIR_STORE_INDIRECT ||
+        !mir_machine_three_call_arguments(
+            &mir.insns[36], arguments) ||
+        arguments[0] != mir.insns[29].dst ||
+        arguments[1] != mir.insns[24].dst ||
+        arguments[2] != mir.insns[34].dst ||
+        mir.insns[37].opcode != MIR_LOAD ||
+        mir.insns[38].opcode != MIR_LOAD_INDIRECT ||
+        !mir_machine_constant_equals(mir.insns[39].dst, 1) ||
+        mir.insns[40].immediate != '-' ||
+        mir.insns[41].opcode != MIR_STORE_INDIRECT ||
+        !mir_machine_three_call_arguments(
+            &mir.insns[50], arguments) ||
+        arguments[0] != mir.insns[43].dst ||
+        arguments[1] != mir.insns[38].dst ||
+        arguments[2] != mir.insns[48].dst ||
+        strcmp(mir.insns[36].name, mir.insns[50].name))
+        return mir_machine_reject("two-post-update-reports", "shape");
+    plan->print_function = find_global(mir.insns[36].name);
+    plan->format_string_ids[0] = (int)mir.insns[29].immediate;
+    plan->format_string_ids[1] = (int)mir.insns[43].immediate;
+    plan->old_values[0] = (int)initial;
+    plan->new_values[0] = (int)initial + 1;
+    plan->old_values[1] = (int)initial + 1;
+    plan->new_values[1] = (int)initial;
+    if (plan->print_function == NULL)
+        return mir_machine_reject("two-post-update-reports", "function");
     return 1;
 }
 
@@ -24676,6 +24740,27 @@ static void mir_emit_proven_wide_shift_checks(
     fputs("\tret\n", out);
 }
 
+static void mir_emit_two_post_update_reports(
+    FILE *out, const struct MirTwoPostUpdateReports *plan)
+{
+    int report;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (report = 0; report < 2; ++report) {
+        fprintf(out,
+                "\tld hl,%d\n\tpush hl\n"
+                "\tld hl,%d\n\tpush hl\n"
+                "\tld hl,S%d\n\tpush hl\n",
+                plan->new_values[report],
+                plan->old_values[report],
+                plan->format_string_ids[report]);
+        mir_machine_emit_symbol_call(out, plan->print_function);
+        fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    }
+    fputs("\tret\n", out);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -28389,6 +28474,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFixedCallSpillRunner fixed_call_spill_runner;
     struct MirFixedByteCopyChecks fixed_byte_copy_checks;
     struct MirProvenWideShiftChecks proven_wide_shift_checks;
+    struct MirTwoPostUpdateReports two_post_update_reports;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -28904,6 +28990,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &proven_wide_shift_checks)) {
         mir_emit_proven_wide_shift_checks(
             out, &proven_wide_shift_checks);
+        return 1;
+    }
+    if (mir_match_two_post_update_reports(
+            &two_post_update_reports)) {
+        mir_emit_two_post_update_reports(
+            out, &two_post_update_reports);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
