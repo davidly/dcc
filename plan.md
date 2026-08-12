@@ -6,11 +6,21 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `de3ae10`
-  (`dcc MIR: schedule aggregate ldiv checks`).
-- Current candidate coverage: **2096/2185 (95.93%)**.
-- Remaining fallback population: **89 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `be85b72`
+  (`dcc MIR: schedule array post-update checks`).
+- Current candidate coverage: **2097/2185 (95.97%)**.
+- Remaining fallback population: **88 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The name-free bitfield report scheduler admits `tbitfld.main`. It reuses one
+  four-byte IX aggregate slot, uses no IY, preserves all 12 `printf`, eight
+  aggregate-sum, and two hidden-buffer aggregate-return calls, and emits direct
+  packed constants for structurally proven assignments and RMW results. In the
+  stack-check census, selected output falls from 21,489 to 4,616 text bytes and
+  from 2,485 to 480 instructions. `tbitfld` improves from 361,103 to 348,102
+  peep cycles (-3.60%) and from 364,093 to 350,003 nopeep cycles (-3.87%);
+  linked size falls 2,432/2,688 bytes. The fresh non-stack census is
+  2008/2101 and the stack-check census is 2097/2185, each with exactly this one
+  new function and no regression.
 - The name-free local-array/struct check scheduler admits
   `tpostptr.test_arrays_and_structs`. It packs the arrays and struct into one
   70-byte IX frame without overlapping potentially escaped call arguments,

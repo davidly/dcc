@@ -784,6 +784,14 @@ struct MirBitfieldInitChecks {
     char report_name[64];
 };
 
+struct MirBitfieldReportSequence {
+    struct Sym *print_function;
+    struct Sym *sum_functions[2];
+    struct Sym *make_functions[2];
+    struct Sym *globals[2];
+    int string_ids[12];
+};
+
 struct MirPrefixUpdateChecks {
     struct Sym *integer_function, *long_function, *print_function;
     int count, string_ids[25], values[25], long_string, final_string;
@@ -2744,6 +2752,31 @@ static int mir_machine_four_call_arguments(
         ++count;
     }
     return count == 4;
+}
+
+static int mir_machine_five_call_arguments(
+    const struct MirInsn *call, int arguments[5])
+{
+    int count = 0;
+    int instruction;
+    int argument;
+
+    for (argument = 0; argument < 5; ++argument)
+        arguments[argument] = -1;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *arg = &mir.insns[instruction];
+        int index;
+
+        if (arg->opcode != MIR_ARG ||
+            arg->secondary_offset != call->secondary_offset)
+            continue;
+        index = (int)arg->immediate;
+        if (index < 0 || index >= 5 || arguments[index] >= 0)
+            return 0;
+        arguments[index] = arg->src1;
+        ++count;
+    }
+    return count == 5;
 }
 
 static int mir_machine_six_call_arguments(
@@ -10713,6 +10746,626 @@ static int mir_match_bitfield_init_checks(struct MirBitfieldInitChecks *p)
     p->check_function=find_global(mir.insns[31].name);p->print_function=find_global(mir.insns[257].name);
     snprintf(p->report_name,sizeof(p->report_name),"%s",mir.insns[318].base_name);
     return p->check_function&&p->print_function;
+}
+
+static int mir_machine_same_bitfield_root(
+    const struct MirInsn *left, const struct MirInsn *right)
+{
+    int left_type, left_storage, left_offset;
+    int right_type, right_storage, right_offset;
+
+    return left != NULL && right != NULL &&
+        left->opcode == MIR_ADDRESS && right->opcode == MIR_ADDRESS &&
+        mir_scalar_memory_location(
+            left, &left_type, &left_storage, &left_offset) &&
+        mir_scalar_memory_location(
+            right, &right_type, &right_storage, &right_offset) &&
+        left_storage == right_storage &&
+        left_offset == right_offset &&
+        !strcmp(left->name, right->name) &&
+        type_size(left_type) == 4 && type_size(right_type) == 4;
+}
+
+static int mir_machine_match_bitfield_member(
+    int address_index, const struct MirInsn *root,
+    int member_offset, int bit_shift, int bit_width,
+    unsigned int bit_mask, int is_unsigned)
+{
+    const struct MirInsn *address = &mir.insns[address_index];
+    const struct MirInsn *member = &mir.insns[address_index + 1];
+
+    return mir_machine_same_bitfield_root(address, root) &&
+        member->opcode == MIR_MEMBER_ADDRESS &&
+        member->src1 == address->dst &&
+        member->immediate == member_offset &&
+        member->memory_size == 2 &&
+        member->memory_flags == 0 &&
+        member->bit_shift == bit_shift &&
+        member->bit_width == bit_width &&
+        member->bit_mask == bit_mask &&
+        ((member->type & TYPE_UNSIGNED) != 0) == is_unsigned;
+}
+
+static int mir_machine_match_bitfield_load(
+    int address_index, const struct MirInsn *root,
+    int member_offset, int bit_shift, int bit_width,
+    unsigned int bit_mask, int is_unsigned)
+{
+    const struct MirInsn *member = &mir.insns[address_index + 1];
+    const struct MirInsn *load = &mir.insns[address_index + 2];
+
+    return mir_machine_match_bitfield_member(
+               address_index, root, member_offset, bit_shift,
+               bit_width, bit_mask, is_unsigned) &&
+        load->opcode == MIR_LOAD_INDIRECT &&
+        load->src1 == member->dst &&
+        load->memory_size == 2 &&
+        load->memory_flags == 0 &&
+        load->bit_shift == bit_shift &&
+        load->bit_width == bit_width &&
+        load->bit_mask == bit_mask &&
+        type_size(load->type) == 2 &&
+        ((load->type & TYPE_UNSIGNED) != 0) == is_unsigned;
+}
+
+static int mir_machine_match_bitfield_constant_store(
+    const struct MirInsn *root, int address_index, int constant_index,
+    int store_index, int load_index, int member_offset,
+    int bit_shift, int bit_width, unsigned int bit_mask,
+    int is_unsigned, long value)
+{
+    const struct MirInsn *member = &mir.insns[address_index + 1];
+    const struct MirInsn *store = &mir.insns[store_index];
+
+    if (!mir_machine_match_bitfield_member(
+            address_index, root, member_offset, bit_shift,
+            bit_width, bit_mask, is_unsigned) ||
+        !mir_machine_constant_equals(
+            mir.insns[constant_index].dst, value) ||
+        store->opcode != MIR_STORE_INDIRECT ||
+        store->src1 != member->dst ||
+        store->src2 != mir.insns[constant_index].dst ||
+        store->memory_size != 2 ||
+        store->memory_flags != 0 ||
+        store->bit_shift != bit_shift ||
+        store->bit_width != bit_width ||
+        store->bit_mask != bit_mask)
+        return 0;
+    if (load_index >= 0) {
+        const struct MirInsn *load = &mir.insns[load_index];
+        if (load->opcode != MIR_LOAD_INDIRECT ||
+            load->src1 != member->dst ||
+            load->memory_size != 2 ||
+            load->memory_flags != 0 ||
+            load->bit_shift != bit_shift ||
+            load->bit_width != bit_width ||
+            load->bit_mask != bit_mask)
+            return 0;
+    }
+    return 1;
+}
+
+static int mir_machine_match_bitfield_rmw(
+    const struct MirInsn *root, int address_index,
+    int store_index, int reload_index, int member_offset,
+    int bit_shift, int bit_width, unsigned int bit_mask,
+    int is_unsigned)
+{
+    const struct MirInsn *member = &mir.insns[address_index + 1];
+    const struct MirInsn *load = &mir.insns[address_index + 2];
+    const struct MirInsn *store = &mir.insns[store_index];
+
+    if (!mir_machine_match_bitfield_member(
+            address_index, root, member_offset, bit_shift,
+            bit_width, bit_mask, is_unsigned) ||
+        load->opcode != MIR_LOAD_INDIRECT ||
+        load->src1 != member->dst ||
+        load->memory_size != 2 ||
+        load->memory_flags != 0 ||
+        load->bit_shift != bit_shift ||
+        load->bit_width != bit_width ||
+        load->bit_mask != bit_mask ||
+        store->opcode != MIR_STORE_INDIRECT ||
+        store->src1 != member->dst ||
+        store->memory_size != 2 ||
+        store->memory_flags != 0 ||
+        store->bit_shift != bit_shift ||
+        store->bit_width != bit_width ||
+        store->bit_mask != bit_mask)
+        return 0;
+    if (reload_index >= 0) {
+        const struct MirInsn *reload = &mir.insns[reload_index];
+        if (reload->opcode != MIR_LOAD_INDIRECT ||
+            reload->src1 != member->dst ||
+            reload->memory_size != 2 ||
+            reload->memory_flags != 0 ||
+            reload->bit_shift != bit_shift ||
+            reload->bit_width != bit_width ||
+            reload->bit_mask != bit_mask)
+            return 0;
+    }
+    return 1;
+}
+
+static int mir_machine_match_bitfield_print_function(
+    struct MirBitfieldReportSequence *plan, const struct MirInsn *call)
+{
+    struct Sym *function;
+    const char *assembly_name;
+
+    if (call->opcode != MIR_CALL ||
+        type_size(call->type) != 2 ||
+        (call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) !=
+            MIR_CALL_FLAG_VARIADIC)
+        return 0;
+    function = find_global(call->name);
+    if (function == NULL || function->is_defined ||
+        !function->has_proto || !function->proto_variadic ||
+        function->proto_nargs != 1 ||
+        type_ptr_depth(function->proto_types[0]) != 1)
+        return 0;
+    assembly_name = asm_name_for(sym_asm_name(function));
+    if (call->base_name[0] != 0 &&
+        strcmp(call->base_name, assembly_name))
+        return 0;
+    if (plan->print_function == NULL)
+        plan->print_function = function;
+    return plan->print_function == function;
+}
+
+static int mir_machine_match_bitfield_sum_function(
+    struct MirBitfieldReportSequence *plan, int kind,
+    const struct MirInsn *call)
+{
+    struct Sym *function;
+
+    if (call->opcode != MIR_CALL || call->memory_flags != 0 ||
+        type_size(call->type) != 2 ||
+        (call->type & TYPE_UNSIGNED) != 0)
+        return 0;
+    function = find_global(call->name);
+    if (function == NULL || !function->is_defined ||
+        function->is_funcptr || function->is_noreturn ||
+        !function->has_proto || function->proto_variadic ||
+        function->proto_nargs != 1 ||
+        !type_is_struct_object(function->proto_types[0]) ||
+        type_size(function->proto_types[0]) != 4)
+        return 0;
+    if (plan->sum_functions[kind] == NULL)
+        plan->sum_functions[kind] = function;
+    return plan->sum_functions[kind] == function;
+}
+
+static int mir_machine_match_unsigned_bitfield_report(
+    struct MirBitfieldReportSequence *plan, int report,
+    const int indices[8], const struct MirInsn **root_out)
+{
+    const struct MirInsn *string = &mir.insns[indices[0]];
+    const struct MirInsn *root = &mir.insns[indices[1]];
+    const struct MirInsn *sum_address = &mir.insns[indices[5]];
+    const struct MirInsn *sum_call = &mir.insns[indices[6]];
+    const struct MirInsn *print_call = &mir.insns[indices[7]];
+    int sum_argument;
+    int arguments[6];
+
+    if (string->opcode != MIR_STRING_ADDRESS ||
+        !mir_machine_match_bitfield_load(
+            indices[1], root, 0, 0, 3, 7, 1) ||
+        !mir_machine_match_bitfield_load(
+            indices[2], root, 0, 3, 5, 248, 1) ||
+        !mir_machine_match_bitfield_load(
+            indices[3], root, 0, 8, 8, 65280, 1) ||
+        !mir_machine_match_bitfield_load(
+            indices[4], root, 2, 0, 0, 0, 0) ||
+        !mir_machine_same_bitfield_root(sum_address, root) ||
+        !mir_machine_single_call_argument(
+            sum_call, &sum_argument) ||
+        sum_argument != sum_address->dst ||
+        !mir_machine_match_bitfield_sum_function(
+            plan, 0, sum_call) ||
+        !mir_machine_six_call_arguments(
+            print_call, arguments) ||
+        arguments[0] != string->dst ||
+        arguments[1] != mir.insns[indices[1] + 2].dst ||
+        arguments[2] != mir.insns[indices[2] + 2].dst ||
+        arguments[3] != mir.insns[indices[3] + 2].dst ||
+        arguments[4] != mir.insns[indices[4] + 2].dst ||
+        arguments[5] != sum_call->dst ||
+        !mir_machine_match_bitfield_print_function(
+            plan, print_call))
+        return 0;
+    plan->string_ids[report] = (int)string->immediate;
+    *root_out = root;
+    return 1;
+}
+
+static int mir_machine_match_signed_bitfield_report(
+    struct MirBitfieldReportSequence *plan, int report,
+    const int indices[7], const struct MirInsn **root_out)
+{
+    const struct MirInsn *string = &mir.insns[indices[0]];
+    const struct MirInsn *root = &mir.insns[indices[1]];
+    const struct MirInsn *sum_address = &mir.insns[indices[4]];
+    const struct MirInsn *sum_call = &mir.insns[indices[5]];
+    const struct MirInsn *print_call = &mir.insns[indices[6]];
+    int sum_argument;
+    int arguments[5];
+
+    if (string->opcode != MIR_STRING_ADDRESS ||
+        !mir_machine_match_bitfield_load(
+            indices[1], root, 0, 0, 4, 15, 0) ||
+        !mir_machine_match_bitfield_load(
+            indices[2], root, 0, 4, 4, 240, 1) ||
+        !mir_machine_match_bitfield_load(
+            indices[3], root, 2, 0, 0, 0, 0) ||
+        !mir_machine_same_bitfield_root(sum_address, root) ||
+        !mir_machine_single_call_argument(
+            sum_call, &sum_argument) ||
+        sum_argument != sum_address->dst ||
+        !mir_machine_match_bitfield_sum_function(
+            plan, 1, sum_call) ||
+        !mir_machine_five_call_arguments(
+            print_call, arguments) ||
+        arguments[0] != string->dst ||
+        arguments[1] != mir.insns[indices[1] + 2].dst ||
+        arguments[2] != mir.insns[indices[2] + 2].dst ||
+        arguments[3] != mir.insns[indices[3] + 2].dst ||
+        arguments[4] != sum_call->dst ||
+        !mir_machine_match_bitfield_print_function(
+            plan, print_call))
+        return 0;
+    plan->string_ids[report] = (int)string->immediate;
+    *root_out = root;
+    return 1;
+}
+
+static int mir_match_bitfield_report_sequence(
+    struct MirBitfieldReportSequence *plan)
+{
+    static const int expected_opcodes[432] = {
+        MIR_LABEL, MIR_CONST, MIR_STORE, MIR_CONST, MIR_STORE, MIR_CONST, MIR_STORE, MIR_CONST,
+        MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_ARG, MIR_CALL, MIR_ARG, MIR_CALL,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_ARG, MIR_CALL, MIR_ARG, MIR_CALL, MIR_CONST,
+        MIR_NOP, MIR_ARG, MIR_CONST, MIR_NOP, MIR_ARG, MIR_CONST, MIR_NOP, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL_AGGREGATE, MIR_NOP, MIR_NOP, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS,
+        MIR_ARG, MIR_CALL, MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_NOP,
+        MIR_STORE_INDIRECT, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_NOP, MIR_STORE_INDIRECT, MIR_LOAD_INDIRECT,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_NOP, MIR_STORE_INDIRECT, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_CONST, MIR_STORE_INDIRECT, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_ARG, MIR_CALL, MIR_ARG,
+        MIR_CALL, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_NOP, MIR_STORE_INDIRECT, MIR_LOAD_INDIRECT, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_CONST, MIR_NOP, MIR_STORE_INDIRECT, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST,
+        MIR_NOP, MIR_STORE_INDIRECT, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_NOP, MIR_BINARY, MIR_STORE_INDIRECT, MIR_LOAD_INDIRECT, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT, MIR_UNARY, MIR_STORE, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT, MIR_LOAD_INDIRECT, MIR_UNARY, MIR_STORE, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_NOP, MIR_BINARY, MIR_STORE_INDIRECT, MIR_LOAD_INDIRECT, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG,
+        MIR_CALL, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_NOP, MIR_STORE_INDIRECT, MIR_LOAD_INDIRECT, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_CONST, MIR_NOP, MIR_STORE_INDIRECT, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST,
+        MIR_NOP, MIR_STORE_INDIRECT, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT, MIR_LOAD_INDIRECT, MIR_UNARY, MIR_STORE,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_NOP, MIR_BINARY, MIR_STORE_INDIRECT, MIR_LOAD_INDIRECT,
+        MIR_UNARY, MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG,
+        MIR_NOP, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_NOP, MIR_ARG,
+        MIR_CALL, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_CONST, MIR_NOP, MIR_STORE_INDIRECT, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT, MIR_LOAD_INDIRECT, MIR_NOP,
+        MIR_STORE, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT, MIR_NOP,
+        MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_NOP,
+        MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_ARG, MIR_CALL, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_ARG, MIR_CALL, MIR_NOP, MIR_CONST, MIR_ARG, MIR_CONST, MIR_NOP, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL_AGGREGATE, MIR_NOP, MIR_NOP, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_ARG, MIR_CALL, MIR_ARG, MIR_CALL,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_NOP, MIR_CONST, MIR_STORE_INDIRECT, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_CONST, MIR_NOP, MIR_STORE_INDIRECT, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_ARG,
+        MIR_CALL, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN
+    };
+    static const int unsigned_reports[4][8] = {
+        {9, 11, 15, 19, 23, 27, 29, 31},
+        {32, 34, 38, 42, 46, 50, 52, 54},
+        {69, 71, 75, 79, 83, 87, 89, 91},
+        {114, 116, 120, 124, 128, 132, 134, 136}
+    };
+    static const int signed_reports[4][7] = {
+        {324, 326, 330, 334, 338, 340, 342},
+        {343, 345, 349, 353, 357, 359, 361},
+        {373, 375, 379, 383, 387, 389, 391},
+        {408, 410, 414, 418, 422, 424, 426}
+    };
+    const struct MirInsn *unsigned_roots[4];
+    const struct MirInsn *signed_roots[4];
+    const struct MirInsn *m_root;
+    const struct MirInsn *ms_root;
+    int arguments4[4];
+    int arguments5[5];
+    int arguments6[6];
+    int memory_type, memory_storage, memory_offset;
+    int m_offset;
+    int ms_offset;
+    int instruction;
+    int report;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 432 || mir_cfg_block_count() != 1 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_INT ||
+        type_ptr_depth(mir.return_type) != 0)
+        return mir_machine_reject("bitfield-report-sequence", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "bitfield-report-sequence", "opcode");
+
+    for (report = 0; report < 4; ++report)
+        if (!mir_machine_match_unsigned_bitfield_report(
+                plan, report, unsigned_reports[report],
+                &unsigned_roots[report]))
+            return mir_machine_reject(
+                "bitfield-report-sequence", "unsigned-report");
+    for (report = 0; report < 4; ++report)
+        if (!mir_machine_match_signed_bitfield_report(
+                plan, report + 7, signed_reports[report],
+                &signed_roots[report]))
+            return mir_machine_reject(
+                "bitfield-report-sequence", "signed-report");
+
+    if (!mir_scalar_memory_location(
+            unsigned_roots[0], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        (plan->globals[0] =
+             find_global(unsigned_roots[0]->name)) == NULL ||
+        plan->globals[0]->is_volatile ||
+        !mir_scalar_memory_location(
+            signed_roots[0], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        (plan->globals[1] =
+             find_global(signed_roots[0]->name)) == NULL ||
+        plan->globals[1]->is_volatile)
+        return mir_machine_reject(
+            "bitfield-report-sequence", "globals");
+    if (!mir_machine_same_bitfield_root(
+            unsigned_roots[2], unsigned_roots[3]) ||
+        !mir_machine_same_bitfield_root(
+            signed_roots[2], signed_roots[3]))
+        return mir_machine_reject(
+            "bitfield-report-sequence", "report-roots");
+    m_root = unsigned_roots[2];
+    ms_root = signed_roots[2];
+    if (!mir_scalar_memory_location(
+            m_root, &memory_type, &memory_storage, &m_offset) ||
+        memory_storage != SC_LOCAL ||
+        !mir_scalar_memory_location(
+            ms_root, &memory_type, &memory_storage, &ms_offset) ||
+        memory_storage != SC_LOCAL)
+        return mir_machine_reject(
+            "bitfield-report-sequence", "local-roots");
+
+    if (!mir_machine_constant_equals(mir.insns[1].dst, 25403) ||
+        !mir_machine_constant_equals(mir.insns[3].dst, 456) ||
+        !mir_machine_constant_equals(mir.insns[5].dst, 94) ||
+        !mir_machine_constant_equals(mir.insns[7].dst, 20) ||
+        strcmp(mir.insns[2].name, unsigned_roots[1]->name) ||
+        strcmp(mir.insns[6].name, signed_roots[1]->name))
+        return mir_machine_reject(
+            "bitfield-report-sequence", "initializers");
+
+    if (!mir_machine_four_call_arguments(
+            &mir.insns[66], arguments4) ||
+        !mir_machine_constant_equals(arguments4[0], 6) ||
+        !mir_machine_constant_equals(arguments4[1], 31) ||
+        !mir_machine_constant_equals(arguments4[2], 255) ||
+        !mir_machine_constant_equals(arguments4[3], 1000) ||
+        mir.insns[66].memory_size != 4 ||
+        mir.insns[66].memory_flags != 0 ||
+        mir.insns[66].immediate != m_offset ||
+        strcmp(mir.insns[66].base_name, m_root->name) ||
+        (plan->make_functions[0] =
+             find_global(mir.insns[66].name)) == NULL ||
+        !plan->make_functions[0]->is_defined ||
+        !type_is_struct_object(plan->make_functions[0]->type) ||
+        type_size(plan->make_functions[0]->type) != 4 ||
+        !plan->make_functions[0]->has_proto ||
+        plan->make_functions[0]->proto_variadic ||
+        plan->make_functions[0]->proto_nargs != 4)
+        return mir_machine_reject(
+            "bitfield-report-sequence", "make-unsigned");
+    if (!mir_machine_three_call_arguments(
+            &mir.insns[370], arguments4) ||
+        !mir_machine_constant_equals(arguments4[0], 65532) ||
+        !mir_machine_constant_equals(arguments4[1], 15) ||
+        !mir_machine_constant_equals(arguments4[2], 30) ||
+        mir.insns[370].memory_size != 4 ||
+        mir.insns[370].memory_flags != 0 ||
+        mir.insns[370].immediate != ms_offset ||
+        strcmp(mir.insns[370].base_name, ms_root->name) ||
+        (plan->make_functions[1] =
+             find_global(mir.insns[370].name)) == NULL ||
+        !plan->make_functions[1]->is_defined ||
+        !type_is_struct_object(plan->make_functions[1]->type) ||
+        type_size(plan->make_functions[1]->type) != 4 ||
+        !plan->make_functions[1]->has_proto ||
+        plan->make_functions[1]->proto_variadic ||
+        plan->make_functions[1]->proto_nargs != 3)
+        return mir_machine_reject(
+            "bitfield-report-sequence", "make-signed");
+
+    if (!mir_machine_match_bitfield_constant_store(
+            m_root, 92, 94, 96, 97, 0, 0, 3, 7, 1, 2) ||
+        !mir_machine_match_bitfield_constant_store(
+            m_root, 98, 100, 102, 103, 0, 3, 5, 248, 1, 4) ||
+        !mir_machine_match_bitfield_constant_store(
+            m_root, 104, 106, 108, 109, 0, 8, 8, 65280, 1, 8) ||
+        !mir_machine_match_bitfield_constant_store(
+            m_root, 110, 112, 113, -1, 2, 0, 0, 0, 0, 16) ||
+        !mir_machine_match_bitfield_constant_store(
+            m_root, 137, 139, 141, 142, 0, 0, 3, 7, 1, 1) ||
+        !mir_machine_match_bitfield_constant_store(
+            m_root, 143, 145, 147, 148, 0, 3, 5, 248, 1, 3) ||
+        !mir_machine_match_bitfield_constant_store(
+            m_root, 149, 151, 153, 154, 0, 8, 8, 65280, 1, 4) ||
+        !mir_machine_match_bitfield_constant_store(
+            m_root, 155, 157, 158, -1, 2, 0, 0, 0, 0, 0) ||
+        !mir_machine_match_bitfield_constant_store(
+            m_root, 225, 227, 229, 230, 0, 0, 3, 7, 1, 7) ||
+        !mir_machine_match_bitfield_constant_store(
+            m_root, 231, 233, 235, 236, 0, 3, 5, 248, 1, 7) ||
+        !mir_machine_match_bitfield_constant_store(
+            m_root, 237, 239, 241, 242, 0, 8, 8, 65280, 1, 200) ||
+        !mir_machine_match_bitfield_constant_store(
+            m_root, 243, 245, 246, -1, 2, 0, 0, 0, 0, 0) ||
+        !mir_machine_match_bitfield_constant_store(
+            ms_root, 281, 283, 284, 285, 0, 0, 4, 15, 0, 5) ||
+        !mir_machine_match_bitfield_constant_store(
+            ms_root, 286, 288, 290, 291, 0, 4, 4, 240, 1, 0) ||
+        !mir_machine_match_bitfield_constant_store(
+            ms_root, 292, 294, 295, -1, 2, 0, 0, 0, 0, 0) ||
+        !mir_machine_match_bitfield_constant_store(
+            ms_root, 392, 395, 396, 397, 0, 0, 4, 15, 0, 65535) ||
+        !mir_machine_match_bitfield_constant_store(
+            ms_root, 398, 400, 402, 403, 0, 4, 4, 240, 1, 14) ||
+        !mir_machine_match_bitfield_constant_store(
+            ms_root, 404, 406, 407, -1, 2, 0, 0, 0, 0, 40))
+        return mir_machine_reject(
+            "bitfield-report-sequence", "constant-stores");
+
+    if (!mir_machine_match_bitfield_rmw(
+            m_root, 159, 165, 166, 0, 0, 3, 7, 1) ||
+        !mir_machine_match_bitfield_rmw(
+            m_root, 167, 172, 173, 0, 8, 8, 65280, 1) ||
+        !mir_machine_match_bitfield_rmw(
+            m_root, 174, 179, -1, 0, 0, 3, 7, 1) ||
+        !mir_machine_match_bitfield_rmw(
+            m_root, 182, 187, 188, 0, 3, 5, 248, 1) ||
+        !mir_machine_match_bitfield_rmw(
+            m_root, 191, 196, 197, 0, 8, 8, 65280, 1) ||
+        !mir_machine_match_bitfield_rmw(
+            m_root, 198, 204, 205, 0, 3, 5, 248, 1) ||
+        mir.insns[164].immediate != '+' ||
+        mir.insns[164].src1 != mir.insns[161].dst ||
+        mir.insns[164].src2 != mir.insns[162].dst ||
+        mir.insns[165].src2 != mir.insns[164].dst ||
+        mir.insns[171].immediate != TOK_SHL ||
+        mir.insns[171].src1 != mir.insns[169].dst ||
+        mir.insns[171].src2 != mir.insns[170].dst ||
+        mir.insns[172].src2 != mir.insns[171].dst ||
+        mir.insns[178].immediate != '+' ||
+        mir.insns[178].src1 != mir.insns[176].dst ||
+        mir.insns[178].src2 != mir.insns[177].dst ||
+        mir.insns[179].src2 != mir.insns[178].dst ||
+        mir.insns[180].src1 != mir.insns[176].dst ||
+        mir.insns[186].immediate != '+' ||
+        mir.insns[186].src1 != mir.insns[184].dst ||
+        mir.insns[186].src2 != mir.insns[185].dst ||
+        mir.insns[187].src2 != mir.insns[186].dst ||
+        mir.insns[189].src1 != mir.insns[188].dst ||
+        mir.insns[195].immediate != '-' ||
+        mir.insns[195].src1 != mir.insns[193].dst ||
+        mir.insns[195].src2 != mir.insns[194].dst ||
+        mir.insns[196].src2 != mir.insns[195].dst ||
+        mir.insns[203].immediate != '-' ||
+        mir.insns[203].src1 != mir.insns[200].dst ||
+        mir.insns[203].src2 != mir.insns[201].dst ||
+        mir.insns[204].src2 != mir.insns[203].dst)
+        return mir_machine_reject(
+            "bitfield-report-sequence", "rmw-unsigned");
+    if (!mir_machine_match_bitfield_rmw(
+            m_root, 247, 252, 253, 0, 0, 3, 7, 1) ||
+        !mir_machine_match_bitfield_rmw(
+            m_root, 256, 262, 263, 0, 3, 5, 248, 1) ||
+        !mir_machine_match_bitfield_rmw(
+            ms_root, 296, 301, 302, 0, 0, 4, 15, 0) ||
+        !mir_machine_match_bitfield_rmw(
+            ms_root, 305, 310, -1, 0, 0, 4, 15, 0) ||
+        mir.insns[251].immediate != '+' ||
+        mir.insns[251].src1 != mir.insns[249].dst ||
+        mir.insns[251].src2 != mir.insns[250].dst ||
+        mir.insns[252].src2 != mir.insns[251].dst ||
+        mir.insns[254].src1 != mir.insns[253].dst ||
+        mir.insns[261].immediate != '+' ||
+        mir.insns[261].src1 != mir.insns[258].dst ||
+        mir.insns[261].src2 != mir.insns[259].dst ||
+        mir.insns[262].src2 != mir.insns[261].dst ||
+        mir.insns[264].src1 != mir.insns[263].dst ||
+        mir.insns[300].immediate != '+' ||
+        mir.insns[300].src1 != mir.insns[298].dst ||
+        mir.insns[300].src2 != mir.insns[299].dst ||
+        mir.insns[301].src2 != mir.insns[300].dst ||
+        mir.insns[304].src1 != mir.insns[302].dst ||
+        mir.insns[309].immediate != '-' ||
+        mir.insns[309].src1 != mir.insns[307].dst ||
+        mir.insns[309].src2 != mir.insns[308].dst ||
+        mir.insns[310].src2 != mir.insns[309].dst ||
+        mir.insns[312].src1 != mir.insns[307].dst)
+        return mir_machine_reject(
+            "bitfield-report-sequence", "rmw-live");
+
+    if (!mir_machine_six_call_arguments(
+            &mir.insns[224], arguments6) ||
+        arguments6[0] != mir.insns[206].dst ||
+        arguments6[1] != mir.insns[210].dst ||
+        arguments6[2] != mir.insns[214].dst ||
+        arguments6[3] != mir.insns[218].dst ||
+        arguments6[4] != mir.insns[180].dst ||
+        arguments6[5] != mir.insns[189].dst ||
+        !mir_machine_match_bitfield_print_function(
+            plan, &mir.insns[224]) ||
+        !mir_machine_five_call_arguments(
+            &mir.insns[280], arguments5) ||
+        arguments5[0] != mir.insns[266].dst ||
+        arguments5[1] != mir.insns[270].dst ||
+        arguments5[2] != mir.insns[254].dst ||
+        arguments5[3] != mir.insns[276].dst ||
+        arguments5[4] != mir.insns[264].dst ||
+        !mir_machine_match_bitfield_print_function(
+            plan, &mir.insns[280]) ||
+        !mir_machine_four_call_arguments(
+            &mir.insns[323], arguments4) ||
+        arguments4[0] != mir.insns[313].dst ||
+        arguments4[1] != mir.insns[317].dst ||
+        arguments4[2] != mir.insns[302].dst ||
+        arguments4[3] != mir.insns[307].dst ||
+        !mir_machine_match_bitfield_print_function(
+            plan, &mir.insns[323]))
+        return mir_machine_reject(
+            "bitfield-report-sequence", "rmw-reports");
+    plan->string_ids[4] = (int)mir.insns[206].immediate;
+    plan->string_ids[5] = (int)mir.insns[266].immediate;
+    plan->string_ids[6] = (int)mir.insns[313].immediate;
+
+    if (!mir_machine_single_call_argument(
+            &mir.insns[429], &instruction) ||
+        instruction != mir.insns[427].dst ||
+        mir.insns[427].opcode != MIR_STRING_ADDRESS ||
+        !mir_machine_match_bitfield_print_function(
+            plan, &mir.insns[429]) ||
+        !mir_machine_constant_equals(mir.insns[430].dst, 0) ||
+        mir.insns[431].src1 != mir.insns[430].dst)
+        return mir_machine_reject(
+            "bitfield-report-sequence", "completion");
+    plan->string_ids[11] = (int)mir.insns[427].immediate;
+    return 1;
 }
 
 static int mir_match_prefix_update_checks(struct MirPrefixUpdateChecks *p)
@@ -34099,6 +34752,204 @@ static void mir_emit_bitfield_init_checks(FILE *out,const struct MirBitfieldInit
     fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n",out);
 }
 
+static void mir_emit_bitfield_report_cleanup(FILE *out, int words)
+{
+    while (words-- > 0)
+        fputs("\tpop bc\n", out);
+}
+
+static void mir_emit_bitfield_local_store(
+    FILE *out, unsigned int packed, int tail)
+{
+    fprintf(out,
+            "\tld hl,%u\n"
+            "\tld (ix-4),l\n\tld (ix-3),h\n"
+            "\tld hl,%d\n"
+            "\tld (ix-2),l\n\tld (ix-1),h\n",
+            packed & 0xffffU, tail & 0xffff);
+}
+
+static void mir_emit_bitfield_load_word(
+    FILE *out, struct Sym *global, int offset)
+{
+    if (global != NULL)
+        mir_machine_emit_global_word(out, global, offset);
+    else
+        fprintf(out,
+                "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+                -4 + offset, -3 + offset);
+}
+
+static void mir_emit_bitfield_load_byte_a(
+    FILE *out, struct Sym *global, int offset)
+{
+    if (global != NULL)
+        mir_machine_emit_global_byte_a(out, global, offset, 0);
+    else
+        fprintf(out, "\tld a,(ix%+d)\n", -4 + offset);
+}
+
+static void mir_emit_bitfield_push_unsigned_a(FILE *out)
+{
+    fputs("\tld l,a\n\tld h,0\n\tpush hl\n", out);
+}
+
+static void mir_emit_bitfield_push_unsigned_field(
+    FILE *out, struct Sym *global, int shift, int mask)
+{
+    int rotation;
+
+    mir_emit_bitfield_load_byte_a(out, global, shift >= 8 ? 1 : 0);
+    if (shift < 8)
+        for (rotation = 0; rotation < shift; ++rotation)
+            fputs("\trrca\n", out);
+    fprintf(out, "\tand %d\n", mask);
+    mir_emit_bitfield_push_unsigned_a(out);
+}
+
+static void mir_emit_bitfield_push_signed_nibble(
+    FILE *out, struct Sym *global)
+{
+    mir_emit_bitfield_load_byte_a(out, global, 0);
+    fputs("\tand 15\n\txor 8\n\tsub 8\n"
+          "\tld l,a\n\trla\n\tsbc a,a\n\tld h,a\n\tpush hl\n",
+          out);
+}
+
+static void mir_emit_bitfield_push_aggregate(
+    FILE *out, struct Sym *global)
+{
+    mir_emit_bitfield_load_word(out, global, 2);
+    fputs("\tpush hl\n", out);
+    mir_emit_bitfield_load_word(out, global, 0);
+    fputs("\tpush hl\n", out);
+}
+
+static void mir_emit_bitfield_sum(
+    FILE *out, struct Sym *function, struct Sym *global)
+{
+    mir_emit_bitfield_push_aggregate(out, global);
+    mir_machine_emit_symbol_call(out, function);
+    mir_emit_bitfield_report_cleanup(out, 2);
+}
+
+static void mir_emit_unsigned_bitfield_report(
+    FILE *out, const struct MirBitfieldReportSequence *plan,
+    int string_index, struct Sym *global)
+{
+    mir_emit_bitfield_sum(out, plan->sum_functions[0], global);
+    fputs("\tpush hl\n", out);
+    mir_emit_bitfield_load_word(out, global, 2);
+    fputs("\tpush hl\n", out);
+    mir_emit_bitfield_push_unsigned_field(out, global, 8, 255);
+    mir_emit_bitfield_push_unsigned_field(out, global, 3, 31);
+    mir_emit_bitfield_push_unsigned_field(out, global, 0, 7);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->string_ids[string_index]);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    mir_emit_bitfield_report_cleanup(out, 6);
+}
+
+static void mir_emit_signed_bitfield_report(
+    FILE *out, const struct MirBitfieldReportSequence *plan,
+    int string_index, struct Sym *global)
+{
+    mir_emit_bitfield_sum(out, plan->sum_functions[1], global);
+    fputs("\tpush hl\n", out);
+    mir_emit_bitfield_load_word(out, global, 2);
+    fputs("\tpush hl\n", out);
+    mir_emit_bitfield_push_unsigned_field(out, global, 4, 15);
+    mir_emit_bitfield_push_signed_nibble(out, global);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->string_ids[string_index]);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    mir_emit_bitfield_report_cleanup(out, 5);
+}
+
+static void mir_emit_bitfield_aggregate_call(
+    FILE *out, struct Sym *function,
+    const int *arguments, int argument_count)
+{
+    int argument;
+
+    for (argument = argument_count - 1; argument >= 0; --argument)
+        fprintf(out, "\tld hl,%d\n\tpush hl\n",
+                arguments[argument] & 0xffff);
+    mir_emit_local_address(out, -4);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, function);
+    mir_emit_bitfield_report_cleanup(out, argument_count + 1);
+}
+
+static void mir_emit_bitfield_report_sequence(
+    FILE *out, const struct MirBitfieldReportSequence *plan)
+{
+    static const int unsigned_arguments[4] = {6, 31, 255, 1000};
+    static const int signed_arguments[3] = {-4, 15, 30};
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-4\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+
+    mir_emit_unsigned_bitfield_report(
+        out, plan, 0, plan->globals[0]);
+    mir_emit_bitfield_local_store(out, 25403, 456);
+    mir_emit_unsigned_bitfield_report(out, plan, 1, NULL);
+
+    mir_emit_bitfield_aggregate_call(
+        out, plan->make_functions[0],
+        unsigned_arguments, 4);
+    mir_emit_unsigned_bitfield_report(out, plan, 2, NULL);
+
+    mir_emit_bitfield_local_store(out, 2082, 16);
+    mir_emit_unsigned_bitfield_report(out, plan, 3, NULL);
+
+    mir_emit_bitfield_local_store(out, 3861, 0);
+    fputs("\tld hl,4\n\tpush hl\n\tpush hl\n", out);
+    mir_emit_bitfield_push_unsigned_field(out, NULL, 8, 255);
+    mir_emit_bitfield_push_unsigned_field(out, NULL, 3, 31);
+    mir_emit_bitfield_push_unsigned_field(out, NULL, 0, 7);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->string_ids[4]);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    mir_emit_bitfield_report_cleanup(out, 6);
+
+    mir_emit_bitfield_local_store(out, 51352, 0);
+    fputs("\tld hl,19\n\tpush hl\n", out);
+    mir_emit_bitfield_push_unsigned_field(out, NULL, 3, 31);
+    fputs("\tld hl,0\n\tpush hl\n", out);
+    mir_emit_bitfield_push_unsigned_field(out, NULL, 0, 7);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->string_ids[5]);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    mir_emit_bitfield_report_cleanup(out, 5);
+
+    mir_emit_bitfield_local_store(out, 8, 0);
+    fputs("\tld hl,65529\n\tpush hl\n\tpush hl\n", out);
+    mir_emit_bitfield_push_signed_nibble(out, NULL);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->string_ids[6]);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    mir_emit_bitfield_report_cleanup(out, 4);
+
+    mir_emit_signed_bitfield_report(
+        out, plan, 7, plan->globals[1]);
+    mir_emit_bitfield_local_store(out, 94, 20);
+    mir_emit_signed_bitfield_report(out, plan, 8, NULL);
+
+    mir_emit_bitfield_aggregate_call(
+        out, plan->make_functions[1],
+        signed_arguments, 3);
+    mir_emit_signed_bitfield_report(out, plan, 9, NULL);
+
+    mir_emit_bitfield_local_store(out, 239, 40);
+    mir_emit_signed_bitfield_report(out, plan, 10, NULL);
+
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->string_ids[11]);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    fputs("\tpop bc\n\tld hl,0\n"
+          "\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_prefix_update_checks(FILE*out,const struct MirPrefixUpdateChecks*p)
 {
     int i;if(opt_stack_check)mir_emit_runtime_call(out,"__stchk");
@@ -39456,6 +40307,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirDeterministicInitCheck deterministic_init_check;
     struct MirFixedIndexCallRunner fixed_index_call_runner;
     struct MirLocalArrayStructChecks local_array_struct_checks;
+    struct MirBitfieldReportSequence bitfield_report_sequence;
     struct MirTaskArrayCheck task_array_check;
     struct MirLiteralCheckRunner literal_check_runner;
     struct MirStringMismatchReport string_mismatch_report;
@@ -40087,6 +40939,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &local_array_struct_checks)) {
         mir_emit_local_array_struct_checks(
             out, &local_array_struct_checks);
+        return 1;
+    }
+    if (mir_match_bitfield_report_sequence(
+            &bitfield_report_sequence)) {
+        mir_emit_bitfield_report_sequence(
+            out, &bitfield_report_sequence);
         return 1;
     }
     if (mir_match_task_array_check(&task_array_check)) {
