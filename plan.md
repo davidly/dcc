@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `caeba65`
-  (`schedule three-argument bitcast calls`).
-- Current candidate coverage: **1969/2185 (90.11%)**.
-- Remaining fallback population: **216 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `2c98365`
+  (`schedule inline float tolerance reports`).
+- Current candidate coverage: **1971/2185 (90.21%)**.
+- Remaining fallback population: **214 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -242,6 +242,16 @@ current execution plan and handoff.
   directly, and push the original values only on failure. This admits
   `tpromo.ck_f` and `tctxops.chkf`, improving those apps 3.01%/3.09% and
   3.55%/3.75% in peep/nopeep modes.
+- Global record-pop loops now reload the cheap global state root at each
+  boundary, keep the decremented index in BC, form the six-byte record address
+  directly, and return immediately on the selected kind. Avoiding IY prevents
+  file-wide allocator interference. This admits
+  `tstretst.direct_return_to_call/helper_return_to_call`; `tstretst` improves
+  8.64% peep / 14.67% nopeep.
+- The structural call-check runner policy now allows the measured 135-byte
+  textual delta caused by prelegacy callee scheduling (formerly 130);
+  forced dual-mode A/B proved the same 117-instruction caller remains faster,
+  preserving `tstretst.run_direct` and forward-only coverage.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -249,7 +259,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 216 final-cost fallbacks,
+- Current next priority: repeated causes in the 214 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 

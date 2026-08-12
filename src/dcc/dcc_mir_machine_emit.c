@@ -724,6 +724,20 @@ struct MirPointerMemberAny2 {
     int member_offsets[2];
 };
 
+struct MirGlobalRecordPop {
+    struct Sym *state;
+    int base_stack_offset;
+    int target_stack_offset;
+    int records_offset;
+    int index_offset;
+    int kind_offset;
+    int value_offset;
+    int stride;
+    int wanted_kind;
+    int loop_label;
+    int done_label;
+};
+
 struct MirAsciiUpper {
     int parameter_stack_offset;
     int width;
@@ -11813,6 +11827,222 @@ static int mir_match_conditional_string_report(
     return 1;
 }
 
+static int mir_match_global_record_pop(
+    struct MirGlobalRecordPop *plan)
+{
+    static const int prefix_opcodes[24] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_LABEL, MIR_NOP, MIR_LOAD,
+        MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_LOAD,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT,
+        MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT
+    };
+    static const int direct_opcodes[30] = {
+        MIR_INDEX_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_INDEX_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_STORE_INDIRECT, MIR_CONST, MIR_RETURN, MIR_NOP, MIR_LABEL,
+        MIR_NOP, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_RETURN
+    };
+    static const int helper_opcodes[29] = {
+        MIR_CONST, MIR_BINARY, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD,
+        MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_STORE_INDIRECT,
+        MIR_CONST, MIR_RETURN, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_LABEL,
+        MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_RETURN
+    };
+    const struct MirInsn *base = &mir.insns[1];
+    const struct MirInsn *target = &mir.insns[2];
+    const struct MirInsn *target_load;
+    const struct MirInsn *value_load;
+    const struct MirInsn *records_member = &mir.insns[19];
+    const struct MirInsn *index_member = &mir.insns[7];
+    int memory_type, memory_storage, memory_offset;
+    long wanted_kind;
+    int direct;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    direct = mir.count == 54;
+    if ((mir.count != 54 && mir.count != 53) ||
+        mir_cfg_block_count() != 5 || mir.has_vla ||
+        type_size(mir.return_type) != 2 ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        type_size(base->type) != 2 ||
+        type_ptr_depth(base->type) != 0 ||
+        type_ptr_depth(target->type) != 1)
+        return mir_machine_reject("global-record-pop", "shape");
+    for (instruction = 0; instruction < 24; ++instruction)
+        if (mir.insns[instruction].opcode != prefix_opcodes[instruction])
+            return mir_machine_reject("global-record-pop", "prefix-opcode");
+    for (instruction = 24; instruction < mir.count; ++instruction) {
+        int expected = direct
+            ? direct_opcodes[instruction - 24]
+            : helper_opcodes[instruction - 24];
+        if (mir.insns[instruction].opcode != expected)
+            return mir_machine_reject("global-record-pop", "tail-opcode");
+    }
+    if (!mir_scalar_memory_location(
+            base, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2)
+        return mir_machine_reject("global-record-pop", "base");
+    plan->base_stack_offset = memory_offset - 2;
+    if (!mir_scalar_memory_location(
+            target, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2)
+        return mir_machine_reject("global-record-pop", "target");
+    plan->target_stack_offset = memory_offset - 2;
+    if (!mir_machine_named_nonvolatile(&mir.insns[6]) ||
+        !mir_machine_same_location(&mir.insns[6], &mir.insns[12]) ||
+        !mir_machine_same_location(&mir.insns[6], &mir.insns[18]) ||
+        !mir_machine_same_location(&mir.insns[6], &mir.insns[21]) ||
+        index_member->src1 != mir.insns[6].dst ||
+        mir.insns[8].src1 != index_member->dst ||
+        mir.insns[8].memory_size != 2 ||
+        (mir.insns[8].memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_same_location(base, &mir.insns[9]) ||
+        mir.insns[10].immediate != '>' ||
+        mir.insns[10].src1 != mir.insns[8].dst ||
+        mir.insns[10].src2 != mir.insns[9].dst ||
+        mir.insns[11].src1 != mir.insns[10].dst ||
+        mir.insns[11].label != mir.insns[direct ? 51 : 50].label)
+        return mir_machine_reject("global-record-pop", "loop-test");
+    plan->state = find_global(mir.insns[6].name);
+    if (plan->state == NULL || plan->state->is_volatile ||
+        plan->state->storage == SC_EXTERN ||
+        index_member->immediate < -128 || index_member->immediate > 126 ||
+        mir.insns[13].src1 != mir.insns[12].dst ||
+        mir.insns[13].immediate != index_member->immediate ||
+        mir.insns[14].src1 != mir.insns[13].dst ||
+        (mir.insns[14].memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_constant_equals(mir.insns[15].dst, 1) ||
+        mir.insns[16].immediate != '-' ||
+        mir.insns[16].src1 != mir.insns[14].dst ||
+        mir.insns[16].src2 != mir.insns[15].dst ||
+        mir.insns[17].src1 != mir.insns[13].dst ||
+        mir.insns[17].src2 != mir.insns[16].dst ||
+        mir.insns[17].memory_size != 2 ||
+        (mir.insns[17].memory_flags & (1 | 8)) != 0 ||
+        records_member->src1 != mir.insns[18].dst ||
+        mir.insns[20].src1 != records_member->dst ||
+        mir.insns[20].memory_size != 2 ||
+        (mir.insns[20].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[22].src1 != mir.insns[21].dst ||
+        mir.insns[22].immediate != index_member->immediate ||
+        mir.insns[23].src1 != mir.insns[22].dst ||
+        mir.insns[23].memory_size != 2 ||
+        (mir.insns[23].memory_flags & (1 | 8)) != 0)
+        return mir_machine_reject("global-record-pop", "state");
+    plan->index_offset = (int)index_member->immediate;
+    plan->records_offset = (int)records_member->immediate;
+    if (plan->records_offset < -128 || plan->records_offset > 126)
+        return mir_machine_reject("global-record-pop", "state-offsets");
+    if (direct) {
+        if (mir.insns[24].src1 != mir.insns[20].dst ||
+            mir.insns[24].src2 != mir.insns[23].dst ||
+            mir.insns[24].immediate <= 0 ||
+            mir.insns[25].src1 != mir.insns[24].dst ||
+            mir.insns[26].src1 != mir.insns[25].dst ||
+            mir.insns[26].memory_size != 2 ||
+            (mir.insns[26].memory_flags & (1 | 8)) != 0 ||
+            !mir_machine_unobservable_local_store(&mir.insns[28]) ||
+            mir.insns[28].src1 != mir.insns[26].dst ||
+            !mir_machine_constant_value(
+                mir.insns[30].dst, &wanted_kind, 0) ||
+            mir.insns[31].immediate != TOK_EQ ||
+            mir.insns[31].src1 != mir.insns[26].dst ||
+            mir.insns[31].src2 != mir.insns[30].dst ||
+            mir.insns[32].src1 != mir.insns[31].dst ||
+            mir.insns[32].label != mir.insns[47].label)
+            return mir_machine_reject("global-record-pop", "direct-kind");
+        plan->stride = (int)mir.insns[24].immediate;
+        plan->kind_offset = (int)mir.insns[25].immediate;
+        plan->wanted_kind = (int)wanted_kind;
+        target_load = &mir.insns[33];
+        value_load = &mir.insns[42];
+        if (!mir_machine_same_location(&mir.insns[6], &mir.insns[34]) ||
+            mir.insns[35].src1 != mir.insns[34].dst ||
+            mir.insns[35].immediate != plan->records_offset ||
+            mir.insns[36].src1 != mir.insns[35].dst ||
+            !mir_machine_same_location(&mir.insns[6], &mir.insns[37]) ||
+            mir.insns[38].src1 != mir.insns[37].dst ||
+            mir.insns[38].immediate != plan->index_offset ||
+            mir.insns[39].src1 != mir.insns[38].dst ||
+            mir.insns[40].src1 != mir.insns[36].dst ||
+            mir.insns[40].src2 != mir.insns[39].dst ||
+            mir.insns[40].immediate != plan->stride ||
+            mir.insns[41].src1 != mir.insns[40].dst)
+            return mir_machine_reject("global-record-pop", "direct-value");
+        plan->value_offset = (int)mir.insns[41].immediate;
+    } else {
+        long stride;
+        if (!mir_machine_constant_value(mir.insns[24].dst, &stride, 0) ||
+            stride <= 0 || stride > 255 ||
+            mir.insns[25].immediate != '*' ||
+            mir.insns[25].src1 != mir.insns[23].dst ||
+            mir.insns[25].src2 != mir.insns[24].dst ||
+            mir.insns[26].immediate != '+' ||
+            mir.insns[26].src1 != mir.insns[20].dst ||
+            mir.insns[26].src2 != mir.insns[25].dst ||
+            !mir_machine_unobservable_local_store(&mir.insns[28]) ||
+            mir.insns[28].src1 != mir.insns[26].dst ||
+            !mir_machine_same_location(&mir.insns[28], &mir.insns[29]) ||
+            mir.insns[30].src1 != mir.insns[29].dst ||
+            mir.insns[31].src1 != mir.insns[30].dst ||
+            (mir.insns[31].memory_flags & (1 | 8)) != 0 ||
+            !mir_machine_unobservable_local_store(&mir.insns[33]) ||
+            mir.insns[33].src1 != mir.insns[31].dst ||
+            !mir_machine_constant_value(
+                mir.insns[35].dst, &wanted_kind, 0) ||
+            mir.insns[36].immediate != TOK_EQ ||
+            mir.insns[36].src1 != mir.insns[31].dst ||
+            mir.insns[36].src2 != mir.insns[35].dst ||
+            mir.insns[37].src1 != mir.insns[36].dst ||
+            mir.insns[37].label != mir.insns[46].label)
+            return mir_machine_reject("global-record-pop", "helper-kind");
+        plan->stride = (int)stride;
+        plan->kind_offset = (int)mir.insns[30].immediate;
+        plan->wanted_kind = (int)wanted_kind;
+        target_load = &mir.insns[38];
+        value_load = &mir.insns[41];
+        if (!mir_machine_same_location(&mir.insns[28], &mir.insns[39]) ||
+            mir.insns[40].src1 != mir.insns[39].dst)
+            return mir_machine_reject("global-record-pop", "helper-value");
+        plan->value_offset = (int)mir.insns[40].immediate;
+    }
+    if (!mir_machine_same_location(target, target_load) ||
+        value_load->src1 !=
+            mir.insns[direct ? 41 : 40].dst ||
+        value_load->memory_size != 2 ||
+        (value_load->memory_flags & (1 | 8)) != 0 ||
+        mir.insns[direct ? 43 : 42].src1 != target_load->dst ||
+        mir.insns[direct ? 43 : 42].src2 != value_load->dst ||
+        mir.insns[direct ? 43 : 42].memory_size != 2 ||
+        (mir.insns[direct ? 43 : 42].memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_constant_equals(
+            mir.insns[direct ? 44 : 43].dst, 1) ||
+        mir.insns[direct ? 45 : 44].src1 !=
+            mir.insns[direct ? 44 : 43].dst ||
+        mir.insns[direct ? 50 : 49].label != mir.insns[3].label ||
+        !mir_machine_constant_equals(
+            mir.insns[direct ? 52 : 51].dst, 0) ||
+        mir.insns[direct ? 53 : 52].src1 !=
+            mir.insns[direct ? 52 : 51].dst)
+        return mir_machine_reject("global-record-pop", "result");
+    if (plan->stride <= 0 || plan->stride > 16 ||
+        plan->kind_offset < 0 || plan->kind_offset + 1 >= plan->stride ||
+        plan->value_offset < 0 || plan->value_offset + 1 >= plan->stride ||
+        wanted_kind < -32768 || wanted_kind > 32767)
+        return mir_machine_reject("global-record-pop", "constants");
+    plan->loop_label = mir.insns[3].label;
+    plan->done_label = mir.insns[direct ? 51 : 50].label;
+    return 1;
+}
+
 static int mir_match_pointer_member_any2(
     struct MirPointerMemberAny2 *plan)
 {
@@ -21657,6 +21887,57 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_global_record_pop(
+    FILE *out, const struct MirGlobalRecordPop *plan)
+{
+    int add;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "L%d:\n"
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n",
+            plan->loop_label, plan->base_stack_offset);
+    mir_machine_emit_global_word(out, plan->state, 0);
+    mir_machine_emit_hl_offset(out, plan->index_offset, 0);
+    fprintf(out,
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n"
+            "\tld a,h\n\txor 128\n\tld h,a\n"
+            "\tld a,b\n\txor 128\n\tld b,a\n"
+            "\tor a\n\tsbc hl,bc\n\tjp c,L%d\n"
+            "\tld a,h\n\tor l\n\tjp z,L%d\n",
+            plan->done_label, plan->done_label);
+    mir_machine_emit_global_word(out, plan->state, 0);
+    mir_machine_emit_hl_offset(out, plan->index_offset, 0);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tdec de\n"
+          "\tld (hl),d\n\tdec hl\n\tld (hl),e\n"
+          "\tld b,d\n\tld c,e\n", out);
+    mir_machine_emit_global_word(out, plan->state, 0);
+    mir_machine_emit_hl_offset(out, plan->records_offset, 0);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tld hl,0\n", out);
+    for (add = 0; add < plan->stride; ++add)
+        fputs("\tadd hl,bc\n", out);
+    fputs("\tadd hl,de\n", out);
+    mir_machine_emit_hl_offset(out, plan->kind_offset, 0);
+    fprintf(out,
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tld a,e\n\tcp %d\n\tjp nz,L%d\n"
+            "\tld a,d\n\tcp %d\n\tjp nz,L%d\n",
+            plan->wanted_kind & 0xff, plan->loop_label,
+            (plan->wanted_kind >> 8) & 0xff, plan->loop_label);
+    mir_machine_emit_hl_offset(
+        out, plan->value_offset - plan->kind_offset - 1, 0);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n", out);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tld h,b\n\tld l,c\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n"
+            "\tld hl,1\n\tret\n"
+            "L%d:\n\tld hl,0\n\tret\n",
+            plan->target_stack_offset, plan->done_label);
+}
+
 static void mir_emit_word_range_bool(
     FILE *out, const struct MirWordRangeBool *plan)
 {
@@ -22475,6 +22756,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirGlobalRecordPop global_record_pop;
     struct MirPointerMemberAny2 pointer_member_any2;
     struct MirWordRangeBool word_range_bool;
     struct MirAsciiUpper ascii_upper;
@@ -23102,6 +23384,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_global_record_pop(&global_record_pop)) {
+        mir_emit_global_record_pop(out, &global_record_pop);
         return 1;
     }
     if (mir_match_pointer_member_any2(&pointer_member_any2)) {
