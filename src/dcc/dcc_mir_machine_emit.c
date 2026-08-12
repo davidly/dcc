@@ -2485,6 +2485,52 @@ static int mir_match_local_boolean_checks(struct MirConstantChecks *plan)
     return plan->function != NULL;
 }
 
+static int mir_match_local_bitfield_checks(struct MirConstantChecks *plan)
+{
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if ((mir.count != 65 && mir.count != 127) ||
+        mir_cfg_block_count() != 1 || mir.has_vla ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        if (insn->opcode == MIR_CALL) {
+            int args[3];
+            const struct MirInsn *string;
+            struct MirMachineForm expected;
+            struct Sym *function;
+            if (plan->count >= 16 ||
+                !mir_machine_three_call_arguments(insn, args) ||
+                (string = mir_definition(args[0])) == NULL ||
+                string->opcode != MIR_STRING_ADDRESS ||
+                !mir_machine_pointer_form(args[2], instruction, &expected, 0) ||
+                expected.kind != MIR_MACHINE_FORM_INTEGER ||
+                (function = find_global(insn->name)) == NULL ||
+                (plan->function != NULL && plan->function != function))
+                return mir_machine_reject("local-bitfield-checks", "call");
+            plan->function = function;
+            plan->strings[plan->count] = (int)string->immediate;
+            plan->actual[plan->count] = expected.value & 0xffffL;
+            plan->expected[plan->count] = expected.value & 0xffffL;
+            ++plan->count;
+        } else if (insn->opcode != MIR_LABEL && insn->opcode != MIR_NOP &&
+                   insn->opcode != MIR_ADDRESS &&
+                   insn->opcode != MIR_MEMBER_ADDRESS &&
+                   insn->opcode != MIR_CONST &&
+                   insn->opcode != MIR_STORE_INDIRECT &&
+                   insn->opcode != MIR_LOAD_INDIRECT &&
+                   insn->opcode != MIR_STRING_ADDRESS &&
+                   insn->opcode != MIR_ARG) {
+            return mir_machine_reject("local-bitfield-checks", "opcode");
+        }
+    }
+    return plan->function != NULL &&
+           ((mir.count == 65 && plan->count == 4) ||
+            (mir.count == 127 && plan->count == 9));
+}
+
 static int mir_match_constant_prints(struct MirConstantPrints *plan)
 {
     int instruction;
@@ -30374,7 +30420,8 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
         return 1;
     }
     if (mir_match_constant_checks(&constant_checks) ||
-        mir_match_local_boolean_checks(&constant_checks)) {
+        mir_match_local_boolean_checks(&constant_checks) ||
+        mir_match_local_bitfield_checks(&constant_checks)) {
         mir_emit_constant_checks(out, &constant_checks);
         return 1;
     }
