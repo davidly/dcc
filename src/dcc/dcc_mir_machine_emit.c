@@ -358,6 +358,14 @@ struct MirPointerWordSumUntilZero {
     int count_stack_offset;
 };
 
+struct MirFixedByteScanChecks {
+    struct Sym *root;
+    struct Sym *check_function;
+    char root_assembly_name[64];
+    int values[6];
+    int string_ids[3];
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -4935,6 +4943,120 @@ static int mir_match_byte_mismatch_report(
         return 0;
     plan->counter_offset = memory_offset;
     plan->string_id = (int)string->immediate;
+    return 1;
+}
+
+static int mir_match_fixed_byte_scan_checks(
+    struct MirFixedByteScanChecks *plan)
+{
+    int element;
+    int first_zero = -1;
+    int call_indices[3] = { 72, 81, 88 };
+    int string_indices[3] = { 70, 79, 86 };
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 89 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return mir_machine_reject("fixed-byte-scan-checks", "shape");
+    for (element = 0; element < 6; ++element) {
+        int base = 1 + element * 6;
+        const struct MirInsn *root = &mir.insns[base];
+        const struct MirInsn *index = &mir.insns[base + 2];
+        const struct MirInsn *value = &mir.insns[base + 4];
+        const struct MirInsn *store = &mir.insns[base + 5];
+        long index_value;
+        long stored_value;
+
+        if (root->opcode != MIR_ADDRESS ||
+            !mir_machine_constant_value(
+                mir.insns[base + 1].dst, &index_value, 0) ||
+            index_value != element ||
+            index->opcode != MIR_INDEX_ADDRESS ||
+            index->src1 != root->dst ||
+            index->src2 != mir.insns[base + 1].dst ||
+            index->immediate != 1 ||
+            !mir_machine_constant_value(value->dst, &stored_value, 0) ||
+            store->opcode != MIR_STORE_INDIRECT ||
+            store->src1 != index->dst || store->src2 != value->dst ||
+            store->memory_size != 1)
+            return mir_machine_reject(
+                "fixed-byte-scan-checks", "initializers");
+        if (element == 0)
+            plan->root = find_global(root->name);
+        else if (strcmp(root->name, mir.insns[1].name))
+            return mir_machine_reject(
+                "fixed-byte-scan-checks", "root-consistency");
+        plan->values[element] = (int)stored_value & 0xff;
+        if (plan->values[element] == 0 && first_zero < 0)
+            first_zero = element;
+    }
+    if (plan->root != NULL) {
+        snprintf(plan->root_assembly_name,
+                 sizeof(plan->root_assembly_name), "%s",
+                 asm_name_for(sym_asm_name(plan->root)));
+    } else {
+        for (element = 0; element < mir.declared_count; ++element)
+            if (!strcmp(
+                    mir.declared_names[element],
+                    mir.insns[1].name)) {
+                snprintf(plan->root_assembly_name,
+                         sizeof(plan->root_assembly_name), "%s",
+                         asm_name_for(
+                             mir.declared_link_names[element]));
+                break;
+            }
+    }
+    if (plan->root_assembly_name[0] == 0 ||
+        (plan->root != NULL && plan->root->is_volatile) ||
+        first_zero < 0 ||
+        mir.insns[37].opcode != MIR_ADDRESS ||
+        strcmp(mir.insns[37].name, mir.insns[1].name) ||
+        mir.insns[39].opcode != MIR_STORE ||
+        mir.insns[39].src1 != mir.insns[37].dst ||
+        mir.insns[40].opcode != MIR_ADDRESS ||
+        strcmp(mir.insns[40].name, mir.insns[1].name) ||
+        mir.insns[42].opcode != MIR_STORE ||
+        mir.insns[42].src1 != mir.insns[40].dst ||
+        !mir_machine_constant_equals(mir.insns[43].dst, 0))
+        return mir_machine_reject("fixed-byte-scan-checks", "setup");
+    if (
+        mir.insns[47].opcode != MIR_PHI ||
+        mir.insns[49].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[52].immediate != TOK_NE ||
+        mir.insns[53].src1 != mir.insns[52].dst ||
+        mir.insns[53].label != mir.insns[65].label ||
+        !mir_machine_constant_equals(mir.insns[55].dst, 1) ||
+        mir.insns[56].immediate != '+' ||
+        !mir_machine_constant_equals(mir.insns[59].dst, 1) ||
+        mir.insns[60].immediate != '+' ||
+        mir.insns[64].label != mir.insns[46].label)
+        return mir_machine_reject("fixed-byte-scan-checks", "scan");
+    if (!mir_machine_constant_equals(
+            mir.insns[67].dst, first_zero) ||
+        mir.insns[68].immediate != TOK_EQ ||
+        !mir_machine_constant_equals(mir.insns[75].dst, 0) ||
+        mir.insns[77].immediate != TOK_EQ ||
+        mir.insns[84].immediate != TOK_EQ)
+        return mir_machine_reject("fixed-byte-scan-checks", "proofs");
+    for (element = 0; element < 3; ++element) {
+        int args[2];
+        const struct MirInsn *call = &mir.insns[call_indices[element]];
+        if (call->opcode != MIR_CALL ||
+            !mir_machine_two_call_arguments(call, args) ||
+            args[1] != mir.insns[string_indices[element]].dst)
+            return mir_machine_reject(
+                "fixed-byte-scan-checks", "calls");
+        plan->string_ids[element] =
+            (int)mir.insns[string_indices[element]].immediate;
+        if (element == 0)
+            plan->check_function = find_global(call->name);
+        else if (strcmp(call->name, mir.insns[call_indices[0]].name))
+            return mir_machine_reject(
+                "fixed-byte-scan-checks", "call-consistency");
+    }
+    if (plan->check_function == NULL ||
+        plan->check_function->is_funcptr)
+        return mir_machine_reject("fixed-byte-scan-checks", "function");
     return 1;
 }
 
@@ -23180,6 +23302,33 @@ static void mir_emit_byte_binary_operands(
     fputs("\tld l,c\n\tld h,b\n", out);
 }
 
+static void mir_emit_fixed_byte_scan_checks(
+    FILE *out, const struct MirFixedByteScanChecks *plan)
+{
+    int element;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    if (plan->root != NULL)
+        mir_machine_emit_global_address_hl(out, plan->root, 0);
+    else
+        fprintf(out, "\tld hl,%s\n", plan->root_assembly_name);
+    for (element = 0; element < 6; ++element) {
+        fprintf(out, "\tld (hl),%d\n", plan->values[element]);
+        if (element != 5)
+            fputs("\tinc hl\n", out);
+    }
+    for (element = 0; element < 3; ++element) {
+        fprintf(out,
+                "\tld hl,S%d\n\tpush hl\n"
+                "\tld hl,1\n\tpush hl\n",
+                plan->string_ids[element]);
+        mir_machine_emit_symbol_call(out, plan->check_function);
+        fputs("\tpop bc\n\tpop bc\n", out);
+    }
+    fputs("\tret\n", out);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -26883,6 +27032,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirBoundedMemberAppend bounded_member_append;
     struct MirByteMismatchReport byte_mismatch_report;
     struct MirByteArithmeticReports byte_arithmetic_reports;
+    struct MirFixedByteScanChecks fixed_byte_scan_checks;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -27348,6 +27498,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &byte_arithmetic_reports)) {
         mir_emit_byte_arithmetic_reports(
             out, &byte_arithmetic_reports);
+        return 1;
+    }
+    if (mir_match_fixed_byte_scan_checks(&fixed_byte_scan_checks)) {
+        mir_emit_fixed_byte_scan_checks(out, &fixed_byte_scan_checks);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(

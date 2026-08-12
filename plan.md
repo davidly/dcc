@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `ed8c916`
-  (`schedule affine local reports`).
-- Current candidate coverage: **2003/2185 (91.67%)**.
-- Remaining fallback population: **182 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `0288d34`
+  (`schedule terminating pointer sums`).
+- Current candidate coverage: **2004/2185 (91.72%)**.
+- Remaining fallback population: **181 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -406,6 +406,11 @@ current execution plan and handoff.
   contribution only at entry/normal exit. This admits
   `tbcgcol.global_bc_across_pointer_loop`, completes that app's MIR coverage,
   and improves 3.84% peep / 5.91% nopeep.
+- Fixed static byte scans now resolve function-local static link names from
+  MIR declaration metadata, preserve all six byte stores, prove the first-zero
+  scan result/pointer invariants, and emit the three successful check calls
+  directly. This admits `treg.test_scan`; `treg` now beats the stretch goal at
+  11.48% peep / 13.81% nopeep with both images smaller.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -413,7 +418,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 182 final-cost fallbacks,
+- Current next priority: repeated causes in the 181 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
