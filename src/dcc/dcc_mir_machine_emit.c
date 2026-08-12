@@ -631,6 +631,11 @@ struct MirFloatLongChecks {
     int string_ids[14], final_string;
 };
 
+struct MirFloatInitChecks {
+    struct Sym *check_function, *print_function;
+    int string_ids[14], final_string;
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -7565,6 +7570,25 @@ static int mir_match_float_long_checks(struct MirFloatLongChecks *p)
     p->check_function=find_global(mir.insns[23].name);
     p->print_function=find_global(mir.insns[227].name);
     return p->identity_function&&p->check_function&&p->print_function;
+}
+
+static int mir_match_float_init_checks(struct MirFloatInitChecks *p)
+{
+    static const int calls[14]={29,40,50,86,96,106,134,144,154,178,188,211,238,261};
+    int i,ins;
+    memset(p,0,sizeof(*p));
+    if(mir.count!=279||mir_cfg_block_count()!=2||mir.has_vla||
+       mir.insns[276].opcode!=MIR_CALL||mir.insns[278].opcode!=MIR_RETURN)return 0;
+    for(i=0;i<14;++i){int found=0;
+        for(ins=0;ins<mir.count;++ins){const struct MirInsn*a=&mir.insns[ins],*d;
+            if(a->opcode!=MIR_ARG||a->secondary_offset!=mir.insns[calls[i]].secondary_offset)continue;
+            d=mir_definition(a->src1);if(d&&d->opcode==MIR_STRING_ADDRESS){p->string_ids[i]=(int)d->immediate;++found;}}
+        if(found!=1)return 0;}
+    for(ins=0;ins<mir.count;++ins){const struct MirInsn*a=&mir.insns[ins],*d;
+        if(a->opcode!=MIR_ARG||a->secondary_offset!=mir.insns[276].secondary_offset)continue;
+        d=mir_definition(a->src1);if(d&&d->opcode==MIR_STRING_ADDRESS)p->final_string=(int)d->immediate;}
+    p->check_function=find_global(mir.insns[29].name);p->print_function=find_global(mir.insns[276].name);
+    return p->check_function&&p->print_function;
 }
 
 static int mir_match_pointer_word_sum_until_zero(
@@ -27183,6 +27207,20 @@ static void mir_emit_float_long_checks(FILE *out,const struct MirFloatLongChecks
     fputs("\tpop bc\n\tld hl,0\n\tret\n",out);
 }
 
+static void mir_emit_float_init_checks(FILE *out,const struct MirFloatInitChecks*p)
+{
+    static const unsigned long bits[14]={
+        0x3fc00000UL,0xc0200000UL,0,0x40a00000UL,0x40800000UL,0x3f800000UL,
+        0x3f800000UL,0x40400000UL,0x40400000UL,0x3fc00000UL,0x40200000UL,
+        0x40f00000UL,0x40a00000UL,0x3fc00000UL};
+    int i,pop;if(opt_stack_check)mir_emit_runtime_call(out,"__stchk");
+    for(i=0;i<14;++i){mir_emit_fixed_point_constant(out,bits[i]);mir_emit_fixed_point_constant(out,bits[i]);
+        fprintf(out,"\tld hl,S%d\n\tpush hl\n",p->string_ids[i]);mir_machine_emit_symbol_call(out,p->check_function);
+        for(pop=0;pop<5;++pop)fputs("\tpop bc\n",out);}
+    fprintf(out,"\tld hl,S%d\n\tpush hl\n",p->final_string);mir_machine_emit_symbol_call(out,p->print_function);
+    fputs("\tpop bc\n\tld hl,0\n\tret\n",out);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -30921,6 +30959,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFloatByteChecks float_byte_checks;
     struct MirFloatStructByteChecks float_struct_byte_checks;
     struct MirFloatLongChecks float_long_checks;
+    struct MirFloatInitChecks float_init_checks;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -31551,6 +31590,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_float_long_checks(&float_long_checks)) {
         mir_emit_float_long_checks(out, &float_long_checks);
+        return 1;
+    }
+    if (mir_match_float_init_checks(&float_init_checks)) {
+        mir_emit_float_init_checks(out, &float_init_checks);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
