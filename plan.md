@@ -6,10 +6,27 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Base HEAD for this batch: `d59f80e`.
+- Base HEAD for this architecture refactor: `62ea25e`.
 - Current candidate coverage: **2126/2185 (97.30%)**.
 - Remaining fallback population: **59 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The first machine-emitter architecture pivot moves the recently added float
+  report/check orchestration family, including the raw-conversion checker,
+  from `dcc_mir_machine_emit.c` into
+  `dcc_mir_machine_float_reports.c`. The new module owns the plan structs,
+  strict matchers, emitters, raw-before-float production dispatch, and both
+  family-local strict-smaller gates. A narrow
+  `dcc_mir_machine_internal.h` contract exposes only the shared machine
+  matching/emission functions it needs; the extraction adds **zero shared
+  variables**, and all plan/candidate state remains module-local. The module
+  has 35 `static` helpers and exports only its single dispatch entry.
+  `dcc_mir_machine_emit.c` falls from
+  **54,347 to 52,387 lines**; the new family module is **1,975 lines** and its
+  internal contract is **27 lines**. The normal and stack-check full censuses
+  are byte-identical before/after: **0** coverage, selector, metric, selected
+  hash, or runtime-validation changes; stack coverage remains
+  **2126/2185 (97.30%)**. All 11 affected apps pass full peep/nopeep validation
+  with no checked performance regression and no baseline update.
 - Two strict name-free scheduled families admit the genuine nine-block
   call/check/report mains in `tfmaddr` and `tfpraw`. The float report family
   now accepts the fully proved nine-check, 195-instruction, 41-call,

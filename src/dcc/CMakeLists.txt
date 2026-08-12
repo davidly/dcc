@@ -60,6 +60,7 @@ set(DCC_SOURCES
     dcc_mir_emit_common.c
     dcc_mir_homed_cfg.c
     dcc_mir_machine_emit.c # scheduled Z80 machine-template emission
+    dcc_mir_machine_float_reports.c # strict float report/check schedules
     dcc_mir_select.c
     dcc_mir_schedule.c      # shadow sparse live-segment scheduler
     dcc_mir_spilled_cfg.c
@@ -67,7 +68,8 @@ set(DCC_SOURCES
 )
 
 add_executable(dcc ${DCC_SOURCES} dcc.h dcc_ast_gen_internal.h
-                   dcc_preproc_internal.h dcc_regalloc_internal.h dcc_mir.h)
+                   dcc_preproc_internal.h dcc_regalloc_internal.h dcc_mir.h
+                   dcc_mir_machine_internal.h)
 target_include_directories(dcc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
