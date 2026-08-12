@@ -374,6 +374,17 @@ struct MirTwoConstantChecks {
     int string_ids[2];
 };
 
+struct MirVariadicJoinReport {
+    struct Sym *join_function;
+    struct Sym *print_function;
+    int separator_string_id;
+    int item_string_ids[4];
+    int format_string_id;
+    int item_count;
+    int buffer_size;
+    int separator;
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -5266,6 +5277,94 @@ static int mir_match_two_constant_checks(struct MirTwoConstantChecks *plan)
     plan->values[1] = 1;
     plan->string_ids[0] = (int)mir.insns[44].immediate;
     plan->string_ids[1] = (int)mir.insns[71].immediate;
+    return 1;
+}
+
+static int mir_match_variadic_join_report(
+    struct MirVariadicJoinReport *plan)
+{
+    int join_arguments[7] = { -1, -1, -1, -1, -1, -1, -1 };
+    int join_count = 0;
+    int report_arguments[4];
+    int type, storage, offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 63 || mir_cfg_block_count() != 5 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        mir.insns[1].opcode != MIR_ADDRESS ||
+        mir.insns[3].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[5].opcode != MIR_CONST ||
+        mir.insns[15].opcode != MIR_CALL)
+        return mir_machine_reject("variadic-join-report", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *arg = &mir.insns[instruction];
+        int index;
+        if (arg->opcode != MIR_ARG ||
+            arg->secondary_offset != mir.insns[15].secondary_offset)
+            continue;
+        index = (int)arg->immediate;
+        if (index < 0 || index >= 7 || join_arguments[index] >= 0)
+            return mir_machine_reject(
+                "variadic-join-report", "join-arguments");
+        join_arguments[index] = arg->src1;
+        ++join_count;
+    }
+    if (join_count != 7 ||
+        join_arguments[0] != mir.insns[1].dst ||
+        join_arguments[1] != mir.insns[3].dst ||
+        join_arguments[2] != mir.insns[5].dst ||
+        join_arguments[3] != mir.insns[7].dst ||
+        join_arguments[4] != mir.insns[9].dst ||
+        join_arguments[5] != mir.insns[11].dst ||
+        join_arguments[6] != mir.insns[13].dst)
+        return mir_machine_reject("variadic-join-report", "join-order");
+    plan->item_count = (int)mir.insns[5].immediate;
+    if (plan->item_count != 4 ||
+        !mir_scalar_memory_location(
+            &mir.insns[1], &type, &storage, &offset) ||
+        storage != SC_LOCAL || offset >= 0)
+        return mir_machine_reject("variadic-join-report", "buffer");
+    plan->buffer_size = -offset;
+    plan->separator_string_id = (int)mir.insns[3].immediate;
+    for (instruction = 0; instruction < 4; ++instruction)
+        plan->item_string_ids[instruction] =
+            (int)mir.insns[7 + instruction * 2].immediate;
+    if (mir.insns[25].opcode != MIR_PHI ||
+        mir.insns[28].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[28].src1 != mir.insns[26].dst ||
+        mir.insns[29].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[30].src1 != mir.insns[29].dst ||
+        mir.insns[30].label != mir.insns[51].label ||
+        !mir_machine_constant_equals(mir.insns[35].dst, 44) ||
+        mir.insns[37].immediate != TOK_EQ ||
+        mir.insns[38].src1 != mir.insns[37].dst ||
+        mir.insns[38].label != mir.insns[43].label ||
+        !mir_machine_constant_equals(mir.insns[40].dst, 1) ||
+        mir.insns[41].immediate != '+' ||
+        !mir_machine_constant_equals(mir.insns[47].dst, 1) ||
+        mir.insns[48].immediate != '+' ||
+        mir.insns[50].label != mir.insns[22].label)
+        return mir_machine_reject("variadic-join-report", "scan");
+    plan->separator = 44;
+    if (!mir_machine_four_call_arguments(
+            &mir.insns[60], report_arguments) ||
+        report_arguments[0] != mir.insns[52].dst ||
+        report_arguments[1] != mir.insns[15].dst ||
+        report_arguments[2] != mir.insns[56].dst ||
+        report_arguments[3] != mir.insns[58].dst ||
+        mir.insns[58].opcode != MIR_ADDRESS ||
+        strcmp(mir.insns[58].name, mir.insns[1].name) ||
+        !mir_machine_constant_equals(mir.insns[61].dst, 0) ||
+        mir.insns[62].src1 != mir.insns[61].dst)
+        return mir_machine_reject("variadic-join-report", "report");
+    plan->join_function = find_global(mir.insns[15].name);
+    plan->print_function = find_global(mir.insns[60].name);
+    plan->format_string_id = (int)mir.insns[52].immediate;
+    if (plan->join_function == NULL || plan->join_function->is_funcptr ||
+        plan->print_function == NULL ||
+        plan->buffer_size < 16 || plan->buffer_size > 120)
+        return mir_machine_reject("variadic-join-report", "symbols");
     return 1;
 }
 
@@ -23556,6 +23655,58 @@ static void mir_emit_two_constant_checks(
     fputs("\tret\n", out);
 }
 
+static void mir_emit_variadic_join_report(
+    FILE *out, const struct MirVariadicJoinReport *plan)
+{
+    int scan = new_label();
+    int next = new_label();
+    int done = new_label();
+    int length_offset = plan->buffer_size + 2;
+    int argument;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    fprintf(out,
+            "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
+            length_offset);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (argument = plan->item_count - 1; argument >= 0; --argument)
+        fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+                plan->item_string_ids[argument]);
+    fprintf(out,
+            "\tld hl,%d\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n"
+            "\tpush ix\n\tpop hl\n\tld de,-%d\n"
+            "\tadd hl,de\n\tpush hl\n",
+            plan->item_count, plan->separator_string_id,
+            plan->buffer_size);
+    mir_machine_emit_symbol_call(out, plan->join_function);
+    for (argument = 0; argument < 7; ++argument)
+        fputs("\tpop bc\n", out);
+    fprintf(out,
+            "\tld (ix-%d),l\n\tld (ix-%d),h\n"
+            "\tpush ix\n\tpop hl\n\tld de,-%d\n\tadd hl,de\n"
+            "\tld c,0\n"
+            "L%d:\n\tld a,(hl)\n\tor a\n\tjp z,L%d\n"
+            "\tcp %d\n\tjp nz,L%d\n\tinc c\n"
+            "L%d:\n\tinc hl\n\tjp L%d\n"
+            "L%d:\n\tpush ix\n\tpop hl\n\tld de,-%d\n"
+            "\tadd hl,de\n\tpush hl\n"
+            "\tld l,c\n\tld h,0\n\tpush hl\n"
+            "\tld l,(ix-%d)\n\tld h,(ix-%d)\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            length_offset, length_offset - 1,
+            plan->buffer_size,
+            scan, done, plan->separator, next,
+            next, scan,
+            done, plan->buffer_size,
+            length_offset, length_offset - 1,
+            plan->format_string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -27261,6 +27412,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirByteArithmeticReports byte_arithmetic_reports;
     struct MirFixedByteScanChecks fixed_byte_scan_checks;
     struct MirTwoConstantChecks two_constant_checks;
+    struct MirVariadicJoinReport variadic_join_report;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -27736,6 +27888,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_two_constant_checks(&two_constant_checks)) {
         mir_emit_two_constant_checks(out, &two_constant_checks);
+        return 1;
+    }
+    if (mir_match_variadic_join_report(&variadic_join_report)) {
+        mir_emit_variadic_join_report(out, &variadic_join_report);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(

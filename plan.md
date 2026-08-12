@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `48c4898`
-  (`expand affine static byte proofs`).
-- Current candidate coverage: **2007/2185 (91.85%)**.
-- Remaining fallback population: **178 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `8de8268`
+  (`schedule deterministic condition checks`).
+- Current candidate coverage: **2008/2185 (91.90%)**.
+- Remaining fallback population: **177 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -422,6 +422,10 @@ current execution plan and handoff.
   directly after structurally validating the if/negation/one-iteration while
   graph. This admits `tbool.check_conditions`, improving the app 1.77% peep /
   2.00% nopeep with smaller images.
+- Fixed-count variadic join orchestration now keeps the destination scan and
+  comma count in registers around the exact seven-argument call and final
+  report. This admits `tvapinit.main`, improving the app 7.75% peep / 14.01%
+  nopeep while shrinking both linked images.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -429,7 +433,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 178 final-cost fallbacks,
+- Current next priority: repeated causes in the 177 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
