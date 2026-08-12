@@ -352,6 +352,12 @@ struct MirByteArithmeticReports {
     char call_name[64];
 };
 
+struct MirPointerWordSumUntilZero {
+    struct Sym *value;
+    int pointer_stack_offset;
+    int count_stack_offset;
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -4929,6 +4935,86 @@ static int mir_match_byte_mismatch_report(
         return 0;
     plan->counter_offset = memory_offset;
     plan->string_id = (int)string->immediate;
+    return 1;
+}
+
+static int mir_match_pointer_word_sum_until_zero(
+    struct MirPointerWordSumUntilZero *plan)
+{
+    static const int global_loads[6] = { 3, 4, 6, 51, 53, 55 };
+    int type, storage, offset;
+    int load;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 58 || mir_cfg_block_count() != 5 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        mir.insns[1].opcode != MIR_PARAM ||
+        mir.insns[2].opcode != MIR_PARAM ||
+        mir.insns[5].immediate != '+' ||
+        mir.insns[7].immediate != '+' ||
+        !mir_machine_constant_equals(mir.insns[11].dst, 0) ||
+        mir.insns[16].opcode != MIR_PHI ||
+        mir.insns[16].src1 != mir.insns[7].dst ||
+        mir.insns[16].src2 != mir.insns[39].dst ||
+        mir.insns[17].opcode != MIR_PHI ||
+        mir.insns[17].src1 != mir.insns[11].dst ||
+        mir.insns[17].src2 != mir.insns[46].dst ||
+        mir.insns[22].immediate != '<' ||
+        mir.insns[22].src1 != mir.insns[20].dst ||
+        mir.insns[22].src2 != mir.insns[21].dst ||
+        mir.insns[23].src1 != mir.insns[22].dst ||
+        mir.insns[23].label != mir.insns[49].label)
+        return mir_machine_reject("pointer-word-sum-zero", "shape");
+    for (load = 1; load < 6; ++load)
+        if (!mir_machine_same_location(
+                &mir.insns[global_loads[0]],
+                &mir.insns[global_loads[load]]))
+            return mir_machine_reject(
+                "pointer-word-sum-zero", "globals");
+    plan->value = find_global(mir.insns[3].name);
+    if (plan->value == NULL || plan->value->is_volatile ||
+        mir.insns[26].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[26].src1 != mir.insns[1].dst ||
+        mir.insns[26].src2 != mir.insns[17].dst ||
+        mir.insns[26].immediate != 2 ||
+        mir.insns[27].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[27].src1 != mir.insns[26].dst ||
+        !mir_machine_constant_equals(mir.insns[28].dst, 0) ||
+        mir.insns[29].immediate != TOK_EQ ||
+        mir.insns[30].src1 != mir.insns[29].dst ||
+        mir.insns[30].label != mir.insns[33].label ||
+        mir.insns[32].src1 != mir.insns[16].dst)
+        return mir_machine_reject("pointer-word-sum-zero", "early");
+    if (
+        mir.insns[37].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[37].src1 != mir.insns[1].dst ||
+        mir.insns[37].src2 != mir.insns[17].dst ||
+        mir.insns[37].immediate != 2 ||
+        mir.insns[38].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[38].src1 != mir.insns[37].dst ||
+        mir.insns[39].immediate != '+' ||
+        mir.insns[39].src1 != mir.insns[16].dst ||
+        mir.insns[39].src2 != mir.insns[38].dst ||
+        !mir_machine_constant_equals(mir.insns[45].dst, 1) ||
+        mir.insns[46].immediate != '+' ||
+        mir.insns[48].label != mir.insns[13].label)
+        return mir_machine_reject("pointer-word-sum-zero", "body");
+    if (
+        mir.insns[52].immediate != '+' ||
+        mir.insns[54].immediate != '+' ||
+        mir.insns[56].immediate != '+' ||
+        mir.insns[57].src1 != mir.insns[56].dst)
+        return mir_machine_reject("pointer-word-sum-zero", "flow");
+    if (!mir_scalar_memory_location(
+            &mir.insns[1], &type, &storage, &offset) ||
+        storage != SC_PARAM || offset < 2)
+        return mir_machine_reject("pointer-word-sum-zero", "pointer");
+    plan->pointer_stack_offset = offset - 2;
+    if (!mir_scalar_memory_location(
+            &mir.insns[2], &type, &storage, &offset) ||
+        storage != SC_PARAM || offset < 2)
+        return mir_machine_reject("pointer-word-sum-zero", "count");
+    plan->count_stack_offset = offset - 2;
     return 1;
 }
 
@@ -23094,6 +23180,42 @@ static void mir_emit_byte_binary_operands(
     fputs("\tld l,c\n\tld h,b\n", out);
 }
 
+static void mir_emit_pointer_word_sum_until_zero(
+    FILE *out, const struct MirPointerWordSumUntilZero *plan)
+{
+    int loop = new_label();
+    int nonzero = new_label();
+    int early = new_label();
+    int done = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_word(out, plan->value, 0);
+    fputs("\tld d,h\n\tld e,l\n\tadd hl,hl\n\tadd hl,de\n"
+          "\tex de,hl\n", out);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tld h,b\n\tld l,c\n"
+            "\tpush hl\n"
+            "\tld hl,%d\n\tadd hl,sp\n\tld b,(hl)\n"
+            "\tpop hl\n\tld a,b\n\tor a\n\tjp z,L%d\n"
+            "L%d:\n\tld c,(hl)\n\tinc hl\n\tld a,c\n\tor a\n"
+            "\tjp nz,L%d\n\tld a,(hl)\n\tor a\n\tjp z,L%d\n"
+            "L%d:\n\tld a,(hl)\n\tinc hl\n\tpush hl\n"
+            "\tld l,c\n\tld h,a\n\tadd hl,de\n\tex de,hl\n"
+            "\tpop hl\n\tdjnz L%d\n",
+            plan->pointer_stack_offset,
+            plan->count_stack_offset + 2,
+            done, loop, nonzero, early,
+            nonzero, loop);
+    fprintf(out, "\tjp L%d\nL%d:\n\tex de,hl\n\tret\nL%d:\n",
+            done, early, done);
+    mir_machine_emit_global_word(out, plan->value, 0);
+    fputs("\tld b,h\n\tld c,l\n\tadd hl,hl\n\tadd hl,bc\n"
+          "\tadd hl,de\n\tret\n", out);
+}
+
 static void mir_emit_byte_arithmetic_reports(
     FILE *out, const struct MirByteArithmeticReports *plan)
 {
@@ -26761,6 +26883,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirBoundedMemberAppend bounded_member_append;
     struct MirByteMismatchReport byte_mismatch_report;
     struct MirByteArithmeticReports byte_arithmetic_reports;
+    struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
     struct MirGuardedGlobalPop guarded_global_pop;
@@ -27225,6 +27348,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &byte_arithmetic_reports)) {
         mir_emit_byte_arithmetic_reports(
             out, &byte_arithmetic_reports);
+        return 1;
+    }
+    if (mir_match_pointer_word_sum_until_zero(
+            &pointer_word_sum_until_zero)) {
+        mir_emit_pointer_word_sum_until_zero(
+            out, &pointer_word_sum_until_zero);
         return 1;
     }
     if (mir_match_byte_bitwise_report(&byte_bitwise_report)) {
