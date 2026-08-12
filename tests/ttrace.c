@@ -1,4 +1,4 @@
-// This app shows how to enable ntvcm intruction tracing at runtime.
+// This app shows how to enable ntvcm instruction tracing at runtime.
 // This feature is useful for finding code generation issues in dcc when enabling instruction tracing
 // for the whole apps would creation enormous ntvcm.log files.
 // To use it, start ntvcm with tracing enabled (-t) but instruction tracing disabled by not specifying (-i). 
