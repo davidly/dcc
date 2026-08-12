@@ -6,9 +6,9 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Clean base HEAD for the current coverage batch: `acc02e5`.
-- Current working-tree candidate coverage: **2128/2185 (97.39%)**.
-- Remaining fallback population: **57 `final-cost-policy`**, all selected by
+- Clean base HEAD for the current coverage batch: `6e46494`.
+- Current working-tree candidate coverage: **2129/2185 (97.44%)**.
+- Remaining fallback population: **56 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - The first machine-emitter architecture pivot moves the recently added float
   report/check orchestration family, including the raw-conversion checker,
@@ -128,6 +128,42 @@ current execution plan and handoff.
   accepted function, moves selector counts from **1,426 spilled / 352
   scheduled** to **1,425 spilled / 353 scheduled**, and leaves
   **57 `final-cost-policy`** fallbacks. No baseline changes.
+- The next scanner-family batch admits the 12-block two-character delimiter
+  scan in `pint`. The strict name-free matcher proves all **86 MIR
+  instructions**, four distinct nonvolatile globals (source pointer, signed
+  long length/cursor, and signed line counter), both signed-long
+  `cursor + 1 < length` bounds, the ordered `'*'`/`')'` reads, newline count,
+  every cursor store, the final two-byte advance, and the complete
+  short-circuit CFG. The emitter keeps the source cursor in BC, uses a fast
+  registerized 16-bit bounded path only when both long high words are zero,
+  retains an exact signed 32-bit path for every other value, never reads the
+  second delimiter byte before the bound succeeds, and uses no IY. A
+  mode-aware unreachable tail preserves the established downstream code
+  addresses: push/pop pairs disappear under dccpeep while the retained NOP
+  bytes make the peep and nopeep function endpoints independently identical
+  to fallback.
+  Normal selected/captured metrics improve from **3,082/314
+  bytes/instructions to 2,945/309**; stack-check metrics improve from
+  **3,111/315 to 2,974/310**. `pint` passes full peep/nopeep selected and
+  forced-fallback runs with identical checked measurements:
+  **253,436,043/284,125,051 cycles** and **30,464/33,024 bytes**.
+  A scratch selected/fallback edge harness covers immediate and delayed
+  closure, newline counting, two unterminated bodies, exact two- and
+  three-byte EOF bounds, empty input, and negative length. All four runs print
+  identical cursor/line results. Selected/fallback measurements are
+  **100,153/116,197 cycles and 2,944/3,072 bytes** peep
+  (**-16,044, -13.81%; -128 bytes, -4.17%**) and
+  **101,106/120,088 cycles and 3,072/3,200 bytes** nopeep
+  (**-18,982, -15.81%; -128 bytes, -4.00%**).
+  The scanner module audit reports **3,059 source lines**, **48 static
+  top-level helpers**, only `mir_try_emit_scanner_kernels` as exported code,
+  and zero read-only or writable data exports. The regression-gated
+  stack-check census advances **2,128/2,185 (97.39%)** to
+  **2,129/2,185 (97.44%)**, changes only this function/application, removes no
+  accepted function, moves selector counts from **1,425 spilled / 353
+  scheduled** to **1,424 spilled / 354 scheduled**, and leaves
+  **56 `final-cost-policy`** fallbacks. No baseline, name, or hash gate was
+  added.
 - Architecture rule for subsequent machine-family extractions: add **zero
   shared variables or mutable state**. Each module owns its plan structs,
   static arrays/constants, counters, candidate state, matchers, emitters, and
