@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `be0a694`
-  (`schedule compact extra literal checks`).
-- Current candidate coverage: **2028/2185 (92.81%)**.
-- Remaining fallback population: **157 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `57cbcac`
+  (`registerize scaled vector add loops`).
+- Current candidate coverage: **2029/2185 (92.86%)**.
+- Remaining fallback population: **156 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -508,6 +508,10 @@ current execution plan and handoff.
   state in a seven-byte IX frame and carry wide multiply/add values through
   DE:HL helper boundaries. This admits `attnc11.vector_scaled_add`, improving
   both modes slightly and shrinking the nopeep image by 0.98%.
+- Hall initializers now retain the hall index in IY, keep only the formatting
+  buffer, use the `__scf` DE-destination/HL-source ABI and unroll the three
+  exhibit calls. This admits `too.hall_init`; cumulative app gains reach
+  2.38% peep / 2.74% nopeep.
 - A binary-search replacement for `too.isqrt_l` was rejected after focused
   boundary tests exposed incorrect small-input results; it is absent.
 - A candidate `pint.add_sym` schedule was rejected after it remained 0.26%
@@ -520,7 +524,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 157 final-cost fallbacks,
+- Current next priority: repeated causes in the 156 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 

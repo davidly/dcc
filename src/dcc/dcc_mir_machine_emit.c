@@ -552,6 +552,18 @@ struct MirScaledVectorAdd {
     int length_stack_offset;
 };
 
+struct MirHallInit {
+    struct Sym *length_function;
+    struct Sym *allocate_function;
+    struct Sym *exhibit_function;
+    struct Sym *curators;
+    char format_call[64];
+    int hall_stack_offset, index_stack_offset;
+    int format_string_id;
+    int name_offset, curator_offset, count_offset, exhibits_offset;
+    int exhibit_stride, count;
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -6948,6 +6960,52 @@ static int mir_match_scaled_vector_add(struct MirScaledVectorAdd *plan)
         !mir_machine_parameter_value_offset(
             mir.insns[4].dst, &plan->length_stack_offset))
         return mir_machine_reject("scaled-vector-add", "parameters");
+    return 1;
+}
+
+static int mir_match_hall_init(struct MirHallInit *plan)
+{
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 72 || mir_cfg_block_count() != 4 || mir.has_vla ||
+        mir.insns[1].opcode != MIR_PARAM || mir.insns[2].opcode != MIR_PARAM ||
+        mir.insns[3].opcode != MIR_ADDRESS ||
+        mir.insns[9].opcode != MIR_CALL || mir.insns[11].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[14].opcode != MIR_CALL || !mir_machine_constant_equals(mir.insns[15].dst, 1) ||
+        mir.insns[20].opcode != MIR_CALL || mir.insns[22].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[24].opcode != MIR_MEMBER_ADDRESS || mir.insns[29].opcode != MIR_CALL ||
+        mir.insns[31].opcode != MIR_MEMBER_ADDRESS || mir.insns[32].opcode != MIR_ADDRESS ||
+        !mir_machine_constant_equals(mir.insns[34].dst, 3) ||
+        mir.insns[35].immediate != '%' || mir.insns[36].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[38].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[40].opcode != MIR_MEMBER_ADDRESS ||
+        !mir_machine_constant_equals(mir.insns[41].dst, 3) ||
+        mir.insns[42].opcode != MIR_STORE_INDIRECT ||
+        !mir_machine_constant_equals(mir.insns[44].dst, 0) ||
+        mir.insns[48].opcode != MIR_PHI ||
+        !mir_machine_constant_equals(mir.insns[50].dst, 3) ||
+        mir.insns[52].immediate != '<' || mir.insns[55].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[57].opcode != MIR_INDEX_ADDRESS || mir.insns[64].opcode != MIR_CALL ||
+        !mir_machine_constant_equals(mir.insns[67].dst, 1) ||
+        mir.insns[68].immediate != '+' || mir.insns[70].label != mir.insns[46].label)
+        return mir_machine_reject("hall-init", "shape");
+    plan->length_function = find_global(mir.insns[14].name);
+    plan->allocate_function = find_global(mir.insns[20].name);
+    plan->exhibit_function = find_global(mir.insns[64].name);
+    plan->curators = find_global(mir.insns[32].name);
+    snprintf(plan->format_call, sizeof(plan->format_call), "%s", mir.insns[9].base_name);
+    plan->format_string_id = (int)mir.insns[5].immediate;
+    plan->name_offset = (int)mir.insns[11].immediate;
+    plan->curator_offset = (int)mir.insns[31].immediate;
+    plan->count_offset = (int)mir.insns[40].immediate;
+    plan->exhibits_offset = (int)mir.insns[55].immediate;
+    plan->exhibit_stride = (int)mir.insns[57].immediate;
+    plan->count = (int)mir.insns[50].immediate;
+    if (!mir_machine_parameter_value_offset(mir.insns[1].dst, &plan->hall_stack_offset) ||
+        !mir_machine_parameter_value_offset(mir.insns[2].dst, &plan->index_stack_offset) ||
+        plan->length_function == NULL || plan->allocate_function == NULL ||
+        plan->exhibit_function == NULL || plan->curators == NULL ||
+        plan->format_call[0] == 0 || plan->count != 3 || plan->exhibit_stride != 8)
+        return mir_machine_reject("hall-init", "layout");
     return 1;
 }
 
@@ -26210,6 +26268,56 @@ static void mir_emit_scaled_vector_add(
             loop, done);
 }
 
+static void mir_emit_hall_address(FILE *out, const struct MirHallInit *p, int off)
+{
+    fprintf(out, "\tld l,(ix+%d)\n\tld h,(ix+%d)\n",
+            p->hall_stack_offset + 4, p->hall_stack_offset + 5);
+    mir_machine_emit_hl_offset(out, off, 0);
+}
+
+static void mir_emit_hall_init(FILE *out, const struct MirHallInit *p)
+{
+    int e;
+    fprintf(out, ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n"
+                 "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+                 "\tld hl,-8\n\tadd hl,sp\n\tld sp,hl\n", mir.name);
+    if (opt_stack_check) mir_emit_runtime_call(out, "__stchk");
+    fprintf(out, "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tpush hl\n\tpop iy\n",
+            p->index_stack_offset + 4, p->index_stack_offset + 5);
+    fputs("\tpush iy\n\tpop hl\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", p->format_string_id);
+    mir_emit_local_address(out, -8); fputs("\tpush hl\n", out);
+    fprintf(out, "\textrn %s\n\tcall %s\n\tpop bc\n\tpop bc\n\tpop bc\n",
+            p->format_call, p->format_call);
+    mir_emit_local_address(out, -8); fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, p->length_function);
+    fputs("\tpop bc\n\tinc hl\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, p->allocate_function);
+    fputs("\tpop bc\n\tex de,hl\n", out);
+    mir_emit_hall_address(out, p, p->name_offset);
+    fputs("\tld (hl),e\n\tinc hl\n\tld (hl),d\n\tpush de\n", out);
+    mir_emit_local_address(out, -8);
+    fputs("\tex de,hl\n\tpop hl\n\tex de,hl\n", out);
+    mir_emit_runtime_call(out, "__scf");
+    fputs("\tpush iy\n\tpop hl\n\tld de,3\n", out);
+    mir_emit_runtime_call(out, "__mods");
+    fputs("\tadd hl,hl\n", out);
+    mir_machine_emit_global_address_de(out, p->curators, 0);
+    fputs("\tadd hl,de\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n", out);
+    mir_emit_hall_address(out, p, p->curator_offset);
+    fputs("\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
+    mir_emit_hall_address(out, p, p->count_offset);
+    fprintf(out, "\tld (hl),%d\n\tinc hl\n\tld (hl),0\n", p->count);
+    for (e = 0; e < p->count; ++e) {
+        fprintf(out, "\tld hl,%d\n\tpush hl\n\tpush iy\n\tpop hl\n\tpush hl\n", e);
+        mir_emit_hall_address(out, p, p->exhibits_offset + e * p->exhibit_stride);
+        fputs("\tpush hl\n", out);
+        mir_machine_emit_symbol_call(out, p->exhibit_function);
+        fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    }
+    fputs("\tld sp,ix\n\tpop ix\n\tpop iy\n;@dcc.reg free=iy\n\tret\n", out);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -29934,6 +30042,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirBlockLiteralChecks block_literal_checks;
     struct MirExtraLiteralChecks extra_literal_checks;
     struct MirScaledVectorAdd scaled_vector_add;
+    struct MirHallInit hall_init;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -30506,6 +30615,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_scaled_vector_add(&scaled_vector_add)) {
         mir_emit_scaled_vector_add(out, &scaled_vector_add);
+        return 1;
+    }
+    if (mir_match_hall_init(&hall_init)) {
+        mir_emit_hall_init(out, &hall_init);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
