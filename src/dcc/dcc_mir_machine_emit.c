@@ -493,6 +493,14 @@ struct MirRecursiveWideProduct {
     int base_result;
 };
 
+struct MirRecursiveFrameFill {
+    struct Sym *function;
+    struct Sym *sink;
+    int parameter_frame_offset;
+    int array_offset;
+    int count;
+};
+
 struct MirRecursiveWideTreeSum {
     struct Sym *function;
     int parameter_stack_offset;
@@ -7267,6 +7275,144 @@ static int mir_match_float_tangent_rational(
         mir.insns[113].src1 != mir.insns[112].dst)
         return mir_machine_reject(
             "float-tangent-rational", "result");
+    return 1;
+}
+
+static int mir_match_recursive_frame_fill(
+    struct MirRecursiveFrameFill *plan)
+{
+    static const int expected_opcodes[47] = {
+        MIR_LABEL, MIR_PARAM, MIR_NOP, MIR_CONST, MIR_STORE,
+        MIR_LABEL, MIR_NOP, MIR_PHI, MIR_NOP, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP, MIR_NOP, MIR_UNARY,
+        MIR_BINARY, MIR_STORE_INDIRECT, MIR_LABEL, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_ADDRESS,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY, MIR_RETURN
+    };
+    const struct MirInsn *parameter = &mir.insns[1];
+    const struct MirInsn *call = &mir.insns[40];
+    int parameter_type, parameter_storage, parameter_offset;
+    int array_type, array_storage, array_offset;
+    int other_type, other_storage, other_offset;
+    int call_argument;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 47 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        type_ptr_depth(mir.return_type) != 0)
+        return mir_machine_reject("recursive-frame-fill", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "recursive-frame-fill", "opcode");
+    if (!mir_scalar_memory_location(
+            parameter, &parameter_type, &parameter_storage,
+            &parameter_offset) ||
+        parameter_storage != SC_PARAM || parameter_offset < 4 ||
+        type_size(parameter_type) != 2 ||
+        type_ptr_depth(parameter_type) != 0 ||
+        !mir_machine_constant_equals(mir.insns[3].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[4]) ||
+        mir.insns[4].memory_size != 1 ||
+        mir.insns[7].src1 != mir.insns[3].dst ||
+        mir.insns[7].src2 != mir.insns[24].dst ||
+        mir.insns[7].phi_pred1 != mir.insns[0].label ||
+        mir.insns[7].phi_pred2 != mir.insns[21].label ||
+        mir.insns[9].immediate <= 1 ||
+        mir.insns[9].immediate > 255 ||
+        mir.insns[10].immediate != 0 ||
+        mir.insns[10].src1 != mir.insns[7].dst ||
+        mir.insns[11].immediate != '<' ||
+        mir.insns[11].src1 != mir.insns[10].dst ||
+        mir.insns[11].src2 != mir.insns[9].dst ||
+        mir.insns[12].src1 != mir.insns[11].dst ||
+        mir.insns[12].label != mir.insns[27].label)
+        return mir_machine_reject("recursive-frame-fill", "loop");
+    plan->count = (int)mir.insns[9].immediate;
+    if ((plan->count & (plan->count - 1)) != 0 ||
+        !mir_scalar_memory_location(
+            &mir.insns[13], &array_type, &array_storage,
+            &array_offset) ||
+        array_storage != SC_LOCAL ||
+        array_offset != -2 * plan->count ||
+        type_size(array_type) != 2 ||
+        mir.insns[15].src1 != mir.insns[13].dst ||
+        mir.insns[15].src2 != mir.insns[7].dst ||
+        mir.insns[15].immediate != 2 ||
+        mir.insns[18].immediate != 0 ||
+        mir.insns[18].src1 != mir.insns[7].dst ||
+        mir.insns[19].immediate != '+' ||
+        mir.insns[19].src1 != parameter->dst ||
+        mir.insns[19].src2 != mir.insns[18].dst ||
+        mir.insns[20].src1 != mir.insns[15].dst ||
+        mir.insns[20].src2 != mir.insns[19].dst ||
+        mir.insns[20].memory_size != 2 ||
+        !mir_machine_constant_equals(mir.insns[23].dst, 1) ||
+        mir.insns[24].immediate != '+' ||
+        mir.insns[24].src1 != mir.insns[7].dst ||
+        mir.insns[24].src2 != mir.insns[23].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[25]) ||
+        mir.insns[25].src1 != mir.insns[24].dst ||
+        mir.insns[26].label != mir.insns[5].label)
+        return mir_machine_reject("recursive-frame-fill", "fill");
+    if (!mir_scalar_memory_location(
+            &mir.insns[28], &other_type, &other_storage, &other_offset) ||
+        other_storage != array_storage || other_offset != array_offset ||
+        type_size(other_type) != 2 ||
+        !mir_machine_constant_equals(
+            mir.insns[30].dst, plan->count - 1) ||
+        mir.insns[31].immediate != '&' ||
+        mir.insns[31].src1 != parameter->dst ||
+        mir.insns[31].src2 != mir.insns[30].dst ||
+        mir.insns[32].src1 != mir.insns[28].dst ||
+        mir.insns[32].src2 != mir.insns[31].dst ||
+        mir.insns[32].immediate != 2 ||
+        mir.insns[33].src1 != mir.insns[32].dst ||
+        mir.insns[33].memory_size != 2 ||
+        mir.insns[35].src1 != mir.insns[33].dst ||
+        mir.insns[35].memory_size != 2 ||
+        !mir_machine_name_nonvolatile(mir.insns[35].name))
+        return mir_machine_reject("recursive-frame-fill", "publish");
+    plan->sink = find_global(mir.insns[35].name);
+    if (plan->sink == NULL || plan->sink->storage == SC_EXTERN ||
+        plan->sink->needs_extrn ||
+        !mir_machine_constant_equals(mir.insns[37].dst, 1) ||
+        mir.insns[38].immediate != '+' ||
+        mir.insns[38].src1 != parameter->dst ||
+        mir.insns[38].src2 != mir.insns[37].dst ||
+        !mir_machine_single_call_argument(call, &call_argument) ||
+        call_argument != mir.insns[38].dst ||
+        strcmp(call->name, mir.name) ||
+        (call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC | MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0)
+        return mir_machine_reject("recursive-frame-fill", "call");
+    plan->function = find_global(call->name);
+    if (plan->function == NULL || !plan->function->is_defined ||
+        plan->function->is_funcptr ||
+        (call->base_name[0] != 0 &&
+         strcmp(call->base_name,
+                asm_name_for(sym_asm_name(plan->function)))) ||
+        !mir_scalar_memory_location(
+            &mir.insns[41], &other_type, &other_storage, &other_offset) ||
+        other_storage != array_storage || other_offset != array_offset ||
+        !mir_machine_constant_equals(mir.insns[42].dst, 0) ||
+        mir.insns[43].src1 != mir.insns[41].dst ||
+        mir.insns[43].src2 != mir.insns[42].dst ||
+        mir.insns[43].immediate != 2 ||
+        mir.insns[44].src1 != mir.insns[43].dst ||
+        mir.insns[44].memory_size != 2 ||
+        mir.insns[45].immediate != '+' ||
+        mir.insns[45].src1 != call->dst ||
+        mir.insns[45].src2 != mir.insns[44].dst ||
+        mir.insns[46].src1 != mir.insns[45].dst)
+        return mir_machine_reject("recursive-frame-fill", "return");
+    plan->parameter_frame_offset = parameter_offset;
+    plan->array_offset = array_offset;
     return 1;
 }
 
@@ -20056,6 +20202,45 @@ static void mir_emit_float_tangent_rational(
     fprintf(out, "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n", done);
 }
 
+static void mir_emit_recursive_frame_fill(
+    FILE *out, const struct MirRecursiveFrameFill *plan)
+{
+    int loop = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n\tld sp,hl\n",
+            plan->array_offset);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tpush ix\n\tpop hl\n\tld bc,%d\n\tadd hl,bc\n"
+            "\tld e,(ix+%d)\n\tld d,(ix+%d)\n\tld b,%d\n"
+            "L%d:\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n"
+            "\tinc hl\n\tinc de\n\tdjnz L%d\n"
+            "\tpush ix\n\tpop hl\n\tld bc,%d\n\tadd hl,bc\n"
+            "\tld a,(ix+%d)\n\tand %d\n\tadd a,a\n"
+            "\tld e,a\n\tld d,0\n\tadd hl,de\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n",
+            plan->array_offset,
+            plan->parameter_frame_offset,
+            plan->parameter_frame_offset + 1,
+            plan->count, loop, loop,
+            plan->array_offset, plan->parameter_frame_offset,
+            plan->count - 1);
+    mir_machine_emit_global_word_store(out, plan->sink, 0);
+    fprintf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tinc hl\n\tpush hl\n",
+            plan->parameter_frame_offset,
+            plan->parameter_frame_offset + 1);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fprintf(out,
+            "\tpop bc\n\tld e,(ix+%d)\n\tld d,(ix+%d)\n"
+            "\tadd hl,de\n\tld sp,ix\n\tpop ix\n\tret\n",
+            plan->parameter_frame_offset,
+            plan->parameter_frame_offset + 1);
+}
+
 static void mir_emit_recursive_wide_product(
     FILE *out, const struct MirRecursiveWideProduct *plan)
 {
@@ -21839,6 +22024,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConditionalGlobalFloatLoad conditional_global_float_load;
     struct MirReducedFloatPolynomial reduced_float_polynomial;
     struct MirFloatTangentRational float_tangent_rational;
+    struct MirRecursiveFrameFill recursive_frame_fill;
     struct MirRecursiveWideProduct recursive_wide_product;
     struct MirRecursiveWideTreeSum recursive_wide_tree_sum;
     struct MirByteRotateFlags byte_rotate_flags;
@@ -22337,6 +22523,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &float_tangent_rational)) {
         mir_emit_float_tangent_rational(
             out, &float_tangent_rational);
+        return 1;
+    }
+    if (mir_match_recursive_frame_fill(&recursive_frame_fill)) {
+        mir_emit_recursive_frame_fill(out, &recursive_frame_fill);
         return 1;
     }
     if (mir_match_recursive_wide_product(

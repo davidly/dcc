@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `eadf1d0`
-  (`schedule random wide fills`).
-- Current candidate coverage: **1960/2185 (89.70%)**.
-- Remaining fallback population: **225 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `56e864b`
+  (`schedule fixed byte board calls`).
+- Current candidate coverage: **1962/2185 (89.79%)**.
+- Remaining fallback population: **223 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -221,6 +221,13 @@ current execution plan and handoff.
   dccpeep recognizes that MIR call shape and coordinates it with its existing
   whole-file MinMax packed-byte ABI rewrite; `ttt` improves slightly in both
   peep and nopeep modes rather than losing the packed-call optimization.
+- Recursive fixed-frame word fills now preserve the source array as a compact
+  16-byte IX frame while keeping its pointer in HL, fill value in DE, and
+  count in B. Indexed publication and the recursive recurrence are emitted
+  directly. This admits `tstackov.descend` and
+  `tpragstk.guarded_descend`, improving them 52.03%/57.36% and
+  49.11%/54.43% in peep/nopeep modes respectively while preserving the stack
+  guard's observable overflow.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -228,7 +235,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 225 final-cost fallbacks,
+- Current next priority: repeated causes in the 223 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
