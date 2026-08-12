@@ -2005,6 +2005,21 @@ struct MirContextOpSchedule {
     int failure_string_id;
 };
 
+struct MirCommentScanSchedule {
+    struct Sym *state_root;
+    int state_root_offset;
+    int source_offset;
+    int length_offset;
+    int cursor_offset;
+    int line_offset;
+};
+
+struct MirStateMember {
+    struct Sym *root;
+    int root_offset;
+    int member_offset;
+};
+
 struct MirLocalIdentityArrayResult {
     struct Sym *escaped_pointer;
     int escaped_pointer_offset;
@@ -2099,6 +2114,13 @@ static void mir_machine_emit_float_bits(
     FILE *out, unsigned long bits);
 static void mir_machine_emit_global_byte_a(
     FILE *out, struct Sym *symbol, int offset, int is_store);
+static int mir_machine_state_member_address(
+    int value, struct MirStateMember *member_out);
+static int mir_machine_same_state_member(
+    const struct MirStateMember *left,
+    const struct MirStateMember *right);
+static int mir_machine_only_root_loads(
+    struct Sym *root, int root_offset);
 static int mir_machine_single_call_argument(
     const struct MirInsn *call, int *argument);
 
@@ -27973,6 +27995,210 @@ static int mir_match_context_op_schedule(
     return 1;
 }
 
+static int mir_match_comment_member_load(
+    int member_index, int load_index, int width, int pointer,
+    struct MirStateMember *member_out)
+{
+    const struct MirInsn *member = &mir.insns[member_index];
+    const struct MirInsn *load = &mir.insns[load_index];
+
+    return member->opcode == MIR_MEMBER_ADDRESS &&
+        load->opcode == MIR_LOAD_INDIRECT &&
+        load->src1 == member->dst &&
+        load->memory_size == width &&
+        load->bit_width == 0 &&
+        (load->memory_flags & (1 | 8)) == 0 &&
+        type_size(load->type) == width &&
+        (pointer ? type_ptr_depth(load->type) > 0 :
+                   (type_ptr_depth(load->type) == 0 &&
+                    (load->type & TYPE_UNSIGNED) == 0)) &&
+        mir_machine_state_member_address(
+            member->dst, member_out);
+}
+
+static int mir_match_comment_scan_schedule(
+    struct MirCommentScanSchedule *plan)
+{
+    static const int expected_opcodes[60] = {
+        MIR_LABEL, MIR_LABEL, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY,
+        MIR_UNARY, MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY,
+        MIR_STORE_INDIRECT, MIR_LABEL, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_JUMP,
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_STORE_INDIRECT, MIR_NOP, MIR_JUMP, MIR_NOP,
+        MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_JUMP, MIR_LABEL
+    };
+    struct MirStateMember cursor_condition;
+    struct MirStateMember length_condition;
+    struct MirStateMember source;
+    struct MirStateMember cursor_update;
+    struct MirStateMember line;
+    struct MirStateMember cursor_eof;
+    struct MirStateMember length_eof;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 60 || mir_cfg_block_count() != 7 ||
+        mir.has_vla || mir.local_bytes != 2 ||
+        mir.aggregate_temp_bytes != 0 ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < 60; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "comment-scan-schedule", "opcodes");
+
+    if (!mir_match_comment_member_load(
+            3, 4, 4, 0, &cursor_condition) ||
+        !mir_match_comment_member_load(
+            6, 7, 4, 0, &length_condition) ||
+        mir.insns[8].immediate != '<' ||
+        mir.insns[8].src1 != mir.insns[4].dst ||
+        mir.insns[8].src2 != mir.insns[7].dst ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[9].label != mir.insns[59].label)
+        return mir_machine_reject(
+            "comment-scan-schedule", "condition");
+
+    if (!mir_match_comment_member_load(
+            11, 12, 2, 1, &source) ||
+        !mir_match_comment_member_load(
+            14, 15, 4, 0, &cursor_update) ||
+        !mir_machine_same_state_member(
+            &cursor_condition, &cursor_update) ||
+        !mir_machine_constant_equals(mir.insns[16].dst, 1) ||
+        mir.insns[17].immediate != '+' ||
+        mir.insns[17].src1 != mir.insns[15].dst ||
+        mir.insns[17].src2 != mir.insns[16].dst ||
+        mir.insns[17].type != mir.insns[15].type ||
+        mir.insns[18].src1 != mir.insns[14].dst ||
+        mir.insns[18].src2 != mir.insns[17].dst ||
+        mir.insns[18].memory_size != 4 ||
+        mir.insns[18].bit_width != 0 ||
+        (mir.insns[18].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[19].src1 != mir.insns[12].dst ||
+        mir.insns[19].src2 != mir.insns[15].dst ||
+        mir.insns[19].immediate != 1 ||
+        mir.insns[19].memory_size != 1 ||
+        mir.insns[20].src1 != mir.insns[19].dst ||
+        mir.insns[20].memory_size != 1 ||
+        mir.insns[20].bit_width != 0 ||
+        (mir.insns[20].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[21].src1 != mir.insns[20].dst ||
+        mir.insns[21].immediate != 0 ||
+        mir.insns[22].src1 != mir.insns[21].dst ||
+        mir.insns[22].immediate != 0 ||
+        type_size(mir.insns[22].type) != 2 ||
+        mir.insns[23].src1 != mir.insns[22].dst ||
+        mir.insns[23].memory_size != 2 ||
+        !mir_machine_unobservable_local_store(
+            &mir.insns[23]) ||
+        mir.insns[24].object != mir.insns[23].object ||
+        mir.insns[24].object < 0)
+        return mir_machine_reject(
+            "comment-scan-schedule", "cursor-read");
+
+    if (!mir_machine_constant_equals(mir.insns[25].dst, '\n') ||
+        mir.insns[26].immediate != TOK_EQ ||
+        mir.insns[26].src1 != mir.insns[22].dst ||
+        mir.insns[26].src2 != mir.insns[25].dst ||
+        mir.insns[27].src1 != mir.insns[26].dst ||
+        mir.insns[27].label != mir.insns[34].label ||
+        !mir_match_comment_member_load(
+            29, 30, 2, 0, &line) ||
+        !mir_machine_constant_equals(mir.insns[31].dst, 1) ||
+        mir.insns[32].immediate != '+' ||
+        mir.insns[32].src1 != mir.insns[30].dst ||
+        mir.insns[32].src2 != mir.insns[31].dst ||
+        mir.insns[33].src1 != mir.insns[29].dst ||
+        mir.insns[33].src2 != mir.insns[32].dst ||
+        mir.insns[33].memory_size != 2 ||
+        mir.insns[33].bit_width != 0 ||
+        (mir.insns[33].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[35].object != mir.insns[23].object)
+        return mir_machine_reject(
+            "comment-scan-schedule", "line");
+
+    if (!mir_machine_constant_equals(mir.insns[36].dst, ')') ||
+        mir.insns[37].immediate != TOK_EQ ||
+        mir.insns[37].src1 != mir.insns[22].dst ||
+        mir.insns[37].src2 != mir.insns[36].dst ||
+        mir.insns[38].src1 != mir.insns[37].dst ||
+        mir.insns[38].label != mir.insns[41].label ||
+        mir.insns[40].label != mir.insns[59].label ||
+        mir.insns[42].object != mir.insns[23].object ||
+        !mir_machine_constant_equals(mir.insns[43].dst, 0x1a) ||
+        mir.insns[44].immediate != TOK_EQ ||
+        mir.insns[44].src1 != mir.insns[22].dst ||
+        mir.insns[44].src2 != mir.insns[43].dst ||
+        mir.insns[45].src1 != mir.insns[44].dst ||
+        mir.insns[45].label != mir.insns[55].label ||
+        !mir_machine_state_member_address(
+            mir.insns[47].dst, &cursor_eof) ||
+        !mir_match_comment_member_load(
+            49, 50, 4, 0, &length_eof) ||
+        !mir_machine_same_state_member(
+            &cursor_condition, &cursor_eof) ||
+        !mir_machine_same_state_member(
+            &length_condition, &length_eof) ||
+        mir.insns[51].src1 != mir.insns[47].dst ||
+        mir.insns[51].src2 != mir.insns[50].dst ||
+        mir.insns[51].memory_size != 4 ||
+        mir.insns[51].bit_width != 0 ||
+        (mir.insns[51].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[53].label != mir.insns[59].label ||
+        mir.insns[58].label != mir.insns[1].label)
+        return mir_machine_reject(
+            "comment-scan-schedule", "terminators");
+
+    if (cursor_condition.root != length_condition.root ||
+        cursor_condition.root != source.root ||
+        cursor_condition.root != line.root ||
+        cursor_condition.root_offset !=
+            length_condition.root_offset ||
+        cursor_condition.root_offset != source.root_offset ||
+        cursor_condition.root_offset != line.root_offset ||
+        cursor_condition.member_offset ==
+            length_condition.member_offset ||
+        cursor_condition.member_offset == source.member_offset ||
+        cursor_condition.member_offset == line.member_offset ||
+        length_condition.member_offset == source.member_offset ||
+        length_condition.member_offset == line.member_offset ||
+        source.member_offset == line.member_offset ||
+        source.member_offset < -128 ||
+        source.member_offset + 1 > 127 ||
+        cursor_condition.member_offset < -128 ||
+        cursor_condition.member_offset + 3 > 127 ||
+        length_condition.member_offset < -128 ||
+        length_condition.member_offset + 3 > 127 ||
+        line.member_offset < -128 ||
+        line.member_offset + 1 > 127 ||
+        !mir_machine_only_root_loads(
+            cursor_condition.root,
+            cursor_condition.root_offset))
+        return mir_machine_reject(
+            "comment-scan-schedule", "state");
+
+    plan->state_root = cursor_condition.root;
+    plan->state_root_offset = cursor_condition.root_offset;
+    plan->source_offset = source.member_offset;
+    plan->length_offset = length_condition.member_offset;
+    plan->cursor_offset = cursor_condition.member_offset;
+    plan->line_offset = line.member_offset;
+    return 1;
+}
+
 static int mir_match_local_identity_array_result(
     struct MirLocalIdentityArrayResult *plan)
 {
@@ -30684,12 +30910,6 @@ static int mir_match_nested_append(struct MirNestedAppend *plan)
         return 0;
     return 1;
 }
-
-struct MirStateMember {
-    struct Sym *root;
-    int root_offset;
-    int member_offset;
-};
 
 static int mir_machine_state_member_address(
     int value, struct MirStateMember *member_out)
@@ -44582,6 +44802,86 @@ static void mir_emit_fixed_sieve_build(
     fputs("\tret\n", out);
 }
 
+static void mir_emit_comment_scan_schedule(
+    FILE *out, const struct MirCommentScanSchedule *plan)
+{
+    int loop = new_label();
+    int body = new_label();
+    int cursor_ready = new_label();
+    int line_ready = new_label();
+    int done = new_label();
+
+    fputs("\tpush ix\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_word(
+        out, plan->state_root, plan->state_root_offset);
+    fprintf(out,
+            "\tpush hl\n\tpop ix\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "\tld c,(ix%+d)\n\tld b,(ix%+d)\n"
+            "L%d:\n"
+            "\tld a,(ix%+d)\n\txor 128\n\tld h,a\n"
+            "\tld a,(ix%+d)\n\txor 128\n\tcp h\n"
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,(ix%+d)\n\tcp (ix%+d)\n"
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,b\n\tcp (ix%+d)\n"
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,c\n\tcp (ix%+d)\n\tjp nc,L%d\n"
+            "L%d:\n"
+            "\tld h,b\n\tld l,c\n\tadd hl,de\n"
+            "\tinc bc\n"
+            "\tld (ix%+d),c\n\tld (ix%+d),b\n"
+            "\tld a,b\n\tor c\n\tjp nz,L%d\n"
+            "\tld a,(ix%+d)\n\tinc a\n"
+            "\tld (ix%+d),a\n\tjp nz,L%d\n"
+            "\tinc (ix%+d)\n"
+            "L%d:\n"
+            "\tld a,(hl)\n\tcp %d\n\tjp nz,L%d\n"
+            "\tinc (ix%+d)\n\tjp nz,L%d\n"
+            "\tinc (ix%+d)\n"
+            "L%d:\n"
+            "\tcp %d\n\tjp z,L%d\n"
+            "\tcp %d\n\tjp nz,L%d\n",
+            plan->source_offset, plan->source_offset + 1,
+            plan->cursor_offset, plan->cursor_offset + 1,
+            loop,
+            plan->length_offset + 3,
+            plan->cursor_offset + 3,
+            body, done,
+            plan->cursor_offset + 2,
+            plan->length_offset + 2,
+            body, done,
+            plan->length_offset + 1,
+            body, done,
+            plan->length_offset, done,
+            body,
+            plan->cursor_offset, plan->cursor_offset + 1,
+            cursor_ready,
+            plan->cursor_offset + 2,
+            plan->cursor_offset + 2, cursor_ready,
+            plan->cursor_offset + 3,
+            cursor_ready,
+            '\n', line_ready,
+            plan->line_offset, line_ready,
+            plan->line_offset + 1,
+            line_ready,
+            ')', done,
+            0x1a, loop);
+    fprintf(out,
+            "\tld a,(ix%+d)\n\tld (ix%+d),a\n"
+            "\tld a,(ix%+d)\n\tld (ix%+d),a\n"
+            "\tld a,(ix%+d)\n\tld (ix%+d),a\n"
+            "\tld a,(ix%+d)\n\tld (ix%+d),a\n"
+            "L%d:\n\tpop ix\n\tret\n",
+            plan->length_offset, plan->cursor_offset,
+            plan->length_offset + 1, plan->cursor_offset + 1,
+            plan->length_offset + 2, plan->cursor_offset + 2,
+            plan->length_offset + 3, plan->cursor_offset + 3,
+            done);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -44815,6 +45115,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirMathVerificationSchedule math_verification_schedule;
     struct MirCtypeReallocSchedule ctype_realloc_schedule;
     struct MirContextOpSchedule context_op_schedule;
+    struct MirCommentScanSchedule comment_scan_schedule;
     struct MirLocalIdentityArrayResult local_identity_array_result;
     struct MirConstantResultSwitch constant_result_switch;
     struct MirStringResultSwitch string_result_switch;
@@ -44973,6 +45274,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_context_op_schedule(&context_op_schedule)) {
         mir_emit_context_op_schedule(out, &context_op_schedule);
+        return 1;
+    }
+    if (mir_match_comment_scan_schedule(&comment_scan_schedule)) {
+        mir_emit_comment_scan_schedule(out, &comment_scan_schedule);
         return 1;
     }
     if (mir_match_affine_pointer_constant_return(&constant)) {

@@ -6,11 +6,33 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `f258f7e`
-  (`dcc MIR: schedule fixed ctype checks`).
-- Current candidate coverage: **2104/2185 (96.29%)**.
-- Remaining fallback population: **81 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `7f9fb32`
+  (`dcc MIR: schedule context operation checks`).
+- Current candidate coverage: **2105/2185 (96.34%)**.
+- Remaining fallback population: **80 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The strict name-free comment-scan scheduler admits `fint.skip_comment`. It
+  matches the complete 60-instruction, seven-block MIR graph and validates
+  the signed 32-bit cursor bound, old-cursor byte load, full-width cursor
+  increment, newline line-number update, closing-delimiter exit, Ctrl-Z
+  cursor-to-end assignment, and loop/exit edges structurally. The emitter
+  retains the state pointer in IX, the low cursor word in BC, the source
+  pointer in DE, and the scanned byte in A; the high cursor word and 32-bit
+  end remain authoritative in memory, and IY is not used. Non-stack selected
+  output is 691 text bytes / 61 instructions versus 1,651 / 162 captured;
+  stack-check output is 720 / 62 versus 1,680 / 163. The ordinary `fint`
+  full run and forced fallback have identical peep/nopeep cycles at
+  378,912,094 / 382,764,623; peep linked size is unchanged at 32,128 bytes,
+  while nopeep falls from 35,072 to 34,944 bytes (-128 / -0.36%). A focused
+  multiline-comment fixture improves from 674,391 to 654,615 peep cycles
+  (-2.93%) and from 739,128 to 715,939 nopeep cycles (-3.14%). Selected and
+  forced-fallback outputs are byte-identical for closing-delimiter,
+  multiline line-number, embedded Ctrl-Z, and end-boundary cases. A separately
+  named `scan_comment_body` clone selects with the same 720-byte /
+  62-instruction stack-check metrics. No app/function name, hash, baseline
+  exception, or IY allocation participates in selection. The fresh
+  stack-check census is 2105/2185 with exactly this one new function and no
+  regression.
 - The strict name-free context-operation scheduler admits `tctxops.main`. It
   matches the complete 433-instruction, seven-block MIR graph, retains the
   eight-iteration long-array initialization loop and both global float stores,
