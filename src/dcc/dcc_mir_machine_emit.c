@@ -960,6 +960,16 @@ struct MirCompactRecordAppend {
     int string_id;
 };
 
+struct MirByteMismatchReporter {
+    struct Sym *print_function;
+    struct Sym *exit_function;
+    int pointer_stack_offset;
+    int value_stack_offset;
+    int count_stack_offset;
+    int mismatch_string_id;
+    int failure_string_id;
+};
+
 struct MirAsciiUpper {
     int parameter_stack_offset;
     int width;
@@ -12046,6 +12056,84 @@ static int mir_match_conditional_string_report(
     plan->format_string_id = (int)mir.insns[3].immediate;
     plan->true_string_id = (int)mir.insns[9].immediate;
     plan->false_string_id = (int)mir.insns[13].immediate;
+    return 1;
+}
+
+static int mir_match_byte_mismatch_reporter(
+    struct MirByteMismatchReporter *plan)
+{
+    const struct MirInsn *print_call = &mir.insns[48];
+    const struct MirInsn *exit_call = &mir.insns[51];
+    int print_args[3];
+    int exit_arg;
+    int type, storage, offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 69 || mir_cfg_block_count() != 5 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID ||
+        mir.insns[1].opcode != MIR_PARAM ||
+        mir.insns[2].opcode != MIR_PARAM ||
+        mir.insns[3].opcode != MIR_PARAM ||
+        !mir_machine_same_location(&mir.insns[1], &mir.insns[4]) ||
+        mir.insns[6].opcode != MIR_STORE ||
+        mir.insns[6].src1 != mir.insns[4].dst ||
+        !mir_machine_constant_equals(mir.insns[8].dst, 255) ||
+        mir.insns[9].immediate != '&' ||
+        !mir_machine_constant_equals(mir.insns[16].dst, 0) ||
+        mir.insns[24].opcode != MIR_PHI ||
+        mir.insns[27].immediate != '<' ||
+        mir.insns[27].src1 != mir.insns[24].dst ||
+        mir.insns[27].src2 != mir.insns[3].dst ||
+        mir.insns[28].src1 != mir.insns[27].dst ||
+        mir.insns[28].label != mir.insns[65].label)
+        return mir_machine_reject("byte-mismatch-reporter", "shape");
+    if (!mir_machine_same_location(&mir.insns[6], &mir.insns[29]) ||
+        mir.insns[30].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[30].src1 != mir.insns[29].dst ||
+        mir.insns[30].memory_size != 1 ||
+        mir.insns[34].immediate != TOK_NE ||
+        mir.insns[34].src1 != mir.insns[32].dst ||
+        mir.insns[34].src2 != mir.insns[33].dst ||
+        mir.insns[35].src1 != mir.insns[34].dst ||
+        mir.insns[35].label != mir.insns[53].label ||
+        mir.insns[36].opcode != MIR_STRING_ADDRESS ||
+        !mir_machine_three_call_arguments(print_call, print_args) ||
+        print_args[0] != mir.insns[36].dst ||
+        print_args[1] != mir.insns[41].dst ||
+        print_args[2] != mir.insns[46].dst ||
+        !mir_machine_single_call_argument(exit_call, &exit_arg) ||
+        !mir_machine_constant_equals(exit_arg, 1))
+        return mir_machine_reject("byte-mismatch-reporter", "mismatch");
+    if (!mir_machine_same_location(&mir.insns[6], &mir.insns[54]) ||
+        !mir_machine_constant_equals(mir.insns[55].dst, 1) ||
+        mir.insns[56].immediate != '+' ||
+        !mir_machine_same_location(&mir.insns[6], &mir.insns[57]) ||
+        !mir_machine_constant_equals(mir.insns[61].dst, 1) ||
+        mir.insns[62].immediate != '+' ||
+        mir.insns[64].label != mir.insns[19].label ||
+        mir.insns[66].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[68].opcode != MIR_CALL)
+        return mir_machine_reject("byte-mismatch-reporter", "loop");
+    plan->print_function = find_global(print_call->name);
+    plan->exit_function = find_global(exit_call->name);
+    if (plan->print_function == NULL || plan->exit_function == NULL ||
+        strcmp(mir.insns[68].name, print_call->name))
+        return mir_machine_reject("byte-mismatch-reporter", "symbols");
+    plan->mismatch_string_id = (int)mir.insns[36].immediate;
+    plan->failure_string_id = (int)mir.insns[66].immediate;
+#define MISMATCH_PARAM(insn, field) \
+    do { \
+        if (!mir_scalar_memory_location( \
+                (insn), &type, &storage, &offset) || \
+            storage != SC_PARAM || offset < 2) \
+            return mir_machine_reject( \
+                "byte-mismatch-reporter", "parameter"); \
+        (field) = offset - 2; \
+    } while (0)
+    MISMATCH_PARAM(&mir.insns[1], plan->pointer_stack_offset);
+    MISMATCH_PARAM(&mir.insns[2], plan->value_stack_offset);
+    MISMATCH_PARAM(&mir.insns[3], plan->count_stack_offset);
+#undef MISMATCH_PARAM
     return 1;
 }
 
@@ -24813,6 +24901,48 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_byte_mismatch_reporter(
+    FILE *out, const struct MirByteMismatchReporter *plan)
+{
+    int loop = new_label();
+    int mismatch = new_label();
+    int done = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld c,(ix+%d)\n\tld b,(ix+%d)\n"
+            "\tld a,b\n\tor c\n\tjp z,L%d\n"
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
+            "\tld a,(ix+%d)\n"
+            "L%d:\n\tcpi\n\tjp nz,L%d\n\tjp pe,L%d\n\tjp L%d\n"
+            "L%d:\n\tdec hl\n\tld e,(hl)\n\tld d,0\n\tpush de\n"
+            "\tld e,(ix+%d)\n\tld d,(ix+%d)\n"
+            "\tor a\n\tsbc hl,de\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            plan->count_stack_offset + 2,
+            plan->count_stack_offset + 3,
+            done,
+            plan->pointer_stack_offset + 2,
+            plan->pointer_stack_offset + 3,
+            plan->value_stack_offset + 2,
+            loop, mismatch, loop, done,
+            mismatch,
+            plan->pointer_stack_offset + 2,
+            plan->pointer_stack_offset + 3,
+            plan->mismatch_string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tld hl,1\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->exit_function);
+    fputs("\tpop bc\n", out);
+    fprintf(out, "L%d:\n\tld hl,S%d\n\tpush hl\n",
+            done, plan->failure_string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    fputs("\tpop bc\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_compact_record_append(
     FILE *out, const struct MirCompactRecordAppend *plan)
 {
@@ -26571,6 +26701,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirByteMismatchReporter byte_mismatch_reporter;
     struct MirCompactRecordAppend compact_record_append;
     struct MirSignedMulClampAbs signed_mul_clamp_abs;
     struct MirFixedGlobalStringCopies fixed_global_string_copies;
@@ -27224,6 +27355,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_byte_mismatch_reporter(&byte_mismatch_reporter)) {
+        mir_emit_byte_mismatch_reporter(out, &byte_mismatch_reporter);
         return 1;
     }
     if (mir_match_compact_record_append(&compact_record_append)) {
