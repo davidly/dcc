@@ -875,6 +875,13 @@ struct MirFixedMemberInitCalls {
     int string_id;
 };
 
+struct MirVolatileMemberSum {
+    struct Sym *base;
+    struct Sym *function;
+    int member_offset;
+    int count;
+};
+
 struct MirAsciiUpper {
     int parameter_stack_offset;
     int width;
@@ -11961,6 +11968,68 @@ static int mir_match_conditional_string_report(
     plan->format_string_id = (int)mir.insns[3].immediate;
     plan->true_string_id = (int)mir.insns[9].immediate;
     plan->false_string_id = (int)mir.insns[13].immediate;
+    return 1;
+}
+
+static int mir_match_volatile_member_sum(struct MirVolatileMemberSum *plan)
+{
+    const struct MirInsn *index_phi = &mir.insns[6];
+    const struct MirInsn *total_phi = &mir.insns[7];
+    const struct MirInsn *call = &mir.insns[28];
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 35 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        !mir_machine_constant_equals(mir.insns[1].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[3].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[2]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[4]) ||
+        index_phi->opcode != MIR_PHI ||
+        index_phi->src1 != mir.insns[1].dst ||
+        index_phi->src2 != mir.insns[17].dst ||
+        total_phi->opcode != MIR_PHI ||
+        total_phi->src1 != mir.insns[3].dst ||
+        total_phi->src2 != mir.insns[25].dst ||
+        mir.insns[10].immediate != '<' ||
+        mir.insns[10].src1 != index_phi->dst ||
+        mir.insns[10].src2 != mir.insns[9].dst ||
+        mir.insns[11].src1 != mir.insns[10].dst ||
+        mir.insns[11].label != mir.insns[32].label)
+        return mir_machine_reject("volatile-member-sum", "shape");
+    plan->count = (int)mir.insns[9].immediate;
+    if (plan->count <= 0 || plan->count > 255 ||
+        mir.insns[12].opcode != MIR_LOAD ||
+        mir.insns[13].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[13].src1 != mir.insns[12].dst ||
+        mir.insns[14].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[14].src1 != mir.insns[13].dst ||
+        (mir.insns[14].memory_flags & (1 | 8)) == 0 ||
+        !mir_machine_constant_equals(mir.insns[16].dst, 1) ||
+        mir.insns[17].immediate != '+' ||
+        mir.insns[17].src1 != index_phi->dst ||
+        mir.insns[17].src2 != mir.insns[16].dst ||
+        mir.insns[19].src1 != mir.insns[14].dst ||
+        mir.insns[19].src2 != index_phi->dst ||
+        mir.insns[19].immediate != 2 ||
+        mir.insns[21].src1 != mir.insns[19].dst ||
+        mir.insns[23].src1 != mir.insns[21].dst ||
+        mir.insns[24].src1 != mir.insns[23].dst ||
+        mir.insns[25].immediate != '+' ||
+        mir.insns[25].src1 != total_phi->dst ||
+        mir.insns[25].src2 != mir.insns[24].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[27]) ||
+        !mir_machine_call_has_no_arguments(call) ||
+        mir.insns[31].label != mir.insns[5].label ||
+        mir.insns[34].src1 != total_phi->dst)
+        return mir_machine_reject("volatile-member-sum", "flow");
+    plan->base = find_global(mir.insns[12].name);
+    plan->function = find_global(call->name);
+    plan->member_offset = (int)mir.insns[13].immediate;
+    if (plan->base == NULL || plan->base->is_volatile ||
+        plan->function == NULL || !plan->function->is_defined ||
+        plan->function->is_funcptr ||
+        plan->member_offset < -32768 || plan->member_offset > 32767)
+        return mir_machine_reject("volatile-member-sum", "symbols");
     return 1;
 }
 
@@ -23660,6 +23729,36 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_volatile_member_sum(
+    FILE *out, const struct MirVolatileMemberSum *plan)
+{
+    int loop = new_label();
+    int done = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n\tdec sp\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tld (ix-1),0\n\tld bc,0\n", out);
+    fprintf(out,
+            "L%d:\n\tld a,(ix-1)\n\tcp %d\n\tjp nc,L%d\n"
+            "\tpush bc\n",
+            loop, plan->count, done);
+    mir_machine_emit_global_word(out, plan->base, 0);
+    mir_machine_emit_hl_offset(out, plan->member_offset, 0);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tld c,(ix-1)\n\tld b,0\n\tinc (ix-1)\n"
+          "\tex de,hl\n\tadd hl,bc\n\tadd hl,bc\n"
+          "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n"
+          "\tpop bc\n\tadd hl,bc\n\tld b,h\n\tld c,l\n"
+          "\tpush bc\n", out);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n", out);
+    fprintf(out,
+            "\tjp L%d\nL%d:\n\tld h,b\n\tld l,c\n"
+            "\tld sp,ix\n\tpop ix\n\tret\n",
+            loop, done);
+}
+
 static void mir_emit_member_init_parameter(
     FILE *out, int stack_offset)
 {
@@ -25036,6 +25135,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirVolatileMemberSum volatile_member_sum;
     struct MirFixedMemberInitCalls fixed_member_init_calls;
     struct MirLocalByteFillCall local_byte_fill_call;
     struct MirGlobalLastRecordKind global_last_record_kind;
@@ -25679,6 +25779,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_volatile_member_sum(&volatile_member_sum)) {
+        mir_emit_volatile_member_sum(out, &volatile_member_sum);
         return 1;
     }
     if (mir_match_fixed_member_init_calls(
