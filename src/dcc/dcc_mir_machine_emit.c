@@ -949,6 +949,17 @@ struct MirSignedMulClampAbs {
     int limit;
 };
 
+struct MirCompactRecordAppend {
+    struct Sym *records;
+    struct Sym *count;
+    struct Sym *error_function;
+    int parameter_stack_offsets[3];
+    int field_offsets[3];
+    int stride;
+    int capacity;
+    int string_id;
+};
+
 struct MirAsciiUpper {
     int parameter_stack_offset;
     int width;
@@ -12035,6 +12046,93 @@ static int mir_match_conditional_string_report(
     plan->format_string_id = (int)mir.insns[3].immediate;
     plan->true_string_id = (int)mir.insns[9].immediate;
     plan->false_string_id = (int)mir.insns[13].immediate;
+    return 1;
+}
+
+static int mir_match_compact_record_append(
+    struct MirCompactRecordAppend *plan)
+{
+    static const int root_indices[3] = { 12, 19, 25 };
+    static const int count_indices[3] = { 13, 20, 26 };
+    static const int index_indices[3] = { 14, 21, 27 };
+    static const int member_indices[3] = { 15, 22, 28 };
+    static const int store_indices[3] = { 18, 24, 30 };
+    int type, storage, offset;
+    int field;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 36 || mir_cfg_block_count() != 2 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        mir.insns[4].opcode != MIR_LOAD ||
+        mir.insns[6].immediate != TOK_GE ||
+        mir.insns[6].src1 != mir.insns[4].dst ||
+        mir.insns[6].src2 != mir.insns[5].dst ||
+        mir.insns[7].src1 != mir.insns[6].dst ||
+        mir.insns[7].label != mir.insns[11].label ||
+        mir.insns[8].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[10].opcode != MIR_CALL ||
+        !mir_machine_single_call_argument(&mir.insns[10], &field) ||
+        field != mir.insns[8].dst)
+        return mir_machine_reject("compact-record-append", "guard");
+    plan->capacity = (int)mir.insns[5].immediate;
+    plan->string_id = (int)mir.insns[8].immediate;
+    plan->count = find_global(mir.insns[4].name);
+    plan->error_function = find_global(mir.insns[10].name);
+    if (plan->capacity <= 0 || plan->capacity > 32767 ||
+        plan->count == NULL || plan->count->is_volatile ||
+        plan->error_function == NULL || !plan->error_function->is_defined)
+        return mir_machine_reject("compact-record-append", "guard-symbols");
+    for (field = 0; field < 3; ++field) {
+        const struct MirInsn *root = &mir.insns[root_indices[field]];
+        const struct MirInsn *count = &mir.insns[count_indices[field]];
+        const struct MirInsn *index = &mir.insns[index_indices[field]];
+        const struct MirInsn *member = &mir.insns[member_indices[field]];
+        const struct MirInsn *store = &mir.insns[store_indices[field]];
+
+        if (root->opcode != MIR_LOAD ||
+            !mir_machine_same_location(&mir.insns[4], count) ||
+            index->opcode != MIR_INDEX_ADDRESS ||
+            index->src1 != root->dst ||
+            index->src2 != count->dst ||
+            index->immediate <= 0 ||
+            member->opcode != MIR_MEMBER_ADDRESS ||
+            member->src1 != index->dst ||
+            store->opcode != MIR_STORE_INDIRECT ||
+            store->src1 != member->dst ||
+            store->memory_size != (field == 0 ? 1 : 2) ||
+            (field == 0
+                 ? (mir.insns[17].src1 != mir.insns[1].dst ||
+                    store->src2 != mir.insns[17].dst)
+                 : store->src2 != mir.insns[1 + field].dst))
+            return mir_machine_reject("compact-record-append", "fields");
+        if (field == 0) {
+            plan->records = find_global(root->name);
+            plan->stride = (int)index->immediate;
+        } else if (strcmp(root->name, mir.insns[12].name) ||
+                   index->immediate != plan->stride) {
+            return mir_machine_reject(
+                "compact-record-append", "field-consistency");
+        }
+        plan->field_offsets[field] = (int)member->immediate;
+    }
+    if (plan->records == NULL || plan->records->is_volatile ||
+        plan->stride <= 0 || plan->stride > 255 ||
+        !mir_machine_same_location(&mir.insns[4], &mir.insns[31]) ||
+        !mir_machine_constant_equals(mir.insns[32].dst, 1) ||
+        mir.insns[33].immediate != '+' ||
+        mir.insns[33].src1 != mir.insns[31].dst ||
+        !mir_machine_same_location(&mir.insns[4], &mir.insns[34]) ||
+        mir.insns[34].src1 != mir.insns[33].dst ||
+        mir.insns[35].src1 != mir.insns[31].dst)
+        return mir_machine_reject("compact-record-append", "tail");
+    for (field = 0; field < 3; ++field) {
+        if (!mir_scalar_memory_location(
+                &mir.insns[1 + field], &type, &storage, &offset) ||
+            storage != SC_PARAM || offset < 2)
+            return mir_machine_reject(
+                "compact-record-append", "parameters");
+        plan->parameter_stack_offsets[field] = offset - 2;
+    }
     return 1;
 }
 
@@ -24715,6 +24813,49 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_compact_record_append(
+    FILE *out, const struct MirCompactRecordAppend *plan)
+{
+    int ready = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_word(out, plan->count, 0);
+    fprintf(out,
+            "\tld de,%d\n\tor a\n\tsbc hl,de\n\tjp c,L%d\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            plan->capacity, ready, plan->string_id);
+    mir_machine_emit_symbol_call(out, plan->error_function);
+    fputs("\tpop bc\n", out);
+    fprintf(out, "L%d:\n", ready);
+    mir_machine_emit_global_word(out, plan->count, 0);
+    fputs("\tld b,h\n\tld c,l\n\tadd hl,hl\n\tadd hl,hl\n"
+          "\tadd hl,bc\n\tpush hl\n", out);
+    mir_machine_emit_global_word(out, plan->records, 0);
+    fputs("\tex de,hl\n\tpop hl\n\tadd hl,de\n", out);
+    mir_machine_emit_hl_offset(out, plan->field_offsets[0], 0);
+    fprintf(out, "\tld a,(ix+%d)\n\tld (hl),a\n",
+            plan->parameter_stack_offsets[0] + 2);
+    mir_machine_emit_hl_offset(
+        out, plan->field_offsets[1] - plan->field_offsets[0], 0);
+    fprintf(out,
+            "\tld e,(ix+%d)\n\tld d,(ix+%d)\n"
+            "\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+            plan->parameter_stack_offsets[1] + 2,
+            plan->parameter_stack_offsets[1] + 3);
+    mir_machine_emit_hl_offset(
+        out, plan->field_offsets[2] - plan->field_offsets[1] - 1, 0);
+    fprintf(out,
+            "\tld e,(ix+%d)\n\tld d,(ix+%d)\n"
+            "\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+            plan->parameter_stack_offsets[2] + 2,
+            plan->parameter_stack_offsets[2] + 3);
+    fputs("\tinc bc\n\tld h,b\n\tld l,c\n", out);
+    mir_machine_emit_global_word_store(out, plan->count, 0);
+    fputs("\tdec hl\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_signed_mul_clamp_abs(
     FILE *out, const struct MirSignedMulClampAbs *plan)
 {
@@ -26430,6 +26571,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirCompactRecordAppend compact_record_append;
     struct MirSignedMulClampAbs signed_mul_clamp_abs;
     struct MirFixedGlobalStringCopies fixed_global_string_copies;
     struct MirScaledGlobalStore scaled_global_store;
@@ -27082,6 +27224,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_compact_record_append(&compact_record_append)) {
+        mir_emit_compact_record_append(out, &compact_record_append);
         return 1;
     }
     if (mir_match_signed_mul_clamp_abs(&signed_mul_clamp_abs)) {
