@@ -6,9 +6,9 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Clean base HEAD for the current coverage batch: `6e46494`.
-- Current working-tree candidate coverage: **2129/2185 (97.44%)**.
-- Remaining fallback population: **56 `final-cost-policy`**, all selected by
+- Clean base HEAD for the current coverage batch: `1983475`.
+- Current working-tree candidate coverage: **2130/2185 (97.48%)**.
+- Remaining fallback population: **55 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - The first machine-emitter architecture pivot moves the recently added float
   report/check orchestration family, including the raw-conversion checker,
@@ -164,6 +164,40 @@ current execution plan and handoff.
   scheduled** to **1,424 spilled / 354 scheduled**, and leaves
   **56 `final-cost-policy`** fallbacks. No baseline, name, or hash gate was
   added.
+- The next float-family coverage batch admits the nine-block arithmetic
+  normalization/decomposition loop in `tlog.frexpf` through a strict
+  name-free matcher in `dcc_mir_machine_float_reports.c`. It proves the exact
+  **72-instruction** graph, float and `int *` parameter ABI, initial exponent
+  zero store, signed zero/negative comparisons, recursive sign normalization,
+  both value-scaling loops, every exponent pointer update, self-call
+  identity/prototype, parameter locations, and all returns. The emitter
+  retains the established `__feqf`/`__fgtf`/`__flef`/`__fmf` fastcall
+  convention, mutates only the by-value parameter copy, reloads the exponent
+  pointer for every observable write, preserves carry/borrow wrapping, uses
+  IX for stable parameter access, and uses no IY. Its family-local
+  strict-smaller gate remains in force; the final generic cost policy is
+  unchanged. Normal selected/captured metrics are **1,562/1,615 bytes** and
+  **141/145 instructions**; stack-check metrics are **1,591/1,644** and
+  **142/146**. `tlog` passes full peep/nopeep validation. Selected versus
+  forced fallback is **1,046,252/1,046,294 cycles** peep and
+  **1,047,767/1,048,350 cycles** nopeep, exact gains of **-42 (-0.0040%)**
+  and **-583 (-0.0556%)**; linked size is unchanged at **8,448 bytes** in
+  both modes.
+  A separately named boundary/alias clone exercises positive and negative
+  zero, both normalization boundaries, large and small powers, negative
+  recursion, a NaN, and exponent pointers aliasing both words of the caller's
+  source float. Selected and forced-fallback output is byte-identical in peep
+  and nopeep; selected/fallback measurements are **707,338/707,428 cycles**
+  peep and **707,982/708,903 cycles** nopeep, all at **5,888 bytes**.
+  The float module audit reports **2,339 source lines**, **40 static top-level
+  helpers**, only `mir_try_emit_float_reports` as exported code, and zero
+  read-only or writable data exports. The regression-gated stack census
+  advances **2,129/2,185 (97.44%)** to **2,130/2,185 (97.48%)**, changes
+  only `tlog`, adds exactly `tlog.frexpf`, removes no accepted function, moves
+  selector counts to **1,423 spilled / 355 scheduled**, and leaves **55
+  `final-cost-policy`** fallbacks. The prior forced final-generic
+  `tlog.logf` experiment remains a measured regression and stays behind the
+  unchanged cost gate. No performance baseline changed.
 - Architecture rule for subsequent machine-family extractions: add **zero
   shared variables or mutable state**. Each module owns its plan structs,
   static arrays/constants, counters, candidate state, matchers, emitters, and

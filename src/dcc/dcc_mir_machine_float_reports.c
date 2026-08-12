@@ -1,4 +1,4 @@
-/* dcc_mir_machine_float_reports.c - strict float report/check schedules. */
+/* dcc_mir_machine_float_reports.c - strict float schedules. */
 
 #include "dcc_mir_machine_internal.h"
 
@@ -86,6 +86,12 @@ struct MirRawConversionCheckSchedule {
     int result_string_id;
     int success_string_id;
     int failure_string_id;
+};
+
+struct MirFloatNormalizationSchedule {
+    struct Sym *function;
+    int value_frame_offset;
+    int exponent_frame_offset;
 };
 
 static int mir_float_report_call_arguments(
@@ -1946,11 +1952,369 @@ static void mir_emit_raw_conversion_check_schedule(
             return_success, return_success);
 }
 
+static int mir_float_normalization_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+        type_is_float(type) && type_size(type) == 4;
+}
+
+static int mir_float_normalization_parameter_load(
+    const struct MirInsn *load, const struct MirInsn *parameter)
+{
+    return load->opcode == MIR_LOAD &&
+        mir_machine_named_nonvolatile(load) &&
+        mir_machine_same_location(load, parameter);
+}
+
+static int mir_match_float_normalization_schedule(
+    struct MirFloatNormalizationSchedule *plan)
+{
+    static const int expected_opcodes[72] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_LOAD, MIR_CONST,
+        MIR_STORE_INDIRECT, MIR_NOP, MIR_FLOAT_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_FLOAT_CONST, MIR_RETURN, MIR_NOP, MIR_LABEL,
+        MIR_LOAD, MIR_FLOAT_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD,
+        MIR_UNARY, MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CALL, MIR_UNARY,
+        MIR_RETURN, MIR_NOP, MIR_LABEL, MIR_LABEL, MIR_NOP, MIR_LOAD,
+        MIR_LOAD, MIR_FLOAT_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD,
+        MIR_FLOAT_CONST, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LOAD,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT,
+        MIR_NOP, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_LABEL, MIR_NOP,
+        MIR_LOAD, MIR_LOAD, MIR_FLOAT_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_LOAD, MIR_FLOAT_CONST, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LOAD,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT,
+        MIR_NOP, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_RETURN
+    };
+    static const int label_indices[9] = {
+        0, 13, 27, 28, 46, 48, 49, 67, 69
+    };
+    static const int value_load_indices[7] = {
+        14, 18, 31, 35, 52, 56, 70
+    };
+    static const int exponent_load_indices[6] = {
+        3, 21, 30, 40, 51, 61
+    };
+    const struct MirInsn *value;
+    const struct MirInsn *exponent;
+    const struct MirInsn *call;
+    int arguments[MIR_FLOAT_REPORT_MAX_CALL_ARGS];
+    int value_type, value_storage, value_offset;
+    int exponent_type, exponent_storage, exponent_offset;
+    int instruction;
+    int left;
+    int right;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 72 || mir_cfg_block_count() != 9 ||
+        mir.has_vla || mir.local_bytes != 0 ||
+        mir.aggregate_temp_bytes != 0 ||
+        !mir_float_normalization_type(mir.return_type))
+        return 0;
+    value = &mir.insns[1];
+    exponent = &mir.insns[2];
+    call = &mir.insns[23];
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return 0;
+    for (left = 0; left < 9; ++left)
+        for (right = left + 1; right < 9; ++right)
+            if (mir.insns[label_indices[left]].label ==
+                mir.insns[label_indices[right]].label)
+                return 0;
+    if (!mir_float_normalization_type(value->type) ||
+        type_ptr_depth(exponent->type) != 1 ||
+        (exponent->type & 15) != TYPE_INT ||
+        mir_machine_pointee_is_volatile(exponent) ||
+        !mir_scalar_memory_location(
+            value, &value_type, &value_storage, &value_offset) ||
+        value_storage != SC_PARAM ||
+        !mir_float_normalization_type(value_type) ||
+        !mir_scalar_memory_location(
+            exponent, &exponent_type, &exponent_storage, &exponent_offset) ||
+        exponent_storage != SC_PARAM ||
+        type_ptr_depth(exponent_type) != 1 ||
+        (exponent_type & 15) != TYPE_INT ||
+        value_offset != 4 || exponent_offset != 8)
+        return 0;
+    for (instruction = 0; instruction < 7; ++instruction)
+        if (!mir_float_normalization_parameter_load(
+                &mir.insns[value_load_indices[instruction]], value))
+            return 0;
+    for (instruction = 0; instruction < 6; ++instruction)
+        if (!mir_float_normalization_parameter_load(
+                &mir.insns[exponent_load_indices[instruction]], exponent))
+            return 0;
+
+    if (!mir_machine_constant_equals(mir.insns[4].dst, 0) ||
+        mir.insns[5].src1 != mir.insns[3].dst ||
+        mir.insns[5].src2 != mir.insns[4].dst ||
+        mir.insns[5].memory_size != 2 ||
+        ((unsigned long)mir.insns[7].immediate & 0xffffffffUL) != 0 ||
+        !mir_float_normalization_type(mir.insns[7].type) ||
+        mir.insns[8].immediate != TOK_EQ ||
+        mir.insns[8].secondary_offset != TYPE_FLOAT ||
+        mir.insns[8].src1 != value->dst ||
+        mir.insns[8].src2 != mir.insns[7].dst ||
+        !mir_match_final_call_integer_type(mir.insns[8].type, 2) ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[9].label != mir.insns[13].label ||
+        ((unsigned long)mir.insns[10].immediate & 0xffffffffUL) != 0 ||
+        !mir_float_normalization_type(mir.insns[10].type) ||
+        mir.insns[11].src1 != mir.insns[10].dst)
+        return 0;
+
+    if (((unsigned long)mir.insns[15].immediate & 0xffffffffUL) != 0 ||
+        !mir_float_normalization_type(mir.insns[15].type) ||
+        mir.insns[16].immediate != '<' ||
+        mir.insns[16].secondary_offset != TYPE_FLOAT ||
+        mir.insns[16].src1 != mir.insns[14].dst ||
+        mir.insns[16].src2 != mir.insns[15].dst ||
+        !mir_match_final_call_integer_type(mir.insns[16].type, 2) ||
+        mir.insns[17].src1 != mir.insns[16].dst ||
+        mir.insns[17].label != mir.insns[27].label ||
+        mir.insns[19].immediate != '-' ||
+        mir.insns[19].src1 != mir.insns[18].dst ||
+        !mir_float_normalization_type(mir.insns[19].type) ||
+        !mir_float_report_call_arguments(call, 2, arguments) ||
+        arguments[0] != mir.insns[19].dst ||
+        arguments[1] != mir.insns[21].dst ||
+        mir.insns[24].immediate != '-' ||
+        mir.insns[24].src1 != call->dst ||
+        !mir_float_normalization_type(mir.insns[24].type) ||
+        mir.insns[25].src1 != mir.insns[24].dst)
+        return 0;
+
+    if (((unsigned long)mir.insns[32].immediate & 0xffffffffUL) !=
+            1065353216UL ||
+        !mir_float_normalization_type(mir.insns[32].type) ||
+        mir.insns[33].immediate != TOK_GE ||
+        mir.insns[33].secondary_offset != TYPE_FLOAT ||
+        mir.insns[33].src1 != mir.insns[31].dst ||
+        mir.insns[33].src2 != mir.insns[32].dst ||
+        !mir_match_final_call_integer_type(mir.insns[33].type, 2) ||
+        mir.insns[34].src1 != mir.insns[33].dst ||
+        mir.insns[34].label != mir.insns[48].label ||
+        ((unsigned long)mir.insns[36].immediate & 0xffffffffUL) !=
+            1056964608UL ||
+        !mir_float_normalization_type(mir.insns[36].type) ||
+        mir.insns[37].immediate != '*' ||
+        mir.insns[37].secondary_offset != TYPE_FLOAT ||
+        mir.insns[37].src1 != mir.insns[35].dst ||
+        mir.insns[37].src2 != mir.insns[36].dst ||
+        !mir_float_normalization_type(mir.insns[37].type) ||
+        !mir_machine_same_location(&mir.insns[39], value) ||
+        mir.insns[39].src1 != mir.insns[37].dst ||
+        mir.insns[39].memory_size != 4 ||
+        mir.insns[41].src1 != mir.insns[40].dst ||
+        mir.insns[41].memory_size != 2 ||
+        !mir_match_final_call_integer_type(mir.insns[41].type, 2) ||
+        !mir_machine_constant_equals(mir.insns[42].dst, 1) ||
+        mir.insns[43].immediate != '+' ||
+        mir.insns[43].src1 != mir.insns[41].dst ||
+        mir.insns[43].src2 != mir.insns[42].dst ||
+        !mir_match_final_call_integer_type(mir.insns[43].type, 2) ||
+        mir.insns[44].src1 != mir.insns[40].dst ||
+        mir.insns[44].src2 != mir.insns[43].dst ||
+        mir.insns[44].memory_size != 2 ||
+        mir.insns[47].label != mir.insns[28].label)
+        return 0;
+
+    if (((unsigned long)mir.insns[53].immediate & 0xffffffffUL) !=
+            1056964608UL ||
+        !mir_float_normalization_type(mir.insns[53].type) ||
+        mir.insns[54].immediate != '<' ||
+        mir.insns[54].secondary_offset != TYPE_FLOAT ||
+        mir.insns[54].src1 != mir.insns[52].dst ||
+        mir.insns[54].src2 != mir.insns[53].dst ||
+        !mir_match_final_call_integer_type(mir.insns[54].type, 2) ||
+        mir.insns[55].src1 != mir.insns[54].dst ||
+        mir.insns[55].label != mir.insns[69].label ||
+        ((unsigned long)mir.insns[57].immediate & 0xffffffffUL) !=
+            1073741824UL ||
+        !mir_float_normalization_type(mir.insns[57].type) ||
+        mir.insns[58].immediate != '*' ||
+        mir.insns[58].secondary_offset != TYPE_FLOAT ||
+        mir.insns[58].src1 != mir.insns[56].dst ||
+        mir.insns[58].src2 != mir.insns[57].dst ||
+        !mir_float_normalization_type(mir.insns[58].type) ||
+        !mir_machine_same_location(&mir.insns[60], value) ||
+        mir.insns[60].src1 != mir.insns[58].dst ||
+        mir.insns[60].memory_size != 4 ||
+        mir.insns[62].src1 != mir.insns[61].dst ||
+        mir.insns[62].memory_size != 2 ||
+        !mir_match_final_call_integer_type(mir.insns[62].type, 2) ||
+        !mir_machine_constant_equals(mir.insns[63].dst, 1) ||
+        mir.insns[64].immediate != '-' ||
+        mir.insns[64].src1 != mir.insns[62].dst ||
+        mir.insns[64].src2 != mir.insns[63].dst ||
+        !mir_match_final_call_integer_type(mir.insns[64].type, 2) ||
+        mir.insns[65].src1 != mir.insns[61].dst ||
+        mir.insns[65].src2 != mir.insns[64].dst ||
+        mir.insns[65].memory_size != 2 ||
+        mir.insns[68].label != mir.insns[49].label ||
+        mir.insns[71].src1 != mir.insns[70].dst)
+        return 0;
+
+    plan->function = find_global(call->name);
+    if (plan->function == NULL || !plan->function->is_defined ||
+        plan->function->is_funcptr || plan->function->is_noreturn ||
+        !plan->function->has_proto ||
+        plan->function->proto_nargs != 2 ||
+        plan->function->proto_variadic ||
+        !mir_float_normalization_type(plan->function->proto_types[0]) ||
+        type_ptr_depth(plan->function->proto_types[1]) != 1 ||
+        (plan->function->proto_types[1] & 15) != TYPE_INT ||
+        strcmp(call->name, mir.name) ||
+        call->memory_flags != 0 ||
+        !mir_float_normalization_type(call->type) ||
+        !mir_match_math_symbol_target(call, plan->function))
+        return 0;
+    plan->value_frame_offset = value_offset;
+    plan->exponent_frame_offset = exponent_offset;
+    return 1;
+}
+
+static void mir_emit_float_normalization_frame_word(
+    FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+            offset, offset + 1);
+}
+
+static void mir_emit_float_normalization_frame_float(
+    FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+            offset, offset + 1, offset + 2, offset + 3);
+}
+
+static void mir_emit_float_normalization_store_frame_float(
+    FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld (ix%+d),l\n\tld (ix%+d),h\n"
+            "\tld (ix%+d),e\n\tld (ix%+d),d\n",
+            offset, offset + 1, offset + 2, offset + 3);
+}
+
+static void mir_emit_float_normalization_schedule(
+    FILE *out, const struct MirFloatNormalizationSchedule *plan)
+{
+    int nonzero = new_label();
+    int nonnegative = new_label();
+    int upper_loop = new_label();
+    int upper_done = new_label();
+    int lower_loop = new_label();
+    int lower_done = new_label();
+    int finish = new_label();
+
+    /* The two direct backedges replace the source CFG's carry/borrow joins.
+     * Reserve their label IDs so later functions keep legacy numbering. */
+    (void)new_label();
+    (void)new_label();
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_emit_float_normalization_frame_word(
+        out, plan->exponent_frame_offset);
+    fputs("\txor a\n\tld (hl),a\n\tinc hl\n\tld (hl),a\n", out);
+
+    mir_emit_float_normalization_frame_float(
+        out, plan->value_frame_offset);
+    fputs("\tpush de\n\tpush hl\n\tld hl,0\n\tld de,0\n", out);
+    mir_emit_runtime_call(out, "__feqf");
+    fputs("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n", out);
+    fprintf(out,
+            "\tjr z,L%d\n\tld hl,0\n\tld de,0\n\tjp L%d\nL%d:\n",
+            nonzero, finish, nonzero);
+
+    mir_emit_float_normalization_frame_float(
+        out, plan->value_frame_offset);
+    fputs("\tpush de\n\tpush hl\n\tld hl,0\n\tld de,0\n", out);
+    mir_emit_runtime_call(out, "__fgtf");
+    fputs("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjr z,L%d\n", nonnegative);
+    mir_emit_float_normalization_frame_word(
+        out, plan->exponent_frame_offset);
+    fputs("\tpush hl\n", out);
+    mir_emit_float_normalization_frame_float(
+        out, plan->value_frame_offset);
+    fputs("\tld a,d\n\txor 128\n\tld d,a\n"
+          "\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tld a,d\n\txor 128\n\tld d,a\n", out);
+    fprintf(out, "\tjp L%d\n", finish);
+
+    fprintf(out, "L%d:\nL%d:\n", nonnegative, upper_loop);
+    mir_emit_float_normalization_frame_float(
+        out, plan->value_frame_offset);
+    fputs("\tpush de\n\tpush hl\n\tld hl,0\n\tld de,16256\n", out);
+    mir_emit_runtime_call(out, "__flef");
+    fputs("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjr z,L%d\n", upper_done);
+    mir_emit_float_normalization_frame_float(
+        out, plan->value_frame_offset);
+    fputs("\tpush de\n\tpush hl\n\tld hl,0\n\tld de,16128\n", out);
+    mir_emit_runtime_call(out, "__fmf");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_emit_float_normalization_store_frame_float(
+        out, plan->value_frame_offset);
+    mir_emit_float_normalization_frame_word(
+        out, plan->exponent_frame_offset);
+    fputs("\tinc (hl)\n", out);
+    fprintf(out,
+            "\tjr nz,L%d\n\tinc hl\n\tinc (hl)\n\tjr L%d\n"
+            "L%d:\nL%d:\n",
+            upper_loop, upper_loop,
+            upper_done, lower_loop);
+
+    mir_emit_float_normalization_frame_float(
+        out, plan->value_frame_offset);
+    fputs("\tpush de\n\tpush hl\n\tld hl,0\n\tld de,16128\n", out);
+    mir_emit_runtime_call(out, "__fgtf");
+    fputs("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjr z,L%d\n", lower_done);
+    mir_emit_float_normalization_frame_float(
+        out, plan->value_frame_offset);
+    fputs("\tpush de\n\tpush hl\n\tld hl,0\n\tld de,16384\n", out);
+    mir_emit_runtime_call(out, "__fmf");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_emit_float_normalization_store_frame_float(
+        out, plan->value_frame_offset);
+    mir_emit_float_normalization_frame_word(
+        out, plan->exponent_frame_offset);
+    fputs("\tld a,(hl)\n\tdec (hl)\n\tor a\n", out);
+    fprintf(out,
+            "\tjr nz,L%d\n\tinc hl\n\tdec (hl)\n\tjr L%d\nL%d:\n",
+            lower_loop, lower_loop, lower_done);
+    mir_emit_float_normalization_frame_float(
+        out, plan->value_frame_offset);
+    fprintf(out,
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            finish);
+}
+
 int mir_try_emit_float_reports(FILE *out)
 {
+    struct MirFloatNormalizationSchedule float_normalization_schedule;
     struct MirRawConversionCheckSchedule raw_conversion_check_schedule;
     struct MirFloatReportSchedule float_report_schedule;
 
+    if (mir_match_float_normalization_schedule(
+            &float_normalization_schedule)) {
+        mir_emit_float_normalization_schedule(
+            out, &float_normalization_schedule);
+        if (mir_stream_size(out) <
+            mir_stream_size(mir.capture_stream))
+            return 1;
+        return mir_machine_reject(
+            "float-normalization-schedule", "text-cost");
+    }
     if (mir_match_raw_conversion_check_schedule(
             &raw_conversion_check_schedule)) {
         mir_emit_raw_conversion_check_schedule(
