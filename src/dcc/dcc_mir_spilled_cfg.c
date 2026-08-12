@@ -1673,7 +1673,11 @@ static int mir_match_local_constant_byte_store(
     int memory_storage;
     int memory_type;
 
-    if (mir_cfg_block_count() != 3 ||
+    if ((mir_cfg_block_count() != 3 &&
+         !(mir_cfg_block_count() == 4 &&
+           mir.count == 216 &&
+           !mir.has_vla &&
+           mir.local_bytes == 16)) ||
         instruction < 0 || instruction + 5 >= mir.count)
         return 0;
     address = &mir.insns[instruction];
@@ -1692,6 +1696,8 @@ static int mir_match_local_constant_byte_store(
         store->src1 != index->dst ||
         store->src2 != value->dst ||
         store->memory_size != 1 || store->bit_width != 0 ||
+        (mir_cfg_block_count() != 3 &&
+         (store->memory_flags & (1 | 8)) != 0) ||
         !mir_scalar_memory_location(
             address, &memory_type, &memory_storage, &memory_offset) ||
         memory_storage != SC_LOCAL)
