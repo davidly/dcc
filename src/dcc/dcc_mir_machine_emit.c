@@ -832,6 +832,14 @@ struct MirStringPutcharLoop {
     int string_id;
 };
 
+struct MirFixedCallReductionReport {
+    struct Sym *function;
+    struct Sym *print_function;
+    int last_index;
+    int report_values[2];
+    int string_id;
+};
+
 struct MirAsciiUpper {
     int parameter_stack_offset;
     int width;
@@ -11918,6 +11926,102 @@ static int mir_match_conditional_string_report(
     plan->format_string_id = (int)mir.insns[3].immediate;
     plan->true_string_id = (int)mir.insns[9].immediate;
     plan->false_string_id = (int)mir.insns[13].immediate;
+    return 1;
+}
+
+static int mir_match_fixed_call_reduction_report(
+    struct MirFixedCallReductionReport *plan)
+{
+    static const int expected_opcodes[46] = {
+        MIR_LABEL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST,
+        MIR_STORE, MIR_LABEL, MIR_PHI, MIR_PHI, MIR_NOP, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP,
+        MIR_UNARY, MIR_ARG, MIR_CALL, MIR_BINARY, MIR_NOP, MIR_STORE,
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP,
+        MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_ARG,
+        MIR_NOP, MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN
+    };
+    const struct MirInsn *sum_phi = &mir.insns[8];
+    const struct MirInsn *index_phi = &mir.insns[9];
+    const struct MirInsn *loop_call = &mir.insns[19];
+    const struct MirInsn *first_report_call = &mir.insns[35];
+    const struct MirInsn *second_report_call = &mir.insns[39];
+    const struct MirInsn *print_call = &mir.insns[43];
+    int call_argument;
+    int print_arguments[4];
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 46 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || type_size(mir.return_type) != 2)
+        return mir_machine_reject("fixed-call-reduction-report", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "fixed-call-reduction-report", "opcode");
+    if (!mir_machine_constant_equals(mir.insns[1].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[3]) ||
+        !mir_machine_constant_equals(mir.insns[5].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[6]) ||
+        sum_phi->src1 != mir.insns[1].dst ||
+        sum_phi->src2 != mir.insns[20].dst ||
+        sum_phi->phi_pred1 != mir.insns[0].label ||
+        sum_phi->phi_pred2 != mir.insns[23].label ||
+        index_phi->src1 != mir.insns[5].dst ||
+        index_phi->src2 != mir.insns[26].dst ||
+        index_phi->phi_pred1 != mir.insns[0].label ||
+        index_phi->phi_pred2 != mir.insns[23].label ||
+        mir.insns[13].immediate != TOK_LE ||
+        mir.insns[13].src1 != mir.insns[12].dst ||
+        mir.insns[13].src2 != mir.insns[11].dst ||
+        mir.insns[14].src1 != mir.insns[13].dst ||
+        mir.insns[14].label != mir.insns[29].label)
+        return mir_machine_reject("fixed-call-reduction-report", "loop");
+    plan->last_index = (int)mir.insns[11].immediate;
+    if (plan->last_index < 0 || plan->last_index >= 255 ||
+        mir.insns[17].src1 != index_phi->dst ||
+        !mir_machine_single_call_argument(loop_call, &call_argument) ||
+        call_argument != mir.insns[17].dst ||
+        mir.insns[20].immediate != '+' ||
+        mir.insns[20].src1 != sum_phi->dst ||
+        mir.insns[20].src2 != loop_call->dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[22]) ||
+        !mir_machine_constant_equals(mir.insns[25].dst, 1) ||
+        mir.insns[26].immediate != '+' ||
+        mir.insns[26].src1 != index_phi->dst ||
+        mir.insns[26].src2 != mir.insns[25].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[27]) ||
+        mir.insns[28].label != mir.insns[7].label)
+        return mir_machine_reject("fixed-call-reduction-report", "body");
+    plan->function = find_global(loop_call->name);
+    if (plan->function == NULL || !plan->function->is_defined ||
+        plan->function->is_funcptr ||
+        strcmp(loop_call->name, first_report_call->name) ||
+        strcmp(loop_call->name, second_report_call->name) ||
+        !mir_machine_single_call_argument(
+            first_report_call, &call_argument) ||
+        call_argument != mir.insns[33].dst ||
+        !mir_machine_single_call_argument(
+            second_report_call, &call_argument) ||
+        call_argument != mir.insns[37].dst)
+        return mir_machine_reject("fixed-call-reduction-report", "calls");
+    plan->report_values[0] = (int)mir.insns[33].immediate;
+    plan->report_values[1] = (int)mir.insns[37].immediate;
+    if (!mir_machine_four_call_arguments(print_call, print_arguments) ||
+        print_arguments[0] != mir.insns[30].dst ||
+        print_arguments[1] != first_report_call->dst ||
+        print_arguments[2] != second_report_call->dst ||
+        print_arguments[3] != sum_phi->dst ||
+        strcmp(print_call->name, "printf") ||
+        (print_call->memory_flags & MIR_CALL_FLAG_VARIADIC) == 0 ||
+        !mir_machine_constant_equals(mir.insns[44].dst, 0) ||
+        mir.insns[45].src1 != mir.insns[44].dst)
+        return mir_machine_reject("fixed-call-reduction-report", "report");
+    plan->print_function = find_global(print_call->name);
+    plan->string_id = (int)mir.insns[30].immediate;
+    if (plan->print_function == NULL || plan->print_function->is_defined)
+        return mir_machine_reject("fixed-call-reduction-report", "print");
     return 1;
 }
 
@@ -23170,6 +23274,38 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_fixed_call_reduction_report(
+    FILE *out, const struct MirFixedCallReductionReport *plan)
+{
+    int loop = new_label();
+
+    fprintf(out,
+            ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n"
+            "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n\tdec sp\n",
+            mir.name);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tld iy,0\n\tld (ix-1),0\n", out);
+    fprintf(out, "L%d:\n", loop);
+    fputs("\tld l,(ix-1)\n\tld h,0\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n\tpush iy\n\tpop de\n\tadd hl,de\n"
+          "\tpush hl\n\tpop iy\n\tinc (ix-1)\n\tld a,(ix-1)\n", out);
+    fprintf(out, "\tcp %d\n\tjp c,L%d\n\tpush iy\n",
+            plan->last_index + 1, loop);
+    fprintf(out, "\tld hl,%d\n\tpush hl\n", plan->report_values[1]);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,%d\n\tpush hl\n", plan->report_values[0]);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tld hl,0\n\tld sp,ix\n\tpop ix\n\tpop iy\n"
+          ";@dcc.reg free=iy\n\tret\n", out);
+}
+
 static void mir_emit_string_putchar_loop(
     FILE *out, const struct MirStringPutcharLoop *plan)
 {
@@ -24399,6 +24535,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirFixedCallReductionReport fixed_call_reduction_report;
     struct MirStringPutcharLoop string_putchar_loop;
     struct MirFixedAllocationRunner fixed_allocation_runner;
     struct MirFloatModuloNormalize float_modulo_normalize;
@@ -25037,6 +25174,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_fixed_call_reduction_report(
+            &fixed_call_reduction_report)) {
+        mir_emit_fixed_call_reduction_report(
+            out, &fixed_call_reduction_report);
         return 1;
     }
     if (mir_match_string_putchar_loop(&string_putchar_loop)) {
