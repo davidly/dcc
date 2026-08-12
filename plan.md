@@ -6,11 +6,40 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Base HEAD for this batch: `d7727f7`
-  (`dcc MIR: schedule buffered declaration parsing`).
-- Current candidate coverage: **2111/2185 (96.61%)**.
-- Remaining fallback population: **74 `final-cost-policy`**, all selected by
+- Base HEAD for this batch: the clean branch tip before the uncommitted
+  softmax scheduler work.
+- Current candidate coverage: **2112/2185 (96.66%)**.
+- Remaining fallback population: **73 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- One strict name-free softmax scheduler now admits `attnc11.softmax`. The
+  matcher validates the complete 132-instruction, nine-block graph: the
+  pointer/unsigned-byte parameters and stack positions, the initial
+  three-argument maximum scan and its distinct dummy output, the first
+  bounded traversal, signed wrapped maximum difference and negative clamp,
+  three-bit shift and 255 cap, ordered lookup/store/reload accumulation, the
+  second bounded traversal, signed long Q8 numerator construction and
+  division, the one-argument clamp call, and both pointer/index increments.
+  Emission preserves every call and source evaluation point, including table
+  loads after the current item read and stores before accumulation, so a
+  vector overlapping the lookup table remains ordered safely. Each traversal
+  keeps its cursor in DE and its unsigned remaining count in B; the complete
+  frame is six bytes for the distinct dummy, maximum, and sum words. No IY is
+  used. Non-stack selected/captured metrics are 1,290/2,323 bytes and 131/208
+  instructions; stack-check metrics are 1,319/2,352 bytes and 132/209
+  instructions. `attnc11` passes full peep/nopeep. Against forcing only this
+  function back, cycles remain exactly 339,250,960 peep / 342,162,991
+  nopeep, while linked sizes improve from 23,936 to 23,808 bytes peep and
+  from 25,728 to 25,600 bytes nopeep (-128 each). A separately named harness
+  selects at 1,278/2,304 bytes and 131/208 instructions and produces
+  byte-identical program output in selected peep/nopeep and forced-fallback
+  peep/nopeep modes for ordinary, zero-length, one-element, lookup-cap,
+  signed-overflow, lookup-table alias, and 255-element cases. The harness
+  improves from 2,574,317 to 2,378,680 peep cycles (-7.60%) and from
+  3,083,359 to 2,808,535 nopeep cycles (-8.91%); linked sizes fall
+  4,736 to 4,608 bytes and 5,120 to 4,864 bytes. No app/function name, hash,
+  performance-baseline change, or IY allocation participates in selection.
+  The regression-gated stack-check census advances from 2111/2185 to
+  2112/2185 with exactly this function and no removal.
 - One strict name-free matrix-product scheduler now admits
   `attnc11.transposed_matrix_vector_multiply` and
   `attnc11.add_outer_product`. The shared matcher validates each complete

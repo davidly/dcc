@@ -2078,6 +2078,15 @@ struct MirMatrixProductSchedule {
     int columns_stack_offset;
 };
 
+struct MirSoftmaxSchedule {
+    struct Sym *maximum_function;
+    struct Sym *clamp_function;
+    struct Sym *table;
+    int table_offset;
+    int vector_stack_offset;
+    int length_stack_offset;
+};
+
 struct MirSymbolFindSchedule {
     struct Sym *symbols_root;
     struct Sym *count_root;
@@ -29753,6 +29762,360 @@ static int mir_match_matrix_product_schedule(
                plan, MIR_MATRIX_PRODUCT_OUTER);
 }
 
+static int mir_match_softmax_call(
+    const struct MirInsn *call, int argument_count,
+    struct Sym **function_out)
+{
+    struct Sym *function;
+
+    if (call == NULL || call->opcode != MIR_CALL ||
+        !mir_match_matrix_product_word_type(call->type) ||
+        (call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0)
+        return 0;
+    function = find_global(call->name);
+    if (function == NULL || !function->is_defined ||
+        function->storage != SC_FUNC || function->is_funcptr ||
+        function->is_noreturn || !function->has_proto ||
+        function->proto_variadic ||
+        function->proto_nargs != argument_count ||
+        (call->base_name[0] != 0 &&
+         strcmp(call->base_name,
+                asm_name_for(sym_asm_name(function)))))
+        return 0;
+    *function_out = function;
+    return 1;
+}
+
+static int mir_match_softmax_schedule(
+    struct MirSoftmaxSchedule *plan)
+{
+    static const int expected_opcodes[132] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_LOAD, MIR_ARG, MIR_NOP,
+        MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_STORE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST,
+        MIR_STORE, MIR_LOAD, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_LOAD,
+        MIR_NOP, MIR_LOAD, MIR_NOP, MIR_PHI, MIR_PHI, MIR_NOP,
+        MIR_NOP, MIR_UNARY, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_NOP, MIR_LOAD, MIR_LOAD_INDIRECT, MIR_BINARY, MIR_NOP,
+        MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE,
+        MIR_LABEL, MIR_LOAD, MIR_ADDRESS, MIR_LOAD, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_STORE_INDIRECT, MIR_NOP, MIR_LOAD,
+        MIR_LOAD_INDIRECT, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_STORE, MIR_LOAD, MIR_NOP, MIR_STORE, MIR_LABEL,
+        MIR_LOAD, MIR_NOP, MIR_LOAD, MIR_NOP, MIR_NOP, MIR_PHI,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_UNARY, MIR_UNARY,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD, MIR_LOAD,
+        MIR_LOAD_INDIRECT, MIR_STORE, MIR_LOAD, MIR_UNARY, MIR_CONST,
+        MIR_BINARY, MIR_NOP, MIR_UNARY, MIR_BINARY, MIR_ARG, MIR_CALL,
+        MIR_STORE_INDIRECT, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP,
+        MIR_LABEL
+    };
+    const struct MirInsn *sum_phi = &mir.insns[27];
+    const struct MirInsn *first_index_phi = &mir.insns[28];
+    const struct MirInsn *second_index_phi = &mir.insns[98];
+    int maximum_arguments[3];
+    int clamp_argument;
+    int dummy_type;
+    int dummy_storage;
+    int dummy_offset;
+    long table_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 132 || mir_cfg_block_count() != 9 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID ||
+        mir.aggregate_temp_bytes != 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "softmax-schedule", "opcodes");
+
+    if (!mir_match_matrix_product_parameter(
+            1, 2, 1, &plan->vector_stack_offset) ||
+        !mir_match_matrix_product_parameter(
+            2, 4, 0, &plan->length_stack_offset) ||
+        !mir_machine_same_location(
+            &mir.insns[1], &mir.insns[3]) ||
+        !mir_machine_three_call_arguments(
+            &mir.insns[10], maximum_arguments) ||
+        maximum_arguments[0] != mir.insns[3].dst ||
+        maximum_arguments[1] != mir.insns[2].dst ||
+        maximum_arguments[2] != mir.insns[7].dst ||
+        !mir_scalar_memory_location(
+            &mir.insns[7], &dummy_type, &dummy_storage,
+            &dummy_offset) ||
+        dummy_storage != SC_LOCAL || dummy_offset >= 0 ||
+        !mir_match_matrix_product_word_type(dummy_type) ||
+        type_ptr_depth(mir.insns[7].type) != 1 ||
+        type_size(mir.insns[7].type) != 2 ||
+        !mir_match_softmax_call(
+            &mir.insns[10], 3, &plan->maximum_function) ||
+        !mir_match_matrix_product_pointer_type(
+            plan->maximum_function->proto_types[0]) ||
+        !mir_match_matrix_product_count_type(
+            plan->maximum_function->proto_types[1]) ||
+        !mir_match_matrix_product_pointer_type(
+            plan->maximum_function->proto_types[2]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[12]) ||
+        mir.insns[12].src1 != mir.insns[10].dst ||
+        !mir_machine_constant_equals(mir.insns[13].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[15]) ||
+        mir.insns[15].src1 != mir.insns[13].dst ||
+        mir_machine_same_location(
+            &mir.insns[7], &mir.insns[12]) ||
+        mir_machine_same_location(
+            &mir.insns[7], &mir.insns[15]) ||
+        mir_machine_same_location(
+            &mir.insns[12], &mir.insns[15]))
+        return mir_machine_reject(
+            "softmax-schedule", "entry");
+
+    if (!mir_machine_constant_equals(mir.insns[17].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[18]) ||
+        mir.insns[18].src1 != mir.insns[17].dst ||
+        !mir_machine_same_location(
+            &mir.insns[1], &mir.insns[19]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[21]) ||
+        mir.insns[21].src1 != mir.insns[19].dst ||
+        sum_phi->src1 != mir.insns[13].dst ||
+        sum_phi->src2 != mir.insns[71].dst ||
+        sum_phi->phi_pred1 != mir.insns[0].label ||
+        sum_phi->phi_pred2 != mir.insns[75].label ||
+        sum_phi->object != mir.insns[15].object ||
+        !mir_match_matrix_product_word_type(sum_phi->type) ||
+        first_index_phi->src1 != mir.insns[17].dst ||
+        first_index_phi->src2 != mir.insns[78].dst ||
+        first_index_phi->phi_pred1 != mir.insns[0].label ||
+        first_index_phi->phi_pred2 != mir.insns[75].label ||
+        first_index_phi->object != mir.insns[18].object ||
+        !mir_match_matrix_product_count_type(first_index_phi->type) ||
+        mir.insns[31].opcode != MIR_UNARY ||
+        mir.insns[31].immediate != 0 ||
+        mir.insns[31].src1 != first_index_phi->dst ||
+        !mir_match_matrix_product_word_type(mir.insns[31].type) ||
+        mir.insns[32].opcode != MIR_UNARY ||
+        mir.insns[32].immediate != 0 ||
+        mir.insns[32].src1 != mir.insns[2].dst ||
+        !mir_match_matrix_product_word_type(mir.insns[32].type) ||
+        mir.insns[33].immediate != '<' ||
+        mir.insns[33].src1 != mir.insns[31].dst ||
+        mir.insns[33].src2 != mir.insns[32].dst ||
+        !mir_match_matrix_product_word_type(
+            mir.insns[33].secondary_offset) ||
+        mir.insns[34].src1 != mir.insns[33].dst ||
+        mir.insns[34].label != mir.insns[85].label)
+        return mir_machine_reject(
+            "softmax-schedule", "first-loop");
+
+    if (!mir_machine_same_location(
+            &mir.insns[21], &mir.insns[36]) ||
+        mir.insns[37].src1 != mir.insns[36].dst ||
+        mir.insns[37].memory_size != 2 ||
+        (mir.insns[37].memory_flags & (1 | 8)) != 0 ||
+        !mir_match_matrix_product_word_type(mir.insns[37].type) ||
+        mir.insns[38].immediate != '-' ||
+        mir.insns[38].src1 != mir.insns[10].dst ||
+        mir.insns[38].src2 != mir.insns[37].dst ||
+        !mir_match_matrix_product_word_type(mir.insns[38].type) ||
+        !mir_machine_unobservable_local_store(&mir.insns[40]) ||
+        mir.insns[40].src1 != mir.insns[38].dst ||
+        !mir_machine_constant_equals(mir.insns[42].dst, 0) ||
+        mir.insns[43].immediate != '<' ||
+        mir.insns[43].src1 != mir.insns[38].dst ||
+        mir.insns[43].src2 != mir.insns[42].dst ||
+        mir.insns[44].src1 != mir.insns[43].dst ||
+        mir.insns[44].label != mir.insns[48].label ||
+        !mir_machine_constant_equals(mir.insns[45].dst, 0) ||
+        !mir_machine_same_location(
+            &mir.insns[40], &mir.insns[47]) ||
+        mir.insns[47].src1 != mir.insns[45].dst ||
+        !mir_machine_same_location(
+            &mir.insns[40], &mir.insns[49]) ||
+        !mir_machine_constant_equals(mir.insns[50].dst, 3) ||
+        mir.insns[51].immediate != TOK_SHR ||
+        mir.insns[51].src1 != mir.insns[49].dst ||
+        mir.insns[51].src2 != mir.insns[50].dst ||
+        !mir_match_matrix_product_word_type(mir.insns[51].type) ||
+        !mir_machine_unobservable_local_store(&mir.insns[53]) ||
+        mir.insns[53].src1 != mir.insns[51].dst ||
+        !mir_machine_constant_equals(mir.insns[55].dst, 255) ||
+        mir.insns[56].immediate != '>' ||
+        mir.insns[56].src1 != mir.insns[51].dst ||
+        mir.insns[56].src2 != mir.insns[55].dst ||
+        mir.insns[57].src1 != mir.insns[56].dst ||
+        mir.insns[57].label != mir.insns[61].label ||
+        !mir_machine_constant_equals(mir.insns[58].dst, 255) ||
+        !mir_machine_same_location(
+            &mir.insns[53], &mir.insns[60]) ||
+        mir.insns[60].src1 != mir.insns[58].dst)
+        return mir_machine_reject(
+            "softmax-schedule", "exponential-index");
+
+    if (!mir_machine_same_location(
+            &mir.insns[21], &mir.insns[62]) ||
+        !mir_machine_global_address_offset(
+            mir.insns[63].dst, &plan->table,
+            &table_offset, 0) ||
+        table_offset < -32768 || table_offset > 32767 ||
+        plan->table == NULL || plan->table->storage == SC_FUNC ||
+        plan->table->is_volatile ||
+        !mir_machine_same_location(
+            &mir.insns[53], &mir.insns[64]) ||
+        mir.insns[65].src1 != mir.insns[63].dst ||
+        mir.insns[65].src2 != mir.insns[64].dst ||
+        mir.insns[65].immediate != 2 ||
+        mir.insns[65].memory_size != 2 ||
+        mir.insns[66].src1 != mir.insns[65].dst ||
+        mir.insns[66].memory_size != 2 ||
+        (mir.insns[66].memory_flags & (1 | 8)) != 0 ||
+        !mir_match_matrix_product_word_type(mir.insns[66].type) ||
+        mir.insns[67].src1 != mir.insns[62].dst ||
+        mir.insns[67].src2 != mir.insns[66].dst ||
+        mir.insns[67].memory_size != 2 ||
+        (mir.insns[67].memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_same_location(
+            &mir.insns[21], &mir.insns[69]) ||
+        mir.insns[70].src1 != mir.insns[69].dst ||
+        mir.insns[70].memory_size != 2 ||
+        (mir.insns[70].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[71].immediate != '+' ||
+        mir.insns[71].src1 != sum_phi->dst ||
+        mir.insns[71].src2 != mir.insns[70].dst ||
+        !mir_match_matrix_product_word_type(mir.insns[71].type) ||
+        !mir_machine_same_location(
+            &mir.insns[15], &mir.insns[73]) ||
+        mir.insns[73].src1 != mir.insns[71].dst)
+        return mir_machine_reject(
+            "softmax-schedule", "table-and-sum");
+    plan->table_offset = (int)table_offset;
+
+    if (!mir_machine_constant_equals(mir.insns[77].dst, 1) ||
+        mir.insns[78].immediate != '+' ||
+        mir.insns[78].src1 != first_index_phi->dst ||
+        mir.insns[78].src2 != mir.insns[77].dst ||
+        !mir_match_matrix_product_count_type(mir.insns[78].type) ||
+        !mir_machine_same_location(
+            &mir.insns[18], &mir.insns[79]) ||
+        mir.insns[79].src1 != mir.insns[78].dst ||
+        !mir_machine_same_location(
+            &mir.insns[21], &mir.insns[80]) ||
+        !mir_machine_constant_equals(mir.insns[81].dst, 2) ||
+        mir.insns[82].immediate != '+' ||
+        mir.insns[82].src1 != mir.insns[80].dst ||
+        mir.insns[82].src2 != mir.insns[81].dst ||
+        !mir_match_matrix_product_pointer_type(mir.insns[82].type) ||
+        !mir_machine_same_location(
+            &mir.insns[21], &mir.insns[83]) ||
+        mir.insns[83].src1 != mir.insns[82].dst ||
+        mir.insns[84].label != mir.insns[22].label)
+        return mir_machine_reject(
+            "softmax-schedule", "first-increment");
+
+    if (!mir_machine_constant_equals(mir.insns[87].dst, 0) ||
+        !mir_machine_same_location(
+            &mir.insns[18], &mir.insns[88]) ||
+        mir.insns[88].src1 != mir.insns[87].dst ||
+        !mir_machine_same_location(
+            &mir.insns[1], &mir.insns[89]) ||
+        !mir_machine_same_location(
+            &mir.insns[21], &mir.insns[91]) ||
+        mir.insns[91].src1 != mir.insns[89].dst ||
+        second_index_phi->src1 != mir.insns[87].dst ||
+        second_index_phi->src2 != mir.insns[124].dst ||
+        second_index_phi->phi_pred1 != mir.insns[85].label ||
+        second_index_phi->phi_pred2 != mir.insns[121].label ||
+        second_index_phi->object != mir.insns[18].object ||
+        !mir_match_matrix_product_count_type(second_index_phi->type) ||
+        mir.insns[103].immediate != 0 ||
+        mir.insns[103].src1 != second_index_phi->dst ||
+        !mir_match_matrix_product_word_type(mir.insns[103].type) ||
+        mir.insns[104].immediate != 0 ||
+        mir.insns[104].src1 != mir.insns[2].dst ||
+        !mir_match_matrix_product_word_type(mir.insns[104].type) ||
+        mir.insns[105].immediate != '<' ||
+        mir.insns[105].src1 != mir.insns[103].dst ||
+        mir.insns[105].src2 != mir.insns[104].dst ||
+        mir.insns[106].src1 != mir.insns[105].dst ||
+        mir.insns[106].label != mir.insns[131].label)
+        return mir_machine_reject(
+            "softmax-schedule", "second-loop");
+
+    if (!mir_machine_same_location(
+            &mir.insns[21], &mir.insns[107]) ||
+        !mir_machine_same_location(
+            &mir.insns[21], &mir.insns[108]) ||
+        mir.insns[109].src1 != mir.insns[108].dst ||
+        mir.insns[109].memory_size != 2 ||
+        (mir.insns[109].memory_flags & (1 | 8)) != 0 ||
+        !mir_match_matrix_product_word_type(mir.insns[109].type) ||
+        !mir_machine_unobservable_local_store(&mir.insns[110]) ||
+        mir.insns[110].src1 != mir.insns[109].dst ||
+        !mir_machine_same_location(
+            &mir.insns[110], &mir.insns[111]) ||
+        mir.insns[112].immediate != 0 ||
+        mir.insns[112].src1 != mir.insns[111].dst ||
+        !mir_match_matrix_product_long_type(mir.insns[112].type) ||
+        !mir_machine_constant_equals(mir.insns[113].dst, 256) ||
+        !mir_match_matrix_product_long_type(mir.insns[113].type) ||
+        mir.insns[114].immediate != '*' ||
+        mir.insns[114].src1 != mir.insns[112].dst ||
+        mir.insns[114].src2 != mir.insns[113].dst ||
+        !mir_match_matrix_product_long_type(mir.insns[114].type) ||
+        mir.insns[116].immediate != 0 ||
+        mir.insns[116].src1 != sum_phi->dst ||
+        !mir_match_matrix_product_long_type(mir.insns[116].type) ||
+        mir.insns[117].immediate != '/' ||
+        mir.insns[117].src1 != mir.insns[114].dst ||
+        mir.insns[117].src2 != mir.insns[116].dst ||
+        !mir_match_matrix_product_long_type(mir.insns[117].type) ||
+        !mir_machine_single_call_argument(
+            &mir.insns[119], &clamp_argument) ||
+        clamp_argument != mir.insns[117].dst ||
+        !mir_match_softmax_call(
+            &mir.insns[119], 1, &plan->clamp_function) ||
+        !mir_match_matrix_product_long_type(
+            plan->clamp_function->proto_types[0]) ||
+        mir.insns[120].src1 != mir.insns[107].dst ||
+        mir.insns[120].src2 != mir.insns[119].dst ||
+        mir.insns[120].memory_size != 2 ||
+        (mir.insns[120].memory_flags & (1 | 8)) != 0)
+        return mir_machine_reject(
+            "softmax-schedule", "normalization");
+
+    if (!mir_machine_constant_equals(mir.insns[123].dst, 1) ||
+        mir.insns[124].immediate != '+' ||
+        mir.insns[124].src1 != second_index_phi->dst ||
+        mir.insns[124].src2 != mir.insns[123].dst ||
+        !mir_match_matrix_product_count_type(mir.insns[124].type) ||
+        !mir_machine_same_location(
+            &mir.insns[18], &mir.insns[125]) ||
+        mir.insns[125].src1 != mir.insns[124].dst ||
+        !mir_machine_same_location(
+            &mir.insns[21], &mir.insns[126]) ||
+        !mir_machine_constant_equals(mir.insns[127].dst, 2) ||
+        mir.insns[128].immediate != '+' ||
+        mir.insns[128].src1 != mir.insns[126].dst ||
+        mir.insns[128].src2 != mir.insns[127].dst ||
+        !mir_match_matrix_product_pointer_type(mir.insns[128].type) ||
+        !mir_machine_same_location(
+            &mir.insns[21], &mir.insns[129]) ||
+        mir.insns[129].src1 != mir.insns[128].dst ||
+        mir.insns[130].label != mir.insns[92].label)
+        return mir_machine_reject(
+            "softmax-schedule", "second-increment");
+    return 1;
+}
+
 static int mir_match_symbol_find_schedule(
     struct MirSymbolFindSchedule *plan)
 {
@@ -47153,6 +47516,93 @@ static void mir_emit_matrix_product_schedule(
             inner, row_done, outer, done);
 }
 
+static void mir_emit_softmax_schedule(
+    FILE *out, const struct MirSoftmaxSchedule *plan)
+{
+    int exponential_loop = new_label();
+    int exponential_ready = new_label();
+    int nonnegative = new_label();
+    int index_ready = new_label();
+    int normalization_loop = new_label();
+    int done = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-6\n\tadd hl,sp\n\tld sp,hl\n",
+          out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+
+    fputs("\tpush ix\n\tpop hl\n\tdec hl\n\tdec hl\n"
+          "\tpush hl\n", out);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,0\n\tpush hl\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n",
+            plan->length_stack_offset + 2,
+            plan->vector_stack_offset + 2,
+            plan->vector_stack_offset + 3);
+    mir_machine_emit_symbol_call(out, plan->maximum_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tld (ix-4),l\n\tld (ix-3),h\n"
+          "\txor a\n\tld (ix-6),a\n\tld (ix-5),a\n",
+          out);
+
+    fprintf(out,
+            "\tld a,(ix%+d)\n\tor a\n\tjp z,L%d\n"
+            "\tld b,a\n\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "L%d:\n\tpush bc\n\tpush de\n"
+            "\tld a,(de)\n\tld c,a\n\tinc de\n"
+            "\tld a,(de)\n\tld b,a\n\tld d,b\n\tld e,c\n"
+            "\tld l,(ix-4)\n\tld h,(ix-3)\n"
+            "\tor a\n\tsbc hl,de\n\tbit 7,h\n"
+            "\tjp z,L%d\n\tld hl,0\n"
+            "L%d:\n\tsra h\n\trr l\n\tsra h\n\trr l\n"
+            "\tsra h\n\trr l\n\tld a,h\n\tor a\n"
+            "\tjp z,L%d\n\tld hl,255\n"
+            "L%d:\n\tadd hl,hl\n",
+            plan->length_stack_offset + 2, exponential_ready,
+            plan->vector_stack_offset + 2,
+            plan->vector_stack_offset + 3,
+            exponential_loop, nonnegative, nonnegative,
+            index_ready, index_ready);
+    mir_machine_emit_global_address_de(
+        out, plan->table, plan->table_offset);
+    fputs("\tadd hl,de\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tpop bc\n\tld a,e\n\tld (bc),a\n\tinc bc\n"
+          "\tld a,d\n\tld (bc),a\n\tinc bc\n"
+          "\tld l,(ix-6)\n\tld h,(ix-5)\n\tadd hl,de\n"
+          "\tld (ix-6),l\n\tld (ix-5),h\n"
+          "\tld d,b\n\tld e,c\n\tpop bc\n\tdjnz ",
+          out);
+    fprintf(out, "L%d\n", exponential_loop);
+
+    fprintf(out,
+            "L%d:\n\tld a,(ix%+d)\n\tor a\n\tjp z,L%d\n"
+            "\tld b,a\n\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "L%d:\n\tpush bc\n\tpush de\n"
+            "\tld a,(de)\n\tld l,a\n\tinc de\n"
+            "\tld a,(de)\n\tld h,a\n\tld a,h\n\trlca\n"
+            "\tsbc a,a\n\tld d,a\n\tld e,a\n"
+            "\tld d,e\n\tld e,h\n\tld h,l\n\tld l,0\n"
+            "\tpush de\n\tpush hl\n"
+            "\tld l,(ix-6)\n\tld h,(ix-5)\n"
+            "\tld a,h\n\trlca\n\tsbc a,a\n"
+            "\tld d,a\n\tld e,a\n",
+            exponential_ready, plan->length_stack_offset + 2, done,
+            plan->vector_stack_offset + 2,
+            plan->vector_stack_offset + 3,
+            normalization_loop);
+    mir_emit_runtime_call(out, "__lds");
+    fputs("\tpop bc\n\tpop bc\n\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->clamp_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop de\n"
+          "\tld a,l\n\tld (de),a\n\tinc de\n"
+          "\tld a,h\n\tld (de),a\n\tinc de\n"
+          "\tpop bc\n\tdjnz ", out);
+    fprintf(out,
+            "L%d\nL%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            normalization_loop, done);
+}
+
 static void mir_emit_buffered_declaration_address(
     FILE *out, const struct MirBufferedDeclarationSchedule *plan)
 {
@@ -47636,6 +48086,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirBufferedDeclarationSchedule
         buffered_declaration_schedule;
     struct MirMatrixProductSchedule matrix_product_schedule;
+    struct MirSoftmaxSchedule softmax_schedule;
     struct MirSymbolFindSchedule symbol_find_schedule;
     struct MirLocalIdentityArrayResult local_identity_array_result;
     struct MirConstantResultSwitch constant_result_switch;
@@ -47823,6 +48274,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &matrix_product_schedule)) {
         mir_emit_matrix_product_schedule(
             out, &matrix_product_schedule);
+        return 1;
+    }
+    if (mir_match_softmax_schedule(&softmax_schedule)) {
+        mir_emit_softmax_schedule(out, &softmax_schedule);
         return 1;
     }
     if (mir_match_symbol_find_schedule(&symbol_find_schedule)) {
