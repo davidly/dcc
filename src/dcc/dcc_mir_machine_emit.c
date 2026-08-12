@@ -2142,6 +2142,10 @@ struct MirBackwardPassSchedule {
     struct Sym *functions[MIR_BACKWARD_FUNCTION_COUNT];
 };
 
+struct MirUnsignedLongSqrtSchedule {
+    int parameter_stack_offset;
+};
+
 struct MirSymbolFindSchedule {
     struct Sym *symbols_root;
     struct Sym *count_root;
@@ -30858,6 +30862,192 @@ static int mir_match_backward_pass_schedule(
     return 1;
 }
 
+static int mir_machine_unsigned_long_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           !type_is_float(type) &&
+           (type & 15) == TYPE_LONG &&
+           (type & TYPE_UNSIGNED) != 0 &&
+           type_size(type) == 4;
+}
+
+static int mir_match_unsigned_long_sqrt_schedule(
+    struct MirUnsignedLongSqrtSchedule *plan)
+{
+    static const int expected_opcodes[72] = {
+        MIR_LABEL, MIR_PARAM, MIR_NOP, MIR_CONST, MIR_STORE,
+        MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP,
+        MIR_RETURN, MIR_LABEL, MIR_LABEL, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_LOAD, MIR_LOAD, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_LOAD, MIR_LOAD,
+        MIR_BINARY, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BINARY,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_BINARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_NOP, MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP,
+        MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_RETURN
+    };
+    static const int constants[] = {3, 7, 11, 15, 35, 52, 61};
+    static const int wide_values[] = {
+        1, 3, 7, 8, 11, 15, 26, 27, 30, 31, 32, 33,
+        35, 36, 37, 43, 52, 53, 61, 62, 70
+    };
+    static const int wide_stores[] = {4, 9, 12, 39, 49, 55, 64};
+    int parameter_type;
+    int parameter_storage;
+    int parameter_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 72 || mir_cfg_block_count() != 8 ||
+        mir.has_vla || mir.aggregate_temp_bytes != 0 ||
+        !mir_machine_unsigned_long_type(mir.return_type))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "unsigned-long-sqrt-schedule", "opcodes");
+    if (!mir_scalar_memory_location(
+            &mir.insns[1], &parameter_type,
+            &parameter_storage, &parameter_offset) ||
+        parameter_storage != SC_PARAM ||
+        !mir_machine_unsigned_long_type(parameter_type) ||
+        !mir_machine_unsigned_long_type(mir.insns[1].type) ||
+        (plan->parameter_stack_offset = parameter_offset - 2) != 2)
+        return mir_machine_reject(
+            "unsigned-long-sqrt-schedule", "parameter-abi");
+    for (instruction = 0;
+         instruction < (int)(sizeof(constants) / sizeof(constants[0]));
+         ++instruction)
+        if (!mir_machine_unsigned_long_type(
+                mir.insns[constants[instruction]].type))
+            return mir_machine_reject(
+                "unsigned-long-sqrt-schedule", "constant-types");
+    if (!mir_machine_constant_equals(mir.insns[3].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[7].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[11].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[15].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[35].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[52].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[61].dst, 1))
+        return mir_machine_reject(
+            "unsigned-long-sqrt-schedule", "constants");
+    for (instruction = 0;
+         instruction <
+             (int)(sizeof(wide_values) / sizeof(wide_values[0]));
+         ++instruction)
+        if (!mir_machine_unsigned_long_type(
+                mir.insns[wide_values[instruction]].type))
+            return mir_machine_reject(
+                "unsigned-long-sqrt-schedule", "wide-types");
+    for (instruction = 0;
+         instruction <
+             (int)(sizeof(wide_stores) / sizeof(wide_stores[0]));
+         ++instruction)
+        if (mir.insns[wide_stores[instruction]].memory_size != 4)
+            return mir_machine_reject(
+                "unsigned-long-sqrt-schedule", "store-widths");
+    if (!mir_machine_unobservable_local_store(&mir.insns[4]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[9]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[12]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[39]) ||
+        mir_machine_same_location(&mir.insns[4], &mir.insns[9]) ||
+        mir_machine_same_location(&mir.insns[4], &mir.insns[12]) ||
+        mir_machine_same_location(&mir.insns[4], &mir.insns[39]) ||
+        mir_machine_same_location(&mir.insns[9], &mir.insns[12]) ||
+        mir_machine_same_location(&mir.insns[9], &mir.insns[39]) ||
+        mir_machine_same_location(&mir.insns[12], &mir.insns[39]) ||
+        !mir_machine_same_location(&mir.insns[4], &mir.insns[26]) ||
+        !mir_machine_same_location(&mir.insns[4], &mir.insns[30]) ||
+        !mir_machine_same_location(&mir.insns[4], &mir.insns[32]) ||
+        !mir_machine_same_location(&mir.insns[4], &mir.insns[55]) ||
+        !mir_machine_same_location(&mir.insns[9], &mir.insns[27]) ||
+        !mir_machine_same_location(&mir.insns[9], &mir.insns[31]) ||
+        !mir_machine_same_location(&mir.insns[9], &mir.insns[64]) ||
+        !mir_machine_same_location(&mir.insns[12], &mir.insns[49]) ||
+        !mir_machine_same_location(&mir.insns[12], &mir.insns[70]))
+        return mir_machine_reject(
+            "unsigned-long-sqrt-schedule", "local-relationships");
+
+    if (mir.insns[4].src1 != mir.insns[3].dst ||
+        mir.insns[8].immediate != '/' ||
+        mir.insns[8].src1 != mir.insns[1].dst ||
+        mir.insns[8].src2 != mir.insns[7].dst ||
+        mir.insns[8].secondary_offset != mir.insns[8].type ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[12].src1 != mir.insns[11].dst ||
+        mir.insns[16].immediate != TOK_LE ||
+        mir.insns[16].src1 != mir.insns[1].dst ||
+        mir.insns[16].src2 != mir.insns[15].dst ||
+        mir.insns[16].secondary_offset != mir.insns[1].type ||
+        type_ptr_depth(mir.insns[16].type) != 0 ||
+        type_size(mir.insns[16].type) != 2 ||
+        mir.insns[17].src1 != mir.insns[16].dst ||
+        mir.insns[17].label != mir.insns[20].label ||
+        mir.insns[19].src1 != mir.insns[1].dst)
+        return mir_machine_reject(
+            "unsigned-long-sqrt-schedule", "initialization");
+
+    if (mir.insns[28].immediate != TOK_LE ||
+        mir.insns[28].src1 != mir.insns[26].dst ||
+        mir.insns[28].src2 != mir.insns[27].dst ||
+        mir.insns[28].secondary_offset != mir.insns[26].type ||
+        type_ptr_depth(mir.insns[28].type) != 0 ||
+        type_size(mir.insns[28].type) != 2 ||
+        mir.insns[29].src1 != mir.insns[28].dst ||
+        mir.insns[29].label != mir.insns[69].label ||
+        mir.insns[33].immediate != '-' ||
+        mir.insns[33].src1 != mir.insns[31].dst ||
+        mir.insns[33].src2 != mir.insns[32].dst ||
+        mir.insns[33].secondary_offset != mir.insns[33].type ||
+        mir.insns[36].immediate != '/' ||
+        mir.insns[36].src1 != mir.insns[33].dst ||
+        mir.insns[36].src2 != mir.insns[35].dst ||
+        mir.insns[36].secondary_offset != mir.insns[36].type ||
+        mir.insns[37].immediate != '+' ||
+        mir.insns[37].src1 != mir.insns[30].dst ||
+        mir.insns[37].src2 != mir.insns[36].dst ||
+        mir.insns[37].secondary_offset != mir.insns[37].type ||
+        mir.insns[39].src1 != mir.insns[37].dst)
+        return mir_machine_reject(
+            "unsigned-long-sqrt-schedule", "midpoint");
+
+    if (mir.insns[43].immediate != '/' ||
+        mir.insns[43].src1 != mir.insns[1].dst ||
+        mir.insns[43].src2 != mir.insns[37].dst ||
+        mir.insns[43].secondary_offset != mir.insns[43].type ||
+        mir.insns[44].immediate != TOK_LE ||
+        mir.insns[44].src1 != mir.insns[37].dst ||
+        mir.insns[44].src2 != mir.insns[43].dst ||
+        mir.insns[44].secondary_offset != mir.insns[37].type ||
+        type_ptr_depth(mir.insns[44].type) != 0 ||
+        type_size(mir.insns[44].type) != 2 ||
+        mir.insns[45].src1 != mir.insns[44].dst ||
+        mir.insns[45].label != mir.insns[58].label ||
+        mir.insns[49].src1 != mir.insns[37].dst ||
+        mir.insns[53].immediate != '+' ||
+        mir.insns[53].src1 != mir.insns[37].dst ||
+        mir.insns[53].src2 != mir.insns[52].dst ||
+        mir.insns[53].secondary_offset != mir.insns[53].type ||
+        mir.insns[55].src1 != mir.insns[53].dst ||
+        mir.insns[57].label != mir.insns[65].label ||
+        mir.insns[62].immediate != '-' ||
+        mir.insns[62].src1 != mir.insns[37].dst ||
+        mir.insns[62].src2 != mir.insns[61].dst ||
+        mir.insns[62].secondary_offset != mir.insns[62].type ||
+        mir.insns[64].src1 != mir.insns[62].dst ||
+        mir.insns[68].label != mir.insns[21].label ||
+        mir.insns[71].src1 != mir.insns[70].dst)
+        return mir_machine_reject(
+            "unsigned-long-sqrt-schedule", "loop-result");
+    return 1;
+}
+
 static int mir_match_symbol_find_schedule(
     struct MirSymbolFindSchedule *plan)
 {
@@ -49050,6 +49240,126 @@ static void mir_emit_backward_pass_schedule(
             done);
 }
 
+static void mir_emit_unsigned_long_sqrt_schedule(
+    FILE *out, const struct MirUnsignedLongSqrtSchedule *plan)
+{
+    int initialize = new_label();
+    int loop_body = new_label();
+    int done = new_label();
+    int early_return = new_label();
+    int epilogue = new_label();
+    int high_decrement_ready = new_label();
+    int loop = new_label();
+    int low_increment_ready = new_label();
+    int subtract_mid = new_label();
+    int use_mid = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-12\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld a,(ix%+d)\n\tor (ix%+d)\n"
+            "\tor (ix%+d)\n\tjp nz,L%d\n"
+            "\tld a,(ix%+d)\n\tcp 2\n\tjp c,L%d\n"
+            "L%d:\n"
+            "\tld hl,1\n\tld de,0\n",
+            plan->parameter_stack_offset + 5,
+            plan->parameter_stack_offset + 4,
+            plan->parameter_stack_offset + 3,
+            initialize,
+            plan->parameter_stack_offset + 2,
+            early_return,
+            initialize);
+    mir_machine_emit_ix_wide_store(out, -4);
+    fputs("\txor a\n"
+          "\tld (ix-12),a\n\tld (ix-11),a\n"
+          "\tld (ix-10),a\n\tld (ix-9),a\n", out);
+    mir_machine_emit_ix_wide_load(
+        out, plan->parameter_stack_offset + 2);
+    fputs("\tsrl d\n\trr e\n\trr h\n\trr l\n", out);
+    mir_machine_emit_ix_wide_store(out, -8);
+
+    fprintf(out,
+            "L%d:\n"
+            "\tld a,(ix-5)\n\tcp (ix-1)\n"
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,(ix-6)\n\tcp (ix-2)\n"
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,(ix-7)\n\tcp (ix-3)\n"
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,(ix-8)\n\tcp (ix-4)\n"
+            "\tjp c,L%d\n"
+            "L%d:\n",
+            loop,
+            done, loop_body,
+            done, loop_body,
+            done, loop_body,
+            done,
+            loop_body);
+
+    mir_machine_emit_ix_wide_load(out, -8);
+    fputs("\tld c,(ix-4)\n\tld b,(ix-3)\n"
+          "\tor a\n\tsbc hl,bc\n\tex de,hl\n"
+          "\tld c,(ix-2)\n\tld b,(ix-1)\n"
+          "\tsbc hl,bc\n\tex de,hl\n"
+          "\tsrl d\n\trr e\n\trr h\n\trr l\n"
+          "\tld c,(ix-4)\n\tld b,(ix-3)\n"
+          "\tadd hl,bc\n\tex de,hl\n"
+          "\tld c,(ix-2)\n\tld b,(ix-1)\n"
+          "\tadc hl,bc\n\tex de,hl\n"
+          "\tpush de\n\tpush hl\n", out);
+
+    mir_machine_emit_ix_wide_load(
+        out, plan->parameter_stack_offset + 2);
+    /* __ldu takes the dividend on the stack and the divisor in DE:HL. */
+    fputs("\tpush de\n\tpush hl\n"
+          "\tld l,(ix-16)\n\tld h,(ix-15)\n"
+          "\tld e,(ix-14)\n\tld d,(ix-13)\n", out);
+    mir_emit_runtime_call(out, "__ldu");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    fprintf(out,
+            "\tld a,d\n\tcp (ix-13)\n"
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,e\n\tcp (ix-14)\n"
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,h\n\tcp (ix-15)\n"
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,l\n\tcp (ix-16)\n"
+            "\tjp c,L%d\n"
+            "L%d:\n\tpop hl\n\tpop de\n",
+            subtract_mid, use_mid,
+            subtract_mid, use_mid,
+            subtract_mid, use_mid,
+            subtract_mid,
+            use_mid);
+    mir_machine_emit_ix_wide_store(out, -12);
+    fputs("\tinc hl\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tinc de\nL%d:\n",
+            low_increment_ready, low_increment_ready);
+    mir_machine_emit_ix_wide_store(out, -4);
+    fprintf(out, "\tjp L%d\n", loop);
+
+    fprintf(out, "L%d:\n\tpop hl\n\tpop de\n"
+                 "\tld a,h\n\tor l\n\tjp nz,L%d\n"
+                 "\tdec de\nL%d:\n\tdec hl\n",
+            subtract_mid,
+            high_decrement_ready, high_decrement_ready);
+    mir_machine_emit_ix_wide_store(out, -8);
+    fprintf(out, "\tjp L%d\n", loop);
+
+    fprintf(out, "L%d:\n", done);
+    mir_machine_emit_ix_wide_load(
+        out, -12);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            epilogue, early_return);
+    mir_machine_emit_ix_wide_load(
+        out, plan->parameter_stack_offset + 2);
+    fprintf(out,
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            epilogue);
+}
+
 static void mir_emit_buffered_declaration_address(
     FILE *out, const struct MirBufferedDeclarationSchedule *plan)
 {
@@ -49535,6 +49845,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirMatrixProductSchedule matrix_product_schedule;
     struct MirSoftmaxSchedule softmax_schedule;
     struct MirBackwardPassSchedule backward_pass_schedule;
+    struct MirUnsignedLongSqrtSchedule unsigned_long_sqrt_schedule;
     struct MirSymbolFindSchedule symbol_find_schedule;
     struct MirLocalIdentityArrayResult local_identity_array_result;
     struct MirConstantResultSwitch constant_result_switch;
@@ -49732,6 +50043,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &backward_pass_schedule)) {
         mir_emit_backward_pass_schedule(
             out, &backward_pass_schedule);
+        return 1;
+    }
+    if (mir_match_unsigned_long_sqrt_schedule(
+            &unsigned_long_sqrt_schedule)) {
+        mir_emit_unsigned_long_sqrt_schedule(
+            out, &unsigned_long_sqrt_schedule);
         return 1;
     }
     if (mir_match_symbol_find_schedule(&symbol_find_schedule)) {

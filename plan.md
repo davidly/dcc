@@ -6,10 +6,42 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Base HEAD for this batch: `2d29faf`.
-- Current candidate coverage: **2114/2185 (96.75%)**.
-- Remaining fallback population: **71 `final-cost-policy`**, all selected by
+- Base HEAD for this batch: `198b876`.
+- Current candidate coverage: **2115/2185 (96.80%)**.
+- Remaining fallback population: **70 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- A strict name-free unsigned-long binary-search scheduler now admits the
+  72-instruction, eight-block `primes.ulsqrt` graph. The matcher validates the
+  single unsigned 32-bit parameter and stack position, all four local
+  identities, `low = 1`, `high = n / 2`, `result = 0`, the `n <= 1` return,
+  the unsigned `low <= high` loop, the exact overflow-safe midpoint
+  `low + ((high - low) / 2)`, the ordered `n / mid` quotient test, both
+  `mid +/- 1` updates, and the final 32-bit return. The emitter uses a compact
+  12-byte IX frame for only low, high, and result; midpoint remains in DE:HL
+  and a transient stack save instead of retaining the fourth source local.
+  Division by two is emitted as a logical 32-bit shift. The variable division
+  preserves the `__ldu` fastcall ABI exactly: the dividend is pushed and the
+  divisor arrives in DE:HL, with midpoint kept below the pushed dividend for
+  the subsequent update. Unsigned comparisons run most-significant byte first,
+  and all midpoint/update arithmetic propagates the original 32-bit
+  carry/borrow behavior. No IY is used. Non-stack selected/captured metrics are
+  1,652/2,596 bytes and 146/243 instructions; stack-check metrics are
+  1,681/2,625 bytes and 147/244 instructions. `primes` passes full peep/nopeep.
+  Against forcing only this function back, cycles improve from 6,292,774 to
+  4,619,721 peep (-1,673,053 / -26.59%) and from 6,347,782 to 4,635,343
+  nopeep (-1,712,439 / -26.98%); linked size falls from 7,168 to 7,040 bytes
+  in both modes (-128 / -1.79%). A separately renamed boundary harness selects
+  with the same stack-check metrics and produces identical selected/fallback
+  program output in peep and nopeep modes for 0, 1, small exact/non-exact
+  squares, the 16-bit transition, signed-boundary bit patterns, and values
+  through `UINT32_MAX`; every checked result is correct, including 65,535 for
+  the maximum input. The harness improves from 4,680,157 to 3,678,926 peep
+  cycles (-1,001,231 / -21.39%) and from 4,705,739 to 3,684,533 nopeep cycles
+  (-1,021,206 / -21.70%); linked sizes fall 3,840 to 3,712 bytes peep and
+  4,096 to 3,840 bytes nopeep. No app/function name, hash, performance
+  baseline, or IY allocation participates in selection. The regression-gated
+  stack-check census advances from 2114/2185 to 2115/2185 with exactly this
+  function and no removal.
 - The strict name-free backward-orchestration scheduler now admits the
   730-instruction, 37-block `attnc11.backward_pass` graph. Its exact structural
   gate validates the full opcode/control-flow sequence, all 101 typed
