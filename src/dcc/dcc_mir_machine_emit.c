@@ -918,6 +918,13 @@ struct MirWideHash33 {
     int multiplier;
 };
 
+struct MirScaledGlobalLoad {
+    struct Sym *root;
+    int base_stack_offset;
+    int scale_stack_offset;
+    int index_stack_offset;
+};
+
 struct MirAsciiUpper {
     int parameter_stack_offset;
     int width;
@@ -12004,6 +12011,87 @@ static int mir_match_conditional_string_report(
     plan->format_string_id = (int)mir.insns[3].immediate;
     plan->true_string_id = (int)mir.insns[9].immediate;
     plan->false_string_id = (int)mir.insns[13].immediate;
+    return 1;
+}
+
+static int mir_match_scaled_global_load(struct MirScaledGlobalLoad *plan)
+{
+    const struct MirInsn *base = &mir.insns[1];
+    const struct MirInsn *scale = &mir.insns[2];
+    const struct MirInsn *index = &mir.insns[3];
+    int type, storage, offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 44 || mir_cfg_block_count() != 2 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        mir.insns[6].opcode != MIR_BINARY ||
+        mir.insns[6].immediate != TOK_EQ ||
+        mir.insns[6].src1 != scale->dst ||
+        !mir_machine_constant_equals(mir.insns[5].dst, 1) ||
+        mir.insns[7].src1 != mir.insns[6].dst ||
+        mir.insns[7].label != mir.insns[18].label)
+        return mir_machine_reject("scaled-global-load", "shape");
+    if (mir.insns[8].opcode != MIR_ADDRESS ||
+        mir.insns[12].immediate != '*' ||
+        mir.insns[12].src1 != index->dst ||
+        mir.insns[12].src2 != scale->dst ||
+        mir.insns[13].immediate != '+' ||
+        mir.insns[13].src1 != base->dst ||
+        mir.insns[13].src2 != mir.insns[12].dst ||
+        mir.insns[14].src1 != mir.insns[8].dst ||
+        mir.insns[14].src2 != mir.insns[13].dst ||
+        mir.insns[14].immediate != 1 ||
+        mir.insns[15].src1 != mir.insns[14].dst ||
+        mir.insns[15].memory_size != 1 ||
+        mir.insns[17].src1 != mir.insns[16].dst)
+        return mir_machine_reject("scaled-global-load", "byte");
+    if (mir.insns[19].opcode != MIR_ADDRESS ||
+        mir.insns[23].immediate != '*' ||
+        mir.insns[23].src1 != index->dst ||
+        mir.insns[23].src2 != scale->dst ||
+        mir.insns[24].immediate != '+' ||
+        mir.insns[24].src1 != base->dst ||
+        mir.insns[24].src2 != mir.insns[23].dst ||
+        mir.insns[25].src1 != mir.insns[19].dst ||
+        mir.insns[25].src2 != mir.insns[24].dst ||
+        mir.insns[26].src1 != mir.insns[25].dst ||
+        mir.insns[26].memory_size != 1 ||
+        mir.insns[31].immediate != '*' ||
+        mir.insns[31].src1 != index->dst ||
+        mir.insns[31].src2 != scale->dst ||
+        mir.insns[32].immediate != '+' ||
+        mir.insns[32].src1 != base->dst ||
+        mir.insns[32].src2 != mir.insns[31].dst ||
+        !mir_machine_constant_equals(mir.insns[33].dst, 1) ||
+        mir.insns[34].immediate != '+' ||
+        mir.insns[35].src1 != mir.insns[27].dst ||
+        mir.insns[35].src2 != mir.insns[34].dst ||
+        mir.insns[36].src1 != mir.insns[35].dst ||
+        mir.insns[36].memory_size != 1 ||
+        !mir_machine_constant_equals(mir.insns[37].dst, 8) ||
+        mir.insns[39].immediate != TOK_SHL ||
+        mir.insns[41].immediate != '|' ||
+        mir.insns[43].src1 != mir.insns[41].dst)
+        return mir_machine_reject("scaled-global-load", "word");
+    plan->root = find_global(mir.insns[8].name);
+    if (plan->root == NULL || plan->root->is_volatile ||
+        strcmp(mir.insns[8].name, mir.insns[19].name) ||
+        strcmp(mir.insns[8].name, mir.insns[27].name) ||
+        !mir_scalar_memory_location(
+            base, &type, &storage, &offset) ||
+        storage != SC_PARAM || offset < 2)
+        return mir_machine_reject("scaled-global-load", "base");
+    plan->base_stack_offset = offset - 2;
+    if (!mir_scalar_memory_location(
+            scale, &type, &storage, &offset) ||
+        storage != SC_PARAM || offset < 2)
+        return mir_machine_reject("scaled-global-load", "scale");
+    plan->scale_stack_offset = offset - 2;
+    if (!mir_scalar_memory_location(
+            index, &type, &storage, &offset) ||
+        storage != SC_PARAM || offset < 2)
+        return mir_machine_reject("scaled-global-load", "index");
+    plan->index_stack_offset = offset - 2;
     return 1;
 }
 
@@ -24148,6 +24236,40 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_scaled_global_load(
+    FILE *out, const struct MirScaledGlobalLoad *plan)
+{
+    int byte_load = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tld h,b\n\tld l,c\n",
+            plan->scale_stack_offset,
+            plan->index_stack_offset);
+    mir_emit_runtime_call(out, "__mulu");
+    fprintf(out,
+            "\tex de,hl\n\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tex de,hl\n\tadd hl,bc\n",
+            plan->base_stack_offset);
+    mir_machine_emit_global_address_de(out, plan->root, 0);
+    fputs("\tadd hl,de\n\tpush hl\n", out);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tdec a\n\tld c,a\n"
+            "\tinc hl\n\tld a,(hl)\n\tor c\n\tpop hl\n",
+            plan->scale_stack_offset + 2);
+    fprintf(out, "\tjp z,L%d\n", byte_load);
+    fputs("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+          "\tld h,b\n\tld l,c\n\tret\n", out);
+    fprintf(out, "L%d:\n\tld l,(hl)\n\tld h,0\n\tret\n", byte_load);
+}
+
 static void mir_emit_wide_hash33(
     FILE *out, const struct MirWideHash33 *plan)
 {
@@ -25728,6 +25850,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirScaledGlobalLoad scaled_global_load;
     struct MirWideHash33 wide_hash33;
     struct MirFileLineLoop file_line_loop;
     struct MirScopedTempAlloc scoped_temp_alloc;
@@ -26376,6 +26499,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_scaled_global_load(&scaled_global_load)) {
+        mir_emit_scaled_global_load(out, &scaled_global_load);
         return 1;
     }
     if (mir_match_wide_hash33(&wide_hash33)) {
