@@ -652,6 +652,22 @@ struct MirFixedGlobalStrideCall {
     int count;
 };
 
+struct MirFixedPredictionLoop {
+    struct Sym *prefix_function;
+    struct Sym *maximum_function;
+    struct Sym *logits;
+    struct Sym *targets;
+    struct Sym *hits;
+    struct Sym *total;
+    int logits_offset;
+    int targets_offset;
+    int hits_offset;
+    int total_offset;
+    int count;
+    int columns;
+    int returns_bool;
+};
+
 struct MirConstantLoopCheck {
     struct Sym *function;
     int string_id;
@@ -10667,6 +10683,129 @@ static int mir_match_fixed_global_stride_call(
     return 1;
 }
 
+static int mir_match_fixed_prediction_count(
+    struct MirFixedPredictionLoop *plan)
+{
+    static const int expected_opcodes[51] = {
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_PHI,
+        MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_ADDRESS, MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_INDEX_ADDRESS, MIR_ARG, MIR_NOP, MIR_CONST, MIR_ARG,
+        MIR_ADDRESS, MIR_NOP, MIR_ARG, MIR_CALL, MIR_LOAD, MIR_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_NOP,
+        MIR_STORE, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_NOP,
+        MIR_STORE, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_JUMP, MIR_LABEL
+    };
+    const struct MirInsn *index_phi = &mir.insns[5];
+    const struct MirInsn *call = &mir.insns[24];
+    int arguments[3];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 51 || mir_cfg_block_count() != 5 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return mir_machine_reject("fixed-prediction-count", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "fixed-prediction-count", "opcode");
+    if (!mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[3]) ||
+        index_phi->src1 != mir.insns[2].dst ||
+        index_phi->src2 != mir.insns[47].dst ||
+        index_phi->phi_pred1 != mir.insns[0].label ||
+        index_phi->phi_pred2 != mir.insns[44].label ||
+        mir.insns[7].immediate <= 0 ||
+        mir.insns[7].immediate > 255 ||
+        mir.insns[8].src1 != index_phi->dst ||
+        mir.insns[9].immediate != '<' ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[9].src2 != mir.insns[7].dst ||
+        mir.insns[10].label != mir.insns[50].label)
+        return mir_machine_reject("fixed-prediction-count", "loop");
+    plan->count = (int)mir.insns[7].immediate;
+    plan->columns = (int)mir.insns[13].immediate;
+    if (plan->columns <= 0 || plan->columns > 255 ||
+        !mir_scalar_memory_location(
+            &mir.insns[11], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        mir.insns[15].immediate != '*' ||
+        mir.insns[15].src1 != mir.insns[14].dst ||
+        mir.insns[15].src2 != mir.insns[13].dst ||
+        mir.insns[16].src1 != mir.insns[11].dst ||
+        mir.insns[16].src2 != mir.insns[15].dst ||
+        mir.insns[16].immediate != 2)
+        return mir_machine_reject(
+            "fixed-prediction-count", "logits");
+    plan->logits = find_global(mir.insns[11].name);
+    plan->logits_offset = memory_offset;
+    if (!mir_machine_three_call_arguments(call, arguments) ||
+        arguments[0] != mir.insns[16].dst ||
+        arguments[1] != mir.insns[19].dst ||
+        arguments[2] != mir.insns[21].dst ||
+        mir.insns[19].immediate != plan->columns)
+        return mir_machine_reject(
+            "fixed-prediction-count", "call");
+    plan->maximum_function = find_global(call->name);
+    if (plan->maximum_function == NULL ||
+        !plan->maximum_function->is_defined ||
+        plan->maximum_function->is_funcptr ||
+        !mir_scalar_memory_location(
+            &mir.insns[26], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        mir.insns[28].src1 != mir.insns[26].dst ||
+        mir.insns[28].src2 != index_phi->dst ||
+        mir.insns[28].immediate != 2 ||
+        mir.insns[29].src1 != mir.insns[28].dst ||
+        mir.insns[30].immediate != TOK_EQ ||
+        mir.insns[30].src1 != mir.insns[25].dst ||
+        mir.insns[30].src2 != mir.insns[29].dst ||
+        mir.insns[31].label != mir.insns[37].label)
+        return mir_machine_reject(
+            "fixed-prediction-count", "target");
+    plan->targets = find_global(mir.insns[26].name);
+    plan->targets_offset = memory_offset;
+    if (!mir_scalar_memory_location(
+            &mir.insns[32], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        !mir_machine_same_location(&mir.insns[32], &mir.insns[36]) ||
+        mir.insns[34].immediate != '+' ||
+        mir.insns[34].src1 != mir.insns[32].dst ||
+        !mir_machine_constant_equals(mir.insns[34].src2, 1))
+        return mir_machine_reject("fixed-prediction-count", "hits");
+    plan->hits = find_global(mir.insns[32].name);
+    plan->hits_offset = memory_offset;
+    if (!mir_scalar_memory_location(
+            &mir.insns[38], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        !mir_machine_same_location(&mir.insns[38], &mir.insns[42]) ||
+        mir.insns[40].immediate != '+' ||
+        mir.insns[40].src1 != mir.insns[38].dst ||
+        !mir_machine_constant_equals(mir.insns[40].src2, 1) ||
+        !mir_machine_constant_equals(mir.insns[46].dst, 1) ||
+        mir.insns[47].immediate != '+' ||
+        mir.insns[47].src1 != index_phi->dst ||
+        mir.insns[49].label != mir.insns[4].label)
+        return mir_machine_reject("fixed-prediction-count", "total");
+    plan->total = find_global(mir.insns[38].name);
+    plan->total_offset = memory_offset;
+    if (plan->logits == NULL || plan->targets == NULL ||
+        plan->hits == NULL || plan->total == NULL ||
+        plan->logits->is_volatile || plan->targets->is_volatile ||
+        plan->hits->is_volatile || plan->total->is_volatile)
+        return mir_machine_reject("fixed-prediction-count", "symbols");
+    return 1;
+}
+
 static int mir_match_constant_loop_check(
     struct MirConstantLoopCheck *plan)
 {
@@ -20408,6 +20547,53 @@ static void mir_emit_fixed_global_stride_call(
             plan->count, loop);
 }
 
+static void mir_emit_fixed_prediction_count(
+    FILE *out, const struct MirFixedPredictionLoop *plan)
+{
+    int different = new_label();
+    int loop = new_label();
+
+    fprintf(out,
+            ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n"
+            "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+            "\tdec sp\n\tdec sp\n",
+            mir.name);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tld iy,0\n", out);
+    fprintf(out, "L%d:\n"
+                 "\tpush ix\n\tpop hl\n\tdec hl\n\tdec hl\n\tpush hl\n"
+                 "\tld hl,%d\n\tpush hl\n",
+            loop, plan->columns);
+    mir_emit_stride_global_argument(
+        out, plan->logits, plan->logits_offset,
+        plan->columns * 2);
+    mir_machine_emit_symbol_call(out, plan->maximum_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tld c,(ix-2)\n\tld b,(ix-1)\n"
+          "\tpush iy\n\tpop hl\n\tadd hl,hl\n", out);
+    mir_machine_emit_global_address_de(
+        out, plan->targets, plan->targets_offset);
+    fputs("\tadd hl,de\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tld a,b\n\tcp d\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tld a,c\n\tcp e\n\tjp nz,L%d\n",
+            different, different);
+    mir_machine_emit_global_word(out, plan->hits, plan->hits_offset);
+    fputs("\tinc hl\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->hits, plan->hits_offset);
+    fprintf(out, "L%d:\n", different);
+    mir_machine_emit_global_word(out, plan->total, plan->total_offset);
+    fputs("\tinc hl\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->total, plan->total_offset);
+    fputs("\tinc iy\n\tpush iy\n\tpop hl\n\tld a,l\n", out);
+    fprintf(out, "\tcp %d\n\tjp nz,L%d\n"
+                 "\tld sp,ix\n\tpop ix\n\tpop iy\n"
+                 ";@dcc.reg free=iy\n\tret\n",
+            plan->count, loop);
+}
+
 static void mir_emit_constant_loop_check(
     FILE *out, const struct MirConstantLoopCheck *plan)
 {
@@ -21271,6 +21457,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFixedRandomWordFill fixed_random_word_fill;
     struct MirGlobalByteCopyState global_byte_copy_state;
     struct MirFixedGlobalStrideCall fixed_global_stride_call;
+    struct MirFixedPredictionLoop fixed_prediction_loop;
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
@@ -21859,6 +22046,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &fixed_global_stride_call)) {
         mir_emit_fixed_global_stride_call(
             out, &fixed_global_stride_call);
+        return 1;
+    }
+    if (mir_match_fixed_prediction_count(
+            &fixed_prediction_loop)) {
+        mir_emit_fixed_prediction_count(
+            out, &fixed_prediction_loop);
         return 1;
     }
     if (mir_match_constant_loop_check(&constant_loop_check)) {
