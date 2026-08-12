@@ -420,6 +420,15 @@ struct MirRecursiveAggregateChain {
     int value_stack_offset;
 };
 
+struct MirFixedCallSpillRunner {
+    struct Sym *sum_function;
+    struct Sym *check_function;
+    char buffer_assembly_name[128];
+    int message_string_ids[2];
+    int count;
+    int expected_total;
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -5664,6 +5673,98 @@ static int mir_match_recursive_aggregate_chain(
         (plan->value_stack_offset = memory_offset - 2) != 6)
         return mir_machine_reject(
             "recursive-aggregate-chain", "abi");
+    return 1;
+}
+
+static int mir_match_fixed_call_spill_runner(
+    struct MirFixedCallSpillRunner *plan)
+{
+    int arguments[2];
+    int declaration;
+    long count;
+    long expected_total;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 78 || mir_cfg_block_count() != 7 ||
+        mir.has_vla ||
+        !mir_machine_constant_equals(mir.insns[1].dst, 0) ||
+        mir.insns[5].opcode != MIR_PHI ||
+        !mir_machine_constant_value(
+            mir.insns[7].dst, &count, 0) ||
+        mir.insns[8].immediate != '<' ||
+        mir.insns[12].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[12].src1 != mir.insns[10].dst ||
+        mir.insns[12].src2 != mir.insns[5].dst ||
+        !mir_machine_constant_equals(mir.insns[14].dst, 1) ||
+        mir.insns[15].immediate != '+' ||
+        mir.insns[16].src1 != mir.insns[15].dst ||
+        mir.insns[17].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[17].src1 != mir.insns[12].dst ||
+        mir.insns[17].src2 != mir.insns[16].dst ||
+        !mir_machine_constant_equals(mir.insns[20].dst, 1) ||
+        mir.insns[21].immediate != '+' ||
+        mir.insns[23].label != mir.insns[4].label ||
+        mir.insns[25].opcode != MIR_ADDRESS ||
+        strcmp(mir.insns[25].name, mir.insns[10].name) ||
+        !mir_machine_constant_equals(mir.insns[28].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[31].dst, 0) ||
+        mir.insns[35].opcode != MIR_PHI ||
+        mir.insns[36].opcode != MIR_PHI ||
+        !mir_machine_constant_equals(
+            mir.insns[38].dst, count) ||
+        mir.insns[39].immediate != '<' ||
+        !mir_machine_two_call_arguments(
+            &mir.insns[46], arguments) ||
+        arguments[0] != mir.insns[42].dst ||
+        arguments[1] != mir.insns[44].dst ||
+        !mir_machine_constant_equals(mir.insns[44].dst, 1) ||
+        mir.insns[47].immediate != '+' ||
+        !mir_machine_constant_equals(mir.insns[51].dst, 1) ||
+        mir.insns[52].immediate != '+' ||
+        !mir_machine_constant_equals(mir.insns[57].dst, 1) ||
+        mir.insns[58].immediate != '+' ||
+        mir.insns[60].label != mir.insns[34].label)
+        return mir_machine_reject("fixed-call-spill-runner", "loops");
+    if (!mir_machine_constant_value(
+            mir.insns[63].dst, &expected_total, 0) ||
+        mir.insns[64].immediate != TOK_EQ ||
+        !mir_machine_two_call_arguments(
+            &mir.insns[68], arguments) ||
+        arguments[0] != mir.insns[64].dst ||
+        arguments[1] != mir.insns[66].dst ||
+        mir.insns[69].opcode != MIR_LOAD ||
+        mir.insns[70].opcode != MIR_ADDRESS ||
+        strcmp(mir.insns[70].name, mir.insns[10].name) ||
+        !mir_machine_constant_equals(
+            mir.insns[71].dst, count) ||
+        mir.insns[72].immediate != '+' ||
+        mir.insns[73].immediate != TOK_EQ ||
+        !mir_machine_two_call_arguments(
+            &mir.insns[77], arguments) ||
+        arguments[0] != mir.insns[73].dst ||
+        arguments[1] != mir.insns[75].dst)
+        return mir_machine_reject("fixed-call-spill-runner", "checks");
+    plan->count = (int)count;
+    plan->expected_total = (int)expected_total;
+    plan->sum_function = find_global(mir.insns[46].name);
+    plan->check_function = find_global(mir.insns[68].name);
+    plan->message_string_ids[0] = (int)mir.insns[66].immediate;
+    plan->message_string_ids[1] = (int)mir.insns[75].immediate;
+    for (declaration = 0; declaration < mir.declared_count; ++declaration)
+        if (!strcmp(
+                mir.declared_names[declaration],
+                mir.insns[10].name)) {
+            snprintf(plan->buffer_assembly_name,
+                     sizeof(plan->buffer_assembly_name), "%s",
+                     asm_name_for(
+                         mir.declared_link_names[declaration]));
+            break;
+        }
+    if (plan->sum_function == NULL ||
+        plan->check_function == NULL ||
+        plan->buffer_assembly_name[0] == 0 ||
+        plan->count <= 0 || plan->count > 32)
+        return mir_machine_reject("fixed-call-spill-runner", "symbols");
     return 1;
 }
 
@@ -24213,6 +24314,67 @@ static void mir_emit_recursive_aggregate_chain(
     fprintf(out, "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n", done);
 }
 
+static void mir_emit_fixed_call_spill_check(
+    FILE *out, const struct MirFixedCallSpillRunner *plan,
+    int check, int pointer_check)
+{
+    int unequal = new_label();
+
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->message_string_ids[check]);
+    if (pointer_check) {
+        fprintf(out,
+                "\tpush iy\n\tpop hl\n\tld de,%s+%d\n",
+                plan->buffer_assembly_name, plan->count);
+    } else {
+        fprintf(out,
+                "\tld l,(ix-2)\n\tld h,(ix-1)\n\tld de,%d\n",
+                plan->expected_total);
+    }
+    fprintf(out,
+            "\tor a\n\tsbc hl,de\n\tld hl,0\n"
+            "\tjp nz,L%d\n\tinc hl\nL%d:\n\tpush hl\n",
+            unequal, unequal);
+    mir_machine_emit_symbol_call(out, plan->check_function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+}
+
+static void mir_emit_fixed_call_spill_runner(
+    FILE *out, const struct MirFixedCallSpillRunner *plan)
+{
+    int element;
+
+    fprintf(out,
+            ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n"
+            "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+            "\tdec sp\n\tdec sp\n",
+            mir.name);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out, "\tld hl,%s\n", plan->buffer_assembly_name);
+    for (element = 0; element < plan->count; ++element) {
+        fprintf(out, "\tld (hl),%d\n", element + 1);
+        if (element + 1 != plan->count)
+            fputs("\tinc hl\n", out);
+    }
+    fprintf(out,
+            "\tld hl,%s\n\tpush hl\n\tpop iy\n"
+            "\tld (ix-2),0\n\tld (ix-1),0\n",
+            plan->buffer_assembly_name);
+    for (element = 0; element < plan->count; ++element) {
+        fputs("\tld hl,1\n\tpush hl\n"
+              "\tpush iy\n\tpop hl\n\tpush hl\n", out);
+        mir_machine_emit_symbol_call(out, plan->sum_function);
+        fputs("\tpop bc\n\tpop bc\n"
+              "\tld e,(ix-2)\n\tld d,(ix-1)\n\tadd hl,de\n"
+              "\tld (ix-2),l\n\tld (ix-1),h\n\tinc iy\n", out);
+    }
+    mir_emit_fixed_call_spill_check(out, plan, 0, 0);
+    mir_emit_fixed_call_spill_check(out, plan, 1, 1);
+    fputs("\tld sp,ix\n\tpop ix\n\tpop iy\n"
+          ";@dcc.reg free=iy\n\tret\n", out);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -27923,6 +28085,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirCrcUpdateRunner crc_update_runner;
     struct MirFixedRowMemberSum fixed_row_member_sum;
     struct MirRecursiveAggregateChain recursive_aggregate_chain;
+    struct MirFixedCallSpillRunner fixed_call_spill_runner;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -28420,6 +28583,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &recursive_aggregate_chain)) {
         mir_emit_recursive_aggregate_chain(
             out, &recursive_aggregate_chain);
+        return 1;
+    }
+    if (mir_match_fixed_call_spill_runner(
+            &fixed_call_spill_runner)) {
+        mir_emit_fixed_call_spill_runner(
+            out, &fixed_call_spill_runner);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
