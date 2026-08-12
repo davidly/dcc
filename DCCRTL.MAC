@@ -3809,7 +3809,7 @@ pf_pct_prec_loop:
 pf_pct_prec_done:
         ; A = format specifier char, HL points to it (not yet consumed)
         inc     hl
-        jr pf_pct_done_width ; peep: jp_to_jr
+        jr      pf_pct_done_width ; peep: jp_to_jr
 
 pf_pct_z:
         ld      a,(hl)
@@ -9483,7 +9483,7 @@ rl_try_grow_top:
         pop     hl                      ; HL = new_end
         jr      c,rl_grow_ok            ; new_end < hlimit
         jr      z,rl_grow_ok            ; new_end == hlimit
-        jr rl_do_alloc ; peep: jp_to_jr
+        jr      rl_do_alloc ; peep: jp_to_jr
 rl_grow_ok:
         ld      (__brk),hl              ; extend heap to the new end
         ld      hl,(__rl_old)
@@ -12815,7 +12815,7 @@ _isfinite:
         push    de
         push    hl
         push    bc
-        jr __ffin ; peep: jp_to_jr
+        jr      __ffin ; peep: jp_to_jr
 
         public  _signbit
 _signbit:
@@ -12826,7 +12826,7 @@ _signbit:
         push    de
         push    hl
         push    bc
-        jr __fsgn ; peep: jp_to_jr
+        jr      __fsgn ; peep: jp_to_jr
 
         public  _dcc_nan
 _dcc_nan:
@@ -13056,12 +13056,12 @@ __fcsgf:
         ld      a,d
         bit     7,a
         jp      nz,__fcltf
-        jr __fcgtf ; peep: jp_to_jr
+        jr      __fcgtf ; peep: jp_to_jr
 __fcsmf:
         ld      a,d
         bit     7,a
         jr      nz,__fcsnf
-        jr __frcmpf ; peep: jp_to_jr
+        jr      __frcmpf ; peep: jp_to_jr
 __fcsnf:
         call    __frcmpf
         cp      1
@@ -13462,7 +13462,7 @@ __faf:
         ; __msf's first attempt (__msetf) and __fmf's (__fmulf).
         xor     a
         ld      (FSUB),a
-        jr FADDR0F ; peep: jp_to_jr
+        jr      FADDR0F ; peep: jp_to_jr
 
         public  __fsf
 __fsf:
@@ -13588,7 +13588,7 @@ FANOFL2:
         exx                     ; main bank active again; flags preserved
         inc     a
         jp      nz,FANZ_ENTRY   ; ordinary finite path: one branch, not jr+jp
-        jr FA_BSPEC ; peep: jp_to_jr
+        jr      FA_BSPEC ; peep: jp_to_jr
 
 FA_ASPEC:
         ; A's exponent is 255: nonzero mantissa payload (implicit bit
@@ -13617,7 +13617,7 @@ FA_ASPEC:
         cp      d               ; compare against BSGN (post-__fsf-flip)
         exx
         jp      nz,FA_NAN       ; Inf + (-Inf) = NaN
-        jr FA_RETA ; peep: jp_to_jr
+        jr      FA_RETA ; peep: jp_to_jr
 
 FA_BSPEC:
         ; A finite (any value, including 0), B's exponent is 255.
@@ -13710,7 +13710,7 @@ FALGNR:
         call    FSHR            ; shift main's C:H:L right by A bits
         ld      a,e
         ld      b,a             ; AEXP := BEXP
-        jr FSIGNC ; peep: jp_to_jr
+        jr      FSIGNC ; peep: jp_to_jr
 FANEGL:
         ; A negligible relative to B: zero A's mantissa, AEXP := BEXP
         xor     a
@@ -13719,7 +13719,7 @@ FANEGL:
         ld      l,a
         ld      a,e
         ld      b,a
-        jr FSIGNC ; peep: jp_to_jr
+        jr      FSIGNC ; peep: jp_to_jr
 
 FAEXPB:
         ; AEXP > BEXP (A = BEXP-AEXP, negative): negate for B's shift count.
@@ -13788,7 +13788,7 @@ FSIGNC:
         ld      d,a             ; D = sign | exponent's top 7 bits (all 1)
         ld      e,80h           ; E = exponent's low bit | mantissa top 7 (0)
         ld      hl,0
-        jr FARET ; peep: jp_to_jr
+        jr      FARET ; peep: jp_to_jr
 
 FSUBTR:
         ; different signs: subtract, result sign = sign of the bigger
@@ -13816,7 +13816,7 @@ FSUBTR:
         exx                      ; main active; A (diff high byte) preserved
         pop     hl
         ld      c,a
-        jr FNORMR ; peep: jp_to_jr
+        jr      FNORMR ; peep: jp_to_jr
 
 FBBIG:
         ; A_mantissa < B_mantissa: negate {A:HL} (still in the alternate
@@ -14225,7 +14225,7 @@ FM_ASPEC_ALT:
 
 FM_BSPEC_ALT:
         exx
-        jr FM_BSPEC ; peep: jp_to_jr
+        jr      FM_BSPEC ; peep: jp_to_jr
 
 FM_ZERO_ALT:
         exx
@@ -14407,7 +14407,7 @@ FMAZ:
         ld      hl,(FP4)
         add     hl,bc
         ld      (FP4),hl
-        jr FMDONE ; peep: jp_to_jr
+        jr      FMDONE ; peep: jp_to_jr
 
 FMANBZ:
         ; Alo != 0, Blo == 0: Alo*Bhi plus Ahi*Bhi.
@@ -14436,7 +14436,7 @@ FMANBZ:
         ld      hl,(FP4)
         add     hl,bc
         ld      (FP4),hl
-        jr FMDONE ; peep: jp_to_jr
+        jr      FMDONE ; peep: jp_to_jr
 
 FMABZ:
         ; Both low words are zero: only Ahi*Bhi survives.
@@ -14607,7 +14607,7 @@ __fmaf:
         ; FMADD_UNPACKED expects, regardless of which physical register
         ; set that maps to (exx has no absolute "main" identity, only
         ; active-vs-other, so this is exactly equivalent).
-        jr FMADD_UNPACKED ; peep: jp_to_jr
+        jr      FMADD_UNPACKED ; peep: jp_to_jr
 
         public  __fmadd
 __fmadd:
@@ -14675,7 +14675,7 @@ FMADD_UNPACKED:
         exx
         inc     a
         jr      z,FQ_BSPEC
-        jr FQ_ORDINARY ; peep: jp_to_jr
+        jr      FQ_ORDINARY ; peep: jp_to_jr
 
 FQ_ASPEC:
         ; a's exponent is 255: nonzero mantissa payload (implicit bit
@@ -14698,7 +14698,7 @@ FQ_ASPEC:
         or      l
         exx                     ; main bank active again; flags preserved
         jp      nz,FQ_QNAN      ; b is NaN
-        jr FQ_QINF ; peep: jp_to_jr
+        jr      FQ_QINF ; peep: jp_to_jr
 
 FQ_BSPEC:
         ; a finite (any value, including 0), b's exponent is 255.
@@ -14971,7 +14971,7 @@ FQFB1:
         ld      hl,(FP4)
         add     hl,bc
         ld      (FP4),hl
-        jr FQDONE ; peep: jp_to_jr
+        jr      FQDONE ; peep: jp_to_jr
 
 FQANBZ:
         ; Alo != 0, Blo == 0: Alo*Bhi plus Ahi*Bhi only (both terms
@@ -15002,7 +15002,7 @@ FQANBZ:
         ld      hl,(FP4)
         add     hl,bc
         ld      (FP4),hl
-        jr FQDONE ; peep: jp_to_jr
+        jr      FQDONE ; peep: jp_to_jr
 
 FQFB2:
         ; Alo == 0, Blo != 0: Ahi*Blo plus Ahi*Bhi only.  Ahi is not
@@ -15062,7 +15062,7 @@ FQDONE:
         inc     a               ; overflow only if exponent became 255
         jr      z,FQINF
         ld      hl,(FP3)        ; L=FP3, H=FP4
-        jr FQBRIDGE_R ; peep: jp_to_jr
+        jr      FQBRIDGE_R ; peep: jp_to_jr
 
 FQNOC:
         ld      hl,(FP2)        ; DE already holds FP5:FP4 from FQDONE
@@ -15074,7 +15074,7 @@ FQNOC:
         ld      d,a             ; D=result sign
         ld      l,h             ; L=mantissa low byte
         ld      h,e             ; H=mantissa middle byte
-        jr FQBRIDGE_R ; peep: jp_to_jr
+        jr      FQBRIDGE_R ; peep: jp_to_jr
 
 FQZERO:
         ; IEEE-754 sign-of-zero: sign = a's D xor b's D, computed lazily
@@ -15088,7 +15088,7 @@ FQZERO:
         ld      d,a
         ld      bc,0
         ld      hl,0
-        jr FQBRIDGE_R ; peep: jp_to_jr
+        jr      FQBRIDGE_R ; peep: jp_to_jr
 
 FQINF:
         ; Entry used by late overflow paths after multiply helpers have
@@ -15190,7 +15190,7 @@ __fdf:
         call    FUNA            ; unpack a (numerator)
         exx                     ; b <- back from shadow bank
         call    FUNB            ; unpack b (denominator), LAST
-        jr FDBODY ; peep: jp_to_jr
+        jr      FDBODY ; peep: jp_to_jr
 
         public  __fdiv
 __fdiv:
@@ -15236,7 +15236,7 @@ FDBODY:
         ld      a,(BEXP)
         inc     a
         jr      z,FD_BSPEC
-        jr FD_ORDINARY ; peep: jp_to_jr
+        jr      FD_ORDINARY ; peep: jp_to_jr
 
 FD_ASPEC:
         ; A's exponent is 255: a nonzero mantissa payload (implicit bit
@@ -15256,7 +15256,7 @@ FD_ASPEC:
         ld      a,(BEXP)
         cp      255
         jp      nz,FDINF
-        jr FDNAN ; peep: jp_to_jr
+        jr      FDNAN ; peep: jp_to_jr
 
 FD_BSPEC:
         ; A finite (any value, including 0), B's exponent is 255.
@@ -15588,7 +15588,7 @@ _floorf:
         ld      e,(ix+6)
         ld      d,(ix+7)
         xor     a                       ; mode 0 = floor
-        jr __frint ; peep: jp_to_jr
+        jr      __frint ; peep: jp_to_jr
 
 _ceilf:
         push    ix
@@ -15599,6 +15599,14 @@ _ceilf:
         ld      e,(ix+6)
         ld      d,(ix+7)
         ld      a,1                     ; mode 1 = ceil
+        jr      __frint                 ; explicit, not fall-through: __frint
+                                         ; is its own dccrtlstrip PUBLIC block
+                                         ; (see "public __frint" above), and
+                                         ; falling through here with no jp/jr
+                                         ; left dccrtlstrip's reference scan
+                                         ; with nothing to see - an app
+                                         ; linking _ceilf without _floorf
+                                         ; would silently drop __frint's body
 
 ; Direct binary32 floor/ceil. A selects floor (0) or ceil (1), DE:HL is x,
 ; and IX is the caller frame. Values already integral, infinities, and NaNs
@@ -15985,7 +15993,7 @@ FMDMOD_HAVE_EXP:
         and     80h
         or      d
         ld      d,a
-        jr FMDRET ; peep: jp_to_jr
+        jr      FMDRET ; peep: jp_to_jr
 FMDMOD_DENORM:
         ; subnormal: mantissa = significand >> (1 - exp), exponent field 0.
         ld      hl,1
@@ -16015,7 +16023,7 @@ FMDMOD_DENORM_LOOP:
         ld      a,(ix+7)
         and     80h
         ld      d,a                     ; sign, exponent field 0
-        jr FMDRET ; peep: jp_to_jr
+        jr      FMDRET ; peep: jp_to_jr
 FMDMOD_UNDERFLOW:
         ld      a,(ix+7)
         and     80h
@@ -16677,12 +16685,12 @@ NXGEN:
         ld      a,(NXLT)
         or      a
         jp      nz,NXINC
-        jr NXDEC ; peep: jp_to_jr
+        jr      NXDEC ; peep: jp_to_jr
 NXNEG:
         ld      a,(NXLT)
         or      a
         jp      nz,NXDEC
-        jr NXINC ; peep: jp_to_jr
+        jr      NXINC ; peep: jp_to_jr
 
 NXZERO:
         ld      hl,1
@@ -16691,20 +16699,20 @@ NXZERO:
         and     80h
         jp      z,NXRET
         ld      d,80h
-        jr NXRET ; peep: jp_to_jr
+        jr      NXRET ; peep: jp_to_jr
 
 NXRET_X:
         ld      l,(ix+4)
         ld      h,(ix+5)
         ld      e,(ix+6)
         ld      d,(ix+7)
-        jr NXRET ; peep: jp_to_jr
+        jr      NXRET ; peep: jp_to_jr
 NXRET_Y:
         ld      l,(ix+8)
         ld      h,(ix+9)
         ld      e,(ix+10)
         ld      d,(ix+11)
-        jr NXRET ; peep: jp_to_jr
+        jr      NXRET ; peep: jp_to_jr
 
 NXINC:
         inc     l
@@ -16714,7 +16722,7 @@ NXINC:
         inc     e
         jp      nz,NXRET
         inc     d
-        jr NXRET ; peep: jp_to_jr
+        jr      NXRET ; peep: jp_to_jr
 
 NXDEC:
         ld      a,l
@@ -16808,7 +16816,7 @@ MFEXPNOTNAN:
         pop bc
         ld a,h
         or l
-        jr z,MFL2 ; peep: jp_to_jr
+        jr      z,MFL2 ; peep: jp_to_jr
         ld d,7fh                ; x >= 88.0 (including +Infinity): overflow
         ld e,80h                ; -> +Infinity (was a finite 3.4e38f
         ld hl,0                 ; approximation)
@@ -16828,7 +16836,7 @@ MFL2:
         pop bc
         ld a,h
         or l
-        jr z,MFL4 ; peep: jp_to_jr
+        jr      z,MFL4 ; peep: jp_to_jr
         ld hl,0
         ld de,0
         ret ; peep: jp_to_plain_ret
@@ -16853,7 +16861,7 @@ MFL4:
         pop bc
         ld a,h
         or l
-        jr z,MFL6 ; peep: jp_to_jr
+        jr      z,MFL6 ; peep: jp_to_jr
         ld hl,(__expf_xlog2e)
         ld de,(__expf_xlog2e+2)
         push de
@@ -16866,7 +16874,7 @@ MFL4:
         call __ffl
         ld (__expf_n),hl
         ld (__expf_n+2),de
-        jr MFL7 ; peep: jp_to_jr
+        jr      MFL7 ; peep: jp_to_jr
 MFL6:
         ld hl,(__expf_xlog2e)
         ld de,(__expf_xlog2e+2)
@@ -17104,7 +17112,7 @@ MFL9:
         pop bc
         ld a,h
         or l
-        jr z,MFL12 ; peep: jp_to_jr
+        jr      z,MFL12 ; peep: jp_to_jr
         ld hl,(__logf_m)
         ld de,(__logf_m+2)
         ld b,1
@@ -17307,7 +17315,7 @@ _powf:
         pop bc
         ld a,h
         or l
-        jr z,MFL15 ; peep: jp_to_jr
+        jr      z,MFL15 ; peep: jp_to_jr
         ld hl,0
         ld de,16256
         ret ; peep: jp_to_plain_ret
@@ -17347,7 +17355,7 @@ MFL17:
         pop bc
         ld a,h
         or l
-        jr z,MFL19 ; peep: jp_to_jr
+        jr      z,MFL19 ; peep: jp_to_jr
         ld hl,(__powf_y)
         ld de,(__powf_y+2)
         push de
@@ -17380,13 +17388,13 @@ MFL19:
         pop bc
         ld a,h
         or l
-        jr z,MFL21 ; peep: jp_to_jr
+        jr      z,MFL21 ; peep: jp_to_jr
         ld hl,(__powf_y)
         ld de,(__powf_y+2)
         ld a,d
         xor 80h
         ld d,a
-        jr MFL22 ; peep: jp_to_jr
+        jr      MFL22 ; peep: jp_to_jr
 MFL21:
         ld hl,(__powf_y)
         ld de,(__powf_y+2)
@@ -17417,7 +17425,7 @@ MFL22:
         pop bc
         ld a,h
         or l
-        jr z,MFL23 ; peep: jp_to_jr
+        jr      z,MFL23 ; peep: jp_to_jr
         ld hl,0
         ld de,0
         ret ; peep: jp_to_plain_ret
@@ -17488,7 +17496,7 @@ MFL23:
         ld a,b
         xor d
         or l
-        jr z,MFL26 ; peep: jp_to_jr
+        jr      z,MFL26 ; peep: jp_to_jr
         ld hl,(__powf_result)
         ld de,(__powf_result+2)
         ld a,d
@@ -17751,7 +17759,7 @@ _sinf:
         pop bc
         ld a,h
         or l
-        jr z,MFL38 ; peep: jp_to_jr
+        jr      z,MFL38 ; peep: jp_to_jr
         ld hl,(__sinf_x)
         ld de,(__sinf_x+2)
         push de
@@ -17778,7 +17786,7 @@ MFL38:
         pop bc
         ld a,h
         or l
-        jr z,MFL40 ; peep: jp_to_jr
+        jr      z,MFL40 ; peep: jp_to_jr
         ld hl,(__sinf_x)
         ld de,(__sinf_x+2)
         push de
@@ -17802,7 +17810,7 @@ MFL40:
         pop bc
         ld a,h
         or l
-        jr z,MFL41 ; peep: jp_to_jr
+        jr      z,MFL41 ; peep: jp_to_jr
         ld hl,4059
         ld de,16457
         push de
@@ -17814,7 +17822,7 @@ MFL40:
         pop bc
         ld (__sinf_x),hl
         ld (__sinf_x+2),de
-        jr MFL42 ; peep: jp_to_jr
+        jr      MFL42 ; peep: jp_to_jr
 MFL41:
         ld hl,(__sinf_x)
         ld de,(__sinf_x+2)
@@ -17830,7 +17838,7 @@ MFL41:
         pop bc
         ld a,h
         or l
-        jr z,MFL42 ; peep: jp_to_jr
+        jr      z,MFL42 ; peep: jp_to_jr
         ld hl,4059
         ld de,16457
         ld a,d
@@ -17962,7 +17970,7 @@ _cosf:
         pop bc
         ld a,h
         or l
-        jr z,MFL47 ; peep: jp_to_jr
+        jr      z,MFL47 ; peep: jp_to_jr
         ld hl,(__cosf_x)
         ld de,(__cosf_x+2)
         push de
@@ -17989,7 +17997,7 @@ MFL47:
         pop bc
         ld a,h
         or l
-        jr z,MFL49 ; peep: jp_to_jr
+        jr      z,MFL49 ; peep: jp_to_jr
         ld hl,(__cosf_x)
         ld de,(__cosf_x+2)
         push de
@@ -18013,7 +18021,7 @@ MFL49:
         pop bc
         ld a,h
         or l
-        jr z,MFL50 ; peep: jp_to_jr
+        jr      z,MFL50 ; peep: jp_to_jr
         ld hl,4059
         ld de,16457
         push de
@@ -18032,7 +18040,7 @@ MFL49:
         ld d,a
         ld (__cosf_sign),hl
         ld (__cosf_sign+2),de
-        jr MFL51 ; peep: jp_to_jr
+        jr      MFL51 ; peep: jp_to_jr
 MFL50:
         ld hl,(__cosf_x)
         ld de,(__cosf_x+2)
@@ -18048,7 +18056,7 @@ MFL50:
         pop bc
         ld a,h
         or l
-        jr z,MFL51 ; peep: jp_to_jr
+        jr      z,MFL51 ; peep: jp_to_jr
         ld hl,4059
         ld de,16457
         ld a,d
@@ -18193,7 +18201,7 @@ _tanf:
         pop bc
         ld a,h
         or l
-        jr z,MFL55 ; peep: jp_to_jr
+        jr      z,MFL55 ; peep: jp_to_jr
         ld hl,(__tanf_r)
         ld de,(__tanf_r+2)
         push de
@@ -18205,7 +18213,7 @@ _tanf:
         pop bc
         ld (__tanf_r),hl
         ld (__tanf_r+2),de
-        jr MFL56 ; peep: jp_to_jr
+        jr      MFL56 ; peep: jp_to_jr
 MFL55:
         ld hl,(__tanf_r)
         ld de,(__tanf_r+2)
@@ -18221,7 +18229,7 @@ MFL55:
         pop bc
         ld a,h
         or l
-        jr z,MFL56 ; peep: jp_to_jr
+        jr      z,MFL56 ; peep: jp_to_jr
         ld hl,(__tanf_r)
         ld de,(__tanf_r+2)
         push de
@@ -18245,7 +18253,7 @@ MFL56:
         pop bc
         ld a,h
         or l
-        jr z,MFL59 ; peep: jp_to_jr
+        jr      z,MFL59 ; peep: jp_to_jr
         ld hl,4059
         ld de,16329
         push de
@@ -18259,7 +18267,7 @@ MFL56:
         ld (__tanf_r+2),de
         ld hl,1
         ld (__tanf_sign),hl
-        jr MFL60 ; peep: jp_to_jr
+        jr      MFL60 ; peep: jp_to_jr
 MFL59:
         ld hl,(__tanf_r)
         ld de,(__tanf_r+2)
@@ -18275,7 +18283,7 @@ MFL59:
         pop bc
         ld a,h
         or l
-        jr z,MFL60 ; peep: jp_to_jr
+        jr      z,MFL60 ; peep: jp_to_jr
         ld hl,4059
         ld de,16329
         ld a,d
@@ -18349,7 +18357,7 @@ MFL60:
         pop bc
         ld a,h
         or l
-        jr z,MFL63 ; peep: jp_to_jr
+        jr      z,MFL63 ; peep: jp_to_jr
         ld hl,0
         ld de,0
         ret ; peep: jp_to_plain_ret
@@ -18368,7 +18376,7 @@ MFL63:
         ld hl,(__tanf_sign)
         ld a,h
         or l
-        jr z,MFL66 ; peep: jp_to_jr
+        jr      z,MFL66 ; peep: jp_to_jr
         ld hl,(__tanf_result)
         ld de,(__tanf_result+2)
         push de
@@ -18380,10 +18388,10 @@ MFL63:
         pop bc
         ld a,h
         or l
-        jr z,MFL67 ; peep: jp_to_jr
+        jr      z,MFL67 ; peep: jp_to_jr
         ld hl,0
         ld de,0
-        jr MFL54 ; peep: jp_to_jr
+        jr      MFL54 ; peep: jp_to_jr
 MFL67:
         ld hl,0
         ld de,16256
@@ -18444,7 +18452,7 @@ _atanf:
         pop bc
         ld a,h
         or l
-        jr z,MFL71 ; peep: jp_to_jr
+        jr      z,MFL71 ; peep: jp_to_jr
         ld hl,0
         ld de,16256
         ld a,d
@@ -18471,7 +18479,7 @@ MFL71:
         pop bc
         ld a,h
         or l
-        jr z,MFL72 ; peep: jp_to_jr
+        jr      z,MFL72 ; peep: jp_to_jr
         ld hl,4059
         ld de,16329
         ld (__atanf_offset),hl
@@ -18490,7 +18498,7 @@ MFL71:
         pop bc
         ld (__atanf_x),hl
         ld (__atanf_x+2),de
-        jr MFL73 ; peep: jp_to_jr
+        jr      MFL73 ; peep: jp_to_jr
 MFL72:
         ld hl,(__atanf_x)
         ld de,(__atanf_x+2)
@@ -18503,7 +18511,7 @@ MFL72:
         pop bc
         ld a,h
         or l
-        jr z,MFL73 ; peep: jp_to_jr
+        jr      z,MFL73 ; peep: jp_to_jr
         ld hl,4059
         ld de,16201
         ld (__atanf_offset),hl
@@ -18708,11 +18716,11 @@ _atan2f:
         jr      nz,MATAN2_3Q
         ld      hl,4059
         ld      de,16201        ; pi/4
-        jr MATAN2SGNY ; peep: jp_to_jr
+        jr      MATAN2SGNY ; peep: jp_to_jr
 MATAN2_3Q:
         ld      hl,52196
         ld      de,16406        ; 3pi/4
-        jr MATAN2SGNY ; peep: jp_to_jr
+        jr      MATAN2SGNY ; peep: jp_to_jr
 
 MATAN2XIYF:
         ; x is +/-Inf, y finite: +/-0 (x>0) or +/-pi (x<0), sign=sign(y).
@@ -18752,7 +18760,7 @@ MATAN2XORD:
         jr      z,MATAN2ORD
         ld      hl,4059
         ld      de,16329        ; half_pi
-        jr MATAN2SGNY ; peep: jp_to_jr
+        jr      MATAN2SGNY ; peep: jp_to_jr
 MATAN2ORD:
 
         ; if (x == 0.0f)
@@ -18943,7 +18951,7 @@ _asinf:
         pop bc
         ld a,h
         or l
-        jr z,MFL89 ; peep: jp_to_jr
+        jr      z,MFL89 ; peep: jp_to_jr
         ld hl,0
         ld de,16256
         ld a,d
@@ -18980,7 +18988,7 @@ Lskrl_18944:
         pop bc
         ld a,h
         or l
-        jr z,MFL90 ; peep: jp_to_jr
+        jr      z,MFL90 ; peep: jp_to_jr
         ; |x| > 1.0: domain error per C99 7.12.4.2 -> NaN (was a bare
         ; 0.0f, silently wrong - confirmed |x|==1.0 exactly still takes
         ; the ordinary path below and is already correct, so only the
@@ -19689,7 +19697,7 @@ __stol:
         ld hl,1
         push hl
         push bc
-        jr __stox_core ; peep: jp_to_jr
+        jr      __stox_core ; peep: jp_to_jr
 
         public __stou
 __stou:
@@ -19740,11 +19748,11 @@ SCL38:
         pop bc
         ld a,h
         or l
-        jr z,SCL39 ; peep: jp_to_jr
+        jr      z,SCL39 ; peep: jp_to_jr
         ld hl,(__stox_p)
         inc hl ; peep: ld_de1_to_inc
         ld (__stox_p),hl
-        jr SCL38 ; peep: jp_to_jr
+        jr      SCL38 ; peep: jp_to_jr
 SCL39:
         ld hl,0
         ld (__stox_neg),hl
@@ -19757,11 +19765,11 @@ SCL39:
         ld de,43 ; peep: push_lde_pop
         or a
         sbc hl,de
-        jr nz,SCL40 ; peep: jp_to_jr
+        jr      nz,SCL40 ; peep: jp_to_jr
         ld hl,(__stox_p)
         inc hl ; peep: ld_de1_to_inc
         ld (__stox_p),hl
-        jr SCL41 ; peep: jp_to_jr
+        jr      SCL41 ; peep: jp_to_jr
 SCL40:
         ld hl,(__stox_p)
         ld l,(hl)
@@ -19772,7 +19780,7 @@ SCL40:
         ld de,45 ; peep: push_lde_pop
         or a
         sbc hl,de
-        jr nz,SCL41 ; peep: jp_to_jr
+        jr      nz,SCL41 ; peep: jp_to_jr
         ld hl,1
         ld (__stox_neg),hl
         ld hl,(__stox_p)
@@ -19782,12 +19790,12 @@ SCL41:
         ld hl,(__stox_base)
         ld a,h ; peep: cmp0_or_hl
         or l
-        jr z,SCL48 ; peep: jp_to_jr
+        jr      z,SCL48 ; peep: jp_to_jr
         ld hl,(__stox_base)
         ld de,16 ; peep: push_lde_pop
         or a
         sbc hl,de
-        jr nz,SCL44 ; peep: jp_to_jr
+        jr      nz,SCL44 ; peep: jp_to_jr
 SCL48:
         ld hl,(__stox_p)
         ld l,(hl)
@@ -19798,7 +19806,7 @@ SCL48:
         ld de,48 ; peep: push_lde_pop
         or a
         sbc hl,de
-        jr nz,SCL44 ; peep: jp_to_jr
+        jr      nz,SCL44 ; peep: jp_to_jr
         ld hl,(__stox_p)
         inc hl ; peep: ld_de1_to_inc
         ld l,(hl)
@@ -19809,7 +19817,7 @@ SCL48:
         ld de,120 ; peep: push_lde_pop
         or a
         sbc hl,de
-        jr z,SCL57 ; peep: jp_to_jr
+        jr      z,SCL57 ; peep: jp_to_jr
         ld hl,(__stox_p)
         inc hl ; peep: ld_de1_to_inc
         ld l,(hl)
@@ -19820,7 +19828,7 @@ SCL48:
         ld de,88 ; peep: push_lde_pop
         or a
         sbc hl,de
-        jr nz,SCL44 ; peep: jp_to_jr
+        jr      nz,SCL44 ; peep: jp_to_jr
 SCL57:
         ld hl,(__stox_p)
         inc hl ; peep: ld_de2_to_inc
@@ -19828,12 +19836,12 @@ SCL57:
         ld (__stox_p),hl
         ld hl,16
         ld (__stox_base),hl
-        jr SCL45 ; peep: jp_to_jr
+        jr      SCL45 ; peep: jp_to_jr
 SCL44:
         ld hl,(__stox_base)
         ld a,h ; peep: cmp0_or_hl
         or l
-        jr nz,SCL45 ; peep: jp_to_jr
+        jr      nz,SCL45 ; peep: jp_to_jr
         ld hl,(__stox_p)
         ld l,(hl)
         ld a,l
@@ -19843,9 +19851,9 @@ SCL44:
         ld de,48 ; peep: push_lde_pop
         or a
         sbc hl,de
-        jr nz,SCL68 ; peep: jp_to_jr
+        jr      nz,SCL68 ; peep: jp_to_jr
         ld hl,8
-        jr SCL69 ; peep: jp_to_jr
+        jr      SCL69 ; peep: jp_to_jr
 SCL68:
         ld hl,10
 SCL69:
@@ -19857,18 +19865,18 @@ SCL45:
         ld hl,(__stox_signed)
         ld a,h
         or l
-        jr z,SCL45U ; peep: jp_to_jr
+        jr      z,SCL45U ; peep: jp_to_jr
         ld hl,(__stox_neg)
         ld a,h
         or l
-        jr z,SCL70 ; peep: jp_to_jr
+        jr      z,SCL70 ; peep: jp_to_jr
         ld hl,0
         ld de,32768
-        jr SCL71 ; peep: jp_to_jr
+        jr      SCL71 ; peep: jp_to_jr
 SCL70:
         ld hl,65535
         ld de,32767
-        jr SCL71 ; peep: jp_to_jr
+        jr      SCL71 ; peep: jp_to_jr
 SCL45U:
         ld hl,65535
         ld de,65535
@@ -19958,7 +19966,7 @@ SCL72:
         ex de,hl
         ld a,h
         or l
-        jr nz,SCL83 ; peep: jp_to_jr
+        jr      nz,SCL83 ; peep: jp_to_jr
         ld hl,(__stox_acc)
         ld de,(__stox_acc+2)
         push de
@@ -19981,7 +19989,7 @@ SCL72:
         ld a,b
         xor d
         or l
-        jr nz,SCL77 ; peep: jp_to_jr
+        jr      nz,SCL77 ; peep: jp_to_jr
         ld hl,(__stox_c)
         ld de,(__stox_cutlim)
         ld a,h
@@ -19991,12 +19999,12 @@ SCL72:
         xor 80h
         ld d,a
         sbc hl,de
-        jr z,SCL77 ; peep: jp_to_jr
-        jr c,SCL77 ; peep: jp_to_jr
+        jr      z,SCL77 ; peep: jp_to_jr
+        jr      c,SCL77 ; peep: jp_to_jr
 SCL83:
         ld hl,65535
         ld (__stox_any),hl
-        jr SCL78 ; peep: jp_to_jr
+        jr      SCL78 ; peep: jp_to_jr
 SCL77:
         ld hl,1
         ld (__stox_any),hl
@@ -20056,11 +20064,11 @@ SCL74:
         ld hl,(__stox_signed)
         ld a,h
         or l
-        jr z,SCL94U ; peep: jp_to_jr
+        jr      z,SCL94U ; peep: jp_to_jr
         ld hl,(__stox_neg)
         ld a,h
         or l
-        jr z,SCL95 ; peep: jp_to_jr
+        jr      z,SCL95 ; peep: jp_to_jr
         ; Signed negative overflow: return LONG_MIN. This is not "negate
         ; LONG_MIN's magnitude" happening to need no work; LONG_MIN
         ; (0x80000000) is its own two's-complement negation, so the
@@ -20068,11 +20076,11 @@ SCL74:
         ; bytes already loaded here.
         ld hl,0
         ld de,32768
-        jr SCL96 ; peep: jp_to_jr
+        jr      SCL96 ; peep: jp_to_jr
 SCL95:
         ld hl,65535
         ld de,32767
-        jr SCL96 ; peep: jp_to_jr
+        jr      SCL96 ; peep: jp_to_jr
 SCL94U:
         ld hl,65535
         ld de,65535
@@ -20081,12 +20089,12 @@ SCL96:
         ld (__stox_acc+2),de
         ld hl,34
         ld (_errno),hl
-        jr SCL93 ; peep: jp_to_jr
+        jr      SCL93 ; peep: jp_to_jr
 SCL92:
         ld hl,(__stox_neg)
         ld a,h
         or l
-        jr z,SCL93 ; peep: jp_to_jr
+        jr      z,SCL93 ; peep: jp_to_jr
         ld hl,0
         ld de,0
         push de
@@ -20132,16 +20140,16 @@ SCL93:
         ld a,b
         xor d
         or l
-        jr z,SCL101 ; peep: jp_to_jr
+        jr      z,SCL101 ; peep: jp_to_jr
         ld hl,(__stox_endptr) ; peep: ix_frame_ptr_deadd
         push hl
         ld hl,(__stox_any)
         ld a,h
         or l
-        jr z,SCL104 ; peep: jp_to_jr
+        jr      z,SCL104 ; peep: jp_to_jr
         ld hl,(__stox_p)
         ld de,0
-        jr SCL105 ; peep: jp_to_jr
+        jr      SCL105 ; peep: jp_to_jr
 SCL104:
         ld hl,(__stox_nptr)
 SCL105:
