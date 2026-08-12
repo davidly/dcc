@@ -1574,6 +1574,14 @@ struct MirConstantResultSwitch {
     int results[MIR_MACHINE_SWITCH_RESULT_LIMIT];
 };
 
+struct MirStringResultSwitch {
+    int parameter_stack_offset;
+    int minimum_case;
+    int maximum_case;
+    int default_string;
+    int strings[MIR_MACHINE_SWITCH_RESULT_LIMIT];
+};
+
 struct MirLocalByteFillSumPrint {
     struct Sym *fill_function;
     struct Sym *print_function;
@@ -20883,6 +20891,205 @@ static int mir_match_constant_result_switch(
     return 1;
 }
 
+static int mir_machine_string_return_for_label(
+    int label, int *string_id)
+{
+    int instruction = mir_find_label(label);
+    const struct MirInsn *value;
+    const struct MirInsn *return_insn;
+    int return_position;
+
+    if (instruction < 0)
+        return 0;
+    ++instruction;
+    while (instruction < mir.count &&
+           (mir.insns[instruction].opcode == MIR_NOP ||
+            mir.insns[instruction].opcode == MIR_LABEL))
+        ++instruction;
+    if (instruction >= mir.count)
+        return 0;
+    value = &mir.insns[instruction];
+    return_position = instruction + 1;
+    while (return_position < mir.count &&
+           (mir.insns[return_position].opcode == MIR_NOP ||
+            mir.insns[return_position].opcode == MIR_LABEL))
+        ++return_position;
+    if (return_position >= mir.count)
+        return 0;
+    return_insn = &mir.insns[return_position];
+    if (return_insn->opcode != MIR_RETURN ||
+        return_insn->src1 != value->dst)
+        return 0;
+    if (value->opcode == MIR_STRING_ADDRESS &&
+        value->immediate >= 0) {
+        *string_id = (int)value->immediate;
+        return 1;
+    }
+    if (value->opcode == MIR_CONST &&
+        value->immediate == 0) {
+        *string_id = -1;
+        return 1;
+    }
+    return 0;
+}
+
+static int mir_match_string_result_switch(
+    struct MirStringResultSwitch *plan)
+{
+    int case_values[MIR_MACHINE_SWITCH_RESULT_LIMIT];
+    int case_strings[MIR_MACHINE_SWITCH_RESULT_LIMIT];
+    const struct MirInsn *parameter = NULL;
+    int condition = -1;
+    int case_count = 0;
+    int default_label = -1;
+    int start = -1;
+    int cursor;
+    int instruction;
+    int width;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla ||
+        type_ptr_depth(mir.return_type) != 1 ||
+        (mir.return_type & 15) != TYPE_CHAR ||
+        type_size(mir.return_type) != 2)
+        return 0;
+    for (instruction = 0;
+         instruction + 3 < mir.count; ++instruction) {
+        const struct MirInsn *constant =
+            &mir.insns[instruction];
+        const struct MirInsn *binary =
+            &mir.insns[instruction + 1];
+        const struct MirInsn *branch =
+            &mir.insns[instruction + 2];
+        const struct MirInsn *jump =
+            &mir.insns[instruction + 3];
+        int candidate;
+
+        if (constant->opcode != MIR_CONST ||
+            binary->opcode != MIR_BINARY ||
+            binary->immediate != TOK_EQ ||
+            branch->opcode != MIR_BRANCH_FALSE ||
+            branch->src1 != binary->dst ||
+            jump->opcode != MIR_JUMP)
+            continue;
+        if (binary->src1 == constant->dst)
+            candidate = binary->src2;
+        else if (binary->src2 == constant->dst)
+            candidate = binary->src1;
+        else
+            continue;
+        parameter = mir_definition(candidate);
+        if (parameter == NULL ||
+            parameter->opcode != MIR_PARAM ||
+            type_ptr_depth(parameter->type) != 0 ||
+            type_size(parameter->type) != 2 ||
+            type_is_float(parameter->type) ||
+            !mir_machine_parameter_value_offset(
+                candidate,
+                &plan->parameter_stack_offset))
+            return 0;
+        condition = candidate;
+        start = instruction;
+        break;
+    }
+    if (start < 0)
+        return 0;
+    for (instruction = 0; instruction < start; ++instruction)
+        if (mir.insns[instruction].opcode != MIR_LABEL &&
+            mir.insns[instruction].opcode != MIR_PARAM &&
+            mir.insns[instruction].opcode != MIR_NOP)
+            return 0;
+    cursor = start;
+    for (;;) {
+        const struct MirInsn *constant;
+        const struct MirInsn *binary;
+        const struct MirInsn *branch;
+        const struct MirInsn *jump;
+        int candidate;
+        int next;
+
+        if (case_count >= MIR_MACHINE_SWITCH_RESULT_LIMIT ||
+            cursor < 0 || cursor + 3 >= mir.count)
+            return 0;
+        constant = &mir.insns[cursor];
+        binary = &mir.insns[cursor + 1];
+        branch = &mir.insns[cursor + 2];
+        jump = &mir.insns[cursor + 3];
+        if (constant->opcode != MIR_CONST ||
+            constant->immediate < 0 ||
+            constant->immediate > 32767 ||
+            binary->opcode != MIR_BINARY ||
+            binary->immediate != TOK_EQ ||
+            branch->opcode != MIR_BRANCH_FALSE ||
+            branch->src1 != binary->dst ||
+            jump->opcode != MIR_JUMP)
+            return 0;
+        if (binary->src1 == constant->dst)
+            candidate = binary->src2;
+        else if (binary->src2 == constant->dst)
+            candidate = binary->src1;
+        else
+            return 0;
+        if (candidate != condition ||
+            !mir_machine_string_return_for_label(
+                jump->label,
+                &case_strings[case_count]))
+            return 0;
+        for (instruction = 0;
+             instruction < case_count; ++instruction)
+            if (case_values[instruction] ==
+                constant->immediate)
+                return 0;
+        case_values[case_count] =
+            (int)constant->immediate;
+        ++case_count;
+        next = cursor + 4;
+        if (next < mir.count &&
+            mir.insns[next].opcode == MIR_LABEL &&
+            mir.insns[next].label == branch->label) {
+            cursor = next + 1;
+            if (cursor + 3 < mir.count &&
+                mir.insns[cursor].opcode == MIR_CONST)
+                continue;
+            if (cursor < mir.count &&
+                mir.insns[cursor].opcode == MIR_JUMP)
+                default_label = mir.insns[cursor].label;
+            else
+                default_label = branch->label;
+        } else {
+            default_label = branch->label;
+        }
+        break;
+    }
+    if (case_count < 2 || default_label < 0 ||
+        !mir_machine_string_return_for_label(
+            default_label, &plan->default_string))
+        return 0;
+    plan->minimum_case = case_values[0];
+    plan->maximum_case = case_values[0];
+    for (instruction = 1;
+         instruction < case_count; ++instruction) {
+        if (case_values[instruction] < plan->minimum_case)
+            plan->minimum_case = case_values[instruction];
+        if (case_values[instruction] > plan->maximum_case)
+            plan->maximum_case = case_values[instruction];
+    }
+    width = plan->maximum_case -
+            plan->minimum_case + 1;
+    if (width > MIR_MACHINE_SWITCH_RESULT_LIMIT ||
+        case_count * 2 < width)
+        return 0;
+    for (instruction = 0; instruction < width; ++instruction)
+        plan->strings[instruction] =
+            plan->default_string;
+    for (instruction = 0;
+         instruction < case_count; ++instruction)
+        plan->strings[case_values[instruction] -
+                      plan->minimum_case] =
+            case_strings[instruction];
+    return 1;
+}
+
 static int mir_match_constant_flow_result_switch(
     struct MirConstantResultSwitch *plan)
 {
@@ -33661,6 +33868,51 @@ static void mir_emit_constant_result_switch(
             default_label, plan->default_result);
 }
 
+static void mir_emit_string_result_switch(
+    FILE *out, const struct MirStringResultSwitch *plan)
+{
+    int default_label = new_label();
+    int table_label = new_label();
+    int width = plan->maximum_case -
+                plan->minimum_case + 1;
+    int value;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tex de,hl\n",
+            plan->parameter_stack_offset);
+    if (plan->minimum_case != 0)
+        fprintf(out,
+                "\tld de,%d\n\tor a\n\tsbc hl,de\n",
+                plan->minimum_case);
+    fprintf(out,
+            "\tld a,h\n\tor a\n\tjp nz,L%d\n"
+            "\tld a,l\n\tcp %d\n\tjp nc,L%d\n"
+            "\tadd hl,hl\n\tld de,L%d\n\tadd hl,de\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tex de,hl\n\tret\nL%d:\n",
+            default_label, width, default_label,
+            table_label, table_label);
+    for (value = 0; value < width; ++value)
+        if (plan->strings[value] >= 0)
+            fprintf(out, "\tdw S%d\n",
+                    plan->strings[value]);
+        else
+            fputs("\tdw 0\n", out);
+    if (plan->default_string >= 0)
+        fprintf(out,
+                "L%d:\n\tld hl,S%d\n\tret\n",
+                default_label,
+                plan->default_string);
+    else
+        fprintf(out,
+                "L%d:\n\tld hl,0\n\tret\n",
+                default_label);
+}
+
 static void mir_emit_local_byte_fill_sum_print(
     FILE *out, const struct MirLocalByteFillSumPrint *plan)
 {
@@ -33919,6 +34171,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirSingleSignedDivCheck single_signed_div_check;
     struct MirLocalIdentityArrayResult local_identity_array_result;
     struct MirConstantResultSwitch constant_result_switch;
+    struct MirStringResultSwitch string_result_switch;
     struct MirLocalByteFillSumPrint local_byte_fill_sum_print;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
@@ -34943,6 +35196,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &constant_result_switch)) {
         mir_emit_constant_result_switch(
             out, &constant_result_switch);
+        return 1;
+    }
+    if (mir_match_string_result_switch(
+            &string_result_switch)) {
+        mir_emit_string_result_switch(
+            out, &string_result_switch);
         return 1;
     }
     if (mir_match_local_byte_fill_sum_print(
