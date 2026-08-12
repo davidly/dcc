@@ -1969,6 +1969,42 @@ struct MirCtypeReallocSchedule {
     int check_count;
 };
 
+#define MIR_CONTEXT_OP_CHECK_COUNT 33
+#define MIR_CONTEXT_OP_MAX_ARGUMENTS 4
+
+struct MirContextOpArgument {
+    unsigned long value;
+    int width;
+};
+
+struct MirContextOpCheck {
+    struct Sym *value_function;
+    struct Sym *check_function;
+    struct MirContextOpArgument arguments[MIR_CONTEXT_OP_MAX_ARGUMENTS];
+    unsigned long expected;
+    int argument_count;
+    int result_width;
+    int result_unsigned;
+    int check_width;
+    int check_unsigned;
+    int check_float;
+    int string_id;
+};
+
+struct MirContextOpSchedule {
+    struct MirContextOpCheck checks[MIR_CONTEXT_OP_CHECK_COUNT];
+    struct Sym *array_root;
+    struct Sym *float_roots[2];
+    struct Sym *failure_root;
+    struct Sym *print_function;
+    unsigned long float_values[2];
+    int array_offset;
+    int float_offsets[2];
+    int failure_offset;
+    int success_string_id;
+    int failure_string_id;
+};
+
 struct MirLocalIdentityArrayResult {
     struct Sym *escaped_pointer;
     int escaped_pointer_offset;
@@ -27471,6 +27507,472 @@ static int mir_match_ctype_realloc_schedule(
     return 1;
 }
 
+static int mir_match_context_call_arguments(
+    const struct MirInsn *call, int count,
+    int arguments[MIR_CONTEXT_OP_MAX_ARGUMENTS])
+{
+    int found = 0;
+    int instruction;
+    int argument;
+
+    if (count < 1 || count > MIR_CONTEXT_OP_MAX_ARGUMENTS)
+        return 0;
+    for (argument = 0; argument < MIR_CONTEXT_OP_MAX_ARGUMENTS;
+         ++argument)
+        arguments[argument] = -1;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *item = &mir.insns[instruction];
+        int index;
+
+        if (item->opcode != MIR_ARG ||
+            item->secondary_offset != call->secondary_offset)
+            continue;
+        index = (int)item->immediate;
+        if (index < 0 || index >= count ||
+            arguments[index] >= 0)
+            return 0;
+        arguments[index] = item->src1;
+        ++found;
+    }
+    return found == count;
+}
+
+static int mir_match_context_scalar_type(int type, int width)
+{
+    return type_ptr_depth(type) == 0 &&
+        (width == 2 || width == 4) &&
+        type_size(type) == width;
+}
+
+static int mir_match_context_constant(
+    int value, int type, unsigned long *constant)
+{
+    long evaluated;
+
+    if (!mir_match_context_scalar_type(type, type_size(type)))
+        return 0;
+    if (type_is_float(type))
+        return mir_match_math_float_constant(value, constant);
+    if (!mir_machine_evaluate_constant(value, &evaluated, 0))
+        return 0;
+    if (type_size(type) == 2)
+        *constant = (unsigned long)evaluated & 0xffffUL;
+    else
+        *constant = (unsigned long)evaluated & 0xffffffffUL;
+    return 1;
+}
+
+static int mir_match_context_value_call(
+    struct MirContextOpCheck *check,
+    const struct MirInsn *call)
+{
+    struct Sym *function = find_global(call->name);
+    int arguments[MIR_CONTEXT_OP_MAX_ARGUMENTS];
+    int argument;
+
+    if (!mir_match_ctype_call_target(call, function) ||
+        function->proto_nargs < 1 ||
+        function->proto_nargs > MIR_CONTEXT_OP_MAX_ARGUMENTS ||
+        function->proto_variadic || call->memory_flags != 0 ||
+        !mir_match_context_scalar_type(
+            call->type, type_size(call->type)))
+        return 0;
+    if (!mir_match_context_call_arguments(
+            call, function->proto_nargs, arguments))
+        return 0;
+    memset(check, 0, sizeof(*check));
+    check->value_function = function;
+    check->argument_count = function->proto_nargs;
+    check->result_width = type_size(call->type);
+    check->result_unsigned =
+        !type_is_float(call->type) &&
+        (call->type & TYPE_UNSIGNED) != 0;
+    for (argument = 0; argument < check->argument_count;
+         ++argument) {
+        int type = function->proto_types[argument];
+
+        if (!mir_match_context_scalar_type(type, type_size(type)) ||
+            type_is_float(type) ||
+            !mir_match_context_constant(
+                arguments[argument], type,
+                &check->arguments[argument].value))
+            return 0;
+        check->arguments[argument].width = type_size(type);
+    }
+    return 1;
+}
+
+static int mir_match_context_check_call(
+    struct MirContextOpCheck *check,
+    const struct MirInsn *value_call,
+    const struct MirInsn *call)
+{
+    struct Sym *function = find_global(call->name);
+    const struct MirInsn *converted;
+    int arguments[3];
+    int check_type;
+
+    if (!mir_match_ctype_call_target(call, function) ||
+        function->proto_nargs != 3 ||
+        function->proto_variadic || call->memory_flags != 0 ||
+        (call->type & 15) != TYPE_VOID ||
+        !mir_machine_three_call_arguments(call, arguments))
+        return 0;
+    check_type = function->proto_types[0];
+    if (!mir_match_context_scalar_type(check_type, 4) ||
+        function->proto_types[1] != check_type ||
+        !mir_match_ctype_pointer_type(function->proto_types[2]) ||
+        !mir_match_context_constant(
+            arguments[1], check_type, &check->expected) ||
+        !mir_match_ctype_string(
+            arguments[2], &check->string_id))
+        return 0;
+    if (arguments[0] != value_call->dst) {
+        converted = mir_definition(arguments[0]);
+        if (converted == NULL ||
+            converted->opcode != MIR_UNARY ||
+            converted->immediate != 0 ||
+            converted->src1 != value_call->dst ||
+            converted->type != check_type)
+            return 0;
+    } else if (value_call->type != check_type) {
+        return 0;
+    }
+    check->check_function = function;
+    check->check_width = 4;
+    check->check_unsigned =
+        !type_is_float(check_type) &&
+        (check_type & TYPE_UNSIGNED) != 0;
+    check->check_float = type_is_float(check_type);
+    if (check->result_width == 4 &&
+        (check->check_float != type_is_float(value_call->type) ||
+         (!check->check_float &&
+          check->check_unsigned != check->result_unsigned)))
+        return 0;
+    return 1;
+}
+
+static int mir_match_context_prefix(
+    struct MirContextOpSchedule *plan)
+{
+    struct Sym *root;
+    long offset;
+
+    if (mir.insns[0].opcode != MIR_LABEL ||
+        mir.insns[1].opcode != MIR_NOP ||
+        mir.insns[2].opcode != MIR_CONST ||
+        !mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+        mir.insns[3].opcode != MIR_STORE ||
+        mir.insns[3].src1 != mir.insns[2].dst ||
+        mir.insns[3].memory_size != 1 ||
+        !mir_machine_named_nonvolatile(&mir.insns[3]) ||
+        mir.insns[4].opcode != MIR_LABEL ||
+        mir.insns[5].opcode != MIR_PHI ||
+        mir.insns[5].src1 != mir.insns[2].dst ||
+        mir.insns[5].src2 != mir.insns[22].dst ||
+        mir.insns[5].phi_pred1 != mir.insns[0].label ||
+        mir.insns[5].phi_pred2 != mir.insns[19].label ||
+        mir.insns[6].opcode != MIR_NOP ||
+        mir.insns[7].opcode != MIR_CONST ||
+        !mir_machine_constant_equals(mir.insns[7].dst, 8) ||
+        mir.insns[8].opcode != MIR_UNARY ||
+        mir.insns[8].immediate != 0 ||
+        mir.insns[8].src1 != mir.insns[5].dst ||
+        mir.insns[9].opcode != MIR_BINARY ||
+        mir.insns[9].immediate != '<' ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[9].src2 != mir.insns[7].dst ||
+        mir.insns[10].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        mir.insns[10].label != mir.insns[25].label)
+        return 0;
+    if (mir.insns[11].opcode != MIR_ADDRESS ||
+        !mir_machine_global_address_offset(
+            mir.insns[11].dst, &root, &offset, 0) ||
+        root == NULL || offset < -32768 || offset > 32767 ||
+        mir.insns[12].opcode != MIR_NOP ||
+        mir.insns[13].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[13].src1 != mir.insns[11].dst ||
+        mir.insns[13].src2 != mir.insns[5].dst ||
+        mir.insns[13].immediate != 4 ||
+        mir.insns[13].memory_size != 4 ||
+        mir.insns[14].opcode != MIR_NOP ||
+        mir.insns[15].opcode != MIR_UNARY ||
+        mir.insns[15].immediate != 0 ||
+        mir.insns[15].src1 != mir.insns[5].dst ||
+        mir.insns[16].opcode != MIR_CONST ||
+        !mir_machine_constant_equals(
+            mir.insns[16].dst, 100000) ||
+        mir.insns[17].opcode != MIR_BINARY ||
+        mir.insns[17].immediate != '*' ||
+        mir.insns[17].src1 != mir.insns[15].dst ||
+        mir.insns[17].src2 != mir.insns[16].dst ||
+        type_size(mir.insns[17].type) != 4 ||
+        mir.insns[18].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[18].src1 != mir.insns[13].dst ||
+        mir.insns[18].src2 != mir.insns[17].dst ||
+        mir.insns[18].memory_size != 4 ||
+        (mir.insns[18].memory_flags & (1 | 8)) != 0)
+        return 0;
+    if (mir.insns[19].opcode != MIR_LABEL ||
+        mir.insns[20].opcode != MIR_NOP ||
+        mir.insns[21].opcode != MIR_CONST ||
+        !mir_machine_constant_equals(mir.insns[21].dst, 1) ||
+        mir.insns[22].opcode != MIR_BINARY ||
+        mir.insns[22].immediate != '+' ||
+        mir.insns[22].src1 != mir.insns[5].dst ||
+        mir.insns[22].src2 != mir.insns[21].dst ||
+        mir.insns[23].opcode != MIR_STORE ||
+        mir.insns[23].src1 != mir.insns[22].dst ||
+        !mir_machine_same_location(
+            &mir.insns[3], &mir.insns[23]) ||
+        mir.insns[24].opcode != MIR_JUMP ||
+        mir.insns[24].label != mir.insns[4].label ||
+        mir.insns[25].opcode != MIR_LABEL)
+        return 0;
+    plan->array_root = root;
+    plan->array_offset = (int)offset;
+    return 1;
+}
+
+static int mir_match_context_float_stores(
+    struct MirContextOpSchedule *plan)
+{
+    int store;
+
+    for (store = 0; store < 2; ++store) {
+        const struct MirInsn *value = &mir.insns[214 + store * 3];
+        const struct MirInsn *name = value + 1;
+        const struct MirInsn *write = value + 2;
+        int memory_type;
+        int memory_storage;
+        int memory_offset;
+
+        if (value->opcode != MIR_FLOAT_CONST ||
+            !mir_match_math_float_type(value->type) ||
+            name->opcode != MIR_NOP ||
+            write->opcode != MIR_STORE ||
+            write->src1 != value->dst ||
+            !mir_machine_named_nonvolatile(write) ||
+            !mir_scalar_memory_location(
+                write, &memory_type, &memory_storage,
+                &memory_offset) ||
+            memory_storage != SC_GLOBAL ||
+            !mir_match_math_float_type(memory_type) ||
+            (plan->float_roots[store] =
+                 find_global(write->name)) == NULL)
+            return 0;
+        plan->float_values[store] =
+            (unsigned long)value->immediate & 0xffffffffUL;
+        plan->float_offsets[store] = memory_offset;
+    }
+    return plan->float_roots[0] != plan->float_roots[1] ||
+        plan->float_offsets[0] != plan->float_offsets[1];
+}
+
+static int mir_match_context_tail(
+    struct MirContextOpSchedule *plan,
+    const int call_indices[68])
+{
+    struct Sym *print_function = NULL;
+    int arguments[2];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int argument;
+
+    if (mir.insns[413].opcode != MIR_LOAD ||
+        !mir_machine_named_nonvolatile(&mir.insns[413]) ||
+        !mir_scalar_memory_location(
+            &mir.insns[413], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        type_ptr_depth(memory_type) != 0 ||
+        type_size(memory_type) != 2 ||
+        (plan->failure_root =
+             find_global(mir.insns[413].name)) == NULL ||
+        mir.insns[414].opcode != MIR_CONST ||
+        !mir_machine_constant_equals(mir.insns[414].dst, 0) ||
+        mir.insns[415].opcode != MIR_BINARY ||
+        mir.insns[415].immediate != TOK_EQ ||
+        mir.insns[415].src1 != mir.insns[413].dst ||
+        mir.insns[415].src2 != mir.insns[414].dst ||
+        mir.insns[416].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[416].src1 != mir.insns[415].dst ||
+        mir.insns[416].label != mir.insns[422].label ||
+        mir.insns[417].opcode != MIR_LABEL ||
+        mir.insns[418].opcode != MIR_STRING_ADDRESS ||
+        !mir_match_ctype_string(
+            mir.insns[418].dst, &plan->success_string_id) ||
+        mir.insns[419].opcode != MIR_ARG ||
+        mir.insns[419].src1 != mir.insns[418].dst ||
+        call_indices[66] != 420 ||
+        mir.insns[420].opcode != MIR_CALL ||
+        !mir_machine_single_call_argument(
+            &mir.insns[420], &argument) ||
+        argument != mir.insns[418].dst ||
+        !mir_match_ctype_print_call(
+            &mir.insns[420], &print_function) ||
+        mir.insns[421].opcode != MIR_JUMP ||
+        mir.insns[421].label != mir.insns[428].label ||
+        mir.insns[422].opcode != MIR_LABEL ||
+        mir.insns[423].opcode != MIR_STRING_ADDRESS ||
+        !mir_match_ctype_string(
+            mir.insns[423].dst, &plan->failure_string_id) ||
+        mir.insns[424].opcode != MIR_ARG ||
+        mir.insns[424].src1 != mir.insns[423].dst ||
+        mir.insns[425].opcode != MIR_LOAD ||
+        !mir_machine_same_location(
+            &mir.insns[413], &mir.insns[425]) ||
+        mir.insns[426].opcode != MIR_ARG ||
+        mir.insns[426].src1 != mir.insns[425].dst ||
+        call_indices[67] != 427 ||
+        mir.insns[427].opcode != MIR_CALL ||
+        !mir_machine_two_call_arguments(
+            &mir.insns[427], arguments) ||
+        arguments[0] != mir.insns[423].dst ||
+        arguments[1] != mir.insns[425].dst ||
+        !mir_match_ctype_print_call(
+            &mir.insns[427], &print_function) ||
+        mir.insns[428].opcode != MIR_LABEL ||
+        mir.insns[429].opcode != MIR_LOAD ||
+        !mir_machine_same_location(
+            &mir.insns[413], &mir.insns[429]) ||
+        mir.insns[430].opcode != MIR_CONST ||
+        !mir_machine_constant_equals(mir.insns[430].dst, 0) ||
+        mir.insns[431].opcode != MIR_BINARY ||
+        mir.insns[431].immediate != TOK_NE ||
+        mir.insns[431].src1 != mir.insns[429].dst ||
+        mir.insns[431].src2 != mir.insns[430].dst ||
+        mir.insns[432].opcode != MIR_RETURN ||
+        mir.insns[432].src1 != mir.insns[431].dst)
+        return 0;
+    plan->failure_offset = memory_offset;
+    plan->print_function = print_function;
+    return 1;
+}
+
+static int mir_match_context_op_schedule(
+    struct MirContextOpSchedule *plan)
+{
+    static const int expected_counts[MIR_RETURN + 1] = {
+        [MIR_LABEL] = 7,
+        [MIR_NOP] = 18,
+        [MIR_CONST] = 99,
+        [MIR_FLOAT_CONST] = 7,
+        [MIR_STORE] = 4,
+        [MIR_PHI] = 1,
+        [MIR_UNARY] = 11,
+        [MIR_BINARY] = 5,
+        [MIR_BRANCH_FALSE] = 2,
+        [MIR_ADDRESS] = 1,
+        [MIR_INDEX_ADDRESS] = 1,
+        [MIR_STORE_INDIRECT] = 1,
+        [MIR_JUMP] = 2,
+        [MIR_ARG] = 167,
+        [MIR_CALL] = 68,
+        [MIR_STRING_ADDRESS] = 35,
+        [MIR_LOAD] = 3,
+        [MIR_RETURN] = 1
+    };
+    struct Sym *check_functions[3] = {NULL, NULL, NULL};
+    struct Sym *value_functions[MIR_CONTEXT_OP_CHECK_COUNT];
+    int call_indices[68];
+    int check_counts[3] = {0, 0, 0};
+    int opcode_counts[MIR_RETURN + 1];
+    int call_count = 0;
+    int instruction;
+    int check;
+
+    memset(plan, 0, sizeof(*plan));
+    memset(opcode_counts, 0, sizeof(opcode_counts));
+    memset(value_functions, 0, sizeof(value_functions));
+    if (mir.count != 433 || mir_cfg_block_count() != 7 ||
+        mir.has_vla || mir.local_bytes != 1 ||
+        mir.aggregate_temp_bytes != 0 ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_size(mir.return_type) != 2)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        int opcode = mir.insns[instruction].opcode;
+
+        if (opcode < 0 || opcode > MIR_RETURN)
+            return mir_machine_reject(
+                "context-op-schedule", "opcode-range");
+        ++opcode_counts[opcode];
+        if (opcode == MIR_CALL) {
+            if (call_count >= 68)
+                return mir_machine_reject(
+                    "context-op-schedule", "call-overflow");
+            call_indices[call_count++] = instruction;
+        }
+    }
+    if (call_count != 68)
+        return mir_machine_reject(
+            "context-op-schedule", "call-count");
+    for (instruction = 0; instruction <= MIR_RETURN; ++instruction)
+        if (opcode_counts[instruction] != expected_counts[instruction])
+            return mir_machine_reject(
+                "context-op-schedule", "opcode-counts");
+    if (!mir_match_context_prefix(plan) ||
+        call_indices[0] != 32 ||
+        call_indices[29] != 213 ||
+        call_indices[30] != 222 ||
+        call_indices[65] != 412 ||
+        !mir_match_context_float_stores(plan))
+        return mir_machine_reject(
+            "context-op-schedule", "sections");
+    for (check = 0; check < MIR_CONTEXT_OP_CHECK_COUNT; ++check) {
+        struct MirContextOpCheck *item = &plan->checks[check];
+        int category;
+        int prior;
+
+        if (!mir_match_context_value_call(
+                item, &mir.insns[call_indices[check * 2]]) ||
+            !mir_match_context_check_call(
+                item, &mir.insns[call_indices[check * 2]],
+                &mir.insns[call_indices[check * 2 + 1]]))
+            return mir_machine_reject(
+                "context-op-schedule", "check");
+        category = item->check_float ? 2 :
+            (item->check_unsigned ? 1 : 0);
+        if (check_functions[category] != NULL &&
+            check_functions[category] != item->check_function)
+            return mir_machine_reject(
+                "context-op-schedule", "check-identity");
+        check_functions[category] = item->check_function;
+        ++check_counts[category];
+        value_functions[check] = item->value_function;
+        for (prior = 0; prior < check; ++prior)
+            if (plan->checks[prior].string_id == item->string_id)
+                return mir_machine_reject(
+                    "context-op-schedule", "duplicate-string");
+    }
+    if (check_counts[0] != 24 || check_counts[1] != 4 ||
+        check_counts[2] != 5 ||
+        check_functions[0] == NULL ||
+        check_functions[1] == NULL ||
+        check_functions[2] == NULL ||
+        check_functions[0] == check_functions[1] ||
+        check_functions[0] == check_functions[2] ||
+        check_functions[1] == check_functions[2])
+        return mir_machine_reject(
+            "context-op-schedule", "check-groups");
+    if (value_functions[5] != value_functions[6] ||
+        value_functions[10] != value_functions[11] ||
+        value_functions[10] != value_functions[12] ||
+        value_functions[20] != value_functions[21] ||
+        value_functions[23] != value_functions[24] ||
+        value_functions[29] != value_functions[30])
+        return mir_machine_reject(
+            "context-op-schedule", "repeated-functions");
+    if (!mir_match_context_tail(plan, call_indices))
+        return mir_machine_reject(
+            "context-op-schedule", "tail");
+    return 1;
+}
+
 static int mir_match_local_identity_array_result(
     struct MirLocalIdentityArrayResult *plan)
 {
@@ -42619,6 +43121,117 @@ static void mir_emit_ctype_realloc_schedule(
     fputs("\tpop bc\n\tpop bc\n\tld hl,0\n\tret\n", out);
 }
 
+static void mir_emit_context_wide_global_store(
+    FILE *out, struct Sym *root, int offset,
+    unsigned long value)
+{
+    mir_machine_emit_float_bits(out, value);
+    mir_machine_emit_global_word_store(out, root, offset);
+    fputs("\tex de,hl\n", out);
+    mir_machine_emit_global_word_store(out, root, offset + 2);
+}
+
+static void mir_emit_context_array_init(
+    FILE *out, const struct MirContextOpSchedule *plan)
+{
+    int loop = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_address_de(
+        out, plan->array_root, plan->array_offset);
+    fputs("\tld b,d\n\tld c,e\n"
+          "\tld hl,0\n\tld de,0\n\tld a,8\n", out);
+    fprintf(out,
+            "L%d:\n\tpush af\n"
+            "\tld a,l\n\tld (bc),a\n\tinc bc\n"
+            "\tld a,h\n\tld (bc),a\n\tinc bc\n"
+            "\tld a,e\n\tld (bc),a\n\tinc bc\n"
+            "\tld a,d\n\tld (bc),a\n\tinc bc\n"
+            "\tpush bc\n\tld bc,34464\n\tadd hl,bc\n"
+            "\tex de,hl\n\tld bc,1\n\tadc hl,bc\n"
+            "\tex de,hl\n\tpop bc\n"
+            "\tpop af\n\tdec a\n\tjp nz,L%d\n",
+            loop, loop);
+}
+
+static int mir_emit_context_argument(
+    FILE *out, const struct MirContextOpArgument *argument)
+{
+    mir_emit_final_call_constant(
+        out, argument->value, argument->width);
+    return argument->width / 2;
+}
+
+static void mir_emit_context_check(
+    FILE *out, const struct MirContextOpCheck *check)
+{
+    int argument;
+    int argument_words = 0;
+
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            check->string_id);
+    mir_emit_final_call_constant(
+        out, check->expected, check->check_width);
+    for (argument = check->argument_count - 1;
+         argument >= 0; --argument)
+        argument_words += mir_emit_context_argument(
+            out, &check->arguments[argument]);
+    mir_machine_emit_symbol_call(out, check->value_function);
+    mir_emit_final_call_cleanup(out, argument_words);
+    if (check->result_width == 2) {
+        if (check->result_unsigned)
+            fputs("\tld de,0\n", out);
+        else
+            fputs("\tld a,h\n\trlca\n\tsbc a,a\n"
+                  "\tld e,a\n\tld d,a\n", out);
+    }
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, check->check_function);
+    mir_emit_final_call_cleanup(out, 5);
+}
+
+static void mir_emit_context_op_schedule(
+    FILE *out, const struct MirContextOpSchedule *plan)
+{
+    int failure = new_label();
+    int done = new_label();
+    int check;
+
+    mir_emit_context_array_init(out, plan);
+    for (check = 0; check < 15; ++check)
+        mir_emit_context_check(out, &plan->checks[check]);
+    mir_emit_context_wide_global_store(
+        out, plan->float_roots[0], plan->float_offsets[0],
+        plan->float_values[0]);
+    mir_emit_context_wide_global_store(
+        out, plan->float_roots[1], plan->float_offsets[1],
+        plan->float_values[1]);
+    for (; check < MIR_CONTEXT_OP_CHECK_COUNT; ++check)
+        mir_emit_context_check(out, &plan->checks[check]);
+
+    mir_machine_emit_global_word(
+        out, plan->failure_root, plan->failure_offset);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tld hl,S%d\n\tpush hl\n",
+            failure, plan->success_string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    fputs("\tpop bc\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            done, failure);
+    mir_machine_emit_global_word(
+        out, plan->failure_root, plan->failure_offset);
+    fprintf(out, "\tpush hl\n\tld hl,S%d\n\tpush hl\n",
+            plan->failure_string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+    fprintf(out, "L%d:\n", done);
+    mir_machine_emit_global_word(
+        out, plan->failure_root, plan->failure_offset);
+    fputs("\tld a,h\n\tor l\n\tld hl,0\n\tret z\n"
+          "\tinc hl\n\tret\n", out);
+}
+
 static void mir_emit_local_identity_array_result(
     FILE *out, const struct MirLocalIdentityArrayResult *plan)
 {
@@ -44201,6 +44814,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFinalCallCheckSchedule final_call_check_schedule;
     struct MirMathVerificationSchedule math_verification_schedule;
     struct MirCtypeReallocSchedule ctype_realloc_schedule;
+    struct MirContextOpSchedule context_op_schedule;
     struct MirLocalIdentityArrayResult local_identity_array_result;
     struct MirConstantResultSwitch constant_result_switch;
     struct MirStringResultSwitch string_result_switch;
@@ -44355,6 +44969,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &ctype_realloc_schedule)) {
         mir_emit_ctype_realloc_schedule(
             out, &ctype_realloc_schedule);
+        return 1;
+    }
+    if (mir_match_context_op_schedule(&context_op_schedule)) {
+        mir_emit_context_op_schedule(out, &context_op_schedule);
         return 1;
     }
     if (mir_match_affine_pointer_constant_return(&constant)) {

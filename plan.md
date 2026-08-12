@@ -6,11 +6,31 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `70d4a62`
-  (`dcc MIR: schedule VLA pointer switches`).
-- Current candidate coverage: **2103/2185 (96.25%)**.
-- Remaining fallback population: **82 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `f258f7e`
+  (`dcc MIR: schedule fixed ctype checks`).
+- Current candidate coverage: **2104/2185 (96.29%)**.
+- Remaining fallback population: **81 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The strict name-free context-operation scheduler admits `tctxops.main`. It
+  matches the complete 433-instruction, seven-block MIR graph, retains the
+  eight-iteration long-array initialization loop and both global float stores,
+  and preserves all 33 helper, 33 checker, and two `printf` calls in their
+  original side-effect order. Each helper prototype, constant argument,
+  result conversion, checker type, expected value, string, repeated-callee
+  relationship, and final success/failure branch is validated structurally;
+  no app/function-name, hash, or baseline exception participates in selection.
+  The emitter is frameless, uses neither IX nor IY, and keeps the
+  initialization and final report branches executable. Non-stack selected
+  output is 8,286 text bytes / 886 instructions versus 9,047 / 970 captured;
+  stack-check output is 8,315 /
+  887 versus 9,076 / 971. Against forced fallback, `tctxops` improves from
+  122,667 to 105,614 peep cycles (-13.90%) and from 124,726 to 107,409
+  nopeep cycles (-13.88%), with linked sizes non-regressing at 10,752 and
+  11,008 bytes respectively. The fresh stack-check census is 2104/2185 with
+  exactly this one new function and no regression. A separately named
+  `context_driver` clone selected through the same matcher (8,315 / 887
+  versus 9,067 / 970 captured) and produced byte-identical output in peep,
+  nopeep, and forced-fallback runs.
 - The strict name-free ctype/reallocation scheduler admits `tctype.main`. It
   matches the complete five-block graph, preserves all 14 ctype, 17 checker,
   five `printf`, and six allocation/string calls in their MIR side-effect
