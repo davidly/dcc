@@ -186,6 +186,24 @@ struct MirFourByteFailureCheck {
     char call_name[64];
 };
 
+enum MirFloatSpecialCheckKind {
+    MIR_FLOAT_SPECIAL_INFINITY = 1,
+    MIR_FLOAT_SPECIAL_NAN = 2
+};
+
+struct MirFloatSpecialCheck {
+    struct Sym *checks;
+    struct Sym *failures;
+    int checks_offset;
+    int failures_offset;
+    int name_stack_offset;
+    int value_stack_offset;
+    int negative_stack_offset;
+    int kind;
+    int string_id;
+    char call_name[64];
+};
+
 struct MirWideMemberUpdate {
     int pointer_stack_offset;
     int value_stack_offset;
@@ -24973,6 +24991,208 @@ static int mir_match_four_byte_failure_check(
     return 1;
 }
 
+static int mir_machine_named_global_increment(
+    const struct MirInsn *store,
+    struct Sym **root, int *offset)
+{
+    const struct MirInsn *add;
+    const struct MirInsn *load;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (store == NULL || store->opcode != MIR_STORE ||
+        !mir_scalar_memory_location(
+            store, &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        type_size(memory_type) != 2)
+        return 0;
+    add = mir_definition(store->src1);
+    if (add == NULL || add->opcode != MIR_BINARY ||
+        add->immediate != '+' ||
+        !mir_machine_constant_equals(add->src2, 1))
+        return 0;
+    load = mir_definition(add->src1);
+    if (load == NULL || load->opcode != MIR_LOAD ||
+        !mir_machine_same_location(load, store))
+        return 0;
+    *root = find_global(store->name);
+    *offset = memory_offset;
+    return *root != NULL && !(*root)->is_volatile;
+}
+
+static int mir_machine_match_name_report(
+    const struct MirInsn *call,
+    const struct MirInsn *name,
+    int *string_id, char call_name[64])
+{
+    int arguments[2];
+    const struct MirInsn *format;
+    struct Sym *function;
+
+    if (!mir_machine_two_call_arguments(call, arguments) ||
+        !mir_machine_value_matches_parameter(
+            arguments[1], name) ||
+        (call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) !=
+            MIR_CALL_FLAG_VARIADIC)
+        return 0;
+    format = mir_definition(arguments[0]);
+    if (format == NULL ||
+        format->opcode != MIR_STRING_ADDRESS ||
+        format->immediate < 0)
+        return 0;
+    function = find_global(call->name);
+    if (function == NULL || function->is_defined)
+        return 0;
+    *string_id = (int)format->immediate;
+    snprintf(call_name, 64, "%s",
+             call->base_name[0] != 0
+                 ? call->base_name
+                 : asm_name_for(
+                       sym_asm_name(function)));
+    return 1;
+}
+
+static int mir_match_float_special_check(
+    struct MirFloatSpecialCheck *plan)
+{
+    const struct MirInsn *name;
+    const struct MirInsn *value;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla || (mir.return_type & 15) != TYPE_VOID ||
+        mir.insns[0].opcode != MIR_LABEL ||
+        mir.insns[1].opcode != MIR_PARAM ||
+        mir.insns[2].opcode != MIR_PARAM)
+        return 0;
+    name = &mir.insns[1];
+    value = &mir.insns[2];
+    if (type_ptr_depth(name->type) == 0 ||
+        type_ptr_depth(value->type) != 0 ||
+        !type_is_float(value->type) ||
+        type_size(value->type) != 4 ||
+        !mir_machine_parameter_value_offset(
+            name->dst, &plan->name_stack_offset) ||
+        !mir_scalar_memory_location(
+            value, &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_size(memory_type) != 4 ||
+        !type_is_float(memory_type) ||
+        memory_offset < 2)
+        return 0;
+    plan->value_stack_offset = memory_offset - 2;
+    if (mir.count == 118 &&
+        mir_cfg_block_count() == 27) {
+        const struct MirInsn *negative = &mir.insns[3];
+
+        if (negative->opcode != MIR_PARAM ||
+            type_size(negative->type) != 2 ||
+            type_ptr_depth(negative->type) != 0 ||
+            !mir_machine_parameter_value_offset(
+                negative->dst,
+                &plan->negative_stack_offset) ||
+            !mir_machine_named_global_increment(
+                &mir.insns[7], &plan->checks,
+                &plan->checks_offset) ||
+            mir.insns[11].opcode != MIR_STORE_INDIRECT ||
+            mir.insns[11].src2 != value->dst ||
+            mir.insns[11].memory_size != 4 ||
+            !mir_machine_constant_equals(
+                mir.insns[17].dst, 0) ||
+            mir.insns[19].opcode != MIR_BINARY ||
+            mir.insns[19].immediate != TOK_NE ||
+            !mir_machine_constant_equals(
+                mir.insns[30].dst, 0) ||
+            mir.insns[32].opcode != MIR_BINARY ||
+            mir.insns[32].immediate != TOK_NE ||
+            !mir_machine_constant_equals(
+                mir.insns[55].dst, 128) ||
+            mir.insns[57].opcode != MIR_BINARY ||
+            mir.insns[57].immediate != TOK_NE ||
+            mir.insns[81].opcode != MIR_BRANCH_FALSE ||
+            mir.insns[81].src1 != negative->dst ||
+            !mir_machine_constant_equals(
+                mir.insns[82].dst, 255) ||
+            !mir_machine_constant_equals(
+                mir.insns[86].dst, 127) ||
+            mir.insns[93].opcode != MIR_BINARY ||
+            mir.insns[93].immediate != TOK_NE ||
+            mir.insns[106].opcode != MIR_BRANCH_FALSE ||
+            mir.insns[106].label !=
+                mir.insns[117].label ||
+            !mir_machine_match_name_report(
+                &mir.insns[111], name,
+                &plan->string_id,
+                plan->call_name) ||
+            !mir_machine_named_global_increment(
+                &mir.insns[115], &plan->failures,
+                &plan->failures_offset))
+            return 0;
+        plan->kind = MIR_FLOAT_SPECIAL_INFINITY;
+        return 1;
+    }
+    if (mir.count == 141 &&
+        mir_cfg_block_count() == 29) {
+        if (!mir_machine_named_global_increment(
+                &mir.insns[6], &plan->checks,
+                &plan->checks_offset) ||
+            mir.insns[10].opcode != MIR_STORE_INDIRECT ||
+            mir.insns[10].src2 != value->dst ||
+            mir.insns[10].memory_size != 4 ||
+            mir.insns[13].opcode != MIR_BINARY ||
+            mir.insns[13].immediate != TOK_EQ ||
+            mir.insns[13].src1 != value->dst ||
+            mir.insns[13].src2 != value->dst ||
+            !mir_machine_constant_equals(
+                mir.insns[24].dst, 127) ||
+            mir.insns[26].opcode != MIR_BINARY ||
+            mir.insns[26].immediate != '&' ||
+            !mir_machine_constant_equals(
+                mir.insns[27].dst, 127) ||
+            mir.insns[28].opcode != MIR_BINARY ||
+            mir.insns[28].immediate != TOK_NE ||
+            !mir_machine_constant_equals(
+                mir.insns[51].dst, 128) ||
+            mir.insns[53].opcode != MIR_BINARY ||
+            mir.insns[53].immediate != '&' ||
+            !mir_machine_constant_equals(
+                mir.insns[54].dst, 0) ||
+            mir.insns[55].opcode != MIR_BINARY ||
+            mir.insns[55].immediate != TOK_EQ ||
+            !mir_machine_constant_equals(
+                mir.insns[78].dst, 127) ||
+            mir.insns[80].opcode != MIR_BINARY ||
+            mir.insns[80].immediate != '&' ||
+            mir.insns[82].opcode != MIR_BINARY ||
+            mir.insns[82].immediate != TOK_EQ ||
+            mir.insns[91].opcode != MIR_BINARY ||
+            mir.insns[91].immediate != TOK_EQ ||
+            mir.insns[108].opcode != MIR_BINARY ||
+            mir.insns[108].immediate != TOK_EQ ||
+            mir.insns[129].opcode != MIR_BRANCH_FALSE ||
+            mir.insns[129].label !=
+                mir.insns[140].label ||
+            !mir_machine_match_name_report(
+                &mir.insns[134], name,
+                &plan->string_id,
+                plan->call_name) ||
+            !mir_machine_named_global_increment(
+                &mir.insns[138], &plan->failures,
+                &plan->failures_offset))
+            return 0;
+        plan->kind = MIR_FLOAT_SPECIAL_NAN;
+        return 1;
+    }
+    return 0;
+}
+
 static int mir_machine_pointee_is_volatile(
     const struct MirInsn *parameter)
 {
@@ -26810,6 +27030,75 @@ static void mir_emit_four_byte_failure_check(
     mir_machine_emit_global_word_store(
         out, plan->failure_count,
         plan->failure_offset);
+    fprintf(out,
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            done);
+}
+
+static void mir_emit_float_special_check(
+    FILE *out, const struct MirFloatSpecialCheck *plan)
+{
+    int failure = new_label();
+    int done = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_word(
+        out, plan->checks, plan->checks_offset);
+    fputs("\tinc hl\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->checks, plan->checks_offset);
+    if (plan->kind == MIR_FLOAT_SPECIAL_INFINITY) {
+        int positive = new_label();
+
+        fprintf(out,
+                "\tld a,(ix+%d)\n\tor a\n\tjp nz,L%d\n"
+                "\tld a,(ix+%d)\n\tor a\n\tjp nz,L%d\n"
+                "\tld a,(ix+%d)\n\tcp 128\n\tjp nz,L%d\n"
+                "\tld a,(ix+%d)\n\tor (ix+%d)\n"
+                "\tld a,(ix+%d)\n\tjp z,L%d\n"
+                "\tcp 255\n\tjp nz,L%d\n\tjp L%d\n"
+                "L%d:\n\tcp 127\n\tjp nz,L%d\n\tjp L%d\n",
+                plan->value_stack_offset + 2, failure,
+                plan->value_stack_offset + 3, failure,
+                plan->value_stack_offset + 4, failure,
+                plan->negative_stack_offset + 2,
+                plan->negative_stack_offset + 3,
+                plan->value_stack_offset + 5, positive,
+                failure, done, positive, failure, done);
+    } else {
+        fprintf(out,
+                "\tld a,(ix+%d)\n\tand 127\n"
+                "\tcp 127\n\tjp nz,L%d\n"
+                "\tld a,(ix+%d)\n\tld b,a\n"
+                "\tand 128\n\tjp z,L%d\n"
+                "\tld a,b\n\tand 127\n\tld b,a\n"
+                "\tld a,(ix+%d)\n\tor b\n\tld b,a\n"
+                "\tld a,(ix+%d)\n\tor b\n"
+                "\tjp z,L%d\n\tjp L%d\n",
+                plan->value_stack_offset + 5, failure,
+                plan->value_stack_offset + 4, failure,
+                plan->value_stack_offset + 3,
+                plan->value_stack_offset + 2,
+                failure, done);
+    }
+    fprintf(out,
+            "L%d:\n\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
+            "\tpush hl\n\tld hl,S%d\n\tpush hl\n",
+            failure,
+            plan->name_stack_offset + 2,
+            plan->name_stack_offset + 3,
+            plan->string_id);
+    mir_emit_runtime_call(out, plan->call_name);
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_global_word(
+        out, plan->failures,
+        plan->failures_offset);
+    fputs("\tinc hl\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->failures,
+        plan->failures_offset);
     fprintf(out,
             "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
             done);
@@ -32973,6 +33262,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFixedEmbeddingBuild fixed_embedding_build;
     struct MirFixedForwardAttention fixed_forward_attention;
     struct MirFourByteFailureCheck four_byte_failure_check;
+    struct MirFloatSpecialCheck float_special_check;
     struct MirWideMemberUpdate wide_member_update;
     struct MirSignedMemberProduct signed_member_product;
     struct MirSignedMemberSquareScaleDiv
@@ -33368,6 +33658,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &four_byte_failure_check)) {
         mir_emit_four_byte_failure_check(
             out, &four_byte_failure_check);
+        return 1;
+    }
+    if (mir_match_float_special_check(
+            &float_special_check)) {
+        mir_emit_float_special_check(
+            out, &float_special_check);
         return 1;
     }
     if (mir_match_wide_member_update(&wide_member_update)) {
