@@ -892,6 +892,27 @@ struct MirMixedScalarCallReport {
     int string_id;
 };
 
+struct MirScopedTempAlloc {
+    struct Sym *current;
+    struct Sym *records;
+    struct Sym *global_top;
+    int record_stride;
+    int local_offset;
+    int increment;
+};
+
+struct MirFileLineLoop {
+    struct Sym *open_function;
+    struct Sym *error_function;
+    struct Sym *read_function;
+    struct Sym *write_function;
+    struct Sym *close_function;
+    int path_string_id;
+    int mode_string_id;
+    int buffer_size;
+    int stream_value;
+};
+
 struct MirAsciiUpper {
     int parameter_stack_offset;
     int width;
@@ -11978,6 +11999,147 @@ static int mir_match_conditional_string_report(
     plan->format_string_id = (int)mir.insns[3].immediate;
     plan->true_string_id = (int)mir.insns[9].immediate;
     plan->false_string_id = (int)mir.insns[13].immediate;
+    return 1;
+}
+
+static int mir_match_file_line_loop(struct MirFileLineLoop *plan)
+{
+    int args2[2];
+    int args3[3];
+    int arg;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 40 || mir_cfg_block_count() != 5 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        mir.insns[1].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[3].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[5].opcode != MIR_CALL ||
+        !mir_machine_two_call_arguments(&mir.insns[5], args2) ||
+        args2[0] != mir.insns[1].dst ||
+        args2[1] != mir.insns[3].dst ||
+        mir.insns[6].opcode != MIR_STORE ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        !mir_machine_same_location(&mir.insns[6], &mir.insns[7]) ||
+        mir.insns[8].opcode != MIR_UNARY ||
+        mir.insns[8].immediate != '!' ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[9].label != mir.insns[16].label)
+        return mir_machine_reject("file-line-loop", "open");
+    if (mir.insns[10].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[12].opcode != MIR_CALL ||
+        !mir_machine_single_call_argument(&mir.insns[12], &arg) ||
+        arg != mir.insns[10].dst ||
+        !mir_machine_constant_equals(mir.insns[13].dst, 1) ||
+        mir.insns[14].src1 != mir.insns[13].dst)
+        return mir_machine_reject("file-line-loop", "error");
+    if (mir.insns[18].opcode != MIR_ADDRESS ||
+        mir.insns[20].opcode != MIR_CONST ||
+        mir.insns[24].opcode != MIR_CALL ||
+        !mir_machine_three_call_arguments(&mir.insns[24], args3) ||
+        args3[0] != mir.insns[18].dst ||
+        args3[1] != mir.insns[20].dst ||
+        args3[2] != mir.insns[22].dst ||
+        !mir_machine_same_location(&mir.insns[6], &mir.insns[22]) ||
+        mir.insns[25].src1 != mir.insns[24].dst ||
+        mir.insns[25].label != mir.insns[34].label)
+        return mir_machine_reject("file-line-loop", "read");
+    plan->buffer_size = (int)mir.insns[20].immediate;
+    if (plan->buffer_size <= 0 || plan->buffer_size > 255 ||
+        mir.insns[26].opcode != MIR_ADDRESS ||
+        mir.insns[31].opcode != MIR_CALL ||
+        !mir_machine_two_call_arguments(&mir.insns[31], args2) ||
+        args2[0] != mir.insns[26].dst ||
+        args2[1] != mir.insns[28].dst ||
+        mir.insns[33].label != mir.insns[17].label ||
+        !mir_machine_same_location(&mir.insns[6], &mir.insns[35]) ||
+        mir.insns[37].opcode != MIR_CALL ||
+        !mir_machine_single_call_argument(&mir.insns[37], &arg) ||
+        arg != mir.insns[35].dst ||
+        !mir_machine_constant_equals(mir.insns[38].dst, 0) ||
+        mir.insns[39].src1 != mir.insns[38].dst)
+        return mir_machine_reject("file-line-loop", "tail");
+    plan->stream_value = (int)mir.insns[28].immediate;
+    plan->path_string_id = (int)mir.insns[1].immediate;
+    plan->mode_string_id = (int)mir.insns[3].immediate;
+    plan->open_function = find_global(mir.insns[5].name);
+    plan->error_function = find_global(mir.insns[12].name);
+    plan->read_function = find_global(mir.insns[24].name);
+    plan->write_function = find_global(mir.insns[31].name);
+    plan->close_function = find_global(mir.insns[37].name);
+    if (plan->open_function == NULL || plan->error_function == NULL ||
+        plan->read_function == NULL || plan->write_function == NULL ||
+        plan->close_function == NULL)
+        return mir_machine_reject("file-line-loop", "symbols");
+    return 1;
+}
+
+static int mir_match_scoped_temp_alloc(struct MirScopedTempAlloc *plan)
+{
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 35 || mir_cfg_block_count() != 2 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        mir.insns[0].opcode != MIR_LABEL ||
+        mir.insns[1].opcode != MIR_LOAD ||
+        !mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+        mir.insns[3].opcode != MIR_BINARY ||
+        mir.insns[3].immediate != TOK_GE ||
+        mir.insns[3].src1 != mir.insns[1].dst ||
+        mir.insns[3].src2 != mir.insns[2].dst ||
+        mir.insns[4].src1 != mir.insns[3].dst ||
+        mir.insns[4].label != mir.insns[24].label)
+        return mir_machine_reject("scoped-temp-alloc", "shape");
+    if (mir.insns[5].opcode != MIR_LOAD ||
+        !mir_machine_same_location(&mir.insns[1], &mir.insns[6]) ||
+        mir.insns[7].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[7].src1 != mir.insns[5].dst ||
+        mir.insns[7].src2 != mir.insns[6].dst ||
+        mir.insns[7].immediate <= 0 ||
+        mir.insns[8].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[8].src1 != mir.insns[7].dst ||
+        mir.insns[9].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[9].memory_size != 1 ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        !mir_machine_same_location(&mir.insns[5], &mir.insns[12]) ||
+        !mir_machine_same_location(&mir.insns[1], &mir.insns[13]) ||
+        mir.insns[14].src1 != mir.insns[12].dst ||
+        mir.insns[14].src2 != mir.insns[13].dst ||
+        mir.insns[14].immediate != mir.insns[7].immediate ||
+        mir.insns[15].src1 != mir.insns[14].dst ||
+        mir.insns[15].immediate != mir.insns[8].immediate ||
+        mir.insns[16].src1 != mir.insns[15].dst ||
+        !mir_machine_constant_equals(mir.insns[17].dst, 2) ||
+        mir.insns[18].immediate != '+' ||
+        mir.insns[18].src1 != mir.insns[16].dst ||
+        mir.insns[18].src2 != mir.insns[17].dst ||
+        mir.insns[20].src1 != mir.insns[15].dst ||
+        mir.insns[20].src2 != mir.insns[19].dst ||
+        mir.insns[20].memory_size != 1 ||
+        mir.insns[22].src1 != mir.insns[10].dst)
+        return mir_machine_reject("scoped-temp-alloc", "record");
+    plan->current = find_global(mir.insns[1].name);
+    plan->records = find_global(mir.insns[5].name);
+    plan->record_stride = (int)mir.insns[7].immediate;
+    plan->local_offset = (int)mir.insns[8].immediate;
+    plan->increment = (int)mir.insns[17].immediate;
+    if (plan->current == NULL || plan->current->is_volatile ||
+        plan->records == NULL || plan->records->is_volatile ||
+        mir.insns[25].opcode != MIR_LOAD ||
+        mir.insns[27].src1 != mir.insns[25].dst ||
+        !mir_machine_same_location(&mir.insns[25], &mir.insns[28]) ||
+        !mir_machine_constant_equals(mir.insns[29].dst, plan->increment) ||
+        mir.insns[30].immediate != '+' ||
+        mir.insns[30].src1 != mir.insns[28].dst ||
+        mir.insns[30].src2 != mir.insns[29].dst ||
+        !mir_machine_same_location(&mir.insns[25], &mir.insns[32]) ||
+        mir.insns[32].src1 != mir.insns[30].dst ||
+        mir.insns[34].src1 != mir.insns[25].dst)
+        return mir_machine_reject("scoped-temp-alloc", "global");
+    plan->global_top = find_global(mir.insns[25].name);
+    if (plan->global_top == NULL || plan->global_top->is_volatile ||
+        plan->record_stride != 40 ||
+        plan->local_offset < -32768 || plan->local_offset > 32767)
+        return mir_machine_reject("scoped-temp-alloc", "symbols");
     return 1;
 }
 
@@ -23931,6 +24093,84 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_file_buffer_address(
+    FILE *out, const struct MirFileLineLoop *plan)
+{
+    fputs("\tpush ix\n\tpop hl\n", out);
+    mir_machine_emit_hl_offset(out, -(plan->buffer_size + 2), 0);
+}
+
+static void mir_emit_file_line_loop(
+    FILE *out, const struct MirFileLineLoop *plan)
+{
+    int opened = new_label();
+    int loop = new_label();
+    int done = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    fprintf(out,
+            "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
+            plan->buffer_size + 2);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,S%d\n\tpush hl\n\tld hl,S%d\n\tpush hl\n",
+            plan->mode_string_id, plan->path_string_id);
+    mir_machine_emit_symbol_call(out, plan->open_function);
+    fputs("\tpop bc\n\tpop bc\n\tld (ix-2),l\n\tld (ix-1),h\n"
+          "\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tld hl,S%d\n\tpush hl\n",
+            opened, plan->path_string_id);
+    mir_machine_emit_symbol_call(out, plan->error_function);
+    fputs("\tpop bc\n\tld hl,1\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+    fprintf(out, "L%d:\nL%d:\n", opened, loop);
+    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,%d\n\tpush hl\n", plan->buffer_size);
+    mir_emit_file_buffer_address(out, plan);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->read_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n\tld hl,%d\n\tpush hl\n",
+            done, plan->stream_value);
+    mir_emit_file_buffer_address(out, plan);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->write_function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->close_function);
+    fputs("\tpop bc\n\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
+static void mir_emit_scoped_temp_alloc(
+    FILE *out, const struct MirScopedTempAlloc *plan)
+{
+    int global_path = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_word(out, plan->current, 0);
+    fputs("\tbit 7,h\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tld b,h\n\tld c,l\n",
+            global_path);
+    mir_machine_emit_global_word(out, plan->records, 0);
+    fputs("\tld d,h\n\tld e,l\n\tld h,b\n\tld l,c\n"
+          "\tadd hl,hl\n\tadd hl,hl\n\tadd hl,bc\n"
+          "\tadd hl,hl\n\tadd hl,hl\n\tadd hl,hl\n"
+          "\tadd hl,de\n", out);
+    mir_machine_emit_hl_offset(out, plan->local_offset, 0);
+    fprintf(out,
+            "\tld a,(hl)\n\tld c,a\n\tadd a,%d\n\tld (hl),a\n"
+            "\tld l,c\n\tld h,0\n\tret\n"
+            "L%d:\n",
+            plan->increment, global_path);
+    mir_machine_emit_global_word(out, plan->global_top, 0);
+    fputs("\tld b,h\n\tld c,l\n", out);
+    fprintf(out, "\tld de,%d\n\tadd hl,de\n", plan->increment);
+    mir_machine_emit_global_word_store(out, plan->global_top, 0);
+    fputs("\tld h,b\n\tld l,c\n\tret\n", out);
+}
+
 static void mir_emit_volatile_local_widths(FILE *out)
 {
     int loop = new_label();
@@ -25400,6 +25640,8 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirFileLineLoop file_line_loop;
+    struct MirScopedTempAlloc scoped_temp_alloc;
     struct MirMixedScalarCallReport mixed_scalar_call_report;
     struct MirVolatileMemberSum volatile_member_sum;
     struct MirFixedMemberInitCalls fixed_member_init_calls;
@@ -26045,6 +26287,15 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_file_line_loop(&file_line_loop)) {
+        mir_emit_file_line_loop(out, &file_line_loop);
+        return 1;
+    }
+    if (getenv("DCC_MIR_EXPERIMENTAL_SCOPED_TEMP") != NULL &&
+        mir_match_scoped_temp_alloc(&scoped_temp_alloc)) {
+        mir_emit_scoped_temp_alloc(out, &scoped_temp_alloc);
         return 1;
     }
     if (mir_match_volatile_local_widths()) {

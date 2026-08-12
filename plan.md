@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `18ff1e3`
-  (`schedule mixed scalar reports`).
-- Current candidate coverage: **1990/2185 (91.08%)**.
-- Remaining fallback population: **195 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `1102b55`
+  (`schedule volatile local kernels`).
+- Current candidate coverage: **1991/2185 (91.12%)**.
+- Remaining fallback population: **194 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -344,6 +344,14 @@ current execution plan and handoff.
   and execute the volatile counter's separate test and increment reads. This
   admits `tvolopt.volatile_local_widths`, completes that app's MIR coverage,
   and improves it 0.76% peep / 1.42% nopeep.
+- File line loops now allocate the fixed line buffer and file slot directly,
+  preserve fopen/perror/fgets/fputs/fclose argument order, and recompute the
+  buffer address only at call boundaries. This admits `texfile.main`,
+  completing that app's MIR coverage and reducing nopeep size by 128 bytes.
+- The structurally smaller `pint.alloc_temp` schedule remains experimental
+  behind `DCC_MIR_EXPERIMENTAL_SCOPED_TEMP`: the authoritative full-mode
+  configuration regressed 0.26% peep / 0.16% nopeep, so production correctly
+  retains the established backend.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -351,7 +359,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 195 final-cost fallbacks,
+- Current next priority: repeated causes in the 194 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
