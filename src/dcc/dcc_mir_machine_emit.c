@@ -523,6 +523,14 @@ struct MirCpmFileSize {
     int record_shift;
 };
 
+struct MirBlockLiteralChecks {
+    struct Sym *pair_function;
+    struct Sym *integer_function;
+    int pair_string_ids[2];
+    int integer_string_ids[7];
+    int integer_values[7];
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -6729,6 +6737,83 @@ static int mir_match_cpm_file_size(struct MirCpmFileSize *plan)
         plan->high_record_offset < 0 ||
         plan->record_shift <= 0 || plan->record_shift > 15)
         return mir_machine_reject("cpm-file-size", "layout");
+    return 1;
+}
+
+static int mir_match_block_literal_checks(
+    struct MirBlockLiteralChecks *plan)
+{
+    static const int call_indices[7] = {
+        80, 90, 101, 112, 123, 134, 142
+    };
+    static const int actual_indices[7] = {
+        74, 84, 95, 106, 117, 128, 136
+    };
+    static const int expected_indices[7] = {
+        76, 86, 97, 108, 119, 130, 138
+    };
+    static const int string_indices[7] = {
+        78, 88, 99, 110, 121, 132, 140
+    };
+    static const int values[7] = { 1, 2, 5, 6, 7, 11, 1235 };
+    int pair_arguments[4];
+    int integer_arguments[3];
+    int check;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 143 || mir_cfg_block_count() != 1 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID ||
+        !mir_machine_constant_equals(mir.insns[5].dst, 20) ||
+        !mir_machine_constant_equals(mir.insns[7].dst, 10) ||
+        !mir_machine_constant_equals(mir.insns[12].dst, 30) ||
+        !mir_machine_constant_equals(mir.insns[14].dst, 40) ||
+        !mir_machine_constant_equals(mir.insns[21].dst, 11) ||
+        !mir_machine_constant_equals(mir.insns[27].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[29].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[31].dst, 7) ||
+        !mir_machine_constant_equals(mir.insns[33].dst, 5) ||
+        !mir_machine_constant_equals(mir.insns[35].dst, 6) ||
+        !mir_machine_constant_equals(mir.insns[42].dst, 1234) ||
+        !mir_machine_constant_equals(mir.insns[50].dst, 1) ||
+        mir.insns[51].immediate != '+')
+        return mir_machine_reject("block-literal-checks", "setup");
+    if (!mir_machine_four_call_arguments(
+            &mir.insns[61], pair_arguments) ||
+        pair_arguments[0] != mir.insns[53].dst ||
+        !mir_machine_constant_equals(pair_arguments[1], 11) ||
+        !mir_machine_constant_equals(pair_arguments[2], 20) ||
+        pair_arguments[3] != mir.insns[59].dst ||
+        !mir_machine_four_call_arguments(
+            &mir.insns[70], pair_arguments) ||
+        pair_arguments[0] != mir.insns[62].dst ||
+        !mir_machine_constant_equals(pair_arguments[1], 30) ||
+        !mir_machine_constant_equals(pair_arguments[2], 40) ||
+        pair_arguments[3] != mir.insns[68].dst ||
+        strcmp(mir.insns[61].name, mir.insns[70].name))
+        return mir_machine_reject("block-literal-checks", "pairs");
+    plan->pair_function = find_global(mir.insns[61].name);
+    plan->pair_string_ids[0] = (int)mir.insns[59].immediate;
+    plan->pair_string_ids[1] = (int)mir.insns[68].immediate;
+    for (check = 0; check < 7; ++check) {
+        if (!mir_machine_three_call_arguments(
+                &mir.insns[call_indices[check]], integer_arguments) ||
+            integer_arguments[0] != mir.insns[actual_indices[check]].dst ||
+            integer_arguments[1] != mir.insns[expected_indices[check]].dst ||
+            integer_arguments[2] != mir.insns[string_indices[check]].dst ||
+            !mir_machine_constant_equals(
+                integer_arguments[1], values[check]) ||
+            (check != 0 &&
+             strcmp(mir.insns[call_indices[0]].name,
+                    mir.insns[call_indices[check]].name)))
+            return mir_machine_reject(
+                "block-literal-checks", "integers");
+        plan->integer_string_ids[check] =
+            (int)mir.insns[string_indices[check]].immediate;
+        plan->integer_values[check] = values[check];
+    }
+    plan->integer_function = find_global(mir.insns[80].name);
+    if (plan->pair_function == NULL || plan->integer_function == NULL)
+        return mir_machine_reject("block-literal-checks", "functions");
     return 1;
 }
 
@@ -25824,6 +25909,47 @@ static void mir_emit_cpm_file_size(
     fprintf(out, "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n", done);
 }
 
+static void mir_emit_block_literal_checks(
+    FILE *out, const struct MirBlockLiteralChecks *plan)
+{
+    static const int pair_values[4] = { 11, 20, 30, 40 };
+    int check;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-8\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (check = 0; check < 4; ++check) {
+        fprintf(out,
+                "\tld (ix%+d),%d\n\tld (ix%+d),0\n",
+                -8 + check * 2, pair_values[check],
+                -7 + check * 2);
+    }
+    for (check = 0; check < 2; ++check) {
+        fprintf(out,
+                "\tld hl,S%d\n\tpush hl\n"
+                "\tld hl,%d\n\tpush hl\n"
+                "\tld hl,%d\n\tpush hl\n",
+                plan->pair_string_ids[check],
+                pair_values[check * 2 + 1],
+                pair_values[check * 2]);
+        mir_emit_local_address(out, -8 + check * 4);
+        fputs("\tpush hl\n", out);
+        mir_machine_emit_symbol_call(out, plan->pair_function);
+        fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    }
+    for (check = 0; check < 7; ++check) {
+        fprintf(out,
+                "\tld hl,S%d\n\tpush hl\n"
+                "\tld hl,%d\n\tpush hl\n\tpush hl\n",
+                plan->integer_string_ids[check],
+                plan->integer_values[check]);
+        mir_machine_emit_symbol_call(out, plan->integer_function);
+        fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    }
+    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -29545,6 +29671,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirAggregateSignNormalize aggregate_sign_normalize;
     struct MirAggregateReturnReport aggregate_return_report;
     struct MirCpmFileSize cpm_file_size;
+    struct MirBlockLiteralChecks block_literal_checks;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -30105,6 +30232,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_cpm_file_size(&cpm_file_size)) {
         mir_emit_cpm_file_size(out, &cpm_file_size);
+        return 1;
+    }
+    if (mir_match_block_literal_checks(&block_literal_checks)) {
+        mir_emit_block_literal_checks(out, &block_literal_checks);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
