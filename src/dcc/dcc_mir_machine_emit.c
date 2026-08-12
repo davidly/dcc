@@ -1126,6 +1126,15 @@ struct MirFixedCallCheckRunner {
     int byte_arguments[3];
 };
 
+struct MirDeterministicInitCheck {
+    struct Sym *check_function;
+    int parameter_stack_offset;
+    int check_ids[7];
+    int check_count;
+    int return_multiplier;
+    int return_addend;
+};
+
 struct MirPalindromeScan {
     int parameter_stack_offset;
 };
@@ -7313,6 +7322,216 @@ static int mir_match_fixed_call_check_runner(
         (int)mir.insns[123].immediate;
     plan->success_string_id =
         (int)mir.insns[132].immediate;
+    return 1;
+}
+
+static int mir_match_deterministic_init_check(
+    struct MirDeterministicInitCheck *plan)
+{
+    static const int init_additions[8] = {
+        6, 14, 22, 26, 32, 36, 48, 54
+    };
+    static const int init_constants[8] = {
+        5, 13, 21, 25, 31, 35, 47, 53
+    };
+    static const int init_stores[8] = {
+        7, 15, 23, 27, 33, 37, 49, 55
+    };
+    static const int zero_constants[8] = {
+        8, 10, 16, 18, 28, 42, 44, 50
+    };
+    static const int zero_stores[8] = {
+        9, 11, 17, 19, 29, 43, 45, 51
+    };
+    static const int check_ids[7] = {
+        58, 115, 163, 213, 241, 290, 337
+    };
+    static const int check_values[7] = {
+        112, 160, 210, 238, 287, 334, 383
+    };
+    static const int check_calls[7] = {
+        114, 162, 212, 240, 289, 336, 385
+    };
+    static const int comparisons[21] = {
+        65, 74, 89, 104, 126, 135, 152,
+        174, 185, 202, 221, 230, 251, 261,
+        279, 300, 308, 326, 347, 357, 375
+    };
+    static const int parameter_additions[8] = {
+        73, 125, 173, 184, 220, 229, 299, 325
+    };
+    static const int parameter_constants[8] = {
+        72, 124, 172, 183, 219, 228, 298, 324
+    };
+    static const int init_offsets[8] = {
+        2, 0, 6, 8, 0, 2, 8, 12
+    };
+    static const int zero_offsets[8] = {
+        4, 6, 2, 4, 10, 6, 7, 10
+    };
+    static const int zero_sizes[8] = {
+        2, 2, 2, 2, 2, 1, 1, 2
+    };
+    int arguments[2];
+    struct Sym *check_function = NULL;
+    int call_count = 0;
+    int index;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 409 || mir_cfg_block_count() != 43 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_INT ||
+        mir.insns[1].opcode != MIR_PARAM ||
+        type_ptr_depth(mir.insns[1].type) != 0 ||
+        type_size(mir.insns[1].type) != 2 ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[1].dst,
+            &plan->parameter_stack_offset) ||
+        mir.insns[3].opcode != MIR_STORE ||
+        mir.insns[3].src1 != mir.insns[1].dst ||
+        mir.insns[3].memory_size != 2)
+        return mir_machine_reject(
+            "deterministic-init-check", "shape");
+    for (index = 0; index < 8; ++index) {
+        if (!mir_machine_constant_equals(
+                mir.insns[init_constants[index]].dst,
+                index + 1) ||
+            mir.insns[init_additions[index]].opcode != MIR_BINARY ||
+            mir.insns[init_additions[index]].immediate != '+' ||
+            mir.insns[init_additions[index]].src1 !=
+                mir.insns[1].dst ||
+            mir.insns[init_additions[index]].src2 !=
+                mir.insns[init_constants[index]].dst ||
+            mir.insns[init_stores[index]].opcode != MIR_STORE ||
+            mir.insns[init_stores[index]].src1 !=
+                mir.insns[init_additions[index]].dst ||
+            mir.insns[init_stores[index]].immediate !=
+                init_offsets[index] ||
+            mir.insns[init_stores[index]].memory_size != 2 ||
+            strcmp(mir.insns[init_stores[index]].name,
+                   mir.insns[index == 0 ? 3 :
+                       index < 4 ? 15 : 33].name) != 0 ||
+            !mir_machine_constant_equals(
+                mir.insns[zero_constants[index]].dst, 0) ||
+            mir.insns[zero_stores[index]].opcode != MIR_STORE ||
+            mir.insns[zero_stores[index]].src1 !=
+                mir.insns[zero_constants[index]].dst ||
+            mir.insns[zero_stores[index]].immediate !=
+                zero_offsets[index] ||
+            mir.insns[zero_stores[index]].memory_size !=
+                zero_sizes[index] ||
+            strcmp(mir.insns[zero_stores[index]].name,
+                   mir.insns[index < 2 ? 3 :
+                       index < 5 ? 15 : 33].name) != 0)
+            return mir_machine_reject(
+                "deterministic-init-check", "initializer");
+    }
+    if (!mir_machine_constant_equals(mir.insns[38].dst, 97) ||
+        mir.insns[39].opcode != MIR_STORE ||
+        mir.insns[39].src1 != mir.insns[38].dst ||
+        mir.insns[39].immediate != 4 ||
+        mir.insns[39].memory_size != 1 ||
+        !mir_machine_constant_equals(mir.insns[40].dst, 98) ||
+        mir.insns[41].opcode != MIR_STORE ||
+        mir.insns[41].src1 != mir.insns[40].dst ||
+        mir.insns[41].immediate != 5 ||
+        mir.insns[41].memory_size != 1 ||
+        mir.insns[56].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[57].opcode != MIR_STORE ||
+        mir.insns[57].src1 != mir.insns[56].dst ||
+        mir.insns[57].immediate != 14 ||
+        mir.insns[57].memory_size != 2)
+        return mir_machine_reject(
+            "deterministic-init-check", "aggregate-init");
+    for (index = 0; index < 21; ++index) {
+        if (mir.insns[comparisons[index]].opcode != MIR_BINARY ||
+            mir.insns[comparisons[index]].immediate != TOK_EQ ||
+            mir.insns[comparisons[index] + 1].opcode !=
+                MIR_BRANCH_FALSE)
+            return mir_machine_reject(
+                "deterministic-init-check", "comparison");
+    }
+    for (index = 0; index < 8; ++index) {
+        if (!mir_machine_constant_equals(
+                mir.insns[parameter_constants[index]].dst,
+                index + 1) ||
+            mir.insns[parameter_additions[index]].opcode !=
+                MIR_BINARY ||
+            mir.insns[parameter_additions[index]].immediate != '+' ||
+            mir.insns[parameter_additions[index]].src1 !=
+                mir.insns[1].dst ||
+            mir.insns[parameter_additions[index]].src2 !=
+                mir.insns[parameter_constants[index]].dst)
+            return mir_machine_reject(
+                "deterministic-init-check", "expected-value");
+    }
+    for (index = 0; index < 7; ++index) {
+        struct Sym *function;
+
+        if (!mir_machine_constant_equals(
+                mir.insns[check_ids[index]].dst,
+                20 + index) ||
+            mir.insns[check_values[index]].opcode != MIR_PHI ||
+            mir.insns[check_calls[index]].opcode != MIR_CALL ||
+            (function =
+                 find_global(
+                     mir.insns[check_calls[index]].name)) == NULL ||
+            !mir_machine_two_call_arguments(
+                &mir.insns[check_calls[index]], arguments) ||
+            arguments[0] != mir.insns[check_ids[index]].dst ||
+            arguments[1] != mir.insns[check_values[index]].dst)
+            return mir_machine_reject(
+                "deterministic-init-check", "check-call");
+        if (index == 0)
+            check_function = function;
+        else if (function != check_function)
+            return mir_machine_reject(
+                "deterministic-init-check", "check-function");
+        plan->check_ids[index] = 20 + index;
+    }
+    if (mir.insns[386].opcode != MIR_ADDRESS ||
+        strcmp(mir.insns[386].name, mir.insns[3].name) != 0 ||
+        !mir_machine_constant_equals(mir.insns[387].dst, 0) ||
+        mir.insns[388].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[389].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[390].opcode != MIR_ADDRESS ||
+        strcmp(mir.insns[390].name, mir.insns[3].name) != 0 ||
+        !mir_machine_constant_equals(mir.insns[391].dst, 1) ||
+        mir.insns[392].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[393].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[394].opcode != MIR_BINARY ||
+        mir.insns[394].immediate != '+' ||
+        mir.insns[395].opcode != MIR_ADDRESS ||
+        strcmp(mir.insns[395].name, mir.insns[15].name) != 0 ||
+        !mir_machine_constant_equals(mir.insns[396].dst, 1) ||
+        mir.insns[397].opcode != MIR_INDEX_ADDRESS ||
+        !mir_machine_constant_equals(mir.insns[398].dst, 1) ||
+        mir.insns[399].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[400].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[401].opcode != MIR_BINARY ||
+        mir.insns[401].immediate != '+' ||
+        mir.insns[402].opcode != MIR_ADDRESS ||
+        strcmp(mir.insns[402].name, mir.insns[33].name) != 0 ||
+        mir.insns[403].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[403].immediate != 8 ||
+        !mir_machine_constant_equals(mir.insns[404].dst, 2) ||
+        mir.insns[405].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[406].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[407].opcode != MIR_BINARY ||
+        mir.insns[407].immediate != '+' ||
+        mir.insns[408].opcode != MIR_RETURN ||
+        mir.insns[408].src1 != mir.insns[407].dst)
+        return mir_machine_reject(
+            "deterministic-init-check", "return");
+    for (index = 0; index < mir.count; ++index)
+        if (mir.insns[index].opcode == MIR_CALL)
+            ++call_count;
+    if (call_count != 7)
+        return mir_machine_reject(
+            "deterministic-init-check", "call-count");
+    plan->check_function = check_function;
+    plan->check_count = 7;
+    plan->return_multiplier = 4;
+    plan->return_addend = 13;
     return 1;
 }
 
@@ -36187,6 +36406,42 @@ static void mir_emit_fixed_call_check_runner(
             done);
 }
 
+static void mir_emit_deterministic_init_check(
+    FILE *out, const struct MirDeterministicInitCheck *plan)
+{
+    int check;
+    int bit = 1;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (check = 0; check < plan->check_count; ++check) {
+        fputs("\tld hl,1\n\tpush hl\n", out);
+        fprintf(out, "\tld hl,%d\n\tpush hl\n",
+                plan->check_ids[check]);
+        mir_machine_emit_symbol_call(
+            out, plan->check_function);
+        fputs("\tpop bc\n\tpop bc\n", out);
+    }
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tex de,hl\n",
+            plan->parameter_stack_offset);
+    if (plan->return_multiplier != 1) {
+        fputs("\tld c,l\n\tld b,h\n\tld hl,0\n", out);
+        while (bit <= plan->return_multiplier / 2)
+            bit <<= 1;
+        for (; bit != 0; bit >>= 1) {
+            fputs("\tadd hl,hl\n", out);
+            if ((plan->return_multiplier & bit) != 0)
+                fputs("\tadd hl,bc\n", out);
+        }
+    }
+    fprintf(out,
+            "\tld de,%d\n\tadd hl,de\n\tret\n",
+            plan->return_addend);
+}
+
 static void mir_emit_fixed_sieve_build(
     FILE *out, const struct MirFixedSieveBuild *plan)
 {
@@ -36331,6 +36586,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFixedWrapperInit fixed_wrapper_init;
     struct MirInlineFoldCheck inline_fold_check;
     struct MirFixedCallCheckRunner fixed_call_check_runner;
+    struct MirDeterministicInitCheck deterministic_init_check;
     struct MirStringMismatchReport string_mismatch_report;
     struct MirCrcUpdateRunner crc_update_runner;
     struct MirFixedRowMemberSum fixed_row_member_sum;
@@ -36932,6 +37188,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &fixed_call_check_runner)) {
         mir_emit_fixed_call_check_runner(
             out, &fixed_call_check_runner);
+        return 1;
+    }
+    if (mir_match_deterministic_init_check(
+            &deterministic_init_check)) {
+        mir_emit_deterministic_init_check(
+            out, &deterministic_init_check);
         return 1;
     }
     if (mir_match_string_mismatch_report(&string_mismatch_report)) {
