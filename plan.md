@@ -6,9 +6,9 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Base HEAD for the current architecture refactor: `b708c28`.
-- Current candidate coverage: **2126/2185 (97.30%)**.
-- Remaining fallback population: **59 `final-cost-policy`**, all selected by
+- Clean base HEAD for the current coverage batch: `acc02e5`.
+- Current working-tree candidate coverage: **2128/2185 (97.39%)**.
+- Remaining fallback population: **57 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - The first machine-emitter architecture pivot moves the recently added float
   report/check orchestration family, including the raw-conversion checker,
@@ -95,6 +95,39 @@ current execution plan and handoff.
   `/tmp/mir-census-current.tsv` advances **2,126/2,185 (97.30%)** to
   **2,127/2,185 (97.35%)**, leaves **58 `final-cost-policy`** fallbacks, and
   changes exactly this one function/app with zero removal. No baseline changes.
+- The next scanner-family coverage batch admits the 13-block bounded
+  four-character string predicate in `cint`. The strict matcher proves all
+  **74 MIR instructions**, the single nonvolatile signed-character pointer
+  parameter, five ordered byte loads at offsets 0 through 4, the four
+  short-circuit boolean joins, exact equality types, four nonzero
+  seven-bit character constants, the final zero terminator, and the final
+  `int` 0/1 return. It captures the compared bytes from MIR and contains no
+  source-function or application-name test. The frameless emitter loads the
+  pointer from SP, performs only the source-ordered reads, stops at the first
+  mismatch, leaves null-pointer behavior unchanged rather than adding a
+  special case, and uses no IY. Normal selected/captured metrics improve from
+  **1,285/121 bytes/instructions to 274/28**; stack-check metrics improve from
+  **1,314/122 to 303/29**.
+  `cint` passes full peep/nopeep validation. Selected versus forced fallback is
+  **299,200,769/299,201,203 cycles** with **31,360/31,360 bytes** peep and
+  **305,243,211/305,244,627 cycles** with **35,840/36,096 bytes** nopeep:
+  **-434 cycles (-0.00015%) / 0 bytes** and
+  **-1,416 cycles (-0.00046%) / -256 bytes (-0.71%)** respectively.
+  A scratch selected/fallback edge harness covers the exact string, empty and
+  one-to-three-character prefixes, a longer suffix, every case-position
+  mismatch, minimally sized arrays that fail at offsets 0 through 3, an exact
+  five-byte array, and a null pointer; all four runs print identical 0/1
+  results and return success. Selected/fallback measurements are
+  **64,885/67,299 cycles** with **2,432/2,432 bytes** peep and
+  **65,012/72,464 cycles** with **2,432/2,688 bytes** nopeep.
+  The scanner module audit now reports **2,502 source lines**, **35 static
+  top-level helpers**, only `mir_try_emit_scanner_kernels` as exported code,
+  and zero read-only or writable data exports. The regression-gated
+  stack-check census advances **2,127/2,185 (97.35%)** to
+  **2,128/2,185 (97.39%)**, changes only this function/application, removes no
+  accepted function, moves selector counts from **1,426 spilled / 352
+  scheduled** to **1,425 spilled / 353 scheduled**, and leaves
+  **57 `final-cost-policy`** fallbacks. No baseline changes.
 - Architecture rule for subsequent machine-family extractions: add **zero
   shared variables or mutable state**. Each module owns its plan structs,
   static arrays/constants, counters, candidate state, matchers, emitters, and

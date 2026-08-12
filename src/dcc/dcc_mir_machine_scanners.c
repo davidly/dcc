@@ -11,6 +11,11 @@ struct MirCommentScanSchedule {
     int line_offset;
 };
 
+struct MirBoundedStringMatchSchedule {
+    int pointer_stack_offset;
+    int expected[5];
+};
+
 struct MirWhitespaceScanSchedule {
     struct Sym *state_root;
     struct Sym *space_function;
@@ -248,6 +253,178 @@ static int mir_machine_only_root_loads(
             find_global(insn->name) != root)
             return 0;
     }
+    return 1;
+}
+
+static int mir_match_bounded_string_byte(
+    int instruction, int pointer_value, int offset, int *expected_out)
+{
+    const struct MirInsn *offset_constant = &mir.insns[instruction];
+    const struct MirInsn *address = &mir.insns[instruction + 1];
+    const struct MirInsn *load = &mir.insns[instruction + 2];
+    const struct MirInsn *expected = &mir.insns[instruction + 3];
+    const struct MirInsn *conversion = &mir.insns[instruction + 4];
+    const struct MirInsn *comparison = &mir.insns[instruction + 5];
+    const struct MirInsn *branch = &mir.insns[instruction + 6];
+
+    if (!mir_machine_constant_equals(
+            offset_constant->dst, offset) ||
+        type_ptr_depth(offset_constant->type) != 0 ||
+        type_size(offset_constant->type) != 2 ||
+        (offset_constant->type & TYPE_UNSIGNED) != 0 ||
+        address->src1 != pointer_value ||
+        address->src2 != offset_constant->dst ||
+        address->immediate != 1 ||
+        address->memory_size != 1 ||
+        address->bit_width != 0 ||
+        (address->memory_flags & (1 | 8)) != 0 ||
+        type_ptr_depth(address->type) != 1 ||
+        (address->type & 15) != TYPE_CHAR ||
+        type_size(address->type) != 2 ||
+        load->src1 != address->dst ||
+        load->memory_size != 1 ||
+        load->bit_width != 0 ||
+        (load->memory_flags & (1 | 8)) != 0 ||
+        type_ptr_depth(load->type) != 0 ||
+        (load->type & 15) != TYPE_CHAR ||
+        type_size(load->type) != 1 ||
+        (load->type & TYPE_UNSIGNED) != 0 ||
+        type_ptr_depth(expected->type) != 0 ||
+        (expected->type & 15) != TYPE_INT ||
+        type_size(expected->type) != 2 ||
+        (expected->type & TYPE_UNSIGNED) != 0 ||
+        expected->immediate < 0 || expected->immediate > 127 ||
+        conversion->src1 != load->dst ||
+        conversion->immediate != 0 ||
+        type_ptr_depth(conversion->type) != 0 ||
+        (conversion->type & 15) != TYPE_INT ||
+        type_size(conversion->type) != 2 ||
+        (conversion->type & TYPE_UNSIGNED) != 0 ||
+        comparison->src1 != conversion->dst ||
+        comparison->src2 != expected->dst ||
+        comparison->immediate != TOK_EQ ||
+        type_ptr_depth(comparison->type) != 0 ||
+        (comparison->type & 15) != TYPE_INT ||
+        type_size(comparison->type) != 2 ||
+        (comparison->type & TYPE_UNSIGNED) != 0 ||
+        type_ptr_depth(comparison->secondary_offset) != 0 ||
+        (comparison->secondary_offset & 15) != TYPE_INT ||
+        type_size(comparison->secondary_offset) != 2 ||
+        (comparison->secondary_offset & TYPE_UNSIGNED) != 0 ||
+        branch->src1 != comparison->dst)
+        return 0;
+    *expected_out = (int)expected->immediate;
+    return 1;
+}
+
+static int mir_match_bounded_string_boolean_join(
+    int success_label, int one, int jump, int failure_label,
+    int zero, int join_label, int phi)
+{
+    return mir_machine_constant_equals(mir.insns[one].dst, 1) &&
+        mir.insns[jump].label == mir.insns[join_label].label &&
+        mir_machine_constant_equals(mir.insns[zero].dst, 0) &&
+        mir.insns[phi].src1 == mir.insns[one].dst &&
+        mir.insns[phi].src2 == mir.insns[zero].dst &&
+        mir.insns[phi].phi_pred1 == mir.insns[success_label].label &&
+        mir.insns[phi].phi_pred2 == mir.insns[failure_label].label;
+}
+
+static int mir_match_bounded_string_match_schedule(
+    struct MirBoundedStringMatchSchedule *plan)
+{
+    static const int expected_opcodes[74] = {
+        MIR_LABEL, MIR_PARAM, MIR_NOP, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP,
+        MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST,
+        MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL,
+        MIR_PHI, MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL,
+        MIR_PHI, MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL,
+        MIR_PHI, MIR_RETURN
+    };
+    static const int byte_instructions[5] = { 3, 11, 27, 43, 59 };
+    int instruction;
+    int byte;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 74 || mir_cfg_block_count() != 13 ||
+        mir.has_vla || mir.local_bytes != 0 ||
+        mir.aggregate_temp_bytes != 0 ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_size(mir.return_type) != 2 ||
+        (mir.return_type & TYPE_UNSIGNED) != 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "bounded-string-match-schedule", "opcodes");
+
+    if (!mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->pointer_stack_offset) ||
+        plan->pointer_stack_offset > 32767 ||
+        type_ptr_depth(mir.insns[1].type) != 1 ||
+        (mir.insns[1].type & 15) != TYPE_CHAR ||
+        type_size(mir.insns[1].type) != 2 ||
+        mir_machine_pointee_is_volatile(&mir.insns[1]) ||
+        mir.insns[2].object != mir.insns[1].object ||
+        mir.insns[2].object < 0)
+        return mir_machine_reject(
+            "bounded-string-match-schedule", "parameter");
+
+    for (byte = 0; byte < 5; ++byte) {
+        if (!mir_match_bounded_string_byte(
+                byte_instructions[byte], mir.insns[1].dst,
+                byte, &plan->expected[byte]))
+            return mir_machine_reject(
+                "bounded-string-match-schedule", "byte");
+        if ((byte < 4 &&
+             (plan->expected[byte] <= 0 ||
+              plan->expected[byte] > 127)) ||
+            (byte == 4 && plan->expected[byte] != 0))
+            return mir_machine_reject(
+                "bounded-string-match-schedule", "terminator");
+    }
+
+    if (mir.insns[9].label != mir.insns[21].label ||
+        mir.insns[17].label != mir.insns[21].label ||
+        mir.insns[10].object != mir.insns[1].object ||
+        !mir_match_bounded_string_boolean_join(
+            18, 19, 20, 21, 22, 23, 24) ||
+        mir.insns[25].src1 != mir.insns[24].dst ||
+        mir.insns[25].label != mir.insns[37].label ||
+        mir.insns[26].object != mir.insns[1].object ||
+        mir.insns[33].label != mir.insns[37].label ||
+        !mir_match_bounded_string_boolean_join(
+            34, 35, 36, 37, 38, 39, 40) ||
+        mir.insns[41].src1 != mir.insns[40].dst ||
+        mir.insns[41].label != mir.insns[53].label ||
+        mir.insns[42].object != mir.insns[1].object ||
+        mir.insns[49].label != mir.insns[53].label ||
+        !mir_match_bounded_string_boolean_join(
+            50, 51, 52, 53, 54, 55, 56) ||
+        mir.insns[57].src1 != mir.insns[56].dst ||
+        mir.insns[57].label != mir.insns[69].label ||
+        mir.insns[58].object != mir.insns[1].object ||
+        mir.insns[65].label != mir.insns[69].label ||
+        !mir_match_bounded_string_boolean_join(
+            66, 67, 68, 69, 70, 71, 72) ||
+        mir.insns[73].src1 != mir.insns[72].dst)
+        return mir_machine_reject(
+            "bounded-string-match-schedule", "short-circuit");
     return 1;
 }
 
@@ -1725,6 +1902,29 @@ static int mir_match_symbol_find_schedule(
     return 1;
 }
 
+static void mir_emit_bounded_string_match_schedule(
+    FILE *out, const struct MirBoundedStringMatchSchedule *plan)
+{
+    int failure = new_label();
+    int byte;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n",
+            plan->pointer_stack_offset);
+    for (byte = 0; byte < 5; ++byte) {
+        fputs("\tld a,(de)\n", out);
+        fprintf(out, "\tcp %d\n\tjp nz,L%d\n",
+                plan->expected[byte] & 255, failure);
+        if (byte < 4)
+            fputs("\tinc de\n", out);
+    }
+    fputs("\tld hl,1\n\tret\n", out);
+    fprintf(out, "L%d:\n\tld hl,0\n\tret\n", failure);
+}
+
 static void mir_emit_comment_scan_schedule(
     FILE *out, const struct MirCommentScanSchedule *plan)
 {
@@ -2248,12 +2448,20 @@ static void mir_emit_symbol_find_schedule(
 int mir_try_emit_scanner_kernels(FILE *out, int late)
 {
     if (!late) {
+        struct MirBoundedStringMatchSchedule
+            bounded_string_match_schedule;
         struct MirCommentScanSchedule comment_scan_schedule;
         struct MirWhitespaceScanSchedule whitespace_scan_schedule;
         struct MirActionDecodeSchedule action_decode_schedule;
         struct MirBufferedDeclarationSchedule
             buffered_declaration_schedule;
 
+        if (mir_match_bounded_string_match_schedule(
+                &bounded_string_match_schedule)) {
+            mir_emit_bounded_string_match_schedule(
+                out, &bounded_string_match_schedule);
+            return 1;
+        }
         if (mir_match_comment_scan_schedule(
                 &comment_scan_schedule)) {
             mir_emit_comment_scan_schedule(
