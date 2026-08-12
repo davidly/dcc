@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `3dc537b`
-  (`registerize triangle perimeter kernels`).
-- Current candidate coverage: **2021/2185 (92.49%)**.
-- Remaining fallback population: **164 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `16e6d93`
+  (`schedule fixed-point wide reports`).
+- Current candidate coverage: **2022/2185 (92.54%)**.
+- Remaining fallback population: **163 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -478,6 +478,10 @@ current execution plan and handoff.
   streams four wide variadic arguments in reverse ABI order and calls the
   mapped long-format entry directly. This admits `tshlmac.main`, improving the
   app 1.05% peep / 1.12% nopeep with 2.04% smaller images.
+- Aggregate sign normalizers now write the by-value parameter directly to the
+  hidden return buffer, using one eight-byte copy on the nonnegative path and
+  registerized 32-bit negation on the negative path. This admits
+  `tsretret.normalize`; cumulative app gains reach 7.41% peep / 8.01% nopeep.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -485,7 +489,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 164 final-cost fallbacks,
+- Current next priority: repeated causes in the 163 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 

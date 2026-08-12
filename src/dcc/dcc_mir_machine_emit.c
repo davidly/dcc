@@ -490,6 +490,13 @@ struct MirFixedPointReport {
     int format_string_id;
 };
 
+struct MirAggregateSignNormalize {
+    int aggregate_size;
+    int first_member_offset;
+    int second_member_offset;
+    int value_stack_offset;
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -6426,6 +6433,59 @@ static int mir_match_fixed_point_report(struct MirFixedPointReport *plan)
         plan->exponent < 0 || plan->exponent > 32767 ||
         plan->shift != 16)
         return mir_machine_reject("fixed-point-report", "functions");
+    return 1;
+}
+
+static int mir_match_aggregate_sign_normalize(
+    struct MirAggregateSignNormalize *plan)
+{
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 27 || mir_cfg_block_count() != 2 ||
+        mir.has_vla || mir.insns[1].opcode != MIR_PARAM ||
+        mir.insns[2].opcode != MIR_ADDRESS ||
+        mir.insns[3].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[4].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[4].memory_size != 4 ||
+        !mir_machine_constant_equals(mir.insns[6].dst, 0) ||
+        mir.insns[7].immediate != '<' ||
+        mir.insns[8].src1 != mir.insns[7].dst ||
+        mir.insns[10].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[12].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[13].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[14].opcode != MIR_UNARY ||
+        mir.insns[14].immediate != '-' ||
+        mir.insns[15].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[15].src2 != mir.insns[14].dst ||
+        mir.insns[17].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[19].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[20].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[21].opcode != MIR_UNARY ||
+        mir.insns[21].immediate != '-' ||
+        mir.insns[22].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[22].src2 != mir.insns[21].dst ||
+        mir.insns[25].opcode != MIR_ADDRESS ||
+        mir.insns[26].src1 != mir.insns[25].dst ||
+        !mir_scalar_memory_location(
+            &mir.insns[1], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_PARAM)
+        return mir_machine_reject("aggregate-sign-normalize", "shape");
+    plan->aggregate_size = type_size(memory_type);
+    plan->first_member_offset = (int)mir.insns[10].immediate;
+    plan->second_member_offset = (int)mir.insns[3].immediate;
+    plan->value_stack_offset = memory_offset - 2;
+    if (plan->aggregate_size != 8 ||
+        plan->first_member_offset != (int)mir.insns[12].immediate ||
+        plan->second_member_offset != (int)mir.insns[17].immediate ||
+        plan->second_member_offset != (int)mir.insns[19].immediate ||
+        plan->first_member_offset < 0 ||
+        plan->second_member_offset < 0 ||
+        plan->value_stack_offset != 4)
+        return mir_machine_reject("aggregate-sign-normalize", "layout");
     return 1;
 }
 
@@ -25338,6 +25398,64 @@ static void mir_emit_fixed_point_report(
     fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static void mir_emit_aggregate_negated_member(
+    FILE *out, const struct MirAggregateSignNormalize *plan, int offset)
+{
+    int nonzero = new_label();
+
+    fprintf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
+            "\tld e,(ix+%d)\n\tld d,(ix+%d)\n"
+            "\tld a,l\n\tcpl\n\tld l,a\n"
+            "\tld a,h\n\tcpl\n\tld h,a\n"
+            "\tld a,e\n\tcpl\n\tld e,a\n"
+            "\tld a,d\n\tcpl\n\tld d,a\n"
+            "\tinc hl\n\tld a,h\n\tor l\n\tjp nz,L%d\n\tinc de\n"
+            "L%d:\n\tpush de\n\tpush hl\n"
+            "\tld l,(ix+4)\n\tld h,(ix+5)\n",
+            plan->value_stack_offset + 2 + offset,
+            plan->value_stack_offset + 3 + offset,
+            plan->value_stack_offset + 4 + offset,
+            plan->value_stack_offset + 5 + offset,
+            nonzero, nonzero);
+    mir_machine_emit_hl_offset(out, offset, 0);
+    fputs("\tpop bc\n\tld (hl),c\n\tinc hl\n\tld (hl),b\n"
+          "\tinc hl\n\tpop bc\n\tld (hl),c\n\tinc hl\n\tld (hl),b\n",
+          out);
+}
+
+static void mir_emit_aggregate_sign_normalize(
+    FILE *out, const struct MirAggregateSignNormalize *plan)
+{
+    int nonnegative = new_label();
+    int copy = new_label();
+    int done = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tbit 7,(ix+%d)\n\tjp z,L%d\n",
+            plan->value_stack_offset + 2 +
+                plan->second_member_offset + 3,
+            nonnegative);
+    mir_emit_aggregate_negated_member(
+        out, plan, plan->first_member_offset);
+    mir_emit_aggregate_negated_member(
+        out, plan, plan->second_member_offset);
+    fprintf(out, "\tjp L%d\nL%d:\n", done, nonnegative);
+    fprintf(out,
+            "\tpush ix\n\tpop de\n\tld hl,%d\n\tadd hl,de\n"
+            "\tex de,hl\n"
+            "\tld l,(ix+4)\n\tld h,(ix+5)\n\tld b,%d\n"
+            "L%d:\n\tld a,(de)\n\tld (hl),a\n"
+            "\tinc de\n\tinc hl\n\tdjnz L%d\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            plan->value_stack_offset + 2,
+            plan->aggregate_size,
+            copy, copy, done);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -29056,6 +29174,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirTwoStringPairReports two_string_pair_reports;
     struct MirTrianglePerimeter triangle_perimeter;
     struct MirFixedPointReport fixed_point_report;
+    struct MirAggregateSignNormalize aggregate_sign_normalize;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -29599,6 +29718,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_fixed_point_report(&fixed_point_report)) {
         mir_emit_fixed_point_report(out, &fixed_point_report);
+        return 1;
+    }
+    if (mir_match_aggregate_sign_normalize(
+            &aggregate_sign_normalize)) {
+        mir_emit_aggregate_sign_normalize(
+            out, &aggregate_sign_normalize);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
