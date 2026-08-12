@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `cf3e0f9`
-  (`schedule null-safe string assertions`).
-- Current candidate coverage: **1980/2185 (90.62%)**.
-- Remaining fallback population: **205 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `1421fec`
+  (`schedule compact test orchestration`).
+- Current candidate coverage: **1981/2185 (90.66%)**.
+- Remaining fallback population: **204 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -298,6 +298,12 @@ current execution plan and handoff.
   comparison with zero, and invokes `__faf` only for a negative result. This
   preserves NaN and negative-zero semantics while admitting `pihex.fpart`;
   both modes improve and both linked images shrink by 128 bytes.
+- Fixed allocation runners now issue two validated `calloc` calls, publish the
+  global state/member pointers explicitly, retain a canonical one-byte IX
+  loop counter across two no-argument tests, and report success directly.
+  Avoiding IY preserves file-wide dccpeep opportunities. This admits
+  `tstretst.main`, completing that app's MIR coverage and improving it
+  8.68% peep / 14.70% nopeep while shrinking nopeep by 256 bytes.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -305,7 +311,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 205 final-cost fallbacks,
+- Current next priority: repeated causes in the 204 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 

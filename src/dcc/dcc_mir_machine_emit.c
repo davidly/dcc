@@ -814,6 +814,18 @@ struct MirFloatModuloNormalize {
     unsigned long one_bits;
 };
 
+struct MirFixedAllocationRunner {
+    struct Sym *allocator;
+    struct Sym *state;
+    struct Sym *tests[2];
+    struct Sym *print_function;
+    int state_member_offset;
+    int allocation_counts[2];
+    int allocation_sizes[2];
+    int iterations;
+    int string_id;
+};
+
 struct MirAsciiUpper {
     int parameter_stack_offset;
     int width;
@@ -11903,6 +11915,157 @@ static int mir_match_conditional_string_report(
     return 1;
 }
 
+static int mir_match_fixed_allocation_runner(
+    struct MirFixedAllocationRunner *plan)
+{
+    static const int expected_opcodes[61] = {
+        MIR_LABEL, MIR_CONST, MIR_NOP, MIR_ARG, MIR_CONST, MIR_NOP, MIR_ARG,
+        MIR_CALL, MIR_NOP, MIR_UNARY, MIR_STORE, MIR_LOAD, MIR_UNARY,
+        MIR_BRANCH_FALSE, MIR_CONST, MIR_RETURN, MIR_LABEL, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_CONST, MIR_NOP, MIR_ARG, MIR_CONST, MIR_NOP,
+        MIR_ARG, MIR_CALL, MIR_NOP, MIR_STORE_INDIRECT, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY, MIR_BRANCH_FALSE,
+        MIR_CONST, MIR_RETURN, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE,
+        MIR_LABEL, MIR_PHI, MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_CALL, MIR_CALL, MIR_NOP, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN
+    };
+    const struct MirInsn *first_call = &mir.insns[7];
+    const struct MirInsn *second_call = &mir.insns[25];
+    const struct MirInsn *index_phi = &mir.insns[40];
+    int first_arguments[2];
+    int second_arguments[2];
+    int memory_type, memory_storage, memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 61 || mir_cfg_block_count() != 6 ||
+        mir.has_vla || type_size(mir.return_type) != 2)
+        return mir_machine_reject("fixed-allocation-runner", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "fixed-allocation-runner", "opcode");
+    if (!mir_machine_two_call_arguments(
+            first_call, first_arguments) ||
+        first_arguments[0] != mir.insns[1].dst ||
+        first_arguments[1] != mir.insns[4].dst ||
+        !mir_machine_two_call_arguments(
+            second_call, second_arguments) ||
+        second_arguments[0] != mir.insns[19].dst ||
+        second_arguments[1] != mir.insns[22].dst ||
+        strcmp(first_call->name, second_call->name) ||
+        (first_call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+        (second_call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0)
+        return mir_machine_reject("fixed-allocation-runner", "allocations");
+    plan->allocation_counts[0] = (int)mir.insns[1].immediate;
+    plan->allocation_sizes[0] = (int)mir.insns[4].immediate;
+    plan->allocation_counts[1] = (int)mir.insns[19].immediate;
+    plan->allocation_sizes[1] = (int)mir.insns[22].immediate;
+    if (plan->allocation_counts[0] <= 0 ||
+        plan->allocation_sizes[0] <= 0 ||
+        plan->allocation_counts[1] <= 0 ||
+        plan->allocation_sizes[1] <= 0 ||
+        mir.insns[9].src1 != first_call->dst ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        !mir_machine_named_nonvolatile(&mir.insns[10]) ||
+        !mir_machine_same_location(&mir.insns[10], &mir.insns[11]) ||
+        mir.insns[12].immediate != '!' ||
+        mir.insns[12].src1 != mir.insns[11].dst ||
+        mir.insns[13].src1 != mir.insns[12].dst ||
+        mir.insns[13].label != mir.insns[16].label ||
+        !mir_machine_constant_equals(mir.insns[14].dst, 1) ||
+        mir.insns[15].src1 != mir.insns[14].dst)
+        return mir_machine_reject("fixed-allocation-runner", "first-result");
+    plan->allocator = find_global(first_call->name);
+    plan->state = find_global(mir.insns[10].name);
+    if (plan->allocator == NULL ||
+        plan->allocator->storage != SC_FUNC ||
+        plan->allocator->is_funcptr || plan->allocator->is_noreturn ||
+        plan->state == NULL || plan->state->is_volatile ||
+        !mir_machine_same_location(&mir.insns[10], &mir.insns[17]) ||
+        mir.insns[18].src1 != mir.insns[17].dst ||
+        mir.insns[27].src1 != mir.insns[18].dst ||
+        mir.insns[27].src2 != second_call->dst ||
+        mir.insns[27].memory_size != 2 ||
+        (mir.insns[27].memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_same_location(&mir.insns[10], &mir.insns[28]) ||
+        mir.insns[29].src1 != mir.insns[28].dst ||
+        mir.insns[29].immediate != mir.insns[18].immediate ||
+        mir.insns[30].src1 != mir.insns[29].dst ||
+        mir.insns[30].memory_size != 2 ||
+        mir.insns[31].immediate != '!' ||
+        mir.insns[31].src1 != mir.insns[30].dst ||
+        mir.insns[32].src1 != mir.insns[31].dst ||
+        mir.insns[32].label != mir.insns[35].label ||
+        !mir_machine_constant_equals(mir.insns[33].dst, 1) ||
+        mir.insns[34].src1 != mir.insns[33].dst)
+        return mir_machine_reject("fixed-allocation-runner", "state");
+    plan->state_member_offset = (int)mir.insns[18].immediate;
+    if (!mir_machine_constant_equals(mir.insns[37].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[38]) ||
+        index_phi->src1 != mir.insns[37].dst ||
+        index_phi->src2 != mir.insns[52].dst ||
+        index_phi->phi_pred1 != mir.insns[35].label ||
+        index_phi->phi_pred2 != mir.insns[49].label ||
+        mir.insns[43].immediate != 0 ||
+        mir.insns[43].src1 != index_phi->dst ||
+        mir.insns[44].immediate != '<' ||
+        mir.insns[44].src1 != mir.insns[43].dst ||
+        mir.insns[44].src2 != mir.insns[42].dst ||
+        mir.insns[45].src1 != mir.insns[44].dst ||
+        mir.insns[45].label != mir.insns[55].label ||
+        !mir_machine_call_has_no_arguments(&mir.insns[46]) ||
+        !mir_machine_call_has_no_arguments(&mir.insns[47]) ||
+        !mir_machine_constant_equals(mir.insns[51].dst, 1) ||
+        mir.insns[52].immediate != '+' ||
+        mir.insns[52].src1 != index_phi->dst ||
+        mir.insns[52].src2 != mir.insns[51].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[53]) ||
+        mir.insns[53].src1 != mir.insns[52].dst ||
+        mir.insns[54].label != mir.insns[39].label)
+        return mir_machine_reject("fixed-allocation-runner", "loop");
+    plan->iterations = (int)mir.insns[42].immediate;
+    if (plan->iterations <= 0 || plan->iterations > 32767)
+        return mir_machine_reject("fixed-allocation-runner", "iterations");
+    for (instruction = 0; instruction < 2; ++instruction) {
+        const struct MirInsn *call = &mir.insns[46 + instruction];
+
+        plan->tests[instruction] = find_global(call->name);
+        if (plan->tests[instruction] == NULL ||
+            !plan->tests[instruction]->is_defined ||
+            plan->tests[instruction]->is_funcptr ||
+            (call->memory_flags &
+             (MIR_CALL_FLAG_VARIADIC |
+              MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0)
+            return mir_machine_reject("fixed-allocation-runner", "tests");
+    }
+    if (mir.insns[56].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[57].src1 != mir.insns[56].dst ||
+        !mir_machine_single_call_argument(
+            &mir.insns[58], &memory_offset) ||
+        memory_offset != mir.insns[56].dst ||
+        strcmp(mir.insns[58].name, "printf") ||
+        (mir.insns[58].memory_flags & MIR_CALL_FLAG_VARIADIC) == 0 ||
+        !mir_machine_constant_equals(mir.insns[59].dst, 0) ||
+        mir.insns[60].src1 != mir.insns[59].dst)
+        return mir_machine_reject("fixed-allocation-runner", "print");
+    plan->print_function = find_global(mir.insns[58].name);
+    plan->string_id = (int)mir.insns[56].immediate;
+    if (plan->print_function == NULL ||
+        plan->print_function->is_defined ||
+        !mir_scalar_memory_location(
+            &mir.insns[10], &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL || memory_offset != 0)
+        return mir_machine_reject("fixed-allocation-runner", "symbols");
+    return 1;
+}
+
 static int mir_match_float_modulo_normalize(
     struct MirFloatModuloNormalize *plan)
 {
@@ -22902,6 +23065,49 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_fixed_allocation_runner(
+    FILE *out, const struct MirFixedAllocationRunner *plan)
+{
+    int allocation_failed = new_label();
+    int loop = new_label();
+    int finish = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n\tdec sp\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tpush hl\n\tld hl,%d\n\tpush hl\n",
+            plan->allocation_sizes[0], plan->allocation_counts[0]);
+    mir_machine_emit_symbol_call(out, plan->allocator);
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_global_word_store(out, plan->state, 0);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", allocation_failed);
+    fprintf(out,
+            "\tld hl,%d\n\tpush hl\n\tld hl,%d\n\tpush hl\n",
+            plan->allocation_sizes[1], plan->allocation_counts[1]);
+    mir_machine_emit_symbol_call(out, plan->allocator);
+    fputs("\tpop bc\n\tpop bc\n\tpush hl\n", out);
+    mir_machine_emit_global_word(out, plan->state, 0);
+    mir_machine_emit_hl_offset(out, plan->state_member_offset, 0);
+    fputs("\tpop de\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n"
+          "\tld a,d\n\tor e\n", out);
+    fprintf(out, "\tjp z,L%d\n\tld (ix-1),0\nL%d:\n",
+            allocation_failed, loop);
+    mir_machine_emit_symbol_call(out, plan->tests[0]);
+    mir_machine_emit_symbol_call(out, plan->tests[1]);
+    fputs("\tinc (ix-1)\n\tld a,(ix-1)\n", out);
+    fprintf(out, "\tcp %d\n\tjp c,L%d\n\tld hl,S%d\n\tpush hl\n",
+            plan->iterations, loop, plan->string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    fputs("\tpop bc\n\tld hl,0\n", out);
+    fprintf(out, "\tjp L%d\n", finish);
+    fprintf(out,
+            "L%d:\n\tld hl,1\nL%d:\n"
+            "\tld sp,ix\n\tpop ix\n\tret\n",
+            allocation_failed, finish);
+}
+
 static void mir_emit_float_modulo_normalize(
     FILE *out, const struct MirFloatModuloNormalize *plan)
 {
@@ -24061,6 +24267,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirFixedAllocationRunner fixed_allocation_runner;
     struct MirFloatModuloNormalize float_modulo_normalize;
     struct MirNoArgTestRunner noarg_test_runner;
     struct MirStringCheckReport string_check_report;
@@ -24697,6 +24904,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_fixed_allocation_runner(
+            &fixed_allocation_runner)) {
+        mir_emit_fixed_allocation_runner(
+            out, &fixed_allocation_runner);
         return 1;
     }
     if (mir_match_float_modulo_normalize(
