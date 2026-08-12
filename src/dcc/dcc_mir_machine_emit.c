@@ -769,6 +769,10 @@ struct MirRandomUniqueInit {
     int final_value;
 };
 
+struct MirFloatNanBits {
+    int parameter_stack_offset;
+};
+
 struct MirAsciiUpper {
     int parameter_stack_offset;
     int width;
@@ -11858,6 +11862,73 @@ static int mir_match_conditional_string_report(
     return 1;
 }
 
+static int mir_match_float_nan_bits(struct MirFloatNanBits *plan)
+{
+    static const int expected_opcodes[32] = {
+        MIR_LABEL, MIR_PARAM, MIR_ADDRESS, MIR_NOP, MIR_LOAD_INDIRECT,
+        MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_NOP, MIR_CONST, MIR_NOP, MIR_BINARY, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+        MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_RETURN
+    };
+    const struct MirInsn *parameter = &mir.insns[1];
+    int memory_type, memory_storage, memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 32 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        !type_is_float(parameter->type) ||
+        type_size(parameter->type) != 4)
+        return mir_machine_reject("float-nan-bits", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject("float-nan-bits", "opcode");
+    if (strcmp(mir.insns[2].name, parameter->name) ||
+        mir.insns[4].src1 != mir.insns[2].dst ||
+        mir.insns[4].memory_size != 4 ||
+        (mir.insns[4].memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_unobservable_local_store(&mir.insns[5]) ||
+        mir.insns[5].src1 != mir.insns[4].dst ||
+        !mir_machine_constant_equals(mir.insns[7].dst, 23) ||
+        mir.insns[8].immediate != TOK_SHR ||
+        mir.insns[8].src1 != mir.insns[4].dst ||
+        mir.insns[8].src2 != mir.insns[7].dst ||
+        !mir_machine_constant_equals(mir.insns[10].dst, 255) ||
+        mir.insns[11].immediate != '&' ||
+        mir.insns[11].src1 != mir.insns[8].dst ||
+        mir.insns[11].src2 != mir.insns[10].dst ||
+        !mir_machine_constant_equals(mir.insns[13].dst, 255) ||
+        mir.insns[14].immediate != TOK_EQ ||
+        mir.insns[14].src1 != mir.insns[11].dst ||
+        mir.insns[14].src2 != mir.insns[13].dst ||
+        mir.insns[15].src1 != mir.insns[14].dst ||
+        mir.insns[15].label != mir.insns[27].label)
+        return mir_machine_reject("float-nan-bits", "exponent");
+    if (!mir_machine_constant_equals(mir.insns[17].dst, 8388607L) ||
+        mir.insns[19].immediate != '&' ||
+        mir.insns[19].src1 != mir.insns[4].dst ||
+        mir.insns[19].src2 != mir.insns[17].dst ||
+        !mir_machine_constant_equals(mir.insns[21].dst, 0) ||
+        mir.insns[22].immediate != TOK_NE ||
+        mir.insns[22].src1 != mir.insns[19].dst ||
+        mir.insns[22].src2 != mir.insns[21].dst ||
+        mir.insns[23].src1 != mir.insns[22].dst ||
+        mir.insns[23].label != mir.insns[27].label ||
+        !mir_machine_boolean_merge(30, 25, 28, 24, 27) ||
+        mir.insns[26].label != mir.insns[29].label ||
+        mir.insns[31].src1 != mir.insns[30].dst)
+        return mir_machine_reject("float-nan-bits", "mantissa");
+    if (!mir_scalar_memory_location(
+            parameter, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2)
+        return mir_machine_reject("float-nan-bits", "parameter");
+    plan->parameter_stack_offset = memory_offset - 2;
+    return 1;
+}
+
 static int mir_match_random_unique_init(
     struct MirRandomUniqueInit *plan)
 {
@@ -22359,6 +22430,27 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_float_nan_bits(
+    FILE *out, const struct MirFloatNanBits *plan)
+{
+    int false_result = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n\tor (hl)\n\tld b,a\n"
+            "\tinc hl\n\tld a,(hl)\n\tld c,a\n"
+            "\tand 127\n\tor b\n\tld b,a\n"
+            "\tld a,c\n\tand 128\n\tjp z,L%d\n"
+            "\tinc hl\n\tld a,(hl)\n\tand 127\n\tcp 127\n"
+            "\tjp nz,L%d\n\tld a,b\n\tor a\n\tjp z,L%d\n"
+            "\tld hl,1\n\tret\n"
+            "L%d:\n\tld hl,0\n\tret\n",
+            plan->parameter_stack_offset,
+            false_result, false_result, false_result, false_result);
+}
+
 static void mir_emit_object_parameter_ix(
     FILE *out, const struct MirRandomUniqueInit *plan)
 {
@@ -23372,6 +23464,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirFloatNanBits float_nan_bits;
     struct MirRandomUniqueInit random_unique_init;
     struct MirFixedRowFind fixed_row_find;
     struct MirLocalByteFillCallReports local_byte_fill_call_reports;
@@ -24003,6 +24096,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_float_nan_bits(&float_nan_bits)) {
+        mir_emit_float_nan_bits(out, &float_nan_bits);
         return 1;
     }
     if (mir_match_random_unique_init(&random_unique_init)) {
