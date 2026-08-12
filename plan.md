@@ -6,10 +6,37 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Base HEAD for this batch: `198b876`.
-- Current candidate coverage: **2115/2185 (96.80%)**.
-- Remaining fallback population: **70 `final-cost-policy`**, all selected by
+- Base HEAD for this batch: `924cebd`.
+- Current candidate coverage: **2116/2185 (96.84%)**.
+- Remaining fallback population: **69 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- A strict name-free formatted-buffer scheduler now admits the exact
+  897-instruction, eight-block `tzpad.main` graph. The matcher proves the
+  single 64-byte local character array and every one of its 122 address
+  uses, all 61 alternating three-argument variadic formatting calls and
+  three-pointer checker calls, all 185 string operands, all integer and long
+  constant widths/bits, each call-site argument index and definition, each
+  per-format runtime hook and assembly target, and both final variadic print
+  branches plus the reloaded global failure return. Formatting, checker, and
+  print callees are selected only by prototype, definition status, and
+  repeated symbol relationships; no source function or application name is
+  consulted. The emitter keeps the compact 64-byte buffer directly below IX,
+  carries its address in DE between calls by restoring the already-pushed
+  first argument, preserves the wide variadic stack order and hex/octal hooks,
+  and uses no IY. Non-stack selected/captured metrics are 11,729/15,241 bytes
+  and 1,207/1,459 instructions; stack-check metrics are 11,758/15,270 bytes
+  and 1,208/1,460 instructions. `tzpad` passes full peep/nopeep. The checked
+  performance gate improves peep from 447,775 to 443,108 cycles
+  (-4,667 / -1.04%) and 9,344 to 8,704 bytes (-640 / -6.85%), and nopeep from
+  447,708 to 442,984 cycles (-4,724 / -1.06%) and 9,472 to 8,704 bytes
+  (-768 / -8.11%). A separately renamed buffer-edge harness selects the same
+  graph while formatting 63 characters plus the terminator into the complete
+  64-byte buffer. Selected and forced-fallback program output is identical in
+  both modes; peep improves from 460,831 to 456,164 cycles and 6,784 to 6,016
+  bytes, while nopeep improves from 460,764 to 456,040 cycles and 6,784 to
+  6,144 bytes. No name, hash, performance baseline, or IY allocation
+  participates in selection. The regression-gated stack-check census advances
+  from 2115/2185 to 2116/2185 with exactly `tzpad.main` and no removal.
 - A strict name-free unsigned-long binary-search scheduler now admits the
   72-instruction, eight-block `primes.ulsqrt` graph. The matcher validates the
   single unsigned 32-bit parameter and stack position, all four local
