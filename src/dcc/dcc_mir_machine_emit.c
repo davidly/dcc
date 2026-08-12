@@ -1180,6 +1180,19 @@ struct MirFixedIndexCallRunner {
     unsigned long expected_longs[2];
 };
 
+struct MirLocalArrayStructChecks {
+    struct Sym *array_functions[3];
+    struct Sym *scalar_functions[6];
+    struct Sym *check_functions[2];
+    unsigned long array_values[3][4];
+    unsigned long scalar_values[6];
+    unsigned long member_array_values[3][4];
+    unsigned long expected_values[24];
+    int string_ids[24];
+    int array_indices[3];
+    int member_array_indices[3];
+};
+
 struct MirTaskArrayCheck {
     struct Sym *highest_function;
     struct Sym *count_function;
@@ -7797,6 +7810,471 @@ static int mir_match_fixed_index_call_runner(
         (int)mir.insns[143].immediate;
     plan->success_string_id =
         (int)mir.insns[152].immediate;
+    return 1;
+}
+
+static int mir_machine_same_pointer_root(
+    const struct MirMachineForm *left,
+    const struct MirMachineForm *right)
+{
+    return left->kind == MIR_MACHINE_FORM_POINTER &&
+           right->kind == MIR_MACHINE_FORM_POINTER &&
+           left->storage == right->storage &&
+           left->offset == right->offset &&
+           !strcmp(left->name, right->name);
+}
+
+static int mir_machine_local_pointer_form(
+    int value, int before, struct MirMachineForm *form, int depth)
+{
+    const struct MirInsn *definition;
+    int definition_index;
+
+    if (depth > 16 ||
+        (definition = mir_definition(value)) == NULL)
+        return 0;
+    definition_index = (int)(definition - mir.insns);
+    if (definition_index >= before)
+        return 0;
+    if (definition->opcode == MIR_MEMBER_ADDRESS) {
+        if (!mir_machine_local_pointer_form(
+                definition->src1, definition_index,
+                form, depth + 1))
+            return 0;
+        form->value += definition->immediate;
+        return 1;
+    }
+    if (definition->opcode == MIR_INDEX_ADDRESS) {
+        long index;
+
+        if (definition->immediate <= 0 ||
+            !mir_machine_local_pointer_form(
+                definition->src1, definition_index,
+                form, depth + 1) ||
+            !mir_machine_constant_value(
+                definition->src2, &index, 0))
+            return 0;
+        form->value += index * definition->immediate;
+        return 1;
+    }
+    if (definition->opcode == MIR_LOAD) {
+        const struct MirInsn *stored =
+            mir_machine_resolve_local_alias(value);
+
+        return stored != NULL &&
+               mir_machine_local_pointer_form(
+                   stored->dst, definition_index,
+                   form, depth + 1);
+    }
+    if (definition->opcode == MIR_UNARY &&
+        definition->immediate == 0)
+        return mir_machine_local_pointer_form(
+            definition->src1, definition_index,
+            form, depth + 1);
+    return mir_machine_pointer_form(value, before, form, 0);
+}
+
+static int mir_machine_local_pointer_location(
+    int value, int before, const struct MirMachineForm *root,
+    long relative_offset)
+{
+    struct MirMachineForm form;
+
+    return mir_machine_local_pointer_form(
+               value, before, &form, 0) &&
+           form.storage == SC_LOCAL &&
+           form.pointer_terms == 1 &&
+           mir_machine_same_pointer_root(&form, root) &&
+           form.value == relative_offset;
+}
+
+static int mir_machine_value_strips_to(int value, int source, int depth)
+{
+    const struct MirInsn *definition;
+
+    if (value == source)
+        return 1;
+    if (depth > 8 ||
+        (definition = mir_definition(value)) == NULL ||
+        definition->opcode != MIR_UNARY ||
+        definition->immediate != 0)
+        return 0;
+    return mir_machine_value_strips_to(
+        definition->src1, source, depth + 1);
+}
+
+static int mir_machine_match_check_call(
+    const struct MirInsn *call, int source_value,
+    const struct MirMachineForm *load_root, long load_offset,
+    int width, int is_unsigned, struct MirLocalArrayStructChecks *plan,
+    int check_index)
+{
+    int arguments[3];
+    const struct MirInsn *string;
+    const struct MirInsn *load;
+    struct Sym *function;
+    long expected;
+    int instruction = (int)(call - mir.insns);
+
+    if (call->opcode != MIR_CALL || call->memory_flags != 0 ||
+        !mir_machine_three_call_arguments(call, arguments) ||
+        (string = mir_definition(arguments[0])) == NULL ||
+        string->opcode != MIR_STRING_ADDRESS ||
+        !mir_machine_constant_value(arguments[2], &expected, 0))
+        return 0;
+    if (source_value >= 0) {
+        if (!mir_machine_value_strips_to(
+                arguments[1], source_value, 0))
+            return 0;
+    } else {
+        load = mir_definition(arguments[1]);
+        while (load != NULL && load->opcode == MIR_UNARY &&
+               load->immediate == 0)
+            load = mir_definition(load->src1);
+        if (load == NULL || load->opcode != MIR_LOAD_INDIRECT ||
+            load->memory_size != width ||
+            load->memory_flags != 0 || load->bit_width != 0 ||
+            ((load->type & TYPE_UNSIGNED) != 0) != is_unsigned ||
+            !mir_machine_local_pointer_location(
+                load->src1, (int)(load - mir.insns),
+                load_root, load_offset))
+            return 0;
+    }
+    function = find_global(call->name);
+    if (function == NULL || !function->is_defined ||
+        function->is_funcptr || function->is_noreturn ||
+        (call->type & 15) != TYPE_VOID ||
+        mir_definition(arguments[1]) == NULL ||
+        type_size(mir_definition(arguments[1])->type) != 4 ||
+        ((mir_definition(arguments[1])->type & TYPE_UNSIGNED) != 0) !=
+            is_unsigned)
+        return 0;
+    if (plan->check_functions[is_unsigned] == NULL)
+        plan->check_functions[is_unsigned] = function;
+    else if (plan->check_functions[is_unsigned] != function)
+        return 0;
+    if (check_index < 0 || check_index >= 24 ||
+        instruction <= 0)
+        return 0;
+    plan->string_ids[check_index] = (int)string->immediate;
+    plan->expected_values[check_index] =
+        (unsigned long)expected & 0xffffffffUL;
+    return 1;
+}
+
+static int mir_machine_match_pointer_call(
+    const struct MirInsn *call, const struct MirMachineForm *root,
+    long relative_offset, int width, int is_unsigned,
+    int has_index, int *index_out, struct Sym **function_out)
+{
+    int arguments[2];
+    int argument;
+    long index;
+    struct Sym *function;
+    int instruction = (int)(call - mir.insns);
+
+    if (call->opcode != MIR_CALL || call->memory_flags != 0 ||
+        type_size(call->type) != width ||
+        ((call->type & TYPE_UNSIGNED) != 0) != is_unsigned)
+        return 0;
+    if (has_index) {
+        if (!mir_machine_two_call_arguments(call, arguments) ||
+            !mir_machine_local_pointer_location(
+                arguments[0], instruction, root, relative_offset) ||
+            !mir_machine_constant_value(arguments[1], &index, 0) ||
+            index < 0 || index > 3)
+            return 0;
+        argument = arguments[0];
+        *index_out = (int)index;
+    } else {
+        if (!mir_machine_single_call_argument(call, &argument) ||
+            !mir_machine_local_pointer_location(
+                argument, instruction, root, relative_offset))
+            return 0;
+    }
+    function = find_global(call->name);
+    if (function == NULL || !function->is_defined ||
+        function->is_funcptr || function->is_noreturn)
+        return 0;
+    *function_out = function;
+    return 1;
+}
+
+static int mir_match_local_array_struct_checks(
+    struct MirLocalArrayStructChecks *plan)
+{
+    static const int widths[3] = {1, 2, 4};
+    static const int unsigned_kinds[3] = {1, 0, 0};
+    static const int member_offsets[6] = {0, 1, 2, 4, 6, 10};
+    static const int member_widths[6] = {1, 1, 2, 2, 4, 4};
+    static const int member_unsigned[6] = {1, 0, 0, 1, 0, 1};
+    static const int array_member_offsets[3] = {14, 18, 26};
+    const struct MirInsn *stores[30];
+    const struct MirInsn *calls[36];
+    struct MirMachineForm array_roots[3];
+    struct MirMachineForm struct_root;
+    int opcode_counts[MIR_RETURN + 1];
+    int store_count = 0;
+    int call_count = 0;
+    int call_index = 0;
+    int check_index = 0;
+    int instruction;
+    int group;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    memset(opcode_counts, 0, sizeof(opcode_counts));
+    if (mir.count != 466 || mir_cfg_block_count() != 1 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return mir_machine_reject(
+            "local-array-struct-checks", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode < 0 || insn->opcode > MIR_RETURN)
+            return mir_machine_reject(
+                "local-array-struct-checks", "opcode-range");
+        ++opcode_counts[insn->opcode];
+        switch (insn->opcode) {
+        case MIR_LABEL:
+        case MIR_NOP:
+        case MIR_CONST:
+        case MIR_ADDRESS:
+        case MIR_INDEX_ADDRESS:
+        case MIR_STRING_ADDRESS:
+        case MIR_ARG:
+        case MIR_UNARY:
+        case MIR_LOAD:
+        case MIR_MEMBER_ADDRESS:
+        case MIR_LOAD_INDIRECT:
+            break;
+        case MIR_STORE:
+            if (!mir_machine_unobservable_local_store(insn))
+                return mir_machine_reject(
+                    "local-array-struct-checks", "named-store");
+            break;
+        case MIR_STORE_INDIRECT:
+            if (store_count >= 30 || insn->memory_flags != 0 ||
+                insn->bit_width != 0)
+                return mir_machine_reject(
+                    "local-array-struct-checks", "indirect-store");
+            stores[store_count++] = insn;
+            break;
+        case MIR_CALL:
+            if (call_count >= 36 || insn->memory_flags != 0)
+                return mir_machine_reject(
+                    "local-array-struct-checks", "call");
+            calls[call_count++] = insn;
+            break;
+        default:
+            return mir_machine_reject(
+                "local-array-struct-checks", "opcode");
+        }
+    }
+    if (store_count != 30 || call_count != 36 ||
+        opcode_counts[MIR_LABEL] != 1 ||
+        opcode_counts[MIR_NOP] != 39 ||
+        opcode_counts[MIR_CONST] != 90 ||
+        opcode_counts[MIR_ADDRESS] != 19 ||
+        opcode_counts[MIR_INDEX_ADDRESS] != 30 ||
+        opcode_counts[MIR_STRING_ADDRESS] != 24 ||
+        opcode_counts[MIR_ARG] != 90 ||
+        opcode_counts[MIR_UNARY] != 16 ||
+        opcode_counts[MIR_LOAD] != 36 ||
+        opcode_counts[MIR_MEMBER_ADDRESS] != 36 ||
+        opcode_counts[MIR_LOAD_INDIRECT] != 12 ||
+        opcode_counts[MIR_STORE] != 7)
+        return mir_machine_reject(
+            "local-array-struct-checks", "census");
+
+    for (group = 0; group < 3; ++group) {
+        for (item = 0; item < 4; ++item) {
+            const struct MirInsn *store = stores[group * 4 + item];
+            struct MirMachineForm form;
+            long value;
+
+            if (store->memory_size != widths[group] ||
+                !mir_machine_local_pointer_form(
+                    store->src1, (int)(store - mir.insns),
+                    &form, 0) ||
+                form.storage != SC_LOCAL ||
+                form.pointer_terms != 1 ||
+                form.value != item * widths[group] ||
+                !mir_machine_constant_value(
+                    store->src2, &value, 0))
+                return mir_machine_reject(
+                    "local-array-struct-checks", "array-init");
+            if (item == 0)
+                array_roots[group] = form;
+            else if (!mir_machine_same_pointer_root(
+                         &form, &array_roots[group]))
+                return mir_machine_reject(
+                    "local-array-struct-checks", "array-root");
+            plan->array_values[group][item] =
+                (unsigned long)value & 0xffffffffUL;
+        }
+    }
+    if (mir_machine_same_pointer_root(
+            &array_roots[0], &array_roots[1]) ||
+        mir_machine_same_pointer_root(
+            &array_roots[0], &array_roots[2]) ||
+        mir_machine_same_pointer_root(
+            &array_roots[1], &array_roots[2]) ||
+        stores[11] >= calls[0])
+        return mir_machine_reject(
+            "local-array-struct-checks", "array-layout");
+
+    for (item = 0; item < 6; ++item) {
+        const struct MirInsn *store = stores[12 + item];
+        struct MirMachineForm form;
+        long value;
+
+        if (store->memory_size != member_widths[item] ||
+            !mir_machine_local_pointer_form(
+                store->src1, (int)(store - mir.insns),
+                &form, 0) ||
+            form.storage != SC_LOCAL ||
+            form.pointer_terms != 1 ||
+            form.value != member_offsets[item] ||
+            !mir_machine_constant_value(store->src2, &value, 0))
+            return mir_machine_reject(
+                "local-array-struct-checks", "member-init");
+        if (item == 0)
+            struct_root = form;
+        else if (!mir_machine_same_pointer_root(
+                     &form, &struct_root))
+            return mir_machine_reject(
+                "local-array-struct-checks", "member-root");
+        plan->scalar_values[item] =
+            (unsigned long)value & 0xffffffffUL;
+    }
+    for (group = 0; group < 3; ++group) {
+        for (item = 0; item < 4; ++item) {
+            const struct MirInsn *store =
+                stores[18 + group * 4 + item];
+            struct MirMachineForm form;
+            long value;
+
+            if (store->memory_size != widths[group] ||
+                !mir_machine_local_pointer_form(
+                    store->src1, (int)(store - mir.insns),
+                    &form, 0) ||
+                !mir_machine_same_pointer_root(
+                    &form, &struct_root) ||
+                form.pointer_terms != 1 ||
+                form.value != array_member_offsets[group] +
+                    item * widths[group] ||
+                !mir_machine_constant_value(
+                    store->src2, &value, 0))
+                return mir_machine_reject(
+                    "local-array-struct-checks",
+                    "member-array-init");
+            plan->member_array_values[group][item] =
+                (unsigned long)value & 0xffffffffUL;
+        }
+    }
+    if (mir_machine_same_pointer_root(
+            &struct_root, &array_roots[0]) ||
+        mir_machine_same_pointer_root(
+            &struct_root, &array_roots[1]) ||
+        mir_machine_same_pointer_root(
+            &struct_root, &array_roots[2]) ||
+        calls[8] >= stores[12] || stores[17] >= calls[9] ||
+        calls[26] >= stores[18] || stores[29] >= calls[27])
+        return mir_machine_reject(
+            "local-array-struct-checks", "phase-order");
+
+    for (group = 0; group < 3; ++group) {
+        const struct MirInsn *helper = calls[call_index++];
+
+        if (!mir_machine_match_pointer_call(
+                helper, &array_roots[group], 0,
+                widths[group], unsigned_kinds[group], 1,
+                &plan->array_indices[group],
+                &plan->array_functions[group])) {
+            if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+                fprintf(stderr,
+                        "; MIR machine function=%s"
+                        " template=local-array-struct-checks"
+                        " group=%d reject=array-helper\n",
+                        mir.name, group);
+            return 0;
+        }
+        if (!mir_machine_match_check_call(
+                calls[call_index++], helper->dst, NULL, 0,
+                widths[group], unsigned_kinds[group],
+                plan, check_index++)) {
+            if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+                fprintf(stderr,
+                        "; MIR machine function=%s"
+                        " template=local-array-struct-checks"
+                        " group=%d reject=array-result-check\n",
+                        mir.name, group);
+            return 0;
+        }
+        if (!mir_machine_match_check_call(
+                calls[call_index++], -1, &array_roots[group],
+                plan->array_indices[group] * widths[group],
+                widths[group], unsigned_kinds[group],
+                plan, check_index++)) {
+            if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+                fprintf(stderr,
+                        "; MIR machine function=%s"
+                        " template=local-array-struct-checks"
+                        " group=%d reject=array-store-check\n",
+                        mir.name, group);
+            return 0;
+        }
+    }
+    for (item = 0; item < 6; ++item) {
+        const struct MirInsn *helper = calls[call_index++];
+        int ignored_index = 0;
+
+        if (!mir_machine_match_pointer_call(
+                helper, &struct_root, member_offsets[item],
+                member_widths[item], member_unsigned[item], 0,
+                &ignored_index, &plan->scalar_functions[item]) ||
+            !mir_machine_match_check_call(
+                calls[call_index++], helper->dst, NULL, 0,
+                member_widths[item], member_unsigned[item],
+                plan, check_index++) ||
+            !mir_machine_match_check_call(
+                calls[call_index++], -1, &struct_root,
+                member_offsets[item], member_widths[item],
+                member_unsigned[item], plan, check_index++))
+            return mir_machine_reject(
+                "local-array-struct-checks", "member-calls");
+    }
+    for (group = 0; group < 3; ++group) {
+        const struct MirInsn *helper = calls[call_index++];
+        struct Sym *function;
+
+        if (!mir_machine_match_pointer_call(
+                helper, &struct_root, array_member_offsets[group],
+                widths[group], unsigned_kinds[group], 1,
+                &plan->member_array_indices[group],
+                &function) ||
+            function != plan->array_functions[group] ||
+            !mir_machine_match_check_call(
+                calls[call_index++], helper->dst, NULL, 0,
+                widths[group], unsigned_kinds[group],
+                plan, check_index++) ||
+            !mir_machine_match_check_call(
+                calls[call_index++], -1, &struct_root,
+                array_member_offsets[group] +
+                    plan->member_array_indices[group] *
+                    widths[group],
+                widths[group], unsigned_kinds[group],
+                plan, check_index++))
+            return mir_machine_reject(
+                "local-array-struct-checks",
+                "member-array-calls");
+    }
+    if (call_index != 36 || check_index != 24 ||
+        plan->check_functions[0] == NULL ||
+        plan->check_functions[1] == NULL)
+        return mir_machine_reject(
+            "local-array-struct-checks", "call-count");
     return 1;
 }
 
@@ -38497,6 +38975,183 @@ static void mir_emit_fixed_index_call_runner(
             done);
 }
 
+static void mir_local_array_struct_store(
+    FILE *out, int offset, int width, unsigned long value)
+{
+    if (width == 1) {
+        fprintf(out, "\tld (ix%+d),%lu\n",
+                offset, value & 0xffUL);
+    } else if (width == 2) {
+        fprintf(out,
+                "\tld hl,%lu\n"
+                "\tld (ix%+d),l\n\tld (ix%+d),h\n",
+                value & 0xffffUL, offset, offset + 1);
+    } else {
+        mir_machine_emit_float_bits(out, value);
+        mir_machine_emit_ix_wide_store(out, offset);
+    }
+}
+
+static void mir_local_array_struct_address(FILE *out, int offset)
+{
+    fputs("\tpush ix\n\tpop hl\n", out);
+    mir_machine_emit_hl_offset(out, offset, 0);
+}
+
+static void mir_local_array_struct_normalize(
+    FILE *out, int width, int is_unsigned)
+{
+    if (width == 4)
+        return;
+    if (width == 1) {
+        if (is_unsigned)
+            fputs("\tld h,0\n\tld de,0\n", out);
+        else
+            fputs("\tld a,l\n\trlca\n\tsbc a,a\n"
+                  "\tld h,a\n\tld d,a\n\tld e,a\n", out);
+        return;
+    }
+    if (is_unsigned)
+        fputs("\tld de,0\n", out);
+    else
+        fputs("\tld a,h\n\trlca\n\tsbc a,a\n"
+              "\tld d,a\n\tld e,a\n", out);
+}
+
+static void mir_local_array_struct_load(
+    FILE *out, int offset, int width, int is_unsigned)
+{
+    if (width == 1)
+        fprintf(out, "\tld l,(ix%+d)\n", offset);
+    else if (width == 2)
+        fprintf(out,
+                "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+                offset, offset + 1);
+    else
+        mir_machine_emit_ix_wide_load(out, offset);
+    mir_local_array_struct_normalize(out, width, is_unsigned);
+}
+
+static void mir_local_array_struct_check(
+    FILE *out, const struct MirLocalArrayStructChecks *plan,
+    int check, int is_unsigned)
+{
+    fputs("\texx\n", out);
+    mir_machine_emit_float_bits(
+        out, plan->expected_values[check]);
+    fputs("\tpush de\n\tpush hl\n\texx\n"
+          "\tpush de\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->string_ids[check]);
+    mir_machine_emit_symbol_call(
+        out, plan->check_functions[is_unsigned]);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tpop bc\n\tpop bc\n", out);
+}
+
+static void mir_local_array_struct_pointer_call(
+    FILE *out, struct Sym *function, int offset,
+    int width, int is_unsigned, int has_index, int index)
+{
+    if (has_index)
+        fprintf(out, "\tld hl,%d\n\tpush hl\n", index);
+    mir_local_array_struct_address(out, offset);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, function);
+    fputs("\tpop bc\n", out);
+    if (has_index)
+        fputs("\tpop bc\n", out);
+    mir_local_array_struct_normalize(out, width, is_unsigned);
+}
+
+static void mir_emit_local_array_struct_checks(
+    FILE *out, const struct MirLocalArrayStructChecks *plan)
+{
+    static const int widths[3] = {1, 2, 4};
+    static const int unsigned_kinds[3] = {1, 0, 0};
+    static const int array_offsets[3] = {-70, -66, -58};
+    static const int member_offsets[6] = {0, 1, 2, 4, 6, 10};
+    static const int member_widths[6] = {1, 1, 2, 2, 4, 4};
+    static const int member_unsigned[6] = {1, 0, 0, 1, 0, 1};
+    static const int array_member_offsets[3] = {14, 18, 26};
+    const int struct_offset = -42;
+    int check = 0;
+    int group;
+    int item;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-70\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (group = 0; group < 3; ++group)
+        for (item = 0; item < 4; ++item)
+            mir_local_array_struct_store(
+                out, array_offsets[group] + item * widths[group],
+                widths[group], plan->array_values[group][item]);
+    for (group = 0; group < 3; ++group) {
+        int value_offset = array_offsets[group] +
+            plan->array_indices[group] * widths[group];
+
+        mir_local_array_struct_pointer_call(
+            out, plan->array_functions[group],
+            array_offsets[group], widths[group],
+            unsigned_kinds[group], 1,
+            plan->array_indices[group]);
+        mir_local_array_struct_check(
+            out, plan, check++, unsigned_kinds[group]);
+        mir_local_array_struct_load(
+            out, value_offset, widths[group],
+            unsigned_kinds[group]);
+        mir_local_array_struct_check(
+            out, plan, check++, unsigned_kinds[group]);
+    }
+
+    for (item = 0; item < 6; ++item)
+        mir_local_array_struct_store(
+            out, struct_offset + member_offsets[item],
+            member_widths[item], plan->scalar_values[item]);
+    for (item = 0; item < 6; ++item) {
+        mir_local_array_struct_pointer_call(
+            out, plan->scalar_functions[item],
+            struct_offset + member_offsets[item],
+            member_widths[item], member_unsigned[item],
+            0, 0);
+        mir_local_array_struct_check(
+            out, plan, check++, member_unsigned[item]);
+        mir_local_array_struct_load(
+            out, struct_offset + member_offsets[item],
+            member_widths[item], member_unsigned[item]);
+        mir_local_array_struct_check(
+            out, plan, check++, member_unsigned[item]);
+    }
+
+    for (group = 0; group < 3; ++group)
+        for (item = 0; item < 4; ++item)
+            mir_local_array_struct_store(
+                out, struct_offset + array_member_offsets[group] +
+                    item * widths[group],
+                widths[group],
+                plan->member_array_values[group][item]);
+    for (group = 0; group < 3; ++group) {
+        int base = struct_offset + array_member_offsets[group];
+        int value_offset = base +
+            plan->member_array_indices[group] * widths[group];
+
+        mir_local_array_struct_pointer_call(
+            out, plan->array_functions[group], base,
+            widths[group], unsigned_kinds[group], 1,
+            plan->member_array_indices[group]);
+        mir_local_array_struct_check(
+            out, plan, check++, unsigned_kinds[group]);
+        mir_local_array_struct_load(
+            out, value_offset, widths[group],
+            unsigned_kinds[group]);
+        mir_local_array_struct_check(
+            out, plan, check++, unsigned_kinds[group]);
+    }
+    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_task_array_push_arguments(
     FILE *out, int task_count)
 {
@@ -38800,6 +39455,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFixedCallCheckRunner fixed_call_check_runner;
     struct MirDeterministicInitCheck deterministic_init_check;
     struct MirFixedIndexCallRunner fixed_index_call_runner;
+    struct MirLocalArrayStructChecks local_array_struct_checks;
     struct MirTaskArrayCheck task_array_check;
     struct MirLiteralCheckRunner literal_check_runner;
     struct MirStringMismatchReport string_mismatch_report;
@@ -39425,6 +40081,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &fixed_index_call_runner)) {
         mir_emit_fixed_index_call_runner(
             out, &fixed_index_call_runner);
+        return 1;
+    }
+    if (mir_match_local_array_struct_checks(
+            &local_array_struct_checks)) {
+        mir_emit_local_array_struct_checks(
+            out, &local_array_struct_checks);
         return 1;
     }
     if (mir_match_task_array_check(&task_array_check)) {
