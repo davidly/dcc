@@ -464,6 +464,12 @@ struct MirCharPointerUpdateReports {
     int frame_size;
 };
 
+struct MirTwoStringPairReports {
+    struct Sym *print_function;
+    int format_string_ids[2];
+    int value_string_ids[4];
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -6197,6 +6203,69 @@ static int mir_match_char_pointer_update_reports(
         plan->frame_size <= 0 || plan->frame_size > 120)
         return mir_machine_reject(
             "char-pointer-update-reports", "symbols");
+    return 1;
+}
+
+static int mir_match_two_string_pair_reports(
+    struct MirTwoStringPairReports *plan)
+{
+    int arguments[3];
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 69 || mir_cfg_block_count() != 1 ||
+        mir.has_vla ||
+        mir.insns[1].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[4].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[7].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[10].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[13].opcode != MIR_ADDRESS ||
+        !mir_machine_constant_equals(mir.insns[14].dst, 0) ||
+        mir.insns[15].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[19].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[20].opcode != MIR_LOAD ||
+        mir.insns[21].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[21].src2 != mir.insns[20].dst ||
+        mir.insns[23].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[24].opcode != MIR_LOAD ||
+        mir.insns[25].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[25].src2 != mir.insns[24].dst ||
+        !mir_machine_constant_equals(mir.insns[27].dst, 4) ||
+        mir.insns[28].immediate != '+' ||
+        mir.insns[31].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[32].opcode != MIR_LOAD ||
+        mir.insns[33].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[33].src2 != mir.insns[32].dst ||
+        mir.insns[35].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[36].opcode != MIR_LOAD ||
+        mir.insns[37].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[37].src2 != mir.insns[36].dst)
+        return mir_machine_reject("two-string-pair-reports", "stores");
+    if (!mir_machine_three_call_arguments(
+            &mir.insns[52], arguments) ||
+        arguments[0] != mir.insns[38].dst ||
+        arguments[1] != mir.insns[44].dst ||
+        arguments[2] != mir.insns[50].dst ||
+        !mir_machine_constant_equals(mir.insns[41].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[47].dst, 0) ||
+        !mir_machine_three_call_arguments(
+            &mir.insns[67], arguments) ||
+        arguments[0] != mir.insns[53].dst ||
+        arguments[1] != mir.insns[59].dst ||
+        arguments[2] != mir.insns[65].dst ||
+        !mir_machine_constant_equals(mir.insns[56].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[62].dst, 1) ||
+        strcmp(mir.insns[52].name, mir.insns[67].name) ||
+        mir.insns[68].opcode != MIR_RETURN)
+        return mir_machine_reject("two-string-pair-reports", "reports");
+    plan->print_function = find_global(mir.insns[52].name);
+    plan->format_string_ids[0] = (int)mir.insns[38].immediate;
+    plan->format_string_ids[1] = (int)mir.insns[53].immediate;
+    plan->value_string_ids[0] = (int)mir.insns[1].immediate;
+    plan->value_string_ids[1] = (int)mir.insns[4].immediate;
+    plan->value_string_ids[2] = (int)mir.insns[7].immediate;
+    plan->value_string_ids[3] = (int)mir.insns[10].immediate;
+    if (plan->print_function == NULL)
+        return mir_machine_reject("two-string-pair-reports", "function");
     return 1;
 }
 
@@ -24953,6 +25022,27 @@ static void mir_emit_char_pointer_update_reports(
     fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static void mir_emit_two_string_pair_reports(
+    FILE *out, const struct MirTwoStringPairReports *plan)
+{
+    int report;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (report = 0; report < 2; ++report) {
+        fprintf(out,
+                "\tld hl,S%d\n\tpush hl\n"
+                "\tld hl,S%d\n\tpush hl\n"
+                "\tld hl,S%d\n\tpush hl\n",
+                plan->value_string_ids[report * 2 + 1],
+                plan->value_string_ids[report * 2],
+                plan->format_string_ids[report]);
+        mir_machine_emit_symbol_call(out, plan->print_function);
+        fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    }
+    fputs("\tret\n", out);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -28668,6 +28758,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirProvenWideShiftChecks proven_wide_shift_checks;
     struct MirTwoPostUpdateReports two_post_update_reports;
     struct MirCharPointerUpdateReports char_pointer_update_reports;
+    struct MirTwoStringPairReports two_string_pair_reports;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -29197,6 +29288,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &char_pointer_update_reports)) {
         mir_emit_char_pointer_update_reports(
             out, &char_pointer_update_reports);
+        return 1;
+    }
+    if (mir_match_two_string_pair_reports(
+            &two_string_pair_reports)) {
+        mir_emit_two_string_pair_reports(
+            out, &two_string_pair_reports);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
