@@ -478,6 +478,18 @@ struct MirTrianglePerimeter {
     int scale;
 };
 
+struct MirFixedPointReport {
+    struct Sym *power_function;
+    struct Sym *multiply_function;
+    struct Sym *fraction_function;
+    char print_name[64];
+    unsigned long rate;
+    unsigned long square_base;
+    int exponent;
+    int shift;
+    int format_string_id;
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -6335,6 +6347,85 @@ static int mir_match_triangle_perimeter(
         !mir_machine_parameter_value_offset(
             mir.insns[1].dst, &plan->parameter_stack_offset))
         return mir_machine_reject("triangle-perimeter", "layout");
+    return 1;
+}
+
+static int mir_match_fixed_point_report(struct MirFixedPointReport *plan)
+{
+    long exponent;
+    long shift;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 60 || mir_cfg_block_count() != 1 ||
+        mir.has_vla ||
+        !mir_machine_constant_equals(mir.insns[3].dst, 65536L) ||
+        !mir_machine_constant_equals(mir.insns[6].dst, 65536L) ||
+        !mir_machine_constant_equals(mir.insns[8].dst, 10) ||
+        mir.insns[9].immediate != '/' ||
+        mir.insns[10].immediate != '+' ||
+        !mir_machine_constant_value(mir.insns[15].dst, &exponent, 0))
+        return mir_machine_reject("fixed-point-report", "power-values");
+    if (mir.insns[14].opcode != MIR_ARG ||
+        mir.insns[14].src1 != mir.insns[10].dst ||
+        mir.insns[16].opcode != MIR_ARG ||
+        mir.insns[16].src1 != mir.insns[15].dst ||
+        mir.insns[14].secondary_offset !=
+            mir.insns[17].secondary_offset ||
+        mir.insns[16].secondary_offset !=
+            mir.insns[17].secondary_offset)
+        return mir_machine_reject("fixed-point-report", "power-call");
+    if (
+        !mir_machine_constant_equals(mir.insns[22].dst, 65536L) ||
+        !mir_machine_constant_equals(mir.insns[25].dst, 65536L) ||
+        !mir_machine_constant_equals(mir.insns[27].dst, 2) ||
+        mir.insns[28].immediate != '/' ||
+        mir.insns[29].immediate != '+' ||
+        mir.insns[33].opcode != MIR_ARG ||
+        mir.insns[33].src1 != mir.insns[29].dst ||
+        mir.insns[35].opcode != MIR_ARG ||
+        mir.insns[35].src1 != mir.insns[29].dst)
+        return mir_machine_reject("fixed-point-report", "square");
+    if (
+        !mir_machine_constant_value(mir.insns[42].dst, &shift, 0) ||
+        mir.insns[43].immediate != TOK_SHR ||
+        mir.insns[46].opcode != MIR_ARG ||
+        mir.insns[46].src1 != mir.insns[17].dst ||
+        !mir_machine_constant_equals(mir.insns[50].dst, shift) ||
+        mir.insns[51].immediate != TOK_SHR ||
+        mir.insns[54].opcode != MIR_ARG ||
+        mir.insns[54].src1 != mir.insns[36].dst)
+        return mir_machine_reject("fixed-point-report", "fractions");
+    if (
+        mir.insns[40].opcode != MIR_ARG ||
+        mir.insns[40].src1 != mir.insns[39].dst ||
+        mir.insns[44].opcode != MIR_ARG ||
+        mir.insns[44].src1 != mir.insns[43].dst ||
+        mir.insns[48].opcode != MIR_ARG ||
+        mir.insns[48].src1 != mir.insns[47].dst ||
+        mir.insns[52].opcode != MIR_ARG ||
+        mir.insns[52].src1 != mir.insns[51].dst ||
+        mir.insns[56].opcode != MIR_ARG ||
+        mir.insns[56].src1 != mir.insns[55].dst ||
+        !mir_machine_constant_equals(mir.insns[58].dst, 0) ||
+        mir.insns[59].src1 != mir.insns[58].dst)
+        return mir_machine_reject("fixed-point-report", "report");
+    plan->power_function = find_global(mir.insns[17].name);
+    plan->multiply_function = find_global(mir.insns[36].name);
+    plan->fraction_function = find_global(mir.insns[47].name);
+    snprintf(plan->print_name, sizeof(plan->print_name), "%s",
+             mir.insns[57].base_name);
+    plan->rate = 65536UL + 65536UL / 10UL;
+    plan->square_base = 65536UL + 65536UL / 2UL;
+    plan->exponent = (int)exponent;
+    plan->shift = (int)shift;
+    plan->format_string_id = (int)mir.insns[39].immediate;
+    if (plan->power_function == NULL ||
+        plan->multiply_function == NULL ||
+        plan->fraction_function == NULL ||
+        plan->print_name[0] == 0 ||
+        plan->exponent < 0 || plan->exponent > 32767 ||
+        plan->shift != 16)
+        return mir_machine_reject("fixed-point-report", "functions");
     return 1;
 }
 
@@ -25165,6 +25256,88 @@ static void mir_emit_triangle_perimeter(
     fputs("\tpop bc\n\tpop bc\n\tpop ix\n\tret\n", out);
 }
 
+static void mir_emit_fixed_point_constant(
+    FILE *out, unsigned long value)
+{
+    fprintf(out,
+            "\tld hl,%lu\n\tpush hl\n"
+            "\tld hl,%lu\n\tpush hl\n",
+            (value >> 16) & 0xffffUL,
+            value & 0xffffUL);
+}
+
+static void mir_emit_fixed_point_load(
+    FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+            offset, offset + 1, offset + 2, offset + 3);
+}
+
+static void mir_emit_fixed_point_store(
+    FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld (ix%+d),l\n\tld (ix%+d),h\n"
+            "\tld (ix%+d),e\n\tld (ix%+d),d\n",
+            offset, offset + 1, offset + 2, offset + 3);
+}
+
+static void mir_emit_fixed_point_high_word(
+    FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld a,h\n\trlca\n\tsbc a,a\n"
+            "\tld d,a\n\tld e,a\n",
+            offset + 2, offset + 3);
+}
+
+static void mir_emit_fixed_point_fraction(
+    FILE *out, const struct MirFixedPointReport *plan, int offset)
+{
+    mir_emit_fixed_point_load(out, offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->fraction_function);
+    fputs("\tpop bc\n\tpop bc\n\tpush de\n\tpush hl\n", out);
+}
+
+static void mir_emit_fixed_point_report(
+    FILE *out, const struct MirFixedPointReport *plan)
+{
+    int argument;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-8\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out, "\tld hl,%d\n\tpush hl\n", plan->exponent);
+    mir_emit_fixed_point_constant(out, plan->rate);
+    mir_machine_emit_symbol_call(out, plan->power_function);
+    for (argument = 0; argument < 3; ++argument)
+        fputs("\tpop bc\n", out);
+    mir_emit_fixed_point_store(out, -4);
+    mir_emit_fixed_point_constant(out, plan->square_base);
+    mir_emit_fixed_point_constant(out, plan->square_base);
+    mir_machine_emit_symbol_call(out, plan->multiply_function);
+    for (argument = 0; argument < 4; ++argument)
+        fputs("\tpop bc\n", out);
+    mir_emit_fixed_point_store(out, -8);
+    mir_emit_fixed_point_fraction(out, plan, -8);
+    mir_emit_fixed_point_high_word(out, -8);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_fixed_point_fraction(out, plan, -4);
+    mir_emit_fixed_point_high_word(out, -4);
+    fputs("\tpush de\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->format_string_id);
+    fprintf(out, "\textrn %s\n\tcall %s\n",
+            plan->print_name, plan->print_name);
+    for (argument = 0; argument < 9; ++argument)
+        fputs("\tpop bc\n", out);
+    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -28882,6 +29055,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirCharPointerUpdateReports char_pointer_update_reports;
     struct MirTwoStringPairReports two_string_pair_reports;
     struct MirTrianglePerimeter triangle_perimeter;
+    struct MirFixedPointReport fixed_point_report;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -29421,6 +29595,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_triangle_perimeter(&triangle_perimeter)) {
         mir_emit_triangle_perimeter(out, &triangle_perimeter);
+        return 1;
+    }
+    if (mir_match_fixed_point_report(&fixed_point_report)) {
+        mir_emit_fixed_point_report(out, &fixed_point_report);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
