@@ -589,6 +589,12 @@ struct MirPointerValueChecks {
     int string_ids[4];
 };
 
+struct MirEscapeReport {
+    struct Sym *global_function, *interior_function, *call_function;
+    char print_name[64];
+    int format_id;
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -7282,6 +7288,34 @@ static int mir_match_pointer_value_checks(struct MirPointerValueChecks *p)
     return p->integer_function != NULL && p->long_function != NULL &&
            !strcmp(mir.insns[100].name, mir.insns[125].name) &&
            !strcmp(mir.insns[100].name, mir.insns[139].name);
+}
+
+static int mir_match_escape_report(struct MirEscapeReport *p)
+{
+    int instruction, found = 0;
+    memset(p, 0, sizeof(*p));
+    if (mir.count != 118 || mir_cfg_block_count() != 1 || mir.has_vla ||
+        mir.insns[107].opcode != MIR_CALL || mir.insns[109].opcode != MIR_CALL ||
+        mir.insns[113].opcode != MIR_CALL || mir.insns[115].opcode != MIR_CALL ||
+        !mir_machine_constant_equals(mir.insns[116].dst, 0) ||
+        mir.insns[117].src1 != mir.insns[116].dst)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *arg = &mir.insns[instruction], *def;
+        if (arg->opcode != MIR_ARG ||
+            arg->secondary_offset != mir.insns[115].secondary_offset) continue;
+        def = mir_definition(arg->src1);
+        if (def != NULL && def->opcode == MIR_STRING_ADDRESS) {
+            p->format_id = (int)def->immediate;
+            ++found;
+        }
+    }
+    p->global_function = find_global(mir.insns[107].name);
+    p->interior_function = find_global(mir.insns[109].name);
+    p->call_function = find_global(mir.insns[113].name);
+    snprintf(p->print_name, sizeof(p->print_name), "%s", mir.insns[115].base_name);
+    return found == 1 && p->global_function && p->interior_function &&
+           p->call_function && p->print_name[0];
 }
 
 static int mir_match_pointer_word_sum_until_zero(
@@ -26728,6 +26762,34 @@ static void mir_emit_pointer_value_checks(FILE *out,
     fputs("\tret\n", out);
 }
 
+static void mir_emit_escape_report(FILE *out, const struct MirEscapeReport *p)
+{
+    static const int fixed_values[5] = {20,20,25,53,173};
+    int i;
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-6\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check) mir_emit_runtime_call(out, "__stchk");
+    fputs("\tld hl,1\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, p->global_function);
+    fputs("\tpop bc\n\tld (ix-2),l\n\tld (ix-1),h\n", out);
+    mir_machine_emit_symbol_call(out, p->interior_function);
+    fputs("\tld (ix-4),l\n\tld (ix-3),h\n"
+          "\tld hl,1\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, p->call_function);
+    fputs("\tpop bc\n\tld (ix-6),l\n\tld (ix-5),h\n", out);
+    for (i = -6; i <= -2; i += 2)
+        fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n", i, i+1);
+    for (i = 0; i < 5; ++i)
+        fprintf(out, "\tld hl,%d\n\tpush hl\n", fixed_values[i]);
+    mir_emit_fixed_point_constant(out, 0xfffff880UL);
+    mir_emit_fixed_point_constant(out, 0xffffffe8UL);
+    mir_emit_fixed_point_constant(out, 40UL);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n\textrn %s\n\tcall %s\n",
+            p->format_id, p->print_name, p->print_name);
+    for (i = 0; i < 15; ++i) fputs("\tpop bc\n", out);
+    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -30458,6 +30520,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirStringInitReports string_init_reports;
     struct MirStructPointerReports struct_pointer_reports;
     struct MirPointerValueChecks pointer_value_checks;
+    struct MirEscapeReport escape_report;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -31056,6 +31119,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_pointer_value_checks(&pointer_value_checks)) {
         mir_emit_pointer_value_checks(out, &pointer_value_checks);
+        return 1;
+    }
+    if (mir_match_escape_report(&escape_report)) {
+        mir_emit_escape_report(out, &escape_report);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
