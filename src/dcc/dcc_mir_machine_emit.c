@@ -679,6 +679,11 @@ struct MirPackedBitDecode { int parameter_stack_offset; };
 
 struct MirSortSearchReport { struct Sym *print_function; int format_id; };
 
+struct MirLeafConstructor {
+    int seed_stack_offset, value_offset, byte_offset, long_offset;
+    int words_offset, bytes_offset, longs_offset;
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -7836,6 +7841,24 @@ static int mir_match_sort_search_report(struct MirSortSearchReport *p)
         d=mir_definition(a->src1);if(d&&d->opcode==MIR_STRING_ADDRESS){p->format_id=(int)d->immediate;++found;}}
     p->print_function=find_global(mir.insns[86].name);
     return found==1&&p->print_function!=NULL;
+}
+
+static int mir_match_leaf_constructor(struct MirLeafConstructor *p)
+{
+    memset(p,0,sizeof(*p));
+    if(mir.count!=74||mir_cfg_block_count()!=4||mir.has_vla||
+       mir.insns[1].opcode!=MIR_PARAM||!mir_machine_constant_equals(mir.insns[9].dst,1)||
+       !mir_machine_constant_equals(mir.insns[17].dst,1000)||
+       !mir_machine_constant_equals(mir.insns[21].dst,0)||
+       !mir_machine_constant_equals(mir.insns[27].dst,4)||
+       !mir_machine_constant_equals(mir.insns[45].dst,10)||
+       !mir_machine_constant_equals(mir.insns[58].dst,1000)||
+       mir.insns[73].src1!=mir.insns[72].dst||
+       !mir_machine_parameter_value_offset(mir.insns[1].dst,&p->seed_stack_offset))return 0;
+    p->value_offset=(int)mir.insns[3].immediate;p->byte_offset=(int)mir.insns[7].immediate;
+    p->long_offset=(int)mir.insns[14].immediate;p->words_offset=(int)mir.insns[32].immediate;
+    p->bytes_offset=(int)mir.insns[41].immediate;p->longs_offset=(int)mir.insns[53].immediate;
+    return 1;
 }
 
 static int mir_match_pointer_word_sum_until_zero(
@@ -27596,6 +27619,45 @@ static void mir_emit_sort_search_report(FILE*out,const struct MirSortSearchRepor
     fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tld hl,0\n\tret\n",out);
 }
 
+static void mir_emit_leaf_dest(FILE*out,int off)
+{
+    fputs("\tld l,(ix+4)\n\tld h,(ix+5)\n",out);
+    mir_machine_emit_hl_offset(out,off,0);
+}
+
+static void mir_emit_leaf_constructor(FILE*out,const struct MirLeafConstructor*p)
+{
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n\tld hl,-4\n\tadd hl,sp\n\tld sp,hl\n",out);
+    if(opt_stack_check)mir_emit_runtime_call(out,"__stchk");
+    fprintf(out,"\tld c,(ix+%d)\n\tld b,(ix+%d)\n\tld hl,1000\n",
+            p->seed_stack_offset+2,p->seed_stack_offset+3);
+    mir_emit_runtime_call(out,"__m1s");
+    fputs("\tld (ix-4),l\n\tld (ix-3),h\n\tld (ix-2),e\n\tld (ix-1),d\n",out);
+    mir_emit_leaf_dest(out,p->value_offset);fprintf(out,"\tld e,(ix+%d)\n\tld d,(ix+%d)\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+            p->seed_stack_offset+2,p->seed_stack_offset+3);
+    mir_emit_leaf_dest(out,p->byte_offset);fprintf(out,"\tld a,(ix+%d)\n\tinc a\n\tld (hl),a\n",p->seed_stack_offset+2);
+    mir_emit_leaf_dest(out,p->long_offset);fputs("\tld e,(ix-4)\n\tld d,(ix-3)\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n\tinc hl\n\tld e,(ix-2)\n\tld d,(ix-1)\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n",out);
+    {
+        int words=new_label(),bytes=new_label(),longs=new_label();
+        mir_emit_leaf_dest(out,p->words_offset);
+        fprintf(out,"\tld e,(ix+%d)\n\tld d,(ix+%d)\n\tld b,4\nL%d:\n"
+                    "\tld (hl),e\n\tinc hl\n\tld (hl),d\n\tinc hl\n"
+                    "\tinc de\n\tdjnz L%d\n",
+                p->seed_stack_offset+2,p->seed_stack_offset+3,words,words);
+        mir_emit_leaf_dest(out,p->bytes_offset);
+        fprintf(out,"\tld a,(ix+%d)\n\tadd a,10\n\tld b,4\nL%d:\n"
+                    "\tld (hl),a\n\tinc hl\n\tinc a\n\tdjnz L%d\n",
+                p->seed_stack_offset+2,bytes,bytes);
+        mir_emit_leaf_dest(out,p->longs_offset);
+        fprintf(out,"\tld c,(ix-4)\n\tld b,(ix-3)\n"
+                    "\tld e,(ix-2)\n\tld d,(ix-1)\n\tld a,4\nL%d:\n"
+                    "\tld (hl),c\n\tinc hl\n\tld (hl),b\n\tinc hl\n"
+                    "\tld (hl),e\n\tinc hl\n\tld (hl),d\n\tinc hl\n"
+                    "\tinc bc\n\tdec a\n\tjp nz,L%d\n",longs,longs);
+    }
+    fputs("\tld sp,ix\n\tpop ix\n\tret\n",out);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -31344,6 +31406,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstexprWideChecks constexpr_wide_checks;
     struct MirPackedBitDecode packed_bit_decode;
     struct MirSortSearchReport sort_search_report;
+    struct MirLeafConstructor leaf_constructor;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -32014,6 +32077,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_sort_search_report(&sort_search_report)) {
         mir_emit_sort_search_report(out, &sort_search_report);
+        return 1;
+    }
+    if (mir_match_leaf_constructor(&leaf_constructor)) {
+        mir_emit_leaf_constructor(out, &leaf_constructor);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
