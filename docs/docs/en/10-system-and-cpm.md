@@ -193,6 +193,29 @@ matched by a wildcard-aware `unlink()`/`opendir()` scan (which correctly treat
 creating a file with no portable way to clean it back up. See
 `tests/tmakewc.c`.
 
+### `rename()` onto an existing (unambiguous) destination name
+
+This is a separate case from the ambiguous-FCB one above: both names are
+ordinary, unambiguous filenames, but the destination already exists as its
+own file. Real BDOS (confirmed against its own source) doesn't check for
+this at all — it just overwrites the matched entry's name/extension bytes
+with the new name, with no awareness that another directory entry already
+has that name. On real hardware that leaves **two** directory entries
+sharing one name, and which one a later `open()` finds is undefined.
+
+No emulator that maps CP/M files onto real host files can reproduce that:
+POSIX and Windows filesystems both refuse two directory entries with the
+same name, so every emulator is forced to collapse this into a single
+winner, one way or the other — there's no hardware-faithful option
+available at all, on any host. Emulators split on which winner they pick:
+ntvcm, cpmemu, zxcc, and z88dk's cpm overwrite the destination (nonzero
+return means failure — 0 means the destination now holds the source's old
+content and the source name is gone); tnylpo and cpm.exe reject the rename
+outright instead (nonzero return, original name and content untouched).
+Neither is "more correct." If your program cares which way this goes, check
+`rename()`'s return value and/or `unlink()` the destination first rather
+than relying on either outcome. See `tests/trenamex.c`.
+
 ### Drive-letter prefixes
 
 `fopen("A:FILE.TXT", ...)` and similar are supported: a leading `A`-`P`

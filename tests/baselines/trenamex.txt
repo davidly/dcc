@@ -1,5 +1,4 @@
-REPORT rename() onto existing destination returned 0
-REPORT RXOLD.TMP still exists: 0
-REPORT RXNEW.TMP content after rename: [old content]
-PASS at_least_one_name_survives: 1
+PASS rename_reports_success: 1
+PASS source_name_gone: 0
+PASS destination_has_source_content: 1
 trenamex ok
