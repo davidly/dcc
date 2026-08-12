@@ -847,6 +847,15 @@ struct MirAggregateByteFillReturn {
     int tag_offset;
 };
 
+struct MirGlobalLastRecordKind {
+    struct Sym *state;
+    int count_offset;
+    int records_offset;
+    int member_offset;
+    int stride;
+    int wanted;
+};
+
 struct MirAsciiUpper {
     int parameter_stack_offset;
     int width;
@@ -11933,6 +11942,101 @@ static int mir_match_conditional_string_report(
     plan->format_string_id = (int)mir.insns[3].immediate;
     plan->true_string_id = (int)mir.insns[9].immediate;
     plan->false_string_id = (int)mir.insns[13].immediate;
+    return 1;
+}
+
+static int mir_match_global_last_record_kind(
+    struct MirGlobalLastRecordKind *plan)
+{
+    static const int expected_opcodes[31] = {
+        MIR_LABEL, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_RETURN,
+        MIR_LABEL, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST,
+        MIR_BINARY, MIR_BINARY, MIR_CONST, MIR_CONST, MIR_BINARY,
+        MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_RETURN
+    };
+    int memory_type, memory_storage, memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 31 || mir_cfg_block_count() != 2 ||
+        mir.has_vla || type_size(mir.return_type) != 2)
+        return mir_machine_reject("global-last-record-kind", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject("global-last-record-kind", "opcode");
+    if (!mir_machine_named_nonvolatile(&mir.insns[1]) ||
+        !mir_machine_same_location(&mir.insns[1], &mir.insns[10]) ||
+        !mir_machine_same_location(&mir.insns[1], &mir.insns[13]) ||
+        mir.insns[2].src1 != mir.insns[1].dst ||
+        mir.insns[3].src1 != mir.insns[2].dst ||
+        mir.insns[3].memory_size != 2 ||
+        !mir_machine_constant_equals(mir.insns[4].dst, 0) ||
+        mir.insns[5].immediate != TOK_LE ||
+        mir.insns[5].src1 != mir.insns[3].dst ||
+        mir.insns[5].src2 != mir.insns[4].dst ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        mir.insns[6].label != mir.insns[9].label ||
+        !mir_machine_constant_equals(mir.insns[7].dst, 0) ||
+        mir.insns[8].src1 != mir.insns[7].dst)
+        return mir_machine_reject("global-last-record-kind", "count");
+    plan->state = find_global(mir.insns[1].name);
+    plan->count_offset = (int)mir.insns[2].immediate;
+    if (plan->state == NULL || plan->state->is_volatile ||
+        mir.insns[11].src1 != mir.insns[10].dst ||
+        mir.insns[12].src1 != mir.insns[11].dst ||
+        mir.insns[12].memory_size != 2 ||
+        mir.insns[14].src1 != mir.insns[13].dst ||
+        mir.insns[15].src1 != mir.insns[14].dst ||
+        mir.insns[15].memory_size != 2 ||
+        mir.insns[14].immediate == mir.insns[11].immediate)
+        return mir_machine_reject("global-last-record-kind", "members");
+    if (
+        !mir_machine_constant_equals(mir.insns[16].dst, 4) ||
+        mir.insns[17].immediate != '*' ||
+        mir.insns[17].src1 != mir.insns[15].dst ||
+        mir.insns[17].src2 != mir.insns[16].dst ||
+        mir.insns[18].immediate != '+' ||
+        mir.insns[18].src1 != mir.insns[12].dst ||
+        mir.insns[18].src2 != mir.insns[17].dst)
+        return mir_machine_reject("global-last-record-kind", "index");
+    if (
+        !mir_machine_constant_equals(mir.insns[19].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[20].dst, 4) ||
+        mir.insns[21].immediate != '*' ||
+        mir.insns[21].src1 != mir.insns[19].dst ||
+        mir.insns[21].src2 != mir.insns[20].dst ||
+        mir.insns[22].immediate != '-' ||
+        mir.insns[22].src1 != mir.insns[18].dst ||
+        mir.insns[22].src2 != mir.insns[21].dst)
+        return mir_machine_reject("global-last-record-kind", "address");
+    if (!mir_machine_unobservable_local_store(&mir.insns[24]) ||
+        mir.insns[24].src1 != mir.insns[22].dst)
+        return mir_machine_reject("global-last-record-kind", "local");
+    plan->records_offset = (int)mir.insns[11].immediate;
+    plan->stride = (int)mir.insns[16].immediate;
+    if (!mir_machine_same_location(&mir.insns[24], &mir.insns[25]) ||
+        mir.insns[26].src1 != mir.insns[25].dst ||
+        mir.insns[27].src1 != mir.insns[26].dst ||
+        mir.insns[27].memory_size != 2 ||
+        mir.insns[29].immediate != TOK_EQ ||
+        mir.insns[29].src1 != mir.insns[27].dst ||
+        mir.insns[29].src2 != mir.insns[28].dst ||
+        mir.insns[30].src1 != mir.insns[29].dst)
+        return mir_machine_reject("global-last-record-kind", "result");
+    plan->member_offset = (int)mir.insns[26].immediate;
+    plan->wanted = (int)mir.insns[28].immediate;
+    if (plan->stride != 4 ||
+        plan->count_offset < -32768 || plan->count_offset > 32767 ||
+        plan->records_offset < -32768 || plan->records_offset > 32767 ||
+        plan->member_offset < -32768 || plan->member_offset > 32767)
+        return mir_machine_reject("global-last-record-kind", "constants");
+    if (!mir_scalar_memory_location(
+            &mir.insns[1], &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL || memory_offset != 0)
+        return mir_machine_reject("global-last-record-kind", "global");
     return 1;
 }
 
@@ -23372,6 +23476,35 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_global_last_record_kind(
+    FILE *out, const struct MirGlobalLastRecordKind *plan)
+{
+    int false_result = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_word(out, plan->state, 0);
+    mir_machine_emit_hl_offset(out, plan->count_offset, 0);
+    fputs("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n\tbit 7,b\n", out);
+    fprintf(out, "\tjp nz,L%d\n", false_result);
+    fputs("\tld a,b\n\tor c\n", out);
+    fprintf(out, "\tjp z,L%d\n\tdec bc\n\tpush bc\n", false_result);
+    mir_machine_emit_global_word(out, plan->state, 0);
+    mir_machine_emit_hl_offset(out, plan->records_offset, 0);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpop bc\n"
+          "\tld h,b\n\tld l,c\n\tadd hl,hl\n\tadd hl,hl\n"
+          "\tadd hl,de\n", out);
+    mir_machine_emit_hl_offset(out, plan->member_offset, 0);
+    fprintf(out,
+            "\tld a,(hl)\n\txor %d\n\tld c,a\n"
+            "\tinc hl\n\tld a,(hl)\n\txor %d\n\tor c\n"
+            "\tld hl,0\n\tret nz\n\tinc hl\n\tret\n"
+            "L%d:\n\tld hl,0\n\tret\n",
+            plan->wanted & 0xff,
+            (plan->wanted >> 8) & 0xff,
+            false_result);
+}
+
 static void mir_emit_aggregate_byte_fill_return(
     FILE *out, const struct MirAggregateByteFillReturn *plan)
 {
@@ -24654,6 +24787,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirGlobalLastRecordKind global_last_record_kind;
     struct MirAggregateByteFillReturn aggregate_byte_fill_return;
     struct MirFixedCallReductionReport fixed_call_reduction_report;
     struct MirStringPutcharLoop string_putchar_loop;
@@ -25294,6 +25428,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_global_last_record_kind(
+            &global_last_record_kind)) {
+        mir_emit_global_last_record_kind(
+            out, &global_last_record_kind);
         return 1;
     }
     if (mir_match_aggregate_byte_fill_return(

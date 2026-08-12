@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `51ac7cc`
-  (`schedule fixed call reductions`).
-- Current candidate coverage: **1984/2185 (90.80%)**.
-- Remaining fallback population: **201 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `4bbf968`
+  (`schedule direct aggregate returns`).
+- Current candidate coverage: **1985/2185 (90.85%)**.
+- Remaining fallback population: **200 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -318,6 +318,11 @@ current execution plan and handoff.
   tag in place instead of constructing and copying a 42-byte local. This
   admits `tstructv.proto_make_big`, completing that app's MIR coverage and
   improving it 3.85% peep / 6.07% nopeep.
+- Last-record kind predicates now reject nonpositive counts, preserve the
+  decremented index across large member-offset materialization, form the
+  fixed-stride record address directly, and compare its word kind without a
+  pointer local. This admits hot `fint.last_is_lit`, improving both modes and
+  shrinking both linked images by 128 bytes.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -325,7 +330,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 201 final-cost fallbacks,
+- Current next priority: repeated causes in the 200 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
