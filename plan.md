@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `5576761`
-  (`prove designated bitfield initializers`).
-- Current candidate coverage: **2049/2185 (93.78%)**.
-- Remaining fallback population: **136 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `685dfe3`
+  (`prove prefix update checks`).
+- Current candidate coverage: **2050/2185 (93.82%)**.
+- Remaining fallback population: **135 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -580,6 +580,10 @@ current execution plan and handoff.
   MIR and preserve every PASS-producing checker call. This admits
   `tpreinc.main`, improving both modes while shrinking images by 12.50% /
   14.04%.
+- Wide bit-operation runners now derive all 22 expected values and labels from
+  MIR and emit the wide checker ABI directly. This admits `tbits32.main`,
+  improving the app 8.54% peep / 8.96% nopeep with 7.69% / 9.43% smaller
+  images.
 - A direct `too.expected_area` dispatcher was rejected after repeated-call
   tests exposed incorrect signed divmod cache/register handling; it is absent.
 - A binary-search replacement for `too.isqrt_l` was rejected after focused
@@ -594,7 +598,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 136 final-cost fallbacks,
+- Current next priority: repeated causes in the 135 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
