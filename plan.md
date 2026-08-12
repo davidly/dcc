@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `fa2027e`
-  (`dcc MIR: schedule fixed wrapper initializers`).
-- Current candidate coverage: **2085/2185 (95.42%)**.
-- Remaining fallback population: **100 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `1590c03`
+  (`dcc MIR: schedule proven inline fold loops`).
+- Current candidate coverage: **2086/2185 (95.47%)**.
+- Remaining fallback population: **99 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -697,6 +697,13 @@ current execution plan and handoff.
   replacing call-shaped MIR with direct global stores, admitting
   `tinline.inline_fold_check` and improving the app **2.18%/2.44%** while
   shrinking both images.
+- Fixed K&R call-check runners now retain ordinary and wide ABI argument
+  ordering, keep failure state in a six-byte IX frame, and compare DE:HL
+  results directly. This admits `tkandr.main`, improving **1.29%/1.83%**
+  with no image regression.
+- A compact register schedule for `pint.alloc_temp` was rejected despite 50
+  fewer instructions and one smaller sector because program placement still
+  regressed **0.26%/0.16%**; no padding or baseline movement was retained.
 - A direct `too.expected_area` dispatcher was rejected after repeated-call
   tests exposed incorrect signed divmod cache/register handling; it is absent.
 - A binary-search replacement for `too.isqrt_l` was rejected after focused
@@ -711,7 +718,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 100 final-cost fallbacks,
+- Current next priority: repeated causes in the 99 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
