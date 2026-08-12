@@ -298,6 +298,12 @@ struct MirGlobalArrayFma {
     int stride;
 };
 
+struct MirWideBitcastCall {
+    struct Sym *function;
+    int first_stack_offset;
+    int second_stack_offset;
+};
+
 struct MirByteMismatchReport {
     struct Sym *counter;
     int counter_offset;
@@ -4001,6 +4007,73 @@ static int mir_match_global_array_fma(
         mir.insns[22].memory_size != 4 ||
         mir.insns[23].src1 != mir.insns[22].dst)
         return mir_machine_reject("global-array-fma", "fma");
+    return 1;
+}
+
+static int mir_match_wide_bitcast_call(
+    struct MirWideBitcastCall *plan)
+{
+    static const int expected_opcodes[27] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_NOP, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_NOP, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG,
+        MIR_CALL, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_RETURN
+    };
+    const struct MirInsn *first = &mir.insns[1];
+    const struct MirInsn *second = &mir.insns[2];
+    const struct MirInsn *call = &mir.insns[21];
+    int arguments[2];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 27 || mir_cfg_block_count() != 1 ||
+        mir.has_vla || !type_is_float(mir.return_type) ||
+        type_size(mir.return_type) != 4)
+        return mir_machine_reject("wide-bitcast-call", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject("wide-bitcast-call", "opcode");
+    if (!type_is_float(first->type) || type_size(first->type) != 4 ||
+        !mir_scalar_memory_location(
+            first, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2)
+        return mir_machine_reject("wide-bitcast-call", "first");
+    plan->first_stack_offset = memory_offset - 2;
+    if (!type_is_float(second->type) || type_size(second->type) != 4 ||
+        !mir_scalar_memory_location(
+            second, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2)
+        return mir_machine_reject("wide-bitcast-call", "second");
+    plan->second_stack_offset = memory_offset - 2;
+    if (mir.insns[6].src2 != first->dst ||
+        mir.insns[10].src2 != second->dst ||
+        mir.insns[15].memory_size != 4 ||
+        mir.insns[19].memory_size != 4 ||
+        !mir_machine_two_call_arguments(call, arguments) ||
+        arguments[0] != mir.insns[15].dst ||
+        arguments[1] != mir.insns[19].dst ||
+        type_size(call->type) != 4 ||
+        type_is_float(call->type) ||
+        mir.insns[22].src2 != call->dst ||
+        mir.insns[25].memory_size != 4 ||
+        !type_is_float(mir.insns[25].type) ||
+        mir.insns[26].src1 != mir.insns[25].dst)
+        return mir_machine_reject("wide-bitcast-call", "flow");
+    plan->function = find_global(call->name);
+    if (plan->function == NULL ||
+        !plan->function->is_defined ||
+        plan->function->is_funcptr ||
+        plan->function->is_noreturn ||
+        (call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0)
+        return mir_machine_reject("wide-bitcast-call", "function");
     return 1;
 }
 
@@ -18133,6 +18206,19 @@ static void mir_emit_global_array_fma(
           "\tpop iy\n;@dcc.reg free=iy\n\tret\n", out);
 }
 
+static void mir_emit_wide_bitcast_call(
+    FILE *out, const struct MirWideBitcastCall *plan)
+{
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_emit_wide_parameter(out, plan->second_stack_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_wide_parameter(out, plan->first_stack_offset + 4);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tret\n", out);
+}
+
 static void mir_emit_byte_mismatch_report(
     FILE *out, const struct MirByteMismatchReport *plan)
 {
@@ -20662,6 +20748,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirMixedWideSum mixed_wide_sum;
     struct MirFloatMemberScaleAdd float_member_scale_add;
     struct MirGlobalArrayFma global_array_fma;
+    struct MirWideBitcastCall wide_bitcast_call;
     struct MirByteMismatchReport byte_mismatch_report;
     struct MirByteArithmeticReports byte_arithmetic_reports;
     struct MirByteBitwiseReport byte_bitwise_report;
@@ -21059,6 +21146,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_global_array_fma(&global_array_fma)) {
         mir_emit_global_array_fma(out, &global_array_fma);
+        return 1;
+    }
+    if (mir_match_wide_bitcast_call(&wide_bitcast_call)) {
+        mir_emit_wide_bitcast_call(out, &wide_bitcast_call);
         return 1;
     }
     if (mir_match_byte_mismatch_report(
