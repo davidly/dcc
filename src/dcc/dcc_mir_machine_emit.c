@@ -864,6 +864,17 @@ struct MirLocalByteFillCall {
     int patch_value;
 };
 
+struct MirFixedMemberInitCalls {
+    struct Sym *function;
+    int parameter_stack_offset;
+    int name_offset;
+    int count_offset;
+    int array_offset;
+    int stride;
+    int count;
+    int string_id;
+};
+
 struct MirAsciiUpper {
     int parameter_stack_offset;
     int width;
@@ -11950,6 +11961,76 @@ static int mir_match_conditional_string_report(
     plan->format_string_id = (int)mir.insns[3].immediate;
     plan->true_string_id = (int)mir.insns[9].immediate;
     plan->false_string_id = (int)mir.insns[13].immediate;
+    return 1;
+}
+
+static int mir_match_fixed_member_init_calls(
+    struct MirFixedMemberInitCalls *plan)
+{
+    const struct MirInsn *parameter = &mir.insns[1];
+    const struct MirInsn *index_phi = &mir.insns[14];
+    const struct MirInsn *call = &mir.insns[28];
+    int args[2];
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 36 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID ||
+        mir.insns[0].opcode != MIR_LABEL ||
+        parameter->opcode != MIR_PARAM ||
+        !mir_machine_parameter_value_offset(
+            parameter->dst, &plan->parameter_stack_offset) ||
+        mir.insns[2].opcode != MIR_LOAD ||
+        !mir_machine_same_location(parameter, &mir.insns[2]) ||
+        mir.insns[3].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[3].src1 != mir.insns[2].dst ||
+        mir.insns[4].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[5].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[5].src1 != mir.insns[3].dst ||
+        mir.insns[5].src2 != mir.insns[4].dst ||
+        !mir_machine_same_location(parameter, &mir.insns[6]) ||
+        mir.insns[7].src1 != mir.insns[6].dst ||
+        mir.insns[9].src1 != mir.insns[7].dst ||
+        mir.insns[9].src2 != mir.insns[8].dst)
+        return mir_machine_reject("fixed-member-init-calls", "setup");
+    plan->name_offset = (int)mir.insns[3].immediate;
+    plan->count_offset = (int)mir.insns[7].immediate;
+    plan->count = (int)mir.insns[8].immediate;
+    plan->string_id = (int)mir.insns[4].immediate;
+    if (plan->count <= 0 || plan->count > 16 ||
+        !mir_machine_constant_equals(mir.insns[11].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[12]) ||
+        index_phi->src1 != mir.insns[11].dst ||
+        index_phi->src2 != mir.insns[32].dst ||
+        mir.insns[18].immediate != '<' ||
+        mir.insns[18].src1 != mir.insns[17].dst ||
+        mir.insns[18].src2 != mir.insns[16].dst ||
+        mir.insns[19].src1 != mir.insns[18].dst ||
+        mir.insns[19].label != mir.insns[35].label ||
+        !mir_machine_same_location(parameter, &mir.insns[20]) ||
+        mir.insns[21].src1 != mir.insns[20].dst ||
+        mir.insns[23].src1 != mir.insns[21].dst ||
+        mir.insns[23].src2 != index_phi->dst ||
+        mir.insns[23].immediate <= 0 ||
+        !mir_machine_two_call_arguments(call, args) ||
+        args[0] != mir.insns[23].dst ||
+        args[1] != mir.insns[26].dst ||
+        mir.insns[26].src1 != index_phi->dst ||
+        !mir_machine_constant_equals(mir.insns[31].dst, 1) ||
+        mir.insns[32].immediate != '+' ||
+        mir.insns[32].src1 != index_phi->dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[33]) ||
+        mir.insns[34].label != mir.insns[13].label)
+        return mir_machine_reject("fixed-member-init-calls", "loop");
+    plan->array_offset = (int)mir.insns[21].immediate;
+    plan->stride = (int)mir.insns[23].immediate;
+    plan->function = find_global(call->name);
+    if (plan->function == NULL || !plan->function->is_defined ||
+        plan->function->is_funcptr ||
+        plan->stride <= 0 || plan->stride > 255 ||
+        plan->name_offset < -32768 || plan->name_offset > 32767 ||
+        plan->count_offset < -32768 || plan->count_offset > 32767 ||
+        plan->array_offset < -32768 || plan->array_offset > 32767)
+        return mir_machine_reject("fixed-member-init-calls", "constants");
     return 1;
 }
 
@@ -23579,6 +23660,45 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_member_init_parameter(
+    FILE *out, int stack_offset)
+{
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n",
+            stack_offset);
+}
+
+static void mir_emit_fixed_member_init_calls(
+    FILE *out, const struct MirFixedMemberInitCalls *plan)
+{
+    int index;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_emit_member_init_parameter(out, plan->parameter_stack_offset);
+    mir_machine_emit_hl_offset(out, plan->name_offset, 0);
+    fprintf(out,
+            "\tld de,S%d\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+            plan->string_id);
+    mir_emit_member_init_parameter(out, plan->parameter_stack_offset);
+    mir_machine_emit_hl_offset(out, plan->count_offset, 0);
+    fprintf(out,
+            "\tld (hl),%d\n\tinc hl\n\tld (hl),0\n",
+            plan->count);
+    for (index = 0; index < plan->count; ++index) {
+        fprintf(out, "\tld hl,%d\n\tpush hl\n", index);
+        mir_emit_member_init_parameter(
+            out, plan->parameter_stack_offset + 2);
+        mir_machine_emit_hl_offset(
+            out, plan->array_offset + index * plan->stride, 0);
+        fputs("\tpush hl\n", out);
+        mir_machine_emit_symbol_call(out, plan->function);
+        fputs("\tpop bc\n\tpop bc\n", out);
+    }
+    fputs("\tret\n", out);
+}
+
 static void mir_emit_local_byte_fill_call(
     FILE *out, const struct MirLocalByteFillCall *plan)
 {
@@ -24916,6 +25036,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirFixedMemberInitCalls fixed_member_init_calls;
     struct MirLocalByteFillCall local_byte_fill_call;
     struct MirGlobalLastRecordKind global_last_record_kind;
     struct MirAggregateByteFillReturn aggregate_byte_fill_return;
@@ -25558,6 +25679,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_fixed_member_init_calls(
+            &fixed_member_init_calls)) {
+        mir_emit_fixed_member_init_calls(
+            out, &fixed_member_init_calls);
         return 1;
     }
     if (mir_match_local_byte_fill_call(&local_byte_fill_call)) {
