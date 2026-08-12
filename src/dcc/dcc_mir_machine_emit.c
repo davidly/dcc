@@ -738,6 +738,18 @@ struct MirGlobalRecordPop {
     int done_label;
 };
 
+struct MirLocalByteFillCallReports {
+    struct Sym *functions[2];
+    struct Sym *report_function;
+    int string_ids[2];
+    int call_count;
+    int count;
+    int local_offset;
+    int patch_offset;
+    int patch_value;
+    int loop_label;
+};
+
 struct MirAsciiUpper {
     int parameter_stack_offset;
     int width;
@@ -11827,6 +11839,189 @@ static int mir_match_conditional_string_report(
     return 1;
 }
 
+static int mir_match_local_byte_fill_call_reports(
+    struct MirLocalByteFillCallReports *plan)
+{
+    static const int prefix_opcodes[27] = {
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_PHI,
+        MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT, MIR_LABEL,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL
+    };
+    const struct MirInsn *index_phi = &mir.insns[5];
+    int memory_type, memory_storage, memory_offset;
+    int instruction = 27;
+    int call_index;
+
+    memset(plan, 0, sizeof(*plan));
+    plan->patch_offset = -1;
+    if ((mir.count != 44 && mir.count != 47) ||
+        mir_cfg_block_count() != 4 || mir.has_vla ||
+        type_size(mir.return_type) != 2 ||
+        type_ptr_depth(mir.return_type) != 0)
+        return mir_machine_reject(
+            "local-byte-fill-call-reports", "shape");
+    for (call_index = 0; call_index < 27; ++call_index)
+        if (mir.insns[call_index].opcode != prefix_opcodes[call_index])
+            return mir_machine_reject(
+                "local-byte-fill-call-reports", "prefix-opcode");
+    if (!mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[3]) ||
+        mir.insns[3].memory_size != 1 ||
+        index_phi->src1 != mir.insns[2].dst ||
+        index_phi->src2 != mir.insns[23].dst ||
+        index_phi->phi_pred1 != mir.insns[0].label ||
+        index_phi->phi_pred2 != mir.insns[20].label ||
+        mir.insns[8].immediate != 0 ||
+        mir.insns[8].src1 != index_phi->dst ||
+        mir.insns[9].immediate != '<' ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[9].src2 != mir.insns[7].dst ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        mir.insns[10].label != mir.insns[26].label)
+        return mir_machine_reject(
+            "local-byte-fill-call-reports", "loop");
+    plan->count = (int)mir.insns[7].immediate;
+    if (plan->count <= 0 || plan->count > 255 ||
+        !mir_scalar_memory_location(
+            &mir.insns[11], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_LOCAL || memory_offset != -plan->count ||
+        mir.insns[13].src1 != mir.insns[11].dst ||
+        mir.insns[13].src2 != index_phi->dst ||
+        mir.insns[13].immediate != 1 ||
+        !mir_machine_constant_equals(mir.insns[15].dst, 1) ||
+        mir.insns[16].immediate != 0 ||
+        mir.insns[16].src1 != index_phi->dst ||
+        mir.insns[17].immediate != '+' ||
+        mir.insns[17].src1 != mir.insns[16].dst ||
+        mir.insns[17].src2 != mir.insns[15].dst ||
+        mir.insns[18].immediate != 0 ||
+        mir.insns[18].src1 != mir.insns[17].dst ||
+        mir.insns[19].src1 != mir.insns[13].dst ||
+        mir.insns[19].src2 != mir.insns[18].dst ||
+        mir.insns[19].memory_size != 1 ||
+        (mir.insns[19].memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_constant_equals(mir.insns[22].dst, 1) ||
+        mir.insns[23].immediate != '+' ||
+        mir.insns[23].src1 != index_phi->dst ||
+        mir.insns[23].src2 != mir.insns[22].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[24]) ||
+        mir.insns[24].src1 != mir.insns[23].dst ||
+        mir.insns[25].label != mir.insns[4].label)
+        return mir_machine_reject(
+            "local-byte-fill-call-reports", "fill");
+    plan->local_offset = memory_offset;
+    if (mir.insns[instruction].opcode == MIR_ADDRESS) {
+        int patch_type, patch_storage, patch_base_offset;
+        long patch_index, patch_value;
+
+        if (instruction + 5 >= mir.count ||
+            !mir_scalar_memory_location(
+                &mir.insns[instruction], &patch_type, &patch_storage,
+                &patch_base_offset) ||
+            patch_storage != memory_storage ||
+            patch_base_offset != memory_offset ||
+            !mir_machine_constant_value(
+                mir.insns[instruction + 1].dst, &patch_index, 0) ||
+            patch_index < 0 || patch_index >= plan->count ||
+            mir.insns[instruction + 2].opcode != MIR_INDEX_ADDRESS ||
+            mir.insns[instruction + 2].src1 !=
+                mir.insns[instruction].dst ||
+            mir.insns[instruction + 2].src2 !=
+                mir.insns[instruction + 1].dst ||
+            mir.insns[instruction + 2].immediate != 1 ||
+            mir.insns[instruction + 3].opcode != MIR_NOP ||
+            !mir_machine_constant_value(
+                mir.insns[instruction + 4].dst, &patch_value, 0) ||
+            mir.insns[instruction + 5].opcode != MIR_STORE_INDIRECT ||
+            mir.insns[instruction + 5].src1 !=
+                mir.insns[instruction + 2].dst ||
+            mir.insns[instruction + 5].src2 !=
+                mir.insns[instruction + 4].dst ||
+            mir.insns[instruction + 5].memory_size != 1 ||
+            (mir.insns[instruction + 5].memory_flags & (1 | 8)) != 0)
+            return mir_machine_reject(
+                "local-byte-fill-call-reports", "patch");
+        plan->patch_offset = (int)patch_index;
+        plan->patch_value = (int)patch_value & 0xff;
+        instruction += 6;
+    }
+    while (instruction + 8 < mir.count - 2 &&
+           plan->call_count < 2) {
+        const struct MirInsn *string = &mir.insns[instruction];
+        const struct MirInsn *address = &mir.insns[instruction + 2];
+        const struct MirInsn *count = &mir.insns[instruction + 4];
+        const struct MirInsn *call = &mir.insns[instruction + 6];
+        const struct MirInsn *report = &mir.insns[instruction + 8];
+        int call_arguments[2];
+        int report_arguments[2];
+        int address_type, address_storage, address_offset;
+        struct Sym *function;
+        struct Sym *report_function;
+
+        if (string->opcode != MIR_STRING_ADDRESS ||
+            mir.insns[instruction + 1].opcode != MIR_ARG ||
+            mir.insns[instruction + 1].src1 != string->dst ||
+            address->opcode != MIR_ADDRESS ||
+            !mir_scalar_memory_location(
+                address, &address_type, &address_storage, &address_offset) ||
+            address_storage != memory_storage ||
+            address_offset != memory_offset ||
+            mir.insns[instruction + 3].opcode != MIR_ARG ||
+            mir.insns[instruction + 3].src1 != address->dst ||
+            count->opcode != MIR_CONST ||
+            count->immediate != plan->count ||
+            mir.insns[instruction + 5].opcode != MIR_ARG ||
+            mir.insns[instruction + 5].src1 != count->dst ||
+            call->opcode != MIR_CALL ||
+            !mir_machine_two_call_arguments(call, call_arguments) ||
+            call_arguments[0] != address->dst ||
+            call_arguments[1] != count->dst ||
+            mir.insns[instruction + 7].opcode != MIR_ARG ||
+            mir.insns[instruction + 7].src1 != call->dst ||
+            report->opcode != MIR_CALL ||
+            !mir_machine_two_call_arguments(report, report_arguments) ||
+            report_arguments[0] != string->dst ||
+            report_arguments[1] != call->dst ||
+            (report->memory_flags &
+             (MIR_CALL_FLAG_VARIADIC |
+              MIR_CALL_FLAG_FORMAT_RUNTIME)) != MIR_CALL_FLAG_VARIADIC)
+            return mir_machine_reject(
+                "local-byte-fill-call-reports", "calls");
+        function = find_global(call->name);
+        report_function = find_global(report->name);
+        if (function == NULL || !function->is_defined ||
+            function->is_funcptr ||
+            (call->memory_flags &
+             (MIR_CALL_FLAG_VARIADIC |
+              MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+            strcmp(report->name, "printf") ||
+            report_function == NULL || report_function->is_defined)
+            return mir_machine_reject(
+                "local-byte-fill-call-reports", "symbols");
+        plan->functions[plan->call_count] = function;
+        plan->string_ids[plan->call_count] = (int)string->immediate;
+        if (plan->report_function == NULL)
+            plan->report_function = report_function;
+        else if (plan->report_function != report_function)
+            return mir_machine_reject(
+                "local-byte-fill-call-reports", "report-symbol");
+        ++plan->call_count;
+        instruction += 9;
+    }
+    if (plan->call_count == 0 || instruction + 2 != mir.count ||
+        mir.insns[instruction].opcode != MIR_CONST ||
+        mir.insns[instruction].immediate != 0 ||
+        mir.insns[instruction + 1].opcode != MIR_RETURN ||
+        mir.insns[instruction + 1].src1 != mir.insns[instruction].dst)
+        return mir_machine_reject(
+            "local-byte-fill-call-reports", "return");
+    plan->loop_label = mir.insns[4].label;
+    return 1;
+}
+
 static int mir_match_global_record_pop(
     struct MirGlobalRecordPop *plan)
 {
@@ -21887,6 +22082,43 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_local_byte_fill_call_reports(
+    FILE *out, const struct MirLocalByteFillCallReports *plan)
+{
+    int call_index;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n\tld sp,hl\n",
+            plan->local_offset);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tpush ix\n\tpop hl\n\tld de,%d\n\tadd hl,de\n"
+            "\tld a,1\n\tld b,%d\n"
+            "L%d:\n\tld (hl),a\n\tinc hl\n\tinc a\n\tdjnz L%d\n",
+            plan->local_offset, plan->count,
+            plan->loop_label, plan->loop_label);
+    if (plan->patch_offset >= 0)
+        fprintf(out, "\tld (ix%+d),%d\n",
+                plan->local_offset + plan->patch_offset,
+                plan->patch_value);
+    for (call_index = 0; call_index < plan->call_count; ++call_index) {
+        fprintf(out, "\tld hl,%d\n\tpush hl\n", plan->count);
+        fputs("\tpush ix\n\tpop hl\n", out);
+        mir_machine_emit_hl_offset(out, plan->local_offset, 0);
+        fputs("\tpush hl\n", out);
+        mir_machine_emit_symbol_call(
+            out, plan->functions[call_index]);
+        fputs("\tpop bc\n\tpop bc\n\tpush hl\n", out);
+        fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+                plan->string_ids[call_index]);
+        mir_machine_emit_symbol_call(out, plan->report_function);
+        fputs("\tpop bc\n\tpop bc\n", out);
+    }
+    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_global_record_pop(
     FILE *out, const struct MirGlobalRecordPop *plan)
 {
@@ -22756,6 +22988,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirLocalByteFillCallReports local_byte_fill_call_reports;
     struct MirGlobalRecordPop global_record_pop;
     struct MirPointerMemberAny2 pointer_member_any2;
     struct MirWordRangeBool word_range_bool;
@@ -23384,6 +23617,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_local_byte_fill_call_reports(
+            &local_byte_fill_call_reports)) {
+        mir_emit_local_byte_fill_call_reports(
+            out, &local_byte_fill_call_reports);
         return 1;
     }
     if (mir_match_global_record_pop(&global_record_pop)) {

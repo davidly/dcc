@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `2c98365`
-  (`schedule inline float tolerance reports`).
-- Current candidate coverage: **1971/2185 (90.21%)**.
-- Remaining fallback population: **214 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `1ef796d`
+  (`schedule global record pop loops`).
+- Current candidate coverage: **1973/2185 (90.30%)**.
+- Remaining fallback population: **212 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -252,6 +252,12 @@ current execution plan and handoff.
   textual delta caused by prelegacy callee scheduling (formerly 130);
   forced dual-mode A/B proved the same 117-instruction caller remains faster,
   preserving `tstretst.run_direct` and forward-only coverage.
+- Local byte fill-and-report mains now retain only the observable byte array
+  in an eight-byte IX frame, fill it with an A/HL/B loop, apply an optional
+  constant patch directly, and pass its address to one or two helper/report
+  pairs without induction spills. This admits `tbcreg.main` and
+  `tbcregno.main`, improving them 6.54%/8.28% and 3.80%/5.25% in
+  peep/nopeep modes.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -259,7 +265,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 214 final-cost fallbacks,
+- Current next priority: repeated causes in the 212 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
