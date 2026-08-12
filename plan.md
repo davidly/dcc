@@ -6,11 +6,17 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `e9694a8`
-  (`dcc MIR: schedule literal check runners`).
-- Current candidate coverage: **2094/2185 (95.84%)**.
-- Remaining fallback population: **91 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `0e3c2c4`
+  (`dcc MIR: extend literal check evaluation`).
+- Current candidate coverage: **2095/2185 (95.88%)**.
+- Remaining fallback population: **90 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The scheduled wide div-result checker preserves the eight-byte hidden
+  `ldiv_t` return buffer and reverse call ABI, compares quotient/remainder
+  directly in DE:HL, and validates `quot*denom+rem` with one `__lmul`. This
+  admits `tstdlib.check_ldiv`; `tstdlib` improves from 126,755 to 125,360
+  peep cycles (-1.10%) and 129,028 to 127,063 nopeep cycles (-1.52%), while
+  linked size falls by 128 bytes peep and 256 bytes nopeep.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
 - The release gate is clean: 314 runnable apps, diagnostics, 22 dccpeep

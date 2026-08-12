@@ -1755,6 +1755,17 @@ struct MirSingleSignedDivCheck {
     int operation;
 };
 
+struct MirWideDivResultCheck {
+    struct Sym *divide_function;
+    struct Sym *failure_function;
+    int name_stack_offset;
+    int numerator_stack_offset;
+    int denominator_stack_offset;
+    int expected_quotient_stack_offset;
+    int expected_remainder_stack_offset;
+    int result_offset;
+};
+
 struct MirLocalIdentityArrayResult {
     struct Sym *escaped_pointer;
     int escaped_pointer_offset;
@@ -23130,6 +23141,256 @@ static int mir_match_single_signed_div_check(
     return 1;
 }
 
+static int mir_match_wide_div_result_access(
+    int address_index, int member_offset,
+    const struct MirInsn *result_address)
+{
+    const struct MirInsn *address = &mir.insns[address_index];
+    const struct MirInsn *member = &mir.insns[address_index + 1];
+    const struct MirInsn *load = &mir.insns[address_index + 2];
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+
+    if (!mir_scalar_memory_location(
+            address, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_LOCAL || memory_offset != -8 ||
+        type_size(memory_type) != 8 ||
+        (result_address != NULL &&
+         !mir_machine_same_location(address, result_address)) ||
+        member->src1 != address->dst ||
+        member->immediate != member_offset ||
+        load->src1 != member->dst ||
+        load->memory_size != 4 ||
+        load->memory_flags != 0 ||
+        type_ptr_depth(load->type) != 0 ||
+        (load->type & 15) != TYPE_LONG ||
+        (load->type & TYPE_UNSIGNED) != 0 ||
+        type_is_float(load->type))
+        return 0;
+    return 1;
+}
+
+static int mir_match_wide_parameter_offset(
+    const struct MirInsn *parameter, int *stack_offset)
+{
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+
+    if (parameter->opcode != MIR_PARAM ||
+        !mir_scalar_memory_location(
+            parameter, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_ptr_depth(memory_type) != 0 ||
+        (memory_type & 15) != TYPE_LONG ||
+        (memory_type & TYPE_UNSIGNED) != 0 ||
+        type_is_float(memory_type) ||
+        type_size(memory_type) != 4)
+        return 0;
+    *stack_offset = memory_offset - 2;
+    return *stack_offset >= 0;
+}
+
+static int mir_match_wide_div_result_check(
+    struct MirWideDivResultCheck *plan)
+{
+    static const int expected_opcodes[73] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_PARAM,
+        MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL_AGGREGATE,
+        MIR_NOP, MIR_NOP, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_LOAD, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL,
+        MIR_LABEL, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD, MIR_ARG,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG,
+        MIR_NOP, MIR_ARG, MIR_CALL, MIR_LABEL, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_BINARY,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY,
+        MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD, MIR_ARG,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP,
+        MIR_BINARY, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_BINARY, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_LABEL
+    };
+    const struct MirInsn *divide_call = &mir.insns[10];
+    const struct MirInsn *first_failure = &mir.insns[27];
+    const struct MirInsn *second_failure = &mir.insns[43];
+    const struct MirInsn *third_failure = &mir.insns[71];
+    int divide_arguments[2];
+    int failure_arguments[3];
+    int instruction;
+    int parameter;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 73 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return 0;
+
+    if (type_ptr_depth(mir.insns[1].type) != 1 ||
+        type_size(mir.insns[1].type) != 2)
+        return mir_machine_reject(
+            "wide-div-result-check", "name-parameter");
+    for (parameter = 2; parameter <= 5; ++parameter)
+        if (type_ptr_depth(mir.insns[parameter].type) != 0 ||
+            (mir.insns[parameter].type & 15) != TYPE_LONG ||
+            (mir.insns[parameter].type & TYPE_UNSIGNED) != 0 ||
+            type_is_float(mir.insns[parameter].type) ||
+            type_size(mir.insns[parameter].type) != 4)
+            return mir_machine_reject(
+                "wide-div-result-check", "wide-parameters");
+    if (!mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->name_stack_offset) ||
+        !mir_match_wide_parameter_offset(
+            &mir.insns[2], &plan->numerator_stack_offset) ||
+        !mir_match_wide_parameter_offset(
+            &mir.insns[3], &plan->denominator_stack_offset) ||
+        !mir_match_wide_parameter_offset(
+            &mir.insns[4],
+            &plan->expected_quotient_stack_offset) ||
+        !mir_match_wide_parameter_offset(
+            &mir.insns[5],
+            &plan->expected_remainder_stack_offset) ||
+        plan->name_stack_offset != 2 ||
+        plan->numerator_stack_offset != 4 ||
+        plan->denominator_stack_offset != 8 ||
+        plan->expected_quotient_stack_offset != 12 ||
+        plan->expected_remainder_stack_offset != 16)
+        return mir_machine_reject(
+            "wide-div-result-check", "parameter-abi");
+
+    if (!mir_machine_two_call_arguments(
+            divide_call, divide_arguments) ||
+        divide_arguments[0] != mir.insns[2].dst ||
+        divide_arguments[1] != mir.insns[3].dst ||
+        divide_call->memory_size != 8 ||
+        divide_call->memory_flags != 0)
+        return mir_machine_reject(
+            "wide-div-result-check", "divide-call");
+    plan->divide_function = find_global(divide_call->name);
+    if (plan->divide_function == NULL ||
+        plan->divide_function->is_funcptr ||
+        plan->divide_function->is_noreturn ||
+        !plan->divide_function->has_proto ||
+        plan->divide_function->proto_nargs != 2 ||
+        plan->divide_function->proto_variadic ||
+        type_ptr_depth(plan->divide_function->proto_types[0]) != 0 ||
+        (plan->divide_function->proto_types[0] & 15) != TYPE_LONG ||
+        (plan->divide_function->proto_types[0] & TYPE_UNSIGNED) != 0 ||
+        type_size(plan->divide_function->proto_types[0]) != 4 ||
+        type_ptr_depth(plan->divide_function->proto_types[1]) != 0 ||
+        (plan->divide_function->proto_types[1] & 15) != TYPE_LONG ||
+        (plan->divide_function->proto_types[1] & TYPE_UNSIGNED) != 0 ||
+        type_size(plan->divide_function->proto_types[1]) != 4)
+        return mir_machine_reject(
+            "wide-div-result-check", "divide-function");
+
+    if (!mir_match_wide_div_result_access(13, 0, NULL) ||
+        !mir_match_wide_div_result_access(21, 0, &mir.insns[13]) ||
+        !mir_match_wide_div_result_access(29, 4, &mir.insns[13]) ||
+        !mir_match_wide_div_result_access(37, 4, &mir.insns[13]) ||
+        !mir_match_wide_div_result_access(45, 0, &mir.insns[13]) ||
+        !mir_match_wide_div_result_access(50, 4, &mir.insns[13]) ||
+        !mir_match_wide_div_result_access(59, 0, &mir.insns[13]) ||
+        !mir_match_wide_div_result_access(64, 4, &mir.insns[13]))
+        return mir_machine_reject(
+            "wide-div-result-check", "result-layout");
+    plan->result_offset = -8;
+
+    if (mir.insns[17].immediate != TOK_NE ||
+        mir.insns[17].src1 != mir.insns[15].dst ||
+        mir.insns[17].src2 != mir.insns[4].dst ||
+        mir.insns[17].secondary_offset != 4 ||
+        mir.insns[18].src1 != mir.insns[17].dst ||
+        mir.insns[18].label != mir.insns[28].label ||
+        !mir_machine_same_location(&mir.insns[1], &mir.insns[19]) ||
+        !mir_machine_three_call_arguments(
+            first_failure, failure_arguments) ||
+        failure_arguments[0] != mir.insns[19].dst ||
+        failure_arguments[1] != mir.insns[23].dst ||
+        failure_arguments[2] != mir.insns[4].dst)
+        return mir_machine_reject(
+            "wide-div-result-check", "quotient-check");
+
+    plan->failure_function = find_global(first_failure->name);
+    if (plan->failure_function == NULL ||
+        !plan->failure_function->is_defined ||
+        plan->failure_function->storage != SC_FUNC ||
+        plan->failure_function->is_funcptr ||
+        plan->failure_function->is_noreturn ||
+        !plan->failure_function->has_proto ||
+        plan->failure_function->proto_nargs != 3 ||
+        plan->failure_function->proto_variadic ||
+        type_ptr_depth(plan->failure_function->proto_types[0]) != 1 ||
+        type_size(plan->failure_function->proto_types[0]) != 2 ||
+        type_ptr_depth(plan->failure_function->proto_types[1]) != 0 ||
+        (plan->failure_function->proto_types[1] & 15) != TYPE_LONG ||
+        (plan->failure_function->proto_types[1] & TYPE_UNSIGNED) != 0 ||
+        type_size(plan->failure_function->proto_types[1]) != 4 ||
+        type_ptr_depth(plan->failure_function->proto_types[2]) != 0 ||
+        (plan->failure_function->proto_types[2] & 15) != TYPE_LONG ||
+        (plan->failure_function->proto_types[2] & TYPE_UNSIGNED) != 0 ||
+        type_size(plan->failure_function->proto_types[2]) != 4 ||
+        (first_failure->type & 15) != TYPE_VOID ||
+        first_failure->memory_flags != 0)
+        return mir_machine_reject(
+            "wide-div-result-check", "failure-function");
+
+    if (mir.insns[33].immediate != TOK_NE ||
+        mir.insns[33].src1 != mir.insns[31].dst ||
+        mir.insns[33].src2 != mir.insns[5].dst ||
+        mir.insns[33].secondary_offset != 4 ||
+        mir.insns[34].src1 != mir.insns[33].dst ||
+        mir.insns[34].label != mir.insns[44].label ||
+        !mir_machine_same_location(&mir.insns[1], &mir.insns[35]) ||
+        !mir_machine_three_call_arguments(
+            second_failure, failure_arguments) ||
+        failure_arguments[0] != mir.insns[35].dst ||
+        failure_arguments[1] != mir.insns[39].dst ||
+        failure_arguments[2] != mir.insns[5].dst ||
+        find_global(second_failure->name) != plan->failure_function ||
+        (second_failure->type & 15) != TYPE_VOID ||
+        second_failure->memory_flags != 0)
+        return mir_machine_reject(
+            "wide-div-result-check", "remainder-check");
+
+    if (mir.insns[49].immediate != '*' ||
+        mir.insns[49].src1 != mir.insns[47].dst ||
+        mir.insns[49].src2 != mir.insns[3].dst ||
+        mir.insns[53].immediate != '+' ||
+        mir.insns[53].src1 != mir.insns[49].dst ||
+        mir.insns[53].src2 != mir.insns[52].dst ||
+        mir.insns[55].immediate != TOK_NE ||
+        mir.insns[55].src1 != mir.insns[53].dst ||
+        mir.insns[55].src2 != mir.insns[2].dst ||
+        mir.insns[55].secondary_offset != 4 ||
+        mir.insns[56].src1 != mir.insns[55].dst ||
+        mir.insns[56].label != mir.insns[72].label ||
+        !mir_machine_same_location(&mir.insns[1], &mir.insns[57]) ||
+        mir.insns[63].immediate != '*' ||
+        mir.insns[63].src1 != mir.insns[61].dst ||
+        mir.insns[63].src2 != mir.insns[3].dst ||
+        mir.insns[67].immediate != '+' ||
+        mir.insns[67].src1 != mir.insns[63].dst ||
+        mir.insns[67].src2 != mir.insns[66].dst ||
+        !mir_machine_three_call_arguments(
+            third_failure, failure_arguments) ||
+        failure_arguments[0] != mir.insns[57].dst ||
+        failure_arguments[1] != mir.insns[67].dst ||
+        failure_arguments[2] != mir.insns[2].dst ||
+        find_global(third_failure->name) != plan->failure_function ||
+        (third_failure->type & 15) != TYPE_VOID ||
+        third_failure->memory_flags != 0)
+        return mir_machine_reject(
+            "wide-div-result-check", "identity-check");
+
+    return 1;
+}
+
 static int mir_match_local_identity_array_result(
     struct MirLocalIdentityArrayResult *plan)
 {
@@ -37364,6 +37625,108 @@ static void mir_emit_single_signed_div_check(
     fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tret\n", out);
 }
 
+static void mir_emit_wide_ix_load(FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+            offset, offset + 1, offset + 2, offset + 3);
+}
+
+static void mir_emit_wide_ix_store(FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld (ix%+d),l\n\tld (ix%+d),h\n"
+            "\tld (ix%+d),e\n\tld (ix%+d),d\n",
+            offset, offset + 1, offset + 2, offset + 3);
+}
+
+static void mir_emit_wide_ix_equal_branch(
+    FILE *out, int expected_offset, int equal_label)
+{
+    fprintf(out,
+            "\tld a,l\n\txor (ix%+d)\n\tld c,a\n"
+            "\tld a,h\n\txor (ix%+d)\n\tor c\n\tld c,a\n"
+            "\tld a,e\n\txor (ix%+d)\n\tor c\n\tld c,a\n"
+            "\tld a,d\n\txor (ix%+d)\n\tor c\n"
+            "\tjp z,L%d\n",
+            expected_offset, expected_offset + 1,
+            expected_offset + 2, expected_offset + 3,
+            equal_label);
+}
+
+static void mir_emit_wide_div_failure(
+    FILE *out, const struct MirWideDivResultCheck *plan,
+    int actual_offset, int expected_offset)
+{
+    mir_emit_local_wide_argument(out, expected_offset);
+    mir_emit_wide_ix_load(out, actual_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n",
+            plan->name_stack_offset + 2,
+            plan->name_stack_offset + 3);
+    mir_machine_emit_symbol_call(out, plan->failure_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+}
+
+static void mir_emit_wide_div_result_check(
+    FILE *out, const struct MirWideDivResultCheck *plan)
+{
+    int quotient_ok = new_label();
+    int remainder_ok = new_label();
+    int identity_ok = new_label();
+    int numerator_offset = plan->numerator_stack_offset + 2;
+    int denominator_offset = plan->denominator_stack_offset + 2;
+    int expected_quotient_offset =
+        plan->expected_quotient_stack_offset + 2;
+    int expected_remainder_offset =
+        plan->expected_remainder_stack_offset + 2;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-8\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+
+    mir_emit_local_wide_argument(out, denominator_offset);
+    mir_emit_local_wide_argument(out, numerator_offset);
+    mir_emit_local_address(out, plan->result_offset);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->divide_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+
+    mir_emit_wide_ix_load(out, plan->result_offset);
+    mir_emit_wide_ix_equal_branch(
+        out, expected_quotient_offset, quotient_ok);
+    mir_emit_wide_div_failure(
+        out, plan, plan->result_offset, expected_quotient_offset);
+    fprintf(out, "L%d:\n", quotient_ok);
+
+    mir_emit_wide_ix_load(out, plan->result_offset + 4);
+    mir_emit_wide_ix_equal_branch(
+        out, expected_remainder_offset, remainder_ok);
+    mir_emit_wide_div_failure(
+        out, plan, plan->result_offset + 4,
+        expected_remainder_offset);
+    fprintf(out, "L%d:\n", remainder_ok);
+
+    mir_emit_wide_ix_load(out, plan->result_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_wide_ix_load(out, denominator_offset);
+    mir_emit_runtime_call(out, "__lmul");
+    fputs("\tpop bc\n\tpop bc\n\tpush de\n\tpush hl\n", out);
+    mir_emit_wide_ix_load(out, plan->result_offset + 4);
+    fputs("\tpop bc\n\tadd hl,bc\n\tex de,hl\n"
+          "\tpop bc\n\tadc hl,bc\n\tex de,hl\n", out);
+    mir_emit_wide_ix_store(out, plan->result_offset);
+    mir_emit_wide_ix_equal_branch(out, numerator_offset, identity_ok);
+    mir_emit_wide_div_failure(
+        out, plan, plan->result_offset, numerator_offset);
+    fprintf(out,
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            identity_ok);
+}
+
 static void mir_emit_local_identity_array_result(
     FILE *out, const struct MirLocalIdentityArrayResult *plan)
 {
@@ -38578,6 +38941,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirNibbleAppend nibble_append;
     struct MirVolatileFillWideConstant volatile_fill_wide_constant;
     struct MirSingleSignedDivCheck single_signed_div_check;
+    struct MirWideDivResultCheck wide_div_result_check;
     struct MirLocalIdentityArrayResult local_identity_array_result;
     struct MirConstantResultSwitch constant_result_switch;
     struct MirStringResultSwitch string_result_switch;
@@ -38707,6 +39071,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &single_signed_div_check)) {
         mir_emit_single_signed_div_check(
             out, &single_signed_div_check);
+        return 1;
+    }
+    if (mir_match_wide_div_result_check(
+            &wide_div_result_check)) {
+        mir_emit_wide_div_result_check(
+            out, &wide_div_result_check);
         return 1;
     }
     if (mir_match_affine_pointer_constant_return(&constant)) {
