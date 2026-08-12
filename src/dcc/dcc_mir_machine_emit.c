@@ -5140,6 +5140,81 @@ static int mir_match_fixed_byte_write_checks(
     return 1;
 }
 
+static int mir_match_fixed_byte_walk_checks(
+    struct MirFixedByteScanChecks *plan)
+{
+    int element;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 71 || mir_cfg_block_count() != 7 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID ||
+        !mir_machine_constant_equals(mir.insns[1].dst, 0) ||
+        mir.insns[5].opcode != MIR_PHI ||
+        !mir_machine_constant_equals(mir.insns[7].dst, 8) ||
+        mir.insns[8].immediate != '<' ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[9].label != mir.insns[24].label ||
+        mir.insns[10].opcode != MIR_ADDRESS ||
+        mir.insns[12].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[12].src1 != mir.insns[10].dst ||
+        mir.insns[12].src2 != mir.insns[5].dst ||
+        !mir_machine_constant_equals(mir.insns[14].dst, 3) ||
+        mir.insns[15].immediate != '*' ||
+        mir.insns[17].opcode != MIR_STORE_INDIRECT ||
+        !mir_machine_constant_equals(mir.insns[20].dst, 1) ||
+        mir.insns[21].immediate != '+' ||
+        mir.insns[23].label != mir.insns[4].label)
+        return mir_machine_reject("fixed-byte-walk-checks", "fill");
+    plan->root = find_global(mir.insns[10].name);
+    if (plan->root != NULL) {
+        snprintf(plan->root_assembly_name,
+                 sizeof(plan->root_assembly_name), "%s",
+                 asm_name_for(sym_asm_name(plan->root)));
+    } else {
+        for (element = 0; element < mir.declared_count; ++element)
+            if (!strcmp(
+                    mir.declared_names[element],
+                    mir.insns[10].name)) {
+                snprintf(plan->root_assembly_name,
+                         sizeof(plan->root_assembly_name), "%s",
+                         asm_name_for(
+                             mir.declared_link_names[element]));
+                break;
+            }
+    }
+    if (plan->root_assembly_name[0] == 0 ||
+        mir.insns[32].opcode != MIR_PHI ||
+        !mir_machine_constant_equals(mir.insns[34].dst, 8) ||
+        mir.insns[35].immediate != '<' ||
+        mir.insns[36].src1 != mir.insns[35].dst ||
+        mir.insns[36].label != mir.insns[61].label ||
+        mir.insns[38].opcode != MIR_LOAD_INDIRECT ||
+        !mir_machine_constant_equals(mir.insns[40].dst, 3) ||
+        mir.insns[41].immediate != '*' ||
+        mir.insns[45].immediate != TOK_EQ ||
+        mir.insns[49].opcode != MIR_CALL ||
+        !mir_machine_constant_equals(mir.insns[51].dst, 1) ||
+        mir.insns[52].immediate != '+' ||
+        !mir_machine_constant_equals(mir.insns[57].dst, 1) ||
+        mir.insns[58].immediate != '+' ||
+        mir.insns[60].label != mir.insns[31].label ||
+        mir.insns[66].immediate != TOK_EQ ||
+        mir.insns[70].opcode != MIR_CALL ||
+        strcmp(mir.insns[49].name, mir.insns[70].name))
+        return mir_machine_reject("fixed-byte-walk-checks", "checks");
+    plan->check_function = find_global(mir.insns[49].name);
+    if (plan->check_function == NULL || plan->check_function->is_funcptr)
+        return mir_machine_reject("fixed-byte-walk-checks", "function");
+    plan->value_count = 8;
+    plan->check_count = 9;
+    for (element = 0; element < 8; ++element) {
+        plan->values[element] = element * 3;
+        plan->string_ids[element] = (int)mir.insns[47].immediate;
+    }
+    plan->string_ids[8] = (int)mir.insns[68].immediate;
+    return 1;
+}
+
 static int mir_match_pointer_word_sum_until_zero(
     struct MirPointerWordSumUntilZero *plan)
 {
@@ -27581,7 +27656,8 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
         return 1;
     }
     if (mir_match_fixed_byte_scan_checks(&fixed_byte_scan_checks) ||
-        mir_match_fixed_byte_write_checks(&fixed_byte_scan_checks)) {
+        mir_match_fixed_byte_write_checks(&fixed_byte_scan_checks) ||
+        mir_match_fixed_byte_walk_checks(&fixed_byte_scan_checks)) {
         mir_emit_fixed_byte_scan_checks(out, &fixed_byte_scan_checks);
         return 1;
     }
