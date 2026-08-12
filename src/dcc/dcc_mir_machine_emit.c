@@ -1954,6 +1954,15 @@ struct MirStringResultSwitch {
     int strings[MIR_MACHINE_SWITCH_RESULT_LIMIT];
 };
 
+struct MirVlaPointerElementSwitch {
+    int rows_stack_offset;
+    int pointer_stack_offset;
+    int compare_value;
+    int case_value;
+    int default_value;
+    int element_offset;
+};
+
 struct MirLocalByteFillSumPrint {
     struct Sym *fill_function;
     struct Sym *print_function;
@@ -27527,6 +27536,194 @@ static int mir_match_constant_result_switch(
     return 1;
 }
 
+static int mir_match_vla_pointer_element_address(
+    int start, const struct MirInsn *pointer_parameter,
+    int *element_offset)
+{
+    const struct MirInsn *load = &mir.insns[start];
+    const struct MirInsn *row_index = &mir.insns[start + 1];
+    const struct MirInsn *row_stride = &mir.insns[start + 2];
+    const struct MirInsn *row_scale = &mir.insns[start + 3];
+    const struct MirInsn *row_address = &mir.insns[start + 4];
+    const struct MirInsn *element_index = &mir.insns[start + 5];
+    const struct MirInsn *element_stride = &mir.insns[start + 6];
+    const struct MirInsn *element_scale = &mir.insns[start + 7];
+    const struct MirInsn *address = &mir.insns[start + 8];
+
+    if (load->opcode != MIR_LOAD ||
+        !mir_machine_named_nonvolatile(load) ||
+        !mir_machine_same_location(pointer_parameter, load) ||
+        type_ptr_depth(load->type) != 1 ||
+        (load->type & 15) != TYPE_INT ||
+        type_size(load->type) != 2 ||
+        !mir_machine_constant_equals(row_index->dst, 0) ||
+        !mir_machine_constant_equals(row_stride->dst, 6) ||
+        row_scale->opcode != MIR_BINARY ||
+        row_scale->immediate != '*' ||
+        row_scale->src1 != row_index->dst ||
+        row_scale->src2 != row_stride->dst ||
+        type_ptr_depth(row_scale->type) != 0 ||
+        type_size(row_scale->type) != 2 ||
+        type_ptr_depth(row_scale->secondary_offset) != 0 ||
+        type_size(row_scale->secondary_offset) != 2 ||
+        row_address->opcode != MIR_BINARY ||
+        row_address->immediate != '+' ||
+        row_address->src1 != load->dst ||
+        row_address->src2 != row_scale->dst ||
+        type_ptr_depth(row_address->type) != 1 ||
+        type_size(row_address->type) != 2 ||
+        type_ptr_depth(row_address->secondary_offset) != 0 ||
+        type_size(row_address->secondary_offset) != 2 ||
+        !mir_machine_constant_equals(element_index->dst, 1) ||
+        !mir_machine_constant_equals(element_stride->dst, 2) ||
+        element_scale->opcode != MIR_BINARY ||
+        element_scale->immediate != '*' ||
+        element_scale->src1 != element_index->dst ||
+        element_scale->src2 != element_stride->dst ||
+        type_ptr_depth(element_scale->type) != 0 ||
+        type_size(element_scale->type) != 2 ||
+        type_ptr_depth(element_scale->secondary_offset) != 0 ||
+        type_size(element_scale->secondary_offset) != 2 ||
+        address->opcode != MIR_BINARY ||
+        address->immediate != '+' ||
+        address->src1 != row_address->dst ||
+        address->src2 != element_scale->dst ||
+        type_ptr_depth(address->type) != 1 ||
+        type_size(address->type) != 2 ||
+        type_ptr_depth(address->secondary_offset) != 0 ||
+        type_size(address->secondary_offset) != 2)
+        return 0;
+    *element_offset = 2;
+    return 1;
+}
+
+static int mir_match_vla_pointer_element_switch(
+    struct MirVlaPointerElementSwitch *plan)
+{
+    static const int expected_opcodes[51] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_JUMP, MIR_LABEL, MIR_JUMP, MIR_LABEL,
+        MIR_LOAD, MIR_CONST, MIR_CONST, MIR_BINARY, MIR_BINARY, MIR_CONST,
+        MIR_CONST, MIR_BINARY, MIR_BINARY, MIR_CONST, MIR_STORE_INDIRECT,
+        MIR_NOP, MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_CONST,
+        MIR_BINARY, MIR_BINARY, MIR_CONST, MIR_CONST, MIR_BINARY,
+        MIR_BINARY, MIR_CONST, MIR_STORE_INDIRECT, MIR_NOP, MIR_JUMP,
+        MIR_NOP, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_CONST, MIR_BINARY,
+        MIR_BINARY, MIR_CONST, MIR_CONST, MIR_BINARY, MIR_BINARY,
+        MIR_LOAD_INDIRECT, MIR_RETURN
+    };
+    const struct MirInsn *rows = &mir.insns[1];
+    const struct MirInsn *pointer = &mir.insns[2];
+    const struct MirInsn *case_store = &mir.insns[21];
+    const struct MirInsn *default_store = &mir.insns[35];
+    const struct MirInsn *result_load = &mir.insns[49];
+    int case_offset;
+    int default_offset;
+    int result_offset;
+    int instruction;
+    long value;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 51 || mir_cfg_block_count() != 5 ||
+        mir.has_vla || !mir.has_runtime_stride_param ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        (mir.return_type & TYPE_UNSIGNED) != 0 ||
+        type_size(mir.return_type) != 2)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return 0;
+
+    if (type_ptr_depth(rows->type) != 0 ||
+        (rows->type & 15) != TYPE_INT ||
+        (rows->type & TYPE_UNSIGNED) != 0 ||
+        type_size(rows->type) != 2 ||
+        type_ptr_depth(pointer->type) != 1 ||
+        (pointer->type & 15) != TYPE_INT ||
+        type_size(pointer->type) != 2 ||
+        mir_machine_pointee_is_volatile(pointer) ||
+        !mir_machine_parameter_value_offset(
+            rows->dst, &plan->rows_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            pointer->dst, &plan->pointer_stack_offset) ||
+        plan->rows_stack_offset != 2 ||
+        plan->pointer_stack_offset != 4)
+        return mir_machine_reject(
+            "vla-pointer-element-switch", "parameters");
+
+    if (!mir_machine_constant_value(
+            mir.insns[4].dst, &value, 0) ||
+        value < -32768 || value > 32767 ||
+        mir.insns[5].immediate != TOK_EQ ||
+        mir.insns[5].src1 != rows->dst ||
+        mir.insns[5].src2 != mir.insns[4].dst ||
+        type_ptr_depth(mir.insns[5].secondary_offset) != 0 ||
+        type_size(mir.insns[5].secondary_offset) != 2 ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        mir.insns[6].label != mir.insns[24].label ||
+        mir.insns[7].label != mir.insns[10].label ||
+        mir.insns[9].label != mir.insns[24].label ||
+        mir.insns[8].label == mir.insns[0].label ||
+        mir.insns[8].label == mir.insns[10].label ||
+        mir.insns[8].label == mir.insns[24].label ||
+        mir.insns[10].label == mir.insns[24].label ||
+        mir.insns[23].label != mir.insns[39].label ||
+        mir.insns[37].label != mir.insns[39].label)
+        return mir_machine_reject(
+            "vla-pointer-element-switch", "control-flow");
+    plan->compare_value = (int)value;
+
+    if (!mir_match_vla_pointer_element_address(
+            11, pointer, &case_offset) ||
+        !mir_match_vla_pointer_element_address(
+            25, pointer, &default_offset) ||
+        !mir_match_vla_pointer_element_address(
+            40, pointer, &result_offset) ||
+        case_offset != default_offset ||
+        case_offset != result_offset)
+        return mir_machine_reject(
+            "vla-pointer-element-switch", "address-chain");
+    plan->element_offset = case_offset;
+
+    if (case_store->memory_size != 2 ||
+        case_store->memory_flags != 0 ||
+        case_store->bit_width != 0 ||
+        case_store->src1 != mir.insns[19].dst ||
+        !mir_machine_constant_value(
+            case_store->src2, &value, 0) ||
+        value < -32768 || value > 65535)
+        return mir_machine_reject(
+            "vla-pointer-element-switch", "case-store");
+    plan->case_value = (int)((unsigned long)value & 0xffffUL);
+
+    if (default_store->memory_size != 2 ||
+        default_store->memory_flags != 0 ||
+        default_store->bit_width != 0 ||
+        default_store->src1 != mir.insns[33].dst ||
+        !mir_machine_constant_value(
+            default_store->src2, &value, 0) ||
+        value < -32768 || value > 65535)
+        return mir_machine_reject(
+            "vla-pointer-element-switch", "default-store");
+    plan->default_value =
+        (int)((unsigned long)value & 0xffffUL);
+
+    if (result_load->src1 != mir.insns[48].dst ||
+        result_load->memory_size != 2 ||
+        result_load->memory_flags != 0 ||
+        result_load->bit_width != 0 ||
+        type_ptr_depth(result_load->type) != 0 ||
+        (result_load->type & 15) != TYPE_INT ||
+        (result_load->type & TYPE_UNSIGNED) != 0 ||
+        type_size(result_load->type) != 2 ||
+        mir.insns[50].src1 != result_load->dst)
+        return mir_machine_reject(
+            "vla-pointer-element-switch", "result-load");
+    return 1;
+}
+
 static int mir_machine_string_return_for_label(
     int label, int *string_id)
 {
@@ -41631,6 +41828,35 @@ static void mir_emit_constant_result_switch(
             default_label, plan->default_result);
 }
 
+static void mir_emit_vla_pointer_element_switch(
+    FILE *out, const struct MirVlaPointerElementSwitch *plan)
+{
+    int default_label = new_label();
+    int value_ready = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tld hl,%d\n\tor a\n\tsbc hl,de\n"
+            "\tjp nz,L%d\n"
+            "\tld de,%d\n\tjp L%d\n"
+            "L%d:\n\tld de,%d\n"
+            "L%d:\n"
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tld h,b\n\tld l,c\n",
+            plan->rows_stack_offset, plan->compare_value,
+            default_label, plan->case_value, value_ready,
+            default_label, plan->default_value, value_ready,
+            plan->pointer_stack_offset);
+    mir_machine_emit_hl_offset(out, plan->element_offset, 0);
+    fputs("\tld (hl),e\n\tinc hl\n\tld (hl),d\n"
+          "\tld d,(hl)\n\tdec hl\n\tld e,(hl)\n"
+          "\tex de,hl\n\tret\n", out);
+}
+
 static void mir_emit_string_result_switch(
     FILE *out, const struct MirStringResultSwitch *plan)
 {
@@ -43130,6 +43356,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirLocalIdentityArrayResult local_identity_array_result;
     struct MirConstantResultSwitch constant_result_switch;
     struct MirStringResultSwitch string_result_switch;
+    struct MirVlaPointerElementSwitch vla_pointer_element_switch;
     struct MirLocalByteFillSumPrint local_byte_fill_sum_print;
     struct MirIndexedMemberWrite indexed_member_write;
     long constant;
@@ -44266,6 +44493,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &constant_result_switch)) {
         mir_emit_constant_result_switch(
             out, &constant_result_switch);
+        return 1;
+    }
+    if (mir_match_vla_pointer_element_switch(
+            &vla_pointer_element_switch)) {
+        mir_emit_vla_pointer_element_switch(
+            out, &vla_pointer_element_switch);
         return 1;
     }
     if (mir_match_constant_flow_result_switch(

@@ -6,11 +6,28 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `0685e1b`
-  (`dcc MIR: schedule compound assignment checks`).
-- Current candidate coverage: **2101/2185 (96.16%)**.
-- Remaining fallback population: **84 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `31fa816`
+  (`dcc MIR: schedule math call orchestration`).
+- Current candidate coverage: **2102/2185 (96.20%)**.
+- Remaining fallback population: **83 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The strict name-free VLA pointer-element switch scheduler admits
+  `tvla.vla_ptr2d_deref_chain_switch`. It matches the complete 51-instruction,
+  five-block MIR graph, proves the two word parameters at their ABI offsets,
+  requires the pointer-to-array runtime-stride marker, validates all three
+  explicit `0*6 + 1*2` dereference address chains, and preserves the case and
+  default word stores plus the final nonvolatile reload. The frameless emitter
+  keeps the switch branches and stack-check call, uses no IX or IY, and does
+  not fold away the observable store/reload. Non-stack selected output is
+  290 text bytes / 29 instructions versus 507 / 47 captured; stack-check
+  output is 319 / 30 versus 536 / 48. Against forced fallback, `tvla`
+  improves from 12,372,468 to 12,372,363 peep cycles (-105) and from
+  14,771,615 to 14,771,454 nopeep cycles (-161), with linked sizes unchanged
+  at 29,696 / 35,328 bytes. The fresh stack-check census is 2102/2185 with
+  exactly this one new function and no regression. A separately named
+  `pointer_switch` scratch clone selected through the same matcher and produced
+  `20 20 99 99` in peep, nopeep, and forced-fallback runs, exercising both
+  switch branches and both observable stores/reloads.
 - The strict name-free math-verification scheduler admits `tmathf.main`. It
   structurally matches the complete two-block graph and preserves all five
   `printf`, 74 `chk`, 16 `chkx`, and 84 math-runtime calls in their original
