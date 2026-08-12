@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `4179c73`
-  (`dcc MIR: schedule fixed task array checks`).
-- Current candidate coverage: **2093/2185 (95.79%)**.
-- Remaining fallback population: **92 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `e9694a8`
+  (`dcc MIR: schedule literal check runners`).
+- Current candidate coverage: **2094/2185 (95.84%)**.
+- Remaining fallback population: **91 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -725,6 +725,9 @@ current execution plan and handoff.
   unary/binary DAGs and replay only their observable checker calls. This admits
   `tunaryp.main`, improving both modes and shrinking images by
   **7.94%/9.38%** without a local frame.
+- The same evaluator now normalizes 8/16/32-bit target constants and supports
+  start/failure reports. This admits `ts32.main`, beating the stretch goal at
+  **12.34%/14.25%** while shrinking images by **17.91%/20.00%**.
 - A compact register schedule for `pint.alloc_temp` was rejected despite 50
   fewer instructions and one smaller sector because program placement still
   regressed **0.26%/0.16%**; no padding or baseline movement was retained.
@@ -742,7 +745,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 92 final-cost fallbacks,
+- Current next priority: repeated causes in the 91 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
