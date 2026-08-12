@@ -325,6 +325,15 @@ struct MirWideResultSwitch {
     unsigned long results[3];
 };
 
+struct MirBoundedMemberAppend {
+    int root_stack_offset;
+    int value_stack_offset;
+    int count_offset;
+    int array_offset;
+    int bound;
+    int stride;
+};
+
 struct MirByteMismatchReport {
     struct Sym *counter;
     int counter_offset;
@@ -4306,6 +4315,87 @@ static int mir_match_wide_result_switch(
         (unsigned long)mir.insns[24].immediate & 0xffffffffUL;
     plan->results[2] =
         (unsigned long)mir.insns[28].immediate & 0xffffffffUL;
+    return 1;
+}
+
+static int mir_match_bounded_member_append(
+    struct MirBoundedMemberAppend *plan)
+{
+    static const int expected_opcodes[21] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_NOP, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP,
+        MIR_MEMBER_ADDRESS, MIR_NOP, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT, MIR_INDEX_ADDRESS,
+        MIR_LOAD, MIR_STORE_INDIRECT, MIR_LABEL
+    };
+    const struct MirInsn *root = &mir.insns[1];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 21 || mir_cfg_block_count() != 2 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return mir_machine_reject("bounded-member-append", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "bounded-member-append", "opcode");
+    if (type_ptr_depth(root->type) != 1 ||
+        !mir_machine_parameter_value_offset(
+            root->dst, &plan->root_stack_offset) ||
+        !mir_scalar_memory_location(
+            &mir.insns[18], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2 ||
+        type_ptr_depth(memory_type) != 1)
+        return mir_machine_reject(
+            "bounded-member-append", "parameters");
+    plan->value_stack_offset = memory_offset - 2;
+    if (mir.insns[4].src1 != root->dst ||
+        mir.insns[4].memory_size != 2 ||
+        mir.insns[5].src1 != mir.insns[4].dst ||
+        mir.insns[5].memory_size != 2 ||
+        mir.insns[6].immediate <= 0 ||
+        mir.insns[6].immediate > 32767 ||
+        mir.insns[7].immediate != '<' ||
+        mir.insns[7].src1 != mir.insns[5].dst ||
+        mir.insns[7].src2 != mir.insns[6].dst ||
+        mir.insns[8].src1 != mir.insns[7].dst ||
+        mir.insns[8].label != mir.insns[20].label)
+        return mir_machine_reject(
+            "bounded-member-append", "guard");
+    plan->count_offset = (int)mir.insns[4].immediate;
+    plan->bound = (int)mir.insns[6].immediate;
+    if (mir.insns[10].src1 != root->dst ||
+        mir.insns[12].src1 != root->dst ||
+        mir.insns[12].immediate != plan->count_offset ||
+        mir.insns[13].src1 != mir.insns[12].dst ||
+        mir.insns[13].memory_size != 2 ||
+        !mir_machine_constant_equals(mir.insns[14].dst, 1) ||
+        mir.insns[15].immediate != '+' ||
+        mir.insns[15].src1 != mir.insns[13].dst ||
+        mir.insns[15].src2 != mir.insns[14].dst ||
+        mir.insns[16].src1 != mir.insns[12].dst ||
+        mir.insns[16].src2 != mir.insns[15].dst ||
+        mir.insns[16].memory_size != 2 ||
+        mir.insns[17].src1 != mir.insns[10].dst ||
+        mir.insns[17].src2 != mir.insns[13].dst ||
+        mir.insns[17].immediate <= 0 ||
+        mir.insns[17].memory_size != 2 ||
+        mir.insns[19].src1 != mir.insns[17].dst ||
+        mir.insns[19].src2 != mir.insns[18].dst ||
+        mir.insns[19].memory_size != 2)
+        return mir_machine_reject(
+            "bounded-member-append", "store");
+    plan->array_offset = (int)mir.insns[10].immediate;
+    plan->stride = (int)mir.insns[17].immediate;
+    if (plan->count_offset < -128 || plan->count_offset + 1 > 127 ||
+        plan->array_offset < -32768 || plan->array_offset > 32767 ||
+        plan->stride <= 0 || plan->stride > 32767)
+        return mir_machine_reject(
+            "bounded-member-append", "offsets");
     return 1;
 }
 
@@ -18569,6 +18659,47 @@ static void mir_emit_wide_result_switch(
     fputs("\tret\n", out);
 }
 
+static void mir_emit_bounded_member_append(
+    FILE *out, const struct MirBoundedMemberAppend *plan)
+{
+    int append = new_label();
+    int done = new_label();
+
+    fprintf(out,
+            ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n"
+            "\tpush iy\n",
+            mir.name);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tpush de\n\tpop iy\n"
+            "\tld c,(iy%+d)\n\tld b,(iy%+d)\n"
+            "\tbit 7,b\n\tjp nz,L%d\n"
+            "\tld a,b\n\tor a\n\tjp nz,L%d\n"
+            "\tld a,c\n\tcp %d\n\tjp nc,L%d\n"
+            "L%d:\n\tinc bc\n"
+            "\tld (iy%+d),c\n\tld (iy%+d),b\n\tdec bc\n"
+            "\tld h,b\n\tld l,c\n",
+            plan->root_stack_offset + 2,
+            plan->count_offset, plan->count_offset + 1,
+            append, done, plan->bound, done, append,
+            plan->count_offset, plan->count_offset + 1);
+    mir_emit_mul_hl_const(out, (unsigned long)plan->stride);
+    fputs("\tpush iy\n\tpop de\n\tadd hl,de\n", out);
+    mir_machine_emit_hl_offset(out, plan->array_offset, 0);
+    fputs("\tpush hl\n", out);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tpop hl\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+            plan->value_stack_offset + 4);
+    fprintf(out,
+            "L%d:\n\tpop iy\n;@dcc.reg free=iy\n\tret\n",
+            done);
+}
+
 static void mir_emit_byte_mismatch_report(
     FILE *out, const struct MirByteMismatchReport *plan)
 {
@@ -21102,6 +21233,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirWideShiftCompare wide_shift_compare;
     struct MirConditionalWideAdd conditional_wide_add;
     struct MirWideResultSwitch wide_result_switch;
+    struct MirBoundedMemberAppend bounded_member_append;
     struct MirByteMismatchReport byte_mismatch_report;
     struct MirByteArithmeticReports byte_arithmetic_reports;
     struct MirByteBitwiseReport byte_bitwise_report;
@@ -21517,6 +21649,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_wide_result_switch(&wide_result_switch)) {
         mir_emit_wide_result_switch(out, &wide_result_switch);
+        return 1;
+    }
+    if (mir_match_bounded_member_append(
+            &bounded_member_append)) {
+        mir_emit_bounded_member_append(
+            out, &bounded_member_append);
         return 1;
     }
     if (mir_match_byte_mismatch_report(
