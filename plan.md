@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `949c838`
-  (`schedule flattened affine fills`).
-- Current candidate coverage: **2060/2185 (94.28%)**.
-- Remaining fallback population: **125 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `9299371`
+  (`schedule fixed embedding builds`).
+- Current candidate coverage: **2061/2185 (94.32%)**.
+- Remaining fallback population: **124 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -616,6 +616,11 @@ current execution plan and handoff.
   the advancing token-weight cursor while preserving every clamp call. This
   admits `attnc11.build_embeddings`, saving 129,500 peep / 171,402 nopeep
   cycles and shrinking both images.
+- Fixed forward-attention orchestration now keeps the query row in IY,
+  compacts score/key cursors to a five-byte frame, emits the fixed transpose
+  calls directly, and registerizes the residual clamp loop. This admits
+  `attnc11.forward_attention`, saving another 94,248 peep / 691,740 nopeep
+  cycles beyond the embedding batch.
 - A direct `too.expected_area` dispatcher was rejected after repeated-call
   tests exposed incorrect signed divmod cache/register handling; it is absent.
 - A binary-search replacement for `too.isqrt_l` was rejected after focused
@@ -630,7 +635,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 125 final-cost fallbacks,
+- Current next priority: repeated causes in the 124 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
