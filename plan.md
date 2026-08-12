@@ -6,11 +6,41 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Base HEAD for this batch: the clean branch tip before the uncommitted
-  softmax scheduler work.
-- Current candidate coverage: **2112/2185 (96.66%)**.
-- Remaining fallback population: **73 `final-cost-policy`**, all selected by
+- Base HEAD for this batch: `8ffc669`.
+- Current candidate coverage: **2113/2185 (96.70%)**.
+- Remaining fallback population: **72 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The shared strict name-free matrix-product scheduler now also admits the
+  141-instruction, 19-block `attnc11.matrix_vector_add` graph. The new variant
+  proves all five parameter types and stack positions, unsigned byte row and
+  column dimensions, both loops and PHIs, two-byte matrix postincrement and
+  indexed input stride, each ordered signed 16x16-to-32 multiplication and
+  signed 32-bit accumulation, the complete saturating Q16-to-Q8 conversion
+  CFG, output postincrement before destination reload, the final signed
+  wide addition, clamp call, and indirect store. Emission follows the existing
+  attention-kernel cursor policy: IX advances through the matrix, DE resets to
+  the input base for each row and advances only after each read, and BC carries
+  both unsigned loop counts across the multiply and clamp boundaries. A
+  four-byte stack accumulator is the only frame storage; no IY is used.
+  Matrix is read before input on every product, the output cursor store remains
+  before its destination load, and output is written only after a complete row,
+  preserving matrix/input/output overlap behavior. Non-stack selected/captured
+  metrics are 1,861/2,893 bytes and 195/278 instructions; stack-check metrics
+  are 1,890/2,922 bytes and 196/279 instructions. `attnc11` passes full
+  peep/nopeep. Against forcing only this function back, cycles remain exactly
+  339,250,960 peep / 342,162,991 nopeep, while linked size falls from 23,808
+  to 23,680 bytes peep (-128) and 25,600 to 25,344 bytes nopeep (-256).
+  A separately named alias harness selects with the same stack-check metrics
+  and produces identical selected/forced-fallback output in peep and nopeep
+  modes for ordinary, zero-row, zero-column, Q16 saturation, negative
+  truncation, final-add saturation, matrix/input, output/input,
+  output/future-matrix, and all-three alias cases. It improves from 342,428 to
+  327,826 peep cycles (-14,602 / -4.26%) and from 354,745 to 334,952 nopeep
+  cycles (-19,793 / -5.58%); linked sizes fall 3,968 to 3,840 bytes peep and
+  4,224 to 3,968 bytes nopeep. No app/function name, hash, performance
+  baseline, or IY allocation participates in selection. The regression-gated
+  stack-check census advances from 2112/2185 to 2113/2185 with exactly this
+  function and no removal.
 - One strict name-free softmax scheduler now admits `attnc11.softmax`. The
   matcher validates the complete 132-instruction, nine-block graph: the
   pointer/unsigned-byte parameters and stack positions, the initial
