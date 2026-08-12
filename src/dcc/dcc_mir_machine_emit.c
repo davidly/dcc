@@ -304,6 +304,13 @@ struct MirWideBitcastCall {
     int second_stack_offset;
 };
 
+struct MirWideShiftCompare {
+    int word_stack_offset;
+    int wide_stack_offset;
+    int shift;
+    unsigned long threshold;
+};
+
 struct MirByteMismatchReport {
     struct Sym *counter;
     int counter_offset;
@@ -4074,6 +4081,75 @@ static int mir_match_wide_bitcast_call(
          (MIR_CALL_FLAG_VARIADIC |
           MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0)
         return mir_machine_reject("wide-bitcast-call", "function");
+    return 1;
+}
+
+static int mir_match_wide_shift_compare(
+    struct MirWideShiftCompare *plan)
+{
+    static const int expected_opcodes[17] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_NOP, MIR_NOP, MIR_UNARY,
+        MIR_BINARY, MIR_CONST, MIR_BINARY, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_CONST, MIR_RETURN, MIR_LABEL, MIR_CONST,
+        MIR_RETURN
+    };
+    const struct MirInsn *word = &mir.insns[1];
+    const struct MirInsn *wide = &mir.insns[2];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+    long shift;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 17 || mir_cfg_block_count() != 2 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_INT ||
+        type_size(mir.return_type) != 2)
+        return mir_machine_reject("wide-shift-compare", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject("wide-shift-compare", "opcode");
+    if (type_size(word->type) != 2 ||
+        (word->type & TYPE_UNSIGNED) != 0 ||
+        !mir_scalar_memory_location(
+            word, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2)
+        return mir_machine_reject("wide-shift-compare", "word");
+    plan->word_stack_offset = memory_offset - 2;
+    if (type_size(wide->type) != 4 ||
+        type_is_float(wide->type) ||
+        (wide->type & TYPE_UNSIGNED) != 0 ||
+        !mir_scalar_memory_location(
+            wide, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2)
+        return mir_machine_reject("wide-shift-compare", "wide");
+    plan->wide_stack_offset = memory_offset - 2;
+    if (mir.insns[5].immediate != 0 ||
+        mir.insns[5].src1 != word->dst ||
+        type_size(mir.insns[5].type) != 4 ||
+        mir.insns[6].immediate != '+' ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        mir.insns[6].src2 != wide->dst ||
+        mir.insns[8].immediate != TOK_SHR ||
+        mir.insns[8].src1 != mir.insns[6].dst ||
+        !mir_machine_constant_value(
+            mir.insns[7].dst, &shift, 0) ||
+        shift <= 0 || shift > 31 ||
+        mir.insns[10].immediate != '>' ||
+        mir.insns[10].src1 != mir.insns[8].dst ||
+        mir.insns[10].src2 != mir.insns[9].dst ||
+        mir.insns[11].src1 != mir.insns[10].dst ||
+        mir.insns[11].label != mir.insns[14].label ||
+        !mir_machine_constant_equals(mir.insns[12].dst, 1) ||
+        mir.insns[13].src1 != mir.insns[12].dst ||
+        !mir_machine_constant_equals(mir.insns[15].dst, 0) ||
+        mir.insns[16].src1 != mir.insns[15].dst)
+        return mir_machine_reject("wide-shift-compare", "flow");
+    plan->shift = (int)shift;
+    plan->threshold =
+        (unsigned long)mir.insns[9].immediate & 0xffffffffUL;
+    if (plan->threshold >= 0x7fffffffUL)
+        return mir_machine_reject("wide-shift-compare", "threshold");
     return 1;
 }
 
@@ -18219,6 +18295,37 @@ static void mir_emit_wide_bitcast_call(
     fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tret\n", out);
 }
 
+static void mir_emit_wide_shift_compare(
+    FILE *out, const struct MirWideShiftCompare *plan)
+{
+    unsigned long boundary = plan->threshold + 1;
+    int shift;
+    int true_result = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_emit_wide_parameter(out, plan->wide_stack_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tld h,b\n\tld l,c\n"
+            "\tld a,b\n\trlca\n\tsbc a,a\n\tld d,a\n\tld e,a\n"
+            "\tpop bc\n\tadd hl,bc\n\tex de,hl\n"
+            "\tpop bc\n\tadc hl,bc\n\tex de,hl\n",
+            plan->word_stack_offset + 4);
+    for (shift = 0; shift < plan->shift; ++shift)
+        fputs("\tsra d\n\trr e\n\trr h\n\trr l\n", out);
+    fprintf(out,
+            "\tld a,d\n\txor 128\n\tld d,a\n"
+            "\tld bc,%lu\n\tor a\n\tsbc hl,bc\n\tex de,hl\n"
+            "\tld bc,%lu\n\tsbc hl,bc\n\tjp nc,L%d\n"
+            "\tld hl,0\n\tret\nL%d:\n\tld hl,1\n\tret\n",
+            boundary & 0xffffUL,
+            ((boundary >> 16) ^ 0x8000UL) & 0xffffUL,
+            true_result, true_result);
+}
+
 static void mir_emit_byte_mismatch_report(
     FILE *out, const struct MirByteMismatchReport *plan)
 {
@@ -20749,6 +20856,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFloatMemberScaleAdd float_member_scale_add;
     struct MirGlobalArrayFma global_array_fma;
     struct MirWideBitcastCall wide_bitcast_call;
+    struct MirWideShiftCompare wide_shift_compare;
     struct MirByteMismatchReport byte_mismatch_report;
     struct MirByteArithmeticReports byte_arithmetic_reports;
     struct MirByteBitwiseReport byte_bitwise_report;
@@ -21150,6 +21258,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_wide_bitcast_call(&wide_bitcast_call)) {
         mir_emit_wide_bitcast_call(out, &wide_bitcast_call);
+        return 1;
+    }
+    if (mir_match_wide_shift_compare(&wide_shift_compare)) {
+        mir_emit_wide_shift_compare(out, &wide_shift_compare);
         return 1;
     }
     if (mir_match_byte_mismatch_report(
