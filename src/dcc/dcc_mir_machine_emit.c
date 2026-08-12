@@ -173,6 +173,19 @@ struct MirFixedForwardAttention {
     int output_offset;
 };
 
+struct MirFourByteFailureCheck {
+    struct Sym *failure_count;
+    int failure_offset;
+    int name_stack_offset;
+    int source_stack_offset;
+    int source_is_pointer;
+    int expected_stack_offsets[4];
+    int expected_widths[4];
+    int include_expected;
+    int string_id;
+    char call_name[64];
+};
+
 struct MirWideMemberUpdate {
     int pointer_stack_offset;
     int value_stack_offset;
@@ -24623,6 +24636,343 @@ static int mir_match_fixed_forward_attention(
     return 1;
 }
 
+static int mir_machine_value_matches_parameter(
+    int value, const struct MirInsn *parameter)
+{
+    const struct MirInsn *definition;
+    int value_type;
+    int value_storage;
+    int value_offset;
+    int parameter_type;
+    int parameter_storage;
+    int parameter_offset;
+    int depth = 0;
+
+    while ((definition = mir_definition(value)) != NULL &&
+           definition->opcode == MIR_UNARY &&
+           definition->immediate == 0 &&
+           depth++ < 8)
+        value = definition->src1;
+    if (value == parameter->dst)
+        return 1;
+    definition = mir_definition(value);
+    return definition != NULL &&
+           mir_scalar_memory_location(
+               definition, &value_type, &value_storage,
+               &value_offset) &&
+           mir_scalar_memory_location(
+               parameter, &parameter_type, &parameter_storage,
+               &parameter_offset) &&
+           value_storage == SC_PARAM &&
+           parameter_storage == SC_PARAM &&
+           value_offset == parameter_offset;
+}
+
+static int mir_machine_source_base_matches(
+    int value, const struct MirInsn *source,
+    int source_is_pointer, int depth)
+{
+    const struct MirInsn *definition;
+    int value_type;
+    int value_storage;
+    int value_offset;
+    int source_type;
+    int source_storage;
+    int source_offset;
+    int instruction;
+    const struct MirInsn *matching_store = NULL;
+
+    if (depth > 12)
+        return 0;
+    if (value == source->dst && source_is_pointer)
+        return 1;
+    definition = mir_definition(value);
+    if (definition == NULL)
+        return 0;
+    if (definition->opcode == MIR_UNARY &&
+        definition->immediate == 0)
+        return mir_machine_source_base_matches(
+            definition->src1, source,
+            source_is_pointer, depth + 1);
+    if (mir_scalar_memory_location(
+            definition, &value_type, &value_storage,
+            &value_offset) &&
+        mir_scalar_memory_location(
+            source, &source_type, &source_storage,
+            &source_offset) &&
+        value_storage == SC_PARAM &&
+        source_storage == SC_PARAM &&
+        value_offset == source_offset)
+        return source_is_pointer
+                   ? definition->opcode == MIR_LOAD
+                   : definition->opcode == MIR_ADDRESS;
+    if (definition->opcode != MIR_LOAD ||
+        !mir_machine_named_nonvolatile(definition))
+        return 0;
+    for (instruction = 0;
+         instruction < (int)(definition - mir.insns);
+         ++instruction)
+        if (mir.insns[instruction].opcode == MIR_STORE &&
+            mir_machine_same_location(
+                definition, &mir.insns[instruction])) {
+            if (matching_store != NULL)
+                return 0;
+            matching_store = &mir.insns[instruction];
+        }
+    return matching_store != NULL &&
+           mir_machine_source_base_matches(
+               matching_store->src1, source,
+               source_is_pointer, depth + 1);
+}
+
+static int mir_machine_byte_load_from_source(
+    int value, const struct MirInsn *source,
+    int source_is_pointer, int *byte_offset)
+{
+    const struct MirInsn *definition;
+    const struct MirInsn *address;
+    long offset;
+    int depth = 0;
+
+    while ((definition = mir_definition(value)) != NULL &&
+           definition->opcode == MIR_UNARY &&
+           definition->immediate == 0 &&
+           depth++ < 8)
+        value = definition->src1;
+    definition = mir_definition(value);
+    if (definition == NULL ||
+        definition->opcode != MIR_LOAD_INDIRECT ||
+        definition->memory_size != 1 ||
+        definition->bit_width != 0 ||
+        (definition->memory_flags & (1 | 8)) != 0)
+        return 0;
+    address = mir_definition(definition->src1);
+    if (address == NULL ||
+        address->opcode != MIR_INDEX_ADDRESS ||
+        address->immediate != 1 ||
+        address->memory_size != 1 ||
+        !mir_machine_constant_value(
+            address->src2, &offset, 0) ||
+        offset < 0 || offset > 3 ||
+        !mir_machine_source_base_matches(
+            address->src1, source,
+            source_is_pointer, 0))
+        return 0;
+    *byte_offset = (int)offset;
+    return 1;
+}
+
+static int mir_match_four_byte_failure_check(
+    struct MirFourByteFailureCheck *plan)
+{
+    const struct MirInsn *name;
+    const struct MirInsn *source;
+    const struct MirInsn *expected[4];
+    const struct MirInsn *print_call = NULL;
+    const struct MirInsn *failure_store = NULL;
+    int comparison_seen[4] = { 0, 0, 0, 0 };
+    int arguments[10];
+    int parameter_count = 0;
+    int comparison_count = 0;
+    int call_count = 0;
+    int global_store_count = 0;
+    int final_branch_count = 0;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+    int byte;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla || mir_cfg_block_count() != 23 ||
+        (mir.return_type & 15) != TYPE_VOID ||
+        (mir.count != 122 && mir.count != 126) ||
+        mir.insns[mir.count - 1].opcode != MIR_LABEL)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_PARAM)
+            ++parameter_count;
+    if (parameter_count != 6)
+        return 0;
+    name = &mir.insns[1];
+    source = &mir.insns[2];
+    for (byte = 0; byte < 4; ++byte)
+        expected[byte] = &mir.insns[3 + byte];
+    if (name->opcode != MIR_PARAM ||
+        type_ptr_depth(name->type) == 0 ||
+        source->opcode != MIR_PARAM ||
+        !mir_machine_parameter_value_offset(
+            name->dst, &plan->name_stack_offset))
+        return 0;
+    if (type_ptr_depth(source->type) == 1) {
+        plan->source_is_pointer = 1;
+        if (!mir_machine_parameter_value_offset(
+                source->dst, &plan->source_stack_offset))
+            return 0;
+    } else {
+        if (type_ptr_depth(source->type) != 0 ||
+            type_size(source->type) != 4 ||
+            !type_is_float(source->type) ||
+            !mir_scalar_memory_location(
+                source, &memory_type, &memory_storage,
+                &memory_offset) ||
+            memory_storage != SC_PARAM ||
+            type_size(memory_type) != 4 ||
+            !type_is_float(memory_type) ||
+            memory_offset < 2)
+            return 0;
+        plan->source_stack_offset = memory_offset - 2;
+    }
+    for (byte = 0; byte < 4; ++byte) {
+        if (expected[byte]->opcode != MIR_PARAM ||
+            type_ptr_depth(expected[byte]->type) != 0 ||
+            type_is_float(expected[byte]->type) ||
+            (type_size(expected[byte]->type) != 1 &&
+             type_size(expected[byte]->type) != 2) ||
+            (expected[byte]->type & TYPE_UNSIGNED) == 0 ||
+            !mir_machine_parameter_value_offset(
+                expected[byte]->dst,
+                &plan->expected_stack_offsets[byte]))
+            return 0;
+        plan->expected_widths[byte] =
+            type_size(expected[byte]->type);
+    }
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode == MIR_BINARY &&
+            insn->immediate == TOK_NE) {
+            int actual_byte = -1;
+            int expected_byte;
+
+            for (expected_byte = 0;
+                 expected_byte < 4; ++expected_byte)
+                if (mir_machine_value_matches_parameter(
+                        insn->src2,
+                        expected[expected_byte]) &&
+                    mir_machine_byte_load_from_source(
+                        insn->src1, source,
+                        plan->source_is_pointer,
+                        &actual_byte))
+                    break;
+            if (expected_byte == 4) {
+                for (expected_byte = 0;
+                     expected_byte < 4; ++expected_byte)
+                    if (mir_machine_value_matches_parameter(
+                            insn->src1,
+                            expected[expected_byte]) &&
+                        mir_machine_byte_load_from_source(
+                            insn->src2, source,
+                            plan->source_is_pointer,
+                            &actual_byte))
+                        break;
+            }
+            if (expected_byte == 4 ||
+                actual_byte != expected_byte ||
+                comparison_seen[actual_byte])
+                return 0;
+            comparison_seen[actual_byte] = 1;
+            ++comparison_count;
+        } else if (insn->opcode == MIR_CALL) {
+            print_call = insn;
+            ++call_count;
+        } else if (insn->opcode == MIR_STORE &&
+                   !mir_machine_unobservable_local_store(insn)) {
+            ++global_store_count;
+            failure_store = insn;
+        } else if (insn->opcode == MIR_STORE_INDIRECT) {
+            return 0;
+        } else if (insn->opcode == MIR_BRANCH_FALSE &&
+                   insn->label ==
+                       mir.insns[mir.count - 1].label) {
+            if (instruction >= mir.count - 7)
+                return 0;
+            ++final_branch_count;
+        }
+    }
+    if (comparison_count != 4 || call_count != 1 ||
+        global_store_count != 1 || final_branch_count != 1 ||
+        print_call == NULL || failure_store == NULL ||
+        (print_call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) !=
+            MIR_CALL_FLAG_VARIADIC)
+        return 0;
+    plan->include_expected =
+        mir_machine_ten_call_arguments(
+            print_call, arguments);
+    if (!plan->include_expected &&
+        !mir_machine_six_call_arguments(
+            print_call, arguments))
+        return 0;
+    {
+        const struct MirInsn *format =
+            mir_definition(arguments[0]);
+
+        if (format == NULL ||
+            format->opcode != MIR_STRING_ADDRESS ||
+            format->immediate < 0)
+            return 0;
+        plan->string_id = (int)format->immediate;
+    }
+    if (!mir_machine_value_matches_parameter(
+            arguments[1], name))
+        return 0;
+    for (byte = 0; byte < 4; ++byte) {
+        int actual_byte;
+
+        if (!mir_machine_byte_load_from_source(
+                arguments[2 + byte], source,
+                plan->source_is_pointer,
+                &actual_byte) ||
+            actual_byte != byte ||
+            (plan->include_expected &&
+             !mir_machine_value_matches_parameter(
+                 arguments[6 + byte],
+                 expected[byte])))
+            return 0;
+    }
+    {
+        const struct MirInsn *add =
+            mir_definition(failure_store->src1);
+        const struct MirInsn *load;
+
+        if (!mir_scalar_memory_location(
+                failure_store, &memory_type,
+                &memory_storage, &memory_offset) ||
+            memory_storage != SC_GLOBAL ||
+            type_size(memory_type) != 2 ||
+            add == NULL || add->opcode != MIR_BINARY ||
+            add->immediate != '+' ||
+            !mir_machine_constant_equals(add->src2, 1) ||
+            (load = mir_definition(add->src1)) == NULL ||
+            load->opcode != MIR_LOAD ||
+            !mir_machine_same_location(
+                load, failure_store))
+            return 0;
+        plan->failure_count =
+            find_global(failure_store->name);
+        plan->failure_offset = memory_offset;
+        if (plan->failure_count == NULL ||
+            plan->failure_count->is_volatile)
+            return 0;
+    }
+    {
+        struct Sym *function =
+            find_global(print_call->name);
+
+        if (function == NULL || function->is_defined)
+            return 0;
+        snprintf(plan->call_name,
+                 sizeof(plan->call_name), "%s",
+                 print_call->base_name[0] != 0
+                     ? print_call->base_name
+                     : asm_name_for(
+                           sym_asm_name(function)));
+    }
+    return 1;
+}
+
 static int mir_machine_pointee_is_volatile(
     const struct MirInsn *parameter)
 {
@@ -26379,6 +26729,90 @@ static void mir_emit_fixed_forward_attention(
             "\tjp nz,L%d\n\tld sp,ix\n\tpop ix\n\tpop iy\n"
             ";@dcc.reg free=iy\n\tret\n",
             residual_loop);
+}
+
+static void mir_emit_four_byte_source(
+    FILE *out, const struct MirFourByteFailureCheck *plan,
+    int byte)
+{
+    if (plan->source_is_pointer) {
+        int offset;
+
+        fprintf(out,
+                "\tld l,(ix+%d)\n\tld h,(ix+%d)\n",
+                plan->source_stack_offset + 2,
+                plan->source_stack_offset + 3);
+        for (offset = 0; offset < byte; ++offset)
+            fputs("\tinc hl\n", out);
+        fputs("\tld a,(hl)\n", out);
+    } else {
+        fprintf(out, "\tld a,(ix+%d)\n",
+                plan->source_stack_offset + 2 + byte);
+    }
+}
+
+static void mir_emit_four_byte_failure_check(
+    FILE *out, const struct MirFourByteFailureCheck *plan)
+{
+    int mismatch = new_label();
+    int done = new_label();
+    int byte;
+    int argument;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (byte = 0; byte < 4; ++byte) {
+        if (plan->expected_widths[byte] == 2) {
+            fprintf(out,
+                    "\tld a,(ix+%d)\n\tor a\n"
+                    "\tjp nz,L%d\n",
+                    plan->expected_stack_offsets[byte] + 3,
+                    mismatch);
+        }
+        mir_emit_four_byte_source(out, plan, byte);
+        fprintf(out,
+                "\tcp (ix+%d)\n\tjp nz,L%d\n",
+                plan->expected_stack_offsets[byte] + 2,
+                mismatch);
+    }
+    fprintf(out, "\tjp L%d\nL%d:\n", done, mismatch);
+    if (plan->include_expected)
+        for (byte = 3; byte >= 0; --byte) {
+            fprintf(out, "\tld l,(ix+%d)\n",
+                    plan->expected_stack_offsets[byte] + 2);
+            if (plan->expected_widths[byte] == 2)
+                fprintf(out, "\tld h,(ix+%d)\n",
+                        plan->expected_stack_offsets[byte] + 3);
+            else
+                fputs("\tld h,0\n", out);
+            fputs("\tpush hl\n", out);
+        }
+    for (byte = 3; byte >= 0; --byte) {
+        mir_emit_four_byte_source(out, plan, byte);
+        fputs("\tld l,a\n\tld h,0\n\tpush hl\n", out);
+    }
+    fprintf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            plan->name_stack_offset + 2,
+            plan->name_stack_offset + 3,
+            plan->string_id);
+    mir_emit_runtime_call(out, plan->call_name);
+    for (argument = 0;
+         argument < (plan->include_expected ? 10 : 6);
+         ++argument)
+        fputs("\tpop bc\n", out);
+    mir_machine_emit_global_word(
+        out, plan->failure_count,
+        plan->failure_offset);
+    fputs("\tinc hl\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->failure_count,
+        plan->failure_offset);
+    fprintf(out,
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            done);
 }
 
 static void mir_emit_wide_member_update(
@@ -32538,6 +32972,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFixedArrayAffineFill fixed_array_affine_fill;
     struct MirFixedEmbeddingBuild fixed_embedding_build;
     struct MirFixedForwardAttention fixed_forward_attention;
+    struct MirFourByteFailureCheck four_byte_failure_check;
     struct MirWideMemberUpdate wide_member_update;
     struct MirSignedMemberProduct signed_member_product;
     struct MirSignedMemberSquareScaleDiv
@@ -32927,6 +33362,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &fixed_forward_attention)) {
         mir_emit_fixed_forward_attention(
             out, &fixed_forward_attention);
+        return 1;
+    }
+    if (mir_match_four_byte_failure_check(
+            &four_byte_failure_check)) {
+        mir_emit_four_byte_failure_check(
+            out, &four_byte_failure_check);
         return 1;
     }
     if (mir_match_wide_member_update(&wide_member_update)) {
