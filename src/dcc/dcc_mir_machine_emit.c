@@ -204,6 +204,28 @@ struct MirFloatSpecialCheck {
     char call_name[64];
 };
 
+struct MirFlaggedRecordAppend {
+    struct Sym *counts;
+    struct Sym *records;
+    struct Sym *values;
+    struct Sym *classify_function;
+    int counts_offset;
+    int records_offset;
+    int values_offset;
+    int ply_stack_offset;
+    int from_stack_offset;
+    int to_stack_offset;
+    int promoted_stack_offset;
+    int flag_stack_offset;
+    int record_stride;
+    int row_stride;
+    int field_offsets[8];
+    int limit;
+    int special_mask;
+    int true_value;
+    int false_value;
+};
+
 struct MirWideMemberUpdate {
     int pointer_stack_offset;
     int value_stack_offset;
@@ -25193,6 +25215,232 @@ static int mir_match_float_special_check(
     return 0;
 }
 
+static int mir_match_flagged_record_append(
+    struct MirFlaggedRecordAppend *plan)
+{
+    static const int member_indices[8] = {
+        29, 34, 39, 52, 83, 87, 91, 96
+    };
+    const struct MirInsn *count_address = &mir.insns[8];
+    const struct MirInsn *count_load = &mir.insns[9];
+    const struct MirInsn *row_address = &mir.insns[17];
+    const struct MirInsn *count_update_address = &mir.insns[20];
+    const struct MirInsn *old_count = &mir.insns[21];
+    const struct MirInsn *record_address = &mir.insns[25];
+    int call_argument;
+    struct Sym *root;
+    long root_offset;
+    int field;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla || mir.count != 100 ||
+        mir_cfg_block_count() != 9 ||
+        (mir.return_type & 15) != TYPE_VOID ||
+        mir.insns[0].opcode != MIR_LABEL ||
+        mir.insns[1].opcode != MIR_PARAM ||
+        mir.insns[2].opcode != MIR_PARAM ||
+        mir.insns[3].opcode != MIR_PARAM ||
+        mir.insns[4].opcode != MIR_PARAM ||
+        mir.insns[5].opcode != MIR_PARAM)
+        return 0;
+    if (!mir_machine_parameter_value_offset(
+            mir.insns[1].dst,
+            &plan->ply_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[2].dst,
+            &plan->from_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[3].dst,
+            &plan->to_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[4].dst,
+            &plan->promoted_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[5].dst,
+            &plan->flag_stack_offset) ||
+        type_size(mir.insns[1].type) != 2 ||
+        type_size(mir.insns[2].type) != 2 ||
+        type_size(mir.insns[3].type) != 2 ||
+        type_size(mir.insns[4].type) != 1 ||
+        type_size(mir.insns[5].type) != 1)
+        return 0;
+    if (!mir_machine_global_address_offset(
+            mir.insns[6].dst, &plan->counts,
+            &root_offset, 0) ||
+        root_offset < -32768 ||
+        root_offset > 32767)
+        return 0;
+    plan->counts_offset = (int)root_offset;
+    if (!mir_machine_global_address_offset(
+            mir.insns[18].dst, &root,
+            &root_offset, 0) ||
+        root != plan->counts ||
+        root_offset != plan->counts_offset ||
+        count_address->src1 != mir.insns[6].dst ||
+        count_address->src2 != mir.insns[1].dst ||
+        count_address->immediate != 2 ||
+        count_address->memory_size != 2 ||
+        count_load->src1 != count_address->dst ||
+        count_load->memory_size != 2 ||
+        (count_load->memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_constant_value(
+            mir.insns[10].dst, &root_offset, 0) ||
+        root_offset <= 0 || root_offset > 255 ||
+        mir.insns[11].opcode != MIR_BINARY ||
+        mir.insns[11].immediate != TOK_GE ||
+        mir.insns[11].src1 != count_load->dst ||
+        mir.insns[11].src2 != mir.insns[10].dst ||
+        mir.insns[12].src1 != mir.insns[11].dst ||
+        mir.insns[12].label != mir.insns[14].label ||
+        mir.insns[13].opcode != MIR_RETURN)
+        return 0;
+    plan->limit = (int)root_offset;
+    if (!mir_machine_global_address_offset(
+            mir.insns[15].dst, &plan->records,
+            &root_offset, 0) ||
+        root_offset < -32768 ||
+        root_offset > 32767)
+        return 0;
+    plan->records_offset = (int)root_offset;
+    if (row_address->src1 != mir.insns[15].dst ||
+        row_address->src2 != mir.insns[1].dst ||
+        row_address->immediate <= 0 ||
+        row_address->memory_size != row_address->immediate ||
+        count_update_address->src1 != mir.insns[18].dst ||
+        count_update_address->src2 != mir.insns[1].dst ||
+        count_update_address->immediate != 2 ||
+        old_count->src1 != count_update_address->dst ||
+        old_count->memory_size != 2 ||
+        !mir_machine_constant_equals(
+            mir.insns[22].dst, 1) ||
+        mir.insns[23].opcode != MIR_BINARY ||
+        mir.insns[23].immediate != '+' ||
+        mir.insns[23].src1 != old_count->dst ||
+        mir.insns[23].src2 != mir.insns[22].dst ||
+        mir.insns[24].src1 !=
+            count_update_address->dst ||
+        mir.insns[24].src2 != mir.insns[23].dst ||
+        mir.insns[24].memory_size != 2 ||
+        record_address->src1 != row_address->dst ||
+        record_address->src2 != old_count->dst ||
+        record_address->immediate <= 0 ||
+        record_address->memory_size !=
+            record_address->immediate ||
+        !mir_machine_unobservable_local_store(
+            &mir.insns[27]) ||
+        mir.insns[27].src1 != record_address->dst)
+        return 0;
+    plan->row_stride = (int)row_address->immediate;
+    plan->record_stride =
+        (int)record_address->immediate;
+    for (field = 0; field < 8; ++field) {
+        const struct MirInsn *member =
+            &mir.insns[member_indices[field]];
+
+        if (member->opcode != MIR_MEMBER_ADDRESS ||
+            member->memory_size != 1 ||
+            member->immediate < 0 ||
+            member->immediate >= plan->record_stride)
+            return 0;
+        plan->field_offsets[field] =
+            (int)member->immediate;
+    }
+    if (plan->field_offsets[0] != 0 ||
+        plan->field_offsets[1] != 1 ||
+        plan->field_offsets[2] != 2 ||
+        plan->field_offsets[3] != 3 ||
+        plan->field_offsets[4] != 4 ||
+        plan->field_offsets[5] != 5 ||
+        plan->field_offsets[6] != 6 ||
+        plan->field_offsets[7] != 7 ||
+        mir.insns[31].opcode != MIR_UNARY ||
+        mir.insns[31].immediate != 0 ||
+        mir.insns[31].src1 != mir.insns[2].dst ||
+        mir.insns[32].src2 != mir.insns[31].dst ||
+        mir.insns[36].opcode != MIR_UNARY ||
+        mir.insns[36].immediate != 0 ||
+        mir.insns[36].src1 != mir.insns[3].dst ||
+        mir.insns[37].src2 != mir.insns[36].dst)
+        return 0;
+    if (!mir_machine_global_address_offset(
+            mir.insns[40].dst, &plan->values,
+            &root_offset, 0) ||
+        root_offset < -32768 ||
+        root_offset > 32767)
+        return 0;
+    plan->values_offset = (int)root_offset;
+    if (mir.insns[42].src1 != mir.insns[40].dst ||
+        mir.insns[42].src2 != mir.insns[2].dst ||
+        mir.insns[42].immediate != 1 ||
+        mir.insns[43].src1 != mir.insns[42].dst ||
+        mir.insns[43].memory_size != 1 ||
+        mir.insns[44].src2 != mir.insns[43].dst ||
+        !mir_machine_constant_value(
+            mir.insns[46].dst, &root_offset, 0) ||
+        root_offset <= 0 || root_offset > 255 ||
+        mir.insns[47].opcode != MIR_UNARY ||
+        mir.insns[47].immediate != 0 ||
+        mir.insns[47].src1 != mir.insns[5].dst ||
+        mir.insns[48].opcode != MIR_BINARY ||
+        mir.insns[48].immediate != '&' ||
+        mir.insns[48].src1 != mir.insns[47].dst ||
+        mir.insns[48].src2 != mir.insns[46].dst ||
+        mir.insns[49].src1 != mir.insns[48].dst)
+        return 0;
+    plan->special_mask = (int)root_offset;
+    if (!mir_machine_global_address_offset(
+            mir.insns[53].dst, &root,
+            &root_offset, 0) ||
+        root != plan->values ||
+        root_offset != plan->values_offset ||
+        mir.insns[55].src1 != mir.insns[53].dst ||
+        mir.insns[55].src2 != mir.insns[2].dst ||
+        mir.insns[55].immediate != 1 ||
+        mir.insns[56].src1 != mir.insns[55].dst ||
+        !mir_machine_single_call_argument(
+            &mir.insns[58], &call_argument) ||
+        call_argument != mir.insns[56].dst ||
+        !mir_machine_resolve_direct_call(
+            &mir.insns[58],
+            &plan->classify_function) ||
+        !mir_machine_constant_equals(
+            mir.insns[59].dst, 1) ||
+        mir.insns[60].opcode != MIR_BINARY ||
+        mir.insns[60].immediate != TOK_EQ ||
+        mir.insns[60].src1 != mir.insns[58].dst ||
+        mir.insns[60].src2 != mir.insns[59].dst ||
+        !mir_machine_constant_value(
+            mir.insns[62].dst, &root_offset, 0) ||
+        root_offset < -128 || root_offset > 255)
+        return 0;
+    plan->true_value = (int)root_offset & 255;
+    if (!mir_machine_constant_value(
+            mir.insns[66].dst, &root_offset, 0) ||
+        root_offset < -128 || root_offset > 255)
+        return 0;
+    plan->false_value = (int)root_offset & 255;
+    if (!mir_machine_global_address_offset(
+            mir.insns[76].dst, &root,
+            &root_offset, 0) ||
+        root != plan->values ||
+        root_offset != plan->values_offset ||
+        mir.insns[78].src1 != mir.insns[76].dst ||
+        mir.insns[78].src2 != mir.insns[3].dst ||
+        mir.insns[78].immediate != 1 ||
+        mir.insns[79].src1 != mir.insns[78].dst ||
+        mir.insns[80].src2 != mir.insns[79].dst ||
+        mir.insns[85].src2 != mir.insns[4].dst ||
+        mir.insns[89].src2 != mir.insns[5].dst ||
+        !mir_machine_constant_equals(
+            mir.insns[93].dst, 0) ||
+        mir.insns[94].src2 != mir.insns[93].dst ||
+        !mir_machine_constant_equals(
+            mir.insns[98].dst, 0) ||
+        mir.insns[99].src2 != mir.insns[98].dst)
+        return 0;
+    return 1;
+}
+
 static int mir_machine_pointee_is_volatile(
     const struct MirInsn *parameter)
 {
@@ -27101,6 +27349,111 @@ static void mir_emit_float_special_check(
         plan->failures_offset);
     fprintf(out,
             "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            done);
+}
+
+static void mir_emit_flagged_record_append(
+    FILE *out, const struct MirFlaggedRecordAppend *plan)
+{
+    int append = new_label();
+    int done = new_label();
+    int ordinary_capture = new_label();
+    int false_capture = new_label();
+    int capture_done = new_label();
+
+    fprintf(out,
+            ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n"
+            "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n",
+            mir.name);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tadd hl,hl\n",
+            plan->ply_stack_offset + 4,
+            plan->ply_stack_offset + 5);
+    mir_machine_emit_global_address_de(
+        out, plan->counts, plan->counts_offset);
+    fputs("\tadd hl,de\n\tld c,(hl)\n\tinc hl\n"
+          "\tld b,(hl)\n\tdec hl\n\tbit 7,b\n", out);
+    fprintf(out,
+            "\tjp nz,L%d\n\tld a,b\n\tor a\n\tjp nz,L%d\n"
+            "\tld a,c\n\tcp %d\n\tjp nc,L%d\n"
+            "L%d:\n\tpush hl\n"
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n",
+            append, done, plan->limit, done, append,
+            plan->ply_stack_offset + 4,
+            plan->ply_stack_offset + 5);
+    mir_emit_mul_hl_const(
+        out, (unsigned long)plan->row_stride);
+    mir_machine_emit_global_address_de(
+        out, plan->records, plan->records_offset);
+    fputs("\tadd hl,de\n\tpush hl\n\tld h,b\n\tld l,c\n", out);
+    mir_emit_mul_hl_const(
+        out, (unsigned long)plan->record_stride);
+    fputs("\tex de,hl\n\tpop hl\n\tadd hl,de\n"
+          "\tpush hl\n\tpop iy\n\tpop hl\n"
+          "\tinc (hl)\n", out);
+    {
+        int no_count_carry = new_label();
+
+        fprintf(out,
+                "\tjp nz,L%d\n\tinc hl\n\tinc (hl)\nL%d:\n",
+                no_count_carry, no_count_carry);
+    }
+    fprintf(out,
+            "\tld a,(ix+%d)\n\tld (iy%+d),a\n"
+            "\tld a,(ix+%d)\n\tld (iy%+d),a\n"
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n",
+            plan->from_stack_offset + 4,
+            plan->field_offsets[0],
+            plan->to_stack_offset + 4,
+            plan->field_offsets[1],
+            plan->from_stack_offset + 4,
+            plan->from_stack_offset + 5);
+    mir_machine_emit_global_address_de(
+        out, plan->values, plan->values_offset);
+    fputs("\tadd hl,de\n\tld a,(hl)\n", out);
+    fprintf(out,
+            "\tld (iy%+d),a\n"
+            "\tld a,(ix+%d)\n\tand %d\n"
+            "\tjp z,L%d\n"
+            "\tld l,(iy%+d)\n\tld a,l\n\trlca\n"
+            "\tsbc a,a\n\tld h,a\n\tpush hl\n",
+            plan->field_offsets[2],
+            plan->flag_stack_offset + 4,
+            plan->special_mask, ordinary_capture,
+            plan->field_offsets[2]);
+    mir_machine_emit_symbol_call(
+        out, plan->classify_function);
+    fputs("\tpop bc\n\tld a,h\n\tor a\n", out);
+    fprintf(out,
+            "\tjp nz,L%d\n\tld a,l\n\tcp 1\n\tjp nz,L%d\n"
+            "\tld a,%d\n\tjp L%d\n"
+            "L%d:\n\tld a,%d\n\tjp L%d\n"
+            "L%d:\n\tld l,(ix+%d)\n\tld h,(ix+%d)\n",
+            false_capture, false_capture,
+            plan->true_value, capture_done,
+            false_capture, plan->false_value, capture_done,
+            ordinary_capture,
+            plan->to_stack_offset + 4,
+            plan->to_stack_offset + 5);
+    mir_machine_emit_global_address_de(
+        out, plan->values, plan->values_offset);
+    fputs("\tadd hl,de\n\tld a,(hl)\n", out);
+    fprintf(out,
+            "L%d:\n\tld (iy%+d),a\n"
+            "\tld a,(ix+%d)\n\tld (iy%+d),a\n"
+            "\tld a,(ix+%d)\n\tld (iy%+d),a\n"
+            "\txor a\n\tld (iy%+d),a\n\tld (iy%+d),a\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tpop iy\n"
+            ";@dcc.reg free=iy\n\tret\n",
+            capture_done, plan->field_offsets[3],
+            plan->promoted_stack_offset + 4,
+            plan->field_offsets[4],
+            plan->flag_stack_offset + 4,
+            plan->field_offsets[5],
+            plan->field_offsets[6],
+            plan->field_offsets[7],
             done);
 }
 
@@ -33263,6 +33616,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFixedForwardAttention fixed_forward_attention;
     struct MirFourByteFailureCheck four_byte_failure_check;
     struct MirFloatSpecialCheck float_special_check;
+    struct MirFlaggedRecordAppend flagged_record_append;
     struct MirWideMemberUpdate wide_member_update;
     struct MirSignedMemberProduct signed_member_product;
     struct MirSignedMemberSquareScaleDiv
@@ -33664,6 +34018,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &float_special_check)) {
         mir_emit_float_special_check(
             out, &float_special_check);
+        return 1;
+    }
+    if (mir_match_flagged_record_append(
+            &flagged_record_append)) {
+        mir_emit_flagged_record_append(
+            out, &flagged_record_append);
         return 1;
     }
     if (mir_match_wide_member_update(&wide_member_update)) {
