@@ -66,6 +66,35 @@ current execution plan and handoff.
   Canonical and CMake builds pass; `fint`, `cint`, `bint`, and `forint` pass
   full peep/nopeep validation with zero checked regression and no baseline
   update.
+- The next coverage batch admits the 10-block deferred
+  `tdmfuse.test_while_register_narrowed` fallback through a strict, name-free
+  scheduled matcher in the core machine emitter. It proves the complete
+  165-instruction graph, signed 16-bit count/value/index state, unsigned-byte
+  narrowed loop and array state, nonvolatile/nonoverlapping local ranges,
+  div/mod operand identity, all stores, the three-argument check call and
+  seven-iteration outer bound. The emitter retains the real 32-byte frame and
+  both loops, keeps the inner narrowed counter in BC across `__sdivmod` with
+  explicit save/restore, uses DE for the report index only across safe spans,
+  and never uses IY. The family remains in the core for now because it is a
+  numeric div/mod trace loop, not a scanner/parser family.
+  Normal metrics improve from **2,457/223 captured bytes/instructions to
+  1,138/104 selected**; stack-check metrics improve from **2,486/224 to
+  1,167/105**. Focused full mode passes with selected results of
+  **172,199 cycles / 8,960 bytes peep** and
+  **175,887 cycles / 8,832 bytes nopeep**. Forced fallback is
+  **187,705 / 9,088** and **202,264 / 9,088**, so the exact A/B gain is
+  **-15,506 cycles (-8.26%) / -128 bytes** peep and
+  **-26,377 cycles (-13.04%) / -256 bytes** nopeep.
+  A scratch boundary/wrap variant replaces the scale with 32,767 and produces
+  the independently computed signed-wrap trace
+  `12052,-1139,11879,16082,-16261,15579,2596`; selected and forced-fallback
+  program output is byte-identical in peep and nopeep. Its selected/fallback
+  measurements are **506,581/531,921 cycles** peep and
+  **510,390/546,517 cycles** nopeep, with **5,632/5,888 bytes** in both
+  modes. The regression-gated stack census against
+  `/tmp/mir-census-current.tsv` advances **2,126/2,185 (97.30%)** to
+  **2,127/2,185 (97.35%)**, leaves **58 `final-cost-policy`** fallbacks, and
+  changes exactly this one function/app with zero removal. No baseline changes.
 - Architecture rule for subsequent machine-family extractions: add **zero
   shared variables or mutable state**. Each module owns its plan structs,
   static arrays/constants, counters, candidate state, matchers, emitters, and
