@@ -6,11 +6,23 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `be85b72`
-  (`dcc MIR: schedule array post-update checks`).
-- Current candidate coverage: **2097/2185 (95.97%)**.
-- Remaining fallback population: **88 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `2331d12`
+  (`dcc MIR: schedule fixed bitfield checks`).
+- Current candidate coverage: **2098/2185 (96.02%)**.
+- Remaining fallback population: **87 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The name-free pointer-alias mix scheduler admits
+  `tptrlhs.touch_alias_mix`. It structurally validates all 22 local pointer
+  initializations, retains each of the six runtime global pointer-member
+  loads, and preserves all 24 observable stores and 24 checker calls in
+  source order. The emitted function is frameless and uses no IY. In the
+  stack-check census, selected output falls from 15,723 to 5,526 text bytes
+  and from 1,537 to 533 instructions; the rejected spilled candidate was
+  20,343 bytes / 1,867 instructions. `tptrlhs` improves from 974,367 to
+  925,005 peep cycles (-5.07%) and from 1,021,278 to 967,079 nopeep cycles
+  (-5.31%); linked size falls 1,152/1,664 bytes. The fresh non-stack census
+  is 2009/2101 and the stack-check census is 2098/2185, each with exactly
+  this one new function and no regression.
 - The name-free bitfield report scheduler admits `tbitfld.main`. It reuses one
   four-byte IX aggregate slot, uses no IY, preserves all 12 `printf`, eight
   aggregate-sum, and two hidden-buffer aggregate-return calls, and emits direct

@@ -1201,6 +1201,33 @@ struct MirLocalArrayStructChecks {
     int member_array_indices[3];
 };
 
+struct MirAliasMixAddress {
+    struct Sym *root;
+    int root_offset;
+    int pointee_offset;
+    int indirect;
+};
+
+struct MirAliasMixStore {
+    struct MirAliasMixAddress address;
+    unsigned long value;
+    int width;
+};
+
+struct MirAliasMixCheck {
+    struct MirAliasMixAddress address;
+    struct Sym *function;
+    unsigned long expected;
+    int string_id;
+    int width;
+    int is_unsigned;
+};
+
+struct MirAliasMixSchedule {
+    struct MirAliasMixStore stores[24];
+    struct MirAliasMixCheck checks[24];
+};
+
 struct MirTaskArrayCheck {
     struct Sym *highest_function;
     struct Sym *count_function;
@@ -8308,6 +8335,518 @@ static int mir_match_local_array_struct_checks(
         plan->check_functions[1] == NULL)
         return mir_machine_reject(
             "local-array-struct-checks", "call-count");
+    return 1;
+}
+
+struct MirAliasMixPointerSlot {
+    char name[64];
+    int base_offset;
+    long slot_offset;
+    struct Sym *root;
+    int root_offset;
+    int store_index;
+};
+
+enum MirAliasMixFormKind {
+    MIR_ALIAS_MIX_INTEGER = 1,
+    MIR_ALIAS_MIX_LOCAL = 2,
+    MIR_ALIAS_MIX_GLOBAL = 3,
+    MIR_ALIAS_MIX_INDIRECT = 4
+};
+
+struct MirAliasMixForm {
+    int kind;
+    long value;
+    char name[64];
+    int base_offset;
+    struct Sym *root;
+    int root_offset;
+};
+
+static int mir_alias_mix_form(
+    int value, int before,
+    const struct MirAliasMixPointerSlot *slots, int slot_count,
+    struct MirAliasMixForm *form, int depth)
+{
+    const struct MirInsn *definition;
+    int definition_index;
+
+    if (depth > 32 ||
+        (definition = mir_definition(value)) == NULL)
+        return 0;
+    definition_index = (int)(definition - mir.insns);
+    if (definition_index >= before)
+        return 0;
+    if (definition->opcode == MIR_CONST) {
+        long converted;
+
+        if (!mir_machine_convert_integer(
+                definition->immediate, definition->type,
+                &converted))
+            return 0;
+        memset(form, 0, sizeof(*form));
+        form->kind = MIR_ALIAS_MIX_INTEGER;
+        form->value = converted;
+        return 1;
+    }
+    if (definition->opcode == MIR_ADDRESS) {
+        int memory_type;
+        int memory_storage;
+        int memory_offset;
+
+        if (!mir_scalar_memory_location(
+                definition, &memory_type, &memory_storage,
+                &memory_offset) ||
+            (memory_storage != SC_LOCAL &&
+             memory_storage != SC_GLOBAL) ||
+            mir_declared_is_vla_object(definition->name))
+            return 0;
+        memset(form, 0, sizeof(*form));
+        form->value = memory_offset;
+        if (memory_storage == SC_LOCAL) {
+            form->kind = MIR_ALIAS_MIX_LOCAL;
+            form->base_offset = memory_offset;
+            form->value = 0;
+            snprintf(form->name, sizeof(form->name), "%s",
+                     definition->name);
+        } else {
+            form->kind = MIR_ALIAS_MIX_GLOBAL;
+            form->root = find_global(definition->name);
+            if (form->root == NULL || !form->root->is_defined ||
+                form->root->is_volatile)
+                return 0;
+        }
+        return 1;
+    }
+    if (definition->opcode == MIR_MEMBER_ADDRESS) {
+        if (!mir_alias_mix_form(
+                definition->src1, definition_index,
+                slots, slot_count, form, depth + 1) ||
+            (form->kind != MIR_ALIAS_MIX_LOCAL &&
+             form->kind != MIR_ALIAS_MIX_GLOBAL &&
+             form->kind != MIR_ALIAS_MIX_INDIRECT))
+            return 0;
+        form->value += definition->immediate;
+        return form->value >= -32768 && form->value <= 32767;
+    }
+    if (definition->opcode == MIR_INDEX_ADDRESS) {
+        struct MirAliasMixForm index;
+        long scaled;
+
+        if (definition->immediate <= 0 ||
+            !mir_alias_mix_form(
+                definition->src1, definition_index,
+                slots, slot_count, form, depth + 1) ||
+            !mir_alias_mix_form(
+                definition->src2, definition_index,
+                slots, slot_count, &index, depth + 1) ||
+            index.kind != MIR_ALIAS_MIX_INTEGER ||
+            !mir_machine_fold_integer_binary(
+                '*', index.value, definition->immediate,
+                TYPE_INT, &scaled) ||
+            (form->kind != MIR_ALIAS_MIX_LOCAL &&
+             form->kind != MIR_ALIAS_MIX_GLOBAL &&
+             form->kind != MIR_ALIAS_MIX_INDIRECT))
+            return 0;
+        form->value += scaled;
+        return form->value >= -32768 && form->value <= 32767;
+    }
+    if (definition->opcode == MIR_BINARY &&
+        (definition->immediate == '+' ||
+         definition->immediate == '-' ||
+         definition->immediate == '*')) {
+        struct MirAliasMixForm left;
+        struct MirAliasMixForm right;
+
+        if (!mir_alias_mix_form(
+                definition->src1, definition_index,
+                slots, slot_count, &left, depth + 1) ||
+            !mir_alias_mix_form(
+                definition->src2, definition_index,
+                slots, slot_count, &right, depth + 1))
+            return 0;
+        if (left.kind == MIR_ALIAS_MIX_INTEGER &&
+            right.kind == MIR_ALIAS_MIX_INTEGER) {
+            long result;
+
+            if (!mir_machine_fold_integer_binary(
+                    (int)definition->immediate,
+                    left.value, right.value,
+                    definition->type, &result))
+                return 0;
+            memset(form, 0, sizeof(*form));
+            form->kind = MIR_ALIAS_MIX_INTEGER;
+            form->value = result;
+            return 1;
+        }
+        if (definition->immediate == '+' &&
+            left.kind == MIR_ALIAS_MIX_INTEGER &&
+            right.kind != MIR_ALIAS_MIX_INTEGER) {
+            *form = right;
+            form->value += left.value;
+        } else if ((definition->immediate == '+' ||
+                    definition->immediate == '-') &&
+                   left.kind != MIR_ALIAS_MIX_INTEGER &&
+                   right.kind == MIR_ALIAS_MIX_INTEGER) {
+            *form = left;
+            form->value += definition->immediate == '+'
+                ? right.value : -right.value;
+        } else {
+            return 0;
+        }
+        return form->value >= -32768 && form->value <= 32767;
+    }
+    if (definition->opcode == MIR_UNARY &&
+        definition->immediate == 0) {
+        struct MirAliasMixForm source;
+
+        if (!mir_alias_mix_form(
+                definition->src1, definition_index,
+                slots, slot_count, &source, depth + 1))
+            return 0;
+        if (source.kind != MIR_ALIAS_MIX_INTEGER) {
+            *form = source;
+            return type_ptr_depth(definition->type) > 0 &&
+                   type_size(definition->type) == 2;
+        }
+        memset(form, 0, sizeof(*form));
+        form->kind = MIR_ALIAS_MIX_INTEGER;
+        return mir_machine_convert_integer(
+            source.value, definition->type, &form->value);
+    }
+    if (definition->opcode == MIR_LOAD_INDIRECT) {
+        struct MirAliasMixForm address;
+        int slot;
+
+        if (definition->memory_size != 2 ||
+            (definition->memory_flags & (1 | 8)) != 0 ||
+            definition->bit_width != 0 ||
+            type_ptr_depth(definition->type) == 0 ||
+            type_size(definition->type) != 2 ||
+            !mir_alias_mix_form(
+                definition->src1, definition_index,
+                slots, slot_count, &address, depth + 1))
+            return 0;
+        if (address.kind == MIR_ALIAS_MIX_LOCAL) {
+            for (slot = 0; slot < slot_count; ++slot) {
+                const struct MirAliasMixPointerSlot *candidate =
+                    &slots[slot];
+
+                if (candidate->store_index >= definition_index ||
+                    candidate->base_offset != address.base_offset ||
+                    candidate->slot_offset != address.value ||
+                    strcmp(candidate->name, address.name))
+                    continue;
+                memset(form, 0, sizeof(*form));
+                form->kind = MIR_ALIAS_MIX_GLOBAL;
+                form->root = candidate->root;
+                form->value = candidate->root_offset;
+                return 1;
+            }
+            return 0;
+        }
+        if (address.kind != MIR_ALIAS_MIX_GLOBAL)
+            return 0;
+        memset(form, 0, sizeof(*form));
+        form->kind = MIR_ALIAS_MIX_INDIRECT;
+        form->root = address.root;
+        form->root_offset = (int)address.value;
+        return 1;
+    }
+    return 0;
+}
+
+static int mir_alias_mix_address(
+    int value, int before,
+    const struct MirAliasMixPointerSlot *slots, int slot_count,
+    struct MirAliasMixAddress *address)
+{
+    struct MirAliasMixForm form;
+
+    if (!mir_alias_mix_form(
+            value, before, slots, slot_count, &form, 0) ||
+        (form.kind != MIR_ALIAS_MIX_GLOBAL &&
+         form.kind != MIR_ALIAS_MIX_INDIRECT) ||
+        form.root == NULL ||
+        form.value < -32768 || form.value > 32767)
+        return 0;
+    memset(address, 0, sizeof(*address));
+    address->root = form.root;
+    if (form.kind == MIR_ALIAS_MIX_GLOBAL)
+        address->root_offset = (int)form.value;
+    else {
+        address->root_offset = form.root_offset;
+        address->pointee_offset = (int)form.value;
+        address->indirect = 1;
+    }
+    return address->root_offset >= -32768 &&
+           address->root_offset <= 32767;
+}
+
+static int mir_match_alias_mix_schedule(
+    struct MirAliasMixSchedule *plan)
+{
+    static const int expected_counts[MIR_RETURN + 1] = {
+        [MIR_LABEL] = 1,
+        [MIR_NOP] = 24,
+        [MIR_CONST] = 234,
+        [MIR_ADDRESS] = 92,
+        [MIR_INDEX_ADDRESS] = 121,
+        [MIR_MEMBER_ADDRESS] = 55,
+        [MIR_LOAD_INDIRECT] = 54,
+        [MIR_STORE_INDIRECT] = 46,
+        [MIR_BINARY] = 74,
+        [MIR_STRING_ADDRESS] = 24,
+        [MIR_ARG] = 72,
+        [MIR_CALL] = 24,
+        [MIR_STORE] = 1
+    };
+    const struct MirInsn *stores[46];
+    const struct MirInsn *calls[24];
+    const struct MirInsn *named_store = NULL;
+    struct MirAliasMixPointerSlot slots[22];
+    int opcode_counts[MIR_RETURN + 1];
+    int group_counts[6] = {0, 0, 0, 0, 0, 0};
+    int group_masks[6] = {0, 0, 0, 0, 0, 0};
+    char group_names[6][64];
+    int group_offsets[6];
+    int sorted_counts[6];
+    int store_count = 0;
+    int call_count = 0;
+    int group_count = 0;
+    int instruction;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    memset(opcode_counts, 0, sizeof(opcode_counts));
+    memset(group_names, 0, sizeof(group_names));
+    if (mir.count != 822 || mir_cfg_block_count() != 1 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return mir_machine_reject("alias-mix-schedule", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode < 0 || insn->opcode > MIR_RETURN)
+            return mir_machine_reject(
+                "alias-mix-schedule", "opcode-range");
+        ++opcode_counts[insn->opcode];
+        switch (insn->opcode) {
+        case MIR_LABEL:
+        case MIR_NOP:
+        case MIR_CONST:
+        case MIR_ADDRESS:
+        case MIR_INDEX_ADDRESS:
+        case MIR_MEMBER_ADDRESS:
+        case MIR_BINARY:
+        case MIR_STRING_ADDRESS:
+        case MIR_ARG:
+            break;
+        case MIR_LOAD_INDIRECT:
+            if ((insn->memory_flags & (1 | 8)) != 0 ||
+                insn->bit_width != 0)
+                return mir_machine_reject(
+                    "alias-mix-schedule", "load");
+            break;
+        case MIR_STORE_INDIRECT:
+            if (store_count >= 46 ||
+                (insn->memory_flags & (1 | 8)) != 0 ||
+                insn->bit_width != 0 ||
+                (insn->memory_size != 1 &&
+                 insn->memory_size != 2 &&
+                 insn->memory_size != 4))
+                return mir_machine_reject(
+                    "alias-mix-schedule", "indirect-store");
+            stores[store_count++] = insn;
+            break;
+        case MIR_STORE:
+            if (named_store != NULL ||
+                !mir_machine_unobservable_local_store(insn) ||
+                insn->memory_size != 2)
+                return mir_machine_reject(
+                    "alias-mix-schedule", "named-store");
+            named_store = insn;
+            break;
+        case MIR_CALL:
+            if (call_count >= 24 || insn->memory_flags != 0)
+                return mir_machine_reject(
+                    "alias-mix-schedule", "call");
+            calls[call_count++] = insn;
+            break;
+        default:
+            return mir_machine_reject(
+                "alias-mix-schedule", "opcode");
+        }
+    }
+    for (instruction = 0; instruction <= MIR_RETURN; ++instruction)
+        if (opcode_counts[instruction] != expected_counts[instruction])
+            return mir_machine_reject(
+                "alias-mix-schedule", "census");
+    if (store_count != 46 || call_count != 24 ||
+        named_store == NULL || stores[21] >= named_store ||
+        named_store >= stores[22] || stores[45] >= calls[0])
+        return mir_machine_reject(
+            "alias-mix-schedule", "phase-order");
+
+    for (item = 0; item < 22; ++item) {
+        const struct MirInsn *store = stores[item];
+        struct MirAliasMixForm destination;
+        struct MirAliasMixForm source;
+        int duplicate;
+        int group;
+        long root_offset;
+
+        if (store->memory_size != 2 ||
+            !mir_alias_mix_form(
+                store->src1, (int)(store - mir.insns),
+                slots, item, &destination, 0) ||
+            !mir_alias_mix_form(
+                store->src2, (int)(store - mir.insns),
+                slots, item, &source, 0) ||
+            destination.kind != MIR_ALIAS_MIX_LOCAL ||
+            destination.value < 0 ||
+            (destination.value & 1) != 0 ||
+            source.kind != MIR_ALIAS_MIX_GLOBAL ||
+            source.root == NULL)
+            return mir_machine_reject(
+                "alias-mix-schedule", "pointer-init");
+        root_offset = source.value;
+        if (root_offset < -32768 || root_offset > 32767)
+            return mir_machine_reject(
+                "alias-mix-schedule", "pointer-offset");
+        duplicate = 0;
+        for (instruction = 0; instruction < item; ++instruction)
+            if (slots[instruction].base_offset ==
+                    destination.base_offset &&
+                slots[instruction].slot_offset == destination.value &&
+                !strcmp(slots[instruction].name, destination.name))
+                duplicate = 1;
+        if (duplicate)
+            return mir_machine_reject(
+                "alias-mix-schedule", "pointer-duplicate");
+        snprintf(slots[item].name, sizeof(slots[item].name), "%s",
+                 destination.name);
+        slots[item].base_offset = destination.base_offset;
+        slots[item].slot_offset = destination.value;
+        slots[item].root = source.root;
+        slots[item].root_offset = (int)root_offset;
+        slots[item].store_index = (int)(store - mir.insns);
+
+        for (group = 0; group < group_count; ++group)
+            if (group_offsets[group] == destination.base_offset &&
+                !strcmp(group_names[group], destination.name))
+                break;
+        if (group == group_count) {
+            if (group_count >= 6)
+                return mir_machine_reject(
+                    "alias-mix-schedule", "pointer-groups");
+            group_offsets[group] = destination.base_offset;
+            snprintf(group_names[group], sizeof(group_names[group]), "%s",
+                     destination.name);
+            ++group_count;
+        }
+        if (destination.value > 8)
+            return mir_machine_reject(
+                "alias-mix-schedule", "pointer-span");
+        ++group_counts[group];
+        group_masks[group] |= 1 << (destination.value / 2);
+    }
+    if (group_count != 6)
+        return mir_machine_reject(
+            "alias-mix-schedule", "pointer-group-count");
+    for (item = 0; item < 6; ++item) {
+        int insert = item;
+
+        if (group_masks[item] != (1 << group_counts[item]) - 1)
+            return mir_machine_reject(
+                "alias-mix-schedule", "pointer-contiguity");
+        sorted_counts[item] = group_counts[item];
+        while (insert > 0 &&
+               sorted_counts[insert - 1] > sorted_counts[insert]) {
+            int temporary = sorted_counts[insert - 1];
+
+            sorted_counts[insert - 1] = sorted_counts[insert];
+            sorted_counts[insert] = temporary;
+            --insert;
+        }
+    }
+    if (sorted_counts[0] != 2 || sorted_counts[1] != 3 ||
+        sorted_counts[2] != 4 || sorted_counts[3] != 4 ||
+        sorted_counts[4] != 4 || sorted_counts[5] != 5)
+        return mir_machine_reject(
+            "alias-mix-schedule", "pointer-layout");
+
+    for (item = 0; item < 24; ++item) {
+        const struct MirInsn *store = stores[item + 22];
+        const struct MirInsn *source = mir_definition(store->src2);
+        long value;
+
+        if (source == NULL ||
+            type_ptr_depth(source->type) != 0 ||
+            type_is_float(source->type) ||
+            type_size(source->type) != store->memory_size ||
+            !mir_machine_constant_value(store->src2, &value, 0) ||
+            !mir_alias_mix_address(
+                store->src1, (int)(store - mir.insns),
+                slots, 22, &plan->stores[item].address))
+            return mir_machine_reject(
+                "alias-mix-schedule", "observable-store");
+        plan->stores[item].width = store->memory_size;
+        plan->stores[item].value =
+            (unsigned long)value & 0xffffffffUL;
+    }
+
+    for (item = 0; item < 24; ++item) {
+        const struct MirInsn *call = calls[item];
+        const struct MirInsn *string;
+        const struct MirInsn *actual;
+        const struct MirInsn *expected_definition;
+        struct Sym *function;
+        int arguments[3];
+        long expected;
+        int expected_width;
+
+        if (!mir_machine_three_call_arguments(call, arguments) ||
+            (string = mir_definition(arguments[0])) == NULL ||
+            string->opcode != MIR_STRING_ADDRESS ||
+            (actual = mir_definition(arguments[1])) == NULL ||
+            actual->opcode != MIR_LOAD_INDIRECT ||
+            (actual->memory_flags & (1 | 8)) != 0 ||
+            actual->bit_width != 0 ||
+            type_ptr_depth(actual->type) != 0 ||
+            type_is_float(actual->type) ||
+            actual->memory_size != type_size(actual->type) ||
+            (actual->memory_size != 1 &&
+             actual->memory_size != 2 &&
+             actual->memory_size != 4) ||
+            (expected_definition =
+                mir_definition(arguments[2])) == NULL ||
+            type_ptr_depth(expected_definition->type) != 0 ||
+            type_is_float(expected_definition->type) ||
+            !mir_machine_constant_value(
+                arguments[2], &expected, 0) ||
+            !mir_alias_mix_address(
+                actual->src1, (int)(actual - mir.insns),
+                slots, 22, &plan->checks[item].address) ||
+            plan->checks[item].address.indirect ||
+            (function = find_global(call->name)) == NULL ||
+            !function->is_defined || function->is_funcptr ||
+            function->is_noreturn ||
+            type_ptr_depth(call->type) != 0 ||
+            (call->type & 15) != TYPE_VOID)
+            return mir_machine_reject(
+                "alias-mix-schedule", "check");
+        expected_width = actual->memory_size == 4 ? 4 : 2;
+        if (type_size(expected_definition->type) != expected_width)
+            return mir_machine_reject(
+                "alias-mix-schedule", "check-width");
+        plan->checks[item].function = function;
+        plan->checks[item].string_id = (int)string->immediate;
+        plan->checks[item].expected =
+            (unsigned long)expected & 0xffffffffUL;
+        plan->checks[item].width = actual->memory_size;
+        plan->checks[item].is_unsigned =
+            (actual->type & TYPE_UNSIGNED) != 0;
+    }
     return 1;
 }
 
@@ -40003,6 +40542,86 @@ static void mir_emit_local_array_struct_checks(
     fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static void mir_alias_mix_emit_address(
+    FILE *out, const struct MirAliasMixAddress *address)
+{
+    if (address->indirect) {
+        mir_machine_emit_global_word(
+            out, address->root, address->root_offset);
+        mir_machine_emit_hl_offset(
+            out, address->pointee_offset, 0);
+    } else {
+        mir_machine_emit_global_address_hl(
+            out, address->root, address->root_offset);
+    }
+}
+
+static void mir_alias_mix_emit_store(
+    FILE *out, const struct MirAliasMixStore *store)
+{
+    int byte;
+
+    mir_alias_mix_emit_address(out, &store->address);
+    for (byte = 0; byte < store->width; ++byte) {
+        fprintf(out, "\tld (hl),%lu\n",
+                (store->value >> (byte * 8)) & 255UL);
+        if (byte + 1 < store->width)
+            fputs("\tinc hl\n", out);
+    }
+}
+
+static void mir_alias_mix_emit_check(
+    FILE *out, const struct MirAliasMixCheck *check)
+{
+    int cleanup;
+
+    mir_alias_mix_emit_address(out, &check->address);
+    if (check->width == 1) {
+        fputs("\tld a,(hl)\n\tld l,a\n", out);
+        if (check->is_unsigned)
+            fputs("\tld h,0\n", out);
+        else
+            fputs("\trlca\n\tsbc a,a\n\tld h,a\n", out);
+        fputs("\tld d,h\n\tld e,l\n", out);
+    } else if (check->width == 2) {
+        fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n", out);
+    } else {
+        fputs("\tld c,(hl)\n\tinc hl\n"
+              "\tld b,(hl)\n\tinc hl\n"
+              "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n", out);
+    }
+
+    if (check->width == 4) {
+        mir_emit_fixed_point_constant(out, check->expected);
+        fputs("\tpush de\n\tpush bc\n", out);
+        cleanup = 5;
+    } else {
+        fprintf(out, "\tld hl,%lu\n\tpush hl\n",
+                check->expected & 0xffffUL);
+        fputs("\tpush de\n", out);
+        cleanup = 3;
+    }
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            check->string_id);
+    mir_machine_emit_symbol_call(out, check->function);
+    while (cleanup-- > 0)
+        fputs("\tpop bc\n", out);
+}
+
+static void mir_emit_alias_mix_schedule(
+    FILE *out, const struct MirAliasMixSchedule *plan)
+{
+    int item;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (item = 0; item < 24; ++item)
+        mir_alias_mix_emit_store(out, &plan->stores[item]);
+    for (item = 0; item < 24; ++item)
+        mir_alias_mix_emit_check(out, &plan->checks[item]);
+    fputs("\tret\n", out);
+}
+
 static void mir_task_array_push_arguments(
     FILE *out, int task_count)
 {
@@ -40307,6 +40926,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirDeterministicInitCheck deterministic_init_check;
     struct MirFixedIndexCallRunner fixed_index_call_runner;
     struct MirLocalArrayStructChecks local_array_struct_checks;
+    struct MirAliasMixSchedule alias_mix_schedule;
     struct MirBitfieldReportSequence bitfield_report_sequence;
     struct MirTaskArrayCheck task_array_check;
     struct MirLiteralCheckRunner literal_check_runner;
@@ -40939,6 +41559,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &local_array_struct_checks)) {
         mir_emit_local_array_struct_checks(
             out, &local_array_struct_checks);
+        return 1;
+    }
+    if (mir_match_alias_mix_schedule(&alias_mix_schedule)) {
+        mir_emit_alias_mix_schedule(out, &alias_mix_schedule);
         return 1;
     }
     if (mir_match_bitfield_report_sequence(
