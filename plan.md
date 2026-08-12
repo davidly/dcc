@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `8bb2f3d`
-  (`schedule local byte fill reports`).
-- Current candidate coverage: **1974/2185 (90.34%)**.
-- Remaining fallback population: **211 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `45ff10a`
+  (`schedule fixed global row searches`).
+- Current candidate coverage: **1975/2185 (90.39%)**.
+- Remaining fallback population: **210 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -262,6 +262,17 @@ current execution plan and handoff.
   keep the target word in BC, unroll the three adjacent word comparisons, and
   publish the matching value directly. This admits `wumpus.fwum`, improving
   that app 0.33% peep / 0.36% nopeep.
+- Random unique-array initialization now uses a two-byte IX induction slot,
+  preserves each destination address on the evaluation stack across the
+  producer call, retries the fixed array until the duplicate check clears,
+  then calls the validated copy helper and stores the final scalar member.
+  This admits `wumpus.ginit`; together with `fwum`, `wumpus` improves
+  0.45% peep / 0.49% nopeep.
+- Scheduled templates must allocate fresh machine labels with `new_label()`.
+  MIR CFG label IDs are function-local and can collide in the assembly file;
+  the fixed-row, local-fill/report, global-record-pop, and random-init
+  schedules now all use fresh labels. The full forward-only census remains
+  clean after the correction.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -269,7 +280,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 211 final-cost fallbacks,
+- Current next priority: repeated causes in the 210 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 

@@ -734,8 +734,6 @@ struct MirGlobalRecordPop {
     int value_offset;
     int stride;
     int wanted_kind;
-    int loop_label;
-    int done_label;
 };
 
 struct MirLocalByteFillCallReports {
@@ -747,7 +745,6 @@ struct MirLocalByteFillCallReports {
     int local_offset;
     int patch_offset;
     int patch_value;
-    int loop_label;
 };
 
 struct MirFixedRowFind {
@@ -758,7 +755,18 @@ struct MirFixedRowFind {
     int target_member_offset;
     int row_stride;
     int count;
-    int next_labels[3];
+};
+
+struct MirRandomUniqueInit {
+    struct Sym *producer;
+    struct Sym *duplicate_check;
+    struct Sym *copy_function;
+    int object_stack_offset;
+    int array_offset;
+    int copy_offset;
+    int final_offset;
+    int count;
+    int final_value;
 };
 
 struct MirAsciiUpper {
@@ -11850,6 +11858,133 @@ static int mir_match_conditional_string_report(
     return 1;
 }
 
+static int mir_match_random_unique_init(
+    struct MirRandomUniqueInit *plan)
+{
+    static const int expected_opcodes[53] = {
+        MIR_LABEL, MIR_PARAM, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_NOP,
+        MIR_STORE, MIR_LABEL, MIR_NOP, MIR_PHI, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_MEMBER_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_CALL, MIR_STORE_INDIRECT,
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP,
+        MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_MEMBER_ADDRESS,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_BRANCH_FALSE, MIR_JUMP,
+        MIR_LABEL, MIR_NOP, MIR_MEMBER_ADDRESS, MIR_ARG, MIR_NOP,
+        MIR_MEMBER_ADDRESS, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_MEMBER_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_CONST,
+        MIR_RETURN
+    };
+    const struct MirInsn *object = &mir.insns[1];
+    const struct MirInsn *array_member = &mir.insns[15];
+    const struct MirInsn *duplicate_call = &mir.insns[34];
+    const struct MirInsn *copy_call = &mir.insns[46];
+    int duplicate_arguments[2];
+    int copy_arguments[3];
+    int memory_type, memory_storage, memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 53 || mir_cfg_block_count() != 7 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        type_ptr_depth(object->type) != 1)
+        return mir_machine_reject("random-unique-init", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject("random-unique-init", "opcode");
+    if (!mir_machine_parameter_value_offset(
+            object->dst, &plan->object_stack_offset) ||
+        !mir_machine_constant_equals(mir.insns[4].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[6]) ||
+        mir.insns[6].memory_size != 2 ||
+        mir.insns[9].src1 != mir.insns[4].dst ||
+        mir.insns[9].src2 != mir.insns[23].dst ||
+        mir.insns[9].phi_pred1 != mir.insns[2].label ||
+        mir.insns[9].phi_pred2 != mir.insns[20].label ||
+        mir.insns[12].immediate != '<' ||
+        mir.insns[12].src1 != mir.insns[9].dst ||
+        mir.insns[12].src2 != mir.insns[11].dst ||
+        mir.insns[13].src1 != mir.insns[12].dst ||
+        mir.insns[13].label != mir.insns[26].label)
+        return mir_machine_reject("random-unique-init", "loop");
+    plan->count = (int)mir.insns[11].immediate;
+    if (plan->count <= 0 || plan->count > 255 ||
+        array_member->src1 != object->dst ||
+        mir.insns[17].src1 != array_member->dst ||
+        mir.insns[17].src2 != mir.insns[9].dst ||
+        mir.insns[17].immediate != 2 ||
+        mir.insns[18].memory_flags != 0 ||
+        mir.insns[19].src1 != mir.insns[17].dst ||
+        mir.insns[19].src2 != mir.insns[18].dst ||
+        mir.insns[19].memory_size != 2 ||
+        (mir.insns[19].memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_constant_equals(mir.insns[22].dst, 1) ||
+        mir.insns[23].immediate != '+' ||
+        mir.insns[23].src1 != mir.insns[9].dst ||
+        mir.insns[23].src2 != mir.insns[22].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[24]) ||
+        mir.insns[24].src1 != mir.insns[23].dst ||
+        mir.insns[25].label != mir.insns[7].label)
+        return mir_machine_reject("random-unique-init", "fill");
+    plan->producer = find_global(mir.insns[18].name);
+    plan->array_offset = (int)array_member->immediate;
+    if (plan->producer == NULL || !plan->producer->is_defined ||
+        plan->producer->is_funcptr ||
+        (mir.insns[18].memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+        mir.insns[30].src1 != object->dst ||
+        mir.insns[30].immediate != plan->array_offset ||
+        !mir_machine_two_call_arguments(
+            duplicate_call, duplicate_arguments) ||
+        duplicate_arguments[0] != mir.insns[30].dst ||
+        duplicate_arguments[1] != mir.insns[32].dst ||
+        mir.insns[32].immediate != plan->count ||
+        mir.insns[35].src1 != duplicate_call->dst ||
+        mir.insns[35].label != mir.insns[37].label ||
+        mir.insns[36].label != mir.insns[2].label)
+        return mir_machine_reject("random-unique-init", "duplicate");
+    plan->duplicate_check = find_global(duplicate_call->name);
+    if (plan->duplicate_check == NULL ||
+        !plan->duplicate_check->is_defined ||
+        plan->duplicate_check->is_funcptr ||
+        (duplicate_call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+        mir.insns[39].src1 != object->dst ||
+        mir.insns[42].src1 != object->dst ||
+        mir.insns[42].immediate != plan->array_offset ||
+        !mir_machine_three_call_arguments(copy_call, copy_arguments) ||
+        copy_arguments[0] != mir.insns[39].dst ||
+        copy_arguments[1] != mir.insns[42].dst ||
+        copy_arguments[2] != mir.insns[44].dst ||
+        mir.insns[44].immediate != plan->count)
+        return mir_machine_reject("random-unique-init", "copy");
+    plan->copy_function = find_global(copy_call->name);
+    plan->copy_offset = (int)mir.insns[39].immediate;
+    if (plan->copy_function == NULL || !plan->copy_function->is_defined ||
+        plan->copy_function->is_funcptr ||
+        (copy_call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+        mir.insns[48].src1 != object->dst ||
+        mir.insns[50].src1 != mir.insns[48].dst ||
+        mir.insns[50].src2 != mir.insns[49].dst ||
+        mir.insns[50].memory_size != 2 ||
+        (mir.insns[50].memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_constant_equals(mir.insns[51].dst, 0) ||
+        mir.insns[52].src1 != mir.insns[51].dst)
+        return mir_machine_reject("random-unique-init", "result");
+    plan->final_offset = (int)mir.insns[48].immediate;
+    plan->final_value = (int)mir.insns[49].immediate;
+    if (plan->array_offset < -32768 || plan->array_offset > 32767 ||
+        plan->copy_offset < -32768 || plan->copy_offset > 32767 ||
+        plan->final_offset < -32768 || plan->final_offset > 32767 ||
+        plan->final_value < -32768 || plan->final_value > 32767)
+        return mir_machine_reject("random-unique-init", "constants");
+    return 1;
+}
+
 static int mir_match_fixed_row_find(struct MirFixedRowFind *plan)
 {
     static const int expected_opcodes[56] = {
@@ -11981,9 +12116,6 @@ static int mir_match_fixed_row_find(struct MirFixedRowFind *plan)
         !mir_machine_constant_equals(mir.insns[54].dst, 0) ||
         mir.insns[55].src1 != mir.insns[54].dst)
         return mir_machine_reject("fixed-row-find", "result");
-    plan->next_labels[0] = mir.insns[45].label;
-    plan->next_labels[1] = mir.insns[47].label;
-    plan->next_labels[2] = mir.insns[53].label;
     return 1;
 }
 
@@ -12166,7 +12298,6 @@ static int mir_match_local_byte_fill_call_reports(
         mir.insns[instruction + 1].src1 != mir.insns[instruction].dst)
         return mir_machine_reject(
             "local-byte-fill-call-reports", "return");
-    plan->loop_label = mir.insns[4].label;
     return 1;
 }
 
@@ -12381,8 +12512,6 @@ static int mir_match_global_record_pop(
         plan->value_offset < 0 || plan->value_offset + 1 >= plan->stride ||
         wanted_kind < -32768 || wanted_kind > 32767)
         return mir_machine_reject("global-record-pop", "constants");
-    plan->loop_label = mir.insns[3].label;
-    plan->done_label = mir.insns[direct ? 51 : 50].label;
     return 1;
 }
 
@@ -22230,11 +22359,73 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_object_parameter_ix(
+    FILE *out, const struct MirRandomUniqueInit *plan)
+{
+    fprintf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n",
+            plan->object_stack_offset + 2,
+            plan->object_stack_offset + 3);
+}
+
+static void mir_emit_random_unique_init(
+    FILE *out, const struct MirRandomUniqueInit *plan)
+{
+    int outer_label = new_label();
+    int inner_label = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tdec sp\n\tdec sp\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "L%d:\n\tld (ix-2),0\n\tld (ix-1),0\n"
+            "L%d:\n",
+            outer_label, inner_label);
+    mir_emit_object_parameter_ix(out, plan);
+    mir_machine_emit_hl_offset(out, plan->array_offset, 0);
+    fputs("\tld e,(ix-2)\n\tld d,(ix-1)\n"
+          "\tex de,hl\n\tadd hl,hl\n\tex de,hl\n"
+          "\tadd hl,de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->producer);
+    fputs("\tpop de\n\tex de,hl\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n"
+          "\tinc (ix-2)\n\tld a,(ix-2)\n", out);
+    fprintf(out, "\tcp %d\n\tjp c,L%d\n",
+            plan->count, inner_label);
+    fprintf(out, "\tld hl,%d\n\tpush hl\n", plan->count);
+    mir_emit_object_parameter_ix(out, plan);
+    mir_machine_emit_hl_offset(out, plan->array_offset, 0);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->duplicate_check);
+    fputs("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n", outer_label);
+    fprintf(out, "\tld hl,%d\n\tpush hl\n", plan->count);
+    mir_emit_object_parameter_ix(out, plan);
+    mir_machine_emit_hl_offset(out, plan->array_offset, 0);
+    fputs("\tpush hl\n", out);
+    mir_emit_object_parameter_ix(out, plan);
+    mir_machine_emit_hl_offset(out, plan->copy_offset, 0);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->copy_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    mir_emit_object_parameter_ix(out, plan);
+    mir_machine_emit_hl_offset(out, plan->final_offset, 0);
+    fprintf(out,
+            "\tld (hl),%d\n\tinc hl\n\tld (hl),%d\n"
+            "\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n",
+            plan->final_value & 0xff,
+            (plan->final_value >> 8) & 0xff);
+}
+
 static void mir_emit_fixed_row_find(
     FILE *out, const struct MirFixedRowFind *plan)
 {
     int add;
     int element;
+    int next_labels[3];
+
+    for (element = 0; element < 3; ++element)
+        next_labels[element] = new_label();
 
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
@@ -22257,9 +22448,9 @@ static void mir_emit_fixed_row_find(
     for (element = 0; element < plan->count; ++element) {
         fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tinc hl\n"
               "\tld a,e\n\txor c\n", out);
-        fprintf(out, "\tjp nz,L%d\n", plan->next_labels[element]);
+        fprintf(out, "\tjp nz,L%d\n", next_labels[element]);
         fputs("\tld a,d\n\txor b\n", out);
-        fprintf(out, "\tjp nz,L%d\n", plan->next_labels[element]);
+        fprintf(out, "\tjp nz,L%d\n", next_labels[element]);
         fprintf(out,
                 "\tld hl,%d\n\tadd hl,sp\n"
                 "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
@@ -22267,7 +22458,7 @@ static void mir_emit_fixed_row_find(
                 "\tld hl,1\n\tret\n"
                 "L%d:\n",
                 plan->output_stack_offset,
-                plan->next_labels[element]);
+                next_labels[element]);
     }
     fputs("\tld hl,0\n\tret\n", out);
 }
@@ -22276,6 +22467,7 @@ static void mir_emit_local_byte_fill_call_reports(
     FILE *out, const struct MirLocalByteFillCallReports *plan)
 {
     int call_index;
+    int loop_label = new_label();
 
     fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
     fprintf(out,
@@ -22288,7 +22480,7 @@ static void mir_emit_local_byte_fill_call_reports(
             "\tld a,1\n\tld b,%d\n"
             "L%d:\n\tld (hl),a\n\tinc hl\n\tinc a\n\tdjnz L%d\n",
             plan->local_offset, plan->count,
-            plan->loop_label, plan->loop_label);
+            loop_label, loop_label);
     if (plan->patch_offset >= 0)
         fprintf(out, "\tld (ix%+d),%d\n",
                 plan->local_offset + plan->patch_offset,
@@ -22313,6 +22505,8 @@ static void mir_emit_global_record_pop(
     FILE *out, const struct MirGlobalRecordPop *plan)
 {
     int add;
+    int loop_label = new_label();
+    int done_label = new_label();
 
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
@@ -22320,7 +22514,7 @@ static void mir_emit_global_record_pop(
             "L%d:\n"
             "\tld hl,%d\n\tadd hl,sp\n"
             "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n",
-            plan->loop_label, plan->base_stack_offset);
+            loop_label, plan->base_stack_offset);
     mir_machine_emit_global_word(out, plan->state, 0);
     mir_machine_emit_hl_offset(out, plan->index_offset, 0);
     fprintf(out,
@@ -22329,7 +22523,7 @@ static void mir_emit_global_record_pop(
             "\tld a,b\n\txor 128\n\tld b,a\n"
             "\tor a\n\tsbc hl,bc\n\tjp c,L%d\n"
             "\tld a,h\n\tor l\n\tjp z,L%d\n",
-            plan->done_label, plan->done_label);
+            done_label, done_label);
     mir_machine_emit_global_word(out, plan->state, 0);
     mir_machine_emit_hl_offset(out, plan->index_offset, 0);
     fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tdec de\n"
@@ -22346,8 +22540,8 @@ static void mir_emit_global_record_pop(
             "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
             "\tld a,e\n\tcp %d\n\tjp nz,L%d\n"
             "\tld a,d\n\tcp %d\n\tjp nz,L%d\n",
-            plan->wanted_kind & 0xff, plan->loop_label,
-            (plan->wanted_kind >> 8) & 0xff, plan->loop_label);
+            plan->wanted_kind & 0xff, loop_label,
+            (plan->wanted_kind >> 8) & 0xff, loop_label);
     mir_machine_emit_hl_offset(
         out, plan->value_offset - plan->kind_offset - 1, 0);
     fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n", out);
@@ -22357,7 +22551,7 @@ static void mir_emit_global_record_pop(
             "\tld h,b\n\tld l,c\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n"
             "\tld hl,1\n\tret\n"
             "L%d:\n\tld hl,0\n\tret\n",
-            plan->target_stack_offset, plan->done_label);
+            plan->target_stack_offset, done_label);
 }
 
 static void mir_emit_word_range_bool(
@@ -23178,6 +23372,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirRandomUniqueInit random_unique_init;
     struct MirFixedRowFind fixed_row_find;
     struct MirLocalByteFillCallReports local_byte_fill_call_reports;
     struct MirGlobalRecordPop global_record_pop;
@@ -23808,6 +24003,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_random_unique_init(&random_unique_init)) {
+        mir_emit_random_unique_init(out, &random_unique_init);
         return 1;
     }
     if (mir_match_fixed_row_find(&fixed_row_find)) {
