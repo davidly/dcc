@@ -943,6 +943,12 @@ struct MirFixedGlobalStringCopies {
     int stride;
 };
 
+struct MirSignedMulClampAbs {
+    int left_stack_offset;
+    int right_stack_offset;
+    int limit;
+};
+
 struct MirAsciiUpper {
     int parameter_stack_offset;
     int width;
@@ -12029,6 +12035,58 @@ static int mir_match_conditional_string_report(
     plan->format_string_id = (int)mir.insns[3].immediate;
     plan->true_string_id = (int)mir.insns[9].immediate;
     plan->false_string_id = (int)mir.insns[13].immediate;
+    return 1;
+}
+
+static int mir_match_signed_mul_clamp_abs(struct MirSignedMulClampAbs *plan)
+{
+    int type, storage, offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 45 || mir_cfg_block_count() != 13 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        mir.insns[1].opcode != MIR_PARAM ||
+        mir.insns[2].opcode != MIR_PARAM ||
+        mir.insns[5].opcode != MIR_BINARY ||
+        mir.insns[5].immediate != '*' ||
+        mir.insns[5].src1 != mir.insns[1].dst ||
+        mir.insns[5].src2 != mir.insns[2].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[6]) ||
+        mir.insns[6].src1 != mir.insns[5].dst)
+        return mir_machine_reject("signed-mul-clamp-abs", "shape");
+    plan->limit = (int)mir.insns[8].immediate;
+    if (plan->limit <= 0 || plan->limit > 32767 ||
+        mir.insns[9].immediate != '>' ||
+        !mir_machine_same_location(&mir.insns[6], &mir.insns[7]) ||
+        mir.insns[9].src1 != mir.insns[7].dst ||
+        mir.insns[9].src2 != mir.insns[8].dst ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        !mir_machine_constant_equals(mir.insns[11].dst, plan->limit) ||
+        !mir_machine_same_location(&mir.insns[6], &mir.insns[15]) ||
+        mir.insns[18].immediate != '<' ||
+        mir.insns[18].src1 != mir.insns[15].dst ||
+        !mir_machine_constant_equals(
+            mir.insns[17].dst, 65536 - plan->limit) ||
+        !mir_machine_constant_equals(
+            mir.insns[21].dst, 65536 - plan->limit) ||
+        !mir_machine_same_location(&mir.insns[6], &mir.insns[25]) ||
+        !mir_machine_constant_equals(mir.insns[26].dst, 0) ||
+        mir.insns[27].immediate != '<' ||
+        !mir_machine_same_location(&mir.insns[6], &mir.insns[29]) ||
+        mir.insns[30].immediate != '-' ||
+        !mir_machine_same_location(&mir.insns[6], &mir.insns[34]) ||
+        mir.insns[44].src1 != mir.insns[43].dst)
+        return mir_machine_reject("signed-mul-clamp-abs", "flow");
+    if (!mir_scalar_memory_location(
+            &mir.insns[1], &type, &storage, &offset) ||
+        storage != SC_PARAM || offset < 2)
+        return mir_machine_reject("signed-mul-clamp-abs", "left");
+    plan->left_stack_offset = offset - 2;
+    if (!mir_scalar_memory_location(
+            &mir.insns[2], &type, &storage, &offset) ||
+        storage != SC_PARAM || offset < 2)
+        return mir_machine_reject("signed-mul-clamp-abs", "right");
+    plan->right_stack_offset = offset - 2;
     return 1;
 }
 
@@ -24429,6 +24487,38 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_signed_mul_clamp_abs(
+    FILE *out, const struct MirSignedMulClampAbs *plan)
+{
+    int negative = new_label();
+    int upper = new_label();
+    int lower = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tld h,b\n\tld l,c\n",
+            plan->right_stack_offset, plan->left_stack_offset);
+    mir_emit_runtime_call(out, "__mulu");
+    fputs("\tld b,h\n\tld c,l\n\tbit 7,b\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tld a,b\n\tor a\n\tjp nz,L%d\n"
+                 "\tld a,c\n\tcp %d\n\tjp nc,L%d\n"
+                 "\tld h,b\n\tld l,c\n\tret\n"
+                 "L%d:\n\tld h,b\n\tld l,c\n\tld de,%d\n"
+                 "\tor a\n\tsbc hl,de\n\tjp c,L%d\n"
+                 "\tld hl,0\n\tor a\n\tsbc hl,bc\n\tret\n"
+                 "L%d:\n\tld hl,%d\n\tret\n"
+                 "L%d:\n\tld hl,%d\n\tret\n",
+            negative, upper, plan->limit + 1, upper,
+            negative, 65536 - plan->limit, lower,
+            upper, plan->limit,
+            lower, 65536 - plan->limit);
+}
+
 static void mir_emit_fixed_global_string_copies(
     FILE *out, const struct MirFixedGlobalStringCopies *plan)
 {
@@ -26112,6 +26202,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirSignedMulClampAbs signed_mul_clamp_abs;
     struct MirFixedGlobalStringCopies fixed_global_string_copies;
     struct MirScaledGlobalStore scaled_global_store;
     struct MirScaledGlobalLoad scaled_global_load;
@@ -26763,6 +26854,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_signed_mul_clamp_abs(&signed_mul_clamp_abs)) {
+        mir_emit_signed_mul_clamp_abs(out, &signed_mul_clamp_abs);
         return 1;
     }
     if (mir_match_fixed_global_string_copies(

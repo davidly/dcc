@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `a1a11ca`
-  (`schedule scaled global stores`).
-- Current candidate coverage: **1995/2185 (91.30%)**.
-- Remaining fallback population: **190 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `f7e5ce8`
+  (`schedule fixed fastcall string copies`).
+- Current candidate coverage: **1996/2185 (91.35%)**.
+- Remaining fallback population: **189 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -369,6 +369,10 @@ current execution plan and handoff.
   `old_index*16`, call the existing `__scf` fastcall directly, and push the
   three final row pointers without spills. This admits `tfcarg2d.main`,
   improving both modes and shrinking nopeep by 128 bytes.
+- Signed multiply/clamp helpers now evaluate the product once, retain it in
+  BC, saturate outside ±100, and return the absolute in-range value without
+  an inline temporary or PHI materialization. This admits
+  `tinline.nest_scale_and_clamp` with no app-level regression.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -376,7 +380,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 190 final-cost fallbacks,
+- Current next priority: repeated causes in the 189 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
