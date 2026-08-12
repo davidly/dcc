@@ -368,6 +368,12 @@ struct MirFixedByteScanChecks {
     int check_count;
 };
 
+struct MirTwoConstantChecks {
+    struct Sym *function;
+    int values[2];
+    int string_ids[2];
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -5212,6 +5218,54 @@ static int mir_match_fixed_byte_walk_checks(
         plan->string_ids[element] = (int)mir.insns[47].immediate;
     }
     plan->string_ids[8] = (int)mir.insns[68].immediate;
+    return 1;
+}
+
+static int mir_match_two_constant_checks(struct MirTwoConstantChecks *plan)
+{
+    int first_args[3];
+    int second_args[3];
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 74 || mir_cfg_block_count() != 8 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID ||
+        !mir_machine_constant_equals(mir.insns[2].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[5].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[7].dst, 0) ||
+        mir.insns[11].src1 != mir.insns[2].dst ||
+        !mir_machine_constant_equals(mir.insns[13].dst, 1) ||
+        mir.insns[18].src1 != mir.insns[5].dst ||
+        mir.insns[25].immediate != '!' ||
+        mir.insns[25].src1 != mir.insns[5].dst ||
+        mir.insns[33].immediate != '!' ||
+        mir.insns[33].src1 != mir.insns[2].dst)
+        return mir_machine_reject("two-constant-checks", "conditions");
+    if (!mir_machine_three_call_arguments(
+            &mir.insns[46], first_args) ||
+        first_args[0] != mir.insns[40].dst ||
+        !mir_machine_constant_equals(first_args[1], 2) ||
+        first_args[2] != mir.insns[44].dst ||
+        !mir_machine_constant_equals(mir.insns[47].dst, 0) ||
+        mir.insns[51].opcode != MIR_PHI ||
+        mir.insns[53].opcode != MIR_PHI ||
+        mir.insns[55].src1 != mir.insns[51].dst ||
+        !mir_machine_constant_equals(mir.insns[57].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[61].dst, 0) ||
+        mir.insns[65].label != mir.insns[50].label ||
+        !mir_machine_three_call_arguments(
+            &mir.insns[73], second_args) ||
+        second_args[0] != mir.insns[53].dst ||
+        !mir_machine_constant_equals(second_args[1], 1) ||
+        second_args[2] != mir.insns[71].dst)
+        return mir_machine_reject("two-constant-checks", "calls");
+    plan->function = find_global(mir.insns[46].name);
+    if (plan->function == NULL || plan->function->is_funcptr ||
+        strcmp(mir.insns[46].name, mir.insns[73].name))
+        return mir_machine_reject("two-constant-checks", "function");
+    plan->values[0] = 2;
+    plan->values[1] = 1;
+    plan->string_ids[0] = (int)mir.insns[44].immediate;
+    plan->string_ids[1] = (int)mir.insns[71].immediate;
     return 1;
 }
 
@@ -23484,6 +23538,24 @@ static void mir_emit_fixed_byte_scan_checks(
     fputs("\tret\n", out);
 }
 
+static void mir_emit_two_constant_checks(
+    FILE *out, const struct MirTwoConstantChecks *plan)
+{
+    int check;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (check = 0; check < 2; ++check) {
+        fprintf(out,
+                "\tld hl,S%d\n\tpush hl\n"
+                "\tld hl,%d\n\tpush hl\n\tpush hl\n",
+                plan->string_ids[check], plan->values[check]);
+        mir_machine_emit_symbol_call(out, plan->function);
+        fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    }
+    fputs("\tret\n", out);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -27188,6 +27260,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirByteMismatchReport byte_mismatch_report;
     struct MirByteArithmeticReports byte_arithmetic_reports;
     struct MirFixedByteScanChecks fixed_byte_scan_checks;
+    struct MirTwoConstantChecks two_constant_checks;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -27659,6 +27732,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
         mir_match_fixed_byte_write_checks(&fixed_byte_scan_checks) ||
         mir_match_fixed_byte_walk_checks(&fixed_byte_scan_checks)) {
         mir_emit_fixed_byte_scan_checks(out, &fixed_byte_scan_checks);
+        return 1;
+    }
+    if (mir_match_two_constant_checks(&two_constant_checks)) {
+        mir_emit_two_constant_checks(out, &two_constant_checks);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(

@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `c364540`
-  (`expand fixed static byte proofs`).
-- Current candidate coverage: **2006/2185 (91.81%)**.
-- Remaining fallback population: **179 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `48c4898`
+  (`expand affine static byte proofs`).
+- Current candidate coverage: **2007/2185 (91.85%)**.
+- Remaining fallback population: **178 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -418,6 +418,10 @@ current execution plan and handoff.
 - The affine walk variant now preserves eight `i*3` stores and emits eight
   value checks plus the end-pointer check directly. This admits
   `treg.test_walk`, taking the app to 30.81% peep / 32.95% nopeep gains.
+- Deterministic boolean condition runners now emit the two proven check calls
+  directly after structurally validating the if/negation/one-iteration while
+  graph. This admits `tbool.check_conditions`, improving the app 1.77% peep /
+  2.00% nopeep with smaller images.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -425,7 +429,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 179 final-cost fallbacks,
+- Current next priority: repeated causes in the 178 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
