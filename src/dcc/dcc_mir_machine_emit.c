@@ -1197,6 +1197,23 @@ struct MirTaskArrayCheck {
     int name_bytes[4];
 };
 
+#define MIR_MAX_LITERAL_CHECK_CALLS 64
+
+struct MirLiteralCheckCall {
+    struct Sym *function;
+    int string_id;
+    int value_width;
+    unsigned long value;
+};
+
+struct MirLiteralCheckRunner {
+    struct MirLiteralCheckCall calls[MIR_MAX_LITERAL_CHECK_CALLS];
+    struct Sym *failure_root;
+    struct Sym *print_function;
+    int success_string_id;
+    int call_count;
+};
+
 struct MirPalindromeScan {
     int parameter_stack_offset;
 };
@@ -7927,6 +7944,171 @@ static int mir_match_task_array_check(
         if (mir.insns[item].opcode == MIR_CALL)
             ++call_count;
     return call_count == 3;
+}
+
+static int mir_machine_evaluate_constant(
+    int value, long *result, int depth)
+{
+    const struct MirInsn *insn;
+    long left;
+    long right;
+
+    if (result == NULL || depth > 32)
+        return 0;
+    insn = mir_definition(value);
+    if (insn == NULL)
+        return 0;
+    if (insn->opcode == MIR_CONST) {
+        *result = insn->immediate;
+        return 1;
+    }
+    if (insn->opcode == MIR_UNARY) {
+        int operation;
+
+        if (!mir_machine_evaluate_constant(
+                insn->src1, &left, depth + 1))
+            return 0;
+        operation = (int)insn->immediate;
+        if (operation == 0 || operation == '+')
+            return mir_fold_constant_binary(
+                '+', 0, left, insn->type, result);
+        if (operation == '-')
+            return mir_fold_constant_binary(
+                '-', 0, left, insn->type, result);
+        if (operation == '~')
+            return mir_fold_constant_binary(
+                '^', left, -1, insn->type, result);
+        if (operation == '!')
+            return mir_fold_constant_binary(
+                TOK_EQ, left, 0, insn->type, result) ||
+                   (*result = left == 0, 1);
+        return 0;
+    }
+    if (insn->opcode != MIR_BINARY ||
+        !mir_machine_evaluate_constant(
+            insn->src1, &left, depth + 1) ||
+        !mir_machine_evaluate_constant(
+            insn->src2, &right, depth + 1))
+        return 0;
+    return mir_fold_constant_binary(
+               (int)insn->immediate, left, right,
+               insn->secondary_offset, result) ||
+           mir_fold_constant_compare(
+               (int)insn->immediate, left, right,
+               insn->secondary_offset, result);
+}
+
+static int mir_match_literal_check_runner(
+    struct MirLiteralCheckRunner *plan)
+{
+    int final_load;
+    int final_call;
+    int instruction;
+    int total_calls = 0;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count < 100 || mir_cfg_block_count() != 2 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_INT)
+        return mir_machine_reject(
+            "literal-check-runner", "shape");
+    final_load = mir.count - 10;
+    final_call = mir.count - 3;
+    if (mir.insns[final_load].opcode != MIR_LOAD ||
+        (plan->failure_root =
+             find_global(mir.insns[final_load].name)) == NULL ||
+        plan->failure_root->is_volatile ||
+        mir.insns[final_load + 1].opcode != MIR_BRANCH_FALSE ||
+        !mir_machine_constant_equals(
+            mir.insns[final_load + 2].dst, 1) ||
+        mir.insns[final_load + 3].opcode != MIR_RETURN ||
+        mir.insns[final_load + 4].opcode != MIR_LABEL ||
+        mir.insns[final_load + 5].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[final_load + 6].opcode != MIR_ARG ||
+        mir.insns[final_call].opcode != MIR_CALL ||
+        !mir_machine_constant_equals(
+            mir.insns[mir.count - 2].dst, 0) ||
+        mir.insns[mir.count - 1].opcode != MIR_RETURN)
+        return mir_machine_reject(
+            "literal-check-runner", "final");
+    plan->print_function =
+        find_global(mir.insns[final_call].name);
+    plan->success_string_id =
+        (int)mir.insns[final_load + 5].immediate;
+    if (plan->print_function == NULL)
+        return mir_machine_reject(
+            "literal-check-runner", "print");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode == MIR_CALL) {
+            int arguments[3];
+            const struct MirInsn *string;
+            struct Sym *function;
+            long actual;
+            long expected;
+            unsigned long mask;
+            int width;
+
+            ++total_calls;
+            if (instruction == final_call)
+                continue;
+            if (plan->call_count >=
+                    MIR_MAX_LITERAL_CHECK_CALLS ||
+                !mir_machine_three_call_arguments(
+                    insn, arguments) ||
+                (string = mir_definition(arguments[0])) == NULL ||
+                string->opcode != MIR_STRING_ADDRESS ||
+                !mir_machine_evaluate_constant(
+                    arguments[1], &actual, 0) ||
+                !mir_machine_evaluate_constant(
+                    arguments[2], &expected, 0) ||
+                (function = find_global(insn->name)) == NULL ||
+                function->proto_nargs != 3)
+                return mir_machine_reject(
+                    "literal-check-runner", "call");
+            width = type_size(function->proto_types[1]);
+            if ((width != 2 && width != 4) ||
+                type_size(function->proto_types[2]) != width)
+                return mir_machine_reject(
+                    "literal-check-runner", "call-type");
+            mask = width == 2 ? 0xffffUL : 0xffffffffUL;
+            if (((unsigned long)actual & mask) !=
+                ((unsigned long)expected & mask))
+                return mir_machine_reject(
+                    "literal-check-runner", "mismatch");
+            plan->calls[plan->call_count].function = function;
+            plan->calls[plan->call_count].string_id =
+                (int)string->immediate;
+            plan->calls[plan->call_count].value_width = width;
+            plan->calls[plan->call_count].value =
+                (unsigned long)expected & mask;
+            ++plan->call_count;
+            continue;
+        }
+        if (insn->opcode == MIR_STORE &&
+            !mir_machine_unobservable_local_store(insn))
+            return mir_machine_reject(
+                "literal-check-runner", "store");
+        if (insn->opcode == MIR_LOAD &&
+            instruction != final_load)
+            return mir_machine_reject(
+                "literal-check-runner", "load");
+        if (insn->opcode != MIR_LABEL &&
+            insn->opcode != MIR_NOP &&
+            insn->opcode != MIR_CONST &&
+            insn->opcode != MIR_STRING_ADDRESS &&
+            insn->opcode != MIR_ARG &&
+            insn->opcode != MIR_UNARY &&
+            insn->opcode != MIR_BINARY &&
+            insn->opcode != MIR_STORE &&
+            insn->opcode != MIR_LOAD &&
+            insn->opcode != MIR_BRANCH_FALSE &&
+            insn->opcode != MIR_RETURN)
+            return mir_machine_reject(
+                "literal-check-runner", "opcode");
+    }
+    return plan->call_count >= 8 &&
+           total_calls == plan->call_count + 1;
 }
 
 static int mir_match_string_mismatch_report(
@@ -37928,6 +38110,52 @@ static void mir_emit_task_array_check(
             done);
 }
 
+static void mir_emit_literal_check_runner(
+    FILE *out, const struct MirLiteralCheckRunner *plan)
+{
+    int success = new_label();
+    int call;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (call = 0; call < plan->call_count; ++call) {
+        const struct MirLiteralCheckCall *check =
+            &plan->calls[call];
+        int copy;
+
+        for (copy = 0; copy < 2; ++copy) {
+            if (check->value_width == 4) {
+                fprintf(out,
+                        "\tld hl,%lu\n\tpush hl\n"
+                        "\tld hl,%lu\n\tpush hl\n",
+                        (check->value >> 16) & 0xffffUL,
+                        check->value & 0xffffUL);
+            } else {
+                fprintf(out, "\tld hl,%lu\n\tpush hl\n",
+                        check->value & 0xffffUL);
+            }
+        }
+        fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+                check->string_id);
+        mir_machine_emit_symbol_call(out, check->function);
+        if (check->value_width == 4)
+            fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
+                  "\tpop bc\n\tpop bc\n", out);
+        else
+            fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    }
+    mir_machine_emit_global_word(
+        out, plan->failure_root, 0);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out,
+            "\tjp z,L%d\n\tld hl,1\n\tret\n"
+            "L%d:\n\tld hl,S%d\n\tpush hl\n",
+            success, success, plan->success_string_id);
+    mir_machine_emit_symbol_call(
+        out, plan->print_function);
+    fputs("\tpop bc\n\tld hl,0\n\tret\n", out);
+}
+
 static void mir_emit_fixed_sieve_build(
     FILE *out, const struct MirFixedSieveBuild *plan)
 {
@@ -38075,6 +38303,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirDeterministicInitCheck deterministic_init_check;
     struct MirFixedIndexCallRunner fixed_index_call_runner;
     struct MirTaskArrayCheck task_array_check;
+    struct MirLiteralCheckRunner literal_check_runner;
     struct MirStringMismatchReport string_mismatch_report;
     struct MirCrcUpdateRunner crc_update_runner;
     struct MirFixedRowMemberSum fixed_row_member_sum;
@@ -38695,6 +38924,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_task_array_check(&task_array_check)) {
         mir_emit_task_array_check(out, &task_array_check);
+        return 1;
+    }
+    if (mir_match_literal_check_runner(
+            &literal_check_runner)) {
+        mir_emit_literal_check_runner(
+            out, &literal_check_runner);
         return 1;
     }
     if (mir_match_string_mismatch_report(&string_mismatch_report)) {
