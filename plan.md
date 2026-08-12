@@ -6,11 +6,24 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `2331d12`
-  (`dcc MIR: schedule fixed bitfield checks`).
-- Current candidate coverage: **2098/2185 (96.02%)**.
-- Remaining fallback population: **87 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `733889b`
+  (`dcc MIR: schedule alias-safe pointer mixes`).
+- Current candidate coverage: **2099/2185 (96.06%)**.
+- Remaining fallback population: **86 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The strict name-free final-call scheduler admits `tstdlib.main`. It matches
+  the exact two-block call graph structurally, preserves all 77 calls
+  (including four `abs`, four `labs`, ten `atoi`, fifteen `atol`, ten
+  direct div/ldiv wrappers among 43 checker calls, and the success print), and
+  emits every outer argument in reverse ABI order. The function is frameless
+  and uses neither IX nor IY. Non-stack selected output falls from 7,427 to 7,363
+  text bytes and from 779 to 768 instructions; stack-check output falls from
+  7,456 to 7,392 bytes and from 780 to 769 instructions. Against forced
+  fallback, `tstdlib` changes from 125,360 to 125,358 peep cycles (-2) and
+  from 127,063 to 126,939 nopeep cycles (-124), with linked sizes unchanged
+  at 9,472 bytes. The fresh non-stack census is 2010/2101 and the stack-check
+  census is 2099/2185, each with exactly this one new function and no
+  regression.
 - The name-free pointer-alias mix scheduler admits
   `tptrlhs.touch_alias_mix`. It structurally validates all 22 local pointer
   initializations, retains each of the six runtime global pointer-member

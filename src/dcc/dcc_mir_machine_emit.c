@@ -1814,6 +1814,34 @@ struct MirWideDivResultCheck {
     int result_offset;
 };
 
+#define MIR_FINAL_CALL_CHECK_COUNT 43
+
+enum MirFinalCallCheckKind {
+    MIR_FINAL_CALL_NESTED_CONSTANT = 1,
+    MIR_FINAL_CALL_NESTED_STRING,
+    MIR_FINAL_CALL_DIRECT
+};
+
+struct MirFinalCallCheck {
+    struct Sym *check_function;
+    struct Sym *value_function;
+    int kind;
+    int width;
+    int name_string_id;
+    int value_string_id;
+    unsigned long value;
+    unsigned long expected;
+    unsigned long direct_values[4];
+};
+
+struct MirFinalCallCheckSchedule {
+    struct MirFinalCallCheck checks[MIR_FINAL_CALL_CHECK_COUNT];
+    struct Sym *failure_root;
+    struct Sym *print_function;
+    int failure_offset;
+    int success_string_id;
+};
+
 struct MirLocalIdentityArrayResult {
     struct Sym *escaped_pointer;
     int escaped_pointer_offset;
@@ -25061,6 +25089,325 @@ static int mir_match_wide_div_result_check(
     return 1;
 }
 
+static int mir_match_final_call_integer_type(int type, int width)
+{
+    return type_ptr_depth(type) == 0 &&
+        type_size(type) == width &&
+        !type_is_float(type) &&
+        (type & TYPE_UNSIGNED) == 0;
+}
+
+static int mir_match_final_call_function(
+    const struct MirInsn *call, int argument_count,
+    int argument_width)
+{
+    struct Sym *function = find_global(call->name);
+    int argument;
+
+    if (function == NULL || function->is_funcptr ||
+        function->is_noreturn || !function->has_proto ||
+        function->proto_nargs != argument_count ||
+        function->proto_variadic ||
+        (call->type & 15) != TYPE_VOID ||
+        call->memory_flags != 0 ||
+        type_ptr_depth(function->proto_types[0]) != 1 ||
+        type_size(function->proto_types[0]) != 2)
+        return 0;
+    for (argument = 1; argument < argument_count; ++argument)
+        if (!mir_match_final_call_integer_type(
+                function->proto_types[argument],
+                argument_width))
+            return 0;
+    return 1;
+}
+
+static int mir_match_final_value_function(
+    const struct MirInsn *call, int argument_kind, int width)
+{
+    struct Sym *function = find_global(call->name);
+
+    if (function == NULL || function->is_funcptr ||
+        function->is_noreturn || !function->has_proto ||
+        function->proto_nargs != 1 ||
+        function->proto_variadic ||
+        call->memory_flags != 0 ||
+        !mir_match_final_call_integer_type(call->type, width))
+        return 0;
+    if (argument_kind == MIR_FINAL_CALL_NESTED_STRING)
+        return type_ptr_depth(function->proto_types[0]) == 1 &&
+            type_size(function->proto_types[0]) == 2;
+    return mir_match_final_call_integer_type(
+        function->proto_types[0], width);
+}
+
+static int mir_match_final_string_value(int value, int *string_id)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    if (definition == NULL ||
+        definition->opcode != MIR_STRING_ADDRESS ||
+        type_ptr_depth(definition->type) != 1 ||
+        type_size(definition->type) != 2)
+        return 0;
+    *string_id = (int)definition->immediate;
+    return 1;
+}
+
+static int mir_match_final_nested_call(
+    struct MirFinalCallCheck *check,
+    const struct MirInsn *value_call,
+    const struct MirInsn *check_call,
+    int argument_kind, int width,
+    struct Sym **value_function,
+    struct Sym **check_function)
+{
+    int check_arguments[3];
+    int value_argument;
+    long constant;
+
+    memset(check, 0, sizeof(*check));
+    if (!mir_machine_single_call_argument(
+            value_call, &value_argument) ||
+        !mir_machine_three_call_arguments(
+            check_call, check_arguments) ||
+        check_arguments[1] != value_call->dst ||
+        !mir_match_final_value_function(
+            value_call, argument_kind, width) ||
+        !mir_match_final_call_function(check_call, 3, width) ||
+        !mir_match_final_string_value(
+            check_arguments[0], &check->name_string_id))
+        return 0;
+    check->value_function = find_global(value_call->name);
+    check->check_function = find_global(check_call->name);
+    if ((*value_function != NULL &&
+         *value_function != check->value_function) ||
+        (*check_function != NULL &&
+         *check_function != check->check_function))
+        return 0;
+    *value_function = check->value_function;
+    *check_function = check->check_function;
+    if (argument_kind == MIR_FINAL_CALL_NESTED_STRING) {
+        if (!mir_match_final_string_value(
+                value_argument, &check->value_string_id))
+            return 0;
+    } else {
+        if (!mir_machine_evaluate_constant(
+                value_argument, &constant, 0))
+            return 0;
+        check->value = (unsigned long)constant;
+    }
+    if (!mir_machine_evaluate_constant(
+            check_arguments[2], &constant, 0))
+        return 0;
+    check->kind = argument_kind;
+    check->width = width;
+    check->expected = (unsigned long)constant;
+    return 1;
+}
+
+static int mir_match_final_direct_call(
+    struct MirFinalCallCheck *check,
+    const struct MirInsn *call, int width,
+    struct Sym **check_function)
+{
+    int arguments[5];
+    int argument;
+    long constant;
+
+    memset(check, 0, sizeof(*check));
+    if (!mir_machine_five_call_arguments(call, arguments) ||
+        !mir_match_final_call_function(call, 5, width) ||
+        !mir_match_final_string_value(
+            arguments[0], &check->name_string_id))
+        return 0;
+    check->check_function = find_global(call->name);
+    if (*check_function != NULL &&
+        *check_function != check->check_function)
+        return 0;
+    *check_function = check->check_function;
+    for (argument = 0; argument < 4; ++argument) {
+        if (!mir_machine_evaluate_constant(
+                arguments[argument + 1], &constant, 0))
+            return 0;
+        check->direct_values[argument] =
+            (unsigned long)constant;
+    }
+    check->kind = MIR_FINAL_CALL_DIRECT;
+    check->width = width;
+    return 1;
+}
+
+static int mir_match_final_call_check_schedule(
+    struct MirFinalCallCheckSchedule *plan)
+{
+    static const int group_counts[6] = {4, 4, 5, 5, 10, 15};
+    static const int group_widths[6] = {2, 4, 2, 4, 2, 4};
+    static const int group_kinds[6] = {
+        MIR_FINAL_CALL_NESTED_CONSTANT,
+        MIR_FINAL_CALL_NESTED_CONSTANT,
+        MIR_FINAL_CALL_DIRECT,
+        MIR_FINAL_CALL_DIRECT,
+        MIR_FINAL_CALL_NESTED_STRING,
+        MIR_FINAL_CALL_NESTED_STRING
+    };
+    const struct MirInsn *final_load;
+    const struct MirInsn *final_call;
+    struct Sym *value_functions[4] = {NULL, NULL, NULL, NULL};
+    struct Sym *check_functions[4] = {NULL, NULL, NULL, NULL};
+    int call_indices[77];
+    int opcode_counts[MIR_RETURN + 1];
+    int call_count = 0;
+    int check = 0;
+    int group;
+    int instruction;
+    int call_position = 0;
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+    int print_argument;
+
+    memset(plan, 0, sizeof(*plan));
+    memset(opcode_counts, 0, sizeof(opcode_counts));
+    if (mir.count != 448 || mir_cfg_block_count() != 2 ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_size(mir.return_type) != 2)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        int opcode = mir.insns[instruction].opcode;
+
+        if (opcode < 0 || opcode > MIR_RETURN)
+            return mir_machine_reject(
+                "final-call-check-schedule", "opcode-range");
+        ++opcode_counts[opcode];
+        if (opcode == MIR_CALL) {
+            if (call_count >= 77)
+                return mir_machine_reject(
+                    "final-call-check-schedule", "call-overflow");
+            call_indices[call_count++] = instruction;
+        }
+        if (instruction < 436 &&
+            opcode != MIR_LABEL &&
+            opcode != MIR_STRING_ADDRESS &&
+            opcode != MIR_ARG &&
+            opcode != MIR_NOP &&
+            opcode != MIR_CONST &&
+            opcode != MIR_CALL &&
+            opcode != MIR_BINARY)
+            return mir_machine_reject(
+                "final-call-check-schedule", "prefix-opcode");
+    }
+    if (call_count != 77 ||
+        opcode_counts[MIR_ARG] != 183 ||
+        opcode_counts[MIR_CONST] != 85 ||
+        opcode_counts[MIR_STRING_ADDRESS] != 69 ||
+        opcode_counts[MIR_NOP] != 26 ||
+        opcode_counts[MIR_LABEL] != 2 ||
+        opcode_counts[MIR_BINARY] != 2 ||
+        opcode_counts[MIR_LOAD] != 1 ||
+        opcode_counts[MIR_BRANCH_FALSE] != 1 ||
+        opcode_counts[MIR_RETURN] != 2)
+        return mir_machine_reject(
+            "final-call-check-schedule", "opcode-counts");
+
+    for (group = 0; group < 6; ++group) {
+        int item;
+        int check_slot =
+            (group_kinds[group] == MIR_FINAL_CALL_DIRECT ? 2 : 0) +
+            (group_widths[group] == 4);
+        int value_slot = group < 2 ? group : group - 2;
+
+        for (item = 0; item < group_counts[group]; ++item) {
+            if (group_kinds[group] == MIR_FINAL_CALL_DIRECT) {
+                if (!mir_match_final_direct_call(
+                        &plan->checks[check],
+                        &mir.insns[call_indices[call_position]],
+                        group_widths[group],
+                        &check_functions[check_slot]))
+                    return mir_machine_reject(
+                        "final-call-check-schedule", "direct-call");
+                ++call_position;
+            } else {
+                if (!mir_match_final_nested_call(
+                        &plan->checks[check],
+                        &mir.insns[call_indices[call_position]],
+                        &mir.insns[call_indices[call_position + 1]],
+                        group_kinds[group], group_widths[group],
+                        &value_functions[value_slot],
+                        &check_functions[check_slot]))
+                    return mir_machine_reject(
+                        "final-call-check-schedule", "nested-call");
+                call_position += 2;
+            }
+            ++check;
+        }
+    }
+    if (check != MIR_FINAL_CALL_CHECK_COUNT ||
+        call_position != 76 ||
+        check_functions[0] == NULL ||
+        check_functions[1] == NULL ||
+        check_functions[2] == NULL ||
+        check_functions[3] == NULL ||
+        value_functions[0] == NULL ||
+        value_functions[1] == NULL)
+        return mir_machine_reject(
+            "final-call-check-schedule", "group-counts");
+
+    final_load = &mir.insns[436];
+    final_call = &mir.insns[445];
+    if (mir.insns[0].opcode != MIR_LABEL ||
+        final_load->opcode != MIR_LOAD ||
+        !mir_machine_named_nonvolatile(final_load) ||
+        !mir_scalar_memory_location(
+            final_load, &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        type_ptr_depth(final_load->type) != 0 ||
+        type_size(final_load->type) != 2 ||
+        (plan->failure_root =
+             find_global(final_load->name)) == NULL ||
+        mir.insns[437].opcode != MIR_CONST ||
+        !mir_machine_constant_equals(mir.insns[437].dst, 0) ||
+        mir.insns[438].opcode != MIR_BINARY ||
+        mir.insns[438].immediate != TOK_NE ||
+        mir.insns[438].src1 != final_load->dst ||
+        mir.insns[438].src2 != mir.insns[437].dst ||
+        mir.insns[439].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[439].src1 != mir.insns[438].dst ||
+        mir.insns[439].label != mir.insns[442].label ||
+        mir.insns[440].opcode != MIR_CONST ||
+        !mir_machine_constant_equals(mir.insns[440].dst, 1) ||
+        mir.insns[441].opcode != MIR_RETURN ||
+        mir.insns[441].src1 != mir.insns[440].dst ||
+        mir.insns[442].opcode != MIR_LABEL ||
+        mir.insns[443].opcode != MIR_STRING_ADDRESS ||
+        !mir_match_final_string_value(
+            mir.insns[443].dst, &plan->success_string_id) ||
+        mir.insns[444].opcode != MIR_ARG ||
+        mir.insns[444].src1 != mir.insns[443].dst ||
+        final_call->opcode != MIR_CALL ||
+        call_indices[76] != 445 ||
+        !mir_machine_single_call_argument(
+            final_call, &print_argument) ||
+        print_argument != mir.insns[443].dst ||
+        (plan->print_function =
+             find_global(final_call->name)) == NULL ||
+        plan->print_function->is_funcptr ||
+        plan->print_function->is_noreturn ||
+        !plan->print_function->has_proto ||
+        plan->print_function->proto_nargs != 1 ||
+        !plan->print_function->proto_variadic ||
+        (final_call->type & 15) != TYPE_INT ||
+        mir.insns[446].opcode != MIR_CONST ||
+        !mir_machine_constant_equals(mir.insns[446].dst, 0) ||
+        mir.insns[447].opcode != MIR_RETURN ||
+        mir.insns[447].src1 != mir.insns[446].dst)
+        return mir_machine_reject(
+            "final-call-check-schedule", "final");
+    plan->failure_offset = memory_offset;
+    return 1;
+}
+
 static int mir_match_local_identity_array_result(
     struct MirLocalIdentityArrayResult *plan)
 {
@@ -39595,6 +39942,86 @@ static void mir_emit_wide_div_result_check(
             identity_ok);
 }
 
+static void mir_emit_final_call_constant(
+    FILE *out, unsigned long value, int width)
+{
+    if (width == 4)
+        mir_emit_fixed_point_constant(out, value);
+    else
+        fprintf(out, "\tld hl,%lu\n\tpush hl\n",
+                value & 0xffffUL);
+}
+
+static void mir_emit_final_call_cleanup(
+    FILE *out, int words)
+{
+    while (words-- > 0)
+        fputs("\tpop bc\n", out);
+}
+
+static void mir_emit_final_call_check(
+    FILE *out, const struct MirFinalCallCheck *check)
+{
+    int argument;
+    int words = check->width / 2;
+
+    if (check->kind == MIR_FINAL_CALL_DIRECT) {
+        for (argument = 3; argument >= 0; --argument)
+            mir_emit_final_call_constant(
+                out, check->direct_values[argument],
+                check->width);
+    } else {
+        mir_emit_final_call_constant(
+            out, check->expected, check->width);
+        if (check->kind == MIR_FINAL_CALL_NESTED_STRING)
+            fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+                    check->value_string_id);
+        else
+            mir_emit_final_call_constant(
+                out, check->value, check->width);
+        mir_machine_emit_symbol_call(
+            out, check->value_function);
+        mir_emit_final_call_cleanup(
+            out,
+            check->kind == MIR_FINAL_CALL_NESTED_STRING ?
+                1 : words);
+        if (check->width == 4)
+            fputs("\tpush de\n\tpush hl\n", out);
+        else
+            fputs("\tpush hl\n", out);
+    }
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            check->name_string_id);
+    mir_machine_emit_symbol_call(
+        out, check->check_function);
+    mir_emit_final_call_cleanup(
+        out,
+        check->kind == MIR_FINAL_CALL_DIRECT ?
+            1 + 4 * words : 1 + 2 * words);
+}
+
+static void mir_emit_final_call_check_schedule(
+    FILE *out, const struct MirFinalCallCheckSchedule *plan)
+{
+    int check;
+    int success = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (check = 0;
+         check < MIR_FINAL_CALL_CHECK_COUNT; ++check)
+        mir_emit_final_call_check(out, &plan->checks[check]);
+    mir_machine_emit_global_word(
+        out, plan->failure_root, plan->failure_offset);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out,
+            "\tjp z,L%d\n\tld hl,1\n\tret\n"
+            "L%d:\n\tld hl,S%d\n\tpush hl\n",
+            success, success, plan->success_string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    fputs("\tpop bc\n\tld hl,0\n\tret\n", out);
+}
+
 static void mir_emit_local_identity_array_result(
     FILE *out, const struct MirLocalIdentityArrayResult *plan)
 {
@@ -41070,6 +41497,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirVolatileFillWideConstant volatile_fill_wide_constant;
     struct MirSingleSignedDivCheck single_signed_div_check;
     struct MirWideDivResultCheck wide_div_result_check;
+    struct MirFinalCallCheckSchedule final_call_check_schedule;
     struct MirLocalIdentityArrayResult local_identity_array_result;
     struct MirConstantResultSwitch constant_result_switch;
     struct MirStringResultSwitch string_result_switch;
@@ -41205,6 +41633,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &wide_div_result_check)) {
         mir_emit_wide_div_result_check(
             out, &wide_div_result_check);
+        return 1;
+    }
+    if (mir_match_final_call_check_schedule(
+            &final_call_check_schedule)) {
+        mir_emit_final_call_check_schedule(
+            out, &final_call_check_schedule);
         return 1;
     }
     if (mir_match_affine_pointer_constant_return(&constant)) {
