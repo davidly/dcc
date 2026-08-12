@@ -882,6 +882,16 @@ struct MirVolatileMemberSum {
     int count;
 };
 
+struct MirMixedScalarCallReport {
+    struct Sym *setup_function;
+    struct Sym *functions[11];
+    struct Sym *callback;
+    struct Sym *print_function;
+    int has_argument[11];
+    int arguments[11];
+    int string_id;
+};
+
 struct MirAsciiUpper {
     int parameter_stack_offset;
     int width;
@@ -11968,6 +11978,131 @@ static int mir_match_conditional_string_report(
     plan->format_string_id = (int)mir.insns[3].immediate;
     plan->true_string_id = (int)mir.insns[9].immediate;
     plan->false_string_id = (int)mir.insns[13].immediate;
+    return 1;
+}
+
+static int mir_match_mixed_scalar_call_report(
+    struct MirMixedScalarCallReport *plan)
+{
+    static const int call_indices[11] = {
+        7, 12, 16, 18, 20, 22, 24, 26, 28, 31, 35
+    };
+    static const int result_arg_indices[11] = {
+        8, 13, 17, 19, 21, 23, 25, 27, 29, 32, 36
+    };
+    static const int value_indices[11] = {
+        5, 10, 14, -1, -1, -1, -1, -1, -1, -1, 33
+    };
+    const struct MirInsn *print_call = &mir.insns[37];
+    int print_arguments[12] = { 0 };
+    int print_count = 0;
+    int call_number;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 40 || mir_cfg_block_count() != 1 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        mir.insns[0].opcode != MIR_LABEL ||
+        mir.insns[1].opcode != MIR_CALL ||
+        !mir_machine_call_has_no_arguments(&mir.insns[1]) ||
+        mir.insns[2].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[3].opcode != MIR_ARG ||
+        mir.insns[3].src1 != mir.insns[2].dst)
+        return mir_machine_reject("mixed-scalar-call-report", "shape");
+    plan->setup_function = find_global(mir.insns[1].name);
+    if (plan->setup_function == NULL ||
+        !plan->setup_function->is_defined ||
+        plan->setup_function->is_funcptr)
+        return mir_machine_reject("mixed-scalar-call-report", "setup");
+    for (call_number = 0; call_number < 11; ++call_number) {
+        int call_index = call_indices[call_number];
+        int result_index = result_arg_indices[call_number];
+        const struct MirInsn *call = &mir.insns[call_index];
+        long value;
+
+        if (call->opcode != MIR_CALL ||
+            mir.insns[result_index].opcode != MIR_ARG ||
+            mir.insns[result_index].src1 != call->dst ||
+            type_size(call->type) != 2 ||
+            (call->memory_flags &
+             (MIR_CALL_FLAG_VARIADIC |
+              MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0)
+            return mir_machine_reject("mixed-scalar-call-report", "calls");
+        if (call_number == 9) {
+            if (mir.insns[30].opcode != MIR_LOAD ||
+                call->src1 != mir.insns[30].dst ||
+                !mir_machine_call_has_no_arguments(call))
+                return mir_machine_reject(
+                    "mixed-scalar-call-report", "callback");
+            plan->callback = find_global(mir.insns[30].name);
+            if (plan->callback == NULL)
+                return mir_machine_reject(
+                    "mixed-scalar-call-report", "callback-missing");
+            if ((mir.insns[30].memory_flags & (1 | 8)) != 0)
+                return mir_machine_reject(
+                    "mixed-scalar-call-report", "callback-symbol");
+            continue;
+        }
+        plan->functions[call_number] = find_global(call->name);
+        if (plan->functions[call_number] == NULL ||
+            !plan->functions[call_number]->is_defined ||
+            plan->functions[call_number]->is_funcptr)
+            return mir_machine_reject(
+                "mixed-scalar-call-report", "function");
+        if (value_indices[call_number] >= 0) {
+            int call_argument;
+            int value_index = value_indices[call_number];
+
+            if (!mir_machine_constant_value(
+                    mir.insns[value_index].dst, &value, 0) ||
+                value < -32768 || value > 65535 ||
+                !mir_machine_single_call_argument(call, &call_argument) ||
+                call_argument != mir.insns[value_index].dst)
+                return mir_machine_reject(
+                    "mixed-scalar-call-report", "call-argument");
+            plan->has_argument[call_number] = 1;
+            plan->arguments[call_number] = (int)value & 0xffff;
+        } else if (!mir_machine_call_has_no_arguments(call)) {
+            return mir_machine_reject(
+                "mixed-scalar-call-report", "noarg-call");
+        }
+    }
+    if (print_call->opcode != MIR_CALL ||
+        strcmp(print_call->name, "printf") ||
+        (print_call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != MIR_CALL_FLAG_VARIADIC)
+        return mir_machine_reject("mixed-scalar-call-report", "print");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *arg = &mir.insns[instruction];
+        int index;
+
+        if (arg->opcode != MIR_ARG ||
+            arg->secondary_offset != print_call->secondary_offset)
+            continue;
+        index = (int)arg->immediate;
+        if (index < 0 || index >= 12 || print_arguments[index] != 0)
+            return mir_machine_reject(
+                "mixed-scalar-call-report", "print-arguments");
+        print_arguments[index] = arg->src1 + 1;
+        ++print_count;
+    }
+    if (print_count != 12 ||
+        print_arguments[0] != mir.insns[2].dst + 1)
+        return mir_machine_reject("mixed-scalar-call-report", "print-prefix");
+    for (call_number = 0; call_number < 11; ++call_number)
+        if (print_arguments[call_number + 1] !=
+            mir.insns[call_indices[call_number]].dst + 1)
+            return mir_machine_reject(
+                "mixed-scalar-call-report", "print-order");
+    plan->print_function = find_global(print_call->name);
+    plan->string_id = (int)mir.insns[2].immediate;
+    if (plan->print_function == NULL ||
+        plan->print_function->is_defined ||
+        !mir_machine_constant_equals(mir.insns[38].dst, 0) ||
+        mir.insns[39].opcode != MIR_RETURN ||
+        mir.insns[39].src1 != mir.insns[38].dst)
+        return mir_machine_reject("mixed-scalar-call-report", "return");
     return 1;
 }
 
@@ -23729,6 +23864,37 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_mixed_scalar_call_report(
+    FILE *out, const struct MirMixedScalarCallReport *plan)
+{
+    int call_number;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_symbol_call(out, plan->setup_function);
+    for (call_number = 10; call_number >= 0; --call_number) {
+        if (call_number == 9) {
+            mir_machine_emit_global_word(out, plan->callback, 0);
+            mir_emit_runtime_call(out, "__call_hl");
+        } else {
+            if (plan->has_argument[call_number]) {
+                fprintf(out, "\tld hl,%d\n\tpush hl\n",
+                        plan->arguments[call_number]);
+            }
+            mir_machine_emit_symbol_call(
+                out, plan->functions[call_number]);
+            if (plan->has_argument[call_number])
+                fputs("\tpop bc\n", out);
+        }
+        fputs("\tpush hl\n", out);
+    }
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    for (call_number = 0; call_number < 12; ++call_number)
+        fputs("\tpop bc\n", out);
+    fputs("\tld hl,0\n\tret\n", out);
+}
+
 static void mir_emit_volatile_member_sum(
     FILE *out, const struct MirVolatileMemberSum *plan)
 {
@@ -25135,6 +25301,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirMixedScalarCallReport mixed_scalar_call_report;
     struct MirVolatileMemberSum volatile_member_sum;
     struct MirFixedMemberInitCalls fixed_member_init_calls;
     struct MirLocalByteFillCall local_byte_fill_call;
@@ -25779,6 +25946,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_mixed_scalar_call_report(
+            &mixed_scalar_call_report)) {
+        mir_emit_mixed_scalar_call_report(
+            out, &mixed_scalar_call_report);
         return 1;
     }
     if (mir_match_volatile_member_sum(&volatile_member_sum)) {
