@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `fdd806c`
-  (`schedule compact leaf construction`).
-- Current candidate coverage: **2059/2185 (94.23%)**.
-- Remaining fallback population: **126 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `949c838`
+  (`schedule flattened affine fills`).
+- Current candidate coverage: **2060/2185 (94.28%)**.
+- Remaining fallback population: **125 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -611,6 +611,11 @@ current execution plan and handoff.
   preserving every scalar helper call and its argument order. This admits
   `tarray6.fill_c/fill_i/fill_l`, improving the app 56.95% peep / 57.05%
   nopeep and shrinking both images by more than 21%.
+- Fixed embedding builders now flatten the proven 8x16 traversal, derive
+  destination and position addresses from one byte counter, and retain only
+  the advancing token-weight cursor while preserving every clamp call. This
+  admits `attnc11.build_embeddings`, saving 129,500 peep / 171,402 nopeep
+  cycles and shrinking both images.
 - A direct `too.expected_area` dispatcher was rejected after repeated-call
   tests exposed incorrect signed divmod cache/register handling; it is absent.
 - A binary-search replacement for `too.isqrt_l` was rejected after focused
@@ -625,7 +630,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 126 final-cost fallbacks,
+- Current next priority: repeated causes in the 125 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
