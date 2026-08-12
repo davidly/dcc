@@ -808,6 +808,12 @@ struct MirNoArgTestRunner {
     int fail_string_id;
 };
 
+struct MirFloatModuloNormalize {
+    struct Sym *function;
+    int parameter_stack_offset;
+    unsigned long one_bits;
+};
+
 struct MirAsciiUpper {
     int parameter_stack_offset;
     int width;
@@ -11897,6 +11903,72 @@ static int mir_match_conditional_string_report(
     return 1;
 }
 
+static int mir_match_float_modulo_normalize(
+    struct MirFloatModuloNormalize *plan)
+{
+    static const int expected_opcodes[20] = {
+        MIR_LABEL, MIR_PARAM, MIR_NOP, MIR_ARG, MIR_FLOAT_CONST, MIR_ARG,
+        MIR_CALL, MIR_STORE, MIR_NOP, MIR_FLOAT_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_FLOAT_CONST, MIR_BINARY, MIR_NOP,
+        MIR_STORE, MIR_LABEL, MIR_LOAD, MIR_RETURN
+    };
+    const struct MirInsn *parameter = &mir.insns[1];
+    const struct MirInsn *call = &mir.insns[6];
+    int arguments[2];
+    int memory_type, memory_storage, memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 20 || mir_cfg_block_count() != 2 ||
+        mir.has_vla || !type_is_float(mir.return_type) ||
+        type_size(mir.return_type) != 4 ||
+        !type_is_float(parameter->type) ||
+        type_size(parameter->type) != 4)
+        return mir_machine_reject("float-modulo-normalize", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "float-modulo-normalize", "opcode");
+    if (!mir_machine_two_call_arguments(call, arguments) ||
+        arguments[0] != parameter->dst ||
+        arguments[1] != mir.insns[4].dst ||
+        !type_is_float(call->type) || type_size(call->type) != 4 ||
+        !mir_machine_unobservable_local_store(&mir.insns[7]) ||
+        mir.insns[7].src1 != call->dst ||
+        (mir.insns[7].memory_flags & (1 | 8)) != 0)
+        return mir_machine_reject("float-modulo-normalize", "call");
+    plan->one_bits =
+        (unsigned long)mir.insns[4].immediate & 0xffffffffUL;
+    if (plan->one_bits !=
+            ((unsigned long)mir.insns[13].immediate & 0xffffffffUL) ||
+        ((unsigned long)mir.insns[9].immediate & 0xffffffffUL) != 0 ||
+        mir.insns[10].immediate != '<' ||
+        mir.insns[10].src1 != call->dst ||
+        mir.insns[10].src2 != mir.insns[9].dst ||
+        mir.insns[11].src1 != mir.insns[10].dst ||
+        mir.insns[11].label != mir.insns[17].label ||
+        mir.insns[14].immediate != '+' ||
+        mir.insns[14].src1 != call->dst ||
+        mir.insns[14].src2 != mir.insns[13].dst ||
+        !mir_machine_same_location(&mir.insns[7], &mir.insns[16]) ||
+        mir.insns[16].src1 != mir.insns[14].dst ||
+        !mir_machine_same_location(&mir.insns[7], &mir.insns[18]) ||
+        mir.insns[19].src1 != mir.insns[18].dst)
+        return mir_machine_reject("float-modulo-normalize", "flow");
+    plan->function = find_global(call->name);
+    if (plan->function == NULL || plan->function->storage != SC_FUNC ||
+        plan->function->is_funcptr || plan->function->is_noreturn ||
+        (call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+        !mir_scalar_memory_location(
+            parameter, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2)
+        return mir_machine_reject("float-modulo-normalize", "function");
+    plan->parameter_stack_offset = memory_offset - 2;
+    return 1;
+}
+
 static int mir_match_noarg_test_runner(struct MirNoArgTestRunner *plan)
 {
     const struct MirInsn *counts_call;
@@ -22830,6 +22902,26 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_float_modulo_normalize(
+    FILE *out, const struct MirFloatModuloNormalize *plan)
+{
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_float_bits(out, plan->one_bits);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_wide_parameter(out, plan->parameter_stack_offset + 4);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tpush de\n\tpush hl\n\tld hl,0\n\tld de,0\n", out);
+    mir_emit_runtime_call(out, "__fgtf");
+    fputs("\tld a,h\n\tor l\n\tpop hl\n\tpop de\n\tret z\n"
+          "\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, plan->one_bits);
+    mir_emit_runtime_call(out, "__faf");
+    fputs("\tpop bc\n\tpop bc\n\tret\n", out);
+}
+
 static void mir_emit_noarg_test_runner(
     FILE *out, const struct MirNoArgTestRunner *plan)
 {
@@ -23969,6 +24061,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirFloatModuloNormalize float_modulo_normalize;
     struct MirNoArgTestRunner noarg_test_runner;
     struct MirStringCheckReport string_check_report;
     struct MirSequentialScalarCallReport sequential_scalar_call_report;
@@ -24604,6 +24697,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_float_modulo_normalize(
+            &float_modulo_normalize)) {
+        mir_emit_float_modulo_normalize(
+            out, &float_modulo_normalize);
         return 1;
     }
     if (mir_match_noarg_test_runner(&noarg_test_runner)) {
