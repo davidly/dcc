@@ -6,11 +6,30 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Base HEAD for this batch: `0401e79`
-  (`dcc MIR: schedule bounded whitespace scans`).
-- Current candidate coverage: **2108/2185 (96.48%)**.
-- Remaining fallback population: **77 `final-cost-policy`**, all selected by
+- Base HEAD for this batch: `d3f9119`
+  (`dcc MIR: schedule interpreter action decoding`).
+- Current candidate coverage: **2109/2185 (96.52%)**.
+- Remaining fallback population: **76 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The strict name-free buffered-declaration scheduler admits
+  `forint.parse_decls`. It validates the complete 72-instruction, 11-block
+  graph: the signed `i < g_ns` bound, per-iteration `g_stmts` reload and
+  66-byte record stride, text-field load, `strcpy` then `trim`, all three
+  ordered prefix tests, their `parse_decl` calls and type arguments, every
+  false edge, and the cursor PHI/increment/backedge. The emitter keeps the
+  cursor in BC, saves it across the complete call sequence, retains the
+  original 162-byte IX frame, and caches the stable buffer address in the
+  promoted cursor's otherwise dead frame slot. It reloads both globals at
+  their source evaluation points and uses no IY. Non-stack selected output is
+  1,290 text bytes / 124 instructions versus 1,452 / 138 captured;
+  stack-check output is 1,319 / 125 versus 1,481 / 139. Against forced
+  fallback, `forint` improves from 658,293,675 to 658,293,229 peep cycles
+  (-446) and from 698,119,833 to 698,118,064 nopeep cycles (-1,769), with
+  linked sizes unchanged at 33,152 / 36,608 bytes. A separately renamed
+  `scan_declaration_buffer` clone selects with identical stack-check metrics.
+  No app/function name, hash, performance-baseline change, or IY allocation
+  participates in selection. The regression-gated stack-check census is
+  2109/2185 with exactly this one new function and no removal.
 - The strict name-free action-dispatch scheduler admits
   `forint.decode_action`. The two requested 11-block graphs do not support one
   safe shared emitter family: `decode_action` is a local-free two-parameter
