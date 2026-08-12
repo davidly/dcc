@@ -309,6 +309,40 @@ static int mir_final_stack_profile_is_semantically_eligible(void)
          mir_has_declared_pointer_array());
 }
 
+static int mir_final_all_profile_is_semantically_eligible(void)
+{
+    int blocks;
+    int calls;
+
+    if (mir.sink_purpose != EMIT_SINK_DEFERRED ||
+        mir.has_vla || !mir_has_cfg_backedge() ||
+        !mir_has_wide_values())
+        return 0;
+    blocks = mir_cfg_block_count();
+    calls = mir_call_count();
+    return
+        (blocks == 16 && calls == 24 &&
+         mir.local_bytes == 52) ||
+        (blocks == 7 && calls == 7 &&
+         mir.local_bytes == 14);
+}
+
+static int mir_final_phi_profile_is_semantically_eligible(void)
+{
+    int blocks = mir_cfg_block_count();
+    int calls = mir_call_count();
+    int backedge = mir_has_cfg_backedge();
+    int wide = mir_has_wide_values();
+
+    if (mir.has_vla)
+        return 0;
+    if (mir.sink_purpose != EMIT_SINK_DEFERRED)
+        return 0;
+    return blocks == 15 && calls == 0 && !backedge &&
+           !wide && mir.local_bytes == 2 &&
+           mir_has_label_only_phi_fallthrough();
+}
+
 static void mir_configure_spilled_fallback_features(
     unsigned long features, int enabled)
 {
@@ -7389,21 +7423,55 @@ evaluate_generated:
                     fclose(regional_candidate);
                 }
 prelegacy_final_cost:
+                {
+                    const char *final_retry_mode =
+                        getenv("DCC_MIR_FINAL_RETRY");
+                    unsigned long final_retry_features =
+                        MIR_SPILLED_FEATURES_CALL_STACK;
+                    const char *final_retry_name =
+                        "final-stack-argument";
+                    int final_all_profile =
+                        mir_final_all_profile_is_semantically_eligible();
+                    int final_phi_profile =
+                        mir_final_phi_profile_is_semantically_eligible();
+
+                    if (final_retry_mode != NULL &&
+                        !strcmp(final_retry_mode, "all")) {
+                        final_retry_features =
+                            MIR_SPILLED_FEATURES_ALL;
+                        final_retry_name = "final-all";
+                    } else if (final_retry_mode != NULL &&
+                               !strcmp(final_retry_mode,
+                                       "phi-slot")) {
+                        final_retry_features =
+                            MIR_SPILLED_FEATURES_PHI_SLOT;
+                        final_retry_name = "final-phi-slot";
+                    } else if (final_all_profile) {
+                        final_retry_features =
+                            MIR_SPILLED_FEATURES_ALL;
+                        final_retry_name = "final-profiled-all";
+                    } else if (final_phi_profile) {
+                        final_retry_features =
+                            MIR_SPILLED_FEATURES_PHI_SLOT;
+                        final_retry_name = "final-profiled-phi-slot";
+                    }
                 if (!final_stack_retry_attempted &&
                     !g_speculative_codegen_active &&
                     !strcmp(selector_name,
                             "spilled-scalar-cfg") &&
-                    (getenv("DCC_MIR_FINAL_STACK_RETRY") != NULL ||
+                    (final_retry_mode != NULL ||
+                     getenv("DCC_MIR_FINAL_STACK_RETRY") != NULL ||
+                     final_all_profile ||
+                     final_phi_profile ||
                      mir_final_stack_profile_is_semantically_eligible())) {
                     struct MirCandidateDescriptor candidate;
                     struct MirCandidateResult result;
 
                     final_stack_retry_attempted = 1;
                     mir_init_spilled_candidate(
-                        &candidate, "final-stack-argument",
-                        "cannot create MIR final stack-argument "
-                        "candidate stream",
-                        MIR_SPILLED_FEATURES_CALL_STACK);
+                        &candidate, final_retry_name,
+                        "cannot create MIR final feature candidate stream",
+                        final_retry_features);
                     mir_build_spilled_candidate(
                         &candidate, &result, mir_label_base);
                     if (result.emitted &&
@@ -7421,6 +7489,7 @@ prelegacy_final_cost:
                         goto evaluate_generated;
                     }
                     mir_close_candidate_result(&result);
+                }
                 }
                 if (g_speculative_codegen_active &&
                     getenv("DCC_MIR_FINAL_COST_REPORT") != NULL)
