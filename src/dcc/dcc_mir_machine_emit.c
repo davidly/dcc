@@ -4992,8 +4992,6 @@ static int mir_match_byte_arithmetic_reports(
         return 0;
     plan->is_unsigned =
         (left->type & TYPE_UNSIGNED) != 0;
-    if (plan->is_unsigned)
-        return 0;
     first_store = &mir.insns[store_index[0]];
     for (report = 0; report < 3; ++report) {
         const struct MirInsn *left_conversion =

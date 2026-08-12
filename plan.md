@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `30e6378`
-  (`schedule compact record appends`).
-- Current candidate coverage: **2000/2185 (91.53%)**.
-- Remaining fallback population: **185 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `89e8229`
+  (`schedule corrected CPI reporters`).
+- Current candidate coverage: **2001/2185 (91.58%)**.
+- Remaining fallback population: **184 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -393,6 +393,10 @@ current execution plan and handoff.
   immediately on mismatch, PE alone controls continuation, and HL is backed
   up before the cold offset/byte report. This admits `tcpirlp.chk`, completes
   that app's MIR coverage, and improves 2.24% peep / 13.56% nopeep.
+- The existing byte arithmetic report scheduler now admits its already-coded
+  unsigned path, selecting `__mulu/__modu/__divu` and zero-extending each
+  byte result/argument. This admits `tmuldiv.ui8_test`, completes that app's
+  MIR coverage, and improves both modes.
 - Do not force statically small fallbacks. `tcrcfix.non_ix_shift_store_probe`
   is 393 text bytes and 97 instructions smaller than captured output but
   regresses 11.49% peep and 5.48% nopeep dynamically.
@@ -400,7 +404,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 185 final-cost fallbacks,
+- Current next priority: repeated causes in the 184 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
