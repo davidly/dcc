@@ -318,6 +318,13 @@ struct MirConditionalWideAdd {
     int false_wide_stack_offset;
 };
 
+struct MirWideResultSwitch {
+    int word_stack_offset;
+    int wide_stack_offset;
+    unsigned long cases[2];
+    unsigned long results[3];
+};
+
 struct MirByteMismatchReport {
     struct Sym *counter;
     int counter_offset;
@@ -4224,6 +4231,81 @@ static int mir_match_conditional_wide_add(
         mir.insns[20].phi_pred2 != mir.insns[18].label ||
         mir.insns[21].src1 != mir.insns[20].dst)
         return mir_machine_reject("conditional-wide-add", "flow");
+    return 1;
+}
+
+static int mir_match_wide_result_switch(
+    struct MirWideResultSwitch *plan)
+{
+    static const int expected_opcodes[32] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_NOP, MIR_NOP, MIR_UNARY,
+        MIR_BINARY, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_JUMP,
+        MIR_LABEL, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_JUMP,
+        MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_RETURN,
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_RETURN, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_RETURN, MIR_NOP, MIR_LABEL
+    };
+    const struct MirInsn *word = &mir.insns[1];
+    const struct MirInsn *wide = &mir.insns[2];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 32 || mir_cfg_block_count() != 7 ||
+        mir.has_vla || type_size(mir.return_type) != 4 ||
+        type_is_float(mir.return_type))
+        return mir_machine_reject("wide-result-switch", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject("wide-result-switch", "opcode");
+    if (type_size(word->type) != 2 ||
+        (word->type & TYPE_UNSIGNED) != 0 ||
+        !mir_scalar_memory_location(
+            word, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2)
+        return mir_machine_reject("wide-result-switch", "word");
+    plan->word_stack_offset = memory_offset - 2;
+    if (type_size(wide->type) != 4 ||
+        type_is_float(wide->type) ||
+        !mir_scalar_memory_location(
+            wide, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM || memory_offset < 2)
+        return mir_machine_reject("wide-result-switch", "wide");
+    plan->wide_stack_offset = memory_offset - 2;
+    if (mir.insns[5].immediate != 0 ||
+        mir.insns[5].src1 != word->dst ||
+        mir.insns[6].immediate != '+' ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        mir.insns[6].src2 != wide->dst ||
+        mir.insns[8].immediate != TOK_EQ ||
+        mir.insns[8].src1 != mir.insns[6].dst ||
+        mir.insns[8].src2 != mir.insns[7].dst ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[9].label != mir.insns[11].label ||
+        mir.insns[10].label != mir.insns[18].label ||
+        mir.insns[13].immediate != TOK_EQ ||
+        mir.insns[13].src1 != mir.insns[6].dst ||
+        mir.insns[13].src2 != mir.insns[12].dst ||
+        mir.insns[14].src1 != mir.insns[13].dst ||
+        mir.insns[14].label != mir.insns[26].label ||
+        mir.insns[15].label != mir.insns[22].label ||
+        mir.insns[17].label != mir.insns[26].label ||
+        mir.insns[21].src1 != mir.insns[20].dst ||
+        mir.insns[25].src1 != mir.insns[24].dst ||
+        mir.insns[29].src1 != mir.insns[28].dst)
+        return mir_machine_reject("wide-result-switch", "flow");
+    plan->cases[0] =
+        (unsigned long)mir.insns[7].immediate & 0xffffffffUL;
+    plan->cases[1] =
+        (unsigned long)mir.insns[12].immediate & 0xffffffffUL;
+    plan->results[0] =
+        (unsigned long)mir.insns[20].immediate & 0xffffffffUL;
+    plan->results[1] =
+        (unsigned long)mir.insns[24].immediate & 0xffffffffUL;
+    plan->results[2] =
+        (unsigned long)mir.insns[28].immediate & 0xffffffffUL;
     return 1;
 }
 
@@ -18434,6 +18516,59 @@ static void mir_emit_conditional_wide_add(
         out, plan, plan->false_wide_stack_offset);
 }
 
+static void mir_emit_word_plus_wide(
+    FILE *out, int word_stack_offset, int wide_stack_offset)
+{
+    mir_emit_wide_parameter(out, wide_stack_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tld h,b\n\tld l,c\n"
+            "\tld a,b\n\trlca\n\tsbc a,a\n\tld d,a\n\tld e,a\n"
+            "\tpop bc\n\tadd hl,bc\n\tex de,hl\n"
+            "\tpop bc\n\tadc hl,bc\n\tex de,hl\n",
+            word_stack_offset + 4);
+}
+
+static void mir_emit_wide_result_switch(
+    FILE *out, const struct MirWideResultSwitch *plan)
+{
+    int next_case = new_label();
+    int second_case = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_emit_word_plus_wide(
+        out, plan->word_stack_offset, plan->wide_stack_offset);
+    fprintf(out,
+            "\tld a,l\n\tcp %lu\n\tjp nz,L%d\n"
+            "\tld a,h\n\tcp %lu\n\tjp nz,L%d\n"
+            "\tld a,e\n\tcp %lu\n\tjp nz,L%d\n"
+            "\tld a,d\n\tcp %lu\n\tjp nz,L%d\n",
+            plan->cases[0] & 0xffUL, next_case,
+            (plan->cases[0] >> 8) & 0xffUL, next_case,
+            (plan->cases[0] >> 16) & 0xffUL, next_case,
+            (plan->cases[0] >> 24) & 0xffUL, next_case);
+    mir_machine_emit_float_bits(out, plan->results[0]);
+    fputs("\tret\n", out);
+    fprintf(out,
+            "L%d:\n\tld a,l\n\tcp %lu\n\tjp nz,L%d\n"
+            "\tld a,h\n\tcp %lu\n\tjp nz,L%d\n"
+            "\tld a,e\n\tcp %lu\n\tjp nz,L%d\n"
+            "\tld a,d\n\tcp %lu\n\tjp nz,L%d\n",
+            next_case,
+            plan->cases[1] & 0xffUL, second_case,
+            (plan->cases[1] >> 8) & 0xffUL, second_case,
+            (plan->cases[1] >> 16) & 0xffUL, second_case,
+            (plan->cases[1] >> 24) & 0xffUL, second_case);
+    mir_machine_emit_float_bits(out, plan->results[1]);
+    fputs("\tret\n", out);
+    fprintf(out, "L%d:\n", second_case);
+    mir_machine_emit_float_bits(out, plan->results[2]);
+    fputs("\tret\n", out);
+}
+
 static void mir_emit_byte_mismatch_report(
     FILE *out, const struct MirByteMismatchReport *plan)
 {
@@ -20966,6 +21101,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirWideBitcastCall wide_bitcast_call;
     struct MirWideShiftCompare wide_shift_compare;
     struct MirConditionalWideAdd conditional_wide_add;
+    struct MirWideResultSwitch wide_result_switch;
     struct MirByteMismatchReport byte_mismatch_report;
     struct MirByteArithmeticReports byte_arithmetic_reports;
     struct MirByteBitwiseReport byte_bitwise_report;
@@ -21377,6 +21513,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_wide_add)) {
         mir_emit_conditional_wide_add(
             out, &conditional_wide_add);
+        return 1;
+    }
+    if (mir_match_wide_result_switch(&wide_result_switch)) {
+        mir_emit_wide_result_switch(out, &wide_result_switch);
         return 1;
     }
     if (mir_match_byte_mismatch_report(
