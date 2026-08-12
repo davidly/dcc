@@ -668,6 +668,12 @@ struct MirFixedPredictionLoop {
     int returns_bool;
 };
 
+struct MirRandomWideFill {
+    struct Sym *function;
+    int pointer_stack_offset;
+    int count_stack_offset;
+};
+
 struct MirConstantLoopCheck {
     struct Sym *function;
     int string_id;
@@ -10913,6 +10919,82 @@ static int mir_match_fixed_prediction_check(
     return 1;
 }
 
+static int mir_match_random_wide_fill(
+    struct MirRandomWideFill *plan)
+{
+    static const int expected_opcodes[37] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_CONST, MIR_NOP, MIR_STORE,
+        MIR_LABEL, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_CALL, MIR_CONST, MIR_BINARY, MIR_CONST,
+        MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_NOP, MIR_UNARY, MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT,
+        MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_JUMP, MIR_LABEL
+    };
+    const struct MirInsn *pointer = &mir.insns[1];
+    const struct MirInsn *count = &mir.insns[2];
+    const struct MirInsn *index_phi = &mir.insns[9];
+    const struct MirInsn *call = &mir.insns[14];
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 37 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return mir_machine_reject("random-wide-fill", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject("random-wide-fill", "opcode");
+    if (type_ptr_depth(pointer->type) != 1 ||
+        type_size(count->type) != 2 ||
+        (count->type & TYPE_UNSIGNED) != 0 ||
+        !mir_machine_parameter_value_offset(
+            pointer->dst, &plan->pointer_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            count->dst, &plan->count_stack_offset) ||
+        !mir_machine_constant_equals(mir.insns[3].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[5]) ||
+        index_phi->src1 != mir.insns[3].dst ||
+        index_phi->src2 != mir.insns[33].dst ||
+        index_phi->phi_pred1 != mir.insns[0].label ||
+        index_phi->phi_pred2 != mir.insns[30].label ||
+        mir.insns[12].immediate != '<' ||
+        mir.insns[12].src1 != index_phi->dst ||
+        mir.insns[12].src2 != count->dst ||
+        mir.insns[13].label != mir.insns[36].label)
+        return mir_machine_reject("random-wide-fill", "loop");
+    if (!mir_machine_call_has_no_arguments(call) ||
+        mir.insns[15].immediate != 255 ||
+        mir.insns[16].immediate != '&' ||
+        mir.insns[16].src1 != call->dst ||
+        mir.insns[16].src2 != mir.insns[15].dst ||
+        mir.insns[17].immediate != 128 ||
+        mir.insns[18].immediate != '-' ||
+        mir.insns[18].src1 != mir.insns[16].dst ||
+        mir.insns[18].src2 != mir.insns[17].dst ||
+        mir.insns[23].src1 != pointer->dst ||
+        mir.insns[23].src2 != index_phi->dst ||
+        mir.insns[23].immediate != 4 ||
+        mir.insns[25].immediate != 0 ||
+        mir.insns[25].src1 != mir.insns[18].dst ||
+        mir.insns[26].immediate != 256 ||
+        mir.insns[27].immediate != '*' ||
+        mir.insns[27].src1 != mir.insns[25].dst ||
+        mir.insns[27].src2 != mir.insns[26].dst ||
+        mir.insns[28].src1 != mir.insns[23].dst ||
+        mir.insns[28].src2 != mir.insns[27].dst ||
+        mir.insns[28].memory_size != 4)
+        return mir_machine_reject("random-wide-fill", "body");
+    plan->function = find_global(call->name);
+    if (plan->function == NULL || !plan->function->is_defined ||
+        plan->function->is_funcptr ||
+        !mir_machine_constant_equals(mir.insns[32].dst, 1) ||
+        mir.insns[33].immediate != '+' ||
+        mir.insns[33].src1 != index_phi->dst ||
+        mir.insns[35].label != mir.insns[6].label)
+        return mir_machine_reject("random-wide-fill", "result");
+    return 1;
+}
+
 static int mir_match_constant_loop_check(
     struct MirConstantLoopCheck *plan)
 {
@@ -20719,6 +20801,51 @@ static void mir_emit_fixed_prediction_count(
           ";@dcc.reg free=iy\n\tret\n", out);
 }
 
+static void mir_emit_random_wide_fill(
+    FILE *out, const struct MirRandomWideFill *plan)
+{
+    int done = new_label();
+    int loop = new_label();
+
+    fprintf(out,
+            ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n"
+            "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+            "\tdec sp\n\tdec sp\n",
+            mir.name);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld c,(ix%+d)\n\tld b,(ix%+d)\n"
+            "\tbit 7,b\n\tjp nz,L%d\n"
+            "\tld a,b\n\tor c\n\tjp z,L%d\n"
+            "\tpush hl\n\tld h,b\n\tld l,c\n"
+            "\tadd hl,hl\n\tadd hl,hl\n"
+            "\tpop de\n\tadd hl,de\n"
+            "\tld (ix-2),l\n\tld (ix-1),h\n"
+            "\tpush de\n\tpop iy\n"
+            "L%d:\n",
+            plan->pointer_stack_offset + 4,
+            plan->pointer_stack_offset + 5,
+            plan->count_stack_offset + 4,
+            plan->count_stack_offset + 5,
+            done, done, loop);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tld h,0\n\tld a,l\n\tsub 128\n"
+          "\tld l,0\n\tld h,a\n\trlca\n\tsbc a,a\n"
+          "\tld e,a\n\tld d,a\n"
+          "\tld (iy+0),l\n\tld (iy+1),h\n"
+          "\tld (iy+2),e\n\tld (iy+3),d\n"
+          "\tinc iy\n\tinc iy\n\tinc iy\n\tinc iy\n"
+          "\tpush iy\n\tpop hl\n"
+          "\tld c,(ix-2)\n\tld b,(ix-1)\n"
+          "\tor a\n\tsbc hl,bc\n", out);
+    fprintf(out, "\tjp nz,L%d\nL%d:\n"
+                 "\tld sp,ix\n\tpop ix\n\tpop iy\n"
+                 ";@dcc.reg free=iy\n\tret\n",
+            loop, done);
+}
+
 static void mir_emit_constant_loop_check(
     FILE *out, const struct MirConstantLoopCheck *plan)
 {
@@ -21583,6 +21710,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirGlobalByteCopyState global_byte_copy_state;
     struct MirFixedGlobalStrideCall fixed_global_stride_call;
     struct MirFixedPredictionLoop fixed_prediction_loop;
+    struct MirRandomWideFill random_wide_fill;
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
@@ -22179,6 +22307,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &fixed_prediction_loop)) {
         mir_emit_fixed_prediction_count(
             out, &fixed_prediction_loop);
+        return 1;
+    }
+    if (mir_match_random_wide_fill(&random_wide_fill)) {
+        mir_emit_random_wide_fill(out, &random_wide_fill);
         return 1;
     }
     if (mir_match_constant_loop_check(&constant_loop_check)) {
