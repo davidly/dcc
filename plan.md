@@ -6,11 +6,29 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `7f9fb32`
-  (`dcc MIR: schedule context operation checks`).
-- Current candidate coverage: **2105/2185 (96.34%)**.
-- Remaining fallback population: **80 `final-cost-policy`**, all selected by
+- Base HEAD for this batch: `dbdc259`
+  (`dcc MIR: schedule bounded comment scans`).
+- Current candidate coverage: **2106/2185 (96.38%)**.
+- Remaining fallback population: **79 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The strict name-free symbol-table scheduler admits `bint.sym_find`. It
+  matches the complete 87-instruction, seven-block MIR graph, proves the
+  signed `i < nsym` bound and both `nsym`/`mtop` capacity checks, preserves the
+  two-argument string-comparison call, `strncpy`, both error calls, both return
+  cases, and every observable `sym`, `nsym`, and `mtop` access. The frameless
+  emitter keeps the index in BC, record cursor in HL, and loop bound in DE,
+  saving and restoring all three across comparison calls; the input name is
+  retained on the machine stack and neither IX nor IY is used. Non-stack
+  selected output is 1,533 text bytes / 151 instructions versus 2,063 / 196
+  captured; stack-check output is 1,562 / 152 versus 2,092 / 197. Against
+  forced fallback, `bint` improves from 334,564,928 to 334,558,534 peep cycles
+  (-6,394 / -0.0019%) and from 336,986,804 to 336,973,716 nopeep cycles
+  (-13,088 / -0.0039%); peep linked size is unchanged at 22,144 bytes and
+  nopeep falls from 24,448 to 24,320 bytes (-128 / -0.52%). A separately
+  named `lookup_symbol` clone selects with identical stack-check metrics. No
+  app/function name, hash, baseline exception, IX frame, or IY allocation
+  participates in selection. The fresh stack-check census is 2106/2185 with
+  exactly this one new function and no regression.
 - The strict name-free comment-scan scheduler admits `fint.skip_comment`. It
   matches the complete 60-instruction, seven-block MIR graph and validates
   the signed 32-bit cursor bound, old-cursor byte load, full-width cursor
