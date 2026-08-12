@@ -6,10 +6,37 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Base HEAD for this batch: `82d51f0`.
-- Current candidate coverage: **2117/2185 (96.89%)**.
-- Remaining fallback population: **68 `final-cost-policy`**, all selected by
+- Base HEAD for this batch: `eb6fd65`.
+- Current candidate coverage: **2121/2185 (97.07%)**.
+- Remaining fallback population: **64 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- One shared strict name-free float call/report scheduler now admits the
+  nine-block `main` graphs in `tlogfsp`, `tfloorsp`, `tatan2sp`, and
+  `tfpspec`; it also replaces the larger active spilled schedules in
+  `tfdf.main` and `tsqrtsp.main`. The matcher requires at least 14 ordered
+  checks, 38 direct calls, exactly two repeated three-argument checker
+  identities, one captured nonvolatile float snapshot, the canonical two
+  variadic summary/result prints, distinct global check/failure counters,
+  and the exact final failure-to-boolean control flow. It recursively proves
+  every constant, snapshot, local pointer output, unary/binary float
+  operation, direct call prototype/target, argument definition/index, and
+  checker width; every instruction before the final report is accounted for.
+  Emission schedules effectful arguments in MIR order, rematerializes only
+  proven values, retains all float runtime/check/print calls, and uses a
+  four-byte IX snapshot frame except for `tfloorsp`'s compact 12-byte
+  snapshot/`modff` output frame. No IY is used. A final family-local cost gate
+  requires the complete emitted assembly stream to be strictly smaller than
+  the captured stream. This keeps `tasinfsp.main`, `tfmodfsp.main`, and
+  `tfmaf.main` on fallback after forced A/B exposed real cycle/sector losses.
+  The six retained apps pass full peep/nopeep and forced-main-fallback A/B
+  with identical output and no checked regression. A separately named
+  30-check infinity/NaN/signed-zero harness selects at 8,948/9,696 bytes and
+  exercises the failure print/nonzero return; selected and fallback output
+  are identical in both modes, while selected improves 341,694 to 339,981
+  peep cycles and 341,762 to 339,984 nopeep cycles, with linked size
+  8,576 to 8,320 bytes in both modes. The regression-gated stack census
+  advances from 2117/2185 to 2121/2185 with exactly four additions and no
+  removal.
 - A strict name-free conversion-check scheduler now admits the exact
   482-instruction, eight-block `tatof.main` graph. The matcher validates all
   46 checks in source order: 26 float comparisons, three float-to-int
