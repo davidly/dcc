@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `84f7f6a`
-  (`schedule deterministic struct initializer reports`).
-- Current candidate coverage: **2040/2185 (93.36%)**.
-- Remaining fallback population: **145 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `083dd79`
+  (`prove deterministic float struct checks`).
+- Current candidate coverage: **2041/2185 (93.41%)**.
+- Remaining fallback population: **144 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -547,6 +547,9 @@ current execution plan and handoff.
 - Float-struct runners now emit five proven value/tolerance checks directly.
   This admits `tfloat4.test_structs`, improving the app 1.45% peep / 1.46%
   nopeep with about 3.1% smaller images.
+- Type-specifier runners now emit twelve integer and four wide checks directly
+  before the success report. This admits `ttypesr.main`, improving the app
+  9.26% peep / 10.01% nopeep with 5.88% smaller images.
 - A direct `too.expected_area` dispatcher was rejected after repeated-call
   tests exposed incorrect signed divmod cache/register handling; it is absent.
 - A binary-search replacement for `too.isqrt_l` was rejected after focused
@@ -561,7 +564,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 145 final-cost fallbacks,
+- Current next priority: repeated causes in the 144 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
