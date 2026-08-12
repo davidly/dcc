@@ -1878,6 +1878,57 @@ struct MirFinalCallCheckSchedule {
     int success_string_id;
 };
 
+#define MIR_MATH_CALL_CHECK_COUNT 78
+#define MIR_MATH_ORDINARY_CHECK_COUNT 74
+#define MIR_MATH_FREXP_CHECK_COUNT 4
+#define MIR_MATH_MODEXP_CHECK_COUNT 4
+#define MIR_MATH_MODF_CHECK_COUNT 2
+
+enum MirMathConstantKind {
+    MIR_MATH_FLOAT_CONSTANT = 1,
+    MIR_MATH_WORD_CONSTANT
+};
+
+struct MirMathConstant {
+    int kind;
+    unsigned long value;
+};
+
+struct MirMathCallCheck {
+    struct Sym *value_function;
+    struct Sym *check_function;
+    struct MirMathConstant arguments[2];
+    int argument_count;
+    int string_id;
+    unsigned long expected_bits;
+};
+
+struct MirMathPointerCheck {
+    struct Sym *value_function;
+    struct Sym *check_function;
+    unsigned long input_bits;
+    unsigned long result_bits;
+    unsigned long output_bits;
+    int result_string_id;
+    int output_string_id;
+};
+
+struct MirMathVerificationSchedule {
+    struct MirMathCallCheck calls[MIR_MATH_CALL_CHECK_COUNT];
+    struct MirMathPointerCheck frexp[MIR_MATH_FREXP_CHECK_COUNT];
+    struct MirMathPointerCheck modf[MIR_MATH_MODF_CHECK_COUNT];
+    struct Sym *print_function;
+    struct Sym *checks_root;
+    struct Sym *failures_root;
+    int checks_offset;
+    int failures_offset;
+    int intro_string_id;
+    int separator_string_id;
+    int summary_string_id;
+    int success_string_id;
+    int failure_string_id;
+};
+
 struct MirLocalIdentityArrayResult {
     struct Sym *escaped_pointer;
     int escaped_pointer_offset;
@@ -26033,6 +26084,720 @@ static int mir_match_final_call_check_schedule(
     return 1;
 }
 
+static int mir_match_math_symbol_target(
+    const struct MirInsn *call, struct Sym *function)
+{
+    return call->base_name[0] == 0 ||
+        !strcmp(call->base_name,
+                asm_name_for(sym_asm_name(function)));
+}
+
+static int mir_match_math_float_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+        type_is_float(type) && type_size(type) == 4;
+}
+
+static int mir_match_math_float_constant(
+    int value, unsigned long *bits)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    if (definition == NULL ||
+        !mir_match_math_float_type(definition->type))
+        return 0;
+    if (definition->opcode == MIR_FLOAT_CONST) {
+        *bits = (unsigned long)definition->immediate & 0xffffffffUL;
+        return 1;
+    }
+    if (definition->opcode == MIR_UNARY &&
+        definition->immediate == '-') {
+        const struct MirInsn *source =
+            mir_definition(definition->src1);
+
+        if (source == NULL ||
+            source->opcode != MIR_FLOAT_CONST ||
+            !mir_match_math_float_type(source->type))
+            return 0;
+        *bits = ((unsigned long)source->immediate ^
+                 0x80000000UL) & 0xffffffffUL;
+        return 1;
+    }
+    return 0;
+}
+
+static int mir_match_math_word_constant(
+    int value, unsigned long *word)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    long constant;
+
+    if (definition == NULL ||
+        type_ptr_depth(definition->type) != 0 ||
+        type_is_float(definition->type) ||
+        (definition->type & 15) != TYPE_INT ||
+        (definition->type & TYPE_UNSIGNED) != 0 ||
+        type_size(definition->type) != 2 ||
+        !mir_machine_evaluate_constant(value, &constant, 0))
+        return 0;
+    *word = (unsigned long)constant & 0xffffUL;
+    return 1;
+}
+
+static int mir_match_math_check_function(
+    const struct MirInsn *call, struct Sym **expected)
+{
+    struct Sym *function = find_global(call->name);
+
+    if (function == NULL || !function->is_defined ||
+        function->is_funcptr || function->is_noreturn ||
+        !function->has_proto || function->proto_nargs != 3 ||
+        function->proto_variadic ||
+        type_ptr_depth(function->proto_types[0]) != 1 ||
+        type_size(function->proto_types[0]) != 2 ||
+        !mir_match_math_float_type(function->proto_types[1]) ||
+        !mir_match_math_float_type(function->proto_types[2]) ||
+        (call->type & 15) != TYPE_VOID ||
+        call->memory_flags != 0 ||
+        !mir_match_math_symbol_target(call, function) ||
+        (*expected != NULL && *expected != function))
+        return 0;
+    *expected = function;
+    return 1;
+}
+
+static int mir_match_math_value_function(
+    const struct MirInsn *call, struct Sym **function_out,
+    int *argument_count)
+{
+    struct Sym *function = find_global(call->name);
+
+    if (function == NULL || function->is_funcptr ||
+        function->is_noreturn || !function->has_proto ||
+        function->proto_variadic ||
+        (function->proto_nargs != 1 &&
+         function->proto_nargs != 2) ||
+        !mir_match_math_float_type(call->type) ||
+        call->memory_flags != 0 ||
+        !mir_match_math_symbol_target(call, function))
+        return 0;
+    *function_out = function;
+    *argument_count = function->proto_nargs;
+    return 1;
+}
+
+static int mir_match_math_call_check(
+    struct MirMathCallCheck *plan,
+    const struct MirInsn *value_call,
+    const struct MirInsn *check_call,
+    struct Sym **check_function)
+{
+    int check_arguments[3];
+    int value_arguments[2] = {-1, -1};
+    int argument;
+
+    memset(plan, 0, sizeof(*plan));
+    if (value_call >= check_call ||
+        !mir_match_math_value_function(
+            value_call, &plan->value_function,
+            &plan->argument_count) ||
+        !mir_match_math_check_function(
+            check_call, check_function) ||
+        !mir_machine_three_call_arguments(
+            check_call, check_arguments) ||
+        check_arguments[1] != value_call->dst ||
+        !mir_match_final_string_value(
+            check_arguments[0], &plan->string_id) ||
+        !mir_match_math_float_constant(
+            check_arguments[2], &plan->expected_bits))
+        return 0;
+    plan->check_function = *check_function;
+    if (plan->argument_count == 1) {
+        if (!mir_machine_single_call_argument(
+                value_call, &value_arguments[0]))
+            return 0;
+    } else if (!mir_machine_two_call_arguments(
+                   value_call, value_arguments)) {
+        return 0;
+    }
+    for (argument = 0;
+         argument < plan->argument_count; ++argument) {
+        int type =
+            plan->value_function->proto_types[argument];
+        const struct MirInsn *definition =
+            mir_definition(value_arguments[argument]);
+
+        if (definition == NULL || definition >= value_call)
+            return 0;
+        if (mir_match_math_float_type(type)) {
+            plan->arguments[argument].kind =
+                MIR_MATH_FLOAT_CONSTANT;
+            if (!mir_match_math_float_constant(
+                    value_arguments[argument],
+                    &plan->arguments[argument].value))
+                return 0;
+        } else {
+            plan->arguments[argument].kind =
+                MIR_MATH_WORD_CONSTANT;
+            if (type_ptr_depth(type) != 0 ||
+                type_is_float(type) ||
+                (type & 15) != TYPE_INT ||
+                (type & TYPE_UNSIGNED) != 0 ||
+                type_size(type) != 2 ||
+                !mir_match_math_word_constant(
+                    value_arguments[argument],
+                    &plan->arguments[argument].value))
+                return 0;
+        }
+    }
+    return 1;
+}
+
+static const struct MirInsn *mir_match_math_result_store(
+    const struct MirInsn *value_call,
+    const struct MirInsn *first_check)
+{
+    const struct MirInsn *store = NULL;
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *candidate = &mir.insns[instruction];
+
+        if (candidate->opcode != MIR_STORE ||
+            candidate->src1 != value_call->dst)
+            continue;
+        if (store != NULL)
+            return NULL;
+        store = candidate;
+    }
+    if (store == NULL || store <= value_call ||
+        store >= first_check ||
+        !mir_machine_unobservable_local_store(store) ||
+        !mir_scalar_memory_location(
+            store, &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_LOCAL ||
+        !mir_match_math_float_type(memory_type) ||
+        store->memory_size != 4 ||
+        store->memory_flags != 0)
+        return NULL;
+    return store;
+}
+
+static int mir_match_math_output_address(
+    const struct MirInsn *address, int base_type,
+    int *offset_out)
+{
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+
+    if (address == NULL || address->opcode != MIR_ADDRESS ||
+        type_ptr_depth(address->type) != 1 ||
+        type_size(address->type) != 2 ||
+        !mir_machine_named_nonvolatile(address) ||
+        !mir_scalar_memory_location(
+            address, &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_LOCAL ||
+        type_ptr_depth(memory_type) != 0 ||
+        (memory_type & 15) != base_type ||
+        type_size(memory_type) !=
+            (base_type == TYPE_FLOAT ? 4 : 2))
+        return 0;
+    *offset_out = memory_offset;
+    return 1;
+}
+
+static int mir_match_math_same_location(
+    const struct MirInsn *left, const struct MirInsn *right)
+{
+    int left_offset;
+    int left_storage;
+    int left_type;
+    int right_offset;
+    int right_storage;
+    int right_type;
+
+    return left != NULL && right != NULL &&
+        mir_scalar_memory_location(
+            left, &left_type, &left_storage, &left_offset) &&
+        mir_scalar_memory_location(
+            right, &right_type, &right_storage, &right_offset) &&
+        left_storage == right_storage &&
+        left_offset == right_offset &&
+        !strcmp(left->name, right->name);
+}
+
+static int mir_match_math_pointer_function(
+    const struct MirInsn *call, int pointer_base_type,
+    struct Sym **function_out)
+{
+    struct Sym *function = find_global(call->name);
+
+    if (function == NULL || function->is_funcptr ||
+        function->is_noreturn || !function->has_proto ||
+        function->proto_nargs != 2 ||
+        function->proto_variadic ||
+        !mir_match_math_float_type(function->proto_types[0]) ||
+        type_ptr_depth(function->proto_types[1]) != 1 ||
+        (function->proto_types[1] & 15) != pointer_base_type ||
+        type_size(function->proto_types[1]) != 2 ||
+        !mir_match_math_float_type(call->type) ||
+        call->memory_flags != 0 ||
+        !mir_match_math_symbol_target(call, function))
+        return 0;
+    *function_out = function;
+    return 1;
+}
+
+static int mir_match_math_frexp_check(
+    struct MirMathPointerCheck *plan,
+    const struct MirInsn *value_call,
+    const struct MirInsn *result_check,
+    const struct MirInsn *output_check,
+    struct Sym **check_function,
+    const struct MirInsn **output_location,
+    const struct MirInsn **result_location)
+{
+    const struct MirInsn *address;
+    const struct MirInsn *conversion;
+    const struct MirInsn *load;
+    const struct MirInsn *store;
+    int result_arguments[3];
+    int output_arguments[3];
+    int value_arguments[2];
+    int output_offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (value_call >= result_check ||
+        result_check >= output_check ||
+        !mir_match_math_pointer_function(
+            value_call, TYPE_INT, &plan->value_function) ||
+        !mir_machine_two_call_arguments(
+            value_call, value_arguments) ||
+        !mir_match_math_float_constant(
+            value_arguments[0], &plan->input_bits) ||
+        (address = mir_definition(value_arguments[1])) == NULL ||
+        !mir_match_math_output_address(
+            address, TYPE_INT, &output_offset) ||
+        output_offset >= 0)
+        return mir_machine_reject(
+            "math-frexp-check", "value-call");
+    if (!mir_match_math_check_function(
+            result_check, check_function) ||
+        !mir_match_math_check_function(
+            output_check, check_function) ||
+        !mir_machine_three_call_arguments(
+            result_check, result_arguments) ||
+        result_arguments[1] != value_call->dst ||
+        !mir_match_final_string_value(
+            result_arguments[0], &plan->result_string_id) ||
+        !mir_match_math_float_constant(
+            result_arguments[2], &plan->result_bits) ||
+        !mir_machine_three_call_arguments(
+            output_check, output_arguments) ||
+        !mir_match_final_string_value(
+            output_arguments[0], &plan->output_string_id) ||
+        !mir_match_math_float_constant(
+            output_arguments[2], &plan->output_bits))
+        return mir_machine_reject(
+            "math-frexp-check", "check-calls");
+    plan->check_function = *check_function;
+    store = mir_match_math_result_store(
+        value_call, result_check);
+    conversion = mir_definition(output_arguments[1]);
+    if (store == NULL)
+        return mir_machine_reject(
+            "math-frexp-check", "result-store");
+    if (conversion == NULL ||
+        conversion->opcode != MIR_UNARY ||
+        conversion->immediate != 0 ||
+        !mir_match_math_float_type(conversion->type))
+        return mir_machine_reject(
+            "math-frexp-check", "output-conversion");
+    load = mir_definition(conversion->src1);
+    if (load == NULL ||
+        load->opcode != MIR_LOAD ||
+        load <= result_check || load >= output_check ||
+        type_ptr_depth(load->type) != 0 ||
+        (load->type & 15) != TYPE_INT ||
+        type_size(load->type) != 2 ||
+        !mir_match_math_same_location(address, load) ||
+        load->memory_flags != 0)
+        return mir_machine_reject(
+            "math-frexp-check", "output-load");
+    if ((*output_location != NULL &&
+         !mir_match_math_same_location(
+             *output_location, address)) ||
+        (*result_location != NULL &&
+         !mir_match_math_same_location(
+             *result_location, store)) ||
+        !strcmp(address->name, store->name))
+        return mir_machine_reject(
+            "math-frexp-check", "location-identity");
+    *output_location = address;
+    *result_location = store;
+    return 1;
+}
+
+static int mir_match_math_modf_check(
+    struct MirMathPointerCheck *plan,
+    const struct MirInsn *value_call,
+    const struct MirInsn *result_check,
+    const struct MirInsn *output_check,
+    struct Sym **check_function,
+    const struct MirInsn **output_location,
+    const struct MirInsn **result_location)
+{
+    const struct MirInsn *address;
+    const struct MirInsn *load;
+    const struct MirInsn *store;
+    int result_arguments[3];
+    int output_arguments[3];
+    int value_arguments[2];
+    int output_offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (value_call >= result_check ||
+        result_check >= output_check ||
+        !mir_match_math_pointer_function(
+            value_call, TYPE_FLOAT, &plan->value_function) ||
+        !mir_machine_two_call_arguments(
+            value_call, value_arguments) ||
+        !mir_match_math_float_constant(
+            value_arguments[0], &plan->input_bits) ||
+        (address = mir_definition(value_arguments[1])) == NULL ||
+        !mir_match_math_output_address(
+            address, TYPE_FLOAT, &output_offset) ||
+        output_offset >= 0 ||
+        !mir_match_math_check_function(
+            result_check, check_function) ||
+        !mir_match_math_check_function(
+            output_check, check_function) ||
+        !mir_machine_three_call_arguments(
+            result_check, result_arguments) ||
+        result_arguments[1] != value_call->dst ||
+        !mir_match_final_string_value(
+            result_arguments[0], &plan->result_string_id) ||
+        !mir_match_math_float_constant(
+            result_arguments[2], &plan->result_bits) ||
+        !mir_machine_three_call_arguments(
+            output_check, output_arguments) ||
+        !mir_match_final_string_value(
+            output_arguments[0], &plan->output_string_id) ||
+        !mir_match_math_float_constant(
+            output_arguments[2], &plan->output_bits))
+        return 0;
+    plan->check_function = *check_function;
+    store = mir_match_math_result_store(
+        value_call, result_check);
+    load = mir_definition(output_arguments[1]);
+    if (store == NULL || load == NULL ||
+        load->opcode != MIR_LOAD ||
+        load <= result_check || load >= output_check ||
+        !mir_match_math_float_type(load->type) ||
+        !mir_match_math_same_location(address, load) ||
+        load->memory_flags != 0 ||
+        (*output_location != NULL &&
+         !mir_match_math_same_location(
+             *output_location, address)) ||
+        (*result_location != NULL &&
+         !mir_match_math_same_location(
+             *result_location, store)) ||
+        !strcmp(address->name, store->name))
+        return 0;
+    *output_location = address;
+    *result_location = store;
+    return 1;
+}
+
+static int mir_match_math_print_function(
+    const struct MirInsn *call, struct Sym **expected)
+{
+    struct Sym *function = find_global(call->name);
+
+    if (function == NULL || function->is_defined ||
+        function->is_funcptr || function->is_noreturn ||
+        !function->has_proto || function->proto_nargs != 1 ||
+        !function->proto_variadic ||
+        type_ptr_depth(function->proto_types[0]) != 1 ||
+        type_size(function->proto_types[0]) != 2 ||
+        (call->type & 15) != TYPE_INT ||
+        call->memory_flags != MIR_CALL_FLAG_VARIADIC ||
+        !mir_match_math_symbol_target(call, function) ||
+        (*expected != NULL && *expected != function))
+        return 0;
+    *expected = function;
+    return 1;
+}
+
+static int mir_match_math_global_word(
+    const struct MirInsn *load, struct Sym **root_out,
+    int *offset_out)
+{
+    int memory_offset;
+    int memory_storage;
+    int memory_type;
+    struct Sym *root;
+
+    if (load == NULL || load->opcode != MIR_LOAD ||
+        !mir_machine_named_nonvolatile(load) ||
+        !mir_scalar_memory_location(
+            load, &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        type_ptr_depth(memory_type) != 0 ||
+        (memory_type & 15) != TYPE_INT ||
+        type_size(memory_type) != 2 ||
+        (root = find_global(load->name)) == NULL)
+        return 0;
+    *root_out = root;
+    *offset_out = memory_offset;
+    return 1;
+}
+
+static int mir_match_math_verification_schedule(
+    struct MirMathVerificationSchedule *plan)
+{
+    const struct MirInsn *frexp_output = NULL;
+    const struct MirInsn *frexp_result = NULL;
+    const struct MirInsn *modf_output = NULL;
+    const struct MirInsn *modf_result = NULL;
+    struct Sym *ordinary_check = NULL;
+    struct Sym *exact_check = NULL;
+    struct Sym *final_failures_root;
+    int call_indices[179];
+    int opcode_counts[MIR_RETURN + 1];
+    int call_count = 0;
+    int final_failures_offset;
+    int instruction;
+    int check;
+    int arguments[3];
+    int argument;
+    int print_argument;
+
+    memset(plan, 0, sizeof(*plan));
+    memset(opcode_counts, 0, sizeof(opcode_counts));
+    if (mir.count != 945 || mir_cfg_block_count() != 2 ||
+        mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_size(mir.return_type) != 2)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        int opcode = mir.insns[instruction].opcode;
+
+        if (opcode < 0 || opcode > MIR_RETURN)
+            return mir_machine_reject(
+                "math-verification-schedule", "opcode-range");
+        ++opcode_counts[opcode];
+        if (opcode == MIR_CALL) {
+            if (call_count >= 179)
+                return mir_machine_reject(
+                    "math-verification-schedule", "call-overflow");
+            call_indices[call_count++] = instruction;
+        }
+    }
+    if (call_count != 179 ||
+        opcode_counts[MIR_LABEL] != 2 ||
+        opcode_counts[MIR_STRING_ADDRESS] != 95 ||
+        opcode_counts[MIR_ARG] != 384 ||
+        opcode_counts[MIR_CALL] != 179 ||
+        opcode_counts[MIR_FLOAT_CONST] != 187 ||
+        opcode_counts[MIR_UNARY] != 47 ||
+        opcode_counts[MIR_ADDRESS] != 6 ||
+        opcode_counts[MIR_NOP] != 19 ||
+        opcode_counts[MIR_STORE] != 6 ||
+        opcode_counts[MIR_LOAD] != 9 ||
+        opcode_counts[MIR_CONST] != 7 ||
+        opcode_counts[MIR_BINARY] != 1 ||
+        opcode_counts[MIR_BRANCH_FALSE] != 1 ||
+        opcode_counts[MIR_RETURN] != 2)
+        return mir_machine_reject(
+            "math-verification-schedule", "opcode-counts");
+    for (instruction = 0; instruction <= MIR_RETURN; ++instruction) {
+        int expected = 0;
+
+        switch (instruction) {
+        case MIR_LABEL: expected = 2; break;
+        case MIR_STRING_ADDRESS: expected = 95; break;
+        case MIR_ARG: expected = 384; break;
+        case MIR_CALL: expected = 179; break;
+        case MIR_FLOAT_CONST: expected = 187; break;
+        case MIR_UNARY: expected = 47; break;
+        case MIR_ADDRESS: expected = 6; break;
+        case MIR_NOP: expected = 19; break;
+        case MIR_STORE: expected = 6; break;
+        case MIR_LOAD: expected = 9; break;
+        case MIR_CONST: expected = 7; break;
+        case MIR_BINARY: expected = 1; break;
+        case MIR_BRANCH_FALSE: expected = 1; break;
+        case MIR_RETURN: expected = 2; break;
+        default: break;
+        }
+        if (opcode_counts[instruction] != expected)
+            return mir_machine_reject(
+                "math-verification-schedule", "unexpected-opcode");
+    }
+
+    if (mir.insns[0].opcode != MIR_LABEL ||
+        call_indices[0] != 3 ||
+        mir.insns[1].opcode != MIR_STRING_ADDRESS ||
+        !mir_machine_single_call_argument(
+            &mir.insns[call_indices[0]], &print_argument) ||
+        print_argument != mir.insns[1].dst ||
+        !mir_match_math_print_function(
+            &mir.insns[call_indices[0]], &plan->print_function))
+        return mir_machine_reject(
+            "math-verification-schedule", "intro");
+    plan->intro_string_id = (int)mir.insns[1].immediate;
+
+    for (check = 0;
+         check < MIR_MATH_ORDINARY_CHECK_COUNT; ++check) {
+        struct MirMathCallCheck *item = &plan->calls[check];
+
+        if (!mir_match_math_call_check(
+                item,
+                &mir.insns[call_indices[1 + check * 2]],
+                &mir.insns[call_indices[2 + check * 2]],
+                &ordinary_check))
+            return mir_machine_reject(
+                "math-verification-schedule", "ordinary-check");
+        for (argument = 0;
+             argument < item->argument_count; ++argument)
+            if (item->arguments[argument].kind !=
+                    MIR_MATH_FLOAT_CONSTANT)
+                return mir_machine_reject(
+                    "math-verification-schedule",
+                    "ordinary-argument");
+    }
+
+    if (call_indices[149] != 737 ||
+        call_indices[161] != 832 ||
+        call_indices[169] != 877 ||
+        call_indices[175] != 921)
+        return mir_machine_reject(
+            "math-verification-schedule", "section-boundaries");
+    for (check = 0;
+         check < MIR_MATH_FREXP_CHECK_COUNT; ++check)
+        if (!mir_match_math_frexp_check(
+                &plan->frexp[check],
+                &mir.insns[call_indices[149 + check * 3]],
+                &mir.insns[call_indices[150 + check * 3]],
+                &mir.insns[call_indices[151 + check * 3]],
+                &exact_check, &frexp_output, &frexp_result))
+            return mir_machine_reject(
+                "math-verification-schedule", "frexp-check");
+
+    for (check = 0;
+         check < MIR_MATH_MODEXP_CHECK_COUNT; ++check) {
+        struct MirMathCallCheck *item =
+            &plan->calls[MIR_MATH_ORDINARY_CHECK_COUNT + check];
+
+        if (!mir_match_math_call_check(
+                item,
+                &mir.insns[call_indices[161 + check * 2]],
+                &mir.insns[call_indices[162 + check * 2]],
+                &exact_check) ||
+            item->argument_count != 2 ||
+            item->arguments[0].kind !=
+                MIR_MATH_FLOAT_CONSTANT ||
+            item->arguments[1].kind !=
+                MIR_MATH_WORD_CONSTANT)
+            return mir_machine_reject(
+                "math-verification-schedule", "ldexp-check");
+    }
+
+    for (check = 0;
+         check < MIR_MATH_MODF_CHECK_COUNT; ++check)
+        if (!mir_match_math_modf_check(
+                &plan->modf[check],
+                &mir.insns[call_indices[169 + check * 3]],
+                &mir.insns[call_indices[170 + check * 3]],
+                &mir.insns[call_indices[171 + check * 3]],
+                &exact_check, &modf_output, &modf_result))
+            return mir_machine_reject(
+                "math-verification-schedule", "modf-check");
+    if (ordinary_check == NULL || exact_check == NULL ||
+        ordinary_check == exact_check ||
+        frexp_output == NULL || frexp_result == NULL ||
+        modf_output == NULL || modf_result == NULL)
+        return mir_machine_reject(
+            "math-verification-schedule", "check-identities");
+
+    if (mir.insns[919].opcode != MIR_STRING_ADDRESS ||
+        !mir_machine_single_call_argument(
+            &mir.insns[call_indices[175]], &print_argument) ||
+        print_argument != mir.insns[919].dst ||
+        !mir_match_math_print_function(
+            &mir.insns[call_indices[175]], &plan->print_function) ||
+        mir.insns[922].opcode != MIR_STRING_ADDRESS ||
+        !mir_machine_three_call_arguments(
+            &mir.insns[call_indices[176]], arguments) ||
+        arguments[0] != mir.insns[922].dst ||
+        arguments[1] != mir.insns[924].dst ||
+        arguments[2] != mir.insns[926].dst ||
+        !mir_match_math_global_word(
+            &mir.insns[924], &plan->checks_root,
+            &plan->checks_offset) ||
+        !mir_match_math_global_word(
+            &mir.insns[926], &plan->failures_root,
+            &plan->failures_offset) ||
+        plan->checks_root == plan->failures_root ||
+        !mir_match_math_print_function(
+            &mir.insns[call_indices[176]], &plan->print_function))
+        return mir_machine_reject(
+            "math-verification-schedule", "summary");
+    plan->separator_string_id = (int)mir.insns[919].immediate;
+    plan->summary_string_id = (int)mir.insns[922].immediate;
+    if (call_indices[176] != 928 ||
+        call_indices[177] != 935 ||
+        call_indices[178] != 942 ||
+        !mir_match_math_global_word(
+            &mir.insns[929], &final_failures_root,
+            &final_failures_offset) ||
+        final_failures_root != plan->failures_root ||
+        final_failures_offset != plan->failures_offset ||
+        mir.insns[930].opcode != MIR_CONST ||
+        !mir_machine_constant_equals(mir.insns[930].dst, 0) ||
+        mir.insns[931].opcode != MIR_BINARY ||
+        mir.insns[931].immediate != TOK_EQ ||
+        mir.insns[931].src1 != mir.insns[929].dst ||
+        mir.insns[931].src2 != mir.insns[930].dst ||
+        mir.insns[932].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[932].src1 != mir.insns[931].dst ||
+        mir.insns[932].label != mir.insns[939].label ||
+        mir.insns[933].opcode != MIR_STRING_ADDRESS ||
+        !mir_machine_single_call_argument(
+            &mir.insns[935], &print_argument) ||
+        print_argument != mir.insns[933].dst ||
+        !mir_match_math_print_function(
+            &mir.insns[935], &plan->print_function) ||
+        mir.insns[936].opcode != MIR_CONST ||
+        !mir_machine_constant_equals(mir.insns[936].dst, 0) ||
+        mir.insns[937].opcode != MIR_RETURN ||
+        mir.insns[937].src1 != mir.insns[936].dst ||
+        mir.insns[939].opcode != MIR_LABEL ||
+        mir.insns[940].opcode != MIR_STRING_ADDRESS ||
+        !mir_machine_single_call_argument(
+            &mir.insns[942], &print_argument) ||
+        print_argument != mir.insns[940].dst ||
+        !mir_match_math_print_function(
+            &mir.insns[942], &plan->print_function) ||
+        mir.insns[943].opcode != MIR_CONST ||
+        !mir_machine_constant_equals(mir.insns[943].dst, 1) ||
+        mir.insns[944].opcode != MIR_RETURN ||
+        mir.insns[944].src1 != mir.insns[943].dst)
+        return mir_machine_reject(
+            "math-verification-schedule", "final");
+    plan->success_string_id = (int)mir.insns[933].immediate;
+    plan->failure_string_id = (int)mir.insns[940].immediate;
+    return 1;
+}
+
 static int mir_match_local_identity_array_result(
     struct MirLocalIdentityArrayResult *plan)
 {
@@ -40647,6 +41412,169 @@ static void mir_emit_final_call_check_schedule(
     fputs("\tpop bc\n\tld hl,0\n\tret\n", out);
 }
 
+static int mir_emit_math_constant_argument(
+    FILE *out, const struct MirMathConstant *argument)
+{
+    if (argument->kind == MIR_MATH_FLOAT_CONSTANT) {
+        mir_emit_final_call_constant(out, argument->value, 4);
+        return 2;
+    }
+    fprintf(out, "\tld hl,%lu\n\tpush hl\n",
+            argument->value & 0xffffUL);
+    return 1;
+}
+
+static void mir_emit_math_call_check(
+    FILE *out, const struct MirMathCallCheck *check)
+{
+    int argument;
+    int argument_words = 0;
+
+    mir_emit_final_call_constant(
+        out, check->expected_bits, 4);
+    for (argument = check->argument_count - 1;
+         argument >= 0; --argument)
+        argument_words += mir_emit_math_constant_argument(
+            out, &check->arguments[argument]);
+    mir_machine_emit_symbol_call(
+        out, check->value_function);
+    mir_emit_final_call_cleanup(out, argument_words);
+    fputs("\tpush de\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            check->string_id);
+    mir_machine_emit_symbol_call(
+        out, check->check_function);
+    mir_emit_final_call_cleanup(out, 5);
+}
+
+static void mir_emit_math_frexp_check(
+    FILE *out, const struct MirMathPointerCheck *check)
+{
+    mir_emit_final_call_constant(
+        out, check->result_bits, 4);
+    mir_emit_local_address(out, -2);
+    fputs("\tpush hl\n", out);
+    mir_emit_final_call_constant(
+        out, check->input_bits, 4);
+    mir_machine_emit_symbol_call(
+        out, check->value_function);
+    mir_emit_final_call_cleanup(out, 3);
+    fputs("\tpush de\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            check->result_string_id);
+    mir_machine_emit_symbol_call(
+        out, check->check_function);
+    mir_emit_final_call_cleanup(out, 5);
+
+    mir_emit_final_call_constant(
+        out, check->output_bits, 4);
+    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n", out);
+    mir_emit_runtime_call(out, "__fif");
+    fputs("\tpush de\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            check->output_string_id);
+    mir_machine_emit_symbol_call(
+        out, check->check_function);
+    mir_emit_final_call_cleanup(out, 5);
+}
+
+static void mir_emit_math_modf_check(
+    FILE *out, const struct MirMathPointerCheck *check)
+{
+    mir_emit_final_call_constant(
+        out, check->result_bits, 4);
+    mir_emit_local_address(out, -4);
+    fputs("\tpush hl\n", out);
+    mir_emit_final_call_constant(
+        out, check->input_bits, 4);
+    mir_machine_emit_symbol_call(
+        out, check->value_function);
+    mir_emit_final_call_cleanup(out, 3);
+    fputs("\tpush de\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            check->result_string_id);
+    mir_machine_emit_symbol_call(
+        out, check->check_function);
+    mir_emit_final_call_cleanup(out, 5);
+
+    mir_emit_final_call_constant(
+        out, check->output_bits, 4);
+    fputs("\tld l,(ix-4)\n\tld h,(ix-3)\n"
+          "\tld e,(ix-2)\n\tld d,(ix-1)\n"
+          "\tpush de\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            check->output_string_id);
+    mir_machine_emit_symbol_call(
+        out, check->check_function);
+    mir_emit_final_call_cleanup(out, 5);
+}
+
+static void mir_emit_math_verification_schedule(
+    FILE *out, const struct MirMathVerificationSchedule *plan)
+{
+    int failure = new_label();
+    int check;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-4\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->intro_string_id);
+    mir_machine_emit_symbol_call(
+        out, plan->print_function);
+    mir_emit_final_call_cleanup(out, 1);
+
+    for (check = 0;
+         check < MIR_MATH_ORDINARY_CHECK_COUNT; ++check)
+        mir_emit_math_call_check(out, &plan->calls[check]);
+    for (check = 0;
+         check < MIR_MATH_FREXP_CHECK_COUNT; ++check)
+        mir_emit_math_frexp_check(out, &plan->frexp[check]);
+    for (check = 0;
+         check < MIR_MATH_MODEXP_CHECK_COUNT; ++check)
+        mir_emit_math_call_check(
+            out,
+            &plan->calls[
+                MIR_MATH_ORDINARY_CHECK_COUNT + check]);
+    for (check = 0;
+         check < MIR_MATH_MODF_CHECK_COUNT; ++check)
+        mir_emit_math_modf_check(out, &plan->modf[check]);
+
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->separator_string_id);
+    mir_machine_emit_symbol_call(
+        out, plan->print_function);
+    mir_emit_final_call_cleanup(out, 1);
+    mir_machine_emit_global_word(
+        out, plan->failures_root, plan->failures_offset);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_global_word(
+        out, plan->checks_root, plan->checks_offset);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->summary_string_id);
+    mir_machine_emit_symbol_call(
+        out, plan->print_function);
+    mir_emit_final_call_cleanup(out, 3);
+
+    mir_machine_emit_global_word(
+        out, plan->failures_root, plan->failures_offset);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tld hl,S%d\n\tpush hl\n",
+            failure, plan->success_string_id);
+    mir_machine_emit_symbol_call(
+        out, plan->print_function);
+    fputs("\tpop bc\n\tld hl,0\n"
+          "\tld sp,ix\n\tpop ix\n\tret\n", out);
+    fprintf(out, "L%d:\n\tld hl,S%d\n\tpush hl\n",
+            failure, plan->failure_string_id);
+    mir_machine_emit_symbol_call(
+        out, plan->print_function);
+    fputs("\tpop bc\n\tld hl,1\n"
+          "\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_local_identity_array_result(
     FILE *out, const struct MirLocalIdentityArrayResult *plan)
 {
@@ -42198,6 +43126,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirSingleSignedDivCheck single_signed_div_check;
     struct MirWideDivResultCheck wide_div_result_check;
     struct MirFinalCallCheckSchedule final_call_check_schedule;
+    struct MirMathVerificationSchedule math_verification_schedule;
     struct MirLocalIdentityArrayResult local_identity_array_result;
     struct MirConstantResultSwitch constant_result_switch;
     struct MirStringResultSwitch string_result_switch;
@@ -42339,6 +43268,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &final_call_check_schedule)) {
         mir_emit_final_call_check_schedule(
             out, &final_call_check_schedule);
+        return 1;
+    }
+    if (mir_match_math_verification_schedule(
+            &math_verification_schedule)) {
+        mir_emit_math_verification_schedule(
+            out, &math_verification_schedule);
         return 1;
     }
     if (mir_match_affine_pointer_constant_return(&constant)) {

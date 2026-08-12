@@ -6,11 +6,25 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `d6cdbaf`
-  (`dcc MIR: schedule stdlib call orchestration`).
-- Current candidate coverage: **2100/2185 (96.11%)**.
-- Remaining fallback population: **85 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `0685e1b`
+  (`dcc MIR: schedule compound assignment checks`).
+- Current candidate coverage: **2101/2185 (96.16%)**.
+- Remaining fallback population: **84 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The strict name-free math-verification scheduler admits `tmathf.main`. It
+  structurally matches the complete two-block graph and preserves all five
+  `printf`, 74 `chk`, 16 `chkx`, and 84 math-runtime calls in their original
+  evaluation order, including the `frexpf`/`modff` pointer outputs and four
+  int-to-float conversions. Emission reuses the ordinary symbol-call,
+  reverse-argument, float-constant, and cleanup helpers; it does not evaluate
+  any math result at compile time. One four-byte IX frame overlays the
+  two-byte exponent output with the later four-byte float output, and no IY is
+  used. Non-stack selected output is 19,750 text bytes / 2,042 instructions
+  versus 20,184 / 2,090 captured; stack-check output is 19,779 / 2,043 versus
+  20,213 / 2,091. `tmathf` improves from 2,993,444 to 2,978,018 peep cycles
+  (-0.52%) and from 3,004,974 to 2,984,180 nopeep cycles (-0.69%); linked size
+  falls 256 bytes in both modes. The stack-check census is 2101/2185 with
+  exactly this one new function and no regression.
 - The strict name-free compound-check scheduler admits `tcaslv.main`. A
   sequential MIR proof validates all 116 local/pointer/array/member stores,
   folds only proven integer values, and preserves all 71 `chk` calls, the
@@ -808,7 +822,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 85 final-cost fallbacks,
+- Current next priority: repeated causes in the 84 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
