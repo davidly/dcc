@@ -2171,6 +2171,43 @@ struct MirFormatBufferSchedule {
     char failure_call_name[64];
 };
 
+#define MIR_ATOF_SCHEDULE_CHECK_COUNT 46
+
+enum MirAtofScheduleCheckKind {
+    MIR_ATOF_SCHEDULE_FLOAT = 1,
+    MIR_ATOF_SCHEDULE_INT,
+    MIR_ATOF_SCHEDULE_END,
+    MIR_ATOF_SCHEDULE_INFINITY,
+    MIR_ATOF_SCHEDULE_NAN
+};
+
+struct MirAtofScheduleCheck {
+    int kind;
+    int name_string_id;
+    int input_string_id;
+    unsigned long expected;
+    unsigned long tolerance;
+    unsigned long scale;
+    int has_scale;
+};
+
+struct MirAtofSchedule {
+    struct MirAtofScheduleCheck checks[MIR_ATOF_SCHEDULE_CHECK_COUNT];
+    struct Sym *value_function;
+    struct Sym *float_check_function;
+    struct Sym *int_check_function;
+    struct Sym *end_check_function;
+    struct Sym *infinity_check_function;
+    struct Sym *nan_check_function;
+    struct Sym *print_function;
+    struct Sym *failure_root;
+    struct Sym *checks_root;
+    int failure_offset;
+    int checks_offset;
+    int failure_string_id;
+    int success_string_id;
+};
+
 struct MirSymbolFindSchedule {
     struct Sym *symbols_root;
     struct Sym *count_root;
@@ -31389,6 +31426,691 @@ static int mir_match_format_buffer_schedule(
     return 1;
 }
 
+static int mir_match_atof_schedule_string(
+    int value, int *string_id)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    return definition != NULL &&
+           definition->opcode == MIR_STRING_ADDRESS &&
+           type_ptr_depth(definition->type) == 1 &&
+           (definition->type & 15) == TYPE_CHAR &&
+           type_size(definition->type) == 2 &&
+           mir_match_final_string_value(value, string_id);
+}
+
+static int mir_match_atof_schedule_argument(
+    const struct MirInsn *argument, const struct MirInsn *call,
+    int value, int index)
+{
+    return argument->opcode == MIR_ARG &&
+           argument->src1 == value &&
+           argument->secondary_offset == call->secondary_offset &&
+           argument->immediate == index;
+}
+
+static int mir_match_atof_schedule_value_function(
+    const struct MirInsn *call, struct Sym **expected)
+{
+    struct Sym *function = find_global(call->name);
+
+    if (function == NULL || function->is_defined ||
+        function->is_funcptr || function->is_noreturn ||
+        !function->has_proto || function->proto_nargs != 1 ||
+        function->proto_variadic ||
+        type_ptr_depth(function->proto_types[0]) != 1 ||
+        (function->proto_types[0] & 15) != TYPE_CHAR ||
+        type_size(function->proto_types[0]) != 2 ||
+        !mir_match_math_float_type(call->type) ||
+        call->memory_flags != 0 ||
+        !mir_match_math_symbol_target(call, function) ||
+        (*expected != NULL && *expected != function))
+        return 0;
+    *expected = function;
+    return 1;
+}
+
+static int mir_match_atof_schedule_check_function(
+    const struct MirInsn *call, int kind, struct Sym **expected)
+{
+    struct Sym *function = find_global(call->name);
+    int argument_count;
+
+    if (function == NULL || !function->is_defined ||
+        function->is_funcptr || function->is_noreturn ||
+        !function->has_proto || function->proto_variadic ||
+        (call->type & 15) != TYPE_VOID ||
+        call->memory_flags != 0 ||
+        !mir_match_math_symbol_target(call, function) ||
+        (*expected != NULL && *expected != function))
+        return 0;
+    argument_count =
+        kind == MIR_ATOF_SCHEDULE_FLOAT ? 4 :
+        kind == MIR_ATOF_SCHEDULE_NAN ? 2 : 3;
+    if (function->proto_nargs != argument_count ||
+        type_ptr_depth(function->proto_types[0]) != 1 ||
+        (function->proto_types[0] & 15) != TYPE_CHAR ||
+        type_size(function->proto_types[0]) != 2)
+        return 0;
+    if (kind == MIR_ATOF_SCHEDULE_FLOAT) {
+        if (!mir_match_math_float_type(function->proto_types[1]) ||
+            !mir_match_math_float_type(function->proto_types[2]) ||
+            !mir_match_math_float_type(function->proto_types[3]))
+            return 0;
+    } else if (kind == MIR_ATOF_SCHEDULE_INT) {
+        if (!mir_match_final_call_integer_type(
+                function->proto_types[1], 2) ||
+            !mir_match_final_call_integer_type(
+                function->proto_types[2], 2))
+            return 0;
+    } else if (kind == MIR_ATOF_SCHEDULE_END) {
+        if (type_ptr_depth(function->proto_types[1]) != 1 ||
+            (function->proto_types[1] & 15) != TYPE_CHAR ||
+            type_size(function->proto_types[1]) != 2 ||
+            !mir_match_final_call_integer_type(
+                function->proto_types[2], 2))
+            return 0;
+    } else if (kind == MIR_ATOF_SCHEDULE_INFINITY) {
+        if (!mir_match_math_float_type(function->proto_types[1]) ||
+            !mir_match_final_call_integer_type(
+                function->proto_types[2], 2))
+            return 0;
+    } else if (kind == MIR_ATOF_SCHEDULE_NAN) {
+        if (!mir_match_math_float_type(function->proto_types[1]))
+            return 0;
+    } else {
+        return 0;
+    }
+    *expected = function;
+    return 1;
+}
+
+static int mir_match_atof_schedule_print_function(
+    const struct MirInsn *call, struct Sym **expected)
+{
+    struct Sym *function = find_global(call->name);
+
+    if (function == NULL || function->is_defined ||
+        function->is_funcptr || function->is_noreturn ||
+        !function->has_proto || function->proto_nargs != 1 ||
+        !function->proto_variadic ||
+        type_ptr_depth(function->proto_types[0]) != 1 ||
+        (function->proto_types[0] & 15) != TYPE_CHAR ||
+        type_size(function->proto_types[0]) != 2 ||
+        !mir_match_final_call_integer_type(call->type, 2) ||
+        call->memory_flags != MIR_CALL_FLAG_VARIADIC ||
+        !mir_match_math_symbol_target(call, function) ||
+        (*expected != NULL && *expected != function))
+        return 0;
+    *expected = function;
+    return 1;
+}
+
+static int mir_match_atof_schedule_float_definition(
+    int *cursor, int limit, int *value, unsigned long *bits)
+{
+    const struct MirInsn *constant;
+    const struct MirInsn *definition;
+
+    if (*cursor >= limit ||
+        mir.insns[*cursor].opcode != MIR_FLOAT_CONST)
+        return 0;
+    constant = &mir.insns[(*cursor)++];
+    definition = constant;
+    if (*cursor < limit &&
+        mir.insns[*cursor].opcode == MIR_UNARY &&
+        mir.insns[*cursor].immediate == '-' &&
+        mir.insns[*cursor].src1 == constant->dst) {
+        definition = &mir.insns[(*cursor)++];
+    }
+    if (!mir_match_math_float_constant(definition->dst, bits))
+        return 0;
+    *value = definition->dst;
+    return 1;
+}
+
+static int mir_match_atof_schedule_optional_scale(
+    int *cursor, int limit, int source_value,
+    struct MirAtofScheduleCheck *item, int *result_value)
+{
+    const struct MirInsn *constant;
+    const struct MirInsn *multiply;
+
+    *result_value = source_value;
+    if (*cursor + 1 >= limit ||
+        mir.insns[*cursor].opcode != MIR_FLOAT_CONST ||
+        mir.insns[*cursor + 1].opcode != MIR_BINARY)
+        return 1;
+    constant = &mir.insns[*cursor];
+    multiply = &mir.insns[*cursor + 1];
+    if (multiply->immediate != '*' ||
+        multiply->src1 != source_value ||
+        multiply->src2 != constant->dst ||
+        !mir_match_math_float_type(multiply->type) ||
+        !mir_match_math_float_type(multiply->secondary_offset) ||
+        !mir_match_math_float_constant(
+            constant->dst, &item->scale))
+        return 0;
+    item->has_scale = 1;
+    *result_value = multiply->dst;
+    *cursor += 2;
+    return 1;
+}
+
+static int mir_match_atof_schedule_prefix(
+    struct MirAtofSchedule *plan,
+    struct MirAtofScheduleCheck *item,
+    int *cursor, int limit,
+    const struct MirInsn **name_out,
+    const struct MirInsn **name_argument_out,
+    const struct MirInsn **value_call_out,
+    int *result_value)
+{
+    const struct MirInsn *name;
+    const struct MirInsn *name_argument;
+    const struct MirInsn *input;
+    const struct MirInsn *input_argument;
+    const struct MirInsn *value_call;
+    int value_argument;
+
+    if (*cursor + 4 >= limit)
+        return 0;
+    name = &mir.insns[(*cursor)++];
+    name_argument = &mir.insns[(*cursor)++];
+    input = &mir.insns[(*cursor)++];
+    input_argument = &mir.insns[(*cursor)++];
+    value_call = &mir.insns[(*cursor)++];
+    if (!mir_match_atof_schedule_string(
+            name->dst, &item->name_string_id) ||
+        !mir_match_atof_schedule_string(
+            input->dst, &item->input_string_id) ||
+        !mir_match_atof_schedule_value_function(
+            value_call, &plan->value_function) ||
+        !mir_machine_single_call_argument(
+            value_call, &value_argument) ||
+        value_argument != input->dst ||
+        !mir_match_atof_schedule_argument(
+            input_argument, value_call, input->dst, 0))
+        return 0;
+    *name_out = name;
+    *name_argument_out = name_argument;
+    *value_call_out = value_call;
+    return mir_match_atof_schedule_optional_scale(
+        cursor, limit, value_call->dst, item, result_value);
+}
+
+static int mir_match_atof_schedule_float_check(
+    struct MirAtofSchedule *plan,
+    struct MirAtofScheduleCheck *item,
+    int *cursor, int limit)
+{
+    const struct MirInsn *name;
+    const struct MirInsn *name_argument;
+    const struct MirInsn *value_call;
+    const struct MirInsn *value_argument;
+    const struct MirInsn *expected_argument;
+    const struct MirInsn *tolerance_argument;
+    const struct MirInsn *check_call;
+    int arguments[4];
+    int result_value;
+    int expected_value;
+    int tolerance_value;
+
+    if (!mir_match_atof_schedule_prefix(
+            plan, item, cursor, limit,
+            &name, &name_argument, &value_call, &result_value) ||
+        *cursor >= limit)
+        return 0;
+    value_argument = &mir.insns[(*cursor)++];
+    if (!mir_match_atof_schedule_float_definition(
+            cursor, limit, &expected_value, &item->expected) ||
+        *cursor >= limit)
+        return 0;
+    expected_argument = &mir.insns[(*cursor)++];
+    if (!mir_match_atof_schedule_float_definition(
+            cursor, limit, &tolerance_value, &item->tolerance) ||
+        *cursor + 1 >= limit)
+        return 0;
+    tolerance_argument = &mir.insns[(*cursor)++];
+    check_call = &mir.insns[(*cursor)++];
+    if (!mir_match_atof_schedule_check_function(
+            check_call, item->kind,
+            &plan->float_check_function) ||
+        !mir_machine_four_call_arguments(check_call, arguments) ||
+        arguments[0] != name->dst ||
+        arguments[1] != result_value ||
+        arguments[2] != expected_value ||
+        arguments[3] != tolerance_value ||
+        !mir_match_atof_schedule_argument(
+            name_argument, check_call, name->dst, 0) ||
+        !mir_match_atof_schedule_argument(
+            value_argument, check_call, result_value, 1) ||
+        !mir_match_atof_schedule_argument(
+            expected_argument, check_call, expected_value, 2) ||
+        !mir_match_atof_schedule_argument(
+            tolerance_argument, check_call, tolerance_value, 3))
+        return 0;
+    return 1;
+}
+
+static int mir_match_atof_schedule_int_check(
+    struct MirAtofSchedule *plan,
+    struct MirAtofScheduleCheck *item,
+    int *cursor, int limit, int *nop_count)
+{
+    const struct MirInsn *name;
+    const struct MirInsn *name_argument;
+    const struct MirInsn *value_call;
+    const struct MirInsn *conversion;
+    const struct MirInsn *value_argument;
+    const struct MirInsn *expected_argument;
+    const struct MirInsn *check_call;
+    int arguments[3];
+    int result_value;
+    int expected_value;
+
+    if (!mir_match_atof_schedule_prefix(
+            plan, item, cursor, limit,
+            &name, &name_argument, &value_call, &result_value) ||
+        *cursor + 3 >= limit)
+        return 0;
+    conversion = &mir.insns[(*cursor)++];
+    value_argument = &mir.insns[(*cursor)++];
+    if (conversion->opcode != MIR_UNARY ||
+        conversion->immediate != 0 ||
+        conversion->src1 != result_value ||
+        !mir_match_final_call_integer_type(conversion->type, 2))
+        return 0;
+    while (*cursor < limit &&
+           mir.insns[*cursor].opcode == MIR_NOP) {
+        ++*nop_count;
+        ++*cursor;
+    }
+    if (*cursor + 2 >= limit)
+        return 0;
+    expected_value = mir.insns[*cursor].dst;
+    if (mir.insns[(*cursor)++].opcode != MIR_CONST ||
+        !mir_match_math_word_constant(
+            expected_value, &item->expected))
+        return 0;
+    expected_argument = &mir.insns[(*cursor)++];
+    check_call = &mir.insns[(*cursor)++];
+    if (!mir_match_atof_schedule_check_function(
+            check_call, item->kind,
+            &plan->int_check_function) ||
+        !mir_machine_three_call_arguments(check_call, arguments) ||
+        arguments[0] != name->dst ||
+        arguments[1] != conversion->dst ||
+        arguments[2] != expected_value ||
+        !mir_match_atof_schedule_argument(
+            name_argument, check_call, name->dst, 0) ||
+        !mir_match_atof_schedule_argument(
+            value_argument, check_call, conversion->dst, 1) ||
+        !mir_match_atof_schedule_argument(
+            expected_argument, check_call, expected_value, 2))
+        return 0;
+    return 1;
+}
+
+static int mir_match_atof_schedule_end_check(
+    struct MirAtofSchedule *plan,
+    struct MirAtofScheduleCheck *item,
+    int *cursor, int limit)
+{
+    const struct MirInsn *name;
+    const struct MirInsn *name_argument;
+    const struct MirInsn *input;
+    const struct MirInsn *input_argument;
+    const struct MirInsn *expected;
+    const struct MirInsn *expected_argument;
+    const struct MirInsn *check_call;
+    int arguments[3];
+
+    if (*cursor + 6 >= limit)
+        return 0;
+    name = &mir.insns[(*cursor)++];
+    name_argument = &mir.insns[(*cursor)++];
+    input = &mir.insns[(*cursor)++];
+    input_argument = &mir.insns[(*cursor)++];
+    expected = &mir.insns[(*cursor)++];
+    expected_argument = &mir.insns[(*cursor)++];
+    check_call = &mir.insns[(*cursor)++];
+    if (!mir_match_atof_schedule_string(
+            name->dst, &item->name_string_id) ||
+        !mir_match_atof_schedule_string(
+            input->dst, &item->input_string_id) ||
+        expected->opcode != MIR_CONST ||
+        !mir_match_math_word_constant(
+            expected->dst, &item->expected) ||
+        !mir_match_atof_schedule_check_function(
+            check_call, item->kind,
+            &plan->end_check_function) ||
+        !mir_machine_three_call_arguments(check_call, arguments) ||
+        arguments[0] != name->dst ||
+        arguments[1] != input->dst ||
+        arguments[2] != expected->dst ||
+        !mir_match_atof_schedule_argument(
+            name_argument, check_call, name->dst, 0) ||
+        !mir_match_atof_schedule_argument(
+            input_argument, check_call, input->dst, 1) ||
+        !mir_match_atof_schedule_argument(
+            expected_argument, check_call, expected->dst, 2))
+        return 0;
+    return 1;
+}
+
+static int mir_match_atof_schedule_infinity_check(
+    struct MirAtofSchedule *plan,
+    struct MirAtofScheduleCheck *item,
+    int *cursor, int limit)
+{
+    const struct MirInsn *name;
+    const struct MirInsn *name_argument;
+    const struct MirInsn *value_call;
+    const struct MirInsn *value_argument;
+    const struct MirInsn *expected;
+    const struct MirInsn *expected_argument;
+    const struct MirInsn *check_call;
+    int arguments[3];
+    int result_value;
+
+    if (!mir_match_atof_schedule_prefix(
+            plan, item, cursor, limit,
+            &name, &name_argument, &value_call, &result_value) ||
+        item->has_scale || *cursor + 3 >= limit)
+        return 0;
+    value_argument = &mir.insns[(*cursor)++];
+    expected = &mir.insns[(*cursor)++];
+    expected_argument = &mir.insns[(*cursor)++];
+    check_call = &mir.insns[(*cursor)++];
+    if (expected->opcode != MIR_CONST ||
+        !mir_match_math_word_constant(
+            expected->dst, &item->expected) ||
+        !mir_match_atof_schedule_check_function(
+            check_call, item->kind,
+            &plan->infinity_check_function) ||
+        !mir_machine_three_call_arguments(check_call, arguments) ||
+        arguments[0] != name->dst ||
+        arguments[1] != result_value ||
+        arguments[2] != expected->dst ||
+        !mir_match_atof_schedule_argument(
+            name_argument, check_call, name->dst, 0) ||
+        !mir_match_atof_schedule_argument(
+            value_argument, check_call, result_value, 1) ||
+        !mir_match_atof_schedule_argument(
+            expected_argument, check_call, expected->dst, 2))
+        return 0;
+    return 1;
+}
+
+static int mir_match_atof_schedule_nan_check(
+    struct MirAtofSchedule *plan,
+    struct MirAtofScheduleCheck *item,
+    int *cursor, int limit)
+{
+    const struct MirInsn *name;
+    const struct MirInsn *name_argument;
+    const struct MirInsn *value_call;
+    const struct MirInsn *value_argument;
+    const struct MirInsn *check_call;
+    int arguments[2];
+    int result_value;
+
+    if (!mir_match_atof_schedule_prefix(
+            plan, item, cursor, limit,
+            &name, &name_argument, &value_call, &result_value) ||
+        item->has_scale || *cursor + 1 >= limit)
+        return 0;
+    value_argument = &mir.insns[(*cursor)++];
+    check_call = &mir.insns[(*cursor)++];
+    if (!mir_match_atof_schedule_check_function(
+            check_call, item->kind,
+            &plan->nan_check_function) ||
+        !mir_machine_two_call_arguments(check_call, arguments) ||
+        arguments[0] != name->dst ||
+        arguments[1] != result_value ||
+        !mir_match_atof_schedule_argument(
+            name_argument, check_call, name->dst, 0) ||
+        !mir_match_atof_schedule_argument(
+            value_argument, check_call, result_value, 1))
+        return 0;
+    return 1;
+}
+
+static int mir_match_atof_schedule_final(
+    struct MirAtofSchedule *plan, int cursor)
+{
+    const struct MirInsn *failure_load = &mir.insns[cursor];
+    const struct MirInsn *failure_string = &mir.insns[cursor + 3];
+    const struct MirInsn *failure_print_load = &mir.insns[cursor + 5];
+    const struct MirInsn *failure_print = &mir.insns[cursor + 7];
+    const struct MirInsn *success_string = &mir.insns[cursor + 10];
+    const struct MirInsn *checks_load = &mir.insns[cursor + 12];
+    const struct MirInsn *success_print = &mir.insns[cursor + 14];
+    const struct MirInsn *return_load = &mir.insns[cursor + 16];
+    const struct MirInsn *phi = &mir.insns[cursor + 25];
+    int failure_arguments[2];
+    int success_arguments[2];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (cursor != 455 ||
+        failure_load->opcode != MIR_LOAD ||
+        !mir_machine_named_nonvolatile(failure_load) ||
+        !mir_scalar_memory_location(
+            failure_load, &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        !mir_match_final_call_integer_type(memory_type, 2) ||
+        (plan->failure_root =
+             find_global(failure_load->name)) == NULL ||
+        plan->failure_root->is_volatile ||
+        mir.insns[cursor + 1].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[cursor + 1].src1 != failure_load->dst ||
+        mir.insns[cursor + 1].label !=
+            mir.insns[cursor + 9].label ||
+        mir.insns[cursor + 2].opcode != MIR_LABEL ||
+        !mir_match_atof_schedule_string(
+            failure_string->dst, &plan->failure_string_id) ||
+        mir.insns[cursor + 4].opcode != MIR_ARG ||
+        failure_print_load->opcode != MIR_LOAD ||
+        !mir_machine_same_location(
+            failure_load, failure_print_load) ||
+        mir.insns[cursor + 6].opcode != MIR_ARG ||
+        failure_print->opcode != MIR_CALL ||
+        mir.insns[cursor + 8].opcode != MIR_JUMP ||
+        mir.insns[cursor + 8].label !=
+            mir.insns[cursor + 15].label ||
+        mir.insns[cursor + 9].opcode != MIR_LABEL ||
+        !mir_match_atof_schedule_string(
+            success_string->dst, &plan->success_string_id) ||
+        mir.insns[cursor + 11].opcode != MIR_ARG ||
+        checks_load->opcode != MIR_LOAD ||
+        !mir_machine_named_nonvolatile(checks_load) ||
+        !mir_scalar_memory_location(
+            checks_load, &memory_type,
+            &memory_storage, &plan->checks_offset) ||
+        memory_storage != SC_GLOBAL ||
+        !mir_match_final_call_integer_type(memory_type, 2) ||
+        (plan->checks_root =
+             find_global(checks_load->name)) == NULL ||
+        plan->checks_root->is_volatile ||
+        mir_machine_same_location(failure_load, checks_load) ||
+        mir.insns[cursor + 13].opcode != MIR_ARG ||
+        success_print->opcode != MIR_CALL ||
+        mir.insns[cursor + 15].opcode != MIR_LABEL ||
+        return_load->opcode != MIR_LOAD ||
+        !mir_machine_same_location(failure_load, return_load) ||
+        mir.insns[cursor + 17].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[cursor + 17].src1 != return_load->dst ||
+        mir.insns[cursor + 17].label !=
+            mir.insns[cursor + 21].label ||
+        mir.insns[cursor + 18].opcode != MIR_CONST ||
+        !mir_machine_constant_equals(
+            mir.insns[cursor + 18].dst, 1) ||
+        mir.insns[cursor + 19].opcode != MIR_LABEL ||
+        mir.insns[cursor + 20].opcode != MIR_JUMP ||
+        mir.insns[cursor + 20].label !=
+            mir.insns[cursor + 24].label ||
+        mir.insns[cursor + 21].opcode != MIR_LABEL ||
+        mir.insns[cursor + 22].opcode != MIR_CONST ||
+        !mir_machine_constant_equals(
+            mir.insns[cursor + 22].dst, 0) ||
+        mir.insns[cursor + 23].opcode != MIR_LABEL ||
+        mir.insns[cursor + 24].opcode != MIR_LABEL ||
+        phi->opcode != MIR_PHI ||
+        phi->src1 != mir.insns[cursor + 18].dst ||
+        phi->src2 != mir.insns[cursor + 22].dst ||
+        phi->phi_pred1 != mir.insns[cursor + 19].label ||
+        phi->phi_pred2 != mir.insns[cursor + 23].label ||
+        mir.insns[cursor + 26].opcode != MIR_RETURN ||
+        mir.insns[cursor + 26].src1 != phi->dst)
+        return 0;
+    plan->failure_offset = memory_offset;
+    if (!mir_machine_two_call_arguments(
+            failure_print, failure_arguments) ||
+        failure_arguments[0] != failure_string->dst ||
+        failure_arguments[1] != failure_print_load->dst ||
+        !mir_match_atof_schedule_argument(
+            &mir.insns[cursor + 4], failure_print,
+            failure_string->dst, 0) ||
+        !mir_match_atof_schedule_argument(
+            &mir.insns[cursor + 6], failure_print,
+            failure_print_load->dst, 1) ||
+        !mir_match_atof_schedule_print_function(
+            failure_print, &plan->print_function) ||
+        !mir_machine_two_call_arguments(
+            success_print, success_arguments) ||
+        success_arguments[0] != success_string->dst ||
+        success_arguments[1] != checks_load->dst ||
+        !mir_match_atof_schedule_argument(
+            &mir.insns[cursor + 11], success_print,
+            success_string->dst, 0) ||
+        !mir_match_atof_schedule_argument(
+            &mir.insns[cursor + 13], success_print,
+            checks_load->dst, 1) ||
+        !mir_match_atof_schedule_print_function(
+            success_print, &plan->print_function))
+        return 0;
+    return 1;
+}
+
+static int mir_match_atof_schedule(
+    struct MirAtofSchedule *plan)
+{
+    static const int group_counts[9] =
+        {16, 3, 5, 5, 3, 3, 5, 4, 2};
+    static const int group_kinds[9] = {
+        MIR_ATOF_SCHEDULE_FLOAT,
+        MIR_ATOF_SCHEDULE_INT,
+        MIR_ATOF_SCHEDULE_END,
+        MIR_ATOF_SCHEDULE_INFINITY,
+        MIR_ATOF_SCHEDULE_FLOAT,
+        MIR_ATOF_SCHEDULE_NAN,
+        MIR_ATOF_SCHEDULE_FLOAT,
+        MIR_ATOF_SCHEDULE_END,
+        MIR_ATOF_SCHEDULE_FLOAT
+    };
+    int opcode_counts[MIR_RETURN + 1];
+    int cursor = 1;
+    int check = 0;
+    int group;
+    int instruction;
+    int nop_count = 0;
+    int scaled_float_count = 0;
+    int scaled_int_count = 0;
+
+    memset(plan, 0, sizeof(*plan));
+    memset(opcode_counts, 0, sizeof(opcode_counts));
+    if (mir.count != 482 || mir_cfg_block_count() != 8 ||
+        mir.has_vla || mir.local_bytes != 0 ||
+        mir.aggregate_temp_bytes != 0 ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        !mir_match_final_call_integer_type(mir.return_type, 2) ||
+        mir.insns[0].opcode != MIR_LABEL)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        int opcode = mir.insns[instruction].opcode;
+
+        if (opcode < 0 || opcode > MIR_RETURN)
+            return mir_machine_reject(
+                "atof-schedule", "opcode-range");
+        ++opcode_counts[opcode];
+    }
+    if (opcode_counts[MIR_ARG] != 202 ||
+        opcode_counts[MIR_STRING_ADDRESS] != 94 ||
+        opcode_counts[MIR_CALL] != 85 ||
+        opcode_counts[MIR_FLOAT_CONST] != 55 ||
+        opcode_counts[MIR_CONST] != 19 ||
+        opcode_counts[MIR_LABEL] != 8 ||
+        opcode_counts[MIR_UNARY] != 5 ||
+        opcode_counts[MIR_LOAD] != 4 ||
+        opcode_counts[MIR_BINARY] != 3 ||
+        opcode_counts[MIR_BRANCH_FALSE] != 2 ||
+        opcode_counts[MIR_JUMP] != 2 ||
+        opcode_counts[MIR_NOP] != 1 ||
+        opcode_counts[MIR_PHI] != 1 ||
+        opcode_counts[MIR_RETURN] != 1)
+        return mir_machine_reject(
+            "atof-schedule", "opcode-counts");
+
+    for (group = 0; group < 9; ++group) {
+        int item_index;
+
+        for (item_index = 0;
+             item_index < group_counts[group];
+             ++item_index) {
+            struct MirAtofScheduleCheck *item =
+                &plan->checks[check];
+            int matched = 0;
+
+            item->kind = group_kinds[group];
+            if (item->kind == MIR_ATOF_SCHEDULE_FLOAT)
+                matched = mir_match_atof_schedule_float_check(
+                    plan, item, &cursor, 455);
+            else if (item->kind == MIR_ATOF_SCHEDULE_INT)
+                matched = mir_match_atof_schedule_int_check(
+                    plan, item, &cursor, 455, &nop_count);
+            else if (item->kind == MIR_ATOF_SCHEDULE_END)
+                matched = mir_match_atof_schedule_end_check(
+                    plan, item, &cursor, 455);
+            else if (item->kind == MIR_ATOF_SCHEDULE_INFINITY)
+                matched = mir_match_atof_schedule_infinity_check(
+                    plan, item, &cursor, 455);
+            else if (item->kind == MIR_ATOF_SCHEDULE_NAN)
+                matched = mir_match_atof_schedule_nan_check(
+                    plan, item, &cursor, 455);
+            if (!matched)
+                return mir_machine_reject(
+                    "atof-schedule", "check-shape");
+            if (item->has_scale) {
+                if (item->kind == MIR_ATOF_SCHEDULE_FLOAT)
+                    ++scaled_float_count;
+                else if (item->kind == MIR_ATOF_SCHEDULE_INT)
+                    ++scaled_int_count;
+                else
+                    return mir_machine_reject(
+                        "atof-schedule", "scaled-kind");
+            }
+            ++check;
+        }
+    }
+    if (check != MIR_ATOF_SCHEDULE_CHECK_COUNT ||
+        cursor != 455 || nop_count != 1 ||
+        scaled_float_count != 2 || scaled_int_count != 1 ||
+        plan->value_function == NULL ||
+        plan->float_check_function == NULL ||
+        plan->int_check_function == NULL ||
+        plan->end_check_function == NULL ||
+        plan->infinity_check_function == NULL ||
+        plan->nan_check_function == NULL ||
+        !mir_match_atof_schedule_final(plan, cursor))
+        return mir_machine_reject(
+            "atof-schedule", "complete-shape");
+    return 1;
+}
+
 static int mir_match_symbol_find_schedule(
     struct MirSymbolFindSchedule *plan)
 {
@@ -49780,6 +50502,139 @@ static void mir_emit_format_buffer_schedule(
             epilogue, epilogue);
 }
 
+static void mir_emit_atof_schedule_cleanup(
+    FILE *out, int words)
+{
+    if (words >= 5) {
+        fprintf(out,
+                "\tld hl,%d\n\tadd hl,sp\n\tld sp,hl\n",
+                words * 2);
+        return;
+    }
+    mir_emit_final_call_cleanup(out, words);
+}
+
+static void mir_emit_atof_schedule_value(
+    FILE *out, const struct MirAtofSchedule *plan,
+    const struct MirAtofScheduleCheck *item)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            item->input_string_id);
+    mir_machine_emit_symbol_call(out, plan->value_function);
+    fputs("\tpop bc\n", out);
+    if (item->has_scale) {
+        fputs("\tpush de\n\tpush hl\n", out);
+        mir_machine_emit_float_bits(out, item->scale);
+        mir_emit_runtime_call(out, "__fmf");
+        fputs("\tpop bc\n\tpop bc\n", out);
+    }
+}
+
+static void mir_emit_atof_schedule_check(
+    FILE *out, const struct MirAtofSchedule *plan,
+    const struct MirAtofScheduleCheck *item)
+{
+    if (item->kind == MIR_ATOF_SCHEDULE_FLOAT) {
+        mir_emit_final_call_constant(out, item->tolerance, 4);
+        mir_emit_final_call_constant(out, item->expected, 4);
+        mir_emit_atof_schedule_value(out, plan, item);
+        fputs("\tpush de\n\tpush hl\n", out);
+        fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+                item->name_string_id);
+        mir_machine_emit_symbol_call(
+            out, plan->float_check_function);
+        mir_emit_atof_schedule_cleanup(out, 7);
+        return;
+    }
+    if (item->kind == MIR_ATOF_SCHEDULE_INT) {
+        fprintf(out, "\tld hl,%lu\n\tpush hl\n",
+                item->expected & 0xffffUL);
+        mir_emit_atof_schedule_value(out, plan, item);
+        mir_emit_runtime_call(out, "__ffi");
+        fputs("\tpush hl\n", out);
+        fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+                item->name_string_id);
+        mir_machine_emit_symbol_call(
+            out, plan->int_check_function);
+        mir_emit_atof_schedule_cleanup(out, 3);
+        return;
+    }
+    if (item->kind == MIR_ATOF_SCHEDULE_END) {
+        fprintf(out,
+                "\tld hl,%lu\n\tpush hl\n"
+                "\tld hl,S%d\n\tpush hl\n"
+                "\tld hl,S%d\n\tpush hl\n",
+                item->expected & 0xffffUL,
+                item->input_string_id,
+                item->name_string_id);
+        mir_machine_emit_symbol_call(
+            out, plan->end_check_function);
+        mir_emit_atof_schedule_cleanup(out, 3);
+        return;
+    }
+    if (item->kind == MIR_ATOF_SCHEDULE_INFINITY) {
+        fprintf(out, "\tld hl,%lu\n\tpush hl\n",
+                item->expected & 0xffffUL);
+        mir_emit_atof_schedule_value(out, plan, item);
+        fputs("\tpush de\n\tpush hl\n", out);
+        fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+                item->name_string_id);
+        mir_machine_emit_symbol_call(
+            out, plan->infinity_check_function);
+        mir_emit_atof_schedule_cleanup(out, 4);
+        return;
+    }
+    mir_emit_atof_schedule_value(out, plan, item);
+    fputs("\tpush de\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            item->name_string_id);
+    mir_machine_emit_symbol_call(
+        out, plan->nan_check_function);
+    mir_emit_atof_schedule_cleanup(out, 3);
+}
+
+static void mir_emit_atof_schedule(
+    FILE *out, const struct MirAtofSchedule *plan)
+{
+    int success = new_label();
+    int summary = new_label();
+    int check;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (check = 0;
+         check < MIR_ATOF_SCHEDULE_CHECK_COUNT;
+         ++check)
+        mir_emit_atof_schedule_check(
+            out, plan, &plan->checks[check]);
+
+    mir_machine_emit_global_word(
+        out, plan->failure_root, plan->failure_offset);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", success);
+    mir_machine_emit_global_word(
+        out, plan->failure_root, plan->failure_offset);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->failure_string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    mir_emit_atof_schedule_cleanup(out, 2);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            summary, success);
+    mir_machine_emit_global_word(
+        out, plan->checks_root, plan->checks_offset);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->success_string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    mir_emit_atof_schedule_cleanup(out, 2);
+    fprintf(out, "L%d:\n", summary);
+    mir_machine_emit_global_word(
+        out, plan->failure_root, plan->failure_offset);
+    fputs("\tld a,h\n\tor l\n\tld hl,0\n\tret z\n"
+          "\tinc hl\n\tret\n", out);
+}
+
 static void mir_emit_buffered_declaration_address(
     FILE *out, const struct MirBufferedDeclarationSchedule *plan)
 {
@@ -50267,6 +51122,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirBackwardPassSchedule backward_pass_schedule;
     struct MirUnsignedLongSqrtSchedule unsigned_long_sqrt_schedule;
     struct MirFormatBufferSchedule format_buffer_schedule;
+    struct MirAtofSchedule atof_schedule;
     struct MirSymbolFindSchedule symbol_find_schedule;
     struct MirLocalIdentityArrayResult local_identity_array_result;
     struct MirConstantResultSwitch constant_result_switch;
@@ -50476,6 +51332,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &format_buffer_schedule)) {
         mir_emit_format_buffer_schedule(
             out, &format_buffer_schedule);
+        return 1;
+    }
+    if (mir_match_atof_schedule(&atof_schedule)) {
+        mir_emit_atof_schedule(out, &atof_schedule);
         return 1;
     }
     if (mir_match_symbol_find_schedule(&symbol_find_schedule)) {

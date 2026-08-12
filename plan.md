@@ -6,10 +6,42 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Base HEAD for this batch: `924cebd`.
-- Current candidate coverage: **2116/2185 (96.84%)**.
-- Remaining fallback population: **69 `final-cost-policy`**, all selected by
+- Base HEAD for this batch: `82d51f0`.
+- Current candidate coverage: **2117/2185 (96.89%)**.
+- Remaining fallback population: **68 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- A strict name-free conversion-check scheduler now admits the exact
+  482-instruction, eight-block `tatof.main` graph. The matcher validates all
+  46 checks in source order: 26 float comparisons, three float-to-int
+  conversions, nine end-pointer checks, five infinity checks, and three NaN
+  checks. It proves all 37 one-pointer float conversion calls, the three
+  signed float-to-int ABI conversions, all three float multiplications, every
+  typed float/word constant, all 94 string operands, every call-site argument
+  index and definition, each checker prototype and repeated symbol identity,
+  both variadic print branches, the distinct global check/failure counters,
+  and the final reloaded failure-to-boolean return. Selection uses only the
+  complete MIR structure, types, prototypes, storage relationships, and CFG;
+  no source/app/function name or output hash is consulted. Emission is
+  frameless, uses no IY, retains the DE:HL float ABI and the established
+  `__fmf`/`__ffi` conversions, preserves all conversion/check/print calls and
+  their ordering, and keeps the original success/failure paths. Non-stack
+  selected/captured metrics are 8,039/8,775 bytes and 810/922 instructions;
+  stack-check metrics are 8,068/8,804 bytes and 811/923 instructions.
+  `tatof` passes full peep/nopeep. Checked performance improves peep from
+  1,847,963 to 1,841,506 cycles (-6,457 / -0.35%) and 9,600 to 9,344 bytes
+  (-256 / -2.67%), and nopeep from 1,852,891 to 1,843,460 cycles
+  (-9,431 / -0.51%) and 9,984 to 9,344 bytes (-640 / -6.41%). A separately
+  renamed conversion-edge harness selects at 8,075/8,811 bytes and 811/923
+  instructions while checking 32,767, -32,767, and a scaled 16,383.5-to-32,767
+  conversion. Selected and forced-fallback output is identical in both modes.
+  Peep improves from 1,878,263 to 1,877,132 cycles with equal 8,704-byte linked
+  size; nopeep improves from 1,880,291 to 1,879,086 cycles and 8,832 to
+  8,704 bytes. A deliberate one-check mismatch exercises the failure print and
+  nonzero return path; selected and forced-fallback program output is identical
+  in peep and nopeep modes (`got 32767 expected 32766`, then `tatof FAILED 1`).
+  No performance baseline changes were made. The regression-gated stack-check
+  census advances from 2116/2185 to 2117/2185 with exactly `tatof.main` and no
+  removal.
 - A strict name-free formatted-buffer scheduler now admits the exact
   897-instruction, eight-block `tzpad.main` graph. The matcher proves the
   single 64-byte local character array and every one of its 122 address
