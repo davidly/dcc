@@ -470,6 +470,14 @@ struct MirTwoStringPairReports {
     int value_string_ids[4];
 };
 
+struct MirTrianglePerimeter {
+    struct Sym *sqrt_function;
+    int parameter_stack_offset;
+    int first_member_offset;
+    int second_member_offset;
+    int scale;
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -6266,6 +6274,67 @@ static int mir_match_two_string_pair_reports(
     plan->value_string_ids[3] = (int)mir.insns[10].immediate;
     if (plan->print_function == NULL)
         return mir_machine_reject("two-string-pair-reports", "function");
+    return 1;
+}
+
+static int mir_match_triangle_perimeter(
+    struct MirTrianglePerimeter *plan)
+{
+    int argument;
+    long scale;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 41 || mir_cfg_block_count() != 1 ||
+        mir.has_vla || type_size(mir.return_type) != 4 ||
+        mir.insns[1].opcode != MIR_PARAM ||
+        mir.insns[2].opcode != MIR_LOAD ||
+        mir.insns[5].opcode != MIR_LOAD ||
+        mir.insns[6].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[7].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[7].memory_size != 2 ||
+        mir.insns[8].opcode != MIR_UNARY ||
+        mir.insns[10].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[11].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[12].opcode != MIR_UNARY ||
+        mir.insns[13].immediate != '*' ||
+        mir.insns[15].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[16].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[17].opcode != MIR_UNARY ||
+        mir.insns[19].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[20].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[21].opcode != MIR_UNARY ||
+        mir.insns[22].immediate != '*' ||
+        mir.insns[23].immediate != '+' ||
+        !mir_machine_single_call_argument(
+            &mir.insns[25], &argument) ||
+        argument != mir.insns[23].dst ||
+        mir.insns[28].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[29].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[30].opcode != MIR_UNARY ||
+        mir.insns[32].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[33].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[34].opcode != MIR_UNARY ||
+        mir.insns[35].immediate != '+' ||
+        mir.insns[37].immediate != '+' ||
+        !mir_machine_constant_value(mir.insns[38].dst, &scale, 0) ||
+        mir.insns[39].immediate != '*' ||
+        mir.insns[40].src1 != mir.insns[39].dst)
+        return mir_machine_reject("triangle-perimeter", "shape");
+    plan->first_member_offset = (int)mir.insns[6].immediate;
+    plan->second_member_offset = (int)mir.insns[15].immediate;
+    plan->scale = (int)scale;
+    plan->sqrt_function = find_global(mir.insns[25].name);
+    if (plan->first_member_offset != (int)mir.insns[10].immediate ||
+        plan->first_member_offset != (int)mir.insns[28].immediate ||
+        plan->second_member_offset != (int)mir.insns[19].immediate ||
+        plan->second_member_offset != (int)mir.insns[32].immediate ||
+        plan->first_member_offset < 0 ||
+        plan->second_member_offset < 0 ||
+        plan->scale <= 0 || plan->scale > 32767 ||
+        plan->sqrt_function == NULL ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->parameter_stack_offset))
+        return mir_machine_reject("triangle-perimeter", "layout");
     return 1;
 }
 
@@ -25043,6 +25112,59 @@ static void mir_emit_two_string_pair_reports(
     fputs("\tret\n", out);
 }
 
+static void mir_emit_triangle_square(
+    FILE *out, const struct MirTrianglePerimeter *plan, int offset)
+{
+    (void)plan;
+    fprintf(out,
+            "\tld c,(ix%+d)\n\tld b,(ix%+d)\n"
+            "\tld l,c\n\tld h,b\n",
+            offset, offset + 1);
+    mir_emit_runtime_call(out, "__m1s");
+}
+
+static void mir_emit_triangle_signed_member(
+    FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld a,h\n\trlca\n\tsbc a,a\n"
+            "\tld d,a\n\tld e,a\n",
+            offset, offset + 1);
+}
+
+static void mir_emit_triangle_perimeter(
+    FILE *out, const struct MirTrianglePerimeter *plan)
+{
+    fputs("\tpush ix\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tpush de\n\tpop ix\n",
+            plan->parameter_stack_offset + 2);
+    mir_emit_triangle_square(out, plan, plan->first_member_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_triangle_square(out, plan, plan->second_member_offset);
+    fputs("\tpop bc\n\tadd hl,bc\n"
+          "\tex de,hl\n\tpop bc\n\tadc hl,bc\n\tex de,hl\n"
+          "\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->sqrt_function);
+    fputs("\tpop bc\n\tpop bc\n\tpush de\n\tpush hl\n", out);
+    mir_emit_triangle_signed_member(out, plan->first_member_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_triangle_signed_member(out, plan->second_member_offset);
+    fputs("\tpop bc\n\tadd hl,bc\n"
+          "\tex de,hl\n\tpop bc\n\tadc hl,bc\n\tex de,hl\n"
+          "\tpop bc\n\tadd hl,bc\n"
+          "\tex de,hl\n\tpop bc\n\tadc hl,bc\n\tex de,hl\n"
+          "\tpush de\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,%d\n\tld de,0\n", plan->scale);
+    mir_emit_runtime_call(out, "__lmul");
+    fputs("\tpop bc\n\tpop bc\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -28759,6 +28881,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirTwoPostUpdateReports two_post_update_reports;
     struct MirCharPointerUpdateReports char_pointer_update_reports;
     struct MirTwoStringPairReports two_string_pair_reports;
+    struct MirTrianglePerimeter triangle_perimeter;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -29294,6 +29417,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &two_string_pair_reports)) {
         mir_emit_two_string_pair_reports(
             out, &two_string_pair_reports);
+        return 1;
+    }
+    if (mir_match_triangle_perimeter(&triangle_perimeter)) {
+        mir_emit_triangle_perimeter(out, &triangle_perimeter);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
