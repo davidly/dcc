@@ -403,6 +403,14 @@ struct MirCrcUpdateRunner {
     int count;
 };
 
+struct MirFixedRowMemberSum {
+    int pointer_stack_offset;
+    int rows_stack_offset;
+    int columns;
+    int element_stride;
+    int member_offset;
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -5525,6 +5533,63 @@ static int mir_match_crc_update_runner(struct MirCrcUpdateRunner *plan)
     if (plan->bytes_assembly_name[0] == 0 ||
         plan->count <= 0 || plan->count > 255)
         return mir_machine_reject("crc-update-runner", "objects");
+    return 1;
+}
+
+static int mir_match_fixed_row_member_sum(
+    struct MirFixedRowMemberSum *plan)
+{
+    long column_count;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 59 || mir_cfg_block_count() != 7 ||
+        mir.has_vla || type_size(mir.return_type) != 4 ||
+        mir.insns[1].opcode != MIR_PARAM ||
+        mir.insns[2].opcode != MIR_PARAM ||
+        !mir_machine_constant_equals(mir.insns[4].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[6].dst, 0) ||
+        mir.insns[13].opcode != MIR_PHI ||
+        mir.insns[16].immediate != '<' ||
+        mir.insns[16].src1 != mir.insns[13].dst ||
+        mir.insns[16].src2 != mir.insns[2].dst ||
+        mir.insns[17].src1 != mir.insns[16].dst ||
+        !mir_machine_constant_equals(mir.insns[18].dst, 0) ||
+        !mir_machine_constant_value(
+            mir.insns[28].dst, &column_count, 0) ||
+        mir.insns[29].immediate != '<' ||
+        mir.insns[30].src1 != mir.insns[29].dst ||
+        mir.insns[34].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[34].src1 != mir.insns[1].dst ||
+        mir.insns[34].src2 != mir.insns[13].dst ||
+        mir.insns[36].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[36].src1 != mir.insns[34].dst ||
+        mir.insns[37].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[37].src1 != mir.insns[36].dst ||
+        mir.insns[38].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[38].memory_size != 2 ||
+        mir.insns[40].immediate != '+' ||
+        !mir_machine_constant_equals(mir.insns[45].dst, 1) ||
+        mir.insns[46].immediate != '+' ||
+        mir.insns[48].label != mir.insns[21].label ||
+        !mir_machine_constant_equals(mir.insns[52].dst, 1) ||
+        mir.insns[53].immediate != '+' ||
+        mir.insns[55].label != mir.insns[9].label ||
+        mir.insns[58].src1 != mir.insns[57].dst)
+        return mir_machine_reject("fixed-row-member-sum", "shape");
+    plan->columns = (int)column_count;
+    plan->element_stride = (int)mir.insns[36].immediate;
+    plan->member_offset = (int)mir.insns[37].immediate;
+    if ((int)mir.insns[34].immediate !=
+            plan->columns * plan->element_stride ||
+        plan->columns <= 0 || plan->columns > 8 ||
+        plan->element_stride <= 0 || plan->element_stride > 16 ||
+        plan->member_offset < 0 ||
+        plan->member_offset + 1 >= plan->element_stride ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->pointer_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[2].dst, &plan->rows_stack_offset))
+        return mir_machine_reject("fixed-row-member-sum", "layout");
     return 1;
 }
 
@@ -23957,6 +24022,48 @@ static void mir_emit_crc_update_runner(
     fputs("\tpop iy\n;@dcc.reg free=iy\n\tret\n", out);
 }
 
+static void mir_emit_fixed_row_member_sum(
+    FILE *out, const struct MirFixedRowMemberSum *plan)
+{
+    int loop = new_label();
+    int done = new_label();
+    int column;
+    int step;
+
+    fputs("\tpush ix\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tpush de\n\tpop ix\n"
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tld de,0\n\tld hl,0\n"
+            "\tld a,b\n\tor a\n\tjp m,L%d\n"
+            "\tor c\n\tjp z,L%d\n"
+            "L%d:\n",
+            plan->pointer_stack_offset + 2,
+            plan->rows_stack_offset + 2,
+            done, done, loop);
+    for (column = 0; column < plan->columns; ++column) {
+        fprintf(out,
+                "\tpush bc\n"
+                "\tld c,(ix%+d)\n\tld b,(ix%+d)\n"
+                "\tld a,b\n\trla\n\tsbc a,a\n"
+                "\tadd hl,bc\n\tld c,a\n\tld b,a\n"
+                "\tex de,hl\n\tadc hl,bc\n\tex de,hl\n"
+                "\tpop bc\n",
+                plan->member_offset, plan->member_offset + 1);
+        for (step = 0; step < plan->element_stride; ++step)
+            fputs("\tinc ix\n", out);
+    }
+    fprintf(out,
+            "\tdec bc\n\tld a,b\n\tor c\n\tjp nz,L%d\n"
+            "L%d:\n\tpop ix\n\tret\n",
+            loop, done);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -27665,6 +27772,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirVariadicJoinReport variadic_join_report;
     struct MirStringMismatchReport string_mismatch_report;
     struct MirCrcUpdateRunner crc_update_runner;
+    struct MirFixedRowMemberSum fixed_row_member_sum;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -28152,6 +28260,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_crc_update_runner(&crc_update_runner)) {
         mir_emit_crc_update_runner(out, &crc_update_runner);
+        return 1;
+    }
+    if (mir_match_fixed_row_member_sum(&fixed_row_member_sum)) {
+        mir_emit_fixed_row_member_sum(out, &fixed_row_member_sum);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
