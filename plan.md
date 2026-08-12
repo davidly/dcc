@@ -6,11 +6,29 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `31fa816`
-  (`dcc MIR: schedule math call orchestration`).
-- Current candidate coverage: **2102/2185 (96.20%)**.
-- Remaining fallback population: **83 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `70d4a62`
+  (`dcc MIR: schedule VLA pointer switches`).
+- Current candidate coverage: **2103/2185 (96.25%)**.
+- Remaining fallback population: **82 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The strict name-free ctype/reallocation scheduler admits `tctype.main`. It
+  matches the complete five-block graph, preserves all 14 ctype, 17 checker,
+  five `printf`, and six allocation/string calls in their MIR side-effect
+  order, and retains each null-return branch plus the final global-failure
+  report. The emitter keeps the pointer in one persistent stack word, has no
+  IX frame and uses no IY. Zero-result ctype checks use a direct HL truth test
+  so the shipping peep path remains profitable. Non-stack selected output is
+  3,885 text bytes / 381 instructions versus 4,423 / 430 captured;
+  stack-check output is 3,914 / 382 versus 4,452 / 431. Against forced
+  fallback, `tctype` improves from 23,887 to 23,800 peep cycles (-0.36%) and
+  from 24,372 to 23,766 nopeep cycles (-2.49%). Peep linked size remains
+  7,424 bytes; nopeep falls from 7,680 to 7,424 bytes (-256 / -3.33%). The
+  fresh stack-check census is 2103/2185 with exactly this one new function
+  and no regression. A separately named scratch clone added `EOF`, 128, and
+  255 inputs to `isalpha`/`toupper`/`tolower`; the same matcher selected its
+  4,536-byte / 444-instruction stack-check graph versus 5,189 / 502 captured,
+  and peep, nopeep, and forced-fallback runs all printed
+  `ctype/realloc ok`.
 - The strict name-free VLA pointer-element switch scheduler admits
   `tvla.vla_ptr2d_deref_chain_switch`. It matches the complete 51-instruction,
   five-block MIR graph, proves the two word parameters at their ABI offsets,
