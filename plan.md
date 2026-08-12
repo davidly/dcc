@@ -6,11 +6,23 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `733889b`
-  (`dcc MIR: schedule alias-safe pointer mixes`).
-- Current candidate coverage: **2099/2185 (96.06%)**.
-- Remaining fallback population: **86 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `d6cdbaf`
+  (`dcc MIR: schedule stdlib call orchestration`).
+- Current candidate coverage: **2100/2185 (96.11%)**.
+- Remaining fallback population: **85 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The strict name-free compound-check scheduler admits `tcaslv.main`. A
+  sequential MIR proof validates all 116 local/pointer/array/member stores,
+  folds only proven integer values, and preserves all 71 `chk` calls, the
+  zero-argument compound-assignment helper call, the final failure load and
+  the success print in their original order. Emission uses a 23-byte IX frame
+  and no IY. Non-stack selected output is 10,462 text bytes / 1,044
+  instructions versus 17,650 / 1,728 captured; stack-check output is 10,491 /
+  1,045 versus 17,679 / 1,729. `tcaslv` improves from 2,222,225 to 2,210,323
+  peep cycles (-0.54%) and from 2,229,962 to 2,217,366 nopeep cycles (-0.56%);
+  linked size falls 1,280 / 1,152 bytes. The fresh non-stack census is
+  2011/2101 and the stack-check census is 2100/2185, each with exactly this
+  one new function and no regression.
 - The strict name-free final-call scheduler admits `tstdlib.main`. It matches
   the exact two-block call graph structurally, preserves all 77 calls
   (including four `abs`, four `labs`, ten `atoi`, fifteen `atol`, ten
@@ -796,7 +808,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 89 final-cost fallbacks,
+- Current next priority: repeated causes in the 85 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 

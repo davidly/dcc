@@ -1266,6 +1266,42 @@ struct MirLiteralCheckRunner {
     int has_failure_report;
 };
 
+#define MIR_MAX_COMPOUND_CHECK_EVENTS 192
+
+enum MirCompoundCheckEventKind {
+    MIR_COMPOUND_CHECK_STORE = 1,
+    MIR_COMPOUND_CHECK_CALL,
+    MIR_COMPOUND_CHECK_HELPER
+};
+
+enum MirCompoundCheckValueKind {
+    MIR_COMPOUND_CHECK_INTEGER = 1,
+    MIR_COMPOUND_CHECK_ADDRESS
+};
+
+struct MirCompoundCheckEvent {
+    struct Sym *function;
+    unsigned long value;
+    int kind;
+    int value_kind;
+    int offset;
+    int address_offset;
+    int width;
+    int string_id;
+};
+
+struct MirCompoundCheckRunner {
+    struct MirCompoundCheckEvent events[MIR_MAX_COMPOUND_CHECK_EVENTS];
+    struct Sym *check_function;
+    struct Sym *helper_function;
+    struct Sym *failure_root;
+    struct Sym *print_function;
+    int event_count;
+    int frame_bytes;
+    int failure_offset;
+    int success_string_id;
+};
+
 struct MirPalindromeScan {
     int parameter_stack_offset;
 };
@@ -9315,6 +9351,595 @@ static int mir_match_literal_check_runner(
     return plan->call_count >= 8 &&
            total_calls == plan->call_count + 1 +
                plan->has_intro + plan->has_failure_report;
+}
+
+enum MirCompoundValueKind {
+    MIR_COMPOUND_VALUE_UNKNOWN = 0,
+    MIR_COMPOUND_VALUE_INTEGER,
+    MIR_COMPOUND_VALUE_ADDRESS,
+    MIR_COMPOUND_VALUE_STRING
+};
+
+struct MirCompoundValue {
+    long value;
+    int kind;
+};
+
+static int mir_compound_normalize_integer(
+    long value, int type, long *result)
+{
+    int width = type_size(type);
+
+    if (type_ptr_depth(type) != 0 || type_is_float(type))
+        return 0;
+    if ((type & 15) == TYPE_BOOL) {
+        *result = value != 0;
+        return 1;
+    }
+    if (width != 1 && width != 2 && width != 4)
+        return 0;
+    return mir_machine_convert_integer(value, type, result);
+}
+
+static int mir_compound_frame_index(
+    int frame_bytes, int offset, int width)
+{
+    if (width <= 0 || offset < -frame_bytes ||
+        offset >= 0 || offset + width > 0)
+        return -1;
+    return offset + frame_bytes;
+}
+
+static void mir_compound_invalidate_addresses(
+    unsigned char *address_known, int frame_bytes,
+    int index, int width)
+{
+    int candidate;
+
+    for (candidate = 0; candidate + 1 < frame_bytes; ++candidate)
+        if (address_known[candidate] &&
+            candidate < index + width &&
+            candidate + 2 > index)
+            address_known[candidate] = 0;
+}
+
+static int mir_compound_store_memory(
+    unsigned char *bytes, unsigned char *byte_known,
+    int *addresses, unsigned char *address_known,
+    int frame_bytes, int offset, int width,
+    const struct MirCompoundValue *value)
+{
+    int index = mir_compound_frame_index(
+        frame_bytes, offset, width);
+    int byte;
+
+    if (index < 0 || (width != 1 && width != 2))
+        return 0;
+    mir_compound_invalidate_addresses(
+        address_known, frame_bytes, index, width);
+    if (value->kind == MIR_COMPOUND_VALUE_ADDRESS) {
+        if (width != 2)
+            return 0;
+        address_known[index] = 1;
+        addresses[index] = (int)value->value;
+        byte_known[index] = 0;
+        byte_known[index + 1] = 0;
+        return 1;
+    }
+    if (value->kind != MIR_COMPOUND_VALUE_INTEGER)
+        return 0;
+    for (byte = 0; byte < width; ++byte) {
+        bytes[index + byte] =
+            (unsigned char)(((unsigned long)value->value >>
+                             (byte * 8)) & 255UL);
+        byte_known[index + byte] = 1;
+    }
+    return 1;
+}
+
+static int mir_compound_load_memory(
+    const unsigned char *bytes, const unsigned char *byte_known,
+    const int *addresses, const unsigned char *address_known,
+    int frame_bytes, int offset, int width, int type,
+    struct MirCompoundValue *value)
+{
+    int index = mir_compound_frame_index(
+        frame_bytes, offset, width);
+    unsigned long bits = 0;
+    long converted;
+    int byte;
+
+    if (index < 0 || (width != 1 && width != 2))
+        return 0;
+    if (type_ptr_depth(type) != 0) {
+        if (width != 2 || !address_known[index])
+            return 0;
+        value->kind = MIR_COMPOUND_VALUE_ADDRESS;
+        value->value = addresses[index];
+        return 1;
+    }
+    for (byte = 0; byte < width; ++byte) {
+        if (!byte_known[index + byte])
+            return 0;
+        bits |= (unsigned long)bytes[index + byte] << (byte * 8);
+    }
+    if (!mir_compound_normalize_integer(
+            (long)bits, type, &converted))
+        return 0;
+    value->kind = MIR_COMPOUND_VALUE_INTEGER;
+    value->value = converted;
+    return 1;
+}
+
+static int mir_compound_add_store_event(
+    struct MirCompoundCheckRunner *plan, int offset, int width,
+    const struct MirCompoundValue *value)
+{
+    struct MirCompoundCheckEvent *event;
+
+    if (plan->event_count >= MIR_MAX_COMPOUND_CHECK_EVENTS ||
+        (value->kind != MIR_COMPOUND_VALUE_INTEGER &&
+         value->kind != MIR_COMPOUND_VALUE_ADDRESS))
+        return 0;
+    event = &plan->events[plan->event_count++];
+    memset(event, 0, sizeof(*event));
+    event->kind = MIR_COMPOUND_CHECK_STORE;
+    event->offset = offset;
+    event->width = width;
+    if (value->kind == MIR_COMPOUND_VALUE_ADDRESS) {
+        event->value_kind = MIR_COMPOUND_CHECK_ADDRESS;
+        event->address_offset = (int)value->value;
+    } else {
+        event->value_kind = MIR_COMPOUND_CHECK_INTEGER;
+        event->value = (unsigned long)value->value;
+    }
+    return 1;
+}
+
+static int mir_compound_check_function(
+    const struct MirInsn *call, struct Sym **function_out)
+{
+    struct Sym *function = find_global(call->name);
+
+    if (function == NULL || !function->is_defined ||
+        function->is_funcptr || function->is_noreturn ||
+        !function->has_proto || function->proto_variadic ||
+        function->proto_nargs != 3 ||
+        type_ptr_depth(function->proto_types[0]) != 1 ||
+        type_size(function->proto_types[0]) != 2 ||
+        type_ptr_depth(function->proto_types[1]) != 0 ||
+        type_ptr_depth(function->proto_types[2]) != 0 ||
+        type_size(function->proto_types[1]) != 2 ||
+        type_size(function->proto_types[2]) != 2 ||
+        (call->type & 15) != TYPE_VOID ||
+        call->memory_flags != 0)
+        return 0;
+    if (*function_out != NULL && *function_out != function)
+        return 0;
+    *function_out = function;
+    return 1;
+}
+
+static int mir_compound_add_call_event(
+    struct MirCompoundCheckRunner *plan,
+    const struct MirInsn *call,
+    const struct MirCompoundValue *values, int value_capacity)
+{
+    struct MirCompoundCheckEvent *event;
+    int arguments[3];
+    int argument;
+
+    if (!mir_machine_three_call_arguments(call, arguments) ||
+        !mir_compound_check_function(
+            call, &plan->check_function))
+        return 0;
+    for (argument = 0; argument < 3; ++argument)
+        if (arguments[argument] < 0 ||
+            arguments[argument] >= value_capacity)
+            return 0;
+    if (values[arguments[0]].kind != MIR_COMPOUND_VALUE_STRING ||
+        values[arguments[1]].kind != MIR_COMPOUND_VALUE_INTEGER ||
+        values[arguments[2]].kind != MIR_COMPOUND_VALUE_INTEGER ||
+        (((unsigned long)values[arguments[1]].value & 0xffffUL) !=
+         ((unsigned long)values[arguments[2]].value & 0xffffUL)) ||
+        plan->event_count >= MIR_MAX_COMPOUND_CHECK_EVENTS)
+        return 0;
+    event = &plan->events[plan->event_count++];
+    memset(event, 0, sizeof(*event));
+    event->kind = MIR_COMPOUND_CHECK_CALL;
+    event->function = plan->check_function;
+    event->string_id = (int)values[arguments[0]].value;
+    event->value =
+        (unsigned long)values[arguments[2]].value & 0xffffUL;
+    return 1;
+}
+
+static int mir_compound_add_helper_event(
+    struct MirCompoundCheckRunner *plan,
+    const struct MirInsn *call)
+{
+    struct MirCompoundCheckEvent *event;
+    struct Sym *function = find_global(call->name);
+
+    if (function == NULL || !function->is_defined ||
+        function->is_funcptr || function->is_noreturn ||
+        !function->has_proto || function->proto_variadic ||
+        function->proto_nargs != 0 ||
+        (call->type & 15) != TYPE_VOID ||
+        call->memory_flags != 0 ||
+        !mir_machine_call_has_no_arguments(call) ||
+        plan->helper_function != NULL ||
+        plan->event_count >= MIR_MAX_COMPOUND_CHECK_EVENTS)
+        return 0;
+    plan->helper_function = function;
+    event = &plan->events[plan->event_count++];
+    memset(event, 0, sizeof(*event));
+    event->kind = MIR_COMPOUND_CHECK_HELPER;
+    event->function = function;
+    return 1;
+}
+
+static int mir_match_compound_check_runner(
+    struct MirCompoundCheckRunner *plan)
+{
+    struct MirCompoundValue *values = NULL;
+    unsigned char *bytes = NULL;
+    unsigned char *byte_known = NULL;
+    int *addresses = NULL;
+    unsigned char *address_known = NULL;
+    int opcode_counts[MIR_RETURN + 1];
+    int value_capacity = mir.next_value > 0 ? mir.next_value : 1;
+    int final_load = mir.count - 10;
+    int check_count = 0;
+    int helper_after_checks = -1;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+    int ok = 0;
+
+    memset(plan, 0, sizeof(*plan));
+    memset(opcode_counts, 0, sizeof(opcode_counts));
+    if (mir.count != 974 || mir_cfg_block_count() != 2 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_INT ||
+        mir.local_bytes != 23 || final_load != 964)
+        return mir_machine_reject(
+            "compound-check-runner", "shape");
+    values = (struct MirCompoundValue *)calloc(
+        (size_t)value_capacity, sizeof(*values));
+    bytes = (unsigned char *)calloc(
+        (size_t)mir.local_bytes, sizeof(*bytes));
+    byte_known = (unsigned char *)calloc(
+        (size_t)mir.local_bytes, sizeof(*byte_known));
+    addresses = (int *)calloc(
+        (size_t)mir.local_bytes, sizeof(*addresses));
+    address_known = (unsigned char *)calloc(
+        (size_t)mir.local_bytes, sizeof(*address_known));
+    if (values == NULL || bytes == NULL || byte_known == NULL ||
+        addresses == NULL || address_known == NULL)
+        goto done;
+    plan->frame_bytes = mir.local_bytes;
+
+    for (instruction = 0; instruction < final_load; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        struct MirCompoundValue value;
+        int width;
+
+        if (insn->opcode < 0 || insn->opcode > MIR_RETURN)
+            goto done;
+        ++opcode_counts[insn->opcode];
+        switch (insn->opcode) {
+        case MIR_LABEL:
+        case MIR_NOP:
+        case MIR_ARG:
+            break;
+        case MIR_CONST:
+            if (insn->dst < 0 || insn->dst >= value_capacity ||
+                !mir_compound_normalize_integer(
+                    insn->immediate, insn->type,
+                    &values[insn->dst].value))
+                goto done;
+            values[insn->dst].kind =
+                MIR_COMPOUND_VALUE_INTEGER;
+            break;
+        case MIR_STRING_ADDRESS:
+            if (insn->dst < 0 || insn->dst >= value_capacity ||
+                type_ptr_depth(insn->type) != 1 ||
+                type_size(insn->type) != 2)
+                goto done;
+            values[insn->dst].kind =
+                MIR_COMPOUND_VALUE_STRING;
+            values[insn->dst].value = insn->immediate;
+            break;
+        case MIR_ADDRESS:
+            if (insn->dst < 0 || insn->dst >= value_capacity ||
+                !mir_machine_named_nonvolatile(insn) ||
+                !mir_scalar_memory_location(
+                    insn, &memory_type, &memory_storage,
+                    &memory_offset) ||
+                memory_storage != SC_LOCAL ||
+                mir_compound_frame_index(
+                    mir.local_bytes, memory_offset, 1) < 0)
+                goto done;
+            values[insn->dst].kind =
+                MIR_COMPOUND_VALUE_ADDRESS;
+            values[insn->dst].value = memory_offset;
+            break;
+        case MIR_INDEX_ADDRESS:
+            if (insn->dst < 0 || insn->dst >= value_capacity ||
+                insn->src1 < 0 || insn->src1 >= value_capacity ||
+                insn->src2 < 0 || insn->src2 >= value_capacity ||
+                insn->immediate <= 0 ||
+                values[insn->src1].kind !=
+                    MIR_COMPOUND_VALUE_ADDRESS ||
+                values[insn->src2].kind !=
+                    MIR_COMPOUND_VALUE_INTEGER)
+                goto done;
+            values[insn->dst].kind =
+                MIR_COMPOUND_VALUE_ADDRESS;
+            values[insn->dst].value =
+                values[insn->src1].value +
+                values[insn->src2].value * insn->immediate;
+            break;
+        case MIR_MEMBER_ADDRESS:
+            if (insn->dst < 0 || insn->dst >= value_capacity ||
+                insn->src1 < 0 || insn->src1 >= value_capacity ||
+                values[insn->src1].kind !=
+                    MIR_COMPOUND_VALUE_ADDRESS ||
+                insn->immediate < 0)
+                goto done;
+            values[insn->dst].kind =
+                MIR_COMPOUND_VALUE_ADDRESS;
+            values[insn->dst].value =
+                values[insn->src1].value + insn->immediate;
+            break;
+        case MIR_UNARY:
+            if (insn->dst < 0 || insn->dst >= value_capacity ||
+                insn->src1 < 0 || insn->src1 >= value_capacity)
+                goto done;
+            value = values[insn->src1];
+            if (value.kind == MIR_COMPOUND_VALUE_ADDRESS) {
+                if (insn->immediate != 0 ||
+                    type_ptr_depth(insn->type) == 0 ||
+                    type_size(insn->type) != 2)
+                    goto done;
+                values[insn->dst] = value;
+                break;
+            }
+            if (value.kind != MIR_COMPOUND_VALUE_INTEGER)
+                goto done;
+            if (insn->immediate == 0 ||
+                insn->immediate == '+') {
+                if (!mir_compound_normalize_integer(
+                        value.value, insn->type,
+                        &values[insn->dst].value))
+                    goto done;
+            } else if (insn->immediate == '-') {
+                if (!mir_fold_constant_binary(
+                        '-', 0, value.value, insn->type,
+                        &values[insn->dst].value))
+                    goto done;
+            } else if (insn->immediate == '~') {
+                if (!mir_fold_constant_binary(
+                        '^', value.value, -1, insn->type,
+                        &values[insn->dst].value))
+                    goto done;
+            } else if (insn->immediate == '!') {
+                values[insn->dst].value =
+                    value.value == 0;
+            } else {
+                goto done;
+            }
+            values[insn->dst].kind =
+                MIR_COMPOUND_VALUE_INTEGER;
+            break;
+        case MIR_BINARY:
+            if (insn->dst < 0 || insn->dst >= value_capacity ||
+                insn->src1 < 0 || insn->src1 >= value_capacity ||
+                insn->src2 < 0 || insn->src2 >= value_capacity ||
+                values[insn->src1].kind !=
+                    MIR_COMPOUND_VALUE_INTEGER ||
+                values[insn->src2].kind !=
+                    MIR_COMPOUND_VALUE_INTEGER ||
+                (!mir_fold_constant_binary(
+                     (int)insn->immediate,
+                     values[insn->src1].value,
+                     values[insn->src2].value,
+                     insn->secondary_offset,
+                     &values[insn->dst].value) &&
+                 !mir_fold_constant_compare(
+                     (int)insn->immediate,
+                     values[insn->src1].value,
+                     values[insn->src2].value,
+                     insn->secondary_offset,
+                     &values[insn->dst].value)))
+                goto done;
+            values[insn->dst].kind =
+                MIR_COMPOUND_VALUE_INTEGER;
+            break;
+        case MIR_STORE:
+            if (!mir_machine_named_nonvolatile(insn) ||
+                insn->src1 < 0 || insn->src1 >= value_capacity ||
+                !mir_scalar_memory_location(
+                    insn, &memory_type, &memory_storage,
+                    &memory_offset) ||
+                memory_storage != SC_LOCAL ||
+                insn->memory_flags != 0)
+                goto done;
+            width = insn->memory_size;
+            if (!mir_compound_store_memory(
+                    bytes, byte_known, addresses, address_known,
+                    mir.local_bytes, memory_offset, width,
+                    &values[insn->src1]) ||
+                !mir_compound_add_store_event(
+                    plan, memory_offset, width,
+                    &values[insn->src1]))
+                goto done;
+            break;
+        case MIR_LOAD:
+            if (insn->dst < 0 || insn->dst >= value_capacity ||
+                !mir_machine_named_nonvolatile(insn) ||
+                !mir_scalar_memory_location(
+                    insn, &memory_type, &memory_storage,
+                    &memory_offset) ||
+                memory_storage != SC_LOCAL ||
+                insn->memory_flags != 0)
+                goto done;
+            width = insn->memory_size > 0
+                ? insn->memory_size : type_size(memory_type);
+            if (
+                !mir_compound_load_memory(
+                    bytes, byte_known, addresses, address_known,
+                    mir.local_bytes, memory_offset,
+                    width, insn->type,
+                    &values[insn->dst]))
+                goto done;
+            break;
+        case MIR_STORE_INDIRECT:
+            if (insn->src1 < 0 || insn->src1 >= value_capacity ||
+                insn->src2 < 0 || insn->src2 >= value_capacity ||
+                values[insn->src1].kind !=
+                    MIR_COMPOUND_VALUE_ADDRESS ||
+                insn->memory_flags != 0 || insn->bit_width != 0)
+                goto done;
+            memory_offset = (int)values[insn->src1].value;
+            width = insn->memory_size;
+            if (!mir_compound_store_memory(
+                    bytes, byte_known, addresses, address_known,
+                    mir.local_bytes, memory_offset, width,
+                    &values[insn->src2]) ||
+                !mir_compound_add_store_event(
+                    plan, memory_offset, width,
+                    &values[insn->src2]))
+                goto done;
+            break;
+        case MIR_LOAD_INDIRECT:
+            if (insn->dst < 0 || insn->dst >= value_capacity ||
+                insn->src1 < 0 || insn->src1 >= value_capacity ||
+                values[insn->src1].kind !=
+                    MIR_COMPOUND_VALUE_ADDRESS ||
+                insn->memory_flags != 0 || insn->bit_width != 0 ||
+                !mir_compound_load_memory(
+                    bytes, byte_known, addresses, address_known,
+                    mir.local_bytes,
+                    (int)values[insn->src1].value,
+                    insn->memory_size, insn->type,
+                    &values[insn->dst]))
+                goto done;
+            break;
+        case MIR_CALL:
+            if (mir_machine_three_call_arguments(
+                    insn, (int[3]){-1, -1, -1})) {
+                if (!mir_compound_add_call_event(
+                        plan, insn, values, value_capacity))
+                    goto done;
+                ++check_count;
+            } else {
+                if (!mir_compound_add_helper_event(plan, insn))
+                    goto done;
+                helper_after_checks = check_count;
+            }
+            if (insn->dst >= 0 && insn->dst < value_capacity)
+                values[insn->dst].kind =
+                    MIR_COMPOUND_VALUE_UNKNOWN;
+            break;
+        default:
+            goto done;
+        }
+    }
+    if (check_count != 71 || helper_after_checks != 58 ||
+        plan->event_count != 188 ||
+        plan->check_function == NULL ||
+        plan->helper_function == NULL ||
+        opcode_counts[MIR_LABEL] != 1 ||
+        opcode_counts[MIR_NOP] != 140 ||
+        opcode_counts[MIR_CONST] != 163 ||
+        opcode_counts[MIR_STRING_ADDRESS] != 71 ||
+        opcode_counts[MIR_ARG] != 213 ||
+        opcode_counts[MIR_UNARY] != 19 ||
+        opcode_counts[MIR_BINARY] != 30 ||
+        opcode_counts[MIR_ADDRESS] != 47 ||
+        opcode_counts[MIR_INDEX_ADDRESS] != 20 ||
+        opcode_counts[MIR_MEMBER_ADDRESS] != 15 ||
+        opcode_counts[MIR_STORE] != 81 ||
+        opcode_counts[MIR_LOAD] != 26 ||
+        opcode_counts[MIR_STORE_INDIRECT] != 35 ||
+        opcode_counts[MIR_LOAD_INDIRECT] != 31 ||
+        opcode_counts[MIR_CALL] != 72)
+        goto done;
+
+    if (mir.insns[final_load].opcode != MIR_LOAD ||
+        !mir_machine_named_nonvolatile(&mir.insns[final_load]) ||
+        !mir_scalar_memory_location(
+            &mir.insns[final_load], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        type_ptr_depth(memory_type) != 0 ||
+        type_size(memory_type) != 2 ||
+        (plan->failure_root =
+             find_global(mir.insns[final_load].name)) == NULL ||
+        plan->failure_root->is_volatile ||
+        mir.insns[final_load + 1].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[final_load + 1].src1 !=
+            mir.insns[final_load].dst ||
+        mir.insns[final_load + 1].label !=
+            mir.insns[final_load + 4].label ||
+        !mir_machine_constant_equals(
+            mir.insns[final_load + 2].dst, 1) ||
+        mir.insns[final_load + 3].opcode != MIR_RETURN ||
+        mir.insns[final_load + 3].src1 !=
+            mir.insns[final_load + 2].dst ||
+        mir.insns[final_load + 4].opcode != MIR_LABEL ||
+        mir.insns[final_load + 5].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[final_load + 6].opcode != MIR_ARG ||
+        mir.insns[final_load + 6].src1 !=
+            mir.insns[final_load + 5].dst ||
+        mir.insns[final_load + 7].opcode != MIR_CALL ||
+        !mir_machine_single_call_argument(
+            &mir.insns[final_load + 7], &instruction) ||
+        instruction != mir.insns[final_load + 5].dst ||
+        !mir_machine_constant_equals(
+            mir.insns[final_load + 8].dst, 0) ||
+        mir.insns[final_load + 9].opcode != MIR_RETURN ||
+        mir.insns[final_load + 9].src1 !=
+            mir.insns[final_load + 8].dst)
+        goto done;
+    plan->failure_offset = memory_offset;
+    plan->success_string_id =
+        (int)mir.insns[final_load + 5].immediate;
+    plan->print_function =
+        find_global(mir.insns[final_load + 7].name);
+    if (plan->print_function == NULL ||
+        plan->print_function->is_funcptr ||
+        plan->print_function->is_noreturn ||
+        !plan->print_function->has_proto ||
+        plan->print_function->proto_nargs != 1 ||
+        !plan->print_function->proto_variadic ||
+        (mir.insns[final_load + 7].type & 15) != TYPE_INT)
+        goto done;
+    ok = 1;
+done:
+    free(address_known);
+    free(addresses);
+    free(byte_known);
+    free(bytes);
+    free(values);
+    if (!ok) {
+        if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR machine function=%s"
+                    " template=compound-check-runner"
+                    " instruction=%d opcode=%d events=%d"
+                    " checks=%d helper-after=%d\n",
+                    mir.name, instruction,
+                    instruction >= 0 && instruction < mir.count
+                        ? mir.insns[instruction].opcode : -1,
+                    plan->event_count, check_count,
+                    helper_after_checks);
+        return mir_machine_reject(
+            "compound-check-runner", "proof");
+    }
+    return 1;
 }
 
 static int mir_match_string_mismatch_report(
@@ -41206,6 +41831,80 @@ static void mir_emit_literal_check_runner(
     fputs("\tpop bc\n\tld hl,0\n\tret\n", out);
 }
 
+static void mir_emit_compound_check_store(
+    FILE *out, const struct MirCompoundCheckEvent *event)
+{
+    if (event->value_kind == MIR_COMPOUND_CHECK_ADDRESS) {
+        fputs("\tpush ix\n\tpop hl\n", out);
+        mir_machine_emit_hl_offset(
+            out, event->address_offset, 0);
+    } else if (event->width == 1) {
+        fprintf(out, "\tld (ix%+d),%lu\n",
+                event->offset, event->value & 255UL);
+        return;
+    } else {
+        fprintf(out, "\tld hl,%lu\n",
+                event->value & 0xffffUL);
+    }
+    fprintf(out,
+            "\tld (ix%+d),l\n"
+            "\tld (ix%+d),h\n",
+            event->offset, event->offset + 1);
+}
+
+static void mir_emit_compound_check_call(
+    FILE *out, const struct MirCompoundCheckEvent *event)
+{
+    fprintf(out,
+            "\tld hl,%lu\n\tpush hl\n"
+            "\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            event->value & 0xffffUL, event->string_id);
+    mir_machine_emit_symbol_call(out, event->function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
+}
+
+static void mir_emit_compound_check_runner(
+    FILE *out, const struct MirCompoundCheckRunner *plan)
+{
+    int success = new_label();
+    int event;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    fprintf(out,
+            "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
+            plan->frame_bytes);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (event = 0; event < plan->event_count; ++event) {
+        const struct MirCompoundCheckEvent *item =
+            &plan->events[event];
+
+        if (item->kind == MIR_COMPOUND_CHECK_STORE)
+            mir_emit_compound_check_store(out, item);
+        else if (item->kind == MIR_COMPOUND_CHECK_CALL)
+            mir_emit_compound_check_call(out, item);
+        else
+            mir_machine_emit_symbol_call(
+                out, item->function);
+    }
+    mir_machine_emit_global_word(
+        out, plan->failure_root, plan->failure_offset);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out,
+            "\tjp z,L%d\n"
+            "\tld hl,1\n"
+            "\tld sp,ix\n\tpop ix\n\tret\n"
+            "L%d:\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            success, success, plan->success_string_id);
+    mir_machine_emit_symbol_call(
+        out, plan->print_function);
+    fputs("\tpop bc\n"
+          "\tld hl,0\n"
+          "\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_fixed_sieve_build(
     FILE *out, const struct MirFixedSieveBuild *plan)
 {
@@ -41357,6 +42056,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirBitfieldReportSequence bitfield_report_sequence;
     struct MirTaskArrayCheck task_array_check;
     struct MirLiteralCheckRunner literal_check_runner;
+    struct MirCompoundCheckRunner compound_check_runner;
     struct MirStringMismatchReport string_mismatch_report;
     struct MirCrcUpdateRunner crc_update_runner;
     struct MirFixedRowMemberSum fixed_row_member_sum;
@@ -42013,6 +42713,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &literal_check_runner)) {
         mir_emit_literal_check_runner(
             out, &literal_check_runner);
+        return 1;
+    }
+    if (mir_match_compound_check_runner(
+            &compound_check_runner)) {
+        mir_emit_compound_check_runner(
+            out, &compound_check_runner);
         return 1;
     }
     if (mir_match_string_mismatch_report(&string_mismatch_report)) {
