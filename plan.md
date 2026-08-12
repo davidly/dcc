@@ -50,6 +50,20 @@ current execution plan and handoff.
   static arrays/constants, counters, candidate state, matchers, emitters, and
   selector ordering locally; it exports only one family dispatch entry, and
   `dcc_mir_machine_internal.h` remains a function-prototype-only contract.
+- `scripts/audit-c-module-exports.py` makes that rule repeatable: it compiles
+  each module with the repository host C11/include settings, runs
+  `nm -g --defined-only` (GNU nm or llvm-nm), reports LOC, best-effort static
+  top-level functions, and exported code/read-only/writable data, then fails on
+  writable storage or any function not explicitly allowlisted. Audit the two
+  current extractions from any working directory with:
+  ```sh
+  python3 scripts/audit-c-module-exports.py \
+    src/dcc/dcc_mir_machine_float_reports.c \
+    --allow-function mir_try_emit_float_reports
+  python3 scripts/audit-c-module-exports.py \
+    src/dcc/dcc_mir_machine_attention.c \
+    --allow-function mir_try_emit_attention_kernels
+  ```
 - Two strict name-free scheduled families admit the genuine nine-block
   call/check/report mains in `tfmaddr` and `tfpraw`. The float report family
   now accepts the fully proved nine-check, 195-instruction, 41-call,
