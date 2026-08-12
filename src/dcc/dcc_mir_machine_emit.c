@@ -490,6 +490,18 @@ struct MirVariadicStringJoin {
     char length_call_name[64];
 };
 
+struct MirFixedRecordSortCheck {
+    struct Sym *records;
+    struct Sym *random_function;
+    struct Sym *compare_function;
+    struct Sym *sort_function;
+    struct Sym *failure_function;
+    int records_offset;
+    int count;
+    int record_size;
+    int failure_string_id;
+};
+
 struct MirStringMismatchReport {
     struct Sym *print_function;
     struct Sym *failure_count;
@@ -1642,6 +1654,9 @@ static int mir_machine_pointee_is_volatile(
     const struct MirInsn *parameter);
 static void mir_machine_emit_global_address_de(
     FILE *out, struct Sym *symbol, int offset);
+static int mir_machine_global_address_offset(
+    int value, struct Sym **root_out,
+    long *offset_out, int depth);
 static void mir_machine_emit_global_word(
     FILE *out, struct Sym *symbol, int offset);
 static void mir_machine_emit_float_bits(
@@ -6039,6 +6054,148 @@ static int mir_match_variadic_string_join(
     strcpy(plan->copy_call_name, "__scf");
     strcpy(plan->length_call_name, "__slf");
     return 1;
+}
+
+static int mir_match_fixed_record_sort_check(
+    struct MirFixedRecordSortCheck *plan)
+{
+    const struct MirInsn *fill_address = &mir.insns[20];
+    const struct MirInsn *random_call = &mir.insns[26];
+    const struct MirInsn *sort_call = &mir.insns[55];
+    const struct MirInsn *compare_call = &mir.insns[83];
+    const struct MirInsn *failure_call = &mir.insns[89];
+    struct Sym *root;
+    long root_offset;
+    int sort_arguments[4];
+    int compare_arguments[3];
+    int failure_argument;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 98 || mir_cfg_block_count() != 11 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID ||
+        !mir_machine_constant_equals(mir.insns[1].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[3]) ||
+        mir.insns[5].src1 != mir.insns[1].dst ||
+        mir.insns[5].src2 != mir.insns[41].dst ||
+        !mir_machine_constant_equals(mir.insns[7].dst, 16) ||
+        mir.insns[8].immediate != '<' ||
+        mir.insns[8].src1 != mir.insns[5].dst ||
+        mir.insns[8].src2 != mir.insns[7].dst ||
+        mir.insns[9].label != mir.insns[44].label ||
+        !mir_machine_constant_equals(mir.insns[10].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[12]) ||
+        !mir_machine_constant_equals(mir.insns[17].dst, 5) ||
+        mir.insns[18].immediate != '<' ||
+        mir.insns[18].src1 != mir.insns[16].dst ||
+        mir.insns[18].src2 != mir.insns[17].dst ||
+        mir.insns[19].label != mir.insns[37].label)
+        return mir_machine_reject(
+            "fixed-record-sort-check", "loops");
+    if (!mir_machine_global_address_offset(
+            fill_address->dst, &plan->records,
+            &root_offset, 0) ||
+        root_offset < -32768 || root_offset > 32767)
+        return mir_machine_reject(
+            "fixed-record-sort-check", "fill-root");
+    if (
+        mir.insns[22].src1 != fill_address->dst ||
+        mir.insns[22].src2 != mir.insns[5].dst ||
+        mir.insns[22].immediate <= 0 ||
+        mir.insns[22].memory_size !=
+            mir.insns[22].immediate ||
+        mir.insns[25].src1 != mir.insns[23].dst ||
+        mir.insns[25].src2 != mir.insns[24].dst ||
+        mir.insns[25].immediate != 1 ||
+        !mir_machine_call_has_no_arguments(random_call) ||
+        !mir_machine_constant_equals(mir.insns[27].dst, 255) ||
+        mir.insns[28].immediate != '&' ||
+        mir.insns[28].src1 != random_call->dst ||
+        mir.insns[28].src2 != mir.insns[27].dst ||
+        mir.insns[30].src1 != mir.insns[25].dst ||
+        mir.insns[30].src2 != mir.insns[29].dst ||
+        mir.insns[30].memory_size != 1)
+        return mir_machine_reject(
+            "fixed-record-sort-check", "fill-body");
+    plan->records_offset = (int)root_offset;
+    plan->record_size = (int)mir.insns[22].immediate;
+    plan->count = (int)mir.insns[7].immediate;
+    if (plan->count != 16 || plan->record_size != 5 ||
+        !mir_machine_global_address_offset(
+            mir.insns[45].dst, &root,
+            &root_offset, 0) ||
+        root != plan->records ||
+        root_offset != plan->records_offset ||
+        !mir_machine_four_call_arguments(
+            sort_call, sort_arguments) ||
+        sort_arguments[0] != mir.insns[45].dst ||
+        !mir_machine_constant_equals(
+            sort_arguments[1], plan->count) ||
+        !mir_machine_constant_equals(
+            sort_arguments[2], plan->record_size) ||
+        sort_arguments[3] != mir.insns[53].dst)
+        return mir_machine_reject(
+            "fixed-record-sort-check", "sort");
+    plan->random_function = find_global(random_call->name);
+    plan->compare_function = find_global(mir.insns[53].name);
+    plan->sort_function = find_global(sort_call->name);
+    if (plan->random_function == NULL ||
+        !plan->random_function->is_defined ||
+        plan->compare_function == NULL ||
+        !plan->compare_function->is_defined ||
+        plan->sort_function == NULL)
+        return mir_machine_reject(
+            "fixed-record-sort-check", "functions");
+    if (!mir_machine_constant_equals(mir.insns[56].dst, 1) ||
+        !mir_machine_unobservable_local_store(&mir.insns[58]) ||
+        mir.insns[60].src1 != mir.insns[56].dst ||
+        mir.insns[60].src2 != mir.insns[94].dst ||
+        !mir_machine_constant_equals(mir.insns[63].dst, 16) ||
+        mir.insns[64].immediate != '<' ||
+        mir.insns[64].src1 != mir.insns[60].dst ||
+        mir.insns[64].src2 != mir.insns[63].dst ||
+        mir.insns[65].label != mir.insns[97].label ||
+        !mir_machine_global_address_offset(
+            mir.insns[66].dst, &root,
+            &root_offset, 0) ||
+        root != plan->records ||
+        root_offset != plan->records_offset ||
+        !mir_machine_global_address_offset(
+            mir.insns[74].dst, &root,
+            &root_offset, 0) ||
+        root != plan->records ||
+        root_offset != plan->records_offset ||
+        !mir_machine_three_call_arguments(
+            compare_call, compare_arguments) ||
+        compare_arguments[0] != mir.insns[71].dst ||
+        compare_arguments[1] != mir.insns[77].dst ||
+        !mir_machine_constant_equals(
+            compare_arguments[2], plan->record_size) ||
+        !mir_machine_constant_equals(mir.insns[84].dst, 0) ||
+        mir.insns[85].immediate != '>' ||
+        mir.insns[85].src1 != compare_call->dst ||
+        mir.insns[85].src2 != mir.insns[84].dst ||
+        mir.insns[86].label != mir.insns[90].label)
+        return mir_machine_reject(
+            "fixed-record-sort-check", "verify");
+    if ((strcmp(compare_call->name, "memcmp") &&
+         strcmp(compare_call->base_name, "__cmpf")) ||
+        !mir_machine_single_call_argument(
+            failure_call, &failure_argument))
+        return mir_machine_reject(
+            "fixed-record-sort-check", "failure");
+    {
+        const struct MirInsn *string =
+            mir_definition(failure_argument);
+
+        if (string == NULL ||
+            string->opcode != MIR_STRING_ADDRESS)
+            return mir_machine_reject(
+                "fixed-record-sort-check", "string");
+        plan->failure_string_id = (int)string->immediate;
+    }
+    plan->failure_function = find_global(failure_call->name);
+    return plan->failure_function != NULL &&
+           plan->failure_function->is_defined;
 }
 
 static int mir_match_string_mismatch_report(
@@ -29025,6 +29182,82 @@ static void mir_emit_variadic_string_join(
             loop, done);
 }
 
+static void mir_emit_fixed_record_sort_check(
+    FILE *out, const struct MirFixedRecordSortCheck *plan)
+{
+    int fill_loop = new_label();
+    int scan_loop = new_label();
+    int scan_next = new_label();
+    int done = new_label();
+    const char *compare_name =
+        asm_name_for(sym_asm_name(plan->compare_function));
+
+    fprintf(out,
+            ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n"
+            "\tpush iy\n",
+            mir.name);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_address_de(
+        out, plan->records, plan->records_offset);
+    fputs("\tpush de\n\tpop iy\n", out);
+    fprintf(out, "L%d:\n", fill_loop);
+    mir_machine_emit_symbol_call(out, plan->random_function);
+    fputs("\tld (iy+0),l\n\tinc iy\n"
+          "\tpush iy\n\tpop hl\n", out);
+    mir_machine_emit_global_address_de(
+        out, plan->records,
+        plan->records_offset +
+            plan->count * plan->record_size);
+    fputs("\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp nz,L%d\n", fill_loop);
+    fprintf(out, "\tld hl,%s\n\tpush hl\n", compare_name);
+    fprintf(out,
+            "\tld hl,%d\n\tpush hl\n"
+            "\tld hl,%d\n\tpush hl\n",
+            plan->record_size, plan->count);
+    mir_machine_emit_global_address_de(
+        out, plan->records, plan->records_offset);
+    fputs("\tpush de\n", out);
+    mir_machine_emit_symbol_call(out, plan->sort_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_global_address_de(
+        out, plan->records,
+        plan->records_offset + plan->record_size);
+    fputs("\tpush de\n\tpop iy\n", out);
+    fprintf(out,
+            "L%d:\n\tpush iy\n\tpop hl\n"
+            "\tld de,-%d\n\tadd hl,de\n\tex de,hl\n"
+            "\tpush iy\n\tpop hl\n\tld bc,%d\n",
+            scan_loop, plan->record_size,
+            plan->record_size);
+    mir_emit_runtime_call(out, "__cmpf");
+    fputs("\tbit 7,h\n", out);
+    fprintf(out,
+            "\tjp nz,L%d\n\tld a,h\n\tor l\n\tjp z,L%d\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            scan_next, scan_next,
+            plan->failure_string_id);
+    mir_machine_emit_symbol_call(out, plan->failure_function);
+    fputs("\tpop bc\n", out);
+    fprintf(out, "L%d:\n", scan_next);
+    {
+        int byte;
+        for (byte = 0; byte < plan->record_size; ++byte)
+            fputs("\tinc iy\n", out);
+    }
+    fputs("\tpush iy\n\tpop hl\n", out);
+    mir_machine_emit_global_address_de(
+        out, plan->records,
+        plan->records_offset +
+            plan->count * plan->record_size);
+    fputs("\tor a\n\tsbc hl,de\n", out);
+    fprintf(out,
+            "\tjp nz,L%d\nL%d:\n\tpop iy\n"
+            ";@dcc.reg free=iy\n\tret\n",
+            scan_loop, done);
+}
+
 static void mir_emit_string_mismatch_report(
     FILE *out, const struct MirStringMismatchReport *plan)
 {
@@ -34232,6 +34465,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirTwoConstantChecks two_constant_checks;
     struct MirVariadicJoinReport variadic_join_report;
     struct MirVariadicStringJoin variadic_string_join;
+    struct MirFixedRecordSortCheck fixed_record_sort_check;
     struct MirStringMismatchReport string_mismatch_report;
     struct MirCrcUpdateRunner crc_update_runner;
     struct MirFixedRowMemberSum fixed_row_member_sum;
@@ -34804,6 +35038,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_variadic_string_join(&variadic_string_join)) {
         mir_emit_variadic_string_join(out, &variadic_string_join);
+        return 1;
+    }
+    if (mir_match_fixed_record_sort_check(
+            &fixed_record_sort_check)) {
+        mir_emit_fixed_record_sort_check(
+            out, &fixed_record_sort_check);
         return 1;
     }
     if (mir_match_string_mismatch_report(&string_mismatch_report)) {

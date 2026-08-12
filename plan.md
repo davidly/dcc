@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `8d79671`
-  (`extend scoped local byte stores`).
-- Current candidate coverage: **2078/2185 (95.10%)**.
-- Remaining fallback population: **107 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `27e2d30`
+  (`schedule variadic string joins`).
+- Current candidate coverage: **2079/2185 (95.15%)**.
+- Remaining fallback population: **106 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -672,6 +672,10 @@ current execution plan and handoff.
   IX frame and call the `__scf`/`__slf` fastcall ABIs directly. This admits
   `tvapinit.join`, beating the stretch goal at 11.53% peep / 18.30% nopeep
   while shrinking both images.
+- Fixed five-byte record-sort tests now fill through an IY cursor, call
+  `_qsort` directly and validate adjacent records through `__cmpf`. This
+  admits `tqsort.t_qsort_r5`, improving both modes and shrinking each image
+  by one sector.
 - A direct `too.expected_area` dispatcher was rejected after repeated-call
   tests exposed incorrect signed divmod cache/register handling; it is absent.
 - A binary-search replacement for `too.isqrt_l` was rejected after focused
@@ -686,7 +690,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 107 final-cost fallbacks,
+- Current next priority: repeated causes in the 106 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
