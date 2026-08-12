@@ -773,6 +773,14 @@ struct MirFloatNanBits {
     int parameter_stack_offset;
 };
 
+struct MirSequentialScalarCallReport {
+    struct Sym *functions[8];
+    struct Sym *print_function;
+    int arguments[8];
+    int call_count;
+    int string_id;
+};
+
 struct MirAsciiUpper {
     int parameter_stack_offset;
     int width;
@@ -11862,6 +11870,111 @@ static int mir_match_conditional_string_report(
     return 1;
 }
 
+static int mir_match_sequential_scalar_call_report(
+    struct MirSequentialScalarCallReport *plan)
+{
+    const struct MirInsn *print_call;
+    int print_arguments[9] = { 0 };
+    int print_argument_count = 0;
+    int instruction;
+    int call_index;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count < 10 || (mir.count - 6) % 4 != 0 ||
+        mir_cfg_block_count() != 1 || mir.has_vla ||
+        type_size(mir.return_type) != 2 ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        mir.insns[0].opcode != MIR_LABEL ||
+        mir.insns[1].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[2].opcode != MIR_ARG ||
+        mir.insns[2].src1 != mir.insns[1].dst)
+        return mir_machine_reject(
+            "sequential-scalar-call-report", "shape");
+    plan->call_count = (mir.count - 6) / 4;
+    if (plan->call_count < 2 || plan->call_count > 8)
+        return mir_machine_reject(
+            "sequential-scalar-call-report", "call-count");
+    for (call_index = 0; call_index < plan->call_count; ++call_index) {
+        int base = 3 + call_index * 4;
+        const struct MirInsn *constant = &mir.insns[base];
+        const struct MirInsn *argument = &mir.insns[base + 1];
+        const struct MirInsn *call = &mir.insns[base + 2];
+        const struct MirInsn *result_argument = &mir.insns[base + 3];
+        struct Sym *function;
+        int call_argument;
+        long value;
+
+        if (constant->opcode != MIR_CONST ||
+            !mir_machine_constant_value(constant->dst, &value, 0) ||
+            value < -32768 || value > 65535 ||
+            argument->opcode != MIR_ARG ||
+            argument->src1 != constant->dst ||
+            call->opcode != MIR_CALL ||
+            !mir_machine_single_call_argument(call, &call_argument) ||
+            call_argument != constant->dst ||
+            type_size(call->type) != 2 ||
+            type_ptr_depth(call->type) != 0 ||
+            result_argument->opcode != MIR_ARG ||
+            result_argument->src1 != call->dst ||
+            (call->memory_flags &
+             (MIR_CALL_FLAG_VARIADIC |
+              MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0)
+            return mir_machine_reject(
+                "sequential-scalar-call-report", "call");
+        function = find_global(call->name);
+        if (function == NULL || !function->is_defined ||
+            function->is_funcptr || function->is_noreturn)
+            return mir_machine_reject(
+                "sequential-scalar-call-report", "function");
+        plan->functions[call_index] = function;
+        plan->arguments[call_index] = (int)value & 0xffff;
+    }
+    print_call = &mir.insns[3 + plan->call_count * 4];
+    if (print_call->opcode != MIR_CALL ||
+        strcmp(print_call->name, "printf") ||
+        (print_call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != MIR_CALL_FLAG_VARIADIC)
+        return mir_machine_reject(
+            "sequential-scalar-call-report", "print");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *argument = &mir.insns[instruction];
+        int index;
+
+        if (argument->opcode != MIR_ARG ||
+            argument->secondary_offset != print_call->secondary_offset)
+            continue;
+        index = (int)argument->immediate;
+        if (index < 0 || index > plan->call_count ||
+            print_arguments[index] != 0)
+            return mir_machine_reject(
+                "sequential-scalar-call-report", "print-arguments");
+        print_arguments[index] = argument->src1 + 1;
+        ++print_argument_count;
+    }
+    if (print_argument_count != plan->call_count + 1 ||
+        print_arguments[0] != mir.insns[1].dst + 1)
+        return mir_machine_reject(
+            "sequential-scalar-call-report", "print-prefix");
+    for (call_index = 0; call_index < plan->call_count; ++call_index)
+        if (print_arguments[call_index + 1] !=
+            mir.insns[5 + call_index * 4].dst + 1)
+            return mir_machine_reject(
+                "sequential-scalar-call-report", "print-order");
+    plan->print_function = find_global(print_call->name);
+    if (plan->print_function == NULL ||
+        plan->print_function->is_defined ||
+        mir.insns[mir.count - 2].opcode != MIR_CONST ||
+        mir.insns[mir.count - 2].immediate != 0 ||
+        mir.insns[mir.count - 1].opcode != MIR_RETURN ||
+        mir.insns[mir.count - 1].src1 !=
+            mir.insns[mir.count - 2].dst)
+        return mir_machine_reject(
+            "sequential-scalar-call-report", "return");
+    plan->string_id = (int)mir.insns[1].immediate;
+    return 1;
+}
+
 static int mir_match_float_nan_bits(struct MirFloatNanBits *plan)
 {
     static const int expected_opcodes[32] = {
@@ -22430,6 +22543,28 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_sequential_scalar_call_report(
+    FILE *out, const struct MirSequentialScalarCallReport *plan)
+{
+    int call_index;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (call_index = plan->call_count - 1;
+         call_index >= 0; --call_index) {
+        fprintf(out, "\tld hl,%d\n\tpush hl\n",
+                plan->arguments[call_index]);
+        mir_machine_emit_symbol_call(out, plan->functions[call_index]);
+        fputs("\tpop bc\n\tpush hl\n", out);
+    }
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    for (call_index = 0; call_index < plan->call_count + 1; ++call_index)
+        fputs("\tpop bc\n", out);
+    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_float_nan_bits(
     FILE *out, const struct MirFloatNanBits *plan)
 {
@@ -23464,6 +23599,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirSequentialScalarCallReport sequential_scalar_call_report;
     struct MirFloatNanBits float_nan_bits;
     struct MirRandomUniqueInit random_unique_init;
     struct MirFixedRowFind fixed_row_find;
@@ -24096,6 +24232,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_sequential_scalar_call_report(
+            &sequential_scalar_call_report)) {
+        mir_emit_sequential_scalar_call_report(
+            out, &sequential_scalar_call_report);
         return 1;
     }
     if (mir_match_float_nan_bits(&float_nan_bits)) {
