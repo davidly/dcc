@@ -794,6 +794,20 @@ struct MirStringCheckReport {
     int string_id;
 };
 
+struct MirNoArgTestRunner {
+    struct Sym *tests[12];
+    struct Sym *checks;
+    struct Sym *failures;
+    struct Sym *print_function;
+    int test_count;
+    int checks_offset;
+    int failures_offset;
+    int counts_string_id;
+    int result_string_id;
+    int pass_string_id;
+    int fail_string_id;
+};
+
 struct MirAsciiUpper {
     int parameter_stack_offset;
     int width;
@@ -11883,6 +11897,140 @@ static int mir_match_conditional_string_report(
     return 1;
 }
 
+static int mir_match_noarg_test_runner(struct MirNoArgTestRunner *plan)
+{
+    const struct MirInsn *counts_call;
+    const struct MirInsn *result_call;
+    int count_arguments[3];
+    int result_arguments[2];
+    int memory_type, memory_storage, memory_offset;
+    int base;
+    int test;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count < 36 || mir_cfg_block_count() != 9 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        mir.insns[0].opcode != MIR_LABEL)
+        return mir_machine_reject("noarg-test-runner", "shape");
+    for (test = 1; test < mir.count &&
+         mir.insns[test].opcode == MIR_CALL; ++test) {
+        struct Sym *function;
+
+        if (test > 12 ||
+            !mir_machine_call_has_no_arguments(&mir.insns[test]) ||
+            (mir.insns[test].type & 15) != TYPE_VOID ||
+            (mir.insns[test].memory_flags &
+             (MIR_CALL_FLAG_VARIADIC |
+              MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0)
+            return mir_machine_reject("noarg-test-runner", "test-call");
+        function = find_global(mir.insns[test].name);
+        if (function == NULL || !function->is_defined ||
+            function->is_funcptr || function->is_noreturn)
+            return mir_machine_reject("noarg-test-runner", "test-symbol");
+        plan->tests[plan->test_count++] = function;
+    }
+    base = 1 + plan->test_count;
+    if (plan->test_count == 0 || base + 34 != mir.count)
+        return mir_machine_reject("noarg-test-runner", "test-count");
+    if (mir.insns[base].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[base + 1].opcode != MIR_ARG ||
+        mir.insns[base + 1].src1 != mir.insns[base].dst ||
+        mir.insns[base + 2].opcode != MIR_LOAD ||
+        mir.insns[base + 3].opcode != MIR_ARG ||
+        mir.insns[base + 3].src1 != mir.insns[base + 2].dst ||
+        mir.insns[base + 4].opcode != MIR_LOAD ||
+        mir.insns[base + 5].opcode != MIR_ARG ||
+        mir.insns[base + 5].src1 != mir.insns[base + 4].dst ||
+        mir.insns[base + 6].opcode != MIR_CALL)
+        return mir_machine_reject("noarg-test-runner", "counts-shape");
+    counts_call = &mir.insns[base + 6];
+    if (!mir_machine_three_call_arguments(
+            counts_call, count_arguments) ||
+        count_arguments[0] != mir.insns[base].dst ||
+        count_arguments[1] != mir.insns[base + 2].dst ||
+        count_arguments[2] != mir.insns[base + 4].dst ||
+        strcmp(counts_call->name, "printf") ||
+        (counts_call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != MIR_CALL_FLAG_VARIADIC)
+        return mir_machine_reject("noarg-test-runner", "counts-call");
+    if (!mir_machine_named_nonvolatile(&mir.insns[base + 2]) ||
+        !mir_scalar_memory_location(
+            &mir.insns[base + 2], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_GLOBAL || type_size(memory_type) != 2)
+        return mir_machine_reject("noarg-test-runner", "checks");
+    plan->checks = find_global(mir.insns[base + 2].name);
+    plan->checks_offset = memory_offset;
+    if (!mir_machine_named_nonvolatile(&mir.insns[base + 4]) ||
+        !mir_scalar_memory_location(
+            &mir.insns[base + 4], &memory_type, &memory_storage,
+            &memory_offset) ||
+        memory_storage != SC_GLOBAL || type_size(memory_type) != 2)
+        return mir_machine_reject("noarg-test-runner", "failures");
+    plan->failures = find_global(mir.insns[base + 4].name);
+    plan->failures_offset = memory_offset;
+    if (plan->checks == NULL || plan->checks->is_volatile ||
+        plan->failures == NULL || plan->failures->is_volatile)
+        return mir_machine_reject("noarg-test-runner", "globals");
+    if (mir.insns[base + 7].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[base + 8].opcode != MIR_ARG ||
+        mir.insns[base + 8].src1 != mir.insns[base + 7].dst ||
+        !mir_machine_same_location(
+            &mir.insns[base + 4], &mir.insns[base + 9]) ||
+        !mir_machine_constant_equals(mir.insns[base + 10].dst, 0) ||
+        mir.insns[base + 11].opcode != MIR_BINARY ||
+        mir.insns[base + 11].immediate != TOK_EQ ||
+        mir.insns[base + 11].src1 != mir.insns[base + 9].dst ||
+        mir.insns[base + 11].src2 != mir.insns[base + 10].dst ||
+        mir.insns[base + 12].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[base + 12].src1 != mir.insns[base + 11].dst ||
+        mir.insns[base + 12].label != mir.insns[base + 16].label ||
+        mir.insns[base + 13].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[base + 15].opcode != MIR_JUMP ||
+        mir.insns[base + 15].label != mir.insns[base + 19].label ||
+        mir.insns[base + 17].opcode != MIR_STRING_ADDRESS ||
+        !mir_machine_phi_merge(
+            base + 20, base + 13, base + 17, base + 14, base + 18) ||
+        mir.insns[base + 21].opcode != MIR_ARG ||
+        mir.insns[base + 21].src1 != mir.insns[base + 20].dst ||
+        mir.insns[base + 22].opcode != MIR_CALL)
+        return mir_machine_reject("noarg-test-runner", "result-shape");
+    result_call = &mir.insns[base + 22];
+    if (!mir_machine_two_call_arguments(
+            result_call, result_arguments) ||
+        result_arguments[0] != mir.insns[base + 7].dst ||
+        result_arguments[1] != mir.insns[base + 20].dst ||
+        strcmp(result_call->name, "printf") ||
+        (result_call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != MIR_CALL_FLAG_VARIADIC)
+        return mir_machine_reject("noarg-test-runner", "result-call");
+    if (!mir_machine_same_location(
+            &mir.insns[base + 4], &mir.insns[base + 23]) ||
+        mir.insns[base + 24].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[base + 24].src1 != mir.insns[base + 23].dst ||
+        !mir_machine_constant_equals(mir.insns[base + 25].dst, 1) ||
+        mir.insns[base + 27].opcode != MIR_JUMP ||
+        mir.insns[base + 27].label != mir.insns[base + 31].label ||
+        !mir_machine_constant_equals(mir.insns[base + 29].dst, 0) ||
+        !mir_machine_phi_merge(
+            base + 32, base + 25, base + 29, base + 26, base + 30) ||
+        mir.insns[base + 33].opcode != MIR_RETURN ||
+        mir.insns[base + 33].src1 != mir.insns[base + 32].dst)
+        return mir_machine_reject("noarg-test-runner", "return");
+    plan->print_function = find_global(counts_call->name);
+    if (plan->print_function == NULL ||
+        plan->print_function->is_defined ||
+        plan->print_function != find_global(result_call->name))
+        return mir_machine_reject("noarg-test-runner", "print-symbol");
+    plan->counts_string_id = (int)mir.insns[base].immediate;
+    plan->result_string_id = (int)mir.insns[base + 7].immediate;
+    plan->pass_string_id = (int)mir.insns[base + 13].immediate;
+    plan->fail_string_id = (int)mir.insns[base + 17].immediate;
+    return 1;
+}
+
 static int mir_match_string_check_report(struct MirStringCheckReport *plan)
 {
     static const int expected_opcodes[47] = {
@@ -22682,6 +22830,45 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_noarg_test_runner(
+    FILE *out, const struct MirNoArgTestRunner *plan)
+{
+    int failed = new_label();
+    int selected = new_label();
+    int test;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (test = 0; test < plan->test_count; ++test)
+        mir_machine_emit_symbol_call(out, plan->tests[test]);
+    mir_machine_emit_global_word(
+        out, plan->failures, plan->failures_offset);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_global_word(
+        out, plan->checks, plan->checks_offset);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->counts_string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_global_word(
+        out, plan->failures, plan->failures_offset);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out,
+            "\tjp nz,L%d\n\tld hl,S%d\n\tjp L%d\n"
+            "L%d:\n\tld hl,S%d\nL%d:\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            failed, plan->pass_string_id, selected,
+            failed, plan->fail_string_id, selected,
+            plan->result_string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_global_word(
+        out, plan->failures, plan->failures_offset);
+    fputs("\tld a,h\n\tor l\n\tld hl,0\n\tret z\n\tinc hl\n\tret\n",
+          out);
+}
+
 static void mir_emit_string_check_report(
     FILE *out, const struct MirStringCheckReport *plan)
 {
@@ -23782,6 +23969,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirNoArgTestRunner noarg_test_runner;
     struct MirStringCheckReport string_check_report;
     struct MirSequentialScalarCallReport sequential_scalar_call_report;
     struct MirFloatNanBits float_nan_bits;
@@ -24416,6 +24604,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_noarg_test_runner(&noarg_test_runner)) {
+        mir_emit_noarg_test_runner(out, &noarg_test_runner);
         return 1;
     }
     if (mir_match_string_check_report(&string_check_report)) {
