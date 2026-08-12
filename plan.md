@@ -6,10 +6,43 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Base HEAD for this batch: `eb6fd65`.
-- Current candidate coverage: **2121/2185 (97.07%)**.
-- Remaining fallback population: **64 `final-cost-policy`**, all selected by
+- Base HEAD for this batch: `c71806a`.
+- Current candidate coverage: **2124/2185 (97.21%)**.
+- Remaining fallback population: **61 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- Three strict variants of the float call/report family now admit the remaining
+  nine-block mains in `tasinfsp`, `tfmodfsp`, and `tfmaf`. They retain the
+  complete existing recursive expression proof and add exact structural
+  profiles for 177/396/289 MIR instructions, 12/27/15 checker calls,
+  36/86/61 total calls, and checker-use distributions 10+2, 8+4+15, and
+  14+1. The variant emitter evaluates each proven call argument in the
+  established reverse ABI order; the complete selected and captured main call
+  sequences are identical in all three applications. Float unary constants
+  fold their sign bit at emission, while every float runtime, checker, bitcast,
+  FMA, modulo, and printf call remains present and ordered. `tasinfsp` uses one
+  four-byte IX NaN snapshot, `tfmodfsp` uses one four-byte IX NaN snapshot and
+  rematerializes its proven infinity constants, and `tfmaf` is frameless. No IY
+  is used. The family-local strict-smaller gate remains in force.
+  Non-stack selected/captured metrics are respectively 3,445/3,460 bytes and
+  340/346 instructions; 8,483/8,802 and 881/909; and 6,407/6,557 and 667/680.
+  Stack-check metrics are 3,474/3,489 and 341/347; 8,512/8,831 and 882/910;
+  and 6,436/6,586 and 668/681. Affected full peep/nopeep validation passes with
+  no checked regression. Selected versus forced-main-fallback results are:
+  `tasinfsp` 131,380/131,380 peep cycles and 131,379/131,437 nopeep, with
+  7,808/7,808 and 7,808/7,936 bytes; `tfmodfsp` 448,571/449,118 and
+  449,706/450,308 cycles, with 10,368/10,368 and 10,368/10,496 bytes; and
+  `tfmaf` 104,794/104,794 and 104,794/104,920 cycles, with 7,680/7,680 and
+  7,680/7,808 bytes. Separately named failure harnesses retain the same
+  nine-block structures while deliberately mismatching one asin value, one
+  modulo bit result, and one FMA bit result. Selected and fallback program
+  output is identical in both modes, including each failure line, summary,
+  `RESULT: FAIL`, and nonzero return. Selected/fallback failure-harness
+  peep/nopeep cycles are 213,080/213,092 and 213,084/213,164; 490,773/491,332
+  and 491,898/492,522; and 145,414/145,414 and 145,414/145,562. Linked sizes
+  are equal in peep; selected nopeep is equal for asin and 128 bytes smaller
+  for modulo and FMA. No performance baseline changed. The regression-gated
+  stack census advances from 2121/2185 to 2124/2185 with exactly these three
+  additions and no removal.
 - One shared strict name-free float call/report scheduler now admits the
   nine-block `main` graphs in `tlogfsp`, `tfloorsp`, `tatan2sp`, and
   `tfpspec`; it also replaces the larger active spilled schedules in

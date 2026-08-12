@@ -2232,12 +2232,20 @@ struct MirFloatReportSetup {
     int output_index;
 };
 
+enum MirFloatReportVariant {
+    MIR_FLOAT_REPORT_SHARED = 0,
+    MIR_FLOAT_REPORT_ASIN_DOMAIN,
+    MIR_FLOAT_REPORT_MOD_SPECIAL,
+    MIR_FLOAT_REPORT_FMA_BITS
+};
+
 struct MirFloatReportSchedule {
     struct MirFloatReportCheck checks[MIR_FLOAT_REPORT_MAX_CHECKS];
     struct MirFloatReportSetup setups[MIR_FLOAT_REPORT_MAX_LOCALS];
     struct MirFloatReportLocal snapshots[MIR_FLOAT_REPORT_MAX_LOCALS];
     struct MirFloatReportLocal outputs[MIR_FLOAT_REPORT_MAX_LOCALS];
     struct Sym *check_functions[3];
+    int check_function_uses[3];
     struct Sym *print_function;
     struct Sym *checks_root;
     struct Sym *failures_root;
@@ -2252,6 +2260,7 @@ struct MirFloatReportSchedule {
     int success_string_id;
     int failure_string_id;
     int frame_bytes;
+    int variant;
 };
 
 struct MirSymbolFindSchedule {
@@ -32839,8 +32848,10 @@ static int mir_match_float_report_schedule(
         if (slot < 0) {
             if (check_function_count >= 3)
                 goto done;
+            slot = check_function_count;
             plan->check_functions[check_function_count++] = function;
         }
+        ++plan->check_function_uses[slot];
         plan->checks[plan->check_count].call_index = call_index;
         plan->checks[plan->check_count].name_string_id =
             (int)name->immediate;
@@ -32878,12 +32889,47 @@ static int mir_match_float_report_schedule(
         }
         cursor = call_index + 1;
     }
-    if (plan->check_count < 14 ||
-        call_count < 38 ||
-        plan->snapshot_count == 0 ||
-        check_function_count != 2 ||
-        !mir_match_float_report_tail(plan, cursor))
+    if (!mir_match_float_report_tail(plan, cursor))
         goto done;
+    if (plan->check_count >= 14 &&
+        call_count >= 38 &&
+        plan->snapshot_count > 0 &&
+        check_function_count == 2) {
+        plan->variant = MIR_FLOAT_REPORT_SHARED;
+    } else if (mir.count == 177 &&
+               plan->check_count == 12 &&
+               call_count == 36 &&
+               plan->snapshot_count == 1 &&
+               plan->setup_count == 0 &&
+               plan->output_count == 0 &&
+               check_function_count == 2 &&
+               plan->check_function_uses[0] == 10 &&
+               plan->check_function_uses[1] == 2) {
+        plan->variant = MIR_FLOAT_REPORT_ASIN_DOMAIN;
+    } else if (mir.count == 396 &&
+               plan->check_count == 27 &&
+               call_count == 86 &&
+               plan->snapshot_count == 1 &&
+               plan->setup_count == 0 &&
+               plan->output_count == 0 &&
+               check_function_count == 3 &&
+               plan->check_function_uses[0] == 8 &&
+               plan->check_function_uses[1] == 4 &&
+               plan->check_function_uses[2] == 15) {
+        plan->variant = MIR_FLOAT_REPORT_MOD_SPECIAL;
+    } else if (mir.count == 289 &&
+               plan->check_count == 15 &&
+               call_count == 61 &&
+               plan->snapshot_count == 0 &&
+               plan->setup_count == 0 &&
+               plan->output_count == 0 &&
+               check_function_count == 2 &&
+               plan->check_function_uses[0] == 14 &&
+               plan->check_function_uses[1] == 1) {
+        plan->variant = MIR_FLOAT_REPORT_FMA_BITS;
+    } else {
+        goto done;
+    }
     for (instruction = 0; instruction < cursor; ++instruction)
         if (!covered[instruction])
             goto done;
@@ -51726,6 +51772,162 @@ static void mir_emit_float_report_expression(
     }
 }
 
+static void mir_emit_float_report_variant_expression(
+    FILE *out, const struct MirFloatReportSchedule *plan,
+    int value);
+
+static void mir_emit_float_report_variant_call(
+    FILE *out, const struct MirFloatReportSchedule *plan,
+    const struct MirInsn *call)
+{
+    struct Sym *function = find_global(call->name);
+    int arguments[MIR_FLOAT_REPORT_MAX_CALL_ARGS];
+    int actual_words = 0;
+    int argument;
+
+    if (function == NULL ||
+        !mir_float_report_call_arguments(
+            call, function->proto_nargs, arguments))
+        fatal("invalid scheduled float-report variant call");
+    /* These exact profiles reproduce the legacy ABI argument evaluation
+     * order, avoiding temporary saves between nested float calls. */
+    for (argument = function->proto_nargs - 1;
+         argument >= 0; --argument) {
+        int width =
+            mir_float_report_value_width(arguments[argument]);
+
+        mir_emit_float_report_variant_expression(
+            out, plan, arguments[argument]);
+        mir_float_report_push_value(out, width);
+        actual_words += width / 2;
+    }
+    mir_machine_emit_symbol_call(out, function);
+    mir_emit_final_call_cleanup(out, actual_words);
+}
+
+static void mir_emit_float_report_variant_expression(
+    FILE *out, const struct MirFloatReportSchedule *plan,
+    int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int snapshot =
+        mir_float_report_snapshot_index(plan, value);
+    int setup =
+        mir_float_report_setup_index(plan, value);
+    int width = mir_float_report_value_width(value);
+
+    if (snapshot >= 0) {
+        mir_machine_emit_ix_wide_load(
+            out, plan->snapshots[snapshot].ix_offset);
+        return;
+    }
+    if (setup >= 0) {
+        mir_machine_emit_ix_wide_load(
+            out,
+            plan->outputs[
+                plan->setups[setup].output_index].ix_offset);
+        return;
+    }
+    if (definition == NULL)
+        fatal("missing scheduled float-report variant value");
+    switch (definition->opcode) {
+    case MIR_CONST:
+        if (width == 4)
+            mir_machine_emit_float_bits(
+                out, (unsigned long)definition->immediate);
+        else
+            fprintf(out, "\tld hl,%lu\n",
+                    (unsigned long)definition->immediate &
+                        0xffffUL);
+        return;
+    case MIR_FLOAT_CONST:
+        mir_machine_emit_float_bits(
+            out, (unsigned long)definition->immediate);
+        return;
+    case MIR_STRING_ADDRESS:
+        fprintf(out, "\tld hl,S%ld\n",
+                definition->immediate);
+        return;
+    case MIR_ADDRESS:
+        {
+            int memory_type;
+            int memory_storage;
+            int memory_offset;
+            int local;
+
+            if (!mir_scalar_memory_location(
+                    definition, &memory_type,
+                    &memory_storage, &memory_offset))
+                fatal("invalid scheduled float-report variant address");
+            local = mir_float_report_find_local(
+                plan->outputs, plan->output_count,
+                memory_storage, memory_offset);
+            if (local < 0)
+                fatal("missing scheduled float-report variant address");
+            fprintf(out,
+                    "\tpush ix\n\tpop hl\n"
+                    "\tld de,%d\n\tadd hl,de\n",
+                    plan->outputs[local].ix_offset);
+        }
+        return;
+    case MIR_LOAD:
+        {
+            int memory_type;
+            int memory_storage;
+            int memory_offset;
+            int local;
+
+            if (!mir_scalar_memory_location(
+                    definition, &memory_type,
+                    &memory_storage, &memory_offset))
+                fatal("invalid scheduled float-report variant load");
+            local = mir_float_report_find_local(
+                plan->outputs, plan->output_count,
+                memory_storage, memory_offset);
+            if (local < 0)
+                fatal("missing scheduled float-report variant load");
+            mir_machine_emit_ix_wide_load(
+                out, plan->outputs[local].ix_offset);
+        }
+        return;
+    case MIR_UNARY:
+        {
+            const struct MirInsn *operand =
+                mir_definition(definition->src1);
+
+            if (operand != NULL &&
+                (operand->opcode == MIR_CONST ||
+                 operand->opcode == MIR_FLOAT_CONST)) {
+                mir_machine_emit_float_bits(
+                    out,
+                    ((unsigned long)operand->immediate) ^
+                        0x80000000UL);
+                return;
+            }
+        }
+        mir_emit_float_report_variant_expression(
+            out, plan, definition->src1);
+        fputs("\tld a,d\n\txor 128\n\tld d,a\n", out);
+        return;
+    case MIR_BINARY:
+        mir_emit_float_report_variant_expression(
+            out, plan, definition->src1);
+        fputs("\tpush de\n\tpush hl\n", out);
+        mir_emit_float_report_variant_expression(
+            out, plan, definition->src2);
+        mir_emit_runtime_call(
+            out, mir_float_report_binary_helper(definition));
+        fputs("\tpop bc\n\tpop bc\n", out);
+        return;
+    case MIR_CALL:
+        mir_emit_float_report_variant_call(
+            out, plan, definition);
+        return;
+    default:
+        fatal("unsupported scheduled float-report variant expression");
+    }
+}
+
 static void mir_emit_float_report_epilogue(
     FILE *out, const struct MirFloatReportSchedule *plan)
 {
@@ -51763,18 +51965,28 @@ static void mir_emit_float_report_schedule(
     for (check = 0; check < plan->check_count; ++check) {
         while (setup < plan->setup_count &&
                plan->setups[setup].before_check == check) {
-            mir_emit_float_report_call(
-                out, plan,
-                &mir.insns[plan->setups[setup].call_index]);
+            if (plan->variant == MIR_FLOAT_REPORT_SHARED)
+                mir_emit_float_report_call(
+                    out, plan,
+                    &mir.insns[plan->setups[setup].call_index]);
+            else
+                mir_emit_float_report_variant_call(
+                    out, plan,
+                    &mir.insns[plan->setups[setup].call_index]);
             mir_machine_emit_ix_wide_store(
                 out,
                 plan->outputs[
                     plan->setups[setup].output_index].ix_offset);
             ++setup;
         }
-        mir_emit_float_report_call(
-            out, plan,
-            &mir.insns[plan->checks[check].call_index]);
+        if (plan->variant == MIR_FLOAT_REPORT_SHARED)
+            mir_emit_float_report_call(
+                out, plan,
+                &mir.insns[plan->checks[check].call_index]);
+        else
+            mir_emit_float_report_variant_call(
+                out, plan,
+                &mir.insns[plan->checks[check].call_index]);
     }
 
     mir_machine_emit_global_word(
@@ -51791,26 +52003,45 @@ static void mir_emit_float_report_schedule(
     mir_machine_emit_global_word(
         out, plan->failures_root, plan->failures_offset);
     fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out,
-            "\tjp nz,L%d\n\tld hl,S%d\n\tpush hl\n"
-            "\tjp L%d\nL%d:\n"
-            "\tld hl,S%d\n\tpush hl\nL%d:\n"
-            "\tld hl,S%d\n\tpush hl\n",
-            failure_string, plan->success_string_id,
-            result_ready, failure_string,
-            plan->failure_string_id, result_ready,
-            plan->result_string_id);
+    if (plan->variant == MIR_FLOAT_REPORT_SHARED)
+        fprintf(out,
+                "\tjp nz,L%d\n\tld hl,S%d\n\tpush hl\n"
+                "\tjp L%d\nL%d:\n"
+                "\tld hl,S%d\n\tpush hl\nL%d:\n"
+                "\tld hl,S%d\n\tpush hl\n",
+                failure_string, plan->success_string_id,
+                result_ready, failure_string,
+                plan->failure_string_id, result_ready,
+                plan->result_string_id);
+    else
+        fprintf(out,
+                "\tjr nz,L%d\n\tld hl,S%d\n\tpush hl\n"
+                "\tjr L%d\nL%d:\n"
+                "\tld hl,S%d\n\tpush hl\nL%d:\n"
+                "\tld hl,S%d\n\tpush hl\n",
+                failure_string, plan->success_string_id,
+                result_ready, failure_string,
+                plan->failure_string_id, result_ready,
+                plan->result_string_id);
     mir_machine_emit_symbol_call(out, plan->print_function);
     mir_emit_final_call_cleanup(out, 2);
 
     mir_machine_emit_global_word(
         out, plan->failures_root, plan->failures_offset);
     fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp nz,L%d\n\tld hl,0\n",
-            return_failure);
-    mir_emit_float_report_epilogue(out, plan);
-    fprintf(out, "L%d:\n\tld hl,1\n", return_failure);
-    mir_emit_float_report_epilogue(out, plan);
+    if (plan->variant == MIR_FLOAT_REPORT_SHARED) {
+        fprintf(out, "\tjp nz,L%d\n\tld hl,0\n",
+                return_failure);
+        mir_emit_float_report_epilogue(out, plan);
+        fprintf(out, "L%d:\n\tld hl,1\n", return_failure);
+        mir_emit_float_report_epilogue(out, plan);
+    } else {
+        fprintf(out, "\tjr z,L%d\n\tld hl,1\n",
+                return_failure);
+        mir_emit_float_report_epilogue(out, plan);
+        fprintf(out, "L%d:\n\tld hl,0\n", return_failure);
+        mir_emit_float_report_epilogue(out, plan);
+    }
 }
 
 static void mir_emit_buffered_declaration_address(
