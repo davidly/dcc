@@ -580,6 +580,17 @@ struct MirTwoPostUpdateReports {
     int count;
 };
 
+struct MirPostDecrementCheckRunner {
+    struct Sym *check_function;
+    struct Sym *failure_count;
+    struct Sym *print_function;
+    int failure_offset;
+    int check_strings[3];
+    int check_values[3];
+    int failure_string;
+    int success_string;
+};
+
 struct MirCharPointerUpdateReports {
     struct Sym *copy_function;
     struct Sym *print_function;
@@ -6944,6 +6955,125 @@ static int mir_match_two_post_update_reports(
     if (plan->print_function == NULL)
         return mir_machine_reject("two-post-update-reports", "function");
     return 1;
+}
+
+static int mir_match_post_decrement_check_runner(
+    struct MirPostDecrementCheckRunner *plan)
+{
+    static const int check_calls[3] = { 34, 68, 100 };
+    static const int check_strings[3] = { 28, 62, 94 };
+    static const int actual_values[3] = { 13, 47, 78 };
+    static const int expected_values[3] = { 32, 66, 98 };
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int args[3];
+    int check;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 117 || mir_cfg_block_count() != 11 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_INT ||
+        !mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[5].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[7].dst, 0) ||
+        mir.insns[11].src1 != mir.insns[2].dst ||
+        mir.insns[11].src2 != mir.insns[16].dst ||
+        mir.insns[13].src1 != mir.insns[7].dst ||
+        mir.insns[13].src2 != mir.insns[23].dst ||
+        !mir_machine_constant_equals(mir.insns[15].dst, 1) ||
+        mir.insns[16].immediate != '-' ||
+        mir.insns[16].src1 != mir.insns[11].dst ||
+        mir.insns[16].src2 != mir.insns[15].dst ||
+        mir.insns[19].immediate != '>' ||
+        mir.insns[19].src1 != mir.insns[11].dst ||
+        mir.insns[19].src2 != mir.insns[5].dst ||
+        !mir_machine_constant_equals(mir.insns[22].dst, 1) ||
+        mir.insns[23].immediate != '+' ||
+        mir.insns[23].src1 != mir.insns[13].dst ||
+        mir.insns[26].label != mir.insns[10].label)
+        return mir_machine_reject(
+            "post-decrement-check-runner", "first-loop");
+    if (!mir_machine_constant_equals(mir.insns[36].dst, 3) ||
+        !mir_machine_constant_equals(mir.insns[39].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[41].dst, 0) ||
+        mir.insns[45].src1 != mir.insns[36].dst ||
+        mir.insns[45].src2 != mir.insns[50].dst ||
+        mir.insns[47].src1 != mir.insns[41].dst ||
+        mir.insns[47].src2 != mir.insns[57].dst ||
+        mir.insns[50].immediate != '-' ||
+        mir.insns[53].immediate != '>' ||
+        mir.insns[53].src1 != mir.insns[45].dst ||
+        mir.insns[53].src2 != mir.insns[39].dst ||
+        mir.insns[57].immediate != '+' ||
+        mir.insns[60].label != mir.insns[44].label)
+        return mir_machine_reject(
+            "post-decrement-check-runner", "second-loop");
+    if (!mir_machine_constant_equals(mir.insns[69].dst, 3) ||
+        !mir_machine_constant_equals(mir.insns[72].dst, 0) ||
+        mir.insns[78].src1 != mir.insns[72].dst ||
+        mir.insns[78].src2 != mir.insns[89].dst ||
+        mir.insns[79].src1 != mir.insns[69].dst ||
+        mir.insns[79].src2 != mir.insns[82].dst ||
+        !mir_machine_constant_equals(mir.insns[81].dst, 1) ||
+        mir.insns[82].immediate != '-' ||
+        !mir_machine_constant_equals(mir.insns[84].dst, 0) ||
+        mir.insns[85].immediate != '>' ||
+        mir.insns[85].src1 != mir.insns[79].dst ||
+        mir.insns[85].src2 != mir.insns[84].dst ||
+        mir.insns[89].immediate != '+' ||
+        mir.insns[92].label != mir.insns[75].label)
+        return mir_machine_reject(
+            "post-decrement-check-runner", "third-loop");
+    for (check = 0; check < 3; ++check) {
+        const struct MirInsn *call =
+            &mir.insns[check_calls[check]];
+        const struct MirInsn *string =
+            &mir.insns[check_strings[check]];
+
+        if (!mir_machine_three_call_arguments(call, args) ||
+            args[0] != string->dst ||
+            args[1] != mir.insns[actual_values[check]].dst ||
+            args[2] != mir.insns[expected_values[check]].dst ||
+            string->opcode != MIR_STRING_ADDRESS ||
+            (check != 0 &&
+             strcmp(call->name,
+                    mir.insns[check_calls[0]].name)))
+            return mir_machine_reject(
+                "post-decrement-check-runner", "checks");
+        plan->check_strings[check] =
+            (int)string->immediate;
+        plan->check_values[check] =
+            check == 0 ? 0 : 3;
+    }
+    plan->check_function =
+        find_global(mir.insns[34].name);
+    if (!mir_scalar_memory_location(
+            &mir.insns[101], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        type_size(memory_type) != 2 ||
+        mir.insns[102].src1 != mir.insns[101].dst ||
+        !mir_machine_two_call_arguments(
+            &mir.insns[107], args) ||
+        args[0] != mir.insns[103].dst ||
+        args[1] != mir.insns[105].dst ||
+        !mir_machine_single_call_argument(
+            &mir.insns[114], &args[0]) ||
+        args[0] != mir.insns[112].dst)
+        return mir_machine_reject(
+            "post-decrement-check-runner", "report");
+    plan->failure_count =
+        find_global(mir.insns[101].name);
+    plan->failure_offset = memory_offset;
+    plan->print_function =
+        find_global(mir.insns[107].name);
+    plan->failure_string =
+        (int)mir.insns[103].immediate;
+    plan->success_string =
+        (int)mir.insns[112].immediate;
+    return plan->check_function != NULL &&
+           plan->failure_count != NULL &&
+           plan->print_function != NULL;
 }
 
 static int mir_match_pointer_word_update_reports(
@@ -29831,6 +29961,41 @@ static void mir_emit_two_post_update_reports(
     fputs("\tret\n", out);
 }
 
+static void mir_emit_post_decrement_check_runner(
+    FILE *out, const struct MirPostDecrementCheckRunner *plan)
+{
+    int success = new_label();
+    int check;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (check = 0; check < 3; ++check) {
+        fprintf(out,
+                "\tld hl,%d\n\tpush hl\n\tpush hl\n"
+                "\tld hl,S%d\n\tpush hl\n",
+                plan->check_values[check],
+                plan->check_strings[check]);
+        mir_machine_emit_symbol_call(
+            out, plan->check_function);
+        fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    }
+    mir_machine_emit_global_word(
+        out, plan->failure_count,
+        plan->failure_offset);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n\tpush hl\n", success);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->failure_string);
+    mir_machine_emit_symbol_call(
+        out, plan->print_function);
+    fputs("\tpop bc\n\tpop bc\n\tld hl,1\n\tret\n", out);
+    fprintf(out, "L%d:\n\tld hl,S%d\n\tpush hl\n",
+            success, plan->success_string);
+    mir_machine_emit_symbol_call(
+        out, plan->print_function);
+    fputs("\tpop bc\n\tld hl,0\n\tret\n", out);
+}
+
 static void mir_emit_char_pointer_update_reports(
     FILE *out, const struct MirCharPointerUpdateReports *plan)
 {
@@ -34674,6 +34839,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFixedByteCopyChecks fixed_byte_copy_checks;
     struct MirProvenWideShiftChecks proven_wide_shift_checks;
     struct MirTwoPostUpdateReports two_post_update_reports;
+    struct MirPostDecrementCheckRunner post_decrement_check_runner;
     struct MirCharPointerUpdateReports char_pointer_update_reports;
     struct MirTwoStringPairReports two_string_pair_reports;
     struct MirTrianglePerimeter triangle_perimeter;
@@ -35292,6 +35458,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &two_post_update_reports)) {
         mir_emit_two_post_update_reports(
             out, &two_post_update_reports);
+        return 1;
+    }
+    if (mir_match_post_decrement_check_runner(
+            &post_decrement_check_runner)) {
+        mir_emit_post_decrement_check_runner(
+            out, &post_decrement_check_runner);
         return 1;
     }
     if (mir_match_char_pointer_update_reports(
