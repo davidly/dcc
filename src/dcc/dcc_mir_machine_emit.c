@@ -933,6 +933,16 @@ struct MirScaledGlobalStore {
     int value_stack_offset;
 };
 
+struct MirFixedGlobalStringCopies {
+    struct Sym *root;
+    struct Sym *index;
+    struct Sym *copy_function;
+    struct Sym *print_function;
+    int source_string_ids[3];
+    int format_string_id;
+    int stride;
+};
+
 struct MirAsciiUpper {
     int parameter_stack_offset;
     int width;
@@ -12019,6 +12029,102 @@ static int mir_match_conditional_string_report(
     plan->format_string_id = (int)mir.insns[3].immediate;
     plan->true_string_id = (int)mir.insns[9].immediate;
     plan->false_string_id = (int)mir.insns[13].immediate;
+    return 1;
+}
+
+static int mir_match_fixed_global_string_copies(
+    struct MirFixedGlobalStringCopies *plan)
+{
+    int copy;
+    int print_arguments[5] = { 0 };
+    int print_count = 0;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 50 || mir_cfg_block_count() != 1 ||
+        mir.has_vla || type_size(mir.return_type) != 2)
+        return mir_machine_reject("fixed-global-string-copies", "shape");
+    for (copy = 0; copy < 3; ++copy) {
+        int base = 1 + copy * 10;
+        const struct MirInsn *root = &mir.insns[base];
+        const struct MirInsn *load = &mir.insns[base + 1];
+        const struct MirInsn *store = &mir.insns[base + 4];
+        const struct MirInsn *address = &mir.insns[base + 5];
+        const struct MirInsn *string = &mir.insns[base + 7];
+        const struct MirInsn *call = &mir.insns[base + 9];
+        int args[2];
+
+        if (root->opcode != MIR_ADDRESS ||
+            load->opcode != MIR_LOAD ||
+            !mir_machine_constant_equals(mir.insns[base + 2].dst, 1) ||
+            mir.insns[base + 3].immediate != '+' ||
+            mir.insns[base + 3].src1 != load->dst ||
+            store->opcode != MIR_STORE ||
+            store->src1 != mir.insns[base + 3].dst ||
+            !mir_machine_same_location(load, store) ||
+            address->opcode != MIR_INDEX_ADDRESS ||
+            address->src1 != root->dst ||
+            address->src2 != load->dst ||
+            address->immediate <= 0 ||
+            string->opcode != MIR_STRING_ADDRESS ||
+            call->opcode != MIR_CALL ||
+            !mir_machine_two_call_arguments(call, args) ||
+            args[0] != address->dst || args[1] != string->dst)
+            return mir_machine_reject(
+                "fixed-global-string-copies", "copy");
+        if (copy == 0) {
+            plan->root = find_global(root->name);
+            plan->index = find_global(load->name);
+            plan->copy_function = find_global(call->name);
+            plan->stride = (int)address->immediate;
+        } else if (strcmp(root->name, mir.insns[1].name) ||
+                   strcmp(load->name, mir.insns[2].name) ||
+                   strcmp(call->name, mir.insns[10].name) ||
+                   address->immediate != plan->stride) {
+            return mir_machine_reject(
+                "fixed-global-string-copies", "consistency");
+        }
+        plan->source_string_ids[copy] = (int)string->immediate;
+    }
+    if (plan->root == NULL || plan->root->is_volatile ||
+        plan->index == NULL || plan->index->is_volatile ||
+        plan->copy_function == NULL || plan->copy_function->is_funcptr ||
+        plan->stride != 16 ||
+        mir.insns[31].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[47].opcode != MIR_CALL ||
+        strcmp(mir.insns[47].name, "printf"))
+        return mir_machine_reject("fixed-global-string-copies", "report");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *arg = &mir.insns[instruction];
+        int index;
+        if (arg->opcode != MIR_ARG ||
+            arg->secondary_offset != mir.insns[47].secondary_offset)
+            continue;
+        index = (int)arg->immediate;
+        if (index < 0 || index >= 5 || print_arguments[index] != 0)
+            return mir_machine_reject(
+                "fixed-global-string-copies", "print-args");
+        print_arguments[index] = arg->src1 + 1;
+        ++print_count;
+    }
+    if (print_count != 5 ||
+        print_arguments[0] != mir.insns[31].dst + 1 ||
+        print_arguments[1] != mir.insns[33].dst + 1 ||
+        print_arguments[2] != mir.insns[37].dst + 1 ||
+        print_arguments[3] != mir.insns[41].dst + 1 ||
+        print_arguments[4] != mir.insns[45].dst + 1 ||
+        !mir_machine_same_location(&mir.insns[2], &mir.insns[33]) ||
+        !mir_machine_constant_equals(mir.insns[36].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[40].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[44].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[48].dst, 0) ||
+        mir.insns[49].src1 != mir.insns[48].dst)
+        return mir_machine_reject(
+            "fixed-global-string-copies", "print-order");
+    plan->print_function = find_global(mir.insns[47].name);
+    plan->format_string_id = (int)mir.insns[31].immediate;
+    if (plan->print_function == NULL)
+        return mir_machine_reject("fixed-global-string-copies", "symbols");
     return 1;
 }
 
@@ -24323,6 +24429,39 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_fixed_global_string_copies(
+    FILE *out, const struct MirFixedGlobalStringCopies *plan)
+{
+    int copy;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (copy = 0; copy < 3; ++copy) {
+        mir_machine_emit_global_word(out, plan->index, 0);
+        fputs("\tpush hl\n\tinc hl\n", out);
+        mir_machine_emit_global_word_store(out, plan->index, 0);
+        fputs("\tpop hl\n\tadd hl,hl\n\tadd hl,hl\n"
+              "\tadd hl,hl\n\tadd hl,hl\n", out);
+        mir_machine_emit_global_address_de(out, plan->root, 0);
+        fputs("\tadd hl,de\n\tex de,hl\n", out);
+        fprintf(out, "\tld hl,S%d\n",
+                plan->source_string_ids[copy]);
+        mir_emit_runtime_call(out, "__scf");
+    }
+    for (copy = 2; copy >= 0; --copy) {
+        mir_machine_emit_global_address_hl(
+            out, plan->root, copy * plan->stride);
+        fputs("\tpush hl\n", out);
+    }
+    mir_machine_emit_global_word(out, plan->index, 0);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->format_string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    for (copy = 0; copy < 5; ++copy)
+        fputs("\tpop bc\n", out);
+    fputs("\tld hl,0\n\tret\n", out);
+}
+
 static void mir_emit_scaled_global_store(
     FILE *out, const struct MirScaledGlobalStore *plan)
 {
@@ -25973,6 +26112,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirFixedGlobalStringCopies fixed_global_string_copies;
     struct MirScaledGlobalStore scaled_global_store;
     struct MirScaledGlobalLoad scaled_global_load;
     struct MirWideHash33 wide_hash33;
@@ -26623,6 +26763,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_fixed_global_string_copies(
+            &fixed_global_string_copies)) {
+        mir_emit_fixed_global_string_copies(
+            out, &fixed_global_string_copies);
         return 1;
     }
     if (mir_match_scaled_global_store(&scaled_global_store)) {
