@@ -569,6 +569,11 @@ struct MirValueLiteralChecks {
     int string_ids[13];
 };
 
+struct MirFixedCellChecksum {
+    struct Sym *cells;
+    int count, stride, rows, columns, member_offset;
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -7131,6 +7136,41 @@ static int mir_match_value_literal_checks(struct MirValueLiteralChecks *plan)
         strcmp(mir.insns[60].name, mir.insns[70].name) ||
         strcmp(mir.insns[60].name, mir.insns[80].name))
         return mir_machine_reject("value-literal-checks", "functions");
+    return 1;
+}
+
+static int mir_match_fixed_cell_checksum(struct MirFixedCellChecksum *p)
+{
+    memset(p, 0, sizeof(*p));
+    if (mir.count != 82 || mir_cfg_block_count() != 10 || mir.has_vla ||
+        type_size(mir.return_type) != 4 ||
+        !mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[8].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[15].dst, 3) ||
+        mir.insns[16].immediate != '<' ||
+        mir.insns[19].opcode != MIR_ADDRESS ||
+        mir.insns[21].opcode != MIR_INDEX_ADDRESS ||
+        !mir_machine_constant_equals(mir.insns[23].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[31].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[34].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[43].dst, 2) ||
+        mir.insns[48].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[50].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[52].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[53].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[55].immediate != '+' ||
+        mir.insns[81].src1 != mir.insns[80].dst)
+        return mir_machine_reject("fixed-cell-checksum", "shape");
+    p->cells = find_global(mir.insns[19].name);
+    p->count = (int)mir.insns[15].immediate;
+    p->stride = (int)mir.insns[21].immediate;
+    p->rows = (int)mir.insns[31].immediate;
+    p->columns = (int)mir.insns[43].immediate;
+    p->member_offset = (int)mir.insns[48].immediate;
+    if (p->cells == NULL || p->count != 3 || p->stride != 6 ||
+        p->rows != 2 || p->columns != 2 ||
+        mir.insns[50].immediate != 2 || mir.insns[52].immediate != 1)
+        return mir_machine_reject("fixed-cell-checksum", "layout");
     return 1;
 }
 
@@ -26494,6 +26534,23 @@ static void mir_emit_value_literal_checks(FILE *out,
     fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static void mir_emit_fixed_cell_checksum(FILE *out,
+    const struct MirFixedCellChecksum *p)
+{
+    int cell, byte;
+    fputs("\tpush ix\n", out);
+    if (opt_stack_check) mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_address_de(out, p->cells, 0);
+    fputs("\tpush de\n\tpop ix\n\tld hl,0\n\tld de,0\n", out);
+    for (cell = 0; cell < p->count; ++cell)
+        for (byte = 0; byte < p->rows * p->columns; ++byte) {
+            fprintf(out, "\tld c,(ix%+d)\n\tld b,0\n\tadd hl,bc\n"
+                         "\tex de,hl\n\tld bc,0\n\tadc hl,bc\n\tex de,hl\n",
+                    p->member_offset + cell * p->stride + byte);
+        }
+    fputs("\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -30220,6 +30277,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirScaledVectorAdd scaled_vector_add;
     struct MirHallInit hall_init;
     struct MirValueLiteralChecks value_literal_checks;
+    struct MirFixedCellChecksum fixed_cell_checksum;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -30802,6 +30860,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_value_literal_checks(&value_literal_checks)) {
         mir_emit_value_literal_checks(out, &value_literal_checks);
+        return 1;
+    }
+    if (mir_match_fixed_cell_checksum(&fixed_cell_checksum)) {
+        mir_emit_fixed_cell_checksum(out, &fixed_cell_checksum);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
