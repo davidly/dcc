@@ -840,6 +840,13 @@ struct MirFixedCallReductionReport {
     int string_id;
 };
 
+struct MirAggregateByteFillReturn {
+    int base_stack_offset;
+    int tag_stack_offset;
+    int count;
+    int tag_offset;
+};
+
 struct MirAsciiUpper {
     int parameter_stack_offset;
     int width;
@@ -11926,6 +11933,97 @@ static int mir_match_conditional_string_report(
     plan->format_string_id = (int)mir.insns[3].immediate;
     plan->true_string_id = (int)mir.insns[9].immediate;
     plan->false_string_id = (int)mir.insns[13].immediate;
+    return 1;
+}
+
+static int mir_match_aggregate_byte_fill_return(
+    struct MirAggregateByteFillReturn *plan)
+{
+    static const int expected_opcodes[39] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_NOP, MIR_CONST, MIR_STORE,
+        MIR_LABEL, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP, MIR_NOP,
+        MIR_UNARY, MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT,
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP,
+        MIR_LABEL, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_NOP,
+        MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_RETURN
+    };
+    const struct MirInsn *base = &mir.insns[1];
+    const struct MirInsn *tag = &mir.insns[2];
+    const struct MirInsn *index_phi = &mir.insns[9];
+    int memory_type, memory_storage, memory_offset;
+    int return_type, return_storage, return_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 39 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || type_size(base->type) != 1 ||
+        type_size(tag->type) != 2)
+        return mir_machine_reject("aggregate-byte-fill-return", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "aggregate-byte-fill-return", "opcode");
+    if (!mir_machine_parameter_value_offset(
+            base->dst, &plan->base_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            tag->dst, &plan->tag_stack_offset) ||
+        !mir_machine_constant_equals(mir.insns[4].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[5]) ||
+        index_phi->src1 != mir.insns[4].dst ||
+        index_phi->src2 != mir.insns[29].dst ||
+        index_phi->phi_pred1 != mir.insns[0].label ||
+        index_phi->phi_pred2 != mir.insns[26].label ||
+        mir.insns[13].immediate != '<' ||
+        mir.insns[13].src1 != mir.insns[12].dst ||
+        mir.insns[13].src2 != mir.insns[11].dst ||
+        mir.insns[14].src1 != mir.insns[13].dst ||
+        mir.insns[14].label != mir.insns[32].label)
+        return mir_machine_reject("aggregate-byte-fill-return", "loop");
+    plan->count = (int)mir.insns[11].immediate;
+    if (plan->count <= 0 || plan->count > 255 ||
+        !mir_scalar_memory_location(
+            &mir.insns[15], &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_LOCAL ||
+        mir.insns[16].src1 != mir.insns[15].dst ||
+        mir.insns[18].src1 != mir.insns[16].dst ||
+        mir.insns[18].src2 != index_phi->dst ||
+        mir.insns[18].immediate != 1 ||
+        mir.insns[21].src1 != base->dst ||
+        mir.insns[22].src1 != index_phi->dst ||
+        mir.insns[23].immediate != '+' ||
+        mir.insns[23].src1 != mir.insns[21].dst ||
+        mir.insns[23].src2 != mir.insns[22].dst ||
+        mir.insns[24].src1 != mir.insns[23].dst ||
+        mir.insns[25].src1 != mir.insns[18].dst ||
+        mir.insns[25].src2 != mir.insns[24].dst ||
+        mir.insns[25].memory_size != 1 ||
+        (mir.insns[25].memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_constant_equals(mir.insns[28].dst, 1) ||
+        mir.insns[29].immediate != '+' ||
+        mir.insns[29].src1 != index_phi->dst ||
+        mir.insns[29].src2 != mir.insns[28].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[30]) ||
+        mir.insns[31].label != mir.insns[6].label)
+        return mir_machine_reject("aggregate-byte-fill-return", "fill");
+    if (!mir_scalar_memory_location(
+            &mir.insns[33], &return_type, &return_storage, &return_offset) ||
+        return_storage != memory_storage || return_offset != memory_offset ||
+        mir.insns[34].src1 != mir.insns[33].dst ||
+        mir.insns[36].src1 != mir.insns[34].dst ||
+        mir.insns[36].src2 != tag->dst ||
+        mir.insns[36].memory_size != 2 ||
+        (mir.insns[36].memory_flags & (1 | 8)) != 0 ||
+        !mir_scalar_memory_location(
+            &mir.insns[37], &return_type, &return_storage, &return_offset) ||
+        return_storage != memory_storage || return_offset != memory_offset ||
+        mir.insns[38].src1 != mir.insns[37].dst)
+        return mir_machine_reject("aggregate-byte-fill-return", "return");
+    plan->tag_offset = (int)mir.insns[34].immediate;
+    if (plan->tag_offset != plan->count ||
+        memory_offset != -(plan->tag_offset + 2))
+        return mir_machine_reject("aggregate-byte-fill-return", "layout");
     return 1;
 }
 
@@ -23274,6 +23372,27 @@ static void mir_emit_pointer_member_any2(
     fprintf(out, "L%d:\n\tld hl,1\n\tret\n", match);
 }
 
+static void mir_emit_aggregate_byte_fill_return(
+    FILE *out, const struct MirAggregateByteFillReturn *plan)
+{
+    int loop = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld l,(ix+4)\n\tld h,(ix+5)\n"
+            "\tld a,(ix+%d)\n\tld b,%d\n"
+            "L%d:\n\tld (hl),a\n\tinc hl\n\tinc a\n\tdjnz L%d\n"
+            "\tld e,(ix+%d)\n\tld d,(ix+%d)\n"
+            "\tld (hl),e\n\tinc hl\n\tld (hl),d\n"
+            "\tld sp,ix\n\tpop ix\n\tret\n",
+            plan->base_stack_offset + 2,
+            plan->count, loop, loop,
+            plan->tag_stack_offset + 2,
+            plan->tag_stack_offset + 3);
+}
+
 static void mir_emit_fixed_call_reduction_report(
     FILE *out, const struct MirFixedCallReductionReport *plan)
 {
@@ -24535,6 +24654,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirConstantLoopCheck constant_loop_check;
     struct MirGlobalByteCountdown global_byte_countdown;
     struct MirConditionalStringReport conditional_string_report;
+    struct MirAggregateByteFillReturn aggregate_byte_fill_return;
     struct MirFixedCallReductionReport fixed_call_reduction_report;
     struct MirStringPutcharLoop string_putchar_loop;
     struct MirFixedAllocationRunner fixed_allocation_runner;
@@ -25174,6 +25294,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &conditional_string_report)) {
         mir_emit_conditional_string_report(
             out, &conditional_string_report);
+        return 1;
+    }
+    if (mir_match_aggregate_byte_fill_return(
+            &aggregate_byte_fill_return)) {
+        mir_emit_aggregate_byte_fill_return(
+            out, &aggregate_byte_fill_return);
         return 1;
     }
     if (mir_match_fixed_call_reduction_report(
