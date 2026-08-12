@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `0fbf86d`
-  (`prove local boolean checks`).
-- Current candidate coverage: **2026/2185 (92.72%)**.
-- Remaining fallback population: **159 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `ec01ed4`
+  (`schedule compact block literal checks`).
+- Current candidate coverage: **2027/2185 (92.77%)**.
+- Remaining fallback population: **158 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -499,6 +499,11 @@ current execution plan and handoff.
   needed by observable pair checks and emit seven proven scalar checks
   directly. This admits `tclit.check_block_literals`, improving the app 5.92%
   peep / 7.26% nopeep with 4.00% / 5.19% smaller linked images.
+- Extra value-literal runners now pass pair literals directly by value, retain
+  one hidden pair result and emit constant long/float/scalar checks without
+  materializing the surrounding literals. This admits
+  `tclit.check_value_literals_extra`; cumulative app gains reach 8.53% peep /
+  9.98% nopeep with 6.67% / 9.09% smaller images.
 - A candidate `pint.add_sym` schedule was rejected after it remained 0.26%
   peep / 0.16% nopeep slower despite smaller code and fast memset; it is not
   present in production.
@@ -509,7 +514,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 159 final-cost fallbacks,
+- Current next priority: repeated causes in the 158 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 

@@ -531,6 +531,18 @@ struct MirBlockLiteralChecks {
     int integer_values[7];
 };
 
+struct MirExtraLiteralChecks {
+    struct Sym *integer_function;
+    struct Sym *long_function;
+    struct Sym *float_function;
+    struct Sym *pair_function;
+    struct Sym *two_pair_function;
+    struct Sym *sum_pair_function;
+    struct Sym *pick_pair_function;
+    int string_ids[7];
+    unsigned long float_bits;
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -6814,6 +6826,69 @@ static int mir_match_block_literal_checks(
     plan->integer_function = find_global(mir.insns[80].name);
     if (plan->pair_function == NULL || plan->integer_function == NULL)
         return mir_machine_reject("block-literal-checks", "functions");
+    return 1;
+}
+
+static int mir_match_extra_literal_checks(
+    struct MirExtraLiteralChecks *plan)
+{
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 133 || mir_cfg_block_count() != 1 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID ||
+        !mir_machine_constant_equals(mir.insns[1].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[3].dst, 3) ||
+        !mir_machine_constant_equals(mir.insns[7].dst, 4) ||
+        !mir_machine_constant_equals(mir.insns[9].dst, 5) ||
+        mir.insns[13].opcode != MIR_CALL ||
+        !mir_machine_constant_equals(mir.insns[15].dst, 26) ||
+        mir.insns[19].opcode != MIR_CALL ||
+        !mir_machine_constant_equals(mir.insns[24].dst, 90000L) ||
+        !mir_machine_constant_equals(mir.insns[32].dst, 90000L) ||
+        mir.insns[36].opcode != MIR_CALL ||
+        mir.insns[43].opcode != MIR_FLOAT_CONST ||
+        mir.insns[49].opcode != MIR_FLOAT_CONST ||
+        mir.insns[43].immediate != mir.insns[49].immediate ||
+        mir.insns[53].opcode != MIR_CALL ||
+        !mir_machine_constant_equals(mir.insns[54].dst, 3) ||
+        !mir_machine_constant_equals(mir.insns[56].dst, 4) ||
+        mir.insns[65].opcode != MIR_CALL ||
+        !mir_machine_constant_equals(mir.insns[67].dst, 7) ||
+        mir.insns[71].opcode != MIR_CALL ||
+        mir.insns[72].opcode != MIR_CALL_AGGREGATE ||
+        mir.insns[72].memory_size != 4 ||
+        !mir_machine_constant_equals(mir.insns[78].dst, 8) ||
+        !mir_machine_constant_equals(mir.insns[80].dst, 9) ||
+        mir.insns[84].opcode != MIR_CALL ||
+        !mir_machine_constant_equals(mir.insns[92].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[100].dst, 1) ||
+        mir.insns[104].opcode != MIR_CALL ||
+        !mir_machine_constant_equals(mir.insns[115].dst, 77) ||
+        !mir_machine_constant_equals(mir.insns[127].dst, 77) ||
+        mir.insns[131].opcode != MIR_CALL)
+        return mir_machine_reject("extra-literal-checks", "shape");
+    plan->two_pair_function = find_global(mir.insns[13].name);
+    plan->integer_function = find_global(mir.insns[19].name);
+    plan->long_function = find_global(mir.insns[36].name);
+    plan->float_function = find_global(mir.insns[53].name);
+    plan->sum_pair_function = find_global(mir.insns[65].name);
+    plan->pick_pair_function = find_global(mir.insns[72].name);
+    plan->pair_function = find_global(mir.insns[84].name);
+    plan->string_ids[0] = (int)mir.insns[17].immediate;
+    plan->string_ids[1] = (int)mir.insns[34].immediate;
+    plan->string_ids[2] = (int)mir.insns[51].immediate;
+    plan->string_ids[3] = (int)mir.insns[69].immediate;
+    plan->string_ids[4] = (int)mir.insns[82].immediate;
+    plan->string_ids[5] = (int)mir.insns[102].immediate;
+    plan->string_ids[6] = (int)mir.insns[129].immediate;
+    plan->float_bits = (unsigned long)mir.insns[43].immediate;
+    if (plan->two_pair_function == NULL ||
+        plan->integer_function == NULL ||
+        plan->long_function == NULL ||
+        plan->float_function == NULL ||
+        plan->sum_pair_function == NULL ||
+        plan->pick_pair_function == NULL ||
+        plan->pair_function == NULL)
+        return mir_machine_reject("extra-literal-checks", "functions");
     return 1;
 }
 
@@ -25950,6 +26025,73 @@ static void mir_emit_block_literal_checks(
     fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static void mir_emit_extra_integer_check(
+    FILE *out, const struct MirExtraLiteralChecks *plan,
+    int value, int string_index)
+{
+    fprintf(out,
+            "\tld hl,S%d\n\tpush hl\n"
+            "\tld hl,%d\n\tpush hl\n\tpush hl\n",
+            plan->string_ids[string_index], value);
+    mir_machine_emit_symbol_call(out, plan->integer_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
+}
+
+static void mir_emit_extra_literal_checks(
+    FILE *out, const struct MirExtraLiteralChecks *plan)
+{
+    int argument;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-4\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tld hl,5\n\tpush hl\n\tld hl,4\n\tpush hl\n"
+          "\tld hl,3\n\tpush hl\n\tld hl,2\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->two_pair_function);
+    for (argument = 0; argument < 4; ++argument)
+        fputs("\tpop bc\n", out);
+    fputs("\tex de,hl\n", out);
+    fprintf(out,
+            "\tld hl,S%d\n\tpush hl\n\tld hl,26\n\tpush hl\n"
+            "\tpush de\n",
+            plan->string_ids[0]);
+    mir_machine_emit_symbol_call(out, plan->integer_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->string_ids[1]);
+    mir_emit_fixed_point_constant(out, 90000UL);
+    mir_emit_fixed_point_constant(out, 90000UL);
+    mir_machine_emit_symbol_call(out, plan->long_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->string_ids[2]);
+    mir_emit_fixed_point_constant(out, plan->float_bits);
+    mir_emit_fixed_point_constant(out, plan->float_bits);
+    mir_machine_emit_symbol_call(out, plan->float_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    fputs("\tld hl,4\n\tpush hl\n\tld hl,3\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->sum_pair_function);
+    fputs("\tpop bc\n\tpop bc\n\tex de,hl\n", out);
+    fprintf(out,
+            "\tld hl,S%d\n\tpush hl\n\tld hl,7\n\tpush hl\n"
+            "\tpush de\n",
+            plan->string_ids[3]);
+    mir_machine_emit_symbol_call(out, plan->integer_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    mir_emit_hidden_aggregate_call(out, plan->pick_pair_function, -4);
+    fputs("\tpop bc\n", out);
+    fprintf(out,
+            "\tld hl,S%d\n\tpush hl\n"
+            "\tld hl,9\n\tpush hl\n\tld hl,8\n\tpush hl\n",
+            plan->string_ids[4]);
+    mir_emit_local_address(out, -4);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->pair_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    mir_emit_extra_integer_check(out, plan, 1, 5);
+    mir_emit_extra_integer_check(out, plan, 77, 6);
+    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -29672,6 +29814,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirAggregateReturnReport aggregate_return_report;
     struct MirCpmFileSize cpm_file_size;
     struct MirBlockLiteralChecks block_literal_checks;
+    struct MirExtraLiteralChecks extra_literal_checks;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -30236,6 +30379,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_block_literal_checks(&block_literal_checks)) {
         mir_emit_block_literal_checks(out, &block_literal_checks);
+        return 1;
+    }
+    if (mir_match_extra_literal_checks(&extra_literal_checks)) {
+        mir_emit_extra_literal_checks(out, &extra_literal_checks);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
