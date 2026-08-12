@@ -742,9 +742,12 @@ struct MirLocalByteFillCallReports {
     int string_ids[2];
     int call_count;
     int count;
+    int fill_initial;
+    int call_argument;
     int local_offset;
     int patch_offset;
     int patch_value;
+    int patch_after_call;
 };
 
 struct MirFixedRowFind {
@@ -14579,6 +14582,103 @@ static int mir_match_fixed_row_find(struct MirFixedRowFind *plan)
     return 1;
 }
 
+static int mir_match_affine_local_fill_call_reports(
+    struct MirLocalByteFillCallReports *plan)
+{
+    const struct MirInsn *index_phi = &mir.insns[5];
+    int helper_args[2];
+    int report_args[2];
+    int type, storage, offset;
+    int call_number;
+    long patch_index;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 53 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        !mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[3]) ||
+        index_phi->opcode != MIR_PHI ||
+        index_phi->src1 != mir.insns[2].dst ||
+        index_phi->src2 != mir.insns[23].dst ||
+        mir.insns[9].immediate != '<' ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[9].src2 != mir.insns[7].dst ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        mir.insns[10].label != mir.insns[26].label)
+        return mir_machine_reject(
+            "affine-local-fill-call-reports", "loop");
+    plan->count = (int)mir.insns[7].immediate;
+    plan->fill_initial = (int)mir.insns[14].immediate;
+    if (plan->count <= 0 || plan->count > 255 ||
+        !mir_scalar_memory_location(
+            &mir.insns[11], &type, &storage, &offset) ||
+        storage != SC_LOCAL || offset != -plan->count ||
+        mir.insns[13].src1 != mir.insns[11].dst ||
+        mir.insns[13].src2 != index_phi->dst ||
+        mir.insns[13].immediate != 1 ||
+        mir.insns[17].immediate != '+' ||
+        mir.insns[17].src1 != mir.insns[14].dst ||
+        mir.insns[17].src2 != mir.insns[16].dst ||
+        mir.insns[19].src1 != mir.insns[13].dst ||
+        mir.insns[19].src2 != mir.insns[18].dst ||
+        mir.insns[19].memory_size != 1 ||
+        !mir_machine_constant_equals(mir.insns[22].dst, 1) ||
+        mir.insns[23].immediate != '+' ||
+        !mir_machine_unobservable_local_store(&mir.insns[24]) ||
+        mir.insns[25].label != mir.insns[4].label)
+        return mir_machine_reject(
+            "affine-local-fill-call-reports", "fill");
+    plan->local_offset = offset;
+    for (call_number = 0; call_number < 2; ++call_number) {
+        int base = call_number == 0 ? 27 : 42;
+        const struct MirInsn *string = &mir.insns[base];
+        const struct MirInsn *address = &mir.insns[base + 2];
+        const struct MirInsn *call = &mir.insns[base + 6];
+        const struct MirInsn *report = &mir.insns[base + 8];
+
+        if (string->opcode != MIR_STRING_ADDRESS ||
+            address->opcode != MIR_ADDRESS ||
+            strcmp(address->name, mir.insns[11].name) ||
+            !mir_machine_two_call_arguments(call, helper_args) ||
+            helper_args[0] != address->dst ||
+            !mir_machine_constant_equals(helper_args[1], plan->fill_initial) ||
+            !mir_machine_two_call_arguments(report, report_args) ||
+            report_args[0] != string->dst ||
+            report_args[1] != call->dst)
+            return mir_machine_reject(
+                "affine-local-fill-call-reports", "calls");
+        plan->functions[call_number] = find_global(call->name);
+        plan->string_ids[call_number] = (int)string->immediate;
+        if (plan->functions[call_number] == NULL ||
+            plan->functions[call_number]->is_funcptr)
+            return mir_machine_reject(
+                "affine-local-fill-call-reports", "helper");
+        if (call_number == 0)
+            plan->report_function = find_global(report->name);
+        else if (strcmp(report->name, mir.insns[35].name))
+            return mir_machine_reject(
+                "affine-local-fill-call-reports", "report");
+    }
+    if (plan->report_function == NULL ||
+        mir.insns[36].opcode != MIR_ADDRESS ||
+        !mir_machine_constant_value(
+        mir.insns[37].dst, &patch_index, 0) ||
+    patch_index < 0 || patch_index >= plan->count ||
+        mir.insns[38].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[41].opcode != MIR_STORE_INDIRECT ||
+        !mir_machine_constant_equals(mir.insns[40].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[51].dst, 0) ||
+        mir.insns[52].src1 != mir.insns[51].dst)
+        return mir_machine_reject(
+            "affine-local-fill-call-reports", "patch");
+    plan->patch_offset = (int)patch_index;
+    plan->patch_value = 0;
+    plan->patch_after_call = 1;
+    plan->call_argument = plan->fill_initial;
+    plan->call_count = 2;
+    return 1;
+}
+
 static int mir_match_local_byte_fill_call_reports(
     struct MirLocalByteFillCallReports *plan)
 {
@@ -14623,6 +14723,8 @@ static int mir_match_local_byte_fill_call_reports(
         return mir_machine_reject(
             "local-byte-fill-call-reports", "loop");
     plan->count = (int)mir.insns[7].immediate;
+    plan->fill_initial = 1;
+    plan->call_argument = plan->count;
     if (plan->count <= 0 || plan->count > 255 ||
         !mir_scalar_memory_location(
             &mir.insns[11], &memory_type, &memory_storage,
@@ -25804,16 +25906,18 @@ static void mir_emit_local_byte_fill_call_reports(
         mir_emit_runtime_call(out, "__stchk");
     fprintf(out,
             "\tpush ix\n\tpop hl\n\tld de,%d\n\tadd hl,de\n"
-            "\tld a,1\n\tld b,%d\n"
+            "\tld a,%d\n\tld b,%d\n"
             "L%d:\n\tld (hl),a\n\tinc hl\n\tinc a\n\tdjnz L%d\n",
-            plan->local_offset, plan->count,
+            plan->local_offset, plan->fill_initial, plan->count,
             loop_label, loop_label);
-    if (plan->patch_offset >= 0)
-        fprintf(out, "\tld (ix%+d),%d\n",
-                plan->local_offset + plan->patch_offset,
-                plan->patch_value);
     for (call_index = 0; call_index < plan->call_count; ++call_index) {
-        fprintf(out, "\tld hl,%d\n\tpush hl\n", plan->count);
+        if (plan->patch_offset >= 0 &&
+            call_index == plan->patch_after_call)
+            fprintf(out, "\tld (ix%+d),%d\n",
+                    plan->local_offset + plan->patch_offset,
+                    plan->patch_value);
+        fprintf(out, "\tld hl,%d\n\tpush hl\n",
+                plan->call_argument);
         fputs("\tpush ix\n\tpop hl\n", out);
         mir_machine_emit_hl_offset(out, plan->local_offset, 0);
         fputs("\tpush hl\n", out);
@@ -27478,7 +27582,9 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
         mir_emit_fixed_row_find(out, &fixed_row_find);
         return 1;
     }
-    if (mir_match_local_byte_fill_call_reports(
+    if (mir_match_affine_local_fill_call_reports(
+            &local_byte_fill_call_reports) ||
+        mir_match_local_byte_fill_call_reports(
             &local_byte_fill_call_reports)) {
         mir_emit_local_byte_fill_call_reports(
             out, &local_byte_fill_call_reports);
