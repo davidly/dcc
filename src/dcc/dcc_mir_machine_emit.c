@@ -641,6 +641,12 @@ struct MirManyIntegerChecks {
     int count, string_ids[64], values[64], final_string;
 };
 
+struct MirBitfieldInitChecks {
+    struct Sym *check_function, *print_function;
+    int string_ids[18], values[18], success_string, report_string;
+    char report_name[64];
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -7627,6 +7633,32 @@ static int mir_match_many_integer_checks(struct MirManyIntegerChecks *p)
         break;
     }
     return p->print_function!=NULL;
+}
+
+static int mir_match_bitfield_init_checks(struct MirBitfieldInitChecks *p)
+{
+    static const int calls[18]={31,44,56,69,82,95,108,121,134,147,159,172,185,198,211,224,237,250};
+    int i,ins;
+    memset(p,0,sizeof(*p));
+    if(mir.count!=321||mir_cfg_block_count()!=2||mir.has_vla||
+       mir.insns[257].opcode!=MIR_CALL||mir.insns[318].opcode!=MIR_CALL||
+       mir.insns[320].opcode!=MIR_RETURN)return 0;
+    for(i=0;i<18;++i){int a[4];const struct MirInsn*s;struct MirMachineForm e;
+        if(!mir_machine_four_call_arguments(&mir.insns[calls[i]],a)||
+           (s=mir_definition(a[0]))==NULL||s->opcode!=MIR_STRING_ADDRESS||
+           !mir_machine_pointer_form(a[2],calls[i],&e,0)||
+           e.kind!=MIR_MACHINE_FORM_INTEGER)return 0;
+        p->string_ids[i]=(int)s->immediate;p->values[i]=(int)(e.value&0xffffL);}
+    for(ins=0;ins<mir.count;++ins){const struct MirInsn*a=&mir.insns[ins],*d;
+        if(a->opcode!=MIR_ARG)
+            continue;
+        d=mir_definition(a->src1);
+        if(!d||d->opcode!=MIR_STRING_ADDRESS)continue;
+        if(a->secondary_offset==mir.insns[257].secondary_offset)p->success_string=(int)d->immediate;
+        if(a->secondary_offset==mir.insns[318].secondary_offset)p->report_string=(int)d->immediate;}
+    p->check_function=find_global(mir.insns[31].name);p->print_function=find_global(mir.insns[257].name);
+    snprintf(p->report_name,sizeof(p->report_name),"%s",mir.insns[318].base_name);
+    return p->check_function&&p->print_function;
 }
 
 static int mir_match_pointer_word_sum_until_zero(
@@ -27269,6 +27301,25 @@ static void mir_emit_many_integer_checks(FILE *out,const struct MirManyIntegerCh
     fputs("\tpop bc\n\tld hl,0\n\tret\n",out);
 }
 
+static void mir_emit_bitfield_init_checks(FILE *out,const struct MirBitfieldInitChecks*p)
+{
+    int i;
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n\tdec sp\n\tdec sp\n"
+          "\tld (ix-2),0\n\tld (ix-1),0\n",out);
+    if(opt_stack_check)mir_emit_runtime_call(out,"__stchk");
+    for(i=0;i<18;++i){mir_emit_local_address(out,-2);fputs("\tpush hl\n",out);
+        fprintf(out,"\tld hl,%d\n\tpush hl\n\tpush hl\n\tld hl,S%d\n\tpush hl\n",p->values[i],p->string_ids[i]);
+        mir_machine_emit_symbol_call(out,p->check_function);fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n",out);}
+    fprintf(out,"\tld hl,S%d\n\tpush hl\n",p->success_string);mir_machine_emit_symbol_call(out,p->print_function);fputs("\tpop bc\n",out);
+    fputs("\tld hl,10\n\tpush hl\n\tld hl,20\n\tpush hl\n\tld hl,30\n\tpush hl\n\tld hl,62090\n\tpush hl\n",out);
+    fprintf(out,"\tld hl,S%d\n\tpush hl\n"
+                "\textrn __pfehx\n\tcall __pfehx\n"
+                "\textrn %s\n\tcall %s\n",
+            p->report_string,p->report_name,p->report_name);
+    for(i=0;i<5;++i)fputs("\tpop bc\n",out);
+    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n",out);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -31009,6 +31060,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFloatLongChecks float_long_checks;
     struct MirFloatInitChecks float_init_checks;
     struct MirManyIntegerChecks many_integer_checks;
+    struct MirBitfieldInitChecks bitfield_init_checks;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -31647,6 +31699,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_many_integer_checks(&many_integer_checks)) {
         mir_emit_many_integer_checks(out, &many_integer_checks);
+        return 1;
+    }
+    if (mir_match_bitfield_init_checks(&bitfield_init_checks)) {
+        mir_emit_bitfield_init_checks(out, &bitfield_init_checks);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
