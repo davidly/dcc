@@ -1062,6 +1062,12 @@ struct MirAffineByteFill {
     int step;
 };
 
+struct MirFixedSieveBuild {
+    int pointer_stack_offset;
+    int member_offset;
+    int limit;
+};
+
 struct MirPalindromeScan {
     int parameter_stack_offset;
 };
@@ -6341,6 +6347,130 @@ static int mir_match_local_bitset_runner(
            mir.insns[55].opcode == MIR_BRANCH_FALSE &&
            mir.insns[70].opcode == MIR_BRANCH_FALSE &&
            mir.insns[79].opcode == MIR_RETURN;
+}
+
+static int mir_match_fixed_sieve_build(
+    struct MirFixedSieveBuild *plan)
+{
+    static const int member_indices[5] = {
+        13, 28, 35, 55, 75
+    };
+    const struct MirInsn *pointer = &mir.insns[1];
+    long limit;
+    int member;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 98 || mir_cfg_block_count() != 11 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID ||
+        pointer->opcode != MIR_PARAM ||
+        type_ptr_depth(pointer->type) != 1 ||
+        mir_machine_pointee_is_volatile(pointer) ||
+        !mir_machine_parameter_value_offset(
+            pointer->dst, &plan->pointer_stack_offset) ||
+        !mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+        mir.insns[7].src1 != mir.insns[2].dst ||
+        mir.insns[7].src2 != mir.insns[22].dst ||
+        mir.insns[10].immediate != TOK_LE ||
+        mir.insns[10].src1 != mir.insns[7].dst ||
+        mir.insns[11].label != mir.insns[26].label ||
+        !mir_machine_constant_value(
+            mir.insns[9].dst, &limit, 0) ||
+        limit <= 0 || limit > 255)
+        return mir_machine_reject(
+            "fixed-sieve-build", "shape");
+    plan->limit = (int)limit;
+    for (member = 0; member < 5; ++member) {
+        const struct MirInsn *address =
+            &mir.insns[member_indices[member]];
+
+        if (address->opcode != MIR_MEMBER_ADDRESS ||
+            address->src1 != pointer->dst ||
+            address->memory_size != plan->limit + 1 ||
+            address->immediate < 0 ||
+            address->immediate > 127 ||
+            (member != 0 &&
+             address->immediate != plan->member_offset))
+            return mir_machine_reject(
+                "fixed-sieve-build", "member");
+        plan->member_offset =
+            (int)address->immediate;
+    }
+    if (mir.insns[15].src1 != mir.insns[13].dst ||
+        mir.insns[15].src2 != mir.insns[7].dst ||
+        mir.insns[15].immediate != 1 ||
+        !mir_machine_constant_equals(mir.insns[17].dst, 0) ||
+        mir.insns[18].src1 != mir.insns[15].dst ||
+        mir.insns[18].src2 != mir.insns[17].dst ||
+        mir.insns[18].memory_size != 1 ||
+        !mir_machine_constant_equals(mir.insns[21].dst, 1) ||
+        mir.insns[22].immediate != '+' ||
+        mir.insns[22].src1 != mir.insns[7].dst ||
+        mir.insns[22].src2 != mir.insns[21].dst ||
+        mir.insns[25].label != mir.insns[5].label ||
+        !mir_machine_constant_equals(mir.insns[29].dst, 0) ||
+        mir.insns[30].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[30].src1 != mir.insns[28].dst ||
+        mir.insns[30].src2 != mir.insns[29].dst ||
+        mir.insns[30].immediate != 1 ||
+        !mir_machine_constant_equals(mir.insns[32].dst, 1) ||
+        mir.insns[33].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[33].src1 != mir.insns[30].dst ||
+        mir.insns[33].src2 != mir.insns[32].dst ||
+        mir.insns[33].memory_size != 1 ||
+        !mir_machine_constant_equals(mir.insns[36].dst, 1) ||
+        mir.insns[37].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[37].src1 != mir.insns[35].dst ||
+        mir.insns[37].src2 != mir.insns[36].dst ||
+        mir.insns[37].immediate != 1 ||
+        !mir_machine_constant_equals(mir.insns[39].dst, 1) ||
+        mir.insns[40].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[40].src1 != mir.insns[37].dst ||
+        mir.insns[40].src2 != mir.insns[39].dst ||
+        mir.insns[40].memory_size != 1 ||
+        !mir_machine_constant_equals(mir.insns[41].dst, 2) ||
+        mir.insns[47].src1 != mir.insns[41].dst ||
+        mir.insns[47].src2 != mir.insns[93].dst ||
+        mir.insns[50].immediate != '*' ||
+        mir.insns[50].src1 != mir.insns[47].dst ||
+        mir.insns[50].src2 != mir.insns[47].dst ||
+        !mir_machine_constant_equals(
+            mir.insns[51].dst, plan->limit) ||
+        mir.insns[52].immediate != TOK_LE ||
+        mir.insns[53].label != mir.insns[97].label ||
+        mir.insns[57].src1 != mir.insns[55].dst ||
+        mir.insns[57].src2 != mir.insns[47].dst ||
+        mir.insns[57].immediate != 1 ||
+        mir.insns[58].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[58].src1 != mir.insns[57].dst ||
+        mir.insns[58].memory_size != 1 ||
+        mir.insns[59].immediate != '!' ||
+        mir.insns[59].src1 != mir.insns[58].dst ||
+        mir.insns[60].label != mir.insns[89].label ||
+        mir.insns[63].immediate != '*' ||
+        mir.insns[63].src1 != mir.insns[47].dst ||
+        mir.insns[63].src2 != mir.insns[47].dst ||
+        mir.insns[65].src1 != mir.insns[63].dst ||
+        !mir_machine_constant_equals(
+            mir.insns[71].dst, plan->limit) ||
+        mir.insns[72].immediate != TOK_LE ||
+        mir.insns[73].label != mir.insns[88].label ||
+        mir.insns[77].src1 != mir.insns[75].dst ||
+        mir.insns[77].src2 != mir.insns[76].dst ||
+        mir.insns[77].immediate != 1 ||
+        !mir_machine_constant_equals(mir.insns[79].dst, 1) ||
+        mir.insns[80].src1 != mir.insns[77].dst ||
+        mir.insns[80].src2 != mir.insns[79].dst ||
+        mir.insns[80].memory_size != 1 ||
+        mir.insns[84].immediate != '+' ||
+        mir.insns[84].src1 != mir.insns[82].dst ||
+        mir.insns[84].src2 != mir.insns[47].dst ||
+        mir.insns[87].label != mir.insns[66].label ||
+        !mir_machine_constant_equals(mir.insns[92].dst, 1) ||
+        mir.insns[93].immediate != '+' ||
+        mir.insns[96].label != mir.insns[44].label)
+        return mir_machine_reject(
+            "fixed-sieve-build", "flow");
+    return 1;
 }
 
 static int mir_match_string_mismatch_report(
@@ -34755,6 +34885,69 @@ static void mir_emit_local_byte_fill_sum_print(
           "\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static void mir_emit_fixed_sieve_build(
+    FILE *out, const struct MirFixedSieveBuild *plan)
+{
+    int clear_loop = new_label();
+    int p;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tex de,hl\n",
+            plan->pointer_stack_offset);
+    mir_machine_emit_hl_offset(out, plan->member_offset, 0);
+    fprintf(out,
+            "\tld b,%d\n\txor a\n"
+            "L%d:\n\tld (hl),a\n\tinc hl\n"
+            "\tdjnz L%d\n",
+            (plan->limit + 1) & 255,
+            clear_loop, clear_loop);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tex de,hl\n",
+            plan->pointer_stack_offset);
+    mir_machine_emit_hl_offset(out, plan->member_offset, 0);
+    fputs("\tld (hl),1\n\tinc hl\n\tld (hl),1\n", out);
+
+    for (p = 2; p * p <= plan->limit; ++p) {
+        int divisor;
+        int is_prime = 1;
+        int mark_loop;
+        int start;
+        int count;
+
+        for (divisor = 2;
+             divisor * divisor <= p; ++divisor) {
+            if (p % divisor == 0) {
+                is_prime = 0;
+                break;
+            }
+        }
+        if (!is_prime)
+            continue;
+        mark_loop = new_label();
+        start = p * p;
+        count = (plan->limit - start) / p + 1;
+        fprintf(out,
+                "\tld hl,%d\n\tadd hl,sp\n"
+                "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+                "\tex de,hl\n",
+                plan->pointer_stack_offset);
+        mir_machine_emit_hl_offset(
+            out, plan->member_offset + start, 0);
+        fprintf(out,
+                "\tld de,%d\n\tld b,%d\n"
+                "L%d:\n\tld (hl),1\n\tadd hl,de\n"
+                "\tdjnz L%d\n",
+                p, count, mark_loop, mark_loop);
+    }
+    fputs("\tret\n", out);
+}
+
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
 {
     struct MirWideNarrowDivision division;
@@ -34766,6 +34959,7 @@ int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
         mir_emit_wide_narrow_division(out, &division);
         return 1;
     }
+
     if (!mir_match_indexed_member_write(&write))
         return 0;
     fprintf(out, "%s\n", MIR_EXACT_KERNEL_MARKER);
@@ -34831,6 +35025,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirVariadicStringJoin variadic_string_join;
     struct MirFixedRecordSortCheck fixed_record_sort_check;
     struct MirLocalBitsetRunner local_bitset_runner;
+    struct MirFixedSieveBuild fixed_sieve_build;
     struct MirStringMismatchReport string_mismatch_report;
     struct MirCrcUpdateRunner crc_update_runner;
     struct MirFixedRowMemberSum fixed_row_member_sum;
@@ -35414,6 +35609,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_local_bitset_runner(&local_bitset_runner)) {
         mir_emit_local_bitset_runner(out, &local_bitset_runner);
+        return 1;
+    }
+    if (mir_match_fixed_sieve_build(&fixed_sieve_build)) {
+        mir_emit_fixed_sieve_build(out, &fixed_sieve_build);
         return 1;
     }
     if (mir_match_string_mismatch_report(&string_mismatch_report)) {
