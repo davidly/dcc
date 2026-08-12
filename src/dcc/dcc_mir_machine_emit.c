@@ -2061,6 +2061,23 @@ struct MirBufferedDeclarationSchedule {
     int declaration_types[3];
 };
 
+enum MirMatrixProductKind {
+    MIR_MATRIX_PRODUCT_TRANSPOSED = 1,
+    MIR_MATRIX_PRODUCT_OUTER = 2
+};
+
+struct MirMatrixProductSchedule {
+    int kind;
+    struct Sym *clear_function;
+    struct Sym *convert_function;
+    struct Sym *clamp_function;
+    int matrix_stack_offset;
+    int source_stack_offset;
+    int vector_stack_offset;
+    int rows_stack_offset;
+    int columns_stack_offset;
+};
+
 struct MirSymbolFindSchedule {
     struct Sym *symbols_root;
     struct Sym *count_root;
@@ -29197,6 +29214,545 @@ static int mir_match_buffered_declaration_schedule(
     return 1;
 }
 
+static int mir_match_matrix_product_word_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           !type_is_float(type) &&
+           (type & 15) == TYPE_INT &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 2;
+}
+
+static int mir_match_matrix_product_long_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           !type_is_float(type) &&
+           (type & 15) == TYPE_LONG &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 4;
+}
+
+static int mir_match_matrix_product_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           !type_is_float(type) &&
+           (type & 15) == TYPE_INT &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 2;
+}
+
+static int mir_match_matrix_product_count_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           !type_is_float(type) &&
+           (type & 15) == TYPE_CHAR &&
+           (type & TYPE_UNSIGNED) != 0 &&
+           type_size(type) == 1;
+}
+
+static int mir_match_matrix_product_parameter(
+    int instruction, int expected_offset, int is_pointer,
+    int *stack_offset)
+{
+    const struct MirInsn *parameter = &mir.insns[instruction];
+
+    if (parameter->opcode != MIR_PARAM ||
+        (is_pointer
+             ? !mir_match_matrix_product_pointer_type(parameter->type)
+             : !mir_match_matrix_product_count_type(parameter->type)) ||
+        !mir_machine_parameter_value_offset(
+            parameter->dst, stack_offset) ||
+        *stack_offset != expected_offset)
+        return 0;
+    return !is_pointer ||
+           !mir_machine_pointee_is_volatile(parameter);
+}
+
+static int mir_match_matrix_product_call(
+    const struct MirInsn *call, int argument,
+    struct Sym **function_out)
+{
+    struct Sym *function;
+    int actual;
+
+    if (!mir_machine_single_call_argument(call, &actual) ||
+        actual != argument ||
+        !mir_match_matrix_product_word_type(call->type) ||
+        (call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0)
+        return 0;
+    function = find_global(call->name);
+    if (function == NULL || !function->is_defined ||
+        function->storage != SC_FUNC ||
+        function->is_funcptr || function->is_noreturn ||
+        !function->has_proto || function->proto_variadic ||
+        function->proto_nargs != 1 ||
+        !mir_match_matrix_product_long_type(
+            function->proto_types[0]) ||
+        (call->base_name[0] != 0 &&
+         strcmp(call->base_name,
+                asm_name_for(sym_asm_name(function)))))
+        return 0;
+    *function_out = function;
+    return 1;
+}
+
+static int mir_match_matrix_product_clear(
+    struct MirMatrixProductSchedule *plan)
+{
+    const struct MirInsn *call = &mir.insns[18];
+    struct Sym *function;
+    int arguments[3];
+
+    if (!mir_machine_three_call_arguments(call, arguments) ||
+        arguments[0] != mir.insns[6].dst ||
+        arguments[1] != mir.insns[9].dst ||
+        arguments[2] != mir.insns[15].dst ||
+        !mir_machine_same_location(
+            &mir.insns[3], &mir.insns[6]) ||
+        !mir_machine_constant_equals(mir.insns[9].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[12].dst, 2) ||
+        mir.insns[14].opcode != MIR_UNARY ||
+        mir.insns[14].immediate != 0 ||
+        mir.insns[14].src1 != mir.insns[5].dst ||
+        !mir_match_matrix_product_word_type(mir.insns[14].type) ||
+        mir.insns[15].opcode != MIR_BINARY ||
+        mir.insns[15].immediate != '*' ||
+        mir.insns[15].src1 != mir.insns[14].dst ||
+        mir.insns[15].src2 != mir.insns[12].dst ||
+        !mir_match_matrix_product_word_type(
+            mir.insns[15].secondary_offset) ||
+        type_ptr_depth(call->type) == 0 ||
+        type_size(call->type) != 2 ||
+        (call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME |
+          MIR_CALL_FLAG_INLINE_SUBSTITUTABLE)) != 0)
+        return 0;
+    function = find_global(call->name);
+    if (function == NULL || function->storage != SC_FUNC ||
+        function->is_funcptr || function->is_noreturn ||
+        !function->has_proto || function->proto_variadic ||
+        function->proto_nargs != 3 ||
+        type_ptr_depth(function->proto_types[0]) == 0 ||
+        type_size(function->proto_types[0]) != 2 ||
+        type_ptr_depth(function->proto_types[1]) != 0 ||
+        type_size(function->proto_types[1]) != 2 ||
+        type_ptr_depth(function->proto_types[2]) != 0 ||
+        type_size(function->proto_types[2]) != 2 ||
+        strcmp(asm_name_for(sym_asm_name(function)), "__mset") ||
+        (call->base_name[0] != 0 &&
+         strcmp(call->base_name,
+                asm_name_for(sym_asm_name(function)))))
+        return 0;
+    plan->clear_function = function;
+    return 1;
+}
+
+static int mir_match_matrix_product_schedule_kind(
+    struct MirMatrixProductSchedule *plan, int kind)
+{
+    static const int transposed_opcodes[101] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_PARAM,
+        MIR_PARAM, MIR_LOAD, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG,
+        MIR_NOP, MIR_CONST, MIR_NOP, MIR_UNARY, MIR_BINARY, MIR_NOP,
+        MIR_ARG, MIR_CALL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL,
+        MIR_LOAD, MIR_LOAD, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP,
+        MIR_NOP, MIR_UNARY, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_LOAD_INDIRECT,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL,
+        MIR_LOAD, MIR_LOAD, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_LOAD, MIR_NOP, MIR_UNARY, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_LOAD_INDIRECT, MIR_STORE, MIR_LOAD, MIR_UNARY, MIR_NOP,
+        MIR_UNARY, MIR_BINARY, MIR_ARG, MIR_CALL, MIR_STORE, MIR_LOAD,
+        MIR_LOAD, MIR_INDEX_ADDRESS, MIR_STORE, MIR_LOAD, MIR_LOAD,
+        MIR_LOAD_INDIRECT, MIR_UNARY, MIR_LOAD, MIR_UNARY, MIR_BINARY,
+        MIR_ARG, MIR_CALL, MIR_STORE_INDIRECT, MIR_LABEL, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP,
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP,
+        MIR_LABEL
+    };
+    static const int outer_opcodes[90] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_PARAM,
+        MIR_PARAM, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_LOAD,
+        MIR_LOAD, MIR_NOP, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP,
+        MIR_UNARY, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_LOAD_INDIRECT, MIR_NOP,
+        MIR_STORE, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_LOAD,
+        MIR_LOAD, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_LOAD, MIR_NOP, MIR_UNARY, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_LOAD, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_STORE, MIR_NOP, MIR_UNARY, MIR_LOAD,
+        MIR_UNARY, MIR_BINARY, MIR_ARG, MIR_CALL, MIR_STORE, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_STORE, MIR_LOAD, MIR_LOAD,
+        MIR_LOAD_INDIRECT, MIR_UNARY, MIR_LOAD, MIR_UNARY, MIR_BINARY,
+        MIR_ARG, MIR_CALL, MIR_STORE_INDIRECT, MIR_LABEL, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP,
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP,
+        MIR_LABEL
+    };
+    const int *expected = kind == MIR_MATRIX_PRODUCT_TRANSPOSED
+        ? transposed_opcodes : outer_opcodes;
+    int count = kind == MIR_MATRIX_PRODUCT_TRANSPOSED ? 101 : 90;
+    int outer_initial = kind == MIR_MATRIX_PRODUCT_TRANSPOSED ? 20 : 7;
+    int outer_store = outer_initial + 1;
+    int outer_label = kind == MIR_MATRIX_PRODUCT_TRANSPOSED ? 22 : 9;
+    int matrix_load = outer_label + 1;
+    int source_load = outer_label + 2;
+    int outer_phi = kind == MIR_MATRIX_PRODUCT_TRANSPOSED ? 27 : 15;
+    int outer_conversion = outer_phi + 3;
+    int rows_conversion = outer_phi + 4;
+    int outer_compare = outer_phi + 5;
+    int outer_branch = outer_phi + 6;
+    int source_reload = kind == MIR_MATRIX_PRODUCT_TRANSPOSED ? 34 : 22;
+    int source_step = source_reload + 2;
+    int source_store = source_reload + 3;
+    int scalar_load = source_reload + 4;
+    int scalar_store = source_reload + 6;
+    int inner_initial = kind == MIR_MATRIX_PRODUCT_TRANSPOSED ? 42 : 30;
+    int inner_store = inner_initial + 1;
+    int inner_label = inner_initial + 2;
+    int inner_phi_load = kind == MIR_MATRIX_PRODUCT_TRANSPOSED ? 52 : 41;
+    int columns_conversion = inner_phi_load + 3;
+    int inner_compare = inner_phi_load + 4;
+    int inner_branch = inner_phi_load + 5;
+    int convert_call = kind == MIR_MATRIX_PRODUCT_TRANSPOSED ? 70 : 58;
+    int clamp_call = kind == MIR_MATRIX_PRODUCT_TRANSPOSED ? 84 : 73;
+    int inner_continue = kind == MIR_MATRIX_PRODUCT_TRANSPOSED ? 86 : 75;
+    int inner_increment = inner_continue + 3;
+    int inner_loop_store = inner_continue + 4;
+    int inner_jump = inner_continue + 5;
+    int inner_done = inner_continue + 6;
+    int outer_continue = inner_continue + 8;
+    int outer_increment = outer_continue + 3;
+    int outer_loop_store = outer_continue + 4;
+    int outer_jump = outer_continue + 5;
+    int outer_done = outer_continue + 6;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != count || mir_cfg_block_count() != 7 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID ||
+        mir.aggregate_temp_bytes != 0)
+        return 0;
+    for (instruction = 0; instruction < count; ++instruction)
+        if (mir.insns[instruction].opcode != expected[instruction])
+            return mir_machine_reject(
+                "matrix-product-schedule", "opcodes");
+    if (!mir_match_matrix_product_parameter(
+            1, 2, 1, &plan->matrix_stack_offset) ||
+        !mir_match_matrix_product_parameter(
+            2, 4, 1, &plan->source_stack_offset) ||
+        !mir_match_matrix_product_parameter(
+            3, 6, 1, &plan->vector_stack_offset) ||
+        !mir_match_matrix_product_parameter(
+            4, 8, 0, &plan->rows_stack_offset) ||
+        !mir_match_matrix_product_parameter(
+            5, 10, 0, &plan->columns_stack_offset))
+        return mir_machine_reject(
+            "matrix-product-schedule", "parameters");
+    plan->kind = kind;
+    if (kind == MIR_MATRIX_PRODUCT_TRANSPOSED &&
+        !mir_match_matrix_product_clear(plan))
+        return mir_machine_reject(
+            "matrix-product-schedule", "clear");
+
+    if (!mir_machine_constant_equals(
+            mir.insns[outer_initial].dst, 0) ||
+        !mir_machine_unobservable_local_store(
+            &mir.insns[outer_store]) ||
+        mir.insns[outer_store].src1 !=
+            mir.insns[outer_initial].dst ||
+        !mir_machine_same_location(
+            &mir.insns[1], &mir.insns[matrix_load]) ||
+        !mir_machine_same_location(
+            &mir.insns[2], &mir.insns[source_load]) ||
+        mir.insns[outer_phi].src1 !=
+            mir.insns[outer_initial].dst ||
+        mir.insns[outer_phi].src2 !=
+            mir.insns[outer_increment].dst ||
+        mir.insns[outer_phi].phi_pred1 != mir.insns[0].label ||
+        mir.insns[outer_phi].phi_pred2 !=
+            mir.insns[outer_continue].label ||
+        mir.insns[outer_phi].object !=
+            mir.insns[outer_store].object ||
+        !mir_match_matrix_product_count_type(
+            mir.insns[outer_phi].type) ||
+        mir.insns[outer_conversion].opcode != MIR_UNARY ||
+        mir.insns[outer_conversion].immediate != 0 ||
+        mir.insns[outer_conversion].src1 !=
+            mir.insns[outer_phi].dst ||
+        !mir_match_matrix_product_word_type(
+            mir.insns[outer_conversion].type) ||
+        mir.insns[rows_conversion].opcode != MIR_UNARY ||
+        mir.insns[rows_conversion].immediate != 0 ||
+        mir.insns[rows_conversion].src1 != mir.insns[4].dst ||
+        !mir_match_matrix_product_word_type(
+            mir.insns[rows_conversion].type) ||
+        mir.insns[outer_compare].immediate != '<' ||
+        mir.insns[outer_compare].src1 !=
+            mir.insns[outer_conversion].dst ||
+        mir.insns[outer_compare].src2 !=
+            mir.insns[rows_conversion].dst ||
+        !mir_match_matrix_product_word_type(
+            mir.insns[outer_compare].secondary_offset) ||
+        mir.insns[outer_branch].src1 !=
+            mir.insns[outer_compare].dst ||
+        mir.insns[outer_branch].label !=
+            mir.insns[outer_done].label)
+        return mir_machine_reject(
+            "matrix-product-schedule", "outer-loop");
+
+    if (!mir_machine_same_location(
+            &mir.insns[2], &mir.insns[source_reload]) ||
+        !mir_machine_constant_equals(
+            mir.insns[source_reload + 1].dst, 2) ||
+        mir.insns[source_step].immediate != '+' ||
+        mir.insns[source_step].src1 !=
+            mir.insns[source_reload].dst ||
+        mir.insns[source_step].src2 !=
+            mir.insns[source_reload + 1].dst ||
+        !mir_machine_same_location(
+            &mir.insns[2], &mir.insns[source_store]) ||
+        mir.insns[source_store].src1 !=
+            mir.insns[source_step].dst ||
+        mir.insns[scalar_load].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[scalar_load].src1 !=
+            mir.insns[source_reload].dst ||
+        mir.insns[scalar_load].memory_size != 2 ||
+        (mir.insns[scalar_load].memory_flags & (1 | 8)) != 0 ||
+        !mir_match_matrix_product_word_type(
+            mir.insns[scalar_load].type) ||
+        !mir_machine_unobservable_local_store(
+            &mir.insns[scalar_store]) ||
+        mir.insns[scalar_store].src1 !=
+            mir.insns[scalar_load].dst ||
+        !mir_machine_constant_equals(
+            mir.insns[inner_initial].dst, 0) ||
+        !mir_machine_unobservable_local_store(
+            &mir.insns[inner_store]) ||
+        mir.insns[inner_store].src1 !=
+            mir.insns[inner_initial].dst)
+        return mir_machine_reject(
+            "matrix-product-schedule", "source");
+
+    if (mir.insns[inner_phi_load].opcode != MIR_LOAD ||
+        !mir_machine_same_location(
+            &mir.insns[inner_store],
+            &mir.insns[inner_phi_load]) ||
+        mir.insns[columns_conversion].opcode != MIR_UNARY ||
+        mir.insns[columns_conversion].immediate != 0 ||
+        mir.insns[columns_conversion].src1 != mir.insns[5].dst ||
+        !mir_match_matrix_product_word_type(
+            mir.insns[columns_conversion].type) ||
+        mir.insns[inner_compare].immediate != '<' ||
+        mir.insns[inner_compare].src1 !=
+            mir.insns[inner_phi_load + 2].dst ||
+        mir.insns[inner_compare].src2 !=
+            mir.insns[columns_conversion].dst ||
+        !mir_match_matrix_product_word_type(
+            mir.insns[inner_compare].secondary_offset) ||
+        mir.insns[inner_branch].src1 !=
+            mir.insns[inner_compare].dst ||
+        mir.insns[inner_branch].label !=
+            mir.insns[inner_done].label)
+        return mir_machine_reject(
+            "matrix-product-schedule", "inner-loop");
+
+    if (kind == MIR_MATRIX_PRODUCT_TRANSPOSED) {
+        if (!mir_machine_same_location(
+                &mir.insns[1], &mir.insns[58]) ||
+            !mir_machine_constant_equals(mir.insns[59].dst, 2) ||
+            mir.insns[60].immediate != '+' ||
+            mir.insns[60].src1 != mir.insns[58].dst ||
+            mir.insns[60].src2 != mir.insns[59].dst ||
+            !mir_machine_same_location(
+                &mir.insns[1], &mir.insns[61]) ||
+            mir.insns[61].src1 != mir.insns[60].dst ||
+            mir.insns[62].src1 != mir.insns[58].dst ||
+            mir.insns[62].memory_size != 2 ||
+            (mir.insns[62].memory_flags & (1 | 8)) != 0 ||
+            !mir_machine_unobservable_local_store(
+                &mir.insns[63]) ||
+            mir.insns[63].src1 != mir.insns[62].dst ||
+            !mir_machine_same_location(
+                &mir.insns[63], &mir.insns[64]) ||
+            mir.insns[65].src1 != mir.insns[64].dst ||
+            !mir_match_matrix_product_long_type(
+                mir.insns[65].type) ||
+            mir.insns[67].src1 != mir.insns[scalar_load].dst ||
+            !mir_match_matrix_product_long_type(
+                mir.insns[67].type) ||
+            mir.insns[68].immediate != '*' ||
+            mir.insns[68].src1 != mir.insns[65].dst ||
+            mir.insns[68].src2 != mir.insns[67].dst ||
+            !mir_match_matrix_product_long_type(
+                mir.insns[68].type) ||
+            !mir_match_matrix_product_call(
+                &mir.insns[convert_call],
+                mir.insns[68].dst,
+                &plan->convert_function) ||
+            !mir_machine_same_location(
+                &mir.insns[3], &mir.insns[72]) ||
+            !mir_machine_same_location(
+                &mir.insns[inner_store], &mir.insns[73]) ||
+            mir.insns[74].src1 != mir.insns[72].dst ||
+            mir.insns[74].src2 != mir.insns[73].dst ||
+            mir.insns[74].immediate != 2 ||
+            mir.insns[74].memory_size != 2 ||
+            !mir_machine_unobservable_local_store(
+                &mir.insns[75]) ||
+            mir.insns[75].src1 != mir.insns[74].dst ||
+            !mir_machine_same_location(
+                &mir.insns[75], &mir.insns[76]) ||
+            !mir_machine_same_location(
+                &mir.insns[75], &mir.insns[77]) ||
+            mir.insns[78].src1 != mir.insns[77].dst ||
+            mir.insns[78].memory_size != 2 ||
+            (mir.insns[78].memory_flags & (1 | 8)) != 0 ||
+            mir.insns[79].src1 != mir.insns[78].dst ||
+            !mir_match_matrix_product_long_type(
+                mir.insns[79].type) ||
+            !mir_machine_same_location(
+                &mir.insns[convert_call + 1],
+                &mir.insns[80]) ||
+            mir.insns[81].src1 != mir.insns[80].dst ||
+            !mir_match_matrix_product_long_type(
+                mir.insns[81].type) ||
+            mir.insns[82].immediate != '+' ||
+            mir.insns[82].src1 != mir.insns[79].dst ||
+            mir.insns[82].src2 != mir.insns[81].dst ||
+            !mir_match_matrix_product_long_type(
+                mir.insns[82].type) ||
+            !mir_match_matrix_product_call(
+                &mir.insns[clamp_call],
+                mir.insns[82].dst,
+                &plan->clamp_function) ||
+            mir.insns[85].src1 != mir.insns[76].dst ||
+            mir.insns[85].src2 != mir.insns[clamp_call].dst ||
+            mir.insns[85].memory_size != 2 ||
+            (mir.insns[85].memory_flags & (1 | 8)) != 0)
+            return mir_machine_reject(
+                "matrix-product-schedule", "transposed-body");
+    } else {
+        if (!mir_machine_same_location(
+                &mir.insns[inner_store], &mir.insns[48]) ||
+            mir.insns[49].src1 != mir.insns[3].dst ||
+            mir.insns[49].src2 != mir.insns[48].dst ||
+            mir.insns[49].immediate != 2 ||
+            mir.insns[49].memory_size != 2 ||
+            mir.insns[50].src1 != mir.insns[49].dst ||
+            mir.insns[50].memory_size != 2 ||
+            (mir.insns[50].memory_flags & (1 | 8)) != 0 ||
+            !mir_machine_unobservable_local_store(
+                &mir.insns[51]) ||
+            mir.insns[51].src1 != mir.insns[50].dst ||
+            mir.insns[53].src1 != mir.insns[scalar_load].dst ||
+            !mir_match_matrix_product_long_type(
+                mir.insns[53].type) ||
+            !mir_machine_same_location(
+                &mir.insns[51], &mir.insns[54]) ||
+            mir.insns[55].src1 != mir.insns[54].dst ||
+            !mir_match_matrix_product_long_type(
+                mir.insns[55].type) ||
+            mir.insns[56].immediate != '*' ||
+            mir.insns[56].src1 != mir.insns[53].dst ||
+            mir.insns[56].src2 != mir.insns[55].dst ||
+            !mir_match_matrix_product_long_type(
+                mir.insns[56].type) ||
+            !mir_match_matrix_product_call(
+                &mir.insns[convert_call],
+                mir.insns[56].dst,
+                &plan->convert_function) ||
+            !mir_machine_same_location(
+                &mir.insns[1], &mir.insns[60]) ||
+            !mir_machine_constant_equals(mir.insns[61].dst, 2) ||
+            mir.insns[62].immediate != '+' ||
+            mir.insns[62].src1 != mir.insns[60].dst ||
+            mir.insns[62].src2 != mir.insns[61].dst ||
+            !mir_machine_same_location(
+                &mir.insns[1], &mir.insns[63]) ||
+            mir.insns[63].src1 != mir.insns[62].dst ||
+            !mir_machine_unobservable_local_store(
+                &mir.insns[64]) ||
+            mir.insns[64].src1 != mir.insns[60].dst ||
+            !mir_machine_same_location(
+                &mir.insns[64], &mir.insns[65]) ||
+            !mir_machine_same_location(
+                &mir.insns[64], &mir.insns[66]) ||
+            mir.insns[67].src1 != mir.insns[66].dst ||
+            mir.insns[67].memory_size != 2 ||
+            (mir.insns[67].memory_flags & (1 | 8)) != 0 ||
+            mir.insns[68].src1 != mir.insns[67].dst ||
+            !mir_match_matrix_product_long_type(
+                mir.insns[68].type) ||
+            !mir_machine_same_location(
+                &mir.insns[convert_call + 1],
+                &mir.insns[69]) ||
+            mir.insns[70].src1 != mir.insns[69].dst ||
+            !mir_match_matrix_product_long_type(
+                mir.insns[70].type) ||
+            mir.insns[71].immediate != '+' ||
+            mir.insns[71].src1 != mir.insns[68].dst ||
+            mir.insns[71].src2 != mir.insns[70].dst ||
+            !mir_match_matrix_product_long_type(
+                mir.insns[71].type) ||
+            !mir_match_matrix_product_call(
+                &mir.insns[clamp_call],
+                mir.insns[71].dst,
+                &plan->clamp_function) ||
+            mir.insns[74].src1 != mir.insns[65].dst ||
+            mir.insns[74].src2 != mir.insns[clamp_call].dst ||
+            mir.insns[74].memory_size != 2 ||
+            (mir.insns[74].memory_flags & (1 | 8)) != 0)
+            return mir_machine_reject(
+                "matrix-product-schedule", "outer-body");
+    }
+
+    if (!mir_machine_constant_equals(
+            mir.insns[inner_increment - 1].dst, 1) ||
+        mir.insns[inner_increment].immediate != '+' ||
+        mir.insns[inner_increment].src1 !=
+        mir.insns[inner_continue + 1].dst ||
+        mir.insns[inner_increment].src2 !=
+            mir.insns[inner_increment - 1].dst ||
+        !mir_machine_same_location(
+            &mir.insns[inner_store],
+            &mir.insns[inner_loop_store]) ||
+        mir.insns[inner_loop_store].src1 !=
+            mir.insns[inner_increment].dst ||
+        mir.insns[inner_jump].label !=
+            mir.insns[inner_label].label ||
+        !mir_machine_constant_equals(
+            mir.insns[outer_increment - 1].dst, 1) ||
+        mir.insns[outer_increment].immediate != '+' ||
+        mir.insns[outer_increment].src1 !=
+            mir.insns[outer_phi].dst ||
+        mir.insns[outer_increment].src2 !=
+            mir.insns[outer_increment - 1].dst ||
+        !mir_machine_same_location(
+            &mir.insns[outer_store],
+            &mir.insns[outer_loop_store]) ||
+        mir.insns[outer_loop_store].src1 !=
+            mir.insns[outer_increment].dst ||
+        mir.insns[outer_jump].label !=
+            mir.insns[outer_label].label)
+        return mir_machine_reject(
+            "matrix-product-schedule", "increments");
+    return 1;
+}
+
+static int mir_match_matrix_product_schedule(
+    struct MirMatrixProductSchedule *plan)
+{
+    return mir_match_matrix_product_schedule_kind(
+               plan, MIR_MATRIX_PRODUCT_TRANSPOSED) ||
+           mir_match_matrix_product_schedule_kind(
+               plan, MIR_MATRIX_PRODUCT_OUTER);
+}
+
 static int mir_match_symbol_find_schedule(
     struct MirSymbolFindSchedule *plan)
 {
@@ -46453,6 +47009,150 @@ static void mir_emit_action_decode_schedule(
     mir_emit_action_decode_return(out);
 }
 
+static void mir_emit_matrix_product_stack_word_de(
+    FILE *out, int stack_offset)
+{
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n",
+            stack_offset + 6);
+}
+
+static void mir_emit_matrix_product_source(
+    FILE *out, const struct MirMatrixProductSchedule *plan)
+{
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tinc de\n\tinc de\n"
+            "\tld (hl),d\n\tdec hl\n\tld (hl),e\n"
+            "\tdec de\n\tdec de\n\tex de,hl\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tld hl,0\n\tadd hl,sp\n"
+            "\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+            plan->source_stack_offset + 6);
+}
+
+static void mir_emit_matrix_product_wide_sum(FILE *out)
+{
+    fputs("\tld a,h\n\trlca\n\tsbc a,a\n"
+          "\tld d,a\n\tld e,a\n\tpush de\n\tpush hl\n"
+          "\tld l,c\n\tld h,b\n"
+          "\tld a,h\n\trlca\n\tsbc a,a\n"
+          "\tld d,a\n\tld e,a\n"
+          "\tpop bc\n\tor a\n\tadd hl,bc\n"
+          "\tex de,hl\n\tpop bc\n\tadc hl,bc\n\tex de,hl\n",
+          out);
+}
+
+static void mir_emit_matrix_product_convert(
+    FILE *out, const struct MirMatrixProductSchedule *plan)
+{
+    mir_emit_runtime_call(out, "__m1s");
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->convert_function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+}
+
+static void mir_emit_matrix_product_clamp(
+    FILE *out, const struct MirMatrixProductSchedule *plan)
+{
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->clamp_function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+}
+
+static void mir_emit_matrix_product_schedule(
+    FILE *out, const struct MirMatrixProductSchedule *plan)
+{
+    int outer = new_label();
+    int inner = new_label();
+    int row_done = new_label();
+    int done = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tpush ix\n\tld hl,0\n\tpush hl\n\tpush hl\n", out);
+
+    if (plan->kind == MIR_MATRIX_PRODUCT_TRANSPOSED) {
+        fprintf(out,
+                "\tld hl,%d\n\tadd hl,sp\n"
+                "\tld c,(hl)\n\tld b,0\n\tsla c\n\trl b\n",
+                plan->columns_stack_offset + 6);
+        mir_emit_matrix_product_stack_word_de(
+            out, plan->vector_stack_offset);
+        fputs("\tex de,hl\n\tld e,0\n", out);
+        mir_emit_runtime_call(out, "__msf");
+    }
+
+    mir_emit_matrix_product_stack_word_de(
+        out, plan->matrix_stack_offset);
+    fputs("\tpush de\n\tpop ix\n", out);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n\tld a,(hl)\n"
+            "\tld hl,2\n\tadd hl,sp\n\tld (hl),a\n"
+            "L%d:\n\tld b,(hl)\n\tld a,b\n\tor a\n\tjp z,L%d\n",
+            plan->rows_stack_offset + 6, outer, done);
+
+    mir_emit_matrix_product_source(out, plan);
+    mir_emit_matrix_product_stack_word_de(
+        out, plan->vector_stack_offset);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n\tld c,(hl)\n"
+            "L%d:\n\tld a,c\n\tor a\n\tjp z,L%d\n",
+            plan->columns_stack_offset + 6, inner, row_done);
+
+    if (plan->kind == MIR_MATRIX_PRODUCT_TRANSPOSED) {
+        fputs("\tpush bc\n\tpush de\n"
+              "\tld hl,4\n\tadd hl,sp\n"
+              "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+              "\tld l,(ix+0)\n\tld h,(ix+1)\n"
+              "\tinc ix\n\tinc ix\n",
+              out);
+    } else {
+        fputs("\tld a,(de)\n\tld l,a\n\tinc de\n"
+              "\tld a,(de)\n\tld h,a\n\tinc de\n"
+              "\tpush bc\n\tpush de\n\tpush hl\n"
+              "\tld hl,6\n\tadd hl,sp\n"
+              "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+              "\tpop hl\n",
+              out);
+    }
+    mir_emit_matrix_product_convert(out, plan);
+    fputs("\tpop de\n\tpop bc\n", out);
+
+    if (plan->kind == MIR_MATRIX_PRODUCT_TRANSPOSED) {
+        fputs("\tpush bc\n\tpush de\n"
+              "\tld a,(de)\n\tld c,a\n\tinc de\n"
+              "\tld a,(de)\n\tld b,a\n\tdec de\n",
+              out);
+        mir_emit_matrix_product_wide_sum(out);
+        mir_emit_matrix_product_clamp(out, plan);
+        fputs("\tpop de\n\tld a,l\n\tld (de),a\n\tinc de\n"
+              "\tld a,h\n\tld (de),a\n\tinc de\n\tpop bc\n",
+              out);
+    } else {
+        fputs("\tpush bc\n\tpush de\n\tpush ix\n\tpop de\n"
+              "\tinc ix\n\tinc ix\n\tpush de\n"
+              "\tld a,(de)\n\tld c,a\n\tinc de\n"
+              "\tld a,(de)\n\tld b,a\n\tdec de\n",
+              out);
+        mir_emit_matrix_product_wide_sum(out);
+        mir_emit_matrix_product_clamp(out, plan);
+        fputs("\tpop de\n\tld a,l\n\tld (de),a\n\tinc de\n"
+              "\tld a,h\n\tld (de),a\n"
+              "\tpop de\n\tpop bc\n",
+              out);
+    }
+
+    fprintf(out,
+            "\tdec c\n\tjp L%d\n"
+            "L%d:\n\tdec b\n\tld hl,2\n\tadd hl,sp\n"
+            "\tld (hl),b\n\tjp nz,L%d\n"
+            "L%d:\n\tpop hl\n\tpop hl\n\tpop ix\n\tret\n",
+            inner, row_done, outer, done);
+}
+
 static void mir_emit_buffered_declaration_address(
     FILE *out, const struct MirBufferedDeclarationSchedule *plan)
 {
@@ -46935,6 +47635,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirActionDecodeSchedule action_decode_schedule;
     struct MirBufferedDeclarationSchedule
         buffered_declaration_schedule;
+    struct MirMatrixProductSchedule matrix_product_schedule;
     struct MirSymbolFindSchedule symbol_find_schedule;
     struct MirLocalIdentityArrayResult local_identity_array_result;
     struct MirConstantResultSwitch constant_result_switch;
@@ -47116,6 +47817,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &buffered_declaration_schedule)) {
         mir_emit_buffered_declaration_schedule(
             out, &buffered_declaration_schedule);
+        return 1;
+    }
+    if (mir_match_matrix_product_schedule(
+            &matrix_product_schedule)) {
+        mir_emit_matrix_product_schedule(
+            out, &matrix_product_schedule);
         return 1;
     }
     if (mir_match_symbol_find_schedule(&symbol_find_schedule)) {

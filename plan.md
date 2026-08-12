@@ -6,11 +6,43 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Base HEAD for this batch: `d3f9119`
-  (`dcc MIR: schedule interpreter action decoding`).
-- Current candidate coverage: **2109/2185 (96.52%)**.
-- Remaining fallback population: **76 `final-cost-policy`**, all selected by
+- Base HEAD for this batch: `d7727f7`
+  (`dcc MIR: schedule buffered declaration parsing`).
+- Current candidate coverage: **2111/2185 (96.61%)**.
+- Remaining fallback population: **74 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- One strict name-free matrix-product scheduler now admits
+  `attnc11.transposed_matrix_vector_multiply` and
+  `attnc11.add_outer_product`. The shared matcher validates each complete
+  seven-block graph, all five parameter types and stack positions, unsigned
+  byte bounds, both loop/control edges, two-byte matrix/vector strides,
+  source-pointer postincrements, per-product signed 16x16-to-32 multiply,
+  Q8 conversion call, signed 32-bit accumulation, clamp call, and final
+  two-byte store. Its two structural variants preserve the source order:
+  transposed multiply advances and reads the matrix before reading the indexed
+  output, while outer product reads the indexed right operand before advancing
+  and reading the matrix destination. The emitter uses the established
+  `__m1s`, Q8-conversion, clamp, and `__msf` fastcall ABIs; IX is the advancing
+  matrix cursor, DE is the reset-per-row vector cursor, and BC carries both
+  byte induction values across calls. A four-byte stack frame holds only the
+  current scalar and the authoritative outer-count checkpoint; no IY is used.
+  Non-stack selected/captured metrics are 1,342/1,649 bytes and 139/149
+  instructions for transposed multiply, and 1,274/1,465 bytes and 134/132
+  instructions for outer product. Stack-check metrics are 1,371/1,678 bytes
+  and 140/150 instructions, and 1,303/1,494 bytes and 135/133 instructions,
+  respectively. `attnc11` passes full peep/nopeep. Against forcing either new
+  function back while leaving the other selected, cycles remain exactly
+  339,250,960 peep / 342,162,991 nopeep and peep linked size remains 23,936
+  bytes; each selected function independently reduces nopeep linked size from
+  25,856 to 25,728 bytes (-128). A separately named focused harness matched
+  both variants and produced identical selected/forced-fallback output in
+  peep and nopeep modes for ordinary operation plus output/matrix,
+  output/input, right/matrix, and left/matrix alias cases. That harness caught
+  and rejected an initial ordinary-stack `memset` call and an unsafe
+  outer-counter iteration before the retained fastcall/register schedule.
+  No app/function name, hash, performance-baseline change, or IY allocation
+  participates in selection. The regression-gated stack-check census advances
+  from 2109/2185 to 2111/2185 with exactly these two functions and no removal.
 - The strict name-free buffered-declaration scheduler admits
   `forint.parse_decls`. It validates the complete 72-instruction, 11-block
   graph: the signed `i < g_ns` bound, per-iteration `g_stmts` reload and
