@@ -979,6 +979,13 @@ struct MirFloatTaylorSine {
     unsigned long half_pi_bits;
 };
 
+struct MirFixedPointMultiply {
+    int left_stack_offset;
+    int right_stack_offset;
+    int shift;
+    unsigned long mask;
+};
+
 struct MirRecursiveWideProduct {
     struct Sym *function;
     int parameter_stack_offset;
@@ -12840,6 +12847,140 @@ static int mir_match_float_taylor_sine(
         mir.insns[118].src1 != mir.insns[66].dst)
         return mir_machine_reject(
             "float-taylor-sine", "loop");
+    return 1;
+}
+
+static int mir_match_fixed_point_multiply(
+    struct MirFixedPointMultiply *plan)
+{
+    static const int expected_opcodes[53] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BINARY, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_CONST, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP, MIR_BINARY,
+        MIR_CONST, MIR_BINARY, MIR_NOP, MIR_NOP, MIR_BINARY, MIR_BINARY,
+        MIR_NOP, MIR_NOP, MIR_BINARY, MIR_BINARY, MIR_NOP, MIR_NOP,
+        MIR_BINARY, MIR_CONST, MIR_BINARY, MIR_BINARY, MIR_RETURN
+    };
+    const struct MirInsn *left = &mir.insns[1];
+    const struct MirInsn *right = &mir.insns[2];
+    long shift;
+    int left_type;
+    int left_storage;
+    int left_offset;
+    int right_type;
+    int right_storage;
+    int right_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 53 || mir_cfg_block_count() != 1 ||
+        mir.has_vla || !type_is_long(mir.return_type) ||
+        type_size(mir.return_type) != 4 ||
+        left->opcode != MIR_PARAM ||
+        right->opcode != MIR_PARAM ||
+        !type_is_long(left->type) ||
+        !type_is_long(right->type) ||
+        !mir_scalar_memory_location(
+            left, &left_type, &left_storage, &left_offset) ||
+        !mir_scalar_memory_location(
+            right, &right_type, &right_storage, &right_offset) ||
+        left_storage != SC_PARAM || right_storage != SC_PARAM ||
+        left_offset < 2 || right_offset < 2)
+        return mir_machine_reject(
+            "fixed-point-multiply", "shape");
+    plan->left_stack_offset = left_offset - 2;
+    plan->right_stack_offset = right_offset - 2;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "fixed-point-multiply", "opcode");
+    if (!mir_machine_constant_value(
+            mir.insns[4].dst, &shift, 0) ||
+        shift != 16)
+        return mir_machine_reject(
+            "fixed-point-multiply", "shift");
+    plan->shift = (int)shift;
+    if (!mir_machine_constant_equals(
+            mir.insns[19].dst, plan->shift) ||
+        !mir_machine_constant_equals(
+            mir.insns[36].dst, plan->shift) ||
+        !mir_machine_constant_equals(
+            mir.insns[49].dst, plan->shift) ||
+        mir.insns[5].immediate != TOK_SHR ||
+        mir.insns[5].src1 != left->dst ||
+        mir.insns[5].src2 != mir.insns[4].dst ||
+        mir.insns[20].immediate != TOK_SHR ||
+        mir.insns[20].src1 != right->dst ||
+        mir.insns[20].src2 != mir.insns[19].dst)
+        return mir_machine_reject(
+            "fixed-point-multiply", "halves");
+    plan->mask =
+        ((unsigned long)mir.insns[11].immediate -
+         (unsigned long)mir.insns[13].immediate) &
+        0xffffffffUL;
+    if (!mir_machine_constant_equals(mir.insns[11].dst, 65536) ||
+        !mir_machine_constant_equals(mir.insns[13].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[26].dst, 65536) ||
+        !mir_machine_constant_equals(mir.insns[28].dst, 1) ||
+        plan->mask != 0xffffUL ||
+        mir.insns[14].immediate != '-' ||
+        mir.insns[14].src1 != mir.insns[11].dst ||
+        mir.insns[14].src2 != mir.insns[13].dst ||
+        mir.insns[15].immediate != '&' ||
+        mir.insns[15].src1 != left->dst ||
+        mir.insns[15].src2 != mir.insns[14].dst ||
+        mir.insns[29].immediate != '-' ||
+        mir.insns[29].src1 != mir.insns[26].dst ||
+        mir.insns[29].src2 != mir.insns[28].dst ||
+        mir.insns[30].immediate != '&' ||
+        mir.insns[30].src1 != right->dst ||
+        mir.insns[30].src2 != mir.insns[29].dst)
+        return mir_machine_reject(
+            "fixed-point-multiply", "fractions");
+    if (!mir_machine_unobservable_local_store(&mir.insns[7]) ||
+        mir.insns[7].src1 != mir.insns[5].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[17]) ||
+        mir.insns[17].src1 != mir.insns[15].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[22]) ||
+        mir.insns[22].src1 != mir.insns[20].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[32]) ||
+        mir.insns[32].src1 != mir.insns[30].dst)
+        return mir_machine_reject(
+            "fixed-point-multiply", "locals");
+    if (mir.insns[35].immediate != '*' ||
+        mir.insns[35].src1 != mir.insns[5].dst ||
+        mir.insns[35].src2 != mir.insns[20].dst ||
+        mir.insns[37].immediate != TOK_SHL ||
+        mir.insns[37].src1 != mir.insns[35].dst ||
+        mir.insns[37].src2 != mir.insns[36].dst ||
+        mir.insns[40].immediate != '*' ||
+        mir.insns[40].src1 != mir.insns[5].dst ||
+        mir.insns[40].src2 != mir.insns[30].dst ||
+        mir.insns[41].immediate != '+' ||
+        mir.insns[41].src1 != mir.insns[37].dst ||
+        mir.insns[41].src2 != mir.insns[40].dst ||
+        mir.insns[44].immediate != '*' ||
+        mir.insns[44].src1 != mir.insns[15].dst ||
+        mir.insns[44].src2 != mir.insns[20].dst ||
+        mir.insns[45].immediate != '+' ||
+        mir.insns[45].src1 != mir.insns[41].dst ||
+        mir.insns[45].src2 != mir.insns[44].dst ||
+        mir.insns[48].immediate != '*' ||
+        mir.insns[48].src1 != mir.insns[15].dst ||
+        mir.insns[48].src2 != mir.insns[30].dst ||
+        mir.insns[50].immediate != TOK_SHR ||
+        mir.insns[50].src1 != mir.insns[48].dst ||
+        mir.insns[50].src2 != mir.insns[49].dst ||
+        mir.insns[51].immediate != '+' ||
+        mir.insns[51].src1 != mir.insns[45].dst ||
+        mir.insns[51].src2 != mir.insns[50].dst ||
+        mir.insns[52].src1 != mir.insns[51].dst)
+        return mir_machine_reject(
+            "fixed-point-multiply", "expression");
     return 1;
 }
 
@@ -33696,6 +33837,81 @@ static void mir_emit_float_taylor_sine(
     fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static void mir_fixed_point_mixed_product(
+    FILE *out, int signed_offset, int unsigned_offset)
+{
+    int positive = new_label();
+    int done = new_label();
+
+    fprintf(out,
+            "\tld c,(ix%+d)\n\tld b,(ix%+d)\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tbit 7,b\n\tjp z,L%d\n"
+            "\txor a\n\tsub c\n\tld c,a\n"
+            "\tsbc a,a\n\tsub b\n\tld b,a\n",
+            signed_offset, signed_offset + 1,
+            unsigned_offset, unsigned_offset + 1,
+            positive);
+    mir_emit_runtime_call(out, "__m1u");
+    fputs("\txor a\n\tsub l\n\tld l,a\n"
+          "\tsbc a,a\n\tsub h\n\tld h,a\n"
+          "\tsbc a,a\n\tsub e\n\tld e,a\n"
+          "\tsbc a,a\n\tsub d\n\tld d,a\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", done, positive);
+    mir_emit_runtime_call(out, "__m1u");
+    fprintf(out, "L%d:\n", done);
+}
+
+static void mir_fixed_point_add_stacked_accumulator(FILE *out)
+{
+    fputs("\tpop bc\n\tadd hl,bc\n\tex de,hl\n"
+          "\tpop bc\n\tadc hl,bc\n\tex de,hl\n", out);
+}
+
+static void mir_emit_fixed_point_multiply(
+    FILE *out, const struct MirFixedPointMultiply *plan)
+{
+    int left_low = plan->left_stack_offset + 2;
+    int left_high = left_low + 2;
+    int right_low = plan->right_stack_offset + 2;
+    int right_high = right_low + 2;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+
+    fprintf(out,
+            "\tld c,(ix%+d)\n\tld b,(ix%+d)\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+            left_high, left_high + 1,
+            right_high, right_high + 1);
+    mir_emit_runtime_call(out, "__m1s");
+    fputs("\tld d,h\n\tld e,l\n\tld hl,0\n"
+          "\tpush de\n\tpush hl\n", out);
+
+    mir_fixed_point_mixed_product(
+        out, left_high, right_low);
+    mir_fixed_point_add_stacked_accumulator(out);
+    fputs("\tpush de\n\tpush hl\n", out);
+
+    mir_fixed_point_mixed_product(
+        out, right_high, left_low);
+    mir_fixed_point_add_stacked_accumulator(out);
+    fputs("\tpush de\n\tpush hl\n", out);
+
+    fprintf(out,
+            "\tld c,(ix%+d)\n\tld b,(ix%+d)\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+            left_low, left_low + 1,
+            right_low, right_low + 1);
+    mir_emit_runtime_call(out, "__m1u");
+    fputs("\tld c,e\n\tld b,d\n"
+          "\tld a,d\n\trla\n\tsbc a,a\n"
+          "\tld d,a\n\tld e,a\n\tld h,b\n\tld l,c\n", out);
+    mir_fixed_point_add_stacked_accumulator(out);
+    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_float_tangent_rational(
     FILE *out, const struct MirFloatTangentRational *plan)
 {
@@ -37335,6 +37551,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirReducedFloatPolynomial reduced_float_polynomial;
     struct MirFloatAtanPolynomial float_atan_polynomial;
     struct MirFloatTaylorSine float_taylor_sine;
+    struct MirFixedPointMultiply fixed_point_multiply;
     struct MirFloatTangentRational float_tangent_rational;
     struct MirRecursiveFrameFill recursive_frame_fill;
     struct MirRecursiveWideProduct recursive_wide_product;
@@ -38174,6 +38391,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &float_taylor_sine)) {
         mir_emit_float_taylor_sine(
             out, &float_taylor_sine);
+        return 1;
+    }
+    if (mir_match_fixed_point_multiply(
+            &fixed_point_multiply)) {
+        mir_emit_fixed_point_multiply(
+            out, &fixed_point_multiply);
         return 1;
     }
     if (mir_match_float_tangent_rational(
