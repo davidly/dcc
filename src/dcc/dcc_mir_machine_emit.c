@@ -1180,6 +1180,23 @@ struct MirFixedIndexCallRunner {
     unsigned long expected_longs[2];
 };
 
+struct MirTaskArrayCheck {
+    struct Sym *highest_function;
+    struct Sym *count_function;
+    int name_string_ids[4];
+    int priorities[4];
+    int done_values[4];
+    int task_count;
+    int expected_open;
+    int expected_priority;
+    int failure_base;
+    int null_result;
+    int priority_failure_base;
+    int name_failure_result;
+    int success_result;
+    int name_bytes[4];
+};
+
 struct MirPalindromeScan {
     int parameter_stack_offset;
 };
@@ -7749,6 +7766,167 @@ static int mir_match_fixed_index_call_runner(
     plan->success_string_id =
         (int)mir.insns[152].immediate;
     return 1;
+}
+
+static int mir_match_task_array_check(
+    struct MirTaskArrayCheck *plan)
+{
+    static const int strings[4] = {1, 7, 13, 19};
+    static const int string_stores[4] = {2, 8, 14, 20};
+    static const int priorities[4] = {3, 9, 15, 21};
+    static const int priority_stores[4] = {4, 10, 16, 22};
+    static const int done_values[4] = {5, 11, 17, 23};
+    static const int done_stores[4] = {6, 12, 18, 24};
+    static const int char_indices[4] = {72, 86, 112, 138};
+    static const int char_loads[4] = {74, 88, 114, 140};
+    static const int char_values[4] = {75, 89, 115, 141};
+    static const int char_compares[4] = {77, 91, 117, 143};
+    int arguments[2];
+    int call_count = 0;
+    long value;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 162 || mir_cfg_block_count() != 26 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_INT)
+        return mir_machine_reject(
+            "task-array-check", "shape");
+    for (item = 0; item < 4; ++item) {
+        if (mir.insns[strings[item]].opcode != MIR_STRING_ADDRESS ||
+            mir.insns[string_stores[item]].opcode != MIR_STORE ||
+            mir.insns[string_stores[item]].src1 !=
+                mir.insns[strings[item]].dst ||
+            mir.insns[string_stores[item]].immediate != item * 5 ||
+            mir.insns[string_stores[item]].memory_size != 2 ||
+            mir.insns[priority_stores[item]].opcode != MIR_STORE ||
+            mir.insns[priority_stores[item]].src1 !=
+                mir.insns[priorities[item]].dst ||
+            mir.insns[priority_stores[item]].immediate != item * 5 + 2 ||
+            mir.insns[priority_stores[item]].memory_size != 2 ||
+            mir.insns[done_stores[item]].opcode != MIR_STORE ||
+            mir.insns[done_stores[item]].src1 !=
+                mir.insns[done_values[item]].dst ||
+            mir.insns[done_stores[item]].immediate != item * 5 + 4 ||
+            mir.insns[done_stores[item]].memory_size != 1 ||
+            !mir_machine_constant_value(
+                mir.insns[priorities[item]].dst, &value, 0))
+            return mir_machine_reject(
+                "task-array-check", "initializer");
+        plan->name_string_ids[item] =
+            (int)mir.insns[strings[item]].immediate;
+        plan->priorities[item] = (int)value;
+        if (!mir_machine_constant_value(
+                mir.insns[done_values[item]].dst, &value, 0) ||
+            value < 0 || value > 1)
+            return mir_machine_reject(
+                "task-array-check", "done");
+        plan->done_values[item] = (int)value;
+    }
+    if (!mir_machine_two_call_arguments(
+            &mir.insns[29], arguments) ||
+        arguments[0] != mir.insns[25].dst ||
+        !mir_machine_constant_value(arguments[1], &value, 0) ||
+        value <= 0 || value > 127 ||
+        (plan->highest_function =
+             find_global(mir.insns[29].name)) == NULL)
+        return mir_machine_reject(
+            "task-array-check", "highest-call");
+    plan->task_count = (int)value;
+    if (plan->task_count != 4 ||
+        !mir_machine_two_call_arguments(
+            &mir.insns[36], arguments) ||
+        arguments[0] != mir.insns[32].dst ||
+        !mir_machine_constant_equals(
+            arguments[1], plan->task_count) ||
+        (plan->count_function =
+             find_global(mir.insns[36].name)) == NULL ||
+        !mir_machine_two_call_arguments(
+            &mir.insns[45], arguments) ||
+        arguments[0] != mir.insns[41].dst ||
+        !mir_machine_constant_equals(
+            arguments[1], plan->task_count) ||
+        find_global(mir.insns[45].name) !=
+            plan->count_function)
+        return mir_machine_reject(
+            "task-array-check", "count-calls");
+    if (!mir_machine_constant_value(
+            mir.insns[37].dst, &value, 0))
+        return mir_machine_reject(
+            "task-array-check", "open-count");
+    plan->expected_open = (int)value;
+    if (!mir_machine_constant_value(
+            mir.insns[40].dst, &value, 0))
+        return mir_machine_reject(
+            "task-array-check", "failure-base");
+    plan->failure_base = (int)value;
+    if (!mir_machine_constant_value(
+            mir.insns[50].dst, &value, 0))
+        return mir_machine_reject(
+            "task-array-check", "null");
+    plan->null_result = 20;
+    if (value != 0 ||
+        !mir_machine_constant_equals(
+            mir.insns[53].dst, plan->null_result))
+        return mir_machine_reject(
+            "task-array-check", "null-result");
+    if (mir.insns[38].opcode != MIR_BINARY ||
+        mir.insns[38].immediate != TOK_NE ||
+        mir.insns[46].opcode != MIR_BINARY ||
+        mir.insns[46].immediate != '+' ||
+        mir.insns[47].opcode != MIR_RETURN ||
+        mir.insns[51].opcode != MIR_BINARY ||
+        mir.insns[51].immediate != TOK_EQ ||
+        mir.insns[54].opcode != MIR_RETURN ||
+        mir.insns[57].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[57].immediate != 2 ||
+        mir.insns[58].opcode != MIR_LOAD_INDIRECT ||
+        !mir_machine_constant_value(
+            mir.insns[59].dst, &value, 0))
+        return mir_machine_reject(
+            "task-array-check", "early-checks");
+    plan->expected_priority = (int)value;
+    if (!mir_machine_constant_value(
+            mir.insns[62].dst, &value, 0))
+        return mir_machine_reject(
+            "task-array-check", "priority-base");
+    plan->priority_failure_base = (int)value;
+    if (mir.insns[60].opcode != MIR_BINARY ||
+        mir.insns[60].immediate != TOK_NE ||
+        mir.insns[66].opcode != MIR_BINARY ||
+        mir.insns[66].immediate != '+' ||
+        mir.insns[67].opcode != MIR_RETURN)
+        return mir_machine_reject(
+            "task-array-check", "priority-check");
+    for (item = 0; item < 4; ++item) {
+        if (!mir_machine_constant_equals(
+                mir.insns[char_indices[item]].dst, item) ||
+            mir.insns[char_loads[item]].opcode !=
+                MIR_LOAD_INDIRECT ||
+            mir.insns[char_loads[item]].memory_size != 1 ||
+            !mir_machine_constant_value(
+                mir.insns[char_values[item]].dst, &value, 0) ||
+            mir.insns[char_compares[item]].opcode != MIR_BINARY ||
+            mir.insns[char_compares[item]].immediate != TOK_NE)
+            return mir_machine_reject(
+                "task-array-check", "name-check");
+        plan->name_bytes[item] = (int)value;
+    }
+    if (!mir_machine_constant_value(
+            mir.insns[157].dst, &value, 0))
+        return mir_machine_reject(
+            "task-array-check", "name-failure");
+    plan->name_failure_result = (int)value;
+    if (!mir_machine_constant_value(
+            mir.insns[160].dst, &value, 0) ||
+        mir.insns[158].opcode != MIR_RETURN ||
+        mir.insns[161].opcode != MIR_RETURN)
+        return mir_machine_reject(
+            "task-array-check", "success");
+    plan->success_result = (int)value;
+    for (item = 0; item < mir.count; ++item)
+        if (mir.insns[item].opcode == MIR_CALL)
+            ++call_count;
+    return call_count == 3;
 }
 
 static int mir_match_string_mismatch_report(
@@ -37657,6 +37835,99 @@ static void mir_emit_fixed_index_call_runner(
             done);
 }
 
+static void mir_task_array_push_arguments(
+    FILE *out, int task_count)
+{
+    fprintf(out,
+            "\tld hl,%d\n\tpush hl\n"
+            "\tpush ix\n\tpop hl\n"
+            "\tld de,-22\n\tadd hl,de\n\tpush hl\n",
+            task_count);
+}
+
+static void mir_emit_task_array_check(
+    FILE *out, const struct MirTaskArrayCheck *plan)
+{
+    int count_ok = new_label();
+    int nonnull = new_label();
+    int priority_ok = new_label();
+    int name_failure = new_label();
+    int done = new_label();
+    int item;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-22\n\tadd hl,sp\n\tld sp,hl\n", out);
+    for (item = 0; item < plan->task_count; ++item) {
+        int offset = -22 + item * 5;
+
+        fprintf(out,
+                "\tld hl,S%d\n"
+                "\tld (ix%+d),l\n\tld (ix%+d),h\n"
+                "\tld hl,%d\n"
+                "\tld (ix%+d),l\n\tld (ix%+d),h\n"
+                "\tld (ix%+d),%d\n",
+                plan->name_string_ids[item],
+                offset, offset + 1,
+                plan->priorities[item],
+                offset + 2, offset + 3,
+                offset + 4, plan->done_values[item]);
+    }
+    mir_task_array_push_arguments(out, plan->task_count);
+    mir_machine_emit_symbol_call(
+        out, plan->highest_function);
+    fputs("\tpop bc\n\tpop bc\n"
+          "\tld (ix-2),l\n\tld (ix-1),h\n", out);
+
+    mir_task_array_push_arguments(out, plan->task_count);
+    mir_machine_emit_symbol_call(
+        out, plan->count_function);
+    fprintf(out,
+            "\tpop bc\n\tpop bc\n\tld de,%d\n"
+            "\tor a\n\tsbc hl,de\n\tjp z,L%d\n",
+            plan->expected_open, count_ok);
+    mir_task_array_push_arguments(out, plan->task_count);
+    mir_machine_emit_symbol_call(
+        out, plan->count_function);
+    fprintf(out,
+            "\tpop bc\n\tpop bc\n\tld de,%d\n"
+            "\tadd hl,de\n\tjp L%d\n"
+            "L%d:\n\tld l,(ix-2)\n\tld h,(ix-1)\n"
+            "\tld a,h\n\tor l\n\tjp nz,L%d\n"
+            "\tld hl,%d\n\tjp L%d\n"
+            "L%d:\n\tinc hl\n\tinc hl\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tex de,hl\n\tld de,%d\n"
+            "\tor a\n\tsbc hl,de\n\tjp z,L%d\n"
+            "\tadd hl,de\n\tld de,%d\n\tadd hl,de\n"
+            "\tjp L%d\n"
+            "L%d:\n\tld l,(ix-2)\n\tld h,(ix-1)\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tex de,hl\n",
+            plan->failure_base, done,
+            count_ok, nonnull,
+            plan->null_result, done,
+            nonnull, plan->expected_priority,
+            priority_ok, plan->priority_failure_base,
+            done, priority_ok);
+    for (item = 0; item < 4; ++item) {
+        fputs("\tld a,(hl)\n", out);
+        fprintf(out, "\tcp %d\n\tjp nz,L%d\n",
+                plan->name_bytes[item] & 255,
+                name_failure);
+        if (item != 3)
+            fputs("\tinc hl\n", out);
+    }
+    fprintf(out,
+            "\tld hl,%d\n\tjp L%d\n"
+            "L%d:\n\tld hl,%d\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            plan->success_result, done,
+            name_failure, plan->name_failure_result,
+            done);
+}
+
 static void mir_emit_fixed_sieve_build(
     FILE *out, const struct MirFixedSieveBuild *plan)
 {
@@ -37803,6 +38074,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFixedCallCheckRunner fixed_call_check_runner;
     struct MirDeterministicInitCheck deterministic_init_check;
     struct MirFixedIndexCallRunner fixed_index_call_runner;
+    struct MirTaskArrayCheck task_array_check;
     struct MirStringMismatchReport string_mismatch_report;
     struct MirCrcUpdateRunner crc_update_runner;
     struct MirFixedRowMemberSum fixed_row_member_sum;
@@ -38419,6 +38691,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             &fixed_index_call_runner)) {
         mir_emit_fixed_index_call_runner(
             out, &fixed_index_call_runner);
+        return 1;
+    }
+    if (mir_match_task_array_check(&task_array_check)) {
+        mir_emit_task_array_check(out, &task_array_check);
         return 1;
     }
     if (mir_match_string_mismatch_report(&string_mismatch_report)) {

@@ -6,10 +6,10 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `2881dca`
-  (`dcc MIR: registerize fixed-point multiplies`).
-- Current candidate coverage: **2091/2185 (95.70%)**.
-- Remaining fallback population: **94 `final-cost-policy`**, all selected by
+- Published HEAD before this batch: `159317e`
+  (`dcc MIR: schedule fixed index call runners`).
+- Current candidate coverage: **2092/2185 (95.74%)**.
+- Remaining fallback population: **93 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - `a1` is **23/23 MIR**. Relative to main it is **11.12% faster peep** and
   **12.98% faster nopeep**, with no checked size regression.
@@ -717,6 +717,10 @@ current execution plan and handoff.
   compact IX frame and compare narrow/wide call results without spill slots.
   This admits `tmulpow2.main`, improving **5.75%/7.30%** and shrinking both
   images by more than 4%.
+- Task-array checks now pack fixed records into a 22-byte IX frame, preserve
+  both search/count helper calls, and validate the returned record in place.
+  This admits `tdecl.auto_mixed_struct_array_init`, improving **0.73%/1.50%**
+  while shrinking both images.
 - A compact register schedule for `pint.alloc_temp` was rejected despite 50
   fewer instructions and one smaller sector because program placement still
   regressed **0.26%/0.16%**; no padding or baseline movement was retained.
@@ -734,7 +738,7 @@ current execution plan and handoff.
   `trowinv.main` (+7.48%/+5.14%), `tautolcs.lcs` (+29.92%/+22.09%),
   `tfreopen.main` (+4.65%/+2.73%), and `t2darr.main`
   (+28.46%/+31.34%).
-- Current next priority: repeated causes in the 94 final-cost fallbacks,
+- Current next priority: repeated causes in the 93 final-cost fallbacks,
   followed by calibrated replacement of `register-v69`. Maintain zero
   correctness, performance, and coverage regressions.
 
