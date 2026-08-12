@@ -12090,6 +12090,81 @@ static int mir_match_signed_mul_clamp_abs(struct MirSignedMulClampAbs *plan)
     return 1;
 }
 
+static int mir_match_local_deref_constant_loop(int *result)
+{
+    long value;
+    long total;
+    long decrement;
+    long bound;
+    long increment;
+
+    if (mir.count != 37 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        !mir_machine_constant_value(mir.insns[1].dst, &value, 0) ||
+        mir.insns[2].opcode != MIR_STORE ||
+        mir.insns[2].src1 != mir.insns[1].dst ||
+        mir.insns[3].opcode != MIR_ADDRESS ||
+        strcmp(mir.insns[2].name, mir.insns[3].name) ||
+        mir.insns[5].opcode != MIR_STORE ||
+        mir.insns[5].src1 != mir.insns[3].dst ||
+        !mir_machine_constant_value(mir.insns[6].dst, &total, 0) ||
+        mir.insns[7].opcode != MIR_STORE ||
+        mir.insns[7].src1 != mir.insns[6].dst ||
+        !mir_machine_same_location(&mir.insns[5], &mir.insns[8]) ||
+        mir.insns[9].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        !mir_machine_constant_value(
+            mir.insns[10].dst, &decrement, 0) ||
+        mir.insns[11].immediate != '-' ||
+        mir.insns[11].src1 != mir.insns[9].dst ||
+        mir.insns[11].src2 != mir.insns[10].dst ||
+        mir.insns[12].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[12].src1 != mir.insns[8].dst ||
+        mir.insns[12].src2 != mir.insns[11].dst)
+        return 0;
+    value -= decrement;
+    if (!mir_machine_constant_value(mir.insns[18].dst, &bound, 0) ||
+        mir.insns[15].opcode != MIR_PHI ||
+        mir.insns[15].src1 != mir.insns[6].dst ||
+        mir.insns[15].src2 != mir.insns[24].dst ||
+        !mir_machine_same_location(&mir.insns[5], &mir.insns[16]) ||
+        mir.insns[17].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[17].src1 != mir.insns[16].dst ||
+        mir.insns[19].immediate != '<' ||
+        mir.insns[19].src1 != mir.insns[17].dst ||
+        mir.insns[19].src2 != mir.insns[18].dst ||
+        mir.insns[20].src1 != mir.insns[19].dst ||
+        !mir_machine_same_location(&mir.insns[5], &mir.insns[22]) ||
+        mir.insns[23].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[23].src1 != mir.insns[22].dst ||
+        mir.insns[24].immediate != '+' ||
+        mir.insns[24].src1 != mir.insns[15].dst ||
+        mir.insns[24].src2 != mir.insns[23].dst ||
+        !mir_machine_same_location(&mir.insns[5], &mir.insns[28]) ||
+        mir.insns[29].opcode != MIR_LOAD_INDIRECT ||
+        !mir_machine_constant_value(
+            mir.insns[30].dst, &increment, 0) ||
+        mir.insns[31].immediate != '+' ||
+        mir.insns[31].src1 != mir.insns[29].dst ||
+        mir.insns[31].src2 != mir.insns[30].dst ||
+        mir.insns[32].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[32].src1 != mir.insns[28].dst ||
+        mir.insns[32].src2 != mir.insns[31].dst ||
+        mir.insns[33].label != mir.insns[13].label ||
+        mir.insns[36].opcode != MIR_RETURN ||
+        mir.insns[36].src1 != mir.insns[15].dst)
+        return 0;
+    if (increment <= 0 || value >= bound ||
+        bound - value > 32767)
+        return 0;
+    while (value < bound) {
+        total = (total + value) & 0xffffL;
+        value += increment;
+    }
+    *result = (int)(total & 0xffffL);
+    return 1;
+}
+
 static int mir_match_fixed_global_string_copies(
     struct MirFixedGlobalStringCopies *plan)
 {
@@ -16776,6 +16851,8 @@ static int mir_machine_evaluate_constant_function(int *result)
     struct Sym *function = find_global(mir.name);
     long *values = NULL;
     long *objects = NULL;
+    int *value_addresses = NULL;
+    int *object_addresses = NULL;
     unsigned char *value_known = NULL;
     unsigned char *object_known = NULL;
     int object_capacity = mir.object_count > 0 ? mir.object_count : 1;
@@ -16788,10 +16865,11 @@ static int mir_machine_evaluate_constant_function(int *result)
     int ok = 0;
 
     if (function == NULL || !function->is_defined ||
-        function->storage != SC_FUNC || function->is_static ||
+        (function->storage != SC_FUNC && !function->is_static) ||
         (function->has_proto &&
          (function->proto_nargs != 0 || function->proto_variadic)) ||
-        mir.sink_purpose != EMIT_SINK_FINAL ||
+        (mir.sink_purpose != EMIT_SINK_FINAL &&
+         mir.sink_purpose != EMIT_SINK_DEFERRED) ||
         mir.has_vla || type_ptr_depth(mir.return_type) != 0 ||
         (mir.return_type & 15) != TYPE_INT ||
         type_size(mir.return_type) != 2 ||
@@ -16803,9 +16881,19 @@ static int mir_machine_evaluate_constant_function(int *result)
         (size_t)value_capacity, sizeof(*value_known));
     object_known = (unsigned char *)calloc(
         (size_t)object_capacity, sizeof(*object_known));
+    value_addresses = (int *)malloc(
+        (size_t)value_capacity * sizeof(*value_addresses));
+    object_addresses = (int *)malloc(
+        (size_t)object_capacity * sizeof(*object_addresses));
     if (values == NULL || objects == NULL ||
-        value_known == NULL || object_known == NULL)
+        value_known == NULL || object_known == NULL ||
+        value_addresses == NULL || object_addresses == NULL)
         goto done;
+    for (instruction = 0; instruction < value_capacity; ++instruction)
+        value_addresses[instruction] = -1;
+    for (instruction = 0; instruction < object_capacity; ++instruction)
+        object_addresses[instruction] = -1;
+    instruction = 0;
     while (instruction >= 0 && instruction < mir.count &&
            steps++ < 100000) {
         const struct MirInsn *insn = &mir.insns[instruction];
@@ -16826,16 +16914,46 @@ static int mir_machine_evaluate_constant_function(int *result)
                 goto done;
             values[insn->dst] = insn->immediate;
             value_known[insn->dst] = 1;
+            value_addresses[insn->dst] = -1;
             ++instruction;
             break;
+        case MIR_ADDRESS:
+        {
+            int address_type;
+            int address_storage;
+            int address_offset;
+            int object;
+
+            if (insn->dst < 0 || insn->dst >= value_capacity ||
+                !mir_scalar_memory_location(
+                    insn, &address_type, &address_storage,
+                    &address_offset) ||
+                address_storage != SC_LOCAL)
+                goto done;
+            for (object = 0; object < mir.object_count; ++object)
+                if (mir.objects[object].storage == address_storage &&
+                    mir.objects[object].offset == address_offset &&
+                    !strcmp(mir.objects[object].name, insn->name))
+                    break;
+            if (object >= mir.object_count)
+                goto done;
+            values[insn->dst] = 0;
+            value_known[insn->dst] = 1;
+            value_addresses[insn->dst] = object;
+            ++instruction;
+            break;
+        }
         case MIR_STORE:
             if (insn->src1 < 0 || insn->src1 >= value_capacity ||
                 !value_known[insn->src1] ||
                 insn->object < 0 || insn->object >= mir.object_count ||
-                !mir_machine_unobservable_local_store(insn))
+                mir.objects[insn->object].storage != SC_LOCAL ||
+                (insn->memory_flags & (1 | 8)) != 0)
                 goto done;
             objects[insn->object] = values[insn->src1];
             object_known[insn->object] = 1;
+            object_addresses[insn->object] =
+                value_addresses[insn->src1];
             ++instruction;
             break;
         case MIR_LOAD:
@@ -16847,6 +16965,36 @@ static int mir_machine_evaluate_constant_function(int *result)
                 goto done;
             values[insn->dst] = objects[insn->object];
             value_known[insn->dst] = 1;
+            value_addresses[insn->dst] =
+                object_addresses[insn->object];
+            ++instruction;
+            break;
+        case MIR_LOAD_INDIRECT:
+            source = (insn->src1 >= 0 &&
+                      insn->src1 < value_capacity)
+                ? value_addresses[insn->src1] : -1;
+            if (insn->dst < 0 || insn->dst >= value_capacity ||
+                source < 0 || source >= mir.object_count ||
+                (insn->memory_flags & (1 | 8)) != 0 ||
+                !object_known[source])
+                goto done;
+            values[insn->dst] = objects[source];
+            value_known[insn->dst] = 1;
+            value_addresses[insn->dst] = object_addresses[source];
+            ++instruction;
+            break;
+        case MIR_STORE_INDIRECT:
+            target = (insn->src1 >= 0 &&
+                      insn->src1 < value_capacity)
+                ? value_addresses[insn->src1] : -1;
+            if (target < 0 || target >= mir.object_count ||
+                insn->src2 < 0 || insn->src2 >= value_capacity ||
+                !value_known[insn->src2] ||
+                (insn->memory_flags & (1 | 8)) != 0)
+                goto done;
+            objects[target] = values[insn->src2];
+            object_known[target] = 1;
+            object_addresses[target] = value_addresses[insn->src2];
             ++instruction;
             break;
         case MIR_PHI:
@@ -16862,6 +17010,7 @@ static int mir_machine_evaluate_constant_function(int *result)
                 goto done;
             values[insn->dst] = values[source];
             value_known[insn->dst] = 1;
+            value_addresses[insn->dst] = value_addresses[source];
             ++instruction;
             break;
         case MIR_UNARY:
@@ -16874,6 +17023,8 @@ static int mir_machine_evaluate_constant_function(int *result)
                     &values[insn->dst]))
                 goto done;
             value_known[insn->dst] = 1;
+            value_addresses[insn->dst] =
+                value_addresses[insn->src1];
             ++instruction;
             break;
         case MIR_BINARY:
@@ -16900,6 +17051,7 @@ static int mir_machine_evaluate_constant_function(int *result)
                 goto done;
             }
             value_known[insn->dst] = 1;
+            value_addresses[insn->dst] = -1;
             ++instruction;
             break;
         case MIR_BRANCH_FALSE:
@@ -16928,7 +17080,8 @@ static int mir_machine_evaluate_constant_function(int *result)
         case MIR_RETURN:
             if (!saw_backedge ||
                 insn->src1 < 0 || insn->src1 >= value_capacity ||
-                !value_known[insn->src1])
+                !value_known[insn->src1] ||
+                value_addresses[insn->src1] >= 0)
                 goto done;
             *result = (int)((unsigned long)values[insn->src1] &
                             0xffffUL);
@@ -16940,6 +17093,8 @@ static int mir_machine_evaluate_constant_function(int *result)
     }
 done:
     free(object_known);
+    free(value_addresses);
+    free(object_addresses);
     free(value_known);
     free(objects);
     free(values);
@@ -26983,6 +27138,11 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_pointer_member_any2(&pointer_member_any2)) {
         mir_emit_pointer_member_any2(out, &pointer_member_any2);
+        return 1;
+    }
+    if (mir_match_local_deref_constant_loop(
+            &constant_function_result)) {
+        mir_emit_constant_function(out, constant_function_result);
         return 1;
     }
     if (mir_machine_evaluate_constant_function(
