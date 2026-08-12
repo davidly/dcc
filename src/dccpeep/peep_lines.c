@@ -142,8 +142,23 @@ int eq(int i, const char *s)
 
 int starts_label(const char *s)
 {
+    const char *semi;
     int n;
-    n = (int)strlen(s);
+
+    while (*s == ' ' || *s == '\t')
+        s++;
+    if (*s == ';')
+        return 0;  /* a prose comment ending in ':' is not a label */
+
+    /* A label may carry a trailing inline comment on the same physical
+     * line ("stchk_pb:      ; print byte..."); only the code before the
+     * comment determines whether this is a label, not the raw line's own
+     * last character. */
+    semi = strchr(s, ';');
+    n = semi ? (int)(semi - s) : (int)strlen(s);
+    while (n > 0 && (s[n - 1] == ' ' || s[n - 1] == '\t'))
+        --n;
+
     return n > 0 && s[n - 1] == ':';
 }
 
