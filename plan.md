@@ -6,11 +6,31 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Base HEAD for this batch: `dbdc259`
-  (`dcc MIR: schedule bounded comment scans`).
-- Current candidate coverage: **2106/2185 (96.38%)**.
-- Remaining fallback population: **79 `final-cost-policy`**, all selected by
+- Base HEAD for this batch: `13ec15f`
+  (`dcc MIR: schedule bounded symbol searches`).
+- Current candidate coverage: **2107/2185 (96.43%)**.
+- Remaining fallback population: **78 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The strict name-free whitespace-scan scheduler admits `cint.skip_ws`. It
+  matches the complete 60-instruction, eight-block MIR graph, proves the
+  signed 32-bit source-cursor bound, preserves the unsigned-byte helper call
+  and short-circuit edges, reloads the source pointer and cursor after that
+  call before testing newline, and retains the 16-bit line update plus
+  full-width cursor increment in source evaluation order. The emitter holds
+  only the global state address in IX, reloads all mutable fields around the
+  helper call, and uses no IY. Non-stack selected output is 661 text bytes /
+  57 instructions versus 1,423 / 139 captured; stack-check output is 690 /
+  58 versus 1,452 / 140. Against forced fallback, `cint` improves from
+  299,327,627 to 299,201,573 peep cycles (-126,054 / -0.0421%) and from
+  305,443,007 to 305,244,693 nopeep cycles (-198,314 / -0.0649%); peep
+  linked size is unchanged at 31,360 bytes and nopeep falls from 36,224 to
+  36,096 bytes (-128 / -0.35%). A separately named fixture with a
+  side-effecting helper selects the same structural schedule and produces
+  identical peep, nopeep, and forced-fallback cursor/line/call-count output
+  for mutation-after-call, empty-bound, and multiline whitespace cases. No
+  app/function name, hash, baseline exception, or IY allocation participates
+  in selection. The fresh stack-check census is 2107/2185 with exactly this
+  one new function and no regression.
 - The strict name-free symbol-table scheduler admits `bint.sym_find`. It
   matches the complete 87-instruction, seven-block MIR graph, proves the
   signed `i < nsym` bound and both `nsym`/`mtop` capacity checks, preserves the

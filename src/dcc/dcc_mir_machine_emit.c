@@ -2014,6 +2014,16 @@ struct MirCommentScanSchedule {
     int line_offset;
 };
 
+struct MirWhitespaceScanSchedule {
+    struct Sym *state_root;
+    struct Sym *space_function;
+    int state_root_offset;
+    int source_offset;
+    int length_offset;
+    int cursor_offset;
+    int line_offset;
+};
+
 struct MirSymbolFindSchedule {
     struct Sym *symbols_root;
     struct Sym *count_root;
@@ -28222,6 +28232,284 @@ static int mir_match_comment_scan_schedule(
     return 1;
 }
 
+static int mir_match_whitespace_member_load(
+    int member_index, int load_index, int width, int pointer,
+    struct MirStateMember *member_out)
+{
+    const struct MirInsn *member = &mir.insns[member_index];
+    const struct MirInsn *load = &mir.insns[load_index];
+    struct Sym *root;
+    long root_offset;
+
+    if (member->opcode != MIR_MEMBER_ADDRESS ||
+        member->bit_width != 0 ||
+        (member->memory_flags & (1 | 8)) != 0 ||
+        load->opcode != MIR_LOAD_INDIRECT ||
+        load->src1 != member->dst ||
+        load->memory_size != width ||
+        load->bit_width != 0 ||
+        (load->memory_flags & (1 | 8)) != 0 ||
+        type_size(load->type) != width ||
+        (pointer ? type_ptr_depth(load->type) == 0 :
+                   (type_ptr_depth(load->type) != 0 ||
+                    (load->type & TYPE_UNSIGNED) != 0)) ||
+        !mir_machine_global_address_offset(
+            member->src1, &root, &root_offset, 0) ||
+        root_offset < -32768 || root_offset > 32767 ||
+        member->immediate < -32768 ||
+        member->immediate > 32767)
+        return 0;
+    member_out->root = root;
+    member_out->root_offset = (int)root_offset;
+    member_out->member_offset = (int)member->immediate;
+    return 1;
+}
+
+static int mir_whitespace_members_overlap(
+    const struct MirStateMember *left, int left_width,
+    const struct MirStateMember *right, int right_width)
+{
+    return left->member_offset <
+               right->member_offset + right_width &&
+           right->member_offset <
+               left->member_offset + left_width;
+}
+
+static int mir_match_whitespace_scan_schedule(
+    struct MirWhitespaceScanSchedule *plan)
+{
+    static const int expected_opcodes[60] = {
+        MIR_LABEL, MIR_LABEL, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY,
+        MIR_UNARY, MIR_ARG, MIR_CALL, MIR_BRANCH_FALSE,
+        MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST,
+        MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY,
+        MIR_STORE_INDIRECT, MIR_LABEL, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST,
+        MIR_BINARY, MIR_STORE_INDIRECT, MIR_NOP, MIR_LABEL,
+        MIR_JUMP, MIR_LABEL
+    };
+    struct MirStateMember cursor_condition;
+    struct MirStateMember length_condition;
+    struct MirStateMember source_condition;
+    struct MirStateMember cursor_condition_source;
+    struct MirStateMember source_body;
+    struct MirStateMember cursor_body;
+    struct MirStateMember line;
+    struct MirStateMember cursor_update;
+    int call_argument;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 60 || mir_cfg_block_count() != 8 ||
+        mir.has_vla || mir.local_bytes != 0 ||
+        mir.aggregate_temp_bytes != 0 ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < 60; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "whitespace-scan-schedule", "opcodes");
+
+    if (!mir_match_whitespace_member_load(
+            3, 4, 4, 0, &cursor_condition) ||
+        !mir_match_whitespace_member_load(
+            6, 7, 4, 0, &length_condition) ||
+        mir.insns[8].immediate != '<' ||
+        mir.insns[8].src1 != mir.insns[4].dst ||
+        mir.insns[8].src2 != mir.insns[7].dst ||
+        type_size(mir.insns[8].secondary_offset) != 4 ||
+        type_size(mir.insns[8].type) != 2 ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[9].label != mir.insns[26].label)
+        return mir_machine_reject(
+            "whitespace-scan-schedule", "bound");
+
+    if (!mir_match_whitespace_member_load(
+            11, 12, 2, 1, &source_condition) ||
+        !mir_match_whitespace_member_load(
+            14, 15, 4, 0, &cursor_condition_source) ||
+        !mir_machine_same_state_member(
+            &cursor_condition, &cursor_condition_source) ||
+        mir.insns[16].src1 != mir.insns[12].dst ||
+        mir.insns[16].src2 != mir.insns[15].dst ||
+        mir.insns[16].immediate != 1 ||
+        mir.insns[16].memory_size != 1 ||
+        (mir.insns[16].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[17].src1 != mir.insns[16].dst ||
+        mir.insns[17].memory_size != 1 ||
+        mir.insns[17].bit_width != 0 ||
+        (mir.insns[17].memory_flags & (1 | 8)) != 0 ||
+        type_ptr_depth(mir.insns[17].type) != 0 ||
+        type_size(mir.insns[17].type) != 1 ||
+        (mir.insns[17].type & TYPE_UNSIGNED) != 0 ||
+        mir.insns[18].src1 != mir.insns[17].dst ||
+        mir.insns[18].immediate != 0 ||
+        type_size(mir.insns[18].type) != 1 ||
+        (mir.insns[18].type & TYPE_UNSIGNED) == 0 ||
+        mir.insns[19].src1 != mir.insns[18].dst ||
+        mir.insns[19].immediate != 0 ||
+        type_ptr_depth(mir.insns[19].type) != 0 ||
+        type_size(mir.insns[19].type) != 2 ||
+        mir.insns[20].src1 != mir.insns[19].dst ||
+        !mir_machine_single_call_argument(
+            &mir.insns[21], &call_argument) ||
+        call_argument != mir.insns[19].dst ||
+        mir.insns[22].src1 != mir.insns[21].dst ||
+        mir.insns[22].label != mir.insns[26].label)
+        return mir_machine_reject(
+            "whitespace-scan-schedule", "helper-call");
+    plan->space_function = find_global(mir.insns[21].name);
+    if (plan->space_function == NULL ||
+        plan->space_function->storage != SC_FUNC ||
+        plan->space_function->is_funcptr ||
+        plan->space_function->is_noreturn ||
+        !plan->space_function->has_proto ||
+        plan->space_function->proto_nargs != 1 ||
+        plan->space_function->proto_variadic ||
+        type_ptr_depth(plan->space_function->proto_types[0]) != 0 ||
+        type_size(plan->space_function->proto_types[0]) != 2 ||
+        type_ptr_depth(mir.insns[21].type) != 0 ||
+        type_size(mir.insns[21].type) != 2 ||
+        (mir.insns[21].memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+        (mir.insns[21].base_name[0] != 0 &&
+         strcmp(mir.insns[21].base_name,
+                asm_name_for(sym_asm_name(
+                    plan->space_function)))))
+        return mir_machine_reject(
+            "whitespace-scan-schedule", "helper-function");
+
+    if (!mir_machine_constant_equals(mir.insns[24].dst, 1) ||
+        mir.insns[25].label != mir.insns[28].label ||
+        !mir_machine_constant_equals(mir.insns[27].dst, 0) ||
+        mir.insns[29].src1 != mir.insns[24].dst ||
+        mir.insns[29].src2 != mir.insns[27].dst ||
+        mir.insns[29].phi_pred1 != mir.insns[23].label ||
+        mir.insns[29].phi_pred2 != mir.insns[26].label ||
+        mir.insns[30].src1 != mir.insns[29].dst ||
+        mir.insns[30].label != mir.insns[59].label)
+        return mir_machine_reject(
+            "whitespace-scan-schedule", "short-circuit");
+
+    if (!mir_match_whitespace_member_load(
+            32, 33, 2, 1, &source_body) ||
+        !mir_match_whitespace_member_load(
+            35, 36, 4, 0, &cursor_body) ||
+        !mir_machine_same_state_member(
+            &source_condition, &source_body) ||
+        !mir_machine_same_state_member(
+            &cursor_condition, &cursor_body) ||
+        mir.insns[37].src1 != mir.insns[33].dst ||
+        mir.insns[37].src2 != mir.insns[36].dst ||
+        mir.insns[37].immediate != 1 ||
+        mir.insns[37].memory_size != 1 ||
+        (mir.insns[37].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[38].src1 != mir.insns[37].dst ||
+        mir.insns[38].memory_size != 1 ||
+        mir.insns[38].bit_width != 0 ||
+        (mir.insns[38].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[38].type != mir.insns[17].type ||
+        !mir_machine_constant_equals(mir.insns[39].dst, '\n') ||
+        mir.insns[40].src1 != mir.insns[38].dst ||
+        mir.insns[40].immediate != 0 ||
+        type_size(mir.insns[40].type) != 2 ||
+        mir.insns[41].immediate != TOK_EQ ||
+        mir.insns[41].src1 != mir.insns[40].dst ||
+        mir.insns[41].src2 != mir.insns[39].dst ||
+        mir.insns[42].src1 != mir.insns[41].dst ||
+        mir.insns[42].label != mir.insns[49].label)
+        return mir_machine_reject(
+            "whitespace-scan-schedule", "body-read");
+
+    if (!mir_match_whitespace_member_load(
+            44, 45, 2, 0, &line) ||
+        !mir_machine_constant_equals(mir.insns[46].dst, 1) ||
+        mir.insns[47].immediate != '+' ||
+        mir.insns[47].src1 != mir.insns[45].dst ||
+        mir.insns[47].src2 != mir.insns[46].dst ||
+        mir.insns[48].src1 != mir.insns[44].dst ||
+        mir.insns[48].src2 != mir.insns[47].dst ||
+        mir.insns[48].memory_size != 2 ||
+        mir.insns[48].bit_width != 0 ||
+        (mir.insns[48].memory_flags & (1 | 8)) != 0 ||
+        !mir_match_whitespace_member_load(
+            51, 52, 4, 0, &cursor_update) ||
+        !mir_machine_same_state_member(
+            &cursor_condition, &cursor_update) ||
+        !mir_machine_constant_equals(mir.insns[53].dst, 1) ||
+        mir.insns[54].immediate != '+' ||
+        mir.insns[54].src1 != mir.insns[52].dst ||
+        mir.insns[54].src2 != mir.insns[53].dst ||
+        mir.insns[55].src1 != mir.insns[51].dst ||
+        mir.insns[55].src2 != mir.insns[54].dst ||
+        mir.insns[55].memory_size != 4 ||
+        mir.insns[55].bit_width != 0 ||
+        (mir.insns[55].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[58].label != mir.insns[1].label)
+        return mir_machine_reject(
+            "whitespace-scan-schedule", "updates");
+
+    if (cursor_condition.root != length_condition.root ||
+        cursor_condition.root != source_condition.root ||
+        cursor_condition.root != line.root ||
+        cursor_condition.root_offset !=
+            length_condition.root_offset ||
+        cursor_condition.root_offset !=
+            source_condition.root_offset ||
+        cursor_condition.root_offset != line.root_offset ||
+        cursor_condition.member_offset ==
+            length_condition.member_offset ||
+        cursor_condition.member_offset ==
+            source_condition.member_offset ||
+        cursor_condition.member_offset == line.member_offset ||
+        length_condition.member_offset ==
+            source_condition.member_offset ||
+        length_condition.member_offset == line.member_offset ||
+        source_condition.member_offset == line.member_offset ||
+        mir_whitespace_members_overlap(
+            &source_condition, 2, &length_condition, 4) ||
+        mir_whitespace_members_overlap(
+            &source_condition, 2, &cursor_condition, 4) ||
+        mir_whitespace_members_overlap(
+            &source_condition, 2, &line, 2) ||
+        mir_whitespace_members_overlap(
+            &length_condition, 4, &cursor_condition, 4) ||
+        mir_whitespace_members_overlap(
+            &length_condition, 4, &line, 2) ||
+        mir_whitespace_members_overlap(
+            &cursor_condition, 4, &line, 2) ||
+        source_condition.member_offset < -128 ||
+        source_condition.member_offset + 1 > 127 ||
+        cursor_condition.member_offset < -128 ||
+        cursor_condition.member_offset + 3 > 127 ||
+        length_condition.member_offset < -128 ||
+        length_condition.member_offset + 3 > 127 ||
+        line.member_offset < -128 ||
+        line.member_offset + 1 > 127)
+        return mir_machine_reject(
+            "whitespace-scan-schedule", "state");
+
+    plan->state_root = cursor_condition.root;
+    plan->state_root_offset = cursor_condition.root_offset;
+    plan->source_offset = source_condition.member_offset;
+    plan->length_offset = length_condition.member_offset;
+    plan->cursor_offset = cursor_condition.member_offset;
+    plan->line_offset = line.member_offset;
+    return 1;
+}
+
 static int mir_match_symbol_find_schedule(
     struct MirSymbolFindSchedule *plan)
 {
@@ -45282,6 +45570,78 @@ static void mir_emit_comment_scan_schedule(
             done);
 }
 
+static void mir_emit_whitespace_scan_schedule(
+    FILE *out, const struct MirWhitespaceScanSchedule *plan)
+{
+    int body = new_label();
+    int done = new_label();
+    int line_ready = new_label();
+    int loop = new_label();
+    int byte;
+
+    fputs("\tpush ix\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_address_de(
+        out, plan->state_root, plan->state_root_offset);
+    fputs("\tpush de\n\tpop ix\n", out);
+    fprintf(out,
+            "L%d:\n"
+            "\tld a,(ix%+d)\n\txor 128\n\tld h,a\n"
+            "\tld a,(ix%+d)\n\txor 128\n\tcp h\n"
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,(ix%+d)\n\tcp (ix%+d)\n"
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,(ix%+d)\n\tcp (ix%+d)\n"
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,(ix%+d)\n\tcp (ix%+d)\n"
+            "\tjp nc,L%d\n"
+            "L%d:\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tadd hl,de\n\tld l,(hl)\n\tld h,0\n\tpush hl\n",
+            loop,
+            plan->length_offset + 3,
+            plan->cursor_offset + 3,
+            body, done,
+            plan->cursor_offset + 2,
+            plan->length_offset + 2,
+            body, done,
+            plan->cursor_offset + 1,
+            plan->length_offset + 1,
+            body, done,
+            plan->cursor_offset,
+            plan->length_offset, done,
+            body,
+            plan->source_offset, plan->source_offset + 1,
+            plan->cursor_offset, plan->cursor_offset + 1);
+    mir_machine_emit_symbol_call(out, plan->space_function);
+    fprintf(out,
+            "\tpop bc\n\tld a,h\n\tor l\n\tjp z,L%d\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tadd hl,de\n\tld a,(hl)\n\tcp %d\n"
+            "\tjp nz,L%d\n"
+            "\tinc (ix%+d)\n\tjp nz,L%d\n"
+            "\tinc (ix%+d)\n"
+            "L%d:\n",
+            done,
+            plan->source_offset, plan->source_offset + 1,
+            plan->cursor_offset, plan->cursor_offset + 1,
+            '\n', line_ready,
+            plan->line_offset, line_ready,
+            plan->line_offset + 1, line_ready);
+    for (byte = 0; byte < 3; ++byte)
+        fprintf(out,
+                "\tinc (ix%+d)\n\tjp nz,L%d\n",
+                plan->cursor_offset + byte,
+                loop);
+    fprintf(out,
+            "\tinc (ix%+d)\n\tjp L%d\n"
+            "L%d:\n\tpop ix\n\tret\n",
+            plan->cursor_offset + 3, loop, done);
+}
+
 static void mir_emit_symbol_find_schedule(
     FILE *out, const struct MirSymbolFindSchedule *plan)
 {
@@ -45645,6 +46005,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirCtypeReallocSchedule ctype_realloc_schedule;
     struct MirContextOpSchedule context_op_schedule;
     struct MirCommentScanSchedule comment_scan_schedule;
+    struct MirWhitespaceScanSchedule whitespace_scan_schedule;
     struct MirSymbolFindSchedule symbol_find_schedule;
     struct MirLocalIdentityArrayResult local_identity_array_result;
     struct MirConstantResultSwitch constant_result_switch;
@@ -45808,6 +46169,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_comment_scan_schedule(&comment_scan_schedule)) {
         mir_emit_comment_scan_schedule(out, &comment_scan_schedule);
+        return 1;
+    }
+    if (mir_match_whitespace_scan_schedule(
+            &whitespace_scan_schedule)) {
+        mir_emit_whitespace_scan_schedule(
+            out, &whitespace_scan_schedule);
         return 1;
     }
     if (mir_match_symbol_find_schedule(&symbol_find_schedule)) {
