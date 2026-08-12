@@ -12165,6 +12165,79 @@ static int mir_match_local_deref_constant_loop(int *result)
     return 1;
 }
 
+static int mir_match_local_index_constant_loop(int *result)
+{
+    static const int address_indices[5] = { 3, 8, 17, 25, 33 };
+    static const int index_indices[5] = { 5, 10, 19, 27, 35 };
+    long value;
+    long total;
+    long initial_add;
+    long bound;
+    long increment;
+    int access;
+
+    if (mir.count != 44 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || type_size(mir.return_type) != 2 ||
+        !mir_machine_constant_value(mir.insns[1].dst, &total, 0) ||
+        !mir_machine_constant_value(mir.insns[6].dst, &value, 0) ||
+        !mir_machine_constant_value(
+            mir.insns[12].dst, &initial_add, 0) ||
+        !mir_machine_constant_value(mir.insns[21].dst, &bound, 0) ||
+        !mir_machine_constant_value(
+            mir.insns[37].dst, &increment, 0))
+        return 0;
+    for (access = 0; access < 5; ++access) {
+        int address = address_indices[access];
+        int index = index_indices[access];
+        if (mir.insns[address].opcode != MIR_ADDRESS ||
+            strcmp(mir.insns[address].name, mir.insns[3].name) ||
+            mir.insns[index].opcode != MIR_INDEX_ADDRESS ||
+            mir.insns[index].src1 != mir.insns[address].dst ||
+            !mir_machine_constant_equals(
+                mir.insns[index - 1].dst, 1) ||
+            mir.insns[index].src2 != mir.insns[index - 1].dst ||
+            mir.insns[index].immediate != 2)
+            return 0;
+    }
+    if (mir.insns[7].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[7].src1 != mir.insns[5].dst ||
+        mir.insns[7].src2 != mir.insns[6].dst ||
+        mir.insns[11].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[13].immediate != '+' ||
+        mir.insns[14].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[14].src1 != mir.insns[10].dst ||
+        mir.insns[14].src2 != mir.insns[13].dst ||
+        mir.insns[16].opcode != MIR_PHI ||
+        mir.insns[16].src1 != mir.insns[1].dst ||
+        mir.insns[16].src2 != mir.insns[29].dst ||
+        mir.insns[20].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[22].immediate != '<' ||
+        mir.insns[22].src1 != mir.insns[20].dst ||
+        mir.insns[22].src2 != mir.insns[21].dst ||
+        mir.insns[23].src1 != mir.insns[22].dst ||
+        mir.insns[28].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[29].immediate != '+' ||
+        mir.insns[29].src1 != mir.insns[16].dst ||
+        mir.insns[29].src2 != mir.insns[28].dst ||
+        mir.insns[36].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[38].immediate != '+' ||
+        mir.insns[39].opcode != MIR_STORE_INDIRECT ||
+        mir.insns[39].src1 != mir.insns[35].dst ||
+        mir.insns[39].src2 != mir.insns[38].dst ||
+        mir.insns[40].label != mir.insns[15].label ||
+        mir.insns[43].src1 != mir.insns[16].dst)
+        return 0;
+    value += initial_add;
+    if (increment <= 0 || value >= bound || bound - value > 32767)
+        return 0;
+    while (value < bound) {
+        total = (total + value) & 0xffffL;
+        value += increment;
+    }
+    *result = (int)(total & 0xffffL);
+    return 1;
+}
+
 static int mir_match_fixed_global_string_copies(
     struct MirFixedGlobalStringCopies *plan)
 {
@@ -27141,6 +27214,8 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
         return 1;
     }
     if (mir_match_local_deref_constant_loop(
+            &constant_function_result) ||
+        mir_match_local_index_constant_loop(
             &constant_function_result)) {
         mir_emit_constant_function(out, constant_function_result);
         return 1;
