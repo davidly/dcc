@@ -6,8 +6,8 @@ current execution plan and handoff.
 ## 2026-08-12 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Published HEAD before this batch: `81c59e6`
-  (`schedule record wildcard matches`).
+- Published HEAD before this batch: `d1e29ab`
+  (`schedule string result switches`).
 - Current candidate coverage: **2070/2185 (94.74%)**.
 - Remaining fallback population: **115 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
@@ -642,6 +642,11 @@ current execution plan and handoff.
 - Dense integer switches returning string pointers now use a bounds check and
   address table, including a null default. This admits `tchess.bk_text_at`,
   removes 35 MIR blocks and saves another nopeep image sector.
+- Final MIR streams now remove adjacent `exx/exx` pairs before emission while
+  preserving their pre-cleanup metrics for profitability decisions. This
+  improves 38 already-active apps in both modes without widening coverage;
+  `tasinfsp.main` remains correctly rejected after forced A/B showed it still
+  loses 0.79% peep / 0.78% nopeep and linked size.
 - A direct `too.expected_area` dispatcher was rejected after repeated-call
   tests exposed incorrect signed divmod cache/register handling; it is absent.
 - A binary-search replacement for `too.isqrt_l` was rejected after focused

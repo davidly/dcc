@@ -248,6 +248,38 @@ static FILE *mir_compact_regional_candidate(FILE *input)
     return output;
 }
 
+static FILE *mir_compact_adjacent_exx(
+    FILE *input, int *elided_instructions)
+{
+    char previous[512];
+    char current[512];
+    int have_previous = 0;
+    FILE *output = tmpfile();
+
+    if (output == NULL)
+        fatal("cannot create compacted MIR stream");
+    *elided_instructions = 0;
+    rewind(input);
+    while (fgets(current, sizeof(current), input) != NULL) {
+        if (!have_previous) {
+            strcpy(previous, current);
+            have_previous = 1;
+            continue;
+        }
+        if (mir_regional_line_is(previous, "\texx\n") &&
+            mir_regional_line_is(current, "\texx\n")) {
+            *elided_instructions += 2;
+            have_previous = 0;
+            continue;
+        }
+        fputs(previous, output);
+        strcpy(previous, current);
+    }
+    if (have_previous)
+        fputs(previous, output);
+    return output;
+}
+
 static int mir_call_count(void);
 static int mir_has_inline_substitution_call(void);
 static int mir_has_declared_pointer_array(void);
@@ -5139,6 +5171,7 @@ void mir_end_function(void)
         long captured_size = -1;
         int generated_instructions = -1;
         int captured_instructions = -1;
+        int adjacent_exx_elided_instructions = 0;
         int candidate_matrix_label_base = label_id;
 
         emit_sink_restore(&mir.saved_sink);
@@ -5406,10 +5439,26 @@ retry_selection:
             }
             if (emitted) {
 evaluate_generated:
+                {
+                    FILE *compacted =
+                        mir_compact_adjacent_exx(
+                            generated,
+                            &adjacent_exx_elided_instructions);
+                    fclose(generated);
+                    generated = compacted;
+                }
                 generated_size = mir_stream_size(generated);
                 captured_size = mir_stream_size(mir.capture_stream);
                 generated_instructions =
                     mir_stream_instruction_count(generated);
+                if (!strcmp(selector_name,
+                            "spilled-scalar-cfg") &&
+                    adjacent_exx_elided_instructions > 0) {
+                    generated_size +=
+                        adjacent_exx_elided_instructions * 5L;
+                    generated_instructions +=
+                        adjacent_exx_elided_instructions;
+                }
                 captured_instructions =
                     mir_stream_instruction_count(mir.capture_stream);
                 if (!strcmp(selector_name, "spilled-scalar-cfg") &&
