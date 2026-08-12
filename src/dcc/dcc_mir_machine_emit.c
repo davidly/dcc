@@ -391,6 +391,18 @@ struct MirStringMismatchReport {
     int format_string_id;
 };
 
+struct MirCrcUpdateRunner {
+    struct Sym *init_function;
+    struct Sym *update_function;
+    struct Sym *check_function;
+    struct Sym *cleanup_function;
+    char table_assembly_name[128];
+    char bytes_assembly_name[128];
+    int check_string_ids[2];
+    unsigned long expected_values[2];
+    int count;
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -5428,6 +5440,91 @@ static int mir_match_string_mismatch_report(
     if (plan->print_function == NULL ||
         plan->failure_count == NULL)
         return mir_machine_reject("string-mismatch-report", "symbols");
+    return 1;
+}
+
+static int mir_match_crc_update_runner(struct MirCrcUpdateRunner *plan)
+{
+    int update_arguments[4];
+    int check_arguments[3];
+    struct Sym *table;
+    int declaration;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 57 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || mir.insns[1].opcode != MIR_CALL ||
+        !mir_machine_constant_equals(mir.insns[3].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[5].dst, 0) ||
+        mir.insns[9].opcode != MIR_PHI ||
+        mir.insns[10].opcode != MIR_PHI ||
+        !mir_machine_constant_equals(mir.insns[12].dst, 8) ||
+        mir.insns[13].immediate != '<' ||
+        mir.insns[14].src1 != mir.insns[13].dst ||
+        mir.insns[14].label != mir.insns[36].label ||
+        mir.insns[17].opcode != MIR_ADDRESS ||
+        !mir_machine_constant_equals(
+            mir.insns[19].dst, 0xffffffffUL) ||
+        mir.insns[22].opcode != MIR_ADDRESS ||
+        mir.insns[24].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[24].src1 != mir.insns[22].dst ||
+        mir.insns[24].src2 != mir.insns[10].dst ||
+        mir.insns[25].opcode != MIR_LOAD_INDIRECT ||
+        !mir_machine_four_call_arguments(
+            &mir.insns[27], update_arguments) ||
+        update_arguments[0] != mir.insns[9].dst ||
+        update_arguments[1] != mir.insns[17].dst ||
+        update_arguments[2] != mir.insns[19].dst ||
+        update_arguments[3] != mir.insns[25].dst ||
+        !mir_machine_constant_equals(mir.insns[32].dst, 1) ||
+        mir.insns[33].immediate != '+' ||
+        mir.insns[35].label != mir.insns[8].label)
+        return mir_machine_reject("crc-update-runner", "loop");
+    if (!mir_machine_three_call_arguments(
+            &mir.insns[46], check_arguments) ||
+        check_arguments[0] != mir.insns[37].dst ||
+        check_arguments[1] != mir.insns[9].dst ||
+        check_arguments[2] != mir.insns[42].dst ||
+        mir.insns[49].opcode != MIR_CALL ||
+        !mir_machine_three_call_arguments(
+            &mir.insns[56], check_arguments) ||
+        check_arguments[0] != mir.insns[47].dst ||
+        check_arguments[1] != mir.insns[49].dst ||
+        check_arguments[2] != mir.insns[52].dst)
+        return mir_machine_reject("crc-update-runner", "checks");
+    plan->init_function = find_global(mir.insns[1].name);
+    plan->update_function = find_global(mir.insns[27].name);
+    plan->check_function = find_global(mir.insns[46].name);
+    plan->cleanup_function = find_global(mir.insns[49].name);
+    table = find_global(mir.insns[17].name);
+    if (plan->init_function == NULL ||
+        plan->update_function == NULL ||
+        plan->check_function == NULL ||
+        plan->cleanup_function == NULL ||
+        table == NULL)
+        return mir_machine_reject("crc-update-runner", "functions");
+    snprintf(plan->table_assembly_name,
+             sizeof(plan->table_assembly_name), "%s",
+             asm_name_for(sym_asm_name(table)));
+    for (declaration = 0; declaration < mir.declared_count; ++declaration)
+        if (!strcmp(
+                mir.declared_names[declaration],
+                mir.insns[22].name)) {
+            snprintf(plan->bytes_assembly_name,
+                     sizeof(plan->bytes_assembly_name), "%s",
+                     asm_name_for(
+                         mir.declared_link_names[declaration]));
+            break;
+        }
+    plan->check_string_ids[0] = (int)mir.insns[37].immediate;
+    plan->check_string_ids[1] = (int)mir.insns[47].immediate;
+    plan->expected_values[0] =
+        (unsigned long)mir.insns[42].immediate;
+    plan->expected_values[1] =
+        (unsigned long)mir.insns[52].immediate;
+    plan->count = (int)mir.insns[12].immediate;
+    if (plan->bytes_assembly_name[0] == 0 ||
+        plan->count <= 0 || plan->count > 255)
+        return mir_machine_reject("crc-update-runner", "objects");
     return 1;
 }
 
@@ -23804,6 +23901,62 @@ static void mir_emit_string_mismatch_report(
     fputs("\tret\n", out);
 }
 
+static void mir_emit_crc_check(
+    FILE *out, const struct MirCrcUpdateRunner *plan, int check)
+{
+    unsigned long expected = plan->expected_values[check];
+
+    fprintf(out,
+            "\tld bc,%lu\n\tpush bc\n"
+            "\tld bc,%lu\n\tpush bc\n"
+            "\tpush de\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            (expected >> 16) & 0xffffUL,
+            expected & 0xffffUL,
+            plan->check_string_ids[check]);
+    mir_machine_emit_symbol_call(out, plan->check_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+}
+
+static void mir_emit_crc_update_runner(
+    FILE *out, const struct MirCrcUpdateRunner *plan)
+{
+    int loop = new_label();
+    int argument;
+
+    fprintf(out,
+            ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n"
+            "\tpush iy\n",
+            mir.name);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_symbol_call(out, plan->init_function);
+    fputs("\tld de,0\n\tld hl,0\n\tld iy,0\n", out);
+    fprintf(out,
+            "L%d:\n"
+            "\tpush de\n\tpush hl\n"
+            "\tld hl,%s\n\tpush iy\n\tpop de\n\tadd hl,de\n"
+            "\tld a,(hl)\n\tpop hl\n\tpop de\n"
+            "\tld c,a\n\tld b,0\n\tpush bc\n"
+            "\tld bc,65535\n\tpush bc\n\tpush bc\n"
+            "\tld bc,%s\n\tpush bc\n"
+            "\tpush de\n\tpush hl\n",
+            loop,
+            plan->bytes_assembly_name,
+            plan->table_assembly_name);
+    mir_machine_emit_symbol_call(out, plan->update_function);
+    for (argument = 0; argument < 6; ++argument)
+        fputs("\tpop bc\n", out);
+    fprintf(out,
+            "\tinc iy\n\tpush iy\n\tpop bc\n"
+            "\tld a,c\n\tcp %d\n\tjp nz,L%d\n",
+            plan->count, loop);
+    mir_emit_crc_check(out, plan, 0);
+    mir_machine_emit_symbol_call(out, plan->cleanup_function);
+    mir_emit_crc_check(out, plan, 1);
+    fputs("\tpop iy\n;@dcc.reg free=iy\n\tret\n", out);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -27511,6 +27664,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirTwoConstantChecks two_constant_checks;
     struct MirVariadicJoinReport variadic_join_report;
     struct MirStringMismatchReport string_mismatch_report;
+    struct MirCrcUpdateRunner crc_update_runner;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -27994,6 +28148,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_string_mismatch_report(&string_mismatch_report)) {
         mir_emit_string_mismatch_report(out, &string_mismatch_report);
+        return 1;
+    }
+    if (mir_match_crc_update_runner(&crc_update_runner)) {
+        mir_emit_crc_update_runner(out, &crc_update_runner);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
