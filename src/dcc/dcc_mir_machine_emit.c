@@ -385,6 +385,12 @@ struct MirVariadicJoinReport {
     int separator;
 };
 
+struct MirStringMismatchReport {
+    struct Sym *print_function;
+    struct Sym *failure_count;
+    int format_string_id;
+};
+
 struct MirByteBitwiseReport {
     int left_stack_offset;
     int right_stack_offset;
@@ -5365,6 +5371,63 @@ static int mir_match_variadic_join_report(
         plan->print_function == NULL ||
         plan->buffer_size < 16 || plan->buffer_size > 120)
         return mir_machine_reject("variadic-join-report", "symbols");
+    return 1;
+}
+
+static int mir_match_string_mismatch_report(
+    struct MirStringMismatchReport *plan)
+{
+    int arguments[2];
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 70 || mir_cfg_block_count() != 12 ||
+        mir.has_vla || mir.insns[1].opcode != MIR_PARAM ||
+        mir.insns[2].opcode != MIR_PARAM ||
+        mir.insns[3].opcode != MIR_PARAM ||
+        type_size(mir.insns[1].type) != 2 ||
+        type_size(mir.insns[2].type) != 2 ||
+        type_size(mir.insns[3].type) != 2 ||
+        !mir_machine_constant_equals(mir.insns[4].dst, 0) ||
+        mir.insns[11].opcode != MIR_PHI ||
+        mir.insns[14].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[14].src1 != mir.insns[12].dst ||
+        mir.insns[14].src2 != mir.insns[11].dst ||
+        mir.insns[15].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[16].src1 != mir.insns[15].dst ||
+        mir.insns[23].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[23].src1 != mir.insns[21].dst ||
+        mir.insns[23].src2 != mir.insns[11].dst ||
+        mir.insns[24].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[25].src1 != mir.insns[24].dst ||
+        mir.insns[37].src1 != mir.insns[36].dst ||
+        mir.insns[40].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[40].src1 != mir.insns[38].dst ||
+        mir.insns[40].src2 != mir.insns[11].dst ||
+        mir.insns[41].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[44].opcode != MIR_INDEX_ADDRESS ||
+        mir.insns[44].src1 != mir.insns[42].dst ||
+        mir.insns[44].src2 != mir.insns[11].dst ||
+        mir.insns[45].opcode != MIR_LOAD_INDIRECT ||
+        mir.insns[48].immediate != TOK_NE ||
+        mir.insns[49].src1 != mir.insns[48].dst ||
+        !mir_machine_constant_equals(mir.insns[56].dst, 1) ||
+        mir.insns[57].immediate != '+' ||
+        mir.insns[59].opcode != MIR_RETURN ||
+        !mir_machine_constant_equals(mir.insns[65].dst, 1) ||
+        mir.insns[66].immediate != '+' ||
+        mir.insns[68].label != mir.insns[7].label)
+        return mir_machine_reject("string-mismatch-report", "shape");
+    if (!mir_machine_two_call_arguments(&mir.insns[54], arguments) ||
+        arguments[0] != mir.insns[50].dst ||
+        arguments[1] != mir.insns[52].dst)
+        return mir_machine_reject(
+            "string-mismatch-report", "report-arguments");
+    plan->print_function = find_global(mir.insns[54].name);
+    plan->failure_count = find_global(mir.insns[55].name);
+    plan->format_string_id = (int)mir.insns[50].immediate;
+    if (plan->print_function == NULL ||
+        plan->failure_count == NULL)
+        return mir_machine_reject("string-mismatch-report", "symbols");
     return 1;
 }
 
@@ -23707,6 +23770,40 @@ static void mir_emit_variadic_join_report(
           "\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static void mir_emit_string_mismatch_report(
+    FILE *out, const struct MirStringMismatchReport *plan)
+{
+    int loop = new_label();
+    int mismatch = new_label();
+    int done = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tld hl,2\n\tadd hl,sp\n"
+          "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n\tinc hl\n"
+          "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tld h,b\n\tld l,c\n", out);
+    fprintf(out,
+            "L%d:\n\tld a,(de)\n\tld c,a\n\tld b,(hl)\n"
+            "\tor b\n\tjp z,L%d\n"
+            "\tld a,c\n\tcp b\n\tjp nz,L%d\n"
+            "\tinc hl\n\tinc de\n\tjp L%d\n"
+            "L%d:\n\tret\n"
+            "L%d:\n",
+            loop, done, mismatch, loop, done, mismatch);
+    fputs("\tld hl,6\n\tadd hl,sp\n"
+          "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+          "\tld h,b\n\tld l,c\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->format_string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_global_word(out, plan->failure_count, 0);
+    fputs("\tinc hl\n", out);
+    mir_machine_emit_global_word_store(out, plan->failure_count, 0);
+    fputs("\tret\n", out);
+}
+
 static void mir_emit_pointer_word_sum_until_zero(
     FILE *out, const struct MirPointerWordSumUntilZero *plan)
 {
@@ -27413,6 +27510,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFixedByteScanChecks fixed_byte_scan_checks;
     struct MirTwoConstantChecks two_constant_checks;
     struct MirVariadicJoinReport variadic_join_report;
+    struct MirStringMismatchReport string_mismatch_report;
     struct MirPointerWordSumUntilZero pointer_word_sum_until_zero;
     struct MirByteBitwiseReport byte_bitwise_report;
     struct MirVariadicSum variadic_sum;
@@ -27892,6 +27990,10 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     if (mir_match_variadic_join_report(&variadic_join_report)) {
         mir_emit_variadic_join_report(out, &variadic_join_report);
+        return 1;
+    }
+    if (mir_match_string_mismatch_report(&string_mismatch_report)) {
+        mir_emit_string_mismatch_report(out, &string_mismatch_report);
         return 1;
     }
     if (mir_match_pointer_word_sum_until_zero(
