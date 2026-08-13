@@ -45814,6 +45814,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
         return 1;
     }
     {
+        int endgame_result = mir_try_emit_endgame_runners(out);
+
+        if (endgame_result >= 0)
+            return endgame_result;
+    }
+    {
         int call_runner_result =
             mir_try_emit_call_runners(out, 0);
 

@@ -3,7 +3,46 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
-## 2026-08-13 current checkpoint (read this first)
+## 2026-08-13 endgame 13-block batch (working tree)
+
+- Branch/base: `pr/143` at `b583f51`. The remaining 13-block mains in the
+  file-position, formatted-output and float-comparison tests now use one
+  shared endgame runner family with three strict structural variants over
+  **236**, **537** and **647** MIR instructions. The matchers validate full
+  opcode streams plus types, constants, object/call identities, argument
+  relationships and CFG structure; they contain no production identifiers or
+  output hashes.
+- The emitters preserve all formatted-I/O calls and their selected ABI names,
+  long/float arguments, hexadecimal/octal format hooks, both 300-byte
+  formatted-output buffers, the 16-byte file buffer, stream and cleanup side
+  effects, all checks, summaries and failure returns. The float variant uses
+  ABI-preserving tail-call islands for the comparison helpers and loads the
+  external NaN object without an external-symbol-plus-offset relocation. No
+  variant uses IY.
+- Selected/captured metrics are **3,298/3,725 bytes, 299/335 instructions**
+  for the file variant; **7,162/9,859 bytes, 708/974 instructions** for the
+  format variant; and **13,259/16,587 bytes, 1,347/1,495 instructions** for
+  the float variant.
+- Stack-check full-mode selected/fallback totals are:
+  **81,844/83,357 cycles and 9,088/9,216 bytes** peep plus
+  **81,991/83,935 cycles and 9,088/9,216 bytes** nopeep for file positioning;
+  **1,186,686/1,522,305 cycles and 7,168/7,552 bytes** peep plus
+  **1,186,696/1,584,448 cycles and 7,168/7,680 bytes** nopeep for formatting;
+  and **96,885/103,086 cycles and 8,960/9,600 bytes** peep plus
+  **96,926/103,397 cycles and 8,960/9,728 bytes** nopeep for float comparison.
+  Normal selected and forced-fallback full runs both pass the existing
+  baselines with zero performance regressions.
+- The regression-gated census advances **2,067/2,105 (98.19%)** to
+  **2,070/2,105 (98.34%)**, adds exactly the three target mains, removes no
+  accepted function, moves scheduled-machine selection **381 -> 384**, and
+  reduces `final-cost-policy` fallbacks **38 -> 35**.
+- Exact source growth is **1,467 lines**: 1,270 in the new runner module, 187
+  in its opcode include and 10 integration lines. The module object defines
+  only `mir_try_emit_endgame_runners [T]` globally and has zero global
+  read-only or writable data. The canonical build and `git diff --check`
+  pass. No baseline was changed.
+
+## 2026-08-13 prior checkpoint
 
 - Branch: `pr/143`; clean base HEAD for this batch: `a31e42d`.
 - Current working-tree candidate coverage: **2156/2185 (98.67%)**.
