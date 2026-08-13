@@ -30,6 +30,11 @@
 #define MIR_ENDGAME_SIZE_CHECKS 125
 #define MIR_ENDGAME_SIZE_PRODUCERS 13
 #define MIR_ENDGAME_SIZE_INSNS 1040
+#define MIR_ENDGAME_ARRAY_INSNS 497
+#define MIR_ENDGAME_ARRAY_ROLES 6
+#define MIR_ENDGAME_ARRAY_FUNCTIONS 14
+#define MIR_ENDGAME_ARRAY_CHECKS 18
+#define MIR_ENDGAME_ARRAY_FRAME_BYTES 448
 
 enum MirEndgameFloatOperandKind {
     MIR_ENDGAME_FLOAT_BITS,
@@ -8594,8 +8599,857 @@ static void mir_emit_endgame_size_runner(
     fputs("\tpop bc\n\tpop bc\n\tld hl,1\n\tret\n", out);
 }
 
+enum MirEndgameArrayFunction {
+    MIR_ENDGAME_ARRAY_FILL_WORD,
+    MIR_ENDGAME_ARRAY_FILL_BYTE,
+    MIR_ENDGAME_ARRAY_FILL_WIDE,
+    MIR_ENDGAME_ARRAY_CHECK_WORD,
+    MIR_ENDGAME_ARRAY_CHECK_WIDE,
+    MIR_ENDGAME_ARRAY_SUM_WORD,
+    MIR_ENDGAME_ARRAY_SUM_BYTE,
+    MIR_ENDGAME_ARRAY_SUM_WIDE,
+    MIR_ENDGAME_ARRAY_MUTATE_WORD,
+    MIR_ENDGAME_ARRAY_MUTATE_BYTE,
+    MIR_ENDGAME_ARRAY_MUTATE_WIDE,
+    MIR_ENDGAME_ARRAY_ROW_WORD,
+    MIR_ENDGAME_ARRAY_ROW_BYTE,
+    MIR_ENDGAME_ARRAY_ROW_WIDE
+};
+
+struct MirEndgameArrayCheck {
+    int string_instruction;
+    int address_instruction;
+    int first_index_instruction;
+    int load_instruction;
+    int unary_instruction;
+    int call_instruction;
+    int role;
+    int element;
+    unsigned long expected;
+};
+
+struct MirEndgameArrayRunner {
+    struct Sym *functions[MIR_ENDGAME_ARRAY_FUNCTIONS];
+    struct Sym *globals[3];
+    struct Sym *failure_symbol;
+    struct Sym *print_function;
+    int strings[27];
+    char print_names[3][64];
+};
+
+static const char mir_endgame_array_opcode_stream[] =
+    "LSRCARKRCARKRCARKRCARKRCARKRCARKRCSRAKIKIKIKIKIKINRKRCSRAKIKIKIKIKIKINRKRCSRAKIK"
+    "IKIKIKIKINRKRCSRAKIKIKIKIKIKINRKRCSRAKIKIKIKIKIKINURKRCSRAKIKIKIKIKIKINURKRCSRAK"
+    "IKIKIKIKIKINURKRCSRAKIKIKIKIKIKINURKRCSRAKIKIKIKIKIKINRKRCSRAKIKIKIKIKIKINRKRCSR"
+    "AKIKIKIKIKIKINRKRCSRAKIKIKIKIKIKINRKRCSRARCRKRCSRARCRKRCSRARCRKRCSRARCRKRCSRARCR"
+    "KRCSRARCRKRCARCSRAKIKIKIKIKIKINRKRCSRAKIKIKIKIKIKINRKRCARCSRAKIKIKIKIKIKINURKRCS"
+    "RAKIKIKIKIKIKINURKRCARCSRAKIKIKIKIKIKINRKRCSRAKIKIKIKIKIKINRKRCARCARCARCARCARCAR"
+    "CDBSRDRCKTOLSRCKT";
+
+static const struct MirEndgameArrayCheck mir_endgame_array_checks[] = {
+    {34, 36, 38, 49, -1, 53, 0, 0, 100UL},
+    {54, 56, 58, 69, -1, 73, 0, 63, 163UL},
+    {74, 76, 78, 89, -1, 93, 1, 0, 200UL},
+    {94, 96, 98, 109, -1, 113, 1, 63, 263UL},
+    {114, 116, 118, 129, 130, 134, 2, 0, 10UL},
+    {135, 137, 139, 150, 151, 155, 2, 63, 73UL},
+    {156, 158, 160, 171, 172, 176, 3, 0, 20UL},
+    {177, 179, 181, 192, 193, 197, 3, 63, 83UL},
+    {198, 200, 202, 213, -1, 217, 4, 0, 100000UL},
+    {218, 220, 222, 233, -1, 237, 4, 63, 100063UL},
+    {238, 240, 242, 253, -1, 257, 5, 0, 200000UL},
+    {258, 260, 262, 273, -1, 277, 5, 63, 200063UL},
+    {335, 337, 339, 350, -1, 354, 0, 42, 1142UL},
+    {355, 357, 359, 370, -1, 374, 0, 21, 2121UL},
+    {378, 380, 382, 393, 394, 398, 2, 51, 99UL},
+    {399, 401, 403, 414, 415, 419, 2, 12, 77UL},
+    {423, 425, 427, 438, -1, 442, 4, 57, 200057UL},
+    {443, 445, 447, 458, -1, 462, 4, 6, 300006UL}
+};
+
+static int mir_endgame_array_opcode(char encoded)
+{
+    switch (encoded) {
+    case 'A': return MIR_ADDRESS;
+    case 'B': return MIR_BRANCH_FALSE;
+    case 'C': return MIR_CALL;
+    case 'D': return MIR_LOAD;
+    case 'I': return MIR_INDEX_ADDRESS;
+    case 'K': return MIR_CONST;
+    case 'L': return MIR_LABEL;
+    case 'N': return MIR_LOAD_INDIRECT;
+    case 'O': return MIR_NOP;
+    case 'R': return MIR_ARG;
+    case 'S': return MIR_STRING_ADDRESS;
+    case 'T': return MIR_RETURN;
+    case 'U': return MIR_UNARY;
+    }
+    return -1;
+}
+
+static int mir_endgame_array_opcode_sequence(void)
+{
+    int instruction;
+
+    if (mir.count != MIR_ENDGAME_ARRAY_INSNS ||
+        sizeof(mir_endgame_array_opcode_stream) - 1 !=
+            MIR_ENDGAME_ARRAY_INSNS)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            mir_endgame_array_opcode(
+                mir_endgame_array_opcode_stream[instruction]))
+            return 0;
+    return 1;
+}
+
+static int mir_endgame_array_role_width(int role)
+{
+    if (role < 0 || role >= MIR_ENDGAME_ARRAY_ROLES)
+        return 0;
+    if (role < 2)
+        return 2;
+    if (role < 4)
+        return 1;
+    return 4;
+}
+
+static int mir_endgame_array_role_type(int role)
+{
+    if (role < 2)
+        return TYPE_INT;
+    if (role < 4)
+        return TYPE_CHAR;
+    return TYPE_LONG;
+}
+
+static int mir_endgame_array_address(
+    struct MirEndgameArrayRunner *plan, int role, int instruction)
+{
+    const struct MirInsn *address = &mir.insns[instruction];
+    struct Sym *global;
+    int earlier;
+
+    if (address->opcode != MIR_ADDRESS ||
+        address->name[0] == 0 ||
+        type_ptr_depth(address->type) != 1 ||
+        (address->type & 15) != mir_endgame_array_role_type(role))
+        return 0;
+    if (strcmp(address->name, mir.insns[4 + role * 5].name))
+        return 0;
+    global = find_global(address->name);
+    if ((role & 1) == 0) {
+        if (global == NULL || !global->is_array ||
+            global->storage == SC_FUNC)
+            return 0;
+        plan->globals[role / 2] = global;
+    } else if (global != NULL) {
+        return 0;
+    }
+    for (earlier = 0; earlier < role; ++earlier)
+        if (!strcmp(address->name,
+                    mir.insns[4 + earlier * 5].name))
+            return 0;
+    return 1;
+}
+
+static int mir_endgame_array_function_signature(
+    struct Sym *function, int result_type, int argument_count,
+    int first_type, int second_type)
+{
+    if (function == NULL ||
+        type_ptr_depth(function->type) != 0 ||
+        (function->type & 15) != result_type)
+        return 0;
+    if (function->has_proto &&
+        (function->proto_variadic ||
+         function->proto_nargs != argument_count ||
+         (argument_count > 0 &&
+          function->proto_types[0] != first_type) ||
+         (argument_count > 1 &&
+          function->proto_types[1] != second_type)))
+        return 0;
+    return 1;
+}
+
+static struct Sym *mir_endgame_array_direct_function(
+    const struct MirInsn *call)
+{
+    struct Sym *function;
+    const char *assembly_name;
+
+    if (call->opcode != MIR_CALL || call->src1 >= 0 ||
+        (call->memory_flags & MIR_CALL_FLAG_VARIADIC) != 0 ||
+        (function = find_global(call->name)) == NULL ||
+        function->storage != SC_FUNC || function->is_funcptr ||
+        function->is_noreturn || call->type != function->type)
+        return NULL;
+    assembly_name = asm_name_for(sym_asm_name(function));
+    if (call->base_name[0] != 0 &&
+        strcmp(call->base_name, assembly_name))
+        return NULL;
+    return function;
+}
+
+static int mir_endgame_array_capture_function(
+    struct MirEndgameArrayRunner *plan, int role,
+    int instruction, int argument_count)
+{
+    struct Sym *function =
+        mir_endgame_array_direct_function(
+            &mir.insns[instruction]);
+    int arguments[MIR_ENDGAME_MAX_ARGS];
+
+    if (function == NULL ||
+        mir_endgame_call_arguments(
+            &mir.insns[instruction], arguments) != argument_count)
+        return 0;
+    if (plan->functions[role] == NULL)
+        plan->functions[role] = function;
+    return plan->functions[role] == function;
+}
+
+static int mir_endgame_array_constant(
+    int value, int target_type, unsigned long expected)
+{
+    unsigned long bits;
+    int width;
+
+    return mir_endgame_size_constant_as(
+               value, target_type, &bits, &width, 0) &&
+           width == type_size(target_type) &&
+           bits == (expected &
+               (width == 1 ? 0xffUL :
+                width == 2 ? 0xffffUL : 0xffffffffUL));
+}
+
+static int mir_endgame_array_initial_calls(
+    struct MirEndgameArrayRunner *plan)
+{
+    static const int call_instructions[] = {8, 13, 18, 23, 28, 33};
+    static const unsigned long bases[] = {
+        100UL, 200UL, 10UL, 20UL, 100000UL, 200000UL
+    };
+    static const int function_roles[] = {
+        MIR_ENDGAME_ARRAY_FILL_WORD, MIR_ENDGAME_ARRAY_FILL_WORD,
+        MIR_ENDGAME_ARRAY_FILL_BYTE, MIR_ENDGAME_ARRAY_FILL_BYTE,
+        MIR_ENDGAME_ARRAY_FILL_WIDE, MIR_ENDGAME_ARRAY_FILL_WIDE
+    };
+    int role;
+
+    for (role = 0; role < MIR_ENDGAME_ARRAY_ROLES; ++role) {
+        const struct MirInsn *call =
+            &mir.insns[call_instructions[role]];
+        int arguments[MIR_ENDGAME_MAX_ARGS];
+        int base_type = role < 4 ? TYPE_INT : TYPE_LONG;
+
+        if (!mir_endgame_array_address(
+                plan, role, 4 + role * 5) ||
+            !mir_endgame_array_capture_function(
+                plan, function_roles[role],
+                call_instructions[role], 2) ||
+            mir_endgame_call_arguments(call, arguments) != 2 ||
+            arguments[0] != mir.insns[4 + role * 5].dst ||
+            !mir_endgame_array_constant(
+                arguments[1], base_type, bases[role]) ||
+            !mir_endgame_array_function_signature(
+                plan->functions[function_roles[role]],
+                TYPE_VOID, 2,
+                mir.insns[4 + role * 5].type, base_type))
+            return 0;
+    }
+    return 1;
+}
+
+static int mir_endgame_array_indexed_value(
+    const struct MirEndgameArrayCheck *check, int *value_out)
+{
+    const struct MirInsn *address =
+        &mir.insns[check->address_instruction];
+    const struct MirInsn *load =
+        &mir.insns[check->load_instruction];
+    int pointer = address->dst;
+    int width = mir_endgame_array_role_width(check->role);
+    int level;
+
+    if (strcmp(address->name,
+               mir.insns[4 + check->role * 5].name) ||
+        address->type != mir.insns[4 + check->role * 5].type)
+        return 0;
+    for (level = 0; level < 6; ++level) {
+        const struct MirInsn *index =
+            &mir.insns[check->first_index_instruction + level * 2];
+        const struct MirInsn *constant =
+            &mir.insns[check->first_index_instruction + level * 2 - 1];
+        int bit = (check->element >> (5 - level)) & 1;
+
+        if (constant->opcode != MIR_CONST ||
+            !mir_endgame_array_constant(
+                constant->dst, TYPE_INT, (unsigned long)bit) ||
+            index->opcode != MIR_INDEX_ADDRESS ||
+            index->src1 != pointer ||
+            index->src2 != constant->dst ||
+            index->type != address->type ||
+            index->immediate !=
+                (long)(width << (5 - level)) ||
+            index->memory_size != (level == 0 ? width * 32 : width))
+            return 0;
+        pointer = index->dst;
+    }
+    if (load->opcode != MIR_LOAD_INDIRECT ||
+        load->src1 != pointer ||
+        load->memory_size != width ||
+        type_ptr_depth(load->type) != 0 ||
+        (load->type & 15) !=
+            mir_endgame_array_role_type(check->role))
+        return 0;
+    if (check->unary_instruction >= 0) {
+        const struct MirInsn *unary =
+            &mir.insns[check->unary_instruction];
+
+        if (width != 1 || unary->opcode != MIR_UNARY ||
+            unary->src1 != load->dst ||
+            unary->immediate != 0 ||
+            unary->type != TYPE_INT)
+            return 0;
+        *value_out = unary->dst;
+    } else {
+        if (width == 1)
+            return 0;
+        *value_out = load->dst;
+    }
+    return 1;
+}
+
+static int mir_endgame_array_direct_checks(
+    struct MirEndgameArrayRunner *plan, int *string_count)
+{
+    int item;
+
+    for (item = 0; item < MIR_ENDGAME_ARRAY_CHECKS; ++item) {
+        const struct MirEndgameArrayCheck *check =
+            &mir_endgame_array_checks[item];
+        const struct MirInsn *call =
+            &mir.insns[check->call_instruction];
+        int arguments[MIR_ENDGAME_MAX_ARGS];
+        int function_role = check->role < 4
+            ? MIR_ENDGAME_ARRAY_CHECK_WORD
+            : MIR_ENDGAME_ARRAY_CHECK_WIDE;
+        int expected_type = check->role < 4
+            ? TYPE_INT : TYPE_LONG;
+        int got;
+
+        if (!mir_endgame_array_capture_function(
+                plan, function_role,
+                check->call_instruction, 3) ||
+            mir_endgame_call_arguments(call, arguments) != 3 ||
+            !mir_endgame_size_string(
+                arguments[0], &plan->strings[*string_count]) ||
+            arguments[0] !=
+                mir.insns[check->string_instruction].dst ||
+            !mir_endgame_array_indexed_value(check, &got) ||
+            arguments[1] != got ||
+            !mir_endgame_array_constant(
+                arguments[2], expected_type, check->expected))
+            return 0;
+        ++*string_count;
+    }
+    if (!mir_endgame_array_function_signature(
+            plan->functions[MIR_ENDGAME_ARRAY_CHECK_WORD],
+            TYPE_VOID, 3, type_add_ptr(TYPE_CHAR), TYPE_INT) ||
+        (plan->functions[MIR_ENDGAME_ARRAY_CHECK_WORD]->has_proto &&
+         plan->functions[MIR_ENDGAME_ARRAY_CHECK_WORD]->
+             proto_types[2] != TYPE_INT) ||
+        !mir_endgame_array_function_signature(
+            plan->functions[MIR_ENDGAME_ARRAY_CHECK_WIDE],
+            TYPE_VOID, 3, type_add_ptr(TYPE_CHAR), TYPE_LONG) ||
+        (plan->functions[MIR_ENDGAME_ARRAY_CHECK_WIDE]->has_proto &&
+         plan->functions[MIR_ENDGAME_ARRAY_CHECK_WIDE]->
+             proto_types[2] != TYPE_LONG))
+        return 0;
+    return 1;
+}
+
+static int mir_endgame_array_sum_checks(
+    struct MirEndgameArrayRunner *plan, int *string_count)
+{
+    static const int string_instructions[] =
+        {278, 287, 296, 305, 314, 323};
+    static const int address_instructions[] =
+        {280, 289, 298, 307, 316, 325};
+    static const int sum_calls[] =
+        {282, 291, 300, 309, 318, 327};
+    static const int check_calls[] =
+        {286, 295, 304, 313, 322, 331};
+    static const unsigned long expected[] = {
+        8416UL, 14816UL, 2656UL, 3296UL,
+        6402016UL, 12802016UL
+    };
+    static const int sum_roles[] = {
+        MIR_ENDGAME_ARRAY_SUM_WORD, MIR_ENDGAME_ARRAY_SUM_WORD,
+        MIR_ENDGAME_ARRAY_SUM_BYTE, MIR_ENDGAME_ARRAY_SUM_BYTE,
+        MIR_ENDGAME_ARRAY_SUM_WIDE, MIR_ENDGAME_ARRAY_SUM_WIDE
+    };
+    int role;
+
+    for (role = 0; role < MIR_ENDGAME_ARRAY_ROLES; ++role) {
+        const struct MirInsn *sum = &mir.insns[sum_calls[role]];
+        const struct MirInsn *check = &mir.insns[check_calls[role]];
+        int sum_arguments[MIR_ENDGAME_MAX_ARGS];
+        int check_arguments[MIR_ENDGAME_MAX_ARGS];
+        int check_role = role < 4
+            ? MIR_ENDGAME_ARRAY_CHECK_WORD
+            : MIR_ENDGAME_ARRAY_CHECK_WIDE;
+        int result_type = role < 4 ? TYPE_INT : TYPE_LONG;
+
+        if (!mir_endgame_array_capture_function(
+                plan, sum_roles[role], sum_calls[role], 1) ||
+            mir_endgame_call_arguments(sum, sum_arguments) != 1 ||
+            sum_arguments[0] !=
+                mir.insns[address_instructions[role]].dst ||
+            strcmp(mir.insns[address_instructions[role]].name,
+                   mir.insns[4 + role * 5].name) ||
+            !mir_endgame_array_function_signature(
+                plan->functions[sum_roles[role]], result_type, 1,
+                mir.insns[4 + role * 5].type, 0) ||
+            mir_endgame_array_direct_function(check) !=
+                plan->functions[check_role] ||
+            mir_endgame_call_arguments(check, check_arguments) != 3 ||
+            !mir_endgame_size_string(
+                check_arguments[0],
+                &plan->strings[*string_count]) ||
+            check_arguments[0] !=
+                mir.insns[string_instructions[role]].dst ||
+            check_arguments[1] != sum->dst ||
+            !mir_endgame_array_constant(
+                check_arguments[2], result_type, expected[role]))
+            return 0;
+        ++*string_count;
+    }
+    return 1;
+}
+
+static int mir_endgame_array_pointer_calls(
+    struct MirEndgameArrayRunner *plan)
+{
+    static const int mutate_addresses[] = {332, 375, 420};
+    static const int mutate_calls[] = {334, 377, 422};
+    static const int mutate_roles[] = {
+        MIR_ENDGAME_ARRAY_MUTATE_WORD,
+        MIR_ENDGAME_ARRAY_MUTATE_BYTE,
+        MIR_ENDGAME_ARRAY_MUTATE_WIDE
+    };
+    static const int row_addresses[] =
+        {463, 466, 469, 472, 475, 478};
+    static const int row_calls[] =
+        {465, 468, 471, 474, 477, 480};
+    static const int row_roles[] = {
+        MIR_ENDGAME_ARRAY_ROW_WORD, MIR_ENDGAME_ARRAY_ROW_WORD,
+        MIR_ENDGAME_ARRAY_ROW_BYTE, MIR_ENDGAME_ARRAY_ROW_BYTE,
+        MIR_ENDGAME_ARRAY_ROW_WIDE, MIR_ENDGAME_ARRAY_ROW_WIDE
+    };
+    int item;
+
+    for (item = 0; item < 3; ++item) {
+        int array_role = item * 2;
+        int arguments[MIR_ENDGAME_MAX_ARGS];
+
+        if (!mir_endgame_array_capture_function(
+                plan, mutate_roles[item],
+                mutate_calls[item], 1) ||
+            mir_endgame_call_arguments(
+                &mir.insns[mutate_calls[item]], arguments) != 1 ||
+            arguments[0] != mir.insns[mutate_addresses[item]].dst ||
+            strcmp(mir.insns[mutate_addresses[item]].name,
+                   mir.insns[4 + array_role * 5].name) ||
+            !mir_endgame_array_function_signature(
+                plan->functions[mutate_roles[item]],
+                TYPE_VOID, 1,
+                mir.insns[4 + array_role * 5].type, 0))
+            return 0;
+    }
+    for (item = 0; item < MIR_ENDGAME_ARRAY_ROLES; ++item) {
+        int arguments[MIR_ENDGAME_MAX_ARGS];
+
+        if (!mir_endgame_array_capture_function(
+                plan, row_roles[item], row_calls[item], 1) ||
+            mir_endgame_call_arguments(
+                &mir.insns[row_calls[item]], arguments) != 1 ||
+            arguments[0] != mir.insns[row_addresses[item]].dst ||
+            strcmp(mir.insns[row_addresses[item]].name,
+                   mir.insns[4 + item * 5].name) ||
+            !mir_endgame_array_function_signature(
+                plan->functions[row_roles[item]],
+                TYPE_VOID, 1,
+                mir.insns[4 + item * 5].type, 0))
+            return 0;
+    }
+    return 1;
+}
+
+static int mir_endgame_array_final(
+    struct MirEndgameArrayRunner *plan, int *string_count)
+{
+    const struct MirInsn *first_print = &mir.insns[3];
+    const struct MirInsn *failure_print = &mir.insns[487];
+    const struct MirInsn *success_print = &mir.insns[494];
+    int first_arguments[MIR_ENDGAME_MAX_ARGS];
+    int failure_arguments[MIR_ENDGAME_MAX_ARGS];
+    int success_arguments[MIR_ENDGAME_MAX_ARGS];
+    int item;
+
+    plan->print_function =
+        mir_endgame_call_function(first_print, 1, 1);
+    if (plan->print_function == NULL ||
+        mir_endgame_call_function(failure_print, 1, 1) !=
+            plan->print_function ||
+        mir_endgame_call_function(success_print, 1, 1) !=
+            plan->print_function ||
+        !mir_endgame_word_type(plan->print_function->type) ||
+        !plan->print_function->has_proto ||
+        !plan->print_function->proto_variadic ||
+        plan->print_function->proto_nargs != 1 ||
+        !mir_endgame_char_pointer_type(
+            plan->print_function->proto_types[0]) ||
+        mir_endgame_call_arguments(
+            first_print, first_arguments) != 1 ||
+        mir_endgame_call_arguments(
+            failure_print, failure_arguments) != 2 ||
+        mir_endgame_call_arguments(
+            success_print, success_arguments) != 1 ||
+        !mir_endgame_size_string(
+            first_arguments[0], &plan->strings[*string_count]) ||
+        first_arguments[0] != mir.insns[1].dst)
+        return 0;
+    snprintf(plan->print_names[0],
+             sizeof(plan->print_names[0]), "%s",
+             mir_endgame_call_name(first_print));
+    ++*string_count;
+    if (!mir_machine_named_nonvolatile(&mir.insns[481]) ||
+        !mir_machine_same_location(
+            &mir.insns[481], &mir.insns[485]) ||
+        !mir_endgame_word_type(mir.insns[481].type) ||
+        (mir.insns[481].type & TYPE_UNSIGNED) != 0 ||
+        mir.insns[482].src1 != mir.insns[481].dst ||
+        mir.insns[482].label != mir.insns[491].label ||
+        failure_arguments[1] != mir.insns[485].dst ||
+        !mir_endgame_size_string(
+            failure_arguments[0],
+            &plan->strings[*string_count]) ||
+        failure_arguments[0] != mir.insns[483].dst)
+        return 0;
+    snprintf(plan->print_names[1],
+             sizeof(plan->print_names[1]), "%s",
+             mir_endgame_call_name(failure_print));
+    ++*string_count;
+    if (!mir_endgame_size_string(
+            success_arguments[0],
+            &plan->strings[*string_count]) ||
+        success_arguments[0] != mir.insns[492].dst ||
+        !mir_endgame_array_constant(
+            mir.insns[488].dst, TYPE_INT, 1) ||
+        mir.insns[489].src1 != mir.insns[488].dst ||
+        !mir_endgame_array_constant(
+            mir.insns[495].dst, TYPE_INT, 0) ||
+        mir.insns[496].src1 != mir.insns[495].dst)
+        return 0;
+    snprintf(plan->print_names[2],
+             sizeof(plan->print_names[2]), "%s",
+             mir_endgame_call_name(success_print));
+    ++*string_count;
+    if (*string_count !=
+        (int)(sizeof(plan->strings) / sizeof(plan->strings[0])))
+        return 0;
+    for (item = 0; item < *string_count; ++item) {
+        int other;
+
+        for (other = 0; other < item; ++other)
+            if (plan->strings[item] == plan->strings[other])
+                return 0;
+    }
+    plan->failure_symbol = find_global(mir.insns[481].name);
+    return plan->failure_symbol != NULL &&
+           plan->failure_symbol->storage != SC_FUNC &&
+           plan->failure_symbol->type == TYPE_INT;
+}
+
+static int mir_match_endgame_array_runner(
+    struct MirEndgameArrayRunner *plan)
+{
+    int function;
+    int earlier;
+    int strings = 0;
+
+    memset(plan, 0, sizeof(*plan));
+    if (!mir_endgame_array_opcode_sequence() ||
+        mir_cfg_block_count() != 2 ||
+        mir.local_bytes != MIR_ENDGAME_ARRAY_FRAME_BYTES ||
+        mir.aggregate_temp_bytes != 0 ||
+        mir.object_count != 0 ||
+        mir.has_vla || mir.is_variadic_function ||
+        mir.return_type != TYPE_INT)
+        return mir_machine_reject(
+            "endgame-array-runner", "shape");
+    if (!mir_endgame_array_initial_calls(plan))
+        return mir_machine_reject(
+            "endgame-array-runner", "initial-calls");
+    if (!mir_endgame_array_direct_checks(plan, &strings))
+        return mir_machine_reject(
+            "endgame-array-runner", "direct-checks");
+    if (!mir_endgame_array_sum_checks(plan, &strings))
+        return mir_machine_reject(
+            "endgame-array-runner", "sum-checks");
+    if (!mir_endgame_array_pointer_calls(plan))
+        return mir_machine_reject(
+            "endgame-array-runner", "pointer-calls");
+    if (!mir_endgame_array_final(plan, &strings))
+        return mir_machine_reject(
+            "endgame-array-runner", "final");
+    for (function = 0;
+         function < MIR_ENDGAME_ARRAY_FUNCTIONS;
+         ++function) {
+        if (plan->functions[function] == NULL ||
+            plan->functions[function] == plan->print_function)
+            return mir_machine_reject(
+                "endgame-array-runner", "function-roles");
+        for (earlier = 0; earlier < function; ++earlier)
+            if (plan->functions[function] ==
+                plan->functions[earlier])
+                return mir_machine_reject(
+                    "endgame-array-runner", "function-roles");
+    }
+    for (function = 0; function < 3; ++function) {
+        if (plan->globals[function] == plan->failure_symbol)
+            return mir_machine_reject(
+                "endgame-array-runner", "global-roles");
+        for (earlier = 0; earlier < function; ++earlier)
+            if (plan->globals[function] ==
+                plan->globals[earlier])
+                return mir_machine_reject(
+                    "endgame-array-runner", "global-roles");
+    }
+    return 1;
+}
+
+static int mir_endgame_array_local_offset(int role)
+{
+    switch (role) {
+    case 1: return 0;
+    case 3: return 128;
+    case 5: return 192;
+    }
+    return -1;
+}
+
+static void mir_endgame_emit_array_address(
+    FILE *out, const struct MirEndgameArrayRunner *plan,
+    int role, int offset, int stack_bytes)
+{
+    if ((role & 1) == 0) {
+        mir_machine_emit_global_address_de(
+            out, plan->globals[role / 2], offset);
+        fputs("\tex de,hl\n", out);
+    } else {
+        fprintf(out, "\tld hl,%d\n\tadd hl,sp\n",
+                mir_endgame_array_local_offset(role) +
+                offset + stack_bytes);
+    }
+}
+
+static void mir_endgame_emit_array_pointer_call(
+    FILE *out, const struct MirEndgameArrayRunner *plan,
+    int role, struct Sym *function, int stack_bytes)
+{
+    mir_endgame_emit_array_address(
+        out, plan, role, 0, stack_bytes);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, function);
+    fputs("\tpop bc\n", out);
+}
+
+static void mir_endgame_emit_array_fill(
+    FILE *out, const struct MirEndgameArrayRunner *plan,
+    int role, unsigned long base)
+{
+    int function = role < 2
+        ? MIR_ENDGAME_ARRAY_FILL_WORD
+        : role < 4
+        ? MIR_ENDGAME_ARRAY_FILL_BYTE
+        : MIR_ENDGAME_ARRAY_FILL_WIDE;
+    int width = role < 4 ? 2 : 4;
+
+    mir_emit_final_call_constant(out, base, width);
+    mir_endgame_emit_array_address(
+        out, plan, role, 0, width);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(
+        out, plan->functions[function]);
+    mir_emit_final_call_cleanup(out, 1 + width / 2);
+}
+
+static void mir_endgame_emit_array_load(
+    FILE *out, const struct MirEndgameArrayRunner *plan,
+    int role, int element)
+{
+    int width = mir_endgame_array_role_width(role);
+
+    mir_endgame_emit_array_address(
+        out, plan, role, element * width,
+        width == 4 ? 4 : 2);
+    if (width == 1) {
+        fputs("\tld l,(hl)\n\tld a,l\n\trlca\n"
+              "\tsbc a,a\n\tld h,a\n", out);
+    } else if (width == 2) {
+        fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+              "\tex de,hl\n", out);
+    } else {
+        fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+              "\tinc hl\n\tld a,(hl)\n\tinc hl\n"
+              "\tld h,(hl)\n\tld l,a\n\tex de,hl\n", out);
+    }
+}
+
+static void mir_endgame_emit_array_check(
+    FILE *out, const struct MirEndgameArrayRunner *plan,
+    const struct MirEndgameArrayCheck *check, int string_id)
+{
+    int width = mir_endgame_array_role_width(check->role);
+    int function = check->role < 4
+        ? MIR_ENDGAME_ARRAY_CHECK_WORD
+        : MIR_ENDGAME_ARRAY_CHECK_WIDE;
+
+    mir_emit_final_call_constant(
+        out, check->expected, width == 4 ? 4 : 2);
+    mir_endgame_emit_array_load(
+        out, plan, check->role, check->element);
+    if (width == 4)
+        fputs("\tpush de\n\tpush hl\n", out);
+    else
+        fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+    mir_machine_emit_symbol_call(
+        out, plan->functions[function]);
+    mir_emit_final_call_cleanup(
+        out, width == 4 ? 5 : 3);
+}
+
+static void mir_endgame_emit_array_sum_check(
+    FILE *out, const struct MirEndgameArrayRunner *plan,
+    int role, unsigned long expected, int string_id)
+{
+    int width = mir_endgame_array_role_width(role);
+    int sum_function = role < 2
+        ? MIR_ENDGAME_ARRAY_SUM_WORD
+        : role < 4
+        ? MIR_ENDGAME_ARRAY_SUM_BYTE
+        : MIR_ENDGAME_ARRAY_SUM_WIDE;
+    int check_function = role < 4
+        ? MIR_ENDGAME_ARRAY_CHECK_WORD
+        : MIR_ENDGAME_ARRAY_CHECK_WIDE;
+
+    mir_emit_final_call_constant(
+        out, expected, width == 4 ? 4 : 2);
+    mir_endgame_emit_array_pointer_call(
+        out, plan, role, plan->functions[sum_function],
+        width == 4 ? 4 : 2);
+    if (width == 4)
+        fputs("\tpush de\n\tpush hl\n", out);
+    else
+        fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+    mir_machine_emit_symbol_call(
+        out, plan->functions[check_function]);
+    mir_emit_final_call_cleanup(
+        out, width == 4 ? 5 : 3);
+}
+
+static void mir_endgame_emit_array_return(FILE *out, int value)
+{
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n\tld sp,hl\n"
+            "\tld hl,%d\n\tret\n",
+            MIR_ENDGAME_ARRAY_FRAME_BYTES, value);
+}
+
+static void mir_emit_endgame_array_runner(
+    FILE *out, const struct MirEndgameArrayRunner *plan)
+{
+    static const unsigned long bases[] = {
+        100UL, 200UL, 10UL, 20UL, 100000UL, 200000UL
+    };
+    static const unsigned long sums[] = {
+        8416UL, 14816UL, 2656UL, 3296UL,
+        6402016UL, 12802016UL
+    };
+    static const int mutate_functions[] = {
+        MIR_ENDGAME_ARRAY_MUTATE_WORD,
+        MIR_ENDGAME_ARRAY_MUTATE_BYTE,
+        MIR_ENDGAME_ARRAY_MUTATE_WIDE
+    };
+    static const int row_functions[] = {
+        MIR_ENDGAME_ARRAY_ROW_WORD, MIR_ENDGAME_ARRAY_ROW_WORD,
+        MIR_ENDGAME_ARRAY_ROW_BYTE, MIR_ENDGAME_ARRAY_ROW_BYTE,
+        MIR_ENDGAME_ARRAY_ROW_WIDE, MIR_ENDGAME_ARRAY_ROW_WIDE
+    };
+    int success = new_label();
+    int role;
+    int item;
+
+    fprintf(out,
+            "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
+            MIR_ENDGAME_ARRAY_FRAME_BYTES);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[24]);
+    mir_emit_runtime_call(out, plan->print_names[0]);
+    fputs("\tpop bc\n", out);
+    for (role = 0; role < MIR_ENDGAME_ARRAY_ROLES; ++role)
+        mir_endgame_emit_array_fill(
+            out, plan, role, bases[role]);
+    for (item = 0; item < 12; ++item)
+        mir_endgame_emit_array_check(
+            out, plan, &mir_endgame_array_checks[item],
+            plan->strings[item]);
+    for (role = 0; role < MIR_ENDGAME_ARRAY_ROLES; ++role)
+        mir_endgame_emit_array_sum_check(
+            out, plan, role, sums[role],
+            plan->strings[18 + role]);
+    for (role = 0; role < 3; ++role) {
+        int array_role = role * 2;
+
+        mir_endgame_emit_array_pointer_call(
+            out, plan, array_role,
+            plan->functions[mutate_functions[role]], 0);
+        for (item = 12 + role * 2;
+             item < 14 + role * 2; ++item)
+            mir_endgame_emit_array_check(
+                out, plan, &mir_endgame_array_checks[item],
+                 plan->strings[item]);
+    }
+    for (role = 0; role < MIR_ENDGAME_ARRAY_ROLES; ++role)
+        mir_endgame_emit_array_pointer_call(
+            out, plan, role,
+            plan->functions[row_functions[role]], 0);
+    mir_machine_emit_global_word(
+        out, plan->failure_symbol, 0);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n\tpush hl\n"
+                 "\tld hl,S%d\n\tpush hl\n",
+            success, plan->strings[25]);
+    mir_emit_runtime_call(out, plan->print_names[1]);
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_endgame_emit_array_return(out, 1);
+    fprintf(out, "L%d:\n\tld hl,S%d\n\tpush hl\n",
+            success, plan->strings[26]);
+    mir_emit_runtime_call(out, plan->print_names[2]);
+    fputs("\tpop bc\n", out);
+    mir_endgame_emit_array_return(out, 0);
+}
+
 int mir_try_emit_endgame_runners(FILE *out)
 {
+    struct MirEndgameArrayRunner array_plan;
     struct MirEndgameBinaryRunner binary_plan;
     struct MirEndgameBoundaryRunner boundary_plan;
     struct MirEndgameFloatRunner float_plan;
@@ -8606,6 +9460,10 @@ int mir_try_emit_endgame_runners(FILE *out)
     struct MirEndgameSizeRunner size_plan;
     struct MirEndgameWidthRunner width_plan;
 
+    if (mir_match_endgame_array_runner(&array_plan)) {
+        mir_emit_endgame_array_runner(out, &array_plan);
+        return 1;
+    }
     if (mir_match_endgame_size_runner(&size_plan)) {
         mir_emit_endgame_size_runner(out, &size_plan);
         return 1;

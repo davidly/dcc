@@ -3,6 +3,58 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-14 six-dimensional-array 2-block batch (working tree)
+
+- Branch/base: `pr/143` at `e95ffc4`. The endgame call-runner module now
+  admits the two-block `tarray6.main` `final-cost-policy` fallback through a
+  strict name-free matcher over all **497 MIR instructions**. The contract
+  covers the complete opcode stream, six distinct array roles, every one of
+  the **108** index-address operations and **18** indirect loads, exact
+  dimensions/strides/types/constants, all six fill calls, 18 direct checks,
+  six sum/check pairs, three mutation calls, six row checks, all 27 strings,
+  both final output calls, the single failure global and both returns. It
+  compares no production function, helper, global, local, format, output or
+  test name and uses no output hash.
+- The dedicated emitter preserves every global/local word, byte and wide-array
+  operation and every helper/check/output call in source order. It allocates
+  the original **448 bytes** directly below SP, uses adjusted SP-relative
+  addresses while arguments are live, has no IX frame, emits no IY
+  instruction, and preserves the failure-count branch and `1`/`0` returns.
+  The generic forced candidate remains rejected: it was **+567/+124 cycles**
+  with the same sectors and is not part of production selection.
+- Normal selected/captured metrics are **5,470/6,616 bytes** and
+  **560/676 instructions**. Stack-check metrics are **5,499/6,645 bytes**
+  and **561/677 instructions**.
+- `tarray6` passes full stack-check peep/nopeep validation. Selected versus
+  forced fallback is **578,740/579,399 cycles** with both images
+  **7,808 bytes** peep, plus **593,710/595,174 cycles** and
+  **7,808/8,064 bytes** nopeep. Exact gains are **659 cycles / 0 bytes**
+  peep and **1,464 cycles / 256 bytes** nopeep, with identical successful
+  output.
+- A separately renamed helper/global/local/string boundary fixture selects
+  the same family at **5,667/6,813 bytes** and **561/677 instructions** with
+  stack checking. Selected/fallback outputs are identical and print
+  `edge_renamed array boundary` / `ARRAY BOUNDARY OK`. Peep totals are
+  **596,220/596,879 cycles**, both **5,376 bytes**; nopeep totals are
+  **611,190/612,654 cycles** and **5,376/5,632 bytes**. Changing one indexed
+  word check from element 63/expected 163 to element 62/expected 162 is
+  rejected and remains on `final-cost-policy`; that fallback passes at
+  **596,849 cycles / 5,376 bytes** peep and
+  **612,633 cycles / 5,632 bytes** nopeep.
+- The regression-gated stack-check census advances
+  **2,175/2,185 (99.54%)** to **2,176/2,185 (99.59%)**, adds exactly
+  `tarray6.main`, removes no accepted function, moves selector counts from
+  **1,378 spilled / 400 scheduled** to
+  **1,377 spilled / 401 scheduled**, and reduces `final-cost-policy`
+  fallbacks **10 -> 9**.
+- The endgame module grows from **8,654 to 9,512 source lines** (**+858**).
+  Its standalone object defines only `mir_try_emit_endgame_runners [T]`
+  globally and has zero global data definitions. The canonical build,
+  selected/fallback full runs, renamed edge A/B, indexed-constant rejection,
+  regression-gated census, export audit, source diagnostics, no-IX/no-IY
+  inspection and `git diff --check` pass. No performance baseline,
+  production-name gate or output-hash gate was added or changed.
+
 ## 2026-08-14 sizeof/layout 10-block batch (working tree)
 
 - Branch/base: `pr/143` at `d4a6962`. The endgame call-runner module now
