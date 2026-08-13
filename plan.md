@@ -6,10 +6,49 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Clean base HEAD for the current coverage batch: `4a679ee`.
-- Current working-tree candidate coverage: **2134/2185 (97.67%)**.
-- Remaining fallback population: **51 `final-cost-policy`**, all selected by
+- Clean base HEAD for the current coverage batch: `1c39c19`.
+- Current working-tree candidate coverage: **2135/2185 (97.71%)**.
+- Remaining fallback population: **50 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The next scanner-family batch admits the 12-block `tbig.str_to_long`
+  `final-cost-policy` fallback through a strict name-free matcher over all
+  **79 MIR instructions**. It proves the single nonvolatile signed-character
+  pointer parameter, exact local long/negative state, the optional `'-'`
+  path, both ordered signed-character digit comparisons, accumulator and
+  pointer PHI/backedge relationships, every local/parameter store, and both
+  signed-long return arms. The frameless emitter keeps the pointer in BC and
+  the full accumulator in DE:HL, keeps only the sign flag on the stack,
+  multiplies by ten with three carry-propagating 32-bit shifts plus the saved
+  doubled value, and adds each digit modulo 2^32. Final two's-complement
+  negation preserves the target's wrap behavior; no IX frame or IY is used.
+  Normal selected/captured metrics are **620/2,012 bytes** and
+  **71/202 instructions**; stack-check metrics are **649/2,041 bytes** and
+  **72/203 instructions**.
+- `tbig` passes full peep/nopeep validation. Its standard workload does not
+  call the argument parser, so selected and forced-fallback cycles are exactly
+  equal at **1,499,414,928 peep** and **1,469,070,385 nopeep**. Selected versus
+  fallback checked image sizes are **12,288/12,672 bytes peep** and
+  **12,672/13,056 bytes nopeep**, exact reductions of **384 bytes (-3.03%)**
+  and **384 bytes (-2.94%)**.
+- A separately named 27-case boundary clone covers empty and nondigit inputs,
+  leading space/tab, plus/minus/double-minus forms, negative zero, exact and
+  embedded terminators, leading zeroes, signed-long limits, values on both
+  sides of 2^32 wrap, a many-digit wrap, and a leading high-bit signed
+  character. Selected and forced-fallback output is byte-identical with
+  `failures 0` in both modes. Selected/fallback measurements are
+  **903,843/1,189,141 cycles and 3,968/4,352 bytes peep**
+  (**-285,298, -23.99%; -384 bytes, -8.82%**) and
+  **905,016/1,228,512 cycles and 4,096/4,608 bytes nopeep**
+  (**-323,496, -26.33%; -512 bytes, -11.11%**).
+- The scanner module audit reports **3,442 source lines**, **58 static
+  top-level helpers**, only `mir_try_emit_scanner_kernels` as exported code,
+  and zero read-only or writable data exports. Canonical and CMake builds
+  pass. The regression-gated stack-check census advances
+  **2,134/2,185 (97.67%)** to **2,135/2,185 (97.71%)**, changes only
+  `tbig.str_to_long`, removes no accepted function, moves selector counts from
+  **1,419 spilled / 359 scheduled** to **1,418 spilled / 360 scheduled**, and
+  leaves **50 `final-cost-policy`** fallbacks. No performance baseline,
+  production name, or output-hash gate was added.
 - The call/check orchestration extraction creates compiled
   `dcc_mir_machine_call_runners.c` with zero shared variables and
   `mir_try_emit_call_runners` as its sole export. Two phase calls preserve

@@ -16,6 +16,10 @@ struct MirBoundedStringMatchSchedule {
     int expected[5];
 };
 
+struct MirDecimalLongScanSchedule {
+    int pointer_stack_offset;
+};
+
 struct MirStarCommentScanSchedule {
     struct Sym *source_root;
     struct Sym *length_root;
@@ -444,6 +448,327 @@ static int mir_match_bounded_string_match_schedule(
         mir.insns[73].src1 != mir.insns[72].dst)
         return mir_machine_reject(
             "bounded-string-match-schedule", "short-circuit");
+    return 1;
+}
+
+static int mir_decimal_signed_type(int type, int base_type, int width)
+{
+    return type_ptr_depth(type) == 0 &&
+        (type & 15) == base_type &&
+        type_size(type) == width &&
+        (type & TYPE_UNSIGNED) == 0;
+}
+
+static int mir_decimal_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+        (type & 15) == TYPE_CHAR &&
+        type_size(type) == 2 &&
+        (type & TYPE_UNSIGNED) == 0;
+}
+
+static int mir_match_decimal_pointer_access(
+    const struct MirInsn *insn, int opcode,
+    const struct MirInsn *parameter)
+{
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    return insn->opcode == opcode &&
+        insn->bit_width == 0 &&
+        (insn->memory_flags & (1 | 8)) == 0 &&
+        mir_scalar_memory_location(
+            insn, &memory_type, &memory_storage, &memory_offset) &&
+        memory_storage == SC_PARAM &&
+        mir_decimal_pointer_type(memory_type) &&
+        mir_machine_named_nonvolatile(insn) &&
+        mir_machine_same_location(insn, parameter);
+}
+
+static int mir_match_decimal_local_access(
+    const struct MirInsn *insn, int opcode, int base_type, int width,
+    int object, const struct MirInsn *same_location)
+{
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    return insn->opcode == opcode &&
+        insn->object == object &&
+        insn->bit_width == 0 &&
+        (insn->memory_flags & (1 | 8)) == 0 &&
+        mir_scalar_memory_location(
+            insn, &memory_type, &memory_storage, &memory_offset) &&
+        memory_storage == SC_LOCAL &&
+        mir_decimal_signed_type(memory_type, base_type, width) &&
+        memory_offset >= -mir.local_bytes &&
+        memory_offset + width <= 0 &&
+        mir_machine_named_nonvolatile(insn) &&
+        (same_location == NULL ||
+         mir_machine_same_location(insn, same_location));
+}
+
+static int mir_match_decimal_char_load(
+    int instruction, int pointer_value)
+{
+    const struct MirInsn *load = &mir.insns[instruction];
+
+    return load->src1 == pointer_value &&
+        load->memory_size == 1 &&
+        load->bit_width == 0 &&
+        (load->memory_flags & (1 | 8)) == 0 &&
+        mir_decimal_signed_type(load->type, TYPE_CHAR, 1);
+}
+
+static int mir_match_decimal_conversion(
+    int instruction, int source_value, int base_type, int width)
+{
+    const struct MirInsn *conversion = &mir.insns[instruction];
+
+    return conversion->src1 == source_value &&
+        conversion->immediate == 0 &&
+        mir_decimal_signed_type(conversion->type, base_type, width);
+}
+
+static int mir_match_decimal_pointer_add(
+    int instruction, int left_value, int right_value, int operand_type)
+{
+    const struct MirInsn *binary = &mir.insns[instruction];
+
+    return binary->src1 == left_value &&
+        binary->src2 == right_value &&
+        binary->immediate == '+' &&
+        mir_decimal_pointer_type(binary->type) &&
+        binary->secondary_offset == operand_type;
+}
+
+static int mir_match_decimal_binary(
+    int instruction, int left_value, int right_value,
+    int operation, int base_type, int width, int operand_type)
+{
+    const struct MirInsn *binary = &mir.insns[instruction];
+
+    return binary->src1 == left_value &&
+        binary->src2 == right_value &&
+        binary->immediate == operation &&
+        mir_decimal_signed_type(binary->type, base_type, width) &&
+        binary->secondary_offset == operand_type;
+}
+
+static int mir_match_decimal_long_scan_schedule(
+    struct MirDecimalLongScanSchedule *plan)
+{
+    static const int expected_opcodes[79] = {
+        MIR_LABEL, MIR_PARAM, MIR_CONST, MIR_NOP, MIR_STORE,
+        MIR_CONST, MIR_NOP, MIR_STORE, MIR_CONST, MIR_LOAD,
+        MIR_LOAD_INDIRECT, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_CONST, MIR_NOP, MIR_STORE, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_NOP, MIR_LABEL, MIR_LABEL,
+        MIR_LOAD, MIR_PHI, MIR_NOP, MIR_LOAD, MIR_LOAD_INDIRECT,
+        MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_LOAD, MIR_LOAD_INDIRECT, MIR_CONST, MIR_UNARY,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST,
+        MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_LOAD,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_UNARY, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_NOP, MIR_LABEL,
+        MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_BRANCH_FALSE, MIR_NOP,
+        MIR_UNARY, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_NOP,
+        MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_RETURN
+    };
+    const struct MirInsn *parameter = &mir.insns[1];
+    int accumulator_object;
+    int negative_object;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 79 || mir_cfg_block_count() != 12 ||
+        mir.has_vla || mir.local_bytes != 6 ||
+        mir.aggregate_temp_bytes != 0 ||
+        !mir_decimal_signed_type(mir.return_type, TYPE_LONG, 4))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "decimal-long-scan-schedule", "opcodes");
+
+    if (!mir_machine_parameter_value_offset(
+            parameter->dst, &plan->pointer_stack_offset) ||
+        plan->pointer_stack_offset > 32767 ||
+        !mir_decimal_pointer_type(parameter->type) ||
+        !mir_machine_named_nonvolatile(parameter) ||
+        mir_machine_pointee_is_volatile(parameter))
+        return mir_machine_reject(
+            "decimal-long-scan-schedule", "parameter");
+
+    accumulator_object = mir.insns[4].object;
+    negative_object = mir.insns[7].object;
+    if (accumulator_object < 0 || negative_object < 0 ||
+        accumulator_object == negative_object ||
+        !mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+        !mir_decimal_signed_type(mir.insns[2].type, TYPE_LONG, 4) ||
+        mir.insns[4].src1 != mir.insns[2].dst ||
+        !mir_match_decimal_local_access(
+            &mir.insns[4], MIR_STORE, TYPE_LONG, 4,
+            accumulator_object, NULL) ||
+        !mir_machine_constant_equals(mir.insns[5].dst, 0) ||
+        !mir_decimal_signed_type(mir.insns[5].type, TYPE_INT, 2) ||
+        mir.insns[7].src1 != mir.insns[5].dst ||
+        !mir_match_decimal_local_access(
+            &mir.insns[7], MIR_STORE, TYPE_INT, 2,
+            negative_object, NULL))
+        return mir_machine_reject(
+            "decimal-long-scan-schedule", "initializers");
+
+    if (!mir_machine_constant_equals(mir.insns[8].dst, '-') ||
+        !mir_decimal_signed_type(mir.insns[8].type, TYPE_INT, 2))
+        return mir_machine_reject(
+            "decimal-long-scan-schedule", "sign-constant");
+    if (!mir_match_decimal_pointer_access(
+            &mir.insns[9], MIR_LOAD, parameter))
+        return mir_machine_reject(
+            "decimal-long-scan-schedule", "sign-pointer");
+    if (!mir_match_decimal_char_load(10, mir.insns[9].dst) ||
+        !mir_match_decimal_conversion(
+            11, mir.insns[10].dst, TYPE_INT, 2))
+        return mir_machine_reject(
+            "decimal-long-scan-schedule", "sign-load");
+    if (!mir_match_decimal_binary(
+            12, mir.insns[8].dst, mir.insns[11].dst,
+            TOK_EQ, TYPE_INT, 2, mir.insns[8].type))
+        return mir_machine_reject(
+            "decimal-long-scan-schedule", "sign-compare");
+    if (mir.insns[13].src1 != mir.insns[12].dst ||
+        mir.insns[13].label != mir.insns[22].label)
+        return mir_machine_reject(
+            "decimal-long-scan-schedule", "sign-test");
+    if (!mir_machine_constant_equals(mir.insns[14].dst, 1) ||
+        !mir_decimal_signed_type(mir.insns[14].type, TYPE_INT, 2) ||
+        mir.insns[16].src1 != mir.insns[14].dst ||
+        !mir_match_decimal_local_access(
+            &mir.insns[16], MIR_STORE, TYPE_INT, 2,
+            negative_object, &mir.insns[7]))
+        return mir_machine_reject(
+            "decimal-long-scan-schedule", "sign-state");
+    if (!mir_match_decimal_pointer_access(
+            &mir.insns[17], MIR_LOAD, parameter) ||
+        !mir_machine_constant_equals(mir.insns[18].dst, 1) ||
+        !mir_decimal_pointer_type(mir.insns[18].type) ||
+        !mir_match_decimal_pointer_add(
+            19, mir.insns[17].dst, mir.insns[18].dst,
+            mir.insns[17].type) ||
+        mir.insns[20].src1 != mir.insns[19].dst ||
+        !mir_match_decimal_pointer_access(
+            &mir.insns[20], MIR_STORE, parameter))
+        return mir_machine_reject(
+            "decimal-long-scan-schedule", "sign-advance");
+
+    if (!mir_match_decimal_pointer_access(
+            &mir.insns[24], MIR_LOAD, parameter) ||
+        mir.insns[25].src1 != mir.insns[2].dst ||
+        mir.insns[25].src2 != mir.insns[56].dst ||
+        mir.insns[25].object != accumulator_object ||
+        !mir_decimal_signed_type(mir.insns[25].type, TYPE_LONG, 4) ||
+        mir.insns[25].phi_pred1 != mir.insns[22].label ||
+        mir.insns[25].phi_pred2 != mir.insns[64].label ||
+        mir.insns[26].object != negative_object ||
+        !mir_match_decimal_pointer_access(
+            &mir.insns[27], MIR_LOAD, parameter) ||
+        !mir_match_decimal_char_load(28, mir.insns[27].dst) ||
+        !mir_machine_constant_equals(mir.insns[29].dst, '0') ||
+        !mir_decimal_signed_type(mir.insns[29].type, TYPE_INT, 2) ||
+        !mir_match_decimal_conversion(
+            30, mir.insns[28].dst, TYPE_INT, 2) ||
+        !mir_match_decimal_binary(
+            31, mir.insns[30].dst, mir.insns[29].dst,
+            TOK_GE, TYPE_INT, 2, mir.insns[29].type) ||
+        mir.insns[32].src1 != mir.insns[31].dst ||
+        mir.insns[32].label != mir.insns[42].label ||
+        !mir_match_decimal_pointer_access(
+            &mir.insns[33], MIR_LOAD, parameter) ||
+        !mir_match_decimal_char_load(34, mir.insns[33].dst) ||
+        !mir_machine_constant_equals(mir.insns[35].dst, '9') ||
+        !mir_decimal_signed_type(mir.insns[35].type, TYPE_INT, 2) ||
+        !mir_match_decimal_conversion(
+            36, mir.insns[34].dst, TYPE_INT, 2) ||
+        !mir_match_decimal_binary(
+            37, mir.insns[36].dst, mir.insns[35].dst,
+            TOK_LE, TYPE_INT, 2, mir.insns[35].type) ||
+        mir.insns[38].src1 != mir.insns[37].dst ||
+        mir.insns[38].label != mir.insns[42].label ||
+        !mir_machine_constant_equals(mir.insns[40].dst, 1) ||
+        mir.insns[41].label != mir.insns[44].label ||
+        !mir_machine_constant_equals(mir.insns[43].dst, 0) ||
+        mir.insns[45].src1 != mir.insns[40].dst ||
+        mir.insns[45].src2 != mir.insns[43].dst ||
+        mir.insns[45].phi_pred1 != mir.insns[39].label ||
+        mir.insns[45].phi_pred2 != mir.insns[42].label ||
+        mir.insns[46].src1 != mir.insns[45].dst ||
+        mir.insns[46].label != mir.insns[66].label)
+        return mir_machine_reject(
+            "decimal-long-scan-schedule", "digit-test");
+
+    if (mir.insns[47].object != accumulator_object ||
+        !mir_machine_constant_equals(mir.insns[48].dst, 10) ||
+        !mir_decimal_signed_type(mir.insns[48].type, TYPE_LONG, 4) ||
+        !mir_match_decimal_binary(
+            49, mir.insns[25].dst, mir.insns[48].dst,
+            '*', TYPE_LONG, 4, mir.insns[48].type) ||
+        !mir_match_decimal_pointer_access(
+            &mir.insns[50], MIR_LOAD, parameter) ||
+        !mir_match_decimal_char_load(51, mir.insns[50].dst) ||
+        !mir_machine_constant_equals(mir.insns[52].dst, '0') ||
+        !mir_decimal_signed_type(mir.insns[52].type, TYPE_INT, 2) ||
+        !mir_match_decimal_conversion(
+            53, mir.insns[51].dst, TYPE_INT, 2) ||
+        !mir_match_decimal_binary(
+            54, mir.insns[53].dst, mir.insns[52].dst,
+            '-', TYPE_INT, 2, mir.insns[52].type) ||
+        !mir_match_decimal_conversion(
+            55, mir.insns[54].dst, TYPE_LONG, 4) ||
+        !mir_match_decimal_binary(
+            56, mir.insns[49].dst, mir.insns[55].dst,
+            '+', TYPE_LONG, 4, mir.insns[48].type) ||
+        mir.insns[58].src1 != mir.insns[56].dst ||
+        !mir_match_decimal_local_access(
+            &mir.insns[58], MIR_STORE, TYPE_LONG, 4,
+            accumulator_object, &mir.insns[4]) ||
+        !mir_match_decimal_pointer_access(
+            &mir.insns[59], MIR_LOAD, parameter) ||
+        !mir_machine_constant_equals(mir.insns[60].dst, 1) ||
+        !mir_decimal_pointer_type(mir.insns[60].type) ||
+        !mir_match_decimal_pointer_add(
+            61, mir.insns[59].dst, mir.insns[60].dst,
+            mir.insns[59].type) ||
+        mir.insns[62].src1 != mir.insns[61].dst ||
+        !mir_match_decimal_pointer_access(
+            &mir.insns[62], MIR_STORE, parameter) ||
+        mir.insns[65].label != mir.insns[23].label)
+        return mir_machine_reject(
+            "decimal-long-scan-schedule", "digit-body");
+
+    if (!mir_match_decimal_local_access(
+            &mir.insns[67], MIR_LOAD, TYPE_INT, 2,
+            negative_object, &mir.insns[7]) ||
+        mir.insns[68].src1 != mir.insns[67].dst ||
+        mir.insns[68].label != mir.insns[73].label ||
+        mir.insns[69].object != accumulator_object ||
+        mir.insns[70].src1 != mir.insns[25].dst ||
+        mir.insns[70].immediate != '-' ||
+        !mir_decimal_signed_type(mir.insns[70].type, TYPE_LONG, 4) ||
+        mir.insns[72].label != mir.insns[76].label ||
+        mir.insns[74].object != accumulator_object ||
+        mir.insns[77].src1 != mir.insns[70].dst ||
+        mir.insns[77].src2 != mir.insns[25].dst ||
+        mir.insns[77].phi_pred1 != mir.insns[71].label ||
+        mir.insns[77].phi_pred2 != mir.insns[75].label ||
+        !mir_decimal_signed_type(mir.insns[77].type, TYPE_LONG, 4) ||
+        mir.insns[78].src1 != mir.insns[77].dst)
+        return mir_machine_reject(
+            "decimal-long-scan-schedule", "return");
     return 1;
 }
 
@@ -2266,6 +2591,57 @@ static void mir_emit_bounded_string_match_schedule(
     fprintf(out, "L%d:\n\tld hl,0\n\tret\n", failure);
 }
 
+static void mir_emit_decimal_long_scan_schedule(
+    FILE *out, const struct MirDecimalLongScanSchedule *plan)
+{
+    int add_ready = new_label();
+    int digits = new_label();
+    int done = new_label();
+    int loop = new_label();
+    int negate_ready = new_label();
+    int positive = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+            "\tld a,(bc)\n\tcp %d\n\tjp nz,L%d\n"
+            "\tinc bc\n\tld a,1\n\tpush af\n\tjp L%d\n"
+            "L%d:\n\txor a\n\tpush af\n"
+            "L%d:\n\tld hl,0\n\tld de,0\n",
+            plan->pointer_stack_offset, '-',
+            positive, digits, positive, digits);
+    /* Save x2, shift to x8, then add x2 modulo the target's 32 bits. */
+    fprintf(out,
+            "L%d:\n\tld a,(bc)\n\tcp %d\n\tjp c,L%d\n"
+            "\tcp %d\n\tjp nc,L%d\n\tsub %d\n"
+            "\tpush bc\n"
+            "\tadd hl,hl\n\trl e\n\trl d\n"
+            "\tpush de\n\tpush hl\n"
+            "\tadd hl,hl\n\trl e\n\trl d\n"
+            "\tadd hl,hl\n\trl e\n\trl d\n"
+            "\tpop bc\n\tadd hl,bc\n\tex de,hl\n"
+            "\tpop bc\n\tadc hl,bc\n\tex de,hl\n"
+            "\tpop bc\n"
+            "\tadd a,l\n\tld l,a\n"
+            "\tld a,h\n\tadc a,0\n\tld h,a\n"
+            "\tjp nc,L%d\n\tinc de\n"
+            "L%d:\n\tinc bc\n\tjp L%d\n",
+            loop, '0', done, '9' + 1, done, '0',
+            add_ready, add_ready, loop);
+    fprintf(out,
+            "L%d:\n\tpop af\n\tor a\n\tret z\n"
+            "\tld a,l\n\tcpl\n\tld l,a\n"
+            "\tld a,h\n\tcpl\n\tld h,a\n"
+            "\tld a,e\n\tcpl\n\tld e,a\n"
+            "\tld a,d\n\tcpl\n\tld d,a\n"
+            "\tinc hl\n\tld a,h\n\tor l\n"
+            "\tjp nz,L%d\n\tinc de\n"
+            "L%d:\n\tret\n",
+            done, negate_ready, negate_ready);
+}
+
 static void mir_emit_star_global_byte_load(
     FILE *out, struct Sym *root, int offset)
 {
@@ -2998,6 +3374,7 @@ int mir_try_emit_scanner_kernels(FILE *out, int late)
             bounded_string_match_schedule;
         struct MirCommentScanSchedule comment_scan_schedule;
         struct MirWhitespaceScanSchedule whitespace_scan_schedule;
+        struct MirDecimalLongScanSchedule decimal_long_scan_schedule;
         struct MirActionDecodeSchedule action_decode_schedule;
         struct MirBufferedDeclarationSchedule
             buffered_declaration_schedule;
@@ -3029,6 +3406,12 @@ int mir_try_emit_scanner_kernels(FILE *out, int late)
                 &whitespace_scan_schedule)) {
             mir_emit_whitespace_scan_schedule(
                 out, &whitespace_scan_schedule);
+            return 1;
+        }
+        if (mir_match_decimal_long_scan_schedule(
+                &decimal_long_scan_schedule)) {
+            mir_emit_decimal_long_scan_schedule(
+                out, &decimal_long_scan_schedule);
             return 1;
         }
         if (mir_match_action_decode_schedule(
