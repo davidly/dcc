@@ -305,6 +305,49 @@ struct MirAggregateMultidimChecks {
     } size2;
 };
 
+#define MIR_TOUCH_LOCAL_CHECK_COUNT 27
+#define MIR_TOUCH_LOCAL_MEMORY_MAX 96
+
+enum MirTouchLocalValueKind {
+    MIR_TOUCH_LOCAL_UNKNOWN = 0,
+    MIR_TOUCH_LOCAL_INTEGER = 1,
+    MIR_TOUCH_LOCAL_ADDRESS = 2
+};
+
+struct MirTouchLocalValue {
+    int kind;
+    long value;
+    int origin_address;
+    int origin_width;
+};
+
+struct MirTouchLocalMemory {
+    int address;
+    int width;
+    struct MirTouchLocalValue value;
+};
+
+struct MirTouchLocalStore {
+    unsigned long value;
+    int width;
+    int compact_offset;
+};
+
+struct MirTouchLocalCheck {
+    struct Sym *function;
+    unsigned long expected;
+    int string_id;
+    int width;
+    int is_unsigned;
+    int store_index;
+};
+
+struct MirTouchLocalsPlan {
+    struct MirTouchLocalStore stores[MIR_TOUCH_LOCAL_CHECK_COUNT];
+    struct MirTouchLocalCheck checks[MIR_TOUCH_LOCAL_CHECK_COUNT];
+    int frame_bytes;
+};
+
 static int mir_aggregate_direct_function(
     int instruction, struct Sym **function_out)
 {
@@ -494,6 +537,640 @@ static int mir_aggregate_local_location(
         return 0;
     *offset_out = offset;
     return 1;
+}
+
+static int mir_touch_local_convert_integer(
+    long value, int type, long *result)
+{
+    int width = type_size(type);
+    unsigned long bits;
+
+    if (type_ptr_depth(type) > 0) {
+        *result = value & 0xffffL;
+        return type_size(type) == 2;
+    }
+    if (type_is_float(type) || (width != 1 && width != 2 && width != 4))
+        return 0;
+    bits = (unsigned long)value;
+    if (width == 1)
+        bits &= 0xffUL;
+    else if (width == 2)
+        bits &= 0xffffUL;
+    else
+        bits &= 0xffffffffUL;
+    if ((type & TYPE_UNSIGNED) != 0) {
+        *result = (long)bits;
+        return 1;
+    }
+    if (width == 1 && (bits & 0x80UL) != 0)
+        *result = (long)bits - 0x100L;
+    else if (width == 2 && (bits & 0x8000UL) != 0)
+        *result = (long)bits - 0x10000L;
+    else if (width == 4 && (bits & 0x80000000UL) != 0)
+        *result = (long)((long long)bits - 0x100000000LL);
+    else
+        *result = (long)bits;
+    return 1;
+}
+
+static int mir_touch_local_ranges_overlap(
+    int left, int left_width, int right, int right_width)
+{
+    return left < right + right_width && right < left + left_width;
+}
+
+static void mir_touch_local_memory_clear(
+    struct MirTouchLocalMemory *memory, int *memory_count,
+    int address, int width)
+{
+    int item = 0;
+
+    while (item < *memory_count) {
+        if (!mir_touch_local_ranges_overlap(
+                memory[item].address, memory[item].width,
+                address, width)) {
+            ++item;
+            continue;
+        }
+        memory[item] = memory[--*memory_count];
+    }
+}
+
+static int mir_touch_local_memory_set(
+    struct MirTouchLocalMemory *memory, int *memory_count,
+    int address, int width, const struct MirTouchLocalValue *value)
+{
+    mir_touch_local_memory_clear(memory, memory_count, address, width);
+    if (*memory_count >= MIR_TOUCH_LOCAL_MEMORY_MAX)
+        return 0;
+    memory[*memory_count].address = address;
+    memory[*memory_count].width = width;
+    memory[*memory_count].value = *value;
+    ++*memory_count;
+    return 1;
+}
+
+static int mir_touch_local_memory_get(
+    const struct MirTouchLocalMemory *memory, int memory_count,
+    int address, int width, struct MirTouchLocalValue *value)
+{
+    int item;
+
+    for (item = 0; item < memory_count; ++item)
+        if (memory[item].address == address &&
+            memory[item].width == width) {
+            *value = memory[item].value;
+            value->origin_address = address;
+            value->origin_width = width;
+            return 1;
+        }
+    memset(value, 0, sizeof(*value));
+    return 0;
+}
+
+static int mir_touch_local_memory_copy(
+    struct MirTouchLocalMemory *memory, int *memory_count,
+    int destination, int source, int width)
+{
+    struct MirTouchLocalMemory copied[MIR_TOUCH_LOCAL_MEMORY_MAX];
+    int copied_count = 0;
+    int item;
+
+    for (item = 0; item < *memory_count; ++item) {
+        int offset = memory[item].address - source;
+
+        if (offset < 0 ||
+            offset + memory[item].width > width)
+            continue;
+        copied[copied_count] = memory[item];
+        copied[copied_count].address = destination + offset;
+        ++copied_count;
+    }
+    mir_touch_local_memory_clear(
+        memory, memory_count, destination, width);
+    for (item = 0; item < copied_count; ++item)
+        if (!mir_touch_local_memory_set(
+                memory, memory_count,
+                copied[item].address, copied[item].width,
+                &copied[item].value))
+            return 0;
+    return 1;
+}
+
+static int mir_touch_local_value_for_address(
+    const struct MirInsn *insn, struct MirTouchLocalValue *value)
+{
+    int type;
+    int storage;
+    int offset;
+
+    if (!mir_scalar_memory_location(
+            insn, &type, &storage, &offset) ||
+        storage != SC_LOCAL ||
+        mir_declared_is_vla_object(insn->name))
+        return 0;
+    memset(value, 0, sizeof(*value));
+    value->kind = MIR_TOUCH_LOCAL_ADDRESS;
+    value->value = offset;
+    return 1;
+}
+
+static int mir_touch_local_step(
+    int instruction, struct MirTouchLocalValue *values,
+    struct MirTouchLocalMemory *memory, int *memory_count)
+{
+    const struct MirInsn *insn = &mir.insns[instruction];
+    struct MirTouchLocalValue result;
+
+    memset(&result, 0, sizeof(result));
+    switch (insn->opcode) {
+    case MIR_CONST:
+        if (!mir_touch_local_convert_integer(
+                insn->immediate, insn->type, &result.value))
+            return 0;
+        result.kind = MIR_TOUCH_LOCAL_INTEGER;
+        break;
+    case MIR_ADDRESS:
+        if (!mir_touch_local_value_for_address(insn, &result))
+            return 0;
+        break;
+    case MIR_MEMBER_ADDRESS:
+        if (insn->src1 < 0 || insn->src1 >= mir.next_value ||
+            values[insn->src1].kind != MIR_TOUCH_LOCAL_ADDRESS)
+            break;
+        result = values[insn->src1];
+        result.value += insn->immediate;
+        break;
+    case MIR_INDEX_ADDRESS:
+        if (insn->src1 < 0 || insn->src1 >= mir.next_value ||
+            insn->src2 < 0 || insn->src2 >= mir.next_value ||
+            values[insn->src1].kind != MIR_TOUCH_LOCAL_ADDRESS ||
+            values[insn->src2].kind != MIR_TOUCH_LOCAL_INTEGER ||
+            insn->immediate <= 0)
+            break;
+        result = values[insn->src1];
+        result.value += values[insn->src2].value * insn->immediate;
+        break;
+    case MIR_BINARY:
+        if (insn->src1 < 0 || insn->src1 >= mir.next_value ||
+            insn->src2 < 0 || insn->src2 >= mir.next_value)
+            return 0;
+        if (values[insn->src1].kind == MIR_TOUCH_LOCAL_INTEGER &&
+            values[insn->src2].kind == MIR_TOUCH_LOCAL_INTEGER) {
+            if (!mir_machine_fold_integer_binary(
+                    (int)insn->immediate,
+                    values[insn->src1].value,
+                    values[insn->src2].value,
+                    insn->type, &result.value))
+                break;
+            result.kind = MIR_TOUCH_LOCAL_INTEGER;
+        } else if (insn->immediate == '+' &&
+                   values[insn->src1].kind ==
+                       MIR_TOUCH_LOCAL_ADDRESS &&
+                   values[insn->src2].kind ==
+                       MIR_TOUCH_LOCAL_INTEGER) {
+            result = values[insn->src1];
+            result.value += values[insn->src2].value;
+        } else if (insn->immediate == '+' &&
+                   values[insn->src2].kind ==
+                       MIR_TOUCH_LOCAL_ADDRESS &&
+                   values[insn->src1].kind ==
+                       MIR_TOUCH_LOCAL_INTEGER) {
+            result = values[insn->src2];
+            result.value += values[insn->src1].value;
+        } else if (insn->immediate == '-' &&
+                   values[insn->src1].kind ==
+                       MIR_TOUCH_LOCAL_ADDRESS &&
+                   values[insn->src2].kind ==
+                       MIR_TOUCH_LOCAL_INTEGER) {
+            result = values[insn->src1];
+            result.value -= values[insn->src2].value;
+        }
+        break;
+    case MIR_UNARY:
+        if (insn->immediate != 0 ||
+            insn->src1 < 0 || insn->src1 >= mir.next_value)
+            break;
+        result = values[insn->src1];
+        if (result.kind == MIR_TOUCH_LOCAL_INTEGER &&
+            !mir_touch_local_convert_integer(
+                result.value, insn->type, &result.value))
+            memset(&result, 0, sizeof(result));
+        else if (result.kind == MIR_TOUCH_LOCAL_ADDRESS &&
+                 (type_ptr_depth(insn->type) == 0 ||
+                  type_size(insn->type) != 2))
+            memset(&result, 0, sizeof(result));
+        break;
+    case MIR_LOAD:
+    {
+        int type;
+        int storage;
+        int offset;
+        int width;
+
+        if (!mir_scalar_memory_location(
+                insn, &type, &storage, &offset) ||
+            storage != SC_LOCAL)
+            return 0;
+        width = insn->memory_size != 0
+            ? insn->memory_size : type_size(type);
+        if (!mir_touch_local_value_for_address(insn, &result) ||
+            !mir_touch_local_memory_get(
+                memory, *memory_count, (int)result.value,
+                width, &result))
+            memset(&result, 0, sizeof(result));
+        break;
+    }
+    case MIR_LOAD_INDIRECT:
+        if (insn->src1 < 0 || insn->src1 >= mir.next_value ||
+            values[insn->src1].kind != MIR_TOUCH_LOCAL_ADDRESS ||
+            !mir_touch_local_memory_get(
+                memory, *memory_count,
+                (int)values[insn->src1].value,
+                insn->memory_size, &result))
+            memset(&result, 0, sizeof(result));
+        break;
+    case MIR_STORE:
+        if (insn->src1 < 0 || insn->src1 >= mir.next_value ||
+            !mir_touch_local_value_for_address(insn, &result))
+            return 0;
+        if (values[insn->src1].kind == MIR_TOUCH_LOCAL_UNKNOWN)
+            mir_touch_local_memory_clear(
+                memory, memory_count, (int)result.value,
+                insn->memory_size);
+        else if (!mir_touch_local_memory_set(
+                     memory, memory_count, (int)result.value,
+                     insn->memory_size, &values[insn->src1]))
+            return 0;
+        break;
+    case MIR_STORE_INDIRECT:
+        if (insn->src1 < 0 || insn->src1 >= mir.next_value ||
+            insn->src2 < 0 || insn->src2 >= mir.next_value)
+            return 0;
+        if (values[insn->src1].kind != MIR_TOUCH_LOCAL_ADDRESS)
+            break;
+        if (values[insn->src2].kind == MIR_TOUCH_LOCAL_UNKNOWN)
+            mir_touch_local_memory_clear(
+                memory, memory_count,
+                (int)values[insn->src1].value,
+                insn->memory_size);
+        else if (!mir_touch_local_memory_set(
+                     memory, memory_count,
+                     (int)values[insn->src1].value,
+                     insn->memory_size, &values[insn->src2]))
+            return 0;
+        break;
+    case MIR_COPY_AGGREGATE:
+        if (insn->src1 < 0 || insn->src1 >= mir.next_value ||
+            insn->src2 < 0 || insn->src2 >= mir.next_value ||
+            values[insn->src1].kind != MIR_TOUCH_LOCAL_ADDRESS ||
+            values[insn->src2].kind != MIR_TOUCH_LOCAL_ADDRESS ||
+            !mir_touch_local_memory_copy(
+                memory, memory_count,
+                (int)values[insn->src1].value,
+                (int)values[insn->src2].value,
+                insn->memory_size))
+            return 0;
+        break;
+    default:
+        break;
+    }
+    if (insn->dst >= 0) {
+        if (insn->dst >= mir.next_value)
+            return 0;
+        values[insn->dst] = result;
+    }
+    return 1;
+}
+
+static unsigned long mir_touch_local_bits(long value, int width)
+{
+    if (width == 1)
+        return (unsigned long)value & 0xffUL;
+    if (width == 2)
+        return (unsigned long)value & 0xffffUL;
+    return (unsigned long)value & 0xffffffffUL;
+}
+
+static int mir_match_touch_locals(
+    struct MirTouchLocalsPlan *plan)
+{
+    static const int expected_counts[MIR_RETURN + 1] = {
+        [MIR_LABEL] = 22,
+        [MIR_NOP] = 113,
+        [MIR_CONST] = 359,
+        [MIR_LOAD] = 48,
+        [MIR_STORE] = 20,
+        [MIR_ADDRESS] = 139,
+        [MIR_INDEX_ADDRESS] = 243,
+        [MIR_MEMBER_ADDRESS] = 121,
+        [MIR_LOAD_INDIRECT] = 42,
+        [MIR_STORE_INDIRECT] = 96,
+        [MIR_COPY_AGGREGATE] = 2,
+        [MIR_BINARY] = 79,
+        [MIR_UNARY] = 2,
+        [MIR_STRING_ADDRESS] = 27,
+        [MIR_ARG] = 81,
+        [MIR_CALL] = 27,
+        [MIR_PHI] = 4,
+        [MIR_BRANCH_FALSE] = 7,
+        [MIR_JUMP] = 7
+    };
+    static const int label_indices[22] = {
+        0, 4, 32, 65, 71, 73, 79, 83, 107, 113, 117,
+        127, 157, 163, 164, 170, 238, 248, 420, 426, 614, 620
+    };
+    static const int branch_indices[7] =
+        {9, 38, 89, 123, 133, 244, 254};
+    static const int branch_targets[7] =
+        {79, 71, 113, 170, 163, 620, 426};
+    static const int jump_indices[7] =
+        {70, 78, 112, 162, 169, 425, 619};
+    static const int jump_targets[7] =
+        {32, 4, 83, 127, 117, 248, 238};
+    static const int phi_indices[4] = {5, 84, 118, 239};
+    static const int phi_predecessors[4][2] = {
+        {0, 73}, {79, 107}, {113, 164}, {170, 614}
+    };
+    static const int final_store_indices[MIR_TOUCH_LOCAL_CHECK_COUNT] = {
+        800, 811, 821, 829, 842, 854, 867, 881, 893,
+        906, 920, 928, 938, 945, 957, 968, 976, 989,
+        1002, 1014, 1028, 1043, 1055, 1067, 1080, 1094, 1111
+    };
+    static const int call_indices[MIR_TOUCH_LOCAL_CHECK_COUNT] = {
+        1123, 1135, 1148, 1159, 1175, 1190, 1200, 1213, 1226,
+        1236, 1246, 1258, 1270, 1282, 1295, 1308, 1319, 1335,
+        1350, 1360, 1371, 1384, 1397, 1407, 1417, 1427, 1438
+    };
+    struct MirTouchLocalValue *values;
+    struct MirTouchLocalMemory memory[MIR_TOUCH_LOCAL_MEMORY_MAX];
+    struct Sym *check_functions[3] = {NULL, NULL, NULL};
+    int original_addresses[MIR_TOUCH_LOCAL_CHECK_COUNT];
+    int opcode_counts[MIR_RETURN + 1];
+    int memory_count = 0;
+    int instruction;
+    int item;
+    int result = 0;
+    const char *reject_reason = "abstract";
+
+    memset(plan, 0, sizeof(*plan));
+    memset(opcode_counts, 0, sizeof(opcode_counts));
+    if (mir.count != 1439 || mir.next_value != 1198 ||
+        mir_cfg_block_count() != 22 || mir.local_bytes != 962 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return mir_machine_reject("touch-locals", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        int type = 0;
+        int storage = 0;
+        int offset = 0;
+
+        if (insn->opcode < 0 || insn->opcode > MIR_RETURN)
+            return mir_machine_reject("touch-locals", "opcode-range");
+        ++opcode_counts[insn->opcode];
+        switch (insn->opcode) {
+        case MIR_LABEL:
+        case MIR_NOP:
+        case MIR_CONST:
+        case MIR_INDEX_ADDRESS:
+        case MIR_MEMBER_ADDRESS:
+        case MIR_BINARY:
+        case MIR_UNARY:
+        case MIR_STRING_ADDRESS:
+        case MIR_ARG:
+        case MIR_PHI:
+        case MIR_BRANCH_FALSE:
+        case MIR_JUMP:
+            break;
+        case MIR_ADDRESS:
+            if (!mir_scalar_memory_location(
+                    insn, &type, &storage, &offset) ||
+                storage != SC_LOCAL ||
+                mir_declared_is_vla_object(insn->name))
+                return mir_machine_reject("touch-locals", "address");
+            break;
+        case MIR_LOAD:
+            if (!mir_scalar_memory_location(
+                    insn, &type, &storage, &offset) ||
+                storage != SC_LOCAL ||
+                (insn->memory_flags & (1 | 8)) != 0 ||
+                insn->bit_width != 0 ||
+                (insn->memory_size != 0 &&
+                 insn->memory_size != 1 &&
+                 insn->memory_size != 2 &&
+                 insn->memory_size != 4) ||
+                (insn->memory_size == 0 &&
+                 type_size(type) != 1 &&
+                 type_size(type) != 2 &&
+                 type_size(type) != 4)) {
+                if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+                    fprintf(stderr,
+                            "; MIR machine function=%s template=touch-locals"
+                            " instruction=%d load flags=%d bits=%d"
+                            " size=%d storage=%d\n",
+                            mir.name, instruction, insn->memory_flags,
+                            insn->bit_width, insn->memory_size, storage);
+                return mir_machine_reject("touch-locals", "load");
+            }
+            break;
+        case MIR_STORE:
+            if ((insn->memory_flags & (1 | 8)) != 0 ||
+                insn->bit_width != 0 ||
+                (insn->memory_size != 1 &&
+                 insn->memory_size != 2 &&
+                 insn->memory_size != 4) ||
+                !mir_machine_unobservable_local_store(insn))
+                return mir_machine_reject("touch-locals", "store");
+            break;
+        case MIR_LOAD_INDIRECT:
+        case MIR_STORE_INDIRECT:
+            if ((insn->memory_flags & (1 | 8)) != 0 ||
+                insn->bit_width != 0 ||
+                (insn->memory_size != 1 &&
+                 insn->memory_size != 2 &&
+                 insn->memory_size != 4))
+                return mir_machine_reject(
+                    "touch-locals", "indirect-memory");
+            break;
+        case MIR_COPY_AGGREGATE:
+            if (insn->memory_flags != 0 ||
+                insn->memory_size != 155 ||
+                (instruction != 629 && instruction != 638))
+                return mir_machine_reject("touch-locals", "aggregate-copy");
+            break;
+        case MIR_CALL:
+            if (instruction < call_indices[0] ||
+                insn->memory_flags != 0)
+                return mir_machine_reject("touch-locals", "call-phase");
+            break;
+        default:
+            return mir_machine_reject("touch-locals", "opcode");
+        }
+    }
+    for (instruction = 0; instruction <= MIR_RETURN; ++instruction)
+        if (opcode_counts[instruction] != expected_counts[instruction])
+            return mir_machine_reject("touch-locals", "census");
+    for (item = 0; item < 22; ++item)
+        if (mir.insns[label_indices[item]].opcode != MIR_LABEL)
+            return mir_machine_reject("touch-locals", "labels");
+    for (item = 0; item < 7; ++item) {
+        if (mir.insns[branch_indices[item]].opcode != MIR_BRANCH_FALSE ||
+            mir.insns[branch_indices[item]].label !=
+                mir.insns[branch_targets[item]].label ||
+            mir.insns[jump_indices[item]].opcode != MIR_JUMP ||
+            mir.insns[jump_indices[item]].label !=
+                mir.insns[jump_targets[item]].label)
+            return mir_machine_reject("touch-locals", "branches");
+    }
+    for (item = 0; item < 4; ++item) {
+        const struct MirInsn *phi = &mir.insns[phi_indices[item]];
+
+        if (phi->opcode != MIR_PHI ||
+            phi->phi_pred1 !=
+                mir.insns[phi_predecessors[item][0]].label ||
+            phi->phi_pred2 !=
+                mir.insns[phi_predecessors[item][1]].label)
+            return mir_machine_reject("touch-locals", "phis");
+    }
+    values = (struct MirTouchLocalValue *)calloc(
+        (size_t)mir.next_value, sizeof(*values));
+    if (values == NULL)
+        return mir_machine_reject("touch-locals", "allocation");
+    for (instruction = 170; instruction < mir.count; ++instruction) {
+        if (!mir_touch_local_step(
+                instruction, values, memory, &memory_count)) {
+            reject_reason = "abstract-step";
+            goto cleanup;
+        }
+        if (instruction >= final_store_indices[0] &&
+            instruction <= final_store_indices[
+                MIR_TOUCH_LOCAL_CHECK_COUNT - 1] &&
+            mir.insns[instruction].opcode == MIR_STORE_INDIRECT) {
+            const struct MirInsn *store = &mir.insns[instruction];
+            const struct MirInsn *source;
+            int store_index = -1;
+            int prior;
+
+            for (item = 0; item < MIR_TOUCH_LOCAL_CHECK_COUNT; ++item)
+                if (final_store_indices[item] == instruction) {
+                    store_index = item;
+                    break;
+                }
+            if (store_index < 0 ||
+                store->src1 < 0 || store->src1 >= mir.next_value ||
+                store->src2 < 0 || store->src2 >= mir.next_value ||
+                values[store->src1].kind != MIR_TOUCH_LOCAL_ADDRESS ||
+                values[store->src2].kind != MIR_TOUCH_LOCAL_INTEGER ||
+                (source = mir_definition(store->src2)) == NULL ||
+                type_ptr_depth(source->type) != 0 ||
+                type_is_float(source->type) ||
+                type_size(source->type) != store->memory_size) {
+                reject_reason = "final-store";
+                goto cleanup;
+            }
+            original_addresses[store_index] =
+                (int)values[store->src1].value;
+            for (prior = 0; prior < store_index; ++prior)
+                if (original_addresses[prior] ==
+                    original_addresses[store_index]) {
+                    reject_reason = "store-alias";
+                    goto cleanup;
+                }
+            plan->stores[store_index].width = store->memory_size;
+            plan->stores[store_index].value =
+                mir_touch_local_bits(
+                    values[store->src2].value, store->memory_size);
+        }
+        if (mir.insns[instruction].opcode == MIR_CALL) {
+            const struct MirInsn *call = &mir.insns[instruction];
+            const struct MirInsn *string;
+            const struct MirInsn *actual;
+            const struct MirInsn *expected_definition;
+            struct Sym *function;
+            int arguments[3];
+            int check_index = -1;
+            int function_index;
+            long expected;
+
+            for (item = 0; item < MIR_TOUCH_LOCAL_CHECK_COUNT; ++item)
+                if (call_indices[item] == instruction) {
+                    check_index = item;
+                    break;
+                }
+            if (check_index < 0 ||
+                !mir_aggregate_direct_function(
+                    instruction, &function) ||
+                !mir_machine_three_call_arguments(call, arguments) ||
+                (string = mir_definition(arguments[0])) == NULL ||
+                string->opcode != MIR_STRING_ADDRESS ||
+                arguments[1] < 0 || arguments[1] >= mir.next_value ||
+                values[arguments[1]].kind != MIR_TOUCH_LOCAL_INTEGER ||
+                values[arguments[1]].origin_width == 0 ||
+                values[arguments[1]].origin_address !=
+                    original_addresses[check_index] ||
+                (actual = mir_definition(arguments[1])) == NULL ||
+                (expected_definition =
+                    mir_definition(arguments[2])) == NULL ||
+                type_ptr_depth(actual->type) != 0 ||
+                type_is_float(actual->type) ||
+                type_ptr_depth(expected_definition->type) != 0 ||
+                type_is_float(expected_definition->type) ||
+                !mir_machine_constant_value(
+                    arguments[2], &expected, 0) ||
+                values[arguments[1]].origin_width !=
+                    plan->stores[check_index].width ||
+                type_size(expected_definition->type) !=
+                    (plan->stores[check_index].width == 4 ? 4 : 2) ||
+                mir_touch_local_bits(
+                    expected,
+                    plan->stores[check_index].width) !=
+                    plan->stores[check_index].value ||
+                type_ptr_depth(call->type) != 0 ||
+                (call->type & 15) != TYPE_VOID) {
+                reject_reason = "check";
+                goto cleanup;
+            }
+            function_index =
+                plan->stores[check_index].width == 1 ? 0 :
+                plan->stores[check_index].width == 2 ? 1 : 2;
+            if (check_functions[function_index] == NULL)
+                check_functions[function_index] = function;
+            else if (check_functions[function_index] != function) {
+                reject_reason = "check-function";
+                goto cleanup;
+            }
+            plan->checks[check_index].function = function;
+            plan->checks[check_index].expected =
+                plan->stores[check_index].value;
+            plan->checks[check_index].string_id =
+                (int)string->immediate;
+            plan->checks[check_index].width =
+                plan->stores[check_index].width;
+            plan->checks[check_index].is_unsigned =
+                (actual->type & TYPE_UNSIGNED) != 0;
+            plan->checks[check_index].store_index = check_index;
+        }
+    }
+    if (check_functions[0] == NULL ||
+        check_functions[1] == NULL ||
+        check_functions[2] == NULL ||
+        check_functions[0] == check_functions[1] ||
+        check_functions[0] == check_functions[2] ||
+        check_functions[1] == check_functions[2])
+    {
+        reject_reason = "check-function-set";
+        goto cleanup;
+    }
+    for (item = 0; item < MIR_TOUCH_LOCAL_CHECK_COUNT; ++item) {
+        plan->frame_bytes += plan->stores[item].width;
+        plan->stores[item].compact_offset = -plan->frame_bytes;
+    }
+    result = plan->frame_bytes > 0 && plan->frame_bytes <= 120;
+cleanup:
+    free(values);
+    if (!result)
+        mir_machine_reject("touch-locals", reject_reason);
+    return result;
 }
 
 static int mir_match_multidim_aggregate_checks(
@@ -1154,6 +1831,65 @@ static void mir_aggregate_emit_word_check(
     mir_aggregate_cleanup(out, 3);
 }
 
+static void mir_touch_local_emit_check(
+    FILE *out, const struct MirTouchLocalsPlan *plan,
+    const struct MirTouchLocalCheck *check)
+{
+    const struct MirTouchLocalStore *store =
+        &plan->stores[check->store_index];
+
+    if (check->width == 4) {
+        mir_machine_emit_float_bits(out, check->expected);
+        fputs("\tpush de\n\tpush hl\n", out);
+        mir_machine_emit_ix_wide_load(out, store->compact_offset);
+        fputs("\tpush de\n\tpush hl\n", out);
+    } else {
+        fprintf(out, "\tld hl,%lu\n\tpush hl\n",
+                check->expected & 0xffffUL);
+        if (check->width == 1) {
+            fprintf(out, "\tld a,(ix%+d)\n\tld e,a\n",
+                    store->compact_offset);
+            if (check->is_unsigned)
+                fputs("\tld d,0\n", out);
+            else
+                fputs("\trlca\n\tsbc a,a\n\tld d,a\n", out);
+        } else {
+            fprintf(out,
+                    "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+                    store->compact_offset,
+                    store->compact_offset + 1);
+        }
+        fputs("\tpush de\n", out);
+    }
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            check->string_id);
+    mir_machine_emit_symbol_call(out, check->function);
+    mir_aggregate_cleanup(out, check->width == 4 ? 5 : 3);
+}
+
+static void mir_emit_touch_locals(
+    FILE *out, const struct MirTouchLocalsPlan *plan)
+{
+    int item;
+
+    fprintf(out,
+            "%s\n"
+            "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+            "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
+            MIR_EXACT_KERNEL_MARKER, plan->frame_bytes);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (item = 0; item < MIR_TOUCH_LOCAL_CHECK_COUNT; ++item)
+        mir_aggregate_emit_ix_store(
+            out, plan->stores[item].compact_offset,
+            plan->stores[item].width,
+            plan->stores[item].value);
+    for (item = 0; item < MIR_TOUCH_LOCAL_CHECK_COUNT; ++item)
+        mir_touch_local_emit_check(
+            out, plan, &plan->checks[item]);
+    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_aggregate_scale_hl(FILE *out, int factor)
 {
     int add;
@@ -1559,7 +2295,12 @@ static void mir_emit_aggregate_multidim_checks(
 int mir_try_emit_aggregate_checks(FILE *out)
 {
     struct MirAggregateMultidimChecks plan;
+    struct MirTouchLocalsPlan touch_locals;
 
+    if (mir_match_touch_locals(&touch_locals)) {
+        mir_emit_touch_locals(out, &touch_locals);
+        return 1;
+    }
     if (!mir_match_aggregate_multidim_checks(&plan))
         return -1;
     mir_emit_aggregate_multidim_checks(out, &plan);

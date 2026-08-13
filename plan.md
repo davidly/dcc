@@ -6,10 +6,45 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Clean base HEAD for the current coverage batch: `8f93d15`.
-- Current working-tree candidate coverage: **2144/2185 (98.12%)**.
-- Remaining fallback population: **41 `final-cost-policy`**, all selected by
+- Clean base HEAD for the current coverage batch: `f90c620`.
+- Current working-tree candidate coverage: **2145/2185 (98.17%)**.
+- Remaining fallback population: **40 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The aggregate-check module now admits the 22-block
+  `tptrlhs.touch_locals` `final-cost-policy` fallback through a strict
+  name-free matcher over all **1,439 MIR instructions**. It proves the four
+  loop PHIs and all seven conditional/backedge pairs, both 155-byte aggregate
+  copies, the complete local pointer graph, all member/array/index address
+  calculations, all **27** ordered writes, all **27** ordered three-argument
+  checks, and the original void fallthrough. The emitter preserves the
+  resolved alias relationships and write/check evaluation order in a compact
+  **62-byte IX frame**, with no IY.
+- Normal selected/captured metrics are **4,967/40,433 bytes** and
+  **464/4,079 instructions**; stack-check metrics are
+  **4,996/40,462 bytes** and **465/4,080 instructions**. `tptrlhs` passes
+  checked full peep/nopeep validation, as does the forced-fallback side.
+  Selected/fallback totals are **738,186/925,005 cycles** and
+  **17,792/22,400 bytes** peep, plus **768,429/967,079 cycles** and
+  **19,584/24,576 bytes** nopeep.
+- A renamed-function, renamed-checker and renamed-local alias A/B is
+  byte-identical in both modes and prints `tptrlhs start` then `PASS`.
+  Selected/fallback measurements are **738,062/924,881 cycles** and
+  **15,104/19,712 bytes** peep, plus **768,305/966,955 cycles** and
+  **16,896/21,888 bytes** nopeep.
+- The aggregate-check module grows from **1,568 to 2,308 source lines** and
+  from **27 to 39 static top-level helpers**. Its audit still reports only
+  `mir_try_emit_aggregate_checks [T]`, with zero exported read-only or
+  writable data. The canonical build passes. The regression-gated
+  stack-check census advances **2,144/2,185 (98.12%)** to
+  **2,145/2,185 (98.17%)**, adds exactly `tptrlhs.touch_locals`, removes no
+  accepted function, moves selector counts from **1,409 spilled / 369
+  scheduled** to **1,408 spilled / 370 scheduled**, and leaves **40
+  `final-cost-policy`** fallbacks. The corresponding regression-gated normal
+  census advances **2,055/2,103 (97.72%)** to
+  **2,056/2,103 (97.77%)**, moves **1,347 spilled / 369 scheduled** to
+  **1,346 spilled / 370 scheduled**, and leaves **47
+  `final-cost-policy`** fallbacks. No performance baseline, production name,
+  or output-hash gate was added.
 - The call-runner module now admits the 22-block `tgnarly.main`
   `final-cost-policy` fallback through a strict name-free matcher over all
   **564 MIR instructions**. It proves both local-array initialization loops,
