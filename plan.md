@@ -6,10 +6,58 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Clean base HEAD for the current coverage batch: `edeaf12`.
-- Current working-tree candidate coverage: **2133/2185 (97.62%)**.
-- Remaining fallback population: **52 `final-cost-policy`**, all selected by
+- Clean base HEAD for the current coverage batch: `4a679ee`.
+- Current working-tree candidate coverage: **2134/2185 (97.67%)**.
+- Remaining fallback population: **51 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The call/check orchestration extraction creates compiled
+  `dcc_mir_machine_call_runners.c` with zero shared variables and
+  `mir_try_emit_call_runners` as its sole export. Two phase calls preserve
+  the exact former positions of the fixed call/check runner and fixed
+  index-call runner while their plans, matchers, emitters, and family helpers
+  move out of the core machine emitter. Normal and stack-check extraction
+  censuses are byte-identical to the `4a679ee` snapshots: zero coverage,
+  selector, metric, selected-hash, or runtime-validation change. The core
+  emitter falls from **47,195 to 46,538 lines**; the new module is **1,526
+  lines** with **28 static top-level helpers**, and the function-only internal
+  contract grows from **52 to 55 lines**. `nm` reports only
+  `mir_try_emit_call_runners [T]` as defined global code and no global
+  read-only or writable data. Canonical and CMake builds pass.
+- The same module admits the 12-block `tbcloop.main`
+  `final-cost-policy` fallback through a strict name-free matcher over all
+  **148 MIR instructions**. It proves every opcode, call-site argument,
+  repeated global root, local narrowed induction PHI, 16-element word fill,
+  call order, output PHIs, and return edge. The emitter preserves both
+  string-copy calls, the count/length/check ordering, both out-of-line
+  long-index functions, both string checks, the safe and unsafe sum calls,
+  the unsafe-call counter store/load and side effects, both final prints,
+  global checks/failures, and every failure label. It uses a four-byte IX
+  scratch frame for the call-crossing long result and **no IY**.
+  Normal selected/captured metrics are **2,465/2,317 bytes** and
+  **240/231 instructions**; stack-check metrics are **2,494/2,346 bytes**
+  and **241/232 instructions**. Checked full mode passes with selected versus
+  forced-fallback measurements of **117,271/117,553 cycles peep**
+  (**-282 / -0.24%**) and **120,679/122,437 cycles nopeep**
+  (**-1,758 / -1.44%**), with unchanged **6,656/6,784-byte** checked images
+  and no baseline update.
+- A renamed-helper edge A/B changes both source strings and exercises
+  five-element safe/unsafe sums, expected totals 20/10, and five unsafe call
+  side effects. The strict scheduler still selects without a source-function
+  or application-name gate. Selected and forced-fallback output is
+  byte-identical in peep and nopeep (`checks=7 failures=0`, `RESULT: PASS`).
+  Direct selected/fallback measurements are **106,214/106,496 cycles** and
+  **3,968/3,968 bytes** peep, and **109,259/111,017 cycles** and
+  **4,096/4,096 bytes** nopeep.
+- The final regression-gated normal census advances
+  **2,044/2,103 (97.19%)** to **2,045/2,103 (97.24%)** and moves
+  **1,358 spilled / 358 scheduled** to
+  **1,357 spilled / 359 scheduled**. Stack-check advances
+  **2,133/2,185 (97.62%)** to **2,134/2,185 (97.67%)** and moves
+  **1,420 spilled / 358 scheduled** to
+  **1,419 spilled / 359 scheduled**. Both comparisons add exactly
+  `tbcloop.main`, remove nothing, and change no other application or
+  function. The plan line-count audit grows this file from **2,661 to
+  2,709 lines**.
 - The next numeric-family batch creates compiled
   `dcc_mir_machine_numeric.c` with zero shared variables and
   `mir_try_emit_numeric_kernels` as its sole export. Phase dispatch keeps the

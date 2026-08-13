@@ -1143,21 +1143,7 @@ struct MirInlineFoldCheck {
     int byte_value;
 };
 
-struct MirFixedCallCheckRunner {
-    struct Sym *functions[5];
-    struct Sym *print_function;
-    int failure_string_ids[5];
-    int summary_string_id;
-    int success_string_id;
-    int expected_words[4];
-    unsigned long expected_long;
-    int array_values[4];
-    int binary_arguments[2][2];
-    int pointer_count;
-    unsigned long long_arguments[2];
-    int long_middle_argument;
-    int byte_arguments[3];
-};
+
 
 struct MirDeterministicInitCheck {
     struct Sym *check_function;
@@ -1168,19 +1154,7 @@ struct MirDeterministicInitCheck {
     int return_addend;
 };
 
-struct MirFixedIndexCallRunner {
-    struct Sym *functions[5];
-    struct Sym *print_function;
-    int failure_string_id;
-    int success_string_id;
-    int int_values[4];
-    unsigned long long_values[4];
-    unsigned long pair_values[6];
-    int scalar_arguments[2];
-    int pointer_indices[3];
-    int expected_words[3];
-    unsigned long expected_longs[2];
-};
+
 
 struct MirLocalArrayStructChecks {
     struct Sym *array_functions[3];
@@ -7563,207 +7537,7 @@ static int mir_match_inline_fold_check(
     return call_count == 3;
 }
 
-static int mir_match_fixed_call_check_runner(
-    struct MirFixedCallCheckRunner *plan)
-{
-    static const int function_calls[5] = {
-        32, 49, 66, 85, 108
-    };
-    static const int expected_constants[5] = {
-        33, 50, 67, 89, 109
-    };
-    static const int failure_strings[5] = {
-        36, 53, 70, 92, 112
-    };
-    static const int failure_prints[5] = {
-        38, 55, 72, 94, 114
-    };
-    static const int comparisons[5] = {
-        34, 51, 68, 90, 110
-    };
-    static const int branches[5] = {
-        35, 52, 69, 91, 111
-    };
-    static const int array_addresses[5] = {
-        4, 10, 16, 22, 62
-    };
-    static const int array_indices[4] = {
-        5, 11, 17, 23
-    };
-    static const int array_values[4] = {
-        8, 14, 20, 26
-    };
-    static const int array_stores[4] = {
-        9, 15, 21, 27
-    };
-    int arguments[4];
-    long value;
-    int call;
-    int index;
-    int call_count = 0;
-    const char *array_name;
 
-    memset(plan, 0, sizeof(*plan));
-    if (mir.count != 137 || mir_cfg_block_count() != 7 ||
-        mir.has_vla || (mir.return_type & 15) != TYPE_INT ||
-        !mir_machine_constant_equals(mir.insns[1].dst, 0) ||
-        mir.insns[3].opcode != MIR_STORE ||
-        mir.insns[4].opcode != MIR_ADDRESS)
-        return mir_machine_reject(
-            "fixed-call-check-runner", "shape");
-    array_name = mir.insns[4].name;
-    for (index = 0; index < 4; ++index) {
-        if (mir.insns[array_addresses[index]].opcode !=
-                MIR_ADDRESS ||
-            strcmp(mir.insns[array_addresses[index]].name,
-                   array_name) != 0 ||
-            !mir_machine_constant_equals(
-                mir.insns[array_indices[index]].dst, index) ||
-            mir.insns[array_stores[index]].opcode !=
-                MIR_STORE_INDIRECT ||
-            mir.insns[array_stores[index]].src1 !=
-                mir.insns[array_stores[index] - 3].dst ||
-            mir.insns[array_stores[index]].memory_size != 1 ||
-            !mir_machine_constant_value(
-                mir.insns[array_values[index]].dst,
-                &value, 0))
-            return mir_machine_reject(
-                "fixed-call-check-runner", "array");
-        plan->array_values[index] = (int)value;
-    }
-    if (mir.insns[array_addresses[4]].opcode != MIR_ADDRESS ||
-        strcmp(mir.insns[array_addresses[4]].name,
-               array_name) != 0)
-        return mir_machine_reject(
-            "fixed-call-check-runner", "array-argument");
-    for (call = 0; call < 5; ++call) {
-        struct Sym *function;
-        struct Sym *print_function;
-
-        if (mir.insns[function_calls[call]].opcode != MIR_CALL ||
-            (function =
-                 find_global(
-                     mir.insns[function_calls[call]].name)) ==
-                NULL ||
-            mir.insns[comparisons[call]].opcode != MIR_BINARY ||
-            mir.insns[comparisons[call]].immediate != TOK_NE ||
-            mir.insns[comparisons[call]].src1 !=
-                mir.insns[function_calls[call]].dst ||
-            mir.insns[comparisons[call]].src2 !=
-                mir.insns[expected_constants[call]].dst ||
-            mir.insns[branches[call]].opcode !=
-                MIR_BRANCH_FALSE ||
-            mir.insns[failure_strings[call]].opcode !=
-                MIR_STRING_ADDRESS ||
-            mir.insns[failure_prints[call]].opcode != MIR_CALL ||
-            (print_function =
-                 find_global(
-                     mir.insns[failure_prints[call]].name)) ==
-                NULL)
-            return mir_machine_reject(
-                "fixed-call-check-runner", "check");
-        if (call == 0)
-            plan->print_function = print_function;
-        else if (print_function != plan->print_function)
-            return mir_machine_reject(
-                "fixed-call-check-runner", "print");
-        plan->functions[call] = function;
-        plan->failure_string_ids[call] =
-            (int)mir.insns[failure_strings[call]].immediate;
-        if (call == 3) {
-            if (!mir_machine_constant_value(
-                    mir.insns[expected_constants[call]].dst,
-                    &value, 0))
-                return mir_machine_reject(
-                    "fixed-call-check-runner", "wide-result");
-            plan->expected_long =
-                (unsigned long)value;
-        } else {
-            if (!mir_machine_constant_value(
-                    mir.insns[expected_constants[call]].dst,
-                    &value, 0))
-                return mir_machine_reject(
-                    "fixed-call-check-runner", "result");
-            plan->expected_words[
-                call < 3 ? call : 3] = (int)value;
-        }
-    }
-    if (!mir_machine_two_call_arguments(
-            &mir.insns[32], arguments) ||
-        !mir_machine_constant_value(arguments[0], &value, 0))
-        return mir_machine_reject(
-            "fixed-call-check-runner", "first-args");
-    plan->binary_arguments[0][0] = (int)value;
-    if (!mir_machine_constant_value(arguments[1], &value, 0))
-        return mir_machine_reject(
-            "fixed-call-check-runner", "first-arg2");
-    plan->binary_arguments[0][1] = (int)value;
-    if (!mir_machine_two_call_arguments(
-            &mir.insns[49], arguments) ||
-        !mir_machine_constant_value(arguments[0], &value, 0))
-        return mir_machine_reject(
-            "fixed-call-check-runner", "second-args");
-    plan->binary_arguments[1][0] = (int)value;
-    if (!mir_machine_constant_value(arguments[1], &value, 0))
-        return mir_machine_reject(
-            "fixed-call-check-runner", "second-arg2");
-    plan->binary_arguments[1][1] = (int)value;
-    if (!mir_machine_two_call_arguments(
-            &mir.insns[66], arguments) ||
-        arguments[0] != mir.insns[62].dst ||
-        !mir_machine_constant_value(arguments[1], &value, 0))
-        return mir_machine_reject(
-            "fixed-call-check-runner", "pointer-args");
-    plan->pointer_count = (int)value;
-    if (!mir_machine_three_call_arguments(
-            &mir.insns[85], arguments) ||
-        !mir_machine_constant_value(arguments[0], &value, 0))
-        return mir_machine_reject(
-            "fixed-call-check-runner", "wide-args");
-    plan->long_arguments[0] = (unsigned long)value;
-    if (!mir_machine_constant_value(arguments[1], &value, 0))
-        return mir_machine_reject(
-            "fixed-call-check-runner", "wide-middle");
-    plan->long_middle_argument = (int)value;
-    if (!mir_machine_constant_value(arguments[2], &value, 0))
-        return mir_machine_reject(
-            "fixed-call-check-runner", "wide-last");
-    plan->long_arguments[1] = (unsigned long)value;
-    if (!mir_machine_three_call_arguments(
-            &mir.insns[108], arguments))
-        return mir_machine_reject(
-            "fixed-call-check-runner", "byte-args");
-    for (index = 0; index < 3; ++index) {
-        if (!mir_machine_constant_value(
-                arguments[index], &value, 0))
-            return mir_machine_reject(
-                "fixed-call-check-runner", "byte-arg");
-        plan->byte_arguments[index] = (int)value;
-    }
-    for (index = 0; index < mir.count; ++index)
-        if (mir.insns[index].opcode == MIR_CALL)
-            ++call_count;
-    if (call_count != 12 ||
-        mir.insns[127].opcode != MIR_CALL ||
-        find_global(mir.insns[127].name) !=
-            plan->print_function ||
-        mir.insns[134].opcode != MIR_CALL ||
-        find_global(mir.insns[134].name) !=
-            plan->print_function ||
-        mir.insns[123].opcode != MIR_STRING_ADDRESS ||
-        mir.insns[132].opcode != MIR_STRING_ADDRESS ||
-        mir.insns[129].opcode != MIR_RETURN ||
-        !mir_machine_constant_equals(mir.insns[128].dst, 1) ||
-        mir.insns[136].opcode != MIR_RETURN ||
-        !mir_machine_constant_equals(mir.insns[135].dst, 0))
-        return mir_machine_reject(
-            "fixed-call-check-runner", "final");
-    plan->summary_string_id =
-        (int)mir.insns[123].immediate;
-    plan->success_string_id =
-        (int)mir.insns[132].immediate;
-    return 1;
-}
 
 static int mir_match_deterministic_init_check(
     struct MirDeterministicInitCheck *plan)
@@ -7975,176 +7749,7 @@ static int mir_match_deterministic_init_check(
     return 1;
 }
 
-static int mir_match_fixed_index_call_runner(
-    struct MirFixedIndexCallRunner *plan)
-{
-    static const int int_addresses[4] = {4, 9, 14, 19};
-    static const int int_indices[4] = {5, 10, 15, 20};
-    static const int int_values[4] = {7, 12, 17, 22};
-    static const int int_stores[4] = {8, 13, 18, 23};
-    static const int long_addresses[4] = {24, 29, 34, 39};
-    static const int long_indices[4] = {25, 30, 35, 40};
-    static const int long_values[4] = {27, 32, 37, 42};
-    static const int long_stores[4] = {28, 33, 38, 43};
-    static const int pair_addresses[6] = {44, 50, 56, 62, 68, 74};
-    static const int pair_indices[6] = {45, 51, 57, 63, 69, 75};
-    static const int pair_members[6] = {47, 53, 59, 65, 71, 77};
-    static const int pair_values[6] = {48, 54, 60, 66, 72, 78};
-    static const int pair_stores[6] = {49, 55, 61, 67, 73, 79};
-    static const int calls[5] = {82, 93, 106, 119, 132};
-    static const int expecteds[5] = {83, 94, 107, 120, 133};
-    static const int comparisons[5] = {84, 95, 108, 121, 134};
-    static const int branches[5] = {85, 96, 109, 122, 135};
-    static const int call_addresses[3] = {102, 115, 128};
-    int arguments[2];
-    int argument;
-    int call_count = 0;
-    long value;
 
-    memset(plan, 0, sizeof(*plan));
-    if (mir.count != 157 || mir_cfg_block_count() != 7 ||
-        mir.has_vla || (mir.return_type & 15) != TYPE_INT ||
-        !mir_machine_constant_equals(mir.insns[1].dst, 0) ||
-        mir.insns[3].opcode != MIR_STORE)
-        return mir_machine_reject(
-            "fixed-index-call-runner", "shape");
-    for (argument = 0; argument < 4; ++argument) {
-        if (mir.insns[int_addresses[argument]].opcode != MIR_ADDRESS ||
-            (argument != 0 &&
-                strcmp(mir.insns[int_addresses[argument]].name,
-                       mir.insns[int_addresses[0]].name) != 0) ||
-            !mir_machine_constant_equals(
-                mir.insns[int_indices[argument]].dst, argument) ||
-            mir.insns[int_stores[argument]].opcode !=
-                MIR_STORE_INDIRECT ||
-            mir.insns[int_stores[argument]].src1 !=
-                mir.insns[int_stores[argument] - 2].dst ||
-            mir.insns[int_stores[argument]].src2 !=
-                mir.insns[int_values[argument]].dst ||
-            mir.insns[int_stores[argument]].memory_size != 2 ||
-            !mir_machine_constant_value(
-                mir.insns[int_values[argument]].dst, &value, 0))
-            return mir_machine_reject(
-                "fixed-index-call-runner", "int-array");
-        plan->int_values[argument] = (int)value;
-        if (mir.insns[long_addresses[argument]].opcode != MIR_ADDRESS ||
-            (argument != 0 &&
-                strcmp(mir.insns[long_addresses[argument]].name,
-                       mir.insns[long_addresses[0]].name) != 0) ||
-            !mir_machine_constant_equals(
-                mir.insns[long_indices[argument]].dst, argument) ||
-            mir.insns[long_stores[argument]].opcode !=
-                MIR_STORE_INDIRECT ||
-            mir.insns[long_stores[argument]].src1 !=
-                mir.insns[long_stores[argument] - 2].dst ||
-            mir.insns[long_stores[argument]].src2 !=
-                mir.insns[long_values[argument]].dst ||
-            mir.insns[long_stores[argument]].memory_size != 4 ||
-            !mir_machine_constant_value(
-                mir.insns[long_values[argument]].dst, &value, 0))
-            return mir_machine_reject(
-                "fixed-index-call-runner", "long-array");
-        plan->long_values[argument] = (unsigned long)value;
-    }
-    for (argument = 0; argument < 6; ++argument) {
-        int expected_member_offset = (argument & 1) ? 4 : 0;
-
-        if (mir.insns[pair_addresses[argument]].opcode != MIR_ADDRESS ||
-            (argument != 0 &&
-                strcmp(mir.insns[pair_addresses[argument]].name,
-                       mir.insns[pair_addresses[0]].name) != 0) ||
-            !mir_machine_constant_equals(
-                mir.insns[pair_indices[argument]].dst,
-                argument / 2) ||
-            mir.insns[pair_members[argument]].opcode !=
-                MIR_MEMBER_ADDRESS ||
-            mir.insns[pair_members[argument]].immediate !=
-                expected_member_offset ||
-            mir.insns[pair_stores[argument]].opcode !=
-                MIR_STORE_INDIRECT ||
-            mir.insns[pair_stores[argument]].src1 !=
-                mir.insns[pair_members[argument]].dst ||
-            mir.insns[pair_stores[argument]].src2 !=
-                mir.insns[pair_values[argument]].dst ||
-            mir.insns[pair_stores[argument]].memory_size != 4 ||
-            !mir_machine_constant_value(
-                mir.insns[pair_values[argument]].dst, &value, 0))
-            return mir_machine_reject(
-                "fixed-index-call-runner", "pair-array");
-        plan->pair_values[argument] = (unsigned long)value;
-    }
-    for (argument = 0; argument < 5; ++argument) {
-        struct Sym *function;
-
-        if (mir.insns[calls[argument]].opcode != MIR_CALL ||
-            (function =
-                 find_global(mir.insns[calls[argument]].name)) == NULL ||
-            mir.insns[comparisons[argument]].opcode != MIR_BINARY ||
-            mir.insns[comparisons[argument]].immediate != TOK_NE ||
-            mir.insns[comparisons[argument]].src1 !=
-                mir.insns[calls[argument]].dst ||
-            mir.insns[comparisons[argument]].src2 !=
-                mir.insns[expecteds[argument]].dst ||
-            mir.insns[branches[argument]].opcode != MIR_BRANCH_FALSE)
-            return mir_machine_reject(
-                "fixed-index-call-runner", "call-check");
-        plan->functions[argument] = function;
-        if (!mir_machine_constant_value(
-                mir.insns[expecteds[argument]].dst, &value, 0))
-            return mir_machine_reject(
-                "fixed-index-call-runner", "expected");
-        if (argument < 3)
-            plan->expected_words[argument] = (int)value;
-        else
-            plan->expected_longs[argument - 3] =
-                (unsigned long)value;
-    }
-    for (argument = 0; argument < 2; ++argument) {
-        int call_argument;
-
-        if (!mir_machine_single_call_argument(
-                &mir.insns[calls[argument]], &call_argument) ||
-            !mir_machine_constant_value(
-                call_argument, &value, 0))
-            return mir_machine_reject(
-                "fixed-index-call-runner", "scalar-argument");
-        plan->scalar_arguments[argument] = (int)value;
-    }
-    for (argument = 0; argument < 3; ++argument) {
-        if (!mir_machine_two_call_arguments(
-                &mir.insns[calls[argument + 2]], arguments) ||
-            arguments[0] != mir.insns[call_addresses[argument]].dst ||
-            !mir_machine_constant_value(arguments[1], &value, 0))
-            return mir_machine_reject(
-                "fixed-index-call-runner", "pointer-argument");
-        plan->pointer_indices[argument] = (int)value;
-    }
-    plan->print_function =
-        find_global(mir.insns[147].name);
-    if (plan->print_function == NULL ||
-        mir.insns[147].opcode != MIR_CALL ||
-        mir.insns[154].opcode != MIR_CALL ||
-        find_global(mir.insns[154].name) != plan->print_function ||
-        mir.insns[143].opcode != MIR_STRING_ADDRESS ||
-        mir.insns[152].opcode != MIR_STRING_ADDRESS ||
-        mir.insns[149].opcode != MIR_RETURN ||
-        !mir_machine_constant_equals(mir.insns[148].dst, 1) ||
-        mir.insns[156].opcode != MIR_RETURN ||
-        !mir_machine_constant_equals(mir.insns[155].dst, 0))
-        return mir_machine_reject(
-            "fixed-index-call-runner", "final");
-    for (argument = 0; argument < mir.count; ++argument)
-        if (mir.insns[argument].opcode == MIR_CALL)
-            ++call_count;
-    if (call_count != 7)
-        return mir_machine_reject(
-            "fixed-index-call-runner", "call-count");
-    plan->failure_string_id =
-        (int)mir.insns[143].immediate;
-    plan->success_string_id =
-        (int)mir.insns[152].immediate;
-    return 1;
-}
 
 static int mir_machine_same_pointer_root(
     const struct MirMachineForm *left,
@@ -44625,157 +44230,13 @@ static void mir_emit_inline_fold_check(
             plan->byte_base + plan->byte_index);
 }
 
-static void mir_fixed_call_runner_failure(
-    FILE *out, const struct MirFixedCallCheckRunner *plan,
-    int check, int next_label)
-{
-    int increment_done = new_label();
 
-    fprintf(out, "\tjp z,L%d\n\tld hl,S%d\n\tpush hl\n",
-            next_label, plan->failure_string_ids[check]);
-    mir_machine_emit_symbol_call(
-        out, plan->print_function);
-    fprintf(out,
-            "\tpop bc\n\tinc (ix-2)\n"
-            "\tjp nz,L%d\n\tinc (ix-1)\n"
-            "L%d:\nL%d:\n",
-            increment_done, increment_done, next_label);
-}
 
-static void mir_fixed_call_runner_word_check(
-    FILE *out, const struct MirFixedCallCheckRunner *plan,
-    int check, int expected)
-{
-    int next_label = new_label();
 
-    fprintf(out,
-            "\tld de,%d\n\tor a\n\tsbc hl,de\n",
-            expected);
-    mir_fixed_call_runner_failure(
-        out, plan, check, next_label);
-}
 
-static void mir_fixed_call_runner_push_long(
-    FILE *out, unsigned long value)
-{
-    fprintf(out,
-            "\tld hl,%lu\n\tpush hl\n"
-            "\tld hl,%lu\n\tpush hl\n",
-            (value >> 16) & 0xffffUL,
-            value & 0xffffUL);
-}
 
-static void mir_emit_fixed_call_check_runner(
-    FILE *out, const struct MirFixedCallCheckRunner *plan)
-{
-    int success = new_label();
-    int done = new_label();
-    int next_label;
-    int argument;
 
-    if (opt_stack_check)
-        mir_emit_runtime_call(out, "__stchk");
-    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
-          "\tld hl,-6\n\tadd hl,sp\n\tld sp,hl\n"
-          "\tld (ix-2),0\n\tld (ix-1),0\n", out);
-    for (argument = 0; argument < 4; ++argument)
-        fprintf(out, "\tld (ix%+d),%d\n",
-                -6 + argument,
-                plan->array_values[argument] & 255);
 
-    for (argument = 1; argument >= 0; --argument)
-        fprintf(out, "\tld hl,%d\n\tpush hl\n",
-                plan->binary_arguments[0][argument]);
-    mir_machine_emit_symbol_call(
-        out, plan->functions[0]);
-    fputs("\tpop bc\n\tpop bc\n", out);
-    mir_fixed_call_runner_word_check(
-        out, plan, 0, plan->expected_words[0]);
-
-    for (argument = 1; argument >= 0; --argument)
-        fprintf(out, "\tld hl,%d\n\tpush hl\n",
-                plan->binary_arguments[1][argument]);
-    mir_machine_emit_symbol_call(
-        out, plan->functions[1]);
-    fputs("\tpop bc\n\tpop bc\n", out);
-    mir_fixed_call_runner_word_check(
-        out, plan, 1, plan->expected_words[1]);
-
-    fprintf(out,
-            "\tld hl,%d\n\tpush hl\n"
-            "\tpush ix\n\tpop hl\n"
-            "\tld de,-6\n\tadd hl,de\n\tpush hl\n",
-            plan->pointer_count);
-    mir_machine_emit_symbol_call(
-        out, plan->functions[2]);
-    fputs("\tpop bc\n\tpop bc\n", out);
-    mir_fixed_call_runner_word_check(
-        out, plan, 2, plan->expected_words[2]);
-
-    mir_fixed_call_runner_push_long(
-        out, plan->long_arguments[1]);
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
-            plan->long_middle_argument);
-    mir_fixed_call_runner_push_long(
-        out, plan->long_arguments[0]);
-    mir_machine_emit_symbol_call(
-        out, plan->functions[3]);
-    fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
-          "\tpop bc\n\tpop bc\n", out);
-    {
-        int failure_label = new_label();
-        int increment_done = new_label();
-
-        next_label = new_label();
-        fprintf(out,
-                "\tld bc,%lu\n\tor a\n\tsbc hl,bc\n"
-                "\tjp nz,L%d\n\tex de,hl\n"
-                "\tld bc,%lu\n\tor a\n\tsbc hl,bc\n"
-                "\tjp z,L%d\n"
-                "L%d:\n\tld hl,S%d\n\tpush hl\n",
-                plan->expected_long & 0xffffUL,
-                failure_label,
-                (plan->expected_long >> 16) & 0xffffUL,
-                next_label, failure_label,
-                plan->failure_string_ids[3]);
-        mir_machine_emit_symbol_call(
-            out, plan->print_function);
-        fprintf(out,
-                "\tpop bc\n\tinc (ix-2)\n"
-                "\tjp nz,L%d\n\tinc (ix-1)\n"
-                "L%d:\nL%d:\n",
-                increment_done, increment_done, next_label);
-    }
-
-    for (argument = 2; argument >= 0; --argument)
-        fprintf(out, "\tld hl,%d\n\tpush hl\n",
-                plan->byte_arguments[argument]);
-    mir_machine_emit_symbol_call(
-        out, plan->functions[4]);
-    fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
-    mir_fixed_call_runner_word_check(
-        out, plan, 4, plan->expected_words[3]);
-
-    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n"
-          "\tld a,h\n\tor l\n", out);
-    fprintf(out,
-            "\tjp z,L%d\n\tpush hl\n"
-            "\tld hl,S%d\n\tpush hl\n",
-            success, plan->summary_string_id);
-    mir_machine_emit_symbol_call(
-        out, plan->print_function);
-    fprintf(out,
-            "\tpop bc\n\tpop bc\n\tld hl,1\n"
-            "\tjp L%d\n"
-            "L%d:\n\tld hl,S%d\n\tpush hl\n",
-            done, success, plan->success_string_id);
-    mir_machine_emit_symbol_call(
-        out, plan->print_function);
-    fprintf(out,
-            "\tpop bc\n\tld hl,0\n"
-            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
-            done);
-}
 
 static void mir_emit_deterministic_init_check(
     FILE *out, const struct MirDeterministicInitCheck *plan)
@@ -44813,131 +44274,13 @@ static void mir_emit_deterministic_init_check(
             plan->return_addend);
 }
 
-static void mir_fixed_index_runner_failure(
-    FILE *out, int next_label)
-{
-    int increment_done = new_label();
 
-    fprintf(out,
-            "\tjp z,L%d\n\tinc (ix-2)\n"
-            "\tjp nz,L%d\n\tinc (ix-1)\n"
-            "L%d:\nL%d:\n",
-            next_label, increment_done,
-            increment_done, next_label);
-}
 
-static void mir_fixed_index_runner_word_check(
-    FILE *out, int expected)
-{
-    int next_label = new_label();
 
-    fprintf(out,
-            "\tld de,%d\n\tor a\n\tsbc hl,de\n",
-            expected);
-    mir_fixed_index_runner_failure(out, next_label);
-}
 
-static void mir_fixed_index_runner_wide_check(
-    FILE *out, unsigned long expected)
-{
-    int failure = new_label();
-    int next_label = new_label();
 
-    fprintf(out,
-            "\tld bc,%lu\n\tor a\n\tsbc hl,bc\n"
-            "\tjp nz,L%d\n\tex de,hl\n"
-            "\tld bc,%lu\n\tor a\n\tsbc hl,bc\n"
-            "\tjp z,L%d\n"
-            "L%d:\n",
-            expected & 0xffffUL, failure,
-            (expected >> 16) & 0xffffUL,
-            next_label, failure);
-    mir_fixed_index_runner_failure(out, next_label);
-}
 
-static void mir_emit_fixed_index_call_runner(
-    FILE *out, const struct MirFixedIndexCallRunner *plan)
-{
-    static const int int_offsets[4] = {-50, -48, -46, -44};
-    static const int long_offsets[4] = {-42, -38, -34, -30};
-    static const int pair_offsets[6] = {
-        -26, -22, -18, -14, -10, -6
-    };
-    static const int pointer_offsets[3] = {-50, -42, -26};
-    int success = new_label();
-    int done = new_label();
-    int item;
 
-    if (opt_stack_check)
-        mir_emit_runtime_call(out, "__stchk");
-    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
-          "\tld hl,-50\n\tadd hl,sp\n\tld sp,hl\n"
-          "\tld (ix-2),0\n\tld (ix-1),0\n", out);
-    for (item = 0; item < 4; ++item) {
-        fprintf(out,
-                "\tld hl,%d\n"
-                "\tld (ix%+d),l\n\tld (ix%+d),h\n",
-                plan->int_values[item],
-                int_offsets[item], int_offsets[item] + 1);
-        mir_machine_emit_float_bits(
-            out, plan->long_values[item]);
-        mir_machine_emit_ix_wide_store(
-            out, long_offsets[item]);
-    }
-    for (item = 0; item < 6; ++item) {
-        mir_machine_emit_float_bits(
-            out, plan->pair_values[item]);
-        mir_machine_emit_ix_wide_store(
-            out, pair_offsets[item]);
-    }
-
-    for (item = 0; item < 2; ++item) {
-        fprintf(out, "\tld hl,%d\n\tpush hl\n",
-                plan->scalar_arguments[item]);
-        mir_machine_emit_symbol_call(
-            out, plan->functions[item]);
-        fputs("\tpop bc\n", out);
-        mir_fixed_index_runner_word_check(
-            out, plan->expected_words[item]);
-    }
-    for (item = 0; item < 3; ++item) {
-        fprintf(out,
-                "\tld hl,%d\n\tpush hl\n"
-                "\tpush ix\n\tpop hl\n"
-                "\tld de,%d\n\tadd hl,de\n\tpush hl\n",
-                plan->pointer_indices[item],
-                pointer_offsets[item]);
-        mir_machine_emit_symbol_call(
-            out, plan->functions[item + 2]);
-        fputs("\tpop bc\n\tpop bc\n", out);
-        if (item == 0)
-            mir_fixed_index_runner_word_check(
-                out, plan->expected_words[2]);
-        else
-            mir_fixed_index_runner_wide_check(
-                out, plan->expected_longs[item - 1]);
-    }
-
-    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n"
-          "\tld a,h\n\tor l\n", out);
-    fprintf(out,
-            "\tjp z,L%d\n\tpush hl\n"
-            "\tld hl,S%d\n\tpush hl\n",
-            success, plan->failure_string_id);
-    mir_machine_emit_symbol_call(
-        out, plan->print_function);
-    fprintf(out,
-            "\tpop bc\n\tpop bc\n\tld hl,1\n"
-            "\tjp L%d\n"
-            "L%d:\n\tld hl,S%d\n\tpush hl\n",
-            done, success, plan->success_string_id);
-    mir_machine_emit_symbol_call(
-        out, plan->print_function);
-    fprintf(out,
-            "\tpop bc\n\tld hl,0\n"
-            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
-            done);
-}
 
 static void mir_local_array_struct_store(
     FILE *out, int offset, int width, unsigned long value)
@@ -45783,9 +45126,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     struct MirFixedSieveBuild fixed_sieve_build;
     struct MirFixedWrapperInit fixed_wrapper_init;
     struct MirInlineFoldCheck inline_fold_check;
-    struct MirFixedCallCheckRunner fixed_call_check_runner;
     struct MirDeterministicInitCheck deterministic_init_check;
-    struct MirFixedIndexCallRunner fixed_index_call_runner;
     struct MirLocalArrayStructChecks local_array_struct_checks;
     struct MirAliasMixSchedule alias_mix_schedule;
     struct MirBitfieldReportSequence bitfield_report_sequence;
@@ -46472,11 +45813,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
         mir_emit_inline_fold_check(out, &inline_fold_check);
         return 1;
     }
-    if (mir_match_fixed_call_check_runner(
-            &fixed_call_check_runner)) {
-        mir_emit_fixed_call_check_runner(
-            out, &fixed_call_check_runner);
-        return 1;
+    {
+        int call_runner_result =
+            mir_try_emit_call_runners(out, 0);
+
+        if (call_runner_result >= 0)
+            return call_runner_result;
     }
     if (mir_match_deterministic_init_check(
             &deterministic_init_check)) {
@@ -46484,11 +45826,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             out, &deterministic_init_check);
         return 1;
     }
-    if (mir_match_fixed_index_call_runner(
-            &fixed_index_call_runner)) {
-        mir_emit_fixed_index_call_runner(
-            out, &fixed_index_call_runner);
-        return 1;
+    {
+        int call_runner_result =
+            mir_try_emit_call_runners(out, 1);
+
+        if (call_runner_result >= 0)
+            return call_runner_result;
     }
     if (mir_match_local_array_struct_checks(
             &local_array_struct_checks)) {
