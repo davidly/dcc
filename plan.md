@@ -3,6 +3,55 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-14 sizeof/layout 10-block batch (working tree)
+
+- Branch/base: `pr/143` at `d4a6962`. The endgame call-runner module now
+  admits the 10-block `tc89size.main` `final-cost-policy` fallback through a
+  strict name-free matcher over all **1,040 MIR instructions**. It validates
+  the complete opcode and CFG streams, four distinct global-address/local-
+  pointer relationships, the single failure global, all **125** integer/long
+  checks, all **13** nested-scope helper calls, both final output calls and
+  both returns. The target-width constant evaluator applies the check
+  prototype's exact 16/32-bit conversion and resolves the two constant
+  conditional PHIs, preserving signed, unsigned, pointer, array and aggregate
+  size/layout values without comparing any production function, helper,
+  global, local, field, format, output or test name.
+- The dedicated emitter remains frameless, zeros and later tests the original
+  failure global, emits every check/helper/output call in source order, keeps
+  the one helper argument and all string roles, and returns the original
+  failure/success values. It emits no IY instruction.
+- Normal selected/captured metrics are **15,000/16,025 bytes** and
+  **1,562/1,683 instructions**. Stack-check metrics are
+  **15,029/16,054 bytes** and **1,563/1,684 instructions**.
+- `tc89size` passes full stack-check peep/nopeep validation. Selected versus
+  forced fallback is **94,089/94,419 cycles and 10,752/10,880 bytes** peep
+  plus **100,282/100,906 cycles and 10,880/11,008 bytes** nopeep. Exact gains
+  are **330 cycles and 128 bytes** peep plus **624 cycles and 128 bytes**
+  nopeep, with the existing successful output unchanged.
+- A separately renamed helper/global/local/string boundary fixture selects
+  the same family at the same stack-check generated/captured metrics.
+  Selected/fallback output is byte-identical in both modes and prints
+  `layout boundary completed`. Peep totals are **86,203/86,533 cycles** with
+  both images **8,448 bytes**; nopeep totals are **92,396/93,020 cycles** and
+  **8,576/8,704 bytes**. Changing only the aggregate-array extent from two to
+  three and its valid size expectation from 14 to 21 is rejected by the
+  exact constants contract and remains on `final-cost-policy`; the
+  changed-layout fallback still passes at **86,680 cycles / 8,448 bytes**
+  peep and **93,167 cycles / 8,704 bytes** nopeep.
+- The regression-gated stack-check census advances
+  **2,174/2,185 (99.50%)** to **2,175/2,185 (99.54%)**, adds exactly
+  `tc89size.main`, removes no accepted function, moves selector counts from
+  **1,379 spilled / 399 scheduled** to
+  **1,378 spilled / 400 scheduled**, and reduces `final-cost-policy`
+  fallbacks **11 -> 10**.
+- The endgame module grows from **7,878 to 8,654 source lines** (**+776**).
+  Its standalone object defines only `mir_try_emit_endgame_runners [T]`
+  globally and has zero global data definitions. The canonical build,
+  focused selected/fallback full runs, renamed layout A/B, changed-layout
+  runtime, regression-gated census, export audit, source diagnostics, no-IY
+  inspection and `git diff --check` pass. No performance baseline,
+  production-name gate or output-hash gate was added or changed.
+
 ## 2026-08-13 pointer-condition 246-block batch (working tree)
 
 - Branch/base: `pr/143` at `f5ba843`. The aggregate-check scheduler now admits
