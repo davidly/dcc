@@ -6,10 +6,59 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Clean base HEAD for the current coverage batch: `d830f6f`.
-- Current working-tree candidate coverage: **2132/2185 (97.57%)**.
-- Remaining fallback population: **53 `final-cost-policy`**, all selected by
+- Clean base HEAD for the current coverage batch: `edeaf12`.
+- Current working-tree candidate coverage: **2133/2185 (97.62%)**.
+- Remaining fallback population: **52 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The next numeric-family batch creates compiled
+  `dcc_mir_machine_numeric.c` with zero shared variables and
+  `mir_try_emit_numeric_kernels` as its sole export. Phase dispatch keeps the
+  previous selector positions byte-for-byte while moving the unsigned-long
+  square-root search, fixed-point multiply, and narrowed div/mod while-loop
+  schedules out of the core emitter. Before/after extraction censuses are
+  byte-identical in normal mode at SHA-256
+  `93168b31174f680dafd4a427709d179f5dbc4f5e0a0da871d240b5c058f1dcd0`
+  and stack-check mode at
+  `ea904031465ae5d13981f54b5560e787ebc898b46b3c062f70df209fffaff0b8`;
+  coverage remains **2043/2103** and **2132/2185**, with zero selector,
+  metric, selected-hash, or runtime-validation change. The core machine
+  emitter falls from **48,352 to 47,195 lines**; the numeric module is
+  **1,768 lines** with **23 static top-level helpers**, and the narrow
+  function-only internal contract is **52 lines**. The module export audit
+  reports only `mir_try_emit_numeric_kernels [T]`, no read-only or writable
+  data, and **PASS**; canonical and CMake builds pass.
+- The same module admits the 11-block `primes.main`
+  `final-cost-policy` fallback through a strict name-free matcher over all
+  **120 MIR instructions**. It proves the `argc`/`argv[1]` ABI, `atol`
+  conversion, unsigned start and odd normalization, the unsigned square-root
+  helper relationship, outer ten-result loop, 32-bit odd divisor/modulo loop,
+  `%lu` variadic print target in both automatic-long and forced-float/long
+  modes, and final zero return. The emitter uses an 11-byte IX frame, keeps
+  the active divisor low word in BC across `__lmu`, carries its high word
+  explicitly, preserves full 32-bit wrap and the source's boundary behavior,
+  and uses no IY. Normal selected/captured metrics are
+  **1,616/3,574 bytes** and **145/352 instructions**; stack-check metrics are
+  **1,645/3,603** and **146/353**. Checked-setting selected versus forced
+  fallback improves peep from **4,619,721 to 3,929,138 cycles**
+  (**-690,583 / -14.95%**) and **7,040 to 6,656 bytes**, and nopeep from
+  **4,635,343 to 3,929,149 cycles** (**-706,194 / -15.23%**) with the same
+  384-byte reduction. A renamed-helper edge A/B covers starts
+  `0, 1, 2, 65534, 65535, 4294967294`; selected and fallback output is
+  byte-identical in peep and nopeep. At 65,534, selected/fallback is
+  **6,626,136/8,023,323 cycles peep** and
+  **6,626,175/8,049,751 nopeep**, with **6,656/7,040 bytes** in both modes.
+  Full `primes`, `tshlmac`, and `tdmfuse` peep/nopeep validation passes with
+  zero checked regression and no baseline update. Normal coverage advances
+  **2043/2103 (97.15%)** to **2044/2103 (97.19%)**; stack-check advances
+  **2132/2185 (97.57%)** to **2133/2185 (97.62%)**, adding exactly
+  `primes.main`, removing none, moving selector counts from
+  **1,421 spilled / 357 scheduled** to **1,420 spilled / 358 scheduled**,
+  and leaving **52 `final-cost-policy`** fallbacks. Final proof-snapshot
+  SHA-256 values are
+  `dc7f360093250818c911b29511dd5ffeec40f4102ed92edab75571d42481c0e0`
+  normal and
+  `60062d11a5a604ad5daa0925f9b88bdcd2adc1abbbb01cb4f93f538e23c9d195`
+  stack-check.
 - The first machine-emitter architecture pivot moves the recently added float
   report/check orchestration family, including the raw-conversion checker,
   from `dcc_mir_machine_emit.c` into

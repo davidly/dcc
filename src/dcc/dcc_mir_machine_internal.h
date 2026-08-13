@@ -46,4 +46,7 @@ int mir_try_emit_scanner_kernels(FILE *out, int late);
 /* Returns -1 when no aggregate check schedule matches. */
 int mir_try_emit_aggregate_checks(FILE *out);
 
+/* The phase preserves each numeric schedule's existing selector position. */
+int mir_try_emit_numeric_kernels(FILE *out, int phase);
+
 #endif
