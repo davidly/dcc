@@ -21105,8 +21105,11 @@ _difftime:
         ld      h,(ix+5)        ; HL = t1 low word
         ld      e,(ix+8)
         ld      d,(ix+9)        ; DE = t0 low word
-        or      a
-        sbc     hl,de           ; HL = t1_lo - t0_lo, carry = borrow
+        sbc     hl,de           ; HL = t1_lo - t0_lo, carry = borrow: C is
+                                 ; already clear here from "add ix,sp" above
+                                 ; (IX was 0, so that add can't overflow and
+                                 ; set carry), untouched since by the LD's
+                                 ; in between (LD never affects flags)
         push    hl              ; save low result
         ld      l,(ix+6)
         ld      h,(ix+7)        ; HL = t1 high word
@@ -21124,6 +21127,15 @@ _difftime:
 ; then rename generated L<n>/_Z<n>/S<n> labels to CDL<n>/CDZ<n>/CDS<n> (collision-avoidance, same idea as the
 ; strconv.c-derived block's SCL<n>/SCZ<n> rename below). dcc's own codegen already special-cases "localtime"
 ; to call __ltim directly (see dcc_asmname.c), so no manual rename is needed for that one specifically.
+; Two more hand-applied cleanups on top of the raw regenerated+peepholed output, both dead "or a"
+; carry-clears dcc's codegen emits reflexively: (1) cal_days_in_month's first sbc hl,de, right after
+; push ix/ld ix,0/add ix,sp - C is already clear there (see _difftime's header comment for the proof);
+; (2) every "pop bc / or a / add hl,bc" 32-bit-add sequence - ADD HL,rr never reads incoming carry (only
+; ADC does), so clearing it first is always dead code regardless of context, not just here. Both are
+; general dcc codegen habits, not calendar.c-specific, so a full fix belongs in the compiler - noted,
+; not chased further right now (see peep_pass_once.c's KNOWN BUG comment for why: same "wait for the
+; feature branch, don't create merge friction" reasoning applies to touching shared codegen right now).
+; Regenerating this block from calendar.c will reintroduce both patterns; reapply this same trim.
 
 
 
@@ -21487,7 +21499,6 @@ CDL254:
         ld de,0
 CDL255:
         pop bc
-        or a
         add hl,bc
         ex de,hl
         pop bc
@@ -21539,7 +21550,6 @@ CDL257:
         ld d,a
         ld e,a
         pop bc
-        or a
         add hl,bc
         ex de,hl
         pop bc
@@ -21575,7 +21585,6 @@ CDL259:
         ld d,a
         ld e,a
         pop bc
-        or a
         add hl,bc
         ex de,hl
         pop bc
@@ -21617,7 +21626,6 @@ CDL259:
         pop bc
         pop bc
         pop bc
-        or a
         add hl,bc
         ex de,hl
         pop bc
@@ -21646,7 +21654,6 @@ CDL259:
         pop bc
         pop bc
         pop bc
-        or a
         add hl,bc
         ex de,hl
         pop bc
@@ -21666,7 +21673,6 @@ CDL259:
         ld d,a
         ld e,a
         pop bc
-        or a
         add hl,bc
         ex de,hl
         pop bc
@@ -21859,8 +21865,7 @@ CDZ0002:
         ld l,(ix+6)
         ld h,(ix+7)
         ld de,1
-        or a
-        sbc hl,de
+        sbc hl,de       ; C already clear: see _difftime's header comment
         jr nz,CDL62 ; peep: jp_to_jr
         ld l,(ix+4)
         ld h,(ix+5)
@@ -21997,7 +22002,6 @@ CDL140:
         ld hl,4
         ld de,0
         pop bc
-        or a
         add hl,bc
         ex de,hl
         pop bc
