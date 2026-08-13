@@ -7271,8 +7271,562 @@ static int mir_match_ptr_condition_main(
     return 1;
 }
 
+#define MIR_ADDITIVE_CHECKS 6
+#define MIR_ADDITIVE_FIXED_STORES 4
+
+struct MirAdditiveSubscriptPlan {
+    struct Sym *target;
+    struct Sym *source;
+    struct Sym *check_function;
+    int strings[MIR_ADDITIVE_CHECKS];
+    int check_offsets[MIR_ADDITIVE_CHECKS];
+    unsigned long expected[MIR_ADDITIVE_CHECKS];
+    int fixed_offsets[MIR_ADDITIVE_FIXED_STORES];
+    int fixed_values[MIR_ADDITIVE_FIXED_STORES];
+    int fill_count;
+    int fill_bias;
+    int source_count;
+    int source_offset_mask;
+};
+
+static int mir_additive_opcode_sequence(void)
+{
+    static const unsigned char expected[] = {
+        MIR_LABEL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_PHI,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_UNARY, MIR_STORE_INDIRECT, MIR_LABEL, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_ADDRESS, MIR_NOP,
+        MIR_NOP, MIR_CONST, MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST,
+        MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_NOP, MIR_NOP, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST, MIR_STORE_INDIRECT,
+        MIR_ADDRESS, MIR_NOP, MIR_NOP, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_NOP, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_NOP,
+        MIR_NOP, MIR_CONST, MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST,
+        MIR_STORE_INDIRECT, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS,
+        MIR_NOP, MIR_NOP, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_NOP,
+        MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_ADDRESS, MIR_NOP, MIR_NOP, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG,
+        MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_NOP,
+        MIR_NOP, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST,
+        MIR_NOP, MIR_STORE, MIR_LABEL, MIR_PHI, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP, MIR_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_NOP, MIR_BINARY, MIR_UNARY,
+        MIR_STORE, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_NOP,
+        MIR_BINARY, MIR_UNARY, MIR_STORE, MIR_ADDRESS, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_INDEX_ADDRESS, MIR_LOAD, MIR_UNARY,
+        MIR_STORE_INDIRECT, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_ADDRESS, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL
+    };
+    int instruction;
+
+    if (mir.count != (int)(sizeof(expected) / sizeof(expected[0])))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        if ((instruction == 143 || instruction == 144) &&
+            ((mir.insns[143].opcode == MIR_LOAD &&
+              mir.insns[144].opcode == MIR_CONST) ||
+             (mir.insns[143].opcode == MIR_CONST &&
+              mir.insns[144].opcode == MIR_LOAD)))
+            continue;
+        if (mir.insns[instruction].opcode != expected[instruction])
+            return 0;
+    }
+    return 1;
+}
+
+static int mir_additive_int_constant(int instruction, long *value)
+{
+    const struct MirInsn *insn = &mir.insns[instruction];
+
+    if (insn->opcode != MIR_CONST ||
+        !mir_packed_scalar_type(insn->type, TYPE_INT, 0, 0))
+        return 0;
+    *value = insn->immediate;
+    return 1;
+}
+
+static int mir_additive_commutative_binary(
+    int instruction, int left, int right, int operation, int type)
+{
+    const struct MirInsn *insn = &mir.insns[instruction];
+    int left_value = mir.insns[left].dst;
+    int right_value = mir.insns[right].dst;
+
+    return insn->opcode == MIR_BINARY &&
+           insn->immediate == operation &&
+           insn->type == type &&
+           insn->secondary_offset == type &&
+           ((insn->src1 == left_value && insn->src2 == right_value) ||
+            (insn->src1 == right_value && insn->src2 == left_value));
+}
+
+static int mir_additive_ordered_binary(
+    int instruction, int left, int right, int operation, int type)
+{
+    const struct MirInsn *insn = &mir.insns[instruction];
+
+    return insn->opcode == MIR_BINARY &&
+           insn->src1 == mir.insns[left].dst &&
+           insn->src2 == mir.insns[right].dst &&
+           insn->immediate == operation &&
+           insn->type == type &&
+           insn->secondary_offset == type;
+}
+
+static int mir_additive_global_root(
+    int instruction, struct Sym **root_out)
+{
+    long offset;
+
+    if (mir.insns[instruction].opcode != MIR_ADDRESS ||
+        !mir_machine_global_address_offset(
+            mir.insns[instruction].dst, root_out, &offset, 0) ||
+        offset != 0 || (*root_out)->is_volatile ||
+        (*root_out)->is_funcptr)
+        return 0;
+    return 1;
+}
+
+static int mir_additive_local_word(
+    int instruction, int *offset_out)
+{
+    int type;
+    int storage;
+
+    return mir_scalar_memory_location(
+               &mir.insns[instruction], &type, &storage, offset_out) &&
+           storage == SC_LOCAL &&
+           (mir.insns[instruction].memory_size == 2 ||
+            (mir.insns[instruction].opcode == MIR_LOAD &&
+             mir.insns[instruction].memory_size == 0)) &&
+           mir_packed_scalar_type(type, TYPE_INT, 0, 0) &&
+           (mir.insns[instruction].memory_flags & (1 | 8)) == 0;
+}
+
+static int mir_additive_check(
+    struct MirAdditiveSubscriptPlan *plan, int slot, int string_instruction,
+    int address_instruction, int index_constant_instruction,
+    int index_instruction, int load_instruction, int convert_instruction,
+    int call_instruction)
+{
+    static const int argument_instruction[MIR_ADDITIVE_CHECKS][3] = {
+        {58, 66, 68}, {71, 79, 81}, {84, 92, 94},
+        {97, 105, 107}, {159, 169, 171}, {174, 184, 186}
+    };
+    struct Sym *root;
+    struct Sym *function;
+    int arguments[3];
+    long offset;
+    long expected;
+
+    if (!mir_additive_global_root(address_instruction, &root) ||
+        root != plan->target ||
+        !mir_additive_int_constant(index_constant_instruction, &offset) ||
+        offset < 0 || offset > 32767 ||
+        mir.insns[index_instruction].src1 !=
+            mir.insns[address_instruction].dst ||
+        mir.insns[index_instruction].src2 !=
+            mir.insns[index_constant_instruction].dst ||
+        mir.insns[index_instruction].memory_size != 1 ||
+        mir.insns[index_instruction].immediate != 1 ||
+        !mir_packed_scalar_type(
+            mir.insns[index_instruction].type, TYPE_CHAR, 1, 1) ||
+        mir.insns[load_instruction].src1 !=
+            mir.insns[index_instruction].dst ||
+        mir.insns[load_instruction].memory_size != 1 ||
+        !mir_packed_scalar_type(
+            mir.insns[load_instruction].type, TYPE_CHAR, 1, 0) ||
+        mir.insns[convert_instruction].src1 !=
+            mir.insns[load_instruction].dst ||
+        mir.insns[convert_instruction].immediate != 0 ||
+        !mir_packed_scalar_type(
+            mir.insns[convert_instruction].type, TYPE_LONG, 0, 0) ||
+        !mir_aggregate_direct_function(call_instruction, &function) ||
+        !mir_machine_three_call_arguments(
+            &mir.insns[call_instruction], arguments) ||
+        arguments[0] !=
+            mir.insns[argument_instruction[slot][0]].src1 ||
+        arguments[1] !=
+            mir.insns[argument_instruction[slot][1]].src1 ||
+        arguments[2] !=
+            mir.insns[argument_instruction[slot][2]].src1 ||
+        arguments[0] != mir.insns[string_instruction].dst ||
+        arguments[1] != mir.insns[convert_instruction].dst ||
+        !mir_machine_constant_value(arguments[2], &expected, 0) ||
+        !mir_packed_scalar_type(
+            mir_definition(arguments[2])->type, TYPE_LONG, 0, 0))
+        return 0;
+    if (slot == 0)
+        plan->check_function = function;
+    else if (function != plan->check_function)
+        return 0;
+    if (mir.insns[string_instruction].opcode != MIR_STRING_ADDRESS ||
+        !mir_packed_scalar_type(
+            mir.insns[string_instruction].type, TYPE_CHAR, 0, 1))
+        return 0;
+    plan->strings[slot] =
+        (int)mir.insns[string_instruction].immediate;
+    plan->check_offsets[slot] = (int)offset;
+    plan->expected[slot] = (unsigned long)expected;
+    return 1;
+}
+
+static int mir_match_additive_subscript_runner(
+    struct MirAdditiveSubscriptPlan *plan)
+{
+    static const int fixed_address[MIR_ADDITIVE_FIXED_STORES] = {
+        25, 33, 41, 49
+    };
+    static const int fixed_index_constant[MIR_ADDITIVE_FIXED_STORES] = {
+        28, 36, 44, 52
+    };
+    static const int fixed_index[MIR_ADDITIVE_FIXED_STORES] = {
+        29, 37, 45, 53
+    };
+    static const int fixed_value[MIR_ADDITIVE_FIXED_STORES] = {
+        31, 39, 47, 55
+    };
+    static const int fixed_store[MIR_ADDITIVE_FIXED_STORES] = {
+        32, 40, 48, 56
+    };
+    static const int check_layout[MIR_ADDITIVE_CHECKS][6] = {
+        {57, 59, 62, 63, 64, 65},
+        {70, 72, 75, 76, 77, 78},
+        {83, 85, 88, 89, 90, 91},
+        {96, 98, 101, 102, 103, 104},
+        {158, 160, 165, 166, 167, 168},
+        {173, 175, 180, 181, 182, 183}
+    };
+    struct Sym *root;
+    int i_offset;
+    int offset_offset;
+    int value_offset;
+    int offset_load_instruction;
+    int offset_one_instruction;
+    int item;
+    long constant;
+
+    memset(plan, 0, sizeof(*plan));
+    if (!mir_additive_opcode_sequence() ||
+        mir_cfg_block_count() != 7 || mir.local_bytes != 6 ||
+        mir.aggregate_temp_bytes != 0 || mir.has_vla ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    offset_load_instruction =
+        mir.insns[143].opcode == MIR_LOAD ? 143 : 144;
+    offset_one_instruction =
+        mir.insns[143].opcode == MIR_CONST ? 143 : 144;
+    if (!mir_additive_local_word(3, &i_offset) ||
+        !mir_additive_local_word(22, &item) || item != i_offset ||
+        !mir_additive_local_word(111, &item) || item != i_offset ||
+        !mir_additive_local_word(155, &item) || item != i_offset ||
+        !mir_additive_local_word(130, &offset_offset) ||
+        !mir_additive_local_word(offset_load_instruction, &item) ||
+        item != offset_offset ||
+        !mir_additive_local_word(141, &value_offset) ||
+        !mir_additive_local_word(147, &item) || item != value_offset ||
+        i_offset == offset_offset || i_offset == value_offset ||
+        offset_offset == value_offset)
+        return mir_machine_reject(
+            "additive-subscript-runner", "local-layout");
+    if (!mir_machine_constant_equals(mir.insns[3].src1, 0) ||
+        mir.insns[5].object < 0 ||
+        mir.insns[5].object != mir.insns[3].object ||
+        mir.insns[5].object != mir.insns[22].object ||
+        mir.insns[5].src1 != mir.insns[1].dst ||
+        mir.insns[5].src2 != mir.insns[21].dst ||
+        mir.insns[5].phi_pred1 != mir.insns[0].label ||
+        mir.insns[5].phi_pred2 != mir.insns[18].label ||
+        !mir_additive_int_constant(7, &constant) ||
+        constant <= 0 || constant > 256)
+        return mir_machine_reject(
+            "additive-subscript-runner", "fill-loop");
+    plan->fill_count = (int)constant;
+    if (!mir_additive_ordered_binary(8, 5, 7, '<', TYPE_INT) ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[9].label != mir.insns[24].label ||
+        !mir_additive_global_root(10, &plan->target) ||
+        mir.insns[12].src1 != mir.insns[10].dst ||
+        mir.insns[12].src2 != mir.insns[5].dst ||
+        mir.insns[12].memory_size != 1 ||
+        mir.insns[12].immediate != 1 ||
+        !mir_packed_scalar_type(
+            mir.insns[12].type, TYPE_CHAR, 1, 1) ||
+        !mir_additive_int_constant(14, &constant) ||
+        constant != 1 ||
+        !mir_additive_commutative_binary(15, 5, 14, '+', TYPE_INT) ||
+        mir.insns[16].src1 != mir.insns[15].dst ||
+        mir.insns[16].immediate != 0 ||
+        !mir_packed_scalar_type(
+            mir.insns[16].type, TYPE_CHAR, 1, 0) ||
+        mir.insns[17].src1 != mir.insns[12].dst ||
+        mir.insns[17].src2 != mir.insns[16].dst ||
+        mir.insns[17].memory_size != 1 ||
+        !mir_additive_int_constant(20, &constant) ||
+        constant != 1 ||
+        !mir_additive_commutative_binary(21, 5, 20, '+', TYPE_INT) ||
+        mir.insns[22].src1 != mir.insns[21].dst ||
+        mir.insns[23].label != mir.insns[4].label)
+        return mir_machine_reject(
+            "additive-subscript-runner", "fill-operations");
+    plan->fill_bias = 1;
+    for (item = 0; item < MIR_ADDITIVE_FIXED_STORES; ++item) {
+        long offset;
+        long value;
+
+        if (!mir_additive_global_root(fixed_address[item], &root) ||
+            root != plan->target ||
+            !mir_additive_int_constant(
+                fixed_index_constant[item], &offset) ||
+            offset < 0 || offset > 32767 ||
+            mir.insns[fixed_index[item]].src1 !=
+                mir.insns[fixed_address[item]].dst ||
+            mir.insns[fixed_index[item]].src2 !=
+                mir.insns[fixed_index_constant[item]].dst ||
+            mir.insns[fixed_index[item]].memory_size != 1 ||
+            mir.insns[fixed_index[item]].immediate != 1 ||
+            !mir_packed_scalar_type(
+                mir.insns[fixed_index[item]].type,
+                TYPE_CHAR, 1, 1) ||
+            mir.insns[fixed_value[item]].immediate < 0 ||
+            mir.insns[fixed_value[item]].immediate > 255 ||
+            !mir_packed_scalar_type(
+                mir.insns[fixed_value[item]].type,
+                TYPE_CHAR, 1, 0) ||
+            mir.insns[fixed_store[item]].src1 !=
+                mir.insns[fixed_index[item]].dst ||
+            mir.insns[fixed_store[item]].src2 !=
+                mir.insns[fixed_value[item]].dst ||
+            mir.insns[fixed_store[item]].memory_size != 1) {
+            return mir_machine_reject(
+                "additive-subscript-runner", "fixed-stores");
+        }
+        value = mir.insns[fixed_value[item]].immediate;
+        plan->fixed_offsets[item] = (int)offset;
+        plan->fixed_values[item] = (int)value;
+    }
+    for (item = 0; item < 4; ++item)
+        if (!mir_additive_check(
+                plan, item, check_layout[item][0],
+                check_layout[item][1], check_layout[item][2],
+                check_layout[item][3], check_layout[item][4],
+                check_layout[item][5], 69 + 13 * item))
+            return mir_machine_reject(
+                "additive-subscript-runner", "fixed-checks");
+    if (!plan->check_function->has_proto ||
+        plan->check_function->proto_variadic ||
+        plan->check_function->proto_nargs != 3 ||
+        (plan->check_function->type & 15) != TYPE_VOID ||
+        !mir_packed_scalar_type(
+            plan->check_function->proto_types[0], TYPE_CHAR, 0, 1) ||
+        !mir_packed_scalar_type(
+            plan->check_function->proto_types[1], TYPE_LONG, 0, 0) ||
+        !mir_packed_scalar_type(
+            plan->check_function->proto_types[2], TYPE_LONG, 0, 0))
+        return mir_machine_reject(
+            "additive-subscript-runner", "check-prototype");
+    if (!mir_machine_constant_equals(mir.insns[111].src1, 0) ||
+        mir.insns[113].object != mir.insns[5].object ||
+        mir.insns[113].src1 != mir.insns[109].dst ||
+        mir.insns[113].src2 != mir.insns[154].dst ||
+        mir.insns[113].phi_pred1 != mir.insns[24].label ||
+        mir.insns[113].phi_pred2 != mir.insns[151].label ||
+        !mir_additive_int_constant(115, &constant) ||
+        constant <= 0 || constant > 256)
+        return mir_machine_reject(
+            "additive-subscript-runner", "source-loop");
+    plan->source_count = (int)constant;
+    if (!mir_additive_ordered_binary(116, 113, 115, '<', TYPE_INT) ||
+        mir.insns[117].src1 != mir.insns[116].dst ||
+        mir.insns[117].label != mir.insns[157].label ||
+        !mir_additive_global_root(120, &plan->source) ||
+        plan->source == plan->target ||
+        mir.insns[122].src1 != mir.insns[120].dst ||
+        mir.insns[122].src2 != mir.insns[113].dst ||
+        mir.insns[122].memory_size != 4 ||
+        mir.insns[122].immediate != 4 ||
+        !mir_packed_scalar_type(
+            mir.insns[122].type, TYPE_INT, 1, 1) ||
+        !mir_machine_constant_equals(mir.insns[123].dst, 0) ||
+        mir.insns[124].src1 != mir.insns[122].dst ||
+        mir.insns[124].src2 != mir.insns[123].dst ||
+        mir.insns[124].memory_size != 2 ||
+        mir.insns[124].immediate != 2 ||
+        !mir_packed_scalar_type(
+            mir.insns[124].type, TYPE_INT, 1, 1) ||
+        mir.insns[125].src1 != mir.insns[124].dst ||
+        mir.insns[125].memory_size != 2 ||
+        !mir_packed_scalar_type(
+            mir.insns[125].type, TYPE_INT, 1, 0) ||
+        !mir_additive_int_constant(126, &constant) ||
+        constant < 0 || constant > 254 ||
+        mir.insns[128].src1 != mir.insns[125].dst ||
+        mir.insns[128].src2 != mir.insns[126].dst ||
+        mir.insns[128].immediate != '&' ||
+        mir.insns[128].secondary_offset != mir.insns[128].type ||
+        !mir_packed_scalar_type(
+            mir.insns[128].type, TYPE_INT, 1, 0) ||
+        mir.insns[129].src1 != mir.insns[128].dst ||
+        mir.insns[129].immediate != 0 ||
+        !mir_packed_scalar_type(
+            mir.insns[129].type, TYPE_INT, 0, 0) ||
+        mir.insns[130].src1 != mir.insns[129].dst)
+        return mir_machine_reject(
+            "additive-subscript-runner", "source-offset");
+    plan->source_offset_mask = (int)constant;
+    if (!mir_additive_global_root(131, &root) ||
+        root != plan->source ||
+        mir.insns[133].src1 != mir.insns[131].dst ||
+        mir.insns[133].src2 != mir.insns[113].dst ||
+        mir.insns[133].memory_size != 4 ||
+        mir.insns[133].immediate != 4 ||
+        !mir_packed_scalar_type(
+            mir.insns[133].type, TYPE_INT, 1, 1) ||
+        !mir_machine_constant_equals(mir.insns[134].dst, 1) ||
+        mir.insns[135].src1 != mir.insns[133].dst ||
+        mir.insns[135].src2 != mir.insns[134].dst ||
+        mir.insns[135].memory_size != 2 ||
+        mir.insns[135].immediate != 2 ||
+        !mir_packed_scalar_type(
+            mir.insns[135].type, TYPE_INT, 1, 1) ||
+        mir.insns[136].src1 != mir.insns[135].dst ||
+        mir.insns[136].memory_size != 2 ||
+        !mir_packed_scalar_type(
+            mir.insns[136].type, TYPE_INT, 1, 0) ||
+        !mir_machine_constant_equals(mir.insns[137].dst, 255) ||
+        mir.insns[139].src1 != mir.insns[136].dst ||
+        mir.insns[139].src2 != mir.insns[137].dst ||
+        mir.insns[139].immediate != '&' ||
+        mir.insns[139].secondary_offset != mir.insns[139].type ||
+        !mir_packed_scalar_type(
+            mir.insns[139].type, TYPE_INT, 1, 0) ||
+        mir.insns[140].src1 != mir.insns[139].dst ||
+        mir.insns[140].immediate != 0 ||
+        !mir_packed_scalar_type(
+            mir.insns[140].type, TYPE_INT, 0, 0) ||
+        mir.insns[141].src1 != mir.insns[140].dst)
+        return mir_machine_reject(
+            "additive-subscript-runner", "source-value");
+    if (!mir_additive_global_root(142, &root) ||
+        root != plan->target ||
+        !mir_machine_constant_equals(
+            mir.insns[offset_one_instruction].dst, 1) ||
+        !mir_additive_commutative_binary(
+            145, offset_load_instruction, offset_one_instruction,
+            '+', TYPE_INT) ||
+        mir.insns[146].src1 != mir.insns[142].dst ||
+        mir.insns[146].src2 != mir.insns[145].dst ||
+        mir.insns[146].memory_size != 1 ||
+        mir.insns[146].immediate != 1 ||
+        !mir_packed_scalar_type(
+            mir.insns[146].type, TYPE_CHAR, 1, 1) ||
+        mir.insns[148].src1 != mir.insns[147].dst ||
+        mir.insns[148].immediate != 0 ||
+        !mir_packed_scalar_type(
+            mir.insns[148].type, TYPE_CHAR, 1, 0) ||
+        mir.insns[149].src1 != mir.insns[146].dst ||
+        mir.insns[149].src2 != mir.insns[148].dst ||
+        mir.insns[149].memory_size != 1 ||
+        !mir_machine_constant_equals(mir.insns[153].dst, 1) ||
+        !mir_additive_commutative_binary(
+            154, 113, 153, '+', TYPE_INT) ||
+        mir.insns[155].src1 != mir.insns[154].dst ||
+        mir.insns[156].label != mir.insns[112].label)
+        return mir_machine_reject(
+            "additive-subscript-runner", "target-store");
+    for (item = 4; item < MIR_ADDITIVE_CHECKS; ++item)
+        if (!mir_additive_check(
+                plan, item, check_layout[item][0],
+                check_layout[item][1], check_layout[item][2],
+                check_layout[item][3], check_layout[item][4],
+                check_layout[item][5], item == 4 ? 172 : 187))
+            return mir_machine_reject(
+                "additive-subscript-runner", "source-checks");
+    for (item = 0; item < MIR_ADDITIVE_CHECKS; ++item) {
+        int other;
+
+        for (other = item + 1; other < MIR_ADDITIVE_CHECKS; ++other)
+            if (plan->strings[item] == plan->strings[other])
+                return mir_machine_reject(
+                    "additive-subscript-runner", "check-strings");
+    }
+    return 1;
+}
+
+static void mir_additive_emit_absolute_byte_store(
+    FILE *out, struct Sym *symbol, int offset, int value)
+{
+    fprintf(out, "\tld a,%d\n\tld (%s%+d),a\n",
+            value & 255, asm_name_for(sym_asm_name(symbol)), offset);
+}
+
+static void mir_additive_emit_check(
+    FILE *out, const struct MirAdditiveSubscriptPlan *plan, int check)
+{
+    mir_emit_final_call_constant(out, plan->expected[check], 4);
+    fprintf(out,
+            "\tld a,(%s%+d)\n\tld l,a\n\tld h,0\n"
+            "\tld de,0\n\tpush de\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            asm_name_for(sym_asm_name(plan->target)),
+            plan->check_offsets[check], plan->strings[check]);
+    mir_machine_emit_symbol_call(out, plan->check_function);
+    mir_emit_final_call_cleanup(out, 5);
+}
+
+static void mir_emit_additive_subscript_runner(
+    FILE *out, const struct MirAdditiveSubscriptPlan *plan)
+{
+    int fill_loop = new_label();
+    int source_loop = new_label();
+    int item;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_address_hl(out, plan->target, 0);
+    fprintf(out, "\tld b,%d\n\tld a,%d\nL%d:\n"
+                 "\tld (hl),a\n\tinc hl\n\tinc a\n\tdjnz L%d\n",
+            plan->fill_count & 255, plan->fill_bias & 255,
+            fill_loop, fill_loop);
+    for (item = 0; item < MIR_ADDITIVE_FIXED_STORES; ++item)
+        mir_additive_emit_absolute_byte_store(
+            out, plan->target, plan->fixed_offsets[item],
+            plan->fixed_values[item]);
+    for (item = 0; item < 4; ++item)
+        mir_additive_emit_check(out, plan, item);
+    mir_machine_emit_global_address_hl(out, plan->source, 0);
+    fprintf(out,
+            "\tld b,%d\nL%d:\n"
+            "\tld a,(hl)\n\tand %d\n\tinc a\n\tld c,a\n"
+            "\tinc hl\n\tinc hl\n\tld a,(hl)\n\tpush hl\n",
+            plan->source_count & 255, source_loop,
+            plan->source_offset_mask);
+    mir_machine_emit_global_address_hl(out, plan->target, 0);
+    fputs("\tld e,c\n\tld d,0\n\tadd hl,de\n\tld (hl),a\n"
+          "\tpop hl\n\tinc hl\n\tinc hl\n", out);
+    fprintf(out, "\tdjnz L%d\n", source_loop);
+    for (item = 4; item < MIR_ADDITIVE_CHECKS; ++item)
+        mir_additive_emit_check(out, plan, item);
+    fputs("\tret\n", out);
+}
+
 int mir_try_emit_aggregate_checks(FILE *out)
 {
+    struct MirAdditiveSubscriptPlan additive_subscript;
     struct MirArrayMainPlan array_main;
     struct MirAggregateMultidimChecks plan;
     struct MirMultidimArrayRunner multidim_array;
@@ -7280,6 +7834,10 @@ int mir_try_emit_aggregate_checks(FILE *out)
     struct MirPtrConditionPlan ptr_condition;
     struct MirTouchLocalsPlan touch_locals;
 
+    if (mir_match_additive_subscript_runner(&additive_subscript)) {
+        mir_emit_additive_subscript_runner(out, &additive_subscript);
+        return 1;
+    }
     if (mir_match_ptr_condition_main(&ptr_condition)) {
         mir_emit_ptr_condition_main(out, &ptr_condition);
         return 1;

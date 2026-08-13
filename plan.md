@@ -3,6 +3,59 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-14 additive-subscript 7-block coverage batch (working tree)
+
+- Branch/base: `pr/143` at `bd7d3db`. The aggregate/endgame family now admits
+  the seven-block `tsyntax.test_additive_subscripts`
+  `final-cost-policy` fallback through a strict, name-free scheduled-machine
+  matcher over all **188 MIR instructions**. The contract proves both signed
+  induction loops, their PHIs and edges, the byte target and distinct
+  nonvolatile unsigned-short source roots, target alias identity, outer
+  four-byte and inner two-byte pointer strides, the masked source fields,
+  byte truncation, all four fixed stores, all six long checks and the implicit
+  void return. The target index accepts either operand order for the
+  semantically commutative `off + 1` addition while ordered comparisons remain
+  ordered.
+- The emitter is frameless and uses no IX or IY. BC/A fill the target in the
+  first loop; HL walks the four-byte source rows in the second loop while
+  BC/DE form each masked target address. The six original calls and their
+  source string/value/expected arguments are retained in source order, and
+  stack-check remains active.
+- Normal selected/captured metrics are **1,399/2,673 bytes** and
+  **143/260 instructions**. Stack-check metrics are **1,428/2,702 bytes** and
+  **144/261 instructions**.
+- Full stack-check `tsyntax` passes peep and nopeep. Selected versus forced
+  fallback is **378,666/384,041 cycles** and **6,784/6,912 bytes** peep plus
+  **379,733/385,913 cycles** and **6,784/7,040 bytes** nopeep. Exact gains are
+  **5,375 cycles and 128 bytes** peep plus **6,180 cycles and 256 bytes**
+  nopeep.
+- The rejected generic forced-final candidate remains excluded: against the
+  same fallback it is **389,432 cycles / 7,040 bytes** peep and
+  **393,601 / 7,168** nopeep, regressions of **5,391 cycles (1.40%) and
+  128 bytes** peep plus **7,688 cycles (1.99%) and 128 bytes** nopeep.
+- A separately renamed two-round fixture exercises all **16** masked indices,
+  aliases every destination twice, verifies last-store ordering, and compiles
+  both `off + 1` and `1 + off` target-index forms to the same schedule.
+  Selected/fallback totals are identical for both forms:
+  **58,358/77,017 cycles and 3,328/3,456 bytes** peep plus
+  **60,236/80,978 cycles and 3,328/3,584 bytes** nopeep. All selected and
+  fallback peep/nopeep runs report every index and alias correct. Changing the
+  source row stride from four to six bytes rejects the dedicated schedule and
+  leaves the clone on `final-cost-policy`.
+- The regression-gated stack-check census advances
+  **2,180/2,185 (99.77%)** to **2,181/2,185 (99.82%)**, adds exactly
+  `tsyntax.test_additive_subscripts`, removes nothing, moves selector counts
+  from **1,373 spilled / 405 scheduled** to
+  **1,372 spilled / 406 scheduled**, and reduces `final-cost-policy`
+  fallbacks **5 -> 4**.
+- The aggregate module is **7,865 source lines**. Its standalone object defines
+  only `mir_try_emit_aggregate_checks [T]` globally with zero global data.
+  The canonical build, focused full run, forced fallback A/B, renamed
+  exhaustive index/alias A/B, commuted-addition proof, stride perturbation,
+  frameless/no-IY inspection, export/data audit, regression-gated census and
+  `git diff --check` pass. No performance baseline, production-name gate or
+  output-hash gate was added or changed.
+
 ## 2026-08-14 signed-long Newton square-root 5-block batch (working tree)
 
 - Branch/base: `pr/143` at `0d3f3ff`. The numeric machine module now admits
