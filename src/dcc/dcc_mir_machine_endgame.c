@@ -24,6 +24,9 @@
 #define MIR_ENDGAME_INLINE_FRAME_BYTES 26
 #define MIR_ENDGAME_INLINE_FUNCTIONS 7
 #define MIR_ENDGAME_INLINE_GLOBALS 5
+#define MIR_ENDGAME_SCOPE_CHECKS 29
+#define MIR_ENDGAME_SCOPE_STRINGS 31
+#define MIR_ENDGAME_SCOPE_FRAME_BYTES 24
 
 enum MirEndgameFloatOperandKind {
     MIR_ENDGAME_FLOAT_BITS,
@@ -283,6 +286,384 @@ struct MirEndgameInlineRunner {
     struct Sym *globals[MIR_ENDGAME_INLINE_GLOBALS];
     int format_string;
     char print_name[64];
+};
+
+struct MirEndgameScopeRunner {
+    struct Sym *check_function;
+    struct Sym *increment_function;
+    struct Sym *shadow_function;
+    struct Sym *print_function;
+    struct Sym *failure_symbol;
+    int strings[MIR_ENDGAME_SCOPE_STRINGS];
+    char print_names[2][64];
+};
+
+struct MirEndgameScopeConstant {
+    int instruction;
+    int type;
+    long value;
+};
+
+struct MirEndgameScopeBinary {
+    int instruction;
+    int first;
+    int second;
+    int type;
+    int operand_type;
+    int operation;
+};
+
+struct MirEndgameScopeUnary {
+    int instruction;
+    int source;
+    int type;
+    int operation;
+};
+
+struct MirEndgameScopeEdge {
+    int instruction;
+    int target;
+};
+
+struct MirEndgameScopePhi {
+    int instruction;
+    int first;
+    int second;
+    int type;
+    int first_predecessor;
+    int second_predecessor;
+};
+
+struct MirEndgameScopeObject {
+    int instruction;
+    int object;
+};
+
+enum MirEndgameScopeSlot {
+    MIR_ENDGAME_SCOPE_SUM = -2,
+    MIR_ENDGAME_SCOPE_FIRST = -4,
+    MIR_ENDGAME_SCOPE_SECOND = -6,
+    MIR_ENDGAME_SCOPE_THIRD = -8,
+    MIR_ENDGAME_SCOPE_WIDE = -12,
+    MIR_ENDGAME_SCOPE_WIDE_ITER = -16,
+    MIR_ENDGAME_SCOPE_ARRAY = -22,
+    MIR_ENDGAME_SCOPE_POINTER = -24
+};
+
+static const unsigned char mir_endgame_scope_opcodes[] = {
+    MIR_LABEL, MIR_CONST, MIR_STORE, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE,
+    MIR_LABEL, MIR_PHI, MIR_PHI, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP,
+    MIR_NOP, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+    MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_PHI, MIR_NOP, MIR_PHI, MIR_NOP,
+    MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP, MIR_BINARY, MIR_NOP,
+    MIR_STORE, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL,
+    MIR_NOP, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+    MIR_NOP, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_PHI, MIR_NOP,
+    MIR_PHI, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP,
+    MIR_NOP, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+    MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE,
+    MIR_LABEL, MIR_PHI, MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP, MIR_BINARY, MIR_NOP, MIR_STORE,
+    MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP,
+    MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE,
+    MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY,
+    MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_LOAD, MIR_CONST,
+    MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_LABEL, MIR_LOAD,
+    MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_LABEL, MIR_NOP, MIR_CONST,
+    MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE,
+    MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL,
+    MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY,
+    MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD, MIR_LOAD,
+    MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE,
+    MIR_JUMP, MIR_LABEL, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP,
+    MIR_LABEL, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+    MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP,
+    MIR_CONST, MIR_STORE, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE,
+    MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_PHI, MIR_PHI, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+    MIR_NOP, MIR_NOP, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_CONST,
+    MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_CALL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP, MIR_CONST,
+    MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_PHI, MIR_PHI, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+    MIR_NOP, MIR_NOP, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_CONST,
+    MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_CONST, MIR_NOP,
+    MIR_STORE, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_PHI,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP,
+    MIR_NOP, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+    MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP,
+    MIR_CONST, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_PHI,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST,
+    MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_NOP, MIR_BINARY,
+    MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_JUMP,
+    MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP,
+    MIR_LABEL, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+    MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP, MIR_CONST, MIR_STORE,
+    MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_PHI, MIR_PHI,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP,
+    MIR_NOP, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+    MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_PHI, MIR_NOP, MIR_PHI, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL,
+    MIR_NOP, MIR_NOP, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY,
+    MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_CALL, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG,
+    MIR_CALL, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE,
+    MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP, MIR_CONST,
+    MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_PHI, MIR_PHI, MIR_PHI, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP, MIR_NOP, MIR_BINARY, MIR_BINARY,
+    MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_NOP,
+    MIR_CONST, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_ARG,
+    MIR_CONST, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP, MIR_ARG, MIR_CONST,
+    MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+    MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS,
+    MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_NOP, MIR_STORE, MIR_NOP,
+    MIR_ADDRESS, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_PHI, MIR_LOAD, MIR_ADDRESS, MIR_CONST,
+    MIR_BINARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_LOAD, MIR_LOAD_INDIRECT, MIR_BINARY, MIR_NOP,
+    MIR_STORE, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL,
+    MIR_LOAD, MIR_LOAD_INDIRECT, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG,
+    MIR_CALL, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST,
+    MIR_STORE, MIR_CONST, MIR_STORE, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE,
+    MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP, MIR_CONST, MIR_STORE, MIR_CONST, MIR_STORE,
+    MIR_CONST, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_PHI, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+    MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_ADDRESS, MIR_STORE, MIR_LABEL, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+    MIR_LABEL, MIR_NOP, MIR_ARG, MIR_LOAD, MIR_CALL, MIR_NOP, MIR_STORE, MIR_JUMP,
+    MIR_LABEL, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+    MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP, MIR_CONST,
+    MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_PHI,
+    MIR_PHI, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP,
+    MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE,
+    MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_PHI, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST,
+    MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LABEL,
+    MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_ARG,
+    MIR_CONST, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP, MIR_ARG, MIR_CONST,
+    MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP, MIR_CONST, MIR_ARG, MIR_CALL,
+    MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP, MIR_CONST,
+    MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_LOAD, MIR_PHI, MIR_LOAD, MIR_NOP, MIR_CONST, MIR_BINARY,
+    MIR_BRANCH_FALSE, MIR_NOP, MIR_ADDRESS, MIR_NOP, MIR_STORE, MIR_NOP, MIR_LOAD, MIR_LOAD_INDIRECT,
+    MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+    MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_CALL, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG,
+    MIR_CALL, MIR_NOP, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_CALL, MIR_JUMP, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_ARG,
+    MIR_CALL, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_RETURN,
+};
+
+static const struct MirEndgameScopeConstant mir_endgame_scope_constants[] = {
+    {1, 2, 0}, {6, 2, 0}, {12, 2, 5}, {22, 2, 1},
+    {30, 4, 10}, {35, 2, 99}, {41, 2, 0}, {49, 2, 3},
+    {59, 2, 1}, {67, 4, 99}, {75, 4, 13}, {83, 2, 0},
+    {92, 2, 4}, {102, 2, 1}, {110, 2, 0}, {120, 2, 4},
+    {130, 2, 1}, {138, 4, 25}, {150, 2, 0}, {153, 2, 0},
+    {166, 2, 3}, {170, 2, 0}, {183, 2, 2}, {187, 0, 1},
+    {192, 0, 1}, {199, 0, 1}, {206, 4, 6}, {222, 2, 7},
+    {226, 4, 0}, {229, 2, 0}, {246, 2, 3}, {250, 2, 0},
+    {267, 2, 3}, {277, 0, 1}, {284, 2, 1}, {291, 4, 7},
+    {298, 4, 9}, {304, 2, 0}, {314, 2, 1234}, {318, 4, 0},
+    {321, 4, 100000}, {341, 4, 100003}, {351, 4, 1},
+    {358, 4, 1234}, {365, 4, 300003}, {371, 4, 100000},
+    {380, 4, 0}, {383, 2, 0}, {405, 2, 6}, {415, 2, 1},
+    {422, 4, 15}, {428, 2, 0}, {430, 2, 77}, {436, 2, 0},
+    {460, 2, 2}, {470, 2, 1}, {478, 4, 77}, {486, 4, 26},
+    {498, 2, 500}, {501, 2, 0}, {504, 2, 0}, {531, 2, 5},
+    {535, 2, 1}, {547, 2, 3}, {556, 0, 1}, {563, 4, 500},
+    {570, 4, 5}, {587, 2, 20}, {590, 2, 0}, {593, 2, 0},
+    {596, 2, 0}, {628, 2, 3}, {638, 0, 1}, {644, 2, 0},
+    {676, 2, 4}, {686, 0, 1}, {693, 4, 20}, {700, 4, 3},
+    {707, 4, 6}, {726, 2, 100}, {729, 2, 200}, {732, 2, 0},
+    {735, 2, 1}, {738, 2, 2}, {776, 2, 4}, {788, 0, 1},
+    {792, 2, 10}, {800, 4, 100}, {807, 4, 200}, {814, 4, 45},
+    {827, 2, 0}, {830, 2, 0}, {832, 2, 2}, {835, 2, 1},
+    {837, 2, 4}, {840, 2, 2}, {842, 2, 6}, {887, 2, 6},
+    {899, 0, 2}, {908, 4, 2}, {915, 4, 12}, {927, 2, 3},
+    {929, 2, 4}, {934, 2, 0}, {937, 2, 7}, {940, 2, 0},
+    {942, 2, 3}, {944, 2, 4}, {985, 2, 2}, {998, 0, 1},
+    {1045, 2, 9}, {1059, 4, 7}, {1066, 4, 9},
+    {1081, 2, 0}, {1084, 2, 0}, {1087, 2, 0}, {1131, 2, 3},
+    {1141, 0, 1}, {1147, 2, 0}, {1191, 2, 3}, {1201, 0, 1},
+    {1208, 4, 3}, {1215, 4, 3}, {1221, 2, 7}, {1226, 4, 307},
+    {1241, 2, 10}, {1244, 2, 0}, {1247, 2, 5},
+    {1294, 2, 0}, {1310, 0, 1}, {1317, 4, 10}, {1324, 4, 6},
+    {1331, 2, 0}, {1347, 2, 0}
+};
+
+static const struct MirEndgameScopeBinary mir_endgame_scope_binary[] = {
+    {13, 10, 12, 2, 2, 60}, {17, 9, 10, 2, 2, 43},
+    {23, 10, 22, 2, 2, 43}, {50, 46, 49, 2, 2, 60},
+    {54, 44, 46, 2, 2, 43}, {60, 46, 59, 2, 2, 43},
+    {93, 88, 92, 2, 2, 60}, {97, 86, 88, 2, 2, 43},
+    {103, 88, 102, 2, 2, 43}, {121, 115, 120, 2, 2, 60},
+    {125, 113, 115, 2, 2, 43}, {131, 115, 130, 2, 2, 43},
+    {167, 163, 166, 2, 2, 60}, {184, 182, 183, 2, 2, 60},
+    {188, 186, 187, 0, 0, 43}, {193, 191, 192, 0, 0, 43},
+    {200, 163, 199, 0, 0, 43}, {247, 234, 246, 2, 2, 60},
+    {268, 266, 267, 2, 2, 60}, {272, 270, 271, 4, 4, 43},
+    {278, 276, 277, 0, 0, 43}, {285, 234, 284, 2, 2, 43},
+    {342, 337, 341, 2, 4, 60}, {346, 338, 337, 4, 4, 43},
+    {352, 337, 351, 4, 4, 43}, {406, 403, 405, 2, 2, 60},
+    {410, 402, 403, 4, 4, 43}, {416, 403, 415, 2, 2, 43},
+    {461, 457, 460, 2, 2, 60}, {465, 439, 457, 2, 2, 43},
+    {471, 457, 470, 2, 2, 43}, {532, 527, 531, 2, 2, 60},
+    {536, 527, 535, 2, 2, 276}, {543, 541, 527, 2, 2, 43},
+    {548, 527, 547, 2, 2, 276}, {557, 527, 556, 0, 0, 43},
+    {629, 622, 628, 2, 2, 60}, {633, 623, 622, 2, 2, 43},
+    {639, 622, 638, 0, 0, 43}, {677, 674, 676, 2, 2, 60},
+    {682, 672, 674, 2, 2, 43}, {687, 674, 686, 0, 0, 43},
+    {739, 735, 738, 2, 2, 43}, {777, 770, 776, 2, 2, 60},
+    {782, 770, 771, 2, 2, 43}, {783, 772, 782, 2, 2, 43},
+    {789, 770, 788, 0, 0, 43}, {793, 771, 792, 2, 2, 43},
+    {888, 886, 887, 18, 2, 43}, {889, 885, 888, 2, 2, 60},
+    {894, 884, 893, 2, 2, 43}, {900, 898, 899, 18, 2, 43},
+    {986, 960, 985, 2, 2, 60}, {993, 981, 992, 2, 2, 43},
+    {999, 960, 998, 0, 0, 43}, {1046, 1042, 1045, 2, 2, 60},
+    {1132, 1128, 1131, 2, 2, 60}, {1136, 1127, 1128, 2, 2, 43},
+    {1142, 1128, 1141, 0, 0, 43}, {1192, 1178, 1191, 2, 2, 60},
+    {1196, 1184, 1178, 2, 2, 43}, {1202, 1178, 1201, 0, 0, 43},
+    {1295, 1291, 1294, 2, 2, 276}, {1304, 1291, 1303, 2, 2, 43},
+    {1311, 1304, 1310, 0, 0, 43}, {1332, 1330, 1331, 2, 2, 276},
+    {1348, 1346, 1347, 2, 2, 277}
+};
+
+static const struct MirEndgameScopeUnary mir_endgame_scope_unary[] = {
+    {28, 9, 4, 0}, {65, 35, 4, 0}, {73, 44, 4, 0},
+    {136, 113, 4, 0}, {476, 430, 4, 0}, {484, 439, 4, 0},
+    {906, 905, 4, 0}, {1224, 1223, 4, 0}
+};
+
+static const struct MirEndgameScopeEdge mir_endgame_scope_edges[] = {
+    {14, 2}, {25, 1}, {51, 5}, {62, 4}, {94, 8}, {105, 7},
+    {122, 11}, {133, 10}, {168, 14}, {185, 17}, {195, 16},
+    {202, 13}, {248, 21}, {269, 24}, {280, 23}, {287, 20},
+    {343, 28}, {354, 27}, {407, 32}, {418, 31}, {462, 36},
+    {473, 35}, {533, 39}, {537, 41}, {539, 40}, {549, 44},
+    {551, 39}, {559, 38}, {630, 50}, {641, 49}, {678, 53},
+    {689, 52}, {778, 57}, {796, 56}, {890, 61}, {902, 60},
+    {987, 65}, {1001, 64}, {1047, 68}, {1055, 67},
+    {1133, 72}, {1144, 71}, {1193, 75}, {1204, 74},
+    {1296, 79}, {1313, 78}, {1333, 83}, {1338, 84}
+};
+
+static const struct MirEndgameScopePhi mir_endgame_scope_phis[] = {
+    {9, 1, 17, 2, 0, 3}, {10, 6, 23, 2, 0, 3},
+    {44, 9, 54, 2, 2, 6}, {46, 41, 60, 2, 2, 6},
+    {86, 44, 97, 2, 5, 9}, {88, 83, 103, 2, 5, 9},
+    {113, 86, 125, 2, 8, 12}, {115, 110, 131, 2, 8, 12},
+    {163, 153, 200, 2, 11, 15}, {234, 229, 285, 2, 14, 22},
+    {337, 321, 352, 4, 21, 29}, {338, 318, 346, 4, 21, 29},
+    {402, 380, 410, 4, 28, 33}, {403, 383, 416, 2, 28, 33},
+    {439, 113, 465, 2, 32, 37}, {457, 436, 471, 2, 32, 37},
+    {527, 504, 557, 2, 36, 40}, {622, 596, 639, 2, 39, 51},
+    {623, 590, 633, 2, 39, 51}, {672, 593, 682, 2, 50, 54},
+    {674, 644, 687, 2, 50, 54}, {770, 735, 789, 2, 53, 58},
+    {771, 739, 793, 2, 53, 58}, {772, 732, 783, 2, 53, 58},
+    {884, 827, 894, 2, 57, 62}, {960, 940, 999, 2, 61, 66},
+    {981, 934, 993, 2, 61, 66}, {1042, 937, 1052, 2, 65, 69},
+    {1127, 1081, 1136, 2, 68, 73}, {1128, 1087, 1142, 2, 68, 73},
+    {1178, 1147, 1202, 2, 72, 76}, {1184, 1084, 1196, 2, 72, 76},
+    {1291, 1244, 1311, 2, 75, 80}
+};
+
+static const struct MirEndgameScopeObject mir_endgame_scope_objects[] = {
+    {2, 0}, {7, 1}, {9, 0}, {10, 1}, {19, 0}, {24, 1},
+    {37, 2}, {42, 3}, {44, 0}, {46, 3}, {56, 0}, {61, 3},
+    {84, 4}, {86, 0}, {88, 4}, {99, 0}, {104, 4}, {111, 5},
+    {113, 0}, {115, 5}, {127, 0}, {132, 5}, {151, 6},
+    {154, 7}, {163, 7}, {171, 8}, {182, 8}, {186, 6},
+    {189, 6}, {191, 8}, {194, 8}, {201, 7}, {204, 6},
+    {223, 9}, {227, 10}, {230, 11}, {234, 11}, {251, 12},
+    {266, 12}, {270, 10}, {271, 12}, {274, 10}, {276, 12},
+    {279, 12}, {286, 11}, {296, 10}, {305, 12}, {315, 13},
+    {319, 14}, {322, 15}, {337, 15}, {338, 14}, {348, 14},
+    {353, 15}, {372, 15}, {381, 16}, {384, 17}, {402, 16},
+    {403, 17}, {412, 16}, {417, 17}, {429, 17}, {432, 18},
+    {437, 19}, {439, 0}, {457, 19}, {467, 0}, {472, 19},
+    {499, 20}, {502, 21}, {505, 22}, {527, 22}, {541, 21},
+    {545, 21}, {558, 22}, {568, 21}, {588, 23}, {591, 24},
+    {594, 25}, {597, 26}, {622, 26}, {623, 24}, {635, 24},
+    {640, 26}, {645, 27}, {672, 25}, {674, 27}, {684, 25},
+    {688, 27}, {727, 28}, {730, 29}, {733, 30}, {736, 31},
+    {740, 32}, {770, 31}, {771, 32}, {772, 30}, {785, 30},
+    {790, 31}, {795, 32}, {828, 33}, {884, 33}, {896, 33},
+    {935, 34}, {938, 35}, {941, 36}, {960, 36}, {981, 34},
+    {995, 34}, {1000, 36}, {1042, 35}, {1054, 35},
+    {1082, 37}, {1085, 34}, {1088, 38}, {1127, 37},
+    {1128, 38}, {1138, 37}, {1143, 38}, {1148, 39},
+    {1178, 39}, {1184, 34}, {1198, 34}, {1203, 39},
+    {1242, 40}, {1245, 41}, {1291, 41}, {1306, 41},
+    {1312, 41}
 };
 
 struct MirEndgameInlineConstant {
@@ -4983,6 +5364,391 @@ static int mir_match_endgame_inline_runner(
     return 1;
 }
 
+static int mir_endgame_scope_long_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == TYPE_LONG && type_size(type) == 4;
+}
+
+static int mir_endgame_scope_structure(void)
+{
+    size_t item;
+
+    for (item = 0;
+         item < sizeof(mir_endgame_scope_constants) /
+                    sizeof(mir_endgame_scope_constants[0]);
+         ++item) {
+        const struct MirEndgameScopeConstant *expected =
+            &mir_endgame_scope_constants[item];
+        const struct MirInsn *insn =
+            &mir.insns[expected->instruction];
+
+        if (insn->type != expected->type ||
+            insn->immediate != expected->value)
+            return 0;
+    }
+    for (item = 0;
+         item < sizeof(mir_endgame_scope_binary) /
+                    sizeof(mir_endgame_scope_binary[0]);
+         ++item) {
+        const struct MirEndgameScopeBinary *expected =
+            &mir_endgame_scope_binary[item];
+        const struct MirInsn *insn =
+            &mir.insns[expected->instruction];
+
+        if (insn->src1 != mir.insns[expected->first].dst ||
+            insn->src2 != mir.insns[expected->second].dst ||
+            insn->type != expected->type ||
+            insn->secondary_offset != expected->operand_type ||
+            insn->immediate != expected->operation)
+            return 0;
+    }
+    for (item = 0;
+         item < sizeof(mir_endgame_scope_unary) /
+                    sizeof(mir_endgame_scope_unary[0]);
+         ++item) {
+        const struct MirEndgameScopeUnary *expected =
+            &mir_endgame_scope_unary[item];
+        const struct MirInsn *insn =
+            &mir.insns[expected->instruction];
+
+        if (insn->src1 != mir.insns[expected->source].dst ||
+            insn->type != expected->type ||
+            insn->immediate != expected->operation)
+            return 0;
+    }
+    for (item = 0;
+         item < sizeof(mir_endgame_scope_objects) /
+                    sizeof(mir_endgame_scope_objects[0]);
+         ++item) {
+        const struct MirEndgameScopeObject *expected =
+            &mir_endgame_scope_objects[item];
+
+        if (mir.insns[expected->instruction].object !=
+                expected->object)
+            return 0;
+    }
+    return mir.object_count == 42;
+}
+
+static int mir_endgame_scope_graph(void)
+{
+    size_t item;
+
+    for (item = 0;
+         item < sizeof(mir_endgame_scope_edges) /
+                    sizeof(mir_endgame_scope_edges[0]);
+         ++item) {
+        const struct MirEndgameScopeEdge *expected =
+            &mir_endgame_scope_edges[item];
+        const struct MirInsn *insn =
+            &mir.insns[expected->instruction];
+
+        if (insn->label != expected->target ||
+            (insn->opcode == MIR_BRANCH_FALSE &&
+             insn->src1 !=
+                 mir.insns[expected->instruction - 1].dst))
+            return 0;
+    }
+    for (item = 0;
+         item < sizeof(mir_endgame_scope_phis) /
+                    sizeof(mir_endgame_scope_phis[0]);
+         ++item) {
+        const struct MirEndgameScopePhi *expected =
+            &mir_endgame_scope_phis[item];
+        const struct MirInsn *insn =
+            &mir.insns[expected->instruction];
+
+        if (insn->src1 != mir.insns[expected->first].dst ||
+            insn->src2 != mir.insns[expected->second].dst ||
+            insn->type != expected->type ||
+            insn->phi_pred1 != expected->first_predecessor ||
+            insn->phi_pred2 != expected->second_predecessor)
+            return 0;
+    }
+    return mir.insns[1349].src1 == mir.insns[1348].dst;
+}
+
+static int mir_endgame_scope_same_named(
+    int first_instruction, int second_instruction)
+{
+    const struct MirInsn *first = &mir.insns[first_instruction];
+    const struct MirInsn *second = &mir.insns[second_instruction];
+
+    return first->name[0] != 0 && second->name[0] != 0 &&
+           !strcmp(first->name, second->name);
+}
+
+static int mir_endgame_scope_memory(
+    struct MirEndgameScopeRunner *plan)
+{
+    static const int first_array_addresses[] = {
+        829, 834, 839, 844, 848, 886
+    };
+    static const int first_array_indices[][3] = {
+        {831, 829, 830}, {836, 834, 835}, {841, 839, 840}
+    };
+    static const int first_array_stores[][3] = {
+        {833, 831, 832}, {838, 836, 837}, {843, 841, 842}
+    };
+    static const int second_array_stores[] = {928, 930, 943, 945};
+    struct Sym *function;
+    size_t item;
+
+    for (item = 1;
+         item < sizeof(first_array_addresses) /
+                    sizeof(first_array_addresses[0]);
+         ++item)
+        if (!mir_endgame_same_address(
+                first_array_addresses[0],
+                first_array_addresses[item]))
+            return mir_machine_reject(
+                "endgame-scope-memory", "first-array-address");
+    for (item = 0;
+         item < sizeof(first_array_indices) /
+                    sizeof(first_array_indices[0]);
+         ++item) {
+        const struct MirInsn *index =
+            &mir.insns[first_array_indices[item][0]];
+
+        if (index->src1 !=
+                mir.insns[first_array_indices[item][1]].dst ||
+            index->src2 !=
+                mir.insns[first_array_indices[item][2]].dst ||
+            index->memory_size != 2 || index->immediate != 2 ||
+            !mir_endgame_boundary_pointer_type(
+                index->type, 1, TYPE_INT))
+            return mir_machine_reject(
+                "endgame-scope-memory", "first-array-index");
+    }
+    for (item = 0;
+         item < sizeof(first_array_stores) /
+                    sizeof(first_array_stores[0]);
+         ++item) {
+        const struct MirInsn *store =
+            &mir.insns[first_array_stores[item][0]];
+
+        if (store->src1 !=
+                mir.insns[first_array_stores[item][1]].dst ||
+            store->src2 !=
+                mir.insns[first_array_stores[item][2]].dst ||
+            store->memory_size != 2)
+            return mir_machine_reject(
+                "endgame-scope-memory", "first-array-store");
+    }
+    for (item = 1;
+         item < sizeof(second_array_stores) /
+                    sizeof(second_array_stores[0]);
+         ++item)
+        if (!mir_machine_named_nonvolatile(
+                &mir.insns[second_array_stores[item]]) ||
+            strcmp(mir.insns[second_array_stores[0]].name,
+                   mir.insns[second_array_stores[item]].name) ||
+            mir.insns[second_array_stores[0]].type !=
+                mir.insns[second_array_stores[item]].type)
+            return mir_machine_reject(
+                "endgame-scope-memory", "second-array-store");
+    if (mir.insns[928].immediate != 0 ||
+        mir.insns[930].immediate != 2 ||
+        mir.insns[943].immediate != 0 ||
+        mir.insns[945].immediate != 2)
+        return mir_machine_reject(
+            "endgame-scope-memory", "array-offset");
+    if (!mir_endgame_scope_same_named(846, 904) ||
+        mir.insns[846].src1 != mir.insns[844].dst)
+        return mir_machine_reject(
+            "endgame-scope-memory", "outer-pointer");
+    if (!mir_endgame_scope_same_named(849, 885) ||
+        !mir_endgame_scope_same_named(849, 892) ||
+        !mir_endgame_scope_same_named(849, 898))
+        return mir_machine_reject(
+            "endgame-scope-memory", "inner-pointer");
+    if (!mir_endgame_scope_same_named(1005, 1051))
+        return mir_machine_reject(
+            "endgame-scope-memory", "function-pointer");
+    if (!mir_endgame_scope_same_named(1248, 1290) ||
+        !mir_endgame_scope_same_named(1248, 1292))
+        return mir_machine_reject(
+            "endgame-scope-memory", "const-object");
+    if (!mir_endgame_scope_same_named(1248, 1298))
+        return mir_machine_reject(
+            "endgame-scope-memory", "const-address");
+    if (!mir_endgame_scope_same_named(1300, 1302))
+        return mir_machine_reject(
+            "endgame-scope-memory", "const-pointer");
+    if (mir.insns[893].src1 != mir.insns[892].dst ||
+        mir.insns[893].memory_size != 2 ||
+        mir.insns[905].src1 != mir.insns[904].dst ||
+        mir.insns[905].memory_size != 2 ||
+        mir.insns[992].src1 != mir.insns[991].dst ||
+        mir.insns[992].memory_size != 2 ||
+        mir.insns[1303].src1 != mir.insns[1302].dst ||
+        mir.insns[1303].memory_size != 2)
+        return mir_machine_reject(
+            "endgame-scope-memory", "indirect-load");
+    if (mir.insns[1004].opcode != MIR_ADDRESS ||
+        (function = find_global(mir.insns[1004].name)) == NULL ||
+        function->storage != SC_FUNC || !function->is_defined ||
+        !function->is_static || function->is_funcptr ||
+        function->is_noreturn || !function->has_proto ||
+        function->proto_variadic || function->proto_nargs != 1 ||
+        !mir_endgame_word_type(function->type) ||
+        !mir_endgame_word_type(function->proto_types[0]))
+        return mir_machine_reject(
+            "endgame-scope-memory", "increment-function");
+    plan->increment_function = function;
+    if (!mir_machine_named_nonvolatile(&mir.insns[1330]) ||
+        !mir_machine_same_location(
+            &mir.insns[1330], &mir.insns[1342]) ||
+        !mir_machine_same_location(
+            &mir.insns[1330], &mir.insns[1346]) ||
+        (plan->failure_symbol =
+             find_global(mir.insns[1330].name)) == NULL ||
+        !plan->failure_symbol->is_defined ||
+        !plan->failure_symbol->is_static ||
+        plan->failure_symbol->is_array ||
+        !mir_endgame_word_type(plan->failure_symbol->type))
+        return mir_machine_reject(
+            "endgame-scope-memory", "failure-symbol");
+    return 1;
+}
+
+static int mir_endgame_scope_calls(
+    struct MirEndgameScopeRunner *plan)
+{
+    static const int check_calls[MIR_ENDGAME_SCOPE_CHECKS][4] = {
+        {34, 28, 30, 32}, {71, 65, 67, 69},
+        {79, 73, 75, 77}, {142, 136, 138, 140},
+        {210, 204, 206, 208}, {295, 222, 291, 293},
+        {302, 296, 298, 300}, {362, 314, 358, 360},
+        {369, 338, 365, 367}, {426, 402, 422, 424},
+        {482, 476, 478, 480}, {490, 484, 486, 488},
+        {567, 498, 563, 565}, {574, 568, 570, 572},
+        {697, 587, 693, 695}, {704, 623, 700, 702},
+        {711, 672, 707, 709}, {804, 726, 800, 802},
+        {811, 729, 807, 809}, {818, 772, 814, 816},
+        {912, 906, 908, 910}, {919, 884, 915, 917},
+        {1063, 981, 1059, 1061}, {1070, 1042, 1066, 1068},
+        {1212, 1127, 1208, 1210},
+        {1219, 1184, 1215, 1217},
+        {1230, 1224, 1226, 1228},
+        {1321, 1241, 1317, 1319},
+        {1328, 1291, 1324, 1326}
+    };
+    static const int string_instructions[MIR_ENDGAME_SCOPE_STRINGS] = {
+        32, 69, 77, 140, 208, 293, 300, 360, 367, 424,
+        480, 488, 565, 572, 695, 702, 709, 802, 809, 816,
+        910, 917, 1061, 1068, 1210, 1217, 1228, 1319,
+        1326, 1335, 1340
+    };
+    static const int shadow_args[] = {1221};
+    static const int print_pass_args[] = {1335};
+    static const int print_fail_args[] = {1340, 1342};
+    static const int indirect_args[] = {1042};
+    int arguments[MIR_ENDGAME_MAX_ARGS];
+    size_t item;
+
+    for (item = 0; item < MIR_ENDGAME_SCOPE_CHECKS; ++item)
+        if (!mir_endgame_call_matches(
+                check_calls[item][0], &plan->check_function,
+                0, 3, 3, &check_calls[item][1]))
+            return 0;
+    if (plan->check_function == NULL ||
+        plan->check_function->type != TYPE_VOID ||
+        !plan->check_function->is_defined ||
+        !plan->check_function->is_static ||
+        !mir_endgame_scope_long_type(
+            plan->check_function->proto_types[0]) ||
+        !mir_endgame_scope_long_type(
+            plan->check_function->proto_types[1]) ||
+        !mir_endgame_char_pointer_type(
+            plan->check_function->proto_types[2]))
+        return 0;
+    if (!mir_endgame_call_matches(
+            1223, &plan->shadow_function, 0, 1, 1,
+            shadow_args) ||
+        plan->shadow_function == NULL ||
+        !plan->shadow_function->is_defined ||
+        !plan->shadow_function->is_static ||
+        !mir_endgame_word_type(plan->shadow_function->type) ||
+        !mir_endgame_word_type(
+            plan->shadow_function->proto_types[0]))
+        return 0;
+    if (!mir_endgame_call_matches(
+            1337, &plan->print_function, 1, 1, 1,
+            print_pass_args) ||
+        !mir_endgame_call_matches(
+            1344, &plan->print_function, 1, 1, 2,
+            print_fail_args) ||
+        plan->print_function == NULL ||
+        plan->print_function->is_defined ||
+        !mir_endgame_word_type(plan->print_function->type) ||
+        !mir_endgame_char_pointer_type(
+            plan->print_function->proto_types[0]))
+        return 0;
+    snprintf(plan->print_names[0], sizeof(plan->print_names[0]), "%s",
+             mir_endgame_call_name(&mir.insns[1337]));
+    snprintf(plan->print_names[1], sizeof(plan->print_names[1]), "%s",
+             mir_endgame_call_name(&mir.insns[1344]));
+    if (mir.insns[1052].opcode != MIR_CALL ||
+        mir.insns[1052].src1 != mir.insns[1051].dst ||
+        strcmp(mir.insns[1052].name, "<indirect>") ||
+        !mir_endgame_word_type(mir.insns[1052].type) ||
+        (mir.insns[1052].memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_INLINE_SUBSTITUTABLE)) != 0 ||
+        mir_endgame_call_arguments(
+            &mir.insns[1052], arguments) != 1 ||
+        arguments[0] != mir.insns[indirect_args[0]].dst)
+        return 0;
+    for (item = 0; item < MIR_ENDGAME_SCOPE_STRINGS; ++item) {
+        const struct MirInsn *string =
+            &mir.insns[string_instructions[item]];
+
+        if (string->opcode != MIR_STRING_ADDRESS ||
+            string->immediate < 0 ||
+            !mir_endgame_char_pointer_type(string->type))
+            return 0;
+        plan->strings[item] = (int)string->immediate;
+    }
+    return plan->check_function != plan->shadow_function &&
+           plan->check_function != plan->increment_function &&
+           plan->shadow_function != plan->increment_function &&
+           mir.insns[34].memory_flags == 0 &&
+           mir.insns[1223].memory_flags == 0 &&
+           (mir.insns[1337].memory_flags &
+            MIR_CALL_FLAG_FORMAT_RUNTIME) == 0 &&
+           (mir.insns[1344].memory_flags &
+            MIR_CALL_FLAG_FORMAT_RUNTIME) == 0;
+}
+
+static int mir_match_endgame_scope_runner(
+    struct MirEndgameScopeRunner *plan)
+{
+    memset(plan, 0, sizeof(*plan));
+    if (!mir_endgame_opcode_sequence(
+            mir_endgame_scope_opcodes,
+            sizeof(mir_endgame_scope_opcodes)) ||
+        mir_cfg_block_count() != 69 || mir.local_bytes != 116 ||
+        mir.aggregate_temp_bytes != 0 || mir.has_vla ||
+        mir.is_variadic_function || !mir_endgame_word_type(mir.return_type))
+        return mir_machine_reject(
+            "endgame-scope-runner", "shape");
+    if (!mir_endgame_scope_structure())
+        return mir_machine_reject(
+            "endgame-scope-runner", "operations");
+    if (!mir_endgame_scope_graph())
+        return mir_machine_reject(
+            "endgame-scope-runner", "graph");
+    if (!mir_endgame_scope_memory(plan))
+        return mir_machine_reject(
+            "endgame-scope-runner", "memory");
+    if (!mir_endgame_scope_calls(plan))
+        return mir_machine_reject(
+            "endgame-scope-runner", "calls");
+    return 1;
+}
+
 static void mir_endgame_boundary_emit_buffer(FILE *out)
 {
     fputs("\tpush ix\n\tpop hl\n", out);
@@ -6600,6 +7366,463 @@ static void mir_emit_endgame_inline_runner(
     fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static void mir_endgame_scope_store_hl(FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld (ix%+d),l\n\tld (ix%+d),h\n",
+            offset, offset + 1);
+}
+
+static void mir_endgame_scope_load_hl(FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+            offset, offset + 1);
+}
+
+static void mir_endgame_scope_constant(
+    FILE *out, int offset, int value)
+{
+    fprintf(out, "\tld hl,%d\n", value);
+    mir_endgame_scope_store_hl(out, offset);
+}
+
+static void mir_endgame_scope_increment(FILE *out, int offset)
+{
+    int done = new_label();
+
+    fprintf(out, "\tinc (ix%+d)\n\tjp nz,L%d\n"
+                 "\tinc (ix%+d)\nL%d:\n",
+            offset, done, offset + 1, done);
+}
+
+static void mir_endgame_scope_add(
+    FILE *out, int destination, int source)
+{
+    mir_endgame_scope_load_hl(out, destination);
+    fputs("\tld b,h\n\tld c,l\n", out);
+    mir_endgame_scope_load_hl(out, source);
+    fputs("\tadd hl,bc\n", out);
+    mir_endgame_scope_store_hl(out, destination);
+}
+
+static void mir_endgame_scope_address(
+    FILE *out, int offset)
+{
+    fputs("\tpush ix\n\tpop hl\n", out);
+    fprintf(out, "\tld de,%d\n\tadd hl,de\n", offset);
+}
+
+static void mir_endgame_scope_cleanup(FILE *out, int words)
+{
+    while (words-- > 0)
+        fputs("\tpop bc\n", out);
+}
+
+static void mir_endgame_scope_push_word_long(
+    FILE *out, int offset)
+{
+    mir_endgame_scope_load_hl(out, offset);
+    fputs("\tld a,h\n\trlca\n\tsbc a,a\n"
+          "\tld d,a\n\tld e,a\n\tpush de\n\tpush hl\n", out);
+}
+
+static void mir_endgame_scope_check_word(
+    FILE *out, const struct MirEndgameScopeRunner *plan,
+    int string, unsigned long want, int offset)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[string]);
+    mir_machine_emit_float_bits(out, want);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_endgame_scope_push_word_long(out, offset);
+    mir_machine_emit_symbol_call(out, plan->check_function);
+    mir_endgame_scope_cleanup(out, 5);
+}
+
+static void mir_endgame_scope_check_wide(
+    FILE *out, const struct MirEndgameScopeRunner *plan,
+    int string, unsigned long want, int offset)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[string]);
+    mir_machine_emit_float_bits(out, want);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->check_function);
+    mir_endgame_scope_cleanup(out, 5);
+}
+
+static void mir_endgame_scope_sum_loop(
+    FILE *out, int sum_offset, int counter_offset, int bound)
+{
+    int loop = new_label();
+    int done = new_label();
+
+    mir_endgame_scope_constant(out, counter_offset, 0);
+    fprintf(out, "L%d:\n", loop);
+    mir_endgame_scope_load_hl(out, counter_offset);
+    fprintf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n"
+                 "\tjp nc,L%d\n",
+            bound, done);
+    mir_endgame_scope_add(out, sum_offset, counter_offset);
+    mir_endgame_scope_increment(out, counter_offset);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+}
+
+static void mir_endgame_scope_nested_count(FILE *out)
+{
+    int outer = new_label();
+    int inner = new_label();
+    int next_outer = new_label();
+    int done = new_label();
+
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_SECOND, 0);
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_FIRST, 0);
+    fprintf(out, "L%d:\n", outer);
+    mir_endgame_scope_load_hl(out, MIR_ENDGAME_SCOPE_FIRST);
+    fputs("\tld a,l\n\tcp 3\n", out);
+    fprintf(out, "\tjp nc,L%d\n", done);
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_THIRD, 0);
+    fprintf(out, "L%d:\n", inner);
+    mir_endgame_scope_load_hl(out, MIR_ENDGAME_SCOPE_THIRD);
+    fputs("\tld a,l\n\tcp 2\n", out);
+    fprintf(out, "\tjp nc,L%d\n", next_outer);
+    mir_endgame_scope_increment(out, MIR_ENDGAME_SCOPE_SECOND);
+    mir_endgame_scope_increment(out, MIR_ENDGAME_SCOPE_THIRD);
+    fprintf(out, "\tjp L%d\nL%d:\n", inner, next_outer);
+    mir_endgame_scope_increment(out, MIR_ENDGAME_SCOPE_FIRST);
+    fprintf(out, "\tjp L%d\nL%d:\n", outer, done);
+}
+
+static void mir_endgame_scope_nested_sum(FILE *out)
+{
+    int outer = new_label();
+    int inner = new_label();
+    int next_outer = new_label();
+    int done = new_label();
+
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_SECOND, 0);
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_THIRD, 0);
+    fprintf(out, "L%d:\n", outer);
+    mir_endgame_scope_load_hl(out, MIR_ENDGAME_SCOPE_THIRD);
+    fputs("\tld a,l\n\tcp 3\n", out);
+    fprintf(out, "\tjp nc,L%d\n", done);
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_POINTER, 0);
+    fprintf(out, "L%d:\n", inner);
+    mir_endgame_scope_load_hl(out, MIR_ENDGAME_SCOPE_POINTER);
+    fputs("\tld a,l\n\tcp 3\n", out);
+    fprintf(out, "\tjp nc,L%d\n", next_outer);
+    mir_endgame_scope_add(
+        out, MIR_ENDGAME_SCOPE_SECOND, MIR_ENDGAME_SCOPE_POINTER);
+    mir_endgame_scope_increment(out, MIR_ENDGAME_SCOPE_POINTER);
+    fprintf(out, "\tjp L%d\nL%d:\n", inner, next_outer);
+    mir_endgame_scope_increment(out, MIR_ENDGAME_SCOPE_THIRD);
+    fprintf(out, "\tjp L%d\nL%d:\n", outer, done);
+}
+
+static void mir_endgame_scope_long_sum(FILE *out)
+{
+    int loop = new_label();
+    int body = new_label();
+    int done = new_label();
+
+    mir_machine_emit_float_bits(out, 0);
+    mir_machine_emit_ix_wide_store(out, MIR_ENDGAME_SCOPE_WIDE);
+    mir_machine_emit_float_bits(out, 100000UL);
+    mir_machine_emit_ix_wide_store(out, MIR_ENDGAME_SCOPE_WIDE_ITER);
+    fprintf(out, "L%d:\n", loop);
+    fprintf(out,
+            "\tld a,(ix%+d)\n\tcp 163\n\tjp nz,L%d\n"
+            "\tld a,(ix%+d)\n\tcp 134\n\tjp nz,L%d\n"
+            "\tld a,(ix%+d)\n\tcp 1\n\tjp nz,L%d\n"
+            "\tld a,(ix%+d)\n\tor a\n\tjp z,L%d\n"
+            "L%d:\n",
+            MIR_ENDGAME_SCOPE_WIDE_ITER, body,
+            MIR_ENDGAME_SCOPE_WIDE_ITER + 1, body,
+            MIR_ENDGAME_SCOPE_WIDE_ITER + 2, body,
+            MIR_ENDGAME_SCOPE_WIDE_ITER + 3, done, body);
+    mir_machine_emit_ix_wide_load(out, MIR_ENDGAME_SCOPE_WIDE);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, MIR_ENDGAME_SCOPE_WIDE_ITER);
+    fputs("\tpop bc\n\tor a\n\tadd hl,bc\n"
+          "\tex de,hl\n\tpop bc\n\tadc hl,bc\n\tex de,hl\n", out);
+    mir_machine_emit_ix_wide_store(out, MIR_ENDGAME_SCOPE_WIDE);
+    {
+        int byte;
+        int carry_done = new_label();
+
+        for (byte = 0; byte < 4; ++byte) {
+            fprintf(out, "\tinc (ix%+d)\n",
+                    MIR_ENDGAME_SCOPE_WIDE_ITER + byte);
+            if (byte != 3)
+                fprintf(out, "\tjp nz,L%d\n", carry_done);
+        }
+        fprintf(out, "L%d:\n", carry_done);
+    }
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+}
+
+static void mir_emit_endgame_scope_runner(
+    FILE *out, const struct MirEndgameScopeRunner *plan)
+{
+    int loop;
+    int next;
+    int done;
+
+    mir_endgame_emit_frame(out, MIR_ENDGAME_SCOPE_FRAME_BYTES);
+
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_SUM, 0);
+    mir_endgame_scope_sum_loop(
+        out, MIR_ENDGAME_SCOPE_SUM, MIR_ENDGAME_SCOPE_FIRST, 5);
+    mir_endgame_scope_check_word(
+        out, plan, 0, 10, MIR_ENDGAME_SCOPE_SUM);
+
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_FIRST, 99);
+    mir_endgame_scope_sum_loop(
+        out, MIR_ENDGAME_SCOPE_SUM, MIR_ENDGAME_SCOPE_SECOND, 3);
+    mir_endgame_scope_check_word(
+        out, plan, 1, 99, MIR_ENDGAME_SCOPE_FIRST);
+    mir_endgame_scope_check_word(
+        out, plan, 2, 13, MIR_ENDGAME_SCOPE_SUM);
+
+    mir_endgame_scope_sum_loop(
+        out, MIR_ENDGAME_SCOPE_SUM, MIR_ENDGAME_SCOPE_SECOND, 4);
+    mir_endgame_scope_sum_loop(
+        out, MIR_ENDGAME_SCOPE_SUM, MIR_ENDGAME_SCOPE_SECOND, 4);
+    mir_endgame_scope_check_word(
+        out, plan, 3, 25, MIR_ENDGAME_SCOPE_SUM);
+
+    mir_endgame_scope_nested_count(out);
+    mir_endgame_scope_check_word(
+        out, plan, 4, 6, MIR_ENDGAME_SCOPE_SECOND);
+
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_FIRST, 7);
+    mir_endgame_scope_nested_sum(out);
+    mir_endgame_scope_check_word(
+        out, plan, 5, 7, MIR_ENDGAME_SCOPE_FIRST);
+    mir_endgame_scope_check_word(
+        out, plan, 6, 9, MIR_ENDGAME_SCOPE_SECOND);
+
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_FIRST, 1234);
+    mir_endgame_scope_long_sum(out);
+    mir_endgame_scope_check_word(
+        out, plan, 7, 1234, MIR_ENDGAME_SCOPE_FIRST);
+    mir_endgame_scope_check_wide(
+        out, plan, 8, 300003UL, MIR_ENDGAME_SCOPE_WIDE);
+
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_SECOND, 0);
+    mir_endgame_scope_sum_loop(
+        out, MIR_ENDGAME_SCOPE_SECOND, MIR_ENDGAME_SCOPE_THIRD, 6);
+    mir_endgame_scope_check_word(
+        out, plan, 9, 15, MIR_ENDGAME_SCOPE_SECOND);
+
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_FIRST, 77);
+    mir_endgame_scope_sum_loop(
+        out, MIR_ENDGAME_SCOPE_SUM, MIR_ENDGAME_SCOPE_SECOND, 2);
+    mir_endgame_scope_check_word(
+        out, plan, 10, 77, MIR_ENDGAME_SCOPE_FIRST);
+    mir_endgame_scope_check_word(
+        out, plan, 11, 26, MIR_ENDGAME_SCOPE_SUM);
+
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_FIRST, 500);
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_SECOND, 0);
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_THIRD, 0);
+    loop = new_label();
+    next = new_label();
+    done = new_label();
+    fprintf(out, "L%d:\n", loop);
+    mir_endgame_scope_load_hl(out, MIR_ENDGAME_SCOPE_THIRD);
+    fputs("\tld a,l\n\tcp 5\n", out);
+    fprintf(out, "\tjp nc,L%d\n\tcp 1\n\tjp z,L%d\n",
+            done, next);
+    mir_endgame_scope_add(
+        out, MIR_ENDGAME_SCOPE_SECOND, MIR_ENDGAME_SCOPE_THIRD);
+    mir_endgame_scope_load_hl(out, MIR_ENDGAME_SCOPE_THIRD);
+    fputs("\tld a,l\n\tcp 3\n", out);
+    fprintf(out, "\tjp z,L%d\nL%d:\n", done, next);
+    mir_endgame_scope_increment(out, MIR_ENDGAME_SCOPE_THIRD);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+    mir_endgame_scope_check_word(
+        out, plan, 12, 500, MIR_ENDGAME_SCOPE_FIRST);
+    mir_endgame_scope_check_word(
+        out, plan, 13, 5, MIR_ENDGAME_SCOPE_SECOND);
+
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_FIRST, 20);
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_SECOND, 0);
+    mir_endgame_scope_sum_loop(
+        out, MIR_ENDGAME_SCOPE_SECOND, MIR_ENDGAME_SCOPE_THIRD, 3);
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_THIRD, 0);
+    mir_endgame_scope_sum_loop(
+        out, MIR_ENDGAME_SCOPE_THIRD, MIR_ENDGAME_SCOPE_SUM, 4);
+    mir_endgame_scope_check_word(
+        out, plan, 14, 20, MIR_ENDGAME_SCOPE_FIRST);
+    mir_endgame_scope_check_word(
+        out, plan, 15, 3, MIR_ENDGAME_SCOPE_SECOND);
+    mir_endgame_scope_check_word(
+        out, plan, 16, 6, MIR_ENDGAME_SCOPE_THIRD);
+
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_FIRST, 100);
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_SECOND, 200);
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_THIRD, 0);
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_SUM, 1);
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_POINTER, 3);
+    loop = new_label();
+    done = new_label();
+    fprintf(out, "L%d:\n", loop);
+    mir_endgame_scope_load_hl(out, MIR_ENDGAME_SCOPE_SUM);
+    fputs("\tld a,l\n\tcp 4\n", out);
+    fprintf(out, "\tjp nc,L%d\n", done);
+    mir_endgame_scope_add(
+        out, MIR_ENDGAME_SCOPE_THIRD, MIR_ENDGAME_SCOPE_SUM);
+    mir_endgame_scope_add(
+        out, MIR_ENDGAME_SCOPE_THIRD, MIR_ENDGAME_SCOPE_POINTER);
+    mir_endgame_scope_increment(out, MIR_ENDGAME_SCOPE_SUM);
+    mir_endgame_scope_load_hl(out, MIR_ENDGAME_SCOPE_POINTER);
+    fputs("\tld de,10\n\tadd hl,de\n", out);
+    mir_endgame_scope_store_hl(out, MIR_ENDGAME_SCOPE_POINTER);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+    mir_endgame_scope_check_word(
+        out, plan, 17, 100, MIR_ENDGAME_SCOPE_FIRST);
+    mir_endgame_scope_check_word(
+        out, plan, 18, 200, MIR_ENDGAME_SCOPE_SECOND);
+    mir_endgame_scope_check_word(
+        out, plan, 19, 45, MIR_ENDGAME_SCOPE_THIRD);
+
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_ARRAY, 2);
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_ARRAY + 2, 4);
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_ARRAY + 4, 6);
+    mir_endgame_scope_address(out, MIR_ENDGAME_SCOPE_ARRAY);
+    mir_endgame_scope_store_hl(out, MIR_ENDGAME_SCOPE_POINTER);
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_FIRST, 0);
+    mir_endgame_scope_address(out, MIR_ENDGAME_SCOPE_ARRAY);
+    mir_endgame_scope_store_hl(out, MIR_ENDGAME_SCOPE_SECOND);
+    loop = new_label();
+    done = new_label();
+    fprintf(out, "L%d:\n", loop);
+    mir_endgame_scope_load_hl(out, MIR_ENDGAME_SCOPE_SECOND);
+    fputs("\tld b,h\n\tld c,l\n", out);
+    mir_endgame_scope_address(out, MIR_ENDGAME_SCOPE_ARRAY);
+    fputs("\tld de,6\n\tadd hl,de\n\tex de,hl\n"
+          "\tld h,b\n\tld l,c\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp nc,L%d\n", done);
+    mir_endgame_scope_load_hl(out, MIR_ENDGAME_SCOPE_SECOND);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tex de,hl\n", out);
+    mir_endgame_scope_store_hl(out, MIR_ENDGAME_SCOPE_THIRD);
+    mir_endgame_scope_add(
+        out, MIR_ENDGAME_SCOPE_FIRST, MIR_ENDGAME_SCOPE_THIRD);
+    mir_endgame_scope_load_hl(out, MIR_ENDGAME_SCOPE_SECOND);
+    fputs("\tinc hl\n\tinc hl\n", out);
+    mir_endgame_scope_store_hl(out, MIR_ENDGAME_SCOPE_SECOND);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+    mir_endgame_scope_load_hl(out, MIR_ENDGAME_SCOPE_POINTER);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n", out);
+    mir_endgame_scope_store_hl(out, MIR_ENDGAME_SCOPE_SECOND);
+    mir_endgame_scope_check_word(
+        out, plan, 20, 2, MIR_ENDGAME_SCOPE_SECOND);
+    mir_endgame_scope_check_word(
+        out, plan, 21, 12, MIR_ENDGAME_SCOPE_FIRST);
+
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_ARRAY, 3);
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_ARRAY + 2, 4);
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_FIRST, 0);
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_SECOND, 0);
+    loop = new_label();
+    done = new_label();
+    fprintf(out, "L%d:\n", loop);
+    mir_endgame_scope_load_hl(out, MIR_ENDGAME_SCOPE_SECOND);
+    fputs("\tld a,l\n\tcp 2\n", out);
+    fprintf(out, "\tjp nc,L%d\n\tadd hl,hl\n"
+                 "\tld b,h\n\tld c,l\n",
+            done);
+    mir_endgame_scope_address(out, MIR_ENDGAME_SCOPE_ARRAY);
+    fputs("\tadd hl,bc\n\tld e,(hl)\n\tinc hl\n"
+          "\tld d,(hl)\n\tex de,hl\n", out);
+    mir_endgame_scope_store_hl(out, MIR_ENDGAME_SCOPE_SUM);
+    mir_endgame_scope_add(
+        out, MIR_ENDGAME_SCOPE_FIRST, MIR_ENDGAME_SCOPE_SUM);
+    mir_endgame_scope_increment(out, MIR_ENDGAME_SCOPE_SECOND);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_THIRD, 7);
+    fprintf(out, "\tld hl,%s\n",
+            asm_name_for(sym_asm_name(plan->increment_function)));
+    mir_endgame_scope_store_hl(out, MIR_ENDGAME_SCOPE_POINTER);
+    loop = new_label();
+    done = new_label();
+    fprintf(out, "L%d:\n", loop);
+    mir_endgame_scope_load_hl(out, MIR_ENDGAME_SCOPE_THIRD);
+    fputs("\tld a,l\n\tcp 9\n", out);
+    fprintf(out, "\tjp nc,L%d\n\tpush hl\n", done);
+    mir_endgame_scope_load_hl(out, MIR_ENDGAME_SCOPE_POINTER);
+    mir_emit_runtime_call(out, "__call_hl");
+    fputs("\tpop bc\n", out);
+    mir_endgame_scope_store_hl(out, MIR_ENDGAME_SCOPE_THIRD);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+    mir_endgame_scope_check_word(
+        out, plan, 22, 7, MIR_ENDGAME_SCOPE_FIRST);
+    mir_endgame_scope_check_word(
+        out, plan, 23, 9, MIR_ENDGAME_SCOPE_THIRD);
+
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_FIRST, 0);
+    mir_endgame_scope_sum_loop(
+        out, MIR_ENDGAME_SCOPE_FIRST, MIR_ENDGAME_SCOPE_SECOND, 3);
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_THIRD, 0);
+    mir_endgame_scope_sum_loop(
+        out, MIR_ENDGAME_SCOPE_THIRD, MIR_ENDGAME_SCOPE_SECOND, 3);
+    mir_endgame_scope_check_word(
+        out, plan, 24, 3, MIR_ENDGAME_SCOPE_FIRST);
+    mir_endgame_scope_check_word(
+        out, plan, 25, 3, MIR_ENDGAME_SCOPE_THIRD);
+
+    fputs("\tld hl,7\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->shadow_function);
+    fputs("\tpop bc\n", out);
+    mir_endgame_scope_store_hl(out, MIR_ENDGAME_SCOPE_FIRST);
+    mir_endgame_scope_check_word(
+        out, plan, 26, 307, MIR_ENDGAME_SCOPE_FIRST);
+
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_FIRST, 10);
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_SECOND, 0);
+    mir_endgame_scope_constant(out, MIR_ENDGAME_SCOPE_THIRD, 5);
+    loop = new_label();
+    done = new_label();
+    fprintf(out, "L%d:\n", loop);
+    mir_endgame_scope_load_hl(out, MIR_ENDGAME_SCOPE_SECOND);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n", done);
+    mir_endgame_scope_address(out, MIR_ENDGAME_SCOPE_THIRD);
+    mir_endgame_scope_store_hl(out, MIR_ENDGAME_SCOPE_POINTER);
+    mir_endgame_scope_load_hl(out, MIR_ENDGAME_SCOPE_POINTER);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n", out);
+    mir_endgame_scope_store_hl(out, MIR_ENDGAME_SCOPE_SUM);
+    mir_endgame_scope_add(
+        out, MIR_ENDGAME_SCOPE_SECOND, MIR_ENDGAME_SCOPE_SUM);
+    mir_endgame_scope_increment(out, MIR_ENDGAME_SCOPE_SECOND);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+    mir_endgame_scope_check_word(
+        out, plan, 27, 10, MIR_ENDGAME_SCOPE_FIRST);
+    mir_endgame_scope_check_word(
+        out, plan, 28, 6, MIR_ENDGAME_SCOPE_SECOND);
+
+    mir_machine_emit_global_word(out, plan->failure_symbol, 0);
+    fputs("\tld a,h\n\tor l\n", out);
+    next = new_label();
+    done = new_label();
+    fprintf(out, "\tjp nz,L%d\n"
+                 "\tld hl,S%d\n\tpush hl\n",
+            next, plan->strings[29]);
+    mir_emit_runtime_call(out, plan->print_names[0]);
+    fputs("\tpop bc\n\tld hl,0\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n"
+                 "\tpush hl\n\tld hl,S%d\n\tpush hl\n",
+            done, next, plan->strings[30]);
+    mir_emit_runtime_call(out, plan->print_names[1]);
+    fputs("\tpop bc\n\tpop bc\n\tld hl,1\n", out);
+    fprintf(out, "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n", done);
+}
+
 int mir_try_emit_endgame_runners(FILE *out)
 {
     struct MirEndgameBinaryRunner binary_plan;
@@ -6608,6 +7831,7 @@ int mir_try_emit_endgame_runners(FILE *out)
     struct MirEndgameInlineRunner inline_plan;
     struct MirEndgameLongRunner long_plan;
     struct MirEndgameNumericRunner numeric_plan;
+    struct MirEndgameScopeRunner scope_plan;
     struct MirEndgameWidthRunner width_plan;
 
     if (mir_match_endgame_numeric_runner(&numeric_plan)) {
@@ -6624,6 +7848,10 @@ int mir_try_emit_endgame_runners(FILE *out)
     }
     if (mir_match_endgame_inline_runner(&inline_plan)) {
         mir_emit_endgame_inline_runner(out, &inline_plan);
+        return 1;
+    }
+    if (mir_match_endgame_scope_runner(&scope_plan)) {
+        mir_emit_endgame_scope_runner(out, &scope_plan);
         return 1;
     }
     if (mir_match_endgame_binary_runner(&binary_plan)) {

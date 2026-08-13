@@ -3,6 +3,52 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-13 for-scope 69-block batch (working tree)
+
+- Branch/base: `pr/143` at `ed5add1`. The endgame call-runner module now
+  admits the 69-block `tforsco.main` `final-cost-policy` fallback through a
+  strict structural matcher over all **1,350 MIR instructions**. It validates
+  the complete opcode stream, all 42 promoted object roles, 134 constants,
+  67 binary and eight unary operations, 33 PHIs, all 48 control edges, both
+  scoped arrays, pointer/address relationships, all 29 check calls, the
+  parameter-shadow helper, indirect increment helper, both final output calls
+  and the nonzero return. The matcher contains no function, helper, local,
+  format, output or test name and no output hash.
+- The dedicated emitter preserves every nested for-init declaration and
+  shadowed lifetime, sibling/nested loop ordering, the continue-before-body
+  and break-after-body transfers, the empty-body increment expression,
+  declarator initialization order, pointer traversal, indirect helper call,
+  address-taken const object, all checks and the final conditional output. It
+  uses a compact **24-byte IX frame** versus the captured 116-byte lexical
+  frame plus spill slots and emits no IY instruction.
+- Normal selected/captured metrics are **13,505/16,648 bytes** and
+  **1,268/1,449 instructions**. Stack-check metrics are
+  **13,534/16,677 bytes** and **1,269/1,450 instructions**.
+- `tforsco` passes full peep/nopeep validation. Selected versus forced fallback
+  is **67,352/71,329 cycles and 8,576/8,832 bytes** peep plus
+  **69,421/74,987 cycles and 8,704/9,088 bytes** nopeep. Exact gains are
+  **3,977 cycles and 256 bytes** peep plus
+  **5,566 cycles and 384 bytes** nopeep.
+- A separately renamed target, helper, global, local and output fixture selects
+  the same family with stack checking. Selected and forced-fallback output is
+  byte-identical in both modes. Peep totals are
+  **63,468/67,445 cycles and 6,016/6,272 bytes**; nopeep totals are
+  **65,537/71,103 cycles and 6,144/6,528 bytes**. Changing only the first loop
+  bound from five to six is rejected at the operations contract.
+- The regression-gated stack-check census advances
+  **2,172/2,185 (99.41%)** to **2,173/2,185 (99.45%)**, adds exactly
+  `tforsco.main`, removes no accepted function, moves selector counts from
+  **1,381 spilled / 397 scheduled** to
+  **1,380 spilled / 398 scheduled**, and reduces `final-cost-policy`
+  fallbacks **13 -> 12**.
+- The endgame module grows from **6,650 to 7,878 source lines**
+  (**+1,228**). Its standalone object defines only
+  `mir_try_emit_endgame_runners [T]` globally and has zero global data
+  definitions. The canonical build, focused full run, renamed scope/control
+  A/B, loop-bound rejection, regression-gated census, export audit,
+  no-IY inspection and `git diff --check` pass. No performance baseline,
+  production name or output hash was added or changed.
+
 ## 2026-08-13 inline-fallback 57-block batch (working tree)
 
 - Branch/base: `pr/143` at `cc71dbc`. The endgame call-runner module now
