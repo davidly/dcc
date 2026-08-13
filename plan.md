@@ -6,10 +6,45 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Clean base HEAD for the current coverage batch: `0d9d92a`.
-- Current working-tree candidate coverage: **2142/2185 (98.03%)**.
-- Remaining fallback population: **43 `final-cost-policy`**, all selected by
+- Clean base HEAD for the current coverage batch: `3294e44`.
+- Current working-tree candidate coverage: **2143/2185 (98.08%)**.
+- Remaining fallback population: **42 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The call-runner module now admits the 22-block `tbyteeq.main`
+  `final-cost-policy` fallback through a strict name-free matcher over all
+  **380 MIR instructions**. It proves the five signed/unsigned byte
+  initializers and conversions, both distinct global byte arrays and indexed
+  stores/loads, all signed and unsigned integer promotions, every equality
+  and inequality operand order, the short-circuit logical value, all ten
+  failure branches, all **15** ordered three-argument check calls, the final
+  variadic report choice, global failure test and return. The emitter retains
+  all five multiply-helper calls and uses a compact **5-byte IX frame** with
+  no IY. Normal selected/captured metrics are **4,895/5,956 bytes** and
+  **489/559 instructions**; stack-check metrics are **4,924/5,985 bytes**
+  and **490/560 instructions**.
+- `tbyteeq` passes checked full peep/nopeep validation, as does the forced
+  fallback side. Against the checked fallback values, peep improves from
+  **23,013 to 22,393 cycles** and **6,912 to 6,784 bytes**, while nopeep
+  improves from **24,260 to 23,152 cycles** and
+  **7,168 to 6,784 bytes**.
+- A renamed-symbol boundary A/B calls the scheduled driver with `argc` values
+  zero, one and two, exercising zero, negative signed-byte, unsigned
+  high-byte and wrapped signed-byte promotion boundaries. Selected and
+  forced-fallback output is byte-identical in both modes and ends with
+  `edge 1 4 0 0 1 2`. Selected/fallback measurements are
+  **296,242/298,214 cycles and 3,328/3,456 bytes peep**, and
+  **298,556/302,028 cycles and 3,328/3,712 bytes nopeep**.
+- The call-runner module grows from **3,764 to 4,612 source lines** and from
+  **68 to 83 static top-level helpers**. The object audit reports only
+  `mir_try_emit_call_runners [T]` as defined global code, with zero global
+  read-only or writable data. The canonical build passes. The
+  regression-gated stack-check census advances **2,142/2,185 (98.03%)** to
+  **2,143/2,185 (98.08%)**, adds exactly `tbyteeq.main`, removes no accepted
+  function, moves selector counts from **1,411 spilled / 367 scheduled** to
+  **1,410 spilled / 368 scheduled**, and leaves
+  **42 `final-cost-policy`** fallbacks. The corresponding normal census moves
+  from **2,053/2,103** to **2,054/2,103** with no regression. No performance
+  baseline, production name, or output-hash gate was added.
 - The numeric module now admits the 22-block `ln2.main`
   `final-cost-policy` fallback through a strict name-free matcher over all
   **250 MIR instructions**. It proves the two distinct 29-element local long

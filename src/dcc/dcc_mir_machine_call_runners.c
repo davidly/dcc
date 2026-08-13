@@ -110,6 +110,19 @@ struct MirMemoryExerciseRunner {
     int memset_fastcall;
 };
 
+struct MirByteEqualityRunner {
+    struct Sym *check_function;
+    struct Sym *print_function;
+    struct Sym *signed_array;
+    struct Sym *unsigned_array;
+    struct Sym *failures;
+    int check_strings[15];
+    int format_string;
+    int pass_string;
+    int fail_string;
+    int argc_stack_offset;
+};
+
 static int mir_machine_constant_value(
     int value, long *constant_out, int depth)
 {
@@ -2670,6 +2683,834 @@ static int mir_match_fixed_index_call_runner(
     return 1;
 }
 
+static int mir_byte_equality_byte_type(int type, int is_unsigned)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == TYPE_CHAR &&
+           ((type & TYPE_UNSIGNED) != 0) == is_unsigned &&
+           type_size(type) == 1;
+}
+
+static int mir_byte_equality_word_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == TYPE_INT &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 2;
+}
+
+static int mir_byte_equality_byte_pointer_type(
+    int type, int is_unsigned)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & 15) == TYPE_CHAR &&
+           ((type & TYPE_UNSIGNED) != 0) == is_unsigned &&
+           type_size(type) == 2;
+}
+
+static int mir_byte_equality_global(
+    int instruction, int is_unsigned, struct Sym **symbol_out)
+{
+    const struct MirInsn *address = &mir.insns[instruction];
+    struct Sym *symbol;
+
+    if (address->opcode != MIR_ADDRESS ||
+        !mir_machine_named_nonvolatile(address) ||
+        !mir_byte_equality_byte_pointer_type(
+            address->type, is_unsigned) ||
+        (symbol = find_global(address->name)) == NULL ||
+        symbol->storage == SC_FUNC)
+        return 0;
+    *symbol_out = symbol;
+    return 1;
+}
+
+static int mir_byte_equality_same_global(
+    int instruction, struct Sym *symbol, int is_unsigned)
+{
+    const struct MirInsn *address = &mir.insns[instruction];
+
+    return address->opcode == MIR_ADDRESS &&
+           mir_machine_named_nonvolatile(address) &&
+           mir_byte_equality_byte_pointer_type(
+               address->type, is_unsigned) &&
+           find_global(address->name) == symbol;
+}
+
+static int mir_byte_equality_branch(
+    int comparison, int branch, int label, int operation)
+{
+    return mir.insns[comparison].opcode == MIR_BINARY &&
+           mir.insns[comparison].immediate == operation &&
+           mir_byte_equality_word_type(mir.insns[comparison].type) &&
+           mir.insns[branch].opcode == MIR_BRANCH_FALSE &&
+           mir.insns[branch].src1 == mir.insns[comparison].dst &&
+           mir.insns[branch].label == mir.insns[label].label;
+}
+
+static int mir_byte_equality_call(
+    int call_instruction, int string_instruction,
+    int actual_instruction, int expected_instruction,
+    struct Sym *function, int expected, int *string_out)
+{
+    int arguments[3];
+
+    if (mir.insns[string_instruction].opcode !=
+            MIR_STRING_ADDRESS ||
+        !mir_machine_call_arguments(
+            &mir.insns[call_instruction], 3, arguments) ||
+        arguments[0] != mir.insns[string_instruction].dst ||
+        arguments[1] != mir.insns[actual_instruction].dst ||
+        arguments[2] != mir.insns[expected_instruction].dst ||
+        find_global(mir.insns[call_instruction].name) != function ||
+        !mir_machine_constant_equals(
+            mir.insns[expected_instruction].dst, expected))
+        return 0;
+    *string_out =
+        (int)mir.insns[string_instruction].immediate;
+    return 1;
+}
+
+static int mir_match_byte_equality_runner(
+    struct MirByteEqualityRunner *plan)
+{
+    static const unsigned char expected_opcodes[380] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_NOP,
+        MIR_CONST, MIR_NOP, MIR_BINARY, MIR_UNARY,
+        MIR_STORE, MIR_NOP, MIR_CONST, MIR_NOP,
+        MIR_BINARY, MIR_UNARY, MIR_STORE, MIR_CONST,
+        MIR_NOP, MIR_BINARY, MIR_UNARY, MIR_STORE,
+        MIR_CONST, MIR_NOP, MIR_BINARY, MIR_UNARY,
+        MIR_STORE, MIR_CONST, MIR_NOP, MIR_BINARY,
+        MIR_UNARY, MIR_STORE, MIR_NOP, MIR_STORE,
+        MIR_LOAD, MIR_UNARY, MIR_ADDRESS, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_INDEX_ADDRESS, MIR_NOP,
+        MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_INDEX_ADDRESS, MIR_NOP, MIR_STORE_INDIRECT,
+        MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST,
+        MIR_NOP, MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_CONST, MIR_NOP,
+        MIR_STORE, MIR_NOP, MIR_NOP, MIR_UNARY,
+        MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST,
+        MIR_NOP, MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_NOP, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_CONST, MIR_LABEL, MIR_PHI, MIR_LABEL,
+        MIR_JUMP, MIR_LABEL, MIR_PHI, MIR_UNARY,
+        MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_CONST, MIR_NOP, MIR_STORE, MIR_ADDRESS,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE,
+        MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_CONST, MIR_NOP, MIR_STORE, MIR_CONST,
+        MIR_ADDRESS, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE,
+        MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_CONST, MIR_NOP, MIR_STORE, MIR_ADDRESS,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_NOP, MIR_UNARY, MIR_UNARY,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP,
+        MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG,
+        MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP,
+        MIR_NOP, MIR_UNARY, MIR_UNARY, MIR_BINARY,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_NOP,
+        MIR_UNARY, MIR_UNARY, MIR_BINARY, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_NOP, MIR_CONST, MIR_UNARY,
+        MIR_BINARY, MIR_ARG, MIR_CONST, MIR_ARG,
+        MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_CONST, MIR_NOP, MIR_STORE, MIR_ADDRESS,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_NOP, MIR_UNARY, MIR_UNARY,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP,
+        MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG,
+        MIR_CALL, MIR_CONST, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_ADDRESS, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY,
+        MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST,
+        MIR_NOP, MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_CONST, MIR_NOP,
+        MIR_STORE, MIR_ADDRESS, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP,
+        MIR_UNARY, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_ADDRESS,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_UNARY, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE,
+        MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_LABEL,
+        MIR_JUMP, MIR_LABEL, MIR_STRING_ADDRESS, MIR_LABEL,
+        MIR_LABEL, MIR_PHI, MIR_ARG, MIR_CALL,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_RETURN
+    };
+    static const int initial_constants[5] = {
+        65480, 65480, 65, 200, 200
+    };
+    static const int constant_instructions[5] = {
+        4, 10, 15, 20, 25
+    };
+    static const int multiply_instructions[5] = {
+        6, 12, 17, 22, 27
+    };
+    static const int cast_instructions[5] = {
+        7, 13, 18, 23, 28
+    };
+    static const int store_instructions[5] = {
+        8, 14, 19, 24, 29
+    };
+    static const int address_instructions[10] = {
+        34, 41, 143, 168, 191, 247, 263, 289, 313, 339
+    };
+    static const int index_constants[10] = {
+        36, 43, 145, 170, 193, 249, 265, 291, 315, 341
+    };
+    static const int index_adds[10] = {
+        37, 44, 146, 171, 194, 250, 266, 292, 316, 342
+    };
+    static const int index_addresses[10] = {
+        38, 45, 147, 172, 195, 251, 267, 293, 317, 343
+    };
+    static const int check_calls[15] = {
+        66, 85, 105, 139, 163, 187, 212, 223,
+        234, 244, 259, 284, 309, 334, 359
+    };
+    static const int check_strings[15] = {
+        60, 79, 99, 133, 157, 181, 206, 213,
+        224, 235, 245, 278, 303, 328, 353
+    };
+    static const int check_actuals[15] = {
+        62, 81, 101, 131, 159, 183, 208, 219,
+        230, 240, 255, 280, 305, 330, 355
+    };
+    static const int check_expecteds[15] = {
+        64, 83, 103, 137, 161, 185, 210, 221,
+        232, 242, 257, 282, 307, 332, 357
+    };
+    static const int expected_results[15] = {
+        0, 1, 0, 0, 0, 0, 0, 1,
+        1, 1, 1, 1, 1, 1, 1
+    };
+    static const int comparison_instructions[18] = {
+        54, 73, 93, 109, 118, 151, 175, 200, 219,
+        230, 240, 255, 272, 297, 322, 347, 364, 378
+    };
+    static const int comparison_lefts[18] = {
+        53, 72, 91, 108, 117, 150, 167, 198, 217,
+        228, 239, 254, 270, 295, 320, 345, 362, 376
+    };
+    static const int comparison_rights[18] = {
+        52, 71, 92, 107, 116, 149, 174, 199, 218,
+        229, 238, 253, 271, 296, 321, 346, 363, 377
+    };
+    static const int branch_comparisons[13] = {
+        54, 73, 93, 109, 118, 151, 175,
+        200, 272, 297, 322, 347, 364
+    };
+    static const int branches[13] = {
+        55, 74, 94, 110, 119, 152, 176,
+        201, 273, 298, 323, 348, 365
+    };
+    static const int branch_labels[13] = {
+        59, 78, 98, 114, 123, 156, 180,
+        205, 277, 302, 327, 352, 369
+    };
+    static const int signed_loads[5] = {
+        148, 173, 196, 268, 294
+    };
+    static const int unsigned_loads[3] = {
+        252, 318, 344
+    };
+    static const int signed_promotions[14] = {
+        53, 72, 91, 108, 150, 174, 198,
+        217, 218, 239, 270, 271, 295, 296
+    };
+    static const int signed_promotion_sources[14] = {
+        7, 7, 7, 7, 148, 173, 196,
+        7, 13, 18, 268, 7, 7, 294
+    };
+    static const int unsigned_promotions[10] = {
+        92, 117, 199, 228, 229,
+        254, 320, 321, 345, 346
+    };
+    static const int unsigned_promotion_sources[10] = {
+        23, 23, 23, 23, 28,
+        252, 318, 23, 23, 344
+    };
+    static const int result_zero_constants[10] = {
+        48, 67, 86, 140, 164, 188, 260, 285, 310, 335
+    };
+    static const int result_zero_stores[10] = {
+        50, 69, 88, 142, 166, 190, 262, 287, 312, 337
+    };
+    static const int result_one_constants[10] = {
+        56, 75, 95, 153, 177, 202, 274, 299, 324, 349
+    };
+    static const int result_one_stores[10] = {
+        58, 77, 97, 155, 179, 204, 276, 301, 326, 351
+    };
+    static const int result_loads[10] = {
+        62, 81, 101, 159, 183, 208, 280, 305, 330, 355
+    };
+    int call_count = 0;
+    int instruction;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 380 || mir_cfg_block_count() != 22 ||
+        mir.has_vla || !mir_byte_equality_word_type(mir.return_type))
+        return mir_machine_reject(
+            "byte-equality-runner", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        if (mir.insns[instruction].opcode !=
+                expected_opcodes[instruction])
+            return mir_machine_reject(
+                "byte-equality-runner", "opcode");
+        if (mir.insns[instruction].opcode == MIR_CALL)
+            ++call_count;
+    }
+    if (call_count != 16 ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->argc_stack_offset) ||
+        plan->argc_stack_offset != 2 ||
+        !mir_byte_equality_word_type(mir.insns[1].type) ||
+        type_ptr_depth(mir.insns[2].type) != 2 ||
+        (mir.insns[2].type & 15) != TYPE_CHAR)
+        return mir_machine_reject(
+            "byte-equality-runner", "parameters");
+    if (strcmp(mir.insns[2].name, mir.insns[32].name) ||
+        mir.insns[33].src1 != mir.insns[32].dst ||
+        (mir.insns[33].type & 15) != TYPE_VOID)
+        return mir_machine_reject(
+            "byte-equality-runner", "unused-argv");
+
+    for (item = 0; item < 5; ++item) {
+        const struct MirInsn *binary =
+            &mir.insns[multiply_instructions[item]];
+        const struct MirInsn *cast =
+            &mir.insns[cast_instructions[item]];
+        const struct MirInsn *store =
+            &mir.insns[store_instructions[item]];
+
+        if (!mir_machine_constant_equals(
+                mir.insns[constant_instructions[item]].dst,
+                initial_constants[item]) ||
+            binary->immediate != '*' ||
+            binary->src1 !=
+                mir.insns[constant_instructions[item]].dst ||
+            binary->src2 != mir.insns[1].dst ||
+            !mir_byte_equality_word_type(binary->type) ||
+            cast->immediate != 0 ||
+            cast->src1 != binary->dst ||
+            !mir_byte_equality_byte_type(
+                cast->type, item >= 3) ||
+            store->src1 != cast->dst ||
+            store->memory_size != 1 ||
+            !mir_machine_unobservable_local_store(store))
+            return mir_machine_reject(
+                "byte-equality-runner", "initializers");
+        if (item != 0 &&
+            mir_machine_same_location(
+                store, &mir.insns[store_instructions[0]]))
+            return mir_machine_reject(
+                "byte-equality-runner", "locals");
+    }
+
+    if (!mir_byte_equality_global(
+            address_instructions[0], 0, &plan->signed_array) ||
+        !mir_byte_equality_global(
+            address_instructions[1], 1, &plan->unsigned_array) ||
+        plan->signed_array == plan->unsigned_array ||
+        !plan->signed_array->is_array ||
+        !plan->unsigned_array->is_array ||
+        plan->signed_array->array_len < 4 ||
+        plan->unsigned_array->array_len < 4 ||
+        plan->signed_array->elem_size != 1 ||
+        plan->unsigned_array->elem_size != 1 ||
+        !plan->signed_array->is_defined ||
+        !plan->unsigned_array->is_defined)
+        return mir_machine_reject(
+            "byte-equality-runner", "arrays");
+    for (item = 0; item < 10; ++item) {
+        int is_unsigned =
+            item == 1 || item == 5 || item >= 8;
+        struct Sym *expected =
+            is_unsigned ? plan->unsigned_array :
+                          plan->signed_array;
+        const struct MirInsn *add =
+            &mir.insns[index_adds[item]];
+        const struct MirInsn *address =
+            &mir.insns[index_addresses[item]];
+
+        if (!mir_byte_equality_same_global(
+                address_instructions[item],
+                expected, is_unsigned) ||
+            !mir_machine_constant_equals(
+                mir.insns[index_constants[item]].dst, 1) ||
+            add->immediate != '+' ||
+            add->src1 != mir.insns[1].dst ||
+            add->src2 !=
+                mir.insns[index_constants[item]].dst ||
+            address->src1 !=
+                mir.insns[address_instructions[item]].dst ||
+            address->src2 != add->dst ||
+            address->memory_size != 1 ||
+            address->immediate != 1)
+            return mir_machine_reject(
+                "byte-equality-runner", "index");
+    }
+    if (mir.insns[40].src1 != mir.insns[38].dst ||
+        mir.insns[40].src2 != mir.insns[7].dst ||
+        mir.insns[40].memory_size != 1 ||
+        mir.insns[47].src1 != mir.insns[45].dst ||
+        mir.insns[47].src2 != mir.insns[23].dst ||
+        mir.insns[47].memory_size != 1)
+        return mir_machine_reject(
+            "byte-equality-runner", "array-stores");
+    for (item = 0; item < 5; ++item)
+        if (!mir_byte_equality_byte_type(
+                mir.insns[signed_loads[item]].type, 0) ||
+            mir.insns[signed_loads[item]].memory_size != 1)
+            return mir_machine_reject(
+                "byte-equality-runner", "signed-load");
+    for (item = 0; item < 3; ++item)
+        if (!mir_byte_equality_byte_type(
+                mir.insns[unsigned_loads[item]].type, 1) ||
+            mir.insns[unsigned_loads[item]].memory_size != 1)
+            return mir_machine_reject(
+                "byte-equality-runner", "unsigned-load");
+    for (item = 0; item < 14; ++item)
+        if (mir.insns[signed_promotions[item]].src1 !=
+                mir.insns[signed_promotion_sources[item]].dst ||
+            mir.insns[signed_promotions[item]].immediate != 0 ||
+            !mir_byte_equality_word_type(
+                mir.insns[signed_promotions[item]].type))
+            return mir_machine_reject(
+                "byte-equality-runner", "signed-promotion");
+    for (item = 0; item < 10; ++item)
+        if (mir.insns[unsigned_promotions[item]].src1 !=
+                mir.insns[unsigned_promotion_sources[item]].dst ||
+            mir.insns[unsigned_promotions[item]].immediate != 0 ||
+            !mir_byte_equality_word_type(
+                mir.insns[unsigned_promotions[item]].type))
+            return mir_machine_reject(
+                "byte-equality-runner", "unsigned-promotion");
+
+    for (item = 0; item < 18; ++item) {
+        int operation =
+            item == 1 || item == 17 ? TOK_NE : TOK_EQ;
+        const struct MirInsn *comparison =
+            &mir.insns[comparison_instructions[item]];
+
+        if (comparison->immediate != operation ||
+            comparison->src1 !=
+                mir.insns[comparison_lefts[item]].dst ||
+            comparison->src2 !=
+                mir.insns[comparison_rights[item]].dst ||
+            !mir_byte_equality_word_type(comparison->type))
+            return mir_machine_reject(
+                "byte-equality-runner", "comparison");
+    }
+    for (item = 0; item < 13; ++item) {
+        int operation = item == 1 ? TOK_NE : TOK_EQ;
+
+        if (!mir_byte_equality_branch(
+                branch_comparisons[item], branches[item],
+                branch_labels[item], operation))
+            return mir_machine_reject(
+                "byte-equality-runner", "branch");
+    }
+    for (item = 0; item < 10; ++item)
+        if (!mir_machine_constant_equals(
+                mir.insns[result_zero_constants[item]].dst, 0) ||
+            mir.insns[result_zero_stores[item]].src1 !=
+                mir.insns[result_zero_constants[item]].dst ||
+            !mir_machine_unobservable_local_store(
+                &mir.insns[result_zero_stores[item]]) ||
+            !mir_machine_constant_equals(
+                mir.insns[result_one_constants[item]].dst, 1) ||
+            mir.insns[result_one_stores[item]].src1 !=
+                mir.insns[result_one_constants[item]].dst ||
+            !mir_machine_unobservable_local_store(
+                &mir.insns[result_one_stores[item]]) ||
+            !mir_machine_same_location(
+                &mir.insns[result_zero_stores[item]],
+                &mir.insns[result_one_stores[item]]) ||
+            !mir_machine_same_location(
+                &mir.insns[result_zero_stores[item]],
+                &mir.insns[result_loads[item]]))
+            return mir_machine_reject(
+                "byte-equality-runner", "branch-result");
+
+    if (mir.insns[113].label != mir.insns[129].label ||
+        mir.insns[122].label != mir.insns[125].label ||
+        mir.insns[128].label != mir.insns[129].label ||
+        mir.insns[126].src1 != mir.insns[121].dst ||
+        mir.insns[126].src2 != mir.insns[124].dst ||
+        mir.insns[126].phi_pred1 != mir.insns[120].label ||
+        mir.insns[126].phi_pred2 != mir.insns[123].label ||
+        mir.insns[130].src1 != mir.insns[112].dst ||
+        mir.insns[130].src2 != mir.insns[126].dst ||
+        mir.insns[130].phi_pred1 != mir.insns[111].label ||
+        mir.insns[130].phi_pred2 != mir.insns[127].label)
+        return mir_machine_reject(
+            "byte-equality-runner", "logical-or");
+
+    plan->check_function =
+        mir_memory_runner_call_function(66, 0, 3);
+    if (plan->check_function == NULL ||
+        (plan->check_function->type & 15) != TYPE_VOID ||
+        type_ptr_depth(plan->check_function->proto_types[0]) != 1 ||
+        (plan->check_function->proto_types[0] & 15) != TYPE_CHAR ||
+        !mir_byte_equality_word_type(
+            plan->check_function->proto_types[1]) ||
+        !mir_byte_equality_word_type(
+            plan->check_function->proto_types[2]))
+        return mir_machine_reject(
+            "byte-equality-runner", "check-function");
+    for (item = 0; item < 15; ++item)
+        if (!mir_byte_equality_call(
+                check_calls[item], check_strings[item],
+                check_actuals[item], check_expecteds[item],
+                plan->check_function, expected_results[item],
+                &plan->check_strings[item]))
+            return mir_machine_reject(
+                "byte-equality-runner", "check-call");
+
+    plan->failures = find_global(mir.insns[362].name);
+    plan->print_function =
+        mir_allocation_runner_call_function(375, 1);
+    if (plan->failures == NULL ||
+        plan->failures->storage == SC_FUNC ||
+    plan->failures->is_array ||
+    !mir_byte_equality_word_type(plan->failures->type) ||
+    !mir_machine_named_nonvolatile(&mir.insns[362]) ||
+        !mir_machine_named_nonvolatile(&mir.insns[376]) ||
+        find_global(mir.insns[376].name) != plan->failures ||
+        plan->print_function == NULL ||
+        plan->print_function->storage != SC_FUNC ||
+        !plan->print_function->has_proto ||
+        !plan->print_function->proto_variadic ||
+        !mir_byte_equality_word_type(plan->print_function->type) ||
+        plan->print_function->proto_nargs != 1 ||
+        type_ptr_depth(plan->print_function->proto_types[0]) != 1 ||
+        (plan->print_function->proto_types[0] & 15) != TYPE_CHAR ||
+        !mir_machine_unobservable_local_store(&mir.insns[31]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[132]) ||
+        !mir_byte_equality_word_type(mir.insns[362].type) ||
+        !mir_byte_equality_word_type(mir.insns[376].type) ||
+        mir.insns[360].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[366].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[370].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[368].label != mir.insns[372].label ||
+        mir.insns[373].src1 != mir.insns[366].dst ||
+        mir.insns[373].src2 != mir.insns[370].dst ||
+        mir.insns[373].phi_pred1 != mir.insns[367].label ||
+        mir.insns[373].phi_pred2 != mir.insns[371].label ||
+        mir.insns[379].src1 != mir.insns[378].dst)
+        return mir_machine_reject(
+            "byte-equality-runner", "final");
+    {
+        int arguments[2];
+
+        if (!mir_machine_two_call_arguments(
+                &mir.insns[375], arguments) ||
+            arguments[0] != mir.insns[360].dst ||
+            arguments[1] != mir.insns[373].dst)
+            return mir_machine_reject(
+                "byte-equality-runner", "print-call");
+    }
+    plan->format_string = (int)mir.insns[360].immediate;
+    plan->pass_string = (int)mir.insns[366].immediate;
+    plan->fail_string = (int)mir.insns[370].immediate;
+    return 1;
+}
+
+enum MirByteEqualityValue {
+    MIR_BYTE_EQ_SIGNED_HIGH,
+    MIR_BYTE_EQ_SIGNED_SAME,
+    MIR_BYTE_EQ_SIGNED_LOW,
+    MIR_BYTE_EQ_UNSIGNED_HIGH,
+    MIR_BYTE_EQ_UNSIGNED_SAME,
+    MIR_BYTE_EQ_SIGNED_ARRAY,
+    MIR_BYTE_EQ_UNSIGNED_ARRAY,
+    MIR_BYTE_EQ_CONSTANT
+};
+
+static void mir_byte_equality_load_parameter(
+    FILE *out, const struct MirByteEqualityRunner *plan)
+{
+    fprintf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n",
+            plan->argc_stack_offset + 2,
+            plan->argc_stack_offset + 3);
+}
+
+static void mir_byte_equality_emit_multiply(
+    FILE *out, const struct MirByteEqualityRunner *plan,
+    int multiplier, int offset)
+{
+    fprintf(out, "\tld hl,%d\n\tpush hl\n", multiplier);
+    mir_byte_equality_load_parameter(out, plan);
+    fputs("\tex de,hl\n\tpop hl\n", out);
+    mir_emit_runtime_call(out, "__mulu");
+    fprintf(out, "\tld (ix%d),l\n", offset);
+}
+
+static void mir_byte_equality_array_address(
+    FILE *out, const struct MirByteEqualityRunner *plan,
+    struct Sym *array)
+{
+    mir_byte_equality_load_parameter(out, plan);
+    fprintf(out,
+            "\tinc hl\n\tld de,%s\n\tadd hl,de\n",
+            asm_name_for(sym_asm_name(array)));
+}
+
+static void mir_byte_equality_load_value(
+    FILE *out, const struct MirByteEqualityRunner *plan,
+    enum MirByteEqualityValue value, int constant)
+{
+    int offset = 0;
+    int is_unsigned = 0;
+
+    switch (value) {
+    case MIR_BYTE_EQ_SIGNED_HIGH:
+        offset = -1;
+        break;
+    case MIR_BYTE_EQ_SIGNED_SAME:
+        offset = -2;
+        break;
+    case MIR_BYTE_EQ_SIGNED_LOW:
+        offset = -3;
+        break;
+    case MIR_BYTE_EQ_UNSIGNED_HIGH:
+        offset = -4;
+        is_unsigned = 1;
+        break;
+    case MIR_BYTE_EQ_UNSIGNED_SAME:
+        offset = -5;
+        is_unsigned = 1;
+        break;
+    case MIR_BYTE_EQ_SIGNED_ARRAY:
+        mir_byte_equality_array_address(
+            out, plan, plan->signed_array);
+        fputs("\tld l,(hl)\n", out);
+        break;
+    case MIR_BYTE_EQ_UNSIGNED_ARRAY:
+        mir_byte_equality_array_address(
+            out, plan, plan->unsigned_array);
+        fputs("\tld l,(hl)\n", out);
+        is_unsigned = 1;
+        break;
+    case MIR_BYTE_EQ_CONSTANT:
+        fprintf(out, "\tld hl,%d\n", constant);
+        return;
+    }
+    if (value <= MIR_BYTE_EQ_UNSIGNED_SAME)
+        fprintf(out, "\tld l,(ix%d)\n", offset);
+    if (is_unsigned) {
+        fputs("\tld h,0\n", out);
+    } else {
+        fputs("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n",
+              out);
+    }
+}
+
+static void mir_byte_equality_compare(
+    FILE *out, const struct MirByteEqualityRunner *plan,
+    enum MirByteEqualityValue left, int left_constant,
+    enum MirByteEqualityValue right, int right_constant,
+    int operation)
+{
+    int done = new_label();
+
+    mir_byte_equality_load_value(
+        out, plan, left, left_constant);
+    fputs("\tpush hl\n", out);
+    mir_byte_equality_load_value(
+        out, plan, right, right_constant);
+    fputs("\tex de,hl\n\tpop hl\n\tor a\n\tsbc hl,de\n"
+          "\tld hl,0\n", out);
+    fprintf(out, "\tjp %s,L%d\n",
+            operation == TOK_EQ ? "nz" : "z", done);
+    fputs("\tinc hl\n", out);
+    fprintf(out, "L%d:\n", done);
+}
+
+static void mir_byte_equality_check(
+    FILE *out, const struct MirByteEqualityRunner *plan,
+    int check, int expected)
+{
+    fprintf(out,
+            "\tld de,%d\n\tpush de\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            expected, plan->check_strings[check]);
+    mir_machine_emit_symbol_call(
+        out, plan->check_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
+}
+
+static void mir_emit_byte_equality_runner(
+    FILE *out, const struct MirByteEqualityRunner *plan)
+{
+    int logical_true = new_label();
+    int logical_done = new_label();
+    int result_fail = new_label();
+    int result_done = new_label();
+    int return_nonzero = new_label();
+    int return_done = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-5\n\tadd hl,sp\n\tld sp,hl\n", out);
+
+    mir_byte_equality_emit_multiply(out, plan, 65480, -1);
+    mir_byte_equality_emit_multiply(out, plan, 65480, -2);
+    mir_byte_equality_emit_multiply(out, plan, 65, -3);
+    mir_byte_equality_emit_multiply(out, plan, 200, -4);
+    mir_byte_equality_emit_multiply(out, plan, 200, -5);
+
+    mir_byte_equality_array_address(
+        out, plan, plan->signed_array);
+    fputs("\tld a,(ix-1)\n\tld (hl),a\n", out);
+    mir_byte_equality_array_address(
+        out, plan, plan->unsigned_array);
+    fputs("\tld a,(ix-4)\n\tld (hl),a\n", out);
+
+    mir_byte_equality_compare(
+        out, plan, MIR_BYTE_EQ_SIGNED_HIGH, 0,
+        MIR_BYTE_EQ_CONSTANT, 200, TOK_EQ);
+    mir_byte_equality_check(out, plan, 0, 0);
+
+    mir_byte_equality_compare(
+        out, plan, MIR_BYTE_EQ_SIGNED_HIGH, 0,
+        MIR_BYTE_EQ_CONSTANT, 200, TOK_NE);
+    mir_byte_equality_check(out, plan, 1, 1);
+
+    mir_byte_equality_compare(
+        out, plan, MIR_BYTE_EQ_SIGNED_HIGH, 0,
+        MIR_BYTE_EQ_UNSIGNED_HIGH, 0, TOK_EQ);
+    mir_byte_equality_check(out, plan, 2, 0);
+
+    mir_byte_equality_compare(
+        out, plan, MIR_BYTE_EQ_SIGNED_HIGH, 0,
+        MIR_BYTE_EQ_CONSTANT, 200, TOK_EQ);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n", logical_true);
+    mir_byte_equality_compare(
+        out, plan, MIR_BYTE_EQ_UNSIGNED_HIGH, 0,
+        MIR_BYTE_EQ_CONSTANT, 201, TOK_EQ);
+    fprintf(out, "\tjp L%d\nL%d:\n\tld hl,1\nL%d:\n",
+            logical_done, logical_true, logical_done);
+    mir_byte_equality_check(out, plan, 3, 0);
+
+    mir_byte_equality_compare(
+        out, plan, MIR_BYTE_EQ_SIGNED_ARRAY, 0,
+        MIR_BYTE_EQ_CONSTANT, 200, TOK_EQ);
+    mir_byte_equality_check(out, plan, 4, 0);
+
+    mir_byte_equality_compare(
+        out, plan, MIR_BYTE_EQ_CONSTANT, 200,
+        MIR_BYTE_EQ_SIGNED_ARRAY, 0, TOK_EQ);
+    mir_byte_equality_check(out, plan, 5, 0);
+
+    mir_byte_equality_compare(
+        out, plan, MIR_BYTE_EQ_SIGNED_ARRAY, 0,
+        MIR_BYTE_EQ_UNSIGNED_HIGH, 0, TOK_EQ);
+    mir_byte_equality_check(out, plan, 6, 0);
+
+    mir_byte_equality_compare(
+        out, plan, MIR_BYTE_EQ_SIGNED_HIGH, 0,
+        MIR_BYTE_EQ_SIGNED_SAME, 0, TOK_EQ);
+    mir_byte_equality_check(out, plan, 7, 1);
+
+    mir_byte_equality_compare(
+        out, plan, MIR_BYTE_EQ_UNSIGNED_HIGH, 0,
+        MIR_BYTE_EQ_UNSIGNED_SAME, 0, TOK_EQ);
+    mir_byte_equality_check(out, plan, 8, 1);
+
+    mir_byte_equality_compare(
+        out, plan, MIR_BYTE_EQ_SIGNED_LOW, 0,
+        MIR_BYTE_EQ_CONSTANT, 65, TOK_EQ);
+    mir_byte_equality_check(out, plan, 9, 1);
+
+    mir_byte_equality_compare(
+        out, plan, MIR_BYTE_EQ_UNSIGNED_ARRAY, 0,
+        MIR_BYTE_EQ_CONSTANT, 200, TOK_EQ);
+    mir_byte_equality_check(out, plan, 10, 1);
+
+    mir_byte_equality_compare(
+        out, plan, MIR_BYTE_EQ_SIGNED_ARRAY, 0,
+        MIR_BYTE_EQ_SIGNED_HIGH, 0, TOK_EQ);
+    mir_byte_equality_check(out, plan, 11, 1);
+
+    mir_byte_equality_compare(
+        out, plan, MIR_BYTE_EQ_SIGNED_HIGH, 0,
+        MIR_BYTE_EQ_SIGNED_ARRAY, 0, TOK_EQ);
+    mir_byte_equality_check(out, plan, 12, 1);
+
+    mir_byte_equality_compare(
+        out, plan, MIR_BYTE_EQ_UNSIGNED_ARRAY, 0,
+        MIR_BYTE_EQ_UNSIGNED_HIGH, 0, TOK_EQ);
+    mir_byte_equality_check(out, plan, 13, 1);
+
+    mir_byte_equality_compare(
+        out, plan, MIR_BYTE_EQ_UNSIGNED_HIGH, 0,
+        MIR_BYTE_EQ_UNSIGNED_ARRAY, 0, TOK_EQ);
+    mir_byte_equality_check(out, plan, 14, 1);
+
+    mir_machine_emit_global_word(out, plan->failures, 0);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out,
+            "\tjp nz,L%d\n\tld hl,S%d\n\tjp L%d\n"
+            "L%d:\n\tld hl,S%d\n"
+            "L%d:\n\tpush hl\n\tld hl,S%d\n\tpush hl\n",
+            result_fail, plan->pass_string, result_done,
+            result_fail, plan->fail_string,
+            result_done, plan->format_string);
+    mir_machine_emit_symbol_call(
+        out, plan->print_function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+
+    mir_machine_emit_global_word(out, plan->failures, 0);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out,
+            "\tjp nz,L%d\n\tld hl,0\n\tjp L%d\n"
+            "L%d:\n\tld hl,1\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            return_nonzero, return_done,
+            return_nonzero, return_done);
+}
+
 static void mir_fixed_call_runner_failure(
     FILE *out, const struct MirFixedCallCheckRunner *plan,
     int check, int next_label)
@@ -3718,6 +4559,7 @@ int mir_try_emit_call_runners(FILE *out, int phase)
         struct MirAllocationLifetimeRunner allocation_plan;
         struct MirCallbackRegistrationRunner callback_plan;
         struct MirForIncrementRunner for_increment_plan;
+        struct MirByteEqualityRunner byte_equality_plan;
         struct MirLongIndexCallRunner long_index_plan;
         struct MirFixedCallCheckRunner plan;
 
@@ -3741,6 +4583,12 @@ int mir_try_emit_call_runners(FILE *out, int phase)
                 &for_increment_plan)) {
             mir_emit_for_increment_runner(
                 out, &for_increment_plan);
+            return 1;
+        }
+        if (mir_match_byte_equality_runner(
+                &byte_equality_plan)) {
+            mir_emit_byte_equality_runner(
+                out, &byte_equality_plan);
             return 1;
         }
         if (mir_match_long_index_call_runner(&long_index_plan)) {
