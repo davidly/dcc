@@ -6,9 +6,9 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Clean base HEAD for the current coverage batch: `1983475`.
-- Current working-tree candidate coverage: **2130/2185 (97.48%)**.
-- Remaining fallback population: **55 `final-cost-policy`**, all selected by
+- Clean base HEAD for the current coverage batch: `d830f6f`.
+- Current working-tree candidate coverage: **2132/2185 (97.57%)**.
+- Remaining fallback population: **53 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
 - The first machine-emitter architecture pivot moves the recently added float
   report/check orchestration family, including the raw-conversion checker,
@@ -198,11 +198,70 @@ current execution plan and handoff.
   `final-cost-policy`** fallbacks. The prior forced final-generic
   `tlog.logf` experiment remains a measured regression and stays behind the
   unchanged cost gate. No performance baseline changed.
+- The next aggregate/multidimensional batch admits both seven-block
+  `too.test_multidim` and `too.test_size_inference2` through one strict,
+  name-free scheduled family. The two variants prove the complete
+  144/401-instruction graphs, all 14/24 calls, every checker/helper
+  relationship, inferred row/element counts, 12/3 and 12/6 multidimensional
+  strides, all local initializer and loop stores, fixed local/global member
+  addresses, and the original void returns. The emitters retain compact
+  13-byte and 86-byte IX frames, use no IY, preserve the pointer alias and all
+  check/report ordering, and keep every observed aggregate value in its
+  original width. Normal selected/captured metrics are **2,402/2,521 bytes
+  and 226/237 instructions** for `test_multidim`, and **5,981/7,109 bytes
+  and 554/661 instructions** for `test_size_inference2`; stack-check metrics
+  are **2,431/2,550 and 227/238**, and **6,010/7,138 and 555/662**.
+  `too` passes full peep/nopeep. Selected versus one-function forced fallback
+  improves `test_multidim` by **210 cycles peep** and **244 cycles nopeep**
+  with equal linked sizes, and improves `test_size_inference2` by
+  **9,176 cycles / 128 bytes peep** and **6,203 cycles / 256 bytes nopeep**.
+  A separately renamed edge clone raises board weights to a 120,018-wide sum
+  and local inferred-array values to 30,000..30,003; selected and fallback
+  program output is byte-identical in both modes. Its per-function A/B is
+  **1,885,183/1,885,393 cycles and 19,200/19,200 bytes peep** plus
+  **1,902,066/1,902,379 and 20,224/20,224 nopeep** for the multidimensional
+  variant, and **1,885,183/1,894,359 cycles and 19,200/19,328 bytes peep**
+  plus **1,902,066/1,908,269 and 20,224/20,480 nopeep** for size inference.
+  The regression-gated stack census advances **2,130/2,185 (97.48%)** to
+  **2,132/2,185 (97.57%)**, adds exactly these two functions, removes none,
+  moves selector counts from **1,423 spilled / 355 scheduled** to
+  **1,421 spilled / 357 scheduled**, and leaves **53
+  `final-cost-policy`** fallbacks. No production name, output hash, or
+  baseline gate was added.
+- The aggregate batch is now placed in its own compiled
+  `dcc_mir_machine_aggregate_checks.c` family module rather than growing the
+  core emitter. The module owns both plan variants, every table, matcher,
+  emitter, and private helper; the plan is local to
+  `mir_try_emit_aggregate_checks`, which is the module's only exported symbol.
+  The dispatch remains exactly between `local-array-struct-checks` and
+  `alias-mix`, preserving selector order. No adjacent established schedule was
+  moved: those two neighbours have distinct plans and emission contracts, so
+  moving either would expand the refactor's proof surface without improving
+  family cohesion; in particular, `local-array-struct-checks` is coupled to
+  the core `MirMachineForm` pointer/alias matcher stack rather than being a
+  self-contained aggregate-check schedule. The pending implementation's
+  `dcc_mir_machine_emit.c` falls from **49,695 to 48,352 lines** (**-1,343**);
+  the new module is **1,567 lines** with **27 static top-level helpers**.
+  `dcc_mir_machine_internal.h` is **49 lines** and adds only the family dispatch
+  prototype; it declares no shared data. The export audit reports only
+  `mir_try_emit_aggregate_checks [T]`, with no read-only or writable data.
+  Canonical and CMake builds pass. Normal before/after censuses are
+  byte-identical at SHA-256
+  `93168b31174f680dafd4a427709d179f5dbc4f5e0a0da871d240b5c058f1dcd0`
+  (**2043/2103, 97.15%**), and stack-check censuses are byte-identical at
+  `ea904031465ae5d13981f54b5560e787ebc898b46b3c062f70df209fffaff0b8`
+  (**2132/2185, 97.57%**): zero selector, metric, selected-hash, coverage, or
+  validation-set changes. `too` full passes peep/nopeep with zero regression;
+  selected totals remain **1,865,062 cycles / 21,888 bytes peep** and
+  **1,882,005 / 22,912 nopeep**.
 - Architecture rule for subsequent machine-family extractions: add **zero
   shared variables or mutable state**. Each module owns its plan structs,
   static arrays/constants, counters, candidate state, matchers, emitters, and
   selector ordering locally; it exports only one family dispatch entry, and
   `dcc_mir_machine_internal.h` remains a function-prototype-only contract.
+  New schedules must be added directly to their cohesive family module; do not
+  regrow `dcc_mir_machine_emit.c`. Use the core only when no established family
+  fits, and extract a new family as soon as the schedule has a cohesive peer.
 - `scripts/audit-c-module-exports.py` makes that rule repeatable: it compiles
   each module with the repository host C11/include settings, runs
   `nm -g --defined-only` (GNU nm or llvm-nm), reports LOC, best-effort static
@@ -219,6 +278,9 @@ current execution plan and handoff.
   python3 scripts/audit-c-module-exports.py \
     src/dcc/dcc_mir_machine_scanners.c \
     --allow-function mir_try_emit_scanner_kernels
+  python3 scripts/audit-c-module-exports.py \
+    src/dcc/dcc_mir_machine_aggregate_checks.c \
+    --allow-function mir_try_emit_aggregate_checks
   ```
 - Two strict name-free scheduled families admit the genuine nine-block
   call/check/report mains in `tfmaddr` and `tfpraw`. The float report family

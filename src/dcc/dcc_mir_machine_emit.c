@@ -47655,6 +47655,13 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
             out, &local_array_struct_checks);
         return 1;
     }
+    {
+        int aggregate_result =
+            mir_try_emit_aggregate_checks(out);
+
+        if (aggregate_result >= 0)
+            return aggregate_result;
+    }
     if (mir_match_alias_mix_schedule(&alias_mix_schedule)) {
         mir_emit_alias_mix_schedule(out, &alias_mix_schedule);
         return 1;

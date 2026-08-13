@@ -43,4 +43,7 @@ int mir_try_emit_attention_kernels(FILE *out);
 /* The late phase preserves the symbol-search selector's existing position. */
 int mir_try_emit_scanner_kernels(FILE *out, int late);
 
+/* Returns -1 when no aggregate check schedule matches. */
+int mir_try_emit_aggregate_checks(FILE *out);
+
 #endif

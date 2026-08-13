@@ -60,6 +60,7 @@ set(DCC_SOURCES
     dcc_mir_emit_common.c
     dcc_mir_homed_cfg.c
     dcc_mir_machine_emit.c # scheduled Z80 machine-template emission
+    dcc_mir_machine_aggregate_checks.c # strict aggregate check schedules
     dcc_mir_machine_attention.c # strict attention-kernel schedules
     dcc_mir_machine_float_reports.c # strict float report/check schedules
     dcc_mir_machine_scanners.c # strict scanner/parser schedules
