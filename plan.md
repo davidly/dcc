@@ -3,6 +3,63 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-13 big-file 43-block batch (working tree)
+
+- Branch/base: `pr/143` at `9faccd3`. The endgame call-runner module now
+  admits the 43-block `tbig.main` `final-cost-policy` fallback through a
+  strict structural matcher over all **498 MIR instructions**. It validates
+  the complete opcode stream and CFG, both parameters, all ten promoted
+  objects, the 128-byte local buffer declaration, every constant and
+  arithmetic/comparison operand, all 49 calls and their exact arguments, 23
+  distinct strings plus the required reused file/dot/suppression strings, all
+  three loop/return PHIs and every branch edge. The matcher contains no
+  function, helper, parameter, local, file, format, output or test name and no
+  output hash.
+- The dedicated emitter preserves the conditional scanner call rather than
+  precomputing it, all **20** formatted-output calls, two unlink calls, four
+  opens, four error-helper calls, two record fills, two writes, four closes,
+  one read, one record check, one stamp read, six boundary probes and one seek.
+  It retains the 128-byte buffer, sequential write/verify order, short-read
+  continue path, mismatch-only stamp call, suppression branches, random probe
+  order, past-limit success/failure paths, cleanup and final status. It uses a
+  compact **148-byte IX frame** versus the captured 156-byte source frame plus
+  spill slots and emits no IY instruction.
+- Normal selected/captured metrics are **9,532/11,439 bytes** and
+  **855/1,075 instructions**. Stack-check metrics are
+  **9,561/11,468 bytes** and **856/1,076 instructions**.
+- `tbig` passes full peep/nopeep validation. Selected versus forced fallback
+  is **1,421,783,690/1,499,414,928 cycles** and
+  **12,160/12,288 bytes** peep plus
+  **1,381,804,889/1,469,070,385 cycles** and
+  **12,288/12,672 bytes** nopeep. Exact gains are
+  **77,631,238 cycles and 128 bytes** peep plus
+  **87,265,496 cycles and 384 bytes** nopeep.
+- Direct selected/fallback A/B runs with scanner inputs `0`, `-1` and `3x`
+  are output-identical in both modes. Cycle pairs are respectively
+  **464,570/466,169**, **470,900/471,557** and
+  **527,793/532,611** peep; nopeep pairs are
+  **463,199/465,369**, **471,832/472,928** and
+  **523,742/529,572**.
+- A separately renamed function/helper/local/string fixture selects at
+  **9,584/11,482 bytes** and **856/1,075 instructions** with stack checking.
+  Its selected/fallback output is byte-identical for input `0`; peep cycles
+  are **495,136/496,735** with **9,600/9,728-byte** images and nopeep cycles
+  are **493,785/495,955** with **9,728/9,984-byte** images. Changing only the
+  final valid-record constant is rejected at the operations contract.
+- The regression-gated stack-check census advances
+  **2,169/2,185 (99.27%)** to **2,170/2,185 (99.31%)**, adds exactly
+  `tbig.main`, removes no accepted function, moves selector counts from
+  **1,384 spilled / 394 scheduled** to
+  **1,383 spilled / 395 scheduled**, and reduces `final-cost-policy`
+  fallbacks **16 -> 15**.
+- The endgame module grows from **4,234 to 5,602 source lines**
+  (**+1,368**). Its standalone object defines only
+  `mir_try_emit_endgame_runners [T]` globally and has zero global data
+  definitions. The canonical build, focused full run, input/edge A/Bs,
+  renamed/perturbed fixture, regression-gated census and `git diff --check`
+  pass. No performance baseline, production name or output hash was added or
+  changed.
+
 ## 2026-08-13 long-audit 43-block batch (working tree)
 
 - Branch/base: `pr/143` at `157f1a1`. The endgame module now admits the

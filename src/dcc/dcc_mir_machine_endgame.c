@@ -11,6 +11,16 @@
 #define MIR_ENDGAME_NUMERIC_PRINT_CALLS 16
 #define MIR_ENDGAME_LONG_CHECKS 34
 #define MIR_ENDGAME_LONG_STRINGS 36
+#define MIR_ENDGAME_BOUNDARY_PRINT_CALLS 20
+#define MIR_ENDGAME_BOUNDARY_STRINGS 23
+#define MIR_ENDGAME_BOUNDARY_FRAME_BYTES 148
+#define MIR_ENDGAME_BOUNDARY_BUFFER_OFFSET -148
+#define MIR_ENDGAME_BOUNDARY_LAST_OFFSET -4
+#define MIR_ENDGAME_BOUNDARY_RECORD_OFFSET -8
+#define MIR_ENDGAME_BOUNDARY_OK_OFFSET -12
+#define MIR_ENDGAME_BOUNDARY_BAD_OFFSET -16
+#define MIR_ENDGAME_BOUNDARY_FD_OFFSET -18
+#define MIR_ENDGAME_BOUNDARY_RESULT_OFFSET -20
 
 enum MirEndgameFloatOperandKind {
     MIR_ENDGAME_FLOAT_BITS,
@@ -125,6 +135,335 @@ struct MirEndgameLongCheck {
     int string;
     int got;
     int expected;
+};
+
+enum MirEndgameBoundaryFunction {
+    MIR_ENDGAME_BOUNDARY_SCAN,
+    MIR_ENDGAME_BOUNDARY_PRINT,
+    MIR_ENDGAME_BOUNDARY_UNLINK,
+    MIR_ENDGAME_BOUNDARY_OPEN,
+    MIR_ENDGAME_BOUNDARY_ERROR,
+    MIR_ENDGAME_BOUNDARY_FILL,
+    MIR_ENDGAME_BOUNDARY_WRITE,
+    MIR_ENDGAME_BOUNDARY_CLOSE,
+    MIR_ENDGAME_BOUNDARY_READ,
+    MIR_ENDGAME_BOUNDARY_CHECK,
+    MIR_ENDGAME_BOUNDARY_STAMP,
+    MIR_ENDGAME_BOUNDARY_PROBE,
+    MIR_ENDGAME_BOUNDARY_SEEK,
+    MIR_ENDGAME_BOUNDARY_FUNCTIONS
+};
+
+enum MirEndgameBoundaryString {
+    MIR_ENDGAME_BOUNDARY_FILE,
+    MIR_ENDGAME_BOUNDARY_CREATE_ERROR,
+    MIR_ENDGAME_BOUNDARY_WRITING,
+    MIR_ENDGAME_BOUNDARY_WRITE_FAILURE,
+    MIR_ENDGAME_BOUNDARY_SEQUENTIAL_ERROR,
+    MIR_ENDGAME_BOUNDARY_DOT,
+    MIR_ENDGAME_BOUNDARY_NEWLINE,
+    MIR_ENDGAME_BOUNDARY_READ_ERROR,
+    MIR_ENDGAME_BOUNDARY_VERIFYING,
+    MIR_ENDGAME_BOUNDARY_SHORT_READ,
+    MIR_ENDGAME_BOUNDARY_SUPPRESSED,
+    MIR_ENDGAME_BOUNDARY_MISMATCH,
+    MIR_ENDGAME_BOUNDARY_SUMMARY,
+    MIR_ENDGAME_BOUNDARY_RANDOM_ERROR,
+    MIR_ENDGAME_BOUNDARY_RANDOM_HEADING,
+    MIR_ENDGAME_BOUNDARY_LIMIT_HEADING,
+    MIR_ENDGAME_BOUNDARY_REOPEN_FAILURE,
+    MIR_ENDGAME_BOUNDARY_SEEK_FAILURE,
+    MIR_ENDGAME_BOUNDARY_WRITE_SUCCESS,
+    MIR_ENDGAME_BOUNDARY_LIMIT_WRITE_FAILURE,
+    MIR_ENDGAME_BOUNDARY_SUCCESS,
+    MIR_ENDGAME_BOUNDARY_FAILURE,
+    MIR_ENDGAME_BOUNDARY_HEADER
+};
+
+enum MirEndgameBoundaryPrint {
+    MIR_ENDGAME_BOUNDARY_PRINT_HEADER,
+    MIR_ENDGAME_BOUNDARY_PRINT_WRITING,
+    MIR_ENDGAME_BOUNDARY_PRINT_WRITE_FAILURE,
+    MIR_ENDGAME_BOUNDARY_PRINT_WRITE_DOT,
+    MIR_ENDGAME_BOUNDARY_PRINT_WRITE_NEWLINE,
+    MIR_ENDGAME_BOUNDARY_PRINT_VERIFYING,
+    MIR_ENDGAME_BOUNDARY_PRINT_SHORT_READ,
+    MIR_ENDGAME_BOUNDARY_PRINT_READ_SUPPRESSED,
+    MIR_ENDGAME_BOUNDARY_PRINT_MISMATCH,
+    MIR_ENDGAME_BOUNDARY_PRINT_MISMATCH_SUPPRESSED,
+    MIR_ENDGAME_BOUNDARY_PRINT_READ_DOT,
+    MIR_ENDGAME_BOUNDARY_PRINT_SUMMARY,
+    MIR_ENDGAME_BOUNDARY_PRINT_RANDOM_HEADING,
+    MIR_ENDGAME_BOUNDARY_PRINT_LIMIT_HEADING,
+    MIR_ENDGAME_BOUNDARY_PRINT_REOPEN_FAILURE,
+    MIR_ENDGAME_BOUNDARY_PRINT_SEEK_FAILURE,
+    MIR_ENDGAME_BOUNDARY_PRINT_WRITE_SUCCESS,
+    MIR_ENDGAME_BOUNDARY_PRINT_LIMIT_WRITE_FAILURE,
+    MIR_ENDGAME_BOUNDARY_PRINT_SUCCESS,
+    MIR_ENDGAME_BOUNDARY_PRINT_FAILURE
+};
+
+struct MirEndgameBoundaryRunner {
+    struct Sym *functions[MIR_ENDGAME_BOUNDARY_FUNCTIONS];
+    int strings[MIR_ENDGAME_BOUNDARY_STRINGS];
+    char print_names[MIR_ENDGAME_BOUNDARY_PRINT_CALLS][64];
+};
+
+struct MirEndgameBoundaryConstant {
+    int instruction;
+    int type;
+    long value;
+};
+
+struct MirEndgameBoundaryOperation {
+    int instruction;
+    int first;
+    int second;
+    int type;
+    int operand_type;
+    int operation;
+};
+
+struct MirEndgameBoundaryObjectRef {
+    int instruction;
+    int object;
+};
+
+struct MirEndgameBoundaryEdge {
+    int instruction;
+    int target;
+};
+
+struct MirEndgameBoundaryCall {
+    int instruction;
+    int function;
+    int argument_count;
+    int definitions[3];
+};
+
+static const unsigned char mir_endgame_boundary_opcodes[] = {
+    MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST,
+    MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL,
+    MIR_NOP, MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_CONST, MIR_BINARY,
+    MIR_ARG, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_ARG,
+    MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_CONST, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP,
+    MIR_STORE, MIR_NOP, MIR_CONST, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG,
+    MIR_CALL, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP, MIR_CONST, MIR_STORE,
+    MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_LOAD,
+    MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_ARG, MIR_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP,
+    MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_ARG, MIR_CONST, MIR_NOP, MIR_ARG, MIR_CALL,
+    MIR_NOP, MIR_STORE, MIR_CONST, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG,
+    MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+    MIR_NOP, MIR_LABEL, MIR_CONST, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BINARY, MIR_BRANCH_FALSE,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST,
+    MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP,
+    MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CONST, MIR_ARG,
+    MIR_CALL, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_CONST,
+    MIR_NOP, MIR_STORE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_STORE,
+    MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_LOAD, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD, MIR_ARG, MIR_ADDRESS,
+    MIR_NOP, MIR_ARG, MIR_CONST, MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP, MIR_STORE,
+    MIR_CONST, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE,
+    MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP,
+    MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_NOP,
+    MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_LABEL, MIR_LABEL, MIR_NOP,
+    MIR_JUMP, MIR_NOP, MIR_LABEL, MIR_LOAD, MIR_ARG, MIR_ADDRESS, MIR_ARG, MIR_CALL,
+    MIR_BRANCH_FALSE, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL,
+    MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+    MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_ARG, MIR_ADDRESS, MIR_ARG, MIR_CALL,
+    MIR_ARG, MIR_CALL, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_LABEL, MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_CONST,
+    MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+    MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP,
+    MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CALL,
+    MIR_LOAD, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CONST,
+    MIR_ARG, MIR_CALL, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_NOP, MIR_BINARY,
+    MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+    MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP,
+    MIR_ARG, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_ARG, MIR_ADDRESS, MIR_ARG, MIR_CALL,
+    MIR_NOP, MIR_ARG, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_ARG, MIR_ADDRESS, MIR_ARG,
+    MIR_CALL, MIR_NOP, MIR_ARG, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_ARG, MIR_ADDRESS,
+    MIR_ARG, MIR_CALL, MIR_NOP, MIR_ARG, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_ARG,
+    MIR_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP, MIR_ARG, MIR_LOAD, MIR_ARG, MIR_ADDRESS,
+    MIR_ARG, MIR_CALL, MIR_NOP, MIR_ARG, MIR_CALL, MIR_LOAD, MIR_CONST, MIR_BINARY,
+    MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CONST, MIR_ARG,
+    MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_NOP,
+    MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_JUMP, MIR_LABEL,
+    MIR_NOP, MIR_NOP, MIR_CONST, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP, MIR_STORE,
+    MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP,
+    MIR_STORE, MIR_NOP, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG,
+    MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_JUMP, MIR_LABEL, MIR_NOP,
+    MIR_NOP, MIR_CONST, MIR_ARG, MIR_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP, MIR_ARG,
+    MIR_ADDRESS, MIR_NOP, MIR_ARG, MIR_CONST, MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP,
+    MIR_STORE, MIR_CONST, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG,
+    MIR_CALL, MIR_JUMP, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL,
+    MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP, MIR_LABEL,
+    MIR_NOP, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_CONST, MIR_LOAD, MIR_BINARY,
+    MIR_BRANCH_FALSE, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_JUMP, MIR_LABEL, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CALL, MIR_LABEL, MIR_CONST, MIR_LOAD, MIR_BINARY,
+    MIR_BRANCH_FALSE, MIR_CONST, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_LABEL,
+    MIR_PHI, MIR_RETURN,
+};
+
+static const struct MirEndgameBoundaryConstant
+mir_endgame_boundary_constants[] = {
+    {3, TYPE_LONG, 65535L}, {7, TYPE_INT, 1L},
+    {11, TYPE_INT, 1L}, {22, TYPE_LONG, 1L},
+    {26, TYPE_LONG, 1L}, {29, TYPE_LONG, 128L},
+    {42, TYPE_INT, 578L}, {44, TYPE_INT, 0L},
+    {50, TYPE_INT, 65535L}, {62, TYPE_LONG, 0L},
+    {84, TYPE_INT, 128L}, {90, TYPE_INT, 128L},
+    {106, TYPE_LONG, 0L}, {108, TYPE_LONG, 8191L},
+    {119, TYPE_LONG, 1L}, {132, TYPE_INT, 0L},
+    {134, TYPE_INT, 0L}, {140, TYPE_INT, 65535L},
+    {151, TYPE_LONG, 0L}, {154, TYPE_LONG, 0L},
+    {158, TYPE_LONG, 0L}, {178, TYPE_INT, 128L},
+    {184, TYPE_INT, 128L}, {189, TYPE_LONG, 1L},
+    {193, TYPE_LONG, 10L}, {206, TYPE_LONG, 10L},
+    {227, TYPE_LONG, 1L}, {233, TYPE_LONG, 1L},
+    {237, TYPE_LONG, 10L}, {252, TYPE_LONG, 10L},
+    {263, TYPE_LONG, 0L}, {265, TYPE_LONG, 8191L},
+    {276, TYPE_LONG, 1L}, {293, TYPE_INT, 0L},
+    {295, TYPE_INT, 0L}, {301, TYPE_INT, 65535L},
+    {314, TYPE_LONG, 0L}, {322, TYPE_LONG, 4L},
+    {331, TYPE_LONG, 2L}, {340, TYPE_LONG, 2L},
+    {349, TYPE_LONG, 1L}, {366, TYPE_LONG, 65535L},
+    {374, TYPE_INT, 2L}, {376, TYPE_INT, 0L},
+    {382, TYPE_INT, 65535L}, {394, TYPE_LONG, 65536L},
+    {396, TYPE_LONG, 128L}, {404, TYPE_INT, 0L},
+    {425, TYPE_LONG, 65536L}, {435, TYPE_INT, 128L},
+    {441, TYPE_INT, 128L}, {469, TYPE_LONG, 0L},
+    {485, TYPE_LONG, 0L}, {489, TYPE_INT, 0L},
+    {493, TYPE_INT, 1L}
+};
+
+static const struct MirEndgameBoundaryOperation
+mir_endgame_boundary_operations[] = {
+    {8, 1, 7, TYPE_INT, TYPE_INT, '>'},
+    {23, 21, 22, TYPE_LONG, TYPE_LONG, '+'},
+    {27, 25, 26, TYPE_LONG, TYPE_LONG, '+'},
+    {30, 27, 29, TYPE_LONG, TYPE_LONG, '*'},
+    {52, 50, 46, TYPE_INT, TYPE_INT, TOK_EQ},
+    {72, 69, 71, TYPE_INT, TYPE_LONG, TOK_LE},
+    {92, 90, 87, TYPE_INT, TYPE_INT, TOK_NE},
+    {109, 69, 108, TYPE_LONG, TYPE_LONG, '&'},
+    {110, 106, 109, TYPE_INT, TYPE_LONG, TOK_EQ},
+    {120, 69, 119, TYPE_LONG, TYPE_LONG, '+'},
+    {142, 140, 136, TYPE_INT, TYPE_INT, TOK_EQ},
+    {171, 165, 170, TYPE_INT, TYPE_LONG, TOK_LE},
+    {186, 184, 181, TYPE_INT, TYPE_INT, TOK_NE},
+    {190, 188, 189, TYPE_LONG, TYPE_LONG, '+'},
+    {194, 190, 193, TYPE_INT, TYPE_LONG, TOK_LE},
+    {208, 206, 190, TYPE_INT, TYPE_LONG, TOK_EQ},
+    {228, 226, 227, TYPE_LONG, TYPE_LONG, '+'},
+    {234, 232, 233, TYPE_LONG, TYPE_LONG, '+'},
+    {238, 234, 237, TYPE_INT, TYPE_LONG, TOK_LE},
+    {254, 252, 234, TYPE_INT, TYPE_LONG, TOK_EQ},
+    {266, 264, 265, TYPE_LONG, TYPE_LONG, '&'},
+    {267, 263, 266, TYPE_INT, TYPE_LONG, TOK_EQ},
+    {277, 275, 276, TYPE_LONG, TYPE_LONG, '+'},
+    {303, 301, 297, TYPE_INT, TYPE_INT, TOK_EQ},
+    {323, 321, 322, TYPE_LONG, TYPE_LONG, '/'},
+    {332, 330, 331, TYPE_LONG, TYPE_LONG, '/'},
+    {341, 339, 340, TYPE_LONG, TYPE_LONG, '-'},
+    {350, 348, 349, TYPE_LONG, TYPE_LONG, '-'},
+    {367, 365, 366, TYPE_INT, TYPE_LONG, TOK_EQ},
+    {384, 382, 378, TYPE_INT, TYPE_INT, TOK_EQ},
+    {397, 394, 396, TYPE_LONG, TYPE_LONG, '*'},
+    {411, 406, 397, TYPE_INT, TYPE_LONG, TOK_NE},
+    {443, 441, 438, TYPE_INT, TYPE_INT, TOK_EQ},
+    {471, 469, 470, TYPE_INT, TYPE_LONG, TOK_EQ},
+    {487, 485, 486, TYPE_INT, TYPE_LONG, TOK_EQ}
+};
+
+static const struct MirEndgameBoundaryObjectRef
+mir_endgame_boundary_object_refs[] = {
+    {1, 0}, {2, 1}, {5, 2}, {6, 0}, {10, 1}, {17, 2},
+    {21, 2}, {25, 2}, {48, 3}, {51, 3}, {63, 4}, {65, 0},
+    {66, 1}, {67, 2}, {68, 3}, {69, 4}, {70, 4}, {71, 2},
+    {74, 4}, {79, 3}, {89, 5}, {91, 5}, {96, 4}, {98, 5},
+    {107, 4}, {118, 4}, {121, 4}, {127, 3}, {138, 3},
+    {141, 3}, {153, 6}, {156, 7}, {159, 4}, {161, 0},
+    {162, 1}, {163, 2}, {164, 3}, {165, 4}, {166, 5},
+    {167, 6}, {168, 7}, {169, 4}, {170, 2}, {173, 3},
+    {183, 5}, {185, 5}, {188, 7}, {191, 7}, {192, 7},
+    {199, 4}, {201, 5}, {207, 7}, {219, 4}, {226, 6},
+    {229, 6}, {232, 7}, {235, 7}, {236, 7}, {243, 4},
+    {253, 7}, {264, 4}, {275, 4}, {278, 4}, {283, 6},
+    {285, 7}, {288, 3}, {299, 3}, {302, 3}, {312, 3},
+    {319, 3}, {321, 2}, {328, 3}, {330, 2}, {337, 3},
+    {339, 2}, {346, 3}, {348, 2}, {355, 3}, {357, 2},
+    {362, 3}, {365, 2}, {380, 3}, {383, 3}, {399, 8},
+    {400, 3}, {402, 8}, {408, 9}, {409, 9}, {410, 8},
+    {416, 9}, {418, 8}, {430, 3}, {440, 5}, {442, 5},
+    {453, 5}, {459, 3}, {470, 7}, {481, 7}, {486, 7}
+};
+
+static const struct MirEndgameBoundaryEdge
+mir_endgame_boundary_edges[] = {
+    {9, 18}, {53, 57}, {73, 123}, {93, 105}, {111, 115},
+    {122, 64}, {143, 147}, {172, 280}, {187, 218},
+    {195, 205}, {204, 274}, {209, 213}, {216, 274},
+    {224, 231}, {230, 262}, {239, 251}, {250, 260},
+    {255, 259}, {268, 272}, {279, 160}, {304, 308},
+    {368, 465}, {385, 391}, {390, 463}, {412, 422},
+    {421, 458}, {444, 450}, {449, 456}, {472, 478},
+    {477, 484}, {488, 492}, {491, 495}
+};
+
+static const struct MirEndgameBoundaryCall
+mir_endgame_boundary_calls[] = {
+    {15, MIR_ENDGAME_BOUNDARY_SCAN, 1, {13, -1, -1}},
+    {32, MIR_ENDGAME_BOUNDARY_PRINT, 3, {19, 23, 30}},
+    {35, MIR_ENDGAME_BOUNDARY_UNLINK, 1, {33, -1, -1}},
+    {46, MIR_ENDGAME_BOUNDARY_OPEN, 3, {36, 42, 44}},
+    {56, MIR_ENDGAME_BOUNDARY_ERROR, 1, {54, -1, -1}},
+    {60, MIR_ENDGAME_BOUNDARY_PRINT, 1, {58, -1, -1}},
+    {78, MIR_ENDGAME_BOUNDARY_FILL, 2, {69, 76, -1}},
+    {87, MIR_ENDGAME_BOUNDARY_WRITE, 3, {46, 81, 84}},
+    {100, MIR_ENDGAME_BOUNDARY_PRINT, 3, {94, 69, 87}},
+    {103, MIR_ENDGAME_BOUNDARY_ERROR, 1, {101, -1, -1}},
+    {114, MIR_ENDGAME_BOUNDARY_PRINT, 1, {112, -1, -1}},
+    {126, MIR_ENDGAME_BOUNDARY_PRINT, 1, {124, -1, -1}},
+    {129, MIR_ENDGAME_BOUNDARY_CLOSE, 1, {46, -1, -1}},
+    {136, MIR_ENDGAME_BOUNDARY_OPEN, 3, {130, 132, 134}},
+    {146, MIR_ENDGAME_BOUNDARY_ERROR, 1, {144, -1, -1}},
+    {150, MIR_ENDGAME_BOUNDARY_PRINT, 1, {148, -1, -1}},
+    {181, MIR_ENDGAME_BOUNDARY_READ, 3, {173, 175, 178}},
+    {203, MIR_ENDGAME_BOUNDARY_PRINT, 3, {197, 165, 181}},
+    {212, MIR_ENDGAME_BOUNDARY_PRINT, 1, {210, -1, -1}},
+    {223, MIR_ENDGAME_BOUNDARY_CHECK, 2, {219, 221, -1}},
+    {247, MIR_ENDGAME_BOUNDARY_STAMP, 1, {245, -1, -1}},
+    {249, MIR_ENDGAME_BOUNDARY_PRINT, 3, {241, 243, 247}},
+    {258, MIR_ENDGAME_BOUNDARY_PRINT, 1, {256, -1, -1}},
+    {271, MIR_ENDGAME_BOUNDARY_PRINT, 1, {269, -1, -1}},
+    {287, MIR_ENDGAME_BOUNDARY_PRINT, 3, {281, 283, 285}},
+    {290, MIR_ENDGAME_BOUNDARY_CLOSE, 1, {288, -1, -1}},
+    {297, MIR_ENDGAME_BOUNDARY_OPEN, 3, {291, 293, 295}},
+    {307, MIR_ENDGAME_BOUNDARY_ERROR, 1, {305, -1, -1}},
+    {311, MIR_ENDGAME_BOUNDARY_PRINT, 1, {309, -1, -1}},
+    {318, MIR_ENDGAME_BOUNDARY_PROBE, 3, {297, 314, 316}},
+    {327, MIR_ENDGAME_BOUNDARY_PROBE, 3, {297, 323, 325}},
+    {336, MIR_ENDGAME_BOUNDARY_PROBE, 3, {297, 332, 334}},
+    {345, MIR_ENDGAME_BOUNDARY_PROBE, 3, {297, 341, 343}},
+    {354, MIR_ENDGAME_BOUNDARY_PROBE, 3, {297, 350, 352}},
+    {361, MIR_ENDGAME_BOUNDARY_PROBE, 3, {297, 357, 359}},
+    {364, MIR_ENDGAME_BOUNDARY_CLOSE, 1, {297, -1, -1}},
+    {371, MIR_ENDGAME_BOUNDARY_PRINT, 1, {369, -1, -1}},
+    {378, MIR_ENDGAME_BOUNDARY_OPEN, 3, {372, 374, 376}},
+    {389, MIR_ENDGAME_BOUNDARY_PRINT, 1, {387, -1, -1}},
+    {406, MIR_ENDGAME_BOUNDARY_SEEK, 3, {378, 397, 404}},
+    {420, MIR_ENDGAME_BOUNDARY_PRINT, 3, {414, 406, 397}},
+    {429, MIR_ENDGAME_BOUNDARY_FILL, 2, {425, 427, -1}},
+    {438, MIR_ENDGAME_BOUNDARY_WRITE, 3, {378, 432, 435}},
+    {448, MIR_ENDGAME_BOUNDARY_PRINT, 1, {446, -1, -1}},
+    {455, MIR_ENDGAME_BOUNDARY_PRINT, 2, {451, 438, -1}},
+    {461, MIR_ENDGAME_BOUNDARY_CLOSE, 1, {378, -1, -1}},
+    {468, MIR_ENDGAME_BOUNDARY_UNLINK, 1, {466, -1, -1}},
+    {476, MIR_ENDGAME_BOUNDARY_PRINT, 1, {474, -1, -1}},
+    {483, MIR_ENDGAME_BOUNDARY_PRINT, 2, {479, 481, -1}}
 };
 
 static const unsigned char mir_endgame_width_opcodes[] = {
@@ -3545,6 +3884,1030 @@ static int mir_match_endgame_long_runner(
     return 1;
 }
 
+static int mir_endgame_boundary_scalar_type(
+    int type, int base, int width)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == base &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == width;
+}
+
+static int mir_endgame_boundary_pointer_type(
+    int type, int depth, int base)
+{
+    return type_ptr_depth(type) == depth &&
+           (type & 15) == base &&
+           type_size(type) == 2;
+}
+
+static int mir_endgame_boundary_graph(void)
+{
+    size_t item;
+
+    for (item = 0;
+         item < sizeof(mir_endgame_boundary_edges) /
+                    sizeof(mir_endgame_boundary_edges[0]);
+         ++item) {
+        const struct MirEndgameBoundaryEdge *edge =
+            &mir_endgame_boundary_edges[item];
+
+        if (mir.insns[edge->instruction].label !=
+            mir.insns[edge->target].label)
+            return 0;
+    }
+    return mir.insns[69].src1 == mir.insns[62].dst &&
+           mir.insns[69].src2 == mir.insns[120].dst &&
+           mir.insns[69].phi_pred1 == mir.insns[57].label &&
+           mir.insns[69].phi_pred2 == mir.insns[117].label &&
+           mir.insns[165].src1 == mir.insns[158].dst &&
+           mir.insns[165].src2 == mir.insns[277].dst &&
+           mir.insns[165].phi_pred1 == mir.insns[147].label &&
+           mir.insns[165].phi_pred2 == mir.insns[274].label &&
+           mir.insns[496].src1 == mir.insns[489].dst &&
+           mir.insns[496].src2 == mir.insns[493].dst &&
+           mir.insns[496].phi_pred1 == mir.insns[490].label &&
+           mir.insns[496].phi_pred2 == mir.insns[494].label &&
+           mir.insns[497].src1 == mir.insns[496].dst;
+}
+
+static int mir_endgame_boundary_objects(void)
+{
+    static const int object_types[] = {
+        TYPE_INT, TYPE_CHAR, TYPE_LONG, TYPE_INT, TYPE_LONG,
+        TYPE_INT, TYPE_LONG, TYPE_LONG, TYPE_LONG, TYPE_LONG
+    };
+    static const int object_widths[] = {
+        2, 2, 4, 2, 4, 2, 4, 4, 4, 4
+    };
+    static const int buffer_addresses[] = {
+        76, 81, 175, 221, 245, 316, 325,
+        334, 343, 352, 359, 427, 432
+    };
+    int parameter_offset;
+    int buffer_offset;
+    int declaration;
+    size_t item;
+
+    if (mir.object_count != 10 ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &parameter_offset) ||
+        parameter_offset != 2 ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[2].dst, &parameter_offset) ||
+        parameter_offset != 4 ||
+        !mir_endgame_boundary_scalar_type(
+            mir.objects[0].type, TYPE_INT, 2) ||
+        !mir_endgame_boundary_pointer_type(
+            mir.objects[1].type, 2, TYPE_CHAR))
+        return 0;
+    for (item = 2; item < 10; ++item)
+        if (!mir_endgame_boundary_scalar_type(
+                mir.objects[item].type,
+                object_types[item], object_widths[item]) ||
+            mir.objects[item].storage != SC_LOCAL)
+            return 0;
+    if (mir.objects[0].storage != SC_PARAM ||
+        mir.objects[1].storage != SC_PARAM)
+        return 0;
+    for (item = 0;
+         item < sizeof(mir_endgame_boundary_object_refs) /
+                    sizeof(mir_endgame_boundary_object_refs[0]);
+         ++item) {
+        const struct MirEndgameBoundaryObjectRef *reference =
+            &mir_endgame_boundary_object_refs[item];
+
+        if (mir.insns[reference->instruction].object !=
+                reference->object ||
+            !mir_machine_named_nonvolatile(
+                &mir.insns[reference->instruction]))
+            return 0;
+    }
+    for (item = 1;
+         item < sizeof(buffer_addresses) /
+                    sizeof(buffer_addresses[0]);
+         ++item)
+        if (!mir_endgame_same_address(
+                buffer_addresses[0], buffer_addresses[item]))
+            return 0;
+    if (!mir_match_buffered_declaration_buffer(
+            buffer_addresses[0], &mir.insns[buffer_addresses[0]],
+            &buffer_offset) ||
+        buffer_offset != -156)
+        return 0;
+    for (declaration = 0;
+         declaration < mir.declared_count; ++declaration)
+        if (!strcmp(mir.declared_names[declaration],
+                    mir.insns[buffer_addresses[0]].name))
+            return mir.declared_storage[declaration] == SC_LOCAL &&
+                   mir.declared_offsets[declaration] == -156 &&
+                   mir.declared_sizes[declaration] == 128 &&
+                   mir.declared_is_array[declaration] &&
+                   !mir.declared_is_vla[declaration] &&
+                   !mir.declared_is_volatile[declaration] &&
+                   mir.declared_dim_counts[declaration] == 1 &&
+                   mir.declared_dims[declaration][0] == 128 &&
+                   mir.declared_elem_sizes[declaration] == 1 &&
+                   (mir.declared_types[declaration] & 15) ==
+                       TYPE_CHAR;
+    return 0;
+}
+
+static int mir_endgame_boundary_operations_match(void)
+{
+    size_t item;
+
+    for (item = 0;
+         item < sizeof(mir_endgame_boundary_constants) /
+                    sizeof(mir_endgame_boundary_constants[0]);
+         ++item) {
+        const struct MirEndgameBoundaryConstant *expected =
+            &mir_endgame_boundary_constants[item];
+        const struct MirInsn *constant =
+            &mir.insns[expected->instruction];
+
+        if (constant->opcode != MIR_CONST ||
+            constant->type != expected->type ||
+            constant->immediate != expected->value)
+            return 0;
+    }
+    for (item = 0;
+         item < sizeof(mir_endgame_boundary_operations) /
+                    sizeof(mir_endgame_boundary_operations[0]);
+         ++item) {
+        const struct MirEndgameBoundaryOperation *expected =
+            &mir_endgame_boundary_operations[item];
+        const struct MirInsn *operation =
+            &mir.insns[expected->instruction];
+
+        if (operation->src1 != mir.insns[expected->first].dst ||
+            operation->src2 != mir.insns[expected->second].dst ||
+            operation->type != expected->type ||
+            operation->secondary_offset != expected->operand_type ||
+            operation->immediate != expected->operation)
+            return 0;
+    }
+    return mir.insns[12].src1 == mir.insns[2].dst &&
+           mir.insns[12].src2 == mir.insns[11].dst &&
+           mir.insns[12].immediate == 2 &&
+           mir.insns[12].memory_size == 2 &&
+           mir.insns[13].src1 == mir.insns[12].dst &&
+           mir.insns[13].memory_size == 2;
+}
+
+static int mir_endgame_boundary_function_type(
+    const struct Sym *function, int result_base, int result_width,
+    int defined)
+{
+    return function != NULL &&
+           function->is_defined == defined &&
+           (result_base == TYPE_VOID
+                ? (function->type & 15) == TYPE_VOID
+                : mir_endgame_boundary_scalar_type(
+                      function->type, result_base, result_width));
+}
+
+static int mir_endgame_boundary_call_matches(
+    const struct MirEndgameBoundaryCall *expected,
+    struct MirEndgameBoundaryRunner *plan,
+    const int *variadic, const int *fixed_arguments)
+{
+    const struct MirInsn *call =
+        &mir.insns[expected->instruction];
+    struct Sym **function_out =
+        &plan->functions[expected->function];
+    int arguments[MIR_ENDGAME_MAX_ARGS];
+    int argument;
+
+    if (expected->function != MIR_ENDGAME_BOUNDARY_OPEN)
+        return mir_endgame_call_matches(
+            expected->instruction, function_out,
+            variadic[expected->function],
+            fixed_arguments[expected->function],
+            expected->argument_count, expected->definitions);
+    if (call->opcode != MIR_CALL || call->src1 >= 0 ||
+        (call->memory_flags & MIR_CALL_FLAG_VARIADIC) != 0)
+        return 0;
+    {
+        struct Sym *function = find_global(call->name);
+        const char *assembly_name;
+
+        if (function == NULL || function->storage != SC_FUNC ||
+            function->is_funcptr || function->is_noreturn ||
+            function->has_proto || call->type != function->type ||
+            !mir_endgame_boundary_scalar_type(
+                function->type, TYPE_INT, 2))
+            return 0;
+        assembly_name = asm_name_for(sym_asm_name(function));
+        if (call->base_name[0] != 0 &&
+            strcmp(call->base_name, assembly_name))
+            return 0;
+        if (*function_out == NULL)
+            *function_out = function;
+        else if (*function_out != function)
+            return 0;
+    }
+    if (mir_endgame_call_arguments(call, arguments) !=
+            expected->argument_count)
+        return 0;
+    for (argument = 0;
+         argument < expected->argument_count; ++argument)
+        if (arguments[argument] !=
+            mir.insns[expected->definitions[argument]].dst)
+            return 0;
+    return 1;
+}
+
+static int mir_endgame_boundary_calls_match(
+    struct MirEndgameBoundaryRunner *plan)
+{
+    static const int string_instructions[] = {
+        33, 54, 58, 94, 101, 112, 124, 144, 148, 197, 210,
+        241, 281, 305, 309, 369, 387, 414, 446, 451, 474,
+        479, 19
+    };
+    static const int fixed_arguments[] = {
+        1, 1, 1, 2, 1, 2, 3, 1, 3, 2, 1, 3, 3
+    };
+    static const int variadic[] = {
+        0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    };
+    int print_call = 0;
+    size_t item;
+
+    for (item = 0;
+         item < sizeof(mir_endgame_boundary_calls) /
+                    sizeof(mir_endgame_boundary_calls[0]);
+         ++item) {
+        const struct MirEndgameBoundaryCall *expected =
+            &mir_endgame_boundary_calls[item];
+
+        if (!mir_endgame_boundary_call_matches(
+                expected, plan, variadic, fixed_arguments)) {
+            if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+                fprintf(stderr,
+                        "; MIR machine function=%s "
+                        "template=endgame-boundary-runner "
+                        "call=%d role=%d reject=call\n",
+                        mir.name, expected->instruction,
+                        expected->function);
+            return 0;
+        }
+        if (expected->function == MIR_ENDGAME_BOUNDARY_PRINT) {
+            const struct MirInsn *call =
+                &mir.insns[expected->instruction];
+
+            if (print_call >= MIR_ENDGAME_BOUNDARY_PRINT_CALLS ||
+                (call->memory_flags &
+                 MIR_CALL_FLAG_FORMAT_RUNTIME) != 0)
+                return 0;
+            snprintf(plan->print_names[print_call],
+                     sizeof(plan->print_names[print_call]), "%s",
+                     mir_endgame_call_name(call));
+            ++print_call;
+        }
+    }
+    if (print_call != MIR_ENDGAME_BOUNDARY_PRINT_CALLS ||
+        !mir_endgame_boundary_function_type(
+            plan->functions[MIR_ENDGAME_BOUNDARY_SCAN],
+            TYPE_LONG, 4, 1) ||
+        !mir_endgame_boundary_function_type(
+            plan->functions[MIR_ENDGAME_BOUNDARY_PRINT],
+            TYPE_INT, 2, 0) ||
+        !mir_endgame_boundary_function_type(
+            plan->functions[MIR_ENDGAME_BOUNDARY_UNLINK],
+            TYPE_INT, 2, 0) ||
+        !mir_endgame_boundary_function_type(
+            plan->functions[MIR_ENDGAME_BOUNDARY_OPEN],
+            TYPE_INT, 2, 0) ||
+        !mir_endgame_boundary_function_type(
+            plan->functions[MIR_ENDGAME_BOUNDARY_ERROR],
+            TYPE_VOID, 0, 1) ||
+        !mir_endgame_boundary_function_type(
+            plan->functions[MIR_ENDGAME_BOUNDARY_FILL],
+            TYPE_VOID, 0, 1) ||
+        !mir_endgame_boundary_function_type(
+            plan->functions[MIR_ENDGAME_BOUNDARY_WRITE],
+            TYPE_INT, 2, 0) ||
+        !mir_endgame_boundary_function_type(
+            plan->functions[MIR_ENDGAME_BOUNDARY_CLOSE],
+            TYPE_INT, 2, 0) ||
+        !mir_endgame_boundary_function_type(
+            plan->functions[MIR_ENDGAME_BOUNDARY_READ],
+            TYPE_INT, 2, 0) ||
+        !mir_endgame_boundary_function_type(
+            plan->functions[MIR_ENDGAME_BOUNDARY_CHECK],
+            TYPE_INT, 2, 1) ||
+        !mir_endgame_boundary_function_type(
+            plan->functions[MIR_ENDGAME_BOUNDARY_STAMP],
+            TYPE_LONG, 4, 1) ||
+        !mir_endgame_boundary_function_type(
+            plan->functions[MIR_ENDGAME_BOUNDARY_PROBE],
+            TYPE_VOID, 0, 1) ||
+        !mir_endgame_boundary_function_type(
+            plan->functions[MIR_ENDGAME_BOUNDARY_SEEK],
+            TYPE_LONG, 4, 0))
+        return 0;
+    for (item = 0; item < MIR_ENDGAME_BOUNDARY_STRINGS; ++item) {
+        const struct MirInsn *string =
+            &mir.insns[string_instructions[item]];
+        size_t other;
+
+        if (string->opcode != MIR_STRING_ADDRESS ||
+            string->immediate < 0 ||
+            !mir_endgame_char_pointer_type(string->type))
+            return 0;
+        plan->strings[item] = (int)string->immediate;
+        for (other = 0; other < item; ++other)
+            if (plan->strings[other] == plan->strings[item])
+                return 0;
+    }
+    return mir.insns[36].immediate ==
+               plan->strings[MIR_ENDGAME_BOUNDARY_FILE] &&
+           mir.insns[130].immediate ==
+               plan->strings[MIR_ENDGAME_BOUNDARY_FILE] &&
+           mir.insns[291].immediate ==
+               plan->strings[MIR_ENDGAME_BOUNDARY_FILE] &&
+           mir.insns[372].immediate ==
+               plan->strings[MIR_ENDGAME_BOUNDARY_FILE] &&
+           mir.insns[466].immediate ==
+               plan->strings[MIR_ENDGAME_BOUNDARY_FILE] &&
+           mir.insns[256].immediate ==
+               plan->strings[MIR_ENDGAME_BOUNDARY_SUPPRESSED] &&
+           mir.insns[269].immediate ==
+               plan->strings[MIR_ENDGAME_BOUNDARY_DOT];
+}
+
+static int mir_match_endgame_boundary_runner(
+    struct MirEndgameBoundaryRunner *plan)
+{
+    memset(plan, 0, sizeof(*plan));
+    if (!mir_endgame_opcode_sequence(
+            mir_endgame_boundary_opcodes,
+            sizeof(mir_endgame_boundary_opcodes)) ||
+        mir_cfg_block_count() != 43 || mir.local_bytes != 156 ||
+        mir.aggregate_temp_bytes != 0 || mir.has_vla ||
+        mir.is_variadic_function ||
+        !mir_endgame_boundary_scalar_type(
+            mir.return_type, TYPE_INT, 2))
+        return mir_machine_reject(
+            "endgame-boundary-runner", "shape");
+    if (!mir_endgame_boundary_graph())
+        return mir_machine_reject(
+            "endgame-boundary-runner", "graph");
+    if (!mir_endgame_boundary_objects())
+        return mir_machine_reject(
+            "endgame-boundary-runner", "objects");
+    if (!mir_endgame_boundary_operations_match())
+        return mir_machine_reject(
+            "endgame-boundary-runner", "operations");
+    if (!mir_endgame_boundary_calls_match(plan))
+        return mir_machine_reject(
+            "endgame-boundary-runner", "calls");
+    return 1;
+}
+
+static void mir_endgame_boundary_emit_buffer(FILE *out)
+{
+    fputs("\tpush ix\n\tpop hl\n", out);
+    fprintf(out, "\tld de,%d\n\tadd hl,de\n",
+            MIR_ENDGAME_BOUNDARY_BUFFER_OFFSET);
+}
+
+static void mir_endgame_boundary_emit_long(FILE *out, unsigned long bits)
+{
+    mir_machine_emit_float_bits(out, bits);
+}
+
+static void mir_endgame_boundary_push_long(FILE *out)
+{
+    fputs("\tpush de\n\tpush hl\n", out);
+}
+
+static void mir_endgame_boundary_cleanup(FILE *out, int words)
+{
+    while (words-- > 0)
+        fputs("\tpop bc\n", out);
+}
+
+static void mir_endgame_boundary_emit_print(
+    FILE *out, const struct MirEndgameBoundaryRunner *plan,
+    int print, int words)
+{
+    mir_emit_runtime_call(out, plan->print_names[print]);
+    mir_endgame_boundary_cleanup(out, words);
+}
+
+static void mir_endgame_boundary_emit_text(
+    FILE *out, const struct MirEndgameBoundaryRunner *plan,
+    int print, int string)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[string]);
+    mir_endgame_boundary_emit_print(out, plan, print, 1);
+}
+
+static void mir_endgame_boundary_emit_call(
+    FILE *out, const struct MirEndgameBoundaryRunner *plan,
+    int function, int words)
+{
+    mir_machine_emit_symbol_call(out, plan->functions[function]);
+    mir_endgame_boundary_cleanup(out, words);
+}
+
+static void mir_endgame_boundary_increment_long(
+    FILE *out, int offset)
+{
+    int done = new_label();
+
+    fprintf(out, "\tinc (ix%+d)\n\tjp nz,L%d\n",
+            offset, done);
+    fprintf(out, "\tinc (ix%+d)\n\tjp nz,L%d\n",
+            offset + 1, done);
+    fprintf(out, "\tinc (ix%+d)\n\tjp nz,L%d\n"
+                 "\tinc (ix%+d)\nL%d:\n",
+            offset + 2, done, offset + 3, done);
+}
+
+static void mir_endgame_boundary_add_long_constant(
+    FILE *out, int offset, int value)
+{
+    int done = new_label();
+
+    mir_machine_emit_ix_wide_load(out, offset);
+    fprintf(out, "\tld bc,%d\n\tadd hl,bc\n", value);
+    fprintf(out, "\tjp nc,L%d\n\tinc de\nL%d:\n",
+            done, done);
+}
+
+static void mir_endgame_boundary_subtract_long_constant(
+    FILE *out, int offset, int value)
+{
+    int done = new_label();
+
+    mir_machine_emit_ix_wide_load(out, offset);
+    fprintf(out, "\tld bc,%d\n\tor a\n\tsbc hl,bc\n", value);
+    fprintf(out, "\tjp nc,L%d\n\tdec de\nL%d:\n",
+            done, done);
+}
+
+static void mir_endgame_boundary_long_le_memory(
+    FILE *out, int left, int right, int false_label)
+{
+    int accepted = new_label();
+
+    fprintf(out,
+            "\tld a,(ix%+d)\n\txor 128\n\tld c,a\n"
+            "\tld a,(ix%+d)\n\txor 128\n\tcp c\n"
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,(ix%+d)\n\tcp (ix%+d)\n"
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,(ix%+d)\n\tcp (ix%+d)\n"
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,(ix%+d)\n\tcp (ix%+d)\n"
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "L%d:\n",
+            right + 3, left + 3, accepted, false_label,
+            left + 2, right + 2, accepted, false_label,
+            left + 1, right + 1, accepted, false_label,
+            left, right, accepted, false_label, accepted);
+}
+
+static void mir_endgame_boundary_long_le_constant(
+    FILE *out, int offset, unsigned long value, int false_label)
+{
+    int accepted = new_label();
+
+    fprintf(out,
+            "\tld a,(ix%+d)\n\txor 128\n\tcp %lu\n"
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,(ix%+d)\n\tcp %lu\n"
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,(ix%+d)\n\tcp %lu\n"
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,(ix%+d)\n\tcp %lu\n"
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "L%d:\n",
+            offset + 3, ((value >> 24) & 0xffUL) ^ 128UL,
+            accepted, false_label,
+            offset + 2, (value >> 16) & 0xffUL,
+            accepted, false_label,
+            offset + 1, (value >> 8) & 0xffUL,
+            accepted, false_label,
+            offset, value & 0xffUL,
+            accepted, false_label, accepted);
+}
+
+static void mir_endgame_boundary_long_equal_constant(
+    FILE *out, int offset, unsigned long value, int false_label)
+{
+    fprintf(out,
+            "\tld a,(ix%+d)\n\txor %lu\n\tjp nz,L%d\n"
+            "\tld a,(ix%+d)\n\txor %lu\n\tjp nz,L%d\n"
+            "\tld a,(ix%+d)\n\txor %lu\n\tjp nz,L%d\n"
+            "\tld a,(ix%+d)\n\txor %lu\n\tjp nz,L%d\n",
+            offset, value & 0xffUL, false_label,
+            offset + 1, (value >> 8) & 0xffUL, false_label,
+            offset + 2, (value >> 16) & 0xffUL, false_label,
+            offset + 3, (value >> 24) & 0xffUL, false_label);
+}
+
+static void mir_endgame_boundary_emit_open(
+    FILE *out, const struct MirEndgameBoundaryRunner *plan,
+    int flags)
+{
+    fputs("\tld hl,0\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,%d\n\tpush hl\n", flags);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[MIR_ENDGAME_BOUNDARY_FILE]);
+    mir_endgame_boundary_emit_call(
+        out, plan, MIR_ENDGAME_BOUNDARY_OPEN, 3);
+    fprintf(out, "\tld (ix%+d),l\n\tld (ix%+d),h\n",
+            MIR_ENDGAME_BOUNDARY_FD_OFFSET,
+            MIR_ENDGAME_BOUNDARY_FD_OFFSET + 1);
+}
+
+static void mir_endgame_boundary_emit_close(
+    FILE *out, const struct MirEndgameBoundaryRunner *plan)
+{
+    fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n",
+            MIR_ENDGAME_BOUNDARY_FD_OFFSET,
+            MIR_ENDGAME_BOUNDARY_FD_OFFSET + 1);
+    mir_endgame_boundary_emit_call(
+        out, plan, MIR_ENDGAME_BOUNDARY_CLOSE, 1);
+}
+
+static void mir_endgame_boundary_emit_error(
+    FILE *out, const struct MirEndgameBoundaryRunner *plan,
+    int string)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[string]);
+    mir_endgame_boundary_emit_call(
+        out, plan, MIR_ENDGAME_BOUNDARY_ERROR, 1);
+}
+
+static void mir_endgame_boundary_emit_record_call(
+    FILE *out, const struct MirEndgameBoundaryRunner *plan,
+    int function, int record_offset)
+{
+    mir_endgame_boundary_emit_buffer(out);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, record_offset);
+    mir_endgame_boundary_push_long(out);
+    if (function == MIR_ENDGAME_BOUNDARY_PROBE) {
+        fprintf(out,
+                "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n",
+                MIR_ENDGAME_BOUNDARY_FD_OFFSET,
+                MIR_ENDGAME_BOUNDARY_FD_OFFSET + 1);
+        mir_endgame_boundary_emit_call(out, plan, function, 4);
+    } else {
+        mir_endgame_boundary_emit_call(out, plan, function, 3);
+    }
+}
+
+static void mir_endgame_boundary_emit_record_constant_call(
+    FILE *out, const struct MirEndgameBoundaryRunner *plan,
+    int function, unsigned long record)
+{
+    mir_endgame_boundary_emit_buffer(out);
+    fputs("\tpush hl\n", out);
+    mir_endgame_boundary_emit_long(out, record);
+    mir_endgame_boundary_push_long(out);
+    if (function == MIR_ENDGAME_BOUNDARY_PROBE) {
+        fprintf(out,
+                "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n",
+                MIR_ENDGAME_BOUNDARY_FD_OFFSET,
+                MIR_ENDGAME_BOUNDARY_FD_OFFSET + 1);
+        mir_endgame_boundary_emit_call(out, plan, function, 4);
+    } else {
+        mir_endgame_boundary_emit_call(out, plan, function, 3);
+    }
+}
+
+static void mir_endgame_boundary_emit_io(
+    FILE *out, const struct MirEndgameBoundaryRunner *plan,
+    int function)
+{
+    fputs("\tld hl,128\n\tpush hl\n", out);
+    mir_endgame_boundary_emit_buffer(out);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n",
+            MIR_ENDGAME_BOUNDARY_FD_OFFSET,
+            MIR_ENDGAME_BOUNDARY_FD_OFFSET + 1);
+    mir_endgame_boundary_emit_call(out, plan, function, 3);
+}
+
+static void mir_endgame_boundary_emit_write_failure(
+    FILE *out, const struct MirEndgameBoundaryRunner *plan)
+{
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(
+        out, MIR_ENDGAME_BOUNDARY_RECORD_OFFSET);
+    mir_endgame_boundary_push_long(out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[MIR_ENDGAME_BOUNDARY_WRITE_FAILURE]);
+    mir_endgame_boundary_emit_print(
+        out, plan, MIR_ENDGAME_BOUNDARY_PRINT_WRITE_FAILURE, 4);
+    mir_endgame_boundary_emit_error(
+        out, plan, MIR_ENDGAME_BOUNDARY_SEQUENTIAL_ERROR);
+}
+
+static void mir_endgame_boundary_emit_bad_report(
+    FILE *out, const struct MirEndgameBoundaryRunner *plan,
+    int mismatch)
+{
+    int too_many = new_label();
+    int done = new_label();
+
+    mir_endgame_boundary_increment_long(
+        out, MIR_ENDGAME_BOUNDARY_BAD_OFFSET);
+    mir_endgame_boundary_long_le_constant(
+        out, MIR_ENDGAME_BOUNDARY_BAD_OFFSET, 10UL, too_many);
+    if (mismatch) {
+        mir_endgame_boundary_emit_buffer(out);
+        fputs("\tpush hl\n", out);
+        mir_endgame_boundary_emit_call(
+            out, plan, MIR_ENDGAME_BOUNDARY_STAMP, 1);
+        mir_endgame_boundary_push_long(out);
+        mir_machine_emit_ix_wide_load(
+            out, MIR_ENDGAME_BOUNDARY_RECORD_OFFSET);
+        mir_endgame_boundary_push_long(out);
+        fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+                plan->strings[MIR_ENDGAME_BOUNDARY_MISMATCH]);
+        mir_endgame_boundary_emit_print(
+            out, plan, MIR_ENDGAME_BOUNDARY_PRINT_MISMATCH, 5);
+    } else {
+        fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n",
+                MIR_ENDGAME_BOUNDARY_RESULT_OFFSET,
+                MIR_ENDGAME_BOUNDARY_RESULT_OFFSET + 1);
+        mir_machine_emit_ix_wide_load(
+            out, MIR_ENDGAME_BOUNDARY_RECORD_OFFSET);
+        mir_endgame_boundary_push_long(out);
+        fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+                plan->strings[MIR_ENDGAME_BOUNDARY_SHORT_READ]);
+        mir_endgame_boundary_emit_print(
+            out, plan, MIR_ENDGAME_BOUNDARY_PRINT_SHORT_READ, 4);
+    }
+    fprintf(out, "\tjp L%d\nL%d:\n", done, too_many);
+    mir_endgame_boundary_long_equal_constant(
+        out, MIR_ENDGAME_BOUNDARY_BAD_OFFSET, 10UL, done);
+    mir_endgame_boundary_emit_text(
+        out, plan,
+        mismatch
+            ? MIR_ENDGAME_BOUNDARY_PRINT_MISMATCH_SUPPRESSED
+            : MIR_ENDGAME_BOUNDARY_PRINT_READ_SUPPRESSED,
+        MIR_ENDGAME_BOUNDARY_SUPPRESSED);
+    fprintf(out, "L%d:\n", done);
+}
+
+static void mir_emit_endgame_boundary_runner(
+    FILE *out, const struct MirEndgameBoundaryRunner *plan)
+{
+    int no_argument = new_label();
+    int create_ok = new_label();
+    int write_loop = new_label();
+    int write_done = new_label();
+    int write_failed = new_label();
+    int write_ok = new_label();
+    int no_write_dot = new_label();
+    int read_open_ok = new_label();
+    int read_loop = new_label();
+    int read_done = new_label();
+    int short_read = new_label();
+    int read_ok = new_label();
+    int record_bad = new_label();
+    int record_checked = new_label();
+    int read_increment = new_label();
+    int no_read_dot = new_label();
+    int random_open_ok = new_label();
+    int skip_limit = new_label();
+    int limit_open_ok = new_label();
+    int seek_failed = new_label();
+    int seek_ok = new_label();
+    int limit_write_failed = new_label();
+    int limit_write_ok = new_label();
+    int limit_write_done = new_label();
+    int limit_close = new_label();
+    int limit_done = new_label();
+    int failed = new_label();
+    int return_done = new_label();
+    int shift;
+
+    mir_endgame_emit_frame(
+        out, MIR_ENDGAME_BOUNDARY_FRAME_BYTES);
+    mir_endgame_boundary_emit_long(out, 65535UL);
+    mir_machine_emit_ix_wide_store(
+        out, MIR_ENDGAME_BOUNDARY_LAST_OFFSET);
+
+    fputs("\tld l,(ix+4)\n\tld h,(ix+5)\n"
+          "\tld de,1\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp c,L%d\n\tjp z,L%d\n", no_argument,
+            no_argument);
+    fputs("\tld l,(ix+6)\n\tld h,(ix+7)\n"
+          "\tinc hl\n\tinc hl\n"
+          "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tex de,hl\n\tpush hl\n", out);
+    mir_endgame_boundary_emit_call(
+        out, plan, MIR_ENDGAME_BOUNDARY_SCAN, 1);
+    mir_machine_emit_ix_wide_store(
+        out, MIR_ENDGAME_BOUNDARY_LAST_OFFSET);
+    fprintf(out, "L%d:\n", no_argument);
+
+    mir_endgame_boundary_add_long_constant(
+        out, MIR_ENDGAME_BOUNDARY_LAST_OFFSET, 1);
+    for (shift = 0; shift < 7; ++shift)
+        fputs("\tadd hl,hl\n\trl e\n\trl d\n", out);
+    mir_endgame_boundary_push_long(out);
+    mir_endgame_boundary_add_long_constant(
+        out, MIR_ENDGAME_BOUNDARY_LAST_OFFSET, 1);
+    mir_endgame_boundary_push_long(out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[MIR_ENDGAME_BOUNDARY_HEADER]);
+    mir_endgame_boundary_emit_print(
+        out, plan, MIR_ENDGAME_BOUNDARY_PRINT_HEADER, 5);
+
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[MIR_ENDGAME_BOUNDARY_FILE]);
+    mir_endgame_boundary_emit_call(
+        out, plan, MIR_ENDGAME_BOUNDARY_UNLINK, 1);
+    mir_endgame_boundary_emit_open(out, plan, 578);
+    fprintf(out,
+            "\tld a,(ix%+d)\n\tand (ix%+d)\n\tinc a\n"
+            "\tjp nz,L%d\n",
+            MIR_ENDGAME_BOUNDARY_FD_OFFSET,
+            MIR_ENDGAME_BOUNDARY_FD_OFFSET + 1, create_ok);
+    mir_endgame_boundary_emit_error(
+        out, plan, MIR_ENDGAME_BOUNDARY_CREATE_ERROR);
+    fprintf(out, "L%d:\n", create_ok);
+
+    mir_endgame_boundary_emit_text(
+        out, plan, MIR_ENDGAME_BOUNDARY_PRINT_WRITING,
+        MIR_ENDGAME_BOUNDARY_WRITING);
+    mir_endgame_boundary_emit_long(out, 0);
+    mir_machine_emit_ix_wide_store(
+        out, MIR_ENDGAME_BOUNDARY_RECORD_OFFSET);
+    fprintf(out, "L%d:\n", write_loop);
+    mir_endgame_boundary_long_le_memory(
+        out, MIR_ENDGAME_BOUNDARY_RECORD_OFFSET,
+        MIR_ENDGAME_BOUNDARY_LAST_OFFSET, write_done);
+    mir_endgame_boundary_emit_record_call(
+        out, plan, MIR_ENDGAME_BOUNDARY_FILL,
+        MIR_ENDGAME_BOUNDARY_RECORD_OFFSET);
+    mir_endgame_boundary_emit_io(
+        out, plan, MIR_ENDGAME_BOUNDARY_WRITE);
+    fputs("\tld a,h\n\tor a\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tld a,l\n\tcp 128\n"
+                 "\tjp z,L%d\nL%d:\n",
+            write_failed, write_ok, write_failed);
+    mir_endgame_boundary_emit_write_failure(out, plan);
+    fprintf(out, "L%d:\n", write_ok);
+    fprintf(out,
+            "\tld a,(ix%+d)\n\tand 31\n"
+            "\tor (ix%+d)\n\tjp nz,L%d\n",
+            MIR_ENDGAME_BOUNDARY_RECORD_OFFSET + 1,
+            MIR_ENDGAME_BOUNDARY_RECORD_OFFSET, no_write_dot);
+    mir_endgame_boundary_emit_text(
+        out, plan, MIR_ENDGAME_BOUNDARY_PRINT_WRITE_DOT,
+        MIR_ENDGAME_BOUNDARY_DOT);
+    fprintf(out, "L%d:\n", no_write_dot);
+    mir_endgame_boundary_increment_long(
+        out, MIR_ENDGAME_BOUNDARY_RECORD_OFFSET);
+    fprintf(out, "\tjp L%d\nL%d:\n", write_loop, write_done);
+    mir_endgame_boundary_emit_text(
+        out, plan, MIR_ENDGAME_BOUNDARY_PRINT_WRITE_NEWLINE,
+        MIR_ENDGAME_BOUNDARY_NEWLINE);
+    mir_endgame_boundary_emit_close(out, plan);
+
+    mir_endgame_boundary_emit_open(out, plan, 0);
+    fprintf(out,
+            "\tld a,(ix%+d)\n\tand (ix%+d)\n\tinc a\n"
+            "\tjp nz,L%d\n",
+            MIR_ENDGAME_BOUNDARY_FD_OFFSET,
+            MIR_ENDGAME_BOUNDARY_FD_OFFSET + 1, read_open_ok);
+    mir_endgame_boundary_emit_error(
+        out, plan, MIR_ENDGAME_BOUNDARY_READ_ERROR);
+    fprintf(out, "L%d:\n", read_open_ok);
+    mir_endgame_boundary_emit_text(
+        out, plan, MIR_ENDGAME_BOUNDARY_PRINT_VERIFYING,
+        MIR_ENDGAME_BOUNDARY_VERIFYING);
+    mir_endgame_boundary_emit_long(out, 0);
+    mir_machine_emit_ix_wide_store(
+        out, MIR_ENDGAME_BOUNDARY_OK_OFFSET);
+    mir_machine_emit_ix_wide_store(
+        out, MIR_ENDGAME_BOUNDARY_BAD_OFFSET);
+    mir_machine_emit_ix_wide_store(
+        out, MIR_ENDGAME_BOUNDARY_RECORD_OFFSET);
+
+    fprintf(out, "L%d:\n", read_loop);
+    mir_endgame_boundary_long_le_memory(
+        out, MIR_ENDGAME_BOUNDARY_RECORD_OFFSET,
+        MIR_ENDGAME_BOUNDARY_LAST_OFFSET, read_done);
+    mir_endgame_boundary_emit_io(
+        out, plan, MIR_ENDGAME_BOUNDARY_READ);
+    fprintf(out, "\tld (ix%+d),l\n\tld (ix%+d),h\n"
+                 "\tld a,h\n\tor a\n",
+            MIR_ENDGAME_BOUNDARY_RESULT_OFFSET,
+            MIR_ENDGAME_BOUNDARY_RESULT_OFFSET + 1);
+    fprintf(out,
+            "\tjp nz,L%d\n\tld a,l\n\tcp 128\n"
+            "\tjp z,L%d\nL%d:\n",
+            short_read, read_ok, short_read);
+    mir_endgame_boundary_emit_bad_report(
+        out, plan, 0);
+    fprintf(out, "\tjp L%d\nL%d:\n", read_increment, read_ok);
+    mir_endgame_boundary_emit_buffer(out);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(
+        out, MIR_ENDGAME_BOUNDARY_RECORD_OFFSET);
+    mir_endgame_boundary_push_long(out);
+    mir_endgame_boundary_emit_call(
+        out, plan, MIR_ENDGAME_BOUNDARY_CHECK, 3);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", record_bad);
+    mir_endgame_boundary_increment_long(
+        out, MIR_ENDGAME_BOUNDARY_OK_OFFSET);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            record_checked, record_bad);
+    mir_endgame_boundary_emit_bad_report(
+        out, plan, 1);
+    fprintf(out, "L%d:\n", record_checked);
+    fprintf(out,
+            "\tld a,(ix%+d)\n\tand 31\n"
+            "\tor (ix%+d)\n\tjp nz,L%d\n",
+            MIR_ENDGAME_BOUNDARY_RECORD_OFFSET + 1,
+            MIR_ENDGAME_BOUNDARY_RECORD_OFFSET, no_read_dot);
+    mir_endgame_boundary_emit_text(
+        out, plan, MIR_ENDGAME_BOUNDARY_PRINT_READ_DOT,
+        MIR_ENDGAME_BOUNDARY_DOT);
+    fprintf(out, "L%d:\nL%d:\n", no_read_dot, read_increment);
+    mir_endgame_boundary_increment_long(
+        out, MIR_ENDGAME_BOUNDARY_RECORD_OFFSET);
+    fprintf(out, "\tjp L%d\nL%d:\n", read_loop, read_done);
+
+    mir_machine_emit_ix_wide_load(
+        out, MIR_ENDGAME_BOUNDARY_BAD_OFFSET);
+    mir_endgame_boundary_push_long(out);
+    mir_machine_emit_ix_wide_load(
+        out, MIR_ENDGAME_BOUNDARY_OK_OFFSET);
+    mir_endgame_boundary_push_long(out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[MIR_ENDGAME_BOUNDARY_SUMMARY]);
+    mir_endgame_boundary_emit_print(
+        out, plan, MIR_ENDGAME_BOUNDARY_PRINT_SUMMARY, 5);
+    mir_endgame_boundary_emit_close(out, plan);
+
+    mir_endgame_boundary_emit_open(out, plan, 0);
+    fprintf(out,
+            "\tld a,(ix%+d)\n\tand (ix%+d)\n\tinc a\n"
+            "\tjp nz,L%d\n",
+            MIR_ENDGAME_BOUNDARY_FD_OFFSET,
+            MIR_ENDGAME_BOUNDARY_FD_OFFSET + 1,
+            random_open_ok);
+    mir_endgame_boundary_emit_error(
+        out, plan, MIR_ENDGAME_BOUNDARY_RANDOM_ERROR);
+    fprintf(out, "L%d:\n", random_open_ok);
+    mir_endgame_boundary_emit_text(
+        out, plan, MIR_ENDGAME_BOUNDARY_PRINT_RANDOM_HEADING,
+        MIR_ENDGAME_BOUNDARY_RANDOM_HEADING);
+    mir_endgame_boundary_emit_record_constant_call(
+        out, plan, MIR_ENDGAME_BOUNDARY_PROBE, 0UL);
+
+    mir_machine_emit_ix_wide_load(
+        out, MIR_ENDGAME_BOUNDARY_LAST_OFFSET);
+    mir_endgame_boundary_push_long(out);
+    mir_endgame_boundary_emit_long(out, 4UL);
+    mir_emit_runtime_call(out, "__lds");
+    mir_endgame_boundary_cleanup(out, 2);
+    mir_machine_emit_ix_wide_store(
+        out, MIR_ENDGAME_BOUNDARY_RECORD_OFFSET);
+    mir_endgame_boundary_emit_record_call(
+        out, plan, MIR_ENDGAME_BOUNDARY_PROBE,
+        MIR_ENDGAME_BOUNDARY_RECORD_OFFSET);
+
+    mir_machine_emit_ix_wide_load(
+        out, MIR_ENDGAME_BOUNDARY_LAST_OFFSET);
+    mir_endgame_boundary_push_long(out);
+    mir_endgame_boundary_emit_long(out, 2UL);
+    mir_emit_runtime_call(out, "__lds");
+    mir_endgame_boundary_cleanup(out, 2);
+    mir_machine_emit_ix_wide_store(
+        out, MIR_ENDGAME_BOUNDARY_RECORD_OFFSET);
+    mir_endgame_boundary_emit_record_call(
+        out, plan, MIR_ENDGAME_BOUNDARY_PROBE,
+        MIR_ENDGAME_BOUNDARY_RECORD_OFFSET);
+
+    mir_endgame_boundary_subtract_long_constant(
+        out, MIR_ENDGAME_BOUNDARY_LAST_OFFSET, 2);
+    mir_machine_emit_ix_wide_store(
+        out, MIR_ENDGAME_BOUNDARY_RECORD_OFFSET);
+    mir_endgame_boundary_emit_record_call(
+        out, plan, MIR_ENDGAME_BOUNDARY_PROBE,
+        MIR_ENDGAME_BOUNDARY_RECORD_OFFSET);
+    mir_endgame_boundary_subtract_long_constant(
+        out, MIR_ENDGAME_BOUNDARY_LAST_OFFSET, 1);
+    mir_machine_emit_ix_wide_store(
+        out, MIR_ENDGAME_BOUNDARY_RECORD_OFFSET);
+    mir_endgame_boundary_emit_record_call(
+        out, plan, MIR_ENDGAME_BOUNDARY_PROBE,
+        MIR_ENDGAME_BOUNDARY_RECORD_OFFSET);
+    mir_endgame_boundary_emit_record_call(
+        out, plan, MIR_ENDGAME_BOUNDARY_PROBE,
+        MIR_ENDGAME_BOUNDARY_LAST_OFFSET);
+    mir_endgame_boundary_emit_close(out, plan);
+
+    mir_endgame_boundary_long_equal_constant(
+        out, MIR_ENDGAME_BOUNDARY_LAST_OFFSET, 65535UL,
+        skip_limit);
+    mir_endgame_boundary_emit_text(
+        out, plan, MIR_ENDGAME_BOUNDARY_PRINT_LIMIT_HEADING,
+        MIR_ENDGAME_BOUNDARY_LIMIT_HEADING);
+    mir_endgame_boundary_emit_open(out, plan, 2);
+    fprintf(out,
+            "\tld a,(ix%+d)\n\tand (ix%+d)\n\tinc a\n"
+            "\tjp nz,L%d\n",
+            MIR_ENDGAME_BOUNDARY_FD_OFFSET,
+            MIR_ENDGAME_BOUNDARY_FD_OFFSET + 1,
+            limit_open_ok);
+    mir_endgame_boundary_emit_text(
+        out, plan, MIR_ENDGAME_BOUNDARY_PRINT_REOPEN_FAILURE,
+        MIR_ENDGAME_BOUNDARY_REOPEN_FAILURE);
+    fprintf(out, "\tjp L%d\nL%d:\n", limit_done, limit_open_ok);
+
+    fputs("\tld hl,0\n\tpush hl\n", out);
+    mir_endgame_boundary_emit_long(out, 8388608UL);
+    mir_endgame_boundary_push_long(out);
+    fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n",
+            MIR_ENDGAME_BOUNDARY_FD_OFFSET,
+            MIR_ENDGAME_BOUNDARY_FD_OFFSET + 1);
+    mir_endgame_boundary_emit_call(
+        out, plan, MIR_ENDGAME_BOUNDARY_SEEK, 4);
+    mir_machine_emit_ix_wide_store(
+        out, MIR_ENDGAME_BOUNDARY_RECORD_OFFSET);
+    mir_endgame_boundary_long_equal_constant(
+        out, MIR_ENDGAME_BOUNDARY_RECORD_OFFSET, 8388608UL,
+        seek_failed);
+    fprintf(out, "\tjp L%d\nL%d:\n", seek_ok, seek_failed);
+    mir_endgame_boundary_emit_long(out, 8388608UL);
+    mir_endgame_boundary_push_long(out);
+    mir_machine_emit_ix_wide_load(
+        out, MIR_ENDGAME_BOUNDARY_RECORD_OFFSET);
+    mir_endgame_boundary_push_long(out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[MIR_ENDGAME_BOUNDARY_SEEK_FAILURE]);
+    mir_endgame_boundary_emit_print(
+        out, plan, MIR_ENDGAME_BOUNDARY_PRINT_SEEK_FAILURE, 5);
+    fprintf(out, "\tjp L%d\nL%d:\n", limit_close, seek_ok);
+
+    mir_endgame_boundary_emit_record_constant_call(
+        out, plan, MIR_ENDGAME_BOUNDARY_FILL, 65536UL);
+    mir_endgame_boundary_emit_io(
+        out, plan, MIR_ENDGAME_BOUNDARY_WRITE);
+    fputs("\tld a,h\n\tor a\n", out);
+    fprintf(out,
+            "\tjp nz,L%d\n\tld a,l\n\tcp 128\n"
+            "\tjp z,L%d\nL%d:\n",
+            limit_write_failed, limit_write_ok,
+            limit_write_failed);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[MIR_ENDGAME_BOUNDARY_LIMIT_WRITE_FAILURE]);
+    mir_endgame_boundary_emit_print(
+        out, plan,
+        MIR_ENDGAME_BOUNDARY_PRINT_LIMIT_WRITE_FAILURE, 2);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            limit_write_done, limit_write_ok);
+    mir_endgame_boundary_emit_text(
+        out, plan, MIR_ENDGAME_BOUNDARY_PRINT_WRITE_SUCCESS,
+        MIR_ENDGAME_BOUNDARY_WRITE_SUCCESS);
+    fprintf(out, "L%d:\nL%d:\n", limit_write_done, limit_close);
+    mir_endgame_boundary_emit_close(out, plan);
+    fprintf(out, "L%d:\nL%d:\n", limit_done, skip_limit);
+
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[MIR_ENDGAME_BOUNDARY_FILE]);
+    mir_endgame_boundary_emit_call(
+        out, plan, MIR_ENDGAME_BOUNDARY_UNLINK, 1);
+    mir_endgame_boundary_long_equal_constant(
+        out, MIR_ENDGAME_BOUNDARY_BAD_OFFSET, 0UL, failed);
+    mir_endgame_boundary_emit_text(
+        out, plan, MIR_ENDGAME_BOUNDARY_PRINT_SUCCESS,
+        MIR_ENDGAME_BOUNDARY_SUCCESS);
+    fputs("\tld hl,0\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", return_done, failed);
+    mir_machine_emit_ix_wide_load(
+        out, MIR_ENDGAME_BOUNDARY_BAD_OFFSET);
+    mir_endgame_boundary_push_long(out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[MIR_ENDGAME_BOUNDARY_FAILURE]);
+    mir_endgame_boundary_emit_print(
+        out, plan, MIR_ENDGAME_BOUNDARY_PRINT_FAILURE, 3);
+    fputs("\tld hl,1\n", out);
+    fprintf(out,
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            return_done);
+}
+
 static void mir_endgame_emit_numeric_text(
     FILE *out, const struct MirEndgameNumericRunner *plan,
     int print_call, int string)
@@ -4197,6 +5560,7 @@ static void mir_emit_endgame_binary_runner(
 int mir_try_emit_endgame_runners(FILE *out)
 {
     struct MirEndgameBinaryRunner binary_plan;
+    struct MirEndgameBoundaryRunner boundary_plan;
     struct MirEndgameFloatRunner float_plan;
     struct MirEndgameLongRunner long_plan;
     struct MirEndgameNumericRunner numeric_plan;
@@ -4204,6 +5568,10 @@ int mir_try_emit_endgame_runners(FILE *out)
 
     if (mir_match_endgame_numeric_runner(&numeric_plan)) {
         mir_emit_endgame_numeric_runner(out, &numeric_plan);
+        return 1;
+    }
+    if (mir_match_endgame_boundary_runner(&boundary_plan)) {
+        mir_emit_endgame_boundary_runner(out, &boundary_plan);
         return 1;
     }
     if (mir_match_endgame_long_runner(&long_plan)) {
