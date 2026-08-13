@@ -3,6 +3,47 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-13 integer-width 35-block batch (working tree)
+
+- Branch/base: `pr/143` at `fcbe54b`. The endgame module now admits the
+  35-block `tlimits.main` `final-cost-policy` fallback through a strict
+  structural matcher over all **217 MIR instructions**. It validates the full
+  opcode stream and CFG, both promoted word counters, the signed and unsigned
+  8/16/32-bit constant types and conversion/comparison graph, all 14 variadic
+  output calls and argument identities, the three result paths, summary
+  values and failure return. The matcher contains no function, helper, local,
+  format, output or test name and no output hash.
+- Every predicate is resolved through the existing exact target-width MIR
+  constant evaluator, preserving signedness and 8/16/32-bit wrapping rather
+  than using host-width arithmetic. The dedicated emitter preserves the
+  introductory, heading, selected result and summary call order, including
+  constants-failure, math-failure and success paths. It is frameless and emits
+  no IX or IY instruction. Normal selected/captured metrics are
+  **409/1,408 bytes** and **40/124 instructions**. Stack-check metrics are
+  **438/1,437 bytes** and **41/125 instructions**.
+- `tlimits` passes full peep/nopeep validation. Selected versus forced fallback
+  is **139,342/139,903 cycles and 5,504/5,632 bytes** peep plus
+  **139,342/140,025 cycles and 5,504/5,632 bytes** nopeep, exact cycle gains
+  of **561** and **683**.
+- A separately renamed function/local/string boundary fixture selects the same
+  family at **438/1,444 bytes** and **41/126 instructions**. It exercises a
+  signed-byte minimum mismatch, unsigned-word wrap to one, signed-long minimum
+  construction, unsigned-long wrap to zero, all three result-call paths and
+  the nonzero failure return. Selected and forced-fallback program output is
+  byte-identical in both modes. Peep totals are
+  **169,580/170,070 cycles and 2,176/2,304 bytes**; nopeep totals are
+  **169,580/170,187 cycles and 2,176/2,432 bytes**.
+- The regression-gated stack-check census advances
+  **2,165/2,185 (99.08%)** to **2,166/2,185 (99.13%)**, adds exactly
+  `tlimits.main`, removes no accepted function, moves selector counts from
+  **1,388 spilled / 390 scheduled** to **1,387 spilled / 391 scheduled**, and
+  reduces `final-cost-policy` fallbacks **20 -> 19**.
+- The endgame module grows from **1,456 to 1,948 source lines** (**+492**).
+  Its standalone object defines only `mir_try_emit_endgame_runners [T]`
+  globally and has zero read-only or writable global data definitions. The
+  canonical build and `git diff --check` pass. No performance baseline,
+  production name or output hash was added or changed.
+
 ## 2026-08-13 long-subtraction 32-block batch (working tree)
 
 - Branch/base: `pr/143` at `65a4b9b`. The call-runner module now admits the
