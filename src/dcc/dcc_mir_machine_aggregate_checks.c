@@ -362,6 +362,54 @@ struct MirPackedRecordRunner {
     int member_offsets[6];
 };
 
+#define MIR_MULTIDIM_ARRAY_CHECK_COUNT 24
+
+struct MirMultidimArrayRunner {
+    struct Sym *byte_matrix;
+    struct Sym *word_matrix;
+    struct Sym *cube;
+    struct Sym *grid;
+    struct Sym *failures;
+    struct Sym *check_function;
+    struct Sym *row_function;
+    struct Sym *column_function;
+    struct Sym *print_function;
+    int check_strings[MIR_MULTIDIM_ARRAY_CHECK_COUNT];
+    int failure_string;
+    int success_string;
+    char failure_call_name[64];
+    char success_call_name[64];
+    int byte_array_offset;
+    int byte_row_offset;
+    int byte_column_offset;
+    int byte_row_stride;
+    int byte_column_stride;
+    int byte_rows;
+    int byte_columns;
+    int word_array_offset;
+    int word_row_offset;
+    int word_column_offset;
+    int word_row_stride;
+    int word_column_stride;
+    int word_rows;
+    int word_columns;
+    int cube_array_offset;
+    int cube_a_offset;
+    int cube_b_offset;
+    int cube_d_offset;
+    int cube_plane_stride;
+    int cube_row_stride;
+    int cube_column_stride;
+    int cube_planes;
+    int cube_rows;
+    int cube_columns;
+    int grid_cells_offset;
+    int grid_cell_stride;
+    int grid_array_offset;
+    int grid_row_stride;
+    int grid_column_stride;
+};
+
 static int mir_aggregate_direct_function(
     int instruction, struct Sym **function_out)
 {
@@ -1401,6 +1449,843 @@ static const char *mir_packed_call_name(
     return call->base_name[0] != 0
         ? call->base_name
         : asm_name_for(sym_asm_name(function));
+}
+
+static struct Sym *mir_multidim_array_root(int instruction)
+{
+    const struct MirInsn *address;
+    struct Sym *root;
+    int type;
+    int storage;
+    int offset;
+
+    if (instruction < 0 || instruction >= mir.count)
+        return NULL;
+    address = &mir.insns[instruction];
+    if (address->opcode != MIR_ADDRESS ||
+        !mir_scalar_memory_location(
+            address, &type, &storage, &offset) ||
+        storage != SC_GLOBAL || offset != 0)
+        return NULL;
+    root = find_global(address->name);
+    if (root == NULL || !root->is_defined || root->is_volatile ||
+        root->is_array || root->is_vla || root->has_init)
+        return NULL;
+    return root;
+}
+
+static int mir_multidim_fixed_address(
+    int value, struct Sym **root_out, long *offset_out, int depth)
+{
+    const struct MirInsn *definition;
+
+    if (depth > 16 ||
+        (definition = mir_definition(value)) == NULL)
+        return 0;
+    if (definition->opcode == MIR_ADDRESS) {
+        int instruction = (int)(definition - mir.insns);
+        struct Sym *root = mir_multidim_array_root(instruction);
+
+        if (root == NULL)
+            return 0;
+        *root_out = root;
+        *offset_out = 0;
+        return 1;
+    }
+    if (definition->opcode == MIR_MEMBER_ADDRESS) {
+        long offset;
+
+        if (!mir_multidim_fixed_address(
+                definition->src1, root_out, &offset, depth + 1))
+            return 0;
+        *offset_out = offset + definition->immediate;
+        return 1;
+    }
+    if (definition->opcode == MIR_INDEX_ADDRESS) {
+        long index;
+        long offset;
+
+        if (!mir_multidim_fixed_address(
+                definition->src1, root_out, &offset, depth + 1) ||
+            !mir_machine_constant_value(
+                definition->src2, &index, 0))
+            return 0;
+        *offset_out = offset + index * definition->immediate;
+        return *offset_out >= 0 && *offset_out <= 32767;
+    }
+    return 0;
+}
+
+static int mir_multidim_fixed_memory(
+    int instruction, int opcode, struct Sym *root,
+    int offset, int width)
+{
+    const struct MirInsn *memory;
+    struct Sym *actual_root;
+    long actual_offset;
+    int address_value;
+
+    if (instruction < 0 || instruction >= mir.count)
+        return 0;
+    memory = &mir.insns[instruction];
+    if (memory->opcode != opcode ||
+        memory->memory_size != width ||
+        memory->memory_flags != 0 ||
+        memory->bit_width != 0)
+        return 0;
+    address_value = memory->src1;
+    return mir_multidim_fixed_address(
+               address_value, &actual_root, &actual_offset, 0) &&
+           actual_root == root && actual_offset == offset;
+}
+
+static int mir_multidim_member_group(
+    const int *instructions, int count, int offset, int size)
+{
+    int item;
+
+    for (item = 0; item < count; ++item) {
+        const struct MirInsn *member =
+            &mir.insns[instructions[item]];
+
+        if (member->opcode != MIR_MEMBER_ADDRESS ||
+            member->src1 != mir.insns[instructions[item] - 1].dst ||
+            member->immediate != offset ||
+            member->memory_size != size)
+            return 0;
+    }
+    return 1;
+}
+
+static int mir_multidim_index_group(
+    const int *instructions, int count, int stride, int size)
+{
+    int item;
+
+    for (item = 0; item < count; ++item) {
+        int instruction = instructions[item];
+        const struct MirInsn *index = &mir.insns[instruction];
+
+        if (index->opcode != MIR_INDEX_ADDRESS ||
+            index->immediate != stride ||
+            index->memory_size != size)
+            return 0;
+    }
+    return 1;
+}
+
+static int mir_multidim_phi(
+    int instruction, int first, int second,
+    int first_predecessor, int second_predecessor)
+{
+    const struct MirInsn *phi = &mir.insns[instruction];
+
+    return phi->opcode == MIR_PHI &&
+           phi->src1 == mir.insns[first].dst &&
+           phi->src2 == mir.insns[second].dst &&
+           phi->phi_pred1 == mir.insns[first_predecessor].label &&
+           phi->phi_pred2 == mir.insns[second_predecessor].label &&
+           mir_packed_scalar_type(phi->type, TYPE_INT, 0, 0);
+}
+
+static int mir_match_multidim_array_runner(
+    struct MirMultidimArrayRunner *plan)
+{
+    static const int expected_opcodes[680] = {
+        MIR_LABEL, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST,
+        MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST,
+        MIR_STORE_INDIRECT, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG,
+        MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST, MIR_NOP, MIR_STORE,
+        MIR_LABEL, MIR_PHI, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD, MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_LOAD, MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT, MIR_LABEL,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL,
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP,
+        MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST,
+        MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_INDEX_ADDRESS, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_INDEX_ADDRESS, MIR_NOP,
+        MIR_CONST, MIR_STORE_INDIRECT, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_INDEX_ADDRESS,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CALL, MIR_INDEX_ADDRESS, MIR_CALL, MIR_INDEX_ADDRESS,
+        MIR_NOP, MIR_CONST, MIR_STORE_INDIRECT, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST,
+        MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST,
+        MIR_STORE_INDIRECT, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST,
+        MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_INDEX_ADDRESS, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_INDEX_ADDRESS, MIR_CONST,
+        MIR_STORE_INDIRECT, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_INDEX_ADDRESS, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CONST, MIR_ARG,
+        MIR_CALL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_PHI,
+        MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST,
+        MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE,
+        MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD, MIR_INDEX_ADDRESS, MIR_LOAD, MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BINARY, MIR_LOAD,
+        MIR_BINARY, MIR_STORE_INDIRECT, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_LABEL, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST,
+        MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_INDEX_ADDRESS, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_INDEX_ADDRESS, MIR_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_NOP,
+        MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_NOP,
+        MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_NOP,
+        MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_NOP,
+        MIR_CONST, MIR_STORE_INDIRECT, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_CONST, MIR_INDEX_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG,
+        MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_LOAD, MIR_BRANCH_FALSE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CALL, MIR_CONST,
+        MIR_RETURN, MIR_NOP, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_CONST, MIR_RETURN
+    };
+    static const int byte_root_addresses[] = {
+        1, 10, 19, 28, 39, 53, 67, 81, 112, 141, 155, 167,
+        171, 175, 177, 181, 190, 204, 206, 210, 220, 224, 228, 239
+    };
+    static const int word_root_addresses[] = {
+        251, 259, 267, 275, 285, 298, 311, 324, 335,
+        339, 343, 345, 349, 357, 370, 372, 376
+    };
+    static const int cube_root_addresses[] = {
+        416, 457, 472, 487, 502, 515, 519, 523, 529, 531, 535, 539
+    };
+    static const int grid_root_addresses[] =
+        {548, 560, 572, 584, 598, 615, 632, 649};
+    static const int byte_array_members[] = {
+        2, 11, 20, 29, 40, 54, 68, 82, 113, 142, 156, 176,
+        191, 205, 229, 240
+    };
+    static const int byte_row_members[] = {168, 178, 207, 221};
+    static const int byte_column_members[] = {172, 182, 211, 225};
+    static const int word_array_members[] =
+        {252, 260, 268, 276, 286, 299, 312, 325, 344, 358, 371};
+    static const int word_row_members[] = {336, 346, 373};
+    static const int word_column_members[] = {340, 350, 377};
+    static const int cube_array_members[] = {417, 458, 473, 488, 503, 530};
+    static const int cube_a_members[] = {516, 532};
+    static const int cube_b_members[] = {520, 536};
+    static const int cube_d_members[] = {524, 540};
+    static const int grid_cells_members[] = {549, 561, 573, 585, 599, 616, 633, 650};
+    static const int grid_array_members[] = {552, 564, 576, 588, 602, 619, 636, 653};
+    static const int byte_row_indices[] =
+        {4, 13, 22, 31, 42, 56, 70, 84, 115, 144, 158, 180, 193, 209, 231, 242};
+    static const int byte_column_indices[] =
+        {6, 15, 24, 33, 44, 58, 72, 86, 117, 146, 160, 184, 195, 213, 233, 244};
+    static const int word_row_indices[] =
+        {254, 262, 270, 278, 288, 301, 314, 327, 348, 360, 375};
+    static const int word_column_indices[] =
+        {256, 264, 272, 280, 290, 303, 316, 329, 352, 362, 379};
+    static const int cube_plane_indices[] = {419, 460, 475, 490, 505, 534};
+    static const int cube_row_indices[] = {421, 462, 477, 492, 507, 538};
+    static const int cube_column_indices[] = {423, 464, 479, 494, 509, 542};
+    static const int grid_cell_indices[] = {551, 563, 575, 587, 601, 618, 635, 652};
+    static const int grid_row_indices[] = {554, 566, 578, 590, 604, 621, 638, 655};
+    static const int grid_column_indices[] = {556, 568, 580, 592, 606, 623, 640, 657};
+    static const int check_calls[MIR_MULTIDIM_ARRAY_CHECK_COUNT] = {
+        50, 64, 78, 92, 152, 166, 201, 219, 250, 295, 308, 321,
+        334, 367, 384, 469, 484, 499, 514, 547, 612, 629, 646, 663
+    };
+    static const int check_strings[MIR_MULTIDIM_ARRAY_CHECK_COUNT] = {
+        37, 51, 65, 79, 139, 153, 188, 202, 237, 283, 296, 309,
+        322, 355, 368, 455, 470, 485, 500, 527, 596, 613, 630, 647
+    };
+    static const int check_actuals[MIR_MULTIDIM_ARRAY_CHECK_COUNT] = {
+        46, 60, 74, 88, 148, 162, 197, 215, 246, 291, 304, 317,
+        330, 363, 380, 465, 480, 495, 510, 543, 608, 625, 642, 659
+    };
+    static const int check_loads[MIR_MULTIDIM_ARRAY_CHECK_COUNT] = {
+        45, 59, 73, 87, 147, 161, 196, 214, 245, 291, 304, 317,
+        330, 363, 380, 465, 480, 495, 510, 543, 607, 624, 641, 658
+    };
+    static const int check_expected[MIR_MULTIDIM_ARRAY_CHECK_COUNT] = {
+        48, 62, 76, 90, 150, 164, 199, 217, 248, 293, 306, 319,
+        332, 365, 382, 467, 482, 497, 512, 545, 610, 627, 644, 661
+    };
+    static const int check_roots[MIR_MULTIDIM_ARRAY_CHECK_COUNT] = {
+        0, 0, 0, 0, 0, 0, 0, 0, 0,
+        1, 1, 1, 1, 1, 1,
+        2, 2, 2, 2, 2,
+        3, 3, 3, 3
+    };
+    static const int check_offsets[MIR_MULTIDIM_ARRAY_CHECK_COUNT] = {
+        0, 4, 11, 6, 11, 5, 9, -1, 7,
+        0, 8, 22, 12, 20, -1,
+        0, 46, 24, 18, -1,
+        0, 8, 13, 9
+    };
+    static const int check_values[MIR_MULTIDIM_ARRAY_CHECK_COUNT] = {
+        1, 15, 42, 99, 11, 5, 77, 77, 55,
+        1000, 2000, 3003, 1202, 4242, 4242,
+        0, 123, 100, 21, 123, 10, 21, 32, 23
+    };
+    struct Sym *roots[4];
+    struct Sym *function;
+    int arguments[3];
+    int instruction;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 680 || mir.next_value != 538 ||
+        mir_cfg_block_count() != 17 || mir.local_bytes != 10 ||
+        mir.aggregate_temp_bytes != 0 || mir.has_vla ||
+        !mir_packed_scalar_type(mir.return_type, TYPE_INT, 0, 0))
+        return mir_machine_reject("multidim-array-runner", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "multidim-array-runner", "opcodes");
+
+    roots[0] = mir_multidim_array_root(1);
+    roots[1] = mir_multidim_array_root(251);
+    roots[2] = mir_multidim_array_root(416);
+    roots[3] = mir_multidim_array_root(548);
+    if (roots[0] == NULL || roots[1] == NULL ||
+        roots[2] == NULL || roots[3] == NULL ||
+        roots[0] == roots[1] || roots[0] == roots[2] ||
+        roots[0] == roots[3] || roots[1] == roots[2] ||
+        roots[1] == roots[3] || roots[2] == roots[3])
+        return mir_machine_reject(
+            "multidim-array-runner", "roots");
+#define MIR_CHECK_ROOT_GROUP(group, root) \
+    do { \
+        for (item = 0; item < \
+                (int)(sizeof(group) / sizeof((group)[0])); ++item) \
+            if (mir_multidim_array_root((group)[item]) != (root)) \
+                return mir_machine_reject( \
+                    "multidim-array-runner", "root-alias"); \
+    } while (0)
+    MIR_CHECK_ROOT_GROUP(byte_root_addresses, roots[0]);
+    MIR_CHECK_ROOT_GROUP(word_root_addresses, roots[1]);
+    MIR_CHECK_ROOT_GROUP(cube_root_addresses, roots[2]);
+    MIR_CHECK_ROOT_GROUP(grid_root_addresses, roots[3]);
+#undef MIR_CHECK_ROOT_GROUP
+
+    plan->byte_array_offset = (int)mir.insns[2].immediate;
+    plan->byte_row_offset = (int)mir.insns[168].immediate;
+    plan->byte_column_offset = (int)mir.insns[172].immediate;
+    plan->word_array_offset = (int)mir.insns[252].immediate;
+    plan->word_row_offset = (int)mir.insns[336].immediate;
+    plan->word_column_offset = (int)mir.insns[340].immediate;
+    plan->cube_array_offset = (int)mir.insns[417].immediate;
+    plan->cube_a_offset = (int)mir.insns[516].immediate;
+    plan->cube_b_offset = (int)mir.insns[520].immediate;
+    plan->cube_d_offset = (int)mir.insns[524].immediate;
+    plan->grid_cells_offset = (int)mir.insns[549].immediate;
+    plan->grid_array_offset = (int)mir.insns[552].immediate;
+    plan->byte_row_stride = (int)mir.insns[4].immediate;
+    plan->byte_column_stride = (int)mir.insns[6].immediate;
+    plan->word_row_stride = (int)mir.insns[254].immediate;
+    plan->word_column_stride = (int)mir.insns[256].immediate;
+    plan->cube_plane_stride = (int)mir.insns[419].immediate;
+    plan->cube_row_stride = (int)mir.insns[421].immediate;
+    plan->cube_column_stride = (int)mir.insns[423].immediate;
+    plan->grid_cell_stride = (int)mir.insns[551].immediate;
+    plan->grid_row_stride = (int)mir.insns[554].immediate;
+    plan->grid_column_stride = (int)mir.insns[556].immediate;
+    plan->byte_rows = 3;
+    plan->byte_columns = 4;
+    plan->word_rows = 3;
+    plan->word_columns = 4;
+    plan->cube_planes = 2;
+    plan->cube_rows = 3;
+    plan->cube_columns = 4;
+    if (plan->byte_array_offset != 0 ||
+        plan->byte_row_offset != 12 ||
+        plan->byte_column_offset != 14 ||
+        plan->byte_row_stride != 4 ||
+        plan->byte_column_stride != 1 ||
+        roots[0]->size != 16 ||
+        plan->word_array_offset != 0 ||
+        plan->word_row_offset != 24 ||
+        plan->word_column_offset != 26 ||
+        plan->word_row_stride != 8 ||
+        plan->word_column_stride != 2 ||
+        roots[1]->size != 28 ||
+        plan->cube_array_offset != 0 ||
+        plan->cube_a_offset != 48 ||
+        plan->cube_b_offset != 50 ||
+        plan->cube_d_offset != 52 ||
+        plan->cube_plane_stride != 24 ||
+        plan->cube_row_stride != 8 ||
+        plan->cube_column_stride != 2 ||
+        roots[2]->size != 54 ||
+        plan->grid_cells_offset != 0 ||
+        plan->grid_cell_stride != 6 ||
+        plan->grid_array_offset != 0 ||
+        plan->grid_row_stride != 2 ||
+        plan->grid_column_stride != 1 ||
+        roots[3]->size != 18)
+        return mir_machine_reject(
+            "multidim-array-runner", "layout");
+    if (!mir_multidim_member_group(
+            byte_array_members,
+            sizeof(byte_array_members) / sizeof(byte_array_members[0]),
+            plan->byte_array_offset, 12) ||
+        !mir_multidim_member_group(
+            byte_row_members,
+            sizeof(byte_row_members) / sizeof(byte_row_members[0]),
+            plan->byte_row_offset, 2) ||
+        !mir_multidim_member_group(
+            byte_column_members,
+            sizeof(byte_column_members) / sizeof(byte_column_members[0]),
+            plan->byte_column_offset, 2) ||
+        !mir_multidim_member_group(
+            word_array_members,
+            sizeof(word_array_members) / sizeof(word_array_members[0]),
+            plan->word_array_offset, 24) ||
+        !mir_multidim_member_group(
+            word_row_members,
+            sizeof(word_row_members) / sizeof(word_row_members[0]),
+            plan->word_row_offset, 2) ||
+        !mir_multidim_member_group(
+            word_column_members,
+            sizeof(word_column_members) / sizeof(word_column_members[0]),
+            plan->word_column_offset, 2) ||
+        !mir_multidim_member_group(
+            cube_array_members,
+            sizeof(cube_array_members) / sizeof(cube_array_members[0]),
+            plan->cube_array_offset, 48) ||
+        !mir_multidim_member_group(
+            cube_a_members,
+            sizeof(cube_a_members) / sizeof(cube_a_members[0]),
+            plan->cube_a_offset, 2) ||
+        !mir_multidim_member_group(
+            cube_b_members,
+            sizeof(cube_b_members) / sizeof(cube_b_members[0]),
+            plan->cube_b_offset, 2) ||
+        !mir_multidim_member_group(
+            cube_d_members,
+            sizeof(cube_d_members) / sizeof(cube_d_members[0]),
+            plan->cube_d_offset, 2) ||
+        !mir_multidim_member_group(
+            grid_cells_members,
+            sizeof(grid_cells_members) / sizeof(grid_cells_members[0]),
+            plan->grid_cells_offset, 18) ||
+        !mir_multidim_member_group(
+            grid_array_members,
+            sizeof(grid_array_members) / sizeof(grid_array_members[0]),
+            plan->grid_array_offset, 4))
+        return mir_machine_reject(
+            "multidim-array-runner", "members");
+    if (!mir_multidim_index_group(
+            byte_row_indices,
+            sizeof(byte_row_indices) / sizeof(byte_row_indices[0]),
+            plan->byte_row_stride, 1) ||
+        !mir_multidim_index_group(
+            byte_column_indices,
+            sizeof(byte_column_indices) / sizeof(byte_column_indices[0]),
+            plan->byte_column_stride, 1) ||
+        !mir_multidim_index_group(
+            word_row_indices,
+            sizeof(word_row_indices) / sizeof(word_row_indices[0]),
+            plan->word_row_stride, 2) ||
+        !mir_multidim_index_group(
+            word_column_indices,
+            sizeof(word_column_indices) / sizeof(word_column_indices[0]),
+            plan->word_column_stride, 2) ||
+        !mir_multidim_index_group(
+            cube_plane_indices,
+            sizeof(cube_plane_indices) / sizeof(cube_plane_indices[0]),
+            plan->cube_plane_stride, 2) ||
+        !mir_multidim_index_group(
+            cube_row_indices,
+            sizeof(cube_row_indices) / sizeof(cube_row_indices[0]),
+            plan->cube_row_stride, 2) ||
+        !mir_multidim_index_group(
+            cube_column_indices,
+            sizeof(cube_column_indices) / sizeof(cube_column_indices[0]),
+            plan->cube_column_stride, 2) ||
+        !mir_multidim_index_group(
+            grid_cell_indices,
+            sizeof(grid_cell_indices) / sizeof(grid_cell_indices[0]),
+            plan->grid_cell_stride, 6) ||
+        !mir_multidim_index_group(
+            grid_row_indices,
+            sizeof(grid_row_indices) / sizeof(grid_row_indices[0]),
+            plan->grid_row_stride, 1) ||
+        !mir_multidim_index_group(
+            grid_column_indices,
+            sizeof(grid_column_indices) / sizeof(grid_column_indices[0]),
+            plan->grid_column_stride, 1))
+        return mir_machine_reject(
+            "multidim-array-runner", "strides");
+
+    for (item = 0; item < MIR_MULTIDIM_ARRAY_CHECK_COUNT; ++item) {
+        const struct MirInsn *call = &mir.insns[check_calls[item]];
+        const struct MirInsn *string = &mir.insns[check_strings[item]];
+        struct Sym *root = roots[check_roots[item]];
+        long expected;
+
+        if (!mir_packed_direct_function(
+                check_calls[item], &function) ||
+            call->memory_flags != 0 || call->src1 >= 0 ||
+            !mir_packed_call_arguments(call, 3, arguments) ||
+            arguments[0] != string->dst ||
+            arguments[1] != mir.insns[check_actuals[item]].dst ||
+            arguments[2] != mir.insns[check_expected[item]].dst ||
+            string->opcode != MIR_STRING_ADDRESS ||
+            string->immediate < 0 ||
+            !mir_packed_scalar_type(
+                string->type, TYPE_CHAR, 0, 1) ||
+            !mir_machine_constant_value(
+                mir.insns[check_expected[item]].dst,
+                &expected, 0) ||
+            expected != check_values[item] ||
+            (item != 0 && function != plan->check_function))
+            return mir_machine_reject(
+                "multidim-array-runner", "check-calls");
+        if (item == 0)
+            plan->check_function = function;
+        plan->check_strings[item] = (int)string->immediate;
+        if (item > 0) {
+            int prior;
+
+            for (prior = 0; prior < item; ++prior)
+                if (plan->check_strings[prior] ==
+                    plan->check_strings[item])
+                    return mir_machine_reject(
+                        "multidim-array-runner", "check-strings");
+        }
+        if (item < 9 || item >= 20) {
+            if (!mir_packed_unary(
+                    check_actuals[item], check_loads[item],
+                    0, TYPE_INT, 0) ||
+                !mir_packed_load(
+                    check_loads[item],
+                    check_loads[item] - 1,
+                    TYPE_CHAR, 1, 1))
+                return mir_machine_reject(
+                    "multidim-array-runner", "byte-checks");
+        } else if (!mir_packed_load(
+                       check_loads[item],
+                       check_loads[item] - 1,
+                       TYPE_INT, 0, 2)) {
+            return mir_machine_reject(
+                "multidim-array-runner", "word-checks");
+        }
+        if (check_offsets[item] >= 0 &&
+            !mir_multidim_fixed_memory(
+                check_loads[item], MIR_LOAD_INDIRECT,
+                root, check_offsets[item],
+                (item < 9 || item >= 20) ? 1 : 2))
+            return mir_machine_reject(
+                "multidim-array-runner", "check-addresses");
+    }
+    if (!plan->check_function->has_proto ||
+        plan->check_function->proto_variadic ||
+        plan->check_function->proto_nargs != 3 ||
+        (plan->check_function->type & 15) != TYPE_VOID ||
+        !mir_packed_scalar_type(
+            plan->check_function->proto_types[0],
+            TYPE_CHAR, 0, 1) ||
+        !mir_packed_scalar_type(
+            plan->check_function->proto_types[1],
+            TYPE_INT, 0, 0) ||
+        !mir_packed_scalar_type(
+            plan->check_function->proto_types[2],
+            TYPE_INT, 0, 0))
+        return mir_machine_reject(
+            "multidim-array-runner", "check-prototype");
+
+    if (!mir_multidim_phi(97, 93, 135, 0, 132) ||
+        !mir_packed_binary(100, 97, 99, '<', TYPE_INT, 0) ||
+        !mir_packed_branch(101, 100, 138) ||
+        !mir_packed_binary(110, 108, 109, '<', TYPE_INT, 0) ||
+        !mir_packed_branch(111, 110, 131) ||
+        !mir_packed_binary(120, 97, 119, '*', TYPE_INT, 0) ||
+        !mir_packed_binary(122, 120, 121, '+', TYPE_INT, 0) ||
+        !mir_packed_unary(123, 122, 0, TYPE_CHAR, 1) ||
+        !mir_packed_binary(128, 126, 127, '+', TYPE_INT, 0) ||
+        !mir_packed_jump(130, 105) ||
+        !mir_packed_binary(135, 97, 134, '+', TYPE_INT, 0) ||
+        !mir_packed_jump(137, 96) ||
+        !mir_machine_constant_equals(mir.insns[93].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[99].dst, plan->byte_rows) ||
+        !mir_machine_constant_equals(mir.insns[102].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[109].dst, plan->byte_columns) ||
+        !mir_machine_constant_equals(
+            mir.insns[119].dst, plan->byte_columns) ||
+        !mir_machine_constant_equals(mir.insns[127].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[134].dst, 1) ||
+        !mir_packed_store(124, 117, 123, 1))
+        return mir_machine_reject(
+            "multidim-array-runner", "byte-loop");
+
+    if (!mir_multidim_phi(389, 385, 451, 138, 448) ||
+        !mir_packed_binary(393, 389, 392, '<', TYPE_INT, 0) ||
+        !mir_packed_branch(394, 393, 454) ||
+        !mir_packed_binary(403, 401, 402, '<', TYPE_INT, 0) ||
+        !mir_packed_branch(404, 403, 447) ||
+        !mir_packed_binary(414, 412, 413, '<', TYPE_INT, 0) ||
+        !mir_packed_branch(415, 414, 440) ||
+        !mir_packed_binary(426, 389, 425, '*', TYPE_INT, 0) ||
+        !mir_packed_binary(429, 427, 428, '*', TYPE_INT, 0) ||
+        !mir_packed_binary(430, 426, 429, '+', TYPE_INT, 0) ||
+        !mir_packed_binary(432, 430, 431, '+', TYPE_INT, 0) ||
+        !mir_packed_store(433, 423, 432, 2) ||
+        !mir_packed_binary(437, 435, 436, '+', TYPE_INT, 0) ||
+        !mir_packed_jump(439, 408) ||
+        !mir_packed_binary(444, 442, 443, '+', TYPE_INT, 0) ||
+        !mir_packed_jump(446, 398) ||
+        !mir_packed_binary(451, 389, 450, '+', TYPE_INT, 0) ||
+        !mir_packed_jump(453, 388) ||
+        !mir_machine_constant_equals(mir.insns[385].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[392].dst, plan->cube_planes) ||
+        !mir_machine_constant_equals(mir.insns[395].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[402].dst, plan->cube_rows) ||
+        !mir_machine_constant_equals(mir.insns[405].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[413].dst, plan->cube_columns) ||
+        !mir_machine_constant_equals(mir.insns[425].dst, 100) ||
+        !mir_machine_constant_equals(mir.insns[428].dst, 10) ||
+        !mir_machine_constant_equals(mir.insns[436].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[443].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[450].dst, 1))
+        return mir_machine_reject(
+            "multidim-array-runner", "cube-loop");
+
+    if (!mir_multidim_fixed_memory(9, MIR_STORE_INDIRECT, roots[0], 0, 1) ||
+        !mir_multidim_fixed_memory(18, MIR_STORE_INDIRECT, roots[0], 4, 1) ||
+        !mir_multidim_fixed_memory(27, MIR_STORE_INDIRECT, roots[0], 11, 1) ||
+        !mir_multidim_fixed_memory(36, MIR_STORE_INDIRECT, roots[0], 6, 1) ||
+        !mir_multidim_fixed_memory(258, MIR_STORE_INDIRECT, roots[1], 0, 2) ||
+        !mir_multidim_fixed_memory(266, MIR_STORE_INDIRECT, roots[1], 8, 2) ||
+        !mir_multidim_fixed_memory(274, MIR_STORE_INDIRECT, roots[1], 22, 2) ||
+        !mir_multidim_fixed_memory(282, MIR_STORE_INDIRECT, roots[1], 12, 2) ||
+        !mir_multidim_fixed_memory(559, MIR_STORE_INDIRECT, roots[3], 0, 1) ||
+        !mir_multidim_fixed_memory(571, MIR_STORE_INDIRECT, roots[3], 8, 1) ||
+        !mir_multidim_fixed_memory(583, MIR_STORE_INDIRECT, roots[3], 13, 1) ||
+        !mir_multidim_fixed_memory(595, MIR_STORE_INDIRECT, roots[3], 9, 1) ||
+        !mir_machine_constant_equals(mir.insns[9].src2, 1) ||
+        !mir_machine_constant_equals(mir.insns[18].src2, 15) ||
+        !mir_machine_constant_equals(mir.insns[27].src2, 42) ||
+        !mir_machine_constant_equals(mir.insns[36].src2, 99) ||
+        !mir_machine_constant_equals(mir.insns[258].src2, 1000) ||
+        !mir_machine_constant_equals(mir.insns[266].src2, 2000) ||
+        !mir_machine_constant_equals(mir.insns[274].src2, 3003) ||
+        !mir_machine_constant_equals(mir.insns[282].src2, 1202) ||
+        !mir_machine_constant_equals(mir.insns[559].src2, 10) ||
+        !mir_machine_constant_equals(mir.insns[571].src2, 21) ||
+        !mir_machine_constant_equals(mir.insns[583].src2, 32) ||
+        !mir_machine_constant_equals(mir.insns[595].src2, 23))
+        return mir_machine_reject(
+            "multidim-array-runner", "initializers");
+
+    if (!mir_packed_store(170, 168, 169, 2) ||
+        !mir_packed_store(174, 172, 173, 2) ||
+        !mir_machine_constant_equals(mir.insns[170].src2, 2) ||
+        !mir_machine_constant_equals(mir.insns[174].src2, 1) ||
+        !mir_packed_load(179, 178, TYPE_INT, 0, 2) ||
+        mir.insns[180].src1 != mir.insns[176].dst ||
+        !mir_packed_store(187, 184, 186, 1) ||
+        !mir_machine_constant_equals(mir.insns[187].src2, 77) ||
+        mir.insns[180].src2 != mir.insns[179].dst ||
+        !mir_packed_load(183, 182, TYPE_INT, 0, 2) ||
+        mir.insns[184].src1 != mir.insns[180].dst ||
+        mir.insns[184].src2 != mir.insns[183].dst ||
+        !mir_packed_load(208, 207, TYPE_INT, 0, 2) ||
+        mir.insns[209].src1 != mir.insns[205].dst ||
+        mir.insns[209].src2 != mir.insns[208].dst ||
+        !mir_packed_load(212, 211, TYPE_INT, 0, 2) ||
+        mir.insns[213].src1 != mir.insns[209].dst ||
+        mir.insns[213].src2 != mir.insns[212].dst ||
+        !mir_packed_store(223, 221, 222, 2) ||
+        !mir_packed_store(227, 225, 226, 2) ||
+        !mir_machine_constant_equals(mir.insns[223].src2, 1) ||
+        !mir_machine_constant_equals(mir.insns[227].src2, 3) ||
+        !mir_packed_direct_function(230, &plan->row_function) ||
+        !mir_packed_direct_function(232, &plan->column_function) ||
+        plan->row_function == plan->column_function ||
+        !mir_machine_call_has_no_arguments(&mir.insns[230]) ||
+        !mir_machine_call_has_no_arguments(&mir.insns[232]) ||
+        mir.insns[231].src1 != mir.insns[229].dst ||
+        mir.insns[231].src2 != mir.insns[230].dst ||
+        mir.insns[233].src1 != mir.insns[231].dst ||
+        mir.insns[233].src2 != mir.insns[232].dst ||
+        !mir_packed_store(236, 233, 235, 1) ||
+        !mir_machine_constant_equals(mir.insns[236].src2, 55) ||
+        !plan->row_function->has_proto ||
+        plan->row_function->proto_variadic ||
+        plan->row_function->proto_nargs != 0 ||
+        !mir_packed_scalar_type(
+            plan->row_function->type, TYPE_INT, 0, 0) ||
+        !plan->column_function->has_proto ||
+        plan->column_function->proto_variadic ||
+        plan->column_function->proto_nargs != 0 ||
+        !mir_packed_scalar_type(
+            plan->column_function->type, TYPE_INT, 0, 0))
+        return mir_machine_reject(
+            "multidim-array-runner", "byte-aliases");
+
+    if (!mir_packed_store(338, 336, 337, 2) ||
+        !mir_packed_store(342, 340, 341, 2) ||
+        !mir_machine_constant_equals(mir.insns[338].src2, 2) ||
+        !mir_machine_constant_equals(mir.insns[342].src2, 2) ||
+        !mir_packed_load(347, 346, TYPE_INT, 0, 2) ||
+        mir.insns[348].src1 != mir.insns[344].dst ||
+        mir.insns[348].src2 != mir.insns[347].dst ||
+        !mir_packed_load(351, 350, TYPE_INT, 0, 2) ||
+        mir.insns[352].src1 != mir.insns[348].dst ||
+        mir.insns[352].src2 != mir.insns[351].dst ||
+        !mir_packed_store(354, 352, 353, 2) ||
+        !mir_machine_constant_equals(mir.insns[354].src2, 4242) ||
+        !mir_packed_load(374, 373, TYPE_INT, 0, 2) ||
+        mir.insns[375].src1 != mir.insns[371].dst ||
+        mir.insns[375].src2 != mir.insns[374].dst ||
+        !mir_packed_load(378, 377, TYPE_INT, 0, 2) ||
+        mir.insns[379].src1 != mir.insns[375].dst ||
+        mir.insns[379].src2 != mir.insns[378].dst ||
+        mir.insns[419].src1 != mir.insns[417].dst ||
+        mir.insns[419].src2 != mir.insns[389].dst ||
+        mir.insns[421].src1 != mir.insns[419].dst ||
+        mir.insns[421].src2 != mir.insns[420].dst ||
+        mir.insns[423].src1 != mir.insns[421].dst ||
+        mir.insns[423].src2 != mir.insns[422].dst ||
+        !mir_packed_store(518, 516, 517, 2) ||
+        !mir_packed_store(522, 520, 521, 2) ||
+        !mir_packed_store(526, 524, 525, 2) ||
+        !mir_machine_constant_equals(mir.insns[518].src2, 1) ||
+        !mir_machine_constant_equals(mir.insns[522].src2, 2) ||
+        !mir_machine_constant_equals(mir.insns[526].src2, 3) ||
+        !mir_packed_load(533, 532, TYPE_INT, 0, 2) ||
+        mir.insns[534].src1 != mir.insns[530].dst ||
+        mir.insns[534].src2 != mir.insns[533].dst ||
+        !mir_packed_load(537, 536, TYPE_INT, 0, 2) ||
+        mir.insns[538].src1 != mir.insns[534].dst ||
+        mir.insns[538].src2 != mir.insns[537].dst ||
+        !mir_packed_load(541, 540, TYPE_INT, 0, 2) ||
+        mir.insns[542].src1 != mir.insns[538].dst ||
+        mir.insns[542].src2 != mir.insns[541].dst)
+        return mir_machine_reject(
+            "multidim-array-runner", "word-aliases");
+
+    if (mir.insns[664].opcode != MIR_LOAD ||
+        mir.insns[668].opcode != MIR_LOAD ||
+        !mir_machine_same_location(&mir.insns[664], &mir.insns[668]) ||
+        !mir_scalar_memory_location(
+            &mir.insns[664], &instruction, &item, &arguments[0]) ||
+        item != SC_GLOBAL || instruction != TYPE_INT ||
+        arguments[0] != 0 ||
+        (plan->failures = find_global(mir.insns[664].name)) == NULL ||
+        !plan->failures->is_defined || plan->failures->is_volatile ||
+        plan->failures == roots[0] ||
+        plan->failures == roots[1] ||
+        plan->failures == roots[2] ||
+        plan->failures == roots[3] ||
+        !mir_packed_branch(665, 664, 674) ||
+        !mir_packed_direct_function(670, &plan->print_function) ||
+        !mir_packed_direct_function(677, &function) ||
+        function != plan->print_function ||
+        mir.insns[670].memory_flags != MIR_CALL_FLAG_VARIADIC ||
+        mir.insns[677].memory_flags != MIR_CALL_FLAG_VARIADIC ||
+        !mir_packed_call_arguments(&mir.insns[670], 2, arguments) ||
+        arguments[0] != mir.insns[666].dst ||
+        arguments[1] != mir.insns[668].dst ||
+        !mir_packed_call_arguments(&mir.insns[677], 1, arguments) ||
+        arguments[0] != mir.insns[675].dst ||
+        !mir_packed_scalar_type(
+            mir.insns[666].type, TYPE_CHAR, 0, 1) ||
+        !mir_packed_scalar_type(
+            mir.insns[675].type, TYPE_CHAR, 0, 1) ||
+        !mir_machine_constant_equals(mir.insns[672].src1, 1) ||
+        !mir_machine_constant_equals(mir.insns[679].src1, 0) ||
+        !plan->print_function->has_proto ||
+        !plan->print_function->proto_variadic ||
+        plan->print_function->proto_nargs != 1 ||
+        !mir_packed_scalar_type(
+            plan->print_function->type, TYPE_INT, 0, 0) ||
+        !mir_packed_scalar_type(
+            plan->print_function->proto_types[0],
+            TYPE_CHAR, 0, 1))
+        return mir_machine_reject(
+            "multidim-array-runner", "returns");
+    plan->failure_string = (int)mir.insns[666].immediate;
+    plan->success_string = (int)mir.insns[675].immediate;
+    if (plan->failure_string < 0 || plan->success_string < 0 ||
+        plan->failure_string == plan->success_string)
+        return mir_machine_reject(
+            "multidim-array-runner", "summary-strings");
+    snprintf(plan->failure_call_name,
+             sizeof(plan->failure_call_name), "%s",
+             mir_packed_call_name(
+                 &mir.insns[670], plan->print_function));
+    snprintf(plan->success_call_name,
+             sizeof(plan->success_call_name), "%s",
+             mir_packed_call_name(
+                 &mir.insns[677], plan->print_function));
+    plan->byte_matrix = roots[0];
+    plan->word_matrix = roots[1];
+    plan->cube = roots[2];
+    plan->grid = roots[3];
+    return 1;
 }
 
 static int mir_match_packed_record_runner(
@@ -2865,6 +3750,354 @@ static void mir_emit_packed_record_runner(
     fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static void mir_multidim_emit_byte_store(
+    FILE *out, struct Sym *root, int offset, int value)
+{
+    mir_machine_emit_global_address_hl(out, root, offset);
+    fprintf(out, "\tld (hl),%d\n", value & 0xff);
+}
+
+static void mir_multidim_emit_word_store(
+    FILE *out, struct Sym *root, int offset, int value)
+{
+    mir_machine_emit_global_address_hl(out, root, offset);
+    fprintf(out,
+            "\tld (hl),%d\n\tinc hl\n\tld (hl),%d\n",
+            value & 0xff, (value >> 8) & 0xff);
+}
+
+static void mir_multidim_emit_check_at(
+    FILE *out, const struct MirMultidimArrayRunner *plan,
+    int check, struct Sym *root, int offset, int width, int expected)
+{
+    mir_machine_emit_global_address_hl(out, root, offset);
+    fputs("\tld e,(hl)\n", out);
+    if (width == 1)
+        fputs("\tld d,0\n", out);
+    else
+        fputs("\tinc hl\n\tld d,(hl)\n", out);
+    mir_aggregate_emit_word_check(
+        out, plan->check_function,
+        plan->check_strings[check], (unsigned long)expected);
+}
+
+static void mir_multidim_emit_dynamic_2d_address(
+    FILE *out, struct Sym *root, int array_offset,
+    int row_offset, int column_offset,
+    int row_stride, int column_stride)
+{
+    mir_machine_emit_global_address_hl(out, root, row_offset);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tex de,hl\n", out);
+    mir_aggregate_scale_hl(out, row_stride);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_global_address_hl(out, root, column_offset);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tex de,hl\n", out);
+    mir_aggregate_scale_hl(out, column_stride);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_global_address_hl(out, root, array_offset);
+    fputs("\tpop de\n\tadd hl,de\n"
+          "\tpop de\n\tadd hl,de\n", out);
+}
+
+static void mir_multidim_emit_call_2d_address(
+    FILE *out, const struct MirMultidimArrayRunner *plan)
+{
+    mir_machine_emit_symbol_call(out, plan->row_function);
+    mir_aggregate_scale_hl(out, plan->byte_row_stride);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->column_function);
+    mir_aggregate_scale_hl(out, plan->byte_column_stride);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_global_address_hl(
+        out, plan->byte_matrix, plan->byte_array_offset);
+    fputs("\tpop de\n\tadd hl,de\n"
+          "\tpop de\n\tadd hl,de\n", out);
+}
+
+static void mir_multidim_emit_dynamic_3d_address(
+    FILE *out, const struct MirMultidimArrayRunner *plan)
+{
+    mir_machine_emit_global_address_hl(
+        out, plan->cube, plan->cube_a_offset);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tex de,hl\n", out);
+    mir_aggregate_scale_hl(out, plan->cube_plane_stride);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_global_address_hl(
+        out, plan->cube, plan->cube_b_offset);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tex de,hl\n", out);
+    mir_aggregate_scale_hl(out, plan->cube_row_stride);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_global_address_hl(
+        out, plan->cube, plan->cube_d_offset);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tex de,hl\n", out);
+    mir_aggregate_scale_hl(out, plan->cube_column_stride);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_global_address_hl(
+        out, plan->cube, plan->cube_array_offset);
+    fputs("\tpop de\n\tadd hl,de\n"
+          "\tpop de\n\tadd hl,de\n"
+          "\tpop de\n\tadd hl,de\n", out);
+}
+
+static void mir_emit_multidim_array_runner(
+    FILE *out, const struct MirMultidimArrayRunner *plan)
+{
+    int plane;
+    int row;
+    int column;
+    int value;
+    int success = new_label();
+
+    fprintf(out, "%s\n", MIR_EXACT_KERNEL_MARKER);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+
+    mir_multidim_emit_byte_store(
+        out, plan->byte_matrix,
+        plan->byte_array_offset, 1);
+    mir_multidim_emit_byte_store(
+        out, plan->byte_matrix,
+        plan->byte_array_offset + plan->byte_row_stride, 15);
+    mir_multidim_emit_byte_store(
+        out, plan->byte_matrix,
+        plan->byte_array_offset +
+            2 * plan->byte_row_stride +
+            3 * plan->byte_column_stride, 42);
+    mir_multidim_emit_byte_store(
+        out, plan->byte_matrix,
+        plan->byte_array_offset +
+            plan->byte_row_stride +
+            2 * plan->byte_column_stride, 99);
+    mir_multidim_emit_check_at(
+        out, plan, 0, plan->byte_matrix,
+        plan->byte_array_offset, 1, 1);
+    mir_multidim_emit_check_at(
+        out, plan, 1, plan->byte_matrix,
+        plan->byte_array_offset + plan->byte_row_stride, 1, 15);
+    mir_multidim_emit_check_at(
+        out, plan, 2, plan->byte_matrix,
+        plan->byte_array_offset +
+            2 * plan->byte_row_stride +
+            3 * plan->byte_column_stride, 1, 42);
+    mir_multidim_emit_check_at(
+        out, plan, 3, plan->byte_matrix,
+        plan->byte_array_offset +
+            plan->byte_row_stride +
+            2 * plan->byte_column_stride, 1, 99);
+
+    mir_machine_emit_global_address_hl(
+        out, plan->byte_matrix, plan->byte_array_offset);
+    for (row = 0; row < plan->byte_rows; ++row)
+        for (column = 0; column < plan->byte_columns; ++column) {
+            value = row * plan->byte_columns + column;
+            fprintf(out, "\tld (hl),%d\n", value);
+            if (row != plan->byte_rows - 1 ||
+                column != plan->byte_columns - 1)
+                fputs("\tinc hl\n", out);
+        }
+    mir_multidim_emit_check_at(
+        out, plan, 4, plan->byte_matrix,
+        plan->byte_array_offset +
+            2 * plan->byte_row_stride +
+            3 * plan->byte_column_stride, 1, 11);
+    mir_multidim_emit_check_at(
+        out, plan, 5, plan->byte_matrix,
+        plan->byte_array_offset +
+            plan->byte_row_stride +
+            plan->byte_column_stride, 1, 5);
+
+    mir_multidim_emit_word_store(
+        out, plan->byte_matrix, plan->byte_row_offset, 2);
+    mir_multidim_emit_word_store(
+        out, plan->byte_matrix, plan->byte_column_offset, 1);
+    mir_multidim_emit_dynamic_2d_address(
+        out, plan->byte_matrix, plan->byte_array_offset,
+        plan->byte_row_offset, plan->byte_column_offset,
+        plan->byte_row_stride, plan->byte_column_stride);
+    fputs("\tld (hl),77\n", out);
+    mir_multidim_emit_check_at(
+        out, plan, 6, plan->byte_matrix,
+        plan->byte_array_offset +
+            2 * plan->byte_row_stride +
+            plan->byte_column_stride, 1, 77);
+    mir_multidim_emit_dynamic_2d_address(
+        out, plan->byte_matrix, plan->byte_array_offset,
+        plan->byte_row_offset, plan->byte_column_offset,
+        plan->byte_row_stride, plan->byte_column_stride);
+    fputs("\tld e,(hl)\n\tld d,0\n", out);
+    mir_aggregate_emit_word_check(
+        out, plan->check_function,
+        plan->check_strings[7], 77);
+
+    mir_multidim_emit_word_store(
+        out, plan->byte_matrix, plan->byte_row_offset, 1);
+    mir_multidim_emit_word_store(
+        out, plan->byte_matrix, plan->byte_column_offset, 3);
+    mir_multidim_emit_call_2d_address(out, plan);
+    fputs("\tld (hl),55\n", out);
+    mir_multidim_emit_check_at(
+        out, plan, 8, plan->byte_matrix,
+        plan->byte_array_offset +
+            plan->byte_row_stride +
+            3 * plan->byte_column_stride, 1, 55);
+
+    mir_multidim_emit_word_store(
+        out, plan->word_matrix,
+        plan->word_array_offset, 1000);
+    mir_multidim_emit_word_store(
+        out, plan->word_matrix,
+        plan->word_array_offset + plan->word_row_stride, 2000);
+    mir_multidim_emit_word_store(
+        out, plan->word_matrix,
+        plan->word_array_offset +
+            2 * plan->word_row_stride +
+            3 * plan->word_column_stride, 3003);
+    mir_multidim_emit_word_store(
+        out, plan->word_matrix,
+        plan->word_array_offset +
+            plan->word_row_stride +
+            2 * plan->word_column_stride, 1202);
+    mir_multidim_emit_check_at(
+        out, plan, 9, plan->word_matrix,
+        plan->word_array_offset, 2, 1000);
+    mir_multidim_emit_check_at(
+        out, plan, 10, plan->word_matrix,
+        plan->word_array_offset + plan->word_row_stride, 2, 2000);
+    mir_multidim_emit_check_at(
+        out, plan, 11, plan->word_matrix,
+        plan->word_array_offset +
+            2 * plan->word_row_stride +
+            3 * plan->word_column_stride, 2, 3003);
+    mir_multidim_emit_check_at(
+        out, plan, 12, plan->word_matrix,
+        plan->word_array_offset +
+            plan->word_row_stride +
+            2 * plan->word_column_stride, 2, 1202);
+
+    mir_multidim_emit_word_store(
+        out, plan->word_matrix, plan->word_row_offset, 2);
+    mir_multidim_emit_word_store(
+        out, plan->word_matrix, plan->word_column_offset, 2);
+    mir_multidim_emit_dynamic_2d_address(
+        out, plan->word_matrix, plan->word_array_offset,
+        plan->word_row_offset, plan->word_column_offset,
+        plan->word_row_stride, plan->word_column_stride);
+    fputs("\tld (hl),146\n\tinc hl\n\tld (hl),16\n", out);
+    mir_multidim_emit_check_at(
+        out, plan, 13, plan->word_matrix,
+        plan->word_array_offset +
+            2 * plan->word_row_stride +
+            2 * plan->word_column_stride, 2, 4242);
+    mir_multidim_emit_dynamic_2d_address(
+        out, plan->word_matrix, plan->word_array_offset,
+        plan->word_row_offset, plan->word_column_offset,
+        plan->word_row_stride, plan->word_column_stride);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n", out);
+    mir_aggregate_emit_word_check(
+        out, plan->check_function,
+        plan->check_strings[14], 4242);
+
+    mir_machine_emit_global_address_hl(
+        out, plan->cube, plan->cube_array_offset);
+    for (plane = 0; plane < plan->cube_planes; ++plane)
+        for (row = 0; row < plan->cube_rows; ++row)
+            for (column = 0; column < plan->cube_columns; ++column) {
+                value = plane * 100 + row * 10 + column;
+                fprintf(out,
+                        "\tld (hl),%d\n\tinc hl\n"
+                        "\tld (hl),%d\n",
+                        value & 0xff, (value >> 8) & 0xff);
+                if (plane != plan->cube_planes - 1 ||
+                    row != plan->cube_rows - 1 ||
+                    column != plan->cube_columns - 1)
+                    fputs("\tinc hl\n", out);
+            }
+    mir_multidim_emit_check_at(
+        out, plan, 15, plan->cube,
+        plan->cube_array_offset, 2, 0);
+    mir_multidim_emit_check_at(
+        out, plan, 16, plan->cube,
+        plan->cube_array_offset +
+            plan->cube_plane_stride +
+            2 * plan->cube_row_stride +
+            3 * plan->cube_column_stride, 2, 123);
+    mir_multidim_emit_check_at(
+        out, plan, 17, plan->cube,
+        plan->cube_array_offset +
+            plan->cube_plane_stride, 2, 100);
+    mir_multidim_emit_check_at(
+        out, plan, 18, plan->cube,
+        plan->cube_array_offset +
+            2 * plan->cube_row_stride +
+            plan->cube_column_stride, 2, 21);
+    mir_multidim_emit_word_store(
+        out, plan->cube, plan->cube_a_offset, 1);
+    mir_multidim_emit_word_store(
+        out, plan->cube, plan->cube_b_offset, 2);
+    mir_multidim_emit_word_store(
+        out, plan->cube, plan->cube_d_offset, 3);
+    mir_multidim_emit_dynamic_3d_address(out, plan);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n", out);
+    mir_aggregate_emit_word_check(
+        out, plan->check_function,
+        plan->check_strings[19], 123);
+
+    mir_multidim_emit_byte_store(
+        out, plan->grid,
+        plan->grid_cells_offset + plan->grid_array_offset, 10);
+    mir_multidim_emit_byte_store(
+        out, plan->grid,
+        plan->grid_cells_offset + plan->grid_cell_stride +
+            plan->grid_array_offset + plan->grid_row_stride, 21);
+    mir_multidim_emit_byte_store(
+        out, plan->grid,
+        plan->grid_cells_offset + 2 * plan->grid_cell_stride +
+            plan->grid_array_offset + plan->grid_column_stride, 32);
+    mir_multidim_emit_byte_store(
+        out, plan->grid,
+        plan->grid_cells_offset + plan->grid_cell_stride +
+            plan->grid_array_offset + plan->grid_row_stride +
+            plan->grid_column_stride, 23);
+    mir_multidim_emit_check_at(
+        out, plan, 20, plan->grid,
+        plan->grid_cells_offset + plan->grid_array_offset, 1, 10);
+    mir_multidim_emit_check_at(
+        out, plan, 21, plan->grid,
+        plan->grid_cells_offset + plan->grid_cell_stride +
+            plan->grid_array_offset + plan->grid_row_stride, 1, 21);
+    mir_multidim_emit_check_at(
+        out, plan, 22, plan->grid,
+        plan->grid_cells_offset + 2 * plan->grid_cell_stride +
+            plan->grid_array_offset + plan->grid_column_stride, 1, 32);
+    mir_multidim_emit_check_at(
+        out, plan, 23, plan->grid,
+        plan->grid_cells_offset + plan->grid_cell_stride +
+            plan->grid_array_offset + plan->grid_row_stride +
+            plan->grid_column_stride, 1, 23);
+
+    mir_machine_emit_global_word(out, plan->failures, 0);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", success);
+    mir_machine_emit_global_word(out, plan->failures, 0);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->failure_string);
+    mir_aggregate_emit_format_call(
+        out, plan->print_function, plan->failure_call_name);
+    mir_aggregate_cleanup(out, 2);
+    fputs("\tld hl,1\n\tret\n", out);
+    fprintf(out, "L%d:\n\tld hl,S%d\n\tpush hl\n",
+            success, plan->success_string);
+    mir_aggregate_emit_format_call(
+        out, plan->print_function, plan->success_call_name);
+    fputs("\tpop bc\n\tld hl,0\n\tret\n", out);
+}
+
 static void mir_emit_multidim_aggregate_checks(
     FILE *out, const struct MirAggregateMultidimChecks *plan)
 {
@@ -3238,9 +4471,14 @@ static void mir_emit_aggregate_multidim_checks(
 int mir_try_emit_aggregate_checks(FILE *out)
 {
     struct MirAggregateMultidimChecks plan;
+    struct MirMultidimArrayRunner multidim_array;
     struct MirPackedRecordRunner packed_record;
     struct MirTouchLocalsPlan touch_locals;
 
+    if (mir_match_multidim_array_runner(&multidim_array)) {
+        mir_emit_multidim_array_runner(out, &multidim_array);
+        return 1;
+    }
     if (mir_match_packed_record_runner(&packed_record)) {
         mir_emit_packed_record_runner(out, &packed_record);
         return 1;

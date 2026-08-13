@@ -3,6 +3,53 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-13 multidimensional-array 17-block batch (working tree)
+
+- Branch/base: `pr/143` at `43b6e5d`. The aggregate-check module now admits
+  the 17-block `t2darr.main` `final-cost-policy` fallback through a strict
+  structural matcher over all **680 MIR instructions**. It validates the full
+  opcode stream, four distinct aggregate roots and their exact layouts, every
+  2D/3D row-major stride, the **3x4**, **3x4**, **2x3x4** and nested
+  **3x2x2** bounds, all initialization stores and loop formulas, every direct
+  and member-derived alias, 24 check calls and argument identities, both
+  index-helper calls, both final formatted-output calls, the shared failure
+  object and both returns. The matcher contains no function, helper, local,
+  global, field, format or output name and no output hash.
+- The generic final candidate remains excluded: its measured
+  **+28.46% peep / +31.34% nopeep** regression is not admitted. The dedicated
+  schedule preserves helper/check/printf calls and row-major initialization,
+  but specializes the proved fixed bounds into direct contiguous writes. It
+  is frameless and emits no IX or IY instruction.
+- Normal selected/captured metrics are **7,063/8,392 bytes** and
+  **677/773 instructions**. Stack-check metrics are **7,092/8,421 bytes**
+  and **678/774 instructions**.
+- Stack-check full-mode selected/fallback totals are
+  **29,533/51,550 cycles and 6,784/6,912 bytes** peep plus
+  **30,319/54,237 cycles and 6,784/7,168 bytes** nopeep. Both selected and
+  forced-fallback runs pass the existing `t2darr` output, for
+  **-42.71%/-44.10%** cycle wins.
+- A function/helper/global/local/type-renamed success fixture selects the same
+  17-block family at **7,092/8,412 bytes** and **678/773 instructions**.
+  Selected/fallback output is identical in both modes. Peep totals are
+  **29,561/51,578 cycles and 3,456/3,712 bytes**; nopeep totals are
+  **30,347/54,265 cycles and 3,584/3,968 bytes**.
+- A byte-row-bound near miss is rejected at the loop contract and remains on
+  `final-cost-policy`; peep/nopeep output is identical and reports the one
+  expected failed check at **97,420/100,003 cycles**. A sibling-index alias
+  swap is also rejected and remains on `final-cost-policy`; both modes report
+  the same two expected failed checks at **141,864/144,554 cycles**. Their
+  respective peep/nopeep image sizes are **3,712/3,968 bytes**.
+- The regression-gated stack-check census advances
+  **2,161/2,185 (98.90%)** to **2,162/2,185 (98.95%)**, adds exactly
+  `t2darr.main`, removes no accepted function, moves selector counts from
+  **1,392 spilled / 386 scheduled** to **1,391 spilled / 387 scheduled**,
+  and reduces `final-cost-policy` fallbacks **24 -> 23**.
+- The aggregate-check module grows from **3,256 to 4,494 source lines**
+  (**+1,238**). Its standalone object defines only
+  `mir_try_emit_aggregate_checks [T]` globally and has zero global data
+  definitions. The canonical build and `git diff --check` pass. No
+  performance baseline was changed.
+
 ## 2026-08-13 buffered-console 16-block batch (working tree)
 
 - Branch/base: `pr/143` at `fdad5fc`. The call-runner module now admits the
