@@ -3,6 +3,54 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-13 pi-hex numeric 37-block batch (working tree)
+
+- Branch/base: `pr/143` at `dd03b04`. The endgame module now admits the
+  37-block `tpihexb.main` `final-cost-policy` fallback through a strict
+  structural matcher over all **256 MIR instructions**. It validates the
+  complete opcode stream and CFG, the unsigned-word local and its exact
+  loads/addresses, all nine parser calls and success/failure merges, all five
+  numeric-range calls and their **0/1/4/511** arguments, all 16 variadic
+  output calls and argument identities, 25 distinct strings, and the zero
+  return. The matcher contains no function, helper, local, format, output or
+  test name and no output hash.
+- The dedicated emitter preserves every parser/range/output call, argument
+  order, format string, result merge and return. The two helper functions,
+  including both nested boundary loops, remain unchanged. Numeric results stay
+  in HL through their output calls; the parser destination uses a compact
+  **2-byte IX frame** with a direct stable-SP address. It emits no IY
+  instruction. Normal selected/captured metrics are **2,838/2,990 bytes** and
+  **275/295 instructions**. Stack-check metrics are **2,867/3,019 bytes** and
+  **276/296 instructions**.
+- `tpihexb` passes full peep/nopeep validation with the override table honored
+  (there is no app-specific entry). Selected versus forced fallback is
+  **175,545/175,693 cycles and 6,400/6,400 bytes** peep plus
+  **179,640/179,800 cycles and 6,528/6,528 bytes** nopeep, exact cycle gains
+  of **148** and **160**.
+- Direct selected/fallback A/B runs with no arguments, `0 1`, and
+  `511 +42 extra` are output-identical in both modes. All three argument sets
+  measure **174,553/174,701 cycles** peep and
+  **178,648/178,808 cycles** nopeep, so command-tail variation does not alter
+  either the output or the exact **148/160-cycle** win.
+- A separately renamed function/helper/local/string fixture selects the same
+  family at **2,867/3,010 bytes** and **276/295 instructions**. Selected and
+  forced-fallback output is byte-identical in both modes. Peep totals are
+  **179,859/180,007 cycles**; nopeep totals are
+  **183,954/184,114 cycles**, retaining the same exact gains. Changing only
+  the second numeric-range count from **4 to 5** is rejected at the operations
+  contract.
+- The regression-gated stack-check census advances
+  **2,167/2,185 (99.18%)** to **2,168/2,185 (99.22%)**, adds exactly
+  `tpihexb.main`, removes no accepted function, moves selector counts from
+  **1,386 spilled / 392 scheduled** to
+  **1,385 spilled / 393 scheduled**, and reduces `final-cost-policy`
+  fallbacks **18 -> 17**.
+- The endgame module grows from **2,749 to 3,225 source lines** (**+476**).
+  Its standalone object defines only `mir_try_emit_endgame_runners [T]`
+  globally and has zero global data definitions. The canonical build,
+  regression-gated census, focused full run and `git diff --check` pass. No
+  performance baseline, production name or output hash was added or changed.
+
 ## 2026-08-13 binary-format 36-block batch (working tree)
 
 - Branch/base: `pr/143` at `de24045`. The endgame module now admits the

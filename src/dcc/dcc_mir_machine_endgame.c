@@ -6,6 +6,9 @@
 #define MIR_ENDGAME_FLOAT_CHECKS 61
 #define MIR_ENDGAME_WIDTH_CALLS 14
 #define MIR_ENDGAME_BINARY_FRAME_BYTES 8
+#define MIR_ENDGAME_NUMERIC_PARSE_CASES 9
+#define MIR_ENDGAME_NUMERIC_VISIT_CASES 5
+#define MIR_ENDGAME_NUMERIC_PRINT_CALLS 16
 
 enum MirEndgameFloatOperandKind {
     MIR_ENDGAME_FLOAT_BITS,
@@ -63,6 +66,14 @@ struct MirEndgameBinaryRunner {
     int format_string;
     char copy_name[64];
     char print_name[64];
+};
+
+struct MirEndgameNumericRunner {
+    struct Sym *parse_function;
+    struct Sym *visit_function;
+    struct Sym *print_function;
+    int strings[25];
+    char print_names[MIR_ENDGAME_NUMERIC_PRINT_CALLS][64];
 };
 
 struct MirEndgameOpcode {
@@ -234,6 +245,60 @@ static const struct MirEndgameWidthPhi mir_endgame_binary_phis[] = {
     {384, 92, 439, 366, 436},
     {419, 414, 417, 413, 416},
     {423, 406, 419, 405, 420}
+};
+
+static const unsigned char mir_endgame_numeric_opcodes[] = {
+    MIR_LABEL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_ARG, MIR_CALL, MIR_BRANCH_FALSE,
+    MIR_LOAD, MIR_NOP, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_LABEL,
+    MIR_LABEL, MIR_PHI, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG,
+    MIR_ADDRESS, MIR_NOP, MIR_ARG, MIR_CALL, MIR_BRANCH_FALSE, MIR_LOAD, MIR_NOP, MIR_LABEL,
+    MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_ARG,
+    MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_ARG,
+    MIR_CALL, MIR_BRANCH_FALSE, MIR_LOAD, MIR_NOP, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_NOP,
+    MIR_CONST, MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_ARG, MIR_CALL, MIR_BRANCH_FALSE, MIR_LOAD,
+    MIR_NOP, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_LABEL, MIR_LABEL,
+    MIR_PHI, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS,
+    MIR_NOP, MIR_ARG, MIR_CALL, MIR_BRANCH_FALSE, MIR_LOAD, MIR_NOP, MIR_LABEL, MIR_JUMP,
+    MIR_LABEL, MIR_NOP, MIR_CONST, MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_ARG, MIR_CALL,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_ARG, MIR_CALL,
+    MIR_BRANCH_FALSE, MIR_LOAD, MIR_NOP, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_CONST,
+    MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_ARG, MIR_CALL, MIR_BRANCH_FALSE, MIR_LOAD, MIR_NOP,
+    MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_LABEL, MIR_LABEL, MIR_PHI,
+    MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_NOP,
+    MIR_ARG, MIR_CALL, MIR_BRANCH_FALSE, MIR_LOAD, MIR_NOP, MIR_LABEL, MIR_JUMP, MIR_LABEL,
+    MIR_NOP, MIR_CONST, MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_ARG, MIR_CALL, MIR_BRANCH_FALSE,
+    MIR_LOAD, MIR_NOP, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_LABEL,
+    MIR_LABEL, MIR_PHI, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CONST, MIR_NOP,
+    MIR_ARG, MIR_CONST, MIR_NOP, MIR_ARG, MIR_CALL, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_CONST, MIR_NOP, MIR_ARG, MIR_CONST, MIR_NOP, MIR_ARG, MIR_CALL,
+    MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CONST, MIR_NOP, MIR_ARG, MIR_CONST,
+    MIR_NOP, MIR_ARG, MIR_CALL, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CONST,
+    MIR_NOP, MIR_ARG, MIR_CONST, MIR_NOP, MIR_ARG, MIR_CALL, MIR_ARG, MIR_CALL,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_CONST, MIR_NOP, MIR_ARG, MIR_CONST, MIR_NOP, MIR_ARG,
+    MIR_CALL, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN,
+};
+
+static const struct MirEndgameWidthEdge mir_endgame_numeric_edges[] = {
+    {15, 20}, {19, 24}, {36, 41}, {40, 45}, {57, 62},
+    {61, 66}, {78, 83}, {82, 87}, {99, 104}, {103, 108},
+    {120, 125}, {124, 129}, {141, 146}, {145, 150},
+    {162, 167}, {166, 171}, {183, 188}, {187, 192}
+};
+
+static const struct MirEndgameWidthPhi mir_endgame_numeric_phis[] = {
+    {25, 16, 22, 18, 23},
+    {46, 37, 43, 39, 44},
+    {67, 58, 64, 60, 65},
+    {88, 79, 85, 81, 86},
+    {109, 100, 106, 102, 107},
+    {130, 121, 127, 123, 128},
+    {151, 142, 148, 144, 149},
+    {172, 163, 169, 165, 170},
+    {193, 184, 190, 186, 191}
 };
 
 static const unsigned char mir_endgame_file_opcodes[] = {
@@ -1676,6 +1741,329 @@ static int mir_endgame_width_boolean(int instruction, int *result)
     return 1;
 }
 
+static int mir_endgame_numeric_graph(void)
+{
+    static const int branch_values[][2] = {
+        {15, 14}, {36, 35}, {57, 56}, {78, 77}, {99, 98},
+        {120, 119}, {141, 140}, {162, 161}, {183, 182}
+    };
+    size_t item;
+
+    for (item = 0;
+         item < sizeof(mir_endgame_numeric_edges) /
+                sizeof(mir_endgame_numeric_edges[0]);
+         ++item) {
+        const struct MirEndgameWidthEdge *edge =
+            &mir_endgame_numeric_edges[item];
+
+        if ((mir.insns[edge->instruction].opcode !=
+                 MIR_BRANCH_FALSE &&
+             mir.insns[edge->instruction].opcode != MIR_JUMP) ||
+            mir.insns[edge->instruction].label !=
+                mir.insns[edge->target].label)
+            return 0;
+    }
+    for (item = 0;
+         item < sizeof(mir_endgame_numeric_phis) /
+                sizeof(mir_endgame_numeric_phis[0]);
+         ++item) {
+        const struct MirEndgameWidthPhi *phi =
+            &mir_endgame_numeric_phis[item];
+        const struct MirInsn *instruction =
+            &mir.insns[phi->instruction];
+
+        if (instruction->opcode != MIR_PHI ||
+            instruction->src1 !=
+                mir.insns[phi->first_value].dst ||
+            instruction->src2 !=
+                mir.insns[phi->second_value].dst ||
+            instruction->phi_pred1 !=
+                mir.insns[phi->first_predecessor].label ||
+            instruction->phi_pred2 !=
+                mir.insns[phi->second_predecessor].label)
+            return 0;
+    }
+    for (item = 0;
+         item < sizeof(branch_values) / sizeof(branch_values[0]);
+         ++item)
+        if (mir.insns[branch_values[item][0]].src1 !=
+            mir.insns[branch_values[item][1]].dst)
+            return 0;
+    return 1;
+}
+
+static int mir_endgame_numeric_objects(void)
+{
+    static const int locations[] = {
+        3, 11, 16, 32, 37, 53, 58, 74, 79, 95,
+        100, 116, 121, 137, 142, 158, 163, 179, 184
+    };
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    size_t item;
+
+    if (mir.object_count != 0 ||
+        !mir_machine_named_nonvolatile(&mir.insns[locations[0]]) ||
+        !mir_scalar_memory_location(
+            &mir.insns[locations[0]], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_LOCAL || memory_offset != -2 ||
+        !mir_endgame_width_integer_type(
+            memory_type, TYPE_INT, 1, 2))
+        return 0;
+    for (item = 1;
+         item < sizeof(locations) / sizeof(locations[0]);
+         ++item) {
+        const struct MirInsn *location =
+            &mir.insns[locations[item]];
+
+        if (!mir_machine_named_nonvolatile(location) ||
+            !mir_machine_same_location(
+                &mir.insns[locations[0]],
+                location))
+            return 0;
+    }
+    for (item = 0;
+         item < sizeof(locations) / sizeof(locations[0]);
+         ++item) {
+        const struct MirInsn *location =
+            &mir.insns[locations[item]];
+
+        if (location->opcode == MIR_ADDRESS) {
+            if (type_ptr_depth(location->type) != 1 ||
+                (location->type & 15) != TYPE_INT ||
+                (location->type & TYPE_UNSIGNED) == 0 ||
+                type_size(location->type) != 2)
+                return 0;
+        } else if (location->opcode == MIR_LOAD) {
+            if (!mir_endgame_width_integer_type(
+                    location->type, TYPE_INT, 1, 2))
+                return 0;
+        } else if (location->opcode == MIR_STORE) {
+            if (location->memory_size != 2)
+                return 0;
+        } else {
+            return 0;
+        }
+    }
+    return mir.insns[3].src1 == mir.insns[1].dst;
+}
+
+static int mir_endgame_numeric_operations(
+    struct MirEndgameNumericRunner *plan)
+{
+    static const struct {
+        int instruction;
+        long value;
+    } constants[] = {
+        {1, 0},
+        {22, 65535}, {43, 65535}, {64, 65535},
+        {85, 65535}, {106, 65535}, {127, 65535},
+        {148, 65535}, {169, 65535}, {190, 65535},
+        {198, 0}, {201, 1}, {209, 0}, {212, 4},
+        {220, 511}, {223, 1}, {231, 1}, {234, 511},
+        {242, 0}, {245, 511}, {254, 0}
+    };
+    static const int string_instructions[] = {
+        4, 7, 9, 28, 30, 49, 51, 70, 72, 91,
+        93, 112, 114, 133, 135, 154, 156, 175, 177,
+        196, 207, 218, 229, 240, 251
+    };
+    size_t item;
+
+    for (item = 0;
+         item < sizeof(constants) / sizeof(constants[0]);
+         ++item)
+        if (!mir_machine_constant_equals(
+                mir.insns[constants[item].instruction].dst,
+                constants[item].value) ||
+            !mir_endgame_width_integer_type(
+                mir.insns[constants[item].instruction].type,
+                TYPE_INT, 0, 2))
+            return 0;
+    for (item = 0;
+         item < sizeof(string_instructions) /
+                sizeof(string_instructions[0]);
+         ++item) {
+        const struct MirInsn *string =
+            &mir.insns[string_instructions[item]];
+        size_t earlier;
+
+        if (string->immediate < 0 ||
+            !mir_endgame_char_pointer_type(string->type))
+            return 0;
+        plan->strings[item] = (int)string->immediate;
+        for (earlier = 0; earlier < item; ++earlier)
+            if (plan->strings[item] == plan->strings[earlier])
+                return 0;
+    }
+    for (item = 0;
+         item < sizeof(mir_endgame_numeric_phis) /
+                sizeof(mir_endgame_numeric_phis[0]);
+         ++item)
+        if (!mir_endgame_width_integer_type(
+                mir.insns[
+                    mir_endgame_numeric_phis[item].instruction].type,
+                TYPE_INT, 0, 2))
+            return 0;
+    return mir.insns[255].src1 == mir.insns[254].dst;
+}
+
+static int mir_endgame_numeric_calls(
+    struct MirEndgameNumericRunner *plan)
+{
+    static const int parse_steps[MIR_ENDGAME_NUMERIC_PARSE_CASES][7] = {
+        {14, 27, 7, 9, 11, 16, 25},
+        {35, 48, 28, 30, 32, 37, 46},
+        {56, 69, 49, 51, 53, 58, 67},
+        {77, 90, 70, 72, 74, 79, 88},
+        {98, 111, 91, 93, 95, 100, 109},
+        {119, 132, 112, 114, 116, 121, 130},
+        {140, 153, 133, 135, 137, 142, 151},
+        {161, 174, 154, 156, 158, 163, 172},
+        {182, 195, 175, 177, 179, 184, 193}
+    };
+    static const int visit_steps[MIR_ENDGAME_NUMERIC_VISIT_CASES][5] = {
+        {204, 206, 196, 198, 201},
+        {215, 217, 207, 209, 212},
+        {226, 228, 218, 220, 223},
+        {237, 239, 229, 231, 234},
+        {248, 250, 240, 242, 245}
+    };
+    int print_call = 0;
+    int call_count = 0;
+    int arguments[2];
+    int instruction;
+    int item;
+
+    arguments[0] = 4;
+    if (!mir_endgame_call_matches(
+            6, &plan->print_function, 1, 1, 1, arguments))
+        return 0;
+    snprintf(plan->print_names[print_call++],
+        sizeof(plan->print_names[0]), "%s",
+        mir_endgame_call_name(&mir.insns[6]));
+
+    for (item = 0; item < MIR_ENDGAME_NUMERIC_PARSE_CASES; ++item) {
+        const int *step = parse_steps[item];
+
+        arguments[0] = step[3];
+        arguments[1] = step[4];
+        if (!mir_endgame_call_matches(
+                step[0], &plan->parse_function,
+                0, 2, 2, arguments))
+            return 0;
+        arguments[0] = step[2];
+        arguments[1] = step[6];
+        if (!mir_endgame_call_matches(
+                step[1], &plan->print_function,
+                1, 1, 2, arguments))
+            return 0;
+        if (mir.insns[step[5]].opcode != MIR_LOAD ||
+            mir.insns[step[6]].src1 !=
+                mir.insns[step[5]].dst)
+            return 0;
+        snprintf(plan->print_names[print_call++],
+            sizeof(plan->print_names[0]), "%s",
+            mir_endgame_call_name(&mir.insns[step[1]]));
+    }
+
+    for (item = 0; item < MIR_ENDGAME_NUMERIC_VISIT_CASES; ++item) {
+        const int *step = visit_steps[item];
+
+        arguments[0] = step[3];
+        arguments[1] = step[4];
+        if (!mir_endgame_call_matches(
+                step[0], &plan->visit_function,
+                0, 2, 2, arguments))
+            return 0;
+        arguments[0] = step[2];
+        arguments[1] = step[0];
+        if (!mir_endgame_call_matches(
+                step[1], &plan->print_function,
+                1, 1, 2, arguments))
+            return 0;
+        snprintf(plan->print_names[print_call++],
+            sizeof(plan->print_names[0]), "%s",
+            mir_endgame_call_name(&mir.insns[step[1]]));
+    }
+
+    arguments[0] = 251;
+    if (!mir_endgame_call_matches(
+            253, &plan->print_function, 1, 1, 1, arguments))
+        return 0;
+    snprintf(plan->print_names[print_call++],
+        sizeof(plan->print_names[0]), "%s",
+        mir_endgame_call_name(&mir.insns[253]));
+
+    if (print_call != MIR_ENDGAME_NUMERIC_PRINT_CALLS ||
+        plan->parse_function == plan->visit_function ||
+        plan->parse_function == plan->print_function ||
+        plan->visit_function == plan->print_function ||
+        !mir_endgame_width_integer_type(
+            plan->parse_function->type, TYPE_INT, 0, 2) ||
+        !mir_endgame_char_pointer_type(
+            plan->parse_function->proto_types[0]) ||
+        type_ptr_depth(
+            plan->parse_function->proto_types[1]) != 1 ||
+        (plan->parse_function->proto_types[1] & 15) != TYPE_INT ||
+        (plan->parse_function->proto_types[1] & TYPE_UNSIGNED) == 0 ||
+        type_size(plan->parse_function->proto_types[1]) != 2 ||
+        !mir_endgame_width_integer_type(
+            plan->visit_function->type, TYPE_INT, 1, 2) ||
+        !mir_endgame_width_integer_type(
+            plan->visit_function->proto_types[0], TYPE_INT, 1, 2) ||
+        !mir_endgame_width_integer_type(
+            plan->visit_function->proto_types[1], TYPE_INT, 1, 2) ||
+        !mir_endgame_width_integer_type(
+            plan->print_function->type, TYPE_INT, 0, 2) ||
+        !mir_endgame_char_pointer_type(
+            plan->print_function->proto_types[0]))
+        return 0;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        if (mir.insns[instruction].opcode == MIR_CALL)
+            ++call_count;
+        if (mir.insns[instruction].opcode == MIR_CALL &&
+            (mir.insns[instruction].memory_flags &
+             (MIR_CALL_FLAG_FORMAT_HEX |
+              MIR_CALL_FLAG_FORMAT_OCTAL)) != 0)
+            return 0;
+    }
+    return call_count == 30;
+}
+
+static int mir_match_endgame_numeric_runner(
+    struct MirEndgameNumericRunner *plan)
+{
+    memset(plan, 0, sizeof(*plan));
+    if (!mir_endgame_opcode_sequence(
+            mir_endgame_numeric_opcodes,
+            sizeof(mir_endgame_numeric_opcodes)) ||
+        mir_cfg_block_count() != 37 ||
+        mir.local_bytes != 2 ||
+        mir.aggregate_temp_bytes != 0 ||
+        mir.has_vla || mir.is_variadic_function ||
+        !mir_endgame_width_integer_type(
+            mir.return_type, TYPE_INT, 0, 2))
+        return mir_machine_reject(
+            "endgame-numeric-runner", "shape");
+    if (!mir_endgame_numeric_graph())
+        return mir_machine_reject(
+            "endgame-numeric-runner", "graph");
+    if (!mir_endgame_numeric_objects())
+        return mir_machine_reject(
+            "endgame-numeric-runner", "objects");
+    if (!mir_endgame_numeric_operations(plan))
+        return mir_machine_reject(
+            "endgame-numeric-runner", "operations");
+    if (!mir_endgame_numeric_calls(plan))
+        return mir_machine_reject(
+            "endgame-numeric-runner", "calls");
+    return 1;
+}
+
 static int mir_endgame_binary_link(
     int instruction, int operation, int left, int right)
 {
@@ -2549,6 +2937,89 @@ static void mir_emit_endgame_width_runner(
             plan->passed == 3 ? 0 : 1);
 }
 
+static void mir_endgame_emit_numeric_text(
+    FILE *out, const struct MirEndgameNumericRunner *plan,
+    int print_call, int string)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[string]);
+    mir_emit_runtime_call(out, plan->print_names[print_call]);
+    fputs("\tpop bc\n", out);
+}
+
+static void mir_endgame_emit_numeric_value(
+    FILE *out, const struct MirEndgameNumericRunner *plan,
+    int print_call, int string)
+{
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[string]);
+    mir_emit_runtime_call(out, plan->print_names[print_call]);
+    fputs("\tpop bc\n\tpop bc\n", out);
+}
+
+static void mir_endgame_emit_numeric_parse(
+    FILE *out, const struct MirEndgameNumericRunner *plan,
+    int print_call, int format_string, int input_string)
+{
+    int failed = new_label();
+    int ready = new_label();
+
+    fputs("\tld hl,0\n\tadd hl,sp\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[input_string]);
+    mir_machine_emit_symbol_call(out, plan->parse_function);
+    fputs("\tpop bc\n\tpop bc\n"
+          "\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", failed);
+    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n\tld hl,65535\nL%d:\n",
+            ready, failed, ready);
+    mir_endgame_emit_numeric_value(
+        out, plan, print_call, format_string);
+}
+
+static void mir_endgame_emit_numeric_visit(
+    FILE *out, const struct MirEndgameNumericRunner *plan,
+    int print_call, int format_string, int first, int second)
+{
+    fprintf(out,
+            "\tld hl,%d\n\tpush hl\n"
+            "\tld hl,%d\n\tpush hl\n",
+            second, first);
+    mir_machine_emit_symbol_call(out, plan->visit_function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_endgame_emit_numeric_value(
+        out, plan, print_call, format_string);
+}
+
+static void mir_emit_endgame_numeric_runner(
+    FILE *out, const struct MirEndgameNumericRunner *plan)
+{
+    static const int visits[MIR_ENDGAME_NUMERIC_VISIT_CASES][2] = {
+        {0, 1}, {0, 4}, {511, 1}, {1, 511}, {0, 511}
+    };
+    int item;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-2\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\txor a\n\tld (ix-2),a\n\tld (ix-1),a\n", out);
+
+    mir_endgame_emit_numeric_text(out, plan, 0, 0);
+    for (item = 0; item < MIR_ENDGAME_NUMERIC_PARSE_CASES; ++item)
+        mir_endgame_emit_numeric_parse(
+            out, plan, item + 1, item * 2 + 1, item * 2 + 2);
+    for (item = 0; item < MIR_ENDGAME_NUMERIC_VISIT_CASES; ++item)
+        mir_endgame_emit_numeric_visit(
+            out, plan, item + 10, item + 19,
+            visits[item][0], visits[item][1]);
+    mir_endgame_emit_numeric_text(out, plan, 15, 24);
+
+    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_endgame_binary_runner(
     FILE *out, const struct MirEndgameBinaryRunner *plan)
 {
@@ -2723,8 +3194,13 @@ int mir_try_emit_endgame_runners(FILE *out)
 {
     struct MirEndgameBinaryRunner binary_plan;
     struct MirEndgameFloatRunner float_plan;
+    struct MirEndgameNumericRunner numeric_plan;
     struct MirEndgameWidthRunner width_plan;
 
+    if (mir_match_endgame_numeric_runner(&numeric_plan)) {
+        mir_emit_endgame_numeric_runner(out, &numeric_plan);
+        return 1;
+    }
     if (mir_match_endgame_binary_runner(&binary_plan)) {
         mir_emit_endgame_binary_runner(out, &binary_plan);
         return 1;
