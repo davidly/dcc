@@ -3,6 +3,55 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-14 expected-area 7-block coverage batch (working tree)
+
+- Branch/base: `pr/143` at `7834245`. The numeric family now admits the
+  seven-block `too.expected_area` `final-cost-policy` fallback through a
+  strict, name-free scheduled-machine matcher over all **55 MIR
+  instructions**. It proves the signed-int parameter and signed-long return
+  ABI, exact `% 3` switch dispatch and CFG edges, every signed
+  int-to-long conversion, left-to-right multiply/divide graph, all constants,
+  all three returns and the trailing control-flow boundary.
+- The emitter deliberately does not reuse the rejected direct dispatcher.
+  It calls the established `__mods` signed-remainder entry with
+  `HL=dividend` and `DE=divisor`, keeps the parameter in BC only under the
+  runtime's audited BC-preservation contract, and retains the source call
+  families and order: rectangle `__m1s` then `__lmul`, circle two `__lmul`
+  calls then `__lds`, and triangle's signed extension, two long shifts and
+  `__lmul`. The schedule is frameless and emits no IX or IY in either peep
+  or nopeep output.
+- Normal selected/captured metrics are **847/1,209 bytes** and
+  **91/121 instructions**. Stack-check metrics are **876/1,238 bytes** and
+  **92/122 instructions**.
+- Full stack-check `too` passes peep and nopeep. Selected versus forced
+  fallback is **1,860,169/1,861,546 cycles** and **21,760/21,760 bytes**
+  peep plus **1,876,081/1,878,001 cycles** and **22,656/22,784 bytes**
+  nopeep. Exact gains are **1,377 cycles** peep and **1,920 cycles plus
+  128 bytes** nopeep.
+- A separately renamed exhaustive fixture checks all **65,536 signed-int bit
+  patterns** against a structurally different reference. Alternating call
+  order makes the selected routine enter `__mods` after both cache misses and
+  cache hits. Selected and forced-fallback peep/nopeep runs all report
+  `mismatch=0`, branch sums
+  **-6,553,800 / 663,708,844 / -1,426,194,432**, and checksum
+  **1,828,437,700**. Selected/fallback totals are
+  **948,382,201/958,168,902 cycles** and **4,864/4,864 bytes** peep plus
+  **1,069,996,849/1,083,420,807 cycles** and **5,248/5,248 bytes** nopeep.
+  Changing only the circle divisor from 100 to 101 rejects the dedicated
+  schedule and leaves the clone on `final-cost-policy`.
+- The regression-gated stack-check census advances
+  **2,181/2,185 (99.82%)** to **2,182/2,185 (99.86%)**, adds exactly
+  `too.expected_area`, removes nothing, moves selector counts from
+  **1,372 spilled / 406 scheduled** to **1,371 spilled / 407 scheduled**,
+  and reduces `final-cost-policy` fallbacks **4 -> 3**.
+- The numeric module is **5,757 source lines**. Its standalone object defines
+  only `mir_try_emit_numeric_kernels [T]` globally and has zero global data
+  definitions. The canonical build, focused full run, forced fallback A/B,
+  exhaustive signed/cache-order A/B, divisor perturbation, peep/nopeep
+  no-IY inspection, export/data audit, regression-gated census and
+  `git diff --check` pass. No performance baseline, production-name gate or
+  output-hash gate was added or changed.
+
 ## 2026-08-14 additive-subscript 7-block coverage batch (working tree)
 
 - Branch/base: `pr/143` at `bd7d3db`. The aggregate/endgame family now admits

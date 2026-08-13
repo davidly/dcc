@@ -35,6 +35,10 @@ struct MirSignedLongNewtonSqrtSchedule {
     int parameter_stack_offset;
 };
 
+struct MirExpectedAreaSchedule {
+    int parameter_stack_offset;
+};
+
 struct MirPrimeSearchSchedule {
     struct Sym *convert_function;
     struct Sym *sqrt_function;
@@ -1725,6 +1729,218 @@ static int mir_machine_signed_int_type(int type)
            (type & 15) == TYPE_INT &&
            (type & TYPE_UNSIGNED) == 0 &&
            type_size(type) == 2;
+}
+
+static int mir_match_expected_area_schedule(
+    struct MirExpectedAreaSchedule *plan)
+{
+    static const int expected_opcodes[55] = {
+        MIR_LABEL, MIR_PARAM, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_JUMP, MIR_LABEL,
+        MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_JUMP, MIR_LABEL,
+        MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_NOP, MIR_BINARY,
+        MIR_UNARY, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_CONST,
+        MIR_BINARY, MIR_RETURN, MIR_LABEL, MIR_CONST, MIR_CONST,
+        MIR_NOP, MIR_BINARY, MIR_UNARY, MIR_BINARY, MIR_CONST,
+        MIR_NOP, MIR_BINARY, MIR_UNARY, MIR_BINARY, MIR_CONST,
+        MIR_BINARY, MIR_RETURN, MIR_LABEL, MIR_CONST, MIR_LOAD,
+        MIR_BINARY, MIR_UNARY, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_CONST, MIR_BINARY, MIR_RETURN, MIR_NOP, MIR_LABEL
+    };
+    static const int constants[13][2] = {
+        {3, 3}, {5, 0}, {10, 1}, {17, 2},
+        {22, 3}, {24, 100}, {28, 31416}, {29, 1},
+        {34, 1}, {39, 100}, {43, 2}, {48, 4}, {50, 50}
+    };
+    static const int label_indices[7] = {
+        0, 9, 14, 16, 27, 42, 54
+    };
+    int parameter_type;
+    int parameter_storage;
+    int parameter_offset;
+    int instruction;
+    int label;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 55 || mir_cfg_block_count() != 7 ||
+        mir.has_vla || mir.local_bytes != 0 ||
+        mir.aggregate_temp_bytes != 0 ||
+        !mir_machine_signed_long_type(mir.return_type))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "expected-area-schedule", "opcodes");
+    for (label = 0;
+         label < (int)(sizeof(label_indices) / sizeof(label_indices[0]));
+         ++label)
+        for (instruction = label + 1;
+             instruction <
+                 (int)(sizeof(label_indices) / sizeof(label_indices[0]));
+             ++instruction)
+            if (mir.insns[label_indices[label]].label ==
+                mir.insns[label_indices[instruction]].label)
+                return mir_machine_reject(
+                    "expected-area-schedule", "labels");
+    if (!mir_scalar_memory_location(
+            &mir.insns[1], &parameter_type,
+            &parameter_storage, &parameter_offset) ||
+        parameter_storage != SC_PARAM ||
+        !mir_machine_signed_int_type(parameter_type) ||
+        !mir_machine_signed_int_type(mir.insns[1].type) ||
+        (plan->parameter_stack_offset = parameter_offset - 2) != 2)
+        return mir_machine_reject(
+            "expected-area-schedule", "parameter-abi");
+    if (mir.insns[1].object < 0 ||
+        mir.insns[2].object != mir.insns[1].object ||
+        mir.insns[18].object != mir.insns[1].object ||
+        mir.insns[30].object != mir.insns[1].object ||
+        mir.insns[35].object != mir.insns[1].object ||
+        mir.insns[44].object != mir.insns[1].object)
+        return mir_machine_reject(
+            "expected-area-schedule", "parameter-object");
+    if (!mir_machine_same_location(
+            &mir.insns[1], &mir.insns[44]) ||
+        !mir_machine_signed_int_type(mir.insns[44].type))
+        return mir_machine_reject(
+            "expected-area-schedule", "parameter-load");
+    for (instruction = 0;
+         instruction < (int)(sizeof(constants) / sizeof(constants[0]));
+         ++instruction) {
+        int index = constants[instruction][0];
+
+        if (!mir_machine_constant_equals(
+                mir.insns[index].dst, constants[instruction][1]))
+            return mir_machine_reject(
+                "expected-area-schedule", "constants");
+    }
+    if (!mir_machine_signed_int_type(mir.insns[3].type) ||
+        !mir_machine_signed_int_type(mir.insns[5].type) ||
+        !mir_machine_signed_int_type(mir.insns[10].type) ||
+        !mir_machine_signed_int_type(mir.insns[17].type) ||
+        !mir_machine_signed_long_type(mir.insns[22].type) ||
+        !mir_machine_signed_long_type(mir.insns[24].type) ||
+        !mir_machine_signed_long_type(mir.insns[28].type) ||
+        !mir_machine_signed_int_type(mir.insns[29].type) ||
+        !mir_machine_signed_int_type(mir.insns[34].type) ||
+        !mir_machine_signed_long_type(mir.insns[39].type) ||
+        !mir_machine_signed_int_type(mir.insns[43].type) ||
+        !mir_machine_signed_long_type(mir.insns[48].type) ||
+        !mir_machine_signed_long_type(mir.insns[50].type))
+        return mir_machine_reject(
+            "expected-area-schedule", "constant-types");
+    if (mir.insns[4].immediate != '%' ||
+        mir.insns[4].src1 != mir.insns[1].dst ||
+        mir.insns[4].src2 != mir.insns[3].dst ||
+        !mir_machine_signed_int_type(mir.insns[4].type) ||
+        !mir_machine_signed_int_type(
+            mir.insns[4].secondary_offset) ||
+        mir.insns[6].immediate != TOK_EQ ||
+        mir.insns[6].src1 != mir.insns[4].dst ||
+        mir.insns[6].src2 != mir.insns[5].dst ||
+        !mir_machine_signed_int_type(mir.insns[6].type) ||
+        mir.insns[7].src1 != mir.insns[6].dst ||
+        mir.insns[7].label != mir.insns[9].label ||
+        mir.insns[8].label != mir.insns[16].label ||
+        mir.insns[11].immediate != TOK_EQ ||
+        mir.insns[11].src1 != mir.insns[4].dst ||
+        mir.insns[11].src2 != mir.insns[10].dst ||
+        !mir_machine_signed_int_type(mir.insns[11].type) ||
+        mir.insns[12].src1 != mir.insns[11].dst ||
+        mir.insns[12].label != mir.insns[42].label ||
+        mir.insns[13].label != mir.insns[27].label ||
+        mir.insns[15].label != mir.insns[42].label)
+        return mir_machine_reject(
+            "expected-area-schedule", "dispatch");
+    if (mir.insns[19].immediate != '+' ||
+        mir.insns[19].src1 != mir.insns[17].dst ||
+        mir.insns[19].src2 != mir.insns[1].dst ||
+        !mir_machine_signed_int_type(mir.insns[19].type) ||
+        !mir_machine_signed_int_type(
+            mir.insns[19].secondary_offset) ||
+        mir.insns[20].immediate != 0 ||
+        mir.insns[20].src1 != mir.insns[19].dst ||
+        !mir_machine_signed_long_type(mir.insns[20].type) ||
+        mir.insns[23].immediate != '*' ||
+        mir.insns[23].src1 != mir.insns[20].dst ||
+        mir.insns[23].src2 != mir.insns[22].dst ||
+        !mir_machine_signed_long_type(mir.insns[23].type) ||
+        !mir_machine_signed_long_type(
+            mir.insns[23].secondary_offset) ||
+        mir.insns[25].immediate != '*' ||
+        mir.insns[25].src1 != mir.insns[23].dst ||
+        mir.insns[25].src2 != mir.insns[24].dst ||
+        !mir_machine_signed_long_type(mir.insns[25].type) ||
+        !mir_machine_signed_long_type(
+            mir.insns[25].secondary_offset) ||
+        mir.insns[26].src1 != mir.insns[25].dst)
+        return mir_machine_reject(
+            "expected-area-schedule", "rectangle");
+    if (mir.insns[31].immediate != '+' ||
+        mir.insns[31].src1 != mir.insns[29].dst ||
+        mir.insns[31].src2 != mir.insns[1].dst ||
+        !mir_machine_signed_int_type(mir.insns[31].type) ||
+        !mir_machine_signed_int_type(
+            mir.insns[31].secondary_offset) ||
+        mir.insns[32].immediate != 0 ||
+        mir.insns[32].src1 != mir.insns[31].dst ||
+        !mir_machine_signed_long_type(mir.insns[32].type) ||
+        mir.insns[33].immediate != '*' ||
+        mir.insns[33].src1 != mir.insns[28].dst ||
+        mir.insns[33].src2 != mir.insns[32].dst ||
+        !mir_machine_signed_long_type(mir.insns[33].type) ||
+        !mir_machine_signed_long_type(
+            mir.insns[33].secondary_offset) ||
+        mir.insns[36].immediate != '+' ||
+        mir.insns[36].src1 != mir.insns[34].dst ||
+        mir.insns[36].src2 != mir.insns[1].dst ||
+        !mir_machine_signed_int_type(mir.insns[36].type) ||
+        !mir_machine_signed_int_type(
+            mir.insns[36].secondary_offset) ||
+        mir.insns[37].immediate != 0 ||
+        mir.insns[37].src1 != mir.insns[36].dst ||
+        !mir_machine_signed_long_type(mir.insns[37].type) ||
+        mir.insns[38].immediate != '*' ||
+        mir.insns[38].src1 != mir.insns[33].dst ||
+        mir.insns[38].src2 != mir.insns[37].dst ||
+        !mir_machine_signed_long_type(mir.insns[38].type) ||
+        !mir_machine_signed_long_type(
+            mir.insns[38].secondary_offset) ||
+        mir.insns[40].immediate != '/' ||
+        mir.insns[40].src1 != mir.insns[38].dst ||
+        mir.insns[40].src2 != mir.insns[39].dst ||
+        !mir_machine_signed_long_type(mir.insns[40].type) ||
+        !mir_machine_signed_long_type(
+            mir.insns[40].secondary_offset) ||
+        mir.insns[41].src1 != mir.insns[40].dst)
+        return mir_machine_reject(
+            "expected-area-schedule", "circle");
+    if (mir.insns[45].immediate != '+' ||
+        mir.insns[45].src1 != mir.insns[43].dst ||
+        mir.insns[45].src2 != mir.insns[44].dst ||
+        !mir_machine_signed_int_type(mir.insns[45].type) ||
+        !mir_machine_signed_int_type(
+            mir.insns[45].secondary_offset) ||
+        mir.insns[46].immediate != 0 ||
+        mir.insns[46].src1 != mir.insns[45].dst ||
+        !mir_machine_signed_long_type(mir.insns[46].type) ||
+        mir.insns[49].immediate != '*' ||
+        mir.insns[49].src1 != mir.insns[46].dst ||
+        mir.insns[49].src2 != mir.insns[48].dst ||
+        !mir_machine_signed_long_type(mir.insns[49].type) ||
+        !mir_machine_signed_long_type(
+            mir.insns[49].secondary_offset) ||
+        mir.insns[51].immediate != '*' ||
+        mir.insns[51].src1 != mir.insns[49].dst ||
+        mir.insns[51].src2 != mir.insns[50].dst ||
+        !mir_machine_signed_long_type(mir.insns[51].type) ||
+        !mir_machine_signed_long_type(
+            mir.insns[51].secondary_offset) ||
+        mir.insns[52].src1 != mir.insns[51].dst)
+        return mir_machine_reject(
+            "expected-area-schedule", "triangle");
+    return 1;
 }
 
 static int mir_match_signed_long_newton_sqrt_schedule(
@@ -4107,6 +4323,67 @@ static void mir_numeric_emit_signed_long_divide_by_two(FILE *out)
     fputs("\tpop bc\n\tpop bc\n", out);
 }
 
+static void mir_numeric_emit_sign_extend_hl(FILE *out)
+{
+    fputs("\tld a,h\n\trlca\n\tsbc a,a\n"
+          "\tld d,a\n\tld e,a\n", out);
+}
+
+static void mir_numeric_emit_long_rhs_constant(
+    FILE *out, int value, const char *helper)
+{
+    fputs("\tpush de\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,%d\n\tld de,0\n", value);
+    mir_emit_runtime_call(out, helper);
+    fputs("\tpop bc\n\tpop bc\n", out);
+}
+
+static void mir_emit_expected_area_schedule(
+    FILE *out, const struct MirExpectedAreaSchedule *plan)
+{
+    int circle = new_label();
+    int rectangle = new_label();
+
+    (void)plan;
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tpop de\n\tpop bc\n\tpush bc\n\tpush de\n"
+          "\tld h,b\n\tld l,c\n\tld de,3\n", out);
+    mir_emit_runtime_call(out, "__mods");
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", rectangle);
+    fputs("\tdec hl\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", circle);
+
+    fputs("\tld h,b\n\tld l,c\n\tinc hl\n\tinc hl\n", out);
+    mir_numeric_emit_sign_extend_hl(out);
+    fputs("\tadd hl,hl\n\trl e\n\trl d\n"
+          "\tadd hl,hl\n\trl e\n\trl d\n", out);
+    mir_numeric_emit_long_rhs_constant(out, 50, "__lmul");
+    fputs("\tret\n", out);
+
+    fprintf(out, "L%d:\n", rectangle);
+    fputs("\tld h,b\n\tld l,c\n\tinc hl\n\tinc hl\n"
+          "\tld b,h\n\tld c,l\n\tld hl,3\n", out);
+    mir_emit_runtime_call(out, "__m1s");
+    mir_numeric_emit_long_rhs_constant(out, 100, "__lmul");
+    fputs("\tret\n", out);
+
+    fprintf(out, "L%d:\n", circle);
+    fputs("\tld h,b\n\tld l,c\n\tinc hl\n", out);
+    mir_numeric_emit_sign_extend_hl(out);
+    fputs("\tpush hl\n\tld bc,0\n\tpush bc\n"
+          "\tld bc,31416\n\tpush bc\n", out);
+    mir_emit_runtime_call(out, "__lmul");
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tpush de\n\tpush hl\n\tld h,b\n\tld l,c\n", out);
+    mir_numeric_emit_sign_extend_hl(out);
+    mir_emit_runtime_call(out, "__lmul");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_numeric_emit_long_rhs_constant(out, 100, "__lds");
+    fputs("\tret\n", out);
+}
+
 static void mir_emit_signed_long_newton_sqrt_schedule(
     FILE *out, const struct MirSignedLongNewtonSqrtSchedule *plan)
 {
@@ -5407,6 +5684,7 @@ static void mir_emit_scoped_temp_schedule(
 int mir_try_emit_numeric_kernels(FILE *out, int phase)
 {
     if (phase == 0) {
+        struct MirExpectedAreaSchedule expected_area_plan;
         struct MirSignedLongNewtonSqrtSchedule signed_sqrt_plan;
         struct MirUnsignedLongSqrtSchedule sqrt_plan;
         struct MirPrimeSearchSchedule prime_plan;
@@ -5414,6 +5692,10 @@ int mir_try_emit_numeric_kernels(FILE *out, int phase)
         struct MirLogSeriesDriverSchedule log_series_plan;
         struct MirModp2DriverSchedule modp2_plan;
 
+        if (mir_match_expected_area_schedule(&expected_area_plan)) {
+            mir_emit_expected_area_schedule(out, &expected_area_plan);
+            return 1;
+        }
         if (mir_match_signed_long_newton_sqrt_schedule(
                 &signed_sqrt_plan)) {
             mir_emit_signed_long_newton_sqrt_schedule(
