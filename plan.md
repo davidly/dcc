@@ -3,6 +3,57 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-14 VLA smoothing 12-block coverage batch (working tree)
+
+- Branch/base: `pr/143` at `f8efb72`. The aggregate family now admits the
+  12-block `tvlaparm.smooth` `final-cost-policy` fallback through a strict,
+  name-free scheduled-machine matcher over all **141 MIR instructions**. It
+  proves the four-parameter signed-int/pointer ABI, the run-time `n` and `w`
+  dataflow, all six private scalar locals, both loop PHIs and every CFG edge,
+  the four signed-short index operations with exact two-byte element strides,
+  the long accumulation/division/cast graph, the destination store followed
+  by destination/source reload comparison, the long changed-count update and
+  the signed-long return.
+- The emitter uses a compact **14-byte IX frame** and keeps the complete inner
+  `j` induction live in BC. It uses no IY. Signed `w / 2` is emitted inline
+  with truncation toward zero; source elements are accumulated in original
+  iteration order; the long average uses the established `__lds` ABI; and the
+  post-store destination/source reload order is retained so exact, forward
+  overlap, backward overlap and in-place aliases observe the source program's
+  writes.
+- Normal selected/captured metrics are **2,176/2,873 bytes** and
+  **197/264 instructions**. Stack-check metrics are **2,205/2,902 bytes** and
+  **198/265 instructions**.
+- Full stack-check `tvlaparm` passes peep and nopeep. Selected versus forced
+  fallback is **197,397/204,936 cycles** and **7,424/7,424 bytes** peep plus
+  **201,250/219,033 cycles** and **7,424/7,808 bytes** nopeep. Exact gains are
+  **7,539 cycles** peep and **17,783 cycles plus 384 bytes** nopeep.
+- The rejected generic forced-final candidate remains excluded. Before the
+  dedicated schedule it produced **220,826 cycles** peep and **233,383
+  cycles** nopeep, regressions of **15,890 (7.75%)** and **14,350 (6.55%)**
+  against the corresponding forced fallback; nopeep also grew by 128 bytes.
+- A separately renamed fixture covers run-time dimensions
+  **0/1/2/5/9/12**, windows **-1/1/2/3/4/5**, distinct buffers, exact
+  in-place aliasing and forward/backward overlaps. Selected and forced
+  fallback peep/nopeep runs all report
+  `smooth cases=39 total=-306295371`. Selected/fallback totals are
+  **3,830,258/3,976,007 cycles** and **5,632/5,632 bytes** peep plus
+  **3,674,424/4,016,560 cycles** and **5,888/6,144 bytes** nopeep. Changing
+  only the inner bound from `<=` to `<` rejects the schedule and leaves the
+  renamed function on `final-cost-policy`.
+- The regression-gated stack-check census advances
+  **2,182/2,185 (99.86%)** to **2,183/2,185 (99.91%)**, adds exactly
+  `tvlaparm.smooth`, removes nothing, moves selector counts from
+  **1,371 spilled / 407 scheduled** to **1,370 spilled / 408 scheduled**,
+  and reduces `final-cost-policy` fallbacks **3 -> 2**.
+- The aggregate module is **8,423 source lines**. Its standalone object
+  defines only `mir_try_emit_aggregate_checks [T]` globally and has zero
+  global data definitions. The canonical build, focused full run, forced
+  fallback A/B, renamed dimension/alias A/B, bound perturbation, peep/nopeep
+  no-IY inspection, export/data audit, regression-gated census and
+  `git diff --check` pass. No performance baseline, production-name gate or
+  output-hash gate was added or changed.
+
 ## 2026-08-14 expected-area 7-block coverage batch (working tree)
 
 - Branch/base: `pr/143` at `7834245`. The numeric family now admits the

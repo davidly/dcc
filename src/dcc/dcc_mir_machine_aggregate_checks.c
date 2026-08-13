@@ -2,6 +2,13 @@
 
 #include "dcc_mir_machine_internal.h"
 
+struct MirVlaSmoothPlan {
+    int n_stack_offset;
+    int w_stack_offset;
+    int src_stack_offset;
+    int dst_stack_offset;
+};
+
 static int mir_machine_fold_integer_binary(
     int operation, long left, long right, int type, long *result)
 {
@@ -7824,6 +7831,552 @@ static void mir_emit_additive_subscript_runner(
     fputs("\tret\n", out);
 }
 
+static int mir_vla_smooth_signed_type(int type, int width)
+{
+    return type_ptr_depth(type) == 0 &&
+           !type_is_float(type) &&
+           (type & 15) == (width == 4 ? TYPE_LONG : TYPE_INT) &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == width;
+}
+
+static int mir_vla_smooth_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           !type_is_float(type) &&
+           (type & 15) == TYPE_INT &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 2;
+}
+
+static int mir_vla_smooth_parameter(
+    int instruction, int expected_offset, int pointer,
+    int *stack_offset)
+{
+    const struct MirInsn *parameter = &mir.insns[instruction];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (parameter->opcode != MIR_PARAM ||
+        parameter->object < 0 ||
+        !mir_scalar_memory_location(
+            parameter, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        (pointer
+             ? (!mir_vla_smooth_pointer_type(parameter->type) ||
+                !mir_vla_smooth_pointer_type(memory_type) ||
+                mir_machine_pointee_is_volatile(parameter))
+             : (!mir_vla_smooth_signed_type(parameter->type, 2) ||
+                !mir_vla_smooth_signed_type(memory_type, 2))) ||
+        !mir_machine_parameter_value_offset(parameter->dst, stack_offset) ||
+        *stack_offset != expected_offset)
+        return 0;
+    return 1;
+}
+
+static int mir_vla_smooth_local(
+    int instruction, int width, int object, int *offset_out)
+{
+    const struct MirInsn *insn = &mir.insns[instruction];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if ((insn->opcode != MIR_LOAD && insn->opcode != MIR_STORE) ||
+        insn->object != object ||
+        !mir_scalar_memory_location(
+            insn, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_LOCAL ||
+        !mir_vla_smooth_signed_type(memory_type, width) ||
+        !mir_vla_smooth_signed_type(insn->type, width) ||
+        !mir_machine_named_nonvolatile(insn))
+        return 0;
+    if (offset_out != NULL)
+        *offset_out = memory_offset;
+    return 1;
+}
+
+static int mir_vla_smooth_same_local(
+    int instruction, int anchor, int width)
+{
+    return mir_vla_smooth_local(
+               instruction, width, mir.insns[anchor].object, NULL) &&
+           mir_machine_same_location(
+               &mir.insns[instruction], &mir.insns[anchor]);
+}
+
+static int mir_vla_smooth_distinct_objects(const int *objects, int count)
+{
+    int left;
+    int right;
+
+    for (left = 0; left < count; ++left) {
+        if (objects[left] < 0)
+            return 0;
+        for (right = left + 1; right < count; ++right)
+            if (objects[left] == objects[right])
+                return 0;
+    }
+    return 1;
+}
+
+static int mir_vla_smooth_index(
+    int instruction, int base, int subscript)
+{
+    const struct MirInsn *index = &mir.insns[instruction];
+
+    return index->opcode == MIR_INDEX_ADDRESS &&
+           index->src1 == mir.insns[base].dst &&
+           index->src2 == mir.insns[subscript].dst &&
+           index->immediate == 2 &&
+           index->memory_size == 2 &&
+           index->memory_flags == 0 &&
+           mir_vla_smooth_pointer_type(index->type);
+}
+
+static int mir_match_vla_smooth(
+    struct MirVlaSmoothPlan *plan)
+{
+    static const int expected_opcodes[141] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_NOP,
+        MIR_CONST, MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE,
+        MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_PHI, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP,
+        MIR_CONST, MIR_STORE, MIR_NOP, MIR_NOP, MIR_NOP, MIR_BINARY,
+        MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_LOAD, MIR_NOP,
+        MIR_NOP, MIR_BINARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD, MIR_NOP,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+        MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE,
+        MIR_LOAD, MIR_NOP, MIR_LOAD, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD, MIR_LOAD, MIR_BINARY,
+        MIR_UNARY, MIR_STORE_INDIRECT, MIR_NOP, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_NOP, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_LABEL,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL,
+        MIR_LOAD, MIR_RETURN
+    };
+    static const int label_indices[12] = {
+        0, 26, 53, 78, 81, 83, 99, 101, 107, 130, 132, 138
+    };
+    static const int constant_values[][2] = {
+        {6, 0}, {9, 2}, {24, 0}, {43, 0}, {46, 0}, {71, 0},
+        {79, 1}, {82, 0}, {95, 1}, {103, 1}, {127, 1}, {134, 1}
+    };
+    static const int parameter_object_uses[][2] = {
+        {27, 1}, {38, 1}, {54, 1}, {75, 1},
+        {28, 2}, {55, 2},
+        {29, 3}, {56, 3}, {87, 3}, {120, 3},
+        {30, 4}, {57, 4}, {108, 4}, {116, 4}
+    };
+    static const int local_object_uses[][2] = {
+        {31, 7}, {58, 7},
+        {20, 11}, {32, 11}, {50, 11}, {59, 11}, {66, 11},
+        {13, 25}, {19, 25}, {33, 25}, {37, 25}, {49, 25}, {60, 25},
+        {65, 25}, {109, 25}, {117, 25}, {121, 25}, {133, 25}, {136, 25},
+        {16, 44}, {34, 44}, {61, 44},
+        {18, 47}, {35, 47}, {62, 47},
+        {22, 52}, {36, 52}, {63, 52}
+    };
+    static const int local_widths[6] = {4, 2, 2, 4, 2, 2};
+    int objects[10];
+    int offsets[6];
+    int instruction;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 141 || mir_cfg_block_count() != 12 ||
+        mir.has_vla || mir.local_bytes != 16 ||
+        mir.aggregate_temp_bytes != 0 ||
+        !mir_vla_smooth_signed_type(mir.return_type, 4))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject("vla-smooth", "opcodes");
+    for (item = 0; item < 12; ++item) {
+        int other;
+
+        for (other = item + 1; other < 12; ++other)
+            if (mir.insns[label_indices[item]].label ==
+                mir.insns[label_indices[other]].label)
+                return mir_machine_reject("vla-smooth", "labels");
+    }
+    if (!mir_vla_smooth_parameter(
+            1, 2, 0, &plan->n_stack_offset) ||
+        !mir_vla_smooth_parameter(
+            2, 4, 0, &plan->w_stack_offset) ||
+        !mir_vla_smooth_parameter(
+            3, 6, 1, &plan->src_stack_offset) ||
+        !mir_vla_smooth_parameter(
+            4, 8, 1, &plan->dst_stack_offset))
+        return mir_machine_reject("vla-smooth", "parameter-abi");
+    objects[0] = mir.insns[1].object;
+    objects[1] = mir.insns[2].object;
+    objects[2] = mir.insns[3].object;
+    objects[3] = mir.insns[4].object;
+    objects[4] = mir.insns[7].object;
+    objects[5] = mir.insns[11].object;
+    objects[6] = mir.insns[25].object;
+    objects[7] = mir.insns[44].object;
+    objects[8] = mir.insns[47].object;
+    objects[9] = mir.insns[52].object;
+    if (!mir_vla_smooth_distinct_objects(objects, 10))
+        return mir_machine_reject("vla-smooth", "objects");
+    for (item = 0;
+         item < (int)(sizeof(parameter_object_uses) /
+                      sizeof(parameter_object_uses[0]));
+         ++item)
+        if (mir.insns[parameter_object_uses[item][0]].object !=
+            mir.insns[parameter_object_uses[item][1]].object)
+            return mir_machine_reject(
+                "vla-smooth", "parameter-objects");
+    if (!mir_vla_smooth_local(7, 4, objects[4], &offsets[0]) ||
+        !mir_vla_smooth_local(11, 2, objects[5], &offsets[1]) ||
+        !mir_vla_smooth_local(25, 2, objects[6], &offsets[2]) ||
+        !mir_vla_smooth_local(44, 4, objects[7], &offsets[3]) ||
+        !mir_vla_smooth_local(47, 2, objects[8], &offsets[4]) ||
+        !mir_vla_smooth_local(52, 2, objects[9], &offsets[5]))
+        return mir_machine_reject("vla-smooth", "local-types");
+    for (item = 0; item < 6; ++item) {
+        int other;
+
+        for (other = item + 1; other < 6; ++other)
+            if (offsets[item] <
+                    offsets[other] + local_widths[other] &&
+                offsets[other] <
+                    offsets[item] + local_widths[item])
+                return mir_machine_reject(
+                    "vla-smooth", "local-layout");
+    }
+    for (item = 0;
+         item < (int)(sizeof(local_object_uses) /
+                      sizeof(local_object_uses[0]));
+         ++item)
+        if (mir.insns[local_object_uses[item][0]].object !=
+            mir.insns[local_object_uses[item][1]].object)
+            return mir_machine_reject("vla-smooth", "local-objects");
+    if (!mir_vla_smooth_same_local(126, 7, 4) ||
+        !mir_vla_smooth_same_local(129, 7, 4) ||
+        !mir_vla_smooth_same_local(139, 7, 4) ||
+        !mir_vla_smooth_same_local(86, 44, 4) ||
+        !mir_vla_smooth_same_local(93, 44, 4) ||
+        !mir_vla_smooth_same_local(111, 44, 4) ||
+        !mir_vla_smooth_same_local(94, 47, 2) ||
+        !mir_vla_smooth_same_local(97, 47, 2) ||
+        !mir_vla_smooth_same_local(112, 47, 2) ||
+        !mir_vla_smooth_same_local(64, 52, 2) ||
+        !mir_vla_smooth_same_local(70, 52, 2) ||
+        !mir_vla_smooth_same_local(74, 52, 2) ||
+        !mir_vla_smooth_same_local(88, 52, 2) ||
+        !mir_vla_smooth_same_local(102, 52, 2) ||
+        !mir_vla_smooth_same_local(105, 52, 2))
+        return mir_machine_reject("vla-smooth", "local-aliases");
+    if (!mir_machine_unobservable_local_store(&mir.insns[7]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[11]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[25]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[44]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[47]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[52]))
+        return mir_machine_reject("vla-smooth", "local-address");
+    for (item = 0;
+         item < (int)(sizeof(constant_values) /
+                      sizeof(constant_values[0]));
+         ++item)
+        if (!mir_machine_constant_equals(
+                mir.insns[constant_values[item][0]].dst,
+                constant_values[item][1]))
+            return mir_machine_reject("vla-smooth", "constants");
+    if (!mir_vla_smooth_signed_type(mir.insns[6].type, 4) ||
+        !mir_vla_smooth_signed_type(mir.insns[9].type, 2) ||
+        !mir_vla_smooth_signed_type(mir.insns[43].type, 4) ||
+        !mir_vla_smooth_signed_type(mir.insns[46].type, 2) ||
+        !mir_vla_smooth_signed_type(mir.insns[71].type, 2) ||
+        !mir_vla_smooth_signed_type(mir.insns[127].type, 4))
+        return mir_machine_reject("vla-smooth", "constant-types");
+    if (mir.insns[7].src1 != mir.insns[6].dst ||
+        mir.insns[10].immediate != '/' ||
+        mir.insns[10].src1 != mir.insns[2].dst ||
+        mir.insns[10].src2 != mir.insns[9].dst ||
+        !mir_vla_smooth_signed_type(mir.insns[10].type, 2) ||
+        !mir_vla_smooth_signed_type(
+            mir.insns[10].secondary_offset, 2) ||
+        mir.insns[11].src1 != mir.insns[10].dst ||
+        mir.insns[25].src1 != mir.insns[24].dst)
+        return mir_machine_reject("vla-smooth", "initialization");
+    if (mir.insns[33].src1 != mir.insns[24].dst ||
+        mir.insns[33].src2 != mir.insns[135].dst ||
+        mir.insns[33].phi_pred1 != mir.insns[0].label ||
+        mir.insns[33].phi_pred2 != mir.insns[132].label ||
+        mir.insns[33].object != objects[6] ||
+        !mir_vla_smooth_signed_type(mir.insns[33].type, 2) ||
+        mir.insns[39].immediate != '<' ||
+        mir.insns[39].src1 != mir.insns[33].dst ||
+        mir.insns[39].src2 != mir.insns[1].dst ||
+        !mir_vla_smooth_signed_type(mir.insns[39].type, 2) ||
+        mir.insns[40].src1 != mir.insns[39].dst ||
+        mir.insns[40].label != mir.insns[138].label)
+        return mir_machine_reject("vla-smooth", "outer-loop");
+    if (mir.insns[44].src1 != mir.insns[43].dst ||
+        mir.insns[47].src1 != mir.insns[46].dst ||
+        mir.insns[51].immediate != '-' ||
+        mir.insns[51].src1 != mir.insns[33].dst ||
+        mir.insns[51].src2 != mir.insns[10].dst ||
+        !mir_vla_smooth_signed_type(mir.insns[51].type, 2) ||
+        mir.insns[52].src1 != mir.insns[51].dst ||
+        mir.insns[67].immediate != '+' ||
+        mir.insns[67].src1 != mir.insns[33].dst ||
+        mir.insns[67].src2 != mir.insns[10].dst ||
+        !mir_vla_smooth_signed_type(mir.insns[67].type, 2) ||
+        mir.insns[68].immediate != TOK_LE ||
+        mir.insns[68].src1 != mir.insns[64].dst ||
+        mir.insns[68].src2 != mir.insns[67].dst ||
+        !mir_vla_smooth_signed_type(mir.insns[68].type, 2) ||
+        mir.insns[69].src1 != mir.insns[68].dst ||
+        mir.insns[69].label != mir.insns[107].label)
+        return mir_machine_reject("vla-smooth", "inner-bounds");
+    if (mir.insns[72].immediate != TOK_GE ||
+        mir.insns[72].src1 != mir.insns[70].dst ||
+        mir.insns[72].src2 != mir.insns[71].dst ||
+        !mir_vla_smooth_signed_type(mir.insns[72].type, 2) ||
+        mir.insns[73].src1 != mir.insns[72].dst ||
+        mir.insns[73].label != mir.insns[81].label ||
+        mir.insns[76].immediate != '<' ||
+        mir.insns[76].src1 != mir.insns[74].dst ||
+        mir.insns[76].src2 != mir.insns[1].dst ||
+        !mir_vla_smooth_signed_type(mir.insns[76].type, 2) ||
+        mir.insns[77].src1 != mir.insns[76].dst ||
+        mir.insns[77].label != mir.insns[81].label ||
+        mir.insns[80].label != mir.insns[83].label ||
+        mir.insns[84].src1 != mir.insns[79].dst ||
+        mir.insns[84].src2 != mir.insns[82].dst ||
+        mir.insns[84].phi_pred1 != mir.insns[78].label ||
+        mir.insns[84].phi_pred2 != mir.insns[81].label ||
+        mir.insns[85].src1 != mir.insns[84].dst ||
+        mir.insns[85].label != mir.insns[99].label)
+        return mir_machine_reject("vla-smooth", "valid-index");
+    if (!mir_vla_smooth_index(89, 3, 88) ||
+        mir.insns[90].src1 != mir.insns[89].dst ||
+        mir.insns[90].memory_size != 2 ||
+        mir.insns[90].memory_flags != 0 ||
+        mir.insns[90].bit_width != 0 ||
+        !mir_vla_smooth_signed_type(mir.insns[90].type, 2) ||
+        mir.insns[91].immediate != '+' ||
+        mir.insns[91].src1 != mir.insns[86].dst ||
+        mir.insns[91].src2 != mir.insns[90].dst ||
+        !mir_vla_smooth_signed_type(mir.insns[91].type, 4) ||
+        !mir_vla_smooth_signed_type(
+            mir.insns[91].secondary_offset, 4) ||
+        mir.insns[93].src1 != mir.insns[91].dst ||
+        mir.insns[96].immediate != '+' ||
+        mir.insns[96].src1 != mir.insns[94].dst ||
+        mir.insns[96].src2 != mir.insns[95].dst ||
+        mir.insns[97].src1 != mir.insns[96].dst)
+        return mir_machine_reject("vla-smooth", "accumulation");
+    if (mir.insns[104].immediate != '+' ||
+        mir.insns[104].src1 != mir.insns[102].dst ||
+        mir.insns[104].src2 != mir.insns[103].dst ||
+        mir.insns[105].src1 != mir.insns[104].dst ||
+        mir.insns[106].label != mir.insns[53].label)
+        return mir_machine_reject("vla-smooth", "inner-increment");
+    if (!mir_vla_smooth_index(110, 4, 33) ||
+        mir.insns[113].immediate != '/' ||
+        mir.insns[113].src1 != mir.insns[111].dst ||
+        mir.insns[113].src2 != mir.insns[112].dst ||
+        !mir_vla_smooth_signed_type(mir.insns[113].type, 4) ||
+        !mir_vla_smooth_signed_type(
+            mir.insns[113].secondary_offset, 4) ||
+        mir.insns[114].immediate != 0 ||
+        mir.insns[114].src1 != mir.insns[113].dst ||
+        !mir_vla_smooth_signed_type(mir.insns[114].type, 2) ||
+        mir.insns[115].src1 != mir.insns[110].dst ||
+        mir.insns[115].src2 != mir.insns[114].dst ||
+        mir.insns[115].memory_size != 2 ||
+        mir.insns[115].memory_flags != 0 ||
+        mir.insns[115].bit_width != 0)
+        return mir_machine_reject("vla-smooth", "average-store");
+    if (!mir_vla_smooth_index(118, 4, 33) ||
+        mir.insns[119].src1 != mir.insns[118].dst ||
+        mir.insns[119].memory_size != 2 ||
+        mir.insns[119].memory_flags != 0 ||
+        mir.insns[119].bit_width != 0 ||
+        !mir_vla_smooth_signed_type(mir.insns[119].type, 2) ||
+        !mir_vla_smooth_index(122, 3, 33) ||
+        mir.insns[123].src1 != mir.insns[122].dst ||
+        mir.insns[123].memory_size != 2 ||
+        mir.insns[123].memory_flags != 0 ||
+        mir.insns[123].bit_width != 0 ||
+        !mir_vla_smooth_signed_type(mir.insns[123].type, 2) ||
+        mir.insns[124].immediate != TOK_NE ||
+        mir.insns[124].src1 != mir.insns[119].dst ||
+        mir.insns[124].src2 != mir.insns[123].dst ||
+        !mir_vla_smooth_signed_type(mir.insns[124].type, 2) ||
+        mir.insns[125].src1 != mir.insns[124].dst ||
+        mir.insns[125].label != mir.insns[130].label ||
+        mir.insns[128].immediate != '+' ||
+        mir.insns[128].src1 != mir.insns[126].dst ||
+        mir.insns[128].src2 != mir.insns[127].dst ||
+        !mir_vla_smooth_signed_type(mir.insns[128].type, 4) ||
+        mir.insns[129].src1 != mir.insns[128].dst)
+        return mir_machine_reject("vla-smooth", "alias-compare");
+    if (mir.insns[135].immediate != '+' ||
+        mir.insns[135].src1 != mir.insns[33].dst ||
+        mir.insns[135].src2 != mir.insns[134].dst ||
+        mir.insns[136].src1 != mir.insns[135].dst ||
+        mir.insns[137].label != mir.insns[26].label ||
+        mir.insns[140].src1 != mir.insns[139].dst)
+        return mir_machine_reject("vla-smooth", "return-graph");
+    return 1;
+}
+
+static void mir_vla_smooth_emit_index_address(
+    FILE *out, int pointer_offset, int index_offset)
+{
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tadd hl,hl\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "\tadd hl,de\n",
+            index_offset, index_offset + 1,
+            pointer_offset + 2, pointer_offset + 3);
+}
+
+static void mir_vla_smooth_emit_bc_index_address(
+    FILE *out, int pointer_offset)
+{
+    fprintf(out,
+            "\tld h,b\n\tld l,c\n\tadd hl,hl\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "\tadd hl,de\n",
+            pointer_offset + 2, pointer_offset + 3);
+}
+
+static void mir_emit_vla_smooth(
+    FILE *out, const struct MirVlaSmoothPlan *plan)
+{
+    int changed_ready = new_label();
+    int changed_done = new_label();
+    int half_ready = new_label();
+    int inner = new_label();
+    int inner_done = new_label();
+    int inner_increment = new_label();
+    int outer = new_label();
+    int outer_done = new_label();
+    int valid_index = new_label();
+
+    fprintf(out, "%s\n", MIR_EXACT_KERNEL_MARKER);
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-14\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tld hl,0\n"
+          "\tld (ix-14),l\n\tld (ix-13),h\n"
+          "\tld (ix-12),l\n\tld (ix-11),h\n", out);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tbit 7,h\n\tjp z,L%d\n\tinc hl\n"
+            "L%d:\n\tsra h\n\trr l\n"
+            "\tld (ix-2),l\n\tld (ix-1),h\n"
+            "\tld hl,0\n\tld (ix-4),l\n\tld (ix-3),h\n"
+            "L%d:\n",
+            plan->w_stack_offset + 2, plan->w_stack_offset + 3,
+            half_ready, half_ready, outer);
+    fprintf(out,
+            "\tld l,(ix-4)\n\tld h,(ix-3)\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "\tld a,h\n\txor 80h\n\tld h,a\n"
+            "\tld a,d\n\txor 80h\n\tld d,a\n"
+            "\tor a\n\tsbc hl,de\n\tjp nc,L%d\n",
+            plan->n_stack_offset + 2, plan->n_stack_offset + 3,
+            outer_done);
+    fputs("\tld hl,0\n"
+          "\tld (ix-8),l\n\tld (ix-7),h\n"
+          "\tld (ix-6),l\n\tld (ix-5),h\n"
+          "\tld (ix-10),l\n\tld (ix-9),h\n"
+          "\tld l,(ix-4)\n\tld h,(ix-3)\n"
+          "\tld e,(ix-2)\n\tld d,(ix-1)\n"
+          "\tor a\n\tsbc hl,de\n"
+          "\tld b,h\n\tld c,l\n", out);
+    fprintf(out, "L%d:\n", inner);
+    fputs("\tld l,(ix-4)\n\tld h,(ix-3)\n"
+          "\tld e,(ix-2)\n\tld d,(ix-1)\n"
+          "\tadd hl,de\n\tex de,hl\n"
+          "\tld h,b\n\tld l,c\n"
+          "\tld a,h\n\txor 80h\n\tld h,a\n"
+          "\tld a,d\n\txor 80h\n\tld d,a\n"
+          "\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp c,L%d\n\tjp z,L%d\n\tjp L%d\n",
+            valid_index, valid_index, inner_done);
+    fprintf(out, "L%d:\n", valid_index);
+    fputs("\tbit 7,b\n", out);
+    fprintf(out, "\tjp nz,L%d\n", inner_increment);
+    fprintf(out,
+            "\tld h,b\n\tld l,c\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "\tld a,h\n\txor 80h\n\tld h,a\n"
+            "\tld a,d\n\txor 80h\n\tld d,a\n"
+            "\tor a\n\tsbc hl,de\n\tjp nc,L%d\n",
+            plan->n_stack_offset + 2, plan->n_stack_offset + 3,
+            inner_increment);
+    mir_vla_smooth_emit_bc_index_address(
+        out, plan->src_stack_offset);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tpush bc\n\tld c,e\n\tld b,d\n"
+          "\tld a,b\n\trlca\n\tsbc a,a\n\tld e,a\n\tld d,a\n"
+          "\tld l,(ix-8)\n\tld h,(ix-7)\n\tadd hl,bc\n"
+          "\tld (ix-8),l\n\tld (ix-7),h\n"
+          "\tld l,(ix-6)\n\tld h,(ix-5)\n\tadc hl,de\n"
+          "\tld (ix-6),l\n\tld (ix-5),h\n"
+          "\tld l,(ix-10)\n\tld h,(ix-9)\n\tinc hl\n"
+          "\tld (ix-10),l\n\tld (ix-9),h\n\tpop bc\n", out);
+    fprintf(out, "L%d:\n", inner_increment);
+    fputs("\tinc bc\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", inner, inner_done);
+    fputs("\tld l,(ix-6)\n\tld h,(ix-5)\n\tpush hl\n"
+          "\tld l,(ix-8)\n\tld h,(ix-7)\n\tpush hl\n"
+          "\tld l,(ix-10)\n\tld h,(ix-9)\n"
+          "\tld a,h\n\trlca\n\tsbc a,a\n\tld e,a\n\tld d,a\n",
+          out);
+    mir_emit_runtime_call(out, "__lds");
+    fputs("\tpop bc\n\tpop bc\n\tld b,h\n\tld c,l\n", out);
+    mir_vla_smooth_emit_index_address(
+        out, plan->dst_stack_offset, -4);
+    fputs("\tld (hl),c\n\tinc hl\n\tld (hl),b\n", out);
+    mir_vla_smooth_emit_index_address(
+        out, plan->dst_stack_offset, -4);
+    fputs("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n", out);
+    mir_vla_smooth_emit_index_address(
+        out, plan->src_stack_offset, -4);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tld a,c\n\tcp e\n", out);
+    fprintf(out, "\tjp nz,L%d\n", changed_ready);
+    fputs("\tld a,b\n\tcp d\n", out);
+    fprintf(out, "\tjp z,L%d\n", changed_done);
+    fprintf(out, "L%d:\n", changed_ready);
+    fputs("\tld l,(ix-14)\n\tld h,(ix-13)\n\tinc hl\n"
+          "\tld (ix-14),l\n\tld (ix-13),h\n"
+          "\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n", changed_done);
+    fputs("\tld l,(ix-12)\n\tld h,(ix-11)\n\tinc hl\n"
+          "\tld (ix-12),l\n\tld (ix-11),h\n", out);
+    fprintf(out, "L%d:\n", changed_done);
+    fputs("\tld l,(ix-4)\n\tld h,(ix-3)\n\tinc hl\n"
+          "\tld (ix-4),l\n\tld (ix-3),h\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", outer, outer_done);
+    fputs("\tld l,(ix-14)\n\tld h,(ix-13)\n"
+          "\tld e,(ix-12)\n\tld d,(ix-11)\n"
+          "\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 int mir_try_emit_aggregate_checks(FILE *out)
 {
     struct MirAdditiveSubscriptPlan additive_subscript;
@@ -7833,7 +8386,12 @@ int mir_try_emit_aggregate_checks(FILE *out)
     struct MirPackedRecordRunner packed_record;
     struct MirPtrConditionPlan ptr_condition;
     struct MirTouchLocalsPlan touch_locals;
+    struct MirVlaSmoothPlan vla_smooth;
 
+    if (mir_match_vla_smooth(&vla_smooth)) {
+        mir_emit_vla_smooth(out, &vla_smooth);
+        return 1;
+    }
     if (mir_match_additive_subscript_runner(&additive_subscript)) {
         mir_emit_additive_subscript_runner(out, &additive_subscript);
         return 1;
