@@ -3,6 +3,51 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-13 binary-format 36-block batch (working tree)
+
+- Branch/base: `pr/143` at `de24045`. The endgame module now admits the
+  36-block `tarray.ShowBinaryData` `final-cost-policy` fallback through a
+  strict structural matcher over all **461 MIR instructions**. It validates
+  the complete opcode stream and CFG, the unsigned-byte pointer and two word
+  parameters, the 32-byte copy buffer and 200-byte line buffer, all local
+  object identities, both byte-format loops, the offset/cap/length arithmetic,
+  printable-byte boundary conditions, all four calls and their argument
+  identities, the reused format string and void fallthrough. The matcher
+  contains no function, helper, parameter, local, global, format, output or
+  test name and no output hash.
+- The dedicated emitter retains the original 32-byte rows, high-byte-first
+  offset and byte formatting calls, the midpoint colon and spacing, printable
+  conversion, terminating zero, final formatted-output call, zero-length null
+  behavior and void return. It uses a compact **8-byte IX frame** and emits no
+  IY instruction. Normal selected/captured metrics are
+  **2,752/6,657 bytes** and **243/611 instructions**. Stack-check metrics are
+  **2,781/6,686 bytes** and **244/612 instructions**.
+- `tarray` passes full peep/nopeep validation. Selected versus forced fallback
+  is **3,178,608/3,595,265 cycles and 8,832/9,728 bytes** peep plus
+  **3,228,298/3,735,411 cycles and 9,344/10,368 bytes** nopeep, exact cycle
+  gains of **416,657** and **507,113**.
+- A separately renamed function/helper/global/local fixture selects the same
+  family at **2,781/6,686 bytes** and **244/612 instructions**. It exercises
+  a null pointer with length zero, lengths **1/15/16/17/31/32/33**, both sides
+  of the midpoint separator, signed-character boundaries **31/32/126/127/128**
+  and byte values **0/15/16/255**. Selected and forced-fallback output is
+  byte-identical in both modes, including its surrounding character-output
+  calls. Peep totals are **1,171,055/1,696,203 cycles and
+  3,072/3,968 bytes**; nopeep totals are **1,192,594/1,782,332 cycles and
+  3,456/4,480 bytes**.
+- The regression-gated ordinary census advances **2,077/2,105 (98.67%)** to
+  **2,078/2,105 (98.72%)**. The requested stack-check census advances
+  **2,166/2,185 (99.13%)** to **2,167/2,185 (99.18%)**, adds exactly
+  `tarray.ShowBinaryData`, removes no accepted function, moves selector counts
+  from **1,387 spilled / 391 scheduled** to
+  **1,386 spilled / 392 scheduled**, and reduces `final-cost-policy`
+  fallbacks **19 -> 18**.
+- The endgame module grows from **1,948 to 2,749 source lines** (**+801**).
+  Its standalone object defines only `mir_try_emit_endgame_runners [T]`
+  globally and has zero global data definitions. The canonical build,
+  regression-gated censuses and `git diff --check` pass. No performance
+  baseline, production name or output hash was added or changed.
+
 ## 2026-08-13 integer-width 35-block batch (working tree)
 
 - Branch/base: `pr/143` at `fcbe54b`. The endgame module now admits the
