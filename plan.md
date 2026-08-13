@@ -5,10 +5,45 @@ current execution plan and handoff.
 
 ## 2026-08-13 current checkpoint (read this first)
 
-- Branch: `pr/143`; clean base HEAD for this batch: `f5acbbe`.
-- Current working-tree candidate coverage: **2148/2185 (98.31%)**.
-- Remaining fallback population: **37 `final-cost-policy`**, all selected by
+- Branch: `pr/143`; clean base HEAD for this batch: `b5e4b11`.
+- Current working-tree candidate coverage: **2149/2185 (98.35%)**.
+- Remaining fallback population: **36 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The call-runner module now admits the 26-block `tforcomm.main`
+  `final-cost-policy` fallback through a strict name-free matcher over all
+  **345 MIR instructions**. It proves the four-word local array, all 15 PHIs,
+  ten conditional branches, five backedges, every scalar/pointer load and
+  store, both indexed loads, the pointer differences and all seven ordered
+  variadic reports. The matcher also proves the three distinct `for`
+  init/condition/increment placements, both side-effecting comma conditions,
+  the value and statement comma expressions, and the complete short-circuit
+  return graph.
+- The emitter preserves initialization, condition, body and increment order
+  separately for each loop, including `ticks++` before `ptr++` before the
+  comparison and `i++` before the final `ptr++`. It retains every report call
+  and observable local update in a compact **13-byte IX frame**, with no IY.
+  Normal selected/captured metrics are **3,625/6,845 bytes** and
+  **384/594 instructions**; stack-check metrics are **3,654/6,874 bytes**
+  and **385/595 instructions**.
+- Checked `tforcomm` full-mode totals improve from **137,456 to 132,751
+  cycles** and **6,272 to 5,888 bytes** peep, plus **139,196 to 132,721
+  cycles** and **6,528 to 5,888 bytes** nopeep. Forced fallback also passes
+  full-mode validation.
+- A renamed-function, renamed-local and renamed-report side-effect A/B calls
+  a helper, checker and `printf` once per report. Selected and fallback output
+  are identical in both modes and end with `sidefx: 7 247 0 1`. Selected/
+  fallback measurements are **102,086/106,791 cycles** and
+  **2,816/3,072 bytes** peep, plus **103,103/109,578 cycles** and
+  **2,944/3,456 bytes** nopeep.
+- The call-runner module grows from **7,271 to 7,952 source lines**. Its
+  object audit still reports only `mir_try_emit_call_runners [T]` as defined
+  global code, with zero global read-only or writable data. The canonical
+  build passes. The regression-gated stack-check census advances
+  **2,148/2,185 (98.31%)** to **2,149/2,185 (98.35%)**, adds exactly
+  `tforcomm.main`, removes no accepted function, moves selector counts from
+  **1,405 spilled / 373 scheduled** to **1,404 spilled / 374 scheduled**,
+  and leaves **36 `final-cost-policy`** fallbacks. No performance baseline,
+  production symbol-name, or output-hash gate was added.
 - The numeric module now admits the 27-block `tautolcs.lcs`
   `final-cost-policy` fallback through a strict name-free matcher over all
   **225 MIR instructions**. It proves both nonvolatile character-pointer

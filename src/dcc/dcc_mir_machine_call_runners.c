@@ -96,6 +96,12 @@ struct MirForIncrementRunner {
     int expected[7];
 };
 
+struct MirCommaLoopRunner {
+    struct Sym *print_function;
+    int strings[7];
+    int values[4];
+};
+
 struct MirMemoryExerciseRunner {
     struct Sym *print_function;
     struct Sym *calloc_function;
@@ -7196,6 +7202,676 @@ static void mir_emit_for_increment_runner(
             done, failure, done);
 }
 
+static int mir_comma_word_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & 15) == TYPE_INT &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 2;
+}
+
+static int mir_comma_local_word(
+    const struct MirInsn *insn, int pointer, int *offset_out)
+{
+    int type;
+    int storage;
+    int offset;
+
+    if (!mir_machine_named_nonvolatile(insn) ||
+        !mir_scalar_memory_location(
+            insn, &type, &storage, &offset) ||
+        storage != SC_LOCAL ||
+        (pointer ? !mir_comma_word_pointer_type(type)
+                 : !mir_gnarly_word_type(type, 0)) ||
+        insn->memory_size != 2 ||
+        insn->bit_width != 0)
+        return 0;
+    if (offset_out != NULL)
+        *offset_out = offset;
+    return 1;
+}
+
+static int mir_comma_report_call(
+    struct MirCommaLoopRunner *plan, int slot,
+    int call_instruction, int string_instruction,
+    int argument_count, const int *definitions)
+{
+    const struct MirInsn *call = &mir.insns[call_instruction];
+    const struct MirInsn *string = &mir.insns[string_instruction];
+    struct Sym *function;
+    const char *assembly_name;
+    int arguments[4];
+    int argument;
+
+    if (slot < 0 || slot >= 7 ||
+        call->opcode != MIR_CALL || call->src1 >= 0 ||
+        call->secondary_offset != slot ||
+        call->memory_flags != MIR_CALL_FLAG_VARIADIC ||
+        !mir_gnarly_word_type(call->type, 0) ||
+        string->opcode != MIR_STRING_ADDRESS ||
+        !mir_gnarly_string_type(string->type) ||
+        string->immediate < 0 ||
+        !mir_machine_call_arguments(
+            call, argument_count, arguments) ||
+        (function = find_global(call->name)) == NULL ||
+        function->storage != SC_FUNC ||
+        function->is_funcptr || function->is_noreturn ||
+        !function->has_proto || function->proto_nargs != 1 ||
+        !function->proto_variadic ||
+        !mir_gnarly_string_type(function->proto_types[0]) ||
+        !mir_gnarly_word_type(function->type, 0) ||
+        (plan->print_function != NULL &&
+         plan->print_function != function))
+        return 0;
+    assembly_name = asm_name_for(sym_asm_name(function));
+    if (call->base_name[0] != 0 &&
+        strcmp(call->base_name, assembly_name))
+        return 0;
+    for (argument = 0; argument < argument_count; ++argument)
+        if (!mir_gnarly_value_from(
+                arguments[argument], definitions[argument]))
+            return 0;
+    plan->print_function = function;
+    plan->strings[slot] = (int)string->immediate;
+    return 1;
+}
+
+static int mir_match_comma_loop_runner(
+    struct MirCommaLoopRunner *plan)
+{
+    static const char expected_opcodes[] =
+        "LCSCSCSCSCNSCNSANSLPPNCBFNDRBNSLNCBSDCBSJLTGNGNGDABCBNGKANSCNSCNSLPPNCBFNDRBNSLNCBNSDCBSJLTGNGNGDABC"
+        "BNGKCNSCNSANSLPPNCBFNDRBNSDCBSNLNCBSJLTGNGNGDABCBNGKCNSCNSANSCNSLPPPNCBSDCBSNCBFNDNCIRBNSLNCBSJLTGNG"
+        "NGDABCBNGKCNSCNSCNSLPPPNCBSNCBFNANIRBNSNCBSNLJLTGNGNGKANSDCBSDRNSTGNGDABCBNGKCNSANSNCBSDCBSUTGNGDABC"
+        "BNGKNCBFNCBFLCJLCLPFDACCBBBFLCJLCLPFCLJLCLLPE";
+    static const int constants[] = {
+        1, 3, 5, 7, 9, 12, 22, 33, 37, 51, 59, 62, 69, 80,
+        85, 99, 104, 107, 117, 127, 133, 147, 152, 155, 161,
+        169, 173, 177, 183, 191, 205, 210, 213, 216, 224, 228,
+        240, 258, 272, 277, 284, 288, 299, 305, 309, 313, 316,
+        322, 323, 329, 332, 336, 340
+    };
+    static const long constant_values[] = {
+        10, 20, 30, 0, 0, 0, 3, 1, 2, 2, 0, 0, 3, 1, 2, 2,
+        0, 0, 3, 2, 1, 2, 0, 0, 0, 1, 2, 3, 65535, 1, 2, 0,
+        0, 0, 1, 3, 1, 2, 2, 0, 1, 2, 2, 60, 1, 1, 0, 1, 2,
+        1, 0, 0, 1
+    };
+    static const int pointer_constants[] = {
+        37, 85, 127, 173, 258, 288
+    };
+    static const int untyped_constants[] = {
+        313, 316, 329, 332
+    };
+    static const int binaries[][4] = {
+        {23, 20, 22, '<'}, {28, 19, 27, '+'},
+        {34, 20, 33, '+'}, {38, 36, 37, '+'},
+        {50, 48, 49, '-'}, {52, 50, 51, '/'},
+        {70, 67, 69, '<'}, {75, 66, 74, '+'},
+        {81, 67, 80, '+'}, {86, 84, 85, '+'},
+        {98, 96, 97, '-'}, {100, 98, 99, '/'},
+        {118, 115, 117, '<'}, {123, 114, 122, '+'},
+        {128, 126, 127, '+'}, {134, 115, 133, '+'},
+        {146, 144, 145, '-'}, {148, 146, 147, '/'},
+        {170, 167, 169, '+'}, {174, 172, 173, '+'},
+        {178, 166, 177, '<'}, {186, 165, 185, '+'},
+        {192, 166, 191, '+'}, {204, 202, 203, '-'},
+        {206, 204, 205, '/'}, {225, 222, 224, '+'},
+        {229, 221, 228, '<'}, {236, 220, 235, '+'},
+        {241, 221, 240, '+'}, {259, 257, 258, '+'},
+        {271, 269, 270, '-'}, {273, 271, 272, '/'},
+        {285, 277, 284, '+'}, {289, 287, 288, '+'},
+        {298, 296, 297, '-'}, {300, 298, 299, '/'},
+        {306, 262, 305, TOK_EQ}, {310, 285, 309, TOK_EQ},
+        {324, 322, 323, '*'}, {325, 321, 324, '+'},
+        {326, 320, 325, TOK_EQ}
+    };
+    static const int pointer_binaries[] = {
+        38, 86, 128, 174, 259, 289, 325
+    };
+    static const int stores[][2] = {
+        {2, 1}, {4, 3}, {6, 5}, {8, 7},
+        {11, 9}, {14, 12}, {17, 15}, {30, 28},
+        {35, 34}, {39, 38}, {58, 56}, {61, 59},
+        {64, 62}, {77, 75}, {83, 81}, {87, 86},
+        {106, 104}, {109, 107}, {112, 110}, {125, 123},
+        {129, 128}, {135, 134}, {154, 152}, {157, 155},
+        {160, 158}, {163, 161}, {171, 170}, {175, 174},
+        {188, 186}, {193, 192}, {212, 210}, {215, 213},
+        {218, 216}, {226, 225}, {238, 236}, {242, 241},
+        {256, 254}, {260, 259}, {264, 262}, {279, 277},
+        {282, 280}, {286, 285}, {290, 289}
+    };
+    static const int sum_locations[] = {
+        11, 19, 30, 61, 66, 77, 106, 114, 125, 154, 165, 188,
+        212, 220, 238, 264, 10, 25, 29, 44, 60, 72, 76, 92,
+        105, 120, 124, 140, 153, 180, 187, 198, 211, 231, 237,
+        249, 263, 267, 304
+    };
+    static const int index_locations[] = {
+        14, 20, 35, 64, 67, 83, 109, 115, 135, 163, 166, 193,
+        218, 221, 242, 279, 286, 13, 21, 32, 46, 63, 68, 79,
+        82, 94, 108, 116, 132, 142, 162, 176, 190, 217, 227,
+        233, 239, 278, 283, 294, 308
+    };
+    static const int tick_locations[] = {
+        157, 167, 171, 215, 222, 226,
+        156, 168, 200, 214, 223, 251
+    };
+    static const int pointer_locations[] = {
+        17, 26, 36, 39, 48, 58, 73, 84, 87, 96, 112, 121,
+        126, 129, 144, 160, 172, 175, 181, 202, 256, 257, 260,
+        261, 269, 282, 287, 290, 296, 320, 16, 57, 111, 159,
+        255, 281
+    };
+    static const int array_addresses[] = {
+        15, 49, 56, 97, 110, 145, 158, 203, 232, 254,
+        270, 280, 297, 321
+    };
+    static const int phis[][5] = {
+        {19, 9, 28, 0, 31}, {20, 12, 34, 0, 31},
+        {66, 59, 75, 41, 78}, {67, 62, 81, 41, 78},
+        {114, 104, 123, 89, 131}, {115, 107, 134, 89, 131},
+        {165, 152, 186, 137, 189}, {166, 161, 192, 137, 189},
+        {167, 155, 170, 137, 189},
+        {220, 210, 236, 195, 244}, {221, 216, 241, 195, 244},
+        {222, 213, 225, 195, 244},
+        {318, 313, 316, 312, 315},
+        {334, 329, 332, 328, 331},
+        {343, 336, 340, 337, 341}
+    };
+    static const int branches[][3] = {
+        {24, 23, 41}, {71, 70, 89}, {119, 118, 137},
+        {179, 178, 195}, {230, 229, 246},
+        {307, 306, 315}, {311, 310, 315},
+        {319, 318, 331}, {327, 326, 331}, {335, 334, 339}
+    };
+    static const int jumps[][2] = {
+        {40, 18}, {88, 65}, {136, 113}, {194, 164},
+        {245, 219}, {314, 317}, {330, 333}, {338, 342}
+    };
+    static const int indirect_loads[][2] = {
+        {27, 26}, {74, 73}, {122, 121},
+        {185, 184}, {235, 234}, {262, 261}
+    };
+    static const int first_report[] = {42, 19, 20, 52};
+    static const int second_report[] = {90, 66, 67, 100};
+    static const int third_report[] = {138, 114, 115, 148};
+    static const int condition_report[] = {196, 165, 170, 206};
+    static const int while_report[] = {247, 220, 225};
+    static const int value_report[] = {265, 262, 273};
+    static const int statement_report[] = {292, 285, 300};
+    int scalar_offsets[4];
+    int array_storage;
+    int array_offset;
+    int array_type;
+    int instruction;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 345 || mir_cfg_block_count() != 26 ||
+        mir.has_vla || mir.local_bytes != 20 ||
+        mir.aggregate_temp_bytes != 0 ||
+        mir.object_count != 3 ||
+        !mir_gnarly_word_type(mir.return_type, 0))
+        return mir_machine_reject(
+            "comma-loop-runner", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir_gnarly_opcode_code(
+                mir.insns[instruction].opcode) !=
+                expected_opcodes[instruction])
+            return mir_machine_reject(
+                "comma-loop-runner", "opcode");
+
+    for (item = 0;
+         item < (int)(sizeof(constants) / sizeof(constants[0]));
+         ++item) {
+        const struct MirInsn *constant = &mir.insns[constants[item]];
+        int pointer = 0;
+        int untyped = 0;
+        int search;
+
+        if (!mir_machine_constant_equals(
+                constant->dst, constant_values[item]))
+            return mir_machine_reject(
+                "comma-loop-runner", "constant");
+        for (search = 0;
+             search < (int)(sizeof(pointer_constants) /
+                            sizeof(pointer_constants[0]));
+             ++search)
+            if (constants[item] == pointer_constants[search])
+                pointer = 1;
+        for (search = 0;
+             search < (int)(sizeof(untyped_constants) /
+                            sizeof(untyped_constants[0]));
+             ++search)
+            if (constants[item] == untyped_constants[search])
+                untyped = 1;
+        if ((pointer &&
+             !mir_comma_word_pointer_type(constant->type)) ||
+            (!pointer && !untyped &&
+             !mir_gnarly_word_type(constant->type, 0)) ||
+            (untyped && constant->type != 0))
+            return mir_machine_reject(
+                "comma-loop-runner", "constant-type");
+    }
+
+    for (item = 0;
+         item < (int)(sizeof(binaries) / sizeof(binaries[0]));
+         ++item) {
+        const struct MirInsn *binary = &mir.insns[binaries[item][0]];
+        int pointer = 0;
+        int search;
+
+        if (!mir_gnarly_binary(
+                binaries[item][0], binaries[item][1],
+                binaries[item][2], binaries[item][3]))
+            return mir_machine_reject(
+                "comma-loop-runner", "binary");
+        for (search = 0;
+             search < (int)(sizeof(pointer_binaries) /
+                            sizeof(pointer_binaries[0]));
+             ++search)
+            if (binaries[item][0] == pointer_binaries[search])
+                pointer = 1;
+        if ((pointer &&
+             !mir_comma_word_pointer_type(binary->type)) ||
+            (!pointer && !mir_gnarly_word_type(binary->type, 0)))
+            return mir_machine_reject(
+                "comma-loop-runner", "binary-type");
+    }
+
+    for (item = 0;
+         item < (int)(sizeof(stores) / sizeof(stores[0]));
+         ++item)
+        if (mir.insns[stores[item][0]].src1 !=
+                mir.insns[stores[item][1]].dst ||
+            mir.insns[stores[item][0]].memory_size != 2 ||
+            (mir.insns[stores[item][0]].memory_flags & (1 | 8)) != 0)
+            return mir_machine_reject(
+                "comma-loop-runner", "store");
+
+    if (!mir_comma_local_word(&mir.insns[11], 0, &scalar_offsets[0]) ||
+        !mir_comma_local_word(&mir.insns[14], 0, &scalar_offsets[1]) ||
+        !mir_comma_local_word(&mir.insns[157], 0, &scalar_offsets[2]) ||
+        !mir_comma_local_word(&mir.insns[17], 1, &scalar_offsets[3]) ||
+        scalar_offsets[0] == scalar_offsets[1] ||
+        scalar_offsets[0] == scalar_offsets[2] ||
+        scalar_offsets[0] == scalar_offsets[3] ||
+        scalar_offsets[1] == scalar_offsets[2] ||
+        scalar_offsets[1] == scalar_offsets[3] ||
+        scalar_offsets[2] == scalar_offsets[3])
+        return mir_machine_reject(
+            "comma-loop-runner", "locals");
+    for (item = 0;
+         item < (int)(sizeof(sum_locations) /
+                      sizeof(sum_locations[0]));
+         ++item)
+        if (!mir_machine_same_location(
+                &mir.insns[11],
+                &mir.insns[sum_locations[item]]))
+            return mir_machine_reject(
+                "comma-loop-runner", "sum-location");
+    for (item = 0;
+         item < (int)(sizeof(index_locations) /
+                      sizeof(index_locations[0]));
+         ++item)
+        if (!mir_machine_same_location(
+                &mir.insns[14],
+                &mir.insns[index_locations[item]]))
+            return mir_machine_reject(
+                "comma-loop-runner", "index-location");
+    for (item = 0;
+         item < (int)(sizeof(tick_locations) /
+                      sizeof(tick_locations[0]));
+         ++item)
+        if (!mir_machine_same_location(
+                &mir.insns[157],
+                &mir.insns[tick_locations[item]]))
+            return mir_machine_reject(
+                "comma-loop-runner", "tick-location");
+    for (item = 0;
+         item < (int)(sizeof(pointer_locations) /
+                      sizeof(pointer_locations[0]));
+         ++item)
+        if (!mir_machine_same_location(
+                &mir.insns[17],
+                &mir.insns[pointer_locations[item]]))
+            return mir_machine_reject(
+                "comma-loop-runner", "pointer-location");
+
+    if (!mir_scalar_memory_location(
+            &mir.insns[2], &array_type,
+            &array_storage, &array_offset) ||
+        array_storage != SC_LOCAL ||
+        !mir_gnarly_word_type(array_type, 0) ||
+        !mir_machine_named_nonvolatile(&mir.insns[2]) ||
+        mir.insns[2].immediate != 0)
+        return mir_machine_reject(
+            "comma-loop-runner", "array");
+    for (item = 0; item < 4; ++item) {
+        const struct MirInsn *store = &mir.insns[2 + item * 2];
+        int element_type;
+        int element_storage;
+        int element_offset;
+
+        if (strcmp(store->name, mir.insns[2].name) ||
+            store->immediate != item * 2 ||
+            !mir_scalar_memory_location(
+                store, &element_type,
+                &element_storage, &element_offset) ||
+            element_storage != array_storage ||
+            element_offset != array_offset + item * 2 ||
+            !mir_gnarly_word_type(element_type, 0))
+            return mir_machine_reject(
+                "comma-loop-runner", "array-store");
+        plan->values[item] =
+            (int)mir.insns[1 + item * 2].immediate;
+    }
+    if (!strcmp(mir.insns[2].name, mir.insns[11].name) ||
+        !strcmp(mir.insns[2].name, mir.insns[14].name) ||
+        !strcmp(mir.insns[2].name, mir.insns[157].name) ||
+        !strcmp(mir.insns[2].name, mir.insns[17].name))
+        return mir_machine_reject(
+            "comma-loop-runner", "array-alias");
+    for (item = 0; item < 4; ++item)
+        if (scalar_offsets[item] < array_offset + 8 &&
+            scalar_offsets[item] + 2 > array_offset)
+            return mir_machine_reject(
+                "comma-loop-runner", "array-overlap");
+    for (item = 0;
+         item < (int)(sizeof(array_addresses) /
+                      sizeof(array_addresses[0]));
+         ++item) {
+        const struct MirInsn *address =
+            &mir.insns[array_addresses[item]];
+
+        if (!mir_machine_named_nonvolatile(address) ||
+            strcmp(address->name, mir.insns[2].name) ||
+            !mir_comma_word_pointer_type(address->type) ||
+            address->secondary_offset != 0)
+            return mir_machine_reject(
+                "comma-loop-runner", "array-address");
+    }
+
+    for (item = 0;
+         item < (int)(sizeof(phis) / sizeof(phis[0]));
+         ++item)
+        if (!mir_gnarly_phi(
+                phis[item][0], phis[item][1], phis[item][2],
+                phis[item][3], phis[item][4]))
+            return mir_machine_reject(
+                "comma-loop-runner", "phi");
+    for (item = 0;
+         item < (int)(sizeof(branches) / sizeof(branches[0]));
+         ++item)
+        if (!mir_gnarly_branch(
+                branches[item][0], branches[item][1],
+                branches[item][2]))
+            return mir_machine_reject(
+                "comma-loop-runner", "branch");
+    for (item = 0;
+         item < (int)(sizeof(jumps) / sizeof(jumps[0]));
+         ++item)
+        if (mir.insns[jumps[item][0]].label !=
+                mir.insns[jumps[item][1]].label)
+            return mir_machine_reject(
+                "comma-loop-runner", "jump");
+
+    for (item = 0;
+         item < (int)(sizeof(indirect_loads) /
+                      sizeof(indirect_loads[0]));
+         ++item) {
+        const struct MirInsn *load =
+            &mir.insns[indirect_loads[item][0]];
+
+        if (!mir_gnarly_value_from(
+                load->src1, indirect_loads[item][1]) ||
+            !mir_gnarly_word_type(load->type, 0) ||
+            load->memory_size != 2 ||
+            (load->memory_flags & (1 | 8)) != 0)
+            return mir_machine_reject(
+                "comma-loop-runner", "indirect-load");
+    }
+    if (!mir_gnarly_value_from(mir.insns[184].src1, 181) ||
+        !mir_gnarly_value_from(mir.insns[184].src2, 183) ||
+        !mir_comma_word_pointer_type(mir.insns[184].type) ||
+        mir.insns[184].immediate != 2 ||
+        mir.insns[184].memory_size != 2 ||
+        !mir_gnarly_value_from(mir.insns[234].src1, 232) ||
+        !mir_gnarly_value_from(mir.insns[234].src2, 221) ||
+        !mir_comma_word_pointer_type(mir.insns[234].type) ||
+        mir.insns[234].immediate != 2 ||
+        mir.insns[234].memory_size != 2 ||
+        !mir_gnarly_value_from(mir.insns[291].src1, 287) ||
+        (mir.insns[291].type & 15) != TYPE_VOID ||
+        mir.insns[291].immediate != 0)
+        return mir_machine_reject(
+            "comma-loop-runner", "index-update");
+
+    if (!mir_comma_report_call(
+            plan, 0, 55, 42, 4, first_report) ||
+        !mir_comma_report_call(
+            plan, 1, 103, 90, 4, second_report) ||
+        !mir_comma_report_call(
+            plan, 2, 151, 138, 4, third_report) ||
+        !mir_comma_report_call(
+            plan, 3, 209, 196, 4, condition_report) ||
+        !mir_comma_report_call(
+            plan, 4, 253, 247, 3, while_report) ||
+        !mir_comma_report_call(
+            plan, 5, 276, 265, 3, value_report) ||
+        !mir_comma_report_call(
+            plan, 6, 303, 292, 3, statement_report))
+        return mir_machine_reject(
+            "comma-loop-runner", "report-call");
+    for (item = 0; item < 7; ++item) {
+        int previous;
+
+        for (previous = 0; previous < item; ++previous)
+            if (plan->strings[item] == plan->strings[previous])
+                return mir_machine_reject(
+                    "comma-loop-runner", "report-string");
+    }
+
+    if (mir.insns[344].src1 != mir.insns[343].dst)
+        return mir_machine_reject(
+            "comma-loop-runner", "return");
+    return 1;
+}
+
+enum {
+    MIR_COMMA_ARRAY = -8,
+    MIR_COMMA_SCRATCH = -10,
+    MIR_COMMA_FINAL_I = -11,
+    MIR_COMMA_FINAL_PTR = -13,
+    MIR_COMMA_FRAME_BYTES = 13
+};
+
+static void mir_comma_array_address(FILE *out)
+{
+    fputs("\tpush ix\n\tpop hl\n"
+          "\tld de,-8\n\tadd hl,de\n\tex de,hl\n", out);
+}
+
+static void mir_comma_increment_scratch(FILE *out)
+{
+    int done = new_label();
+
+    fprintf(out,
+            "\tinc (ix%d)\n\tjp nz,L%d\n"
+            "\tinc (ix%d)\nL%d:\n",
+            MIR_COMMA_SCRATCH, done,
+            MIR_COMMA_SCRATCH + 1, done);
+}
+
+static void mir_comma_push_pointer_difference(FILE *out)
+{
+    fputs("\tpush bc\n\tpush de\n\tpush ix\n\tpop hl\n"
+          "\tld bc,-8\n\tadd hl,bc\n\tpop de\n"
+          "\tex de,hl\n\tor a\n\tsbc hl,de\n"
+          "\tsra h\n\trr l\n\tex de,hl\n\tpop bc\n"
+          "\tex de,hl\n\tpush hl\n", out);
+}
+
+static void mir_comma_report(
+    FILE *out, const struct MirCommaLoopRunner *plan,
+    int slot, int argument_count)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[slot]);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    mir_gnarly_cleanup(out, argument_count);
+}
+
+static void mir_comma_push_index(FILE *out)
+{
+    fputs("\tld l,a\n\tld h,0\n\tpush hl\n", out);
+}
+
+static void mir_comma_push_sum(FILE *out)
+{
+    fputs("\tld l,c\n\tld h,b\n\tpush hl\n", out);
+}
+
+static void mir_emit_comma_sum_loop(
+    FILE *out, const struct MirCommaLoopRunner *plan,
+    int report_slot, int pointer_first)
+{
+    int loop = new_label();
+    int done = new_label();
+
+    mir_comma_array_address(out);
+    fputs("\tld bc,0\n\txor a\n", out);
+    fprintf(out, "L%d:\n\tcp 3\n\tjp nc,L%d\n",
+            loop, done);
+    fputs("\tpush af\n\tld a,(de)\n\tld l,a\n\tinc de\n"
+          "\tld a,(de)\n\tld h,a\n\tdec de\n"
+          "\tadd hl,bc\n\tld b,h\n\tld c,l\n\tpop af\n",
+          out);
+    if (pointer_first)
+        fputs("\tinc de\n\tinc de\n\tinc a\n", out);
+    else
+        fputs("\tinc a\n\tinc de\n\tinc de\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+    mir_comma_push_pointer_difference(out);
+    mir_comma_push_index(out);
+    mir_comma_push_sum(out);
+    mir_comma_report(out, plan, report_slot, 4);
+}
+
+static void mir_emit_comma_condition_loop(
+    FILE *out, const struct MirCommaLoopRunner *plan)
+{
+    int loop = new_label();
+    int done = new_label();
+
+    fputs("\tld (ix-10),0\n\tld (ix-9),0\n", out);
+    mir_comma_array_address(out);
+    fputs("\tld bc,0\n\txor a\n", out);
+    fprintf(out, "L%d:\n", loop);
+    mir_comma_increment_scratch(out);
+    fputs("\tinc de\n\tinc de\n\tcp 3\n", out);
+    fprintf(out, "\tjp nc,L%d\n", done);
+    fputs("\tpush af\n\tdec de\n\tld a,(de)\n\tld h,a\n"
+          "\tdec de\n\tld a,(de)\n\tld l,a\n"
+          "\tinc de\n\tinc de\n\tadd hl,bc\n"
+          "\tld b,h\n\tld c,l\n\tpop af\n\tinc a\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+    mir_comma_push_pointer_difference(out);
+    fputs("\tld l,(ix-10)\n\tld h,(ix-9)\n\tpush hl\n", out);
+    mir_comma_push_sum(out);
+    mir_comma_report(out, plan, 3, 4);
+}
+
+static void mir_emit_comma_while_loop(
+    FILE *out, const struct MirCommaLoopRunner *plan)
+{
+    int loop = new_label();
+    int done = new_label();
+
+    fputs("\tld (ix-10),0\n\tld (ix-9),0\n", out);
+    mir_comma_array_address(out);
+    fputs("\tld bc,0\n\txor a\n", out);
+    fprintf(out, "L%d:\n", loop);
+    mir_comma_increment_scratch(out);
+    fputs("\tcp 3\n", out);
+    fprintf(out, "\tjp nc,L%d\n", done);
+    fputs("\tpush af\n\tld a,(de)\n\tld l,a\n\tinc de\n"
+          "\tld a,(de)\n\tld h,a\n\tinc de\n"
+          "\tadd hl,bc\n\tld b,h\n\tld c,l\n"
+          "\tpop af\n\tinc a\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+    fputs("\tld l,(ix-10)\n\tld h,(ix-9)\n\tpush hl\n", out);
+    mir_comma_push_sum(out);
+    mir_comma_report(out, plan, 4, 3);
+}
+
+static void mir_emit_comma_value_and_statement(
+    FILE *out, const struct MirCommaLoopRunner *plan)
+{
+    mir_comma_array_address(out);
+    fputs("\tinc de\n\tinc de\n"
+          "\tld a,(de)\n\tld c,a\n\tinc de\n"
+          "\tld a,(de)\n\tld b,a\n\tdec de\n"
+          "\tld (ix-10),c\n\tld (ix-9),b\n", out);
+    mir_comma_push_pointer_difference(out);
+    mir_comma_push_sum(out);
+    mir_comma_report(out, plan, 5, 3);
+
+    mir_comma_array_address(out);
+    fputs("\txor a\n\tinc a\n\tinc de\n\tinc de\n"
+          "\tld (ix-11),a\n\tld (ix-13),e\n\tld (ix-12),d\n",
+          out);
+    mir_comma_push_pointer_difference(out);
+    mir_comma_push_index(out);
+    mir_comma_report(out, plan, 6, 3);
+}
+
+static void mir_emit_comma_loop_runner(
+    FILE *out, const struct MirCommaLoopRunner *plan)
+{
+    int failure = new_label();
+    int done = new_label();
+    int item;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    fprintf(out,
+            "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
+            MIR_COMMA_FRAME_BYTES);
+    for (item = 0; item < 4; ++item)
+        fprintf(out,
+                "\tld hl,%d\n\tld (ix%+d),l\n\tld (ix%+d),h\n",
+                plan->values[item],
+                MIR_COMMA_ARRAY + item * 2,
+                MIR_COMMA_ARRAY + item * 2 + 1);
+
+    mir_emit_comma_sum_loop(out, plan, 0, 0);
+    mir_emit_comma_sum_loop(out, plan, 1, 0);
+    mir_emit_comma_sum_loop(out, plan, 2, 1);
+    mir_emit_comma_condition_loop(out, plan);
+    mir_emit_comma_while_loop(out, plan);
+    mir_emit_comma_value_and_statement(out, plan);
+
+    fputs("\tld l,(ix-10)\n\tld h,(ix-9)\n"
+          "\tld de,60\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp nz,L%d\n", failure);
+    fputs("\tld a,(ix-11)\n\tcp 1\n", out);
+    fprintf(out, "\tjp nz,L%d\n", failure);
+    fputs("\tld e,(ix-13)\n\tld d,(ix-12)\n"
+          "\tpush de\n\tpush ix\n\tpop hl\n\tld bc,-8\n"
+          "\tadd hl,bc\n\tpop de\n\tex de,hl\n\tor a\n"
+          "\tsbc hl,de\n\tdec hl\n\tdec hl\n"
+          "\tld a,h\n\tor l\n", out);
+    fprintf(out,
+            "\tjp nz,L%d\n\tld hl,0\n\tjp L%d\n"
+            "L%d:\n\tld hl,1\nL%d:\n"
+            "\tld sp,ix\n\tpop ix\n\tret\n",
+            failure, done, failure, done);
+}
+
 int mir_try_emit_call_runners(FILE *out, int phase)
 {
     if (phase == 0) {
@@ -7203,6 +7879,7 @@ int mir_try_emit_call_runners(FILE *out, int phase)
         struct MirAllocationLifetimeRunner allocation_plan;
         struct MirCallbackRegistrationRunner callback_plan;
         struct MirForIncrementRunner for_increment_plan;
+        struct MirCommaLoopRunner comma_loop_plan;
         struct MirByteEqualityRunner byte_equality_plan;
         struct MirGnarlyRunner gnarly_plan;
         struct MirNestedForRunner nested_for_plan;
@@ -7230,6 +7907,10 @@ int mir_try_emit_call_runners(FILE *out, int phase)
                 &for_increment_plan)) {
             mir_emit_for_increment_runner(
                 out, &for_increment_plan);
+            return 1;
+        }
+        if (mir_match_comma_loop_runner(&comma_loop_plan)) {
+            mir_emit_comma_loop_runner(out, &comma_loop_plan);
             return 1;
         }
         if (mir_match_byte_equality_runner(
