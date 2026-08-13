@@ -8377,17 +8377,485 @@ static void mir_emit_vla_smooth(
           "\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+struct MirHeapPopPlan {
+    int parameter_stack_offset;
+};
+
+static int mir_heap_pop_word_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == TYPE_INT &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           !type_is_float(type) &&
+           type_size(type) == 2;
+}
+
+static int mir_heap_pop_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & 15) == TYPE_INT &&
+           type_size(type) == 2;
+}
+
+static int mir_heap_pop_member(
+    int instruction, int parameter_value,
+    int offset, int extent)
+{
+    const struct MirInsn *member = &mir.insns[instruction];
+
+    return member->opcode == MIR_MEMBER_ADDRESS &&
+           member->src1 == parameter_value &&
+           member->immediate == offset &&
+           member->memory_size == extent &&
+           member->memory_flags == (extent == 128 ? 2 : 0) &&
+           member->bit_width == 0 &&
+           mir_heap_pop_pointer_type(member->type);
+}
+
+static int mir_heap_pop_index(
+    int instruction, int base_instruction,
+    int subscript_instruction)
+{
+    const struct MirInsn *index = &mir.insns[instruction];
+
+    return index->opcode == MIR_INDEX_ADDRESS &&
+           index->src1 == mir.insns[base_instruction].dst &&
+           index->src2 == mir.insns[subscript_instruction].dst &&
+           index->immediate == 2 &&
+           index->memory_size == 2 &&
+           index->memory_flags == 0 &&
+           index->bit_width == 0 &&
+           mir_heap_pop_pointer_type(index->type);
+}
+
+static int mir_heap_pop_load(
+    int instruction, int address_instruction)
+{
+    const struct MirInsn *load = &mir.insns[instruction];
+
+    return load->opcode == MIR_LOAD_INDIRECT &&
+           load->src1 == mir.insns[address_instruction].dst &&
+           load->memory_size == 2 &&
+           load->memory_flags == 0 &&
+           load->bit_width == 0 &&
+           mir_heap_pop_word_type(load->type);
+}
+
+static int mir_heap_pop_store_indirect(
+    int instruction, int address_instruction,
+    int value_instruction)
+{
+    const struct MirInsn *store = &mir.insns[instruction];
+
+    return store->opcode == MIR_STORE_INDIRECT &&
+           store->src1 == mir.insns[address_instruction].dst &&
+           store->src2 == mir.insns[value_instruction].dst &&
+           store->memory_size == 2 &&
+           store->memory_flags == 0 &&
+           store->bit_width == 0;
+}
+
+static int mir_heap_pop_local_store(
+    int instruction, int value_instruction, int object)
+{
+    const struct MirInsn *store = &mir.insns[instruction];
+
+    return store->opcode == MIR_STORE &&
+           store->src1 == mir.insns[value_instruction].dst &&
+           store->object == object &&
+           store->memory_size == 2 &&
+           store->memory_flags == 0 &&
+           store->bit_width == 0;
+}
+
+static int mir_heap_pop_local_load(int instruction, int object)
+{
+    const struct MirInsn *load = &mir.insns[instruction];
+
+    return load->opcode == MIR_LOAD &&
+           load->object == object &&
+           load->memory_size == 0 &&
+           load->memory_flags == 0 &&
+           load->bit_width == 0 &&
+           mir_heap_pop_word_type(load->type);
+}
+
+static int mir_heap_pop_binary(
+    int instruction, int left_instruction,
+    int right_instruction, int operation)
+{
+    const struct MirInsn *binary = &mir.insns[instruction];
+
+    return binary->opcode == MIR_BINARY &&
+           binary->src1 == mir.insns[left_instruction].dst &&
+           binary->src2 == mir.insns[right_instruction].dst &&
+           binary->immediate == operation &&
+           mir_heap_pop_word_type(binary->type) &&
+           mir_heap_pop_word_type(binary->secondary_offset);
+}
+
+static int mir_heap_pop_distinct_objects(
+    const int *objects, int count)
+{
+    int left;
+    int right;
+
+    for (left = 0; left < count; ++left) {
+        if (objects[left] < 0)
+            return 0;
+        for (right = left + 1; right < count; ++right)
+            if (objects[left] == objects[right])
+                return 0;
+    }
+    return 1;
+}
+
+static int mir_match_heap_pop(
+    struct MirHeapPopPlan *plan)
+{
+    static const int expected_opcodes[177] = {
+        MIR_LABEL, MIR_PARAM, MIR_NOP, MIR_MEMBER_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_MEMBER_ADDRESS, MIR_NOP, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT, MIR_NOP,
+        MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_NOP,
+        MIR_MEMBER_ADDRESS, MIR_NOP, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_STORE_INDIRECT, MIR_CONST,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_NOP, MIR_BINARY, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_NOP, MIR_CONST, MIR_NOP, MIR_BINARY,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_NOP, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_NOP, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_MEMBER_ADDRESS, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_MEMBER_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_CONST, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP,
+        MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP,
+        MIR_MEMBER_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_NOP, MIR_MEMBER_ADDRESS, MIR_LOAD, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_LOAD,
+        MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_JUMP, MIR_LABEL,
+        MIR_NOP, MIR_NOP, MIR_MEMBER_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_STORE, MIR_NOP, MIR_MEMBER_ADDRESS, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_NOP, MIR_MEMBER_ADDRESS, MIR_LOAD,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_STORE_INDIRECT, MIR_NOP,
+        MIR_MEMBER_ADDRESS, MIR_LOAD, MIR_INDEX_ADDRESS, MIR_NOP,
+        MIR_STORE_INDIRECT, MIR_NOP, MIR_LOAD, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_RETURN
+    };
+    static const int data_members[] = {
+        3, 18, 22, 84, 89, 114, 119, 146, 152, 156, 162
+    };
+    static const int size_members[] = {10, 12, 24, 79, 109};
+    int objects[6];
+    int instruction;
+    int member;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 177 || mir_cfg_block_count() != 13 ||
+        mir.has_vla || mir.local_bytes != 12 ||
+        mir.aggregate_temp_bytes != 0 ||
+        !mir_heap_pop_word_type(mir.return_type))
+        return 0;
+    for (instruction = 0; instruction < 177; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return 0;
+    if (!mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->parameter_stack_offset) ||
+        plan->parameter_stack_offset != 2 ||
+        type_ptr_depth(mir.insns[1].type) != 1 ||
+        type_size(mir.insns[1].type) != 2 ||
+        mir_machine_pointee_is_volatile(&mir.insns[1]))
+        return 0;
+    for (member = 0;
+         member < (int)(sizeof(data_members) / sizeof(data_members[0]));
+         ++member)
+        if (!mir_heap_pop_member(
+                data_members[member], mir.insns[1].dst, 0, 128))
+            return 0;
+    for (member = 0;
+         member < (int)(sizeof(size_members) / sizeof(size_members[0]));
+         ++member)
+        if (!mir_heap_pop_member(
+                size_members[member], mir.insns[1].dst, 128, 2))
+            return 0;
+
+    if (!mir_machine_constant_equals(mir.insns[4].dst, 0) ||
+        !mir_heap_pop_index(5, 3, 4) ||
+        !mir_heap_pop_load(6, 5) ||
+        !mir_heap_pop_member(10, mir.insns[1].dst, 128, 2) ||
+        !mir_heap_pop_member(12, mir.insns[1].dst, 128, 2) ||
+        !mir_heap_pop_load(13, 12) ||
+        !mir_machine_constant_equals(mir.insns[14].dst, 1) ||
+        !mir_heap_pop_binary(15, 13, 14, '-') ||
+        !mir_heap_pop_store_indirect(16, 10, 15) ||
+        !mir_machine_constant_equals(mir.insns[19].dst, 0) ||
+        !mir_heap_pop_index(20, 18, 19) ||
+        !mir_heap_pop_load(25, 24) ||
+        !mir_heap_pop_index(26, 22, 25) ||
+        !mir_heap_pop_load(27, 26) ||
+        !mir_heap_pop_store_indirect(28, 20, 27) ||
+        !mir_machine_constant_equals(mir.insns[29].dst, 0))
+        return 0;
+
+    objects[0] = mir.insns[8].object;
+    objects[1] = mir.insns[31].object;
+    objects[2] = mir.insns[66].object;
+    objects[3] = mir.insns[73].object;
+    objects[4] = mir.insns[76].object;
+    objects[5] = mir.insns[150].object;
+    if (!mir_heap_pop_distinct_objects(objects, 6) ||
+        !mir_heap_pop_local_store(8, 6, objects[0]) ||
+        !mir_heap_pop_local_store(31, 29, objects[1]) ||
+        !mir_machine_constant_equals(mir.insns[61].dst, 2) ||
+        !mir_heap_pop_binary(63, 61, 55, '*') ||
+        !mir_machine_constant_equals(mir.insns[64].dst, 1) ||
+        !mir_heap_pop_binary(65, 63, 64, '+') ||
+        !mir_heap_pop_local_store(66, 65, objects[2]) ||
+        !mir_machine_constant_equals(mir.insns[68].dst, 2) ||
+        !mir_heap_pop_binary(70, 68, 55, '*') ||
+        !mir_machine_constant_equals(mir.insns[71].dst, 2) ||
+        !mir_heap_pop_binary(72, 70, 71, '+') ||
+        !mir_heap_pop_local_store(73, 72, objects[3]) ||
+        !mir_heap_pop_local_store(76, 55, objects[4]))
+        return 0;
+
+    if (mir.insns[55].object != objects[1] ||
+        mir.insns[55].src1 != mir.insns[29].dst ||
+        mir.insns[55].src2 != mir.insns[168].dst ||
+        mir.insns[55].phi_pred1 != mir.insns[0].label ||
+        mir.insns[55].phi_pred2 != mir.insns[172].label ||
+        !mir_heap_pop_word_type(mir.insns[55].type) ||
+        !mir_heap_pop_load(80, 79) ||
+        !mir_heap_pop_binary(81, 65, 80, '<') ||
+        mir.insns[82].src1 != mir.insns[81].dst ||
+        mir.insns[82].label != mir.insns[98].label ||
+        !mir_heap_pop_index(86, 84, 65) ||
+        !mir_heap_pop_load(87, 86) ||
+        !mir_heap_pop_index(91, 89, 55) ||
+        !mir_heap_pop_load(92, 91) ||
+        !mir_heap_pop_binary(93, 87, 92, '<') ||
+        mir.insns[94].src1 != mir.insns[93].dst ||
+        mir.insns[94].label != mir.insns[98].label)
+        return 0;
+    if (!mir_machine_constant_equals(mir.insns[96].dst, 1) ||
+        mir.insns[97].label != mir.insns[100].label ||
+        !mir_machine_constant_equals(mir.insns[99].dst, 0) ||
+        mir.insns[101].src1 != mir.insns[96].dst ||
+        mir.insns[101].src2 != mir.insns[99].dst ||
+        mir.insns[101].phi_pred1 != mir.insns[95].label ||
+        mir.insns[101].phi_pred2 != mir.insns[98].label ||
+        mir.insns[102].src1 != mir.insns[101].dst ||
+        mir.insns[102].label != mir.insns[106].label ||
+        !mir_heap_pop_local_store(105, 65, objects[4]))
+        return 0;
+
+    if (!mir_heap_pop_load(110, 109) ||
+        !mir_heap_pop_binary(111, 72, 110, '<') ||
+        mir.insns[112].src1 != mir.insns[111].dst ||
+        mir.insns[112].label != mir.insns[128].label ||
+        !mir_heap_pop_index(116, 114, 72) ||
+        !mir_heap_pop_load(117, 116) ||
+        !mir_heap_pop_local_load(120, objects[4]) ||
+        !mir_heap_pop_index(121, 119, 120) ||
+        !mir_heap_pop_load(122, 121) ||
+        !mir_heap_pop_binary(123, 117, 122, '<') ||
+        mir.insns[124].src1 != mir.insns[123].dst ||
+        mir.insns[124].label != mir.insns[128].label)
+        return 0;
+    if (!mir_machine_constant_equals(mir.insns[126].dst, 1) ||
+        mir.insns[127].label != mir.insns[130].label ||
+        !mir_machine_constant_equals(mir.insns[129].dst, 0) ||
+        mir.insns[131].src1 != mir.insns[126].dst ||
+        mir.insns[131].src2 != mir.insns[129].dst ||
+        mir.insns[131].phi_pred1 != mir.insns[125].label ||
+        mir.insns[131].phi_pred2 != mir.insns[128].label ||
+        mir.insns[132].src1 != mir.insns[131].dst ||
+        mir.insns[132].label != mir.insns[136].label ||
+        !mir_heap_pop_local_store(135, 72, objects[4]))
+        return 0;
+
+    if (!mir_heap_pop_local_load(137, objects[4]) ||
+        !mir_heap_pop_binary(139, 137, 55, TOK_EQ) ||
+        mir.insns[140].src1 != mir.insns[139].dst ||
+        mir.insns[140].label != mir.insns[143].label ||
+        mir.insns[142].label != mir.insns[174].label ||
+        !mir_heap_pop_index(148, 146, 55) ||
+        !mir_heap_pop_load(149, 148) ||
+        !mir_heap_pop_local_store(150, 149, objects[5]) ||
+        !mir_heap_pop_index(154, 152, 55) ||
+        !mir_heap_pop_local_load(157, objects[4]) ||
+        !mir_heap_pop_index(158, 156, 157) ||
+        !mir_heap_pop_load(159, 158) ||
+        !mir_heap_pop_store_indirect(160, 154, 159) ||
+        !mir_heap_pop_local_load(163, objects[4]) ||
+        !mir_heap_pop_index(164, 162, 163) ||
+        !mir_heap_pop_store_indirect(166, 164, 149) ||
+        !mir_heap_pop_local_load(168, objects[4]) ||
+        !mir_heap_pop_local_store(170, 168, objects[1]) ||
+        mir.insns[173].label != mir.insns[52].label ||
+        mir.insns[176].src1 != mir.insns[6].dst)
+        return 0;
+    return 1;
+}
+
+static void mir_heap_pop_emit_base(FILE *out)
+{
+    fputs("\tld l,c\n\tld h,b\n", out);
+}
+
+static void mir_heap_pop_emit_size_address(FILE *out)
+{
+    mir_heap_pop_emit_base(out);
+    fputs("\tld de,128\n\tadd hl,de\n", out);
+}
+
+static void mir_heap_pop_emit_frame_word(
+    FILE *out, int frame_offset)
+{
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n",
+            frame_offset, frame_offset + 1);
+}
+
+static void mir_heap_pop_emit_index_address(
+    FILE *out, int frame_offset)
+{
+    mir_heap_pop_emit_frame_word(out, frame_offset);
+    fputs("\tadd hl,hl\n\tadd hl,bc\n", out);
+}
+
+static void mir_heap_pop_emit_signed_ge_jump(
+    FILE *out, int label)
+{
+    fputs("\tld a,h\n\txor 80h\n\tld h,a\n"
+          "\tld a,d\n\txor 80h\n\tld d,a\n"
+          "\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp nc,L%d\n", label);
+}
+
+static void mir_heap_pop_emit_child(
+    FILE *out, int addend, int done_label)
+{
+    mir_heap_pop_emit_frame_word(out, -4);
+    fputs("\tadd hl,hl\n", out);
+    if (addend >= 1)
+        fputs("\tinc hl\n", out);
+    if (addend >= 2)
+        fputs("\tinc hl\n", out);
+    fputs("\tpush hl\n", out);
+    mir_heap_pop_emit_size_address(out);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tpop hl\n", out);
+    mir_heap_pop_emit_signed_ge_jump(out, done_label);
+
+    mir_heap_pop_emit_frame_word(out, -4);
+    fputs("\tadd hl,hl\n", out);
+    if (addend >= 1)
+        fputs("\tinc hl\n", out);
+    if (addend >= 2)
+        fputs("\tinc hl\n", out);
+    fputs("\tpush hl\n\tadd hl,hl\n\tadd hl,bc\n"
+          "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n", out);
+    mir_heap_pop_emit_index_address(out, -6);
+    fputs("\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n"
+          "\tld a,d\n\txor 80h\n\tld d,a\n"
+          "\tld a,h\n\txor 80h\n\tld h,a\n"
+          "\tex de,hl\n\tor a\n\tsbc hl,de\n"
+          "\tpop hl\n", out);
+    fprintf(out, "\tjp nc,L%d\n", done_label);
+    fputs("\tld (ix-6),l\n\tld (ix-5),h\n", out);
+}
+
+static void mir_emit_heap_pop(
+    FILE *out, const struct MirHeapPopPlan *plan)
+{
+    int loop = new_label();
+    int left_done = new_label();
+    int right_done = new_label();
+    int done = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-6\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld c,(ix+%d)\n\tld b,(ix+%d)\n",
+            plan->parameter_stack_offset + 2,
+            plan->parameter_stack_offset + 3);
+
+    mir_heap_pop_emit_base(out);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tld (ix-2),e\n\tld (ix-1),d\n", out);
+
+    mir_heap_pop_emit_size_address(out);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tdec de\n\tld (hl),d\n\tdec hl\n\tld (hl),e\n",
+          out);
+    mir_heap_pop_emit_size_address(out);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n"
+          "\tadd hl,hl\n\tadd hl,bc\n"
+          "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n",
+          out);
+    mir_heap_pop_emit_base(out);
+    fputs("\tld (hl),e\n\tinc hl\n\tld (hl),d\n"
+          "\txor a\n\tld (ix-4),a\n\tld (ix-3),a\n", out);
+
+    fprintf(out, "L%d:\n", loop);
+    fputs("\tld l,(ix-4)\n\tld h,(ix-3)\n"
+          "\tld (ix-6),l\n\tld (ix-5),h\n", out);
+    mir_heap_pop_emit_child(out, 1, left_done);
+    fprintf(out, "L%d:\n", left_done);
+    mir_heap_pop_emit_child(out, 2, right_done);
+    fprintf(out, "L%d:\n", right_done);
+
+    fputs("\tld l,(ix-6)\n\tld h,(ix-5)\n"
+          "\tld e,(ix-4)\n\tld d,(ix-3)\n"
+          "\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp z,L%d\n", done);
+
+    mir_heap_pop_emit_index_address(out, -4);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n",
+          out);
+    mir_heap_pop_emit_index_address(out, -6);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n",
+          out);
+    mir_heap_pop_emit_index_address(out, -4);
+    fputs("\tpop de\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+          out);
+    mir_heap_pop_emit_index_address(out, -6);
+    fputs("\tpop de\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n"
+          "\tld l,(ix-6)\n\tld h,(ix-5)\n"
+          "\tld (ix-4),l\n\tld (ix-3),h\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n"
+          "\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 int mir_try_emit_aggregate_checks(FILE *out)
 {
     struct MirAdditiveSubscriptPlan additive_subscript;
     struct MirArrayMainPlan array_main;
     struct MirAggregateMultidimChecks plan;
+    struct MirHeapPopPlan heap_pop;
     struct MirMultidimArrayRunner multidim_array;
     struct MirPackedRecordRunner packed_record;
     struct MirPtrConditionPlan ptr_condition;
     struct MirTouchLocalsPlan touch_locals;
     struct MirVlaSmoothPlan vla_smooth;
 
+    if (mir_match_heap_pop(&heap_pop)) {
+        mir_emit_heap_pop(out, &heap_pop);
+        return 1;
+    }
     if (mir_match_vla_smooth(&vla_smooth)) {
         mir_emit_vla_smooth(out, &vla_smooth);
         return 1;

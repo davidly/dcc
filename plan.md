@@ -3,6 +3,66 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-14 binary-heap pop 13-block coverage batch (working tree)
+
+- Branch/base: `pr/143` at `30f9597`. The aggregate family now admits the
+  13-block `tlngnarw.heap_pop` `final-cost-policy` fallback through a strict,
+  name-free scheduled-machine matcher over all **177 MIR instructions**. It
+  proves the single nonvolatile aggregate-pointer parameter, the exact
+  64-word data member and adjacent size member, all six distinct scalar
+  objects, the loop PHI and every CFG edge, signed size and element
+  comparisons, left-before-right child selection, every ordered load/store,
+  the swap, size update and returned original root.
+- The emitter uses a compact **6-byte IX frame**, keeps the aggregate base in
+  BC, and uses no IY. Every array index is scaled inline with `add hl,hl`;
+  there is no `__mulu` reference or call. It reloads size at each source
+  access and preserves the source ordering for empty, single-element and
+  multi-element heaps, including the empty-case `data[-1]` alias immediately
+  before the aggregate.
+- Normal selected/captured metrics are **2,149/3,528 bytes** and
+  **208/329 instructions**. Stack-check metrics are **2,178/3,592 bytes** and
+  **209/330 instructions**.
+- Full stack-check `tlngnarw` passes peep and nopeep. Selected versus forced
+  fallback is **132,771/146,685 cycles** and **7,040/7,168 bytes** peep plus
+  **144,328/172,462 cycles** and **7,296/7,552 bytes** nopeep. Exact gains are
+  **13,914 cycles (9.49%) and 128 bytes** peep plus
+  **28,134 cycles (16.31%) and 256 bytes** nopeep.
+- The rejected generic forced-final candidate remains excluded. Direct
+  stack-check A/B is **190,485/146,561 cycles** and **4,096/3,968 bytes**
+  peep, a **43,924-cycle (29.97%) and 128-byte regression**, plus
+  **210,274/172,338 cycles** and **4,480/4,352 bytes** nopeep, a
+  **37,936-cycle (22.01%) and 128-byte regression**. Both generic modes emit
+  two `__mulu` calls for child-index scaling.
+- A separately renamed fixture covers the Cartesian product of every
+  **16-bit value** and every heap size **0 through 64**, then adds four
+  signed/tie/alternating patterns and eight boundary values at every size:
+  **4,260,360 cases** total. Uniform cases prove every value/size return,
+  size update, root replacement and both surrounding guards; patterned cases
+  compare all 64 elements and both guards against a structurally different
+  reference, so empty-case under-indexing, single-element replacement, child
+  choice, swaps and array aliasing are all observed. Selected and
+  forced-fallback peep/nopeep runs all report
+  `heap cases=4260360 mismatch=0 checksum=4110255594`.
+  Selected/fallback measurements are
+  **55,897,867,274/58,080,763,455 cycles** and **6,912/7,040 bytes** peep
+  (**-2,182,896,181, -3.76%; -128 bytes**) plus
+  **57,296,806,558/61,494,875,198 cycles** and **7,296/7,552 bytes** nopeep
+  (**-4,198,068,640, -6.83%; -256 bytes**). Changing only the right-child
+  constant from two to three rejects the schedule and leaves the clone on
+  `final-cost-policy`.
+- The regression-gated stack-check census advances
+  **2,183/2,185 (99.91%)** to **2,184/2,185 (99.95%)**, adds exactly
+  `tlngnarw.heap_pop`, removes nothing, moves selector counts from
+  **1,370 spilled / 408 scheduled** to **1,369 spilled / 409 scheduled**,
+  and reduces `final-cost-policy` fallbacks **2 -> 1**.
+- The aggregate module is **8,891 source lines**. Its standalone object
+  defines only `mir_try_emit_aggregate_checks [T]` globally and has zero
+  global data definitions. The canonical build, focused full run, forced
+  fallback A/B, renamed exhaustive size/value A/B, structural perturbation,
+  peep/nopeep no-IY/no-`__mulu` inspection, export/data audit,
+  regression-gated census and `git diff --check` pass. No performance
+  baseline, production-name gate or output-hash gate was added or changed.
+
 ## 2026-08-14 VLA smoothing 12-block coverage batch (working tree)
 
 - Branch/base: `pr/143` at `f8efb72`. The aggregate family now admits the
