@@ -273,6 +273,20 @@ struct MirReadValidateRunner {
     int stream_stack_offset;
 };
 
+#define MIR_PROMOTION_CHECK_COUNT 49
+
+struct MirPromotionCallRunner {
+    struct Sym *check_function;
+    struct Sym *print_function;
+    struct Sym *failures;
+    unsigned long values[MIR_PROMOTION_CHECK_COUNT];
+    int check_strings[MIR_PROMOTION_CHECK_COUNT];
+    int intro_string;
+    int failure_string;
+    int success_string;
+    char print_names[3][64];
+};
+
 enum MirBufferedConsoleFunction {
     MIR_BUFFER_PRINT,
     MIR_BUFFER_ALLOCATE,
@@ -13085,9 +13099,677 @@ static void mir_emit_buffered_console_runner(
     fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+struct MirPromotionOperation {
+    int instruction;
+    int type;
+    int operand_type;
+    int operation;
+};
+
+static int mir_promotion_opcode_sequence(void)
+{
+    static const unsigned char expected[660] = {
+        MIR_LABEL, MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP, MIR_CONST, MIR_STORE,
+        MIR_NOP, MIR_CONST, MIR_STORE, MIR_CONST, MIR_STORE, MIR_CONST, MIR_STORE, MIR_CONST,
+        MIR_STORE, MIR_NOP, MIR_CONST, MIR_STORE, MIR_STRADDR, MIR_ARG, MIR_CALL, MIR_CONST,
+        MIR_NOP, MIR_STORE, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_UNARY,
+        MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_NOP, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP, MIR_NOP, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_NOP, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG,
+        MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_UNARY,
+        MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_NOP, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_UNARY,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_NOP,
+        MIR_UNARY, MIR_BINARY, MIR_NOP, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP, MIR_NOP, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_CONST, MIR_NOP,
+        MIR_BINARY, MIR_NOP, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR,
+        MIR_ARG, MIR_NOP, MIR_NOP, MIR_UNARY, MIR_BINARY, MIR_NOP, MIR_UNARY, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_NOP, MIR_UNARY,
+        MIR_BINARY, MIR_NOP, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR,
+        MIR_ARG, MIR_NOP, MIR_UNARY, MIR_UNARY, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG,
+        MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_UNARY,
+        MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_NOP,
+        MIR_NOP, MIR_UNARY, MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_UNARY, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_NOP, MIR_UNARY, MIR_UNARY,
+        MIR_BINARY, MIR_UNARY, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR,
+        MIR_ARG, MIR_NOP, MIR_NOP, MIR_UNARY, MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_UNARY,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_NOP,
+        MIR_UNARY, MIR_BINARY, MIR_NOP, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_NOP, MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_UNARY,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_NOP,
+        MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_NOP, MIR_UNARY, MIR_BINARY, MIR_NOP, MIR_NOP,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_BINARY, MIR_NOP, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_UNARY,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_NOP,
+        MIR_UNARY, MIR_UNARY, MIR_BINARY, MIR_NOP, MIR_BINARY, MIR_UNARY, MIR_UNARY, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_UNARY, MIR_UNARY,
+        MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_NOP,
+        MIR_UNARY, MIR_UNARY, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR,
+        MIR_ARG, MIR_NOP, MIR_UNARY, MIR_UNARY, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG,
+        MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_UNARY, MIR_UNARY, MIR_UNARY, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_UNARY, MIR_UNARY,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_UNARY,
+        MIR_NOP, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG,
+        MIR_NOP, MIR_UNARY, MIR_NOP, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_UNARY, MIR_NOP, MIR_NOP, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_UNARY, MIR_NOP, MIR_NOP,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_NOP,
+        MIR_UNARY, MIR_UNARY, MIR_BINARY, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_NOP, MIR_NOP, MIR_BINARY, MIR_UNARY, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_BINARY, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG,
+        MIR_NOP, MIR_NOP, MIR_BINARY, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_STRADDR, MIR_ARG, MIR_CONST, MIR_BRFALSE, MIR_NOP, MIR_LABEL, MIR_JUMP, MIR_LABEL,
+        MIR_NOP, MIR_UNARY, MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_NOP, MIR_UNARY, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_CONST, MIR_BRFALSE, MIR_NOP,
+        MIR_UNARY, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_LABEL, MIR_PHI,
+        MIR_NOP, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG,
+        MIR_CONST, MIR_BRFALSE, MIR_NOP, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_NOP,
+        MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_NOP, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG,
+        MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_CONST, MIR_BRFALSE, MIR_NOP, MIR_LABEL, MIR_JUMP,
+        MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_NOP, MIR_NOP, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_UNARY, MIR_STORE, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_NOP, MIR_UNARY, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_UNARY, MIR_STORE, MIR_STRADDR, MIR_ARG,
+        MIR_LOAD, MIR_UNARY, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_UNARY, MIR_STORE, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_NOP, MIR_UNARY, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_UNARY, MIR_STORE, MIR_STRADDR, MIR_ARG,
+        MIR_LOAD, MIR_UNARY, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP, MIR_CONST,
+        MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_UNARY, MIR_STORE, MIR_STRADDR, MIR_ARG,
+        MIR_NOP, MIR_NOP, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_NOP,
+        MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_NOP, MIR_STORE, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_NOP, MIR_NOP, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_LOAD, MIR_BRFALSE, MIR_STRADDR, MIR_ARG,
+        MIR_LOAD, MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN, MIR_NOP, MIR_LABEL, MIR_STRADDR,
+        MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN
+    };
+    int instruction;
+
+    if (mir.count != (int)(sizeof(expected) / sizeof(expected[0])))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected[instruction])
+            return 0;
+    return 1;
+}
+
+static int mir_promotion_scalar_type(
+    int type, int base, int is_unsigned, int bytes)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == base &&
+           ((type & TYPE_UNSIGNED) != 0) == is_unsigned &&
+           type_size(type) == bytes;
+}
+
+static int mir_promotion_char_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & 15) == TYPE_CHAR &&
+           type_size(type) == 2;
+}
+
+static int mir_promotion_integer_type(int type)
+{
+    int base = type & 15;
+    int bytes = type_size(type);
+
+    return type_ptr_depth(type) == 0 &&
+           (base == TYPE_CHAR || base == TYPE_INT ||
+            base == TYPE_LONG) &&
+           (bytes == 1 || bytes == 2 || bytes == 4);
+}
+
+static int mir_promotion_normalize(
+    long value, int type, unsigned long *bits_out)
+{
+    unsigned long mask;
+    int bytes;
+
+    if (bits_out == NULL || type_ptr_depth(type) != 0)
+        return 0;
+    bytes = type_size(type);
+    if (bytes == 1)
+        mask = 0xffUL;
+    else if (bytes == 2)
+        mask = 0xffffUL;
+    else if (bytes == 4)
+        mask = 0xffffffffUL;
+    else
+        return 0;
+    *bits_out = (unsigned long)value & mask;
+    return 1;
+}
+
+static int mir_promotion_denormalize(
+    unsigned long bits, int type, long *value_out)
+{
+    int bytes = type_size(type);
+
+    if (value_out == NULL || !mir_promotion_integer_type(type))
+        return 0;
+    bits &= bytes == 1 ? 0xffUL
+          : bytes == 2 ? 0xffffUL : 0xffffffffUL;
+    if ((type & TYPE_UNSIGNED) == 0) {
+        if (bytes == 1 && (bits & 0x80UL) != 0)
+            *value_out = (long)bits - 0x100L;
+        else if (bytes == 2 && (bits & 0x8000UL) != 0)
+            *value_out = (long)bits - 0x10000L;
+        else if (bytes == 4 && (bits & 0x80000000UL) != 0)
+            *value_out = (long)bits - 0x100000000L;
+        else
+            *value_out = (long)bits;
+    } else {
+        *value_out = (long)bits;
+    }
+    return 1;
+}
+
+static int mir_promotion_evaluate(
+    int value, unsigned long *bits_out, int depth)
+{
+    const struct MirInsn *definition;
+    long value_out;
+    int instruction;
+
+    if (depth > 16 ||
+        (definition = mir_definition(value)) == NULL)
+        return 0;
+    if (mir_machine_evaluate_constant(
+            value, &value_out, 0))
+        return mir_promotion_normalize(
+            value_out, definition->type, bits_out);
+    instruction = (int)(definition - mir.insns);
+    if (definition->opcode == MIR_PHI) {
+        int source;
+
+        if (instruction == 468 || instruction == 506)
+            source = definition->src1;
+        else if (instruction == 487 || instruction == 524)
+            source = definition->src2;
+        else
+            return 0;
+        return mir_promotion_evaluate(
+            source, bits_out, depth + 1);
+    }
+    if (definition->opcode == MIR_UNARY &&
+        definition->immediate == 0) {
+        const struct MirInsn *source =
+            mir_definition(definition->src1);
+        unsigned long source_bits;
+
+        if (source == NULL ||
+            !mir_promotion_evaluate(
+                definition->src1, &source_bits, depth + 1) ||
+            !mir_promotion_denormalize(
+                source_bits, source->type, &value_out))
+            return 0;
+        return mir_promotion_normalize(
+            value_out, definition->type, bits_out);
+    }
+    if (definition->opcode == MIR_LOAD) {
+        int store;
+
+        for (store = instruction - 1; store >= 0; --store)
+            if (mir.insns[store].opcode == MIR_STORE &&
+                mir_machine_same_location(
+                    &mir.insns[store], definition))
+                return mir_promotion_evaluate(
+                    mir.insns[store].src1,
+                    bits_out, depth + 1);
+    }
+    return 0;
+}
+
+static int mir_promotion_operations(void)
+{
+    static const struct MirPromotionOperation unary[] = {
+        {31, 34, 0, 0}, {32, 36, 0, 0}, {43, 36, 0, 0},
+        {85, 2, 0, 0}, {87, 34, 0, 0}, {88, 36, 0, 0},
+        {99, 36, 0, 0}, {108, 2, 0, 0}, {110, 33, 0, 0},
+        {111, 36, 0, 0}, {120, 36, 0, 0}, {155, 34, 0, 0},
+        {158, 36, 0, 0}, {167, 34, 0, 0}, {170, 36, 0, 0},
+        {178, 2, 0, '~'}, {179, 33, 0, 0}, {180, 36, 0, 0},
+        {189, 2, 0, 0}, {191, 33, 0, 0}, {192, 36, 0, 0},
+        {201, 2, 0, 0}, {202, 2, 0, 0}, {204, 34, 0, 0},
+        {205, 36, 0, 0}, {214, 2, 0, 0}, {215, 2, 0, 0},
+        {217, 33, 0, 0}, {218, 36, 0, 0}, {227, 2, 0, 0},
+        {228, 2, 0, 0}, {230, 34, 0, 0}, {231, 36, 0, 0},
+        {240, 34, 0, 0}, {243, 36, 0, 0}, {252, 2, 0, 0},
+        {254, 34, 0, 0}, {255, 36, 0, 0}, {264, 4, 0, 0},
+        {266, 34, 0, 0}, {267, 36, 0, 0}, {276, 36, 0, 0},
+        {300, 2, 0, 0}, {302, 34, 0, 0}, {303, 36, 0, 0},
+        {312, 2, 0, 0}, {313, 2, 0, 0}, {317, 34, 0, 0},
+        {318, 36, 0, 0}, {326, 2, 0, '+'}, {327, 33, 0, 0},
+        {328, 36, 0, 0}, {336, 2, 0, '-'}, {337, 33, 0, 0},
+        {338, 36, 0, 0}, {346, 2, 0, '-'}, {347, 33, 0, 0},
+        {348, 36, 0, 0}, {356, 2, 0, '~'}, {357, 33, 0, 0},
+        {358, 36, 0, 0}, {366, 2, 0, '!'}, {367, 36, 0, 0},
+        {375, 36, 0, '-'}, {385, 36, 0, '~'}, {395, 4, 0, '-'},
+        {405, 4, 0, '~'}, {416, 2, 0, 0}, {417, 2, 0, 0},
+        {419, 36, 0, 0}, {430, 36, 0, 0}, {441, 36, 0, 0},
+        {451, 36, 0, 0}, {465, 34, 0, 0}, {470, 36, 0, 0},
+        {480, 36, 0, 0}, {536, 33, 0, 0}, {542, 36, 0, 0},
+        {548, 1, 0, 0}, {553, 33, 0, 0}, {554, 36, 0, 0},
+        {560, 34, 0, 0}, {566, 36, 0, 0}, {572, 2, 0, 0},
+        {577, 34, 0, 0}, {578, 36, 0, 0}, {604, 33, 0, 0},
+        {610, 36, 0, 0}, {624, 36, 0, 0}
+    };
+    static const struct MirPromotionOperation binary[] = {
+        {30, 2, 2, TOK_SHR}, {41, 34, 34, TOK_SHR},
+        {52, 4, 4, TOK_SHR}, {63, 4, 4, TOK_SHR},
+        {74, 36, 36, TOK_SHR}, {86, 2, 2, TOK_SHL},
+        {97, 34, 34, TOK_SHL}, {109, 2, 2, TOK_SHR},
+        {121, 36, 36, '&'}, {132, 36, 36, '|'},
+        {144, 36, 36, '&'}, {156, 34, 34, '|'},
+        {168, 34, 34, '^'}, {190, 2, 2, '&'},
+        {203, 2, 2, '+'}, {216, 2, 2, '+'},
+        {229, 2, 2, '*'}, {241, 34, 34, '*'},
+        {253, 2, 2, '/'}, {265, 4, 4, '/'},
+        {277, 36, 36, '+'}, {289, 36, 36, '+'},
+        {301, 2, 2, '+'}, {314, 2, 2, '*'},
+        {316, 2, 2, '+'}, {418, 2, 2, '<'},
+        {429, 2, 36, '>'}, {440, 2, 36, '<'},
+        {450, 2, 4, '<'}, {603, 2, 2, '+'},
+        {617, 34, 34, '+'}, {631, 36, 36, '+'}
+    };
+    size_t item;
+
+    for (item = 0; item < sizeof(unary) / sizeof(unary[0]); ++item) {
+        const struct MirInsn *insn =
+            &mir.insns[unary[item].instruction];
+
+        if (insn->opcode != MIR_UNARY ||
+            insn->type != unary[item].type ||
+            insn->immediate != unary[item].operation)
+            return 0;
+    }
+    for (item = 0; item < sizeof(binary) / sizeof(binary[0]); ++item) {
+        const struct MirInsn *insn =
+            &mir.insns[binary[item].instruction];
+
+        if (insn->opcode != MIR_BINARY ||
+            insn->type != binary[item].type ||
+            insn->secondary_offset != binary[item].operand_type ||
+            insn->immediate != binary[item].operation)
+            return 0;
+    }
+    return 1;
+}
+
+static int mir_promotion_initial_state(void)
+{
+    static const struct {
+        int instruction;
+        int type;
+        long value;
+    } constants[] = {
+        {3, 1, -10L}, {6, 33, 200L}, {9, 2, 62536L},
+        {11, 34, 50000L}, {13, 4, 123456L},
+        {15, 36, 4000000000L}, {18, 4, 4293967296L},
+        {23, 2, 0L}, {458, 2, 1L}, {477, 2, 0L},
+        {496, 2, 1L}, {515, 2, 0L}, {593, 33, 250L},
+        {596, 34, 60000L}, {599, 36, 4294967280L}
+    };
+    static const int object_types[10] = {
+        1, 33, 2, 34, 4, 36, 4, 33, 34, 36
+    };
+    static const struct {
+        int instruction;
+        int object;
+        int bytes;
+    } stores[] = {
+        {4, 0, 1}, {7, 1, 1}, {10, 2, 2}, {12, 3, 2},
+        {14, 4, 4}, {16, 5, 4}, {19, 6, 4}, {537, 7, 1},
+        {561, 8, 2}, {594, 7, 1}, {597, 8, 2}, {600, 9, 4},
+        {605, 7, 1}, {619, 8, 2}, {633, 9, 4}
+    };
+    size_t item;
+
+    if (mir.object_count != 10 || mir.local_bytes != 31 ||
+        mir.aggregate_temp_bytes != 0)
+        return 0;
+    for (item = 0; item < 10; ++item)
+        if (mir.objects[item].storage != SC_LOCAL ||
+            mir.objects[item].type != object_types[item] ||
+            mir.objects[item].is_register)
+            return 0;
+    for (item = 0; item < sizeof(constants) / sizeof(constants[0]);
+         ++item) {
+        const struct MirInsn *insn =
+            &mir.insns[constants[item].instruction];
+
+        if (insn->opcode != MIR_CONST ||
+            insn->type != constants[item].type ||
+            insn->immediate != constants[item].value)
+            return 0;
+    }
+    for (item = 0; item < sizeof(stores) / sizeof(stores[0]); ++item) {
+        const struct MirInsn *insn =
+            &mir.insns[stores[item].instruction];
+
+        if (insn->opcode != MIR_STORE ||
+            insn->object != stores[item].object ||
+            insn->memory_size != stores[item].bytes ||
+            (insn->memory_flags & (1 | 8)) != 0)
+            return 0;
+    }
+    return mir_machine_same_location(
+               &mir.insns[549], &mir.insns[552]) &&
+           mir_machine_same_location(
+               &mir.insns[573], &mir.insns[576]) &&
+           mir.insns[549].object < 0 &&
+           mir.insns[573].object < 0 &&
+           mir_promotion_scalar_type(
+               mir.insns[548].type, TYPE_CHAR, 0, 1) &&
+           mir_promotion_scalar_type(
+               mir.insns[552].type, TYPE_CHAR, 0, 1) &&
+           mir_promotion_scalar_type(
+               mir.insns[572].type, TYPE_INT, 0, 2) &&
+           mir_promotion_scalar_type(
+               mir.insns[576].type, TYPE_INT, 0, 2);
+}
+
+static int mir_promotion_direct_call(
+    const struct MirInsn *call, struct Sym **function_out,
+    int variadic, int fixed_arguments)
+{
+    struct Sym *function;
+
+    if (call->opcode != MIR_CALL || call->src1 >= 0 ||
+        ((call->memory_flags & MIR_CALL_FLAG_VARIADIC) != 0) != variadic ||
+        (function = find_global(call->name)) == NULL ||
+        function->storage != SC_FUNC || function->is_funcptr ||
+        function->is_noreturn || !function->has_proto ||
+        function->proto_nargs != fixed_arguments ||
+        function->proto_variadic != variadic ||
+        call->type != function->type)
+        return 0;
+    *function_out = function;
+    return 1;
+}
+
+static int mir_promotion_string_argument(
+    int value, int *string_out)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    if (definition == NULL ||
+        definition->opcode != MIR_STRING_ADDRESS ||
+        !mir_promotion_char_pointer_type(definition->type) ||
+        definition->immediate <= 0)
+        return 0;
+    *string_out = (int)definition->immediate;
+    return 1;
+}
+
+static void mir_promotion_capture_call_name(
+    char destination[64], const struct MirInsn *call,
+    struct Sym *function)
+{
+    const char *name = call->base_name[0] != 0
+        ? call->base_name
+        : asm_name_for(sym_asm_name(function));
+
+    snprintf(destination, 64, "%s", name);
+}
+
+static int mir_match_promotion_call_runner(
+    struct MirPromotionCallRunner *plan)
+{
+    static const unsigned long expected[MIR_PROMOTION_CHECK_COUNT] = {
+        65348UL, 3125UL, 7716UL, 4294904796UL, 15625000UL,
+        400UL, 3392UL, 251UL, 4000000000UL, 4000000015UL,
+        57856UL, 65526UL, 15526UL, 55UL, 246UL, 65516UL,
+        190UL, 63536UL, 38528UL, 300UL, 2UL, 4000050000UL,
+        4000123456UL, 500UL, 60536UL, 200UL, 56UL, 10UL,
+        9UL, 0UL, 294967296UL, 294967295UL, 1000000UL,
+        4294843839UL, 1UL, 1UL, 1UL, 1UL, 50000UL,
+        4000000000UL, 4000000000UL, 4293967296UL, 246UL,
+        200UL, 57920UL, 10240UL, 4UL, 4464UL, 16UL
+    };
+    static const int branch_targets[][2] = {
+        {459, 463}, {478, 483}, {497, 501}, {516, 520}, {645, 654}
+    };
+    static const int phi_contracts[][5] = {
+        {468, 461, 466, 11, 465},
+        {487, 481, 485, 480, 15},
+        {506, 499, 504, 15, 13},
+        {524, 518, 522, 13, 18}
+    };
+    int all_strings[52];
+    int call_count = 0;
+    int check = 0;
+    int instruction;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (!mir_promotion_opcode_sequence())
+        return mir_machine_reject(
+            "promotion-call-runner", "opcode");
+    if (!mir_promotion_operations())
+        return mir_machine_reject(
+            "promotion-call-runner", "operations");
+    if (!mir_promotion_initial_state())
+        return mir_machine_reject(
+            "promotion-call-runner", "initial-state");
+    if (mir_cfg_block_count() != 18 || mir.has_vla ||
+        mir.is_variadic_function ||
+        !mir_promotion_scalar_type(
+            mir.return_type, TYPE_INT, 0, 2))
+        return mir_machine_reject(
+            "promotion-call-runner", "shape");
+    for (item = 0;
+         item < (int)(sizeof(branch_targets) /
+                      sizeof(branch_targets[0]));
+         ++item)
+        if (mir.insns[branch_targets[item][0]].label !=
+            mir.insns[branch_targets[item][1]].label)
+            return mir_machine_reject(
+                "promotion-call-runner", "branches");
+    for (item = 0;
+         item < (int)(sizeof(phi_contracts) /
+                      sizeof(phi_contracts[0]));
+         ++item) {
+        const struct MirInsn *phi =
+            &mir.insns[phi_contracts[item][0]];
+
+        if (phi->phi_pred1 !=
+                mir.insns[phi_contracts[item][1]].label ||
+            phi->phi_pred2 !=
+                mir.insns[phi_contracts[item][2]].label ||
+            phi->src1 !=
+                mir.insns[phi_contracts[item][3]].dst ||
+            phi->src2 !=
+                mir.insns[phi_contracts[item][4]].dst)
+            return mir_machine_reject(
+                "promotion-call-runner", "phis");
+    }
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *call = &mir.insns[instruction];
+        struct Sym *function;
+        int arguments[3];
+        int argument_count;
+        int string_id;
+
+        if (call->opcode != MIR_CALL)
+            continue;
+        if (call_count == 0 || call_count >= 50) {
+            int print_slot = call_count == 0 ? 0
+                           : call_count == 50 ? 1 : 2;
+
+            argument_count = call_count == 50 ? 2 : 1;
+            if (!mir_promotion_direct_call(
+                    call, &function, 1, 1) ||
+                !mir_promotion_scalar_type(
+                    function->type, TYPE_INT, 0, 2) ||
+                !mir_promotion_char_pointer_type(
+                    function->proto_types[0]) ||
+                !mir_machine_call_arguments(
+                    call, argument_count, arguments) ||
+                !mir_promotion_string_argument(
+                    arguments[0], &string_id))
+                return mir_machine_reject(
+                    "promotion-call-runner", "print-call");
+            if (plan->print_function == NULL)
+                plan->print_function = function;
+            else if (plan->print_function != function)
+                return mir_machine_reject(
+                    "promotion-call-runner", "print-family");
+            if (call_count == 0)
+                plan->intro_string = string_id;
+            else if (call_count == 50) {
+                const struct MirInsn *failure =
+                    mir_definition(arguments[1]);
+
+                plan->failure_string = string_id;
+                if (failure != &mir.insns[648])
+                    return mir_machine_reject(
+                        "promotion-call-runner",
+                        "failure-argument");
+            } else
+                plan->success_string = string_id;
+            mir_promotion_capture_call_name(
+                plan->print_names[print_slot],
+                call, function);
+        } else {
+            const struct MirInsn *got;
+            const struct MirInsn *want;
+            unsigned long got_bits;
+            unsigned long want_bits;
+
+            if (!mir_promotion_direct_call(
+                    call, &function, 0, 3) ||
+                (function->type & 15) != TYPE_VOID ||
+                type_ptr_depth(function->type) != 0 ||
+                !mir_promotion_char_pointer_type(
+                    function->proto_types[0]) ||
+                !mir_promotion_scalar_type(
+                    function->proto_types[1],
+                    TYPE_LONG, 1, 4) ||
+                !mir_promotion_scalar_type(
+                    function->proto_types[2],
+                    TYPE_LONG, 1, 4) ||
+                !mir_machine_call_arguments(
+                    call, 3, arguments) ||
+                !mir_promotion_string_argument(
+                    arguments[0], &string_id) ||
+                (got = mir_definition(arguments[1])) == NULL ||
+                (want = mir_definition(arguments[2])) == NULL ||
+                !mir_promotion_integer_type(got->type) ||
+                !mir_promotion_scalar_type(
+                    want->type, TYPE_LONG, 1, 4) ||
+                !mir_promotion_evaluate(
+                    arguments[1], &got_bits, 0) ||
+                !mir_promotion_evaluate(
+                    arguments[2], &want_bits, 0) ||
+                got_bits != expected[check] ||
+                want_bits != expected[check] ||
+                call->secondary_offset != check + 1) {
+                return mir_machine_reject(
+                    "promotion-call-runner", "checks");
+            }
+            if (plan->check_function == NULL)
+                plan->check_function = function;
+            else if (plan->check_function != function)
+                return mir_machine_reject(
+                    "promotion-call-runner", "check-family");
+            plan->check_strings[check] = string_id;
+            plan->values[check] = expected[check];
+            ++check;
+        }
+        all_strings[call_count] = string_id;
+        for (item = 0; item < call_count; ++item)
+            if (all_strings[item] == string_id)
+                return mir_machine_reject(
+                    "promotion-call-runner", "strings");
+        ++call_count;
+    }
+    if (call_count != 52 || check != MIR_PROMOTION_CHECK_COUNT)
+        return mir_machine_reject(
+            "promotion-call-runner", "call-count");
+    if (!mir_machine_named_nonvolatile(&mir.insns[25]) ||
+        (plan->failures = find_global(
+             mir.insns[25].name)) == NULL ||
+        !mir_machine_same_location(
+            &mir.insns[25], &mir.insns[644]) ||
+        !mir_machine_same_location(
+            &mir.insns[25], &mir.insns[648]) ||
+        !mir_promotion_scalar_type(
+            plan->failures->type, TYPE_INT, 0, 2) ||
+        mir.insns[25].src1 != mir.insns[23].dst ||
+        mir.insns[645].src1 != mir.insns[644].dst ||
+        mir.insns[649].src1 != mir.insns[648].dst ||
+        mir.insns[651].immediate != 1 ||
+        mir.insns[652].src1 != mir.insns[651].dst ||
+        mir.insns[658].immediate != 0 ||
+        mir.insns[659].src1 != mir.insns[658].dst)
+        return mir_machine_reject(
+            "promotion-call-runner", "failure-path");
+    return 1;
+}
+
+static void mir_promotion_print(
+    FILE *out, const struct MirPromotionCallRunner *plan,
+    int string_id, int print_slot, int words)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+    mir_emit_runtime_call(out, plan->print_names[print_slot]);
+    mir_emit_final_call_cleanup(out, words);
+}
+
+static void mir_emit_promotion_call_runner(
+    FILE *out, const struct MirPromotionCallRunner *plan)
+{
+    int success = new_label();
+    int check;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_promotion_print(
+        out, plan, plan->intro_string, 0, 1);
+    fputs("\tld hl,0\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->failures, 0);
+    for (check = 0; check < MIR_PROMOTION_CHECK_COUNT; ++check) {
+        mir_emit_final_call_constant(
+            out, plan->values[check], 4);
+        mir_emit_final_call_constant(
+            out, plan->values[check], 4);
+        fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+                plan->check_strings[check]);
+        mir_machine_emit_symbol_call(
+            out, plan->check_function);
+        mir_emit_final_call_cleanup(out, 5);
+    }
+    mir_machine_emit_global_word(
+        out, plan->failures, 0);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n\tpush hl\n", success);
+    mir_promotion_print(
+        out, plan, plan->failure_string, 1, 2);
+    fputs("\tld hl,1\n\tret\n", out);
+    fprintf(out, "L%d:\n", success);
+    mir_promotion_print(
+        out, plan, plan->success_string, 2, 1);
+    fputs("\tld hl,0\n\tret\n", out);
+}
+
 int mir_try_emit_call_runners(FILE *out, int phase)
 {
     if (phase == 0) {
+        struct MirPromotionCallRunner promotion_plan;
         struct MirReadValidateRunner read_validate_plan;
         struct MirBufferedConsoleRunner buffered_console_plan;
         struct MirDirectoryEnumerationRunner directory_plan;
@@ -13107,6 +13789,12 @@ int mir_try_emit_call_runners(FILE *out, int phase)
         struct MirCastLogicalRunner cast_logical_plan;
         struct MirFixedCallCheckRunner plan;
 
+        if (mir_match_promotion_call_runner(
+                &promotion_plan)) {
+            mir_emit_promotion_call_runner(
+                out, &promotion_plan);
+            return 1;
+        }
         if (mir_match_read_validate_runner(
                 &read_validate_plan)) {
             mir_emit_read_validate_runner(

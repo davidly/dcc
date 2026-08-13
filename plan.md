@@ -3,6 +3,53 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-13 integer-promotion 18-block batch (working tree)
+
+- Branch/base: `pr/143` at `e8e075a`. The call-runner module now admits the
+  18-block `tpromo32.main` `final-cost-policy` fallback through a strict
+  structural matcher over all **660 MIR instructions**. It validates the
+  complete opcode stream and CFG, all 49 check calls and argument identities,
+  all three formatted-output calls, the signed and unsigned 8/16/32-bit
+  initial objects, every unary/binary operation and common operand type, four
+  conditional merges, narrowing assignments, compound assignments, the
+  failure object and both returns. The matcher contains no function, helper,
+  local, global, format or output name and no output hash.
+- Constant results are accepted only after the existing MIR constant evaluator
+  succeeds and the result is normalized to the exact target width. The four
+  constant conditional merges and two surviving local reloads are resolved
+  only through their validated CFG or exact prior store, preserving signedness
+  and 8/16/32-bit wrap rather than using host-width arithmetic.
+- The dedicated emitter preserves the introductory, check, failure and success
+  calls and both return paths. Its proved values are passed directly to the
+  original check function. It is frameless and emits no IX or IY instruction.
+  Normal selected/captured metrics are **7,696/14,188 bytes** and
+  **808/1,464 instructions**. Stack-check metrics are **7,725/14,217 bytes**
+  and **809/1,465 instructions**.
+- Stack-check full-mode selected/fallback totals are
+  **65,755/80,442 cycles and 7,040/8,960 bytes** peep plus
+  **67,519/82,592 cycles and 7,040/9,216 bytes** nopeep. Both runs pass the
+  unchanged complete `tpromo32` output, for **-18.26%/-18.25%** cycle wins.
+- A helper/global/local/function-renamed fixture selects the same family at
+  **7,725/14,208 bytes** and **809/1,464 instructions**. Selected/fallback
+  output is identical in both modes. Peep totals are
+  **65,721/80,408 cycles and 5,376/7,296 bytes**; nopeep totals are
+  **67,485/82,558 cycles and 5,376/7,424 bytes**.
+- Changing only the signed byte to an equal-bit-pattern unsigned byte is
+  rejected at the opcode contract and remains on `final-cost-policy`; peep and
+  nopeep output is identical with the same nine expected failed checks.
+  Changing only the signed right shift to an unsigned right shift is likewise
+  rejected and produces the same one expected failed check in both modes.
+- The regression-gated stack-check census advances
+  **2,163/2,185 (98.99%)** to **2,164/2,185 (99.04%)**, adds exactly
+  `tpromo32.main`, removes no accepted function, moves selector counts from
+  **1,390 spilled / 388 scheduled** to **1,389 spilled / 389 scheduled**, and
+  reduces `final-cost-policy` fallbacks **22 -> 21**.
+- The call-runner module grows from **13,208 to 13,896 source lines**
+  (**+688**). Its standalone object defines only
+  `mir_try_emit_call_runners [T]` globally and has zero global data
+  definitions. The canonical build and `git diff --check` pass. No
+  performance baseline, production name or output hash was added or changed.
+
 ## 2026-08-13 buffered-read validation 17-block batch (working tree)
 
 - Branch/base: `pr/143` at `5b9ff1c`. The call-runner module now admits the
