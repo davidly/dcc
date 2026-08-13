@@ -277,11 +277,10 @@ __argbuf:
 ;                            before stdin input, or at program exit;
 ;                1 (_IOLBF)  additionally flush at each newline (the default);
 ;                2 (_IONBF)  flush after every character.
-; Preserves all registers except F (callers rely on this).
+; Preserves BC/DE/HL; clobbers A and F (no caller depends on either surviving).
         public  __conout
 COBSZ   equ     128
 __conout:
-        push    af
         push    bc
         push    de
         push    hl
@@ -309,7 +308,6 @@ co_ret:
         pop     hl
         pop     de
         pop     bc
-        pop     af
         ret
 
 ; __cob_put: append the character in A to the console buffer; flush if it is
