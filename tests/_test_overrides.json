@@ -91,6 +91,7 @@
     { "name": "tdirent", "host": true, "perf_ignore": true },
     { "name": "cpmenumd", "perf_ignore": true },
     { "name": "terrno", "host": true },
+    { "name": "ttime", "dcc_args": "dcc-peep=false" },
     { "name": "tlimits", "host": true, "requires-32bit-linux-host-compiler": true },
     { "name": "tlong", "host": true, "requires-32bit-linux-host-compiler": true },
     { "name": "tlongaud", "host": true, "requires-32bit-linux-host-compiler": true },

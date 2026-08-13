@@ -1138,6 +1138,37 @@ static int try_subtract_one_at(int i)
      *   dec hl
      *
      * This hits HL = n - 1 patterns in indexed loops.
+     *
+     * KNOWN BUG (found 2026-08-13, via dcc/tests/ttime.c's mktime() tests -
+     * see the dcc-peep=false override for "ttime" in
+     * tests/_test_overrides.json): 16-bit DEC HL does not set flags on Z80,
+     * unlike SBC HL,DE. The "not immediately followed by a conditional
+     * branch" check below only looks at the single next line and only
+     * recognizes literal "jp " as a branch. pass_bool_from_cmp() (dccpeep.c)
+     * can relocate the real flag-consuming branch two lines further away,
+     * behind an intervening flag-neutral "ld hl,0" - when that pass runs
+     * first, this check no longer sees a "jp "-prefixed line, concludes the
+     * flags are dead, and substitutes dec hl, silently corrupting the
+     * branch that still depends on them. (A jp-to-jr shortening pass
+     * running first would trip the same blind spot, since the check never
+     * looks for "jr " either.)
+     *
+     * Already fixed on the perf/unified-regalloc branch (~/gh/dcc): that
+     * branch rewrote this function to use peep_flags_dead_after /
+     * peep_registers_dead_after - a proper dataflow-based liveness
+     * analysis that already exists on this branch too (see dccpeep.c's own
+     * other uses of peep_flags_dead_after) but was never wired up here.
+     * Confirmed empirically: feature-branch dccpeep applied to the same
+     * pre-peephole input produces correct output.
+     *
+     * Do NOT patch this function here to fix it locally - the feature
+     * branch's version touches these exact lines with a larger rewrite
+     * (plus new helpers: subtract_one_bc_loop_flags_dead,
+     * subtract_one_transfer_is_safe, subtract_one_call_argument_is_safe),
+     * so any local fix here would just create a guaranteed merge conflict
+     * for no benefit. Once that branch merges: delete this comment, drop
+     * the "ttime" dcc-peep=false override in tests/_test_overrides.json,
+     * and confirm tests/ttime.c passes with peephole enabled again.
      */
     if (eq(i, "ld de,1") &&
         eq(i + 1, "or a") &&

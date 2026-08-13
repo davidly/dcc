@@ -7,4 +7,34 @@ PASS difftime(5,0) == 5 (t1/t0 argument order)
 PASS difftime(0,5) == -5 (t1/t0 argument order)
 PASS difftime across a 65536s boundary == 65536
 PASS difftime(t,t) == 0
+PASS gmtime NULL check
+PASS 1970-01-01 wday
+PASS 1970-01-01 yday
+PASS 1970-01-01 mday
+PASS 1970-01-01 mon
+PASS 1970-01-01 year
+PASS 1970-01-01 asctime
+PASS 2000-01-01 wday
+PASS 2000-01-01 asctime
+PASS 2000-02-29 mday
+PASS 2000-02-29 mon
+PASS 2038 rollover year
+PASS 2038 rollover mon
+PASS 2038 rollover mday
+PASS 2038 rollover hour
+PASS 2038 rollover min
+PASS 2038 rollover sec
+PASS localtime matches gmtime (no tz database)
+PASS ctime matches asctime(localtime)
+PASS gmtime(NULL) returns NULL
+PASS localtime(NULL) returns NULL
+PASS asctime(NULL) returns NULL
+PASS ctime(NULL) returns NULL
+PASS mktime(NULL) returns -1
+PASS mktime round-trip
+PASS mktime round-trip wday filled
+PASS mktime mday overflow -> mon
+PASS mktime mday overflow -> mday
+PASS mktime mon==12 -> year
+PASS mktime mon==12 -> mon
 ttime passed

@@ -20925,18 +20925,17 @@ __lcnv:
 ; emulator tested either implements it too or safely no-ops it, leaving a
 ; deterministic-but-wrong fixed timestamp rather than crashing - acceptable
 ; since real hardware/BIOS behavior for an unrecognized BDOS call is already
-; undefined. clock() and the calendar-breakdown functions (localtime, gmtime,
-; asctime, ctime, mktime, strftime) remain stubs; nothing here builds a
-; struct tm.
+; undefined.
+;
+; gmtime/localtime/asctime/ctime/mktime (see the generated block below,
+; after _difftime) build on that: since this target has no timezone
+; database, localtime() is just gmtime() under another name - the BDOS
+; clock's raw reading already *is* "local" time, with no UTC offset to
+; apply. clock() and strftime() remain stubs.
 ; ============================================================
         public  _clock
         public  _time
         public  _difftime
-        public  _mktime
-        public  _asctime
-        public  _ctime
-        public  _gmtime
-        public  __ltim
         public  _strftime
 
 _clock:
@@ -21120,22 +21119,1166 @@ _difftime:
         pop     ix
         ret
 
-_mktime:
-; time_t mktime(struct tm *tp) -- returns (time_t)-1 (unavailable)
-        ld      hl,0ffffh
-        ld      de,0ffffh
+; ================= BEGIN generated calendar functions (from calendar.c, peephole-optimized) =================
+; gmtime localtime(__ltim) asctime ctime mktime -- regenerate: dcc -c calendar.c -o calendar.mac | dccpeep,
+; then rename generated L<n>/_Z<n>/S<n> labels to CDL<n>/CDZ<n>/CDS<n> (collision-avoidance, same idea as the
+; strconv.c-derived block's SCL<n>/SCZ<n> rename below). dcc's own codegen already special-cases "localtime"
+; to call __ltim directly (see dcc_asmname.c), so no manual rename is needed for that one specifically.
+
+
+
+; static function cal_is_leap
+CDZ0001:
+        ld hl,2
+        add hl,sp
+        ld a,(hl)
+        inc hl
+        ld h,(hl)
+        ld l,a
+        ld e,3
+        call __r1p
+        ld a,h ; peep: cmp0_or_hl
+        or l
+        jr z,CDL15 ; peep: jp_to_jr
+        ld hl,0
+        ret ; peep: jp_to_plain_ret
+CDL15:
+        ld hl,2
+        add hl,sp
+        ld a,(hl)
+        inc hl
+        ld h,(hl)
+        ld l,a
+        ld e,100
+        call __r1s ; peep: const_divmod_helper
+        ld a,h ; peep: cmp0_or_hl
+        or l
+        jr z,CDL18 ; peep: jp_to_jr
+        ld hl,1
+        ret ; peep: jp_to_plain_ret
+CDL18:
+        ld hl,2
+        add hl,sp
+        ld a,(hl)
+        inc hl
+        ld h,(hl)
+        ld l,a
+        ld de,400
+        call __r2s ; peep: const_divmod_helper
+        ld a,h ; peep: cmp0_or_hl
+        or l
+        ld hl,0 ; peep: bool_from_cmp
+        jr nz,CDL14 ; peep: jp_to_jr
+        inc l
+CDL14:
         ret
 
-_asctime:
-_ctime:
+        public _gmtime
 _gmtime:
+        push ix
+        ld ix,0
+        add ix,sp
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld a,h
+        or l
+        jr nz,CDL169 ; peep: jp_to_jr
+        ld hl,0
+        jr CDL168 ; peep: jp_to_jr
+CDL169:
+        ld l,(ix+4) ; peep: ix_frame_ptr_deadd
+        ld h,(ix+5)
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        inc hl
+        ld a,(hl)
+        inc hl
+        ld h,(hl)
+        ld l,a
+        push hl ; peep: long_load_push_no_ex_call
+        push de
+        call CDZ0004
+        pop bc
+        pop bc
+CDL168:
+        ld sp,ix
+        pop ix
+        ret
+
+        public __ltim
 __ltim:
+        push ix
+        ld ix,0
+        add ix,sp
+        ld l,(ix+4)
+        ld h,(ix+5)
+        push hl
+        call _gmtime
+        ld sp,ix
+        pop ix
+        ret
+
+        public _asctime
+_asctime:
+        push ix
+        ld ix,0
+        add ix,sp
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld a,h
+        or l
+        jr nz,CDL187 ; peep: jp_to_jr
+        ld hl,0
+        jp CDL186
+CDL187:
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,10
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        ld de,1900
+        add hl,de
+        push hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        push hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        inc hl
+        inc hl
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        push hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,4
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        push hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,6
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        push hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,8
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        add hl,hl
+        ld de,CDZ0008
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        push hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,12
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        add hl,hl
+        ld de,CDZ0009
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        push hl
+        ld hl,CDS19
+        push hl
+        ld hl,CDZ0010
+        push hl
+        call _sprintf
+        pop bc
+        pop bc
+        pop bc
+        pop bc
+        pop bc
+        pop bc
+        pop bc
+        pop bc
+        pop bc
+        ld hl,CDZ0010
+CDL186:
+        ld sp,ix
+        pop ix
+        ret
+
+        public _ctime
+_ctime:
+        push ix
+        ld ix,0
+        add ix,sp
+        ld l,(ix+4)
+        ld h,(ix+5)
+        push hl
+        call __ltim
+        pop bc
+        push hl
+        call _asctime
+        ld sp,ix
+        pop ix
+        ret
+
+        public _mktime
+_mktime:
+        push ix
+        ld ix,0
+        add ix,sp
+        ld hl,-18
+        add hl,sp
+        ld sp,hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld a,h
+        or l
+        jr nz,CDL241 ; peep: jp_to_jr
+        ld hl,65535
+        ld de,65535 ; peep: fold_const_sxt
+        jp CDL240
+CDL241:
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,10
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        ld de,1900
+        add hl,de
+        ld (ix-2),l
+        ld (ix-1),h
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,8
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        ld (ix-4),l
+        ld (ix-3),h
+        ld c,(ix-4)
+        ld b,(ix-3)
+CDL244:
+        ld l,c
+        ld h,b
+        bit 7,h ; peep: signed_zero_branch
+        jr z,CDL245 ; peep: jp_to_jr
+        ld l,c
+        ld h,b
+        ld de,12
+        add hl,de
+        ld c,l
+        ld b,h
+        ld a,(ix-2)
+        dec (ix-2)
+        or a
+        jr nz,CDL244 ; peep: jp_to_jr
+        dec (ix-1)
+        jr CDL244 ; peep: jp_to_jr
+CDL245:
+        ld (ix-4),c
+        ld (ix-3),b
+        ld c,(ix-4)
+        ld b,(ix-3)
+CDL247:
+        ld l,c
+        ld h,b
+        ld de,32779 ; peep: signed_cmp_const_bias_fold
+        ld a,h
+        xor 80h
+        ld h,a
+        sbc hl,de
+        jr z,CDL248 ; peep: jp_to_jr
+        jr c,CDL248 ; peep: jp_to_jr
+        ld l,c
+        ld h,b
+        ld de,12
+        sbc hl,de
+        ld c,l
+        ld b,h
+        inc (ix-2)
+        jr nz,CDL247 ; peep: jp_to_jr
+        inc (ix-1)
+        jr CDL247 ; peep: jp_to_jr
+CDL248:
+        ld (ix-4),c
+        ld (ix-3),b
+        ld l,(ix-2)
+        ld h,(ix-1)
+        ld de,34738 ; peep: signed_cmp_const_bias_fold
+        ld a,h
+        xor 80h
+        ld h,a
+        sbc hl,de
+        jr nc,CDL250 ; peep: jp_to_jr
+        ld hl,65535
+        ld de,65535 ; peep: fold_const_sxt
+        jp CDL240
+CDL250:
+        ld hl,0
+        ld de,0 ; peep: fold_const_sxt
+        ld (ix-12),l
+        ld (ix-11),h
+        ld (ix-10),e
+        ld (ix-9),d
+        ld hl,1970
+        ld (ix-8),l
+        ld (ix-7),h
+CDL251:
+        ld l,(ix-8)
+        ld h,(ix-7)
+        ld e,(ix-2) ; peep: ix_pair_load_to_de
+        ld d,(ix-1)
+        ld a,h
+        xor 80h
+        ld h,a
+        ld a,d
+        xor 80h
+        ld d,a
+        sbc hl,de
+        jr nc,CDL253 ; peep: jp_to_jr
+        ld l,(ix-12)
+        ld h,(ix-11)
+        ld e,(ix-10)
+        ld d,(ix-9)
+        push de
+        push hl
+        ld l,(ix-8)
+        ld h,(ix-7)
+        push hl
+        call CDZ0001
+        pop bc
+        ld a,h
+        or l
+        jr z,CDL254 ; peep: jp_to_jr
+        ld hl,366
+        ld de,0
+        jr CDL255 ; peep: jp_to_jr
+CDL254:
+        ld hl,365
+        ld de,0
+CDL255:
+        pop bc
+        or a
+        add hl,bc
+        ex de,hl
+        pop bc
+        adc hl,bc
+        ex de,hl
+        ld (ix-12),l
+        ld (ix-11),h
+        ld (ix-10),e
+        ld (ix-9),d
+        inc (ix-8)
+        jp nz, CDL251
+        inc (ix-7)
+        jp CDL251
+CDL253:
+        ld hl,0
+        ld (ix-6),l
+        ld (ix-5),h
+CDL257:
+        ld l,(ix-6)
+        ld h,(ix-5)
+        ld e,(ix-4) ; peep: ix_pair_load_to_de
+        ld d,(ix-3)
+        ld a,h
+        xor 80h
+        ld h,a
+        ld a,d
+        xor 80h
+        ld d,a
+        sbc hl,de
+        jr nc,CDL259 ; peep: jp_to_jr
+        ld l,(ix-12)
+        ld h,(ix-11)
+        ld e,(ix-10)
+        ld d,(ix-9)
+        push de
+        push hl
+        ld l,(ix-6)
+        ld h,(ix-5)
+        push hl
+        ld l,(ix-2)
+        ld h,(ix-1)
+        push hl
+        call CDZ0002
+        pop bc
+        pop bc
+        ld a,h
+        rlca
+        sbc a,a
+        ld d,a
+        ld e,a
+        pop bc
+        or a
+        add hl,bc
+        ex de,hl
+        pop bc
+        adc hl,bc
+        ex de,hl
+        ld (ix-12),l
+        ld (ix-11),h
+        ld (ix-10),e
+        ld (ix-9),d
+        inc (ix-6)
+        jp nz, CDL257
+        inc (ix-5)
+        jp CDL257
+CDL259:
+        ld l,(ix-12)
+        ld h,(ix-11)
+        ld e,(ix-10)
+        ld d,(ix-9)
+        push de
+        push hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,6
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        dec hl ; peep: sbc_de1_to_dec
+        ld a,h
+        rlca
+        sbc a,a
+        ld d,a
+        ld e,a
+        pop bc
+        or a
+        add hl,bc
+        ex de,hl
+        pop bc
+        adc hl,bc
+        ex de,hl
+        ld (ix-12),l
+        ld (ix-11),h
+        ld (ix-10),e
+        ld (ix-9),d
+        ld e,(ix-10)
+        ld d,(ix-9)
+        push de
+        push hl
+        ld hl,20864
+        ld de,1
+        call __lmul
+        pop bc
+        pop bc
+        push de
+        push hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,4
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        ld a,h
+        rlca
+        sbc a,a
+        ld d,a
+        ld e,a
+        push de
+        push hl
+        ld hl,3600
+        ld de,0
+        call __lmul
+        pop bc
+        pop bc
+        pop bc
+        or a
+        add hl,bc
+        ex de,hl
+        pop bc
+        adc hl,bc
+        ex de,hl
+        push de
+        push hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        inc hl
+        inc hl
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        ld a,h
+        rlca
+        sbc a,a
+        ld d,a
+        ld e,a
+        push de
+        push hl
+        ld hl,60
+        ld de,0
+        call __lmul
+        pop bc
+        pop bc
+        pop bc
+        or a
+        add hl,bc
+        ex de,hl
+        pop bc
+        adc hl,bc
+        ex de,hl
+        push de
+        push hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        ld a,h
+        rlca
+        sbc a,a
+        ld d,a
+        ld e,a
+        pop bc
+        or a
+        add hl,bc
+        ex de,hl
+        pop bc
+        adc hl,bc
+        ex de,hl
+        ld (ix-16),l
+        ld (ix-15),h
+        ld (ix-14),e
+        ld (ix-13),d
+        ld e,(ix-14)
+        ld d,(ix-13)
+        ld a,d
+        xor 80h
+        ld d,a
+        ld bc,0
+        sbc hl,bc
+        ex de,hl
+        ld bc,32768
+        sbc hl,bc
+        jr nc,CDL261 ; peep: jp_to_jr
+        ld hl,65535
+        ld de,65535 ; peep: fold_const_sxt
+        jp CDL240
+CDL261:
+        ld l,(ix-16)
+        ld h,(ix-15)
+        ld e,(ix-14)
+        ld d,(ix-13)
+        push de
+        push hl
+        call CDZ0004
+        pop bc
+        pop bc
+        ld (ix-18),l
+        ld (ix-17),h
+        ld l,(ix+4)
+        ld h,(ix+5)
+        push hl
+        ld l,(ix-18)
+        ld h,(ix-17)
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        pop hl
+        ld (hl),e
+        inc hl
+        ld (hl),d
+        ld l,(ix+4)
+        ld h,(ix+5)
+        inc hl
+        inc hl
+        push hl
+        ld l,(ix-18)
+        ld h,(ix-17)
+        inc hl
+        inc hl
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        pop hl
+        ld (hl),e
+        inc hl
+        ld (hl),d
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,4
+        add hl,de
+        push hl
+        ld l,(ix-18)
+        ld h,(ix-17)
+        ld de,4
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        pop hl
+        ld (hl),e
+        inc hl
+        ld (hl),d
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,6
+        add hl,de
+        push hl
+        ld l,(ix-18)
+        ld h,(ix-17)
+        ld de,6
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        pop hl
+        ld (hl),e
+        inc hl
+        ld (hl),d
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,8
+        add hl,de
+        push hl
+        ld l,(ix-18)
+        ld h,(ix-17)
+        ld de,8
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        pop hl
+        ld (hl),e
+        inc hl
+        ld (hl),d
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,10
+        add hl,de
+        push hl
+        ld l,(ix-18)
+        ld h,(ix-17)
+        ld de,10
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        pop hl
+        ld (hl),e
+        inc hl
+        ld (hl),d
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,12
+        add hl,de
+        push hl
+        ld l,(ix-18)
+        ld h,(ix-17)
+        ld de,12
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        pop hl
+        ld (hl),e
+        inc hl
+        ld (hl),d
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,14
+        add hl,de
+        push hl
+        ld l,(ix-18)
+        ld h,(ix-17)
+        ld de,14
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        pop hl
+        ld (hl),e
+        inc hl
+        ld (hl),d
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,16
+        add hl,de
+        push hl
+        ld l,(ix-18)
+        ld h,(ix-17)
+        ld de,16
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        pop hl
+        ld (hl),e
+        inc hl
+        ld (hl),d
+        ld l,(ix-16)
+        ld h,(ix-15)
+        ld e,(ix-14)
+        ld d,(ix-13)
+CDL240:
+        ld sp,ix
+        pop ix
+        ret
+
+; static function cal_days_in_month
+CDZ0002:
+        push ix
+        ld ix,0
+        add ix,sp
+        ld l,(ix+6)
+        ld h,(ix+7)
+        ld de,1
+        or a
+        sbc hl,de
+        jr nz,CDL62 ; peep: jp_to_jr
+        ld l,(ix+4)
+        ld h,(ix+5)
+        push hl
+        call CDZ0001
+        pop bc
+        ld a,h
+        or l
+        jr z,CDL62 ; peep: jp_to_jr
+        ld hl,29
+        jr CDL61 ; peep: jp_to_jr
+CDL62:
+        ld l,(ix+6)
+        ld h,(ix+7)
+        add hl,hl
+        ld de,CDZ0003
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+CDL61:
+        ld sp,ix
+        pop ix
+        ret
+
+; static function cal_breakdown
+CDZ0004:
+        push ix
+        ld ix,0
+        add ix,sp
+        ld hl,-18
+        add hl,sp
+        ld sp,hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld e,(ix+6)
+        ld d,(ix+7)
+        ld a,d
+        xor 80h
+        ld d,a
+        ld bc,0
+        sbc hl,bc
+        ex de,hl
+        ld bc,32768
+        sbc hl,bc
+        jr nc,CDL140 ; peep: jp_to_jr
+        ld hl,0
+        jp CDL139
+CDL140:
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld e,(ix+6)
+        ld d,(ix+7)
+        push de
+        push hl
+        ld hl,20864
+        ld de,1
+        call __lds
+        pop bc
+        pop bc
+        ld (ix-4),l
+        ld (ix-3),h
+        ld (ix-2),e
+        ld (ix-1),d
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld e,(ix+6)
+        ld d,(ix+7)
+        push de
+        push hl
+        ld hl,20864
+        ld de,1
+        call __lms
+        pop bc
+        pop bc
+        ld (ix-8),l
+        ld (ix-7),h
+        ld (ix-6),e
+        ld (ix-5),d
+        ld e,(ix-6)
+        ld d,(ix-5)
+        push de
+        push hl
+        ld hl,3600
+        ld de,0
+        call __lds
+        pop bc
+        pop bc
+        ld (CDZ0005+4),hl
+        ld l,(ix-8)
+        ld h,(ix-7)
+        ld e,(ix-6)
+        ld d,(ix-5)
+        push de
+        push hl
+        ld hl,3600
+        ld de,0
+        call __lms
+        pop bc
+        pop bc
+        ld (ix-8),l
+        ld (ix-7),h
+        ld (ix-6),e
+        ld (ix-5),d
+        ld e,(ix-6)
+        ld d,(ix-5)
+        push de
+        push hl
+        ld hl,60
+        ld de,0
+        call __lds
+        pop bc
+        pop bc
+        ld (CDZ0005+2),hl
+        ld l,(ix-8)
+        ld h,(ix-7)
+        ld e,(ix-6)
+        ld d,(ix-5)
+        push de
+        push hl
+        ld hl,60
+        ld de,0
+        call __lms
+        pop bc
+        pop bc
+        ld (CDZ0005),hl
+        ld l,(ix-4)
+        ld h,(ix-3)
+        ld e,(ix-2)
+        ld d,(ix-1)
+        push de
+        push hl
+        ld hl,4
+        ld de,0
+        pop bc
+        or a
+        add hl,bc
+        ex de,hl
+        pop bc
+        adc hl,bc
+        ex de,hl
+        push de
+        push hl
+        ld hl,7
+        ld de,0
+        call __lms
+        pop bc
+        pop bc
+        ld (CDZ0005+12),hl
+        ld hl,1970
+        ld (ix-10),l
+        ld (ix-9),h
+CDL145:
+        ld l,(ix-10)
+        ld h,(ix-9)
+        push hl
+        call CDZ0001
+        pop bc
+        ld a,h
+        or l
+        jr z,CDL148 ; peep: jp_to_jr
+        ld hl,366
+        ld de,0
+        jr CDL149 ; peep: jp_to_jr
+CDL148:
+        ld hl,365
+        ld de,0
+CDL149:
+        ld (ix-16),l
+        ld (ix-15),h
+        ld (ix-14),e
+        ld (ix-13),d
+        ld l,(ix-4)
+        ld h,(ix-3)
+        ld e,(ix-2)
+        ld d,(ix-1)
+        push de
+        push hl
+        ld l,(ix-16)
+        ld h,(ix-15)
+        ld e,(ix-14)
+        ld d,(ix-13)
+        push de
+        push hl
+        call __lts
+        ex de,hl
+        ld hl,8
+        add hl,sp
+        ld sp,hl
+        ex de,hl
+        ld a,h
+        or l
+        jr nz,CDL147 ; peep: jp_to_jr
+        ld l,(ix-4)
+        ld h,(ix-3)
+        ld e,(ix-2)
+        ld d,(ix-1)
+        push de
+        push hl
+        ld l,(ix-16)
+        ld h,(ix-15)
+        ld e,(ix-14)
+        ld d,(ix-13)
+        ld b,h
+        ld c,l
+        pop hl
+        or a
+        sbc hl,bc
+        ld b,h
+        ld c,l
+        pop hl
+        sbc hl,de
+        ld d,b
+        ld e,c
+        ex de,hl
+        ld (ix-4),l
+        ld (ix-3),h
+        ld (ix-2),e
+        ld (ix-1),d
+        inc (ix-10)
+        jp nz, CDL145
+        inc (ix-9)
+        jp CDL145
+CDL147:
+        ld l,(ix-10)
+        ld h,(ix-9)
+        ld de,1900
+        or a
+        sbc hl,de
+        ld (CDZ0005+10),hl
+        ld l,(ix-4)
+        ld h,(ix-3)
+        ld e,(ix-2)
+        ld d,(ix-1)
+        ld (CDZ0005+14),hl
+        ld hl,0
+        ld (ix-12),l
+        ld (ix-11),h
+CDL152:
+        ld l,(ix-12)
+        ld h,(ix-11)
+        push hl
+        ld l,(ix-10)
+        ld h,(ix-9)
+        push hl
+        call CDZ0002
+        pop bc
+        pop bc
+        ld (ix-18),l
+        ld (ix-17),h
+        ld l,(ix-4)
+        ld h,(ix-3)
+        ld e,(ix-2)
+        ld d,(ix-1)
+        push de
+        push hl
+        ld l,(ix-18)
+        ld h,(ix-17)
+        ld a,h
+        rlca
+        sbc a,a
+        ld d,a
+        ld e,a
+        push de
+        push hl
+        call __lts
+        ex de,hl
+        ld hl,8
+        add hl,sp
+        ld sp,hl
+        ex de,hl
+        ld a,h
+        or l
+        jr nz,CDL154 ; peep: jp_to_jr
+        ld l,(ix-4)
+        ld h,(ix-3)
+        ld e,(ix-2)
+        ld d,(ix-1)
+        push de
+        push hl
+        ld l,(ix-18)
+        ld h,(ix-17)
+        ld a,h
+        rlca
+        sbc a,a
+        ld d,a
+        ld e,a
+        ld b,h
+        ld c,l
+        pop hl
+        or a
+        sbc hl,bc
+        ld b,h
+        ld c,l
+        pop hl
+        sbc hl,de
+        ld d,b
+        ld e,c
+        ex de,hl
+        ld (ix-4),l
+        ld (ix-3),h
+        ld (ix-2),e
+        ld (ix-1),d
+        inc (ix-12)
+        jp nz, CDL152
+        inc (ix-11)
+        jp CDL152
+CDL154:
+        ld l,(ix-12)
+        ld h,(ix-11)
+        ld (CDZ0005+8),hl
+        ld l,(ix-4)
+        ld h,(ix-3)
+        ld e,(ix-2)
+        ld d,(ix-1)
+        inc hl ; peep: ld_de1_to_inc
+        ld (CDZ0005+6),hl
+        ld hl,0
+        ld (CDZ0005+16),hl
+        ld hl,CDZ0005
+CDL139:
+        ld sp,ix
+        pop ix
+        ret
+
+; string literals
+CDS0:
+        db 83,117,110,0
+CDS1:
+        db 77,111,110,0
+CDS2:
+        db 84,117,101,0
+CDS3:
+        db 87,101,100,0
+CDS4:
+        db 84,104,117,0
+CDS5:
+        db 70,114,105,0
+CDS6:
+        db 83,97,116,0
+CDS7:
+        db 74,97,110,0
+CDS8:
+        db 70,101,98,0
+CDS9:
+        db 77,97,114,0
+CDS10:
+        db 65,112,114,0
+CDS11:
+        db 77,97,121,0
+CDS12:
+        db 74,117,110,0
+CDS13:
+        db 74,117,108,0
+CDS14:
+        db 65,117,103,0
+CDS15:
+        db 83,101,112,0
+CDS16:
+        db 79,99,116,0
+CDS17:
+        db 78,111,118,0
+CDS18:
+        db 68,101,99,0
+CDS19:
+        db 37,115,32,37,115,32,37,50,100,32,37,48,50,100,58,37,48,50,100,58,37,48,50,100,32,37,100,10,0
+
+; initialized globals
+CDZ0003:
+        dw 31
+        dw 28
+        dw 31
+        dw 30
+        dw 31
+        dw 30
+        dw 31
+        dw 31
+        dw 30
+        dw 31
+        dw 30
+        dw 31
+CDZ0009:
+        dw CDS0
+        dw CDS1
+        dw CDS2
+        dw CDS3
+        dw CDS4
+        dw CDS5
+        dw CDS6
+CDZ0008:
+        dw CDS7
+        dw CDS8
+        dw CDS9
+        dw CDS10
+        dw CDS11
+        dw CDS12
+        dw CDS13
+        dw CDS14
+        dw CDS15
+        dw CDS16
+        dw CDS17
+        dw CDS18
+
+; module uninitialized globals
+CDZ0005:
+        ds 18
+CDZ0010:
+        ds 26
+
+; ================= END generated calendar functions =================
+
 _strftime:
-; All return NULL/0 (no clock on CP/M 2.2). strftime returns size_t (0 =
-; wrote nothing) rather than a NULL pointer, but that's still HL=0 on
-; return, and none of these five functions ever read their arguments, so
-; the differing parameter lists don't matter for a shared stub that
-; ignores all of them.
+; size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tp)
+; Still a stub (returns 0, writes nothing) - a real implementation is a
+; separate, much bigger project (a format-string mini-interpreter), unlike
+; gmtime/localtime/asctime/ctime/mktime above which just needed the shared
+; time_t<->struct-tm breakdown.
         ld      hl,0
         ret
 
