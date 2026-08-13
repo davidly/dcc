@@ -3,6 +3,53 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-13 array-main 48-block batch (working tree)
+
+- Branch/base: `pr/143` at `34d0296`. The aggregate-check family now admits
+  the 48-block `tarray.main` `final-cost-policy` fallback through a strict
+  structural matcher over all **465 MIR instructions**. It validates the
+  complete opcode stream and CFG, both parameters, all six loop objects,
+  every constant/arithmetic/conversion operation, all six numeric arrays,
+  the character/board/string arrays, all indexed loads and stores, the ten
+  formatted-output calls, failure exit, record-test call and zero return.
+  The matcher contains no function, helper, parameter, local, global, format,
+  output or test name and no output hash.
+- The dedicated emitter preserves the five size checks and failure calls,
+  both complete numeric print passes, all six indexed writes, the eight-char
+  report, 8x8 board traversal and row newlines, eight string-pointer reports,
+  the record-test call and final success output in source order. The existing
+  record-test and binary-display schedules remain separate and observable.
+  It uses a compact **4-byte IX frame** versus the captured 12-byte lexical
+  frame plus spill slots and emits no IY instruction.
+- Normal selected/captured metrics are **5,796/7,622 bytes** and
+  **539/720 instructions**. Stack-check metrics are **5,825/7,651 bytes**
+  and **540/721 instructions**.
+- `tarray` passes full peep/nopeep validation. Selected versus forced fallback
+  is **3,177,053/3,178,608 cycles and 8,704/8,832 bytes** peep plus
+  **3,214,137/3,228,298 cycles and 8,832/9,344 bytes** nopeep. Exact gains
+  are **1,555 cycles and 128 bytes** peep plus **14,161 cycles and 512 bytes**
+  nopeep.
+- A separately renamed boundary fixture selects at **5,834/7,651 bytes** and
+  **540/720 instructions** with stack checking. Its unsigned and signed
+  initial arrays exercise zero, one, byte/word sign boundaries and 32-bit
+  extrema. Selected/fallback program output is byte-identical in both modes.
+  Peep totals are **3,737,215/3,738,770 cycles and 6,016/6,144 bytes**;
+  nopeep totals are **3,774,319/3,788,480 cycles and 6,144/6,784 bytes**.
+  Changing only one replacement bias from 20 to 21 is rejected at the
+  operations contract.
+- The regression-gated stack-check census advances
+  **2,170/2,185 (99.31%)** to **2,171/2,185 (99.36%)**, adds exactly
+  `tarray.main`, removes no accepted function, moves selector counts from
+  **1,383 spilled / 395 scheduled** to
+  **1,382 spilled / 396 scheduled**, and reduces `final-cost-policy`
+  fallbacks **15 -> 14**.
+- The aggregate-check module grows from **4,494 to 5,517 source lines**.
+  Its standalone object defines only `mir_try_emit_aggregate_checks [T]`
+  globally and has zero global data definitions. The canonical build,
+  focused full run, renamed boundary A/B, perturbation rejection,
+  regression-gated census, export audit and `git diff --check` pass. No
+  performance baseline, production name or output hash was added or changed.
+
 ## 2026-08-13 big-file 43-block batch (working tree)
 
 - Branch/base: `pr/143` at `9faccd3`. The endgame call-runner module now

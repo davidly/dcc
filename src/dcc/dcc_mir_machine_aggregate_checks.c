@@ -410,6 +410,278 @@ struct MirMultidimArrayRunner {
     int grid_column_stride;
 };
 
+#define MIR_ARRAY_MAIN_PRINT_CALLS 10
+#define MIR_ARRAY_MAIN_STRINGS 8
+#define MIR_ARRAY_MAIN_FRAME_BYTES 4
+
+enum MirArrayMainSymbol {
+    MIR_ARRAY_MAIN_U8,
+    MIR_ARRAY_MAIN_U16,
+    MIR_ARRAY_MAIN_U32,
+    MIR_ARRAY_MAIN_I8,
+    MIR_ARRAY_MAIN_I16,
+    MIR_ARRAY_MAIN_I32,
+    MIR_ARRAY_MAIN_CHARS,
+    MIR_ARRAY_MAIN_BOARD,
+    MIR_ARRAY_MAIN_WORDS,
+    MIR_ARRAY_MAIN_SYMBOLS
+};
+
+enum MirArrayMainString {
+    MIR_ARRAY_MAIN_SIZE_FAILURE,
+    MIR_ARRAY_MAIN_UNSIGNED_FORMAT,
+    MIR_ARRAY_MAIN_SIGNED_FORMAT,
+    MIR_ARRAY_MAIN_CHARS_FORMAT,
+    MIR_ARRAY_MAIN_BOARD_FORMAT,
+    MIR_ARRAY_MAIN_NEWLINE,
+    MIR_ARRAY_MAIN_WORD_FORMAT,
+    MIR_ARRAY_MAIN_SUCCESS,
+};
+
+struct MirArrayMainPlan {
+    struct Sym *symbols[MIR_ARRAY_MAIN_SYMBOLS];
+    struct Sym *print_function;
+    struct Sym *exit_function;
+    struct Sym *many_function;
+    int strings[MIR_ARRAY_MAIN_STRINGS];
+    char print_names[MIR_ARRAY_MAIN_PRINT_CALLS][64];
+    char exit_name[64];
+    int count;
+    int replacement_bias;
+    int board_columns;
+};
+
+struct MirArrayMainConstant {
+    short instruction;
+    short type;
+    long value;
+};
+
+struct MirArrayMainBinary {
+    short instruction;
+    short operation;
+    short type;
+    short operand_type;
+    short left;
+    short right;
+};
+
+struct MirArrayMainIndex {
+    short instruction;
+    short base;
+    short subscript;
+    short type;
+    short width;
+    short stride;
+};
+
+struct MirArrayMainEdge {
+    short instruction;
+    short target;
+};
+
+struct MirArrayMainPhi {
+    short instruction;
+    short first;
+    short second;
+    short first_predecessor;
+    short second_predecessor;
+};
+
+static const unsigned char mir_array_main_opcodes[] = {
+    MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_CONST, MIR_CONST, MIR_BINARY,
+    MIR_CONST, MIR_CONST, MIR_BINARY, MIR_BINARY, MIR_BRANCH_FALSE,
+    MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_CONST,
+    MIR_BINARY, MIR_CONST, MIR_CONST, MIR_BINARY, MIR_BINARY,
+    MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+    MIR_CONST, MIR_LABEL, MIR_PHI, MIR_LABEL, MIR_JUMP, MIR_LABEL,
+    MIR_PHI, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+    MIR_LABEL, MIR_CONST, MIR_CONST, MIR_BINARY, MIR_CONST, MIR_CONST,
+    MIR_BINARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST,
+    MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_LABEL,
+    MIR_JUMP, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE, MIR_LABEL,
+    MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_CONST, MIR_BINARY,
+    MIR_CONST, MIR_CONST, MIR_BINARY, MIR_BINARY, MIR_BRANCH_FALSE,
+    MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL,
+    MIR_PHI, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_PHI,
+    MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+    MIR_CONST, MIR_CONST, MIR_BINARY, MIR_CONST, MIR_CONST, MIR_BINARY,
+    MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+    MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_LABEL, MIR_JUMP,
+    MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG,
+    MIR_CALL, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_LABEL,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL,
+    MIR_NOP, MIR_LOAD, MIR_PHI, MIR_NOP, MIR_CONST, MIR_CONST,
+    MIR_BINARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_NOP, MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_NOP, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_NOP, MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP, MIR_LABEL,
+    MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL,
+    MIR_NOP, MIR_LOAD, MIR_NOP, MIR_PHI, MIR_NOP, MIR_CONST,
+    MIR_BINARY, MIR_BRANCH_FALSE, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+    MIR_NOP, MIR_CONST, MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT,
+    MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST,
+    MIR_BINARY, MIR_NOP, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_NOP,
+    MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_UNARY,
+    MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+    MIR_NOP, MIR_UNARY, MIR_NOP, MIR_CONST, MIR_BINARY,
+    MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+    MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT, MIR_ADDRESS,
+    MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST, MIR_BINARY,
+    MIR_UNARY, MIR_STORE_INDIRECT, MIR_NOP, MIR_LABEL, MIR_NOP,
+    MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_NOP,
+    MIR_LOAD, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_CONST,
+    MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP,
+    MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+    MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+    MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+    MIR_NOP, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP,
+    MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+    MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+    MIR_ARG, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+    MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP, MIR_LABEL, MIR_NOP,
+    MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_CONST,
+    MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS,
+    MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG,
+    MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+    MIR_ARG, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_CONST,
+    MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS,
+    MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG,
+    MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+    MIR_ARG, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_NOP,
+    MIR_LOAD, MIR_NOP, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP,
+    MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST,
+    MIR_STORE, MIR_LABEL, MIR_NOP, MIR_LOAD, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_LOAD, MIR_CONST, MIR_BINARY,
+    MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS,
+    MIR_NOP, MIR_CONST, MIR_BINARY, MIR_LOAD, MIR_BINARY,
+    MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL, MIR_LABEL,
+    MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP, MIR_LABEL,
+    MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL,
+    MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL,
+    MIR_NOP, MIR_LOAD, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_PHI, MIR_NOP, MIR_CONST, MIR_CONST, MIR_BINARY, MIR_BINARY,
+    MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_ARG,
+    MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+    MIR_ARG, MIR_CALL, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+    MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_CALL, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN
+};
+
+static const struct MirArrayMainConstant mir_array_main_constants[] = {
+    {3, TYPE_INT, 8}, {4, TYPE_INT, 1}, {6, TYPE_INT, 8},
+    {7, TYPE_INT, 1}, {12, 0, 1}, {15, TYPE_INT, 8},
+    {16, TYPE_INT, 1}, {18, TYPE_INT, 16}, {19, TYPE_INT, 2},
+    {24, 0, 1}, {27, 0, 0}, {36, 0, 1}, {39, TYPE_INT, 8},
+    {40, TYPE_INT, 1}, {42, TYPE_INT, 16}, {43, TYPE_INT, 2},
+    {48, 0, 1}, {51, 0, 0}, {60, 0, 1}, {63, TYPE_INT, 8},
+    {64, TYPE_INT, 1}, {66, TYPE_INT, 32}, {67, TYPE_INT, 4},
+    {72, 0, 1}, {75, 0, 0}, {84, 0, 1}, {87, TYPE_INT, 8},
+    {88, TYPE_INT, 1}, {90, TYPE_INT, 32}, {91, TYPE_INT, 4},
+    {96, 0, 1}, {99, 0, 0}, {110, TYPE_INT, 1},
+    {118, TYPE_INT, 0}, {125, TYPE_INT, 8}, {126, TYPE_INT, 1},
+    {175, 0, 1}, {183, TYPE_INT, 0}, {191, TYPE_INT, 8},
+    {198, TYPE_INT, 20}, {206, TYPE_INT, 20}, {214, TYPE_INT, 20},
+    {224, TYPE_LONG, 20}, {231, TYPE_INT, 20}, {238, TYPE_INT, 20},
+    {245, 0, 1}, {253, TYPE_INT, 0}, {262, TYPE_INT, 8},
+    {310, 0, 1}, {318, TYPE_INT, 0}, {323, TYPE_INT, 1},
+    {328, TYPE_INT, 2}, {333, TYPE_INT, 3}, {338, TYPE_INT, 4},
+    {343, TYPE_INT, 5}, {348, TYPE_INT, 6}, {353, TYPE_INT, 7},
+    {363, TYPE_INT, 0}, {374, TYPE_INT, 8}, {378, TYPE_INT, 0},
+    {389, TYPE_INT, 8}, {396, TYPE_INT, 8}, {406, 0, 1},
+    {417, 0, 1}, {425, TYPE_INT, 0}, {437, TYPE_INT, 16},
+    {438, TYPE_INT, 2}, {454, 0, 1}, {463, TYPE_INT, 0}
+};
+
+static const struct MirArrayMainBinary mir_array_main_binaries[] = {
+    {5, '/', TYPE_INT, TYPE_INT, 3, 4},
+    {8, '/', TYPE_INT, TYPE_INT, 6, 7},
+    {9, TOK_NE, TYPE_INT, TYPE_INT, 5, 8},
+    {17, '/', TYPE_INT, TYPE_INT, 15, 16},
+    {20, '/', TYPE_INT, TYPE_INT, 18, 19},
+    {21, TOK_NE, TYPE_INT, TYPE_INT, 17, 20},
+    {41, '/', TYPE_INT, TYPE_INT, 39, 40},
+    {44, '/', TYPE_INT, TYPE_INT, 42, 43},
+    {45, TOK_NE, TYPE_INT, TYPE_INT, 41, 44},
+    {65, '/', TYPE_INT, TYPE_INT, 63, 64},
+    {68, '/', TYPE_INT, TYPE_INT, 66, 67},
+    {69, TOK_NE, TYPE_INT, TYPE_INT, 65, 68},
+    {89, '/', TYPE_INT, TYPE_INT, 87, 88},
+    {92, '/', TYPE_INT, TYPE_INT, 90, 91},
+    {93, TOK_NE, TYPE_INT, TYPE_INT, 89, 92},
+    {127, '/', TYPE_INT, TYPE_INT, 125, 126},
+    {128, '<', TYPE_INT, TYPE_INT, 123, 127},
+    {176, '+', 0, 0, 123, 175},
+    {192, '<', TYPE_INT, TYPE_INT, 189, 191},
+    {199, '+', TYPE_INT, TYPE_INT, 189, 198},
+    {207, '+', TYPE_INT, TYPE_INT, 189, 206},
+    {215, '+', TYPE_INT, TYPE_INT, 189, 214},
+    {225, '-', TYPE_LONG, TYPE_LONG, 222, 224},
+    {232, '-', TYPE_INT, TYPE_INT, 189, 231},
+    {239, '-', TYPE_INT, TYPE_INT, 189, 238},
+    {246, '+', 0, 0, 189, 245},
+    {263, '<', TYPE_INT, TYPE_INT, 260, 262},
+    {311, '+', 0, 0, 260, 310},
+    {375, '<', TYPE_INT, TYPE_INT, 371, 374},
+    {390, '<', TYPE_INT, TYPE_INT, 388, 389},
+    {397, '*', TYPE_INT, TYPE_INT, 371, 396},
+    {399, '+', TYPE_INT, TYPE_INT, 397, 398},
+    {407, '+', 0, 0, 405, 406},
+    {418, '+', 0, 0, 371, 417},
+    {439, '/', TYPE_INT, TYPE_INT, 437, 438},
+    {440, '<', TYPE_INT, TYPE_INT, 435, 439},
+    {455, '+', 0, 0, 435, 454}
+};
+
+static const struct MirArrayMainIndex mir_array_main_indices[] = {
+    {136, 134, 123, 49, 1, 1}, {141, 139, 123, 50, 2, 2},
+    {146, 144, 123, 52, 4, 4}, {157, 155, 123, 17, 1, 1},
+    {162, 160, 123, 18, 2, 2}, {167, 165, 123, 20, 4, 4},
+    {196, 194, 189, 52, 4, 4}, {204, 202, 189, 50, 2, 2},
+    {212, 210, 189, 49, 1, 1}, {220, 218, 189, 20, 4, 4},
+    {229, 227, 189, 18, 2, 2}, {236, 234, 189, 17, 1, 1},
+    {271, 269, 260, 49, 1, 1}, {276, 274, 260, 50, 2, 2},
+    {281, 279, 260, 52, 4, 4}, {292, 290, 260, 17, 1, 1},
+    {297, 295, 260, 18, 2, 2}, {302, 300, 260, 20, 4, 4},
+    {319, 317, 318, 17, 1, 1}, {324, 322, 323, 17, 1, 1},
+    {329, 327, 328, 17, 1, 1}, {334, 332, 333, 17, 1, 1},
+    {339, 337, 338, 17, 1, 1}, {344, 342, 343, 17, 1, 1},
+    {349, 347, 348, 17, 1, 1}, {354, 352, 353, 17, 1, 1},
+    {400, 394, 399, 17, 1, 1}, {448, 446, 435, 81, 2, 2}
+};
+
+static const struct MirArrayMainEdge mir_array_main_edges[] = {
+    {10, 18}, {13, 22}, {22, 20}, {25, 21}, {31, 22},
+    {34, 13}, {37, 17}, {46, 15}, {49, 16}, {55, 17},
+    {58, 8}, {61, 12}, {70, 10}, {73, 11}, {79, 12},
+    {82, 3}, {85, 7}, {94, 5}, {97, 6}, {103, 7},
+    {106, 1}, {129, 33}, {178, 32}, {193, 37}, {248, 36},
+    {264, 41}, {313, 40}, {376, 45}, {391, 48}, {409, 47},
+    {420, 44}, {441, 52}, {457, 51}
+};
+
+static const struct MirArrayMainPhi mir_array_main_phis[] = {
+    {29, 24, 27, 23, 20}, {33, 12, 29, 19, 24},
+    {53, 48, 51, 25, 15}, {57, 36, 53, 14, 26},
+    {77, 72, 75, 27, 10}, {81, 60, 77, 9, 28},
+    {101, 96, 99, 29, 5}, {105, 84, 101, 4, 30},
+    {123, 118, 176, 1, 34}, {189, 183, 246, 33, 38},
+    {260, 253, 311, 37, 42}, {371, 363, 418, 41, 46},
+    {435, 425, 455, 45, 53}
+};
+
 static int mir_aggregate_direct_function(
     int instruction, struct Sym **function_out)
 {
@@ -427,6 +699,427 @@ static int mir_aggregate_direct_function(
          strcmp(call->base_name,
                 asm_name_for(sym_asm_name(*function_out)))))
         return 0;
+    return 1;
+}
+
+static int mir_array_main_opcode_sequence(void)
+{
+    int instruction;
+
+    if (mir.count !=
+        (int)(sizeof(mir_array_main_opcodes) /
+              sizeof(mir_array_main_opcodes[0])))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            mir_array_main_opcodes[instruction])
+            return 0;
+    return 1;
+}
+
+static int mir_array_main_operations(void)
+{
+    size_t item;
+
+    for (item = 0;
+         item < sizeof(mir_array_main_constants) /
+                sizeof(mir_array_main_constants[0]);
+         ++item) {
+        const struct MirArrayMainConstant *expected =
+            &mir_array_main_constants[item];
+        const struct MirInsn *insn =
+            &mir.insns[expected->instruction];
+
+        if (insn->opcode != MIR_CONST ||
+            insn->type != expected->type ||
+            insn->immediate != expected->value)
+            return 0;
+    }
+    for (item = 0;
+         item < sizeof(mir_array_main_binaries) /
+                sizeof(mir_array_main_binaries[0]);
+         ++item) {
+        const struct MirArrayMainBinary *expected =
+            &mir_array_main_binaries[item];
+        const struct MirInsn *insn =
+            &mir.insns[expected->instruction];
+
+        if (insn->opcode != MIR_BINARY ||
+            insn->immediate != expected->operation ||
+            insn->type != expected->type ||
+            insn->secondary_offset != expected->operand_type ||
+            insn->src1 != mir.insns[expected->left].dst ||
+            insn->src2 != mir.insns[expected->right].dst)
+            return 0;
+    }
+    if (mir.insns[200].immediate != 0 ||
+        mir.insns[200].type != (TYPE_LONG | TYPE_UNSIGNED) ||
+        mir.insns[200].src1 != mir.insns[199].dst ||
+        mir.insns[216].immediate != 0 ||
+        mir.insns[216].type != (TYPE_CHAR | TYPE_UNSIGNED) ||
+        mir.insns[216].src1 != mir.insns[215].dst ||
+        mir.insns[222].immediate != 0 ||
+        mir.insns[222].type != TYPE_LONG ||
+        mir.insns[222].src1 != mir.insns[189].dst ||
+        mir.insns[240].immediate != 0 ||
+        mir.insns[240].type != TYPE_CHAR ||
+        mir.insns[240].src1 != mir.insns[239].dst)
+        return 0;
+    return 1;
+}
+
+static int mir_array_main_graph(void)
+{
+    size_t item;
+
+    for (item = 0;
+         item < sizeof(mir_array_main_edges) /
+                sizeof(mir_array_main_edges[0]);
+         ++item) {
+        const struct MirArrayMainEdge *edge =
+            &mir_array_main_edges[item];
+        const struct MirInsn *insn = &mir.insns[edge->instruction];
+
+        if ((insn->opcode != MIR_BRANCH_FALSE &&
+             insn->opcode != MIR_JUMP) ||
+            insn->label != edge->target)
+            return 0;
+    }
+    for (item = 0;
+         item < sizeof(mir_array_main_phis) /
+                sizeof(mir_array_main_phis[0]);
+         ++item) {
+        const struct MirArrayMainPhi *phi =
+            &mir_array_main_phis[item];
+        const struct MirInsn *insn = &mir.insns[phi->instruction];
+
+        if (insn->opcode != MIR_PHI ||
+            insn->src1 != mir.insns[phi->first].dst ||
+            insn->src2 != mir.insns[phi->second].dst ||
+            insn->phi_pred1 != phi->first_predecessor ||
+            insn->phi_pred2 != phi->second_predecessor)
+            return 0;
+    }
+    return 1;
+}
+
+static int mir_array_main_memory(void)
+{
+    static const short loads[][4] = {
+        {137, 136, TYPE_CHAR | TYPE_UNSIGNED, 1},
+        {142, 141, TYPE_INT | TYPE_UNSIGNED, 2},
+        {147, 146, TYPE_LONG | TYPE_UNSIGNED, 4},
+        {158, 157, TYPE_CHAR, 1}, {163, 162, TYPE_INT, 2},
+        {168, 167, TYPE_LONG, 4},
+        {272, 271, TYPE_CHAR | TYPE_UNSIGNED, 1},
+        {277, 276, TYPE_INT | TYPE_UNSIGNED, 2},
+        {282, 281, TYPE_LONG | TYPE_UNSIGNED, 4},
+        {293, 292, TYPE_CHAR, 1}, {298, 297, TYPE_INT, 2},
+        {303, 302, TYPE_LONG, 4}, {320, 319, TYPE_CHAR, 1},
+        {325, 324, TYPE_CHAR, 1}, {330, 329, TYPE_CHAR, 1},
+        {335, 334, TYPE_CHAR, 1}, {340, 339, TYPE_CHAR, 1},
+        {345, 344, TYPE_CHAR, 1}, {350, 349, TYPE_CHAR, 1},
+        {355, 354, TYPE_CHAR, 1}, {401, 400, TYPE_CHAR, 1},
+        {449, 448, TYPE_CHAR | TYPE_PTR, 2}
+    };
+    static const short stores[][3] = {
+        {201, 196, 200}, {209, 204, 207}, {217, 212, 216},
+        {226, 220, 225}, {233, 229, 232}, {241, 236, 240}
+    };
+    static const short local_stores[][2] = {
+        {119, 177}, {184, 247}, {254, 312},
+        {364, 419}, {379, 408}, {426, 456}
+    };
+    int offsets[6];
+    size_t item;
+    size_t other;
+
+    for (item = 0;
+         item < sizeof(mir_array_main_indices) /
+                sizeof(mir_array_main_indices[0]);
+         ++item) {
+        const struct MirArrayMainIndex *expected =
+            &mir_array_main_indices[item];
+        const struct MirInsn *insn =
+            &mir.insns[expected->instruction];
+
+        if (insn->opcode != MIR_INDEX_ADDRESS ||
+            insn->src1 != mir.insns[expected->base].dst ||
+            insn->src2 != mir.insns[expected->subscript].dst ||
+            insn->type != expected->type ||
+            insn->memory_size != expected->width ||
+            insn->immediate != expected->stride)
+            return 0;
+    }
+    for (item = 0; item < sizeof(loads) / sizeof(loads[0]); ++item) {
+        const struct MirInsn *load = &mir.insns[loads[item][0]];
+
+        if (load->opcode != MIR_LOAD_INDIRECT ||
+            load->src1 != mir.insns[loads[item][1]].dst ||
+            load->type != loads[item][2] ||
+            load->memory_size != loads[item][3] ||
+            load->memory_flags != 0 || load->bit_width != 0)
+            return 0;
+    }
+    for (item = 0; item < sizeof(stores) / sizeof(stores[0]); ++item) {
+        const struct MirInsn *store = &mir.insns[stores[item][0]];
+
+        if (store->opcode != MIR_STORE_INDIRECT ||
+            store->src1 != mir.insns[stores[item][1]].dst ||
+            store->src2 != mir.insns[stores[item][2]].dst ||
+            store->memory_size !=
+                (item == 0 || item == 3 ? 4 :
+                 item == 1 || item == 4 ? 2 : 1) ||
+            store->memory_flags != 0 || store->bit_width != 0)
+            return 0;
+    }
+    for (item = 0;
+         item < sizeof(local_stores) / sizeof(local_stores[0]);
+         ++item) {
+        int type;
+        int storage;
+        int second_offset;
+
+        if (!mir_scalar_memory_location(
+                &mir.insns[local_stores[item][0]], &type,
+                &storage, &offsets[item]) ||
+            storage != SC_LOCAL || type != TYPE_INT ||
+            mir.insns[local_stores[item][0]].memory_size != 2 ||
+            !mir_scalar_memory_location(
+                &mir.insns[local_stores[item][1]], &type,
+                &storage, &second_offset) ||
+            storage != SC_LOCAL || type != TYPE_INT ||
+            mir.insns[local_stores[item][1]].memory_size != 2 ||
+            second_offset != offsets[item])
+            return 0;
+    }
+    for (item = 0; item < 6; ++item)
+        for (other = item + 1; other < 6; ++other)
+            if (offsets[item] == offsets[other])
+                return 0;
+    if (mir.insns[388].object != mir.insns[379].object ||
+        mir.insns[398].object != mir.insns[379].object ||
+        mir.insns[405].object != mir.insns[379].object ||
+        mir.insns[122].object != mir.insns[2].object ||
+        mir.insns[187].object != mir.insns[2].object ||
+        mir.insns[257].object != mir.insns[2].object ||
+        mir.insns[367].object != mir.insns[2].object ||
+        mir.insns[382].object != mir.insns[2].object ||
+        mir.insns[429].object != mir.insns[2].object)
+        return 0;
+    return 1;
+}
+
+static int mir_array_main_global(
+    int instruction, int type, struct Sym **symbol_out)
+{
+    const struct MirInsn *address = &mir.insns[instruction];
+    struct Sym *symbol;
+
+    if (address->opcode != MIR_ADDRESS || address->type != type ||
+        address->name[0] == 0 ||
+        (symbol = find_global(address->name)) == NULL ||
+        !symbol->is_defined || symbol->is_volatile ||
+        symbol->is_funcptr)
+        return 0;
+    *symbol_out = symbol;
+    return 1;
+}
+
+static int mir_array_main_globals(struct MirArrayMainPlan *plan)
+{
+    static const short first_addresses[MIR_ARRAY_MAIN_SYMBOLS] = {
+        134, 139, 144, 155, 160, 165, 317, 394, 446
+    };
+    static const short types[MIR_ARRAY_MAIN_SYMBOLS] = {
+        49, 50, 52, 17, 18, 20, 17, 17, 81
+    };
+    static const short repeats[][2] = {
+        {210, MIR_ARRAY_MAIN_U8}, {269, MIR_ARRAY_MAIN_U8},
+        {202, MIR_ARRAY_MAIN_U16}, {274, MIR_ARRAY_MAIN_U16},
+        {194, MIR_ARRAY_MAIN_U32}, {279, MIR_ARRAY_MAIN_U32},
+        {234, MIR_ARRAY_MAIN_I8}, {290, MIR_ARRAY_MAIN_I8},
+        {227, MIR_ARRAY_MAIN_I16}, {295, MIR_ARRAY_MAIN_I16},
+        {218, MIR_ARRAY_MAIN_I32}, {300, MIR_ARRAY_MAIN_I32},
+        {322, MIR_ARRAY_MAIN_CHARS}, {327, MIR_ARRAY_MAIN_CHARS},
+        {332, MIR_ARRAY_MAIN_CHARS}, {337, MIR_ARRAY_MAIN_CHARS},
+        {342, MIR_ARRAY_MAIN_CHARS}, {347, MIR_ARRAY_MAIN_CHARS},
+        {352, MIR_ARRAY_MAIN_CHARS}
+    };
+    struct Sym *symbol;
+    size_t item;
+    size_t other;
+
+    for (item = 0; item < MIR_ARRAY_MAIN_SYMBOLS; ++item)
+        if (!mir_array_main_global(
+                first_addresses[item], types[item],
+                &plan->symbols[item]))
+            return 0;
+    for (item = 0; item < sizeof(repeats) / sizeof(repeats[0]); ++item)
+        if (!mir_array_main_global(
+                repeats[item][0], types[repeats[item][1]], &symbol) ||
+            symbol != plan->symbols[repeats[item][1]])
+            return 0;
+    for (item = 0; item < MIR_ARRAY_MAIN_SYMBOLS; ++item)
+        for (other = item + 1;
+             other < MIR_ARRAY_MAIN_SYMBOLS; ++other)
+            if (plan->symbols[item] == plan->symbols[other])
+                return 0;
+    return 1;
+}
+
+static int mir_array_main_function(
+    int instruction, int variadic, int noreturn,
+    struct Sym **function_out, char *call_name, size_t call_name_size)
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    struct Sym *function;
+    const char *name;
+
+    if (call->opcode != MIR_CALL || call->name[0] == 0 ||
+        (function = find_global(call->name)) == NULL ||
+        function->is_funcptr ||
+        !!function->is_noreturn != noreturn ||
+        !!(call->memory_flags & MIR_CALL_FLAG_VARIADIC) != variadic)
+        return 0;
+    name = call->base_name[0] != 0
+        ? call->base_name
+        : asm_name_for(sym_asm_name(function));
+    if (name[0] == 0 || strlen(name) >= call_name_size)
+        return 0;
+    *function_out = function;
+    snprintf(call_name, call_name_size, "%s", name);
+    return 1;
+}
+
+static int mir_array_main_calls(struct MirArrayMainPlan *plan)
+{
+    static const short print_calls[MIR_ARRAY_MAIN_PRINT_CALLS] = {
+        109, 150, 171, 285, 306, 357, 403, 413, 451, 462
+    };
+    static const short string_instructions[MIR_ARRAY_MAIN_STRINGS] = {
+        107, 130, 151, 315, 392, 411, 442, 460
+    };
+    static const short args[][3] = {
+        {108, 0, 107}, {111, 1, 110}, {131, 2, 130},
+        {133, 2, 123}, {138, 2, 137}, {143, 2, 142},
+        {149, 2, 147}, {152, 3, 151}, {154, 3, 123},
+        {159, 3, 158}, {164, 3, 163}, {170, 3, 168},
+        {266, 4, 265}, {268, 4, 260}, {273, 4, 272},
+        {278, 4, 277}, {284, 4, 282}, {287, 5, 286},
+        {289, 5, 260}, {294, 5, 293}, {299, 5, 298},
+        {305, 5, 303}, {316, 6, 315}, {321, 6, 320},
+        {326, 6, 325}, {331, 6, 330}, {336, 6, 335},
+        {341, 6, 340}, {346, 6, 345}, {351, 6, 350},
+        {356, 6, 355}, {393, 7, 392}, {402, 7, 401},
+        {412, 8, 411}, {443, 9, 442}, {445, 9, 435},
+        {450, 9, 449}, {461, 11, 460}
+    };
+    struct Sym *function;
+    char ignored_name[64];
+    size_t item;
+    size_t other;
+
+    for (item = 0; item < MIR_ARRAY_MAIN_PRINT_CALLS; ++item) {
+        if (!mir_array_main_function(
+                print_calls[item], 1, 0, &function,
+                plan->print_names[item],
+                sizeof(plan->print_names[item])))
+            return 0;
+        if (item == 0)
+            plan->print_function = function;
+        else if (function != plan->print_function)
+            return 0;
+    }
+    if (!mir_array_main_function(
+            112, 0, 1, &plan->exit_function,
+            plan->exit_name, sizeof(plan->exit_name)) ||
+        !mir_array_main_function(
+            459, 0, 0, &plan->many_function,
+            ignored_name, sizeof(ignored_name)) ||
+        plan->exit_function == plan->print_function ||
+        plan->many_function == plan->print_function ||
+        plan->many_function == plan->exit_function)
+        return 0;
+    snprintf(plan->exit_name, sizeof(plan->exit_name), "%s",
+             mir.insns[112].base_name[0] != 0
+                 ? mir.insns[112].base_name
+                 : asm_name_for(sym_asm_name(plan->exit_function)));
+    for (item = 0; item < MIR_ARRAY_MAIN_STRINGS; ++item) {
+        const struct MirInsn *string =
+            &mir.insns[string_instructions[item]];
+
+        if (string->opcode != MIR_STRING_ADDRESS ||
+            string->type != (TYPE_CHAR | TYPE_PTR))
+            return 0;
+        plan->strings[item] = (int)string->immediate;
+    }
+    if (mir.insns[265].immediate !=
+            plan->strings[MIR_ARRAY_MAIN_UNSIGNED_FORMAT] ||
+        mir.insns[286].immediate !=
+            plan->strings[MIR_ARRAY_MAIN_SIGNED_FORMAT])
+        return 0;
+    for (item = 0; item < MIR_ARRAY_MAIN_STRINGS; ++item)
+        for (other = item + 1;
+             other < MIR_ARRAY_MAIN_STRINGS; ++other)
+            if (plan->strings[item] == plan->strings[other])
+                return 0;
+    for (item = 0; item < sizeof(args) / sizeof(args[0]); ++item) {
+        const struct MirInsn *arg = &mir.insns[args[item][0]];
+
+        if (arg->opcode != MIR_ARG ||
+            arg->secondary_offset != args[item][1] ||
+            arg->src1 != mir.insns[args[item][2]].dst)
+            return 0;
+    }
+    if (mir.insns[109].secondary_offset != 0 ||
+        mir.insns[112].secondary_offset != 1 ||
+        mir.insns[150].secondary_offset != 2 ||
+        mir.insns[171].secondary_offset != 3 ||
+        mir.insns[285].secondary_offset != 4 ||
+        mir.insns[306].secondary_offset != 5 ||
+        mir.insns[357].secondary_offset != 6 ||
+        mir.insns[403].secondary_offset != 7 ||
+        mir.insns[413].secondary_offset != 8 ||
+        mir.insns[451].secondary_offset != 9 ||
+        mir.insns[459].secondary_offset != 10 ||
+        mir.insns[462].secondary_offset != 11)
+        return 0;
+    return 1;
+}
+
+static int mir_match_array_main(struct MirArrayMainPlan *plan)
+{
+    int argc_offset;
+    int argv_offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (!mir_array_main_opcode_sequence() ||
+        mir_cfg_block_count() != 48 ||
+        mir.local_bytes != 12 || mir.has_vla ||
+        (mir.return_type & 15) != TYPE_INT)
+        return mir_machine_reject("array-main", "shape");
+    if (!mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &argc_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[2].dst, &argv_offset) ||
+        argc_offset != 2 || argv_offset != 4)
+        return mir_machine_reject("array-main", "parameters");
+    if (!mir_array_main_operations())
+        return mir_machine_reject("array-main", "operations");
+    if (!mir_array_main_graph())
+        return mir_machine_reject("array-main", "graph");
+    if (!mir_array_main_memory())
+        return mir_machine_reject("array-main", "memory");
+    if (!mir_array_main_globals(plan))
+        return mir_machine_reject("array-main", "globals");
+    if (!mir_array_main_calls(plan))
+        return mir_machine_reject("array-main", "calls");
+    if (mir.insns[464].src1 != mir.insns[463].dst)
+        return mir_machine_reject("array-main", "return");
+    plan->count = 8;
+    plan->replacement_bias = 20;
+    plan->board_columns = 8;
     return 1;
 }
 
@@ -3264,6 +3957,331 @@ static void mir_aggregate_emit_format_call(
         fprintf(out, "\tcall %s\n", call_name);
 }
 
+static void mir_array_main_emit_counter(
+    FILE *out, int offset, int value)
+{
+    fprintf(out,
+            "\tld (ix%+d),%d\n"
+            "\tld (ix%+d),0\n",
+            offset, value & 0xff, offset + 1);
+}
+
+static void mir_array_main_emit_counter_load(
+    FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld l,(ix%+d)\n"
+            "\tld h,(ix%+d)\n",
+            offset, offset + 1);
+}
+
+static void mir_array_main_emit_counter_increment(
+    FILE *out, int offset, int carry_label)
+{
+    fprintf(out,
+            "\tinc (ix%+d)\n"
+            "\tjp nz,L%d\n"
+            "\tinc (ix%+d)\n"
+            "L%d:\n",
+            offset, carry_label, offset + 1, carry_label);
+}
+
+static void mir_array_main_emit_index_address(
+    FILE *out, struct Sym *symbol, int counter_offset, int stride)
+{
+    mir_array_main_emit_counter_load(out, counter_offset);
+    if (stride >= 2)
+        fputs("\tadd hl,hl\n", out);
+    if (stride >= 4)
+        fputs("\tadd hl,hl\n", out);
+    fputs("\tex de,hl\n", out);
+    mir_machine_emit_global_address_hl(out, symbol, 0);
+    fputs("\tadd hl,de\n", out);
+}
+
+static void mir_array_main_emit_byte_load(
+    FILE *out, struct Sym *symbol, int counter_offset,
+    int fixed_offset, int is_unsigned)
+{
+    if (counter_offset != 0)
+        mir_array_main_emit_index_address(
+            out, symbol, counter_offset, 1);
+    else
+        mir_machine_emit_global_address_hl(
+            out, symbol, fixed_offset);
+    fputs("\tld l,(hl)\n", out);
+    if (is_unsigned)
+        fputs("\tld h,0\n", out);
+    else
+        fputs("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n", out);
+}
+
+static void mir_array_main_emit_word_load(
+    FILE *out, struct Sym *symbol, int counter_offset)
+{
+    mir_array_main_emit_index_address(
+        out, symbol, counter_offset, 2);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n",
+          out);
+}
+
+static void mir_array_main_emit_wide_load(
+    FILE *out, struct Sym *symbol, int counter_offset)
+{
+    mir_array_main_emit_index_address(
+        out, symbol, counter_offset, 4);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tinc hl\n\tld a,(hl)\n\tinc hl\n"
+          "\tld h,(hl)\n\tld l,a\n\tex de,hl\n", out);
+}
+
+static void mir_array_main_emit_print_values(
+    FILE *out, const struct MirArrayMainPlan *plan,
+    int counter_offset, int is_unsigned, int print)
+{
+    int base = is_unsigned ? MIR_ARRAY_MAIN_U8 : MIR_ARRAY_MAIN_I8;
+
+    mir_array_main_emit_wide_load(
+        out, plan->symbols[base + 2], counter_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_array_main_emit_word_load(
+        out, plan->symbols[base + 1], counter_offset);
+    fputs("\tpush hl\n", out);
+    mir_array_main_emit_byte_load(
+        out, plan->symbols[base], counter_offset, 0, is_unsigned);
+    fputs("\tpush hl\n", out);
+    mir_array_main_emit_counter_load(out, counter_offset);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[
+                is_unsigned
+                    ? MIR_ARRAY_MAIN_UNSIGNED_FORMAT
+                    : MIR_ARRAY_MAIN_SIGNED_FORMAT]);
+    mir_emit_runtime_call(out, plan->print_names[print]);
+    mir_aggregate_cleanup(out, 6);
+}
+
+static void mir_array_main_emit_store_value(
+    FILE *out, struct Sym *symbol, int counter_offset,
+    int stride, int bias, int subtract, int width)
+{
+    mir_array_main_emit_counter_load(out, counter_offset);
+    fprintf(out, "\tld de,%d\n", subtract ? -bias : bias);
+    fputs("\tadd hl,de\n\tpush hl\n", out);
+    mir_array_main_emit_index_address(
+        out, symbol, counter_offset, stride);
+    fputs("\tpop de\n\tld (hl),e\n", out);
+    if (width >= 2)
+        fputs("\tinc hl\n\tld (hl),d\n", out);
+    if (width == 4) {
+        fputs("\tld a,d\n\trlca\n\tsbc a,a\n\tinc hl\n"
+              "\tld (hl),a\n\tinc hl\n\tld (hl),a\n", out);
+    }
+}
+
+static void mir_array_main_emit_size_check(
+    FILE *out, const struct MirArrayMainPlan *plan,
+    int failed, int accepted)
+{
+    int check;
+
+    for (check = 0; check < 5; ++check) {
+        fprintf(out,
+                "\tld hl,%d\n\tld de,%d\n"
+                "\tor a\n\tsbc hl,de\n\tjp nz,L%d\n",
+                plan->count, plan->count, failed);
+    }
+    fprintf(out, "\tjp L%d\nL%d:\n\tld hl,S%d\n\tpush hl\n",
+            accepted, failed,
+            plan->strings[MIR_ARRAY_MAIN_SIZE_FAILURE]);
+    mir_emit_runtime_call(out, plan->print_names[0]);
+    mir_aggregate_cleanup(out, 1);
+    fputs("\tld hl,1\n\tpush hl\n", out);
+    mir_emit_runtime_call(out, plan->exit_name);
+    mir_aggregate_cleanup(out, 1);
+    fprintf(out, "L%d:\n", accepted);
+}
+
+static void mir_array_main_emit_character_report(
+    FILE *out, const struct MirArrayMainPlan *plan)
+{
+    int character;
+
+    for (character = plan->count - 1; character >= 0; --character) {
+        mir_array_main_emit_byte_load(
+            out, plan->symbols[MIR_ARRAY_MAIN_CHARS],
+            0, character, 0);
+        fputs("\tpush hl\n", out);
+    }
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[MIR_ARRAY_MAIN_CHARS_FORMAT]);
+    mir_emit_runtime_call(out, plan->print_names[5]);
+    mir_aggregate_cleanup(out, plan->count + 1);
+}
+
+static void mir_array_main_emit_board(
+    FILE *out, const struct MirArrayMainPlan *plan)
+{
+    int row_loop = new_label();
+    int column_loop = new_label();
+    int next_row = new_label();
+    int board_done = new_label();
+    int column_carry = new_label();
+    int row_carry = new_label();
+
+    mir_array_main_emit_counter(out, -2, 0);
+    fprintf(out, "L%d:\n", row_loop);
+    mir_array_main_emit_counter_load(out, -2);
+    fprintf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n"
+                 "\tjp nc,L%d\n",
+            plan->count, board_done);
+    mir_array_main_emit_counter(out, -4, 0);
+    fprintf(out, "L%d:\n", column_loop);
+    mir_array_main_emit_counter_load(out, -4);
+    fprintf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n"
+                 "\tjp nc,L%d\n",
+            plan->board_columns, next_row);
+    mir_array_main_emit_counter_load(out, -2);
+    fputs("\tadd hl,hl\n\tadd hl,hl\n\tadd hl,hl\n\tpush hl\n",
+          out);
+    mir_array_main_emit_counter_load(out, -4);
+    fputs("\tex de,hl\n\tpop hl\n\tadd hl,de\n\tex de,hl\n",
+          out);
+    mir_machine_emit_global_address_hl(
+        out, plan->symbols[MIR_ARRAY_MAIN_BOARD], 0);
+    fputs("\tadd hl,de\n\tld l,(hl)\n"
+          "\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n"
+          "\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[MIR_ARRAY_MAIN_BOARD_FORMAT]);
+    mir_emit_runtime_call(out, plan->print_names[6]);
+    mir_aggregate_cleanup(out, 2);
+    mir_array_main_emit_counter_increment(
+        out, -4, column_carry);
+    fprintf(out, "\tjp L%d\nL%d:\n\tld hl,S%d\n\tpush hl\n",
+            column_loop, next_row,
+            plan->strings[MIR_ARRAY_MAIN_NEWLINE]);
+    mir_emit_runtime_call(out, plan->print_names[7]);
+    mir_aggregate_cleanup(out, 1);
+    mir_array_main_emit_counter_increment(out, -2, row_carry);
+    fprintf(out, "\tjp L%d\nL%d:\n", row_loop, board_done);
+}
+
+static void mir_array_main_emit_words(
+    FILE *out, const struct MirArrayMainPlan *plan)
+{
+    int loop = new_label();
+    int done = new_label();
+    int carry = new_label();
+
+    mir_array_main_emit_counter(out, -2, 0);
+    fprintf(out, "L%d:\n", loop);
+    mir_array_main_emit_counter_load(out, -2);
+    fprintf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n"
+                 "\tjp nc,L%d\n",
+            plan->count, done);
+    mir_array_main_emit_index_address(
+        out, plan->symbols[MIR_ARRAY_MAIN_WORDS], -2, 2);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tpush de\n", out);
+    mir_array_main_emit_counter_load(out, -2);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[MIR_ARRAY_MAIN_WORD_FORMAT]);
+    mir_emit_runtime_call(out, plan->print_names[8]);
+    mir_aggregate_cleanup(out, 3);
+    mir_array_main_emit_counter_increment(out, -2, carry);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+}
+
+static void mir_emit_array_main(
+    FILE *out, const struct MirArrayMainPlan *plan)
+{
+    int size_failed = new_label();
+    int size_ok = new_label();
+    int first_loop = new_label();
+    int first_done = new_label();
+    int first_carry = new_label();
+    int write_loop = new_label();
+    int write_done = new_label();
+    int write_carry = new_label();
+    int second_loop = new_label();
+    int second_done = new_label();
+    int second_carry = new_label();
+
+    fprintf(out,
+            "%s\n"
+            "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+            "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
+            MIR_EXACT_KERNEL_MARKER, MIR_ARRAY_MAIN_FRAME_BYTES);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_array_main_emit_size_check(
+        out, plan, size_failed, size_ok);
+
+    mir_array_main_emit_counter(out, -2, 0);
+    fprintf(out, "L%d:\n", first_loop);
+    mir_array_main_emit_counter_load(out, -2);
+    fprintf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n"
+                 "\tjp nc,L%d\n",
+            plan->count, first_done);
+    mir_array_main_emit_print_values(out, plan, -2, 1, 1);
+    mir_array_main_emit_print_values(out, plan, -2, 0, 2);
+    mir_array_main_emit_counter_increment(
+        out, -2, first_carry);
+    fprintf(out, "\tjp L%d\nL%d:\n", first_loop, first_done);
+
+    mir_array_main_emit_counter(out, -2, 0);
+    fprintf(out, "L%d:\n", write_loop);
+    mir_array_main_emit_counter_load(out, -2);
+    fprintf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n"
+                 "\tjp nc,L%d\n",
+            plan->count, write_done);
+    mir_array_main_emit_store_value(
+        out, plan->symbols[MIR_ARRAY_MAIN_U32], -2, 4,
+        plan->replacement_bias, 0, 4);
+    mir_array_main_emit_store_value(
+        out, plan->symbols[MIR_ARRAY_MAIN_U16], -2, 2,
+        plan->replacement_bias, 0, 2);
+    mir_array_main_emit_store_value(
+        out, plan->symbols[MIR_ARRAY_MAIN_U8], -2, 1,
+        plan->replacement_bias, 0, 1);
+    mir_array_main_emit_store_value(
+        out, plan->symbols[MIR_ARRAY_MAIN_I32], -2, 4,
+        plan->replacement_bias, 1, 4);
+    mir_array_main_emit_store_value(
+        out, plan->symbols[MIR_ARRAY_MAIN_I16], -2, 2,
+        plan->replacement_bias, 1, 2);
+    mir_array_main_emit_store_value(
+        out, plan->symbols[MIR_ARRAY_MAIN_I8], -2, 1,
+        plan->replacement_bias, 1, 1);
+    mir_array_main_emit_counter_increment(
+        out, -2, write_carry);
+    fprintf(out, "\tjp L%d\nL%d:\n", write_loop, write_done);
+
+    mir_array_main_emit_counter(out, -2, 0);
+    fprintf(out, "L%d:\n", second_loop);
+    mir_array_main_emit_counter_load(out, -2);
+    fprintf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n"
+                 "\tjp nc,L%d\n",
+            plan->count, second_done);
+    mir_array_main_emit_print_values(out, plan, -2, 1, 3);
+    mir_array_main_emit_print_values(out, plan, -2, 0, 4);
+    mir_array_main_emit_counter_increment(
+        out, -2, second_carry);
+    fprintf(out, "\tjp L%d\nL%d:\n", second_loop, second_done);
+
+    mir_array_main_emit_character_report(out, plan);
+    mir_array_main_emit_board(out, plan);
+    mir_array_main_emit_words(out, plan);
+    mir_machine_emit_symbol_call(out, plan->many_function);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[MIR_ARRAY_MAIN_SUCCESS]);
+    mir_emit_runtime_call(out, plan->print_names[9]);
+    mir_aggregate_cleanup(out, 1);
+    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_aggregate_emit_ix_store(
     FILE *out, int offset, int width, unsigned long value)
 {
@@ -4470,11 +5488,16 @@ static void mir_emit_aggregate_multidim_checks(
 
 int mir_try_emit_aggregate_checks(FILE *out)
 {
+    struct MirArrayMainPlan array_main;
     struct MirAggregateMultidimChecks plan;
     struct MirMultidimArrayRunner multidim_array;
     struct MirPackedRecordRunner packed_record;
     struct MirTouchLocalsPlan touch_locals;
 
+    if (mir_match_array_main(&array_main)) {
+        mir_emit_array_main(out, &array_main);
+        return 1;
+    }
     if (mir_match_multidim_array_runner(&multidim_array)) {
         mir_emit_multidim_array_runner(out, &multidim_array);
         return 1;
