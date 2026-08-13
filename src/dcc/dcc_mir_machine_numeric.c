@@ -31,6 +31,10 @@ struct MirUnsignedLongSqrtSchedule {
     int parameter_stack_offset;
 };
 
+struct MirSignedLongNewtonSqrtSchedule {
+    int parameter_stack_offset;
+};
+
 struct MirPrimeSearchSchedule {
     struct Sym *convert_function;
     struct Sym *sqrt_function;
@@ -1703,6 +1707,169 @@ static int mir_machine_unsigned_long_type(int type)
            (type & 15) == TYPE_LONG &&
            (type & TYPE_UNSIGNED) != 0 &&
            type_size(type) == 4;
+}
+
+static int mir_machine_signed_long_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           !type_is_float(type) &&
+           (type & 15) == TYPE_LONG &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 4;
+}
+
+static int mir_machine_signed_int_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           !type_is_float(type) &&
+           (type & 15) == TYPE_INT &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 2;
+}
+
+static int mir_match_signed_long_newton_sqrt_schedule(
+    struct MirSignedLongNewtonSqrtSchedule *plan)
+{
+    static const int expected_opcodes[50] = {
+        MIR_LABEL, MIR_PARAM, MIR_NOP, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST, MIR_RETURN,
+        MIR_LABEL, MIR_NOP, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP,
+        MIR_PHI, MIR_PHI, MIR_NOP, MIR_NOP, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_BINARY, MIR_BINARY, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_RETURN
+    };
+    int parameter_type;
+    int parameter_storage;
+    int parameter_offset;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 50 || mir_cfg_block_count() != 5 ||
+        mir.has_vla || mir.local_bytes != 8 ||
+        mir.aggregate_temp_bytes != 0 ||
+        !mir_machine_signed_long_type(mir.return_type))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "signed-long-newton-sqrt-schedule", "opcodes");
+    if (!mir_scalar_memory_location(
+            &mir.insns[1], &parameter_type,
+            &parameter_storage, &parameter_offset) ||
+        parameter_storage != SC_PARAM ||
+        !mir_machine_signed_long_type(parameter_type) ||
+        !mir_machine_signed_long_type(mir.insns[1].type) ||
+        (plan->parameter_stack_offset = parameter_offset - 2) != 2)
+        return mir_machine_reject(
+            "signed-long-newton-sqrt-schedule", "parameter-abi");
+    if (!mir_machine_constant_equals(mir.insns[4].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[8].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[16].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[19].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[40].dst, 2) ||
+        !mir_machine_signed_long_type(mir.insns[4].type) ||
+        !mir_machine_signed_long_type(mir.insns[8].type) ||
+        !mir_machine_signed_long_type(mir.insns[16].type) ||
+        !mir_machine_signed_long_type(mir.insns[19].type) ||
+        !mir_machine_signed_long_type(mir.insns[40].type))
+        return mir_machine_reject(
+            "signed-long-newton-sqrt-schedule", "constants");
+    if (!mir_machine_unobservable_local_store(&mir.insns[13]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[22]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[33]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[43]) ||
+        mir.insns[13].memory_size != 4 ||
+        mir.insns[22].memory_size != 4 ||
+        mir.insns[33].memory_size != 4 ||
+        mir.insns[43].memory_size != 4 ||
+        !mir_machine_same_location(
+            &mir.insns[13], &mir.insns[33]) ||
+        !mir_machine_same_location(
+            &mir.insns[22], &mir.insns[43]) ||
+        mir_machine_same_location(
+            &mir.insns[13], &mir.insns[22]) ||
+        mir.insns[25].object != mir.insns[13].object ||
+        mir.insns[26].object != mir.insns[22].object ||
+        mir.insns[25].object < 0 || mir.insns[26].object < 0)
+        return mir_machine_reject(
+            "signed-long-newton-sqrt-schedule", "locals");
+    if (mir.insns[5].immediate != TOK_LE ||
+        mir.insns[5].src1 != mir.insns[1].dst ||
+        mir.insns[5].src2 != mir.insns[4].dst ||
+        !mir_machine_signed_int_type(mir.insns[5].type) ||
+        !mir_machine_signed_long_type(
+            mir.insns[5].secondary_offset) ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        mir.insns[6].label != mir.insns[10].label ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[13].src1 != mir.insns[1].dst)
+        return mir_machine_reject(
+            "signed-long-newton-sqrt-schedule", "entry");
+    if (mir.insns[17].immediate != '+' ||
+        mir.insns[17].src1 != mir.insns[1].dst ||
+        mir.insns[17].src2 != mir.insns[16].dst ||
+        !mir_machine_signed_long_type(mir.insns[17].type) ||
+        !mir_machine_signed_long_type(
+            mir.insns[17].secondary_offset) ||
+        mir.insns[20].immediate != '/' ||
+        mir.insns[20].src1 != mir.insns[17].dst ||
+        mir.insns[20].src2 != mir.insns[19].dst ||
+        !mir_machine_signed_long_type(mir.insns[20].type) ||
+        !mir_machine_signed_long_type(
+            mir.insns[20].secondary_offset) ||
+        mir.insns[22].src1 != mir.insns[20].dst)
+        return mir_machine_reject(
+            "signed-long-newton-sqrt-schedule", "initialization");
+    if (mir.insns[25].src1 != mir.insns[1].dst ||
+        mir.insns[25].src2 != mir.insns[26].dst ||
+        mir.insns[26].src1 != mir.insns[20].dst ||
+        mir.insns[26].src2 != mir.insns[41].dst ||
+        !mir_machine_signed_long_type(mir.insns[25].type) ||
+        !mir_machine_signed_long_type(mir.insns[26].type) ||
+        mir.insns[25].phi_pred1 != mir.insns[10].label ||
+        mir.insns[25].phi_pred2 != mir.insns[45].label ||
+        mir.insns[26].phi_pred1 != mir.insns[10].label ||
+        mir.insns[26].phi_pred2 != mir.insns[45].label ||
+        mir.insns[29].immediate != '<' ||
+        mir.insns[29].src1 != mir.insns[26].dst ||
+        mir.insns[29].src2 != mir.insns[25].dst ||
+        !mir_machine_signed_int_type(mir.insns[29].type) ||
+        !mir_machine_signed_long_type(
+            mir.insns[29].secondary_offset) ||
+        mir.insns[30].src1 != mir.insns[29].dst ||
+        mir.insns[30].label != mir.insns[47].label ||
+        mir.insns[33].src1 != mir.insns[26].dst)
+        return mir_machine_reject(
+            "signed-long-newton-sqrt-schedule", "loop-control");
+    if (mir.insns[37].immediate != '/' ||
+        mir.insns[37].src1 != mir.insns[1].dst ||
+        mir.insns[37].src2 != mir.insns[26].dst ||
+        !mir_machine_signed_long_type(mir.insns[37].type) ||
+        !mir_machine_signed_long_type(
+            mir.insns[37].secondary_offset) ||
+        mir.insns[38].immediate != '+' ||
+        mir.insns[38].src1 != mir.insns[26].dst ||
+        mir.insns[38].src2 != mir.insns[37].dst ||
+        !mir_machine_signed_long_type(mir.insns[38].type) ||
+        !mir_machine_signed_long_type(
+            mir.insns[38].secondary_offset) ||
+        mir.insns[41].immediate != '/' ||
+        mir.insns[41].src1 != mir.insns[38].dst ||
+        mir.insns[41].src2 != mir.insns[40].dst ||
+        !mir_machine_signed_long_type(mir.insns[41].type) ||
+        !mir_machine_signed_long_type(
+            mir.insns[41].secondary_offset) ||
+        mir.insns[43].src1 != mir.insns[41].dst ||
+        mir.insns[46].label != mir.insns[23].label ||
+        mir.insns[49].src1 != mir.insns[25].dst)
+        return mir_machine_reject(
+            "signed-long-newton-sqrt-schedule", "loop-update");
+    return 1;
 }
 
 static int mir_match_unsigned_long_sqrt_schedule(
@@ -3658,7 +3825,7 @@ static int mir_match_modp2_driver_schedule(
     const struct MirInsn *index_store;
     const struct MirInsn *signed_value_store = NULL;
     const struct MirInsn *unsigned_value_store = NULL;
-    struct Sym *array_symbol;
+    struct Sym *array_symbol = NULL;
     int arguments[2];
     int previous_sum;
     int instruction;
@@ -3930,6 +4097,82 @@ static void mir_emit_narrowed_divmod_loop_schedule(
             "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
             plan->index_offset, plan->index_offset + 1,
             outer_loop, done);
+}
+
+static void mir_numeric_emit_signed_long_divide_by_two(FILE *out)
+{
+    fputs("\tpush de\n\tpush hl\n"
+          "\tld hl,2\n\tld de,0\n", out);
+    mir_emit_runtime_call(out, "__lds");
+    fputs("\tpop bc\n\tpop bc\n", out);
+}
+
+static void mir_emit_signed_long_newton_sqrt_schedule(
+    FILE *out, const struct MirSignedLongNewtonSqrtSchedule *plan)
+{
+    int add_ready = new_label();
+    int body = new_label();
+    int done = new_label();
+    int early_return = new_label();
+    int epilogue = new_label();
+    int loop = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-8\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_ix_wide_load(
+        out, plan->parameter_stack_offset + 2);
+    fprintf(out,
+            "\tbit 7,d\n\tjp nz,L%d\n"
+            "\tld a,d\n\tor e\n\tor h\n\tor l\n"
+            "\tjp z,L%d\n",
+            early_return, early_return);
+    mir_machine_emit_ix_wide_store(out, -4);
+    fputs("\tinc hl\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tinc de\nL%d:\n",
+            add_ready, add_ready);
+    mir_numeric_emit_signed_long_divide_by_two(out);
+    mir_machine_emit_ix_wide_store(out, -8);
+
+    fprintf(out, "L%d:\n", loop);
+    mir_machine_emit_ix_wide_load(out, -8);
+    fprintf(out,
+            "\tld a,d\n\txor 80h\n\tld b,a\n"
+            "\tld a,(ix-1)\n\txor 80h\n\tcp b\n"
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,e\n\tcp (ix-2)\n"
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,h\n\tcp (ix-3)\n"
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,l\n\tcp (ix-4)\n"
+            "\tjp c,L%d\n\tjp L%d\n"
+            "L%d:\n",
+            done, body,
+            body, done,
+            body, done,
+            body, done,
+            body);
+    mir_machine_emit_ix_wide_store(out, -4);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(
+        out, plan->parameter_stack_offset + 2);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, -4);
+    mir_emit_runtime_call(out, "__lds");
+    fputs("\tpop bc\n\tpop bc\n"
+          "\tpop bc\n\tadd hl,bc\n\tex de,hl\n"
+          "\tpop bc\n\tadc hl,bc\n\tex de,hl\n", out);
+    mir_numeric_emit_signed_long_divide_by_two(out);
+    mir_machine_emit_ix_wide_store(out, -8);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+    mir_machine_emit_ix_wide_load(out, -4);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            epilogue, early_return);
+    fputs("\tld hl,0\n\tld de,0\n", out);
+    fprintf(out,
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            epilogue);
 }
 
 static void mir_emit_unsigned_long_sqrt_schedule(
@@ -5164,12 +5407,19 @@ static void mir_emit_scoped_temp_schedule(
 int mir_try_emit_numeric_kernels(FILE *out, int phase)
 {
     if (phase == 0) {
+        struct MirSignedLongNewtonSqrtSchedule signed_sqrt_plan;
         struct MirUnsignedLongSqrtSchedule sqrt_plan;
         struct MirPrimeSearchSchedule prime_plan;
         struct MirCatalanDriverSchedule catalan_plan;
         struct MirLogSeriesDriverSchedule log_series_plan;
         struct MirModp2DriverSchedule modp2_plan;
 
+        if (mir_match_signed_long_newton_sqrt_schedule(
+                &signed_sqrt_plan)) {
+            mir_emit_signed_long_newton_sqrt_schedule(
+                out, &signed_sqrt_plan);
+            return 1;
+        }
         if (mir_match_unsigned_long_sqrt_schedule(&sqrt_plan)) {
             mir_emit_unsigned_long_sqrt_schedule(out, &sqrt_plan);
             return 1;

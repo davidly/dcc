@@ -3,6 +3,57 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-14 signed-long Newton square-root 5-block batch (working tree)
+
+- Branch/base: `pr/143` at `0d3f3ff`. The numeric machine module now admits
+  the five-block `too.isqrt_l` `final-cost-policy` fallback through a strict,
+  name-free matcher over all **50 MIR instructions**. The contract proves the
+  signed-long parameter and return ABI, the exact `n <= 0` early boundary,
+  distinct private four-byte `x`/`y` locals, `x = n`,
+  `y = (x + 1) / 2`, the `y < x` loop boundary, both loop PHIs,
+  `x = y`, `n / x`, the original `x + n / x` operand order, the second
+  signed division by two, the backedge and the returned `x`.
+- The emitter is the original Newton schedule, not the previously rejected
+  binary-search replacement. It uses the source operation order and the
+  established `__lds` signed-long division ABI for the initial divide and
+  both loop divisions, including target wrap/truncation behavior at every
+  boundary. Signed comparisons are exact inline byte comparisons. An
+  **8-byte IX frame** retains `x` and `y`; no IY instruction is emitted.
+- Normal selected/captured metrics are **1,185/1,668 bytes** and
+  **108/154 instructions**. Stack-check metrics are
+  **1,214/1,697 bytes** and **109/155 instructions**.
+- Full stack-check `too` passes peep and nopeep. Selected versus forced
+  fallback is **1,861,546/1,865,062 cycles** and
+  **21,760/21,888 bytes** peep, plus
+  **1,878,001/1,882,005 cycles** and **22,784/22,912 bytes** nopeep.
+  Exact gains are **3,516 cycles and 128 bytes** peep plus
+  **4,004 cycles and 128 bytes** nopeep.
+- A separately renamed boundary fixture selects the same schedule and checks
+  every input from **-256 through 4,096**, plus **177** host-derived values
+  around large exact squares, their one/two-unit neighbours, deterministic
+  broad values, `46,340^2`, the values through `LONG_MAX`, and the target's
+  exact wrapped `LONG_MAX` result. All **4,530 checks** pass in selected and
+  forced-fallback peep/nopeep builds with identical program output. Selected
+  versus fallback totals are **190,108,754/206,181,234 cycles** and
+  **6,016/6,016 bytes** peep plus **190,981,786/209,027,981 cycles** and
+  **6,272/6,400 bytes** nopeep.
+- Changing only the early test from `n <= 0` to the equivalent
+  `n < 1` rejects the exact schedule and leaves the clone on
+  `final-cost-policy`; that perturbed fallback passes both modes, including
+  the small inputs, the largest nonoverflowing square and `LONG_MAX`.
+- The regression-gated stack-check census advances
+  **2,179/2,185 (99.73%)** to **2,180/2,185 (99.77%)**, adds exactly
+  `too.isqrt_l`, removes nothing, moves selector counts from
+  **1,374 spilled / 404 scheduled** to **1,373 spilled / 405 scheduled**,
+  and reduces `final-cost-policy` fallbacks **6 -> 5**.
+- The numeric module is **5,475 source lines** and its standalone object
+  defines only `mir_try_emit_numeric_kernels [T]` globally with zero
+  read-only or writable global data. The canonical build, focused full run,
+  forced fallback A/B, renamed exhaustive/broad boundary A/B, perturbation
+  rejection, no-IY peep/nopeep inspection, export/data audit,
+  regression-gated census and `git diff --check` pass. No performance
+  baseline, production-name gate or output-hash gate was added or changed.
+
 ## 2026-08-14 float log-series 4-block batch (working tree)
 
 - Branch/base: `pr/143` at `8dd8152`. The float-report module now admits the
