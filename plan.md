@@ -6,10 +6,53 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Clean base HEAD for the current coverage batch: `657fdc0`.
-- Current working-tree candidate coverage: **2141/2185 (97.99%)**.
-- Remaining fallback population: **44 `final-cost-policy`**, all selected by
+- Clean base HEAD for the current coverage batch: `0d9d92a`.
+- Current working-tree candidate coverage: **2142/2185 (98.03%)**.
+- Remaining fallback population: **43 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The numeric module now admits the 22-block `ln2.main`
+  `final-cost-policy` fallback through a strict name-free matcher over all
+  **250 MIR instructions**. It proves the two distinct 29-element local long
+  arrays; all initialization, convergence, series and nested digit-loop
+  PHIs/backedges; the exact `10000`, `3`, `2*k+1` and `9*(2*k+3)` long
+  operations; the three defined helper ABIs and ordered calls; the variadic
+  prefix report, both character-output sites, the 100-digit bound and the
+  final zero return. The emitter retains the source long multiply, divide and
+  remainder order and helpers, including signed division/remainder rounding.
+  It uses a compact **236-byte IX frame**: the two arrays occupy 232 bytes and
+  one four-byte in-range slot is reused by the initialization remainder,
+  series index and digit divisor. BC carries array cursors, DE carries the
+  printed-digit count, and no IY is used. Normal selected/captured metrics are
+  **3,017/7,430 bytes** and **284/755 instructions**; stack-check metrics are
+  **3,046/7,459 bytes** and **285/756 instructions**.
+- `ln2` passes checked full peep/nopeep validation, as does the forced
+  fallback side. Against the checked fallback values, peep improves from
+  **46,892,054 to 46,770,814 cycles** and **7,680 to 7,296 bytes**, while
+  nopeep improves from **47,355,231 to 47,201,620 cycles** and
+  **7,936 to 7,296 bytes**.
+- A renamed-helper convergence/edge A/B calls the scheduled driver twice. The
+  first call terminates before the series body; the second proves the 29
+  initialized `6666` blocks, exactly three ordered series iterations and
+  multiplier/divisor pairs `(1,27)`, `(3,45)` and `(5,63)`, then exercises
+  all ten decimal digits and the exact 100-digit termination. Selected and
+  forced-fallback output is byte-identical in both modes. Selected/fallback
+  measurements are **1,796,482/1,985,382 cycles and 4,224/4,608 bytes peep**,
+  and **1,794,261/2,038,973 cycles and 4,608/5,248 bytes nopeep**.
+- The first compact-frame attempt placed reusable state below IX's signed
+  displacement range; the repeated-call edge case exposed caller-frame
+  corruption. The retained layout moves that state to offsets `-120..-117`
+  between the arrays, and both consecutive calls now return cleanly.
+- The numeric module grows from **3,322 to 4,013 source lines** and from
+  **57 to 67 static top-level helpers**. The object audit reports only
+  `mir_try_emit_numeric_kernels [T]` as defined global code, with zero
+  read-only or writable data. The canonical build passes. The
+  regression-gated stack-check census advances **2,141/2,185 (97.99%)** to
+  **2,142/2,185 (98.03%)**, adds exactly `ln2.main`, removes no accepted
+  function, moves selector counts from **1,412 spilled / 366 scheduled** to
+  **1,411 spilled / 367 scheduled**, and leaves
+  **43 `final-cost-policy`** fallbacks. The corresponding normal census moves
+  from **2,052/2,103** to **2,053/2,103** with no regression. No performance
+  baseline, production name, or output-hash gate was added.
 - The numeric module now admits the 19-block `tmodp2.main`
   `final-cost-policy` fallback through a strict name-free matcher over all
   **675 MIR instructions**. It proves the distinct signed 38-element and

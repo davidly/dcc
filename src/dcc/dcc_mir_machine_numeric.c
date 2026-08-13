@@ -50,6 +50,15 @@ struct MirCatalanDriverSchedule {
     char print_name[64];
 };
 
+struct MirLogSeriesDriverSchedule {
+    struct Sym *is_zero_function;
+    struct Sym *add_function;
+    struct Sym *mul_div_function;
+    struct Sym *putchar_function;
+    int format_string_id;
+    char print_name[64];
+};
+
 struct MirModp2DriverSchedule {
     struct Sym *signed_values;
     struct Sym *unsigned_values;
@@ -89,6 +98,8 @@ struct MirModp2LoopShape {
     int divisor_count;
     const int *divisors;
 };
+
+static int mir_modp2_opcode_code(int opcode);
 
 static int mir_machine_constant_value(
     int value, long *constant_out, int depth)
@@ -2012,6 +2023,490 @@ static int mir_match_catalan_driver_schedule(
     return 1;
 }
 
+static int mir_log_series_array_address(
+    const struct MirInsn *address, int expected_offset)
+{
+    int declared;
+
+    if (address->opcode != MIR_ADDRESS ||
+        !mir_catalan_long_pointer_type(address->type))
+        return 0;
+    for (declared = 0; declared < mir.declared_count; ++declared)
+        if (!strcmp(mir.declared_names[declared], address->name))
+            return mir.declared_storage[declared] == SC_LOCAL &&
+                   mir.declared_offsets[declared] == expected_offset &&
+                   mir.declared_sizes[declared] == 116 &&
+                   mir.declared_is_array[declared] &&
+                   !mir.declared_is_vla[declared] &&
+                   !mir.declared_is_volatile[declared] &&
+                   mir.declared_dim_counts[declared] == 1 &&
+                   mir.declared_dims[declared][0] == 29 &&
+                   mir.declared_elem_sizes[declared] == 4 &&
+                   (mir.declared_types[declared] & 15) == TYPE_LONG;
+    return 0;
+}
+
+static int mir_log_series_same_array(
+    const struct MirInsn *address, const struct MirInsn *expected)
+{
+    return address->opcode == MIR_ADDRESS &&
+           address->type == expected->type &&
+           !strcmp(address->name, expected->name);
+}
+
+static int mir_log_series_print_function(
+    struct MirLogSeriesDriverSchedule *plan,
+    const struct MirInsn *call)
+{
+    struct Sym *function;
+
+    function = find_global(call->name);
+    if (function == NULL || function->is_defined ||
+        function->is_funcptr || function->is_noreturn ||
+        !function->has_proto || function->proto_nargs != 1 ||
+        !function->proto_variadic ||
+        type_ptr_depth(function->proto_types[0]) != 1 ||
+        (function->proto_types[0] & 15) != TYPE_CHAR ||
+        !mir_catalan_int_type(function->type) ||
+        !mir_catalan_int_type(call->type) ||
+        call->memory_flags != MIR_CALL_FLAG_VARIADIC ||
+        call->base_name[0] == 0)
+        return 0;
+    snprintf(plan->print_name, sizeof(plan->print_name), "%s",
+             call->base_name);
+    return 1;
+}
+
+static int mir_match_log_series_driver_schedule(
+    struct MirLogSeriesDriverSchedule *plan)
+{
+    static const char expected_opcodes[] =
+        "LCNSLPNNNNNNNNNCBFANINCWANINCWNLNCBSJLNNNNNCSCNSLPPNNNNNNNNNCBFNCBNSANINCBN"
+        "WNCBNSNLNCBSJLNCNSLNNPAGKUFAGAGKAGCNUBCBGCCNUBCBBGKNCBSNLJLTGKCNSNNNNNCNSLPN"
+        "NNNNNNNNNNNNCBFDCBFLCJLCLPFNNCNCBSLNNNNNDCBFDCBFLCJLCLPFANIRDBNCBUNSCDBGKDCB"
+        "NSDCBSNLJLNLNCBSJLCGKCE";
+    const struct MirInsn *sum = &mir.insns[18];
+    const struct MirInsn *term = &mir.insns[24];
+    const struct MirInsn *i_store = &mir.insns[3];
+    const struct MirInsn *rem_store = &mir.insns[44];
+    const struct MirInsn *k_store = &mir.insns[92];
+    const struct MirInsn *printed_store = &mir.insns[139];
+    const struct MirInsn *p_store = &mir.insns[184];
+    const struct MirInsn *d_store = &mir.insns[218];
+    struct Sym *function;
+    int arguments[3];
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 250 ||
+        sizeof(expected_opcodes) - 1 != 250 ||
+        mir_cfg_block_count() != 22 ||
+        mir.local_bytes != 250 ||
+        mir.aggregate_temp_bytes != 0 ||
+        mir.has_vla || !mir_has_cfg_backedge() ||
+        !mir_catalan_int_type(mir.return_type))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir_modp2_opcode_code(
+                mir.insns[instruction].opcode) !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "log-series-driver-schedule", "opcode");
+
+    if (!mir_log_series_array_address(sum, -116) ||
+        !mir_log_series_array_address(term, -234) ||
+        !strcmp(sum->name, term->name) ||
+        !mir_log_series_same_array(&mir.insns[68], term) ||
+        !mir_log_series_same_array(&mir.insns[97], term) ||
+        !mir_log_series_same_array(&mir.insns[102], sum) ||
+        !mir_log_series_same_array(&mir.insns[104], term) ||
+        !mir_log_series_same_array(&mir.insns[107], term) ||
+        !mir_log_series_same_array(&mir.insns[207], sum))
+        return mir_machine_reject(
+            "log-series-driver-schedule", "arrays");
+
+    if (!mir_numeric_same_location(
+            i_store, SC_LOCAL, 2, 0, 0, -236) ||
+        !mir_numeric_same_location(
+            &mir.insns[35], SC_LOCAL, 2, 0, 0, -236) ||
+        !mir_numeric_same_location(
+            &mir.insns[47], SC_LOCAL, 2, 0, 0, -236) ||
+        !mir_numeric_same_location(
+            &mir.insns[86], SC_LOCAL, 2, 0, 0, -236) ||
+        !mir_numeric_same_location(
+            &mir.insns[147], SC_LOCAL, 2, 0, 0, -236) ||
+        !mir_numeric_same_location(
+            &mir.insns[242], SC_LOCAL, 2, 0, 0, -236) ||
+        !mir_numeric_same_location(
+            rem_store, SC_LOCAL, 4, 0, 0, -244) ||
+        !mir_numeric_same_location(
+            &mir.insns[67], SC_LOCAL, 4, 0, 0, -244) ||
+        !mir_numeric_same_location(
+            &mir.insns[80], SC_LOCAL, 4, 0, 0, -244) ||
+        !mir_numeric_same_location(
+            k_store, SC_LOCAL, 2, 0, 0, -238) ||
+        !mir_numeric_same_location(
+            &mir.insns[129], SC_LOCAL, 2, 0, 0, -238) ||
+        !mir_numeric_same_location(
+            printed_store, SC_LOCAL, 2, 0, 0, -240) ||
+        !mir_numeric_same_location(
+            &mir.insns[166], SC_LOCAL, 2, 0, 0, -240) ||
+        !mir_numeric_same_location(
+            &mir.insns[195], SC_LOCAL, 2, 0, 0, -240) ||
+        !mir_numeric_same_location(
+            &mir.insns[229], SC_LOCAL, 2, 0, 0, -240) ||
+        !mir_numeric_same_location(
+            &mir.insns[232], SC_LOCAL, 2, 0, 0, -240) ||
+        !mir_numeric_same_location(
+            p_store, SC_LOCAL, 4, 0, 0, -250) ||
+        !mir_numeric_same_location(
+            &mir.insns[191], SC_LOCAL, 4, 0, 0, -250) ||
+        !mir_numeric_same_location(
+            &mir.insns[211], SC_LOCAL, 4, 0, 0, -250) ||
+        !mir_numeric_same_location(
+            &mir.insns[224], SC_LOCAL, 4, 0, 0, -250) ||
+        !mir_numeric_same_location(
+            &mir.insns[228], SC_LOCAL, 4, 0, 0, -250) ||
+        !mir_numeric_same_location(
+            d_store, SC_LOCAL, 2, 0, 0, -246) ||
+        !mir_numeric_same_location(
+            &mir.insns[220], SC_LOCAL, 2, 0, 0, -246))
+        return mir_machine_reject(
+            "log-series-driver-schedule", "locals");
+
+    if (!mir_machine_constant_equals(mir.insns[1].dst, 0) ||
+        i_store->src1 != mir.insns[1].dst ||
+        mir.insns[5].object != i_store->object ||
+        mir.insns[5].src1 != mir.insns[1].dst ||
+        mir.insns[5].src2 != mir.insns[34].dst ||
+        mir.insns[5].phi_pred1 != mir.insns[0].label ||
+        mir.insns[5].phi_pred2 != mir.insns[31].label ||
+        !mir_machine_constant_equals(mir.insns[15].dst, 29) ||
+        mir.insns[16].immediate != '<' ||
+        mir.insns[16].src1 != mir.insns[5].dst ||
+        mir.insns[16].src2 != mir.insns[15].dst ||
+        mir.insns[17].src1 != mir.insns[16].dst ||
+        mir.insns[17].label != mir.insns[37].label ||
+        mir.insns[20].src1 != sum->dst ||
+        mir.insns[20].src2 != mir.insns[5].dst ||
+        mir.insns[20].immediate != 4 ||
+        mir.insns[20].memory_size != 4 ||
+        !mir_machine_constant_equals(mir.insns[22].dst, 0) ||
+        !mir_catalan_long_type(mir.insns[22].type) ||
+        mir.insns[23].src1 != mir.insns[20].dst ||
+        mir.insns[23].src2 != mir.insns[22].dst ||
+        mir.insns[23].memory_size != 4 ||
+        mir.insns[26].src1 != term->dst ||
+        mir.insns[26].src2 != mir.insns[5].dst ||
+        mir.insns[26].immediate != 4 ||
+        mir.insns[26].memory_size != 4 ||
+        !mir_machine_constant_equals(mir.insns[28].dst, 0) ||
+        mir.insns[29].src1 != mir.insns[26].dst ||
+        mir.insns[29].src2 != mir.insns[28].dst ||
+        mir.insns[29].memory_size != 4 ||
+        !mir_machine_constant_equals(mir.insns[33].dst, 1) ||
+        mir.insns[34].immediate != '+' ||
+        mir.insns[34].src1 != mir.insns[5].dst ||
+        mir.insns[34].src2 != mir.insns[33].dst ||
+        mir.insns[35].src1 != mir.insns[34].dst ||
+        mir.insns[36].label != mir.insns[4].label)
+        return mir_machine_reject(
+            "log-series-driver-schedule", "zero-initialization");
+
+    if (!mir_machine_constant_equals(mir.insns[43].dst, 2) ||
+        !mir_catalan_long_type(mir.insns[43].type) ||
+        rem_store->src1 != mir.insns[43].dst ||
+        !mir_machine_constant_equals(mir.insns[45].dst, 0) ||
+        mir.insns[47].src1 != mir.insns[45].dst ||
+        mir.insns[49].object != i_store->object ||
+        mir.insns[49].src1 != mir.insns[45].dst ||
+        mir.insns[49].src2 != mir.insns[85].dst ||
+        mir.insns[49].phi_pred1 != mir.insns[37].label ||
+        mir.insns[49].phi_pred2 != mir.insns[82].label ||
+        mir.insns[50].object != rem_store->object ||
+        mir.insns[50].src1 != mir.insns[43].dst ||
+        mir.insns[50].src2 != mir.insns[78].dst ||
+        mir.insns[50].phi_pred1 != mir.insns[37].label ||
+        mir.insns[50].phi_pred2 != mir.insns[82].label ||
+        !mir_machine_constant_equals(mir.insns[60].dst, 29) ||
+        mir.insns[61].immediate != '<' ||
+        mir.insns[61].src1 != mir.insns[49].dst ||
+        mir.insns[61].src2 != mir.insns[60].dst ||
+        mir.insns[62].src1 != mir.insns[61].dst ||
+        mir.insns[62].label != mir.insns[88].label ||
+        !mir_machine_constant_equals(mir.insns[64].dst, 10000) ||
+        mir.insns[65].immediate != '*' ||
+        mir.insns[65].src1 != mir.insns[50].dst ||
+        mir.insns[65].src2 != mir.insns[64].dst ||
+        !mir_catalan_long_type(mir.insns[65].type) ||
+        mir.insns[67].src1 != mir.insns[65].dst ||
+        mir.insns[70].src1 != mir.insns[68].dst ||
+        mir.insns[70].src2 != mir.insns[49].dst ||
+        mir.insns[70].immediate != 4 ||
+        mir.insns[70].memory_size != 4 ||
+        !mir_machine_constant_equals(mir.insns[72].dst, 3) ||
+        mir.insns[73].immediate != '/' ||
+        mir.insns[73].src1 != mir.insns[65].dst ||
+        mir.insns[73].src2 != mir.insns[72].dst ||
+        mir.insns[75].src1 != mir.insns[70].dst ||
+        mir.insns[75].src2 != mir.insns[73].dst ||
+        mir.insns[75].memory_size != 4 ||
+        !mir_machine_constant_equals(mir.insns[77].dst, 3) ||
+        mir.insns[78].immediate != '%' ||
+        mir.insns[78].src1 != mir.insns[65].dst ||
+        mir.insns[78].src2 != mir.insns[77].dst ||
+        mir.insns[80].src1 != mir.insns[78].dst ||
+        !mir_machine_constant_equals(mir.insns[84].dst, 1) ||
+        mir.insns[85].immediate != '+' ||
+        mir.insns[85].src1 != mir.insns[49].dst ||
+        mir.insns[85].src2 != mir.insns[84].dst ||
+        mir.insns[86].src1 != mir.insns[85].dst ||
+        mir.insns[87].label != mir.insns[48].label)
+        return mir_machine_reject(
+            "log-series-driver-schedule", "fraction-initialization");
+
+    if (!mir_machine_constant_equals(mir.insns[90].dst, 0) ||
+        k_store->src1 != mir.insns[90].dst ||
+        mir.insns[96].object != k_store->object ||
+        mir.insns[96].src1 != mir.insns[90].dst ||
+        mir.insns[96].src2 != mir.insns[128].dst ||
+        mir.insns[96].phi_pred1 != mir.insns[88].label ||
+        mir.insns[96].phi_pred2 != mir.insns[131].label)
+        return mir_machine_reject(
+            "log-series-driver-schedule", "series-state");
+
+    if (!mir_catalan_defined_function(
+            &mir.insns[99], TYPE_INT, 1,
+            &plan->is_zero_function) ||
+        !mir_catalan_long_pointer_type(
+            plan->is_zero_function->proto_types[0]) ||
+        !mir_numeric_call_arguments(
+            &mir.insns[99], 1, arguments) ||
+        arguments[0] != mir.insns[97].dst ||
+        !mir_catalan_argument(
+            98, &mir.insns[99], 0, mir.insns[97].dst) ||
+        mir.insns[100].immediate != '!' ||
+        mir.insns[100].src1 != mir.insns[99].dst ||
+        mir.insns[101].src1 != mir.insns[100].dst ||
+        mir.insns[101].label != mir.insns[133].label)
+        return mir_machine_reject(
+            "log-series-driver-schedule", "zero-test-call");
+
+    if (!mir_catalan_defined_function(
+            &mir.insns[106], TYPE_VOID, 2,
+            &plan->add_function) ||
+        !mir_catalan_long_pointer_type(
+            plan->add_function->proto_types[0]) ||
+        !mir_catalan_long_pointer_type(
+            plan->add_function->proto_types[1]) ||
+        !mir_numeric_call_arguments(
+            &mir.insns[106], 2, arguments) ||
+        arguments[0] != mir.insns[102].dst ||
+        arguments[1] != mir.insns[104].dst ||
+        !mir_catalan_argument(
+            103, &mir.insns[106], 0, mir.insns[102].dst) ||
+        !mir_catalan_argument(
+            105, &mir.insns[106], 1, mir.insns[104].dst))
+        return mir_machine_reject(
+            "log-series-driver-schedule", "add-call");
+
+    if (!mir_catalan_defined_function(
+            &mir.insns[125], TYPE_VOID, 3,
+            &plan->mul_div_function) ||
+        !mir_catalan_long_pointer_type(
+            plan->mul_div_function->proto_types[0]) ||
+        !mir_catalan_long_type(
+            plan->mul_div_function->proto_types[1]) ||
+        !mir_catalan_long_type(
+            plan->mul_div_function->proto_types[2]) ||
+        !mir_numeric_call_arguments(
+            &mir.insns[125], 3, arguments) ||
+        arguments[0] != mir.insns[107].dst ||
+        arguments[1] != mir.insns[114].dst ||
+        arguments[2] != mir.insns[123].dst ||
+        !mir_catalan_argument(
+            108, &mir.insns[125], 0, mir.insns[107].dst) ||
+        !mir_catalan_argument(
+            115, &mir.insns[125], 1, mir.insns[114].dst) ||
+        !mir_catalan_argument(
+            124, &mir.insns[125], 2, mir.insns[123].dst) ||
+        !mir_machine_constant_equals(mir.insns[109].dst, 2) ||
+        mir.insns[111].immediate != 0 ||
+        mir.insns[111].src1 != mir.insns[96].dst ||
+        mir.insns[112].immediate != '*' ||
+        mir.insns[112].src1 != mir.insns[109].dst ||
+        mir.insns[112].src2 != mir.insns[111].dst ||
+        !mir_machine_constant_equals(mir.insns[113].dst, 1) ||
+        mir.insns[114].immediate != '+' ||
+        mir.insns[114].src1 != mir.insns[112].dst ||
+        mir.insns[114].src2 != mir.insns[113].dst ||
+        !mir_machine_constant_equals(mir.insns[116].dst, 9) ||
+        !mir_machine_constant_equals(mir.insns[117].dst, 2) ||
+        mir.insns[119].immediate != 0 ||
+        mir.insns[119].src1 != mir.insns[96].dst ||
+        mir.insns[120].immediate != '*' ||
+        mir.insns[120].src1 != mir.insns[117].dst ||
+        mir.insns[120].src2 != mir.insns[119].dst ||
+        !mir_machine_constant_equals(mir.insns[121].dst, 3) ||
+        mir.insns[122].immediate != '+' ||
+        mir.insns[122].src1 != mir.insns[120].dst ||
+        mir.insns[122].src2 != mir.insns[121].dst ||
+        mir.insns[123].immediate != '*' ||
+        mir.insns[123].src1 != mir.insns[116].dst ||
+        mir.insns[123].src2 != mir.insns[122].dst ||
+        !mir_machine_constant_equals(mir.insns[127].dst, 1) ||
+        mir.insns[128].immediate != '+' ||
+        mir.insns[128].src1 != mir.insns[96].dst ||
+        mir.insns[128].src2 != mir.insns[127].dst ||
+        mir.insns[129].src1 != mir.insns[128].dst ||
+        mir.insns[132].label != mir.insns[93].label)
+        return mir_machine_reject(
+            "log-series-driver-schedule", "series-body");
+
+    if (mir.insns[134].immediate < 0 ||
+        type_ptr_depth(mir.insns[134].type) != 1 ||
+        (mir.insns[134].type & 15) != TYPE_CHAR ||
+        !mir_log_series_print_function(
+            plan, &mir.insns[136]) ||
+        !mir_numeric_call_arguments(
+            &mir.insns[136], 1, arguments) ||
+        arguments[0] != mir.insns[134].dst ||
+        !mir_catalan_argument(
+            135, &mir.insns[136], 0, mir.insns[134].dst))
+        return mir_machine_reject(
+            "log-series-driver-schedule", "prefix-report");
+    plan->format_string_id = (int)mir.insns[134].immediate;
+
+    if (!mir_machine_constant_equals(mir.insns[137].dst, 0) ||
+        printed_store->src1 != mir.insns[137].dst ||
+        !mir_machine_constant_equals(mir.insns[145].dst, 0) ||
+        mir.insns[147].src1 != mir.insns[145].dst ||
+        mir.insns[149].object != i_store->object ||
+        mir.insns[149].src1 != mir.insns[145].dst ||
+        mir.insns[149].src2 != mir.insns[241].dst ||
+        mir.insns[149].phi_pred1 != mir.insns[133].label ||
+        mir.insns[149].phi_pred2 != mir.insns[238].label ||
+        !mir_machine_constant_equals(mir.insns[163].dst, 29) ||
+        mir.insns[164].immediate != '<' ||
+        mir.insns[164].src1 != mir.insns[149].dst ||
+        mir.insns[164].src2 != mir.insns[163].dst ||
+        mir.insns[165].src1 != mir.insns[164].dst ||
+        mir.insns[165].label != mir.insns[173].label ||
+        !mir_machine_constant_equals(mir.insns[167].dst, 100) ||
+        mir.insns[168].immediate != '<' ||
+        mir.insns[168].src1 != mir.insns[166].dst ||
+        mir.insns[168].src2 != mir.insns[167].dst ||
+        mir.insns[169].src1 != mir.insns[168].dst ||
+        mir.insns[169].label != mir.insns[173].label ||
+        mir.insns[172].label != mir.insns[175].label ||
+        mir.insns[176].src1 != mir.insns[171].dst ||
+        mir.insns[176].src2 != mir.insns[174].dst ||
+        mir.insns[176].phi_pred1 != mir.insns[170].label ||
+        mir.insns[176].phi_pred2 != mir.insns[173].label ||
+        mir.insns[177].src1 != mir.insns[176].dst ||
+        mir.insns[177].label != mir.insns[244].label)
+        return mir_machine_reject(
+            "log-series-driver-schedule", "outer-print-loop");
+
+    if (!mir_machine_constant_equals(mir.insns[180].dst, 10000) ||
+        !mir_machine_constant_equals(mir.insns[182].dst, 10) ||
+        mir.insns[183].immediate != '/' ||
+        mir.insns[183].src1 != mir.insns[180].dst ||
+        mir.insns[183].src2 != mir.insns[182].dst ||
+        p_store->src1 != mir.insns[183].dst ||
+        !mir_machine_constant_equals(mir.insns[192].dst, 0) ||
+        mir.insns[193].immediate != '>' ||
+        mir.insns[193].src1 != mir.insns[191].dst ||
+        mir.insns[193].src2 != mir.insns[192].dst ||
+        mir.insns[194].src1 != mir.insns[193].dst ||
+        mir.insns[194].label != mir.insns[202].label ||
+        !mir_machine_constant_equals(mir.insns[196].dst, 100) ||
+        mir.insns[197].immediate != '<' ||
+        mir.insns[197].src1 != mir.insns[195].dst ||
+        mir.insns[197].src2 != mir.insns[196].dst ||
+        mir.insns[198].src1 != mir.insns[197].dst ||
+        mir.insns[198].label != mir.insns[202].label ||
+        mir.insns[201].label != mir.insns[204].label ||
+        mir.insns[205].src1 != mir.insns[200].dst ||
+        mir.insns[205].src2 != mir.insns[203].dst ||
+        mir.insns[205].phi_pred1 != mir.insns[199].label ||
+        mir.insns[205].phi_pred2 != mir.insns[202].label ||
+        mir.insns[206].src1 != mir.insns[205].dst ||
+        mir.insns[206].label != mir.insns[236].label)
+        return mir_machine_reject(
+            "log-series-driver-schedule", "inner-print-loop");
+
+    if (mir.insns[209].src1 != mir.insns[207].dst ||
+        mir.insns[209].src2 != mir.insns[149].dst ||
+        mir.insns[209].immediate != 4 ||
+        mir.insns[209].memory_size != 4 ||
+        mir.insns[210].src1 != mir.insns[209].dst ||
+        mir.insns[210].memory_size != 4 ||
+        mir.insns[212].immediate != '/' ||
+        mir.insns[212].src1 != mir.insns[210].dst ||
+        mir.insns[212].src2 != mir.insns[211].dst ||
+        !mir_machine_constant_equals(mir.insns[214].dst, 10) ||
+        mir.insns[215].immediate != '%' ||
+        mir.insns[215].src1 != mir.insns[212].dst ||
+        mir.insns[215].src2 != mir.insns[214].dst ||
+        mir.insns[216].immediate != 0 ||
+        mir.insns[216].src1 != mir.insns[215].dst ||
+        d_store->src1 != mir.insns[216].dst ||
+        !mir_machine_constant_equals(mir.insns[219].dst, 48) ||
+        mir.insns[221].immediate != '+' ||
+        mir.insns[221].src1 != mir.insns[219].dst ||
+        mir.insns[221].src2 != mir.insns[220].dst ||
+        !mir_numeric_call_arguments(
+            &mir.insns[223], 1, arguments) ||
+        arguments[0] != mir.insns[221].dst ||
+        !mir_catalan_argument(
+            222, &mir.insns[223], 0, mir.insns[221].dst) ||
+        !mir_machine_constant_equals(mir.insns[225].dst, 10) ||
+        mir.insns[226].immediate != '/' ||
+        mir.insns[226].src1 != mir.insns[224].dst ||
+        mir.insns[226].src2 != mir.insns[225].dst ||
+        mir.insns[228].src1 != mir.insns[226].dst ||
+        !mir_machine_constant_equals(mir.insns[230].dst, 1) ||
+        mir.insns[231].immediate != '+' ||
+        mir.insns[231].src1 != mir.insns[229].dst ||
+        mir.insns[231].src2 != mir.insns[230].dst ||
+        mir.insns[232].src1 != mir.insns[231].dst ||
+        mir.insns[235].label != mir.insns[185].label ||
+        !mir_machine_constant_equals(mir.insns[240].dst, 1) ||
+        mir.insns[241].immediate != '+' ||
+        mir.insns[241].src1 != mir.insns[149].dst ||
+        mir.insns[241].src2 != mir.insns[240].dst ||
+        mir.insns[242].src1 != mir.insns[241].dst ||
+        mir.insns[243].label != mir.insns[148].label)
+        return mir_machine_reject(
+            "log-series-driver-schedule", "digit-body");
+
+    function = find_global(mir.insns[223].name);
+    if (function == NULL || function->is_defined ||
+        function->is_funcptr || function->is_noreturn ||
+        !function->has_proto || function->proto_variadic ||
+        function->proto_nargs != 1 ||
+        !mir_catalan_int_type(function->type) ||
+        !mir_catalan_int_type(function->proto_types[0]) ||
+        mir.insns[223].memory_flags != 0 ||
+        find_global(mir.insns[247].name) != function ||
+        mir.insns[247].memory_flags != 0 ||
+        strcmp(mir.insns[247].base_name,
+               mir.insns[223].base_name) ||
+        !mir_machine_constant_equals(mir.insns[245].dst, 10) ||
+        !mir_numeric_call_arguments(
+            &mir.insns[247], 1, arguments) ||
+        arguments[0] != mir.insns[245].dst ||
+        !mir_catalan_argument(
+            246, &mir.insns[247], 0, mir.insns[245].dst) ||
+        !mir_machine_constant_equals(mir.insns[248].dst, 0) ||
+        mir.insns[249].src1 != mir.insns[248].dst)
+        return mir_machine_reject(
+            "log-series-driver-schedule", "putchar-return");
+    plan->putchar_function = function;
+    return 1;
+}
+
 static int mir_modp2_opcode_code(int opcode)
 {
     switch (opcode) {
@@ -2025,6 +2520,8 @@ static int mir_modp2_opcode_code(int opcode)
     case MIR_ADDRESS: return 'A';
     case MIR_INDEX_ADDRESS: return 'I';
     case MIR_LOAD_INDIRECT: return 'R';
+    case MIR_STORE_INDIRECT: return 'W';
+    case MIR_LOAD: return 'D';
     case MIR_STRING_ADDRESS: return 'T';
     case MIR_ARG: return 'G';
     case MIR_CALL: return 'K';
@@ -3081,6 +3578,194 @@ static void mir_emit_catalan_driver_schedule(
           "\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static void mir_log_series_emit_local_address(FILE *out, int offset)
+{
+    fprintf(out,
+            "\tpush ix\n\tpop hl\n\tld de,%d\n\tadd hl,de\n",
+            offset);
+}
+
+static void mir_log_series_emit_long_argument(
+    FILE *out, unsigned long value)
+{
+    fprintf(out,
+            "\tld hl,%lu\n\tld de,%lu\n\tpush de\n\tpush hl\n",
+            value & 0xffffUL, (value >> 16) & 0xffffUL);
+}
+
+static void mir_log_series_emit_k(FILE *out)
+{
+    fputs("\tld l,(ix-118)\n\tld h,(ix-117)\n"
+          "\tld a,h\n\trlca\n\tsbc a,a\n"
+          "\tld d,a\n\tld e,a\n", out);
+}
+
+static void mir_log_series_emit_twice_k_plus(
+    FILE *out, int delta, int outer_multiplier)
+{
+    int carry_done = new_label();
+
+    if (outer_multiplier != 0)
+        mir_log_series_emit_long_argument(
+            out, (unsigned long)outer_multiplier);
+    mir_log_series_emit_long_argument(out, 2);
+    mir_log_series_emit_k(out);
+    mir_emit_runtime_call(out, "__lmul");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    fprintf(out,
+            "\tld bc,%d\n\tadd hl,bc\n\tjp nc,L%d\n\tinc de\n"
+            "L%d:\n",
+            delta, carry_done, carry_done);
+    if (outer_multiplier != 0) {
+        mir_emit_runtime_call(out, "__lmul");
+        fputs("\tpop bc\n\tpop bc\n", out);
+    }
+}
+
+static void mir_log_series_emit_digit(
+    FILE *out, const struct MirLogSeriesDriverSchedule *plan)
+{
+    fputs("\tpush bc\n\tpush de\n"
+          "\tld h,b\n\tld l,c\n"
+          "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n\tinc hl\n"
+          "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tld l,c\n\tld h,b\n\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, -120);
+    mir_emit_runtime_call(out, "__lds");
+    fputs("\tpop bc\n\tpop bc\n\tpush de\n\tpush hl\n"
+          "\tld hl,10\n\tld de,0\n", out);
+    mir_emit_runtime_call(out, "__lms");
+    fputs("\tpop bc\n\tpop bc\n\tld bc,48\n\tadd hl,bc\n"
+          "\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->putchar_function);
+    fputs("\tpop bc\n", out);
+
+    mir_machine_emit_ix_wide_load(out, -120);
+    fputs("\tpush de\n\tpush hl\n\tld hl,10\n\tld de,0\n", out);
+    mir_emit_runtime_call(out, "__lds");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_ix_wide_store(out, -120);
+    fputs("\tpop de\n\tpop bc\n\tinc de\n", out);
+}
+
+static void mir_emit_log_series_driver_schedule(
+    FILE *out, const struct MirLogSeriesDriverSchedule *plan)
+{
+    int fraction_loop = new_label();
+    int series_loop = new_label();
+    int series_done = new_label();
+    int outer_loop = new_label();
+    int outer_body = new_label();
+    int inner_loop = new_label();
+    int inner_done = new_label();
+    int print_done = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-236\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+
+    fputs("\tpush ix\n\tpop hl\n\tld de,-236\n\tadd hl,de\n"
+          "\tld (hl),0\n\tld d,h\n\tld e,l\n\tinc de\n"
+          "\tld bc,235\n\tldir\n", out);
+
+    fputs("\tld hl,2\n\tld de,0\n", out);
+    mir_machine_emit_ix_wide_store(out, -120);
+    mir_log_series_emit_local_address(out, -236);
+    fputs("\tld b,h\n\tld c,l\n\tld a,29\n", out);
+    fprintf(out, "L%d:\n\tpush af\n\tpush bc\n", fraction_loop);
+    mir_machine_emit_ix_wide_load(out, -120);
+    fputs("\tpush de\n\tpush hl\n\tld hl,10000\n\tld de,0\n", out);
+    mir_emit_runtime_call(out, "__lmul");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_ix_wide_store(out, -120);
+    fputs("\tpush de\n\tpush hl\n\tld hl,3\n\tld de,0\n", out);
+    mir_emit_runtime_call(out, "__lds");
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tld a,l\n\tld (bc),a\n\tinc bc\n"
+          "\tld a,h\n\tld (bc),a\n\tinc bc\n"
+          "\tld a,e\n\tld (bc),a\n\tinc bc\n"
+          "\tld a,d\n\tld (bc),a\n\tinc bc\n"
+          "\tpush bc\n", out);
+    mir_machine_emit_ix_wide_load(out, -120);
+    fputs("\tpush de\n\tpush hl\n\tld hl,3\n\tld de,0\n", out);
+    mir_emit_runtime_call(out, "__lms");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_ix_wide_store(out, -120);
+    fputs("\tpop bc\n\tpop af\n\tdec a\n", out);
+    fprintf(out, "\tjp nz,L%d\n", fraction_loop);
+
+    fputs("\txor a\n\tld (ix-118),a\n\tld (ix-117),a\n", out);
+    fprintf(out, "L%d:\n", series_loop);
+    mir_log_series_emit_local_address(out, -236);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->is_zero_function);
+    fputs("\tpop bc\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n", series_done);
+
+    mir_log_series_emit_local_address(out, -236);
+    fputs("\tpush hl\n", out);
+    mir_log_series_emit_local_address(out, -116);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->add_function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+
+    mir_log_series_emit_twice_k_plus(out, 3, 9);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_log_series_emit_twice_k_plus(out, 1, 0);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_log_series_emit_local_address(out, -236);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->mul_div_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tinc (ix-118)\n", out);
+    fprintf(out, "\tjp nz,L%d\n", series_loop);
+    fputs("\tinc (ix-117)\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", series_loop, series_done);
+
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->format_string_id);
+    mir_emit_runtime_call(out, plan->print_name);
+    fputs("\tpop bc\n"
+          "\tpush ix\n\tpop hl\n\tld de,-116\n\tadd hl,de\n"
+          "\tld b,h\n\tld c,l\n\tld de,0\n", out);
+
+    fprintf(out,
+            "L%d:\n"
+            "\tpush ix\n\tpop hl\n"
+            "\tld a,h\n\tcp b\n\tjp nz,L%d\n"
+            "\tld a,l\n\tcp c\n\tjp z,L%d\n"
+            "L%d:\n"
+            "\tld a,d\n\tor a\n\tjp nz,L%d\n"
+            "\tld a,e\n\tcp 100\n\tjp nc,L%d\n"
+            "\tpush de\n\tld hl,1000\n\tld de,0\n",
+            outer_loop, outer_body, print_done,
+            outer_body, print_done, print_done);
+    mir_machine_emit_ix_wide_store(out, -120);
+    fputs("\tpop de\n", out);
+
+    fprintf(out,
+            "L%d:\n"
+            "\tld a,(ix-117)\n\tor (ix-118)\n"
+            "\tor (ix-119)\n\tor (ix-120)\n"
+            "\tjp z,L%d\n"
+            "\tld a,d\n\tor a\n\tjp nz,L%d\n"
+            "\tld a,e\n\tcp 100\n\tjp nc,L%d\n",
+            inner_loop, inner_done,
+            inner_done, inner_done);
+    mir_log_series_emit_digit(out, plan);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            inner_loop, inner_done);
+    fputs("\tinc bc\n\tinc bc\n\tinc bc\n\tinc bc\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            outer_loop, print_done);
+
+    fputs("\tld hl,10\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->putchar_function);
+    fputs("\tpop bc\n\tld hl,0\n"
+          "\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static int mir_modp2_power_shift(int divisor)
 {
     int shift = 0;
@@ -3285,6 +3970,7 @@ int mir_try_emit_numeric_kernels(FILE *out, int phase)
         struct MirUnsignedLongSqrtSchedule sqrt_plan;
         struct MirPrimeSearchSchedule prime_plan;
         struct MirCatalanDriverSchedule catalan_plan;
+        struct MirLogSeriesDriverSchedule log_series_plan;
         struct MirModp2DriverSchedule modp2_plan;
 
         if (mir_match_unsigned_long_sqrt_schedule(&sqrt_plan)) {
@@ -3297,6 +3983,11 @@ int mir_try_emit_numeric_kernels(FILE *out, int phase)
         }
         if (mir_match_catalan_driver_schedule(&catalan_plan)) {
             mir_emit_catalan_driver_schedule(out, &catalan_plan);
+            return 1;
+        }
+        if (mir_match_log_series_driver_schedule(&log_series_plan)) {
+            mir_emit_log_series_driver_schedule(
+                out, &log_series_plan);
             return 1;
         }
         if (mir_match_modp2_driver_schedule(&modp2_plan)) {
