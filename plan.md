@@ -3,6 +3,57 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-13 inline-fallback 57-block batch (working tree)
+
+- Branch/base: `pr/143` at `cc71dbc`. The endgame call-runner module now
+  admits the 57-block `tinlinfb.main` `final-cost-policy` fallback through a
+  strict structural matcher over all **461 MIR instructions**. It validates
+  the complete opcode stream and CFG, all 15 promoted result objects, every
+  integer/long/float constant and operation, local/member/index memory
+  relationships, the two global word arrays and three global scalar roles,
+  all direct and indirect calls, all 17 final output arguments and the zero
+  return. The matcher contains no function, helper, local, global, format,
+  output or test name and no output hash.
+- The dedicated emitter preserves all four calls to the side-effecting scalar
+  producer, both call-free static-inline store helpers as real calls, the
+  function-pointer call, the non-substitutable inline helper call, all ten
+  overflow-helper calls and the variadic output call. It directly emits only
+  expressions and statement bodies already represented structurally by the
+  captured inline MIR, preserving argument evaluation, postfix/global side
+  effects, both clamp branches, both early-return checks, both conditional
+  side-effect branches, all five push guards, all five pop guards and the
+  complete final report. It uses a compact **26-byte IX frame** versus the
+  captured 74-byte lexical frame plus spill slots and emits no IY instruction.
+- Normal selected/captured metrics are **5,202/9,740 bytes** and
+  **457/902 instructions**. Stack-check metrics are
+  **5,231/9,775 bytes** and **458/903 instructions**.
+- `tinlinfb` passes full peep/nopeep validation. Selected versus forced
+  fallback is **95,160/98,518 cycles and 6,272/6,784 bytes** peep plus
+  **95,564/100,832 cycles and 6,400/7,296 bytes** nopeep. Exact gains are
+  **3,358 cycles and 512 bytes** peep plus
+  **5,268 cycles and 896 bytes** nopeep.
+- A separately renamed function/helper/global/local/format fixture selects
+  the same family while starting the scalar producer at five, forcing both
+  early-return checks, and making the overflow helper safely exercise one
+  push failure and four pop failures. Selected and forced-fallback output is
+  byte-identical in both modes. Peep totals are
+  **98,872/102,262 cycles and 3,072/5,376 bytes**; nopeep totals are
+  **99,383/104,629 cycles and 3,200/5,888 bytes**. Changing only the indirect
+  call argument from six to seven is rejected at the operations contract.
+- The regression-gated stack-check census advances
+  **2,171/2,185 (99.36%)** to **2,172/2,185 (99.41%)**, adds exactly
+  `tinlinfb.main`, removes no accepted function, moves selector counts from
+  **1,382 spilled / 396 scheduled** to
+  **1,381 spilled / 397 scheduled**, and reduces `final-cost-policy`
+  fallbacks **14 -> 13**.
+- The endgame module grows from **5,602 to 6,650 source lines**
+  (**+1,048**). Its standalone object defines only
+  `mir_try_emit_endgame_runners [T]` globally and has zero global data
+  definitions. The canonical build, focused full run, renamed edge A/B,
+  perturbation rejection, regression-gated census, export audit,
+  no-IY inspection and `git diff --check` pass. No performance baseline,
+  production name or output hash was added or changed.
+
 ## 2026-08-13 array-main 48-block batch (working tree)
 
 - Branch/base: `pr/143` at `34d0296`. The aggregate-check family now admits

@@ -2,7 +2,7 @@
 
 #include "dcc_mir_machine_internal.h"
 
-#define MIR_ENDGAME_MAX_ARGS 16
+#define MIR_ENDGAME_MAX_ARGS 17
 #define MIR_ENDGAME_FLOAT_CHECKS 61
 #define MIR_ENDGAME_WIDTH_CALLS 14
 #define MIR_ENDGAME_BINARY_FRAME_BYTES 8
@@ -21,6 +21,9 @@
 #define MIR_ENDGAME_BOUNDARY_BAD_OFFSET -16
 #define MIR_ENDGAME_BOUNDARY_FD_OFFSET -18
 #define MIR_ENDGAME_BOUNDARY_RESULT_OFFSET -20
+#define MIR_ENDGAME_INLINE_FRAME_BYTES 26
+#define MIR_ENDGAME_INLINE_FUNCTIONS 7
+#define MIR_ENDGAME_INLINE_GLOBALS 5
 
 enum MirEndgameFloatOperandKind {
     MIR_ENDGAME_FLOAT_BITS,
@@ -239,6 +242,76 @@ struct MirEndgameBoundaryCall {
     int function;
     int argument_count;
     int definitions[3];
+};
+
+enum MirEndgameInlineFunction {
+    MIR_ENDGAME_INLINE_BUMP,
+    MIR_ENDGAME_INLINE_STORE_ONE,
+    MIR_ENDGAME_INLINE_STORE_TWO,
+    MIR_ENDGAME_INLINE_INDIRECT,
+    MIR_ENDGAME_INLINE_LOCAL,
+    MIR_ENDGAME_INLINE_OVERFLOW,
+    MIR_ENDGAME_INLINE_PRINT
+};
+
+enum MirEndgameInlineGlobal {
+    MIR_ENDGAME_INLINE_SLOTS,
+    MIR_ENDGAME_INLINE_COUNTER,
+    MIR_ENDGAME_INLINE_GCOUNTER,
+    MIR_ENDGAME_INLINE_STACK,
+    MIR_ENDGAME_INLINE_SP
+};
+
+enum MirEndgameInlineResult {
+    MIR_ENDGAME_INLINE_RESULT = -2,
+    MIR_ENDGAME_INLINE_BIGGER = -4,
+    MIR_ENDGAME_INLINE_CLAMPED = -6,
+    MIR_ENDGAME_INLINE_FIELD = -8,
+    MIR_ENDGAME_INLINE_WIDE_OK = -10,
+    MIR_ENDGAME_INLINE_FLOAT_OK = -12,
+    MIR_ENDGAME_INLINE_STORED = -14,
+    MIR_ENDGAME_INLINE_STORED_TWO = -16,
+    MIR_ENDGAME_INLINE_VIA_POINTER = -18,
+    MIR_ENDGAME_INLINE_LOCAL_OK = -20,
+    MIR_ENDGAME_INLINE_SEQUENCE_OK = -22,
+    MIR_ENDGAME_INLINE_BUMP_OK = -24,
+    MIR_ENDGAME_INLINE_GUARD_SUM = -26
+};
+
+struct MirEndgameInlineRunner {
+    struct Sym *functions[MIR_ENDGAME_INLINE_FUNCTIONS];
+    struct Sym *globals[MIR_ENDGAME_INLINE_GLOBALS];
+    int format_string;
+    char print_name[64];
+};
+
+struct MirEndgameInlineConstant {
+    int instruction;
+    int type;
+    unsigned long bits;
+};
+
+struct MirEndgameInlineOperation {
+    int instruction;
+    int first;
+    int second;
+    int type;
+    int operand_type;
+    int operation;
+};
+
+struct MirEndgameInlinePhi {
+    int instruction;
+    int first_value;
+    int second_value;
+    int first_predecessor;
+    int second_predecessor;
+};
+
+struct MirEndgameInlineIndex {
+    int instruction;
+    int base;
+    int index;
 };
 
 static const unsigned char mir_endgame_boundary_opcodes[] = {
@@ -464,6 +537,161 @@ mir_endgame_boundary_calls[] = {
     {468, MIR_ENDGAME_BOUNDARY_UNLINK, 1, {466, -1, -1}},
     {476, MIR_ENDGAME_BOUNDARY_PRINT, 1, {474, -1, -1}},
     {483, MIR_ENDGAME_BOUNDARY_PRINT, 2, {479, 481, -1}}
+};
+
+static const unsigned char mir_endgame_inline_opcodes[] = {
+    MIR_LABEL, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_MEMBER_ADDRESS, MIR_CONST,
+    MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_NOP, MIR_STORE, MIR_CALL, MIR_STORE, MIR_LOAD, MIR_LOAD,
+    MIR_BINARY, MIR_NOP, MIR_STORE, MIR_CALL, MIR_STORE, MIR_LOAD, MIR_CONST, MIR_BINARY,
+    MIR_BRANCH_FALSE, MIR_LOAD, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_LABEL,
+    MIR_PHI, MIR_NOP, MIR_STORE, MIR_CALL, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_LOAD,
+    MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_LOAD,
+    MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_LOAD,
+    MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_UNARY, MIR_STORE,
+    MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_NOP, MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP,
+    MIR_STORE, MIR_FLOAT_CONST, MIR_FLOAT_CONST, MIR_BINARY, MIR_FLOAT_CONST, MIR_BINARY, MIR_NOP, MIR_STORE,
+    MIR_NOP, MIR_FLOAT_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_FLOAT_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+    MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_UNARY,
+    MIR_STORE, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_CALL,
+    MIR_INDEX_ADDRESS, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT,
+    MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+    MIR_ARG, MIR_CONST, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_CONST,
+    MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY, MIR_NOP,
+    MIR_STORE, MIR_ADDRESS, MIR_NOP, MIR_STORE, MIR_LOAD, MIR_CONST, MIR_ARG, MIR_CALL,
+    MIR_NOP, MIR_STORE, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_STORE, MIR_LOAD,
+    MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST, MIR_LABEL, MIR_JUMP, MIR_LABEL,
+    MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_UNARY,
+    MIR_STORE, MIR_NOP, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST,
+    MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_LABEL,
+    MIR_LABEL, MIR_PHI, MIR_CONST, MIR_BINARY, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP,
+    MIR_NOP, MIR_CONST, MIR_BRANCH_FALSE, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_CONST,
+    MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_UNARY,
+    MIR_STORE, MIR_NOP, MIR_NOP, MIR_CONST, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD,
+    MIR_CONST, MIR_BINARY, MIR_STORE, MIR_CONST, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_CONST,
+    MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_CONST, MIR_BINARY, MIR_BINARY, MIR_NOP, MIR_STORE,
+    MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CALL, MIR_LABEL, MIR_ADDRESS, MIR_LOAD,
+    MIR_CONST, MIR_BINARY, MIR_STORE, MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_NOP, MIR_LOAD,
+    MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CALL, MIR_LABEL, MIR_ADDRESS, MIR_LOAD, MIR_CONST,
+    MIR_BINARY, MIR_STORE, MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_NOP, MIR_LOAD, MIR_CONST,
+    MIR_BINARY, MIR_BRANCH_FALSE, MIR_CALL, MIR_LABEL, MIR_ADDRESS, MIR_LOAD, MIR_CONST, MIR_BINARY,
+    MIR_STORE, MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_NOP, MIR_LOAD, MIR_CONST, MIR_BINARY,
+    MIR_BRANCH_FALSE, MIR_CALL, MIR_LABEL, MIR_ADDRESS, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE,
+    MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_NOP, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+    MIR_CALL, MIR_LABEL, MIR_ADDRESS, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_INDEX_ADDRESS,
+    MIR_CONST, MIR_STORE_INDIRECT, MIR_NOP, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CALL,
+    MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_ADDRESS,
+    MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_LOAD, MIR_CONST,
+    MIR_BINARY, MIR_BRANCH_FALSE, MIR_CALL, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL,
+    MIR_LABEL, MIR_PHI, MIR_ADDRESS, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_BINARY, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CALL, MIR_LABEL,
+    MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_ADDRESS, MIR_LOAD,
+    MIR_CONST, MIR_BINARY, MIR_STORE, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY, MIR_LOAD, MIR_CONST,
+    MIR_BINARY, MIR_BRANCH_FALSE, MIR_CALL, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL,
+    MIR_LABEL, MIR_PHI, MIR_ADDRESS, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_BINARY, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CALL, MIR_LABEL,
+    MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_ADDRESS, MIR_LOAD,
+    MIR_CONST, MIR_BINARY, MIR_STORE, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY, MIR_NOP, MIR_STORE,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG,
+    MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG,
+    MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG, MIR_LOAD, MIR_ARG,
+    MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG, MIR_LOAD, MIR_ARG, MIR_NOP, MIR_ARG,
+    MIR_LOAD, MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN,
+};
+
+static const struct MirEndgameInlineConstant
+mir_endgame_inline_constants[] = {
+    {3, 2, 44UL}, {7, 2, 77UL}, {22, 2, 10UL},
+    {29, 2, 10UL}, {36, 2, 300UL}, {40, 2, 0UL},
+    {43, 2, 0UL}, {48, 2, 255UL}, {51, 2, 255UL},
+    {73, 4, 142000UL}, {77, 4, 142000UL},
+    {81, 5, 1095761920UL}, {82, 5, 1056964608UL},
+    {84, 5, 1065353216UL}, {89, 5, 1089260749UL},
+    {93, 5, 1089680179UL}, {97, 0, 1UL}, {100, 0, 0UL},
+    {106, 2, 4UL}, {108, 2, 30UL}, {114, 2, 12UL},
+    {118, 2, 4UL}, {124, 2, 1UL}, {126, 2, 9UL},
+    {129, 2, 2UL}, {131, 2, 20UL}, {134, 2, 1UL},
+    {137, 2, 3UL}, {139, 2, 4UL}, {143, 2, 1UL},
+    {147, 2, 2UL}, {157, 2, 6UL}, {162, 2, 8UL},
+    {168, 2, 100UL}, {172, 2, 65535UL}, {177, 2, 1UL},
+    {187, 2, 100UL}, {191, 2, 65535UL}, {196, 2, 1UL},
+    {202, 2, 10UL}, {209, 2, 1UL}, {212, 2, 1UL},
+    {215, 2, 1UL}, {219, 2, 0UL}, {227, 2, 65535UL},
+    {228, 2, 0UL}, {232, 2, 1UL}, {235, 2, 1UL},
+    {239, 2, 0UL}, {243, 2, 10UL}, {249, 2, 4UL},
+    {256, 2, 1UL}, {260, 2, 7UL}, {264, 2, 4UL},
+    {271, 2, 1UL}, {275, 2, 8UL}, {279, 2, 4UL},
+    {286, 2, 1UL}, {290, 2, 9UL}, {294, 2, 4UL},
+    {301, 2, 1UL}, {305, 2, 10UL}, {309, 2, 4UL},
+    {316, 2, 1UL}, {320, 2, 11UL}, {324, 2, 0UL},
+    {331, 2, 0UL}, {337, 2, 1UL}, {343, 2, 0UL},
+    {350, 2, 0UL}, {356, 2, 1UL}, {363, 2, 0UL},
+    {370, 2, 0UL}, {376, 2, 1UL}, {383, 2, 0UL},
+    {390, 2, 0UL}, {396, 2, 1UL}, {403, 2, 0UL},
+    {410, 2, 0UL}, {416, 2, 1UL}, {459, 2, 0UL}
+};
+
+static const struct MirEndgameInlineOperation
+mir_endgame_inline_operations[] = {
+    {16, 14, 15, 2, 2, 43}, {23, 21, 22, 2, 2, 62},
+    {37, 35, 36, 2, 2, 43}, {41, 39, 40, 2, 2, 60},
+    {49, 47, 48, 2, 2, 62}, {62, 61, -1, 2, 0, 0},
+    {78, 73, 77, 2, 4, 276}, {83, 81, 82, 5, 5, 42},
+    {85, 83, 84, 5, 5, 43}, {90, 85, 89, 2, 5, 62},
+    {94, 85, 93, 2, 5, 60}, {103, 102, -1, 2, 0, 0},
+    {150, 145, 149, 2, 2, 43}, {169, 167, 168, 2, 2, 62},
+    {178, 176, 177, 2, 2, 43}, {183, 182, -1, 2, 0, 0},
+    {188, 186, 187, 2, 2, 62}, {197, 195, 196, 2, 2, 43},
+    {203, 201, 202, 2, 2, 42}, {204, 183, 203, 2, 2, 43},
+    {213, 211, 212, 2, 2, 43}, {223, 222, -1, 2, 0, 0},
+    {229, 227, 228, 2, 2, 62}, {233, 231, 232, 2, 2, 43},
+    {244, 242, 243, 2, 2, 42}, {245, 223, 244, 2, 2, 43},
+    {250, 248, 249, 2, 2, 279}, {257, 255, 256, 2, 2, 43},
+    {265, 263, 264, 2, 2, 279}, {272, 270, 271, 2, 2, 43},
+    {280, 278, 279, 2, 2, 279}, {287, 285, 286, 2, 2, 43},
+    {295, 293, 294, 2, 2, 279}, {302, 300, 301, 2, 2, 43},
+    {310, 308, 309, 2, 2, 279}, {317, 315, 316, 2, 2, 43},
+    {325, 323, 324, 2, 2, 278}, {338, 336, 337, 2, 2, 45},
+    {344, 342, 343, 2, 2, 278}, {357, 355, 356, 2, 2, 45},
+    {361, 341, 360, 2, 2, 43}, {364, 362, 363, 2, 2, 278},
+    {377, 375, 376, 2, 2, 45}, {381, 361, 380, 2, 2, 43},
+    {384, 382, 383, 2, 2, 278}, {397, 395, 396, 2, 2, 45},
+    {401, 381, 400, 2, 2, 43}, {404, 402, 403, 2, 2, 278},
+    {417, 415, 416, 2, 2, 45}, {421, 401, 420, 2, 2, 43}
+};
+
+static const struct MirEndgameBoundaryEdge
+mir_endgame_inline_edges[] = {
+    {24, 28}, {27, 31}, {42, 46}, {45, 60}, {50, 54},
+    {53, 57}, {91, 99}, {95, 99}, {98, 101}, {170, 175},
+    {174, 181}, {189, 194}, {193, 200}, {210, 218},
+    {217, 221}, {230, 238}, {237, 241}, {251, 253},
+    {266, 268}, {281, 283}, {296, 298}, {311, 313},
+    {326, 330}, {329, 333}, {345, 349}, {348, 352},
+    {365, 369}, {368, 372}, {385, 389}, {388, 392},
+    {405, 409}, {408, 412}
+};
+
+static const struct MirEndgameInlinePhi
+mir_endgame_inline_phis[] = {
+    {32, 25, 29, 26, 30}, {58, 51, 55, 52, 56},
+    {61, 43, 58, 44, 59}, {102, 97, 100, 96, 99},
+    {182, 172, 176, 173, 180}, {201, 191, 195, 192, 199},
+    {222, 215, 219, 216, 220}, {242, 235, 239, 236, 240},
+    {334, 327, 331, 328, 332}, {353, 346, 350, 347, 351},
+    {373, 366, 370, 367, 371}, {393, 386, 390, 387, 391},
+    {413, 406, 410, 407, 411}
+};
+
+static const struct MirEndgameInlineIndex
+mir_endgame_inline_indices[] = {
+    {107, 105, 106}, {112, 110, 111}, {119, 117, 118},
+    {125, 123, 124}, {130, 128, 129}, {135, 133, 134},
+    {144, 142, 143}, {148, 146, 147}, {259, 254, 255},
+    {274, 269, 270}, {289, 284, 285}, {304, 299, 300},
+    {319, 314, 315}, {340, 335, 338}, {359, 354, 357},
+    {379, 374, 377}, {399, 394, 397}, {419, 414, 417}
 };
 
 static const unsigned char mir_endgame_width_opcodes[] = {
@@ -4267,6 +4495,494 @@ static int mir_match_endgame_boundary_runner(
     return 1;
 }
 
+static int mir_endgame_inline_graph(void)
+{
+    size_t item;
+
+    for (item = 0;
+         item < sizeof(mir_endgame_inline_edges) /
+                    sizeof(mir_endgame_inline_edges[0]);
+         ++item) {
+        const struct MirEndgameBoundaryEdge *edge =
+            &mir_endgame_inline_edges[item];
+
+        if (mir.insns[edge->instruction].label !=
+            mir.insns[edge->target].label)
+            return 0;
+    }
+    for (item = 0;
+         item < sizeof(mir_endgame_inline_phis) /
+                    sizeof(mir_endgame_inline_phis[0]);
+         ++item) {
+        const struct MirEndgameInlinePhi *expected =
+            &mir_endgame_inline_phis[item];
+        const struct MirInsn *phi =
+            &mir.insns[expected->instruction];
+
+        if (phi->src1 != mir.insns[expected->first_value].dst ||
+            phi->src2 != mir.insns[expected->second_value].dst ||
+            phi->phi_pred1 !=
+                mir.insns[expected->first_predecessor].label ||
+            phi->phi_pred2 !=
+                mir.insns[expected->second_predecessor].label)
+            return 0;
+    }
+    return 1;
+}
+
+static int mir_endgame_inline_operations_match(void)
+{
+    size_t item;
+
+    for (item = 0;
+         item < sizeof(mir_endgame_inline_constants) /
+                    sizeof(mir_endgame_inline_constants[0]);
+         ++item) {
+        const struct MirEndgameInlineConstant *expected =
+            &mir_endgame_inline_constants[item];
+        const struct MirInsn *constant =
+            &mir.insns[expected->instruction];
+
+        if (constant->type != expected->type ||
+            (unsigned long)constant->immediate != expected->bits)
+            return 0;
+    }
+    for (item = 0;
+         item < sizeof(mir_endgame_inline_operations) /
+                    sizeof(mir_endgame_inline_operations[0]);
+         ++item) {
+        const struct MirEndgameInlineOperation *expected =
+            &mir_endgame_inline_operations[item];
+        const struct MirInsn *operation =
+            &mir.insns[expected->instruction];
+
+        if (operation->src1 != mir.insns[expected->first].dst ||
+            (expected->second >= 0 &&
+             operation->src2 != mir.insns[expected->second].dst) ||
+            operation->type != expected->type ||
+            operation->secondary_offset != expected->operand_type ||
+            operation->immediate != expected->operation)
+            return 0;
+    }
+    return 1;
+}
+
+static int mir_endgame_inline_object_refs(void)
+{
+    static const int object_types[] = {
+        TYPE_INT, TYPE_INT, TYPE_INT, TYPE_INT, TYPE_LONG,
+        TYPE_INT, TYPE_FLOAT, TYPE_INT, TYPE_INT, TYPE_INT,
+        TYPE_INT, TYPE_INT, TYPE_INT, TYPE_INT, TYPE_INT
+    };
+    static const int references[][2] = {
+        {18, 0}, {34, 1}, {63, 2}, {68, 3}, {75, 4},
+        {80, 5}, {87, 6}, {104, 7}, {122, 8}, {152, 9},
+        {161, 10}, {166, 11}, {184, 12}, {206, 12},
+        {224, 13}, {247, 13}, {423, 14},
+        {426, 0}, {428, 1}, {430, 2}, {432, 3}, {434, 5},
+        {436, 7}, {438, 8}, {440, 9}, {442, 10}, {444, 11},
+        {448, 12}, {450, 13}, {454, 14}
+    };
+    size_t item;
+
+    if (mir.object_count != 15)
+        return 0;
+    for (item = 0; item < 15; ++item)
+        if (mir.objects[item].storage != SC_LOCAL ||
+            mir.objects[item].type != object_types[item])
+            return 0;
+    for (item = 0;
+         item < sizeof(references) / sizeof(references[0]);
+         ++item)
+        if (mir.insns[references[item][0]].object !=
+                references[item][1] ||
+            !mir_machine_named_nonvolatile(
+                &mir.insns[references[item][0]]))
+            return 0;
+    return 1;
+}
+
+static int mir_endgame_inline_global_array(
+    const struct MirInsn *address, int count, struct Sym **symbol_out)
+{
+    struct Sym *symbol;
+
+    if (address->opcode != MIR_ADDRESS ||
+        !mir_machine_named_nonvolatile(address) ||
+        (symbol = find_global(address->name)) == NULL ||
+        !symbol->is_defined || symbol->is_static ||
+        symbol->is_volatile || !symbol->is_array || symbol->is_vla ||
+        symbol->type != TYPE_INT || symbol->size != count * 2 ||
+        symbol->array_len != count || symbol->elem_size != 2 ||
+        symbol->dim_count != 1 || symbol->dims[0] != count)
+        return 0;
+    *symbol_out = symbol;
+    return 1;
+}
+
+static int mir_endgame_inline_global_word(
+    const struct MirInsn *insn, struct Sym **symbol_out)
+{
+    struct Sym *symbol;
+
+    if (!mir_machine_named_nonvolatile(insn) ||
+        (symbol = find_global(insn->name)) == NULL ||
+        !symbol->is_defined || symbol->is_static ||
+        symbol->is_volatile || symbol->is_array ||
+        !mir_endgame_word_type(symbol->type))
+        return 0;
+    *symbol_out = symbol;
+    return 1;
+}
+
+static int mir_endgame_inline_same_symbol(
+    int instruction, const struct Sym *symbol)
+{
+    const struct MirInsn *insn = &mir.insns[instruction];
+
+    return mir_machine_named_nonvolatile(insn) &&
+           find_global(insn->name) == symbol;
+}
+
+static int mir_endgame_inline_memory(
+    struct MirEndgameInlineRunner *plan)
+{
+    static const int slot_addresses[] = {
+        105, 110, 117, 123, 128, 133, 142, 146
+    };
+    static const int stack_addresses[] = {
+        254, 269, 284, 299, 314, 335, 354, 374, 394, 414
+    };
+    static const int side_effect_refs[] = {
+        167, 176, 179, 186, 195, 198, 211, 214, 231, 234, 452
+    };
+    static const int sp_refs[] = {
+        248, 255, 258, 263, 270, 273, 278, 285, 288, 293,
+        300, 303, 308, 315, 318, 323, 336, 339, 342, 355,
+        358, 362, 375, 378, 382, 395, 398, 402, 415, 418, 456
+    };
+    static const int indirect_stores[][3] = {
+        {4, 2, 3}, {8, 6, 7}, {109, 107, 108},
+        {127, 125, 126}, {132, 130, 131}, {261, 259, 260},
+        {276, 274, 275}, {291, 289, 290}, {306, 304, 305},
+        {321, 319, 320}
+    };
+    static const int indirect_loads[][2] = {
+        {66, 65}, {120, 119}, {145, 144}, {149, 148},
+        {341, 340}, {360, 359}, {380, 379}, {400, 399},
+        {420, 419}
+    };
+    size_t item;
+
+    if (!mir_endgame_inline_global_array(
+            &mir.insns[slot_addresses[0]], 5,
+            &plan->globals[MIR_ENDGAME_INLINE_SLOTS]) ||
+        !mir_endgame_inline_global_array(
+            &mir.insns[stack_addresses[0]], 8,
+            &plan->globals[MIR_ENDGAME_INLINE_STACK]) ||
+        !mir_endgame_inline_global_word(
+            &mir.insns[446],
+            &plan->globals[MIR_ENDGAME_INLINE_COUNTER]) ||
+        !mir_endgame_inline_global_word(
+            &mir.insns[452],
+            &plan->globals[MIR_ENDGAME_INLINE_GCOUNTER]) ||
+        !mir_endgame_inline_global_word(
+            &mir.insns[456],
+            &plan->globals[MIR_ENDGAME_INLINE_SP]))
+        return 0;
+    for (item = 1;
+         item < sizeof(slot_addresses) / sizeof(slot_addresses[0]);
+         ++item)
+        if (!mir_endgame_same_address(
+                slot_addresses[0], slot_addresses[item]))
+            return 0;
+    for (item = 1;
+         item < sizeof(stack_addresses) / sizeof(stack_addresses[0]);
+         ++item)
+        if (!mir_endgame_same_address(
+                stack_addresses[0], stack_addresses[item]))
+            return 0;
+    for (item = 0;
+         item < sizeof(side_effect_refs) / sizeof(side_effect_refs[0]);
+         ++item)
+        if (!mir_endgame_inline_same_symbol(
+                side_effect_refs[item],
+                plan->globals[MIR_ENDGAME_INLINE_GCOUNTER]))
+            return 0;
+    for (item = 0;
+         item < sizeof(sp_refs) / sizeof(sp_refs[0]);
+         ++item)
+        if (!mir_endgame_inline_same_symbol(
+                sp_refs[item], plan->globals[MIR_ENDGAME_INLINE_SP]))
+            return 0;
+    for (item = 0;
+         item < sizeof(mir_endgame_inline_indices) /
+                    sizeof(mir_endgame_inline_indices[0]);
+         ++item) {
+        const struct MirEndgameInlineIndex *expected =
+            &mir_endgame_inline_indices[item];
+        const struct MirInsn *index =
+            &mir.insns[expected->instruction];
+
+        if (index->src1 != mir.insns[expected->base].dst ||
+            index->src2 != mir.insns[expected->index].dst ||
+            index->immediate != 2 || index->memory_size != 2 ||
+            !mir_endgame_boundary_pointer_type(
+                index->type, 1, TYPE_INT))
+            return 0;
+    }
+    for (item = 0;
+         item < sizeof(indirect_stores) / sizeof(indirect_stores[0]);
+         ++item) {
+        const struct MirInsn *store =
+            &mir.insns[indirect_stores[item][0]];
+
+        if (store->src1 !=
+                mir.insns[indirect_stores[item][1]].dst ||
+            store->src2 !=
+                mir.insns[indirect_stores[item][2]].dst ||
+            store->memory_size != 2)
+            return 0;
+    }
+    for (item = 0;
+         item < sizeof(indirect_loads) / sizeof(indirect_loads[0]);
+         ++item) {
+        const struct MirInsn *load =
+            &mir.insns[indirect_loads[item][0]];
+
+        if (load->src1 != mir.insns[indirect_loads[item][1]].dst ||
+            load->type != TYPE_INT || load->memory_size != 2)
+            return 0;
+    }
+    return mir_endgame_same_address(1, 5) &&
+           mir_endgame_same_address(1, 9) &&
+           mir.insns[2].src1 == mir.insns[1].dst &&
+           mir.insns[6].src1 == mir.insns[5].dst &&
+           mir.insns[65].src1 == mir.insns[64].dst &&
+           mir.insns[2].immediate == 0 &&
+           mir.insns[6].immediate == 2 &&
+           mir.insns[65].immediate == 2 &&
+           !strcmp(mir.insns[6].name, mir.insns[65].name) &&
+           strcmp(mir.insns[2].name, mir.insns[6].name) &&
+           mir_machine_same_location(
+               &mir.insns[11], &mir.insns[64]) &&
+           mir_machine_same_location(
+               &mir.insns[13], &mir.insns[14]) &&
+           mir_machine_same_location(
+               &mir.insns[13], &mir.insns[15]) &&
+           mir.insns[13].inline_temp_id != 0 &&
+           mir.insns[13].inline_temp_id ==
+               mir.insns[14].inline_temp_id &&
+           mir.insns[13].inline_temp_id ==
+               mir.insns[15].inline_temp_id &&
+           mir_machine_same_location(
+               &mir.insns[20], &mir.insns[21]) &&
+           mir_machine_same_location(
+               &mir.insns[20], &mir.insns[25]) &&
+           mir.insns[20].inline_temp_id !=
+               mir.insns[13].inline_temp_id &&
+           mir_machine_same_location(
+               &mir.insns[38], &mir.insns[39]) &&
+           mir_machine_same_location(
+               &mir.insns[38], &mir.insns[47]) &&
+           mir_machine_same_location(
+               &mir.insns[38], &mir.insns[55]) &&
+           mir.insns[38].inline_temp_id !=
+               mir.insns[20].inline_temp_id &&
+           mir_machine_same_location(
+               &mir.insns[155], &mir.insns[156]);
+}
+
+static int mir_endgame_inline_function_shape(
+    const struct Sym *function, int result_type, int arguments)
+{
+    return function != NULL && function->storage == SC_FUNC &&
+           function->is_defined && function->is_static &&
+           !function->is_funcptr && !function->is_noreturn &&
+           function->has_proto && !function->proto_variadic &&
+           function->proto_nargs == arguments &&
+           function->type == result_type;
+}
+
+static int mir_endgame_inline_calls(
+    struct MirEndgameInlineRunner *plan)
+{
+    static const int source_calls[] = {12, 19, 35, 111};
+    static const int overflow_calls[] = {
+        252, 267, 282, 297, 312, 327, 346, 366, 386, 406
+    };
+    static const int store_one_args[] = {112, 114};
+    static const int store_two_args[] = {135, 137, 139};
+    static const int local_args[] = {162};
+    static const int print_args[] = {
+        424, 16, 32, 62, 66, 78, 103, 120, 150,
+        159, 164, 446, 204, 245, 452, 421, 456
+    };
+    const struct MirInsn *indirect = &mir.insns[159];
+    const struct MirInsn *function_address = &mir.insns[153];
+    struct Sym *function;
+    int arguments[MIR_ENDGAME_MAX_ARGS];
+    size_t item;
+
+    memset(plan->functions, 0, sizeof(plan->functions));
+    for (item = 0;
+         item < sizeof(source_calls) / sizeof(source_calls[0]);
+         ++item)
+        if (!mir_endgame_call_matches(
+                source_calls[item],
+                &plan->functions[MIR_ENDGAME_INLINE_BUMP],
+                0, 0, 0, NULL))
+            return 0;
+    if (!mir_endgame_call_matches(
+            116, &plan->functions[MIR_ENDGAME_INLINE_STORE_ONE],
+            0, 2, 2, store_one_args) ||
+        !mir_endgame_call_matches(
+            141, &plan->functions[MIR_ENDGAME_INLINE_STORE_TWO],
+            0, 3, 3, store_two_args) ||
+        !mir_endgame_call_matches(
+            164, &plan->functions[MIR_ENDGAME_INLINE_LOCAL],
+            0, 1, 1, local_args))
+        return 0;
+    for (item = 0;
+         item < sizeof(overflow_calls) / sizeof(overflow_calls[0]);
+         ++item)
+        if (!mir_endgame_call_matches(
+                overflow_calls[item],
+                &plan->functions[MIR_ENDGAME_INLINE_OVERFLOW],
+                0, 0, 0, NULL))
+            return 0;
+
+    if (function_address->opcode != MIR_ADDRESS ||
+        (function = find_global(function_address->name)) == NULL ||
+        !mir_endgame_inline_function_shape(function, TYPE_INT, 1) ||
+        !function->is_inline || function->inline_return_expr == NULL ||
+        function->inline_stmt_expr != NULL ||
+        function->inline_stmt_body != NULL ||
+        indirect->src1 != mir.insns[156].dst ||
+        strcmp(indirect->name, "<indirect>") ||
+        indirect->type != TYPE_INT ||
+        (indirect->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_INLINE_SUBSTITUTABLE)) != 0 ||
+        mir_endgame_call_arguments(indirect, arguments) != 1 ||
+        arguments[0] != mir.insns[157].dst)
+        return 0;
+    plan->functions[MIR_ENDGAME_INLINE_INDIRECT] = function;
+
+    if (!mir_endgame_call_matches(
+            458, &plan->functions[MIR_ENDGAME_INLINE_PRINT],
+            1, 1, 17, print_args) ||
+        (mir.insns[458].memory_flags &
+         (MIR_CALL_FLAG_FORMAT_RUNTIME |
+          MIR_CALL_FLAG_INLINE_SUBSTITUTABLE)) != 0)
+        return 0;
+    snprintf(plan->print_name, sizeof(plan->print_name), "%s",
+             mir_endgame_call_name(&mir.insns[458]));
+
+    if (!mir_endgame_inline_function_shape(
+            plan->functions[MIR_ENDGAME_INLINE_BUMP],
+            TYPE_INT, 0) ||
+        plan->functions[MIR_ENDGAME_INLINE_BUMP]->is_inline ||
+        plan->functions[MIR_ENDGAME_INLINE_BUMP]->inline_return_expr != NULL ||
+        !mir_endgame_inline_function_shape(
+            plan->functions[MIR_ENDGAME_INLINE_STORE_ONE],
+            TYPE_VOID, 2) ||
+        !mir_endgame_inline_function_shape(
+            plan->functions[MIR_ENDGAME_INLINE_STORE_TWO],
+            TYPE_VOID, 3) ||
+        !mir_endgame_inline_function_shape(
+            plan->functions[MIR_ENDGAME_INLINE_LOCAL],
+            TYPE_INT, 1) ||
+        !mir_endgame_inline_function_shape(
+            plan->functions[MIR_ENDGAME_INLINE_OVERFLOW],
+            TYPE_VOID, 0))
+        return 0;
+    if (!plan->functions[MIR_ENDGAME_INLINE_STORE_ONE]->is_inline ||
+        (plan->functions[MIR_ENDGAME_INLINE_STORE_ONE]->inline_stmt_expr ==
+             NULL &&
+         plan->functions[MIR_ENDGAME_INLINE_STORE_ONE]->inline_stmt_body ==
+             NULL) ||
+        !plan->functions[MIR_ENDGAME_INLINE_STORE_TWO]->is_inline ||
+        (plan->functions[MIR_ENDGAME_INLINE_STORE_TWO]->inline_stmt_expr ==
+             NULL &&
+         plan->functions[MIR_ENDGAME_INLINE_STORE_TWO]->inline_stmt_body ==
+             NULL) ||
+        !plan->functions[MIR_ENDGAME_INLINE_LOCAL]->is_inline ||
+        plan->functions[MIR_ENDGAME_INLINE_LOCAL]->inline_return_expr !=
+            NULL ||
+        plan->functions[MIR_ENDGAME_INLINE_LOCAL]->inline_stmt_expr !=
+            NULL ||
+        plan->functions[MIR_ENDGAME_INLINE_LOCAL]->inline_stmt_body !=
+            NULL ||
+        plan->functions[MIR_ENDGAME_INLINE_OVERFLOW]->is_inline)
+        return 0;
+    if ((mir.insns[116].memory_flags &
+         MIR_CALL_FLAG_INLINE_SUBSTITUTABLE) == 0 ||
+        (mir.insns[141].memory_flags &
+         MIR_CALL_FLAG_INLINE_SUBSTITUTABLE) == 0 ||
+        (mir.insns[12].memory_flags &
+         MIR_CALL_FLAG_INLINE_SUBSTITUTABLE) != 0 ||
+        (mir.insns[164].memory_flags &
+         MIR_CALL_FLAG_INLINE_SUBSTITUTABLE) != 0 ||
+        (mir.insns[252].memory_flags &
+         MIR_CALL_FLAG_INLINE_SUBSTITUTABLE) != 0)
+        return 0;
+    if (plan->functions[MIR_ENDGAME_INLINE_PRINT] == NULL ||
+        plan->functions[MIR_ENDGAME_INLINE_PRINT]->is_defined ||
+        !plan->functions[MIR_ENDGAME_INLINE_PRINT]->has_proto ||
+        !plan->functions[MIR_ENDGAME_INLINE_PRINT]->proto_variadic ||
+        plan->functions[MIR_ENDGAME_INLINE_PRINT]->proto_nargs != 1 ||
+        plan->functions[MIR_ENDGAME_INLINE_PRINT]->type != TYPE_INT ||
+        !mir_endgame_char_pointer_type(
+            plan->functions[MIR_ENDGAME_INLINE_PRINT]->proto_types[0]))
+        return 0;
+    for (item = 0; item < MIR_ENDGAME_INLINE_FUNCTIONS; ++item) {
+        size_t other;
+
+        for (other = 0; other < item; ++other)
+            if (plan->functions[item] == plan->functions[other])
+                return 0;
+    }
+    return 1;
+}
+
+static int mir_match_endgame_inline_runner(
+    struct MirEndgameInlineRunner *plan)
+{
+    memset(plan, 0, sizeof(*plan));
+    if (!mir_endgame_opcode_sequence(
+            mir_endgame_inline_opcodes,
+            sizeof(mir_endgame_inline_opcodes)) ||
+        mir_cfg_block_count() != 57 || mir.local_bytes != 74 ||
+        mir.aggregate_temp_bytes != 0 || mir.has_vla ||
+        mir.is_variadic_function || !mir_endgame_word_type(mir.return_type))
+        return mir_machine_reject(
+            "endgame-inline-runner", "shape");
+    if (!mir_endgame_inline_graph())
+        return mir_machine_reject(
+            "endgame-inline-runner", "graph");
+    if (!mir_endgame_inline_operations_match())
+        return mir_machine_reject(
+            "endgame-inline-runner", "operations");
+    if (!mir_endgame_inline_object_refs())
+        return mir_machine_reject(
+            "endgame-inline-runner", "objects");
+    if (!mir_endgame_inline_memory(plan))
+        return mir_machine_reject(
+            "endgame-inline-runner", "memory");
+    if (!mir_endgame_inline_calls(plan))
+        return mir_machine_reject(
+            "endgame-inline-runner", "calls");
+    if (mir.insns[424].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[424].immediate < 0 ||
+        !mir_endgame_char_pointer_type(mir.insns[424].type) ||
+        mir.insns[460].src1 != mir.insns[459].dst)
+        return mir_machine_reject(
+            "endgame-inline-runner", "final");
+    plan->format_string = (int)mir.insns[424].immediate;
+    return 1;
+}
+
 static void mir_endgame_boundary_emit_buffer(FILE *out)
 {
     fputs("\tpush ix\n\tpop hl\n", out);
@@ -5557,11 +6273,339 @@ static void mir_emit_endgame_binary_runner(
             outer, done);
 }
 
+static void mir_endgame_inline_store_ix(
+    FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld (ix%+d),l\n\tld (ix%+d),h\n",
+            offset, offset + 1);
+}
+
+static void mir_endgame_inline_load_ix(
+    FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+            offset, offset + 1);
+}
+
+static void mir_endgame_inline_push_ix(
+    FILE *out, int offset)
+{
+    mir_endgame_inline_load_ix(out, offset);
+    fputs("\tpush hl\n", out);
+}
+
+static void mir_endgame_inline_call(
+    FILE *out, const struct MirEndgameInlineRunner *plan,
+    int function)
+{
+    mir_machine_emit_symbol_call(out, plan->functions[function]);
+}
+
+static void mir_endgame_inline_emit_max(
+    FILE *out, const struct MirEndgameInlineRunner *plan)
+{
+    int use_constant = new_label();
+    int ready = new_label();
+
+    mir_endgame_inline_call(
+        out, plan, MIR_ENDGAME_INLINE_BUMP);
+    fputs("\tld b,h\n\tld c,l\n"
+          "\tld a,h\n\txor 128\n\tcp 128\n", out);
+    fprintf(out,
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,l\n\tcp 11\n\tjp nc,L%d\n"
+            "L%d:\n\tld bc,10\n"
+            "L%d:\n\tld h,b\n\tld l,c\n",
+            use_constant, ready, ready, use_constant, ready);
+}
+
+static void mir_endgame_inline_emit_clamp(
+    FILE *out, const struct MirEndgameInlineRunner *plan)
+{
+    int low = new_label();
+    int high = new_label();
+    int ready = new_label();
+
+    mir_endgame_inline_call(
+        out, plan, MIR_ENDGAME_INLINE_BUMP);
+    fputs("\tld de,300\n\tadd hl,de\n\tbit 7,h\n", out);
+    fprintf(out, "\tjp nz,L%d\n", low);
+    fputs("\tld a,h\n\tor a\n", out);
+    fprintf(out,
+            "\tjp nz,L%d\n\tjp L%d\n"
+            "L%d:\n\tld hl,0\n\tjp L%d\n"
+            "L%d:\n\tld hl,255\n"
+            "L%d:\n",
+            high, ready, low, ready, high, ready);
+}
+
+static void mir_endgame_inline_emit_next(
+    FILE *out, const struct MirEndgameInlineRunner *plan)
+{
+    int too_large = new_label();
+    int increment = new_label();
+    int ready = new_label();
+
+    mir_machine_emit_global_word(
+        out, plan->globals[MIR_ENDGAME_INLINE_GCOUNTER], 0);
+    fputs("\tld a,h\n\txor 128\n\tcp 128\n", out);
+    fprintf(out,
+            "\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,l\n\tcp 101\n\tjp nc,L%d\n"
+            "L%d:\n\tld b,h\n\tld c,l\n\tinc hl\n",
+            increment, too_large, too_large, increment);
+    mir_machine_emit_global_word_store(
+        out, plan->globals[MIR_ENDGAME_INLINE_GCOUNTER], 0);
+    fputs("\tld h,b\n\tld l,c\n", out);
+    fprintf(out,
+            "\tjp L%d\nL%d:\n\tld hl,65535\nL%d:\n",
+            ready, too_large, ready);
+}
+
+static void mir_endgame_inline_emit_push(
+    FILE *out, const struct MirEndgameInlineRunner *plan,
+    int value)
+{
+    int no_overflow = new_label();
+    int overflow = new_label();
+
+    mir_machine_emit_global_word(
+        out, plan->globals[MIR_ENDGAME_INLINE_SP], 0);
+    fputs("\tbit 7,h\n", out);
+    fprintf(out, "\tjp nz,L%d\n", no_overflow);
+    fputs("\tld a,h\n\tor a\n", out);
+    fprintf(out, "\tjp nz,L%d\n", overflow);
+    fputs("\tld a,l\n\tcp 4\n", out);
+    fprintf(out, "\tjp c,L%d\nL%d:\n",
+            no_overflow, overflow);
+    mir_endgame_inline_call(
+        out, plan, MIR_ENDGAME_INLINE_OVERFLOW);
+    fprintf(out, "L%d:\n", no_overflow);
+
+    mir_machine_emit_global_word(
+        out, plan->globals[MIR_ENDGAME_INLINE_SP], 0);
+    fputs("\tld b,h\n\tld c,l\n\tinc hl\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->globals[MIR_ENDGAME_INLINE_SP], 0);
+    fputs("\tld h,b\n\tld l,c\n\tadd hl,hl\n", out);
+    mir_machine_emit_global_address_de(
+        out, plan->globals[MIR_ENDGAME_INLINE_STACK], 0);
+    fprintf(out,
+            "\tadd hl,de\n\tld de,%d\n"
+            "\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+            value);
+}
+
+static void mir_endgame_inline_emit_pop(
+    FILE *out, const struct MirEndgameInlineRunner *plan)
+{
+    int empty = new_label();
+    int ready = new_label();
+
+    mir_machine_emit_global_word(
+        out, plan->globals[MIR_ENDGAME_INLINE_SP], 0);
+    fputs("\tbit 7,h\n", out);
+    fprintf(out, "\tjp nz,L%d\n", empty);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\nL%d:\n",
+            ready, empty);
+    mir_endgame_inline_call(
+        out, plan, MIR_ENDGAME_INLINE_OVERFLOW);
+    fprintf(out, "L%d:\n", ready);
+
+    mir_machine_emit_global_word(
+        out, plan->globals[MIR_ENDGAME_INLINE_SP], 0);
+    fputs("\tdec hl\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->globals[MIR_ENDGAME_INLINE_SP], 0);
+    fputs("\tadd hl,hl\n", out);
+    mir_machine_emit_global_address_de(
+        out, plan->globals[MIR_ENDGAME_INLINE_STACK], 0);
+    fputs("\tadd hl,de\n\tld e,(hl)\n\tinc hl\n"
+          "\tld d,(hl)\n\tex de,hl\n", out);
+}
+
+static void mir_endgame_inline_push_global(
+    FILE *out, struct Sym *symbol)
+{
+    mir_machine_emit_global_word(out, symbol, 0);
+    fputs("\tpush hl\n", out);
+}
+
+static void mir_emit_endgame_inline_runner(
+    FILE *out, const struct MirEndgameInlineRunner *plan)
+{
+    int item;
+
+    mir_endgame_emit_frame(out, MIR_ENDGAME_INLINE_FRAME_BYTES);
+
+    mir_endgame_inline_call(
+        out, plan, MIR_ENDGAME_INLINE_BUMP);
+    fputs("\tadd hl,hl\n", out);
+    mir_endgame_inline_store_ix(
+        out, MIR_ENDGAME_INLINE_RESULT);
+
+    mir_endgame_inline_emit_max(out, plan);
+    mir_endgame_inline_store_ix(
+        out, MIR_ENDGAME_INLINE_BIGGER);
+
+    mir_endgame_inline_emit_clamp(out, plan);
+    mir_endgame_inline_store_ix(
+        out, MIR_ENDGAME_INLINE_CLAMPED);
+
+    fputs("\tld hl,77\n", out);
+    mir_endgame_inline_store_ix(
+        out, MIR_ENDGAME_INLINE_FIELD);
+    fputs("\tld hl,1\n", out);
+    mir_endgame_inline_store_ix(
+        out, MIR_ENDGAME_INLINE_WIDE_OK);
+    mir_endgame_inline_store_ix(
+        out, MIR_ENDGAME_INLINE_FLOAT_OK);
+
+    fputs("\tld hl,30\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->globals[MIR_ENDGAME_INLINE_SLOTS], 8);
+    mir_endgame_inline_call(
+        out, plan, MIR_ENDGAME_INLINE_BUMP);
+    fputs("\tadd hl,hl\n", out);
+    mir_machine_emit_global_address_de(
+        out, plan->globals[MIR_ENDGAME_INLINE_SLOTS], 0);
+    fputs("\tadd hl,de\n\tex de,hl\n"
+          "\tld hl,12\n\tpush hl\n\tpush de\n", out);
+    mir_endgame_inline_call(
+        out, plan, MIR_ENDGAME_INLINE_STORE_ONE);
+    fputs("\tpop bc\n\tpop bc\n", out);
+
+    mir_machine_emit_global_word(
+        out, plan->globals[MIR_ENDGAME_INLINE_SLOTS], 8);
+    mir_endgame_inline_store_ix(
+        out, MIR_ENDGAME_INLINE_STORED);
+    fputs("\tld hl,9\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->globals[MIR_ENDGAME_INLINE_SLOTS], 2);
+    fputs("\tld hl,20\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->globals[MIR_ENDGAME_INLINE_SLOTS], 4);
+    fputs("\tld hl,4\n\tpush hl\n"
+          "\tld hl,3\n\tpush hl\n", out);
+    mir_machine_emit_global_address_de(
+        out, plan->globals[MIR_ENDGAME_INLINE_SLOTS], 2);
+    fputs("\tpush de\n", out);
+    mir_endgame_inline_call(
+        out, plan, MIR_ENDGAME_INLINE_STORE_TWO);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
+
+    mir_machine_emit_global_word(
+        out, plan->globals[MIR_ENDGAME_INLINE_SLOTS], 2);
+    fputs("\tld b,h\n\tld c,l\n", out);
+    mir_machine_emit_global_word(
+        out, plan->globals[MIR_ENDGAME_INLINE_SLOTS], 4);
+    fputs("\tadd hl,bc\n", out);
+    mir_endgame_inline_store_ix(
+        out, MIR_ENDGAME_INLINE_STORED_TWO);
+
+    fprintf(out, "\tld de,%s\n",
+            asm_name_for(sym_asm_name(
+                plan->functions[MIR_ENDGAME_INLINE_INDIRECT])));
+    fputs("\tld hl,6\n\tpush hl\n\tex de,hl\n", out);
+    mir_emit_runtime_call(out, "__call_hl");
+    fputs("\tpop bc\n", out);
+    mir_endgame_inline_store_ix(
+        out, MIR_ENDGAME_INLINE_VIA_POINTER);
+
+    fputs("\tld hl,8\n\tpush hl\n", out);
+    mir_endgame_inline_call(
+        out, plan, MIR_ENDGAME_INLINE_LOCAL);
+    fputs("\tpop bc\n", out);
+    mir_endgame_inline_store_ix(
+        out, MIR_ENDGAME_INLINE_LOCAL_OK);
+
+    mir_endgame_inline_emit_next(out, plan);
+    mir_endgame_inline_store_ix(
+        out, MIR_ENDGAME_INLINE_SEQUENCE_OK);
+    mir_endgame_inline_emit_next(out, plan);
+    fputs("\tld d,h\n\tld e,l\n\tadd hl,hl\n"
+          "\tld b,h\n\tld c,l\n\tex de,hl\n"
+          "\tadd hl,hl\n\tadd hl,hl\n\tadd hl,hl\n"
+          "\tadd hl,bc\n\tex de,hl\n", out);
+    mir_endgame_inline_load_ix(
+        out, MIR_ENDGAME_INLINE_SEQUENCE_OK);
+    fputs("\tadd hl,de\n", out);
+    mir_endgame_inline_store_ix(
+        out, MIR_ENDGAME_INLINE_SEQUENCE_OK);
+
+    mir_machine_emit_global_word(
+        out, plan->globals[MIR_ENDGAME_INLINE_GCOUNTER], 0);
+    fputs("\tinc hl\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->globals[MIR_ENDGAME_INLINE_GCOUNTER], 0);
+    fputs("\tld hl,1\n", out);
+    mir_endgame_inline_store_ix(
+        out, MIR_ENDGAME_INLINE_BUMP_OK);
+
+    for (item = 7; item <= 11; ++item)
+        mir_endgame_inline_emit_push(out, plan, item);
+    mir_endgame_inline_emit_pop(out, plan);
+    mir_endgame_inline_store_ix(
+        out, MIR_ENDGAME_INLINE_GUARD_SUM);
+    for (item = 0; item < 4; ++item) {
+        mir_endgame_inline_emit_pop(out, plan);
+        fputs("\tex de,hl\n", out);
+        mir_endgame_inline_load_ix(
+            out, MIR_ENDGAME_INLINE_GUARD_SUM);
+        fputs("\tadd hl,de\n", out);
+        mir_endgame_inline_store_ix(
+            out, MIR_ENDGAME_INLINE_GUARD_SUM);
+    }
+
+    mir_endgame_inline_push_global(
+        out, plan->globals[MIR_ENDGAME_INLINE_SP]);
+    mir_endgame_inline_push_ix(
+        out, MIR_ENDGAME_INLINE_GUARD_SUM);
+    mir_endgame_inline_push_global(
+        out, plan->globals[MIR_ENDGAME_INLINE_GCOUNTER]);
+    mir_endgame_inline_push_ix(
+        out, MIR_ENDGAME_INLINE_BUMP_OK);
+    mir_endgame_inline_push_ix(
+        out, MIR_ENDGAME_INLINE_SEQUENCE_OK);
+    mir_endgame_inline_push_global(
+        out, plan->globals[MIR_ENDGAME_INLINE_COUNTER]);
+    mir_endgame_inline_push_ix(
+        out, MIR_ENDGAME_INLINE_LOCAL_OK);
+    mir_endgame_inline_push_ix(
+        out, MIR_ENDGAME_INLINE_VIA_POINTER);
+    mir_endgame_inline_push_ix(
+        out, MIR_ENDGAME_INLINE_STORED_TWO);
+    mir_endgame_inline_push_ix(
+        out, MIR_ENDGAME_INLINE_STORED);
+    mir_endgame_inline_push_ix(
+        out, MIR_ENDGAME_INLINE_FLOAT_OK);
+    mir_endgame_inline_push_ix(
+        out, MIR_ENDGAME_INLINE_WIDE_OK);
+    mir_endgame_inline_push_ix(
+        out, MIR_ENDGAME_INLINE_FIELD);
+    mir_endgame_inline_push_ix(
+        out, MIR_ENDGAME_INLINE_CLAMPED);
+    mir_endgame_inline_push_ix(
+        out, MIR_ENDGAME_INLINE_BIGGER);
+    mir_endgame_inline_push_ix(
+        out, MIR_ENDGAME_INLINE_RESULT);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->format_string);
+    mir_emit_runtime_call(out, plan->print_name);
+    for (item = 0; item < 17; ++item)
+        fputs("\tpop bc\n", out);
+    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 int mir_try_emit_endgame_runners(FILE *out)
 {
     struct MirEndgameBinaryRunner binary_plan;
     struct MirEndgameBoundaryRunner boundary_plan;
     struct MirEndgameFloatRunner float_plan;
+    struct MirEndgameInlineRunner inline_plan;
     struct MirEndgameLongRunner long_plan;
     struct MirEndgameNumericRunner numeric_plan;
     struct MirEndgameWidthRunner width_plan;
@@ -5576,6 +6620,10 @@ int mir_try_emit_endgame_runners(FILE *out)
     }
     if (mir_match_endgame_long_runner(&long_plan)) {
         mir_emit_endgame_long_runner(out, &long_plan);
+        return 1;
+    }
+    if (mir_match_endgame_inline_runner(&inline_plan)) {
+        mir_emit_endgame_inline_runner(out, &inline_plan);
         return 1;
     }
     if (mir_match_endgame_binary_runner(&binary_plan)) {
