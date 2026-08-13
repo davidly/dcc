@@ -3,6 +3,68 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-14 pint two-function 2-block batch (working tree)
+
+- Branch/base: `pr/143` at `eaf3ed9`. Two strict, name-free scheduled-machine
+  matchers admit the remaining two-block `pint` `final-cost-policy` fallbacks:
+  the **35-instruction** scoped temporary allocator in the numeric module and
+  the **71-instruction** symbol insertion path in the scanner module. The old
+  opt-in scoped-temp experiment and environment gate were removed from the
+  monolithic emitter.
+- The allocator contract proves the signed local/global split, three distinct
+  nonvolatile global roots, 40-byte record stride, byte field at offset 19,
+  byte truncation, increment by two, both stores, side-effect order and both
+  returns. The insertion contract proves the signed 128-entry bound and error
+  call, postincrement, 27-byte record clearing through the memset fastcall,
+  16-byte name field and 15-byte bounded copy, byte field offsets 16/17/18,
+  word field offset 21, value truncations, field order and return.
+- Both emitters intentionally preserve the canonical source-lowering schedule
+  and downstream placement through real instructions; neither uses padding,
+  dead code, IY, production names or hashes. Stack-check selected/captured
+  metrics are **869/914 bytes, 80/84 instructions** for the allocator and
+  **1,882/1,869 bytes, 174/174 instructions** for insertion.
+- Full stack-check `pint` passes E, TTT and SIEVE in peep and nopeep modes.
+  Selected totals are **253,436,027 cycles / 30,464 bytes** peep and
+  **284,125,051 cycles / 33,024 bytes** nopeep. The checked baseline is
+  **253,436,043 / 284,125,051 cycles** at the same sizes: **16 cycles better**
+  peep and exact nopeep nonregression.
+- Per-function forced fallback proves both schedules independently meet the
+  dual-mode gate. Forcing only the allocator back leaves
+  **253,436,027 / 284,125,051 cycles** and **30,464/33,024 bytes**; forcing
+  only insertion back gives **253,436,043 / 284,125,051 cycles** at the same
+  sizes. Thus the allocator is neutral in both modes and insertion contributes
+  the 16-cycle peep gain without changing nopeep.
+- The rejected compact allocator measured
+  **254,091,522 / 284,581,900 cycles** despite smaller images; the rejected
+  compact pair measured **254,085,771 / 284,121,797 cycles** at
+  **30,208/32,768 bytes**. Profiling attributed the peep loss to downstream
+  interpreter placement across a hot 256-byte pointer boundary. Additional
+  name/scope/procedure placement compensators also lost and were reverted;
+  none of those schedules or executed-padding approaches remains.
+- A renamed boundary fixture selects both families without production names.
+  It exercises local byte wraparound, the global branch, return values,
+  continued execution after the 128-entry error call, count ordering, complete
+  record clearing, bounded-copy termination, byte truncation and all initialized
+  fields. With its unrelated large-CFG `main` forced to legacy, both modes print
+  `RENAMED TEMP SYMBOL EDGE OK`: **177,947 cycles / 1,920 bytes** peep and
+  **181,427 cycles / 2,816 bytes** nopeep. Changing the procedure stride
+  rejects only the allocator schedule; changing the symbol stride rejects only
+  insertion. Both perturbed fallbacks pass in both modes.
+- The regression-gated stack-check census advances
+  **2,176/2,185 (99.59%)** to **2,178/2,185 (99.68%)**, adds exactly
+  `pint.alloc_temp` and `pint.add_sym`, removes nothing, moves selector counts
+  from **1,377 spilled / 401 scheduled** to
+  **1,375 spilled / 403 scheduled**, and reduces `final-cost-policy`
+  fallbacks **9 -> 7**.
+- Standalone audits for the numeric, scanner and endgame modules each report
+  only their allowlisted dispatcher as global code and zero read-only or
+  writable global data. Exact peep/nopeep assembly inspection finds zero IY
+  references in both selected functions. The canonical build, forced A/B,
+  renamed/perturbed edge runs, regression-gated census and `git diff --check`
+  pass. Only the pre-existing three unused-variable warnings in
+  `mir_match_random_unique_init` remain. No baseline was changed and no commit
+  or push was made.
+
 ## 2026-08-14 six-dimensional-array 2-block batch (working tree)
 
 - Branch/base: `pr/143` at `e95ffc4`. The endgame call-runner module now

@@ -111,6 +111,18 @@ struct MirRowInversionCheckSchedule {
     char print_name[64];
 };
 
+struct MirScopedTempSchedule {
+    struct Sym *current_root;
+    struct Sym *records_root;
+    struct Sym *global_top_root;
+    int current_root_offset;
+    int records_root_offset;
+    int global_top_root_offset;
+    int record_stride;
+    int local_offset;
+    int increment;
+};
+
 static int mir_modp2_opcode_code(int opcode);
 
 static int mir_machine_constant_value(
@@ -4915,6 +4927,240 @@ static void mir_emit_modp2_driver_schedule(
           "\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static int mir_match_scoped_temp_schedule(
+    struct MirScopedTempSchedule *plan)
+{
+    static const int expected_opcodes[35] = {
+        MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_LOAD, MIR_LOAD, MIR_INDEX_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_UNARY, MIR_STORE, MIR_LOAD, MIR_LOAD,
+        MIR_INDEX_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_CONST, MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT, MIR_NOP,
+        MIR_RETURN, MIR_NOP, MIR_LABEL, MIR_LOAD, MIR_NOP, MIR_STORE,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_RETURN
+    };
+    int current_type;
+    int current_storage;
+    int records_type;
+    int records_storage;
+    int top_type;
+    int top_storage;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 35 || mir_cfg_block_count() != 2 ||
+        mir.has_vla || mir.local_bytes != 2 ||
+        mir.aggregate_temp_bytes != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        (mir.return_type & TYPE_UNSIGNED) != 0 ||
+        type_size(mir.return_type) != 2 ||
+        type_is_float(mir.return_type) ||
+        type_ptr_depth(mir.return_type) != 0)
+        return 0;
+    for (instruction = 0; instruction < 35; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return 0;
+    if (!mir_scalar_memory_location(
+            &mir.insns[1], &current_type, &current_storage,
+            &plan->current_root_offset) ||
+        current_storage != SC_GLOBAL ||
+        type_ptr_depth(current_type) != 0 ||
+        (current_type & 15) != TYPE_INT ||
+        (current_type & TYPE_UNSIGNED) != 0 ||
+        type_size(current_type) != 2 ||
+        !mir_machine_named_nonvolatile(&mir.insns[1]) ||
+        !mir_scalar_memory_location(
+            &mir.insns[5], &records_type, &records_storage,
+            &plan->records_root_offset) ||
+        records_storage != SC_GLOBAL ||
+        type_ptr_depth(records_type) != 1 ||
+        type_size(records_type) != 2 ||
+        !mir_machine_named_nonvolatile(&mir.insns[5]) ||
+        !mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+        mir.insns[3].immediate != TOK_GE ||
+        mir.insns[3].src1 != mir.insns[1].dst ||
+        mir.insns[3].src2 != mir.insns[2].dst ||
+        type_ptr_depth(mir.insns[3].secondary_offset) != 0 ||
+        (mir.insns[3].secondary_offset & 15) != TYPE_INT ||
+        (mir.insns[3].secondary_offset & TYPE_UNSIGNED) != 0 ||
+        type_size(mir.insns[3].secondary_offset) != 2 ||
+        mir.insns[4].src1 != mir.insns[3].dst ||
+        mir.insns[4].label != mir.insns[24].label ||
+        !mir_machine_same_location(
+            &mir.insns[1], &mir.insns[6]) ||
+        !mir_machine_same_location(
+            &mir.insns[1], &mir.insns[13]) ||
+        !mir_machine_same_location(
+            &mir.insns[5], &mir.insns[12]) ||
+        mir.insns[7].src1 != mir.insns[5].dst ||
+        mir.insns[7].src2 != mir.insns[6].dst ||
+        mir.insns[7].immediate != 40 ||
+        mir.insns[7].memory_size != 40 ||
+        mir.insns[8].src1 != mir.insns[7].dst ||
+        mir.insns[8].immediate != 19 ||
+        mir.insns[8].memory_size != 1 ||
+        mir.insns[8].bit_width != 0 ||
+        (mir.insns[8].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[9].memory_size != 1 ||
+        mir.insns[9].bit_width != 0 ||
+        (mir.insns[9].memory_flags & (1 | 8)) != 0 ||
+        type_ptr_depth(mir.insns[9].type) != 0 ||
+        (mir.insns[9].type & 15) != TYPE_CHAR ||
+        (mir.insns[9].type & TYPE_UNSIGNED) == 0 ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        mir.insns[10].immediate != 0 ||
+        type_ptr_depth(mir.insns[10].type) != 0 ||
+        (mir.insns[10].type & 15) != TYPE_INT ||
+        (mir.insns[10].type & TYPE_UNSIGNED) != 0 ||
+        type_size(mir.insns[10].type) != 2 ||
+        mir.insns[11].src1 != mir.insns[10].dst ||
+        mir.insns[11].memory_size != 2 ||
+        mir.insns[14].src1 != mir.insns[12].dst ||
+        mir.insns[14].src2 != mir.insns[13].dst ||
+        mir.insns[14].immediate != 40 ||
+        mir.insns[15].src1 != mir.insns[14].dst ||
+        mir.insns[15].immediate != 19 ||
+        mir.insns[15].memory_size != 1 ||
+        mir.insns[15].bit_width != 0 ||
+        (mir.insns[15].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[16].src1 != mir.insns[15].dst ||
+        mir.insns[16].memory_size != 1 ||
+        mir.insns[16].bit_width != 0 ||
+        (mir.insns[16].memory_flags & (1 | 8)) != 0 ||
+        type_ptr_depth(mir.insns[16].type) != 0 ||
+        (mir.insns[16].type & 15) != TYPE_CHAR ||
+        (mir.insns[16].type & TYPE_UNSIGNED) == 0 ||
+        !mir_machine_constant_equals(mir.insns[17].dst, 2) ||
+        mir.insns[18].immediate != '+' ||
+        mir.insns[18].src1 != mir.insns[16].dst ||
+        mir.insns[18].src2 != mir.insns[17].dst ||
+        mir.insns[19].src1 != mir.insns[18].dst ||
+        type_ptr_depth(mir.insns[19].type) != 0 ||
+        (mir.insns[19].type & 15) != TYPE_CHAR ||
+        (mir.insns[19].type & TYPE_UNSIGNED) == 0 ||
+        type_size(mir.insns[19].type) != 1 ||
+        mir.insns[20].src1 != mir.insns[15].dst ||
+        mir.insns[20].src2 != mir.insns[19].dst ||
+        mir.insns[20].memory_size != 1 ||
+        mir.insns[20].bit_width != 0 ||
+        (mir.insns[20].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[22].src1 != mir.insns[10].dst)
+        return 0;
+    if (!mir_scalar_memory_location(
+            &mir.insns[25], &top_type, &top_storage,
+            &plan->global_top_root_offset) ||
+        top_storage != SC_GLOBAL ||
+        type_ptr_depth(top_type) != 0 ||
+        (top_type & 15) != TYPE_INT ||
+        (top_type & TYPE_UNSIGNED) != 0 ||
+        type_size(top_type) != 2 ||
+        !mir_machine_named_nonvolatile(&mir.insns[25]) ||
+        !mir_machine_same_location(
+            &mir.insns[25], &mir.insns[28]) ||
+        !mir_machine_same_location(
+            &mir.insns[25], &mir.insns[32]) ||
+        mir.insns[27].src1 != mir.insns[25].dst ||
+        mir.insns[27].memory_size != 2 ||
+        !mir_machine_constant_equals(mir.insns[29].dst, 2) ||
+        mir.insns[30].immediate != '+' ||
+        mir.insns[30].src1 != mir.insns[28].dst ||
+        mir.insns[30].src2 != mir.insns[29].dst ||
+        mir.insns[32].src1 != mir.insns[30].dst ||
+        mir.insns[32].memory_size != 2 ||
+        mir.insns[34].src1 != mir.insns[25].dst)
+        return 0;
+    plan->current_root = find_global(mir.insns[1].name);
+    plan->records_root = find_global(mir.insns[5].name);
+    plan->global_top_root = find_global(mir.insns[25].name);
+    plan->record_stride = 40;
+    plan->local_offset = 19;
+    plan->increment = 2;
+    if (plan->current_root == NULL ||
+        plan->records_root == NULL ||
+        plan->global_top_root == NULL ||
+        plan->current_root == plan->records_root ||
+        plan->current_root == plan->global_top_root ||
+        plan->records_root == plan->global_top_root ||
+        plan->current_root->storage == SC_FUNC ||
+        plan->records_root->storage == SC_FUNC ||
+        plan->global_top_root->storage == SC_FUNC ||
+        plan->current_root->is_volatile ||
+        plan->records_root->is_volatile ||
+        plan->global_top_root->is_volatile ||
+        type_size(plan->current_root->type) != 2 ||
+        type_size(plan->global_top_root->type) != 2 ||
+        type_ptr_depth(plan->records_root->type) != 1)
+        return 0;
+    return 1;
+}
+
+static void mir_numeric_emit_scoped_local_address(
+    FILE *out, const struct MirScopedTempSchedule *plan)
+{
+    mir_machine_emit_global_word(
+        out, plan->records_root, plan->records_root_offset);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_global_word(
+        out, plan->current_root, plan->current_root_offset);
+    fputs("\tld d,h\n\tld e,l\n"
+          "\tadd hl,hl\n\tadd hl,hl\n\tadd hl,de\n"
+          "\tadd hl,hl\n\tadd hl,hl\n\tadd hl,hl\n"
+          "\tex de,hl\n\tpop hl\n\tadd hl,de\n", out);
+    fprintf(out, "\tld de,%d\n\tadd hl,de\n",
+            plan->local_offset);
+}
+
+static void mir_emit_scoped_temp_schedule(
+    FILE *out, const struct MirScopedTempSchedule *plan)
+{
+    int global_path = new_label();
+    int epilogue = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-2\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_word(
+        out, plan->current_root, plan->current_root_offset);
+    fputs("\tpush hl\n\tld hl,0\n\tex de,hl\n\tpop hl\n"
+          "\tld a,h\n\txor 80h\n\tld h,a\n"
+          "\tld a,d\n\txor 80h\n\tld d,a\n"
+          "\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp c,L%d\n", global_path);
+
+    mir_numeric_emit_scoped_local_address(out, plan);
+    fputs("\tld l,(hl)\n\tld h,0\n"
+          "\tld (ix-2),l\n\tld (ix-1),h\n", out);
+    mir_numeric_emit_scoped_local_address(out, plan);
+    fputs("\tpush hl\n\tld l,(hl)\n\tld h,0\n", out);
+    if (plan->increment == 2)
+        fputs("\tinc hl\n\tinc hl\n", out);
+    else
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n",
+                plan->increment);
+    fputs("\tex de,hl\n\tpop hl\n\tld (hl),e\n"
+          "\tld l,(ix-2)\n\tld h,(ix-1)\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", epilogue, global_path);
+
+    mir_machine_emit_global_word(
+        out, plan->global_top_root, plan->global_top_root_offset);
+    fputs("\tld (ix-2),l\n\tld (ix-1),h\n", out);
+    mir_machine_emit_global_word(
+        out, plan->global_top_root, plan->global_top_root_offset);
+    if (plan->increment == 2)
+        fputs("\tinc hl\n\tinc hl\n", out);
+    else
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n",
+                plan->increment);
+    mir_machine_emit_global_word_store(
+        out, plan->global_top_root, plan->global_top_root_offset);
+    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n", out);
+    fprintf(out, "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n", epilogue);
+}
+
 int mir_try_emit_numeric_kernels(FILE *out, int phase)
 {
     if (phase == 0) {
@@ -4956,6 +5202,7 @@ int mir_try_emit_numeric_kernels(FILE *out, int phase)
         struct MirLcsDpSchedule lcs_plan;
         struct MirNarrowedDivmodLoopSchedule plan;
         struct MirRowInversionCheckSchedule row_plan;
+        struct MirScopedTempSchedule scoped_temp_plan;
 
         if (mir_match_lcs_dp_schedule(&lcs_plan)) {
             mir_emit_lcs_dp_schedule(out, &lcs_plan);
@@ -4967,6 +5214,10 @@ int mir_try_emit_numeric_kernels(FILE *out, int phase)
         }
         if (mir_match_row_inversion_check_schedule(&row_plan)) {
             mir_emit_row_inversion_check_schedule(out, &row_plan);
+            return 1;
+        }
+        if (mir_match_scoped_temp_schedule(&scoped_temp_plan)) {
+            mir_emit_scoped_temp_schedule(out, &scoped_temp_plan);
             return 1;
         }
     }
