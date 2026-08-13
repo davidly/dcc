@@ -7874,5 +7874,5 @@ int mir_try_emit_endgame_runners(FILE *out)
         mir_emit_endgame_float_runner(out, &float_plan);
         return 1;
     }
-    return -1;
+    return mir_try_emit_aggregate_checks(out);
 }

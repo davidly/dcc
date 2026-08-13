@@ -3,6 +3,60 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-13 pointer-condition 246-block batch (working tree)
+
+- Branch/base: `pr/143` at `f5ba843`. The aggregate-check scheduler now admits
+  the 246-block `tptrcnd.main` `final-cost-policy` fallback during the endgame
+  phase, before the generic block-count gate. No core MIR emitter was changed.
+  The strict name-free matcher covers all **2,450 MIR instructions**, including
+  the 86-position promoted prelegacy variant, operation and type streams,
+  constants, scalar/aggregate layouts, seven distinct global roles, local
+  alias relationships, memory widths, both returns and the complete CFG.
+- The proof requires all four same-identity initializer calls, 49 same-identity
+  failure calls and strings, 16 three-argument check calls, 11 wrapper-picker
+  calls, four node-picker calls, four leaf-picker calls, the integer and long
+  loop pickers, and all three output calls. It compares no production function,
+  helper, global, local, field, format, output or test name and uses no output
+  hash.
+- The dedicated emitter preserves every pointer, struct, member, array,
+  short-circuit and ternary condition, every initialization and alias, all
+  loop/control-transfer order, call order and final return. It reuses the
+  existing initializer schedule and alias-safe pointer helpers. The two
+  aggregate wrappers still require the original **762-byte IX frame**, while
+  hot scalars, aliases and small arrays are placed within IX displacement
+  range. No IY instruction is emitted.
+- Normal selected/captured metrics are **31,004/55,616 bytes** and
+  **2,888/5,478 instructions**. Stack-check metrics are
+  **31,033/55,645 bytes** and **2,889/5,479 instructions**.
+- `tptrcnd` passes full stack-check peep/nopeep validation. Selected versus
+  forced fallback is **154,794/204,457 cycles and 13,440/15,104 bytes** peep
+  plus **156,806/212,807 cycles and 13,696/17,280 bytes** nopeep. Exact gains
+  are **49,663 cycles and 1,664 bytes** peep plus
+  **56,001 cycles and 3,584 bytes** nopeep. All four program outputs are
+  identical and end with `tptrcnd start` and `PASS`.
+- A separately renamed target/helper/global/local boundary fixture selects the
+  same family with stack checking at **31,073/55,685 bytes** and
+  **2,889/5,479 instructions**. Selected/fallback output is identical in both
+  modes and prints `renamed pointer boundary` / `BOUNDARY OK`; peep cycles are
+  **166,406/216,069** and nopeep cycles are **168,418/224,419**. Its selected
+  and fallback `.COM` sizes are **10,240/11,904 bytes** peep and
+  **10,496/13,952 bytes** nopeep. Changing only the proved integer-array
+  constant from 5005 to 5006 is rejected by the constants contract and remains
+  on `final-cost-policy`.
+- The regression-gated stack-check census advances
+  **2,173/2,185 (99.45%)** to **2,174/2,185 (99.50%)**, adds exactly
+  `tptrcnd.main`, removes no accepted function, moves selector counts from
+  **1,380 spilled / 398 scheduled** to
+  **1,379 spilled / 399 scheduled**, and reduces `final-cost-policy`
+  fallbacks **12 -> 11**.
+- The aggregate-check module grows from **5,517 to 7,307 source lines**
+  (**+1,790**). Its standalone object defines only
+  `mir_try_emit_aggregate_checks [T]` globally and has zero read-only or
+  writable global data. The canonical build, focused selected/fallback full
+  runs, renamed boundary A/B, perturbation rejection, regression-gated census,
+  export audit, no-IY inspection and `git diff --check` pass. No performance
+  baseline, production-name gate or output-hash gate was added or changed.
+
 ## 2026-08-13 for-scope 69-block batch (working tree)
 
 - Branch/base: `pr/143` at `ed5add1`. The endgame call-runner module now
