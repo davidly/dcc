@@ -6,10 +6,41 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Clean base HEAD for the current coverage batch: `1215d7f`.
-- Current working-tree candidate coverage: **2137/2185 (97.80%)**.
-- Remaining fallback population: **48 `final-cost-policy`**, all selected by
+- Clean base HEAD for the current coverage batch: `f6137ff`.
+- Current working-tree candidate coverage: **2138/2185 (97.85%)**.
+- Remaining fallback population: **47 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The call-runner module now admits the 19-block `tforinc.main`
+  `final-cost-policy` fallback through a strict name-free matcher over all
+  **123 MIR instructions**. It proves seven distinct defined helper calls and
+  their exact prototypes, arguments, source order and result locals; the
+  shared input string; the eight-argument variadic report; all seven ordered
+  short-circuit checks and their expected values; the complete PHI/branch
+  graph; and the final logical-negation return. The emitter uses a 14-byte IX
+  result frame, preserves every helper and report call, and uses no IY.
+  Normal selected/captured metrics are **1,370/2,274 bytes** and
+  **128/208 instructions**; stack-check metrics are **1,399/2,303 bytes**
+  and **129/209 instructions**.
+- `tforinc` passes checked full peep/nopeep validation. Selected versus forced
+  fallback improves peep from **47,848 to 47,771 cycles** with both images
+  **5,888 bytes**, and nopeep from **49,635 to 49,103 cycles** while reducing
+  the image from **6,272 to 6,016 bytes**. A renamed-helper edge A/B uses a
+  phase counter, ordered increment-expression side effects, pointer bounds,
+  unsigned-byte wrap and array sentinels while retaining the same seven-call
+  main graph. Selected and forced-fallback output is byte-identical in both
+  modes: `edge 10,10,4,4,14,22,14`. Selected/fallback measurements are
+  **63,391/63,468 cycles and 3,968/3,968 bytes peep**, and
+  **68,705/69,237 cycles and 4,608/4,736 bytes nopeep**.
+- The call-runner module grows from **2,341 to 2,823 source lines** and from
+  **37 to 41 static top-level helpers**. The object audit reports only
+  `mir_try_emit_call_runners [T]` as defined global code and zero global
+  data. The canonical build passes. The regression-gated stack-check census
+  advances **2,137/2,185 (97.80%)** to **2,138/2,185 (97.85%)**, adds exactly
+  `tforinc.main`, removes no accepted function, moves selector counts from
+  **1,416 spilled / 362 scheduled** to
+  **1,415 spilled / 363 scheduled**, and leaves
+  **47 `final-cost-policy`** fallbacks. No performance baseline, production
+  name, or output-hash gate was added.
 - The call-runner module now admits the 18-block `tatexit.main`
   `final-cost-policy` fallback through a strict name-free matcher over all
   **66 MIR instructions**. It proves three distinct defined `void (void)`
