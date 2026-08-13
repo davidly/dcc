@@ -28,7 +28,13 @@ struct tm {
 clock_t clock(void);
 
 /** Current calendar time; stores through tp if non-null.
- *  Returns (time_t)-1 because CP/M 2.2 has no real-time clock. */
+ *  Reads a real clock via BDOS function 105 (CP/M 3+ "Get Date and Time")
+ *  when the underlying system/emulator implements it - many do even while
+ *  still reporting CP/M 2.2 via BDOS 12. The result tracks the BDOS clock's
+ *  raw wall-clock reading with no timezone adjustment (CP/M has no timezone
+ *  concept), encoded as a Unix time_t. Returns (time_t)-1, and stores -1
+ *  through tp, when the underlying BDOS doesn't actually implement the
+ *  call (e.g. real CP/M 2.2 hardware). */
 time_t time(time_t *tp);
 
 /** Difference t1-t0 as a floating-point count of seconds.

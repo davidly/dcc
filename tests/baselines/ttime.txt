@@ -1,0 +1,10 @@
+PASS time(NULL) returns -1 or a plausible epoch
+PASS time(&tp) matches time(NULL) within a few seconds
+PASS time(&tp) stores the same value it returns
+PASS difftime(100000,0) == 100000
+PASS difftime(0,100000) == -100000
+PASS difftime(5,0) == 5 (t1/t0 argument order)
+PASS difftime(0,5) == -5 (t1/t0 argument order)
+PASS difftime across a 65536s boundary == 65536
+PASS difftime(t,t) == 0
+ttime passed

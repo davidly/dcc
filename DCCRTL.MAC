@@ -20917,9 +20917,17 @@ __lcnv:
 
 ; ============================================================
 ; Time functions  (C89 7.12)
-; CP/M 2.2 has no real-time clock.  clock() and time() return -1.
-; Struct-based functions (localtime etc.) return NULL.
-; difftime converts the low 16 bits of (t1-t0) to float via __fif.
+; time() reads the real clock via BDOS 105 (CP/M 3+ "Get Date and Time")
+; and converts it to a standard Unix time_t. The call is made unconditionally,
+; with no CP/M-version check first: ntvcm and RunCPM both answer it correctly
+; while still reporting CP/M 2.2 via BDOS 12 (so a version gate would just
+; disable this on the two emulators that matter most here), and every other
+; emulator tested either implements it too or safely no-ops it, leaving a
+; deterministic-but-wrong fixed timestamp rather than crashing - acceptable
+; since real hardware/BIOS behavior for an unrecognized BDOS call is already
+; undefined. clock() and the calendar-breakdown functions (localtime, gmtime,
+; asctime, ctime, mktime, strftime) remain stubs; nothing here builds a
+; struct tm.
 ; ============================================================
         public  _clock
         public  _time
@@ -20937,45 +20945,178 @@ _clock:
         ld      de,0ffffh
         ret
 
+; __bcd2bin: A = packed BCD byte (each nibble 0-9) -> A = binary value.
+; Preserves BC, DE, HL.
+__bcd2bin:
+        push    bc
+        ld      b,a             ; B = original packed byte
+        and     0fh             ; A = units digit
+        ld      c,a             ; C = units
+        ld      a,b
+        rrca
+        rrca
+        rrca
+        rrca
+        and     0fh             ; A = tens digit (0-9)
+        ld      b,a
+        add     a,a             ; tens*2
+        add     a,a             ; tens*4
+        add     a,b             ; tens*5
+        add     a,a             ; tens*10
+        add     a,c             ; tens*10 + units
+        pop     bc
+        ret
+
 _time:
 ; time_t time(time_t *tp) -- tp @ IX+4/5
-; Stores (time_t)-1 through tp if non-null; returns (time_t)-1.
+; BDOS 105 fills a 4-byte buffer (day count since 1978-01-01 = day 1, packed
+; BCD hour, packed BCD minute) and returns packed BCD seconds in A. Detect a
+; system that doesn't actually implement the call (real CP/M 2.2 hardware, or
+; any BDOS that silently no-ops an unrecognized function) by sentinel-filling
+; the hour byte with 0FFh first: no valid packed-BCD hour (0x00-0x23) can
+; ever equal it, and a real implementation always writes all 4 buffer bytes
+; together, so a surviving sentinel means the call didn't run - fall back to
+; (time_t)-1, matching this function's pre-BDOS-105 stub behavior, rather
+; than returning a fabricated-looking but wrong timestamp.
+; Otherwise convert to a Unix time_t: unix_days = cpm_day_count + 2921 (CP/M
+; day 1 is Unix day 2922 - i.e. day 0 is Unix day 2921; matches ntvcm/RunCPM's
+; own reverse conversion), then seconds = unix_days*86400 + hour*3600 +
+; minute*60 + sec, accumulated as a 32-bit value via __lmul (32x32->32) and
+; __mulu (16x16->16, safe here since minute*60+second never exceeds 3599).
         push    ix
         ld      ix,0
         add     ix,sp
+
+        ld      a,0ffh
+        ld      (__time_buf+2),a        ; sentinel: never a valid packed-BCD hour
+        ld      de,__time_buf
+        ld      c,105
+        call    5
+        ld      (__time_sec_bcd),a      ; stash seconds (BCD): fn 105 doesn't
+                                         ; write it to the buffer, only to A
+
+        ld      a,(__time_buf+2)
+        cp      0ffh
+        jr      z,tim_unavailable       ; sentinel survived: no real clock
+
+        ld      hl,(__time_buf)         ; HL = cpm_day_count
+        ld      de,2921
+        add     hl,de                   ; HL = unix_days
+        ex      de,hl                   ; DE = unix_days
+
+        ; acc = unix_days * 86400 (0x00015180)
+        ld      hl,0
+        push    hl                      ; LHS high = 0
+        push    de                      ; LHS low = unix_days
+        ld      de,1
+        ld      hl,5180h
+        call    __lmul                  ; DE:HL = product (high:low)
+        pop     bc
+        pop     bc                      ; discard LHS (caller-cleanup convention)
+        ld      (__time_acc_l),hl
+        ld      (__time_acc_h),de
+
+        ; acc += hour * 3600
+        ld      a,(__time_buf+2)
+        call    __bcd2bin
+        ld      e,a
+        ld      d,0                     ; DE = hour (0-23)
+        ld      hl,0
+        push    hl                      ; LHS high = 0
+        push    de                      ; LHS low = hour
+        ld      de,0
+        ld      hl,3600
+        call    __lmul                  ; DE:HL = hour*3600 (high:low)
+        pop     bc
+        pop     bc
+        ld      bc,(__time_acc_l)
+        add     hl,bc
+        ld      (__time_acc_l),hl
+        ld      hl,(__time_acc_h)
+        adc     hl,de
+        ld      (__time_acc_h),hl
+
+        ; acc += minute*60 + second (fits in 16 bits: max 59*60+59 = 3599)
+        ld      a,(__time_buf+3)
+        call    __bcd2bin
+        ld      h,0
+        ld      l,a                     ; HL = minute
+        ld      de,60
+        call    __mulu                  ; HL = minute*60
+        ld      a,(__time_sec_bcd)
+        call    __bcd2bin
+        ld      e,a
+        ld      d,0
+        add     hl,de                   ; HL = minute*60 + second
+        ld      de,(__time_acc_l)
+        add     hl,de
+        ld      (__time_acc_l),hl
+        ld      hl,(__time_acc_h)
+        ld      de,0
+        adc     hl,de
+        ld      (__time_acc_h),hl
+        jr      tim_store
+
+tim_unavailable:
+        ld      hl,0ffffh
+        ld      (__time_acc_l),hl
+        ld      (__time_acc_h),hl
+
+tim_store:
+        ; Store through tp if non-null, then return the value in DE:HL.
         ld      l,(ix+4)
         ld      h,(ix+5)
         ld      a,h
         or      l
-        jr      z,tim_ret
-        ld      (hl),0ffh
+        jr      z,tim_noptr
+        ld      de,(__time_acc_l)
+        ld      (hl),e
         inc     hl
-        ld      (hl),0ffh
+        ld      (hl),d
         inc     hl
-        ld      (hl),0ffh
+        ld      de,(__time_acc_h)
+        ld      (hl),e
         inc     hl
-        ld      (hl),0ffh
-tim_ret:
-        ld      hl,0ffffh
-        ld      de,0ffffh
+        ld      (hl),d
+tim_noptr:
+        ld      hl,(__time_acc_l)
+        ld      de,(__time_acc_h)
         pop     ix
         ret
+
+__time_buf:     ds      4
+__time_sec_bcd: db      0
+__time_acc_l:   dw      0
+__time_acc_h:   dw      0
 
 _difftime:
 ; float difftime(time_t t1, time_t t0)
 ; Note: C89 returns double; dcc returns float (no double type).
-; Converts the signed 16-bit difference of the low words to float via __fif.
-; t0 @ IX+4..7, t1 @ IX+8..11
+; Full 32-bit signed difference converted to float via __flf - a low-word-
+; only difference (as before real timestamps existed) would be wrong
+; whenever t1/t0 straddle a 65536-second (~18.2 hour) boundary, which is
+; routine now that time() returns real Unix timestamps instead of -1.
+; t1 @ IX+4..7, t0 @ IX+8..11 (args are pushed right-to-left, so the first
+; declared parameter - t1 - ends up at the lowest IX offset; see _lseek's
+; fd/offset/whence layout for the same rule applied to a 3-arg function).
         push    ix
         ld      ix,0
         add     ix,sp
-        ld      l,(ix+8)
-        ld      h,(ix+9)        ; HL = t1 low word
-        ld      e,(ix+4)
-        ld      d,(ix+5)        ; DE = t0 low word
+        ld      l,(ix+4)
+        ld      h,(ix+5)        ; HL = t1 low word
+        ld      e,(ix+8)
+        ld      d,(ix+9)        ; DE = t0 low word
         or      a
-        sbc     hl,de           ; HL = t1_lo - t0_lo
-        call    __fif           ; convert signed 16-bit to float in DE:HL
+        sbc     hl,de           ; HL = t1_lo - t0_lo, carry = borrow
+        push    hl              ; save low result
+        ld      l,(ix+6)
+        ld      h,(ix+7)        ; HL = t1 high word
+        ld      e,(ix+10)
+        ld      d,(ix+11)       ; DE = t0 high word
+        sbc     hl,de           ; HL = t1_hi - t0_hi - borrow
+        ex      de,hl           ; DE = result high
+        pop     hl              ; HL = result low
+        call    __flf           ; convert signed 32-bit DE:HL to float
         pop     ix
         ret
 
