@@ -6629,11 +6629,9 @@ opclr:
         ; promises anything for an ambiguous FCB passed to open, so that
         ; case is left as documented, implementation-defined behavior
         ; rather than a new restriction.
-        ld      a,(ix+7)
-        and     2
+        bit     1,(ix+7)
         jr      nz,opwscn       ; O_TRUNC set: check
-        ld      a,(ix+6)
-        and     40h
+        bit     6,(ix+6)
         jr      z,opnowc        ; neither set ("r"): no create risk, skip
 opwscn:
         ld      h,d
@@ -6655,12 +6653,10 @@ opnowc:
         ;   O_CREAT = 0100 octal = 0040h
         ;   O_TRUNC = 01000 octal = 0200h
         ;   O_RDWR  = 2, which must NOT truncate.
-        ld      a,(ix+7)
-        and     2               ; O_TRUNC high byte
+        bit     1,(ix+7)        ; O_TRUNC high byte
         jr      nz,opmake       ; "w": always delete + recreate
 
-        ld      a,(ix+6)
-        and     40h             ; O_CREAT low byte
+        bit     6,(ix+6)        ; O_CREAT low byte
         jr      z,opexist       ; neither set ("r"): must already exist
 
         ; O_CREAT without O_TRUNC ("a"): per C89 7.9.5.3, appended output
@@ -9314,8 +9310,7 @@ rl_have_ptr:
         ; Round up to even (0 stays 0, so the realloc(ptr,0) check below
         ; still sees the caller's true zero), matching __mlh's own header
         ; format - see __wr_hf's header comment.
-        ld      a,l
-        and     1
+        bit     0,l
         jr      z,rl_sz_even
         inc     hl
         ld      a,h
@@ -9433,8 +9428,7 @@ rl_try_grow:
         ld      e,(hl)
         inc     hl
         ld      d,(hl)                  ; DE = next block's packed size
-        ld      a,e
-        and     1
+        bit     0,e
         jp      z,rl_do_alloc           ; next block is used
         ld      a,e
         and     0feh
@@ -9600,8 +9594,7 @@ __frcoal:
         ld      e,(hl)
         inc     hl
         ld      d,(hl)          ; DE = preceding block's packed footer value
-        ld      a,e
-        and     1
+        bit     0,e
         jr      z,fr_coal       ; preceding block is used: nothing to merge
 
         ; Preceding block is free: its header sits (HDRSIZE+FTRSIZE+size)
@@ -9642,8 +9635,7 @@ fr_coal:
         ld      e,(hl)
         inc     hl
         ld      d,(hl)          ; DE = next block's packed value
-        ld      a,e
-        and     1
+        bit     0,e
         jr      z,fr_write      ; next block is used
 
         ld      a,e
@@ -9684,8 +9676,7 @@ __fr_csz:       dw      0
 ; Separate public block: _malloc/_calloc reference this helper, but _free
 ; and programs that only need heap-limit startup state do not pull it in.
 __mlh:
-        ld      a,l
-        and     1
+        bit     0,l
         jr      z,mh_rnd_ok
         inc     hl
         ld      a,h
@@ -9718,8 +9709,7 @@ mh_walk:
         inc     hl
         ld      d,(hl)
 
-        ld      a,e
-        and     1
+        bit     0,e
         jr      z,mh_used
 
         ; --- Free block --- DE currently holds size|1; mask to true size.
@@ -16699,8 +16689,7 @@ NXGEN:
 
         ; For positive x, x<y means increment raw bits; otherwise decrement.
         ; For negative x, x<y means decrement raw bits; otherwise increment.
-        ld      a,d
-        and     80h
+        bit     7,d
         jr      nz,NXNEG
 
         ld      a,(NXLT)
@@ -16716,8 +16705,7 @@ NXNEG:
 NXZERO:
         ld      hl,1
         ld      de,0
-        ld      a,(ix+11)
-        and     80h
+        bit     7,(ix+11)
         jp      z,NXRET
         ld      d,80h
         jr      NXRET ; peep: jp_to_jr
