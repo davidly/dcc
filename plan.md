@@ -5,10 +5,46 @@ current execution plan and handoff.
 
 ## 2026-08-13 current checkpoint (read this first)
 
-- Branch: `pr/143`; clean base HEAD for this batch: `6d115d6`.
-- Current working-tree candidate coverage: **2154/2185 (98.58%)**.
-- Remaining fallback population: **31 `final-cost-policy`**, all selected by
+- Branch: `pr/143`; clean base HEAD for this batch: `478769b`.
+- Current working-tree candidate coverage: **2155/2185 (98.63%)**.
+- Remaining fallback population: **30 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The scanner module now admits the 30-block `wumpus.cbfs`
+  `final-cost-policy` fallback through a strict name-free matcher over all
+  **274 MIR instructions**. It proves six parameter ABIs and types, eight
+  distinct local objects, both private 21-word work arrays, the private
+  21-by-3 board, every queue/predecessor/path access and stride, all six
+  PHIs, every comparison/branch/jump edge, the no-call contract, all three
+  returns, and the exact destination-first then two-avoid short-circuit
+  order. No production function, parameter, local, global, board value, or
+  selected-output hash is matched.
+- The dedicated emitter preserves static predecessor/queue storage, board
+  visit order, queue bounds, destination allowance, avoid-room ordering,
+  backward predecessor traversal, maximum-length rejection before path
+  writes, reverse path fill, stack-check call and return values. It uses a
+  compact **7-byte IX frame** and no IY.
+- Normal selected/captured metrics are **2,194/4,246 bytes** and
+  **198/367 instructions**; stack-check metrics are **2,223/4,275 bytes**
+  and **199/368 instructions**. Checked full-mode selected/fallback totals
+  are **306,690/320,283 cycles** and **15,360/15,616 bytes** peep, plus
+  **329,475/353,184 cycles** and **16,256/16,640 bytes** nopeep. Selected
+  and forced fallback both pass the existing `-c` override and baseline.
+- A renamed function/global/parameter/local fixture uses a permuted board,
+  exercises exact-capacity success, one-below-capacity rejection without
+  path writes, destination-equals-avoid, alternate avoid routing, a
+  five-edge path, and six recursive caller levels. Selected and fallback
+  output is identical (`1 5 120`) in both modes. Selected/fallback
+  measurements are **305,964/425,842 cycles** and **3,584/3,840 bytes**
+  peep, plus **316,598/526,217 cycles** and **3,968/4,352 bytes** nopeep.
+- The scanner module grows from **3,442 to 4,097 source lines**. Its object
+  audit reports only `mir_try_emit_scanner_kernels [T]` as defined global
+  code, with zero global read-only or writable data. The canonical build
+  passes. The regression-gated stack-check census advances
+  **2,154/2,185 (98.58%)** to **2,155/2,185 (98.63%)**, adds exactly
+  `wumpus.cbfs`, removes no accepted function, moves selector counts from
+  **1,399 spilled / 379 scheduled** to **1,398 spilled / 380 scheduled**,
+  and leaves **30 `final-cost-policy`** fallbacks. No performance baseline,
+  production identifier, or output-hash gate was added.
 - The call-runner module now admits the 29-block `tfreopen.main`
   `final-cost-policy` fallback through a strict name-free matcher over all
   **316 MIR instructions**. It proves the 32-byte line buffer, primary and

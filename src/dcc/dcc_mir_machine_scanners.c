@@ -103,6 +103,18 @@ struct MirSymbolFindSchedule {
     int memory_error_string_id;
 };
 
+struct MirBreadthFirstPathSchedule {
+    struct Sym *board;
+    int predecessor_declaration;
+    int queue_declaration;
+    int predecessor_offset;
+    int queue_offset;
+    int board_offset;
+    int parameter_stack_offsets[6];
+    char predecessor_assembly_name[64];
+    char queue_assembly_name[64];
+};
+
 struct MirStateMember {
     struct Sym *root;
     int root_offset;
@@ -3367,6 +3379,642 @@ static void mir_emit_symbol_find_schedule(
             found);
 }
 
+static int mir_breadth_first_word_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == TYPE_INT &&
+           type_size(type) == 2 &&
+           (type & TYPE_UNSIGNED) == 0;
+}
+
+static int mir_breadth_first_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & 15) == TYPE_INT &&
+           type_size(type) == 2 &&
+           (type & TYPE_UNSIGNED) == 0;
+}
+
+static int mir_breadth_first_array(
+    int instruction, int first_dimension, int element_size,
+    int dimensions, int second_dimension,
+    struct Sym **symbol_out, int *offset_out)
+{
+    struct Sym *symbol;
+    long offset;
+
+    if (!mir_machine_global_address_offset(
+            mir.insns[instruction].dst, &symbol, &offset, 0) ||
+        offset < -32768 || offset > 32767 ||
+        !symbol->is_defined || !symbol->is_static ||
+        !symbol->is_array || symbol->is_vla ||
+        symbol->is_volatile ||
+        symbol->array_len != first_dimension ||
+        symbol->elem_size != element_size ||
+        symbol->size != first_dimension * element_size ||
+        symbol->dim_count != dimensions ||
+        symbol->dims[0] != first_dimension ||
+        (dimensions == 2 &&
+         symbol->dims[1] != second_dimension) ||
+        !mir_breadth_first_word_type(symbol->type) ||
+        !mir_breadth_first_pointer_type(mir.insns[instruction].type) ||
+        (mir.insns[instruction].memory_flags & (1 | 8)) != 0)
+        return 0;
+    *symbol_out = symbol;
+    *offset_out = (int)offset;
+    return 1;
+}
+
+static int mir_breadth_first_declared_array(
+    int instruction, int first_dimension, int element_size,
+    int *declaration_out, int *offset_out, char assembly_name[64])
+{
+    const struct MirInsn *address = &mir.insns[instruction];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int declaration;
+
+    if (!mir_scalar_memory_location(
+            address, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL ||
+        !mir_breadth_first_pointer_type(address->type) ||
+        (address->memory_flags & (1 | 8)) != 0)
+        return 0;
+    for (declaration = 0;
+         declaration < mir.declared_count;
+         ++declaration)
+        if (!strcmp(
+                mir.declared_names[declaration], address->name))
+            break;
+    if (declaration >= mir.declared_count ||
+        mir.declared_storage[declaration] != SC_GLOBAL ||
+        !mir.declared_is_array[declaration] ||
+        mir.declared_is_vla[declaration] ||
+        mir.declared_is_volatile[declaration] ||
+        !mir_breadth_first_word_type(
+            mir.declared_types[declaration]) ||
+        mir.declared_sizes[declaration] !=
+            first_dimension * element_size ||
+        mir.declared_dim_counts[declaration] != 1 ||
+        mir.declared_dims[declaration][0] != first_dimension ||
+        mir.declared_elem_sizes[declaration] != element_size ||
+        mir.declared_link_names[declaration][0] == 0)
+        return 0;
+    snprintf(assembly_name, 64, "%s",
+             asm_name_for(mir.declared_link_names[declaration]));
+    *declaration_out = declaration;
+    *offset_out = memory_offset;
+    return 1;
+}
+
+static int mir_breadth_first_same_declared_array(
+    int instruction, int declaration, int expected_offset)
+{
+    const struct MirInsn *address = &mir.insns[instruction];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    return !strcmp(address->name, mir.declared_names[declaration]) &&
+           mir_scalar_memory_location(
+               address, &memory_type, &memory_storage, &memory_offset) &&
+           memory_storage == SC_GLOBAL &&
+           memory_offset == expected_offset;
+}
+
+static void mir_breadth_first_emit_named_address_de(
+    FILE *out, const char *assembly_name, int offset)
+{
+    if (offset == 0)
+        fprintf(out, "\tld de,%s\n", assembly_name);
+    else
+        fprintf(out, "\tld de,%s%+d\n", assembly_name, offset);
+}
+
+static int mir_breadth_first_object_group(
+    const int *instructions, int count, int *object_out)
+{
+    int object = mir.insns[instructions[0]].object;
+    int item;
+
+    if (object < 0)
+        return 0;
+    for (item = 1; item < count; ++item)
+        if (mir.insns[instructions[item]].object != object)
+            return 0;
+    *object_out = object;
+    return 1;
+}
+
+static int mir_breadth_first_sources(
+    const int (*one_source)[2], int one_count,
+    const int (*two_sources)[3], int two_count)
+{
+    int item;
+
+    for (item = 0; item < one_count; ++item)
+        if (mir.insns[one_source[item][0]].src1 !=
+            mir.insns[one_source[item][1]].dst)
+            return 0;
+    for (item = 0; item < two_count; ++item)
+        if (mir.insns[two_sources[item][0]].src1 !=
+                mir.insns[two_sources[item][1]].dst ||
+            mir.insns[two_sources[item][0]].src2 !=
+                mir.insns[two_sources[item][2]].dst)
+            return 0;
+    return 1;
+}
+
+static int mir_match_breadth_first_path_schedule(
+    struct MirBreadthFirstPathSchedule *plan)
+{
+    static const int expected_opcodes[274] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_PARAM,
+        MIR_PARAM, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_PHI,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_ADDRESS, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_CONST,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_STORE, MIR_ADDRESS, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_NOP, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_INDEX_ADDRESS, MIR_NOP,
+        MIR_STORE_INDIRECT, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_LOAD,
+        MIR_LOAD, MIR_BINARY, MIR_BRANCH_FALSE, MIR_ADDRESS, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_NOP, MIR_STORE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_ADDRESS, MIR_LOAD, MIR_INDEX_ADDRESS,
+        MIR_LOAD, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE,
+        MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_LOAD,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_LOAD, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_NOP,
+        MIR_LOAD, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST,
+        MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_LABEL,
+        MIR_JUMP, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST,
+        MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_JUMP, MIR_LABEL, MIR_ADDRESS, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_LOAD, MIR_STORE_INDIRECT, MIR_NOP, MIR_LOAD,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_LOAD, MIR_LOAD,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_ADDRESS, MIR_LOAD, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_LABEL, MIR_JUMP, MIR_LABEL,
+        MIR_LOAD, MIR_LOAD, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST,
+        MIR_RETURN, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_STORE, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_PHI,
+        MIR_PHI, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP, MIR_STORE_INDIRECT, MIR_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_RETURN, MIR_NOP, MIR_LABEL,
+        MIR_ADDRESS, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_INDEX_ADDRESS, MIR_LOAD, MIR_STORE_INDIRECT, MIR_NOP, MIR_LABEL,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL,
+        MIR_NOP, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_RETURN
+    };
+    static const int constants[][2] = {
+        {7, 0}, {19, 20}, {25, 0}, {29, 1}, {34, 0}, {46, 1},
+        {68, 1}, {75, 0}, {90, 3}, {118, 1}, {126, 1}, {129, 0},
+        {138, 1}, {141, 0}, {157, 0}, {182, 1}, {199, 0},
+        {206, 1}, {226, 0}, {243, 1}, {254, 1}, {263, 1}, {272, 0}
+    };
+    static const int branches[][2] = {
+        {21, 33}, {32, 10}, {65, 271}, {92, 267}, {105, 108},
+        {107, 261}, {112, 140}, {116, 120}, {119, 134}, {124, 128},
+        {127, 130}, {133, 134}, {136, 140}, {139, 142}, {144, 147},
+        {146, 261}, {156, 251}, {180, 194}, {193, 163}, {198, 201},
+        {228, 247}, {246, 210}, {266, 78}, {270, 52}
+    };
+    static const int one_source[][2] = {
+        {9, 7}, {21, 20}, {31, 30}, {36, 34}, {38, 34}, {48, 47},
+        {65, 64}, {70, 69}, {72, 71}, {74, 72}, {77, 75}, {92, 91},
+        {98, 97}, {100, 98}, {104, 103}, {105, 104}, {112, 111},
+        {116, 115}, {124, 123}, {136, 135}, {144, 143}, {156, 155},
+        {159, 157}, {162, 98}, {180, 179}, {184, 183}, {188, 187},
+        {190, 188}, {198, 197}, {200, 199}, {204, 98}, {209, 207},
+        {228, 227}, {237, 236}, {239, 237}, {245, 244}, {249, 248},
+        {256, 255}, {265, 264}, {273, 272}
+    };
+    static const int two_sources[][3] = {
+        {17, 7, 30}, {20, 17, 19}, {24, 22, 17}, {26, 24, 25},
+        {30, 17, 29}, {41, 39, 1}, {43, 41, 1}, {47, 34, 46},
+        {49, 44, 34}, {51, 49, 1}, {64, 62, 63}, {69, 67, 68},
+        {71, 66, 67}, {91, 89, 90}, {95, 93, 94}, {97, 95, 96},
+        {103, 101, 98}, {111, 98, 110}, {115, 98, 114},
+        {123, 98, 122}, {131, 126, 129}, {135, 118, 131},
+        {143, 138, 141}, {150, 148, 98}, {152, 150, 151},
+        {155, 98, 154}, {179, 177, 178}, {183, 181, 182},
+        {187, 185, 186}, {197, 195, 196}, {207, 205, 206},
+        {223, 98, 237}, {224, 207, 244}, {227, 224, 226},
+        {231, 229, 224}, {233, 231, 223}, {236, 234, 223},
+        {244, 224, 243}, {255, 253, 254}, {257, 252, 253},
+        {259, 257, 258}, {264, 262, 263}
+    };
+    static const int binary_operations[][2] = {
+        {20, TOK_LE}, {30, '+'}, {47, '+'}, {64, '<'}, {69, '+'},
+        {91, '<'}, {111, TOK_NE}, {115, TOK_EQ}, {123, TOK_EQ},
+        {155, TOK_EQ}, {179, TOK_NE}, {183, '+'}, {197, '>'},
+        {207, '-'}, {227, TOK_GE}, {244, '-'}, {255, '+'}, {264, '+'}
+    };
+    static const int index_addresses[][3] = {
+        {24, 2, 2}, {41, 2, 2}, {49, 2, 2}, {71, 2, 2},
+        {95, 6, 6}, {97, 2, 2}, {103, 2, 2}, {150, 2, 2},
+        {187, 2, 2}, {231, 2, 2}, {236, 2, 2}, {257, 2, 2}
+    };
+    static const int indirect_loads[] = {72, 98, 104, 188, 237};
+    static const int indirect_stores[] = {26, 43, 51, 152, 233, 259};
+    static const int predecessor_addresses[] = {22, 39, 101, 148, 185, 234};
+    static const int queue_addresses[] = {44, 66, 252};
+    static const int object_groups[][14] = {
+        {10, 1, 11, 40, 42, 50, 53, 79, 164, 178, 211},
+        {8, 2, 12, 54, 80, 110, 154, 165, 212},
+        {7, 3, 13, 55, 81, 114, 166, 213},
+        {7, 4, 14, 56, 82, 122, 167, 214},
+        {7, 5, 15, 57, 83, 168, 215, 229},
+        {7, 6, 16, 58, 84, 169, 196, 216},
+        {13, 9, 17, 18, 23, 28, 31, 59, 74, 85, 94, 151, 170, 217},
+        {10, 36, 45, 48, 60, 63, 86, 171, 218, 253, 256},
+        {8, 38, 61, 62, 67, 70, 87, 172, 219},
+        {8, 77, 88, 89, 96, 173, 220, 262, 265},
+        {12, 100, 102, 109, 113, 121, 149, 153, 160, 174, 202, 221, 258},
+        {8, 159, 175, 181, 184, 195, 205, 222, 248},
+        {10, 162, 176, 177, 186, 190, 204, 223, 232, 235, 239},
+        {6, 209, 224, 225, 230, 242, 245}
+    };
+    static const int local_stores[] = {9, 36, 38, 77, 100, 159, 162, 209};
+    static const int local_loads[] = {
+        62, 63, 67, 89, 94, 96, 110, 114, 122, 151, 154, 177,
+        178, 181, 186, 195, 196, 205, 248, 253, 258, 262
+    };
+    int objects[14];
+    int instruction;
+    int item;
+    int other;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 274 || mir_cfg_block_count() != 30)
+        return 0;
+    if (mir.local_bytes != 16 || mir.aggregate_temp_bytes != 0 ||
+        mir.has_vla || !mir_has_cfg_backedge() ||
+        !mir_breadth_first_word_type(mir.return_type))
+        return mir_machine_reject(
+            "breadth-first-path-schedule", "preflight");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "breadth-first-path-schedule", "opcodes");
+    for (item = 0;
+         item < (int)(sizeof(constants) / sizeof(constants[0]));
+         ++item)
+        if (!mir_machine_constant_equals(
+                mir.insns[constants[item][0]].dst,
+                constants[item][1]))
+            return mir_machine_reject(
+                "breadth-first-path-schedule", "constants");
+    for (item = 0;
+         item < (int)(sizeof(branches) / sizeof(branches[0]));
+         ++item)
+        if (mir.insns[branches[item][0]].label !=
+            mir.insns[branches[item][1]].label)
+            return mir_machine_reject(
+                "breadth-first-path-schedule", "control-flow");
+    if (!mir_breadth_first_sources(
+            one_source,
+            (int)(sizeof(one_source) / sizeof(one_source[0])),
+            two_sources,
+            (int)(sizeof(two_sources) / sizeof(two_sources[0]))))
+        return mir_machine_reject(
+            "breadth-first-path-schedule", "value-flow");
+
+    for (item = 0; item < 6; ++item) {
+        const struct MirInsn *parameter = &mir.insns[item + 1];
+
+        if (!mir_machine_parameter_value_offset(
+                parameter->dst,
+                &plan->parameter_stack_offsets[item]) ||
+            plan->parameter_stack_offsets[item] != 2 + item * 2 ||
+            !mir_machine_named_nonvolatile(parameter) ||
+            (item == 4
+                 ? (!mir_breadth_first_pointer_type(parameter->type) ||
+                    mir_machine_pointee_is_volatile(parameter))
+                 : !mir_breadth_first_word_type(parameter->type)))
+            return mir_machine_reject(
+                "breadth-first-path-schedule", "parameters");
+    }
+
+    for (item = 0; item < 14; ++item) {
+        if (!mir_breadth_first_object_group(
+                &object_groups[item][1], object_groups[item][0],
+                &objects[item]))
+            return mir_machine_reject(
+                "breadth-first-path-schedule", "objects");
+        for (other = 0; other < item; ++other)
+            if (objects[item] == objects[other])
+                return mir_machine_reject(
+                    "breadth-first-path-schedule", "object-alias");
+    }
+    for (item = 0;
+         item < (int)(sizeof(local_stores) / sizeof(local_stores[0]));
+         ++item)
+        if (!mir_machine_unobservable_local_store(
+                &mir.insns[local_stores[item]]) ||
+            !mir_breadth_first_word_type(
+                mir.insns[local_stores[item]].type))
+            return mir_machine_reject(
+                "breadth-first-path-schedule", "local-stores");
+    for (item = 0;
+         item < (int)(sizeof(local_loads) / sizeof(local_loads[0]));
+         ++item)
+        if (!mir_breadth_first_word_type(
+                mir.insns[local_loads[item]].type))
+            return mir_machine_reject(
+                "breadth-first-path-schedule", "local-loads");
+
+    if (!mir_breadth_first_declared_array(
+            22, 21, 2, &plan->predecessor_declaration,
+            &plan->predecessor_offset,
+            plan->predecessor_assembly_name))
+        return mir_machine_reject(
+            "breadth-first-path-schedule", "predecessor-array");
+    if (!mir_breadth_first_declared_array(
+            44, 21, 2, &plan->queue_declaration,
+            &plan->queue_offset, plan->queue_assembly_name))
+        return mir_machine_reject(
+            "breadth-first-path-schedule", "queue-array");
+    if (!mir_breadth_first_array(
+            93, 21, 6, 2, 3, &plan->board,
+            &plan->board_offset))
+        return mir_machine_reject(
+            "breadth-first-path-schedule", "board-array");
+    if (plan->predecessor_declaration ==
+            plan->queue_declaration ||
+        !strcmp(plan->predecessor_assembly_name,
+                plan->queue_assembly_name))
+        return mir_machine_reject(
+            "breadth-first-path-schedule", "array-alias");
+    for (item = 0;
+         item < (int)(sizeof(predecessor_addresses) /
+                      sizeof(predecessor_addresses[0]));
+         ++item)
+        if (!mir_breadth_first_same_declared_array(
+                predecessor_addresses[item],
+                plan->predecessor_declaration,
+                plan->predecessor_offset))
+            return mir_machine_reject(
+                "breadth-first-path-schedule", "predecessor-visits");
+    for (item = 0;
+         item < (int)(sizeof(queue_addresses) /
+                      sizeof(queue_addresses[0]));
+         ++item)
+        if (!mir_breadth_first_same_declared_array(
+                queue_addresses[item], plan->queue_declaration,
+                plan->queue_offset))
+            return mir_machine_reject(
+                "breadth-first-path-schedule", "queue-visits");
+
+    for (item = 0;
+         item < (int)(sizeof(binary_operations) /
+                      sizeof(binary_operations[0]));
+         ++item) {
+        const struct MirInsn *binary =
+            &mir.insns[binary_operations[item][0]];
+
+        if (binary->immediate != binary_operations[item][1] ||
+            !mir_breadth_first_word_type(binary->type) ||
+            !mir_breadth_first_word_type(binary->secondary_offset))
+            return mir_machine_reject(
+                "breadth-first-path-schedule", "operations");
+    }
+    for (item = 0;
+         item < (int)(sizeof(index_addresses) /
+                      sizeof(index_addresses[0]));
+         ++item) {
+        const struct MirInsn *index =
+            &mir.insns[index_addresses[item][0]];
+
+        if (index->immediate != index_addresses[item][1] ||
+            index->memory_size != index_addresses[item][2] ||
+            index->bit_width != 0 ||
+            (index->memory_flags & (1 | 8)) != 0 ||
+            !mir_breadth_first_pointer_type(index->type))
+            return mir_machine_reject(
+                "breadth-first-path-schedule", "indexes");
+    }
+    for (item = 0;
+         item < (int)(sizeof(indirect_loads) /
+                      sizeof(indirect_loads[0]));
+         ++item) {
+        const struct MirInsn *load = &mir.insns[indirect_loads[item]];
+
+        if (load->memory_size != 2 || load->bit_width != 0 ||
+            (load->memory_flags & (1 | 8)) != 0 ||
+            !mir_breadth_first_word_type(load->type))
+            return mir_machine_reject(
+                "breadth-first-path-schedule", "indirect-loads");
+    }
+    for (item = 0;
+         item < (int)(sizeof(indirect_stores) /
+                      sizeof(indirect_stores[0]));
+         ++item) {
+        const struct MirInsn *store = &mir.insns[indirect_stores[item]];
+
+        if (store->memory_size != 2 || store->bit_width != 0 ||
+            (store->memory_flags & (1 | 8)) != 0)
+            return mir_machine_reject(
+                "breadth-first-path-schedule", "indirect-stores");
+    }
+
+    if (mir.insns[17].phi_pred1 != mir.insns[0].label ||
+        mir.insns[17].phi_pred2 != mir.insns[27].label ||
+        mir.insns[131].phi_pred1 != mir.insns[125].label ||
+        mir.insns[131].phi_pred2 != mir.insns[128].label ||
+        mir.insns[135].phi_pred1 != mir.insns[117].label ||
+        mir.insns[135].phi_pred2 != mir.insns[132].label ||
+        mir.insns[143].phi_pred1 != mir.insns[137].label ||
+        mir.insns[143].phi_pred2 != mir.insns[140].label ||
+        mir.insns[223].phi_pred1 != mir.insns[201].label ||
+        mir.insns[223].phi_pred2 != mir.insns[241].label ||
+        mir.insns[224].phi_pred1 != mir.insns[201].label ||
+        mir.insns[224].phi_pred2 != mir.insns[241].label ||
+        mir.insns[229].object != mir.insns[5].object ||
+        !mir_breadth_first_pointer_type(mir.insns[229].type))
+        return mir_machine_reject(
+            "breadth-first-path-schedule", "joins");
+    return 1;
+}
+
+static void mir_emit_breadth_first_path_schedule(
+    FILE *out, const struct MirBreadthFirstPathSchedule *plan)
+{
+    int clear_loop = new_label();
+    int outer_loop = new_label();
+    int outer_done = new_label();
+    int inner_loop = new_label();
+    int next_neighbor = new_label();
+    int accept_neighbor = new_label();
+    int found = new_label();
+    int length_loop = new_label();
+    int length_ready = new_label();
+    int fill_loop = new_label();
+    int return_zero = new_label();
+    int epilogue = new_label();
+    int source_offset = plan->parameter_stack_offsets[0] + 2;
+    int destination_offset = plan->parameter_stack_offsets[1] + 2;
+    int first_avoid_offset = plan->parameter_stack_offsets[2] + 2;
+    int second_avoid_offset = plan->parameter_stack_offsets[3] + 2;
+    int path_offset = plan->parameter_stack_offsets[4] + 2;
+    int maximum_offset = plan->parameter_stack_offsets[5] + 2;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-7\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+
+    mir_breadth_first_emit_named_address_de(
+        out, plan->predecessor_assembly_name,
+        plan->predecessor_offset);
+    fprintf(out,
+            "\tld b,21\n\txor a\n"
+            "L%d:\n\tld (de),a\n\tinc de\n"
+            "\tld (de),a\n\tinc de\n\tdjnz L%d\n"
+            "\tld (ix-1),a\n\tinc a\n\tld (ix-2),a\n"
+            "\tld c,(ix%+d)\n\tld b,(ix%+d)\n"
+            "\tld l,c\n\tld h,b\n\tadd hl,hl\n",
+            clear_loop, clear_loop, source_offset,
+            source_offset + 1);
+    mir_breadth_first_emit_named_address_de(
+        out, plan->predecessor_assembly_name,
+        plan->predecessor_offset);
+    fputs("\tadd hl,de\n\tld (hl),c\n\tinc hl\n\tld (hl),b\n", out);
+    mir_breadth_first_emit_named_address_de(
+        out, plan->queue_assembly_name, plan->queue_offset);
+    fputs("\tld a,c\n\tld (de),a\n\tinc de\n"
+          "\tld a,b\n\tld (de),a\n", out);
+
+    fprintf(out,
+            "L%d:\n"
+            "\tld a,(ix-1)\n\tld c,a\n"
+            "\tld a,(ix-2)\n\tcp c\n"
+            "\tjp c,L%d\n\tjp z,L%d\n"
+            "\tld a,c\n\tinc (ix-1)\n"
+            "\tld l,a\n\tld h,0\n\tadd hl,hl\n",
+            outer_loop, outer_done, outer_done);
+    mir_breadth_first_emit_named_address_de(
+        out, plan->queue_assembly_name, plan->queue_offset);
+    fputs("\tadd hl,de\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tld (ix-4),e\n\tld (ix-3),d\n"
+          "\txor a\n\tld (ix-5),a\n", out);
+
+    fprintf(out,
+            "L%d:\n\tld a,(ix-5)\n\tcp 3\n\tjp nc,L%d\n"
+            "\tld l,(ix-4)\n\tld h,(ix-3)\n"
+            "\tld d,h\n\tld e,l\n"
+            "\tadd hl,hl\n\tadd hl,de\n\tadd hl,hl\n",
+            inner_loop, outer_loop);
+    mir_machine_emit_global_address_de(
+        out, plan->board, plan->board_offset);
+    fputs("\tadd hl,de\n"
+          "\tld a,(ix-5)\n\tadd a,a\n\tld e,a\n\tld d,0\n"
+          "\tadd hl,de\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tld (ix-7),e\n\tld (ix-6),d\n"
+          "\tld h,d\n\tld l,e\n\tadd hl,hl\n", out);
+    mir_breadth_first_emit_named_address_de(
+        out, plan->predecessor_assembly_name,
+        plan->predecessor_offset);
+    fprintf(out,
+            "\tadd hl,de\n\tld a,(hl)\n\tinc hl\n\tor (hl)\n"
+            "\tjp nz,L%d\n"
+            "\tld e,(ix-7)\n\tld d,(ix-6)\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tor a\n\tsbc hl,de\n\tjp z,L%d\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tor a\n\tsbc hl,de\n\tjp z,L%d\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tor a\n\tsbc hl,de\n\tjp z,L%d\n"
+            "L%d:\n"
+            "\tld e,(ix-7)\n\tld d,(ix-6)\n"
+            "\tld h,d\n\tld l,e\n\tadd hl,hl\n",
+            next_neighbor,
+            destination_offset, destination_offset + 1,
+            accept_neighbor,
+            first_avoid_offset, first_avoid_offset + 1,
+            next_neighbor,
+            second_avoid_offset, second_avoid_offset + 1,
+            next_neighbor, accept_neighbor);
+    mir_breadth_first_emit_named_address_de(
+        out, plan->predecessor_assembly_name,
+        plan->predecessor_offset);
+    fprintf(out,
+            "\tadd hl,de\n"
+            "\tld e,(ix-4)\n\tld d,(ix-3)\n"
+            "\tld (hl),e\n\tinc hl\n\tld (hl),d\n"
+            "\tld e,(ix-7)\n\tld d,(ix-6)\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tor a\n\tsbc hl,de\n\tjp z,L%d\n"
+            "\tld a,(ix-2)\n\tinc (ix-2)\n"
+            "\tld l,a\n\tld h,0\n\tadd hl,hl\n",
+            destination_offset, destination_offset + 1, found);
+    mir_breadth_first_emit_named_address_de(
+        out, plan->queue_assembly_name, plan->queue_offset);
+    fprintf(out,
+            "\tadd hl,de\n\tld e,(ix-7)\n\tld d,(ix-6)\n"
+            "\tld (hl),e\n\tinc hl\n\tld (hl),d\n"
+            "L%d:\n\tinc (ix-5)\n\tjp L%d\n",
+            next_neighbor, inner_loop);
+
+    fprintf(out,
+            "L%d:\n\tld e,(ix-7)\n\tld d,(ix-6)\n\tld bc,0\n"
+            "L%d:\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tor a\n\tsbc hl,de\n\tjp z,L%d\n"
+            "\tinc bc\n\tld h,d\n\tld l,e\n\tadd hl,hl\n",
+            found, length_loop, source_offset, source_offset + 1,
+            length_ready);
+    mir_breadth_first_emit_named_address_de(
+        out, plan->predecessor_assembly_name,
+        plan->predecessor_offset);
+    fprintf(out,
+            "\tadd hl,de\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tjp L%d\n"
+            "L%d:\n"
+            "\tbit 7,(ix%+d)\n\tjp nz,L%d\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tor a\n\tsbc hl,bc\n\tjp c,L%d\n"
+            "\tld (ix-1),c\n\txor a\n\tld (ix-2),a\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld a,c\n\tdec a\n\tadd a,a\n"
+            "\tld e,a\n\tld d,0\n\tadd hl,de\n"
+            "\tld e,(ix-7)\n\tld d,(ix-6)\n"
+            "\tld b,(ix-1)\n"
+            "L%d:\n"
+            "\tld (hl),e\n\tinc hl\n\tld (hl),d\n"
+            "\tdec hl\n\tdec hl\n\tdec hl\n\tpush hl\n"
+            "\tld h,d\n\tld l,e\n\tadd hl,hl\n",
+            length_loop, length_ready, maximum_offset + 1,
+            return_zero, maximum_offset, maximum_offset + 1,
+            return_zero, path_offset, path_offset + 1, fill_loop);
+    mir_breadth_first_emit_named_address_de(
+        out, plan->predecessor_assembly_name,
+        plan->predecessor_offset);
+    fprintf(out,
+            "\tadd hl,de\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tpop hl\n\tdjnz L%d\n"
+            "\tld l,(ix-1)\n\tld h,0\n\tjp L%d\n"
+            "L%d:\n\tld hl,0\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            fill_loop, epilogue, return_zero, epilogue);
+
+    fprintf(out, "L%d:\n\tjp L%d\n", outer_done, return_zero);
+}
+
 int mir_try_emit_scanner_kernels(FILE *out, int late)
 {
     if (!late) {
@@ -3430,11 +4078,18 @@ int mir_try_emit_scanner_kernels(FILE *out, int late)
     }
     {
         struct MirSymbolFindSchedule symbol_find_schedule;
+        struct MirBreadthFirstPathSchedule breadth_first_path_schedule;
 
         if (mir_match_symbol_find_schedule(
                 &symbol_find_schedule)) {
             mir_emit_symbol_find_schedule(
                 out, &symbol_find_schedule);
+            return 1;
+        }
+        if (mir_match_breadth_first_path_schedule(
+                &breadth_first_path_schedule)) {
+            mir_emit_breadth_first_path_schedule(
+                out, &breadth_first_path_schedule);
             return 1;
         }
     }
