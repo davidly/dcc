@@ -9,6 +9,8 @@
 #define MIR_ENDGAME_NUMERIC_PARSE_CASES 9
 #define MIR_ENDGAME_NUMERIC_VISIT_CASES 5
 #define MIR_ENDGAME_NUMERIC_PRINT_CALLS 16
+#define MIR_ENDGAME_LONG_CHECKS 34
+#define MIR_ENDGAME_LONG_STRINGS 36
 
 enum MirEndgameFloatOperandKind {
     MIR_ENDGAME_FLOAT_BITS,
@@ -76,6 +78,14 @@ struct MirEndgameNumericRunner {
     char print_names[MIR_ENDGAME_NUMERIC_PRINT_CALLS][64];
 };
 
+struct MirEndgameLongRunner {
+    struct Sym *check_function;
+    struct Sym *print_function;
+    struct Sym *failures;
+    int strings[MIR_ENDGAME_LONG_STRINGS];
+    char print_names[2][64];
+};
+
 struct MirEndgameOpcode {
     int instruction;
     int opcode;
@@ -92,6 +102,29 @@ struct MirEndgameWidthPhi {
     int second_value;
     int first_predecessor;
     int second_predecessor;
+};
+
+struct MirEndgameLongConstant {
+    int instruction;
+    int type;
+    unsigned long bits;
+};
+
+struct MirEndgameLongOperation {
+    int instruction;
+    int opcode;
+    int first;
+    int second;
+    int type;
+    int operand_type;
+    int operation;
+};
+
+struct MirEndgameLongCheck {
+    int call;
+    int string;
+    int got;
+    int expected;
 };
 
 static const unsigned char mir_endgame_width_opcodes[] = {
@@ -299,6 +332,215 @@ static const struct MirEndgameWidthPhi mir_endgame_numeric_phis[] = {
     {151, 142, 148, 144, 149},
     {172, 163, 169, 165, 170},
     {193, 184, 190, 186, 191}
+};
+
+static const unsigned char mir_endgame_long_opcodes[] = {
+    MIR_LABEL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_BRANCH_FALSE, MIR_CONST, MIR_BRANCH_FALSE,
+    MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_UNARY,
+    MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG,
+    MIR_CALL, MIR_CONST, MIR_BRANCH_FALSE, MIR_NOP, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+    MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_UNARY, MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG,
+    MIR_NOP, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_BRANCH_FALSE,
+    MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST,
+    MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_LABEL, MIR_JUMP, MIR_LABEL,
+    MIR_PHI, MIR_UNARY, MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_UNARY, MIR_ARG,
+    MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+    MIR_LABEL, MIR_NOP, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST,
+    MIR_LABEL, MIR_PHI, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_PHI, MIR_UNARY, MIR_STORE,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+    MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_CONST,
+    MIR_BINARY, MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG,
+    MIR_CALL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_BRANCH_FALSE, MIR_LABEL, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_CONST, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_JUMP, MIR_LABEL,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_LABEL,
+    MIR_NOP, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP,
+    MIR_BRANCH_FALSE, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+    MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE, MIR_LOAD, MIR_CONST, MIR_BINARY,
+    MIR_STORE, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_UNARY,
+    MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_NOP, MIR_CONST, MIR_NOP,
+    MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_BRANCH_FALSE, MIR_LOAD, MIR_CONST,
+    MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL,
+    MIR_PHI, MIR_BRANCH_FALSE, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_LABEL, MIR_JUMP,
+    MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG,
+    MIR_CALL, MIR_NOP, MIR_NOP, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP,
+    MIR_NOP, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_CONST, MIR_NOP, MIR_STORE,
+    MIR_NOP, MIR_LABEL, MIR_NOP, MIR_BRANCH_FALSE, MIR_JUMP, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG,
+    MIR_LOAD, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_CONST,
+    MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG,
+    MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_CONST, MIR_BINARY,
+    MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+    MIR_NOP, MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_CONST, MIR_NOP, MIR_CONST, MIR_NOP, MIR_BINARY, MIR_UNARY,
+    MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CONST, MIR_NOP,
+    MIR_CONST, MIR_NOP, MIR_BINARY, MIR_UNARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_ARG, MIR_CONST,
+    MIR_ARG, MIR_CALL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP,
+    MIR_CONST, MIR_BINARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST, MIR_NOP,
+    MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_ARG, MIR_CONST,
+    MIR_ARG, MIR_CALL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY,
+    MIR_NOP, MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG,
+    MIR_CALL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP,
+    MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+    MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP, MIR_STORE,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_NOP, MIR_CONST, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_CONST, MIR_NOP, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG,
+    MIR_CALL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_NOP, MIR_BINARY,
+    MIR_BRANCH_FALSE, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CONST, MIR_ARG,
+    MIR_CALL, MIR_JUMP, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CONST,
+    MIR_ARG, MIR_CALL, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_NOP, MIR_CONST,
+    MIR_NOP, MIR_ARG, MIR_CONST, MIR_NOP, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG,
+    MIR_NOP, MIR_NOP, MIR_CONST, MIR_NOP, MIR_ARG, MIR_NOP, MIR_CONST, MIR_NOP,
+    MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_NOP, MIR_CONST, MIR_NOP,
+    MIR_ARG, MIR_CONST, MIR_NOP, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP,
+    MIR_NOP, MIR_CONST, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_CONST,
+    MIR_STORE, MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP, MIR_UNARY, MIR_STORE, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_UNARY,
+    MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_ARG, MIR_CONST,
+    MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY,
+    MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_LOAD, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG,
+    MIR_LOAD, MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN, MIR_NOP, MIR_LABEL, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN,
+};
+
+static const struct MirEndgameWidthEdge mir_endgame_long_edges[] = {
+    {5, 11}, {7, 11}, {10, 13}, {26, 32}, {28, 32},
+    {31, 34}, {47, 51}, {50, 63}, {53, 57}, {56, 59},
+    {62, 63}, {76, 80}, {79, 92}, {82, 86}, {85, 88},
+    {91, 92}, {133, 143}, {142, 151}, {160, 168},
+    {164, 168}, {167, 170}, {172, 179}, {178, 156},
+    {197, 205}, {201, 205}, {204, 207}, {209, 216},
+    {215, 193}, {243, 245}, {244, 230}, {424, 434},
+    {433, 442}, {533, 542}
+};
+
+static const struct MirEndgameWidthPhi mir_endgame_long_phis[] = {
+    {14, 9, 12, 8, 11},
+    {35, 30, 33, 29, 32},
+    {60, 55, 58, 54, 57},
+    {64, 49, 60, 48, 61},
+    {89, 84, 87, 83, 86},
+    {93, 78, 89, 77, 90},
+    {171, 166, 169, 165, 168},
+    {208, 203, 206, 202, 205}
+};
+
+static const int mir_endgame_long_branch_values[][2] = {
+    {5, 1}, {7, 6}, {26, 25}, {28, 1}, {47, 1},
+    {53, 52}, {76, 75}, {82, 1}, {133, 129},
+    {160, 129}, {164, 163}, {172, 171}, {197, 129},
+    {201, 200}, {209, 208}, {243, 237}, {424, 423},
+    {533, 532}
+};
+
+static const struct MirEndgameLongConstant mir_endgame_long_constants[] = {
+    {1, 36, 65536UL}, {6, 2, 1UL}, {9, 0, 1UL},
+    {12, 0, 0UL}, {22, 36, 1UL}, {25, 2, 1UL},
+    {30, 0, 1UL}, {33, 0, 0UL}, {43, 36, 1UL},
+    {49, 0, 1UL}, {52, 2, 0UL}, {55, 0, 1UL},
+    {58, 0, 0UL}, {72, 36, 1UL}, {75, 2, 0UL},
+    {78, 0, 1UL}, {84, 0, 1UL}, {87, 0, 0UL},
+    {101, 36, 1UL}, {104, 36, 65535UL},
+    {108, 36, 1UL}, {115, 36, 65536UL},
+    {119, 36, 1UL}, {126, 36, 65535UL},
+    {129, 36, 65536UL}, {137, 36, 1UL},
+    {139, 36, 1UL}, {146, 36, 0UL}, {148, 36, 1UL},
+    {153, 2, 0UL}, {162, 2, 0UL}, {166, 0, 1UL},
+    {169, 0, 0UL}, {174, 0, 1UL}, {185, 36, 1UL},
+    {190, 2, 0UL}, {199, 2, 0UL}, {203, 0, 1UL},
+    {206, 0, 0UL}, {211, 0, 1UL}, {222, 36, 1UL},
+    {227, 2, 0UL}, {234, 0, 1UL}, {237, 36, 0UL},
+    {251, 36, 1UL}, {255, 36, 0xffffffffUL},
+    {259, 36, 1UL}, {266, 36, 0UL}, {270, 36, 1UL},
+    {277, 36, 0xffffffffUL}, {281, 4, 0xffffffffUL},
+    {285, 4, 1UL}, {293, 36, 0UL},
+    {298, 36, 0xffffffffUL}, {300, 4, 0xffffffffUL},
+    {305, 36, 1UL}, {310, 36, 0xffffffffUL},
+    {312, 4, 0xffffffffUL}, {317, 36, 0UL},
+    {325, 36, 1UL}, {327, 36, 1UL},
+    {330, 36, 0x80000000UL}, {336, 36, 2UL},
+    {339, 36, 0x40000000UL}, {342, 36, 0x80000001UL},
+    {348, 36, 2UL}, {351, 36, 1UL},
+    {354, 36, 0xffffffffUL}, {358, 36, 2UL},
+    {366, 36, 1UL}, {369, 36, 0x80000000UL},
+    {373, 36, 31UL}, {381, 36, 1UL}, {384, 36, 1UL},
+    {388, 36, 31UL}, {396, 36, 0x80000000UL},
+    {402, 4, 0xfffffffeUL}, {405, 36, 0xfffffffeUL},
+    {410, 36, 0x80000000UL}, {414, 36, 0x80000000UL},
+    {417, 36, 0x80000000UL}, {421, 4, 0UL},
+    {428, 36, 1UL}, {430, 36, 1UL}, {437, 36, 0UL},
+    {439, 36, 1UL}, {447, 4, 300000UL},
+    {450, 4, 300000UL}, {458, 4, 0xfffe7960UL},
+    {462, 4, 0xfffe7960UL}, {470, 4, 300000UL},
+    {473, 4, 300000UL}, {481, 36, 0x80000000UL},
+    {483, 36, 0x80000000UL}, {487, 33, 255UL},
+    {490, 34, 65535UL}, {499, 36, 255UL},
+    {509, 36, 65535UL}, {515, 36, 1UL},
+    {519, 36, 256UL}, {525, 36, 1UL},
+    {529, 36, 65536UL}, {539, 2, 1UL}, {546, 2, 0UL}
+};
+
+static const struct MirEndgameLongOperation mir_endgame_long_operations[] = {
+    {15, MIR_UNARY, 14, -1, 2, 0, 0},
+    {20, MIR_UNARY, 15, -1, 36, 0, 0},
+    {36, MIR_UNARY, 35, -1, 2, 0, 0},
+    {41, MIR_UNARY, 36, -1, 36, 0, 0},
+    {65, MIR_UNARY, 64, -1, 2, 0, 0},
+    {70, MIR_UNARY, 65, -1, 36, 0, 0},
+    {94, MIR_UNARY, 93, -1, 2, 0, 0},
+    {99, MIR_UNARY, 94, -1, 36, 0, 0},
+    {109, MIR_BINARY, 104, 108, 36, 36, '+'},
+    {120, MIR_BINARY, 109, 119, 36, 36, '-'},
+    {163, MIR_BINARY, 161, 162, 2, 2, TOK_EQ},
+    {175, MIR_BINARY, 173, 174, 0, 0, '+'},
+    {183, MIR_UNARY, 182, -1, 36, 0, 0},
+    {200, MIR_BINARY, 198, 199, 2, 2, TOK_EQ},
+    {212, MIR_BINARY, 210, 211, 0, 0, '+'},
+    {220, MIR_UNARY, 219, -1, 36, 0, 0},
+    {235, MIR_BINARY, 233, 234, 0, 0, '+'},
+    {249, MIR_UNARY, 248, -1, 36, 0, 0},
+    {260, MIR_BINARY, 255, 259, 36, 36, '+'},
+    {271, MIR_BINARY, 260, 270, 36, 36, '-'},
+    {286, MIR_BINARY, 281, 285, 4, 4, '+'},
+    {302, MIR_BINARY, 298, 300, 2, 36, TOK_EQ},
+    {303, MIR_UNARY, 302, -1, 36, 0, 0},
+    {314, MIR_BINARY, 310, 312, 2, 36, '>'},
+    {315, MIR_UNARY, 314, -1, 36, 0, 0},
+    {337, MIR_BINARY, 330, 336, 36, 36, '/'},
+    {349, MIR_BINARY, 342, 348, 36, 36, '%'},
+    {359, MIR_BINARY, 354, 358, 36, 36, '+'},
+    {374, MIR_BINARY, 369, 373, 36, 36, TOK_SHR},
+    {389, MIR_BINARY, 384, 388, 36, 36, TOK_SHL},
+    {423, MIR_BINARY, 417, 421, 2, 36, '>'},
+    {493, MIR_UNARY, 487, -1, 36, 0, 0},
+    {503, MIR_UNARY, 490, -1, 36, 0, 0},
+    {516, MIR_UNARY, 487, -1, 36, 0, 0},
+    {517, MIR_BINARY, 516, 515, 36, 36, '+'},
+    {526, MIR_UNARY, 490, -1, 36, 0, 0},
+    {527, MIR_BINARY, 526, 525, 36, 36, '+'}
+};
+
+static const struct MirEndgameLongCheck mir_endgame_long_checks[] = {
+    {24, 17, 20, 22}, {45, 38, 41, 43},
+    {74, 67, 70, 72}, {103, 96, 99, 101},
+    {117, 111, 109, 115}, {128, 122, 120, 126},
+    {141, 135, 137, 139}, {150, 144, 146, 148},
+    {187, 180, 183, 185}, {224, 217, 220, 222},
+    {253, 246, 249, 251}, {268, 262, 260, 266},
+    {279, 273, 271, 277}, {295, 288, 286, 293},
+    {307, 296, 303, 305}, {319, 308, 315, 317},
+    {329, 320, 325, 327}, {341, 333, 337, 339},
+    {353, 345, 349, 351}, {368, 362, 359, 366},
+    {383, 377, 374, 381}, {398, 392, 389, 396},
+    {407, 399, 402, 405}, {416, 408, 410, 414},
+    {432, 426, 428, 430}, {441, 435, 437, 439},
+    {453, 443, 447, 450}, {465, 454, 458, 462},
+    {476, 466, 470, 473}, {485, 477, 481, 483},
+    {501, 495, 493, 499}, {511, 505, 503, 509},
+    {521, 512, 517, 519}, {531, 522, 527, 529}
 };
 
 static const unsigned char mir_endgame_file_opcodes[] = {
@@ -2937,6 +3179,372 @@ static void mir_emit_endgame_width_runner(
             plan->passed == 3 ? 0 : 1);
 }
 
+static int mir_endgame_long_graph(void)
+{
+    size_t item;
+
+    for (item = 0;
+         item < sizeof(mir_endgame_long_edges) /
+                sizeof(mir_endgame_long_edges[0]);
+         ++item) {
+        const struct MirEndgameWidthEdge *edge =
+            &mir_endgame_long_edges[item];
+
+        if ((mir.insns[edge->instruction].opcode !=
+                 MIR_BRANCH_FALSE &&
+             mir.insns[edge->instruction].opcode != MIR_JUMP) ||
+            mir.insns[edge->instruction].label !=
+                mir.insns[edge->target].label)
+            return 0;
+    }
+    for (item = 0;
+         item < sizeof(mir_endgame_long_phis) /
+                sizeof(mir_endgame_long_phis[0]);
+         ++item) {
+        const struct MirEndgameWidthPhi *phi =
+            &mir_endgame_long_phis[item];
+        const struct MirInsn *instruction =
+            &mir.insns[phi->instruction];
+
+        if (instruction->opcode != MIR_PHI ||
+            instruction->src1 !=
+                mir.insns[phi->first_value].dst ||
+            instruction->src2 !=
+                mir.insns[phi->second_value].dst ||
+            instruction->phi_pred1 !=
+                mir.insns[phi->first_predecessor].label ||
+            instruction->phi_pred2 !=
+                mir.insns[phi->second_predecessor].label)
+            return 0;
+    }
+    for (item = 0;
+         item < sizeof(mir_endgame_long_branch_values) /
+                sizeof(mir_endgame_long_branch_values[0]);
+         ++item)
+        if (mir.insns[
+                mir_endgame_long_branch_values[item][0]].src1 !=
+            mir.insns[
+                mir_endgame_long_branch_values[item][1]].dst)
+            return 0;
+    return 1;
+}
+
+static int mir_endgame_long_location_type(
+    int instruction, int base, int is_unsigned, int width,
+    int storage)
+{
+    int type;
+    int actual_storage;
+    int offset;
+
+    return mir_scalar_memory_location(
+               &mir.insns[instruction], &type,
+               &actual_storage, &offset) &&
+           actual_storage == storage &&
+           mir_endgame_width_integer_type(
+               type, base, is_unsigned, width);
+}
+
+static int mir_endgame_long_objects(
+    struct MirEndgameLongRunner *plan)
+{
+    static const int ul_locations[] = {
+        3, 106, 110, 121, 131, 239, 257, 261, 272, 332,
+        344, 356, 361, 371, 376, 386, 391, 419, 494, 504
+    };
+    static const int result_locations[] = {16, 37, 66, 95};
+    static const int first_count_locations[] = {
+        155, 161, 173, 176, 182
+    };
+    static const int second_count_locations[] = {
+        192, 198, 210, 213, 219
+    };
+    static const int third_count_locations[] = {
+        229, 233, 236, 248
+    };
+    static const int signed_long_locations[] = {283, 287};
+    static const int byte_locations[] = {488};
+    static const int word_locations[] = {491};
+    static const int failure_locations[] = {532, 536};
+    static const int stores[][2] = {
+        {3, 1}, {16, 15}, {37, 36}, {66, 65}, {95, 94},
+        {106, 104}, {110, 109}, {121, 120}, {131, 129},
+        {155, 153}, {176, 175}, {192, 190}, {213, 212},
+        {229, 227}, {236, 235}, {239, 237}, {257, 255},
+        {261, 260}, {272, 271}, {283, 281}, {287, 286},
+        {332, 330}, {344, 342}, {356, 354}, {361, 359},
+        {371, 369}, {376, 374}, {386, 384}, {391, 389},
+        {419, 417}, {488, 487}, {491, 490}, {494, 493},
+        {504, 503}
+    };
+    size_t item;
+
+    if (mir.object_count != 5)
+        return 0;
+    for (item = 0; item < 5; ++item)
+        if (mir.objects[item].storage != SC_LOCAL ||
+            mir.objects[item].is_register)
+            return 0;
+    if (!mir_endgame_width_integer_type(
+            mir.objects[0].type, TYPE_LONG, 1, 4) ||
+        !mir_endgame_width_integer_type(
+            mir.objects[1].type, TYPE_INT, 0, 2) ||
+        !mir_endgame_width_integer_type(
+            mir.objects[2].type, TYPE_LONG, 0, 4) ||
+        !mir_endgame_width_integer_type(
+            mir.objects[3].type, TYPE_CHAR, 1, 1) ||
+        !mir_endgame_width_integer_type(
+            mir.objects[4].type, TYPE_INT, 1, 2) ||
+        !mir_endgame_same_locations(
+            ul_locations,
+            sizeof(ul_locations) / sizeof(ul_locations[0]), 4) ||
+        !mir_endgame_same_locations(
+            result_locations,
+            sizeof(result_locations) /
+                sizeof(result_locations[0]), 2) ||
+        !mir_endgame_same_locations(
+            first_count_locations,
+            sizeof(first_count_locations) /
+                sizeof(first_count_locations[0]), 2) ||
+        !mir_endgame_same_locations(
+            second_count_locations,
+            sizeof(second_count_locations) /
+                sizeof(second_count_locations[0]), 2) ||
+        !mir_endgame_same_locations(
+            third_count_locations,
+            sizeof(third_count_locations) /
+                sizeof(third_count_locations[0]), 2) ||
+        !mir_endgame_same_locations(
+            signed_long_locations,
+            sizeof(signed_long_locations) /
+                sizeof(signed_long_locations[0]), 4) ||
+        !mir_endgame_same_locations(
+            byte_locations,
+            sizeof(byte_locations) / sizeof(byte_locations[0]), 1) ||
+        !mir_endgame_same_locations(
+            word_locations,
+            sizeof(word_locations) / sizeof(word_locations[0]), 2) ||
+        !mir_endgame_same_locations(
+            failure_locations,
+            sizeof(failure_locations) /
+                sizeof(failure_locations[0]), 2))
+        return 0;
+    if (!mir_endgame_long_location_type(
+            ul_locations[0], TYPE_LONG, 1, 4, SC_LOCAL) ||
+        !mir_endgame_long_location_type(
+            result_locations[0], TYPE_INT, 0, 2, SC_LOCAL) ||
+        !mir_endgame_long_location_type(
+            first_count_locations[0],
+            TYPE_INT, 0, 2, SC_LOCAL) ||
+        !mir_endgame_long_location_type(
+            second_count_locations[0],
+            TYPE_INT, 0, 2, SC_LOCAL) ||
+        !mir_endgame_long_location_type(
+            third_count_locations[0],
+            TYPE_INT, 0, 2, SC_LOCAL) ||
+        !mir_endgame_long_location_type(
+            signed_long_locations[0],
+            TYPE_LONG, 0, 4, SC_LOCAL) ||
+        !mir_endgame_long_location_type(
+            byte_locations[0], TYPE_CHAR, 1, 1, SC_LOCAL) ||
+        !mir_endgame_long_location_type(
+            word_locations[0], TYPE_INT, 1, 2, SC_LOCAL) ||
+        !mir_endgame_long_location_type(
+            failure_locations[0], TYPE_INT, 0, 2, SC_GLOBAL))
+        return 0;
+    for (item = 0;
+         item < sizeof(stores) / sizeof(stores[0]);
+         ++item)
+        if (mir.insns[stores[item][0]].src1 !=
+            mir.insns[stores[item][1]].dst)
+            return 0;
+    plan->failures = find_global(mir.insns[532].name);
+    return plan->failures != NULL &&
+           plan->failures ==
+               find_global(mir.insns[536].name) &&
+           plan->failures->storage == SC_GLOBAL;
+}
+
+static int mir_endgame_long_operations_match(void)
+{
+    size_t item;
+
+    for (item = 0;
+         item < sizeof(mir_endgame_long_constants) /
+                sizeof(mir_endgame_long_constants[0]);
+         ++item) {
+        const struct MirEndgameLongConstant *expected =
+            &mir_endgame_long_constants[item];
+        const struct MirInsn *constant =
+            &mir.insns[expected->instruction];
+        unsigned long bits;
+
+        if (constant->opcode != MIR_CONST ||
+            constant->type != expected->type)
+            return 0;
+        bits = (unsigned long)constant->immediate;
+        if (expected->type != 0 &&
+            type_size(expected->type) == 4)
+            bits &= 0xffffffffUL;
+        if (bits != expected->bits)
+            return 0;
+    }
+    for (item = 0;
+         item < sizeof(mir_endgame_long_operations) /
+                sizeof(mir_endgame_long_operations[0]);
+         ++item) {
+        const struct MirEndgameLongOperation *expected =
+            &mir_endgame_long_operations[item];
+        const struct MirInsn *operation =
+            &mir.insns[expected->instruction];
+
+        if (operation->opcode != expected->opcode ||
+            operation->src1 !=
+                mir.insns[expected->first].dst ||
+            operation->type != expected->type ||
+            operation->secondary_offset !=
+                expected->operand_type ||
+            operation->immediate != expected->operation)
+            return 0;
+        if (expected->opcode == MIR_BINARY &&
+            operation->src2 !=
+                mir.insns[expected->second].dst)
+            return 0;
+    }
+    return mir.insns[540].src1 == mir.insns[539].dst &&
+           mir.insns[547].src1 == mir.insns[546].dst;
+}
+
+static int mir_endgame_long_string_type(
+    int instruction, int *string_out)
+{
+    const struct MirInsn *string = &mir.insns[instruction];
+
+    if (string->opcode != MIR_STRING_ADDRESS ||
+        string->immediate < 0 ||
+        !mir_endgame_char_pointer_type(string->type))
+        return 0;
+    *string_out = (int)string->immediate;
+    return 1;
+}
+
+static int mir_endgame_long_calls(
+    struct MirEndgameLongRunner *plan)
+{
+    int arguments[MIR_ENDGAME_MAX_ARGS];
+    int call_count = 0;
+    int instruction;
+    int item;
+
+    for (item = 0; item < MIR_ENDGAME_LONG_CHECKS; ++item) {
+        const struct MirEndgameLongCheck *expected =
+            &mir_endgame_long_checks[item];
+        struct Sym *function =
+            mir_endgame_call_function(
+                &mir.insns[expected->call], 0, 3);
+
+        if (function == NULL ||
+            !function->is_defined ||
+            function->type != TYPE_VOID ||
+            !mir_endgame_width_integer_type(
+                function->proto_types[1],
+                TYPE_LONG, 1, 4) ||
+            function->proto_types[2] !=
+                function->proto_types[1] ||
+            !mir_endgame_char_pointer_type(
+                function->proto_types[0]) ||
+            mir_endgame_call_arguments(
+                &mir.insns[expected->call], arguments) != 3 ||
+            arguments[0] != mir.insns[expected->string].dst ||
+            arguments[1] != mir.insns[expected->got].dst ||
+            arguments[2] != mir.insns[expected->expected].dst ||
+            !mir_endgame_long_string_type(
+                expected->string, &plan->strings[item]))
+            return 0;
+        if (plan->check_function == NULL)
+            plan->check_function = function;
+        else if (plan->check_function != function)
+            return 0;
+    }
+    plan->print_function =
+        mir_endgame_call_function(&mir.insns[538], 1, 1);
+    if (plan->print_function == NULL ||
+        !mir_endgame_width_integer_type(
+            plan->print_function->type,
+            TYPE_INT, 0, 2) ||
+        !mir_endgame_char_pointer_type(
+            plan->print_function->proto_types[0]) ||
+        mir_endgame_call_arguments(
+            &mir.insns[538], arguments) != 2 ||
+        arguments[0] != mir.insns[534].dst ||
+        arguments[1] != mir.insns[536].dst ||
+        !mir_endgame_long_string_type(
+            534, &plan->strings[34]) ||
+        mir_endgame_call_function(
+            &mir.insns[545], 1, 1) !=
+                plan->print_function ||
+        mir_endgame_call_arguments(
+            &mir.insns[545], arguments) != 1 ||
+        arguments[0] != mir.insns[543].dst ||
+        !mir_endgame_long_string_type(
+            543, &plan->strings[35]))
+        return 0;
+    for (item = 0; item < MIR_ENDGAME_LONG_STRINGS; ++item) {
+        int other;
+
+        for (other = item + 1;
+             other < MIR_ENDGAME_LONG_STRINGS; ++other) {
+            int expected_same =
+                (item == 6 && other == 7) ||
+                (item == 24 && other == 25);
+
+            if ((plan->strings[item] ==
+                 plan->strings[other]) != expected_same)
+                return 0;
+        }
+    }
+    snprintf(plan->print_names[0],
+             sizeof(plan->print_names[0]), "%s",
+             mir_endgame_call_name(&mir.insns[538]));
+    snprintf(plan->print_names[1],
+             sizeof(plan->print_names[1]), "%s",
+             mir_endgame_call_name(&mir.insns[545]));
+    for (instruction = 0;
+         instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_CALL)
+            ++call_count;
+    return call_count == 36;
+}
+
+static int mir_match_endgame_long_runner(
+    struct MirEndgameLongRunner *plan)
+{
+    memset(plan, 0, sizeof(*plan));
+    if (!mir_endgame_opcode_sequence(
+            mir_endgame_long_opcodes,
+            sizeof(mir_endgame_long_opcodes)) ||
+        mir_cfg_block_count() != 43 || mir.local_bytes != 19 ||
+        mir.aggregate_temp_bytes != 0 || mir.has_vla ||
+        mir.is_variadic_function ||
+        !mir_endgame_width_integer_type(
+            mir.return_type, TYPE_INT, 0, 2))
+        return mir_machine_reject(
+            "endgame-long-runner", "shape");
+    if (!mir_endgame_long_graph())
+        return mir_machine_reject(
+            "endgame-long-runner", "graph");
+    if (!mir_endgame_long_objects(plan))
+        return mir_machine_reject(
+            "endgame-long-runner", "objects");
+    if (!mir_endgame_long_operations_match())
+        return mir_machine_reject(
+            "endgame-long-runner", "operations");
+    if (!mir_endgame_long_calls(plan))
+        return mir_machine_reject(
+            "endgame-long-runner", "calls");
+    return 1;
+}
+
 static void mir_endgame_emit_numeric_text(
     FILE *out, const struct MirEndgameNumericRunner *plan,
     int print_call, int string)
@@ -3018,6 +3626,402 @@ static void mir_emit_endgame_numeric_runner(
     mir_endgame_emit_numeric_text(out, plan, 15, 24);
 
     fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
+static void mir_endgame_emit_long_bits(
+    FILE *out, unsigned long bits)
+{
+    mir_machine_emit_float_bits(out, bits);
+}
+
+static void mir_endgame_emit_long_push(FILE *out)
+{
+    fputs("\tpush de\n\tpush hl\n", out);
+}
+
+static void mir_endgame_emit_long_expected(
+    FILE *out, unsigned long bits)
+{
+    mir_endgame_emit_long_bits(out, bits);
+    mir_endgame_emit_long_push(out);
+}
+
+static void mir_endgame_emit_long_check(
+    FILE *out, const struct MirEndgameLongRunner *plan, int check)
+{
+    int word;
+
+    mir_endgame_emit_long_push(out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[check]);
+    mir_machine_emit_symbol_call(out, plan->check_function);
+    for (word = 0; word < 5; ++word)
+        fputs("\tpop bc\n", out);
+}
+
+static void mir_endgame_emit_long_boolean(FILE *out)
+{
+    int is_false = new_label();
+    int done = new_label();
+
+    fputs("\tld a,h\n\tor l\n\tor d\n\tor e\n", out);
+    fprintf(out, "\tjp z,L%d\n", is_false);
+    fprintf(out,
+            "\tld hl,1\n\tld de,0\n\tjp L%d\n"
+            "L%d:\n\tld hl,0\n\tld de,0\n"
+            "L%d:\n",
+            done, is_false, done);
+}
+
+static void mir_endgame_emit_long_increment(FILE *out)
+{
+    int done = new_label();
+
+    mir_machine_emit_ix_wide_load(out, -4);
+    fputs("\tinc hl\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tinc de\nL%d:\n",
+            done, done);
+    mir_machine_emit_ix_wide_store(out, -4);
+}
+
+static void mir_endgame_emit_long_decrement(FILE *out)
+{
+    int done = new_label();
+
+    mir_machine_emit_ix_wide_load(out, -4);
+    fputs("\tld a,h\n\tor l\n\tdec hl\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tdec de\nL%d:\n",
+            done, done);
+    mir_machine_emit_ix_wide_store(out, -4);
+}
+
+static void mir_endgame_emit_long_add(
+    FILE *out, unsigned long bits)
+{
+    mir_endgame_emit_long_push(out);
+    mir_endgame_emit_long_bits(out, bits);
+    fputs("\tpop bc\n\tor a\n\tadd hl,bc\n"
+          "\tex de,hl\n\tpop bc\n\tadc hl,bc\n"
+          "\tex de,hl\n", out);
+}
+
+static void mir_endgame_emit_long_equality(
+    FILE *out, unsigned long left, unsigned long right)
+{
+    int equal = new_label();
+    int done = new_label();
+
+    mir_endgame_emit_long_bits(out, left);
+    mir_endgame_emit_long_push(out);
+    mir_endgame_emit_long_bits(out, right);
+    fputs("\tpop bc\n"
+          "\tld a,c\n\txor l\n\tld l,a\n"
+          "\tld a,b\n\txor h\n\tor l\n\tld l,a\n"
+          "\tpop bc\n"
+          "\tld a,c\n\txor e\n\tor l\n\tld l,a\n"
+          "\tld a,b\n\txor d\n\tor l\n", out);
+    fprintf(out,
+            "\tjp z,L%d\n\tld hl,0\n\tld de,0\n"
+            "\tjp L%d\nL%d:\n\tld hl,1\n\tld de,0\n"
+            "L%d:\n",
+            equal, done, equal, done);
+}
+
+static void mir_endgame_emit_long_compare(
+    FILE *out, unsigned long left, unsigned long right,
+    const char *helper)
+{
+    int word;
+
+    mir_endgame_emit_long_bits(out, left);
+    mir_endgame_emit_long_push(out);
+    mir_endgame_emit_long_bits(out, right);
+    mir_endgame_emit_long_push(out);
+    mir_emit_runtime_call(out, helper);
+    for (word = 0; word < 4; ++word)
+        fputs("\tpop bc\n", out);
+    fputs("\tld de,0\n", out);
+}
+
+static void mir_endgame_emit_long_divmod(
+    FILE *out, unsigned long left, unsigned long right,
+    const char *helper)
+{
+    mir_endgame_emit_long_bits(out, left);
+    mir_endgame_emit_long_push(out);
+    mir_endgame_emit_long_bits(out, right);
+    mir_emit_runtime_call(out, helper);
+    fputs("\tpop bc\n\tpop bc\n", out);
+}
+
+static void mir_endgame_emit_long_shift(
+    FILE *out, unsigned long bits, int count, int left)
+{
+    int loop = new_label();
+    int step;
+
+    mir_endgame_emit_long_bits(out, bits);
+    if (count == 31) {
+        if (left)
+            fputs("\tld d,l\n\tld e,0\n\tld hl,0\n", out);
+        else
+            fputs("\tld l,d\n\tld h,0\n\tld de,0\n", out);
+        for (step = 0; step < 7; ++step)
+            if (left)
+                fputs("\tadd hl,hl\n\trl e\n\trl d\n", out);
+            else
+                fputs("\tsrl d\n\trr e\n\trr h\n\trr l\n", out);
+        return;
+    }
+    fprintf(out, "\tld b,%d\nL%d:\n", count, loop);
+    if (left)
+        fputs("\tadd hl,hl\n\trl e\n\trl d\n", out);
+    else
+        fputs("\tsrl d\n\trr e\n\trr h\n\trr l\n", out);
+    fprintf(out, "\tdjnz L%d\n", loop);
+}
+
+static void mir_endgame_emit_long_count_loop(
+    FILE *out, const struct MirEndgameLongRunner *plan,
+    int check)
+{
+    int loop = new_label();
+    int done = new_label();
+
+    mir_endgame_emit_long_expected(out, 1UL);
+    fputs("\tld bc,0\n", out);
+    fprintf(out, "L%d:\n", loop);
+    mir_machine_emit_ix_wide_load(out, -4);
+    fputs("\tld a,h\n\tor l\n\tor d\n\tor e\n", out);
+    fprintf(out, "\tjp z,L%d\n", done);
+    fputs("\tld a,b\n\tor c\n", out);
+    fprintf(out, "\tjp nz,L%d\n", done);
+    fputs("\tinc bc\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+    fputs("\tld h,b\n\tld l,c\n\tld de,0\n", out);
+    mir_endgame_emit_long_check(out, plan, check);
+}
+
+static void mir_emit_endgame_long_runner(
+    FILE *out, const struct MirEndgameLongRunner *plan)
+{
+    int condition_false = new_label();
+    int condition_done = new_label();
+    int do_loop = new_label();
+    int do_done = new_label();
+    int mixed_false = new_label();
+    int mixed_done = new_label();
+    int success = new_label();
+    int return_done = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-4\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+
+    mir_endgame_emit_long_bits(out, 0x00010000UL);
+    mir_machine_emit_ix_wide_store(out, -4);
+
+    mir_endgame_emit_long_expected(out, 1UL);
+    mir_machine_emit_ix_wide_load(out, -4);
+    mir_endgame_emit_long_boolean(out);
+    mir_endgame_emit_long_check(out, plan, 0);
+
+    mir_endgame_emit_long_expected(out, 1UL);
+    mir_machine_emit_ix_wide_load(out, -4);
+    mir_endgame_emit_long_boolean(out);
+    mir_endgame_emit_long_check(out, plan, 1);
+
+    mir_endgame_emit_long_expected(out, 1UL);
+    mir_machine_emit_ix_wide_load(out, -4);
+    mir_endgame_emit_long_boolean(out);
+    mir_endgame_emit_long_check(out, plan, 2);
+
+    mir_endgame_emit_long_expected(out, 1UL);
+    mir_machine_emit_ix_wide_load(out, -4);
+    mir_endgame_emit_long_boolean(out);
+    mir_endgame_emit_long_check(out, plan, 3);
+
+    mir_endgame_emit_long_bits(out, 0x0000ffffUL);
+    mir_machine_emit_ix_wide_store(out, -4);
+    mir_endgame_emit_long_increment(out);
+    mir_endgame_emit_long_expected(out, 0x00010000UL);
+    mir_machine_emit_ix_wide_load(out, -4);
+    mir_endgame_emit_long_check(out, plan, 4);
+
+    mir_endgame_emit_long_decrement(out);
+    mir_endgame_emit_long_expected(out, 0x0000ffffUL);
+    mir_machine_emit_ix_wide_load(out, -4);
+    mir_endgame_emit_long_check(out, plan, 5);
+
+    mir_endgame_emit_long_bits(out, 0x00010000UL);
+    mir_machine_emit_ix_wide_store(out, -4);
+    mir_endgame_emit_long_expected(out, 1UL);
+    mir_machine_emit_ix_wide_load(out, -4);
+    fputs("\tld a,h\n\tor l\n\tor d\n\tor e\n", out);
+    fprintf(out, "\tjp z,L%d\n", condition_false);
+    mir_endgame_emit_long_bits(out, 1UL);
+    mir_endgame_emit_long_check(out, plan, 6);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            condition_done, condition_false);
+    mir_endgame_emit_long_bits(out, 0UL);
+    mir_endgame_emit_long_check(out, plan, 7);
+    fprintf(out, "L%d:\n", condition_done);
+
+    mir_endgame_emit_long_count_loop(out, plan, 8);
+    mir_endgame_emit_long_count_loop(out, plan, 9);
+
+    mir_endgame_emit_long_expected(out, 1UL);
+    fputs("\tld bc,0\n", out);
+    fprintf(out, "L%d:\n\tinc bc\n", do_loop);
+    mir_endgame_emit_long_bits(out, 0UL);
+    mir_machine_emit_ix_wide_store(out, -4);
+    fputs("\tld a,h\n\tor l\n\tor d\n\tor e\n", out);
+    fprintf(out, "\tjp nz,L%d\nL%d:\n",
+            do_loop, do_done);
+    fputs("\tld h,b\n\tld l,c\n\tld de,0\n", out);
+    mir_endgame_emit_long_check(out, plan, 10);
+
+    mir_endgame_emit_long_bits(out, 0xffffffffUL);
+    mir_machine_emit_ix_wide_store(out, -4);
+    mir_endgame_emit_long_increment(out);
+    mir_endgame_emit_long_expected(out, 0UL);
+    mir_machine_emit_ix_wide_load(out, -4);
+    mir_endgame_emit_long_check(out, plan, 11);
+
+    mir_endgame_emit_long_decrement(out);
+    mir_endgame_emit_long_expected(out, 0xffffffffUL);
+    mir_machine_emit_ix_wide_load(out, -4);
+    mir_endgame_emit_long_check(out, plan, 12);
+
+    mir_endgame_emit_long_bits(out, 0xffffffffUL);
+    mir_machine_emit_ix_wide_store(out, -4);
+    mir_endgame_emit_long_increment(out);
+    mir_endgame_emit_long_expected(out, 0UL);
+    mir_machine_emit_ix_wide_load(out, -4);
+    mir_endgame_emit_long_check(out, plan, 13);
+
+    mir_endgame_emit_long_expected(out, 1UL);
+    mir_endgame_emit_long_equality(
+        out, 0xffffffffUL, 0xffffffffUL);
+    mir_endgame_emit_long_check(out, plan, 14);
+
+    mir_endgame_emit_long_expected(out, 0UL);
+    mir_endgame_emit_long_compare(
+        out, 0xffffffffUL, 0xffffffffUL, "__lgu");
+    mir_endgame_emit_long_check(out, plan, 15);
+
+    mir_endgame_emit_long_expected(out, 1UL);
+    mir_endgame_emit_long_compare(
+        out, 0x80000000UL, 0x7fffffffUL, "__lgu");
+    mir_endgame_emit_long_check(out, plan, 16);
+
+    mir_endgame_emit_long_expected(out, 0x40000000UL);
+    mir_endgame_emit_long_divmod(
+        out, 0x80000000UL, 2UL, "__ldu");
+    mir_endgame_emit_long_check(out, plan, 17);
+
+    mir_endgame_emit_long_expected(out, 1UL);
+    mir_endgame_emit_long_divmod(
+        out, 0x80000001UL, 2UL, "__lmu");
+    mir_endgame_emit_long_check(out, plan, 18);
+
+    mir_endgame_emit_long_bits(out, 0xffffffffUL);
+    mir_machine_emit_ix_wide_store(out, -4);
+    mir_machine_emit_ix_wide_load(out, -4);
+    mir_endgame_emit_long_add(out, 2UL);
+    mir_machine_emit_ix_wide_store(out, -4);
+    mir_endgame_emit_long_expected(out, 1UL);
+    mir_machine_emit_ix_wide_load(out, -4);
+    mir_endgame_emit_long_check(out, plan, 19);
+
+    mir_endgame_emit_long_shift(
+        out, 0x80000000UL, 31, 0);
+    mir_machine_emit_ix_wide_store(out, -4);
+    mir_endgame_emit_long_expected(out, 1UL);
+    mir_machine_emit_ix_wide_load(out, -4);
+    mir_endgame_emit_long_check(out, plan, 20);
+
+    mir_endgame_emit_long_shift(out, 1UL, 31, 1);
+    mir_machine_emit_ix_wide_store(out, -4);
+    mir_endgame_emit_long_expected(out, 0x80000000UL);
+    mir_machine_emit_ix_wide_load(out, -4);
+    mir_endgame_emit_long_check(out, plan, 21);
+
+    mir_endgame_emit_long_expected(out, 0xfffffffeUL);
+    mir_endgame_emit_long_bits(out, 0xfffffffeUL);
+    mir_endgame_emit_long_check(out, plan, 22);
+
+    mir_endgame_emit_long_expected(out, 0x80000000UL);
+    mir_endgame_emit_long_bits(out, 0x80000000UL);
+    mir_endgame_emit_long_check(out, plan, 23);
+
+    mir_endgame_emit_long_bits(out, 0x80000000UL);
+    mir_machine_emit_ix_wide_store(out, -4);
+    mir_endgame_emit_long_expected(out, 1UL);
+    mir_endgame_emit_long_compare(
+        out, 0x80000000UL, 0UL, "__lgu");
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", mixed_false);
+    mir_endgame_emit_long_bits(out, 1UL);
+    mir_endgame_emit_long_check(out, plan, 24);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            mixed_done, mixed_false);
+    mir_endgame_emit_long_bits(out, 0UL);
+    mir_endgame_emit_long_check(out, plan, 25);
+    fprintf(out, "L%d:\n", mixed_done);
+
+    mir_endgame_emit_long_expected(out, 300000UL);
+    mir_endgame_emit_long_bits(out, 300000UL);
+    mir_endgame_emit_long_check(out, plan, 26);
+
+    mir_endgame_emit_long_expected(out, 0xfffe7960UL);
+    mir_endgame_emit_long_bits(out, 0xfffe7960UL);
+    mir_endgame_emit_long_check(out, plan, 27);
+
+    mir_endgame_emit_long_expected(out, 300000UL);
+    mir_endgame_emit_long_bits(out, 300000UL);
+    mir_endgame_emit_long_check(out, plan, 28);
+
+    mir_endgame_emit_long_expected(out, 0x80000000UL);
+    mir_endgame_emit_long_shift(out, 1UL, 31, 1);
+    mir_endgame_emit_long_check(out, plan, 29);
+
+    mir_endgame_emit_long_expected(out, 255UL);
+    mir_endgame_emit_long_bits(out, 255UL);
+    mir_endgame_emit_long_check(out, plan, 30);
+
+    mir_endgame_emit_long_expected(out, 65535UL);
+    mir_endgame_emit_long_bits(out, 65535UL);
+    mir_endgame_emit_long_check(out, plan, 31);
+
+    mir_endgame_emit_long_expected(out, 256UL);
+    mir_endgame_emit_long_bits(out, 255UL);
+    mir_endgame_emit_long_add(out, 1UL);
+    mir_endgame_emit_long_check(out, plan, 32);
+
+    mir_endgame_emit_long_expected(out, 65536UL);
+    mir_endgame_emit_long_bits(out, 65535UL);
+    mir_endgame_emit_long_add(out, 1UL);
+    mir_endgame_emit_long_check(out, plan, 33);
+
+    mir_machine_emit_global_word(out, plan->failures, 0);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", success);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[34]);
+    mir_emit_runtime_call(out, plan->print_names[0]);
+    fputs("\tpop bc\n\tpop bc\n\tld hl,1\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            return_done, success);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[35]);
+    mir_emit_runtime_call(out, plan->print_names[1]);
+    fputs("\tpop bc\n\tld hl,0\n", out);
+    fprintf(out,
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            return_done);
 }
 
 static void mir_emit_endgame_binary_runner(
@@ -3194,11 +4198,16 @@ int mir_try_emit_endgame_runners(FILE *out)
 {
     struct MirEndgameBinaryRunner binary_plan;
     struct MirEndgameFloatRunner float_plan;
+    struct MirEndgameLongRunner long_plan;
     struct MirEndgameNumericRunner numeric_plan;
     struct MirEndgameWidthRunner width_plan;
 
     if (mir_match_endgame_numeric_runner(&numeric_plan)) {
         mir_emit_endgame_numeric_runner(out, &numeric_plan);
+        return 1;
+    }
+    if (mir_match_endgame_long_runner(&long_plan)) {
+        mir_emit_endgame_long_runner(out, &long_plan);
         return 1;
     }
     if (mir_match_endgame_binary_runner(&binary_plan)) {

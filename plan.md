@@ -3,6 +3,51 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-13 long-audit 43-block batch (working tree)
+
+- Branch/base: `pr/143` at `157f1a1`. The endgame module now admits the
+  43-block `tlongaud.main` `final-cost-policy` fallback through a strict
+  structural matcher over all **548 MIR instructions**. It validates the
+  complete opcode stream and CFG, all five promoted local objects and three
+  reused block-counter lifetimes, every signed/unsigned 8/16/32-bit type and
+  conversion, all arithmetic/comparison/shift/divide/modulo operands and edge
+  constants, all 34 audit call sites, both variadic output calls, string
+  identity, global failure state and both returns. The matcher contains no
+  function, helper, local, global, format, output or test name and no output
+  hash.
+- The dedicated emitter preserves the four high-word logical checks,
+  carry/borrow and wrap transitions, the conditional and three loop audits,
+  signed/unsigned comparisons, unsigned divide/modulo, wrapping addition,
+  both 31-bit shifts, casts, promotions and constant-fold audit values in
+  source order. It retains all **34** static audit calls and both output calls,
+  uses a compact **4-byte IX frame**, and emits no IY instruction. Normal
+  selected/captured metrics are **9,714/11,971 bytes** and
+  **1,003/1,188 instructions**. Stack-check metrics are
+  **9,743/12,000 bytes** and **1,004/1,189 instructions**.
+- `tlongaud` passes full peep/nopeep validation. Selected versus forced
+  fallback is **63,072/64,687 cycles and 8,064/8,320 bytes** peep plus
+  **64,438/66,740 cycles and 8,192/8,576 bytes** nopeep, exact gains of
+  **1,615/2,302 cycles** and **256/384 bytes**.
+- A separately renamed function/helper/global/local/string fixture selects
+  the same family at **10,049/12,301 bytes** and
+  **1,004/1,188 instructions** with stack checking. Selected and forced
+  fallback output is byte-identical in both modes. Peep totals are
+  **72,880/74,495 cycles and 5,760/6,016 bytes**; nopeep totals are
+  **74,246/76,548 cycles and 5,888/6,272 bytes**. Changing only the unsigned
+  right-shift count from **31 to 30** is rejected at the operations contract.
+- The regression-gated stack-check census advances
+  **2,168/2,185 (99.22%)** to **2,169/2,185 (99.27%)**, adds exactly
+  `tlongaud.main`, removes no accepted function, moves selector counts from
+  **1,385 spilled / 393 scheduled** to
+  **1,384 spilled / 394 scheduled**, and reduces `final-cost-policy`
+  fallbacks **17 -> 16**.
+- The endgame module grows from **3,225 to 4,234 source lines**
+  (**+1,009**). Its standalone object defines only
+  `mir_try_emit_endgame_runners [T]` globally and has zero global data
+  definitions. The canonical build, regression-gated census, focused full
+  run and `git diff --check` pass. No performance baseline, production name
+  or output hash was added or changed.
+
 ## 2026-08-13 pi-hex numeric 37-block batch (working tree)
 
 - Branch/base: `pr/143` at `dd03b04`. The endgame module now admits the
