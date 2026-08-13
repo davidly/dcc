@@ -5,10 +5,43 @@ current execution plan and handoff.
 
 ## 2026-08-13 current checkpoint (read this first)
 
-- Branch: `pr/143`; clean base HEAD for this batch: `fdf7f93`.
-- Current working-tree candidate coverage: **2151/2185 (98.44%)**.
-- Remaining fallback population: **34 `final-cost-policy`**, all selected by
+- Branch: `pr/143`; clean base HEAD for this batch: `ecd3b17`.
+- Current working-tree candidate coverage: **2152/2185 (98.49%)**.
+- Remaining fallback population: **33 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The call-runner module now admits the 28-block `cpmenumd.enumerate`
+  `final-cost-policy` fallback through a strict name-free matcher over all
+  **318 MIR instructions**. It proves the 36-byte FCB, 13-byte filename,
+  400-entry pointer list, signed BDOS-result range, both filename-copy loops,
+  all four PHIs, 13 conditional branches, 11 jumps, both search calls, the
+  comparator callback, three report sites, size/free traversal and all three
+  returns. No production function, global, local, field or output name is
+  matched.
+- The emitter preserves FCB initialization, BDOS find-first/find-next order,
+  the 128-byte DMA base and 32-byte result slots, FCB name/type offsets,
+  wildcard termination, duplicate-before-capacity behavior, qsort/bsearch
+  callback order, unexpected-result and found/not-found branches, per-result
+  size/report/free order and the original boolean return. It uses a compact
+  **53-byte IX frame** and no IY. Normal selected/captured metrics are
+  **3,054/5,431 bytes** and **274/483 instructions**; stack-check metrics are
+  **3,083/5,460 bytes** and **275/484 instructions**.
+- `cpmenumd` passes checked full peep/nopeep validation, as does forced
+  fallback. A temporary override staged two additional COM fixtures while
+  leaving the 68K and XYZ searches empty. Selected and fallback output was
+  identical in both modes: the COM search found the executable and both empty
+  searches completed before the success line. Controlled selected/fallback
+  measurements are **172,700/187,584 cycles** and **4,992/5,888 bytes**
+  peep, plus **174,813/197,986 cycles** and **5,120/6,272 bytes** nopeep.
+  The override and fixtures were removed after the A/B.
+- The call-runner module grows from **9,442 to 10,309 source lines**. Its
+  object audit still reports only `mir_try_emit_call_runners [T]` as defined
+  global code, with zero global read-only or writable data. The canonical
+  build passes. The regression-gated stack-check census advances
+  **2,151/2,185 (98.44%)** to **2,152/2,185 (98.49%)**, adds exactly
+  `cpmenumd.enumerate`, removes no accepted function, moves selector counts
+  from **1,402 spilled / 376 scheduled** to **1,401 spilled / 377
+  scheduled**, and leaves **33 `final-cost-policy`** fallbacks. No
+  performance baseline, production identifier, or output-hash gate was added.
 - The call-runner module now admits the 28-block `tforblk.main`
   `final-cost-policy` fallback through a strict name-free matcher over all
   **703 MIR instructions**. It proves all 30 distinct scoped objects and

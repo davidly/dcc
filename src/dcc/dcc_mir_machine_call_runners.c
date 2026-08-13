@@ -4204,6 +4204,7 @@ static int mir_gnarly_opcode_code(int opcode)
 {
     switch (opcode) {
     case MIR_LABEL: return 'L';
+    case MIR_PARAM: return 'Q';
     case MIR_NOP: return 'N';
     case MIR_CONST: return 'C';
     case MIR_STORE: return 'S';
@@ -9352,9 +9353,869 @@ static void mir_emit_scope_block_runner(
             return_done, return_done);
 }
 
+struct MirDirectoryEnumerationRunner {
+    struct Sym *initialize_function;
+    struct Sym *bdos_function;
+    struct Sym *duplicate_function;
+    struct Sym *sort_function;
+    struct Sym *search_function;
+    struct Sym *print_function;
+    struct Sym *size_function;
+    struct Sym *free_function;
+    struct Sym *compare_function;
+    struct Sym *quiet;
+    char list_name[64];
+    int strings[4];
+    int parameter_stack_offset;
+};
+
+static struct Sym *mir_directory_function(
+    int instruction, int variadic, int argument_count)
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    struct Sym *function;
+    const char *assembly_name;
+
+    if (call->opcode != MIR_CALL || call->src1 >= 0 ||
+        call->memory_flags !=
+            (variadic ? MIR_CALL_FLAG_VARIADIC : 0) ||
+        (function = find_global(call->name)) == NULL ||
+        function->storage != SC_FUNC || function->is_funcptr ||
+        function->is_noreturn || !function->has_proto ||
+        function->proto_variadic != variadic ||
+        function->proto_nargs != argument_count ||
+        call->type != function->type)
+        return NULL;
+    assembly_name = asm_name_for(sym_asm_name(function));
+    if (call->base_name[0] != 0 &&
+        strcmp(call->base_name, assembly_name))
+        return NULL;
+    return function;
+}
+
+static int mir_directory_call(
+    int instruction, struct Sym *function, int ordinal,
+    int argument_count, const int *definitions)
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    int arguments[5];
+    int argument;
+
+    if (function == NULL || argument_count > 5 ||
+        find_global(call->name) != function ||
+        call->secondary_offset != ordinal ||
+        !mir_machine_call_arguments(
+            call, argument_count, arguments))
+        return 0;
+    for (argument = 0; argument < argument_count; ++argument)
+        if (arguments[argument] !=
+            mir.insns[definitions[argument]].dst)
+            return 0;
+    return 1;
+}
+
+static int mir_directory_string(int instruction, int *id_out)
+{
+    const struct MirInsn *string = &mir.insns[instruction];
+
+    if (string->opcode != MIR_STRING_ADDRESS ||
+        !mir_abort_runner_pointer_type(string->type, TYPE_CHAR) ||
+        string->immediate < 0)
+        return 0;
+    *id_out = (int)string->immediate;
+    return 1;
+}
+
+static int mir_directory_local_address(
+    int instruction, int pointer_depth, int base_type,
+    int is_struct)
+{
+    const struct MirInsn *address = &mir.insns[instruction];
+
+    return address->opcode == MIR_ADDRESS &&
+           address->object < 0 &&
+           (address->memory_flags & (1 | 8)) == 0 &&
+           type_ptr_depth(address->type) == pointer_depth &&
+           ((address->type & TYPE_STRUCT) != 0) == is_struct &&
+           (is_struct || (address->type & 15) == base_type) &&
+           type_size(address->type) == 2 &&
+           mir_machine_named_nonvolatile(address);
+}
+
+static struct Sym *mir_directory_global_address(
+    int instruction, int pointer_depth, int base_type)
+{
+    const struct MirInsn *address = &mir.insns[instruction];
+    struct Sym *symbol;
+
+    if (address->opcode != MIR_ADDRESS ||
+        address->object >= 0 || address->memory_flags != 0 ||
+        type_ptr_depth(address->type) != pointer_depth ||
+        (address->type & 15) != base_type ||
+        type_size(address->type) != 2 ||
+        !mir_machine_named_nonvolatile(address) ||
+        (symbol = find_global(address->name)) == NULL)
+        return NULL;
+    return symbol;
+}
+
+static int mir_directory_same_list_address(
+    int instruction, const char *root_name)
+{
+    const struct MirInsn *address = &mir.insns[instruction];
+    const char *separator;
+
+    return address->opcode == MIR_ADDRESS &&
+           address->object < 0 && address->memory_flags == 0 &&
+           type_ptr_depth(address->type) == 2 &&
+           (address->type & 15) == TYPE_CHAR &&
+           type_size(address->type) == 2 &&
+           mir_machine_named_nonvolatile(address) &&
+           (separator = strchr(address->name, '#')) != NULL &&
+           separator != address->name && separator[1] != 0 &&
+           strchr(separator + 1, '#') == NULL &&
+           strcmp(separator + 1, root_name) == 0;
+}
+
+static int mir_match_directory_enumeration_runner(
+    struct MirDirectoryEnumerationRunner *plan)
+{
+    static const char expected_opcodes[] =
+        "LQTSCNSANGDGKUFCELCGANGKNSLDPPNCBFNCBFLCJLCLPFCNCBBNUSCNSCNSLDNNNNDCBFCD"
+        "MDIRUBFLADCBSIDMDIRWJLNJLNLDCBSJLCDMCIRUBFADCBSINCWCNSLDNNNNDCBFCDMDIRUB"
+        "FLADCBSIDMDIRWJLNJLNLDCBSJLNLADINCWADCBSIAGKWCCBNNBFNJLCGANGKNSNLJLCDBFT"
+        "GDGKCENLANGDGCNGAGKANGANGDGCNGAGKUSCDBFTGDRGKLCNSLDNNNPNDNBFANIRGKNSDUFT"
+        "GNGANIRGNNGKLANIRNGKNLNCBSJLCE";
+    static const int constant_instructions[37] = {
+        4, 15, 18, 31, 35, 39, 42, 46, 48, 54, 57, 67, 70, 82,
+        100, 105, 108, 116, 121, 123, 133, 136, 148, 166,
+        177, 181, 189, 190, 199, 211, 220, 229, 243, 251,
+        262, 311, 316
+    };
+    static const long constant_values[37] = {
+        0, 0, 17, 0, 3, 1, 0, 128, 32, 0, 0, 8, 32, 1,
+        1, 32, 0, 1, 46, 0, 3, 32, 1, 1,
+        0, 1, 800, 2, 18, 255, 0, 2, 2, 0,
+        0, 1, 1
+    };
+    static const struct {
+        int instruction;
+        int left;
+        int right;
+        int operation;
+    } binaries[21] = {
+        {32, 29, 31, TOK_GE}, {36, 29, 35, TOK_LE},
+        {49, 29, 48, '*'}, {50, 46, 49, '+'},
+        {68, 66, 67, '<'}, {77, 70, 76, TOK_NE},
+        {83, 81, 82, '+'}, {101, 99, 100, '+'},
+        {112, 105, 111, TOK_NE}, {117, 115, 116, '+'},
+        {134, 132, 133, '<'}, {143, 136, 142, TOK_NE},
+        {149, 147, 148, '+'}, {167, 165, 166, '+'},
+        {182, 180, 181, '+'}, {191, 189, 190, '/'},
+        {194, 191, 182, TOK_EQ}, {213, 211, 212, TOK_NE},
+        {253, 251, 252, TOK_NE}, {274, 270, 272, '<'},
+        {312, 270, 311, '+'}
+    };
+    static const struct {
+        int instruction;
+        int function;
+        int argument_count;
+        int definitions[5];
+    } calls[11] = {
+        {12, 0, 2, {7, 10, 0, 0, 0}},
+        {23, 1, 2, {18, 20, 0, 0, 0}},
+        {187, 2, 1, {185, 0, 0, 0, 0}},
+        {204, 1, 2, {199, 201, 0, 0, 0}},
+        {219, 5, 2, {215, 217, 0, 0, 0}},
+        {234, 3, 4, {224, 227, 229, 232, 0}},
+        {248, 4, 5, {235, 238, 241, 243, 246}},
+        {260, 5, 2, {255, 258, 0, 0, 0}},
+        {281, 6, 1, {279, 0, 0, 0, 0}},
+        {299, 5, 4, {287, 270, 294, 281, 0}},
+        {307, 7, 1, {304, 0, 0, 0, 0}}
+    };
+    static const int fcb_addresses[3] = {7, 20, 201};
+    static const int file_addresses[5] = {80, 114, 146, 173, 185};
+    static const int list_addresses[6] = {179, 224, 238, 276, 291, 301};
+    static const int result_fcb_uses[6] = {53, 71, 86, 106, 137, 152};
+    static const int len_uses[8] = {56, 81, 84, 115, 118, 147, 150, 174};
+    static const int result_uses[6] = {25, 47, 206, 212, 217, 29};
+    struct Sym *functions[8];
+    int call_count = 0;
+    int instruction;
+    int item;
+    int previous;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 318 || mir_cfg_block_count() != 28 ||
+        mir.sink_purpose != EMIT_SINK_FINAL ||
+        mir.has_vla || mir.local_bytes != 69 ||
+        mir.aggregate_temp_bytes != 0 || mir.object_count != 5 ||
+        !mir_abort_runner_word_type(mir.return_type) ||
+        strlen(expected_opcodes) != (size_t)mir.count)
+        return mir_machine_reject(
+            "directory-enumeration-runner", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        if (mir_gnarly_opcode_code(
+                mir.insns[instruction].opcode) !=
+                expected_opcodes[instruction])
+            return mir_machine_reject(
+                "directory-enumeration-runner", "opcode");
+        if (mir.insns[instruction].opcode == MIR_CALL)
+            ++call_count;
+    }
+    if (call_count != 11)
+        return mir_machine_reject(
+            "directory-enumeration-runner", "call-count");
+    for (item = 0; item < 37; ++item)
+        if (!mir_machine_constant_equals(
+                mir.insns[constant_instructions[item]].dst,
+                constant_values[item]))
+            return mir_machine_reject(
+                "directory-enumeration-runner", "constant");
+    if (!mir_gnarly_char_type(mir.insns[121].type) ||
+        !mir_gnarly_char_type(mir.insns[177].type) ||
+        !mir_gnarly_word_type(mir.insns[181].type, 1))
+        return mir_machine_reject(
+            "directory-enumeration-runner", "constant-type");
+    for (item = 0; item < 21; ++item)
+        if (!mir_gnarly_binary(
+                binaries[item].instruction,
+                binaries[item].left,
+                binaries[item].right,
+                binaries[item].operation))
+            return mir_machine_reject(
+                "directory-enumeration-runner", "binary");
+
+    if (!mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->parameter_stack_offset) ||
+        plan->parameter_stack_offset != 2 ||
+        !mir_abort_runner_pointer_type(
+            mir.insns[1].type, TYPE_CHAR) ||
+        !mir_gnarly_phi(28, 4, 182, 17, 208) ||
+        !mir_gnarly_phi(29, 23, 204, 17, 208) ||
+        !mir_gnarly_phi(44, 39, 42, 38, 41) ||
+        !mir_gnarly_phi(270, 262, 312, 261, 309))
+        return mir_machine_reject(
+            "directory-enumeration-runner", "parameter-phi");
+    if (!mir_gnarly_branch(14, 13, 17) ||
+        !mir_gnarly_branch(33, 32, 41) ||
+        !mir_gnarly_branch(37, 36, 41) ||
+        !mir_gnarly_branch(45, 44, 210) ||
+        !mir_gnarly_branch(69, 68, 104) ||
+        !mir_gnarly_branch(78, 77, 104) ||
+        !mir_gnarly_branch(113, 112, 172) ||
+        !mir_gnarly_branch(135, 134, 170) ||
+        !mir_gnarly_branch(144, 143, 170) ||
+        !mir_gnarly_branch(195, 194, 198) ||
+        !mir_gnarly_branch(214, 213, 223) ||
+        !mir_gnarly_branch(254, 253, 261) ||
+        !mir_gnarly_branch(275, 274, 315) ||
+        !mir_gnarly_branch(286, 285, 300) ||
+        mir.insns[40].label != mir.insns[43].label ||
+        mir.insns[92].label != mir.insns[96].label ||
+        mir.insns[95].label != mir.insns[104].label ||
+        mir.insns[103].label != mir.insns[60].label ||
+        mir.insns[158].label != mir.insns[162].label ||
+        mir.insns[161].label != mir.insns[170].label ||
+        mir.insns[169].label != mir.insns[126].label ||
+        mir.insns[197].label != mir.insns[210].label ||
+        mir.insns[209].label != mir.insns[26].label ||
+        mir.insns[314].label != mir.insns[265].label)
+        return mir_machine_reject(
+            "directory-enumeration-runner", "control-flow");
+
+    for (item = 0; item < 5; ++item)
+        if (mir.objects[item].storage != SC_LOCAL ||
+            mir.objects[item].is_register)
+            return mir_machine_reject(
+                "directory-enumeration-runner", "object");
+    if (!mir_gnarly_word_type(mir.objects[0].type, 1) ||
+        !mir_gnarly_word_type(mir.objects[1].type, 0) ||
+        !mir_gnarly_word_type(mir.objects[2].type, 0) ||
+        !mir_gnarly_word_type(mir.objects[3].type, 0) ||
+        type_ptr_depth(mir.objects[4].type) != 0 ||
+        (mir.objects[4].type & 15) != TYPE_LONG ||
+        (mir.objects[4].type & TYPE_UNSIGNED) == 0 ||
+        type_size(mir.objects[4].type) != 4)
+        return mir_machine_reject(
+            "directory-enumeration-runner", "object-type");
+    for (item = 0; item < 6; ++item)
+        if (!mir_machine_same_location(
+                &mir.insns[result_uses[0]],
+                &mir.insns[result_uses[item]]))
+            return mir_machine_reject(
+                "directory-enumeration-runner", "result-local");
+    for (item = 0; item < 6; ++item)
+        if (!mir_machine_same_location(
+                &mir.insns[result_fcb_uses[0]],
+                &mir.insns[result_fcb_uses[item]]))
+            return mir_machine_reject(
+                "directory-enumeration-runner",
+                "result-fcb-local");
+    for (item = 0; item < 8; ++item)
+        if (!mir_machine_same_location(
+                &mir.insns[len_uses[0]],
+                &mir.insns[len_uses[item]]))
+            return mir_machine_reject(
+                "directory-enumeration-runner", "length-local");
+    if (mir.insns[6].object != 0 ||
+        mir.insns[25].object != 1 ||
+        mir.insns[56].object != 2 ||
+        mir.insns[59].object != 3 ||
+        mir.insns[283].object != 4 ||
+        mir.insns[183].object != 0 ||
+        mir.insns[206].object != 1 ||
+        mir.insns[313].object != 3)
+        return mir_machine_reject(
+            "directory-enumeration-runner", "object-use");
+
+    for (item = 0; item < 3; ++item)
+        if (!mir_directory_local_address(
+                fcb_addresses[item], 1, 0, 1) ||
+            !mir_machine_same_location(
+                &mir.insns[fcb_addresses[0]],
+                &mir.insns[fcb_addresses[item]]))
+            return mir_machine_reject(
+                "directory-enumeration-runner", "fcb-address");
+    for (item = 0; item < 5; ++item)
+        if (!mir_directory_local_address(
+                file_addresses[item], 1, TYPE_CHAR, 0) ||
+            !mir_machine_same_location(
+                &mir.insns[file_addresses[0]],
+                &mir.insns[file_addresses[item]]))
+            return mir_machine_reject(
+                "directory-enumeration-runner", "file-address");
+    if (mir_machine_same_location(
+            &mir.insns[fcb_addresses[0]],
+            &mir.insns[file_addresses[0]]) ||
+        !mir_directory_local_address(235, 2, TYPE_CHAR, 0) ||
+        !mir_machine_same_location(
+            &mir.insns[3], &mir.insns[235]))
+        return mir_machine_reject(
+            "directory-enumeration-runner", "local-alias");
+
+    if (!mir_memory_runner_array_root(
+            179, plan->list_name))
+        return mir_machine_reject(
+            "directory-enumeration-runner", "list");
+    for (item = 0; item < 6; ++item)
+        if (!mir_directory_same_list_address(
+                list_addresses[item], plan->list_name))
+            return mir_machine_reject(
+                "directory-enumeration-runner", "list-address");
+
+    plan->quiet = find_global(mir.insns[284].name);
+    if (plan->quiet == NULL ||
+        plan->quiet->storage != SC_GLOBAL ||
+        !plan->quiet->is_defined || plan->quiet->is_array ||
+        plan->quiet->is_volatile ||
+        type_ptr_depth(plan->quiet->type) != 0 ||
+        (plan->quiet->type & 15) != TYPE_BOOL ||
+        type_size(plan->quiet->type) != 1 ||
+        mir.insns[284].object >= 0 ||
+        !mir_machine_named_nonvolatile(&mir.insns[284]))
+        return mir_machine_reject(
+            "directory-enumeration-runner", "quiet");
+
+    if (mir.insns[72].immediate != 1 ||
+        mir.insns[72].memory_size != 8 ||
+        mir.insns[72].src1 != mir.insns[71].dst ||
+        mir.insns[87].immediate != 1 ||
+        mir.insns[87].memory_size != 8 ||
+        mir.insns[87].src1 != mir.insns[86].dst ||
+        mir.insns[107].immediate != 9 ||
+        mir.insns[107].memory_size != 3 ||
+        mir.insns[107].src1 != mir.insns[106].dst ||
+        mir.insns[138].immediate != 9 ||
+        mir.insns[138].memory_size != 3 ||
+        mir.insns[138].src1 != mir.insns[137].dst ||
+        mir.insns[153].immediate != 9 ||
+        mir.insns[153].memory_size != 3 ||
+        mir.insns[153].src1 != mir.insns[152].dst)
+        return mir_machine_reject(
+            "directory-enumeration-runner", "fcb-member");
+    if (mir.insns[74].src1 != mir.insns[72].dst ||
+        mir.insns[74].src2 != mir.insns[73].dst ||
+        mir.insns[74].immediate != 1 ||
+        mir.insns[75].src1 != mir.insns[74].dst ||
+        mir.insns[85].src1 != mir.insns[80].dst ||
+        mir.insns[85].src2 != mir.insns[81].dst ||
+        mir.insns[89].src1 != mir.insns[87].dst ||
+        mir.insns[89].src2 != mir.insns[88].dst ||
+        mir.insns[90].src1 != mir.insns[89].dst ||
+        mir.insns[91].src1 != mir.insns[85].dst ||
+        mir.insns[91].src2 != mir.insns[90].dst)
+        return mir_machine_reject(
+            "directory-enumeration-runner", "name-copy");
+    if (mir.insns[109].src1 != mir.insns[107].dst ||
+        mir.insns[109].src2 != mir.insns[108].dst ||
+        mir.insns[110].src1 != mir.insns[109].dst ||
+        mir.insns[119].src1 != mir.insns[114].dst ||
+        mir.insns[119].src2 != mir.insns[115].dst ||
+        mir.insns[122].src1 != mir.insns[119].dst)
+        return mir_machine_reject(
+            "directory-enumeration-runner", "extension-prefix");
+    if (mir.insns[140].src1 != mir.insns[138].dst ||
+        mir.insns[140].src2 != mir.insns[139].dst ||
+        mir.insns[141].src1 != mir.insns[140].dst ||
+        mir.insns[151].src1 != mir.insns[146].dst ||
+        mir.insns[151].src2 != mir.insns[147].dst ||
+        mir.insns[155].src1 != mir.insns[153].dst ||
+        mir.insns[155].src2 != mir.insns[154].dst ||
+        mir.insns[156].src1 != mir.insns[155].dst ||
+        mir.insns[157].src1 != mir.insns[151].dst ||
+        mir.insns[157].src2 != mir.insns[156].dst)
+        return mir_machine_reject(
+            "directory-enumeration-runner", "extension-copy");
+    if (mir.insns[175].src1 != mir.insns[173].dst ||
+        mir.insns[175].src2 != mir.insns[174].dst ||
+        mir.insns[178].src1 != mir.insns[175].dst)
+        return mir_machine_reject(
+            "directory-enumeration-runner", "file-copy");
+    if (mir.insns[184].src1 != mir.insns[179].dst ||
+        mir.insns[184].src2 != mir.insns[180].dst ||
+        mir.insns[184].immediate != 2 ||
+        mir.insns[188].src1 != mir.insns[184].dst ||
+        mir.insns[188].src2 != mir.insns[187].dst ||
+        mir.insns[278].src1 != mir.insns[276].dst ||
+        mir.insns[278].src2 != mir.insns[270].dst ||
+        mir.insns[278].immediate != 2 ||
+        mir.insns[279].src1 != mir.insns[278].dst ||
+        mir.insns[293].src1 != mir.insns[291].dst ||
+        mir.insns[293].src2 != mir.insns[270].dst ||
+        mir.insns[294].src1 != mir.insns[293].dst ||
+        mir.insns[303].src1 != mir.insns[301].dst ||
+        mir.insns[303].src2 != mir.insns[270].dst ||
+        mir.insns[304].src1 != mir.insns[303].dst)
+        return mir_machine_reject(
+            "directory-enumeration-runner", "list-access");
+
+    functions[0] = mir_directory_function(12, 0, 2);
+    functions[1] = mir_directory_function(23, 0, 2);
+    functions[2] = mir_directory_function(187, 0, 1);
+    functions[3] = mir_directory_function(234, 0, 4);
+    functions[4] = mir_directory_function(248, 0, 5);
+    functions[5] = mir_directory_function(219, 1, 1);
+    functions[6] = mir_directory_function(281, 0, 1);
+    functions[7] = mir_directory_function(307, 0, 1);
+    for (item = 0; item < 8; ++item) {
+        if (functions[item] == NULL)
+            return mir_machine_reject(
+                "directory-enumeration-runner", "function");
+        for (previous = 0; previous < item; ++previous)
+            if (functions[item] == functions[previous])
+                return mir_machine_reject(
+                    "directory-enumeration-runner",
+                    "function-alias");
+    }
+    plan->initialize_function = functions[0];
+    plan->bdos_function = functions[1];
+    plan->duplicate_function = functions[2];
+    plan->sort_function = functions[3];
+    plan->search_function = functions[4];
+    plan->print_function = functions[5];
+    plan->size_function = functions[6];
+    plan->free_function = functions[7];
+
+    plan->compare_function =
+        mir_directory_global_address(232, 1, TYPE_INT);
+    if (plan->compare_function == NULL ||
+        plan->compare_function->storage != SC_FUNC ||
+        !plan->compare_function->is_defined ||
+        plan->compare_function->is_funcptr ||
+        plan->compare_function->is_noreturn ||
+        !plan->compare_function->has_proto ||
+        plan->compare_function->proto_variadic ||
+        plan->compare_function->proto_nargs != 2 ||
+        !mir_abort_runner_word_type(
+            plan->compare_function->type) ||
+        type_ptr_depth(
+            plan->compare_function->proto_types[0]) != 2 ||
+        (plan->compare_function->proto_types[0] & 15) !=
+            TYPE_CHAR ||
+        plan->compare_function->proto_types[0] !=
+            plan->compare_function->proto_types[1] ||
+        mir_directory_global_address(246, 1, TYPE_INT) !=
+            plan->compare_function)
+        return mir_machine_reject(
+            "directory-enumeration-runner", "callback");
+
+    if ((plan->initialize_function->type & 15) != TYPE_BOOL ||
+        type_ptr_depth(plan->initialize_function->type) != 0 ||
+        type_size(plan->initialize_function->type) != 1 ||
+        type_ptr_depth(
+            plan->initialize_function->proto_types[0]) != 1 ||
+        !mir_abort_runner_pointer_type(
+            plan->initialize_function->proto_types[1],
+            TYPE_CHAR) ||
+        !mir_abort_runner_word_type(
+            plan->bdos_function->type) ||
+        !mir_abort_runner_word_type(
+            plan->bdos_function->proto_types[0]) ||
+        !mir_abort_runner_word_type(
+            plan->bdos_function->proto_types[1]) ||
+        !mir_abort_runner_pointer_type(
+            plan->duplicate_function->type, TYPE_CHAR) ||
+        !mir_abort_runner_pointer_type(
+            plan->duplicate_function->proto_types[0],
+            TYPE_CHAR) ||
+        (plan->sort_function->type & 15) != TYPE_VOID ||
+        type_ptr_depth(plan->sort_function->type) != 0 ||
+        type_ptr_depth(
+            plan->sort_function->proto_types[0]) != 1 ||
+        !mir_gnarly_word_type(
+            plan->sort_function->proto_types[1], 1) ||
+        !mir_gnarly_word_type(
+            plan->sort_function->proto_types[2], 1) ||
+        type_ptr_depth(
+            plan->sort_function->proto_types[3]) != 1 ||
+        type_ptr_depth(plan->search_function->type) != 1 ||
+        type_ptr_depth(
+            plan->search_function->proto_types[0]) != 1 ||
+        type_ptr_depth(
+            plan->search_function->proto_types[1]) != 1 ||
+        !mir_gnarly_word_type(
+            plan->search_function->proto_types[2], 1) ||
+        !mir_gnarly_word_type(
+            plan->search_function->proto_types[3], 1) ||
+        type_ptr_depth(
+            plan->search_function->proto_types[4]) != 1 ||
+        !mir_abort_runner_word_type(
+            plan->print_function->type) ||
+        !mir_abort_runner_pointer_type(
+            plan->print_function->proto_types[0], TYPE_CHAR) ||
+        type_ptr_depth(plan->size_function->type) != 0 ||
+        (plan->size_function->type & 15) != TYPE_LONG ||
+        (plan->size_function->type & TYPE_UNSIGNED) == 0 ||
+        type_size(plan->size_function->type) != 4 ||
+        !mir_abort_runner_pointer_type(
+            plan->size_function->proto_types[0], TYPE_CHAR) ||
+        (plan->free_function->type & 15) != TYPE_VOID ||
+        type_ptr_depth(plan->free_function->type) != 0 ||
+        type_ptr_depth(
+            plan->free_function->proto_types[0]) != 1)
+        return mir_machine_reject(
+            "directory-enumeration-runner", "prototype");
+    for (item = 0; item < 11; ++item)
+        if (!mir_directory_call(
+                calls[item].instruction,
+                functions[calls[item].function],
+                item, calls[item].argument_count,
+                calls[item].definitions))
+            return mir_machine_reject(
+                "directory-enumeration-runner", "call");
+
+    if (!mir_directory_string(2, &plan->strings[0]) ||
+        !mir_directory_string(215, &plan->strings[1]) ||
+        !mir_directory_string(255, &plan->strings[2]) ||
+        !mir_directory_string(287, &plan->strings[3]))
+        return mir_machine_reject(
+            "directory-enumeration-runner", "string");
+    for (item = 0; item < 4; ++item)
+        for (previous = 0; previous < item; ++previous)
+            if (plan->strings[item] == plan->strings[previous])
+                return mir_machine_reject(
+                    "directory-enumeration-runner",
+                    "string-alias");
+
+    if (mir.insns[13].immediate != '!' ||
+        mir.insns[13].src1 != mir.insns[12].dst ||
+        mir.insns[52].immediate != 0 ||
+        mir.insns[52].src1 != mir.insns[50].dst ||
+        mir.insns[76].immediate != 0 ||
+        mir.insns[76].src1 != mir.insns[75].dst ||
+        mir.insns[111].immediate != 0 ||
+        mir.insns[111].src1 != mir.insns[110].dst ||
+        mir.insns[142].immediate != 0 ||
+        mir.insns[142].src1 != mir.insns[141].dst ||
+        mir.insns[249].immediate != 0 ||
+        mir.insns[249].src1 != mir.insns[248].dst ||
+        mir.insns[285].immediate != '!' ||
+        mir.insns[285].src1 != mir.insns[284].dst ||
+        mir.insns[16].src1 != mir.insns[15].dst ||
+        mir.insns[221].src1 != mir.insns[220].dst ||
+        mir.insns[317].src1 != mir.insns[316].dst)
+        return mir_machine_reject(
+            "directory-enumeration-runner", "result-flow");
+    return 1;
+}
+
+enum {
+    MIR_DIRECTORY_FCB = -36,
+    MIR_DIRECTORY_FILE = -49,
+    MIR_DIRECTORY_LIST_LENGTH = -51,
+    MIR_DIRECTORY_TEMP = -53,
+    MIR_DIRECTORY_FRAME_BYTES = 53
+};
+
+static void mir_directory_emit_local_address(FILE *out, int offset)
+{
+    fputs("\tpush ix\n\tpop hl\n", out);
+    if (offset != 0)
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n", offset);
+}
+
+static void mir_directory_emit_symbol_address(
+    FILE *out, struct Sym *symbol)
+{
+    fprintf(out, "\tld hl,%s\n",
+            asm_name_for(sym_asm_name(symbol)));
+}
+
+static void mir_directory_emit_list_item(
+    FILE *out, const struct MirDirectoryEnumerationRunner *plan,
+    int index_offset)
+{
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tadd hl,hl\n\tld de,%s\n\tadd hl,de\n",
+            index_offset, index_offset + 1,
+            asm_name_for(plan->list_name));
+}
+
+static void mir_directory_emit_cleanup(FILE *out, int words)
+{
+    while (words-- > 0)
+        fputs("\tpop bc\n", out);
+}
+
+static void mir_directory_emit_bdos(
+    FILE *out, const struct MirDirectoryEnumerationRunner *plan,
+    int function_number)
+{
+    mir_directory_emit_local_address(out, MIR_DIRECTORY_FCB);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,%d\n\tpush hl\n", function_number);
+    mir_machine_emit_symbol_call(out, plan->bdos_function);
+    mir_directory_emit_cleanup(out, 2);
+    fprintf(out,
+            "\tld (ix%+d),l\n\tld (ix%+d),h\n",
+            MIR_DIRECTORY_TEMP, MIR_DIRECTORY_TEMP + 1);
+}
+
+static void mir_emit_directory_enumeration_runner(
+    FILE *out, const struct MirDirectoryEnumerationRunner *plan)
+{
+    int initialized = new_label();
+    int search_loop = new_label();
+    int search_done = new_label();
+    int name_loop = new_label();
+    int name_done = new_label();
+    int extension_loop = new_label();
+    int extension_done = new_label();
+    int search_result_ok = new_label();
+    int not_found = new_label();
+    int free_loop = new_label();
+    int free_done = new_label();
+    int quiet = new_label();
+    int return_done = new_label();
+    const char *list_name =
+        asm_name_for(plan->list_name);
+    const char *quiet_name =
+        asm_name_for(sym_asm_name(plan->quiet));
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    fprintf(out,
+            "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
+            MIR_DIRECTORY_FRAME_BYTES);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,S%d\n"
+            "\tld (ix%+d),l\n\tld (ix%+d),h\n"
+            "\txor a\n\tld (ix%+d),a\n\tld (ix%+d),a\n",
+            plan->strings[0],
+            MIR_DIRECTORY_TEMP, MIR_DIRECTORY_TEMP + 1,
+            MIR_DIRECTORY_LIST_LENGTH,
+            MIR_DIRECTORY_LIST_LENGTH + 1);
+
+    fprintf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tpush hl\n",
+            plan->parameter_stack_offset + 2,
+            plan->parameter_stack_offset + 3);
+    mir_directory_emit_local_address(out, MIR_DIRECTORY_FCB);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->initialize_function);
+    mir_directory_emit_cleanup(out, 2);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out,
+            "\tjp nz,L%d\n\tld hl,0\n\tjp L%d\n"
+            "L%d:\n",
+            initialized, return_done, initialized);
+
+    mir_directory_emit_bdos(out, plan, 17);
+    fprintf(out,
+            "L%d:\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tbit 7,h\n\tjp nz,L%d\n"
+            "\tld a,h\n\tor a\n\tjp nz,L%d\n"
+            "\tld a,l\n\tcp 4\n\tjp nc,L%d\n"
+            "\tld h,0\n"
+            "\tadd hl,hl\n\tadd hl,hl\n\tadd hl,hl\n"
+            "\tadd hl,hl\n\tadd hl,hl\n"
+            "\tld de,128\n\tadd hl,de\n\tex de,hl\n"
+            "\tinc de\n",
+            search_loop,
+            MIR_DIRECTORY_TEMP, MIR_DIRECTORY_TEMP + 1,
+            search_done, search_done, search_done);
+    fputs("\tpush de\n", out);
+    mir_directory_emit_local_address(out, MIR_DIRECTORY_FILE);
+    fputs("\tpop de\n", out);
+    fprintf(out,
+            "\tld b,8\n"
+            "L%d:\n\tld a,(de)\n\tcp 32\n\tjp z,L%d\n"
+            "\tld (hl),a\n\tinc hl\n\tinc de\n"
+            "\tdjnz L%d\n"
+            "L%d:\n\tpush hl\n"
+            "\tld l,(ix%+d)\n\tld h,0\n"
+            "\tadd hl,hl\n\tadd hl,hl\n\tadd hl,hl\n"
+            "\tadd hl,hl\n\tadd hl,hl\n"
+            "\tld de,137\n\tadd hl,de\n\tex de,hl\n"
+            "\tpop hl\n\tld a,(de)\n\tcp 32\n"
+            "\tjp z,L%d\n\tld (hl),46\n\tinc hl\n"
+            "\tld b,3\n"
+            "L%d:\n\tld a,(de)\n\tcp 32\n\tjp z,L%d\n"
+            "\tld (hl),a\n\tinc hl\n\tinc de\n"
+            "\tdjnz L%d\n"
+            "L%d:\n\txor a\n\tld (hl),a\n",
+            name_loop, name_done, name_loop, name_done,
+            MIR_DIRECTORY_TEMP,
+            extension_done, extension_loop, extension_done,
+            extension_loop, extension_done);
+
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tinc hl\n\tld (ix%+d),l\n\tld (ix%+d),h\n",
+            MIR_DIRECTORY_LIST_LENGTH,
+            MIR_DIRECTORY_LIST_LENGTH + 1,
+            MIR_DIRECTORY_LIST_LENGTH,
+            MIR_DIRECTORY_LIST_LENGTH + 1);
+    mir_directory_emit_local_address(out, MIR_DIRECTORY_FILE);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->duplicate_function);
+    fputs("\tpop bc\n\tex de,hl\n", out);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tdec hl\n\tadd hl,hl\n\tld bc,%s\n"
+            "\tadd hl,bc\n\tld (hl),e\n\tinc hl\n"
+            "\tld (hl),d\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld de,400\n\tor a\n\tsbc hl,de\n"
+            "\tjp z,L%d\n",
+            MIR_DIRECTORY_LIST_LENGTH,
+            MIR_DIRECTORY_LIST_LENGTH + 1,
+            list_name,
+            MIR_DIRECTORY_LIST_LENGTH,
+            MIR_DIRECTORY_LIST_LENGTH + 1,
+            search_done);
+    mir_directory_emit_bdos(out, plan, 18);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            search_loop, search_done);
+
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld de,255\n\tor a\n\tsbc hl,de\n"
+            "\tjp z,L%d\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            MIR_DIRECTORY_TEMP, MIR_DIRECTORY_TEMP + 1,
+            search_result_ok,
+            MIR_DIRECTORY_TEMP, MIR_DIRECTORY_TEMP + 1,
+            plan->strings[1]);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    mir_directory_emit_cleanup(out, 2);
+    fprintf(out,
+            "\tld hl,0\n\tjp L%d\n"
+            "L%d:\n"
+            "\tld hl,S%d\n"
+            "\tld (ix%+d),l\n\tld (ix%+d),h\n",
+            return_done, search_result_ok, plan->strings[0],
+            MIR_DIRECTORY_TEMP, MIR_DIRECTORY_TEMP + 1);
+
+    mir_directory_emit_symbol_address(out, plan->compare_function);
+    fputs("\tpush hl\n\tld hl,2\n\tpush hl\n", out);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
+            "\tld hl,%s\n\tpush hl\n",
+            MIR_DIRECTORY_LIST_LENGTH,
+            MIR_DIRECTORY_LIST_LENGTH + 1,
+            list_name);
+    mir_machine_emit_symbol_call(out, plan->sort_function);
+    mir_directory_emit_cleanup(out, 4);
+
+    mir_directory_emit_symbol_address(out, plan->compare_function);
+    fputs("\tpush hl\n\tld hl,2\n\tpush hl\n", out);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
+            "\tld hl,%s\n\tpush hl\n",
+            MIR_DIRECTORY_LIST_LENGTH,
+            MIR_DIRECTORY_LIST_LENGTH + 1,
+            list_name);
+    mir_directory_emit_local_address(out, MIR_DIRECTORY_TEMP);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->search_function);
+    mir_directory_emit_cleanup(out, 5);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", not_found);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[2]);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    mir_directory_emit_cleanup(out, 2);
+    fprintf(out,
+            "L%d:\n\txor a\n"
+            "\tld (ix%+d),a\n\tld (ix%+d),a\n"
+            "L%d:\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "\tor a\n\tsbc hl,de\n\tjp nc,L%d\n",
+            not_found,
+            MIR_DIRECTORY_TEMP, MIR_DIRECTORY_TEMP + 1,
+            free_loop,
+            MIR_DIRECTORY_TEMP, MIR_DIRECTORY_TEMP + 1,
+            MIR_DIRECTORY_LIST_LENGTH,
+            MIR_DIRECTORY_LIST_LENGTH + 1,
+            free_done);
+
+    mir_directory_emit_list_item(out, plan, MIR_DIRECTORY_TEMP);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tpush de\n", out);
+    mir_machine_emit_symbol_call(out, plan->size_function);
+    fputs("\tpop bc\n", out);
+    fprintf(out, "\tld a,(%s)\n\tor a\n\tjp nz,L%d\n",
+            quiet_name, quiet);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_directory_emit_list_item(out, plan, MIR_DIRECTORY_TEMP);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n", out);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            MIR_DIRECTORY_TEMP, MIR_DIRECTORY_TEMP + 1,
+            plan->strings[3]);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    mir_directory_emit_cleanup(out, 5);
+    fprintf(out, "L%d:\n", quiet);
+
+    mir_directory_emit_list_item(out, plan, MIR_DIRECTORY_TEMP);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n", out);
+    mir_machine_emit_symbol_call(out, plan->free_function);
+    fputs("\tpop bc\n", out);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tinc hl\n"
+            "\tld (ix%+d),l\n\tld (ix%+d),h\n"
+            "\tjp L%d\n"
+            "L%d:\n\tld hl,1\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            MIR_DIRECTORY_TEMP, MIR_DIRECTORY_TEMP + 1,
+            MIR_DIRECTORY_TEMP, MIR_DIRECTORY_TEMP + 1,
+            free_loop, free_done, return_done);
+}
+
 int mir_try_emit_call_runners(FILE *out, int phase)
 {
     if (phase == 0) {
+        struct MirDirectoryEnumerationRunner directory_plan;
         struct MirAbortFileRunner abort_plan;
         struct MirMemoryExerciseRunner memory_plan;
         struct MirAllocationLifetimeRunner allocation_plan;
@@ -9369,6 +10230,12 @@ int mir_try_emit_call_runners(FILE *out, int phase)
         struct MirLongIndexCallRunner long_index_plan;
         struct MirFixedCallCheckRunner plan;
 
+        if (mir_match_directory_enumeration_runner(
+                &directory_plan)) {
+            mir_emit_directory_enumeration_runner(
+                out, &directory_plan);
+            return 1;
+        }
         if (mir_match_abort_file_runner(&abort_plan)) {
             mir_emit_abort_file_runner(out, &abort_plan);
             return 1;
