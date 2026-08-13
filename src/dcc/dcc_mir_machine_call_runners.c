@@ -96,6 +96,20 @@ struct MirForIncrementRunner {
     int expected[7];
 };
 
+struct MirMemoryExerciseRunner {
+    struct Sym *print_function;
+    struct Sym *calloc_function;
+    struct Sym *check_function;
+    struct Sym *memset_function;
+    struct Sym *malloc_function;
+    struct Sym *free_function;
+    struct Sym *logging_root;
+    char pointer_array_name[64];
+    int strings[5];
+    int argc_stack_offset;
+    int memset_fastcall;
+};
+
 static int mir_machine_constant_value(
     int value, long *constant_out, int depth)
 {
@@ -274,6 +288,661 @@ static int mir_allocation_runner_single_argument(
     return mir_machine_single_call_argument(
                &mir.insns[call_instruction], &argument) &&
            argument == mir.insns[argument_instruction].dst;
+}
+
+static int mir_memory_runner_word_type(int type, int is_unsigned)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == TYPE_INT &&
+           ((type & TYPE_UNSIGNED) != 0) == is_unsigned &&
+           type_size(type) == 2;
+}
+
+static int mir_memory_runner_pointer_type(
+    int type, int depth, int base_type)
+{
+    return type_ptr_depth(type) == depth &&
+           (type & 15) == base_type &&
+           type_size(type) == 2;
+}
+
+static struct Sym *mir_memory_runner_call_function(
+    int instruction, int variadic, int argument_count)
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    struct Sym *function;
+    const char *assembly_name;
+
+    if (call->opcode != MIR_CALL || call->src1 >= 0 ||
+        ((call->memory_flags & MIR_CALL_FLAG_VARIADIC) != 0) != variadic ||
+        (call->memory_flags & MIR_CALL_FLAG_FORMAT_RUNTIME) != 0 ||
+        (function = find_global(call->name)) == NULL ||
+        function->storage != SC_FUNC || function->is_funcptr ||
+        function->is_noreturn || !function->has_proto ||
+        function->proto_variadic != variadic ||
+        function->proto_nargs != argument_count)
+        return NULL;
+    assembly_name = asm_name_for(sym_asm_name(function));
+    if (call->base_name[0] != 0 &&
+        strcmp(call->base_name, assembly_name))
+        return NULL;
+    return function;
+}
+
+static int mir_memory_runner_call_matches(
+    int instruction, struct Sym *function, int ordinal,
+    int argument_count, const int *definitions)
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    int arguments[3];
+    int argument;
+
+    if (find_global(call->name) != function ||
+        call->secondary_offset != ordinal ||
+        call->type != function->type ||
+        !mir_machine_call_arguments(
+            call, argument_count, arguments))
+        return 0;
+    for (argument = 0; argument < argument_count; ++argument)
+        if (arguments[argument] !=
+            mir.insns[definitions[argument]].dst)
+            return 0;
+    return 1;
+}
+
+static int mir_memory_runner_loop(
+    int initial_constant, int initial_store, int entry_label,
+    int header_label,
+    int phi, int bound_constant, int comparison, int branch,
+    int exit_label, int back_label, int step_constant,
+    int increment, int increment_store, int jump,
+    long initial, long bound, long step)
+{
+    const struct MirInsn *merge = &mir.insns[phi];
+
+    return mir_machine_constant_equals(
+               mir.insns[initial_constant].dst, initial) &&
+           mir.insns[initial_store].src1 ==
+               mir.insns[initial_constant].dst &&
+           mir_machine_unobservable_local_store(
+               &mir.insns[initial_store]) &&
+           merge->src1 == mir.insns[initial_constant].dst &&
+           merge->src2 == mir.insns[increment].dst &&
+           merge->phi_pred1 == mir.insns[entry_label].label &&
+           merge->phi_pred2 == mir.insns[back_label].label &&
+           mir_machine_same_location(
+               &mir.insns[initial_store], merge) &&
+           mir_machine_constant_equals(
+               mir.insns[bound_constant].dst, bound) &&
+           mir.insns[comparison].immediate == '<' &&
+           mir.insns[comparison].src1 == merge->dst &&
+           mir.insns[comparison].src2 ==
+               mir.insns[bound_constant].dst &&
+           mir.insns[branch].src1 ==
+               mir.insns[comparison].dst &&
+           mir.insns[branch].label ==
+               mir.insns[exit_label].label &&
+           mir_machine_constant_equals(
+               mir.insns[step_constant].dst, step) &&
+           mir.insns[increment].immediate == '+' &&
+           mir.insns[increment].src1 == merge->dst &&
+           mir.insns[increment].src2 ==
+               mir.insns[step_constant].dst &&
+           mir.insns[increment_store].src1 ==
+               mir.insns[increment].dst &&
+           mir_machine_same_location(
+               &mir.insns[initial_store],
+               &mir.insns[increment_store]) &&
+           mir.insns[jump].label ==
+               mir.insns[header_label].label;
+}
+
+static int mir_memory_runner_sizes(
+    int index_value, int base_constant, int scale_constant,
+    int product, int sum, int size_store, int extra_constant,
+    int extended_sum, int extended_store, long extra)
+{
+    return mir_machine_constant_equals(
+               mir.insns[base_constant].dst, 8) &&
+           mir_machine_constant_equals(
+               mir.insns[scale_constant].dst, 10) &&
+           mir.insns[product].immediate == '*' &&
+           mir.insns[product].src1 == mir.insns[index_value].dst &&
+           mir.insns[product].src2 ==
+               mir.insns[scale_constant].dst &&
+           mir.insns[sum].immediate == '+' &&
+           mir.insns[sum].src1 ==
+               mir.insns[base_constant].dst &&
+           mir.insns[sum].src2 == mir.insns[product].dst &&
+           mir.insns[size_store].src1 == mir.insns[sum].dst &&
+           mir_machine_unobservable_local_store(
+               &mir.insns[size_store]) &&
+           mir_machine_constant_equals(
+               mir.insns[extra_constant].dst, extra) &&
+           mir.insns[extended_sum].immediate == '+' &&
+           mir.insns[extended_sum].src1 == mir.insns[sum].dst &&
+           mir.insns[extended_sum].src2 ==
+               mir.insns[extra_constant].dst &&
+           mir.insns[extended_store].src1 ==
+               mir.insns[extended_sum].dst &&
+           mir_machine_unobservable_local_store(
+               &mir.insns[extended_store]);
+}
+
+static int mir_memory_runner_array_root(
+    int instruction, char name[64])
+{
+    const struct MirInsn *address = &mir.insns[instruction];
+    const char *separator;
+
+    if (address->opcode != MIR_ADDRESS ||
+        !mir_machine_named_nonvolatile(address) ||
+        address->memory_flags != 0 || address->object >= 0 ||
+        !mir_memory_runner_pointer_type(
+            address->type, 2, TYPE_CHAR) ||
+        (separator = strchr(address->name, '#')) == NULL ||
+        separator == address->name || separator[1] == 0 ||
+        strchr(separator + 1, '#') != NULL)
+        return 0;
+    strncpy(name, separator + 1, 63);
+    name[63] = 0;
+    return 1;
+}
+
+static int mir_memory_runner_array_access(
+    const char *root_name, int address, int index_address,
+    int load, int index_value)
+{
+    const struct MirInsn *base = &mir.insns[address];
+    const struct MirInsn *index = &mir.insns[index_address];
+    const char *separator = strchr(base->name, '#');
+
+    if (base->opcode != MIR_ADDRESS ||
+        separator == NULL ||
+        strcmp(separator + 1, root_name) ||
+        base->type != mir.insns[97].type ||
+        base->memory_flags != 0 || base->object >= 0 ||
+        index->src1 != base->dst ||
+        index->src2 != mir.insns[index_value].dst ||
+        index->immediate != 2 || index->memory_size != 2)
+        return 0;
+    if (load < 0)
+        return 1;
+    return mir.insns[load].src1 == index->dst &&
+           mir.insns[load].memory_size == 2 &&
+           mir_memory_runner_pointer_type(
+               mir.insns[load].type, 1, TYPE_CHAR);
+}
+
+static int mir_match_memory_exercise_runner(
+    struct MirMemoryExerciseRunner *plan)
+{
+    static const int expected_opcodes[386] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP,
+        MIR_NOP, MIR_PHI, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_CALL, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE,
+        MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP,
+        MIR_CONST, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST,
+        MIR_NOP, MIR_CONST, MIR_NOP, MIR_BINARY, MIR_NOP, MIR_BINARY,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_NOP, MIR_BINARY,
+        MIR_NOP, MIR_STORE, MIR_LOAD, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_LABEL,
+        MIR_NOP, MIR_ARG, MIR_CONST, MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_UNARY, MIR_STORE, MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG,
+        MIR_NOP, MIR_ARG, MIR_CALL, MIR_LOAD, MIR_NOP, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_NOP,
+        MIR_ARG, MIR_CALL, MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG, MIR_NOP,
+        MIR_ARG, MIR_CALL, MIR_LOAD, MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP,
+        MIR_LABEL, MIR_LOAD, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_CALL, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_CONST, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST,
+        MIR_NOP, MIR_CONST, MIR_NOP, MIR_BINARY, MIR_NOP, MIR_BINARY,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_NOP, MIR_BINARY,
+        MIR_NOP, MIR_STORE, MIR_LOAD, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_LABEL,
+        MIR_NOP, MIR_ARG, MIR_CONST, MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_UNARY, MIR_STORE, MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG,
+        MIR_NOP, MIR_ARG, MIR_CALL, MIR_LOAD, MIR_NOP, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_ARG, MIR_CALL,
+        MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL,
+        MIR_LOAD, MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_NOP, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_JUMP,
+        MIR_LABEL, MIR_LOAD, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_CALL, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_CONST, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST,
+        MIR_NOP, MIR_CONST, MIR_NOP, MIR_BINARY, MIR_NOP, MIR_BINARY,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_NOP, MIR_BINARY,
+        MIR_NOP, MIR_STORE, MIR_LOAD, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_LABEL,
+        MIR_NOP, MIR_ARG, MIR_CONST, MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_UNARY, MIR_STORE, MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG,
+        MIR_NOP, MIR_ARG, MIR_CALL, MIR_LOAD, MIR_NOP, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_ARG, MIR_CALL,
+        MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL,
+        MIR_LOAD, MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_NOP, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_JUMP,
+        MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_CALL, MIR_CONST, MIR_RETURN
+    };
+    static const int constant_instructions[] = {
+        4, 9, 18, 26, 36, 44, 48, 50, 58, 75, 84, 92, 111,
+        118, 130, 142, 152, 156, 158, 166, 183, 192, 200, 210,
+        221, 235, 247, 261, 271, 275, 277, 285, 302, 311, 319,
+        329, 340, 354, 366, 376, 384
+    };
+    static const long constant_values[] = {
+        1, 0, 0, 10, 0, 66, 8, 10, 5, 1, 0, 204, 170, 204, 1,
+        0, 66, 8, 10, 3, 1, 0, 204, 170, 255, 204, 2, 1, 66, 8,
+        10, 7, 1, 0, 204, 170, 255, 204, 2, 1, 0
+    };
+    enum {
+        MIR_MEMORY_PRINT,
+        MIR_MEMORY_CALLOC,
+        MIR_MEMORY_CHECK,
+        MIR_MEMORY_MEMSET,
+        MIR_MEMORY_MALLOC,
+        MIR_MEMORY_FREE
+    };
+    static const struct {
+        int instruction;
+        int function;
+        int argument_count;
+        int definitions[3];
+    } calls[] = {
+        {33, MIR_MEMORY_PRINT, 1, {31, 0, 0}},
+        {71, MIR_MEMORY_PRINT, 3, {65, 42, 54}},
+        {78, MIR_MEMORY_CALLOC, 2, {60, 75, 0}},
+        {88, MIR_MEMORY_CHECK, 3, {82, 84, 60}},
+        {96, MIR_MEMORY_MEMSET, 3, {89, 92, 60}},
+        {102, MIR_MEMORY_MALLOC, 1, {54, 0, 0}},
+        {115, MIR_MEMORY_MEMSET, 3, {108, 111, 54}},
+        {122, MIR_MEMORY_CHECK, 3, {116, 118, 60}},
+        {126, MIR_MEMORY_FREE, 1, {123, 0, 0}},
+        {139, MIR_MEMORY_PRINT, 1, {137, 0, 0}},
+        {179, MIR_MEMORY_PRINT, 3, {173, 148, 162}},
+        {186, MIR_MEMORY_CALLOC, 2, {168, 183, 0}},
+        {196, MIR_MEMORY_CHECK, 3, {190, 192, 168}},
+        {204, MIR_MEMORY_MEMSET, 3, {197, 200, 168}},
+        {214, MIR_MEMORY_CHECK, 3, {208, 210, 162}},
+        {225, MIR_MEMORY_MEMSET, 3, {218, 221, 162}},
+        {232, MIR_MEMORY_FREE, 1, {229, 0, 0}},
+        {239, MIR_MEMORY_CHECK, 3, {233, 235, 168}},
+        {243, MIR_MEMORY_FREE, 1, {240, 0, 0}},
+        {258, MIR_MEMORY_PRINT, 1, {256, 0, 0}},
+        {298, MIR_MEMORY_PRINT, 3, {292, 267, 281}},
+        {305, MIR_MEMORY_CALLOC, 2, {287, 302, 0}},
+        {315, MIR_MEMORY_CHECK, 3, {309, 311, 287}},
+        {323, MIR_MEMORY_MEMSET, 3, {316, 319, 287}},
+        {333, MIR_MEMORY_CHECK, 3, {327, 329, 281}},
+        {344, MIR_MEMORY_MEMSET, 3, {337, 340, 281}},
+        {351, MIR_MEMORY_FREE, 1, {348, 0, 0}},
+        {358, MIR_MEMORY_CHECK, 3, {352, 354, 287}},
+        {362, MIR_MEMORY_FREE, 1, {359, 0, 0}},
+        {383, MIR_MEMORY_PRINT, 1, {381, 0, 0}}
+    };
+    struct Sym *functions[6];
+    int argv_stack_offset;
+    int call_count = 0;
+    int instruction;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 386 || mir_cfg_block_count() != 19 ||
+        mir.has_vla || mir.local_bytes != 10 ||
+        mir.aggregate_temp_bytes != 0 ||
+        !mir_memory_runner_word_type(mir.return_type, 0))
+        return mir_machine_reject(
+            "memory-exercise-runner", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        if (mir.insns[instruction].opcode !=
+                expected_opcodes[instruction])
+            return mir_machine_reject(
+                "memory-exercise-runner", "opcode");
+        if (mir.insns[instruction].opcode == MIR_CALL)
+            ++call_count;
+    }
+    if (call_count != 30)
+        return mir_machine_reject(
+            "memory-exercise-runner", "call-count");
+    for (item = 0;
+         item < (int)(sizeof(constant_instructions) /
+                      sizeof(constant_instructions[0]));
+         ++item)
+        if (!mir_machine_constant_equals(
+                mir.insns[constant_instructions[item]].dst,
+                constant_values[item]))
+            return mir_machine_reject(
+                "memory-exercise-runner", "constant");
+
+    if (!mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->argc_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[2].dst, &argv_stack_offset) ||
+        plan->argc_stack_offset != 2 || argv_stack_offset != 4 ||
+        !mir_memory_runner_word_type(mir.insns[1].type, 0) ||
+        !mir_memory_runner_pointer_type(
+            mir.insns[2].type, 2, TYPE_CHAR) ||
+        !mir_machine_same_location(
+            &mir.insns[1], &mir.insns[3]) ||
+        mir.insns[5].immediate != '>' ||
+        mir.insns[5].src1 != mir.insns[1].dst ||
+        mir.insns[5].src2 != mir.insns[4].dst ||
+        !mir_memory_runner_word_type(mir.insns[5].type, 0))
+        return mir_machine_reject(
+            "memory-exercise-runner", "parameters");
+
+    plan->logging_root = find_global(mir.insns[7].name);
+    if (plan->logging_root == NULL ||
+        !plan->logging_root->is_defined ||
+        plan->logging_root->is_array ||
+        plan->logging_root->is_volatile ||
+        !mir_memory_runner_word_type(
+            plan->logging_root->type, 0) ||
+        mir.insns[7].src1 != mir.insns[5].dst ||
+        mir.insns[7].memory_size != 2 ||
+        !mir_machine_named_nonvolatile(&mir.insns[7]))
+        return mir_machine_reject(
+            "memory-exercise-runner", "logging");
+    {
+        static const int logging_loads[] = {
+            29, 63, 135, 171, 254, 290
+        };
+
+        for (item = 0; item < 6; ++item)
+            if (!mir_machine_same_location(
+                    &mir.insns[7],
+                    &mir.insns[logging_loads[item]]))
+                return mir_machine_reject(
+                    "memory-exercise-runner", "logging-load");
+    }
+
+    if (mir.insns[10].src1 != mir.insns[2].dst ||
+        mir.insns[10].src2 != mir.insns[9].dst ||
+        mir.insns[10].immediate != 2 ||
+        mir.insns[10].memory_size != 2 ||
+        mir.insns[11].src1 != mir.insns[10].dst ||
+        mir.insns[11].memory_size != 2 ||
+        mir.insns[13].src1 != mir.insns[11].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[13]))
+        return mir_machine_reject(
+            "memory-exercise-runner", "dead-argv-load");
+
+    if (!mir_memory_runner_loop(
+            18, 20, 0, 21, 24, 26, 27, 28, 380, 374,
+            376, 377, 378, 379, 0, 10, 1) ||
+        !mir_memory_runner_loop(
+            36, 37, 34, 38, 42, 44, 46, 47, 134, 128,
+            130, 131, 132, 133, 0, 66, 1) ||
+        !mir_memory_runner_loop(
+            142, 143, 140, 144, 148, 152, 154, 155, 253, 245,
+            247, 249, 251, 252, 0, 66, 2) ||
+        !mir_memory_runner_loop(
+            261, 262, 259, 263, 267, 271, 273, 274, 372, 364,
+            366, 368, 370, 371, 1, 66, 2))
+        return mir_machine_reject(
+            "memory-exercise-runner", "loop-cfg");
+    if (!mir_memory_runner_sizes(
+            42, 48, 50, 52, 54, 56, 58, 60, 62, 5) ||
+        !mir_memory_runner_sizes(
+            148, 156, 158, 160, 162, 164, 166, 168, 170, 3) ||
+        !mir_memory_runner_sizes(
+            267, 275, 277, 279, 281, 283, 285, 287, 289, 7) ||
+        !mir_machine_same_location(
+            &mir.insns[56], &mir.insns[164]) ||
+        !mir_machine_same_location(
+            &mir.insns[56], &mir.insns[283]) ||
+        !mir_machine_same_location(
+            &mir.insns[62], &mir.insns[170]) ||
+        !mir_machine_same_location(
+            &mir.insns[62], &mir.insns[289]))
+        return mir_machine_reject(
+            "memory-exercise-runner", "sizes");
+    if (mir_machine_same_location(
+            &mir.insns[20], &mir.insns[37]) ||
+        mir_machine_same_location(
+            &mir.insns[20], &mir.insns[56]) ||
+        mir_machine_same_location(
+            &mir.insns[20], &mir.insns[62]) ||
+        mir_machine_same_location(
+            &mir.insns[13], &mir.insns[20]) ||
+        mir_machine_same_location(
+            &mir.insns[13], &mir.insns[37]) ||
+        mir_machine_same_location(
+            &mir.insns[13], &mir.insns[56]) ||
+        mir_machine_same_location(
+            &mir.insns[13], &mir.insns[62]) ||
+        mir_machine_same_location(
+            &mir.insns[37], &mir.insns[56]) ||
+        mir_machine_same_location(
+            &mir.insns[37], &mir.insns[62]) ||
+        mir_machine_same_location(
+            &mir.insns[56], &mir.insns[62]))
+        return mir_machine_reject(
+            "memory-exercise-runner", "local-alias");
+
+    functions[MIR_MEMORY_PRINT] =
+        mir_memory_runner_call_function(33, 1, 1);
+    functions[MIR_MEMORY_CALLOC] =
+        mir_memory_runner_call_function(78, 0, 2);
+    functions[MIR_MEMORY_CHECK] =
+        mir_memory_runner_call_function(88, 0, 3);
+    functions[MIR_MEMORY_MEMSET] =
+        mir_memory_runner_call_function(96, 0, 3);
+    functions[MIR_MEMORY_MALLOC] =
+        mir_memory_runner_call_function(102, 0, 1);
+    functions[MIR_MEMORY_FREE] =
+        mir_memory_runner_call_function(126, 0, 1);
+    for (item = 0; item < 6; ++item) {
+        int previous;
+
+        if (functions[item] == NULL)
+            return mir_machine_reject(
+                "memory-exercise-runner", "function");
+        for (previous = 0; previous < item; ++previous)
+            if (functions[item] == functions[previous])
+                return mir_machine_reject(
+                    "memory-exercise-runner", "function-alias");
+    }
+    plan->print_function = functions[MIR_MEMORY_PRINT];
+    plan->calloc_function = functions[MIR_MEMORY_CALLOC];
+    plan->check_function = functions[MIR_MEMORY_CHECK];
+    plan->memset_function = functions[MIR_MEMORY_MEMSET];
+    plan->malloc_function = functions[MIR_MEMORY_MALLOC];
+    plan->free_function = functions[MIR_MEMORY_FREE];
+
+    if (!mir_memory_runner_word_type(
+            plan->print_function->type, 0) ||
+        !mir_memory_runner_pointer_type(
+            plan->print_function->proto_types[0], 1, TYPE_CHAR) ||
+        !mir_memory_runner_pointer_type(
+            plan->calloc_function->type, 1, TYPE_VOID) ||
+        !mir_memory_runner_word_type(
+            plan->calloc_function->proto_types[0], 1) ||
+        !mir_memory_runner_word_type(
+            plan->calloc_function->proto_types[1], 1) ||
+        (plan->check_function->type & 15) != TYPE_VOID ||
+        type_ptr_depth(plan->check_function->type) != 0 ||
+        !plan->check_function->is_defined ||
+        !mir_memory_runner_pointer_type(
+            plan->check_function->proto_types[0], 1, TYPE_CHAR) ||
+        !mir_memory_runner_word_type(
+            plan->check_function->proto_types[1], 0) ||
+        !mir_memory_runner_word_type(
+            plan->check_function->proto_types[2], 1) ||
+        !mir_memory_runner_pointer_type(
+            plan->memset_function->type, 1, TYPE_VOID) ||
+        !mir_memory_runner_pointer_type(
+            plan->memset_function->proto_types[0], 1, TYPE_VOID) ||
+        !mir_memory_runner_word_type(
+            plan->memset_function->proto_types[1], 0) ||
+        !mir_memory_runner_word_type(
+            plan->memset_function->proto_types[2], 1) ||
+        !mir_memory_runner_pointer_type(
+            plan->malloc_function->type, 1, TYPE_VOID) ||
+        !mir_memory_runner_word_type(
+            plan->malloc_function->proto_types[0], 1) ||
+        (plan->free_function->type & 15) != TYPE_VOID ||
+        type_ptr_depth(plan->free_function->type) != 0 ||
+        !mir_memory_runner_pointer_type(
+            plan->free_function->proto_types[0], 1, TYPE_VOID))
+        return mir_machine_reject(
+            "memory-exercise-runner", "prototype");
+    for (item = 0;
+         item < (int)(sizeof(calls) / sizeof(calls[0]));
+         ++item)
+        if (!mir_memory_runner_call_matches(
+                calls[item].instruction,
+                functions[calls[item].function],
+                item, calls[item].argument_count,
+                calls[item].definitions))
+            return mir_machine_reject(
+                "memory-exercise-runner", "call");
+    {
+        static const int memset_calls[] = {
+            96, 115, 204, 225, 323, 344
+        };
+        static const int memset_destinations[] = {
+            89, 108, 197, 218, 316, 337
+        };
+        static const int memset_fills[] = {
+            92, 111, 200, 221, 319, 340
+        };
+        static const int memset_counts[] = {
+            60, 54, 168, 162, 287, 281
+        };
+
+        int fastcall_count = 0;
+
+        for (item = 0; item < 6; ++item) {
+            int destination;
+            int fill;
+            int count;
+
+            if (!mir_call_is_memset_fastcall(
+                    memset_calls[item], &destination,
+                    &fill, &count))
+                continue;
+            ++fastcall_count;
+            if (destination !=
+                    mir.insns[memset_destinations[item]].dst ||
+                fill != mir.insns[memset_fills[item]].dst ||
+                count != mir.insns[memset_counts[item]].dst)
+                return mir_machine_reject(
+                    "memory-exercise-runner", "memset-abi");
+        }
+        if (fastcall_count != 0 && fastcall_count != 6)
+            return mir_machine_reject(
+                "memory-exercise-runner", "memset-abi-mix");
+        plan->memset_fastcall = fastcall_count == 6;
+    }
+
+    plan->strings[0] = (int)mir.insns[31].immediate;
+    plan->strings[1] = (int)mir.insns[65].immediate;
+    plan->strings[2] = (int)mir.insns[137].immediate;
+    plan->strings[3] = (int)mir.insns[256].immediate;
+    plan->strings[4] = (int)mir.insns[381].immediate;
+    if (mir.insns[173].immediate != plan->strings[1] ||
+        mir.insns[292].immediate != plan->strings[1])
+        return mir_machine_reject(
+            "memory-exercise-runner", "report-string");
+    for (item = 0; item < 5; ++item) {
+        int previous;
+
+        for (previous = 0; previous < item; ++previous)
+            if (plan->strings[item] == plan->strings[previous])
+                return mir_machine_reject(
+                    "memory-exercise-runner", "string-alias");
+    }
+
+    if (mir.insns[30].src1 != mir.insns[29].dst ||
+        mir.insns[30].label != mir.insns[34].label ||
+        mir.insns[64].src1 != mir.insns[63].dst ||
+        mir.insns[64].label != mir.insns[72].label ||
+        mir.insns[136].src1 != mir.insns[135].dst ||
+        mir.insns[136].label != mir.insns[140].label ||
+        mir.insns[172].src1 != mir.insns[171].dst ||
+        mir.insns[172].label != mir.insns[180].label ||
+        mir.insns[255].src1 != mir.insns[254].dst ||
+        mir.insns[255].label != mir.insns[259].label ||
+        mir.insns[291].src1 != mir.insns[290].dst ||
+        mir.insns[291].label != mir.insns[299].label)
+        return mir_machine_reject(
+            "memory-exercise-runner", "print-cfg");
+
+    if (!mir_memory_runner_array_root(
+            97, plan->pointer_array_name) ||
+        !mir_memory_runner_array_access(
+            plan->pointer_array_name, 97, 99, -1, 42) ||
+        mir.insns[104].src1 != mir.insns[99].dst ||
+        mir.insns[104].src2 != mir.insns[102].dst ||
+        mir.insns[104].memory_size != 2 ||
+        !mir_memory_runner_array_access(
+            plan->pointer_array_name, 105, 107, 108, 42) ||
+        !mir_memory_runner_array_access(
+            plan->pointer_array_name, 205, 207, 208, 148) ||
+        !mir_memory_runner_array_access(
+            plan->pointer_array_name, 215, 217, 218, 148) ||
+        !mir_memory_runner_array_access(
+            plan->pointer_array_name, 226, 228, 229, 148) ||
+        !mir_memory_runner_array_access(
+            plan->pointer_array_name, 324, 326, 327, 267) ||
+        !mir_memory_runner_array_access(
+            plan->pointer_array_name, 334, 336, 337, 267) ||
+        !mir_memory_runner_array_access(
+            plan->pointer_array_name, 345, 347, 348, 267))
+        return mir_machine_reject(
+            "memory-exercise-runner", "pointer-array");
+
+    {
+        static const int pointer_locations[] = {
+            81, 82, 89, 116, 123, 189, 190, 197, 233, 240,
+            308, 309, 316, 352, 359
+        };
+
+        for (item = 0;
+             item < (int)(sizeof(pointer_locations) /
+                          sizeof(pointer_locations[0]));
+             ++item)
+            if (!mir_machine_same_location(
+                    &mir.insns[13],
+                    &mir.insns[pointer_locations[item]]))
+                return mir_machine_reject(
+                    "memory-exercise-runner", "pointer-local");
+    }
+    if (mir.insns[80].immediate != 0 ||
+        mir.insns[80].src1 != mir.insns[78].dst ||
+        mir.insns[81].src1 != mir.insns[80].dst ||
+        mir.insns[188].immediate != 0 ||
+        mir.insns[188].src1 != mir.insns[186].dst ||
+        mir.insns[189].src1 != mir.insns[188].dst ||
+        mir.insns[307].immediate != 0 ||
+        mir.insns[307].src1 != mir.insns[305].dst ||
+        mir.insns[308].src1 != mir.insns[307].dst ||
+        mir.insns[385].src1 != mir.insns[384].dst)
+        return mir_machine_reject(
+            "memory-exercise-runner", "result-flow");
+    return 1;
 }
 
 static int mir_match_allocation_lifetime_runner(
@@ -2545,6 +3214,273 @@ static void mir_emit_long_index_call_runner(
             return_nonzero, return_done);
 }
 
+static void mir_memory_runner_cleanup(FILE *out, int words)
+{
+    while (words-- > 0)
+        fputs("\tpop bc\n", out);
+}
+
+static void mir_memory_runner_push_frame_word(FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n",
+            offset, offset + 1);
+}
+
+static void mir_memory_runner_push_index(FILE *out)
+{
+    fputs("\tld l,(ix-2)\n\tld h,0\n\tpush hl\n", out);
+}
+
+static void mir_memory_runner_compute_size(FILE *out, int extra)
+{
+    fprintf(out,
+            "\tld l,(ix-2)\n\tld h,0\n"
+            "\tadd hl,hl\n\tld d,h\n\tld e,l\n"
+            "\tadd hl,hl\n\tadd hl,hl\n\tadd hl,de\n"
+            "\tld de,8\n\tadd hl,de\n"
+            "\tld (ix-4),l\n\tld (ix-3),h\n"
+            "\tld de,%d\n\tadd hl,de\n"
+            "\tld (ix-6),l\n\tld (ix-5),h\n",
+            extra);
+}
+
+static void mir_memory_runner_push_extended_size(FILE *out)
+{
+    fprintf(out,
+            "\tld l,(ix-6)\n\tld h,(ix-5)\n\tpush hl\n");
+}
+
+static void mir_memory_runner_array_slot(
+    FILE *out, const struct MirMemoryExerciseRunner *plan)
+{
+    fputs("\tld l,(ix-2)\n\tld h,0\n\tadd hl,hl\n", out);
+    fprintf(out, "\tld de,%s\n\tadd hl,de\n",
+            asm_name_for(plan->pointer_array_name));
+}
+
+static void mir_memory_runner_array_pointer(
+    FILE *out, const struct MirMemoryExerciseRunner *plan)
+{
+    mir_memory_runner_array_slot(out, plan);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n", out);
+}
+
+static void mir_memory_runner_simple_print(
+    FILE *out, const struct MirMemoryExerciseRunner *plan,
+    int string)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    fputs("\tpop bc\n", out);
+}
+
+static void mir_memory_runner_conditional_print(
+    FILE *out, const struct MirMemoryExerciseRunner *plan,
+    int string)
+{
+    int done = new_label();
+
+    mir_machine_emit_global_word(out, plan->logging_root, 0);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", done);
+    mir_memory_runner_simple_print(out, plan, string);
+    fprintf(out, "L%d:\n", done);
+}
+
+static void mir_memory_runner_report(
+    FILE *out, const struct MirMemoryExerciseRunner *plan)
+{
+    int done = new_label();
+
+    mir_machine_emit_global_word(out, plan->logging_root, 0);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", done);
+    mir_memory_runner_push_frame_word(out, -4);
+    mir_memory_runner_push_index(out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    mir_memory_runner_cleanup(out, 3);
+    fprintf(out, "L%d:\n", done);
+}
+
+static void mir_memory_runner_call_calloc(
+    FILE *out, const struct MirMemoryExerciseRunner *plan)
+{
+    fputs("\tld hl,1\n\tpush hl\n", out);
+    mir_memory_runner_push_extended_size(out);
+    mir_machine_emit_symbol_call(out, plan->calloc_function);
+    mir_memory_runner_cleanup(out, 2);
+    fputs("\tld (ix-8),l\n\tld (ix-7),h\n", out);
+}
+
+static void mir_memory_runner_call_check_pc(
+    FILE *out, const struct MirMemoryExerciseRunner *plan,
+    int value)
+{
+    mir_memory_runner_push_extended_size(out);
+    fprintf(out, "\tld hl,%d\n\tpush hl\n", value);
+    mir_memory_runner_push_frame_word(out, -8);
+    mir_machine_emit_symbol_call(out, plan->check_function);
+    mir_memory_runner_cleanup(out, 3);
+}
+
+static void mir_memory_runner_call_memset_pc(
+    FILE *out, const struct MirMemoryExerciseRunner *plan,
+    int value)
+{
+    if (plan->memset_fastcall) {
+        fputs("\tld l,(ix-6)\n\tld h,(ix-5)\n"
+              "\tld b,h\n\tld c,l\n", out);
+        fprintf(out, "\tld e,%d\n", value);
+        fputs("\tld l,(ix-8)\n\tld h,(ix-7)\n", out);
+        mir_emit_runtime_call(out, "__msf");
+    } else {
+        mir_memory_runner_push_extended_size(out);
+        fprintf(out, "\tld hl,%d\n\tpush hl\n", value);
+        mir_memory_runner_push_frame_word(out, -8);
+        mir_machine_emit_symbol_call(
+            out, plan->memset_function);
+        mir_memory_runner_cleanup(out, 3);
+    }
+}
+
+static void mir_memory_runner_call_saved_array(
+    FILE *out, struct Sym *function, int value)
+{
+    if (value >= 0) {
+        mir_memory_runner_push_frame_word(out, -4);
+        fprintf(out, "\tld hl,%d\n\tpush hl\n", value);
+    }
+    mir_memory_runner_push_frame_word(out, -10);
+    mir_machine_emit_symbol_call(out, function);
+    mir_memory_runner_cleanup(out, value >= 0 ? 3 : 1);
+}
+
+static void mir_memory_runner_call_free_pc(
+    FILE *out, const struct MirMemoryExerciseRunner *plan)
+{
+    mir_memory_runner_push_frame_word(out, -8);
+    mir_machine_emit_symbol_call(out, plan->free_function);
+    fputs("\tpop bc\n", out);
+}
+
+static void mir_memory_runner_allocate_array(
+    FILE *out, const struct MirMemoryExerciseRunner *plan)
+{
+    mir_memory_runner_push_frame_word(out, -4);
+    mir_machine_emit_symbol_call(out, plan->malloc_function);
+    fputs("\tpop bc\n\tpush hl\n", out);
+    mir_memory_runner_array_slot(out, plan);
+    fputs("\tpop de\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
+    if (plan->memset_fastcall) {
+        fputs("\tex de,hl\n"
+              "\tld e,170\n"
+              "\tld c,(ix-4)\n\tld b,(ix-3)\n", out);
+        mir_emit_runtime_call(out, "__msf");
+    } else {
+        mir_memory_runner_push_frame_word(out, -4);
+        fputs("\tld hl,170\n\tpush hl\n\tpush de\n", out);
+        mir_machine_emit_symbol_call(
+            out, plan->memset_function);
+        mir_memory_runner_cleanup(out, 3);
+    }
+}
+
+static void mir_memory_runner_emit_release_loop(
+    FILE *out, const struct MirMemoryExerciseRunner *plan,
+    int initial, int extra)
+{
+    int loop = new_label();
+    int done = new_label();
+
+    fprintf(out, "\tld (ix-2),%d\nL%d:\n", initial, loop);
+    fputs("\tld a,(ix-2)\n\tcp 66\n", out);
+    fprintf(out, "\tjp nc,L%d\n", done);
+    mir_memory_runner_compute_size(out, extra);
+    mir_memory_runner_report(out, plan);
+    mir_memory_runner_call_calloc(out, plan);
+    mir_memory_runner_call_check_pc(out, plan, 0);
+    mir_memory_runner_call_memset_pc(out, plan, 204);
+    mir_memory_runner_array_pointer(out, plan);
+    fputs("\tld (ix-10),l\n\tld (ix-9),h\n", out);
+    mir_memory_runner_call_saved_array(
+        out, plan->check_function, 170);
+    if (plan->memset_fastcall) {
+        fputs("\tld c,(ix-4)\n\tld b,(ix-3)\n"
+              "\tld e,255\n"
+              "\tld l,(ix-10)\n\tld h,(ix-9)\n", out);
+        mir_emit_runtime_call(out, "__msf");
+    } else {
+        mir_memory_runner_call_saved_array(
+            out, plan->memset_function, 255);
+    }
+    mir_memory_runner_call_saved_array(
+        out, plan->free_function, -1);
+    mir_memory_runner_call_check_pc(out, plan, 204);
+    mir_memory_runner_call_free_pc(out, plan);
+    fputs("\tinc (ix-2)\n\tinc (ix-2)\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+}
+
+static void mir_emit_memory_exercise_runner(
+    FILE *out, const struct MirMemoryExerciseRunner *plan)
+{
+    int outer_loop = new_label();
+    int outer_done = new_label();
+    int allocate_loop = new_label();
+    int allocate_done = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-10\n\tadd hl,sp\n\tld sp,hl\n", out);
+    fprintf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
+            "\tld de,1\n",
+            plan->argc_stack_offset + 2,
+            plan->argc_stack_offset + 3);
+    mir_emit_scalar_compare(out, '>', 0);
+    mir_machine_emit_global_word_store(
+        out, plan->logging_root, 0);
+
+    fputs("\tld (ix-1),0\n", out);
+    fprintf(out, "L%d:\n", outer_loop);
+    fputs("\tld a,(ix-1)\n\tcp 10\n", out);
+    fprintf(out, "\tjp nc,L%d\n", outer_done);
+    mir_memory_runner_conditional_print(
+        out, plan, plan->strings[0]);
+
+    fputs("\tld (ix-2),0\n", out);
+    fprintf(out, "L%d:\n", allocate_loop);
+    fputs("\tld a,(ix-2)\n\tcp 66\n", out);
+    fprintf(out, "\tjp nc,L%d\n", allocate_done);
+    mir_memory_runner_compute_size(out, 5);
+    mir_memory_runner_report(out, plan);
+    mir_memory_runner_call_calloc(out, plan);
+    mir_memory_runner_call_check_pc(out, plan, 0);
+    mir_memory_runner_call_memset_pc(out, plan, 204);
+    mir_memory_runner_allocate_array(out, plan);
+    mir_memory_runner_call_check_pc(out, plan, 204);
+    mir_memory_runner_call_free_pc(out, plan);
+    fputs("\tinc (ix-2)\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            allocate_loop, allocate_done);
+
+    mir_memory_runner_conditional_print(
+        out, plan, plan->strings[2]);
+    mir_memory_runner_emit_release_loop(out, plan, 0, 3);
+    mir_memory_runner_conditional_print(
+        out, plan, plan->strings[3]);
+    mir_memory_runner_emit_release_loop(out, plan, 1, 7);
+
+    fputs("\tinc (ix-1)\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", outer_loop, outer_done);
+    mir_memory_runner_simple_print(
+        out, plan, plan->strings[4]);
+    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_allocation_runner_call_one(
     FILE *out, struct Sym *function, unsigned long argument)
 {
@@ -2778,12 +3714,17 @@ static void mir_emit_for_increment_runner(
 int mir_try_emit_call_runners(FILE *out, int phase)
 {
     if (phase == 0) {
+        struct MirMemoryExerciseRunner memory_plan;
         struct MirAllocationLifetimeRunner allocation_plan;
         struct MirCallbackRegistrationRunner callback_plan;
         struct MirForIncrementRunner for_increment_plan;
         struct MirLongIndexCallRunner long_index_plan;
         struct MirFixedCallCheckRunner plan;
 
+        if (mir_match_memory_exercise_runner(&memory_plan)) {
+            mir_emit_memory_exercise_runner(out, &memory_plan);
+            return 1;
+        }
         if (mir_match_allocation_lifetime_runner(
                 &allocation_plan)) {
             mir_emit_allocation_lifetime_runner(

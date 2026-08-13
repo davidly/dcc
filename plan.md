@@ -6,10 +6,47 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Clean base HEAD for the current coverage batch: `e70918a`.
-- Current working-tree candidate coverage: **2139/2185 (97.89%)**.
-- Remaining fallback population: **46 `final-cost-policy`**, all selected by
+- Clean base HEAD for the current coverage batch: `79f9545`.
+- Current working-tree candidate coverage: **2140/2185 (97.94%)**.
+- Remaining fallback population: **45 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The call-runner module now admits the 19-block `tm.main`
+  `final-cost-policy` fallback through a strict name-free matcher over all
+  **386 MIR instructions**. It proves the signed `argc > 1` logging store,
+  dead `argv[0]` assignment, 10-pass outer loop, all three exact 66-element
+  allocation/release loops and PHIs, the shared static 66-pointer array,
+  every size/delta calculation, all conditional reports, and all **30**
+  ordered calls: seven variadic reports, three zeroed allocations, eight
+  memory checks, six fills, one plain allocation and five releases. The
+  emitter keeps `j` and `i` byte-narrowed, uses a compact **10-byte IX
+  frame**, uses no IY, preserves every call and failure path, and retains the
+  compiler-proven six-call `memset` fastcall ABI; no float operation or float
+  ABI is involved. Normal selected/captured metrics are **4,533/5,899
+  bytes** and **406/534 instructions**; stack-check metrics are
+  **4,562/5,928 bytes** and **407/535 instructions**.
+- `tm` passes checked full peep/nopeep validation. Against checked performance
+  values, peep improves from **100,313,194 to 99,949,760 cycles** and
+  **7,552 to 7,424 bytes**, while nopeep improves from **103,829,038 to
+  103,369,587 cycles** and **7,680 to 7,424 bytes**. Direct stack-check
+  selected versus forced fallback output is byte-identical (`success`) in
+  both modes: peep is **99,949,698/100,313,132 cycles** and
+  **4,224/4,352 bytes**, while nopeep is
+  **103,369,525/103,828,976 cycles** and **4,224/4,480 bytes**.
+- A renamed-helper edge A/B runs both logging branches and checks exact
+  aggregate counts for all allocation, fill, check, release and report calls.
+  Selected and forced-fallback output is byte-identical in both modes:
+  `edge 0 2640 1320 5280 6600 3960 1352`. Selected/fallback measurements
+  are **915,310,753/915,782,707 cycles and 5,760/5,888 bytes peep**, and
+  **1,143,324,901/1,144,006,209 cycles and 6,272/6,400 bytes nopeep**.
+- The call-runner module grows from **2,823 to 3,764 source lines** and from
+  **41 to 68 static top-level helpers**. The object audit reports only
+  `mir_try_emit_call_runners [T]` as defined global code and zero global
+  data. The canonical build passes. The regression-gated stack-check census
+  advances **2,139/2,185 (97.89%)** to **2,140/2,185 (97.94%)**, adds exactly
+  `tm.main`, removes no accepted function, moves selector counts from
+  **1,414 spilled / 364 scheduled** to **1,413 spilled / 365 scheduled**,
+  and leaves **45 `final-cost-policy`** fallbacks. No performance baseline,
+  production name, or output-hash gate was added.
 - The numeric module now admits the 19-block `catalan.main`
   `final-cost-policy` fallback through a strict name-free matcher over all
   **437 MIR instructions**. It proves the three distinct 31-element local
