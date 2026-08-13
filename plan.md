@@ -6,10 +6,51 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Clean base HEAD for the current coverage batch: `f6137ff`.
-- Current working-tree candidate coverage: **2138/2185 (97.85%)**.
-- Remaining fallback population: **47 `final-cost-policy`**, all selected by
+- Clean base HEAD for the current coverage batch: `e70918a`.
+- Current working-tree candidate coverage: **2139/2185 (97.89%)**.
+- Remaining fallback population: **46 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The numeric module now admits the 19-block `catalan.main`
+  `final-cost-policy` fallback through a strict name-free matcher over all
+  **437 MIR instructions**. It proves the three distinct 31-element local
+  long arrays and their zero/one initialization; the shared zero, zero-test,
+  term, and small-division helper ABIs; all twelve ordered term calls and
+  their signs, numerators, powers, and `8L*n + delta` operands; both loop
+  PHIs/backedges; the `%ld.` report; the nested 100-digit output loops; both
+  `putchar` calls; and the final zero return. The emitter preserves 32-bit
+  wrap, multiply, add, divide, and remainder order, uses the original array
+  spacing, and reduces the frame from 392 to **374 bytes**. BC carries the
+  inner array cursor, DE carries the printed-digit accumulator, the later
+  four-byte divisor reuses dead first-series/index storage, and no IY is used.
+  Normal selected/captured metrics are **8,132/12,696 bytes** and
+  **851/1,346 instructions**; stack-check metrics are
+  **8,161/12,725 bytes** and **852/1,347 instructions**.
+- `catalan` passes checked full peep/nopeep validation. Against checked
+  performance values, peep improves from **542,781,715 to 541,800,591
+  cycles** and **8,960 to 8,576 bytes**, while nopeep improves from
+  **546,454,360 to 545,132,808 cycles** and **9,216 to 8,704 bytes**.
+  Direct selected versus forced fallback A/B with the test's 768-byte stack
+  has byte-identical output in both modes and improves peep from
+  **542,097,273 to 541,800,565 cycles** with **6,144 to 6,016 bytes**, and
+  nopeep from **545,481,072 to 545,132,782 cycles** with
+  **6,528 to 6,016 bytes**.
+- A renamed-helper boundary A/B runs the first numeric series through
+  `n=8192`, proving the carry from `8L*n` into the high word and the final
+  `+7` result `65543`, then exercises the unchanged nested digit loops.
+  Selected and forced-fallback output is byte-identical in peep and nopeep:
+  `65543.` followed by 100 zero digits. Selected/fallback measurements are
+  **95,920,653/111,259,889 cycles and 5,120/5,632 bytes peep**, and
+  **107,810,403/125,038,581 cycles and 5,376/6,016 bytes nopeep**.
+- The numeric module grows from **1,768 to 2,665 source lines** and from
+  **23 to 41 static top-level helpers**. The object audit reports only
+  `mir_try_emit_numeric_kernels [T]` as defined global code, with zero
+  read-only or writable data. The canonical build passes. The
+  regression-gated stack-check census advances **2,138/2,185 (97.85%)** to
+  **2,139/2,185 (97.89%)**, adds exactly `catalan.main`, removes no accepted
+  function, moves selector counts from **1,415 spilled / 363 scheduled** to
+  **1,414 spilled / 364 scheduled**, and leaves
+  **46 `final-cost-policy`** fallbacks. No performance baseline, production
+  name, or output-hash gate was added.
 - The call-runner module now admits the 19-block `tforinc.main`
   `final-cost-policy` fallback through a strict name-free matcher over all
   **123 MIR instructions**. It proves seven distinct defined helper calls and

@@ -40,6 +40,16 @@ struct MirPrimeSearchSchedule {
     char print_name[64];
 };
 
+struct MirCatalanDriverSchedule {
+    struct Sym *zero_function;
+    struct Sym *is_zero_function;
+    struct Sym *add_term_function;
+    struct Sym *div_small_function;
+    struct Sym *putchar_function;
+    int format_string_id;
+    char print_name[64];
+};
+
 static int mir_machine_constant_value(
     int value, long *constant_out, int depth)
 {
@@ -1297,6 +1307,671 @@ static int mir_match_prime_search_schedule(
     return 1;
 }
 
+static int mir_catalan_int_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == TYPE_INT &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 2;
+}
+
+static int mir_catalan_long_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == TYPE_LONG &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           !type_is_float(type) &&
+           type_size(type) == 4;
+}
+
+static int mir_catalan_long_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & 15) == TYPE_LONG &&
+           type_size(type) == 2;
+}
+
+static int mir_catalan_array_address(
+    const struct MirInsn *address, int expected_offset)
+{
+    int declared;
+
+    if (address->opcode != MIR_ADDRESS ||
+        !mir_catalan_long_pointer_type(address->type))
+        return 0;
+    for (declared = 0; declared < mir.declared_count; ++declared)
+        if (!strcmp(mir.declared_names[declared], address->name))
+            return mir.declared_storage[declared] == SC_LOCAL &&
+                   mir.declared_offsets[declared] == expected_offset &&
+                   mir.declared_sizes[declared] == 124 &&
+                   mir.declared_is_array[declared] &&
+                   !mir.declared_is_vla[declared] &&
+                   !mir.declared_is_volatile[declared] &&
+                   mir.declared_dim_counts[declared] == 1 &&
+                   mir.declared_dims[declared][0] == 31 &&
+                   mir.declared_elem_sizes[declared] == 4 &&
+                   (mir.declared_types[declared] & 15) == TYPE_LONG;
+    return 0;
+}
+
+static int mir_catalan_same_array(
+    const struct MirInsn *address, const struct MirInsn *expected)
+{
+    return address->opcode == MIR_ADDRESS &&
+           address->type == expected->type &&
+           !strcmp(address->name, expected->name);
+}
+
+static int mir_catalan_defined_function(
+    const struct MirInsn *call, int return_type, int arguments,
+    struct Sym **function_out)
+{
+    struct Sym *function;
+    const char *assembly_name;
+
+    if (call->opcode != MIR_CALL || call->src1 >= 0 ||
+        call->memory_flags != 0 ||
+        (function = find_global(call->name)) == NULL ||
+        function->storage != SC_FUNC || !function->is_defined ||
+        function->is_funcptr || function->is_noreturn ||
+        !function->has_proto || function->proto_variadic ||
+        function->proto_nargs != arguments ||
+        function->type != return_type || call->type != return_type)
+        return 0;
+    assembly_name = asm_name_for(sym_asm_name(function));
+    if (call->base_name[0] != 0 &&
+        strcmp(call->base_name, assembly_name))
+        return 0;
+    *function_out = function;
+    return 1;
+}
+
+static int mir_catalan_argument(
+    int instruction, const struct MirInsn *call, int index, int value)
+{
+    const struct MirInsn *argument = &mir.insns[instruction];
+
+    return argument->opcode == MIR_ARG &&
+           argument->src1 == value &&
+           argument->immediate == index &&
+           argument->secondary_offset == call->secondary_offset;
+}
+
+static int mir_catalan_match_term_call(
+    int item, int a_value, const struct MirInsn *sum,
+    const struct MirInsn *scale, struct Sym **function_out)
+{
+    static const int sum_addresses[12] = {
+        44, 62, 81, 99, 118, 136, 191, 210, 229, 248, 266, 284
+    };
+    static const int scale_addresses[12] = {
+        46, 64, 83, 101, 120, 138, 193, 212, 231, 250, 268, 286
+    };
+    static const int signs[12] = {
+        48, 67, 85, 104, 122, 141, 196, 215, 234, 252, 270, 288
+    };
+    static const int numerators[12] = {
+        51, 70, 88, 107, 125, 144, 199, 218, 237, 255, 273, 291
+    };
+    static const int powers[12] = {
+        54, 73, 91, 110, 128, 147, 202, 221, 240, 258, 276, 294
+    };
+    static const int deltas[12] = {
+        57, 76, 94, 113, 131, 150, 205, 224, 243, 261, 279, 297
+    };
+    static const int additions[12] = {
+        58, 77, 95, 114, 132, 151, 206, 225, 244, 262, 280, 298
+    };
+    static const int calls[12] = {
+        61, 80, 98, 117, 135, 154, 209, 228, 247, 265, 283, 301
+    };
+    static const int expected_signs[12] = {
+        1, 65535, 1, 65535, 1, 65535,
+        65535, 65535, 65535, 1, 1, 1
+    };
+    static const int expected_numerators[12] = {
+        3, 3, 3, 3, 3, 3, 1, 1, 1, 1, 1, 1
+    };
+    static const int expected_powers[12] = {
+        2, 2, 4, 8, 8, 16, 4, 8, 32, 256, 512, 2048
+    };
+    static const int expected_deltas[12] = {
+        1, 2, 3, 5, 6, 7, 1, 2, 3, 5, 6, 7
+    };
+    const struct MirInsn *call = &mir.insns[calls[item]];
+    const struct MirInsn *addition = &mir.insns[additions[item]];
+    int arguments[6];
+
+    if (!mir_catalan_same_array(
+            &mir.insns[sum_addresses[item]], sum) ||
+        !mir_catalan_same_array(
+            &mir.insns[scale_addresses[item]], scale) ||
+        !mir_machine_constant_equals(
+            mir.insns[signs[item]].dst, expected_signs[item]) ||
+        !mir_catalan_int_type(mir.insns[signs[item]].type) ||
+        !mir_machine_constant_equals(
+            mir.insns[numerators[item]].dst,
+            expected_numerators[item]) ||
+        !mir_catalan_long_type(mir.insns[numerators[item]].type) ||
+        !mir_machine_constant_equals(
+            mir.insns[powers[item]].dst, expected_powers[item]) ||
+        !mir_catalan_long_type(mir.insns[powers[item]].type) ||
+        !mir_machine_constant_equals(
+            mir.insns[deltas[item]].dst, expected_deltas[item]) ||
+        !mir_catalan_long_type(mir.insns[deltas[item]].type) ||
+        addition->immediate != '+' ||
+        addition->src1 != a_value ||
+        addition->src2 != mir.insns[deltas[item]].dst ||
+        !mir_catalan_long_type(addition->type) ||
+        addition->secondary_offset != addition->type ||
+        !mir_catalan_defined_function(
+            call, TYPE_VOID, 6, function_out) ||
+        !mir_numeric_call_arguments(call, 6, arguments) ||
+        arguments[0] != mir.insns[sum_addresses[item]].dst ||
+        arguments[1] != mir.insns[scale_addresses[item]].dst ||
+        arguments[2] != mir.insns[signs[item]].dst ||
+        arguments[3] != mir.insns[numerators[item]].dst ||
+        arguments[4] != mir.insns[powers[item]].dst ||
+        arguments[5] != addition->dst ||
+        !mir_catalan_argument(
+            sum_addresses[item] + 1, call, 0,
+            mir.insns[sum_addresses[item]].dst) ||
+        !mir_catalan_argument(
+            scale_addresses[item] + 1, call, 1,
+            mir.insns[scale_addresses[item]].dst) ||
+        !mir_catalan_argument(
+            signs[item] + 1, call, 2, mir.insns[signs[item]].dst) ||
+        !mir_catalan_argument(
+            numerators[item] + 1, call, 3,
+            mir.insns[numerators[item]].dst) ||
+        !mir_catalan_argument(
+            powers[item] + 1, call, 4,
+            mir.insns[powers[item]].dst) ||
+        !mir_catalan_argument(
+            additions[item] + 2, call, 5, addition->dst))
+        return 0;
+    return 1;
+}
+
+static int mir_match_catalan_driver_schedule(
+    struct MirCatalanDriverSchedule *plan)
+{
+    static const unsigned char expected_opcodes[437] = {
+        MIR_LABEL, MIR_ADDRESS, MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_ARG,
+        MIR_CALL, MIR_ADDRESS, MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST, MIR_STORE_INDIRECT, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_NOP, MIR_STORE,
+        MIR_LABEL, MIR_PHI, MIR_NOP, MIR_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_UNARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST, MIR_NOP, MIR_UNARY,
+        MIR_BINARY, MIR_STORE, MIR_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_NOP, MIR_CONST, MIR_ARG, MIR_NOP,
+        MIR_CONST, MIR_ARG, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP,
+        MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_ARG,
+        MIR_NOP, MIR_CONST, MIR_ARG, MIR_NOP, MIR_CONST, MIR_ARG,
+        MIR_NOP, MIR_CONST, MIR_ARG, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_NOP, MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_ARG, MIR_ADDRESS,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_NOP, MIR_CONST, MIR_ARG,
+        MIR_NOP, MIR_CONST, MIR_ARG, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_NOP, MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_ARG, MIR_ADDRESS,
+        MIR_ARG, MIR_NOP, MIR_CONST, MIR_ARG, MIR_NOP, MIR_CONST,
+        MIR_ARG, MIR_NOP, MIR_CONST, MIR_ARG, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_NOP, MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_ARG,
+        MIR_ADDRESS, MIR_ARG, MIR_CONST, MIR_ARG, MIR_NOP, MIR_CONST,
+        MIR_ARG, MIR_NOP, MIR_CONST, MIR_ARG, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_NOP, MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_ARG,
+        MIR_ADDRESS, MIR_ARG, MIR_NOP, MIR_CONST, MIR_ARG, MIR_NOP,
+        MIR_CONST, MIR_ARG, MIR_NOP, MIR_CONST, MIR_ARG, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_NOP, MIR_ARG, MIR_CALL, MIR_ADDRESS,
+        MIR_ARG, MIR_NOP, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP,
+        MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_PHI, MIR_PHI,
+        MIR_ADDRESS, MIR_ARG, MIR_CALL, MIR_UNARY, MIR_BRANCH_FALSE, MIR_NOP,
+        MIR_CONST, MIR_NOP, MIR_UNARY, MIR_BINARY, MIR_STORE, MIR_ADDRESS,
+        MIR_ARG, MIR_ADDRESS, MIR_ARG, MIR_NOP, MIR_CONST, MIR_ARG,
+        MIR_NOP, MIR_CONST, MIR_ARG, MIR_NOP, MIR_CONST, MIR_ARG,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP, MIR_ARG, MIR_CALL,
+        MIR_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_ARG, MIR_NOP, MIR_CONST,
+        MIR_ARG, MIR_NOP, MIR_CONST, MIR_ARG, MIR_NOP, MIR_CONST,
+        MIR_ARG, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP, MIR_ARG,
+        MIR_CALL, MIR_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_ARG, MIR_NOP,
+        MIR_CONST, MIR_ARG, MIR_NOP, MIR_CONST, MIR_ARG, MIR_NOP,
+        MIR_CONST, MIR_ARG, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP,
+        MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_NOP, MIR_CONST, MIR_ARG, MIR_NOP,
+        MIR_CONST, MIR_ARG, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP,
+        MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_NOP, MIR_CONST, MIR_ARG, MIR_NOP,
+        MIR_CONST, MIR_ARG, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP,
+        MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_NOP, MIR_CONST, MIR_ARG, MIR_NOP,
+        MIR_CONST, MIR_ARG, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP,
+        MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_ARG, MIR_NOP, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP, MIR_CONST,
+        MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_LOAD, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_NOP, MIR_JUMP, MIR_LABEL, MIR_JUMP,
+        MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_PHI, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_NOP,
+        MIR_JUMP, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_NOP,
+        MIR_CONST, MIR_ADDRESS, MIR_LOAD, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP,
+        MIR_BINARY, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_UNARY, MIR_BINARY,
+        MIR_ARG, MIR_CALL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP,
+        MIR_STORE, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_NOP,
+        MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN
+    };
+    static const int zero_calls[3] = {3, 6, 9};
+    static const int zero_addresses[3] = {1, 4, 7};
+    const struct MirInsn *sum = &mir.insns[1];
+    const struct MirInsn *s16 = &mir.insns[4];
+    const struct MirInsn *s4096 = &mir.insns[7];
+    struct Sym *function;
+    struct Sym *term_function = NULL;
+    int arguments[6];
+    int instruction;
+    int item;
+    int n_offset;
+    int a_offset;
+    int printed_offset;
+    int i_offset;
+    int p_offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 437 || mir_cfg_block_count() != 19 ||
+        mir.local_bytes != 392 || mir.aggregate_temp_bytes != 0 ||
+        mir.has_vla || !mir_has_cfg_backedge() ||
+        !mir_catalan_int_type(mir.return_type))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "catalan-driver-schedule", "opcode");
+
+    if (!mir_catalan_array_address(sum, -124) ||
+        !mir_catalan_array_address(s16, -250) ||
+        !mir_catalan_array_address(s4096, -374) ||
+        !strcmp(sum->name, s16->name) ||
+        !strcmp(sum->name, s4096->name) ||
+        !strcmp(s16->name, s4096->name))
+        return mir_machine_reject(
+            "catalan-driver-schedule", "arrays");
+
+    for (item = 0; item < 3; ++item) {
+        const struct MirInsn *call = &mir.insns[zero_calls[item]];
+        const struct MirInsn *address =
+            &mir.insns[zero_addresses[item]];
+
+        if (!mir_catalan_defined_function(
+                call, TYPE_VOID, 1, &function) ||
+            !mir_catalan_long_pointer_type(
+                function->proto_types[0]) ||
+            !mir_numeric_call_arguments(call, 1, arguments) ||
+            arguments[0] != address->dst ||
+            !mir_catalan_argument(
+                zero_addresses[item] + 1, call, 0, address->dst) ||
+            (item == 0
+                 ? (plan->zero_function = function, 0)
+                 : function != plan->zero_function))
+            return mir_machine_reject(
+                "catalan-driver-schedule", "zero-calls");
+    }
+
+    if (!mir_catalan_same_array(&mir.insns[10], s16) ||
+        !mir_machine_constant_equals(mir.insns[11].dst, 0) ||
+        !mir_catalan_int_type(mir.insns[11].type) ||
+        mir.insns[12].src1 != mir.insns[10].dst ||
+        mir.insns[12].src2 != mir.insns[11].dst ||
+        mir.insns[12].immediate != 4 ||
+        mir.insns[12].memory_size != 4 ||
+        !mir_machine_constant_equals(mir.insns[14].dst, 1) ||
+        !mir_catalan_long_type(mir.insns[14].type) ||
+        mir.insns[15].src1 != mir.insns[12].dst ||
+        mir.insns[15].src2 != mir.insns[14].dst ||
+        mir.insns[15].memory_size != 4 ||
+        !mir_catalan_same_array(&mir.insns[16], s4096) ||
+        !mir_machine_constant_equals(mir.insns[17].dst, 0) ||
+        mir.insns[18].src1 != mir.insns[16].dst ||
+        mir.insns[18].src2 != mir.insns[17].dst ||
+        mir.insns[18].immediate != 4 ||
+        mir.insns[18].memory_size != 4 ||
+        !mir_machine_constant_equals(mir.insns[20].dst, 1) ||
+        mir.insns[21].src1 != mir.insns[18].dst ||
+        mir.insns[21].src2 != mir.insns[20].dst ||
+        mir.insns[21].memory_size != 4)
+        return mir_machine_reject(
+            "catalan-driver-schedule", "array-initializers");
+
+    if (!mir_numeric_scalar_location(
+            &mir.insns[29], SC_LOCAL, 2, 0, 0, &n_offset) ||
+        n_offset != -376 ||
+        !mir_numeric_scalar_location(
+            &mir.insns[43], SC_LOCAL, 4, 0, 0, &a_offset) ||
+        a_offset != -380 ||
+        !mir_machine_same_location(
+            &mir.insns[29], &mir.insns[166]) ||
+        !mir_machine_same_location(
+            &mir.insns[29], &mir.insns[176]) ||
+        !mir_machine_same_location(
+            &mir.insns[29], &mir.insns[313]) ||
+        !mir_machine_same_location(
+            &mir.insns[43], &mir.insns[190]) ||
+        !mir_machine_constant_equals(mir.insns[27].dst, 0) ||
+        mir.insns[29].src1 != mir.insns[27].dst ||
+        mir.insns[31].src1 != mir.insns[27].dst ||
+        mir.insns[31].src2 != mir.insns[165].dst ||
+        mir.insns[31].phi_pred1 != mir.insns[0].label ||
+        mir.insns[31].phi_pred2 != mir.insns[162].label)
+        return mir_machine_reject(
+            "catalan-driver-schedule", "first-loop-state");
+
+    if (!mir_catalan_same_array(&mir.insns[33], s16) ||
+        !mir_catalan_defined_function(
+            &mir.insns[35], TYPE_INT, 1,
+            &plan->is_zero_function) ||
+        !mir_catalan_long_pointer_type(
+            plan->is_zero_function->proto_types[0]) ||
+        !mir_numeric_call_arguments(&mir.insns[35], 1, arguments) ||
+        arguments[0] != mir.insns[33].dst ||
+        !mir_catalan_argument(
+            34, &mir.insns[35], 0, mir.insns[33].dst) ||
+        mir.insns[36].immediate != '!' ||
+        mir.insns[36].src1 != mir.insns[35].dst ||
+        mir.insns[37].src1 != mir.insns[36].dst ||
+        mir.insns[37].label != mir.insns[168].label ||
+        !mir_machine_constant_equals(mir.insns[39].dst, 8) ||
+        !mir_catalan_long_type(mir.insns[39].type) ||
+        mir.insns[41].immediate != 0 ||
+        mir.insns[41].src1 != mir.insns[31].dst ||
+        !mir_catalan_long_type(mir.insns[41].type) ||
+        mir.insns[42].immediate != '*' ||
+        mir.insns[42].src1 != mir.insns[39].dst ||
+        mir.insns[42].src2 != mir.insns[41].dst ||
+        mir.insns[43].src1 != mir.insns[42].dst)
+        return mir_machine_reject(
+            "catalan-driver-schedule", "first-loop-header");
+
+    for (item = 0; item < 6; ++item) {
+        if (!mir_catalan_match_term_call(
+                item, mir.insns[42].dst, sum, s16, &function) ||
+            (item == 0
+                 ? (term_function = function, 0)
+                 : function != term_function))
+            return mir_machine_reject(
+                "catalan-driver-schedule", "first-terms");
+    }
+    plan->add_term_function = term_function;
+
+    if (!mir_catalan_same_array(&mir.insns[155], s16) ||
+        !mir_machine_constant_equals(mir.insns[158].dst, 16) ||
+        !mir_catalan_long_type(mir.insns[158].type) ||
+        !mir_catalan_defined_function(
+            &mir.insns[160], TYPE_VOID, 2,
+            &plan->div_small_function) ||
+        !mir_catalan_long_pointer_type(
+            plan->div_small_function->proto_types[0]) ||
+        !mir_catalan_long_type(
+            plan->div_small_function->proto_types[1]) ||
+        !mir_numeric_call_arguments(&mir.insns[160], 2, arguments) ||
+        arguments[0] != mir.insns[155].dst ||
+        arguments[1] != mir.insns[158].dst ||
+        !mir_catalan_argument(
+            156, &mir.insns[160], 0, mir.insns[155].dst) ||
+        !mir_catalan_argument(
+            159, &mir.insns[160], 1, mir.insns[158].dst) ||
+        !mir_machine_constant_equals(mir.insns[164].dst, 1) ||
+        mir.insns[165].immediate != '+' ||
+        mir.insns[165].src1 != mir.insns[31].dst ||
+        mir.insns[165].src2 != mir.insns[164].dst ||
+        mir.insns[166].src1 != mir.insns[165].dst ||
+        mir.insns[167].label != mir.insns[30].label)
+        return mir_machine_reject(
+            "catalan-driver-schedule", "first-loop-tail");
+
+    if (!mir_machine_constant_equals(mir.insns[174].dst, 0) ||
+        mir.insns[176].src1 != mir.insns[174].dst ||
+        mir.insns[178].src1 != mir.insns[174].dst ||
+        mir.insns[178].src2 != mir.insns[312].dst ||
+        mir.insns[178].phi_pred1 != mir.insns[168].label ||
+        mir.insns[178].phi_pred2 != mir.insns[309].label ||
+        !mir_catalan_same_array(&mir.insns[180], s4096) ||
+        !mir_catalan_defined_function(
+            &mir.insns[182], TYPE_INT, 1, &function) ||
+        function != plan->is_zero_function ||
+        !mir_numeric_call_arguments(&mir.insns[182], 1, arguments) ||
+        arguments[0] != mir.insns[180].dst ||
+        mir.insns[183].immediate != '!' ||
+        mir.insns[183].src1 != mir.insns[182].dst ||
+        mir.insns[184].src1 != mir.insns[183].dst ||
+        mir.insns[184].label != mir.insns[315].label ||
+        !mir_machine_constant_equals(mir.insns[186].dst, 8) ||
+        mir.insns[188].immediate != 0 ||
+        mir.insns[188].src1 != mir.insns[178].dst ||
+        mir.insns[189].immediate != '*' ||
+        mir.insns[189].src1 != mir.insns[186].dst ||
+        mir.insns[189].src2 != mir.insns[188].dst ||
+        mir.insns[190].src1 != mir.insns[189].dst)
+        return mir_machine_reject(
+            "catalan-driver-schedule", "second-loop-header");
+
+    for (item = 6; item < 12; ++item)
+        if (!mir_catalan_match_term_call(
+                item, mir.insns[189].dst, sum, s4096, &function) ||
+            function != plan->add_term_function)
+            return mir_machine_reject(
+                "catalan-driver-schedule", "second-terms");
+
+    if (!mir_catalan_same_array(&mir.insns[302], s4096) ||
+        !mir_machine_constant_equals(mir.insns[305].dst, 4096) ||
+        !mir_catalan_defined_function(
+            &mir.insns[307], TYPE_VOID, 2, &function) ||
+        function != plan->div_small_function ||
+        !mir_numeric_call_arguments(&mir.insns[307], 2, arguments) ||
+        arguments[0] != mir.insns[302].dst ||
+        arguments[1] != mir.insns[305].dst ||
+        !mir_machine_constant_equals(mir.insns[311].dst, 1) ||
+        mir.insns[312].immediate != '+' ||
+        mir.insns[312].src1 != mir.insns[178].dst ||
+        mir.insns[312].src2 != mir.insns[311].dst ||
+        mir.insns[313].src1 != mir.insns[312].dst ||
+        mir.insns[314].label != mir.insns[177].label)
+        return mir_machine_reject(
+            "catalan-driver-schedule", "second-loop-tail");
+
+    if (mir.insns[316].immediate < 0 ||
+        !mir_catalan_same_array(&mir.insns[318], sum) ||
+        !mir_machine_constant_equals(mir.insns[319].dst, 0) ||
+        mir.insns[320].src1 != mir.insns[318].dst ||
+        mir.insns[320].src2 != mir.insns[319].dst ||
+        mir.insns[320].immediate != 4 ||
+        mir.insns[321].src1 != mir.insns[320].dst ||
+        mir.insns[321].memory_size != 4 ||
+        !mir_catalan_long_type(mir.insns[321].type) ||
+        !mir_numeric_call_arguments(&mir.insns[323], 2, arguments) ||
+        arguments[0] != mir.insns[316].dst ||
+        arguments[1] != mir.insns[321].dst ||
+        !mir_catalan_argument(
+            317, &mir.insns[323], 0, mir.insns[316].dst) ||
+        !mir_catalan_argument(
+            322, &mir.insns[323], 1, mir.insns[321].dst))
+        return mir_machine_reject(
+            "catalan-driver-schedule", "initial-report");
+
+    function = find_global(mir.insns[323].name);
+    if (function == NULL || function->is_defined ||
+        function->is_funcptr || function->is_noreturn ||
+        !function->has_proto || function->proto_nargs != 1 ||
+        !function->proto_variadic ||
+        !mir_catalan_int_type(function->type) ||
+        type_ptr_depth(function->proto_types[0]) != 1 ||
+        (function->proto_types[0] & 15) != TYPE_CHAR ||
+        mir.insns[323].memory_flags != MIR_CALL_FLAG_VARIADIC ||
+        !mir_catalan_int_type(mir.insns[323].type) ||
+        mir.insns[323].base_name[0] == 0)
+        return mir_machine_reject(
+            "catalan-driver-schedule", "print-function");
+    plan->format_string_id = (int)mir.insns[316].immediate;
+    snprintf(plan->print_name, sizeof(plan->print_name), "%s",
+             mir.insns[323].base_name);
+
+    if (!mir_numeric_scalar_location(
+            &mir.insns[333], SC_LOCAL, 2, 0, 0,
+            &printed_offset) ||
+        printed_offset != -386 ||
+        !mir_numeric_scalar_location(
+            &mir.insns[337], SC_LOCAL, 2, 0, 0, &i_offset) ||
+        i_offset != -388 ||
+        !mir_numeric_scalar_location(
+            &mir.insns[374], SC_LOCAL, 4, 0, 0, &p_offset) ||
+        p_offset != -392 ||
+        !mir_machine_same_location(
+            &mir.insns[333], &mir.insns[357]) ||
+        !mir_machine_same_location(
+            &mir.insns[333], &mir.insns[384]) ||
+        !mir_machine_same_location(
+            &mir.insns[333], &mir.insns[415]) ||
+        !mir_machine_same_location(
+            &mir.insns[333], &mir.insns[418]) ||
+        !mir_machine_same_location(
+            &mir.insns[337], &mir.insns[343]) ||
+        !mir_machine_same_location(
+            &mir.insns[337], &mir.insns[398]) ||
+        !mir_machine_same_location(
+            &mir.insns[337], &mir.insns[425]) ||
+        !mir_machine_same_location(
+            &mir.insns[337], &mir.insns[428]) ||
+        !mir_machine_same_location(
+            &mir.insns[374], &mir.insns[380]) ||
+        !mir_machine_same_location(
+            &mir.insns[374], &mir.insns[414]))
+        return mir_machine_reject(
+            "catalan-driver-schedule", "print-locals");
+
+    if (!mir_machine_constant_equals(mir.insns[332].dst, 0) ||
+        mir.insns[333].src1 != mir.insns[332].dst ||
+        !mir_machine_constant_equals(mir.insns[335].dst, 1) ||
+        mir.insns[337].src1 != mir.insns[335].dst ||
+        !mir_machine_constant_equals(mir.insns[354].dst, 31) ||
+        mir.insns[355].immediate != '<' ||
+        mir.insns[355].src1 != mir.insns[343].dst ||
+        mir.insns[355].src2 != mir.insns[354].dst ||
+        mir.insns[356].src1 != mir.insns[355].dst ||
+        mir.insns[356].label != mir.insns[364].label ||
+        !mir_machine_constant_equals(mir.insns[358].dst, 100) ||
+        mir.insns[359].immediate != '<' ||
+        mir.insns[359].src1 != mir.insns[357].dst ||
+        mir.insns[359].src2 != mir.insns[358].dst ||
+        mir.insns[360].src1 != mir.insns[359].dst ||
+        mir.insns[360].label != mir.insns[364].label ||
+        mir.insns[363].label != mir.insns[366].label ||
+        mir.insns[365].label != mir.insns[430].label)
+        return mir_machine_reject(
+            "catalan-driver-schedule", "outer-print-loop");
+
+    if (!mir_machine_constant_equals(mir.insns[370].dst, 10000) ||
+        !mir_machine_constant_equals(mir.insns[372].dst, 10) ||
+        mir.insns[373].immediate != '/' ||
+        mir.insns[373].src1 != mir.insns[370].dst ||
+        mir.insns[373].src2 != mir.insns[372].dst ||
+        mir.insns[374].src1 != mir.insns[373].dst ||
+        mir.insns[380].src1 != mir.insns[373].dst ||
+        mir.insns[380].src2 != mir.insns[412].dst ||
+        mir.insns[380].phi_pred1 != mir.insns[366].label ||
+        mir.insns[380].phi_pred2 != mir.insns[420].label ||
+        !mir_machine_constant_equals(mir.insns[381].dst, 0) ||
+        mir.insns[382].immediate != '>' ||
+        mir.insns[382].src1 != mir.insns[380].dst ||
+        mir.insns[382].src2 != mir.insns[381].dst ||
+        mir.insns[383].src1 != mir.insns[382].dst ||
+        mir.insns[383].label != mir.insns[391].label ||
+        !mir_machine_constant_equals(mir.insns[385].dst, 100) ||
+        mir.insns[386].immediate != '<' ||
+        mir.insns[386].src1 != mir.insns[384].dst ||
+        mir.insns[386].src2 != mir.insns[385].dst ||
+        mir.insns[387].src1 != mir.insns[386].dst ||
+        mir.insns[387].label != mir.insns[391].label ||
+        mir.insns[390].label != mir.insns[393].label ||
+        mir.insns[392].label != mir.insns[422].label)
+        return mir_machine_reject(
+            "catalan-driver-schedule", "inner-print-loop");
+
+    if (!mir_machine_constant_equals(mir.insns[396].dst, 48) ||
+        !mir_catalan_same_array(&mir.insns[397], sum) ||
+        mir.insns[399].src1 != mir.insns[397].dst ||
+        mir.insns[399].src2 != mir.insns[398].dst ||
+        mir.insns[399].immediate != 4 ||
+        mir.insns[400].src1 != mir.insns[399].dst ||
+        mir.insns[400].memory_size != 4 ||
+        mir.insns[402].immediate != '/' ||
+        mir.insns[402].src1 != mir.insns[400].dst ||
+        mir.insns[402].src2 != mir.insns[380].dst ||
+        !mir_machine_constant_equals(mir.insns[404].dst, 10) ||
+        mir.insns[405].immediate != '%' ||
+        mir.insns[405].src1 != mir.insns[402].dst ||
+        mir.insns[405].src2 != mir.insns[404].dst ||
+        mir.insns[406].immediate != 0 ||
+        mir.insns[406].src1 != mir.insns[405].dst ||
+        mir.insns[407].immediate != '+' ||
+        mir.insns[407].src1 != mir.insns[396].dst ||
+        mir.insns[407].src2 != mir.insns[406].dst ||
+        !mir_catalan_int_type(mir.insns[407].type) ||
+        !mir_numeric_call_arguments(&mir.insns[409], 1, arguments) ||
+        arguments[0] != mir.insns[407].dst ||
+        !mir_catalan_argument(
+            408, &mir.insns[409], 0, mir.insns[407].dst) ||
+        !mir_machine_constant_equals(mir.insns[411].dst, 10) ||
+        mir.insns[412].immediate != '/' ||
+        mir.insns[412].src1 != mir.insns[380].dst ||
+        mir.insns[412].src2 != mir.insns[411].dst ||
+        mir.insns[414].src1 != mir.insns[412].dst ||
+        !mir_machine_constant_equals(mir.insns[416].dst, 1) ||
+        mir.insns[417].immediate != '+' ||
+        mir.insns[417].src1 != mir.insns[415].dst ||
+        mir.insns[417].src2 != mir.insns[416].dst ||
+        mir.insns[418].src1 != mir.insns[417].dst ||
+        mir.insns[421].label != mir.insns[375].label)
+        return mir_machine_reject(
+            "catalan-driver-schedule", "digit-body");
+
+    function = find_global(mir.insns[409].name);
+    if (function == NULL || function->is_defined ||
+        function->is_funcptr || function->is_noreturn ||
+        !function->has_proto || function->proto_variadic ||
+        function->proto_nargs != 1 ||
+        !mir_catalan_int_type(function->type) ||
+        !mir_catalan_int_type(function->proto_types[0]) ||
+        mir.insns[409].memory_flags != 0)
+        return mir_machine_reject(
+            "catalan-driver-schedule", "putchar-function");
+    if (find_global(mir.insns[434].name) != function ||
+        mir.insns[434].src1 >= 0 ||
+        mir.insns[434].memory_flags != 0 ||
+        !mir_catalan_int_type(mir.insns[434].type) ||
+        strcmp(mir.insns[434].base_name, mir.insns[409].base_name) ||
+        !mir_machine_constant_equals(mir.insns[432].dst, 10) ||
+        !mir_numeric_call_arguments(&mir.insns[434], 1, arguments) ||
+        arguments[0] != mir.insns[432].dst ||
+        !mir_catalan_argument(
+            433, &mir.insns[434], 0, mir.insns[432].dst) ||
+        !mir_machine_constant_equals(mir.insns[435].dst, 0) ||
+        mir.insns[436].src1 != mir.insns[435].dst)
+        return mir_machine_reject(
+            "catalan-driver-schedule", "newline-return");
+    plan->putchar_function = function;
+    return 1;
+}
+
 static void mir_fixed_point_mixed_product(
     FILE *out, int signed_offset, int unsigned_offset)
 {
@@ -1735,11 +2410,229 @@ static void mir_emit_prime_search_schedule(
             done);
 }
 
+static void mir_catalan_emit_local_address(FILE *out, int offset)
+{
+    fprintf(out,
+            "\tpush ix\n\tpop hl\n\tld de,%d\n\tadd hl,de\n",
+            offset);
+}
+
+static void mir_catalan_emit_long_argument(
+    FILE *out, unsigned long value)
+{
+    fprintf(out,
+            "\tld hl,%lu\n\tld de,%lu\n\tpush de\n\tpush hl\n",
+            value & 0xffffUL, (value >> 16) & 0xffffUL);
+}
+
+static void mir_catalan_emit_m_argument(FILE *out, int delta)
+{
+    int carry_done = new_label();
+    int shift;
+
+    fputs("\tld l,(ix-126)\n\tld h,(ix-125)\n"
+          "\tld a,h\n\trlca\n\tsbc a,a\n"
+          "\tld d,a\n\tld e,a\n", out);
+    for (shift = 0; shift < 3; ++shift)
+        fputs("\tadd hl,hl\n\trl e\n\trl d\n", out);
+    fprintf(out,
+            "\tld bc,%d\n\tadd hl,bc\n\tjp nc,L%d\n\tinc de\n"
+            "L%d:\n\tpush de\n\tpush hl\n",
+            delta, carry_done, carry_done);
+}
+
+static void mir_catalan_emit_term_call(
+    FILE *out, const struct MirCatalanDriverSchedule *plan,
+    int scale_offset, int sign, int numerator, int power, int delta)
+{
+    int cleanup;
+
+    mir_catalan_emit_m_argument(out, delta);
+    mir_catalan_emit_long_argument(out, (unsigned long)power);
+    mir_catalan_emit_long_argument(out, (unsigned long)numerator);
+    fprintf(out, "\tld hl,%d\n\tpush hl\n", sign);
+    mir_catalan_emit_local_address(out, scale_offset);
+    fputs("\tpush hl\n", out);
+    mir_catalan_emit_local_address(out, -124);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->add_term_function);
+    for (cleanup = 0; cleanup < 9; ++cleanup)
+        fputs("\tpop bc\n", out);
+}
+
+static void mir_catalan_emit_div_call(
+    FILE *out, const struct MirCatalanDriverSchedule *plan,
+    int array_offset, int divisor)
+{
+    mir_catalan_emit_long_argument(out, (unsigned long)divisor);
+    mir_catalan_emit_local_address(out, array_offset);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->div_small_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
+}
+
+static void mir_catalan_emit_zero_call(
+    FILE *out, const struct MirCatalanDriverSchedule *plan, int offset)
+{
+    mir_catalan_emit_local_address(out, offset);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->zero_function);
+    fputs("\tpop bc\n", out);
+}
+
+static void mir_catalan_emit_is_zero_call(
+    FILE *out, const struct MirCatalanDriverSchedule *plan, int offset)
+{
+    mir_catalan_emit_local_address(out, offset);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->is_zero_function);
+    fputs("\tpop bc\n", out);
+}
+
+static void mir_catalan_emit_digit(
+    FILE *out, const struct MirCatalanDriverSchedule *plan)
+{
+    fputs("\tpush bc\n\tpush de\n"
+          "\tld h,b\n\tld l,c\n"
+          "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n\tinc hl\n"
+          "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tld l,c\n\tld h,b\n\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, -128);
+    mir_emit_runtime_call(out, "__lds");
+    fputs("\tpop bc\n\tpop bc\n\tpush de\n\tpush hl\n"
+          "\tld hl,10\n\tld de,0\n", out);
+    mir_emit_runtime_call(out, "__lms");
+    fputs("\tpop bc\n\tpop bc\n\tld bc,48\n\tadd hl,bc\n"
+          "\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->putchar_function);
+    fputs("\tpop bc\n", out);
+
+    mir_machine_emit_ix_wide_load(out, -128);
+    fputs("\tpush de\n\tpush hl\n\tld hl,10\n\tld de,0\n", out);
+    mir_emit_runtime_call(out, "__lds");
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_ix_wide_store(out, -128);
+    fputs("\tpop de\n\tpop bc\n\tinc de\n", out);
+}
+
+static void mir_emit_catalan_driver_schedule(
+    FILE *out, const struct MirCatalanDriverSchedule *plan)
+{
+    static const int first_signs[6] = {1, -1, 1, -1, 1, -1};
+    static const int first_powers[6] = {2, 2, 4, 8, 8, 16};
+    static const int second_signs[6] = {-1, -1, -1, 1, 1, 1};
+    static const int second_powers[6] = {4, 8, 32, 256, 512, 2048};
+    static const int deltas[6] = {1, 2, 3, 5, 6, 7};
+    int first_loop = new_label();
+    int first_done = new_label();
+    int second_loop = new_label();
+    int second_done = new_label();
+    int outer_loop = new_label();
+    int outer_body = new_label();
+    int inner_loop = new_label();
+    int inner_done = new_label();
+    int print_done = new_label();
+    int item;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-374\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+
+    mir_catalan_emit_zero_call(out, plan, -124);
+    mir_catalan_emit_zero_call(out, plan, -250);
+    mir_catalan_emit_zero_call(out, plan, -374);
+    mir_catalan_emit_local_address(out, -250);
+    fputs("\tld (hl),1\n\tinc hl\n\txor a\n"
+          "\tld (hl),a\n\tinc hl\n\tld (hl),a\n\tinc hl\n\tld (hl),a\n",
+          out);
+    mir_catalan_emit_local_address(out, -374);
+    fputs("\tld (hl),1\n\tinc hl\n\txor a\n"
+          "\tld (hl),a\n\tinc hl\n\tld (hl),a\n\tinc hl\n\tld (hl),a\n"
+          "\tld (ix-126),0\n\tld (ix-125),0\n", out);
+
+    fprintf(out, "L%d:\n", first_loop);
+    mir_catalan_emit_is_zero_call(out, plan, -250);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n", first_done);
+    for (item = 0; item < 6; ++item)
+        mir_catalan_emit_term_call(
+            out, plan, -250, first_signs[item], 3,
+            first_powers[item], deltas[item]);
+    mir_catalan_emit_div_call(out, plan, -250, 16);
+    fputs("\tinc (ix-126)\n", out);
+    fprintf(out, "\tjp nz,L%d\n", first_loop);
+    fputs("\tinc (ix-125)\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            first_loop, first_done);
+
+    fputs("\tld (ix-126),0\n\tld (ix-125),0\n", out);
+    fprintf(out, "L%d:\n", second_loop);
+    mir_catalan_emit_is_zero_call(out, plan, -374);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n", second_done);
+    for (item = 0; item < 6; ++item)
+        mir_catalan_emit_term_call(
+            out, plan, -374, second_signs[item], 1,
+            second_powers[item], deltas[item]);
+    mir_catalan_emit_div_call(out, plan, -374, 4096);
+    fputs("\tinc (ix-126)\n", out);
+    fprintf(out, "\tjp nz,L%d\n", second_loop);
+    fputs("\tinc (ix-125)\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            second_loop, second_done);
+
+    mir_machine_emit_ix_wide_load(out, -124);
+    fputs("\tpush de\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->format_string_id);
+    mir_emit_runtime_call(out, plan->print_name);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tpush ix\n\tpop hl\n\tld bc,-120\n\tadd hl,bc\n"
+          "\tld b,h\n\tld c,l\n\tld de,0\n", out);
+
+    fprintf(out,
+            "L%d:\n"
+            "\tpush ix\n\tpop hl\n"
+            "\tld a,h\n\tcp b\n\tjp nz,L%d\n"
+            "\tld a,l\n\tcp c\n\tjp z,L%d\n"
+            "L%d:\n"
+            "\tld a,d\n\tor a\n\tjp nz,L%d\n"
+            "\tld a,e\n\tcp 100\n\tjp nc,L%d\n"
+            "\tpush de\n\tld hl,1000\n\tld de,0\n",
+            outer_loop, outer_body, print_done,
+            outer_body, print_done, print_done);
+    mir_machine_emit_ix_wide_store(out, -128);
+    fputs("\tpop de\n", out);
+
+    fprintf(out,
+            "L%d:\n"
+            "\tld a,(ix-125)\n\tor (ix-126)\n"
+            "\tor (ix-127)\n\tor (ix-128)\n"
+            "\tjp z,L%d\n"
+            "\tld a,d\n\tor a\n\tjp nz,L%d\n"
+            "\tld a,e\n\tcp 100\n\tjp nc,L%d\n",
+            inner_loop, inner_done,
+            inner_done, inner_done);
+    mir_catalan_emit_digit(out, plan);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            inner_loop, inner_done);
+    fputs("\tinc bc\n\tinc bc\n\tinc bc\n\tinc bc\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            outer_loop, print_done);
+
+    fputs("\tld hl,10\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->putchar_function);
+    fputs("\tpop bc\n\tld hl,0\n"
+          "\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 int mir_try_emit_numeric_kernels(FILE *out, int phase)
 {
     if (phase == 0) {
         struct MirUnsignedLongSqrtSchedule sqrt_plan;
         struct MirPrimeSearchSchedule prime_plan;
+        struct MirCatalanDriverSchedule catalan_plan;
 
         if (mir_match_unsigned_long_sqrt_schedule(&sqrt_plan)) {
             mir_emit_unsigned_long_sqrt_schedule(out, &sqrt_plan);
@@ -1747,6 +2640,10 @@ int mir_try_emit_numeric_kernels(FILE *out, int phase)
         }
         if (mir_match_prime_search_schedule(&prime_plan)) {
             mir_emit_prime_search_schedule(out, &prime_plan);
+            return 1;
+        }
+        if (mir_match_catalan_driver_schedule(&catalan_plan)) {
+            mir_emit_catalan_driver_schedule(out, &catalan_plan);
             return 1;
         }
     } else if (phase == 1) {
