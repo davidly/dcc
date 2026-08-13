@@ -3,6 +3,50 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-13 packed-record array batch (working tree)
+
+- Branch/base: `pr/143` at `ce9d7f3`. The aggregate-check module now admits
+  the 13-block `tarray.test_many` `final-cost-policy` fallback through a
+  strict structural matcher over all **319 MIR instructions**. It validates
+  the exact opcode stream, three distinct packed-record arrays and their
+  **10/20/10** dimensions, 14-byte stride and contiguous **1/2/4/1/2/4**
+  member layout, both loop PHIs and bounds, all initialization formulas,
+  member aliases, six comparisons, the two intentionally different fields
+  used by the signed failure reports, four memset fastcalls, six selected
+  formatted-output calls and the final dump call. The production matcher
+  contains no function, helper, local, global, format or output names and no
+  output hash.
+- The dedicated emitter preserves both guard-array clear pairs, every record
+  initialization and indexed check, all conditional failure calls and their
+  promoted word/long arguments, the final byte dump, stack checking and void
+  return. It uses a compact **4-byte IX frame** for the induction value and
+  record alias, and emits no IY instruction.
+- Normal selected/captured metrics are **5,648/7,086 bytes** and
+  **566/727 instructions**. Stack-check metrics are **5,677/7,115 bytes**
+  and **567/728 instructions**.
+- Stack-check full-mode selected/fallback totals are
+  **3,595,265/3,669,812 cycles and 9,728/9,984 bytes** peep plus
+  **3,735,411/3,760,677 cycles and 10,368/10,752 bytes** nopeep. Both
+  selected and forced-fallback runs pass the existing `tarray` baseline.
+- A renamed function/global/local/dump-helper fixture selects the same
+  13-block family at **5,644/7,082 bytes** and **566/727 instructions**.
+  Selected/fallback output is identical in both modes; peep totals are
+  **3,531,875/3,606,260 cycles and 6,912/7,168 bytes**, while nopeep totals
+  are **3,671,859/3,697,125 cycles and 7,552/7,936 bytes**. Changing only
+  the first packed member's signedness is rejected and remains on
+  `final-cost-policy` at **11,760/7,181 bytes** and
+  **1,095/740 instructions**.
+- The regression-gated census advances **2,070/2,105 (98.34%)** to
+  **2,071/2,105 (98.38%)**, adds exactly `tarray.test_many`, removes no
+  accepted function, moves selector counts from **1,334 spilled / 384
+  scheduled** to **1,333 spilled / 385 scheduled**, and reduces
+  `final-cost-policy` fallbacks **35 -> 34**.
+- The aggregate-check module grows from **2,308 to 3,256 source lines**
+  (**+948**). Its standalone object defines only
+  `mir_try_emit_aggregate_checks [T]` globally and has zero exported
+  read-only or writable data. The canonical build and `git diff --check`
+  pass. No performance baseline was changed.
+
 ## 2026-08-13 endgame 13-block batch (working tree)
 
 - Branch/base: `pr/143` at `b583f51`. The remaining 13-block mains in the

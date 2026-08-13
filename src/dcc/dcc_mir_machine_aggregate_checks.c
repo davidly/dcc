@@ -348,6 +348,20 @@ struct MirTouchLocalsPlan {
     int frame_bytes;
 };
 
+struct MirPackedRecordRunner {
+    struct Sym *guards[2];
+    struct Sym *records;
+    struct Sym *memset_function;
+    struct Sym *print_function;
+    struct Sym *dump_function;
+    int strings[6];
+    char print_call_name[64];
+    int guard_count;
+    int record_count;
+    int record_stride;
+    int member_offsets[6];
+};
+
 static int mir_aggregate_direct_function(
     int instruction, struct Sym **function_out)
 {
@@ -1173,6 +1187,653 @@ cleanup:
     return result;
 }
 
+static int mir_packed_scalar_type(
+    int type, int base, int is_unsigned, int pointer_depth)
+{
+    return type_ptr_depth(type) == pointer_depth &&
+           (type & 15) == base &&
+           ((type & TYPE_UNSIGNED) != 0) == is_unsigned;
+}
+
+static int mir_packed_constant(
+    int instruction, long expected, int base, int is_unsigned)
+{
+    const struct MirInsn *insn;
+
+    if (instruction < 0 || instruction >= mir.count)
+        return 0;
+    insn = &mir.insns[instruction];
+    return insn->opcode == MIR_CONST &&
+           insn->immediate == expected &&
+           mir_packed_scalar_type(insn->type, base, is_unsigned, 0);
+}
+
+static int mir_packed_binary(
+    int instruction, int left, int right, int operation,
+    int base, int is_unsigned)
+{
+    const struct MirInsn *insn;
+
+    if (instruction < 0 || instruction >= mir.count)
+        return 0;
+    insn = &mir.insns[instruction];
+    return insn->opcode == MIR_BINARY &&
+           insn->src1 == mir.insns[left].dst &&
+           insn->src2 == mir.insns[right].dst &&
+           insn->immediate == operation &&
+           mir_packed_scalar_type(insn->type, base, is_unsigned, 0);
+}
+
+static int mir_packed_unary(
+    int instruction, int source, int operation,
+    int base, int is_unsigned)
+{
+    const struct MirInsn *insn;
+
+    if (instruction < 0 || instruction >= mir.count)
+        return 0;
+    insn = &mir.insns[instruction];
+    return insn->opcode == MIR_UNARY &&
+           insn->src1 == mir.insns[source].dst &&
+           insn->immediate == operation &&
+           mir_packed_scalar_type(insn->type, base, is_unsigned, 0);
+}
+
+static int mir_packed_call_arguments(
+    const struct MirInsn *call, int count, int *arguments)
+{
+    int found = 0;
+    int instruction;
+
+    memset(arguments, 0xff, (size_t)count * sizeof(*arguments));
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *arg = &mir.insns[instruction];
+        int index;
+
+        if (arg->opcode != MIR_ARG ||
+            arg->secondary_offset != call->secondary_offset)
+            continue;
+        index = (int)arg->immediate;
+        if (index < 0 || index >= count || arguments[index] >= 0)
+            return 0;
+        arguments[index] = arg->src1;
+        ++found;
+    }
+    return found == count;
+}
+
+static struct Sym *mir_packed_global_array(
+    int instruction, int count, int stride)
+{
+    const struct MirInsn *address;
+    struct Sym *symbol;
+
+    if (instruction < 0 || instruction >= mir.count)
+        return NULL;
+    address = &mir.insns[instruction];
+    if (address->opcode != MIR_ADDRESS ||
+        type_ptr_depth(address->type) != 1)
+        return NULL;
+    symbol = find_global(address->name);
+    if (symbol == NULL || !symbol->is_defined || symbol->is_volatile ||
+        symbol->storage != SC_GLOBAL || !symbol->is_array ||
+        symbol->is_vla || symbol->has_init || symbol->init_count != 0 ||
+        symbol->dim_count != 1 || symbol->dims[0] != count ||
+        symbol->array_len != count || symbol->elem_size != stride ||
+        symbol->size != count * stride)
+        return NULL;
+    return symbol;
+}
+
+static int mir_packed_same_global(
+    int instruction, struct Sym *symbol)
+{
+    const struct MirInsn *address;
+
+    if (instruction < 0 || instruction >= mir.count)
+        return 0;
+    address = &mir.insns[instruction];
+    return address->opcode == MIR_ADDRESS &&
+           find_global(address->name) == symbol;
+}
+
+static int mir_packed_member(
+    int instruction, int base_instruction, int offset,
+    int scalar_base, int is_unsigned, int width)
+{
+    const struct MirInsn *member;
+
+    if (instruction < 0 || instruction >= mir.count)
+        return 0;
+    member = &mir.insns[instruction];
+    return member->opcode == MIR_MEMBER_ADDRESS &&
+           member->src1 == mir.insns[base_instruction].dst &&
+           member->immediate == offset &&
+           member->memory_size == width &&
+           member->memory_flags == 0 &&
+           mir_packed_scalar_type(
+               member->type, scalar_base, is_unsigned, 1);
+}
+
+static int mir_packed_load(
+    int instruction, int address_instruction,
+    int scalar_base, int is_unsigned, int width)
+{
+    const struct MirInsn *load;
+
+    if (instruction < 0 || instruction >= mir.count)
+        return 0;
+    load = &mir.insns[instruction];
+    return load->opcode == MIR_LOAD_INDIRECT &&
+           load->src1 == mir.insns[address_instruction].dst &&
+           load->memory_size == width &&
+           load->memory_flags == 0 &&
+           load->bit_width == 0 &&
+           mir_packed_scalar_type(
+               load->type, scalar_base, is_unsigned, 0);
+}
+
+static int mir_packed_store(
+    int instruction, int address_instruction, int value_instruction,
+    int width)
+{
+    const struct MirInsn *store;
+
+    if (instruction < 0 || instruction >= mir.count)
+        return 0;
+    store = &mir.insns[instruction];
+    return store->opcode == MIR_STORE_INDIRECT &&
+           store->src1 == mir.insns[address_instruction].dst &&
+           store->src2 == mir.insns[value_instruction].dst &&
+           store->memory_size == width &&
+           store->memory_flags == 0 &&
+           store->bit_width == 0;
+}
+
+static int mir_packed_branch(int instruction, int value, int target)
+{
+    return mir.insns[instruction].opcode == MIR_BRANCH_FALSE &&
+           mir.insns[instruction].src1 == mir.insns[value].dst &&
+           mir.insns[instruction].label == mir.insns[target].label;
+}
+
+static int mir_packed_jump(int instruction, int target)
+{
+    return mir.insns[instruction].opcode == MIR_JUMP &&
+           mir.insns[instruction].label == mir.insns[target].label;
+}
+
+static int mir_packed_phi(
+    int instruction, int first, int second,
+    int first_predecessor, int second_predecessor)
+{
+    const struct MirInsn *phi = &mir.insns[instruction];
+
+    return phi->opcode == MIR_PHI &&
+           phi->src1 == mir.insns[first].dst &&
+           phi->src2 == mir.insns[second].dst &&
+           phi->phi_pred1 == mir.insns[first_predecessor].label &&
+           phi->phi_pred2 == mir.insns[second_predecessor].label &&
+           mir_packed_scalar_type(phi->type, TYPE_INT, 1, 0);
+}
+
+static int mir_packed_direct_function(
+    int instruction, struct Sym **function_out)
+{
+    const struct MirInsn *call;
+    struct Sym *function;
+
+    if (instruction < 0 || instruction >= mir.count ||
+        mir.insns[instruction].opcode != MIR_CALL)
+        return 0;
+    call = &mir.insns[instruction];
+    function = find_global(call->name);
+    if (function == NULL || function->storage != SC_FUNC ||
+        function->is_funcptr || function->is_noreturn)
+        return 0;
+    *function_out = function;
+    return 1;
+}
+
+static const char *mir_packed_call_name(
+    const struct MirInsn *call, struct Sym *function)
+{
+    return call->base_name[0] != 0
+        ? call->base_name
+        : asm_name_for(sym_asm_name(function));
+}
+
+static int mir_match_packed_record_runner(
+    struct MirPackedRecordRunner *plan)
+{
+    static const int expected_opcodes[319] = {
+        MIR_LABEL, MIR_ADDRESS, MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG,
+        MIR_CONST, MIR_NOP, MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_NOP,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CONST, MIR_NOP, MIR_ARG,
+        MIR_CALL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_NOP, MIR_STORE,
+        MIR_LABEL, MIR_PHI, MIR_NOP, MIR_CONST, MIR_CONST, MIR_BINARY,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_ADDRESS, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_STORE, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_NOP,
+        MIR_UNARY, MIR_STORE_INDIRECT, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_NOP,
+        MIR_NOP, MIR_CONST, MIR_NOP, MIR_BINARY, MIR_STORE_INDIRECT,
+        MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_NOP, MIR_UNARY, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_NOP, MIR_UNARY, MIR_UNARY, MIR_UNARY, MIR_STORE_INDIRECT,
+        MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_NOP, MIR_NOP, MIR_UNARY,
+        MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_NOP, MIR_UNARY, MIR_UNARY, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_STORE_INDIRECT, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_ADDRESS,
+        MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CONST, MIR_NOP,
+        MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_NOP, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_CONST, MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP,
+        MIR_PHI, MIR_NOP, MIR_CONST, MIR_CONST, MIR_BINARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_STORE, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP,
+        MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_NOP, MIR_NOP, MIR_ARG, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_UNARY, MIR_ARG, MIR_NOP, MIR_UNARY,
+        MIR_ARG, MIR_CALL, MIR_LABEL, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_NOP, MIR_NOP, MIR_CONST, MIR_NOP,
+        MIR_BINARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_NOP, MIR_NOP, MIR_ARG, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_UNARY, MIR_ARG, MIR_NOP, MIR_UNARY,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_ARG, MIR_CALL, MIR_LABEL,
+        MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_UNARY,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_NOP, MIR_ARG,
+        MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_ARG,
+        MIR_NOP, MIR_UNARY, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_ARG,
+        MIR_CALL, MIR_LABEL, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_NOP, MIR_UNARY, MIR_UNARY, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_NOP,
+        MIR_ARG, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY,
+        MIR_ARG, MIR_NOP, MIR_UNARY, MIR_UNARY, MIR_ARG, MIR_CALL,
+        MIR_LABEL, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP,
+        MIR_NOP, MIR_UNARY, MIR_CONST, MIR_BINARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_NOP,
+        MIR_ARG, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY,
+        MIR_ARG, MIR_NOP, MIR_UNARY, MIR_UNARY, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_ARG, MIR_CALL, MIR_LABEL, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_UNARY, MIR_UNARY,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_NOP, MIR_ARG,
+        MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_ARG,
+        MIR_NOP, MIR_UNARY, MIR_UNARY, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_ARG, MIR_CALL, MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL,
+        MIR_ADDRESS, MIR_NOP, MIR_ARG, MIR_CONST, MIR_NOP, MIR_ARG,
+        MIR_CONST, MIR_NOP, MIR_ARG, MIR_CALL
+    };
+    static const int labels[13] = {
+        0, 30, 89, 95, 125, 160, 188,
+        216, 241, 270, 300, 302, 308
+    };
+    static const int first_member_addresses[6] =
+        {44, 49, 57, 65, 72, 80};
+    static const int first_member_bases[6] =
+        {43, 48, 56, 64, 71, 79};
+    static const int first_stores[6] =
+        {47, 55, 63, 70, 78, 87};
+    static const int first_values[6] =
+        {46, 54, 62, 69, 77, 86};
+    static const int second_member_addresses[12] = {
+        140, 152, 162, 177, 190, 205,
+        218, 232, 243, 258, 272, 288
+    };
+    static const int second_member_bases[12] = {
+        139, 151, 161, 176, 189, 204,
+        217, 231, 242, 257, 271, 287
+    };
+    static const int second_loads[12] = {
+        141, 153, 163, 178, 191, 206,
+        219, 233, 244, 259, 273, 289
+    };
+    static const int second_members[12] =
+        {0, 0, 1, 1, 2, 2, 3, 3, 4, 1, 5, 2};
+    static const int member_kinds[6] = {
+        TYPE_CHAR, TYPE_INT, TYPE_LONG,
+        TYPE_CHAR, TYPE_INT, TYPE_LONG
+    };
+    static const int member_unsigned[6] = {1, 1, 1, 0, 0, 0};
+    static const int member_widths[6] = {1, 2, 4, 1, 2, 4};
+    static const int print_calls[6] = {159, 187, 215, 240, 269, 299};
+    static const int print_strings[6] = {146, 171, 199, 226, 252, 282};
+    static const int print_actuals[6] = {154, 179, 206, 234, 260, 289};
+    static const int print_expected[6] = {157, 185, 213, 238, 267, 297};
+    static const int print_actual_unsigned[6] = {1, 1, 1, 0, 0, 1};
+    struct Sym *memset_function = NULL;
+    struct Sym *print_function = NULL;
+    struct Sym *dump_function = NULL;
+    int arguments[4];
+    int destination;
+    int fill;
+    int count;
+    int instruction;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 319 || mir.next_value != 235 ||
+        mir_cfg_block_count() != 13 || mir.local_bytes != 8 ||
+        mir.aggregate_temp_bytes != 0 || mir.has_vla ||
+        (mir.return_type & 15) != TYPE_VOID ||
+        type_ptr_depth(mir.return_type) != 0)
+        return mir_machine_reject("packed-record-runner", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "packed-record-runner", "opcodes");
+    for (item = 0; item < 13; ++item)
+        if (mir.insns[labels[item]].opcode != MIR_LABEL)
+            return mir_machine_reject(
+                "packed-record-runner", "labels");
+
+    if (!mir_packed_constant(4, 0, TYPE_INT, 0) ||
+        !mir_packed_constant(6, 140, TYPE_INT, 0) ||
+        !mir_packed_constant(13, 0, TYPE_INT, 0) ||
+        !mir_packed_constant(15, 140, TYPE_INT, 0) ||
+        !mir_packed_constant(27, 0, TYPE_INT, 0) ||
+        !mir_packed_constant(33, 280, TYPE_INT, 0) ||
+        !mir_packed_constant(34, 14, TYPE_INT, 0) ||
+        !mir_packed_constant(52, 2, TYPE_INT, 0) ||
+        !mir_packed_constant(61, 4, TYPE_LONG, 1) ||
+        !mir_packed_constant(76, 2, TYPE_INT, 0) ||
+        !mir_packed_constant(85, 4, TYPE_LONG, 0) ||
+        mir.insns[91].immediate != 1 ||
+        !mir_packed_constant(99, 0, TYPE_INT, 0) ||
+        !mir_packed_constant(101, 140, TYPE_INT, 0) ||
+        !mir_packed_constant(108, 0, TYPE_INT, 0) ||
+        !mir_packed_constant(110, 140, TYPE_INT, 0) ||
+        !mir_packed_constant(122, 0, TYPE_INT, 0) ||
+        !mir_packed_constant(129, 280, TYPE_INT, 0) ||
+        !mir_packed_constant(130, 14, TYPE_INT, 0) ||
+        !mir_packed_constant(166, 2, TYPE_INT, 0) ||
+        !mir_packed_constant(184, 2, TYPE_LONG, 1) ||
+        !mir_packed_constant(195, 4, TYPE_LONG, 1) ||
+        !mir_packed_constant(212, 4, TYPE_LONG, 1) ||
+        !mir_packed_constant(248, 2, TYPE_INT, 0) ||
+        !mir_packed_constant(266, 2, TYPE_LONG, 0) ||
+        !mir_packed_constant(278, 4, TYPE_LONG, 0) ||
+        !mir_packed_constant(296, 4, TYPE_LONG, 0) ||
+        mir.insns[304].immediate != 1 ||
+        !mir_packed_constant(312, 280, TYPE_INT, 0) ||
+        !mir_packed_constant(315, 4, TYPE_INT, 0))
+        return mir_machine_reject(
+            "packed-record-runner", "constants");
+
+    plan->guard_count = 10;
+    plan->record_count = 20;
+    plan->record_stride = 14;
+    plan->guards[0] =
+        mir_packed_global_array(1, plan->guard_count, plan->record_stride);
+    plan->guards[1] =
+        mir_packed_global_array(10, plan->guard_count, plan->record_stride);
+    plan->records =
+        mir_packed_global_array(39, plan->record_count, plan->record_stride);
+    if (plan->guards[0] == NULL || plan->guards[1] == NULL ||
+        plan->records == NULL ||
+        plan->guards[0] == plan->guards[1] ||
+        plan->guards[0] == plan->records ||
+        plan->guards[1] == plan->records ||
+        !mir_packed_same_global(96, plan->guards[0]) ||
+        !mir_packed_same_global(105, plan->guards[1]) ||
+        !mir_packed_same_global(135, plan->records) ||
+        !mir_packed_same_global(309, plan->records))
+        return mir_machine_reject(
+            "packed-record-runner", "arrays");
+
+    for (item = 0; item < 4; ++item) {
+        int call_index = item == 0 ? 9 : item == 1 ? 18 :
+                         item == 2 ? 104 : 113;
+        int root_index = item == 0 ? 1 : item == 1 ? 10 :
+                         item == 2 ? 96 : 105;
+        int zero_index = item == 0 ? 4 : item == 1 ? 13 :
+                         item == 2 ? 99 : 108;
+        int size_index = item == 0 ? 6 : item == 1 ? 15 :
+                         item == 2 ? 101 : 110;
+        struct Sym *function;
+
+        if (!mir_packed_direct_function(call_index, &function) ||
+            !mir_call_is_memset_fastcall(
+                call_index, &destination, &fill, &count) ||
+            destination != mir.insns[root_index].dst ||
+            fill != mir.insns[zero_index].dst ||
+            count != mir.insns[size_index].dst ||
+            (item != 0 && function != memset_function))
+            return mir_machine_reject(
+                "packed-record-runner", "memset-calls");
+        if (item == 0)
+            memset_function = function;
+    }
+    plan->memset_function = memset_function;
+
+    if (!mir_machine_same_location(
+            &mir.insns[29], &mir.insns[31]) ||
+        !mir_machine_same_location(
+            &mir.insns[29], &mir.insns[93]) ||
+        !mir_machine_same_location(
+            &mir.insns[124], &mir.insns[127]) ||
+        !mir_machine_same_location(
+            &mir.insns[124], &mir.insns[306]) ||
+        mir_machine_same_location(
+            &mir.insns[29], &mir.insns[124]) ||
+        mir.insns[29].src1 != mir.insns[27].dst ||
+        mir.insns[93].src1 != mir.insns[92].dst ||
+        mir.insns[124].src1 != mir.insns[122].dst ||
+        mir.insns[306].src1 != mir.insns[305].dst ||
+        !mir_packed_phi(31, 27, 92, 0, 89) ||
+        !mir_packed_phi(127, 122, 305, 95, 302) ||
+        !mir_packed_binary(35, 33, 34, '/', TYPE_INT, 0) ||
+        !mir_packed_binary(36, 31, 35, '<', TYPE_INT, 0) ||
+        !mir_packed_branch(37, 36, 95) ||
+        mir.insns[92].src1 != mir.insns[31].dst ||
+        mir.insns[92].src2 != mir.insns[91].dst ||
+        mir.insns[92].immediate != '+' ||
+        !mir_packed_jump(94, 30) ||
+        !mir_packed_binary(131, 129, 130, '/', TYPE_INT, 0) ||
+        !mir_packed_binary(132, 127, 131, '<', TYPE_INT, 0) ||
+        !mir_packed_branch(133, 132, 308) ||
+        mir.insns[305].src1 != mir.insns[127].dst ||
+        mir.insns[305].src2 != mir.insns[304].dst ||
+        mir.insns[305].immediate != '+' ||
+        !mir_packed_jump(307, 125))
+        return mir_machine_reject(
+            "packed-record-runner", "loops");
+
+    if (mir.insns[41].src1 != mir.insns[39].dst ||
+        mir.insns[41].src2 != mir.insns[31].dst ||
+        mir.insns[41].immediate != plan->record_stride ||
+        mir.insns[41].memory_size != plan->record_stride ||
+        mir.insns[42].src1 != mir.insns[41].dst ||
+        mir.insns[42].memory_size != 2 ||
+        mir.insns[42].memory_flags != 0 ||
+        mir.insns[137].src1 != mir.insns[135].dst ||
+        mir.insns[137].src2 != mir.insns[127].dst ||
+        mir.insns[137].immediate != plan->record_stride ||
+        mir.insns[137].memory_size != plan->record_stride ||
+        mir.insns[138].src1 != mir.insns[137].dst ||
+        mir.insns[138].memory_size != 2 ||
+        mir.insns[138].memory_flags != 0 ||
+        !mir_machine_same_location(
+            &mir.insns[42], &mir.insns[138]))
+        return mir_machine_reject(
+            "packed-record-runner", "record-indexing");
+    for (item = 0; item < 6; ++item) {
+        const struct MirInsn *member =
+            &mir.insns[first_member_addresses[item]];
+
+        plan->member_offsets[item] = (int)member->immediate;
+        if (!mir_machine_same_location(
+                &mir.insns[42],
+                &mir.insns[first_member_bases[item]]) ||
+            !mir_packed_member(
+                first_member_addresses[item],
+                first_member_bases[item],
+                plan->member_offsets[item],
+                member_kinds[item], member_unsigned[item],
+                member_widths[item]) ||
+            !mir_packed_store(
+                first_stores[item],
+                first_member_addresses[item],
+                first_values[item], member_widths[item]))
+            return mir_machine_reject(
+                "packed-record-runner", "initializers");
+        if (item > 0 &&
+            plan->member_offsets[item] !=
+                plan->member_offsets[item - 1] +
+                member_widths[item - 1])
+            return mir_machine_reject(
+                "packed-record-runner", "packed-layout");
+    }
+    if (plan->member_offsets[0] != 0 ||
+        plan->member_offsets[5] + member_widths[5] !=
+            plan->record_stride ||
+        !mir_packed_unary(46, 31, 0, TYPE_CHAR, 1) ||
+        !mir_packed_binary(54, 31, 52, '*', TYPE_INT, 1) ||
+        !mir_packed_unary(59, 31, 0, TYPE_LONG, 1) ||
+        !mir_packed_binary(62, 59, 61, '*', TYPE_LONG, 1) ||
+        !mir_packed_unary(67, 31, 0, TYPE_CHAR, 0) ||
+        !mir_packed_unary(68, 67, '-', TYPE_INT, 0) ||
+        !mir_packed_unary(69, 68, 0, TYPE_CHAR, 0) ||
+        !mir_packed_unary(75, 31, '-', TYPE_INT, 0) ||
+        !mir_packed_binary(77, 75, 76, '*', TYPE_INT, 0) ||
+        !mir_packed_unary(82, 31, 0, TYPE_LONG, 0) ||
+        !mir_packed_unary(83, 82, '-', TYPE_LONG, 0) ||
+        !mir_packed_binary(86, 83, 85, '*', TYPE_LONG, 0))
+        return mir_machine_reject(
+            "packed-record-runner", "initializer-values");
+
+    for (item = 0; item < 12; ++item) {
+        int member = second_members[item];
+
+        if (!mir_machine_same_location(
+                &mir.insns[138],
+                &mir.insns[second_member_bases[item]]) ||
+            !mir_packed_member(
+                second_member_addresses[item],
+                second_member_bases[item],
+                plan->member_offsets[member],
+                member_kinds[member], member_unsigned[member],
+                member_widths[member]) ||
+            !mir_packed_load(
+                second_loads[item],
+                second_member_addresses[item],
+                member_kinds[member], member_unsigned[member],
+                member_widths[member]))
+            return mir_machine_reject(
+                "packed-record-runner", "check-loads");
+    }
+    if (!mir_packed_unary(143, 141, 0, TYPE_INT, 0) ||
+        !mir_packed_binary(144, 143, 127, TOK_NE, TYPE_INT, 0) ||
+        !mir_packed_branch(145, 144, 160) ||
+        !mir_packed_binary(168, 127, 166, '*', TYPE_INT, 1) ||
+        !mir_packed_binary(169, 163, 168, TOK_NE, TYPE_INT, 0) ||
+        !mir_packed_branch(170, 169, 188) ||
+        !mir_packed_unary(193, 127, 0, TYPE_LONG, 1) ||
+        !mir_packed_binary(196, 193, 195, '*', TYPE_LONG, 1) ||
+        !mir_packed_binary(197, 191, 196, TOK_NE, TYPE_INT, 0) ||
+        !mir_packed_branch(198, 197, 216) ||
+        !mir_packed_unary(221, 127, 0, TYPE_CHAR, 0) ||
+        !mir_packed_unary(222, 221, '-', TYPE_INT, 0) ||
+        !mir_packed_unary(223, 219, 0, TYPE_INT, 0) ||
+        !mir_packed_binary(224, 223, 222, TOK_NE, TYPE_INT, 0) ||
+        !mir_packed_branch(225, 224, 241) ||
+        !mir_packed_unary(247, 127, '-', TYPE_INT, 0) ||
+        !mir_packed_binary(249, 247, 248, '*', TYPE_INT, 0) ||
+        !mir_packed_binary(250, 244, 249, TOK_NE, TYPE_INT, 0) ||
+        !mir_packed_branch(251, 250, 270) ||
+        !mir_packed_unary(275, 127, 0, TYPE_LONG, 0) ||
+        !mir_packed_unary(276, 275, '-', TYPE_LONG, 0) ||
+        !mir_packed_binary(279, 276, 278, '*', TYPE_LONG, 0) ||
+        !mir_packed_binary(280, 273, 279, TOK_NE, TYPE_INT, 0) ||
+        !mir_packed_branch(281, 280, 300))
+        return mir_machine_reject(
+            "packed-record-runner", "checks");
+
+    for (item = 0; item < 6; ++item) {
+        const struct MirInsn *call = &mir.insns[print_calls[item]];
+        const char *call_name;
+        struct Sym *function;
+
+        if (!mir_packed_direct_function(
+                print_calls[item], &function) ||
+            call->memory_flags != MIR_CALL_FLAG_VARIADIC ||
+            call->src1 >= 0 ||
+            !mir_packed_call_arguments(call, 4, arguments) ||
+            arguments[0] != mir.insns[print_strings[item]].dst ||
+            arguments[1] != mir.insns[127].dst ||
+            arguments[2] != mir.insns[print_actuals[item]].dst ||
+            arguments[3] != mir.insns[print_expected[item]].dst ||
+            mir.insns[print_strings[item]].immediate < 0 ||
+            !mir_packed_scalar_type(
+                mir.insns[print_strings[item]].type,
+                TYPE_CHAR, 0, 1) ||
+            !mir_packed_scalar_type(
+                mir.insns[127].type,
+                TYPE_INT, 1, 0) ||
+            !mir_packed_scalar_type(
+                mir.insns[print_actuals[item]].type,
+                TYPE_LONG, print_actual_unsigned[item], 0) ||
+            !mir_packed_scalar_type(
+                mir.insns[print_expected[item]].type,
+                TYPE_LONG, item < 3, 0))
+            return mir_machine_reject(
+                "packed-record-runner", "print-calls");
+        call_name = mir_packed_call_name(call, function);
+        if (strlen(call_name) >= sizeof(plan->print_call_name) ||
+            (item != 0 &&
+             (function != print_function ||
+              strcmp(call_name, plan->print_call_name))))
+            return mir_machine_reject(
+                "packed-record-runner", "print-identity");
+        if (item == 0) {
+            print_function = function;
+            strcpy(plan->print_call_name, call_name);
+        }
+        plan->strings[item] =
+            (int)mir.insns[print_strings[item]].immediate;
+    }
+    if (!print_function->has_proto ||
+        !print_function->proto_variadic ||
+        print_function->proto_nargs != 1 ||
+        !mir_packed_scalar_type(
+            print_function->type, TYPE_INT, 0, 0) ||
+        !mir_packed_scalar_type(
+            print_function->proto_types[0], TYPE_CHAR, 0, 1))
+        return mir_machine_reject(
+            "packed-record-runner", "print-prototype");
+    plan->print_function = print_function;
+
+    if (!mir_packed_direct_function(318, &dump_function) ||
+        dump_function == memset_function ||
+        dump_function == print_function ||
+        mir.insns[318].memory_flags != 0 ||
+        !mir_packed_call_arguments(
+            &mir.insns[318], 3, arguments) ||
+        arguments[0] != mir.insns[309].dst ||
+        arguments[1] != mir.insns[312].dst ||
+        arguments[2] != mir.insns[315].dst ||
+        !dump_function->has_proto ||
+        dump_function->proto_variadic ||
+        dump_function->proto_nargs != 3 ||
+        (dump_function->type & 15) != TYPE_VOID ||
+        type_ptr_depth(dump_function->type) != 0 ||
+        !mir_packed_scalar_type(
+            dump_function->proto_types[0], TYPE_CHAR, 1, 1) ||
+        !mir_packed_scalar_type(
+            dump_function->proto_types[1], TYPE_INT, 1, 0) ||
+        !mir_packed_scalar_type(
+            dump_function->proto_types[2], TYPE_INT, 1, 0))
+        return mir_machine_reject(
+            "packed-record-runner", "dump-call");
+    plan->dump_function = dump_function;
+    return 1;
+}
+
 static int mir_match_multidim_aggregate_checks(
     struct MirAggregateMultidimChecks *plan)
 {
@@ -1922,6 +2583,288 @@ static void mir_aggregate_scale_hl(FILE *out, int factor)
         fputs("\tadd hl,de\n", out);
 }
 
+static void mir_packed_emit_record_address(
+    FILE *out, int offset)
+{
+    int step;
+
+    fputs("\tld l,(ix-4)\n\tld h,(ix-3)\n", out);
+    for (step = 0; step < offset; ++step)
+        fputs("\tinc hl\n", out);
+}
+
+static void mir_packed_emit_index_value(
+    FILE *out, int scale, int negate)
+{
+    int factor;
+
+    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n", out);
+    for (factor = 1; factor < scale; factor *= 2)
+        fputs("\tadd hl,hl\n", out);
+    if (negate)
+        fputs("\txor a\n\tsub l\n\tld l,a\n"
+              "\tld a,0\n\tsbc a,h\n\tld h,a\n", out);
+}
+
+static void mir_packed_emit_sign_high(FILE *out)
+{
+    fputs("\tld a,h\n\trlca\n\tsbc a,a\n"
+          "\tld e,a\n\tld d,a\n", out);
+}
+
+static void mir_packed_emit_push_index_wide(
+    FILE *out, int scale, int negate)
+{
+    mir_packed_emit_index_value(out, scale, negate);
+    if (negate)
+        mir_packed_emit_sign_high(out);
+    else
+        fputs("\tld de,0\n", out);
+    fputs("\tpush de\n\tpush hl\n", out);
+}
+
+static void mir_packed_emit_push_member_wide(
+    FILE *out, int offset, int width, int is_signed)
+{
+    mir_packed_emit_record_address(out, offset);
+    if (width == 1) {
+        fputs("\tld l,(hl)\n", out);
+        if (is_signed)
+            fputs("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n", out);
+        else
+            fputs("\tld h,0\n", out);
+        if (is_signed)
+            mir_packed_emit_sign_high(out);
+        else
+            fputs("\tld de,0\n", out);
+    } else if (width == 2) {
+        fputs("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+              "\tld l,c\n\tld h,b\n", out);
+        if (is_signed)
+            mir_packed_emit_sign_high(out);
+        else
+            fputs("\tld de,0\n", out);
+    } else {
+        fputs("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+              "\tinc hl\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+              "\tld l,c\n\tld h,b\n", out);
+    }
+    fputs("\tpush de\n\tpush hl\n", out);
+}
+
+static void mir_packed_emit_print_failure(
+    FILE *out, const struct MirPackedRecordRunner *plan,
+    int check)
+{
+    static const int actual_members[6] = {0, 1, 2, 3, 1, 2};
+    static const int expected_scales[6] = {1, 2, 4, 1, 2, 4};
+    int member = actual_members[check];
+
+    mir_packed_emit_push_index_wide(
+        out, expected_scales[check], check >= 3);
+    mir_packed_emit_push_member_wide(
+        out, plan->member_offsets[member],
+        member == 0 || member == 3 ? 1 :
+        member == 1 || member == 4 ? 2 : 4,
+        member == 3);
+    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[check]);
+    mir_emit_runtime_call(out, plan->print_call_name);
+    mir_aggregate_cleanup(out, 6);
+}
+
+static void mir_packed_emit_byte_check(
+    FILE *out, const struct MirPackedRecordRunner *plan,
+    int check, int member, int scale, int negate, int done)
+{
+    mir_packed_emit_record_address(out, plan->member_offsets[member]);
+    fputs("\tld b,(hl)\n\tld a,(ix-2)\n", out);
+    if (scale >= 2)
+        fputs("\tadd a,a\n", out);
+    if (scale >= 4)
+        fputs("\tadd a,a\n", out);
+    if (negate)
+        fputs("\tld c,a\n\txor a\n\tsub c\n", out);
+    fprintf(out, "\tcp b\n\tjp z,L%d\n", done);
+    mir_packed_emit_print_failure(out, plan, check);
+    fprintf(out, "L%d:\n", done);
+}
+
+static void mir_packed_emit_word_check(
+    FILE *out, const struct MirPackedRecordRunner *plan,
+    int check, int member, int scale, int negate, int done)
+{
+    mir_packed_emit_record_address(out, plan->member_offsets[member]);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n", out);
+    mir_packed_emit_index_value(out, scale, negate);
+    fputs("\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp z,L%d\n", done);
+    mir_packed_emit_print_failure(out, plan, check);
+    fprintf(out, "L%d:\n", done);
+}
+
+static void mir_packed_emit_wide_check(
+    FILE *out, const struct MirPackedRecordRunner *plan,
+    int check, int member, int scale, int negate, int done)
+{
+    int mismatch = new_label();
+
+    mir_packed_emit_index_value(out, scale, negate);
+    if (negate)
+        mir_packed_emit_sign_high(out);
+    else
+        fputs("\tld de,0\n", out);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_packed_emit_record_address(out, plan->member_offsets[member]);
+    fputs("\tpop bc\n\tpop de\n"
+          "\tld a,(hl)\n\tcp c\n", out);
+    fprintf(out, "\tjp nz,L%d\n", mismatch);
+    fputs("\tinc hl\n\tld a,(hl)\n\tcp b\n", out);
+    fprintf(out, "\tjp nz,L%d\n", mismatch);
+    fputs("\tinc hl\n\tld a,(hl)\n\tcp e\n", out);
+    fprintf(out, "\tjp nz,L%d\n", mismatch);
+    fputs("\tinc hl\n\tld a,(hl)\n\tcp d\n", out);
+    fprintf(out, "\tjp z,L%d\nL%d:\n", done, mismatch);
+    mir_packed_emit_print_failure(out, plan, check);
+    fprintf(out, "L%d:\n", done);
+}
+
+static void mir_packed_emit_memset(
+    FILE *out, struct Sym *root, int bytes)
+{
+    mir_machine_emit_global_address_hl(out, root, 0);
+    fprintf(out, "\tld e,0\n\tld bc,%d\n", bytes);
+    mir_emit_runtime_call(out, "__msf");
+}
+
+static void mir_packed_emit_record_pointer(
+    FILE *out, const struct MirPackedRecordRunner *plan)
+{
+    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n", out);
+    mir_aggregate_scale_hl(out, plan->record_stride);
+    mir_machine_emit_global_address_de(out, plan->records, 0);
+    fputs("\tadd hl,de\n\tld (ix-4),l\n\tld (ix-3),h\n", out);
+}
+
+static void mir_packed_emit_initializers(
+    FILE *out, const struct MirPackedRecordRunner *plan)
+{
+    mir_packed_emit_record_address(out, plan->member_offsets[0]);
+    fputs("\tld a,(ix-2)\n\tld (hl),a\n", out);
+
+    mir_packed_emit_index_value(out, 2, 0);
+    fputs("\tld c,l\n\tld b,h\n", out);
+    mir_packed_emit_record_address(out, plan->member_offsets[1]);
+    fputs("\tld (hl),c\n\tinc hl\n\tld (hl),b\n", out);
+
+    mir_packed_emit_index_value(out, 4, 0);
+    fputs("\tld c,l\n\tld b,h\n", out);
+    mir_packed_emit_record_address(out, plan->member_offsets[2]);
+    fputs("\tld (hl),c\n\tinc hl\n\tld (hl),b\n"
+          "\tinc hl\n\tld (hl),0\n\tinc hl\n\tld (hl),0\n", out);
+
+    mir_packed_emit_record_address(out, plan->member_offsets[3]);
+    fputs("\tld a,(ix-2)\n\tld c,a\n\txor a\n\tsub c\n"
+          "\tld (hl),a\n", out);
+
+    mir_packed_emit_index_value(out, 2, 1);
+    fputs("\tld c,l\n\tld b,h\n", out);
+    mir_packed_emit_record_address(out, plan->member_offsets[4]);
+    fputs("\tld (hl),c\n\tinc hl\n\tld (hl),b\n", out);
+
+    mir_packed_emit_index_value(out, 4, 1);
+    mir_packed_emit_sign_high(out);
+    fputs("\tld c,l\n\tld b,h\n", out);
+    mir_packed_emit_record_address(out, plan->member_offsets[5]);
+    fputs("\tld (hl),c\n\tinc hl\n\tld (hl),b\n"
+          "\tinc hl\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
+}
+
+static void mir_emit_packed_record_runner(
+    FILE *out, const struct MirPackedRecordRunner *plan)
+{
+    int initialize_loop = new_label();
+    int initialize_done = new_label();
+    int check_loop = new_label();
+    int check_done = new_label();
+    int check_labels[8];
+    int item;
+
+    for (item = 0; item < 8; ++item)
+        check_labels[item] = new_label();
+    fprintf(out,
+            "%s\n"
+            "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+            "\tld hl,-4\n\tadd hl,sp\n\tld sp,hl\n",
+            MIR_EXACT_KERNEL_MARKER);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+
+    mir_packed_emit_memset(
+        out, plan->guards[0],
+        plan->guard_count * plan->record_stride);
+    mir_packed_emit_memset(
+        out, plan->guards[1],
+        plan->guard_count * plan->record_stride);
+    fputs("\tld hl,0\n\tld (ix-2),l\n\tld (ix-1),h\n", out);
+    fprintf(out,
+            "L%d:\n\tld a,(ix-1)\n\tor a\n\tjp nz,L%d\n"
+            "\tld a,(ix-2)\n\tcp %d\n\tjp nc,L%d\n",
+            initialize_loop, initialize_done,
+            plan->record_count, initialize_done);
+    mir_packed_emit_record_pointer(out, plan);
+    mir_packed_emit_initializers(out, plan);
+    fprintf(out,
+            "\tinc (ix-2)\n\tjp nz,L%d\n\tinc (ix-1)\n"
+            "\tjp L%d\nL%d:\n",
+            check_labels[0], initialize_loop,
+            check_labels[0]);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            initialize_loop, initialize_done);
+
+    mir_packed_emit_memset(
+        out, plan->guards[0],
+        plan->guard_count * plan->record_stride);
+    mir_packed_emit_memset(
+        out, plan->guards[1],
+        plan->guard_count * plan->record_stride);
+    fputs("\tld hl,0\n\tld (ix-2),l\n\tld (ix-1),h\n", out);
+    fprintf(out,
+            "L%d:\n\tld a,(ix-1)\n\tor a\n\tjp nz,L%d\n"
+            "\tld a,(ix-2)\n\tcp %d\n\tjp nc,L%d\n",
+            check_loop, check_done,
+            plan->record_count, check_done);
+    mir_packed_emit_record_pointer(out, plan);
+
+    mir_packed_emit_byte_check(
+        out, plan, 0, 0, 1, 0, check_labels[1]);
+    mir_packed_emit_word_check(
+        out, plan, 1, 1, 2, 0, check_labels[2]);
+    mir_packed_emit_wide_check(
+        out, plan, 2, 2, 4, 0, check_labels[3]);
+    mir_packed_emit_byte_check(
+        out, plan, 3, 3, 1, 1, check_labels[4]);
+    mir_packed_emit_word_check(
+        out, plan, 4, 4, 2, 1, check_labels[5]);
+    mir_packed_emit_wide_check(
+        out, plan, 5, 5, 4, 1, check_labels[6]);
+
+    fprintf(out,
+            "\tinc (ix-2)\n\tjp nz,L%d\n\tinc (ix-1)\n"
+            "\tjp L%d\nL%d:\n",
+            check_labels[7], check_loop, check_labels[7]);
+    fprintf(out, "\tjp L%d\nL%d:\n", check_loop, check_done);
+
+    fputs("\tld hl,4\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+            plan->record_count * plan->record_stride);
+    mir_machine_emit_global_address_hl(out, plan->records, 0);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->dump_function);
+    mir_aggregate_cleanup(out, 3);
+    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_multidim_aggregate_checks(
     FILE *out, const struct MirAggregateMultidimChecks *plan)
 {
@@ -2295,8 +3238,13 @@ static void mir_emit_aggregate_multidim_checks(
 int mir_try_emit_aggregate_checks(FILE *out)
 {
     struct MirAggregateMultidimChecks plan;
+    struct MirPackedRecordRunner packed_record;
     struct MirTouchLocalsPlan touch_locals;
 
+    if (mir_match_packed_record_runner(&packed_record)) {
+        mir_emit_packed_record_runner(out, &packed_record);
+        return 1;
+    }
     if (mir_match_touch_locals(&touch_locals)) {
         mir_emit_touch_locals(out, &touch_locals);
         return 1;
