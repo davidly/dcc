@@ -5,10 +5,45 @@ current execution plan and handoff.
 
 ## 2026-08-13 current checkpoint (read this first)
 
-- Branch: `pr/143`; clean base HEAD for this batch: `478769b`.
-- Current working-tree candidate coverage: **2155/2185 (98.63%)**.
-- Remaining fallback population: **30 `final-cost-policy`**, all selected by
+- Branch: `pr/143`; clean base HEAD for this batch: `a31e42d`.
+- Current working-tree candidate coverage: **2156/2185 (98.67%)**.
+- Remaining fallback population: **29 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The call-runner module now admits the 30-block `tcastlog.main`
+  `final-cost-policy` fallback through a strict name-free matcher over all
+  **198 MIR instructions**. It proves the two exact byte-array types and
+  repeated identities, the shared word induction object, both loop PHIs and
+  bounds, signed/unsigned byte conversions, every logical comparison,
+  short-circuit edge and boolean PHI, the nested byte result, all 13 variadic
+  call arguments and the selected report prototype, plus the final zero
+  return. It uses literal MIR constants only and does not broaden the shape
+  through the shared constant evaluator.
+- The dedicated emitter preserves the left-to-right `||`, `&&`, nested
+  short-circuit and negation order, byte-width stores, signed and unsigned
+  default argument promotion, the selected report helper, stack-check call
+  and return path. It uses a compact **12-byte IX frame** and no IY.
+- Normal selected/captured metrics are **1,338/3,010 bytes** and **141/286
+  instructions**; stack-check metrics are **1,367/3,039 bytes** and **142/287
+  instructions**. Checked full-mode selected/fallback totals are
+  **55,251/58,259 cycles** and **5,376/5,632 bytes** peep, plus
+  **55,462/59,589 cycles** and **5,376/5,760 bytes** nopeep. Selected and
+  forced fallback both pass the existing baseline.
+- A renamed function/helper/local/format boundary fixture selects the same
+  30-block graph while an otherwise identical signedness-swapped near miss
+  remains on `final-cost-policy` fallback. The helper validates every
+  promoted argument and both selected/fallback builds print identical output
+  with zero failures in peep and nopeep. Selected/fallback measurements are
+  **139,272/142,280 cycles** and **6,528/6,656 bytes** peep, plus
+  **142,722/146,849 cycles** and **6,784/7,040 bytes** nopeep.
+- The call-runner module grows from **11,152 to 11,682 source lines**. Its
+  object audit still reports only `mir_try_emit_call_runners [T]` as defined
+  global code, with zero global read-only or writable data. The canonical
+  build passes. The regression-gated stack-check census advances
+  **2,155/2,185 (98.63%)** to **2,156/2,185 (98.67%)**, adds exactly
+  `tcastlog.main`, removes no accepted function, moves selector counts from
+  **1,398 spilled / 380 scheduled** to **1,397 spilled / 381 scheduled**, and
+  leaves **29 `final-cost-policy`** fallbacks. No performance baseline,
+  production identifier, or output-hash gate was added.
 - The scanner module now admits the 30-block `wumpus.cbfs`
   `final-cost-policy` fallback through a strict name-free matcher over all
   **274 MIR instructions**. It proves six parameter ABIs and types, eight
