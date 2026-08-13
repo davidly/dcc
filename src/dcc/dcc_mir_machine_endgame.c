@@ -35,6 +35,10 @@
 #define MIR_ENDGAME_ARRAY_FUNCTIONS 14
 #define MIR_ENDGAME_ARRAY_CHECKS 18
 #define MIR_ENDGAME_ARRAY_FRAME_BYTES 448
+#define MIR_ENDGAME_STRCONV_INSNS 590
+#define MIR_ENDGAME_STRCONV_LINEAR_END 563
+#define MIR_ENDGAME_STRCONV_DEFERRED (-32768)
+#define MIR_ENDGAME_STRCONV_INLINE_DONE (-32767)
 
 enum MirEndgameFloatOperandKind {
     MIR_ENDGAME_FLOAT_BITS,
@@ -71,6 +75,10 @@ struct MirEndgameFloatRunner {
     int fail_string;
     char summary_call[64];
     char result_call[64];
+};
+
+struct MirEndgameStrconvRunner {
+    int frame_bytes;
 };
 
 struct MirEndgameWidthRunner {
@@ -1902,6 +1910,903 @@ static int mir_endgame_call_matches(
                 mir.insns[definitions[argument]].dst)
             return 0;
     return 1;
+}
+
+static void mir_endgame_emit_frame(FILE *out, int bytes);
+
+static int mir_endgame_strconv_named_memory(
+    const struct MirInsn *insn, struct Sym **symbol_out,
+    int *storage_out, int *offset_out)
+{
+    int memory_type;
+    int storage;
+    int offset;
+    struct Sym *symbol;
+
+    if (!mir_machine_named_nonvolatile(insn) ||
+        !mir_scalar_memory_location(
+            insn, &memory_type, &storage, &offset))
+        return 0;
+    if (storage == SC_LOCAL)
+        symbol = find_local(insn->name);
+    else if (storage == SC_GLOBAL || storage == SC_EXTERN)
+        symbol = find_global(insn->name);
+    else
+        return 0;
+    if (storage != SC_LOCAL &&
+        (symbol == NULL || symbol->is_volatile ||
+         symbol->storage != storage))
+        return 0;
+    *symbol_out = symbol;
+    *storage_out = storage;
+    *offset_out = offset;
+    return 1;
+}
+
+static int mir_endgame_strconv_declared_index(const char *name)
+{
+    int declared;
+
+    for (declared = 0; declared < mir.declared_count; ++declared)
+        if (!strcmp(mir.declared_names[declared], name))
+            return declared;
+    return -1;
+}
+
+static int mir_endgame_strconv_value_width(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int width;
+
+    if (definition == NULL)
+        return 0;
+    if (definition->opcode == MIR_ADDRESS ||
+        definition->opcode == MIR_STRING_ADDRESS)
+        return 2;
+    width = type_size(definition->type);
+    return width == 1 || width == 2 || width == 4 ? width : 0;
+}
+
+static int mir_endgame_strconv_value_supported(int value, int depth)
+{
+    const struct MirInsn *definition;
+    struct Sym *symbol;
+    int storage;
+    int offset;
+    int width;
+    long constant;
+
+    if (depth > 12 || (definition = mir_definition(value)) == NULL)
+        return 0;
+    width = mir_endgame_strconv_value_width(value);
+    if (width == 0)
+        return 0;
+    if (mir_machine_evaluate_constant(value, &constant, 0))
+        return width == 2 || width == 4;
+    switch (definition->opcode) {
+    case MIR_STRING_ADDRESS:
+        return definition->immediate >= 0 &&
+               mir_endgame_char_pointer_type(definition->type);
+    case MIR_ADDRESS:
+    case MIR_LOAD:
+        return mir_endgame_strconv_named_memory(
+            definition, &symbol, &storage, &offset);
+    case MIR_LOAD_INDIRECT:
+        return definition->memory_flags == 0 &&
+               definition->memory_size == 1 &&
+               mir_endgame_strconv_value_supported(
+                   definition->src1, depth + 1);
+    case MIR_UNARY:
+        return definition->immediate == 0 &&
+               width == 2 &&
+               mir_endgame_strconv_value_supported(
+                   definition->src1, depth + 1);
+    case MIR_BINARY:
+        return width == 2 &&
+               (definition->immediate == TOK_EQ ||
+                definition->immediate == TOK_NE) &&
+               (mir_machine_constant_equals(definition->src1, 0) ||
+                mir_machine_constant_equals(definition->src2, 0)) &&
+               mir_endgame_strconv_value_supported(
+                   mir_machine_constant_equals(definition->src1, 0)
+                       ? definition->src2 : definition->src1,
+                   depth + 1);
+    case MIR_CALL:
+        return definition->src1 < 0 &&
+               (width == 2 || width == 4);
+    default:
+        return 0;
+    }
+}
+
+static int mir_endgame_strconv_store_for_value(
+    int value, int *store_instruction)
+{
+    int instruction;
+    int found = -1;
+
+    for (instruction = 0; instruction < MIR_ENDGAME_STRCONV_LINEAR_END;
+         ++instruction) {
+        if (mir.insns[instruction].opcode != MIR_STORE ||
+            mir.insns[instruction].src1 != value)
+            continue;
+        if (found >= 0)
+            return 0;
+        found = instruction;
+    }
+    *store_instruction = found;
+    return 1;
+}
+
+static int mir_endgame_strconv_last_argument_use(int value)
+{
+    int instruction;
+    int last = -1;
+
+    for (instruction = 0; instruction < MIR_ENDGAME_STRCONV_LINEAR_END;
+         ++instruction)
+        if (mir.insns[instruction].opcode == MIR_ARG &&
+            mir.insns[instruction].src1 == value)
+            last = instruction;
+    return last;
+}
+
+static int mir_endgame_strconv_value_use_count(int value)
+{
+    int instruction;
+    int uses = 0;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->src1 == value)
+            ++uses;
+        if (insn->src2 == value)
+            ++uses;
+    }
+    return uses;
+}
+
+static struct Sym *mir_endgame_strconv_call_function(
+    const struct MirInsn *call)
+{
+    struct Sym *function;
+    int variadic;
+
+    if (call->opcode != MIR_CALL || call->src1 >= 0 ||
+        (function = find_global(call->name)) == NULL ||
+        function->storage != SC_FUNC || function->is_funcptr ||
+        function->is_noreturn || !function->has_proto ||
+        call->type != function->type)
+        return NULL;
+    variadic =
+        (call->memory_flags & MIR_CALL_FLAG_VARIADIC) != 0;
+    if (function->proto_variadic != variadic)
+        return NULL;
+    if (!function->is_defined && variadic &&
+        call->base_name[0] == 0)
+        return NULL;
+    if (!variadic && call->base_name[0] != 0 &&
+        strcmp(call->base_name,
+               asm_name_for(sym_asm_name(function))))
+        return NULL;
+    return function;
+}
+
+static int mir_endgame_strconv_tail(void)
+{
+    struct Sym *checks = NULL;
+    struct Sym *failures = NULL;
+    struct Sym *root;
+    int arguments[MIR_ENDGAME_MAX_ARGS];
+    int storage;
+    int checks_offset;
+    int failures_offset;
+    int offset;
+
+    if (mir.insns[556].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[557].opcode != MIR_ARG ||
+        mir.insns[557].src1 != mir.insns[556].dst ||
+        !mir_endgame_strconv_named_memory(
+            &mir.insns[558], &checks, &storage, &checks_offset) ||
+        storage != SC_GLOBAL ||
+        mir.insns[559].opcode != MIR_ARG ||
+        mir.insns[559].src1 != mir.insns[558].dst ||
+        !mir_endgame_strconv_named_memory(
+            &mir.insns[560], &failures, &storage, &failures_offset) ||
+        storage != SC_GLOBAL || checks == failures ||
+        mir.insns[561].opcode != MIR_ARG ||
+        mir.insns[561].src1 != mir.insns[560].dst ||
+        mir_endgame_call_function(&mir.insns[562], 1, 1) == NULL ||
+        mir_endgame_call_arguments(&mir.insns[562], arguments) != 3 ||
+        arguments[0] != mir.insns[556].dst ||
+        arguments[1] != mir.insns[558].dst ||
+        arguments[2] != mir.insns[560].dst)
+        return 0;
+    if (mir.insns[563].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[564].opcode != MIR_ARG ||
+        !mir_endgame_strconv_named_memory(
+            &mir.insns[565], &root, &storage, &offset) ||
+        root != failures || storage != SC_GLOBAL ||
+        offset != failures_offset ||
+        !mir_machine_constant_equals(mir.insns[566].dst, 0) ||
+        mir.insns[567].opcode != MIR_BINARY ||
+        mir.insns[567].immediate != TOK_EQ ||
+        mir.insns[567].src1 != mir.insns[565].dst ||
+        mir.insns[567].src2 != mir.insns[566].dst ||
+        mir.insns[568].opcode != MIR_BRANCH_FALSE ||
+        mir.insns[568].src1 != mir.insns[567].dst ||
+        mir.insns[569].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[570].opcode != MIR_LABEL ||
+        mir.insns[571].opcode != MIR_JUMP ||
+        mir.insns[572].opcode != MIR_LABEL ||
+        mir.insns[573].opcode != MIR_STRING_ADDRESS ||
+        mir.insns[574].opcode != MIR_LABEL ||
+        mir.insns[575].opcode != MIR_LABEL ||
+        mir.insns[576].opcode != MIR_PHI ||
+        mir.insns[576].src1 != mir.insns[569].dst ||
+        mir.insns[576].src2 != mir.insns[573].dst ||
+        mir.insns[577].opcode != MIR_ARG ||
+        mir.insns[577].src1 != mir.insns[576].dst ||
+        mir_endgame_call_function(&mir.insns[578], 1, 1) == NULL ||
+        mir_endgame_call_arguments(&mir.insns[578], arguments) != 2 ||
+        arguments[0] != mir.insns[563].dst ||
+        arguments[1] != mir.insns[576].dst)
+        return 0;
+    return mir.insns[579].opcode == MIR_LOAD &&
+           mir_endgame_strconv_named_memory(
+               &mir.insns[579], &root, &storage, &offset) &&
+           root == failures && storage == SC_GLOBAL &&
+           offset == failures_offset &&
+           mir.insns[580].opcode == MIR_BRANCH_FALSE &&
+           mir.insns[580].src1 == mir.insns[579].dst &&
+           mir_machine_constant_equals(mir.insns[581].dst, 1) &&
+           mir.insns[582].opcode == MIR_LABEL &&
+           mir.insns[583].opcode == MIR_JUMP &&
+           mir.insns[584].opcode == MIR_LABEL &&
+           mir_machine_constant_equals(mir.insns[585].dst, 0) &&
+           mir.insns[586].opcode == MIR_LABEL &&
+           mir.insns[587].opcode == MIR_LABEL &&
+           mir.insns[588].opcode == MIR_PHI &&
+           mir.insns[588].src1 == mir.insns[581].dst &&
+           mir.insns[588].src2 == mir.insns[585].dst &&
+           mir.insns[589].opcode == MIR_RETURN &&
+           mir.insns[589].src1 == mir.insns[588].dst;
+}
+
+static int mir_match_endgame_strconv_runner(
+    struct MirEndgameStrconvRunner *plan)
+{
+    static const int expected_array_sizes[6] = {40, 40, 40, 40, 44, 64};
+    int arrays[6] = {-1, -1, -1, -1, -1, -1};
+    int array_count = 0;
+    int opcode_counts[MIR_RETURN + 1];
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    memset(opcode_counts, 0, sizeof(opcode_counts));
+    if (mir.count != MIR_ENDGAME_STRCONV_INSNS ||
+        mir_cfg_block_count() != 9 || mir.local_bytes != 286 ||
+        mir.aggregate_temp_bytes != 0 || mir.has_vla ||
+        mir.is_variadic_function ||
+        !mir_endgame_word_type(mir.return_type) ||
+        (mir.return_type & TYPE_UNSIGNED) != 0)
+        return mir_machine_reject(
+            "endgame-strconv-runner", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        int opcode = mir.insns[instruction].opcode;
+
+        if (opcode < 0 || opcode > MIR_RETURN)
+            return mir_machine_reject(
+                "endgame-strconv-runner", "opcode-range");
+        ++opcode_counts[opcode];
+    }
+    if (opcode_counts[MIR_CALL] != 75 ||
+        opcode_counts[MIR_ARG] != 214 ||
+        opcode_counts[MIR_STRING_ADDRESS] != 80 ||
+        opcode_counts[MIR_ADDRESS] != 22 ||
+        opcode_counts[MIR_STORE] != 16 ||
+        opcode_counts[MIR_LOAD] != 15 ||
+        opcode_counts[MIR_LOAD_INDIRECT] != 1 ||
+        opcode_counts[MIR_UNARY] != 1 ||
+        opcode_counts[MIR_BINARY] != 7 ||
+        opcode_counts[MIR_LABEL] != 9 ||
+        opcode_counts[MIR_BRANCH_FALSE] != 2 ||
+        opcode_counts[MIR_JUMP] != 2 ||
+        opcode_counts[MIR_PHI] != 2 ||
+        opcode_counts[MIR_RETURN] != 1)
+        return mir_machine_reject(
+            "endgame-strconv-runner", "opcode-profile");
+    for (instruction = 0;
+         instruction < MIR_ENDGAME_STRCONV_LINEAR_END; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        struct Sym *symbol;
+        int arguments[MIR_ENDGAME_MAX_ARGS];
+        int argument_count;
+        int argument;
+        int storage;
+        int offset;
+
+        switch (insn->opcode) {
+        case MIR_LABEL:
+        case MIR_NOP:
+        case MIR_CONST:
+        case MIR_STRING_ADDRESS:
+        case MIR_ARG:
+            break;
+        case MIR_ADDRESS:
+            if (!mir_endgame_strconv_named_memory(
+                    insn, &symbol, &storage, &offset) ||
+                storage != SC_LOCAL)
+                return mir_machine_reject(
+                    "endgame-strconv-runner", "address");
+            {
+                int declared =
+                    mir_endgame_strconv_declared_index(insn->name);
+
+                if (declared < 0)
+                    return mir_machine_reject(
+                        "endgame-strconv-runner", "declaration");
+                if (mir.declared_is_array[declared]) {
+                    int found = 0;
+                    int item;
+
+                    for (item = 0; item < array_count; ++item)
+                        if (arrays[item] == declared)
+                            found = 1;
+                    if (!found) {
+                        if (array_count >= 6)
+                            return mir_machine_reject(
+                                "endgame-strconv-runner",
+                                "array-count");
+                        arrays[array_count++] = declared;
+                    }
+                }
+            }
+            break;
+        case MIR_LOAD:
+            if (!mir_endgame_strconv_named_memory(
+                    insn, &symbol, &storage, &offset) ||
+                (mir_endgame_strconv_value_width(insn->dst) != 2 &&
+                 mir_endgame_strconv_value_width(insn->dst) != 4))
+                return mir_machine_reject(
+                    "endgame-strconv-runner", "load");
+            break;
+        case MIR_STORE:
+            if (!mir_endgame_strconv_named_memory(
+                    insn, &symbol, &storage, &offset) ||
+                (insn->memory_size != 2 &&
+                 insn->memory_size != 4) ||
+                !mir_endgame_strconv_value_supported(
+                    insn->src1, 0))
+                return mir_machine_reject(
+                    "endgame-strconv-runner", "store");
+            break;
+        case MIR_LOAD_INDIRECT:
+        case MIR_UNARY:
+        case MIR_BINARY:
+            if (!mir_endgame_strconv_value_supported(
+                    insn->dst, 0))
+                return mir_machine_reject(
+                    "endgame-strconv-runner", "expression");
+            break;
+        case MIR_CALL:
+            {
+                struct Sym *function =
+                    find_global(insn->name);
+                int store_instruction;
+                int last_use;
+                int width;
+
+                if (function == NULL ||
+                    mir_endgame_strconv_call_function(insn) != function ||
+                    (argument_count =
+                         mir_endgame_call_arguments(
+                             insn, arguments)) < 0 ||
+                    argument_count > MIR_ENDGAME_MAX_ARGS ||
+                    argument_count < function->proto_nargs)
+                    return mir_machine_reject(
+                        "endgame-strconv-runner", "call");
+                for (argument = 0; argument < argument_count;
+                     ++argument) {
+                    width = mir_endgame_strconv_value_width(
+                        arguments[argument]);
+                    if ((width != 2 && width != 4) ||
+                        !mir_endgame_strconv_value_supported(
+                            arguments[argument], 0))
+                        return mir_machine_reject(
+                            "endgame-strconv-runner", "call-argument");
+                }
+                if (!mir_endgame_strconv_store_for_value(
+                        insn->dst, &store_instruction))
+                    return mir_machine_reject(
+                        "endgame-strconv-runner", "call-store");
+                last_use =
+                    mir_endgame_strconv_last_argument_use(insn->dst);
+                if (store_instruction < 0 && last_use >= 0) {
+                    if (mir_endgame_strconv_value_use_count(
+                            insn->dst) != 1)
+                        return mir_machine_reject(
+                            "endgame-strconv-runner",
+                            "deferred-call-use");
+                }
+            }
+            break;
+        default:
+            return mir_machine_reject(
+                "endgame-strconv-runner", "linear-opcode");
+        }
+    }
+    if (array_count != 6)
+        return mir_machine_reject(
+            "endgame-strconv-runner", "arrays");
+    for (instruction = 0; instruction < array_count; ++instruction) {
+        int other;
+        int rank = 0;
+
+        for (other = 0; other < array_count; ++other)
+            if (mir.declared_sizes[arrays[other]] <
+                    mir.declared_sizes[arrays[instruction]] ||
+                (mir.declared_sizes[arrays[other]] ==
+                     mir.declared_sizes[arrays[instruction]] &&
+                 other < instruction))
+                ++rank;
+        if (mir.declared_sizes[arrays[instruction]] !=
+                expected_array_sizes[rank] ||
+            mir.declared_dim_counts[arrays[instruction]] != 1 ||
+            mir.declared_dims[arrays[instruction]][0] !=
+                mir.declared_sizes[arrays[instruction]] ||
+            mir.declared_elem_sizes[arrays[instruction]] != 1 ||
+            (mir.declared_types[arrays[instruction]] & 15) != TYPE_CHAR)
+            return mir_machine_reject(
+                "endgame-strconv-runner", "array-shape");
+    }
+    if (!mir_endgame_strconv_tail())
+        return mir_machine_reject(
+            "endgame-strconv-runner", "tail");
+    plan->frame_bytes = mir.local_bytes;
+    return 1;
+}
+
+static void mir_endgame_strconv_ix_address(FILE *out, int offset)
+{
+    fputs("\tpush ix\n\tpop hl\n", out);
+    if (offset != 0)
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n", offset);
+}
+
+static void mir_endgame_strconv_load_at(
+    FILE *out, int storage, struct Sym *symbol, int offset, int width)
+{
+    if (storage == SC_GLOBAL || storage == SC_EXTERN) {
+        if (width == 2) {
+            mir_machine_emit_global_word(out, symbol, offset);
+            return;
+        }
+        {
+            const char *name = asm_name_for(sym_asm_name(symbol));
+
+            if ((symbol->storage == SC_EXTERN || symbol->needs_extrn) &&
+                mir_extrn_should_emit(symbol))
+                fprintf(out, "\textrn %s\n", name);
+            fprintf(out,
+                    "\tld hl,(%s%+d)\n\tld de,(%s%+d)\n",
+                    name, offset, name, offset + 2);
+            return;
+        }
+    }
+    if (offset >= -128 && offset + width - 1 <= 127) {
+        if (width == 2)
+            fprintf(out,
+                    "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+                    offset, offset + 1);
+        else
+            fprintf(out,
+                    "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+                    "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+                    offset, offset + 1, offset + 2, offset + 3);
+        return;
+    }
+    mir_endgame_strconv_ix_address(out, offset);
+    if (width == 2) {
+        fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n",
+              out);
+    } else {
+        fputs("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+              "\tinc hl\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+              "\tld l,c\n\tld h,b\n", out);
+    }
+}
+
+static void mir_endgame_strconv_store_at(
+    FILE *out, int storage, struct Sym *symbol, int offset, int width)
+{
+    if (storage == SC_GLOBAL || storage == SC_EXTERN) {
+        const char *name = asm_name_for(sym_asm_name(symbol));
+
+        if ((symbol->storage == SC_EXTERN || symbol->needs_extrn) &&
+            mir_extrn_should_emit(symbol))
+            fprintf(out, "\textrn %s\n", name);
+        if (width == 2)
+            fprintf(out, "\tld (%s%+d),hl\n", name, offset);
+        else
+            fprintf(out,
+                    "\tld (%s%+d),hl\n\tld (%s%+d),de\n",
+                    name, offset, name, offset + 2);
+        return;
+    }
+    if (offset >= -128 && offset + width - 1 <= 127) {
+        if (width == 2)
+            fprintf(out,
+                    "\tld (ix%+d),l\n\tld (ix%+d),h\n",
+                    offset, offset + 1);
+        else
+            fprintf(out,
+                    "\tld (ix%+d),l\n\tld (ix%+d),h\n"
+                    "\tld (ix%+d),e\n\tld (ix%+d),d\n",
+                    offset, offset + 1, offset + 2, offset + 3);
+        return;
+    }
+    if (width == 4)
+        fputs("\tpush de\n", out);
+    fputs("\tpush hl\n", out);
+    mir_endgame_strconv_ix_address(out, offset);
+    fputs("\tex de,hl\n\tpop hl\n"
+          "\tld a,l\n\tld (de),a\n\tinc de\n"
+          "\tld a,h\n\tld (de),a\n", out);
+    if (width == 4)
+        fputs("\tinc de\n\tpop hl\n"
+              "\tld a,l\n\tld (de),a\n\tinc de\n"
+              "\tld a,h\n\tld (de),a\n", out);
+}
+
+static void mir_endgame_strconv_emit_call_target(
+    FILE *out, const struct MirInsn *call)
+{
+    struct Sym *function = find_global(call->name);
+
+    if ((call->memory_flags & MIR_CALL_FLAG_FORMAT_HEX) != 0)
+        mir_emit_runtime_call(out, "__pfehx");
+    if ((call->memory_flags & MIR_CALL_FLAG_FORMAT_OCTAL) != 0)
+        mir_emit_runtime_call(out, "__pfeoc");
+    if (function != NULL && function->is_defined &&
+        call->base_name[0] == 0)
+        mir_machine_emit_symbol_call(out, function);
+    else
+        mir_emit_runtime_call(out, mir_endgame_call_name(call));
+}
+
+static void mir_endgame_strconv_emit_value(
+    FILE *out, int value, int *call_offsets,
+    int *call_widths);
+
+static void mir_endgame_strconv_emit_deferred_call(
+    FILE *out, int instruction, int *call_offsets,
+    int *call_widths)
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    const char *fastcall_name = NULL;
+    int arguments[MIR_ENDGAME_MAX_ARGS];
+    int argument_count =
+        mir_endgame_call_arguments(call, arguments);
+    int fastcall_arg0;
+    int fastcall_arg1;
+    int words = 0;
+    int argument;
+
+    if (argument_count < 0)
+        fatal("invalid deferred string-conversion call");
+    if (mir_call_is_de_hl_fastcall(
+            instruction, &fastcall_name,
+            &fastcall_arg0, &fastcall_arg1)) {
+        mir_endgame_strconv_emit_value(
+            out, fastcall_arg0, call_offsets, call_widths);
+        fputs("\tpush hl\n", out);
+        mir_endgame_strconv_emit_value(
+            out, fastcall_arg1, call_offsets, call_widths);
+        fputs("\tpop de\n", out);
+        mir_emit_runtime_call(out, fastcall_name);
+        call_offsets[instruction] =
+            MIR_ENDGAME_STRCONV_INLINE_DONE;
+        return;
+    }
+    for (argument = argument_count - 1; argument >= 0; --argument) {
+        int width =
+            mir_endgame_strconv_value_width(arguments[argument]);
+
+        mir_endgame_strconv_emit_value(
+            out, arguments[argument], call_offsets, call_widths);
+        if (width == 4) {
+            fputs("\tpush de\n\tpush hl\n", out);
+            words += 2;
+        } else {
+            fputs("\tpush hl\n", out);
+            ++words;
+        }
+    }
+    mir_endgame_strconv_emit_call_target(out, call);
+    while (words-- > 0)
+        fputs("\tpop bc\n", out);
+    call_offsets[instruction] = MIR_ENDGAME_STRCONV_INLINE_DONE;
+}
+
+static void mir_endgame_strconv_emit_value(
+    FILE *out, int value, int *call_offsets,
+    int *call_widths)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    struct Sym *symbol;
+    long constant;
+    int storage;
+    int offset;
+    int width = mir_endgame_strconv_value_width(value);
+
+    if (definition == NULL)
+        fatal("missing scheduled string-conversion value");
+    if (mir_machine_evaluate_constant(value, &constant, 0)) {
+        if (width == 4)
+            mir_machine_emit_float_bits(
+                out, (unsigned long)constant);
+        else
+            fprintf(out, "\tld hl,%lu\n",
+                    (unsigned long)constant & 0xffffUL);
+        return;
+    }
+    switch (definition->opcode) {
+    case MIR_STRING_ADDRESS:
+        fprintf(out, "\tld hl,S%ld\n", definition->immediate);
+        return;
+    case MIR_ADDRESS:
+        if (!mir_endgame_strconv_named_memory(
+                definition, &symbol, &storage, &offset) ||
+            storage != SC_LOCAL)
+            fatal("invalid scheduled string-conversion address");
+        mir_endgame_strconv_ix_address(out, offset);
+        return;
+    case MIR_LOAD:
+        if (!mir_endgame_strconv_named_memory(
+                definition, &symbol, &storage, &offset))
+            fatal("invalid scheduled string-conversion load");
+        mir_endgame_strconv_load_at(
+            out, storage, symbol, offset, width);
+        return;
+    case MIR_LOAD_INDIRECT:
+        mir_endgame_strconv_emit_value(
+            out, definition->src1, call_offsets, call_widths);
+        fputs("\tld l,(hl)\n\tld h,0\n", out);
+        return;
+    case MIR_UNARY:
+        mir_endgame_strconv_emit_value(
+            out, definition->src1, call_offsets, call_widths);
+        if ((mir_definition(definition->src1)->type & TYPE_UNSIGNED) == 0 &&
+            type_size(mir_definition(definition->src1)->type) == 1) {
+            int positive = new_label();
+
+            fputs("\tbit 7,l\n", out);
+            fprintf(out,
+                    "\tjr z,L%d\n\tdec h\nL%d:\n",
+                    positive, positive);
+        }
+        return;
+    case MIR_BINARY:
+        {
+            int operand =
+                mir_machine_constant_equals(definition->src1, 0)
+                    ? definition->src2 : definition->src1;
+            int nonzero = new_label();
+            int done = new_label();
+
+            mir_endgame_strconv_emit_value(
+                out, operand, call_offsets, call_widths);
+            fputs("\tld a,h\n\tor l\n\tld hl,0\n", out);
+            fprintf(out,
+                    "\tjr nz,L%d\n\tjr L%d\nL%d:\n\tinc hl\nL%d:\n",
+                    nonzero, done, nonzero, done);
+            if (definition->immediate == TOK_EQ)
+                fputs("\tld a,l\n\txor 1\n\tld l,a\n", out);
+        }
+        return;
+    case MIR_CALL:
+        {
+            int call_instruction =
+                (int)(definition - mir.insns);
+
+            if (call_offsets[call_instruction] ==
+                MIR_ENDGAME_STRCONV_DEFERRED) {
+                mir_endgame_strconv_emit_deferred_call(
+                    out, call_instruction,
+                    call_offsets, call_widths);
+                return;
+            }
+            if (call_offsets[call_instruction] == 0 ||
+                call_offsets[call_instruction] ==
+                    MIR_ENDGAME_STRCONV_INLINE_DONE ||
+                call_widths[call_instruction] != width)
+                fatal("unsaved scheduled string-conversion call");
+            mir_endgame_strconv_load_at(
+                out, SC_LOCAL, NULL,
+                call_offsets[call_instruction], width);
+        }
+        return;
+    default:
+        fatal("unsupported scheduled string-conversion value");
+    }
+}
+
+static void mir_endgame_strconv_emit_call(
+    FILE *out, int instruction, int *call_offsets,
+    int *call_widths, unsigned char *consumed_stores)
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    const char *fastcall_name = NULL;
+    int arguments[MIR_ENDGAME_MAX_ARGS];
+    int argument_count =
+        mir_endgame_call_arguments(call, arguments);
+    int fastcall_arg0;
+    int fastcall_arg1;
+    int words = 0;
+    int argument;
+    int store_instruction = -1;
+    int last_use;
+    struct Sym *store_symbol = NULL;
+    int store_storage = 0;
+    int store_offset = 0;
+    int store_width = 0;
+    int prepared_store_address = 0;
+
+    if (argument_count < 0)
+        fatal("invalid scheduled string-conversion call");
+    if (!mir_endgame_strconv_store_for_value(
+            call->dst, &store_instruction))
+        fatal("ambiguous scheduled string-conversion store");
+    if (store_instruction >= 0) {
+        if (!mir_endgame_strconv_named_memory(
+                &mir.insns[store_instruction],
+                &store_symbol, &store_storage, &store_offset))
+            fatal("invalid scheduled string-conversion store");
+        store_width = mir.insns[store_instruction].memory_size;
+        if (store_storage == SC_LOCAL &&
+            (store_offset < -128 ||
+             store_offset + store_width - 1 > 127)) {
+            mir_endgame_strconv_ix_address(out, store_offset);
+            fputs("\tpush hl\n", out);
+            prepared_store_address = 1;
+        }
+    }
+    if (mir_call_is_de_hl_fastcall(
+            instruction, &fastcall_name,
+            &fastcall_arg0, &fastcall_arg1)) {
+        mir_endgame_strconv_emit_value(
+            out, fastcall_arg0, call_offsets, call_widths);
+        fputs("\tpush hl\n", out);
+        mir_endgame_strconv_emit_value(
+            out, fastcall_arg1, call_offsets, call_widths);
+        fputs("\tpop de\n", out);
+        mir_emit_runtime_call(out, fastcall_name);
+    } else {
+        for (argument = argument_count - 1;
+             argument >= 0; --argument) {
+            int argument_width =
+                mir_endgame_strconv_value_width(
+                    arguments[argument]);
+
+            mir_endgame_strconv_emit_value(
+                out, arguments[argument],
+                call_offsets, call_widths);
+            if (argument_width == 4) {
+                fputs("\tpush de\n\tpush hl\n", out);
+                words += 2;
+            } else {
+                fputs("\tpush hl\n", out);
+                ++words;
+            }
+        }
+        mir_endgame_strconv_emit_call_target(out, call);
+        while (words-- > 0)
+            fputs("\tpop bc\n", out);
+    }
+    last_use = mir_endgame_strconv_last_argument_use(call->dst);
+    if (store_instruction >= 0) {
+        if (prepared_store_address) {
+            if (store_width == 2) {
+                fputs("\tex de,hl\n\tpop hl\n"
+                      "\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+                      out);
+            } else {
+                fputs("\tld b,d\n\tld c,e\n\tpop de\n\tex de,hl\n"
+                      "\tld (hl),e\n\tinc hl\n\tld (hl),d\n"
+                      "\tinc hl\n\tld (hl),c\n\tinc hl\n"
+                      "\tld (hl),b\n", out);
+            }
+        } else {
+            mir_endgame_strconv_store_at(
+                out, store_storage, store_symbol,
+                store_offset, store_width);
+        }
+        consumed_stores[store_instruction] = 1;
+        call_offsets[instruction] = store_offset;
+        call_widths[instruction] = store_width;
+    } else if (last_use >= 0)
+        fatal("undeferred scheduled string-conversion result");
+}
+
+static void mir_emit_endgame_strconv_runner(
+    FILE *out, const struct MirEndgameStrconvRunner *plan)
+{
+    int call_offsets[MIR_ENDGAME_STRCONV_INSNS];
+    int call_widths[MIR_ENDGAME_STRCONV_INSNS];
+    unsigned char consumed_stores[MIR_ENDGAME_STRCONV_INSNS];
+    int failure_string = new_label();
+    int result_ready = new_label();
+    int success = new_label();
+    int return_done = new_label();
+    int instruction;
+
+    memset(call_offsets, 0, sizeof(call_offsets));
+    memset(call_widths, 0, sizeof(call_widths));
+    memset(consumed_stores, 0, sizeof(consumed_stores));
+    for (instruction = 0;
+         instruction < MIR_ENDGAME_STRCONV_LINEAR_END; ++instruction) {
+        int store_instruction = -1;
+
+        if (mir.insns[instruction].opcode != MIR_CALL ||
+            !mir_endgame_strconv_store_for_value(
+                mir.insns[instruction].dst, &store_instruction))
+            continue;
+        if (store_instruction < 0 &&
+            mir_endgame_strconv_last_argument_use(
+                mir.insns[instruction].dst) >= 0)
+            call_offsets[instruction] =
+                MIR_ENDGAME_STRCONV_DEFERRED;
+    }
+    mir_endgame_emit_frame(out, plan->frame_bytes);
+    for (instruction = 0;
+         instruction < MIR_ENDGAME_STRCONV_LINEAR_END; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode == MIR_CALL &&
+            call_offsets[instruction] !=
+                MIR_ENDGAME_STRCONV_DEFERRED) {
+            mir_endgame_strconv_emit_call(
+                out, instruction, call_offsets, call_widths,
+                consumed_stores);
+        } else if (insn->opcode == MIR_STORE &&
+                   !consumed_stores[instruction]) {
+            struct Sym *symbol;
+            int storage;
+            int offset;
+
+            if (!mir_endgame_strconv_named_memory(
+                    insn, &symbol, &storage, &offset))
+                fatal("invalid scheduled string-conversion store");
+            mir_endgame_strconv_emit_value(
+                out, insn->src1, call_offsets, call_widths);
+            mir_endgame_strconv_store_at(
+                out, storage, symbol, offset, insn->memory_size);
+        }
+    }
+
+    mir_endgame_strconv_emit_value(
+        out, mir.insns[565].dst, call_offsets, call_widths);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out,
+            "\tjr nz,L%d\n\tld hl,S%ld\n\tpush hl\n"
+            "\tjr L%d\nL%d:\n\tld hl,S%ld\n\tpush hl\n"
+            "L%d:\n\tld hl,S%ld\n\tpush hl\n",
+            failure_string, mir.insns[569].immediate,
+            result_ready, failure_string,
+            mir.insns[573].immediate, result_ready,
+            mir.insns[563].immediate);
+    mir_endgame_strconv_emit_call_target(out, &mir.insns[578]);
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_endgame_strconv_emit_value(
+        out, mir.insns[579].dst, call_offsets, call_widths);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out,
+            "\tjr z,L%d\n\tld hl,1\n\tjr L%d\n"
+            "L%d:\n\tld hl,0\nL%d:\n"
+            "\tld sp,ix\n\tpop ix\n\tret\n",
+            success, return_done, success, return_done);
 }
 
 static int mir_match_endgame_file_runner(void)
@@ -9458,6 +10363,7 @@ int mir_try_emit_endgame_runners(FILE *out)
     struct MirEndgameNumericRunner numeric_plan;
     struct MirEndgameScopeRunner scope_plan;
     struct MirEndgameSizeRunner size_plan;
+    struct MirEndgameStrconvRunner strconv_plan;
     struct MirEndgameWidthRunner width_plan;
 
     if (mir_match_endgame_array_runner(&array_plan)) {
@@ -9502,6 +10408,10 @@ int mir_try_emit_endgame_runners(FILE *out)
     }
     if (mir_match_endgame_format_runner()) {
         mir_emit_endgame_format_runner(out);
+        return 1;
+    }
+    if (mir_match_endgame_strconv_runner(&strconv_plan)) {
+        mir_emit_endgame_strconv_runner(out, &strconv_plan);
         return 1;
     }
     if (mir_match_endgame_float_runner(&float_plan)) {

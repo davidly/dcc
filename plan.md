@@ -3,6 +3,74 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-14 string-conversion runner: production 100% MIR (working tree)
+
+- Branch/base: `pr/143` at `14ca813`. The endgame call-runner family now
+  admits the final nine-block `tstrconv.main` `final-cost-policy` fallback
+  through a strict, production-name-free scheduled-machine matcher over all
+  **590 MIR instructions**. It accounts for all **75 source calls**, 214 call
+  arguments, six exact local character buffers (**40/40/40/40/44/64
+  bytes**), every scalar/wide load and store, the `end` update and byte load,
+  all signed/unsigned long constants and conversions, each `errno` reset and
+  reload, token state, variadic forwarding, final failure string PHI and
+  nonzero return.
+- Emission retains the complete selected/captured call sequence
+  byte-for-byte at **76 calls including `__stchk`**. It preserves reverse ABI
+  argument order, established DE:HL wide values, `strcpy`'s existing DE/HL
+  fastcall, every `strtol`/`strtoul`/`strtok`, checker, `sprintf`/`printf`,
+  `vs`/`vp`/`vfp` call and the original buffer/store ordering. The frame is
+  the source's **286 bytes** with no added spill slot and no IY.
+- Normal selected/captured metrics are **11,611/11,759 bytes** and
+  **1,194/1,204 instructions**. Stack-check metrics are
+  **11,640/11,788 bytes** and **1,195/1,205 instructions**.
+- Full stack-check `tstrconv` passes peep and nopeep. Selected versus forced
+  fallback is **777,270/777,300 cycles** and **12,160/12,160 bytes** peep,
+  plus **778,692/778,893 cycles** and **12,288/12,288 bytes** nopeep:
+  selected is 30 and 201 cycles faster respectively, with equal linked size.
+- A separately renamed full conversion fixture preserves all 34 checks:
+  decimal/sign/whitespace, explicit/automatic bases, base 36, signed and
+  unsigned limits and overflow clamps, end-pointer update, `errno`, token
+  exhaustion, long formatted-I/O counts and all three `v*` paths. Selected
+  and fallback peep/nopeep output is identical:
+  `checks=34 failures=0` and `RESULT: PASS`. Selected/fallback measurements
+  are **776,966/776,996 cycles and 12,160/12,160 bytes** peep plus
+  **778,388/778,589 cycles and 12,160/12,288 bytes** nopeep.
+  A renamed one-value mismatch variant proves the cold failure path with
+  identical selected/fallback output (`got 123 want 124`,
+  `checks=34 failures=1`, `RESULT: FAIL`) and nonzero return. Its A/B is
+  **819,965/819,995 cycles and 12,160/12,160 bytes** peep plus
+  **821,382/821,593 cycles and 12,160/12,288 bytes** nopeep.
+- With all other general selectors disabled, the unchanged renamed runner is
+  accepted by scheduled-machine CFG, while changing its first 40-byte buffer
+  to 41 bytes is rejected transactionally. This independently proves the
+  dedicated matcher is structural, strict and name-free.
+- The regression-gated stack-check census advances
+  **2,184/2,185 (99.95%)** to **2,185/2,185 (100.00%)**, adds exactly
+  `tstrconv.main`, removes nothing, moves selector counts from
+  **1,369 spilled / 409 scheduled** to **1,368 spilled / 410 scheduled**,
+  and reduces production fallback **1 -> 0**. The normal census advances
+  **2,095/2,106 to 2,096/2,106**, adds the same function and removes none;
+  its ten remaining non-stack `final-cost-policy` rows predate this final
+  production stack-check gate.
+- `DCC_MIR_REQUIRE_COMPLETE=1` passes focused full-mode `tstrconv`. The same
+  mode passes all **314 runnable apps**, checked peep/nopeep performance and
+  dccpeep fixtures in the full run; the expected negative diagnostic
+  `ast-local-init-unsupported-member.c` instead trips MIR completeness before
+  its normal parser diagnostic, so MIR-required diagnostics need a deliberate
+  negative-test exemption or separate runnable-only mode. The ordinary full
+  suite passes **314/314 runnable apps**, all diagnostics, dccpeep fixtures and
+  performance checks.
+- The endgame module is **10,422 source lines**. Its standalone object defines
+  only `mir_try_emit_endgame_runners [T]` globally and has zero read-only or
+  writable global data. No performance baseline, production-name gate or
+  output-hash gate was added or changed.
+- Coverage is now 100% for the production stack-check corpus, but legacy
+  capture/replay remains intentionally intact. Next steps are to add a
+  repository runnable-corpus selection-required mode distinct from semantic
+  opaque checking, decide whether the ten non-stack cost-policy rows are also
+  release gates, run the extended corpus under that mode, and only then plan a
+  separate removal of legacy capture/replay and obsolete fallback paths.
+
 ## 2026-08-14 binary-heap pop 13-block coverage batch (working tree)
 
 - Branch/base: `pr/143` at `30f9597`. The aggregate family now admits the
