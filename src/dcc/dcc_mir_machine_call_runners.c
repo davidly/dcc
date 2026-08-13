@@ -135,6 +135,18 @@ struct MirGnarlyRunner {
     char print_names[32][64];
 };
 
+struct MirNestedForRunner {
+    struct Sym *build_function;
+    struct Sym *check_functions[5];
+    struct Sym *count_functions[2];
+    struct Sym *stride_functions[2];
+    struct Sym *print_function;
+    struct Sym *pointer_array;
+    struct Sym *grid_array;
+    int strings[5];
+    char print_names[3][64];
+};
+
 static int mir_machine_constant_value(
     int value, long *constant_out, int depth)
 {
@@ -4424,6 +4436,745 @@ static void mir_emit_gnarly_runner(
     fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static int mir_nested_for_opcode_code(int opcode)
+{
+    if (opcode == MIR_FLOAT_CONST)
+        return 'Q';
+    return mir_gnarly_opcode_code(opcode);
+}
+
+static struct Sym *mir_nested_for_direct_function(
+    int instruction, int argument_count, int is_void, int call_id)
+{
+    struct Sym *function =
+        mir_memory_runner_call_function(
+            instruction, 0, argument_count);
+    const struct MirInsn *call = &mir.insns[instruction];
+
+    if (function == NULL || !function->is_defined ||
+        call->secondary_offset != call_id ||
+        ((call->type & 15) == TYPE_VOID) != is_void ||
+        (is_void ? type_ptr_depth(call->type) != 0 :
+         !mir_gnarly_word_type(call->type, 0)))
+        return NULL;
+    return function;
+}
+
+static int mir_nested_for_call(
+    int instruction, struct Sym *function,
+    int argument_count, const int *definitions)
+{
+    int arguments[6];
+    int argument;
+
+    if (find_global(mir.insns[instruction].name) != function ||
+        !mir_machine_call_arguments(
+            &mir.insns[instruction], argument_count, arguments))
+        return 0;
+    for (argument = 0; argument < argument_count; ++argument)
+        if (!mir_gnarly_value_from(
+                arguments[argument], definitions[argument]))
+            return 0;
+    return 1;
+}
+
+static int mir_nested_for_print_call(
+    struct MirNestedForRunner *plan, int slot,
+    int instruction, int call_id, int argument_count,
+    const int *definitions)
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    struct Sym *function;
+    int arguments[6];
+    int argument;
+
+    if (slot < 0 || slot >= 3 ||
+        call->opcode != MIR_CALL || call->src1 >= 0 ||
+        call->secondary_offset != call_id ||
+        call->memory_flags != MIR_CALL_FLAG_VARIADIC ||
+        call->base_name[0] == 0 ||
+        !mir_gnarly_word_type(call->type, 0) ||
+        !mir_machine_call_arguments(
+            call, argument_count, arguments) ||
+        (function = find_global(call->name)) == NULL ||
+        function->storage != SC_FUNC || function->is_defined ||
+        function->is_funcptr || function->is_noreturn ||
+        !function->has_proto || function->proto_nargs != 1 ||
+        !function->proto_variadic ||
+        !mir_gnarly_string_type(function->proto_types[0]) ||
+        !mir_gnarly_word_type(function->type, 0) ||
+        (plan->print_function != NULL &&
+         plan->print_function != function))
+        return 0;
+    for (argument = 0; argument < argument_count; ++argument)
+        if (!mir_gnarly_value_from(
+                arguments[argument], definitions[argument]))
+            return 0;
+    plan->print_function = function;
+    snprintf(plan->print_names[slot],
+             sizeof(plan->print_names[slot]), "%s",
+             call->base_name);
+    return 1;
+}
+
+static int mir_nested_for_local_address(
+    int instruction, int *offset_out)
+{
+    const struct MirInsn *address = &mir.insns[instruction];
+    int type;
+    int storage;
+    int offset;
+
+    if (address->opcode != MIR_ADDRESS ||
+        !mir_machine_named_nonvolatile(address) ||
+        !mir_scalar_memory_location(
+            address, &type, &storage, &offset) ||
+        storage != SC_LOCAL)
+        return 0;
+    *offset_out = offset;
+    return 1;
+}
+
+static struct Sym *mir_nested_for_global_array(
+    int instruction, int length, int element_size)
+{
+    const struct MirInsn *address = &mir.insns[instruction];
+    struct Sym *symbol;
+
+    if (address->opcode != MIR_ADDRESS ||
+        !mir_machine_named_nonvolatile(address) ||
+        address->object >= 0 ||
+        (symbol = find_global(address->name)) == NULL ||
+        symbol->storage == SC_FUNC || !symbol->is_defined ||
+        symbol->is_volatile || !symbol->is_array ||
+        symbol->array_len != length ||
+        symbol->elem_size != element_size)
+        return NULL;
+    return symbol;
+}
+
+static int mir_nested_for_member(
+    int instruction, int base, int offset,
+    int memory_size, int pointer_depth, int base_type)
+{
+    const struct MirInsn *member = &mir.insns[instruction];
+
+    return member->opcode == MIR_MEMBER_ADDRESS &&
+           mir_gnarly_value_from(member->src1, base) &&
+           member->immediate == offset &&
+           member->memory_size == memory_size &&
+           (member->memory_flags & (1 | 8)) == 0 &&
+           type_ptr_depth(member->type) == pointer_depth &&
+           (member->type & 15) == base_type;
+}
+
+static int mir_nested_for_index(
+    int instruction, int base, int index,
+    int stride, int memory_size)
+{
+    const struct MirInsn *address = &mir.insns[instruction];
+
+    return address->opcode == MIR_INDEX_ADDRESS &&
+           mir_gnarly_value_from(address->src1, base) &&
+           mir_gnarly_value_from(address->src2, index) &&
+           address->immediate == stride &&
+           address->memory_size == memory_size &&
+           (address->memory_flags & (1 | 8)) == 0;
+}
+
+static int mir_nested_for_store_indirect(
+    int instruction, int address, int value, int memory_size)
+{
+    const struct MirInsn *store = &mir.insns[instruction];
+
+    return store->opcode == MIR_STORE_INDIRECT &&
+           mir_gnarly_value_from(store->src1, address) &&
+           mir_gnarly_value_from(store->src2, value) &&
+           store->memory_size == memory_size &&
+           (store->memory_flags & (1 | 8)) == 0;
+}
+
+static int mir_match_nested_for_runner(
+    struct MirNestedForRunner *plan)
+{
+    static const char expected_opcodes[] =
+        "LANGKCNSLPNCBFAMNINCBUWAMNINCBFQLJLQLLPWAMNINCBFTLJLCNLLPWNLNCBNSJLACITWCNSLPNCBFNCNSLNDCBFANIDI"
+        "CWLDCBNSJLNLNCBNSJLACICICWCNSCNSCNSCNSCNSCNSLPPPPPNNCBFNCBANGNGKBNSNCBANGNGKBNSNCBANGNGKBNSNCBNG"
+        "KBNSNLNCBNSJLCNSLPNNNNPNCBFNCBNGKBNSLNCBNSJLTGANGKGANGKGAMCIRUGKTGNGNGNGNGNGKTGCGCGCGKGCGCGKGKCE";
+    static const int constant_instructions[34] = {
+        5, 11, 19, 28, 45, 52, 61, 68, 72, 78, 82, 88,
+        96, 100, 109, 116, 118, 120, 122, 125, 128, 131,
+        134, 137, 148, 152, 164, 176, 188, 199, 205, 216,
+        220, 230
+    };
+    static const long constant_values[34] = {
+        0, 4, 2, 1, 3, 0, 1, 2, 0, 3, 0, 4,
+        1, 1, 1, 1, 0, 0, 0, 0, 0, 0,
+        0, 0, 4, 10, 10, 10, 10, 1, 0, 3,
+        10, 1
+    };
+    static const int tail_constant_instructions[6] = {
+        250, 271, 273, 275, 279, 281
+    };
+    static const long tail_constant_values[6] = {
+        79, 0, 10, 2, 20, 3
+    };
+    static const int binary_instructions[23] = {
+        12, 20, 29, 46, 62, 79, 89, 101, 110, 149, 153,
+        160, 165, 172, 177, 184, 189, 193, 200, 217, 221,
+        225, 231
+    };
+    static const int binary_lefts[23] = {
+        9, 9, 9, 9, 9, 76, 87, 99, 76, 141, 142,
+        153, 143, 165, 144, 177, 145, 189, 141, 209, 214,
+        221, 209
+    };
+    static const int binary_rights[23] = {
+        11, 19, 28, 45, 61, 78, 88, 100, 109, 148, 152,
+        159, 164, 171, 176, 183, 188, 192, 199, 216, 220,
+        224, 230
+    };
+    static const int binary_operations[23] = {
+        '<', TOK_EQ, TOK_EQ, TOK_EQ, '+', '<', '<', '+', '+',
+        '<', '*', '+', '*', '+', '*', '+', '*', '+', '+',
+        '<', '*', '+', '+'
+    };
+    static const int string_instructions[5] = {
+        48, 70, 236, 256, 269
+    };
+    static const int first_print_arguments[4] = {
+        236, 241, 246, 253
+    };
+    static const int second_print_arguments[6] = {
+        256, 142, 143, 144, 145, 214
+    };
+    static const int third_print_arguments[3] = {
+        269, 277, 283
+    };
+    static const int direct_call_instructions[10] = {
+        4, 159, 171, 183, 192, 224, 241, 246, 277, 283
+    };
+    static const int direct_call_ids[10] = {
+        0, 1, 2, 3, 4, 5, 7, 8, 11, 12
+    };
+    static const int direct_call_counts[10] = {
+        1, 2, 2, 2, 1, 1, 1, 1, 3, 2
+    };
+    static const int direct_call_arguments[10][3] = {
+        {1, -1, -1}, {154, 141, -1}, {166, 141, -1},
+        {178, 141, -1}, {141, -1, -1}, {209, -1, -1},
+        {238, -1, -1}, {243, -1, -1}, {271, 273, 275},
+        {279, 281, -1}
+    };
+    struct Sym *direct_functions[10];
+    int s_offset;
+    int b_offset;
+    int call_count = 0;
+    int instruction;
+    int item;
+    int previous;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 288 || mir_cfg_block_count() != 24 ||
+        mir.has_vla || mir.local_bytes != 135 ||
+        mir.object_count != 6 ||
+        !mir_gnarly_word_type(mir.return_type, 0) ||
+        strlen(expected_opcodes) != (size_t)mir.count)
+        return mir_machine_reject(
+            "nested-for-call-runner", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        if (mir_nested_for_opcode_code(
+                mir.insns[instruction].opcode) !=
+                expected_opcodes[instruction])
+            return mir_machine_reject(
+                "nested-for-call-runner", "opcode");
+        if (mir.insns[instruction].opcode == MIR_CALL)
+            ++call_count;
+    }
+    if (call_count != 13)
+        return mir_machine_reject(
+            "nested-for-call-runner", "call-count");
+    for (item = 0; item < 34; ++item)
+        if (!mir_machine_constant_equals(
+                mir.insns[constant_instructions[item]].dst,
+                constant_values[item]))
+            return mir_machine_reject(
+                "nested-for-call-runner", "constants");
+    for (item = 0; item < 6; ++item)
+        if (!mir_machine_constant_equals(
+                mir.insns[tail_constant_instructions[item]].dst,
+                tail_constant_values[item]))
+            return mir_machine_reject(
+                "nested-for-call-runner", "tail-constants");
+    if (!mir_machine_constant_equals(mir.insns[286].dst, 0) ||
+        mir.insns[287].src1 != mir.insns[286].dst ||
+        mir.insns[31].immediate != 1065353216L ||
+        mir.insns[35].immediate != 0 ||
+        !type_is_float(mir.insns[31].type) ||
+        mir.insns[35].type != mir.insns[31].type ||
+        type_size(mir.insns[31].type) != 4)
+        return mir_machine_reject(
+            "nested-for-call-runner", "typed-constants");
+    for (item = 0; item < 23; ++item)
+        if (!mir_gnarly_binary(
+                binary_instructions[item],
+                binary_lefts[item], binary_rights[item],
+                binary_operations[item]) ||
+            !mir_gnarly_word_type(
+                mir.insns[binary_instructions[item]].type, 0))
+            return mir_machine_reject(
+                "nested-for-call-runner", "operations");
+
+    if (!mir_gnarly_phi(9, 5, 62, 0, 59) ||
+        !mir_gnarly_branch(13, 12, 66) ||
+        mir.insns[65].label != mir.insns[8].label ||
+        !mir_gnarly_branch(30, 29, 34) ||
+        mir.insns[33].label != mir.insns[37].label ||
+        !mir_gnarly_phi(38, 31, 35, 32, 36) ||
+        !mir_gnarly_branch(47, 46, 51) ||
+        mir.insns[50].label != mir.insns[55].label ||
+        !mir_gnarly_phi(56, 48, 52, 49, 54) ||
+        !mir_gnarly_phi(76, 72, 110, 66, 107) ||
+        !mir_gnarly_branch(80, 79, 114) ||
+        !mir_gnarly_branch(90, 89, 105) ||
+        mir.insns[104].label != mir.insns[85].label ||
+        mir.insns[113].label != mir.insns[75].label ||
+        !mir_gnarly_phi(141, 137, 200, 114, 197) ||
+        !mir_gnarly_phi(142, 122, 160, 114, 197) ||
+        !mir_gnarly_phi(143, 125, 172, 114, 197) ||
+        !mir_gnarly_phi(144, 128, 184, 114, 197) ||
+        !mir_gnarly_phi(145, 131, 193, 114, 197) ||
+        !mir_gnarly_branch(150, 149, 204) ||
+        mir.insns[203].label != mir.insns[140].label ||
+        !mir_gnarly_phi(209, 205, 231, 204, 228) ||
+        !mir_gnarly_phi(214, 134, 225, 204, 228) ||
+        !mir_gnarly_branch(218, 217, 235) ||
+        mir.insns[234].label != mir.insns[208].label)
+        return mir_machine_reject(
+            "nested-for-call-runner", "control-flow");
+
+    if (!mir_nested_for_local_address(1, &s_offset) ||
+        !mir_nested_for_local_address(14, &b_offset))
+        return mir_machine_reject(
+            "nested-for-call-runner", "local-addresses");
+    if (
+        s_offset == b_offset ||
+        s_offset < -mir.local_bytes || b_offset < -mir.local_bytes ||
+        s_offset + 81 > 0 || b_offset + 40 > 0 ||
+        !(s_offset + 81 <= b_offset ||
+          b_offset + 40 <= s_offset))
+        return mir_machine_reject(
+            "nested-for-call-runner", "local-aggregates");
+    {
+        static const int s_addresses[4] = {1, 238, 243, 248};
+        static const int b_addresses[4] = {14, 154, 166, 178};
+
+        for (item = 1; item < 4; ++item) {
+            int offset;
+
+            if (!mir_nested_for_local_address(
+                    s_addresses[item], &offset) ||
+                offset != s_offset ||
+                strcmp(mir.insns[s_addresses[item]].name,
+                       mir.insns[s_addresses[0]].name) ||
+                !mir_nested_for_local_address(
+                    b_addresses[item], &offset) ||
+                offset != b_offset ||
+                strcmp(mir.insns[b_addresses[item]].name,
+                       mir.insns[b_addresses[0]].name))
+                return mir_machine_reject(
+                    "nested-for-call-runner", "aggregate-aliases");
+        }
+        if (mir_machine_same_location(
+                &mir.insns[s_addresses[0]],
+                &mir.insns[b_addresses[0]]))
+            return mir_machine_reject(
+                "nested-for-call-runner", "aggregate-overlap");
+    }
+    if (!mir_nested_for_member(15, 14, 0, 16, 1, TYPE_LONG) ||
+        !mir_nested_for_index(17, 15, 9, 4, 4) ||
+        !mir_gnarly_binary(20, 9, 19, TOK_EQ) ||
+        mir.insns[21].src1 != mir.insns[20].dst ||
+        mir.insns[21].immediate != 0 ||
+        (mir.insns[21].type & 15) != TYPE_LONG ||
+        type_size(mir.insns[21].type) != 4 ||
+        !mir_nested_for_store_indirect(22, 17, 21, 4) ||
+        !mir_nested_for_member(24, 23, 16, 16, 1, TYPE_FLOAT) ||
+        !mir_nested_for_index(26, 24, 9, 4, 4) ||
+        !mir_nested_for_store_indirect(39, 26, 38, 4) ||
+        !mir_nested_for_member(41, 40, 32, 8, 2, TYPE_CHAR) ||
+        !mir_nested_for_index(43, 41, 9, 2, 2) ||
+        !mir_nested_for_store_indirect(57, 43, 56, 2))
+        return mir_machine_reject(
+            "nested-for-call-runner", "bag-initialization");
+
+    plan->pointer_array =
+        mir_nested_for_global_array(67, 4, 2);
+    plan->grid_array =
+        mir_nested_for_global_array(91, 3, 8);
+    if (plan->pointer_array == NULL || plan->grid_array == NULL ||
+        plan->pointer_array == plan->grid_array ||
+        find_global(mir.insns[115].name) != plan->grid_array ||
+        !mir_nested_for_index(69, 67, 68, 2, 2) ||
+        !mir_nested_for_store_indirect(71, 69, 70, 2) ||
+        !mir_nested_for_index(93, 91, 76, 8, 8) ||
+        !mir_nested_for_index(95, 93, 94, 2, 2) ||
+        !mir_nested_for_store_indirect(97, 95, 96, 2) ||
+        !mir_nested_for_index(117, 115, 116, 8, 8) ||
+        !mir_nested_for_index(119, 117, 118, 2, 2) ||
+        !mir_nested_for_store_indirect(121, 119, 120, 2))
+        return mir_machine_reject(
+            "nested-for-call-runner", "global-arrays");
+
+    if (!mir_machine_unobservable_local_store(&mir.insns[7]) ||
+        !mir_machine_same_location(
+            &mir.insns[7], &mir.insns[9]) ||
+        !mir_machine_same_location(
+            &mir.insns[7], &mir.insns[64]) ||
+        !mir_machine_same_location(
+            &mir.insns[7], &mir.insns[74]) ||
+        !mir_machine_same_location(
+            &mir.insns[7], &mir.insns[76]) ||
+        !mir_machine_same_location(
+            &mir.insns[7], &mir.insns[112]) ||
+        !mir_machine_same_location(
+            &mir.insns[7], &mir.insns[139]) ||
+        !mir_machine_same_location(
+            &mir.insns[7], &mir.insns[141]) ||
+        !mir_machine_same_location(
+            &mir.insns[7], &mir.insns[202]) ||
+        !mir_machine_same_location(
+            &mir.insns[7], &mir.insns[207]) ||
+        !mir_machine_same_location(
+            &mir.insns[7], &mir.insns[209]) ||
+        !mir_machine_same_location(
+            &mir.insns[7], &mir.insns[233]))
+        return mir_machine_reject(
+            "nested-for-call-runner", "loop-index");
+    if (!mir_machine_unobservable_local_store(&mir.insns[84]) ||
+        !mir_machine_same_location(
+            &mir.insns[84], &mir.insns[87]) ||
+        !mir_machine_same_location(
+            &mir.insns[84], &mir.insns[94]) ||
+        !mir_machine_same_location(
+            &mir.insns[84], &mir.insns[99]) ||
+        !mir_machine_same_location(
+            &mir.insns[84], &mir.insns[103]) ||
+        mir_machine_same_location(
+            &mir.insns[84], &mir.insns[7]))
+        return mir_machine_reject(
+            "nested-for-call-runner", "nested-index");
+    {
+        static const int initial_stores[5] = {
+            124, 127, 130, 133, 136
+        };
+        static const int phis[5] = {
+            142, 143, 144, 145, 214
+        };
+        static const int update_stores[5] = {
+            162, 174, 186, 195, 227
+        };
+
+        for (item = 0; item < 5; ++item) {
+            if (!mir_machine_unobservable_local_store(
+                    &mir.insns[initial_stores[item]]) ||
+                !mir_machine_same_location(
+                    &mir.insns[initial_stores[item]],
+                    &mir.insns[phis[item]]) ||
+                !mir_machine_same_location(
+                    &mir.insns[initial_stores[item]],
+                    &mir.insns[update_stores[item]]))
+                return mir_machine_reject(
+                    "nested-for-call-runner", "mask-locals");
+            for (previous = 0; previous < item; ++previous)
+                if (mir_machine_same_location(
+                        &mir.insns[initial_stores[item]],
+                        &mir.insns[initial_stores[previous]]))
+                    return mir_machine_reject(
+                        "nested-for-call-runner", "mask-alias");
+        }
+    }
+
+    if (!mir_nested_for_member(249, 248, 0, 81, 1, TYPE_CHAR) ||
+        (mir.insns[249].type & TYPE_UNSIGNED) == 0 ||
+        !mir_nested_for_index(251, 249, 250, 1, 1) ||
+        mir.insns[252].src1 != mir.insns[251].dst ||
+        mir.insns[252].memory_size != 1 ||
+        (mir.insns[252].type & TYPE_UNSIGNED) == 0 ||
+        mir.insns[253].src1 != mir.insns[252].dst ||
+        mir.insns[253].immediate != '!' ||
+        !mir_gnarly_word_type(mir.insns[253].type, 0))
+        return mir_machine_reject(
+            "nested-for-call-runner", "sieve-check");
+
+    for (item = 0; item < 5; ++item) {
+        const struct MirInsn *string =
+            &mir.insns[string_instructions[item]];
+
+        if (!mir_gnarly_string_type(string->type) ||
+            string->immediate < 0)
+            return mir_machine_reject(
+                "nested-for-call-runner", "strings");
+        plan->strings[item] = (int)string->immediate;
+        for (previous = 0; previous < item; ++previous)
+            if (plan->strings[item] == plan->strings[previous])
+                return mir_machine_reject(
+                    "nested-for-call-runner", "distinct-strings");
+    }
+
+    for (item = 0; item < 10; ++item) {
+        int is_void = item == 0;
+
+        direct_functions[item] =
+            mir_nested_for_direct_function(
+                direct_call_instructions[item],
+                direct_call_counts[item], is_void,
+                direct_call_ids[item]);
+        if (direct_functions[item] == NULL ||
+            !mir_nested_for_call(
+                direct_call_instructions[item],
+                direct_functions[item],
+                direct_call_counts[item],
+                direct_call_arguments[item]))
+            return mir_machine_reject(
+                "nested-for-call-runner", "direct-calls");
+        for (previous = 0; previous < item; ++previous)
+            if (direct_functions[item] == direct_functions[previous])
+                return mir_machine_reject(
+                    "nested-for-call-runner", "distinct-functions");
+    }
+    plan->build_function = direct_functions[0];
+    for (item = 0; item < 5; ++item)
+        plan->check_functions[item] = direct_functions[item + 1];
+    plan->count_functions[0] = direct_functions[6];
+    plan->count_functions[1] = direct_functions[7];
+    plan->stride_functions[0] = direct_functions[8];
+    plan->stride_functions[1] = direct_functions[9];
+
+    if (!mir_nested_for_print_call(
+            plan, 0, 255, 6, 4, first_print_arguments) ||
+        !mir_nested_for_print_call(
+            plan, 1, 268, 9, 6, second_print_arguments) ||
+        !mir_nested_for_print_call(
+            plan, 2, 285, 10, 3, third_print_arguments))
+        return mir_machine_reject(
+            "nested-for-call-runner", "print-calls");
+    for (item = 0; item < 10; ++item)
+        if (direct_functions[item] == plan->print_function)
+            return mir_machine_reject(
+                "nested-for-call-runner", "print-alias");
+    return 1;
+}
+
+enum MirNestedForFrame {
+    MIR_NESTED_SIEVE = -132,
+    MIR_NESTED_BAG = -51,
+    MIR_NESTED_LMASK = -11,
+    MIR_NESTED_FMASK = -9,
+    MIR_NESTED_PMASK = -7,
+    MIR_NESTED_GMASK = -5,
+    MIR_NESTED_RMASK = -3,
+    MIR_NESTED_INDEX = -1
+};
+
+static void mir_nested_for_ix_index_address(
+    FILE *out, int base_offset, int scale)
+{
+    fputs("\tld a,(ix-1)\n", out);
+    while (scale > 1) {
+        fputs("\tadd a,a\n", out);
+        scale /= 2;
+    }
+    fprintf(out,
+            "\tld l,a\n\tld h,0\n\tld de,%d\n\tadd hl,de\n"
+            "\tpush ix\n\tpop de\n\tadd hl,de\n",
+            base_offset);
+}
+
+static void mir_nested_for_cleanup(FILE *out, int words)
+{
+    while (words-- > 0)
+        fputs("\tpop bc\n", out);
+}
+
+static void mir_nested_for_mask_call(
+    FILE *out, struct Sym *function,
+    int mask_offset, int bag_argument)
+{
+    mir_gnarly_load_word(out, mask_offset);
+    fputs("\tadd hl,hl\n\tld d,h\n\tld e,l\n"
+          "\tadd hl,hl\n\tadd hl,hl\n\tadd hl,de\n"
+          "\tpush hl\n"
+          "\tld l,(ix-1)\n\tld h,0\n\tpush hl\n", out);
+    if (bag_argument) {
+        mir_gnarly_ix_address(out, MIR_NESTED_BAG);
+        fputs("\tpush hl\n", out);
+    }
+    mir_machine_emit_symbol_call(out, function);
+    mir_nested_for_cleanup(out, bag_argument ? 2 : 1);
+    fputs("\tpop de\n\tadd hl,de\n", out);
+    fprintf(out,
+            "\tld (ix%+d),l\n\tld (ix%+d),h\n",
+            mask_offset, mask_offset + 1);
+}
+
+static void mir_nested_for_print(
+    FILE *out, const struct MirNestedForRunner *plan,
+    int slot, int argument_count)
+{
+    mir_emit_runtime_call(out, plan->print_names[slot]);
+    mir_nested_for_cleanup(out, argument_count);
+}
+
+static void mir_emit_nested_for_runner(
+    FILE *out, const struct MirNestedForRunner *plan)
+{
+    int bag_loop = new_label();
+    int long_zero = new_label();
+    int float_zero = new_label();
+    int float_done = new_label();
+    int pointer_zero = new_label();
+    int pointer_done = new_label();
+    int grid_outer = new_label();
+    int grid_inner = new_label();
+    int mask_loop = new_label();
+    int row_loop = new_label();
+    int sieve_nonzero = new_label();
+    int sieve_done = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-132\n\tadd hl,sp\n\tld sp,hl\n", out);
+
+    mir_gnarly_ix_address(out, MIR_NESTED_SIEVE);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->build_function);
+    mir_nested_for_cleanup(out, 1);
+
+    fputs("\tld (ix-1),0\n", out);
+    fprintf(out, "L%d:\n", bag_loop);
+    mir_nested_for_ix_index_address(out, MIR_NESTED_BAG, 4);
+    fputs("\tld a,(ix-1)\n\tcp 2\n\tld a,0\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tinc a\nL%d:\n",
+            long_zero, long_zero);
+    fputs("\tld (hl),a\n\txor a\n\tinc hl\n\tld (hl),a\n"
+          "\tinc hl\n\tld (hl),a\n\tinc hl\n\tld (hl),a\n",
+          out);
+
+    mir_nested_for_ix_index_address(out, MIR_NESTED_BAG + 16, 4);
+    fputs("\tld a,(ix-1)\n\tcp 1\n", out);
+    fprintf(out, "\tjp nz,L%d\n", float_zero);
+    fputs("\txor a\n\tld (hl),a\n\tinc hl\n\tld (hl),a\n"
+          "\tinc hl\n\tld (hl),80h\n\tinc hl\n\tld (hl),3fh\n",
+          out);
+    fprintf(out, "\tjp L%d\nL%d:\n", float_done, float_zero);
+    fputs("\txor a\n\tld (hl),a\n\tinc hl\n\tld (hl),a\n"
+          "\tinc hl\n\tld (hl),a\n\tinc hl\n\tld (hl),a\n",
+          out);
+    fprintf(out, "L%d:\n", float_done);
+
+    mir_nested_for_ix_index_address(out, MIR_NESTED_BAG + 32, 2);
+    fputs("\tld a,(ix-1)\n\tcp 3\n\tld de,0\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tld de,S%d\nL%d:\n",
+            pointer_zero, plan->strings[0], pointer_zero);
+    fputs("\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
+    fprintf(out, "L%d:\n", pointer_done);
+    fputs("\tinc (ix-1)\n\tld a,(ix-1)\n\tcp 4\n", out);
+    fprintf(out, "\tjp c,L%d\n", bag_loop);
+
+    fprintf(out, "\tld hl,S%d\n\tld (%s+4),hl\n",
+            plan->strings[1],
+            asm_name_for(sym_asm_name(plan->pointer_array)));
+
+    fprintf(out, "\tld hl,%s\n\tld b,3\nL%d:\n\tld c,4\nL%d:\n",
+            asm_name_for(sym_asm_name(plan->grid_array)),
+            grid_outer, grid_inner);
+    fputs("\tld (hl),1\n\tinc hl\n\tld (hl),0\n\tinc hl\n"
+          "\tdec c\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tdjnz L%d\n",
+            grid_inner, grid_outer);
+    fprintf(out, "\txor a\n\tld (%s+8),a\n\tld (%s+9),a\n",
+            asm_name_for(sym_asm_name(plan->grid_array)),
+            asm_name_for(sym_asm_name(plan->grid_array)));
+
+    mir_gnarly_store_word(out, MIR_NESTED_LMASK, 0);
+    mir_gnarly_store_word(out, MIR_NESTED_FMASK, 0);
+    mir_gnarly_store_word(out, MIR_NESTED_PMASK, 0);
+    mir_gnarly_store_word(out, MIR_NESTED_GMASK, 0);
+    mir_gnarly_store_word(out, MIR_NESTED_RMASK, 0);
+    fputs("\tld (ix-1),0\n", out);
+    fprintf(out, "L%d:\n", mask_loop);
+    mir_nested_for_mask_call(
+        out, plan->check_functions[0], MIR_NESTED_LMASK, 1);
+    mir_nested_for_mask_call(
+        out, plan->check_functions[1], MIR_NESTED_FMASK, 1);
+    mir_nested_for_mask_call(
+        out, plan->check_functions[2], MIR_NESTED_PMASK, 1);
+    mir_nested_for_mask_call(
+        out, plan->check_functions[3], MIR_NESTED_GMASK, 0);
+    fputs("\tinc (ix-1)\n\tld a,(ix-1)\n\tcp 4\n", out);
+    fprintf(out, "\tjp c,L%d\n", mask_loop);
+
+    fputs("\tld (ix-1),0\n", out);
+    fprintf(out, "L%d:\n", row_loop);
+    mir_nested_for_mask_call(
+        out, plan->check_functions[4], MIR_NESTED_RMASK, 0);
+    fputs("\tinc (ix-1)\n\tld a,(ix-1)\n\tcp 3\n", out);
+    fprintf(out, "\tjp c,L%d\n", row_loop);
+
+    mir_gnarly_ix_address(out, MIR_NESTED_SIEVE);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->count_functions[0]);
+    mir_nested_for_cleanup(out, 1);
+    fputs("\tld (ix-51),l\n\tld (ix-50),h\n", out);
+    mir_gnarly_ix_address(out, MIR_NESTED_SIEVE);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->count_functions[1]);
+    mir_nested_for_cleanup(out, 1);
+    fputs("\tld (ix-49),l\n\tld (ix-48),h\n"
+          "\tld a,(ix-53)\n\tor a\n\tld hl,0\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tinc hl\nL%d:\n",
+            sieve_nonzero, sieve_nonzero);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_load_word(out, -49);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_load_word(out, -51);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[2]);
+    mir_nested_for_print(out, plan, 0, 4);
+    fprintf(out, "L%d:\n", sieve_done);
+
+    mir_gnarly_load_word(out, MIR_NESTED_RMASK);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_load_word(out, MIR_NESTED_GMASK);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_load_word(out, MIR_NESTED_PMASK);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_load_word(out, MIR_NESTED_FMASK);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_load_word(out, MIR_NESTED_LMASK);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[3]);
+    mir_nested_for_print(out, plan, 1, 6);
+
+    fputs("\tld hl,2\n\tpush hl\n\tld hl,10\n\tpush hl\n"
+          "\tld hl,0\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->stride_functions[0]);
+    mir_nested_for_cleanup(out, 3);
+    fputs("\tld (ix-51),l\n\tld (ix-50),h\n"
+          "\tld hl,3\n\tpush hl\n\tld hl,20\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->stride_functions[1]);
+    mir_nested_for_cleanup(out, 2);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_load_word(out, -51);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[4]);
+    mir_nested_for_print(out, plan, 2, 3);
+
+    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_fixed_call_runner_failure(
     FILE *out, const struct MirFixedCallCheckRunner *plan,
     int check, int next_label)
@@ -5474,6 +6225,7 @@ int mir_try_emit_call_runners(FILE *out, int phase)
         struct MirForIncrementRunner for_increment_plan;
         struct MirByteEqualityRunner byte_equality_plan;
         struct MirGnarlyRunner gnarly_plan;
+        struct MirNestedForRunner nested_for_plan;
         struct MirLongIndexCallRunner long_index_plan;
         struct MirFixedCallCheckRunner plan;
 
@@ -5507,6 +6259,10 @@ int mir_try_emit_call_runners(FILE *out, int phase)
         }
         if (mir_match_gnarly_runner(&gnarly_plan)) {
             mir_emit_gnarly_runner(out, &gnarly_plan);
+            return 1;
+        }
+        if (mir_match_nested_for_runner(&nested_for_plan)) {
+            mir_emit_nested_for_runner(out, &nested_for_plan);
             return 1;
         }
         if (mir_match_long_index_call_runner(&long_index_plan)) {

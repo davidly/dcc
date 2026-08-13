@@ -6,10 +6,44 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Clean base HEAD for the current coverage batch: `f90c620`.
-- Current working-tree candidate coverage: **2145/2185 (98.17%)**.
-- Remaining fallback population: **40 `final-cost-policy`**, all selected by
+- Clean base HEAD for the current coverage batch: `56aec5b`.
+- Current working-tree candidate coverage: **2146/2185 (98.22%)**.
+- Remaining fallback population: **39 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The call-runner module now admits the 24-block `tnestfor.main`
+  `final-cost-policy` fallback through a strict name-free matcher over all
+  **288 MIR instructions**. It proves the local 81-byte sieve and 40-byte
+  mixed-value aggregate, the aggregate initialization loop and nested
+  three-by-four grid loop, both mask loops and their seven PHIs, all indexed
+  long/float/pointer/word/byte accesses, every branch and backedge, all
+  **13** ordered build/check/count/stride/report calls, the three variadic
+  reports and the final zero return. The emitter preserves the source call
+  and nested-loop order while using a compact **132-byte IX frame**, with no
+  IY.
+- Normal selected/captured metrics are **3,504/6,438 bytes** and
+  **330/604 instructions**; stack-check metrics are **3,533/6,467 bytes**
+  and **331/605 instructions**. `tnestfor` passes checked full peep/nopeep
+  validation, as does the forced-fallback side. Selected/fallback totals are
+  **173,515/183,966 cycles** and **6,784/7,040 bytes** peep, plus
+  **212,306/224,986 cycles** and **7,040/7,424 bytes** nopeep.
+- A renamed-function, renamed-helper, renamed-global, renamed-aggregate and
+  renamed-local edge A/B is byte-identical in both modes and prints the
+  expected prime, indexed-not and stride summaries. Selected/fallback
+  measurements are **170,811/181,262 cycles** and **3,456/3,840 bytes**
+  peep, plus **209,602/222,282 cycles** and **3,712/4,224 bytes** nopeep.
+- The call-runner module grows from **5,530 to 6,286 source lines**. Its
+  object audit still reports only `mir_try_emit_call_runners [T]` as defined
+  global code, with zero global read-only or writable data. The canonical
+  build passes. The regression-gated stack-check census advances
+  **2,145/2,185 (98.17%)** to **2,146/2,185 (98.22%)**, adds exactly
+  `tnestfor.main`, removes no accepted function, moves selector counts from
+  **1,408 spilled / 370 scheduled** to **1,407 spilled / 371 scheduled**,
+  and leaves **39 `final-cost-policy`** fallbacks. The corresponding
+  regression-gated normal census advances **2,056/2,103 (97.77%)** to
+  **2,057/2,103 (97.81%)**, moves **1,346 spilled / 370 scheduled** to
+  **1,345 spilled / 371 scheduled**, and leaves **46
+  `final-cost-policy`** fallbacks. No performance baseline, production name,
+  or output-hash gate was added.
 - The aggregate-check module now admits the 22-block
   `tptrlhs.touch_locals` `final-cost-policy` fallback through a strict
   name-free matcher over all **1,439 MIR instructions**. It proves the four
