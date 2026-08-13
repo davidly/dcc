@@ -261,6 +261,32 @@ struct MirFileIoRunner {
     int strings[MIR_FILE_IO_STRING_COUNT];
 };
 
+enum MirBufferedConsoleFunction {
+    MIR_BUFFER_PRINT,
+    MIR_BUFFER_ALLOCATE,
+    MIR_BUFFER_CONFIGURE,
+    MIR_BUFFER_CHECK,
+    MIR_BUFFER_FLUSH,
+    MIR_BUFFER_FREE,
+    MIR_BUFFER_PUTS_STREAM,
+    MIR_BUFFER_PUTS,
+    MIR_BUFFER_PUTCHAR,
+    MIR_BUFFER_SETBUF,
+    MIR_BUFFER_FPRINT,
+    MIR_BUFFER_CLEAR,
+    MIR_BUFFER_OPEN,
+    MIR_BUFFER_CLOSE,
+    MIR_BUFFER_REMOVE,
+    MIR_BUFFER_FUNCTION_COUNT
+};
+
+struct MirBufferedConsoleRunner {
+    struct Sym *functions[MIR_BUFFER_FUNCTION_COUNT];
+    struct Sym *failures;
+    char call_names[MIR_BUFFER_FUNCTION_COUNT][64];
+    int strings[40];
+};
+
 static int mir_machine_constant_value(
     int value, long *constant_out, int depth)
 {
@@ -11573,9 +11599,843 @@ static void mir_emit_cast_logical_runner(
     fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static int mir_buffered_console_word_type(int type, int is_unsigned)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == TYPE_INT &&
+           ((type & TYPE_UNSIGNED) != 0) == is_unsigned &&
+           type_size(type) == 2;
+}
+
+static int mir_buffered_console_pointer_type(int type, int base_type)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & 15) == base_type &&
+           type_size(type) == 2;
+}
+
+static struct Sym *mir_buffered_console_function(
+    int instruction, int variadic, int fixed_arguments)
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    struct Sym *function;
+
+    if (call->opcode != MIR_CALL || call->src1 >= 0 ||
+        call->memory_flags !=
+            (variadic ? MIR_CALL_FLAG_VARIADIC : 0) ||
+        (function = find_global(call->name)) == NULL ||
+        function->storage != SC_FUNC || function->is_funcptr ||
+        function->is_noreturn || !function->has_proto ||
+        function->proto_variadic != variadic ||
+        function->proto_nargs != fixed_arguments ||
+        call->type != function->type)
+        return NULL;
+    return function;
+}
+
+static int mir_buffered_console_function_types(
+    const struct MirBufferedConsoleRunner *plan)
+{
+    struct Sym *print = plan->functions[MIR_BUFFER_PRINT];
+    struct Sym *allocate = plan->functions[MIR_BUFFER_ALLOCATE];
+    struct Sym *configure = plan->functions[MIR_BUFFER_CONFIGURE];
+    struct Sym *check = plan->functions[MIR_BUFFER_CHECK];
+    struct Sym *flush = plan->functions[MIR_BUFFER_FLUSH];
+    struct Sym *free_function = plan->functions[MIR_BUFFER_FREE];
+    struct Sym *puts_stream = plan->functions[MIR_BUFFER_PUTS_STREAM];
+    struct Sym *puts_function = plan->functions[MIR_BUFFER_PUTS];
+    struct Sym *putchar_function = plan->functions[MIR_BUFFER_PUTCHAR];
+    struct Sym *setbuf_function = plan->functions[MIR_BUFFER_SETBUF];
+    struct Sym *fprint = plan->functions[MIR_BUFFER_FPRINT];
+    struct Sym *clear = plan->functions[MIR_BUFFER_CLEAR];
+    struct Sym *open_function = plan->functions[MIR_BUFFER_OPEN];
+    struct Sym *close_function = plan->functions[MIR_BUFFER_CLOSE];
+    struct Sym *remove_function = plan->functions[MIR_BUFFER_REMOVE];
+
+    return
+        mir_buffered_console_word_type(print->type, 0) &&
+        mir_buffered_console_pointer_type(
+            print->proto_types[0], TYPE_CHAR) &&
+        mir_buffered_console_pointer_type(
+            allocate->type, TYPE_CHAR) &&
+        mir_buffered_console_word_type(
+            allocate->proto_types[0], 1) &&
+        mir_buffered_console_word_type(configure->type, 0) &&
+        mir_buffered_console_pointer_type(
+            configure->proto_types[0], TYPE_INT) &&
+        mir_buffered_console_pointer_type(
+            configure->proto_types[1], TYPE_CHAR) &&
+        mir_buffered_console_word_type(
+            configure->proto_types[2], 0) &&
+        mir_buffered_console_word_type(
+            configure->proto_types[3], 1) &&
+        type_ptr_depth(check->type) == 0 &&
+        (check->type & 15) == TYPE_VOID &&
+        mir_buffered_console_pointer_type(
+            check->proto_types[0], TYPE_CHAR) &&
+        mir_buffered_console_pointer_type(
+            check->proto_types[1], TYPE_CHAR) &&
+        mir_buffered_console_pointer_type(
+            check->proto_types[2], TYPE_CHAR) &&
+        mir_buffered_console_word_type(flush->type, 0) &&
+        mir_buffered_console_pointer_type(
+            flush->proto_types[0], TYPE_INT) &&
+        type_ptr_depth(free_function->type) == 0 &&
+        (free_function->type & 15) == TYPE_VOID &&
+        mir_buffered_console_pointer_type(
+            free_function->proto_types[0], TYPE_VOID) &&
+        mir_buffered_console_word_type(puts_stream->type, 0) &&
+        mir_buffered_console_pointer_type(
+            puts_stream->proto_types[0], TYPE_CHAR) &&
+        mir_buffered_console_pointer_type(
+            puts_stream->proto_types[1], TYPE_INT) &&
+        mir_buffered_console_word_type(puts_function->type, 0) &&
+        mir_buffered_console_pointer_type(
+            puts_function->proto_types[0], TYPE_CHAR) &&
+        mir_buffered_console_word_type(putchar_function->type, 0) &&
+        mir_buffered_console_word_type(
+            putchar_function->proto_types[0], 0) &&
+        type_ptr_depth(setbuf_function->type) == 0 &&
+        (setbuf_function->type & 15) == TYPE_VOID &&
+        mir_buffered_console_pointer_type(
+            setbuf_function->proto_types[0], TYPE_INT) &&
+        mir_buffered_console_pointer_type(
+            setbuf_function->proto_types[1], TYPE_CHAR) &&
+        mir_buffered_console_word_type(fprint->type, 0) &&
+        mir_buffered_console_pointer_type(
+            fprint->proto_types[0], TYPE_INT) &&
+        mir_buffered_console_pointer_type(
+            fprint->proto_types[1], TYPE_CHAR) &&
+        mir_buffered_console_pointer_type(clear->type, TYPE_VOID) &&
+        mir_buffered_console_pointer_type(
+            clear->proto_types[0], TYPE_VOID) &&
+        mir_buffered_console_word_type(clear->proto_types[1], 0) &&
+        mir_buffered_console_word_type(clear->proto_types[2], 1) &&
+        mir_buffered_console_pointer_type(
+            open_function->type, TYPE_INT) &&
+        mir_buffered_console_pointer_type(
+            open_function->proto_types[0], TYPE_CHAR) &&
+        mir_buffered_console_pointer_type(
+            open_function->proto_types[1], TYPE_CHAR) &&
+        mir_buffered_console_word_type(close_function->type, 0) &&
+        mir_buffered_console_pointer_type(
+            close_function->proto_types[0], TYPE_INT) &&
+        mir_buffered_console_word_type(remove_function->type, 0) &&
+        mir_buffered_console_pointer_type(
+            remove_function->proto_types[0], TYPE_CHAR);
+}
+
+static int mir_buffered_console_local(
+    int instruction, int expected_offset, int pointer_base)
+{
+    int type;
+    int storage;
+    int offset;
+
+    return mir_scalar_memory_location(
+               &mir.insns[instruction], &type, &storage, &offset) &&
+           storage == SC_LOCAL &&
+           offset == expected_offset &&
+           (pointer_base < 0
+                ? mir_buffered_console_word_type(type, 0)
+                : mir_buffered_console_pointer_type(type, pointer_base));
+}
+
+static int mir_match_buffered_console_runner(
+    struct MirBufferedConsoleRunner *plan)
+{
+    static const char expected_opcodes[] =
+        "LTGKCNGKNSCNGDGCGCNGKCBFTGKLTGKTGKTGKDGTGTGKCNGKTGKTGKTGKTGKTGKTGKTGKCNGKNNNNNNCNGKSCNGDGCGCNGKT"
+        "GKCNGKDGKNCNGDGCGCNGKCNGKNSCNSLPNCBFDNICNCBBUWNCBCBFDNINCWLNLNCBNSJLDCINCWDCINCWTGDGKCNGKDNGKCNG"
+        "DGCGCNGKTGCNGKTGKCNGCNGCGCNGKTGKCGKCGKCGKCGKNNNNNNCNGKSCNGDGKTGKDGTGTGKCNGKDGKCNGCNGKTGKNCNGTGCG"
+        "CGKCNGTGKCNGCNGCGCNGKCBFLTGKJLTGKLNNDNGCGCNGKCNGDGCGCNGKTGKTGTGKNSDCBFLTGKNJLCNGKNSDGDGCGCNGKCBF"
+        "TGKLDGDGKDGTGKDGKDGKNLTGKDGTGTGKCNGKTGKNCNGCNGCGCNGKDNGKDCBFLTGKJLTGDGKLTGKCE";
+    static const int string_instructions[39] = {
+        1, 24, 28, 31, 34, 39, 41, 48, 51, 54,
+        57, 60, 63, 66, 95, 176, 200, 206, 221, 253,
+        258, 260, 277, 284, 294, 313, 318, 344, 347, 349,
+        359, 384, 395, 406, 411, 413, 445, 450, 456
+    };
+    static const struct {
+        int instruction;
+        int type;
+        long value;
+    } constants[] = {
+        {4, 2, 4096}, {10, 2, 1}, {15, 2, 0}, {17, 2, 4096},
+        {21, 2, 0}, {44, 2, 1}, {69, 2, 1}, {79, 2, 32},
+        {84, 2, 1}, {89, 2, 0}, {91, 2, 32}, {98, 2, 1},
+        {106, 2, 1}, {111, 2, 0}, {113, 2, 4096},
+        {117, 2, 256}, {123, 2, 0}, {129, 2, 200},
+        {135, 2, 48}, {137, 2, 10}, {143, 2, 37}, {145, 2, 0},
+        {152, 1, 36}, {158, 2, 1}, {165, 2, 200},
+        {168, 1, 10}, {171, 2, 201}, {174, 1, 0}, {181, 2, 1},
+        {189, 2, 1}, {194, 2, 1}, {196, 2, 4096},
+        {202, 2, 1}, {209, 2, 1}, {212, 2, 0}, {215, 2, 2},
+        {217, 2, 0}, {224, 2, 88}, {227, 2, 36}, {230, 2, 89},
+        {233, 2, 10}, {242, 2, 256}, {247, 2, 1}, {263, 2, 1},
+        {270, 2, 1}, {273, 2, 0}, {281, 2, 1}, {286, 2, 3},
+        {288, 2, 100}, {291, 2, 2}, {297, 2, 1}, {300, 2, 0},
+        {303, 2, 7}, {305, 2, 0}, {309, 2, 0}, {327, 2, 0},
+        {329, 2, 4096}, {333, 2, 1}, {338, 2, 0},
+        {340, 2, 4096}, {355, 2, 0}, {365, 2, 64},
+        {375, 2, 2}, {377, 2, 64}, {381, 2, 0}, {416, 2, 1},
+        {424, 2, 1}, {427, 2, 0}, {430, 2, 1}, {432, 2, 0},
+        {441, 2, 0}, {459, 2, 0}
+    };
+    static const struct {
+        int instruction;
+        int call_id;
+        int function;
+        int argument_count;
+        int definitions[4];
+    } calls[] = {
+        {3, 0, MIR_BUFFER_PRINT, 1, {1}},
+        {7, 1, MIR_BUFFER_ALLOCATE, 1, {4}},
+        {20, 2, MIR_BUFFER_CONFIGURE, 4, {10, 13, 15, 17}},
+        {26, 3, MIR_BUFFER_PRINT, 1, {24}},
+        {30, 4, MIR_BUFFER_PRINT, 1, {28}},
+        {33, 5, MIR_BUFFER_PRINT, 1, {31}},
+        {36, 6, MIR_BUFFER_PRINT, 1, {34}},
+        {43, 7, MIR_BUFFER_CHECK, 3, {37, 39, 41}},
+        {47, 8, MIR_BUFFER_FLUSH, 1, {44}},
+        {50, 9, MIR_BUFFER_PRINT, 1, {48}},
+        {53, 10, MIR_BUFFER_PRINT, 1, {51}},
+        {56, 11, MIR_BUFFER_PRINT, 1, {54}},
+        {59, 12, MIR_BUFFER_PRINT, 1, {57}},
+        {62, 13, MIR_BUFFER_PRINT, 1, {60}},
+        {65, 14, MIR_BUFFER_PRINT, 1, {63}},
+        {68, 15, MIR_BUFFER_PRINT, 1, {66}},
+        {72, 16, MIR_BUFFER_FLUSH, 1, {69}},
+        {82, 22, MIR_BUFFER_ALLOCATE, 1, {79}},
+        {94, 18, MIR_BUFFER_CONFIGURE, 4, {84, 87, 89, 91}},
+        {97, 19, MIR_BUFFER_PRINT, 1, {95}},
+        {101, 20, MIR_BUFFER_FLUSH, 1, {98}},
+        {104, 21, MIR_BUFFER_FREE, 1, {102}},
+        {116, 23, MIR_BUFFER_CONFIGURE, 4, {106, 109, 111, 113}},
+        {120, 24, MIR_BUFFER_ALLOCATE, 1, {117}},
+        {180, 25, MIR_BUFFER_PRINT, 2, {176, 178}},
+        {184, 26, MIR_BUFFER_FLUSH, 1, {181}},
+        {188, 27, MIR_BUFFER_FREE, 1, {185}},
+        {199, 28, MIR_BUFFER_CONFIGURE, 4, {189, 192, 194, 196}},
+        {205, 29, MIR_BUFFER_PUTS_STREAM, 2, {200, 202}},
+        {208, 30, MIR_BUFFER_PUTS, 1, {206}},
+        {220, 31, MIR_BUFFER_CONFIGURE, 4, {209, 212, 215, 217}},
+        {223, 32, MIR_BUFFER_PRINT, 1, {221}},
+        {226, 33, MIR_BUFFER_PUTCHAR, 1, {224}},
+        {229, 34, MIR_BUFFER_PUTCHAR, 1, {227}},
+        {232, 35, MIR_BUFFER_PUTCHAR, 1, {230}},
+        {235, 36, MIR_BUFFER_PUTCHAR, 1, {233}},
+        {245, 45, MIR_BUFFER_ALLOCATE, 1, {242}},
+        {252, 38, MIR_BUFFER_SETBUF, 2, {247, 250}},
+        {255, 39, MIR_BUFFER_PRINT, 1, {253}},
+        {262, 40, MIR_BUFFER_CHECK, 3, {256, 258, 260}},
+        {266, 41, MIR_BUFFER_FLUSH, 1, {263}},
+        {269, 42, MIR_BUFFER_FREE, 1, {267}},
+        {276, 43, MIR_BUFFER_SETBUF, 2, {270, 273}},
+        {279, 44, MIR_BUFFER_PRINT, 1, {277}},
+        {290, 46, MIR_BUFFER_FPRINT, 4, {281, 284, 286, 288}},
+        {296, 47, MIR_BUFFER_FPRINT, 2, {291, 294}},
+        {308, 48, MIR_BUFFER_CONFIGURE, 4, {297, 300, 303, 305}},
+        {315, 49, MIR_BUFFER_PRINT, 1, {313}},
+        {320, 50, MIR_BUFFER_PRINT, 1, {318}},
+        {332, 51, MIR_BUFFER_CLEAR, 3, {324, 327, 329}},
+        {343, 52, MIR_BUFFER_CONFIGURE, 4, {333, 336, 338, 340}},
+        {346, 53, MIR_BUFFER_PRINT, 1, {344}},
+        {351, 54, MIR_BUFFER_OPEN, 2, {347, 349}},
+        {361, 55, MIR_BUFFER_PRINT, 1, {359}},
+        {368, 56, MIR_BUFFER_ALLOCATE, 1, {365}},
+        {380, 57, MIR_BUFFER_CONFIGURE, 4, {371, 373, 375, 377}},
+        {386, 58, MIR_BUFFER_PRINT, 1, {384}},
+        {392, 59, MIR_BUFFER_SETBUF, 2, {388, 390}},
+        {397, 60, MIR_BUFFER_FPRINT, 2, {393, 395}},
+        {400, 61, MIR_BUFFER_CLOSE, 1, {398}},
+        {403, 62, MIR_BUFFER_FREE, 1, {401}},
+        {408, 63, MIR_BUFFER_PRINT, 1, {406}},
+        {415, 64, MIR_BUFFER_CHECK, 3, {409, 411, 413}},
+        {419, 65, MIR_BUFFER_FLUSH, 1, {416}},
+        {422, 66, MIR_BUFFER_REMOVE, 1, {420}},
+        {435, 67, MIR_BUFFER_CONFIGURE, 4, {424, 427, 430, 432}},
+        {439, 68, MIR_BUFFER_FREE, 1, {436}},
+        {447, 69, MIR_BUFFER_PRINT, 1, {445}},
+        {454, 70, MIR_BUFFER_PRINT, 2, {450, 452}},
+        {458, 71, MIR_BUFFER_PRINT, 1, {456}}
+    };
+    static const int first_calls[MIR_BUFFER_FUNCTION_COUNT] = {
+        3, 7, 20, 43, 47, 104, 205, 208, 226, 252,
+        290, 332, 351, 400, 422
+    };
+    static const int fixed_arguments[MIR_BUFFER_FUNCTION_COUNT] = {
+        1, 1, 4, 3, 1, 1, 2, 1, 1, 2, 2, 3, 2, 1, 1
+    };
+    static const int variadic[MIR_BUFFER_FUNCTION_COUNT] = {
+        1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0
+    };
+    static const int big_locations[] = {
+        9, 13, 37, 109, 192, 324, 336, 409, 436
+    };
+    static const int small_locations[] = {83, 87, 102};
+    static const int line_locations[] = {
+        122, 132, 148, 164, 170, 178, 185
+    };
+    static const int index_locations[] = {125, 127, 161};
+    static const int setbuf_locations[] = {246, 250, 256, 267};
+    static const int stream_locations[] = {
+        353, 354, 371, 388, 393, 398
+    };
+    static const int file_buffer_locations[] = {370, 373, 390, 401};
+    int arguments[4];
+    int instruction;
+    int first;
+    int second;
+    int item;
+    int clear_destination;
+    int clear_fill;
+    int clear_count;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 461 || mir_cfg_block_count() != 16 ||
+        mir.has_vla || mir.local_bytes != 14 ||
+        mir.aggregate_temp_bytes != 0 ||
+        !mir_buffered_console_word_type(mir.return_type, 0) ||
+        strlen(expected_opcodes) != (size_t)mir.count)
+        return mir_machine_reject(
+            "buffered-console-runner", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir_gnarly_opcode_code(mir.insns[instruction].opcode) !=
+                expected_opcodes[instruction])
+            return mir_machine_reject(
+                "buffered-console-runner", "opcode");
+
+    for (item = 0; item < MIR_BUFFER_FUNCTION_COUNT; ++item) {
+        const struct MirInsn *call = &mir.insns[first_calls[item]];
+        const char *call_name;
+
+        plan->functions[item] = mir_buffered_console_function(
+            first_calls[item], variadic[item],
+            fixed_arguments[item]);
+        if (plan->functions[item] == NULL)
+            return mir_machine_reject(
+                "buffered-console-runner", "function");
+        call_name = call->base_name[0] != 0
+            ? call->base_name
+            : asm_name_for(sym_asm_name(plan->functions[item]));
+        snprintf(plan->call_names[item],
+                 sizeof(plan->call_names[item]), "%s", call_name);
+        for (first = 0; first < item; ++first)
+            if (plan->functions[first] == plan->functions[item])
+                return mir_machine_reject(
+                    "buffered-console-runner", "function-alias");
+    }
+    if (!mir_buffered_console_function_types(plan))
+        return mir_machine_reject(
+            "buffered-console-runner", "function-type");
+
+    for (item = 0;
+         item < (int)(sizeof(calls) / sizeof(calls[0]));
+         ++item) {
+        const struct MirInsn *call =
+            &mir.insns[calls[item].instruction];
+        const char *call_name = call->base_name[0] != 0
+            ? call->base_name
+            : asm_name_for(sym_asm_name(
+                plan->functions[calls[item].function]));
+
+        if (call->secondary_offset != calls[item].call_id ||
+            find_global(call->name) !=
+                plan->functions[calls[item].function] ||
+            call->memory_flags !=
+                (plan->functions[calls[item].function]->proto_variadic
+                    ? MIR_CALL_FLAG_VARIADIC : 0) ||
+            call->type !=
+                plan->functions[calls[item].function]->type ||
+            strcmp(call_name,
+                   plan->call_names[calls[item].function]) ||
+            !mir_machine_call_arguments(
+                call, calls[item].argument_count, arguments))
+            return mir_machine_reject(
+                "buffered-console-runner", "call");
+        for (first = 0; first < calls[item].argument_count; ++first)
+            if (arguments[first] !=
+                    mir.insns[calls[item].definitions[first]].dst)
+                return mir_machine_reject(
+                    "buffered-console-runner", "call-argument");
+    }
+
+    for (item = 0;
+         item < (int)(sizeof(constants) / sizeof(constants[0]));
+         ++item)
+        if (mir.insns[constants[item].instruction].type !=
+                constants[item].type ||
+            !mir_machine_constant_equals(
+                mir.insns[constants[item].instruction].dst,
+                constants[item].value))
+            return mir_machine_reject(
+                "buffered-console-runner", "constant");
+
+    for (item = 0; item < 39; ++item) {
+        const struct MirInsn *string =
+            &mir.insns[string_instructions[item]];
+
+        if (!mir_buffered_console_pointer_type(
+                string->type, TYPE_CHAR))
+            return mir_machine_reject(
+                "buffered-console-runner", "string-type");
+        plan->strings[item] = (int)string->immediate;
+        for (second = 0; second < item; ++second)
+            if (plan->strings[item] == plan->strings[second])
+                return mir_machine_reject(
+                    "buffered-console-runner", "string-alias");
+    }
+    if (mir.insns[420].immediate != plan->strings[28] ||
+        mir.insns[420].type != mir.insns[347].type)
+        return mir_machine_reject(
+            "buffered-console-runner", "string-reuse");
+
+#define MIR_BUFFER_LOCAL_GROUP(group, offset, base)                         \
+    do {                                                                    \
+        if (!mir_buffered_console_local((group)[0], (offset), (base)))      \
+            return mir_machine_reject(                                      \
+                "buffered-console-runner", "local");                       \
+        for (item = 1;                                                      \
+             item < (int)(sizeof(group) / sizeof((group)[0]));              \
+             ++item)                                                        \
+            if (!mir_machine_same_location(                                 \
+                    &mir.insns[(group)[0]], &mir.insns[(group)[item]]))      \
+                return mir_machine_reject(                                  \
+                    "buffered-console-runner", "local-alias");             \
+    } while (0)
+    MIR_BUFFER_LOCAL_GROUP(big_locations, -2, TYPE_CHAR);
+    MIR_BUFFER_LOCAL_GROUP(line_locations, -4, TYPE_CHAR);
+    MIR_BUFFER_LOCAL_GROUP(index_locations, -6, -1);
+    MIR_BUFFER_LOCAL_GROUP(small_locations, -8, TYPE_CHAR);
+    MIR_BUFFER_LOCAL_GROUP(setbuf_locations, -10, TYPE_CHAR);
+    MIR_BUFFER_LOCAL_GROUP(stream_locations, -12, TYPE_INT);
+    MIR_BUFFER_LOCAL_GROUP(file_buffer_locations, -14, TYPE_CHAR);
+#undef MIR_BUFFER_LOCAL_GROUP
+
+    if (mir.insns[9].src1 != mir.insns[7].dst ||
+        mir.insns[83].src1 != mir.insns[82].dst ||
+        mir.insns[122].src1 != mir.insns[120].dst ||
+        mir.insns[246].src1 != mir.insns[245].dst ||
+        mir.insns[353].src1 != mir.insns[351].dst ||
+        mir.insns[370].src1 != mir.insns[368].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[9]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[83]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[122]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[246]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[353]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[370]))
+        return mir_machine_reject(
+            "buffered-console-runner", "local-flow");
+
+    if (mir.insns[22].immediate != TOK_NE ||
+        mir.insns[22].src1 != mir.insns[20].dst ||
+        mir.insns[22].src2 != mir.insns[21].dst ||
+        mir.insns[23].src1 != mir.insns[22].dst ||
+        mir.insns[23].label != mir.insns[27].label ||
+        mir.insns[310].immediate != TOK_EQ ||
+        mir.insns[310].src1 != mir.insns[308].dst ||
+        mir.insns[310].src2 != mir.insns[309].dst ||
+        mir.insns[311].src1 != mir.insns[310].dst ||
+        mir.insns[311].label != mir.insns[317].label ||
+        mir.insns[316].label != mir.insns[321].label ||
+        mir.insns[356].immediate != TOK_EQ ||
+        mir.insns[356].src1 != mir.insns[354].dst ||
+        mir.insns[356].src2 != mir.insns[355].dst ||
+        mir.insns[357].src1 != mir.insns[356].dst ||
+        mir.insns[357].label != mir.insns[364].label ||
+        mir.insns[363].label != mir.insns[405].label ||
+        mir.insns[382].immediate != TOK_NE ||
+        mir.insns[382].src1 != mir.insns[380].dst ||
+        mir.insns[382].src2 != mir.insns[381].dst ||
+        mir.insns[383].src1 != mir.insns[382].dst ||
+        mir.insns[383].label != mir.insns[387].label ||
+        mir.insns[442].immediate != TOK_EQ ||
+        mir.insns[442].src1 != mir.insns[440].dst ||
+        mir.insns[442].src2 != mir.insns[441].dst ||
+        mir.insns[443].src1 != mir.insns[442].dst ||
+        mir.insns[443].label != mir.insns[449].label ||
+        mir.insns[448].label != mir.insns[455].label)
+        return mir_machine_reject(
+            "buffered-console-runner", "branch");
+
+    if (mir.insns[127].src1 != mir.insns[123].dst ||
+        mir.insns[127].src2 != mir.insns[159].dst ||
+        mir.insns[127].phi_pred1 != mir.insns[27].label ||
+        mir.insns[127].phi_pred2 != mir.insns[156].label ||
+        mir.insns[130].immediate != '<' ||
+        mir.insns[130].src1 != mir.insns[127].dst ||
+        mir.insns[130].src2 != mir.insns[129].dst ||
+        mir.insns[131].src1 != mir.insns[130].dst ||
+        mir.insns[131].label != mir.insns[163].label ||
+        mir.insns[134].src1 != mir.insns[132].dst ||
+        mir.insns[134].src2 != mir.insns[127].dst ||
+        mir.insns[134].immediate != 1 ||
+        mir.insns[134].memory_size != 1 ||
+        mir.insns[138].immediate != '%' ||
+        mir.insns[138].src1 != mir.insns[127].dst ||
+        mir.insns[138].src2 != mir.insns[137].dst ||
+        mir.insns[139].immediate != '+' ||
+        mir.insns[139].src1 != mir.insns[135].dst ||
+        mir.insns[139].src2 != mir.insns[138].dst ||
+        mir.insns[140].immediate != 0 ||
+        mir.insns[140].src1 != mir.insns[139].dst ||
+        mir.insns[141].src1 != mir.insns[134].dst ||
+        mir.insns[141].src2 != mir.insns[140].dst ||
+        mir.insns[141].memory_size != 1 ||
+        mir.insns[144].immediate != '%' ||
+        mir.insns[144].src1 != mir.insns[127].dst ||
+        mir.insns[144].src2 != mir.insns[143].dst ||
+        mir.insns[146].immediate != TOK_EQ ||
+        mir.insns[146].src1 != mir.insns[144].dst ||
+        mir.insns[146].src2 != mir.insns[145].dst ||
+        mir.insns[147].src1 != mir.insns[146].dst ||
+        mir.insns[147].label != mir.insns[154].label ||
+        mir.insns[150].src1 != mir.insns[148].dst ||
+        mir.insns[150].src2 != mir.insns[127].dst ||
+        mir.insns[150].immediate != 1 ||
+        mir.insns[153].src1 != mir.insns[150].dst ||
+        mir.insns[153].src2 != mir.insns[152].dst ||
+        mir.insns[153].memory_size != 1 ||
+        mir.insns[159].immediate != '+' ||
+        mir.insns[159].src1 != mir.insns[127].dst ||
+        mir.insns[159].src2 != mir.insns[158].dst ||
+        mir.insns[161].src1 != mir.insns[159].dst ||
+        mir.insns[162].label != mir.insns[126].label ||
+        mir.insns[166].src1 != mir.insns[164].dst ||
+        mir.insns[166].src2 != mir.insns[165].dst ||
+        mir.insns[166].immediate != 1 ||
+        mir.insns[169].src1 != mir.insns[166].dst ||
+        mir.insns[169].src2 != mir.insns[168].dst ||
+        mir.insns[169].memory_size != 1 ||
+        mir.insns[172].src1 != mir.insns[170].dst ||
+        mir.insns[172].src2 != mir.insns[171].dst ||
+        mir.insns[172].immediate != 1 ||
+        mir.insns[175].src1 != mir.insns[172].dst ||
+        mir.insns[175].src2 != mir.insns[174].dst ||
+        mir.insns[175].memory_size != 1)
+        return mir_machine_reject(
+            "buffered-console-runner", "line-build");
+
+    if (!mir_machine_named_nonvolatile(&mir.insns[440]) ||
+        (plan->failures = find_global(mir.insns[440].name)) == NULL ||
+        plan->failures->storage == SC_FUNC ||
+        !plan->failures->is_defined || plan->failures->is_array ||
+        plan->failures->is_volatile ||
+        !mir_buffered_console_word_type(plan->failures->type, 0) ||
+        !mir_machine_same_location(
+            &mir.insns[440], &mir.insns[452]) ||
+        mir.insns[460].src1 != mir.insns[459].dst)
+        return mir_machine_reject(
+            "buffered-console-runner", "result");
+    if (!mir_call_is_memset_fastcall(
+            332, &clear_destination, &clear_fill, &clear_count) ||
+        clear_destination != mir.insns[324].dst ||
+        clear_fill != mir.insns[327].dst ||
+        clear_count != mir.insns[329].dst)
+        return mir_machine_reject(
+            "buffered-console-runner", "clear-fastcall");
+    return 1;
+}
+
+static void mir_buffered_console_emit_call(
+    FILE *out, const struct MirBufferedConsoleRunner *plan,
+    int function, int words)
+{
+    if (!strcmp(
+            plan->call_names[function],
+            asm_name_for(sym_asm_name(plan->functions[function]))))
+        mir_machine_emit_symbol_call(out, plan->functions[function]);
+    else
+        fprintf(out, "\tcall %s\n", plan->call_names[function]);
+    mir_emit_final_call_cleanup(out, words);
+}
+
+static void mir_buffered_console_push_string(FILE *out, int string_id)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+}
+
+static void mir_buffered_console_push_local(FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n",
+            offset, offset + 1);
+}
+
+static void mir_buffered_console_print(
+    FILE *out, const struct MirBufferedConsoleRunner *plan,
+    int string)
+{
+    mir_buffered_console_push_string(out, plan->strings[string]);
+    mir_buffered_console_emit_call(
+        out, plan, MIR_BUFFER_PRINT, 1);
+}
+
+static void mir_buffered_console_allocate(
+    FILE *out, const struct MirBufferedConsoleRunner *plan,
+    int size, int offset)
+{
+    fprintf(out, "\tld hl,%d\n\tpush hl\n", size);
+    mir_buffered_console_emit_call(
+        out, plan, MIR_BUFFER_ALLOCATE, 1);
+    fprintf(out,
+            "\tld (ix%+d),l\n\tld (ix%+d),h\n",
+            offset, offset + 1);
+}
+
+static void mir_buffered_console_setvbuf(
+    FILE *out, const struct MirBufferedConsoleRunner *plan,
+    int stream_offset, int stream_value,
+    int buffer_offset, int mode, int size)
+{
+    fprintf(out, "\tld hl,%d\n\tpush hl\n", size);
+    fprintf(out, "\tld hl,%d\n\tpush hl\n", mode);
+    if (buffer_offset != 0)
+        mir_buffered_console_push_local(out, buffer_offset);
+    else
+        fputs("\tld hl,0\n\tpush hl\n", out);
+    if (stream_offset != 0)
+        mir_buffered_console_push_local(out, stream_offset);
+    else
+        fprintf(out, "\tld hl,%d\n\tpush hl\n", stream_value);
+    mir_buffered_console_emit_call(
+        out, plan, MIR_BUFFER_CONFIGURE, 4);
+}
+
+static void mir_buffered_console_setbuf(
+    FILE *out, const struct MirBufferedConsoleRunner *plan,
+    int stream_offset, int stream_value, int buffer_offset)
+{
+    if (buffer_offset != 0)
+        mir_buffered_console_push_local(out, buffer_offset);
+    else
+        fputs("\tld hl,0\n\tpush hl\n", out);
+    if (stream_offset != 0)
+        mir_buffered_console_push_local(out, stream_offset);
+    else
+        fprintf(out, "\tld hl,%d\n\tpush hl\n", stream_value);
+    mir_buffered_console_emit_call(
+        out, plan, MIR_BUFFER_SETBUF, 2);
+}
+
+static void mir_buffered_console_free(
+    FILE *out, const struct MirBufferedConsoleRunner *plan,
+    int offset)
+{
+    mir_buffered_console_push_local(out, offset);
+    mir_buffered_console_emit_call(
+        out, plan, MIR_BUFFER_FREE, 1);
+}
+
+static void mir_buffered_console_expect(
+    FILE *out, const struct MirBufferedConsoleRunner *plan,
+    int buffer_offset, int want, int tag)
+{
+    mir_buffered_console_push_string(out, plan->strings[tag]);
+    mir_buffered_console_push_string(out, plan->strings[want]);
+    mir_buffered_console_push_local(out, buffer_offset);
+    mir_buffered_console_emit_call(
+        out, plan, MIR_BUFFER_CHECK, 3);
+}
+
+static void mir_buffered_console_flush(
+    FILE *out, const struct MirBufferedConsoleRunner *plan)
+{
+    fputs("\tld hl,1\n\tpush hl\n", out);
+    mir_buffered_console_emit_call(
+        out, plan, MIR_BUFFER_FLUSH, 1);
+}
+
+static void mir_emit_buffered_console_runner(
+    FILE *out, const struct MirBufferedConsoleRunner *plan)
+{
+    int initial_buffer_ok = new_label();
+    int line_loop = new_label();
+    int digit_ready = new_label();
+    int ordinary_character = new_label();
+    int invalid_rejected = new_label();
+    int invalid_done = new_label();
+    int file_opened = new_label();
+    int file_done = new_label();
+    int file_buffer_ok = new_label();
+    int success = new_label();
+    int result_done = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-6\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+
+    mir_buffered_console_print(out, plan, 0);
+    mir_buffered_console_allocate(out, plan, 4096, -2);
+    mir_buffered_console_setvbuf(out, plan, 0, 1, -2, 0, 4096);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", initial_buffer_ok);
+    mir_buffered_console_print(out, plan, 1);
+    fprintf(out, "L%d:\n", initial_buffer_ok);
+
+    mir_buffered_console_print(out, plan, 2);
+    mir_buffered_console_print(out, plan, 3);
+    mir_buffered_console_print(out, plan, 4);
+    mir_buffered_console_expect(out, plan, -2, 5, 6);
+    mir_buffered_console_flush(out, plan);
+    mir_buffered_console_print(out, plan, 7);
+    mir_buffered_console_print(out, plan, 8);
+    mir_buffered_console_print(out, plan, 9);
+    mir_buffered_console_print(out, plan, 10);
+    mir_buffered_console_print(out, plan, 11);
+    mir_buffered_console_print(out, plan, 12);
+    mir_buffered_console_print(out, plan, 13);
+    mir_buffered_console_flush(out, plan);
+
+    mir_buffered_console_allocate(out, plan, 32, -4);
+    mir_buffered_console_setvbuf(out, plan, 0, 1, -4, 0, 32);
+    mir_buffered_console_print(out, plan, 14);
+    mir_buffered_console_flush(out, plan);
+    mir_buffered_console_free(out, plan, -4);
+
+    mir_buffered_console_setvbuf(out, plan, 0, 1, -2, 0, 4096);
+    mir_buffered_console_allocate(out, plan, 256, -4);
+    fputs("\tld l,(ix-4)\n\tld h,(ix-3)\n"
+          "\tld b,200\n\tld c,0\n\tld d,0\n", out);
+    fprintf(out,
+            "L%d:\n"
+            "\tld a,c\n\tadd a,48\n"
+            "\tld e,a\n"
+            "\tld a,d\n\tor a\n"
+            "\tjp nz,L%d\n"
+            "\tld e,36\n\tld d,37\n"
+            "L%d:\n"
+            "\tld a,e\n\tld (hl),a\n\tinc hl\n"
+            "\tinc c\n\tld a,c\n\tcp 10\n"
+            "\tjp c,L%d\n\txor a\n\tld c,a\n"
+            "L%d:\n"
+            "\tdec d\n\tdjnz L%d\n"
+            "\tld (hl),10\n\tinc hl\n\tld (hl),0\n",
+            line_loop, ordinary_character, ordinary_character,
+            digit_ready, digit_ready, line_loop);
+    mir_buffered_console_push_local(out, -4);
+    mir_buffered_console_push_string(out, plan->strings[15]);
+    mir_buffered_console_emit_call(
+        out, plan, MIR_BUFFER_PRINT, 2);
+    mir_buffered_console_flush(out, plan);
+    mir_buffered_console_free(out, plan, -4);
+
+    mir_buffered_console_setvbuf(out, plan, 0, 1, -2, 1, 4096);
+    fputs("\tld hl,1\n\tpush hl\n", out);
+    mir_buffered_console_push_string(out, plan->strings[16]);
+    mir_buffered_console_emit_call(
+        out, plan, MIR_BUFFER_PUTS_STREAM, 2);
+    mir_buffered_console_push_string(out, plan->strings[17]);
+    mir_buffered_console_emit_call(
+        out, plan, MIR_BUFFER_PUTS, 1);
+
+    mir_buffered_console_setvbuf(out, plan, 0, 1, 0, 2, 0);
+    mir_buffered_console_print(out, plan, 18);
+    fputs("\tld hl,88\n\tpush hl\n", out);
+    mir_buffered_console_emit_call(
+        out, plan, MIR_BUFFER_PUTCHAR, 1);
+    fputs("\tld hl,36\n\tpush hl\n", out);
+    mir_buffered_console_emit_call(
+        out, plan, MIR_BUFFER_PUTCHAR, 1);
+    fputs("\tld hl,89\n\tpush hl\n", out);
+    mir_buffered_console_emit_call(
+        out, plan, MIR_BUFFER_PUTCHAR, 1);
+    fputs("\tld hl,10\n\tpush hl\n", out);
+    mir_buffered_console_emit_call(
+        out, plan, MIR_BUFFER_PUTCHAR, 1);
+
+    mir_buffered_console_allocate(out, plan, 256, -4);
+    mir_buffered_console_setbuf(out, plan, 0, 1, -4);
+    mir_buffered_console_print(out, plan, 19);
+    mir_buffered_console_expect(out, plan, -4, 20, 21);
+    mir_buffered_console_flush(out, plan);
+    mir_buffered_console_free(out, plan, -4);
+    mir_buffered_console_setbuf(out, plan, 0, 1, 0);
+    mir_buffered_console_print(out, plan, 22);
+
+    fputs("\tld hl,100\n\tpush hl\n"
+          "\tld hl,3\n\tpush hl\n", out);
+    mir_buffered_console_push_string(out, plan->strings[23]);
+    fputs("\tld hl,1\n\tpush hl\n", out);
+    mir_buffered_console_emit_call(
+        out, plan, MIR_BUFFER_FPRINT, 4);
+    mir_buffered_console_push_string(out, plan->strings[24]);
+    fputs("\tld hl,2\n\tpush hl\n", out);
+    mir_buffered_console_emit_call(
+        out, plan, MIR_BUFFER_FPRINT, 2);
+
+    mir_buffered_console_setvbuf(out, plan, 0, 1, 0, 7, 0);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n", invalid_rejected);
+    mir_buffered_console_print(out, plan, 25);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            invalid_done, invalid_rejected);
+    mir_buffered_console_print(out, plan, 26);
+    fprintf(out, "L%d:\n", invalid_done);
+
+    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n"
+          "\tld bc,4096\n\tld de,0\n", out);
+    mir_emit_runtime_call(out, "__msf");
+    mir_buffered_console_setvbuf(out, plan, 0, 1, -2, 0, 4096);
+    mir_buffered_console_print(out, plan, 27);
+
+    mir_buffered_console_push_string(out, plan->strings[29]);
+    mir_buffered_console_push_string(out, plan->strings[28]);
+    mir_buffered_console_emit_call(
+        out, plan, MIR_BUFFER_OPEN, 2);
+    fputs("\tld (ix-4),l\n\tld (ix-3),h\n"
+          "\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n", file_opened);
+    mir_buffered_console_print(out, plan, 30);
+    fprintf(out, "\tjp L%d\nL%d:\n", file_done, file_opened);
+
+    mir_buffered_console_allocate(out, plan, 64, -6);
+    mir_buffered_console_setvbuf(out, plan, -4, 0, -6, 2, 64);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", file_buffer_ok);
+    mir_buffered_console_print(out, plan, 31);
+    fprintf(out, "L%d:\n", file_buffer_ok);
+    mir_buffered_console_setbuf(out, plan, -4, 0, -6);
+    mir_buffered_console_push_string(out, plan->strings[32]);
+    mir_buffered_console_push_local(out, -4);
+    mir_buffered_console_emit_call(
+        out, plan, MIR_BUFFER_FPRINT, 2);
+    mir_buffered_console_push_local(out, -4);
+    mir_buffered_console_emit_call(
+        out, plan, MIR_BUFFER_CLOSE, 1);
+    mir_buffered_console_free(out, plan, -6);
+    fprintf(out, "L%d:\n", file_done);
+
+    mir_buffered_console_print(out, plan, 33);
+    mir_buffered_console_expect(out, plan, -2, 34, 35);
+    mir_buffered_console_flush(out, plan);
+    mir_buffered_console_push_string(out, plan->strings[28]);
+    mir_buffered_console_emit_call(
+        out, plan, MIR_BUFFER_REMOVE, 1);
+
+    mir_buffered_console_setvbuf(out, plan, 0, 1, 0, 1, 0);
+    mir_buffered_console_free(out, plan, -2);
+    mir_machine_emit_global_word(out, plan->failures, 0);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", success);
+    mir_machine_emit_global_word(out, plan->failures, 0);
+    fputs("\tpush hl\n", out);
+    mir_buffered_console_push_string(out, plan->strings[37]);
+    mir_buffered_console_emit_call(
+        out, plan, MIR_BUFFER_PRINT, 2);
+    fprintf(out, "\tjp L%d\nL%d:\n", result_done, success);
+    mir_buffered_console_print(out, plan, 36);
+    fprintf(out, "L%d:\n", result_done);
+    mir_buffered_console_print(out, plan, 38);
+    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 int mir_try_emit_call_runners(FILE *out, int phase)
 {
     if (phase == 0) {
+        struct MirBufferedConsoleRunner buffered_console_plan;
         struct MirDirectoryEnumerationRunner directory_plan;
         struct MirFileIoRunner file_io_plan;
         struct MirAbortFileRunner abort_plan;
@@ -11593,6 +12453,12 @@ int mir_try_emit_call_runners(FILE *out, int phase)
         struct MirCastLogicalRunner cast_logical_plan;
         struct MirFixedCallCheckRunner plan;
 
+        if (mir_match_buffered_console_runner(
+                &buffered_console_plan)) {
+            mir_emit_buffered_console_runner(
+                out, &buffered_console_plan);
+            return 1;
+        }
         if (mir_match_directory_enumeration_runner(
                 &directory_plan)) {
             mir_emit_directory_enumeration_runner(

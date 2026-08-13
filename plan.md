@@ -3,6 +3,55 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-13 buffered-console 16-block batch (working tree)
+
+- Branch/base: `pr/143` at `fdad5fc`. The call-runner module now admits the
+  16-block `tsvbuf2.main` `final-cost-policy` fallback through a strict
+  structural matcher over all **461 MIR instructions**. It validates the full
+  opcode stream, 72 calls and their argument identities, 39 distinct strings
+  plus the file-name reuse, every constant, all seven original local-object
+  lifetimes, the 200-byte construction loop, setvbuf result checks, file-open
+  and file-buffer branches, failure-count result branch, prototypes and the
+  selected memset fastcall. The matcher contains no function, helper, local,
+  file, output or runtime-test name and no output hash.
+- This is a dedicated string/buffer schedule, not admission of the generic
+  final candidate. Forced generic output remains excluded: against forced
+  fallback it measured **1,374,556/1,335,122 peep cycles (+2.95%)** and
+  **1,290,918/1,248,811 nopeep cycles (+3.37%)**.
+- The dedicated emitter preserves every buffering-mode transition, adopted
+  buffer lifetime and inspection, dollar-containing write, flush, allocation
+  and free, formatted console/file call, invalid-mode check, file-open failure
+  branch, close/remove cleanup and final success/failure report. Its 200-byte
+  content loop uses bounded byte counters instead of two signed-modulo helper
+  calls per iteration. It uses a compact **6-byte IX frame** and emits no IY
+  instruction.
+- Normal selected/captured metrics are **5,357/6,372 bytes** and
+  **505/597 instructions**. Stack-check metrics are **5,386/6,401 bytes**
+  and **506/598 instructions**.
+- Stack-check full-mode selected/fallback totals are
+  **892,528/1,335,122 cycles and 10,368/10,496 bytes** peep plus
+  **893,039/1,248,811 cycles and 10,368/10,752 bytes** nopeep. Both selected
+  and forced-fallback runs pass the existing `tsvbuf2` output.
+- A helper/global/local-renamed success fixture selects the same 16-block
+  family and is selected/fallback output-identical in both modes. Selected/
+  fallback totals are **906,418/1,349,012 cycles and 7,168/7,296 bytes**
+  peep plus **906,993/1,262,765 cycles and 7,168/7,680 bytes** nopeep.
+  An otherwise identical empty-file-name fixture exercises fopen failure,
+  buffer-content failure and the final nonzero-failure report; it is also
+  output-identical in both modes and measures **898,472/1,341,040 cycles**
+  peep plus **899,003/1,254,696 cycles** nopeep, with the same respective
+  image sizes.
+- The regression-gated stack-check census advances **2,160/2,185 (98.86%)**
+  to **2,161/2,185 (98.90%)**, adds exactly `tsvbuf2.main`, removes no
+  accepted function, moves selector counts from **1,393 spilled / 385
+  scheduled** to **1,392 spilled / 386 scheduled**, and reduces
+  `final-cost-policy` fallbacks **25 -> 24**.
+- The call-runner module grows from **11,682 to 12,548 source lines**
+  (**+866**). Its standalone object defines only
+  `mir_try_emit_call_runners [T]` globally and has zero global data
+  definitions. The canonical build and `git diff --check` pass. No
+  performance baseline was changed.
+
 ## 2026-08-13 packed-record array batch (working tree)
 
 - Branch/base: `pr/143` at `ce9d7f3`. The aggregate-check module now admits
