@@ -5,10 +5,48 @@ current execution plan and handoff.
 
 ## 2026-08-13 current checkpoint (read this first)
 
-- Branch: `pr/143`; clean base HEAD for this batch: `a3f219f`.
-- Current working-tree candidate coverage: **2153/2185 (98.54%)**.
-- Remaining fallback population: **32 `final-cost-policy`**, all selected by
+- Branch: `pr/143`; clean base HEAD for this batch: `6d115d6`.
+- Current working-tree candidate coverage: **2154/2185 (98.58%)**.
+- Remaining fallback population: **31 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The call-runner module now admits the 29-block `tfreopen.main`
+  `final-cost-policy` fallback through a strict name-free matcher over all
+  **316 MIR instructions**. It proves the 32-byte line buffer, primary and
+  nested stream locals, both trim-loop PHIs, every string identity/reuse,
+  all open/reopen/close/remove/read/write/compare/report call sites and
+  prototypes, every null/content/error branch, both cleanup removals and all
+  ten returns. No production function, local, file, content or output name is
+  matched.
+- This does not admit the previously rejected forced generic candidate, which
+  remains excluded after measuring **+4.65% peep / +2.73% nopeep**. The
+  dedicated emitter preserves call and stream-state order, including storing
+  each open/reopen result, the two in-place newline trims, early error returns,
+  the conditional missing-file reopen, successful close/remove order and final
+  return. It uses a compact **34-byte IX frame** and no IY.
+- Normal selected/captured metrics are **3,082/5,427 bytes** and **287/503
+  instructions**; stack-check metrics are **3,111/5,456 bytes** and **288/504
+  instructions**. Checked full-mode selected/fallback totals are
+  **84,606/87,968 cycles** and **8,960/9,088 bytes** peep, plus
+  **84,586/91,631 cycles** and **8,960/9,344 bytes** nopeep. Forced fallback
+  also passes full-mode validation.
+- A renamed function/helper/local/file/content boundary fixture preserves the
+  same 29-block graph. Its success path is selected/fallback output-identical
+  in both modes, removes both temporary files, and measures
+  **93,199/96,920 cycles** and **9,472/9,600 bytes** peep, plus
+  **93,673/101,323 cycles** and **9,600/9,984 bytes** nopeep. A forced second
+  read failure is also output-identical, returns nonzero before source cleanup
+  in both builds, and measures **62,636/64,248 cycles** peep plus
+  **63,097/67,021 cycles** nopeep with the same respective image sizes. The
+  expected leftover fixture files were removed after the A/B.
+- The call-runner module grows from **10,309 to 11,152 source lines**. Its
+  object audit still reports only `mir_try_emit_call_runners [T]` as defined
+  global code, with zero global read-only or writable data. The canonical
+  build passes. The regression-gated stack-check census advances
+  **2,153/2,185 (98.54%)** to **2,154/2,185 (98.58%)**, adds exactly
+  `tfreopen.main`, removes no accepted function, moves selector counts from
+  **1,400 spilled / 378 scheduled** to **1,399 spilled / 379 scheduled**, and
+  leaves **31 `final-cost-policy`** fallbacks. No performance baseline,
+  production identifier or output-hash gate was added.
 - The numeric module now admits the 13-block `trowinv.main`
   `final-cost-policy` fallback through a strict name-free matcher over all
   **127 MIR instructions**. It proves the private four-word result array,
