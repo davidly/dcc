@@ -5,10 +5,53 @@ current execution plan and handoff.
 
 ## 2026-08-13 current checkpoint (read this first)
 
-- Branch: `pr/143`; clean base HEAD for this batch: `ecd3b17`.
-- Current working-tree candidate coverage: **2152/2185 (98.49%)**.
-- Remaining fallback population: **33 `final-cost-policy`**, all selected by
+- Branch: `pr/143`; clean base HEAD for this batch: `a3f219f`.
+- Current working-tree candidate coverage: **2153/2185 (98.54%)**.
+- Remaining fallback population: **32 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The numeric module now admits the 13-block `trowinv.main`
+  `final-cost-policy` fallback through a strict name-free matcher over all
+  **127 MIR instructions**. It proves the private four-word result array,
+  private 2-by-4 word table, byte-narrowed induction PHI, all four initial
+  stores, both nested index strides, the loop-carried row-source reload,
+  ordered variadic report, complete short-circuit check graph and final
+  boolean return. No production function, global, local, output text or
+  selected-output hash is matched.
+- This is not the previously rejected forced generic candidate, which remains
+  excluded after measuring **+7.48% peep / +5.14% nopeep**. The dedicated
+  emitter uses a frameless register schedule with the bounded induction value
+  in B, recomputes the mutable row selector on every iteration, retains
+  target-width row scaling and word loads/stores, preserves the selected
+  variadic call variant and reloads the result array after that call. It uses
+  no IY.
+- Normal selected/captured metrics are **819/2,193 bytes** and **76/213
+  instructions**; stack-check metrics are **848/2,222 bytes** and **77/214
+  instructions**. Checked full-mode selected/fallback totals are
+  **22,735/23,055 cycles** and **5,376/5,376 bytes** peep, plus
+  **22,745/24,009 cycles** and **5,376/5,504 bytes** nopeep. Forced fallback
+  also passes full-mode validation.
+- Renamed-function/global/local singular-row and switched-row boundary A/B
+  fixtures preserve the same 13-block graph and are output-identical between
+  selected and fallback builds in both modes. The singular case reports
+  `1 0 -32768 32767` and return check 1; selected/fallback measurements are
+  **49,556/49,875 cycles** and **5,376/5,376 bytes** peep, plus
+  **49,556/50,666 cycles** and **5,376/5,632 bytes** nopeep. The switched
+  boundary case reports `1 1 -32768 32767` and return check 1; selected/
+  fallback measurements are **49,611/49,927 cycles** and
+  **5,376/5,376 bytes** peep, plus **49,611/50,798 cycles** and
+  **5,376/5,632 bytes** nopeep.
+- The numeric module grows from **4,526 to 4,974 source lines**. Its object
+  audit still reports only `mir_try_emit_numeric_kernels [T]` as defined
+  global code, with zero global read-only or writable data. The canonical
+  build passes. The regression-gated stack-check census advances
+  **2,152/2,185 (98.49%)** to **2,153/2,185 (98.54%)**, adds exactly
+  `trowinv.main`, removes no accepted function, moves selector counts from
+  **1,401 spilled / 377 scheduled** to **1,400 spilled / 378 scheduled**,
+  and leaves **32 `final-cost-policy`** fallbacks. The corresponding normal
+  census advances **2,063/2,104 to 2,064/2,104**, adds the same function,
+  moves **1,340 spilled / 377 scheduled** to **1,339 spilled / 378
+  scheduled**, and removes no accepted function. No performance baseline,
+  production identifier, or output-hash gate was added.
 - The call-runner module now admits the 28-block `cpmenumd.enumerate`
   `final-cost-policy` fallback through a strict name-free matcher over all
   **318 MIR instructions**. It proves the 36-byte FCB, 13-byte filename,

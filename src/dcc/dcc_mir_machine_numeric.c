@@ -104,6 +104,13 @@ struct MirLcsDpSchedule {
     int right_stack_offset;
 };
 
+struct MirRowInversionCheckSchedule {
+    struct Sym *values;
+    struct Sym *table;
+    int format_string_id;
+    char print_name[64];
+};
+
 static int mir_modp2_opcode_code(int opcode);
 
 static int mir_machine_constant_value(
@@ -258,6 +265,380 @@ static int mir_lcs_char_type(int type)
            !type_is_float(type) &&
            (type & 15) == TYPE_CHAR &&
            type_size(type) == 1;
+}
+
+static int mir_row_inversion_word_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           !type_is_float(type) &&
+           (type & 15) == TYPE_INT &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 2;
+}
+
+static int mir_row_inversion_byte_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           !type_is_float(type) &&
+           (type & 15) == TYPE_CHAR &&
+           (type & TYPE_UNSIGNED) != 0 &&
+           type_size(type) == 1;
+}
+
+static int mir_row_inversion_word_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & 15) == TYPE_INT &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 2;
+}
+
+static int mir_row_inversion_array(
+    int instruction, int dimensions, int first, int second,
+    struct Sym **symbol_out)
+{
+    const struct MirInsn *address = &mir.insns[instruction];
+    struct Sym *symbol;
+    long offset;
+
+    if (address->opcode != MIR_ADDRESS ||
+        !mir_machine_global_address_offset(
+            address->dst, &symbol, &offset, 0) ||
+        offset != 0 || symbol == NULL || !symbol->is_defined ||
+        !symbol->is_static || symbol->is_volatile ||
+        !symbol->is_array || symbol->is_vla ||
+        !mir_row_inversion_word_type(symbol->type) ||
+        symbol->dim_count != dimensions ||
+        symbol->dims[0] != first ||
+        (dimensions == 2 && symbol->dims[1] != second) ||
+        symbol->array_len != first ||
+        symbol->elem_size !=
+            (dimensions == 1 ? 2 : second * 2) ||
+        symbol->size != first *
+            (dimensions == 1 ? 2 : second * 2) ||
+        !mir_row_inversion_word_pointer_type(address->type) ||
+        (address->memory_flags & (1 | 8)) != 0)
+        return 0;
+    *symbol_out = symbol;
+    return 1;
+}
+
+static int mir_row_inversion_same_array(
+    int instruction, struct Sym *expected)
+{
+    struct Sym *symbol;
+    long offset;
+
+    return mir.insns[instruction].opcode == MIR_ADDRESS &&
+           mir_machine_global_address_offset(
+               mir.insns[instruction].dst,
+               &symbol, &offset, 0) &&
+           symbol == expected && offset == 0 &&
+           mir_row_inversion_word_pointer_type(
+               mir.insns[instruction].type) &&
+           (mir.insns[instruction].memory_flags & (1 | 8)) == 0;
+}
+
+static int mir_row_inversion_index(
+    int instruction, int base, int subscript,
+    int stride, int memory_size)
+{
+    const struct MirInsn *index = &mir.insns[instruction];
+
+    return index->opcode == MIR_INDEX_ADDRESS &&
+           index->src1 == mir.insns[base].dst &&
+           index->src2 == mir.insns[subscript].dst &&
+           index->immediate == stride &&
+           index->memory_size == memory_size &&
+           mir_row_inversion_word_pointer_type(index->type) &&
+           (index->memory_flags & (1 | 8)) == 0;
+}
+
+static int mir_row_inversion_word_load(
+    int instruction, int address)
+{
+    const struct MirInsn *load = &mir.insns[instruction];
+
+    return load->opcode == MIR_LOAD_INDIRECT &&
+           load->src1 == mir.insns[address].dst &&
+           load->memory_size == 2 &&
+           mir_row_inversion_word_type(load->type) &&
+           (load->memory_flags & (1 | 8)) == 0;
+}
+
+static int mir_row_inversion_word_store(
+    int instruction, int address, int value)
+{
+    const struct MirInsn *store = &mir.insns[instruction];
+
+    return store->opcode == MIR_STORE_INDIRECT &&
+           store->src1 == mir.insns[address].dst &&
+           store->src2 == mir.insns[value].dst &&
+           store->memory_size == 2 &&
+           (store->memory_flags & (1 | 8)) == 0;
+}
+
+static int mir_row_inversion_compare(
+    int instruction, int left, int right, int operation)
+{
+    const struct MirInsn *comparison = &mir.insns[instruction];
+
+    return comparison->opcode == MIR_BINARY &&
+           comparison->immediate == operation &&
+           comparison->src1 == mir.insns[left].dst &&
+           comparison->src2 == mir.insns[right].dst &&
+           mir_row_inversion_word_type(comparison->type) &&
+           comparison->secondary_offset ==
+               mir.insns[left].type;
+}
+
+static int mir_match_row_inversion_check_schedule(
+    struct MirRowInversionCheckSchedule *plan)
+{
+    static const int expected_opcodes[127] = {
+        MIR_LABEL, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST,
+        MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS,
+        MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT,
+        MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_PHI, MIR_NOP,
+        MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_ADDRESS, MIR_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_INDEX_ADDRESS, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_STORE_INDIRECT,
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP,
+        MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS,
+        MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG,
+        MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_ARG, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL,
+        MIR_PHI, MIR_BRANCH_FALSE, MIR_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_CONST, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE, MIR_ADDRESS,
+        MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+        MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_UNARY, MIR_RETURN
+    };
+    static const int constants[][2] = {
+        {2, 0}, {4, 0}, {7, 1}, {9, 0},
+        {12, 2}, {14, 0}, {17, 3}, {19, 0},
+        {22, 0}, {27, 4}, {36, 1}, {46, 1},
+        {54, 0}, {59, 1}, {64, 2}, {69, 3},
+        {75, 0}, {78, 1}, {82, 1}, {85, 1},
+        {89, 1}, {92, 0}, {97, 2}, {100, 9},
+        {104, 1}, {107, 0}, {112, 3}, {115, 9},
+        {119, 1}, {122, 0}
+    };
+    static const int values_addresses[] = {
+        6, 11, 16, 31, 35, 53, 58, 63,
+        68, 74, 81, 96, 111
+    };
+    static const int print_indices[][4] = {
+        {53, 54, 55, 56},
+        {58, 59, 60, 61},
+        {63, 64, 65, 66},
+        {68, 69, 70, 71}
+    };
+    static const int check_indices[][6] = {
+        {74, 75, 76, 77, 78, 79},
+        {81, 82, 83, 84, 85, 86},
+        {96, 97, 98, 99, 100, 101},
+        {111, 112, 113, 114, 115, 116}
+    };
+    struct Sym *print_function;
+    int arguments[5];
+    int instruction;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 127 || mir_cfg_block_count() != 13 ||
+        mir.local_bytes != 1 || mir.aggregate_temp_bytes != 0 ||
+        mir.has_vla || !mir_has_cfg_backedge() ||
+        !mir_row_inversion_word_type(mir.return_type))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "row-inversion-check", "opcodes");
+    for (item = 0;
+         item < (int)(sizeof(constants) / sizeof(constants[0]));
+         ++item)
+        if (!mir_machine_constant_equals(
+                mir.insns[constants[item][0]].dst,
+                constants[item][1]))
+            return mir_machine_reject(
+                "row-inversion-check", "constants");
+
+    if (!mir_row_inversion_array(
+            1, 1, 4, 0, &plan->values) ||
+        !mir_row_inversion_array(
+            34, 2, 2, 4, &plan->table) ||
+        plan->values == plan->table)
+        return mir_machine_reject(
+            "row-inversion-check", "arrays");
+    for (item = 0;
+         item < (int)(sizeof(values_addresses) /
+                      sizeof(values_addresses[0]));
+         ++item)
+        if (!mir_row_inversion_same_array(
+                values_addresses[item], plan->values))
+            return mir_machine_reject(
+                "row-inversion-check", "array-identity");
+
+    for (item = 0; item < 4; ++item) {
+        int base = item * 5 + 1;
+
+        if (!mir_row_inversion_index(
+                base + 2, base, base + 1, 2, 2) ||
+            !mir_row_inversion_word_store(
+                base + 4, base + 2, base + 3))
+            return mir_machine_reject(
+                "row-inversion-check", "initialization");
+    }
+
+    if (!mir_row_inversion_byte_type(mir.insns[22].type) ||
+        !mir_machine_unobservable_local_store(&mir.insns[23]) ||
+        mir.insns[23].src1 != mir.insns[22].dst ||
+        !mir_row_inversion_byte_type(mir.insns[23].type) ||
+        mir.insns[25].src1 != mir.insns[22].dst ||
+        mir.insns[25].src2 != mir.insns[47].dst ||
+        mir.insns[25].phi_pred1 != mir.insns[0].label ||
+        mir.insns[25].phi_pred2 != mir.insns[44].label ||
+        mir.insns[25].object != mir.insns[23].object ||
+        mir.insns[25].object < 0 ||
+        !mir_row_inversion_byte_type(mir.insns[25].type) ||
+        mir.insns[28].immediate != 0 ||
+        mir.insns[28].src1 != mir.insns[25].dst ||
+        !mir_row_inversion_word_type(mir.insns[28].type) ||
+        !mir_row_inversion_compare(29, 28, 27, '<') ||
+        mir.insns[30].src1 != mir.insns[29].dst ||
+        mir.insns[30].label != mir.insns[50].label ||
+        !mir_row_inversion_index(33, 31, 25, 2, 2) ||
+        !mir_row_inversion_index(37, 35, 36, 2, 2) ||
+        !mir_row_inversion_word_load(38, 37) ||
+        !mir_row_inversion_index(39, 34, 38, 8, 8) ||
+        !mir_row_inversion_index(41, 39, 25, 2, 2) ||
+        !mir_row_inversion_word_load(42, 41) ||
+        !mir_row_inversion_word_store(43, 33, 42) ||
+        !mir_row_inversion_byte_type(mir.insns[46].type) ||
+        mir.insns[47].immediate != '+' ||
+        mir.insns[47].src1 != mir.insns[25].dst ||
+        mir.insns[47].src2 != mir.insns[46].dst ||
+        !mir_row_inversion_byte_type(mir.insns[47].type) ||
+        !mir_machine_unobservable_local_store(&mir.insns[48]) ||
+        !mir_machine_same_location(&mir.insns[48],
+                                   &mir.insns[23]) ||
+        mir.insns[48].src1 != mir.insns[47].dst ||
+        mir.insns[49].label != mir.insns[24].label)
+        return mir_machine_reject(
+            "row-inversion-check", "row-loop");
+
+    for (item = 0; item < 4; ++item) {
+        const int *indices = print_indices[item];
+
+        if (!mir_row_inversion_same_array(
+                indices[0], plan->values) ||
+            !mir_row_inversion_index(
+                indices[2], indices[0], indices[1], 2, 2) ||
+            !mir_row_inversion_word_load(
+                indices[3], indices[2]))
+            return mir_machine_reject(
+                "row-inversion-check", "print-values");
+    }
+    if (mir.insns[51].immediate < 0 ||
+        type_ptr_depth(mir.insns[51].type) != 1 ||
+        (mir.insns[51].type & 15) != TYPE_CHAR ||
+        !mir_numeric_call_arguments(
+            &mir.insns[73], 5, arguments) ||
+        arguments[0] != mir.insns[51].dst ||
+        arguments[1] != mir.insns[56].dst ||
+        arguments[2] != mir.insns[61].dst ||
+        arguments[3] != mir.insns[66].dst ||
+        arguments[4] != mir.insns[71].dst)
+        return mir_machine_reject(
+            "row-inversion-check", "print-arguments");
+    print_function = find_global(mir.insns[73].name);
+    if (print_function == NULL || print_function->is_defined ||
+        print_function->is_funcptr || print_function->is_noreturn ||
+        !print_function->has_proto ||
+        print_function->proto_nargs != 1 ||
+        !print_function->proto_variadic ||
+        type_ptr_depth(print_function->proto_types[0]) != 1 ||
+        (print_function->proto_types[0] & 15) != TYPE_CHAR ||
+        !mir_row_inversion_word_type(print_function->type) ||
+        !mir_row_inversion_word_type(mir.insns[73].type) ||
+        (mir.insns[73].memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) !=
+            MIR_CALL_FLAG_VARIADIC ||
+        mir.insns[73].base_name[0] == 0 ||
+        strlen(mir.insns[73].base_name) >=
+            sizeof(plan->print_name))
+        return mir_machine_reject(
+            "row-inversion-check", "print-call");
+
+    for (item = 0; item < 4; ++item) {
+        const int *indices = check_indices[item];
+
+        if (!mir_row_inversion_same_array(
+                indices[0], plan->values) ||
+            !mir_row_inversion_index(
+                indices[2], indices[0], indices[1], 2, 2) ||
+            !mir_row_inversion_word_load(
+                indices[3], indices[2]) ||
+            !mir_row_inversion_compare(
+                indices[5], indices[3], indices[4], TOK_EQ))
+            return mir_machine_reject(
+                "row-inversion-check", "checks");
+    }
+    if (mir.insns[80].src1 != mir.insns[79].dst ||
+        mir.insns[80].label != mir.insns[91].label ||
+        mir.insns[87].src1 != mir.insns[86].dst ||
+        mir.insns[87].label != mir.insns[91].label ||
+        mir.insns[90].label != mir.insns[93].label ||
+        mir.insns[94].src1 != mir.insns[89].dst ||
+        mir.insns[94].src2 != mir.insns[92].dst ||
+        mir.insns[94].phi_pred1 != mir.insns[88].label ||
+        mir.insns[94].phi_pred2 != mir.insns[91].label ||
+        mir.insns[94].object >= 0 ||
+        mir.insns[95].src1 != mir.insns[94].dst ||
+        mir.insns[95].label != mir.insns[106].label ||
+        mir.insns[102].src1 != mir.insns[101].dst ||
+        mir.insns[102].label != mir.insns[106].label ||
+        mir.insns[105].label != mir.insns[108].label ||
+        mir.insns[109].src1 != mir.insns[104].dst ||
+        mir.insns[109].src2 != mir.insns[107].dst ||
+        mir.insns[109].phi_pred1 != mir.insns[103].label ||
+        mir.insns[109].phi_pred2 != mir.insns[106].label ||
+        mir.insns[109].object >= 0 ||
+        mir.insns[110].src1 != mir.insns[109].dst ||
+        mir.insns[110].label != mir.insns[121].label ||
+        mir.insns[117].src1 != mir.insns[116].dst ||
+        mir.insns[117].label != mir.insns[121].label ||
+        mir.insns[120].label != mir.insns[123].label ||
+        mir.insns[124].src1 != mir.insns[119].dst ||
+        mir.insns[124].src2 != mir.insns[122].dst ||
+        mir.insns[124].phi_pred1 != mir.insns[118].label ||
+        mir.insns[124].phi_pred2 != mir.insns[121].label ||
+        mir.insns[124].object >= 0 ||
+        mir.insns[125].immediate != '!' ||
+        mir.insns[125].src1 != mir.insns[124].dst ||
+        !mir_row_inversion_word_type(mir.insns[125].type) ||
+        mir.insns[126].src1 != mir.insns[125].dst)
+        return mir_machine_reject(
+            "row-inversion-check", "return-graph");
+
+    plan->format_string_id = (int)mir.insns[51].immediate;
+    snprintf(plan->print_name, sizeof(plan->print_name), "%s",
+             mir.insns[73].base_name);
+    return 1;
 }
 
 static int mir_lcs_table_address(
@@ -4361,6 +4742,68 @@ static void mir_emit_lcs_dp_schedule(
             outer_next, outer_loop, done);
 }
 
+static void mir_emit_row_inversion_check_schedule(
+    FILE *out, const struct MirRowInversionCheckSchedule *plan)
+{
+    int clear_loop = new_label();
+    int row_loop = new_label();
+    int failure = new_label();
+    int done = new_label();
+    int offset;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+
+    mir_machine_emit_global_address_de(out, plan->values, 0);
+    fprintf(out,
+            "\tex de,hl\n\tld b,8\n\txor a\n"
+            "L%d:\n\tld (hl),a\n\tinc hl\n\tdjnz L%d\n"
+            "\tld b,0\n"
+            "L%d:\n",
+            clear_loop, clear_loop, row_loop);
+    mir_machine_emit_global_word(out, plan->values, 2);
+    fputs("\tadd hl,hl\n\tadd hl,hl\n\tadd hl,hl\n", out);
+    mir_machine_emit_global_address_de(out, plan->table, 0);
+    fputs("\tadd hl,de\n"
+          "\tld a,b\n\tadd a,a\n\tld e,a\n\tld d,0\n"
+          "\tadd hl,de\n"
+          "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n"
+          "\tld l,b\n\tld h,0\n\tadd hl,hl\n", out);
+    mir_machine_emit_global_address_de(out, plan->values, 0);
+    fputs("\tadd hl,de\n\tpop de\n"
+          "\tld (hl),e\n\tinc hl\n\tld (hl),d\n"
+          "\tinc b\n\tld a,b\n\tcp 4\n", out);
+    fprintf(out, "\tjp c,L%d\n", row_loop);
+
+    for (offset = 6; offset >= 0; offset -= 2) {
+        mir_machine_emit_global_word(
+            out, plan->values, offset);
+        fputs("\tpush hl\n", out);
+    }
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->format_string_id);
+    mir_emit_runtime_call(out, plan->print_name);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n",
+          out);
+
+    mir_machine_emit_global_word(out, plan->values, 0);
+    fputs("\tld de,1\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp nz,L%d\n", failure);
+    mir_machine_emit_global_word(out, plan->values, 2);
+    fputs("\tld de,1\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp nz,L%d\n", failure);
+    mir_machine_emit_global_word(out, plan->values, 4);
+    fputs("\tld de,9\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp nz,L%d\n", failure);
+    mir_machine_emit_global_word(out, plan->values, 6);
+    fputs("\tld de,9\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out,
+            "\tjp nz,L%d\n\tld hl,0\n\tjp L%d\n"
+            "L%d:\n\tld hl,1\n"
+            "L%d:\n\tret\n",
+            failure, done, failure, done);
+}
+
 static void mir_modp2_emit_print(
     FILE *out, const struct MirModp2DriverSchedule *plan,
     int slot, int operation, int is_unsigned,
@@ -4512,6 +4955,7 @@ int mir_try_emit_numeric_kernels(FILE *out, int phase)
     } else if (phase == 2) {
         struct MirLcsDpSchedule lcs_plan;
         struct MirNarrowedDivmodLoopSchedule plan;
+        struct MirRowInversionCheckSchedule row_plan;
 
         if (mir_match_lcs_dp_schedule(&lcs_plan)) {
             mir_emit_lcs_dp_schedule(out, &lcs_plan);
@@ -4519,6 +4963,10 @@ int mir_try_emit_numeric_kernels(FILE *out, int phase)
         }
         if (mir_match_narrowed_divmod_loop_schedule(&plan)) {
             mir_emit_narrowed_divmod_loop_schedule(out, &plan);
+            return 1;
+        }
+        if (mir_match_row_inversion_check_schedule(&row_plan)) {
+            mir_emit_row_inversion_check_schedule(out, &row_plan);
             return 1;
         }
     }
