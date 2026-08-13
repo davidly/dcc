@@ -94,6 +94,11 @@ struct MirFloatNormalizationSchedule {
     int exponent_frame_offset;
 };
 
+struct MirFloatLogSeriesSchedule {
+    struct Sym *normalization_function;
+    int value_frame_offset;
+};
+
 static int mir_float_report_call_arguments(
     const struct MirInsn *call, int count,
     int arguments[MIR_FLOAT_REPORT_MAX_CALL_ARGS])
@@ -1966,6 +1971,268 @@ static int mir_float_normalization_parameter_load(
         mir_machine_same_location(load, parameter);
 }
 
+static int mir_float_log_float_constant(int instruction,
+                                        unsigned long bits)
+{
+    return mir.insns[instruction].opcode == MIR_FLOAT_CONST &&
+        mir_float_normalization_type(mir.insns[instruction].type) &&
+        ((unsigned long)mir.insns[instruction].immediate &
+         0xffffffffUL) == bits;
+}
+
+static int mir_float_log_binary(int instruction, int operation,
+                                int left_instruction,
+                                int right_instruction,
+                                int result_is_float)
+{
+    const struct MirInsn *binary = &mir.insns[instruction];
+
+    return binary->opcode == MIR_BINARY &&
+        binary->immediate == operation &&
+        binary->secondary_offset == TYPE_FLOAT &&
+        binary->src1 == mir.insns[left_instruction].dst &&
+        binary->src2 == mir.insns[right_instruction].dst &&
+        (result_is_float
+             ? mir_float_normalization_type(binary->type)
+             : mir_match_final_call_integer_type(binary->type, 2));
+}
+
+static int mir_float_log_local(const struct MirInsn *insn, int offset,
+                               int width, int is_float)
+{
+    int type;
+    int storage;
+    int actual_offset;
+
+    return mir_scalar_memory_location(
+               insn, &type, &storage, &actual_offset) &&
+        storage == SC_LOCAL && actual_offset == offset &&
+        (insn->opcode == MIR_ADDRESS ||
+         (insn->memory_flags == 0 && insn->memory_size == width)) &&
+        type_ptr_depth(type) == 0 && type_size(type) == width &&
+        (is_float ? type_is_float(type) : (type & 15) == TYPE_INT);
+}
+
+static int mir_match_float_log_series_schedule(
+    struct MirFloatLogSeriesSchedule *plan)
+{
+    static const int expected_opcodes[139] = {
+        MIR_LABEL, MIR_PARAM, MIR_FLOAT_CONST, MIR_STORE, MIR_NOP,
+        MIR_FLOAT_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP,
+        MIR_BINARY, MIR_RETURN, MIR_LABEL, MIR_NOP, MIR_FLOAT_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_FLOAT_CONST, MIR_UNARY, MIR_NOP,
+        MIR_BINARY, MIR_RETURN, MIR_LABEL, MIR_NOP, MIR_ARG, MIR_ADDRESS,
+        MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_FLOAT_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP,
+        MIR_FLOAT_CONST, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP, MIR_LABEL, MIR_LOAD,
+        MIR_FLOAT_CONST, MIR_BINARY, MIR_LOAD, MIR_FLOAT_CONST, MIR_BINARY,
+        MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP, MIR_BINARY,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP,
+        MIR_STORE, MIR_NOP, MIR_NOP, MIR_BINARY, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_NOP, MIR_FLOAT_CONST, MIR_BINARY, MIR_BINARY, MIR_NOP,
+        MIR_STORE, MIR_NOP, MIR_NOP, MIR_BINARY, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_NOP, MIR_FLOAT_CONST, MIR_BINARY, MIR_BINARY, MIR_NOP,
+        MIR_STORE, MIR_NOP, MIR_NOP, MIR_BINARY, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_NOP, MIR_FLOAT_CONST, MIR_BINARY, MIR_BINARY, MIR_NOP,
+        MIR_STORE, MIR_NOP, MIR_NOP, MIR_BINARY, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_NOP, MIR_FLOAT_CONST, MIR_BINARY, MIR_BINARY, MIR_NOP,
+        MIR_STORE, MIR_NOP, MIR_NOP, MIR_BINARY, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_NOP, MIR_FLOAT_CONST, MIR_BINARY, MIR_BINARY, MIR_NOP,
+        MIR_STORE, MIR_FLOAT_CONST, MIR_NOP, MIR_BINARY, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_LOAD, MIR_UNARY, MIR_FLOAT_CONST, MIR_BINARY, MIR_BINARY,
+        MIR_RETURN
+    };
+    static const int labels[4] = {0, 12, 22, 46};
+    static const int sum_stores[6] = {63, 78, 90, 102, 114, 126};
+    static const int term_stores[6] = {66, 71, 83, 95, 107, 119};
+    static const int term_products[5] = {69, 81, 93, 105, 117};
+    static const int divisors[5] = {74, 86, 98, 110, 122};
+    static const unsigned long divisor_bits[5] = {
+        1077936128UL, 1084227584UL, 1088421888UL,
+        1091567616UL, 1093664768UL
+    };
+    static const int quotients[5] = {75, 87, 99, 111, 123};
+    static const int sums[5] = {76, 88, 100, 112, 124};
+    const struct MirInsn *value = &mir.insns[1];
+    const struct MirInsn *call = &mir.insns[28];
+    struct Sym *function;
+    int arguments[MIR_FLOAT_REPORT_MAX_CALL_ARGS];
+    int value_type;
+    int value_storage;
+    int value_offset;
+    int instruction;
+    int index;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 139 || mir_cfg_block_count() != 4 ||
+        mir.has_vla || mir.local_bytes != 30 ||
+        mir.aggregate_temp_bytes != 0 ||
+        !mir_float_normalization_type(mir.return_type))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return 0;
+    for (index = 0; index < 4; ++index) {
+        int other;
+
+        for (other = index + 1; other < 4; ++other)
+            if (mir.insns[labels[index]].label ==
+                mir.insns[labels[other]].label)
+                return 0;
+    }
+    if (!mir_scalar_memory_location(
+            value, &value_type, &value_storage, &value_offset) ||
+        value_storage != SC_PARAM || value_offset != 4 ||
+        !mir_float_normalization_type(value_type) ||
+        !mir_float_normalization_type(value->type) ||
+        !mir_machine_same_location(value, &mir.insns[4]) ||
+        !mir_machine_same_location(value, &mir.insns[13]) ||
+        !mir_machine_same_location(value, &mir.insns[23]))
+        return 0;
+
+    if (!mir_float_log_local(&mir.insns[3], -30, 4, 1) ||
+        !mir_float_log_local(&mir.insns[30], -4, 4, 1) ||
+        !mir_float_log_local(&mir.insns[25], -26, 2, 0) ||
+        type_ptr_depth(mir.insns[25].type) != 1 ||
+        (mir.insns[25].type & 15) != TYPE_INT ||
+        !mir_float_log_local(&mir.insns[55], -8, 4, 1) ||
+        !mir_float_log_local(&mir.insns[60], -12, 4, 1) ||
+        !mir_float_log_local(&mir.insns[63], -16, 4, 1) ||
+        !mir_float_log_local(&mir.insns[66], -20, 4, 1) ||
+        !mir_float_log_local(&mir.insns[131], -24, 4, 1))
+        return 0;
+    if (!mir_machine_same_location(&mir.insns[30], &mir.insns[39]) ||
+        !mir_machine_same_location(&mir.insns[30], &mir.insns[47]) ||
+        !mir_machine_same_location(&mir.insns[30], &mir.insns[50]) ||
+        !mir_machine_same_location(&mir.insns[25], &mir.insns[40]) ||
+        !mir_machine_same_location(&mir.insns[25], &mir.insns[44]) ||
+        !mir_machine_same_location(&mir.insns[25], &mir.insns[133]))
+        return 0;
+    for (index = 1; index < 6; ++index)
+        if (!mir_machine_same_location(
+                &mir.insns[sum_stores[0]],
+                &mir.insns[sum_stores[index]]) ||
+            !mir_machine_same_location(
+                &mir.insns[term_stores[0]],
+                &mir.insns[term_stores[index]]))
+            return 0;
+
+    if (!mir_float_log_float_constant(2, 0) ||
+        mir.insns[3].src1 != mir.insns[2].dst ||
+        !mir_float_log_float_constant(5, 0) ||
+        !mir_float_log_binary(6, '<', 1, 5, 0) ||
+        mir.insns[7].src1 != mir.insns[6].dst ||
+        mir.insns[7].label != mir.insns[12].label ||
+        !mir_float_log_binary(10, '/', 2, 2, 1) ||
+        mir.insns[11].src1 != mir.insns[10].dst ||
+        !mir_float_log_float_constant(14, 0) ||
+        !mir_float_log_binary(15, TOK_EQ, 1, 14, 0) ||
+        mir.insns[16].src1 != mir.insns[15].dst ||
+        mir.insns[16].label != mir.insns[22].label ||
+        !mir_float_log_float_constant(17, 1065353216UL) ||
+        mir.insns[18].immediate != '-' ||
+        mir.insns[18].src1 != mir.insns[17].dst ||
+        !mir_float_normalization_type(mir.insns[18].type) ||
+        !mir_float_log_binary(20, '/', 18, 2, 1) ||
+        mir.insns[21].src1 != mir.insns[20].dst)
+        return 0;
+
+    if (!mir_float_report_call_arguments(call, 2, arguments) ||
+        arguments[0] != value->dst ||
+        arguments[1] != mir.insns[25].dst ||
+        mir.insns[24].src1 != value->dst ||
+        mir.insns[24].immediate != 0 ||
+        mir.insns[24].secondary_offset != call->secondary_offset ||
+        mir.insns[27].src1 != mir.insns[25].dst ||
+        mir.insns[27].immediate != 1 ||
+        mir.insns[27].secondary_offset != call->secondary_offset ||
+        mir.insns[30].src1 != call->dst)
+        return 0;
+    function = find_global(call->name);
+    if (function == NULL || !function->is_defined ||
+        function->is_funcptr || function->is_noreturn ||
+        !function->has_proto || function->proto_variadic ||
+        function->proto_nargs != 2 ||
+        !mir_float_normalization_type(function->type) ||
+        !mir_float_normalization_type(function->proto_types[0]) ||
+        type_ptr_depth(function->proto_types[1]) != 1 ||
+        (function->proto_types[1] & 15) != TYPE_INT ||
+        !strcmp(call->name, mir.name) ||
+        call->memory_flags != 0 ||
+        !mir_float_normalization_type(call->type) ||
+        !mir_match_math_symbol_target(call, function))
+        return 0;
+
+    if (!mir_float_log_float_constant(32, 1060439283UL) ||
+        !mir_float_log_binary(33, '<', 28, 32, 0) ||
+        mir.insns[34].src1 != mir.insns[33].dst ||
+        mir.insns[34].label != mir.insns[46].label ||
+        !mir_float_log_float_constant(36, 1073741824UL) ||
+        !mir_float_log_binary(37, '*', 28, 36, 1) ||
+        mir.insns[39].src1 != mir.insns[37].dst ||
+        !mir_machine_constant_equals(mir.insns[41].dst, 1) ||
+        mir.insns[42].immediate != '-' ||
+        mir.insns[42].src1 != mir.insns[40].dst ||
+        mir.insns[42].src2 != mir.insns[41].dst ||
+        !mir_match_final_call_integer_type(mir.insns[42].type, 2) ||
+        mir.insns[44].src1 != mir.insns[42].dst)
+        return 0;
+
+    if (!mir_float_log_float_constant(48, 1065353216UL) ||
+        !mir_float_log_binary(49, '-', 47, 48, 1) ||
+        !mir_float_log_float_constant(51, 1065353216UL) ||
+        !mir_float_log_binary(52, '+', 50, 51, 1) ||
+        !mir_float_log_binary(53, '/', 49, 52, 1) ||
+        mir.insns[55].src1 != mir.insns[53].dst ||
+        !mir_float_log_binary(58, '*', 53, 53, 1) ||
+        mir.insns[60].src1 != mir.insns[58].dst ||
+        mir.insns[63].src1 != mir.insns[53].dst ||
+        mir.insns[66].src1 != mir.insns[53].dst)
+        return 0;
+
+    for (index = 0; index < 5; ++index) {
+        int previous_term =
+            index == 0 ? 53 : term_products[index - 1];
+        int previous_sum =
+            index == 0 ? 53 : sums[index - 1];
+
+        if (!mir_float_log_binary(
+                term_products[index], '*', previous_term, 58, 1) ||
+            mir.insns[term_stores[index + 1]].src1 !=
+                mir.insns[term_products[index]].dst ||
+            !mir_float_log_float_constant(
+                divisors[index], divisor_bits[index]) ||
+            !mir_float_log_binary(
+                quotients[index], '/',
+                term_products[index], divisors[index], 1) ||
+            !mir_float_log_binary(
+                sums[index], '+',
+                previous_sum, quotients[index], 1) ||
+            mir.insns[sum_stores[index + 1]].src1 !=
+                mir.insns[sums[index]].dst)
+            return 0;
+    }
+
+    if (!mir_float_log_float_constant(127, 1073741824UL) ||
+        !mir_float_log_binary(129, '*', 127, 124, 1) ||
+        mir.insns[131].src1 != mir.insns[129].dst ||
+        mir.insns[133].opcode != MIR_LOAD ||
+        mir.insns[134].immediate != 0 ||
+        mir.insns[134].src1 != mir.insns[133].dst ||
+        !mir_float_normalization_type(mir.insns[134].type) ||
+        !mir_float_log_float_constant(135, 1060205080UL) ||
+        !mir_float_log_binary(136, '*', 134, 135, 1) ||
+        !mir_float_log_binary(137, '+', 129, 136, 1) ||
+        mir.insns[138].src1 != mir.insns[137].dst)
+        return 0;
+
+    plan->normalization_function = function;
+    plan->value_frame_offset = value_offset;
+    return 1;
+}
+
 static int mir_match_float_normalization_schedule(
     struct MirFloatNormalizationSchedule *plan)
 {
@@ -2201,6 +2468,138 @@ static void mir_emit_float_normalization_store_frame_float(
             offset, offset + 1, offset + 2, offset + 3);
 }
 
+static void mir_emit_float_log_iteration(FILE *out,
+                                         unsigned long divisor_bits)
+{
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, -4);
+    mir_emit_runtime_call(out, "__fmf");
+    mir_emit_final_call_cleanup(out, 2);
+
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, divisor_bits);
+    mir_emit_runtime_call(out, "__fdf");
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, -8);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_float_report_emit_stack_load(out, 4, 4);
+    mir_emit_runtime_call(out, "__faf");
+    mir_emit_final_call_cleanup(out, 4);
+    mir_machine_emit_ix_wide_store(out, -8);
+    fputs("\tpop hl\n\tpop de\n", out);
+}
+
+static void mir_emit_float_log_series_schedule(
+    FILE *out, const struct MirFloatLogSeriesSchedule *plan)
+{
+    static const unsigned long divisor_bits[5] = {
+        1077936128UL, 1084227584UL, 1088421888UL,
+        1091567616UL, 1093664768UL
+    };
+    int nonnegative = new_label();
+    int nonzero = new_label();
+    int reduced = new_label();
+    int finish = new_label();
+    int index;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-10\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+
+    mir_machine_emit_ix_wide_load(out, plan->value_frame_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, 0);
+    mir_emit_runtime_call(out, "__fgtf");
+    mir_emit_final_call_cleanup(out, 2);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjr z,L%d\n", nonnegative);
+    mir_machine_emit_float_bits(out, 0);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, 0);
+    mir_emit_runtime_call(out, "__fdf");
+    mir_emit_final_call_cleanup(out, 2);
+    fprintf(out, "\tjp L%d\nL%d:\n", finish, nonnegative);
+
+    mir_machine_emit_ix_wide_load(out, plan->value_frame_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, 0);
+    mir_emit_runtime_call(out, "__feqf");
+    mir_emit_final_call_cleanup(out, 2);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjr z,L%d\n", nonzero);
+    mir_machine_emit_float_bits(out, 1065353216UL ^ 0x80000000UL);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, 0);
+    mir_emit_runtime_call(out, "__fdf");
+    mir_emit_final_call_cleanup(out, 2);
+    fprintf(out, "\tjp L%d\nL%d:\n", finish, nonzero);
+
+    fputs("\tpush ix\n\tpop hl\n\tld de,-10\n\tadd hl,de\n"
+          "\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, plan->value_frame_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->normalization_function);
+    mir_emit_final_call_cleanup(out, 3);
+    mir_machine_emit_ix_wide_store(out, -4);
+
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, 1060439283UL);
+    mir_emit_runtime_call(out, "__fgtf");
+    mir_emit_final_call_cleanup(out, 2);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjr z,L%d\n", reduced);
+    mir_machine_emit_ix_wide_load(out, -4);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, 1073741824UL);
+    mir_emit_runtime_call(out, "__fmf");
+    mir_emit_final_call_cleanup(out, 2);
+    mir_machine_emit_ix_wide_store(out, -4);
+    fputs("\tld a,(ix-10)\n\tdec (ix-10)\n\tor a\n", out);
+    fprintf(out, "\tjr nz,L%d\n\tdec (ix-9)\nL%d:\n",
+            reduced, reduced);
+
+    mir_machine_emit_ix_wide_load(out, -4);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, 1065353216UL);
+    mir_emit_runtime_call(out, "__fsf");
+    mir_emit_final_call_cleanup(out, 2);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, -4);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, 1065353216UL);
+    mir_emit_runtime_call(out, "__faf");
+    mir_emit_final_call_cleanup(out, 2);
+    mir_emit_runtime_call(out, "__fdf");
+    mir_emit_final_call_cleanup(out, 2);
+
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_runtime_call(out, "__fmf");
+    mir_machine_emit_ix_wide_store(out, -4);
+    fputs("\tpop hl\n\tpop de\n", out);
+    mir_machine_emit_ix_wide_store(out, -8);
+
+    for (index = 0; index < 5; ++index)
+        mir_emit_float_log_iteration(out, divisor_bits[index]);
+
+    mir_machine_emit_ix_wide_load(out, -8);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, 1073741824UL);
+    mir_emit_runtime_call(out, "__fmf");
+    mir_emit_final_call_cleanup(out, 2);
+    fputs("\tpush de\n\tpush hl\n"
+          "\tld l,(ix-10)\n\tld h,(ix-9)\n", out);
+    mir_emit_runtime_call(out, "__fif");
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_float_bits(out, 1060205080UL);
+    mir_emit_runtime_call(out, "__fmaf");
+    mir_emit_final_call_cleanup(out, 4);
+
+    fprintf(out,
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            finish);
+}
+
 static void mir_emit_float_normalization_schedule(
     FILE *out, const struct MirFloatNormalizationSchedule *plan)
 {
@@ -2301,6 +2700,7 @@ static void mir_emit_float_normalization_schedule(
 
 int mir_try_emit_float_reports(FILE *out)
 {
+    struct MirFloatLogSeriesSchedule float_log_series_schedule;
     struct MirFloatNormalizationSchedule float_normalization_schedule;
     struct MirRawConversionCheckSchedule raw_conversion_check_schedule;
     struct MirFloatReportSchedule float_report_schedule;
@@ -2314,6 +2714,16 @@ int mir_try_emit_float_reports(FILE *out)
             return 1;
         return mir_machine_reject(
             "float-normalization-schedule", "text-cost");
+    }
+    if (mir_match_float_log_series_schedule(
+            &float_log_series_schedule)) {
+        mir_emit_float_log_series_schedule(
+            out, &float_log_series_schedule);
+        if (mir_stream_size(out) <
+            mir_stream_size(mir.capture_stream))
+            return 1;
+        return mir_machine_reject(
+            "float-log-series-schedule", "text-cost");
     }
     if (mir_match_raw_conversion_check_schedule(
             &raw_conversion_check_schedule)) {

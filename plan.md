@@ -3,6 +3,60 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-14 float log-series 4-block batch (working tree)
+
+- Branch/base: `pr/143` at `8dd8152`. The float-report module now admits the
+  four-block `tlog.logf` `final-cost-policy` fallback through a strict,
+  name-free schedule over all **139 MIR instructions**. The matcher proves the
+  float parameter and return ABI, negative and signed-zero tests, NaN and
+  negative-infinity construction, the exact two-argument normalization call
+  and local exponent pointer, the `0.70710678f` reduction, exponent decrement,
+  transformed ratio, squared term, all five multiply/divide/add Taylor steps
+  with divisors 3/5/7/9/11, integer-to-float conversion, `ln(2)` constant and
+  final multiply/add return graph.
+- The emitter uses a compact **10-byte IX frame** for the exponent, squared
+  ratio and running sum. It preserves the established float helper call order
+  and rounding, retains the existing fused final multiply/add, carries each
+  Taylor term on the machine stack, and evaluates the sum addition in the
+  original operand order. It uses no IY. The family-local strict-smaller gate
+  remains in force; the generic final-cost policy is unchanged.
+- Normal selected/captured metrics are **4,180/5,084 bytes** and
+  **391/425 instructions**. Stack-check metrics are **4,209/5,113 bytes** and
+  **392/426 instructions**.
+- Full stack-check `tlog` passes peep and nopeep. Selected versus forced
+  fallback is **1,039,051/1,046,252 cycles** and
+  **8,192/8,448 bytes** peep, plus **1,039,378/1,047,767 cycles** and
+  **8,192/8,448 bytes** nopeep. Exact gains are **7,201 cycles and 256 bytes**
+  peep plus **8,389 cycles and 256 bytes** nopeep.
+- The prior forced final spilled candidate remains rejected and is not part of
+  production selection. Against the same fallback it measured
+  **1,065,999 cycles / 8,960 bytes** peep and
+  **1,066,990 / 8,960** nopeep: regressions of **19,747/19,223 cycles** and
+  **512 bytes** in both modes.
+- A separately renamed 38-input domain fixture selects the same schedule and
+  covers positive/negative zero, finite negatives, negative infinity, NaN,
+  minimum and maximum finite magnitudes, powers, one-bit neighbours around
+  0.5/0.70710678/1/2, and broad mantissa/exponent values. It also reports
+  eight normalization mantissa/exponent pairs. All **46 raw-bit report lines**
+  are identical between selected/fallback and peep/nopeep. Selected/fallback
+  totals are **5,689,141/5,727,916 cycles and 7,168/7,296 bytes** peep plus
+  **5,697,624/5,742,902 cycles and 7,296/7,552 bytes** nopeep. Changing only
+  the final Taylor divisor from 11 to 13 rejects the schedule and leaves the
+  clone on `final-cost-policy`; the perturbed fallback completes normally.
+- The regression-gated stack-check census advances
+  **2,178/2,185 (99.68%)** to **2,179/2,185 (99.73%)**, adds exactly
+  `tlog.logf`, removes nothing, moves selector counts from
+  **1,375 spilled / 403 scheduled** to **1,374 spilled / 404 scheduled**, and
+  reduces `final-cost-policy` fallbacks **7 -> 6**.
+- The float module is **2,749 source lines** with **46 static top-level
+  helpers**. Its standalone object defines only
+  `mir_try_emit_float_reports [T]` globally and has zero read-only or writable
+  global data. The canonical build, focused full run, forced fallback A/B,
+  renamed wide-domain A/B, perturbation rejection, export audit, no-IY
+  inspection, regression-gated census and `git diff --check` pass. No
+  performance baseline, production-name gate or output-hash gate was added or
+  changed.
+
 ## 2026-08-14 pint two-function 2-block batch (working tree)
 
 - Branch/base: `pr/143` at `eaf3ed9`. Two strict, name-free scheduled-machine
