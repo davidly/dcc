@@ -168,6 +168,48 @@ struct MirWideStringRunner {
     char print_names[13][64];
 };
 
+enum MirAbortFileString {
+    MIR_ABORT_NEW_MISSING,
+    MIR_ABORT_CONTENT,
+    MIR_ABORT_CONTENT_CHECK,
+    MIR_ABORT_OLD_PRESENT,
+    MIR_ABORT_FAILURE_SUMMARY,
+    MIR_ABORT_OLD_NAME,
+    MIR_ABORT_WRITE_MODE,
+    MIR_ABORT_RENAME_CHECK,
+    MIR_ABORT_NEW_NAME,
+    MIR_ABORT_READ_MODE,
+    MIR_ABORT_GRAPH_FIRST,
+    MIR_ABORT_GRAPH_LAST = MIR_ABORT_GRAPH_FIRST + 6,
+    MIR_ABORT_SUCCESS,
+    MIR_ABORT_RETURNED,
+    MIR_ABORT_STRING_COUNT
+};
+
+enum {
+    MIR_STRADDR = MIR_STRING_ADDRESS,
+    MIR_BRFALSE = MIR_BRANCH_FALSE
+};
+
+struct MirAbortFileRunner {
+    struct Sym *open_function;
+    struct Sym *puts_function;
+    struct Sym *close_function;
+    struct Sym *rename_function;
+    struct Sym *check_function;
+    struct Sym *print_function;
+    struct Sym *gets_function;
+    struct Sym *compare_function;
+    struct Sym *remove_function;
+    struct Sym *is_print_function;
+    struct Sym *is_space_function;
+    struct Sym *abort_function;
+    struct Sym *failures;
+    int strings[MIR_ABORT_STRING_COUNT];
+    int graph_characters[7];
+    int graph_expected[7];
+};
+
 static int mir_machine_constant_value(
     int value, long *constant_out, int depth)
 {
@@ -1000,6 +1042,597 @@ static int mir_match_memory_exercise_runner(
         mir.insns[385].src1 != mir.insns[384].dst)
         return mir_machine_reject(
             "memory-exercise-runner", "result-flow");
+    return 1;
+}
+
+static int mir_abort_runner_word_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == TYPE_INT &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 2;
+}
+
+static int mir_abort_runner_pointer_type(
+    int type, int base_type)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & 15) == base_type &&
+           type_size(type) == 2;
+}
+
+static struct Sym *mir_abort_runner_function(
+    int instruction, int variadic, int argument_count,
+    int noreturn)
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    struct Sym *function;
+    const char *assembly_name;
+
+    if (call->opcode != MIR_CALL || call->src1 >= 0 ||
+        call->memory_flags !=
+            (variadic ? MIR_CALL_FLAG_VARIADIC : 0) ||
+        (function = find_global(call->name)) == NULL ||
+        function->storage != SC_FUNC ||
+        function->is_funcptr ||
+        function->is_noreturn != noreturn ||
+        !function->has_proto ||
+        function->proto_variadic != variadic ||
+        function->proto_nargs != argument_count ||
+        call->type != function->type)
+        return NULL;
+    assembly_name = asm_name_for(sym_asm_name(function));
+    if (call->base_name[0] != 0 &&
+        strcmp(call->base_name, assembly_name))
+        return NULL;
+    return function;
+}
+
+static int mir_abort_runner_call(
+    int instruction, struct Sym *function, int ordinal,
+    int argument_count, const int *definitions)
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    const char *assembly_name;
+    int arguments[3];
+    int argument;
+
+    if (function == NULL ||
+        call->src1 >= 0 ||
+        find_global(call->name) != function ||
+        call->memory_flags !=
+            (function->proto_variadic
+                 ? MIR_CALL_FLAG_VARIADIC : 0) ||
+        call->type != function->type ||
+        call->secondary_offset != ordinal ||
+        !mir_machine_call_arguments(
+            call, argument_count, arguments))
+        return 0;
+    assembly_name = asm_name_for(sym_asm_name(function));
+    if (call->base_name[0] != 0 &&
+        strcmp(call->base_name, assembly_name))
+        return 0;
+    for (argument = 0; argument < argument_count; ++argument)
+        if (arguments[argument] !=
+            mir.insns[definitions[argument]].dst)
+            return 0;
+    return 1;
+}
+
+static int mir_abort_runner_no_argument_call(
+    int instruction, struct Sym *function, int ordinal)
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    const char *assembly_name;
+    int scan;
+
+    if (function == NULL ||
+        call->src1 >= 0 ||
+        find_global(call->name) != function ||
+        call->memory_flags != 0 ||
+        call->type != function->type ||
+        call->secondary_offset != ordinal)
+        return 0;
+    assembly_name = asm_name_for(sym_asm_name(function));
+    if (call->base_name[0] != 0 &&
+        strcmp(call->base_name, assembly_name))
+        return 0;
+    for (scan = 0; scan < mir.count; ++scan)
+        if (mir.insns[scan].opcode == MIR_ARG &&
+            mir.insns[scan].secondary_offset ==
+                call->secondary_offset)
+            return 0;
+    return 1;
+}
+
+static int mir_abort_runner_function_types(
+    const struct MirAbortFileRunner *plan)
+{
+    return
+        mir_abort_runner_pointer_type(
+            plan->open_function->type, TYPE_INT) &&
+        mir_abort_runner_pointer_type(
+            plan->open_function->proto_types[0], TYPE_CHAR) &&
+        mir_abort_runner_pointer_type(
+            plan->open_function->proto_types[1], TYPE_CHAR) &&
+        mir_abort_runner_word_type(plan->puts_function->type) &&
+        mir_abort_runner_pointer_type(
+            plan->puts_function->proto_types[0], TYPE_CHAR) &&
+        mir_abort_runner_pointer_type(
+            plan->puts_function->proto_types[1], TYPE_INT) &&
+        mir_abort_runner_word_type(plan->close_function->type) &&
+        mir_abort_runner_pointer_type(
+            plan->close_function->proto_types[0], TYPE_INT) &&
+        mir_abort_runner_word_type(plan->rename_function->type) &&
+        mir_abort_runner_pointer_type(
+            plan->rename_function->proto_types[0], TYPE_CHAR) &&
+        mir_abort_runner_pointer_type(
+            plan->rename_function->proto_types[1], TYPE_CHAR) &&
+        type_ptr_depth(plan->check_function->type) == 0 &&
+        (plan->check_function->type & 15) == TYPE_VOID &&
+        mir_abort_runner_pointer_type(
+            plan->check_function->proto_types[0], TYPE_CHAR) &&
+        mir_abort_runner_word_type(
+            plan->check_function->proto_types[1]) &&
+        mir_abort_runner_word_type(
+            plan->check_function->proto_types[2]) &&
+        mir_abort_runner_word_type(plan->print_function->type) &&
+        mir_abort_runner_pointer_type(
+            plan->print_function->proto_types[0], TYPE_CHAR) &&
+        mir_abort_runner_pointer_type(
+            plan->gets_function->type, TYPE_CHAR) &&
+        mir_abort_runner_pointer_type(
+            plan->gets_function->proto_types[0], TYPE_CHAR) &&
+        mir_abort_runner_word_type(
+            plan->gets_function->proto_types[1]) &&
+        mir_abort_runner_pointer_type(
+            plan->gets_function->proto_types[2], TYPE_INT) &&
+        mir_abort_runner_word_type(plan->compare_function->type) &&
+        mir_abort_runner_pointer_type(
+            plan->compare_function->proto_types[0], TYPE_CHAR) &&
+        mir_abort_runner_pointer_type(
+            plan->compare_function->proto_types[1], TYPE_CHAR) &&
+        mir_abort_runner_word_type(plan->remove_function->type) &&
+        mir_abort_runner_pointer_type(
+            plan->remove_function->proto_types[0], TYPE_CHAR) &&
+        mir_abort_runner_word_type(
+            plan->is_print_function->type) &&
+        mir_abort_runner_word_type(
+            plan->is_print_function->proto_types[0]) &&
+        mir_abort_runner_word_type(
+            plan->is_space_function->type) &&
+        mir_abort_runner_word_type(
+            plan->is_space_function->proto_types[0]) &&
+        type_ptr_depth(plan->abort_function->type) == 0 &&
+        (plan->abort_function->type & 15) == TYPE_VOID;
+}
+
+static int mir_match_abort_file_runner(
+    struct MirAbortFileRunner *plan)
+{
+    static const int expected_opcodes[269] = {
+        MIR_LABEL, MIR_STRADDR, MIR_ARG, MIR_STRADDR, MIR_ARG, MIR_CALL,
+        MIR_NOP, MIR_STORE, MIR_STRADDR, MIR_ARG, MIR_LOAD, MIR_ARG,
+        MIR_CALL, MIR_LOAD, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG,
+        MIR_STRADDR, MIR_ARG, MIR_STRADDR, MIR_ARG, MIR_CALL, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_STRADDR,
+        MIR_ARG, MIR_CALL, MIR_NOP, MIR_STORE, MIR_LOAD, MIR_UNARY,
+        MIR_BRFALSE, MIR_LABEL, MIR_STRADDR, MIR_ARG, MIR_CALL, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_NOP, MIR_JUMP, MIR_LABEL,
+        MIR_ADDRESS, MIR_ARG, MIR_CONST, MIR_ARG, MIR_LOAD, MIR_ARG,
+        MIR_CALL, MIR_LOAD, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG,
+        MIR_ADDRESS, MIR_ARG, MIR_STRADDR, MIR_ARG, MIR_CALL, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_LABEL, MIR_STRADDR,
+        MIR_ARG, MIR_STRADDR, MIR_ARG, MIR_CALL, MIR_NOP, MIR_STORE,
+        MIR_LOAD, MIR_BRFALSE, MIR_STRADDR, MIR_ARG, MIR_CALL, MIR_LOAD,
+        MIR_ARG, MIR_CALL, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_NOP, MIR_LABEL, MIR_STRADDR, MIR_ARG, MIR_CALL, MIR_STRADDR,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_BRFALSE, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_UNARY, MIR_BRFALSE, MIR_LABEL, MIR_CONST,
+        MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_BRFALSE, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_UNARY, MIR_BRFALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_CONST, MIR_LABEL, MIR_PHI, MIR_ARG, MIR_CONST, MIR_ARG,
+        MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_BRFALSE, MIR_CONST, MIR_ARG, MIR_CALL, MIR_UNARY, MIR_BRFALSE,
+        MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL,
+        MIR_PHI, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_BRFALSE, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_UNARY, MIR_BRFALSE, MIR_LABEL, MIR_CONST,
+        MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_BRFALSE, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_UNARY, MIR_BRFALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_CONST, MIR_LABEL, MIR_PHI, MIR_ARG, MIR_CONST, MIR_ARG,
+        MIR_CALL, MIR_STRADDR, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_BRFALSE, MIR_CONST, MIR_ARG, MIR_CALL, MIR_UNARY, MIR_BRFALSE,
+        MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL,
+        MIR_PHI, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRADDR,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_BRFALSE, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_UNARY, MIR_BRFALSE, MIR_LABEL, MIR_CONST,
+        MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_LOAD, MIR_BRFALSE, MIR_STRADDR,
+        MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN,
+        MIR_NOP, MIR_LABEL, MIR_STRADDR, MIR_ARG, MIR_CALL, MIR_CALL,
+        MIR_STRADDR, MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN
+    };
+    static const int string_instructions[MIR_ABORT_STRING_COUNT] = {
+        38, 8, 58, 80, 251, 1, 3, 16, 20, 29,
+        95, 117, 139, 161, 183, 205, 227, 260, 264
+    };
+    static const int graph_starts[7] = {
+        95, 117, 139, 161, 183, 205, 227
+    };
+    static const int graph_characters[7] = {
+        'A', 'z', '0', '!', ' ', '\t', '\0'
+    };
+    static const int graph_expected[7] = {
+        1, 1, 1, 1, 0, 0, 0
+    };
+    static const int open_definitions[3][2] = {
+        {1, 3}, {27, 29}, {71, 73}
+    };
+    static const int open_calls[3] = {5, 31, 75};
+    static const int open_ordinals[3] = {0, 5, 11};
+    static const int close_definitions[3] = {13, 55, 83};
+    static const int close_calls[3] = {15, 57, 85};
+    static const int close_ordinals[3] = {2, 8, 13};
+    static const int file_locations[] = {
+        7, 10, 13, 33, 34, 52, 55, 77, 78, 83
+    };
+    static const int failure_locations[] = {
+        41, 44, 86, 89, 249, 253
+    };
+    struct Sym *functions[12];
+    int arguments[3];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+    int first;
+    int second;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 269 || mir_cfg_block_count() != 27 ||
+        mir.has_vla || mir.local_bytes != 12 ||
+        mir.aggregate_temp_bytes != 0 ||
+        !mir_abort_runner_word_type(mir.return_type))
+        return mir_machine_reject(
+            "abort-file-runner", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+                expected_opcodes[instruction])
+            return mir_machine_reject(
+                "abort-file-runner", "opcode");
+
+    plan->open_function =
+        mir_abort_runner_function(5, 0, 2, 0);
+    plan->puts_function =
+        mir_abort_runner_function(12, 0, 2, 0);
+    plan->close_function =
+        mir_abort_runner_function(15, 0, 1, 0);
+    plan->rename_function =
+        mir_abort_runner_function(22, 0, 2, 0);
+    plan->check_function =
+        mir_abort_runner_function(26, 0, 3, 0);
+    plan->print_function =
+        mir_abort_runner_function(40, 1, 1, 0);
+    plan->gets_function =
+        mir_abort_runner_function(54, 0, 3, 0);
+    plan->compare_function =
+        mir_abort_runner_function(64, 0, 2, 0);
+    plan->remove_function =
+        mir_abort_runner_function(94, 0, 1, 0);
+    plan->is_print_function =
+        mir_abort_runner_function(99, 0, 1, 0);
+    plan->is_space_function =
+        mir_abort_runner_function(103, 0, 1, 0);
+    plan->abort_function =
+        mir_abort_runner_function(263, 0, 0, 1);
+    functions[0] = plan->open_function;
+    functions[1] = plan->puts_function;
+    functions[2] = plan->close_function;
+    functions[3] = plan->rename_function;
+    functions[4] = plan->check_function;
+    functions[5] = plan->print_function;
+    functions[6] = plan->gets_function;
+    functions[7] = plan->compare_function;
+    functions[8] = plan->remove_function;
+    functions[9] = plan->is_print_function;
+    functions[10] = plan->is_space_function;
+    functions[11] = plan->abort_function;
+    for (first = 0; first < 12; ++first) {
+        if (functions[first] == NULL)
+            return mir_machine_reject(
+                "abort-file-runner", "function");
+        for (second = first + 1; second < 12; ++second)
+            if (functions[first] == functions[second])
+                return mir_machine_reject(
+                    "abort-file-runner", "function-alias");
+    }
+    if (!mir_abort_runner_function_types(plan))
+        return mir_machine_reject(
+            "abort-file-runner", "function-type");
+    if (!plan->check_function->is_defined ||
+        !plan->check_function->is_static)
+        return mir_machine_reject(
+            "abort-file-runner", "checker-linkage");
+
+    for (item = 0; item < 3; ++item)
+        if (!mir_abort_runner_call(
+                open_calls[item], plan->open_function,
+                open_ordinals[item], 2,
+                open_definitions[item]) ||
+            !mir_abort_runner_call(
+                close_calls[item], plan->close_function,
+                close_ordinals[item], 1,
+                &close_definitions[item]))
+            return mir_machine_reject(
+                "abort-file-runner", "file-call");
+    arguments[0] = 8;
+    arguments[1] = 10;
+    if (!mir_abort_runner_call(
+            12, plan->puts_function, 1, 2, arguments))
+        return mir_machine_reject(
+            "abort-file-runner", "puts-call");
+    arguments[0] = 18;
+    arguments[1] = 20;
+    if (!mir_abort_runner_call(
+            22, plan->rename_function, 4, 2, arguments))
+        return mir_machine_reject(
+            "abort-file-runner", "rename-call");
+    arguments[0] = 16;
+    arguments[1] = 22;
+    arguments[2] = 24;
+    if (!mir_abort_runner_call(
+            26, plan->check_function, 3, 3, arguments))
+        return mir_machine_reject(
+            "abort-file-runner", "rename-check");
+    arguments[0] = 48;
+    arguments[1] = 50;
+    arguments[2] = 52;
+    if (!mir_abort_runner_call(
+            54, plan->gets_function, 7, 3, arguments))
+        return mir_machine_reject(
+            "abort-file-runner", "gets-call");
+    arguments[0] = 60;
+    arguments[1] = 62;
+    if (!mir_abort_runner_call(
+            64, plan->compare_function, 10, 2, arguments))
+        return mir_machine_reject(
+            "abort-file-runner", "compare-call");
+    arguments[0] = 58;
+    arguments[1] = 64;
+    arguments[2] = 66;
+    if (!mir_abort_runner_call(
+            68, plan->check_function, 9, 3, arguments))
+        return mir_machine_reject(
+            "abort-file-runner", "content-check");
+    arguments[0] = 92;
+    if (!mir_abort_runner_call(
+            94, plan->remove_function, 14, 1, arguments))
+        return mir_machine_reject(
+            "abort-file-runner", "remove-call");
+    arguments[0] = 38;
+    if (!mir_abort_runner_call(
+            40, plan->print_function, 6, 1, arguments))
+        return mir_machine_reject(
+            "abort-file-runner", "missing-print");
+    arguments[0] = 80;
+    if (!mir_abort_runner_call(
+            82, plan->print_function, 12, 1, arguments))
+        return mir_machine_reject(
+            "abort-file-runner", "old-print");
+    arguments[0] = 251;
+    arguments[1] = 253;
+    if (!mir_abort_runner_call(
+            255, plan->print_function, 36, 2, arguments))
+        return mir_machine_reject(
+            "abort-file-runner", "failure-print");
+    arguments[0] = 260;
+    if (!mir_abort_runner_call(
+            262, plan->print_function, 37, 1, arguments))
+        return mir_machine_reject(
+            "abort-file-runner", "success-print");
+    if (!mir_abort_runner_no_argument_call(
+            263, plan->abort_function, 38))
+        return mir_machine_reject(
+            "abort-file-runner", "abort-call");
+    arguments[0] = 264;
+    if (!mir_abort_runner_call(
+            266, plan->print_function, 39, 1, arguments))
+        return mir_machine_reject(
+            "abort-file-runner", "post-abort-print");
+
+    for (item = 0; item < MIR_ABORT_STRING_COUNT; ++item) {
+        const struct MirInsn *string =
+            &mir.insns[string_instructions[item]];
+
+        if (!mir_abort_runner_pointer_type(
+                string->type, TYPE_CHAR))
+            return mir_machine_reject(
+                "abort-file-runner", "string-type");
+        plan->strings[item] = (int)string->immediate;
+        for (second = 0; second < item; ++second)
+            if (plan->strings[item] == plan->strings[second])
+                return mir_machine_reject(
+                    "abort-file-runner", "string-alias");
+    }
+    if (mir.insns[18].immediate !=
+            plan->strings[MIR_ABORT_OLD_NAME] ||
+        mir.insns[71].immediate !=
+            plan->strings[MIR_ABORT_OLD_NAME] ||
+        mir.insns[27].immediate !=
+            plan->strings[MIR_ABORT_NEW_NAME] ||
+        mir.insns[73].immediate !=
+            plan->strings[MIR_ABORT_READ_MODE] ||
+        mir.insns[92].immediate !=
+            plan->strings[MIR_ABORT_NEW_NAME] ||
+        mir.insns[62].immediate !=
+            plan->strings[MIR_ABORT_CONTENT])
+        return mir_machine_reject(
+            "abort-file-runner", "string-reuse");
+
+    if (!mir_scalar_memory_location(
+            &mir.insns[7], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_LOCAL || memory_offset != -2 ||
+        !mir_abort_runner_pointer_type(memory_type, TYPE_INT) ||
+        !mir_machine_unobservable_local_store(&mir.insns[7]))
+        return mir_machine_reject(
+            "abort-file-runner", "file-local");
+    for (item = 1;
+         item < (int)(sizeof(file_locations) /
+                      sizeof(file_locations[0]));
+         ++item)
+        if (!mir_machine_same_location(
+                &mir.insns[file_locations[0]],
+                &mir.insns[file_locations[item]]))
+            return mir_machine_reject(
+                "abort-file-runner", "file-location");
+    if (!mir_machine_same_location(
+            &mir.insns[7], &mir.insns[6]) ||
+        !mir_machine_same_location(
+            &mir.insns[33], &mir.insns[32]) ||
+        !mir_machine_same_location(
+            &mir.insns[77], &mir.insns[76]) ||
+        mir.insns[7].src1 != mir.insns[5].dst ||
+        mir.insns[33].src1 != mir.insns[31].dst ||
+        mir.insns[77].src1 != mir.insns[75].dst)
+        return mir_machine_reject(
+            "abort-file-runner", "file-declaration");
+
+    if (!mir_scalar_memory_location(
+            &mir.insns[48], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_LOCAL || memory_offset != -10 ||
+        (memory_type & 15) != TYPE_CHAR ||
+        type_size(memory_type) != 1 ||
+        strcmp(mir.insns[48].name, mir.insns[60].name) ||
+        strcmp(mir.insns[48].name, mir.insns[50].name) ||
+        !mir_machine_constant_equals(mir.insns[50].dst, 8))
+        return mir_machine_reject(
+            "abort-file-runner", "buffer");
+
+    plan->failures = find_global(mir.insns[41].name);
+    if (plan->failures == NULL ||
+        plan->failures->storage != SC_GLOBAL ||
+        !plan->failures->is_defined ||
+        !plan->failures->is_static ||
+        plan->failures->is_array ||
+        plan->failures->is_volatile ||
+        !mir_abort_runner_word_type(plan->failures->type) ||
+        !mir_scalar_memory_location(
+            &mir.insns[41], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_GLOBAL || memory_offset != 0)
+        return mir_machine_reject(
+            "abort-file-runner", "failure-global");
+    for (item = 1;
+         item < (int)(sizeof(failure_locations) /
+                      sizeof(failure_locations[0]));
+         ++item)
+        if (!mir_machine_same_location(
+                &mir.insns[failure_locations[0]],
+                &mir.insns[failure_locations[item]]))
+            return mir_machine_reject(
+                "abort-file-runner", "failure-location");
+    if (!mir_machine_constant_equals(mir.insns[42].dst, 1) ||
+        mir.insns[43].immediate != '+' ||
+        mir.insns[43].src1 != mir.insns[41].dst ||
+        mir.insns[43].src2 != mir.insns[42].dst ||
+        mir.insns[44].src1 != mir.insns[43].dst ||
+        !mir_machine_constant_equals(mir.insns[87].dst, 1) ||
+        mir.insns[88].immediate != '+' ||
+        mir.insns[88].src1 != mir.insns[86].dst ||
+        mir.insns[88].src2 != mir.insns[87].dst ||
+        mir.insns[89].src1 != mir.insns[88].dst)
+        return mir_machine_reject(
+            "abort-file-runner", "failure-update");
+
+    if (mir.insns[35].immediate != '!' ||
+        mir.insns[35].src1 != mir.insns[34].dst ||
+        mir.insns[36].src1 != mir.insns[35].dst ||
+        mir.insns[36].label != mir.insns[47].label ||
+        mir.insns[46].label != mir.insns[70].label ||
+        mir.insns[79].src1 != mir.insns[78].dst ||
+        mir.insns[79].label != mir.insns[91].label ||
+        mir.insns[250].src1 != mir.insns[249].dst ||
+        mir.insns[250].label != mir.insns[259].label)
+        return mir_machine_reject(
+            "abort-file-runner", "branch");
+
+    for (item = 0; item < 7; ++item) {
+        int start = graph_starts[item];
+
+        plan->graph_characters[item] = graph_characters[item];
+        plan->graph_expected[item] = graph_expected[item];
+        arguments[0] = start + 2;
+        if (!mir_abort_runner_call(
+                start + 4, plan->is_print_function,
+                16 + item * 3, 1, arguments))
+            return mir_machine_reject(
+                "abort-file-runner", "printable-call");
+        arguments[0] = start + 6;
+        if (!mir_abort_runner_call(
+                start + 8, plan->is_space_function,
+                17 + item * 3, 1, arguments))
+            return mir_machine_reject(
+                "abort-file-runner", "space-call");
+        arguments[0] = start;
+        arguments[1] = start + 17;
+        arguments[2] = start + 19;
+        if (!mir_abort_runner_call(
+                start + 21, plan->check_function,
+                15 + item * 3, 3, arguments) ||
+            !mir_machine_constant_equals(
+                mir.insns[start + 2].dst,
+                graph_characters[item]) ||
+            !mir_machine_constant_equals(
+                mir.insns[start + 6].dst,
+                graph_characters[item]) ||
+            mir.insns[start + 5].src1 !=
+                mir.insns[start + 4].dst ||
+            mir.insns[start + 5].label !=
+                mir.insns[start + 14].label ||
+            mir.insns[start + 9].immediate != '!' ||
+            mir.insns[start + 9].src1 !=
+                mir.insns[start + 8].dst ||
+            mir.insns[start + 10].src1 !=
+                mir.insns[start + 9].dst ||
+            mir.insns[start + 10].label !=
+                mir.insns[start + 14].label ||
+            !mir_machine_constant_equals(
+                mir.insns[start + 12].dst, 1) ||
+            mir.insns[start + 13].label !=
+                mir.insns[start + 16].label ||
+            !mir_machine_constant_equals(
+                mir.insns[start + 15].dst, 0) ||
+            mir.insns[start + 17].src1 !=
+                mir.insns[start + 12].dst ||
+            mir.insns[start + 17].src2 !=
+                mir.insns[start + 15].dst ||
+            mir.insns[start + 17].phi_pred1 !=
+                mir.insns[start + 11].label ||
+            mir.insns[start + 17].phi_pred2 !=
+                mir.insns[start + 14].label ||
+            !mir_machine_constant_equals(
+                mir.insns[start + 19].dst,
+                graph_expected[item]))
+            return mir_machine_reject(
+                "abort-file-runner", "graph-check");
+    }
+
+    if (!mir_machine_constant_equals(mir.insns[24].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[66].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[256].dst, 1) ||
+        mir.insns[257].src1 != mir.insns[256].dst ||
+        !mir_machine_constant_equals(mir.insns[267].dst, 1) ||
+        mir.insns[268].src1 != mir.insns[267].dst)
+        return mir_machine_reject(
+            "abort-file-runner", "return");
     return 1;
 }
 
@@ -7095,6 +7728,190 @@ static void mir_emit_allocation_lifetime_runner(
     fprintf(out, "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n", done);
 }
 
+static void mir_abort_runner_push_string(
+    FILE *out, int string_id)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+}
+
+static void mir_abort_runner_push_buffer(FILE *out)
+{
+    fputs("\tpush ix\n\tpop hl\n"
+          "\tld de,-10\n\tadd hl,de\n\tpush hl\n", out);
+}
+
+static void mir_abort_runner_emit_call(
+    FILE *out, struct Sym *function, int words)
+{
+    mir_machine_emit_symbol_call(out, function);
+    mir_emit_final_call_cleanup(out, words);
+}
+
+static void mir_abort_runner_print(
+    FILE *out, const struct MirAbortFileRunner *plan,
+    int string_id)
+{
+    mir_abort_runner_push_string(out, string_id);
+    mir_abort_runner_emit_call(out, plan->print_function, 1);
+}
+
+static void mir_abort_runner_increment_failures(
+    FILE *out, const struct MirAbortFileRunner *plan)
+{
+    mir_machine_emit_global_word(out, plan->failures, 0);
+    fputs("\tinc hl\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->failures, 0);
+}
+
+static void mir_abort_runner_open(
+    FILE *out, const struct MirAbortFileRunner *plan,
+    int name_id, int mode_id)
+{
+    mir_abort_runner_push_string(out, mode_id);
+    mir_abort_runner_push_string(out, name_id);
+    mir_abort_runner_emit_call(out, plan->open_function, 2);
+    fputs("\tld (ix-2),l\n\tld (ix-1),h\n", out);
+}
+
+static void mir_abort_runner_close(
+    FILE *out, const struct MirAbortFileRunner *plan)
+{
+    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n", out);
+    mir_abort_runner_emit_call(out, plan->close_function, 1);
+}
+
+static void mir_abort_runner_check_graph(
+    FILE *out, const struct MirAbortFileRunner *plan,
+    int item)
+{
+    int false_label = new_label();
+    int join_label = new_label();
+
+    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+            plan->graph_expected[item]);
+    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+            plan->graph_characters[item]);
+    mir_abort_runner_emit_call(out, plan->is_print_function, 1);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z, L%d\n", false_label);
+    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+            plan->graph_characters[item]);
+    mir_abort_runner_emit_call(out, plan->is_space_function, 1);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out,
+            "\tjp nz, L%d\n\tld hl,1\n\tjp L%d\n"
+            "L%d:\n\tld hl,0\nL%d:\n\tpush hl\n",
+            false_label, join_label, false_label, join_label);
+    mir_abort_runner_push_string(
+        out, plan->strings[MIR_ABORT_GRAPH_FIRST + item]);
+    mir_abort_runner_emit_call(out, plan->check_function, 3);
+}
+
+static void mir_emit_abort_file_runner(
+    FILE *out, const struct MirAbortFileRunner *plan)
+{
+    int new_file_ok = new_label();
+    int new_file_done = new_label();
+    int old_file_done = new_label();
+    int success = new_label();
+    int done = new_label();
+    int item;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-10\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+
+    mir_abort_runner_open(
+        out, plan,
+        plan->strings[MIR_ABORT_OLD_NAME],
+        plan->strings[MIR_ABORT_WRITE_MODE]);
+    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n", out);
+    mir_abort_runner_push_string(
+        out, plan->strings[MIR_ABORT_CONTENT]);
+    mir_abort_runner_emit_call(out, plan->puts_function, 2);
+    mir_abort_runner_close(out, plan);
+
+    fputs("\tld hl,0\n\tpush hl\n", out);
+    mir_abort_runner_push_string(
+        out, plan->strings[MIR_ABORT_NEW_NAME]);
+    mir_abort_runner_push_string(
+        out, plan->strings[MIR_ABORT_OLD_NAME]);
+    mir_abort_runner_emit_call(out, plan->rename_function, 2);
+    fputs("\tpush hl\n", out);
+    mir_abort_runner_push_string(
+        out, plan->strings[MIR_ABORT_RENAME_CHECK]);
+    mir_abort_runner_emit_call(out, plan->check_function, 3);
+
+    mir_abort_runner_open(
+        out, plan,
+        plan->strings[MIR_ABORT_NEW_NAME],
+        plan->strings[MIR_ABORT_READ_MODE]);
+    fputs("\tld a,(ix-2)\n\tor (ix-1)\n", out);
+    fprintf(out, "\tjp nz, L%d\n", new_file_ok);
+    mir_abort_runner_print(
+        out, plan, plan->strings[MIR_ABORT_NEW_MISSING]);
+    mir_abort_runner_increment_failures(out, plan);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            new_file_done, new_file_ok);
+    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n"
+          "\tld hl,8\n\tpush hl\n", out);
+    mir_abort_runner_push_buffer(out);
+    mir_abort_runner_emit_call(out, plan->gets_function, 3);
+    mir_abort_runner_close(out, plan);
+
+    fputs("\tld hl,0\n\tpush hl\n", out);
+    mir_abort_runner_push_string(
+        out, plan->strings[MIR_ABORT_CONTENT]);
+    mir_abort_runner_push_buffer(out);
+    mir_abort_runner_emit_call(out, plan->compare_function, 2);
+    fputs("\tpush hl\n", out);
+    mir_abort_runner_push_string(
+        out, plan->strings[MIR_ABORT_CONTENT_CHECK]);
+    mir_abort_runner_emit_call(out, plan->check_function, 3);
+    fprintf(out, "L%d:\n", new_file_done);
+
+    mir_abort_runner_open(
+        out, plan,
+        plan->strings[MIR_ABORT_OLD_NAME],
+        plan->strings[MIR_ABORT_READ_MODE]);
+    fputs("\tld a,(ix-2)\n\tor (ix-1)\n", out);
+    fprintf(out, "\tjp z, L%d\n", old_file_done);
+    mir_abort_runner_print(
+        out, plan, plan->strings[MIR_ABORT_OLD_PRESENT]);
+    mir_abort_runner_close(out, plan);
+    mir_abort_runner_increment_failures(out, plan);
+    fprintf(out, "L%d:\n", old_file_done);
+
+    mir_abort_runner_push_string(
+        out, plan->strings[MIR_ABORT_NEW_NAME]);
+    mir_abort_runner_emit_call(out, plan->remove_function, 1);
+    for (item = 0; item < 7; ++item)
+        mir_abort_runner_check_graph(out, plan, item);
+
+    mir_machine_emit_global_word(out, plan->failures, 0);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z, L%d\n", success);
+    mir_machine_emit_global_word(out, plan->failures, 0);
+    fputs("\tpush hl\n", out);
+    mir_abort_runner_push_string(
+        out, plan->strings[MIR_ABORT_FAILURE_SUMMARY]);
+    mir_abort_runner_emit_call(out, plan->print_function, 2);
+    fprintf(out, "\tld hl,1\n\tjp L%d\nL%d:\n",
+            done, success);
+
+    mir_abort_runner_print(
+        out, plan, plan->strings[MIR_ABORT_SUCCESS]);
+    mir_machine_emit_symbol_call(out, plan->abort_function);
+    mir_abort_runner_print(
+        out, plan, plan->strings[MIR_ABORT_RETURNED]);
+    fprintf(out,
+            "\tld hl,1\nL%d:\n"
+            "\tld sp,ix\n\tpop ix\n\tret\n",
+            done);
+}
+
 static void mir_emit_callback_registration_runner(
     FILE *out, const struct MirCallbackRegistrationRunner *plan)
 {
@@ -7875,6 +8692,7 @@ static void mir_emit_comma_loop_runner(
 int mir_try_emit_call_runners(FILE *out, int phase)
 {
     if (phase == 0) {
+        struct MirAbortFileRunner abort_plan;
         struct MirMemoryExerciseRunner memory_plan;
         struct MirAllocationLifetimeRunner allocation_plan;
         struct MirCallbackRegistrationRunner callback_plan;
@@ -7887,6 +8705,10 @@ int mir_try_emit_call_runners(FILE *out, int phase)
         struct MirLongIndexCallRunner long_index_plan;
         struct MirFixedCallCheckRunner plan;
 
+        if (mir_match_abort_file_runner(&abort_plan)) {
+            mir_emit_abort_file_runner(out, &abort_plan);
+            return 1;
+        }
         if (mir_match_memory_exercise_runner(&memory_plan)) {
             mir_emit_memory_exercise_runner(out, &memory_plan);
             return 1;

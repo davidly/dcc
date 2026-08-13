@@ -5,10 +5,49 @@ current execution plan and handoff.
 
 ## 2026-08-13 current checkpoint (read this first)
 
-- Branch: `pr/143`; clean base HEAD for this batch: `b5e4b11`.
-- Current working-tree candidate coverage: **2149/2185 (98.35%)**.
-- Remaining fallback population: **36 `final-cost-policy`**, all selected by
+- Branch: `pr/143`; clean base HEAD for this batch: `690d435`.
+- Current working-tree candidate coverage: **2150/2185 (98.40%)**.
+- Remaining fallback population: **35 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The call-runner module now admits the 27-block `tabort.main`
+  `final-cost-policy` fallback through a strict name-free matcher over all
+  **269 MIR instructions**. It proves the 10-byte file/buffer working set,
+  the static failure counter, all three open/close lifetimes, rename,
+  readback and removal, all nine checker calls, all 14 short-circuited ctype
+  calls, every ordered variadic report, both reachable returns and the code
+  following the noreturn call. The matcher requires the terminating function
+  to carry the noreturn contract but makes no inference about instructions
+  after that call.
+- The emitter preserves the direct abnormal-termination call rather than
+  replacing it with a return through normal exit cleanup. It also retains the
+  following report and return path verbatim as unreachable source behavior,
+  uses a compact **10-byte IX frame**, and never uses IY. Normal
+  selected/captured metrics are **3,572/4,039 bytes** and **338/394
+  instructions**; stack-check metrics are **3,601/4,068 bytes** and
+  **339/395 instructions**.
+- Checked `tabort` full-mode totals improve from **56,549 to 56,541 cycles**
+  with **9,216 bytes** unchanged peep, plus **57,038 to 56,766 cycles** and
+  **9,344 to 9,216 bytes** nopeep. Forced fallback also passes full-mode
+  validation.
+- A renamed-helper/global/local path A/B registers an atexit cleanup from the
+  checker without changing the matched main graph. The abort path ends at
+  `tabort ok` with no cleanup marker; selected/fallback measurements are
+  **57,434/57,442 cycles** and **6,144/6,144 bytes** peep, plus
+  **58,123/58,395 cycles** and **6,272/6,400 bytes** nopeep. The forced
+  failure path returns normally, ends with `tabort FAILED 1` followed by
+  `cleanup marker`, and measures **74,942/74,950 cycles** and
+  **6,144/6,144 bytes** peep, plus **75,634/75,906 cycles** and
+  **6,272/6,400 bytes** nopeep. Selected and fallback program output is
+  identical in both modes on both paths.
+- The call-runner module grows from **7,952 to 8,774 source lines**. Its
+  object audit still reports only `mir_try_emit_call_runners [T]` as defined
+  global code, with zero global read-only or writable data. The canonical
+  build passes. The regression-gated stack-check census advances
+  **2,149/2,185 (98.35%)** to **2,150/2,185 (98.40%)**, adds exactly
+  `tabort.main`, removes no accepted function, moves selector counts from
+  **1,404 spilled / 374 scheduled** to **1,403 spilled / 375 scheduled**,
+  and leaves **35 `final-cost-policy`** fallbacks. No performance baseline,
+  production identifier, or output-signature gate was added.
 - The call-runner module now admits the 26-block `tforcomm.main`
   `final-cost-policy` fallback through a strict name-free matcher over all
   **345 MIR instructions**. It proves the four-word local array, all 15 PHIs,
