@@ -147,6 +147,21 @@ struct MirNestedForRunner {
     char print_names[3][64];
 };
 
+struct MirWideStringRunner {
+    struct Sym *random_function;
+    struct Sym *exit_function;
+    struct Sym *length_function;
+    struct Sym *find_first_function;
+    struct Sym *find_last_function;
+    struct Sym *copy_function;
+    struct Sym *find_string_function;
+    struct Sym *compare_function;
+    struct Sym *print_function;
+    struct Sym *buffer;
+    int strings[14];
+    char print_names[13][64];
+};
+
 static int mir_machine_constant_value(
     int value, long *constant_out, int depth)
 {
@@ -5175,6 +5190,971 @@ static void mir_emit_nested_for_runner(
     fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static int mir_wide_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & 15) == TYPE_INT &&
+           (type & TYPE_UNSIGNED) != 0 &&
+           type_size(type) == 2;
+}
+
+static struct Sym *mir_wide_direct_function(
+    int instruction, int argument_count,
+    int return_type, int return_pointer_depth)
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    struct Sym *function;
+    const char *assembly_name;
+
+    if (call->opcode != MIR_CALL || call->src1 >= 0 ||
+        call->memory_flags != 0 ||
+        (function = find_global(call->name)) == NULL ||
+        function->storage != SC_FUNC || function->is_funcptr ||
+        (call->type & 15) != return_type ||
+        type_ptr_depth(call->type) != return_pointer_depth)
+        return NULL;
+    assembly_name = asm_name_for(sym_asm_name(function));
+    if (call->base_name[0] != 0 &&
+        strcmp(call->base_name, assembly_name))
+        return NULL;
+    if (argument_count == 0) {
+        int item;
+
+        for (item = 0; item < mir.count; ++item)
+            if (mir.insns[item].opcode == MIR_ARG &&
+                mir.insns[item].secondary_offset ==
+                    call->secondary_offset)
+                return NULL;
+    }
+    return function;
+}
+
+static int mir_wide_call_arguments(
+    int instruction, int argument_count, const int *definitions)
+{
+    int arguments[6];
+    int argument;
+
+    if (!mir_machine_call_arguments(
+            &mir.insns[instruction], argument_count, arguments))
+        return 0;
+    for (argument = 0; argument < argument_count; ++argument)
+        if (!mir_gnarly_value_from(
+                arguments[argument], definitions[argument]))
+            return 0;
+    return 1;
+}
+
+static int mir_wide_print_call(
+    struct MirWideStringRunner *plan, int slot,
+    int instruction, int argument_count, const int *definitions)
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    struct Sym *function;
+
+    if (slot < 0 || slot >= 13 ||
+        call->opcode != MIR_CALL || call->src1 >= 0 ||
+        call->memory_flags != MIR_CALL_FLAG_VARIADIC ||
+        call->base_name[0] == 0 ||
+        !mir_gnarly_word_type(call->type, 0) ||
+        !mir_wide_call_arguments(
+            instruction, argument_count, definitions) ||
+        (function = find_global(call->name)) == NULL ||
+        function->storage != SC_FUNC || function->is_defined ||
+        function->is_funcptr || function->is_noreturn ||
+        !function->has_proto || function->proto_nargs != 1 ||
+        !function->proto_variadic ||
+        !mir_gnarly_string_type(function->proto_types[0]) ||
+        !mir_gnarly_word_type(function->type, 0) ||
+        (plan->print_function != NULL &&
+         plan->print_function != function))
+        return 0;
+    plan->print_function = function;
+    snprintf(plan->print_names[slot],
+             sizeof(plan->print_names[slot]), "%s",
+             call->base_name);
+    return 1;
+}
+
+static struct Sym *mir_wide_global_buffer(int instruction)
+{
+    const struct MirInsn *address = &mir.insns[instruction];
+    struct Sym *symbol;
+
+    if (address->opcode != MIR_ADDRESS ||
+        !mir_machine_named_nonvolatile(address) ||
+        address->object >= 0 ||
+        !mir_wide_pointer_type(address->type) ||
+        (symbol = find_global(address->name)) == NULL ||
+        symbol->storage == SC_FUNC || !symbol->is_defined ||
+        symbol->is_volatile || !symbol->is_array ||
+        symbol->array_len != 4096 || symbol->elem_size != 2)
+        return NULL;
+    return symbol;
+}
+
+static int mir_wide_index(
+    int instruction, int base, int index)
+{
+    const struct MirInsn *address = &mir.insns[instruction];
+
+    return address->opcode == MIR_INDEX_ADDRESS &&
+           mir_gnarly_value_from(address->src1, base) &&
+           mir_gnarly_value_from(address->src2, index) &&
+           address->immediate == 2 &&
+           address->memory_size == 2 &&
+           (address->memory_flags & (1 | 8)) == 0 &&
+           mir_wide_pointer_type(address->type);
+}
+
+static int mir_wide_store_indirect(
+    int instruction, int address, int value)
+{
+    const struct MirInsn *store = &mir.insns[instruction];
+
+    return store->opcode == MIR_STORE_INDIRECT &&
+           mir_gnarly_value_from(store->src1, address) &&
+           mir_gnarly_value_from(store->src2, value) &&
+           store->memory_size == 2 &&
+           (store->memory_flags & (1 | 8)) == 0;
+}
+
+static int mir_match_wide_string_runner(
+    struct MirWideStringRunner *plan)
+{
+    static const char expected_opcodes[] =
+        "LNNNCSLPNCCBBFANICNCBBNWLNCBSJLTGKNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNCSLNPNNNNNNCBFNKNCNBNSNCNB"
+        "KNCNBNBNSNNNBSNANIRSANICNWNANCBBGKNSNNBFTGNGNGNGNGNGKCGKNLANINWNLNCBSJLTGKNNNNNNNNNNNNNNNNNNNNNNNNNN"
+        "NNNNNNNNNNNNNNNCSLNNPPPPNPNCBFNKNCNBNSNCNBKNCNBNBNSNNNBSNANIRSANICNWNANCBBGCGKSDUFTGNGNGNGNGKCGKNLDA"
+        "NCBBBFTGNGNGNGNGKCGKNLANCBBGCGKNSDUFTGNGNGNGNGKCGKNLDANCBBBFTGNGNGNGNGKCGKNLANINWNLNCBSJLTGKAGTNGKNN"
+        "NNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNCSLNNPNPNNNPNNCBFNKNCNBNSNKNCNBNSNCKNCNBNBNBNSNNBCBFTGNGN"
+        "GKCGKNLNANCBBSNANCBBGDGKSDUFTGNGNGNGNGDGKCGKNLDGDGNCBNGKFTGNGNGNGNGDGKCGKNLNLNCBSJLTGKNNNNNNNNNNNNNN"
+        "NNNNNNNNNNNNNNNNNNNNNNCSLNNPPPPNNNNPNNCBFNNCBCBSNCNCBCBBSNNNBSNANIRUSANICNWNANCBBGKNSTGNGNGANCBBGKAN"
+        "INWNLNCBSJL";
+    static const int constant_instructions[57] = {
+        4, 9, 10, 17, 19, 26, 74, 85, 91, 97, 102, 123,
+        129, 153, 166, 215, 227, 233, 239, 244, 265, 271, 275,
+        293, 301, 317, 324, 328, 347, 355, 371, 384, 443, 457,
+        463, 471, 477, 480, 492, 502, 510, 517, 541, 551, 570,
+        578, 622, 638, 643, 645, 649, 651, 653, 672, 678, 693,
+        706
+    };
+    static const long constant_values[57] = {
+        0, 8192, 2, 97, 26, 1, 0, 1000, 300, 1, 3000, 0,
+        2, 1, 1, 0, 1000, 300, 1, 70, 33, 2, 33, 1, 2, 1,
+        2, 33, 1, 2, 1, 1, 0, 1000, 300, 26, 1, 26, 26, 1,
+        2, 2, 1, 2, 1, 1, 0, 20, 37, 300, 1, 17, 70, 0, 2,
+        2, 1
+    };
+    static const int binary_instructions[58] = {
+        11, 12, 20, 21, 27, 86, 93, 99, 104, 106, 112, 130,
+        131, 138, 167, 228, 235, 241, 246, 248, 254, 272, 273,
+        302, 303, 304, 325, 326, 356, 357, 358, 385, 458, 465,
+        473, 482, 484, 486, 491, 493, 511, 512, 518, 519, 552,
+        579, 639, 644, 646, 652, 654, 655, 660, 679, 680, 694,
+        695, 707
+    };
+    static const int binary_lefts[58] = {
+        9, 7, 7, 17, 7, 78, 89, 97, 100, 99, 106, 93, 127,
+        112, 78, 225, 231, 239, 242, 241, 248, 235, 269, 248,
+        299, 298, 235, 322, 248, 353, 352, 225, 454, 461, 469,
+        480, 478, 477, 473, 491, 473, 508, 465, 515, 486, 454,
+        635, 635, 644, 635, 652, 649, 646, 646, 676, 646, 691,
+        635
+    };
+    static const int binary_rights[58] = {
+        10, 11, 19, 20, 26, 85, 91, 93, 102, 104, 93, 129,
+        130, 133, 166, 227, 233, 235, 244, 246, 235, 271, 272,
+        301, 302, 303, 324, 325, 355, 356, 357, 384, 457, 463,
+        471, 473, 482, 484, 486, 492, 510, 511, 517, 518, 551,
+        578, 638, 643, 645, 651, 653, 654, 655, 678, 679, 693,
+        694, 706
+    };
+    static const int binary_operations[58] = {
+        '/', '<', '%', '+', '+', '<', '%', '+', '%', '+', '-',
+        '*', '+', TOK_NE, '+', '<', '%', '+', '%', '+', '-', '*',
+        '+', '*', '+', TOK_NE, '*', '+', '*', '+', TOK_NE, '+',
+        '<', '%', '%', '-', '%', '+', '+', '>', '*', '+', '*', '+',
+        '*', '+', '<', '*', '%', '*', '%', '+', '+', '*', '+', '*',
+        '+', '+'
+    };
+    static const int string_instructions[14] = {
+        31, 140, 171, 282, 306, 336, 360,
+        389, 394, 495, 528, 557, 583, 685
+    };
+    static const int print_calls[13] = {
+        33, 152, 173, 292, 316, 346, 370,
+        391, 501, 540, 569, 585, 697
+    };
+    static const unsigned char print_argument_counts[13] = {
+        1, 6, 1, 5, 5, 5, 5, 1, 3, 6, 6, 1, 4
+    };
+    static const int print_arguments[13][6] = {
+        {31, -1, -1, -1, -1, -1},
+        {140, 78, 112, 133, 93, 106},
+        {171, -1, -1, -1, -1, -1},
+        {282, 225, 254, 235, 248, -1},
+        {306, 225, 254, 235, 248, -1},
+        {336, 225, 254, 235, 248, -1},
+        {360, 225, 254, 235, 248, -1},
+        {389, -1, -1, -1, -1, -1},
+        {495, 473, 486, -1, -1, -1},
+        {528, 454, 465, 473, 486, 538},
+        {557, 454, 465, 473, 486, 567},
+        {583, -1, -1, -1, -1, -1},
+        {685, 655, 682, 695, -1, -1}
+    };
+    static const int buffer_addresses[18] = {
+        14, 115, 120, 127, 158, 257, 262, 269,
+        299, 322, 353, 376, 515, 663, 669, 676, 691, 698
+    };
+    static const int exit_calls[8] = {
+        155, 295, 319, 349, 373, 504, 543, 572
+    };
+    static const int exit_arguments[8] = {
+        153, 293, 317, 347, 371, 502, 541, 570
+    };
+    static const int random_calls[7] = {
+        89, 100, 231, 242, 461, 469, 478
+    };
+    static const int local_groups[][5] = {
+        {5, 28, 7, -1, -1},
+        {75, 168, 78, -1, -1},
+        {95, 237, 467, 647, 220},
+        {108, 250, 661, 221, 628},
+        {113, 255, 488, 656, 222},
+        {119, 261, 668, 223, 630},
+        {216, 386, 225, -1, -1},
+        {444, 580, 454, -1, -1},
+        {623, 708, 635, -1, -1}
+    };
+    struct Sym *buffer;
+    struct Sym *function;
+    int alpha_offset;
+    int call_count = 0;
+    int instruction;
+    int group;
+    int item;
+    int previous;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 711 || mir_cfg_block_count() != 24 ||
+        mir.has_vla || mir.local_bytes != 105 ||
+        mir.object_count != 12 ||
+        (mir.return_type & 15) != TYPE_VOID ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        strlen(expected_opcodes) != (size_t)mir.count)
+        return mir_machine_reject(
+            "wide-string-call-runner", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        if (mir_gnarly_opcode_code(
+                mir.insns[instruction].opcode) !=
+                expected_opcodes[instruction])
+            return mir_machine_reject(
+                "wide-string-call-runner", "opcode");
+        if (mir.insns[instruction].opcode == MIR_CALL)
+            ++call_count;
+    }
+    if (call_count != 35)
+        return mir_machine_reject(
+            "wide-string-call-runner", "call-count");
+    for (item = 0; item < 57; ++item)
+        if (!mir_machine_constant_equals(
+                mir.insns[constant_instructions[item]].dst,
+                constant_values[item]))
+            return mir_machine_reject(
+                "wide-string-call-runner", "constants");
+    for (item = 0; item < 58; ++item)
+        if (!mir_gnarly_binary(
+                binary_instructions[item],
+                binary_lefts[item], binary_rights[item],
+                binary_operations[item]))
+            return mir_machine_reject(
+                "wide-string-call-runner", "operations");
+
+    if (!mir_gnarly_phi(7, 4, 27, 0, 24) ||
+        !mir_gnarly_phi(78, 74, 167, 30, 164) ||
+        !mir_gnarly_phi(220, 93, 235, 170, 382) ||
+        !mir_gnarly_phi(221, 106, 248, 170, 382) ||
+        !mir_gnarly_phi(222, 112, 254, 170, 382) ||
+        !mir_gnarly_phi(223, 118, 260, 170, 382) ||
+        !mir_gnarly_phi(225, 215, 385, 170, 382) ||
+        !mir_gnarly_phi(448, 220, 465, 388, 576) ||
+        !mir_gnarly_phi(450, 222, 486, 388, 576) ||
+        !mir_gnarly_phi(454, 443, 579, 388, 576) ||
+        !mir_gnarly_phi(627, 448, 646, 582, 704) ||
+        !mir_gnarly_phi(628, 221, 660, 582, 704) ||
+        !mir_gnarly_phi(629, 450, 655, 582, 704) ||
+        !mir_gnarly_phi(630, 223, 667, 582, 704) ||
+        !mir_gnarly_phi(635, 622, 707, 582, 704) ||
+        !mir_gnarly_branch(13, 12, 30) ||
+        !mir_gnarly_branch(87, 86, 170) ||
+        !mir_gnarly_branch(139, 138, 157) ||
+        !mir_gnarly_branch(229, 228, 388) ||
+        !mir_gnarly_branch(281, 280, 297) ||
+        !mir_gnarly_branch(305, 304, 321) ||
+        !mir_gnarly_branch(335, 334, 351) ||
+        !mir_gnarly_branch(359, 358, 375) ||
+        !mir_gnarly_branch(459, 458, 582) ||
+        !mir_gnarly_branch(494, 493, 506) ||
+        !mir_gnarly_branch(527, 526, 545) ||
+        !mir_gnarly_branch(556, 555, 574) ||
+        !mir_gnarly_branch(640, 639, 710) ||
+        mir.insns[29].label != mir.insns[6].label ||
+        mir.insns[169].label != mir.insns[76].label ||
+        mir.insns[387].label != mir.insns[217].label ||
+        mir.insns[581].label != mir.insns[445].label ||
+        mir.insns[709].label != mir.insns[624].label)
+        return mir_machine_reject(
+            "wide-string-call-runner", "control-flow");
+
+    for (item = 0; item < 14; ++item) {
+        const struct MirInsn *string =
+            &mir.insns[string_instructions[item]];
+
+        if (!mir_gnarly_string_type(string->type) ||
+            string->immediate < 0)
+            return mir_machine_reject(
+                "wide-string-call-runner", "strings");
+        plan->strings[item] = (int)string->immediate;
+        for (previous = 0; previous < item; ++previous)
+            if (plan->strings[item] == plan->strings[previous])
+                return mir_machine_reject(
+                    "wide-string-call-runner",
+                    "distinct-strings");
+    }
+    for (item = 0; item < 13; ++item)
+        if (!mir_wide_print_call(
+                plan, item, print_calls[item],
+                print_argument_counts[item],
+                print_arguments[item]))
+            return mir_machine_reject(
+                "wide-string-call-runner", "print-calls");
+
+    for (item = 0; item < 18; ++item) {
+        buffer = mir_wide_global_buffer(
+            buffer_addresses[item]);
+        if (buffer == NULL ||
+            (plan->buffer != NULL && plan->buffer != buffer))
+            return mir_machine_reject(
+                "wide-string-call-runner", "buffer");
+        plan->buffer = buffer;
+    }
+    if (!mir_wide_index(16, 14, 7) ||
+        !mir_wide_index(117, 115, 106) ||
+        !mir_wide_index(122, 120, 106) ||
+        !mir_wide_index(160, 158, 106) ||
+        !mir_wide_index(259, 257, 248) ||
+        !mir_wide_index(264, 262, 248) ||
+        !mir_wide_index(378, 376, 248) ||
+        !mir_wide_index(665, 663, 660) ||
+        !mir_wide_index(671, 669, 660) ||
+        !mir_wide_index(700, 698, 660) ||
+        !mir_wide_store_indirect(23, 16, 21) ||
+        !mir_wide_store_indirect(125, 122, 123) ||
+        !mir_wide_store_indirect(162, 160, 118) ||
+        !mir_wide_store_indirect(267, 264, 265) ||
+        !mir_wide_store_indirect(380, 378, 260) ||
+        !mir_wide_store_indirect(674, 671, 672) ||
+        !mir_wide_store_indirect(702, 700, 667) ||
+        mir.insns[118].opcode != MIR_LOAD_INDIRECT ||
+        !mir_gnarly_value_from(mir.insns[118].src1, 117) ||
+        mir.insns[118].memory_size != 2 ||
+        !mir_gnarly_word_type(mir.insns[118].type, 1) ||
+        mir.insns[260].opcode != MIR_LOAD_INDIRECT ||
+        !mir_gnarly_value_from(mir.insns[260].src1, 259) ||
+        mir.insns[260].memory_size != 2 ||
+        !mir_gnarly_word_type(mir.insns[260].type, 1) ||
+        mir.insns[666].opcode != MIR_LOAD_INDIRECT ||
+        !mir_gnarly_value_from(mir.insns[666].src1, 665) ||
+        mir.insns[666].memory_size != 2 ||
+        !mir_gnarly_word_type(mir.insns[666].type, 1) ||
+        mir.insns[667].opcode != MIR_UNARY ||
+        !mir_gnarly_value_from(mir.insns[667].src1, 666) ||
+        mir.insns[667].immediate != 0 ||
+        !mir_gnarly_char_type(mir.insns[667].type))
+        return mir_machine_reject(
+            "wide-string-call-runner", "wide-memory");
+
+    if (!mir_nested_for_local_address(392, &alpha_offset) ||
+        alpha_offset < -mir.local_bytes ||
+        alpha_offset + 54 > 0 ||
+        !mir_machine_same_location(
+            &mir.insns[392], &mir.insns[508]) ||
+        strcmp(mir.insns[392].name, mir.insns[508].name) ||
+        !mir_wide_pointer_type(mir.insns[392].type))
+        return mir_machine_reject(
+            "wide-string-call-runner", "alpha-buffer");
+    for (group = 0;
+         group < (int)(sizeof(local_groups) /
+                       sizeof(local_groups[0]));
+         ++group) {
+        int first = local_groups[group][0];
+
+        for (item = 1; item < 5; ++item)
+            if (local_groups[group][item] >= 0 &&
+                !mir_machine_same_location(
+                    &mir.insns[first],
+                    &mir.insns[local_groups[group][item]]))
+                return mir_machine_reject(
+                    "wide-string-call-runner", "local-alias");
+        for (previous = 0; previous < group; ++previous)
+            if (mir_machine_same_location(
+                    &mir.insns[first],
+                    &mir.insns[local_groups[previous][0]]))
+                return mir_machine_reject(
+                    "wide-string-call-runner",
+                    "distinct-locals");
+    }
+    if (!mir_machine_same_location(
+            &mir.insns[513], &mir.insns[521]) ||
+        !mir_machine_same_location(
+            &mir.insns[513], &mir.insns[538]) ||
+        !mir_machine_same_location(
+            &mir.insns[513], &mir.insns[548]) ||
+        !mir_machine_same_location(
+            &mir.insns[513], &mir.insns[567]) ||
+        !mir_machine_same_location(
+            &mir.insns[524], &mir.insns[525]) ||
+        !mir_machine_same_location(
+            &mir.insns[524], &mir.insns[546]) ||
+        mir_machine_same_location(
+            &mir.insns[513], &mir.insns[524]))
+        return mir_machine_reject(
+            "wide-string-call-runner", "pointer-locals");
+
+    for (item = 0; item < 7; ++item) {
+        function = mir_wide_direct_function(
+            random_calls[item], 0, TYPE_INT, 0);
+        if (function == NULL ||
+            !mir_gnarly_word_type(
+                mir.insns[random_calls[item]].type, 0) ||
+            (plan->random_function != NULL &&
+             plan->random_function != function))
+            return mir_machine_reject(
+                "wide-string-call-runner", "random-calls");
+        plan->random_function = function;
+    }
+    for (item = 0; item < 8; ++item) {
+        int arguments[1] = {exit_arguments[item]};
+
+        function = mir_wide_direct_function(
+            exit_calls[item], 1, TYPE_VOID, 0);
+        if (function == NULL || !function->is_noreturn ||
+            !mir_wide_call_arguments(
+                exit_calls[item], 1, arguments) ||
+            !mir_machine_constant_equals(
+                mir.insns[exit_arguments[item]].dst, 1) ||
+            (plan->exit_function != NULL &&
+             plan->exit_function != function))
+            return mir_machine_reject(
+                "wide-string-call-runner", "exit-calls");
+        plan->exit_function = function;
+    }
+    {
+        static const int first_length_arguments[1] = {131};
+        static const int second_length_arguments[1] = {680};
+        static const int first_find_arguments[2] = {273, 275};
+        static const int last_find_arguments[2] = {326, 328};
+        static const int copy_arguments[2] = {392, 394};
+        static const int find_string_arguments[2] = {519, 521};
+        static const int compare_arguments[3] = {546, 548, 552};
+
+        plan->length_function =
+            mir_wide_direct_function(133, 1, TYPE_INT, 0);
+        if (plan->length_function == NULL ||
+            !mir_gnarly_word_type(mir.insns[133].type, 1) ||
+            !mir_wide_call_arguments(
+                133, 1, first_length_arguments) ||
+            mir_wide_direct_function(682, 1, TYPE_INT, 0) !=
+                plan->length_function ||
+            !mir_gnarly_word_type(mir.insns[682].type, 1) ||
+            !mir_wide_call_arguments(
+                682, 1, second_length_arguments))
+            return mir_machine_reject(
+                "wide-string-call-runner", "length-calls");
+        plan->find_first_function =
+            mir_wide_direct_function(277, 2, TYPE_INT, 1);
+        plan->find_last_function =
+            mir_wide_direct_function(330, 2, TYPE_INT, 1);
+        plan->copy_function =
+            mir_wide_direct_function(397, 2, TYPE_INT, 1);
+        plan->find_string_function =
+            mir_wide_direct_function(523, 2, TYPE_INT, 1);
+        if (plan->find_first_function == NULL ||
+            plan->find_last_function == NULL ||
+            plan->copy_function == NULL ||
+            plan->find_string_function == NULL ||
+            !mir_wide_pointer_type(mir.insns[277].type) ||
+            !mir_wide_pointer_type(mir.insns[330].type) ||
+            !mir_wide_pointer_type(mir.insns[397].type) ||
+            !mir_wide_pointer_type(mir.insns[523].type) ||
+            !mir_wide_call_arguments(
+                277, 2, first_find_arguments) ||
+            !mir_wide_call_arguments(
+                330, 2, last_find_arguments) ||
+            !mir_wide_call_arguments(
+                397, 2, copy_arguments) ||
+            !mir_wide_call_arguments(
+                523, 2, find_string_arguments))
+            return mir_machine_reject(
+                "wide-string-call-runner", "wide-calls");
+        plan->compare_function =
+            find_global(mir.insns[555].name);
+        if (plan->compare_function == NULL ||
+            plan->compare_function->storage != SC_FUNC ||
+            plan->compare_function->is_funcptr ||
+            mir.insns[555].src1 >= 0 ||
+            mir.insns[555].memory_flags != 0 ||
+            !mir_gnarly_word_type(mir.insns[555].type, 0) ||
+            !mir_wide_call_arguments(
+                555, 3, compare_arguments))
+            return mir_machine_reject(
+                "wide-string-call-runner", "compare-call");
+    }
+    if (plan->random_function == plan->exit_function ||
+        plan->random_function == plan->length_function ||
+        plan->random_function == plan->find_first_function ||
+        plan->random_function == plan->find_last_function ||
+        plan->random_function == plan->copy_function ||
+        plan->random_function == plan->find_string_function ||
+        plan->exit_function == plan->length_function ||
+        plan->length_function == plan->find_first_function ||
+        plan->length_function == plan->find_last_function ||
+        plan->length_function == plan->copy_function ||
+        plan->length_function == plan->find_string_function ||
+        plan->find_first_function == plan->find_last_function ||
+        plan->find_first_function == plan->copy_function ||
+        plan->find_first_function == plan->find_string_function ||
+        plan->find_last_function == plan->copy_function ||
+        plan->find_last_function == plan->find_string_function ||
+        plan->copy_function == plan->find_string_function ||
+        plan->print_function == plan->random_function ||
+        plan->print_function == plan->exit_function ||
+        plan->print_function == plan->length_function ||
+        plan->print_function == plan->find_first_function ||
+        plan->print_function == plan->find_last_function ||
+        plan->print_function == plan->copy_function ||
+        plan->print_function == plan->find_string_function)
+        return mir_machine_reject(
+            "wide-string-call-runner", "function-alias");
+    return 1;
+}
+
+enum {
+    MIR_WIDE_I = -2,
+    MIR_WIDE_START = -4,
+    MIR_WIDE_END = -6,
+    MIR_WIDE_LEN = -8,
+    MIR_WIDE_ORIG = -10,
+    MIR_WIDE_POINTER = -12,
+    MIR_WIDE_OFFSET = -14,
+    MIR_WIDE_LENGTH = -16,
+    MIR_WIDE_ALPHA = -70,
+    MIR_WIDE_FRAME_BYTES = 70
+};
+
+static void mir_wide_push_frame(FILE *out, int offset)
+{
+    mir_gnarly_load_word(out, offset);
+    fputs("\tpush hl\n", out);
+}
+
+static void mir_wide_buffer_address(
+    FILE *out, const struct MirWideStringRunner *plan, int index_offset)
+{
+    mir_gnarly_load_word(out, index_offset);
+    fprintf(out,
+            "\tadd hl,hl\n\tld de,%s\n\tadd hl,de\n",
+            asm_name_for(sym_asm_name(plan->buffer)));
+}
+
+static void mir_wide_print(
+    FILE *out, const struct MirWideStringRunner *plan,
+    int slot, int argument_count)
+{
+    mir_emit_runtime_call(out, plan->print_names[slot]);
+    mir_gnarly_cleanup(out, argument_count);
+}
+
+static void mir_wide_exit(
+    FILE *out, const struct MirWideStringRunner *plan)
+{
+    fputs("\tld hl,1\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->exit_function);
+    fputs("\tpop bc\n", out);
+}
+
+static void mir_wide_increment_word(
+    FILE *out, int offset)
+{
+    int done = new_label();
+
+    fprintf(out,
+            "\tinc (ix%d)\n\tjp nz,L%d\n"
+            "\tinc (ix%d)\nL%d:\n",
+            offset, done, offset + 1, done);
+}
+
+static void mir_wide_loop_test(
+    FILE *out, int offset, int bound, int done)
+{
+    mir_gnarly_load_word(out, offset);
+    fprintf(out,
+            "\tld de,%d\n\tor a\n\tsbc hl,de\n\tjp nc,L%d\n",
+            bound, done);
+}
+
+static void mir_wide_emit_heading(
+    FILE *out, const struct MirWideStringRunner *plan,
+    int string_slot, int print_slot)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[string_slot]);
+    mir_wide_print(out, plan, print_slot, 1);
+}
+
+static void mir_emit_wide_string_runner(
+    FILE *out, const struct MirWideStringRunner *plan)
+{
+    int fill_loop = new_label();
+    int fill_letter_done = new_label();
+    int length_loop = new_label();
+    int length_done = new_label();
+    int length_ok = new_label();
+    int find_loop = new_label();
+    int find_done = new_label();
+    int first_present = new_label();
+    int first_correct = new_label();
+    int last_present = new_label();
+    int last_correct = new_label();
+    int string_loop = new_label();
+    int string_done = new_label();
+    int string_bounds_ok = new_label();
+    int string_present = new_label();
+    int string_equal = new_label();
+    int print_loop = new_label();
+    int print_done = new_label();
+    int start_in_range = new_label();
+    int length_in_range = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    fprintf(out,
+            "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
+            MIR_WIDE_FRAME_BYTES);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+
+    fprintf(out,
+            "\tld hl,%s\n\tld bc,4096\n\tld d,97\nL%d:\n"
+            "\tld (hl),d\n\tinc hl\n\tld (hl),0\n\tinc hl\n"
+            "\tinc d\n\tld a,d\n\tcp 123\n",
+            asm_name_for(sym_asm_name(plan->buffer)), fill_loop);
+    fprintf(out,
+            "\tjp nz,L%d\n\tld d,97\nL%d:\n"
+            "\tdec bc\n\tld a,b\n\tor c\n\tjp nz,L%d\n",
+            fill_letter_done, fill_letter_done, fill_loop);
+
+    mir_wide_emit_heading(out, plan, 0, 0);
+    mir_gnarly_store_word(out, MIR_WIDE_I, 0);
+    fprintf(out, "L%d:\n", length_loop);
+    mir_wide_loop_test(
+        out, MIR_WIDE_I, 1000, length_done);
+    mir_machine_emit_symbol_call(out, plan->random_function);
+    fputs("\tld de,300\n", out);
+    mir_emit_runtime_call(out, "__modu");
+    fprintf(out,
+            "\tld (ix%d),l\n\tld (ix%d),h\n",
+            MIR_WIDE_START, MIR_WIDE_START + 1);
+    mir_machine_emit_symbol_call(out, plan->random_function);
+    fputs("\tld de,3000\n", out);
+    mir_emit_runtime_call(out, "__modu");
+    fputs("\tinc hl\n", out);
+    fprintf(out,
+            "\tld e,(ix%d)\n\tld d,(ix%d)\n\tadd hl,de\n"
+            "\tld (ix%d),l\n\tld (ix%d),h\n"
+            "\tor a\n\tsbc hl,de\n"
+            "\tld (ix%d),l\n\tld (ix%d),h\n",
+            MIR_WIDE_START, MIR_WIDE_START + 1,
+            MIR_WIDE_END, MIR_WIDE_END + 1,
+            MIR_WIDE_LEN, MIR_WIDE_LEN + 1);
+    mir_wide_buffer_address(out, plan, MIR_WIDE_END);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n", out);
+    fprintf(out,
+            "\tld (ix%d),e\n\tld (ix%d),d\n"
+            "\tdec hl\n\txor a\n\tld (hl),a\n\tinc hl\n\tld (hl),a\n",
+            MIR_WIDE_ORIG, MIR_WIDE_ORIG + 1);
+    mir_wide_buffer_address(out, plan, MIR_WIDE_START);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->length_function);
+    fputs("\tpop bc\n", out);
+    fprintf(out,
+            "\tld (ix%d),l\n\tld (ix%d),h\n"
+            "\tld e,(ix%d)\n\tld d,(ix%d)\n"
+            "\tor a\n\tsbc hl,de\n\tjp z,L%d\n",
+            MIR_WIDE_LENGTH, MIR_WIDE_LENGTH + 1,
+            MIR_WIDE_LEN, MIR_WIDE_LEN + 1, length_ok);
+    mir_wide_push_frame(out, MIR_WIDE_END);
+    mir_wide_push_frame(out, MIR_WIDE_START);
+    mir_wide_push_frame(out, MIR_WIDE_LENGTH);
+    mir_wide_push_frame(out, MIR_WIDE_LEN);
+    mir_wide_push_frame(out, MIR_WIDE_I);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
+    mir_wide_print(out, plan, 1, 6);
+    mir_wide_exit(out, plan);
+    fprintf(out, "L%d:\n", length_ok);
+    mir_wide_buffer_address(out, plan, MIR_WIDE_END);
+    fprintf(out,
+            "\tld e,(ix%d)\n\tld d,(ix%d)\n"
+            "\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+            MIR_WIDE_ORIG, MIR_WIDE_ORIG + 1);
+    mir_wide_increment_word(out, MIR_WIDE_I);
+    fprintf(out, "\tjp L%d\nL%d:\n", length_loop, length_done);
+
+    mir_wide_emit_heading(out, plan, 2, 2);
+    mir_gnarly_store_word(out, MIR_WIDE_I, 0);
+    fprintf(out, "L%d:\n", find_loop);
+    mir_wide_loop_test(
+        out, MIR_WIDE_I, 1000, find_done);
+    mir_machine_emit_symbol_call(out, plan->random_function);
+    fputs("\tld de,300\n", out);
+    mir_emit_runtime_call(out, "__modu");
+    fprintf(out,
+            "\tld (ix%d),l\n\tld (ix%d),h\n",
+            MIR_WIDE_START, MIR_WIDE_START + 1);
+    mir_machine_emit_symbol_call(out, plan->random_function);
+    fputs("\tld de,70\n", out);
+    mir_emit_runtime_call(out, "__modu");
+    fputs("\tinc hl\n", out);
+    fprintf(out,
+            "\tld e,(ix%d)\n\tld d,(ix%d)\n\tadd hl,de\n"
+            "\tld (ix%d),l\n\tld (ix%d),h\n"
+            "\tor a\n\tsbc hl,de\n"
+            "\tld (ix%d),l\n\tld (ix%d),h\n",
+            MIR_WIDE_START, MIR_WIDE_START + 1,
+            MIR_WIDE_END, MIR_WIDE_END + 1,
+            MIR_WIDE_LEN, MIR_WIDE_LEN + 1);
+    mir_wide_buffer_address(out, plan, MIR_WIDE_END);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n", out);
+    fprintf(out,
+            "\tld (ix%d),e\n\tld (ix%d),d\n"
+            "\tdec hl\n\tld (hl),33\n\tinc hl\n\tld (hl),0\n",
+            MIR_WIDE_ORIG, MIR_WIDE_ORIG + 1);
+    fputs("\tld hl,33\n\tpush hl\n", out);
+    mir_wide_buffer_address(out, plan, MIR_WIDE_START);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->find_first_function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+    fprintf(out,
+            "\tld (ix%d),l\n\tld (ix%d),h\n"
+            "\tld a,h\n\tor l\n\tjp nz,L%d\n",
+            MIR_WIDE_POINTER, MIR_WIDE_POINTER + 1, first_present);
+    mir_wide_push_frame(out, MIR_WIDE_END);
+    mir_wide_push_frame(out, MIR_WIDE_START);
+    mir_wide_push_frame(out, MIR_WIDE_LEN);
+    mir_wide_push_frame(out, MIR_WIDE_I);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[3]);
+    mir_wide_print(out, plan, 3, 5);
+    mir_wide_exit(out, plan);
+    fprintf(out, "L%d:\n", first_present);
+    mir_wide_buffer_address(out, plan, MIR_WIDE_END);
+    fputs("\tex de,hl\n", out);
+    mir_gnarly_load_word(out, MIR_WIDE_POINTER);
+    fputs("\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp z,L%d\n", first_correct);
+    mir_wide_push_frame(out, MIR_WIDE_END);
+    mir_wide_push_frame(out, MIR_WIDE_START);
+    mir_wide_push_frame(out, MIR_WIDE_LEN);
+    mir_wide_push_frame(out, MIR_WIDE_I);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[4]);
+    mir_wide_print(out, plan, 4, 5);
+    mir_wide_exit(out, plan);
+    fprintf(out, "L%d:\n", first_correct);
+    fputs("\tld hl,33\n\tpush hl\n", out);
+    mir_wide_buffer_address(out, plan, MIR_WIDE_START);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->find_last_function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+    fprintf(out,
+            "\tld (ix%d),l\n\tld (ix%d),h\n"
+            "\tld a,h\n\tor l\n\tjp nz,L%d\n",
+            MIR_WIDE_POINTER, MIR_WIDE_POINTER + 1, last_present);
+    mir_wide_push_frame(out, MIR_WIDE_END);
+    mir_wide_push_frame(out, MIR_WIDE_START);
+    mir_wide_push_frame(out, MIR_WIDE_LEN);
+    mir_wide_push_frame(out, MIR_WIDE_I);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[5]);
+    mir_wide_print(out, plan, 5, 5);
+    mir_wide_exit(out, plan);
+    fprintf(out, "L%d:\n", last_present);
+    mir_wide_buffer_address(out, plan, MIR_WIDE_END);
+    fputs("\tex de,hl\n", out);
+    mir_gnarly_load_word(out, MIR_WIDE_POINTER);
+    fputs("\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp z,L%d\n", last_correct);
+    mir_wide_push_frame(out, MIR_WIDE_END);
+    mir_wide_push_frame(out, MIR_WIDE_START);
+    mir_wide_push_frame(out, MIR_WIDE_LEN);
+    mir_wide_push_frame(out, MIR_WIDE_I);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[6]);
+    mir_wide_print(out, plan, 6, 5);
+    mir_wide_exit(out, plan);
+    fprintf(out, "L%d:\n", last_correct);
+    mir_wide_buffer_address(out, plan, MIR_WIDE_END);
+    fprintf(out,
+            "\tld e,(ix%d)\n\tld d,(ix%d)\n"
+            "\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+            MIR_WIDE_ORIG, MIR_WIDE_ORIG + 1);
+    mir_wide_increment_word(out, MIR_WIDE_I);
+    fprintf(out, "\tjp L%d\nL%d:\n", find_loop, find_done);
+
+    mir_wide_emit_heading(out, plan, 7, 7);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[8]);
+    mir_gnarly_ix_address(out, MIR_WIDE_ALPHA);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->copy_function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_gnarly_store_word(out, MIR_WIDE_I, 0);
+    fprintf(out, "L%d:\n", string_loop);
+    mir_wide_loop_test(
+        out, MIR_WIDE_I, 1000, string_done);
+    mir_machine_emit_symbol_call(out, plan->random_function);
+    fputs("\tld de,300\n", out);
+    mir_emit_runtime_call(out, "__modu");
+    fprintf(out,
+            "\tld (ix%d),l\n\tld (ix%d),h\n",
+            MIR_WIDE_START, MIR_WIDE_START + 1);
+    mir_machine_emit_symbol_call(out, plan->random_function);
+    fputs("\tld de,26\n", out);
+    mir_emit_runtime_call(out, "__modu");
+    fprintf(out,
+            "\tld (ix%d),l\n\tld (ix%d),h\n",
+            MIR_WIDE_OFFSET, MIR_WIDE_OFFSET + 1);
+    mir_machine_emit_symbol_call(out, plan->random_function);
+    fputs("\tpush hl\n\tld hl,26\n", out);
+    fprintf(out,
+            "\tld e,(ix%d)\n\tld d,(ix%d)\n"
+            "\tor a\n\tsbc hl,de\n\tex de,hl\n\tpop hl\n",
+            MIR_WIDE_OFFSET, MIR_WIDE_OFFSET + 1);
+    mir_emit_runtime_call(out, "__modu");
+    fputs("\tinc hl\n", out);
+    fprintf(out,
+            "\tld (ix%d),l\n\tld (ix%d),h\n"
+            "\tld e,(ix%d)\n\tld d,(ix%d)\n\tadd hl,de\n"
+            "\tld de,26\n\tor a\n\tsbc hl,de\n"
+            "\tjp c,L%d\n\tjp z,L%d\n",
+            MIR_WIDE_LEN, MIR_WIDE_LEN + 1,
+            MIR_WIDE_OFFSET, MIR_WIDE_OFFSET + 1,
+            string_bounds_ok, string_bounds_ok);
+    mir_wide_push_frame(out, MIR_WIDE_LEN);
+    mir_wide_push_frame(out, MIR_WIDE_OFFSET);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[9]);
+    mir_wide_print(out, plan, 8, 3);
+    mir_wide_exit(out, plan);
+    fprintf(out, "L%d:\n", string_bounds_ok);
+    mir_gnarly_ix_address(out, MIR_WIDE_ALPHA);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_load_word(out, MIR_WIDE_OFFSET);
+    fputs("\tadd hl,hl\n\tex de,hl\n\tpop hl\n\tadd hl,de\n", out);
+    fprintf(out,
+            "\tld (ix%d),l\n\tld (ix%d),h\n\tpush hl\n",
+            MIR_WIDE_POINTER, MIR_WIDE_POINTER + 1);
+    mir_wide_buffer_address(out, plan, MIR_WIDE_START);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->find_string_function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+    fprintf(out,
+            "\tld (ix%d),l\n\tld (ix%d),h\n"
+            "\tld a,h\n\tor l\n\tjp nz,L%d\n",
+            MIR_WIDE_LENGTH, MIR_WIDE_LENGTH + 1,
+            string_present);
+    mir_wide_push_frame(out, MIR_WIDE_POINTER);
+    mir_wide_push_frame(out, MIR_WIDE_LEN);
+    mir_wide_push_frame(out, MIR_WIDE_OFFSET);
+    mir_wide_push_frame(out, MIR_WIDE_START);
+    mir_wide_push_frame(out, MIR_WIDE_I);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[10]);
+    mir_wide_print(out, plan, 9, 6);
+    mir_wide_exit(out, plan);
+    fprintf(out, "L%d:\n", string_present);
+    mir_gnarly_load_word(out, MIR_WIDE_LEN);
+    fputs("\tadd hl,hl\n\tpush hl\n", out);
+    mir_wide_push_frame(out, MIR_WIDE_POINTER);
+    mir_wide_push_frame(out, MIR_WIDE_LENGTH);
+    mir_machine_emit_symbol_call(out, plan->compare_function);
+    mir_gnarly_cleanup(out, 3);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", string_equal);
+    mir_wide_push_frame(out, MIR_WIDE_POINTER);
+    mir_wide_push_frame(out, MIR_WIDE_LEN);
+    mir_wide_push_frame(out, MIR_WIDE_OFFSET);
+    mir_wide_push_frame(out, MIR_WIDE_START);
+    mir_wide_push_frame(out, MIR_WIDE_I);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[11]);
+    mir_wide_print(out, plan, 10, 6);
+    mir_wide_exit(out, plan);
+    fprintf(out, "L%d:\n", string_equal);
+    mir_wide_increment_word(out, MIR_WIDE_I);
+    fprintf(out, "\tjp L%d\nL%d:\n", string_loop, string_done);
+
+    mir_wide_emit_heading(out, plan, 12, 11);
+    mir_gnarly_store_word(out, MIR_WIDE_I, 0);
+    mir_gnarly_store_word(out, MIR_WIDE_START, 0);
+    mir_gnarly_store_word(out, MIR_WIDE_LEN, 1);
+    fprintf(out, "L%d:\n", print_loop);
+    mir_wide_loop_test(
+        out, MIR_WIDE_I, 20, print_done);
+    mir_gnarly_load_word(out, MIR_WIDE_START);
+    fprintf(out,
+            "\tld e,(ix%d)\n\tld d,(ix%d)\n\tadd hl,de\n"
+            "\tld (ix%d),l\n\tld (ix%d),h\n",
+            MIR_WIDE_LEN, MIR_WIDE_LEN + 1,
+            MIR_WIDE_END, MIR_WIDE_END + 1);
+    mir_wide_buffer_address(out, plan, MIR_WIDE_END);
+    fputs("\tld l,(hl)\n\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n", out);
+    fprintf(out,
+            "\tld (ix%d),l\n\tld (ix%d),h\n",
+            MIR_WIDE_ORIG, MIR_WIDE_ORIG + 1);
+    mir_wide_buffer_address(out, plan, MIR_WIDE_END);
+    fputs("\txor a\n\tld (hl),a\n\tinc hl\n\tld (hl),a\n", out);
+    mir_wide_buffer_address(out, plan, MIR_WIDE_START);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->length_function);
+    fputs("\tpop bc\n", out);
+    fprintf(out,
+            "\tld (ix%d),l\n\tld (ix%d),h\n",
+            MIR_WIDE_LENGTH, MIR_WIDE_LENGTH + 1);
+    mir_wide_buffer_address(out, plan, MIR_WIDE_START);
+    fputs("\tpush hl\n", out);
+    mir_wide_push_frame(out, MIR_WIDE_LENGTH);
+    mir_wide_push_frame(out, MIR_WIDE_LEN);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[13]);
+    mir_wide_print(out, plan, 12, 4);
+    mir_wide_buffer_address(out, plan, MIR_WIDE_END);
+    fprintf(out,
+            "\tld e,(ix%d)\n\tld d,(ix%d)\n"
+            "\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+            MIR_WIDE_ORIG, MIR_WIDE_ORIG + 1);
+    mir_gnarly_load_word(out, MIR_WIDE_START);
+    fputs("\tld de,37\n\tadd hl,de\n\tld de,300\n"
+          "\tor a\n\tsbc hl,de\n", out);
+    fprintf(out,
+            "\tjp nc,L%d\n\tadd hl,de\nL%d:\n"
+            "\tld (ix%d),l\n\tld (ix%d),h\n",
+            start_in_range, start_in_range,
+            MIR_WIDE_START, MIR_WIDE_START + 1);
+    mir_gnarly_load_word(out, MIR_WIDE_LEN);
+    fputs("\tld de,17\n\tadd hl,de\n\tld a,l\n\tcp 71\n", out);
+    fprintf(out,
+            "\tjp c,L%d\n\tsub 70\n\tld l,a\n\tld h,0\nL%d:\n"
+            "\tld (ix%d),l\n\tld (ix%d),h\n",
+            length_in_range, length_in_range,
+            MIR_WIDE_LEN, MIR_WIDE_LEN + 1);
+    mir_wide_increment_word(out, MIR_WIDE_I);
+    fprintf(out, "\tjp L%d\nL%d:\n", print_loop, print_done);
+    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_fixed_call_runner_failure(
     FILE *out, const struct MirFixedCallCheckRunner *plan,
     int check, int next_label)
@@ -6226,6 +7206,7 @@ int mir_try_emit_call_runners(FILE *out, int phase)
         struct MirByteEqualityRunner byte_equality_plan;
         struct MirGnarlyRunner gnarly_plan;
         struct MirNestedForRunner nested_for_plan;
+        struct MirWideStringRunner wide_string_plan;
         struct MirLongIndexCallRunner long_index_plan;
         struct MirFixedCallCheckRunner plan;
 
@@ -6263,6 +7244,10 @@ int mir_try_emit_call_runners(FILE *out, int phase)
         }
         if (mir_match_nested_for_runner(&nested_for_plan)) {
             mir_emit_nested_for_runner(out, &nested_for_plan);
+            return 1;
+        }
+        if (mir_match_wide_string_runner(&wide_string_plan)) {
+            mir_emit_wide_string_runner(out, &wide_string_plan);
             return 1;
         }
         if (mir_match_long_index_call_runner(&long_index_plan)) {

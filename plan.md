@@ -6,10 +6,50 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Clean base HEAD for the current coverage batch: `56aec5b`.
-- Current working-tree candidate coverage: **2146/2185 (98.22%)**.
-- Remaining fallback population: **39 `final-cost-policy`**, all selected by
+- Clean base HEAD for the current coverage batch: `b5b2721`.
+- Current working-tree candidate coverage: **2147/2185 (98.26%)**.
+- Remaining fallback population: **38 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The call-runner module now admits the 24-block `tstr.test_wide`
+  `final-cost-policy` fallback through a strict name-free matcher over all
+  **711 MIR instructions**. It proves the 4,096-element wide global buffer,
+  the 27-element local wide-string buffer, all 15 PHIs and 13 conditional
+  branches, every wide index/load/store and signed-byte restoration
+  conversion, all seven random calls, both length calls, the first/last
+  character, copy, substring and memory-compare helpers, all **13** ordered
+  variadic reports, all eight ordered failure exits and the original void
+  fallthrough. The emitter preserves the four test phases, buffer mutations,
+  string and integer argument conversions, success order and every failure
+  path in a compact **70-byte IX frame**, with no IY.
+- Normal selected/captured metrics are **7,017/9,284 bytes** and
+  **625/824 instructions**; stack-check metrics are **7,046/9,313 bytes**
+  and **626/825 instructions**. `tstr` passes checked full peep/nopeep
+  validation, as does the forced-fallback side. Selected/fallback totals are
+  **1,382,732,616/1,388,769,453 cycles** and **11,904/12,160 bytes** peep,
+  plus **1,405,854,915/1,435,282,159 cycles** and **12,544/13,056 bytes**
+  nopeep.
+- A renamed-function, renamed-helper, renamed-global and renamed-local
+  boundary A/B is byte-identical in both modes and ends with `edge complete`.
+  Selected/fallback measurements are **704,278,104/710,315,141 cycles** and
+  **5,376/5,760 bytes** peep, plus **717,875,193/747,301,533 cycles** and
+  **5,632/6,144 bytes** nopeep. A deliberate first length-check mismatch
+  follows the same failure report and nonzero exit in both modes; selected/
+  fallback measurements are **1,148,636/6,762,258 cycles** peep and
+  **1,148,515/28,775,932 cycles** nopeep, with the same corresponding image
+  sizes.
+- The call-runner module grows from **6,286 to 7,271 source lines**. Its
+  object audit still reports only `mir_try_emit_call_runners [T]` as defined
+  global code, with zero global read-only or writable data. The canonical
+  build passes. The regression-gated stack-check census advances
+  **2,146/2,185 (98.22%)** to **2,147/2,185 (98.26%)**, adds exactly
+  `tstr.test_wide`, removes no accepted function, moves selector counts from
+  **1,407 spilled / 371 scheduled** to **1,406 spilled / 372 scheduled**,
+  and leaves **38 `final-cost-policy`** fallbacks. The corresponding
+  regression-gated normal census advances **2,057/2,103 (97.81%)** to
+  **2,058/2,103 (97.86%)**, moves **1,345 spilled / 371 scheduled** to
+  **1,344 spilled / 372 scheduled**, and leaves **45
+  `final-cost-policy`** fallbacks. No performance baseline, production name,
+  or output-hash gate was added.
 - The call-runner module now admits the 24-block `tnestfor.main`
   `final-cost-policy` fallback through a strict name-free matcher over all
   **288 MIR instructions**. It proves the local 81-byte sieve and 40-byte
