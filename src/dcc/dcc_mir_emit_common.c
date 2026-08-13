@@ -1704,7 +1704,7 @@ int mir_emit_homed_phi_copies(FILE *out, int predecessor,
     int count = 0;
     int predecessor_label = mir_block_label_before(predecessor);
     int edge_label = -1;
-    int instruction = mir_first_phi_or_block_end(successor);
+    int instruction = mir_next_phi_in_block(successor, successor);
     int i;
 
     if (predecessor >= 0 && predecessor < mir.count &&
@@ -1713,17 +1713,12 @@ int mir_emit_homed_phi_copies(FILE *out, int predecessor,
         mir_find_label(mir.insns[predecessor].label) == successor)
         edge_label = mir.insns[predecessor].label;
 
-    while (instruction >= 0 && instruction < mir.count &&
-           (mir.insns[instruction].opcode == MIR_PHI ||
-            mir.insns[instruction].opcode == MIR_NOP)) {
+    while (instruction >= 0) {
         const struct MirInsn *phi = &mir.insns[instruction];
         int source;
-        if (phi->opcode == MIR_NOP) {
-            ++instruction;
-            continue;
-        }
         if (!mir_value_has_use(phi->dst)) {
-            ++instruction;
+            instruction =
+                mir_next_phi_in_block(successor, instruction + 1);
             continue;
         }
         source = mir_phi_source_for_edge(phi, predecessor_label, edge_label,
@@ -1737,7 +1732,8 @@ int mir_emit_homed_phi_copies(FILE *out, int predecessor,
             destinations[count] = phi->dst;
             ++count;
         }
-        ++instruction;
+        instruction =
+            mir_next_phi_in_block(successor, instruction + 1);
     }
     for (i = 0; i < count; ++i)
         if (!mir_emit_push_home(out, sources[i]))
@@ -1750,13 +1746,9 @@ int mir_emit_homed_phi_copies(FILE *out, int predecessor,
 
 int mir_edge_phi_names_predecessor(int predecessor, int successor)
 {
-    int instruction = mir_first_phi_or_block_end(successor);
+    int instruction = mir_next_phi_in_block(successor, successor);
     int predecessor_label = mir_block_label_before(predecessor);
-    int source;
 
-    if (instruction < 0 || instruction >= mir.count ||
-        mir.insns[instruction].opcode != MIR_PHI)
-        return 0;
     /*
      * Consecutive labels before a phi are aliases for one entry position.
      * The phi can name a later alias (for example AST_COND's else-exit
@@ -1765,10 +1757,15 @@ int mir_edge_phi_names_predecessor(int predecessor, int successor)
      * strict emission places the copy on that real edge instead of dropping
      * it together with the synthetic label-to-label edge.
      */
-    source = mir_phi_source_for_edge(
-        &mir.insns[instruction], predecessor_label, -1,
-        successor, instruction);
-    return source >= 0;
+    while (instruction >= 0) {
+        if (mir_phi_source_for_edge(
+                &mir.insns[instruction], predecessor_label, -1,
+                successor, instruction) >= 0)
+            return 1;
+        instruction =
+            mir_next_phi_in_block(successor, instruction + 1);
+    }
+    return 0;
 }
 
 static int mir_strict_phi_fallthrough_enabled;

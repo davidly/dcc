@@ -17,7 +17,6 @@
 #define MIR_AGGREGATE_FORWARD_OFFSET (-32768L)
 #define MIR_AGGREGATE_VALUE_DEST_OFFSET (-32767L)
 #define MIR_AGGREGATE_GLOBAL_DEST_OFFSET (-32766L)
-#define MIR_MAX_ROLLOUT_INSNS 4096
 
 enum MirOpcode {
     MIR_NOP,
@@ -130,6 +129,7 @@ struct MirFunction {
     int continue_labels[MAX_FLOW];
     int flow_depth;
     int has_vla;
+    int implicit_zero_return;
     int has_runtime_stride_param;
     int is_variadic_function;
     char user_label_names[256][64];
@@ -536,6 +536,7 @@ int mir_insn_is_reachable(int i);
 int mir_target_is_noop_fallthrough(int instruction, int target);
 int mir_first_nonlabel_successor(int successor);
 int mir_first_phi_or_block_end(int successor);
+int mir_next_phi_in_block(int block_start, int from);
 int mir_fold_constant_binary(int op, long left, long right,
                                     int operand_type, long *result);
 int mir_fold_constant_compare(int op, long left, long right,

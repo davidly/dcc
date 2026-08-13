@@ -196,28 +196,24 @@ static int mir_schedule_collect_block_phi_uses(
              terminator->opcode == MIR_BRANCH_FALSE) &&
             mir_find_label(terminator->label) == target)
             edge_label = terminator->label;
-        instruction = mir_first_phi_or_block_end(target);
-        while (instruction >= 0 && instruction < mir.count &&
-               (mir.insns[instruction].opcode == MIR_PHI ||
-                mir.insns[instruction].opcode == MIR_NOP)) {
+        instruction = mir_next_phi_in_block(target, target);
+        while (instruction >= 0) {
             const struct MirInsn *phi = &mir.insns[instruction];
             int source;
 
-            if (phi->opcode == MIR_NOP) {
-                ++instruction;
-                continue;
-            }
             source = mir_phi_source_for_edge(
                 phi, predecessor_label, edge_label,
                 target, instruction);
             if (source < 0) {
-                ++instruction;
+                instruction =
+                    mir_next_phi_in_block(target, instruction + 1);
                 continue;
             }
             if (source >= mir.next_value)
                 return 0;
             ++edge_uses[source];
-            ++instruction;
+            instruction =
+                mir_next_phi_in_block(target, instruction + 1);
         }
     }
     return 1;

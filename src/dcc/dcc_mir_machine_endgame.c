@@ -97,6 +97,13 @@ struct MirNoStackStrtodChecks {
     int value_offset;
 };
 
+struct MirPackedByteReportSchedule {
+    struct Sym *pack_function;
+    unsigned char bytes[4];
+    int string_id;
+    char print_name[64];
+};
+
 #define MIR_ENDGAME_MAX_ARGS 17
 #define MIR_ENDGAME_FLOAT_CHECKS 61
 #define MIR_ENDGAME_WIDTH_CALLS 14
@@ -2005,6 +2012,156 @@ static int mir_endgame_call_matches(
                 mir.insns[definitions[argument]].dst)
             return 0;
     return 1;
+}
+
+static int mir_match_packed_byte_report_schedule(
+    struct MirPackedByteReportSchedule *plan)
+{
+    const unsigned char expected[34] = {
+        MIR_LABEL,
+        MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_NOP,
+        MIR_CONST, MIR_STORE_INDIRECT,
+        MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_NOP,
+        MIR_CONST, MIR_STORE_INDIRECT,
+        MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_NOP,
+        MIR_CONST, MIR_STORE_INDIRECT,
+        MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_NOP,
+        MIR_CONST, MIR_STORE_INDIRECT,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN
+    };
+    const struct MirInsn *first_address;
+    const struct MirInsn *pack_call;
+    const struct MirInsn *print_call;
+    struct Sym *print_function;
+    int pack_arguments[MIR_ENDGAME_MAX_ARGS];
+    int print_arguments[MIR_ENDGAME_MAX_ARGS];
+    int declared;
+    int lane;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla || mir_cfg_block_count() != 1 ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_size(mir.return_type) != 2 ||
+        !mir_endgame_opcode_sequence(expected, sizeof(expected)))
+        return mir_machine_reject(
+            "packed-byte-report-schedule", "shape");
+
+    first_address = &mir.insns[1];
+    if (!mir_endgame_char_pointer_type(first_address->type))
+        return mir_machine_reject(
+            "packed-byte-report-schedule", "buffer-type");
+    for (declared = 0; declared < mir.declared_count; ++declared)
+        if (!strcmp(mir.declared_names[declared],
+                    first_address->name))
+            break;
+    if (declared == mir.declared_count ||
+        mir.declared_storage[declared] != SC_LOCAL ||
+        !mir.declared_is_array[declared] ||
+        mir.declared_is_vla[declared] ||
+        mir.declared_is_volatile[declared] ||
+        mir.declared_sizes[declared] != 4 ||
+        mir.declared_elem_sizes[declared] != 1)
+        return mir_machine_reject(
+            "packed-byte-report-schedule", "buffer");
+
+    for (lane = 0; lane < 4; ++lane) {
+        int base = 1 + lane * 6;
+        const struct MirInsn *address = &mir.insns[base];
+        const struct MirInsn *index_value = &mir.insns[base + 1];
+        const struct MirInsn *index = &mir.insns[base + 2];
+        const struct MirInsn *byte_value = &mir.insns[base + 4];
+        const struct MirInsn *store = &mir.insns[base + 5];
+
+        if (!mir_endgame_same_address(1, base) ||
+            !mir_machine_constant_equals(index_value->dst, lane) ||
+            index->src1 != address->dst ||
+            index->src2 != index_value->dst ||
+            index->immediate != 1 ||
+            index->memory_size != 1 ||
+            index->type != address->type ||
+            byte_value->immediate < 0 ||
+            byte_value->immediate > 255 ||
+            type_size(byte_value->type) != 1 ||
+            store->src1 != index->dst ||
+            store->src2 != byte_value->dst ||
+            store->memory_size != 1 ||
+            store->memory_flags != 0 ||
+            store->bit_width != 0)
+            return mir_machine_reject(
+                "packed-byte-report-schedule", "stores");
+        plan->bytes[lane] =
+            (unsigned char)byte_value->immediate;
+    }
+
+    pack_call = &mir.insns[29];
+    print_call = &mir.insns[31];
+    if (!mir_endgame_same_address(1, 27) ||
+        mir_endgame_call_arguments(
+            pack_call, pack_arguments) != 1 ||
+        pack_arguments[0] != mir.insns[27].dst ||
+        pack_call->src1 >= 0 ||
+        (plan->pack_function = find_global(
+             pack_call->name)) == NULL ||
+        plan->pack_function->storage != SC_FUNC ||
+        !plan->pack_function->is_defined ||
+        plan->pack_function->is_funcptr ||
+        plan->pack_function->is_noreturn ||
+        pack_call->type != plan->pack_function->type ||
+        type_size(pack_call->type) != 4 ||
+        type_is_float(pack_call->type))
+        return mir_machine_reject(
+            "packed-byte-report-schedule", "pack-call");
+
+    print_function =
+        mir_endgame_call_function(print_call, 1, 1);
+    if (print_function == NULL ||
+        mir_endgame_call_arguments(
+            print_call, print_arguments) != 2 ||
+        print_arguments[0] != mir.insns[25].dst ||
+        print_arguments[1] != pack_call->dst ||
+        mir.insns[25].immediate < 0 ||
+        !mir_endgame_char_pointer_type(mir.insns[25].type) ||
+        (print_call->memory_flags &
+         MIR_CALL_FLAG_FORMAT_RUNTIME) != 0 ||
+        strlen(print_call->base_name) >=
+            sizeof(plan->print_name) ||
+        !mir_machine_constant_equals(mir.insns[32].dst, 0) ||
+        mir.insns[33].src1 != mir.insns[32].dst)
+        return mir_machine_reject(
+            "packed-byte-report-schedule", "print-call");
+
+    plan->string_id = (int)mir.insns[25].immediate;
+    strcpy(plan->print_name, print_call->base_name);
+    return 1;
+}
+
+static void mir_emit_packed_byte_report_schedule(
+    FILE *out, const struct MirPackedByteReportSchedule *plan)
+{
+    unsigned int first =
+        (unsigned int)plan->bytes[0] |
+        ((unsigned int)plan->bytes[1] << 8);
+    unsigned int second =
+        (unsigned int)plan->bytes[2] |
+        ((unsigned int)plan->bytes[3] << 8);
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%u\n\tpush hl\n"
+            "\tld hl,%u\n\tpush hl\n"
+            "\tld hl,0\n\tadd hl,sp\n\tpush hl\n",
+            second, first);
+    mir_machine_emit_symbol_call(out, plan->pack_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tpush de\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->string_id);
+    mir_emit_runtime_call(out, plan->print_name);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tld hl,0\n\tret\n", out);
 }
 
 static void mir_endgame_emit_frame(FILE *out, int bytes);
@@ -11647,8 +11804,17 @@ static int mir_try_emit_no_stack_cohort(FILE *out)
 
 int mir_try_emit_endgame_runners(FILE *out, int phase)
 {
-    if (phase == 0)
+    if (phase == 0) {
+        struct MirPackedByteReportSchedule packed_byte_report;
+
+        if (mir_match_packed_byte_report_schedule(
+                &packed_byte_report)) {
+            mir_emit_packed_byte_report_schedule(
+                out, &packed_byte_report);
+            return 1;
+        }
         return mir_try_emit_no_stack_cohort(out);
+    }
 
     struct MirEndgameArrayRunner array_plan;
     struct MirEndgameBinaryRunner binary_plan;

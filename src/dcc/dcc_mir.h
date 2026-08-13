@@ -6,7 +6,7 @@ struct AstNode;
 struct Sym;
 
 void mir_begin_function(const char *name, int sink_purpose, int has_vla,
-						int local_bytes);
+						int local_bytes, int implicit_zero_return);
 void mir_capture_stmt(const struct AstNode *stmt);
 void mir_begin_declaration(const struct AstNode *node);
 void mir_end_declaration(void);
@@ -36,5 +36,6 @@ void mir_note_narrowed_for_counter(void);
 void mir_begin_prelegacy_scheduled_attempt(void);
 int mir_end_prelegacy_scheduled_attempt(void);
 void mir_end_function(void);
+void mir_finish_translation_unit(void);
 
 #endif

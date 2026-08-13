@@ -40,6 +40,48 @@
 
 
 struct MirFunction mir;
+
+static char mir_first_incomplete_function[64];
+static int mir_first_incomplete_count;
+static int mir_first_incomplete_kinds[AST_DIVMOD_CALL + 1];
+
+static void mir_record_incomplete_function(
+    int opaque_count, const int *opaque_kinds)
+{
+    if (getenv("DCC_MIR_REQUIRE_COMPLETE") == NULL ||
+        opaque_count == 0 || mir_first_incomplete_function[0] != 0)
+        return;
+
+    strncpy(mir_first_incomplete_function, mir.name,
+            sizeof(mir_first_incomplete_function) - 1);
+    mir_first_incomplete_function[
+        sizeof(mir_first_incomplete_function) - 1] = 0;
+    mir_first_incomplete_count = opaque_count;
+    memcpy(mir_first_incomplete_kinds, opaque_kinds,
+           sizeof(mir_first_incomplete_kinds));
+}
+
+void mir_finish_translation_unit(void)
+{
+    int kind;
+    int first = 1;
+
+    if (getenv("DCC_MIR_REQUIRE_COMPLETE") == NULL ||
+        mir_first_incomplete_function[0] == 0 || errors != 0)
+        return;
+
+    fprintf(stderr, "MIR completeness failed for function %s opaque=%d kinds=",
+            mir_first_incomplete_function, mir_first_incomplete_count);
+    for (kind = AST_NONE; kind <= AST_DIVMOD_CALL; ++kind)
+        if (mir_first_incomplete_kinds[kind] != 0) {
+            fprintf(stderr, "%s%s:%d", first ? "" : ",",
+                    ast_kind_name(kind), mir_first_incomplete_kinds[kind]);
+            first = 0;
+        }
+    fputc('\n', stderr);
+    fatal("incomplete MIR coverage");
+}
+
 int mir_virtual_iy_base;
 int mir_virtual_iy_frame_bytes;
 int mir_emit_instruction_index = -1;
@@ -3086,7 +3128,7 @@ static void mir_lower_stmt(const struct AstNode *node)
 }
 
 void mir_begin_function(const char *name, int sink_purpose, int has_vla,
-                        int local_bytes)
+                        int local_bytes, int implicit_zero_return)
 {
     struct Sym *function_symbol;
 
@@ -3105,6 +3147,7 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
     mir_inline_expand_depth = 0;
     mir.flow_depth = 0;
     mir.has_vla = has_vla;
+    mir.implicit_zero_return = implicit_zero_return;
     function_symbol = find_global(name);
     mir.is_variadic_function = function_symbol != NULL &&
                                function_symbol->proto_variadic;
@@ -6394,7 +6437,7 @@ static int mir_first_phi_or_block_end_uncached(int successor)
  * mir_invalidate_use_cache is called immediately after it returns (see the
  * call site below); or inside the four suspend-and-invalidate functions
  * above. Every speculative regalloc attempt re-drives mir_begin_function
- * from scratch (see mir_end_function's MIR_MAX_ROLLOUT_INSNS comment),
+ * from scratch (see mir_end_function's dense-analysis-bound comment),
  * which invalidates the cache too, so nothing carries over stale between
  * attempts either.
  *
@@ -6551,6 +6594,39 @@ int mir_first_phi_or_block_end(int successor)
         fatal("MIR use-cache mismatch");
     }
     return result;
+}
+
+int mir_next_phi_in_block(int block_start, int from)
+{
+    int instruction;
+    int saw_instruction = 0;
+
+    if (from < block_start)
+        from = block_start;
+    for (instruction = block_start;
+         instruction >= 0 && instruction < mir.count;
+         ++instruction) {
+        int opcode = mir.insns[instruction].opcode;
+
+        if (opcode == MIR_JUMP ||
+            opcode == MIR_BRANCH_FALSE ||
+            opcode == MIR_RETURN)
+            return -1;
+        if (opcode == MIR_LABEL) {
+            if (saw_instruction)
+                return -1;
+            continue;
+        }
+        if (opcode == MIR_PHI) {
+            saw_instruction = 1;
+            if (instruction >= from)
+                return instruction;
+            continue;
+        }
+        if (opcode != MIR_NOP)
+            saw_instruction = 1;
+    }
+    return -1;
 }
 
 static int mir_phi_edge_uses_value(int predecessor, int successor, int value)
@@ -9406,8 +9482,7 @@ int mir_verify_and_dump(void)
             }
         fputc('\n', stderr);
     }
-    if (getenv("DCC_MIR_REQUIRE_COMPLETE") != NULL && opaque_count != 0)
-        ++errors;
+    mir_record_incomplete_function(opaque_count, opaque_kinds);
     mir.opaque_count = opaque_count;
 
     free(defined);

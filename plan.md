@@ -3,6 +3,135 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-14 strict diagnostic finalization (working tree)
+
+- `DCC_MIR_REQUIRE_COMPLETE=1` now records the first incomplete function,
+  opaque count and AST-kind counts inside `dcc_mir.c`. A single
+  `mir_finish_translation_unit()` call runs after parsing and deferred-body
+  emission; it reports/fatals only when the translation unit has no compiler
+  errors. Invalid sources therefore keep their original diagnostics exactly,
+  including `ast-local-init-unsupported-member.c`'s sole DCC-E1002 under the
+  combined completeness/emission gates.
+- The spilled scalar CFG backend now permits non-void fallthrough. It emits the
+  ordinary epilogue without materializing a return value; only the separately
+  supplied ordinary-`main` rule emits `ld hl,0`. Consequently
+  `warn-nonmain-fallthrough.c` compiles under `DCC_MIR_REQUIRE_EMIT=1`, retains
+  its warning, and its helper epilogue leaves HL undefined.
+- `scripts/test-mir-require-emit.ps1` now pins both diagnostic cases, including
+  exact baseline comparison and an assembly check that the non-main helper does
+  not force HL to zero.
+- Strict combined-gate diagnostics pass **106/106**. Normal census diffs are
+  exactly unchanged: **2107/2107** no-stack and **2186/2186** stack, with zero
+  newly emitted, removed or changed functions/apps. Full strict peep+nopeep
+  runs pass **314/314** in both modes; stack-check also passes all checked
+  performance baselines, and both modes pass diagnostics and dccpeep fixtures.
+  No commit or push was made.
+
+## 2026-08-14 extended strict-gate completion (working tree)
+
+- Added `scripts/mir-extended-census.py`, a deterministic extended-corpus
+  function census. It uses the same sorted `single-exec` source set and
+  `_extended_test_overrides.json` ignores/build overrides as
+  `runall-extended.ps1`, defaults float/long formatted I/O identically, runs
+  stack and no-stack compiles, and records selector/result/reason plus text,
+  instruction, CFG, MIR, value, call, frame, slot, type and semantic metrics.
+- The initial strict logs named 30 failing tests per mode and 31 in their
+  union because stack-only `00140` and no-stack-only `00218` differed. A
+  non-fatal census exposed **38 unique fallback functions / 70 mode rows**:
+  **33 no-stack** and **37 stack**.
+- The two selector failures are now handled structurally. Existing front-end
+  knowledge that only an ordinary integer entry point receives an implicit
+  zero return is passed into MIR; spilled fallthrough emits `ld hl,0` only for
+  that case, while other non-void fallthrough uses the ordinary epilogue and
+  leaves the undefined return value untouched. No selector compares a function
+  name.
+- Forced full selected-vs-captured runs found one hidden correctness defect:
+  a loop header may contain multiple PHIs separated by promoted metadata or
+  ordinary instructions. Edge-copy collection and backend interval extension
+  previously stopped after the first PHI, allowing a later loop-carried value
+  to be overwritten before its backedge copy. Block-wide PHI iteration now
+  feeds spilled/homed copies, schedule edge uses and interval ownership.
+  The dense verifier path retains its cached scan, preserving large-function
+  compile scaling.
+- The remaining generic candidates use **36 exact structural admission
+  profiles**: 35 final-cost profiles and one corrected dynamic-index profile.
+  Profiles match MIR/value/call/local/slot/block/type and semantic flags only;
+  they contain no function names, source IDs, output hashes or performance
+  baselines. Full peep/nopeep forced-selection output matched captured output
+  for the complete 31-test union in both stack modes before production
+  admission.
+- Blockers are now **0**. Extended coverage is **249/249 (100%) no-stack** and
+  **255/255 (100%) stack** across **196 runnable / 220 selected / 24 skipped**
+  tests. The eliminated rows' selected-minus-captured static deltas are
+  **+19,074 bytes / +1,463 instructions no-stack** and
+  **+22,674 bytes / +1,782 instructions stack**; extended has no performance
+  guardrail.
+- Normal runnable output is untouched: the fresh **2107/2107** no-stack census
+  is byte-identical to its before snapshot, and the fresh **2186/2186** stack
+  census is byte-identical to its before snapshot. Ordinary full gates pass
+  **314/314** apps in both modes with zero checked performance regressions,
+  diagnostics and dccpeep fixtures passing.
+- Strict extended full gates pass with
+  `DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1` in stack and no-stack
+  modes: **196/196** runnable tests in each. The require-emit diagnostic script
+  passes all five checks. The existing endgame schedule module audit exposes
+  only `mir_try_emit_endgame_runners` and zero exported read-only/writable
+  data. No commit or push was made.
+
+## 2026-08-14 explicit MIR emission-required gate and runnable blockers
+
+- Base/current HEAD: `7c16e68`. The uncommitted
+  `DCC_MIR_REQUIRE_EMIT=1` gate remains at the final
+  `mir_end_function()` commit decision. It rejects real `FINAL`/`DEFERRED`
+  legacy replay while excluding discard-capable speculation and prelegacy
+  schedule probes; `DCC_MIR_REQUIRE_COMPLETE=1` remains independent.
+- Exact blockers were `tptrrhs.main`, `reason=oversized`, in both stack modes,
+  and `tbcreld.main`, `reason=final-cost-policy`, in both stack modes when the
+  suite forces float and long formatted I/O. `tptrrhs.main` is **8558 MIR
+  instructions / 7093 values / 5 blocks**. `tbcreld.main` was a 34-instruction
+  one-block constant-byte-buffer -> 32-bit pack call -> variadic report shape;
+  the generic spilled candidate scored **1112.750/678.750** no-stack and
+  **1162.500/728.500** stack against captured code.
+- The arbitrary 4096-instruction rollout cap is removed. The replacement
+  bounds the actual dense analyses: both instruction-by-value liveness and
+  value-by-value interference must be at most **64 Mi cells**, with
+  division-before-multiplication overflow safety. `tptrrhs.main` uses
+  **60,701,894** liveness cells and **50,310,649** interference cells, so its
+  dynamically allocated analysis and ordinary `spilled-scalar-cfg` emission
+  are admitted. An over-budget debug boundary still reports
+  `reason=oversized` before allocating the dense matrices.
+- Compile scaling for generated straight-line functions (`-g`, 250/500/1000/
+  1500/1800 assignments) was **0.04/0.13/0.51/1.25/1.77 s** and
+  **11.5/24.0/55.8/79.9/94.6 MiB RSS**. The 1800 case
+  (**9004 instructions / 7202 values / 64,846,808 liveness cells**) passes;
+  1850 (**9254/7402 / 68,498,108 cells**) declines in **0.04 s / 12.0 MiB**.
+  Real `tptrrhs` strict compiles are bounded at **10.23 s / 98.4 MiB**
+  no-stack and **10.48 s / 96.1 MiB** stack.
+- `tbcreld.main` now selects a strict, name-free
+  `packed-byte-report-schedule` in `dcc_mir_machine_endgame.c`. Its local plan
+  validates the complete opcode/dataflow graph, four-byte nonvolatile local
+  array, byte constants and indices, call-site argument ownership, 32-bit
+  non-float producer, variadic one-fixed-argument report ABI, and zero return.
+  It carries no shared schedule state and accepts the call's recorded assembler
+  variant, including forced float+long I/O. Selected/captured output is
+  **217/570 bytes, 21/53 instructions** no-stack and **246/601, 22/54** stack.
+- Strict normal and stack censuses now pass all **314/314** apps:
+  **2107/2107 (100%)** no-stack and **2186/2186 (100%)** stack. Outputs are
+  `build/mir-require-emit-after.tsv` and
+  `build/mir-require-emit-after-stack.tsv`.
+- Focused full peep+nopeep A/B runs pass for `tbcreld,tptrrhs` in stack and
+  no-stack modes, both strict MIR and forced-legacy `main`. Stack MIR versus
+  forced legacy: `tbcreld` **37263/37266 vs 37535/37681 cycles**;
+  `tptrrhs` **376504/472199 vs 389761/490547 cycles**, with MIR sizes
+  **32896/35328 vs 36224/39936 bytes**. No-stack MIR versus forced legacy:
+  `tbcreld` **37140/37140 vs 37412/37555 cycles** at equal size;
+  `tptrrhs` **353320/449015 vs 366577/467363 cycles**, sizes
+  **32640/35072 vs 36096/39680 bytes**.
+- `scripts/test-mir-require-emit.ps1` passes all five gate/boundary checks.
+  Production audit: no app/function-name comparison, selected hash, or
+  performance-baseline gate was added; schedule state is stack-local in its
+  family module. Capture/replay and all gate work remain uncommitted.
+
 ## 2026-08-13 no-stack final-cost endgame: 100% MIR (working tree)
 
 - Branch/base: `pr/143` at `2977cb1`. The ten remaining no-stack

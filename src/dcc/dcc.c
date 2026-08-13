@@ -27,6 +27,7 @@
 #endif
 
 #include "dcc.h"
+#include "dcc_mir.h"
 #include "dcc_preproc_internal.h"
 #include "dcc_ast.h"
 
@@ -1784,6 +1785,7 @@ int main(int argc, char **argv)
 
     parse_translation_unit();
     emit_needed_deferred_bodies();
+    mir_finish_translation_unit();
     emit_data();
     emit_deferred_extrns();
     emit("\n\tend\n");

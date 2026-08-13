@@ -1310,7 +1310,8 @@ static int mir_dynamic_index_base_forward_target(int value)
     int instruction;
 
     if (mir_emit_instruction_index < 0 ||
-        mir_emit_instruction_index + 1 >= mir.count)
+        mir_emit_instruction_index + 1 >= mir.count ||
+        mir_value_use_count(value) != 1)
         return -1;
     target = mir_emit_instruction_index + 1;
     while (target < mir.count && mir.insns[target].opcode == MIR_NOP)
@@ -12441,24 +12442,21 @@ static int mir_prepare_backend_slots(void)
     }
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].opcode == MIR_PHI) {
-            int phi_start = i;
             int predecessor;
-            while (phi_start > 0 &&
-               (mir.insns[phi_start - 1].opcode == MIR_PHI ||
-                mir.insns[phi_start - 1].opcode == MIR_NOP))
-                --phi_start;
-            while (phi_start < i &&
-               mir.insns[phi_start].opcode == MIR_NOP)
-            ++phi_start;
             for (predecessor = 0; predecessor < mir.count; ++predecessor) {
                 int successor;
                 int predecessor_label = mir_block_label_before(predecessor);
                 for (successor = 0;
                      successor < mir.insns[predecessor].successor_count;
                      ++successor) {
-                    int target = mir_first_phi_or_block_end(
-                        mir.insns[predecessor].successors[successor]);
-                    if (target != phi_start)
+                    int block_start =
+                        mir.insns[predecessor].successors[successor];
+                    int target =
+                        mir_next_phi_in_block(block_start, block_start);
+                    while (target >= 0 && target < i)
+                        target =
+                            mir_next_phi_in_block(block_start, target + 1);
+                    if (target != i)
                         continue;
                     if (predecessor_label == mir.insns[i].phi_pred1 &&
                         last[mir.insns[i].src1] < predecessor)
@@ -22463,7 +22461,7 @@ static int mir_collect_phi_copies_for_edge(int predecessor, int successor,
 {
     int predecessor_label = mir_block_label_before(predecessor);
     int edge_label = -1;
-    int instruction = mir_first_phi_or_block_end(successor);
+    int instruction = mir_next_phi_in_block(successor, successor);
     int copy_count = 0;
 
     if (predecessor >= 0 && predecessor < mir.count &&
@@ -22472,17 +22470,12 @@ static int mir_collect_phi_copies_for_edge(int predecessor, int successor,
         mir_find_label(mir.insns[predecessor].label) == successor)
         edge_label = mir.insns[predecessor].label;
 
-    while (instruction >= 0 && instruction < mir.count &&
-           (mir.insns[instruction].opcode == MIR_PHI ||
-            mir.insns[instruction].opcode == MIR_NOP)) {
+    while (instruction >= 0) {
         const struct MirInsn *phi = &mir.insns[instruction];
         int source;
-        if (phi->opcode == MIR_NOP) {
-            ++instruction;
-            continue;
-        }
         if (!mir_value_has_use(phi->dst)) {
-            ++instruction;
+            instruction =
+                mir_next_phi_in_block(successor, instruction + 1);
             continue;
         }
         source = mir_phi_source_for_edge(phi, predecessor_label, edge_label,
@@ -22493,7 +22486,8 @@ static int mir_collect_phi_copies_for_edge(int predecessor, int successor,
              mir_value_is_wide_phi_update_result(source) ||
              mir_value_is_narrow_phi_adjust_result(source)) &&
             mir_phi_copy_is_slot_identity(source, phi->dst)) {
-            ++instruction;
+            instruction =
+                mir_next_phi_in_block(successor, instruction + 1);
             continue;
         }
         if (copy_count >= MAX_FLOW)
@@ -22501,7 +22495,8 @@ static int mir_collect_phi_copies_for_edge(int predecessor, int successor,
         sources[copy_count] = source;
         destinations[copy_count] = phi->dst;
         ++copy_count;
-        ++instruction;
+        instruction =
+            mir_next_phi_in_block(successor, instruction + 1);
     }
     return copy_count;
 }
@@ -26710,12 +26705,6 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     mir_planned_stack_emit_count = 0;
     mir_planned_stack_consume_count = 0;
     mir_planned_stack_invalid = 0;
-    for (i = 0; i < mir.count; ++i)
-        if (mir.insns[i].opcode == MIR_RETURN)
-            break;
-    if (i == mir.count && (mir.return_type & 15) != TYPE_VOID)
-        return mir_scalar_cfg_preflight_reject("implicit-return", -1);
-
     if ((!type_is_struct_object(mir.return_type) &&
             (mir.return_type & 15) != TYPE_VOID &&
          type_size(mir.return_type) > 4) ||
@@ -30180,6 +30169,8 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
          * the label here if any earlier return needed it. */
         if (shared_epilogue_label >= 0)
             fprintf(out, "L%d:\n", shared_epilogue_label);
+        if (return_count == 0 && mir.implicit_zero_return)
+            fputs("\tld hl,0\n", out);
         mir_emit_virtual_iy_epilogue(out);
     } else {
         /* mir-migration-plan-next10 Item 3: the duplicate epilogue this

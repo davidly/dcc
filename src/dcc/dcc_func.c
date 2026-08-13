@@ -2077,11 +2077,14 @@ void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame
 {
     struct Sym *s;
     const char *aname;
+    int function_type;
     int i;
 
     flush_pending_asm();
 
     s = find_global(name);
+    function_type = current_return_type != 0
+        ? current_return_type : s != NULL ? s->type : TYPE_INT;
     aname = asm_name_for(name);
     emit_debug_types_once();
     strncpy(current_debug_function, aname, sizeof(current_debug_function) - 1);
@@ -2104,8 +2107,11 @@ void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame
     }
 
     fprintf(g_emit_sink.stream, "%s:\n", aname);
-    mir_begin_function(name, g_emit_sink.purpose, current_function_has_vla,
-                       local_bytes);
+    mir_begin_function(
+        name, g_emit_sink.purpose, current_function_has_vla, local_bytes,
+        strcmp(name, "main") == 0 &&
+            (function_type & 15) == TYPE_INT &&
+            type_ptr_depth(function_type) == 0);
     current_omit_ix_frame = omit_ix_frame;
     /* Callee-save of the caller's IY, before the frame is established so the
      * epilogue can restore it with a bare "pop iy" once IX has been popped.
