@@ -19997,6 +19997,36 @@ and both focused stack modes are clean. Full extended validation passes
 **314/314 runnable + 196/196 extended**, diagnostics and dccpeep fixtures,
 with zero checked regressions.
 
+## Item T529: replace final register-v69 arbitration with MIR-only cost (2026-08-14)
+
+At strict-MIR HEAD `f2eee89`, production FINAL/DEFERRED arbitration no longer
+uses captured legacy bytes/instructions. Exact scheduled kernels remain first.
+Generic output is compared to fresh homed, hybrid, regional, and cumulative
+spilled candidates with a machine-level score over loop-weighted T-states,
+helper tiers, real opcode bytes/instructions, frame/spills, allocator and
+stream moves, prologue/callee saves, and register homes. `legacy-v69` remains
+an exact A/B control while capture/replay still exists.
+
+The broad minimum-score experiment was rejected: stack/PHI candidates broke
+`texpfsp` NaN forwarding, all/regional candidates broke `cint`, and numerous
+static wins regressed dynamically. Pareto dominance fixed most of that but
+still lost in layout-sensitive `tptrcst`, `adaint`, and `cobint`; a 20% score
+margin still admitted one 4,020-cycle Adaint loss. Final v1 makes only proven
+simple spilled progressions selectable, requires dominance in every MIR-only
+term and a 30% total-score margin, and bounds re-emission at 2,048 MIR
+instructions. No names, source IDs, hashes, legacy metrics, or baselines enter
+the decision.
+
+Only three normal functions change, all measured wins:
+`cint.is_type_start`, `cint.program`, and `tmatbit.bitops`. Normal selector
+totals and 100% coverage are unchanged in both stack modes; extended changes
+are limited to `00043.main`, no-stack `00127.main`, and `00207.f2`, also with
+unchanged 100% coverage. Full strict normal/stack and all-standard extended
+peep+nopeep A/B pass for default v1 and explicit legacy-v69, checked stack
+performance has zero regressions, and focused ASan/UBSan is clean. The exact
+formula, hashes, performance deltas, corpus counts, and commands are recorded
+in root `plan.md`'s 2026-08-14 MIR-only final cost section.
+
 ## Item T528: recover typed conditions and numeric support loops (performance recovery, 2026-08-10)
 
 After T527, Sieve, `t`, and Ttrig were three profiled loop leaders. This batch

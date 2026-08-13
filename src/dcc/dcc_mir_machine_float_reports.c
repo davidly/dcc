@@ -2709,7 +2709,8 @@ int mir_try_emit_float_reports(FILE *out)
             &float_normalization_schedule)) {
         mir_emit_float_normalization_schedule(
             out, &float_normalization_schedule);
-        if (mir_stream_size(out) <
+        if (mir_cost_policy_candidate_mode() ||
+            mir_stream_size(out) <
             mir_stream_size(mir.capture_stream))
             return 1;
         return mir_machine_reject(
@@ -2719,7 +2720,8 @@ int mir_try_emit_float_reports(FILE *out)
             &float_log_series_schedule)) {
         mir_emit_float_log_series_schedule(
             out, &float_log_series_schedule);
-        if (mir_stream_size(out) <
+        if (mir_cost_policy_candidate_mode() ||
+            mir_stream_size(out) <
             mir_stream_size(mir.capture_stream))
             return 1;
         return mir_machine_reject(
@@ -2729,7 +2731,8 @@ int mir_try_emit_float_reports(FILE *out)
             &raw_conversion_check_schedule)) {
         mir_emit_raw_conversion_check_schedule(
             out, &raw_conversion_check_schedule);
-        if (mir_stream_size(out) <
+        if (mir_cost_policy_candidate_mode() ||
+            mir_stream_size(out) <
             mir_stream_size(mir.capture_stream))
             return 1;
         return mir_machine_reject(
@@ -2739,7 +2742,8 @@ int mir_try_emit_float_reports(FILE *out)
             &float_report_schedule)) {
         mir_emit_float_report_schedule(
             out, &float_report_schedule);
-        if (mir_stream_size(out) <
+        if (mir_cost_policy_candidate_mode() ||
+            mir_stream_size(out) <
             mir_stream_size(mir.capture_stream))
             return 1;
         return mir_machine_reject(

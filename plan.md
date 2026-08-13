@@ -3,6 +3,105 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-14 MIR-only final cost policy (working tree)
+
+- Base/current HEAD: clean published strict-MIR checkpoint `f2eee89`. No
+  commit or push was made. Capture/replay remains present.
+- Exact `scheduled-machine-cfg` kernels retain first priority. For every
+  remaining final/deferred generic function, production now runs
+  `DCC_MIR_COST_POLICY=mir-v1` by default. The already-established generic
+  result is the incumbent; fresh-stream alternatives cover ordinary homed,
+  hybrid-homed, regional-homed, and ten cumulative spilled feature masks.
+  Each attempt restores allocation, slot, label, regional, and feature state.
+  `DCC_MIR_COST_POLICY=legacy-v69` is the exact A/B control and
+  `mir-v1-report` is read-only. Discard-only legacy register-allocation probes
+  retain their existing v69 compatibility while capture exists, but the real
+  FINAL/DEFERRED accept/reject decision no longer calls `register-v69` or
+  compares its candidate to captured bytes/instructions.
+- The calibrated MIR-only score is:
+
+  `weighted T-states + helper surcharge + 0.50*machine bytes`
+  `+ 0.50*machine instructions + 4*frame bytes + 24*spills`
+  `+ 3*(fixed + operand + PHI allocation moves) + stream moves`
+  `+ 4*prologue instructions + 8*callee-save instructions`
+  `- register homes + 2*IY homes`.
+
+  Backedge bodies are weighted by `8^loop-depth` (depth capped at three);
+  forward conditional spans by `0.5^skip-depth`. Helper surcharges remain the
+  documented 32/96/256/512 T-state cheap/mul-shift/divmod/float tiers. A
+  replacement must be no worse than the incumbent in weighted machine cost,
+  bytes, instructions, frame, spills, helpers, moves, setup, and register
+  homes, and must improve the total score by at least **30%**. Graphs over
+  2,048 MIR instructions retain the incumbent to bound compile time.
+- Candidate availability and semantic eligibility stay separate. The matrix
+  evaluates homed/hybrid/regional/spilled output and reports every structural
+  term, but only the already-safe baseline/RHS/store-address/wide-LHS/
+  stable-argument/global-argument spilled progression may displace an
+  incumbent in v1. Existing homed/hybrid/regional outputs can remain the
+  incumbent. Stack-argument, promoted-slot, all-feature, and PHI-slot
+  alternatives are diagnostic-only pending a stronger semantic eligibility
+  proof.
+- Calibration rejected three broader policies:
+  1. lowest-score selection exposed wrong `texpfsp` NaN forwarding in both
+     stack/PHI feature candidates, wrong `cint` output through `all` and
+     regional alternatives, and many dynamic losses;
+  2. pure Pareto dominance was correctness-clean after those semantic
+     exclusions but still regressed `tptrcst` peep by 0.18% and shifted
+     `adaint`/`cobint` placement enough to lose one mode;
+  3. a 20% score margin retained `adaint.init_state` (25.61% static score
+     win) but lost 4,020 nopeep cycles. The 30% holdout margin is the first
+     zero-regression calibration. No name, source ID, output hash, captured
+     metric, or performance baseline participates in production selection.
+- New tooling: `mir-migration-census.py --cost-policy-output` writes app,
+  function, candidate/selector, eligibility/final choice, complete score
+  components, and candidate hash. The full normal matrix contains **22,363
+  rows across 1,599 generic functions**. Production selects the incumbent for
+  all but three normal functions:
+  `cint.is_type_start` (`spilled-rhs-forward`),
+  `cint.program` (`spilled-rhs-forward`), and
+  `tmatbit.bitops` (`spilled-wide-binary-lhs`).
+- Exact normal selected-stream changes:
+  - no-stack: `cint.is_type_start`
+    **2425/215, 1680fcdc -> 1591/152, 02430f1d**;
+    `cint.program` **1240/103, 4592b159 -> 1039/88, 0dd2402e**;
+    `tmatbit.bitops` **1254/117, eb2cd9a5 -> 815/85, 0282a031**;
+  - stack: `cint.is_type_start`
+    **2454/216, 78542e97 -> 1620/153, b50b91e8**;
+    `cint.program` **1269/104, a03f0335 -> 1068/89, 1a19dbb0**;
+    `tmatbit.bitops` **1283/118, 22e8449c -> 844/86, 2761e928**.
+  Selector totals are byte-for-byte unchanged:
+  **2107/2107** no-stack
+  (1300 spilled, 420 scheduled, 355 homed, 23 hybrid, 5 regional, 4 buffered)
+  and **2186/2186** stack
+  (1369/410/375/23/5/4).
+- Extended changes are limited to five mode rows:
+  `00043.main` in both modes (**1419/132 -> 989/103** no-stack,
+  **1448/133 -> 1018/104** stack), `00127.main` no-stack
+  (**390/36 -> 255/25**), and `00207.f2` in both modes
+  (**640/60 -> 349/39**, **669/61 -> 378/40**). Extended coverage remains
+  **249/249 no-stack** and **255/255 stack** with identical selector totals.
+- Performance A/B on the changed normal apps:
+  - stack `cint`: **299327627 -> 299190155** peep cycles,
+    **305443007 -> 305224610** nopeep, images **31360 -> 31104** /
+    **36224 -> 35712** bytes;
+  - stack `tmatbit`: **124058 -> 123450** /
+    **126648 -> 125432** cycles, images **6656 -> 6528** /
+    **6784 -> 6656**;
+  - no-stack `cint`: **299091602 -> 299080988** /
+    **305133129 -> 305114528**, images **30720 -> 30592** /
+    **35328 -> 35072**;
+  - no-stack `tmatbit`: **123617 -> 123009** /
+    **126207 -> 124991**, equal 6400-byte peep image and
+    **6656 -> 6528** nopeep.
+- Validation is clean with default mir-v1 and explicit legacy-v69:
+  strict normal/stack full peep+nopeep **314 passed / 9 skipped** in each
+  stack mode; checked stack performance, diagnostics, and dccpeep fixtures
+  pass; all-standard extended full peep+nopeep passes **196/196** in both
+  stack modes for both policies. The final extended censuses are
+  **504/504 MIR rows**. ASan/UBSan strict candidate censuses pass the changed,
+  false-selection, interpreter, and oversized set
+  (`cint,tmatbit,tptrrhs,adaint,cobint,texpfsp`) at **196/196**.
+
 ## 2026-08-14 strict diagnostic finalization (working tree)
 
 - `DCC_MIR_REQUIRE_COMPLETE=1` now records the first incomplete function,

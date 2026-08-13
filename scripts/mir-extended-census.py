@@ -24,7 +24,8 @@ SELECTION_RE = re.compile(
     r"captured-bytes=(?P<captured_bytes>-?\d+) "
     r"generated-insns=(?P<generated_insns>-?\d+) "
     r"captured-insns=(?P<captured_insns>-?\d+) blocks=(?P<blocks>\d+) "
-    r"selected-hash=[0-9a-fA-F]{8} sink=(?P<sink>\S+) "
+    r"selected-hash=(?P<selected_hash>[0-9a-fA-F]{8}) "
+    r"sink=(?P<sink>\S+) "
     r"mir-insns=(?P<mir_insns>\d+) values=(?P<values>\d+) "
     r"calls=(?P<calls>\d+) locals=(?P<locals>\d+) "
     r"aggregate-temps=(?P<aggregate_temps>\d+) slots=(?P<slots>\d+) "
@@ -49,6 +50,7 @@ FIELDS = [
     "generated_insns",
     "captured_insns",
     "blocks",
+    "selected_hash",
     "sink",
     "mir_insns",
     "values",

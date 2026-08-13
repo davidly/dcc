@@ -44,6 +44,33 @@ MATRIX_RE = re.compile(
     r"\twide-values=(?P<wide_values>[01])"
     r"\thash=(?P<hash>[0-9a-fA-F]{8})"
 )
+COST_RE = re.compile(
+    r"MIR cost-candidate function=(?P<function>\S+) "
+    r"candidate=(?P<candidate>\S+) selector=(?P<selector>\S+) "
+    r"emitted=(?P<emitted>[01]) selectable=(?P<selectable>[01]) "
+    r"selected=(?P<selected>[01]) score=(?P<score>[0-9.]+) "
+    r"text-bytes=(?P<text_bytes>-?\d+) "
+    r"machine-bytes=(?P<machine_bytes>-?\d+) "
+    r"instructions=(?P<instructions>\d+) "
+    r"tstates=(?P<tstates>[0-9.]+) "
+    r"helper-tstates=(?P<helper_tstates>[0-9.]+) "
+    r"helper-calls=(?P<helper_calls>\d+) frame=(?P<frame>\d+) "
+    r"slots=(?P<slots>\d+) spills=(?P<spills>\d+) "
+    r"fixed-moves=(?P<fixed_moves>\d+) "
+    r"operand-moves=(?P<operand_moves>\d+) "
+    r"phi-moves=(?P<phi_moves>\d+) "
+    r"stream-moves=(?P<stream_moves>\d+) "
+    r"prologue=(?P<prologue>\d+) "
+    r"callee-saves=(?P<callee_saves>\d+) "
+    r"homes=(?P<homes>\d+) iy-homes=(?P<iy_homes>\d+) "
+    r"loop-depth=(?P<loop_depth>\d+) "
+    r"hash=(?P<hash>[0-9a-fA-F]{8})"
+)
+COST_SELECTED_RE = re.compile(
+    r"MIR cost-selected function=(?P<function>\S+) "
+    r"candidate=(?P<candidate>\S+) selector=(?P<selector>\S+) "
+    r"selected-hash=(?P<selected_hash>[0-9a-fA-F]{8})"
+)
 FIELDS = [
     "app",
     "function",
@@ -80,6 +107,36 @@ MATRIX_FIELDS = [
     "wide_values",
     "hash",
 ]
+COST_FIELDS = [
+    "app",
+    "function",
+    "candidate",
+    "selector",
+    "emitted",
+    "selectable",
+    "selected",
+    "final",
+    "score",
+    "text_bytes",
+    "machine_bytes",
+    "instructions",
+    "tstates",
+    "helper_tstates",
+    "helper_calls",
+    "frame",
+    "slots",
+    "spills",
+    "fixed_moves",
+    "operand_moves",
+    "phi_moves",
+    "stream_moves",
+    "prologue",
+    "callee_saves",
+    "homes",
+    "iy_homes",
+    "loop_depth",
+    "hash",
+]
 
 
 def parse_args() -> argparse.Namespace:
@@ -95,6 +152,17 @@ def parse_args() -> argparse.Namespace:
         metavar="TSV",
         help="also evaluate isolated spilled-selector feature sets and write "
         "their metrics and output hashes to this TSV",
+    )
+    parser.add_argument(
+        "--cost-policy",
+        choices=("mir-v1", "mir-v1-report", "legacy-v69"),
+        help="set DCC_MIR_COST_POLICY while compiling",
+    )
+    parser.add_argument(
+        "--cost-policy-output",
+        metavar="TSV",
+        help="write MIR-only generic-candidate costs, structural terms, "
+        "selection eligibility, and hashes to this TSV",
     )
     parser.add_argument("--compare", metavar="OLD_TSV")
     parser.add_argument("--apps", help="comma-separated app names")
@@ -181,11 +249,22 @@ def compile_source(
     timeout: int,
     extra_args: list[str],
     candidate_matrix: bool,
-) -> tuple[list[dict[str, str]], list[dict[str, str]], str | None]:
+    cost_policy: str | None,
+    cost_report: bool,
+) -> tuple[
+    list[dict[str, str]],
+    list[dict[str, str]],
+    list[dict[str, str]],
+    str | None,
+]:
     env = os.environ.copy()
     env["DCC_MIR_SELECT_REPORT"] = "1"
     if candidate_matrix:
         env["DCC_MIR_CANDIDATE_MATRIX"] = "1"
+    if cost_policy:
+        env["DCC_MIR_COST_POLICY"] = cost_policy
+    if cost_report:
+        env["DCC_MIR_COST_REPORT"] = "1"
     command = [
         compiler,
         "-stack",
@@ -208,10 +287,11 @@ def compile_source(
             check=False,
         )
     except subprocess.TimeoutExpired:
-        return [], [], f"timed out after {timeout}s"
+        return [], [], [], f"timed out after {timeout}s"
     if completed.returncode != 0:
         detail = completed.stderr.strip().splitlines()
         return (
+            [],
             [],
             [],
             detail[-1] if detail else f"compiler exited {completed.returncode}",
@@ -219,8 +299,28 @@ def compile_source(
 
     rows: list[dict[str, str]] = []
     matrix_rows: list[dict[str, str]] = []
+    cost_rows: list[dict[str, str]] = []
+    cost_selected: dict[str, str] = {}
     seen: set[str] = set()
     for line in completed.stderr.splitlines():
+        cost_match = COST_RE.search(line)
+        if cost_match:
+            cost_rows.append(
+                {
+                    "app": source.stem,
+                    **cost_match.groupdict(),
+                    "final": "0",
+                }
+            )
+            continue
+        cost_selected_match = COST_SELECTED_RE.search(line)
+        if cost_selected_match:
+            values = cost_selected_match.groupdict()
+            candidate = values["candidate"]
+            if candidate == "incumbent-large":
+                candidate = "incumbent"
+            cost_selected[values["function"]] = candidate
+            continue
         matrix_match = MATRIX_RE.search(line)
         if matrix_match:
             matrix_rows.append({"app": source.stem, **matrix_match.groupdict()})
@@ -259,7 +359,13 @@ def compile_source(
             continue
         seen.add(function)
         rows.append({"app": source.stem, **values})
-    return rows, matrix_rows, None
+    for row in cost_rows:
+        if (
+            row["selected"] == "1"
+            and cost_selected.get(row["function"]) == row["candidate"]
+        ):
+            row["final"] = "1"
+    return rows, matrix_rows, cost_rows, None
 
 
 def write_rows(path: Path, rows: list[dict[str, str]]) -> None:
@@ -282,6 +388,24 @@ def write_matrix_rows(path: Path, rows: list[dict[str, str]]) -> None:
                     row["app"],
                     row["function"],
                     int(row["mask"], 16),
+                ),
+            )
+        )
+
+
+def write_cost_rows(path: Path, rows: list[dict[str, str]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=COST_FIELDS, delimiter="\t")
+        writer.writeheader()
+        writer.writerows(
+            sorted(
+                rows,
+                key=lambda row: (
+                    row["app"],
+                    row["function"],
+                    row["candidate"],
+                    row["selected"],
                 ),
             )
         )
@@ -435,6 +559,7 @@ def main() -> int:
 
     rows: list[dict[str, str]] = []
     matrix_rows: list[dict[str, str]] = []
+    cost_rows: list[dict[str, str]] = []
     failures: list[tuple[str, str]] = []
     with tempfile.TemporaryDirectory(prefix="dcc-mir-census-") as directory:
         directory_path = Path(directory)
@@ -446,6 +571,7 @@ def main() -> int:
             Path,
             list[dict[str, str]],
             list[dict[str, str]],
+            list[dict[str, str]],
             str | None,
         ]:
             # Each worker writes to its own assembly file: compiles run
@@ -454,7 +580,7 @@ def main() -> int:
             # runall.ps1's parallel app suite), and a shared output path
             # would let two in-flight compiles clobber each other's .mac.
             worker_assembly = directory_path / f"census-{index}.mac"
-            app_rows, app_matrix_rows, error = compile_source(
+            app_rows, app_matrix_rows, app_cost_rows, error = compile_source(
                 args.compiler,
                 source,
                 worker_assembly,
@@ -463,8 +589,17 @@ def main() -> int:
                 shlex.split(str(overrides.get(source.stem, {}).get("dcc_args", "")))
                 + shlex.split(args.extra_args),
                 args.candidate_matrix_output is not None,
+                args.cost_policy,
+                args.cost_policy_output is not None,
             )
-            return index, source, app_rows, app_matrix_rows, error
+            return (
+                index,
+                source,
+                app_rows,
+                app_matrix_rows,
+                app_cost_rows,
+                error,
+            )
 
         done = 0
         with ThreadPoolExecutor(max_workers=max(1, args.jobs)) as executor:
@@ -473,13 +608,21 @@ def main() -> int:
                 for index, source in enumerate(sources, 1)
             ]
             for future in as_completed(futures):
-                index, source, app_rows, app_matrix_rows, error = future.result()
+                (
+                    index,
+                    source,
+                    app_rows,
+                    app_matrix_rows,
+                    app_cost_rows,
+                    error,
+                ) = future.result()
                 done += 1
                 if error:
                     failures.append((source.stem, error))
                 else:
                     rows.extend(app_rows)
                     matrix_rows.extend(app_matrix_rows)
+                    cost_rows.extend(app_cost_rows)
                 # Completion order (not dispatch order) with -j>1, matching
                 # runall.ps1's own parallel status-line convention.
                 print(f"\r[{done:3d}/{len(sources)}] {source.stem:12s}", end="", flush=True)
@@ -496,6 +639,10 @@ def main() -> int:
         matrix_path = Path(args.candidate_matrix_output)
         write_matrix_rows(matrix_path, matrix_rows)
         print(f"Wrote {matrix_path} ({len(matrix_rows)} candidates)")
+    if args.cost_policy_output:
+        cost_path = Path(args.cost_policy_output)
+        write_cost_rows(cost_path, cost_rows)
+        print(f"Wrote {cost_path} ({len(cost_rows)} candidates)")
     print_summary(rows)
     if args.bloat_threshold is not None:
         print_bloat_report(rows, args.bloat_threshold, args.bloat_limit)

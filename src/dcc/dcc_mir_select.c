@@ -16,6 +16,40 @@
 
 static int mir_prelegacy_scheduled_attempt_active;
 static int mir_prelegacy_scheduled_attempt_selected;
+static int mir_cost_candidate_mode;
+
+int mir_cost_policy_candidate_mode(void)
+{
+    return mir_cost_candidate_mode;
+}
+
+static int mir_cost_policy_is_mir_v1(void)
+{
+    const char *policy = getenv("DCC_MIR_COST_POLICY");
+    if (policy == NULL || policy[0] == 0)
+        return 1;
+    if (!strcmp(policy, "mir-v1"))
+        return 1;
+    if (!strcmp(policy, "mir-v1-report") ||
+        !strcmp(policy, "legacy-v69"))
+        return 0;
+    fatal("unknown DCC_MIR_COST_POLICY");
+    return 0;
+}
+
+static int mir_cost_policy_is_active(void)
+{
+    const char *policy = getenv("DCC_MIR_COST_POLICY");
+    if (policy == NULL || policy[0] == 0)
+        return 1;
+    if (!strcmp(policy, "mir-v1") ||
+        !strcmp(policy, "mir-v1-report"))
+        return 1;
+    if (!strcmp(policy, "legacy-v69"))
+        return 0;
+    fatal("unknown DCC_MIR_COST_POLICY");
+    return 0;
+}
 
 #define MIR_MAX_DENSE_ANALYSIS_CELLS (64UL * 1024UL * 1024UL)
 
@@ -1499,43 +1533,21 @@ static unsigned long mir_stream_hash(FILE *stream)
 }
 
 /* ===================================================================
- * Diagnostic-only cost-v1 machine-cost policy
- * (DCC_MIR_SPILLED_POLICY=cost-v1).
+ * MIR machine-cost estimator and historical fixed-spilled matrix.
  *
- * With DCC_MIR_SPILLED_POLICY unset (the default), none of this code
- * changes behaviour: mir_spilled_policy_is_cost_v1() below is the only
- * caller-visible entry point besides the candidate-matrix diagnostic
- * suffix (itself only non-empty when the policy is active), so ordinary
- * codegen, DCC_MIR_CANDIDATE_MATRIX=1 output, and the base census/
- * candidate-matrix files are all byte-identical to base f129be0.
+ * The estimator parses emitted MIR candidates into nominal Z80 T-states,
+ * runtime-helper surcharge, real opcode bytes/instructions, loop/backedge
+ * weighting, moves, and setup costs. It never inspects mir.capture_stream.
+ * Production DCC_MIR_COST_POLICY=mir-v1 uses it below with the incumbent,
+ * homed, hybrid, regional, and spilled candidates.
  *
- * cost-v1 estimates real Z80 machine cost - nominal T-states from parsed
- * opcode/addressing forms, runtime-helper call surcharge, and real
- * opcode byte size - instead of the raw assembly-text byte/instruction-
- * count proxies the rest of this file uses. It only ever scores streams
- * mir_build_spilled_candidate() itself produced (the same ten fixed
- * spilled-candidate feature masks mir_report_spilled_candidate_matrix
- * already builds for diagnostics): it never builds, inspects, or scores
- * mir.capture_stream (the legacy AST-backend output).
- *
- * IMPORTANT - production selection was tried and falsified, then
- * removed: an earlier revision also adopted the lowest-scored candidate
- * into real codegen whenever the policy was active. Measuring that
- * override against the rhs-control train cohort (61 apps, see
- * .../perf-systemic/cost-sonnet5/) found a real regression in
- * tests/tfpcall.c's main() (+158 peep cycles, +128 peep bytes, +160
- * nopeep cycles), because the ordinary retry chain elsewhere in this
- * file already reaches, via its own additional retry/promotion paths,
- * a smaller/faster stream than any of these ten fixed masks - so
- * limiting a selector to only these ten can regress away from a real,
- * already-accepted win no cost-formula weighting can recover. Per this
- * project's falsification policy ("any cycle/size regression" rejects
- * the candidate), no production override is wired in. What remains
- * below is diagnostic-only: the cost estimator plus an extension of
- * DCC_MIR_CANDIDATE_MATRIX=1's existing report with each of the ten
- * candidates' cost components and (only when the policy is also
- * active) which one it would have scored lowest - never a change to
- * real codegen.
+ * DCC_MIR_SPILLED_POLICY=cost-v1 retains the older diagnostic that ranks
+ * only the ten fixed spilled feature masks in
+ * DCC_MIR_CANDIDATE_MATRIX output. Selecting the minimum of that incomplete
+ * universe was falsified by tfpcall.main: the incumbent retry chain had
+ * already produced a smaller/faster stream than every fixed mask. Therefore
+ * this older flag remains diagnostic-only; the production policy always
+ * includes the incumbent and applies calibrated dominance/eligibility gates.
  * =================================================================== */
 
 /* The one shared, fixed candidate universe both the existing candidate-
@@ -1603,7 +1615,12 @@ struct MirCostComponents {
     double tstates;         /* depth/skip-weighted nominal T-state sum */
     double helper_tstates;  /* depth/skip-weighted runtime-helper surcharge */
     long bytes;             /* real, unweighted Z80 opcode byte size */
-    double score;           /* tstates + helper_tstates + 0.25*bytes */
+    int instructions;
+    int helper_calls;
+    int move_instructions;
+    int prologue_instructions;
+    int callee_save_instructions;
+    double score;
     int max_loop_depth;     /* diagnostic only; not used in the score */
 };
 
@@ -1986,6 +2003,11 @@ static void mir_estimate_stream_cost(
     out->tstates = 0.0;
     out->helper_tstates = 0.0;
     out->bytes = 0;
+    out->instructions = 0;
+    out->helper_calls = 0;
+    out->move_instructions = 0;
+    out->prologue_instructions = 0;
+    out->callee_save_instructions = 0;
     out->score = 0.0;
     out->max_loop_depth = 0;
 
@@ -2081,6 +2103,16 @@ static void mir_estimate_stream_cost(
         memcpy(mnemonic, text, length);
         mnemonic[length] = 0;
         rest = space != NULL ? space + 1 : "";
+        ++out->instructions;
+        if (!strcmp(mnemonic, "ld") || !strcmp(mnemonic, "ex") ||
+            !strcmp(mnemonic, "push") || !strcmp(mnemonic, "pop"))
+            ++out->move_instructions;
+        if (!strcmp(text, "push ix") || !strcmp(text, "pop ix") ||
+            !strcmp(text, "ld ix,0") || !strcmp(text, "add ix,sp") ||
+            !strcmp(text, "ld sp,ix"))
+            ++out->prologue_instructions;
+        if (!strcmp(text, "push iy") || !strcmp(text, "pop iy"))
+            ++out->callee_save_instructions;
         if (strcmp(mnemonic, "jp") != 0 && strcmp(mnemonic, "djnz") != 0)
             continue;
         if (!strcmp(rest, "(hl)") || !strcmp(rest, "(ix)") ||
@@ -2205,6 +2237,7 @@ static void mir_estimate_stream_cost(
                 char target[64];
                 const char *t;
                 size_t tlen;
+                double helper_cost;
 
                 mir_cost_v1_instruction_cost(
                     mnemonic, rest, 0.0, &tstates, &bytes,
@@ -2215,8 +2248,10 @@ static void mir_estimate_stream_cost(
                     tlen = sizeof(target) - 1;
                 memcpy(target, t, tlen);
                 target[tlen] = 0;
-                out->helper_tstates +=
-                    mir_cost_v1_helper_tstates(target) * weight;
+                helper_cost = mir_cost_v1_helper_tstates(target);
+                if (helper_cost > 0.0)
+                    ++out->helper_calls;
+                out->helper_tstates += helper_cost * weight;
             }
         }
     }
@@ -2234,25 +2269,466 @@ static void mir_estimate_stream_cost(
     out->score = out->tstates + out->helper_tstates + 0.25 * (double)out->bytes;
 }
 
-/* NOTE: an earlier revision of this file also carried
- * mir_build_and_score_cost_v1_candidates()/mir_select_cost_v1_spilled_
- * candidate(), a production-path override that adopted the lowest
- * cost-v1-scored candidate among mir_spilled_candidate_table into the
- * real generated stream whenever DCC_MIR_SPILLED_POLICY=cost-v1 was set.
- * Falsification on the rhs-control train cohort (61 apps) found it
- * regressed tests/tfpcall.c's main() (+158 peep cycles, +128 peep
- * bytes, +160 nopeep cycles): the ordinary accept/reject retry chain
- * above already reaches, through its own additional retry/promotion
- * paths (beyond the ten named masks below), a smaller/faster stream
- * (4080 bytes/362 insns) than any of the ten fixed candidates (best of
- * which, phi-slot, is 4108 bytes/367 insns) - so a selector limited to
- * those ten can regress away from a real, already-accepted win, and no
- * cost-formula weighting can fix a missing search-space member. Per
- * this task's rejection criteria ("any cycle/size regression" rejects
- * the policy), that override was removed; only the cost estimator and
- * the read-only DCC_MIR_CANDIDATE_MATRIX=1 diagnostic extension below
- * are retained, since default (env-unset) codegen was already proven
- * byte-identical to f129be0 and remains so with no override wired in. */
+enum MirCostCandidateKind {
+    MIR_COST_CANDIDATE_HOMED,
+    MIR_COST_CANDIDATE_HYBRID,
+    MIR_COST_CANDIDATE_REGIONAL,
+    MIR_COST_CANDIDATE_SPILLED
+};
+
+struct MirCostCandidateSpec {
+    const char *name;
+    const char *selector_name;
+    enum MirCostCandidateKind kind;
+    unsigned long features;
+};
+
+struct MirCostCandidate {
+    const struct MirCostCandidateSpec *spec;
+    FILE *stream;
+    int emitted;
+    int selectable;
+    int label_id_after;
+    long text_bytes;
+    int text_instructions;
+    int frame_bytes;
+    int slots;
+    int spills;
+    int fixed_moves;
+    int operand_moves;
+    int phi_moves;
+    int register_homes;
+    int iy_homes;
+    unsigned long hash;
+    struct MirCostComponents machine;
+    double score;
+};
+
+struct MirCostStateSnapshot {
+    int *colors;
+    int *spills;
+    int *backend_slots;
+    int spill_count;
+    int fixed_moves;
+    int operand_moves;
+    int phi_moves;
+    int backend_slot_count;
+    int backend_slot_capacity;
+    int virtual_iy_frame_bytes;
+};
+
+static const struct MirCostCandidateSpec mir_cost_candidate_specs[] = {
+    {"homed", "homed-scalar-cfg", MIR_COST_CANDIDATE_HOMED, 0},
+    {"hybrid", "hybrid-homed-scalar-cfg", MIR_COST_CANDIDATE_HYBRID, 0},
+    {"regional", "regional-homed-scalar-cfg", MIR_COST_CANDIDATE_REGIONAL, 0},
+    {"spilled-baseline", "spilled-scalar-cfg",
+     MIR_COST_CANDIDATE_SPILLED, 0},
+    {"spilled-rhs-forward", "spilled-scalar-cfg",
+     MIR_COST_CANDIDATE_SPILLED, MIR_SPILLED_FEATURES_RHS},
+    {"spilled-store-address", "spilled-scalar-cfg",
+     MIR_COST_CANDIDATE_SPILLED, MIR_SPILLED_FEATURES_STORE_ADDRESS},
+    {"spilled-wide-binary-lhs", "spilled-scalar-cfg",
+     MIR_COST_CANDIDATE_SPILLED, MIR_SPILLED_FEATURES_WIDE_LHS},
+    {"spilled-stable-pointer-argument", "spilled-scalar-cfg",
+     MIR_COST_CANDIDATE_SPILLED, MIR_SPILLED_FEATURES_STABLE_ARG},
+    {"spilled-global-argument", "spilled-scalar-cfg",
+     MIR_COST_CANDIDATE_SPILLED, MIR_SPILLED_FEATURES_GLOBAL_ARG},
+    {"spilled-stack-argument", "spilled-scalar-cfg",
+     MIR_COST_CANDIDATE_SPILLED, MIR_SPILLED_FEATURES_CALL_STACK},
+    {"spilled-promoted-local-slot", "spilled-scalar-cfg",
+     MIR_COST_CANDIDATE_SPILLED, MIR_SPILLED_FEATURES_PROMOTED_LOCAL},
+    {"spilled-all", "spilled-scalar-cfg",
+     MIR_COST_CANDIDATE_SPILLED, MIR_SPILLED_FEATURES_ALL},
+    {"spilled-phi-slot", "spilled-scalar-cfg",
+     MIR_COST_CANDIDATE_SPILLED, MIR_SPILLED_FEATURES_PHI_SLOT}
+};
+
+static void mir_cost_save_state(struct MirCostStateSnapshot *snapshot)
+{
+    size_t values = (size_t)mir.next_value;
+
+    memset(snapshot, 0, sizeof(*snapshot));
+    if (values != 0) {
+        snapshot->colors = (int *)malloc(values * sizeof(*snapshot->colors));
+        snapshot->spills = (int *)malloc(values * sizeof(*snapshot->spills));
+        if (snapshot->colors == NULL || snapshot->spills == NULL)
+            fatal("out of memory saving MIR cost candidate state");
+        memcpy(snapshot->colors, mir.allocation_colors,
+               values * sizeof(*snapshot->colors));
+        memcpy(snapshot->spills, mir.allocation_spills,
+               values * sizeof(*snapshot->spills));
+    }
+    snapshot->backend_slot_capacity = mir.backend_slot_capacity;
+    if (snapshot->backend_slot_capacity > 0) {
+        size_t slots = (size_t)snapshot->backend_slot_capacity;
+
+        snapshot->backend_slots =
+            (int *)malloc(slots * sizeof(*snapshot->backend_slots));
+        if (snapshot->backend_slots == NULL)
+            fatal("out of memory saving MIR backend slots");
+        memcpy(snapshot->backend_slots, mir.backend_slots,
+               slots * sizeof(*snapshot->backend_slots));
+    }
+    snapshot->spill_count = mir.allocation_spill_count;
+    snapshot->fixed_moves = mir.allocation_fixed_moves;
+    snapshot->operand_moves = mir.allocation_operand_moves;
+    snapshot->phi_moves = mir.allocation_phi_moves;
+    snapshot->backend_slot_count = mir.backend_slot_count;
+    snapshot->virtual_iy_frame_bytes = mir_virtual_iy_frame_bytes;
+}
+
+static void mir_cost_restore_state(struct MirCostStateSnapshot *snapshot)
+{
+    size_t values = (size_t)mir.next_value;
+
+    if (values != 0) {
+        memcpy(mir.allocation_colors, snapshot->colors,
+               values * sizeof(*snapshot->colors));
+        memcpy(mir.allocation_spills, snapshot->spills,
+               values * sizeof(*snapshot->spills));
+    }
+    if (snapshot->backend_slot_capacity > 0) {
+        if (mir.backend_slot_capacity < snapshot->backend_slot_capacity)
+            fatal("MIR backend slot capacity shrank during cost selection");
+        memcpy(mir.backend_slots, snapshot->backend_slots,
+               (size_t)snapshot->backend_slot_capacity *
+                   sizeof(*snapshot->backend_slots));
+    }
+    mir.allocation_spill_count = snapshot->spill_count;
+    mir.allocation_fixed_moves = snapshot->fixed_moves;
+    mir.allocation_operand_moves = snapshot->operand_moves;
+    mir.allocation_phi_moves = snapshot->phi_moves;
+    mir.backend_slot_count = snapshot->backend_slot_count;
+    mir_virtual_iy_frame_bytes = snapshot->virtual_iy_frame_bytes;
+    free(snapshot->colors);
+    free(snapshot->spills);
+    free(snapshot->backend_slots);
+}
+
+static void mir_cost_measure_candidate(struct MirCostCandidate *candidate)
+{
+    int value;
+
+    candidate->text_bytes = mir_stream_size(candidate->stream);
+    candidate->text_instructions =
+        mir_stream_instruction_count(candidate->stream);
+    candidate->spills = mir.allocation_spill_count;
+    candidate->fixed_moves = mir.allocation_fixed_moves;
+    candidate->operand_moves = mir.allocation_operand_moves;
+    candidate->phi_moves = mir.allocation_phi_moves;
+    candidate->register_homes = 0;
+    candidate->iy_homes = 0;
+    if (candidate->spec->kind != MIR_COST_CANDIDATE_SPILLED)
+        for (value = 0; value < mir.next_value; ++value) {
+            int color = mir.allocation_colors[value];
+
+            if (color < 0)
+                continue;
+            ++candidate->register_homes;
+            if (color == MIR_COLOR_IY || color == MIR_COLOR_BC_IY)
+                ++candidate->iy_homes;
+        }
+    if (candidate->spec->kind == MIR_COST_CANDIDATE_SPILLED) {
+        candidate->slots = mir.backend_slot_count;
+        candidate->frame_bytes =
+            mir_effective_local_bytes() + mir.aggregate_temp_bytes +
+            2 * candidate->slots;
+    } else {
+        candidate->slots =
+            candidate->spills +
+            (candidate->spec->kind == MIR_COST_CANDIDATE_REGIONAL
+                 ? mir.regional_spill_slot_count : 0);
+        candidate->frame_bytes =
+            mir_effective_local_bytes() + mir.aggregate_temp_bytes +
+            2 * candidate->slots;
+    }
+    candidate->hash = mir_stream_hash(candidate->stream);
+    mir_estimate_stream_cost(candidate->stream, &candidate->machine);
+    candidate->score =
+        candidate->machine.tstates +
+        candidate->machine.helper_tstates +
+        0.50 * (double)candidate->machine.bytes +
+        0.50 * (double)candidate->machine.instructions +
+        4.00 * (double)candidate->frame_bytes +
+        24.00 * (double)candidate->spills +
+        3.00 * (double)(candidate->fixed_moves +
+                         candidate->operand_moves +
+                         candidate->phi_moves) +
+        1.00 * (double)candidate->machine.move_instructions +
+        4.00 * (double)candidate->machine.prologue_instructions +
+        8.00 * (double)candidate->machine.callee_save_instructions -
+        1.00 * (double)candidate->register_homes +
+        2.00 * (double)candidate->iy_homes;
+}
+
+static void mir_cost_build_candidate(
+    const struct MirCostCandidateSpec *spec,
+    struct MirCostCandidate *candidate, int label_base)
+{
+    struct MirCostStateSnapshot snapshot;
+    int regional_active = 0;
+    int exx_elided = 0;
+
+    memset(candidate, 0, sizeof(*candidate));
+    candidate->spec = spec;
+    candidate->label_id_after = label_base;
+    candidate->text_bytes = -1;
+    candidate->text_instructions = -1;
+    candidate->stream = tmpfile();
+    if (candidate->stream == NULL)
+        fatal("cannot create MIR cost candidate stream");
+
+    mir_cost_save_state(&snapshot);
+    ++mir_cost_candidate_mode;
+    label_id = label_base;
+    if (spec->kind == MIR_COST_CANDIDATE_HOMED) {
+        candidate->emitted = mir_try_selector(
+            candidate->stream, mir_try_emit_homed_scalar_cfg);
+    } else if (spec->kind == MIR_COST_CANDIDATE_HYBRID) {
+        mir_begin_hybrid_homed_selection();
+        candidate->emitted = mir_try_selector(
+            candidate->stream, mir_try_emit_homed_scalar_cfg);
+        mir_end_hybrid_homed_selection();
+    } else if (spec->kind == MIR_COST_CANDIDATE_REGIONAL) {
+        regional_active = mir_begin_regional_home_plan();
+        if (regional_active) {
+            mir_begin_hybrid_homed_selection();
+            candidate->emitted = mir_try_selector(
+                candidate->stream, mir_try_emit_homed_scalar_cfg);
+            mir_end_hybrid_homed_selection();
+        }
+    } else {
+        mir_configure_spilled_fallback_features(spec->features, 1);
+        candidate->emitted = mir_try_selector(
+            candidate->stream, mir_try_emit_spilled_scalar_cfg);
+        mir_configure_spilled_fallback_features(spec->features, 0);
+    }
+    candidate->label_id_after = label_id;
+    if (candidate->emitted &&
+        spec->kind == MIR_COST_CANDIDATE_REGIONAL) {
+        FILE *first = mir_compact_regional_candidate(candidate->stream);
+        FILE *second = mir_compact_regional_candidate(first);
+
+        fclose(candidate->stream);
+        fclose(first);
+        candidate->stream = second;
+    }
+    if (candidate->emitted) {
+        FILE *compacted =
+            mir_compact_adjacent_exx(candidate->stream, &exx_elided);
+
+        fclose(candidate->stream);
+        candidate->stream = compacted;
+        mir_cost_measure_candidate(candidate);
+    }
+    if (regional_active)
+        mir_end_regional_home_plan();
+    --mir_cost_candidate_mode;
+    mir_cost_restore_state(&snapshot);
+    label_id = label_base;
+}
+
+static int mir_cost_candidate_is_better(
+    const struct MirCostCandidate *candidate,
+    const struct MirCostCandidate *best)
+{
+    if (!candidate->emitted)
+        return 0;
+    if (!best->emitted)
+        return 1;
+    if (candidate->score < best->score - 0.001)
+        return 1;
+    if (candidate->score > best->score + 0.001)
+        return 0;
+    if (candidate->machine.bytes != best->machine.bytes)
+        return candidate->machine.bytes < best->machine.bytes;
+    if (candidate->machine.instructions != best->machine.instructions)
+        return candidate->machine.instructions <
+               best->machine.instructions;
+    return 0;
+}
+
+static int mir_cost_candidate_is_selectable(
+    const struct MirCostCandidateSpec *spec)
+{
+    return spec->kind == MIR_COST_CANDIDATE_SPILLED &&
+           (spec->features == MIR_SPILLED_FEATURES_RHS ||
+            spec->features == MIR_SPILLED_FEATURES_STORE_ADDRESS ||
+            spec->features == MIR_SPILLED_FEATURES_WIDE_LHS ||
+            spec->features == MIR_SPILLED_FEATURES_STABLE_ARG ||
+            spec->features == MIR_SPILLED_FEATURES_GLOBAL_ARG);
+}
+
+static void mir_cost_report_candidate(
+    const struct MirCostCandidate *candidate, int selected)
+{
+    if (getenv("DCC_MIR_COST_REPORT") == NULL)
+        return;
+    fprintf(stderr,
+            "; MIR cost-candidate function=%s candidate=%s selector=%s "
+            "emitted=%d selectable=%d selected=%d score=%.3f text-bytes=%ld "
+            "machine-bytes=%ld instructions=%d tstates=%.3f "
+            "helper-tstates=%.3f helper-calls=%d frame=%d slots=%d "
+            "spills=%d fixed-moves=%d operand-moves=%d phi-moves=%d "
+            "stream-moves=%d prologue=%d callee-saves=%d homes=%d "
+            "iy-homes=%d loop-depth=%d hash=%08lx\n",
+            mir.name, candidate->spec->name,
+            candidate->spec->selector_name, candidate->emitted,
+            candidate->selectable, selected,
+            candidate->score, candidate->text_bytes,
+            candidate->machine.bytes, candidate->machine.instructions,
+            candidate->machine.tstates,
+            candidate->machine.helper_tstates,
+            candidate->machine.helper_calls,
+            candidate->frame_bytes, candidate->slots,
+            candidate->spills, candidate->fixed_moves,
+            candidate->operand_moves, candidate->phi_moves,
+            candidate->machine.move_instructions,
+            candidate->machine.prologue_instructions,
+            candidate->machine.callee_save_instructions,
+            candidate->register_homes, candidate->iy_homes,
+            candidate->machine.max_loop_depth, candidate->hash);
+}
+
+static enum MirCostCandidateKind mir_cost_selector_kind(
+    const char *selector_name)
+{
+    if (!strcmp(selector_name, "regional-homed-scalar-cfg"))
+        return MIR_COST_CANDIDATE_REGIONAL;
+    if (!strcmp(selector_name, "hybrid-homed-scalar-cfg"))
+        return MIR_COST_CANDIDATE_HYBRID;
+    if (!strcmp(selector_name, "homed-scalar-cfg"))
+        return MIR_COST_CANDIDATE_HOMED;
+    return MIR_COST_CANDIDATE_SPILLED;
+}
+
+static int mir_cost_candidate_dominates(
+    const struct MirCostCandidate *candidate,
+    const struct MirCostCandidate *incumbent)
+{
+    double candidate_dynamic =
+        candidate->machine.tstates + candidate->machine.helper_tstates;
+    double incumbent_dynamic =
+        incumbent->machine.tstates + incumbent->machine.helper_tstates;
+    int candidate_moves =
+        candidate->fixed_moves + candidate->operand_moves +
+        candidate->phi_moves + candidate->machine.move_instructions;
+    int incumbent_moves =
+        incumbent->fixed_moves + incumbent->operand_moves +
+        incumbent->phi_moves + incumbent->machine.move_instructions;
+    int candidate_setup =
+        candidate->machine.prologue_instructions +
+        candidate->machine.callee_save_instructions;
+    int incumbent_setup =
+        incumbent->machine.prologue_instructions +
+        incumbent->machine.callee_save_instructions;
+    int strict = 0;
+
+    /*
+     * Static dominance alone still selected layout-sensitive near wins:
+     * the first complete false-selection set topped out at 15.27%, and a
+     * second full-mode pass exposed a layout loss at 25.61%. A 30% margin
+     * retains only clearly separated machine-level wins. Keep this
+     * calibration MIR-only: it is a ratio between two emitted MIR
+     * candidates, never against captured legacy output.
+     */
+    if (!candidate->emitted ||
+        candidate->score * 100.0 > incumbent->score * 70.0 ||
+        candidate_dynamic > incumbent_dynamic + 0.001 ||
+        candidate->machine.bytes > incumbent->machine.bytes ||
+        candidate->machine.instructions > incumbent->machine.instructions ||
+        candidate->frame_bytes > incumbent->frame_bytes ||
+        candidate->spills > incumbent->spills ||
+        candidate->machine.helper_calls > incumbent->machine.helper_calls ||
+        candidate_moves > incumbent_moves ||
+        candidate_setup > incumbent_setup ||
+        candidate->register_homes < incumbent->register_homes)
+        return 0;
+    strict |= candidate_dynamic + 0.001 < incumbent_dynamic;
+    strict |= candidate->machine.bytes < incumbent->machine.bytes;
+    strict |= candidate->machine.instructions <
+              incumbent->machine.instructions;
+    strict |= candidate->frame_bytes < incumbent->frame_bytes;
+    strict |= candidate->spills < incumbent->spills;
+    strict |= candidate->machine.helper_calls <
+              incumbent->machine.helper_calls;
+    strict |= candidate_moves < incumbent_moves;
+    strict |= candidate_setup < incumbent_setup;
+    strict |= candidate->register_homes > incumbent->register_homes;
+    return strict;
+}
+
+static int mir_apply_mir_v1_policy(
+    FILE **selected_stream, const char **selector_name,
+    const char **candidate_name, int *selected_label_id, int label_base,
+    int select_alternative)
+{
+    struct MirCostCandidateSpec incumbent_spec;
+    struct MirCostCandidate incumbent;
+    struct MirCostCandidate best;
+    size_t i;
+
+    incumbent_spec.name = "incumbent";
+    incumbent_spec.selector_name = *selector_name;
+    incumbent_spec.kind = mir_cost_selector_kind(*selector_name);
+    incumbent_spec.features = 0;
+    memset(&incumbent, 0, sizeof(incumbent));
+    incumbent.spec = &incumbent_spec;
+    incumbent.stream = *selected_stream;
+    incumbent.emitted = 1;
+    incumbent.selectable = 1;
+    incumbent.label_id_after = *selected_label_id;
+    mir_cost_measure_candidate(&incumbent);
+    mir_cost_report_candidate(&incumbent, 1);
+    /*
+     * Re-emitting thirteen variants of an 8k-instruction graph turns one
+     * bounded tptrrhs compile into a minute-long candidate sweep. The
+     * incumbent is already a complete MIR candidate, so cap optional
+     * arbitration at 2k MIR instructions and retain it above that resource
+     * bound. This is a compile-time bound on MIR work, not a legacy-cost
+     * decision.
+     */
+    if (mir.count > 2048) {
+        *candidate_name = "incumbent-large";
+        return 0;
+    }
+    memset(&best, 0, sizeof(best));
+    for (i = 0;
+         i < sizeof(mir_cost_candidate_specs) /
+                 sizeof(mir_cost_candidate_specs[0]);
+         ++i) {
+        struct MirCostCandidate candidate;
+        mir_cost_build_candidate(
+            &mir_cost_candidate_specs[i], &candidate, label_base);
+        candidate.selectable = mir_cost_candidate_is_selectable(
+            &mir_cost_candidate_specs[i]);
+        mir_cost_report_candidate(&candidate, 0);
+        if (candidate.selectable &&
+            mir_cost_candidate_dominates(&candidate, &incumbent) &&
+            mir_cost_candidate_is_better(&candidate, &best)) {
+            if (best.stream != NULL)
+                fclose(best.stream);
+            best = candidate;
+            candidate.stream = NULL;
+        }
+        if (candidate.stream != NULL)
+            fclose(candidate.stream);
+    }
+    if (!select_alternative || !best.emitted ||
+        !mir_cost_candidate_is_better(&best, &incumbent)) {
+        if (best.stream != NULL)
+            fclose(best.stream);
+        *candidate_name = "incumbent";
+        return 0;
+    }
+    fclose(*selected_stream);
+    *selected_stream = best.stream;
+    *selector_name = best.spec->selector_name;
+    *candidate_name = best.spec->name;
+    *selected_label_id = best.label_id_after;
+    mir_cost_report_candidate(&best, 1);
+    return 1;
+}
 
 static void mir_report_spilled_candidate_matrix(int label_base)
 {
@@ -5372,6 +5848,8 @@ void mir_end_function(void)
         int captured_instructions = -1;
         int adjacent_exx_elided_instructions = 0;
         int candidate_matrix_label_base = label_id;
+        int mir_only_selected = 0;
+        const char *mir_cost_candidate_name = "none";
 
         emit_sink_restore(&mir.saved_sink);
         if (verified) {
@@ -7635,6 +8113,28 @@ prelegacy_final_cost:
                     mir_close_candidate_result(&result);
                 }
                 }
+                if (fallback_reason == NULL &&
+                    mir_cost_policy_is_active() &&
+                    !g_speculative_codegen_active &&
+                    !mir_prelegacy_scheduled_attempt_active) {
+                    mir_only_selected = 1;
+                    if (strcmp(selector_name, "scheduled-machine-cfg") &&
+                        !mir_stream_contains_text(
+                            generated, MIR_EXACT_KERNEL_MARKER)) {
+                        if (mir_apply_mir_v1_policy(
+                                &generated, &selector_name,
+                                &mir_cost_candidate_name,
+                                &generated_label_id_after,
+                                mir_label_base,
+                                mir_cost_policy_is_mir_v1())) {
+                            generated_size = mir_stream_size(generated);
+                            generated_instructions =
+                                mir_stream_instruction_count(generated);
+                        }
+                    } else {
+                        mir_cost_candidate_name = "exact-scheduled";
+                    }
+                }
                 if (g_speculative_codegen_active &&
                     getenv("DCC_MIR_FINAL_COST_REPORT") != NULL)
                     fprintf(stderr,
@@ -7648,7 +8148,8 @@ prelegacy_final_cost:
                             generated_size, captured_size,
                             generated_instructions, captured_instructions,
                             mir_cfg_block_count());
-                if (fallback_reason == NULL &&
+                if (!mir_only_selected &&
+                    fallback_reason == NULL &&
                     mir_final_cost_policy_rejects(
                         selector_name, generated, mir.capture_stream,
                         generated_size, captured_size,
@@ -7684,23 +8185,13 @@ prelegacy_final_cost:
                  * entirely) on fallback - so no discarded candidate can
                  * ever shift a later function's label numbering. */
                 label_id = emitted ? generated_label_id_after : mir_label_base;
-                /* cost-v1 falsification result (see the block comment above
-                 * mir_spilled_candidate_table): a production-path override
-                 * that reconsidered only the ten named spilled-candidate
-                 * masks was measured on the rhs-control train cohort and
-                 * found to regress tests/tfpcall.c's main() (+158 peep
-                 * cycles, +128 peep bytes, +160 nopeep cycles) because the
-                 * ordinary retry chain above had already, through its own
-                 * additional retry/promotion paths, reached a smaller/
-                 * faster stream (4080 bytes/362 insns) than any of the ten
-                 * fixed masks (best of which, phi-slot, is 4108 bytes/367
-                 * insns) - so selecting only among those ten can regress
-                 * away from a real, already-accepted win no cost-formula
-                 * weighting can recover. No production override is wired
-                 * in as a result; DCC_MIR_SPILLED_POLICY=cost-v1 therefore
-                 * only affects DCC_MIR_CANDIDATE_MATRIX=1 diagnostic
-                 * output (see mir_report_spilled_candidate_matrix below),
-                 * never real codegen. */
+                /*
+                 * DCC_MIR_SPILLED_POLICY=cost-v1 still controls only the
+                 * historical ten-mask candidate-matrix diagnostic. The
+                 * production mir-v1 arbitration above includes this
+                 * incumbent plus the wider homed/hybrid/regional universe,
+                 * avoiding that fixed-table experiment's tfpcall regression.
+                 */
             }
         }
 copy_selected_output:
@@ -7718,6 +8209,12 @@ copy_selected_output:
             (!mir_prelegacy_scheduled_attempt_active || emitted))
             fprintf(stderr, "; MIR emit function=%s result=%s\n",
                 mir.name, emitted ? "mir" : "fallback");
+        if (mir_only_selected && getenv("DCC_MIR_COST_REPORT") != NULL)
+            fprintf(stderr,
+                    "; MIR cost-selected function=%s candidate=%s "
+                    "selector=%s selected-hash=%08lx\n",
+                    mir.name, mir_cost_candidate_name,
+                    selector_name, selected_hash);
         /* See the oversized-fallback report above: a buffered/speculative
          * legacy attempt's generated/captured sizes describe codegen that
          * is discarded and never reaches the real output, so it must not

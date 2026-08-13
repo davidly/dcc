@@ -3137,7 +3137,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             mir_emit_home_epilogue(out, uses_iy);
         }
     }
-    if (!mir_hybrid_homed_selection &&
+    if (!mir_cost_policy_candidate_mode() &&
+        !mir_hybrid_homed_selection &&
         mir_homed_cfg_depends_on_word_store() &&
         mir_stream_instruction_count(out) >
             mir_stream_instruction_count(mir.capture_stream) - 2 &&
@@ -3147,12 +3148,14 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
     /* A two-instruction deficit regressed the narrow-shift candidates.
      * A one-instruction deficit remains allowed because the measured
      * tmirfast/tmirfuse candidates improve in both peep modes. */
-    if (!mir_regional_home_plan_is_active() &&
+    if (!mir_cost_policy_candidate_mode() &&
+        !mir_regional_home_plan_is_active() &&
         mir_homed_cfg_rematerializes_string_argument() &&
         mir_stream_instruction_count(out) >
             mir_stream_instruction_count(mir.capture_stream) + 1)
         goto done;
-    if (!mir_regional_home_plan_is_active()) {
+    if (!mir_cost_policy_candidate_mode() &&
+        !mir_regional_home_plan_is_active()) {
         if (mir_hybrid_homed_selection) {
             long generated_size = mir_stream_size(out);
             long captured_size = mir_stream_size(mir.capture_stream);

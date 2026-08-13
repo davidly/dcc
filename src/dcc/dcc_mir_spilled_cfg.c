@@ -5307,7 +5307,8 @@ static int mir_value_has_direct_named_home(int value)
         if (!has_param)
             return 0;
     }
-    if (!mir_capture_stream_uses_frame())
+    if (mir_cost_policy_candidate_mode() ||
+        !mir_capture_stream_uses_frame())
         return 0;
     /* mir-migration-plan-next10 (divmod-fusion safety): a fused divmod pair
      * (mir_divmod_partner) must eagerly materialize BOTH its quotient and

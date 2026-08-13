@@ -50,6 +50,24 @@ in the comparison snapshot now falls back. A newly MIR-emitted function is not
 automatically considered safe: run the generated focused command to verify
 correctness, peep/nopeep cycles, and both sizes before committing it.
 
+### MIR-only cost-policy matrix
+
+`--cost-policy-output` records the generic MIR candidates considered by the
+final `mir-v1` policy. The TSV includes emitted machine bytes/instructions,
+loop-weighted T-states, helper calls, frame/spill costs, allocator and stream
+moves, prologue/callee-save costs, register homes, eligibility, score, and
+output hash. With no explicit `--cost-policy`, the option uses the production
+`mir-v1` default; pass `--cost-policy mir-v1-report` to report
+without adopting alternatives or `--cost-policy legacy-v69` for the
+captured-stream A/B control.
+
+```sh
+python3 scripts/mir-migration-census.py \
+  --cost-policy mir-v1 \
+  --cost-policy-output build/mir-cost.tsv \
+  --output build/mir-selected.tsv
+```
+
 ## `publish-package.ps1`
 
 Publishes or republishes the binary package release. By default it reads the
