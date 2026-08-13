@@ -73,6 +73,13 @@ struct MirLongIndexCallRunner {
     char copy_runtime_name[16];
 };
 
+struct MirAllocationLifetimeRunner {
+    struct Sym *allocate_function;
+    struct Sym *free_function;
+    struct Sym *print_function;
+    int strings[7];
+};
+
 static int mir_machine_constant_value(
     int value, long *constant_out, int depth)
 {
@@ -202,6 +209,386 @@ static int mir_long_index_constant(int instruction, int *value_out)
         value < -32768 || value > 65535)
         return 0;
     *value_out = (int)value;
+    return 1;
+}
+
+static struct Sym *mir_allocation_runner_call_function(
+    int instruction, int variadic)
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+
+    if (call->opcode != MIR_CALL || call->src1 >= 0 ||
+        ((call->memory_flags & MIR_CALL_FLAG_VARIADIC) != 0) != variadic ||
+        (call->memory_flags & MIR_CALL_FLAG_FORMAT_RUNTIME) != 0)
+        return NULL;
+    return find_global(call->name);
+}
+
+static int mir_allocation_runner_single_argument(
+    int call_instruction, int argument_instruction)
+{
+    int argument;
+
+    return mir_machine_single_call_argument(
+               &mir.insns[call_instruction], &argument) &&
+           argument == mir.insns[argument_instruction].dst;
+}
+
+static int mir_match_allocation_lifetime_runner(
+    struct MirAllocationLifetimeRunner *plan)
+{
+    static const int expected_opcodes[200] = {
+        MIR_LABEL, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_UNARY,
+        MIR_STORE, MIR_LOAD, MIR_UNARY, MIR_BRANCH_FALSE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN,
+        MIR_NOP, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_NOP, MIR_CONST, MIR_STORE_INDIRECT, MIR_LOAD, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST, MIR_STORE_INDIRECT,
+        MIR_LOAD, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_UNARY, MIR_LOAD, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_UNARY, MIR_BINARY, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN, MIR_NOP, MIR_LABEL,
+        MIR_LOAD, MIR_NOP, MIR_ARG, MIR_CALL, MIR_CONST, MIR_ARG,
+        MIR_CALL, MIR_NOP, MIR_UNARY, MIR_STORE, MIR_LOAD, MIR_UNARY,
+        MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_CONST, MIR_RETURN, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST,
+        MIR_STORE, MIR_LABEL, MIR_NOP, MIR_PHI, MIR_NOP, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_NOP, MIR_NOP, MIR_STORE_INDIRECT,
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP,
+        MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_LOAD, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI,
+        MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN,
+        MIR_NOP, MIR_LABEL, MIR_LOAD, MIR_NOP, MIR_ARG, MIR_CALL,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_UNARY, MIR_STORE, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD, MIR_NOP,
+        MIR_ARG, MIR_CALL, MIR_NOP, MIR_LABEL, MIR_CONST, MIR_ARG,
+        MIR_CALL, MIR_UNARY, MIR_STORE, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_CONST, MIR_RETURN, MIR_NOP, MIR_LABEL, MIR_CONST, MIR_ARG,
+        MIR_CALL, MIR_NOP, MIR_STORE, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_CONST, MIR_RETURN, MIR_NOP, MIR_LABEL, MIR_LOAD, MIR_NOP,
+        MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_CONST, MIR_RETURN
+    };
+    static const int allocation_calls[5] = {3, 63, 146, 161, 177};
+    static const int allocation_arguments[5] = {1, 61, 144, 159, 175};
+    static const int free_calls[4] = {60, 143, 156, 194};
+    static const int free_arguments[4] = {57, 140, 153, 191};
+    static const int print_calls[7] = {12, 52, 72, 135, 170, 186, 197};
+    static const int string_instructions[7] = {10, 46, 70, 133, 168, 184, 195};
+    struct Sym *function;
+    int arguments[3];
+    int instruction;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 200 || mir_cfg_block_count() != 18 ||
+        mir.has_vla || mir.local_bytes != 11 ||
+        mir.aggregate_temp_bytes != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_size(mir.return_type) != 2)
+        return mir_machine_reject(
+            "allocation-lifetime-runner", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+                expected_opcodes[instruction])
+            return mir_machine_reject(
+                "allocation-lifetime-runner", "opcode");
+
+    plan->allocate_function =
+        mir_allocation_runner_call_function(3, 0);
+    plan->free_function =
+        mir_allocation_runner_call_function(60, 0);
+    plan->print_function =
+        mir_allocation_runner_call_function(12, 1);
+    if (plan->allocate_function == NULL ||
+        plan->free_function == NULL ||
+        plan->print_function == NULL ||
+        plan->allocate_function->storage != SC_FUNC ||
+        plan->free_function->storage != SC_FUNC ||
+        plan->print_function->storage != SC_FUNC ||
+        plan->allocate_function->is_funcptr ||
+        plan->free_function->is_funcptr ||
+        plan->print_function->is_funcptr ||
+        plan->allocate_function->is_noreturn ||
+        plan->free_function->is_noreturn ||
+        plan->print_function->is_noreturn ||
+        plan->allocate_function == plan->free_function ||
+        plan->allocate_function == plan->print_function ||
+        plan->free_function == plan->print_function)
+        return mir_machine_reject(
+            "allocation-lifetime-runner", "functions");
+    for (item = 0; item < 5; ++item) {
+        function = mir_allocation_runner_call_function(
+            allocation_calls[item], 0);
+        if (function != plan->allocate_function ||
+            type_ptr_depth(mir.insns[allocation_calls[item]].type) == 0 ||
+            !mir_allocation_runner_single_argument(
+                allocation_calls[item],
+                allocation_arguments[item]))
+            return mir_machine_reject(
+                "allocation-lifetime-runner", "allocation-call");
+    }
+    for (item = 0; item < 4; ++item) {
+        function = mir_allocation_runner_call_function(
+            free_calls[item], 0);
+        if (function != plan->free_function ||
+            (mir.insns[free_calls[item]].type & 15) != TYPE_VOID ||
+            !mir_allocation_runner_single_argument(
+                free_calls[item], free_arguments[item]))
+            return mir_machine_reject(
+                "allocation-lifetime-runner", "free-call");
+    }
+    for (item = 0; item < 7; ++item) {
+        function = mir_allocation_runner_call_function(
+            print_calls[item], 1);
+        if (function != plan->print_function ||
+            type_size(mir.insns[print_calls[item]].type) != 2)
+            return mir_machine_reject(
+                "allocation-lifetime-runner", "print-call");
+        plan->strings[item] =
+            (int)mir.insns[string_instructions[item]].immediate;
+    }
+    if (!mir_allocation_runner_single_argument(12, 10) ||
+        !mir_machine_three_call_arguments(&mir.insns[52], arguments) ||
+        arguments[0] != mir.insns[46].dst ||
+        arguments[1] != mir.insns[39].dst ||
+        arguments[2] != mir.insns[50].dst ||
+        !mir_allocation_runner_single_argument(72, 70) ||
+        !mir_allocation_runner_single_argument(135, 133) ||
+        !mir_allocation_runner_single_argument(170, 168) ||
+        !mir_allocation_runner_single_argument(186, 184) ||
+        !mir_allocation_runner_single_argument(197, 195))
+        return mir_machine_reject(
+            "allocation-lifetime-runner", "print-arguments");
+
+    if (!mir_machine_constant_equals(mir.insns[1].dst, 32768) ||
+        mir.insns[5].immediate != 0 ||
+        mir.insns[5].src1 != mir.insns[3].dst ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[6]) ||
+        !mir_machine_same_location(&mir.insns[6], &mir.insns[7]) ||
+        mir.insns[8].immediate != '!' ||
+        mir.insns[8].src1 != mir.insns[7].dst ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[9].label != mir.insns[16].label ||
+        !mir_machine_constant_equals(mir.insns[13].dst, 1) ||
+        mir.insns[14].src1 != mir.insns[13].dst)
+        return mir_machine_reject(
+            "allocation-lifetime-runner", "first-allocation");
+
+    if (!mir_machine_same_location(&mir.insns[6], &mir.insns[17]) ||
+        !mir_machine_constant_equals(mir.insns[18].dst, 0) ||
+        mir.insns[19].src1 != mir.insns[17].dst ||
+        mir.insns[19].src2 != mir.insns[18].dst ||
+        mir.insns[19].immediate != 1 ||
+        mir.insns[22].src1 != mir.insns[19].dst ||
+        mir.insns[22].src2 != mir.insns[21].dst ||
+        mir.insns[22].memory_size != 1 ||
+        !mir_machine_constant_equals(mir.insns[21].dst, 0x12) ||
+        !mir_machine_same_location(&mir.insns[6], &mir.insns[23]) ||
+        !mir_machine_constant_equals(mir.insns[24].dst, 32767) ||
+        mir.insns[25].src1 != mir.insns[23].dst ||
+        mir.insns[25].src2 != mir.insns[24].dst ||
+        mir.insns[25].immediate != 1 ||
+        mir.insns[28].src1 != mir.insns[25].dst ||
+        mir.insns[28].src2 != mir.insns[27].dst ||
+        mir.insns[28].memory_size != 1 ||
+        !mir_machine_constant_equals(mir.insns[27].dst, 0x34))
+        return mir_machine_reject(
+            "allocation-lifetime-runner", "large-writes");
+
+    if (!mir_machine_same_location(&mir.insns[6], &mir.insns[29]) ||
+        !mir_machine_constant_equals(mir.insns[30].dst, 0) ||
+        mir.insns[31].src1 != mir.insns[29].dst ||
+        mir.insns[31].src2 != mir.insns[30].dst ||
+        mir.insns[31].immediate != 1 ||
+        mir.insns[32].src1 != mir.insns[31].dst ||
+        mir.insns[32].memory_size != 1 ||
+        mir.insns[33].src1 != mir.insns[32].dst ||
+        mir.insns[33].immediate != 0 ||
+        !mir_machine_same_location(&mir.insns[6], &mir.insns[34]) ||
+        !mir_machine_constant_equals(mir.insns[35].dst, 32767) ||
+        mir.insns[36].src1 != mir.insns[34].dst ||
+        mir.insns[36].src2 != mir.insns[35].dst ||
+        mir.insns[36].immediate != 1 ||
+        mir.insns[37].src1 != mir.insns[36].dst ||
+        mir.insns[37].memory_size != 1 ||
+        mir.insns[38].src1 != mir.insns[37].dst ||
+        mir.insns[38].immediate != 0 ||
+        mir.insns[39].immediate != '+' ||
+        mir.insns[39].src1 != mir.insns[33].dst ||
+        mir.insns[39].src2 != mir.insns[38].dst ||
+        mir.insns[41].src1 != mir.insns[39].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[41]) ||
+        !mir_machine_constant_equals(mir.insns[43].dst, 0x46) ||
+        mir.insns[44].immediate != TOK_NE ||
+        mir.insns[44].src1 != mir.insns[39].dst ||
+        mir.insns[44].src2 != mir.insns[43].dst ||
+        mir.insns[45].src1 != mir.insns[44].dst ||
+        mir.insns[45].label != mir.insns[56].label ||
+        !mir_machine_constant_equals(mir.insns[50].dst, 0x46) ||
+        !mir_machine_constant_equals(mir.insns[53].dst, 1) ||
+        mir.insns[54].src1 != mir.insns[53].dst)
+        return mir_machine_reject(
+            "allocation-lifetime-runner", "large-check");
+
+    if (!mir_machine_same_location(&mir.insns[6], &mir.insns[57]) ||
+        !mir_machine_constant_equals(mir.insns[61].dst, 32) ||
+        mir.insns[65].immediate != 0 ||
+        mir.insns[65].src1 != mir.insns[63].dst ||
+        mir.insns[66].src1 != mir.insns[65].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[66]) ||
+        mir_machine_same_location(&mir.insns[6], &mir.insns[66]) ||
+        !mir_machine_same_location(&mir.insns[66], &mir.insns[67]) ||
+        mir.insns[68].immediate != '!' ||
+        mir.insns[68].src1 != mir.insns[67].dst ||
+        mir.insns[69].src1 != mir.insns[68].dst ||
+        mir.insns[69].label != mir.insns[76].label ||
+        !mir_machine_constant_equals(mir.insns[73].dst, 1) ||
+        mir.insns[74].src1 != mir.insns[73].dst)
+        return mir_machine_reject(
+            "allocation-lifetime-runner", "small-allocation");
+
+    if (!mir_machine_constant_equals(mir.insns[78].dst, 0) ||
+        mir.insns[79].src1 != mir.insns[78].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[79]) ||
+        mir.insns[82].src1 != mir.insns[78].dst ||
+        mir.insns[82].src2 != mir.insns[97].dst ||
+        mir.insns[82].phi_pred1 != mir.insns[76].label ||
+        mir.insns[82].phi_pred2 != mir.insns[94].label ||
+        !mir_machine_constant_equals(mir.insns[84].dst, 32) ||
+        mir.insns[85].immediate != 0 ||
+        mir.insns[85].src1 != mir.insns[82].dst ||
+        mir.insns[86].immediate != '<' ||
+        mir.insns[86].src1 != mir.insns[85].dst ||
+        mir.insns[86].src2 != mir.insns[84].dst ||
+        mir.insns[87].src1 != mir.insns[86].dst ||
+        mir.insns[87].label != mir.insns[100].label ||
+        !mir_machine_same_location(&mir.insns[66], &mir.insns[88]) ||
+        mir.insns[90].src1 != mir.insns[88].dst ||
+        mir.insns[90].src2 != mir.insns[82].dst ||
+        mir.insns[90].immediate != 1 ||
+        mir.insns[93].src1 != mir.insns[90].dst ||
+        mir.insns[93].src2 != mir.insns[82].dst ||
+        mir.insns[93].memory_size != 1 ||
+        !mir_machine_constant_equals(mir.insns[96].dst, 1) ||
+        mir.insns[97].immediate != '+' ||
+        mir.insns[97].src1 != mir.insns[82].dst ||
+        mir.insns[97].src2 != mir.insns[96].dst ||
+        mir.insns[98].src1 != mir.insns[97].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[98]) ||
+        mir.insns[99].label != mir.insns[80].label)
+        return mir_machine_reject(
+            "allocation-lifetime-runner", "fill-loop");
+
+    if (!mir_machine_same_location(&mir.insns[66], &mir.insns[101]) ||
+        !mir_machine_constant_equals(mir.insns[102].dst, 0) ||
+        mir.insns[103].src1 != mir.insns[101].dst ||
+        mir.insns[103].src2 != mir.insns[102].dst ||
+        mir.insns[103].immediate != 1 ||
+        mir.insns[104].src1 != mir.insns[103].dst ||
+        mir.insns[104].memory_size != 1 ||
+        !mir_machine_constant_equals(mir.insns[105].dst, 0) ||
+        mir.insns[106].src1 != mir.insns[104].dst ||
+        mir.insns[106].immediate != 0 ||
+        mir.insns[107].immediate != TOK_NE ||
+        mir.insns[107].src1 != mir.insns[106].dst ||
+        mir.insns[107].src2 != mir.insns[105].dst ||
+        mir.insns[108].src1 != mir.insns[107].dst ||
+        mir.insns[108].label != mir.insns[112].label ||
+        !mir_machine_same_location(&mir.insns[66], &mir.insns[113]) ||
+        !mir_machine_constant_equals(mir.insns[114].dst, 31) ||
+        mir.insns[115].src1 != mir.insns[113].dst ||
+        mir.insns[115].src2 != mir.insns[114].dst ||
+        mir.insns[115].immediate != 1 ||
+        mir.insns[116].src1 != mir.insns[115].dst ||
+        mir.insns[116].memory_size != 1 ||
+        !mir_machine_constant_equals(mir.insns[117].dst, 31) ||
+        mir.insns[118].src1 != mir.insns[116].dst ||
+        mir.insns[118].immediate != 0 ||
+        mir.insns[119].immediate != TOK_NE ||
+        mir.insns[119].src1 != mir.insns[118].dst ||
+        mir.insns[119].src2 != mir.insns[117].dst ||
+        mir.insns[120].src1 != mir.insns[119].dst ||
+        mir.insns[120].label != mir.insns[124].label ||
+        !mir_machine_constant_equals(mir.insns[110].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[122].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[125].dst, 0) ||
+        mir.insns[127].src1 != mir.insns[122].dst ||
+        mir.insns[127].src2 != mir.insns[125].dst ||
+        mir.insns[127].phi_pred1 != mir.insns[121].label ||
+        mir.insns[127].phi_pred2 != mir.insns[124].label ||
+        mir.insns[131].src1 != mir.insns[110].dst ||
+        mir.insns[131].src2 != mir.insns[127].dst ||
+        mir.insns[131].phi_pred1 != mir.insns[109].label ||
+        mir.insns[131].phi_pred2 != mir.insns[128].label ||
+        mir.insns[132].src1 != mir.insns[131].dst ||
+        mir.insns[132].label != mir.insns[139].label ||
+        !mir_machine_constant_equals(mir.insns[136].dst, 1) ||
+        mir.insns[137].src1 != mir.insns[136].dst)
+        return mir_machine_reject(
+            "allocation-lifetime-runner", "small-check");
+
+    if (!mir_machine_same_location(&mir.insns[66], &mir.insns[140]) ||
+        !mir_machine_constant_equals(mir.insns[144].dst, 32768) ||
+        mir.insns[147].immediate != 0 ||
+        mir.insns[147].src1 != mir.insns[146].dst ||
+        mir.insns[148].src1 != mir.insns[147].dst ||
+        !mir_machine_same_location(&mir.insns[6], &mir.insns[148]) ||
+        !mir_machine_same_location(&mir.insns[6], &mir.insns[149]) ||
+        !mir_machine_constant_equals(mir.insns[150].dst, 0) ||
+        mir.insns[151].immediate != TOK_NE ||
+        mir.insns[151].src1 != mir.insns[149].dst ||
+        mir.insns[151].src2 != mir.insns[150].dst ||
+        mir.insns[152].src1 != mir.insns[151].dst ||
+        mir.insns[152].label != mir.insns[158].label ||
+        !mir_machine_same_location(&mir.insns[6], &mir.insns[153]) ||
+        !mir_machine_constant_equals(mir.insns[159].dst, 1) ||
+        mir.insns[162].immediate != 0 ||
+        mir.insns[162].src1 != mir.insns[161].dst ||
+        mir.insns[163].src1 != mir.insns[162].dst ||
+        !mir_machine_same_location(&mir.insns[66], &mir.insns[163]) ||
+        !mir_machine_same_location(&mir.insns[66], &mir.insns[164]) ||
+        !mir_machine_constant_equals(mir.insns[165].dst, 0) ||
+        mir.insns[166].immediate != TOK_EQ ||
+        mir.insns[166].src1 != mir.insns[164].dst ||
+        mir.insns[166].src2 != mir.insns[165].dst ||
+        mir.insns[167].src1 != mir.insns[166].dst ||
+        mir.insns[167].label != mir.insns[174].label ||
+        !mir_machine_constant_equals(mir.insns[171].dst, 1) ||
+        mir.insns[172].src1 != mir.insns[171].dst)
+        return mir_machine_reject(
+            "allocation-lifetime-runner", "reuse");
+
+    if (!mir_machine_constant_equals(mir.insns[175].dst, 65000) ||
+        mir.insns[179].src1 != mir.insns[177].dst ||
+        !mir_machine_unobservable_local_store(&mir.insns[179]) ||
+        mir_machine_same_location(&mir.insns[6], &mir.insns[179]) ||
+        mir_machine_same_location(&mir.insns[66], &mir.insns[179]) ||
+        !mir_machine_same_location(&mir.insns[179], &mir.insns[180]) ||
+        !mir_machine_constant_equals(mir.insns[181].dst, 0) ||
+        mir.insns[182].immediate != TOK_NE ||
+        mir.insns[182].src1 != mir.insns[180].dst ||
+        mir.insns[182].src2 != mir.insns[181].dst ||
+        mir.insns[183].src1 != mir.insns[182].dst ||
+        mir.insns[183].label != mir.insns[190].label ||
+        !mir_machine_constant_equals(mir.insns[187].dst, 1) ||
+        mir.insns[188].src1 != mir.insns[187].dst ||
+        !mir_machine_same_location(&mir.insns[66], &mir.insns[191]) ||
+        !mir_machine_constant_equals(mir.insns[198].dst, 0) ||
+        mir.insns[199].src1 != mir.insns[198].dst)
+        return mir_machine_reject(
+            "allocation-lifetime-runner", "final");
     return 1;
 }
 
@@ -1499,12 +1886,142 @@ static void mir_emit_long_index_call_runner(
             return_nonzero, return_done);
 }
 
+static void mir_allocation_runner_call_one(
+    FILE *out, struct Sym *function, unsigned long argument)
+{
+    fprintf(out, "\tld hl,%lu\n\tpush hl\n", argument & 0xffffUL);
+    mir_machine_emit_symbol_call(out, function);
+    fputs("\tpop bc\n", out);
+}
+
+static void mir_allocation_runner_print(
+    FILE *out, const struct MirAllocationLifetimeRunner *plan,
+    int string)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    fputs("\tpop bc\n", out);
+}
+
+static void mir_allocation_runner_free_slot(
+    FILE *out, const struct MirAllocationLifetimeRunner *plan)
+{
+    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->free_function);
+    fputs("\tpop bc\n", out);
+}
+
+static void mir_emit_allocation_lifetime_runner(
+    FILE *out, const struct MirAllocationLifetimeRunner *plan)
+{
+    int first_ok = new_label();
+    int sum_ok = new_label();
+    int small_ok = new_label();
+    int fill_loop = new_label();
+    int small_check_failed = new_label();
+    int small_check_ok = new_label();
+    int optional_free_done = new_label();
+    int final_small_ok = new_label();
+    int wrap_failed = new_label();
+    int done = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-2\n\tadd hl,sp\n\tld sp,hl\n", out);
+
+    mir_allocation_runner_call_one(
+        out, plan->allocate_function, 32768);
+    fputs("\tld (ix-2),l\n\tld (ix-1),h\n"
+          "\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n", first_ok);
+    mir_allocation_runner_print(out, plan, plan->strings[0]);
+    fprintf(out, "\tld hl,1\n\tjp L%d\nL%d:\n", done, first_ok);
+
+    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n"
+          "\tld (hl),18\n"
+          "\tld de,32767\n\tadd hl,de\n\tld (hl),52\n"
+          "\tld l,(ix-2)\n\tld h,(ix-1)\n"
+          "\tld e,(hl)\n\tld d,0\n"
+          "\tld bc,32767\n\tadd hl,bc\n"
+          "\tld a,(hl)\n\tld l,a\n\tld h,0\n\tadd hl,de\n"
+          "\tpush hl\n\tld de,70\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp z,L%d\n\tpop hl\n", sum_ok);
+    fputs("\tld de,0\n\tpush de\n"
+          "\tld de,70\n\tpush de\n"
+          "\tld de,0\n\tpush de\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    fprintf(out, "\tld hl,1\n\tjp L%d\nL%d:\n\tpop bc\n", done, sum_ok);
+
+    mir_allocation_runner_free_slot(out, plan);
+    mir_allocation_runner_call_one(
+        out, plan->allocate_function, 32);
+    fputs("\tld (ix-2),l\n\tld (ix-1),h\n"
+          "\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n", small_ok);
+    mir_allocation_runner_print(out, plan, plan->strings[2]);
+    fprintf(out, "\tld hl,1\n\tjp L%d\nL%d:\n", done, small_ok);
+
+    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n\tld bc,0\n", out);
+    fprintf(out,
+            "L%d:\n\tld (hl),c\n\tinc hl\n\tinc c\n"
+            "\tld a,c\n\tcp 32\n\tjp c,L%d\n",
+            fill_loop, fill_loop);
+    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n"
+          "\tld a,(hl)\n\tor a\n", out);
+    fprintf(out, "\tjp nz,L%d\n", small_check_failed);
+    fputs("\tld de,31\n\tadd hl,de\n\tld a,(hl)\n\tcp 31\n", out);
+    fprintf(out, "\tjp z,L%d\n", small_check_ok);
+    fprintf(out, "L%d:\n", small_check_failed);
+    mir_allocation_runner_print(out, plan, plan->strings[3]);
+    fprintf(out, "\tld hl,1\n\tjp L%d\nL%d:\n",
+            done, small_check_ok);
+
+    mir_allocation_runner_free_slot(out, plan);
+    mir_allocation_runner_call_one(
+        out, plan->allocate_function, 32768);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n\tpush hl\n", optional_free_done);
+    mir_machine_emit_symbol_call(out, plan->free_function);
+    fprintf(out, "\tpop bc\nL%d:\n", optional_free_done);
+
+    mir_allocation_runner_call_one(
+        out, plan->allocate_function, 1);
+    fputs("\tld (ix-2),l\n\tld (ix-1),h\n"
+          "\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n", final_small_ok);
+    mir_allocation_runner_print(out, plan, plan->strings[4]);
+    fprintf(out, "\tld hl,1\n\tjp L%d\nL%d:\n",
+            done, final_small_ok);
+
+    mir_allocation_runner_call_one(
+        out, plan->allocate_function, 65000);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", wrap_failed);
+    mir_allocation_runner_print(out, plan, plan->strings[5]);
+    fprintf(out, "\tld hl,1\n\tjp L%d\nL%d:\n", done, wrap_failed);
+
+    mir_allocation_runner_free_slot(out, plan);
+    mir_allocation_runner_print(out, plan, plan->strings[6]);
+    fputs("\tld hl,0\n", out);
+    fprintf(out, "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n", done);
+}
+
 int mir_try_emit_call_runners(FILE *out, int phase)
 {
     if (phase == 0) {
+        struct MirAllocationLifetimeRunner allocation_plan;
         struct MirLongIndexCallRunner long_index_plan;
         struct MirFixedCallCheckRunner plan;
 
+        if (mir_match_allocation_lifetime_runner(
+                &allocation_plan)) {
+            mir_emit_allocation_lifetime_runner(
+                out, &allocation_plan);
+            return 1;
+        }
         if (mir_match_long_index_call_runner(&long_index_plan)) {
             mir_emit_long_index_call_runner(
                 out, &long_index_plan);

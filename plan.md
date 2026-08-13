@@ -6,10 +6,40 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Clean base HEAD for the current coverage batch: `1c39c19`.
-- Current working-tree candidate coverage: **2135/2185 (97.71%)**.
-- Remaining fallback population: **50 `final-cost-policy`**, all selected by
+- Clean base HEAD for the current coverage batch: `065d11b`.
+- Current working-tree candidate coverage: **2136/2185 (97.76%)**.
+- Remaining fallback population: **49 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The call-runner module now admits the 18-block `tmalloch.main`
+  `final-cost-policy` fallback through a strict name-free matcher over all
+  **200 MIR instructions**. It proves the five allocation calls, four release
+  calls, seven reports and their exact argument sites; the three distinct
+  pointer locals and non-overlapping reusable lifetimes; both large-block byte
+  writes and reads; the 32-byte fill PHI/backedge; both endpoint checks; every
+  null/non-null edge; and the original early-return cleanup ordering. The
+  emitter uses one reusable two-byte IX pointer slot, BC only for the bounded
+  byte fill, and no IY. Normal selected/captured metrics are
+  **1,710/2,834 bytes** and **162/265 instructions**; stack-check metrics are
+  **1,739/2,863 bytes** and **163/266 instructions**.
+- `tmalloch` passes checked full peep/nopeep validation. Selected versus forced
+  fallback improves peep from **29,425 to 26,404 cycles** and
+  **6,272 to 6,144 bytes**, and nopeep from **32,151 to 26,419 cycles** and
+  **6,400 to 6,144 bytes**. A renamed allocator/releaser six-case edge matrix
+  covers normal execution, failure at each of the first four allocation calls,
+  and an intentionally accepted impossible final growth. Selected and
+  forced-fallback program output is byte-identical in
+  both modes for all twelve runs; every selected run is faster, with selected
+  images never larger.
+- The call-runner module is **2,043 source lines** and the added family keeps
+  all seven helpers module-local. The object audit reports only
+  `mir_try_emit_call_runners [T]` as defined global code and zero global data.
+  Canonical and CMake builds pass. The regression-gated stack-check census
+  advances **2,135/2,185 (97.71%)** to **2,136/2,185 (97.76%)**, adds exactly
+  `tmalloch.main`, removes no accepted function, moves selector counts from
+  **1,418 spilled / 360 scheduled** to
+  **1,417 spilled / 361 scheduled**, and leaves
+  **49 `final-cost-policy`** fallbacks. No performance baseline, production
+  name, or output-hash gate was added.
 - The next scanner-family batch admits the 12-block `tbig.str_to_long`
   `final-cost-policy` fallback through a strict name-free matcher over all
   **79 MIR instructions**. It proves the single nonvolatile signed-character
