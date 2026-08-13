@@ -6,10 +6,44 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Clean base HEAD for the current coverage batch: `065d11b`.
-- Current working-tree candidate coverage: **2136/2185 (97.76%)**.
-- Remaining fallback population: **49 `final-cost-policy`**, all selected by
+- Clean base HEAD for the current coverage batch: `1215d7f`.
+- Current working-tree candidate coverage: **2137/2185 (97.80%)**.
+- Remaining fallback population: **48 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The call-runner module now admits the 18-block `tatexit.main`
+  `final-cost-policy` fallback through a strict name-free matcher over all
+  **66 MIR instructions**. It proves three distinct defined `void (void)`
+  callbacks in source registration order, the shared
+  `int (void (*)(void))` registration ABI and exact argument sites, three
+  distinct word result locals, the complete short-circuit failure CFG, both
+  one-argument variadic print sites, and the final zero return. The emitter
+  uses a six-byte IX frame, passes each callback address through the ordinary
+  stack function-pointer ABI, preserves every registration call and failure
+  branch, and uses no IY. Normal selected/captured metrics are
+  **544/721 bytes** and **46/66 instructions**; stack-check metrics are
+  **573/750 bytes** and **47/67 instructions**.
+- `tatexit` passes checked full peep/nopeep validation. Selected versus forced
+  fallback changes peep from **19,893 to 19,873 cycles** and nopeep from
+  **19,983 to 19,873 cycles**, with both checked images unchanged at
+  **5,504 bytes**. A renamed callback/registration edge pair uses global
+  capacity and registration counters to exercise both three-callback success
+  and third-registration failure. Selected and forced-fallback output is
+  byte-identical in both modes: success prints `edge ok` followed by
+  `third`, `second`, `first`; failure prints `edge failure` followed by
+  `second`, `first`. Success selected/fallback measurements are
+  **24,858/24,878 cycles peep** and **24,957/25,067 nopeep**; failure
+  measurements are **22,776/22,791 peep** and **22,866/22,966 nopeep**.
+  All eight edge images are **2,176 bytes**.
+- The call-runner module grows from **2,043 to 2,341 source lines** and from
+  **35 to 37 static top-level helpers**. The object audit reports only
+  `mir_try_emit_call_runners [T]` as defined global code and zero global
+  data. The canonical build passes. The regression-gated stack-check census
+  advances **2,136/2,185 (97.76%)** to **2,137/2,185 (97.80%)**, adds exactly
+  `tatexit.main`, removes no accepted function, moves selector counts from
+  **1,417 spilled / 361 scheduled** to
+  **1,416 spilled / 362 scheduled**, and leaves
+  **48 `final-cost-policy`** fallbacks. No performance baseline, production
+  name, or output-hash gate was added.
 - The call-runner module now admits the 18-block `tmalloch.main`
   `final-cost-policy` fallback through a strict name-free matcher over all
   **200 MIR instructions**. It proves the five allocation calls, four release

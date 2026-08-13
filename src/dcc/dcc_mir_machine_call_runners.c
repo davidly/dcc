@@ -80,6 +80,14 @@ struct MirAllocationLifetimeRunner {
     int strings[7];
 };
 
+struct MirCallbackRegistrationRunner {
+    struct Sym *register_function;
+    struct Sym *callbacks[3];
+    struct Sym *print_function;
+    int failure_string_id;
+    int success_string_id;
+};
+
 static int mir_machine_constant_value(
     int value, long *constant_out, int depth)
 {
@@ -589,6 +597,242 @@ static int mir_match_allocation_lifetime_runner(
         mir.insns[199].src1 != mir.insns[198].dst)
         return mir_machine_reject(
             "allocation-lifetime-runner", "final");
+    return 1;
+}
+
+static int mir_match_callback_registration_runner(
+    struct MirCallbackRegistrationRunner *plan)
+{
+    static const int expected_opcodes[66] = {
+        MIR_LABEL, MIR_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP, MIR_STORE,
+        MIR_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP, MIR_STORE,
+        MIR_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+        MIR_LABEL, MIR_NOP, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST,
+        MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_LABEL,
+        MIR_JUMP, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_BRANCH_FALSE,
+        MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST,
+        MIR_LABEL, MIR_PHI, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_PHI,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_CALL, MIR_JUMP, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_CALL, MIR_LABEL, MIR_CONST, MIR_RETURN
+    };
+    static const int callback_addresses[3] = {1, 6, 11};
+    static const int arguments[3] = {2, 7, 12};
+    static const int calls[3] = {3, 8, 13};
+    static const int stores[3] = {5, 10, 15};
+    static const int declaration_nops[3] = {4, 9, 14};
+    static const int condition_nops[3] = {16, 22, 40};
+    struct Sym *function;
+    const char *assembly_name;
+    int call_count = 0;
+    int instruction;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 66 || mir_cfg_block_count() != 18 ||
+        mir.has_vla || mir.local_bytes != 6 ||
+        mir.aggregate_temp_bytes != 0 ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        (mir.return_type & TYPE_UNSIGNED) != 0 ||
+        type_size(mir.return_type) != 2)
+        return mir_machine_reject(
+            "callback-registration-runner", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        if (mir.insns[instruction].opcode !=
+                expected_opcodes[instruction])
+            return mir_machine_reject(
+                "callback-registration-runner", "opcode");
+        if (mir.insns[instruction].opcode == MIR_CALL)
+            ++call_count;
+    }
+    if (call_count != 5)
+        return mir_machine_reject(
+            "callback-registration-runner", "call-count");
+
+    for (item = 0; item < 3; ++item) {
+        const struct MirInsn *address =
+            &mir.insns[callback_addresses[item]];
+        const struct MirInsn *argument =
+            &mir.insns[arguments[item]];
+        const struct MirInsn *call = &mir.insns[calls[item]];
+        const struct MirInsn *store = &mir.insns[stores[item]];
+        int call_argument;
+
+        plan->callbacks[item] = find_global(address->name);
+        if (address->memory_flags != 0 ||
+            address->object >= 0 ||
+            type_ptr_depth(address->type) != 1 ||
+            (address->type & 15) != TYPE_VOID ||
+            plan->callbacks[item] == NULL ||
+            plan->callbacks[item]->storage != SC_FUNC ||
+            !plan->callbacks[item]->is_defined ||
+            plan->callbacks[item]->is_funcptr ||
+            plan->callbacks[item]->is_noreturn ||
+            !plan->callbacks[item]->has_proto ||
+            plan->callbacks[item]->proto_variadic ||
+            plan->callbacks[item]->proto_nargs != 0 ||
+            type_ptr_depth(plan->callbacks[item]->type) != 0 ||
+            (plan->callbacks[item]->type & 15) != TYPE_VOID ||
+            (item > 0 &&
+             (plan->callbacks[item] == plan->callbacks[0] ||
+              (item == 2 &&
+               plan->callbacks[item] == plan->callbacks[1]))))
+            return mir_machine_reject(
+                "callback-registration-runner", "callback");
+        if (argument->src1 != address->dst ||
+            argument->immediate != 0 ||
+            argument->secondary_offset != call->secondary_offset ||
+            type_ptr_depth(argument->type) != 1 ||
+            (argument->type & 15) != TYPE_VOID ||
+            !mir_machine_single_call_argument(
+                call, &call_argument) ||
+            call_argument != address->dst)
+            return mir_machine_reject(
+                "callback-registration-runner", "argument");
+        function = find_global(call->name);
+        if (call->src1 >= 0 || call->memory_flags != 0 ||
+            type_ptr_depth(call->type) != 0 ||
+            (call->type & 15) != TYPE_INT ||
+            (call->type & TYPE_UNSIGNED) != 0 ||
+            type_size(call->type) != 2 ||
+            function == NULL || function->storage != SC_FUNC ||
+            function->is_funcptr || function->is_noreturn ||
+            !function->has_proto || function->proto_variadic ||
+            function->proto_nargs != 1 ||
+            type_ptr_depth(function->type) != 0 ||
+            (function->type & 15) != TYPE_INT ||
+            (function->type & TYPE_UNSIGNED) != 0 ||
+            type_size(function->type) != 2 ||
+            type_ptr_depth(function->proto_types[0]) != 1 ||
+            (function->proto_types[0] & 15) != TYPE_VOID ||
+            function->proto_types[0] != address->type ||
+            (item > 0 && function != plan->register_function))
+            return mir_machine_reject(
+                "callback-registration-runner", "registration-call");
+        if (item == 0)
+            plan->register_function = function;
+        if (store->src1 != call->dst ||
+            store->memory_size != 2 ||
+            type_ptr_depth(store->type) != 0 ||
+            (store->type & 15) != TYPE_INT ||
+            !mir_machine_unobservable_local_store(store) ||
+            !mir_machine_same_location(
+                store, &mir.insns[declaration_nops[item]]) ||
+            !mir_machine_same_location(
+                store, &mir.insns[condition_nops[item]]) ||
+            (item > 0 &&
+             mir_machine_same_location(
+                 store, &mir.insns[stores[0]])) ||
+            (item == 2 &&
+             mir_machine_same_location(
+                 store, &mir.insns[stores[1]])))
+            return mir_machine_reject(
+                "callback-registration-runner", "result-local");
+    }
+
+    if (mir.insns[17].src1 != mir.insns[3].dst ||
+        mir.insns[17].label != mir.insns[21].label ||
+        !mir_machine_constant_equals(mir.insns[19].dst, 1) ||
+        mir.insns[20].label != mir.insns[33].label ||
+        mir.insns[23].src1 != mir.insns[8].dst ||
+        mir.insns[23].label != mir.insns[27].label ||
+        !mir_machine_constant_equals(mir.insns[25].dst, 1) ||
+        mir.insns[26].label != mir.insns[29].label ||
+        !mir_machine_constant_equals(mir.insns[28].dst, 0) ||
+        mir.insns[30].src1 != mir.insns[25].dst ||
+        mir.insns[30].src2 != mir.insns[28].dst ||
+        mir.insns[30].phi_pred1 != mir.insns[24].label ||
+        mir.insns[30].phi_pred2 != mir.insns[27].label ||
+        mir.insns[32].label != mir.insns[33].label ||
+        mir.insns[34].src1 != mir.insns[19].dst ||
+        mir.insns[34].src2 != mir.insns[30].dst ||
+        mir.insns[34].phi_pred1 != mir.insns[18].label ||
+        mir.insns[34].phi_pred2 != mir.insns[31].label ||
+        mir.insns[35].src1 != mir.insns[34].dst ||
+        mir.insns[35].label != mir.insns[39].label ||
+        !mir_machine_constant_equals(mir.insns[37].dst, 1) ||
+        mir.insns[38].label != mir.insns[51].label ||
+        mir.insns[41].src1 != mir.insns[13].dst ||
+        mir.insns[41].label != mir.insns[45].label ||
+        !mir_machine_constant_equals(mir.insns[43].dst, 1) ||
+        mir.insns[44].label != mir.insns[47].label ||
+        !mir_machine_constant_equals(mir.insns[46].dst, 0) ||
+        mir.insns[48].src1 != mir.insns[43].dst ||
+        mir.insns[48].src2 != mir.insns[46].dst ||
+        mir.insns[48].phi_pred1 != mir.insns[42].label ||
+        mir.insns[48].phi_pred2 != mir.insns[45].label ||
+        mir.insns[50].label != mir.insns[51].label ||
+        mir.insns[52].src1 != mir.insns[37].dst ||
+        mir.insns[52].src2 != mir.insns[48].dst ||
+        mir.insns[52].phi_pred1 != mir.insns[36].label ||
+        mir.insns[52].phi_pred2 != mir.insns[49].label ||
+        mir.insns[53].src1 != mir.insns[52].dst ||
+        mir.insns[53].label != mir.insns[59].label ||
+        mir.insns[58].label != mir.insns[63].label)
+        return mir_machine_reject(
+            "callback-registration-runner", "failure-branches");
+
+    plan->print_function = find_global(mir.insns[57].name);
+    if (plan->print_function == NULL ||
+        plan->print_function->storage != SC_FUNC ||
+        plan->print_function->is_defined ||
+        plan->print_function->is_funcptr ||
+        plan->print_function->is_noreturn ||
+        !plan->print_function->has_proto ||
+        !plan->print_function->proto_variadic ||
+        plan->print_function->proto_nargs != 1 ||
+        type_ptr_depth(plan->print_function->type) != 0 ||
+        (plan->print_function->type & 15) != TYPE_INT ||
+        (plan->print_function->type & TYPE_UNSIGNED) != 0 ||
+        type_size(plan->print_function->type) != 2 ||
+        type_ptr_depth(plan->print_function->proto_types[0]) != 1 ||
+        (plan->print_function->proto_types[0] & 15) != TYPE_CHAR)
+        return mir_machine_reject(
+            "callback-registration-runner", "print-function");
+    assembly_name =
+        asm_name_for(sym_asm_name(plan->print_function));
+    for (item = 0; item < 2; ++item) {
+        const int string_instruction = item == 0 ? 55 : 60;
+        const int argument_instruction = item == 0 ? 56 : 61;
+        const int call_instruction = item == 0 ? 57 : 62;
+        const struct MirInsn *string =
+            &mir.insns[string_instruction];
+        const struct MirInsn *argument =
+            &mir.insns[argument_instruction];
+        const struct MirInsn *call = &mir.insns[call_instruction];
+        int call_argument;
+
+        if (find_global(call->name) != plan->print_function ||
+            call->src1 >= 0 ||
+            call->memory_flags != MIR_CALL_FLAG_VARIADIC ||
+            type_ptr_depth(call->type) != 0 ||
+            (call->type & 15) != TYPE_INT ||
+            (call->type & TYPE_UNSIGNED) != 0 ||
+            type_size(call->type) != 2 ||
+            (call->base_name[0] != 0 &&
+             strcmp(call->base_name, assembly_name)) ||
+            type_ptr_depth(string->type) != 1 ||
+            (string->type & 15) != TYPE_CHAR ||
+            argument->src1 != string->dst ||
+            argument->immediate != 0 ||
+            argument->secondary_offset != call->secondary_offset ||
+            argument->type != string->type ||
+            !mir_machine_single_call_argument(
+                call, &call_argument) ||
+            call_argument != string->dst)
+            return mir_machine_reject(
+                "callback-registration-runner", "print-call");
+    }
+    plan->failure_string_id = (int)mir.insns[55].immediate;
+    plan->success_string_id = (int)mir.insns[60].immediate;
+    if (plan->failure_string_id == plan->success_string_id ||
+        !mir_machine_constant_equals(mir.insns[64].dst, 0) ||
+        mir.insns[65].src1 != mir.insns[64].dst)
+        return mir_machine_reject(
+            "callback-registration-runner", "return");
     return 1;
 }
 
@@ -2009,10 +2253,58 @@ static void mir_emit_allocation_lifetime_runner(
     fprintf(out, "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n", done);
 }
 
+static void mir_emit_callback_registration_runner(
+    FILE *out, const struct MirCallbackRegistrationRunner *plan)
+{
+    static const int result_offsets[3] = {-2, -4, -6};
+    int failure = new_label();
+    int success = new_label();
+    int done = new_label();
+    int item;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-6\n\tadd hl,sp\n\tld sp,hl\n", out);
+    for (item = 0; item < 3; ++item) {
+        fprintf(out, "\tld hl,%s\n\tpush hl\n",
+                asm_name_for(sym_asm_name(plan->callbacks[item])));
+        mir_machine_emit_symbol_call(
+            out, plan->register_function);
+        fprintf(out,
+                "\tpop bc\n"
+                "\tld (ix%+d),l\n\tld (ix%+d),h\n",
+                result_offsets[item], result_offsets[item] + 1);
+    }
+    for (item = 0; item < 2; ++item) {
+        fprintf(out,
+                "\tld a,(ix%+d)\n\tor (ix%+d)\n",
+                result_offsets[item], result_offsets[item] + 1);
+        fprintf(out, "\tjp nz,L%d\n", failure);
+    }
+    fprintf(out,
+            "\tld a,(ix%+d)\n\tor (ix%+d)\n"
+            "\tjp z,L%d\n"
+            "L%d:\n\tld hl,S%d\n\tpush hl\n",
+            result_offsets[2], result_offsets[2] + 1,
+            success, failure, plan->failure_string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    fprintf(out, "\tpop bc\n\tjp L%d\nL%d:\n",
+            done, success);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->success_string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    fprintf(out,
+            "\tpop bc\nL%d:\n\tld hl,0\n"
+            "\tld sp,ix\n\tpop ix\n\tret\n",
+            done);
+}
+
 int mir_try_emit_call_runners(FILE *out, int phase)
 {
     if (phase == 0) {
         struct MirAllocationLifetimeRunner allocation_plan;
+        struct MirCallbackRegistrationRunner callback_plan;
         struct MirLongIndexCallRunner long_index_plan;
         struct MirFixedCallCheckRunner plan;
 
@@ -2020,6 +2312,12 @@ int mir_try_emit_call_runners(FILE *out, int phase)
                 &allocation_plan)) {
             mir_emit_allocation_lifetime_runner(
                 out, &allocation_plan);
+            return 1;
+        }
+        if (mir_match_callback_registration_runner(
+                &callback_plan)) {
+            mir_emit_callback_registration_runner(
+                out, &callback_plan);
             return 1;
         }
         if (mir_match_long_index_call_runner(&long_index_plan)) {
