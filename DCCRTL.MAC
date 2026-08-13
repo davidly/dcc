@@ -9920,15 +9920,10 @@ __csp:
         cp      ' '
         jr      z,issp_yes
         cp      09h             ; HT
-        jr      z,issp_yes
-        cp      0ah             ; LF
-        jr      z,issp_yes
-        cp      0bh             ; VT
-        jr      z,issp_yes
-        cp      0ch             ; FF
-        jr      z,issp_yes
-        cp      0dh             ; CR
-        jr      z,issp_yes
+        jr      c,issp_no       ; below HT: not whitespace
+        cp      0eh             ; one past CR
+        jr      c,issp_yes      ; HT..CR: whitespace
+issp_no:
         ld      hl,0
         ret
 issp_yes:
