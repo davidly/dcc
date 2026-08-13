@@ -566,8 +566,9 @@ sb_ret:
 _setvbuf:
         ; int setvbuf(FILE *fp, char *buf, int mode, size_t size)
         ; mode: _IOFBF(0)/_IOLBF(1)/_IONBF(2).  Returns 0 on success, nonzero
-        ; for an invalid mode.  When buf is non-NULL and size >= 2 the caller's
-        ; buffer is adopted for console output (capacity = size-1, reserving
+        ; for an invalid mode (errno = EINVAL).  When buf is non-NULL and
+        ; size >= 2 the caller's buffer is adopted for console output
+        ; (capacity = size-1, reserving
         ; one guard byte); otherwise the internal buffer is used.
         push    ix
         ld      ix,0
@@ -608,6 +609,7 @@ svb_noop:
         pop     ix
         ret
 svb_bad:
+        call    __einval
         ld      hl,0ffffh               ; nonzero: invalid mode
         pop     ix
         ret
@@ -10163,6 +10165,11 @@ _fgets:
         ld      a,(ix+8)
         cp      FIRSTFD
         jp      c,fgets_con
+        cp      MAXFD
+        jr      nc,fgf_setup            ; fd out of range: skip the __fdeof
+                                         ; slot lookup below (would index past
+                                         ; the array) - _read's own fd check
+                                         ; rejects this below with EBADF.
 
         ; ---- File path ----
         ; Check EOF flag for this slot
@@ -10175,6 +10182,7 @@ _fgets:
         or      a
         jp      nz,fgets_null           ; already at EOF
 
+fgf_setup:
         ; Set up: rem = size-1, ptr = buf, start = buf
         ld      l,(ix+6)
         ld      h,(ix+7)
@@ -10228,9 +10236,15 @@ fgf_no_pb:
         ld      sp,hl                   ; clean 3 args
         ex      de,hl                   ; HL = bytes read
 
+        ; Treat anything but exactly 1 byte read as EOF, including a -1
+        ; (0FFFFh) error return (e.g. EBADF) - h!=0 catches that case before
+        ; __fgets_ch, which _read never touched, could be read as if valid.
         ld      a,h
-        or      l
-        jr      z,fgf_eof               ; read 0 bytes  EOF
+        or      a
+        jr      nz,fgf_eof
+        ld      a,l
+        cp      1
+        jr      nz,fgf_eof              ; read 0 bytes  EOF
 
 fgf_have_ch:
         ld      a,(__fgets_ch)
@@ -10250,14 +10264,19 @@ fgf_have_ch:
         jr      fgf_loop
 
 fgf_eof:
-        ; set EOF flag for this slot
+        ; set EOF flag for this slot (skip for an out-of-range fd, which
+        ; never had a slot to flag - writing __fdeof[fd-FIRSTFD] unchecked
+        ; would corrupt unrelated static data for a large bad fd)
         ld      a,(ix+8)
+        cp      MAXFD
+        jr      nc,fgf_eof_flagged
         sub     FIRSTFD
         ld      h,0
         ld      l,a
         ld      de,__fdeof
         add     hl,de
         ld      (hl),1
+fgf_eof_flagged:
         ; if no chars were stored  return NULL
         ld      hl,(__fgets_ptr)
         ld      de,(__fgets_start)
@@ -10894,7 +10913,8 @@ tn_build:
 ; FILE *tmpfile(void)
 ; Creates a temporary binary file (w+ mode) and returns its FILE*.
 ; The file is removed at program termination via the __tmpf_hook
-; registered in _exit.  Returns NULL if no slot is free or open fails.
+; registered in _exit.  Returns NULL if no slot is free (errno = EMFILE)
+; or open fails (errno set by _open).
 _tmpfile:
         push    ix
         ld      ix,0
@@ -10913,7 +10933,8 @@ tf_slotlp:
         inc     hl
         inc     c
         djnz    tf_slotlp
-        ld      hl,0                    ; no free slot
+        call    __emfil                 ; no free slot
+        ld      hl,0
         pop     ix
         ret
 tf_found:
@@ -11336,6 +11357,7 @@ fseek_bad:
 
 ; ============================================================
 ; _ftell(fp)    returns current file position (low 16 bits).
+; Returns -1L on a bad fd (errno = EBADF).
 ; ============================================================
         public  _ftell
 _ftell:
@@ -11362,6 +11384,7 @@ _ftell:
         ex      de,hl                   ; HL = low 16 bits, DE = high 16 bits
         ret
 ftell_bad:
+        call    __ebadf
         ld      hl,0FFFFh
         ld      de,0FFFFh
         ret

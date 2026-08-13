@@ -145,6 +145,77 @@ int main(void)
     for (i = 0; i < 9; i++)
         unlink(tmpnames[i]);
 
+    /* ftell() on a bad fd must fail with EBADF, matching lseek/read/etc. */
+    errno = 0;
+    lr = ftell((FILE *)99);
+    expect_long_errno("ftell bad fd", lr, EBADF);
+
+    /* fgets() on a bad fd must fail cleanly: return NULL, leave the
+     * caller's buffer untouched, and set errno via the underlying read()
+     * rather than a stale byte or out-of-range static-state lookup. */
+    {
+        char fgbuf[8];
+        char *fgr;
+
+        fgbuf[0] = 'Z';
+        errno = 0;
+        fgr = fgets(fgbuf, sizeof(fgbuf), (FILE *)99);
+        if (fgr == NULL && errno == EBADF && fgbuf[0] == 'Z') {
+            printf("PASS fgets bad fd errno=%d %s\n", errno, strerror(errno));
+        } else {
+            printf("FAIL fgets bad fd rv=%d errno=%d buf0=%d\n",
+                   (int)(fgr != NULL), errno, (int)fgbuf[0]);
+            fails++;
+        }
+    }
+
+    /* setvbuf() with an out-of-range mode must fail with EINVAL. */
+    errno = 0;
+    r = setvbuf(stdout, NULL, 99, 0);
+    if (r != 0 && errno == EINVAL) {
+        printf("PASS setvbuf bad mode errno=%d %s\n", errno, strerror(errno));
+    } else {
+        printf("FAIL setvbuf bad mode rv=%d errno=%d\n", r, errno);
+        fails++;
+    }
+
+    /* tmpfile() must fail with EMFILE once all NTMP (4) temp-file slots are
+     * in use; keep this count in sync with NTMP in dccrtl.mac. Leave the
+     * successfully-opened ones open rather than fclose()-ing them, so
+     * __tmpf_cleanup (registered via _exit) closes and unlinks them
+     * automatically instead of leaking .TMP files in the test directory. */
+    {
+        FILE *tfps[4];
+        FILE *tfover;
+        int j;
+        int alltmpok = 1;
+
+        errno = 0;
+        for (j = 0; j < 4; j++) {
+            tfps[j] = tmpfile();
+            if (tfps[j] == NULL)
+                alltmpok = 0;
+        }
+
+        errno = 0;
+        tfover = tmpfile();
+
+        if (alltmpok) {
+            if (tfover == NULL && errno == EMFILE) {
+                printf("PASS tmpfile too many errno=%d %s\n", errno, strerror(errno));
+            } else {
+                printf("FAIL tmpfile too many rv=%d errno=%d\n",
+                       (int)(tfover != NULL), errno);
+                fails++;
+            }
+        } else {
+            printf("FAIL setup tmpfile slots errno=%d\n", errno);
+            fails++;
+            if (tfover != NULL)
+                fclose(tfover);
+        }
+    }
+
     if (fails) {
         printf("terrno failed: %d\n", fails);
         return 1;

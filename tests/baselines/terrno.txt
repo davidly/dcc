@@ -7,4 +7,8 @@ PASS lseek bad fd errno=9 Bad file descriptor
 PASS open create fd=3
 PASS lseek bad whence errno=22 Invalid argument
 PASS open too many errno=24 Too many open files
+PASS ftell bad fd errno=9 Bad file descriptor
+PASS fgets bad fd errno=9 Bad file descriptor
+PASS setvbuf bad mode errno=22 Invalid argument
+PASS tmpfile too many errno=24 Too many open files
 terrno passed
