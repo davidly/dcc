@@ -3,6 +3,46 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-13 long-subtraction 32-block batch (working tree)
+
+- Branch/base: `pr/143` at `65a4b9b`. The call-runner module now admits the
+  32-block `tlongsub.main` `final-cost-policy` fallback through a strict
+  structural matcher over all **762 MIR instructions**. It validates the full
+  opcode stream and CFG, all 68 scaled long indexes, all 40 typed binary
+  operations, the local/global/pointer roots, the three promoted word objects,
+  every fixed and loop-updated long store, all 26 checker calls, all three
+  value-helper calls, both formatted-output calls, the failure object and the
+  final return. The matcher contains no function, helper, local, global,
+  format, output or test name and no output hash.
+- The dedicated emitter keeps the original call and failure order, uses the
+  signed-long comparison helpers so high-word signed boundaries and low-word
+  unsigned subtraction/borrow remain exact, and propagates carry across both
+  words for every long addition. It uses a compact **18-byte IX frame** for the
+  four-long local array and one loop counter and emits no IY instruction.
+  Normal selected/captured metrics are **10,339/19,466 bytes** and
+  **927/1,900 instructions**. Stack-check metrics are **10,368/19,495 bytes**
+  and **928/1,901 instructions**.
+- `tlongsub` passes full peep/nopeep validation. Selected versus forced
+  fallback is **56,004/62,256 cycles and 7,936/8,960 bytes** peep plus
+  **56,642/63,781 cycles and 7,936/9,088 bytes** nopeep, exact cycle gains of
+  **6,252** and **7,139**.
+- A separately renamed function/helper/global/local fixture selects the same
+  family while exercising `65,536`, `2,147,483,646`, `-2,147,483,647`,
+  `2,147,483,647`, and the cross-word `65,535 + 9 < 65,545` boundary.
+  Selected and forced-fallback program output is identical in both modes.
+  Peep totals are **59,974/66,226 cycles and 5,120/6,144 bytes**; nopeep
+  totals are **60,612/67,751 cycles and 5,120/6,272 bytes**.
+- The regression-gated stack-check census advances
+  **2,164/2,185 (99.04%)** to **2,165/2,185 (99.08%)**, adds exactly
+  `tlongsub.main`, removes no accepted function, moves selector counts from
+  **1,389 spilled / 389 scheduled** to **1,388 spilled / 390 scheduled**, and
+  reduces `final-cost-policy` fallbacks **21 -> 20**.
+- The call-runner module grows from **13,896 to 14,991 source lines**
+  (**+1,095**). Its standalone object defines only
+  `mir_try_emit_call_runners [T]` globally and has zero global data
+  definitions. The canonical build and `git diff --check` pass. No
+  performance baseline, production name or output hash was added or changed.
+
 ## 2026-08-13 integer-promotion 18-block batch (working tree)
 
 - Branch/base: `pr/143` at `e8e075a`. The call-runner module now admits the

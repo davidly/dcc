@@ -287,6 +287,203 @@ struct MirPromotionCallRunner {
     char print_names[3][64];
 };
 
+#define MIR_LONG_SUBTRACTION_CHECK_COUNT 26
+#define MIR_LONG_SUBTRACTION_DIRECT_COUNT 20
+
+struct MirLongSubtractionRunner {
+    struct Sym *check_function;
+    struct Sym *helper_function;
+    struct Sym *print_function;
+    struct Sym *global_array;
+    struct Sym *failures;
+    unsigned long initial_values[4];
+    unsigned long addition_values[2];
+    unsigned long pointer_values[2];
+    unsigned long global_values[2];
+    unsigned long while_values[2];
+    unsigned long for_values[2];
+    unsigned long helper_values[2];
+    unsigned long direct_addends[7];
+    unsigned long while_condition_addend;
+    unsigned long while_step;
+    unsigned long for_step;
+    unsigned long helper_addend;
+    int while_limit;
+    int for_limit;
+    int check_strings[MIR_LONG_SUBTRACTION_CHECK_COUNT];
+    int check_wants[MIR_LONG_SUBTRACTION_CHECK_COUNT];
+    int success_string;
+    int failure_string;
+    char print_names[2][64];
+};
+
+struct MirLongSubtractionEdge {
+    int instruction;
+    int first;
+    int second;
+};
+
+struct MirLongSubtractionIndex {
+    int instruction;
+    int index;
+};
+
+struct MirLongSubtractionBinary {
+    int instruction;
+    int operation;
+    int operand_width;
+};
+
+static const unsigned char mir_long_subtraction_opcodes[] = {
+    MIR_LABEL, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_CONST,
+    MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST,
+    MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_CONST, MIR_NOP,
+    MIR_STORE, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST, MIR_NOP,
+    MIR_STORE, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST, MIR_NOP,
+    MIR_STORE, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST, MIR_NOP,
+    MIR_STORE, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST, MIR_NOP,
+    MIR_STORE, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST, MIR_NOP,
+    MIR_STORE, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST, MIR_NOP,
+    MIR_STORE, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST, MIR_NOP,
+    MIR_STORE, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST, MIR_NOP,
+    MIR_STORE, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST, MIR_NOP,
+    MIR_STORE, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_CONST,
+    MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT,
+    MIR_CONST, MIR_NOP, MIR_STORE, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP,
+    MIR_CONST, MIR_BINARY, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE,
+    MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_ARG,
+    MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_ADDRESS, MIR_CONST,
+    MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST, MIR_NOP,
+    MIR_STORE, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_CONST, MIR_BINARY,
+    MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP,
+    MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG,
+    MIR_CALL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+    MIR_NOP, MIR_CONST, MIR_BINARY, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY,
+    MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD,
+    MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_ADDRESS,
+    MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_ADDRESS, MIR_CONST,
+    MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_ADDRESS,
+    MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST,
+    MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_NOP, MIR_STORE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LOAD,
+    MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_LOAD, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY,
+    MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD,
+    MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LOAD,
+    MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_LOAD, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY,
+    MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD,
+    MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LOAD,
+    MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_LOAD, MIR_CONST,
+    MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL,
+    MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_ADDRESS,
+    MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST,
+    MIR_STORE_INDIRECT, MIR_CONST, MIR_NOP, MIR_STORE, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+    MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP,
+    MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG,
+    MIR_CALL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+    MIR_NOP, MIR_CONST, MIR_BINARY, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY,
+    MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD,
+    MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST,
+    MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_CONST, MIR_NOP,
+    MIR_STORE, MIR_LABEL, MIR_NOP, MIR_PHI, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+    MIR_CONST, MIR_BINARY, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE,
+    MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+    MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP,
+    MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG,
+    MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_CONST,
+    MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT,
+    MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_PHI, MIR_ADDRESS,
+    MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY,
+    MIR_BRANCH_FALSE, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT,
+    MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_JUMP, MIR_LABEL, MIR_NOP,
+    MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_STRING_ADDRESS,
+    MIR_ARG, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+    MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+    MIR_CONST, MIR_STORE_INDIRECT, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+    MIR_ARG, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL, MIR_ARG,
+    MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+    MIR_LOAD_INDIRECT, MIR_ARG, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL,
+    MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_CONST,
+    MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_ARG, MIR_ADDRESS, MIR_CONST,
+    MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+    MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+    MIR_JUMP, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CALL, MIR_LABEL,
+    MIR_LOAD, MIR_RETURN,
+};
+
+static const struct MirLongSubtractionEdge
+mir_long_subtraction_edges[] = {
+    {34, 38, -1}, {58, 62, -1}, {82, 86, -1}, {106, 110, -1},
+    {130, 134, -1}, {154, 158, -1}, {178, 182, -1},
+    {202, 206, -1}, {226, 230, -1}, {250, 254, -1},
+    {287, 291, -1}, {314, 318, -1}, {341, 345, -1},
+    {368, 372, -1}, {395, 399, -1}, {432, 436, -1},
+    {456, 460, -1}, {483, 487, -1}, {517, 521, -1},
+    {544, 548, -1}, {571, 548, 603}, {583, 605, -1},
+    {598, 601, -1}, {600, 605, -1}, {604, 569, -1},
+    {638, 605, 664}, {648, 670, -1}, {659, 662, -1},
+    {661, 670, -1}, {669, 635, -1}, {747, 753, -1},
+    {752, 759, -1}
+};
+
+static const struct MirLongSubtractionIndex
+mir_long_subtraction_indices[] = {
+    {3, 0}, {8, 1}, {13, 2}, {19, 3}, {27, 0}, {31, 1},
+    {51, 1}, {55, 0}, {75, 1}, {79, 0}, {99, 0}, {103, 1},
+    {123, 0}, {127, 1}, {147, 0}, {151, 0}, {171, 1},
+    {175, 0}, {195, 0}, {199, 1}, {219, 2}, {223, 0},
+    {243, 1}, {247, 3}, {264, 0}, {269, 1}, {277, 0},
+    {284, 1}, {304, 0}, {311, 1}, {331, 1}, {338, 0},
+    {358, 0}, {365, 1}, {385, 0}, {392, 1}, {409, 0},
+    {414, 1}, {425, 0}, {429, 1}, {449, 1}, {453, 0},
+    {473, 0}, {480, 1}, {497, 0}, {502, 1}, {510, 0},
+    {514, 1}, {534, 0}, {541, 1}, {558, 0}, {563, 1},
+    {574, 0}, {580, 1}, {590, 0}, {624, 0}, {629, 1},
+    {641, 1}, {645, 0}, {651, 1}, {682, 0}, {687, 1},
+    {694, 0}, {699, 1}, {711, 1}, {716, 0}, {728, 0},
+    {736, 1}
+};
+
+static const struct MirLongSubtractionBinary
+mir_long_subtraction_binaries[] = {
+    {33, '<', 4}, {57, '<', 4}, {81, '>', 4},
+    {105, '>', 4}, {129, TOK_LE, 4}, {153, TOK_LE, 4},
+    {177, TOK_GE, 4}, {201, TOK_GE, 4}, {225, '<', 4},
+    {249, '<', 4}, {281, '+', 4}, {286, '<', 4},
+    {308, '+', 4}, {313, '>', 4}, {335, '+', 4},
+    {340, '<', 4}, {362, '+', 4}, {367, TOK_LE, 4},
+    {389, '+', 4}, {394, TOK_GE, 4}, {431, '<', 4},
+    {455, '<', 4}, {477, '+', 4}, {482, '<', 4},
+    {516, '<', 4}, {538, '+', 4}, {543, '<', 4},
+    {577, '+', 4}, {582, '<', 4}, {586, '+', 2},
+    {593, '+', 4}, {597, '>', 2}, {610, '>', 2},
+    {647, '<', 4}, {654, '+', 4}, {658, '>', 2},
+    {667, '+', 2}, {675, '>', 2}, {732, '+', 4},
+    {746, TOK_EQ, 2}
+};
+
 enum MirBufferedConsoleFunction {
     MIR_BUFFER_PRINT,
     MIR_BUFFER_ALLOCATE,
@@ -13524,6 +13721,557 @@ static void mir_promotion_capture_call_name(
     snprintf(destination, 64, "%s", name);
 }
 
+static int mir_long_subtraction_word_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == TYPE_INT &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 2;
+}
+
+static int mir_long_subtraction_wide_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == TYPE_LONG &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 4;
+}
+
+static int mir_long_subtraction_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & 15) == TYPE_LONG &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 2;
+}
+
+static int mir_long_subtraction_capture_wide(
+    int instruction, unsigned long *value)
+{
+    const struct MirInsn *constant = &mir.insns[instruction];
+
+    if (constant->opcode != MIR_CONST ||
+        !mir_long_subtraction_wide_type(constant->type))
+        return 0;
+    *value = (unsigned long)constant->immediate & 0xffffffffUL;
+    return 1;
+}
+
+static int mir_long_subtraction_capture_stored_wide(
+    int store_instruction, int constant_instruction,
+    unsigned long *value)
+{
+    const struct MirInsn *store = &mir.insns[store_instruction];
+    const struct MirInsn *constant = &mir.insns[constant_instruction];
+
+    return mir_long_subtraction_capture_wide(
+               constant_instruction, value) &&
+           store->opcode == MIR_STORE_INDIRECT &&
+           store->src2 == constant->dst &&
+           store->memory_size == 4 &&
+           (store->memory_flags & (1 | 8)) == 0;
+}
+
+static int mir_long_subtraction_same_location_set(
+    const int *instructions, size_t count, int anchor)
+{
+    size_t item;
+
+    for (item = 0; item < count; ++item) {
+        const struct MirInsn *insn =
+            &mir.insns[instructions[item]];
+
+        if (strcmp(mir.insns[anchor].name, insn->name) ||
+            (insn->memory_flags & (1 | 8)) != 0)
+            return 0;
+    }
+    return 1;
+}
+
+static int mir_long_subtraction_match_roots(
+    struct MirLongSubtractionRunner *plan)
+{
+    static const int local_addresses[] = {
+        1, 6, 11, 17, 25, 29, 49, 53, 73, 77, 97, 101,
+        121, 125, 145, 149, 169, 173, 193, 197, 217, 221,
+        241, 245, 262, 267, 275, 282, 302, 309, 329, 336,
+        356, 363, 383, 390, 407, 412, 417, 556, 561, 572,
+        578, 588, 622, 627, 639, 643, 649, 680, 685, 692,
+        697, 709, 714, 726, 734
+    };
+    static const int global_addresses[] = {
+        495, 500, 508, 512, 532, 539
+    };
+    static const int r_accesses[] = {
+        24, 37, 41, 48, 61, 65, 72, 85, 89, 96, 109, 113,
+        120, 133, 137, 144, 157, 161, 168, 181, 185, 192,
+        205, 209, 216, 229, 233, 240, 253, 257, 274, 290,
+        294, 301, 317, 321, 328, 344, 348, 355, 371, 375,
+        382, 398, 402, 422, 435, 439, 446, 459, 463, 470,
+        486, 490, 507, 520, 524, 531, 547, 551
+    };
+    static const int p_accesses[] = {
+        419, 423, 427, 447, 451, 471, 478
+    };
+    static const int n_accesses[] = {568, 587, 608, 617};
+    static const int i_accesses[] = {634, 668};
+    size_t item;
+
+    if (!mir_long_subtraction_pointer_type(mir.insns[1].type))
+        return mir_machine_reject(
+            "long-subtraction-roots", "local-type");
+    for (item = 0;
+         item < sizeof(local_addresses) /
+                    sizeof(local_addresses[0]);
+         ++item) {
+        const struct MirInsn *address =
+            &mir.insns[local_addresses[item]];
+
+        if (address->opcode != MIR_ADDRESS ||
+            strcmp(address->name, mir.insns[1].name) ||
+            !mir_long_subtraction_pointer_type(address->type))
+            return mir_machine_reject(
+                "long-subtraction-roots", "local-address");
+    }
+
+    plan->global_array = find_global(mir.insns[495].name);
+    if (plan->global_array == NULL ||
+        plan->global_array->storage == SC_FUNC ||
+        !plan->global_array->is_defined ||
+        plan->global_array->is_volatile ||
+        !plan->global_array->is_array ||
+        plan->global_array->array_len != 4 ||
+        plan->global_array->elem_size != 4)
+        return mir_machine_reject(
+            "long-subtraction-roots", "global-symbol");
+    for (item = 0;
+         item < sizeof(global_addresses) /
+                    sizeof(global_addresses[0]);
+         ++item) {
+        const struct MirInsn *address =
+            &mir.insns[global_addresses[item]];
+
+        if (find_global(address->name) != plan->global_array ||
+            !mir_long_subtraction_pointer_type(address->type))
+            return mir_machine_reject(
+                "long-subtraction-roots", "global-address");
+    }
+
+    if (!mir_long_subtraction_same_location_set(
+            r_accesses,
+            sizeof(r_accesses) / sizeof(r_accesses[0]), 24))
+        return mir_machine_reject(
+            "long-subtraction-roots", "r-access");
+    if (!mir_long_subtraction_same_location_set(
+            p_accesses,
+            sizeof(p_accesses) / sizeof(p_accesses[0]), 419))
+        return mir_machine_reject(
+            "long-subtraction-roots", "p-access");
+    if (!mir_long_subtraction_same_location_set(
+            n_accesses,
+            sizeof(n_accesses) / sizeof(n_accesses[0]), 568))
+        return mir_machine_reject(
+            "long-subtraction-roots", "n-access");
+    if (!mir_long_subtraction_same_location_set(
+            i_accesses,
+            sizeof(i_accesses) / sizeof(i_accesses[0]), 634))
+        return mir_machine_reject(
+            "long-subtraction-roots", "i-access");
+    if (!mir_long_subtraction_word_type(mir.insns[41].type) ||
+        !mir_long_subtraction_pointer_type(mir.insns[423].type) ||
+        !mir_long_subtraction_word_type(mir.insns[608].type) ||
+        !mir_long_subtraction_word_type(mir.insns[638].type) ||
+        !strcmp(mir.insns[24].name, mir.insns[419].name) ||
+        !strcmp(mir.insns[24].name, mir.insns[568].name) ||
+        !strcmp(mir.insns[24].name, mir.insns[634].name) ||
+        !strcmp(mir.insns[419].name, mir.insns[568].name) ||
+        !strcmp(mir.insns[419].name, mir.insns[634].name) ||
+        !strcmp(mir.insns[568].name, mir.insns[634].name) ||
+        mir.insns[419].src1 != mir.insns[417].dst)
+        return mir_machine_reject(
+            "long-subtraction-roots", "local-properties");
+    return 1;
+}
+
+static int mir_long_subtraction_match_graph(void)
+{
+    size_t item;
+
+    for (item = 0;
+         item < sizeof(mir_long_subtraction_edges) /
+                    sizeof(mir_long_subtraction_edges[0]);
+         ++item) {
+        const struct MirLongSubtractionEdge *edge =
+            &mir_long_subtraction_edges[item];
+        const struct MirInsn *insn =
+            &mir.insns[edge->instruction];
+
+        if (insn->opcode == MIR_PHI) {
+            if (edge->second < 0 ||
+                insn->phi_pred1 !=
+                    mir.insns[edge->first].label ||
+                insn->phi_pred2 !=
+                    mir.insns[edge->second].label)
+                return 0;
+        } else if (edge->second >= 0 ||
+                   insn->label !=
+                       mir.insns[edge->first].label) {
+            return 0;
+        }
+    }
+    for (item = 0;
+         item < sizeof(mir_long_subtraction_indices) /
+                    sizeof(mir_long_subtraction_indices[0]);
+         ++item) {
+        const struct MirLongSubtractionIndex *index =
+            &mir_long_subtraction_indices[item];
+        const struct MirInsn *insn =
+            &mir.insns[index->instruction];
+        const struct MirInsn *base = mir_definition(insn->src1);
+
+        if (insn->opcode != MIR_INDEX_ADDRESS ||
+            insn->immediate != 4 || insn->memory_size != 4 ||
+            (insn->memory_flags & (1 | 8)) != 0 ||
+            !mir_long_subtraction_pointer_type(insn->type) ||
+            !mir_machine_constant_equals(
+                insn->src2, index->index) ||
+            base == NULL ||
+            (base->opcode != MIR_ADDRESS &&
+             base->opcode != MIR_LOAD))
+            return 0;
+    }
+    for (item = 0;
+         item < sizeof(mir_long_subtraction_binaries) /
+                    sizeof(mir_long_subtraction_binaries[0]);
+         ++item) {
+        const struct MirLongSubtractionBinary *binary =
+            &mir_long_subtraction_binaries[item];
+        const struct MirInsn *insn =
+            &mir.insns[binary->instruction];
+        int comparison =
+            binary->operation != '+';
+
+        if (insn->opcode != MIR_BINARY ||
+            insn->immediate != binary->operation ||
+            type_size(insn->secondary_offset) !=
+                binary->operand_width ||
+            (insn->secondary_offset & TYPE_UNSIGNED) != 0 ||
+            (binary->operand_width == 4
+                 ? (insn->secondary_offset & 15) != TYPE_LONG
+                 : (insn->secondary_offset & 15) != TYPE_INT) ||
+            (comparison
+                 ? !mir_long_subtraction_word_type(insn->type)
+                 : binary->operand_width == 4
+                       ? !mir_long_subtraction_wide_type(insn->type)
+                       : !mir_long_subtraction_word_type(insn->type)) ||
+            mir_definition(insn->src1) == NULL ||
+            mir_definition(insn->src2) == NULL)
+            return 0;
+    }
+    for (item = 0; item < (size_t)mir.count; ++item) {
+        const struct MirInsn *insn = &mir.insns[item];
+
+        if ((insn->opcode == MIR_LOAD_INDIRECT ||
+             insn->opcode == MIR_STORE_INDIRECT) &&
+            (insn->memory_size != 4 ||
+             (insn->memory_flags & (1 | 8)) != 0 ||
+             mir_definition(insn->src1) == NULL ||
+             mir_definition(insn->src1)->opcode !=
+                 MIR_INDEX_ADDRESS))
+            return 0;
+    }
+    return mir.insns[571].src1 == mir.insns[566].dst &&
+           mir.insns[571].src2 == mir.insns[586].dst &&
+           mir.insns[582].src1 == mir.insns[577].dst &&
+           mir.insns[582].src2 == mir.insns[581].dst &&
+           mir.insns[586].src1 == mir.insns[571].dst &&
+           mir.insns[593].src1 == mir.insns[591].dst &&
+           mir.insns[594].src1 == mir.insns[590].dst &&
+           mir.insns[594].src2 == mir.insns[593].dst &&
+           mir.insns[638].src1 == mir.insns[632].dst &&
+           mir.insns[638].src2 == mir.insns[667].dst &&
+           mir.insns[647].src1 == mir.insns[642].dst &&
+           mir.insns[647].src2 == mir.insns[646].dst &&
+           mir.insns[654].src1 == mir.insns[652].dst &&
+           mir.insns[655].src1 == mir.insns[651].dst &&
+           mir.insns[655].src2 == mir.insns[654].dst &&
+           mir.insns[667].src1 == mir.insns[638].dst;
+}
+
+static int mir_long_subtraction_match_constants(
+    struct MirLongSubtractionRunner *plan)
+{
+    static const int initial_stores[][2] = {
+        {5, 4}, {10, 9}, {16, 15}, {21, 20}
+    };
+    static const int addition_stores[][2] = {
+        {266, 265}, {271, 270}
+    };
+    static const int pointer_stores[][2] = {
+        {411, 410}, {416, 415}
+    };
+    static const int global_stores[][2] = {
+        {499, 498}, {504, 503}
+    };
+    static const int while_stores[][2] = {
+        {560, 559}, {565, 564}
+    };
+    static const int for_stores[][2] = {
+        {626, 625}, {631, 630}
+    };
+    static const int helper_stores[][2] = {
+        {684, 683}, {689, 688}
+    };
+    static const int add_constants[] = {
+        280, 307, 334, 361, 388, 476, 537
+    };
+    long while_limit;
+    long for_limit;
+    size_t item;
+
+    for (item = 0; item < 4; ++item)
+        if (!mir_long_subtraction_capture_stored_wide(
+                initial_stores[item][0],
+                initial_stores[item][1],
+                &plan->initial_values[item]))
+            return 0;
+    for (item = 0; item < 2; ++item) {
+        if (!mir_long_subtraction_capture_stored_wide(
+                addition_stores[item][0],
+                addition_stores[item][1],
+                &plan->addition_values[item]) ||
+            !mir_long_subtraction_capture_stored_wide(
+                pointer_stores[item][0],
+                pointer_stores[item][1],
+                &plan->pointer_values[item]) ||
+            !mir_long_subtraction_capture_stored_wide(
+                global_stores[item][0],
+                global_stores[item][1],
+                &plan->global_values[item]) ||
+            !mir_long_subtraction_capture_stored_wide(
+                while_stores[item][0],
+                while_stores[item][1],
+                &plan->while_values[item]) ||
+            !mir_long_subtraction_capture_stored_wide(
+                for_stores[item][0],
+                for_stores[item][1],
+                &plan->for_values[item]) ||
+            !mir_long_subtraction_capture_stored_wide(
+                helper_stores[item][0],
+                helper_stores[item][1],
+                &plan->helper_values[item]))
+            return 0;
+    }
+    for (item = 0; item < 7; ++item)
+        if (!mir_long_subtraction_capture_wide(
+                add_constants[item],
+                &plan->direct_addends[item]))
+            return 0;
+    if (!mir_long_subtraction_capture_wide(
+            576, &plan->while_condition_addend) ||
+        !mir_long_subtraction_capture_wide(
+            592, &plan->while_step) ||
+        !mir_long_subtraction_capture_wide(
+            653, &plan->for_step) ||
+        !mir_long_subtraction_capture_wide(
+            731, &plan->helper_addend) ||
+        !mir_machine_constant_value(
+            mir.insns[596].dst, &while_limit, 0) ||
+        !mir_machine_constant_value(
+            mir.insns[657].dst, &for_limit, 0) ||
+        while_limit < 0 || while_limit > 32766 ||
+        for_limit < 0 || for_limit > 32766 ||
+        !mir_machine_constant_equals(mir.insns[566].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[585].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[632].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[666].dst, 1))
+        return 0;
+    plan->while_limit = (int)while_limit;
+    plan->for_limit = (int)for_limit;
+    return 1;
+}
+
+static int mir_long_subtraction_match_calls(
+    struct MirLongSubtractionRunner *plan)
+{
+    static const int check_calls[MIR_LONG_SUBTRACTION_CHECK_COUNT] = {
+        45, 69, 93, 117, 141, 165, 189, 213, 237, 261,
+        298, 325, 352, 379, 406, 443, 467, 494, 528, 555,
+        614, 621, 679, 706, 723, 743
+    };
+    static const int helper_calls[] = {702, 719, 739};
+    struct Sym *function;
+    int all_strings[MIR_LONG_SUBTRACTION_CHECK_COUNT + 2];
+    int arguments[3];
+    int call_count = 0;
+    int check;
+    int item;
+
+    for (check = 0;
+         check < MIR_LONG_SUBTRACTION_CHECK_COUNT;
+         ++check) {
+        const struct MirInsn *call =
+            &mir.insns[check_calls[check]];
+        const struct MirInsn *got;
+        const struct MirInsn *want;
+        int string_id;
+
+        if (!mir_promotion_direct_call(
+                call, &function, 0, 3) ||
+            (function->type & 15) != TYPE_VOID ||
+            type_ptr_depth(function->type) != 0 ||
+            !mir_promotion_char_pointer_type(
+                function->proto_types[0]) ||
+            !mir_promotion_scalar_type(
+                function->proto_types[1],
+                TYPE_INT, 0, 2) ||
+            !mir_promotion_scalar_type(
+                function->proto_types[2],
+                TYPE_INT, 0, 2) ||
+            !mir_machine_call_arguments(
+                call, 3, arguments) ||
+            !mir_promotion_string_argument(
+                arguments[0], &string_id) ||
+            (got = mir_definition(arguments[1])) == NULL ||
+            (want = mir_definition(arguments[2])) == NULL ||
+            !mir_long_subtraction_word_type(got->type) ||
+            want->opcode != MIR_CONST ||
+            !mir_long_subtraction_word_type(want->type))
+            return 0;
+        if (plan->check_function == NULL)
+            plan->check_function = function;
+        else if (plan->check_function != function)
+            return 0;
+        plan->check_strings[check] = string_id;
+        plan->check_wants[check] =
+            (int)((unsigned long)want->immediate & 0xffffUL);
+        all_strings[check] = string_id;
+    }
+
+    for (item = 0; item < 3; ++item) {
+        const struct MirInsn *call =
+            &mir.insns[helper_calls[item]];
+        const struct MirInsn *left;
+        const struct MirInsn *right;
+
+        if (!mir_promotion_direct_call(
+                call, &function, 0, 2) ||
+            !mir_long_subtraction_word_type(function->type) ||
+            !mir_long_subtraction_wide_type(
+                function->proto_types[0]) ||
+            !mir_long_subtraction_wide_type(
+                function->proto_types[1]) ||
+            !mir_machine_call_arguments(
+                call, 2, arguments) ||
+            (left = mir_definition(arguments[0])) == NULL ||
+            (right = mir_definition(arguments[1])) == NULL ||
+            !mir_long_subtraction_wide_type(left->type) ||
+            !mir_long_subtraction_wide_type(right->type))
+            return 0;
+        if (plan->helper_function == NULL)
+            plan->helper_function = function;
+        else if (plan->helper_function != function)
+            return 0;
+    }
+
+    if (!mir_promotion_direct_call(
+            &mir.insns[751], &plan->print_function, 1, 1) ||
+        !mir_long_subtraction_word_type(
+            plan->print_function->type) ||
+        !mir_promotion_char_pointer_type(
+            plan->print_function->proto_types[0]) ||
+        !mir_machine_call_arguments(
+            &mir.insns[751], 1, arguments) ||
+        !mir_promotion_string_argument(
+            arguments[0], &plan->success_string) ||
+        !mir_promotion_direct_call(
+            &mir.insns[758], &function, 1, 1) ||
+        function != plan->print_function ||
+        !mir_machine_call_arguments(
+            &mir.insns[758], 2, arguments) ||
+        !mir_promotion_string_argument(
+            arguments[0], &plan->failure_string))
+        return 0;
+    mir_promotion_capture_call_name(
+        plan->print_names[0], &mir.insns[751],
+        plan->print_function);
+    mir_promotion_capture_call_name(
+        plan->print_names[1], &mir.insns[758],
+        plan->print_function);
+    all_strings[MIR_LONG_SUBTRACTION_CHECK_COUNT] =
+        plan->success_string;
+    all_strings[MIR_LONG_SUBTRACTION_CHECK_COUNT + 1] =
+        plan->failure_string;
+    for (item = 0;
+         item < MIR_LONG_SUBTRACTION_CHECK_COUNT + 2;
+         ++item)
+        for (check = 0; check < item; ++check)
+            if (all_strings[item] == all_strings[check])
+                return 0;
+
+    plan->failures = find_global(mir.insns[744].name);
+    if (plan->failures == NULL ||
+        plan->failures->storage == SC_FUNC ||
+        !plan->failures->is_defined ||
+        plan->failures->is_array ||
+        plan->failures->is_volatile ||
+        !mir_long_subtraction_word_type(plan->failures->type) ||
+        !mir_machine_same_location(
+            &mir.insns[744], &mir.insns[756]) ||
+        !mir_machine_same_location(
+            &mir.insns[744], &mir.insns[760]) ||
+        arguments[1] != mir.insns[756].dst ||
+        mir.insns[761].src1 != mir.insns[760].dst)
+        return 0;
+    for (item = 0; item < mir.count; ++item)
+        if (mir.insns[item].opcode == MIR_CALL)
+            ++call_count;
+    return call_count == 31;
+}
+
+static int mir_match_long_subtraction_runner(
+    struct MirLongSubtractionRunner *plan)
+{
+    int instruction;
+    int object;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count !=
+            (int)(sizeof(mir_long_subtraction_opcodes) /
+                  sizeof(mir_long_subtraction_opcodes[0])) ||
+        mir_cfg_block_count() != 32 || mir.has_vla ||
+        mir.local_bytes != 26 || mir.aggregate_temp_bytes != 0 ||
+        mir.object_count != 3 ||
+        !mir_long_subtraction_word_type(mir.return_type))
+        return mir_machine_reject(
+            "long-subtraction-runner", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+                mir_long_subtraction_opcodes[instruction])
+            return mir_machine_reject(
+                "long-subtraction-runner", "opcode");
+    for (object = 0; object < mir.object_count; ++object)
+        if (mir.objects[object].storage != SC_LOCAL ||
+            !mir_long_subtraction_word_type(
+                mir.objects[object].type) ||
+            mir.objects[object].is_register)
+            return mir_machine_reject(
+                "long-subtraction-runner", "objects");
+    if (!mir_long_subtraction_match_roots(plan))
+        return mir_machine_reject(
+            "long-subtraction-runner", "roots");
+    if (!mir_long_subtraction_match_graph())
+        return mir_machine_reject(
+            "long-subtraction-runner", "graph");
+    if (!mir_long_subtraction_match_constants(plan))
+        return mir_machine_reject(
+            "long-subtraction-runner", "constants");
+    if (!mir_long_subtraction_match_calls(plan))
+        return mir_machine_reject(
+            "long-subtraction-runner", "calls");
+    return 1;
+}
+
 static int mir_match_promotion_call_runner(
     struct MirPromotionCallRunner *plan)
 {
@@ -13729,6 +14477,346 @@ static void mir_promotion_print(
     mir_emit_final_call_cleanup(out, words);
 }
 
+static void mir_long_subtraction_emit_wide_constant(
+    FILE *out, unsigned long value)
+{
+    fprintf(out, "\tld hl,%lu\n\tld de,%lu\n",
+            value & 0xffffUL, (value >> 16) & 0xffffUL);
+}
+
+static void mir_long_subtraction_emit_local_load(
+    FILE *out, int index)
+{
+    mir_machine_emit_ix_wide_load(out, -16 + index * 4);
+}
+
+static void mir_long_subtraction_emit_local_store(
+    FILE *out, int index, unsigned long value)
+{
+    mir_long_subtraction_emit_wide_constant(out, value);
+    mir_machine_emit_ix_wide_store(out, -16 + index * 4);
+}
+
+static const char *mir_long_subtraction_symbol_name(
+    struct Sym *symbol)
+{
+    return asm_name_for(sym_asm_name(symbol));
+}
+
+static void mir_long_subtraction_emit_global_load(
+    FILE *out, const struct MirLongSubtractionRunner *plan,
+    int index)
+{
+    const char *name =
+        mir_long_subtraction_symbol_name(plan->global_array);
+    int offset = index * 4;
+
+    if (offset == 0)
+        fprintf(out, "\tld hl,(%s)\n\tld de,(%s+2)\n",
+                name, name);
+    else
+        fprintf(out,
+                "\tld hl,(%s+%d)\n\tld de,(%s+%d)\n",
+                name, offset, name, offset + 2);
+}
+
+static void mir_long_subtraction_emit_global_store(
+    FILE *out, const struct MirLongSubtractionRunner *plan,
+    int index, unsigned long value)
+{
+    const char *name =
+        mir_long_subtraction_symbol_name(plan->global_array);
+    int offset = index * 4;
+
+    fprintf(out, "\tld hl,%lu\n",
+            value & 0xffffUL);
+    if (offset == 0)
+        fprintf(out, "\tld (%s),hl\n", name);
+    else
+        fprintf(out, "\tld (%s+%d),hl\n", name, offset);
+    fprintf(out, "\tld hl,%lu\n",
+            (value >> 16) & 0xffffUL);
+    if (offset == 0)
+        fprintf(out, "\tld (%s+2),hl\n", name);
+    else
+        fprintf(out, "\tld (%s+%d),hl\n",
+                name, offset + 2);
+}
+
+static void mir_long_subtraction_emit_add(
+    FILE *out, unsigned long value)
+{
+    fprintf(out,
+            "\tld bc,%lu\n\tadd hl,bc\n"
+            "\tex de,hl\n\tld bc,%lu\n"
+            "\tadc hl,bc\n\tex de,hl\n",
+            value & 0xffffUL, (value >> 16) & 0xffffUL);
+}
+
+static void mir_long_subtraction_cleanup_wide_call(
+    FILE *out)
+{
+    fputs("\tex de,hl\n\tld hl,8\n\tadd hl,sp\n"
+          "\tld sp,hl\n\tex de,hl\n", out);
+}
+
+static const char *mir_long_subtraction_compare_name(
+    int operation)
+{
+    switch (operation) {
+    case '<': return "__lts";
+    case '>': return "__lgs";
+    case TOK_LE: return "__les";
+    case TOK_GE: return "__lks";
+    default: fatal("invalid long subtraction comparison");
+    }
+    return "__lts";
+}
+
+static void mir_long_subtraction_emit_load(
+    FILE *out, const struct MirLongSubtractionRunner *plan,
+    int global, int index)
+{
+    if (global)
+        mir_long_subtraction_emit_global_load(
+            out, plan, index);
+    else
+        mir_long_subtraction_emit_local_load(out, index);
+}
+
+static void mir_long_subtraction_finish_check(
+    FILE *out, const struct MirLongSubtractionRunner *plan,
+    int check)
+{
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->check_strings[check]);
+    mir_machine_emit_symbol_call(out, plan->check_function);
+    mir_emit_final_call_cleanup(out, 3);
+}
+
+static void mir_long_subtraction_emit_direct_check(
+    FILE *out, const struct MirLongSubtractionRunner *plan,
+    int check, int global, int left, int right,
+    int operation, int addend)
+{
+    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+            plan->check_wants[check]);
+    mir_long_subtraction_emit_load(
+        out, plan, global, left);
+    if (addend >= 0)
+        mir_long_subtraction_emit_add(
+            out, plan->direct_addends[addend]);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_long_subtraction_emit_load(
+        out, plan, global, right);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_runtime_call(
+        out, mir_long_subtraction_compare_name(operation));
+    mir_long_subtraction_cleanup_wide_call(out);
+    mir_long_subtraction_finish_check(out, plan, check);
+}
+
+static void mir_long_subtraction_emit_counter_check(
+    FILE *out, const struct MirLongSubtractionRunner *plan,
+    int check, int boolean)
+{
+    int done = new_label();
+
+    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+            plan->check_wants[check]);
+    fputs("\tld l,(ix-18)\n\tld h,(ix-17)\n", out);
+    if (boolean) {
+        fputs("\tld a,h\n\tor l\n\tld hl,0\n", out);
+        fprintf(out, "\tjp z,L%d\n\tinc hl\nL%d:\n",
+                done, done);
+    }
+    mir_long_subtraction_finish_check(out, plan, check);
+}
+
+static void mir_long_subtraction_emit_helper_check(
+    FILE *out, const struct MirLongSubtractionRunner *plan,
+    int check, int left, int right, int add)
+{
+    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+            plan->check_wants[check]);
+    mir_long_subtraction_emit_local_load(out, right);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_long_subtraction_emit_local_load(out, left);
+    if (add)
+        mir_long_subtraction_emit_add(
+            out, plan->helper_addend);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->helper_function);
+    mir_long_subtraction_cleanup_wide_call(out);
+    mir_long_subtraction_finish_check(out, plan, check);
+}
+
+static void mir_long_subtraction_emit_condition(
+    FILE *out, int left, int right,
+    unsigned long addend, int has_addend)
+{
+    mir_long_subtraction_emit_local_load(out, left);
+    if (has_addend)
+        mir_long_subtraction_emit_add(out, addend);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_long_subtraction_emit_local_load(out, right);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_emit_runtime_call(out, "__lts");
+    mir_long_subtraction_cleanup_wide_call(out);
+}
+
+static void mir_emit_long_subtraction_runner(
+    FILE *out, const struct MirLongSubtractionRunner *plan)
+{
+    static const struct {
+        unsigned char global;
+        unsigned char left;
+        unsigned char right;
+        int operation;
+        signed char addend;
+    } direct[MIR_LONG_SUBTRACTION_DIRECT_COUNT] = {
+        {0, 0, 1, '<', -1}, {0, 1, 0, '<', -1},
+        {0, 1, 0, '>', -1}, {0, 0, 1, '>', -1},
+        {0, 0, 1, TOK_LE, -1}, {0, 0, 0, TOK_LE, -1},
+        {0, 1, 0, TOK_GE, -1}, {0, 0, 1, TOK_GE, -1},
+        {0, 2, 0, '<', -1}, {0, 1, 3, '<', -1},
+        {0, 0, 1, '<', 0}, {0, 0, 1, '>', 1},
+        {0, 1, 0, '<', 2}, {0, 0, 1, TOK_LE, 3},
+        {0, 0, 1, TOK_GE, 4}, {0, 0, 1, '<', -1},
+        {0, 1, 0, '<', -1}, {0, 0, 1, '<', 5},
+        {1, 0, 1, '<', -1}, {1, 0, 1, '<', 6}
+    };
+    int while_loop = new_label();
+    int while_done = new_label();
+    int for_loop = new_label();
+    int for_done = new_label();
+    int success = new_label();
+    int finish = new_label();
+    int check;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-18\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+
+    for (check = 0; check < 4; ++check)
+        mir_long_subtraction_emit_local_store(
+            out, check, plan->initial_values[check]);
+    for (check = 0; check < 10; ++check)
+        mir_long_subtraction_emit_direct_check(
+            out, plan, check, direct[check].global,
+            direct[check].left, direct[check].right,
+            direct[check].operation, direct[check].addend);
+
+    for (check = 0; check < 2; ++check)
+        mir_long_subtraction_emit_local_store(
+            out, check, plan->addition_values[check]);
+    for (check = 10; check < 15; ++check)
+        mir_long_subtraction_emit_direct_check(
+            out, plan, check, direct[check].global,
+            direct[check].left, direct[check].right,
+            direct[check].operation, direct[check].addend);
+
+    for (check = 0; check < 2; ++check)
+        mir_long_subtraction_emit_local_store(
+            out, check, plan->pointer_values[check]);
+    for (check = 15; check < 18; ++check)
+        mir_long_subtraction_emit_direct_check(
+            out, plan, check, direct[check].global,
+            direct[check].left, direct[check].right,
+            direct[check].operation, direct[check].addend);
+
+    for (check = 0; check < 2; ++check)
+        mir_long_subtraction_emit_global_store(
+            out, plan, check, plan->global_values[check]);
+    for (check = 18; check < 20; ++check)
+        mir_long_subtraction_emit_direct_check(
+            out, plan, check, direct[check].global,
+            direct[check].left, direct[check].right,
+            direct[check].operation, direct[check].addend);
+
+    for (check = 0; check < 2; ++check)
+        mir_long_subtraction_emit_local_store(
+            out, check, plan->while_values[check]);
+    fputs("\tld hl,0\n\tld (ix-18),l\n"
+          "\tld (ix-17),h\n", out);
+    fprintf(out, "L%d:\n", while_loop);
+    mir_long_subtraction_emit_condition(
+        out, 0, 1,
+        plan->while_condition_addend, 1);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", while_done);
+    fputs("\tld l,(ix-18)\n\tld h,(ix-17)\n\tinc hl\n"
+          "\tld (ix-18),l\n\tld (ix-17),h\n", out);
+    mir_long_subtraction_emit_local_load(out, 0);
+    mir_long_subtraction_emit_add(out, plan->while_step);
+    mir_machine_emit_ix_wide_store(out, -16);
+    fprintf(out,
+            "\tld l,(ix-18)\n\tld h,(ix-17)\n"
+            "\tld de,%d\n\tor a\n\tsbc hl,de\n"
+            "\tjp nc,L%d\n\tjp L%d\nL%d:\n",
+            plan->while_limit + 1, while_done,
+            while_loop, while_done);
+    mir_long_subtraction_emit_counter_check(
+        out, plan, 20, 1);
+    mir_long_subtraction_emit_counter_check(
+        out, plan, 21, 0);
+
+    for (check = 0; check < 2; ++check)
+        mir_long_subtraction_emit_local_store(
+            out, check, plan->for_values[check]);
+    fputs("\tld hl,0\n\tld (ix-18),l\n"
+          "\tld (ix-17),h\n", out);
+    fprintf(out, "L%d:\n", for_loop);
+    mir_long_subtraction_emit_condition(
+        out, 1, 0, 0, 0);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", for_done);
+    mir_long_subtraction_emit_local_load(out, 1);
+    mir_long_subtraction_emit_add(out, plan->for_step);
+    mir_machine_emit_ix_wide_store(out, -12);
+    fprintf(out,
+            "\tld l,(ix-18)\n\tld h,(ix-17)\n"
+            "\tld de,%d\n\tor a\n\tsbc hl,de\n"
+            "\tjp nc,L%d\n"
+            "\tld l,(ix-18)\n\tld h,(ix-17)\n"
+            "\tinc hl\n\tld (ix-18),l\n"
+            "\tld (ix-17),h\n\tjp L%d\nL%d:\n",
+            plan->for_limit + 1, for_done,
+            for_loop, for_done);
+    mir_long_subtraction_emit_counter_check(
+        out, plan, 22, 1);
+
+    for (check = 0; check < 2; ++check)
+        mir_long_subtraction_emit_local_store(
+            out, check, plan->helper_values[check]);
+    mir_long_subtraction_emit_helper_check(
+        out, plan, 23, 0, 1, 0);
+    mir_long_subtraction_emit_helper_check(
+        out, plan, 24, 1, 0, 0);
+    mir_long_subtraction_emit_helper_check(
+        out, plan, 25, 0, 1, 1);
+
+    mir_machine_emit_global_word(
+        out, plan->failures, 0);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n\tpush hl\n"
+                 "\tld hl,S%d\n\tpush hl\n",
+            success, plan->failure_string);
+    mir_emit_runtime_call(out, plan->print_names[1]);
+    mir_emit_final_call_cleanup(out, 2);
+    fprintf(out, "\tjp L%d\nL%d:\n"
+                 "\tld hl,S%d\n\tpush hl\n",
+            finish, success, plan->success_string);
+    mir_emit_runtime_call(out, plan->print_names[0]);
+    mir_emit_final_call_cleanup(out, 1);
+    fprintf(out, "L%d:\n", finish);
+    mir_machine_emit_global_word(
+        out, plan->failures, 0);
+    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_emit_promotion_call_runner(
     FILE *out, const struct MirPromotionCallRunner *plan)
 {
@@ -13769,6 +14857,7 @@ static void mir_emit_promotion_call_runner(
 int mir_try_emit_call_runners(FILE *out, int phase)
 {
     if (phase == 0) {
+        struct MirLongSubtractionRunner long_subtraction_plan;
         struct MirPromotionCallRunner promotion_plan;
         struct MirReadValidateRunner read_validate_plan;
         struct MirBufferedConsoleRunner buffered_console_plan;
@@ -13789,6 +14878,12 @@ int mir_try_emit_call_runners(FILE *out, int phase)
         struct MirCastLogicalRunner cast_logical_plan;
         struct MirFixedCallCheckRunner plan;
 
+        if (mir_match_long_subtraction_runner(
+                &long_subtraction_plan)) {
+            mir_emit_long_subtraction_runner(
+                out, &long_subtraction_plan);
+            return 1;
+        }
         if (mir_match_promotion_call_runner(
                 &promotion_plan)) {
             mir_emit_promotion_call_runner(
