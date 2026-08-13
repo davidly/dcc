@@ -123,6 +123,18 @@ struct MirByteEqualityRunner {
     int argc_stack_offset;
 };
 
+struct MirGnarlyRunner {
+    struct Sym *hello_function;
+    struct Sym *duff_function;
+    struct Sym *structure_function;
+    struct Sym *implicit_function;
+    struct Sym *indirect_function;
+    struct Sym *sum_function;
+    struct Sym *print_function;
+    int strings[35];
+    char print_names[32][64];
+};
+
 static int mir_machine_constant_value(
     int value, long *constant_out, int depth)
 {
@@ -3511,6 +3523,907 @@ static void mir_emit_byte_equality_runner(
             return_nonzero, return_done);
 }
 
+static int mir_gnarly_opcode_code(int opcode)
+{
+    switch (opcode) {
+    case MIR_LABEL: return 'L';
+    case MIR_NOP: return 'N';
+    case MIR_CONST: return 'C';
+    case MIR_STORE: return 'S';
+    case MIR_PHI: return 'P';
+    case MIR_BINARY: return 'B';
+    case MIR_BRANCH_FALSE: return 'F';
+    case MIR_ADDRESS: return 'A';
+    case MIR_INDEX_ADDRESS: return 'I';
+    case MIR_MEMBER_ADDRESS: return 'M';
+    case MIR_LOAD_INDIRECT: return 'R';
+    case MIR_STORE_INDIRECT: return 'W';
+    case MIR_LOAD: return 'D';
+    case MIR_STRING_ADDRESS: return 'T';
+    case MIR_ARG: return 'G';
+    case MIR_CALL: return 'K';
+    case MIR_UNARY: return 'U';
+    case MIR_JUMP: return 'J';
+    case MIR_RETURN: return 'E';
+    default: return 0;
+    }
+}
+
+static int mir_gnarly_word_type(int type, int is_unsigned)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == TYPE_INT &&
+           ((type & TYPE_UNSIGNED) != 0) == is_unsigned &&
+           type_size(type) == 2;
+}
+
+static int mir_gnarly_char_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == TYPE_CHAR &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 1;
+}
+
+static int mir_gnarly_string_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & 15) == TYPE_CHAR &&
+           type_size(type) == 2;
+}
+
+static int mir_gnarly_value_from(int value, int instruction)
+{
+    return value >= 0 &&
+           mir.insns[instruction].dst == value;
+}
+
+static int mir_gnarly_binary(
+    int instruction, int left, int right, int operation)
+{
+    const struct MirInsn *binary = &mir.insns[instruction];
+
+    return binary->opcode == MIR_BINARY &&
+           mir_gnarly_value_from(binary->src1, left) &&
+           mir_gnarly_value_from(binary->src2, right) &&
+           binary->immediate == operation;
+}
+
+static int mir_gnarly_branch(
+    int instruction, int value, int target)
+{
+    return mir.insns[instruction].opcode == MIR_BRANCH_FALSE &&
+           mir_gnarly_value_from(mir.insns[instruction].src1, value) &&
+           mir.insns[instruction].label == mir.insns[target].label;
+}
+
+static int mir_gnarly_phi(
+    int instruction, int left, int right,
+    int left_label, int right_label)
+{
+    const struct MirInsn *phi = &mir.insns[instruction];
+
+    return phi->opcode == MIR_PHI &&
+           mir_gnarly_value_from(phi->src1, left) &&
+           mir_gnarly_value_from(phi->src2, right) &&
+           phi->phi_pred1 == mir.insns[left_label].label &&
+           phi->phi_pred2 == mir.insns[right_label].label;
+}
+
+static struct Sym *mir_gnarly_direct_function(
+    int instruction, int argument_count, int is_void)
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    struct Sym *function;
+    const char *assembly_name;
+
+    if (call->opcode != MIR_CALL || call->src1 >= 0 ||
+        call->memory_flags != 0 ||
+        (function = find_global(call->name)) == NULL ||
+        function->storage != SC_FUNC || !function->is_defined ||
+        function->is_funcptr || function->is_noreturn ||
+        ((call->type & 15) == TYPE_VOID) != is_void ||
+        (is_void ? type_ptr_depth(call->type) != 0 :
+         !mir_gnarly_word_type(call->type, 0)))
+        return NULL;
+    assembly_name = asm_name_for(sym_asm_name(function));
+    if (call->base_name[0] != 0 &&
+        strcmp(call->base_name, assembly_name))
+        return NULL;
+    if (argument_count == 0) {
+        int instruction_index;
+
+        for (instruction_index = 0;
+             instruction_index < mir.count; ++instruction_index)
+            if (mir.insns[instruction_index].opcode == MIR_ARG &&
+                mir.insns[instruction_index].secondary_offset ==
+                    call->secondary_offset)
+                return NULL;
+    }
+    return function;
+}
+
+static int mir_gnarly_print_call(
+    struct MirGnarlyRunner *plan, int slot, int instruction,
+    int call_id, int argument_count, const int *definitions)
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    struct Sym *function;
+    int arguments[5];
+    int item;
+
+    if (slot < 0 || slot >= 32 || argument_count < 1 ||
+        argument_count > 5 ||
+        call->opcode != MIR_CALL || call->src1 >= 0 ||
+        call->secondary_offset != call_id ||
+        call->memory_flags != MIR_CALL_FLAG_VARIADIC ||
+        !mir_gnarly_word_type(call->type, 0) ||
+        call->base_name[0] == 0 ||
+        !mir_machine_call_arguments(
+            call, argument_count, arguments) ||
+        (function = find_global(call->name)) == NULL ||
+        function->storage != SC_FUNC || function->is_defined ||
+        function->is_funcptr || function->is_noreturn ||
+        !function->has_proto || function->proto_nargs != 1 ||
+        !function->proto_variadic ||
+        !mir_gnarly_string_type(function->proto_types[0]) ||
+        !mir_gnarly_word_type(function->type, 0) ||
+        (plan->print_function != NULL &&
+         plan->print_function != function))
+        return 0;
+    for (item = 0; item < argument_count; ++item)
+        if (!mir_gnarly_value_from(
+                arguments[item], definitions[item]))
+            return 0;
+    plan->print_function = function;
+    snprintf(plan->print_names[slot],
+             sizeof(plan->print_names[slot]), "%s",
+             call->base_name);
+    return 1;
+}
+
+static int mir_match_gnarly_runner(struct MirGnarlyRunner *plan)
+{
+    static const char expected_opcodes[] =
+        "LCSCNSKCNSLNNPNCBFANINCBWLNCBSJLCNSLNNPNCBFANICWLNCBSJLAGAGCGKTGACIRGACIRGKKTGNU"
+        "GNGKTGKGKCNSNCNSTGNGKCNSCNSNCBSNBNSTGNGKTGNGKTCIRNSTGNGKACICWACICWACICWACICWACIC"
+        "WACIRNSTGNGKAKTNSTGDGKCNSCNSNCBSNCBSBNSTGNGNGNGKCNSCNSTGNNBGNNBGNNBGKTGACCBBRGAC"
+        "IRGKCNSTGACNSNCBIRGKCNSANCBNSICWTGNGACIRGKANSDKTGTGKCNSTGNCGNGKTGCNGNCGKTGCGCGKG"
+        "KTGNCGNCGKNAMCWAMCWANSTGAMRGAMRGKNNNNNCSNCSTGCFDLJLDLLPGKNNANSTGDNCIRGKNCNSTNIRN"
+        "STGNGKTRNSTGNGKTCIRUSTGNGKCNSNSNSTGNGNGNGKCNSCNSCNSLNNNPPPNNNNNBFNNNBBNSLNCBSNCB"
+        "SJLTGNGKTGNCGKNCNSNCBFCLJLNCBFNCLJLCLLPLLPNSTGNGKTGCGCGCGCGKNCSNUNSTGNGKNNCNSTGN"
+        "GKCE";
+    static const int constant_instructions[82] = {
+        1, 3, 7, 15, 22, 27, 32, 40, 46, 50, 59, 65, 70, 89,
+        93, 101, 104, 108, 126, 137, 139, 142, 144, 147, 149,
+        152, 154, 157, 159, 162, 182, 185, 189, 193, 208, 211,
+        232, 233, 239, 244, 250, 254, 260, 265, 270, 277, 292,
+        298, 305, 309, 314, 316, 324, 327, 333, 337, 358, 361,
+        365, 386, 392, 416, 426, 442, 445, 448, 474, 478, 491,
+        495, 499, 502, 507, 511, 515, 531, 533, 535, 537, 541,
+        554, 562
+    };
+    static const int constant_values[82] = {
+        10, 2, 0, 5, 1, 1, 0, 5, 0, 1, 5, 0, 4, 10, 5, 20,
+        30, 1, 0, 0, 10, 1, 20, 2, 30, 3, 40, 4, 50, 2, 1, 2,
+        1, 1, 6, 3, 3, 2, 3, 0, 1, 2, 1, 2, 99, 3, 5, 2, 65,
+        2, 7, 8, 10, 2, 42, 120, -1, 1, 0, 4, 2, 0, 5, 0, 0,
+        9, 1, 1, 6, 65533, 0, 1, 0, 65535, 0, 255, 127, 65, 65,
+        65, 65520, 0
+    };
+    static const int binary_instructions[24] = {
+        16, 23, 28, 41, 51, 109, 112, 190, 194, 196, 218, 222,
+        226, 234, 235, 255, 266, 463, 468, 469, 475, 479, 500, 508
+    };
+    static const int binary_lefts[24] = {
+        13, 13, 13, 38, 38, 101, 101, 182, 185, 182, 208, 208,
+        208, 232, 231, 250, 260, 455, 455, 457, 455, 456, 495, 495
+    };
+    static const int binary_rights[24] = {
+        15, 22, 27, 40, 50, 108, 104, 189, 193, 194, 211, 211,
+        211, 233, 234, 254, 265, 456, 456, 468, 474, 478, 499, 507
+    };
+    static const int binary_operations[24] = {
+        '<', '+', '+', '<', '+', '+', '+', '-', '-', '-', '&', '|',
+        '^', '*', '+', '+', '+', '<', '+', '+', '+', '-', '>', '<'
+    };
+    static const int string_instructions[35] = {
+        342, 363, 382, 62, 76, 84, 96, 115, 120, 125, 131, 174,
+        177, 199, 214, 229, 247, 272, 287, 289, 295, 303, 312,
+        321, 395, 401, 410, 421, 433, 483, 488, 524, 529, 547, 557
+    };
+    static const int print_calls[32] = {
+        74, 83, 88, 100, 119, 124, 135, 171, 181, 207, 228, 243,
+        259, 281, 291, 302, 311, 320, 329, 352, 376, 390, 405,
+        414, 425, 441, 487, 493, 528, 539, 551, 561
+    };
+    static const int print_call_ids[32] = {
+        2, 4, 5, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17, 18, 20,
+        21, 22, 23, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35,
+        36, 37, 38
+    };
+    static const unsigned char print_argument_counts[32] = {
+        3, 3, 2, 2, 2, 2, 2, 2, 2, 4, 4, 3, 2, 3, 2, 3,
+        3, 2, 3, 3, 2, 2, 2, 2, 2, 4, 2, 2, 2, 5, 2, 2
+    };
+    static const int print_arguments[32][5] = {
+        {62, 67, 72, -1, -1}, {76, 79, 1, -1, -1},
+        {84, 86, -1, -1, -1}, {96, 93, -1, -1, -1},
+        {115, 112, -1, -1, -1}, {120, 109, -1, -1, -1},
+        {131, 128, -1, -1, -1}, {167, 164, -1, -1, -1},
+        {177, 179, -1, -1, -1}, {199, 196, 190, 194, -1},
+        {214, 218, 222, 226, -1}, {229, 236, 241, -1, -1},
+        {247, 257, -1, -1, -1}, {272, 266, 279, -1, -1},
+        {287, 289, -1, -1, -1}, {295, 298, 292, -1, -1},
+        {303, 305, 309, -1, -1}, {312, 318, -1, -1, -1},
+        {321, 324, 327, -1, -1}, {342, 346, 350, -1, -1},
+        {363, 374, -1, -1, -1}, {382, 388, -1, -1, -1},
+        {401, 398, -1, -1, -1}, {410, 407, -1, -1, -1},
+        {421, 419, -1, -1, -1}, {433, 426, 426, 426, -1},
+        {483, 457, -1, -1, -1}, {488, 491, -1, -1, -1},
+        {524, 521, -1, -1, -1}, {529, 531, 533, 535, 537},
+        {547, 544, -1, -1, -1}, {557, 554, -1, -1, -1}
+    };
+    static const int arr_addresses[12] = {
+        136, 141, 146, 151, 156, 161, 231,
+        238, 249, 263, 276, 379
+    };
+    static const int arr_indices[11] = {
+        138, 143, 148, 153, 158, 163,
+        240, 256, 269, 278, 387
+    };
+    static const int arr_index_values[11] = {
+        137, 142, 147, 152, 157, 162,
+        239, 255, 266, 277, 386
+    };
+    int call_count = 0;
+    int instruction;
+    int item;
+    int previous;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 564 || mir_cfg_block_count() != 22 ||
+        mir.has_vla || mir.local_bytes != 68 ||
+        mir.object_count != 9 ||
+        !mir_gnarly_word_type(mir.return_type, 0) ||
+        strlen(expected_opcodes) != (size_t)mir.count)
+        return mir_machine_reject(
+            "gnarly-call-runner", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        if (mir_gnarly_opcode_code(
+                mir.insns[instruction].opcode) !=
+                expected_opcodes[instruction])
+            return mir_machine_reject(
+                "gnarly-call-runner", "opcode");
+        if (mir.insns[instruction].opcode == MIR_CALL)
+            ++call_count;
+    }
+    if (call_count != 39)
+        return mir_machine_reject(
+            "gnarly-call-runner", "call-count");
+    for (item = 0; item < 82; ++item)
+        if (!mir_machine_constant_equals(
+                mir.insns[constant_instructions[item]].dst,
+                constant_values[item]))
+            return mir_machine_reject(
+                "gnarly-call-runner", "constants");
+    for (item = 0; item < 24; ++item)
+        if (!mir_gnarly_binary(
+                binary_instructions[item],
+                binary_lefts[item], binary_rights[item],
+                binary_operations[item]))
+            return mir_machine_reject(
+                "gnarly-call-runner", "operations");
+
+    if (!mir_gnarly_phi(13, 7, 28, 0, 25) ||
+        !mir_gnarly_phi(38, 32, 51, 31, 48) ||
+        !mir_gnarly_phi(374, 367, 371, 368, 372) ||
+        !mir_gnarly_phi(455, 445, 475, 373, 472) ||
+        !mir_gnarly_phi(456, 448, 479, 373, 472) ||
+        !mir_gnarly_phi(457, 442, 469, 373, 472) ||
+        !mir_gnarly_phi(518, 511, 515, 512, 516) ||
+        !mir_gnarly_phi(521, 502, 518, 503, 519) ||
+        !mir_gnarly_branch(17, 16, 31) ||
+        !mir_gnarly_branch(42, 41, 54) ||
+        !mir_gnarly_branch(366, 365, 370) ||
+        !mir_gnarly_branch(464, 463, 482) ||
+        !mir_gnarly_branch(501, 500, 505) ||
+        !mir_gnarly_branch(509, 508, 514) ||
+        mir.insns[30].label != mir.insns[10].label ||
+        mir.insns[53].label != mir.insns[35].label ||
+        mir.insns[369].label != mir.insns[373].label ||
+        mir.insns[481].label != mir.insns[451].label ||
+        mir.insns[504].label != mir.insns[520].label ||
+        mir.insns[513].label != mir.insns[517].label)
+        return mir_machine_reject(
+            "gnarly-call-runner", "control-flow");
+
+    if (mir.insns[79].src1 != mir.insns[3].dst ||
+        mir.insns[79].immediate != 0 ||
+        type_ptr_depth(mir.insns[79].type) != 0 ||
+        (mir.insns[79].type & 15) != TYPE_LONG ||
+        (mir.insns[79].type & TYPE_UNSIGNED) == 0 ||
+        type_size(mir.insns[79].type) != 4 ||
+        mir.insns[419].src1 != mir.insns[418].dst ||
+        mir.insns[419].immediate != 0 ||
+        !mir_gnarly_char_type(mir.insns[419].type) ||
+        mir.insns[544].src1 != mir.insns[541].dst ||
+        mir.insns[544].immediate != '+' ||
+        !mir_gnarly_word_type(mir.insns[544].type, 0))
+        return mir_machine_reject(
+            "gnarly-call-runner", "conversions");
+
+    for (item = 0; item < 35; ++item) {
+        const struct MirInsn *string =
+            &mir.insns[string_instructions[item]];
+
+        if (!mir_gnarly_string_type(string->type) ||
+            string->immediate < 0)
+            return mir_machine_reject(
+                "gnarly-call-runner", "strings");
+        plan->strings[item] = (int)string->immediate;
+        for (previous = 0; previous < item; ++previous)
+            if (plan->strings[item] == plan->strings[previous])
+                return mir_machine_reject(
+                    "gnarly-call-runner", "distinct-strings");
+    }
+    if (mir.insns[167].immediate != plan->strings[6] ||
+        mir.insns[406].immediate != plan->strings[24] ||
+        mir.insns[415].immediate != plan->strings[24])
+        return mir_machine_reject(
+            "gnarly-call-runner", "reused-strings");
+    for (item = 0; item < 32; ++item)
+        if (!mir_gnarly_print_call(
+                plan, item, print_calls[item],
+                print_call_ids[item],
+                print_argument_counts[item],
+                print_arguments[item]))
+            return mir_machine_reject(
+                "gnarly-call-runner", "print-calls");
+
+    plan->hello_function =
+        mir_gnarly_direct_function(6, 0, 0);
+    plan->duff_function =
+        mir_gnarly_direct_function(61, 3, 1);
+    plan->structure_function =
+        mir_gnarly_direct_function(75, 0, 0);
+    plan->implicit_function =
+        mir_gnarly_direct_function(86, 0, 0);
+    plan->sum_function =
+        mir_gnarly_direct_function(318, 2, 0);
+    if (plan->hello_function == NULL ||
+        plan->duff_function == NULL ||
+        plan->structure_function == NULL ||
+        plan->implicit_function == NULL ||
+        plan->sum_function == NULL ||
+        plan->hello_function == plan->duff_function ||
+        plan->hello_function == plan->structure_function ||
+        plan->hello_function == plan->implicit_function ||
+        plan->hello_function == plan->sum_function ||
+        plan->duff_function == plan->structure_function ||
+        plan->duff_function == plan->implicit_function ||
+        plan->duff_function == plan->sum_function ||
+        plan->structure_function == plan->implicit_function ||
+        plan->structure_function == plan->sum_function ||
+        plan->implicit_function == plan->sum_function)
+        return mir_machine_reject(
+            "gnarly-call-runner", "direct-functions");
+    {
+        int arguments[3];
+
+        if (!mir_machine_call_arguments(
+                &mir.insns[61], 3, arguments) ||
+            !mir_gnarly_value_from(arguments[0], 55) ||
+            !mir_gnarly_value_from(arguments[1], 57) ||
+            !mir_gnarly_value_from(arguments[2], 59) ||
+            !mir_machine_call_arguments(
+                &mir.insns[318], 2, arguments) ||
+            !mir_gnarly_value_from(arguments[0], 314) ||
+            !mir_gnarly_value_from(arguments[1], 316))
+            return mir_machine_reject(
+                "gnarly-call-runner", "direct-arguments");
+    }
+
+    plan->indirect_function =
+        find_global(mir.insns[172].name);
+    if (plan->indirect_function == NULL ||
+        plan->indirect_function->storage != SC_FUNC ||
+        !plan->indirect_function->is_defined ||
+        plan->indirect_function->is_funcptr ||
+        plan->indirect_function->is_noreturn ||
+        plan->indirect_function == plan->hello_function ||
+        plan->indirect_function == plan->duff_function ||
+        plan->indirect_function == plan->structure_function ||
+        plan->indirect_function == plan->implicit_function ||
+        plan->indirect_function == plan->sum_function ||
+        !mir_gnarly_value_from(mir.insns[173].src1, 172) ||
+        (mir.insns[173].type & 15) != TYPE_VOID ||
+        find_global(mir.insns[282].name) !=
+            plan->indirect_function ||
+        !mir_gnarly_value_from(mir.insns[284].src1, 282) ||
+        !mir_machine_same_location(
+            &mir.insns[284], &mir.insns[285]) ||
+        !mir_gnarly_value_from(mir.insns[286].src1, 285) ||
+        (mir.insns[286].type & 15) != TYPE_VOID)
+        return mir_machine_reject(
+            "gnarly-call-runner", "indirect-calls");
+
+    if (!mir_machine_same_location(
+            &mir.insns[18], &mir.insns[57]) ||
+        !mir_machine_same_location(
+            &mir.insns[43], &mir.insns[55]) ||
+        !mir_machine_same_location(
+            &mir.insns[43], &mir.insns[64]) ||
+        !mir_machine_same_location(
+            &mir.insns[43], &mir.insns[69]) ||
+        mir_machine_same_location(
+            &mir.insns[18], &mir.insns[43]))
+        return mir_machine_reject(
+            "gnarly-call-runner", "duff-arrays");
+    for (item = 1; item < 12; ++item)
+        if (!mir_machine_same_location(
+                &mir.insns[arr_addresses[0]],
+                &mir.insns[arr_addresses[item]]))
+            return mir_machine_reject(
+                "gnarly-call-runner", "main-array");
+    if (mir_machine_same_location(
+            &mir.insns[arr_addresses[0]], &mir.insns[18]))
+        return mir_machine_reject(
+            "gnarly-call-runner", "distinct-arrays");
+    for (item = 0; item < 11; ++item) {
+        const struct MirInsn *index =
+            &mir.insns[arr_indices[item]];
+
+        if (index->memory_size != 2 ||
+            index->immediate != 2 ||
+            !mir_gnarly_value_from(
+                index->src2, arr_index_values[item]))
+            return mir_machine_reject(
+                "gnarly-call-runner", "array-indices");
+    }
+    if (!mir_machine_same_location(
+            &mir.insns[331], &mir.insns[339]) ||
+        !mir_machine_same_location(
+            &mir.insns[340], &mir.insns[344]) ||
+        mir_machine_same_location(
+            &mir.insns[331], &mir.insns[340]) ||
+        mir.insns[332].src1 != mir.insns[331].dst ||
+        mir.insns[332].immediate != 0 ||
+        mir.insns[332].memory_size != 2 ||
+        mir.insns[336].src1 != mir.insns[335].dst ||
+        mir.insns[336].immediate != 2 ||
+        mir.insns[336].memory_size != 1 ||
+        mir.insns[341].src1 != mir.insns[339].dst ||
+        mir.insns[345].src1 != mir.insns[344].dst ||
+        mir.insns[345].immediate != 0 ||
+        mir.insns[349].src1 != mir.insns[348].dst ||
+        mir.insns[349].immediate != 2)
+        return mir_machine_reject(
+            "gnarly-call-runner", "structure-copy");
+
+    if (mir.insns[2].object != 0 ||
+        mir.insns[5].object != 1 ||
+        mir.insns[9].object != 2 ||
+        mir.insns[91].object != 3 ||
+        mir.insns[106].object != 4 ||
+        mir.insns[114].object != 5 ||
+        mir.insns[130].object != 6 ||
+        mir.insns[210].object != 7 ||
+        mir.insns[213].object != 8 ||
+        mir.insns[563].src1 != mir.insns[562].dst)
+        return mir_machine_reject(
+            "gnarly-call-runner", "objects-return");
+    return 1;
+}
+
+static void mir_gnarly_cleanup(FILE *out, int words)
+{
+    while (words-- > 0)
+        fputs("\tpop bc\n", out);
+}
+
+static void mir_gnarly_ix_address(FILE *out, int offset)
+{
+    fprintf(out,
+            "\tpush ix\n\tpop hl\n\tld de,%d\n\tadd hl,de\n",
+            offset);
+}
+
+static void mir_gnarly_store_word(
+    FILE *out, int offset, int value)
+{
+    fprintf(out,
+            "\tld hl,%d\n\tld (ix%d),l\n\tld (ix%d),h\n",
+            value, offset, offset + 1);
+}
+
+static void mir_gnarly_load_word(FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n",
+            offset, offset + 1);
+}
+
+static void mir_gnarly_push_word(
+    FILE *out, int value)
+{
+    fprintf(out, "\tld hl,%d\n\tpush hl\n", value);
+}
+
+static void mir_gnarly_push_string(
+    FILE *out, const struct MirGnarlyRunner *plan, int string)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[string]);
+}
+
+static void mir_gnarly_print(
+    FILE *out, const struct MirGnarlyRunner *plan,
+    int print_slot, int argument_words)
+{
+    mir_emit_runtime_call(out, plan->print_names[print_slot]);
+    mir_gnarly_cleanup(out, argument_words);
+}
+
+static void mir_gnarly_load_array_word(
+    FILE *out, int base_offset, int index)
+{
+    mir_gnarly_ix_address(out, base_offset + index * 2);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n",
+          out);
+}
+
+static void mir_gnarly_store_array_word(
+    FILE *out, int base_offset, int index, int value)
+{
+    mir_gnarly_ix_address(out, base_offset + index * 2);
+    fprintf(out,
+            "\tld de,%d\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+            value);
+}
+
+static void mir_gnarly_indirect_call(
+    FILE *out, struct Sym *function)
+{
+    fprintf(out, "\tld hl,%s\n",
+            asm_name_for(sym_asm_name(function)));
+    mir_emit_runtime_call(out, "__call_hl");
+}
+
+static void mir_emit_gnarly_runner(
+    FILE *out, const struct MirGnarlyRunner *plan)
+{
+    int source_loop = new_label();
+    int zero_loop = new_label();
+    int copy_loop = new_label();
+    int conditional_false = new_label();
+    int conditional_done = new_label();
+    int comma_loop = new_label();
+    int comma_done = new_label();
+    int ternary_negative = new_label();
+    int ternary_zero = new_label();
+    int ternary_done = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-20\n\tadd hl,sp\n\tld sp,hl\n", out);
+
+    mir_gnarly_store_word(out, -20, 10);
+    mir_gnarly_store_word(out, -18, 2);
+    mir_machine_emit_symbol_call(out, plan->hello_function);
+
+    mir_gnarly_ix_address(out, -10);
+    fputs("\tld de,1\n\tld b,5\n", out);
+    fprintf(out,
+            "L%d:\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n"
+            "\tinc hl\n\tinc de\n\tdjnz L%d\n",
+            source_loop, source_loop);
+    mir_gnarly_ix_address(out, -20);
+    fputs("\txor a\n\tld b,10\n", out);
+    fprintf(out,
+            "L%d:\n\tld (hl),a\n\tinc hl\n\tdjnz L%d\n",
+            zero_loop, zero_loop);
+
+    mir_gnarly_push_word(out, 5);
+    mir_gnarly_ix_address(out, -10);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_ix_address(out, -20);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->duff_function);
+    mir_gnarly_cleanup(out, 3);
+
+    mir_gnarly_load_array_word(out, -20, 4);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_load_array_word(out, -20, 0);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_push_string(out, plan, 3);
+    mir_gnarly_print(out, plan, 0, 3);
+
+    mir_machine_emit_symbol_call(out, plan->structure_function);
+    mir_gnarly_push_word(out, 10);
+    mir_gnarly_push_word(out, 0);
+    mir_gnarly_push_word(out, 2);
+    mir_gnarly_push_string(out, plan, 4);
+    mir_gnarly_print(out, plan, 1, 4);
+
+    mir_machine_emit_symbol_call(out, plan->implicit_function);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_push_string(out, plan, 5);
+    mir_gnarly_print(out, plan, 2, 2);
+
+    mir_gnarly_store_word(out, -20, 10);
+    mir_gnarly_store_word(out, -20, 5);
+    mir_gnarly_load_word(out, -20);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_push_string(out, plan, 6);
+    mir_gnarly_print(out, plan, 3, 2);
+
+    mir_gnarly_store_word(out, -20, 20);
+    mir_gnarly_store_word(out, -18, 30);
+    mir_gnarly_store_word(out, -20, 21);
+    mir_gnarly_store_word(out, -16, 50);
+    mir_gnarly_load_word(out, -16);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_push_string(out, plan, 7);
+    mir_gnarly_print(out, plan, 4, 2);
+    mir_gnarly_load_word(out, -20);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_push_string(out, plan, 8);
+    mir_gnarly_print(out, plan, 5, 2);
+
+    fprintf(out,
+            "\tld hl,S%d\n\tld a,(hl)\n\tld (ix-14),a\n"
+            "\tld l,a\n\trlca\n\tsbc a,a\n\tld h,a\n\tpush hl\n",
+            plan->strings[9]);
+    mir_gnarly_push_string(out, plan, 10);
+    mir_gnarly_print(out, plan, 6, 2);
+
+    mir_gnarly_store_array_word(out, -10, 0, 10);
+    mir_gnarly_store_array_word(out, -10, 1, 20);
+    mir_gnarly_store_array_word(out, -10, 2, 30);
+    mir_gnarly_store_array_word(out, -10, 3, 40);
+    mir_gnarly_store_array_word(out, -10, 4, 50);
+    mir_gnarly_load_array_word(out, -10, 2);
+    fputs("\tld (ix-20),l\n\tld (ix-19),h\n\tpush hl\n",
+          out);
+    mir_gnarly_push_string(out, plan, 6);
+    mir_gnarly_print(out, plan, 7, 2);
+
+    mir_gnarly_indirect_call(out, plan->indirect_function);
+    fprintf(out,
+            "\tld hl,S%d\n\tld (ix-20),l\n\tld (ix-19),h\n"
+            "\tpush hl\n",
+            plan->strings[11]);
+    mir_gnarly_push_string(out, plan, 12);
+    mir_gnarly_print(out, plan, 8, 2);
+
+    mir_gnarly_store_word(out, -20, 1);
+    mir_gnarly_store_word(out, -18, 2);
+    mir_gnarly_store_word(out, -20, 0);
+    mir_gnarly_store_word(out, -18, 1);
+    mir_gnarly_store_word(out, -16, 0);
+    mir_gnarly_load_word(out, -18);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_load_word(out, -20);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_load_word(out, -16);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_push_string(out, plan, 13);
+    mir_gnarly_print(out, plan, 9, 4);
+
+    mir_gnarly_store_word(out, -13, 6);
+    mir_gnarly_store_word(out, -11, 3);
+    mir_gnarly_push_word(out, 5);
+    mir_gnarly_push_word(out, 7);
+    mir_gnarly_push_word(out, 2);
+    mir_gnarly_push_string(out, plan, 14);
+    mir_gnarly_print(out, plan, 10, 4);
+
+    mir_gnarly_load_array_word(out, -10, 3);
+    fputs("\tpush hl\t\n\tpush hl\n", out);
+    mir_gnarly_push_string(out, plan, 15);
+    mir_gnarly_print(out, plan, 11, 3);
+
+    mir_gnarly_store_word(out, -20, 0);
+    mir_gnarly_store_word(out, -20, 1);
+    mir_gnarly_load_array_word(out, -10, 3);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_push_string(out, plan, 16);
+    mir_gnarly_print(out, plan, 12, 2);
+
+    mir_gnarly_store_word(out, -20, 1);
+    mir_gnarly_store_word(out, -20, 3);
+    mir_gnarly_store_array_word(out, -10, 3, 99);
+    mir_gnarly_load_array_word(out, -10, 3);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_load_word(out, -20);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_push_string(out, plan, 17);
+    mir_gnarly_print(out, plan, 13, 3);
+
+    fprintf(out,
+            "\tld hl,%s\n\tld (ix-12),l\n\tld (ix-11),h\n",
+            asm_name_for(sym_asm_name(plan->indirect_function)));
+    mir_gnarly_load_word(out, -12);
+    mir_emit_runtime_call(out, "__call_hl");
+
+    mir_gnarly_push_string(out, plan, 19);
+    mir_gnarly_push_string(out, plan, 18);
+    mir_gnarly_print(out, plan, 14, 2);
+
+    mir_gnarly_store_word(out, -20, 5);
+    mir_gnarly_load_word(out, -20);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_push_word(out, 0);
+    mir_gnarly_push_word(out, 2);
+    mir_gnarly_push_string(out, plan, 20);
+    mir_gnarly_print(out, plan, 15, 4);
+
+    mir_gnarly_push_word(out, 0);
+    mir_gnarly_push_word(out, 2);
+    mir_gnarly_push_word(out, 65);
+    mir_gnarly_push_string(out, plan, 21);
+    mir_gnarly_print(out, plan, 16, 4);
+
+    mir_gnarly_push_word(out, 8);
+    mir_gnarly_push_word(out, 7);
+    mir_machine_emit_symbol_call(out, plan->sum_function);
+    mir_gnarly_cleanup(out, 2);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_push_string(out, plan, 22);
+    mir_gnarly_print(out, plan, 17, 2);
+
+    mir_gnarly_push_word(out, 0);
+    mir_gnarly_push_word(out, 2);
+    mir_gnarly_push_word(out, 0);
+    mir_gnarly_push_word(out, 10);
+    mir_gnarly_push_string(out, plan, 23);
+    mir_gnarly_print(out, plan, 18, 5);
+
+    mir_gnarly_store_word(out, -20, 42);
+    fputs("\tld (ix-18),120\n", out);
+    mir_gnarly_ix_address(out, -17);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_ix_address(out, -20);
+    fputs("\tex de,hl\n\tpop hl\n\tld b,3\n", out);
+    fprintf(out,
+            "L%d:\n\tld a,(de)\n\tld (hl),a\n\tinc de\n"
+            "\tinc hl\n\tdjnz L%d\n",
+            copy_loop, copy_loop);
+    fputs("\tld a,(ix-15)\n\tld l,a\n\trlca\n\tsbc a,a\n"
+          "\tld h,a\n\tpush hl\n", out);
+    mir_gnarly_load_word(out, -17);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_push_string(out, plan, 0);
+    mir_gnarly_print(out, plan, 19, 3);
+
+    fputs("\tld (ix-20),255\n", out);
+    mir_gnarly_store_word(out, -18, 1);
+    fputs("\tld hl,0\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", conditional_false);
+    fputs("\tld l,(ix-20)\n\tld a,l\n\trlca\n\tsbc a,a\n"
+          "\tld h,a\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            conditional_done, conditional_false);
+    mir_gnarly_load_word(out, -18);
+    fprintf(out, "L%d:\n\tpush hl\n", conditional_done);
+    mir_gnarly_push_string(out, plan, 1);
+    mir_gnarly_print(out, plan, 20, 2);
+
+    mir_gnarly_ix_address(out, -10);
+    fputs("\tld (ix-20),l\n\tld (ix-19),h\n", out);
+    mir_gnarly_load_word(out, -20);
+    fputs("\tld de,8\n\tadd hl,de\n\tld e,(hl)\n\tinc hl\n"
+          "\tld d,(hl)\n\tex de,hl\n\tpush hl\n", out);
+    mir_gnarly_push_string(out, plan, 2);
+    mir_gnarly_print(out, plan, 21, 2);
+
+    mir_gnarly_store_word(out, -18, 2);
+    fprintf(out,
+            "\tld hl,S%d\n\tld de,2\n\tadd hl,de\n"
+            "\tld a,(hl)\n\tld (ix-14),a\n"
+            "\tld l,a\n\trlca\n\tsbc a,a\n\tld h,a\n\tpush hl\n",
+            plan->strings[24]);
+    mir_gnarly_push_string(out, plan, 25);
+    mir_gnarly_print(out, plan, 22, 2);
+
+    fprintf(out,
+            "\tld hl,S%d\n\tld a,(hl)\n\tld (ix-14),a\n"
+            "\tld l,a\n\trlca\n\tsbc a,a\n\tld h,a\n\tpush hl\n",
+            plan->strings[24]);
+    mir_gnarly_push_string(out, plan, 26);
+    mir_gnarly_print(out, plan, 23, 2);
+    fprintf(out,
+            "\tld hl,S%d\n\tld a,(hl)\n\tld (ix-14),a\n"
+            "\tld l,a\n\trlca\n\tsbc a,a\n\tld h,a\n\tpush hl\n",
+            plan->strings[24]);
+    mir_gnarly_push_string(out, plan, 27);
+    mir_gnarly_print(out, plan, 24, 2);
+
+    mir_gnarly_store_word(out, -20, 5);
+    mir_gnarly_store_word(out, -18, 5);
+    mir_gnarly_store_word(out, -16, 5);
+    mir_gnarly_load_word(out, -16);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_load_word(out, -18);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_load_word(out, -20);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_push_string(out, plan, 28);
+    mir_gnarly_print(out, plan, 25, 4);
+
+    mir_gnarly_store_word(out, -16, 0);
+    mir_gnarly_store_word(out, -20, 0);
+    mir_gnarly_store_word(out, -18, 9);
+    fprintf(out, "L%d:\n", comma_loop);
+    mir_gnarly_load_word(out, -20);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_load_word(out, -18);
+    fputs("\tex de,hl\n\tpop hl\n\tld a,h\n\txor 80h\n"
+          "\tld h,a\n\tld a,d\n\txor 80h\n\tld d,a\n"
+          "\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp nc,L%d\n", comma_done);
+    mir_gnarly_load_word(out, -20);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_load_word(out, -18);
+    fputs("\tex de,hl\n\tpop hl\n\tadd hl,de\n\tpush hl\n",
+          out);
+    mir_gnarly_load_word(out, -16);
+    fputs("\tex de,hl\n\tpop hl\n\tadd hl,de\n"
+          "\tld (ix-16),l\n\tld (ix-15),h\n", out);
+    mir_gnarly_load_word(out, -20);
+    fputs("\tinc hl\n\tld (ix-20),l\n\tld (ix-19),h\n", out);
+    mir_gnarly_load_word(out, -18);
+    fputs("\tdec hl\n\tld (ix-18),l\n\tld (ix-17),h\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", comma_loop, comma_done);
+    mir_gnarly_load_word(out, -16);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_push_string(out, plan, 29);
+    mir_gnarly_print(out, plan, 26, 2);
+
+    mir_gnarly_push_word(out, 0);
+    mir_gnarly_push_word(out, 6);
+    mir_gnarly_push_string(out, plan, 30);
+    mir_gnarly_print(out, plan, 27, 3);
+
+    mir_gnarly_store_word(out, -20, 65533);
+    mir_gnarly_load_word(out, -20);
+    fputs("\tld a,h\n\tor a\n", out);
+    fprintf(out, "\tjp m,L%d\n", ternary_negative);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n\tld hl,1\n\tjp L%d\n",
+            ternary_zero, ternary_done);
+    fprintf(out, "L%d:\n\tld hl,65535\n\tjp L%d\n",
+            ternary_negative, ternary_done);
+    fprintf(out, "L%d:\n\tld hl,0\nL%d:\n",
+            ternary_zero, ternary_done);
+    fputs("\tld (ix-16),l\n\tld (ix-15),h\n\tpush hl\n", out);
+    mir_gnarly_push_string(out, plan, 31);
+    mir_gnarly_print(out, plan, 28, 2);
+
+    mir_gnarly_push_word(out, 65);
+    mir_gnarly_push_word(out, 65);
+    mir_gnarly_push_word(out, 127);
+    mir_gnarly_push_word(out, 255);
+    mir_gnarly_push_string(out, plan, 32);
+    mir_gnarly_print(out, plan, 29, 5);
+
+    fputs("\tld (ix-14),65\n\tld l,(ix-14)\n"
+          "\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n"
+          "\tld (ix-16),l\n\tld (ix-15),h\n\tpush hl\n", out);
+    mir_gnarly_push_string(out, plan, 33);
+    mir_gnarly_print(out, plan, 30, 2);
+
+    mir_gnarly_store_word(out, -16, 65520);
+    mir_gnarly_load_word(out, -16);
+    fputs("\tpush hl\n", out);
+    mir_gnarly_push_string(out, plan, 34);
+    mir_gnarly_print(out, plan, 31, 2);
+
+    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 static void mir_fixed_call_runner_failure(
     FILE *out, const struct MirFixedCallCheckRunner *plan,
     int check, int next_label)
@@ -4560,6 +5473,7 @@ int mir_try_emit_call_runners(FILE *out, int phase)
         struct MirCallbackRegistrationRunner callback_plan;
         struct MirForIncrementRunner for_increment_plan;
         struct MirByteEqualityRunner byte_equality_plan;
+        struct MirGnarlyRunner gnarly_plan;
         struct MirLongIndexCallRunner long_index_plan;
         struct MirFixedCallCheckRunner plan;
 
@@ -4589,6 +5503,10 @@ int mir_try_emit_call_runners(FILE *out, int phase)
                 &byte_equality_plan)) {
             mir_emit_byte_equality_runner(
                 out, &byte_equality_plan);
+            return 1;
+        }
+        if (mir_match_gnarly_runner(&gnarly_plan)) {
+            mir_emit_gnarly_runner(out, &gnarly_plan);
             return 1;
         }
         if (mir_match_long_index_call_runner(&long_index_plan)) {

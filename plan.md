@@ -6,10 +6,51 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Clean base HEAD for the current coverage batch: `3294e44`.
-- Current working-tree candidate coverage: **2143/2185 (98.08%)**.
-- Remaining fallback population: **42 `final-cost-policy`**, all selected by
+- Clean base HEAD for the current coverage batch: `8f93d15`.
+- Current working-tree candidate coverage: **2144/2185 (98.12%)**.
+- Remaining fallback population: **41 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The call-runner module now admits the 22-block `tgnarly.main`
+  `final-cost-policy` fallback through a strict name-free matcher over all
+  **564 MIR instructions**. It proves both local-array initialization loops,
+  the Duff-device call and copied endpoints, all scalar/byte/pointer/aggregate
+  assignments and conversions, the indirect function-designator calls, the
+  comma loop, nested ternary CFG, all eight PHIs, six conditional branches,
+  six jumps, **39** ordered calls including all **32** variadic reports, and
+  the final zero return. The emitter preserves the unusual helper, switch,
+  loop, aggregate-copy, string-index, function-pointer and formatted-I/O
+  behavior while using a compact **20-byte IX frame** with no IY. Normal
+  selected/captured metrics are **7,367/10,387 bytes** and
+  **693/976 instructions**; stack-check metrics are **7,396/10,416 bytes**
+  and **694/977 instructions**.
+- `tgnarly` passes checked full peep/nopeep validation, as does the forced
+  fallback side. Against the checked values, selected peep improves from
+  **505,350 to 499,737 cycles** and **8,448 to 8,064 bytes**, while selected
+  nopeep improves from **509,049 to 501,987 cycles** and
+  **9,088 to 8,576 bytes**. The forced-fallback full run is correctness-clean
+  at **503,211 peep** and **506,100 nopeep cycles**.
+- A renamed-symbol edge A/B calls the scheduled driver twice and counts every
+  direct and indirect helper path. Selected and forced-fallback program output
+  is byte-identical in both modes and ends with
+  `edge 0 0 4 2 2 2 2 2`. Selected/fallback measurements are
+  **1,038,060/1,045,008 cycles and 5,632/6,016 bytes peep**, and
+  **1,044,508/1,052,734 cycles and 6,272/6,656 bytes nopeep**.
+  Direct stack-check `tgnarly` A/B is also byte-identical:
+  **497,747/501,221 cycles and 5,376/5,760 bytes peep**, and
+  **499,997/504,110 cycles and 5,888/6,400 bytes nopeep**.
+- The call-runner module grows from **4,612 to 5,530 source lines** and adds
+  **22** static top-level helpers. The object audit reports only
+  `mir_try_emit_call_runners [T]` as defined global code, with zero global
+  read-only or writable data. The canonical build passes. The
+  regression-gated stack-check census advances **2,143/2,185 (98.08%)** to
+  **2,144/2,185 (98.12%)**, adds exactly `tgnarly.main`, removes no accepted
+  function, moves selector counts from **1,410 spilled / 368 scheduled** to
+  **1,409 spilled / 369 scheduled**, and leaves
+  **41 `final-cost-policy`** fallbacks. The corresponding normal census moves
+  from **2,054/2,103** to **2,055/2,103**, moves
+  **1,348 spilled / 368 scheduled** to
+  **1,347 spilled / 369 scheduled**, and has no regression. No performance
+  baseline, production name, or output-hash gate was added.
 - The call-runner module now admits the 22-block `tbyteeq.main`
   `final-cost-policy` fallback through a strict name-free matcher over all
   **380 MIR instructions**. It proves the five signed/unsigned byte
