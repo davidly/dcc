@@ -261,6 +261,18 @@ struct MirFileIoRunner {
     int strings[MIR_FILE_IO_STRING_COUNT];
 };
 
+struct MirReadValidateRunner {
+    struct Sym *read_function;
+    struct Sym *print_function;
+    struct Sym *buffer;
+    struct Sym *error_object;
+    char print_names[9][64];
+    int strings[8];
+    int offset_stack_offset;
+    int chunk_stack_offset;
+    int stream_stack_offset;
+};
+
 enum MirBufferedConsoleFunction {
     MIR_BUFFER_PRINT,
     MIR_BUFFER_ALLOCATE,
@@ -1758,6 +1770,465 @@ static int mir_file_io_function_types(
         mir_abort_runner_word_type(plan->print_function->type) &&
         mir_abort_runner_pointer_type(
             plan->print_function->proto_types[0], TYPE_CHAR);
+}
+
+static int mir_read_validate_word_type(int type, int is_unsigned)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == TYPE_INT &&
+           ((type & TYPE_UNSIGNED) != 0) == is_unsigned &&
+           type_size(type) == 2;
+}
+
+static int mir_read_validate_long_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == TYPE_LONG &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 4;
+}
+
+static int mir_read_validate_pointer_type(int type, int base_type)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & 15) == base_type &&
+           type_size(type) == 2;
+}
+
+static int mir_read_validate_parameter(
+    int instruction, int expected_size, int *stack_offset)
+{
+    int type;
+    int storage;
+    int memory_offset;
+
+    if (mir.insns[instruction].opcode != MIR_PARAM ||
+        !mir_scalar_memory_location(
+            &mir.insns[instruction], &type, &storage, &memory_offset) ||
+        storage != SC_PARAM || type_size(type) != expected_size)
+        return 0;
+    *stack_offset = memory_offset - 2;
+    return *stack_offset >= 0;
+}
+
+static int mir_read_validate_effective_call(
+    struct MirReadValidateRunner *plan, int slot, int instruction,
+    int ordinal, int argument_count, const int *definitions)
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    const char *call_name;
+    int arguments[3];
+    int item;
+
+    if (slot < 0 || slot >= 9 || argument_count < 1 ||
+        argument_count > 3 ||
+        call->opcode != MIR_CALL || call->src1 >= 0 ||
+        call->secondary_offset != ordinal ||
+        call->memory_flags != MIR_CALL_FLAG_VARIADIC ||
+        !mir_read_validate_word_type(call->type, 0) ||
+        !mir_machine_call_arguments(
+            call, argument_count, arguments))
+        return 0;
+    if (plan->print_function == NULL) {
+        plan->print_function = find_global(call->name);
+        if (plan->print_function == NULL ||
+            plan->print_function->storage != SC_FUNC ||
+            plan->print_function->is_funcptr ||
+            plan->print_function->is_noreturn ||
+            !plan->print_function->has_proto ||
+            plan->print_function->proto_nargs != 1 ||
+            !plan->print_function->proto_variadic ||
+            !mir_read_validate_word_type(
+                plan->print_function->type, 0) ||
+            !mir_read_validate_pointer_type(
+                plan->print_function->proto_types[0], TYPE_CHAR))
+            return 0;
+    } else if (find_global(call->name) != plan->print_function) {
+        return 0;
+    }
+    if (call->type != plan->print_function->type)
+        return 0;
+    for (item = 0; item < argument_count; ++item)
+        if (arguments[item] != mir.insns[definitions[item]].dst)
+            return 0;
+    call_name = call->base_name[0] != 0
+        ? call->base_name
+        : asm_name_for(sym_asm_name(plan->print_function));
+    snprintf(plan->print_names[slot],
+             sizeof(plan->print_names[slot]), "%s", call_name);
+    return 1;
+}
+
+static int mir_read_validate_buffer_address(
+    int instruction, struct Sym *buffer)
+{
+    struct Sym *symbol;
+    long offset;
+
+    return mir.insns[instruction].opcode == MIR_ADDRESS &&
+           mir_machine_global_address_offset(
+               mir.insns[instruction].dst, &symbol, &offset, 0) &&
+           symbol == buffer && offset == 0 &&
+           mir_read_validate_pointer_type(
+               mir.insns[instruction].type, TYPE_CHAR) &&
+           (mir.insns[instruction].memory_flags & (1 | 8)) == 0;
+}
+
+static int mir_read_validate_byte_access(
+    int address, int index_constant, int index_address, int load,
+    struct Sym *buffer, int expected_index)
+{
+    return mir_read_validate_buffer_address(address, buffer) &&
+           mir_machine_constant_equals(
+               mir.insns[index_constant].dst, expected_index) &&
+           mir.insns[index_address].src1 ==
+               mir.insns[address].dst &&
+           mir.insns[index_address].src2 ==
+               mir.insns[index_constant].dst &&
+           mir.insns[index_address].immediate == 1 &&
+           mir.insns[index_address].memory_size == 1 &&
+           mir.insns[index_address].memory_flags == 0 &&
+           mir.insns[load].src1 ==
+               mir.insns[index_address].dst &&
+           mir.insns[load].memory_size == 1 &&
+           mir.insns[load].memory_flags == 0 &&
+           type_ptr_depth(mir.insns[load].type) == 0 &&
+           (mir.insns[load].type & 15) == TYPE_CHAR &&
+           (mir.insns[load].type & TYPE_UNSIGNED) == 0 &&
+           type_size(mir.insns[load].type) == 1;
+}
+
+static int mir_read_validate_byte_comparison(
+    int unary, int constant, int comparison,
+    int load, int expected, int constant_first)
+{
+    const struct MirInsn *convert = &mir.insns[unary];
+    const struct MirInsn *compare = &mir.insns[comparison];
+
+    return convert->immediate == 0 &&
+           convert->src1 == mir.insns[load].dst &&
+           mir_read_validate_word_type(convert->type, 0) &&
+           mir_machine_constant_equals(
+               mir.insns[constant].dst, expected) &&
+           compare->immediate == TOK_NE &&
+           compare->src1 ==
+               mir.insns[constant_first ? constant : unary].dst &&
+           compare->src2 ==
+               mir.insns[constant_first ? unary : constant].dst &&
+           mir_read_validate_word_type(compare->type, 0);
+}
+
+static int mir_read_validate_branch(int instruction, int target)
+{
+    return mir.insns[instruction].src1 ==
+               mir.insns[instruction - 1].dst &&
+           mir.insns[instruction].label ==
+               mir.insns[target].label;
+}
+
+static int mir_match_read_validate_runner(
+    struct MirReadValidateRunner *plan)
+{
+    static const int expected_opcodes[151] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_ADDRESS, MIR_NOP,
+        MIR_ARG, MIR_CONST, MIR_NOP, MIR_ARG, MIR_NOP, MIR_NOP,
+        MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CALL, MIR_UNARY, MIR_STORE,
+        MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG,
+        MIR_CALL, MIR_CONST, MIR_NOP, MIR_BINARY, MIR_BRFALSE, MIR_LABEL,
+        MIR_STRADDR, MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CALL, MIR_JUMP,
+        MIR_LABEL, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRFALSE,
+        MIR_LABEL, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRFALSE,
+        MIR_STRADDR, MIR_ARG, MIR_CALL, MIR_LABEL, MIR_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_UNARY,
+        MIR_BINARY, MIR_BRFALSE, MIR_STRADDR, MIR_ARG, MIR_CALL, MIR_LABEL,
+        MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRFALSE, MIR_STRADDR,
+        MIR_ARG, MIR_CALL, MIR_LABEL, MIR_NOP, MIR_JUMP, MIR_LABEL,
+        MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRFALSE, MIR_LABEL,
+        MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRFALSE, MIR_STRADDR,
+        MIR_ARG, MIR_CALL, MIR_LABEL, MIR_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_UNARY,
+        MIR_BINARY, MIR_BRFALSE, MIR_STRADDR, MIR_ARG, MIR_CALL, MIR_LABEL,
+        MIR_NOP, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY, MIR_BINARY,
+        MIR_BRFALSE, MIR_STRADDR, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL,
+        MIR_LABEL, MIR_CONST, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_UNARY, MIR_BINARY, MIR_BRFALSE, MIR_STRADDR,
+        MIR_ARG, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_ARG,
+        MIR_CALL, MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_LABEL, MIR_NOP,
+        MIR_LABEL
+    };
+    static const int string_instructions[8] = {
+        18, 30, 51, 63, 75, 96, 108, 123
+    };
+    static const struct {
+        int instruction;
+        int ordinal;
+        int argument_count;
+        int definitions[3];
+    } print_calls[9] = {
+        {24, 1, 3, {18, 1, 16}},
+        {34, 2, 2, {30, 32, 0}},
+        {53, 3, 1, {51, 0, 0}},
+        {65, 4, 1, {63, 0, 0}},
+        {77, 5, 1, {75, 0, 0}},
+        {98, 6, 1, {96, 0, 0}},
+        {110, 7, 1, {108, 0, 0}},
+        {127, 8, 2, {123, 1, 0}},
+        {144, 9, 2, {137, 142, 0}}
+    };
+    static const struct {
+        int address;
+        int index_constant;
+        int index_address;
+        int load;
+        int expected_index;
+    } byte_accesses[7] = {
+        {43, 44, 45, 46, 0},
+        {55, 56, 57, 58, 127},
+        {67, 68, 69, 70, 128},
+        {88, 89, 90, 91, 0},
+        {100, 101, 102, 103, 127},
+        {116, 117, 118, 119, 0},
+        {130, 131, 132, 133, 511}
+    };
+    static const struct {
+        int unary;
+        int constant;
+        int comparison;
+        int load;
+        int expected;
+        int constant_first;
+    } byte_comparisons[7] = {
+        {48, 47, 49, 46, 107, 0},
+        {60, 59, 61, 58, 107, 0},
+        {72, 71, 73, 70, 0, 0},
+        {93, 92, 94, 91, 106, 0},
+        {105, 104, 106, 103, 26, 0},
+        {120, 115, 121, 119, 0, 1},
+        {134, 129, 135, 133, 0, 1}
+    };
+    int arguments[4];
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    long global_offset;
+    int instruction;
+    int item;
+    int previous;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 151 || mir_cfg_block_count() != 17 ||
+        mir.has_vla || mir.local_bytes != 2 ||
+        mir.aggregate_temp_bytes != 0 ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return mir_machine_reject(
+            "read-validate-runner", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+                expected_opcodes[instruction])
+            return mir_machine_reject(
+                "read-validate-runner", "opcode");
+
+    if (!mir_read_validate_parameter(
+            1, 4, &plan->offset_stack_offset) ||
+        !mir_read_validate_parameter(
+            2, 2, &plan->chunk_stack_offset) ||
+        !mir_read_validate_parameter(
+            3, 2, &plan->stream_stack_offset) ||
+        plan->offset_stack_offset != 2 ||
+        plan->chunk_stack_offset != 6 ||
+        plan->stream_stack_offset != 8 ||
+        !mir_read_validate_long_type(mir.insns[1].type) ||
+        !mir_read_validate_word_type(mir.insns[2].type, 0) ||
+        !mir_read_validate_pointer_type(
+            mir.insns[3].type, TYPE_INT))
+        return mir_machine_reject(
+            "read-validate-runner", "parameters");
+
+    plan->read_function =
+        mir_abort_runner_function(15, 0, 4, 0);
+    if (plan->read_function == NULL)
+        return mir_machine_reject(
+            "read-validate-runner", "read-function");
+    if (!mir_read_validate_word_type(
+            plan->read_function->type, 1) ||
+        !mir_read_validate_pointer_type(
+            plan->read_function->proto_types[0], TYPE_VOID) ||
+        !mir_read_validate_word_type(
+            plan->read_function->proto_types[1], 1) ||
+        !mir_read_validate_word_type(
+            plan->read_function->proto_types[2], 1) ||
+        !mir_read_validate_pointer_type(
+            plan->read_function->proto_types[3], TYPE_INT))
+        return mir_machine_reject(
+            "read-validate-runner", "read-type");
+    if (!mir_machine_call_arguments(
+            &mir.insns[15], 4, arguments))
+        return mir_machine_reject(
+            "read-validate-runner", "read-argument-count");
+    if (arguments[0] != mir.insns[4].dst ||
+        arguments[1] != mir.insns[7].dst ||
+        arguments[2] != mir.insns[2].dst ||
+        arguments[3] != mir.insns[13].dst)
+        return mir_machine_reject(
+            "read-validate-runner", "read-argument-identity");
+    if (!mir_machine_constant_equals(
+            mir.insns[7].dst, 1) ||
+        !mir_machine_same_location(
+            &mir.insns[3], &mir.insns[13]))
+        return mir_machine_reject(
+            "read-validate-runner", "read-argument-value");
+
+    for (item = 0; item < 9; ++item)
+        if (!mir_read_validate_effective_call(
+                plan, item, print_calls[item].instruction,
+                print_calls[item].ordinal,
+                print_calls[item].argument_count,
+                print_calls[item].definitions))
+            return mir_machine_reject(
+                "read-validate-runner", "print-call");
+    if (plan->print_function == plan->read_function)
+        return mir_machine_reject(
+            "read-validate-runner", "function-alias");
+
+    for (item = 0; item < 8; ++item) {
+        const struct MirInsn *string =
+            &mir.insns[string_instructions[item]];
+
+        if (!mir_read_validate_pointer_type(
+                string->type, TYPE_CHAR) ||
+            string->immediate < 0)
+            return mir_machine_reject(
+                "read-validate-runner", "string");
+        plan->strings[item] = (int)string->immediate;
+        for (previous = 0; previous < item; ++previous)
+            if (plan->strings[item] ==
+                    plan->strings[previous])
+                return mir_machine_reject(
+                    "read-validate-runner", "string-alias");
+    }
+    if (mir.insns[137].immediate != plan->strings[7] ||
+        !mir_read_validate_pointer_type(
+            mir.insns[137].type, TYPE_CHAR))
+        return mir_machine_reject(
+            "read-validate-runner", "string-reuse");
+
+    if (!mir_machine_global_address_offset(
+            mir.insns[4].dst, &plan->buffer,
+            &global_offset, 0) ||
+        global_offset != 0 || plan->buffer == NULL ||
+        plan->buffer->storage == SC_FUNC ||
+        !plan->buffer->is_defined ||
+        plan->buffer->is_volatile ||
+        !plan->buffer->is_array ||
+        plan->buffer->is_vla ||
+        plan->buffer->dim_count != 1 ||
+        plan->buffer->dims[0] != 512 ||
+        plan->buffer->array_len != 512 ||
+        plan->buffer->elem_size != 1 ||
+        plan->buffer->size != 512 ||
+        type_ptr_depth(plan->buffer->type) != 0 ||
+        (plan->buffer->type & 15) != TYPE_CHAR ||
+        (plan->buffer->type & TYPE_UNSIGNED) != 0 ||
+        !mir_read_validate_buffer_address(4, plan->buffer) ||
+        type_size(plan->buffer->type) != 1)
+        return mir_machine_reject(
+            "read-validate-runner", "buffer");
+    for (item = 0; item < 7; ++item)
+        if (!mir_read_validate_byte_access(
+                byte_accesses[item].address,
+                byte_accesses[item].index_constant,
+                byte_accesses[item].index_address,
+                byte_accesses[item].load,
+                plan->buffer,
+                byte_accesses[item].expected_index))
+            return mir_machine_reject(
+                "read-validate-runner", "buffer-access");
+    for (item = 0; item < 7; ++item)
+        if (!mir_read_validate_byte_comparison(
+                byte_comparisons[item].unary,
+                byte_comparisons[item].constant,
+                byte_comparisons[item].comparison,
+                byte_comparisons[item].load,
+                byte_comparisons[item].expected,
+                byte_comparisons[item].constant_first))
+            return mir_machine_reject(
+                "read-validate-runner", "buffer-check");
+
+    if (!mir_scalar_memory_location(
+            &mir.insns[17], &memory_type,
+            &memory_storage, &memory_offset) ||
+        memory_storage != SC_LOCAL || memory_offset != -2 ||
+        !mir_read_validate_word_type(memory_type, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[17]) ||
+        mir.insns[16].immediate != 0 ||
+        mir.insns[16].src1 != mir.insns[15].dst ||
+        !mir_read_validate_word_type(mir.insns[16].type, 0) ||
+        mir.insns[17].src1 != mir.insns[16].dst ||
+        !mir_machine_same_location(
+            &mir.insns[17], &mir.insns[22]) ||
+        !mir_machine_same_location(
+            &mir.insns[17], &mir.insns[26]) ||
+        !mir_machine_constant_equals(
+            mir.insns[25].dst, 0) ||
+        mir.insns[27].immediate != TOK_EQ ||
+        mir.insns[27].src1 != mir.insns[25].dst ||
+        mir.insns[27].src2 != mir.insns[16].dst ||
+        !mir_read_validate_word_type(mir.insns[27].type, 0))
+        return mir_machine_reject(
+            "read-validate-runner", "result");
+
+    if (!mir_machine_named_nonvolatile(&mir.insns[32]) ||
+        (plan->error_object =
+             find_global(mir.insns[32].name)) == NULL ||
+        plan->error_object->storage == SC_FUNC ||
+        plan->error_object->is_array ||
+        plan->error_object->is_volatile ||
+        !mir_read_validate_word_type(
+            plan->error_object->type, 0) ||
+        mir.insns[32].type != plan->error_object->type)
+        return mir_machine_reject(
+            "read-validate-runner", "error-object");
+
+    if (!mir_machine_constant_equals(
+            mir.insns[39].dst, 512) ||
+        mir.insns[40].immediate != TOK_EQ ||
+        mir.insns[40].src1 != mir.insns[39].dst ||
+        mir.insns[40].src2 != mir.insns[1].dst ||
+        !mir_machine_constant_equals(
+            mir.insns[84].dst, 8192) ||
+        mir.insns[85].immediate != TOK_EQ ||
+        mir.insns[85].src1 != mir.insns[84].dst ||
+        mir.insns[85].src2 != mir.insns[1].dst ||
+        !mir_machine_constant_equals(
+            mir.insns[141].dst, 511) ||
+        mir.insns[142].immediate != '+' ||
+        mir.insns[142].src1 != mir.insns[1].dst ||
+        mir.insns[142].src2 != mir.insns[141].dst ||
+        !mir_read_validate_long_type(mir.insns[142].type))
+        return mir_machine_reject(
+            "read-validate-runner", "offset-flow");
+
+    if (!mir_read_validate_branch(28, 36) ||
+        mir.insns[35].label != mir.insns[150].label ||
+        !mir_read_validate_branch(41, 81) ||
+        !mir_read_validate_branch(50, 54) ||
+        !mir_read_validate_branch(62, 66) ||
+        !mir_read_validate_branch(74, 148) ||
+        mir.insns[80].label != mir.insns[148].label ||
+        !mir_read_validate_branch(86, 114) ||
+        !mir_read_validate_branch(95, 99) ||
+        !mir_read_validate_branch(107, 147) ||
+        mir.insns[113].label != mir.insns[147].label ||
+        !mir_read_validate_branch(122, 128) ||
+        !mir_read_validate_branch(136, 145))
+        return mir_machine_reject(
+            "read-validate-runner", "control-flow");
+    return 1;
 }
 
 static int mir_file_io_trim_loop(int base)
@@ -8574,6 +9045,188 @@ static void mir_file_io_push_string(FILE *out, int string_id)
     fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
 }
 
+static void mir_read_validate_emit_call(
+    FILE *out, struct Sym *function,
+    const char *call_name, int words)
+{
+    if (!strcmp(
+            call_name,
+            asm_name_for(sym_asm_name(function))))
+        mir_machine_emit_symbol_call(out, function);
+    else
+        fprintf(out, "\tcall %s\n", call_name);
+    mir_emit_final_call_cleanup(out, words);
+}
+
+static void mir_read_validate_push_long_parameter(
+    FILE *out, const struct MirReadValidateRunner *plan)
+{
+    int offset = plan->offset_stack_offset + 2;
+
+    fprintf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
+            "\tld e,(ix+%d)\n\tld d,(ix+%d)\n"
+            "\tpush de\n\tpush hl\n",
+            offset, offset + 1, offset + 2, offset + 3);
+}
+
+static void mir_read_validate_print(
+    FILE *out, const struct MirReadValidateRunner *plan,
+    int call_slot, int string_slot)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[string_slot]);
+    mir_read_validate_emit_call(
+        out, plan->print_function,
+        plan->print_names[call_slot], 1);
+}
+
+static void mir_read_validate_print_long(
+    FILE *out, const struct MirReadValidateRunner *plan,
+    int call_slot, int string_slot, int addend)
+{
+    int no_carry = new_label();
+    int offset = plan->offset_stack_offset + 2;
+
+    fprintf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
+            "\tld e,(ix+%d)\n\tld d,(ix+%d)\n",
+            offset, offset + 1, offset + 2, offset + 3);
+    if (addend != 0) {
+        fprintf(out,
+                "\tld bc,%d\n\tadd hl,bc\n"
+                "\tjp nc,L%d\n\tinc de\nL%d:\n",
+                addend, no_carry, no_carry);
+    }
+    fputs("\tpush de\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[string_slot]);
+    mir_read_validate_emit_call(
+        out, plan->print_function,
+        plan->print_names[call_slot], 3);
+}
+
+static void mir_read_validate_buffer_check(
+    FILE *out, const struct MirReadValidateRunner *plan,
+    int buffer_offset, int expected,
+    int call_slot, int string_slot)
+{
+    int equal = new_label();
+
+    fprintf(out, "\tld a,(%s+%d)\n\tcp %d\n",
+            asm_name_for(sym_asm_name(plan->buffer)),
+            buffer_offset, expected);
+    fprintf(out, "\tjp z,L%d\n", equal);
+    mir_read_validate_print(
+        out, plan, call_slot, string_slot);
+    fprintf(out, "L%d:\n", equal);
+}
+
+static void mir_read_validate_offset_mismatch(
+    FILE *out, const struct MirReadValidateRunner *plan,
+    int value, int mismatch)
+{
+    int offset = plan->offset_stack_offset + 2;
+
+    fprintf(out,
+            "\tld a,(ix+%d)\n\tcp %d\n\tjp nz,L%d\n"
+            "\tld a,(ix+%d)\n\tcp %d\n\tjp nz,L%d\n"
+            "\tld a,(ix+%d)\n\tcp %d\n\tjp nz,L%d\n"
+            "\tld a,(ix+%d)\n\tcp %d\n\tjp nz,L%d\n",
+            offset, value & 255, mismatch,
+            offset + 1, (value >> 8) & 255, mismatch,
+            offset + 2, (value >> 16) & 255, mismatch,
+            offset + 3, (value >> 24) & 255, mismatch);
+}
+
+static void mir_emit_read_validate_runner(
+    FILE *out, const struct MirReadValidateRunner *plan)
+{
+    int result_nonzero = new_label();
+    int not_fixed_middle = new_label();
+    int not_file_end = new_label();
+    int done = new_label();
+    int stream = plan->stream_stack_offset + 2;
+    int chunk = plan->chunk_stack_offset + 2;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-2\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+
+    fprintf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tpush hl\n"
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tpush hl\n"
+            "\tld hl,1\n\tpush hl\n"
+            "\tld hl,%s\n\tpush hl\n",
+            stream, stream + 1, chunk, chunk + 1,
+            asm_name_for(sym_asm_name(plan->buffer)));
+    mir_machine_emit_symbol_call(out, plan->read_function);
+    mir_emit_final_call_cleanup(out, 4);
+    fputs("\tld (ix-2),l\n\tld (ix-1),h\n"
+          "\tpush hl\n", out);
+    mir_read_validate_push_long_parameter(out, plan);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[0]);
+    mir_read_validate_emit_call(
+        out, plan->print_function,
+        plan->print_names[0], 4);
+
+    fputs("\tld a,(ix-2)\n\tor (ix-1)\n", out);
+    fprintf(out, "\tjp nz,L%d\n", result_nonzero);
+    mir_machine_emit_global_word(out, plan->error_object, 0);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[1]);
+    mir_read_validate_emit_call(
+        out, plan->print_function,
+        plan->print_names[1], 2);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            done, result_nonzero);
+
+    mir_read_validate_offset_mismatch(
+        out, plan, 512, not_fixed_middle);
+    mir_read_validate_buffer_check(
+        out, plan, 0, 107, 2, 2);
+    mir_read_validate_buffer_check(
+        out, plan, 127, 107, 3, 3);
+    mir_read_validate_buffer_check(
+        out, plan, 128, 0, 4, 4);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            done, not_fixed_middle);
+
+    mir_read_validate_offset_mismatch(
+        out, plan, 8192, not_file_end);
+    mir_read_validate_buffer_check(
+        out, plan, 0, 106, 5, 5);
+    mir_read_validate_buffer_check(
+        out, plan, 127, 26, 6, 6);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            done, not_file_end);
+
+    {
+        int first_zero = new_label();
+        int last_zero = new_label();
+
+        fprintf(out, "\tld a,(%s+0)\n\tor a\n",
+                asm_name_for(sym_asm_name(plan->buffer)));
+        fprintf(out, "\tjp z,L%d\n", first_zero);
+        mir_read_validate_print_long(
+            out, plan, 7, 7, 0);
+        fprintf(out, "L%d:\n", first_zero);
+        fprintf(out, "\tld a,(%s+511)\n\tor a\n",
+                asm_name_for(sym_asm_name(plan->buffer)));
+        fprintf(out, "\tjp z,L%d\n", last_zero);
+        mir_read_validate_print_long(
+            out, plan, 8, 7, 511);
+        fprintf(out, "L%d:\n", last_zero);
+    }
+
+    fprintf(out,
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            done);
+}
+
 static void mir_file_io_push_stream(FILE *out)
 {
     fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n", out);
@@ -12435,6 +13088,7 @@ static void mir_emit_buffered_console_runner(
 int mir_try_emit_call_runners(FILE *out, int phase)
 {
     if (phase == 0) {
+        struct MirReadValidateRunner read_validate_plan;
         struct MirBufferedConsoleRunner buffered_console_plan;
         struct MirDirectoryEnumerationRunner directory_plan;
         struct MirFileIoRunner file_io_plan;
@@ -12453,6 +13107,12 @@ int mir_try_emit_call_runners(FILE *out, int phase)
         struct MirCastLogicalRunner cast_logical_plan;
         struct MirFixedCallCheckRunner plan;
 
+        if (mir_match_read_validate_runner(
+                &read_validate_plan)) {
+            mir_emit_read_validate_runner(
+                out, &read_validate_plan);
+            return 1;
+        }
         if (mir_match_buffered_console_runner(
                 &buffered_console_plan)) {
             mir_emit_buffered_console_runner(

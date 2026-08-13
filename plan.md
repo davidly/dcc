@@ -3,6 +3,56 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-13 buffered-read validation 17-block batch (working tree)
+
+- Branch/base: `pr/143` at `5b9ff1c`. The call-runner module now admits the
+  17-block `fileops.read_and_validate` `final-cost-policy` fallback through a
+  strict structural matcher over all **151 MIR instructions**. It validates
+  the complete opcode stream and CFG, the signed-long offset, word chunk and
+  stream parameters, exact 512-byte nonvolatile character buffer, four-argument
+  read call, all nine variadic report calls and argument identities, the error
+  object, result lifetime, fixed offsets **512/8192**, byte positions
+  **0/127/128/511**, expected contents **k/k/0** and **j/^Z**, both generic
+  zero checks, the **offset + 511** long calculation and void fallthrough.
+  The matcher contains no function, helper, parameter, local, global, format,
+  output or runtime-test name and no output hash.
+- The generic final candidate remains excluded. Forced final-generic full mode
+  is correctness-clean but measures **3,118,168/3,127,084 cycles** and
+  **12,032/12,288 bytes** peep/nopeep, versus forced fallback at
+  **3,110,018/3,116,820 cycles** and **11,904/12,032 bytes**.
+- The dedicated emitter preserves the read, long-format result report, error
+  load/report and all conditional content reports. It uses a compact
+  **2-byte IX frame** for the read result and emits no IY instruction.
+  Normal selected/captured metrics are **1,690/1,847 bytes** and
+  **146/165 instructions**. Stack-check metrics are **1,719/1,876 bytes**
+  and **147/166 instructions**.
+- Stack-check full-mode selected/fallback totals are
+  **3,106,866/3,110,018 cycles and 11,904/11,904 bytes** peep plus
+  **3,110,830/3,116,820 cycles and 12,032/12,032 bytes** nopeep. Both runs
+  pass the existing complete `fileops` output, including its unchanged open,
+  read, close, error and cleanup behavior.
+- A function/helper/global/local-renamed fixture selects the same 17-block
+  family at **1,611/1,787 bytes** and **147/166 instructions**. One run
+  exercises a complete 512-byte read, a 128-byte short read and a zero/error
+  read. Selected/fallback output is identical in both modes; peep totals are
+  **156,366/156,379 cycles and 6,272/6,272 bytes**, while nopeep totals are
+  **157,490/157,757 cycles and 6,272/6,272 bytes**. Changing only the buffer
+  extent to 513 bytes is rejected at the buffer contract; changing only the
+  expected first middle byte is rejected at the content contract. Both remain
+  on `final-cost-policy` at **2,838/1,796 bytes** and
+  **274/166 instructions**.
+- The regression-gated stack-check census advances
+  **2,162/2,185 (98.95%)** to **2,163/2,185 (98.99%)**, adds exactly
+  `fileops.read_and_validate`, removes no accepted function, moves selector
+  counts from **1,391 spilled / 387 scheduled** to
+  **1,390 spilled / 388 scheduled**, and reduces `final-cost-policy`
+  fallbacks **23 -> 22**.
+- The call-runner module grows from **12,548 to 13,204 source lines**
+  (**+656**). Its standalone object defines only
+  `mir_try_emit_call_runners [T]` globally and has zero global data
+  definitions. The canonical build and `git diff --check` pass. No
+  performance baseline, production name or output hash was added or changed.
+
 ## 2026-08-13 multidimensional-array 17-block batch (working tree)
 
 - Branch/base: `pr/143` at `43b6e5d`. The aggregate-check module now admits
