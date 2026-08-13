@@ -50,6 +50,46 @@ struct MirCatalanDriverSchedule {
     char print_name[64];
 };
 
+struct MirModp2DriverSchedule {
+    struct Sym *signed_values;
+    struct Sym *unsigned_values;
+    struct Sym *print_function;
+    int string_ids[7];
+    char print_names[7][64];
+};
+
+struct MirModp2LoopShape {
+    int entry_label;
+    int init_constant;
+    int init_store;
+    int header_label;
+    int sum_phi;
+    int index_phi;
+    int bound_constant;
+    int element_constant;
+    int bound_division;
+    int comparison;
+    int branch;
+    int array_address;
+    int index_address;
+    int element_load;
+    int value_store;
+    int print_start;
+    int print_call;
+    int sum_start;
+    int tail_label;
+    int increment_constant;
+    int increment;
+    int increment_store;
+    int jump;
+    int exit_label;
+    int element_count;
+    int operation;
+    int is_unsigned;
+    int divisor_count;
+    const int *divisors;
+};
+
 static int mir_machine_constant_value(
     int value, long *constant_out, int depth)
 {
@@ -1972,6 +2012,420 @@ static int mir_match_catalan_driver_schedule(
     return 1;
 }
 
+static int mir_modp2_opcode_code(int opcode)
+{
+    switch (opcode) {
+    case MIR_LABEL: return 'L';
+    case MIR_NOP: return 'N';
+    case MIR_CONST: return 'C';
+    case MIR_STORE: return 'S';
+    case MIR_PHI: return 'P';
+    case MIR_BINARY: return 'B';
+    case MIR_BRANCH_FALSE: return 'F';
+    case MIR_ADDRESS: return 'A';
+    case MIR_INDEX_ADDRESS: return 'I';
+    case MIR_LOAD_INDIRECT: return 'R';
+    case MIR_STRING_ADDRESS: return 'T';
+    case MIR_ARG: return 'G';
+    case MIR_CALL: return 'K';
+    case MIR_UNARY: return 'U';
+    case MIR_JUMP: return 'J';
+    case MIR_RETURN: return 'E';
+    default: return 0;
+    }
+}
+
+static int mir_modp2_int_type(int type, int is_unsigned)
+{
+    return type_ptr_depth(type) == 0 &&
+           !type_is_float(type) &&
+           (type & 15) == TYPE_INT &&
+           ((type & TYPE_UNSIGNED) != 0) == is_unsigned &&
+           type_size(type) == 2;
+}
+
+static int mir_modp2_long_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           !type_is_float(type) &&
+           (type & 15) == TYPE_LONG &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 4;
+}
+
+static int mir_modp2_array_address(
+    const struct MirInsn *address, int element_count,
+    int is_unsigned, struct Sym **symbol_out)
+{
+    struct Sym *symbol;
+    long offset;
+
+    if (address == NULL || address->opcode != MIR_ADDRESS ||
+        !mir_machine_global_address_offset(
+            address->dst, &symbol, &offset, 0) ||
+        offset != 0 || symbol == NULL || !symbol->is_defined ||
+        !symbol->is_array || symbol->is_volatile ||
+        symbol->array_len != element_count ||
+        symbol->elem_size != 2 ||
+        symbol->size != element_count * 2 ||
+        !mir_modp2_int_type(symbol->type, is_unsigned) ||
+        type_ptr_depth(address->type) != 1 ||
+        (address->type & 15) != TYPE_INT ||
+        ((address->type & TYPE_UNSIGNED) != 0) != is_unsigned)
+        return 0;
+    *symbol_out = symbol;
+    return 1;
+}
+
+static int mir_modp2_print_function(
+    struct MirModp2DriverSchedule *plan, int slot,
+    const struct MirInsn *call)
+{
+    struct Sym *function;
+
+    function = find_global(call->name);
+    if (function == NULL || function->is_defined ||
+        function->is_funcptr || function->is_noreturn ||
+        !function->has_proto || function->proto_nargs != 1 ||
+        !function->proto_variadic ||
+        type_ptr_depth(function->proto_types[0]) != 1 ||
+        (function->proto_types[0] & 15) != TYPE_CHAR ||
+        !mir_modp2_int_type(function->type, 0) ||
+        !mir_modp2_int_type(call->type, 0) ||
+        call->memory_flags != MIR_CALL_FLAG_VARIADIC ||
+        call->base_name[0] == 0 ||
+        (plan->print_function != NULL &&
+         plan->print_function != function))
+        return 0;
+    plan->print_function = function;
+    snprintf(plan->print_names[slot],
+             sizeof(plan->print_names[slot]), "%s",
+             call->base_name);
+    return 1;
+}
+
+static int mir_match_modp2_loop(
+    struct MirModp2DriverSchedule *plan, int slot,
+    const struct MirModp2LoopShape *shape,
+    const struct MirInsn *sum_store,
+    const struct MirInsn *index_store,
+    const struct MirInsn **value_store,
+    struct Sym **array_symbol,
+    int previous_sum, int *loop_sum_out)
+{
+    const struct MirInsn *sum_phi = &mir.insns[shape->sum_phi];
+    const struct MirInsn *index_phi = &mir.insns[shape->index_phi];
+    const struct MirInsn *load = &mir.insns[shape->element_load];
+    const struct MirInsn *call = &mir.insns[shape->print_call];
+    const struct MirInsn *string = &mir.insns[shape->print_start];
+    int arguments[11];
+    int previous_add;
+    int item;
+
+    if (!mir_machine_constant_equals(
+            mir.insns[shape->init_constant].dst, 0) ||
+        mir.insns[shape->init_store].src1 !=
+            mir.insns[shape->init_constant].dst ||
+        !mir_machine_same_location(
+            &mir.insns[shape->init_store], index_store) ||
+        !mir_modp2_int_type(
+            mir.insns[shape->init_store].type, 0) ||
+        sum_phi->object != sum_store->object ||
+        !mir_modp2_long_type(sum_phi->type) ||
+        sum_phi->src1 != previous_sum ||
+        sum_phi->phi_pred1 !=
+            mir.insns[shape->entry_label].label ||
+        sum_phi->phi_pred2 !=
+            mir.insns[shape->tail_label].label ||
+        index_phi->object != index_store->object ||
+        !mir_modp2_int_type(index_phi->type, 0) ||
+        index_phi->src1 !=
+            mir.insns[shape->init_constant].dst ||
+        index_phi->phi_pred1 !=
+            mir.insns[shape->entry_label].label ||
+        index_phi->phi_pred2 !=
+            mir.insns[shape->tail_label].label ||
+        !mir_machine_constant_equals(
+            mir.insns[shape->bound_constant].dst,
+            shape->element_count * 2) ||
+        !mir_machine_constant_equals(
+            mir.insns[shape->element_constant].dst, 2) ||
+        mir.insns[shape->bound_division].immediate != '/' ||
+        mir.insns[shape->bound_division].src1 !=
+            mir.insns[shape->bound_constant].dst ||
+        mir.insns[shape->bound_division].src2 !=
+            mir.insns[shape->element_constant].dst ||
+        !mir_modp2_int_type(
+            mir.insns[shape->bound_division].type, 0) ||
+        mir.insns[shape->comparison].immediate != '<' ||
+        mir.insns[shape->comparison].src1 != index_phi->dst ||
+        mir.insns[shape->comparison].src2 !=
+            mir.insns[shape->bound_division].dst ||
+        !mir_modp2_int_type(
+            mir.insns[shape->comparison].secondary_offset, 0) ||
+        mir.insns[shape->branch].src1 !=
+            mir.insns[shape->comparison].dst ||
+        mir.insns[shape->branch].label !=
+            mir.insns[shape->exit_label].label)
+        return mir_machine_reject(
+            "modp2-driver-schedule", "loop-control");
+
+    if (!mir_modp2_array_address(
+            &mir.insns[shape->array_address],
+            shape->element_count, shape->is_unsigned,
+            array_symbol) ||
+        mir.insns[shape->index_address].src1 !=
+            mir.insns[shape->array_address].dst ||
+        mir.insns[shape->index_address].src2 != index_phi->dst ||
+        mir.insns[shape->index_address].immediate != 2 ||
+        mir.insns[shape->index_address].memory_size != 2 ||
+        load->src1 != mir.insns[shape->index_address].dst ||
+        load->memory_size != 2 ||
+        (load->memory_flags & (1 | 8)) != 0 ||
+        load->bit_width != 0 ||
+        !mir_modp2_int_type(load->type, shape->is_unsigned) ||
+        mir.insns[shape->value_store].src1 != load->dst ||
+        !mir_modp2_int_type(
+            mir.insns[shape->value_store].type,
+            shape->is_unsigned))
+        return mir_machine_reject(
+            "modp2-driver-schedule", "array-load");
+    if (*value_store == NULL)
+        *value_store = &mir.insns[shape->value_store];
+    else if (!mir_machine_same_location(
+                 *value_store,
+                 &mir.insns[shape->value_store]))
+        return mir_machine_reject(
+            "modp2-driver-schedule", "value-local");
+
+    if (string->immediate < 0 ||
+        type_ptr_depth(string->type) != 1 ||
+        (string->type & 15) != TYPE_CHAR ||
+        !mir_modp2_print_function(plan, slot, call) ||
+        !mir_numeric_call_arguments(
+            call, shape->divisor_count + 2, arguments) ||
+        arguments[0] != string->dst ||
+        arguments[1] != load->dst ||
+        mir.insns[shape->print_start + 1].src1 != string->dst ||
+        mir.insns[shape->print_start + 1].immediate != 0 ||
+        mir.insns[shape->print_start + 3].src1 != load->dst ||
+        mir.insns[shape->print_start + 3].immediate != 1)
+        return mir_machine_reject(
+            "modp2-driver-schedule", "print-call");
+    plan->string_ids[slot] = (int)string->immediate;
+    for (item = 0; item < shape->divisor_count; ++item) {
+        int constant_index = shape->print_start + 5 + 4 * item;
+        int binary_index = constant_index + 1;
+        int argument_index = constant_index + 2;
+        const struct MirInsn *binary = &mir.insns[binary_index];
+
+        if (!mir_machine_constant_equals(
+                mir.insns[constant_index].dst,
+                shape->divisors[item]) ||
+            binary->immediate != shape->operation ||
+            binary->src1 != load->dst ||
+            binary->src2 != mir.insns[constant_index].dst ||
+            !mir_modp2_int_type(
+                binary->type, shape->is_unsigned) ||
+            !mir_modp2_int_type(
+                binary->secondary_offset, shape->is_unsigned) ||
+            mir.insns[argument_index].src1 != binary->dst ||
+            mir.insns[argument_index].immediate != item + 2 ||
+            arguments[item + 2] != binary->dst)
+            return mir_machine_reject(
+                "modp2-driver-schedule", "print-arguments");
+    }
+
+    previous_add = sum_phi->dst;
+    for (item = 0; item < shape->divisor_count; ++item) {
+        int start = shape->sum_start + 8 * item;
+        const struct MirInsn *binary = &mir.insns[start + 3];
+        const struct MirInsn *conversion = &mir.insns[start + 4];
+        const struct MirInsn *addition = &mir.insns[start + 5];
+        const struct MirInsn *store = &mir.insns[start + 7];
+
+        if (!mir_machine_constant_equals(
+                mir.insns[start + 2].dst,
+                shape->divisors[item]) ||
+            binary->immediate != shape->operation ||
+            binary->src1 != load->dst ||
+            binary->src2 != mir.insns[start + 2].dst ||
+            !mir_modp2_int_type(
+                binary->type, shape->is_unsigned) ||
+            !mir_modp2_int_type(
+                binary->secondary_offset, shape->is_unsigned) ||
+            conversion->immediate != 0 ||
+            conversion->src1 != binary->dst ||
+            !mir_modp2_long_type(conversion->type) ||
+            addition->immediate != '+' ||
+            addition->src1 != previous_add ||
+            addition->src2 != conversion->dst ||
+            !mir_modp2_long_type(addition->type) ||
+            store->src1 != addition->dst ||
+            !mir_machine_same_location(store, sum_store))
+            return mir_machine_reject(
+                "modp2-driver-schedule", "sum-update");
+        previous_add = addition->dst;
+    }
+
+    if (sum_phi->src2 != previous_add ||
+        !mir_machine_constant_equals(
+            mir.insns[shape->increment_constant].dst, 1) ||
+        mir.insns[shape->increment].immediate != '+' ||
+        mir.insns[shape->increment].src1 != index_phi->dst ||
+        mir.insns[shape->increment].src2 !=
+            mir.insns[shape->increment_constant].dst ||
+        !mir_modp2_int_type(
+            mir.insns[shape->increment].type, 0) ||
+        mir.insns[shape->increment_store].src1 !=
+            mir.insns[shape->increment].dst ||
+        !mir_machine_same_location(
+            &mir.insns[shape->increment_store], index_store) ||
+        index_phi->src2 != mir.insns[shape->increment].dst ||
+        mir.insns[shape->jump].label !=
+            mir.insns[shape->header_label].label)
+        return mir_machine_reject(
+            "modp2-driver-schedule", "loop-tail");
+
+    *loop_sum_out = sum_phi->dst;
+    return 1;
+}
+
+static int mir_match_modp2_driver_schedule(
+    struct MirModp2DriverSchedule *plan)
+{
+    static const char expected_opcodes[] =
+        "LNCSNNNNNCNSLPPNNCCBNBFNANIRSTGNGNCBGNCBGNCBGNCBGNCBGNCBGNCBGNCBGKNNCBUBNSN"
+        "NCBUBNSNNCBUBNSNNCBUBNSNNCBUBNSNNCBUBNSNNCBUBNSNNCBUBNSNLNCBSJLNNNNNCNSLPPP"
+        "NCCBNBFNANIRSTGNGNCBGNCBGNCBGNCBGNCBGNCBGKNNCBUBNSNNCBUBNSNNCBUBNSNNCBUBNSN"
+        "NCBUBNSNNCBUBNSNLNCBSJLNNNNNCNSLPPNNNCCBNBFNANIRSTGNGNCBGNCBGNCBGNCBGNCBGKN"
+        "NCBUBNSNNCBUBNSNNCBUBNSNNCBUBNSNNCBUBNSNLNCBSJLNNNNNCNSLPPPNNCCBNBFNANIRSTG"
+        "NGNCBGNCBGNCBGNCBGNCBGNCBGNCBGNCBGNCBGKNNCBUBNSNNCBUBNSNNCBUBNSNNCBUBNSNNCB"
+        "UBNSNNCBUBNSNNCBUBNSNNCBUBNSNNCBUBNSNLNCBSJLNNNNNCNSLPPPNNCCBNBFNANIRSTGNGN"
+        "CBGNCBGNCBGNCBGKNNCBUBNSNNCBUBNSNNCBUBNSNNCBUBNSNLNCBSJLNNNNNCNSLPPNPNCCBNB"
+        "FNANIRSTGNGNCBGNCBGNCBGNCBGKNNCBUBNSNNCBUBNSNNCBUBNSNNCBUBNSNLNCBSJLTGNGKCE";
+    static const int signed_mod_pow2[] =
+        {2, 4, 8, 16, 32, 64, 128, 256};
+    static const int signed_mod_other[] =
+        {3, 5, 10, 100, 255, 1000};
+    static const int unsigned_mod[] =
+        {8, 3, 255, 256, 1000};
+    static const int signed_div_pow2[] =
+        {2, 4, 8, 128, 256, 512, 1024, 4096, 16384};
+    static const int signed_div_other[] =
+        {3, 10, 255, 1000};
+    static const int unsigned_div[] =
+        {8, 3, 256, 1000};
+    static const struct MirModp2LoopShape loops[6] = {
+        {0, 9, 11, 12, 13, 14, 17, 18, 19, 21, 22,
+         24, 26, 27, 28, 29, 65, 66, 131, 133, 134, 135, 136, 137,
+         38, '%', 0, 8, signed_mod_pow2},
+        {137, 143, 145, 146, 147, 148, 151, 152, 153, 155, 156,
+         158, 160, 161, 162, 163, 191, 192, 241, 243, 244, 245, 246, 247,
+         38, '%', 0, 6, signed_mod_other},
+        {247, 253, 255, 256, 257, 258, 262, 263, 264, 266, 267,
+         269, 271, 272, 273, 274, 298, 299, 340, 342, 343, 344, 345, 346,
+         13, '%', 1, 5, unsigned_mod},
+        {346, 352, 354, 355, 356, 357, 361, 362, 363, 365, 366,
+         368, 370, 371, 372, 373, 413, 414, 487, 489, 490, 491, 492, 493,
+         38, '/', 0, 9, signed_div_pow2},
+        {493, 499, 501, 502, 503, 504, 508, 509, 510, 512, 513,
+         515, 517, 518, 519, 520, 540, 541, 574, 576, 577, 578, 579, 580,
+         38, '/', 0, 4, signed_div_other},
+        {580, 586, 588, 589, 590, 591, 595, 596, 597, 599, 600,
+         602, 604, 605, 606, 607, 627, 628, 661, 663, 664, 665, 666, 667,
+         13, '/', 1, 4, unsigned_div}
+    };
+    const struct MirInsn *sum_store;
+    const struct MirInsn *index_store;
+    const struct MirInsn *signed_value_store = NULL;
+    const struct MirInsn *unsigned_value_store = NULL;
+    struct Sym *array_symbol;
+    int arguments[2];
+    int previous_sum;
+    int instruction;
+    int loop;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 675 ||
+        sizeof(expected_opcodes) - 1 != 675 ||
+        mir_cfg_block_count() != 19 ||
+        mir.local_bytes != 18 ||
+        mir.aggregate_temp_bytes != 0 ||
+        mir.has_vla || !mir_has_cfg_backedge() ||
+        !mir_modp2_int_type(mir.return_type, 0))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir_modp2_opcode_code(
+                mir.insns[instruction].opcode) !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "modp2-driver-schedule", "opcode");
+
+    sum_store = &mir.insns[3];
+    index_store = &mir.insns[11];
+    if (!mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+        sum_store->src1 != mir.insns[2].dst ||
+        !mir_modp2_long_type(sum_store->type) ||
+        sum_store->object < 0 ||
+        !mir_machine_constant_equals(mir.insns[9].dst, 0) ||
+        index_store->src1 != mir.insns[9].dst ||
+        !mir_modp2_int_type(index_store->type, 0) ||
+        index_store->object < 0)
+        return mir_machine_reject(
+            "modp2-driver-schedule", "initial-state");
+
+    previous_sum = mir.insns[2].dst;
+    for (loop = 0; loop < 6; ++loop) {
+        const struct MirInsn **value_store =
+            loops[loop].is_unsigned
+                ? &unsigned_value_store : &signed_value_store;
+
+        if (!mir_match_modp2_loop(
+                plan, loop, &loops[loop], sum_store,
+                index_store, value_store, &array_symbol,
+                previous_sum, &previous_sum))
+            return 0;
+        if (loops[loop].is_unsigned) {
+            if (plan->unsigned_values == NULL)
+                plan->unsigned_values = array_symbol;
+            else if (plan->unsigned_values != array_symbol)
+                return mir_machine_reject(
+                    "modp2-driver-schedule",
+                    "unsigned-array");
+        } else {
+            if (plan->signed_values == NULL)
+                plan->signed_values = array_symbol;
+            else if (plan->signed_values != array_symbol)
+                return mir_machine_reject(
+                    "modp2-driver-schedule",
+                    "signed-array");
+        }
+    }
+    if (plan->signed_values == plan->unsigned_values)
+        return mir_machine_reject(
+            "modp2-driver-schedule", "distinct-arrays");
+
+    if (mir.insns[668].immediate < 0 ||
+        type_ptr_depth(mir.insns[668].type) != 1 ||
+        (mir.insns[668].type & 15) != TYPE_CHAR ||
+        !mir_modp2_print_function(plan, 6, &mir.insns[672]) ||
+        !mir_numeric_call_arguments(
+            &mir.insns[672], 2, arguments) ||
+        arguments[0] != mir.insns[668].dst ||
+        arguments[1] != previous_sum ||
+        mir.insns[669].src1 != mir.insns[668].dst ||
+        mir.insns[669].immediate != 0 ||
+        mir.insns[671].src1 != previous_sum ||
+        mir.insns[671].immediate != 1 ||
+        !mir_machine_constant_equals(mir.insns[673].dst, 0) ||
+        mir.insns[674].src1 != mir.insns[673].dst)
+        return mir_machine_reject(
+            "modp2-driver-schedule", "final-report");
+    plan->string_ids[6] = (int)mir.insns[668].immediate;
+    return 1;
+}
+
 static void mir_fixed_point_mixed_product(
     FILE *out, int signed_offset, int unsigned_offset)
 {
@@ -2627,12 +3081,211 @@ static void mir_emit_catalan_driver_schedule(
           "\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
+static int mir_modp2_power_shift(int divisor)
+{
+    int shift = 0;
+
+    if (divisor < 2 ||
+        (divisor & (divisor - 1)) != 0)
+        return -1;
+    while (divisor > 1) {
+        divisor >>= 1;
+        ++shift;
+    }
+    return shift;
+}
+
+static void mir_modp2_emit_mask(
+    FILE *out, int divisor)
+{
+    int mask = divisor - 1;
+
+    if (mask == 255)
+        fputs("\tld h,0\n", out);
+    else
+        fprintf(out,
+                "\tld a,l\n\tand %d\n\tld l,a\n\tld h,0\n",
+                mask);
+}
+
+static void mir_modp2_emit_unsigned_shift(
+    FILE *out, int shift)
+{
+    int bit;
+
+    if (shift >= 8) {
+        fputs("\tld l,h\n\tld h,0\n", out);
+        for (bit = 8; bit < shift; ++bit)
+            fputs("\tsrl l\n", out);
+    } else {
+        for (bit = 0; bit < shift; ++bit)
+            fputs("\tsrl h\n\trr l\n", out);
+    }
+}
+
+static void mir_modp2_emit_operation(
+    FILE *out, int operation, int is_unsigned,
+    int divisor)
+{
+    int shift = mir_modp2_power_shift(divisor);
+
+    if (operation == '%' && shift >= 0 && is_unsigned) {
+        mir_modp2_emit_mask(out, divisor);
+        return;
+    }
+    if (operation == '/' && shift >= 0 && is_unsigned) {
+        mir_modp2_emit_unsigned_shift(out, shift);
+        return;
+    }
+
+    fprintf(out, "\tld de,%d\n", divisor);
+    if (operation == '%')
+        mir_emit_runtime_call(
+            out, is_unsigned ? "__modu" : "__mods");
+    else
+        mir_emit_runtime_call(
+            out, is_unsigned ? "__divu" : "__divs");
+}
+
+static void mir_modp2_emit_value_load(FILE *out)
+{
+    fputs("\tld l,(ix-3)\n\tld h,(ix-2)\n", out);
+}
+
+static void mir_modp2_emit_sum_add(
+    FILE *out, int is_unsigned)
+{
+    if (is_unsigned) {
+        fputs("\tld de,0\n", out);
+    } else {
+        fputs("\tld a,h\n\trlca\n\tsbc a,a\n"
+              "\tld d,a\n\tld e,a\n", out);
+    }
+    fputs("\tld c,(ix-7)\n\tld b,(ix-6)\n"
+          "\tadd hl,bc\n\tex de,hl\n"
+          "\tld c,(ix-5)\n\tld b,(ix-4)\n"
+          "\tadc hl,bc\n\tex de,hl\n", out);
+    mir_machine_emit_ix_wide_store(out, -7);
+}
+
+static void mir_modp2_emit_print(
+    FILE *out, const struct MirModp2DriverSchedule *plan,
+    int slot, int operation, int is_unsigned,
+    const int *divisors, int divisor_count)
+{
+    int item;
+
+    for (item = divisor_count - 1; item >= 0; --item) {
+        mir_modp2_emit_value_load(out);
+        mir_modp2_emit_operation(
+            out, operation, is_unsigned, divisors[item]);
+        fputs("\tpush hl\n", out);
+    }
+    mir_modp2_emit_value_load(out);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->string_ids[slot]);
+    mir_emit_runtime_call(out, plan->print_names[slot]);
+    for (item = 0; item < divisor_count + 2; ++item)
+        fputs("\tpop bc\n", out);
+}
+
+static void mir_modp2_emit_loop(
+    FILE *out, const struct MirModp2DriverSchedule *plan,
+    int slot, struct Sym *array, int element_count,
+    int operation, int is_unsigned,
+    const int *divisors, int divisor_count)
+{
+    int loop = new_label();
+    int done = new_label();
+    int item;
+
+    fprintf(out,
+            "\tld (ix-1),0\n"
+            "L%d:\n"
+            "\tld a,(ix-1)\n\tcp %d\n\tjp nc,L%d\n"
+            "\tld l,a\n\tld h,0\n\tadd hl,hl\n",
+            loop, element_count, done);
+    mir_machine_emit_global_address_de(out, array, 0);
+    fputs("\tadd hl,de\n"
+          "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tex de,hl\n"
+          "\tld (ix-3),l\n\tld (ix-2),h\n", out);
+
+    mir_modp2_emit_print(
+        out, plan, slot, operation, is_unsigned,
+        divisors, divisor_count);
+    for (item = 0; item < divisor_count; ++item) {
+        mir_modp2_emit_value_load(out);
+        mir_modp2_emit_operation(
+            out, operation, is_unsigned, divisors[item]);
+        mir_modp2_emit_sum_add(out, is_unsigned);
+    }
+    fprintf(out,
+            "\tinc (ix-1)\n\tjp L%d\n"
+            "L%d:\n",
+            loop, done);
+}
+
+static void mir_emit_modp2_driver_schedule(
+    FILE *out, const struct MirModp2DriverSchedule *plan)
+{
+    static const int signed_mod_pow2[] =
+        {2, 4, 8, 16, 32, 64, 128, 256};
+    static const int signed_mod_other[] =
+        {3, 5, 10, 100, 255, 1000};
+    static const int unsigned_mod[] =
+        {8, 3, 255, 256, 1000};
+    static const int signed_div_pow2[] =
+        {2, 4, 8, 128, 256, 512, 1024, 4096, 16384};
+    static const int signed_div_other[] =
+        {3, 10, 255, 1000};
+    static const int unsigned_div[] =
+        {8, 3, 256, 1000};
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-7\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\txor a\n"
+          "\tld (ix-7),a\n\tld (ix-6),a\n"
+          "\tld (ix-5),a\n\tld (ix-4),a\n", out);
+
+    mir_modp2_emit_loop(
+        out, plan, 0, plan->signed_values, 38,
+        '%', 0, signed_mod_pow2, 8);
+    mir_modp2_emit_loop(
+        out, plan, 1, plan->signed_values, 38,
+        '%', 0, signed_mod_other, 6);
+    mir_modp2_emit_loop(
+        out, plan, 2, plan->unsigned_values, 13,
+        '%', 1, unsigned_mod, 5);
+    mir_modp2_emit_loop(
+        out, plan, 3, plan->signed_values, 38,
+        '/', 0, signed_div_pow2, 9);
+    mir_modp2_emit_loop(
+        out, plan, 4, plan->signed_values, 38,
+        '/', 0, signed_div_other, 4);
+    mir_modp2_emit_loop(
+        out, plan, 5, plan->unsigned_values, 13,
+        '/', 1, unsigned_div, 4);
+
+    mir_machine_emit_ix_wide_load(out, -7);
+    fputs("\tpush de\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->string_ids[6]);
+    mir_emit_runtime_call(out, plan->print_names[6]);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
 int mir_try_emit_numeric_kernels(FILE *out, int phase)
 {
     if (phase == 0) {
         struct MirUnsignedLongSqrtSchedule sqrt_plan;
         struct MirPrimeSearchSchedule prime_plan;
         struct MirCatalanDriverSchedule catalan_plan;
+        struct MirModp2DriverSchedule modp2_plan;
 
         if (mir_match_unsigned_long_sqrt_schedule(&sqrt_plan)) {
             mir_emit_unsigned_long_sqrt_schedule(out, &sqrt_plan);
@@ -2644,6 +3297,10 @@ int mir_try_emit_numeric_kernels(FILE *out, int phase)
         }
         if (mir_match_catalan_driver_schedule(&catalan_plan)) {
             mir_emit_catalan_driver_schedule(out, &catalan_plan);
+            return 1;
+        }
+        if (mir_match_modp2_driver_schedule(&modp2_plan)) {
+            mir_emit_modp2_driver_schedule(out, &modp2_plan);
             return 1;
         }
     } else if (phase == 1) {

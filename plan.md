@@ -6,10 +6,47 @@ current execution plan and handoff.
 ## 2026-08-13 current checkpoint (read this first)
 
 - Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Clean base HEAD for the current coverage batch: `79f9545`.
-- Current working-tree candidate coverage: **2140/2185 (97.94%)**.
-- Remaining fallback population: **45 `final-cost-policy`**, all selected by
+- Clean base HEAD for the current coverage batch: `657fdc0`.
+- Current working-tree candidate coverage: **2141/2185 (97.99%)**.
+- Remaining fallback population: **44 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The numeric module now admits the 19-block `tmodp2.main`
+  `final-cost-policy` fallback through a strict name-free matcher over all
+  **675 MIR instructions**. It proves the distinct signed 38-element and
+  unsigned 13-element word arrays; all six loop PHIs, bounds, loads and
+  backedges; every signed/unsigned divisor and operation; all seven ordered
+  variadic reports; every widening and 32-bit sum update; and the final zero
+  return. The emitter uses a compact **7-byte IX frame**, keeps each bounded
+  index byte-narrowed, and uses no IY. Unsigned power-of-two remainder and
+  division use direct masks and logical shifts. Signed power-of-two operations
+  retain the established signed helpers, allowing dccpeep's proven
+  magnitude/sign-restoring forms to preserve truncation toward zero for every
+  negative edge. Normal selected/captured metrics are **12,598/15,931 bytes**
+  and **1,123/1,472 instructions**; stack-check metrics are
+  **12,627/15,960 bytes** and **1,124/1,473 instructions**.
+- `tmodp2` passes checked full peep/nopeep validation, as does the forced
+  fallback side. Against the checked fallback values, peep improves from
+  **8,702,177 to 8,674,151 cycles** and **8,192 to 8,064 bytes**, while
+  nopeep improves from **10,016,307 to 9,618,933 cycles** and
+  **8,832 to 8,192 bytes**.
+- A renamed-array/renamed-function boundary A/B substitutes signed values at
+  every key zero, sign, mask, byte, 16384 and 16-bit endpoint and unsigned
+  values through 65535, while retaining all seven driver reports and adding a
+  wrapper return check. Selected and forced-fallback program output is
+  byte-identical in both modes, ending with `sum 51967` and `edge return 0`.
+  Selected/fallback measurements are
+  **8,663,144/8,691,170 cycles and 5,504/5,504 bytes peep**, and
+  **9,704,158/10,135,988 cycles and 5,632/6,144 bytes nopeep**.
+- The numeric module grows from **2,665 to 3,322 source lines** and from
+  **41 to 57 static top-level helpers**. The object audit reports only
+  `mir_try_emit_numeric_kernels [T]` as defined global code, with zero global
+  data. The canonical build passes. The regression-gated stack-check census
+  advances **2,140/2,185 (97.94%)** to **2,141/2,185 (97.99%)**, adds exactly
+  `tmodp2.main`, removes no accepted function, moves selector counts from
+  **1,413 spilled / 365 scheduled** to
+  **1,412 spilled / 366 scheduled**, and leaves
+  **44 `final-cost-policy`** fallbacks. No performance baseline, production
+  name, or output-hash gate was added.
 - The call-runner module now admits the 19-block `tm.main`
   `final-cost-policy` fallback through a strict name-free matcher over all
   **386 MIR instructions**. It proves the signed `argc > 1` logging store,
