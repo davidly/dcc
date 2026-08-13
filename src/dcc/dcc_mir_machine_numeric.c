@@ -99,6 +99,11 @@ struct MirModp2LoopShape {
     const int *divisors;
 };
 
+struct MirLcsDpSchedule {
+    int left_stack_offset;
+    int right_stack_offset;
+};
+
 static int mir_modp2_opcode_code(int opcode);
 
 static int mir_machine_constant_value(
@@ -221,6 +226,429 @@ static int mir_numeric_unsigned_long_type(int type)
            (type & 15) == TYPE_LONG &&
            (type & TYPE_UNSIGNED) != 0 &&
            type_size(type) == 4;
+}
+
+static int mir_lcs_int_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           !type_is_float(type) &&
+           (type & 15) == TYPE_INT &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 2;
+}
+
+static int mir_lcs_char_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & 15) == TYPE_CHAR &&
+           type_size(type) == 2;
+}
+
+static int mir_lcs_int_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & 15) == TYPE_INT &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 2;
+}
+
+static int mir_lcs_char_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           !type_is_float(type) &&
+           (type & 15) == TYPE_CHAR &&
+           type_size(type) == 1;
+}
+
+static int mir_lcs_table_address(
+    const struct MirInsn *address, const struct MirInsn *expected)
+{
+    int declared;
+
+    if (address == NULL || address->opcode != MIR_ADDRESS ||
+        !mir_lcs_int_pointer_type(address->type))
+        return 0;
+    if (expected != NULL &&
+        (address->type != expected->type ||
+         strcmp(address->name, expected->name)))
+        return 0;
+    for (declared = 0; declared < mir.declared_count; ++declared)
+        if (!strcmp(mir.declared_names[declared], address->name))
+            return mir.declared_storage[declared] == SC_LOCAL &&
+                   mir.declared_offsets[declared] == -162 &&
+                   mir.declared_sizes[declared] == 162 &&
+                   mir.declared_is_array[declared] &&
+                   !mir.declared_is_vla[declared] &&
+                   !mir.declared_is_volatile[declared] &&
+                   mir.declared_dim_counts[declared] == 2 &&
+                   mir.declared_dims[declared][0] == 9 &&
+                   mir.declared_dims[declared][1] == 9 &&
+                   mir.declared_elem_sizes[declared] == 18 &&
+                   mir_lcs_int_type(mir.declared_types[declared]);
+    return 0;
+}
+
+static int mir_lcs_binary(
+    int instruction, int operation, int left, int right)
+{
+    const struct MirInsn *insn = &mir.insns[instruction];
+
+    return insn->opcode == MIR_BINARY &&
+           insn->immediate == operation &&
+           insn->src1 == mir.insns[left].dst &&
+           insn->src2 == mir.insns[right].dst &&
+           mir_lcs_int_type(insn->type);
+}
+
+static int mir_lcs_index(
+    int instruction, int base, int subscript,
+    int stride, int memory_size)
+{
+    const struct MirInsn *insn = &mir.insns[instruction];
+
+    return insn->opcode == MIR_INDEX_ADDRESS &&
+           insn->src1 == mir.insns[base].dst &&
+           insn->src2 == mir.insns[subscript].dst &&
+           insn->immediate == stride &&
+           insn->memory_size == memory_size &&
+           ((memory_size == 1 &&
+             mir_lcs_char_pointer_type(insn->type)) ||
+            ((memory_size == 2 || memory_size == 18) &&
+             mir_lcs_int_pointer_type(insn->type))) &&
+           (insn->memory_flags & (1 | 8)) == 0;
+}
+
+static int mir_lcs_same_local_store(
+    int instruction, int expected, int value)
+{
+    const struct MirInsn *store = &mir.insns[instruction];
+
+    return mir_machine_unobservable_local_store(store) &&
+           mir_machine_same_location(store, &mir.insns[expected]) &&
+           store->src1 == mir.insns[value].dst;
+}
+
+static int mir_lcs_same_local_load(int instruction, int expected)
+{
+    const struct MirInsn *load = &mir.insns[instruction];
+
+    return load->opcode == MIR_LOAD &&
+           mir_machine_same_location(load, &mir.insns[expected]) &&
+           mir_lcs_int_type(load->type) &&
+           (load->memory_flags & (1 | 8)) == 0;
+}
+
+static int mir_lcs_phi(
+    int instruction, int left, int right,
+    int left_label, int right_label, int object)
+{
+    const struct MirInsn *phi = &mir.insns[instruction];
+
+    return phi->opcode == MIR_PHI &&
+           phi->src1 == mir.insns[left].dst &&
+           phi->src2 == mir.insns[right].dst &&
+           phi->phi_pred1 == mir.insns[left_label].label &&
+           phi->phi_pred2 == mir.insns[right_label].label &&
+           phi->object == mir.insns[object].object &&
+           phi->object >= 0 &&
+           mir_lcs_int_type(phi->type);
+}
+
+static int mir_lcs_value_phi(
+    int instruction, int left, int right,
+    int left_label, int right_label)
+{
+    const struct MirInsn *phi = &mir.insns[instruction];
+
+    return phi->opcode == MIR_PHI &&
+           phi->src1 == mir.insns[left].dst &&
+           phi->src2 == mir.insns[right].dst &&
+           phi->phi_pred1 == mir.insns[left_label].label &&
+           phi->phi_pred2 == mir.insns[right_label].label &&
+           phi->object < 0 &&
+           mir_lcs_int_type(phi->type);
+}
+
+static int mir_lcs_branch(int instruction, int condition, int target)
+{
+    return mir.insns[instruction].src1 ==
+               mir.insns[condition].dst &&
+           mir.insns[instruction].label ==
+               mir.insns[target].label;
+}
+
+static int mir_lcs_jump(int instruction, int target)
+{
+    return mir.insns[instruction].label ==
+           mir.insns[target].label;
+}
+
+static int mir_match_lcs_dp_schedule(struct MirLcsDpSchedule *plan)
+{
+    static const int expected_opcodes[225] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_CONST, MIR_STORE, MIR_CONST,
+        MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_LABEL, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_CONST,
+        MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_LABEL,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL,
+        MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT,
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP,
+        MIR_LABEL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE,
+        MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_LOAD, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE, MIR_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD, MIR_INDEX_ADDRESS, MIR_NOP,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_NOP, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY, MIR_UNARY,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_ADDRESS, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_INDEX_ADDRESS, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY,
+        MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_ADDRESS, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_INDEX_ADDRESS, MIR_LOAD, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_ADDRESS,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_INDEX_ADDRESS, MIR_LOAD,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_LABEL, MIR_JUMP,
+        MIR_LABEL, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_LABEL, MIR_LABEL, MIR_PHI,
+        MIR_STORE_INDIRECT, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_LABEL, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_ADDRESS, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_RETURN
+    };
+    static const int constants[][2] = {
+        {3, 0}, {5, 0}, {18, 1}, {35, 1}, {41, 0}, {57, 0},
+        {59, 0}, {63, 1}, {68, 0}, {83, 0}, {87, 0}, {91, 1},
+        {96, 1}, {110, 1}, {131, 1}, {137, 1}, {147, 1},
+        {151, 1}, {155, 1}, {162, 1}, {172, 1}, {180, 1},
+        {193, 1}, {206, 1}, {213, 1}
+    };
+    static const int table_addresses[] = {
+        54, 82, 124, 145, 160, 168, 178, 189, 218
+    };
+    static const int j_loads[] = {
+        120, 127, 136, 150, 165, 171, 183, 192, 205
+    };
+    const struct MirInsn *table;
+    int instruction;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 225 || mir_cfg_block_count() != 27 ||
+        mir.local_bytes != 174 || mir.aggregate_temp_bytes != 0 ||
+        mir.has_vla || !mir_has_cfg_backedge() ||
+        !mir_lcs_int_type(mir.return_type))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject("lcs-dp", "opcodes");
+    for (item = 0;
+         item < (int)(sizeof(constants) / sizeof(constants[0]));
+         ++item)
+        if (!mir_machine_constant_equals(
+                mir.insns[constants[item][0]].dst,
+                constants[item][1]))
+            return mir_machine_reject("lcs-dp", "constants");
+
+    if (!mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->left_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[2].dst, &plan->right_stack_offset) ||
+        plan->left_stack_offset == plan->right_stack_offset ||
+        plan->left_stack_offset > 124 ||
+        plan->right_stack_offset > 124 ||
+        !mir_lcs_char_pointer_type(mir.insns[1].type) ||
+        !mir_lcs_char_pointer_type(mir.insns[2].type) ||
+        mir_machine_pointee_is_volatile(&mir.insns[1]) ||
+        mir_machine_pointee_is_volatile(&mir.insns[2]))
+        return mir_machine_reject("lcs-dp", "parameters");
+
+    if (!mir_machine_unobservable_local_store(&mir.insns[4]) ||
+        mir.insns[4].src1 != mir.insns[3].dst ||
+        !mir_lcs_same_local_store(20, 4, 19) ||
+        !mir_machine_unobservable_local_store(&mir.insns[6]) ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        !mir_lcs_same_local_store(37, 6, 36) ||
+        !mir_lcs_phi(10, 3, 19, 0, 21, 4) ||
+        !mir_lcs_phi(28, 5, 36, 23, 38, 6) ||
+        !mir_lcs_index(14, 1, 10, 1, 1) ||
+        !mir_lcs_index(31, 2, 28, 1, 1) ||
+        mir.insns[15].src1 != mir.insns[14].dst ||
+        !mir_lcs_char_type(mir.insns[15].type) ||
+        mir.insns[15].memory_size != 1 ||
+        (mir.insns[15].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[32].src1 != mir.insns[31].dst ||
+        !mir_lcs_char_type(mir.insns[32].type) ||
+        mir.insns[32].memory_size != 1 ||
+        (mir.insns[32].memory_flags & (1 | 8)) != 0 ||
+        !mir_lcs_branch(16, 15, 23) ||
+        !mir_lcs_branch(33, 32, 40) ||
+        !mir_lcs_binary(19, '+', 10, 18) ||
+        !mir_lcs_binary(36, '+', 28, 35) ||
+        !mir_lcs_jump(22, 7) || !mir_lcs_jump(39, 24))
+        return mir_machine_reject("lcs-dp", "length-loops");
+
+    if (!mir_machine_unobservable_local_store(&mir.insns[43]) ||
+        mir.insns[43].src1 != mir.insns[41].dst ||
+        !mir_lcs_same_local_store(65, 43, 64) ||
+        !mir_lcs_phi(49, 41, 64, 40, 61, 43) ||
+        !mir_lcs_binary(52, TOK_LE, 49, 10) ||
+        !mir_lcs_branch(53, 52, 67) ||
+        !mir_lcs_binary(64, '+', 49, 63) ||
+        !mir_lcs_jump(66, 44) ||
+        !mir_machine_unobservable_local_store(&mir.insns[70]) ||
+        mir.insns[70].src1 != mir.insns[68].dst ||
+        !mir_lcs_same_local_store(93, 70, 92) ||
+        !mir_lcs_phi(77, 68, 92, 67, 89, 70) ||
+        !mir_lcs_binary(80, TOK_LE, 77, 28) ||
+        !mir_lcs_branch(81, 80, 95) ||
+        !mir_lcs_binary(92, '+', 77, 91) ||
+        !mir_lcs_jump(94, 71))
+        return mir_machine_reject("lcs-dp", "zero-rows");
+
+    table = &mir.insns[54];
+    if (!mir_lcs_table_address(table, NULL))
+        return mir_machine_reject("lcs-dp", "table");
+    for (item = 1;
+         item < (int)(sizeof(table_addresses) /
+                      sizeof(table_addresses[0]));
+         ++item)
+        if (!mir_lcs_table_address(
+                &mir.insns[table_addresses[item]], table))
+            return mir_machine_reject("lcs-dp", "table-alias");
+    if (!mir_lcs_index(56, 54, 49, 18, 18) ||
+        !mir_lcs_index(58, 56, 57, 2, 2) ||
+        mir.insns[60].src1 != mir.insns[58].dst ||
+        mir.insns[60].src2 != mir.insns[59].dst ||
+        mir.insns[60].memory_size != 2 ||
+        (mir.insns[60].memory_flags & (1 | 8)) != 0 ||
+        !mir_lcs_index(84, 82, 83, 18, 18) ||
+        !mir_lcs_index(86, 84, 77, 2, 2) ||
+        mir.insns[88].src1 != mir.insns[86].dst ||
+        mir.insns[88].src2 != mir.insns[87].dst ||
+        mir.insns[88].memory_size != 2 ||
+        (mir.insns[88].memory_flags & (1 | 8)) != 0)
+        return mir_machine_reject("lcs-dp", "zero-storage");
+
+    if (!mir_lcs_same_local_store(98, 43, 96) ||
+        !mir_lcs_phi(104, 96, 214, 95, 211, 43) ||
+        !mir_lcs_binary(108, TOK_LE, 104, 10) ||
+        !mir_lcs_branch(109, 108, 217) ||
+        !mir_lcs_same_local_store(112, 70, 110) ||
+        !mir_lcs_binary(122, TOK_LE, 120, 28) ||
+        !mir_lcs_branch(123, 122, 210) ||
+        !mir_lcs_binary(132, '-', 104, 131) ||
+        !mir_lcs_binary(138, '-', 136, 137) ||
+        !mir_lcs_index(133, 1, 132, 1, 1) ||
+        !mir_lcs_index(139, 2, 138, 1, 1) ||
+        mir.insns[134].src1 != mir.insns[133].dst ||
+        !mir_lcs_char_type(mir.insns[134].type) ||
+        mir.insns[134].memory_size != 1 ||
+        (mir.insns[134].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[140].src1 != mir.insns[139].dst ||
+        !mir_lcs_char_type(mir.insns[140].type) ||
+        mir.insns[140].memory_size != 1 ||
+        (mir.insns[140].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[141].src1 != mir.insns[134].dst ||
+        mir.insns[142].src1 != mir.insns[140].dst ||
+        mir.insns[141].immediate != 0 ||
+        mir.insns[142].immediate != 0 ||
+        !mir_lcs_int_type(mir.insns[141].type) ||
+        !mir_lcs_int_type(mir.insns[142].type) ||
+        !mir_lcs_binary(143, TOK_EQ, 141, 142) ||
+        !mir_lcs_branch(144, 143, 159))
+        return mir_machine_reject("lcs-dp", "loop-and-characters");
+
+    for (item = 0;
+         item < (int)(sizeof(j_loads) / sizeof(j_loads[0]));
+         ++item)
+        if (!mir_lcs_same_local_load(j_loads[item], 70))
+            return mir_machine_reject("lcs-dp", "column-loads");
+    if (!mir_lcs_index(126, 124, 104, 18, 18) ||
+        !mir_lcs_index(128, 126, 127, 2, 2) ||
+        !mir_lcs_binary(148, '-', 104, 147) ||
+        !mir_lcs_index(149, 145, 148, 18, 18) ||
+        !mir_lcs_binary(152, '-', 150, 151) ||
+        !mir_lcs_index(153, 149, 152, 2, 2) ||
+        mir.insns[154].src1 != mir.insns[153].dst ||
+        !mir_lcs_int_type(mir.insns[154].type) ||
+        mir.insns[154].memory_size != 2 ||
+        (mir.insns[154].memory_flags & (1 | 8)) != 0 ||
+        !mir_lcs_binary(156, '+', 154, 155) ||
+        !mir_lcs_binary(163, '-', 104, 162) ||
+        !mir_lcs_index(164, 160, 163, 18, 18) ||
+        !mir_lcs_index(166, 164, 165, 2, 2) ||
+        mir.insns[167].src1 != mir.insns[166].dst ||
+        !mir_lcs_int_type(mir.insns[167].type) ||
+        mir.insns[167].memory_size != 2 ||
+        (mir.insns[167].memory_flags & (1 | 8)) != 0 ||
+        !mir_lcs_index(170, 168, 104, 18, 18) ||
+        !mir_lcs_binary(173, '-', 171, 172) ||
+        !mir_lcs_index(174, 170, 173, 2, 2) ||
+        mir.insns[175].src1 != mir.insns[174].dst ||
+        !mir_lcs_int_type(mir.insns[175].type) ||
+        mir.insns[175].memory_size != 2 ||
+        (mir.insns[175].memory_flags & (1 | 8)) != 0 ||
+        !mir_lcs_binary(176, '>', 167, 175) ||
+        !mir_lcs_branch(177, 176, 188) ||
+        !mir_lcs_binary(181, '-', 104, 180) ||
+        !mir_lcs_index(182, 178, 181, 18, 18) ||
+        !mir_lcs_index(184, 182, 183, 2, 2) ||
+        mir.insns[185].src1 != mir.insns[184].dst ||
+        !mir_lcs_int_type(mir.insns[185].type) ||
+        mir.insns[185].memory_size != 2 ||
+        (mir.insns[185].memory_flags & (1 | 8)) != 0 ||
+        !mir_lcs_index(191, 189, 104, 18, 18) ||
+        !mir_lcs_binary(194, '-', 192, 193) ||
+        !mir_lcs_index(195, 191, 194, 2, 2) ||
+        mir.insns[196].src1 != mir.insns[195].dst ||
+        !mir_lcs_int_type(mir.insns[196].type) ||
+        mir.insns[196].memory_size != 2 ||
+        (mir.insns[196].memory_flags & (1 | 8)) != 0)
+        return mir_machine_reject("lcs-dp", "table-recurrence");
+
+    if (!mir_lcs_value_phi(199, 185, 196, 186, 197) ||
+        !mir_lcs_value_phi(202, 156, 199, 157, 200) ||
+        mir.insns[203].src1 != mir.insns[128].dst ||
+        mir.insns[203].src2 != mir.insns[202].dst ||
+        mir.insns[203].memory_size != 2 ||
+        (mir.insns[203].memory_flags & (1 | 8)) != 0 ||
+        !mir_lcs_binary(207, '+', 205, 206) ||
+        !mir_lcs_same_local_store(208, 70, 207) ||
+        !mir_lcs_jump(209, 113) ||
+        !mir_lcs_binary(214, '+', 104, 213) ||
+        !mir_lcs_same_local_store(215, 43, 214) ||
+        !mir_lcs_jump(216, 99) ||
+        !mir_lcs_jump(158, 201) ||
+        !mir_lcs_jump(187, 198))
+        return mir_machine_reject("lcs-dp", "recurrence-result");
+
+    if (!mir_lcs_index(220, 218, 10, 18, 18) ||
+        !mir_lcs_index(222, 220, 28, 2, 2) ||
+        mir.insns[223].src1 != mir.insns[222].dst ||
+        !mir_lcs_int_type(mir.insns[223].type) ||
+        mir.insns[223].memory_size != 2 ||
+        (mir.insns[223].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[224].src1 != mir.insns[223].dst)
+        return mir_machine_reject("lcs-dp", "return");
+    return 1;
 }
 
 static int mir_match_fixed_point_multiply(
@@ -3853,6 +4281,86 @@ static void mir_modp2_emit_sum_add(
     mir_machine_emit_ix_wide_store(out, -7);
 }
 
+static void mir_emit_lcs_dp_schedule(
+    FILE *out, const struct MirLcsDpSchedule *plan)
+{
+    int left_scan = new_label();
+    int left_done = new_label();
+    int right_scan = new_label();
+    int right_done = new_label();
+    int zero_loop = new_label();
+    int outer_loop = new_label();
+    int outer_next = new_label();
+    int inner_loop = new_label();
+    int mismatch = new_label();
+    int left_value = new_label();
+    int store_value = new_label();
+    int done = new_label();
+
+    /* The matched 9x9 table bounds every defined result to 0..8. Keep one
+     * complete row as target-width words while byte registers carry the
+     * bounded lengths, diagonal value, and inner-loop count. */
+    fprintf(out,
+            "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+            "\tld hl,-25\n\tadd hl,sp\n\tld sp,hl\n");
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
+            "\tld (ix-20),l\n\tld (ix-19),h\n"
+            "\tld b,0\n"
+            "L%d:\n\tld a,(hl)\n\tor a\n\tjp z,L%d\n"
+            "\tinc hl\n\tinc b\n\tjp L%d\n"
+            "L%d:\n\tld (ix-23),b\n"
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
+            "\tld (ix-22),l\n\tld (ix-21),h\n"
+            "\tld b,0\n"
+            "L%d:\n\tld a,(hl)\n\tor a\n\tjp z,L%d\n"
+            "\tinc hl\n\tinc b\n\tjp L%d\n"
+            "L%d:\n\tld (ix-24),b\n",
+            plan->left_stack_offset + 2,
+            plan->left_stack_offset + 3,
+            left_scan, left_done, left_scan, left_done,
+            plan->right_stack_offset + 2,
+            plan->right_stack_offset + 3,
+            right_scan, right_done, right_scan, right_done);
+    fprintf(out,
+            "\tpush ix\n\tpop hl\n\tld de,-18\n\tadd hl,de\n"
+            "\tld b,9\n\txor a\n"
+            "L%d:\n\tld (hl),a\n\tinc hl\n\tld (hl),a\n"
+            "\tinc hl\n\tdjnz L%d\n"
+            "L%d:\n\tld a,(ix-23)\n\tor a\n\tjp z,L%d\n"
+            "\tdec (ix-23)\n"
+            "\tld l,(ix-20)\n\tld h,(ix-19)\n"
+            "\tld a,(hl)\n\tld (ix-25),a\n"
+            "\tinc hl\n\tld (ix-20),l\n\tld (ix-19),h\n"
+            "\tld e,(ix-22)\n\tld d,(ix-21)\n"
+            "\tpush ix\n\tpop hl\n\tld bc,-16\n\tadd hl,bc\n"
+            "\tld b,(ix-24)\n\tld c,0\n"
+            "\tld a,b\n\tor a\n\tjp z,L%d\n",
+            zero_loop, zero_loop, outer_loop, done, outer_next);
+    fprintf(out,
+            "L%d:\n\tld a,(de)\n\tcp (ix-25)\n\tjp nz,L%d\n"
+            "\tld a,c\n\tinc a\n\tjp L%d\n"
+            "L%d:\n\tld a,(hl)\n\tdec hl\n\tdec hl\n"
+            "\tcp (hl)\n\tjp c,L%d\n"
+            "\tinc hl\n\tinc hl\n\tjp L%d\n"
+            "L%d:\n\tld a,(hl)\n\tinc hl\n\tinc hl\n"
+            "L%d:\n\tld c,(hl)\n\tld (hl),a\n\tinc hl\n"
+            "\tld (hl),0\n\tinc hl\n\tinc de\n"
+            "\tdjnz L%d\n"
+            "L%d:\n\tjp L%d\n"
+            "L%d:\n\tld a,(ix-24)\n\tadd a,a\n"
+            "\tld e,a\n\tld d,0\n\tpush ix\n\tpop hl\n"
+            "\tadd hl,de\n\tld de,-18\n\tadd hl,de\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n"
+            "\tld sp,ix\n\tpop ix\n\tret\n",
+            inner_loop, mismatch, store_value,
+            mismatch, left_value, store_value,
+            left_value, store_value, inner_loop,
+            outer_next, outer_loop, done);
+}
+
 static void mir_modp2_emit_print(
     FILE *out, const struct MirModp2DriverSchedule *plan,
     int slot, int operation, int is_unsigned,
@@ -4002,8 +4510,13 @@ int mir_try_emit_numeric_kernels(FILE *out, int phase)
             return 1;
         }
     } else if (phase == 2) {
+        struct MirLcsDpSchedule lcs_plan;
         struct MirNarrowedDivmodLoopSchedule plan;
 
+        if (mir_match_lcs_dp_schedule(&lcs_plan)) {
+            mir_emit_lcs_dp_schedule(out, &lcs_plan);
+            return 1;
+        }
         if (mir_match_narrowed_divmod_loop_schedule(&plan)) {
             mir_emit_narrowed_divmod_loop_schedule(out, &plan);
             return 1;

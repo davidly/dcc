@@ -5,11 +5,49 @@ current execution plan and handoff.
 
 ## 2026-08-13 current checkpoint (read this first)
 
-- Branch: `pr/143`, published to `origin/perf/unified-regalloc`.
-- Clean base HEAD for the current coverage batch: `b5b2721`.
-- Current working-tree candidate coverage: **2147/2185 (98.26%)**.
-- Remaining fallback population: **38 `final-cost-policy`**, all selected by
+- Branch: `pr/143`; clean base HEAD for this batch: `f5acbbe`.
+- Current working-tree candidate coverage: **2148/2185 (98.31%)**.
+- Remaining fallback population: **37 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The numeric module now admits the 27-block `tautolcs.lcs`
+  `final-cost-policy` fallback through a strict name-free matcher over all
+  **225 MIR instructions**. It proves both nonvolatile character-pointer
+  parameters, the two target-width length scans, the fixed 9-by-9 signed-int
+  table, both zero-boundary loops, all five induction PHIs and both
+  recurrence PHIs, every row/column address and word load/store, the
+  promoted character equality, the diagonal increment, ordered maximum
+  choice, backedges and final indexed result. No production function/local
+  name or graph/output hash is used.
+- The dedicated emitter is not the previously rejected forced generic
+  candidate, which remains excluded after measuring **+29.92% peep /
+  +22.09% nopeep**. It replaces the universal-spill CFG with a registerized
+  one-row dynamic-programming kernel: nine target-width word cells, bounded
+  byte loop state, direct character comparisons and a **25-byte IX frame**,
+  with no IY. Empty strings, one-character matches/mismatches, maximum
+  eight-character rows, reversed strings, repeated characters, high-bit
+  characters, identical pointers and overlapping input pointers preserve
+  the legacy result.
+- Normal selected/captured metrics are **1,126/7,806 bytes** and
+  **104/783 instructions**; stack-check metrics are **1,155/7,835 bytes**
+  and **105/784 instructions**. Checked `tautolcs` full-mode totals improve
+  from **111,398 to 22,634 cycles** and **6,144 to 5,376 bytes** peep, plus
+  **124,840 to 22,582 cycles** and **6,400 to 5,376 bytes** nopeep.
+  Forced fallback also passes full-mode validation.
+- A renamed-function/parameter/local boundary and alias A/B is output
+  identical in both modes and ends with `failed=0`. Selected/fallback
+  measurements are **182,892/842,809 cycles** and **2,944/3,584 bytes**
+  peep, plus **183,525/944,432 cycles** and **2,944/3,840 bytes** nopeep.
+- The numeric module grows from **4,013 to 4,526 source lines**. Its object
+  audit reports only `mir_try_emit_numeric_kernels [T]` as defined global
+  code and zero global data symbols. The canonical build passes. The
+  regression-gated stack-check census advances **2,147/2,185 (98.26%)** to
+  **2,148/2,185 (98.31%)**, adds exactly `tautolcs.lcs`, removes no accepted
+  function, moves selector counts from **1,406 spilled / 372 scheduled** to
+  **1,405 spilled / 373 scheduled**, and leaves **37
+  `final-cost-policy`** fallbacks. The corresponding normal census adds the
+  same function at **2,059 accepted**, moves **372 to 373 scheduled**, and
+  removes no accepted function. No performance baseline, production name,
+  or output-hash gate was added.
 - The call-runner module now admits the 24-block `tstr.test_wide`
   `final-cost-policy` fallback through a strict name-free matcher over all
   **711 MIR instructions**. It proves the 4,096-element wide global buffer,
