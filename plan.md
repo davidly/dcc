@@ -3,6 +3,82 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-13 no-stack final-cost endgame: 100% MIR (working tree)
+
+- Branch/base: `pr/143` at `2977cb1`. The ten remaining no-stack
+  `final-cost-policy` fallbacks are now strict, name-free
+  `scheduled-machine-cfg` families in
+  `src/dcc/dcc_mir_machine_endgame.c`.
+  Matchers use MIR instruction/block/call structure, constants, types,
+  parameter and object layout, member/index strides, and call relationships;
+  there are no production-name, hash, or baseline gates. Capture/replay is
+  intentionally retained. Two phase calls to the endgame dispatcher preserve
+  the cohort's original first-selector position and the established late
+  endgame position exactly.
+- Diagnosis: the first rejecting `register-v69` clause was v45 for the
+  symbol-table append, v39 for the string-to-float checks, v2 for the wide
+  failure check, and v19 for both wide quotient/remainder helpers. The other
+  five passed register policy and failed final ratios. The common checked
+  prologue adds 49.75 to both scores, diluting those ratios; admitting the
+  existing no-stack spilled output proved unprofitable, so that experimental
+  cost-profile bypass was removed rather than shipped.
+- Final selected/captured text bytes, instructions, and blocks are:
+  `a1.invoke_command` **776/1150, 66/106, 5**;
+  `a1.m_store` **550/1234, 49/118, 7**;
+  `adaint.add_sym` **978/1979, 91/188, 2**;
+  `adaint.die` **473/498, 45/47, 9**;
+  `cpmenumd.do_compare` **245/244, 23/24, 1**;
+  `tc89c2.test_strtod` **2021/2838, 181/259, 27**;
+  `tcrcfix.check_i` **417/423, 43/43, 2**;
+  `tlongopt.co_div` and `co_mod` each **399/414, 39/40, 1**; and
+  `tm1mu.mulmod` **217/228, 20/21, 1**.
+- Normal census
+  `build/nostack-final-before.tsv` ->
+  `build/nostack-final-after.tsv` is **2096/2106 -> 2106/2106**, adds exactly
+  those ten functions, removes none, and leaves zero fallback; the final
+  normal census SHA-256 is
+  `af9074b0c8d248b0fa4a3af88996f70c804fab558b0a02ca4097eb2c2eeadcc4`.
+  Stack census
+  `build/nostack-final-before-stack.tsv` ->
+  `build/nostack-final-after-stack.tsv` remains **2185/2185** with zero
+  changed apps and is byte-identical; its SHA-256 is
+  `aba4e49aae2f5ef775355142cd8a77ef430b1a8d3cc72669cd7973a403d858ab`.
+- Final selected-minus-forced-fallback A/B in
+  `build/nostack-final-ab-final/summary.tsv` is nonpositive in every
+  peep/nopeep cycle and size column:
+  `invoke_command` **-63/0, -97/-128**;
+  `m_store` **-23133/0, -36848/-128**;
+  `add_sym` **-3348/0, -3572/0**;
+  `die` **0/0, 0/0**;
+  `do_compare` **0/0, -10/0**;
+  `test_strtod` **-42/0, -447/-128**;
+  `check_i` **-44/0, 0/0**;
+  `co_div` **0/0, -20/0**;
+  `co_mod` **0/0, -10/0**; and
+  `mulmod` **0/0, -169060/0**. Every A/B output matches its baseline.
+  The symbol-append family retains 128 bytes after `ret`: without stable
+  downstream addresses, its smaller code shifts string data and adds 452,479
+  cycles of carry propagation in an unrelated address walker; preserving
+  layout exposes the schedule's actual **3348/3572-cycle** win at equal size.
+- Validation passes: affected stack-check full peep+nopeep (**7/7**, zero
+  checked regressions); full no-stack peep+nopeep (**314 passed, 9 skipped**,
+  diagnostics and dccpeep fixtures passed); no-stack
+  `DCC_MIR_REQUIRE_COMPLETE=1` runnable corpus (**314/314**); standalone
+  diagnostics (**106/106**); and dccpeep fixtures (**22/22**). The only host
+  build diagnostics are the pre-existing three unused locals in
+  `mir_match_random_unique_init`.
+- Placement extraction: the successful coverage implementation's core emitter
+  falls from **47,717 to 46,436 source lines** (**-1,281**) and is only
+  **6 lines** above the **46,430-line** pre-batch baseline. The existing
+  endgame module grows from **10,422 to 11,718 source lines** (**+1,296**);
+  its audit reports **250 static top-level helpers**, only
+  `mir_try_emit_endgame_runners [T]` as exported code, and zero exported
+  read-only or writable data. The function-only internal header remains
+  **58 lines** and adds no shared variables. Canonical and CMake builds pass,
+  affected no-stack full peep+nopeep passes **7/7**, and fresh normal and
+  stack placement censuses are byte-identical to the successful implementation
+  at the two hashes above.
+
 ## 2026-08-14 string-conversion runner: production 100% MIR (working tree)
 
 - Branch/base: `pr/143` at `14ca813`. The endgame call-runner family now

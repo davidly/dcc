@@ -45178,6 +45178,12 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     long constant;
     int constant_function_result;
 
+    {
+        int endgame_result = mir_try_emit_endgame_runners(out, 0);
+
+        if (endgame_result >= 0)
+            return endgame_result;
+    }
     if (mir_match_dead_constant_float_check()) {
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
@@ -45705,7 +45711,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
         return 1;
     }
     {
-        int endgame_result = mir_try_emit_endgame_runners(out);
+        int endgame_result = mir_try_emit_endgame_runners(out, 1);
 
         if (endgame_result >= 0)
             return endgame_result;

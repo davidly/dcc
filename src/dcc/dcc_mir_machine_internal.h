@@ -49,8 +49,8 @@ int mir_try_emit_aggregate_checks(FILE *out);
 /* Each phase preserves the moved runner's existing selector position. */
 int mir_try_emit_call_runners(FILE *out, int phase);
 
-/* Returns -1 when no strict endgame call-runner schedule matches. */
-int mir_try_emit_endgame_runners(FILE *out);
+/* Each phase preserves the moved endgame schedule's selector position. */
+int mir_try_emit_endgame_runners(FILE *out, int phase);
 
 /* The phase preserves each numeric schedule's existing selector position. */
 int mir_try_emit_numeric_kernels(FILE *out, int phase);
