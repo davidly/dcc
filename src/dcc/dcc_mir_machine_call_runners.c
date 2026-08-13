@@ -102,6 +102,17 @@ struct MirCommaLoopRunner {
     int values[4];
 };
 
+struct MirScopeBlockRunner {
+    struct Sym *check_function;
+    struct Sym *parameter_function;
+    struct Sym *helper_functions[3];
+    struct Sym *print_function;
+    struct Sym *failures;
+    int check_strings[26];
+    int success_string;
+    int failure_string;
+};
+
 struct MirMemoryExerciseRunner {
     struct Sym *print_function;
     struct Sym *calloc_function;
@@ -8497,6 +8508,436 @@ static int mir_match_comma_loop_runner(
     return 1;
 }
 
+static int mir_scope_long_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == TYPE_LONG &&
+           (type & TYPE_UNSIGNED) == 0 &&
+           type_size(type) == 4;
+}
+
+static int mir_scope_function_types(
+    const struct MirScopeBlockRunner *plan)
+{
+    int helper;
+
+    if (type_ptr_depth(plan->check_function->type) != 0 ||
+        (plan->check_function->type & 15) != TYPE_VOID ||
+        !mir_scope_long_type(
+            plan->check_function->proto_types[0]) ||
+        !mir_scope_long_type(
+            plan->check_function->proto_types[1]) ||
+        !mir_abort_runner_pointer_type(
+            plan->check_function->proto_types[2], TYPE_CHAR) ||
+        !mir_abort_runner_word_type(
+            plan->parameter_function->type) ||
+        !mir_abort_runner_word_type(
+            plan->parameter_function->proto_types[0]) ||
+        !mir_abort_runner_word_type(plan->print_function->type) ||
+        !mir_abort_runner_pointer_type(
+            plan->print_function->proto_types[0], TYPE_CHAR))
+        return 0;
+    for (helper = 0; helper < 3; ++helper)
+        if (!mir_abort_runner_word_type(
+                plan->helper_functions[helper]->type))
+            return 0;
+    return 1;
+}
+
+static int mir_match_scope_block_runner(
+    struct MirScopeBlockRunner *plan)
+{
+    static const char expected_opcodes[] =
+        "LNNNNNCSNCSNGCGTGKNNGCGTGKNNNNNNNNNNCSNCSNNBNSNNCSNNBNSNNGCGTGKNNNNNNNNCSNCSNCSNGCGTGKNNGCGTGKNNGCGT"
+        "GKNNNNNNCSNCSNGCGTGKNNGCGTGKNNNNNNNNNNCSNCSLNNNNNNNNNPPNNCBFNCSNNBNSNLNCBSJLNGCGTGKNNNNNNNNCSNCSLNNN"
+        "NNNNNNNNNNPNNCBFNCSNCBFDCBSLNLNCBSJLDGCGTGKNCGKUGCGTGKNNNNNCSNCBFNCSNGCGTGKNLNGCGTGKNNNNNNNNNNNCSNCS"
+        "NNCSLNNNNNNNNNNNNNNNNNPNPNNCBFNNSNNBNSNCBSNLJLNGCGTGKNGCGTGKNNNNNNNNCSNCSNCBFJLJLNCSNNSNJNLNCNSNLPGC"
+        "GTGKNNNNNNNNNNCSNCSNNBNSNNCSNNBNSNNGCGTGKNNNNNNNNNNCSNCSLNNNNNNNNNNNNNNNNNNNNNNNNNNPNNCBFNCSLNNNNNNN"
+        "NNNNNNNNNNNNNNNNNNNNNDCBFDDBNSLDCBSJLLNCBSJLDGCGTGKNCSNNNNNNNNCSNNCSNCSLNNNNNNNNNPNNNNNNNNNNNNNNNNNN"
+        "PNNCBFNNBNSLNCBSJLNGCGTGKNGCGTGKNCSKUGCGTGKKUGCGTGKKUGCGTGKKUGCGTGKKUGCGTGKKUGCGTGKDCBFLTGKJLTGDGKLD"
+        "CBE";
+    static const int constant_instructions[81] = {
+        6, 9, 13, 21, 36, 39, 48, 58, 71, 74, 77, 81, 89, 97,
+        108, 111, 115, 123, 138, 141, 157, 161, 171, 178, 191,
+        194, 213, 217, 220, 224, 231, 238, 244, 249, 259, 262,
+        266, 270, 279, 295, 298, 302, 327, 339, 348, 355, 368,
+        371, 374, 382, 392, 399, 414, 417, 426, 436, 451, 454,
+        486, 490, 522, 532, 539, 546, 552, 562, 566, 569, 603,
+        613, 620, 627, 633, 638, 646, 654, 662, 670, 678, 684,
+        700
+    };
+    static const long constant_values[81] = {
+        10, 20, 20, 10, 0, 3, 4, 7, 1, 2, 3, 3, 2, 1, 100,
+        100000, 100000, 100, 0, 0, 3, 50, 1, 150, 0, 0, 4,
+        999, 999, 1, 1, 4, 7, 12, 1, 1, 8, 8, 1, 0, 77, 0,
+        2, 1, 77, 1, 1, 0, 1, 11, 65535, 11, 0, 5, 9, 14, 0,
+        0, 3, 0, 2, 1, 1, 3, 0, 42, 0, 0, 5, 1, 10, 42, 0,
+        112, 114, 741, 742, 7, 9, 0, 0
+    };
+    static const unsigned char constant_types[81] = {
+        2, 2, 4, 4, 4, 2, 2, 4, 2, 2, 2, 4, 4, 4, 2, 4, 4,
+        4, 4, 2, 2, 2, 0, 4, 2, 2, 2, 4, 4, 0, 0, 4, 2, 4,
+        2, 2, 2, 4, 4, 2, 2, 4, 2, 0, 4, 4, 2, 2, 0, 2, 2,
+        4, 4, 2, 2, 4, 4, 2, 2, 2, 2, 0, 0, 4, 2, 2, 4, 2,
+        2, 0, 4, 4, 2, 4, 4, 4, 4, 4, 4, 2, 2
+    };
+    static const int binaries[26][4] = {
+        {43, 36, 39, '+'}, {52, 43, 48, '+'},
+        {158, 154, 157, '<'}, {165, 153, 161, '+'},
+        {172, 154, 171, '+'}, {214, 210, 213, '<'},
+        {221, 217, 220, TOK_EQ}, {225, 223, 224, '+'},
+        {232, 210, 231, '+'}, {263, 259, 262, TOK_EQ},
+        {328, 322, 327, '<'}, {335, 324, 322, '+'},
+        {340, 322, 339, '+'}, {375, 368, 374, TOK_EQ},
+        {421, 414, 417, '+'}, {430, 421, 426, '+'},
+        {487, 483, 486, '<'}, {523, 521, 522, '<'},
+        {527, 525, 526, '+'}, {533, 531, 532, '+'},
+        {540, 483, 539, '+'}, {604, 600, 603, '<'},
+        {608, 581, 600, '+'}, {614, 600, 613, '+'},
+        {685, 683, 684, TOK_EQ}, {701, 699, 700, TOK_NE}
+    };
+    static const unsigned char binary_types[26] = {
+        4, 4, 2, 4, 0, 2, 2, 0, 0, 2, 2, 4, 0,
+        2, 4, 4, 2, 2, 4, 0, 0, 2, 4, 0, 2, 2
+    };
+    static const unsigned char binary_widths[26] = {
+        4, 4, 2, 4, 0, 2, 4, 0, 0, 2, 2, 4, 0,
+        0, 4, 4, 2, 2, 4, 0, 0, 2, 4, 0, 2, 2
+    };
+    static const int unaries[7][2] = {
+        {247, 246}, {636, 635}, {644, 643}, {652, 651},
+        {660, 659}, {668, 667}, {676, 675}
+    };
+    static const int phis[9][5] = {
+        {153, 138, 165, 0, 169},
+        {154, 141, 172, 0, 169},
+        {210, 194, 232, 175, 229},
+        {322, 295, 340, 276, 343},
+        {324, 302, 335, 276, 343},
+        {397, 382, 392, 380, 390},
+        {483, 454, 540, 396, 537},
+        {581, 566, 608, 543, 611},
+        {600, 569, 614, 543, 611}
+    };
+    static const unsigned char phi_types[9] = {
+        4, 2, 2, 2, 4, 2, 2, 4, 2
+    };
+    static const unsigned char phi_objects[9] = {
+        9, 10, 13, 17, 19, 22, 26, 9, 29
+    };
+    static const int branches[10][3] = {
+        {159, 158, 175}, {215, 214, 235},
+        {222, 221, 227}, {264, 263, 276},
+        {329, 328, 345}, {376, 375, 390},
+        {488, 487, 543}, {524, 523, 536},
+        {605, 604, 617}, {686, 685, 692}
+    };
+    static const int jumps[10][2] = {
+        {174, 143}, {234, 196}, {344, 304}, {377, 380},
+        {379, 390}, {388, 396}, {535, 492}, {542, 456},
+        {616, 571}, {691, 698}
+    };
+    static const int object_types[30] = {
+        TYPE_INT, TYPE_INT, TYPE_LONG, TYPE_INT, TYPE_INT,
+        TYPE_INT, TYPE_INT, TYPE_INT, TYPE_LONG, TYPE_LONG,
+        TYPE_INT, TYPE_INT, TYPE_INT, TYPE_INT, TYPE_LONG,
+        TYPE_INT, TYPE_INT, TYPE_INT, TYPE_INT, TYPE_LONG,
+        TYPE_INT, TYPE_INT, TYPE_INT, TYPE_INT, TYPE_LONG,
+        TYPE_INT, TYPE_INT, TYPE_INT, TYPE_INT, TYPE_INT
+    };
+    static const int stores[][4] = {
+        {7, 0, 6, 2}, {10, 1, 9, 2}, {37, 2, 36, 4},
+        {40, 3, 39, 2}, {45, 2, 43, 4}, {49, 3, 48, 2},
+        {54, 2, 52, 4}, {72, 4, 71, 2}, {75, 5, 74, 2},
+        {78, 6, 77, 2}, {109, 7, 108, 2}, {112, 8, 111, 4},
+        {139, 9, 138, 4}, {142, 10, 141, 2},
+        {162, 11, 161, 2}, {167, 9, 165, 4},
+        {173, 10, 172, 2}, {192, 12, 191, 2},
+        {195, 13, 194, 2}, {218, 14, 217, 4},
+        {226, 12, 225, 2}, {233, 13, 232, 2},
+        {260, 15, 259, 2}, {267, 16, 266, 2},
+        {296, 17, 295, 2}, {299, 18, 298, 2},
+        {303, 19, 302, 4}, {332, 20, 322, 2},
+        {337, 19, 335, 4}, {341, 17, 340, 2},
+        {369, 21, 368, 2}, {372, 22, 371, 2},
+        {383, 23, 382, 2}, {386, 22, 382, 2},
+        {394, 22, 392, 2}, {415, 24, 414, 4},
+        {418, 25, 417, 2}, {423, 24, 421, 4},
+        {427, 25, 426, 2}, {432, 24, 430, 4},
+        {452, 9, 451, 4}, {455, 26, 454, 2},
+        {491, 27, 490, 2}, {529, 9, 527, 4},
+        {534, 27, 533, 2}, {541, 26, 540, 2},
+        {553, 27, 552, 2}, {563, 28, 562, 2},
+        {567, 9, 566, 4}, {570, 29, 569, 2},
+        {610, 9, 608, 4}, {615, 29, 614, 2},
+        {634, 29, 633, 2}
+    };
+    static const int loads[][2] = {
+        {223, 12}, {236, 12}, {521, 27}, {525, 9},
+        {526, 27}, {531, 27}, {544, 9}
+    };
+    static const int check_calls[26] = {
+        17, 25, 62, 85, 93, 101, 119, 127, 182, 242, 253,
+        274, 283, 352, 359, 403, 440, 550, 624, 631, 642,
+        650, 658, 666, 674, 682
+    };
+    static const int check_call_ids[26] = {
+        0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14,
+        15, 16, 17, 18, 19, 20, 21, 23, 25, 27, 29, 31
+    };
+    static const int check_arguments[26][3] = {
+        {9, 13, 15}, {6, 21, 23}, {52, 58, 60},
+        {77, 81, 83}, {74, 89, 91}, {71, 97, 99},
+        {111, 115, 117}, {108, 123, 125},
+        {153, 178, 180}, {236, 238, 240},
+        {247, 249, 251}, {266, 270, 272},
+        {259, 279, 281}, {298, 348, 350},
+        {324, 355, 357}, {397, 399, 401},
+        {430, 436, 438}, {544, 546, 548},
+        {581, 620, 622}, {562, 627, 629},
+        {636, 638, 640}, {644, 646, 648},
+        {652, 654, 656}, {660, 662, 664},
+        {668, 670, 672}, {676, 678, 680}
+    };
+    static const int check_string_instructions[26] = {
+        15, 23, 60, 83, 91, 99, 117, 125, 180, 240, 251,
+        272, 281, 350, 357, 401, 438, 548, 622, 629, 640,
+        648, 656, 664, 672, 680
+    };
+    static const int helper_calls[6] = {
+        635, 643, 651, 659, 667, 675
+    };
+    static const int helper_call_ids[6] = {
+        22, 24, 26, 28, 30, 32
+    };
+    int arguments[3];
+    int instruction;
+    int item;
+    int previous;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 703 || mir_cfg_block_count() != 28 ||
+        mir.sink_purpose != EMIT_SINK_FINAL ||
+        mir.has_vla || mir.local_bytes != 84 ||
+        mir.aggregate_temp_bytes != 0 || mir.object_count != 30 ||
+        !mir_abort_runner_word_type(mir.return_type) ||
+        strlen(expected_opcodes) != (size_t)mir.count)
+        return mir_machine_reject(
+            "scope-block-runner", "shape");
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir_gnarly_opcode_code(
+                mir.insns[instruction].opcode) !=
+                expected_opcodes[instruction])
+            return mir_machine_reject(
+                "scope-block-runner", "opcode");
+    for (item = 0; item < 81; ++item)
+        if (!mir_machine_constant_equals(
+                mir.insns[constant_instructions[item]].dst,
+                constant_values[item]) ||
+            mir.insns[constant_instructions[item]].type !=
+                constant_types[item])
+            return mir_machine_reject(
+                "scope-block-runner", "constant");
+    for (item = 0; item < 26; ++item)
+        if (!mir_gnarly_binary(
+                binaries[item][0], binaries[item][1],
+                binaries[item][2], binaries[item][3]) ||
+            mir.insns[binaries[item][0]].type !=
+                binary_types[item] ||
+            mir.insns[binaries[item][0]].secondary_offset !=
+                binary_widths[item])
+            return mir_machine_reject(
+                "scope-block-runner", "binary");
+    for (item = 0; item < 7; ++item)
+        if (mir.insns[unaries[item][0]].opcode != MIR_UNARY ||
+            !mir_gnarly_value_from(
+                mir.insns[unaries[item][0]].src1,
+                unaries[item][1]) ||
+            mir.insns[unaries[item][0]].immediate != 0 ||
+            !mir_scope_long_type(
+                mir.insns[unaries[item][0]].type))
+            return mir_machine_reject(
+                "scope-block-runner", "conversion");
+    for (item = 0; item < 9; ++item)
+        if (!mir_gnarly_phi(
+                phis[item][0], phis[item][1], phis[item][2],
+                phis[item][3], phis[item][4]) ||
+            mir.insns[phis[item][0]].type != phi_types[item] ||
+            mir.insns[phis[item][0]].object != phi_objects[item])
+            return mir_machine_reject(
+                "scope-block-runner", "phi");
+    for (item = 0; item < 10; ++item)
+        if (!mir_gnarly_branch(
+                branches[item][0], branches[item][1],
+                branches[item][2]) ||
+            mir.insns[jumps[item][0]].label !=
+                mir.insns[jumps[item][1]].label)
+            return mir_machine_reject(
+                "scope-block-runner", "control-flow");
+
+    for (item = 0; item < 30; ++item)
+        if (mir.objects[item].storage != SC_LOCAL ||
+            mir.objects[item].type != object_types[item] ||
+            mir.objects[item].is_register)
+            return mir_machine_reject(
+                "scope-block-runner", "object");
+    for (item = 0;
+         item < (int)(sizeof(stores) / sizeof(stores[0]));
+         ++item) {
+        const struct MirInsn *store = &mir.insns[stores[item][0]];
+
+        if (store->opcode != MIR_STORE ||
+            store->object != stores[item][1] ||
+            !mir_gnarly_value_from(
+                store->src1, stores[item][2]) ||
+            store->memory_size != stores[item][3] ||
+            (store->memory_flags & (1 | 8)) != 0 ||
+            !mir_machine_named_nonvolatile(store))
+            return mir_machine_reject(
+                "scope-block-runner", "store");
+    }
+    for (item = 0;
+         item < (int)(sizeof(loads) / sizeof(loads[0]));
+         ++item) {
+        const struct MirInsn *load = &mir.insns[loads[item][0]];
+
+        if (load->opcode != MIR_LOAD ||
+            load->object != loads[item][1] ||
+            load->type !=
+                object_types[loads[item][1]] ||
+            !mir_machine_named_nonvolatile(load))
+            return mir_machine_reject(
+                "scope-block-runner", "load");
+    }
+
+    plan->check_function =
+        mir_abort_runner_function(17, 0, 3, 0);
+    plan->parameter_function =
+        mir_abort_runner_function(246, 0, 1, 0);
+    plan->helper_functions[0] =
+        mir_abort_runner_function(635, 0, 0, 0);
+    plan->helper_functions[1] =
+        mir_abort_runner_function(651, 0, 0, 0);
+    plan->helper_functions[2] =
+        mir_abort_runner_function(667, 0, 0, 0);
+    plan->print_function =
+        mir_abort_runner_function(690, 1, 1, 0);
+    if (plan->check_function == NULL ||
+        plan->parameter_function == NULL ||
+        plan->helper_functions[0] == NULL ||
+        plan->helper_functions[1] == NULL ||
+        plan->helper_functions[2] == NULL ||
+        plan->print_function == NULL ||
+        !plan->check_function->is_defined ||
+        !plan->check_function->is_static ||
+        !plan->parameter_function->is_defined ||
+        !plan->parameter_function->is_static ||
+        !plan->helper_functions[0]->is_defined ||
+        !plan->helper_functions[0]->is_static ||
+        !plan->helper_functions[1]->is_defined ||
+        !plan->helper_functions[1]->is_static ||
+        !plan->helper_functions[2]->is_defined ||
+        !plan->helper_functions[2]->is_static ||
+        !mir_scope_function_types(plan))
+        return mir_machine_reject(
+            "scope-block-runner", "function");
+    if (plan->check_function == plan->parameter_function ||
+        plan->check_function == plan->helper_functions[0] ||
+        plan->check_function == plan->helper_functions[1] ||
+        plan->check_function == plan->helper_functions[2] ||
+        plan->parameter_function == plan->helper_functions[0] ||
+        plan->parameter_function == plan->helper_functions[1] ||
+        plan->parameter_function == plan->helper_functions[2] ||
+        plan->helper_functions[0] == plan->helper_functions[1] ||
+        plan->helper_functions[0] == plan->helper_functions[2] ||
+        plan->helper_functions[1] == plan->helper_functions[2])
+        return mir_machine_reject(
+            "scope-block-runner", "function-alias");
+
+    for (item = 0; item < 26; ++item) {
+        const struct MirInsn *string =
+            &mir.insns[check_string_instructions[item]];
+
+        if (!mir_abort_runner_call(
+                check_calls[item], plan->check_function,
+                check_call_ids[item], 3,
+                check_arguments[item]) ||
+            !mir_abort_runner_pointer_type(
+                string->type, TYPE_CHAR) ||
+            string->immediate < 0)
+            return mir_machine_reject(
+                "scope-block-runner", "check-call");
+        plan->check_strings[item] = (int)string->immediate;
+        for (previous = 0; previous < item; ++previous)
+            if (plan->check_strings[item] ==
+                plan->check_strings[previous])
+                return mir_machine_reject(
+                    "scope-block-runner", "check-string");
+    }
+    arguments[0] = 244;
+    if (!mir_abort_runner_call(
+            246, plan->parameter_function, 11, 1, arguments))
+        return mir_machine_reject(
+            "scope-block-runner", "parameter-call");
+    for (item = 0; item < 6; ++item)
+        if (!mir_abort_runner_no_argument_call(
+                helper_calls[item],
+                plan->helper_functions[item / 2],
+                helper_call_ids[item]))
+            return mir_machine_reject(
+                "scope-block-runner", "helper-call");
+
+    arguments[0] = 688;
+    if (!mir_abort_runner_call(
+            690, plan->print_function, 33, 1, arguments))
+        return mir_machine_reject(
+            "scope-block-runner", "success-call");
+    arguments[0] = 693;
+    arguments[1] = 695;
+    if (!mir_abort_runner_call(
+            697, plan->print_function, 34, 2, arguments))
+        return mir_machine_reject(
+            "scope-block-runner", "failure-call");
+    if (!mir_abort_runner_pointer_type(
+            mir.insns[688].type, TYPE_CHAR) ||
+        !mir_abort_runner_pointer_type(
+            mir.insns[693].type, TYPE_CHAR) ||
+        mir.insns[688].immediate < 0 ||
+        mir.insns[693].immediate < 0)
+        return mir_machine_reject(
+            "scope-block-runner", "summary-string");
+    plan->success_string = (int)mir.insns[688].immediate;
+    plan->failure_string = (int)mir.insns[693].immediate;
+    for (item = 0; item < 26; ++item)
+        if (plan->success_string == plan->check_strings[item] ||
+            plan->failure_string == plan->check_strings[item])
+            return mir_machine_reject(
+                "scope-block-runner", "summary-alias");
+    if (plan->success_string == plan->failure_string)
+        return mir_machine_reject(
+            "scope-block-runner", "summary-alias");
+
+    plan->failures = find_global(mir.insns[683].name);
+    if (plan->failures == NULL ||
+        plan->failures->storage != SC_GLOBAL ||
+        !plan->failures->is_defined ||
+        !plan->failures->is_static ||
+        plan->failures->is_array ||
+        plan->failures->is_volatile ||
+        !mir_abort_runner_word_type(plan->failures->type) ||
+        mir.insns[683].object >= 0 ||
+        !mir_machine_same_location(
+            &mir.insns[683], &mir.insns[695]) ||
+        !mir_machine_same_location(
+            &mir.insns[683], &mir.insns[699]) ||
+        mir.insns[686].label != mir.insns[692].label ||
+        mir.insns[691].label != mir.insns[698].label ||
+        mir.insns[702].src1 != mir.insns[701].dst)
+        return mir_machine_reject(
+            "scope-block-runner", "result-flow");
+    return 1;
+}
+
 enum {
     MIR_COMMA_ARRAY = -8,
     MIR_COMMA_SCRATCH = -10,
@@ -8689,6 +9130,228 @@ static void mir_emit_comma_loop_runner(
             failure, done, failure, done);
 }
 
+static void mir_scope_check_constant(
+    FILE *out, const struct MirScopeBlockRunner *plan,
+    int check, unsigned long got, unsigned long expected)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->check_strings[check]);
+    mir_emit_final_call_constant(out, expected, 4);
+    mir_emit_final_call_constant(out, got, 4);
+    mir_machine_emit_symbol_call(out, plan->check_function);
+    mir_gnarly_cleanup(out, 5);
+}
+
+static void mir_scope_check_word(
+    FILE *out, const struct MirScopeBlockRunner *plan,
+    int check, unsigned long expected)
+{
+    fputs("\tld b,h\n\tld c,l\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->check_strings[check]);
+    mir_emit_final_call_constant(out, expected, 4);
+    fputs("\tld h,b\n\tld l,c\n"
+          "\tld a,h\n\trlca\n\tsbc a,a\n"
+          "\tld d,a\n\tld e,a\n\tpush de\n\tpush hl\n",
+          out);
+    mir_machine_emit_symbol_call(out, plan->check_function);
+    mir_gnarly_cleanup(out, 5);
+}
+
+static void mir_scope_emit_shadow_for(
+    FILE *out, const struct MirScopeBlockRunner *plan)
+{
+    int loop = new_label();
+    int done = new_label();
+
+    fputs("\tld bc,0\n\txor a\n", out);
+    fprintf(out, "L%d:\n\tcp 3\n\tjp nc,L%d\n",
+            loop, done);
+    fputs("\tpush af\n\tld hl,50\n\tadd hl,bc\n"
+          "\tld b,h\n\tld c,l\n\tpop af\n\tinc a\n",
+          out);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+    fputs("\tld h,b\n\tld l,c\n", out);
+    mir_scope_check_word(out, plan, 8, 150);
+}
+
+static void mir_scope_emit_count_for(
+    FILE *out, const struct MirScopeBlockRunner *plan)
+{
+    int loop = new_label();
+    int skip = new_label();
+    int done = new_label();
+
+    fputs("\tld bc,0\n\txor a\n", out);
+    fprintf(out, "L%d:\n\tcp 4\n\tjp nc,L%d\n",
+            loop, done);
+    fputs("\tpush af\n\tpush bc\n"
+          "\tld hl,999\n\tld de,999\n"
+          "\tor a\n\tsbc hl,de\n\tpop bc\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tinc bc\nL%d:\n",
+            skip, skip);
+    fputs("\tpop af\n\tinc a\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+    fputs("\tld h,b\n\tld l,c\n", out);
+    mir_scope_check_word(out, plan, 9, 4);
+}
+
+static void mir_scope_emit_while(
+    FILE *out, const struct MirScopeBlockRunner *plan)
+{
+    int loop = new_label();
+    int done = new_label();
+
+    fputs("\tld bc,0\n\txor a\n", out);
+    fprintf(out, "L%d:\n\tcp 2\n\tjp nc,L%d\n",
+            loop, done);
+    fputs("\tpush af\n\tld l,a\n\tld h,0\n"
+          "\tadd hl,bc\n\tld b,h\n\tld c,l\n"
+          "\tpop af\n\tinc a\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+    fputs("\tpush bc\n", out);
+    mir_scope_check_constant(out, plan, 13, 77, 77);
+    fputs("\tpop bc\n", out);
+    fputs("\tld h,b\n\tld l,c\n", out);
+    mir_scope_check_word(out, plan, 14, 1);
+}
+
+static void mir_scope_emit_nested_for(
+    FILE *out, const struct MirScopeBlockRunner *plan)
+{
+    int outer = new_label();
+    int inner = new_label();
+    int inner_done = new_label();
+    int done = new_label();
+
+    fputs("\tld bc,0\n\tld d,0\n", out);
+    fprintf(out,
+            "L%d:\n\tld a,d\n\tcp 3\n\tjp nc,L%d\n"
+            "\txor a\n"
+            "L%d:\n\tcp 2\n\tjp nc,L%d\n",
+            outer, done, inner, inner_done);
+    fputs("\tpush af\n\tld l,a\n\tld h,0\n"
+          "\tadd hl,bc\n\tld b,h\n\tld c,l\n"
+          "\tpop af\n\tinc a\n", out);
+    fprintf(out,
+            "\tjp L%d\nL%d:\n\tinc d\n\tjp L%d\nL%d:\n",
+            inner, inner_done, outer, done);
+    fputs("\tld h,b\n\tld l,c\n", out);
+    mir_scope_check_word(out, plan, 17, 3);
+}
+
+static void mir_scope_emit_for_init(
+    FILE *out, const struct MirScopeBlockRunner *plan)
+{
+    int loop = new_label();
+    int done = new_label();
+
+    fputs("\tld bc,0\n\txor a\n", out);
+    fprintf(out, "L%d:\n\tcp 5\n\tjp nc,L%d\n",
+            loop, done);
+    fputs("\tpush af\n\tld l,a\n\tld h,0\n"
+          "\tadd hl,bc\n\tld b,h\n\tld c,l\n"
+          "\tpop af\n\tinc a\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, done);
+    fputs("\tld h,b\n\tld l,c\n", out);
+    mir_scope_check_word(out, plan, 18, 10);
+    mir_scope_check_constant(out, plan, 19, 42, 42);
+}
+
+static void mir_scope_emit_helper_checks(
+    FILE *out, const struct MirScopeBlockRunner *plan)
+{
+    static const unsigned long expected[6] = {
+        112, 114, 741, 742, 7, 9
+    };
+    int helper;
+
+    for (helper = 0; helper < 6; ++helper) {
+        mir_machine_emit_symbol_call(
+            out, plan->helper_functions[helper / 2]);
+        mir_scope_check_word(
+            out, plan, 20 + helper, expected[helper]);
+    }
+}
+
+static void mir_emit_scope_block_runner(
+    FILE *out, const struct MirScopeBlockRunner *plan)
+{
+    int skip_inner = new_label();
+    int switch_default = new_label();
+    int switch_done = new_label();
+    int failure = new_label();
+    int summary_done = new_label();
+    int return_done = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+
+    mir_scope_check_constant(out, plan, 0, 20, 20);
+    mir_scope_check_constant(out, plan, 1, 10, 10);
+    fputs("\tld hl,3\n\tld de,4\n\tadd hl,de\n", out);
+    mir_scope_check_word(out, plan, 2, 7);
+    mir_scope_check_constant(out, plan, 3, 3, 3);
+    mir_scope_check_constant(out, plan, 4, 2, 2);
+    mir_scope_check_constant(out, plan, 5, 1, 1);
+    mir_scope_check_constant(out, plan, 6, 100000, 100000);
+    mir_scope_check_constant(out, plan, 7, 100, 100);
+
+    mir_scope_emit_shadow_for(out, plan);
+    mir_scope_emit_count_for(out, plan);
+
+    fputs("\tld hl,7\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->parameter_function);
+    mir_gnarly_cleanup(out, 1);
+    mir_scope_check_word(out, plan, 10, 12);
+
+    fputs("\tld a,1\n\tcp 1\n", out);
+    fprintf(out, "\tjp nz,L%d\n", skip_inner);
+    mir_scope_check_constant(out, plan, 11, 8, 8);
+    fprintf(out, "L%d:\n", skip_inner);
+    mir_scope_check_constant(out, plan, 12, 1, 1);
+
+    mir_scope_emit_while(out, plan);
+
+    fputs("\tld hl,0\n\tld a,1\n\tcp 1\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tld hl,11\n\tjp L%d\n"
+            "L%d:\n\tld hl,-1\nL%d:\n",
+            switch_default, switch_done,
+            switch_default, switch_done);
+    mir_scope_check_word(out, plan, 15, 11);
+
+    fputs("\tld hl,5\n\tld de,9\n\tadd hl,de\n", out);
+    mir_scope_check_word(out, plan, 16, 14);
+
+    mir_scope_emit_nested_for(out, plan);
+    mir_scope_emit_for_init(out, plan);
+    mir_scope_emit_helper_checks(out, plan);
+
+    mir_machine_emit_global_word(out, plan->failures, 0);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n", failure);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->success_string);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    mir_gnarly_cleanup(out, 1);
+    fprintf(out, "\tjp L%d\nL%d:\n",
+            summary_done, failure);
+    mir_machine_emit_global_word(out, plan->failures, 0);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->failure_string);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    mir_gnarly_cleanup(out, 2);
+    fprintf(out, "L%d:\n", summary_done);
+
+    mir_machine_emit_global_word(out, plan->failures, 0);
+    fputs("\tld a,h\n\tor l\n\tld hl,0\n", out);
+    fprintf(out, "\tjp z,L%d\n\tinc hl\nL%d:\n"
+            "\tld sp,ix\n\tpop ix\n\tret\n",
+            return_done, return_done);
+}
+
 int mir_try_emit_call_runners(FILE *out, int phase)
 {
     if (phase == 0) {
@@ -8698,6 +9361,7 @@ int mir_try_emit_call_runners(FILE *out, int phase)
         struct MirCallbackRegistrationRunner callback_plan;
         struct MirForIncrementRunner for_increment_plan;
         struct MirCommaLoopRunner comma_loop_plan;
+        struct MirScopeBlockRunner scope_plan;
         struct MirByteEqualityRunner byte_equality_plan;
         struct MirGnarlyRunner gnarly_plan;
         struct MirNestedForRunner nested_for_plan;
@@ -8733,6 +9397,10 @@ int mir_try_emit_call_runners(FILE *out, int phase)
         }
         if (mir_match_comma_loop_runner(&comma_loop_plan)) {
             mir_emit_comma_loop_runner(out, &comma_loop_plan);
+            return 1;
+        }
+        if (mir_match_scope_block_runner(&scope_plan)) {
+            mir_emit_scope_block_runner(out, &scope_plan);
             return 1;
         }
         if (mir_match_byte_equality_runner(

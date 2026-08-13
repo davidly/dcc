@@ -5,10 +5,48 @@ current execution plan and handoff.
 
 ## 2026-08-13 current checkpoint (read this first)
 
-- Branch: `pr/143`; clean base HEAD for this batch: `690d435`.
-- Current working-tree candidate coverage: **2150/2185 (98.40%)**.
-- Remaining fallback population: **35 `final-cost-policy`**, all selected by
+- Branch: `pr/143`; clean base HEAD for this batch: `fdf7f93`.
+- Current working-tree candidate coverage: **2151/2185 (98.44%)**.
+- Remaining fallback population: **34 `final-cost-policy`**, all selected by
   the spilled scalar backend and with no other fallback reason.
+- The call-runner module now admits the 28-block `tforblk.main`
+  `final-cost-policy` fallback through a strict name-free matcher over all
+  **703 MIR instructions**. It proves all 30 distinct scoped objects and
+  their widths, 53 local stores, seven local loads, nine PHIs, ten
+  conditional branches, ten jumps, every shadowed local, all four source
+  loops, the switch flow, 26 ordered checker calls, seven ordered helper
+  calls, both variadic reports and the final failure-derived return. No
+  production function, helper, global, local or output name is matched.
+- The emitter preserves the C99 `for`-declaration scopes, inner/outer
+  lifetimes, nested-loop ordering, shadowed values, helper side effects,
+  checker/report order and final return. It uses a zero-byte IX frame and no
+  IY. Normal selected/captured metrics are **5,986/10,578 bytes** and
+  **660/1,010 instructions**; stack-check metrics are **6,015/10,607
+  bytes** and **661/1,011 instructions**.
+- Checked `tforblk` full-mode totals improve from **55,023 to 44,360 cycles**
+  and **8,064 to 7,168 bytes** peep, plus **56,840 to 45,675 cycles** and
+  **8,192 to 7,168 bytes** nopeep. Forced fallback also passes full-mode
+  validation.
+- A renamed helper/check/report/global/local scope A/B makes every successful
+  checker and helper invocation observable in the final
+  `edge 26/7/1` report without changing the matched main graph. Selected and
+  fallback output is identical in both modes. Peep selected/fallback
+  measurements are **62,722/73,385 cycles** and **7,552/8,448 bytes**;
+  nopeep measurements are **64,340/75,505 cycles** and **7,680/8,576
+  bytes**. A deliberate helper-result mismatch follows the same two checker
+  failures, final `edge 26/7/3: tforblk FAILED: 2` report and nonzero return
+  in selected and fallback builds. Peep selected/fallback measurements are
+  **204,738/215,399 cycles** and **7,552/8,448 bytes**; nopeep measurements
+  are **206,970/218,119 cycles** and **7,680/8,576 bytes**.
+- The call-runner module grows from **8,774 to 9,442 source lines**. Its
+  object audit still reports only `mir_try_emit_call_runners [T]` as defined
+  global code, with zero global read-only or writable data. The canonical
+  build passes. The regression-gated stack-check census advances
+  **2,150/2,185 (98.40%)** to **2,151/2,185 (98.44%)**, adds exactly
+  `tforblk.main`, removes no accepted function, moves selector counts from
+  **1,403 spilled / 375 scheduled** to **1,402 spilled / 376 scheduled**,
+  and leaves **34 `final-cost-policy`** fallbacks. No performance baseline,
+  production name, or output-hash gate was added.
 - The call-runner module now admits the 27-block `tabort.main`
   `final-cost-policy` fallback through a strict name-free matcher over all
   **269 MIR instructions**. It proves the 10-byte file/buffer working set,
