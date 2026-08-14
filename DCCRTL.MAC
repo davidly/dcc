@@ -5647,6 +5647,16 @@ __tmpf_hook:
 __tmpf_dispatch:
         ld      hl,(__tmpf_hook)
         jp      (hl)
+; __tmpf_fd lives here (in the always-resident _exit block), not in
+; _tmpfile's own block: _close's cleanup scan reads it to see whether a
+; closing fd belongs to a still-open tmpfile(), and dccrtlstrip treats
+; each PUBLIC-to-PUBLIC span as one atomic inclusion unit, so leaving
+; this array inside _tmpfile's block would drag all of _tmpfile (and
+; transitively _tmpnam) into every program that ever closes a file, even
+; one that never calls tmpfile() itself.  Literal 4, not NTMP (defined
+; much later in the file, in _tmpfile's own block) - a forward reference
+; to it here inside a ds risks a phase error in a two-pass assembler.
+__tmpf_fd:      ds      4               ; fd per slot (0 = free); must match NTMP
 
 ; ============================================================
 ; atexit -- register a function to call at program exit (C89 7.10.4.2)
@@ -11147,7 +11157,6 @@ __tn_ptr:       dw      0
 __tn_buf:       ds      9               ; internal buffer for tmpnam(NULL)
 __tf_slot:      db      0
 __tf_nmptr:     dw      0
-__tmpf_fd:      ds      NTMP            ; fd per slot (0 = free)
 __tmpf_nm:      ds      NTMP*TN_NSZ     ; name per slot (16 bytes each)
 
 ; ============================================================
