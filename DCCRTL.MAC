@@ -1889,10 +1889,10 @@ __sdup:
         inc     hl
         ld      (__sdup_len),hl
 
-        ; malloc(len)
-        push    hl
-        call    _malloc
-        pop     bc              ; clean malloc arg
+        ; malloc(len) via __mlh (fastcall entry: HL = size in, HL = ptr
+        ; out) - HL is already the length, so no push/pop needed at all,
+        ; unlike the general _malloc entry this used to call.
+        call    __mlh
 
         ; If malloc failed, return NULL.
         ld      a,h
