@@ -785,7 +785,7 @@ static void print_stats(void)
 {
     if (!opt_verbose) return;
     fprintf(stderr, "\nFINT usage summary\n");
-    fprintf(stderr, "  Source bytes:          %ld / %ld\n", slen, MAXSRC);
+    fprintf(stderr, "  Source bytes:          %u / %u\n", (unsigned)slen, (unsigned)MAXSRC);
     fprintf(stderr, "  Bytecode instructions: %d / %d\n", cp, MAXCODE);
     fprintf(stderr, "  Words:                 %d / %d\n", nw, MAXWORDS);
     fprintf(stderr, "  Strings:               %d / %d\n", ns, MAXSTR);

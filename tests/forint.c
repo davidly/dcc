@@ -1418,7 +1418,7 @@ static void print_stats(void)
 {
     if(!g_verbose)return;
     fprintf(stderr,"\nFORINT usage summary\n");
-    fprintf(stderr,"  Source bytes:    %ld / %ld\n",g_slen,MAXSRC);
+    fprintf(stderr,"  Source bytes:    %u / %u\n",(unsigned)g_slen,(unsigned)MAXSRC);
     fprintf(stderr,"  Statements:      %d / %d\n",g_ns,MAXSTMT);
     fprintf(stderr,"  Symbols:         %d / %d\n",g_nsy,MAXSYM);
     fprintf(stderr,"  Data bytes:      %d used, %d allocated, %d max\n",
