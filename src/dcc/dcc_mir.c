@@ -1,6 +1,5 @@
 /* dcc_mir.c - MIR core: lowering, capture API, CFG/dataflow analysis,
- * register allocation, and the top-level transactional accept/replay
- * plumbing shared by every selector.
+ * register allocation, and generated-candidate selection plumbing.
  *
  * This is one of several dcc_mir_*.c translation units that together
  * implement the typed virtual-register machine IR and transactional
@@ -8,9 +7,8 @@
  * shared IR types and cross-file helper prototypes.
  *
  * Set DCC_MIR_REPORT=1 to dump every generated function attempt, or
- * DCC_MIR_FUNCTION=name to restrict the dump. MIR emission remains opt-in
- * and transactional: unsupported functions replay the established
- * backend body.
+ * DCC_MIR_FUNCTION=name to restrict the dump. Production function output is
+ * always selected from generated MIR candidates.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,7 +18,7 @@
 #include "dcc_mir.h"
 #include "dcc_mir_internal.h"
 
-/* dcc_mir.c - typed virtual-register machine IR and transactional backend.
+/* dcc_mir.c - typed virtual-register machine IR and generated backend.
  *
  * dcc currently assigns HL/DE/BC while walking one statement AST at a time.
  * This module is the first vertical slice toward a real allocator: before an
@@ -28,8 +26,7 @@
  * virtual values, then build CFG successors and solve virtual-value liveness.
  *
  * Set DCC_MIR_REPORT=1 to dump every generated function attempt, or
- * DCC_MIR_FUNCTION=name to restrict the dump. MIR emission remains opt-in and
- * transactional: unsupported functions replay the established backend body.
+ * DCC_MIR_FUNCTION=name to restrict the dump.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -257,6 +254,123 @@ static void mir_copy_name(char *dst, const char *name)
         length = 63;
     memcpy(dst, name, length);
     dst[length] = 0;
+}
+
+void mir_clear_debug_events(void)
+{
+    int event;
+
+    for (event = 0; event < mir.debug_event_count; ++event)
+        free(mir.debug_events[event].text);
+    free(mir.debug_events);
+    mir.debug_events = NULL;
+    mir.debug_event_count = 0;
+    mir.debug_event_capacity = 0;
+}
+
+static int mir_capture_debug_text(const char *text)
+{
+    struct MirDebugEvent *event;
+    size_t length;
+
+    if (!mir.active || !opt_debug || text == NULL)
+        return 0;
+    if (mir.debug_event_count == mir.debug_event_capacity) {
+        int capacity = mir.debug_event_capacity == 0
+            ? 32 : mir.debug_event_capacity * 2;
+        struct MirDebugEvent *events =
+            (struct MirDebugEvent *)realloc(
+                mir.debug_events,
+                (size_t)capacity * sizeof(*mir.debug_events));
+        if (events == NULL)
+            fatal("out of memory capturing MIR debug metadata");
+        mir.debug_events = events;
+        mir.debug_event_capacity = capacity;
+    }
+    event = &mir.debug_events[mir.debug_event_count++];
+    event->point = mir.count;
+    length = strlen(text) + 1;
+    event->text = (char *)malloc(length);
+    if (event->text == NULL)
+        fatal("out of memory capturing MIR debug text");
+    memcpy(event->text, text, length);
+    return 1;
+}
+
+int mir_capture_debug_location(const char *file, int line)
+{
+    char text[512];
+    const char *source =
+        file != NULL ? file : input_name != NULL ? input_name : "<input>";
+    size_t used = 0;
+
+    if (!mir.active || !opt_debug || line <= 0)
+        return 0;
+    used += (size_t)snprintf(text + used, sizeof(text) - used,
+                             ";@dcc-line \"");
+    while (*source != 0 && used + 3 < sizeof(text)) {
+        if (*source == '\\' || *source == '"')
+            text[used++] = '\\';
+        text[used++] = *source++;
+    }
+    snprintf(text + used, sizeof(text) - used, "\" %d\n", line);
+    return mir_capture_debug_text(text);
+}
+
+int mir_capture_debug_variable(
+    const char *function, const struct Sym *symbol, int end)
+{
+    char text[1024];
+    size_t used;
+    int dimension;
+
+    if (!mir.active || !opt_debug || function == NULL || symbol == NULL)
+        return 0;
+    if (end) {
+        snprintf(text, sizeof(text),
+                 ";@dcc-var-end \"%s\" \"%s\" %d\n",
+                 function, symbol->name, symbol->offset);
+        return mir_capture_debug_text(text);
+    }
+    used = (size_t)snprintf(
+        text, sizeof(text),
+        ";@dcc-var \"%s\" \"%s\" %d %d %d %d %d %d %d %d \"",
+        function, symbol->name, symbol->type, symbol->storage,
+        symbol->offset, symbol->size, symbol->is_array, symbol->is_vla,
+        symbol->elem_size, symbol->is_funcptr);
+    for (dimension = 0;
+         dimension < symbol->dim_count && used + 24 < sizeof(text);
+         ++dimension)
+        used += (size_t)snprintf(
+            text + used, sizeof(text) - used, "%s%d",
+            dimension != 0 ? "," : "", symbol->dims[dimension]);
+    snprintf(text + used, sizeof(text) - used, "\"\n");
+    return mir_capture_debug_text(text);
+}
+
+int mir_capture_debug_function_end(
+    const char *assembly_name, const char *source_name)
+{
+    char text[256];
+
+    if (!mir.active || !opt_debug ||
+        assembly_name == NULL || source_name == NULL)
+        return 0;
+    snprintf(text, sizeof(text),
+             ";@dcc-func-end \"%s\" \"%s\"\n",
+             assembly_name, source_name);
+    return mir_capture_debug_text(text);
+}
+
+void mir_emit_debug_events(FILE *out, int point)
+{
+    int event;
+
+    if (!opt_debug)
+        return;
+    for (event = 0; event < mir.debug_event_count; ++event)
+        if (mir.debug_events[event].point == point)
+            fputs(mir.debug_events[event].text, out);
 }
 
 static int mir_user_label(const char *name)
@@ -3132,6 +3246,7 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
 {
     struct Sym *function_symbol;
 
+    mir_clear_debug_events();
     mir.count = 0;
     mir_invalidate_use_cache();
     mir.next_value = 0;
@@ -3190,13 +3305,21 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
     mir.aggregate_temp_bytes = 0;
     mir.opaque_count = 0;
     mir_extended_integer_constant_conversion_fold_count = 0;
-    mir.capture_stream = NULL;
+    mir.legacy_discard_stream = NULL;
     mir_copy_name(mir.name, name);
     mir.active = 1;
-    mir.capture_stream = tmpfile();
-    if (mir.capture_stream == NULL)
-        fatal("cannot create MIR capture stream");
-    mir.saved_sink = emit_sink_push(mir.capture_stream, sink_purpose);
+    /*
+     * The legacy AST emitter still drives declaration replay and metadata
+     * side effects while MIR is being built. Its assembly text is obsolete:
+     * write it directly to a discard-only sink, never retain, inspect, copy,
+     * or measure it. MIR selection restores selected_output_sink and commits
+     * only a generated MIR candidate.
+     */
+    mir.legacy_discard_stream = fopen(DCC_NULL_DEVICE, "w");
+    if (mir.legacy_discard_stream == NULL)
+        fatal("cannot create legacy discard-only sink");
+    mir.selected_output_sink =
+        emit_sink_push(mir.legacy_discard_stream, EMIT_SINK_DISCARD);
     mir_emit_label(mir_new_label());
     {
         int local;

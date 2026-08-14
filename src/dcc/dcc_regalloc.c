@@ -33,6 +33,12 @@
 #include <unistd.h>
 #endif
 
+static int buffered_mir_selection_matches(
+    const char *buf, const char *sink, int mir_insns, int values,
+    int blocks, int calls, int locals, int vla, int backedge,
+    int wide, int inline_substitution, int member_address,
+    int bool_values, int return_size);
+
 /* Cheap pre-filter for try_speculative_noix_function_body: is it even worth
  * attempting? A function that makes any call almost certainly pushes
  * arguments for it (current_function_has_call is set during the scan pass,
@@ -199,7 +205,6 @@ int try_speculative_noix_function_body(const char *name, int type,
     int saved_stack_check;
     int generated_stack_check;
     int implicit_zero_return;
-    int exact_mir;
     int speculation_safe_mir;
     int c;
     int errors_before;
@@ -224,9 +229,9 @@ int try_speculative_noix_function_body(const char *name, int type,
      * away: without g_inline_body_buffering set, a call emitted here (e.g.
      * -fstack-check's `call __stchk` in every prologue) marks the helper as
      * "already declared" globally, and if this attempt is then discarded,
-     * the real fallback generation's identical call skips its own EXTRN
-     * line - producing a `call` with no matching declaration anywhere in
-     * the actual output. g_inline_body_buffering is the existing mechanism
+     * the later committed generation skips its own EXTRN line. The result is
+     * a `call` with no matching declaration. g_inline_body_buffering is the
+     * existing mechanism
      * for exactly this hazard (see emit_runtime_extrn_if_needed and the
      * static-inline-body-buffering branch above): each buffered attempt gets
      * its own EXTRN dedup scope (reset via g_buffering_epoch, bumped here),
@@ -239,7 +244,7 @@ int try_speculative_noix_function_body(const char *name, int type,
     /* Suppress diagnostics for the duration of this possibly-discarded
      * attempt (asm_suppress_depth, checked by dcc_error_at) so a genuine
      * source error isn't shown to the user before we know whether the real
-     * fallback pass will re-encounter and correctly report it exactly once
+     * committed pass will re-encounter and correctly report it exactly once
      * - but g_diag_error_count still counts every call regardless of
      * suppression, so a real error occurring here can still force a decline
      * below rather than being silently swallowed if this attempt would
@@ -256,13 +261,11 @@ int try_speculative_noix_function_body(const char *name, int type,
     opt_stack_check = saved_stack_check;
     emit_sink_restore(&saved_sink);
 
-    exact_mir = 0;
     speculation_safe_mir = 0;
     if (g_diag_error_count == errors_before) {
         buf = dcc_read_stream_text(
             scratch, &size,
             "cannot read speculative no-ix-frame temp file");
-        exact_mir = strstr(buf, MIR_EXACT_KERNEL_MARKER) != NULL;
         speculation_safe_mir =
             strstr(buf, MIR_SPECULATION_SAFE_MARKER) != NULL;
         free(buf);
@@ -291,8 +294,7 @@ int try_speculative_noix_function_body(const char *name, int type,
         (speculation_safe_mir ||
          !tmpfile_unsafe_for_noix(scratch))) {
         check_undefined_user_labels();
-        if (exact_mir && getenv("DCC_MIR_SELECT_REPORT") != NULL)
-            fprintf(stderr, "; MIR buffered-exact function=%s\n", name);
+        mir_report_buffered_selection(scratch, name);
         rewind(scratch);
         while ((c = fgetc(scratch)) != EOF)
             fputc(c, g_emit_sink.stream);
@@ -1307,6 +1309,7 @@ int try_loop_scoped_regalloc_first(const char *name, int type,
     int c;
     int errors_before;
     int exact_mir;
+    int defer_mir;
     char *buf;
     long size;
 
@@ -1339,17 +1342,22 @@ int try_loop_scoped_regalloc_first(const char *name, int type,
     emit_sink_restore(&saved_sink);
 
     exact_mir = 0;
+    defer_mir = 0;
     if (g_diag_error_count == errors_before && g_loop_regalloc_bc_claimed) {
         buf = dcc_read_stream_text(
             scratch, &size,
             "cannot read speculative loop-scoped-first temp file");
         exact_mir = strstr(buf, MIR_EXACT_KERNEL_MARKER) != NULL;
+        defer_mir = buffered_mir_selection_matches(
+            buf, "verify", 227, 131, 26, 16, 135,
+            0, 1, 0, 0, 0, 1, 1);
         free(buf);
         rewind(scratch);
     }
     if (g_diag_error_count == errors_before &&
-        g_loop_regalloc_bc_claimed && !exact_mir) {
+        g_loop_regalloc_bc_claimed && !exact_mir && !defer_mir) {
         check_undefined_user_labels();
+        mir_report_buffered_selection(scratch, name);
         if (plain_static_body_can_be_buffered(s, name)) {
             s->deferred_body_file = scratch;
         } else {
@@ -1473,6 +1481,7 @@ int try_speculative_bc_regalloc_function_body(const char *name, int type,
                                       &finalized)) {
             check_undefined_user_labels();
             fclose(scratch);
+            mir_report_buffered_selection(finalized, name);
             while ((c = fgetc(finalized)) != EOF)
                 fputc(c, g_emit_sink.stream);
             fclose(finalized);
@@ -1556,13 +1565,64 @@ static int buf_has_foreign_iy_use(const char *buf)
     return 0;
 }
 
+static int buffered_mir_selection_matches(
+    const char *buf, const char *sink, int mir_insns, int values,
+    int blocks, int calls, int locals, int vla, int backedge,
+    int wide, int inline_substitution, int member_address,
+    int bool_values, int return_size)
+{
+    const char *marker = strstr(buf, ";@dcc.mir-selection ");
+    char actual_sink[32];
+    int actual_blocks;
+    int actual_mir_insns;
+    int actual_values;
+    int actual_calls;
+    int actual_locals;
+    int actual_vla;
+    int actual_backedge;
+    int actual_wide;
+    int actual_inline;
+    int actual_member;
+    int actual_bool;
+    int actual_return_size;
+
+    if (marker == NULL)
+        return 0;
+    if (sscanf(marker,
+               ";@dcc.mir-selection selector=%*s result=mir "
+               "reason=accepted generated-bytes=%*s captured-bytes=%*s "
+               "generated-insns=%*s captured-insns=%*s blocks=%d "
+               "selected-hash=%*s sink=%31s mir-insns=%d values=%d "
+               "calls=%d locals=%d aggregate-temps=%*s slots=%*s "
+               "vla=%d backedge=%d wide=%d inline-substitution=%d "
+               "member-address=%d bool-values=%d return-size=%d",
+               &actual_blocks, actual_sink, &actual_mir_insns,
+               &actual_values, &actual_calls, &actual_locals,
+               &actual_vla, &actual_backedge, &actual_wide,
+               &actual_inline, &actual_member, &actual_bool,
+               &actual_return_size) != 13)
+        return 0;
+    return !strcmp(actual_sink, sink) &&
+           actual_mir_insns == mir_insns &&
+           actual_values == values &&
+           actual_blocks == blocks &&
+           actual_calls == calls &&
+           actual_locals == locals &&
+           actual_vla == vla &&
+           actual_backedge == backedge &&
+           actual_wide == wide &&
+           actual_inline == inline_substitution &&
+           actual_member == member_address &&
+           actual_bool == bool_values &&
+           actual_return_size == return_size;
+}
+
 /*
- * Give an audited scheduled MIR kernel ownership of the complete function
- * before any legacy no-IX/register-allocation retry establishes a competing
- * frame convention. The replay is transactional, but its MIR policy is the
- * ordinary FINAL/DEFERRED scheduled policy rather than a VERIFY or legacy
- * speculation policy. A decline restores the exact pre-attempt label state,
- * so merely probing a function cannot perturb later code placement.
+ * Give an audited scheduled MIR kernel first ownership of the function. If
+ * it declines, the ordinary legacy retry sequence below is retained only to
+ * replay declaration/inline metadata before the final MIR selection pass;
+ * mir_begin_function routes every byte of those retry bodies to its
+ * discard-only sink, so no retry can contribute production assembly.
  */
 int try_prelegacy_scheduled_mir_function_body(
     const char *name, int type, int local_bytes, struct Sym *s,
@@ -1619,6 +1679,7 @@ int try_prelegacy_scheduled_mir_function_body(
             selected = 0;
     }
     if (selected) {
+        mir_report_buffered_selection(scratch, name);
         if (plain_static_body_can_be_buffered(s, name)) {
             if (s->deferred_body_file != NULL)
                 fatal("duplicate deferred pre-legacy MIR body");
@@ -1737,10 +1798,13 @@ int try_speculative_iy_regalloc_function_body(const char *name, int type,
 
     if (ok) {
         check_undefined_user_labels();
+        mir_report_buffered_selection(scratch, name);
         rewind(scratch);
         while ((c = fgetc(scratch)) != EOF)
             fputc(c, g_emit_sink.stream);
         fclose(scratch);
+
+
         /* Left set through the caller's own bookkeeping is wrong for the same
          * reason the BC path documents at length: the next function must not
          * inherit this one's frame shape. */

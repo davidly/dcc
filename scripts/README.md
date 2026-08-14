@@ -4,15 +4,17 @@ Developer utility scripts for the `dcc` (CP/M-80 / Z80) toolchain.
 
 ## `mir-migration-census.py`
 
-Measures active MIR rollout across `tests/*.c`, records why each remaining
-function falls back, and compares two snapshots to produce the smallest
-`runall.ps1 -Apps ...` validation command for a compiler change.
+Measures generated MIR selection across `tests/*.c` and compares two snapshots
+to produce the smallest `runall.ps1 -Apps ...` validation command for a
+compiler change.
 
 The script is read-only with respect to test and performance baselines. It
-compiles each source with `DCC_MIR_SELECT_REPORT=1`, deduplicates repeated
-verify/deferred reports by `(app, function)`, and writes a stable tab-separated
-snapshot containing selector, result, fallback reason, assembly-text size,
-instruction count, and CFG block count.
+compiles each source with `DCC_MIR_SELECT_REPORT=1` and
+`DCC_MIR_REQUIRE_EMIT=1`, deduplicates buffered/final reports by
+`(app, function)`, and writes a stable tab-separated snapshot containing the
+selected generated selector, assembly-text size, instruction count, hash, and
+CFG block count. Compatibility `captured_*` columns remain present with `-1`;
+no legacy text is retained or measured.
 
 ### Fast staged MIR workflow
 
@@ -45,21 +47,19 @@ the complete census matches the runnable app suite. Pass `--include-ignored`
 when deliberately investigating those sources. Per-app `dcc_args` overrides
 are forwarded automatically.
 
-`--fail-on-regression` returns nonzero when a function that emitted through MIR
-in the comparison snapshot now falls back. A newly MIR-emitted function is not
-automatically considered safe: run the generated focused command to verify
-correctness, peep/nopeep cycles, and both sizes before committing it.
+`--fail-on-regression` returns nonzero when a previously reported MIR selection
+disappears or becomes non-MIR. Run the generated focused command whenever a
+selected hash or generated metric changes.
 
 ### MIR-only cost-policy matrix
 
-`--cost-policy-output` records the generic MIR candidates considered by the
-final `mir-v1` policy. The TSV includes emitted machine bytes/instructions,
+`--cost-policy-output` records the generated MIR candidates considered by the
+`mir-v1` policy. The TSV includes emitted machine bytes/instructions,
 loop-weighted T-states, helper calls, frame/spill costs, allocator and stream
 moves, prologue/callee-save costs, register homes, eligibility, score, and
 output hash. With no explicit `--cost-policy`, the option uses the production
-`mir-v1` default; pass `--cost-policy mir-v1-report` to report
-without adopting alternatives or `--cost-policy legacy-v69` for the
-captured-stream A/B control.
+`mir-v1` default; pass `--cost-policy mir-v1-report` to report without adopting
+alternatives.
 
 ```sh
 python3 scripts/mir-migration-census.py \
@@ -67,6 +67,30 @@ python3 scripts/mir-migration-census.py \
   --cost-policy-output build/mir-cost.tsv \
   --output build/mir-selected.tsv
 ```
+
+## `mir-current-vs-parent.py`
+
+Runs strict normal and stack-check censuses with a current compiler and a
+separately built parent compiler, then reports selection/hash changes:
+
+```sh
+python3 scripts/mir-current-vs-parent.py \
+  --parent-compiler build/parent/dcc \
+  --apps cint,cobint
+```
+
+This replaces forced-legacy A/B and fallback-bisection utilities.
+
+For one generated-candidate runtime comparison, use the diagnostic controls:
+
+```sh
+DCC_MIR_SELECT_FUNCTION=parse_move \
+DCC_MIR_SELECT_CANDIDATE=spilled-rhs-forward \
+  pwsh ./scripts/runall.ps1 -Apps tchess -Mode full
+```
+
+Candidate names are the `candidate` values in `--cost-policy-output`; no
+legacy stream is involved.
 
 ## `publish-package.ps1`
 

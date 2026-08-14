@@ -1299,16 +1299,6 @@ static int mir_homed_is_large_call_phi_cfg(void)
     return has_call && has_phi && mir_cfg_block_count() >= 16;
 }
 
-static int mir_homed_cfg_rematerializes_string_argument(void)
-{
-    int i;
-
-    for (i = 0; i < mir.count; ++i)
-        if (mir.insns[i].opcode == MIR_STRING_ADDRESS &&
-            mir_homed_string_call_argument(mir.insns[i].dst))
-            return 1;
-    return 0;
-}
 
 /* Share address formation and one word fetch for adjacent unsigned byte
  * fields passed to the same ordinary two-argument call. */
@@ -3137,42 +3127,6 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             mir_emit_home_epilogue(out, uses_iy);
         }
     }
-    if (!mir_cost_policy_candidate_mode() &&
-        !mir_hybrid_homed_selection &&
-        mir_homed_cfg_depends_on_word_store() &&
-        mir_stream_instruction_count(out) >
-            mir_stream_instruction_count(mir.capture_stream) - 2 &&
-        mir_stream_size(out) * 50L >
-            mir_stream_size(mir.capture_stream) * 47L)
-        goto done;
-    /* A two-instruction deficit regressed the narrow-shift candidates.
-     * A one-instruction deficit remains allowed because the measured
-     * tmirfast/tmirfuse candidates improve in both peep modes. */
-    if (!mir_cost_policy_candidate_mode() &&
-        !mir_regional_home_plan_is_active() &&
-        mir_homed_cfg_rematerializes_string_argument() &&
-        mir_stream_instruction_count(out) >
-            mir_stream_instruction_count(mir.capture_stream) + 1)
-        goto done;
-    if (!mir_cost_policy_candidate_mode() &&
-        !mir_regional_home_plan_is_active()) {
-        if (mir_hybrid_homed_selection) {
-            long generated_size = mir_stream_size(out);
-            long captured_size = mir_stream_size(mir.capture_stream);
-
-            if (generated_size * 100L >
-                    captured_size *
-                        (mir_homed_is_large_call_phi_cfg() ? 125L : 105L))
-                goto done;
-        } else if (mir.allocation_spill_count != 0 &&
-                   (mir_cfg_block_count() > 4 ||
-                    mir_stream_size(out) >=
-                        mir_stream_size(mir.capture_stream) ||
-                    mir_stream_instruction_count(out) >
-                        mir_stream_instruction_count(mir.capture_stream))) {
-            goto done;
-        }
-    }
     mir_homed_cfg_frameless = frameless;
     accepted = 1;
 done:
@@ -3188,14 +3142,11 @@ done:
     if (!accepted && getenv("DCC_MIR_SELECT_REPORT") != NULL)
         fprintf(stderr,
                 "; MIR home-cfg reject function=%s insn=%d opcode=%s "
-                "generated-bytes=%ld captured-bytes=%ld "
-                "generated-insns=%d captured-insns=%d\n",
+                "generated-bytes=%ld generated-insns=%d\n",
                 mir.name, i,
                 i >= 0 && i < mir.count
                     ? mir_opcode_name(mir.insns[i].opcode) : "preflight",
-                mir_stream_size(out), mir_stream_size(mir.capture_stream),
-                mir_stream_instruction_count(out),
-                mir_stream_instruction_count(mir.capture_stream));
+                mir_stream_size(out), mir_stream_instruction_count(out));
     free(labels);
     return accepted;
 }

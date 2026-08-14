@@ -93,6 +93,15 @@ as [`dcc_expr.c`](dcc_expr.c), [`dcc_ops.c`](dcc_ops.c),
 spans and replayed through declaration codegen so the symbol table and stack
 frame match the frame-sizing scan exactly.
 
+Production function assembly is selected only from generated MIR candidates.
+The legacy AST emitter still runs once per function because declaration replay,
+inline-body bookkeeping, and related metadata side effects have not yet moved
+fully into MIR. Its text is written directly to a per-function discard-only
+sink: it is never retained, measured, replayed, or copied to production output.
+Legacy speculative register-allocation drivers remain temporarily to establish
+those side effects and may post-process a generated MIR candidate; removing
+that isolated dependency is the next cleanup stage.
+
 ---
 
 ## Module architecture

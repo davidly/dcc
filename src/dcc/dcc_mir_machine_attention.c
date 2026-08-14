@@ -29,6 +29,20 @@ struct MirSoftmaxSchedule {
     int length_stack_offset;
 };
 
+struct MirVectorMaximumSchedule {
+    int vector_stack_offset;
+    int length_stack_offset;
+    int index_stack_offset;
+};
+
+struct MirFixedSoftmaxSchedule {
+    struct Sym *clamp_function;
+    struct Sym *table;
+    int table_offset;
+    int vector_stack_offset;
+    int length;
+};
+
 struct MirBackwardLocation {
     struct Sym *root;
     int offset;
@@ -948,6 +962,131 @@ static int mir_match_matrix_product_schedule(
            mir_match_matrix_product_add_schedule(plan);
 }
 
+static int mir_match_vector_maximum_schedule(
+    struct MirVectorMaximumSchedule *plan)
+{
+    static const unsigned char expected_opcodes[63] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_LOAD, MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_LABEL, MIR_LOAD, MIR_NOP, MIR_LOAD, MIR_NOP, MIR_NOP,
+        MIR_PHI, MIR_NOP, MIR_NOP, MIR_UNARY, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD,
+        MIR_LOAD_INDIRECT, MIR_LOAD, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD, MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_NOP, MIR_STORE, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP,
+        MIR_LABEL, MIR_LOAD, MIR_LOAD, MIR_UNARY, MIR_STORE_INDIRECT, MIR_LOAD, MIR_RETURN
+    };
+    static const int edges[][2] = {
+        {30, 56}, {35, 44}, {55, 18}
+    };
+    const struct MirInsn *vector = &mir.insns[1];
+    const struct MirInsn *length = &mir.insns[2];
+    const struct MirInsn *index = &mir.insns[3];
+    int edge;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 63 || mir_cfg_block_count() != 5 ||
+        mir.local_bytes != 4 || mir.aggregate_temp_bytes != 0 ||
+        mir.has_vla || !mir_has_cfg_backedge() ||
+        !mir_match_matrix_product_word_type(mir.return_type))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "vector-maximum-schedule", "opcodes");
+        if ((insn->opcode == MIR_LOAD_INDIRECT ||
+             insn->opcode == MIR_STORE_INDIRECT) &&
+            ((insn->memory_flags & (1 | 8)) != 0 ||
+             insn->memory_size != 2))
+            return mir_machine_reject(
+                "vector-maximum-schedule", "volatile-memory");
+    }
+    for (edge = 0;
+         edge < (int)(sizeof(edges) / sizeof(edges[0])); ++edge)
+        if (mir.insns[edges[edge][0]].label !=
+            mir.insns[edges[edge][1]].label)
+            return mir_machine_reject(
+                "vector-maximum-schedule", "control-flow");
+    if (!mir_match_matrix_product_pointer_type(vector->type) ||
+        !mir_match_matrix_product_count_type(length->type) ||
+        !mir_match_matrix_product_pointer_type(index->type) ||
+        mir_machine_pointee_is_volatile(vector) ||
+        mir_machine_pointee_is_volatile(index) ||
+        !mir_machine_parameter_value_offset(
+            vector->dst, &plan->vector_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            length->dst, &plan->length_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            index->dst, &plan->index_stack_offset) ||
+        !mir_machine_same_location(vector, &mir.insns[4]) ||
+        !mir_machine_same_location(vector, &mir.insns[14]) ||
+        !mir_machine_same_location(index, &mir.insns[21]) ||
+        !mir_machine_same_location(index, &mir.insns[57]) ||
+        !mir_machine_constant_equals(mir.insns[9].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[12].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[15].dst, 2) ||
+        mir.insns[34].immediate != '>' ||
+        !mir_machine_constant_equals(mir.insns[48].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[52].dst, 2) ||
+        mir.insns[60].src1 != mir.insns[57].dst ||
+        mir.insns[60].src2 != mir.insns[59].dst ||
+        mir.insns[62].src1 != mir.insns[61].dst)
+        return mir_machine_reject(
+            "vector-maximum-schedule", "semantics");
+    return 1;
+}
+
+static void mir_emit_vector_maximum_schedule(
+    FILE *out, const struct MirVectorMaximumSchedule *plan)
+{
+    int loop = new_label();
+    int greater = new_label();
+    int not_greater = new_label();
+    int advance = new_label();
+    int done = new_label();
+
+    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+          "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-3\n\tadd hl,sp\n\tld sp,hl\n",
+          out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tinc hl\n"
+            "\txor a\n\tld (ix-3),a\n"
+            "\tld a,(ix%+d)\n\tcp 2\n\tjp c,L%d\n"
+            "\tdec a\n\tld (ix-1),a\n"
+            "\tld a,1\n\tld (ix-2),a\n"
+            "L%d:\n\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n\tinc hl\n"
+            "\tld a,b\n\txor 128\n\tld b,a\n"
+            "\tld a,d\n\txor 128\n\tld d,a\n"
+            "\tld a,d\n\tcp b\n\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,e\n\tcp c\n\tjp c,L%d\n"
+            "L%d:\n\tld a,b\n\txor 128\n\tld b,a\n"
+            "\tld a,d\n\txor 128\n\tld d,a\n"
+            "\tjp L%d\n"
+            "L%d:\n\tld a,b\n\txor 128\n\tld b,a\n"
+            "\tld a,d\n\txor 128\n\tld d,a\n"
+            "\tld d,b\n\tld e,c\n\tld a,(ix-2)\n\tld (ix-3),a\n"
+            "L%d:\n\tld a,(ix-2)\n\tinc a\n\tld (ix-2),a\n"
+            "\tld a,(ix-1)\n\tdec a\n\tld (ix-1),a\n"
+            "\tjp nz,L%d\n"
+            "L%d:\n\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld a,(ix-3)\n\tld (hl),a\n\tinc hl\n\txor a\n\tld (hl),a\n"
+            "\tex de,hl\n\tld sp,ix\n\tpop ix\n\tret\n",
+            plan->vector_stack_offset + 2,
+            plan->vector_stack_offset + 3,
+            plan->length_stack_offset + 2, done,
+            loop, greater, not_greater, greater,
+            not_greater, advance, greater, advance,
+            loop, done,
+            plan->index_stack_offset + 2,
+            plan->index_stack_offset + 3);
+}
+
 static int mir_match_softmax_call(
     const struct MirInsn *call, int argument_count,
     struct Sym **function_out)
@@ -971,6 +1110,112 @@ static int mir_match_softmax_call(
                 asm_name_for(sym_asm_name(function)))))
         return 0;
     *function_out = function;
+    return 1;
+}
+
+static int mir_match_fixed_softmax_schedule(
+    struct MirFixedSoftmaxSchedule *plan)
+{
+    static const unsigned char expected_opcodes[154] = {
+        MIR_LABEL, MIR_PARAM, MIR_LOAD, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_LOAD, MIR_NOP, MIR_PHI, MIR_NOP,
+        MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_LOAD, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP,
+        MIR_STORE, MIR_LABEL, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP,
+        MIR_LABEL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LOAD,
+        MIR_NOP, MIR_STORE, MIR_LABEL, MIR_LOAD, MIR_NOP, MIR_PHI, MIR_PHI, MIR_NOP,
+        MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD, MIR_LOAD, MIR_LOAD_INDIRECT, MIR_BINARY,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP,
+        MIR_STORE, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_LOAD,
+        MIR_ADDRESS, MIR_LOAD, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_STORE_INDIRECT, MIR_NOP, MIR_LOAD, MIR_LOAD_INDIRECT,
+        MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_STORE, MIR_LOAD, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_LOAD, MIR_NOP,
+        MIR_PHI, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_LOAD, MIR_LOAD_INDIRECT, MIR_STORE, MIR_LOAD, MIR_UNARY, MIR_CONST,
+        MIR_BINARY, MIR_NOP, MIR_UNARY, MIR_BINARY, MIR_ARG, MIR_CALL, MIR_STORE_INDIRECT, MIR_LABEL,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_JUMP, MIR_LABEL
+    };
+    static const int edges[][2] = {
+        {19, 40}, {26, 33}, {39, 11}, {59, 110},
+        {69, 73}, {82, 86}, {109, 50}, {128, 153},
+        {152, 117}
+    };
+    const struct MirInsn *vector = &mir.insns[1];
+    long table_offset;
+    int edge;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 154 || mir_cfg_block_count() != 13 ||
+        mir.local_bytes != 43 || mir.aggregate_temp_bytes != 0 ||
+        mir.has_vla || !mir_has_cfg_backedge() ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "fixed-softmax-schedule", "opcodes");
+        if ((insn->opcode == MIR_LOAD_INDIRECT ||
+             insn->opcode == MIR_STORE_INDIRECT) &&
+            ((insn->memory_flags & (1 | 8)) != 0 ||
+             insn->memory_size != 2))
+            return mir_machine_reject(
+                "fixed-softmax-schedule", "volatile-memory");
+    }
+    for (edge = 0;
+         edge < (int)(sizeof(edges) / sizeof(edges[0])); ++edge)
+        if (mir.insns[edges[edge][0]].label !=
+            mir.insns[edges[edge][1]].label)
+            return mir_machine_reject(
+                "fixed-softmax-schedule", "control-flow");
+    if (!mir_match_matrix_product_pointer_type(vector->type) ||
+        mir_machine_pointee_is_volatile(vector) ||
+        !mir_machine_parameter_value_offset(
+            vector->dst, &plan->vector_stack_offset) ||
+        !mir_machine_same_location(vector, &mir.insns[2]) ||
+        !mir_machine_same_location(vector, &mir.insns[12]) ||
+        !mir_machine_same_location(vector, &mir.insns[47]) ||
+        !mir_machine_same_location(vector, &mir.insns[51]) ||
+        !mir_machine_same_location(vector, &mir.insns[114]) ||
+        !mir_machine_same_location(vector, &mir.insns[118]) ||
+        !mir_machine_constant_equals(mir.insns[3].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[9].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[16].dst, 8) ||
+        !mir_machine_constant_equals(mir.insns[36].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[41].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[45].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[56].dst, 8) ||
+        !mir_machine_constant_equals(mir.insns[67].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[75].dst, 3) ||
+        !mir_machine_constant_equals(mir.insns[80].dst, 255) ||
+        !mir_machine_constant_equals(mir.insns[83].dst, 255) ||
+        !mir_machine_constant_equals(mir.insns[102].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[112].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[125].dst, 8) ||
+        !mir_machine_constant_equals(mir.insns[135].dst, 256) ||
+        !mir_machine_constant_equals(mir.insns[145].dst, 1))
+        return mir_machine_reject(
+            "fixed-softmax-schedule", "semantics");
+    if (!mir_machine_global_address_offset(
+            mir.insns[88].dst, &plan->table,
+            &table_offset, 0) ||
+        plan->table == NULL || table_offset < -32768 ||
+        table_offset > 32767 ||
+        mir.insns[90].immediate != 2 ||
+        !mir_match_softmax_call(
+            &mir.insns[141], 1, &plan->clamp_function) ||
+        mir.insns[140].src1 != mir.insns[139].dst ||
+        mir.insns[142].src1 != mir.insns[129].dst ||
+        mir.insns[142].src2 != mir.insns[141].dst)
+        return mir_machine_reject(
+            "fixed-softmax-schedule", "table-and-call");
+    plan->table_offset = (int)table_offset;
+    plan->length = 8;
     return 1;
 }
 
@@ -1934,6 +2179,103 @@ static void mir_emit_matrix_product_schedule(
             inner, row_done, outer, done);
 }
 
+static void mir_emit_fixed_softmax_schedule(
+    FILE *out, const struct MirFixedSoftmaxSchedule *plan)
+{
+    int maximum_loop = new_label();
+    int maximum_greater = new_label();
+    int maximum_not_greater = new_label();
+    int maximum_advance = new_label();
+    int exponential_loop = new_label();
+    int nonnegative = new_label();
+    int index_ready = new_label();
+    int normalization_loop = new_label();
+
+    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+          "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-6\n\tadd hl,sp\n\tld sp,hl\n",
+          out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tinc hl\n"
+            "\tld (ix-4),e\n\tld (ix-3),d\n\tld b,%d\n"
+            "L%d:\n\tpush bc\n\tld c,(hl)\n\tinc hl\n"
+            "\tld b,(hl)\n\tinc hl\n\tpush hl\n"
+            "\tld e,(ix-4)\n\tld d,(ix-3)\n"
+            "\tld a,b\n\txor 128\n\tld b,a\n"
+            "\tld a,d\n\txor 128\n\tld d,a\n"
+            "\tld a,d\n\tcp b\n\tjp c,L%d\n\tjp nz,L%d\n"
+            "\tld a,e\n\tcp c\n\tjp c,L%d\n"
+            "L%d:\n\tld a,b\n\txor 128\n\tld b,a\n"
+            "\tjp L%d\n"
+            "L%d:\n\tld a,b\n\txor 128\n\tld b,a\n"
+            "\tld (ix-4),c\n\tld (ix-3),b\n"
+            "L%d:\n\tpop hl\n\tpop bc\n\tdjnz L%d\n",
+            plan->vector_stack_offset + 2,
+            plan->vector_stack_offset + 3,
+            plan->length - 1, maximum_loop,
+            maximum_greater, maximum_not_greater,
+            maximum_greater, maximum_not_greater,
+            maximum_advance, maximum_greater,
+            maximum_advance, maximum_loop);
+
+    fputs("\txor a\n\tld (ix-6),a\n\tld (ix-5),a\n"
+          "\tld b,8\n", out);
+    fprintf(out,
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "L%d:\n\tpush bc\n\tpush de\n"
+            "\tld a,(de)\n\tld c,a\n\tinc de\n"
+            "\tld a,(de)\n\tld b,a\n\tld d,b\n\tld e,c\n"
+            "\tld l,(ix-4)\n\tld h,(ix-3)\n"
+            "\tor a\n\tsbc hl,de\n\tbit 7,h\n"
+            "\tjp z,L%d\n\tld hl,0\n"
+            "L%d:\n\tsra h\n\trr l\n\tsra h\n\trr l\n"
+            "\tsra h\n\trr l\n\tld a,h\n\tor a\n"
+            "\tjp z,L%d\n\tld hl,255\n"
+            "L%d:\n\tadd hl,hl\n",
+            plan->vector_stack_offset + 2,
+            plan->vector_stack_offset + 3,
+            exponential_loop, nonnegative, nonnegative,
+            index_ready, index_ready);
+    mir_machine_emit_global_address_de(
+        out, plan->table, plan->table_offset);
+    fputs("\tadd hl,de\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tpop bc\n\tld a,e\n\tld (bc),a\n\tinc bc\n"
+          "\tld a,d\n\tld (bc),a\n\tinc bc\n"
+          "\tld l,(ix-6)\n\tld h,(ix-5)\n\tadd hl,de\n"
+          "\tld (ix-6),l\n\tld (ix-5),h\n"
+          "\tld d,b\n\tld e,c\n\tpop bc\n\tdjnz ", out);
+    fprintf(out, "L%d\n", exponential_loop);
+
+    fputs("\tld b,8\n", out);
+    fprintf(out,
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "L%d:\n\tpush bc\n\tpush de\n"
+            "\tld a,(de)\n\tld l,a\n\tinc de\n"
+            "\tld a,(de)\n\tld h,a\n\tld a,h\n\trlca\n"
+            "\tsbc a,a\n\tld d,a\n\tld e,a\n"
+            "\tld d,e\n\tld e,h\n\tld h,l\n\tld l,0\n"
+            "\tpush de\n\tpush hl\n"
+            "\tld l,(ix-6)\n\tld h,(ix-5)\n"
+            "\tld a,h\n\trlca\n\tsbc a,a\n"
+            "\tld d,a\n\tld e,a\n",
+            plan->vector_stack_offset + 2,
+            plan->vector_stack_offset + 3,
+            normalization_loop);
+    mir_emit_runtime_call(out, "__lds");
+    fputs("\tpop bc\n\tpop bc\n\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->clamp_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop de\n"
+          "\tld a,l\n\tld (de),a\n\tinc de\n"
+          "\tld a,h\n\tld (de),a\n\tinc de\n"
+          "\tpop bc\n\tdjnz ", out);
+    fprintf(out,
+            "L%d\n\tld sp,ix\n\tpop ix\n\tret\n",
+            normalization_loop);
+}
+
 static void mir_emit_softmax_schedule(
     FILE *out, const struct MirSoftmaxSchedule *plan)
 {
@@ -2614,6 +2956,8 @@ static void mir_emit_backward_pass_schedule(
 int mir_try_emit_attention_kernels(FILE *out)
 {
     struct MirMatrixProductSchedule matrix_product_schedule;
+    struct MirVectorMaximumSchedule vector_maximum_schedule;
+    struct MirFixedSoftmaxSchedule fixed_softmax_schedule;
     struct MirSoftmaxSchedule softmax_schedule;
     struct MirBackwardPassSchedule backward_pass_schedule;
 
@@ -2621,6 +2965,18 @@ int mir_try_emit_attention_kernels(FILE *out)
             &matrix_product_schedule)) {
         mir_emit_matrix_product_schedule(
             out, &matrix_product_schedule);
+        return 1;
+    }
+    if (mir_match_vector_maximum_schedule(
+            &vector_maximum_schedule)) {
+        mir_emit_vector_maximum_schedule(
+            out, &vector_maximum_schedule);
+        return 1;
+    }
+    if (mir_match_fixed_softmax_schedule(
+            &fixed_softmax_schedule)) {
+        mir_emit_fixed_softmax_schedule(
+            out, &fixed_softmax_schedule);
         return 1;
     }
     if (mir_match_softmax_schedule(&softmax_schedule)) {

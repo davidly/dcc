@@ -111,6 +111,11 @@ struct MirSwitchContext {
     int end_label;
 };
 
+struct MirDebugEvent {
+    int point;
+    char *text;
+};
+
 struct MirFunction {
     struct MirInsn *insns;
     int count;
@@ -208,8 +213,11 @@ struct MirFunction {
     int planned_stack_value_capacity;
     unsigned char *planned_stack_emitted;
     int planned_stack_emitted_capacity;
-    FILE *capture_stream;
-    EmitSink saved_sink;
+    struct MirDebugEvent *debug_events;
+    int debug_event_count;
+    int debug_event_capacity;
+    FILE *legacy_discard_stream;
+    EmitSink selected_output_sink;
     struct MirObject objects[256];
     int object_count;
     int has_declared_register_object;
@@ -473,6 +481,8 @@ void mir_extrn_begin_attempt(void);
 int mir_extrn_should_emit(struct Sym *sym);
 int mir_extrn_should_emit_name(const char *name);
 void mir_emit_runtime_call(FILE *out, const char *name);
+void mir_clear_debug_events(void);
+void mir_emit_debug_events(FILE *out, int point);
 void mir_emit_home_epilogue(FILE *out, int uses_iy);
 void mir_emit_home_prologue(FILE *out, int uses_iy);
 int mir_emit_home_push(FILE *out, int value);
@@ -633,9 +643,9 @@ void mir_forward_immediate_phi_returns(void);
 int mir_phi_return_forwarding_count_value(void);
 void mir_reset_phi_return_forwarding_count(void);
 int mir_try_emit_homed_scalar_cfg(FILE *out);
+int mir_try_emit_compacted_regional_homed_cfg(FILE *out);
 int mir_try_emit_scheduled_machine_cfg(FILE *out);
 int mir_try_emit_speculation_safe_machine_cfg(FILE *out);
-int mir_cost_policy_candidate_mode(void);
 int mir_homed_cfg_depends_on_unary_not_branch(void);
 int mir_homed_cfg_was_frameless(void);
 int mir_cfg_block_count(void);
@@ -737,6 +747,5 @@ int mir_load_is_single_call_argument(int value, int size);
 void mir_emit_virtual_load(FILE *out, int value);
 int mir_value_is_wide(int value);
 int mir_value_is_selfstore_incdec(int value);
-extern long mir_spilled_scalar_cfg_elided_epilogue_bytes;
 
 #endif /* DCC_MIR_INTERNAL_H */

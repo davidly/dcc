@@ -1,5 +1,5 @@
 #!/bin/sh
-# Fail-fast validation ladder for one MIR migration item.
+# Fail-fast validation ladder for one MIR selection change.
 #
 # Chains the mandatory SKILL.md validation tiers end-to-end and stops at the
 # first failure, instead of a human re-checking each stage's tail output by
@@ -35,7 +35,7 @@ apps="$3"
 echo "== build =="
 sh src/dcc/build-dcc.sh
 
-echo "== census (fail-on-regression) =="
+echo "== strict generated-MIR census (fail-on-regression) =="
 python3 scripts/mir-migration-census.py \
     --output "build/mir-${label}.tsv" --compare "$baseline" \
     --fail-on-regression

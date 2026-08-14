@@ -2056,6 +2056,8 @@ void emit_debug_variable(struct Sym *s)
     if (!opt_debug || scan_mode || current_debug_function[0] == 0 || s == NULL ||
         s->name[0] == '#' || s->reg_alloc != REG_NONE)
         return;
+    if (mir_capture_debug_variable(current_debug_function, s, 0))
+        return;
     fprintf(g_emit_sink.stream, ";@dcc-var \"%s\" \"%s\" %d %d %d %d %d %d %d %d ",
             current_debug_function, s->name, s->type, s->storage,
             s->offset, s->size, s->is_array, s->is_vla, s->elem_size,
@@ -2068,6 +2070,8 @@ void emit_debug_variable_end(struct Sym *s)
 {
     if (!opt_debug || scan_mode || current_debug_function[0] == 0 || s == NULL ||
         s->name[0] == '#' || s->reg_alloc != REG_NONE)
+        return;
+    if (mir_capture_debug_variable(current_debug_function, s, 1))
         return;
     fprintf(g_emit_sink.stream, ";@dcc-var-end \"%s\" \"%s\" %d\n",
             current_debug_function, s->name, s->offset);
@@ -2312,7 +2316,9 @@ void emit_function_epilogue(int implicit_zero_return)
             emit("\tpop iy\n");
     }
     emit("\tret\n");
-    if (opt_debug && !scan_mode && current_debug_function[0])
+    if (opt_debug && !scan_mode && current_debug_function[0] &&
+        !mir_capture_debug_function_end(
+            current_debug_function, current_debug_function_source_name))
         fprintf(g_emit_sink.stream, ";@dcc-func-end \"%s\" \"%s\"\n",
                 current_debug_function, current_debug_function_source_name);
     mir_end_function();
@@ -3522,9 +3528,9 @@ void parse_function_or_global(int base_type)
         int saved_param_offset;
         int saved_nenum_consts;
         int saved_nulabels;
-        int saved_stack_check;
         struct Sym *bc_regalloc_cand;
         struct Sym *iy_regalloc_cand;
+        int saved_stack_check;
 
         int base_is_func_typedef;
         int is_funcret_funcptr_decl;
@@ -3753,46 +3759,47 @@ void parse_function_or_global(int base_type)
                                _ls.posi, _ls.tok_start_pos, _ls.line_no,
                                _ls.tok_line, _ls.tok,
                                saved_nlocals, saved_local_size)) {
-                    /* Scheduled MIR owned the whole function before any
-                     * legacy frame/register-allocation retry. */
+                    /* An exact scheduled MIR body was selected before the
+                     * metadata-only legacy retry sequence. */
                 } else if (!opt_debug &&
-                           function_qualifies_for_speculative_noix(name, current_local_bytes) &&
-                           try_speculative_noix_function_body(name, type, current_local_bytes, s,
-                                                               _ls.posi, _ls.tok_start_pos, _ls.line_no,
-                                                               _ls.tok_line, _ls.tok,
-                                                               saved_nlocals, saved_local_size)) {
-                    /* No-IX-frame body already generated and written to g_emit_sink.stream
-                     * inside try_speculative_noix_function_body. */
+                           function_qualifies_for_speculative_noix(
+                               name, current_local_bytes) &&
+                           try_speculative_noix_function_body(
+                               name, type, current_local_bytes, s,
+                               _ls.posi, _ls.tok_start_pos, _ls.line_no,
+                               _ls.tok_line, _ls.tok,
+                               saved_nlocals, saved_local_size)) {
+                    /* Legacy retry body text is discard-only; this branch
+                     * remains temporarily for replay side effects. */
                 } else if (!opt_debug &&
-                           try_loop_scoped_regalloc_first(name, type, current_local_bytes, s,
-                                                           _ls.posi, _ls.tok_start_pos, _ls.line_no,
-                                                           _ls.tok_line, _ls.tok,
-                                                           saved_nlocals, saved_local_size)) {
-                    /* A loop inside the body claimed BC on its own - see
-                     * try_loop_scoped_regalloc_first's header comment for why
-                     * that's given priority over find_bc_regalloc_candidate's
-                     * own, cruder whole-function candidate below. Body already
-                     * generated and written to g_emit_sink.stream (or deferred). */
-                } else if (!opt_debug && function_qualifies_for_speculative_regalloc(name) &&
-                           try_speculative_bc_regalloc_with_e_fallback(name, type, current_local_bytes, s,
-                                                                        bc_regalloc_cand,
-                                                                        _ls.posi, _ls.tok_start_pos, _ls.line_no,
-                                                                        _ls.tok_line, _ls.tok,
-                                                                        saved_nlocals, saved_local_size)) {
-                    /* BC/E-resident body already generated and written to
-                     * g_emit_sink.stream inside try_speculative_bc_regalloc_function_body. */
-                } else if (!opt_debug && function_qualifies_for_speculative_iy_regalloc(name) &&
-                           (iy_regalloc_cand = find_iy_regalloc_candidate(saved_nlocals)) != NULL &&
-                           try_speculative_iy_regalloc_function_body(name, type, current_local_bytes, s,
-                                                                     iy_regalloc_cand,
-                                                                     _ls.posi, _ls.tok_start_pos, _ls.line_no,
-                                                                     _ls.tok_line, _ls.tok,
-                                                                     saved_nlocals, saved_local_size)) {
-                    /* Last of the register-allocation attempts, and the only
-                     * one that can fire in a function containing calls: every
-                     * branch above needs a caller-saved register and has
-                     * therefore already declined by this point. IY-resident
-                     * body already written to g_emit_sink.stream. */
+                           try_loop_scoped_regalloc_first(
+                               name, type, current_local_bytes, s,
+                               _ls.posi, _ls.tok_start_pos, _ls.line_no,
+                               _ls.tok_line, _ls.tok,
+                               saved_nlocals, saved_local_size)) {
+                    /* Metadata-only loop-register retry. */
+                } else if (!opt_debug &&
+                           function_qualifies_for_speculative_regalloc(name) &&
+                           try_speculative_bc_regalloc_with_e_fallback(
+                               name, type, current_local_bytes, s,
+                               bc_regalloc_cand,
+                               _ls.posi, _ls.tok_start_pos, _ls.line_no,
+                               _ls.tok_line, _ls.tok,
+                               saved_nlocals, saved_local_size)) {
+                    /* Metadata-only BC/E retry. */
+                } else if (!opt_debug &&
+                           function_qualifies_for_speculative_iy_regalloc(
+                               name) &&
+                           (iy_regalloc_cand =
+                               find_iy_regalloc_candidate(saved_nlocals)) !=
+                               NULL &&
+                           try_speculative_iy_regalloc_function_body(
+                               name, type, current_local_bytes, s,
+                               iy_regalloc_cand,
+                               _ls.posi, _ls.tok_start_pos, _ls.line_no,
+                               _ls.tok_line, _ls.tok,
+                               saved_nlocals, saved_local_size)) {
+                    /* Metadata-only IY retry. */
                 } else if (plain_static_body_can_be_buffered(s, name)) {
                     EmitSink saved_sink;
 

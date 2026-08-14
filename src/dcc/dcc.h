@@ -665,12 +665,10 @@ extern int g_buffering_epoch;
  * g_speculative_codegen_active++/-- pairs in dcc_regalloc.c), never around
  * the static-inline/plain-static body-buffering branches in dcc_func.c that
  * defer real, kept output to a file purely for later placement. Distinct
- * from g_inline_body_buffering, which both cases set: MIR's own
- * mir_begin_function/mir_end_function pair reruns in lockstep with every
- * discarded speculative attempt (each with its own frame/register
- * convention), so a MIR selection report emitted while this flag is set
- * describes codegen that is thrown away and never reaches the real .mac
- * output - it must not be reported to DCC_MIR_SELECT_REPORT/the census. */
+ * from g_inline_body_buffering, which both cases set. MIR selection reruns
+ * for each attempt, but reports are delayed until the surrounding driver
+ * actually commits that generated MIR stream; declined attempts stay silent.
+ */
 extern int g_speculative_codegen_active;
 
 /* loop break/continue target stack + parser flags */

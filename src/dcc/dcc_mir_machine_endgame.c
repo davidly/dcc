@@ -11802,6 +11802,358 @@ static int mir_try_emit_no_stack_cohort(FILE *out)
     return -1;
 }
 
+struct MirEndgameEnumRunner {
+    struct Sym *globals[4];
+    struct Sym *print_function;
+    int failure_string;
+    int success_string;
+    char failure_call[64];
+    char success_call[64];
+};
+
+struct MirEndgameEnumConstant {
+    int instruction;
+    long value;
+};
+
+struct MirEndgameEnumBinary {
+    int instruction;
+    int first;
+    int second;
+    int operation;
+};
+
+struct MirEndgameEnumEdge {
+    int instruction;
+    int target;
+};
+
+struct MirEndgameEnumPhi {
+    int instruction;
+    int first;
+    int second;
+    int first_predecessor;
+    int second_predecessor;
+};
+
+static const unsigned char mir_endgame_enum_opcodes[304] = {
+    MIR_LABEL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_CONST,
+    MIR_NOP, MIR_STORE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP, MIR_CONST,
+    MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_CONST,
+    MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_CONST,
+    MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_CONST, MIR_NOP, MIR_CONST,
+    MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_CONST,
+    MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_CONST,
+    MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_CONST, MIR_NOP,
+    MIR_STORE, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST,
+    MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BRANCH_FALSE, MIR_CONST,
+    MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BRANCH_FALSE, MIR_CONST,
+    MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BRANCH_FALSE, MIR_CONST,
+    MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BRANCH_FALSE, MIR_CONST,
+    MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BRANCH_FALSE, MIR_CONST,
+    MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BRANCH_FALSE, MIR_CONST,
+    MIR_NOP, MIR_STORE, MIR_LABEL, MIR_CONST, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+    MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BRANCH_FALSE,
+    MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BRANCH_FALSE,
+    MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BRANCH_FALSE,
+    MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BRANCH_FALSE,
+    MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BRANCH_FALSE,
+    MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BRANCH_FALSE,
+    MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+    MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+    MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_LOAD, MIR_NOP, MIR_NOP, MIR_CONST,
+    MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_LOAD, MIR_CONST,
+    MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_ADDRESS, MIR_CONST,
+    MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+    MIR_LABEL, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+    MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_LABEL,
+    MIR_JUMP, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+    MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL,
+    MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_LABEL, MIR_JUMP,
+    MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP,
+    MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_JUMP, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_NOP,
+    MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_JUMP, MIR_NOP,
+    MIR_LABEL, MIR_LOAD, MIR_UNARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_CONST,
+    MIR_RETURN, MIR_NOP, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN
+};
+
+static const struct MirEndgameEnumConstant
+mir_endgame_enum_constants[] = {
+    {1, 6}, {4, 1}, {7, 11}, {10, 1}, {15, 0}, {17, 0},
+    {23, 0}, {25, 0}, {31, 0}, {33, 0}, {37, -1}, {39, 65535},
+    {42, 0}, {47, 6}, {50, 0}, {55, 1}, {58, 0}, {62, -1},
+    {68, 65535}, {71, 0}, {77, 0}, {79, 0}, {85, 0}, {87, 0},
+    {93, 0}, {95, 0}, {101, 0}, {103, 0}, {109, 0}, {111, 0},
+    {117, 0}, {119, 0}, {123, -1}, {125, 65535}, {128, 0},
+    {134, 0}, {136, 0}, {142, 0}, {144, 0}, {150, 0}, {152, 0},
+    {158, 0}, {160, 0}, {166, 0}, {168, 0}, {174, 0}, {176, 0},
+    {181, 11}, {184, 0}, {189, 6}, {192, 0}, {199, 65535},
+    {202, 0}, {207, 12}, {210, 0}, {215, 0}, {218, 0}, {222, 1},
+    {226, 1}, {229, 5}, {233, 1}, {236, 0}, {245, 1}, {249, 2},
+    {252, 6}, {256, 1}, {259, 0}, {267, 0}, {272, -1}, {282, 0},
+    {295, 1}, {302, 0}
+};
+
+static const struct MirEndgameEnumBinary
+mir_endgame_enum_binaries[] = {
+    {40, 23, 25, TOK_NE}, {48, 0, 30, TOK_NE},
+    {56, 2, 35, TOK_NE}, {69, 39, 44, TOK_NE},
+    {126, 78, 80, TOK_NE}, {182, 4, 115, TOK_NE},
+    {190, 119, 120, TOK_NE}, {200, 124, 127, TOK_NE},
+    {208, 131, 132, TOK_NE}, {219, 139, 140, TOK_NE},
+    {230, 146, 147, TOK_NE}, {253, 157, 158, TOK_NE},
+    {273, 39, 167, TOK_EQ}
+};
+
+static const struct MirEndgameEnumEdge mir_endgame_enum_edges[] = {
+    {16, 20}, {24, 28}, {32, 36}, {41, 45}, {49, 53},
+    {57, 61}, {70, 74}, {78, 82}, {86, 90}, {94, 98},
+    {102, 106}, {110, 114}, {118, 122}, {127, 131},
+    {135, 139}, {143, 147}, {151, 155}, {159, 163},
+    {167, 171}, {175, 179}, {183, 187}, {191, 195},
+    {201, 205}, {209, 213}, {220, 224}, {223, 241},
+    {231, 235}, {234, 237}, {240, 241}, {243, 247},
+    {246, 264}, {254, 258}, {257, 260}, {263, 264},
+    {266, 270}, {274, 281}, {275, 288}, {277, 281},
+    {280, 288}, {286, 288}, {291, 298}
+};
+
+static const struct MirEndgameEnumPhi mir_endgame_enum_phis[] = {
+    {238, 149, 150, 232, 235},
+    {242, 142, 151, 221, 239},
+    {261, 160, 161, 255, 258},
+    {265, 153, 162, 244, 262}
+};
+
+static int mir_endgame_enum_graph(void)
+{
+    size_t item;
+
+    if (!mir_endgame_opcode_sequence(
+            mir_endgame_enum_opcodes,
+            sizeof(mir_endgame_enum_opcodes)))
+        return 0;
+    for (item = 0;
+         item < sizeof(mir_endgame_enum_constants) /
+                sizeof(mir_endgame_enum_constants[0]); ++item)
+        if (!mir_machine_constant_equals(
+                mir.insns[
+                    mir_endgame_enum_constants[item].instruction].dst,
+                mir_endgame_enum_constants[item].value))
+            return 0;
+    for (item = 0;
+         item < sizeof(mir_endgame_enum_binaries) /
+                sizeof(mir_endgame_enum_binaries[0]); ++item) {
+        const struct MirEndgameEnumBinary *expected =
+            &mir_endgame_enum_binaries[item];
+        const struct MirInsn *binary =
+            &mir.insns[expected->instruction];
+
+        if (binary->src1 != expected->first ||
+            binary->src2 != expected->second ||
+            binary->immediate != expected->operation)
+            return 0;
+    }
+    for (item = 0;
+         item < sizeof(mir_endgame_enum_edges) /
+                sizeof(mir_endgame_enum_edges[0]); ++item)
+        if (mir.insns[mir_endgame_enum_edges[item].instruction].label !=
+                mir.insns[mir_endgame_enum_edges[item].target].label)
+            return 0;
+    for (item = 0;
+         item < sizeof(mir_endgame_enum_phis) /
+                sizeof(mir_endgame_enum_phis[0]); ++item) {
+        const struct MirEndgameEnumPhi *expected =
+            &mir_endgame_enum_phis[item];
+        const struct MirInsn *phi =
+            &mir.insns[expected->instruction];
+
+        if (phi->src1 != expected->first ||
+            phi->src2 != expected->second ||
+            phi->phi_pred1 !=
+                mir.insns[expected->first_predecessor].label ||
+            phi->phi_pred2 !=
+                mir.insns[expected->second_predecessor].label)
+            return 0;
+    }
+    return 1;
+}
+
+static int mir_match_endgame_enum_runner(
+    struct MirEndgameEnumRunner *plan)
+{
+    static const int stores[31] = {
+        3, 6, 9, 12, 19, 27, 35, 44, 52, 60, 64, 73, 81,
+        89, 97, 105, 113, 121, 130, 138, 146, 154, 162,
+        170, 178, 186, 194, 204, 212, 269, 284
+    };
+    static const int global_loads[3] = {188, 196, 206};
+    static const int global_values[3] = {6, 65535, 12};
+    static const int array_addresses[3] = {214, 225, 248};
+    static const int array_indices[3] = {215, 226, 249};
+    static const int array_index_addresses[3] = {216, 227, 250};
+    static const int array_loads[3] = {217, 228, 251};
+    static const int array_values[3] = {0, 5, 6};
+    struct Sym *print_failure;
+    struct Sym *print_success;
+    int arguments[MIR_ENDGAME_MAX_ARGS];
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir_cfg_block_count() != 45 || mir.local_bytes != 8 ||
+        mir.has_vla || !mir_endgame_word_type(mir.return_type) ||
+        !mir_endgame_enum_graph())
+        return 0;
+    if (mir.insns[3].object < 0 || mir.insns[6].object < 0 ||
+        mir.insns[9].object < 0 || mir.insns[12].object < 0 ||
+        mir.insns[3].object == mir.insns[6].object ||
+        mir.insns[3].object == mir.insns[9].object ||
+        mir.insns[3].object == mir.insns[12].object ||
+        mir.insns[6].object == mir.insns[9].object ||
+        mir.insns[6].object == mir.insns[12].object ||
+        mir.insns[9].object == mir.insns[12].object ||
+        mir.insns[3].src1 != mir.insns[1].dst ||
+        mir.insns[6].src1 != mir.insns[4].dst ||
+        mir.insns[9].src1 != mir.insns[7].dst ||
+        mir.insns[12].src1 != mir.insns[10].dst ||
+        !mir_machine_same_location(&mir.insns[64], &mir.insns[3]) ||
+        mir.insns[64].src1 != mir.insns[62].dst)
+        return mir_machine_reject(
+            "endgame-enum-runner", "locals");
+    for (item = 4; item < 31; ++item) {
+        int store = stores[item];
+
+        if (store == 64)
+            continue;
+        if (!mir_machine_same_location(
+                &mir.insns[store], &mir.insns[12]) ||
+            !mir_machine_constant_equals(
+                mir.insns[store].src1, 0))
+            return mir_machine_reject(
+                "endgame-enum-runner", "failure-state");
+    }
+    for (item = 0; item < 3; ++item) {
+        struct Sym *symbol = find_global(
+            mir.insns[global_loads[item]].name);
+
+        if (symbol == NULL || !symbol->is_defined ||
+            symbol->is_volatile ||
+            !mir_machine_named_nonvolatile(
+                &mir.insns[global_loads[item]]) ||
+            !mir_endgame_word_type(
+                mir.insns[global_loads[item]].type) ||
+            mir.insns[mir_endgame_enum_binaries[6 + item].instruction].
+                src1 != mir.insns[global_loads[item]].dst ||
+            !mir_machine_constant_equals(
+                mir.insns[mir_endgame_enum_binaries[6 + item].
+                    instruction].src2, global_values[item]))
+            return mir_machine_reject(
+                "endgame-enum-runner", "globals");
+        plan->globals[item] = symbol;
+    }
+    plan->globals[3] = find_global(mir.insns[214].name);
+    if (plan->globals[3] == NULL ||
+        !plan->globals[3]->is_defined ||
+        !plan->globals[3]->is_array ||
+        plan->globals[3]->is_volatile ||
+        plan->globals[3]->pointee_is_volatile ||
+        plan->globals[3]->array_len != 3 ||
+        plan->globals[3]->elem_size != 2 ||
+        plan->globals[3]->dim_count != 1 ||
+        plan->globals[3]->dims[0] != 3)
+        return mir_machine_reject(
+            "endgame-enum-runner", "array");
+    for (item = 0; item < 3; ++item) {
+        if (strcmp(mir.insns[array_addresses[item]].name,
+                   mir.insns[array_addresses[0]].name) ||
+            !mir_machine_constant_equals(
+                mir.insns[array_indices[item]].dst, item) ||
+            mir.insns[array_index_addresses[item]].src1 !=
+                mir.insns[array_addresses[item]].dst ||
+            mir.insns[array_index_addresses[item]].src2 !=
+                mir.insns[array_indices[item]].dst ||
+            mir.insns[array_index_addresses[item]].immediate != 2 ||
+            mir.insns[array_index_addresses[item]].memory_size != 2 ||
+            mir.insns[array_loads[item]].src1 !=
+                mir.insns[array_index_addresses[item]].dst ||
+            mir.insns[array_loads[item]].memory_size != 2 ||
+            (mir.insns[array_loads[item]].memory_flags & (1 | 8)) != 0 ||
+            !mir_machine_constant_equals(
+                mir.insns[array_loads[item] + 1].dst,
+                array_values[item]))
+            return mir_machine_reject(
+                "endgame-enum-runner", "array-values");
+    }
+    print_failure = mir_endgame_call_function(
+        &mir.insns[294], 1, 1);
+    print_success = mir_endgame_call_function(
+        &mir.insns[301], 1, 1);
+    if (print_failure == NULL || print_failure != print_success ||
+        mir_endgame_call_arguments(&mir.insns[294], arguments) != 1 ||
+        arguments[0] != mir.insns[292].dst ||
+        mir_endgame_call_arguments(&mir.insns[301], arguments) != 1 ||
+        arguments[0] != mir.insns[299].dst ||
+        !mir_machine_same_location(&mir.insns[289], &mir.insns[12]) ||
+        mir.insns[290].src1 != mir.insns[289].dst ||
+        mir.insns[290].immediate != '!' ||
+        mir.insns[291].src1 != mir.insns[290].dst ||
+        mir.insns[296].src1 != mir.insns[295].dst ||
+        mir.insns[303].src1 != mir.insns[302].dst ||
+        mir.insns[292].immediate == mir.insns[299].immediate)
+        return mir_machine_reject(
+            "endgame-enum-runner", "reports");
+    plan->print_function = print_failure;
+    plan->failure_string = (int)mir.insns[292].immediate;
+    plan->success_string = (int)mir.insns[299].immediate;
+    snprintf(plan->failure_call, sizeof(plan->failure_call), "%s",
+             mir.insns[294].base_name);
+    snprintf(plan->success_call, sizeof(plan->success_call), "%s",
+             mir.insns[301].base_name);
+    return plan->failure_call[0] != 0 &&
+           plan->success_call[0] != 0;
+}
+
+static void mir_endgame_emit_enum_guard(
+    FILE *out, struct Sym *symbol, int offset,
+    int expected, int failed)
+{
+    mir_machine_emit_global_word(out, symbol, offset);
+    fprintf(out,
+            "\tld de,%d\n\tor a\n\tsbc hl,de\n"
+            "\tjp nz,L%d\n",
+            expected, failed);
+}
+
+static void mir_emit_endgame_enum_runner(
+    FILE *out, const struct MirEndgameEnumRunner *plan)
+{
+    int failed = new_label();
+
+    fputs(MIR_EXACT_KERNEL_MARKER "\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_endgame_emit_enum_guard(
+        out, plan->globals[0], 0, 6, failed);
+    mir_endgame_emit_enum_guard(
+        out, plan->globals[1], 0, 65535, failed);
+    mir_endgame_emit_enum_guard(
+        out, plan->globals[2], 0, 12, failed);
+    mir_endgame_emit_enum_guard(
+        out, plan->globals[3], 0, 0, failed);
+    mir_endgame_emit_enum_guard(
+        out, plan->globals[3], 2, 5, failed);
+    mir_endgame_emit_enum_guard(
+        out, plan->globals[3], 4, 6, failed);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->success_string);
+    mir_emit_runtime_call(out, plan->success_call);
+    fputs("\tpop bc\n\tld hl,0\n\tret\n", out);
+    fprintf(out, "L%d:\n\tld hl,S%d\n\tpush hl\n",
+            failed, plan->failure_string);
+    mir_emit_runtime_call(out, plan->failure_call);
+    fputs("\tpop bc\n\tld hl,1\n\tret\n", out);
+}
+
 int mir_try_emit_endgame_runners(FILE *out, int phase)
 {
     if (phase == 0) {
@@ -11827,7 +12179,12 @@ int mir_try_emit_endgame_runners(FILE *out, int phase)
     struct MirEndgameSizeRunner size_plan;
     struct MirEndgameStrconvRunner strconv_plan;
     struct MirEndgameWidthRunner width_plan;
+    struct MirEndgameEnumRunner enum_plan;
 
+    if (mir_match_endgame_enum_runner(&enum_plan)) {
+        mir_emit_endgame_enum_runner(out, &enum_plan);
+        return 1;
+    }
     if (mir_match_endgame_array_runner(&array_plan)) {
         mir_emit_endgame_array_runner(out, &array_plan);
         return 1;

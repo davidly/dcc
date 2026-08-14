@@ -1,6 +1,6 @@
 ---
 name: mir-migration
-description: "Stage and coordinate dcc's migration from legacy AST Z80 emission to active MIR emission. Use when expanding MIR rollout, investigating MIR fallback reasons, improving dcc_mir.c selectors, force-profiling one candidate, measuring MIR coverage, validating affected apps, planning multi-day or multi-person MIR work, or removing a transactional fallback gate."
+description: "Develop and validate dcc's generated-only MIR backend. Use when improving MIR selectors/cost policy, comparing generated candidates, measuring MIR coverage, recovering performance, removing discard-only AST/regalloc dependencies, or planning multi-day MIR work."
 ---
 
 # dcc MIR migration
@@ -9,27 +9,30 @@ Use this skill for the staged migration of function code generation to
 `src/dcc/dcc_mir.c`. Also load the `dcc-project` skill for general compiler
 build and test conventions.
 
-The production compiler is deliberately mixed-mode:
+The production compiler is generated-MIR-only:
 
 - Every function is lowered to MIR.
-- Accepted functions emit Z80 through a MIR selector immediately.
-- Rejected functions replay the captured legacy backend output.
-- Migration is complete only when MIR-required mode covers the corpus and the
-  legacy emitter can be removed.
+- Production Z80 is copied only from a selected MIR candidate.
+- The AST emitter still runs against one per-function discard-only null sink
+  for declaration/inline metadata side effects; its text is never retained,
+  measured, selected, or copied.
+- Legacy speculative regalloc drivers may temporarily post-process a generated
+  MIR stream. Removing that isolated dependency is the remaining cleanup.
 
-Do not disable current MIR emission while working on later stages. Improve one
-class, admit it transactionally, and leave all other functions on fallback.
+Do not reintroduce legacy output as an oracle. Compare generated candidates or
+current-vs-parent compilers, improve one structural class, and keep strict
+require-emit coverage.
 
 ## Non-negotiable rules
 
-1. Never remove or widen a fallback gate without identifying the exact affected
-   functions first.
+1. Never widen generated-candidate eligibility without identifying the exact
+   affected functions first.
 2. Never update performance baselines to hide a selector regression.
 3. Peep and nopeep must both be non-regressing for newly emitted functions.
 4. A smaller assembly-text stream or instruction count is not proof of faster
    or smaller Z80 code. Run the affected apps.
-5. Keep semantic-risk gates separate from cost gates. Correct-but-slow output is
-   still fallback output until fixed.
+5. Keep semantic-risk gates separate from cost gates. Correct-but-slow output
+   remains a performance regression until fixed.
 6. Do not add app/function-name exceptions to production selection. Derive a
    structural predicate or improve the emitter.
 7. Preserve unrelated dirty worktree files. Generated census files belong under
@@ -42,7 +45,7 @@ class, admit it transactionally, and leave all other functions on fallback.
 | --- | --- |
 | MIR lowering, analysis, selectors, acceptance | `src/dcc/dcc_mir.c` |
 | MIR integration API | `src/dcc/dcc_mir.h` |
-| Function capture/replay | `src/dcc/dcc_func.c` |
+| Discard-only AST metadata replay | `src/dcc/dcc_func.c` |
 | AST expression emission and static inlining | `src/dcc/dcc_ast_gen_expr.c` |
 | AST statement emission | `src/dcc/dcc_ast_gen_stmt.c` |
 | Symbols, scopes, VLA metadata | `src/dcc/dcc_symbols.c` |
@@ -69,7 +72,10 @@ section near `mir_end_function()` has historically included:
 These are migration boundaries, not permanent architecture. Remove each only
 when its underlying selector or cost problem is solved.
 
-## Known root cause: `text-size` fallback is systemic, not near-miss (2026-07-30)
+## Historical note: `text-size` fallback was systemic (2026-07-30)
+
+The fallback-era sections below are retained only to explain selector design
+and rejected experiments. They are not current production workflow.
 
 At a 165/2319 (7.12%) coverage checkpoint, a full census showed **every**
 `text-size` fallback (2,109 of 2,319 functions) is attempted through the same
@@ -111,9 +117,8 @@ that every selector's slot decisions depend on, so it is higher risk than
 a single-selector fix and deserves a dedicated forced-accept A/B campaign
 across a representative population sample before any code change.
 
-Before proposing new fallback-reduction work, re-run the census and re-bucket
-the gap rather than assuming the old "near-cost real functions" priority still
-applies — at that checkpoint it barely did (3 functions total).
+Before proposing related selector work, re-run the generated-candidate census
+rather than assuming the old fallback-era population still applies.
 
 `mir-text-size-plan.md` is the authoritative chronological migration log and
 root `plan.md` is the short current-state handoff. Older completed planning
@@ -132,7 +137,7 @@ default path** in `mir_end_function()` — only from a diagnostic branch gated
 by an env var (`DCC_MIR_EMIT_FUNCTION`/`DCC_MIR_CANDIDATES` in Item 46's case,
 `DCC_MIR_EMIT_GENERAL`/`DCC_MIR_EMIT_HOME_CFG` in Item 78's). Two prior staged
 rollouts had been built, gated, and diagnosably tested, then simply never
-wired in. Before assuming a fallback population needs a brand-new selector
+wired in. Before assuming a generated population needs a brand-new selector
 built from scratch, grep `dcc_mir.c` for `mir_try_emit_` functions and check
 whether each one is reachable from `mir_end_function()`'s unconditional
 `else` branch — some may already exist and only need wiring plus an A/B proof.
@@ -227,8 +232,8 @@ Prioritize in this order:
 1. **Repeated selector overhead** affecting several functions, such as dead
    backend slots, redundant register preservation, rematerializable call
    arguments, no-op conversions, or missed constant strength reduction.
-2. **Near-cost real functions** where generated and captured metrics are close.
-   Exclude standalone static-inline bodies that legacy intentionally omits.
+2. **Generated-candidate gaps** where machine costs are close. Compatibility
+   `captured_*` census columns are always `-1` and must not drive decisions.
 3. **A semantic class with an existing focused test**, such as pointer arrays,
    VLA sizes, variadics, aggregates, or div/mod pairs.
 4. **Hot loop classes** only after dynamic profiling. Loop backedges are not a
@@ -247,7 +252,7 @@ Examples:
 - "A no-op conversion creates a second virtual home."
 - "Two MIR div/mod operations with identical operands can use one runtime
   `__sdivmod` call."
-- "This fallback is only a text-size artifact; machine behavior is equal."
+- "This generated candidate removes frame traffic without changing ABI state."
 
 Name the focused app and the command that can disprove the hypothesis before
 editing.
@@ -270,8 +275,8 @@ Useful environment controls:
 | `DCC_MIR_COVERAGE=1` | Report opaque lowering nodes |
 | `DCC_MIR_REQUIRE_COMPLETE=1` | Fail when opaque MIR remains |
 | `DCC_MIR_FORCE_ACCEPT_FUNCTION=name` | Diagnostic only: generate one normally rejected candidate |
-| `DCC_MIR_FORCE_FALLBACK_FUNCTION=name` | A/B one active MIR function against legacy output |
-| `DCC_MIR_FORCE_FALLBACK=1` | Diagnostic only: replay all legacy output |
+| `DCC_MIR_SELECT_FUNCTION=name` | Restrict a generated-candidate comparison |
+| `DCC_MIR_SELECT_CANDIDATE=name` | Select one named generated cost candidate |
 | `DCC_MIR_DEAD_LOCAL_REPORT=1` | Report safely reclaimable deepest local-frame suffixes |
 
 Force controls must never be used as the production fix. They exist to measure
@@ -319,14 +324,12 @@ python3 scripts/mir-migration-census.py \
 The report distinguishes:
 
 - newly MIR-emitted functions;
-- functions that unexpectedly returned to fallback;
+- functions that disappeared or stopped reporting MIR;
 - apps with any census metric changes;
 - apps whose runtime output may change.
 
 Run the generated focused command. It includes newly/removed MIR functions and
-already-active MIR functions whose generated metrics changed. Hash changes in
-selected fallback output are also included; fallback-only metric churn with
-byte-identical selected output is excluded.
+already-active MIR functions whose generated metrics changed. Selected-hash changes are included. Captured metrics are compatibility-only.
 
 ### 9. Profile when static metrics disagree
 
@@ -336,7 +339,8 @@ If fewer instructions still run slower:
 DCC_MIR_FORCE_ACCEPT_FUNCTION=function \
   pwsh ./scripts/runall.ps1 -Apps app -Mode full -RunTimeout 20
 
-DCC_MIR_FORCE_FALLBACK_FUNCTION=function \
+DCC_MIR_SELECT_FUNCTION=function \
+DCC_MIR_SELECT_CANDIDATE=spilled-rhs-forward \
   pwsh ./scripts/runall.ps1 -Apps app -Mode full -RunTimeout 20
 ```
 
@@ -417,7 +421,7 @@ model.
 
 ## Multi-person coordination
 
-### Divide work by fallback class
+### Divide work by generated-code class
 
 Assign one owner per class, for example:
 
@@ -473,7 +477,7 @@ dcc MIR: fuse paired scalar divmod operations
 Commit(s):
 Coverage before/after:
 New MIR functions:
-Remaining fallback reasons:
+Remaining generated-MIR debts:
 Focused tests run:
 Full milestone run (if any):
 Performance changes:
@@ -500,10 +504,10 @@ correct-but-slower gate experiment.
 
 The staged migration is complete when:
 
-1. the runnable and extended corpora have no unexplained fallback;
+1. the runnable and extended corpora report generated MIR for every function;
 2. a MIR-required build mode passes correctness and diagnostics;
 3. peep and nopeep performance are accepted;
 4. large CFG compile time is bounded;
 5. legacy emission is no longer needed during normal function compilation;
-6. capture/replay and obsolete legacy register-allocation paths can be removed
-   in separate cleanup commits.
+6. discard-only AST metadata replay and obsolete legacy register-allocation
+   drivers are removed in separate cleanup commits.

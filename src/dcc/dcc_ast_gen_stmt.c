@@ -1171,6 +1171,8 @@ void ast_emit_debug_location(const char *file, int line)
 
     if (!opt_debug || scan_mode || line <= 0)
         return;
+    if (mir_capture_debug_location(file, line))
+        return;
 
     fputs(";@dcc-line \"", g_emit_sink.stream);
     p = file ? file : (input_name ? input_name : "<input>");

@@ -11,9 +11,9 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import sys
-import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 SELECTION_RE = re.compile(
@@ -24,9 +24,6 @@ SELECTION_RE = re.compile(
     r"generated-insns=(?P<generated_insns>-?\d+) "
     r"captured-insns=(?P<captured_insns>-?\d+) blocks=(?P<blocks>\d+) "
     r"selected-hash=(?P<selected_hash>[0-9a-fA-F]{8})"
-)
-BUFFERED_EXACT_RE = re.compile(
-    r"MIR buffered-exact function=(?P<function>\S+)"
 )
 MATRIX_RE = re.compile(
     r"MIR candidate-matrix\tfunction=(?P<function>\S+)"
@@ -155,7 +152,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--cost-policy",
-        choices=("mir-v1", "mir-v1-report", "legacy-v69"),
+        choices=("mir-v1", "mir-v1-report"),
         help="set DCC_MIR_COST_POLICY while compiling",
     )
     parser.add_argument(
@@ -176,7 +173,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--fail-on-regression",
         action="store_true",
-        help="exit nonzero if a previously MIR-emitted function falls back",
+        help="exit nonzero if a previously selected MIR function disappears "
+        "or stops reporting result=mir",
     )
     parser.add_argument(
         "--extra-args",
@@ -193,19 +191,6 @@ def parse_args() -> argparse.Namespace:
         "independent, short-lived subprocess.run call, so this scales well "
         "up to core count). Use -j1 for strictly sequential, deterministic "
         "progress-line ordering (e.g. when diagnosing a single hang).",
-    )
-    parser.add_argument(
-        "--bloat-threshold",
-        type=float,
-        metavar="PERCENT",
-        help="rank accepted MIR functions whose generated assembly exceeds "
-        "captured legacy assembly by more than this percentage",
-    )
-    parser.add_argument(
-        "--bloat-limit",
-        type=int,
-        default=40,
-        help="maximum bloat rows to print; 0 prints every row (default: 40)",
     )
     return parser.parse_args()
 
@@ -259,6 +244,7 @@ def compile_source(
 ]:
     env = os.environ.copy()
     env["DCC_MIR_SELECT_REPORT"] = "1"
+    env["DCC_MIR_REQUIRE_EMIT"] = "1"
     if candidate_matrix:
         env["DCC_MIR_CANDIDATE_MATRIX"] = "1"
     if cost_policy:
@@ -324,29 +310,6 @@ def compile_source(
         matrix_match = MATRIX_RE.search(line)
         if matrix_match:
             matrix_rows.append({"app": source.stem, **matrix_match.groupdict()})
-            continue
-        buffered_match = BUFFERED_EXACT_RE.search(line)
-        if buffered_match:
-            function = buffered_match.group("function")
-            if function in seen:
-                rows = [row for row in rows if row["function"] != function]
-            else:
-                seen.add(function)
-            rows.append(
-                {
-                    "app": source.stem,
-                    "function": function,
-                    "selector": "buffered-exact-mir",
-                    "result": "mir",
-                    "reason": "accepted",
-                    "generated_bytes": "0",
-                    "captured_bytes": "0",
-                    "generated_insns": "0",
-                    "captured_insns": "0",
-                    "blocks": "0",
-                    "selected_hash": "00000000",
-                }
-            )
             continue
         match = SELECTION_RE.search(line)
         if not match:
@@ -433,56 +396,12 @@ def print_summary(rows: list[dict[str, str]]) -> None:
     print(f"\nCoverage: {emitted}/{len(rows)} functions ({percent:.2f}%)")
 
 
-def print_bloat_report(
-    rows: list[dict[str, str]], threshold: float, limit: int
-) -> None:
-    ranked: list[tuple[float, dict[str, str]]] = []
-    for row in rows:
-        if row["result"] != "mir":
-            continue
-        generated = int(row["generated_bytes"])
-        captured = int(row["captured_bytes"])
-        if captured <= 0:
-            continue
-        growth = (generated - captured) * 100.0 / captured
-        if growth > threshold:
-            ranked.append((growth, row))
-    ranked.sort(
-        key=lambda item: (
-            -item[0],
-            item[1]["app"],
-            item[1]["function"],
-        )
-    )
-    selectors = collections.Counter(row["selector"] for _, row in ranked)
-    apps = {row["app"] for _, row in ranked}
-    print(f"\nAccepted MIR bloat > {threshold:g}%")
-    print(f"  functions: {len(ranked)}")
-    print(f"  apps: {len(apps)}")
-    for selector, count in selectors.most_common():
-        print(f"  {count:5d}  {selector}")
-    if not ranked:
-        return
-    print(
-        "\n"
-        f"{'app':16s} {'function':32s} {'selector':27s} "
-        f"{'generated':>9s} {'captured':>9s} {'growth':>9s}"
-    )
-    visible = ranked if limit == 0 else ranked[: max(limit, 0)]
-    for growth, row in visible:
-        print(
-            f"{row['app']:16s} {row['function'][:32]:32s} "
-            f"{row['selector']:27s} {int(row['generated_bytes']):9d} "
-            f"{int(row['captured_bytes']):9d} {growth:8.1f}%"
-        )
-
-
 def compare_rows(
     old: dict[tuple[str, str], dict[str, str]],
     new: dict[tuple[str, str], dict[str, str]],
 ) -> tuple[set[str], int]:
-    newly_mir: list[tuple[str, str]] = []
-    regressed: list[tuple[str, str]] = []
+    newly_selected: list[tuple[str, str]] = []
+    missing_selected: list[tuple[str, str]] = []
     changed_apps: set[str] = set()
     runtime_apps: set[str] = set()
     compared_apps = {app for app, _ in new}
@@ -509,10 +428,10 @@ def compare_rows(
         before_result = before["result"] if before else "missing"
         after_result = after["result"] if after else "missing"
         if before_result != "mir" and after_result == "mir":
-            newly_mir.append(key)
+            newly_selected.append(key)
             runtime_apps.add(key[0])
         elif before_result == "mir" and after_result != "mir":
-            regressed.append(key)
+            missing_selected.append(key)
             runtime_apps.add(key[0])
         elif before_result == "mir" and after_result == "mir":
             runtime_apps.add(key[0])
@@ -526,11 +445,11 @@ def compare_rows(
             runtime_apps.add(key[0])
 
     print("\nSnapshot delta")
-    print(f"  newly MIR-emitted: {len(newly_mir)}")
-    for app, function in newly_mir:
+    print(f"  newly reported MIR selections: {len(newly_selected)}")
+    for app, function in newly_selected:
         print(f"    + {app}.{function}")
-    print(f"  no longer MIR-emitted: {len(regressed)}")
-    for app, function in regressed:
+    print(f"  missing/non-MIR selections: {len(missing_selected)}")
+    for app, function in missing_selected:
         print(f"    - {app}.{function}")
     print(f"  apps with census changes: {len(changed_apps)}")
     print(f"  apps requiring runtime validation: {len(runtime_apps)}")
@@ -541,7 +460,7 @@ def compare_rows(
             "  pwsh ./scripts/runall.ps1 "
             f"-Apps {app_list} -Mode full -RunTimeout 20"
         )
-    return runtime_apps, len(regressed)
+    return runtime_apps, len(missing_selected)
 
 
 def main() -> int:
@@ -561,8 +480,12 @@ def main() -> int:
     matrix_rows: list[dict[str, str]] = []
     cost_rows: list[dict[str, str]] = []
     failures: list[tuple[str, str]] = []
-    with tempfile.TemporaryDirectory(prefix="dcc-mir-census-") as directory:
-        directory_path = Path(directory)
+    work_dir = output_path.parent / f"{output_path.stem}-work"
+    if work_dir.exists():
+        shutil.rmtree(work_dir)
+    work_dir.mkdir(parents=True)
+    try:
+        directory_path = work_dir
 
         def run_one(
             index: int, source: Path
@@ -626,6 +549,8 @@ def main() -> int:
                 # Completion order (not dispatch order) with -j>1, matching
                 # runall.ps1's own parallel status-line convention.
                 print(f"\r[{done:3d}/{len(sources)}] {source.stem:12s}", end="", flush=True)
+    finally:
+        shutil.rmtree(work_dir, ignore_errors=True)
     print()
 
     if failures:
@@ -644,9 +569,6 @@ def main() -> int:
         write_cost_rows(cost_path, cost_rows)
         print(f"Wrote {cost_path} ({len(cost_rows)} candidates)")
     print_summary(rows)
-    if args.bloat_threshold is not None:
-        print_bloat_report(rows, args.bloat_threshold, args.bloat_limit)
-
     regressions = 0
     if args.compare:
         old_path = Path(args.compare)

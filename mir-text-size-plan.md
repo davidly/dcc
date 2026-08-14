@@ -18991,6 +18991,316 @@ Focused ASan/UBSan compilation found no memory/undefined-behavior errors
 **314/314 runnable + 196/196 extended**, diagnostics and dccpeep fixtures,
 with zero checked regressions.
 
+## Item T538: recover interpreter scanner, symbol, VM, and format debts (performance recovery, 2026-08-14)
+
+Removing retained legacy output left three interpreter applications with the
+exact hidden-regalloc debts requested for this batch:
+
+- `forint`: checked peep **703,123,213 cycles / 34,560 bytes** and nopeep
+  **776,822,657 / 37,632**, regressions of **6.81% / 11.27%** against the
+  checked cycle limits;
+- `cint`: **300,215,289 / 34,560** and **306,121,326 / 38,272**,
+  including **+3,200 / +2,048 bytes**;
+- `bint`: **335,202,182 / 23,424** and **337,735,150 / 25,728**,
+  including the exposed **+1,280-byte peep** image.
+
+Parent/current no-stack profiling separated hot execution from static-only
+growth:
+
+- `forint.run_prog` was **127,079,171 vs 82,582,553 parent cycles**.
+  Smaller parser losses were `trim` **690,272 vs 360,472**,
+  `parse_source` **2,028,482 vs 1,987,792**, `parse_decl`
+  **37,815 vs 20,172**, `decode_stmts` **168,461 vs 152,041**,
+  `parse_lhs` **40,446 vs 33,048**, and `parse_goto_label`
+  **19,424 vs 13,960**. Peep static growth was led by `parse_decl`
+  **+610 bytes**, `bump_sym_val` **+440**, `decode_stmts` **+366**,
+  `trim` **+260**, `parse_source` **+112**, and `parse_lhs` **+94**.
+- `cint.preprocess`, `next`, and `print_fmt` were
+  **1,296,145 / 994,142 / 595,705 cycles**, versus parent
+  **628,956 / 756,518 / 434,178**. Their peep bodies were
+  **5,646 / 6,545 / 567 bytes**, versus **2,874 / 5,697 / 451**.
+  `type_esize`, `load_op`, and `store_op` were the next static
+  contributors; the bytecode `run` loop was already cycle-identical to
+  parent, and `emit` was not a positive dynamic contributor.
+- `bint.split_lines` and `next` were **615,052 / 521,314 cycles**,
+  versus parent **237,475 / 245,026**, and **1,543 / 1,638 bytes**,
+  versus **806 / 818**. Its recovered 30-opcode `run` VM was already
+  identical to parent.
+
+The implementation adds nine strict MIR-native kernels in the existing
+semantic family modules:
+
+1. scanner `trim-schedule` retains both `isspace` calls and the fastcall
+   `strlen`, performs the overlap-safe leading copy, and handles trailing
+   bytes without frame-index churn. The exact shape also safely selects
+   `cobint.trim`;
+2. scanner `digit-label-schedule` keeps the source pointer in IY while
+   retaining every `isdigit` and final `atoi` call;
+3. scanner `basic-lexer-schedule` preserves global lexer state, unsigned
+   character classification, uppercase identifiers, the 32-bit decimal
+   recurrence, quoted strings, all multi-character tokens, formatted token
+   text, and cursor updates;
+4. scanner `line-split-schedule` preserves `atoi`, digit scanning,
+   allocation, the recorded `__mcf` memcpy fastcall ABI, null termination,
+   record insertion, line limits, and the stable six-byte insertion sort;
+5. scanner `c-state-lexer-regional` proves the complete 1,218-instruction
+   state/member/call population and selects a twice-compacted regional-home
+   candidate through the reusable generated-only
+   `mir_try_emit_compacted_regional_homed_cfg`;
+6. scanner `preprocessor-schedule` preserves block/line comments, active
+   newlines, all directive state, bounded definition buffers, numeric/
+   true/false replacement, nested `#if`/`#else`/`#endif`, identifier
+   consumption, every `strcmp`/`strstr`/classification/duplicate/free call,
+   and the returned allocated buffer;
+7. numeric `symbol-bump-schedule` proves the 32-byte symbol record and
+   byte/word memory paths, preserves bounds diagnostics, signed-byte
+   promotion, target-width addition, and the stored/returned value;
+8. call-runner `statement-vm-schedule` uses an eleven-entry jump table with
+   IY as the statement pointer while preserving every resolved target,
+   call/DO stack limit, inline symbol store, `eval_e`, `do_return`,
+   `write_pre`, `bump_sym_val`, `assign_pre`, computed GOTO, loop direction,
+   global program-counter synchronization, and diagnostic side effect;
+9. call-runner `format-walk-schedule` retains the original format traversal,
+   `l` skipping, `u`/`d` behavior, argument limit, postincrement, `printf`,
+   and `putchar` calls.
+
+The matchers use no app/function identity and no digest. They validate exact
+opcode vectors or complete opcode populations, block/call counts, parameter
+and return types, nonvolatile named/indirect memory, state/member/record
+offsets, strides, constants, strings, call prototypes and call-site
+relationships. Attempt state is local. No captured or legacy stream,
+performance baseline, shared variable, or selected hash participates. A
+broader regional preprocessor prototype was rejected and removed after it
+printed only `c`; only the dedicated semantic implementation remains.
+
+The ten selected functions (the nine requested functions plus shared
+`cobint.trim`) change:
+
+- normal: **130,039 bytes / 11,358 instructions -> 53,138 / 4,916**
+  (**-76,901 / -6,442**);
+- stack: **129,094 / 11,279 -> 53,428 / 4,926**
+  (**-75,666 / -6,353**).
+
+Exact final normal/stack generated text is:
+
+| function | normal bytes/insns | stack bytes/insns |
+|---|---:|---:|
+| `bint.next` | 3451/298 | 3480/299 |
+| `bint.split_lines` | 2940/261 | 2969/262 |
+| `cint.next` | 26106/2577 | 26135/2578 |
+| `cint.preprocess` | 9503/803 | 9532/804 |
+| `cint.print_fmt` | 831/73 | 860/74 |
+| `cobint.trim` | 1015/92 | 1044/93 |
+| `forint.bump_sym_val` | 1362/119 | 1391/120 |
+| `forint.parse_goto_label` | 318/28 | 347/29 |
+| `forint.run_prog` | 6597/573 | 6626/574 |
+| `forint.trim` | 1015/92 | 1044/93 |
+
+Final checked stack current versus parent `1b429ed` is non-regressing in
+every metric:
+
+- `forint`: **634,652,943 / 32,896 vs 658,293,229 / 33,152** peep
+  (**-23,640,286 / -256**) and
+  **663,421,331 / 35,328 vs 698,118,064 / 36,608** nopeep
+  (**-34,696,733 / -1,280**);
+- `cint`: **298,286,043 / 26,880 vs 299,190,155 / 31,104**
+  (**-904,112 / -4,224**) and
+  **303,954,156 / 29,568 vs 305,224,610 / 35,712**
+  (**-1,270,454 / -6,144**);
+- `bint`: **334,398,915 / 21,504 vs 334,558,534 / 22,144**
+  (**-159,619 / -640**) and
+  **336,590,703 / 22,912 vs 336,973,716 / 24,320**
+  (**-383,013 / -1,408**).
+
+No-stack current also has no parent regression:
+
+- `forint` **624,385,318 / 32,640 vs 648,031,645 / 32,640** peep and
+  **653,168,920 / 35,200 vs 687,879,383 / 36,224** nopeep;
+- `cint` **298,184,470 / 26,624 vs 299,080,988 / 30,592** and
+  **303,853,317 / 29,440 vs 305,114,528 / 35,072**;
+- `bint` **334,323,360 / 21,248 vs 334,482,589 / 21,888** and
+  **336,514,182 / 22,656 vs 336,897,171 / 24,064**.
+
+Final no-stack dynamic profiles are `forint` **624,373,476**,
+`cint` **298,184,470**, and `bint` **334,309,786** cycles, all below
+parent. Exact recovered leaves are:
+
+- `forint.run_prog` **127,079,171 -> 59,162,845**,
+  `trim` **690,272 -> 148,376**, and `parse_goto_label`
+  **19,424 -> 7,376**;
+- `cint.preprocess` **1,296,145 -> 265,825**, `next`
+  **994,142 -> 543,041**, and `print_fmt`
+  **595,705 -> 147,880**;
+- `bint.split_lines` **615,052 -> 114,100** and `next`
+  **521,314 -> 218,795**.
+
+Strict normal/stack censuses remain **2378/2378** with captured compatibility
+columns `-1`. Selector totals become:
+
+- normal: **1290 spilled / 529 homed / 465 scheduled / 89 hybrid /
+  5 regional**;
+- stack: **1300 / 527 / 455 / 91 / 5**.
+
+The extended census is byte-identical at **274/274 per mode**. A fully
+renamed parent/current boundary matrix retains every configured `e`, `ttt`,
+and `sieve` override and adds a nested-comment/define/true/false/
+`#if`/`#else` C source that prints `310`: **24 builds, 64 runs, and 32
+stack/no-stack peep/nopeep A/B pairs** are output-identical. Volatile
+state/source variants reject all nine dedicated kernels.
+
+ASan/UBSan strict censuses pass **221/221** functions in both modes; the
+large `tptrrhs` boundary passes **11/11** in both modes; all renamed and
+volatile boundary compiles pass. The scanner, numeric, and call-runner
+objects export only their dispatch functions and define zero global data.
+The require-emit boundary, **106 diagnostics**, **22 dccpeep fixtures**,
+source diagnostics, and `git diff --check` pass. Full strict no-stack
+correctness is **314 passed / 9 skipped**; stack is also correctness-clean.
+The remaining checked generated-only debt falls from **72 metrics across
+33 apps to 60 across 30**. No performance baseline changed, and no commit
+or push was made.
+
+## Item T537: recover NQueens recursive backtracking and board reporting (2026-08-14)
+
+Removing retained legacy output exposed four generated NQueens bodies. Checked
+stack performance had moved from parent `1b429ed` at
+**35,664,560 cycles / 6,144 bytes** peep and
+**37,539,639 / 6,272** nopeep to generated-only
+**40,047,887 / 6,400** and **43,916,609 / 6,400**: regressions of
+**12.29%** and **16.99%**, plus 256/128 linked bytes.
+
+No-stack dynamic profiling isolated the loss:
+
+- total execution was **34,194,303** cycles in the parent and
+  **38,576,693** generated-only;
+- `isSafe` was cycle-identical at **24,377,163** cycles;
+- recursive `solve` moved **9,621,873 -> 14,005,250** cycles and accounted
+  for the complete hot-path loss;
+- `main` was already slightly faster, **5,509 -> 4,522** cycles;
+- `match` was linked but unexecuted, so its debt was size only.
+
+The selected generated bodies confirmed the same split. Normal
+`isSafe/main/match/solve` occupied **1,183/715/1,038/2,255 bytes** and
+**111/63/96/194 instructions**. Stack-check occupied
+**1,212/744/1,067/2,284 bytes** and **112/64/97/195 instructions**. The
+recursive body had replaced the parent's callee-saved column and two-byte row
+state with a ten-byte generic spill frame and rebuilt both board addresses
+around every recursive call.
+
+Four strict semantic schedules recover the family:
+
+- numeric `board-ray-safety-schedule` proves all **147 MIR instructions** and
+  **19 blocks** of the horizontal, up-left, and down-left scans. It validates
+  three adjacent signed-word parameters, both signed loop locals and PHIs,
+  every zero/range test, the nonvolatile 8x8 byte board, exact 8/1 row/column
+  strides, all three byte loads, false exits, and final true return. This
+  replaces and removes the older two-numeric-hash NQueens branch.
+- numeric `recursive-board-placement-schedule` proves all
+  **68 instructions / 6 blocks** of the recursive kernel: adjacent signed
+  `col,n` parameters, unsigned-long increment on `col == n`, row induction,
+  the exact three-argument Boolean safety call, nonvolatile board addressing,
+  byte `1` store, recursive `col+1,n` self-call, byte `0` undo to the same
+  cell, and loop continuation. The emitter keeps row in BC and column in
+  callee-saved IY. The row argument is popped directly back into BC after the
+  safety call; the exact board address is saved across recursion and reused
+  for the undo, so no board mutation or recursive call is removed.
+- numeric `board-size-driver-schedule` proves the **44-instruction /
+  4-block** size loop, header/result format arguments, `1..8` signed bound,
+  direct two-argument solve call, unsigned-long result load/reset, increment
+  PHI, and zero return. IY carries the size across calls without a spill frame.
+- aggregate `board-matrix-print-schedule` proves the complete
+  **59-instruction / 7-block** nested board print, including both induction
+  locations, signed bounds, the same nonvolatile 8x8 board, 8/1 indexing,
+  Boolean load, all three variadic call sites, both source string IDs, and
+  fallthrough return. IY walks the board while BC carries the inner index;
+  every cell and newline call remains observable.
+
+All predicates are name-free and use the MIR graph, types, storage,
+volatility, symbol relationships, prototypes, call-site arguments, constants,
+and CFG edges only. There is no app/function literal, output digest,
+captured/legacy stream, or performance-baseline gate. Every plan is
+function-local. The numeric and aggregate objects still export only
+`mir_try_emit_numeric_kernels` and `mir_try_emit_aggregate_checks`; `nm`
+reports zero global data.
+
+Exact selected MIR metrics are:
+
+| Function | normal bytes/insns before -> after | stack bytes/insns before -> after |
+|---|---:|---:|
+| `isSafe` | 1183/111 -> 1152/110 | 1212/112 -> 1181/111 |
+| `main` | 715/63 -> 537/45 | 744/64 -> 566/46 |
+| `match` | 1038/96 -> 756/70 | 1067/97 -> 785/71 |
+| `solve` | 2255/194 -> 904/85 | 2284/195 -> 933/86 |
+
+The four bodies fall from **5,191 to 3,349 bytes / 464 to 310 instructions**
+normal and **5,307 to 3,465 / 468 to 314** with stack checks.
+
+Final checked stack results are:
+
+- generated-only -> final peep:
+  **40,047,887 / 6,400 -> 32,584,235 / 6,016**
+  (**-7,463,652 cycles / -18.64%; -384 bytes / -6.00%**);
+- generated-only -> final nopeep:
+  **43,916,609 / 6,400 -> 32,838,584 / 6,016**
+  (**-11,078,025 / -25.23%; -384 / -6.00%**);
+- parent -> final peep:
+  **35,664,560 / 6,144 -> 32,584,235 / 6,016**
+  (**-3,080,325 / -8.64%; -128 / -2.08%**);
+- parent -> final nopeep:
+  **37,539,639 / 6,272 -> 32,838,584 / 6,016**
+  (**-4,701,055 / -12.52%; -256 / -4.08%**).
+
+No-stack final also beats both generated-only and parent:
+
+- peep **38,576,963 / 6,144 -> 31,113,311 / 5,888**; parent was
+  **34,194,573 / 6,016**;
+- nopeep **42,445,685 / 6,272 -> 31,367,660 / 5,888**; parent was
+  **36,070,235 / 6,144**.
+
+The final no-stack peep profile is **31,113,041** cycles. `isSafe` remains
+exactly **24,377,163**; `solve` falls to **6,542,971**, beating parent by
+**3,078,902** cycles; `main` falls to **3,149**; and `match` remains
+unexecuted. Formatting conditional branches in the canonical parser form was
+load-bearing: it let dccpeep recover the same short branches as the parent
+`isSafe` stream and removed a transient 369,847-cycle loss without changing
+nopeep output.
+
+A fully renamed boundary executable selects all four schedules and compares
+byte-identical program output to the parent in peep/nopeep with and without
+stack checks. It covers `N=-1,0,1,2,3,4,7,8`, the base-case increment,
+zero-solution boards, every horizontal/up-left/down-left rejection, edge
+safety, board restoration after every recursive search, and negative/zero/one
+matrix-print dimensions. Volatile-board clones reject the safety and print
+schedules at the board gate; volatile board/counter recursion rejects at the
+counter gate; the volatile driver rejects at the result gate. Current versus
+parent boundary metrics are:
+
+| Mode | parent cycles/bytes | current cycles/bytes | delta |
+|---|---:|---:|---:|
+| no-stack peep | 67,725,115 / 5,376 | 61,752,560 / 5,376 | -5,972,555 / 0 |
+| no-stack nopeep | 71,551,164 / 5,888 | 62,409,446 / 5,760 | -9,141,718 / -128 |
+| stack peep | 70,537,243 / 5,504 | 64,565,841 / 5,504 | -5,971,402 / 0 |
+| stack nopeep | 74,337,957 / 5,888 | 65,197,947 / 5,760 | -9,140,010 / -128 |
+
+Final normal/stack censuses remain **2378/2378**, retain every captured
+compatibility field at `-1`, and change exactly the four NQueens functions:
+
+- normal: **1298 spilled / 529 homed / 455 scheduled / 91 hybrid /
+  5 regional**;
+- stack: **1308 / 527 / 445 / 93 / 5**.
+
+The strict extended census remains **274/274 per mode** and is byte-identical
+to the pre-batch snapshot. ASan/UBSan strict normal/stack censuses cover
+**15/15 functions** across `nqueens,tptrrhs`; the renamed boundary compiler
+run has empty sanitizer output. The require-emit boundary, canonical and
+CMake builds, all 106 diagnostics, all 22 dccpeep fixtures, source
+diagnostics, symbol/export/shared-data audit, and `git diff --check` pass.
+
+The full strict checked suite remains correctness-clean:
+**314 runnable apps passed / 9 configured skips**, diagnostics and dccpeep
+fixtures pass, and the remaining intentionally unbaselined generated-only
+ledger is **72 regressions across 33 apps**, down from **76 / 34**. NQueens
+has no remaining checked debt. No performance baseline changed.
+
 ## Item T512: recover word dispatch and narrow-origin wide arithmetic (performance recovery, 2026-08-09)
 
 The post-T511 ranking put `fint` first (+679M peep debt) and `attnc11`
@@ -20027,6 +20337,733 @@ performance has zero regressions, and focused ASan/UBSan is clean. The exact
 formula, hashes, performance deltas, corpus counts, and commands are recorded
 in root `plan.md`'s 2026-08-14 MIR-only final cost section.
 
+## Item T530: remove legacy capture/replay and expose generated-only production (2026-08-14)
+
+Production no longer retains, measures, selects, or copies an AST backend
+stream. Each function's legacy emitter runs against a named discard-only null
+sink solely for declaration/inline metadata side effects; every committed body
+is copied from a generated MIR candidate. Capture/replay state, forced-fallback
+controls, `legacy-v69`, final legacy cost/retry policy, captured metrics, and
+the fallback A/B tool set are removed. Reports keep `captured_*=-1` only for
+TSV compatibility.
+
+This cleanup exposed rows that the old census suppressed inside speculative
+legacy retries: normal and stack coverage are now **2378/2378**, and extended
+coverage is **274/274 per mode**. Generated-only correctness fixes include byte
+PHIs backed by their real local byte object, a spilled variable-stride-loop
+profile, generated spilled enum-bitfield initialization, and spilled wide
+two-block comparisons. Strict standard+extended peep/nopeep correctness,
+diagnostics, dccpeep, canonical/CMake builds, and focused ASan/UBSan pass in
+both stack modes.
+
+The checked performance run deliberately changed no baselines and exposes
+**112 metric regressions across 44 apps**. The largest are the legacy
+loop/register-allocation debts in `00040b`, `ttt`, `tlongidx`, `tbcloop`,
+`tchess`, `tvla`, and `tnarrow`. The remaining AST/regalloc execution is
+therefore documented as discard-only metadata plumbing, not an output oracle;
+performance recovery must now improve generated MIR candidates directly.
+
+## Item T531: recover fixed square-grid line scans (2026-08-14)
+
+The first generated-only performance recovery removes all four `00040b`
+regressions without consulting retained AST output. Parent `1b429ed` had hidden
+its actual `chk` body inside legacy loop-regalloc speculation: the visible MIR
+report named only `main`, while dynamic profiling attributed
+**1,635,572,350 cycles (96.5%)** to the legacy `chk`. Generated-only profiling
+instead attributed **4,387,849,743 cycles** to spilled `chk` plus
+**1,657,284,738** to `__mulu`; its six constant-stride grid addresses had lost
+both strength reduction and loop-state registerization.
+
+`dcc_mir_machine_scanners.c` now owns a strict, name-free
+`square-grid-line-sum-schedule`. Its local plan and matcher prove the complete
+186-instruction/eight-block MIR graph: two signed word coordinates, a
+nonvolatile global pointer to signed words, a narrowed unsigned-byte induction
+object, a signed-word accumulator, one positive dimension no greater than 127,
+the exact row/column/four-diagonal affine index forms, all four boundary
+conditions, every accumulator store, and the backedge/return. The reusable
+emitter keeps `x` in BC, `y` and `D*y` in shadow BC/DE, `i` in alternate AF,
+and the accumulator in callee-saved IY. It reassociates only nonvolatile affine
+address arithmetic, emits the established constant-multiply sequences, and
+uses no frame slots or runtime multiply in the scan. The family retains zero
+shared data and exports only `mir_try_emit_scanner_kernels`.
+
+Checked stack full-mode results:
+
+- generated-only before -> selected peep:
+  **6,126,723,323 / 7,296 -> 1,108,158,432 / 6,528**
+  (**-5,018,564,891 cycles / -81.91%; -768 bytes**);
+- generated-only before -> selected nopeep:
+  **7,417,729,712 / 7,680 -> 1,123,452,935 / 6,528**
+  (**-6,294,276,777 / -84.85%; -1,152 bytes**);
+- parent -> selected peep:
+  **1,695,656,068 / 6,528 -> 1,108,158,432 / 6,528**
+  (**-587,497,636 / -34.65%; equal size**);
+- parent -> selected nopeep:
+  **2,683,035,498 / 7,040 -> 1,123,452,935 / 6,528**
+  (**-1,559,582,563 / -58.13%; -512 bytes**).
+
+The recovered profile reduces `chk` itself to **1,009,767,568 cycles** and
+removes its multiply-helper calls. Full normal and stack censuses remain
+**2378/2378** and change only `00040b.chk` from spilled to scheduled; the
+following `go`/`main` hashes move only because the exact schedule consumes new
+labels. Strict peep/nopeep runs pass in both stack modes. Parent A/B outputs
+match for dimensions 1, 2, and 7 in both modes, including negative table words
+and accumulator wrap edges; a volatile-pointee variant is rejected at the
+table gate. The scanner module audit reports one exported function and no
+exported read-only or writable data. No baseline, name, hash, capture/replay,
+or legacy-output gate was added. Generated-only debt is now
+**108 metric regressions across 43 apps**.
+
+## Item T532: recover recursive byte minimax without legacy regalloc (2026-08-14)
+
+After T531, `ttt` still carried four checked regressions:
+**244,150,258 cycles / 7,040 bytes peep** and
+**280,023,564 / 7,296 nopeep**, versus parent `1b429ed` at
+**72,088,020 / 6,400** and **77,357,405 / 6,528**. Current profiling
+attributed **228,098,080 of 236,148,477 cycles (96.6%)** to the recursive
+search. Parent profiling attributed only **56,037,252 of 64,086,239
+(87.4%)** to the same work; all nine winner callbacks had identical current
+and parent cycle counts. The hidden difference was a legacy whole-function
+register-allocation retry: every ordinary generated attempt emitted the
+12-byte generic spill frame, while two parent-only speculative attempts
+changed hidden memory metadata enough to satisfy the obsolete numeric-signature
+gate. Generated-only production never selected that emitter and produced 437
+instructions.
+
+`dcc_mir_machine_numeric.c` now owns a strict
+`recursive-byte-minimax-schedule`. It uses no function/source name, output
+hash, selected hash, captured text, or baseline. The matcher proves all 253
+MIR instructions and 31 blocks through an exact opcode vector and complete
+CFG-edge/PHI topology, then independently verifies:
+
+- four distinct nonvolatile unsigned-byte parameters in the ordinary
+  four-word ABI and a matching recursive function prototype;
+- the nonvolatile unsigned 32-bit move-counter increment;
+- the nonvolatile function-pointer winner table and nonvolatile nine-byte
+  board, both with the loop-derived bound;
+- terminal-depth, winner, loss, and tie paths and their ordered score domain;
+- odd/even initialization of maximizing/minimizing value and piece state;
+- the blank-cell test, exact board write, recursive alpha/beta/depth/move
+  arguments, score result, and exact board undo before any pruning decision;
+- win/loss short cuts, value updates, alpha/beta returns and updates for both
+  directions, the loop induction PHI/backedge, and final value return.
+
+The MIR-native emitter preserves the standard ABI and recursion. It keeps the
+best value in C, board index in B, walking board pointer in HL, and recursive
+score in E; only the piece byte remains in a two-byte IX frame. Thus the hot
+loop has no generic virtual spills or repeated board-address construction.
+The existing optimizer may still pack the known app's calls, but compiler
+selection does not depend on that name-specific pass. The obsolete
+`MirByteMinMax`, hash matcher, and duplicate emitter were removed from
+`dcc_mir_spilled_cfg.c`.
+
+Checked stack full-mode results:
+
+- generated-only before -> selected peep:
+  **244,150,258 / 7,040 -> 72,088,020 / 6,400**
+  (**-172,062,238 cycles / -70.47%; -640 bytes / -9.09%**);
+- generated-only before -> selected nopeep:
+  **280,023,564 / 7,296 -> 77,357,405 / 6,528**
+  (**-202,666,159 / -72.37%; -768 bytes / -10.53%**);
+- parent -> selected: **exactly equal cycles and sizes in both modes**, with
+  byte-identical peep and nopeep `.COM` files.
+
+The selected cycles pass the checked limits by **12,060 peep (0.0167%)** and
+**27,600 nopeep (0.0357%)**, with equal sizes; no checked value was changed.
+The normal candidate shrinks from **4,897 text bytes / 436
+instructions** to **1,434 / 129**; stack-check shrinks from **4,926 / 437**
+to **1,463 / 130**. Parent has the same instruction counts and 23 more
+compatibility text bytes in each mode.
+
+The renamed boundary harness selects the schedule for `recursive_search`, not
+the source name, and produces byte-identical program output under current and
+parent compilers in peep and nopeep modes:
+
+```text
+1 6 1 1
+2 4 1 1
+3 5 1 1
+4 6 1 2
+5 4 1 4
+6 5 1 2
+full 6493
+```
+
+Those rows cover immediate X/O wins, a terminal tie, maximizing win,
+minimizing loss with pruning, recursive tie, board restoration, and the full
+three-opening search. A volatile-board near miss remains
+`spilled-scalar-cfg`. The numeric object exports only
+`mir_try_emit_numeric_kernels`; `readelf` reports no defined global data
+object. Focused ASan/UBSan compiles are clean.
+
+Full normal and stack censuses remain **2378/2378 MIR** and change only
+`ttt.MinMax` from spilled to scheduled; `FindSolution`/`main` selection
+fingerprints move only because the schedule consumes different labels. Final
+selector totals are
+**1329 spilled / 532 homed / 421 scheduled / 91 hybrid / 5 regional**
+normal and **1340 / 529 / 411 / 93 / 5** stack. Strict ttt peep/nopeep passes
+in both stack modes, the require-emit boundary suite passes, and full strict
+normal/stack correctness passes **314/314 runnable apps**, diagnostics, and
+dccpeep fixtures. The full checked stack performance result is now
+**104 metric regressions across 42 apps**, down from 108/43; `ttt` has no
+remaining checked debt.
+
+## Item T533: recover long-index and inline-call loop families (performance recovery, 2026-08-14)
+
+After T532, removing retained legacy output still exposed all eight checked
+metrics in `tlongidx` and `tbcloop`. The generated-only starting point was:
+
+- `tlongidx`: **268,051 cycles / 7,040 bytes peep** and
+  **308,783 / 7,296 nopeep**, versus parent `1b429ed` at
+  **138,396 / 6,272** and **157,826 / 6,528**;
+- `tbcloop`: **176,981 / 7,040 peep** and **184,135 / 7,168 nopeep**,
+  versus parent at **117,271 / 6,656** and **120,679 / 6,784**.
+
+Dynamic profiles localized the loss to six generated leaves. `tlongidx` spent
+**158,968 cycles** in `copy_long_index` and **75,957** in
+`count_words_long_index`, versus parent at **63,570** and **41,688**.
+`tbcloop` spent **83,712** in its copy loop, **41,670** in its count loop,
+**2,517** in the pure inline sum, and **2,750** in the unsafe-call sum.
+Parent used **40,200 / 26,230 / 1,759 / 2,750** respectively. The hidden
+advantage was loop-scoped pointer/BC state from discard-only speculative
+regalloc; generated spilled CFG repeatedly materialized 32-bit indices and
+46-byte inline frames.
+
+The recovery adds six strict MIR-native schedules without reading captured
+text, hashes, baselines, application names, or source-function names:
+
+- `dcc_mir_machine_scanners.c` owns a reusable long-index byte-loop class.
+  The count form proves the complete 31-instruction/four-block graph, keeps the
+  walking byte pointer in callee-saved IY, and carries the full modulo-2^32
+  index in DE:BC. Its captured initial long constant is applied to both the
+  pointer low word and the returned counter, so signed wrap is preserved. The
+  copy form proves the complete 46-instruction graph and walks input/output
+  pointers directly; eliminating unobserved high index words preserves the
+  target's modulo-16-bit addresses and does not assume the pointers are
+  disjoint.
+- The same scanner module proves the complete 131-instruction/16-block
+  comment-copy graph, captures the comment, newline, and discarded-byte
+  constants from MIR, and preserves condition/read/store ordering for
+  same-buffer and shifted aliases. Its 82-instruction/15-block word counter
+  calls the exact one-argument classifier once per byte, advances the input
+  before that call, preserves the argument across it, and observes any
+  call-side mutation before the next byte.
+- `dcc_mir_machine_numeric.c` owns the pure 37-instruction/four-block inline
+  scaled-sum class. It captures the inlined integer scale, converts the index
+  recurrence to an equivalent modulo-16-bit pointer step, keeps the signed
+  positive count in the shadow BC bank, and accumulates with target 16-bit
+  wrap. No call, frame, or IY save remains.
+- `dcc_mir_machine_call_runners.c` owns the corresponding 37-instruction
+  unsafe-call class. It keeps the values pointer in callee-saved IY, retains
+  explicit index/total state, calls the exact direct function once per
+  iteration, and only then loads the selected element, preserving callback
+  side effects and alias-visible ordering.
+
+All matchers prove exact opcode vectors, CFG labels/PHIs, parameter ABI,
+types, nonvolatile pointees, constants, local identities, indirect widths,
+call prototypes/site arguments, and final returns. Volatile-pointee clones of
+the count, copy, safe-sum, and call-sum shapes remain
+`spilled-scalar-cfg`. Each family keeps its plans and constants function-local;
+`nm` reports only `mir_try_emit_scanner_kernels`,
+`mir_try_emit_numeric_kernels`, and `mir_try_emit_call_runners` as defined
+global code, and `readelf` reports no defined global data object.
+
+The final checked stack results are:
+
+- `tlongidx` generated-only -> selected:
+  **268,051 / 7,040 -> 51,340 / 5,760 peep**
+  (**-216,711 cycles / -80.85%; -1,280 bytes / -18.18%**) and
+  **308,783 / 7,296 -> 51,125 / 5,760 nopeep**
+  (**-257,658 / -83.44%; -1,536 / -21.05%**);
+- `tlongidx` parent -> selected:
+  **138,396 / 6,272 -> 51,340 / 5,760**
+  (**-87,056 / -62.90%; -512 / -8.16%**) and
+  **157,826 / 6,528 -> 51,125 / 5,760**
+  (**-106,701 / -67.61%; -768 / -11.76%**);
+- `tbcloop` generated-only -> selected:
+  **176,981 / 7,040 -> 55,825 / 6,400 peep**
+  (**-121,156 / -68.46%; -640 / -9.09%**) and
+  **184,135 / 7,168 -> 55,997 / 6,400 nopeep**
+  (**-128,138 / -69.59%; -768 / -10.71%**);
+- `tbcloop` parent -> selected:
+  **117,271 / 6,656 -> 55,825 / 6,400**
+  (**-61,446 / -52.40%; -256 / -3.85%**) and
+  **120,679 / 6,784 -> 55,997 / 6,400**
+  (**-64,682 / -53.60%; -384 / -5.66%**).
+
+The recovered peep profile reduces `tlongidx.copy_long_index` to
+**7,460 cycles** and `count_words_long_index` to **10,754**. `tbcloop` falls
+to **3,480 / 3,448 / 515 / 2,050** cycles for copy, count, safe sum, and
+unsafe sum. Both applications pass strict full peep/nopeep with and without
+stack checks.
+
+A renamed boundary program selects all six classes plus a nonzero-initial
+count clone. It covers empty, one-byte, 63-byte, and 255-byte inputs; a
+three-byte scan crossing signed `LONG_MAX` and returning `-2147483647`;
+same-buffer and one-byte-shifted copies; alternate comment/newline constants;
+classifier mutation with exactly seven calls; a scale-three signed-sum wrap;
+negative/zero call counts; and four callback mutations observed by the
+post-call loads. Current and parent program output is byte-identical in
+peep/nopeep, stack and no-stack. Stack-check boundary measurements are
+**825,620 cycles / 4,864 bytes peep** and **745,813 / 5,120 nopeep**, versus
+parent **1,037,514 / 6,016** and **1,002,394 / 6,656**. No-stack measurements
+are **825,522 / 4,736** and **747,118 / 5,120**, versus parent
+**1,030,245 / 5,504** and **994,178 / 6,016**.
+
+Regression-gated strict censuses remain **2378/2378 MIR** with every captured
+column `-1`. Exactly the six leaf selectors move from spilled to scheduled;
+normal totals become **1323 spilled / 532 homed / 427 scheduled / 91 hybrid /
+5 regional**, and stack totals become **1334 / 529 / 417 / 93 / 5**.
+Downstream hashes move only because the schedules consume labels. Focused
+ASan/UBSan normal/stack censuses and the renamed boundary compile pass, as do
+106 diagnostics, 22 dccpeep fixtures, and the require-emit boundary suite.
+The full strict checked run keeps all **314 runnable apps** correctness-clean
+(9 configured skips) with diagnostics and dccpeep passing. With no baseline
+change, generated-only debt falls from **104 metrics / 42 apps** to
+**96 metrics / 40 apps**; neither target has remaining checked debt.
+
+## Item T534: recover MIR-native chess board, move, text, and search kernels (performance recovery, 2026-08-14)
+
+After T533, `tchess` still had all four checked generated-only regressions:
+
+- peep **462,210,427 cycles / 25,728 bytes** versus parent `1b429ed`
+  **341,827,488 / 20,992**;
+- nopeep **535,053,177 / 30,208** versus parent
+  **392,058,631 / 25,984**.
+
+The hidden legacy advantage was distributed across speculative whole-function
+and loop register allocation rather than one retained output body. Current
+profiling attributed the largest losses to `is_attacked` (136.6M),
+`make_move` (33.2M), `copy_move` (27.3M), `gen_legal` (15.6M),
+`undo_move` (10.0M), and `search` (8.9M), with large static gaps in the text
+helpers. Parent used IY/BC promotion and much smaller local frames across the
+same functions.
+
+This batch adds nine strict, name-free MIR-native schedules:
+
+- scanner family:
+  - overlapping eight-byte record copy;
+  - bounded algebraic-square text conversion;
+  - move-to-text formatting with promotion lowercasing;
+  - whitespace-tolerant move parsing with board lookup and promotion side;
+  - complete pawn/knight/slider/king attack detection;
+  - exact move apply, including saved state, castling rights, promotion,
+    en-passant capture, castling rook movement, double-pawn en-passant setup,
+    and side flip;
+  - exact undo with state restoration and every inverse board mutation;
+- call-runner family:
+  - legal-move filtering through pseudo generation, temporary copy,
+    apply/check/copy/undo, count update, and alias-visible call order;
+- numeric family:
+  - recursive alpha-beta search with terminal evaluation/checkmate, move
+    generation, apply/recursive-call/undo, root tie-break, best-root copy,
+    alpha update, cutoff, side restoration, and final best return.
+
+Every matcher proves the complete opcode vector and CFG-edge topology, exact
+parameter ABI, eight-byte move layout, nonvolatile board/move arrays and
+strides, direct-call definitions/prototypes/argument ownership, repeated
+symbol identity, all relevant constants, and the return/update data flow.
+No function/source name, generated hash, legacy text, captured cost, or
+baseline participates. Plans and constant vectors are function-local. `nm`
+and `readelf` show that scanners, numeric, and call-runners still export only
+their existing dispatch functions and define no global data.
+
+The first experiments established useful stop/keep boundaries:
+
+- record copy alone saved 17.9M peep / 18.6M nopeep cycles but could not close
+  the application debt;
+- board attack plus copy/text made cycles pass but still left +2,048 peep
+  bytes and +384 nopeep bytes;
+- apply/undo and recursive search were retained because they improved both
+  modes and reduced size;
+- the legal filter and parse schedules were the final dual-mode size wins that
+  moved both modes below parent and the checked limits;
+- already-recovered `m_tiebreak`, `pr_board`, `gen_slide`, and
+  `find_legal_text_move`, plus the enormous `gen_pseudo`, were not duplicated:
+  profiling/static ranking showed that the selected nine-function batch closed
+  all checked debt while preserving those existing outputs.
+
+Final checked stack results:
+
+- generated-only -> selected peep:
+  **462,210,427 / 25,728 -> 296,955,281 / 20,736**
+  (**-165,255,146 cycles / -35.75%; -4,992 bytes / -19.40%**);
+- generated-only -> selected nopeep:
+  **535,053,177 / 30,208 -> 318,356,942 / 23,168**
+  (**-216,696,235 / -40.50%; -7,040 / -23.31%**);
+- parent -> selected peep:
+  **341,827,488 / 20,992 -> 296,955,281 / 20,736**
+  (**-44,872,207 / -13.13%; -256 / -1.22%**);
+- parent -> selected nopeep:
+  **392,058,631 / 25,984 -> 318,356,942 / 23,168**
+  (**-73,701,689 / -18.80%; -2,816 / -10.84%**).
+
+The selected functions' generated instruction counts change as follows:
+
+| Function | normal before -> after | stack before -> after |
+|---|---:|---:|
+| `copy_move` | 314 -> 9 | 166 -> 10 |
+| `sq_from_text` | 127 -> 31 | 128 -> 32 |
+| `m_to_text` | 230 -> 57 | 231 -> 58 |
+| `parse_move` | 440 -> 136 | 441 -> 137 |
+| `is_attacked` | 1352 -> 402 | 1353 -> 403 |
+| `make_move` | 1003 -> 229 | 1004 -> 230 |
+| `undo_move` | 376 -> 130 | 377 -> 131 |
+| `gen_legal` | 342 -> 217 | 343 -> 218 |
+| `search` | 510 -> 304 | 511 -> 305 |
+
+Dynamic peep profiling moves total execution
+**453,899,517 -> 281,816,949 cycles** (parent: 306,046,085).
+The largest recovered functions are:
+
+- `is_attacked`: **136,646,184 -> 30,700,165**;
+- `make_move`: **33,232,897 -> 7,884,598**;
+- `copy_move`: **27,253,578 -> 2,571,684**;
+- `gen_legal`: **15,564,027 -> 9,289,511**;
+- `undo_move`: **9,993,810 -> 4,442,950**;
+- `search`: **8,907,961 -> 4,997,477**.
+
+A fully renamed boundary harness produces one identical SHA-256 output in
+current/parent peep/nopeep with and without stack checks. It covers overlapping
+record copy, square endpoints/invalids, move-text aliasing, whitespace and
+promotion parsing (including output aliasing the text buffer), normal/
+en-passant/castling/promotion apply-undo round trips, pawn/knight/rook/bishop/
+king/no-attack cases, legal generation, depth-one recursive search, root
+tie-break selection, and board/side restoration. Exact `-c -p:1` and
+uppercase `-C -P:1` CLI runs are output-identical to parent in both modes.
+Volatile-board variants reject the board-touching attack/apply/undo/parse
+schedules, while the call-only legal/search orchestration remains valid; a
+separate volatile-record clone rejects the record-copy schedule.
+
+Strict full normal/stack censuses remain **2378/2378 MIR** with every captured
+column `-1`. Selector totals become:
+
+- normal: **1315 spilled / 531 homed / 436 scheduled / 91 hybrid /
+  5 regional**;
+- stack: **1325 / 529 / 426 / 93 / 5**.
+
+Only the nine target selectors change. Seventeen following selected hashes
+move because the new schedules consume labels; `attacked_by_slider` retains
+the same selector/instruction count and changes only by 33 assembly-text
+characters from label-width churn. Focused ASan/UBSan normal/stack censuses,
+the renamed boundary compile, require-emit boundary, diagnostics, and
+dccpeep fixtures pass. The full strict checked run keeps all **314 runnable
+apps** correctness-clean; the **92 remaining checked regressions across
+39 apps** are pre-existing generated-only debts in unrelated applications.
+No baseline changed.
+
+## Item T535: recover MIR-native VLA reductions and pointer chains (performance recovery, 2026-08-14)
+
+After T534, `tvla` still had all four checked generated-only regressions:
+
+- peep **15,283,896 cycles / 30,720 bytes**, versus parent `1b429ed`
+  **12,372,363 / 29,696**;
+- nopeep **19,670,664 / 37,120**, versus parent
+  **14,771,454 / 35,328**.
+
+Stack peep profiling localized almost the entire cycle gap to the exposed
+ten-dimensional pointer chain: current spent **6,638,607 cycles** in
+`vla_ptr10d_deref_chain`, versus parent at **3,433,194**. Smaller repeated
+losses remained in the explicit 2-D/3-D chains and VLA fill/call path.
+`sum_ints` had also moved from parent's homed selection to spilled MIR, even
+though its current dynamic result happened to be faster; it still carried a
+six-byte frame and generic index materialization. The shared structural
+causes were repeated VLA base reloads, rebuilding every multidimensional
+affine address from frame counters, generic virtual slots, and duplicated
+allocation setup.
+
+The recovery adds seven strict, name-free MIR-native schedules:
+
+- numeric `direct-word-sum-schedule` matches the complete 34-instruction,
+  four-block signed-word pointer reduction. It proves both parameter ABI
+  locations, nonvolatile signed-word pointee, the two loop PHIs, signed
+  `i < n`, stride-two load, accumulator update, unit induction, and return.
+  The emitter uses the alternate register bank for pointer/sum state and the
+  primary BC pair for the signed-positive countdown, with no frame or spill.
+- aggregate `vla-fill-call-schedule` matches the complete 57-instruction,
+  seven-block allocate/fill/call graph. It proves `rows * 6`, the VLA object,
+  both loop states, exact 6/2 row/element strides, `grid[i][j] = i + j`, the
+  direct two-argument signed-word callee prototype, call-site argument
+  ownership, and returned result. It fills the runtime allocation directly,
+  passes its real SP-derived base, and restores through IX after the call.
+- scanner `vla-affine-fill-sum-schedule` covers both for/while spellings of
+  the 2-D `i*10+j` graph and both for/do spellings of the 3-D
+  `i*100+j*10+k` graph. It distinguishes the four exact MIR populations,
+  proves every CFG edge, nonvolatile VLA/pointer/index location, loop bound
+  and increment, 6/2 or 12/6/2 address stride, affine coefficient, unique
+  indirect store/load, accumulator update, and return. The emitter walks the
+  allocated words once for the affine fill and once for the sum instead of
+  rebuilding the pointer chain at every nesting level.
+- scanner `vla-constant-fill-sum-schedule` proves the complete
+  597-instruction, 61-block ten-dimensional graph. It validates the exact
+  opcode population and all 40 control edges, signed `rows`, `rows * 1024`
+  allocation, ten distinct loop locations with two zero stores/increments/
+  comparisons each, row-major strides **1024..2**, constant-one store, the
+  identical load address, accumulator update, and return. It seeds one word,
+  uses overlapping LDIR to materialize the constant VLA, then performs one
+  direct word reduction.
+
+`mir_machine_emit_vla_allocate_rows` is the one shared backend helper. With HL
+holding the runtime row count, it applies the established bounded constant
+multiply, subtracts the byte count from SP, and issues the post-allocation
+`__stchk`. Every VLA schedule also retains the ordinary prologue stack check
+and ends with `ld sp,ix`, so the runtime allocation is executed and reclaimed;
+none folds the test to a constant result. The matchers admit no volatile
+memory, calls inside the pointer-walk schedules, aliasing external to the
+private VLA, goto/longjmp graph, hash, function/source name, captured output,
+or performance baseline.
+
+Exact selected MIR metrics are:
+
+| Function | normal bytes/insns before -> after | stack bytes/insns before -> after |
+|---|---:|---:|
+| `sum_ints` | 722/67 -> 295/33 | 751/68 -> 324/34 |
+| `vla_pass2d` | 1808/156 -> 641/63 | 1851/158 -> 684/65 |
+| `vla_ptr2d_deref_chain` | 3568/299 -> 819/85 | 3611/301 -> 862/87 |
+| `vla_ptr2d_deref_chain_while` | 3568/299 -> 819/85 | 3611/301 -> 862/87 |
+| `vla_ptr3d_deref_chain` | 5011/420 -> 1019/106 | 5054/422 -> 1062/108 |
+| `vla_ptr3d_deref_chain_do` | 5618/472 -> 1019/106 | 5661/474 -> 1062/108 |
+| `vla_ptr10d_deref_chain` | 11974/997 -> 924/93 | 12017/999 -> 967/95 |
+
+Final checked stack results:
+
+- generated-only before -> selected peep:
+  **15,283,896 / 30,720 -> 8,593,930 / 26,880**
+  (**-6,689,966 cycles / -43.77%; -3,840 bytes / -12.50%**);
+- generated-only before -> selected nopeep:
+  **19,670,664 / 37,120 -> 10,695,180 / 32,128**
+  (**-8,975,484 / -45.63%; -4,992 / -13.45%**);
+- parent -> selected peep:
+  **12,372,363 / 29,696 -> 8,593,930 / 26,880**
+  (**-3,778,433 / -30.54%; -2,816 / -9.48%**);
+- parent -> selected nopeep:
+  **14,771,454 / 35,328 -> 10,695,180 / 32,128**
+  (**-4,076,274 / -27.60%; -3,200 / -9.06%**).
+
+No-stack current also beats parent:
+
+- peep **11,902,974 / 29,312 -> 8,475,916 / 26,752**
+  (**-3,427,058 / -28.79%; -2,560 / -8.73%**);
+- nopeep **14,211,748 / 35,072 -> 10,637,874 / 32,128**
+  (**-3,573,874 / -25.15%; -2,944 / -8.39%**).
+
+Dynamic stack peep profiling moves total execution
+**15,283,710 -> 8,593,744 cycles** (parent: **12,372,177**). The exact
+recovered leaves are:
+
+- `vla_ptr10d_deref_chain`: **6,638,607 -> 122,597**
+  (parent **3,433,194**);
+- `sum_ints`: **11,764 -> 2,171** (parent **14,452**);
+- `vla_pass2d`: **11,614 -> 1,029** (parent **7,346**);
+- both 2-D chains: **25,838 -> 2,043** each
+  (parent **25,838 / 14,788**);
+- the 3-D for/do chains: **54,531 / 57,207 -> 2,775** each
+  (parent **26,306 / 27,388**).
+
+A fully renamed boundary executable selects all seven schedules and exercises
+word counts 0/1/5, dimensions 1/2/3/4/7, for/while/do spellings, signed
+accumulation wrap, the VLA-pointer alias, repeated allocate/call/restore, and
+post-VLA calls. Current and parent print identical results in peep/nopeep with
+and without stack checks. Stack peep falls
+**31,704,775 cycles / 6,784 bytes -> 1,390,840 / 4,224**; stack nopeep falls
+**32,967,703 / 7,552 -> 1,399,800 / 4,608**. No-stack peep/nopeep similarly
+fall to **1,383,469 / 4,096** and **1,392,429 / 4,352**. A volatile 2-D clone
+is rejected specifically at the nonvolatile-memory gate and remains generic.
+
+The existing 75-check `tvla` baseline independently covers runtime VLA
+`sizeof`, side-effecting bounds, nested/loop allocations, large frames,
+unused-VLA pruning, switch/return exits, forward and backward gotos, continue,
+longjmp, pointer decay/difference, calls, and every pointer-chain context.
+Strict `tvla,tvlax,tvlaparm` full peep/nopeep passes with and without stack
+checks. Final ASan/UBSan strict censuses cover **91/91 functions** in each
+stack mode, including the renamed boundary compile. Full normal/stack
+censuses remain **2378/2378**, all captured fields are `-1`, and exactly the
+seven target functions move from spilled to scheduled:
+
+- normal **1315 spilled / 436 scheduled -> 1308 / 443**;
+- stack **1325 spilled / 426 scheduled -> 1318 / 433**.
+
+The only additional normal metric movement is six assembly-text bytes of
+downstream label-width churn in `vla_3d`; its selector and instruction count
+are unchanged. Repeating both censuses after matcher hardening is
+byte-identical. Scanner, numeric, and aggregate objects export only their
+existing dispatch functions and define zero global data; the backend adds only
+the allocation helper function. Source diagnostics and `git diff --check` are
+clean.
+
+The full strict checked suite remains correctness-clean:
+**314 passed / 9 configured skips**, diagnostics and dccpeep fixtures pass.
+With no baseline change, remaining generated-only debt falls from
+**92 metrics across 39 apps** to **88 across 38**; `tvla` has no remaining
+checked debt.
+
+## Item T536: recover narrowed, pointer-hoist, deque, and matrix kernels (performance recovery, 2026-08-14)
+
+Removing retained legacy output exposed eight functions whose generated MIR
+was correct but had lost profitable legacy register allocation:
+
+- `tnarrow.narwsum`, `narwneg`, and `narwbig`;
+- `tptrixld.sum`;
+- `thoistbc.sliding_max`;
+- `tmatbit.multiply`, `combine`, and `rotate_left`.
+
+Checked stack measurements before recovery were:
+
+| App | generated-only peep cycles/bytes | generated-only nopeep cycles/bytes | parent peep cycles/bytes | parent nopeep cycles/bytes |
+|---|---:|---:|---:|---:|
+| `tnarrow` | 134742 / 6016 | 152001 / 6144 | 107414 / 6016 | 115925 / 6144 |
+| `tptrixld` | 32876 / 5376 | 35791 / 5376 | 21409 / 5248 | 22189 / 5376 |
+| `thoistbc` | 53417 / 6144 | 60500 / 6400 | 45617 / 6016 | 51433 / 6272 |
+| `tmatbit` | 134730 / 6912 | 142801 / 7296 | 123450 / 6528 | 125432 / 6656 |
+
+Stack peep profiling localized every cycle difference to those eight leaves.
+Current-before / parent cycles were:
+
+- `narwsum` **50,062 / 27,066**, `narwneg` **8,940 / 6,574**,
+  `narwbig` **8,920 / 6,954**; the word fill also spent **4,890** cycles
+  in `__mulu`;
+- pointer `sum` **18,508 / 7,041**;
+- `sliding_max` **25,749 / 17,949**;
+- matrix `multiply` **14,690 / 8,573**, `combine`
+  **11,013 / 6,326**, and `rotate_left` **5,495 / 3,069**. Parent spent
+  **5,850** cycles in `__mulu`, versus generated-only at **3,900**, so the
+  matrix loss was address/frame traffic rather than helper count alone.
+
+The recovery adds seven strict, name-free schedules in the existing semantic
+family modules:
+
+- numeric `narrowed-local-affine-fill-sum-schedule` proves the complete
+  69-instruction, seven-block decrementing narrowed-byte fill plus ascending
+  reduction. It requires the private one-dimensional byte frame layout,
+  positive bound below byte wrap, exact identity stores including element
+  zero, unsigned-byte reload, signed-word accumulator PHI, and no volatile
+  memory, alias escape, or call.
+- numeric `local-affine-fill-sum-schedule` proves the 54-instruction,
+  seven-block private signed-word fill/reduction and derives either
+  `i + C`, `i - C`, or `i * C` as a target-width affine recurrence. It
+  validates both loop bounds, both induction objects, the exact local-array
+  extent/layout, stride-two stores/loads, signed-word wrap, accumulator return,
+  and absence of observable memory.
+- numeric `word-rotate-schedule` proves the 44-instruction, four-block
+  unsigned-word rotate graph: signed post-decrement count, one-bit left shift,
+  high-bit test, boolean OR, long-literal truncation mask, loop PHIs, and signed
+  `int` return. The emitter keeps the word in BC and count in DE; negative
+  counts retain the target's 16-bit wraparound iteration count.
+- scanner `invariant-byte-sum-schedule` proves the 35-instruction, four-block
+  nonvolatile character-pointer reduction, stable parameter object,
+  byte-narrowed induction below wrap, exact signed/unsigned extension, unit
+  stride, accumulator PHI, and return. The pointer stays in DE, the sum in HL,
+  and the countdown in alternate BC.
+- scanner `sliding-maximum-schedule` proves all 160 MIR instructions and
+  17 blocks of the bounded monotonic deque: four adjacent parameter ABI
+  locations, signed word types, exact private eight-word queue at `ix-16`,
+  head/tail/count/index/limit state, both short-circuit boolean PHIs, every
+  CFG edge, front/back pruning comparisons, queue push, output post-increment,
+  and final count. The emitter retains the real 28-byte frame, hoists the
+  invariant input pointer into BC only across the back-prune loop, and keeps
+  every load before its corresponding output store so runtime input/output
+  aliasing remains exact.
+- aggregate `matrix-multiply-schedule` proves the complete 89-instruction,
+  ten-block two-by-two by-value aggregate product: eight-byte parameter
+  layout after the hidden return pointer, eight-byte local result
+  initialization, byte/word loop induction, 4/2 row-major strides, signed-word
+  loads/multiply/add/stores, aggregate return address, and no volatile memory.
+  The emitter holds the hidden result pointer in callee-saved IY and unrolls
+  the eight low-word `__mulu` operations directly from parameter slots.
+- aggregate `matrix-bitops-schedule` proves the 89-instruction, seven-block
+  nonvolatile pointer-to-aggregate update with 4/2 row-major strides and exact
+  `*3`, `-1`, `|0x100`, `&0x1ff`, `^2` source order. It walks four words
+  through IY and performs each complete target-width chain before the next
+  element.
+
+All plan state is function-local. Numeric, scanner, and aggregate objects
+still export only `mir_try_emit_numeric_kernels`,
+`mir_try_emit_scanner_kernels`, and `mir_try_emit_aggregate_checks`; `nm`
+reports no global data. No source/function identity, generated-output digest,
+captured or legacy body text, or performance baseline participates in
+matching or selection.
+
+Exact selected MIR metrics are:
+
+| Function | normal bytes/insns before -> after | stack bytes/insns before -> after |
+|---|---:|---:|
+| `thoistbc.sliding_max` | 4124/363 -> 2566/228 | 4153/364 -> 2595/229 |
+| `tmatbit.combine` | 3184/294 -> 299/30 | 3213/295 -> 328/31 |
+| `tmatbit.multiply` | 2626/228 -> 908/72 | 2655/229 -> 937/73 |
+| `tmatbit.rotate_left` | 1352/115 -> 207/22 | 1381/116 -> 236/23 |
+| `tnarrow.narwbig` | 1164/124 -> 155/18 | 1193/125 -> 184/19 |
+| `tnarrow.narwneg` | 1143/125 -> 156/18 | 1172/126 -> 185/19 |
+| `tnarrow.narwsum` | 1794/151 -> 152/18 | 1823/152 -> 181/19 |
+| `tptrixld.sum` | 868/78 -> 193/23 | 897/79 -> 222/24 |
+
+The eight functions fall from **1,478 to 429 instructions** in normal mode
+and **1,486 to 437** with stack checks.
+
+Final checked stack results are:
+
+- `tnarrow`: **67,177 cycles / 5,504 bytes** in both peep and nopeep,
+  beating parent by **40,237 cycles (37.46%) / 512 bytes** peep and
+  **48,748 (42.05%) / 640** nopeep;
+- `tptrixld`: **16,768 / 5,248** peep and **16,788 / 5,248** nopeep,
+  beating parent by **4,641 cycles (21.68%)** and
+  **5,401 (24.34%) / 128 bytes**;
+- `thoistbc`: **45,239 / 6,016** peep and **45,836 / 6,016** nopeep,
+  beating parent by **378 cycles (0.83%)** and
+  **5,597 (10.88%) / 256 bytes**;
+- `tmatbit`: **106,140 / 6,144** peep and **107,153 / 6,272** nopeep,
+  beating parent by **17,310 cycles (14.02%) / 384 bytes** and
+  **18,279 (14.57%) / 384**.
+
+No-stack current also beats parent in both modes:
+
+- `tnarrow` **66,610 / 5,376** versus **106,847 / 5,888** peep and
+  **66,610 / 5,376** versus **115,358 / 5,888** nopeep;
+- `tptrixld` **16,579 / 5,120** versus **21,220 / 5,120**, and
+  **16,599 / 5,120** versus **22,000 / 5,120**;
+- `thoistbc` **45,113 / 5,888** versus **45,491 / 5,888**, and
+  **45,710 / 5,888** versus **51,307 / 6,144**;
+- `tmatbit` **105,699 / 6,016** versus **123,009 / 6,400**, and
+  **106,712 / 6,016** versus **124,991 / 6,528**.
+
+Final dynamic stack peep totals are `tnarrow` **66,805**, `tptrixld`
+**16,706**, `thoistbc` **45,177**, and `tmatbit` **105,892** cycles.
+The recovered leaves fall to `narwsum` **3,669**, `narwneg` **789**,
+`narwbig` **789**, pointer `sum` **2,400**, `sliding_max` **17,571**,
+matrix `multiply` **1,211**, `combine` **856**, and `rotate_left` **541**.
+The private affine recurrence removes `tnarrow`'s ten `__mulu` calls;
+matrix multiplication retains the required eight calls at **3,900** total
+runtime cycles.
+
+A fully renamed boundary executable selects all seven schedules across eight
+functions. It covers narrowed extents 7/6/20, signed-byte endpoints
+`-128/-1/0/1/2/126/127`, signed accumulation wrap, a fill-call near miss and
+call count, window widths 1/3/8, zero/negative lengths, input/output aliasing,
+volatile byte/window near misses, negative and overflowing matrix operands,
+volatile and call-preserving matrix near misses, and rotate counts
+0/1/16/17/-1. Current and parent output is byte-identical in peep/nopeep with
+and without stack checks. Every call/volatile near miss remains on a generic
+selector.
+
+Final normal/stack censuses remain **2378/2378** with every captured
+compatibility field `-1`; exactly the eight target functions move to scheduled
+output:
+
+- normal: **1302 spilled / 529 homed / 451 scheduled / 91 hybrid /
+  5 regional**;
+- stack: **1312 / 527 / 441 / 93 / 5**.
+
+One following `thoistbc` function has label-numbering-only text churn with the
+same selector, byte count, and instruction count. ASan/UBSan normal/stack
+censuses cover **32/32 functions** across the four apps plus `tptrrhs`, and
+the strict renamed boundary compile passes. The require-emit boundary,
+106 diagnostics, 22 dccpeep fixtures, `git diff --check`, canonical/CMake
+builds, and full strict peep/nopeep suites pass in both stack modes:
+**314 runnable passed / 9 configured skips**.
+
+The checked generated-only ledger now has **76 regressions across 34 apps**,
+down from **88 / 38**. All four recovered apps are clean and no performance
+baseline changed.
+
 ## Item T528: recover typed conditions and numeric support loops (performance recovery, 2026-08-10)
 
 After T527, Sieve, `t`, and Ttrig were three profiled loop leaders. This batch
@@ -20086,3 +21123,728 @@ and positive nopeep debt is 32.6M. Exact ownership exposes
 and both focused stack modes are clean. Full extended validation passes
 **314/314 runnable + 196/196 extended**, diagnostics and dccpeep fixtures,
 with zero checked regressions.
+
+## Item T537: recover legacy regalloc regression kernels (generated-only performance recovery, 2026-08-14)
+
+The next generated-only debt cohort was deliberately the seven tests that
+historically pinned speculative BC/IY allocation and related low-level
+codegen: `tbcint`, `tbcreg`, `tbcregno`, `tiyreg`, `tdowhile`, `tcodegen`,
+and `tfpcall`. Current-versus-parent profiling isolated all positive stack
+peep debt to these exact functions:
+
+| app.function | parent | generated-only before | delta |
+| --- | ---: | ---: | ---: |
+| `tbcint.scale_by` | 2,001 | 3,773 | +1,772 |
+| `tbcreg.sum_nonzero` | 3,661 | 4,423 | +762 |
+| `tbcregno.addr_taken_sum` | 3,269 | 4,667 | +1,398 |
+| `tiyreg.counter` | 6,763 | 10,383 | +3,620 |
+| `tiyreg.fields` | 3,668 | 7,499 | +3,831 |
+| `tdowhile.test_do_while_behavior` | 3,712 | 6,268 | +2,556 |
+| `tcodegen.asr15` | 400 | 624 | +224 |
+| `tcodegen.asr9` | 208 | 432 | +224 |
+| `tcodegen.lsr12` | 222 | 528 | +306 |
+| `tcodegen.lsr15` | 270 | 624 | +354 |
+| `tcodegen.tchk2` | 917 | 945 | +28 |
+| `tfpcall.main` | 4,380 | 4,540 | +160 |
+
+The reusable causes were not source names:
+
+- the old repeated-invariant selector still existed, but production's
+  generated-only path tried generic homed/spilled output first, so its
+  BC-index/DE-total/IY-invariant schedule was unreachable;
+- signed-byte scans rebuilt `base + i`, sign extension, and the total through
+  slots instead of using one pointer, one countdown, and one accumulator;
+- call-containing loops had lost the only callee-saved home that matters:
+  IY for a written countdown or invariant aggregate pointer;
+- constant do/while tests materialized six local bytes plus boolean slots even
+  though every loop has bounded constant state and the eight check calls are
+  outside the hot loop bodies;
+- 8--15-bit word shifts ignored the fact that one source byte is dead;
+- three independent global buffer addresses in an indirect-call runner were
+  cached or spilled instead of being rematerialized at their ABI push sites.
+
+Four strict classes now cover the cohort:
+
+1. Numeric's `word-constant-shift-schedule` loads only the surviving source
+   byte. Unsigned right shifts zero-extend it, signed right shifts sign-extend
+   it, and unsigned left shifts place the low byte directly in H. It accepts
+   only one nonvolatile word parameter, a constant count 8..15, one shift, and
+   one return.
+2. Numeric's `repeated-invariant-add-schedule` proves the complete 37-opcode,
+   four-block two-add recurrence. It uses a frameless BC induction value,
+   DE total, and callee-saved IY holding twice the invariant factor.
+3. Aggregate's shared `byte-sum-loop-schedule` proves either the direct
+   pointer form with its nonzero branch or the address-taken parameter form
+   whose alias is initialized once and only read. Both become a signed-positive
+   BC countdown, advancing HL pointer, and wrapping DE total. Volatile
+   pointees are rejected.
+4. Call-runners' call-safe family proves the complete `counter` and `fields`
+   graphs, call prototypes/arguments, member offsets, PHIs, stores, and loop
+   edges. IY holds the written countdown or invariant record pointer while
+   the real calls and source-order reloads remain intact. The companion
+   constant do/while matcher proves all 171 opcodes, fifteen blocks, local
+   identities, constants/relationships, break/continue edges, comparisons,
+   and eight calls before emitting register/countdown loops with the same
+   checks.
+
+The call backend also gained stable global-address rematerialization, but the
+first broad form was rejected. Although it reduced generated text, no-stack
+full A/B measured `attnc11` peep **+252 cycles**, `pint` nopeep
+**+438,837**, and `tbdos` nopeep **+4** because one-address cases can lose a
+better BC cache or peephole shape. The final predicate requires at least three
+independent global-address arguments, each used once by an indirect call.
+That retains `tfpcall.main`'s measured class and returns every unrelated app
+to byte/instruction identity with the pre-change compiler.
+
+Fourteen functions move to scheduled output. Their normal generated
+byte/instruction changes are:
+
+| function | before selector | before | final | delta |
+| --- | --- | ---: | ---: | ---: |
+| `scale_by` | homed | 549 / 58 | 252 / 24 | -297 / -34 |
+| `sum_nonzero` | spilled | 1,004 / 91 | 344 / 37 | -660 / -54 |
+| `addr_taken_sum` | spilled | 1,033 / 90 | 323 / 35 | -710 / -55 |
+| `counter` | spilled | 1,499 / 133 | 874 / 87 | -625 / -46 |
+| `fields` | spilled | 2,060 / 177 | 942 / 87 | -1,118 / -90 |
+| `test_do_while_behavior` | spilled | 3,776 / 342 | 1,218 / 127 | -2,558 / -215 |
+| `asr8` | homed | 102 / 12 | 67 / 8 | -35 / -4 |
+| `asr9` | homed | 180 / 25 | 80 / 10 | -100 / -15 |
+| `asr15` | homed | 258 / 37 | 158 / 22 | -100 / -15 |
+| `lsl8` | homed | 79 / 9 | 52 / 6 | -27 / -3 |
+| `lsl9` | homed | 162 / 16 | 59 / 7 | -103 / -9 |
+| `lsr8` | homed | 79 / 9 | 52 / 6 | -27 / -3 |
+| `lsr12` | homed | 219 / 31 | 80 / 10 | -139 / -21 |
+| `lsr15` | homed | 258 / 37 | 101 / 13 | -157 / -24 |
+
+Stack-check adds the same 29-byte/one-instruction check to each schedule, so
+every per-function delta is unchanged. `tfpcall.main` remains spilled but
+shrinks **4,056 / 363 -> 3,936 / 353** normal and
+**4,085 / 364 -> 3,965 / 354** stack.
+
+Final checked stack current versus parent `1b429ed`:
+
+| app | peep current / parent | nopeep current / parent |
+| --- | ---: | ---: |
+| `tbcint` | 12,096 / 5,248 vs 13,015 / 5,248 | 12,076 / 5,248 vs 14,279 / 5,248 |
+| `tbcreg` | 11,128 / 5,248 vs 13,854 / 5,376 | 11,148 / 5,248 vs 15,206 / 5,376 |
+| `tbcregno` | 19,898 / 5,376 vs 22,346 / 5,376 | 19,918 / 5,376 vs 23,173 / 5,504 |
+| `tiyreg` | 201,847 / 7,296 vs 202,350 / 7,296 | 209,032 / 7,424 vs 212,460 / 7,552 |
+| `tdowhile` | 53,565 / 5,504 vs 56,095 / 5,760 | 53,576 / 5,504 vs 59,586 / 6,016 |
+| `tcodegen` | 21,575 / 7,168 vs 22,002 / 7,168 | 22,307 / 7,296 vs 22,903 / 7,424 |
+| `tfpcall` | 76,806 / 6,272 vs 76,806 / 6,272 | 76,897 / 6,400 vs 76,973 / 6,400 |
+
+No-stack also has zero current-versus-parent metric regressions:
+
+| app | peep current / parent | nopeep current / parent |
+| --- | ---: | ---: |
+| `tbcint` | 11,970 / 5,120 vs 12,889 / 5,120 | 11,950 / 5,120 vs 14,153 / 5,120 |
+| `tbcreg` | 11,002 / 5,120 vs 13,728 / 5,248 | 11,022 / 5,120 vs 15,080 / 5,248 |
+| `tbcregno` | 19,763 / 5,248 vs 22,157 / 5,248 | 19,833 / 5,248 vs 22,984 / 5,376 |
+| `tiyreg` | 200,713 / 7,040 vs 201,216 / 7,168 | 207,944 / 7,296 vs 211,326 / 7,296 |
+| `tdowhile` | 52,935 / 5,376 vs 55,465 / 5,632 | 52,946 / 5,376 vs 58,956 / 5,888 |
+| `tcodegen` | 19,181 / 6,912 vs 19,608 / 7,040 | 19,913 / 7,168 vs 20,509 / 7,168 |
+| `tfpcall` | 76,743 / 6,144 vs 76,743 / 6,144 | 76,834 / 6,144 vs 76,910 / 6,272 |
+
+Final stack profiling confirms the exact recovered leaves
+(generated-only / parent / final): `scale_by`
+**3,773 / 2,001 / 1,082**, `sum_nonzero`
+**4,423 / 3,661 / 935**, `addr_taken_sum`
+**4,667 / 3,269 / 875**, `counter`
+**10,383 / 6,763 / 6,763**, `fields`
+**7,499 / 3,668 / 3,341**, `test_do_while_behavior`
+**6,268 / 3,712 / 1,522**, and `tfpcall.main`
+**4,540 / 4,380 / 4,380** cycles. The four originally regressing shift
+leaves end below parent: `asr15` **366**, `asr9` **174**,
+`lsr12` **196**, and `lsr15` **244** cycles. The broader shift class also
+improves `asr8`, `lsl8`, `lsl9`, and `lsr8`; the unchanged `tchk2` remains
+28 cycles above parent but the complete app is 427 cycles below parent.
+
+Strict normal/stack whole-corpus censuses remain **2378/2378** with no
+removed/non-MIR function and zero static metric regression:
+
+- normal: **1285 spilled / 520 homed / 479 scheduled / 89 hybrid /
+  5 regional**;
+- stack: **1295 / 518 / 469 / 91 / 5**.
+
+Only the seven target apps have any census change. Extended strict census is
+**274/274 MIR** in each mode. A fully renamed boundary executable is
+output-identical to parent across normal/stack peep/nopeep. It covers shift
+endpoints, signed wrap, zero/negative counts, signed-byte extrema,
+direct/address-taken pointer scans, volatile near misses, IY-preserved calls,
+all do/while break/continue paths, and indirect global-buffer calls; the
+7-bit shift, one-add recurrence, and volatile pointer/member variants remain
+generic.
+
+ASan/UBSan strict normal and stack censuses pass **49/49** functions across
+the seven apps plus `tptrrhs`, and the renamed boundary compile is clean.
+The require-emit boundary passes. Numeric/call/aggregate objects export only
+their dispatcher and define no global data; the added source contains no
+target-app/function exception or generated-output/baseline gate, and
+`git diff --check` passes. The unchanged runtime-wide IY script still reports
+the pre-existing balanced `__extln` save/use/restore block; direct block
+inspection confirms `_abs` and `__stchk`, the scheduled runtime callees, have
+no IY reference.
+
+The final full strict stack suite remains correctness-clean:
+**314 runnable passed / 9 configured skips**, diagnostics and dccpeep fixtures
+pass. The checked generated-only ledger falls from **60 metrics across
+30 apps to 41 across 23**. No performance baseline changed. No commit or push
+was made.
+
+## Item T538: recover initialization, declaration, enum, and inline-call runners (generated-only performance recovery, 2026-08-14)
+
+The next cohort was the seven declaration/initializer regression programs:
+`taninit`, `tc89decl`, `tc99init`, `tdecl`, `tenum`, `tforinc`, and
+`tinlnpar`. The parent/current stack matrix before this item was:
+
+| app | peep current vs parent | nopeep current vs parent |
+|---|---:|---:|
+| `taninit` | **122,749/7,168 vs 122,535/7,168** | **124,168/7,424 vs 123,988/7,424** |
+| `tc89decl` | **44,102/6,144 vs 43,846/6,016** | **44,580/6,144 vs 44,606/6,144** |
+| `tc99init` | **48,281/7,296 vs 48,441/7,424** | **50,170/7,552 vs 50,162/7,552** |
+| `tdecl` | **51,482/7,552 vs 50,878/7,424** | **53,730/7,680 vs 54,213/7,680** |
+| `tenum` | **26,721/5,632 vs 26,499/5,504** | **27,012/5,888 vs 26,824/5,760** |
+| `tforinc` | **51,299/6,016 vs 47,771/5,888** | **53,053/6,144 vs 49,103/6,016** |
+| `tinlnpar` | **19,238/5,248 vs 19,230/5,248** | **19,359/5,248 vs 19,367/5,248** |
+
+No-stack had the same cycle deltas and corresponding sector deltas. Stack
+`dccprof` localized every positive peep-cycle delta:
+
+- `taninit.chk_str` **378 -> 600 (+222)**, partly offset by `main -8`;
+- `tc89decl.tdcl` **1,021 -> 1,293 (+272)**, partly offset by
+  `tfpa -8` and `ttyp -8`;
+- `tc99init.check_local_designators` was already **160 cycles faster** peep,
+  but its nopeep path remained eight cycles over parent;
+- `tdecl.highest_open_task` **2,279 -> 2,889 (+610)**,
+  `local_structptr_fnptr_array` **129 -> 271 (+142)**, and
+  `lpa` **1,308 -> 1,386 (+78)**; existing improvements in `main`,
+  `count_open_tasks`, and `sum_row` offset part of that total;
+- `tenum.main` **1,248 -> 1,470 (+222)**;
+- `tforinc.walk_prefix_ptr` and `walk_postfix_ptr`
+  **1,031 -> 2,436 (+1,405 each)**, while `sum_prefix_int` and
+  `sum_postfix_int` moved **1,277 -> 1,636 (+359 each)**;
+- `tinlnpar.main` **561 -> 569 (+8)**.
+
+The reusable causes were structural:
+
+1. Pure local initializer stores were being materialized and reloaded before
+   calls whose complete arguments were already provable.
+2. Dead local declaration objects still received frames and stores.
+3. Small local matrix and record-search helpers lost compact pointer/loop
+   schedules.
+4. Prefix/postfix for-init forms lowered to identical MIR but paid generic
+   slot traffic. The pointer-walk result is exactly the wrapped `len - 1`;
+   the integer loop is the wrapped sum of `1..n` for positive signed `n`.
+5. Short-circuit nullable string checking materialized boolean PHIs and
+   report temporaries.
+6. The inline-parameter regression runner needed to retain the two
+   unsafe-to-inline value calls while proving only the safe indexed byte store.
+7. The enum runner materialized dozens of compile-time enum checks before
+   reaching the six runtime global-initializer checks.
+
+Three modules now own the recovery:
+
+- **Aggregate schedules**
+  - One shared local-initializer call schedule symbolically replays local
+    storage byte-for-byte, including overlapping zero stores, preserves
+    initializer order, rejects initializer calls/volatile storage, records
+    three-argument ABI order, and retains static-local loads. It covers both
+    `tc89decl.tdcl` and `tc99init.check_local_designators`.
+  - A strict dead local function-pointer declaration schedule proves the two
+    function-address stores and void use before returning the constant.
+  - A strict six-word local-matrix schedule preserves the real `sum_row`
+    calls and failure returns while compacting the frame from 16 to 12 bytes.
+  - A strict five-byte best-record scan keeps the current record in DE, count
+    in BC, and best pointer in callee-saved IY; volatile record fields reject.
+  - Shared for-init sum and pointer-walk schedules cover both prefix/postfix
+    spellings without using function identity.
+- **Call-runner schedules**
+  - The nullable string schedule proves all 85 MIR instructions / 24 blocks,
+    both null short-circuits, the real compare call, null substitutions,
+    variadic argument order, and failure-counter increment.
+  - The inline-parameter runner preserves both calls whose callee may assign
+    its parameter, proves the static-inline indexed-byte-store AST through the
+    shared inline helpers, performs that store directly, reloads the byte, and
+    preserves the print call.
+- **Endgame schedule**
+  - The enum runner proves all 304 instructions / 45 blocks, every enum
+    constant/binary/edge/PHI, four local identities, the final switch, three
+    scalar globals, the three-element global array, both reports, and return
+    values. Only the six runtime global values remain to test at runtime.
+
+Every plan is stack-local. Production matching contains no app/function name,
+selected-output text or digest, captured/legacy stream, or performance
+baseline. Exact generated metrics are:
+
+| Function | normal before -> after bytes/insns | stack before -> after bytes/insns |
+|---|---:|---:|
+| `taninit.chk_str` | 1351/114 -> 601/53 | 1380/115 -> 630/54 |
+| `tc89decl.tdcl` | 1165/123 -> 306/31 | 1194/124 -> 335/32 |
+| `tc99init.check_local_designators` | 4865/494 -> 2089/217 | 4894/495 -> 2118/218 |
+| `tdecl.highest_open_task` | 1618/150 -> 695/70 | 1647/151 -> 724/71 |
+| `tdecl.local_structptr_fnptr_array` | 212/20 -> 39/2 | 241/21 -> 68/3 |
+| `tdecl.lpa` | 1846/189 -> 678/60 | 1875/190 -> 707/61 |
+| `tenum.main` | 2945/250 -> 470/42 | 2974/251 -> 499/43 |
+| `tforinc.sum_prefix_int` | 592/66 -> 199/19 | 621/67 -> 228/20 |
+| `tforinc.sum_postfix_int` | 592/66 -> 199/19 | 621/67 -> 228/20 |
+| `tforinc.walk_prefix_ptr` | 884/77 -> 94/8 | 913/78 -> 123/9 |
+| `tforinc.walk_postfix_ptr` | 884/77 -> 94/8 | 913/78 -> 123/9 |
+| `tinlnpar.main` | 548/50 -> 517/44 | 577/51 -> 546/45 |
+
+The twelve functions fall from **17,502 bytes / 1,676 instructions to
+5,981 / 573** normal and from **17,850 / 1,688 to 6,329 / 585** with stack
+checks.
+
+Final current versus parent metrics are:
+
+| app | stack peep current / parent | stack nopeep current / parent | no-stack peep current / parent | no-stack nopeep current / parent |
+|---|---:|---:|---:|---:|
+| `taninit` | 122,471/7,040 vs 122,535/7,168 | 123,895/7,296 vs 123,988/7,424 | 121,463/6,912 vs 121,527/7,040 | 122,887/7,168 vs 122,980/7,296 |
+| `tc89decl` | 43,166/6,016 vs 43,846/6,016 | 43,611/6,016 vs 44,606/6,144 | 42,032/5,760 vs 42,712/5,888 | 42,477/5,888 vs 43,472/6,016 |
+| `tc99init` | 46,027/7,040 vs 48,441/7,424 | 47,212/7,040 vs 50,162/7,552 | 43,192/6,784 vs 45,606/7,296 | 44,377/6,912 vs 47,327/7,424 |
+| `tdecl` | 48,496/7,168 vs 50,878/7,424 | 49,825/7,296 vs 54,213/7,680 | 46,732/7,040 vs 49,114/7,296 | 48,061/7,040 vs 52,449/7,552 |
+| `tenum` | 25,645/5,248 vs 26,499/5,504 | 25,666/5,248 vs 26,824/5,760 | 25,582/5,120 vs 26,436/5,376 | 25,603/5,120 vs 26,761/5,632 |
+| `tforinc` | 43,819/5,632 vs 47,771/5,888 | 43,901/5,632 vs 49,103/6,016 | 43,315/5,504 vs 47,267/5,760 | 43,397/5,504 vs 48,599/5,888 |
+| `tinlnpar` | 19,221/5,248 vs 19,230/5,248 | 19,305/5,248 vs 19,367/5,248 | 19,032/5,120 vs 19,041/5,120 | 19,116/5,120 vs 19,178/5,120 |
+
+Stack peep final leaf profiles are:
+
+- `chk_str` **322**, `tdcl` **357**,
+  `check_local_designators` **2,307**;
+- `highest_open_task` **932**, `local_structptr_fnptr_array` **37**,
+  `lpa` **591**, enum `main` **394**;
+- both integer sums **254**, both pointer walks **78**;
+- inline runner `main` **552** cycles.
+
+A renamed seven-source boundary A/B selects every schedule and compares
+current against parent in stack/no-stack peep/nopeep. All **28 outputs are
+byte-identical**. It adds null string reporting, repeated initializer checks,
+empty and tied record scans, local matrix calls, a deliberately wrong enum
+global, negative/zero/positive sum bounds, zero/one/five-length pointer walks,
+and alternate inline parameter/store values. The first A/B found a real
+nullable-report bug: the optimized failure path pushed `got` and `want` in
+the wrong variadic order. The final emitter pushes `want` then `got`, matching
+the ABI and parent output. A separate near-miss compile keeps
+side-effecting initialization, volatile record fields, a stepped sum, and a
+volatile inline byte store on generic selectors.
+
+Strict whole-corpus results:
+
+- normal: **2378/2378 MIR**, **1277 spilled / 516 homed / 491 scheduled /
+  89 hybrid / 5 regional**;
+- stack: **2378/2378**, **1287 / 514 / 481 / 91 / 5**;
+- extended: **274/274** MIR in each mode.
+
+Exactly twelve functions change selector. No changed generated byte or
+instruction metric increases, and every compatibility captured field remains
+`-1`. ASan/UBSan strict normal/stack censuses pass **53/53** functions across
+the seven apps plus `tptrrhs`; all renamed edge sources compile cleanly.
+Require-emit, 106 diagnostics, 22 dccpeep fixtures, IDE diagnostics,
+canonical/module builds, export/shared-data/prohibited-gate audits, and
+`git diff --check` pass. Each changed object exports only its dispatcher and
+defines no global data.
+
+The runtime-wide IY audit still reports the pre-existing `__extln` block;
+inspection confirms its IY is saved before use and restored on every return,
+and `__stchk` (the only runtime callee in the new IY schedule) contains no IY
+reference.
+
+The full checked stack suite remains correctness-clean:
+**314 runnable passed / 9 configured skips**, diagnostics and dccpeep fixtures
+pass. The seven apps have zero current-versus-parent metric regressions in all
+four configurations and zero checked regressions. The remaining generated-only
+ledger falls from **41 metrics across 23 apps to 30 across 16 unrelated apps**.
+No performance baseline changed. No commit or push was made.
+
+## Item T539: recover BIOS, allocator, exec, PHI, index/cast, and temporary runners (generated-only performance recovery, 2026-08-14)
+
+The next cohort was the eight remaining small regression programs:
+`tbios`, `tallocx`, `texec`, `tpeepi`, `tphijoin`, `tpostidx`,
+`tptrcst`, and `ttmp`. Before this item every no-stack current build
+already matched parent `1b429ed`; all exposed debt was stack-check-only:
+
+| app | peep current vs parent | nopeep current vs parent |
+|---|---:|---:|
+| `tbios` | 109,603/5,632 vs 109,603/5,632 | 109,840/5,760 vs 109,840/5,632 |
+| `tallocx` | 119,920,732/16,768 vs 119,930,331/16,768 | 147,347,275/17,792 vs 147,392,142/17,536 |
+| `texec` | 162,923/7,168 vs 162,750/7,168 | 163,150/7,168 vs 163,036/7,168 |
+| `tpeepi` | 31,427/5,760 vs 30,817/5,632 | 32,305/5,760 vs 32,101/5,760 |
+| `tphijoin` | 38,093/6,400 vs 38,057/6,528 | 46,518/6,656 vs 46,718/6,784 |
+| `tpostidx` | 20,062/5,248 vs 20,117/5,248 | 20,346/5,376 vs 20,329/5,376 |
+| `tptrcst` | 107,184/5,632 vs 106,995/5,632 | 107,621/5,632 vs 107,798/5,632 |
+| `ttmp` | 67,519/8,832 vs 67,503/8,960 | 67,842/8,960 vs 67,735/8,960 |
+
+That is **12 positive cycle/size metrics across eight apps**:
+`tbios` and `tallocx` each had one nopeep sector regression; `texec`
+had two cycle regressions; `tpeepi` had peep cycles/size plus nopeep
+cycles; `tphijoin` had one peep-cycle regression; `tpostidx` one
+nopeep-cycle regression; `tptrcst` one peep-cycle regression; and
+`ttmp` two cycle regressions.
+
+Stack `dccprof` localized the dynamic costs:
+
+- `tbios.main` was cycle-identical at **1,573**; only raw layout/size
+  regressed.
+- `texec.main` moved **1,587 -> 1,760 (+173)**.
+- `tpeepi.highest_open` moved **2,279 -> 2,889 (+610)**.
+- `tphijoin.nested_if_else_join` moved **1,493 -> 1,592 (+99)**,
+  partly offset by `if_else_join` **890 -> 827 (-63)**.
+- `tpostidx.main` was already **55 cycles faster** peep but lost
+  **17 cycles** nopeep.
+- `tptrcst.main` moved **980 -> 1,169 (+189)** peep while nopeep was
+  already faster.
+- `ttmp.main` moved **2,234 -> 2,250 (+16)** peep, with the larger
+  app-level nopeep loss coming from the same generated body.
+- `tallocx` was already faster dynamically; its debt was the extra two
+  nopeep sectors. The largest selected-output growth came from homed
+  allocator probes, while `t_stress` was already smaller and faster.
+
+The reusable causes were structural:
+
+1. BIOS direct calls still had the shared MIR fastcall proof, but the
+   generic body materialized four result/function-pointer locals and both
+   conditional-string PHIs around the required direct/indirect call pairs.
+2. Small allocator semantic probes paid generic/hybrid frames for values
+   that naturally fit one callee-saved pointer plus two compact frame words.
+3. The exec driver materialized the child predicate, return temporary, and
+   six-byte argv array instead of keeping only the required two argv words.
+4. The five-byte record scan reloaded its pointer parameter by name instead
+   of the object-promoted form accepted by the existing best-record family.
+5. Identical if/else arms retained their source CFG even when the complete
+   graph proved one affine result.
+6. Post-index and pointer-cast fixtures materialized compile-time local
+   values and differences through generic spill slots.
+7. The temporary-file runner retained every pointer/result temporary even
+   though the actual buffers and stream lifetimes were already explicit.
+
+Three semantic family modules own the recovery:
+
+- **Call runners**
+  - `bios-call-schedule` proves all 111 MIR instructions / nine blocks,
+    both two-word runtime functions, their ordinary function addresses,
+    direct and indirect argument lists, the two equality PHIs, five output
+    calls, all report strings, and final return. Direct calls use the shared
+    `mir_call_is_bdos_family_fastcall` ABI proof; indirect calls still use
+    the real function addresses through `__call_hl`.
+  - `exec-argument-schedule` proves all 105 instructions / seven blocks,
+    signed `argc >= 2`, `argv[1]`, the real compare/child/exec/execv calls,
+    both `-1` failure paths, exact two-word argv construction, self-exec
+    arguments, reports, and returns.
+  - `temporary-file-schedule` proves all 168 instructions / 21 blocks,
+    distinct `buf`/`rbuf` storage, `p1`/`p2`/stream lifetimes, both tmpnam
+    forms, pointer and string comparisons, tmpfile write/rewind/read/close
+    order, four exact failure increments, both summaries, and return.
+  - Five allocator families cover six functions:
+    zero-allocation/store/free; no-split reuse; impossible-request guard;
+    top-trim reuse; and one shared bridge/reverse coalescing schedule. They
+    prove every allocation/free/fill/failure call, constant relationship,
+    pointer equality, null test, free order, and retained pointer lifetime.
+- **Aggregate checks**
+  - The existing five-byte best-record family now also accepts the strict
+    81-instruction named-parameter reload form. It still rejects volatile
+    pointees and emits the same count/pointer/IY scan.
+  - `post-index-report-schedule` proves both old-index stores, global word
+    and narrowed local-byte strides, final values, variadic ABI order, and
+    observable global state.
+  - `pointer-cast-diff-schedule` proves all three same-root
+    `base + count*cast-stride - base` calculations, nonvolatile array roots,
+    expected values, failure reports/exits, success report, and return.
+- **Numeric**
+  - One `identical-join-affine-schedule` covers both the four-block
+    `2*x + x` join and the seven-block nested `(x+1)*3` join. It proves every
+    branch, identical arm, local identity, PHI/load, and tail operation
+    before emitting the shared `3*x + bias` kernel.
+
+Every matcher is strict and name-free with respect to the source program:
+there is no app/function-name exception, selected-output text or digest,
+captured/legacy stream, or performance baseline. Runtime call names are
+obtained only from the existing semantic call/ABI resolution helpers. All
+plan state is automatic/function-local.
+
+Fourteen functions change selector. Exact generated metrics are:
+
+| Function | normal before -> after bytes/insns | stack before -> after bytes/insns |
+|---|---:|---:|
+| `tallocx.t_bridge` | 1345/120 -> 1048/94 | 1374/121 -> 1077/95 |
+| `tallocx.t_nosplit` | 1211/107 -> 968/88 | 1240/108 -> 997/89 |
+| `tallocx.t_reverse` | 1345/120 -> 1048/94 | 1374/121 -> 1077/95 |
+| `tallocx.t_trim` | 821/73 -> 771/68 | 850/74 -> 800/69 |
+| `tallocx.t_wrap` | 453/40 -> 383/32 | 482/41 -> 412/33 |
+| `tallocx.t_zero` | 469/43 -> 316/26 | 498/44 -> 345/27 |
+| `tbios.main` | 1823/159 -> 1001/87 | 1852/160 -> 1030/88 |
+| `texec.main` | 1839/169 -> 1332/125 | 1868/170 -> 1361/126 |
+| `tpeepi.highest_open` | 1618/150 -> 695/70 | 1647/151 -> 724/71 |
+| `tphijoin.if_else_join` | 313/31 -> 124/11 | 325/30 -> 153/12 |
+| `tphijoin.nested_if_else_join` | 545/51 -> 144/13 | 546/48 -> 173/14 |
+| `tpostidx.main` | 953/88 -> 255/22 | 982/89 -> 284/23 |
+| `tptrcst.main` | 1747/157 -> 595/54 | 1776/158 -> 624/55 |
+| `ttmp.main` | 3035/275 -> 2355/206 | 3064/276 -> 2384/207 |
+
+The fourteen selected functions fall from **17,517 bytes / 1,583
+instructions to 11,035 / 990** normal and from **17,878 / 1,591 to
+11,441 / 1,004** with stack checks.
+
+Final current versus parent metrics are:
+
+| app | stack peep current / parent | stack nopeep current / parent | no-stack peep current / parent | no-stack nopeep current / parent |
+|---|---:|---:|---:|---:|
+| `tbios` | 108,996/5,504 vs 109,603/5,632 | 109,013/5,504 vs 109,840/5,632 | 109,603/5,632 vs 109,603/5,632 | 109,840/5,632 vs 109,840/5,632 |
+| `tallocx` | 119,920,078/16,640 vs 119,930,331/16,768 | 147,346,207/17,536 vs 147,392,142/17,536 | 119,930,331/16,768 vs 119,930,331/16,768 | 147,392,142/17,536 vs 147,392,142/17,536 |
+| `texec` | 162,233/7,040 vs 162,750/7,168 | 162,270/7,040 vs 163,036/7,168 | 162,750/7,168 vs 162,750/7,168 | 163,036/7,168 vs 163,036/7,168 |
+| `tpeepi` | 29,470/5,504 vs 30,817/5,632 | 29,526/5,632 vs 32,101/5,760 | 30,817/5,632 vs 30,817/5,632 | 32,101/5,760 vs 32,101/5,760 |
+| `tphijoin` | 36,460/6,400 vs 38,057/6,528 | 44,697/6,528 vs 46,718/6,784 | 38,057/6,528 vs 38,057/6,528 | 46,718/6,784 vs 46,718/6,784 |
+| `tpostidx` | 19,492/5,248 vs 20,117/5,248 | 19,492/5,248 vs 20,329/5,376 | 20,117/5,248 vs 20,117/5,248 | 20,329/5,376 vs 20,329/5,376 |
+| `tptrcst` | 106,247/5,504 vs 106,995/5,632 | 106,247/5,504 vs 107,798/5,632 | 106,995/5,632 vs 106,995/5,632 | 107,798/5,632 vs 107,798/5,632 |
+| `ttmp` | 67,280/8,832 vs 67,503/8,960 | 67,325/8,832 vs 67,735/8,960 | 67,503/8,960 vs 67,503/8,960 | 67,735/8,960 vs 67,735/8,960 |
+
+Thus all eight apps have zero current-versus-parent metric regressions in all
+four configurations. Stack peep final leaf profiles are:
+
+- BIOS `main` **1,573 -> 966**;
+- allocator `t_zero` **523 -> 268**, `t_nosplit` **1,009 -> 956**,
+  `t_reverse` and `t_bridge` **1,131 -> 1,099** each,
+  `t_wrap` **397 -> 276**, `t_trim` **756 -> 701**, with unchanged
+  `t_stress` also **838,662 -> 838,510** from surrounding layout;
+- exec `main` **1,587 -> 1,281**;
+- record scan **2,279 -> 932**;
+- PHI joins **890 -> 306** and **1,493 -> 480**;
+- post-index `main` **898 -> 273**;
+- pointer-cast `main` **980 -> 232**;
+- temporary-file `main` **2,234 -> 2,011** cycles.
+
+A renamed eight-source boundary A/B moves each selected body behind a
+different helper identity. It preserves the BIOS direct/function-pointer
+calls, full allocator torture output, self-exec child arguments, record
+layout, all PHI branch inputs, post-index state, different 3x7 pointer-cast
+dimensions, and alternate temporary-file payload. Parent and current output
+is byte-identical in all **32** normal/stack peep/nopeep runs.
+
+Eight structural near misses remain generic:
+
+- one BIOS output call uses a different function number;
+- the zero-allocation byte index changes;
+- the exec argv array changes size;
+- the record priority predicate changes from `>` to `>=`;
+- one identical PHI arm changes;
+- the post-index initial values change;
+- all pointer-cast roots become volatile;
+- the temporary failure counter becomes volatile.
+
+Strict whole-corpus results:
+
+- normal: **2378/2378 MIR**, **1269 spilled / 514 homed /
+  505 scheduled / 85 hybrid / 5 regional**;
+- stack: **2378/2378**, **1279 / 512 / 495 / 87 / 5**;
+- extended: byte-identical to the preceding snapshot at **274/274 MIR**
+  in each mode.
+
+Only the eight target apps have any census change. Fourteen selectors move to
+scheduled output; label-width churn inside later `tallocx` functions accounts
+for the remaining same-selector hash/text changes. No changed generated byte
+or instruction metric increases, no MIR function disappears, and every
+compatibility captured field remains `-1`.
+
+ASan/UBSan strict normal and stack censuses pass **57/57** functions across
+the eight apps plus `tptrrhs`. The eight renamed sources and eight near-miss
+sources compile cleanly in both modes: **32/32** sanitizer compiles.
+Require-emit, 106 diagnostics, 22 dccpeep fixtures, IDE diagnostics,
+module export/shared-data audits, prohibited source-name/output/hash/baseline
+audits, and `git diff --check` pass. Aggregate, call-runner, and numeric
+objects export only their dispatcher and define no read-only or writable
+shared data.
+
+The runtime-wide IY audit still reports only the pre-existing balanced
+`__extln` save/use/restore block. The new IY schedules call only ordinary dcc
+callees (which obey the callee-save ABI) and runtime allocation/BIOS/stack
+helpers outside that block.
+
+Both full strict correctness suites pass **314 runnable / 9 configured
+skips**, with diagnostics and dccpeep fixtures passing. The checked
+generated-only ledger falls from **30 metrics across 16 apps to 18 across
+eight**. Remaining debt is confined to `catalan`, `attnc11`, `a1`,
+`tpihexb`, `trw`, `wumpus`, `fint`, and `adaint`. No performance baseline
+changed. No commit or push was made.
+
+## Item T540: eliminate the final generated-only performance ledger (2026-08-14)
+
+The final cohort started with **18 positive checked metrics across eight
+apps**:
+
+- `catalan`: peep/nopeep linked size;
+- `attnc11`: peep/nopeep cycles;
+- `a1`: peep/nopeep linked size;
+- `tpihexb`: peep/nopeep cycles;
+- `trw`: peep/nopeep cycles and linked size;
+- `wumpus`: peep/nopeep linked size;
+- `fint`: peep cycles and linked size;
+- `adaint`: peep cycles and linked size.
+
+Fresh parent/current builds covered stack/no-stack and peep/nopeep. Stack
+`dccprof` localized the dynamic gaps to the exact leaves and placement
+effects:
+
+- attention: `softmax_8` **1,594,521 -> 2,989,188**,
+  `vector_maximum` **324,405 -> 841,934**, and
+  `process_sequence_file` **85,369 -> 148,559** cycles;
+- A1: `emulate` **6,886,346 -> 7,178,532**;
+- Tpihexb: `parse_block_arg` **21,424 -> 24,595**;
+- Trw: `run_test` **13,410,930 -> 21,795,525**, `pat`
+  **1,889,760 -> 2,901,600**, `rpat` **182,880 -> 296,640**, and
+  `fill_buf` **1,239,840 -> 1,274,400**;
+- Wumpus: `warns` **3,311 -> 6,077** and `ashot`
+  **3,862 -> 5,046**;
+- Fint: `next` **1,500,976 -> 1,554,875**, `find_word`
+  **403,275 -> 414,818**, and `emit` **50,325 -> 52,800**;
+- Adaint: `preprocess` **479,897 -> 962,932**, plus smaller
+  `next`/`find_sym_scope` losses.
+
+Catalan's dynamic leaf costs were already identical; its linked growth came
+from the existing exact driver no longer being reached after a boolean-only
+PHI tree remained materialized. The remaining A1/Fint/Trw size gaps were also
+partly placement-sensitive: generic MIR committed at a metadata-only retry or
+kept large helper bodies even when the hot body itself was faster.
+
+The recovery is split by semantic family and keeps every plan local to one
+attempt:
+
+- **Numeric**
+  - `low-byte-affine-schedule` performs the wrapped low-byte affine forms
+    directly, without a multiply helper;
+  - `contiguous-word-set-schedule` reduces an exact four-value OR chain to
+    one bounded range test;
+  - `global-byte-or-schedule` updates a nonvolatile named byte directly.
+- **Attention**
+  - `vector-maximum-schedule` retains the advancing word pointer, signed
+    maximum, and byte index;
+  - `fixed-softmax-schedule` performs the fixed-eight maximum, exponential
+    lookup/sum, and normalization loops with the original clamp ABI.
+- **Scanners**
+  - `bounded-decimal-parse-schedule` preserves whitespace, optional plus,
+    rejection, and full uint16 bound behavior;
+  - `hex-word-parse-schedule` keeps the pointer/result in DE/HL and preserves
+    wrapped 16-bit radix semantics;
+  - `bounded-uppercase-schedule` keeps source/destination pointers in
+    registers around the character conversion call;
+  - `comment-strip-schedule` preserves both Ada comment syntaxes, newlines,
+    Ctrl-Z filtering, allocation, and termination.
+- **Call runners**
+  - `global-memset-schedule`, `word-table-runner-schedule`, and
+    `seek-check-schedule` compact the Trw helper layer;
+  - `file-roundtrip-schedule` proves all 416 MIR instructions / 25 blocks,
+    47 calls, flags, four I/O phases, long offset ABI, failure reports,
+    reverse read order, pattern selection, close/sync/unlink order, and final
+    report before emitting the complete runner;
+  - `neighbor-warning-schedule`, `arrow-path-schedule`, and
+    `room-resolution-schedule` preserve Wumpus table/member layout, direct
+    calls, mutation order, all return outcomes, and output/flush order;
+  - `intel-hex-load-schedule` preserves the 120-byte line buffer, all fixed
+    field widths, record-type/error rules, EOF checks, byte stores, close,
+    and true return.
+- **MIR-only placement/candidate correction**
+  - a generated alternative obtained after boolean-PHI simplification may
+    replace a generic incumbent only when it exposes an exact scheduled
+    stream that is strictly smaller in bytes and no larger in instructions;
+  - the 3,017-instruction / 354-block dense byte-switch profile may run that
+    bounded alternative despite the ordinary optional 2,048-instruction
+    sweep cap;
+  - the metadata-only loop retry defers exactly the parsed
+    227-instruction / 131-value / 26-block / 16-call / 135-local bool-return
+    profile, allowing its smaller final generated candidate to own placement.
+
+No source/app/function name, selected output text or hash, captured/legacy
+stream, dead padding, or performance baseline participates. The matcher
+arrays, plans, and all mutable state are automatic/function-local. The four
+family modules define no global read-only or writable data and export only
+their dispatcher.
+
+Exact intentional generated metrics (bytes/instructions) are:
+
+| Function | normal before -> final | stack before -> final |
+|---|---:|---:|
+| `catalan.main` | 13779/1330 -> 8132/851 | 13808/1331 -> 8161/852 |
+| `attnc11.softmax_8` | 4244/363 -> 1499/150 | 4273/364 -> 1528/151 |
+| `attnc11.vector_maximum` | 1409/125 -> 756/73 | 1438/126 -> 785/74 |
+| `a1.emulate` | 38475/3158 -> 35758/2968 | 38504/3159 -> 35787/2969 |
+| `a1.end_emulation` | 120/14 -> 68/4 | 149/15 -> 97/5 |
+| `a1.hextoui` | 3048/261 -> 494/42 | 3077/262 -> 523/43 |
+| `a1.loadFile` | 6197/582 -> 4775/438 | 6226/583 -> 4804/439 |
+| `a1.load_intel` | 4927/486 -> 1589/144 | 4956/487 -> 1618/145 |
+| `a1.soft_reset` | 120/14 -> 68/4 | 149/15 -> 97/5 |
+| `tpihexb.parse_block_arg` | 2882/264 -> 1142/105 | 2911/265 -> 1171/106 |
+| `trw.fill_buf` | 297/31 -> 215/19 | 326/32 -> 244/20 |
+| `trw.main` | 593/59 -> 305/26 | 622/60 -> 334/27 |
+| `trw.must_seek` | 924/87 -> 762/69 | 953/88 -> 791/70 |
+| `trw.pat` | 196/20 -> 181/18 | 225/21 -> 210/19 |
+| `trw.rpat` | 207/21 -> 190/19 | 236/22 -> 219/20 |
+| `trw.run_test` | 10112/879 -> 5225/476 | 10141/880 -> 5254/477 |
+| `wumpus.ashot` | 3410/305 -> 1754/151 | 3439/306 -> 1783/152 |
+| `wumpus.presv` | 2706/233 -> 847/72 | 2735/234 -> 876/73 |
+| `wumpus.warns` | 2946/251 -> 1142/99 | 2987/252 -> 1171/100 |
+| `fint.op_has_local_target` | 697/68 -> 198/18 | 726/69 -> 227/19 |
+| `fint.upper` | 1511/133 -> 371/35 | 1540/134 -> 400/36 |
+| `adaint.preprocess` | 5606/484 -> 795/71 | 5635/485 -> 824/72 |
+
+Those 22 functions fall from **104,406 bytes / 9,168 instructions to
+66,266 / 5,852** normal and from **105,056 / 9,190 to 66,904 / 5,874**
+with stack checks. The final full comparison contains **25 changed normal
+rows / 24 stack rows**, only in these eight apps; the extra rows are
+same-selector label/text churn. No generated byte or instruction metric
+increases, and no MIR row is added or removed.
+
+Final current versus parent `1b429ed`:
+
+| app | stack peep current vs parent | stack nopeep current vs parent | no-stack peep current vs parent | no-stack nopeep current vs parent |
+|---|---:|---:|---:|---:|
+| `catalan` | 541,800,468/8,576 vs 541,800,591/8,576 | 545,125,512/8,704 vs 545,132,808/8,704 | 541,226,790/8,448 vs 541,226,913/8,448 | 544,551,834/8,448 vs 544,559,130/8,576 |
+| `attnc11` | 338,525,773/22,912 vs 339,250,960/23,424 | 341,087,608/23,936 vs 342,162,991/24,960 | 323,172,751/22,656 vs 323,897,923/23,168 | 325,734,445/23,680 vs 326,809,828/24,704 |
+| `a1` | 13,462,365/20,608 vs 13,483,676/20,608 | 14,943,892/22,528 vs 15,025,906/23,168 | 13,119,352/20,224 vs 13,129,516/20,224 | 14,590,964/22,144 vs 14,650,994/22,528 |
+| `tpihexb` | 166,436/6,144 vs 175,545/6,400 | 166,471/6,272 vs 179,640/6,528 | 165,491/6,016 vs 174,600/6,272 | 165,526/6,016 vs 178,695/6,400 |
+| `trw` | 173,853,957/9,856 vs 187,537,263/10,240 | 178,931,847/9,856 vs 194,577,844/10,496 | 171,312,789/9,600 vs 184,758,495/10,112 | 176,390,679/9,728 vs 191,755,876/10,368 |
+| `wumpus` | 304,661/15,232 vs 306,690/15,360 | 326,255/15,872 vs 329,475/16,256 | 302,938/14,976 vs 304,967/15,104 | 325,593/15,616 vs 328,813/16,128 |
+| `fint` | 378,776,249/32,128 vs 378,912,094/32,128 | 382,441,018/34,432 vs 382,764,623/34,944 | 378,749,357/31,872 vs 378,885,193/31,872 | 382,414,117/34,176 vs 382,737,722/34,688 |
+| `adaint` | 458,577,914/35,200 vs 458,967,885/35,840 | 488,697,382/37,632 vs 492,245,091/38,656 | 459,137,801/34,816 vs 459,521,095/35,072 | 488,608,014/37,376 vs 492,152,203/37,760 |
+
+Every one of the **64 cycle/size comparisons is non-positive**. Aggregate
+savings are **14,966,881 cycles / 1,920 bytes** stack peep,
+**20,698,393 / 4,480** stack nopeep,
+**14,711,433 / 1,664** no-stack peep, and
+**20,392,089 / 3,968** no-stack nopeep. The generated-only ledger is now
+**0 metrics across 0 apps**.
+
+Final dynamic stack-peep profiles include:
+
+- `softmax_8` **1,594,521 -> 867,028** and `vector_maximum`
+  **324,405 -> 268,456**;
+- `parse_block_arg` **21,424 -> 12,315**;
+- `run_test` **13,410,930 -> 9,178,935**, `pat`
+  **1,889,760 -> 1,291,680**, `rpat` **182,880 -> 116,160**,
+  `fill_buf` **1,239,840 -> 851,040**, and `must_seek`
+  **2,782,080 -> 2,358,720**;
+- `warns` **3,311 -> 2,608** and `ashot` **3,862 -> 3,250**;
+- Fint `upper` **248,410 -> 47,230**;
+- Adaint `preprocess` **479,897 -> 100,600**.
+
+The complete validation proof:
+
+- renamed source A/B: **32** parent/current output-identical app runs across
+  normal/stack peep/nopeep, with **40** renamed scheduled selections;
+- selected standalone Intel loader: **4** additional parent/current runtime
+  A/Bs, including data and EOF records;
+- structural rejection: **38** normal/stack near-miss compiles remain generic;
+- full censuses: **2378/2378** normal and stack, zero missing rows, zero
+  positive generated metrics, every captured field `-1`; final selectors are
+  **1256 spilled / 525 scheduled / 507 homed / 85 hybrid / 5 regional**
+  normal and **1266 / 515 / 505 / 87 / 5** stack;
+- extended census: **274/274** in each mode, zero captured fields;
+- ASan/UBSan: **255/255** affected-plus-`tptrrhs` functions per mode and
+  **34** renamed/near-miss compiles;
+- both strict full suites: **314 runnable passed / 9 configured skips +
+  196 extended**, diagnostics and all dccpeep fixtures pass;
+- checked performance: **0 regressions / 928 improvements**;
+- canonical and CMake builds, require-emit boundary, four family
+  export/shared-data audits, IDE source diagnostics, and `git diff --check`
+  pass;
+- runtime IY output is byte-identical to the preceding audit: only the
+  pre-existing balanced `__extln` save/use/restore block remains.
+
+No performance baseline changed. No commit or push was made.

@@ -160,16 +160,6 @@ if ($helperAssembly.Contains("`tld hl,0")) {
 }
 Write-Host "PASS non-main fallthrough leaves return value undefined"
 
-$forced = Invoke-Dcc @(
-    "-stack", "512", "-I", ".", "tests/tmircfg.c",
-    "-o", (Join-Path $buildRoot "FORCED.MAC")
-) @{
-    DCC_MIR_REQUIRE_EMIT = "1"
-    DCC_MIR_FORCE_FALLBACK_FUNCTION = "main"
-}
-Assert-Failure "forced final fallback" $forced `
-    "MIR emission failed for function main: legacy fallback required (reason=forced)"
-
 $oversizedSource = Join-Path $buildRoot "oversized.c"
 $writer = [System.IO.StreamWriter]::new($oversizedSource, $false,
     [System.Text.Encoding]::ASCII)
@@ -186,19 +176,13 @@ finally {
     $writer.Dispose()
 }
 
-$oversizedLegacy = Invoke-Dcc @(
-    "-g", "-stack", "512", "-I", ".", $oversizedSource,
-    "-o", (Join-Path $buildRoot "OVERSIZED-LEGACY.MAC")
-)
-Assert-Success "oversized legacy compile without gate" $oversizedLegacy
-
 $oversizedRequired = Invoke-Dcc @(
     "-g", "-stack", "512", "-I", ".", $oversizedSource,
     "-o", (Join-Path $buildRoot "OVERSIZED-REQUIRED.MAC")
 ) @{
     DCC_MIR_REQUIRE_EMIT = "1"
 }
-Assert-Failure "oversized MIR fallback" $oversizedRequired `
-    "MIR emission failed for function oversized: legacy fallback required (reason=oversized)"
+Assert-Failure "oversized MIR boundary" $oversizedRequired `
+    "MIR emission failed for function oversized: no generated candidate (reason=oversized)"
 
 Write-Host "MIR require-emit diagnostics passed."

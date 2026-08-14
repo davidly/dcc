@@ -73,6 +73,201 @@ struct MirLongIndexCallRunner {
     char copy_runtime_name[16];
 };
 
+struct MirInlineCallSumSchedule {
+    struct Sym *index_function;
+    int values_stack_offset;
+    int count_stack_offset;
+};
+
+enum MirCallSafeLoopKind {
+    MIR_CALL_SAFE_COUNTDOWN_SUM,
+    MIR_CALL_SAFE_MEMBER_SUM
+};
+
+struct MirCallSafeWordLoopSchedule {
+    enum MirCallSafeLoopKind kind;
+    struct Sym *call_function;
+    int first_stack_offset;
+    int second_stack_offset;
+    int member_offsets[3];
+};
+
+struct MirConstantDoWhileSchedule {
+    struct Sym *check_function;
+    int second_count;
+    int third_initial;
+    int break_count;
+    int fourth_count;
+};
+
+struct MirArrowPathSchedule {
+    struct Sym *cave;
+    struct Sym *adjacent_function;
+    struct Sym *random_function;
+    struct Sym *flush_function;
+    struct Sym *wake_function;
+    int game_stack_offset;
+    int path_stack_offset;
+    int length_stack_offset;
+    int cave_offset;
+    int location_offset;
+    int arrows_offset;
+    int string_ids[4];
+    char print_name[64];
+};
+
+struct MirRoomResolutionSchedule {
+    struct Sym *flush_function;
+    struct Sym *wake_function;
+    struct Sym *random_room_function;
+    int game_stack_offset;
+    int location_offset;
+    int string_ids[3];
+    char print_name[64];
+};
+
+struct MirGlobalMemsetSchedule {
+    struct Sym *function;
+    struct Sym *buffer;
+    int buffer_offset;
+    int size_stack_offset;
+    int value_stack_offset;
+};
+
+struct MirWordTableRunnerSchedule {
+    struct Sym *print_function;
+    struct Sym *run_function;
+    struct Sym *table;
+    int table_offset;
+    int start_string_id;
+    int done_string_id;
+    char print_name[64];
+};
+
+struct MirSeekCheckSchedule {
+    struct Sym *seek_function;
+    struct Sym *fail_function;
+    int fd_stack_offset;
+    int offset_stack_offset;
+    int where_stack_offset;
+    int format_string_id;
+    char print_name[64];
+};
+
+struct MirFileRoundtripSchedule {
+    struct Sym *print_function;
+    struct Sym *open_function;
+    struct Sym *fail_function;
+    struct Sym *pattern_function;
+    struct Sym *reverse_pattern_function;
+    struct Sym *fill_function;
+    struct Sym *clear_function;
+    struct Sym *check_function;
+    struct Sym *write_function;
+    struct Sym *read_function;
+    struct Sym *sync_function;
+    struct Sym *close_function;
+    struct Sym *seek_function;
+    struct Sym *unlink_function;
+    struct Sym *buffer;
+    int buffer_offset;
+    int size_stack_offset;
+    int start_string_id;
+    int strings[20];
+    char print_names[6][64];
+};
+
+struct MirIntelHexLoadSchedule {
+    struct Sym *line_function;
+    struct Sym *length_function;
+    struct Sym *error_function;
+    struct Sym *hex_function;
+    struct Sym *eof_function;
+    struct Sym *memory_function;
+    struct Sym *close_function;
+    int file_stack_offset;
+    int strings[3];
+};
+
+struct MirLegalMoveFilterSchedule {
+    struct Sym *generate_function;
+    struct Sym *copy_function;
+    struct Sym *apply_function;
+    struct Sym *check_function;
+    struct Sym *undo_function;
+    struct Sym *move_counts;
+    struct Sym *moves;
+    struct Sym *temporary_moves;
+    struct Sym *side;
+    int ply_stack_offset;
+    int ply_stride;
+    int move_stride;
+};
+
+struct MirFormatWalkSchedule {
+    struct Sym *print_function;
+    struct Sym *putchar_function;
+    int format_stack_offset;
+    int argument_count_stack_offset;
+    int values_stack_offset;
+    int integer_format_string_id;
+};
+
+struct MirStatementVmSchedule {
+    struct Sym *statements;
+    struct Sym *statement_count;
+    struct Sym *program_counter;
+    struct Sym *halted;
+    struct Sym *calls;
+    struct Sym *call_count;
+    struct Sym *loops;
+    struct Sym *loop_count;
+    struct Sym *symbols;
+    struct Sym *memory;
+    struct Sym *memory_capacity;
+    struct Sym *return_function;
+    struct Sym *write_function;
+    struct Sym *die_function;
+    struct Sym *evaluate_function;
+    struct Sym *bump_function;
+    struct Sym *assign_function;
+    int statement_stride;
+    int statement_op_offset;
+    int statement_target_offset;
+    int statement_symbol_offset;
+    int statement_ae_offset;
+    int statement_be_offset;
+    int statement_ce_offset;
+    int statement_action_offset;
+    int statement_action_target_offset;
+    int statement_action_symbol_offset;
+    int statement_action_index_offset;
+    int statement_action_rhs_offset;
+    int statement_target_count_offset;
+    int statement_targets_offset;
+    int loop_stride;
+    int loop_label_offset;
+    int loop_pc_offset;
+    int loop_symbol_offset;
+    int loop_end_offset;
+    int loop_step_offset;
+    int symbol_stride;
+    int symbol_type_offset;
+    int symbol_base_offset;
+    int byte_type;
+    int call_limit;
+    int loop_limit;
+    int opcode_count;
+    int action_goto;
+    int action_return;
+    int action_assign;
+    int bad_call_string_id;
+    int call_stack_string_id;
+    int loop_stack_string_id;
+    int bounds_string_id;
+    int bad_label_string_id;
+};
+
 struct MirAllocationLifetimeRunner {
     struct Sym *allocate_function;
     struct Sym *free_function;
@@ -14854,9 +15049,7288 @@ static void mir_emit_promotion_call_runner(
     fputs("\tld hl,0\n\tret\n", out);
 }
 
+static int mir_inline_call_sum_signed_word_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+           (type & 15) == TYPE_INT &&
+           type_size(type) == 2 &&
+           (type & TYPE_UNSIGNED) == 0;
+}
+
+static int mir_inline_call_sum_word_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & 15) == TYPE_INT &&
+           type_size(type) == 2;
+}
+
+static int mir_legal_filter_control_edges_match(
+    const int (*edges)[2], int edge_count)
+{
+    int edge;
+
+    for (edge = 0; edge < edge_count; ++edge)
+        if (mir.insns[edges[edge][0]].label !=
+            mir.insns[edges[edge][1]].label)
+            return 0;
+    return 1;
+}
+
+static struct Sym *mir_legal_filter_function(
+    int call_instruction, int argument_count, int return_size)
+{
+    const struct MirInsn *call = &mir.insns[call_instruction];
+    struct Sym *function = find_global(call->name);
+    int arguments[2];
+
+    if (function == NULL || function->storage != SC_FUNC ||
+        !function->is_defined || function->is_funcptr ||
+        !function->has_proto ||
+        function->proto_nargs != argument_count ||
+        function->proto_variadic ||
+        type_size(function->type) != return_size ||
+        !mir_machine_call_arguments(
+            call, argument_count, arguments))
+        return NULL;
+    return function;
+}
+
+static int mir_match_legal_move_filter_schedule(
+    struct MirLegalMoveFilterSchedule *plan)
+{
+    static const int expected_opcodes[117] = {
+        MIR_LABEL, MIR_PARAM, MIR_NOP, MIR_ARG, MIR_CALL, MIR_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE, MIR_CONST,
+        MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_PHI,
+        MIR_NOP, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE, MIR_ADDRESS, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_ARG, MIR_CALL, MIR_LABEL,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL,
+        MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_CONST, MIR_STORE_INDIRECT, MIR_LOAD,
+        MIR_NOP, MIR_STORE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL,
+        MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP, MIR_ARG, MIR_CALL,
+        MIR_UNARY, MIR_BRANCH_FALSE, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_INDEX_ADDRESS, MIR_ARG, MIR_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT, MIR_NOP, MIR_LABEL,
+        MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_ARG,
+        MIR_CALL, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_JUMP, MIR_LABEL
+    };
+    static const int control_edges[][2] = {
+        {21, 41}, {40, 14}, {61, 116}, {73, 101}, {115, 53}
+    };
+    const struct MirInsn *ply = &mir.insns[1];
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 117 || mir_cfg_block_count() != 8 ||
+        mir.has_vla || mir.local_bytes != 6 ||
+        mir.aggregate_temp_bytes != 0 ||
+        !mir_has_cfg_backedge() ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "legal-move-filter-schedule", "opcodes");
+    if (!mir_legal_filter_control_edges_match(
+            control_edges,
+            (int)(sizeof(control_edges) / sizeof(control_edges[0]))))
+        return mir_machine_reject(
+            "legal-move-filter-schedule", "control-flow");
+    if (type_ptr_depth(ply->type) != 0 ||
+        (ply->type & 15) != TYPE_INT ||
+        (ply->type & TYPE_UNSIGNED) != 0 ||
+        type_size(ply->type) != 2 ||
+        !mir_machine_parameter_value_offset(
+            ply->dst, &plan->ply_stack_offset) ||
+        plan->ply_stack_offset != 2)
+        return mir_machine_reject(
+            "legal-move-filter-schedule", "parameter");
+
+    plan->generate_function =
+        mir_legal_filter_function(4, 1, 0);
+    plan->copy_function =
+        mir_legal_filter_function(34, 2, 0);
+    plan->apply_function =
+        mir_legal_filter_function(68, 1, 0);
+    plan->check_function =
+        mir_legal_filter_function(71, 1, 2);
+    plan->undo_function =
+        mir_legal_filter_function(108, 1, 0);
+    if (plan->generate_function == NULL ||
+        plan->copy_function == NULL ||
+        plan->apply_function == NULL ||
+        plan->check_function == NULL ||
+        plan->undo_function == NULL ||
+        find_global(mir.insns[89].name) != plan->copy_function)
+        return mir_machine_reject(
+            "legal-move-filter-schedule", "calls");
+    plan->move_counts = find_global(mir.insns[5].name);
+    plan->temporary_moves = find_global(mir.insns[22].name);
+    plan->moves = find_global(mir.insns[28].name);
+    plan->side = find_global(mir.insns[47].name);
+    if (plan->move_counts == NULL ||
+        plan->temporary_moves == NULL ||
+        plan->moves == NULL || plan->side == NULL ||
+        plan->move_counts->storage != SC_GLOBAL ||
+        plan->temporary_moves->storage != SC_GLOBAL ||
+        plan->moves->storage != SC_GLOBAL ||
+        plan->side->storage != SC_GLOBAL ||
+        !plan->move_counts->is_array ||
+        !plan->temporary_moves->is_array ||
+        !plan->moves->is_array ||
+        plan->move_counts->is_volatile ||
+        plan->temporary_moves->is_volatile ||
+        plan->moves->is_volatile ||
+        plan->move_counts->pointee_is_volatile ||
+        plan->temporary_moves->pointee_is_volatile ||
+        plan->moves->pointee_is_volatile ||
+        plan->move_counts->elem_size != 2 ||
+        plan->temporary_moves->elem_size != 1024 ||
+        plan->moves->elem_size != 1024 ||
+        plan->side->is_array || plan->side->is_volatile ||
+        strcmp(mir.insns[5].name, mir.insns[42].name) != 0 ||
+        strcmp(mir.insns[5].name, mir.insns[77].name) != 0 ||
+        strcmp(mir.insns[5].name, mir.insns[90].name) != 0 ||
+        strcmp(mir.insns[22].name, mir.insns[62].name) != 0 ||
+        strcmp(mir.insns[22].name, mir.insns[83].name) != 0 ||
+        strcmp(mir.insns[22].name, mir.insns[102].name) != 0 ||
+        strcmp(mir.insns[28].name, mir.insns[74].name) != 0)
+        return mir_machine_reject(
+            "legal-move-filter-schedule", "globals");
+    plan->ply_stride = (int)mir.insns[24].immediate;
+    plan->move_stride = (int)mir.insns[26].immediate;
+    if (plan->ply_stride != 1024 ||
+        plan->move_stride != 8 ||
+        mir.insns[30].immediate != plan->ply_stride ||
+        mir.insns[32].immediate != plan->move_stride ||
+        mir.insns[64].immediate != plan->ply_stride ||
+        mir.insns[66].immediate != plan->move_stride ||
+        mir.insns[76].immediate != plan->ply_stride ||
+        mir.insns[81].immediate != plan->move_stride ||
+        mir.insns[85].immediate != plan->ply_stride ||
+        mir.insns[87].immediate != plan->move_stride ||
+        mir.insns[104].immediate != plan->ply_stride ||
+        mir.insns[106].immediate != plan->move_stride)
+        return mir_machine_reject(
+            "legal-move-filter-schedule", "layout");
+    return 1;
+}
+
+static void mir_emit_legal_filter_array_address(
+    FILE *out, struct Sym *array, int index_offset)
+{
+    const char *array_name =
+        asm_name_for(sym_asm_name(array));
+
+    fprintf(out,
+            "\tpush iy\n\tpop hl\n\tld h,l\n\tld l,0\n"
+            "\tadd hl,hl\n\tadd hl,hl\n"
+            "\tld de,%s\n\tadd hl,de\n\tpush hl\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tadd hl,hl\n\tadd hl,hl\n\tadd hl,hl\n"
+            "\tpop de\n\tadd hl,de\n",
+            array_name, index_offset, index_offset + 1);
+}
+
+static void mir_emit_legal_filter_count_address(
+    FILE *out, const struct MirLegalMoveFilterSchedule *plan)
+{
+    const char *count_name =
+        asm_name_for(sym_asm_name(plan->move_counts));
+
+    fprintf(out,
+            "\tpush iy\n\tpop hl\n\tadd hl,hl\n"
+            "\tld de,%s\n\tadd hl,de\n",
+            count_name);
+}
+
+static void mir_emit_legal_move_filter_schedule(
+    FILE *out, const struct MirLegalMoveFilterSchedule *plan)
+{
+    const char *side_name =
+        asm_name_for(sym_asm_name(plan->side));
+    const char *moves_name =
+        asm_name_for(sym_asm_name(plan->moves));
+    int copy_loop = new_label();
+    int copy_done = new_label();
+    int filter_loop = new_label();
+    int reject_move = new_label();
+    int filter_done = new_label();
+
+    fputs(";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
+          "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-6\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tpush hl\n\tpop iy\n\tpush iy\n",
+            plan->ply_stack_offset + 4,
+            plan->ply_stack_offset + 5);
+    mir_machine_emit_symbol_call(out, plan->generate_function);
+    fputs("\tpop bc\n", out);
+    mir_emit_legal_filter_count_address(out, plan);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tld (ix-4),e\n\tld (ix-3),d\n"
+          "\txor a\n\tld (ix-2),a\n\tld (ix-1),a\n", out);
+
+    fprintf(out, "L%d:\n", copy_loop);
+    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n"
+          "\tld e,(ix-4)\n\tld d,(ix-3)\n"
+          "\tld a,h\n\txor 80h\n\tld h,a\n"
+          "\tld a,d\n\txor 80h\n\tld d,a\n"
+          "\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp nc,L%d\n", copy_done);
+    mir_emit_legal_filter_array_address(
+        out, plan->moves, -2);
+    fputs("\tpush hl\n", out);
+    mir_emit_legal_filter_array_address(
+        out, plan->temporary_moves, -2);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->copy_function);
+    fprintf(out,
+            "\tpop bc\n\tpop bc\n\tinc (ix-2)\n\tjp nz,L%d\n"
+            "\tinc (ix-1)\n\tjp L%d\nL%d:\n",
+            copy_loop, copy_loop, copy_done);
+
+    mir_emit_legal_filter_count_address(out, plan);
+    fputs("\txor a\n\tld (hl),a\n\tinc hl\n\tld (hl),a\n", out);
+    fprintf(out,
+            "\tld hl,(%s)\n\tld (ix-6),l\n\tld (ix-5),h\n"
+            "\txor a\n\tld (ix-2),a\n\tld (ix-1),a\n"
+            "L%d:\n",
+            side_name, filter_loop);
+    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n"
+          "\tld e,(ix-4)\n\tld d,(ix-3)\n"
+          "\tld a,h\n\txor 80h\n\tld h,a\n"
+          "\tld a,d\n\txor 80h\n\tld d,a\n"
+          "\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp nc,L%d\n", filter_done);
+    mir_emit_legal_filter_array_address(
+        out, plan->temporary_moves, -2);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->apply_function);
+    fputs("\tpop bc\n\tld l,(ix-6)\n\tld h,(ix-5)\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->check_function);
+    fprintf(out,
+            "\tpop bc\n\tld a,h\n\tor l\n\tjp nz,L%d\n",
+            reject_move);
+
+    mir_emit_legal_filter_array_address(
+        out, plan->temporary_moves, -2);
+    fputs("\tpush hl\n", out);
+    mir_emit_legal_filter_count_address(out, plan);
+    fprintf(out,
+          "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+          "\tpush iy\n\tpop hl\n\tld h,l\n\tld l,0\n"
+          "\tadd hl,hl\n\tadd hl,hl\n"
+          "\tld de,%s\n\tadd hl,de\n\tpush hl\n"
+          "\tld l,c\n\tld h,b\n"
+          "\tadd hl,hl\n\tadd hl,hl\n\tadd hl,hl\n"
+          "\tpop de\n\tadd hl,de\n\tpush hl\n",
+          moves_name);
+    mir_machine_emit_symbol_call(out, plan->copy_function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+    mir_emit_legal_filter_count_address(out, plan);
+    fputs("\tinc (hl)\n\tjp nz,", out);
+    fprintf(out, "L%d\n\tinc hl\n\tinc (hl)\n", reject_move);
+
+    fprintf(out, "L%d:\n", reject_move);
+    mir_emit_legal_filter_array_address(
+        out, plan->temporary_moves, -2);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->undo_function);
+    fprintf(out,
+            "\tpop bc\n\tinc (ix-2)\n\tjp nz,L%d\n"
+            "\tinc (ix-1)\n\tjp L%d\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tpop iy\n"
+            ";@dcc.reg free=iy\n\tret\n",
+            filter_loop, filter_loop, filter_done);
+}
+
+static int mir_match_statement_vm_schedule(
+    struct MirStatementVmSchedule *plan)
+{
+    static const unsigned char expected_opcodes[643] = {
+        MIR_LABEL, MIR_LOAD, MIR_NOP, MIR_STORE, MIR_LOAD, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_LABEL,
+        MIR_LOAD, MIR_UNARY, MIR_BRANCH_FALSE, MIR_LOAD, MIR_LOAD,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+        MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE,
+        MIR_LOAD, MIR_LOAD, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_NOP, MIR_STORE, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_JUMP, MIR_LABEL, MIR_JUMP, MIR_LABEL,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_NOP, MIR_JUMP,
+        MIR_LABEL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_JUMP,
+        MIR_LABEL, MIR_CALL, MIR_NOP, MIR_JUMP, MIR_LABEL, MIR_LOAD,
+        MIR_ARG, MIR_CALL, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_NOP, MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_LABEL, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_CALL, MIR_LABEL, MIR_LOAD, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_INDEX_ADDRESS, MIR_MEMBER_ADDRESS,
+        MIR_LOAD, MIR_CONST, MIR_CONST, MIR_BINARY, MIR_BINARY,
+        MIR_STORE_INDIRECT, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE, MIR_NOP, MIR_JUMP,
+        MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_LABEL, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL,
+        MIR_STORE, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_STORE, MIR_LOAD, MIR_LOAD, MIR_INDEX_ADDRESS, MIR_STORE,
+        MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_LOAD, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_CONST, MIR_LABEL, MIR_JUMP, MIR_LABEL,
+        MIR_CONST, MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_BINARY,
+        MIR_INDEX_ADDRESS, MIR_LOAD, MIR_UNARY, MIR_STORE_INDIRECT,
+        MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_CONST, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL,
+        MIR_LABEL, MIR_PHI, MIR_CONST, MIR_BINARY, MIR_BINARY, MIR_STORE,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_LOAD, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST,
+        MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_LABEL,
+        MIR_JUMP, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_LABEL, MIR_LOAD,
+        MIR_LOAD, MIR_INDEX_ADDRESS, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_UNARY, MIR_STORE_INDIRECT, MIR_LOAD, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_INDEX_ADDRESS, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_CONST, MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT, MIR_NOP,
+        MIR_LABEL, MIR_NOP, MIR_LOAD, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_INDEX_ADDRESS, MIR_NOP, MIR_STORE, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_STORE_INDIRECT, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD, MIR_CONST, MIR_CONST, MIR_BINARY,
+        MIR_BINARY, MIR_STORE_INDIRECT, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_STORE_INDIRECT, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL,
+        MIR_STORE_INDIRECT, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL,
+        MIR_STORE_INDIRECT, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_NOP, MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_INDEX_ADDRESS, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_LOAD, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST,
+        MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_INDEX_ADDRESS, MIR_NOP, MIR_STORE, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL,
+        MIR_NOP, MIR_STORE, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_NOP, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+        MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE,
+        MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_CONST, MIR_LABEL, MIR_PHI, MIR_LABEL, MIR_JUMP, MIR_LABEL,
+        MIR_PHI, MIR_BRANCH_FALSE, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE, MIR_NOP, MIR_JUMP,
+        MIR_NOP, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_NOP, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_NOP, MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL, MIR_BRANCH_FALSE, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_LABEL, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_JUMP, MIR_NOP, MIR_LABEL, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_CALL, MIR_NOP, MIR_JUMP, MIR_NOP,
+        MIR_LABEL, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL,
+        MIR_NOP, MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_NOP, MIR_JUMP, MIR_LABEL, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_LABEL, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_JUMP, MIR_LABEL, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_CALL, MIR_LABEL, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE, MIR_NOP, MIR_JUMP,
+        MIR_NOP, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_NOP, MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_ARG, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_ARG, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_NOP, MIR_JUMP, MIR_NOP, MIR_LABEL,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_NOP, MIR_LABEL,
+        MIR_JUMP, MIR_LABEL
+    };
+    static const int die_calls[] = {
+        137, 145, 174, 271, 485, 545, 592
+    };
+    static const int evaluate_calls[] = {180, 330, 338, 469, 559};
+    int instruction;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 643 || mir_cfg_block_count() != 84 ||
+        mir.has_vla || mir.local_bytes != 42 ||
+        mir.aggregate_temp_bytes != 0 ||
+        !mir_has_cfg_backedge() ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "statement-vm-schedule", "opcodes");
+
+    plan->statements = find_global(mir.insns[1].name);
+    plan->statement_count = find_global(mir.insns[5].name);
+    plan->program_counter = find_global(mir.insns[3].name);
+    plan->halted = find_global(mir.insns[12].name);
+    plan->calls = find_global(mir.insns[147].name);
+    plan->call_count = find_global(mir.insns[139].name);
+    plan->loops = find_global(mir.insns[296].name);
+    plan->loop_count = find_global(mir.insns[168].name);
+    plan->symbols = find_global(mir.insns[186].name);
+    plan->memory = find_global(mir.insns[197].name);
+    plan->memory_capacity = find_global(mir.insns[254].name);
+    if (plan->statements == NULL ||
+        plan->statement_count == NULL ||
+        plan->program_counter == NULL || plan->halted == NULL ||
+        plan->calls == NULL || plan->call_count == NULL ||
+        plan->loops == NULL || plan->loop_count == NULL ||
+        plan->symbols == NULL || plan->memory == NULL ||
+        plan->memory_capacity == NULL ||
+        plan->statements->is_volatile ||
+        plan->statement_count->is_volatile ||
+        plan->program_counter->is_volatile ||
+        plan->halted->is_volatile ||
+        plan->calls->is_volatile ||
+        plan->call_count->is_volatile ||
+        plan->loops->is_volatile ||
+        plan->loop_count->is_volatile ||
+        plan->symbols->is_volatile ||
+        plan->memory->is_volatile ||
+        plan->memory_capacity->is_volatile ||
+        plan->statements->pointee_is_volatile ||
+        plan->calls->pointee_is_volatile ||
+        plan->loops->pointee_is_volatile ||
+        plan->symbols->pointee_is_volatile ||
+        plan->memory->pointee_is_volatile)
+        return mir_machine_reject(
+            "statement-vm-schedule", "globals");
+    if (find_global(mir.insns[4].name) != plan->statements ||
+        find_global(mir.insns[16].name) != plan->statements ||
+        find_global(mir.insns[148].name) != plan->call_count ||
+        find_global(mir.insns[151].name) != plan->call_count ||
+        find_global(mir.insns[273].name) != plan->memory ||
+        find_global(mir.insns[281].name) != plan->memory ||
+        find_global(mir.insns[297].name) != plan->loop_count ||
+        find_global(mir.insns[300].name) != plan->loop_count ||
+        find_global(mir.insns[351].name) != plan->loops ||
+        find_global(mir.insns[352].name) != plan->loop_count ||
+        find_global(mir.insns[369].name) != plan->loops ||
+        find_global(mir.insns[370].name) != plan->loop_count)
+        return mir_machine_reject(
+            "statement-vm-schedule", "global-uses");
+
+    plan->return_function = find_global(mir.insns[115].name);
+    plan->write_function = find_global(mir.insns[121].name);
+    plan->die_function = find_global(mir.insns[137].name);
+    plan->evaluate_function = find_global(mir.insns[180].name);
+    plan->bump_function = find_global(mir.insns[384].name);
+    plan->assign_function = find_global(mir.insns[525].name);
+    if (plan->return_function == NULL ||
+        plan->write_function == NULL ||
+        plan->die_function == NULL ||
+        plan->evaluate_function == NULL ||
+        plan->bump_function == NULL ||
+        plan->assign_function == NULL ||
+        plan->return_function->proto_nargs != 0 ||
+        plan->write_function->proto_nargs != 1 ||
+        plan->die_function->proto_nargs != 1 ||
+        plan->evaluate_function->proto_nargs != 1 ||
+        plan->bump_function->proto_nargs != 2 ||
+        plan->assign_function->proto_nargs != 3 ||
+        find_global(mir.insns[502].name) !=
+            plan->return_function ||
+        find_global(mir.insns[626].name) !=
+            plan->assign_function)
+        return mir_machine_reject(
+            "statement-vm-schedule", "calls");
+    for (item = 0;
+         item < (int)(sizeof(die_calls) /
+                      sizeof(die_calls[0]));
+         ++item)
+        if (find_global(mir.insns[die_calls[item]].name) !=
+            plan->die_function)
+            return mir_machine_reject(
+                "statement-vm-schedule", "die-calls");
+    for (item = 0;
+         item < (int)(sizeof(evaluate_calls) /
+                      sizeof(evaluate_calls[0]));
+         ++item)
+        if (find_global(mir.insns[evaluate_calls[item]].name) !=
+            plan->evaluate_function)
+            return mir_machine_reject(
+                "statement-vm-schedule", "evaluate-calls");
+
+    plan->statement_stride = (int)mir.insns[6].immediate;
+    plan->statement_op_offset = (int)mir.insns[43].immediate;
+    plan->statement_target_offset = (int)mir.insns[130].immediate;
+    plan->statement_ae_offset = (int)mir.insns[177].immediate;
+    plan->statement_symbol_offset = (int)mir.insns[183].immediate;
+    plan->statement_be_offset = (int)mir.insns[327].immediate;
+    plan->statement_ce_offset = (int)mir.insns[335].immediate;
+    plan->statement_action_offset = (int)mir.insns[472].immediate;
+    plan->statement_action_target_offset =
+        (int)mir.insns[478].immediate;
+    plan->statement_action_symbol_offset =
+        (int)mir.insns[514].immediate;
+    plan->statement_action_index_offset =
+        (int)mir.insns[518].immediate;
+    plan->statement_action_rhs_offset =
+        (int)mir.insns[522].immediate;
+    plan->statement_target_count_offset =
+        (int)mir.insns[568].immediate;
+    plan->statement_targets_offset =
+        (int)mir.insns[581].immediate;
+    plan->loop_stride = (int)mir.insns[301].immediate;
+    plan->loop_label_offset = (int)mir.insns[305].immediate;
+    plan->loop_pc_offset = (int)mir.insns[311].immediate;
+    plan->loop_symbol_offset = (int)mir.insns[319].immediate;
+    plan->loop_end_offset = (int)mir.insns[325].immediate;
+    plan->loop_step_offset = (int)mir.insns[333].immediate;
+    plan->symbol_stride = (int)mir.insns[188].immediate;
+    plan->symbol_type_offset = (int)mir.insns[191].immediate;
+    plan->symbol_base_offset = (int)mir.insns[199].immediate;
+    plan->byte_type = (int)mir.insns[193].immediate;
+    plan->call_limit = (int)mir.insns[140].immediate;
+    plan->loop_limit = (int)mir.insns[169].immediate;
+    plan->opcode_count = (int)mir.insns[95].immediate + 1;
+    plan->action_goto = (int)mir.insns[474].immediate;
+    plan->action_return = (int)mir.insns[499].immediate;
+    plan->action_assign = (int)mir.insns[510].immediate;
+    plan->bad_call_string_id = (int)mir.insns[135].immediate;
+    plan->call_stack_string_id = (int)mir.insns[143].immediate;
+    plan->loop_stack_string_id = (int)mir.insns[172].immediate;
+    plan->bounds_string_id = (int)mir.insns[269].immediate;
+    plan->bad_label_string_id = (int)mir.insns[483].immediate;
+    if (plan->statement_stride != 66 ||
+        plan->statement_op_offset != 6 ||
+        plan->statement_target_offset != 8 ||
+        plan->statement_symbol_offset != 14 ||
+        plan->statement_ae_offset != 22 ||
+        plan->statement_be_offset != 24 ||
+        plan->statement_ce_offset != 26 ||
+        plan->statement_action_offset != 28 ||
+        plan->statement_action_target_offset != 30 ||
+        plan->statement_action_symbol_offset != 34 ||
+        plan->statement_action_index_offset != 40 ||
+        plan->statement_action_rhs_offset != 42 ||
+        plan->statement_target_count_offset != 44 ||
+        plan->statement_targets_offset != 46 ||
+        plan->loop_stride != 10 ||
+        plan->loop_label_offset != 0 ||
+        plan->loop_pc_offset != 2 ||
+        plan->loop_symbol_offset != 4 ||
+        plan->loop_end_offset != 6 ||
+        plan->loop_step_offset != 8 ||
+        plan->symbol_stride != 32 ||
+        plan->symbol_type_offset != 26 ||
+        plan->symbol_base_offset != 28 ||
+        plan->byte_type != 1 ||
+        plan->call_limit <= 0 || plan->call_limit > 255 ||
+        plan->loop_limit <= 0 || plan->loop_limit > 255 ||
+        plan->opcode_count != 11 ||
+        plan->action_goto != 1 ||
+        plan->action_return != 2 ||
+        plan->action_assign != 3 ||
+        plan->bad_call_string_id < 0 ||
+        plan->call_stack_string_id < 0 ||
+        plan->loop_stack_string_id < 0 ||
+        plan->bounds_string_id < 0 ||
+        plan->bad_label_string_id < 0)
+        return mir_machine_reject(
+            "statement-vm-schedule", "layout");
+    return 1;
+}
+
+enum MirStatementVmFrameOffset {
+    MIR_STMT_END = -2,
+    MIR_STMT_POINTER = -4,
+    MIR_STMT_VALUE = -6,
+    MIR_STMT_INDEX = -8,
+    MIR_STMT_TEMP = -10
+};
+
+static void mir_statement_vm_sync_pc(
+    FILE *out, const struct MirStatementVmSchedule *plan)
+{
+    fputs("\tpush iy\n\tpop hl\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->program_counter, 0);
+}
+
+static void mir_statement_vm_load_iy_word(
+    FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld l,(iy%+d)\n\tld h,(iy%+d)\n",
+            offset, offset + 1);
+}
+
+static void mir_statement_vm_load_pointer_word(
+    FILE *out, int pointer_frame, int offset)
+{
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n",
+            pointer_frame, pointer_frame + 1);
+    if (offset != 0)
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n", offset);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tex de,hl\n", out);
+}
+
+static void mir_statement_vm_store_pointer_word(
+    FILE *out, int pointer_frame, int offset)
+{
+    fputs("\tpush hl\n", out);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n",
+            pointer_frame, pointer_frame + 1);
+    if (offset != 0)
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n", offset);
+    fputs("\tpop de\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+          out);
+}
+
+static void mir_statement_vm_die(
+    FILE *out, const struct MirStatementVmSchedule *plan,
+    int string_id)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+    mir_machine_emit_symbol_call(out, plan->die_function);
+    fputs("\tpop bc\n", out);
+}
+
+static void mir_statement_vm_indexed_global(
+    FILE *out, struct Sym *root, int index_frame, int stride)
+{
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n",
+            index_frame, index_frame + 1);
+    mir_emit_mul_hl_const(out, (unsigned long)stride);
+    fputs("\tex de,hl\n", out);
+    mir_machine_emit_global_word(out, root, 0);
+    fputs("\tadd hl,de\n", out);
+}
+
+static void mir_statement_vm_symbol_bounds(
+    FILE *out, const struct MirStatementVmSchedule *plan,
+    int ok_label)
+{
+    int nonnegative = new_label();
+
+    fputs("\tld l,(ix-10)\n\tld h,(ix-9)\n"
+          "\tbit 7,h\n", out);
+    fprintf(out, "\tjp z,L%d\n", nonnegative);
+    mir_statement_vm_die(
+        out, plan, plan->bounds_string_id);
+    fprintf(out, "L%d:\n", nonnegative);
+    mir_machine_emit_global_word(
+        out, plan->memory_capacity, 0);
+    fputs("\tex de,hl\n\tld l,(ix-10)\n\tld h,(ix-9)\n"
+          "\tinc hl\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp c,L%d\n", ok_label);
+    mir_statement_vm_die(
+        out, plan, plan->bounds_string_id);
+}
+
+static void mir_statement_vm_store_symbol_value(
+    FILE *out, const struct MirStatementVmSchedule *plan)
+{
+    int word_value = new_label();
+    int bounds_ok = new_label();
+    int done = new_label();
+
+    mir_statement_vm_indexed_global(
+        out, plan->symbols, MIR_STMT_INDEX,
+        plan->symbol_stride);
+    fputs("\tld (ix-4),l\n\tld (ix-3),h\n", out);
+    fprintf(out, "\tld de,%d\n\tadd hl,de\n"
+                 "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+                 "\tld hl,%d\n\tor a\n\tsbc hl,de\n",
+            plan->symbol_type_offset, plan->byte_type);
+    fprintf(out, "\tjp nz,L%d\n", word_value);
+    mir_statement_vm_load_pointer_word(
+        out, MIR_STMT_POINTER, plan->symbol_base_offset);
+    fputs("\tld (ix-10),l\n\tld (ix-9),h\n", out);
+    mir_machine_emit_global_word(out, plan->memory, 0);
+    fputs("\tld e,(ix-10)\n\tld d,(ix-9)\n\tadd hl,de\n"
+          "\tld a,(ix-6)\n\tld (hl),a\n", out);
+    fprintf(out, "\tjp L%d\n", done);
+
+    fprintf(out, "L%d:\n", word_value);
+    mir_statement_vm_load_pointer_word(
+        out, MIR_STMT_POINTER, plan->symbol_base_offset);
+    fputs("\tld (ix-10),l\n\tld (ix-9),h\n", out);
+    mir_statement_vm_symbol_bounds(out, plan, bounds_ok);
+    fprintf(out, "L%d:\n", bounds_ok);
+    mir_machine_emit_global_word(out, plan->memory, 0);
+    fputs("\tld e,(ix-10)\n\tld d,(ix-9)\n\tadd hl,de\n"
+          "\tld e,(ix-6)\n\tld d,(ix-5)\n"
+          "\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
+    fprintf(out, "L%d:\n", done);
+}
+
+static void mir_statement_vm_evaluate_field(
+    FILE *out, const struct MirStatementVmSchedule *plan,
+    int field_offset)
+{
+    mir_statement_vm_load_iy_word(out, field_offset);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->evaluate_function);
+    fputs("\tpop bc\n", out);
+}
+
+static void mir_statement_vm_advance(
+    FILE *out, const struct MirStatementVmSchedule *plan,
+    int dispatch)
+{
+    fprintf(out, "\tld de,%d\n\tadd iy,de\n\tjp L%d\n",
+            plan->statement_stride, dispatch);
+}
+
+static void mir_emit_statement_vm_schedule(
+    FILE *out, const struct MirStatementVmSchedule *plan)
+{
+    int cases[11];
+    int dispatch = new_label();
+    int table = new_label();
+    int advance = new_label();
+    int done = new_label();
+    int bad_opcode = new_label();
+    int item;
+
+    for (item = 0; item < plan->opcode_count; ++item)
+        cases[item] = new_label();
+    fputs(";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
+          "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-10\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_word(out, plan->statements, 0);
+    fputs("\tpush hl\n\tpop iy\n", out);
+    mir_machine_emit_global_word(out, plan->statement_count, 0);
+    mir_emit_mul_hl_const(
+        out, (unsigned long)plan->statement_stride);
+    fputs("\tpush iy\n\tpop de\n\tadd hl,de\n"
+          "\tld (ix-2),l\n\tld (ix-1),h\n", out);
+
+    fprintf(out, "L%d:\n", dispatch);
+    mir_statement_vm_sync_pc(out, plan);
+    mir_machine_emit_global_word(out, plan->halted, 0);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n", done);
+    fputs("\tpush iy\n\tpop hl\n", out);
+    mir_machine_emit_global_word(out, plan->statements, 0);
+    fputs("\tex de,hl\n\tpush iy\n\tpop hl\n"
+          "\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp c,L%d\n", done);
+    fputs("\tpush iy\n\tpop hl\n"
+          "\tld e,(ix-2)\n\tld d,(ix-1)\n"
+          "\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp nc,L%d\n", done);
+    fprintf(out,
+            "\tld a,(iy%+d)\n\tor a\n\tjp nz,L%d\n"
+            "\tld a,(iy%+d)\n\tcp %d\n\tjp nc,L%d\n"
+            "\tld l,a\n\tld h,0\n\tadd hl,hl\n"
+            "\tld de,L%d\n\tadd hl,de\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tex de,hl\n\tjp (hl)\nL%d:\n",
+            plan->statement_op_offset + 1, bad_opcode,
+            plan->statement_op_offset, plan->opcode_count,
+            bad_opcode, table, table);
+    for (item = 0; item < plan->opcode_count; ++item)
+        fprintf(out, "\tdw L%d\n", cases[item]);
+    fprintf(out, "L%d:\n\tjp L%d\n", bad_opcode, advance);
+
+    fprintf(out, "L%d:\n\tjp L%d\n", cases[0], advance);
+    fprintf(out, "L%d:\n\tld hl,1\n", cases[1]);
+    mir_machine_emit_global_word_store(out, plan->halted, 0);
+    fprintf(out, "\tjp L%d\n", dispatch);
+
+    fprintf(out, "L%d:\n", cases[2]);
+    mir_machine_emit_symbol_call(out, plan->return_function);
+    mir_machine_emit_global_word(out, plan->program_counter, 0);
+    fputs("\tpush hl\n\tpop iy\n", out);
+    fprintf(out, "\tjp L%d\n", dispatch);
+
+    fprintf(out, "L%d:\n\tpush iy\n", cases[3]);
+    mir_machine_emit_symbol_call(out, plan->write_function);
+    fputs("\tpop bc\n", out);
+    fprintf(out, "\tjp L%d\n", advance);
+
+    {
+        int target_ok = new_label();
+        int stack_ok = new_label();
+
+        fprintf(out, "L%d:\n", cases[4]);
+        mir_statement_vm_load_iy_word(
+            out, plan->statement_target_offset);
+        fputs("\tld a,h\n\tor l\n", out);
+        fprintf(out, "\tjp nz,L%d\n", target_ok);
+        mir_statement_vm_die(
+            out, plan, plan->bad_call_string_id);
+        fprintf(out, "L%d:\n"
+                     "\tld (ix-4),l\n\tld (ix-3),h\n",
+                target_ok);
+        mir_machine_emit_global_word(out, plan->call_count, 0);
+        fprintf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n"
+                     "\tjp c,L%d\n",
+                plan->call_limit, stack_ok);
+        mir_statement_vm_die(
+            out, plan, plan->call_stack_string_id);
+        fprintf(out, "L%d:\n", stack_ok);
+        mir_machine_emit_global_word(out, plan->call_count, 0);
+        fputs("\tld (ix-8),l\n\tld (ix-7),h\n\tinc hl\n",
+              out);
+        mir_machine_emit_global_word_store(
+            out, plan->call_count, 0);
+        mir_statement_vm_indexed_global(
+            out, plan->calls, MIR_STMT_INDEX, 2);
+        fputs("\tpush iy\n\tpop de\n", out);
+        fprintf(out, "\tld bc,%d\n\tex de,hl\n\tadd hl,bc\n"
+                     "\tex de,hl\n\tld (hl),e\n\tinc hl\n"
+                     "\tld (hl),d\n",
+                plan->statement_stride);
+        fputs("\tld l,(ix-4)\n\tld h,(ix-3)\n"
+              "\tpush hl\n\tpop iy\n", out);
+        fprintf(out, "\tjp L%d\n", dispatch);
+    }
+
+    {
+        int stack_ok = new_label();
+
+        fprintf(out, "L%d:\n", cases[5]);
+        mir_machine_emit_global_word(out, plan->loop_count, 0);
+        fprintf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n"
+                     "\tjp c,L%d\n",
+                plan->loop_limit, stack_ok);
+        mir_statement_vm_die(
+            out, plan, plan->loop_stack_string_id);
+        fprintf(out, "L%d:\n", stack_ok);
+        mir_statement_vm_evaluate_field(
+            out, plan, plan->statement_ae_offset);
+        fputs("\tld (ix-6),l\n\tld (ix-5),h\n", out);
+        mir_statement_vm_load_iy_word(
+            out, plan->statement_symbol_offset);
+        fputs("\tld (ix-8),l\n\tld (ix-7),h\n", out);
+        mir_statement_vm_store_symbol_value(out, plan);
+
+        mir_machine_emit_global_word(out, plan->loop_count, 0);
+        fputs("\tld (ix-8),l\n\tld (ix-7),h\n\tinc hl\n",
+              out);
+        mir_machine_emit_global_word_store(
+            out, plan->loop_count, 0);
+        mir_statement_vm_indexed_global(
+            out, plan->loops, MIR_STMT_INDEX,
+            plan->loop_stride);
+        fputs("\tld (ix-4),l\n\tld (ix-3),h\n", out);
+        mir_statement_vm_load_iy_word(
+            out, plan->statement_target_offset);
+        mir_statement_vm_store_pointer_word(
+            out, MIR_STMT_POINTER, plan->loop_label_offset);
+        fputs("\tpush iy\n\tpop hl\n", out);
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n",
+                plan->statement_stride);
+        mir_statement_vm_store_pointer_word(
+            out, MIR_STMT_POINTER, plan->loop_pc_offset);
+        mir_statement_vm_load_iy_word(
+            out, plan->statement_symbol_offset);
+        mir_statement_vm_store_pointer_word(
+            out, MIR_STMT_POINTER, plan->loop_symbol_offset);
+        mir_statement_vm_evaluate_field(
+            out, plan, plan->statement_be_offset);
+        mir_statement_vm_store_pointer_word(
+            out, MIR_STMT_POINTER, plan->loop_end_offset);
+        mir_statement_vm_evaluate_field(
+            out, plan, plan->statement_ce_offset);
+        mir_statement_vm_store_pointer_word(
+            out, MIR_STMT_POINTER, plan->loop_step_offset);
+        fprintf(out, "\tjp L%d\n", advance);
+    }
+
+    {
+        int no_loop = new_label();
+        int label_match = new_label();
+        int negative_step = new_label();
+        int continue_loop = new_label();
+        int finish_loop = new_label();
+
+        fprintf(out, "L%d:\n", cases[6]);
+        mir_machine_emit_global_word(out, plan->loop_count, 0);
+        fputs("\tld a,h\n\tor l\n", out);
+        fprintf(out, "\tjp z,L%d\n", no_loop);
+        fputs("\tdec hl\n\tld (ix-8),l\n\tld (ix-7),h\n",
+              out);
+        mir_statement_vm_indexed_global(
+            out, plan->loops, MIR_STMT_INDEX,
+            plan->loop_stride);
+        fputs("\tld (ix-4),l\n\tld (ix-3),h\n", out);
+        mir_statement_vm_load_pointer_word(
+            out, MIR_STMT_POINTER, plan->loop_label_offset);
+        fputs("\tex de,hl\n\tpush iy\n\tpop hl\n"
+              "\tor a\n\tsbc hl,de\n", out);
+        fprintf(out, "\tjp z,L%d\n\tjp L%d\n",
+                label_match, no_loop);
+        fprintf(out, "L%d:\n", label_match);
+        mir_statement_vm_load_pointer_word(
+            out, MIR_STMT_POINTER, plan->loop_step_offset);
+        fputs("\tpush hl\n", out);
+        mir_statement_vm_load_pointer_word(
+            out, MIR_STMT_POINTER, plan->loop_symbol_offset);
+        fputs("\tpush hl\n", out);
+        mir_machine_emit_symbol_call(out, plan->bump_function);
+        fputs("\tpop bc\n\tpop bc\n"
+              "\tld (ix-6),l\n\tld (ix-5),h\n", out);
+        mir_statement_vm_load_pointer_word(
+            out, MIR_STMT_POINTER, plan->loop_step_offset);
+        fputs("\tbit 7,h\n", out);
+        fprintf(out, "\tjp nz,L%d\n", negative_step);
+        fputs("\tld l,(ix-6)\n\tld h,(ix-5)\n"
+              "\tld (ix-10),l\n\tld (ix-9),h\n", out);
+        mir_statement_vm_load_pointer_word(
+            out, MIR_STMT_POINTER, plan->loop_end_offset);
+        fputs("\tex de,hl\t\n\tld l,(ix-10)\n\tld h,(ix-9)\n"
+              "\tld a,h\n\txor 128\n\tld h,a\n"
+              "\tld a,d\n\txor 128\n\tld d,a\n"
+              "\tor a\n\tsbc hl,de\n", out);
+        fprintf(out, "\tjp c,L%d\n\tjp z,L%d\n\tjp L%d\n",
+                continue_loop, continue_loop, finish_loop);
+        fprintf(out, "L%d:\n", negative_step);
+        fputs("\tld l,(ix-6)\n\tld h,(ix-5)\n"
+              "\tld (ix-10),l\n\tld (ix-9),h\n", out);
+        mir_statement_vm_load_pointer_word(
+            out, MIR_STMT_POINTER, plan->loop_end_offset);
+        fputs("\tex de,hl\n\tld l,(ix-10)\n\tld h,(ix-9)\n"
+              "\tld a,h\n\txor 128\n\tld h,a\n"
+              "\tld a,d\n\txor 128\n\tld d,a\n"
+              "\tor a\n\tsbc hl,de\n", out);
+        fprintf(out, "\tjp nc,L%d\n\tjp L%d\n",
+                continue_loop, finish_loop);
+        fprintf(out, "L%d:\n", continue_loop);
+        mir_statement_vm_load_pointer_word(
+            out, MIR_STMT_POINTER, plan->loop_pc_offset);
+        fputs("\tpush hl\n\tpop iy\n", out);
+        fprintf(out, "\tjp L%d\n", dispatch);
+        fprintf(out, "L%d:\n", finish_loop);
+        mir_machine_emit_global_word(out, plan->loop_count, 0);
+        fputs("\tdec hl\n", out);
+        mir_machine_emit_global_word_store(
+            out, plan->loop_count, 0);
+        fprintf(out, "L%d:\n\tjp L%d\n", no_loop, advance);
+    }
+
+    {
+        int false_path = new_label();
+        int action_goto = new_label();
+        int action_return = new_label();
+        int action_assign = new_label();
+        int target_ok = new_label();
+
+        fprintf(out, "L%d:\n", cases[7]);
+        mir_statement_vm_evaluate_field(
+            out, plan, plan->statement_ae_offset);
+        fputs("\tld a,h\n\tor l\n", out);
+        fprintf(out, "\tjp z,L%d\n", false_path);
+        mir_statement_vm_load_iy_word(
+            out, plan->statement_action_offset);
+        fprintf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n"
+                     "\tjp z,L%d\n",
+                plan->action_goto, action_goto);
+        mir_statement_vm_load_iy_word(
+            out, plan->statement_action_offset);
+        fprintf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n"
+                     "\tjp z,L%d\n",
+                plan->action_return, action_return);
+        mir_statement_vm_load_iy_word(
+            out, plan->statement_action_offset);
+        fprintf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n"
+                     "\tjp z,L%d\n\tjp L%d\n",
+                plan->action_assign, action_assign, false_path);
+        fprintf(out, "L%d:\n", action_goto);
+        mir_statement_vm_load_iy_word(
+            out, plan->statement_action_target_offset);
+        fputs("\tld a,h\n\tor l\n", out);
+        fprintf(out, "\tjp nz,L%d\n", target_ok);
+        mir_statement_vm_die(
+            out, plan, plan->bad_label_string_id);
+        fprintf(out, "L%d:\n\tpush hl\n\tpop iy\n\tjp L%d\n",
+                target_ok, dispatch);
+        fprintf(out, "L%d:\n", action_return);
+        mir_machine_emit_symbol_call(out, plan->return_function);
+        mir_machine_emit_global_word(out, plan->program_counter, 0);
+        fputs("\tpush hl\n\tpop iy\n", out);
+        fprintf(out, "\tjp L%d\n", dispatch);
+        fprintf(out, "L%d:\n", action_assign);
+        mir_statement_vm_load_iy_word(
+            out, plan->statement_action_rhs_offset);
+        fputs("\tpush hl\n", out);
+        mir_statement_vm_load_iy_word(
+            out, plan->statement_action_index_offset);
+        fputs("\tpush hl\n", out);
+        mir_statement_vm_load_iy_word(
+            out, plan->statement_action_symbol_offset);
+        fputs("\tpush hl\n", out);
+        mir_machine_emit_symbol_call(out, plan->assign_function);
+        fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
+        fprintf(out, "L%d:\n\tjp L%d\n", false_path, advance);
+    }
+
+    {
+        int target_ok = new_label();
+
+        fprintf(out, "L%d:\n", cases[8]);
+        mir_statement_vm_load_iy_word(
+            out, plan->statement_target_offset);
+        fputs("\tld a,h\n\tor l\n", out);
+        fprintf(out, "\tjp nz,L%d\n", target_ok);
+        mir_statement_vm_die(
+            out, plan, plan->bad_label_string_id);
+        fprintf(out, "L%d:\n\tpush hl\n\tpop iy\n\tjp L%d\n",
+                target_ok, dispatch);
+    }
+
+    {
+        int out_of_range = new_label();
+        int target_ok = new_label();
+
+        fprintf(out, "L%d:\n", cases[9]);
+        mir_statement_vm_evaluate_field(
+            out, plan, plan->statement_ae_offset);
+        fputs("\tld (ix-8),l\n\tld (ix-7),h\n"
+              "\tbit 7,h\n", out);
+        fprintf(out, "\tjp nz,L%d\n", out_of_range);
+        fputs("\tld a,h\n\tor l\n", out);
+        fprintf(out, "\tjp z,L%d\n", out_of_range);
+        mir_statement_vm_load_iy_word(
+            out, plan->statement_target_count_offset);
+        fputs("\tex de,hl\n\tld l,(ix-8)\n\tld h,(ix-7)\n"
+              "\tld a,h\n\txor 128\n\tld h,a\n"
+              "\tld a,d\n\txor 128\n\tld d,a\n"
+              "\tor a\n\tsbc hl,de\n", out);
+        fprintf(out, "\tjp c,L%d\n\tjp z,L%d\n",
+                target_ok, target_ok);
+        fprintf(out, "\tjp L%d\nL%d:\n",
+                out_of_range, target_ok);
+        fputs("\tld l,(ix-8)\n\tld h,(ix-7)\n"
+              "\tdec hl\n\tadd hl,hl\n", out);
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n"
+                     "\tpush iy\n\tpop de\n\tadd hl,de\n"
+                     "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+                     "\tld a,d\n\tor e\n",
+                plan->statement_targets_offset);
+        {
+            int nonnull = new_label();
+
+            fprintf(out, "\tjp nz,L%d\n", nonnull);
+            mir_statement_vm_die(
+                out, plan, plan->bad_label_string_id);
+            fprintf(out, "L%d:\n\tpush de\n\tpop iy\n\tjp L%d\n",
+                    nonnull, dispatch);
+        }
+        fprintf(out, "L%d:\n\tjp L%d\n", out_of_range, advance);
+    }
+
+    fprintf(out, "L%d:\n", cases[10]);
+    mir_statement_vm_load_iy_word(
+        out, plan->statement_be_offset);
+    fputs("\tpush hl\n", out);
+    mir_statement_vm_load_iy_word(
+        out, plan->statement_ae_offset);
+    fputs("\tpush hl\n", out);
+    mir_statement_vm_load_iy_word(
+        out, plan->statement_symbol_offset);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->assign_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n", out);
+
+    fprintf(out, "L%d:\n", advance);
+    mir_statement_vm_advance(out, plan, dispatch);
+    fprintf(out,
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tpop iy\n"
+            ";@dcc.reg free=iy\n\tret\n",
+            done);
+}
+
+static int mir_match_format_walk_schedule(
+    struct MirFormatWalkSchedule *plan)
+{
+    static const unsigned char expected_opcodes[188] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_CONST, MIR_NOP,
+        MIR_STORE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BRANCH_FALSE, MIR_NOP,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY,
+        MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST,
+        MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_PHI, MIR_NOP, MIR_NOP, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_NOP, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL,
+        MIR_PHI, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_PHI,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_NOP, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL,
+        MIR_PHI, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_PHI,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_NOP, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL,
+        MIR_PHI, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_PHI,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_JUMP, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_NOP, MIR_LABEL,
+        MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_NOP, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL, MIR_LABEL, MIR_NOP,
+        MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_ARG, MIR_CALL,
+        MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL
+    };
+    const struct MirInsn *format = &mir.insns[1];
+    const struct MirInsn *argument_count = &mir.insns[2];
+    const struct MirInsn *values = &mir.insns[3];
+    int print_arguments[2];
+    int putchar_argument;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 188 || mir_cfg_block_count() != 36 ||
+        mir.has_vla || mir.local_bytes != 6 ||
+        mir.aggregate_temp_bytes != 0 ||
+        !mir_has_cfg_backedge() ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "format-walk-schedule", "opcodes");
+
+    if (!mir_machine_parameter_value_offset(
+            format->dst, &plan->format_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            argument_count->dst,
+            &plan->argument_count_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            values->dst, &plan->values_stack_offset) ||
+        plan->format_stack_offset < 2 ||
+        plan->argument_count_stack_offset !=
+            plan->format_stack_offset + 2 ||
+        plan->values_stack_offset !=
+            plan->argument_count_stack_offset + 2 ||
+        plan->values_stack_offset > 121 ||
+        type_ptr_depth(format->type) != 1 ||
+        type_size(format->type) != 2 ||
+        type_ptr_depth(argument_count->type) != 0 ||
+        type_size(argument_count->type) != 2 ||
+        type_ptr_depth(values->type) != 1 ||
+        type_size(values->type) != 2 ||
+        mir_machine_pointee_is_volatile(format) ||
+        mir_machine_pointee_is_volatile(values))
+        return mir_machine_reject(
+            "format-walk-schedule", "parameters");
+
+    plan->print_function = find_global(mir.insns[171].name);
+    plan->putchar_function = find_global(mir.insns[178].name);
+    if (plan->print_function == NULL ||
+        plan->putchar_function == NULL ||
+        plan->print_function->proto_nargs < 1 ||
+        plan->putchar_function->proto_nargs != 1 ||
+        plan->putchar_function->proto_variadic ||
+        !mir_machine_two_call_arguments(
+            &mir.insns[171], print_arguments) ||
+        print_arguments[0] != mir.insns[161].dst ||
+        print_arguments[1] != mir.insns[169].dst ||
+        !mir_machine_single_call_argument(
+            &mir.insns[178], &putchar_argument) ||
+        putchar_argument != mir.insns[25].dst)
+        return mir_machine_reject(
+            "format-walk-schedule", "calls");
+    plan->integer_format_string_id =
+        (int)mir.insns[161].immediate;
+    if (plan->integer_format_string_id < 0 ||
+        !mir_machine_constant_equals(mir.insns[28].dst, '%') ||
+        !mir_machine_constant_equals(mir.insns[62].dst, 'l') ||
+        !mir_machine_constant_equals(mir.insns[74].dst, 'u') ||
+        !mir_machine_constant_equals(mir.insns[98].dst, 'd') ||
+        !mir_machine_constant_equals(mir.insns[118].dst, 'u') ||
+        !mir_machine_constant_equals(mir.insns[130].dst, 'd') ||
+        !mir_machine_constant_equals(mir.insns[165].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[183].dst, 1))
+        return mir_machine_reject(
+            "format-walk-schedule", "constants");
+    return 1;
+}
+
+static void mir_emit_format_walk_schedule(
+    FILE *out, const struct MirFormatWalkSchedule *plan)
+{
+    int loop = new_label();
+    int ordinary = new_label();
+    int specifier = new_label();
+    int print_done = new_label();
+    int next_character = new_label();
+    int done = new_label();
+    int count_offset =
+        plan->argument_count_stack_offset + 4;
+    int values_offset = plan->values_stack_offset + 4;
+
+    fputs(";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
+          "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-2\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tpush hl\n\tpop iy\n"
+            "\txor a\n\tld (ix-2),a\n\tld (ix-1),a\n"
+            "L%d:\n\tld a,(iy)\n\tor a\n\tjp z,L%d\n"
+            "\tcp %d\n\tjp nz,L%d\n"
+            "\tld a,(iy+1)\n\tor a\n\tjp z,L%d\n"
+            "\tinc iy\n"
+            "L%d:\n\tld a,(iy)\n\tcp %d\n"
+            "\tjp nz,L%d\n\tinc iy\n\tjp L%d\n"
+            "L%d:\n",
+            plan->format_stack_offset + 4,
+            plan->format_stack_offset + 5,
+            loop, done, '%', ordinary, ordinary,
+            specifier, 'l', print_done, specifier, print_done);
+    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n", out);
+    fprintf(out,
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+            count_offset, count_offset + 1);
+    fputs("\tld a,h\n\txor 128\n\tld h,a\n"
+          "\tld a,d\n\txor 128\n\tld d,a\n"
+          "\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp nc,L%d\n", next_character);
+    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n\tadd hl,hl\n",
+          out);
+    fprintf(out,
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+            values_offset, values_offset + 1);
+    fputs("\tadd hl,de\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tpush de\n\tinc (ix-2)\n", out);
+    {
+        int no_carry = new_label();
+
+        fprintf(out,
+                "\tjp nz,L%d\n\tinc (ix-1)\nL%d:\n",
+                no_carry, no_carry);
+    }
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->integer_format_string_id);
+    mir_machine_emit_symbol_call(out, plan->print_function);
+    fputs("\tpop bc\n\tpop bc\n", out);
+    fprintf(out, "\tjp L%d\n", next_character);
+
+    fprintf(out, "L%d:\n\tld l,a\n", ordinary);
+    fputs("\trla\n\tsbc a,a\n\tld h,a\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->putchar_function);
+    fputs("\tpop bc\n", out);
+
+    fprintf(out,
+            "L%d:\n\tinc iy\n\tjp L%d\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tpop iy\n"
+            ";@dcc.reg free=iy\n\tret\n",
+            next_character, loop, done);
+}
+
+static int mir_match_inline_call_sum_schedule(
+    struct MirInlineCallSumSchedule *plan)
+{
+    static const int expected_opcodes[37] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_CONST,
+        MIR_NOP, MIR_STORE, MIR_CONST, MIR_NOP,
+        MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP,
+        MIR_PHI, MIR_PHI, MIR_NOP, MIR_NOP,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_ARG, MIR_CALL, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_BINARY, MIR_NOP, MIR_STORE,
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP,
+        MIR_RETURN
+    };
+    const struct MirInsn *values = &mir.insns[1];
+    const struct MirInsn *count = &mir.insns[2];
+    const struct MirInsn *total_store = &mir.insns[5];
+    const struct MirInsn *index_store = &mir.insns[8];
+    const struct MirInsn *total_phi = &mir.insns[12];
+    const struct MirInsn *index_phi = &mir.insns[13];
+    const struct MirInsn *call = &mir.insns[22];
+    const struct MirInsn *load = &mir.insns[24];
+    const char *assembly_name;
+    int argument;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 37 || mir_cfg_block_count() != 4 ||
+        mir.has_vla ||
+        !mir_inline_call_sum_signed_word_type(mir.return_type))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+        return mir_machine_reject(
+            "inline-call-sum-schedule", "opcodes");
+
+    if (!mir_machine_parameter_value_offset(
+        values->dst, &plan->values_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+        count->dst, &plan->count_stack_offset) ||
+        plan->count_stack_offset !=
+        plan->values_stack_offset + 2 ||
+        !mir_inline_call_sum_word_pointer_type(values->type) ||
+        mir_machine_pointee_is_volatile(values) ||
+        !mir_machine_named_nonvolatile(values) ||
+        !mir_inline_call_sum_signed_word_type(count->type) ||
+        !mir_machine_named_nonvolatile(count) ||
+        values->object < 0 || count->object < 0 ||
+        values->object == count->object ||
+        mir.insns[10].object != values->object ||
+        mir.insns[11].object != count->object ||
+        mir.insns[15].object != count->object)
+        return mir_machine_reject(
+        "inline-call-sum-schedule", "parameters");
+
+    if (!mir_machine_constant_equals(mir.insns[3].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[6].dst, 0) ||
+        !mir_machine_unobservable_local_store(total_store) ||
+        !mir_machine_unobservable_local_store(index_store) ||
+        total_store->src1 != mir.insns[3].dst ||
+        index_store->src1 != mir.insns[6].dst ||
+        total_store->object < 0 || index_store->object < 0 ||
+        total_store->object == index_store->object ||
+        total_phi->object != total_store->object ||
+        index_phi->object != index_store->object ||
+        !mir_machine_same_location(total_phi, total_store) ||
+        !mir_machine_same_location(index_phi, index_store) ||
+        total_phi->src1 != mir.insns[3].dst ||
+        total_phi->src2 != mir.insns[25].dst ||
+        index_phi->src1 != mir.insns[6].dst ||
+        index_phi->src2 != mir.insns[31].dst ||
+        total_phi->phi_pred1 != mir.insns[0].label ||
+        total_phi->phi_pred2 != mir.insns[28].label ||
+        index_phi->phi_pred1 != mir.insns[0].label ||
+        index_phi->phi_pred2 != mir.insns[28].label ||
+        !mir_inline_call_sum_signed_word_type(total_phi->type) ||
+        !mir_inline_call_sum_signed_word_type(index_phi->type))
+        return mir_machine_reject(
+        "inline-call-sum-schedule", "loop-state");
+
+    if (mir.insns[16].src1 != index_phi->dst ||
+        mir.insns[16].src2 != count->dst ||
+        mir.insns[16].immediate != '<' ||
+        mir.insns[16].secondary_offset != TYPE_INT ||
+        !mir_inline_call_sum_signed_word_type(mir.insns[16].type) ||
+        mir.insns[17].src1 != mir.insns[16].dst ||
+        mir.insns[17].label != mir.insns[34].label ||
+        mir.insns[18].object != total_store->object ||
+        mir.insns[19].object != values->object ||
+        mir.insns[20].object != index_store->object ||
+        !mir_machine_single_call_argument(call, &argument) ||
+        argument != index_phi->dst)
+        return mir_machine_reject(
+        "inline-call-sum-schedule", "loop");
+
+    plan->index_function = find_global(call->name);
+    if (call->src1 >= 0 ||
+        (call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+        plan->index_function == NULL ||
+        plan->index_function->storage != SC_FUNC ||
+        plan->index_function->is_funcptr ||
+        plan->index_function->is_noreturn ||
+        !plan->index_function->has_proto ||
+        plan->index_function->proto_variadic ||
+        plan->index_function->proto_nargs != 1 ||
+        !mir_inline_call_sum_signed_word_type(
+        plan->index_function->type) ||
+        !mir_inline_call_sum_signed_word_type(
+        plan->index_function->proto_types[0]) ||
+        !mir_inline_call_sum_signed_word_type(call->type))
+        return mir_machine_reject(
+        "inline-call-sum-schedule", "call");
+    assembly_name =
+        asm_name_for(sym_asm_name(plan->index_function));
+    if (call->base_name[0] != 0 &&
+        strcmp(call->base_name, assembly_name))
+        return mir_machine_reject(
+        "inline-call-sum-schedule", "call-name");
+
+    if (mir.insns[23].src1 != values->dst ||
+        mir.insns[23].src2 != call->dst ||
+        !mir_inline_call_sum_word_pointer_type(
+        mir.insns[23].type) ||
+        mir.insns[23].memory_size != 2 ||
+        mir.insns[23].immediate != 2 ||
+        (mir.insns[23].memory_flags & (1 | 8)) != 0 ||
+        load->src1 != mir.insns[23].dst ||
+        load->memory_size != 2 ||
+        load->bit_width != 0 ||
+        (load->memory_flags & (1 | 8)) != 0 ||
+        !mir_inline_call_sum_signed_word_type(load->type) ||
+        mir.insns[25].src1 != total_phi->dst ||
+        mir.insns[25].src2 != load->dst ||
+        mir.insns[25].immediate != '+' ||
+        mir.insns[25].secondary_offset != TYPE_INT ||
+        !mir_inline_call_sum_signed_word_type(
+        mir.insns[25].type) ||
+        !mir_machine_same_location(
+        &mir.insns[27], total_store) ||
+        mir.insns[27].src1 != mir.insns[25].dst)
+        return mir_machine_reject(
+        "inline-call-sum-schedule", "accumulate");
+
+    if (!mir_machine_constant_equals(mir.insns[30].dst, 1) ||
+        mir.insns[31].src1 != index_phi->dst ||
+        mir.insns[31].src2 != mir.insns[30].dst ||
+        mir.insns[31].immediate != '+' ||
+        mir.insns[31].secondary_offset != TYPE_INT ||
+        !mir_inline_call_sum_signed_word_type(
+        mir.insns[31].type) ||
+        !mir_machine_same_location(
+        &mir.insns[32], index_store) ||
+        mir.insns[32].src1 != mir.insns[31].dst ||
+        mir.insns[33].label != mir.insns[9].label ||
+        mir.insns[35].object != total_store->object ||
+        mir.insns[36].src1 != total_phi->dst)
+        return mir_machine_reject(
+        "inline-call-sum-schedule", "tail");
+    return 1;
+}
+
+static void mir_emit_inline_call_sum_schedule(
+    FILE *out, const struct MirInlineCallSumSchedule *plan)
+{
+    int loop = new_label();
+    int done = new_label();
+    int increment_high = new_label();
+
+    fputs(";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
+          "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-4\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+        "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+        "\tpush hl\n\tpop iy\n"
+        "\tld hl,0\n"
+        "\tld (ix-2),l\n\tld (ix-1),h\n"
+        "\tld (ix-4),l\n\tld (ix-3),h\n"
+        "L%d:\n"
+        "\tld l,(ix-4)\n\tld h,(ix-3)\n"
+        "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+        "\tld a,h\n\txor 128\n\tld h,a\n"
+        "\tld a,d\n\txor 128\n\tld d,a\n"
+        "\tor a\n\tsbc hl,de\n\tjp nc,L%d\n"
+        "\tld l,(ix-4)\n\tld h,(ix-3)\n\tpush hl\n",
+        plan->values_stack_offset + 4,
+        plan->values_stack_offset + 5,
+        loop,
+        plan->count_stack_offset + 4,
+        plan->count_stack_offset + 5,
+        done);
+    mir_machine_emit_symbol_call(out, plan->index_function);
+    fputs("\tpop bc\n\tadd hl,hl\n\tpush iy\n\tpop de\n"
+          "\tadd hl,de\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tld l,(ix-2)\n\tld h,(ix-1)\n\tadd hl,de\n"
+          "\tld (ix-2),l\n\tld (ix-1),h\n"
+          "\tinc (ix-4)\n", out);
+    fprintf(out,
+        "\tjp nz,L%d\n\tinc (ix-3)\n"
+        "L%d:\n\tjp L%d\n"
+        "L%d:\n\tld l,(ix-2)\n\tld h,(ix-1)\n"
+        "\tld sp,ix\n\tpop ix\n\tpop iy\n"
+        ";@dcc.reg free=iy\n\tret\n",
+        increment_high, increment_high, loop, done);
+}
+
+static int mir_call_safe_signed_word_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+        !type_is_float(type) &&
+        (type & 15) == TYPE_INT &&
+        (type & TYPE_UNSIGNED) == 0 &&
+        type_size(type) == 2;
+}
+
+static int mir_call_safe_word_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+        !type_is_float(type) &&
+        type_size(type) == 2;
+}
+
+static int mir_call_safe_same_direct_function(
+    const struct MirInsn *call, struct Sym **function)
+{
+    struct Sym *candidate;
+
+    if (call->opcode != MIR_CALL ||
+        !strcmp(call->name, "<indirect>") ||
+        (call->memory_flags &
+         (MIR_CALL_FLAG_VARIADIC |
+          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
+        (type_size(call->type) != 0 &&
+         !mir_call_safe_signed_word_type(call->type)))
+        return 0;
+    candidate = find_global(call->name);
+    if (candidate == NULL || candidate->is_funcptr)
+        return 0;
+    if (*function == NULL)
+        *function = candidate;
+    return *function == candidate;
+}
+
+static int mir_match_call_safe_countdown_sum_schedule(
+    struct MirCallSafeWordLoopSchedule *plan)
+{
+    static const int expected_opcodes[54] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_CONST, MIR_STORE, MIR_LABEL,
+        MIR_PHI, MIR_NOP, MIR_PHI, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_BINARY, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_ARG, MIR_CALL, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_ARG, MIR_CALL, MIR_BINARY, MIR_NOP, MIR_BINARY,
+        MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP, MIR_LABEL, MIR_JUMP,
+        MIR_LABEL, MIR_NOP, MIR_RETURN
+    };
+    const struct MirInsn *counter = &mir.insns[1];
+    const struct MirInsn *values = &mir.insns[2];
+    const struct MirInsn *total_store = &mir.insns[4];
+    const struct MirInsn *counter_phi = &mir.insns[6];
+    const struct MirInsn *total_phi = &mir.insns[8];
+    struct Sym *call_function = NULL;
+    int argument;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 54 || mir_cfg_block_count() != 4 ||
+        mir.has_vla ||
+        !mir_call_safe_signed_word_type(mir.return_type))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+                expected_opcodes[instruction])
+            return mir_machine_reject(
+                "call-safe-countdown-sum-schedule", "opcodes");
+    if (!mir_machine_parameter_value_offset(
+            counter->dst, &plan->first_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            values->dst, &plan->second_stack_offset) ||
+        plan->second_stack_offset != plan->first_stack_offset + 2 ||
+        !mir_call_safe_signed_word_type(counter->type) ||
+        !mir_call_safe_word_pointer_type(values->type) ||
+        !mir_machine_named_nonvolatile(counter) ||
+        !mir_machine_named_nonvolatile(values) ||
+        mir_machine_pointee_is_volatile(values) ||
+        counter->object < 0 || values->object < 0 ||
+        counter->object == values->object ||
+        mir.insns[7].object != values->object)
+        return mir_machine_reject(
+            "call-safe-countdown-sum-schedule", "parameters");
+    if (!mir_machine_constant_equals(mir.insns[3].dst, 0) ||
+        !mir_machine_unobservable_local_store(total_store) ||
+        total_store->src1 != mir.insns[3].dst ||
+        total_store->object < 0 ||
+        counter_phi->object != counter->object ||
+        total_phi->object != total_store->object ||
+        !mir_machine_same_location(counter_phi, counter) ||
+        !mir_machine_same_location(total_phi, total_store) ||
+        counter_phi->src1 != counter->dst ||
+        counter_phi->src2 != mir.insns[15].dst ||
+        total_phi->src1 != mir.insns[3].dst ||
+        total_phi->src2 != mir.insns[45].dst ||
+        counter_phi->phi_pred1 != mir.insns[0].label ||
+        counter_phi->phi_pred2 != mir.insns[49].label ||
+        total_phi->phi_pred1 != mir.insns[0].label ||
+        total_phi->phi_pred2 != mir.insns[49].label)
+        return mir_machine_reject(
+            "call-safe-countdown-sum-schedule", "loop-state");
+    if (!mir_call_safe_signed_word_type(counter_phi->type) ||
+        !mir_call_safe_signed_word_type(total_phi->type))
+        return mir_machine_reject(
+            "call-safe-countdown-sum-schedule", "loop-types");
+    if (!mir_machine_constant_equals(mir.insns[10].dst, 0) ||
+        mir.insns[11].src1 != counter_phi->dst ||
+        mir.insns[11].src2 != mir.insns[10].dst ||
+        mir.insns[11].immediate != '>' ||
+        mir.insns[12].src1 != mir.insns[11].dst ||
+        mir.insns[12].label != mir.insns[51].label ||
+        !mir_machine_constant_equals(mir.insns[14].dst, 1) ||
+        mir.insns[15].src1 != counter_phi->dst ||
+        mir.insns[15].src2 != mir.insns[14].dst ||
+        mir.insns[15].immediate != '-' ||
+        !mir_machine_same_location(&mir.insns[16], counter) ||
+        mir.insns[16].src1 != mir.insns[15].dst)
+        return mir_machine_reject(
+            "call-safe-countdown-sum-schedule", "countdown");
+    if (!mir_machine_constant_equals(mir.insns[20].dst, 3) ||
+        mir.insns[21].src1 != mir.insns[15].dst ||
+        mir.insns[21].src2 != mir.insns[20].dst ||
+        mir.insns[21].immediate != '&' ||
+        mir.insns[22].src1 != values->dst ||
+        mir.insns[22].src2 != mir.insns[21].dst ||
+        mir.insns[22].immediate != 2 ||
+        mir.insns[22].memory_size != 2 ||
+        mir.insns[23].src1 != mir.insns[22].dst ||
+        mir.insns[23].memory_size != 2 ||
+        !mir_call_safe_signed_word_type(mir.insns[23].type) ||
+        (mir.insns[23].memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_single_call_argument(
+            &mir.insns[25], &argument) ||
+        argument != mir.insns[23].dst ||
+        !mir_call_safe_signed_word_type(mir.insns[25].type) ||
+        !mir_call_safe_same_direct_function(
+            &mir.insns[25], &call_function))
+        return mir_machine_reject(
+            "call-safe-countdown-sum-schedule", "indexed-call");
+    if (mir.insns[27].immediate != '+' ||
+        !((mir.insns[27].src1 == mir.insns[25].dst &&
+           mir.insns[27].src2 == mir.insns[15].dst) ||
+          (mir.insns[27].src2 == mir.insns[25].dst &&
+           mir.insns[27].src1 == mir.insns[15].dst)) ||
+        mir.insns[28].immediate != '+' ||
+        !((mir.insns[28].src1 == total_phi->dst &&
+           mir.insns[28].src2 == mir.insns[27].dst) ||
+          (mir.insns[28].src2 == total_phi->dst &&
+           mir.insns[28].src1 == mir.insns[27].dst)) ||
+        !mir_machine_same_location(&mir.insns[30], total_store) ||
+        mir.insns[30].src1 != mir.insns[28].dst)
+        return mir_machine_reject(
+            "call-safe-countdown-sum-schedule", "first-sum");
+    if (!mir_machine_constant_equals(mir.insns[33].dst, 1) ||
+        mir.insns[34].src1 != mir.insns[15].dst ||
+        mir.insns[34].src2 != mir.insns[33].dst ||
+        mir.insns[34].immediate != '+' ||
+        !mir_machine_single_call_argument(
+            &mir.insns[36], &argument) ||
+        argument != mir.insns[34].dst ||
+        !mir_call_safe_signed_word_type(mir.insns[36].type) ||
+        !mir_call_safe_same_direct_function(
+            &mir.insns[36], &call_function) ||
+        !mir_machine_constant_equals(mir.insns[38].dst, 1) ||
+        mir.insns[39].src1 != mir.insns[15].dst ||
+        mir.insns[39].src2 != mir.insns[38].dst ||
+        mir.insns[39].immediate != '-' ||
+        !mir_machine_single_call_argument(
+            &mir.insns[41], &argument) ||
+        argument != mir.insns[39].dst ||
+        !mir_call_safe_signed_word_type(mir.insns[41].type) ||
+        !mir_call_safe_same_direct_function(
+            &mir.insns[41], &call_function) ||
+        mir.insns[42].immediate != '+' ||
+        !((mir.insns[42].src1 == mir.insns[36].dst &&
+           mir.insns[42].src2 == mir.insns[41].dst) ||
+          (mir.insns[42].src2 == mir.insns[36].dst &&
+           mir.insns[42].src1 == mir.insns[41].dst)) ||
+        mir.insns[44].immediate != '+' ||
+        !((mir.insns[44].src1 == mir.insns[42].dst &&
+           mir.insns[44].src2 == mir.insns[15].dst) ||
+          (mir.insns[44].src2 == mir.insns[42].dst &&
+           mir.insns[44].src1 == mir.insns[15].dst)) ||
+        mir.insns[45].immediate != '+' ||
+        !((mir.insns[45].src1 == mir.insns[28].dst &&
+           mir.insns[45].src2 == mir.insns[44].dst) ||
+          (mir.insns[45].src2 == mir.insns[28].dst &&
+           mir.insns[45].src1 == mir.insns[44].dst)) ||
+        !mir_machine_same_location(&mir.insns[47], total_store) ||
+        mir.insns[47].src1 != mir.insns[45].dst ||
+        mir.insns[50].label != mir.insns[5].label ||
+        mir.insns[53].src1 != total_phi->dst)
+        return mir_machine_reject(
+            "call-safe-countdown-sum-schedule", "second-sum");
+    plan->kind = MIR_CALL_SAFE_COUNTDOWN_SUM;
+    plan->call_function = call_function;
+    return 1;
+}
+
+static int mir_call_safe_member_load(
+    int member_instruction, int load_instruction,
+    int base, int offset)
+{
+    const struct MirInsn *member = &mir.insns[member_instruction];
+    const struct MirInsn *load = &mir.insns[load_instruction];
+
+    return member->opcode == MIR_MEMBER_ADDRESS &&
+        member->src1 == base &&
+        member->immediate == offset &&
+        member->memory_size == 2 &&
+        (member->memory_flags & (1 | 8)) == 0 &&
+        load->opcode == MIR_LOAD_INDIRECT &&
+        load->src1 == member->dst &&
+        load->memory_size == 2 &&
+        (load->memory_flags & (1 | 8)) == 0 &&
+        mir_call_safe_signed_word_type(load->type);
+}
+
+static int mir_match_call_safe_member_sum_schedule(
+    struct MirCallSafeWordLoopSchedule *plan)
+{
+    static const int expected_opcodes[69] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_CONST, MIR_STORE, MIR_CONST,
+        MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_PHI,
+        MIR_PHI, MIR_NOP, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP,
+        MIR_NOP, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL,
+        MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL,
+        MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL,
+        MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY, MIR_NOP,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BINARY,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_RETURN
+    };
+    static const int member_instructions[6] = {
+        19, 28, 37, 46, 49, 53
+    };
+    static const int load_instructions[6] = {
+        20, 29, 38, 47, 50, 54
+    };
+    const struct MirInsn *pointer = &mir.insns[1];
+    const struct MirInsn *count = &mir.insns[2];
+    const struct MirInsn *total_store = &mir.insns[4];
+    const struct MirInsn *index_store = &mir.insns[7];
+    const struct MirInsn *total_phi = &mir.insns[11];
+    const struct MirInsn *index_phi = &mir.insns[12];
+    struct Sym *call_function = NULL;
+    int argument;
+    int member;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 69 || mir_cfg_block_count() != 4 ||
+        mir.has_vla ||
+        !mir_call_safe_signed_word_type(mir.return_type))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+                expected_opcodes[instruction])
+            return mir_machine_reject(
+                "call-safe-member-sum-schedule", "opcodes");
+    if (!mir_machine_parameter_value_offset(
+            pointer->dst, &plan->first_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            count->dst, &plan->second_stack_offset) ||
+        plan->second_stack_offset != plan->first_stack_offset + 2 ||
+        !mir_call_safe_word_pointer_type(pointer->type) ||
+        !mir_call_safe_signed_word_type(count->type) ||
+        !mir_machine_named_nonvolatile(pointer) ||
+        !mir_machine_named_nonvolatile(count) ||
+        mir_machine_pointee_is_volatile(pointer) ||
+        pointer->object < 0 || count->object < 0 ||
+        pointer->object == count->object ||
+        mir.insns[9].object != pointer->object ||
+        mir.insns[10].object != count->object ||
+        mir.insns[14].object != count->object)
+        return mir_machine_reject(
+            "call-safe-member-sum-schedule", "parameters");
+    if (!mir_machine_constant_equals(mir.insns[3].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[5].dst, 0) ||
+        !mir_machine_unobservable_local_store(total_store) ||
+        !mir_machine_unobservable_local_store(index_store) ||
+        total_store->src1 != mir.insns[3].dst ||
+        index_store->src1 != mir.insns[5].dst ||
+        total_store->object < 0 || index_store->object < 0 ||
+        total_store->object == index_store->object ||
+        total_phi->object != total_store->object ||
+        index_phi->object != index_store->object ||
+        !mir_machine_same_location(total_phi, total_store) ||
+        !mir_machine_same_location(index_phi, index_store) ||
+        total_phi->src1 != mir.insns[3].dst ||
+        total_phi->src2 != mir.insns[56].dst ||
+        index_phi->src1 != mir.insns[5].dst ||
+        index_phi->src2 != mir.insns[63].dst ||
+        total_phi->phi_pred1 != mir.insns[0].label ||
+        total_phi->phi_pred2 != mir.insns[60].label ||
+        index_phi->phi_pred1 != mir.insns[0].label ||
+        index_phi->phi_pred2 != mir.insns[60].label)
+        return mir_machine_reject(
+            "call-safe-member-sum-schedule", "loop-state");
+    if (!mir_call_safe_signed_word_type(total_phi->type) ||
+        !mir_call_safe_signed_word_type(index_phi->type))
+        return mir_machine_reject(
+            "call-safe-member-sum-schedule", "loop-types");
+    if (mir.insns[15].src1 != index_phi->dst ||
+        mir.insns[15].src2 != count->dst ||
+        mir.insns[15].immediate != '<' ||
+        mir.insns[16].src1 != mir.insns[15].dst ||
+        mir.insns[16].label != mir.insns[66].label)
+        return mir_machine_reject(
+            "call-safe-member-sum-schedule", "condition");
+    plan->member_offsets[0] = (int)mir.insns[19].immediate;
+    plan->member_offsets[1] = (int)mir.insns[28].immediate;
+    plan->member_offsets[2] = (int)mir.insns[37].immediate;
+    if (plan->member_offsets[0] < 0 ||
+        plan->member_offsets[1] != plan->member_offsets[0] + 2 ||
+        plan->member_offsets[2] != plan->member_offsets[1] + 2)
+        return mir_machine_reject(
+            "call-safe-member-sum-schedule", "layout");
+    for (member = 0; member < 6; ++member)
+        if (!mir_call_safe_member_load(
+                member_instructions[member],
+                load_instructions[member],
+                pointer->dst,
+                plan->member_offsets[member % 3]))
+            return mir_machine_reject(
+                "call-safe-member-sum-schedule", "member-load");
+    for (member = 0; member < 3; ++member) {
+        const struct MirInsn *call = &mir.insns[22 + member * 9];
+
+        if (!mir_machine_single_call_argument(call, &argument) ||
+            argument != mir.insns[20 + member * 9].dst ||
+            !mir_call_safe_signed_word_type(call->type) ||
+            !mir_call_safe_same_direct_function(
+                call, &call_function))
+            return mir_machine_reject(
+                "call-safe-member-sum-schedule", "calls");
+    }
+    if (mir.insns[23].immediate != '+' ||
+        !((mir.insns[23].src1 == total_phi->dst &&
+           mir.insns[23].src2 == mir.insns[22].dst) ||
+          (mir.insns[23].src2 == total_phi->dst &&
+           mir.insns[23].src1 == mir.insns[22].dst)) ||
+        mir.insns[32].immediate != '+' ||
+        !((mir.insns[32].src1 == mir.insns[23].dst &&
+           mir.insns[32].src2 == mir.insns[31].dst) ||
+          (mir.insns[32].src2 == mir.insns[23].dst &&
+           mir.insns[32].src1 == mir.insns[31].dst)) ||
+        mir.insns[41].immediate != '+' ||
+        !((mir.insns[41].src1 == mir.insns[32].dst &&
+           mir.insns[41].src2 == mir.insns[40].dst) ||
+          (mir.insns[41].src2 == mir.insns[32].dst &&
+           mir.insns[41].src1 == mir.insns[40].dst)) ||
+        !mir_machine_same_location(&mir.insns[25], total_store) ||
+        mir.insns[25].src1 != mir.insns[23].dst ||
+        !mir_machine_same_location(&mir.insns[34], total_store) ||
+        mir.insns[34].src1 != mir.insns[32].dst ||
+        !mir_machine_same_location(&mir.insns[43], total_store) ||
+        mir.insns[43].src1 != mir.insns[41].dst)
+        return mir_machine_reject(
+            "call-safe-member-sum-schedule", "call-sum");
+    if (mir.insns[51].immediate != '+' ||
+        !((mir.insns[51].src1 == mir.insns[47].dst &&
+           mir.insns[51].src2 == mir.insns[50].dst) ||
+          (mir.insns[51].src2 == mir.insns[47].dst &&
+           mir.insns[51].src1 == mir.insns[50].dst)) ||
+        mir.insns[55].immediate != '+' ||
+        !((mir.insns[55].src1 == mir.insns[51].dst &&
+           mir.insns[55].src2 == mir.insns[54].dst) ||
+          (mir.insns[55].src2 == mir.insns[51].dst &&
+           mir.insns[55].src1 == mir.insns[54].dst)) ||
+        mir.insns[56].immediate != '+' ||
+        !((mir.insns[56].src1 == mir.insns[41].dst &&
+           mir.insns[56].src2 == mir.insns[55].dst) ||
+          (mir.insns[56].src2 == mir.insns[41].dst &&
+           mir.insns[56].src1 == mir.insns[55].dst)) ||
+        !mir_machine_same_location(&mir.insns[58], total_store) ||
+        mir.insns[58].src1 != mir.insns[56].dst ||
+        !mir_machine_constant_equals(mir.insns[62].dst, 1) ||
+        mir.insns[63].src1 != index_phi->dst ||
+        mir.insns[63].src2 != mir.insns[62].dst ||
+        mir.insns[63].immediate != '+' ||
+        !mir_machine_same_location(&mir.insns[64], index_store) ||
+        mir.insns[64].src1 != mir.insns[63].dst ||
+        mir.insns[65].label != mir.insns[8].label ||
+        mir.insns[68].src1 != total_phi->dst)
+        return mir_machine_reject(
+            "call-safe-member-sum-schedule", "tail");
+    plan->kind = MIR_CALL_SAFE_MEMBER_SUM;
+    plan->call_function = call_function;
+    return 1;
+}
+
+static void mir_emit_call_safe_countdown_sum_schedule(
+    FILE *out, const struct MirCallSafeWordLoopSchedule *plan)
+{
+    int loop = new_label();
+    int done = new_label();
+
+    fputs(";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
+          "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tdec sp\n\tdec sp\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tpush hl\n\tpop iy\n"
+            "\tld hl,0\n\tld (ix-2),l\n\tld (ix-1),h\n"
+            "L%d:\n\tpush iy\n\tpop hl\n"
+            "\tld a,h\n\tor l\n\tjp z,L%d\n"
+            "\tbit 7,h\n\tjp nz,L%d\n"
+            "\tdec iy\n"
+            "\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
+            "\tpush iy\n\tpop hl\n\tld h,0\n\tld a,l\n"
+            "\tand 3\n\tld l,a\n\tadd hl,hl\n"
+            "\tex de,hl\n\tpop hl\n\tadd hl,de\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n",
+            plan->first_stack_offset + 4,
+            plan->first_stack_offset + 5,
+            loop, done, done,
+            plan->second_stack_offset + 4,
+            plan->second_stack_offset + 5);
+    mir_machine_emit_symbol_call(out, plan->call_function);
+    fputs("\tpop bc\n\tpush hl\n\tpush iy\n\tpop hl\n"
+          "\tex de,hl\n\tpop hl\n\tadd hl,de\n\tex de,hl\n"
+          "\tpop hl\n\tadd hl,de\n\tpush hl\n"
+          "\tpush iy\n\tpop hl\n\tinc hl\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->call_function);
+    fputs("\tpop bc\n\tpush hl\n\tpush iy\n\tpop hl\n"
+          "\tdec hl\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->call_function);
+    fputs("\tpop bc\n\tex de,hl\n\tpop hl\n\tadd hl,de\n"
+          "\tpush hl\n\tpush iy\n\tpop hl\n\tex de,hl\n"
+          "\tpop hl\n\tadd hl,de\n\tex de,hl\n"
+          "\tpop hl\n\tadd hl,de\n"
+          "\tld (ix-2),l\n\tld (ix-1),h\n", out);
+    fprintf(out,
+            "\tjp L%d\n"
+            "L%d:\n\tld l,(ix-2)\n\tld h,(ix-1)\n"
+            "\tld sp,ix\n\tpop ix\n\tpop iy\n"
+            ";@dcc.reg free=iy\n\tret\n",
+            loop, done);
+}
+
+static void mir_emit_call_safe_member_sum_schedule(
+    FILE *out, const struct MirCallSafeWordLoopSchedule *plan)
+{
+    int loop = new_label();
+    int done = new_label();
+    int member;
+
+    fputs(";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
+          "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tdec sp\n\tdec sp\n\tdec sp\n\tdec sp\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tpush hl\n\tpop iy\n"
+            "\tld hl,0\n\tld (ix-2),l\n\tld (ix-1),h\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld (ix-4),l\n\tld (ix-3),h\n"
+            "\tld a,h\n\tor a\n\tjp m,L%d\n"
+            "\tor l\n\tjp z,L%d\n"
+            "L%d:\n\tld l,(ix-2)\n\tld h,(ix-1)\n",
+            plan->first_stack_offset + 4,
+            plan->first_stack_offset + 5,
+            plan->second_stack_offset + 4,
+            plan->second_stack_offset + 5,
+            done, done, loop);
+    for (member = 0; member < 3; ++member) {
+        fputs("\tpush hl\n", out);
+        fprintf(out,
+                "\tld l,(iy%+d)\n\tld h,(iy%+d)\n\tpush hl\n",
+                plan->member_offsets[member],
+                plan->member_offsets[member] + 1);
+        mir_machine_emit_symbol_call(out, plan->call_function);
+        fputs("\tpop bc\n\tex de,hl\n\tpop hl\n\tadd hl,de\n",
+              out);
+    }
+    fputs("\tpush hl\n", out);
+    fprintf(out,
+            "\tld l,(iy%+d)\n\tld h,(iy%+d)\n\tpush hl\n"
+            "\tld l,(iy%+d)\n\tld h,(iy%+d)\n"
+            "\tex de,hl\n\tpop hl\n\tadd hl,de\n\tpush hl\n"
+            "\tld l,(iy%+d)\n\tld h,(iy%+d)\n"
+            "\tex de,hl\n\tpop hl\n\tadd hl,de\n"
+            "\tex de,hl\n\tpop hl\n\tadd hl,de\n"
+            "\tld (ix-2),l\n\tld (ix-1),h\n"
+            "\tld l,(ix-4)\n\tld h,(ix-3)\n\tdec hl\n"
+            "\tld (ix-4),l\n\tld (ix-3),h\n"
+            "\tld a,h\n\tor l\n\tjp nz,L%d\n"
+            "L%d:\n\tld l,(ix-2)\n\tld h,(ix-1)\n"
+            "\tld sp,ix\n\tpop ix\n\tpop iy\n"
+            ";@dcc.reg free=iy\n\tret\n",
+            plan->member_offsets[0],
+            plan->member_offsets[0] + 1,
+            plan->member_offsets[1],
+            plan->member_offsets[1] + 1,
+            plan->member_offsets[2],
+            plan->member_offsets[2] + 1,
+            loop, done);
+}
+
+static void mir_emit_call_safe_word_loop_schedule(
+    FILE *out, const struct MirCallSafeWordLoopSchedule *plan)
+{
+    if (plan->kind == MIR_CALL_SAFE_COUNTDOWN_SUM)
+        mir_emit_call_safe_countdown_sum_schedule(out, plan);
+    else
+        mir_emit_call_safe_member_sum_schedule(out, plan);
+}
+
+static int mir_match_constant_do_while_schedule(
+    struct MirConstantDoWhileSchedule *plan)
+{
+    static const int expected_opcodes[171] = {
+        MIR_LABEL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_CONST, MIR_NOP,
+        MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_JUMP, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_UNARY, MIR_ARG, MIR_CALL, MIR_CONST,
+        MIR_NOP, MIR_STORE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL,
+        MIR_NOP, MIR_NOP, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_NOP, MIR_LABEL,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_JUMP,
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_UNARY, MIR_ARG,
+        MIR_CALL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_UNARY, MIR_ARG,
+        MIR_CALL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_CONST, MIR_NOP,
+        MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP,
+        MIR_JUMP, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_JUMP, MIR_LABEL,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_UNARY, MIR_ARG, MIR_CALL,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_UNARY, MIR_ARG, MIR_CALL,
+        MIR_CONST, MIR_NOP, MIR_STORE, MIR_CONST, MIR_NOP, MIR_STORE,
+        MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_JUMP,
+        MIR_NOP, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_NOP, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_UNARY, MIR_ARG, MIR_CALL, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_UNARY, MIR_ARG, MIR_CALL, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_UNARY, MIR_ARG, MIR_CALL
+    };
+    static const int call_instructions[8] = {
+        27, 58, 64, 103, 109, 158, 164, 170
+    };
+    static const int argument_values[8] = {
+        25, 56, 62, 101, 107, 156, 162, 168
+    };
+    static const int comparison_values[8] = {
+        24, 55, 61, 100, 106, 155, 161, 167
+    };
+    const struct MirInsn *execution_store = &mir.insns[3];
+    const struct MirInsn *condition_store = &mir.insns[6];
+    const struct MirInsn *hit_store = &mir.insns[118];
+    struct Sym *check_function = NULL;
+    long second_count;
+    long third_initial;
+    long break_count;
+    long fourth_count;
+    int argument;
+    int call;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 171 || mir_cfg_block_count() != 15 ||
+        mir.has_vla || type_size(mir.return_type) != 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+                expected_opcodes[instruction])
+            return mir_machine_reject(
+                "constant-do-while-schedule", "opcodes");
+    if (!mir_machine_constant_equals(mir.insns[1].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[4].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[11].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[17].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[23].dst, 1) ||
+        !mir_machine_unobservable_local_store(execution_store) ||
+        !mir_machine_unobservable_local_store(condition_store) ||
+        !mir_call_safe_signed_word_type(execution_store->type) ||
+        !mir_call_safe_signed_word_type(condition_store->type) ||
+        execution_store->src1 != mir.insns[1].dst ||
+        condition_store->src1 != mir.insns[4].dst ||
+        execution_store->object < 0 || condition_store->object < 0 ||
+        execution_store->object == condition_store->object ||
+        !mir_machine_same_location(&mir.insns[10], execution_store) ||
+        !mir_machine_same_location(&mir.insns[13], execution_store) ||
+        mir.insns[12].src1 != mir.insns[10].dst ||
+        mir.insns[12].src2 != mir.insns[11].dst ||
+        mir.insns[12].immediate != '+' ||
+        mir.insns[18].src1 != mir.insns[4].dst ||
+        mir.insns[18].src2 != mir.insns[17].dst ||
+        mir.insns[18].immediate != TOK_NE ||
+        mir.insns[19].label != mir.insns[21].label ||
+        mir.insns[20].label != mir.insns[7].label ||
+        mir.insns[24].src1 != mir.insns[12].dst ||
+        mir.insns[24].src2 != mir.insns[23].dst ||
+        mir.insns[24].immediate != TOK_EQ)
+        return mir_machine_reject(
+            "constant-do-while-schedule", "first-loop");
+    if (!mir_machine_evaluate_constant(
+            mir.insns[31].dst, &second_count, 0) ||
+        second_count <= 0 || second_count > 255 ||
+        !mir_machine_constant_equals(mir.insns[28].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[38].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[42].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[48].dst, 0) ||
+        !mir_machine_constant_equals(
+            mir.insns[54].dst, second_count) ||
+        !mir_machine_constant_equals(mir.insns[60].dst, 0) ||
+        !mir_machine_same_location(&mir.insns[30], execution_store) ||
+        !mir_machine_same_location(&mir.insns[33], condition_store) ||
+        !mir_machine_same_location(&mir.insns[37], execution_store) ||
+        !mir_machine_same_location(&mir.insns[40], execution_store) ||
+        !mir_machine_same_location(&mir.insns[41], condition_store) ||
+        !mir_machine_same_location(&mir.insns[44], condition_store) ||
+        mir.insns[39].src1 != mir.insns[37].dst ||
+        mir.insns[39].src2 != mir.insns[38].dst ||
+        mir.insns[39].immediate != '+' ||
+        mir.insns[40].src1 != mir.insns[39].dst ||
+        mir.insns[43].src1 != mir.insns[41].dst ||
+        mir.insns[43].src2 != mir.insns[42].dst ||
+        mir.insns[43].immediate != '-' ||
+        mir.insns[44].src1 != mir.insns[43].dst ||
+        mir.insns[49].src1 != mir.insns[43].dst ||
+        mir.insns[49].src2 != mir.insns[48].dst ||
+        mir.insns[49].immediate != '>' ||
+        mir.insns[50].label != mir.insns[52].label ||
+        mir.insns[51].label != mir.insns[34].label ||
+        mir.insns[55].src1 != mir.insns[39].dst ||
+        mir.insns[55].src2 != mir.insns[54].dst ||
+        mir.insns[55].immediate != TOK_EQ ||
+        mir.insns[61].src1 != mir.insns[43].dst ||
+        mir.insns[61].src2 != mir.insns[60].dst ||
+        mir.insns[61].immediate != TOK_EQ)
+        return mir_machine_reject(
+            "constant-do-while-schedule", "second-loop");
+    if (!mir_machine_evaluate_constant(
+            mir.insns[68].dst, &third_initial, 0) ||
+        !mir_machine_evaluate_constant(
+            mir.insns[83].dst, &break_count, 0) ||
+        third_initial <= 0 || third_initial > 255 ||
+        break_count <= 0 || break_count > third_initial ||
+        !mir_machine_constant_equals(mir.insns[65].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[75].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[79].dst, 1) ||
+        !mir_machine_constant_equals(
+            mir.insns[93].dst, 0) ||
+        !mir_machine_constant_equals(
+            mir.insns[99].dst, break_count) ||
+        !mir_machine_constant_equals(
+            mir.insns[105].dst, third_initial - break_count) ||
+        !mir_machine_same_location(&mir.insns[67], execution_store) ||
+        !mir_machine_same_location(&mir.insns[70], condition_store) ||
+        !mir_machine_same_location(&mir.insns[74], execution_store) ||
+        !mir_machine_same_location(&mir.insns[77], execution_store) ||
+        !mir_machine_same_location(&mir.insns[78], condition_store) ||
+        !mir_machine_same_location(&mir.insns[81], condition_store) ||
+        mir.insns[76].src1 != mir.insns[74].dst ||
+        mir.insns[76].src2 != mir.insns[75].dst ||
+        mir.insns[76].immediate != '+' ||
+        mir.insns[77].src1 != mir.insns[76].dst ||
+        mir.insns[80].src1 != mir.insns[78].dst ||
+        mir.insns[80].src2 != mir.insns[79].dst ||
+        mir.insns[80].immediate != '-' ||
+        mir.insns[81].src1 != mir.insns[80].dst ||
+        mir.insns[84].src1 != mir.insns[76].dst ||
+        mir.insns[84].src2 != mir.insns[83].dst ||
+        mir.insns[84].immediate != TOK_EQ ||
+        mir.insns[85].label != mir.insns[89].label ||
+        mir.insns[87].label != mir.insns[97].label ||
+        mir.insns[94].src1 != mir.insns[92].dst ||
+        mir.insns[94].src2 != mir.insns[93].dst ||
+        mir.insns[94].immediate != '>' ||
+        mir.insns[95].label != mir.insns[97].label ||
+        mir.insns[96].label != mir.insns[71].label ||
+        !mir_machine_same_location(&mir.insns[98], execution_store) ||
+        mir.insns[100].src1 != mir.insns[98].dst ||
+        mir.insns[100].src2 != mir.insns[99].dst ||
+        mir.insns[100].immediate != TOK_EQ ||
+        !mir_machine_same_location(&mir.insns[104], condition_store) ||
+        mir.insns[106].src1 != mir.insns[104].dst ||
+        mir.insns[106].src2 != mir.insns[105].dst ||
+        mir.insns[106].immediate != TOK_EQ)
+        return mir_machine_reject(
+            "constant-do-while-schedule", "third-loop");
+    if (!mir_machine_evaluate_constant(
+            mir.insns[113].dst, &fourth_count, 0) ||
+        fourth_count <= 0 || fourth_count > 255 ||
+        !mir_machine_constant_equals(mir.insns[110].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[116].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[124].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[128].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[132].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[134].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[142].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[148].dst, 0) ||
+        !mir_machine_constant_equals(
+            mir.insns[154].dst, fourth_count) ||
+        !mir_machine_constant_equals(mir.insns[160].dst, 0) ||
+        !mir_machine_constant_equals(
+            mir.insns[166].dst, (fourth_count + 1) / 2) ||
+        !mir_machine_same_location(&mir.insns[112], execution_store) ||
+        !mir_machine_same_location(&mir.insns[115], condition_store) ||
+        !mir_machine_unobservable_local_store(hit_store) ||
+        !mir_call_safe_signed_word_type(hit_store->type) ||
+        hit_store->src1 != mir.insns[116].dst ||
+        hit_store->object < 0 ||
+        hit_store->object == execution_store->object ||
+        hit_store->object == condition_store->object ||
+        !mir_machine_same_location(&mir.insns[123], execution_store) ||
+        !mir_machine_same_location(&mir.insns[126], execution_store) ||
+        !mir_machine_same_location(&mir.insns[127], condition_store) ||
+        !mir_machine_same_location(&mir.insns[130], condition_store) ||
+        !mir_machine_same_location(&mir.insns[141], hit_store) ||
+        !mir_machine_same_location(&mir.insns[144], hit_store) ||
+        mir.insns[125].src1 != mir.insns[123].dst ||
+        mir.insns[125].src2 != mir.insns[124].dst ||
+        mir.insns[125].immediate != '+' ||
+        mir.insns[126].src1 != mir.insns[125].dst ||
+        mir.insns[129].src1 != mir.insns[127].dst ||
+        mir.insns[129].src2 != mir.insns[128].dst ||
+        mir.insns[129].immediate != '-' ||
+        mir.insns[130].src1 != mir.insns[129].dst ||
+        mir.insns[133].src1 != mir.insns[125].dst ||
+        mir.insns[133].src2 != mir.insns[132].dst ||
+        mir.insns[133].immediate != '%' ||
+        mir.insns[135].src1 != mir.insns[133].dst ||
+        mir.insns[135].src2 != mir.insns[134].dst ||
+        mir.insns[135].immediate != TOK_EQ ||
+        mir.insns[136].label != mir.insns[140].label ||
+        mir.insns[138].label != mir.insns[146].label ||
+        mir.insns[143].src1 != mir.insns[141].dst ||
+        mir.insns[143].src2 != mir.insns[142].dst ||
+        mir.insns[143].immediate != '+' ||
+        mir.insns[144].src1 != mir.insns[143].dst ||
+        mir.insns[149].src1 != mir.insns[147].dst ||
+        mir.insns[149].src2 != mir.insns[148].dst ||
+        mir.insns[149].immediate != '>' ||
+        mir.insns[150].label != mir.insns[152].label ||
+        mir.insns[151].label != mir.insns[119].label ||
+        !mir_machine_same_location(&mir.insns[153], execution_store) ||
+        mir.insns[155].src1 != mir.insns[153].dst ||
+        mir.insns[155].src2 != mir.insns[154].dst ||
+        mir.insns[155].immediate != TOK_EQ ||
+        !mir_machine_same_location(&mir.insns[159], condition_store) ||
+        mir.insns[161].src1 != mir.insns[159].dst ||
+        mir.insns[161].src2 != mir.insns[160].dst ||
+        mir.insns[161].immediate != TOK_EQ ||
+        !mir_machine_same_location(&mir.insns[165], hit_store) ||
+        mir.insns[167].src1 != mir.insns[165].dst ||
+        mir.insns[167].src2 != mir.insns[166].dst ||
+        mir.insns[167].immediate != TOK_EQ)
+        return mir_machine_reject(
+            "constant-do-while-schedule", "fourth-loop");
+    for (call = 0; call < 8; ++call)
+        if (!mir_machine_single_call_argument(
+                &mir.insns[call_instructions[call]], &argument) ||
+            argument != mir.insns[argument_values[call]].dst ||
+            mir.insns[argument_values[call]].src1 !=
+                mir.insns[comparison_values[call]].dst ||
+            mir.insns[argument_values[call]].immediate != 0 ||
+            type_size(
+                mir.insns[call_instructions[call]].type) != 0 ||
+            !mir_call_safe_same_direct_function(
+                &mir.insns[call_instructions[call]],
+                &check_function))
+            return mir_machine_reject(
+                "constant-do-while-schedule", "calls");
+    plan->check_function = check_function;
+    plan->second_count = (int)second_count;
+    plan->third_initial = (int)third_initial;
+    plan->break_count = (int)break_count;
+    plan->fourth_count = (int)fourth_count;
+    return 1;
+}
+
+static void mir_emit_call_safe_check(
+    FILE *out, struct Sym *function)
+{
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, function);
+    fputs("\tpop bc\n", out);
+}
+
+static void mir_emit_bc_equal_constant(FILE *out, int value)
+{
+    int done = new_label();
+
+    fprintf(out,
+            "\tld h,b\n\tld l,c\n\tld de,%d\n"
+            "\tor a\n\tsbc hl,de\n\tld hl,0\n"
+            "\tjp nz,L%d\n\tinc l\nL%d:\n",
+            value, done, done);
+}
+
+static void mir_emit_de_equal_constant(FILE *out, int value)
+{
+    int done = new_label();
+
+    fprintf(out,
+            "\tld h,d\n\tld l,e\n\tld bc,%d\n"
+            "\tor a\n\tsbc hl,bc\n\tld hl,0\n"
+            "\tjp nz,L%d\n\tinc l\nL%d:\n",
+            value, done, done);
+}
+
+static void mir_emit_byte_equal_constant(
+    FILE *out, char reg, int value)
+{
+    int done = new_label();
+
+    fprintf(out,
+            "\tld hl,0\n\tld a,%c\n\tcp %d\n"
+            "\tjp nz,L%d\n\tinc l\nL%d:\n",
+            reg, value, done, done);
+}
+
+static void mir_emit_constant_do_while_schedule(
+    FILE *out, const struct MirConstantDoWhileSchedule *plan)
+{
+    int first = new_label();
+    int second = new_label();
+    int second_done = new_label();
+    int third = new_label();
+    int third_condition = new_label();
+    int third_done = new_label();
+    int fourth = new_label();
+    int fourth_condition = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+
+    fprintf(out,
+            "\tld bc,0\n\tld de,0\n"
+            "L%d:\n\tinc bc\n\tld a,d\n\tor e\n\tjp nz,L%d\n",
+            first, first);
+    mir_emit_bc_equal_constant(out, 1);
+    mir_emit_call_safe_check(out, plan->check_function);
+
+    fprintf(out,
+            "\tld bc,0\n\tld de,%d\n"
+            "L%d:\n\tinc bc\n\tdec de\n"
+            "\tld a,d\n\tor e\n\tjp nz,L%d\n"
+            "L%d:\n\tpush de\n",
+            plan->second_count, second, second, second_done);
+    mir_emit_bc_equal_constant(out, plan->second_count);
+    mir_emit_call_safe_check(out, plan->check_function);
+    fputs("\tpop de\n", out);
+    mir_emit_de_equal_constant(out, 0);
+    mir_emit_call_safe_check(out, plan->check_function);
+
+    fprintf(out,
+            "\tld bc,0\n\tld de,%d\n"
+            "L%d:\n\tinc bc\n\tdec de\n"
+            "\tld a,b\n\tor a\n\tjp nz,L%d\n"
+            "\tld a,c\n\tcp %d\n\tjp z,L%d\n"
+            "L%d:\n\tld a,d\n\tor e\n\tjp nz,L%d\n"
+            "L%d:\n\tpush de\n",
+            plan->third_initial, third,
+            third_condition, plan->break_count, third_done,
+            third_condition, third, third_done);
+    mir_emit_bc_equal_constant(out, plan->break_count);
+    mir_emit_call_safe_check(out, plan->check_function);
+    fputs("\tpop de\n", out);
+    mir_emit_de_equal_constant(
+        out, plan->third_initial - plan->break_count);
+    mir_emit_call_safe_check(out, plan->check_function);
+
+    fprintf(out,
+            "\tld b,0\n\tld c,%d\n\tld de,0\n"
+            "L%d:\n\tinc b\n\tdec c\n\tbit 0,b\n"
+            "\tjp z,L%d\n\tinc e\n"
+            "L%d:\n\tld a,c\n\tor a\n\tjp nz,L%d\n"
+            "\tpush bc\n\tpush de\n",
+            plan->fourth_count, fourth,
+            fourth_condition, fourth_condition, fourth);
+    mir_emit_byte_equal_constant(
+        out, 'b', plan->fourth_count);
+    mir_emit_call_safe_check(out, plan->check_function);
+    fputs("\tpop de\n\tpop bc\n\tpush de\n", out);
+    mir_emit_byte_equal_constant(out, 'c', 0);
+    mir_emit_call_safe_check(out, plan->check_function);
+    fputs("\tpop de\n", out);
+    mir_emit_byte_equal_constant(
+        out, 'e', (plan->fourth_count + 1) / 2);
+    mir_emit_call_safe_check(out, plan->check_function);
+    fputs("\tret\n", out);
+}
+
+struct MirNullableStringCheckSchedule {
+    struct Sym *compare_function;
+    struct Sym *print_function;
+    struct Sym *failure_count;
+    int name_stack_offset;
+    int got_stack_offset;
+    int want_stack_offset;
+    int null_string;
+    int format_string;
+    char compare_name[64];
+    char print_name[64];
+};
+
+struct MirInlineParameterCallSchedule {
+    struct Sym *value_function;
+    struct Sym *array;
+    struct Sym *print_function;
+    int first_arguments[2];
+    int second_arguments[2];
+    int array_offset;
+    int store_value;
+    int format_string;
+    char print_name[64];
+};
+
+struct MirZeroAllocationSchedule {
+    struct Sym *allocate_function;
+    struct Sym *free_function;
+    struct Sym *failure_function;
+    int failure_string;
+    int stored_byte;
+};
+
+struct MirAllocatorReuseSchedule {
+    struct Sym *allocate_function;
+    struct Sym *free_function;
+    struct Sym *failure_function;
+    int sizes[3];
+    int failure_strings[3];
+};
+
+struct MirAllocationGuardSchedule {
+    struct Sym *allocate_function;
+    struct Sym *free_function;
+    struct Sym *failure_function;
+    int guard_size;
+    int rejected_size;
+    int failure_strings[2];
+};
+
+struct MirAllocatorTrimSchedule {
+    struct Sym *allocate_function;
+    struct Sym *free_function;
+    struct Sym *failure_function;
+    int first_size;
+    int final_size;
+    int failure_strings[3];
+};
+
+enum MirAllocatorCoalesceKind {
+    MIR_ALLOCATOR_BRIDGE = 1,
+    MIR_ALLOCATOR_REVERSE
+};
+
+struct MirAllocatorCoalesceSchedule {
+    enum MirAllocatorCoalesceKind kind;
+    struct Sym *allocate_function;
+    struct Sym *free_function;
+    struct Sym *failure_function;
+    struct Sym *fill_function;
+    int allocation_size;
+    int merged_size;
+    int fill_value;
+    int failure_strings[2];
+};
+
+struct MirBiosCallSchedule {
+    struct Sym *bios_function;
+    struct Sym *bioshl_function;
+    struct Sym *print_function;
+    int strings[7];
+    int status_function;
+    int output_function;
+    int output_characters[5];
+    char bios_name[64];
+    char bioshl_name[64];
+    char print_name[64];
+};
+
+struct MirExecArgumentSchedule {
+    struct Sym *compare_function;
+    struct Sym *child_function;
+    struct Sym *print_function;
+    struct Sym *exec_function;
+    struct Sym *execv_function;
+    int argc_stack_offset;
+    int argv_stack_offset;
+    int strings[11];
+    char compare_name[64];
+    char print_name[64];
+    char exec_name[64];
+    char execv_name[64];
+};
+
+struct MirTemporaryFileSchedule {
+    struct Sym *tmpnam_function;
+    struct Sym *print_function;
+    struct Sym *check_function;
+    struct Sym *compare_function;
+    struct Sym *tmpfile_function;
+    struct Sym *puts_function;
+    struct Sym *rewind_function;
+    struct Sym *gets_function;
+    struct Sym *close_function;
+    struct Sym *failure_count;
+    int strings[11];
+    int frame_bytes;
+    int buffer_offset;
+    int read_buffer_offset;
+    int first_name_offset;
+    int second_name_offset;
+    int stream_offset;
+    char tmpnam_name[64];
+    char print_name[64];
+    char check_name[64];
+    char compare_name[64];
+    char tmpfile_name[64];
+    char puts_name[64];
+    char rewind_name[64];
+    char gets_name[64];
+    char close_name[64];
+};
+
+struct MirCallRecoveryEdge {
+    int instruction;
+    int target;
+};
+
+struct MirCallRecoveryPhi {
+    int instruction;
+    int first;
+    int second;
+    int first_predecessor;
+    int second_predecessor;
+};
+
+static void mir_temp_store_hl(FILE *out, int offset);
+static void mir_temp_load_hl(FILE *out, int offset);
+
+static int mir_call_recovery_opcode_sequence(
+    const unsigned char *expected, size_t count)
+{
+    size_t instruction;
+
+    if ((size_t)mir.count != count)
+        return 0;
+    for (instruction = 0; instruction < count; ++instruction)
+        if (mir.insns[instruction].opcode != expected[instruction])
+            return 0;
+    return 1;
+}
+
+static int mir_call_recovery_edges(
+    const struct MirCallRecoveryEdge *edges, size_t count)
+{
+    size_t item;
+
+    for (item = 0; item < count; ++item)
+        if (mir.insns[edges[item].instruction].label !=
+                mir.insns[edges[item].target].label)
+            return 0;
+    return 1;
+}
+
+static int mir_call_recovery_phis(
+    const struct MirCallRecoveryPhi *phis, size_t count)
+{
+    size_t item;
+
+    for (item = 0; item < count; ++item) {
+        const struct MirCallRecoveryPhi *expected = &phis[item];
+        const struct MirInsn *phi =
+            &mir.insns[expected->instruction];
+
+        if (phi->src1 != expected->first ||
+            phi->src2 != expected->second ||
+            phi->phi_pred1 !=
+                mir.insns[expected->first_predecessor].label ||
+            phi->phi_pred2 !=
+                mir.insns[expected->second_predecessor].label)
+            return 0;
+    }
+    return 1;
+}
+
+static int mir_call_char_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           (type & 15) == TYPE_CHAR &&
+           type_size(type) == 2;
+}
+
+static struct Sym *mir_call_recovery_function(
+    int instruction, int variadic, int argument_count,
+    int allow_noreturn, char call_name[64])
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    struct Sym *function;
+
+    if (call->opcode != MIR_CALL || call->src1 >= 0 ||
+        ((call->memory_flags & MIR_CALL_FLAG_VARIADIC) != 0) !=
+            variadic ||
+        (call->memory_flags & MIR_CALL_FLAG_FORMAT_RUNTIME) != 0 ||
+        (function = find_global(call->name)) == NULL ||
+        function->storage != SC_FUNC || function->is_funcptr ||
+        (!allow_noreturn && function->is_noreturn) ||
+        !function->has_proto ||
+        function->proto_variadic != variadic ||
+        function->proto_nargs != argument_count)
+        return NULL;
+    snprintf(call_name, 64, "%s",
+             call->base_name[0] != 0
+                 ? call->base_name
+                 : asm_name_for(sym_asm_name(function)));
+    return function;
+}
+
+static void mir_call_recovery_emit_named_call(
+    FILE *out, struct Sym *function, const char *call_name)
+{
+    const char *assembly_name =
+        asm_name_for(sym_asm_name(function));
+
+    if (call_name != NULL && call_name[0] != 0 &&
+        strcmp(call_name, assembly_name))
+        mir_emit_runtime_call(out, call_name);
+    else
+        mir_machine_emit_symbol_call(out, function);
+}
+
+static int mir_match_zero_allocation_schedule(
+    struct MirZeroAllocationSchedule *plan)
+{
+    static const unsigned char expected_opcodes[29] = {
+        MIR_LABEL, MIR_CONST, MIR_NOP, MIR_ARG, MIR_CALL, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_NOP, MIR_UNARY, MIR_STORE, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_CALL, MIR_LABEL, MIR_LOAD, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST, MIR_STORE_INDIRECT,
+        MIR_LOAD, MIR_NOP, MIR_ARG, MIR_CALL
+    };
+    struct Sym *first_free;
+    struct Sym *second_free;
+    struct Sym *allocate_function;
+    struct Sym *failure_function;
+    int argument;
+    long stored_byte;
+
+    memset(plan, 0, sizeof(*plan));
+    if (!mir_call_recovery_opcode_sequence(
+            expected_opcodes, sizeof(expected_opcodes)) ||
+        mir_cfg_block_count() != 2 || mir.local_bytes != 2 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    first_free = mir_memory_runner_call_function(4, 0, 1);
+    allocate_function =
+        mir_memory_runner_call_function(7, 0, 1);
+    failure_function =
+        mir_memory_runner_call_function(17, 0, 1);
+    second_free = mir_memory_runner_call_function(28, 0, 1);
+    if (first_free == NULL || second_free != first_free ||
+        allocate_function == NULL || failure_function == NULL ||
+        first_free == allocate_function ||
+        first_free == failure_function ||
+        allocate_function == failure_function ||
+        (first_free->type & 15) != TYPE_VOID ||
+        type_ptr_depth(first_free->type) != 0 ||
+        type_ptr_depth(allocate_function->type) != 1 ||
+        type_size(allocate_function->type) != 2 ||
+        (failure_function->type & 15) != TYPE_VOID ||
+        type_ptr_depth(failure_function->type) != 0)
+        return mir_machine_reject(
+            "zero-allocation-schedule", "functions");
+    if (!mir_machine_constant_equals(mir.insns[1].dst, 0) ||
+        !mir_machine_single_call_argument(
+            &mir.insns[4], &argument) ||
+        argument != mir.insns[1].dst ||
+        !mir_machine_constant_equals(mir.insns[5].dst, 0) ||
+        !mir_machine_single_call_argument(
+            &mir.insns[7], &argument) ||
+        argument != mir.insns[5].dst ||
+        mir.insns[9].src1 != mir.insns[7].dst ||
+        mir.insns[9].immediate != 0 ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        !mir_machine_same_location(
+            &mir.insns[10], &mir.insns[11]) ||
+        !mir_machine_same_location(
+            &mir.insns[10], &mir.insns[19]) ||
+        !mir_machine_same_location(
+            &mir.insns[10], &mir.insns[25]) ||
+        !mir_machine_named_nonvolatile(&mir.insns[10]) ||
+        !mir_machine_constant_equals(mir.insns[12].dst, 0) ||
+        mir.insns[13].src1 != mir.insns[11].dst ||
+        mir.insns[13].src2 != mir.insns[12].dst ||
+        mir.insns[13].immediate != TOK_EQ ||
+        mir.insns[14].src1 != mir.insns[13].dst ||
+        mir.insns[14].label != mir.insns[18].label ||
+        !mir_machine_single_call_argument(
+            &mir.insns[17], &argument) ||
+        argument != mir.insns[15].dst)
+        return mir_machine_reject(
+            "zero-allocation-schedule", "control");
+    if (!mir_machine_constant_equals(mir.insns[20].dst, 0) ||
+        mir.insns[21].src1 != mir.insns[19].dst ||
+        mir.insns[21].src2 != mir.insns[20].dst ||
+        mir.insns[21].immediate != 1 ||
+        mir.insns[21].memory_size != 1 ||
+        !mir_machine_evaluate_constant(
+            mir.insns[23].dst, &stored_byte, 0) ||
+        stored_byte < -128 || stored_byte > 255 ||
+        mir.insns[24].src1 != mir.insns[21].dst ||
+        mir.insns[24].src2 != mir.insns[23].dst ||
+        mir.insns[24].memory_size != 1 ||
+        (mir.insns[24].memory_flags & (1 | 8)) != 0 ||
+        !mir_machine_single_call_argument(
+            &mir.insns[28], &argument) ||
+        argument != mir.insns[25].dst)
+        return mir_machine_reject(
+            "zero-allocation-schedule", "store-free");
+    plan->allocate_function = allocate_function;
+    plan->free_function = first_free;
+    plan->failure_function = failure_function;
+    plan->failure_string = (int)mir.insns[15].immediate;
+    plan->stored_byte = (int)stored_byte & 0xff;
+    return 1;
+}
+
+static void mir_emit_zero_allocation_schedule(
+    FILE *out, const struct MirZeroAllocationSchedule *plan)
+{
+    int allocated = new_label();
+
+    fprintf(out,
+            "%s\n"
+            ";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
+            "\tpush iy\n",
+            MIR_EXACT_KERNEL_MARKER);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tld hl,0\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->free_function);
+    mir_emit_final_call_cleanup(out, 1);
+    fputs("\tld hl,0\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->allocate_function);
+    mir_emit_final_call_cleanup(out, 1);
+    fputs("\tpush hl\n\tpop iy\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tld hl,S%d\n\tpush hl\n",
+            allocated, plan->failure_string);
+    mir_machine_emit_symbol_call(out, plan->failure_function);
+    mir_emit_final_call_cleanup(out, 1);
+    fprintf(out,
+            "L%d:\n\tpush iy\n\tpop hl\n"
+            "\tld (hl),%d\n\tpush hl\n",
+            allocated, plan->stored_byte);
+    mir_machine_emit_symbol_call(out, plan->free_function);
+    mir_emit_final_call_cleanup(out, 1);
+    fputs("\tpop iy\n;@dcc.reg free=iy\n\tret\n", out);
+}
+
+static int mir_match_allocator_reuse_schedule(
+    struct MirAllocatorReuseSchedule *plan)
+{
+    static const unsigned char expected_opcodes[85] = {
+        MIR_LABEL, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_UNARY,
+        MIR_STORE, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_UNARY,
+        MIR_STORE, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+        MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_LABEL, MIR_JUMP,
+        MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_CALL, MIR_LABEL, MIR_LOAD, MIR_NOP, MIR_ARG, MIR_CALL,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_UNARY, MIR_STORE,
+        MIR_LOAD, MIR_LOAD, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_LABEL, MIR_LOAD,
+        MIR_NOP, MIR_ARG, MIR_CALL, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_NOP, MIR_UNARY, MIR_STORE, MIR_LOAD, MIR_LOAD, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_LABEL, MIR_LOAD, MIR_NOP, MIR_ARG, MIR_CALL, MIR_LOAD,
+        MIR_NOP, MIR_ARG, MIR_CALL
+    };
+    static const int allocate_calls[4] = {3, 9, 47, 65};
+    static const int allocate_constants[4] = {1, 7, 45, 63};
+    static const int free_calls[4] = {44, 62, 80, 84};
+    static const int free_values[4] = {41, 59, 77, 81};
+    struct Sym *allocate_function = NULL;
+    struct Sym *free_function = NULL;
+    struct Sym *failure_function = NULL;
+    int argument;
+    long size;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (!mir_call_recovery_opcode_sequence(
+            expected_opcodes, sizeof(expected_opcodes)) ||
+        mir_cfg_block_count() != 11 || mir.local_bytes != 8 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (item = 0; item < 4; ++item) {
+        struct Sym *function = mir_memory_runner_call_function(
+            allocate_calls[item], 0, 1);
+
+        if (function == NULL ||
+            !mir_machine_single_call_argument(
+                &mir.insns[allocate_calls[item]], &argument) ||
+            argument != mir.insns[allocate_constants[item]].dst ||
+            !mir_machine_evaluate_constant(
+                argument, &size, 0) ||
+            size < 0 || size > 65535)
+            return mir_machine_reject(
+                "allocator-reuse-schedule", "allocation-call");
+        if (allocate_function == NULL)
+            allocate_function = function;
+        else if (allocate_function != function)
+            return mir_machine_reject(
+                "allocator-reuse-schedule", "mixed-allocator");
+        if (item == 0)
+            plan->sizes[0] = (int)size;
+        else if (item == 1)
+            plan->sizes[1] = (int)size;
+        else if (item == 2)
+            plan->sizes[2] = (int)size;
+        else if ((int)size != plan->sizes[0])
+            return mir_machine_reject(
+                "allocator-reuse-schedule", "final-size");
+    }
+    for (item = 0; item < 4; ++item) {
+        struct Sym *function = mir_memory_runner_call_function(
+            free_calls[item], 0, 1);
+
+        if (function == NULL ||
+            !mir_machine_single_call_argument(
+                &mir.insns[free_calls[item]], &argument) ||
+            argument != mir.insns[free_values[item]].dst)
+            return mir_machine_reject(
+                "allocator-reuse-schedule", "free-call");
+        if (free_function == NULL)
+            free_function = function;
+        else if (free_function != function)
+            return mir_machine_reject(
+                "allocator-reuse-schedule", "mixed-free");
+    }
+    failure_function =
+        mir_memory_runner_call_function(39, 0, 1);
+    if (failure_function == NULL ||
+        mir_memory_runner_call_function(
+            57, 0, 1) != failure_function ||
+        mir_memory_runner_call_function(
+            75, 0, 1) != failure_function ||
+        allocate_function == free_function ||
+        allocate_function == failure_function ||
+        free_function == failure_function)
+        return mir_machine_reject(
+            "allocator-reuse-schedule", "functions");
+    if (mir.insns[5].src1 != mir.insns[3].dst ||
+        mir.insns[5].immediate != 0 ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        mir.insns[11].src1 != mir.insns[9].dst ||
+        mir.insns[11].immediate != 0 ||
+        mir.insns[12].src1 != mir.insns[11].dst ||
+        !mir_machine_same_location(
+            &mir.insns[6], &mir.insns[13]) ||
+        !mir_machine_same_location(
+            &mir.insns[6], &mir.insns[41]) ||
+        !mir_machine_same_location(
+            &mir.insns[6], &mir.insns[52]) ||
+        !mir_machine_same_location(
+            &mir.insns[6], &mir.insns[70]) ||
+        !mir_machine_same_location(
+            &mir.insns[12], &mir.insns[21]) ||
+        !mir_machine_same_location(
+            &mir.insns[12], &mir.insns[81]))
+        return mir_machine_reject(
+            "allocator-reuse-schedule", "pointer-locals");
+    if (!mir_machine_constant_equals(mir.insns[14].dst, 0) ||
+        mir.insns[15].src1 != mir.insns[13].dst ||
+        mir.insns[15].src2 != mir.insns[14].dst ||
+        mir.insns[15].immediate != TOK_EQ ||
+        mir.insns[16].src1 != mir.insns[15].dst ||
+        mir.insns[16].label != mir.insns[20].label ||
+        !mir_machine_constant_equals(mir.insns[18].dst, 1) ||
+        mir.insns[19].label != mir.insns[34].label ||
+        !mir_machine_constant_equals(mir.insns[22].dst, 0) ||
+        mir.insns[23].src1 != mir.insns[21].dst ||
+        mir.insns[23].src2 != mir.insns[22].dst ||
+        mir.insns[23].immediate != TOK_EQ ||
+        mir.insns[24].src1 != mir.insns[23].dst ||
+        mir.insns[24].label != mir.insns[28].label ||
+        !mir_machine_constant_equals(mir.insns[26].dst, 1) ||
+        mir.insns[27].label != mir.insns[30].label ||
+        !mir_machine_constant_equals(mir.insns[29].dst, 0) ||
+        mir.insns[31].src1 != mir.insns[26].dst ||
+        mir.insns[31].src2 != mir.insns[29].dst ||
+        mir.insns[31].phi_pred1 != mir.insns[25].label ||
+        mir.insns[31].phi_pred2 != mir.insns[28].label ||
+        mir.insns[33].label != mir.insns[34].label ||
+        mir.insns[35].src1 != mir.insns[18].dst ||
+        mir.insns[35].src2 != mir.insns[31].dst ||
+        mir.insns[35].phi_pred1 != mir.insns[17].label ||
+        mir.insns[35].phi_pred2 != mir.insns[32].label ||
+        mir.insns[36].src1 != mir.insns[35].dst ||
+        mir.insns[36].label != mir.insns[40].label)
+        return mir_machine_reject(
+            "allocator-reuse-schedule", "setup-condition");
+    if (mir.insns[49].src1 != mir.insns[47].dst ||
+        mir.insns[49].immediate != 0 ||
+        mir.insns[50].src1 != mir.insns[49].dst ||
+        !mir_machine_same_location(
+            &mir.insns[50], &mir.insns[51]) ||
+        !mir_machine_same_location(
+            &mir.insns[50], &mir.insns[59]) ||
+        mir.insns[53].src1 != mir.insns[51].dst ||
+        mir.insns[53].src2 != mir.insns[52].dst ||
+        mir.insns[53].immediate != TOK_NE ||
+        mir.insns[54].src1 != mir.insns[53].dst ||
+        mir.insns[54].label != mir.insns[58].label ||
+        mir.insns[67].src1 != mir.insns[65].dst ||
+        mir.insns[67].immediate != 0 ||
+        mir.insns[68].src1 != mir.insns[67].dst ||
+        !mir_machine_same_location(
+            &mir.insns[68], &mir.insns[69]) ||
+        !mir_machine_same_location(
+            &mir.insns[68], &mir.insns[77]) ||
+        mir.insns[71].src1 != mir.insns[69].dst ||
+        mir.insns[71].src2 != mir.insns[70].dst ||
+        mir.insns[71].immediate != TOK_NE ||
+        mir.insns[72].src1 != mir.insns[71].dst ||
+        mir.insns[72].label != mir.insns[76].label)
+        return mir_machine_reject(
+            "allocator-reuse-schedule", "reuse-checks");
+    if (!mir_machine_single_call_argument(
+            &mir.insns[39], &argument) ||
+        argument != mir.insns[37].dst ||
+        !mir_machine_single_call_argument(
+            &mir.insns[57], &argument) ||
+        argument != mir.insns[55].dst ||
+        !mir_machine_single_call_argument(
+            &mir.insns[75], &argument) ||
+        argument != mir.insns[73].dst)
+        return mir_machine_reject(
+            "allocator-reuse-schedule", "failure-arguments");
+    plan->allocate_function = allocate_function;
+    plan->free_function = free_function;
+    plan->failure_function = failure_function;
+    plan->failure_strings[0] = (int)mir.insns[37].immediate;
+    plan->failure_strings[1] = (int)mir.insns[55].immediate;
+    plan->failure_strings[2] = (int)mir.insns[73].immediate;
+    return 1;
+}
+
+static void mir_allocator_call_one(
+    FILE *out, struct Sym *function, int value)
+{
+    fprintf(out, "\tld hl,%d\n\tpush hl\n", value);
+    mir_machine_emit_symbol_call(out, function);
+    mir_emit_final_call_cleanup(out, 1);
+}
+
+static void mir_allocator_fail(
+    FILE *out, struct Sym *failure_function, int string_id)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+    mir_machine_emit_symbol_call(out, failure_function);
+    mir_emit_final_call_cleanup(out, 1);
+}
+
+static void mir_emit_allocator_reuse_schedule(
+    FILE *out, const struct MirAllocatorReuseSchedule *plan)
+{
+    int setup_failed = new_label();
+    int setup_ok = new_label();
+    int first_reuse_ok = new_label();
+    int second_reuse_ok = new_label();
+
+    fprintf(out,
+            "%s\n"
+            ";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
+            "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+            "\tdec sp\n\tdec sp\n\tdec sp\n\tdec sp\n",
+            MIR_EXACT_KERNEL_MARKER);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_allocator_call_one(
+        out, plan->allocate_function, plan->sizes[0]);
+    fputs("\tpush hl\n\tpop iy\n", out);
+    mir_allocator_call_one(
+        out, plan->allocate_function, plan->sizes[1]);
+    mir_temp_store_hl(out, -2);
+    fputs("\tpush iy\n\tpop hl\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", setup_failed);
+    mir_temp_load_hl(out, -2);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out,
+            "\tjp nz,L%d\n"
+            "L%d:\n",
+            setup_ok, setup_failed);
+    mir_allocator_fail(
+        out, plan->failure_function, plan->failure_strings[0]);
+    fprintf(out, "L%d:\n", setup_ok);
+    fputs("\tpush iy\n\tpop hl\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->free_function);
+    mir_emit_final_call_cleanup(out, 1);
+
+    mir_allocator_call_one(
+        out, plan->allocate_function, plan->sizes[2]);
+    mir_temp_store_hl(out, -4);
+    fputs("\tpush iy\n\tpop de\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp z,L%d\n", first_reuse_ok);
+    mir_allocator_fail(
+        out, plan->failure_function, plan->failure_strings[1]);
+    fprintf(out, "L%d:\n", first_reuse_ok);
+    mir_temp_load_hl(out, -4);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->free_function);
+    mir_emit_final_call_cleanup(out, 1);
+
+    mir_allocator_call_one(
+        out, plan->allocate_function, plan->sizes[0]);
+    mir_temp_store_hl(out, -4);
+    fputs("\tpush iy\n\tpop de\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp z,L%d\n", second_reuse_ok);
+    mir_allocator_fail(
+        out, plan->failure_function, plan->failure_strings[2]);
+    fprintf(out, "L%d:\n", second_reuse_ok);
+    mir_temp_load_hl(out, -4);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->free_function);
+    mir_emit_final_call_cleanup(out, 1);
+    mir_temp_load_hl(out, -2);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->free_function);
+    mir_emit_final_call_cleanup(out, 1);
+    fputs("\tld sp,ix\n\tpop ix\n\tpop iy\n"
+          ";@dcc.reg free=iy\n\tret\n", out);
+}
+
+static int mir_match_allocation_guard_schedule(
+    struct MirAllocationGuardSchedule *plan)
+{
+    static const unsigned char expected_opcodes[33] = {
+        MIR_LABEL, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_UNARY,
+        MIR_STORE, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_LABEL, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_NOP, MIR_UNARY, MIR_STORE, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_CALL, MIR_LABEL, MIR_LOAD, MIR_NOP, MIR_ARG,
+        MIR_CALL
+    };
+    struct Sym *allocate_function;
+    struct Sym *free_function;
+    struct Sym *failure_function;
+    int argument;
+    long value;
+
+    memset(plan, 0, sizeof(*plan));
+    if (!mir_call_recovery_opcode_sequence(
+            expected_opcodes, sizeof(expected_opcodes)) ||
+        mir_cfg_block_count() != 3 || mir.local_bytes != 4 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    allocate_function =
+        mir_memory_runner_call_function(3, 0, 1);
+    free_function =
+        mir_memory_runner_call_function(32, 0, 1);
+    failure_function =
+        mir_memory_runner_call_function(13, 0, 1);
+    if (allocate_function == NULL || free_function == NULL ||
+        failure_function == NULL ||
+        mir_memory_runner_call_function(
+            17, 0, 1) != allocate_function ||
+        mir_memory_runner_call_function(
+            27, 0, 1) != failure_function ||
+        allocate_function == free_function ||
+        allocate_function == failure_function ||
+        free_function == failure_function)
+        return mir_machine_reject(
+            "allocation-guard-schedule", "functions");
+    if (!mir_machine_single_call_argument(
+            &mir.insns[3], &argument) ||
+        !mir_machine_evaluate_constant(argument, &value, 0) ||
+        value < 0 || value > 65535)
+        return mir_machine_reject(
+            "allocation-guard-schedule", "guard-size");
+    plan->guard_size = (int)value;
+    if (!mir_machine_single_call_argument(
+            &mir.insns[17], &argument) ||
+        !mir_machine_evaluate_constant(argument, &value, 0) ||
+        value < 0 || value > 65535)
+        return mir_machine_reject(
+            "allocation-guard-schedule", "rejected-size");
+    plan->rejected_size = (int)value;
+    if (mir.insns[5].src1 != mir.insns[3].dst ||
+        mir.insns[5].immediate != 0 ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        !mir_machine_same_location(
+            &mir.insns[6], &mir.insns[7]) ||
+        !mir_machine_same_location(
+            &mir.insns[6], &mir.insns[29]) ||
+        !mir_machine_constant_equals(mir.insns[8].dst, 0) ||
+        mir.insns[9].src1 != mir.insns[7].dst ||
+        mir.insns[9].src2 != mir.insns[8].dst ||
+        mir.insns[9].immediate != TOK_EQ ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        mir.insns[10].label != mir.insns[14].label ||
+        mir.insns[19].src1 != mir.insns[17].dst ||
+        mir.insns[19].immediate != 0 ||
+        mir.insns[20].src1 != mir.insns[19].dst ||
+        !mir_machine_same_location(
+            &mir.insns[20], &mir.insns[21]) ||
+        !mir_machine_constant_equals(mir.insns[22].dst, 0) ||
+        mir.insns[23].src1 != mir.insns[21].dst ||
+        mir.insns[23].src2 != mir.insns[22].dst ||
+        mir.insns[23].immediate != TOK_NE ||
+        mir.insns[24].src1 != mir.insns[23].dst ||
+        mir.insns[24].label != mir.insns[28].label)
+        return mir_machine_reject(
+            "allocation-guard-schedule", "conditions");
+    if (!mir_machine_single_call_argument(
+            &mir.insns[13], &argument) ||
+        argument != mir.insns[11].dst ||
+        !mir_machine_single_call_argument(
+            &mir.insns[27], &argument) ||
+        argument != mir.insns[25].dst ||
+        !mir_machine_single_call_argument(
+            &mir.insns[32], &argument) ||
+        argument != mir.insns[29].dst)
+        return mir_machine_reject(
+            "allocation-guard-schedule", "arguments");
+    plan->allocate_function = allocate_function;
+    plan->free_function = free_function;
+    plan->failure_function = failure_function;
+    plan->failure_strings[0] = (int)mir.insns[11].immediate;
+    plan->failure_strings[1] = (int)mir.insns[25].immediate;
+    return 1;
+}
+
+static void mir_emit_allocation_guard_schedule(
+    FILE *out, const struct MirAllocationGuardSchedule *plan)
+{
+    int guard_ok = new_label();
+    int rejected_ok = new_label();
+
+    fprintf(out,
+            "%s\n"
+            ";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
+            "\tpush iy\n",
+            MIR_EXACT_KERNEL_MARKER);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_allocator_call_one(
+        out, plan->allocate_function, plan->guard_size);
+    fputs("\tpush hl\n\tpop iy\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n", guard_ok);
+    mir_allocator_fail(
+        out, plan->failure_function,
+        plan->failure_strings[0]);
+    fprintf(out, "L%d:\n", guard_ok);
+    mir_allocator_call_one(
+        out, plan->allocate_function, plan->rejected_size);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", rejected_ok);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->failure_strings[1]);
+    mir_machine_emit_symbol_call(out, plan->failure_function);
+    mir_emit_final_call_cleanup(out, 1);
+    fprintf(out, "L%d:\n\tpush iy\n\tpop hl\n\tpush hl\n",
+            rejected_ok);
+    mir_machine_emit_symbol_call(out, plan->free_function);
+    mir_emit_final_call_cleanup(out, 1);
+    fputs("\tpop iy\n;@dcc.reg free=iy\n\tret\n", out);
+}
+
+static int mir_match_allocator_trim_schedule(
+    struct MirAllocatorTrimSchedule *plan)
+{
+    static const unsigned char expected_opcodes[55] = {
+        MIR_LABEL, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_UNARY,
+        MIR_STORE, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_LABEL, MIR_LOAD,
+        MIR_NOP, MIR_ARG, MIR_CALL, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_NOP, MIR_UNARY, MIR_STORE, MIR_LOAD, MIR_LOAD, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_LABEL, MIR_LOAD, MIR_NOP, MIR_ARG, MIR_CALL, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_NOP, MIR_UNARY, MIR_STORE, MIR_LOAD,
+        MIR_LOAD, MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_CALL, MIR_LABEL, MIR_LOAD, MIR_NOP, MIR_ARG,
+        MIR_CALL
+    };
+    static const int allocation_calls[3] = {3, 21, 39};
+    static const int allocation_constants[3] = {1, 19, 37};
+    static const int free_calls[3] = {18, 36, 54};
+    static const int free_values[3] = {15, 33, 51};
+    static const int failure_calls[3] = {13, 31, 49};
+    static const int failure_values[3] = {11, 29, 47};
+    struct Sym *allocate_function = NULL;
+    struct Sym *free_function = NULL;
+    struct Sym *failure_function = NULL;
+    int argument;
+    long value;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (!mir_call_recovery_opcode_sequence(
+            expected_opcodes, sizeof(expected_opcodes)) ||
+        mir_cfg_block_count() != 4 || mir.local_bytes != 6 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (item = 0; item < 3; ++item) {
+        struct Sym *function = mir_memory_runner_call_function(
+            allocation_calls[item], 0, 1);
+
+        if (function == NULL ||
+            !mir_machine_single_call_argument(
+                &mir.insns[allocation_calls[item]], &argument) ||
+            argument != mir.insns[allocation_constants[item]].dst ||
+            !mir_machine_evaluate_constant(argument, &value, 0) ||
+            value < 0 || value > 65535)
+            return mir_machine_reject(
+                "allocator-trim-schedule", "allocation");
+        if (allocate_function == NULL)
+            allocate_function = function;
+        else if (allocate_function != function)
+            return mir_machine_reject(
+                "allocator-trim-schedule", "mixed-allocation");
+        if (item == 0)
+            plan->first_size = (int)value;
+        else if (item == 1 && (int)value != plan->first_size)
+            return mir_machine_reject(
+                "allocator-trim-schedule", "reuse-size");
+        else if (item == 2)
+            plan->final_size = (int)value;
+    }
+    for (item = 0; item < 3; ++item) {
+        struct Sym *function = mir_memory_runner_call_function(
+            free_calls[item], 0, 1);
+
+        if (function == NULL ||
+            !mir_machine_single_call_argument(
+                &mir.insns[free_calls[item]], &argument) ||
+            argument != mir.insns[free_values[item]].dst)
+            return mir_machine_reject(
+                "allocator-trim-schedule", "free");
+        if (free_function == NULL)
+            free_function = function;
+        else if (free_function != function)
+            return mir_machine_reject(
+                "allocator-trim-schedule", "mixed-free");
+    }
+    for (item = 0; item < 3; ++item) {
+        struct Sym *function = mir_memory_runner_call_function(
+            failure_calls[item], 0, 1);
+
+        if (function == NULL ||
+            !mir_machine_single_call_argument(
+                &mir.insns[failure_calls[item]], &argument) ||
+            argument != mir.insns[failure_values[item]].dst)
+            return mir_machine_reject(
+                "allocator-trim-schedule", "failure");
+        if (failure_function == NULL)
+            failure_function = function;
+        else if (failure_function != function)
+            return mir_machine_reject(
+                "allocator-trim-schedule", "mixed-failure");
+        plan->failure_strings[item] =
+            (int)mir.insns[failure_values[item]].immediate;
+    }
+    if (allocate_function == free_function ||
+        allocate_function == failure_function ||
+        free_function == failure_function)
+        return mir_machine_reject(
+            "allocator-trim-schedule", "functions");
+    if (mir.insns[5].src1 != mir.insns[3].dst ||
+        mir.insns[5].immediate != 0 ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        !mir_machine_same_location(
+            &mir.insns[6], &mir.insns[7]) ||
+        !mir_machine_same_location(
+            &mir.insns[6], &mir.insns[15]) ||
+        !mir_machine_same_location(
+            &mir.insns[6], &mir.insns[26]) ||
+        !mir_machine_same_location(
+            &mir.insns[6], &mir.insns[44]) ||
+        !mir_machine_constant_equals(mir.insns[8].dst, 0) ||
+        mir.insns[9].src1 != mir.insns[7].dst ||
+        mir.insns[9].src2 != mir.insns[8].dst ||
+        mir.insns[9].immediate != TOK_EQ ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        mir.insns[10].label != mir.insns[14].label)
+        return mir_machine_reject(
+            "allocator-trim-schedule", "initial");
+    if (mir.insns[23].src1 != mir.insns[21].dst ||
+        mir.insns[23].immediate != 0 ||
+        mir.insns[24].src1 != mir.insns[23].dst ||
+        !mir_machine_same_location(
+            &mir.insns[24], &mir.insns[25]) ||
+        !mir_machine_same_location(
+            &mir.insns[24], &mir.insns[33]) ||
+        mir.insns[27].src1 != mir.insns[25].dst ||
+        mir.insns[27].src2 != mir.insns[26].dst ||
+        mir.insns[27].immediate != TOK_NE ||
+        mir.insns[28].src1 != mir.insns[27].dst ||
+        mir.insns[28].label != mir.insns[32].label ||
+        mir.insns[41].src1 != mir.insns[39].dst ||
+        mir.insns[41].immediate != 0 ||
+        mir.insns[42].src1 != mir.insns[41].dst ||
+        !mir_machine_same_location(
+            &mir.insns[42], &mir.insns[43]) ||
+        !mir_machine_same_location(
+            &mir.insns[42], &mir.insns[51]) ||
+        mir.insns[45].src1 != mir.insns[43].dst ||
+        mir.insns[45].src2 != mir.insns[44].dst ||
+        mir.insns[45].immediate != TOK_NE ||
+        mir.insns[46].src1 != mir.insns[45].dst ||
+        mir.insns[46].label != mir.insns[50].label)
+        return mir_machine_reject(
+            "allocator-trim-schedule", "reuse");
+    plan->allocate_function = allocate_function;
+    plan->free_function = free_function;
+    plan->failure_function = failure_function;
+    return 1;
+}
+
+static void mir_emit_allocator_trim_schedule(
+    FILE *out, const struct MirAllocatorTrimSchedule *plan)
+{
+    int initial_ok = new_label();
+    int first_reuse_ok = new_label();
+    int final_reuse_ok = new_label();
+
+    fprintf(out,
+            "%s\n"
+            ";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
+            "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+            "\tdec sp\n\tdec sp\n",
+            MIR_EXACT_KERNEL_MARKER);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_allocator_call_one(
+        out, plan->allocate_function, plan->first_size);
+    fputs("\tpush hl\n\tpop iy\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n", initial_ok);
+    mir_allocator_fail(
+        out, plan->failure_function, plan->failure_strings[0]);
+    fprintf(out, "L%d:\n\tpush iy\n\tpop hl\n\tpush hl\n",
+            initial_ok);
+    mir_machine_emit_symbol_call(out, plan->free_function);
+    mir_emit_final_call_cleanup(out, 1);
+
+    mir_allocator_call_one(
+        out, plan->allocate_function, plan->first_size);
+    mir_temp_store_hl(out, -2);
+    fputs("\tpush iy\n\tpop de\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp z,L%d\n", first_reuse_ok);
+    mir_allocator_fail(
+        out, plan->failure_function, plan->failure_strings[1]);
+    fprintf(out, "L%d:\n", first_reuse_ok);
+    mir_temp_load_hl(out, -2);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->free_function);
+    mir_emit_final_call_cleanup(out, 1);
+
+    mir_allocator_call_one(
+        out, plan->allocate_function, plan->final_size);
+    mir_temp_store_hl(out, -2);
+    fputs("\tpush iy\n\tpop de\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp z,L%d\n", final_reuse_ok);
+    mir_allocator_fail(
+        out, plan->failure_function, plan->failure_strings[2]);
+    fprintf(out, "L%d:\n", final_reuse_ok);
+    mir_temp_load_hl(out, -2);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->free_function);
+    mir_emit_final_call_cleanup(out, 1);
+    fputs("\tld sp,ix\n\tpop ix\n\tpop iy\n"
+          ";@dcc.reg free=iy\n\tret\n", out);
+}
+
+static int mir_match_allocator_coalesce_common(
+    struct MirAllocatorCoalesceSchedule *plan,
+    enum MirAllocatorCoalesceKind kind)
+{
+    static const unsigned char bridge_opcodes[104] = {
+        MIR_LABEL, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_UNARY,
+        MIR_STORE, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_UNARY,
+        MIR_STORE, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_UNARY,
+        MIR_STORE, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+        MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_LABEL, MIR_JUMP,
+        MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST,
+        MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_CONST, MIR_LABEL, MIR_PHI, MIR_LABEL, MIR_JUMP, MIR_LABEL,
+        MIR_PHI, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_LABEL, MIR_LOAD, MIR_NOP, MIR_ARG, MIR_CALL, MIR_LOAD,
+        MIR_NOP, MIR_ARG, MIR_CALL, MIR_LOAD, MIR_NOP, MIR_ARG,
+        MIR_CALL, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_UNARY,
+        MIR_STORE, MIR_LOAD, MIR_LOAD, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_LABEL, MIR_LOAD,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_LOAD, MIR_NOP, MIR_ARG, MIR_CALL
+    };
+    static const unsigned char reverse_opcodes[104] = {
+        MIR_LABEL, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_UNARY,
+        MIR_STORE, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_UNARY,
+        MIR_STORE, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_UNARY,
+        MIR_STORE, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+        MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_LABEL, MIR_JUMP,
+        MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST,
+        MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_CONST, MIR_LABEL, MIR_PHI, MIR_LABEL, MIR_JUMP, MIR_LABEL,
+        MIR_PHI, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_LABEL, MIR_LOAD, MIR_NOP, MIR_ARG, MIR_CALL, MIR_LOAD,
+        MIR_NOP, MIR_ARG, MIR_CALL, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_NOP, MIR_UNARY, MIR_STORE, MIR_LOAD, MIR_LOAD, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_LABEL, MIR_LOAD, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_LOAD, MIR_NOP, MIR_ARG, MIR_CALL,
+        MIR_LOAD, MIR_NOP, MIR_ARG, MIR_CALL
+    };
+    const unsigned char *expected =
+        kind == MIR_ALLOCATOR_BRIDGE
+            ? bridge_opcodes : reverse_opcodes;
+    static const int allocation_calls[3] = {3, 9, 15};
+    static const int allocation_constants[3] = {1, 7, 13};
+    struct Sym *allocate_function = NULL;
+    struct Sym *failure_function;
+    int argument;
+    long value;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    plan->kind = kind;
+    if (!mir_call_recovery_opcode_sequence(expected, 104) ||
+        mir_cfg_block_count() != 17 || mir.local_bytes != 8 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (item = 0; item < 3; ++item) {
+        struct Sym *function = mir_memory_runner_call_function(
+            allocation_calls[item], 0, 1);
+
+        if (function == NULL ||
+            !mir_machine_single_call_argument(
+                &mir.insns[allocation_calls[item]], &argument) ||
+            argument != mir.insns[allocation_constants[item]].dst ||
+            !mir_machine_evaluate_constant(argument, &value, 0) ||
+            value <= 0 || value > 65535)
+            return mir_machine_reject(
+                "allocator-coalesce-schedule", "allocation");
+        if (allocate_function == NULL) {
+            allocate_function = function;
+            plan->allocation_size = (int)value;
+        } else if (allocate_function != function ||
+                   plan->allocation_size != (int)value) {
+            return mir_machine_reject(
+                "allocator-coalesce-schedule", "mixed-allocation");
+        }
+    }
+    failure_function =
+        mir_memory_runner_call_function(65, 0, 1);
+    if (failure_function == NULL ||
+        !mir_machine_single_call_argument(
+            &mir.insns[65], &argument) ||
+        argument != mir.insns[63].dst)
+        return mir_machine_reject(
+            "allocator-coalesce-schedule", "setup-failure");
+    if (mir.insns[5].src1 != mir.insns[3].dst ||
+        mir.insns[5].immediate != 0 ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        mir.insns[11].src1 != mir.insns[9].dst ||
+        mir.insns[11].immediate != 0 ||
+        mir.insns[12].src1 != mir.insns[11].dst ||
+        mir.insns[17].src1 != mir.insns[15].dst ||
+        mir.insns[17].immediate != 0 ||
+        mir.insns[18].src1 != mir.insns[17].dst ||
+        !mir_machine_same_location(
+            &mir.insns[6], &mir.insns[19]) ||
+        !mir_machine_same_location(
+            &mir.insns[12], &mir.insns[27]) ||
+        !mir_machine_same_location(
+            &mir.insns[18], &mir.insns[47]) ||
+        !mir_machine_constant_equals(mir.insns[20].dst, 0) ||
+        mir.insns[21].src1 != mir.insns[19].dst ||
+        mir.insns[21].src2 != mir.insns[20].dst ||
+        mir.insns[21].immediate != TOK_EQ ||
+        mir.insns[22].src1 != mir.insns[21].dst ||
+        mir.insns[22].label != mir.insns[26].label ||
+        !mir_machine_constant_equals(mir.insns[24].dst, 1) ||
+        mir.insns[25].label != mir.insns[40].label ||
+        !mir_machine_constant_equals(mir.insns[28].dst, 0) ||
+        mir.insns[29].src1 != mir.insns[27].dst ||
+        mir.insns[29].src2 != mir.insns[28].dst ||
+        mir.insns[29].immediate != TOK_EQ ||
+        mir.insns[30].src1 != mir.insns[29].dst ||
+        mir.insns[30].label != mir.insns[34].label ||
+        !mir_machine_constant_equals(mir.insns[32].dst, 1) ||
+        mir.insns[33].label != mir.insns[36].label ||
+        !mir_machine_constant_equals(mir.insns[35].dst, 0) ||
+        mir.insns[37].src1 != mir.insns[32].dst ||
+        mir.insns[37].src2 != mir.insns[35].dst ||
+        mir.insns[37].phi_pred1 != mir.insns[31].label ||
+        mir.insns[37].phi_pred2 != mir.insns[34].label ||
+        mir.insns[39].label != mir.insns[40].label ||
+        mir.insns[41].src1 != mir.insns[24].dst ||
+        mir.insns[41].src2 != mir.insns[37].dst ||
+        mir.insns[41].phi_pred1 != mir.insns[23].label ||
+        mir.insns[41].phi_pred2 != mir.insns[38].label ||
+        mir.insns[42].src1 != mir.insns[41].dst ||
+        mir.insns[42].label != mir.insns[46].label)
+        return mir_machine_reject(
+            "allocator-coalesce-schedule", "first-condition");
+    if (!mir_machine_constant_equals(mir.insns[48].dst, 0) ||
+        mir.insns[49].src1 != mir.insns[47].dst ||
+        mir.insns[49].src2 != mir.insns[48].dst ||
+        mir.insns[49].immediate != TOK_EQ ||
+        mir.insns[50].src1 != mir.insns[49].dst ||
+        mir.insns[50].label != mir.insns[54].label ||
+        !mir_machine_constant_equals(mir.insns[52].dst, 1) ||
+        mir.insns[53].label != mir.insns[56].label ||
+        !mir_machine_constant_equals(mir.insns[55].dst, 0) ||
+        mir.insns[57].src1 != mir.insns[52].dst ||
+        mir.insns[57].src2 != mir.insns[55].dst ||
+        mir.insns[57].phi_pred1 != mir.insns[51].label ||
+        mir.insns[57].phi_pred2 != mir.insns[54].label ||
+        mir.insns[59].label != mir.insns[60].label ||
+        mir.insns[61].src1 != mir.insns[44].dst ||
+        mir.insns[61].src2 != mir.insns[57].dst ||
+        mir.insns[61].phi_pred1 != mir.insns[43].label ||
+        mir.insns[61].phi_pred2 != mir.insns[58].label ||
+        mir.insns[62].src1 != mir.insns[61].dst ||
+        mir.insns[62].label != mir.insns[66].label)
+        return mir_machine_reject(
+            "allocator-coalesce-schedule", "second-condition");
+    plan->allocate_function = allocate_function;
+    plan->failure_function = failure_function;
+    plan->failure_strings[0] = (int)mir.insns[63].immediate;
+    return 1;
+}
+
+static int mir_match_allocator_bridge_schedule(
+    struct MirAllocatorCoalesceSchedule *plan)
+{
+    static const int free_calls[4] = {70, 74, 78, 103};
+    static const int free_values[4] = {67, 71, 75, 100};
+    int arguments[3];
+    int argument;
+    long value;
+    long merged_value;
+    long fill_value;
+    int item;
+
+    if (!mir_match_allocator_coalesce_common(
+            plan, MIR_ALLOCATOR_BRIDGE))
+        return 0;
+    for (item = 0; item < 4; ++item) {
+        struct Sym *function = mir_memory_runner_call_function(
+            free_calls[item], 0, 1);
+
+        if (function == NULL ||
+            !mir_machine_single_call_argument(
+                &mir.insns[free_calls[item]], &argument) ||
+            argument != mir.insns[free_values[item]].dst)
+            return mir_machine_reject(
+                "allocator-coalesce-schedule", "bridge-free");
+        if (plan->free_function == NULL)
+            plan->free_function = function;
+        else if (plan->free_function != function)
+            return mir_machine_reject(
+                "allocator-coalesce-schedule", "bridge-mixed-free");
+    }
+    if (!mir_machine_same_location(
+            &mir.insns[6], &mir.insns[67]) ||
+        !mir_machine_same_location(
+            &mir.insns[18], &mir.insns[71]) ||
+        !mir_machine_same_location(
+            &mir.insns[12], &mir.insns[75]) ||
+        !mir_machine_evaluate_constant(
+            mir.insns[79].dst, &value, 0) ||
+        value <= 0 || value > 65535 ||
+        !mir_machine_single_call_argument(
+            &mir.insns[81], &argument) ||
+        argument != mir.insns[79].dst ||
+        mir_memory_runner_call_function(
+            81, 0, 1) != plan->allocate_function ||
+        mir.insns[83].src1 != mir.insns[81].dst ||
+        mir.insns[83].immediate != 0 ||
+        mir.insns[84].src1 != mir.insns[83].dst ||
+        !mir_machine_same_location(
+            &mir.insns[84], &mir.insns[85]) ||
+        !mir_machine_same_location(
+            &mir.insns[84], &mir.insns[93]) ||
+        !mir_machine_same_location(
+            &mir.insns[84], &mir.insns[100]) ||
+        mir.insns[87].src1 != mir.insns[85].dst ||
+        mir.insns[87].src2 != mir.insns[86].dst ||
+        mir.insns[87].immediate != TOK_NE ||
+        !mir_machine_same_location(
+            &mir.insns[6], &mir.insns[86]) ||
+        mir.insns[88].src1 != mir.insns[87].dst ||
+        mir.insns[88].label != mir.insns[92].label ||
+        mir_memory_runner_call_function(
+            91, 0, 1) != plan->failure_function ||
+        !mir_machine_single_call_argument(
+            &mir.insns[91], &argument) ||
+        argument != mir.insns[89].dst)
+        return mir_machine_reject(
+            "allocator-coalesce-schedule", "bridge-result");
+    plan->fill_function =
+        mir_memory_runner_call_function(99, 0, 3);
+    if (plan->fill_function == NULL ||
+        !mir_machine_three_call_arguments(
+            &mir.insns[99], arguments) ||
+        arguments[0] != mir.insns[93].dst ||
+        arguments[1] != mir.insns[95].dst ||
+        arguments[2] != mir.insns[97].dst ||
+        !mir_machine_evaluate_constant(
+            arguments[1], &merged_value, 0) ||
+        merged_value <= 0 || merged_value > 65535 ||
+        !mir_machine_evaluate_constant(
+            arguments[2], &fill_value, 0) ||
+        fill_value < -32768 || fill_value > 65535)
+        return mir_machine_reject(
+            "allocator-coalesce-schedule", "bridge-fill");
+    plan->merged_size = (int)merged_value;
+    plan->fill_value = (int)fill_value;
+    if (!mir_machine_evaluate_constant(
+            mir.insns[79].dst, &value, 0) ||
+        (int)value != plan->merged_size)
+        return mir_machine_reject(
+            "allocator-coalesce-schedule", "bridge-size");
+    plan->failure_strings[1] = (int)mir.insns[89].immediate;
+    return 1;
+}
+
+static int mir_match_allocator_reverse_schedule(
+    struct MirAllocatorCoalesceSchedule *plan)
+{
+    static const int free_calls[4] = {70, 74, 99, 103};
+    static const int free_values[4] = {67, 71, 96, 100};
+    int arguments[3];
+    int argument;
+    long value;
+    long merged_value;
+    long fill_value;
+    int item;
+
+    if (!mir_match_allocator_coalesce_common(
+            plan, MIR_ALLOCATOR_REVERSE))
+        return 0;
+    for (item = 0; item < 4; ++item) {
+        struct Sym *function = mir_memory_runner_call_function(
+            free_calls[item], 0, 1);
+
+        if (function == NULL ||
+            !mir_machine_single_call_argument(
+                &mir.insns[free_calls[item]], &argument) ||
+            argument != mir.insns[free_values[item]].dst)
+            return mir_machine_reject(
+                "allocator-coalesce-schedule", "reverse-free");
+        if (plan->free_function == NULL)
+            plan->free_function = function;
+        else if (plan->free_function != function)
+            return mir_machine_reject(
+                "allocator-coalesce-schedule", "reverse-mixed-free");
+    }
+    if (!mir_machine_same_location(
+            &mir.insns[6], &mir.insns[67]) ||
+        !mir_machine_same_location(
+            &mir.insns[12], &mir.insns[71]) ||
+        !mir_machine_same_location(
+            &mir.insns[18], &mir.insns[100]) ||
+        !mir_machine_evaluate_constant(
+            mir.insns[75].dst, &value, 0) ||
+        value <= 0 || value > 65535 ||
+        !mir_machine_single_call_argument(
+            &mir.insns[77], &argument) ||
+        argument != mir.insns[75].dst ||
+        mir_memory_runner_call_function(
+            77, 0, 1) != plan->allocate_function ||
+        mir.insns[79].src1 != mir.insns[77].dst ||
+        mir.insns[79].immediate != 0 ||
+        mir.insns[80].src1 != mir.insns[79].dst ||
+        !mir_machine_same_location(
+            &mir.insns[80], &mir.insns[81]) ||
+        !mir_machine_same_location(
+            &mir.insns[80], &mir.insns[89]) ||
+        !mir_machine_same_location(
+            &mir.insns[80], &mir.insns[96]) ||
+        mir.insns[83].src1 != mir.insns[81].dst ||
+        mir.insns[83].src2 != mir.insns[82].dst ||
+        mir.insns[83].immediate != TOK_NE ||
+        !mir_machine_same_location(
+            &mir.insns[6], &mir.insns[82]) ||
+        mir.insns[84].src1 != mir.insns[83].dst ||
+        mir.insns[84].label != mir.insns[88].label ||
+        mir_memory_runner_call_function(
+            87, 0, 1) != plan->failure_function ||
+        !mir_machine_single_call_argument(
+            &mir.insns[87], &argument) ||
+        argument != mir.insns[85].dst)
+        return mir_machine_reject(
+            "allocator-coalesce-schedule", "reverse-result");
+    plan->fill_function =
+        mir_memory_runner_call_function(95, 0, 3);
+    if (plan->fill_function == NULL ||
+        !mir_machine_three_call_arguments(
+            &mir.insns[95], arguments) ||
+        arguments[0] != mir.insns[89].dst ||
+        arguments[1] != mir.insns[91].dst ||
+        arguments[2] != mir.insns[93].dst ||
+        !mir_machine_evaluate_constant(
+            arguments[1], &merged_value, 0) ||
+        merged_value <= 0 || merged_value > 65535 ||
+        !mir_machine_evaluate_constant(
+            arguments[2], &fill_value, 0) ||
+        fill_value < -32768 || fill_value > 65535)
+        return mir_machine_reject(
+            "allocator-coalesce-schedule", "reverse-fill");
+    plan->merged_size = (int)merged_value;
+    plan->fill_value = (int)fill_value;
+    if (!mir_machine_evaluate_constant(
+            mir.insns[75].dst, &value, 0) ||
+        (int)value != plan->merged_size)
+        return mir_machine_reject(
+            "allocator-coalesce-schedule", "reverse-size");
+    plan->failure_strings[1] = (int)mir.insns[85].immediate;
+    return 1;
+}
+
+static void mir_allocator_free_ix(
+    FILE *out, struct Sym *free_function, int offset)
+{
+    mir_temp_load_hl(out, offset);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, free_function);
+    mir_emit_final_call_cleanup(out, 1);
+}
+
+static void mir_emit_allocator_coalesce_schedule(
+    FILE *out, const struct MirAllocatorCoalesceSchedule *plan)
+{
+    int setup_failed = new_label();
+    int setup_ok = new_label();
+    int result_ok = new_label();
+
+    fprintf(out,
+            "%s\n"
+            ";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
+            "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+            "\tld hl,-6\n\tadd hl,sp\n\tld sp,hl\n",
+            MIR_EXACT_KERNEL_MARKER);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_allocator_call_one(
+        out, plan->allocate_function, plan->allocation_size);
+    fputs("\tpush hl\n\tpop iy\n", out);
+    mir_allocator_call_one(
+        out, plan->allocate_function, plan->allocation_size);
+    mir_temp_store_hl(out, -2);
+    mir_allocator_call_one(
+        out, plan->allocate_function, plan->allocation_size);
+    mir_temp_store_hl(out, -4);
+    fputs("\tpush iy\n\tpop hl\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", setup_failed);
+    mir_temp_load_hl(out, -2);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", setup_failed);
+    mir_temp_load_hl(out, -4);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\nL%d:\n",
+            setup_ok, setup_failed);
+    mir_allocator_fail(
+        out, plan->failure_function, plan->failure_strings[0]);
+    fprintf(out, "L%d:\n", setup_ok);
+
+    fputs("\tpush iy\n\tpop hl\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->free_function);
+    mir_emit_final_call_cleanup(out, 1);
+    if (plan->kind == MIR_ALLOCATOR_BRIDGE) {
+        mir_allocator_free_ix(out, plan->free_function, -4);
+        mir_allocator_free_ix(out, plan->free_function, -2);
+    } else {
+        mir_allocator_free_ix(out, plan->free_function, -2);
+    }
+    mir_allocator_call_one(
+        out, plan->allocate_function, plan->merged_size);
+    mir_temp_store_hl(out, -6);
+    fputs("\tpush iy\n\tpop de\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp z,L%d\n", result_ok);
+    mir_allocator_fail(
+        out, plan->failure_function, plan->failure_strings[1]);
+    fprintf(out, "L%d:\n", result_ok);
+
+    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+            plan->fill_value);
+    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+            plan->merged_size);
+    mir_temp_load_hl(out, -6);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->fill_function);
+    mir_emit_final_call_cleanup(out, 3);
+    mir_allocator_free_ix(out, plan->free_function, -6);
+    if (plan->kind == MIR_ALLOCATOR_REVERSE)
+        mir_allocator_free_ix(out, plan->free_function, -4);
+    fputs("\tld sp,ix\n\tpop ix\n\tpop iy\n"
+          ";@dcc.reg free=iy\n\tret\n", out);
+}
+
+static struct Sym *mir_bios_direct_function(
+    int instruction, int argument_count, char call_name[64])
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    struct Sym *function;
+    const char *rtl_name;
+    int first_argument;
+    int second_argument;
+
+    if (call->opcode != MIR_CALL || call->src1 >= 0 ||
+        call->memory_flags != 0 ||
+        (function = find_global(call->name)) == NULL ||
+        function->storage != SC_FUNC || function->is_funcptr ||
+        function->is_noreturn || !function->has_proto ||
+        function->proto_variadic ||
+        function->proto_nargs != argument_count ||
+        !mir_memory_runner_word_type(function->type, 0) ||
+        argument_count != 2 ||
+        !mir_call_is_bdos_family_fastcall(
+            instruction, &rtl_name,
+            &first_argument, &second_argument) ||
+        !mir_memory_runner_word_type(function->proto_types[0], 0) ||
+        !mir_memory_runner_word_type(function->proto_types[1], 0))
+        return NULL;
+    snprintf(call_name, 64, "%s", rtl_name);
+    return function;
+}
+
+static int mir_bios_call_constants(
+    int instruction, long first, long second)
+{
+    int arguments[2];
+
+    return mir_machine_two_call_arguments(
+               &mir.insns[instruction], arguments) &&
+           mir_machine_constant_equals(arguments[0], first) &&
+           mir_machine_constant_equals(arguments[1], second);
+}
+
+static void mir_call_recovery_emit_function_address(
+    FILE *out, struct Sym *function)
+{
+    const char *name = asm_name_for(sym_asm_name(function));
+
+    if ((function->storage == SC_EXTERN || function->needs_extrn) &&
+        mir_extrn_should_emit(function))
+        fprintf(out, "\textrn %s\n", name);
+    fprintf(out, "\tld hl,%s\n", name);
+}
+
+static int mir_bios_print_call(
+    struct MirBiosCallSchedule *plan, int instruction,
+    int argument_count, const int *definitions)
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    struct Sym *function;
+    int arguments[2];
+    int argument;
+
+    if (argument_count < 1 || argument_count > 2 ||
+        call->opcode != MIR_CALL || call->src1 >= 0 ||
+        call->base_name[0] == 0 ||
+        call->memory_flags != MIR_CALL_FLAG_VARIADIC ||
+        (function = find_global(call->name)) == NULL ||
+        function->storage != SC_FUNC || function->is_funcptr ||
+        function->is_noreturn || !function->has_proto ||
+        !function->proto_variadic || function->proto_nargs != 1 ||
+        !mir_memory_runner_word_type(function->type, 0) ||
+        !mir_machine_call_arguments(
+            call, argument_count, arguments))
+        return 0;
+    for (argument = 0; argument < argument_count; ++argument)
+        if (arguments[argument] !=
+                mir.insns[definitions[argument]].dst)
+            return 0;
+    if (plan->print_function == NULL) {
+        plan->print_function = function;
+        snprintf(plan->print_name, sizeof(plan->print_name), "%s",
+                 call->base_name);
+    }
+    return plan->print_function == function &&
+           !strcmp(plan->print_name, call->base_name);
+}
+
+static int mir_match_bios_call_schedule(
+    struct MirBiosCallSchedule *plan)
+{
+    static const unsigned char expected_opcodes[111] = {
+        MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_CONST,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_ADDRESS, MIR_STORE, MIR_CONST,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_LOAD, MIR_CALL, MIR_NOP,
+        MIR_STORE, MIR_NOP, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_NOP, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_LABEL, MIR_JUMP,
+        MIR_LABEL, MIR_STRING_ADDRESS, MIR_LABEL, MIR_LABEL, MIR_PHI,
+        MIR_ARG, MIR_CALL, MIR_CONST, MIR_ARG, MIR_CONST, MIR_ARG,
+        MIR_CALL, MIR_CONST, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_CONST, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CALL, MIR_CONST, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_ADDRESS, MIR_STORE, MIR_CONST, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_LOAD, MIR_CALL, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_NOP, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_LABEL, MIR_JUMP,
+        MIR_LABEL, MIR_STRING_ADDRESS, MIR_LABEL, MIR_LABEL, MIR_PHI,
+        MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_CONST, MIR_RETURN
+    };
+    static const int one_argument_prints[3][2] = {
+        {3, 1}, {27, 25}, {108, 106}
+    };
+    static const int two_argument_prints[2][3] = {
+        {43, 28, 41}, {105, 90, 103}
+    };
+    static const int direct_bios_calls[6] = {8, 48, 53, 58, 63, 68};
+    static const int direct_bios_arguments[6][2] = {
+        {2, 0}, {4, 72}, {4, 105}, {4, 33}, {4, 13}, {4, 10}
+    };
+    struct Sym *bios_function;
+    struct Sym *bioshl_function;
+    int definitions[2];
+    int arguments[2];
+    char call_name[64];
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (!mir_call_recovery_opcode_sequence(
+            expected_opcodes, sizeof(expected_opcodes)) ||
+        mir_cfg_block_count() != 9 || mir.local_bytes != 12 ||
+        mir.has_vla ||
+        !mir_memory_runner_word_type(mir.return_type, 0))
+        return 0;
+    bios_function =
+        mir_bios_direct_function(8, 2, plan->bios_name);
+    bioshl_function =
+        mir_bios_direct_function(73, 2, plan->bioshl_name);
+    if (bios_function == NULL || bioshl_function == NULL ||
+        bios_function == bioshl_function ||
+        !mir_bios_call_constants(73, 2, 0))
+        return mir_machine_reject(
+            "bios-call-schedule", "direct-functions");
+    for (item = 0; item < 6; ++item) {
+        struct Sym *function = mir_bios_direct_function(
+            direct_bios_calls[item], 2, call_name);
+
+        if (function != bios_function ||
+            strcmp(call_name, plan->bios_name) ||
+            !mir_bios_call_constants(
+                direct_bios_calls[item],
+                direct_bios_arguments[item][0],
+                direct_bios_arguments[item][1]))
+            return mir_machine_reject(
+                "bios-call-schedule", "direct-calls");
+    }
+    if (find_global(mir.insns[14].name) != bios_function ||
+        find_global(mir.insns[79].name) != bioshl_function ||
+        mir.insns[15].src1 != mir.insns[14].dst ||
+        mir.insns[80].src1 != mir.insns[79].dst ||
+        !mir_machine_same_location(
+            &mir.insns[15], &mir.insns[20]) ||
+        !mir_machine_same_location(
+            &mir.insns[80], &mir.insns[85]) ||
+        mir.insns[21].src1 != mir.insns[20].dst ||
+        mir.insns[86].src1 != mir.insns[85].dst ||
+        !mir_machine_two_call_arguments(
+            &mir.insns[21], arguments) ||
+        !mir_machine_constant_equals(arguments[0], 2) ||
+        !mir_machine_constant_equals(arguments[1], 0) ||
+        !mir_machine_two_call_arguments(
+            &mir.insns[86], arguments) ||
+        !mir_machine_constant_equals(arguments[0], 2) ||
+        !mir_machine_constant_equals(arguments[1], 0))
+        return mir_machine_reject(
+            "bios-call-schedule", "indirect-calls");
+    if (mir.insns[32].src1 != mir.insns[8].dst ||
+        mir.insns[32].src2 != mir.insns[21].dst ||
+        mir.insns[32].immediate != TOK_EQ ||
+        mir.insns[33].src1 != mir.insns[32].dst ||
+        mir.insns[33].label != mir.insns[37].label ||
+        mir.insns[36].label != mir.insns[40].label ||
+        mir.insns[41].src1 != mir.insns[34].dst ||
+        mir.insns[41].src2 != mir.insns[38].dst ||
+        mir.insns[41].phi_pred1 != mir.insns[35].label ||
+        mir.insns[41].phi_pred2 != mir.insns[39].label ||
+        mir.insns[94].src1 != mir.insns[73].dst ||
+        mir.insns[94].src2 != mir.insns[86].dst ||
+        mir.insns[94].immediate != TOK_EQ ||
+        mir.insns[95].src1 != mir.insns[94].dst ||
+        mir.insns[95].label != mir.insns[99].label ||
+        mir.insns[98].label != mir.insns[102].label ||
+        mir.insns[103].src1 != mir.insns[96].dst ||
+        mir.insns[103].src2 != mir.insns[100].dst ||
+        mir.insns[103].phi_pred1 != mir.insns[97].label ||
+        mir.insns[103].phi_pred2 != mir.insns[101].label)
+        return mir_machine_reject(
+            "bios-call-schedule", "comparisons");
+    for (item = 0; item < 3; ++item) {
+        definitions[0] = one_argument_prints[item][1];
+        if (!mir_bios_print_call(
+                plan, one_argument_prints[item][0], 1, definitions))
+            return mir_machine_reject(
+                "bios-call-schedule", "one-argument-print");
+    }
+    for (item = 0; item < 2; ++item) {
+        definitions[0] = two_argument_prints[item][1];
+        definitions[1] = two_argument_prints[item][2];
+        if (!mir_bios_print_call(
+                plan, two_argument_prints[item][0], 2, definitions))
+            return mir_machine_reject(
+                "bios-call-schedule", "two-argument-print");
+    }
+    if (!mir_machine_constant_equals(mir.insns[109].dst, 0) ||
+        mir.insns[110].src1 != mir.insns[109].dst)
+        return mir_machine_reject(
+            "bios-call-schedule", "return");
+    plan->strings[0] = (int)mir.insns[1].immediate;
+    plan->strings[1] = (int)mir.insns[25].immediate;
+    plan->strings[2] = (int)mir.insns[28].immediate;
+    plan->strings[3] = (int)mir.insns[34].immediate;
+    plan->strings[4] = (int)mir.insns[38].immediate;
+    plan->strings[5] = (int)mir.insns[90].immediate;
+    plan->strings[6] = (int)mir.insns[106].immediate;
+    if (plan->strings[3] != (int)mir.insns[96].immediate ||
+        plan->strings[4] != (int)mir.insns[100].immediate)
+        return mir_machine_reject(
+            "bios-call-schedule", "conditional-strings");
+    plan->bios_function = bios_function;
+    plan->bioshl_function = bioshl_function;
+    plan->status_function = 2;
+    plan->output_function = 4;
+    for (item = 0; item < 5; ++item)
+        plan->output_characters[item] =
+            direct_bios_arguments[item + 1][1];
+    return 1;
+}
+
+static void mir_emit_bios_direct_call(
+    FILE *out, const char *call_name,
+    int function_number, int argument)
+{
+    fprintf(out, "\tld c,%d\n\tld de,%d\n",
+            function_number & 0xff, argument);
+    mir_emit_runtime_call(out, call_name);
+}
+
+static void mir_emit_bios_indirect_call(
+    FILE *out, struct Sym *function, int function_number)
+{
+    fputs("\tld hl,0\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,%d\n\tpush hl\n", function_number);
+    mir_call_recovery_emit_function_address(out, function);
+    mir_emit_runtime_call(out, "__call_hl");
+    mir_emit_final_call_cleanup(out, 2);
+}
+
+static void mir_emit_bios_print(
+    FILE *out, const struct MirBiosCallSchedule *plan,
+    int format_string, int value_string)
+{
+    if (value_string >= 0)
+        fprintf(out, "\tld hl,S%d\n\tpush hl\n", value_string);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", format_string);
+    mir_emit_runtime_call(out, plan->print_name);
+    mir_emit_final_call_cleanup(
+        out, value_string >= 0 ? 2 : 1);
+}
+
+static void mir_emit_bios_choose_agreement(
+    FILE *out, const struct MirBiosCallSchedule *plan)
+{
+    int disagree = new_label();
+    int ready = new_label();
+
+    fputs("\tpush iy\n\tpop de\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out,
+            "\tjp nz,L%d\n\tld hl,S%d\n\tjp L%d\n"
+            "L%d:\n\tld hl,S%d\nL%d:\n",
+            disagree, plan->strings[3], ready,
+            disagree, plan->strings[4], ready);
+}
+
+static void mir_emit_bios_agreement(
+    FILE *out, const struct MirBiosCallSchedule *plan,
+    int format_string)
+{
+    mir_emit_bios_choose_agreement(out, plan);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", format_string);
+    mir_emit_runtime_call(out, plan->print_name);
+    mir_emit_final_call_cleanup(out, 2);
+}
+
+static void mir_emit_bios_call_schedule(
+    FILE *out, const struct MirBiosCallSchedule *plan)
+{
+    int item;
+
+    fprintf(out,
+            "%s\n"
+            ";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
+            "\tpush iy\n",
+            MIR_EXACT_KERNEL_MARKER);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_emit_bios_print(out, plan, plan->strings[0], -1);
+    mir_emit_bios_direct_call(
+        out, plan->bios_name, plan->status_function, 0);
+    fputs("\tpush hl\n\tpop iy\n", out);
+    mir_emit_bios_indirect_call(
+        out, plan->bios_function, plan->status_function);
+    mir_emit_bios_choose_agreement(out, plan);
+    fputs("\tpush hl\n", out);
+    mir_emit_bios_print(out, plan, plan->strings[1], -1);
+    fputs("\tpop hl\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[2]);
+    mir_emit_runtime_call(out, plan->print_name);
+    mir_emit_final_call_cleanup(out, 2);
+    for (item = 0; item < 5; ++item)
+        mir_emit_bios_direct_call(
+            out, plan->bios_name, plan->output_function,
+            plan->output_characters[item]);
+    mir_emit_bios_direct_call(
+        out, plan->bioshl_name, plan->status_function, 0);
+    fputs("\tpush hl\n\tpop iy\n", out);
+    mir_emit_bios_indirect_call(
+        out, plan->bioshl_function, plan->status_function);
+    mir_emit_bios_agreement(out, plan, plan->strings[5]);
+    mir_emit_bios_print(out, plan, plan->strings[6], -1);
+    fputs("\tld hl,0\n\tpop iy\n"
+          ";@dcc.reg free=iy\n\tret\n", out);
+}
+
+static int mir_exec_call_arguments(
+    int instruction, int first_definition, int second_definition)
+{
+    int arguments[2];
+
+    return mir_machine_two_call_arguments(
+               &mir.insns[instruction], arguments) &&
+           arguments[0] == mir.insns[first_definition].dst &&
+           arguments[1] == mir.insns[second_definition].dst;
+}
+
+static int mir_exec_print_call(
+    struct MirExecArgumentSchedule *plan, int instruction,
+    int argument_count, int first_definition, int second_definition)
+{
+    char call_name[64];
+    struct Sym *function;
+    int arguments[2];
+
+    function = mir_call_recovery_function(
+        instruction, 1, 1, 0, call_name);
+    if (function == NULL || argument_count < 1 || argument_count > 2 ||
+        !mir_machine_call_arguments(
+            &mir.insns[instruction], argument_count, arguments) ||
+        arguments[0] != mir.insns[first_definition].dst ||
+        (argument_count == 2 &&
+         arguments[1] != mir.insns[second_definition].dst))
+        return 0;
+    if (plan->print_function == NULL) {
+        plan->print_function = function;
+        snprintf(plan->print_name, sizeof(plan->print_name), "%s",
+                 call_name);
+    }
+    return plan->print_function == function &&
+           !strcmp(plan->print_name, call_name);
+}
+
+static int mir_match_exec_argument_schedule(
+    struct MirExecArgumentSchedule *plan)
+{
+    static const unsigned char expected_opcodes[105] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST,
+        MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CALL,
+        MIR_RETURN, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_ARG,
+        MIR_CALL, MIR_CONST, MIR_RETURN, MIR_NOP, MIR_LABEL,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_STRING_ADDRESS, MIR_STORE_INDIRECT,
+        MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CONST, MIR_NOP,
+        MIR_STORE_INDIRECT, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS,
+        MIR_ARG, MIR_CALL, MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN,
+        MIR_NOP, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN
+    };
+    struct Sym *compare_function;
+    struct Sym *child_function;
+    struct Sym *exec_function;
+    struct Sym *execv_function;
+    char call_name[64];
+    int argc_offset;
+    int argv_offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (!mir_call_recovery_opcode_sequence(
+            expected_opcodes, sizeof(expected_opcodes)) ||
+        mir_cfg_block_count() != 7 || mir.local_bytes != 8 ||
+        mir.has_vla ||
+        !mir_memory_runner_word_type(mir.return_type, 0) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &argc_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[2].dst, &argv_offset) ||
+        argv_offset != argc_offset + 2 ||
+        !mir_memory_runner_word_type(mir.insns[1].type, 0) ||
+        !mir_memory_runner_pointer_type(
+            mir.insns[2].type, 2, TYPE_CHAR) ||
+        !mir_machine_named_nonvolatile(&mir.insns[1]) ||
+        !mir_machine_named_nonvolatile(&mir.insns[2]))
+        return 0;
+    if (!mir_machine_constant_equals(mir.insns[4].dst, 2) ||
+        mir.insns[5].src1 != mir.insns[1].dst ||
+        mir.insns[5].src2 != mir.insns[4].dst ||
+        mir.insns[5].immediate != TOK_GE ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        mir.insns[6].label != mir.insns[21].label ||
+        strcmp(mir.insns[7].name, mir.insns[2].name) ||
+        !mir_machine_constant_equals(mir.insns[8].dst, 1) ||
+        mir.insns[9].src1 != mir.insns[7].dst ||
+        mir.insns[9].src2 != mir.insns[8].dst ||
+        mir.insns[9].immediate != 2 ||
+        mir.insns[9].memory_size != 2 ||
+        mir.insns[10].src1 != mir.insns[9].dst ||
+        mir.insns[10].memory_size != 2 ||
+        !mir_call_char_pointer_type(mir.insns[10].type))
+        return mir_machine_reject(
+            "exec-argument-schedule", "child-condition");
+    compare_function = mir_call_recovery_function(
+        14, 0, 2, 0, plan->compare_name);
+    child_function = mir_call_recovery_function(
+        30, 0, 2, 0, call_name);
+    if (compare_function == NULL || child_function == NULL ||
+        !mir_exec_call_arguments(14, 10, 12) ||
+        !mir_memory_runner_word_type(compare_function->type, 0) ||
+        !mir_call_char_pointer_type(
+            compare_function->proto_types[0]) ||
+        !mir_call_char_pointer_type(
+            compare_function->proto_types[1]) ||
+        !mir_machine_constant_equals(mir.insns[15].dst, 0) ||
+        mir.insns[16].src1 != mir.insns[14].dst ||
+        mir.insns[16].src2 != mir.insns[15].dst ||
+        mir.insns[16].immediate != TOK_EQ ||
+        mir.insns[17].src1 != mir.insns[16].dst ||
+        mir.insns[17].label != mir.insns[21].label ||
+        !mir_machine_constant_equals(mir.insns[19].dst, 1) ||
+        mir.insns[20].label != mir.insns[23].label ||
+        !mir_machine_constant_equals(mir.insns[22].dst, 0) ||
+        mir.insns[24].src1 != mir.insns[19].dst ||
+        mir.insns[24].src2 != mir.insns[22].dst ||
+        mir.insns[24].phi_pred1 != mir.insns[18].label ||
+        mir.insns[24].phi_pred2 != mir.insns[21].label ||
+        mir.insns[25].src1 != mir.insns[24].dst ||
+        mir.insns[25].label != mir.insns[32].label ||
+        !mir_exec_call_arguments(30, 1, 28) ||
+        strcmp(mir.insns[26].name, mir.insns[1].name) ||
+        strcmp(mir.insns[28].name, mir.insns[2].name) ||
+        mir.insns[31].src1 != mir.insns[30].dst)
+        return mir_machine_reject(
+            "exec-argument-schedule", "child-call");
+    exec_function = mir_call_recovery_function(
+        40, 0, 2, 0, plan->exec_name);
+    execv_function = mir_call_recovery_function(
+        75, 0, 2, 0, plan->execv_name);
+    if (exec_function == NULL || execv_function == NULL ||
+        exec_function == execv_function ||
+        !mir_exec_call_arguments(40, 36, 38) ||
+        !mir_exec_call_arguments(75, 71, 73) ||
+        mir_call_recovery_function(
+            99, 0, 2, 0, call_name) != exec_function ||
+        strcmp(call_name, plan->exec_name) ||
+        !mir_exec_call_arguments(99, 95, 97) ||
+        !mir_memory_runner_word_type(exec_function->type, 0) ||
+        !mir_memory_runner_word_type(execv_function->type, 0) ||
+        !mir_call_char_pointer_type(exec_function->proto_types[0]) ||
+        !mir_call_char_pointer_type(exec_function->proto_types[1]) ||
+        !mir_call_char_pointer_type(execv_function->proto_types[0]) ||
+        !mir_memory_runner_pointer_type(
+            execv_function->proto_types[1], 2, TYPE_CHAR))
+        return mir_machine_reject(
+            "exec-argument-schedule", "exec-calls");
+    if (!mir_machine_constant_equals(mir.insns[45].dst, 65535) ||
+        mir.insns[46].src1 != mir.insns[40].dst ||
+        mir.insns[46].src2 != mir.insns[45].dst ||
+        mir.insns[46].immediate != TOK_NE ||
+        mir.insns[47].src1 != mir.insns[46].dst ||
+        mir.insns[47].label != mir.insns[56].label ||
+        !mir_machine_constant_equals(mir.insns[53].dst, 1) ||
+        mir.insns[54].src1 != mir.insns[53].dst ||
+        !mir_machine_constant_equals(mir.insns[80].dst, 65535) ||
+        mir.insns[81].src1 != mir.insns[75].dst ||
+        mir.insns[81].src2 != mir.insns[80].dst ||
+        mir.insns[81].immediate != TOK_NE ||
+        mir.insns[82].src1 != mir.insns[81].dst ||
+        mir.insns[82].label != mir.insns[91].label ||
+        !mir_machine_constant_equals(mir.insns[88].dst, 1) ||
+        mir.insns[89].src1 != mir.insns[88].dst ||
+        !mir_machine_constant_equals(mir.insns[103].dst, 1) ||
+        mir.insns[104].src1 != mir.insns[103].dst)
+        return mir_machine_reject(
+            "exec-argument-schedule", "failure-flow");
+    if (!mir_machine_same_location(
+            &mir.insns[60], &mir.insns[65]) ||
+        !mir_machine_same_location(
+            &mir.insns[60], &mir.insns[73]) ||
+        !mir_machine_constant_equals(mir.insns[61].dst, 0) ||
+        mir.insns[62].src1 != mir.insns[60].dst ||
+        mir.insns[62].src2 != mir.insns[61].dst ||
+        mir.insns[62].immediate != 2 ||
+        mir.insns[62].memory_size != 2 ||
+        mir.insns[64].src1 != mir.insns[62].dst ||
+        mir.insns[64].src2 != mir.insns[63].dst ||
+        mir.insns[64].memory_size != 2 ||
+        !mir_machine_constant_equals(mir.insns[66].dst, 1) ||
+        mir.insns[67].src1 != mir.insns[65].dst ||
+        mir.insns[67].src2 != mir.insns[66].dst ||
+        mir.insns[67].immediate != 2 ||
+        mir.insns[67].memory_size != 2 ||
+        !mir_machine_constant_equals(mir.insns[68].dst, 0) ||
+        mir.insns[70].src1 != mir.insns[67].dst ||
+        mir.insns[70].src2 != mir.insns[68].dst ||
+        mir.insns[70].memory_size != 2)
+        return mir_machine_reject(
+            "exec-argument-schedule", "argv-local");
+    if (!mir_exec_print_call(plan, 35, 1, 33, 0) ||
+        !mir_exec_print_call(plan, 52, 2, 48, 40) ||
+        !mir_exec_print_call(plan, 59, 1, 57, 0) ||
+        !mir_exec_print_call(plan, 87, 2, 83, 75) ||
+        !mir_exec_print_call(plan, 94, 1, 92, 0) ||
+        !mir_exec_print_call(plan, 102, 1, 100, 0))
+        return mir_machine_reject(
+            "exec-argument-schedule", "prints");
+    if (mir.insns[63].immediate != mir.insns[36].immediate ||
+        mir.insns[71].immediate != mir.insns[36].immediate)
+        return mir_machine_reject(
+            "exec-argument-schedule", "filename-reuse");
+    plan->compare_function = compare_function;
+    plan->child_function = child_function;
+    plan->exec_function = exec_function;
+    plan->execv_function = execv_function;
+    plan->argc_stack_offset = argc_offset;
+    plan->argv_stack_offset = argv_offset;
+    plan->strings[0] = (int)mir.insns[12].immediate;
+    plan->strings[1] = (int)mir.insns[33].immediate;
+    plan->strings[2] = (int)mir.insns[36].immediate;
+    plan->strings[3] = (int)mir.insns[38].immediate;
+    plan->strings[4] = (int)mir.insns[48].immediate;
+    plan->strings[5] = (int)mir.insns[57].immediate;
+    plan->strings[6] = (int)mir.insns[83].immediate;
+    plan->strings[7] = (int)mir.insns[92].immediate;
+    plan->strings[8] = (int)mir.insns[95].immediate;
+    plan->strings[9] = (int)mir.insns[97].immediate;
+    plan->strings[10] = (int)mir.insns[100].immediate;
+    return plan->strings[10] >= 0;
+}
+
+static void mir_exec_load_parameter(
+    FILE *out, int stack_offset)
+{
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+            stack_offset + 2, stack_offset + 3);
+}
+
+static void mir_exec_print_string(
+    FILE *out, const struct MirExecArgumentSchedule *plan,
+    int string_id)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+    mir_call_recovery_emit_named_call(
+        out, plan->print_function, plan->print_name);
+    mir_emit_final_call_cleanup(out, 1);
+}
+
+static void mir_exec_failure(
+    FILE *out, const struct MirExecArgumentSchedule *plan,
+    int string_id)
+{
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+    mir_call_recovery_emit_named_call(
+        out, plan->print_function, plan->print_name);
+    mir_emit_final_call_cleanup(out, 2);
+}
+
+static void mir_emit_exec_argument_schedule(
+    FILE *out, const struct MirExecArgumentSchedule *plan)
+{
+    int parent = new_label();
+    int first_ok = new_label();
+    int second_ok = new_label();
+    int return_one = new_label();
+    int done = new_label();
+
+    fprintf(out,
+            "%s\n"
+            "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+            "\tdec sp\n\tdec sp\n\tdec sp\n\tdec sp\n",
+            MIR_EXACT_KERNEL_MARKER);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_exec_load_parameter(out, plan->argc_stack_offset);
+    fprintf(out,
+            "\tbit 7,h\n\tjp nz,L%d\n"
+            "\tld de,2\n\tor a\n\tsbc hl,de\n\tjp c,L%d\n",
+            parent, parent);
+    mir_exec_load_parameter(out, plan->argv_stack_offset);
+    fputs("\tinc hl\n\tinc hl\n"
+          "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n"
+          "\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
+    mir_call_recovery_emit_named_call(
+        out, plan->compare_function, plan->compare_name);
+    mir_emit_final_call_cleanup(out, 2);
+    fprintf(out, "\tld a,h\n\tor l\n\tjp nz,L%d\n", parent);
+    mir_exec_load_parameter(out, plan->argv_stack_offset);
+    fputs("\tpush hl\n", out);
+    mir_exec_load_parameter(out, plan->argc_stack_offset);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->child_function);
+    mir_emit_final_call_cleanup(out, 2);
+    fprintf(out, "\tjp L%d\nL%d:\n", done, parent);
+
+    mir_exec_print_string(out, plan, plan->strings[1]);
+    fprintf(out,
+            "\tld hl,S%d\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[3], plan->strings[2]);
+    mir_call_recovery_emit_named_call(
+        out, plan->exec_function, plan->exec_name);
+    mir_emit_final_call_cleanup(out, 2);
+    fputs("\tld de,-1\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp z,L%d\n\tld de,-1\n\tadd hl,de\n",
+            first_ok);
+    mir_exec_failure(out, plan, plan->strings[4]);
+    fprintf(out, "\tjp L%d\nL%d:\n", return_one, first_ok);
+
+    mir_exec_print_string(out, plan, plan->strings[5]);
+    fputs("\tpush ix\n\tpop hl\n\tld de,-4\n\tadd hl,de\n", out);
+    fprintf(out,
+            "\tld de,S%d\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n"
+            "\tinc hl\n\txor a\n\tld (hl),a\n\tinc hl\n\tld (hl),a\n",
+            plan->strings[2]);
+    fputs("\tpush ix\n\tpop hl\n\tld de,-4\n\tadd hl,de\n"
+          "\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[2]);
+    mir_call_recovery_emit_named_call(
+        out, plan->execv_function, plan->execv_name);
+    mir_emit_final_call_cleanup(out, 2);
+    fputs("\tld de,-1\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp z,L%d\n\tld de,-1\n\tadd hl,de\n",
+            second_ok);
+    mir_exec_failure(out, plan, plan->strings[6]);
+    fprintf(out, "\tjp L%d\nL%d:\n", return_one, second_ok);
+
+    mir_exec_print_string(out, plan, plan->strings[7]);
+    fprintf(out,
+            "\tld hl,S%d\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[9], plan->strings[8]);
+    mir_call_recovery_emit_named_call(
+        out, plan->exec_function, plan->exec_name);
+    mir_emit_final_call_cleanup(out, 2);
+    mir_exec_print_string(out, plan, plan->strings[10]);
+    fprintf(out,
+            "L%d:\n\tld hl,1\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            return_one, done);
+}
+
+static int mir_temp_no_call_arguments(const struct MirInsn *call)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_ARG &&
+            mir.insns[instruction].secondary_offset ==
+                call->secondary_offset)
+            return 0;
+    return 1;
+}
+
+static int mir_temp_local_address(
+    int instruction, int *offset_out)
+{
+    int type;
+    int storage;
+    int offset;
+
+    if (mir.insns[instruction].opcode != MIR_ADDRESS ||
+        !mir_machine_named_nonvolatile(&mir.insns[instruction]) ||
+        !mir_scalar_memory_location(
+            &mir.insns[instruction], &type, &storage, &offset) ||
+        storage != SC_LOCAL)
+        return 0;
+    *offset_out = offset;
+    return 1;
+}
+
+static int mir_temp_print_call(
+    struct MirTemporaryFileSchedule *plan, int instruction,
+    int argument_count, const int *definitions)
+{
+    char call_name[64];
+    struct Sym *function;
+    int arguments[2];
+    int argument;
+
+    function = mir_call_recovery_function(
+        instruction, 1, 1, 0, call_name);
+    if (function == NULL || argument_count < 1 || argument_count > 2 ||
+        !mir_machine_call_arguments(
+            &mir.insns[instruction], argument_count, arguments))
+        return 0;
+    for (argument = 0; argument < argument_count; ++argument)
+        if (arguments[argument] !=
+                mir.insns[definitions[argument]].dst)
+            return 0;
+    if (plan->print_function == NULL) {
+        plan->print_function = function;
+        snprintf(plan->print_name, sizeof(plan->print_name), "%s",
+                 call_name);
+    }
+    return plan->print_function == function &&
+           !strcmp(plan->print_name, call_name);
+}
+
+static int mir_temp_failure_increment(
+    int load_instruction, int constant_instruction,
+    int binary_instruction, int store_instruction,
+    struct Sym **failure_count)
+{
+    struct Sym *symbol = find_global(mir.insns[load_instruction].name);
+
+    if (symbol == NULL || symbol->storage == SC_FUNC ||
+        symbol->is_array || symbol->is_volatile ||
+        !mir_memory_runner_word_type(symbol->type, 0) ||
+        !mir_machine_named_nonvolatile(
+            &mir.insns[load_instruction]) ||
+        !mir_machine_named_nonvolatile(
+            &mir.insns[store_instruction]) ||
+        !mir_machine_same_location(
+            &mir.insns[load_instruction],
+            &mir.insns[store_instruction]) ||
+        !mir_machine_constant_equals(
+            mir.insns[constant_instruction].dst, 1) ||
+        mir.insns[binary_instruction].src1 !=
+            mir.insns[load_instruction].dst ||
+        mir.insns[binary_instruction].src2 !=
+            mir.insns[constant_instruction].dst ||
+        mir.insns[binary_instruction].immediate != '+' ||
+        mir.insns[store_instruction].src1 !=
+            mir.insns[binary_instruction].dst)
+        return 0;
+    if (*failure_count == NULL)
+        *failure_count = symbol;
+    return *failure_count == symbol;
+}
+
+static int mir_match_temporary_file_schedule(
+    struct MirTemporaryFileSchedule *plan)
+{
+    static const unsigned char expected_opcodes[168] = {
+        MIR_LABEL, MIR_CONST, MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_STORE, MIR_LOAD, MIR_UNARY, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_NOP, MIR_JUMP, MIR_LABEL,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CALL,
+        MIR_NOP, MIR_LABEL, MIR_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_ADDRESS,
+        MIR_BINARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_LOAD,
+        MIR_ADDRESS, MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_ADDRESS, MIR_ARG, MIR_CALL, MIR_LABEL, MIR_LOAD,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST,
+        MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_ARG, MIR_ADDRESS, MIR_ARG,
+        MIR_CALL, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI,
+        MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_NOP, MIR_LABEL, MIR_CALL,
+        MIR_NOP, MIR_STORE, MIR_LOAD, MIR_UNARY, MIR_BRANCH_FALSE,
+        MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_NOP, MIR_JUMP, MIR_LABEL,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CALL,
+        MIR_LOAD, MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CALL, MIR_UNARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_NOP, MIR_JUMP,
+        MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_ADDRESS, MIR_ARG,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_NOP, MIR_LABEL, MIR_LOAD, MIR_ARG,
+        MIR_CALL, MIR_NOP, MIR_LABEL, MIR_LOAD, MIR_BRANCH_FALSE,
+        MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CALL,
+        MIR_JUMP, MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_LABEL, MIR_CONST, MIR_RETURN
+    };
+    static const int single_prints[5][2] = {
+        {13, 11}, {82, 80}, {98, 96}, {126, 124}, {164, 162}
+    };
+    static const int double_prints[3][3] = {
+        {25, 21, 23}, {50, 46, 48}, {159, 155, 157}
+    };
+    static const int increments[4][4] = {
+        {14, 15, 16, 17}, {83, 84, 85, 86},
+        {99, 100, 101, 102}, {127, 128, 129, 130}
+    };
+    static const int first_name_uses[4] = {6, 7, 23, 52};
+    static const int second_name_uses[3] = {32, 35, 42};
+    static const int stream_uses[6] = {91, 92, 108, 111, 118, 147};
+    static const int buffer_addresses[5] = {28, 36, 43, 48, 66};
+    static const int read_buffer_addresses[2] = {114, 136};
+    struct Sym *function;
+    char call_name[64];
+    int definitions[2];
+    int arguments[3];
+    int offset;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (!mir_call_recovery_opcode_sequence(
+            expected_opcodes, sizeof(expected_opcodes)) ||
+        mir_cfg_block_count() != 21 || mir.local_bytes != 55 ||
+        mir.has_vla ||
+        !mir_memory_runner_word_type(mir.return_type, 0))
+        return 0;
+    plan->frame_bytes = mir.local_bytes;
+    for (item = 1; item < 4; ++item)
+        if (!mir_machine_same_location(
+                &mir.insns[first_name_uses[0]],
+                &mir.insns[first_name_uses[item]]))
+            return mir_machine_reject(
+                "temporary-file-schedule", "first-name-local");
+    for (item = 1; item < 3; ++item)
+        if (!mir_machine_same_location(
+                &mir.insns[second_name_uses[0]],
+                &mir.insns[second_name_uses[item]]))
+            return mir_machine_reject(
+                "temporary-file-schedule", "second-name-local");
+    for (item = 1; item < 6; ++item)
+        if (!mir_machine_same_location(
+                &mir.insns[stream_uses[0]],
+                &mir.insns[stream_uses[item]]))
+            return mir_machine_reject(
+                "temporary-file-schedule", "stream-local");
+    if (!mir_scalar_memory_location(
+            &mir.insns[6], &arguments[0], &arguments[1],
+            &plan->first_name_offset) ||
+        arguments[1] != SC_LOCAL ||
+        !mir_scalar_memory_location(
+            &mir.insns[32], &arguments[0], &arguments[1],
+            &plan->second_name_offset) ||
+        arguments[1] != SC_LOCAL ||
+        !mir_scalar_memory_location(
+            &mir.insns[91], &arguments[0], &arguments[1],
+            &plan->stream_offset) ||
+        arguments[1] != SC_LOCAL)
+        return mir_machine_reject(
+            "temporary-file-schedule", "scalar-locals");
+    if (!mir_temp_local_address(
+            buffer_addresses[0], &plan->buffer_offset) ||
+        !mir_temp_local_address(
+            read_buffer_addresses[0],
+            &plan->read_buffer_offset))
+        return mir_machine_reject(
+            "temporary-file-schedule", "buffers");
+    for (item = 1; item < 5; ++item) {
+        if (!mir_temp_local_address(
+                buffer_addresses[item], &offset) ||
+            offset != plan->buffer_offset)
+            return mir_machine_reject(
+                "temporary-file-schedule", "buffer-alias");
+    }
+    if (!mir_temp_local_address(
+            read_buffer_addresses[1], &offset) ||
+        offset != plan->read_buffer_offset ||
+        plan->buffer_offset == plan->read_buffer_offset)
+        return mir_machine_reject(
+            "temporary-file-schedule", "read-buffer-alias");
+    plan->tmpnam_function = mir_call_recovery_function(
+        4, 0, 1, 0, plan->tmpnam_name);
+    function = mir_call_recovery_function(
+        30, 0, 1, 0, call_name);
+    if (plan->tmpnam_function == NULL ||
+        function != plan->tmpnam_function ||
+        strcmp(call_name, plan->tmpnam_name) ||
+        !mir_machine_single_call_argument(
+            &mir.insns[4], &arguments[0]) ||
+        !mir_machine_constant_equals(arguments[0], 0) ||
+        !mir_machine_single_call_argument(
+            &mir.insns[30], &arguments[0]) ||
+        arguments[0] != mir.insns[28].dst ||
+        !mir_call_char_pointer_type(
+            plan->tmpnam_function->type) ||
+        !mir_call_char_pointer_type(
+            plan->tmpnam_function->proto_types[0]))
+        return mir_machine_reject(
+            "temporary-file-schedule", "tmpnam-calls");
+    plan->check_function = mir_call_recovery_function(
+        41, 0, 3, 0, plan->check_name);
+    function = mir_call_recovery_function(
+        144, 0, 3, 0, call_name);
+    if (plan->check_function == NULL ||
+        function != plan->check_function ||
+        strcmp(call_name, plan->check_name) ||
+        !mir_machine_three_call_arguments(
+            &mir.insns[41], arguments) ||
+        arguments[0] != mir.insns[33].dst ||
+        arguments[1] != mir.insns[37].dst ||
+        arguments[2] != mir.insns[39].dst ||
+        !mir_machine_constant_equals(arguments[2], 1) ||
+        !mir_machine_three_call_arguments(
+            &mir.insns[144], arguments) ||
+        arguments[0] != mir.insns[134].dst ||
+        arguments[1] != mir.insns[140].dst ||
+        arguments[2] != mir.insns[142].dst ||
+        !mir_machine_constant_equals(arguments[2], 0))
+        return mir_machine_reject(
+            "temporary-file-schedule", "check-calls");
+    plan->compare_function = mir_call_recovery_function(
+        68, 0, 2, 0, plan->compare_name);
+    function = mir_call_recovery_function(
+        140, 0, 2, 0, call_name);
+    if (plan->compare_function == NULL ||
+        function != plan->compare_function ||
+        strcmp(call_name, plan->compare_name) ||
+        !mir_exec_call_arguments(68, 64, 66) ||
+        !mir_exec_call_arguments(140, 136, 138))
+        return mir_machine_reject(
+            "temporary-file-schedule", "compare-calls");
+    plan->tmpfile_function = mir_call_recovery_function(
+        89, 0, 0, 0, plan->tmpfile_name);
+    if (plan->tmpfile_function == NULL ||
+        !mir_temp_no_call_arguments(&mir.insns[89]) ||
+        type_ptr_depth(plan->tmpfile_function->type) != 1 ||
+        type_size(plan->tmpfile_function->type) != 2)
+        return mir_machine_reject(
+            "temporary-file-schedule", "tmpfile-call");
+    plan->puts_function = mir_call_recovery_function(
+        110, 0, 2, 0, plan->puts_name);
+    plan->rewind_function = mir_call_recovery_function(
+        113, 0, 1, 0, plan->rewind_name);
+    plan->gets_function = mir_call_recovery_function(
+        120, 0, 3, 0, plan->gets_name);
+    plan->close_function = mir_call_recovery_function(
+        149, 0, 1, 0, plan->close_name);
+    if (plan->puts_function == NULL ||
+        plan->rewind_function == NULL ||
+        plan->gets_function == NULL ||
+        plan->close_function == NULL ||
+        !mir_exec_call_arguments(110, 106, 108) ||
+        !mir_machine_single_call_argument(
+            &mir.insns[113], &arguments[0]) ||
+        arguments[0] != mir.insns[111].dst ||
+        !mir_machine_three_call_arguments(
+            &mir.insns[120], arguments) ||
+        arguments[0] != mir.insns[114].dst ||
+        arguments[1] != mir.insns[116].dst ||
+        arguments[2] != mir.insns[118].dst ||
+        !mir_machine_constant_equals(arguments[1], 32) ||
+        !mir_machine_single_call_argument(
+            &mir.insns[149], &arguments[0]) ||
+        arguments[0] != mir.insns[147].dst)
+        return mir_machine_reject(
+            "temporary-file-schedule", "file-calls");
+    for (item = 0; item < 5; ++item) {
+        definitions[0] = single_prints[item][1];
+        if (!mir_temp_print_call(
+                plan, single_prints[item][0], 1, definitions))
+            return mir_machine_reject(
+                "temporary-file-schedule", "single-print");
+    }
+    for (item = 0; item < 3; ++item) {
+        definitions[0] = double_prints[item][1];
+        definitions[1] = double_prints[item][2];
+        if (!mir_temp_print_call(
+                plan, double_prints[item][0], 2, definitions))
+            return mir_machine_reject(
+                "temporary-file-schedule", "double-print");
+    }
+    for (item = 0; item < 4; ++item)
+        if (!mir_temp_failure_increment(
+                increments[item][0], increments[item][1],
+                increments[item][2], increments[item][3],
+                &plan->failure_count))
+            return mir_machine_reject(
+                "temporary-file-schedule", "failure-increment");
+    if (find_global(mir.insns[152].name) != plan->failure_count ||
+        find_global(mir.insns[157].name) != plan->failure_count ||
+        !mir_machine_named_nonvolatile(&mir.insns[152]) ||
+        !mir_machine_named_nonvolatile(&mir.insns[157]) ||
+        mir.insns[153].src1 != mir.insns[152].dst ||
+        mir.insns[153].label != mir.insns[161].label ||
+        !mir_machine_constant_equals(mir.insns[166].dst, 0) ||
+        mir.insns[167].src1 != mir.insns[166].dst)
+        return mir_machine_reject(
+            "temporary-file-schedule", "summary");
+    if (mir.insns[8].src1 != mir.insns[7].dst ||
+        mir.insns[8].immediate != '!' ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[9].label != mir.insns[20].label ||
+        mir.insns[19].label != mir.insns[27].label ||
+        mir.insns[37].src1 != mir.insns[35].dst ||
+        mir.insns[37].src2 != mir.insns[36].dst ||
+        mir.insns[37].immediate != TOK_EQ ||
+        mir.insns[44].src1 != mir.insns[42].dst ||
+        mir.insns[44].src2 != mir.insns[43].dst ||
+        mir.insns[44].immediate != TOK_EQ ||
+        mir.insns[45].src1 != mir.insns[44].dst ||
+        mir.insns[45].label != mir.insns[51].label ||
+        mir.insns[53].src1 != mir.insns[52].dst ||
+        mir.insns[53].label != mir.insns[59].label ||
+        mir.insns[55].src1 != mir.insns[54].dst ||
+        mir.insns[55].label != mir.insns[59].label ||
+        mir.insns[62].src1 != mir.insns[57].dst ||
+        mir.insns[62].src2 != mir.insns[60].dst ||
+        mir.insns[62].phi_pred1 != mir.insns[56].label ||
+        mir.insns[62].phi_pred2 != mir.insns[59].label ||
+        mir.insns[63].src1 != mir.insns[62].dst ||
+        mir.insns[63].label != mir.insns[75].label ||
+        !mir_machine_constant_equals(mir.insns[69].dst, 0) ||
+        mir.insns[70].src1 != mir.insns[68].dst ||
+        mir.insns[70].src2 != mir.insns[69].dst ||
+        mir.insns[70].immediate != TOK_EQ ||
+        mir.insns[71].src1 != mir.insns[70].dst ||
+        mir.insns[71].label != mir.insns[75].label ||
+        mir.insns[74].label != mir.insns[77].label ||
+        mir.insns[78].src1 != mir.insns[73].dst ||
+        mir.insns[78].src2 != mir.insns[76].dst ||
+        mir.insns[78].phi_pred1 != mir.insns[72].label ||
+        mir.insns[78].phi_pred2 != mir.insns[75].label ||
+        mir.insns[79].src1 != mir.insns[78].dst ||
+        mir.insns[79].label != mir.insns[88].label ||
+        mir.insns[93].src1 != mir.insns[92].dst ||
+        mir.insns[93].immediate != '!' ||
+        mir.insns[94].src1 != mir.insns[93].dst ||
+        mir.insns[94].label != mir.insns[105].label ||
+        mir.insns[104].label != mir.insns[151].label ||
+        mir.insns[121].src1 != mir.insns[120].dst ||
+        mir.insns[121].immediate != '!' ||
+        mir.insns[122].src1 != mir.insns[121].dst ||
+        mir.insns[122].label != mir.insns[133].label ||
+        mir.insns[132].label != mir.insns[146].label ||
+        mir.insns[160].label != mir.insns[165].label)
+        return mir_machine_reject(
+            "temporary-file-schedule", "control-flow");
+    plan->strings[0] = (int)mir.insns[11].immediate;
+    plan->strings[1] = (int)mir.insns[21].immediate;
+    plan->strings[2] = (int)mir.insns[33].immediate;
+    plan->strings[3] = (int)mir.insns[46].immediate;
+    plan->strings[4] = (int)mir.insns[80].immediate;
+    plan->strings[5] = (int)mir.insns[96].immediate;
+    plan->strings[6] = (int)mir.insns[106].immediate;
+    plan->strings[7] = (int)mir.insns[124].immediate;
+    plan->strings[8] = (int)mir.insns[134].immediate;
+    plan->strings[9] = (int)mir.insns[155].immediate;
+    plan->strings[10] = (int)mir.insns[162].immediate;
+    if (plan->strings[6] != (int)mir.insns[138].immediate)
+        return mir_machine_reject(
+            "temporary-file-schedule", "content-string");
+    return 1;
+}
+
+static void mir_temp_emit_ix_address(FILE *out, int offset)
+{
+    fputs("\tpush ix\n\tpop hl\n", out);
+    if (offset != 0)
+        fprintf(out, "\tld de,%d\n\tadd hl,de\n", offset);
+}
+
+static void mir_temp_store_hl(FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld (ix%+d),l\n\tld (ix%+d),h\n",
+            offset, offset + 1);
+}
+
+static void mir_temp_load_hl(FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+            offset, offset + 1);
+}
+
+static void mir_temp_increment_failures(
+    FILE *out, const struct MirTemporaryFileSchedule *plan)
+{
+    mir_machine_emit_global_word(out, plan->failure_count, 0);
+    fputs("\tinc hl\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->failure_count, 0);
+}
+
+static void mir_temp_print_one(
+    FILE *out, const struct MirTemporaryFileSchedule *plan,
+    int string_id)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+    mir_call_recovery_emit_named_call(
+        out, plan->print_function, plan->print_name);
+    mir_emit_final_call_cleanup(out, 1);
+}
+
+static void mir_temp_print_pointer(
+    FILE *out, const struct MirTemporaryFileSchedule *plan,
+    int string_id, int pointer_offset)
+{
+    mir_temp_load_hl(out, pointer_offset);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+    mir_call_recovery_emit_named_call(
+        out, plan->print_function, plan->print_name);
+    mir_emit_final_call_cleanup(out, 2);
+}
+
+static void mir_temp_call_check(
+    FILE *out, const struct MirTemporaryFileSchedule *plan,
+    int name_string, int expected)
+{
+    fprintf(out,
+            "\tld de,%d\n\tpush de\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            expected, name_string);
+    mir_call_recovery_emit_named_call(
+        out, plan->check_function, plan->check_name);
+    mir_emit_final_call_cleanup(out, 3);
+}
+
+static void mir_emit_temporary_file_schedule(
+    FILE *out, const struct MirTemporaryFileSchedule *plan)
+{
+    int first_ok = new_label();
+    int first_done = new_label();
+    int pointer_equal = new_label();
+    int pointer_checked = new_label();
+    int duplicate_done = new_label();
+    int names_checked = new_label();
+    int file_ok = new_label();
+    int content_ok = new_label();
+    int close_stream = new_label();
+    int file_done = new_label();
+    int summary_success = new_label();
+    int done = new_label();
+
+    fprintf(out,
+            "%s\n"
+            "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+            "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
+            MIR_EXACT_KERNEL_MARKER, plan->frame_bytes);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tld hl,0\n\tpush hl\n", out);
+    mir_call_recovery_emit_named_call(
+        out, plan->tmpnam_function, plan->tmpnam_name);
+    mir_emit_final_call_cleanup(out, 1);
+    mir_temp_store_hl(out, plan->first_name_offset);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n", first_ok);
+    mir_temp_print_one(out, plan, plan->strings[0]);
+    mir_temp_increment_failures(out, plan);
+    fprintf(out, "\tjp L%d\nL%d:\n", first_done, first_ok);
+    mir_temp_print_pointer(
+        out, plan, plan->strings[1],
+        plan->first_name_offset);
+    fprintf(out, "L%d:\n", first_done);
+
+    mir_temp_emit_ix_address(out, plan->buffer_offset);
+    fputs("\tpush hl\n", out);
+    mir_call_recovery_emit_named_call(
+        out, plan->tmpnam_function, plan->tmpnam_name);
+    mir_emit_final_call_cleanup(out, 1);
+    mir_temp_store_hl(out, plan->second_name_offset);
+    mir_temp_emit_ix_address(out, plan->buffer_offset);
+    fputs("\tex de,hl\n", out);
+    mir_temp_load_hl(out, plan->second_name_offset);
+    fputs("\tor a\n\tsbc hl,de\n", out);
+    fprintf(out,
+            "\tjp z,L%d\n\tld hl,0\n\tjp L%d\n"
+            "L%d:\n\tld hl,1\nL%d:\n",
+            pointer_equal, pointer_checked,
+            pointer_equal, pointer_checked);
+    mir_temp_call_check(out, plan, plan->strings[2], 1);
+    mir_temp_emit_ix_address(out, plan->buffer_offset);
+    fputs("\tex de,hl\n", out);
+    mir_temp_load_hl(out, plan->second_name_offset);
+    fputs("\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp nz,L%d\n", duplicate_done);
+    mir_temp_print_pointer(
+        out, plan, plan->strings[3],
+        plan->second_name_offset);
+    fprintf(out, "L%d:\n", duplicate_done);
+
+    mir_temp_load_hl(out, plan->first_name_offset);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", names_checked);
+    mir_temp_load_hl(out, plan->second_name_offset);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", names_checked);
+    mir_temp_emit_ix_address(out, plan->buffer_offset);
+    fputs("\tpush hl\n", out);
+    mir_temp_load_hl(out, plan->first_name_offset);
+    fputs("\tpush hl\n", out);
+    mir_call_recovery_emit_named_call(
+        out, plan->compare_function, plan->compare_name);
+    mir_emit_final_call_cleanup(out, 2);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n", names_checked);
+    mir_temp_print_one(out, plan, plan->strings[4]);
+    mir_temp_increment_failures(out, plan);
+    fprintf(out, "L%d:\n", names_checked);
+
+    mir_call_recovery_emit_named_call(
+        out, plan->tmpfile_function, plan->tmpfile_name);
+    mir_temp_store_hl(out, plan->stream_offset);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n", file_ok);
+    mir_temp_print_one(out, plan, plan->strings[5]);
+    mir_temp_increment_failures(out, plan);
+    fprintf(out, "\tjp L%d\nL%d:\n", file_done, file_ok);
+    mir_temp_load_hl(out, plan->stream_offset);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[6]);
+    mir_call_recovery_emit_named_call(
+        out, plan->puts_function, plan->puts_name);
+    mir_emit_final_call_cleanup(out, 2);
+    mir_temp_load_hl(out, plan->stream_offset);
+    fputs("\tpush hl\n", out);
+    mir_call_recovery_emit_named_call(
+        out, plan->rewind_function, plan->rewind_name);
+    mir_emit_final_call_cleanup(out, 1);
+    mir_temp_load_hl(out, plan->stream_offset);
+    fputs("\tpush hl\n\tld hl,32\n\tpush hl\n", out);
+    mir_temp_emit_ix_address(out, plan->read_buffer_offset);
+    fputs("\tpush hl\n", out);
+    mir_call_recovery_emit_named_call(
+        out, plan->gets_function, plan->gets_name);
+    mir_emit_final_call_cleanup(out, 3);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n", content_ok);
+    mir_temp_print_one(out, plan, plan->strings[7]);
+    mir_temp_increment_failures(out, plan);
+    fprintf(out, "\tjp L%d\nL%d:\n", close_stream, content_ok);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[6]);
+    mir_temp_emit_ix_address(out, plan->read_buffer_offset);
+    fputs("\tpush hl\n", out);
+    mir_call_recovery_emit_named_call(
+        out, plan->compare_function, plan->compare_name);
+    mir_emit_final_call_cleanup(out, 2);
+    mir_temp_call_check(out, plan, plan->strings[8], 0);
+    fprintf(out, "L%d:\n", close_stream);
+    mir_temp_load_hl(out, plan->stream_offset);
+    fputs("\tpush hl\n", out);
+    mir_call_recovery_emit_named_call(
+        out, plan->close_function, plan->close_name);
+    mir_emit_final_call_cleanup(out, 1);
+    fprintf(out, "L%d:\n", file_done);
+
+    mir_machine_emit_global_word(out, plan->failure_count, 0);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n\tpush hl\n", summary_success);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[9]);
+    mir_call_recovery_emit_named_call(
+        out, plan->print_function, plan->print_name);
+    mir_emit_final_call_cleanup(out, 2);
+    fprintf(out, "\tjp L%d\nL%d:\n", done, summary_success);
+    mir_temp_print_one(out, plan, plan->strings[10]);
+    fprintf(out,
+            "L%d:\n\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n",
+            done);
+}
+
+static int mir_match_nullable_string_check_schedule(
+    struct MirNullableStringCheckSchedule *plan)
+{
+    static const unsigned char expected_opcodes[85] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_CONST, MIR_LABEL, MIR_PHI, MIR_LABEL,
+        MIR_JUMP, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE,
+        MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_LOAD, MIR_ARG, MIR_LOAD, MIR_ARG,
+        MIR_CALL, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_CONST, MIR_LABEL, MIR_PHI, MIR_LABEL,
+        MIR_JUMP, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_ARG,
+        MIR_LOAD, MIR_BRANCH_FALSE, MIR_LOAD, MIR_LABEL,
+        MIR_JUMP, MIR_LABEL, MIR_STRING_ADDRESS, MIR_LABEL,
+        MIR_LABEL, MIR_PHI, MIR_ARG, MIR_LOAD,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_LABEL, MIR_JUMP,
+        MIR_LABEL, MIR_STRING_ADDRESS, MIR_LABEL, MIR_LABEL,
+        MIR_PHI, MIR_ARG, MIR_CALL, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_NOP, MIR_LABEL
+    };
+    static const struct MirCallRecoveryEdge edges[15] = {
+        {7, 11}, {10, 25}, {15, 19}, {18, 21}, {24, 25},
+        {27, 31}, {30, 49}, {39, 43}, {42, 45}, {48, 49},
+        {51, 84}, {57, 61}, {60, 64}, {68, 72}, {71, 75}
+    };
+    static const struct MirCallRecoveryPhi phis[6] = {
+        {22, 10, 11, 16, 19}, {26, 6, 12, 8, 23},
+        {46, 20, 21, 40, 43}, {50, 14, 22, 28, 47},
+        {65, 27, 28, 59, 63}, {76, 31, 32, 70, 74}
+    };
+    struct Sym *compare_function;
+    struct Sym *print_function;
+    struct Sym *failure_count;
+    int compare_arguments[2];
+    int print_arguments[4];
+    int name_offset;
+    int got_offset;
+    int want_offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (!mir_call_recovery_opcode_sequence(
+            expected_opcodes, sizeof(expected_opcodes)) ||
+        !mir_call_recovery_edges(
+            edges, sizeof(edges) / sizeof(edges[0])) ||
+        !mir_call_recovery_phis(
+            phis, sizeof(phis) / sizeof(phis[0])) ||
+        mir_cfg_block_count() != 24 || mir.local_bytes != 0 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &name_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[2].dst, &got_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[3].dst, &want_offset) ||
+        got_offset != name_offset + 2 ||
+        want_offset != got_offset + 2 ||
+        !mir_call_char_pointer_type(mir.insns[1].type) ||
+        !mir_call_char_pointer_type(mir.insns[2].type) ||
+        !mir_call_char_pointer_type(mir.insns[3].type) ||
+        !mir_machine_named_nonvolatile(&mir.insns[1]) ||
+        !mir_machine_named_nonvolatile(&mir.insns[2]) ||
+        !mir_machine_named_nonvolatile(&mir.insns[3]))
+        return 0;
+    if (strcmp(mir.insns[4].name, mir.insns[2].name) ||
+        strcmp(mir.insns[12].name, mir.insns[3].name) ||
+        strcmp(mir.insns[32].name, mir.insns[2].name) ||
+        strcmp(mir.insns[34].name, mir.insns[3].name) ||
+        !mir_machine_constant_equals(mir.insns[5].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[13].dst, 0) ||
+        mir.insns[6].src1 != mir.insns[4].dst ||
+        mir.insns[6].src2 != mir.insns[5].dst ||
+        mir.insns[6].immediate != TOK_EQ ||
+        mir.insns[14].src1 != mir.insns[12].dst ||
+        mir.insns[14].src2 != mir.insns[13].dst ||
+        mir.insns[14].immediate != TOK_EQ ||
+        !mir_machine_constant_equals(mir.insns[9].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[17].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[20].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[29].dst, 1))
+        return mir_machine_reject(
+            "nullable-string-check-schedule", "condition");
+    compare_function = mir_memory_runner_call_function(36, 0, 2);
+    if (compare_function == NULL ||
+        !mir_machine_two_call_arguments(
+            &mir.insns[36], compare_arguments) ||
+        compare_arguments[0] != mir.insns[32].dst ||
+        compare_arguments[1] != mir.insns[34].dst ||
+        !mir_call_char_pointer_type(
+            compare_function->proto_types[0]) ||
+        !mir_call_char_pointer_type(
+            compare_function->proto_types[1]) ||
+        !mir_memory_runner_word_type(compare_function->type, 0) ||
+        !mir_machine_constant_equals(mir.insns[37].dst, 0) ||
+        mir.insns[38].src1 != mir.insns[36].dst ||
+        mir.insns[38].src2 != mir.insns[37].dst ||
+        mir.insns[38].immediate != TOK_NE ||
+        !mir_machine_constant_equals(mir.insns[41].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[44].dst, 0))
+        return mir_machine_reject(
+            "nullable-string-check-schedule", "compare");
+    print_function = mir_memory_runner_call_function(78, 1, 1);
+    if (print_function == NULL ||
+        !mir_machine_call_arguments(
+            &mir.insns[78], 4, print_arguments) ||
+        print_arguments[0] != mir.insns[52].dst ||
+        print_arguments[1] != mir.insns[54].dst ||
+        print_arguments[2] != mir.insns[65].dst ||
+        print_arguments[3] != mir.insns[76].dst ||
+        strcmp(mir.insns[54].name, mir.insns[1].name) ||
+        strcmp(mir.insns[56].name, mir.insns[2].name) ||
+        strcmp(mir.insns[58].name, mir.insns[2].name) ||
+        strcmp(mir.insns[67].name, mir.insns[3].name) ||
+        strcmp(mir.insns[69].name, mir.insns[3].name) ||
+        mir.insns[62].immediate != mir.insns[73].immediate ||
+        mir.insns[52].immediate == mir.insns[62].immediate ||
+        mir.insns[65].src1 != mir.insns[58].dst ||
+        mir.insns[65].src2 != mir.insns[62].dst ||
+        mir.insns[76].src1 != mir.insns[69].dst ||
+        mir.insns[76].src2 != mir.insns[73].dst)
+        return mir_machine_reject(
+            "nullable-string-check-schedule", "report");
+    failure_count = find_global(mir.insns[79].name);
+    if (failure_count == NULL || failure_count->is_volatile ||
+        !mir_machine_named_nonvolatile(&mir.insns[79]) ||
+        !mir_machine_named_nonvolatile(&mir.insns[82]) ||
+        !mir_machine_same_location(&mir.insns[79], &mir.insns[82]) ||
+        !mir_machine_constant_equals(mir.insns[80].dst, 1) ||
+        mir.insns[81].src1 != mir.insns[79].dst ||
+        mir.insns[81].src2 != mir.insns[80].dst ||
+        mir.insns[81].immediate != '+' ||
+        mir.insns[82].src1 != mir.insns[81].dst)
+        return mir_machine_reject(
+            "nullable-string-check-schedule", "failure-count");
+    plan->compare_function = compare_function;
+    plan->print_function = print_function;
+    plan->failure_count = failure_count;
+    plan->name_stack_offset = name_offset;
+    plan->got_stack_offset = got_offset;
+    plan->want_stack_offset = want_offset;
+    plan->format_string = (int)mir.insns[52].immediate;
+    plan->null_string = (int)mir.insns[62].immediate;
+    snprintf(plan->compare_name, sizeof(plan->compare_name), "%s",
+             mir.insns[36].base_name[0] != 0
+                 ? mir.insns[36].base_name
+                 : asm_name_for(sym_asm_name(compare_function)));
+    snprintf(plan->print_name, sizeof(plan->print_name), "%s",
+             mir.insns[78].base_name);
+    return plan->print_name[0] != 0;
+}
+
+static void mir_emit_nullable_string_check_schedule(
+    FILE *out, const struct MirNullableStringCheckSchedule *plan)
+{
+    int failed = new_label();
+    int got_ready = new_label();
+    int want_ready = new_label();
+    int done = new_label();
+
+    fprintf(out,
+            "%s\n"
+            "\tpush ix\n\tld ix,0\n\tadd ix,sp\n",
+            MIR_EXACT_KERNEL_MARKER);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
+            "\tld a,h\n\tor l\n\tjp z,L%d\n"
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
+            "\tld a,h\n\tor l\n\tjp z,L%d\n"
+            "\tpush hl\n"
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tpush hl\n",
+            plan->got_stack_offset + 2,
+            plan->got_stack_offset + 3, failed,
+            plan->want_stack_offset + 2,
+            plan->want_stack_offset + 3, failed,
+            plan->got_stack_offset + 2,
+            plan->got_stack_offset + 3);
+    mir_emit_runtime_call(out, plan->compare_name);
+    fprintf(out,
+            "\tpop bc\n\tpop bc\n"
+            "\tld a,h\n\tor l\n\tjp z,L%d\n"
+            "L%d:\n"
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
+            "\tld a,h\n\tor l\n\tjp nz,L%d\n"
+            "\tld hl,S%d\n"
+            "L%d:\n\tpush hl\n"
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
+            "\tld a,h\n\tor l\n\tjp nz,L%d\n"
+            "\tld hl,S%d\n"
+            "L%d:\n\tpush hl\n"
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            done, failed,
+            plan->want_stack_offset + 2,
+            plan->want_stack_offset + 3, want_ready,
+            plan->null_string, want_ready,
+            plan->got_stack_offset + 2,
+            plan->got_stack_offset + 3, got_ready,
+            plan->null_string, got_ready,
+            plan->name_stack_offset + 2,
+            plan->name_stack_offset + 3,
+            plan->format_string);
+    mir_emit_runtime_call(out, plan->print_name);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    mir_machine_emit_global_word(out, plan->failure_count, 0);
+    fputs("\tinc hl\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->failure_count, 0);
+    fprintf(out,
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            done);
+}
+
+static const struct AstNode *mir_call_inline_single_statement(
+    const struct Sym *callee)
+{
+    const struct AstNode *statement;
+
+    if (callee == NULL)
+        return NULL;
+    statement = callee->inline_stmt_body != NULL
+        ? callee->inline_stmt_body : callee->inline_stmt_expr;
+    if (statement != NULL && statement->kind == AST_COMPOUND) {
+        if (statement->list_len != 1)
+            return NULL;
+        statement = statement->list[0];
+    }
+    if (statement != NULL && statement->kind == AST_EXPR_STMT)
+        statement = statement->a;
+    return statement;
+}
+
+static int mir_call_inline_byte_store(
+    const struct MirInsn *call, struct Sym **array_out)
+{
+    const struct AstNode *assignment;
+    const struct AstNode *index;
+    const struct AstNode *addition;
+    const struct AstNode *value;
+    struct Sym *callee;
+    struct Sym *array;
+
+    if (call == NULL || call->opcode != MIR_CALL ||
+        (call->memory_flags &
+         MIR_CALL_FLAG_INLINE_SUBSTITUTABLE) == 0 ||
+        (call->type & 15) != TYPE_VOID ||
+        (callee = find_global(call->name)) == NULL ||
+        !callee->is_static || !callee->is_inline ||
+        !callee->has_proto || callee->proto_variadic ||
+        callee->proto_nargs != 3 || callee->has_inline_local)
+        return 0;
+    assignment = mir_call_inline_single_statement(callee);
+    if (assignment == NULL || assignment->kind != AST_ASSIGN ||
+        assignment->op != '=' || assignment->a == NULL ||
+        assignment->a->kind != AST_INDEX ||
+        !mir_inline_is_parameter_low_bytes(
+            assignment->b, callee, 2, 1))
+        return 0;
+    index = assignment->a;
+    value = assignment->b;
+    while (value != NULL && value->kind == AST_CAST) {
+        if ((value->type & 15) == TYPE_BOOL)
+            return 0;
+        value = value->a;
+    }
+    array = mir_inline_ident_symbol(index->a);
+    addition = mir_inline_unwrap_cast(index->b);
+    if (array == NULL || !array->is_array || array->elem_size != 1 ||
+        (array->storage != SC_GLOBAL &&
+         array->storage != SC_EXTERN) ||
+        array->is_volatile || array->pointee_is_volatile ||
+        addition == NULL || addition->kind != AST_BINARY ||
+        addition->op != '+' ||
+        !((mir_inline_is_parameter(addition->a, callee, 0) &&
+           mir_inline_is_parameter(addition->b, callee, 1)) ||
+          (mir_inline_is_parameter(addition->a, callee, 1) &&
+           mir_inline_is_parameter(addition->b, callee, 0))))
+        return 0;
+    *array_out = array;
+    return 1;
+}
+
+static int mir_match_inline_parameter_call_schedule(
+    struct MirInlineParameterCallSchedule *plan)
+{
+    static const unsigned char expected_opcodes[39] = {
+        MIR_LABEL, MIR_CONST, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_NOP, MIR_STORE, MIR_CONST, MIR_ARG, MIR_CONST, MIR_ARG,
+        MIR_CALL, MIR_NOP, MIR_STORE, MIR_CONST, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY, MIR_STORE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG,
+        MIR_NOP, MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN
+    };
+    struct Sym *first_function;
+    struct Sym *second_function;
+    struct Sym *print_function;
+    struct Sym *array;
+    int first_arguments[2];
+    int second_arguments[2];
+    int store_arguments[3];
+    int print_arguments[4];
+    long value;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (!mir_call_recovery_opcode_sequence(
+            expected_opcodes, sizeof(expected_opcodes)) ||
+        mir_cfg_block_count() != 1 || mir.local_bytes != 6 ||
+        mir.has_vla ||
+        !mir_memory_runner_word_type(mir.return_type, 0))
+        return 0;
+    first_function = mir_memory_runner_call_function(5, 0, 2);
+    second_function = mir_memory_runner_call_function(12, 0, 2);
+    if (first_function == NULL || first_function != second_function ||
+        !mir_memory_runner_word_type(first_function->type, 0) ||
+        !mir_memory_runner_word_type(
+            first_function->proto_types[0], 0) ||
+        !mir_memory_runner_word_type(
+            first_function->proto_types[1], 0) ||
+        !mir_machine_two_call_arguments(
+            &mir.insns[5], first_arguments) ||
+        !mir_machine_two_call_arguments(
+            &mir.insns[12], second_arguments) ||
+        first_arguments[0] != mir.insns[1].dst ||
+        first_arguments[1] != mir.insns[3].dst ||
+        second_arguments[0] != mir.insns[8].dst ||
+        second_arguments[1] != mir.insns[10].dst)
+        return mir_machine_reject(
+            "inline-parameter-call-schedule", "value-calls");
+    for (item = 0; item < 2; ++item) {
+        if (!mir_machine_evaluate_constant(
+                first_arguments[item], &value, 0))
+            return 0;
+        plan->first_arguments[item] = (int)value;
+        if (!mir_machine_evaluate_constant(
+                second_arguments[item], &value, 0))
+            return 0;
+        plan->second_arguments[item] = (int)value;
+    }
+    if (!mir_machine_unobservable_local_store(&mir.insns[7]) ||
+        !mir_machine_unobservable_local_store(&mir.insns[14]) ||
+        mir.insns[7].src1 != mir.insns[5].dst ||
+        mir.insns[14].src1 != mir.insns[12].dst ||
+        mir.insns[7].object < 0 || mir.insns[14].object < 0 ||
+        mir.insns[7].object == mir.insns[14].object ||
+        !mir_call_inline_byte_store(&mir.insns[21], &array) ||
+        !mir_machine_three_call_arguments(
+            &mir.insns[21], store_arguments))
+        return mir_machine_reject(
+            "inline-parameter-call-schedule", "inline-store");
+    for (item = 0; item < 3; ++item) {
+        if (!mir_machine_evaluate_constant(
+                store_arguments[item], &value, 0))
+            return 0;
+        if (item < 2)
+            plan->array_offset += (int)value;
+        else
+            plan->store_value = (int)value & 0xff;
+    }
+    if (plan->array_offset < 0 || plan->array_offset > 32767 ||
+        find_global(mir.insns[22].name) != array ||
+        mir.insns[24].src1 != mir.insns[22].dst ||
+        mir.insns[24].src2 != mir.insns[23].dst ||
+        !mir_machine_constant_equals(
+            mir.insns[23].dst, plan->array_offset) ||
+        mir.insns[24].immediate != 1 ||
+        mir.insns[24].memory_size != 1 ||
+        mir.insns[25].src1 != mir.insns[24].dst ||
+        mir.insns[25].memory_size != 1 ||
+        (mir.insns[25].memory_flags & (1 | 8)) != 0 ||
+        mir.insns[26].src1 != mir.insns[25].dst ||
+        mir.insns[26].immediate != 0 ||
+        !mir_machine_unobservable_local_store(&mir.insns[27]) ||
+        mir.insns[27].src1 != mir.insns[26].dst)
+        return mir_machine_reject(
+            "inline-parameter-call-schedule", "array-load");
+    print_function = mir_memory_runner_call_function(36, 1, 1);
+    if (print_function == NULL ||
+        !mir_machine_call_arguments(
+            &mir.insns[36], 4, print_arguments) ||
+        print_arguments[0] != mir.insns[28].dst ||
+        print_arguments[1] != mir.insns[5].dst ||
+        print_arguments[2] != mir.insns[12].dst ||
+        print_arguments[3] != mir.insns[26].dst ||
+        !mir_machine_constant_equals(mir.insns[37].dst, 0) ||
+        mir.insns[38].src1 != mir.insns[37].dst)
+        return mir_machine_reject(
+            "inline-parameter-call-schedule", "print");
+    plan->value_function = first_function;
+    plan->array = array;
+    plan->print_function = print_function;
+    plan->format_string = (int)mir.insns[28].immediate;
+    snprintf(plan->print_name, sizeof(plan->print_name), "%s",
+             mir.insns[36].base_name);
+    return plan->print_name[0] != 0;
+}
+
+static void mir_call_emit_global_address(
+    FILE *out, struct Sym *symbol, int offset)
+{
+    const char *name = asm_name_for(sym_asm_name(symbol));
+
+    if ((symbol->storage == SC_EXTERN || symbol->needs_extrn) &&
+        mir_extrn_should_emit(symbol))
+        fprintf(out, "\textrn %s\n", name);
+    if (offset == 0)
+        fprintf(out, "\tld hl,%s\n", name);
+    else
+        fprintf(out, "\tld hl,%s%+d\n", name, offset);
+}
+
+static void mir_emit_inline_parameter_value_call(
+    FILE *out, struct Sym *function, const int arguments[2],
+    int frame_offset)
+{
+    fprintf(out,
+            "\tld hl,%d\n\tpush hl\n"
+            "\tld hl,%d\n\tpush hl\n",
+            arguments[1], arguments[0]);
+    mir_machine_emit_symbol_call(out, function);
+    fprintf(out,
+            "\tpop bc\n\tpop bc\n"
+            "\tld (ix%+d),l\n\tld (ix%+d),h\n",
+            frame_offset, frame_offset + 1);
+}
+
+static void mir_emit_inline_parameter_call_schedule(
+    FILE *out, const struct MirInlineParameterCallSchedule *plan)
+{
+    fprintf(out,
+            "%s\n"
+            "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+            "\tld hl,-4\n\tadd hl,sp\n\tld sp,hl\n",
+            MIR_EXACT_KERNEL_MARKER);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_emit_inline_parameter_value_call(
+        out, plan->value_function, plan->first_arguments, -2);
+    mir_emit_inline_parameter_value_call(
+        out, plan->value_function, plan->second_arguments, -4);
+    fputs(";@dcc.mir inline-simple-store\n", out);
+    mir_call_emit_global_address(
+        out, plan->array, plan->array_offset);
+    fprintf(out,
+            "\tld a,%d\n\tld (hl),a\n"
+            "\tld a,(hl)\n\tld l,a\n\tld h,0\n\tpush hl\n"
+            "\tld l,(ix-4)\n\tld h,(ix-3)\n\tpush hl\n"
+            "\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            plan->store_value, plan->format_string);
+    mir_emit_runtime_call(out, plan->print_name);
+    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
+static int mir_arrow_direct_function(
+    const struct MirInsn *call, int argument_count, int variadic,
+    struct Sym **function_out)
+{
+    struct Sym *function;
+
+    if (call->opcode != MIR_CALL || call->src1 >= 0)
+        return 0;
+    function = find_global(call->name);
+    if (function == NULL || function->storage != SC_FUNC ||
+        function->is_funcptr || !function->has_proto ||
+        function->proto_nargs != argument_count ||
+        function->proto_variadic != variadic ||
+        (call->base_name[0] != 0 && !variadic &&
+         strcmp(call->base_name,
+                asm_name_for(sym_asm_name(function)))))
+        return 0;
+    *function_out = function;
+    return 1;
+}
+
+static int mir_match_room_resolution_schedule(
+    struct MirRoomResolutionSchedule *plan)
+{
+    static const unsigned char expected_opcodes[121] = {
+        MIR_LABEL, MIR_PARAM, MIR_LABEL, MIR_LOAD, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE, MIR_NOP, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_CALL, MIR_LOAD,
+        MIR_ARG, MIR_CALL, MIR_RETURN, MIR_NOP, MIR_LABEL, MIR_LOAD, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+        MIR_LABEL, MIR_LOAD, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI,
+        MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_CALL, MIR_CONST, MIR_RETURN, MIR_NOP, MIR_LABEL, MIR_LOAD, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP,
+        MIR_LABEL, MIR_LOAD, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI,
+        MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_CALL, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_CALL, MIR_STORE_INDIRECT, MIR_NOP,
+        MIR_JUMP, MIR_NOP, MIR_LABEL, MIR_CONST, MIR_RETURN, MIR_NOP, MIR_LABEL, MIR_JUMP,
+        MIR_LABEL
+    };
+    static const int edges[][2] = {
+        {18, 28}, {36, 40}, {39, 58}, {48, 52},
+        {51, 54}, {57, 58}, {60, 68}, {76, 80},
+        {79, 98}, {88, 92}, {91, 94}, {97, 98},
+        {100, 114}, {112, 2}, {119, 2}
+    };
+    static const int game_loads[] = {
+        3, 4, 12, 23, 30, 42, 70, 82, 105
+    };
+    static const int location_members[] = {
+        5, 13, 31, 43, 71, 83, 106
+    };
+    static const int print_calls[] = {21, 63, 103};
+    static const int print_strings[] = {19, 61, 101};
+    static const int flush_calls[] = {22, 64, 104};
+    const struct MirInsn *game = &mir.insns[1];
+    struct Sym *print_function = NULL;
+    struct Sym *flush_function = NULL;
+    int edge;
+    int instruction;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 121 || mir_cfg_block_count() != 21 ||
+        mir.local_bytes != 2 || mir.aggregate_temp_bytes != 0 ||
+        mir.has_vla || !mir_has_cfg_backedge() ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_size(mir.return_type) != 2)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "room-resolution-schedule", "opcodes");
+        if ((insn->opcode == MIR_LOAD_INDIRECT ||
+             insn->opcode == MIR_STORE_INDIRECT) &&
+            (insn->memory_flags & (1 | 8)) != 0)
+            return mir_machine_reject(
+                "room-resolution-schedule", "volatile-memory");
+    }
+    for (edge = 0;
+         edge < (int)(sizeof(edges) / sizeof(edges[0])); ++edge)
+        if (mir.insns[edges[edge][0]].label !=
+            mir.insns[edges[edge][1]].label)
+            return mir_machine_reject(
+                "room-resolution-schedule", "control-flow");
+    if (type_ptr_depth(game->type) != 1 ||
+        type_size(game->type) != 2 ||
+        mir_machine_pointee_is_volatile(game) ||
+        !mir_machine_parameter_value_offset(
+            game->dst, &plan->game_stack_offset))
+        return mir_machine_reject(
+            "room-resolution-schedule", "parameter");
+    for (item = 0;
+         item < (int)(sizeof(game_loads) /
+                      sizeof(game_loads[0])); ++item)
+        if (!mir_machine_same_location(
+                game, &mir.insns[game_loads[item]]))
+            return mir_machine_reject(
+                "room-resolution-schedule", "game-loads");
+    plan->location_offset = (int)mir.insns[5].immediate;
+    if (plan->location_offset < -120 ||
+        plan->location_offset > 116)
+        return mir_machine_reject(
+            "room-resolution-schedule", "location-offset");
+    for (item = 0; item < 7; ++item)
+        if (mir.insns[location_members[item]].immediate !=
+                plan->location_offset ||
+            mir.insns[location_members[item]].memory_size != 12)
+            return mir_machine_reject(
+                "room-resolution-schedule", "location-members");
+    if (!mir_machine_constant_equals(mir.insns[6].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[14].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[32].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[44].dst, 3) ||
+        !mir_machine_constant_equals(mir.insns[65].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[72].dst, 4) ||
+        !mir_machine_constant_equals(mir.insns[84].dst, 5) ||
+        !mir_machine_constant_equals(mir.insns[107].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[115].dst, 0))
+        return mir_machine_reject(
+            "room-resolution-schedule", "constants");
+    if (!mir_arrow_direct_function(
+            &mir.insns[25], 1, 0, &plan->wake_function) ||
+        !mir_arrow_direct_function(
+            &mir.insns[109], 0, 0,
+            &plan->random_room_function))
+        return mir_machine_reject(
+            "room-resolution-schedule", "value-calls");
+    for (item = 0; item < 3; ++item) {
+        struct Sym *candidate;
+
+        if (!mir_arrow_direct_function(
+                &mir.insns[print_calls[item]], 1, 1,
+                &candidate) ||
+            mir.insns[print_strings[item]].immediate < 0 ||
+            (item == 0
+                 ? (print_function = candidate, 0)
+                 : candidate != print_function))
+            return mir_machine_reject(
+                "room-resolution-schedule", "print-calls");
+        plan->string_ids[item] =
+            (int)mir.insns[print_strings[item]].immediate;
+        if (!mir_arrow_direct_function(
+                &mir.insns[flush_calls[item]], 0, 0,
+                &candidate) ||
+            (item == 0
+                 ? (flush_function = candidate, 0)
+                 : candidate != flush_function))
+            return mir_machine_reject(
+                "room-resolution-schedule", "flush-calls");
+    }
+    plan->flush_function = flush_function;
+    snprintf(plan->print_name, sizeof(plan->print_name), "%s",
+             mir.insns[print_calls[0]].base_name);
+    return 1;
+}
+
+static int mir_match_global_memset_schedule(
+    struct MirGlobalMemsetSchedule *plan)
+{
+    const struct MirInsn *size = &mir.insns[1];
+    const struct MirInsn *address;
+    const struct MirInsn *call;
+    int arguments[3];
+    long offset;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 17 ||
+        mir_cfg_block_count() != 1 ||
+        mir.local_bytes != 0 || mir.aggregate_temp_bytes != 0 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID ||
+        size->opcode != MIR_PARAM ||
+        type_ptr_depth(size->type) != 0 ||
+        (size->type & 15) != TYPE_INT ||
+        type_size(size->type) != 2 ||
+        !mir_machine_parameter_value_offset(
+            size->dst, &plan->size_stack_offset))
+        return 0;
+    {
+        const struct MirInsn *value = &mir.insns[2];
+
+        address = &mir.insns[8];
+        call = &mir.insns[16];
+        if (value->opcode != MIR_PARAM ||
+            type_ptr_depth(value->type) != 0 ||
+            (value->type & 15) != TYPE_INT ||
+            type_size(value->type) != 2 ||
+            !mir_machine_parameter_value_offset(
+                value->dst, &plan->value_stack_offset) ||
+            !mir_machine_constant_equals(mir.insns[4].dst, 255) ||
+            mir.insns[5].immediate != '&' ||
+            mir.insns[5].src1 != value->dst ||
+            mir.insns[5].src2 != mir.insns[4].dst ||
+            !mir_machine_call_arguments(
+                call, 3, arguments) ||
+            arguments[0] != address->dst ||
+            arguments[1] != mir.insns[5].dst ||
+            arguments[2] != size->dst)
+            return mir_machine_reject(
+                "global-memset-schedule", "value");
+    }
+    if (!mir_machine_global_address_offset(
+            address->dst, &plan->buffer, &offset, 0) ||
+        plan->buffer == NULL || offset < -32768 ||
+        offset > 32767 ||
+        !mir_arrow_direct_function(call, 3, 0, &plan->function) ||
+        type_ptr_depth(call->type) != 1)
+        return mir_machine_reject(
+            "global-memset-schedule", "target");
+    plan->buffer_offset = (int)offset;
+    return 1;
+}
+
+static void mir_emit_global_memset_schedule(
+    FILE *out, const struct MirGlobalMemsetSchedule *plan)
+{
+    fputs(MIR_EXACT_KERNEL_MARKER "\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tld d,0\n",
+            plan->value_stack_offset);
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n"
+            "\tpush hl\n\tpush de\n",
+            plan->size_stack_offset);
+    mir_machine_emit_global_address_de(
+        out, plan->buffer, plan->buffer_offset);
+    fputs("\tpush de\n", out);
+    mir_machine_emit_symbol_call(out, plan->function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tret\n", out);
+}
+
+static int mir_match_word_table_runner_schedule(
+    struct MirWordTableRunnerSchedule *plan)
+{
+    static const unsigned char expected_opcodes[34] = {
+        MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL,
+        MIR_PHI, MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_ARG, MIR_CALL, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP,
+        MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_CONST, MIR_RETURN
+    };
+    static const int edges[][2] = {
+        {15, 28}, {27, 7}
+    };
+    struct Sym *print_function;
+    struct Sym *second_table;
+    long table_offset;
+    long second_table_offset;
+    int arguments[1];
+    int edge;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 34 || mir_cfg_block_count() != 4 ||
+        mir.local_bytes != 2 || mir.aggregate_temp_bytes != 0 ||
+        mir.has_vla || !mir_has_cfg_backedge() ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_size(mir.return_type) != 2)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "word-table-runner-schedule", "opcodes");
+    for (edge = 0;
+         edge < (int)(sizeof(edges) / sizeof(edges[0])); ++edge)
+        if (mir.insns[edges[edge][0]].label !=
+            mir.insns[edges[edge][1]].label)
+            return mir_machine_reject(
+                "word-table-runner-schedule", "control-flow");
+    if (!mir_machine_global_address_offset(
+            mir.insns[9].dst, &plan->table, &table_offset, 0) ||
+        !mir_machine_global_address_offset(
+            mir.insns[16].dst, &second_table,
+            &second_table_offset, 0) ||
+        plan->table == NULL || second_table != plan->table ||
+        second_table_offset != table_offset ||
+        table_offset < -32768 || table_offset > 32767 ||
+        mir.insns[11].immediate != 2 ||
+        mir.insns[18].immediate != 2 ||
+        !mir_machine_constant_equals(mir.insns[4].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[13].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[24].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[32].dst, 0) ||
+        mir.insns[1].immediate < 0 ||
+        mir.insns[29].immediate < 0 ||
+        !mir_arrow_direct_function(
+            &mir.insns[3], 1, 1, &print_function) ||
+        !mir_arrow_direct_function(
+            &mir.insns[31], 1, 1, &plan->print_function) ||
+        print_function != plan->print_function ||
+        !mir_arrow_direct_function(
+            &mir.insns[21], 1, 0, &plan->run_function) ||
+        !mir_machine_call_arguments(
+            &mir.insns[21], 1, arguments) ||
+        arguments[0] != mir.insns[19].dst)
+        return mir_machine_reject(
+            "word-table-runner-schedule", "semantics");
+    plan->table_offset = (int)table_offset;
+    plan->start_string_id = (int)mir.insns[1].immediate;
+    plan->done_string_id = (int)mir.insns[29].immediate;
+    snprintf(plan->print_name, sizeof(plan->print_name), "%s",
+             mir.insns[3].base_name);
+    return 1;
+}
+
+static void mir_emit_word_table_runner_schedule(
+    FILE *out, const struct MirWordTableRunnerSchedule *plan)
+{
+    int loop = new_label();
+    int done = new_label();
+
+    fputs(MIR_EXACT_KERNEL_MARKER "\n\tpush iy\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->start_string_id);
+    mir_emit_runtime_call(out, plan->print_name);
+    fputs("\tpop bc\n", out);
+    mir_machine_emit_global_address_de(
+        out, plan->table, plan->table_offset);
+    fputs("\tpush de\n\tpop iy\n", out);
+    fprintf(out,
+            "L%d:\n\tld l,(iy+0)\n\tld h,(iy+1)\n"
+            "\tld a,h\n\tor l\n\tjp z,L%d\n"
+            "\tpush hl\n",
+            loop, done);
+    mir_machine_emit_symbol_call(out, plan->run_function);
+    fputs("\tpop bc\n\tinc iy\n\tinc iy\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n\tld hl,S%d\n\tpush hl\n",
+            loop, done, plan->done_string_id);
+    mir_emit_runtime_call(out, plan->print_name);
+    fputs("\tpop bc\n\tld hl,0\n\tpop iy\n\tret\n", out);
+}
+
+static int mir_match_seek_check_schedule(
+    struct MirSeekCheckSchedule *plan)
+{
+    static const unsigned char expected_opcodes[28] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_NOP, MIR_ARG,
+        MIR_NOP, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_STORE,
+        MIR_NOP, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG,
+        MIR_CALL, MIR_LOAD, MIR_ARG, MIR_CALL, MIR_NOP, MIR_LABEL
+    };
+    const struct MirInsn *fd = &mir.insns[1];
+    const struct MirInsn *offset = &mir.insns[2];
+    const struct MirInsn *where = &mir.insns[3];
+    int seek_arguments[3];
+    int print_arguments[3];
+    int fail_arguments[1];
+    struct Sym *print_function;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 28 || mir_cfg_block_count() != 2 ||
+        mir.local_bytes != 4 || mir.aggregate_temp_bytes != 0 ||
+        mir.has_vla || mir_has_cfg_backedge() ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "seek-check-schedule", "opcodes");
+    if (type_ptr_depth(fd->type) != 0 ||
+        (fd->type & 15) != TYPE_INT ||
+        type_size(fd->type) != 2 ||
+        type_ptr_depth(offset->type) != 0 ||
+        (offset->type & 15) != TYPE_LONG ||
+        type_size(offset->type) != 4 ||
+        type_ptr_depth(where->type) != 1 ||
+        (where->type & 15) != TYPE_CHAR ||
+        !mir_machine_parameter_value_offset(
+            fd->dst, &plan->fd_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            where->dst, &plan->where_stack_offset) ||
+        plan->where_stack_offset !=
+            plan->fd_stack_offset + 6 ||
+        !mir_machine_constant_equals(mir.insns[8].dst, 0))
+        return mir_machine_reject(
+            "seek-check-schedule", "parameters");
+    plan->offset_stack_offset = plan->fd_stack_offset + 2;
+    if (
+        !mir_machine_call_arguments(
+            &mir.insns[10], 3, seek_arguments) ||
+        seek_arguments[0] != fd->dst ||
+        seek_arguments[1] != offset->dst ||
+        seek_arguments[2] != mir.insns[8].dst ||
+        !mir_arrow_direct_function(
+            &mir.insns[10], 3, 0, &plan->seek_function) ||
+        mir.insns[14].immediate != TOK_NE ||
+        mir.insns[14].src1 != mir.insns[10].dst ||
+        mir.insns[14].src2 != offset->dst ||
+        mir.insns[15].label != mir.insns[27].label ||
+        mir.insns[16].immediate < 0)
+        return mir_machine_reject(
+            "seek-check-schedule", "seek-call");
+    if (
+        !mir_machine_call_arguments(
+            &mir.insns[22], 3, print_arguments) ||
+        print_arguments[0] != mir.insns[16].dst ||
+        print_arguments[1] != mir.insns[10].dst ||
+        print_arguments[2] != offset->dst ||
+        !mir_arrow_direct_function(
+            &mir.insns[22], 1, 1, &print_function))
+        return mir_machine_reject(
+            "seek-check-schedule", "print-call");
+    if (
+        !mir_machine_call_arguments(
+            &mir.insns[25], 1, fail_arguments) ||
+        fail_arguments[0] != mir.insns[23].dst ||
+        !mir_arrow_direct_function(
+            &mir.insns[25], 1, 0, &plan->fail_function) ||
+        !mir_machine_same_location(where, &mir.insns[23]))
+        return mir_machine_reject(
+            "seek-check-schedule", "fail-call");
+    plan->format_string_id = (int)mir.insns[16].immediate;
+    snprintf(plan->print_name, sizeof(plan->print_name), "%s",
+             mir.insns[22].base_name);
+    return 1;
+}
+
+static void mir_emit_seek_check_schedule(
+    FILE *out, const struct MirSeekCheckSchedule *plan)
+{
+    int done = new_label();
+
+    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+          "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-4\n\tadd hl,sp\n\tld sp,hl\n",
+          out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tld hl,0\n\tpush hl\n", out);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "\tpush de\n\tpush hl\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n",
+            plan->offset_stack_offset + 2,
+            plan->offset_stack_offset + 3,
+            plan->offset_stack_offset + 4,
+            plan->offset_stack_offset + 5,
+            plan->fd_stack_offset + 2,
+            plan->fd_stack_offset + 3);
+    mir_machine_emit_symbol_call(out, plan->seek_function);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
+          "\tld (ix-2),l\n\tld (ix-1),h\n"
+          "\tld (ix-4),e\n\tld (ix-3),d\n", out);
+    fprintf(out,
+            "\tld a,l\n\txor (ix%+d)\n\tld b,a\n"
+            "\tld a,h\n\txor (ix%+d)\n\tor b\n\tld b,a\n"
+            "\tld a,e\n\txor (ix%+d)\n\tor b\n\tld b,a\n"
+            "\tld a,d\n\txor (ix%+d)\n\tor b\n\tjp z,L%d\n",
+            plan->offset_stack_offset + 2,
+            plan->offset_stack_offset + 3,
+            plan->offset_stack_offset + 4,
+            plan->offset_stack_offset + 5, done);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "\tpush de\n\tpush hl\n"
+            "\tld l,(ix-2)\n\tld h,(ix-1)\n"
+            "\tld e,(ix-4)\n\tld d,(ix-3)\n"
+            "\tpush de\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            plan->offset_stack_offset + 2,
+            plan->offset_stack_offset + 3,
+            plan->offset_stack_offset + 4,
+            plan->offset_stack_offset + 5,
+            plan->format_string_id);
+    mir_emit_runtime_call(out, plan->print_name);
+    fputs("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n",
+            plan->where_stack_offset + 2,
+            plan->where_stack_offset + 3);
+    mir_machine_emit_symbol_call(out, plan->fail_function);
+    fputs("\tpop bc\n", out);
+    fprintf(out,
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            done);
+}
+
+static int mir_roundtrip_call(
+    int instruction, int arguments, int variadic,
+    struct Sym **function_out)
+{
+    const struct MirInsn *call = &mir.insns[instruction];
+    struct Sym *function;
+    int values[16];
+
+    if (arguments < 0 || arguments > 16 ||
+        call->opcode != MIR_CALL || call->src1 >= 0 ||
+        call->memory_flags !=
+            (variadic ? MIR_CALL_FLAG_VARIADIC : 0) ||
+        !mir_machine_call_arguments(call, arguments, values) ||
+        (function = find_global(call->name)) == NULL ||
+        function->storage != SC_FUNC || function->is_funcptr)
+        return 0;
+    *function_out = function;
+    return 1;
+}
+
+static int mir_match_file_roundtrip_schedule(
+    struct MirFileRoundtripSchedule *plan)
+{
+    static const unsigned char expected_opcodes[416] = {
+        MIR_LABEL, MIR_PARAM, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_CALL, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_NOP,
+        MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP,
+        MIR_ARG, MIR_NOP, MIR_UNARY, MIR_ARG, MIR_CALL, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_ARG, MIR_NOP, MIR_UNARY, MIR_ARG, MIR_CALL, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_ARG, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_NOP, MIR_ARG, MIR_NOP, MIR_NOP,
+        MIR_ARG, MIR_CALL, MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_CALL, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CONST, MIR_ARG,
+        MIR_CALL, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_CALL, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_NOP,
+        MIR_NOP, MIR_PHI, MIR_PHI, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP, MIR_ARG, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_NOP, MIR_ARG, MIR_NOP, MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_ARG,
+        MIR_NOP, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP, MIR_LABEL,
+        MIR_NOP, MIR_ARG, MIR_NOP, MIR_UNARY, MIR_ARG, MIR_CALL, MIR_ARG, MIR_CALL,
+        MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL,
+        MIR_NOP, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL,
+        MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP, MIR_UNARY, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_ARG, MIR_NOP, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP, MIR_ARG,
+        MIR_NOP, MIR_UNARY, MIR_ARG, MIR_CALL, MIR_ARG, MIR_CALL, MIR_NOP, MIR_ARG,
+        MIR_NOP, MIR_UNARY, MIR_ARG, MIR_CALL, MIR_ARG, MIR_CALL, MIR_NOP, MIR_ARG,
+        MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_NOP, MIR_ARG, MIR_NOP, MIR_NOP, MIR_ARG,
+        MIR_CALL, MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_CALL, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_ARG, MIR_CALL,
+        MIR_NOP, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_NOP, MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST,
+        MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_PHI, MIR_NOP,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP, MIR_UNARY, MIR_BINARY,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_CALL, MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP, MIR_ARG, MIR_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_NOP, MIR_ARG, MIR_NOP, MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_STORE, MIR_NOP, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP,
+        MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_LABEL, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_NOP, MIR_ARG, MIR_NOP, MIR_UNARY, MIR_ARG, MIR_CALL,
+        MIR_ARG, MIR_CALL, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_ARG, MIR_NOP, MIR_UNARY,
+        MIR_ARG, MIR_CALL, MIR_ARG, MIR_CALL, MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_ARG, MIR_CALL,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL
+    };
+    static const int edges[][2] = {
+        {22, 26}, {38, 91}, {71, 83}, {90, 30}, {110, 114},
+        {127, 175}, {147, 159}, {174, 118}, {191, 195},
+        {208, 284}, {216, 276}, {262, 274}, {283, 199},
+        {303, 307}, {323, 404}, {356, 368}, {376, 387},
+        {386, 396}, {403, 313}
+    };
+    static const int print_calls[6] = {6, 78, 154, 269, 363, 415};
+    static const int print_argument_counts[6] = {2, 3, 3, 3, 3, 2};
+    static const int string_instructions[20] = {
+        7, 23, 72, 79, 98, 111, 148, 155,
+        179, 192, 227, 263, 270, 291, 304, 334,
+        357, 364, 408, 411
+    };
+    static const int buffer_addresses[4] = {57, 133, 248, 342};
+    struct Sym *function;
+    struct Sym *root;
+    long offset;
+    int edge;
+    int instruction;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 416 || mir_cfg_block_count() != 25 ||
+        mir.local_bytes != 12 || mir.aggregate_temp_bytes != 0 ||
+        mir.has_vla || !mir_has_cfg_backedge() ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "file-roundtrip-schedule", "opcodes");
+    for (edge = 0;
+         edge < (int)(sizeof(edges) / sizeof(edges[0])); ++edge)
+        if (mir.insns[edges[edge][0]].label !=
+            mir.insns[edges[edge][1]].label)
+            return mir_machine_reject(
+                "file-roundtrip-schedule", "control-flow");
+    if (mir.insns[1].opcode != MIR_PARAM ||
+        type_ptr_depth(mir.insns[1].type) != 0 ||
+        (mir.insns[1].type & 15) != TYPE_INT ||
+        type_size(mir.insns[1].type) != 2 ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->size_stack_offset))
+        return mir_machine_reject(
+            "file-roundtrip-schedule", "parameter");
+    for (item = 0; item < 4; ++item) {
+        if (!mir_machine_global_address_offset(
+                mir.insns[buffer_addresses[item]].dst,
+                &root, &offset, 0) ||
+            root == NULL || offset < -32768 || offset > 32767 ||
+            (item == 0
+                 ? (plan->buffer = root,
+                    plan->buffer_offset = (int)offset, 0)
+                 : root != plan->buffer ||
+                   offset != plan->buffer_offset))
+            return mir_machine_reject(
+                "file-roundtrip-schedule", "buffer");
+    }
+    for (item = 0; item < 20; ++item) {
+        if (mir.insns[string_instructions[item]].immediate < 0)
+            return mir_machine_reject(
+                "file-roundtrip-schedule", "strings");
+        plan->strings[item] =
+            (int)mir.insns[string_instructions[item]].immediate;
+    }
+    if (plan->strings[0] != plan->strings[4] ||
+        plan->strings[0] != plan->strings[8] ||
+        plan->strings[0] != plan->strings[13] ||
+    plan->strings[0] != plan->strings[18] ||
+    plan->strings[6] != plan->strings[16] ||
+        !mir_machine_constant_equals(mir.insns[13].dst, 578) ||
+        !mir_machine_constant_equals(mir.insns[15].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[36].dst, 256) ||
+        !mir_machine_constant_equals(mir.insns[87].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[100].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[102].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[125].dst, 256) ||
+        !mir_machine_constant_equals(mir.insns[171].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[181].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[183].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[206].dst, 256) ||
+        !mir_machine_constant_equals(mir.insns[211].dst, 7) ||
+        !mir_machine_constant_equals(mir.insns[214].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[280].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[293].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[295].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[311].dst, 255) ||
+        !mir_machine_constant_equals(mir.insns[321].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[371].dst, 7) ||
+        !mir_machine_constant_equals(mir.insns[374].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[400].dst, 1))
+        return mir_machine_reject(
+            "file-roundtrip-schedule", "constants");
+    if (mir.insns[2].immediate < 0)
+        return mir_machine_reject(
+            "file-roundtrip-schedule", "start-string");
+    plan->start_string_id = (int)mir.insns[2].immediate;
+    for (item = 0; item < 6; ++item) {
+        if (!mir_roundtrip_call(
+                print_calls[item], print_argument_counts[item],
+                1, &function) ||
+            (item == 0
+                 ? (plan->print_function = function, 0)
+                 : function != plan->print_function))
+            return mir_machine_reject(
+                "file-roundtrip-schedule", "print-functions");
+        snprintf(plan->print_names[item],
+                 sizeof(plan->print_names[item]), "%s",
+                 mir.insns[print_calls[item]].base_name);
+    }
+#define MIR_ROUNDTRIP_FUNCTION(INDEX, ARGS, FIELD) \
+    do { \
+        if (!mir_roundtrip_call( \
+                (INDEX), (ARGS), 0, &function) || \
+            (plan->FIELD != NULL && plan->FIELD != function)) \
+            return mir_machine_reject( \
+                "file-roundtrip-schedule", #FIELD); \
+        plan->FIELD = function; \
+    } while (0)
+    {
+        static const int open_calls[] = {17, 104, 185, 297};
+        int open_arguments[3];
+
+        for (item = 0; item < 4; ++item) {
+            const struct MirInsn *call =
+                &mir.insns[open_calls[item]];
+            function = find_global(call->name);
+            if (function == NULL || function->storage != SC_FUNC ||
+                function->is_funcptr || call->src1 >= 0 ||
+                call->memory_flags != 0 ||
+                !mir_machine_call_arguments(
+                    call, 3, open_arguments) ||
+                type_ptr_depth(function->type) != 0 ||
+                (function->type & 15) != TYPE_INT ||
+                type_size(function->type) != 2 ||
+                (plan->open_function != NULL &&
+                 plan->open_function != function))
+                return mir_machine_reject(
+                    "file-roundtrip-schedule", "open-function");
+            plan->open_function = function;
+        }
+    }
+    MIR_ROUNDTRIP_FUNCTION(25, 1, fail_function);
+    MIR_ROUNDTRIP_FUNCTION(81, 1, fail_function);
+    MIR_ROUNDTRIP_FUNCTION(113, 1, fail_function);
+    MIR_ROUNDTRIP_FUNCTION(157, 1, fail_function);
+    MIR_ROUNDTRIP_FUNCTION(194, 1, fail_function);
+    MIR_ROUNDTRIP_FUNCTION(272, 1, fail_function);
+    MIR_ROUNDTRIP_FUNCTION(306, 1, fail_function);
+    MIR_ROUNDTRIP_FUNCTION(366, 1, fail_function);
+    MIR_ROUNDTRIP_FUNCTION(44, 1, pattern_function);
+    MIR_ROUNDTRIP_FUNCTION(52, 1, pattern_function);
+    MIR_ROUNDTRIP_FUNCTION(165, 1, pattern_function);
+    MIR_ROUNDTRIP_FUNCTION(393, 1, pattern_function);
+    MIR_ROUNDTRIP_FUNCTION(235, 1, reverse_pattern_function);
+    MIR_ROUNDTRIP_FUNCTION(243, 1, reverse_pattern_function);
+    MIR_ROUNDTRIP_FUNCTION(383, 1, reverse_pattern_function);
+    MIR_ROUNDTRIP_FUNCTION(46, 2, fill_function);
+    MIR_ROUNDTRIP_FUNCTION(237, 2, fill_function);
+    MIR_ROUNDTRIP_FUNCTION(130, 1, clear_function);
+    MIR_ROUNDTRIP_FUNCTION(339, 1, clear_function);
+    MIR_ROUNDTRIP_FUNCTION(54, 2, check_function);
+    MIR_ROUNDTRIP_FUNCTION(167, 2, check_function);
+    MIR_ROUNDTRIP_FUNCTION(245, 2, check_function);
+    MIR_ROUNDTRIP_FUNCTION(385, 2, check_function);
+    MIR_ROUNDTRIP_FUNCTION(395, 2, check_function);
+    MIR_ROUNDTRIP_FUNCTION(65, 3, write_function);
+    MIR_ROUNDTRIP_FUNCTION(256, 3, write_function);
+    MIR_ROUNDTRIP_FUNCTION(141, 3, read_function);
+    MIR_ROUNDTRIP_FUNCTION(350, 3, read_function);
+    MIR_ROUNDTRIP_FUNCTION(94, 1, sync_function);
+    MIR_ROUNDTRIP_FUNCTION(287, 1, sync_function);
+    MIR_ROUNDTRIP_FUNCTION(97, 1, close_function);
+    MIR_ROUNDTRIP_FUNCTION(178, 1, close_function);
+    MIR_ROUNDTRIP_FUNCTION(290, 1, close_function);
+    MIR_ROUNDTRIP_FUNCTION(407, 1, close_function);
+    MIR_ROUNDTRIP_FUNCTION(229, 3, seek_function);
+    MIR_ROUNDTRIP_FUNCTION(336, 3, seek_function);
+    MIR_ROUNDTRIP_FUNCTION(410, 1, unlink_function);
+#undef MIR_ROUNDTRIP_FUNCTION
+    return 1;
+}
+
+static int mir_match_intel_hex_load_schedule(
+    struct MirIntelHexLoadSchedule *plan)
+{
+    static const unsigned char expected_opcodes[162] = {
+        MIR_LABEL, MIR_PARAM, MIR_LABEL, MIR_LOAD, MIR_ADDRESS, MIR_ARG, MIR_CONST, MIR_CONST,
+        MIR_BINARY, MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CALL, MIR_NOP, MIR_STORE, MIR_LOAD,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_ARG, MIR_CALL, MIR_CONST, MIR_NOP, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE,
+        MIR_LABEL, MIR_CONST, MIR_LOAD, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_UNARY, MIR_NOP, MIR_STORE, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_NOP, MIR_STORE,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_UNARY,
+        MIR_NOP, MIR_STORE, MIR_CONST, MIR_NOP, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP,
+        MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_NOP, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_CALL, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_LOAD,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP, MIR_UNARY, MIR_UNARY,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD, MIR_ARG, MIR_CALL, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_CALL, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_NOP, MIR_UNARY, MIR_BINARY, MIR_BINARY,
+        MIR_CONST, MIR_BINARY, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CALL, MIR_UNARY, MIR_NOP,
+        MIR_STORE, MIR_NOP, MIR_NOP, MIR_UNARY, MIR_BINARY, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_NOP, MIR_STORE_INDIRECT, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_JUMP, MIR_LABEL,
+        MIR_NOP, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_CONST, MIR_RETURN
+    };
+    static const int edges[][2] = {
+        {16, 27}, {23, 27}, {26, 29}, {31, 155},
+        {40, 44}, {78, 81}, {80, 155}, {86, 90},
+        {105, 151}, {109, 113}, {144, 94}, {147, 151},
+        {150, 155}, {154, 2}
+    };
+    struct Sym *function;
+    int edge;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 162 || mir_cfg_block_count() != 17 ||
+        mir.local_bytes != 128 || mir.aggregate_temp_bytes != 0 ||
+        mir.has_vla || !mir_has_cfg_backedge() ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_BOOL)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "intel-hex-load-schedule", "opcodes");
+    for (edge = 0;
+         edge < (int)(sizeof(edges) / sizeof(edges[0])); ++edge)
+        if (mir.insns[edges[edge][0]].label !=
+            mir.insns[edges[edge][1]].label)
+            return mir_machine_reject(
+                "intel-hex-load-schedule", "control-flow");
+    if (mir.insns[1].opcode != MIR_PARAM ||
+        type_ptr_depth(mir.insns[1].type) != 1 ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->file_stack_offset) ||
+        !mir_machine_constant_equals(mir.insns[6].dst, 120) ||
+        !mir_machine_constant_equals(mir.insns[7].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[20].dst, 11) ||
+        !mir_machine_constant_equals(mir.insns[33].dst, ':') ||
+        !mir_machine_constant_equals(mir.insns[46].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[49].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[56].dst, 3) ||
+        !mir_machine_constant_equals(mir.insns[59].dst, 4) ||
+        !mir_machine_constant_equals(mir.insns[65].dst, 7) ||
+        !mir_machine_constant_equals(mir.insns[68].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[74].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[82].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[92].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[115].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[120].dst, 9) ||
+        !mir_machine_constant_equals(mir.insns[123].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[141].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[160].dst, 1))
+        return mir_machine_reject(
+            "intel-hex-load-schedule", "constants");
+    if (mir.insns[41].immediate < 0 ||
+        mir.insns[87].immediate < 0 ||
+        mir.insns[110].immediate < 0)
+        return mir_machine_reject(
+            "intel-hex-load-schedule", "strings");
+    plan->strings[0] = (int)mir.insns[41].immediate;
+    plan->strings[1] = (int)mir.insns[87].immediate;
+    plan->strings[2] = (int)mir.insns[110].immediate;
+#define MIR_INTEL_CALL(INDEX, ARGS, FIELD) \
+    do { \
+        if (!mir_roundtrip_call( \
+                (INDEX), (ARGS), 0, &function) || \
+            (plan->FIELD != NULL && plan->FIELD != function)) \
+            return mir_machine_reject( \
+                "intel-hex-load-schedule", #FIELD); \
+        plan->FIELD = function; \
+    } while (0)
+    MIR_INTEL_CALL(12, 3, line_function);
+    MIR_INTEL_CALL(19, 1, length_function);
+    MIR_INTEL_CALL(43, 1, error_function);
+    MIR_INTEL_CALL(89, 1, error_function);
+    MIR_INTEL_CALL(112, 1, error_function);
+    MIR_INTEL_CALL(51, 2, hex_function);
+    MIR_INTEL_CALL(61, 2, hex_function);
+    MIR_INTEL_CALL(70, 2, hex_function);
+    MIR_INTEL_CALL(125, 2, hex_function);
+    MIR_INTEL_CALL(108, 1, eof_function);
+    MIR_INTEL_CALL(134, 1, memory_function);
+    MIR_INTEL_CALL(158, 1, close_function);
+#undef MIR_INTEL_CALL
+    return 1;
+}
+
+static void mir_roundtrip_cleanup(FILE *out, int words)
+{
+    while (words-- > 0)
+        fputs("\tpop bc\n", out);
+}
+
+static void mir_intel_buffer_address(FILE *out, int offset)
+{
+    fputs("\tpush ix\n\tpop hl\n", out);
+    fprintf(out, "\tld de,%d\n\tadd hl,de\n", -120 + offset);
+}
+
+static void mir_intel_error(
+    FILE *out, const struct MirIntelHexLoadSchedule *plan,
+    int string_id)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+    mir_machine_emit_symbol_call(out, plan->error_function);
+    fputs("\tpop bc\n", out);
+}
+
+static void mir_intel_read_hex(
+    FILE *out, const struct MirIntelHexLoadSchedule *plan,
+    int offset, int length)
+{
+    fprintf(out, "\tld hl,%d\n\tpush hl\n", length);
+    mir_intel_buffer_address(out, offset);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->hex_function);
+    mir_roundtrip_cleanup(out, 2);
+}
+
+static void mir_emit_intel_hex_load_schedule(
+    FILE *out, const struct MirIntelHexLoadSchedule *plan)
+{
+    int loop = new_label();
+    int done = new_label();
+    int header_ok = new_label();
+    int data_record = new_label();
+    int data_loop = new_label();
+    int data_done = new_label();
+    int eof_ok = new_label();
+
+    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+          "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-126\n\tadd hl,sp\n\tld sp,hl\n",
+          out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tpush hl\n\tpop iy\nL%d:\n"
+            "\tpush iy\n\tld hl,120\n\tpush hl\n",
+            plan->file_stack_offset + 4,
+            plan->file_stack_offset + 5, loop);
+    mir_intel_buffer_address(out, 0);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->line_function);
+    mir_roundtrip_cleanup(out, 3);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", done);
+    mir_intel_buffer_address(out, 0);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->length_function);
+    fputs("\tpop bc\n\tld de,11\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp c,L%d\n", done);
+    fputs("\tld a,(ix-120)\n\tcp ':'\n", out);
+    fprintf(out, "\tjp z,L%d\n", header_ok);
+    mir_intel_error(out, plan, plan->strings[0]);
+    fprintf(out, "L%d:\n", header_ok);
+
+    mir_intel_read_hex(out, plan, 1, 2);
+    fputs("\tld (ix-122),l\n", out);
+    mir_intel_read_hex(out, plan, 3, 4);
+    fputs("\tld (ix-124),l\n\tld (ix-123),h\n", out);
+    mir_intel_read_hex(out, plan, 7, 2);
+    fputs("\tld a,l\n\tcp 1\n", out);
+    fprintf(out, "\tjp z,L%d\n\tor a\n\tjp z,L%d\n",
+            done, data_record);
+    mir_intel_error(out, plan, plan->strings[1]);
+    fprintf(out,
+            "L%d:\n\txor a\n\tld (ix-125),a\n"
+            "L%d:\n\tld a,(ix-125)\n\tld b,a\n"
+            "\tld a,(ix-122)\n\tcp b\n\tjp z,L%d\n"
+            "\tpush iy\n",
+            data_record, data_loop, data_done);
+    mir_machine_emit_symbol_call(out, plan->eof_function);
+    fputs("\tpop bc\n\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n", eof_ok);
+    mir_intel_error(out, plan, plan->strings[2]);
+    fprintf(out, "L%d:\n", eof_ok);
+    fputs("\tld a,(ix-125)\n\tadd a,a\n\tadd a,9\n"
+          "\tld c,a\n\tld hl,2\n\tpush hl\n", out);
+    mir_intel_buffer_address(out, 0);
+    fputs("\tld e,c\n\tld d,0\n\tadd hl,de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->hex_function);
+    mir_roundtrip_cleanup(out, 2);
+    fputs("\tld (ix-126),l\n"
+          "\tld l,(ix-124)\n\tld h,(ix-123)\n"
+          "\tld e,(ix-125)\n\tld d,0\n\tadd hl,de\n"
+          "\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->memory_function);
+    fputs("\tpop bc\n\tld a,(ix-126)\n\tld (hl),a\n"
+          "\tld a,(ix-125)\n\tinc a\n\tld (ix-125),a\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n\tjp L%d\n",
+            data_loop, data_done, loop);
+    fprintf(out, "L%d:\n\tpush iy\n", done);
+    mir_machine_emit_symbol_call(out, plan->close_function);
+    fputs("\tpop bc\n\tld hl,1\n"
+          "\tld sp,ix\n\tpop ix\n\tpop iy\n\tret\n", out);
+}
+
+static void mir_roundtrip_load_ix_word(
+    FILE *out, int offset)
+{
+    fprintf(out, "\tld l,(ix%d)\n\tld h,(ix%d)\n",
+            offset, offset + 1);
+}
+
+static void mir_roundtrip_store_ix_word(
+    FILE *out, int offset)
+{
+    fprintf(out, "\tld (ix%d),l\n\tld (ix%d),h\n",
+            offset, offset + 1);
+}
+
+static void mir_roundtrip_push_size(FILE *out)
+{
+    fputs("\tpush iy\n", out);
+}
+
+static void mir_roundtrip_push_buffer(
+    FILE *out, const struct MirFileRoundtripSchedule *plan)
+{
+    mir_machine_emit_global_address_de(
+        out, plan->buffer, plan->buffer_offset);
+    fputs("\tpush de\n", out);
+}
+
+static void mir_roundtrip_call_one_ix(
+    FILE *out, struct Sym *function, int offset)
+{
+    mir_roundtrip_load_ix_word(out, offset);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, function);
+    fputs("\tpop bc\n", out);
+}
+
+static void mir_roundtrip_call_pattern(
+    FILE *out, struct Sym *function)
+{
+    mir_roundtrip_call_one_ix(out, function, -4);
+    mir_roundtrip_store_ix_word(out, -8);
+}
+
+static void mir_roundtrip_call_fill_check(
+    FILE *out, struct Sym *function)
+{
+    mir_roundtrip_load_ix_word(out, -8);
+    fputs("\tpush hl\n", out);
+    mir_roundtrip_push_size(out);
+    mir_machine_emit_symbol_call(out, function);
+    mir_roundtrip_cleanup(out, 2);
+}
+
+static void mir_roundtrip_call_io(
+    FILE *out, const struct MirFileRoundtripSchedule *plan,
+    struct Sym *function)
+{
+    mir_roundtrip_push_size(out);
+    mir_roundtrip_push_buffer(out, plan);
+    mir_roundtrip_load_ix_word(out, -2);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, function);
+    mir_roundtrip_cleanup(out, 3);
+    mir_roundtrip_store_ix_word(out, -6);
+}
+
+static void mir_roundtrip_call_fail(
+    FILE *out, const struct MirFileRoundtripSchedule *plan,
+    int string_id)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+    mir_machine_emit_symbol_call(out, plan->fail_function);
+    fputs("\tpop bc\n", out);
+}
+
+static void mir_roundtrip_open(
+    FILE *out, const struct MirFileRoundtripSchedule *plan,
+    int flags, int failure_string)
+{
+    int opened = new_label();
+
+    fputs("\tld hl,0\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,%d\n\tpush hl\n", flags);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
+    mir_machine_emit_symbol_call(out, plan->open_function);
+    mir_roundtrip_cleanup(out, 3);
+    mir_roundtrip_store_ix_word(out, -2);
+    fputs("\tbit 7,h\n", out);
+    fprintf(out, "\tjp z,L%d\n", opened);
+    mir_roundtrip_call_fail(out, plan, failure_string);
+    fprintf(out, "L%d:\n", opened);
+}
+
+static void mir_roundtrip_print_failure(
+    FILE *out, const struct MirFileRoundtripSchedule *plan,
+    int print_index, int format_string)
+{
+    fputs("\tld hl,0\n\tpush hl\n", out);
+    mir_roundtrip_load_ix_word(out, -4);
+    fputs("\tpush hl\n", out);
+    mir_roundtrip_load_ix_word(out, -6);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", format_string);
+    mir_emit_runtime_call(out, plan->print_names[print_index]);
+    mir_roundtrip_cleanup(out, 4);
+}
+
+static void mir_roundtrip_multiply_offset(FILE *out)
+{
+    mir_roundtrip_load_ix_word(out, -4);
+    fputs("\tld de,0\n\tpush de\n\tpush hl\n"
+          "\tpush iy\n\tpop hl\n\tld a,h\n\trlca\n\tsbc a,a\n"
+          "\tld d,a\n\tld e,a\n", out);
+    mir_emit_runtime_call(out, "__lmul");
+    mir_roundtrip_cleanup(out, 2);
+}
+
+static void mir_roundtrip_seek(
+    FILE *out, const struct MirFileRoundtripSchedule *plan,
+    int where_string)
+{
+    mir_roundtrip_multiply_offset(out);
+    fprintf(out, "\tld bc,S%d\n\tpush bc\n", where_string);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_roundtrip_load_ix_word(out, -2);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, plan->seek_function);
+    mir_roundtrip_cleanup(out, 4);
+}
+
+static void mir_emit_file_roundtrip_schedule(
+    FILE *out, const struct MirFileRoundtripSchedule *plan)
+{
+    int first_loop = new_label();
+    int first_done = new_label();
+    int first_ok = new_label();
+    int second_loop = new_label();
+    int second_done = new_label();
+    int second_ok = new_label();
+    int third_loop = new_label();
+    int third_done = new_label();
+    int third_skip = new_label();
+    int third_ok = new_label();
+    int fourth_loop = new_label();
+    int fourth_done = new_label();
+    int fourth_ok = new_label();
+    int use_pattern = new_label();
+    int value_ready = new_label();
+
+    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+          "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-8\n\tadd hl,sp\n\tld sp,hl\n",
+          out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tpush hl\n\tpop iy\n\tpush iy\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            plan->size_stack_offset + 4,
+            plan->size_stack_offset + 5,
+            plan->start_string_id);
+    mir_emit_runtime_call(out, plan->print_names[0]);
+    mir_roundtrip_cleanup(out, 2);
+    mir_roundtrip_open(out, plan, 578, plan->strings[1]);
+
+    fputs("\tld hl,0\n", out);
+    mir_roundtrip_store_ix_word(out, -4);
+    fprintf(out, "L%d:\n", first_loop);
+    fputs("\tld a,(ix-3)\n\tor a\n", out);
+    fprintf(out, "\tjp nz,L%d\n", first_done);
+    mir_roundtrip_call_pattern(out, plan->pattern_function);
+    mir_roundtrip_call_fill_check(out, plan->fill_function);
+    mir_roundtrip_call_fill_check(out, plan->check_function);
+    mir_roundtrip_call_io(out, plan, plan->write_function);
+    mir_roundtrip_load_ix_word(out, -6);
+    fputs("\tpush iy\n\tpop de\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp z,L%d\n", first_ok);
+    mir_roundtrip_print_failure(out, plan, 1, plan->strings[2]);
+    mir_roundtrip_call_fail(out, plan, plan->strings[3]);
+    fprintf(out, "L%d:\n", first_ok);
+    mir_roundtrip_load_ix_word(out, -4);
+    fputs("\tinc hl\n", out);
+    mir_roundtrip_store_ix_word(out, -4);
+    fprintf(out, "\tjp L%d\nL%d:\n", first_loop, first_done);
+    mir_roundtrip_call_one_ix(out, plan->sync_function, -2);
+    mir_roundtrip_call_one_ix(out, plan->close_function, -2);
+
+    mir_roundtrip_open(out, plan, 0, plan->strings[5]);
+    fputs("\tld hl,0\n", out);
+    mir_roundtrip_store_ix_word(out, -4);
+    fprintf(out, "L%d:\n", second_loop);
+    fputs("\tld a,(ix-3)\n\tor a\n", out);
+    fprintf(out, "\tjp nz,L%d\n", second_done);
+    mir_roundtrip_push_size(out);
+    mir_machine_emit_symbol_call(out, plan->clear_function);
+    fputs("\tpop bc\n", out);
+    mir_roundtrip_call_io(out, plan, plan->read_function);
+    mir_roundtrip_load_ix_word(out, -6);
+    fputs("\tpush iy\n\tpop de\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp z,L%d\n", second_ok);
+    mir_roundtrip_print_failure(out, plan, 2, plan->strings[6]);
+    mir_roundtrip_call_fail(out, plan, plan->strings[7]);
+    fprintf(out, "L%d:\n", second_ok);
+    mir_roundtrip_call_pattern(out, plan->pattern_function);
+    mir_roundtrip_call_fill_check(out, plan->check_function);
+    mir_roundtrip_load_ix_word(out, -4);
+    fputs("\tinc hl\n", out);
+    mir_roundtrip_store_ix_word(out, -4);
+    fprintf(out, "\tjp L%d\nL%d:\n", second_loop, second_done);
+    mir_roundtrip_call_one_ix(out, plan->close_function, -2);
+
+    mir_roundtrip_open(out, plan, 2, plan->strings[9]);
+    fputs("\tld hl,0\n", out);
+    mir_roundtrip_store_ix_word(out, -4);
+    fprintf(out, "L%d:\n", third_loop);
+    fputs("\tld a,(ix-3)\n\tor a\n", out);
+    fprintf(out, "\tjp nz,L%d\n", third_done);
+    fputs("\tld a,(ix-4)\n\tand 7\n", out);
+    fprintf(out, "\tjp nz,L%d\n", third_skip);
+    mir_roundtrip_seek(out, plan, plan->strings[10]);
+    mir_roundtrip_call_pattern(
+        out, plan->reverse_pattern_function);
+    mir_roundtrip_call_fill_check(out, plan->fill_function);
+    mir_roundtrip_call_fill_check(out, plan->check_function);
+    mir_roundtrip_call_io(out, plan, plan->write_function);
+    mir_roundtrip_load_ix_word(out, -6);
+    fputs("\tpush iy\n\tpop de\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp z,L%d\n", third_ok);
+    mir_roundtrip_print_failure(out, plan, 3, plan->strings[11]);
+    mir_roundtrip_call_fail(out, plan, plan->strings[12]);
+    fprintf(out, "L%d:\n", third_ok);
+    fprintf(out, "L%d:\n", third_skip);
+    mir_roundtrip_load_ix_word(out, -4);
+    fputs("\tinc hl\n", out);
+    mir_roundtrip_store_ix_word(out, -4);
+    fprintf(out, "\tjp L%d\nL%d:\n", third_loop, third_done);
+    mir_roundtrip_call_one_ix(out, plan->sync_function, -2);
+    mir_roundtrip_call_one_ix(out, plan->close_function, -2);
+
+    mir_roundtrip_open(out, plan, 0, plan->strings[14]);
+    fputs("\tld hl,255\n", out);
+    mir_roundtrip_store_ix_word(out, -4);
+    fprintf(out, "L%d:\n", fourth_loop);
+    fputs("\tbit 7,(ix-3)\n", out);
+    fprintf(out, "\tjp nz,L%d\n", fourth_done);
+    mir_roundtrip_seek(out, plan, plan->strings[15]);
+    mir_roundtrip_push_size(out);
+    mir_machine_emit_symbol_call(out, plan->clear_function);
+    fputs("\tpop bc\n", out);
+    mir_roundtrip_call_io(out, plan, plan->read_function);
+    mir_roundtrip_load_ix_word(out, -6);
+    fputs("\tpush iy\n\tpop de\n\tor a\n\tsbc hl,de\n", out);
+    fprintf(out, "\tjp z,L%d\n", fourth_ok);
+    mir_roundtrip_print_failure(out, plan, 4, plan->strings[16]);
+    mir_roundtrip_call_fail(out, plan, plan->strings[17]);
+    fprintf(out, "L%d:\n", fourth_ok);
+    fputs("\tld a,(ix-4)\n\tand 7\n", out);
+    fprintf(out, "\tjp nz,L%d\n", use_pattern);
+    mir_roundtrip_call_pattern(
+        out, plan->reverse_pattern_function);
+    fprintf(out, "\tjp L%d\nL%d:\n", value_ready, use_pattern);
+    mir_roundtrip_call_pattern(out, plan->pattern_function);
+    fprintf(out, "L%d:\n", value_ready);
+    mir_roundtrip_call_fill_check(out, plan->check_function);
+    mir_roundtrip_load_ix_word(out, -4);
+    fputs("\tdec hl\n", out);
+    mir_roundtrip_store_ix_word(out, -4);
+    fprintf(out, "\tjp L%d\nL%d:\n", fourth_loop, fourth_done);
+    mir_roundtrip_call_one_ix(out, plan->close_function, -2);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[18]);
+    mir_machine_emit_symbol_call(out, plan->unlink_function);
+    fputs("\tpop bc\n\tpush iy\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[19]);
+    mir_emit_runtime_call(out, plan->print_names[5]);
+    mir_roundtrip_cleanup(out, 2);
+    fputs("\tld sp,ix\n\tpop ix\n\tpop iy\n\tret\n", out);
+}
+
+static void mir_emit_room_message(
+    FILE *out, const struct MirRoomResolutionSchedule *plan,
+    int string_id)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+    mir_emit_runtime_call(out, plan->print_name);
+    fputs("\tpop bc\n", out);
+    mir_machine_emit_symbol_call(out, plan->flush_function);
+}
+
+static void mir_emit_room_compare(
+    FILE *out, const struct MirRoomResolutionSchedule *plan,
+    int index, int target)
+{
+    fprintf(out,
+            "\tld e,(iy%+d)\n\tld d,(iy%+d)\n"
+            "\tld l,(iy%+d)\n\tld h,(iy%+d)\n"
+            "\tor a\n\tsbc hl,de\n\tjp z,L%d\n",
+            plan->location_offset,
+            plan->location_offset + 1,
+            plan->location_offset + index * 2,
+            plan->location_offset + index * 2 + 1,
+            target);
+}
+
+static void mir_emit_room_resolution_schedule(
+    FILE *out, const struct MirRoomResolutionSchedule *plan)
+{
+    int loop = new_label();
+    int hazard = new_label();
+    int pit = new_label();
+    int bat = new_label();
+    int done = new_label();
+
+    fputs(MIR_EXACT_KERNEL_MARKER "\n\tpush iy\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tpush de\n\tpop iy\nL%d:\n",
+            plan->game_stack_offset + 2, loop);
+    mir_emit_room_compare(out, plan, 1, hazard);
+    mir_emit_room_compare(out, plan, 2, pit);
+    mir_emit_room_compare(out, plan, 3, pit);
+    mir_emit_room_compare(out, plan, 4, bat);
+    mir_emit_room_compare(out, plan, 5, bat);
+    fprintf(out, "\tld hl,0\n\tjp L%d\nL%d:\n",
+            done, hazard);
+    mir_emit_room_message(out, plan, plan->string_ids[0]);
+    fputs("\tpush iy\n", out);
+    mir_machine_emit_symbol_call(out, plan->wake_function);
+    fputs("\tpop bc\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", done, pit);
+    mir_emit_room_message(out, plan, plan->string_ids[1]);
+    fprintf(out, "\tld hl,2\n\tjp L%d\nL%d:\n", done, bat);
+    mir_emit_room_message(out, plan, plan->string_ids[2]);
+    mir_machine_emit_symbol_call(out, plan->random_room_function);
+    fprintf(out,
+            "\tld (iy%+d),l\n\tld (iy%+d),h\n\tjp L%d\n"
+            "L%d:\n\tpop iy\n\tret\n",
+            plan->location_offset, plan->location_offset + 1,
+            loop, done);
+}
+
+static int mir_match_arrow_path_schedule(
+    struct MirArrowPathSchedule *plan)
+{
+    static const unsigned char expected_opcodes[131] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_LOAD,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP, MIR_LOAD, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_LOAD, MIR_ARG, MIR_LOAD, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ARG, MIR_CALL,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_LOAD, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE,
+        MIR_JUMP, MIR_LABEL, MIR_ADDRESS, MIR_LOAD, MIR_INDEX_ADDRESS, MIR_CONST, MIR_ARG, MIR_CALL,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_PHI, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_CALL, MIR_CONST, MIR_RETURN, MIR_NOP, MIR_LABEL, MIR_LOAD, MIR_LOAD, MIR_MEMBER_ADDRESS,
+        MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT,
+        MIR_CALL, MIR_CONST, MIR_RETURN, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_LABEL, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_STORE_INDIRECT, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL,
+        MIR_CALL, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_CALL, MIR_CALL, MIR_CONST, MIR_RETURN, MIR_NOP, MIR_LABEL, MIR_LOAD,
+        MIR_ARG, MIR_CALL, MIR_RETURN
+    };
+    static const int edges[][2] = {
+        {23, 100}, {32, 41}, {40, 52}, {60, 68},
+        {76, 92}, {99, 14}, {118, 126}
+    };
+    static const int game_loads[] = {
+        4, 15, 54, 70, 80, 82, 101, 103, 113, 127
+    };
+    static const int location_members[] = {5, 55, 71};
+    static const int arrow_members[] = {81, 83, 102, 104, 114};
+    static const int print_calls[] = {63, 79, 111, 121};
+    static const int print_strings[] = {61, 77, 109, 119};
+    static const int flush_calls[] = {64, 88, 112, 122};
+    const struct MirInsn *game = &mir.insns[1];
+    const struct MirInsn *path = &mir.insns[2];
+    const struct MirInsn *length = &mir.insns[3];
+    struct Sym *print_function = NULL;
+    struct Sym *flush_function = NULL;
+    long cave_offset;
+    int edge;
+    int instruction;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 131 || mir_cfg_block_count() != 10 ||
+        mir.local_bytes != 4 || mir.aggregate_temp_bytes != 0 ||
+        mir.has_vla || !mir_has_cfg_backedge() ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_size(mir.return_type) != 2)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "arrow-path-schedule", "opcodes");
+        if ((insn->opcode == MIR_LOAD_INDIRECT ||
+             insn->opcode == MIR_STORE_INDIRECT) &&
+            (insn->memory_flags & (1 | 8)) != 0)
+            return mir_machine_reject(
+                "arrow-path-schedule", "volatile-memory");
+    }
+    for (edge = 0;
+         edge < (int)(sizeof(edges) / sizeof(edges[0])); ++edge)
+        if (mir.insns[edges[edge][0]].label !=
+            mir.insns[edges[edge][1]].label)
+            return mir_machine_reject(
+                "arrow-path-schedule", "control-flow");
+    if (type_ptr_depth(game->type) != 1 ||
+        type_ptr_depth(path->type) != 1 ||
+        type_ptr_depth(length->type) != 0 ||
+        type_size(game->type) != 2 ||
+        type_size(path->type) != 2 ||
+        type_size(length->type) != 2 ||
+        mir_machine_pointee_is_volatile(game) ||
+        mir_machine_pointee_is_volatile(path) ||
+        !mir_machine_parameter_value_offset(
+            game->dst, &plan->game_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            path->dst, &plan->path_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            length->dst, &plan->length_stack_offset))
+        return mir_machine_reject(
+            "arrow-path-schedule", "parameters");
+    for (item = 0;
+         item < (int)(sizeof(game_loads) /
+                      sizeof(game_loads[0])); ++item)
+        if (!mir_machine_same_location(
+                game, &mir.insns[game_loads[item]]))
+            return mir_machine_reject(
+                "arrow-path-schedule", "game-loads");
+    plan->location_offset = (int)mir.insns[5].immediate;
+    plan->arrows_offset = (int)mir.insns[81].immediate;
+    if (plan->location_offset < -120 ||
+        plan->location_offset > 116 ||
+        plan->arrows_offset < -128 ||
+        plan->arrows_offset > 126)
+        return mir_machine_reject(
+            "arrow-path-schedule", "member-offsets");
+    for (item = 0; item < 3; ++item)
+        if (mir.insns[location_members[item]].immediate !=
+                plan->location_offset ||
+            mir.insns[location_members[item]].memory_size != 12)
+            return mir_machine_reject(
+                "arrow-path-schedule", "location-members");
+    for (item = 0; item < 5; ++item)
+        if (mir.insns[arrow_members[item]].immediate !=
+                plan->arrows_offset ||
+            mir.insns[arrow_members[item]].memory_size != 2)
+            return mir_machine_reject(
+                "arrow-path-schedule", "arrow-members");
+    if (!mir_machine_global_address_offset(
+            mir.insns[42].dst, &plan->cave, &cave_offset, 0) ||
+        plan->cave == NULL || cave_offset < -32768 ||
+        cave_offset > 32767 ||
+        mir.insns[44].immediate != 6 ||
+        mir.insns[48].immediate != 2 ||
+        !mir_machine_constant_equals(mir.insns[6].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[11].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[45].dst, 3) ||
+        !mir_machine_constant_equals(mir.insns[65].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[85].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[89].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[106].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[116].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[123].dst, 2))
+        return mir_machine_reject(
+            "arrow-path-schedule", "constants");
+    plan->cave_offset = (int)cave_offset;
+    if (!mir_arrow_direct_function(
+            &mir.insns[31], 2, 0,
+            &plan->adjacent_function) ||
+        !mir_arrow_direct_function(
+            &mir.insns[47], 1, 0,
+            &plan->random_function) ||
+        !mir_arrow_direct_function(
+            &mir.insns[129], 1, 0,
+            &plan->wake_function))
+        return mir_machine_reject(
+            "arrow-path-schedule", "value-calls");
+    for (item = 0; item < 4; ++item) {
+        struct Sym *candidate;
+
+        if (!mir_arrow_direct_function(
+                &mir.insns[print_calls[item]], 1, 1,
+                &candidate) ||
+            mir.insns[print_strings[item]].immediate < 0 ||
+            mir.insns[print_strings[item] + 1].src1 !=
+                mir.insns[print_strings[item]].dst ||
+            (item == 0
+                 ? (print_function = candidate, 0)
+                 : candidate != print_function))
+            return mir_machine_reject(
+                "arrow-path-schedule", "print-calls");
+        plan->string_ids[item] =
+            (int)mir.insns[print_strings[item]].immediate;
+    }
+    for (item = 0; item < 4; ++item) {
+        struct Sym *candidate;
+
+        if (!mir_arrow_direct_function(
+                &mir.insns[flush_calls[item]], 0, 0,
+                &candidate) ||
+            (item == 0
+                 ? (flush_function = candidate, 0)
+                 : candidate != flush_function))
+            return mir_machine_reject(
+                "arrow-path-schedule", "flush-calls");
+    }
+    plan->flush_function = flush_function;
+    snprintf(plan->print_name, sizeof(plan->print_name), "%s",
+             mir.insns[print_calls[0]].base_name);
+    return 1;
+}
+
+static void mir_emit_arrow_print(
+    FILE *out, const struct MirArrowPathSchedule *plan,
+    int string_id)
+{
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+    mir_emit_runtime_call(out, plan->print_name);
+    fputs("\tpop bc\n", out);
+    mir_machine_emit_symbol_call(out, plan->flush_function);
+}
+
+static void mir_emit_arrow_decrement(
+    FILE *out, const struct MirArrowPathSchedule *plan)
+{
+    fprintf(out,
+            "\tld l,(iy%+d)\n\tld h,(iy%+d)\n\tdec hl\n"
+            "\tld (iy%+d),l\n\tld (iy%+d),h\n",
+            plan->arrows_offset, plan->arrows_offset + 1,
+            plan->arrows_offset, plan->arrows_offset + 1);
+}
+
+static void mir_emit_arrow_path_schedule(
+    FILE *out, const struct MirArrowPathSchedule *plan)
+{
+    int loop = new_label();
+    int random_room = new_label();
+    int room_ready = new_label();
+    int not_wumpus = new_label();
+    int not_player = new_label();
+    int missed = new_label();
+    int no_arrows = new_label();
+    int have_arrows = new_label();
+    int return_win = new_label();
+    int return_loss = new_label();
+    int epilogue = new_label();
+
+    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+          "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-6\n\tadd hl,sp\n\tld sp,hl\n",
+          out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tpush hl\n\tpop iy\n"
+            "\tld l,(iy%+d)\n\tld h,(iy%+d)\n"
+            "\tld (ix-2),l\n\tld (ix-1),h\n"
+            "\txor a\n\tld (ix-4),a\n\tld (ix-3),a\n"
+            "L%d:\n"
+            "\tld l,(ix-4)\n\tld h,(ix-3)\n"
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
+            "\tld a,h\n\txor 128\n\tld h,a\n"
+            "\tld a,d\n\txor 128\n\tld d,a\n"
+            "\tor a\n\tsbc hl,de\n\tjp nc,L%d\n"
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
+            "\tld e,(ix-4)\n\tld d,(ix-3)\n"
+            "\tadd hl,de\n\tadd hl,de\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tld (ix-6),e\n\tld (ix-5),d\n"
+            "\tpush de\n\tld l,(ix-2)\n\tld h,(ix-1)\n"
+            "\tpush hl\n",
+            plan->game_stack_offset + 4,
+            plan->game_stack_offset + 5,
+            plan->location_offset,
+            plan->location_offset + 1,
+            loop, missed,
+            plan->length_stack_offset + 4,
+            plan->length_stack_offset + 5,
+            plan->path_stack_offset + 4,
+            plan->path_stack_offset + 5);
+    mir_machine_emit_symbol_call(out, plan->adjacent_function);
+    fputs("\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n", out);
+    fprintf(out,
+            "\tjp z,L%d\n\tld l,(ix-6)\n\tld h,(ix-5)\n"
+            "\tjp L%d\nL%d:\n\tld hl,3\n\tpush hl\n",
+            random_room, room_ready, random_room);
+    mir_machine_emit_symbol_call(out, plan->random_function);
+    fputs("\tpop bc\n\tadd hl,hl\n\tpush hl\n"
+          "\tld l,(ix-2)\n\tld h,(ix-1)\n"
+          "\tadd hl,hl\n\tld d,h\n\tld e,l\n"
+          "\tadd hl,hl\n\tadd hl,de\n\tpush hl\n",
+          out);
+    mir_machine_emit_global_address_de(
+        out, plan->cave, plan->cave_offset);
+    fputs("\tpop hl\n\tadd hl,de\n\tpop de\n\tadd hl,de\n"
+          "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n",
+          out);
+    fprintf(out,
+            "L%d:\n\tld (ix-2),l\n\tld (ix-1),h\n"
+            "\tld e,(iy%+d)\n\tld d,(iy%+d)\n"
+            "\tor a\n\tsbc hl,de\n\tjp nz,L%d\n",
+            room_ready,
+            plan->location_offset + 2,
+            plan->location_offset + 3,
+            not_wumpus);
+    mir_emit_arrow_print(out, plan, plan->string_ids[0]);
+    fprintf(out, "\tjp L%d\nL%d:\n", return_win, not_wumpus);
+    fprintf(out,
+            "\tld l,(ix-2)\n\tld h,(ix-1)\n"
+            "\tld e,(iy%+d)\n\tld d,(iy%+d)\n"
+            "\tor a\n\tsbc hl,de\n\tjp nz,L%d\n",
+            plan->location_offset,
+            plan->location_offset + 1, not_player);
+    mir_emit_arrow_print(out, plan, plan->string_ids[1]);
+    mir_emit_arrow_decrement(out, plan);
+    fprintf(out, "\tjp L%d\nL%d:\n", return_loss, not_player);
+    fputs("\tld l,(ix-4)\n\tld h,(ix-3)\n"
+          "\tinc hl\n\tld (ix-4),l\n\tld (ix-3),h\n", out);
+    fprintf(out, "\tjp L%d\nL%d:\n", loop, missed);
+    mir_emit_arrow_decrement(out, plan);
+    mir_emit_arrow_print(out, plan, plan->string_ids[2]);
+    fprintf(out,
+            "\tld l,(iy%+d)\n\tld h,(iy%+d)\n"
+            "\tld a,h\n\tor a\n\tjp m,L%d\n"
+            "\tor l\n\tjp nz,L%d\n",
+            plan->arrows_offset, plan->arrows_offset + 1,
+            no_arrows, have_arrows);
+    fprintf(out, "L%d:\n", no_arrows);
+    mir_emit_arrow_print(out, plan, plan->string_ids[3]);
+    fprintf(out, "\tjp L%d\nL%d:\n", return_loss, have_arrows);
+    fprintf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n",
+            plan->game_stack_offset + 4,
+            plan->game_stack_offset + 5);
+    mir_machine_emit_symbol_call(out, plan->wake_function);
+    fputs("\tpop bc\n", out);
+    fprintf(out,
+            "\tjp L%d\nL%d:\n\tld hl,1\n\tjp L%d\n"
+            "L%d:\n\tld hl,2\nL%d:\n"
+            "\tld sp,ix\n\tpop ix\n\tpop iy\n\tret\n",
+            epilogue, return_win, epilogue,
+            return_loss, epilogue);
+}
+
 int mir_try_emit_call_runners(FILE *out, int phase)
 {
     if (phase == 0) {
+        struct MirInlineParameterCallSchedule inline_parameter;
+        struct MirNullableStringCheckSchedule nullable_string;
+        struct MirZeroAllocationSchedule zero_allocation;
+        struct MirAllocatorReuseSchedule allocator_reuse;
+        struct MirAllocationGuardSchedule allocation_guard;
+        struct MirAllocatorTrimSchedule allocator_trim;
+        struct MirAllocatorCoalesceSchedule allocator_coalesce;
+        struct MirBiosCallSchedule bios_calls;
+        struct MirExecArgumentSchedule exec_arguments;
+        struct MirTemporaryFileSchedule temporary_file;
+        struct MirCallSafeWordLoopSchedule call_safe_loop;
+        struct MirConstantDoWhileSchedule do_while_plan;
+        struct MirArrowPathSchedule arrow_path_plan;
+        struct MirRoomResolutionSchedule room_resolution_plan;
+        struct MirGlobalMemsetSchedule memset_plan;
+        struct MirWordTableRunnerSchedule table_runner_plan;
+        struct MirSeekCheckSchedule seek_check_plan;
+        struct MirFileRoundtripSchedule file_roundtrip_plan;
+        struct MirIntelHexLoadSchedule intel_hex_plan;
+        struct MirLegalMoveFilterSchedule legal_filter_plan;
+        struct MirStatementVmSchedule statement_vm_plan;
+        struct MirFormatWalkSchedule format_walk_plan;
+        struct MirInlineCallSumSchedule inline_call_sum_plan;
         struct MirLongSubtractionRunner long_subtraction_plan;
         struct MirPromotionCallRunner promotion_plan;
         struct MirReadValidateRunner read_validate_plan;
@@ -14869,6 +22343,118 @@ int mir_try_emit_call_runners(FILE *out, int phase)
         struct MirCallbackRegistrationRunner callback_plan;
         struct MirForIncrementRunner for_increment_plan;
         struct MirCommaLoopRunner comma_loop_plan;
+
+        if (mir_match_temporary_file_schedule(&temporary_file)) {
+            mir_emit_temporary_file_schedule(out, &temporary_file);
+            return 1;
+        }
+        if (mir_match_exec_argument_schedule(&exec_arguments)) {
+            mir_emit_exec_argument_schedule(out, &exec_arguments);
+            return 1;
+        }
+        if (mir_match_bios_call_schedule(&bios_calls)) {
+            mir_emit_bios_call_schedule(out, &bios_calls);
+            return 1;
+        }
+        if (mir_match_allocator_bridge_schedule(
+                &allocator_coalesce) ||
+            mir_match_allocator_reverse_schedule(
+                &allocator_coalesce)) {
+            mir_emit_allocator_coalesce_schedule(
+                out, &allocator_coalesce);
+            return 1;
+        }
+        if (mir_match_allocator_trim_schedule(&allocator_trim)) {
+            mir_emit_allocator_trim_schedule(out, &allocator_trim);
+            return 1;
+        }
+        if (mir_match_allocation_guard_schedule(&allocation_guard)) {
+            mir_emit_allocation_guard_schedule(out, &allocation_guard);
+            return 1;
+        }
+        if (mir_match_allocator_reuse_schedule(&allocator_reuse)) {
+            mir_emit_allocator_reuse_schedule(out, &allocator_reuse);
+            return 1;
+        }
+        if (mir_match_zero_allocation_schedule(&zero_allocation)) {
+            mir_emit_zero_allocation_schedule(out, &zero_allocation);
+            return 1;
+        }
+        if (mir_match_nullable_string_check_schedule(
+                &nullable_string)) {
+            mir_emit_nullable_string_check_schedule(
+                out, &nullable_string);
+            return 1;
+        }
+        if (mir_match_inline_parameter_call_schedule(
+                &inline_parameter)) {
+            mir_emit_inline_parameter_call_schedule(
+                out, &inline_parameter);
+            return 1;
+        }
+        if (mir_match_call_safe_countdown_sum_schedule(
+                &call_safe_loop) ||
+            mir_match_call_safe_member_sum_schedule(
+                &call_safe_loop)) {
+            mir_emit_call_safe_word_loop_schedule(
+                out, &call_safe_loop);
+            return 1;
+        }
+        if (mir_match_constant_do_while_schedule(&do_while_plan)) {
+            mir_emit_constant_do_while_schedule(
+                out, &do_while_plan);
+            return 1;
+        }
+        if (mir_match_arrow_path_schedule(&arrow_path_plan)) {
+            mir_emit_arrow_path_schedule(out, &arrow_path_plan);
+            return 1;
+        }
+        if (mir_match_room_resolution_schedule(
+                &room_resolution_plan)) {
+            mir_emit_room_resolution_schedule(
+                out, &room_resolution_plan);
+            return 1;
+        }
+        if (mir_match_global_memset_schedule(&memset_plan)) {
+            mir_emit_global_memset_schedule(out, &memset_plan);
+            return 1;
+        }
+        if (mir_match_word_table_runner_schedule(
+                &table_runner_plan)) {
+            mir_emit_word_table_runner_schedule(
+                out, &table_runner_plan);
+            return 1;
+        }
+        if (mir_match_seek_check_schedule(&seek_check_plan)) {
+            mir_emit_seek_check_schedule(out, &seek_check_plan);
+            return 1;
+        }
+        if (mir_match_file_roundtrip_schedule(
+                &file_roundtrip_plan)) {
+            mir_emit_file_roundtrip_schedule(
+                out, &file_roundtrip_plan);
+            return 1;
+        }
+        if (mir_match_intel_hex_load_schedule(
+                &intel_hex_plan)) {
+            mir_emit_intel_hex_load_schedule(
+                out, &intel_hex_plan);
+            return 1;
+        }
+        if (mir_match_legal_move_filter_schedule(
+                &legal_filter_plan)) {
+            mir_emit_legal_move_filter_schedule(
+                out, &legal_filter_plan);
+            return 1;
+        }
+        if (mir_match_statement_vm_schedule(&statement_vm_plan)) {
+            mir_emit_statement_vm_schedule(out, &statement_vm_plan);
+            return 1;
+        }
+        if (mir_match_format_walk_schedule(&format_walk_plan)) {
+            mir_emit_format_walk_schedule(out, &format_walk_plan);
+            return 1;
+        }
         struct MirScopeBlockRunner scope_plan;
         struct MirByteEqualityRunner byte_equality_plan;
         struct MirGnarlyRunner gnarly_plan;
@@ -14878,6 +22464,12 @@ int mir_try_emit_call_runners(FILE *out, int phase)
         struct MirCastLogicalRunner cast_logical_plan;
         struct MirFixedCallCheckRunner plan;
 
+        if (mir_match_inline_call_sum_schedule(
+                &inline_call_sum_plan)) {
+            mir_emit_inline_call_sum_schedule(
+                out, &inline_call_sum_plan);
+            return 1;
+        }
         if (mir_match_long_subtraction_runner(
                 &long_subtraction_plan)) {
             mir_emit_long_subtraction_runner(

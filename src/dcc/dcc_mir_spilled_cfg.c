@@ -1498,9 +1498,9 @@ static unsigned char *mir_constant_control_reachability(void)
 
     /*
      * Keep this emission-only optimization on the measured C99 constant-
-     * control class. Applying it as a general size reduction changed final
-     * cost admission for unrelated fallback functions and regressed their
-     * runtime performance despite removing dead machine code.
+     * control class. Applying it generally changed generated-candidate
+     * arbitration and regressed runtime performance despite removing dead
+     * machine code.
      */
     for (instruction = 0; instruction < mir.count; ++instruction)
         if (mir.insns[instruction].opcode == MIR_CALL ||
@@ -2662,10 +2662,9 @@ static int mir_multiply_by_small_constant(int value)
 
 /* HL = HL * uv via a fully unrolled left-to-right binary-method shift/add
  * sequence - no runtime loop, unlike __mulu. Port of emit_mul_hl_const_general
- * in dcc_ops.c (the legacy AST backend); keeping the MIR backend's constant
- * multiplication at the same quality avoids MIR losing the cost-gate race
- * against captured legacy output for any function that multiplies by a
- * compile-time constant (array/struct element sizes, VLA row strides, etc).
+ * in dcc_ops.c. Keeping MIR constant multiplication at the same quality
+ * avoids avoidable generated-candidate losses for compile-time multipliers
+ * such as array/struct element sizes and VLA row strides.
  * Caller guarantees uv is nonzero, fits 16 bits, and is not a single power
  * of two (those are handled separately by the caller with plain shifts). */
 static void mir_emit_mul_hl_const_general(FILE *out, unsigned long uv)
@@ -2852,14 +2851,33 @@ static int mir_emit_rematerialized_argument(FILE *out, int value, int size)
     }
 
     if (size == 2 && mir_address_is_single_call_argument(value)) {
+        struct Sym *global;
+        const char *assembly_name;
         int memory_type;
         int memory_storage;
         int memory_offset;
+
         if (!mir_scalar_memory_location(definition, &memory_type,
                                         &memory_storage, &memory_offset))
             return 0;
-        fputs("\tpush ix\n\tpop hl\n", out);
-        mir_emit_hl_offset_from_ix(out, memory_offset);
+        if (memory_storage == SC_GLOBAL ||
+            memory_storage == SC_EXTERN) {
+            global = find_global(definition->name);
+            assembly_name = asm_name_for(
+                global != NULL ? sym_asm_name(global)
+                               : mir_declared_link_name(definition->name));
+            if (memory_storage == SC_EXTERN &&
+                mir_extrn_should_emit(global))
+                fprintf(out, "\textrn %s\n", assembly_name);
+            if (memory_offset == 0)
+                fprintf(out, "\tld hl,%s\n", assembly_name);
+            else
+                fprintf(out, "\tld hl,%s%+d\n",
+                        assembly_name, memory_offset);
+        } else {
+            fputs("\tpush ix\n\tpop hl\n", out);
+            mir_emit_hl_offset_from_ix(out, memory_offset);
+        }
         return 1;
     }
 
@@ -4280,25 +4298,71 @@ static int mir_value_only_used_by_stable_pointer_argument(int value)
     return uses == 1;
 }
 
-/* mir-text-size Item T20 (mir-text-size-plan.md): sibling to
- * mir_load_is_single_call_argument above, but for a MIR_ADDRESS
- * (address-of a local/parameter) whose sole use is exactly one
- * MIR_ARG. Unlike a MIR_LOAD's memory *value*, a MIR_ADDRESS's own
- * emission for the non-VLA, non-global local/param shape (this
- * selector's own MIR_ADDRESS case, dcc_mir_spilled_cfg.c) is nothing
- * but `push ix/pop hl` plus a fixed compile-time-constant offset add -
- * a pure, side-effect-free function of ix (which never moves once the
- * prologue runs) that is exactly as cheap to recompute again later as
- * it was to compute the first time. When such a value can't be
- * forwarded straight through HL (typically because another argument's
- * own computation needs HL first), the generic store-to-slot-then-
- * reload fallback wastes two `ld (ix+n),r` stores legacy's own emitter
- * never needed - legacy simply recomputes the address fresh right at
- * the point of use instead of ever storing it. Found via
- * tests/tbcgcol.c's main(): the array-pointer argument to
- * global_bc_across_pointer_loop was needlessly spilled and reloaded
- * even though nothing about it needs preserving across the gap - it
- * can just be recomputed for free. */
+static int mir_global_address_is_single_indirect_call_argument(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int argument_count = 0;
+    int call_id = -1;
+    int call_count = 0;
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+    int instruction;
+
+    if (definition == NULL || definition->opcode != MIR_ADDRESS ||
+        !mir_scalar_memory_location(definition, &memory_type,
+                                    &memory_storage, &memory_offset) ||
+        (memory_storage != SC_GLOBAL &&
+         memory_storage != SC_EXTERN))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->src2 == value)
+            return 0;
+        if (insn->src1 != value)
+            continue;
+        if (insn->opcode != MIR_ARG ||
+            type_size(insn->type) != 2 ||
+            ++argument_count > 1)
+            return 0;
+        call_id = insn->secondary_offset;
+    }
+    if (argument_count != 1)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode != MIR_CALL ||
+            insn->secondary_offset != call_id)
+            continue;
+        if (strcmp(insn->name, "<indirect>") != 0 ||
+            ++call_count > 1)
+            return 0;
+    }
+    return call_count == 1;
+}
+
+static int mir_global_indirect_address_argument_count(void)
+{
+    int count = 0;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_ADDRESS &&
+            mir_global_address_is_single_indirect_call_argument(
+                mir.insns[instruction].dst) &&
+            ++count >= 3)
+            return count;
+    return count;
+}
+
+/* A MIR_ADDRESS whose sole use is exactly one MIR_ARG is stable and
+ * rematerializable. Local/parameter addresses are fixed functions of IX.
+ * Global addresses use this path only for call-heavy indirect orchestration
+ * with at least three independent global-address arguments: a single
+ * rematerialization can lose a profitable BC cache or peephole shape, while
+ * the repeated class removes frame/cache traffic overall. */
 static int mir_address_is_single_call_argument(int value)
 {
     const struct MirInsn *definition = mir_definition(value);
@@ -4312,8 +4376,15 @@ static int mir_address_is_single_call_argument(int value)
         mir_declared_is_vla_object(definition->name) ||
         !mir_scalar_memory_location(definition, &memory_type,
                                     &memory_storage, &memory_offset) ||
-        (memory_storage != SC_LOCAL && memory_storage != SC_PARAM) ||
-        memory_offset < -128 || memory_offset > 127)
+        ((memory_storage == SC_LOCAL || memory_storage == SC_PARAM)
+             ? (memory_offset < -128 || memory_offset > 127)
+             : (memory_storage != SC_GLOBAL &&
+                memory_storage != SC_EXTERN)))
+        return 0;
+    if ((memory_storage == SC_GLOBAL ||
+         memory_storage == SC_EXTERN) &&
+        (!mir_global_address_is_single_indirect_call_argument(value) ||
+         mir_global_indirect_address_argument_count() < 3))
         return 0;
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
@@ -4379,28 +4450,6 @@ static int mir_load_is_single_indirect_call_target(int value, int size)
  * re-reading assembly. */
 static int mir_fuse_report_fused_count;
 static int mir_fuse_report_materialized_count;
-
-/* mir-migration-plan-next10 Item 3: mir_try_emit_spilled_scalar_cfg no
- * longer emits a second, unreachable copy of the function epilogue after a
- * function whose last IR instruction is already a MIR_RETURN (that case's
- * own emission already wrote one). That is a pure win for every function
- * already accepted through this selector - real dead code, never executed,
- * removed. But letting the resulting few saved bytes decide accept/reject
- * for a function that was NOT already accepted before this fix would widen
- * the acceptance gate as an unreviewed side effect of a dead-code cleanup,
- * which is exactly what skill rule 1 warns against ("never widen a fallback
- * gate without identifying the exact affected functions first"). Measured:
- * of 6 functions this fix newly promoted, 3 (tmirslot's dead_store_elision,
- * tvla's vla_sizeof_op_add/mullhs/sub) showed real cycle/byte regressions in
- * -Mode full despite passing the static cost gate - the byte savings here
- * is exactly the kind of static-metric improvement skill rule 4 warns is not
- * proof of real speed/size. So: the accept/reject gate below adds this
- * elided text back to `generated_size` before comparing against
- * `captured_size` (restoring the exact pre-fix gate outcome, and therefore
- * the exact pre-fix accepted-function set), while the function's real,
- * already-deduplicated emitted text is what actually gets written for any
- * function that clears the gate on its own unrelated merits. */
-long mir_spilled_scalar_cfg_elided_epilogue_bytes = 0;
 
 /* Item 8 (mir-migration-plan-100): when set, mir_prepare_backend_slots must
  * not allocate a frame slot for a comparison result (or intervening '!'
@@ -4987,69 +5036,6 @@ static int mir_call_argument_slot_forwardable(int value, int units,
     return forwardable;
 }
 
-/* mir-migration-plan-next10 (leaf frame-convention safety): legacy sometimes
- * emits a function with no `ix` frame at all - reading parameters directly
- * off `sp` with a leading `add hl,sp` - for sufficiently trivial leaf
- * bodies. `mir_try_emit_spilled_scalar_cfg` has no equivalent frameless
- * path: it always pays for `push ix`/`ld ix,0`/`add ix,sp` and the matching
- * teardown. Ordinarily that fixed overhead keeps such functions out of the
- * text-size gate entirely, but direct-object-forwarding a parameter can
- * shrink the rest of the body just enough to tip the gate anyway, even
- * though the resulting machine code pays real extra frame-setup cost
- * legacy never incurred (skill rule 4). Detected by inspecting the already-
- * captured legacy replay stream for this function: if it never emits
- * `push ix`, treat the function as using a lighter-weight convention MIR
- * cannot match yet, and keep every parameter on the ordinary slot path so
- * this optimization cannot be the deciding factor for that gate. Confirmed
- * via tc89fnty's mulb full-mode regression. */
-static int mir_capture_stream_uses_frame(void)
-{
-    /* Item T34 (mir-text-size-plan.md): this used to cache cached_result
-     * keyed only on `cached_stream == mir.capture_stream` (a raw FILE*
-     * pointer comparison). mir_begin_function calls tmpfile() fresh for
-     * every single function and closes the previous one, so the C
-     * library is free to (and in practice routinely does) hand back the
-     * exact same FILE* address for the next function's stream once the
-     * old one is closed - the two "static" cache variables then silently
-     * carried the *first* function's frame/frameless verdict forward and
-     * applied it to every later function that happened to reuse that
-     * address, regardless of that function's own captured output. This
-     * starved mir_value_has_direct_named_home of ever firing for any function
-     * unlucky enough to share a reused tmpfile() address with an earlier
-     * frameless one - a real, cross-function correctness bug in the
-     * cache, not a deliberate memoization tradeoff. Recomputing fresh on
-     * every call removes the whole bug class; the scan itself is bounded
-     * by one function's own captured-assembly length and already restores
-     * the stream's read position afterward, so there is no correctness
-     * or ordering hazard in dropping the cache. */
-    static const char needle[] = "push ix";
-    int character;
-    int matched;
-    long saved_position;
-    int result;
-
-    if (mir.capture_stream == NULL)
-        return 1;
-    saved_position = ftell(mir.capture_stream);
-    rewind(mir.capture_stream);
-    result = 0;
-    matched = 0;
-    while ((character = fgetc(mir.capture_stream)) != EOF) {
-        if (character == needle[matched]) {
-            ++matched;
-            if (needle[matched] == '\0') {
-                result = 1;
-                break;
-            }
-        } else {
-            matched = (character == needle[0]) ? 1 : 0;
-        }
-    }
-    if (saved_position >= 0)
-        fseek(mir.capture_stream, saved_position, SEEK_SET);
-    return result;
-}
-
 static int mir_direct_named_home_location(const struct MirInsn *definition,
                                           int *storage, int *offset)
 {
@@ -5215,6 +5201,26 @@ static int mir_pointer_value_has_single_safe_named_home_use(int value)
  * not justify widening this first local slice. Item T425 extends the same
  * "stable named home" idea to objectless single-use pointer parameters whose
  * sole direct use can simply reload the original incoming `ix+N` address. */
+static int mir_phi_uses_byte_object_home(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    const struct MirObject *object;
+    int effective_local_bytes;
+
+    if (definition == NULL || definition->opcode != MIR_PHI ||
+        type_size(definition->type) != 1 ||
+        definition->object < 0 ||
+        definition->object >= mir.object_count ||
+        mir.has_vla)
+        return 0;
+    object = &mir.objects[definition->object];
+    effective_local_bytes = mir_effective_local_bytes();
+    return object->storage == SC_LOCAL &&
+           type_size(object->type) == 1 &&
+           object->offset >= -effective_local_bytes &&
+           object->offset < 0;
+}
+
 static int mir_value_has_direct_named_home(int value)
 {
     const struct MirInsn *definition;
@@ -5229,6 +5235,8 @@ static int mir_value_has_direct_named_home(int value)
     if (value < 0 || value >= mir.next_value)
         return 0;
     definition = mir_definition(value);
+    if (mir_phi_uses_byte_object_home(value))
+        return 1;
     if (definition == NULL ||
         (definition->opcode != MIR_PARAM && definition->opcode != MIR_LOAD))
         return mir_value_is_selfstore_wide_increment_result(value);
@@ -5307,26 +5315,13 @@ static int mir_value_has_direct_named_home(int value)
         if (!has_param)
             return 0;
     }
-    if (mir_cost_policy_candidate_mode() ||
-        !mir_capture_stream_uses_frame())
-        return 0;
-    /* mir-migration-plan-next10 (divmod-fusion safety): a fused divmod pair
+    /* A fused divmod pair
      * (mir_divmod_partner) must eagerly materialize BOTH its quotient and
      * remainder results into two simultaneous backend slots at whichever
-     * operator is encountered first, unlike legacy's serial one-slot-
-     * reused-in-turn replay - this needs strictly more frame bytes than
-     * legacy for that pair alone. Direct-object-forwarding one of the
-     * pair's own parameter operands then quietly shrinks the *rest* of the
-     * function's frame just enough to tip its text-size accept/reject
-     * gate over, even though the fused pair's own extra frame bytes make
-     * the real (stack-check-instrumented) machine code slower, not
-     * faster - confirmed via tdmfuse's sdm_pair/sdm_pair_r full-mode
-     * regression (skill rule 4: static byte counts are not proof of real
-     * cost). Keep any parameter that is a live operand of a fused
-     * divmod pair on its ordinary backend-slot path so this optimization
-     * cannot influence that gate decision for these functions, while
-     * still applying normally to every parameter not involved in such a
-     * pair. */
+     * operator is encountered first. Direct-object-forwarding one operand can
+     * hide that simultaneous frame pressure and select slower stack-checked
+     * code. Keep pair operands on the ordinary backend-slot path.
+     */
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
         if (insn->opcode == MIR_BINARY &&
@@ -6075,29 +6070,6 @@ struct MirWordScanLoop {
     int last_match_offset;
 };
 
-struct MirByteMinMax {
-    struct Sym *moves;
-    struct Sym *winner_functions;
-    struct Sym *board;
-    struct Sym *self;
-    int alpha_offset;
-    int beta_offset;
-    int depth_offset;
-    int move_offset;
-    int piece_offset;
-    int depth_threshold;
-    int terminal_depth;
-    int loop_bound;
-    int blank;
-    int piece_x;
-    int piece_o;
-    int score_min;
-    int score_max;
-    int score_win;
-    int score_lose;
-    int score_tie;
-};
-
 struct MirFixedByteWinner {
     struct Sym *board;
     int source_offset;
@@ -6495,14 +6467,6 @@ struct MirCRun {
     int opcode_count;
     int no_main_string;
     int bad_opcode_string;
-};
-
-struct MirNQueensSafe {
-    struct Sym *board;
-    int row_offset;
-    int column_offset;
-    int size_offset;
-    int row_stride;
 };
 
 struct MirWordInsertionSort {
@@ -8553,64 +8517,6 @@ static int mir_match_c_run(struct MirCRun *plan)
            memset_count >= 0;
 }
 
-static int mir_match_nqueens_safe(struct MirNQueensSafe *plan)
-{
-    static const int board_instruction[] = {18, 68, 122};
-    unsigned long long first;
-    unsigned long long second;
-    struct Sym *board;
-    int memory_type;
-    int memory_storage;
-    int memory_offset;
-    int *offsets[3] = {
-        &plan->row_offset, &plan->column_offset, &plan->size_offset
-    };
-    int item;
-
-    memset(plan, 0, sizeof(*plan));
-    if (mir.count != 147 || mir_cfg_block_count() != 19 ||
-        mir.has_vla || type_size(mir.return_type) != 1 ||
-        type_ptr_depth(mir.return_type) != 0)
-        return 0;
-    mir_numeric_shape_hash(&first, &second);
-    if (!((first == 0x08043f59f77054ffULL &&
-           second == 0x99ab618d07206ffbULL) ||
-          (first == 0x8822c448198b2f73ULL &&
-           second == 0x60e6593a591c341dULL)))
-        return 0;
-    for (item = 0; item < 3; ++item) {
-        if (!mir_scalar_memory_location(
-                &mir.insns[1 + item], &memory_type,
-                &memory_storage, &memory_offset) ||
-            memory_storage != SC_PARAM ||
-            type_size(memory_type) != 2 ||
-            memory_offset < -128 || memory_offset + 1 > 127)
-            return 0;
-        *offsets[item] = memory_offset;
-    }
-    board = find_global(mir.insns[18].name);
-    if (board == NULL || !board->is_array ||
-        board->array_len <= 0 || board->elem_size <= 0 ||
-        board->is_volatile || board->pointee_is_volatile ||
-        (board->storage != SC_GLOBAL && board->storage != SC_EXTERN))
-        return 0;
-    for (item = 0; item < 3; ++item)
-        if (strcmp(
-                mir.insns[board_instruction[item]].name,
-                board->name) != 0)
-            return 0;
-    plan->board = board;
-    plan->row_stride = (int)mir.insns[20].immediate;
-    return plan->row_stride == board->elem_size &&
-           mir_ulong_log2_pow2(
-               (unsigned long)plan->row_stride) == 3 &&
-           (int)mir.insns[22].immediate == 1 &&
-           (int)mir.insns[70].immediate == plan->row_stride &&
-           (int)mir.insns[72].immediate == 1 &&
-           (int)mir.insns[124].immediate == plan->row_stride &&
-           (int)mir.insns[126].immediate == 1;
-}
-
 static int mir_match_word_insertion_sort(
     struct MirWordInsertionSort *plan)
 {
@@ -10160,109 +10066,6 @@ static int mir_match_fixed_byte_winner(
         plan->line_offsets[instruction][1] =
             offsets[2 + 2 * instruction];
     }
-    return 1;
-}
-
-static int mir_minmax_byte_location(
-    const struct MirInsn *insn, int required_storage, int *offset)
-{
-    int memory_type;
-    int memory_storage;
-    int memory_offset;
-
-    if (insn == NULL ||
-        !mir_scalar_memory_location(
-            insn, &memory_type, &memory_storage, &memory_offset) ||
-        memory_storage != required_storage ||
-        type_size(memory_type) != 1 ||
-        memory_offset < -128 || memory_offset > 127)
-        return 0;
-    if (offset != NULL)
-        *offset = memory_offset;
-    return 1;
-}
-
-static int mir_match_byte_minmax(struct MirByteMinMax *plan)
-{
-    unsigned long long first;
-    unsigned long long second;
-    struct Sym *moves;
-    struct Sym *winner_functions;
-    struct Sym *board;
-    struct Sym *self;
-    int argument;
-
-    memset(plan, 0, sizeof(*plan));
-    if (mir.count != 253 || mir_cfg_block_count() != 31 ||
-        mir.has_vla ||
-        type_size(mir.return_type) != 1 ||
-        type_ptr_depth(mir.return_type) != 0)
-        return 0;
-    mir_numeric_shape_hash(&first, &second);
-    if (first != 0xfd2672fb1314f7a0ULL ||
-        second != 0xd22eced2a2903e54ULL)
-        return 0;
-
-    moves = find_global(mir.insns[5].name);
-    winner_functions = find_global(mir.insns[14].name);
-    board = find_global(mir.insns[91].name);
-    self = find_global(mir.insns[115].name);
-    if (moves == NULL || winner_functions == NULL ||
-        board == NULL || self == NULL ||
-        strcmp(mir.insns[5].name, mir.insns[8].name) != 0 ||
-        strcmp(mir.insns[91].name, mir.insns[98].name) != 0 ||
-        strcmp(mir.insns[91].name, mir.insns[118].name) != 0 ||
-        strcmp(mir.insns[115].name, mir.name) != 0 ||
-        (moves->storage != SC_GLOBAL && moves->storage != SC_EXTERN) ||
-        type_size(moves->type) != 4 || moves->is_volatile ||
-        (winner_functions->storage != SC_GLOBAL &&
-         winner_functions->storage != SC_EXTERN) ||
-        !winner_functions->is_array ||
-        winner_functions->elem_size != 2 ||
-        winner_functions->is_volatile ||
-        (board->storage != SC_GLOBAL && board->storage != SC_EXTERN) ||
-        !board->is_array || board->elem_size != 1 ||
-        board->is_volatile || board->pointee_is_volatile ||
-        !self->is_defined || self->proto_nargs != 4 ||
-        self->proto_variadic)
-        return 0;
-    for (argument = 0; argument < 4; ++argument)
-        if (type_size(self->proto_types[argument]) != 1 ||
-            type_ptr_depth(self->proto_types[argument]) != 0)
-            return 0;
-    if (!mir_same_scalar_memory_location(
-            &mir.insns[5], &mir.insns[8]) ||
-        mir.insns[5].memory_flags != 0 ||
-        mir.insns[8].memory_flags != 0 ||
-        !mir_minmax_byte_location(
-            &mir.insns[1], SC_PARAM, &plan->alpha_offset) ||
-        !mir_minmax_byte_location(
-            &mir.insns[2], SC_PARAM, &plan->beta_offset) ||
-        !mir_minmax_byte_location(
-            &mir.insns[3], SC_PARAM, &plan->depth_offset) ||
-        !mir_minmax_byte_location(
-            &mir.insns[4], SC_PARAM, &plan->move_offset) ||
-        !mir_minmax_byte_location(
-            &mir.insns[62], SC_LOCAL, &plan->piece_offset) ||
-        !mir_same_scalar_memory_location(
-            &mir.insns[62], &mir.insns[71]))
-        return 0;
-
-    plan->moves = moves;
-    plan->winner_functions = winner_functions;
-    plan->board = board;
-    plan->self = self;
-    plan->depth_threshold = (int)mir.insns[10].immediate;
-    plan->terminal_depth = (int)mir.insns[40].immediate;
-    plan->loop_bound = (int)mir.insns[86].immediate;
-    plan->blank = (int)mir.insns[90].immediate;
-    plan->piece_x = (int)mir.insns[61].immediate;
-    plan->piece_o = (int)mir.insns[70].immediate;
-    plan->score_min = (int)mir.insns[58].immediate;
-    plan->score_max = (int)mir.insns[67].immediate;
-    plan->score_win = (int)mir.insns[32].immediate;
-    plan->score_lose = (int)mir.insns[36].immediate;
-    plan->score_tie = (int)mir.insns[46].immediate;
     return 1;
 }
 
@@ -13569,6 +13372,24 @@ static void mir_emit_virtual_store(FILE *out, int value)
     int offset;
     int iy_offset;
     int pending_planned_consumer;
+    if (mir_phi_uses_byte_object_home(value)) {
+        int home_storage;
+        int home_offset;
+
+        if (!mir_direct_named_home_location(
+                definition, &home_storage, &home_offset) ||
+            home_storage != SC_LOCAL)
+            fatal("missing MIR byte-phi object home");
+        if (home_offset >= -128 && home_offset <= 127)
+            fprintf(out, "\tld (ix%+d),l\n", home_offset);
+        else {
+            fputs("\tld a,l\n\tpush ix\n\tpop hl\n", out);
+            fprintf(out,
+                    "\tld de,%d\n\tadd hl,de\n\tld (hl),a\n",
+                    home_offset);
+        }
+        return;
+    }
     if (mir_value_requires_phi_slot(value))
         force_slot_store = 1;
     if (!force_slot_store &&
@@ -14434,171 +14255,6 @@ static void mir_emit_word_scan_loop(
                 "\tld (ix%+d),c\n\tld (ix%+d),b\n",
                 loop->pointer_offset, loop->pointer_offset + 1);
     fprintf(out, "\tjp L%d\n", labels[loop->exit_label]);
-}
-
-static void mir_emit_byte_minmax(
-    FILE *out, const struct MirByteMinMax *plan)
-{
-    const char *moves_name =
-        asm_name_for(sym_asm_name(plan->moves));
-    const char *winner_name =
-        asm_name_for(sym_asm_name(plan->winner_functions));
-    const char *board_name =
-        asm_name_for(sym_asm_name(plan->board));
-    const char *self_name =
-        asm_name_for(sym_asm_name(plan->self));
-    int moves_done = new_label();
-    int no_terminal = new_label();
-    int no_winner = new_label();
-    int winner_lose = new_label();
-    int even_depth = new_label();
-    int init_done = new_label();
-    int loop = new_label();
-    int tail = new_label();
-    int minimizing = new_label();
-    int max_not_win = new_label();
-    int max_alpha = new_label();
-    int min_not_lose = new_label();
-    int return_value = new_label();
-    int exit = new_label();
-
-    if ((plan->moves->storage == SC_EXTERN ||
-         plan->moves->needs_extrn) &&
-        mir_extrn_should_emit(plan->moves))
-        fprintf(out, "\textrn %s\n", moves_name);
-    if ((plan->winner_functions->storage == SC_EXTERN ||
-         plan->winner_functions->needs_extrn) &&
-        mir_extrn_should_emit(plan->winner_functions))
-        fprintf(out, "\textrn %s\n", winner_name);
-    if ((plan->board->storage == SC_EXTERN ||
-         plan->board->needs_extrn) &&
-        mir_extrn_should_emit(plan->board))
-        fprintf(out, "\textrn %s\n", board_name);
-
-    fprintf(out,
-            "\tld hl,%s\n"
-            "\tinc (hl)\n\tjp nz, L%d\n"
-            "\tinc hl\n\tinc (hl)\n\tjp nz, L%d\n"
-            "\tinc hl\n\tinc (hl)\n\tjp nz, L%d\n"
-            "\tinc hl\n\tinc (hl)\n"
-            "L%d:\n",
-            moves_name, moves_done, moves_done, moves_done, moves_done);
-
-    fprintf(out,
-            "\tld a,(ix%+d)\n\tcp %d\n\tjp c, L%d\n"
-            "\tld l,(ix%+d)\n\tld h,0\n\tadd hl,hl\n"
-            "\tld de,%s\n\tadd hl,de\n"
-            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n",
-            plan->depth_offset, plan->depth_threshold, no_terminal,
-            plan->move_offset, winner_name);
-    mir_emit_runtime_call(out, "__call_hl");
-    fprintf(out,
-            "\tld a,l\n\tor a\n\tjp z, L%d\n"
-            "\tcp %d\n\tjp nz, L%d\n"
-            "\tld l,%d\n\tjp L%d\n"
-            "L%d:\n\tld l,%d\n\tjp L%d\n"
-            "L%d:\n"
-            "\tld a,(ix%+d)\n\tcp %d\n\tjp nz, L%d\n"
-            "\tld l,%d\n\tjp L%d\n"
-            "L%d:\n",
-            no_winner, plan->piece_x, winner_lose,
-            plan->score_win, exit,
-            winner_lose, plan->score_lose, exit,
-            no_winner,
-            plan->depth_offset, plan->terminal_depth, no_terminal,
-            plan->score_tie, exit,
-            no_terminal);
-
-    fprintf(out,
-            "\tbit 0,(ix%+d)\n\tjp z, L%d\n"
-            "\tld c,%d\n\tld a,%d\n\tld (ix%+d),a\n"
-            "\tjp L%d\n"
-            "L%d:\n"
-            "\tld c,%d\n\tld a,%d\n\tld (ix%+d),a\n"
-            "L%d:\n"
-            "\tld b,0\n\tld hl,%s\n"
-            "L%d:\n"
-            "\tld a,(hl)\n\tor a\n\tjp nz, L%d\n"
-            "\tld a,(ix%+d)\n\tld (hl),a\n"
-            "\tpush hl\n\tpush bc\n"
-            "\tld l,b\n\tld h,0\n\tpush hl\n"
-            "\tld l,(ix%+d)\n\tld h,0\n\tinc hl\n\tpush hl\n"
-            "\tld l,(ix%+d)\n\tld h,0\n\tpush hl\n"
-            "\tld l,(ix%+d)\n\tld h,0\n\tpush hl\n"
-            "\tcall %s\n"
-            "\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n"
-            "\tld e,l\n\tpop bc\n\tpop hl\n"
-            "\tld (hl),%d\n"
-            "\tbit 0,(ix%+d)\n\tjp z, L%d\n",
-            plan->depth_offset, even_depth,
-            plan->score_min, plan->piece_x, plan->piece_offset,
-            init_done,
-            even_depth,
-            plan->score_max, plan->piece_o, plan->piece_offset,
-            init_done,
-            board_name,
-            loop,
-            tail,
-            plan->piece_offset,
-            plan->depth_offset,
-            plan->beta_offset,
-            plan->alpha_offset,
-            self_name,
-            plan->blank,
-            plan->depth_offset, minimizing);
-
-    fprintf(out,
-            "\tld a,e\n\tcp %d\n\tjp nz, L%d\n"
-            "\tld l,%d\n\tjp L%d\n"
-            "L%d:\n"
-            "\tcp c\n\tjp c, L%d\n\tjp z, L%d\n"
-            "\tld c,a\n\tcp (ix%+d)\n\tjp c, L%d\n"
-            "\tjp L%d\n"
-            "L%d:\n"
-            "\tcp (ix%+d)\n\tjp c, L%d\n\tjp z, L%d\n"
-            "\tld (ix%+d),a\n\tjp L%d\n",
-            plan->score_win, max_not_win,
-            plan->score_win, exit,
-            max_not_win,
-            tail, tail,
-            plan->beta_offset, max_alpha,
-            return_value,
-            max_alpha,
-            plan->alpha_offset, tail, tail,
-            plan->alpha_offset, tail);
-
-    fprintf(out,
-            "L%d:\n"
-            "\tld a,e\n\tcp %d\n\tjp nz, L%d\n"
-            "\tld l,%d\n\tjp L%d\n"
-            "L%d:\n"
-            "\tcp c\n\tjp nc, L%d\n"
-            "\tld c,a\n\tcp (ix%+d)\n"
-            "\tjp c, L%d\n\tjp z, L%d\n"
-            "\tcp (ix%+d)\n\tjp nc, L%d\n"
-            "\tld (ix%+d),a\n\tjp L%d\n"
-            "L%d:\n\tld l,c\n\tjp L%d\n",
-            minimizing,
-            plan->score_lose, min_not_lose,
-            plan->score_lose, exit,
-            min_not_lose,
-            tail,
-            plan->alpha_offset,
-            return_value, return_value,
-            plan->beta_offset, tail,
-            plan->beta_offset, tail,
-            return_value, exit);
-
-    fprintf(out,
-            "L%d:\n"
-            "\tinc hl\n\tinc b\n\tld a,b\n\tcp %d\n"
-            "\tjp c, L%d\n"
-            "\tld l,c\n"
-            "L%d:\n"
-            "\tld h,0\n",
-            tail, plan->loop_bound, loop,
-            exit);
-    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
 static void mir_emit_fixed_byte_winner(
@@ -19477,91 +19133,6 @@ static void mir_emit_c_run(FILE *out, const struct MirCRun *plan)
     fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->bad_opcode_string);
     mir_emit_symbol_call(out, plan->die_function);
     fprintf(out, "\tjp L%d\n", exit_label);
-}
-
-static void mir_emit_nqueens_board_load(
-    FILE *out, const struct MirNQueensSafe *plan)
-{
-    const char *board_name =
-        asm_name_for(sym_asm_name(plan->board));
-
-    fputs("\tpush de\n\tpush bc\n"
-          "\tld h,d\n\tld l,e\n", out);
-    mir_emit_mul_hl_const(out, (unsigned long)plan->row_stride);
-    fputs("\tadd hl,bc\n", out);
-    fprintf(out, "\tld de,%s\n\tadd hl,de\n\tld a,(hl)\n",
-            board_name);
-    fputs("\tpop bc\n\tpop de\n", out);
-}
-
-static void mir_emit_nqueens_safe(
-    FILE *out, const struct MirNQueensSafe *plan)
-{
-    int horizontal = new_label();
-    int up_init = new_label();
-    int up_loop = new_label();
-    int down_init = new_label();
-    int down_loop = new_label();
-    int down_in_range = new_label();
-    int down_done = new_label();
-    int unsafe = new_label();
-    int safe = new_label();
-    int exit_label = new_label();
-
-    mir_emit_symbol_extrn(out, plan->board);
-    fprintf(out,
-            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n"
-            "\tld c,(ix%+d)\n\tld b,(ix%+d)\n\tdec bc\n"
-            "L%d:\n\tbit 7,b\n\tjp nz, L%d\n",
-            plan->row_offset, plan->row_offset + 1,
-            plan->column_offset, plan->column_offset + 1,
-            horizontal, up_init);
-    mir_emit_nqueens_board_load(out, plan);
-    fprintf(out,
-            "\tor a\n\tjp nz, L%d\n\tdec bc\n\tjp L%d\n"
-            "L%d:\n"
-            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n\tdec de\n"
-            "\tld c,(ix%+d)\n\tld b,(ix%+d)\n\tdec bc\n"
-            "L%d:\n\tbit 7,d\n\tjp nz, L%d\n"
-            "\tbit 7,b\n\tjp nz, L%d\n",
-            unsafe, horizontal,
-            up_init,
-            plan->row_offset, plan->row_offset + 1,
-            plan->column_offset, plan->column_offset + 1,
-            up_loop, down_init, down_init);
-    mir_emit_nqueens_board_load(out, plan);
-    fprintf(out,
-            "\tor a\n\tjp nz, L%d\n"
-            "\tdec de\n\tdec bc\n\tjp L%d\n"
-            "L%d:\n"
-            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n\tinc de\n"
-            "\tld c,(ix%+d)\n\tld b,(ix%+d)\n\tdec bc\n"
-            "L%d:\n\tpush de\n\tpush bc\n"
-            "\tbit 7,b\n\tjp nz, L%d\n"
-            "\tld h,d\n\tld l,e\n"
-            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
-            unsafe, up_loop,
-            down_init,
-            plan->row_offset, plan->row_offset + 1,
-            plan->column_offset, plan->column_offset + 1,
-            down_loop, down_done,
-            plan->size_offset, plan->size_offset + 1);
-    mir_emit_forth_signed_less_branch(
-        out, down_in_range, down_done);
-    fprintf(out, "L%d:\n\tpop bc\n\tpop de\n", down_in_range);
-    mir_emit_nqueens_board_load(out, plan);
-    fprintf(out,
-            "\tor a\n\tjp nz, L%d\n"
-            "\tinc de\n\tdec bc\n\tjp L%d\n"
-            "L%d:\n\tpop bc\n\tpop de\n\tjp L%d\n"
-            "L%d:\n\tld hl,0\n\tjp L%d\n"
-            "L%d:\n\tld hl,1\n"
-            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
-            unsafe, down_loop,
-            down_done, safe,
-            unsafe, exit_label,
-            safe,
-            exit_label);
 }
 
 static void mir_emit_word_insertion_sort(
@@ -26587,7 +26158,6 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     int inline_postincrement_shared_label = -1;
     struct MirInlinePostincrementStore inline_postincrement_helper;
     struct MirFixedByteWinner fixed_byte_winner;
-    struct MirByteMinMax byte_minmax;
     struct MirWordPowermod word_powermod;
     struct MirFloatUnitFraction float_unit_fraction;
     struct MirConstantReturn constant_return;
@@ -26620,7 +26190,6 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     struct MirBasicRun basic_run;
     struct MirFortranEval fortran_eval;
     struct MirCRun c_run;
-    struct MirNQueensSafe nqueens_safe;
     struct MirWordInsertionSort word_insertion_sort;
     struct MirVisitCount visit_count;
     struct MirVlaStable vla_stable;
@@ -26667,7 +26236,6 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
     }
     memset(&inline_postincrement_helper, 0,
            sizeof(inline_postincrement_helper));
-    mir_spilled_scalar_cfg_elided_epilogue_bytes = 0;
     mir_spilled_cfg_used_dead_store_forwarding = 0;
     mir_spilled_cfg_used_constant_absolute = 0;
     mir_spilled_cfg_used_constant_index_absolute = 0;
@@ -26807,6 +26375,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         labels[i] = new_label();
     mir_prepare_inline_postincrement_stores(
         &inline_postincrement_helper);
+    if (!opt_debug) {
     if (mir_match_vla_stable(&vla_stable)) {
         fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
               "\tld hl,-8\n\tadd hl,sp\n\tld sp,hl\n", out);
@@ -27092,15 +26661,6 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         accepted = 1;
         goto done;
     }
-    if (mir_match_nqueens_safe(&nqueens_safe)) {
-        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
-        if (opt_stack_check)
-            mir_emit_runtime_call(out, "__stchk");
-        mir_emit_nqueens_safe(out, &nqueens_safe);
-        mir_spilled_cfg_used_exact_semantic_kernel = 1;
-        accepted = 1;
-        goto done;
-    }
     if (mir_match_word_insertion_sort(&word_insertion_sort)) {
         fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
               "\tld hl,-10\n\tadd hl,sp\n\tld sp,hl\n", out);
@@ -27274,20 +26834,6 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_fixed_byte_winner(out, &fixed_byte_winner);
-        mir_spilled_cfg_used_exact_semantic_kernel = 1;
-        accepted = 1;
-        goto done;
-    }
-    if (mir_match_byte_minmax(&byte_minmax)) {
-        int local_byte;
-
-        fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
-        for (local_byte = 0;
-             local_byte < -byte_minmax.piece_offset; ++local_byte)
-            fputs("\tdec sp\n", out);
-        if (opt_stack_check)
-            mir_emit_runtime_call(out, "__stchk");
-        mir_emit_byte_minmax(out, &byte_minmax);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
@@ -27468,6 +27014,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         accepted = 1;
         goto done;
     }
+    }
     if (inline_postincrement_helper.enabled &&
         inline_postincrement_helper.kind ==
             MIR_INLINE_POSTINC_INDEXED_BASE) {
@@ -27568,6 +27115,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         struct MirFixedArrayInit fixed_array_init;
         struct MirCyclicByteFill cyclic_byte_fill;
 
+        mir_emit_debug_events(out, i);
         mir_emit_instruction_index = i;
         if (constant_control_reachable != NULL &&
             !constant_control_reachable[i])
@@ -29237,16 +28785,11 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                  * the "constant load never clobbers HL" reasoning is not
                  * operator-specific).
                  *
-                 * Skip this shortcut in functions with a VLA: shaving a
-                 * few bytes off this one instruction can tip a borderline
-                 * function's byte-size-based accept/fallback gate over to
-                 * "mir accepted" (particularly under -fstack-check, whose
-                 * extra call-site bytes shift the size comparison), and
-                 * VLA frames lean on ix-relative slot traffic that is
-                 * byte-cheap but T-state-expensive - the resulting switch
-                 * from the legacy path to the MIR path can be a net cycle
-                 * regression even though every individual instruction
-                 * changed here is unambiguously cheaper in isolation. */
+                 * Skip this shortcut in functions with a VLA: the small
+                 * static saving can change generated-candidate arbitration
+                 * toward a frame-heavy result that is slower under stack
+                 * checking.
+                 */
                 if (fused_zero_lhs) {
                     /* EQ/NE is symmetric and HL already holds src2. */
                 } else if (stack_forwarded_right) {
@@ -30173,25 +29716,6 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         if (return_count == 0 && mir.implicit_zero_return)
             fputs("\tld hl,0\n", out);
         mir_emit_virtual_iy_epilogue(out);
-    } else {
-        /* mir-migration-plan-next10 Item 3: the duplicate epilogue this
-         * skips would have been counted in generated_size before this
-         * fix. Measure its exact text length into a scratch buffer (the
-         * epilogue text depends only on module globals, not on `out`,
-         * so this has no side effect) and record it so the acceptance
-         * gate's cost comparison is unaffected by this dead-code removal
-         * - only the real emitted text shrinks, not the accept/reject
-         * decision (skill rule 1: never widen a fallback gate as a side
-         * effect of an unrelated fix). */
-        char elided_buf[128];
-        FILE *elided_scratch = fmemopen(elided_buf, sizeof(elided_buf), "w");
-        if (elided_scratch != NULL) {
-            mir_emit_virtual_iy_epilogue(elided_scratch);
-            fflush(elided_scratch);
-            mir_spilled_scalar_cfg_elided_epilogue_bytes =
-                (int)ftell(elided_scratch);
-            fclose(elided_scratch);
-        }
     }
     if (getenv("DCC_MIR_PREPACK_REPORT") != NULL &&
         mir_constant_argument_prepack_count != 0)
@@ -30202,6 +29726,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
         mir_constant_argument_prepack_count > 0 &&
         mir_constant_argument_prepack_count < 3)
         goto done;
+    mir_emit_debug_events(out, mir.count);
     accepted = 1;
 done:
     free(constant_control_reachable);

@@ -215,6 +215,7 @@ def compile_source(
     )
     environment = os.environ.copy()
     environment["DCC_MIR_SELECT_REPORT"] = "1"
+    environment["DCC_MIR_REQUIRE_EMIT"] = "1"
     if require_complete:
         environment["DCC_MIR_REQUIRE_COMPLETE"] = "1"
     try:
@@ -280,11 +281,11 @@ def print_summary(rows: list[dict[str, str]]) -> None:
         if not mode_rows:
             continue
         emitted = sum(row["result"] == "mir" for row in mode_rows)
-        fallbacks = len(mode_rows) - emitted
+        non_mir = len(mode_rows) - emitted
         percent = emitted * 100.0 / len(mode_rows) if mode_rows else 0.0
         print(
             f"{mode}: {emitted}/{len(mode_rows)} MIR "
-            f"({percent:.2f}%), {fallbacks} fallback"
+            f"({percent:.2f}%), {non_mir} non-MIR/error"
         )
         for (selector, result, reason), count in sorted(
             collections.Counter(

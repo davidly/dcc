@@ -1,4 +1,4 @@
-/* dcc_mir.h - typed virtual-register MIR capture and transactional backend. */
+/* dcc_mir.h - typed virtual-register MIR capture and generated backend. */
 #ifndef DCC_MIR_H
 #define DCC_MIR_H
 
@@ -33,8 +33,14 @@ void mir_end_label_replay(void);
 void mir_note_declared_symbol(struct Sym *symbol);
 void mir_note_declared_alias(const char *source_name, struct Sym *symbol);
 void mir_note_narrowed_for_counter(void);
+int mir_capture_debug_location(const char *file, int line);
+int mir_capture_debug_variable(
+    const char *function, const struct Sym *symbol, int end);
+int mir_capture_debug_function_end(
+    const char *assembly_name, const char *source_name);
 void mir_begin_prelegacy_scheduled_attempt(void);
 int mir_end_prelegacy_scheduled_attempt(void);
+void mir_report_buffered_selection(FILE *stream, const char *name);
 void mir_end_function(void);
 void mir_finish_translation_unit(void);
 

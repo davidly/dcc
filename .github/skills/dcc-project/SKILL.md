@@ -372,7 +372,16 @@ Hard-won rules, each of which cost a measured regression to learn:
 	or has multiple reaching definitions. Capturing it requires a different
 	compiler IR/allocation architecture, not another dccpeep pass.
 
-### MIR prototype
+### MIR backend
+
+Current production state (2026-08-14): every committed function body is a
+generated MIR candidate. Legacy AST assembly is written to a per-function
+discard-only null sink and is never retained, measured, selected, or copied.
+Compatibility census `captured_*` columns are `-1`. Use
+`DCC_MIR_SELECT_FUNCTION` + `DCC_MIR_SELECT_CANDIDATE` or
+`scripts/mir-current-vs-parent.py` for A/B work; forced-legacy controls and
+`legacy-v69` no longer exist. The chronology below describes how the backend
+reached this state and contains historical fallback-era wording.
 
 `src/dcc/dcc_mir.c` / `dcc_mir.h` are the analysis-only first slice of that
 different architecture. dcc builds one statement AST at a time and resets its
