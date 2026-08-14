@@ -50,8 +50,8 @@ selected drive.
 
 | Function | Summary |
 | --- | --- |
-| `DIR *opendir(const char *path)` | Begin a scan (`"."`, `"*.*"`, or `"A:"`). |
-| `struct dirent *readdir(DIR *dirp)` | Next entry, or `NULL` at the end. |
+| `DIR *opendir(const char *path)` | Begin a scan. `"."`, `"*.*"`, and a bare `"A:"` enumerate every file; a specific pattern (`"*.C"`, `"T?.TMP"`) filters the scan the same way `unlink()` does. |
+| `struct dirent *readdir(DIR *dirp)` | Next matching entry, or `NULL` at the end. |
 | `int closedir(DIR *dirp)` | End the scan. |
 
 `struct dirent` has a single member, `char d_name[13]`, holding the 8.3 name.
@@ -82,6 +82,165 @@ The standard-library reference now has dedicated pages for
 [assertions](standard-lib/01-assert.md). The CP/M file runtime uses `errno` for
 file-related failures, and `assert` writes its diagnostic through `stderr` before
 terminating with `exit(1)`.
+
+## File I/O and CP/M BDOS conventions
+
+CP/M 2.2's BDOS file model is much simpler than POSIX/C89 assume, and DCCRTL's
+`fopen`/`read`/`write`/etc. are built directly on it rather than emulating a
+richer filesystem underneath. The differences below aren't DCCRTL bugs — they
+follow from what BDOS itself can express — but they can surprise code ported
+from a hosted C library. Every point here has been cross-checked against
+several independent CP/M emulators (ntvcm, tnylpo, cpmemu, zxcc, iz-cpm,
+z88dk's cpm, RunCPM, and Takeda Toshiya's cpm.exe) and, where noted, differs
+between them.
+
+### File length is tracked in 128-byte records, not bytes
+
+CP/M has no byte-granular length field; a directory entry only knows how many
+128-byte records a file occupies. A file whose true length isn't a multiple of
+128 is still stored as a whole number of records, and the untouched tail of the
+last record — the padding between the real data and the record boundary — is
+written as Ctrl-Z (0x1A) bytes when that record is first created (there's no
+"old data" to merge a partial write with). That padding is genuine, readable,
+on-disk data: `fread()` isn't bounded by the tracked length the way a POSIX
+`read()` would be, so a large-enough `fread()` on a short file can return the
+trailing 0x1A padding right along with the real bytes, even though `ftell()`
+reports the shorter, record-rounded length. This is deliberately left as
+documented behavior rather than "fixed" by trimming the tracked length at the
+runtime level — doing that breaks the classic CP/M convention (used by real
+programs, and by this repo's own `fileops.c` test) of writing a single
+trailing Ctrl-Z as the real end-of-text-file marker, which is indistinguishable
+on disk from unwritten padding. See `tests/tpadread.c` for a worked repro and
+`tests/tctrlz.c` for the Ctrl-Z-as-text-EOF convention in `fgets`/`fread`.
+
+Practical implications:
+
+- Don't assume `fread(buf, 1, sizeof(buf), f)` stops exactly at a text file's
+  logical end; check for the file's own EOF convention (Ctrl-Z) if you rely on
+  padding not leaking into the buffer.
+- `ftell()`/`fseek(f, 0, SEEK_END)` report the record-rounded length, not
+  necessarily the exact byte count your program last wrote.
+- `fopen(path, "a")`'s append position is computed by scanning the last record
+  backward for a run of trailing Ctrl-Z bytes and starting the append right
+  after the real data, so appending doesn't itself introduce fresh padding
+  in the middle of a file — but a pre-existing trailing Ctrl-Z written as real
+  text-EOF data can still shift where "end" is judged to be, same caveat as
+  above.
+
+### Record-count overflow at exactly 8 MB
+
+BDOS function 35 (compute file size) returns the record count in a 16-bit
+register pair. CP/M 2.2's own maximum file size, 8 MB, is exactly 65536
+records — one past what a 16-bit count can represent — so an exactly-8-MB file
+reports a record count of 0, which looks like an empty file if read naively.
+DCCRTL treats this as the one legitimate reason `__fdlen` can be genuinely
+larger than what a raw record-count register pair reported; see `tests/tbig.c`
+for sequential and random I/O across that boundary.
+
+### Only search (fn 17/18) and delete (fn 19) officially support wildcards
+
+Per the documented CP/M 2.2 Interface Guide, `?` in an FCB byte means "match
+any character in this position" — but only for `opendir`/`readdir` (BDOS 17/18,
+search first/next) and `unlink` (BDOS 19, delete). `fopen`/`open` (BDOS 15,
+open), `fopen(path, "w")`/`fopen(path, "a")`-on-a-new-file (BDOS 22, make), and
+`rename` (BDOS 23) are silent on the subject — the spec never promises
+anything for an ambiguous FCB passed to them, and behavior there is either
+implementation-defined or deliberately blocked at the DCCRTL level (see below).
+
+`__mkfcb` passes a `?` through unchanged, matching real BDOS wildcard
+semantics: `unlink("WA?.TMP")` deletes **every** file the pattern matches, not
+just one (`WA1.TMP`, `WA2.TMP`, and `WA3.TMP` all at once, for example), and
+`opendir("T?.TMP")`/`readdir()` filters to exactly the files that match. There
+is no way to single out one file once a wildcard character is present. See
+`tests/twild.c` and `tests/tdirpat.c`.
+
+A literal `*`, unlike `?`, has no meaning to BDOS itself — only `?` is a real
+wildcard at the BDOS level. The familiar shell-glob convention where `*`
+matches any run of characters is implemented by the CCP's own command-line
+parser (and by virtually every historic CP/M C runtime library), which expands
+`*` by filling the rest of the current field with `?` before the FCB ever
+reaches BDOS. `__mkfcb` does the same: a `*` in the name or extension fills
+the remainder of that field with `?`, so `unlink("*.BAK")`,
+`opendir("*.C")`, etc. behave the way C code typically expects, consistently
+across every DCCRTL target rather than only on hosts whose emulator happens to
+do its own glob expansion. See `tests/tstar.c`.
+
+`rename()` with an ambiguous FCB (either the old or new name) is rejected
+outright (nonzero return, nothing renamed) — this is correct, spec-compliant
+behavior, not a limitation worth working around. (CP/M 2.2's own BDOS source
+technically loops over ambiguous *old*-name matches the same way delete does,
+but that's undocumented, and it would just copy the new name's bytes verbatim
+— `?` and all — into every match, producing garbage entries rather than any
+kind of sensible template substitution; no tested BDOS implementation actually
+does this.) See `tests/trenwild.c`.
+
+`fopen()`/`open()` for **reading** an ambiguous name is genuinely
+implementation-defined: real BDOS's open call happens to reuse the same
+directory-search primitive delete uses internally, with no explicit check
+against an ambiguous FCB, so on some implementations it silently opens
+whatever the first matching directory entry happens to be, while others
+reject it outright. Don't rely on this either way. See `tests/tfopenw.c`.
+
+`fopen()`/`open()` for **creating** a file (`"w"`, or `"a"` on a file that
+doesn't exist yet) is different: DCCRTL explicitly rejects a `?` or `*` in the
+parsed name/ext before making any BDOS call at all, returning failure (`NULL`
+from `fopen`, `-1` from `open`, `errno = EINVAL`). BDOS's make call never
+validates the FCB it's given — it just copies it into an empty directory slot
+— so letting a wildcard through would silently create a real, permanent file
+whose name contains that literal character, and such a file can never again be
+matched by a wildcard-aware `unlink()`/`opendir()` scan (which correctly treat
+`?`/`*` as pattern characters, not literal ones). Rejecting it up front avoids
+creating a file with no portable way to clean it back up. See
+`tests/tmakewc.c`.
+
+### `rename()` onto an existing (unambiguous) destination name
+
+This is a separate case from the ambiguous-FCB one above: both names are
+ordinary, unambiguous filenames, but the destination already exists as its
+own file. Real BDOS (confirmed against its own source) doesn't check for
+this at all — it just overwrites the matched entry's name/extension bytes
+with the new name, with no awareness that another directory entry already
+has that name. On real hardware that leaves **two** directory entries
+sharing one name, and which one a later `open()` finds is undefined.
+
+No emulator that maps CP/M files onto real host files can reproduce that:
+POSIX and Windows filesystems both refuse two directory entries with the
+same name, so every emulator is forced to collapse this into a single
+winner, one way or the other — there's no hardware-faithful option
+available at all, on any host. Emulators split on which winner they pick:
+ntvcm, cpmemu, zxcc, and z88dk's cpm overwrite the destination (nonzero
+return means failure — 0 means the destination now holds the source's old
+content and the source name is gone); tnylpo and cpm.exe reject the rename
+outright instead (nonzero return, original name and content untouched).
+Neither is "more correct." If your program cares which way this goes, check
+`rename()`'s return value and/or `unlink()` the destination first rather
+than relying on either outcome. See `tests/trenamex.c`.
+
+### Drive-letter prefixes
+
+`fopen("A:FILE.TXT", ...)` and similar are supported: a leading `A`-`P`
+(case-insensitive) followed by `:` is parsed into the FCB's drive byte, and the
+rest of the name follows normal 8.3 rules. There is no directory/path concept
+beyond this single-letter drive prefix — CP/M has no subdirectories at all (see
+[`dirent.h`](#direnth--directory-enumeration) above).
+
+### 8.3 filenames and truncation collisions
+
+Every filename is 8 characters plus a 3-character extension, uppercased, with
+no further validation. A longer host-supplied or generated name is silently
+truncated to fit; two different names that happen to truncate to the same 8.3
+form collide and refer to the same underlying CP/M file, with no error raised
+at creation time. See `tests/tlongfn.c`.
+
+### No atomic append, no `O_APPEND`-style write positioning
+
+BDOS has no equivalent of POSIX's `O_APPEND` (every write goes to wherever the
+FCB's current record pointer is, and nothing serializes that against other
+processes). `fopen(path, "a")` computes the append position once, at open
+time; it does not re-seek to end before every subsequent write the way a true
+`O_APPEND` descriptor would if another process extended the file in between.
+Programs that share or alternate writes to the same file across processes must
+coordinate at a higher level.
 
 ## CP/M extensions
 

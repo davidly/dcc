@@ -126,11 +126,16 @@ static void test_time(void)
     c = clock();
     CHECK(c == (clock_t)-1, "clock -1");
 
+    /* time() now reads a real clock via BDOS 105 where the underlying
+     * system implements it (see time.h), so its result is environment-
+     * dependent: either (time_t)-1 (no clock) or a plausible Unix epoch. */
     t = time(NULL);
-    CHECK(t == (time_t)-1, "time NULL -1");
+    CHECK(t == (time_t)-1 || (t > 1577836800L && t < 2147483647L),
+          "time NULL -1 or plausible");
 
     t = time(&t);
-    CHECK(t == (time_t)-1, "time ptr -1");
+    CHECK(t == (time_t)-1 || (t > 1577836800L && t < 2147483647L),
+          "time ptr -1 or plausible");
 
     CHECK(mktime(NULL) == (time_t)-1, "mktime -1");
     CHECK(asctime(NULL) == NULL, "asctime NULL");

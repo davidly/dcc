@@ -1,0 +1,4 @@
+PASS rename_reports_success: 1
+PASS source_name_gone: 0
+PASS destination_has_source_content: 1
+trenamex ok

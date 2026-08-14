@@ -1,0 +1,5 @@
+readback after first append: [1234567890ABCDE]
+PASS append_result: [1234567890ABCDE]
+readback after second append: [1234567890ABCDEZ]
+PASS second_append_result: [1234567890ABCDEZ]
+tappend ok

@@ -67,8 +67,10 @@ start:
         jr      c,mem_low       ; SP < __stack_size: underflow, TPA too small
         ld      (__hlimit),hl   ; commit __hlimit (validated just below)
         ld      de,__hstart
-        or      a
-        sbc     hl,de           ; carry iff candidate __hlimit < __hstart
+        sbc     hl,de           ; carry iff candidate __hlimit < __hstart; carry
+                                 ; is already 0 here from the "jr c,mem_low" not
+                                 ; taken above, and no flag-affecting instruction
+                                 ; runs in between
         jr      nc,mem_ok       ; __hlimit >= __hstart: enough room
 mem_low:
         ld      de,mem_low_msg
@@ -87,8 +89,10 @@ mem_ok:
         ; Zero BSS (C89: uninitialized globals must be zero at startup)
         ld      hl,__bsse
         ld      de,__bssb
-        or      a
-        sbc     hl,de           ; HL = __bsse - __bssb = BSS length
+        sbc     hl,de           ; HL = __bsse - __bssb = BSS length; carry is
+                                 ; already 0 here (mem_ok: is reached only via
+                                 ; "jr nc,mem_ok" above, and nothing in between
+                                 ; touches flags)
         ld      b,h
         ld      c,l
         ld      a,b
@@ -273,11 +277,10 @@ __argbuf:
 ;                            before stdin input, or at program exit;
 ;                1 (_IOLBF)  additionally flush at each newline (the default);
 ;                2 (_IONBF)  flush after every character.
-; Preserves all registers except F (callers rely on this).
+; Preserves BC/DE/HL; clobbers A and F (no caller depends on either surviving).
         public  __conout
 COBSZ   equ     128
 __conout:
-        push    af
         push    bc
         push    de
         push    hl
@@ -305,7 +308,6 @@ co_ret:
         pop     hl
         pop     de
         pop     bc
-        pop     af
         ret
 
 ; __cob_put: append the character in A to the console buffer; flush if it is
@@ -421,8 +423,7 @@ __cobuf:
 __pchr:
         ; IX-free argument setup; caller still cleans the argument.
         pop     bc              ; return address
-        pop     hl              ; character
-        push    hl              ; restore argument
+        ex      (sp),hl         ; HL = character
         push    bc
         ld      e,l
         call    __conout
@@ -497,8 +498,7 @@ _clearerr:
         ; void clearerr(FILE *fp)
         ; Clear the EOF and error indicators for this stream's slot.
         pop     bc              ; return address
-        pop     hl              ; fp
-        push    hl              ; restore argument
+        ex      (sp),hl         ; HL = fp
         push    bc
         ld      a,l
         sub     FIRSTFD
@@ -564,8 +564,9 @@ sb_ret:
 _setvbuf:
         ; int setvbuf(FILE *fp, char *buf, int mode, size_t size)
         ; mode: _IOFBF(0)/_IOLBF(1)/_IONBF(2).  Returns 0 on success, nonzero
-        ; for an invalid mode.  When buf is non-NULL and size >= 2 the caller's
-        ; buffer is adopted for console output (capacity = size-1, reserving
+        ; for an invalid mode (errno = EINVAL).  When buf is non-NULL and
+        ; size >= 2 the caller's buffer is adopted for console output
+        ; (capacity = size-1, reserving
         ; one guard byte); otherwise the internal buffer is used.
         push    ix
         ld      ix,0
@@ -606,6 +607,7 @@ svb_noop:
         pop     ix
         ret
 svb_bad:
+        call    __einval
         ld      hl,0ffffh               ; nonzero: invalid mode
         pop     ix
         ret
@@ -641,8 +643,7 @@ __cobdflt:
 _strerror:
         ; char *strerror(int errnum)
         pop     bc              ; return address
-        pop     hl              ; errnum
-        push    hl              ; restore argument
+        ex      (sp),hl         ; HL = errnum
         push    bc
         ld      a,l
         cp      ENOENT
@@ -1150,8 +1151,7 @@ __bios_dispatch:
         public  _inp
 _inp:
         pop     bc              ; return address
-        pop     hl              ; port
-        push    hl              ; restore argument
+        ex      (sp),hl         ; HL = port
         push    bc
         ld      a,l
         ld      (inp_prt),a
@@ -1193,8 +1193,7 @@ __slen:
         ; otherwise get a __slen stub truncated at the label boundary,
         ; falling through into whatever public symbol happens to follow.
         pop     bc              ; return address
-        pop     hl              ; HL = s
-        push    hl              ; restore caller argument for caller cleanup
+        ex      (sp),hl         ; HL = s
         push    bc              ; restore return address
         jr      __slf
 
@@ -1206,8 +1205,9 @@ __slf:
         ld      d,h             ; DE = original s
         ld      bc,0ffffh
         xor     a
-        cpir
-        or      a
+        cpir                    ; carry is unaffected by cpir and was already
+                                 ; cleared by "xor a" above, so sbc below is a
+                                 ; clean subtract without an "or a" to re-clear it
         sbc     hl,de           ; bytes scanned including NUL
         dec     hl
         ret
@@ -1236,8 +1236,7 @@ __scpy:
         ; IX-free entry. Preserve the caller-cleanup argument layout.
         pop     bc              ; return address
         pop     de              ; DE = dst
-        pop     hl              ; HL = src
-        push    hl              ; restore src
+        ex      (sp),hl         ; HL = src
         push    de              ; restore dst
         push    bc              ; restore return address
         ld      b,d
@@ -1260,8 +1259,7 @@ __scmp:
         ; IX-free entry. Preserve the caller-cleanup argument layout.
         pop     bc              ; return address
         pop     de              ; DE = s1
-        pop     hl              ; HL = s2
-        push    hl              ; restore s2
+        ex      (sp),hl         ; HL = s2
         push    de              ; restore s1
         push    bc              ; restore return address
 sp1:
@@ -1306,8 +1304,7 @@ __sicm:
         ; layout above.
         pop     bc              ; return address
         pop     de              ; DE = s1
-        pop     hl              ; HL = s2
-        push    hl              ; restore s2
+        ex      (sp),hl         ; HL = s2
         push    de              ; restore s1
         push    bc              ; restore return address
 sicm_core:
@@ -1462,8 +1459,7 @@ __sstr:
         ; needle[0], almost all fail at needle[1].
         pop     bc              ; return address
         pop     de              ; DE = haystack
-        pop     hl              ; HL = needle
-        push    hl              ; restore caller arguments for caller cleanup
+        ex      (sp),hl         ; HL = needle
         push    de
         push    bc              ; restore return address
 sstr_core:
@@ -1645,8 +1641,7 @@ __scat:
         ; IX-free entry. Preserve the caller-cleanup argument layout.
         pop     bc              ; return address
         pop     de              ; DE = dst
-        pop     hl              ; HL = src
-        push    hl              ; restore src
+        ex      (sp),hl         ; HL = src
         push    de              ; restore dst
         push    bc              ; restore return address
         ld      b,d
@@ -1894,10 +1889,10 @@ __sdup:
         inc     hl
         ld      (__sdup_len),hl
 
-        ; malloc(len)
-        push    hl
-        call    _malloc
-        pop     bc              ; clean malloc arg
+        ; malloc(len) via __mlh (fastcall entry: HL = size in, HL = ptr
+        ; out) - HL is already the length, so no push/pop needed at all,
+        ; unlike the general _malloc entry this used to call.
+        call    __mlh
 
         ; If malloc failed, return NULL.
         ld      a,h
@@ -2691,8 +2686,7 @@ __sdm_done:
 _abs:
         ; int abs(int j)
         pop     bc              ; return address
-        pop     hl              ; j
-        push    hl              ; restore argument
+        ex      (sp),hl         ; HL = j
         push    bc
         bit     7,h
         ret     z
@@ -3022,8 +3016,7 @@ qs_inner:
         ; pprev = pj - gapb
         ld      hl,(__qs_pj)
         ld      de,(__qs_gapb)
-        or      a
-        sbc     hl,de
+        sbc     hl,de           ; carry already 0 (fell through "jr c,qs_idone" above)
         ld      (__qs_pprev),hl
         ; compare(pprev, pj): push pj (b), push pprev (a)
         ld      hl,(__qs_pj)
@@ -3805,7 +3798,7 @@ pf_pct_prec_loop:
 pf_pct_prec_done:
         ; A = format specifier char, HL points to it (not yet consumed)
         inc     hl
-        jp      pf_pct_done_width
+        jr      pf_pct_done_width ; peep: jp_to_jr
 
 pf_pct_z:
         ld      a,(hl)
@@ -5014,8 +5007,8 @@ pf_f_done:
         ld      hl,(pf_bufptr)
         ld      (hl),0
         ld      de,pf_fwbuf
-        or      a
-        sbc     hl,de           ; HL = length
+        sbc     hl,de           ; HL = length; carry already 0 (the "or a" that
+                                 ; tested pf_width above already cleared it)
         ld      a,l
 
         ; Restore the real sink/bufptr now that the length is captured.
@@ -5549,8 +5542,7 @@ __pfeoc:
         public  _exit
 _exit:
         pop     bc                      ; return address
-        pop     hl                      ; exit code
-        push    hl                      ; restore caller-cleanup argument
+        ex      (sp),hl         ; HL = exit code
         push    bc                      ; restore return address
         push    hl                      ; save exit code across hooks + flush
         ; Call atexit handlers (LIFO) if any were registered.
@@ -5834,8 +5826,7 @@ _atoi:
         ; Leaf parser: fetch nptr without an IX frame and restore the
         ; caller-cleanup stack before parsing.
         pop     bc                      ; return address
-        pop     hl                      ; nptr
-        push    hl
+        ex      (sp),hl         ; HL = nptr
         push    bc
         ld      de,0
         ld      b,0
@@ -5905,8 +5896,7 @@ _atol:
         ; The implementation already uses private scratch state, so the IX
         ; frame served only to fetch nptr.
         pop     bc                      ; return address
-        pop     hl                      ; nptr
-        push    hl
+        ex      (sp),hl         ; HL = nptr
         push    bc
         ld      (__atl_p),hl            ; string pointer
         ld      hl,0
@@ -6026,8 +6016,7 @@ _atof:
         ; All parser state is already private static storage; avoid an IX
         ; frame that was used only to load nptr.
         pop     bc                      ; return address
-        pop     hl                      ; nptr
-        push    hl
+        ex      (sp),hl         ; HL = nptr
         push    bc
         ld      (__atf_p),hl
         ld      (__atf_orig),hl
@@ -6234,7 +6223,7 @@ atf_mant_done:
         ld      (__atf_p),hl            ; endptr = original nptr
         ld      hl,0
         ld      de,0
-        jp      atf_ret
+        ret ; peep: jp_to_plain_ret
 atf_md_go:
         ld      a,b                     ; restore current char
         ; a = current char; check for e/E exponent
@@ -6612,18 +6601,67 @@ opclr:
         call    __mkfcb
         pop     de
 
+        ; Reject a wildcard character ('?' or '*') in the parsed name/ext
+        ; whenever this open could create a new directory entry (O_CREAT or
+        ; O_TRUNC - "w" or "a"). BDOS make (fn 22) never validates the FCB;
+        ; it just copies it into an empty directory slot, so letting a
+        ; wildcard through would silently create a real, permanent file
+        ; whose name contains that literal byte - and since delete/search
+        ; (fn 19/17/18) correctly treat '?'/'*' as pattern characters, not
+        ; literal ones, such a file can never be matched/deleted again
+        ; through the normal wildcard-aware path. Plain "r" mode (opexist
+        ; below) is intentionally left unchecked: CP/M's own spec never
+        ; promises anything for an ambiguous FCB passed to open, so that
+        ; case is left as documented, implementation-defined behavior
+        ; rather than a new restriction.
+        bit     1,(ix+7)
+        jr      nz,opwscn       ; O_TRUNC set: check
+        bit     6,(ix+6)
+        jr      z,opnowc        ; neither set ("r"): no create risk, skip
+opwscn:
+        ld      h,d
+        ld      l,e
+        inc     hl              ; HL = fcb+1 (name field)
+        ld      b,11
+opwsc1:
+        ld      a,(hl)
+        cp      '?'
+        jr      z,opwbad
+        cp      '*'
+        jr      z,opwbad
+        inc     hl
+        djnz    opwsc1
+opnowc:
+
         ; Create/truncate only if O_CREAT or O_TRUNC is set.
         ; Test uses:
         ;   O_CREAT = 0100 octal = 0040h
         ;   O_TRUNC = 01000 octal = 0200h
         ;   O_RDWR  = 2, which must NOT truncate.
-        ld      a,(ix+6)
-        and     40h             ; O_CREAT low byte
-        jr      nz,opmake
-        ld      a,(ix+7)
-        and     2               ; O_TRUNC high byte
-        jr      nz,opmake
+        bit     1,(ix+7)        ; O_TRUNC high byte
+        jr      nz,opmake       ; "w": always delete + recreate
 
+        bit     6,(ix+6)        ; O_CREAT low byte
+        jr      z,opexist       ; neither set ("r"): must already exist
+
+        ; O_CREAT without O_TRUNC ("a"): per C89 7.9.5.3, appended output
+        ; must go after any existing content, not overwrite it - so if the
+        ; file is already there, keep it and position at its end rather
+        ; than falling into opmake's unconditional delete+recreate (which
+        ; is correct only for "w"/O_TRUNC, and used to also run for "a").
+        ; Nothing to delete when creating fresh, so that path skips
+        ; straight to fn 22 via opmake_new.
+        push    de
+        ld      c,15            ; open existing
+        call    5
+        pop     de
+        cp      0ffh
+        jr      z,opmake_new    ; doesn't exist yet: create fresh
+        call    __rdsz          ; capture the real length
+        call    __apseek        ; position the offset at end-of-file
+        jr      opok
+
+opexist:
         ld      c,15            ; open existing
         call    5
         cp      0ffh
@@ -6637,6 +6675,7 @@ opmake:
         ld      c,19            ; delete old, ignore status
         call    5
         pop     de
+opmake_new:
         ld      c,22            ; make new
         call    5
         cp      0ffh
@@ -6655,6 +6694,9 @@ opfail_noent:
         jr      opfail_common
 opfail_nospc:
         call    __nospc
+        jr      opfail_common
+opwbad:
+        call    __einval
 opfail_common:
         ld      a,(__slot)
         call    __usep
@@ -6746,8 +6788,7 @@ _unlink:
         ; once (immediately, via __mkfcb) and never needed again; IX-free
         ; leaf.
         pop     bc              ; return address
-        pop     hl              ; path
-        push    hl
+        ex      (sp),hl         ; HL = path
         push    bc
 
         ; Zero the scratch FCB (drive + 8-char name + 3-char ext = 12 bytes)
@@ -7279,11 +7320,176 @@ __lenp:
         add     hl,de
         ret
 
+; Positions a freshly (re)opened existing file at end-of-file for _open's
+; "a" (append) path, per C89 7.9.5.3. __fdlen[__slot] must already be
+; current (call __rdsz first) - but __rdsz deliberately only stores the
+; record-rounded length (see its own comment on why), so this does its
+; own narrower trim scoped to just the append starting position: read the
+; last record and count the *trailing* run of 0x1A bytes back from its
+; end (the classic CP/M C runtime convention - __zerdm pads any
+; partial-record write's untouched tail with Ctrl-Z specifically so this
+; is recoverable), then position __fdoff[__slot] at record-rounded-length
+; minus that count instead of at the raw record boundary. A trailing run
+; (not just "any 0x1A anywhere") is deliberate - it leaves an embedded,
+; non-trailing 0x1A (real data in the middle of a record, as in
+; tctrlz.c) alone, only stripping padding actually at the tail.
+; __fdlen itself is never touched here - unlike this one append-
+; positioning use, ftell()/fread() must keep reporting/serving the
+; record-rounded view (see __rdsz's comment on why trimming there breaks
+; existing software that does its own explicit ^Z scan on top of it).
+__apseek:
+        call    __lenp          ; HL -> __fdlen[slot]
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        inc     hl
+        ld      c,(hl)
+        inc     hl
+        ld      b,(hl)          ; BCDE = 32-bit record-rounded length, E=lsb
+
+        ld      a,b
+        or      c
+        or      d
+        or      e
+        jr      z,apseek_setoff ; length 0: nothing to trim, offset = 0
+
+        push    bc
+        push    de              ; save the untrimmed length for later
+
+        ; length-128 (always safe: length is a nonzero multiple of 128,
+        ; so this never underflows) is the start of the last record -
+        ; temporarily park it in __fdoff so __setrr can position the FCB
+        ; there for the read below.
+        ld      a,e
+        sub     128
+        ld      e,a
+        ld      a,d
+        sbc     a,0
+        ld      d,a
+        ld      a,c
+        sbc     a,0
+        ld      c,a
+        ld      a,b
+        sbc     a,0
+        ld      b,a
+
+        push    bc
+        push    de
+        call    __offp
+        pop     de
+        pop     bc
+        ld      (hl),e
+        inc     hl
+        ld      (hl),d
+        inc     hl
+        ld      (hl),c
+        inc     hl
+        ld      (hl),b
+
+        call    __setrr
+
+        ld      de,__dma
+        ld      c,26            ; set DMA
+        call    5
+        ld      a,(__slot)
+        call    __fcbp
+        ex      de,hl
+        ld      c,33            ; random read
+        call    5
+        ld      e,a             ; stash read status (DE's FCB-address use is done)
+
+        ; The read clobbers whatever the shared read-sector cache thought
+        ; was resident; invalidate it rather than leave it pointing at
+        ; data that's no longer really there.
+        xor     a
+        ld      (__rdcv),a
+
+        ld      a,e             ; restore read status
+        or      a
+        jr      z,apseek_doscan ; read succeeded: trim the trailing padding
+
+        ; Read failed: fall back to the full record-rounded length -
+        ; never overwrites real data, just doesn't trim to the exact end.
+        pop     de
+        pop     bc
+        jr      apseek_write
+
+apseek_doscan:
+        ld      hl,__dma+127
+        ld      b,0
+apseek_scan:
+        ld      a,(hl)
+        cp      1ah
+        jr      nz,apseek_scandone
+        inc     b
+        ld      a,b
+        cp      128
+        jr      z,apseek_scandone
+        dec     hl
+        jr      apseek_scan
+apseek_scandone:
+        ; B holds the trailing 0x1A count (0-128) here - subtract it from
+        ; the saved untrimmed length's low word (E) while B still holds
+        ; it, before popping BC clobbers B with the length's high word.
+        pop     de              ; DE = untrimmed length, low word
+        ld      a,e
+        sub     b
+        ld      e,a
+        ld      a,d
+        sbc     a,0
+        ld      d,a             ; DE = trimmed low word; borrow in carry
+        pop     bc              ; BC = untrimmed length, high word
+        ld      a,c
+        sbc     a,0
+        ld      c,a
+        ld      a,b
+        sbc     a,0
+        ld      b,a             ; BCDE = final trimmed length
+
+apseek_write:
+        push    bc
+        push    de
+        call    __offp
+        pop     de
+        pop     bc
+        ld      (hl),e
+        inc     hl
+        ld      (hl),d
+        inc     hl
+        ld      (hl),c
+        inc     hl
+        ld      (hl),b
+        ret
+
+apseek_setoff:
+        call    __offp
+        xor     a
+        ld      (hl),a
+        inc     hl
+        ld      (hl),a
+        inc     hl
+        ld      (hl),a
+        inc     hl
+        ld      (hl),a
+        ret
+
 ; Query BDOS fn 35 (compute file size) for __slot's FCB, convert the
 ; record count to a byte length, and store it in __fdlen[__slot]. Only
 ; accurate for a file whose directory entry is up to date - i.e. right
 ; after opening an existing (previously closed) file, which is the only
 ; place this is called from.
+;
+; Deliberately just the record-rounded length (record_count*128), not
+; trimmed for trailing Ctrl-Z padding: CP/M's own directory only tracks
+; whole records, and existing software (see fileops.c's cpm_filelen
+; helper) already does its own trailing-^Z scan on top of this exact
+; convention to recover exact text-file length - a single genuine
+; trailing ^Z byte the program wrote as real data is indistinguishable
+; on disk from __zerdm's own unwritten-tail padding, so trimming here
+; unconditionally would silently eat real data other code expects to see
+; (confirmed against fileops.c). __apseek does its own narrower,
+; single-purpose trim scan for the one place this matters (positioning
+; "a" mode's append point) instead of changing this shared length.
 __rdsz:
         ld      a,(__slot)
         call    __fcbp
@@ -7553,15 +7759,56 @@ mfspc:
         djnz    mfspc
         pop     hl
 
+        ; A single letter followed by ':' is a drive prefix (e.g. "A:" or
+        ; "b:"). BDOS FCB drive byte is 1-based (1=A, 2=B, ... 16=P), 0
+        ; meaning "default/current drive" (already what's stored above).
+        ; Recognize and consume it here so a prefixed path still resolves
+        ; the same file a bare name would - without this, the letter and
+        ; colon were previously copied as literal (and for the colon,
+        ; invalid) FCB name bytes, addressing a garbled filename instead
+        ; of the named drive at all.
+        ld      a,(hl)
+        or      a
+        jr      z,mfnoprefix    ; empty string: nothing to check
+        inc     hl
+        ld      a,(hl)
+        dec     hl
+        cp      ':'
+        jr      nz,mfnoprefix
+        ld      a,(hl)
+        call    __upa
+        cp      'A'
+        jr      c,mfnoprefix
+        cp      'P'+1
+        jr      nc,mfnoprefix
+        sub     'A'-1           ; 1=A, 2=B, ... 16=P
+        push    hl
+        ld      hl,(__mffcb)
+        ld      (hl),a
+        pop     hl
+        inc     hl
+        inc     hl              ; skip past "X:"
+mfnoprefix:
+
         ld      de,(__mffcb)
         inc     de              ; name field
         ld      b,8
+        ; '?' is a real BDOS wildcard and is passed through unchanged
+        ; (matches genuine CP/M semantics - see search/delete). '*' has no
+        ; meaning to BDOS itself; only the CCP's own filename parser (and
+        ; virtually every historic CP/M C runtime) expands it to fill the
+        ; rest of the current field with '?'. Do the same here so C-level
+        ; callers get the shell-glob-style "*" behavior they expect,
+        ; consistently across every emulator rather than only the ones
+        ; that happen to do their own host-level glob expansion.
 mfnam:
         ld      a,(hl)
         or      a
         ret     z
         cp      '.'
         jr      z,mfdot
+        cp      '*'
+        jr      z,mfnmst
         call    __upa
         ld      (de),a
         inc     de
@@ -7575,6 +7822,13 @@ mfskp:
         jr      z,mfdot
         inc     hl
         jr      mfskp
+mfnmst:
+        ld      a,'?'
+mfnmfl:
+        ld      (de),a
+        inc     de
+        djnz    mfnmfl
+        jr      mfskp           ; skip any trailing source chars up to '.'
 mfdot:
         inc     hl
         push    hl
@@ -7588,11 +7842,20 @@ mfext:
         ld      a,(hl)
         or      a
         ret     z
+        cp      '*'
+        jr      z,mfexst
         call    __upa
         ld      (de),a
         inc     de
         inc     hl
         djnz    mfext
+        ret
+mfexst:
+        ld      a,'?'
+mfexfl:
+        ld      (de),a
+        inc     de
+        djnz    mfexfl
         ret
 
 __upa:
@@ -7771,8 +8034,7 @@ __dma:
         public  _srand
 _srand:
         pop     de          ; return address
-        pop     hl          ; seed
-        push    hl          ; preserve caller cleanup convention
+        ex      (sp),hl         ; HL = seed
         push    de
         ld      (__rand_state),hl
         ret
@@ -8059,8 +8321,8 @@ __mmu_loop:
                                   ; and (mod-65536 wraparound) HL - m already
                                   ; equals the correct reduced value
         ld      bc,(__mmu_m)
-        or      a
-        sbc     hl,bc            ; trial acc-m
+        sbc     hl,bc            ; trial acc-m; carry already 0 (fell through
+                                 ; "jr c,__mmu_dbl_ge" above)
         jr      nc,__mmu_dbl_done  ; >= m: keep reduced value
         add     hl,bc            ; < m: undo, keep acc as-is
         jr      __mmu_dbl_done
@@ -8076,8 +8338,7 @@ __mmu_dbl_done:
         add     hl,bc            ; acc += a0
         jr      c,__mmu_add_ge
         ld      bc,(__mmu_m)
-        or      a
-        sbc     hl,bc
+        sbc     hl,bc           ; carry already 0 (fell through "jr c,__mmu_add_ge" above)
         jr      nc,__mmu_no_add
         add     hl,bc
         jr      __mmu_no_add
@@ -8458,8 +8719,8 @@ ldqr_bit:
         sla     a                       ; dividend bit7 -> carry; bit0 = 0 (quotient slot)
         adc     hl,hl                   ; HL = (HL<<1) | bit; carry = 16-bit overflow
         jr      c,ldqr_sub1             ; overflow: must subtract, quotient bit = 1
-        or      a                       ; clear carry (leaves A unchanged)
-        sbc     hl,de                   ; trial HL -= divisor
+        sbc     hl,de                   ; trial HL -= divisor; carry already 0
+                                         ; (fell through "jr c,ldqr_sub1" above)
         jr      nc,ldqr_one1            ; HL >= divisor: keep, quotient bit = 1
         add     hl,de                   ; restore: HL < divisor, quotient bit = 0
         jr      ldqr_cont1
@@ -8472,8 +8733,8 @@ ldqr_cont1:
         sla     a                       ; dividend bit7 -> carry; bit0 = 0 (quotient slot)
         adc     hl,hl                   ; HL = (HL<<1) | bit; carry = 16-bit overflow
         jr      c,ldqr_sub              ; overflow: must subtract, quotient bit = 1
-        or      a                       ; clear carry (leaves A unchanged)
-        sbc     hl,de                   ; trial HL -= divisor
+        sbc     hl,de                   ; trial HL -= divisor; carry already 0
+                                         ; (fell through "jr c,ldqr_sub" above)
         jr      nc,ldqr_one             ; HL >= divisor: keep, quotient bit = 1
         add     hl,de                   ; restore: HL < divisor, quotient bit = 0
         jr      ldqr_cont
@@ -8927,8 +9188,7 @@ _malloc:
         ; IX-free single-argument wrapper.  Restore the caller-cleanup stack
         ; before entering the register-ABI allocator helper.
         pop     bc              ; return address
-        pop     hl              ; requested size
-        push    hl
+        ex      (sp),hl         ; HL = requested size
         push    bc
         call    __mlh
         ret
@@ -9032,8 +9292,7 @@ rl_have_ptr:
         ; Round up to even (0 stays 0, so the realloc(ptr,0) check below
         ; still sees the caller's true zero), matching __mlh's own header
         ; format - see __wr_hf's header comment.
-        ld      a,l
-        and     1
+        bit     0,l
         jr      z,rl_sz_even
         inc     hl
         ld      a,h
@@ -9151,8 +9410,7 @@ rl_try_grow:
         ld      e,(hl)
         inc     hl
         ld      d,(hl)                  ; DE = next block's packed size
-        ld      a,e
-        and     1
+        bit     0,e
         jp      z,rl_do_alloc           ; next block is used
         ld      a,e
         and     0feh
@@ -9196,12 +9454,12 @@ rl_try_grow_top:
         jp      c,rl_do_alloc           ; address wrap -> cannot grow here
         push    hl
         ld      de,(__hlimit)
-        or      a
-        sbc     hl,de                   ; new_end - hlimit
+        sbc     hl,de                   ; new_end - hlimit; carry already 0
+                                         ; (fell through "jp c,rl_do_alloc" above)
         pop     hl                      ; HL = new_end
         jr      c,rl_grow_ok            ; new_end < hlimit
         jr      z,rl_grow_ok            ; new_end == hlimit
-        jp      rl_do_alloc             ; would overflow the heap limit
+        jr      rl_do_alloc ; peep: jp_to_jr
 rl_grow_ok:
         ld      (__brk),hl              ; extend heap to the new end
         ld      hl,(__rl_old)
@@ -9269,8 +9527,7 @@ __rl_thdr:      dw      0
 _free:
         ; void free(void *ptr) - single pointer argument; IX-free leaf.
         pop     bc
-        pop     hl              ; HL = ptr
-        push    hl
+        ex      (sp),hl         ; HL = ptr
         push    bc
         call    __frcoal        ; mark free + coalesce neighbours (handles NULL)
         ret
@@ -9318,8 +9575,7 @@ __frcoal:
         ld      e,(hl)
         inc     hl
         ld      d,(hl)          ; DE = preceding block's packed footer value
-        ld      a,e
-        and     1
+        bit     0,e
         jr      z,fr_coal       ; preceding block is used: nothing to merge
 
         ; Preceding block is free: its header sits (HDRSIZE+FTRSIZE+size)
@@ -9360,8 +9616,7 @@ fr_coal:
         ld      e,(hl)
         inc     hl
         ld      d,(hl)          ; DE = next block's packed value
-        ld      a,e
-        and     1
+        bit     0,e
         jr      z,fr_write      ; next block is used
 
         ld      a,e
@@ -9402,8 +9657,7 @@ __fr_csz:       dw      0
 ; Separate public block: _malloc/_calloc reference this helper, but _free
 ; and programs that only need heap-limit startup state do not pull it in.
 __mlh:
-        ld      a,l
-        and     1
+        bit     0,l
         jr      z,mh_rnd_ok
         inc     hl
         ld      a,h
@@ -9436,8 +9690,7 @@ mh_walk:
         inc     hl
         ld      d,(hl)
 
-        ld      a,e
-        and     1
+        bit     0,e
         jr      z,mh_used
 
         ; --- Free block --- DE currently holds size|1; mask to true size.
@@ -9558,8 +9811,8 @@ mh_extend:
         ; itself can wrap when the CP/M stack starts near FFFFh.
         push    hl              ; preserve validated new_brk for commit below
         ld      de,(__hlimit)
-        or      a
-        sbc     hl,de           ; carry if end < limit, z if end == limit
+        sbc     hl,de           ; carry if end < limit, z if end == limit; carry
+                                 ; already 0 (fell through "jp c,mh_oom" above)
         jr      c,mh_extend_ok
         jr      z,mh_extend_ok
         pop     hl
@@ -9648,15 +9901,10 @@ __csp:
         cp      ' '
         jr      z,issp_yes
         cp      09h             ; HT
-        jr      z,issp_yes
-        cp      0ah             ; LF
-        jr      z,issp_yes
-        cp      0bh             ; VT
-        jr      z,issp_yes
-        cp      0ch             ; FF
-        jr      z,issp_yes
-        cp      0dh             ; CR
-        jr      z,issp_yes
+        jr      c,issp_no       ; below HT: not whitespace
+        cp      0eh             ; one past CR
+        jr      c,issp_yes      ; HT..CR: whitespace
+issp_no:
         ld      hl,0
         ret
 issp_yes:
@@ -9883,6 +10131,11 @@ _fgets:
         ld      a,(ix+8)
         cp      FIRSTFD
         jp      c,fgets_con
+        cp      MAXFD
+        jr      nc,fgf_setup            ; fd out of range: skip the __fdeof
+                                         ; slot lookup below (would index past
+                                         ; the array) - _read's own fd check
+                                         ; rejects this below with EBADF.
 
         ; ---- File path ----
         ; Check EOF flag for this slot
@@ -9895,6 +10148,7 @@ _fgets:
         or      a
         jp      nz,fgets_null           ; already at EOF
 
+fgf_setup:
         ; Set up: rem = size-1, ptr = buf, start = buf
         ld      l,(ix+6)
         ld      h,(ix+7)
@@ -9948,9 +10202,15 @@ fgf_no_pb:
         ld      sp,hl                   ; clean 3 args
         ex      de,hl                   ; HL = bytes read
 
+        ; Treat anything but exactly 1 byte read as EOF, including a -1
+        ; (0FFFFh) error return (e.g. EBADF) - h!=0 catches that case before
+        ; __fgets_ch, which _read never touched, could be read as if valid.
         ld      a,h
-        or      l
-        jr      z,fgf_eof               ; read 0 bytes  EOF
+        or      a
+        jr      nz,fgf_eof
+        ld      a,l
+        cp      1
+        jr      nz,fgf_eof              ; read 0 bytes  EOF
 
 fgf_have_ch:
         ld      a,(__fgets_ch)
@@ -9970,14 +10230,19 @@ fgf_have_ch:
         jr      fgf_loop
 
 fgf_eof:
-        ; set EOF flag for this slot
+        ; set EOF flag for this slot (skip for an out-of-range fd, which
+        ; never had a slot to flag - writing __fdeof[fd-FIRSTFD] unchecked
+        ; would corrupt unrelated static data for a large bad fd)
         ld      a,(ix+8)
+        cp      MAXFD
+        jr      nc,fgf_eof_flagged
         sub     FIRSTFD
         ld      h,0
         ld      l,a
         ld      de,__fdeof
         add     hl,de
         ld      (hl),1
+fgf_eof_flagged:
         ; if no chars were stored  return NULL
         ld      hl,(__fgets_ptr)
         ld      de,(__fgets_start)
@@ -10451,8 +10716,7 @@ _puts:
         ; int puts(const char *str) - single pointer argument, and __conout
         ; preserves HL across every call in the loop; IX-free leaf.
         pop     bc
-        pop     hl              ; str
-        push    hl
+        ex      (sp),hl         ; HL = str
         push    bc
 puts_loop:
         ld      a,(hl)
@@ -10614,7 +10878,8 @@ tn_build:
 ; FILE *tmpfile(void)
 ; Creates a temporary binary file (w+ mode) and returns its FILE*.
 ; The file is removed at program termination via the __tmpf_hook
-; registered in _exit.  Returns NULL if no slot is free or open fails.
+; registered in _exit.  Returns NULL if no slot is free (errno = EMFILE)
+; or open fails (errno set by _open).
 _tmpfile:
         push    ix
         ld      ix,0
@@ -10633,7 +10898,8 @@ tf_slotlp:
         inc     hl
         inc     c
         djnz    tf_slotlp
-        ld      hl,0                    ; no free slot
+        call    __emfil                 ; no free slot
+        ld      hl,0
         pop     ix
         ret
 tf_found:
@@ -10710,8 +10976,8 @@ tf_cl_lp:
         push    hl                      ; save &__tmpf_fd[slot] for later restore
         ; slot = HL - __tmpf_fd
         ld      de,__tmpf_fd
-        or      a
-        sbc     hl,de                   ; HL = slot (0..NTMP-1)
+        sbc     hl,de                   ; HL = slot (0..NTMP-1); carry already 0
+                                         ; (the "xor a" above already cleared it)
         ; &__tmpf_nm[slot] = __tmpf_nm + slot * TN_NSZ (slot << 4)
         add     hl,hl
         add     hl,hl
@@ -11056,13 +11322,13 @@ fseek_bad:
 
 ; ============================================================
 ; _ftell(fp)    returns current file position (low 16 bits).
+; Returns -1L on a bad fd (errno = EBADF).
 ; ============================================================
         public  _ftell
 _ftell:
         ; long ftell(FILE *fp) - fp/fd fits in a byte; IX-free leaf.
         pop     bc
-        pop     hl
-        push    hl
+        ex      (sp),hl
         push    bc
         ld      a,l
         sub     FIRSTFD
@@ -11082,6 +11348,7 @@ _ftell:
         ex      de,hl                   ; HL = low 16 bits, DE = high 16 bits
         ret
 ftell_bad:
+        call    __ebadf
         ld      hl,0FFFFh
         ld      de,0FFFFh
         ret
@@ -11237,8 +11504,7 @@ rewind_ret:
 _feof:
         ; int feof(FILE *fp) - fp/fd fits in a byte; IX-free leaf.
         pop     bc
-        pop     hl
-        push    hl
+        ex      (sp),hl
         push    bc
         ld      a,l
         sub     FIRSTFD
@@ -11264,8 +11530,7 @@ feof_no:
 _ferror:
         ; int ferror(FILE *fp) - fp/fd fits in a byte; IX-free leaf.
         pop     bc
-        pop     hl
-        push    hl
+        ex      (sp),hl
         push    bc
         ld      a,l
         sub     FIRSTFD
@@ -12167,8 +12432,9 @@ lj_ix:          dw      0
 ;
 ; This is intentionally small and CP/M-2.2-oriented.  opendir("."),
 ; opendir("*.*"), and opendir("A:") enumerate all files on the selected
-; drive.  Other path strings are accepted but treated as wildcard scans;
-; CP/M has no hierarchical directories.
+; drive.  A specific pattern (e.g. opendir("*.C") or opendir("T?.TMP"))
+; filters the scan the same way unlink()/rename() do - via __mkfcb's
+; '?'/'*' handling.  CP/M has no hierarchical directories.
 ; ============================================================
         public  _dopn
 _dopn:
@@ -12183,40 +12449,34 @@ _dopn:
         ld      (hl),0
         ldir
 
-        ; Optional drive letter: "A:" -> 1, "B:" -> 2, ...
+        ; Parse the caller's path/pattern into the FCB: optional "X:"
+        ; drive prefix, then name/ext with '?' passed through as a
+        ; wildcard and '*' expanded to fill the rest of the field with
+        ; '?' - identical to what unlink()/rename() already do.
         ld      l,(ix+4)
         ld      h,(ix+5)
-        ld      a,(hl)
-        or      a
-        jr      z,__drod0
-        inc     hl
-        ld      b,(hl)
-        dec     hl
-        ld      a,b
-        cp      ':'
-        jr      nz,__drod0
-        ld      a,(hl)
-        cp      'a'
-        jr      c,__drod1
-        cp      'z'+1
-        jr      nc,__drod1
-        sub     20h
-__drod1:
-        cp      'A'
-        jr      c,__drod0
-        cp      'Z'+1
-        jr      nc,__drod0
-        sub     'A'-1
-        ld      (__drfcb),a
-__drod0:
+        ld      de,__drfcb
+        call    __mkfcb
 
-        ; Wildcard name/ext: ???????????
+        ; If nothing was actually specified - empty string, ".", or a bare
+        ; "X:" drive prefix - __mkfcb leaves the whole 11-byte name/ext as
+        ; spaces (it never matches a real file); fall back to a full
+        ; "match everything" wildcard scan, same as an explicit "*.*".
+        ld      hl,__drfcb+1
+        ld      b,11
+__drchk:
+        ld      a,(hl)
+        cp      ' '
+        jr      nz,__drgo
+        inc     hl
+        djnz    __drchk
         ld      hl,__drfcb+1
         ld      b,11
 __drofq:
         ld      (hl),'?'
         inc     hl
         djnz    __drofq
+__drgo:
 
         ; Set DMA buffer.
         ld      c,26
@@ -12365,8 +12625,7 @@ _perror:
         ; __conout preserves HL across every call in the loops below;
         ; IX-free leaf.
         pop     bc
-        pop     hl              ; str
-        push    hl
+        ex      (sp),hl         ; HL = str
         push    bc
         ld      a,h
         or      l
@@ -12538,7 +12797,7 @@ _isfinite:
         push    de
         push    hl
         push    bc
-        jp      __ffin
+        jr      __ffin ; peep: jp_to_jr
 
         public  _signbit
 _signbit:
@@ -12549,7 +12808,7 @@ _signbit:
         push    de
         push    hl
         push    bc
-        jp      __fsgn
+        jr      __fsgn ; peep: jp_to_jr
 
         public  _dcc_nan
 _dcc_nan:
@@ -12779,12 +13038,12 @@ __fcsgf:
         ld      a,d
         bit     7,a
         jp      nz,__fcltf
-        jp      __fcgtf
+        jr      __fcgtf ; peep: jp_to_jr
 __fcsmf:
         ld      a,d
         bit     7,a
         jr      nz,__fcsnf
-        jp      __frcmpf
+        jr      __frcmpf ; peep: jp_to_jr
 __fcsnf:
         call    __frcmpf
         cp      1
@@ -13185,7 +13444,7 @@ __faf:
         ; __msf's first attempt (__msetf) and __fmf's (__fmulf).
         xor     a
         ld      (FSUB),a
-        jp      FADDR0F
+        jr      FADDR0F ; peep: jp_to_jr
 
         public  __fsf
 __fsf:
@@ -13311,7 +13570,7 @@ FANOFL2:
         exx                     ; main bank active again; flags preserved
         inc     a
         jp      nz,FANZ_ENTRY   ; ordinary finite path: one branch, not jr+jp
-        jp      FA_BSPEC
+        jr      FA_BSPEC ; peep: jp_to_jr
 
 FA_ASPEC:
         ; A's exponent is 255: nonzero mantissa payload (implicit bit
@@ -13340,7 +13599,7 @@ FA_ASPEC:
         cp      d               ; compare against BSGN (post-__fsf-flip)
         exx
         jp      nz,FA_NAN       ; Inf + (-Inf) = NaN
-        jp      FA_RETA
+        jr      FA_RETA ; peep: jp_to_jr
 
 FA_BSPEC:
         ; A finite (any value, including 0), B's exponent is 255.
@@ -13433,7 +13692,7 @@ FALGNR:
         call    FSHR            ; shift main's C:H:L right by A bits
         ld      a,e
         ld      b,a             ; AEXP := BEXP
-        jp      FSIGNC
+        jr      FSIGNC ; peep: jp_to_jr
 FANEGL:
         ; A negligible relative to B: zero A's mantissa, AEXP := BEXP
         xor     a
@@ -13442,7 +13701,7 @@ FANEGL:
         ld      l,a
         ld      a,e
         ld      b,a
-        jp      FSIGNC
+        jr      FSIGNC ; peep: jp_to_jr
 
 FAEXPB:
         ; AEXP > BEXP (A = BEXP-AEXP, negative): negate for B's shift count.
@@ -13511,7 +13770,7 @@ FSIGNC:
         ld      d,a             ; D = sign | exponent's top 7 bits (all 1)
         ld      e,80h           ; E = exponent's low bit | mantissa top 7 (0)
         ld      hl,0
-        jp      FARET
+        jr      FARET ; peep: jp_to_jr
 
 FSUBTR:
         ; different signs: subtract, result sign = sign of the bigger
@@ -13539,7 +13798,7 @@ FSUBTR:
         exx                      ; main active; A (diff high byte) preserved
         pop     hl
         ld      c,a
-        jp      FNORMR
+        jr      FNORMR ; peep: jp_to_jr
 
 FBBIG:
         ; A_mantissa < B_mantissa: negate {A:HL} (still in the alternate
@@ -13948,7 +14207,7 @@ FM_ASPEC_ALT:
 
 FM_BSPEC_ALT:
         exx
-        jp      FM_BSPEC
+        jr      FM_BSPEC ; peep: jp_to_jr
 
 FM_ZERO_ALT:
         exx
@@ -14130,7 +14389,7 @@ FMAZ:
         ld      hl,(FP4)
         add     hl,bc
         ld      (FP4),hl
-        jp      FMDONE
+        jr      FMDONE ; peep: jp_to_jr
 
 FMANBZ:
         ; Alo != 0, Blo == 0: Alo*Bhi plus Ahi*Bhi.
@@ -14159,7 +14418,7 @@ FMANBZ:
         ld      hl,(FP4)
         add     hl,bc
         ld      (FP4),hl
-        jp      FMDONE
+        jr      FMDONE ; peep: jp_to_jr
 
 FMABZ:
         ; Both low words are zero: only Ahi*Bhi survives.
@@ -14330,7 +14589,7 @@ __fmaf:
         ; FMADD_UNPACKED expects, regardless of which physical register
         ; set that maps to (exx has no absolute "main" identity, only
         ; active-vs-other, so this is exactly equivalent).
-        jp      FMADD_UNPACKED
+        jr      FMADD_UNPACKED ; peep: jp_to_jr
 
         public  __fmadd
 __fmadd:
@@ -14398,7 +14657,7 @@ FMADD_UNPACKED:
         exx
         inc     a
         jr      z,FQ_BSPEC
-        jp      FQ_ORDINARY
+        jr      FQ_ORDINARY ; peep: jp_to_jr
 
 FQ_ASPEC:
         ; a's exponent is 255: nonzero mantissa payload (implicit bit
@@ -14421,7 +14680,7 @@ FQ_ASPEC:
         or      l
         exx                     ; main bank active again; flags preserved
         jp      nz,FQ_QNAN      ; b is NaN
-        jp      FQ_QINF         ; b is Infinity too: Inf*Inf = signed Inf
+        jr      FQ_QINF ; peep: jp_to_jr
 
 FQ_BSPEC:
         ; a finite (any value, including 0), b's exponent is 255.
@@ -14694,7 +14953,7 @@ FQFB1:
         ld      hl,(FP4)
         add     hl,bc
         ld      (FP4),hl
-        jp      FQDONE
+        jr      FQDONE ; peep: jp_to_jr
 
 FQANBZ:
         ; Alo != 0, Blo == 0: Alo*Bhi plus Ahi*Bhi only (both terms
@@ -14725,7 +14984,7 @@ FQANBZ:
         ld      hl,(FP4)
         add     hl,bc
         ld      (FP4),hl
-        jp      FQDONE
+        jr      FQDONE ; peep: jp_to_jr
 
 FQFB2:
         ; Alo == 0, Blo != 0: Ahi*Blo plus Ahi*Bhi only.  Ahi is not
@@ -14767,7 +15026,6 @@ FQFB2:
         ld      hl,(FP4)
         add     hl,bc
         ld      (FP4),hl
-        jp      FQDONE
 
 FQDONE:
         ; Load FP5:FP4 once and reuse it in both normalization paths, matching
@@ -14786,7 +15044,7 @@ FQDONE:
         inc     a               ; overflow only if exponent became 255
         jr      z,FQINF
         ld      hl,(FP3)        ; L=FP3, H=FP4
-        jp      FQBRIDGE_R
+        jr      FQBRIDGE_R ; peep: jp_to_jr
 
 FQNOC:
         ld      hl,(FP2)        ; DE already holds FP5:FP4 from FQDONE
@@ -14798,7 +15056,7 @@ FQNOC:
         ld      d,a             ; D=result sign
         ld      l,h             ; L=mantissa low byte
         ld      h,e             ; H=mantissa middle byte
-        jp      FQBRIDGE_R
+        jr      FQBRIDGE_R ; peep: jp_to_jr
 
 FQZERO:
         ; IEEE-754 sign-of-zero: sign = a's D xor b's D, computed lazily
@@ -14812,7 +15070,7 @@ FQZERO:
         ld      d,a
         ld      bc,0
         ld      hl,0
-        jp      FQBRIDGE_R
+        jr      FQBRIDGE_R ; peep: jp_to_jr
 
 FQINF:
         ; Entry used by late overflow paths after multiply helpers have
@@ -14914,7 +15172,7 @@ __fdf:
         call    FUNA            ; unpack a (numerator)
         exx                     ; b <- back from shadow bank
         call    FUNB            ; unpack b (denominator), LAST
-        jp      FDBODY
+        jr      FDBODY ; peep: jp_to_jr
 
         public  __fdiv
 __fdiv:
@@ -14960,7 +15218,7 @@ FDBODY:
         ld      a,(BEXP)
         inc     a
         jr      z,FD_BSPEC
-        jp      FD_ORDINARY
+        jr      FD_ORDINARY ; peep: jp_to_jr
 
 FD_ASPEC:
         ; A's exponent is 255: a nonzero mantissa payload (implicit bit
@@ -14980,7 +15238,7 @@ FD_ASPEC:
         ld      a,(BEXP)
         cp      255
         jp      nz,FDINF
-        jp      FDNAN
+        jr      FDNAN ; peep: jp_to_jr
 
 FD_BSPEC:
         ; A finite (any value, including 0), B's exponent is 255.
@@ -15027,8 +15285,8 @@ FD_ANZ:
         ld      a,(BEXP)
         ld      e,a
         ld      d,0
-        or      a
-        sbc     hl,de
+        sbc     hl,de           ; carry already 0 (the "or a" testing BEXP above
+                                 ; already cleared it)
         ld      de,127
         add     hl,de
         bit     7,h
@@ -15312,7 +15570,7 @@ _floorf:
         ld      e,(ix+6)
         ld      d,(ix+7)
         xor     a                       ; mode 0 = floor
-        jp      __frint
+        jr      __frint ; peep: jp_to_jr
 
 _ceilf:
         push    ix
@@ -15323,7 +15581,14 @@ _ceilf:
         ld      e,(ix+6)
         ld      d,(ix+7)
         ld      a,1                     ; mode 1 = ceil
-        jp      __frint
+        jr      __frint                 ; explicit, not fall-through: __frint
+                                         ; is its own dccrtlstrip PUBLIC block
+                                         ; (see "public __frint" above), and
+                                         ; falling through here with no jp/jr
+                                         ; left dccrtlstrip's reference scan
+                                         ; with nothing to see - an app
+                                         ; linking _ceilf without _floorf
+                                         ; would silently drop __frint's body
 
 ; Direct binary32 floor/ceil. A selects floor (0) or ceil (1), DE:HL is x,
 ; and IX is the caller frame. Values already integral, infinities, and NaNs
@@ -15598,8 +15863,9 @@ fmd_ynrm_done:
         ; if xexp < yexp (signed): |x| < |y| -> remainder is x unchanged
         ld      hl,(__fmd_xexp)
         ld      de,(__fmd_yexp)
-        or      a
-        sbc     hl,de                   ; range fits 16-bit signed, no overflow
+        sbc     hl,de                   ; range fits 16-bit signed, no overflow;
+                                         ; carry already 0 (the "xor a" above
+                                         ; already cleared it)
         bit     7,h
         jr      z,FMDMOD_LOOP           ; xexp >= yexp
         ld      l,(ix+4)
@@ -15621,8 +15887,8 @@ FMDMOD_LOOP:
         jr      nz,FMDMOD_SUB
         ld      hl,(__fmd_xlo)
         ld      de,(__fmd_ylo)
-        or      a
-        sbc     hl,de
+        sbc     hl,de                   ; carry already 0 (fell through both
+                                         ; "jr c,FMDMOD_NOSUB" and "jr nz,FMDMOD_SUB" above)
         jr      c,FMDMOD_NOSUB
 FMDMOD_SUB:
         ld      hl,(__fmd_xlo)
@@ -15709,7 +15975,7 @@ FMDMOD_HAVE_EXP:
         and     80h
         or      d
         ld      d,a
-        jp      FMDRET
+        jr      FMDRET ; peep: jp_to_jr
 FMDMOD_DENORM:
         ; subnormal: mantissa = significand >> (1 - exp), exponent field 0.
         ld      hl,1
@@ -15739,14 +16005,13 @@ FMDMOD_DENORM_LOOP:
         ld      a,(ix+7)
         and     80h
         ld      d,a                     ; sign, exponent field 0
-        jp      FMDRET
+        jr      FMDRET ; peep: jp_to_jr
 FMDMOD_UNDERFLOW:
         ld      a,(ix+7)
         and     80h
         ld      d,a
         ld      e,0
         ld      hl,0
-        jp      FMDRET
 
 FMDRET:
         ld      sp,ix
@@ -16395,41 +16660,39 @@ NXGEN:
 
         ; For positive x, x<y means increment raw bits; otherwise decrement.
         ; For negative x, x<y means decrement raw bits; otherwise increment.
-        ld      a,d
-        and     80h
+        bit     7,d
         jr      nz,NXNEG
 
         ld      a,(NXLT)
         or      a
         jp      nz,NXINC
-        jp      NXDEC
+        jr      NXDEC ; peep: jp_to_jr
 NXNEG:
         ld      a,(NXLT)
         or      a
         jp      nz,NXDEC
-        jp      NXINC
+        jr      NXINC ; peep: jp_to_jr
 
 NXZERO:
         ld      hl,1
         ld      de,0
-        ld      a,(ix+11)
-        and     80h
+        bit     7,(ix+11)
         jp      z,NXRET
         ld      d,80h
-        jp      NXRET
+        jr      NXRET ; peep: jp_to_jr
 
 NXRET_X:
         ld      l,(ix+4)
         ld      h,(ix+5)
         ld      e,(ix+6)
         ld      d,(ix+7)
-        jp      NXRET
+        jr      NXRET ; peep: jp_to_jr
 NXRET_Y:
         ld      l,(ix+8)
         ld      h,(ix+9)
         ld      e,(ix+10)
         ld      d,(ix+11)
-        jp      NXRET
+        jr      NXRET ; peep: jp_to_jr
 
 NXINC:
         inc     l
@@ -16439,7 +16702,7 @@ NXINC:
         inc     e
         jp      nz,NXRET
         inc     d
-        jp      NXRET
+        jr      NXRET ; peep: jp_to_jr
 
 NXDEC:
         ld      a,l
@@ -16519,7 +16782,7 @@ _expf:
         ld d,7fh
         ld e,0c0h
         ld hl,0
-        jp MFL1
+        ret ; peep: jp_to_plain_ret
 MFEXPNOTNAN:
 
         ld hl,(__expf_x)
@@ -16533,11 +16796,11 @@ MFEXPNOTNAN:
         pop bc
         ld a,h
         or l
-        jr z,MFL2 ; peep: jp_to_jr
+        jr      z,MFL2 ; peep: jp_to_jr
         ld d,7fh                ; x >= 88.0 (including +Infinity): overflow
         ld e,80h                ; -> +Infinity (was a finite 3.4e38f
         ld hl,0                 ; approximation)
-        jp MFL1
+        ret ; peep: jp_to_plain_ret
 MFL2:
         ld hl,(__expf_x)
         ld de,(__expf_x+2)
@@ -16553,10 +16816,10 @@ MFL2:
         pop bc
         ld a,h
         or l
-        jr z,MFL4 ; peep: jp_to_jr
+        jr      z,MFL4 ; peep: jp_to_jr
         ld hl,0
         ld de,0
-        jp MFL1
+        ret ; peep: jp_to_plain_ret
 MFL4:
         ld hl,(__expf_x)
         ld de,(__expf_x+2)
@@ -16578,7 +16841,7 @@ MFL4:
         pop bc
         ld a,h
         or l
-        jr z,MFL6 ; peep: jp_to_jr
+        jr      z,MFL6 ; peep: jp_to_jr
         ld hl,(__expf_xlog2e)
         ld de,(__expf_xlog2e+2)
         push de
@@ -16591,7 +16854,7 @@ MFL4:
         call __ffl
         ld (__expf_n),hl
         ld (__expf_n+2),de
-        jr MFL7 ; peep: jp_to_jr
+        jr      MFL7 ; peep: jp_to_jr
 MFL6:
         ld hl,(__expf_xlog2e)
         ld de,(__expf_xlog2e+2)
@@ -16654,6 +16917,8 @@ MFL7:
         push de
         push hl
         ld hl,(__expf_r)
+        ld c,l ; peep: global_word_cache_store
+        ld b,h
         ld de,(__expf_r+2)
         push de
         push hl
@@ -16661,7 +16926,8 @@ MFL7:
         ld de,15914
         push de
         push hl
-        ld hl,(__expf_r)
+        ld l,c ; peep: global_word_cache_load
+        ld h,b
         ld de,(__expf_r+2)
         push de
         push hl
@@ -16669,7 +16935,8 @@ MFL7:
         ld de,15658
         push de
         push hl
-        ld hl,(__expf_r)
+        ld l,c ; peep: global_word_cache_load
+        ld h,b
         ld de,(__expf_r+2)
         push de
         push hl
@@ -16677,7 +16944,8 @@ MFL7:
         ld de,15368
         push de
         push hl
-        ld hl,(__expf_r)
+        ld l,c ; peep: global_word_cache_load
+        ld h,b
         ld de,(__expf_r+2)
         push de
         push hl
@@ -16791,17 +17059,17 @@ _logf:
         jp z,MFL9               ; x is positive finite: the ordinary case
         ld hl,(__logf_x)        ; x == +Infinity: logf(+Inf) = +Infinity
         ld de,(__logf_x+2)
-        jp MFL8
+        ret ; peep: jp_to_plain_ret
 MFLOGNAN:
         ld d,7fh
         ld e,0c0h
         ld hl,0
-        jp MFL8
+        ret ; peep: jp_to_plain_ret
 MFLOGNINF:
         ld d,0ffh
         ld e,80h
         ld hl,0
-        jp MFL8
+        ret ; peep: jp_to_plain_ret
 MFL9:
         ld hl,__logf_e
         push hl
@@ -16824,7 +17092,7 @@ MFL9:
         pop bc
         ld a,h
         or l
-        jr z,MFL12 ; peep: jp_to_jr
+        jr      z,MFL12 ; peep: jp_to_jr
         ld hl,(__logf_m)
         ld de,(__logf_m+2)
         ld b,1
@@ -16880,6 +17148,8 @@ MFL12:
         push de
         push hl
         ld hl,(__logf_z2)
+        ld c,l ; peep: global_word_cache_store
+        ld b,h
         ld de,(__logf_z2+2)
         push de
         push hl
@@ -16887,7 +17157,8 @@ MFL12:
         ld de,16042
         push de
         push hl
-        ld hl,(__logf_z2)
+        ld l,c ; peep: global_word_cache_load
+        ld h,b
         ld de,(__logf_z2+2)
         push de
         push hl
@@ -16895,7 +17166,8 @@ MFL12:
         ld de,15948
         push de
         push hl
-        ld hl,(__logf_z2)
+        ld l,c ; peep: global_word_cache_load
+        ld h,b
         ld de,(__logf_z2+2)
         push de
         push hl
@@ -16903,7 +17175,8 @@ MFL12:
         ld de,15890
         push de
         push hl
-        ld hl,(__logf_z2)
+        ld l,c ; peep: global_word_cache_load
+        ld h,b
         ld de,(__logf_z2+2)
         push de
         push hl
@@ -17022,10 +17295,10 @@ _powf:
         pop bc
         ld a,h
         or l
-        jr z,MFL15 ; peep: jp_to_jr
+        jr      z,MFL15 ; peep: jp_to_jr
         ld hl,0
         ld de,16256
-        jp MFL14
+        ret ; peep: jp_to_plain_ret
 MFL15:
         ; if (x == 0.0f) ... - y != 0 is already established by the
         ; check above, so only its sign matters here. C99 7.12.7.4: x==0
@@ -17045,11 +17318,11 @@ MFL15:
         ld d,7fh                ; y < 0: pole error -> +Infinity
         ld e,80h
         ld hl,0
-        jp MFL14
+        ret ; peep: jp_to_plain_ret
 MFPOWZP:
         ld hl,0
         ld de,0
-        jp MFL14
+        ret ; peep: jp_to_plain_ret
 MFL17:
         ld hl,(__powf_x)
         ld de,(__powf_x+2)
@@ -17062,7 +17335,7 @@ MFL17:
         pop bc
         ld a,h
         or l
-        jr z,MFL19 ; peep: jp_to_jr
+        jr      z,MFL19 ; peep: jp_to_jr
         ld hl,(__powf_y)
         ld de,(__powf_y+2)
         push de
@@ -17082,7 +17355,7 @@ MFL17:
         call _expf
         pop bc
         pop bc
-        jp MFL14
+        ret ; peep: jp_to_plain_ret
 MFL19:
         ld hl,(__powf_y)
         ld de,(__powf_y+2)
@@ -17095,13 +17368,13 @@ MFL19:
         pop bc
         ld a,h
         or l
-        jr z,MFL21 ; peep: jp_to_jr
+        jr      z,MFL21 ; peep: jp_to_jr
         ld hl,(__powf_y)
         ld de,(__powf_y+2)
         ld a,d
         xor 80h
         ld d,a
-        jr MFL22 ; peep: jp_to_jr
+        jr      MFL22 ; peep: jp_to_jr
 MFL21:
         ld hl,(__powf_y)
         ld de,(__powf_y+2)
@@ -17132,10 +17405,10 @@ MFL22:
         pop bc
         ld a,h
         or l
-        jr z,MFL23 ; peep: jp_to_jr
+        jr      z,MFL23 ; peep: jp_to_jr
         ld hl,0
         ld de,0
-        jp MFL14
+        ret ; peep: jp_to_plain_ret
 MFL23:
         ld hl,(__powf_y)
         ld de,(__powf_y+2)
@@ -17203,7 +17476,7 @@ MFL23:
         ld a,b
         xor d
         or l
-        jr z,MFL26 ; peep: jp_to_jr
+        jr      z,MFL26 ; peep: jp_to_jr
         ld hl,(__powf_result)
         ld de,(__powf_result+2)
         ld a,d
@@ -17466,7 +17739,7 @@ _sinf:
         pop bc
         ld a,h
         or l
-        jr z,MFL38 ; peep: jp_to_jr
+        jr      z,MFL38 ; peep: jp_to_jr
         ld hl,(__sinf_x)
         ld de,(__sinf_x+2)
         push de
@@ -17493,7 +17766,7 @@ MFL38:
         pop bc
         ld a,h
         or l
-        jr z,MFL40 ; peep: jp_to_jr
+        jr      z,MFL40 ; peep: jp_to_jr
         ld hl,(__sinf_x)
         ld de,(__sinf_x+2)
         push de
@@ -17517,7 +17790,7 @@ MFL40:
         pop bc
         ld a,h
         or l
-        jr z,MFL41 ; peep: jp_to_jr
+        jr      z,MFL41 ; peep: jp_to_jr
         ld hl,4059
         ld de,16457
         push de
@@ -17529,7 +17802,7 @@ MFL40:
         pop bc
         ld (__sinf_x),hl
         ld (__sinf_x+2),de
-        jp MFL42
+        jr      MFL42 ; peep: jp_to_jr
 MFL41:
         ld hl,(__sinf_x)
         ld de,(__sinf_x+2)
@@ -17545,7 +17818,7 @@ MFL41:
         pop bc
         ld a,h
         or l
-        jr z,MFL42 ; peep: jp_to_jr
+        jr      z,MFL42 ; peep: jp_to_jr
         ld hl,4059
         ld de,16457
         ld a,d
@@ -17677,7 +17950,7 @@ _cosf:
         pop bc
         ld a,h
         or l
-        jr z,MFL47 ; peep: jp_to_jr
+        jr      z,MFL47 ; peep: jp_to_jr
         ld hl,(__cosf_x)
         ld de,(__cosf_x+2)
         push de
@@ -17704,7 +17977,7 @@ MFL47:
         pop bc
         ld a,h
         or l
-        jr z,MFL49 ; peep: jp_to_jr
+        jr      z,MFL49 ; peep: jp_to_jr
         ld hl,(__cosf_x)
         ld de,(__cosf_x+2)
         push de
@@ -17728,7 +18001,7 @@ MFL49:
         pop bc
         ld a,h
         or l
-        jr z,MFL50 ; peep: jp_to_jr
+        jr      z,MFL50 ; peep: jp_to_jr
         ld hl,4059
         ld de,16457
         push de
@@ -17747,7 +18020,7 @@ MFL49:
         ld d,a
         ld (__cosf_sign),hl
         ld (__cosf_sign+2),de
-        jp MFL51
+        jr      MFL51 ; peep: jp_to_jr
 MFL50:
         ld hl,(__cosf_x)
         ld de,(__cosf_x+2)
@@ -17763,7 +18036,7 @@ MFL50:
         pop bc
         ld a,h
         or l
-        jr z,MFL51 ; peep: jp_to_jr
+        jr      z,MFL51 ; peep: jp_to_jr
         ld hl,4059
         ld de,16457
         ld a,d
@@ -17803,6 +18076,8 @@ MFL51:
         push hl
         ld hl,(__cosf_x2)
         ld de,(__cosf_x2+2)
+        ld c,e ; peep: global_word_cache_store_de
+        ld b,d
         push de
         push hl
         ld hl,65296
@@ -17813,7 +18088,8 @@ MFL51:
         push de
         push hl
         ld hl,(__cosf_x2)
-        ld de,(__cosf_x2+2)
+        ld e,c ; peep: global_word_cache_load_de
+        ld d,b
         push de
         push hl
         ld hl,34790
@@ -17821,7 +18097,8 @@ MFL51:
         push de
         push hl
         ld hl,(__cosf_x2)
-        ld de,(__cosf_x2+2)
+        ld e,c ; peep: global_word_cache_load_de
+        ld d,b
         push de
         push hl
         ld hl,27383
@@ -17904,7 +18181,7 @@ _tanf:
         pop bc
         ld a,h
         or l
-        jr z,MFL55 ; peep: jp_to_jr
+        jr      z,MFL55 ; peep: jp_to_jr
         ld hl,(__tanf_r)
         ld de,(__tanf_r+2)
         push de
@@ -17916,7 +18193,7 @@ _tanf:
         pop bc
         ld (__tanf_r),hl
         ld (__tanf_r+2),de
-        jp MFL56
+        jr      MFL56 ; peep: jp_to_jr
 MFL55:
         ld hl,(__tanf_r)
         ld de,(__tanf_r+2)
@@ -17932,7 +18209,7 @@ MFL55:
         pop bc
         ld a,h
         or l
-        jr z,MFL56 ; peep: jp_to_jr
+        jr      z,MFL56 ; peep: jp_to_jr
         ld hl,(__tanf_r)
         ld de,(__tanf_r+2)
         push de
@@ -17956,7 +18233,7 @@ MFL56:
         pop bc
         ld a,h
         or l
-        jr z,MFL59 ; peep: jp_to_jr
+        jr      z,MFL59 ; peep: jp_to_jr
         ld hl,4059
         ld de,16329
         push de
@@ -17970,7 +18247,7 @@ MFL56:
         ld (__tanf_r+2),de
         ld hl,1
         ld (__tanf_sign),hl
-        jp MFL60
+        jr      MFL60 ; peep: jp_to_jr
 MFL59:
         ld hl,(__tanf_r)
         ld de,(__tanf_r+2)
@@ -17986,7 +18263,7 @@ MFL59:
         pop bc
         ld a,h
         or l
-        jr z,MFL60 ; peep: jp_to_jr
+        jr      z,MFL60 ; peep: jp_to_jr
         ld hl,4059
         ld de,16329
         ld a,d
@@ -18060,10 +18337,10 @@ MFL60:
         pop bc
         ld a,h
         or l
-        jr z,MFL63 ; peep: jp_to_jr
+        jr      z,MFL63 ; peep: jp_to_jr
         ld hl,0
         ld de,0
-        jp MFL54
+        ret ; peep: jp_to_plain_ret
 MFL63:
         ld hl,(__tanf_num)
         ld de,(__tanf_num+2)
@@ -18079,7 +18356,7 @@ MFL63:
         ld hl,(__tanf_sign)
         ld a,h
         or l
-        jp z, MFL66
+        jr      z,MFL66 ; peep: jp_to_jr
         ld hl,(__tanf_result)
         ld de,(__tanf_result+2)
         push de
@@ -18091,10 +18368,10 @@ MFL63:
         pop bc
         ld a,h
         or l
-        jr z,MFL67 ; peep: jp_to_jr
+        jr      z,MFL67 ; peep: jp_to_jr
         ld hl,0
         ld de,0
-        jr MFL54 ; peep: jp_to_jr
+        jr      MFL54 ; peep: jp_to_jr
 MFL67:
         ld hl,0
         ld de,16256
@@ -18155,7 +18432,7 @@ _atanf:
         pop bc
         ld a,h
         or l
-        jr z,MFL71 ; peep: jp_to_jr
+        jr      z,MFL71 ; peep: jp_to_jr
         ld hl,0
         ld de,16256
         ld a,d
@@ -18182,7 +18459,7 @@ MFL71:
         pop bc
         ld a,h
         or l
-        jr z,MFL72 ; peep: jp_to_jr
+        jr      z,MFL72 ; peep: jp_to_jr
         ld hl,4059
         ld de,16329
         ld (__atanf_offset),hl
@@ -18201,7 +18478,7 @@ MFL71:
         pop bc
         ld (__atanf_x),hl
         ld (__atanf_x+2),de
-        jp MFL73
+        jr      MFL73 ; peep: jp_to_jr
 MFL72:
         ld hl,(__atanf_x)
         ld de,(__atanf_x+2)
@@ -18214,7 +18491,7 @@ MFL72:
         pop bc
         ld a,h
         or l
-        jp z, MFL73
+        jr      z,MFL73 ; peep: jp_to_jr
         ld hl,4059
         ld de,16201
         ld (__atanf_offset),hl
@@ -18279,6 +18556,8 @@ MFL73:
         push de
         push hl
         ld hl,(__atanf_x2)
+        ld c,l ; peep: global_word_cache_store
+        ld b,h
         ld de,(__atanf_x2+2)
         push de
         push hl
@@ -18286,7 +18565,8 @@ MFL73:
         ld de,15948
         push de
         push hl
-        ld hl,(__atanf_x2)
+        ld l,c ; peep: global_word_cache_load
+        ld h,b
         ld de,(__atanf_x2+2)
         push de
         push hl
@@ -18297,7 +18577,8 @@ MFL73:
         ld d,a
         push de
         push hl
-        ld hl,(__atanf_x2)
+        ld l,c ; peep: global_word_cache_load
+        ld h,b
         ld de,(__atanf_x2+2)
         push de
         push hl
@@ -18415,11 +18696,11 @@ _atan2f:
         jr      nz,MATAN2_3Q
         ld      hl,4059
         ld      de,16201        ; pi/4
-        jp      MATAN2SGNY
+        jr      MATAN2SGNY ; peep: jp_to_jr
 MATAN2_3Q:
         ld      hl,52196
         ld      de,16406        ; 3pi/4
-        jp      MATAN2SGNY
+        jr      MATAN2SGNY ; peep: jp_to_jr
 
 MATAN2XIYF:
         ; x is +/-Inf, y finite: +/-0 (x>0) or +/-pi (x<0), sign=sign(y).
@@ -18459,7 +18740,7 @@ MATAN2XORD:
         jr      z,MATAN2ORD
         ld      hl,4059
         ld      de,16329        ; half_pi
-        jp      MATAN2SGNY
+        jr      MATAN2SGNY ; peep: jp_to_jr
 MATAN2ORD:
 
         ; if (x == 0.0f)
@@ -18650,7 +18931,7 @@ _asinf:
         pop bc
         ld a,h
         or l
-        jr z,MFL89 ; peep: jp_to_jr
+        jr      z,MFL89 ; peep: jp_to_jr
         ld hl,0
         ld de,16256
         ld a,d
@@ -18671,11 +18952,13 @@ _asinf:
         ld (ix+5),h
         ld (ix+6),e
         ld (ix+7),d
+        jr Lskrl_18944 ; peep: skip_ix_reload_across_label
 MFL89:
         ld l,(ix+4)
         ld h,(ix+5)
         ld e,(ix+6)
         ld d,(ix+7)
+Lskrl_18944:
         push de
         push hl
         ld hl,0
@@ -18685,7 +18968,7 @@ MFL89:
         pop bc
         ld a,h
         or l
-        jr z,MFL90 ; peep: jp_to_jr
+        jr      z,MFL90 ; peep: jp_to_jr
         ; |x| > 1.0: domain error per C99 7.12.4.2 -> NaN (was a bare
         ; 0.0f, silently wrong - confirmed |x|==1.0 exactly still takes
         ; the ordinary path below and is already correct, so only the
@@ -19317,8 +19600,7 @@ __modff_ihi:    dw      0
 ; Leaf helper: preserve the caller-cleaned argument while avoiding an IX frame.
 sc_isspace:
         pop de                  ; return address
-        pop hl                  ; int argument
-        push hl                 ; restore argument for caller cleanup
+        ex      (sp),hl         ; HL = int argument
         push de                 ; restore return address
         ld a,h
         or a
@@ -19342,8 +19624,7 @@ SCL8:
 ; Leaf helper: preserve the caller-cleaned argument while avoiding an IX frame.
 sc_isdigit:
         pop de                  ; return address
-        pop hl                  ; int argument
-        push hl                 ; restore argument for caller cleanup
+        ex      (sp),hl         ; HL = int argument
         push de                 ; restore return address
         ld a,h
         or a
@@ -19394,7 +19675,7 @@ __stol:
         ld hl,1
         push hl
         push bc
-        jp __stox_core
+        jr      __stox_core ; peep: jp_to_jr
 
         public __stou
 __stou:
@@ -19445,11 +19726,11 @@ SCL38:
         pop bc
         ld a,h
         or l
-        jr z,SCL39 ; peep: jp_to_jr
+        jr      z,SCL39 ; peep: jp_to_jr
         ld hl,(__stox_p)
         inc hl ; peep: ld_de1_to_inc
         ld (__stox_p),hl
-        jr SCL38 ; peep: jp_to_jr
+        jr      SCL38 ; peep: jp_to_jr
 SCL39:
         ld hl,0
         ld (__stox_neg),hl
@@ -19462,11 +19743,11 @@ SCL39:
         ld de,43 ; peep: push_lde_pop
         or a
         sbc hl,de
-        jr nz,SCL40 ; peep: jp_to_jr
+        jr      nz,SCL40 ; peep: jp_to_jr
         ld hl,(__stox_p)
         inc hl ; peep: ld_de1_to_inc
         ld (__stox_p),hl
-        jr SCL41 ; peep: jp_to_jr
+        jr      SCL41 ; peep: jp_to_jr
 SCL40:
         ld hl,(__stox_p)
         ld l,(hl)
@@ -19477,7 +19758,7 @@ SCL40:
         ld de,45 ; peep: push_lde_pop
         or a
         sbc hl,de
-        jr nz,SCL41 ; peep: jp_to_jr
+        jr      nz,SCL41 ; peep: jp_to_jr
         ld hl,1
         ld (__stox_neg),hl
         ld hl,(__stox_p)
@@ -19487,12 +19768,12 @@ SCL41:
         ld hl,(__stox_base)
         ld a,h ; peep: cmp0_or_hl
         or l
-        jr z,SCL48 ; peep: jp_to_jr
+        jr      z,SCL48 ; peep: jp_to_jr
         ld hl,(__stox_base)
         ld de,16 ; peep: push_lde_pop
         or a
         sbc hl,de
-        jp nz, SCL44 ; peep: jump_thread
+        jr      nz,SCL44 ; peep: jp_to_jr
 SCL48:
         ld hl,(__stox_p)
         ld l,(hl)
@@ -19503,7 +19784,7 @@ SCL48:
         ld de,48 ; peep: push_lde_pop
         or a
         sbc hl,de
-        jr nz,SCL44 ; peep: jp_to_jr
+        jr      nz,SCL44 ; peep: jp_to_jr
         ld hl,(__stox_p)
         inc hl ; peep: ld_de1_to_inc
         ld l,(hl)
@@ -19514,7 +19795,7 @@ SCL48:
         ld de,120 ; peep: push_lde_pop
         or a
         sbc hl,de
-        jr z,SCL57 ; peep: jp_to_jr
+        jr      z,SCL57 ; peep: jp_to_jr
         ld hl,(__stox_p)
         inc hl ; peep: ld_de1_to_inc
         ld l,(hl)
@@ -19525,7 +19806,7 @@ SCL48:
         ld de,88 ; peep: push_lde_pop
         or a
         sbc hl,de
-        jr nz,SCL44 ; peep: jp_to_jr
+        jr      nz,SCL44 ; peep: jp_to_jr
 SCL57:
         ld hl,(__stox_p)
         inc hl ; peep: ld_de2_to_inc
@@ -19533,12 +19814,12 @@ SCL57:
         ld (__stox_p),hl
         ld hl,16
         ld (__stox_base),hl
-        jr SCL45 ; peep: jp_to_jr
+        jr      SCL45 ; peep: jp_to_jr
 SCL44:
         ld hl,(__stox_base)
         ld a,h ; peep: cmp0_or_hl
         or l
-        jr nz,SCL45 ; peep: jp_to_jr
+        jr      nz,SCL45 ; peep: jp_to_jr
         ld hl,(__stox_p)
         ld l,(hl)
         ld a,l
@@ -19548,10 +19829,9 @@ SCL44:
         ld de,48 ; peep: push_lde_pop
         or a
         sbc hl,de
-        jr nz,SCL68 ; peep: jp_to_jr
+        jr      nz,SCL68 ; peep: jp_to_jr
         ld hl,8
-        ld de,0 ; peep: fold_const_sxt
-        jr SCL69 ; peep: jp_to_jr
+        jr      SCL69 ; peep: jp_to_jr
 SCL68:
         ld hl,10
 SCL69:
@@ -19563,18 +19843,18 @@ SCL45:
         ld hl,(__stox_signed)
         ld a,h
         or l
-        jr z,SCL45U ; peep: jp_to_jr
+        jr      z,SCL45U ; peep: jp_to_jr
         ld hl,(__stox_neg)
         ld a,h
         or l
-        jr z,SCL70 ; peep: jp_to_jr
+        jr      z,SCL70 ; peep: jp_to_jr
         ld hl,0
         ld de,32768
-        jr SCL71 ; peep: jp_to_jr
+        jr      SCL71 ; peep: jp_to_jr
 SCL70:
         ld hl,65535
         ld de,32767
-        jr SCL71 ; peep: jp_to_jr
+        jr      SCL71 ; peep: jp_to_jr
 SCL45U:
         ld hl,65535
         ld de,65535
@@ -19594,13 +19874,10 @@ SCL71:
         call __lmu
         ld b,d
         ld c,e
-        ex de,hl
-        ld hl,4
-        add hl,sp
-        ld sp,hl
-        ex de,hl
-        ld d,b
-        ld e,c
+        inc sp ; peep: caller_cleanup
+        inc sp
+        inc sp
+        inc sp
         ld (__stox_cutlim),hl
         ld hl,(__stox_cutoff)
         ld de,(__stox_cutoff+2)
@@ -19617,11 +19894,10 @@ SCL71:
         call __ldu
         ld b,d
         ld c,e
-        ex de,hl
-        ld hl,4
-        add hl,sp
-        ld sp,hl
-        ex de,hl
+        inc sp ; peep: caller_cleanup
+        inc sp
+        inc sp
+        inc sp
         ld d,b
         ld e,c
         ld (__stox_cutoff),hl
@@ -19647,17 +19923,11 @@ SCL72:
         ld a,d
         xor 80h
         ld d,a
-        or a
         sbc hl,de
         jp nc, SCL74 ; peep: branch_over_jump
         ld hl,(__stox_any)
-        ld de,32768 ; peep: signed_cmp_const_bias_fold
-        ld a,h
-        xor 80h
-        ld h,a
-        or a
-        sbc hl,de
-        jp c, SCL83 ; peep: branch_over_jump
+        bit 7,h ; peep: signed_zero_branch
+        jp nz, SCL83
         ld hl,(__stox_acc)
         ld de,(__stox_acc+2)
         push de
@@ -19674,7 +19944,7 @@ SCL72:
         ex de,hl
         ld a,h
         or l
-        jp nz, SCL83 ; peep: branch_over_jump
+        jr      nz,SCL83 ; peep: jp_to_jr
         ld hl,(__stox_acc)
         ld de,(__stox_acc+2)
         push de
@@ -19697,7 +19967,7 @@ SCL72:
         ld a,b
         xor d
         or l
-        jr nz,SCL77 ; peep: jp_to_jr
+        jr      nz,SCL77 ; peep: jp_to_jr
         ld hl,(__stox_c)
         ld de,(__stox_cutlim)
         ld a,h
@@ -19706,14 +19976,13 @@ SCL72:
         ld a,d
         xor 80h
         ld d,a
-        or a
         sbc hl,de
-        jr z,SCL77 ; peep: jp_to_jr
-        jr c,SCL77 ; peep: jp_to_jr
+        jr      z,SCL77 ; peep: jp_to_jr
+        jr      c,SCL77 ; peep: jp_to_jr
 SCL83:
         ld hl,65535
         ld (__stox_any),hl
-        jp SCL78
+        jr      SCL78 ; peep: jp_to_jr
 SCL77:
         ld hl,1
         ld (__stox_any),hl
@@ -19732,11 +20001,10 @@ SCL77:
         call __lmul
         ld b,d
         ld c,e
-        ex de,hl
-        ld hl,4
-        add hl,sp
-        ld sp,hl
-        ex de,hl
+        inc sp ; peep: caller_cleanup
+        inc sp
+        inc sp
+        inc sp
         ld d,b
         ld e,c
         push de
@@ -19774,11 +20042,11 @@ SCL74:
         ld hl,(__stox_signed)
         ld a,h
         or l
-        jr z,SCL94U ; peep: jp_to_jr
+        jr      z,SCL94U ; peep: jp_to_jr
         ld hl,(__stox_neg)
         ld a,h
         or l
-        jr z,SCL95 ; peep: jp_to_jr
+        jr      z,SCL95 ; peep: jp_to_jr
         ; Signed negative overflow: return LONG_MIN. This is not "negate
         ; LONG_MIN's magnitude" happening to need no work; LONG_MIN
         ; (0x80000000) is its own two's-complement negation, so the
@@ -19786,11 +20054,11 @@ SCL74:
         ; bytes already loaded here.
         ld hl,0
         ld de,32768
-        jr SCL96 ; peep: jp_to_jr
+        jr      SCL96 ; peep: jp_to_jr
 SCL95:
         ld hl,65535
         ld de,32767
-        jr SCL96 ; peep: jp_to_jr
+        jr      SCL96 ; peep: jp_to_jr
 SCL94U:
         ld hl,65535
         ld de,65535
@@ -19798,14 +20066,13 @@ SCL96:
         ld (__stox_acc),hl
         ld (__stox_acc+2),de
         ld hl,34
-        ld de,0
         ld (_errno),hl
-        jr SCL93 ; peep: jp_to_jr
+        jr      SCL93 ; peep: jp_to_jr
 SCL92:
         ld hl,(__stox_neg)
         ld a,h
         or l
-        jr z,SCL93 ; peep: jp_to_jr
+        jr      z,SCL93 ; peep: jp_to_jr
         ld hl,0
         ld de,0
         push de
@@ -19827,11 +20094,9 @@ SCL92:
         ld (__stox_acc),hl
         ld (__stox_acc+2),de
 SCL93:
-        ld hl,(__stox_endptr)
-        push hl
         ld hl,0
         ld de,0
-        pop bc
+        ld bc,(__stox_endptr) ; peep: defer_global_push_reload
         push de
         push hl
         ld h,b
@@ -19853,16 +20118,16 @@ SCL93:
         ld a,b
         xor d
         or l
-        jr z,SCL101 ; peep: jp_to_jr
+        jr      z,SCL101 ; peep: jp_to_jr
         ld hl,(__stox_endptr) ; peep: ix_frame_ptr_deadd
         push hl
         ld hl,(__stox_any)
         ld a,h
         or l
-        jr z,SCL104 ; peep: jp_to_jr
+        jr      z,SCL104 ; peep: jp_to_jr
         ld hl,(__stox_p)
         ld de,0
-        jr SCL105 ; peep: jp_to_jr
+        jr      SCL105 ; peep: jp_to_jr
 SCL104:
         ld hl,(__stox_nptr)
 SCL105:
@@ -20652,18 +20917,25 @@ __lcnv:
 
 ; ============================================================
 ; Time functions  (C89 7.12)
-; CP/M 2.2 has no real-time clock.  clock() and time() return -1.
-; Struct-based functions (localtime etc.) return NULL.
-; difftime converts the low 16 bits of (t1-t0) to float via __fif.
+; time() reads the real clock via BDOS 105 (CP/M 3+ "Get Date and Time")
+; and converts it to a standard Unix time_t. The call is made unconditionally,
+; with no CP/M-version check first: ntvcm and RunCPM both answer it correctly
+; while still reporting CP/M 2.2 via BDOS 12 (so a version gate would just
+; disable this on the two emulators that matter most here), and every other
+; emulator tested either implements it too or safely no-ops it, leaving a
+; deterministic-but-wrong fixed timestamp rather than crashing - acceptable
+; since real hardware/BIOS behavior for an unrecognized BDOS call is already
+; undefined.
+;
+; gmtime/localtime/asctime/ctime/mktime (see the generated block below,
+; after _difftime) build on that: since this target has no timezone
+; database, localtime() is just gmtime() under another name - the BDOS
+; clock's raw reading already *is* "local" time, with no UTC offset to
+; apply. clock() and strftime() remain stubs.
 ; ============================================================
         public  _clock
         public  _time
         public  _difftime
-        public  _mktime
-        public  _asctime
-        public  _ctime
-        public  _gmtime
-        public  __ltim
         public  _strftime
 
 _clock:
@@ -20672,64 +20944,1345 @@ _clock:
         ld      de,0ffffh
         ret
 
+; __bcd2bin: A = packed BCD byte (each nibble 0-9) -> A = binary value.
+; Preserves BC, DE, HL.
+__bcd2bin:
+        push    bc
+        ld      b,a             ; B = original packed byte
+        and     0fh             ; A = units digit
+        ld      c,a             ; C = units
+        ld      a,b
+        rrca
+        rrca
+        rrca
+        rrca
+        and     0fh             ; A = tens digit (0-9)
+        ld      b,a
+        add     a,a             ; tens*2
+        add     a,a             ; tens*4
+        add     a,b             ; tens*5
+        add     a,a             ; tens*10
+        add     a,c             ; tens*10 + units
+        pop     bc
+        ret
+
 _time:
 ; time_t time(time_t *tp) -- tp @ IX+4/5
-; Stores (time_t)-1 through tp if non-null; returns (time_t)-1.
+; BDOS 105 fills a 4-byte buffer (day count since 1978-01-01 = day 1, packed
+; BCD hour, packed BCD minute) and returns packed BCD seconds in A. Detect a
+; system that doesn't actually implement the call (real CP/M 2.2 hardware, or
+; any BDOS that silently no-ops an unrecognized function) by sentinel-filling
+; the hour byte with 0FFh first: no valid packed-BCD hour (0x00-0x23) can
+; ever equal it, and a real implementation always writes all 4 buffer bytes
+; together, so a surviving sentinel means the call didn't run - fall back to
+; (time_t)-1, matching this function's pre-BDOS-105 stub behavior, rather
+; than returning a fabricated-looking but wrong timestamp.
+; Otherwise convert to a Unix time_t: unix_days = cpm_day_count + 2921 (CP/M
+; day 1 is Unix day 2922 - i.e. day 0 is Unix day 2921; matches ntvcm/RunCPM's
+; own reverse conversion), then seconds = unix_days*86400 + hour*3600 +
+; minute*60 + sec, accumulated as a 32-bit value via __lmul (32x32->32) and
+; __mulu (16x16->16, safe here since minute*60+second never exceeds 3599).
         push    ix
         ld      ix,0
         add     ix,sp
+
+        ld      a,0ffh
+        ld      (__time_buf+2),a        ; sentinel: never a valid packed-BCD hour
+        ld      de,__time_buf
+        ld      c,105
+        call    5
+        ld      (__time_sec_bcd),a      ; stash seconds (BCD): fn 105 doesn't
+                                         ; write it to the buffer, only to A
+
+        ld      a,(__time_buf+2)
+        cp      0ffh
+        jr      z,tim_unavailable       ; sentinel survived: no real clock
+
+        ld      hl,(__time_buf)         ; HL = cpm_day_count
+        ld      de,2921
+        add     hl,de                   ; HL = unix_days
+        ex      de,hl                   ; DE = unix_days
+
+        ; acc = unix_days * 86400 (0x00015180)
+        ld      hl,0
+        push    hl                      ; LHS high = 0
+        push    de                      ; LHS low = unix_days
+        ld      de,1
+        ld      hl,5180h
+        call    __lmul                  ; DE:HL = product (high:low)
+        pop     bc
+        pop     bc                      ; discard LHS (caller-cleanup convention)
+        ld      (__time_acc_l),hl
+        ld      (__time_acc_h),de
+
+        ; acc += hour * 3600
+        ld      a,(__time_buf+2)
+        call    __bcd2bin
+        ld      e,a
+        ld      d,0                     ; DE = hour (0-23)
+        ld      hl,0
+        push    hl                      ; LHS high = 0
+        push    de                      ; LHS low = hour
+        ld      de,0
+        ld      hl,3600
+        call    __lmul                  ; DE:HL = hour*3600 (high:low)
+        pop     bc
+        pop     bc
+        ld      bc,(__time_acc_l)
+        add     hl,bc
+        ld      (__time_acc_l),hl
+        ld      hl,(__time_acc_h)
+        adc     hl,de
+        ld      (__time_acc_h),hl
+
+        ; acc += minute*60 + second (fits in 16 bits: max 59*60+59 = 3599)
+        ld      a,(__time_buf+3)
+        call    __bcd2bin
+        ld      h,0
+        ld      l,a                     ; HL = minute
+        ld      de,60
+        call    __mulu                  ; HL = minute*60
+        ld      a,(__time_sec_bcd)
+        call    __bcd2bin
+        ld      e,a
+        ld      d,0
+        add     hl,de                   ; HL = minute*60 + second
+        ld      de,(__time_acc_l)
+        add     hl,de
+        ld      (__time_acc_l),hl
+        ld      hl,(__time_acc_h)
+        ld      de,0
+        adc     hl,de
+        ld      (__time_acc_h),hl
+        jr      tim_store
+
+tim_unavailable:
+        ld      hl,0ffffh
+        ld      (__time_acc_l),hl
+        ld      (__time_acc_h),hl
+
+tim_store:
+        ; Store through tp if non-null, then return the value in DE:HL.
         ld      l,(ix+4)
         ld      h,(ix+5)
         ld      a,h
         or      l
-        jr      z,tim_ret
-        ld      (hl),0ffh
+        jr      z,tim_noptr
+        ld      de,(__time_acc_l)
+        ld      (hl),e
         inc     hl
-        ld      (hl),0ffh
+        ld      (hl),d
         inc     hl
-        ld      (hl),0ffh
+        ld      de,(__time_acc_h)
+        ld      (hl),e
         inc     hl
-        ld      (hl),0ffh
-tim_ret:
-        ld      hl,0ffffh
-        ld      de,0ffffh
+        ld      (hl),d
+tim_noptr:
+        ld      hl,(__time_acc_l)
+        ld      de,(__time_acc_h)
         pop     ix
         ret
+
+__time_buf:     ds      4
+__time_sec_bcd: db      0
+__time_acc_l:   dw      0
+__time_acc_h:   dw      0
 
 _difftime:
 ; float difftime(time_t t1, time_t t0)
 ; Note: C89 returns double; dcc returns float (no double type).
-; Converts the signed 16-bit difference of the low words to float via __fif.
-; t0 @ IX+4..7, t1 @ IX+8..11
+; Full 32-bit signed difference converted to float via __flf - a low-word-
+; only difference (as before real timestamps existed) would be wrong
+; whenever t1/t0 straddle a 65536-second (~18.2 hour) boundary, which is
+; routine now that time() returns real Unix timestamps instead of -1.
+; t1 @ IX+4..7, t0 @ IX+8..11 (args are pushed right-to-left, so the first
+; declared parameter - t1 - ends up at the lowest IX offset; see _lseek's
+; fd/offset/whence layout for the same rule applied to a 3-arg function).
         push    ix
         ld      ix,0
         add     ix,sp
-        ld      l,(ix+8)
-        ld      h,(ix+9)        ; HL = t1 low word
-        ld      e,(ix+4)
-        ld      d,(ix+5)        ; DE = t0 low word
-        or      a
-        sbc     hl,de           ; HL = t1_lo - t0_lo
-        call    __fif           ; convert signed 16-bit to float in DE:HL
+        ld      l,(ix+4)
+        ld      h,(ix+5)        ; HL = t1 low word
+        ld      e,(ix+8)
+        ld      d,(ix+9)        ; DE = t0 low word
+        sbc     hl,de           ; HL = t1_lo - t0_lo, carry = borrow: C is
+                                 ; already clear here from "add ix,sp" above
+                                 ; (IX was 0, so that add can't overflow and
+                                 ; set carry), untouched since by the LD's
+                                 ; in between (LD never affects flags)
+        push    hl              ; save low result
+        ld      l,(ix+6)
+        ld      h,(ix+7)        ; HL = t1 high word
+        ld      e,(ix+10)
+        ld      d,(ix+11)       ; DE = t0 high word
+        sbc     hl,de           ; HL = t1_hi - t0_hi - borrow
+        ex      de,hl           ; DE = result high
+        pop     hl              ; HL = result low
+        call    __flf           ; convert signed 32-bit DE:HL to float
         pop     ix
         ret
 
-_mktime:
-; time_t mktime(struct tm *tp) -- returns (time_t)-1 (unavailable)
-        ld      hl,0ffffh
-        ld      de,0ffffh
+; ================= BEGIN generated calendar functions (from calendar.c, peephole-optimized) =================
+; gmtime localtime(__ltim) asctime ctime mktime -- regenerate: dcc -c calendar.c -o calendar.mac | dccpeep,
+; then rename generated L<n>/_Z<n>/S<n> labels to CDL<n>/CDZ<n>/CDS<n> (collision-avoidance, same idea as the
+; strconv.c-derived block's SCL<n>/SCZ<n> rename below). dcc's own codegen already special-cases "localtime"
+; to call __ltim directly (see dcc_asmname.c), so no manual rename is needed for that one specifically.
+; Two more hand-applied cleanups on top of the raw regenerated+peepholed output, both dead "or a"
+; carry-clears dcc's codegen emits reflexively: (1) cal_days_in_month's first sbc hl,de, right after
+; push ix/ld ix,0/add ix,sp - C is already clear there (see _difftime's header comment for the proof);
+; (2) every "pop bc / or a / add hl,bc" 32-bit-add sequence - ADD HL,rr never reads incoming carry (only
+; ADC does), so clearing it first is always dead code regardless of context, not just here. Both are
+; general dcc codegen habits, not calendar.c-specific, so a full fix belongs in the compiler - noted,
+; not chased further right now (see peep_pass_once.c's KNOWN BUG comment for why: same "wait for the
+; feature branch, don't create merge friction" reasoning applies to touching shared codegen right now).
+; Regenerating this block from calendar.c will reintroduce both patterns; reapply this same trim.
+
+
+
+; static function cal_is_leap
+CDZ0001:
+        ld hl,2
+        add hl,sp
+        ld a,(hl)
+        inc hl
+        ld h,(hl)
+        ld l,a
+        ld e,3
+        call __r1p
+        ld a,h ; peep: cmp0_or_hl
+        or l
+        jr z,CDL15 ; peep: jp_to_jr
+        ld hl,0
+        ret ; peep: jp_to_plain_ret
+CDL15:
+        ld hl,2
+        add hl,sp
+        ld a,(hl)
+        inc hl
+        ld h,(hl)
+        ld l,a
+        ld e,100
+        call __r1s ; peep: const_divmod_helper
+        ld a,h ; peep: cmp0_or_hl
+        or l
+        jr z,CDL18 ; peep: jp_to_jr
+        ld hl,1
+        ret ; peep: jp_to_plain_ret
+CDL18:
+        ld hl,2
+        add hl,sp
+        ld a,(hl)
+        inc hl
+        ld h,(hl)
+        ld l,a
+        ld de,400
+        call __r2s ; peep: const_divmod_helper
+        ld a,h ; peep: cmp0_or_hl
+        or l
+        ld hl,0 ; peep: bool_from_cmp
+        jr nz,CDL14 ; peep: jp_to_jr
+        inc l
+CDL14:
         ret
 
-_asctime:
-_ctime:
+        public _gmtime
 _gmtime:
+        push ix
+        ld ix,0
+        add ix,sp
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld a,h
+        or l
+        jr nz,CDL169 ; peep: jp_to_jr
+        ld hl,0
+        jr CDL168 ; peep: jp_to_jr
+CDL169:
+        ld l,(ix+4) ; peep: ix_frame_ptr_deadd
+        ld h,(ix+5)
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        inc hl
+        ld a,(hl)
+        inc hl
+        ld h,(hl)
+        ld l,a
+        push hl ; peep: long_load_push_no_ex_call
+        push de
+        call CDZ0004
+        pop bc
+        pop bc
+CDL168:
+        ld sp,ix
+        pop ix
+        ret
+
+        public __ltim
 __ltim:
+        push ix
+        ld ix,0
+        add ix,sp
+        ld l,(ix+4)
+        ld h,(ix+5)
+        push hl
+        call _gmtime
+        ld sp,ix
+        pop ix
+        ret
+
+        public _asctime
+_asctime:
+        push ix
+        ld ix,0
+        add ix,sp
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld a,h
+        or l
+        jr nz,CDL187 ; peep: jp_to_jr
+        ld hl,0
+        jp CDL186
+CDL187:
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,10
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        ld de,1900
+        add hl,de
+        push hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        push hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        inc hl
+        inc hl
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        push hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,4
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        push hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,6
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        push hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,8
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        add hl,hl
+        ld de,CDZ0008
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        push hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,12
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        add hl,hl
+        ld de,CDZ0009
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        push hl
+        ld hl,CDS19
+        push hl
+        ld hl,CDZ0010
+        push hl
+        call _sprintf
+        pop bc
+        pop bc
+        pop bc
+        pop bc
+        pop bc
+        pop bc
+        pop bc
+        pop bc
+        pop bc
+        ld hl,CDZ0010
+CDL186:
+        ld sp,ix
+        pop ix
+        ret
+
+        public _ctime
+_ctime:
+        push ix
+        ld ix,0
+        add ix,sp
+        ld l,(ix+4)
+        ld h,(ix+5)
+        push hl
+        call __ltim
+        pop bc
+        push hl
+        call _asctime
+        ld sp,ix
+        pop ix
+        ret
+
+        public _mktime
+_mktime:
+        push ix
+        ld ix,0
+        add ix,sp
+        ld hl,-18
+        add hl,sp
+        ld sp,hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld a,h
+        or l
+        jr nz,CDL241 ; peep: jp_to_jr
+        ld hl,65535
+        ld de,65535 ; peep: fold_const_sxt
+        jp CDL240
+CDL241:
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,10
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        ld de,1900
+        add hl,de
+        ld (ix-2),l
+        ld (ix-1),h
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,8
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        ld (ix-4),l
+        ld (ix-3),h
+        ld c,(ix-4)
+        ld b,(ix-3)
+CDL244:
+        ld l,c
+        ld h,b
+        bit 7,h ; peep: signed_zero_branch
+        jr z,CDL245 ; peep: jp_to_jr
+        ld l,c
+        ld h,b
+        ld de,12
+        add hl,de
+        ld c,l
+        ld b,h
+        ld a,(ix-2)
+        dec (ix-2)
+        or a
+        jr nz,CDL244 ; peep: jp_to_jr
+        dec (ix-1)
+        jr CDL244 ; peep: jp_to_jr
+CDL245:
+        ld (ix-4),c
+        ld (ix-3),b
+        ld c,(ix-4)
+        ld b,(ix-3)
+CDL247:
+        ld l,c
+        ld h,b
+        ld de,32779 ; peep: signed_cmp_const_bias_fold
+        ld a,h
+        xor 80h
+        ld h,a
+        sbc hl,de
+        jr z,CDL248 ; peep: jp_to_jr
+        jr c,CDL248 ; peep: jp_to_jr
+        ld l,c
+        ld h,b
+        ld de,12
+        sbc hl,de
+        ld c,l
+        ld b,h
+        inc (ix-2)
+        jr nz,CDL247 ; peep: jp_to_jr
+        inc (ix-1)
+        jr CDL247 ; peep: jp_to_jr
+CDL248:
+        ld (ix-4),c
+        ld (ix-3),b
+        ld l,(ix-2)
+        ld h,(ix-1)
+        ld de,34738 ; peep: signed_cmp_const_bias_fold
+        ld a,h
+        xor 80h
+        ld h,a
+        sbc hl,de
+        jr nc,CDL250 ; peep: jp_to_jr
+        ld hl,65535
+        ld de,65535 ; peep: fold_const_sxt
+        jp CDL240
+CDL250:
+        ld hl,0
+        ld de,0 ; peep: fold_const_sxt
+        ld (ix-12),l
+        ld (ix-11),h
+        ld (ix-10),e
+        ld (ix-9),d
+        ld hl,1970
+        ld (ix-8),l
+        ld (ix-7),h
+CDL251:
+        ld l,(ix-8)
+        ld h,(ix-7)
+        ld e,(ix-2) ; peep: ix_pair_load_to_de
+        ld d,(ix-1)
+        ld a,h
+        xor 80h
+        ld h,a
+        ld a,d
+        xor 80h
+        ld d,a
+        sbc hl,de
+        jr nc,CDL253 ; peep: jp_to_jr
+        ld l,(ix-12)
+        ld h,(ix-11)
+        ld e,(ix-10)
+        ld d,(ix-9)
+        push de
+        push hl
+        ld l,(ix-8)
+        ld h,(ix-7)
+        push hl
+        call CDZ0001
+        pop bc
+        ld a,h
+        or l
+        jr z,CDL254 ; peep: jp_to_jr
+        ld hl,366
+        ld de,0
+        jr CDL255 ; peep: jp_to_jr
+CDL254:
+        ld hl,365
+        ld de,0
+CDL255:
+        pop bc
+        add hl,bc
+        ex de,hl
+        pop bc
+        adc hl,bc
+        ex de,hl
+        ld (ix-12),l
+        ld (ix-11),h
+        ld (ix-10),e
+        ld (ix-9),d
+        inc (ix-8)
+        jp nz, CDL251
+        inc (ix-7)
+        jp CDL251
+CDL253:
+        ld hl,0
+        ld (ix-6),l
+        ld (ix-5),h
+CDL257:
+        ld l,(ix-6)
+        ld h,(ix-5)
+        ld e,(ix-4) ; peep: ix_pair_load_to_de
+        ld d,(ix-3)
+        ld a,h
+        xor 80h
+        ld h,a
+        ld a,d
+        xor 80h
+        ld d,a
+        sbc hl,de
+        jr nc,CDL259 ; peep: jp_to_jr
+        ld l,(ix-12)
+        ld h,(ix-11)
+        ld e,(ix-10)
+        ld d,(ix-9)
+        push de
+        push hl
+        ld l,(ix-6)
+        ld h,(ix-5)
+        push hl
+        ld l,(ix-2)
+        ld h,(ix-1)
+        push hl
+        call CDZ0002
+        pop bc
+        pop bc
+        ld a,h
+        rlca
+        sbc a,a
+        ld d,a
+        ld e,a
+        pop bc
+        add hl,bc
+        ex de,hl
+        pop bc
+        adc hl,bc
+        ex de,hl
+        ld (ix-12),l
+        ld (ix-11),h
+        ld (ix-10),e
+        ld (ix-9),d
+        inc (ix-6)
+        jp nz, CDL257
+        inc (ix-5)
+        jp CDL257
+CDL259:
+        ld l,(ix-12)
+        ld h,(ix-11)
+        ld e,(ix-10)
+        ld d,(ix-9)
+        push de
+        push hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,6
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        dec hl ; peep: sbc_de1_to_dec
+        ld a,h
+        rlca
+        sbc a,a
+        ld d,a
+        ld e,a
+        pop bc
+        add hl,bc
+        ex de,hl
+        pop bc
+        adc hl,bc
+        ex de,hl
+        ld (ix-12),l
+        ld (ix-11),h
+        ld (ix-10),e
+        ld (ix-9),d
+        ld e,(ix-10)
+        ld d,(ix-9)
+        push de
+        push hl
+        ld hl,20864
+        ld de,1
+        call __lmul
+        pop bc
+        pop bc
+        push de
+        push hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,4
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        ld a,h
+        rlca
+        sbc a,a
+        ld d,a
+        ld e,a
+        push de
+        push hl
+        ld hl,3600
+        ld de,0
+        call __lmul
+        pop bc
+        pop bc
+        pop bc
+        add hl,bc
+        ex de,hl
+        pop bc
+        adc hl,bc
+        ex de,hl
+        push de
+        push hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        inc hl
+        inc hl
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        ld a,h
+        rlca
+        sbc a,a
+        ld d,a
+        ld e,a
+        push de
+        push hl
+        ld hl,60
+        ld de,0
+        call __lmul
+        pop bc
+        pop bc
+        pop bc
+        add hl,bc
+        ex de,hl
+        pop bc
+        adc hl,bc
+        ex de,hl
+        push de
+        push hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+        ld a,h
+        rlca
+        sbc a,a
+        ld d,a
+        ld e,a
+        pop bc
+        add hl,bc
+        ex de,hl
+        pop bc
+        adc hl,bc
+        ex de,hl
+        ld (ix-16),l
+        ld (ix-15),h
+        ld (ix-14),e
+        ld (ix-13),d
+        ld e,(ix-14)
+        ld d,(ix-13)
+        ld a,d
+        xor 80h
+        ld d,a
+        ld bc,0
+        sbc hl,bc
+        ex de,hl
+        ld bc,32768
+        sbc hl,bc
+        jr nc,CDL261 ; peep: jp_to_jr
+        ld hl,65535
+        ld de,65535 ; peep: fold_const_sxt
+        jp CDL240
+CDL261:
+        ld l,(ix-16)
+        ld h,(ix-15)
+        ld e,(ix-14)
+        ld d,(ix-13)
+        push de
+        push hl
+        call CDZ0004
+        pop bc
+        pop bc
+        ld (ix-18),l
+        ld (ix-17),h
+        ld l,(ix+4)
+        ld h,(ix+5)
+        push hl
+        ld l,(ix-18)
+        ld h,(ix-17)
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        pop hl
+        ld (hl),e
+        inc hl
+        ld (hl),d
+        ld l,(ix+4)
+        ld h,(ix+5)
+        inc hl
+        inc hl
+        push hl
+        ld l,(ix-18)
+        ld h,(ix-17)
+        inc hl
+        inc hl
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        pop hl
+        ld (hl),e
+        inc hl
+        ld (hl),d
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,4
+        add hl,de
+        push hl
+        ld l,(ix-18)
+        ld h,(ix-17)
+        ld de,4
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        pop hl
+        ld (hl),e
+        inc hl
+        ld (hl),d
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,6
+        add hl,de
+        push hl
+        ld l,(ix-18)
+        ld h,(ix-17)
+        ld de,6
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        pop hl
+        ld (hl),e
+        inc hl
+        ld (hl),d
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,8
+        add hl,de
+        push hl
+        ld l,(ix-18)
+        ld h,(ix-17)
+        ld de,8
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        pop hl
+        ld (hl),e
+        inc hl
+        ld (hl),d
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,10
+        add hl,de
+        push hl
+        ld l,(ix-18)
+        ld h,(ix-17)
+        ld de,10
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        pop hl
+        ld (hl),e
+        inc hl
+        ld (hl),d
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,12
+        add hl,de
+        push hl
+        ld l,(ix-18)
+        ld h,(ix-17)
+        ld de,12
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        pop hl
+        ld (hl),e
+        inc hl
+        ld (hl),d
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,14
+        add hl,de
+        push hl
+        ld l,(ix-18)
+        ld h,(ix-17)
+        ld de,14
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        pop hl
+        ld (hl),e
+        inc hl
+        ld (hl),d
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld de,16
+        add hl,de
+        push hl
+        ld l,(ix-18)
+        ld h,(ix-17)
+        ld de,16
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        pop hl
+        ld (hl),e
+        inc hl
+        ld (hl),d
+        ld l,(ix-16)
+        ld h,(ix-15)
+        ld e,(ix-14)
+        ld d,(ix-13)
+CDL240:
+        ld sp,ix
+        pop ix
+        ret
+
+; static function cal_days_in_month
+CDZ0002:
+        push ix
+        ld ix,0
+        add ix,sp
+        ld l,(ix+6)
+        ld h,(ix+7)
+        ld de,1
+        sbc hl,de       ; C already clear: see _difftime's header comment
+        jr nz,CDL62 ; peep: jp_to_jr
+        ld l,(ix+4)
+        ld h,(ix+5)
+        push hl
+        call CDZ0001
+        pop bc
+        ld a,h
+        or l
+        jr z,CDL62 ; peep: jp_to_jr
+        ld hl,29
+        jr CDL61 ; peep: jp_to_jr
+CDL62:
+        ld l,(ix+6)
+        ld h,(ix+7)
+        add hl,hl
+        ld de,CDZ0003
+        add hl,de
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
+CDL61:
+        ld sp,ix
+        pop ix
+        ret
+
+; static function cal_breakdown
+CDZ0004:
+        push ix
+        ld ix,0
+        add ix,sp
+        ld hl,-18
+        add hl,sp
+        ld sp,hl
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld e,(ix+6)
+        ld d,(ix+7)
+        ld a,d
+        xor 80h
+        ld d,a
+        ld bc,0
+        sbc hl,bc
+        ex de,hl
+        ld bc,32768
+        sbc hl,bc
+        jr nc,CDL140 ; peep: jp_to_jr
+        ld hl,0
+        jp CDL139
+CDL140:
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld e,(ix+6)
+        ld d,(ix+7)
+        push de
+        push hl
+        ld hl,20864
+        ld de,1
+        call __lds
+        pop bc
+        pop bc
+        ld (ix-4),l
+        ld (ix-3),h
+        ld (ix-2),e
+        ld (ix-1),d
+        ld l,(ix+4)
+        ld h,(ix+5)
+        ld e,(ix+6)
+        ld d,(ix+7)
+        push de
+        push hl
+        ld hl,20864
+        ld de,1
+        call __lms
+        pop bc
+        pop bc
+        ld (ix-8),l
+        ld (ix-7),h
+        ld (ix-6),e
+        ld (ix-5),d
+        ld e,(ix-6)
+        ld d,(ix-5)
+        push de
+        push hl
+        ld hl,3600
+        ld de,0
+        call __lds
+        pop bc
+        pop bc
+        ld (CDZ0005+4),hl
+        ld l,(ix-8)
+        ld h,(ix-7)
+        ld e,(ix-6)
+        ld d,(ix-5)
+        push de
+        push hl
+        ld hl,3600
+        ld de,0
+        call __lms
+        pop bc
+        pop bc
+        ld (ix-8),l
+        ld (ix-7),h
+        ld (ix-6),e
+        ld (ix-5),d
+        ld e,(ix-6)
+        ld d,(ix-5)
+        push de
+        push hl
+        ld hl,60
+        ld de,0
+        call __lds
+        pop bc
+        pop bc
+        ld (CDZ0005+2),hl
+        ld l,(ix-8)
+        ld h,(ix-7)
+        ld e,(ix-6)
+        ld d,(ix-5)
+        push de
+        push hl
+        ld hl,60
+        ld de,0
+        call __lms
+        pop bc
+        pop bc
+        ld (CDZ0005),hl
+        ld l,(ix-4)
+        ld h,(ix-3)
+        ld e,(ix-2)
+        ld d,(ix-1)
+        push de
+        push hl
+        ld hl,4
+        ld de,0
+        pop bc
+        add hl,bc
+        ex de,hl
+        pop bc
+        adc hl,bc
+        ex de,hl
+        push de
+        push hl
+        ld hl,7
+        ld de,0
+        call __lms
+        pop bc
+        pop bc
+        ld (CDZ0005+12),hl
+        ld hl,1970
+        ld (ix-10),l
+        ld (ix-9),h
+CDL145:
+        ld l,(ix-10)
+        ld h,(ix-9)
+        push hl
+        call CDZ0001
+        pop bc
+        ld a,h
+        or l
+        jr z,CDL148 ; peep: jp_to_jr
+        ld hl,366
+        ld de,0
+        jr CDL149 ; peep: jp_to_jr
+CDL148:
+        ld hl,365
+        ld de,0
+CDL149:
+        ld (ix-16),l
+        ld (ix-15),h
+        ld (ix-14),e
+        ld (ix-13),d
+        ld l,(ix-4)
+        ld h,(ix-3)
+        ld e,(ix-2)
+        ld d,(ix-1)
+        push de
+        push hl
+        ld l,(ix-16)
+        ld h,(ix-15)
+        ld e,(ix-14)
+        ld d,(ix-13)
+        push de
+        push hl
+        call __lts
+        ex de,hl
+        ld hl,8
+        add hl,sp
+        ld sp,hl
+        ex de,hl
+        ld a,h
+        or l
+        jr nz,CDL147 ; peep: jp_to_jr
+        ld l,(ix-4)
+        ld h,(ix-3)
+        ld e,(ix-2)
+        ld d,(ix-1)
+        push de
+        push hl
+        ld l,(ix-16)
+        ld h,(ix-15)
+        ld e,(ix-14)
+        ld d,(ix-13)
+        ld b,h
+        ld c,l
+        pop hl
+        or a
+        sbc hl,bc
+        ld b,h
+        ld c,l
+        pop hl
+        sbc hl,de
+        ld d,b
+        ld e,c
+        ex de,hl
+        ld (ix-4),l
+        ld (ix-3),h
+        ld (ix-2),e
+        ld (ix-1),d
+        inc (ix-10)
+        jp nz, CDL145
+        inc (ix-9)
+        jp CDL145
+CDL147:
+        ld l,(ix-10)
+        ld h,(ix-9)
+        ld de,1900
+        or a
+        sbc hl,de
+        ld (CDZ0005+10),hl
+        ld l,(ix-4)
+        ld h,(ix-3)
+        ld e,(ix-2)
+        ld d,(ix-1)
+        ld (CDZ0005+14),hl
+        ld hl,0
+        ld (ix-12),l
+        ld (ix-11),h
+CDL152:
+        ld l,(ix-12)
+        ld h,(ix-11)
+        push hl
+        ld l,(ix-10)
+        ld h,(ix-9)
+        push hl
+        call CDZ0002
+        pop bc
+        pop bc
+        ld (ix-18),l
+        ld (ix-17),h
+        ld l,(ix-4)
+        ld h,(ix-3)
+        ld e,(ix-2)
+        ld d,(ix-1)
+        push de
+        push hl
+        ld l,(ix-18)
+        ld h,(ix-17)
+        ld a,h
+        rlca
+        sbc a,a
+        ld d,a
+        ld e,a
+        push de
+        push hl
+        call __lts
+        ex de,hl
+        ld hl,8
+        add hl,sp
+        ld sp,hl
+        ex de,hl
+        ld a,h
+        or l
+        jr nz,CDL154 ; peep: jp_to_jr
+        ld l,(ix-4)
+        ld h,(ix-3)
+        ld e,(ix-2)
+        ld d,(ix-1)
+        push de
+        push hl
+        ld l,(ix-18)
+        ld h,(ix-17)
+        ld a,h
+        rlca
+        sbc a,a
+        ld d,a
+        ld e,a
+        ld b,h
+        ld c,l
+        pop hl
+        or a
+        sbc hl,bc
+        ld b,h
+        ld c,l
+        pop hl
+        sbc hl,de
+        ld d,b
+        ld e,c
+        ex de,hl
+        ld (ix-4),l
+        ld (ix-3),h
+        ld (ix-2),e
+        ld (ix-1),d
+        inc (ix-12)
+        jp nz, CDL152
+        inc (ix-11)
+        jp CDL152
+CDL154:
+        ld l,(ix-12)
+        ld h,(ix-11)
+        ld (CDZ0005+8),hl
+        ld l,(ix-4)
+        ld h,(ix-3)
+        ld e,(ix-2)
+        ld d,(ix-1)
+        inc hl ; peep: ld_de1_to_inc
+        ld (CDZ0005+6),hl
+        ld hl,0
+        ld (CDZ0005+16),hl
+        ld hl,CDZ0005
+CDL139:
+        ld sp,ix
+        pop ix
+        ret
+
+; string literals
+CDS0:
+        db 83,117,110,0
+CDS1:
+        db 77,111,110,0
+CDS2:
+        db 84,117,101,0
+CDS3:
+        db 87,101,100,0
+CDS4:
+        db 84,104,117,0
+CDS5:
+        db 70,114,105,0
+CDS6:
+        db 83,97,116,0
+CDS7:
+        db 74,97,110,0
+CDS8:
+        db 70,101,98,0
+CDS9:
+        db 77,97,114,0
+CDS10:
+        db 65,112,114,0
+CDS11:
+        db 77,97,121,0
+CDS12:
+        db 74,117,110,0
+CDS13:
+        db 74,117,108,0
+CDS14:
+        db 65,117,103,0
+CDS15:
+        db 83,101,112,0
+CDS16:
+        db 79,99,116,0
+CDS17:
+        db 78,111,118,0
+CDS18:
+        db 68,101,99,0
+CDS19:
+        db 37,115,32,37,115,32,37,50,100,32,37,48,50,100,58,37,48,50,100,58,37,48,50,100,32,37,100,10,0
+
+; initialized globals
+CDZ0003:
+        dw 31
+        dw 28
+        dw 31
+        dw 30
+        dw 31
+        dw 30
+        dw 31
+        dw 31
+        dw 30
+        dw 31
+        dw 30
+        dw 31
+CDZ0009:
+        dw CDS0
+        dw CDS1
+        dw CDS2
+        dw CDS3
+        dw CDS4
+        dw CDS5
+        dw CDS6
+CDZ0008:
+        dw CDS7
+        dw CDS8
+        dw CDS9
+        dw CDS10
+        dw CDS11
+        dw CDS12
+        dw CDS13
+        dw CDS14
+        dw CDS15
+        dw CDS16
+        dw CDS17
+        dw CDS18
+
+; module uninitialized globals
+CDZ0005:
+        ds 18
+CDZ0010:
+        ds 26
+
+; ================= END generated calendar functions =================
+
 _strftime:
-; All return NULL/0 (no clock on CP/M 2.2). strftime returns size_t (0 =
-; wrote nothing) rather than a NULL pointer, but that's still HL=0 on
-; return, and none of these five functions ever read their arguments, so
-; the differing parameter lists don't matter for a shared stub that
-; ignores all of them.
+; size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tp)
+; Still a stub (returns 0, writes nothing) - a real implementation is a
+; separate, much bigger project (a format-string mini-interpreter), unlike
+; gmtime/localtime/asctime/ctime/mktime above which just needed the shared
+; time_t<->struct-tm breakdown.
         ld      hl,0
         ret
 

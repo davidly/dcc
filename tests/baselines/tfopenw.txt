@@ -1,0 +1,2 @@
+REPORT fopen("OW?.TMP","r") returned NULL
+tfopenw ok

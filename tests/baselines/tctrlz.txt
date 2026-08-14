@@ -1,0 +1,15 @@
+PASS fgets_line1: [line1
+]
+PASS fgets_hits_ctrlz_returns_null: 0
+PASS feof_after_ctrlz: 1
+REPORT fread total bytes (>=19 expected; more is the separate
+  tpadread.c record-padding finding, not a fread problem): 32
+PASS fread_reaches_at_least_19_bytes: 1
+PASS fread_sees_ctrlz_byte: 26
+PASS fread_sees_bytes_after_ctrlz: 108
+PASS fread_sees_line3: 10
+PASS fgetc_sees_ctrlz: 26
+PASS fgetc_sees_line3_end: 10
+REPORT fgetc total bytes (>=19 expected, same caveat as fread): 128
+PASS fgetc_reaches_at_least_19_bytes: 1
+tctrlz ok

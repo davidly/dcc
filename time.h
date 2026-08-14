@@ -28,27 +28,40 @@ struct tm {
 clock_t clock(void);
 
 /** Current calendar time; stores through tp if non-null.
- *  Returns (time_t)-1 because CP/M 2.2 has no real-time clock. */
+ *  Reads a real clock via BDOS function 105 (CP/M 3+ "Get Date and Time")
+ *  when the underlying system/emulator implements it - many do even while
+ *  still reporting CP/M 2.2 via BDOS 12. The result tracks the BDOS clock's
+ *  raw wall-clock reading with no timezone adjustment (CP/M has no timezone
+ *  concept), encoded as a Unix time_t. Returns (time_t)-1, and stores -1
+ *  through tp, when the underlying BDOS doesn't actually implement the
+ *  call (e.g. real CP/M 2.2 hardware). */
 time_t time(time_t *tp);
 
 /** Difference t1-t0 as a floating-point count of seconds.
  *  Note: C89 returns double; dcc returns float (no double type). */
 float difftime(time_t t1, time_t t0);
 
-/** Convert broken-down time *tp to a time_t; returns (time_t)-1 (unavailable). */
+/** Convert broken-down time *tp (year/mon/mday/hour/min/sec) to a time_t,
+ *  and normalize *tp in place - out-of-range fields (e.g. tm_mday=32) carry
+ *  into the next unit, and tm_wday/tm_yday are always recomputed. Supports
+ *  years >= 1970; returns (time_t)-1 (and leaves *tp unmodified) for a NULL
+ *  tp, an earlier year, or a result that doesn't fit in a 32-bit time_t. */
 time_t mktime(struct tm *tp);
 
-/** Convert *tp to a string of the form "Www Mmm dd hh:mm:ss yyyy\n".
- *  Returns NULL on CP/M 2.2. */
+/** Convert *tp to a string of the form "Www Mmm dd hh:mm:ss yyyy\n" in an
+ *  internal static buffer (not reentrant). Returns NULL if tp is NULL. */
 char *asctime(const struct tm *tp);
 
-/** Convert the calendar time *tp to a local-time string; returns NULL on CP/M 2.2. */
+/** Equivalent to asctime(localtime(tp)). Returns NULL if tp is NULL. */
 char *ctime(const time_t *tp);
 
-/** Convert *tp to UTC broken-down time; returns NULL on CP/M 2.2. */
+/** Convert *tp to broken-down time in an internal static buffer (not
+ *  reentrant). Returns NULL if tp is NULL or *tp is negative. */
 struct tm *gmtime(const time_t *tp);
 
-/** Convert *tp to local broken-down time; returns NULL on CP/M 2.2. */
+/** Identical to gmtime(tp): this target has no timezone database, so the
+ *  BDOS clock's raw reading already *is* "local" time, with no UTC offset
+ *  to apply (see time()'s own comment above). */
 struct tm *localtime(const time_t *tp);
 
 /** Format broken-down time *tp into s according to fmt; returns 0 on CP/M 2.2. */

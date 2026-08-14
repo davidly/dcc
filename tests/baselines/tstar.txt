@@ -1,0 +1,6 @@
+PASS sa1_exists_before: 1
+PASS sa2_exists_before: 1
+PASS unlink_star_pattern: 0
+PASS sa1_deleted: 0
+PASS sa2_deleted: 0
+tstar ok

@@ -1,0 +1,5 @@
+REPORT A:TDRV.TMP read back: [noprefix]
+PASS a_prefix_opens_same_file: 1
+REPORT TDRV2.TMP read back: [viaprefix]
+PASS unprefixed_sees_prefixed_create: 1
+tdrive ok

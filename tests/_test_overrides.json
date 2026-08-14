@@ -92,6 +92,8 @@
     { "name": "tdirent", "host": true, "perf_ignore": true },
     { "name": "cpmenumd", "perf_ignore": true },
     { "name": "terrno", "host": true },
+    { "name": "ttime", "dcc_args": "dcc-peep=false", "perf_ignore": true },
+    { "name": "tc89c2", "perf_ignore": true },
     { "name": "tlimits", "host": true, "requires-32bit-linux-host-compiler": true },
     { "name": "tlong", "host": true, "requires-32bit-linux-host-compiler": true },
     { "name": "tlongaud", "host": true, "requires-32bit-linux-host-compiler": true },
@@ -114,6 +116,8 @@
     { "name": "tgnarly", "host": true },
     { "name": "tbool", "requires-non-msvc-host-compiler": true },
     { "name": "tc99apar", "requires-non-msvc-host-compiler": true },
-    { "name": "tpfinf", "requires-non-msvc-host-compiler": true }
+    { "name": "tpfinf", "requires-non-msvc-host-compiler": true },
+    { "name": "ttrace", "ignore": true },
+    { "name": "texecdp", "stack_size": 2048 }
   ]
 }
