@@ -61,7 +61,6 @@
  * to keep this file's interaction with that existing code trivial.
  */
 #include "dcc.h"
-#include "dcc_regalloc_internal.h"
 #include "dcc_ast.h"
 
 #define MAX_LICM_CANDIDATES 8
@@ -81,8 +80,25 @@
 static struct Sym *g_licm_inline_expand_stack[LICM_MAX_INLINE_EXPAND_DEPTH];
 static int g_licm_inline_expand_depth;
 
-/* struct LicmModifiedNames now lives in dcc_ast.h (as LICM_MAX_MODIFIED_NAMES/
- * struct LicmModifiedNames) - dcc_loop_regalloc.c shares it. */
+/* Runtime helpers whose implementations are pure and touch no memory visible
+ * to the caller. LICM may therefore treat them like ordinary scalar
+ * operations after recursively checking their argument expressions. */
+static const char *g_licm_safe_runtime_calls[] = {
+    "__mulu", "__udivmod", "__divu", "__modu", "__divs", "__mods", "__sdivmod",
+    "__caa", "__can", "__csp", "__cdg", "__cup", "__clo",
+    "__cxd", "__cpr", "__cct", "__cpu", "__ctu", "__ctl",
+    NULL
+};
+
+static int asm_name_is_licm_safe_call(const char *name)
+{
+    int i;
+
+    for (i = 0; g_licm_safe_runtime_calls[i] != NULL; ++i)
+        if (strcmp(name, g_licm_safe_runtime_calls[i]) == 0)
+            return 1;
+    return 0;
+}
 
 struct LicmCandidateList {
     const struct AstNode *nodes[MAX_LICM_CANDIDATES];
@@ -242,18 +258,11 @@ void licm_scan_modified(const struct AstNode *n, struct LicmModifiedNames *mod)
                 licm_scan_modified(n->list[i], mod);
             return;
         }
-        /* A call to one of DCCRTL.MAC's verified-BC-clean ctype.h routines
-         * (asm_name_is_bc_safe_call, dcc_regalloc.c/g_safe_runtime_calls) has
-         * nothing to model - no writes, no further calls, no side effects
-         * at all - so it's tolerated exactly like a _Noreturn call: recurse
-         * into its own argument expressions (evaluated in the loop's own
-         * scope, so still subject to the ordinary write-tracking below) and
-         * move on, without declining the whole loop. This is the AST-level
-         * half of the check; buf_has_unsafe_call re-verifies the same
-         * whitelist once the call's real asm name is visible in the
-         * generated text (see that function's own comment for why both
-         * checks exist). */
-        if (fn_sym != NULL && asm_name_is_bc_safe_call(asm_name_for(sym_asm_name(fn_sym)))) {
+        /* Calls to the verified-pure runtime helpers above have no writes or
+         * further side effects, so only their argument expressions can
+         * invalidate a loop-invariant candidate. */
+        if (fn_sym != NULL &&
+            asm_name_is_licm_safe_call(asm_name_for(sym_asm_name(fn_sym)))) {
             for (i = 0; i < n->list_len && !mod->overflowed; ++i)
                 licm_scan_modified(n->list[i], mod);
             return;

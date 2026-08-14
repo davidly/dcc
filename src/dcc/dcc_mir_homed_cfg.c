@@ -511,10 +511,14 @@ static int mir_emit_homed_condition_jump(
     FILE *out, int value, int instruction, int label, int jump_if_true)
 {
     const struct MirInsn *condition = mir_definition(value);
-
     if (condition != NULL && type_size(condition->type) == 4) {
-        int preserve_hl_de = mir_home_color_live_across(
-            instruction, MIR_COLOR_HL_DE);
+        int preserve_hl_de =
+            mir_home_color_live_across(
+                instruction, MIR_COLOR_HL_DE) ||
+            mir_home_color_live_across(
+                instruction, MIR_COLOR_HL) ||
+            mir_home_color_live_across(
+                instruction, MIR_COLOR_DE);
         if (preserve_hl_de)
             fputs("\tpush de\n\tpush hl\n", out);
         if (!mir_emit_wide_home_to_hl_de(out, value))
@@ -1885,24 +1889,10 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             {
                 struct Sym *callee = find_global(insn->name);
                 int is_indirect = strcmp(insn->name, "<indirect>") == 0;
-                /* Phase 1 (mir-migration-plan-to-100pct.md): a defined-in-TU
-                 * callee was previously required, on the theory that only
-                 * mir_emit_home_prologue/epilogue's own push/pop iy could be
-                 * trusted to preserve a caller's IY. That is stricter than
-                 * the invariant the rest of the compiler already relies on
-                 * (dcc.h's REG_IY comment, verified by
-                 * scripts/rtl-iy-safety.py): IY is CALLEE-SAVED across *any*
-                 * call, defined or not - DCCRTL contains no IY instruction
-                 * at all, and CP/M's 8080-coded BDOS has no index registers
-                 * to write with, so nothing reachable from an ordinary call
-                 * can clobber it. This is exactly the same guarantee
-                 * function_qualifies_for_speculative_iy_regalloc
-                 * (dcc_regalloc.c) already leans on for the legacy backend,
-                 * which claims IY for any call-containing function without
-                 * distinguishing defined-in-TU calls from library calls.
-                 * Only an indirect call (whose target isn't known at
-                 * compile time, so it can't be proven to be dcc-compiled or
-                 * part of DCCRTL/BDOS) remains excluded here. */
+                /* IY is callee-saved by the dcc ABI and by the runtime
+                 * helpers that use it. Only an indirect call, whose target
+                 * cannot be checked against that contract, remains
+                 * excluded here. */
                 if (is_indirect || callee == NULL)
                     return mir_homed_reject("call-target");
                 if ((insn->memory_flags & MIR_CALL_FLAG_FORMAT_RUNTIME) != 0 &&

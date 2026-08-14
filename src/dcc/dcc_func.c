@@ -8,8 +8,7 @@
  * parse_translation_unit). File-scope initializer parsing is in
  * dcc_global_init.c.
  *
- * MODULE: compiled as its own translation unit; speculative codegen entry
- * points are declared in dcc_regalloc_internal.h.
+ * MODULE: compiled as its own translation unit.
  * Source provenance: monolith src/ddc.c lines 15880-17705.
  */
 
@@ -23,7 +22,6 @@
 #endif
 
 #include "dcc.h"
-#include "dcc_regalloc_internal.h"
 #include "dcc_ast.h"
 #include "dcc_mir.h"
 #ifdef _WIN32
@@ -649,7 +647,7 @@ static void record_narrow_return_expr_if_simple(struct Sym *s)
  * raw fprintf'd `call` that bypasses the AST-based marking entirely, so a
  * static `main` would otherwise look unreferenced and get silently
  * dropped. */
-int plain_static_body_can_be_buffered(struct Sym *s, const char *name)
+static int plain_static_body_can_be_buffered(struct Sym *s, const char *name)
 {
     return s != NULL && s->is_static && strcmp(name, "main") != 0;
 }
@@ -817,13 +815,9 @@ static void reserve_inline_temp_locals(void)
 #define ADDR_CACHE_MIN_COUNT 3
 #define MAX_IDENT_COUNTS 128
 
-/* Weight applied to each identifier occurrence the body scan records: 8 per
- * enclosing loop level, capped at three levels (512). Maintained by
- * scan_function_body_ident_counts as it tracks loop nesting. */
-static long g_scan_loop_weight = 1;
 #define MAX_ADDR_CACHE_ARRAYS 16
 
-struct IdentCount { char name[64]; int count; long weighted; int addr_taken; int written; };
+struct IdentCount { char name[64]; int count; int addr_taken; };
 static struct IdentCount g_ident_counts[MAX_IDENT_COUNTS];
 static int g_ident_count_n;
 
@@ -855,7 +849,6 @@ static void bump_ident_count(const char *name)
     for (i = 0; i < g_ident_count_n; ++i) {
         if (strcmp(g_ident_counts[i].name, name) == 0) {
             g_ident_counts[i].count++;
-            g_ident_counts[i].weighted += g_scan_loop_weight;
             return;
         }
     }
@@ -870,19 +863,16 @@ static void bump_ident_count(const char *name)
         memcpy(g_ident_counts[g_ident_count_n].name, name, namelen);
         g_ident_counts[g_ident_count_n].name[namelen] = 0;
         g_ident_counts[g_ident_count_n].count = 1;
-        g_ident_counts[g_ident_count_n].weighted = g_scan_loop_weight;
         g_ident_counts[g_ident_count_n].addr_taken = 0;
-        g_ident_counts[g_ident_count_n].written = 0;
         g_ident_count_n++;
     }
 }
 
 /* Called immediately after bump_ident_count for an identifier reached through
  * an address-of token with only parentheses in between - i.e. its address was
- * taken somewhere in the function body. Used by find_bc_regalloc_candidate to
- * exclude a pointer parameter whose own storage location (not what it
- * points to) might be read/written through that address - a BC-resident
- * copy would silently desync from such an alias. */
+ * taken somewhere in the function body. MIR object promotion and the
+ * remaining AST metadata/optimization probes use this conservative
+ * whole-function fact. */
 static void mark_ident_addr_taken(const char *name)
 {
     int i;
@@ -906,27 +896,6 @@ static int ident_count_for(const char *name)
     return 0;
 }
 
-/* Loop-depth-weighted reference count: the same occurrences ident_count_for
- * returns, but each one multiplied by 8 per enclosing loop, so a reference
- * executed every iteration is ranked above one executed once.
- *
- * Register allocation decisions want DYNAMIC reference frequency, and a flat
- * occurrence count is a poor proxy for it - it ranks a symbol touched ten
- * times in straight-line code above one touched twice inside a doubly-nested
- * loop, which is backwards by two orders of magnitude. That mis-ranking is
- * why a purely count-based threshold has to be set high enough to be safe in
- * the worst case, and therefore too high to admit the deep-loop cases that
- * are worth the most. */
-static long ident_weighted_for(const char *name)
-{
-    int i;
-
-    for (i = 0; i < g_ident_count_n; ++i)
-        if (strcmp(g_ident_counts[i].name, name) == 0)
-            return g_ident_counts[i].weighted;
-    return 0;
-}
-
 static int ident_addr_taken_for(const char *name)
 {
     int i;
@@ -940,39 +909,6 @@ static int ident_addr_taken_for(const char *name)
 int local_name_address_taken_in_function(const char *name)
 {
     return ident_addr_taken_for(name);
-}
-
-/* Called when an assignment-like operator ('=', +=/-=/etc., ++, --) is seen
- * immediately following this identifier - i.e. it is written to somewhere in
- * the function body. find_bc_regalloc_candidate restricts round 1 to
- * read-only pointer parameters (only ever indexed/dereferenced/compared,
- * never reassigned), so codegen this round only needs a load-into-BC entry
- * point, never a store-into-BC path. */
-static void mark_ident_written(const char *name)
-{
-    int i;
-
-    for (i = 0; i < g_ident_count_n; ++i) {
-        if (strcmp(g_ident_counts[i].name, name) == 0) {
-            g_ident_counts[i].written = 1;
-            return;
-        }
-    }
-}
-
-static int ident_written_for(const char *name)
-{
-    int i;
-
-    for (i = 0; i < g_ident_count_n; ++i)
-        if (strcmp(g_ident_counts[i].name, name) == 0)
-            return g_ident_counts[i].written;
-    return 0;
-}
-
-static int tok_kind_is_write_op(int kind)
-{
-    return kind == '=' || (kind >= TOK_INC && kind <= TOK_SHREQ);
 }
 
 /* Record (or update, on a later pass) that the array at this frame offset got
@@ -1053,51 +989,11 @@ static void scan_function_body_ident_counts(void)
 {
     LexState _ls;
     int depth;
-    int prev_kind;
     int address_pending;
-    char prev_ident[64];
-    /* Brace depths at which a loop body was opened, innermost last. A `{`
-     * counts as a loop body only when it is the FIRST token after the loop
-     * header's closing `)` (or straight after `do`), which is what
-     * loop_await_header/loop_header_depth track below.
-     *
-     * Getting that wrong is not a rounding error, it inverts the decision. In
-     *
-     *     for (; y<D; y++) {
-     *         for (; x<D; x++)
-     *             if (chk(x, y) == 0) {  ... n ...
-     *
-     * the inner `for` has no braces of its own, so a scan that simply waits
-     * for the next `{` after seeing `for` attributes the IF's brace to the
-     * loop and scores everything inside it as doubly nested. That is how
-     * 00040b's `go` scored its parameter at 65 from two textual references,
-     * promoted it, and lost 1.1M cycles: the guarded reference does not
-     * execute once per iteration, let alone sixty-four times.
-     *
-     * An unbraced single-statement loop body is therefore not tracked at all,
-     * which under-weights rather than over-weights - the safe direction for a
-     * threshold that admits an optimisation. */
-    int loop_depths[8];
-    int n_loop_depths;
-    int loop_pending;
-    int loop_await_header;
-    int loop_header_depth;
-    int loop_arm_next;
-    /* Unbraced single-statement loop bodies: "for (...) t += p->a;". These
-     * carry the same per-iteration cost as a braced body and must be weighted
-     * the same, but they have no brace to hang the scope on. Each one is
-     * closed at the first `;` outside parentheses, or at the first `}` -
-     * whichever comes first, which covers "for (...) if (c) { ... }" where
-     * the body is a compound statement ending in a brace. They nest without
-     * braces ("for (...) for (...) x++;"), so the terminator closes all of
-     * them at once. */
-    int n_stmt_loops;
-    int paren_depth;
 
     g_ident_count_n = 0;
     g_addr_cache_array_count = 0;
     g_addr_cache_calls_exec = 0;
-    current_function_had_call_at_scan = 0;
 
     if (g_lex.tok.kind != '{')
         return;
@@ -1105,350 +1001,30 @@ static void scan_function_body_ident_counts(void)
     _ls = lex_save();
 
     depth = 1;
-    prev_kind = 0;
     address_pending = 0;
-    prev_ident[0] = 0;
-    n_loop_depths = 0;
-    loop_pending = 0;
-    loop_await_header = 0;
-    loop_header_depth = 0;
-    loop_arm_next = 0;
-    n_stmt_loops = 0;
-    paren_depth = 0;
-    g_scan_loop_weight = 1;
     next_token();
     while (g_lex.tok.kind != TOK_EOF && depth > 0) {
-        /* Consume a for/while header so the `{` that follows it can be told
-         * apart from the `{` of some other statement standing in as an
-         * unbraced body. Arming is deferred to the NEXT token: the closing
-         * `)` is itself a token, and would otherwise be seen by the
-         * "something other than `{` follows the header" arm below and clear
-         * the flag it had just set. */
-        if (loop_arm_next) {
-            loop_pending = 1;
-            loop_arm_next = 0;
-        }
-        if (loop_await_header) {
-            if (g_lex.tok.kind == '(') {
-                loop_header_depth++;
-            } else if (g_lex.tok.kind == ')') {
-                loop_header_depth--;
-                if (loop_header_depth == 0) {
-                    loop_await_header = 0;
-                    loop_arm_next = 1;
-                }
-            }
-        }
         if (g_lex.tok.kind == TOK_ID) {
             bump_ident_count(g_lex.tok.text);
             if (address_pending)
                 mark_ident_addr_taken(g_lex.tok.text);
             address_pending = 0;
-            /* Prefix ++/-- ("++x", not "x++") mutates x exactly like the
-             * postfix form the write-op check below already catches - but
-             * that check only ever looks BACKWARD (identifier immediately
-             * FOLLOWED BY a write-op token), so a parameter mutated only via
-             * prefix form was never marked written at all, falsely passing
-             * find_bc_regalloc_candidate's "never written" eligibility bar.
-             * Confirmed as a real miscompile: a whole-function candidate
-             * mutated only via "++p" kept every later read correct (emit_
-             * incdec_sym_direct's REG_BC branch updates bc directly), but
-             * regalloc_buffer_finalize's reload-repair - built entirely on
-             * the assumption a "never written" candidate's own frame slot
-             * is a permanent, always-valid shadow copy - reloaded from that
-             * now-stale, pre-increment slot the moment anything made bc look
-             * untrusted, silently reverting the pointer mid-loop. */
-            if (prev_kind == TOK_INC || prev_kind == TOK_DEC)
-                mark_ident_written(g_lex.tok.text);
             if (strcmp(g_lex.tok.text, "exec") == 0 || strcmp(g_lex.tok.text, "execv") == 0)
                 g_addr_cache_calls_exec = 1;
         } else if (g_lex.tok.kind == '{') {
             depth++;
-            if (loop_pending && n_loop_depths < 8) {
-                loop_depths[n_loop_depths++] = depth;
-                if (g_scan_loop_weight <= 64)
-                    g_scan_loop_weight *= 8;
-            }
-            loop_pending = 0;
         } else if (g_lex.tok.kind == '}') {
-            if (n_loop_depths > 0 && loop_depths[n_loop_depths - 1] == depth) {
-                n_loop_depths--;
-                if (g_scan_loop_weight > 1)
-                    g_scan_loop_weight /= 8;
-            }
             depth--;
-        } else if (g_lex.tok.kind == TOK_FOR || g_lex.tok.kind == TOK_WHILE) {
-            /* Header follows; the loop body is whatever comes after it. */
-            loop_await_header = 1;
-            loop_header_depth = 0;
-            loop_pending = 0;
-        } else if (g_lex.tok.kind == TOK_DO) {
-            /* No header - the body starts immediately. */
-            loop_pending = 1;
-        } else if (loop_pending) {
-            /* Something other than `{` follows the loop header, so the body
-             * is a single unbraced statement. It still runs once per
-             * iteration, so weight it like a braced body and remember to
-             * close it at the statement's end. */
-            loop_pending = 0;
-            if (n_stmt_loops < 8) {
-                n_stmt_loops++;
-                if (g_scan_loop_weight <= 64)
-                    g_scan_loop_weight *= 8;
-            }
-            if (tok_kind_is_write_op(g_lex.tok.kind) && prev_kind == TOK_ID && prev_ident[0])
-                mark_ident_written(prev_ident);
-        } else if (tok_kind_is_write_op(g_lex.tok.kind) && prev_kind == TOK_ID && prev_ident[0])
-            mark_ident_written(prev_ident);
-        if (g_lex.tok.kind == TOK_ID) {
-            size_t pl = strlen(g_lex.tok.text);
-            if (pl > sizeof(prev_ident) - 1) pl = sizeof(prev_ident) - 1;
-            memcpy(prev_ident, g_lex.tok.text, pl);
-            prev_ident[pl] = 0;
-        } else {
-            /* An identifier immediately followed by '(' is a call. Derived
-             * here rather than read from current_function_has_call, which the
-             * frame-sizing scan sets but which does not survive to the point
-             * the IY gate needs it: every speculative attempt runs a full
-             * codegen of the body, and inline substitution saves and restores
-             * that flag around a substituted callee, leaving it holding the
-             * callee's answer. This scan runs once, before any of that, and
-             * is already the source of truth for the reference counts the
-             * same decision uses. */
-            if (g_lex.tok.kind == '(' && prev_kind == TOK_ID && prev_ident[0])
-                current_function_had_call_at_scan = 1;
-            prev_ident[0] = 0;
-        }
-        /* Parenthesis depth, so a `;` inside a nested for-header is not
-         * mistaken for the end of an unbraced body. */
-        if (g_lex.tok.kind == '(')
-            paren_depth++;
-        else if (g_lex.tok.kind == ')' && paren_depth > 0)
-            paren_depth--;
-        if (n_stmt_loops > 0 &&
-            ((g_lex.tok.kind == ';' && paren_depth == 0) || g_lex.tok.kind == '}')) {
-            while (n_stmt_loops > 0) {
-                n_stmt_loops--;
-                if (g_scan_loop_weight > 1)
-                    g_scan_loop_weight /= 8;
-            }
         }
 
         if (g_lex.tok.kind == '&')
             address_pending = 1;
         else if (address_pending && g_lex.tok.kind != '(' && g_lex.tok.kind != ')')
             address_pending = 0;
-        prev_kind = g_lex.tok.kind;
         next_token();
     }
 
-    g_scan_loop_weight = 1;
     lex_restore(&_ls);
-}
-
-/* Round-1 BC register-residency candidate selection: the most-referenced
- * plain 16-bit parameter (pointer or scalar int/unsigned - anything that
- * fits in a register pair and isn't a struct/long/float, matching exactly
- * the "plain 16-bit operand" gate ast_cmp_operand_ok in dcc_ast_gen_cond.c
- * already uses for its own fast comparison path) referenced at least twice
- * in the function body, whose address is never taken. Originally
- * pointer-only; generalized once it became clear every codegen hook this
- * relies on (emit_load_sym_value_direct, gen_ident's reg_alloc check,
- * sym_can_ix_direct's universal reg_alloc bail) treats bc's contents as an
- * opaque 16-bit value and never cared whether it was semantically a
- * pointer - the only pointer-specific hook (gen_index_addr_ast's indexing
- * branch) simply never fires for a non-pointer, which is fine. A `long`
- * parameter (4 bytes) does not fit in bc and is out of scope here - it
- * would need a materially different two-register-pair design.
- *
- * Also considers global/extern word variables, ranked in the SAME pool as
- * parameters (ties favor the parameter, since it's scanned first) - unlike
- * dcc_loop_regalloc.c's loop-scoped mechanism, no separate whole-file
- * address-taken proof is strictly required here: this candidate is only
- * ever acted on when function_qualifies_for_speculative_regalloc's own
- * current_function_has_call==0 gate holds AND regalloc_buffer_finalize's
- * buf_has_unsafe_call independently confirms zero calls (beyond the seven
- * DCCRTL.MAC-contracted runtime helpers) appear anywhere in the generated
- * function body - so nothing else in this single-threaded, non-interrupt-
- * driven program can possibly execute while this function runs, and the
- * only way the global's value could change during that span is a direct
- * write from this SAME function's own text, which ident_written_for
- * already catches (same whole-function lexical scan used for parameters).
- * The whole-file address-taken check is still applied anyway, not because
- * it's load-bearing here the way it is for the loop-scoped mechanism, but
- * because it's cheap, already validated, and removes any need to re-argue
- * the "could an alias reach this from somewhere still-reachable" question
- * for every future change to what counts as a tolerated call.
- *
- * Deliberately restricted to parameters, not locals declared inside the
- * body - a parameter's Sym is added exactly once to locals[] and persists
- * unchanged (same struct instance) across every scan/codegen pass over
- * this function, whereas a body-local's Sym is freshly reallocated at the
- * same offset but as a different struct instance on each pass; carrying
- * reg_alloc across that reallocation would need plumbing this round
- * doesn't build. `params_end` is nlocals right after parameters are
- * registered but before any body-local declaration - exactly the range
- * parse_param_list/parse_old_style_param_declarations populate. */
-#define BC_REGALLOC_MIN_REFS 2
-struct Sym *find_bc_regalloc_candidate(int params_end)
-{
-    int i;
-    struct Sym *best;
-    long best_value;
-
-    /* Rank by ESTIMATED VALUE, not by raw occurrence count.
-     *
-     * Two things go into it. First, references are weighted by loop nesting
-     * (ident_weighted_for), so a parameter touched twice inside a loop
-     * outranks one touched five times in straight-line code - which is the
-     * right answer dynamically and the opposite of what a flat count says.
-     * Second, the weighted count is turned into cycles by
-     * regalloc_estimate_value, which knows that a local saves 30 T-states per
-     * reference against a global's 8, and that their priming costs differ
-     * too. Without that second step a global with a slightly higher count
-     * beats a local worth nearly four times as much per reference.
-     *
-     * The minimum-occurrence bar stays a raw count: it exists to keep
-     * genuinely trivial cases out, and is not a profitability judgement.
-     * Ties keep the earlier-declared parameter (strict '>', not '>='),
-     * matching loop_regalloc_find_bc_candidate's own tie-breaking. */
-    best = NULL;
-    best_value = 0;
-    for (i = 0; i < params_end; ++i) {
-        struct Sym *p = &locals[i];
-        int count;
-        long value;
-
-        if (p->storage != SC_PARAM) continue;
-        if (p->is_array) continue;
-        if (type_is_struct_object(p->type) || type_is_long(p->type) || type_is_float(p->type)) continue;
-        if (type_size(p->type) != 2) continue;
-        count = ident_count_for(p->name);
-        if (count < BC_REGALLOC_MIN_REFS) continue;
-        value = regalloc_estimate_value(p, (int)ident_weighted_for(p->name), 0);
-        if (value <= best_value) continue;
-        if (p->is_volatile) continue;
-        if (ident_addr_taken_for(p->name)) continue;
-        if (ident_written_for(p->name)) continue;
-        best = p;
-        best_value = value;
-    }
-    for (i = 0; i < nglobals; ++i) {
-        struct Sym *g = &globals[i];
-        int count;
-        long value;
-
-        if (!is_global_word_sym(g)) continue;
-        if (g->is_volatile) continue;
-        if (g->reg_alloc != REG_NONE) continue;
-        if (type_is_struct_object(g->type) || type_is_long(g->type) || type_is_float(g->type)) continue;
-        count = ident_count_for(g->name);
-        if (count < BC_REGALLOC_MIN_REFS) continue;
-        value = regalloc_estimate_value(g, (int)ident_weighted_for(g->name), 0);
-        if (value <= best_value) continue;
-        if (global_text_addr_taken_count(g->name) != 0) continue;
-        if (ident_written_for(g->name)) continue;
-        best = g;
-        best_value = value;
-    }
-    g_bc_regalloc_last_value = best ? best_value : 0;
-    return best;
-}
-
-/* Break-even for IY, expressed against the loop-depth-weighted reference
- * count rather than a raw occurrence count.
- *
- * The arithmetic: promoting costs 63 T-states to prime IY through HL plus 29
- * for the callee-save push/pop pair, so 92 per call of the function; each
- * promoted reference then saves 13. Break-even is therefore just over seven
- * EXECUTED references - which is why weighting matters so much here. Seven
- * straight-line occurrences and one occurrence inside a loop are worth
- * completely different amounts, and only the weighted count can tell them
- * apart. A single reference in a singly-nested loop scores 8 and clears this
- * bar on its own, correctly, while seven scattered straight-line references
- * score 7 and do not.
- *
- * Set to 32 - four loop-resident references, or a doubly-nested one - from a
- * sweep over the whole test corpus, re-run after the weighting was corrected
- * for unbraced loop bodies: 32 gives -15.41M, 48 gives -13.10M, 64 gives
- * -13.10M, and 96 and above flatten at -12.55M. The raw break-even of 8 fires
- * more often but admits marginal claims that lose more than they gain.
- *
- * One case remains net-negative at any threshold that keeps the wins - pint
- * +0.002% - because it is genuinely loop-resident and so cannot be told apart
- * from the winners by a static estimate. That is the honest cost of the
- * model, and negligible beside tchess -2.57%, tlngnarw -3.95%, tnestfor
- * -1.15% and nqueens -1.04%. */
-#define IY_REGALLOC_MIN_WEIGHT 32
-
-/* Pick the whole-function IY candidate: a word-sized parameter that is read
- * often, never written, and never has its address taken.
- *
- * Deliberately restricted to PARAMETERS. A local would have to be primed into
- * IY after its initialiser runs rather than at function entry, which no
- * longer dominates every use, and a global can be reloaded more cheaply than
- * IY can be read back ("ld hl,(nn)" is 16 T-states against push/pop's 25), so
- * for a global IY would be a pessimisation rather than an optimisation.
- *
- * This runs only for functions that CONTAIN CALLS - the ones
- * function_qualifies_for_speculative_regalloc turns away, and which
- * consequently get no register allocation at all today. In a call-free
- * function BC is available, strictly cheaper on every count, and is what the
- * existing path will already have taken. */
-struct Sym *find_iy_regalloc_candidate(int params_end)
-{
-    struct Sym *best;
-    long best_weight;
-    int i;
-
-    (void)params_end;
-    best = NULL;
-    best_weight = 0;
-    for (i = 0; i < g_frame.nlocals; ++i) {
-        struct Sym *p = &locals[i];
-        long weight;
-
-        if (p->storage != SC_PARAM) continue;
-        if (p->is_array) continue;
-        if (p->reg_alloc != REG_NONE) continue;
-        if (type_is_struct_object(p->type) || type_is_long(p->type) ||
-            type_is_float(p->type)) continue;
-        if (type_size(p->type) != 2) continue;
-        if (p->is_volatile) continue;
-        weight = ident_weighted_for(p->name);
-        if (weight < IY_REGALLOC_MIN_WEIGHT) continue;
-        if (weight <= best_weight) continue;
-        if (ident_addr_taken_for(p->name)) continue;
-        /* Written parameters ARE eligible, unlike the whole-function BC
-         * candidate. BC's read-only bar exists because
-         * regalloc_buffer_finalize's reload-repair treats the frame slot as a
-         * permanent valid shadow it can fall back on, which a written
-         * candidate would invalidate. IY needs no such repair - entry
-         * dominates every use and nothing else can disturb the register - so
-         * the slot is simply dead after the prime, and no spill is needed
-         * either, since a candidate whose address is never taken has no other
-         * reader.
-         *
-         * This is where most of IY's remaining value is. A written parameter
-         * is usually a walked pointer or a counter, and "inc iy" costs 10
-         * T-states against roughly 82 for the frame-slot read-modify-write it
-         * replaces - by a wide margin the largest per-reference saving on
-         * offer here. */
-        best = p;
-        best_weight = weight;
-    }
-    g_iy_regalloc_last_ref_count = best ? ident_count_for(best->name) : 0;
-    /* Recorded here, at the decision point, rather than recomputed at the
-     * emission site: the claim directive must publish the SAME number the
-     * choice was made on. See regalloc_publish_value's comment. */
-    g_iy_regalloc_last_value =
-        best ? regalloc_estimate_value(best, (int)best_weight, 0) : 0;
-    if (getenv("DCC_TRACE_IY") != NULL)
-        fprintf(stderr, "[iy] candidate=%s weight=%ld refs=%d value=%ld has_call=%d\n",
-                best ? best->name : "(none)", best_weight,
-                g_iy_regalloc_last_ref_count, g_iy_regalloc_last_value,
-                current_function_has_call);
-    return best;
 }
 
 void emit_needed_deferred_bodies(void)
@@ -1723,27 +1299,14 @@ int old_style_param_list_starts(void)
 /* Byte offset of the first parameter from IX. IX points at the saved caller
  * IX, so the return address sits at +2 and the first argument at +4; a
  * struct-returning function has a hidden result pointer ahead of them, making
- * it +6.
- *
- * An IY-resident candidate adds one more word: the caller's IY is pushed
- * BEFORE the frame is established, so it lies between the return address and
- * the saved IX and shifts everything above it up by 2. Saving it there rather
- * than in a frame slot is what makes IY cheap - "push iy" on entry plus
- * "pop iy" on exit is 29 T-states in total, against the 126 a frame-slot save
- * would cost in loads and stores, which is the difference between IY paying
- * for itself after two references and after fifteen. */
-int frame_first_param_offset(void)
+ * it +6. */
+static int frame_first_param_offset(void)
 {
-    int off;
-
-    off = ((parse_function_return_type & TYPE_STRUCT) &&
-           type_ptr_depth(parse_function_return_type) == 0) ? 6 : 4;
-    if (g_iy_regalloc_sym != NULL)
-        off += 2;
-    return off;
+    return ((parse_function_return_type & TYPE_STRUCT) &&
+            type_ptr_depth(parse_function_return_type) == 0) ? 6 : 4;
 }
 
-void recompute_param_offsets(void)
+static void recompute_param_offsets(void)
 {
     int i;
     int off;
@@ -1963,46 +1526,6 @@ void parse_param_list(void)
     }
 }
 
-
-int current_function_param_count(void)
-{
-    int i;
-    int n;
-
-    n = 0;
-    for (i = 0; i < g_frame.nlocals; ++i)
-        if (locals[i].storage == SC_PARAM)
-            n++;
-    return n;
-}
-
-int current_function_safe_to_omit_ix(int return_type, int local_bytes)
-{
-    (void)return_type;
-    (void)local_bytes;
-    (void)current_function_param_count();
-
-    /*
-     * Disabled for now.
-     *
-     * The first no-IX implementation accessed parameters through fixed SP
-     * offsets.  That is only correct if the generated function never changes
-     * SP after entry.  Even very small leaf functions such as:
-     *
-     *     return p[0] + p[1] + p[2] + p[3];
-     *
-     * use push/pop temporaries during expression evaluation, so later
-     * parameter reloads from sp+N read those temporaries instead of the
-     * original argument.  This corrupted tests with struct string
-     * initializers through helper functions like sum4().
-     *
-     * Keep the leaf BC/DE loop optimizations, but do not omit IX until the
-     * compiler has either stable SP-depth tracking for parameter references
-     * or a dedicated no-stack codegen path for recognized functions.
-     */
-    return 0;
-}
-
 static char current_debug_function[64];
 static char current_debug_function_source_name[64];
 static int debug_types_emitted;
@@ -2054,7 +1577,7 @@ void emit_debug_global(struct Sym *s)
 void emit_debug_variable(struct Sym *s)
 {
     if (!opt_debug || scan_mode || current_debug_function[0] == 0 || s == NULL ||
-        s->name[0] == '#' || s->reg_alloc != REG_NONE)
+        s->name[0] == '#')
         return;
     if (mir_capture_debug_variable(current_debug_function, s, 0))
         return;
@@ -2069,7 +1592,7 @@ void emit_debug_variable(struct Sym *s)
 void emit_debug_variable_end(struct Sym *s)
 {
     if (!opt_debug || scan_mode || current_debug_function[0] == 0 || s == NULL ||
-        s->name[0] == '#' || s->reg_alloc != REG_NONE)
+        s->name[0] == '#')
         return;
     if (mir_capture_debug_variable(current_debug_function, s, 1))
         return;
@@ -2077,7 +1600,7 @@ void emit_debug_variable_end(struct Sym *s)
             current_debug_function, s->name, s->offset);
 }
 
-void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame)
+void emit_function_prologue(const char *name, int local_bytes)
 {
     struct Sym *s;
     const char *aname;
@@ -2116,17 +1639,9 @@ void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame
         strcmp(name, "main") == 0 &&
             (function_type & 15) == TYPE_INT &&
             type_ptr_depth(function_type) == 0);
-    current_omit_ix_frame = omit_ix_frame;
-    /* Callee-save of the caller's IY, before the frame is established so the
-     * epilogue can restore it with a bare "pop iy" once IX has been popped.
-     * frame_first_param_offset accounts for the word this occupies. */
-    if (!omit_ix_frame && g_iy_regalloc_sym != NULL)
-        emit("\tpush iy\n");
-    if (!omit_ix_frame) {
-        emit("\tpush ix\n");
-        emit("\tld ix,0\n");
-        emit("\tadd ix,sp\n");
-    }
+    emit("\tpush ix\n");
+    emit("\tld ix,0\n");
+    emit("\tadd ix,sp\n");
 
     if (local_bytes > 0) {
         fprintf(g_emit_sink.stream, "\tld hl,-%d\n", local_bytes);
@@ -2145,52 +1660,19 @@ void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame
     if (opt_stack_check)
         emit_runtime_call("__stchk");
 
-    /* Load a BC-resident parameter or global's value exactly once here,
-     * right after the frame is established but before any user statement
-     * runs - the same "materialize once at entry, dominates every use"
-     * placement as the address-cache block just below. g_bc_regalloc_sym is
-     * only ever set by try_speculative_bc_regalloc_function_body for the
-     * duration of one speculative generation attempt. Prime text must stay
-     * in exact lockstep with bc_regalloc_entry_lines, which regalloc_
-     * buffer_finalize uses to recognize/reinsert this same text - see
-     * try_loop_regalloc_bc's (dcc_loop_regalloc.c) identical comment on why
-     * a global needs a 3-instruction sequence instead of a parameter's 2. */
-    if (!omit_ix_frame && g_bc_regalloc_sym != NULL) {
-        /* Whole-function scope: no matching free directive is emitted, so
-         * dccpeep's claim registry keeps this live to the end of the
-         * function - which is exactly right here, and (unlike the old
-         * blanket rule) no longer imposed on loop-scoped claims too. */
-        emit_regalloc_claim("bc", "func", g_bc_regalloc_sym, "ro",
-                            g_bc_regalloc_last_value);
-        if (g_bc_regalloc_sym->storage == SC_GLOBAL || g_bc_regalloc_sym->storage == SC_EXTERN) {
-            emit_extrn_if_needed(g_bc_regalloc_sym);
-            fprintf(g_emit_sink.stream, ";@dcc-regalloc-bc-prime\n");
-            fprintf(g_emit_sink.stream, "\tld hl,(%s)\n", asm_name_for(sym_asm_name(g_bc_regalloc_sym)));
-            fprintf(g_emit_sink.stream, "\tld c,l\n");
-            fprintf(g_emit_sink.stream, "\tld b,h\n");
-        } else {
-            fprintf(g_emit_sink.stream, "\tld c,(ix%+d)\n", g_bc_regalloc_sym->offset);
-            fprintf(g_emit_sink.stream, "\tld b,(ix%+d)\n", g_bc_regalloc_sym->offset + 1);
-        }
-    }
-
     /* Materialize any address-cached local arrays' addresses exactly once,
      * unconditionally, here - after the recognised prologue sequence above
      * (so as not to disturb dccpeep's shared-frame-stub folding of it) but
      * before any user statement runs. Function entry trivially dominates
      * every use site, so this is always safe regardless of which control-flow
      * path a given call takes - see maybe_reserve_addr_cache_for_array's
-     * comment for why a naive "cache at first use" scheme would not be. Only
-     * valid when IX is actually this function's frame pointer. */
-    if (!omit_ix_frame) {
-        int i;
-        for (i = 0; i < g_addr_cache_array_count; ++i) {
-            emit("\tpush ix\n\tpop hl\n");
-            if (g_addr_cache_arrays[i].array_offset != 0)
-                fprintf(g_emit_sink.stream, "\tld de,%d\n\tadd hl,de\n", g_addr_cache_arrays[i].array_offset);
-            fprintf(g_emit_sink.stream, "\tld (ix%+d),l\n", g_addr_cache_arrays[i].cache_slot_offset);
-            fprintf(g_emit_sink.stream, "\tld (ix%+d),h\n", g_addr_cache_arrays[i].cache_slot_offset + 1);
-        }
+     * comment for why a naive "cache at first use" scheme would not be. */
+    for (i = 0; i < g_addr_cache_array_count; ++i) {
+        emit("\tpush ix\n\tpop hl\n");
+        if (g_addr_cache_arrays[i].array_offset != 0)
+            fprintf(g_emit_sink.stream, "\tld de,%d\n\tadd hl,de\n", g_addr_cache_arrays[i].array_offset);
+        fprintf(g_emit_sink.stream, "\tld (ix%+d),l\n", g_addr_cache_arrays[i].cache_slot_offset);
+        fprintf(g_emit_sink.stream, "\tld (ix%+d),h\n", g_addr_cache_arrays[i].cache_slot_offset + 1);
     }
 }
 
@@ -2306,15 +1788,8 @@ void emit_function_epilogue(int implicit_zero_return)
     /* Always emit ld sp,ix so returns from nested control flow restore the
      * caller stack reliably. pass_elim_ix_frame and pass_shared_frame_stubs clean up the extra
      * instruction for functions that never actually need the stack restore. */
-    if (!current_omit_ix_frame) {
-        emit("\tld sp,ix\n");
-        emit("\tpop ix\n");
-        /* SP now points at the caller's IY, pushed ahead of the frame by
-         * emit_function_prologue; restoring it here keeps IY callee-saved,
-         * which is the whole basis for holding a value there across calls. */
-        if (g_iy_regalloc_sym != NULL)
-            emit("\tpop iy\n");
-    }
+    emit("\tld sp,ix\n");
+    emit("\tpop ix\n");
     emit("\tret\n");
     if (opt_debug && !scan_mode && current_debug_function[0] &&
         !mir_capture_debug_function_end(
@@ -2324,7 +1799,6 @@ void emit_function_epilogue(int implicit_zero_return)
     mir_end_function();
     current_debug_function[0] = 0;
     current_debug_function_source_name[0] = 0;
-    current_omit_ix_frame = 0;
     flush_pending_asm();
 }
 
@@ -3528,8 +3002,6 @@ void parse_function_or_global(int base_type)
         int saved_param_offset;
         int saved_nenum_consts;
         int saved_nulabels;
-        struct Sym *bc_regalloc_cand;
-        struct Sym *iy_regalloc_cand;
         int saved_stack_check;
 
         int base_is_func_typedef;
@@ -3737,8 +3209,8 @@ void parse_function_or_global(int base_type)
                 g_func_pass.compound_literal_seq = 0;
                 g_func_pass.licm_seq = 0;
                 opt_stack_check = s->stack_check_enabled;
-                bc_regalloc_cand = find_bc_regalloc_candidate(saved_nlocals);
-                if (static_inline_body_can_be_buffered(s)) {
+                if (static_inline_body_can_be_buffered(s) ||
+                    plain_static_body_can_be_buffered(s, name)) {
                     EmitSink saved_sink;
 
                     s->deferred_body_file = tmpfile();
@@ -3747,76 +3219,14 @@ void parse_function_or_global(int base_type)
                     saved_sink = emit_sink_push(s->deferred_body_file, EMIT_SINK_DEFERRED);
                     g_inline_body_buffering++;
                     g_buffering_epoch++;
-                    emit_function_prologue(name, current_local_bytes, current_function_safe_to_omit_ix(type, current_local_bytes));
-                    gen_compound();
-                    check_undefined_user_labels();
-                    emit_function_epilogue(0);
-                    g_inline_body_buffering--;
-                    emit_sink_restore(&saved_sink);
-                } else if (!opt_debug &&
-                           try_prelegacy_scheduled_mir_function_body(
-                               name, type, current_local_bytes, s,
-                               _ls.posi, _ls.tok_start_pos, _ls.line_no,
-                               _ls.tok_line, _ls.tok,
-                               saved_nlocals, saved_local_size)) {
-                    /* An exact scheduled MIR body was selected before the
-                     * metadata-only legacy retry sequence. */
-                } else if (!opt_debug &&
-                           function_qualifies_for_speculative_noix(
-                               name, current_local_bytes) &&
-                           try_speculative_noix_function_body(
-                               name, type, current_local_bytes, s,
-                               _ls.posi, _ls.tok_start_pos, _ls.line_no,
-                               _ls.tok_line, _ls.tok,
-                               saved_nlocals, saved_local_size)) {
-                    /* Legacy retry body text is discard-only; this branch
-                     * remains temporarily for replay side effects. */
-                } else if (!opt_debug &&
-                           try_loop_scoped_regalloc_first(
-                               name, type, current_local_bytes, s,
-                               _ls.posi, _ls.tok_start_pos, _ls.line_no,
-                               _ls.tok_line, _ls.tok,
-                               saved_nlocals, saved_local_size)) {
-                    /* Metadata-only loop-register retry. */
-                } else if (!opt_debug &&
-                           function_qualifies_for_speculative_regalloc(name) &&
-                           try_speculative_bc_regalloc_with_e_fallback(
-                               name, type, current_local_bytes, s,
-                               bc_regalloc_cand,
-                               _ls.posi, _ls.tok_start_pos, _ls.line_no,
-                               _ls.tok_line, _ls.tok,
-                               saved_nlocals, saved_local_size)) {
-                    /* Metadata-only BC/E retry. */
-                } else if (!opt_debug &&
-                           function_qualifies_for_speculative_iy_regalloc(
-                               name) &&
-                           (iy_regalloc_cand =
-                               find_iy_regalloc_candidate(saved_nlocals)) !=
-                               NULL &&
-                           try_speculative_iy_regalloc_function_body(
-                               name, type, current_local_bytes, s,
-                               iy_regalloc_cand,
-                               _ls.posi, _ls.tok_start_pos, _ls.line_no,
-                               _ls.tok_line, _ls.tok,
-                               saved_nlocals, saved_local_size)) {
-                    /* Metadata-only IY retry. */
-                } else if (plain_static_body_can_be_buffered(s, name)) {
-                    EmitSink saved_sink;
-
-                    s->deferred_body_file = tmpfile();
-                    if (s->deferred_body_file == NULL)
-                        fatal("cannot create deferred body temp file");
-                    saved_sink = emit_sink_push(s->deferred_body_file, EMIT_SINK_DEFERRED);
-                    g_inline_body_buffering++;
-                    g_buffering_epoch++;
-                    emit_function_prologue(name, current_local_bytes, current_function_safe_to_omit_ix(type, current_local_bytes));
+                    emit_function_prologue(name, current_local_bytes);
                     gen_compound();
                     check_undefined_user_labels();
                     emit_function_epilogue(0);
                     g_inline_body_buffering--;
                     emit_sink_restore(&saved_sink);
                 } else {
-                    emit_function_prologue(name, current_local_bytes, current_function_safe_to_omit_ix(type, current_local_bytes));
+                    emit_function_prologue(name, current_local_bytes);
                     gen_compound();
                     check_undefined_user_labels();
                     emit_function_epilogue(strcmp(name, "main") == 0 &&

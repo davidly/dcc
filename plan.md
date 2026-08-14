@@ -3,6 +3,62 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-15 remove legacy function-generation retries (working tree)
+
+- Base HEAD: `081370f`. No commit or push was made, and no performance
+  baseline changed.
+- Production parsing now performs one body walk for MIR plus the still-needed
+  declaration/inline/debug/deferred-body metadata side effects. `dcc_func.c`
+  no longer runs the prelegacy scheduled probe, no-IX retry, loop-first BC
+  retry, whole-function BC/E retries, or IY retry. Static inline and ordinary
+  static bodies still use the same deferred sink/needed-body bookkeeping, and
+  source diagnostics are emitted once by the retained walk.
+- Deleted `dcc_regalloc.c`, `dcc_loop_regalloc.c`, and
+  `dcc_regalloc_internal.h`, together with their stream readers/rewriters,
+  claim emitters, candidate searches, rewind drivers, shared globals,
+  `Sym.reg_alloc`, and no-IX frame-addressing hooks. MIR schedules remain the
+  sole producer of `;@dcc.reg` ownership directives. **35 declared function
+  entry points were removed or privatized**, along with **17 shared
+  regalloc/speculation state variables**.
+- Removed the prelegacy MIR mode, buffered-selection marker/report API,
+  speculation-safe schedule wrapper, and speculative-report suppression from
+  `dcc_mir_select.c`. Generated candidates now select and report directly to
+  FINAL/DEFERRED destinations.
+- The single metadata walk omits dead for-init reset pairs that the legacy
+  retry plumbing used to leave in MIR. Existing strict, name-free schedules
+  were updated for the cleaner forms:
+  `tpeepi.highest_open` **81 -> 79 MIR instructions**,
+  `tforblk.main` **703 -> 699**, and
+  `tforsco.main` **1350 -> 1344**. Their checked peep/nopeep performance
+  remains improving.
+- Direct MIR-only arbitration exposed a homed wide-truth bug in
+  `tctxflt.truth_for`: loading a 32-bit condition into DE:HL could overwrite
+  independently live scalar DE/HL homes. The wide truth emitter now preserves
+  either individual home as well as an allocated DE:HL pair. `tctxflt` passes
+  and improves **3.19% peep / 3.37% nopeep**.
+- Serial strict-census compile time on the same canonical compiler build:
+  - normal **52.91 -> 45.79 s** (**-7.12 s / -13.46%**);
+  - stack-check **53.32 -> 45.60 s** (**-7.72 s / -14.48%**);
+  - combined **106.23 -> 91.39 s** (**-14.84 s / -13.97%**).
+- Task-only compiler C/header source change is **4,121 net lines deleted**. The three
+  removed files account for **2,996 lines**; `dcc_func.c` falls
+  **4,116 -> 3,526 lines**.
+- Strict censuses:
+  - normal **2378/2378**, selectors
+    **1253 spilled / 525 scheduled / 505 homed / 90 hybrid / 5 regional**;
+  - stack **2378/2378**, selectors
+    **1262 / 515 / 506 / 90 / 5**;
+  - extended **274/274** in both modes, all captured fields `-1`.
+- Validation: canonical and CMake builds, require-emit boundary, 106
+  diagnostics, 22 dccpeep fixtures, focused ASan/UBSan
+  **420/420 functions in each stack mode**, IDE source diagnostics, and
+  `git diff --check` pass. Strict full+extended peep/nopeep passes in stack
+  and no-stack modes: **314/314 runnable + 196/196 extended**, with checked
+  performance **0 regressions / 929 improvements**.
+- The AST metadata walker remains intentionally present. Its removal is a
+  separate migration only after declaration, inline, debug, and deferred-body
+  bookkeeping have MIR-native owners.
+
 ## 2026-08-14 generated-only MIR cleanup (working tree)
 
 - Base/current HEAD: clean `1b429ed`. No commit or push was made.

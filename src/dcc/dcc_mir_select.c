@@ -13,8 +13,6 @@
 #include "dcc_mir.h"
 #include "dcc_mir_internal.h"
 
-static int mir_prelegacy_scheduled_attempt_active;
-static int mir_prelegacy_scheduled_attempt_selected;
 static int mir_has_member_address(void);
 static int mir_call_count(void);
 static int mir_has_wide_values(void);
@@ -62,8 +60,6 @@ static void mir_require_emitted_function(const char *reason)
     if (getenv("DCC_MIR_REQUIRE_EMIT") == NULL ||
         (getenv("DCC_MIR_REQUIRE_COMPLETE") != NULL &&
          mir.opaque_count != 0) ||
-        g_speculative_codegen_active ||
-        mir_prelegacy_scheduled_attempt_active ||
         (mir.sink_purpose != EMIT_SINK_FINAL &&
          mir.sink_purpose != EMIT_SINK_DEFERRED))
         return;
@@ -73,21 +69,6 @@ static void mir_require_emitted_function(const char *reason)
             "(reason=%s)\n",
             mir.name, reason != NULL ? reason : "selector");
     fatal("DCC_MIR_REQUIRE_EMIT requires MIR emission");
-}
-
-void mir_begin_prelegacy_scheduled_attempt(void)
-{
-    mir_prelegacy_scheduled_attempt_active = 1;
-    mir_prelegacy_scheduled_attempt_selected = 0;
-}
-
-int mir_end_prelegacy_scheduled_attempt(void)
-{
-    int selected = mir_prelegacy_scheduled_attempt_selected;
-
-    mir_prelegacy_scheduled_attempt_active = 0;
-    mir_prelegacy_scheduled_attempt_selected = 0;
-    return selected;
 }
 
 #define MIR_SPILLED_FEATURE_RHS_STACK             (1UL << 0)
@@ -1442,27 +1423,6 @@ static unsigned long mir_copy_selected_stream(FILE *source, FILE *destination)
         fputc(character, destination);
     }
     return hash;
-}
-
-void mir_report_buffered_selection(FILE *stream, const char *name)
-{
-    static const char prefix[] = ";@dcc.mir-selection ";
-    char line[1024];
-    long position;
-
-    if (stream == NULL || name == NULL ||
-        getenv("DCC_MIR_SELECT_REPORT") == NULL)
-        return;
-    position = ftell(stream);
-    rewind(stream);
-    while (fgets(line, sizeof(line), stream) != NULL)
-        if (!strncmp(line, prefix, sizeof(prefix) - 1)) {
-            fprintf(stderr, "; MIR selection function=%s %s",
-                    name, line + sizeof(prefix) - 1);
-            break;
-        }
-    if (position >= 0)
-        fseek(stream, position, SEEK_SET);
 }
 
 int mir_stream_instruction_count(FILE *stream)
@@ -3303,25 +3263,6 @@ static int mir_try_generated_candidate(
     mir_end_all_spilled_fallback_optimizations();
     mir_end_strict_phi_fallthrough();
 
-    if (mir_prelegacy_scheduled_attempt_active) {
-        *selector_name = "scheduled-machine-cfg";
-        label_id = label_base;
-        emitted = mir_try_selector(
-            generated,
-            g_speculative_codegen_active
-                ? mir_try_emit_speculation_safe_machine_cfg
-                : mir_try_emit_scheduled_machine_cfg);
-        *selected_label_id = label_id;
-        if (!emitted) {
-            fclose(generated);
-            label_id = label_base;
-            return 0;
-        }
-        *candidate_name = "exact-scheduled";
-        *selected = generated;
-        return 1;
-    }
-
     if (opt_debug) {
         *selector_name = "spilled-scalar-cfg";
         label_id = label_base;
@@ -3468,8 +3409,6 @@ static int mir_try_generated_candidate(
     *candidate_name = !strcmp(*selector_name, "scheduled-machine-cfg")
         ? "exact-scheduled" : "incumbent";
     if (default_policy &&
-        (!g_speculative_codegen_active ||
-         getenv("DCC_MIR_SELECT_CANDIDATE") != NULL) &&
         strcmp(*selector_name, "scheduled-machine-cfg") != 0 &&
         !mir_stream_contains_text(generated, MIR_EXACT_KERNEL_MARKER))
         mir_apply_mir_v1_policy(
@@ -3586,8 +3525,6 @@ void mir_end_function(void)
     if (!mir_try_generated_candidate(
             &generated, &selector_name, &candidate_name,
             &selected_label_id, candidate_label_base)) {
-        if (mir_prelegacy_scheduled_attempt_active)
-            goto finish;
         failure_reason = "selector";
     } else if (!opt_debug) {
         struct MirInsn *original_insns = NULL;
@@ -3664,9 +3601,6 @@ void mir_end_function(void)
         if (generated != NULL)
             fclose(generated);
         label_id = candidate_label_base;
-        if (g_speculative_codegen_active ||
-            mir_prelegacy_scheduled_attempt_active)
-            goto finish;
         if (g_diag_error_count > 0 ||
             (getenv("DCC_MIR_REQUIRE_COMPLETE") != NULL &&
              mir.opaque_count != 0))
@@ -3677,42 +3611,16 @@ void mir_end_function(void)
     generated_size = mir_stream_size(generated);
     generated_instructions = mir_stream_instruction_count(generated);
     mir_mark_selected_inline_call_bodies_needed(generated);
-    if (g_speculative_codegen_active ||
-        mir_prelegacy_scheduled_attempt_active)
-        fprintf(destination,
-                ";@dcc.mir-selection selector=%s result=mir "
-                "reason=accepted generated-bytes=%ld captured-bytes=-1 "
-                "generated-insns=%d captured-insns=-1 blocks=%d "
-                "selected-hash=%08lx sink=%s mir-insns=%d values=%d "
-                "calls=%d locals=%d aggregate-temps=%d slots=%d "
-                "vla=%d backedge=%d wide=%d inline-substitution=%d "
-                "member-address=%d bool-values=%d return-size=%d\n",
-                selector_name, generated_size,
-                generated_instructions, mir_cfg_block_count(),
-                mir_stream_hash(generated), mir_sink_name(mir.sink_purpose),
-                mir.count, mir.next_value, mir_call_count(),
-                mir.local_bytes, mir.aggregate_temp_bytes,
-                mir.backend_slot_count, mir.has_vla,
-                mir_has_cfg_backedge(), mir_has_wide_values(),
-                mir_has_inline_substitution_call(),
-                mir_has_member_address(), mir_has_bool_value(),
-                type_size(mir.return_type));
     selected_hash = mir_copy_selected_stream(generated, destination);
 
-    if (mir_prelegacy_scheduled_attempt_active)
-        mir_prelegacy_scheduled_attempt_selected = 1;
-    if (mir.report_mode && !g_speculative_codegen_active)
+    if (mir.report_mode)
         fprintf(stderr, "; MIR emit function=%s result=mir\n", mir.name);
-    if (!g_speculative_codegen_active &&
-        !mir_prelegacy_scheduled_attempt_active &&
-        getenv("DCC_MIR_COST_REPORT") != NULL)
+    if (getenv("DCC_MIR_COST_REPORT") != NULL)
         fprintf(stderr,
                 "; MIR cost-selected function=%s candidate=%s "
                 "selector=%s selected-hash=%08lx\n",
                 mir.name, candidate_name, selector_name, selected_hash);
-    if (!g_speculative_codegen_active &&
-        !mir_prelegacy_scheduled_attempt_active &&
-        getenv("DCC_MIR_SELECT_REPORT") != NULL)
+    if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
         fprintf(stderr,
                 "; MIR selection function=%s selector=%s result=mir "
                 "reason=accepted generated-bytes=%ld captured-bytes=-1 "
@@ -3731,9 +3639,7 @@ void mir_end_function(void)
                 mir_has_inline_substitution_call(),
                 mir_has_member_address(), mir_has_bool_value(),
                 type_size(mir.return_type));
-    if (!g_speculative_codegen_active &&
-        !mir_prelegacy_scheduled_attempt_active &&
-        getenv("DCC_MIR_CANDIDATE_MATRIX") != NULL)
+    if (getenv("DCC_MIR_CANDIDATE_MATRIX") != NULL)
         mir_report_spilled_candidate_matrix(candidate_label_base);
     fclose(generated);
 

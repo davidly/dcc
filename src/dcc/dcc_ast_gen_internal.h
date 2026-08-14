@@ -298,28 +298,6 @@ void ast_gen_for_stmt(const struct AstNode *n);
 void ast_gen_while_stmt(const struct AstNode *n);
 void ast_gen_dowhile_stmt(const struct AstNode *n);
 void ast_gen_stmt(const struct AstNode *n);
-
-/* dcc_loop_regalloc.c - loop-scoped BC register promotion; see that file's
- * header comment for the full design. `incr` may be NULL (AST_WHILE/
- * AST_DOWHILE have no separate increment clause; only AST_FOR does).
- * *out_is_write reports whether the winning candidate needs try_loop_
- * regalloc_bc (read-only, Phase 1) or try_loop_regalloc_bc_write
- * (Phase 2). */
-struct Sym *loop_regalloc_find_bc_candidate(const struct AstNode *cond,
-                                            const struct AstNode *incr,
-                                            const struct AstNode *body,
-                                            int *out_is_write);
-int try_loop_regalloc_bc(const struct AstNode *loop_node, struct Sym *cand,
-                          void (*gen_loop_impl)(const struct AstNode *));
-int try_loop_regalloc_bc_write(const struct AstNode *loop_node, struct Sym *cand,
-                                void (*gen_loop_impl)(const struct AstNode *));
-/* Reference count of the last candidate returned, and the loop nesting
- * depth the search ran at. The depth is maintained by ast_try_loop_regalloc
- * (dcc_ast_gen_stmt.c); both feed regalloc_estimate_value so the emitted
- * claim directive can publish what the claim is worth. */
-extern int loop_regalloc_last_ref_count;
-extern int loop_regalloc_last_depth;
-extern long loop_regalloc_last_value;
 int ast_try_emit_statement(void);
 
 #endif /* DCC_AST_GEN_INTERNAL_H */

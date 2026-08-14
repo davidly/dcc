@@ -104,23 +104,9 @@ int current_return_type;
 int parse_function_return_type;
 int current_local_bytes;
 int max_function_local_bytes;
-int current_omit_ix_frame;
 int current_function_has_call;
 int g_inline_body_buffering;
 int g_buffering_epoch;
-int g_speculative_codegen_active;
-struct Sym *g_bc_regalloc_sym;
-int g_regalloc_address_escaped;
-int g_e_regalloc_claim_active;
-int g_e_regalloc_claimed;
-struct Sym *g_e_regalloc_sym;
-int g_loop_regalloc_bc_claimed;
-struct Sym *g_iy_regalloc_sym;
-int g_iy_regalloc_escaped;
-int g_iy_regalloc_last_ref_count;
-long g_iy_regalloc_last_value;
-long g_bc_regalloc_last_value;
-int current_function_had_call_at_scan;
 int current_function_has_vla;
 
 /* ---- loop break/continue target stack + parser flags ------------------- */

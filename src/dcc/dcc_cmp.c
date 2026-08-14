@@ -196,10 +196,7 @@ int invert_relop_for_swap(int op)
 void emit_byte_operand_to_a(struct ByteOperand *op)
 {
     if (op->kind == 1) {
-        if (op->sym->reg_alloc == REG_E)
-            emit("\tld a,e\n");
-        else
-            fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", op->sym->offset);
+        fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", op->sym->offset);
     } else if (op->kind == 2) {
         fprintf(g_emit_sink.stream, "\tld a,%ld\n", op->val & 255);
     } else if (op->kind == 3) {
@@ -244,10 +241,7 @@ void emit_byte_operand_to_a(struct ByteOperand *op)
 void emit_cp_byte_operand(struct ByteOperand *op)
 {
     if (op->kind == 1) {
-        if (op->sym->reg_alloc == REG_E)
-            emit("\tcp e\n");
-        else
-            fprintf(g_emit_sink.stream, "\tcp (ix%+d)\n", op->sym->offset);
+        fprintf(g_emit_sink.stream, "\tcp (ix%+d)\n", op->sym->offset);
     } else if (op->kind == 2) {
         fprintf(g_emit_sink.stream, "\tcp %ld\n", op->val & 255);
     } else if (op->kind == 3) {
@@ -439,5 +433,4 @@ int emit_cmp_const_branch_for_signed_local16(struct Sym *s, int op, long c,
 
     return 1;
 }
-
 

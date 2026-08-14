@@ -98,9 +98,9 @@ The legacy AST emitter still runs once per function because declaration replay,
 inline-body bookkeeping, and related metadata side effects have not yet moved
 fully into MIR. Its text is written directly to a per-function discard-only
 sink: it is never retained, measured, replayed, or copied to production output.
-Legacy speculative register-allocation drivers remain temporarily to establish
-those side effects and may post-process a generated MIR candidate; removing
-that isolated dependency is the next cleanup stage.
+The parser no longer retries a body with alternate legacy frame/register
+configurations or post-processes selected MIR text; one metadata walk feeds one
+MIR selection.
 
 ---
 

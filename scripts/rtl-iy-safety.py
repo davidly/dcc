@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
-"""Verify the invariant that makes IY allocatable: DCCRTL never touches it.
+"""Conservatively report runtime IY references for MIR schedule review.
 
-dcc's IY register allocation (REG_IY, dcc_regalloc.c) treats IY as CALLEE-SAVED,
-which is what lets a value held there survive an arbitrary call - the property
-BC can never have, and therefore the reason IY is the only register dcc can
-allocate in a function that calls anything. That rests on exactly two facts:
+Generated MIR schedules treat IY as callee-saved, which lets a value held there
+survive a call.
 
-  1. Every dcc-compiled function that claims IY saves and restores it around its
-     own body. The compiler guarantees this by construction (emit_function_
-     prologue/epilogue, dcc_func.c).
+  1. Every generated function that claims IY saves and restores it.
 
   2. Nothing else in a linked image ever writes IY:
        * DCCRTL.MAC contains no IY instruction anywhere. This script checks it.
@@ -46,9 +42,8 @@ if not violations:
     print("  IY is therefore free for dcc to allocate as a callee-saved register.")
     sys.exit(0)
 
-print("  BROKEN: %d IY reference(s) found. dcc's REG_IY allocation assumes the" % len(violations))
-print("  runtime never writes IY; either revert these, or teach")
-print("  asm_name_is_iy_safe_call (dcc_regalloc.c) to exclude the callers.")
+print("  REVIEW: %d IY reference(s) found. Verify each helper preserves IY" % len(violations))
+print("  on every path, or keep IY-owning MIR schedules from calling it.")
 for lineno, text in violations:
     print("    %s:%d: %s" % (path, lineno, text.strip()))
 sys.exit(1)

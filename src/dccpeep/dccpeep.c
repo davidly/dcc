@@ -3644,8 +3644,8 @@ static int pass_ix_pair_load_to_de(void)
 }
 
 /*
- * BC-resident counterpart of pass_ix_pair_load_to_de above: a loop-scoped
- * register-allocation candidate (dcc_loop_regalloc.c) parked in BC loads
+ * BC-resident counterpart of pass_ix_pair_load_to_de above: a compiler-owned
+ * value parked in BC loads
  * into DE via the same generic "push hl / load into hl / ex de,hl / pop hl"
  * scaffolding used for any expression operand, since dcc's codegen has no
  * AST-level knowledge, at a generic operand-evaluation call site, that the
@@ -5181,10 +5181,8 @@ static int pass_reuse_sbc_result_for_flagcheck_rotated(void)
  * whole-file write-once proof already relies on for its (much narrower)
  * global-hoist fast path, just re-derived here textually since dccpeep has
  * no access to that C-source-level analysis. */
-/* True if `line` is dcc's own reg_alloc priming load for a loop-scoped or
- * whole-function BC candidate (dcc_loop_regalloc.c/dcc_func.c emit this
- * exact pair, with a leading tab in dcc's own output, right before the
- * candidate's live range begins: "\tld c,(ix%+d)\n" / "\tld b,(ix%+d)\n") -
+/* True if `line` is an older dcc BC priming load (with a leading tab in
+ * dcc's own output): "\tld c,(ix%+d)\n" / "\tld b,(ix%+d)\n" -
  * confirmed by grep to be the ONLY place dcc's own codegen ever emits "ld
  * c,(ix" or "ld b,(ix" at all, so this text signature is unambiguous. The
  * comparison below has no leading tab because read_file's own trim() has
@@ -5199,8 +5197,8 @@ static int pass_reuse_sbc_result_for_flagcheck_rotated(void)
  *
  * Two forms are recognised, in order of preference:
  *
- *  1. The explicit "@dcc.reg claim=bc ..." directive (emit_regalloc_claim,
- *     dcc_regalloc.c). This states the register, the scope, the symbol and
+ *  1. The explicit "@dcc.reg claim=bc ..." directive emitted by MIR
+ *     schedules. This states the register, the scope, the symbol and
  *     what the claim is worth, and - crucially - is paired with an
  *     "@dcc.reg free=bc" directive at the point the candidate's live range
  *     actually ends. Being told is strictly better than inferring: it is
@@ -5226,11 +5224,7 @@ static int line_is_regalloc_bc_priming(const char *line)
     return strncmp(clean, "ld c,(ix", 8) == 0 || strncmp(clean, "ld b,(ix", 8) == 0;
 }
 
-/* True if `line` ends a compiler-side BC claim (emit_regalloc_free,
- * dcc_regalloc.c). dcc emits this only where the candidate is genuinely
- * dead: immediately after a read-only loop candidate's loop (every later
- * read goes back to the never-stale frame slot), or after a write
- * candidate's spill store has resynced that slot. */
+/* True if `line` ends a compiler-side BC claim. */
 static int line_is_regalloc_bc_release(const char *line)
 {
     return strstr(line, "@dcc.reg free=bc") != NULL;
@@ -5607,8 +5601,7 @@ static int pass_cache_global_word_reload(void)
         int noc;
         int delta;
 
-        /* dcc's own reg_alloc mechanism (dcc_loop_regalloc.c/dcc_func.c)
-         * keeps a loop-scoped or whole-function candidate resident in BC
+        /* A compiler-side MIR claim can keep a value resident in BC
          * across a span this pass cannot see in the surrounding text at
          * all: the priming load ("ld c,(ix+d)"/"ld b,(ix+d+1)") and the
          * candidate's own later reads/writes are the ONLY textual b/c

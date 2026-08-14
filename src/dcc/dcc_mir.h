@@ -38,9 +38,6 @@ int mir_capture_debug_variable(
     const char *function, const struct Sym *symbol, int end);
 int mir_capture_debug_function_end(
     const char *assembly_name, const char *source_name);
-void mir_begin_prelegacy_scheduled_attempt(void);
-int mir_end_prelegacy_scheduled_attempt(void);
-void mir_report_buffered_selection(FILE *stream, const char *name);
 void mir_end_function(void);
 void mir_finish_translation_unit(void);
 

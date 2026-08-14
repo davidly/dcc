@@ -5,13 +5,11 @@
  * arrays, structs/unions and bitfields, brace-enclosed initializer lists, and
  * const-scalar folding of local initializers into immediates.
  *
- * MODULE: compiled as its own translation unit; E-register allocation state is
- * declared in dcc_regalloc_internal.h.
+ * MODULE: compiled as its own translation unit.
  * Source provenance: monolith src/ddc.c lines 13128-13991.
  */
 
 #include "dcc.h"
-#include "dcc_regalloc_internal.h"
 #include "dcc_mir.h"
 #include "dcc_ast.h"
 int parse_float_init_literal(unsigned long *bits)
@@ -1497,23 +1495,6 @@ void gen_local_decl_after_type(int base)
             s->pointee_is_volatile = g_decl.pointee_is_volatile;
             s->is_register = g_decl.is_register;
             freshly_allocated = 1;
-            /* Round 2 of codegen-time register residency (see dcc_func.c's
-             * find_bc_regalloc_candidate/try_speculative_bc_regalloc_
-             * function_body for round 1's pointer-in-BC case): a local
-             * narrowed by try_narrow_for_counter is, by that proof, used
-             * solely as one simple counting for-loop's own induction
-             * variable - dccpeep's existing pass_byte_for_counter_to_reg_e
-             * already promotes exactly this shape reactively, so codegen
-             * claiming it directly is the same class of change as round 1.
-             * Only claimed inside a speculative attempt (g_e_regalloc_claim_
-             * active), and only the first such local per attempt (a second
-             * counter in the same function falls back to its ordinary frame
-             * slot, matching round 1's "one candidate" scope). */
-            if (narrowed_as_counter && g_e_regalloc_claim_active && !g_e_regalloc_claimed) {
-                s->reg_alloc = REG_E;
-                g_e_regalloc_claimed = 1;
-                g_e_regalloc_sym = s;
-            }
             if (arrlen > 0 || g_last_array_dim_count > 0) {
                 s->is_array = 1;
                 s->array_len = arrlen;

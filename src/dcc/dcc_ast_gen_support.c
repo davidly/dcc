@@ -2056,17 +2056,7 @@ int ast_global_byte_array_fast_store(const struct AstNode *n,
         idx_has_const = 1;
     } else if (n->a->b->kind == AST_IDENT) {
         idx_sym = find_sym(n->a->b->sval);
-        /* A REG_BC-resident word index is also accepted: emit_global_byte_
-         * array_index_addr's word-sized branch (dcc_assign.c) reads it via
-         * BC directly, the same reg_alloc-transparent shape as the plain
-         * (ix+d) case. Byte-sized indices stay sym_can_ix_direct-only for
-         * now - dcc_loop_regalloc.c never promotes anything smaller than a
-         * word, so a byte-sized reg_alloc'd index (REG_E, from the
-         * unrelated whole-function candidate in dcc_func.c) never reaches
-         * this function's word-only fast-path fix and is out of scope
-         * here. */
-        if (!sym_can_ix_direct(idx_sym) &&
-            !(idx_sym != NULL && idx_sym->reg_alloc == REG_BC && type_size(idx_sym->type) == 2))
+        if (!sym_can_ix_direct(idx_sym))
             return 0;
         if (type_size(idx_sym->type) != 1 &&
             !(type_size(idx_sym->type) == 2 && ast_is_plain_int_type(idx_sym->type)))

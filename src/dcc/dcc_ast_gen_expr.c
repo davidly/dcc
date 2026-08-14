@@ -478,13 +478,8 @@ void gen_ident(const struct AstNode *n)
         return;
     }
 
-    /* Local scalar reachable with a direct ix-relative load, or resident in
-     * a register instead of the frame entirely (reg_alloc != REG_NONE) - the
-     * latter never satisfies sym_can_ix_direct (which unconditionally
-     * declines any register-resident symbol so every OTHER ix-direct fast
-     * path safely falls back instead of reading a stale frame slot), so it
-     * needs its own explicit check here rather than folding into that one. */
-    if (sym_can_ix_direct(s) || s->reg_alloc != REG_NONE) {
+    /* Local scalar reachable with a direct ix-relative load. */
+    if (sym_can_ix_direct(s)) {
         emit_load_sym_value_direct(s);
         g_expr.type = s->type;
         return;
@@ -639,14 +634,6 @@ void gen_unary_ast(const struct AstNode *n)
         s = find_sym(n->a->sval);
         if (s->is_array) {
             emit_load_sym_addr(s);
-        } else if (s->reg_alloc == REG_BC) {
-            /* A loop-scoped BC-resident global pointer (dcc_loop_regalloc.c)
-             * also satisfies is_global_word_sym below, which would otherwise
-             * unconditionally win and emit a plain "ld hl,(name)" reload,
-             * silently ignoring its live BC-resident value - checked first
-             * here for the same reason gen_index_addr_ast's own pointer-base
-             * fast path needs the identical ordering (see that comment). */
-            emit_load_sym_value_direct(s);
         } else if (is_global_word_sym(s)) {
             emit_load_global_word_direct(s);
         } else {
@@ -2761,7 +2748,7 @@ static void gen_assign_ident_ast(const struct AstNode *n)
         return;
     }
 
-    if (n->op == '=' && s->reg_alloc == REG_NONE && !sym_can_ix_direct(s) && !is_global_word_sym(s) &&
+    if (n->op == '=' && !sym_can_ix_direct(s) && !is_global_word_sym(s) &&
         ast_is_plain_int_type(s->type) &&
         (type_size(s->type) == 1 || type_size(s->type) == 2)) {
         int want_dead = expr_result_dead;
@@ -2791,7 +2778,7 @@ static void gen_assign_ident_ast(const struct AstNode *n)
         return;
     }
 
-    if (s->reg_alloc == REG_NONE && !sym_can_ix_direct(s) && !is_global_word_sym(s) &&
+    if (!sym_can_ix_direct(s) && !is_global_word_sym(s) &&
         (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
          n->op == TOK_ANDEQ || n->op == TOK_OREQ || n->op == TOK_XOREQ) &&
         ast_is_plain_int_type(s->type) &&
@@ -2927,7 +2914,7 @@ static void gen_assign_ident_plain_ast(const struct AstNode *n, struct Sym *s)
             g_expr.long_from16 = 0;
             return;
         }
-        if (type_size(s->type) == 1 && s->reg_alloc == REG_NONE && n->b->kind == AST_IDENT) {
+        if (type_size(s->type) == 1 && n->b->kind == AST_IDENT) {
             struct Sym *rs = find_sym(n->b->sval);
             if (rs != NULL && sym_can_ix_direct(rs) &&
                 !type_is_float(rs->type) && !type_is_long(rs->type)) {
@@ -2955,7 +2942,7 @@ static void gen_assign_ident_plain_ast(const struct AstNode *n, struct Sym *s)
                 return;
             }
         }
-        if (type_size(s->type) == 1 && s->reg_alloc == REG_NONE && n->b->kind == AST_INT_LIT) {
+        if (type_size(s->type) == 1 && n->b->kind == AST_INT_LIT) {
             if (type_is_bool(s->type)) {
                 fprintf(g_emit_sink.stream, "\tld (ix%+d),%d\n", s->offset, n->b->ival ? 1 : 0);
                 g_expr.type = s->type;
@@ -2971,7 +2958,7 @@ static void gen_assign_ident_plain_ast(const struct AstNode *n, struct Sym *s)
                 emit_load_sym_value_direct(s);
             return;
         }
-        if (type_size(s->type) == 1 && s->reg_alloc == REG_NONE) {
+        if (type_size(s->type) == 1) {
             long fv;
             if (ast_int_const_cast_fold(n->b, &fv)) {
                 if (type_is_bool(s->type))
@@ -3056,7 +3043,7 @@ static void gen_assign_ident_compound_ast(const struct AstNode *n, struct Sym *s
     int binop;
     int saved_dead;
 
-    if (expr_result_dead && type_size(s->type) == 1 && s->reg_alloc == REG_NONE && !sym_can_ix_direct(s) &&
+    if (expr_result_dead && type_size(s->type) == 1 && !sym_can_ix_direct(s) &&
         (n->op == TOK_ANDEQ || n->op == TOK_OREQ || n->op == TOK_XOREQ)) {
         if (n->op == TOK_ANDEQ)
             binop = '&';
@@ -3600,20 +3587,9 @@ void gen_index_addr_ast(const struct AstNode *n, int *out_val_type)
          * a direct ld hl,(nn); an ix-direct local/param pointer loads its value
          * directly too (ld l,(ix+d)/ld h,(ix+d+1)) instead of computing its
          * frame address and then dereferencing it; arrays and any other
-         * pointer load their address.
-         *
-         * The reg_alloc check MUST come first: a loop-scoped BC-resident
-         * global pointer (dcc_loop_regalloc.c) also satisfies is_global_word_
-         * sym below, which would otherwise unconditionally win and emit a
-         * plain "ld hl,(nn)" reload every time, silently ignoring the live
-         * BC-resident value and paying the promotion's priming cost for
-         * nothing - found via tests/bint.c after adding global BC promotion,
-         * where an indexed global pointer inside a promoted loop kept
-         * reloading from memory instead of ever reading back from bc. */
-        if (!s->is_array && type_ptr_depth(s->type) > 0 && s->reg_alloc == REG_BC) {
-            emit_load_sym_value_direct(s);
-            global_ptr_preloaded = 1;
-        } else if (is_global_word_sym(s) && !s->is_array && type_ptr_depth(s->type) > 0) {
+         * pointer load their address. */
+        if (is_global_word_sym(s) && !s->is_array &&
+            type_ptr_depth(s->type) > 0) {
             emit_load_global_word_direct(s);
             global_ptr_preloaded = 1;
         } else if (!s->is_array && type_ptr_depth(s->type) > 0 && sym_can_ix_direct(s)) {
@@ -4990,18 +4966,8 @@ void gen_member_addr_ast(const struct AstNode *n, int *out_val_type)
          * one instruction - or the equivalent direct ix-relative load for a
          * local) instead of computing &s and then dereferencing it, which
          * is the correct-but-needlessly-expensive general path required
-         * only when s has no direct load form at all.
-         *
-         * A register-resident symbol has to be included explicitly:
-         * sym_can_ix_direct bails on any non-zero reg_alloc (it answers
-         * "is this reachable at (ix+d)", which a promoted symbol is not),
-         * so without the reg_alloc arm here a promoted pointer would fall
-         * into emit_load_sym_addr below and set g_regalloc_address_escaped,
-         * declining the whole promotion. That made `p->field` silently
-         * disqualify its own pointer from ever being promoted - the single
-         * most common shape a pointer parameter appears in. */
-        if (arrow && (sym_can_ix_direct(s) || is_global_word_sym(s) ||
-                      s->reg_alloc != REG_NONE)) {
+         * only when s has no direct load form at all. */
+        if (arrow && (sym_can_ix_direct(s) || is_global_word_sym(s))) {
             emit_load_sym_value_direct(s);
         } else {
             emit_load_sym_addr(s);
@@ -5118,70 +5084,6 @@ static void emit_load_global_field_word_direct(struct Sym *base, struct FieldDef
         fprintf(g_emit_sink.stream, "\tld hl,(%s+%d)\n", asm_name_for(sym_asm_name(base)), fd->offset);
 }
 
-/* Is `n` a plain `P->FIELD` word read whose base pointer P is resident in IY,
- * with FIELD at a displacement the Z80's indexed addressing mode can encode?
- *
- * This is the IY counterpart of ast_member_global_word_field just above, and
- * exists for the same reason: the generic path materialises the field ADDRESS
- * in HL and then dereferences it, when the machine can address the field
- * directly in one instruction pair.
- *
- * The saving is the whole point of putting a struct pointer in IY rather than
- * BC. For `p->weight` at offset 2 the generic path emits
- *
- *     push iy / pop hl / inc hl / inc hl / ld e,(hl) / inc hl / ld d,(hl) / ex de,hl
- *
- * - 61 T-states, 8 bytes, and it destroys DE. The indexed form is
- *
- *     ld l,(iy+2) / ld h,(iy+3)
- *
- * - 38 T-states, 6 bytes, and it touches nothing but HL. That is 23 T-states
- * and 2 bytes per field read, plus the DE pressure removed from every
- * surrounding expression.
- *
- * Restricted to word-sized, non-bitfield, non-array scalar fields: those are
- * the common case, they need no sign-extension or masking after the load, and
- * they keep this predicate a straight substitution for the generic path
- * rather than a second implementation of it. The displacement must fit the
- * signed 8-bit field the opcode encodes, checked for BOTH bytes of the pair. */
-static int ast_member_iy_word_field(const struct AstNode *n,
-                                    struct FieldDef **out_fd, int *out_val_type)
-{
-    struct Sym *base;
-    struct FieldDef *fd;
-    int sid;
-    int val_type;
-
-    if (n->kind != AST_MEMBER || n->op != TOK_ARROW)
-        return 0;
-    if (n->a->kind != AST_IDENT)
-        return 0;
-    base = find_sym(n->a->sval);
-    if (base == NULL || base->reg_alloc != REG_IY)
-        return 0;
-
-    sid = base_struct_id_from_type(base->type);
-    fd = find_field_def(sid, n->sval);
-    if (fd == NULL || fd->is_array || fd->bit_width > 0)
-        return 0;
-
-    val_type = fd->type;
-    if (type_size(val_type) != 2 || type_is_bool(val_type))
-        return 0;
-    if (fd->offset < 0 || fd->offset + 1 > 127)
-        return 0;
-
-    *out_fd = fd;
-    *out_val_type = val_type;
-    return 1;
-}
-
-static void emit_load_iy_field_word_direct(struct FieldDef *fd)
-{
-    fprintf(g_emit_sink.stream, "\tld l,(iy%+d)\n", fd->offset);
-    fprintf(g_emit_sink.stream, "\tld h,(iy%+d)\n", fd->offset + 1);
-}
-
 static void emit_store_global_field_word_direct(struct Sym *base, struct FieldDef *fd)
 {
     emit_extrn_if_needed(base);
@@ -5200,15 +5102,6 @@ void gen_member_ast(const struct AstNode *n)
 
     if (ast_member_global_word_field(n, &direct_base, &direct_fd, &val_type)) {
         emit_load_global_field_word_direct(direct_base, direct_fd);
-        g_expr.type = val_type;
-        g_expr.long_from16 = 0;
-        return;
-    }
-
-    /* Same shape as the global fast path above: address the field directly
-     * instead of computing its address and dereferencing it. */
-    if (ast_member_iy_word_field(n, &direct_fd, &val_type)) {
-        emit_load_iy_field_word_direct(direct_fd);
         g_expr.type = val_type;
         g_expr.long_from16 = 0;
         return;
@@ -5596,20 +5489,6 @@ void gen_deref_addr_ast(const struct AstNode *n, int *out_val_type)
     if (s->is_array) {
         emit_load_sym_addr(s);
     } else if (sym_can_ix_direct(s) || is_global_word_sym(s)) {
-        /* Deliberately NOT extended with a `s->reg_alloc != REG_NONE` arm,
-         * unlike the member path in gen_member_addr_ast. Doing so does make a
-         * dereferenced pointer (`*p`, and `p[i]` which routes here as
-         * `*(p+i)`) promotable, but it changes the shape of the access enough
-         * to defeat dccpeep's cross-iteration passes, which hoist the
-         * invariant pointer RELOAD out of the loop - and that hoist is worth
-         * more than the promotion. Measured: adding the arm cost 00040b
-         * +1.11M, pint +354K and tvlax +341K, turning a -10.30M corpus result
-         * into -8.98M.
-         *
-         * A promoted pointer that is only ever dereferenced therefore
-         * declines its own promotion here, via g_regalloc_address_escaped,
-         * which is the intended outcome - IY is left for candidates whose
-         * uses it can actually improve. */
         emit_load_sym_value_direct(s);
     } else {
         emit_load_sym_addr(s);

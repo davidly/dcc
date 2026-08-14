@@ -35446,6 +35446,17 @@ void mir_machine_emit_global_word_store(
         fprintf(out, "\tld (%s%+d),hl\n", name, offset);
 }
 
+void mir_machine_emit_vla_allocate_rows(
+    FILE *out, unsigned long row_bytes)
+{
+    mir_emit_mul_hl_const(out, row_bytes);
+    fputs("\tex de,hl\n"
+          "\tld hl,0\n\tadd hl,sp\n"
+          "\tor a\n\tsbc hl,de\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+}
+
 static void mir_machine_emit_bc_offset(FILE *out, int offset)
 {
     if (offset == 0)
@@ -44936,26 +44947,6 @@ static void mir_emit_atof_schedule(
         out, plan->failure_root, plan->failure_offset);
     fputs("\tld a,h\n\tor l\n\tld hl,0\n\tret z\n"
           "\tinc hl\n\tret\n", out);
-}
-
-int mir_try_emit_speculation_safe_machine_cfg(FILE *out)
-{
-    struct MirWideNarrowDivision division;
-    struct MirIndexedMemberWrite write;
-
-    if (mir_match_wide_narrow_division(&division)) {
-        fprintf(out, "%s\n", MIR_EXACT_KERNEL_MARKER);
-        fprintf(out, "%s\n", MIR_SPECULATION_SAFE_MARKER);
-        mir_emit_wide_narrow_division(out, &division);
-        return 1;
-    }
-
-    if (!mir_match_indexed_member_write(&write))
-        return 0;
-    fprintf(out, "%s\n", MIR_EXACT_KERNEL_MARKER);
-    fprintf(out, "%s\n", MIR_SPECULATION_SAFE_MARKER);
-    mir_emit_indexed_member_write(out, &write);
-    return 1;
 }
 
 int mir_try_emit_scheduled_machine_cfg(FILE *out)

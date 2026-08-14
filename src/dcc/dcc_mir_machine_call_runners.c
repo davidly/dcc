@@ -10473,6 +10473,15 @@ static int mir_scope_function_types(
     return 1;
 }
 
+static int mir_scope_block_instruction(int profile_instruction)
+{
+    if (profile_instruction < 552)
+        return profile_instruction;
+    if (profile_instruction < 633)
+        return profile_instruction - 2;
+    return profile_instruction - 4;
+}
+
 static int mir_match_scope_block_runner(
     struct MirScopeBlockRunner *plan)
 {
@@ -10482,33 +10491,28 @@ static int mir_match_scope_block_runner(
         "NNNNNNNNNNPNNCBFNCSNCBFDCBSLNLNCBSJLDGCGTGKNCGKUGCGTGKNNNNNCSNCBFNCSNGCGTGKNLNGCGTGKNNNNNNNNNNNCSNCS"
         "NNCSLNNNNNNNNNNNNNNNNNPNPNNCBFNNSNNBNSNCBSNLJLNGCGTGKNGCGTGKNNNNNNNNCSNCSNCBFJLJLNCSNNSNJNLNCNSNLPGC"
         "GTGKNNNNNNNNNNCSNCSNNBNSNNCSNNBNSNNGCGTGKNNNNNNNNNNCSNCSLNNNNNNNNNNNNNNNNNNNNNNNNNNPNNCBFNCSLNNNNNNN"
-        "NNNNNNNNNNNNNNNNNNNNNDCBFDDBNSLDCBSJLLNCBSJLDGCGTGKNCSNNNNNNNNCSNNCSNCSLNNNNNNNNNPNNNNNNNNNNNNNNNNNN"
-        "PNNCBFNNBNSLNCBSJLNGCGTGKNGCGTGKNCSKUGCGTGKKUGCGTGKKUGCGTGKKUGCGTGKKUGCGTGKKUGCGTGKDCBFLTGKJLTGDGKLD"
-        "CBE";
-    static const int constant_instructions[81] = {
-        6, 9, 13, 21, 36, 39, 48, 58, 71, 74, 77, 81, 89, 97,
-        108, 111, 115, 123, 138, 141, 157, 161, 171, 178, 191,
-        194, 213, 217, 220, 224, 231, 238, 244, 249, 259, 262,
-        266, 270, 279, 295, 298, 302, 327, 339, 348, 355, 368,
-        371, 374, 382, 392, 399, 414, 417, 426, 436, 451, 454,
-        486, 490, 522, 532, 539, 546, 552, 562, 566, 569, 603,
-        613, 620, 627, 633, 638, 646, 654, 662, 670, 678, 684,
-        700
+        "NNNNNNNNNNNNNNNNNNNNNDCBFDDBNSLDCBSJLLNCBSJLDGCGTGKNNNNNNNNNCSNNCSNCSLNNNNNNNNNPNNNNNNNNNNNNNNNNNNPN"
+        "NCBFNNBNSLNCBSJLNGCGTGKNGCGTGKNKUGCGTGKKUGCGTGKKUGCGTGKKUGCGTGKKUGCGTGKKUGCGTGKDCBFLTGKJLTGDGKLDCBE";
+    static const int constant_instructions[79] = {
+        6, 9, 13, 21, 36, 39, 48, 58, 71, 74, 77, 81, 89, 97, 108, 111, 115,
+        123, 138, 141, 157, 161, 171, 178, 191, 194, 213, 217, 220, 224, 231,
+        238, 244, 249, 259, 262, 266, 270, 279, 295, 298, 302, 327, 339, 348,
+        355, 368, 371, 374, 382, 392, 399, 414, 417, 426, 436, 451, 454, 486,
+        490, 522, 532, 539, 546, 562, 566, 569, 603, 613, 620, 627, 638, 646,
+        654, 662, 670, 678, 684, 700
     };
-    static const long constant_values[81] = {
-        10, 20, 20, 10, 0, 3, 4, 7, 1, 2, 3, 3, 2, 1, 100,
-        100000, 100000, 100, 0, 0, 3, 50, 1, 150, 0, 0, 4,
-        999, 999, 1, 1, 4, 7, 12, 1, 1, 8, 8, 1, 0, 77, 0,
-        2, 1, 77, 1, 1, 0, 1, 11, 65535, 11, 0, 5, 9, 14, 0,
-        0, 3, 0, 2, 1, 1, 3, 0, 42, 0, 0, 5, 1, 10, 42, 0,
-        112, 114, 741, 742, 7, 9, 0, 0
+    static const long constant_values[79] = {
+        10, 20, 20, 10, 0, 3, 4, 7, 1, 2, 3, 3, 2, 1, 100, 100000, 100000,
+        100, 0, 0, 3, 50, 1, 150, 0, 0, 4, 999, 999, 1, 1, 4, 7, 12, 1, 1, 8,
+        8, 1, 0, 77, 0, 2, 1, 77, 1, 1, 0, 1, 11, 65535, 11, 0, 5, 9, 14, 0,
+        0, 3, 0, 2, 1, 1, 3, 42, 0, 0, 5, 1, 10, 42, 112, 114, 741, 742, 7,
+        9, 0, 0
     };
-    static const unsigned char constant_types[81] = {
-        2, 2, 4, 4, 4, 2, 2, 4, 2, 2, 2, 4, 4, 4, 2, 4, 4,
-        4, 4, 2, 2, 2, 0, 4, 2, 2, 2, 4, 4, 0, 0, 4, 2, 4,
-        2, 2, 2, 4, 4, 2, 2, 4, 2, 0, 4, 4, 2, 2, 0, 2, 2,
-        4, 4, 2, 2, 4, 4, 2, 2, 2, 2, 0, 0, 4, 2, 2, 4, 2,
-        2, 0, 4, 4, 2, 4, 4, 4, 4, 4, 4, 2, 2
+    static const unsigned char constant_types[79] = {
+        2, 2, 4, 4, 4, 2, 2, 4, 2, 2, 2, 4, 4, 4, 2, 4, 4, 4, 4, 2, 2, 2, 0,
+        4, 2, 2, 2, 4, 4, 0, 0, 4, 2, 4, 2, 2, 2, 4, 4, 2, 2, 4, 2, 0, 4, 4,
+        2, 2, 0, 2, 2, 4, 4, 2, 2, 4, 4, 2, 2, 2, 2, 0, 0, 4, 2, 4, 2, 2, 0,
+        4, 4, 4, 4, 4, 4, 4, 4, 2, 2
     };
     static const int binaries[26][4] = {
         {43, 36, 39, '+'}, {52, 43, 48, '+'},
@@ -10596,10 +10600,9 @@ static int mir_match_scope_block_runner(
         {452, 9, 451, 4}, {455, 26, 454, 2},
         {491, 27, 490, 2}, {529, 9, 527, 4},
         {534, 27, 533, 2}, {541, 26, 540, 2},
-        {553, 27, 552, 2}, {563, 28, 562, 2},
+        {563, 28, 562, 2},
         {567, 9, 566, 4}, {570, 29, 569, 2},
-        {610, 9, 608, 4}, {615, 29, 614, 2},
-        {634, 29, 633, 2}
+        {610, 9, 608, 4}, {615, 29, 614, 2}
     };
     static const int loads[][2] = {
         {223, 12}, {236, 12}, {521, 27}, {525, 9},
@@ -10645,7 +10648,7 @@ static int mir_match_scope_block_runner(
     int previous;
 
     memset(plan, 0, sizeof(*plan));
-    if (mir.count != 703 || mir_cfg_block_count() != 28 ||
+    if (mir.count != 699 || mir_cfg_block_count() != 28 ||
         mir.sink_purpose != EMIT_SINK_FINAL ||
         mir.has_vla || mir.local_bytes != 84 ||
         mir.aggregate_temp_bytes != 0 || mir.object_count != 30 ||
@@ -10659,48 +10662,69 @@ static int mir_match_scope_block_runner(
                 expected_opcodes[instruction])
             return mir_machine_reject(
                 "scope-block-runner", "opcode");
-    for (item = 0; item < 81; ++item)
+    for (item = 0; item < 79; ++item) {
+        int constant =
+            mir_scope_block_instruction(
+                constant_instructions[item]);
+
         if (!mir_machine_constant_equals(
-                mir.insns[constant_instructions[item]].dst,
+                mir.insns[constant].dst,
                 constant_values[item]) ||
-            mir.insns[constant_instructions[item]].type !=
+            mir.insns[constant].type !=
                 constant_types[item])
             return mir_machine_reject(
                 "scope-block-runner", "constant");
+    }
     for (item = 0; item < 26; ++item)
         if (!mir_gnarly_binary(
-                binaries[item][0], binaries[item][1],
-                binaries[item][2], binaries[item][3]) ||
-            mir.insns[binaries[item][0]].type !=
+                mir_scope_block_instruction(binaries[item][0]),
+                mir_scope_block_instruction(binaries[item][1]),
+                mir_scope_block_instruction(binaries[item][2]),
+                binaries[item][3]) ||
+            mir.insns[mir_scope_block_instruction(
+                binaries[item][0])].type !=
                 binary_types[item] ||
-            mir.insns[binaries[item][0]].secondary_offset !=
+            mir.insns[mir_scope_block_instruction(
+                binaries[item][0])].secondary_offset !=
                 binary_widths[item])
             return mir_machine_reject(
                 "scope-block-runner", "binary");
     for (item = 0; item < 7; ++item)
-        if (mir.insns[unaries[item][0]].opcode != MIR_UNARY ||
+        if (mir.insns[mir_scope_block_instruction(
+                unaries[item][0])].opcode != MIR_UNARY ||
             !mir_gnarly_value_from(
-                mir.insns[unaries[item][0]].src1,
-                unaries[item][1]) ||
-            mir.insns[unaries[item][0]].immediate != 0 ||
+                mir.insns[mir_scope_block_instruction(
+                    unaries[item][0])].src1,
+                mir_scope_block_instruction(unaries[item][1])) ||
+            mir.insns[mir_scope_block_instruction(
+                unaries[item][0])].immediate != 0 ||
             !mir_scope_long_type(
-                mir.insns[unaries[item][0]].type))
+                mir.insns[mir_scope_block_instruction(
+                    unaries[item][0])].type))
             return mir_machine_reject(
                 "scope-block-runner", "conversion");
     for (item = 0; item < 9; ++item)
         if (!mir_gnarly_phi(
-                phis[item][0], phis[item][1], phis[item][2],
-                phis[item][3], phis[item][4]) ||
-            mir.insns[phis[item][0]].type != phi_types[item] ||
-            mir.insns[phis[item][0]].object != phi_objects[item])
+                mir_scope_block_instruction(phis[item][0]),
+                mir_scope_block_instruction(phis[item][1]),
+                mir_scope_block_instruction(phis[item][2]),
+                mir_scope_block_instruction(phis[item][3]),
+                mir_scope_block_instruction(phis[item][4])) ||
+            mir.insns[mir_scope_block_instruction(
+                phis[item][0])].type != phi_types[item] ||
+            mir.insns[mir_scope_block_instruction(
+                phis[item][0])].object != phi_objects[item])
             return mir_machine_reject(
                 "scope-block-runner", "phi");
     for (item = 0; item < 10; ++item)
         if (!mir_gnarly_branch(
-                branches[item][0], branches[item][1],
-                branches[item][2]) ||
-            mir.insns[jumps[item][0]].label !=
-                mir.insns[jumps[item][1]].label)
+                mir_scope_block_instruction(branches[item][0]),
+                mir_scope_block_instruction(branches[item][1]),
+                mir_scope_block_instruction(branches[item][2])) ||
+            mir.insns[mir_scope_block_instruction(
+                jumps[item][0])].label !=
+                mir.insns[mir_scope_block_instruction(
+                    jumps[item][1])].label)
             return mir_machine_reject(
                 "scope-block-runner", "control-flow");
 
@@ -10713,12 +10737,16 @@ static int mir_match_scope_block_runner(
     for (item = 0;
          item < (int)(sizeof(stores) / sizeof(stores[0]));
          ++item) {
-        const struct MirInsn *store = &mir.insns[stores[item][0]];
+        const struct MirInsn *store =
+            &mir.insns[mir_scope_block_instruction(
+                stores[item][0])];
 
         if (store->opcode != MIR_STORE ||
             store->object != stores[item][1] ||
             !mir_gnarly_value_from(
-                store->src1, stores[item][2]) ||
+                store->src1,
+                mir_scope_block_instruction(
+                    stores[item][2])) ||
             store->memory_size != stores[item][3] ||
             (store->memory_flags & (1 | 8)) != 0 ||
             !mir_machine_named_nonvolatile(store))
@@ -10728,7 +10756,9 @@ static int mir_match_scope_block_runner(
     for (item = 0;
          item < (int)(sizeof(loads) / sizeof(loads[0]));
          ++item) {
-        const struct MirInsn *load = &mir.insns[loads[item][0]];
+        const struct MirInsn *load =
+            &mir.insns[mir_scope_block_instruction(
+                loads[item][0])];
 
         if (load->opcode != MIR_LOAD ||
             load->object != loads[item][1] ||
@@ -10740,17 +10770,23 @@ static int mir_match_scope_block_runner(
     }
 
     plan->check_function =
-        mir_abort_runner_function(17, 0, 3, 0);
+        mir_abort_runner_function(
+            mir_scope_block_instruction(17), 0, 3, 0);
     plan->parameter_function =
-        mir_abort_runner_function(246, 0, 1, 0);
+        mir_abort_runner_function(
+            mir_scope_block_instruction(246), 0, 1, 0);
     plan->helper_functions[0] =
-        mir_abort_runner_function(635, 0, 0, 0);
+        mir_abort_runner_function(
+            mir_scope_block_instruction(635), 0, 0, 0);
     plan->helper_functions[1] =
-        mir_abort_runner_function(651, 0, 0, 0);
+        mir_abort_runner_function(
+            mir_scope_block_instruction(651), 0, 0, 0);
     plan->helper_functions[2] =
-        mir_abort_runner_function(667, 0, 0, 0);
+        mir_abort_runner_function(
+            mir_scope_block_instruction(667), 0, 0, 0);
     plan->print_function =
-        mir_abort_runner_function(690, 1, 1, 0);
+        mir_abort_runner_function(
+            mir_scope_block_instruction(690), 1, 1, 0);
     if (plan->check_function == NULL ||
         plan->parameter_function == NULL ||
         plan->helper_functions[0] == NULL ||
@@ -10785,12 +10821,25 @@ static int mir_match_scope_block_runner(
 
     for (item = 0; item < 26; ++item) {
         const struct MirInsn *string =
-            &mir.insns[check_string_instructions[item]];
+            &mir.insns[mir_scope_block_instruction(
+                check_string_instructions[item])];
+        int check_arguments_direct[3];
+
+        check_arguments_direct[0] =
+            mir_scope_block_instruction(
+                check_arguments[item][0]);
+        check_arguments_direct[1] =
+            mir_scope_block_instruction(
+                check_arguments[item][1]);
+        check_arguments_direct[2] =
+            mir_scope_block_instruction(
+                check_arguments[item][2]);
 
         if (!mir_abort_runner_call(
-                check_calls[item], plan->check_function,
+                mir_scope_block_instruction(check_calls[item]),
+                plan->check_function,
                 check_call_ids[item], 3,
-                check_arguments[item]) ||
+                check_arguments_direct) ||
             !mir_abort_runner_pointer_type(
                 string->type, TYPE_CHAR) ||
             string->immediate < 0)
@@ -10803,40 +10852,47 @@ static int mir_match_scope_block_runner(
                 return mir_machine_reject(
                     "scope-block-runner", "check-string");
     }
-    arguments[0] = 244;
+    arguments[0] = mir_scope_block_instruction(244);
     if (!mir_abort_runner_call(
-            246, plan->parameter_function, 11, 1, arguments))
+            mir_scope_block_instruction(246),
+            plan->parameter_function, 11, 1, arguments))
         return mir_machine_reject(
             "scope-block-runner", "parameter-call");
     for (item = 0; item < 6; ++item)
         if (!mir_abort_runner_no_argument_call(
-                helper_calls[item],
+                mir_scope_block_instruction(helper_calls[item]),
                 plan->helper_functions[item / 2],
                 helper_call_ids[item]))
             return mir_machine_reject(
                 "scope-block-runner", "helper-call");
 
-    arguments[0] = 688;
+    arguments[0] = mir_scope_block_instruction(688);
     if (!mir_abort_runner_call(
-            690, plan->print_function, 33, 1, arguments))
+            mir_scope_block_instruction(690),
+            plan->print_function, 33, 1, arguments))
         return mir_machine_reject(
             "scope-block-runner", "success-call");
-    arguments[0] = 693;
-    arguments[1] = 695;
+    arguments[0] = mir_scope_block_instruction(693);
+    arguments[1] = mir_scope_block_instruction(695);
     if (!mir_abort_runner_call(
-            697, plan->print_function, 34, 2, arguments))
+            mir_scope_block_instruction(697),
+            plan->print_function, 34, 2, arguments))
         return mir_machine_reject(
             "scope-block-runner", "failure-call");
     if (!mir_abort_runner_pointer_type(
-            mir.insns[688].type, TYPE_CHAR) ||
+            mir.insns[mir_scope_block_instruction(688)].type,
+            TYPE_CHAR) ||
         !mir_abort_runner_pointer_type(
-            mir.insns[693].type, TYPE_CHAR) ||
-        mir.insns[688].immediate < 0 ||
-        mir.insns[693].immediate < 0)
+            mir.insns[mir_scope_block_instruction(693)].type,
+            TYPE_CHAR) ||
+        mir.insns[mir_scope_block_instruction(688)].immediate < 0 ||
+        mir.insns[mir_scope_block_instruction(693)].immediate < 0)
         return mir_machine_reject(
             "scope-block-runner", "summary-string");
-    plan->success_string = (int)mir.insns[688].immediate;
-    plan->failure_string = (int)mir.insns[693].immediate;
+    plan->success_string =
+        (int)mir.insns[mir_scope_block_instruction(688)].immediate;
+    plan->failure_string =
+        (int)mir.insns[mir_scope_block_instruction(693)].immediate;
     for (item = 0; item < 26; ++item)
         if (plan->success_string == plan->check_strings[item] ||
             plan->failure_string == plan->check_strings[item])
@@ -10846,7 +10902,8 @@ static int mir_match_scope_block_runner(
         return mir_machine_reject(
             "scope-block-runner", "summary-alias");
 
-    plan->failures = find_global(mir.insns[683].name);
+    plan->failures = find_global(
+        mir.insns[mir_scope_block_instruction(683)].name);
     if (plan->failures == NULL ||
         plan->failures->storage != SC_GLOBAL ||
         !plan->failures->is_defined ||
@@ -10854,14 +10911,19 @@ static int mir_match_scope_block_runner(
         plan->failures->is_array ||
         plan->failures->is_volatile ||
         !mir_abort_runner_word_type(plan->failures->type) ||
-        mir.insns[683].object >= 0 ||
+        mir.insns[mir_scope_block_instruction(683)].object >= 0 ||
         !mir_machine_same_location(
-            &mir.insns[683], &mir.insns[695]) ||
+            &mir.insns[mir_scope_block_instruction(683)],
+            &mir.insns[mir_scope_block_instruction(695)]) ||
         !mir_machine_same_location(
-            &mir.insns[683], &mir.insns[699]) ||
-        mir.insns[686].label != mir.insns[692].label ||
-        mir.insns[691].label != mir.insns[698].label ||
-        mir.insns[702].src1 != mir.insns[701].dst)
+            &mir.insns[mir_scope_block_instruction(683)],
+            &mir.insns[mir_scope_block_instruction(699)]) ||
+        mir.insns[mir_scope_block_instruction(686)].label !=
+            mir.insns[mir_scope_block_instruction(692)].label ||
+        mir.insns[mir_scope_block_instruction(691)].label !=
+            mir.insns[mir_scope_block_instruction(698)].label ||
+        mir.insns[mir_scope_block_instruction(702)].src1 !=
+            mir.insns[mir_scope_block_instruction(701)].dst)
         return mir_machine_reject(
             "scope-block-runner", "result-flow");
     return 1;

@@ -6,8 +6,7 @@
  * Function bodies lower through a typed,
  * function-local AST. This header holds broadly shared target constants, core
  * records, state declarations, and cross-module APIs; narrower contracts live
- * in dcc_ast_gen_internal.h, dcc_preproc_internal.h, and
- * dcc_regalloc_internal.h.
+ * in dcc_ast_gen_internal.h and dcc_preproc_internal.h.
  *
  * This foundational contract includes:
  *   1. System headers used across the compiler.
@@ -38,8 +37,6 @@
  *   dcc_stmt.c      token-to-AST statement bridge + switch helpers
  *   dcc_func.c      functions/top-level declarations + inline-body capture
  *   dcc_global_init.c file-scope object initializer parsing (record path)
- *   dcc_regalloc.c  speculative no-IX / BC-register-allocation codegen
- *   dcc_loop_regalloc.c loop-scoped BC register allocation
  *   dcc_global_scan.c whole-file lexical global-write/address scan
  *   dcc_array_narrow.c conservative byte-narrowing proof
  *   dcc_licm.c      loop-invariant code motion and loop-local CSE
@@ -166,10 +163,7 @@
 #define SC_EXTERN      5
 #define SC_REGISTER    6   /* unused; reserved */
 
-/* Prevent legacy speculative register allocation from rewriting a
- * transactionally selected exact MIR stream. */
 #define MIR_EXACT_KERNEL_MARKER ";@dcc.mir exact-kernel"
-#define MIR_SPECULATION_SAFE_MARKER ";@dcc.mir speculation-safe"
 #define MIR_PHI_SLOT_MARKER ";@dcc.mir phi-slot"
 
 /* ------------------------------------------------------------------------- *
@@ -389,10 +383,7 @@ struct Sym {
     int is_volatile; /* object declared with the volatile qualifier: access-
                       * contracting fast paths must decline for it */
     int pointee_is_volatile; /* immediate pointed-to type is volatile */
-    int is_register; /* object declared with the register qualifier: a
-                      * signal dcc_loop_regalloc.c uses to decline promoting
-                      * anything ELSE in a loop that also contains one - see
-                      * loop_regalloc_sym_eligible's comment for why. */
+    int is_register; /* object declared with the register qualifier */
     int is_inline;   /* function declared with inline specifier */
     int is_noreturn; /* function declared with _Noreturn: licm_scan_modified
                       * (dcc_licm.c) tolerates a call to it in an otherwise-
@@ -437,27 +428,7 @@ struct Sym {
                             * per-function address-cache scan) */
     int addr_cache_offset; /* frame offset of the 2-byte pointer slot holding
                             * this array's address, valid when has_addr_cache */
-    int reg_alloc;         /* REG_NONE, or the physical register this symbol
-                            * is resident in for the whole function body (or,
-                            * for REG_BC, possibly just one loop) instead of
-                            * a frame slot. See find_bc_regalloc_candidate /
-                            * try_speculative_bc_regalloc_function_body
-                            * (dcc_func.c, dcc_regalloc.c) for BC and E, and
-                            * find_iy_regalloc_candidate for IY. */
 };
-
-#define REG_NONE 0
-#define REG_BC   1
-#define REG_E    2
-/* IY differs from BC and E in one decisive way: it is CALLEE-SAVED. A
- * function claiming it pushes the caller's IY on entry and pops it on exit,
- * and nothing else in a linked image ever writes IY - DCCRTL contains no IY
- * instruction at all (verified by scripts/rtl-iy-safety.py), and CP/M's
- * 8080-coded BDOS has no index registers to write with. So a value in IY
- * survives an arbitrary call, which is exactly what BC cannot do: that is
- * why IY is the only register dcc can allocate in a function that calls
- * anything, and why it is not simply a third choice alongside the others. */
-#define REG_IY   3
 
 struct Def {
     char name[64];
@@ -656,20 +627,10 @@ extern int current_return_type;
 extern int parse_function_return_type;
 extern int current_local_bytes;
 extern int max_function_local_bytes;
-extern int current_omit_ix_frame;
 extern int current_function_has_call;
+extern int current_function_has_vla;
 extern int g_inline_body_buffering;
 extern int g_buffering_epoch;
-/* Set only around a discard-capable speculative codegen attempt (no-IX-
- * frame, BC/E regalloc, IY regalloc, loop-scoped-BC-first - see their
- * g_speculative_codegen_active++/-- pairs in dcc_regalloc.c), never around
- * the static-inline/plain-static body-buffering branches in dcc_func.c that
- * defer real, kept output to a file purely for later placement. Distinct
- * from g_inline_body_buffering, which both cases set. MIR selection reruns
- * for each attempt, but reports are delayed until the surrounding driver
- * actually commits that generated MIR stream; declined attempts stay silent.
- */
-extern int g_speculative_codegen_active;
 
 /* loop break/continue target stack + parser flags */
 extern int break_stack[MAX_FLOW];
@@ -963,7 +924,6 @@ void emit_extrn_if_needed(struct Sym *s);
 void emit_deferred_extrns(void);
 void emit_runtime_extrn_if_needed(const char *name);
 void emit_runtime_call(const char *name);
-int frame_sp_offset_for_sym(struct Sym *s);
 void emit_load_frame_addr_hl(struct Sym *s);
 void emit_load_sym_addr(struct Sym *s);
 int sym_can_ix_direct(struct Sym *s);
@@ -1159,13 +1119,10 @@ void copy_parsed_prototype_to_sym(struct Sym *s);
 void copy_funcptr_prototype_to_sym(struct Sym *s, int direct_declarator);
 void remember_proto_param_type(int type);
 int old_style_param_list_starts(void);
-void recompute_param_offsets(void);
 void parse_old_style_param_id_list(void);
 void parse_old_style_param_declarations(void);
 void parse_param_list(void);
-int current_function_param_count(void);
-int current_function_safe_to_omit_ix(int return_type, int local_bytes);
-void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame);
+void emit_function_prologue(const char *name, int local_bytes);
 void emit_debug_variable(struct Sym *s);
 void emit_debug_variable_end(struct Sym *s);
 void emit_debug_types_once(void);
@@ -1173,6 +1130,7 @@ void emit_debug_global(struct Sym *s);
 void maybe_reserve_addr_cache_for_array(struct Sym *s, const char *name);
 void emit_function_epilogue(int implicit_zero_return);
 void emit_needed_deferred_bodies(void);
+int is_inline_substitutable(struct Sym *s);
 void skip_initializer_or_decl_tail(void);
 int local_name_address_taken_ahead(const char *name);
 int local_name_address_taken_in_function(const char *name);

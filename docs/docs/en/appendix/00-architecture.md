@@ -194,10 +194,16 @@ inline bodies, and unreferenced runtime support.
 
 The compiler is one binary built from focused modules. Foundational target
 types, shared data structures, and broadly used APIs live in `dcc.h`; narrower
-contracts live in `dcc_ast_gen_internal.h`, `dcc_preproc_internal.h`, and
-`dcc_regalloc_internal.h`. Shared mutable state is defined once in
+contracts live in `dcc_ast_gen_internal.h` and `dcc_preproc_internal.h`.
+Shared mutable state is defined once in
 `dcc_state.c`, with related fields grouped into the lifecycle structures
 described above.
+
+Production function text is generated-only MIR. After the frame-sizing scans,
+`dcc_func.c` performs one body walk for MIR lowering and declaration/inline
+metadata. The legacy AST emitter writes that walk to a discard-only sink; it
+does not retry alternate IX/BC/E/IY configurations, post-process text, or
+contribute bytes to the selected function.
 
 ```mermaid
 graph TB
@@ -238,16 +244,21 @@ graph TB
         NARROW["dcc_array_narrow.c<br/>byte-narrowing proof"]
     end
 
-      subgraph TOP["5 - Top level, speculation + output"]
+    subgraph MIR["5 - MIR generation + selection"]
+        MIRCORE["dcc_mir.c<br/>lowering + analysis"]
+        MIRSEL["dcc_mir_select.c<br/>candidate selection"]
+        MIREMIT["dcc_mir_*<br/>machine schedules + emitters"]
+    end
+
+      subgraph TOP["6 - Top level + output"]
         FUNC["dcc_func.c<br/>functions, frame layout"]
         GINIT["dcc_global_init.c<br/>file-scope initializers"]
-        REG["dcc_regalloc.c<br/>whole-function speculation"]
-        LREG["dcc_loop_regalloc.c<br/>loop-scoped BC allocation"]
         DATA["dcc_data.c<br/>data-section emission"]
     end
 
       SHARED -.contracts.-> FE
-    FE ==> TYP ==> AST ==> CG ==> TOP
+    FE ==> TYP ==> AST ==> MIR ==> TOP
+    AST -.metadata replay.-> CG
 ```
 
 The thick arrows are the dominant translation pipeline (front end → types →
@@ -257,12 +268,13 @@ The thick arrows are the dominant translation pipeline (front end → types →
 
 | Group | Modules | Responsibility |
 | --- | --- | --- |
-| Shared | `dcc.h`, `dcc_state.c`, `dcc_ast_gen_internal.h`, `dcc_preproc_internal.h`, `dcc_regalloc_internal.h` | Foundational contract, focused internal contracts, and shared state definitions |
+| Shared | `dcc.h`, `dcc_state.c`, `dcc_ast_gen_internal.h`, `dcc_preproc_internal.h` | Foundational contract, focused internal contracts, and shared state definitions |
 | Front end | `dcc.c`, `dcc_preproc.c`, `dcc_pp_expr.c`, `dcc_diag_emit.c`, `dcc_asmname.c` | Driver/CLI, macro engine + lexer, conditional-expression evaluation, diagnostics + emit primitives, C-name-to-asm-symbol mapping |
 | Types / symbols | `dcc_types.c`, `dcc_symbols.c`, `dcc_constexpr.c`, `dcc_fold.c` | Type system, symbol tables, constant-expression evaluation, constant folding |
-| Function-local AST | `dcc_ast.h`, `dcc_ast.c`, `dcc_ast_build.c`, `dcc_ast_gen.c` + `dcc_ast_gen_support.c` / `_expr.c` / `_cond.c` / `_stmt.c` (behind `dcc_ast_gen_internal.h`) | AST node storage, typed statement/expression building, and the AST-driven Z80 emitter — split into classifiers/type resolvers (`dcc_ast_gen.c`), the `ast_gen_supported` dispatch and folds (`_support.c`), expression emitters (`_expr.c`), condition/branch emitters (`_cond.c`), and switch/for/statement emitters (`_stmt.c`) |
-| Code generation helpers | `dcc_expr.c`, `dcc_ops.c`, `dcc_cmp.c`, `dcc_assign.c`, `dcc_stmt.c`, `dcc_decl.c`, `dcc_stmt_fast.c`, `dcc_array_narrow.c` | Low-level expression/operator/statement emit helpers and conservative byte-narrowing proof, all feeding the AST-driven path |
-| Top level / speculation / output | `dcc_func.c`, `dcc_global_init.c`, `dcc_regalloc.c`, `dcc_loop_regalloc.c`, `dcc_data.c` | Function/frame parsing, global initializer recording, speculative no-IX and BC/E allocation, loop-scoped BC allocation, and data-section emission |
+| Function-local AST | `dcc_ast.h`, `dcc_ast.c`, `dcc_ast_build.c`, `dcc_ast_gen.c` + `dcc_ast_gen_support.c` / `_expr.c` / `_cond.c` / `_stmt.c` (behind `dcc_ast_gen_internal.h`) | AST node storage, typed statement/expression building, MIR capture, and the discard-only metadata walker |
+| Legacy metadata helpers | `dcc_expr.c`, `dcc_ops.c`, `dcc_cmp.c`, `dcc_assign.c`, `dcc_stmt.c`, `dcc_decl.c`, `dcc_stmt_fast.c`, `dcc_array_narrow.c` | Declaration/inline/frame metadata side effects and conservative byte-narrowing analysis; emitted AST text is discarded |
+| MIR backend | `dcc_mir.c`, `dcc_mir_select.c`, `dcc_mir_homed_cfg.c`, `dcc_mir_spilled_cfg.c`, `dcc_mir_schedule.c`, `dcc_mir_target.c`, `dcc_mir_emit_common.c`, `dcc_mir_machine_*.c` | Persistent MIR, verification/allocation, generated-candidate selection, schedules, and production Z80 emission |
+| Top level / output | `dcc_func.c`, `dcc_global_init.c`, `dcc_data.c` | Function/frame parsing, one production metadata/MIR body walk, global initializer recording, deferred static-body placement, and data-section emission |
 
 ## Inside dccpeep: a fixpoint peephole optimizer
 

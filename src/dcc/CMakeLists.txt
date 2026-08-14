@@ -44,8 +44,6 @@ set(DCC_SOURCES
     dcc_stmt.c
     dcc_func.c
     dcc_global_init.c   # file-scope object initializer parsing (split from dcc_func.c)
-    dcc_regalloc.c      # speculative no-IX / BC-regalloc codegen (split from dcc_func.c)
-    dcc_loop_regalloc.c # loop-scoped BC register allocation
     dcc_array_narrow.c  # conservative byte-narrowing proof
     dcc_licm.c          # loop-invariant code motion / CSE
     dcc_data.c
@@ -74,7 +72,7 @@ set(DCC_SOURCES
 )
 
 add_executable(dcc ${DCC_SOURCES} dcc.h dcc_ast_gen_internal.h
-                   dcc_preproc_internal.h dcc_regalloc_internal.h dcc_mir.h
+                   dcc_preproc_internal.h dcc_mir.h
                    dcc_mir_machine_internal.h)
 target_include_directories(dcc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 

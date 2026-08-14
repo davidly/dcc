@@ -27,6 +27,8 @@ void mir_machine_emit_hl_offset(FILE *out, int offset, int preserve_bc);
 void mir_machine_emit_global_word(FILE *out, struct Sym *symbol, int offset);
 void mir_machine_emit_global_word_store(
     FILE *out, struct Sym *symbol, int offset);
+void mir_machine_emit_vla_allocate_rows(
+    FILE *out, unsigned long row_bytes);
 void mir_machine_emit_float_bits(FILE *out, unsigned long bits);
 void mir_machine_emit_symbol_call(FILE *out, struct Sym *symbol);
 void mir_machine_emit_ix_wide_load(FILE *out, int offset);

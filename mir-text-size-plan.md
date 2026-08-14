@@ -21848,3 +21848,99 @@ The complete validation proof:
   pre-existing balanced `__extln` save/use/restore block remains.
 
 No performance baseline changed. No commit or push was made.
+
+## Item T541: remove legacy speculative body retries (2026-08-15)
+
+At generated-only HEAD `081370f`, production Z80 already came exclusively
+from MIR, but parsing still carried the complete fallback-era retry ladder:
+scheduled preprobe, no-IX, loop-first BC, BC+E then BC-only, IY, and final
+ordinary generation. Declining attempts reparsed the same body, generated
+discard-only AST text, reread temporary streams, and in some cases rewrote the
+selected MIR text even though no legacy assembly could be committed.
+
+The production parser now performs one codegen walk after its frame-sizing
+scans. That walk retains the AST metadata responsibilities that are not yet
+MIR-native: declaration replay, inline capture/needed-body marking, debug
+events, static-local identity, and deferred static-body placement. Static
+inline and ordinary static functions still compile into one DEFERRED stream;
+other functions select directly into FINAL. Diagnostics are no longer
+suppressed and replayed through speculative attempts, so a real error is
+reported once.
+
+Deleted surfaces:
+
+- `dcc_regalloc.c` (**1,860 lines**);
+- `dcc_loop_regalloc.c` (**1,016 lines**);
+- `dcc_regalloc_internal.h` (**120 lines**);
+- all no-IX/BC/E/IY candidate, retry, rewind, text verifier/rewriter, and
+  claim/free APIs;
+- prelegacy scheduled-attempt state and APIs, buffered selection markers,
+  speculation-safe exact wrapper, speculative report suppression, and
+  discarded-attempt globals;
+- the no-IX frame-addressing paths and dormant `Sym.reg_alloc` AST hooks.
+
+In total, **35 declared function entry points** were removed or privatized and
+**17 shared regalloc/speculation state variables** were deleted.
+
+`asm_name_is_bc_safe_call` had one non-regalloc consumer: LICM's pure runtime
+call whitelist. That predicate was retained as a file-local LICM helper rather
+than preserving an obsolete allocator module. The parser's whole-function
+identifier/address-taken scan also remains: MIR object promotion and AST
+metadata optimizations still consume it. This is the intended boundary from
+the task; the AST metadata walker itself was not removed.
+
+Removing the retry-created metadata noise deleted dead `const 0`/local-store
+pairs at C99 for-init scope ends. Three exact schedules were therefore moved
+to their cleaner, semantically identical MIR profiles:
+
+- best-record scan: **81 -> 79 instructions**;
+- scope-block runner: **703 -> 699**;
+- endgame scope runner: **1350 -> 1344**.
+
+The schedule contracts still validate the complete opcode/CFG/object/call
+semantics and remain name-free. Checked results are:
+
+- `tpeepi`: **29,470 / 29,526 cycles**, **5,504 / 5,632 bytes**;
+- `tforblk`: **44,397 / 45,637**, **7,168 / 7,168**;
+- `tforsco`: **66,741 / 68,749**, **8,576 / 8,576**;
+
+for peep/nopeep respectively, all below checked baselines.
+
+The first direct MIR-only selector pass also exposed a real semantic bug that
+the retry ordering had hidden. `tctxflt.truth_for` selected homed CFG; its
+wide float truth test loaded DE:HL while a loop-carried scalar remained live
+in DE, corrupting the induction state and hanging. Wide homed truth emission
+now preserves individually live HL or DE homes in addition to a combined
+DE:HL home. `tctxflt` passes full mode and improves from checked
+**380,500 -> 368,345 peep** and **388,323 -> 375,229 nopeep**.
+
+Serial strict-census timing, canonical compiler and `--jobs 1`:
+
+| mode | before | after | change |
+| --- | ---: | ---: | ---: |
+| normal | 52.91 s | 45.79 s | **-7.12 s / -13.46%** |
+| stack-check | 53.32 s | 45.60 s | **-7.72 s / -14.48%** |
+| combined | 106.23 s | 91.39 s | **-14.84 s / -13.97%** |
+
+The task-only compiler C/header diff is **4,121 net lines deleted**. Raw removals are 4,577
+lines against 456 task additions; the deleted allocator files contribute
+2,996 lines and `dcc_func.c` shrinks **4,116 -> 3,526**.
+
+Final strict results:
+
+- normal census **2378/2378**:
+  **1253 spilled / 525 scheduled / 505 homed / 90 hybrid / 5 regional**;
+- stack census **2378/2378**:
+  **1262 / 515 / 506 / 90 / 5**;
+- extended census **274/274** in each mode, every captured metric `-1`;
+- focused ASan/UBSan **420/420 functions** in normal and stack modes;
+- strict full+extended peep/nopeep in stack and no-stack modes:
+  **314 runnable passed / 9 configured skips + 196 extended**;
+- diagnostics **106/106**, dccpeep **22/22**, require-emit boundary,
+  canonical/CMake builds, IDE source diagnostics, and `git diff --check`
+  pass;
+- checked performance **0 regressions / 929 improvements**.
+
+No baseline changed. No commit or push was made. The remaining discard-only
+AST metadata walk is intentionally deferred until its side effects have
+MIR-native owners.

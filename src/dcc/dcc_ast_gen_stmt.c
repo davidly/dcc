@@ -805,52 +805,11 @@ static void ast_gen_for_stmt_impl(const struct AstNode *n)
     }
 }
 
-static int ast_try_loop_regalloc(const struct AstNode *loop_node,
-                                 const struct AstNode *cond,
-                                 const struct AstNode *inc,
-                                 const struct AstNode *body,
-                                 void (*gen_loop_impl)(const struct AstNode *))
-{
-    int is_write;
-    struct Sym *cand;
-
-    /* Nesting depth of the loop about to be generated, for the cost model
-     * behind the emitted claim directive. nflow counts the enclosing
-     * breakable scopes and has not yet been incremented for THIS loop, so
-     * it is exactly the number of loops/switches wrapped around it. A
-     * candidate inside a nested loop is worth far more per reference than
-     * the same candidate in straight-line code, and publishing that is what
-     * lets dccpeep tell a valuable claim from a marginal one instead of
-     * unconditionally yielding BC to whichever claim it happens to see. */
-    loop_regalloc_last_depth = nflow;
-
-    cand = loop_regalloc_find_bc_candidate(cond, inc, body, &is_write);
-    if (cand == NULL)
-        return 0;
-    if (is_write)
-        return try_loop_regalloc_bc_write(loop_node, cand, gen_loop_impl);
-    return try_loop_regalloc_bc(loop_node, cand, gen_loop_impl);
-}
-
-/* Loop-scoped BC register promotion (dcc_loop_regalloc.c): if this loop has
- * an eligible candidate (see loop_regalloc_find_bc_candidate), try
- * generating the whole loop with it primed into BC instead of its normal
- * frame slot - via try_loop_regalloc_bc for a read-only candidate (Phase
- * 1) or try_loop_regalloc_bc_write for one the loop also writes (Phase 2,
- * which additionally spills BC back to the frame slot once, after the
- * loop) - verify the result is safe, and commit it. Falls back to plain,
- * unpromoted generation (the untouched ast_gen_for_stmt_impl above) if no
- * candidate exists or the speculative attempt is declined. */
 void ast_gen_for_stmt(const struct AstNode *n)
 {
-    if (ast_try_loop_regalloc(n, n->b, n->c, n->d, ast_gen_for_stmt_impl))
-        return;
     ast_gen_for_stmt_impl(n);
 }
 
-/* Renamed original body of the AST_WHILE case (formerly inline in
- * ast_gen_stmt's switch) - see ast_gen_while_stmt just below for the
- * loop-scoped BC register-promotion wrapper now placed around it. */
 static void ast_gen_while_stmt_impl(const struct AstNode *n)
 {
     /* Generic while shape: ltop, lend allocated up front;
@@ -875,18 +834,11 @@ static void ast_gen_while_stmt_impl(const struct AstNode *n)
     emit_label(lend);
 }
 
-/* Loop-scoped BC register promotion (dcc_loop_regalloc.c) for AST_WHILE -
- * same wrapper shape as ast_gen_for_stmt, just with no separate increment
- * clause (AST_WHILE's cond is n->a, body is n->b; there is no n->c). */
 void ast_gen_while_stmt(const struct AstNode *n)
 {
-    if (ast_try_loop_regalloc(n, n->a, NULL, n->b, ast_gen_while_stmt_impl))
-        return;
     ast_gen_while_stmt_impl(n);
 }
 
-/* Renamed original body of the AST_DOWHILE case (formerly inline in
- * ast_gen_stmt's switch) - see ast_gen_dowhile_stmt just below. */
 static void ast_gen_dowhile_stmt_impl(const struct AstNode *n)
 {
     /* Generic do-while shape: ltop, lcont, lend
@@ -912,12 +864,8 @@ static void ast_gen_dowhile_stmt_impl(const struct AstNode *n)
     emit_label(lend);
 }
 
-/* Loop-scoped BC register promotion (dcc_loop_regalloc.c) for AST_DOWHILE -
- * same wrapper shape as ast_gen_for_stmt/ast_gen_while_stmt. */
 void ast_gen_dowhile_stmt(const struct AstNode *n)
 {
-    if (ast_try_loop_regalloc(n, n->a, NULL, n->b, ast_gen_dowhile_stmt_impl))
-        return;
     ast_gen_dowhile_stmt_impl(n);
 }
 

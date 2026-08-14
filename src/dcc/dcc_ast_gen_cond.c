@@ -268,24 +268,7 @@ int ast_cmp_operand_ok(const struct AstNode *e)
         return 0;
     if (type_size(s->type) != 2)
         return 0;                          /* excludes char (byte rel path) */
-    /* ast_gen_cmp_branch (the emitter every caller of this gate reaches on
-     * success) is already reg_alloc-transparent: it evaluates both operands
-     * via plain ast_gen_expr calls, which already load a REG_BC-resident
-     * symbol correctly (emit_load_sym_value_direct's existing fast path,
-     * dcc_symbols.c) - so a BC-resident operand needs no special handling
-     * here, only permission to reach that emitter at all. Without this, a
-     * loop-scoped BC candidate used in its own loop's condition (dcc_loop_
-     * regalloc.c) fell through every specialized fast path in ast_gen_cond_
-     * branch's dispatch chain to the generic "materialize a 0/1 boolean,
-     * then test it" fallback - paid every iteration - which is what forced
-     * that mechanism to exclude condition-clause candidates entirely
-     * (tests/sieve.c: promoting its loop counter this way more than
-     * doubled total cycles). Word-sized only (matches this function's own
-     * type_size(s->type) == 2 gate above) - REG_BC is the only reg_alloc
-     * value that ever reaches a word-sized operand. Mirrors existing
-     * precedent: ast_byte_operand's own gate already accepts sym_can_ix_
-     * direct(s) || s->reg_alloc == REG_E for the byte-comparison path. */
-    if (!sym_can_ix_direct(s) && !is_global_word_sym(s) && s->reg_alloc != REG_BC)
+    if (!sym_can_ix_direct(s) && !is_global_word_sym(s))
         return 0;
     return 1;
 }
@@ -516,7 +499,7 @@ int ast_byte_operand(const struct AstNode *e, struct ByteOperand *op)
         return 0;
     if (e->kind == AST_IDENT) {
         s = find_sym(e->sval);
-        if (s != NULL && (sym_can_ix_direct(s) || s->reg_alloc == REG_E) &&
+        if (s != NULL && sym_can_ix_direct(s) &&
             type_size(s->type) == 1 && (s->type & TYPE_UNSIGNED)) {
             op->kind = 1;
             op->sym = s;
@@ -1150,7 +1133,7 @@ struct Sym *ast_deadincdec_sym_direct(const struct AstNode *e)
     s = find_sym(e->a->sval);
     if (s == NULL || s->is_const_value || s->storage == SC_FUNC || s->is_array)
         return NULL;
-    if (s->reg_alloc == REG_NONE && !sym_can_ix_direct(s) && !is_global_word_sym(s))
+    if (!sym_can_ix_direct(s) && !is_global_word_sym(s))
         return NULL;
     return s;
 }
@@ -2031,19 +2014,8 @@ void ast_gen_byte_eq_branch(const struct AstNode *n, int label,
     } else if (sym_can_ix_direct(sb)) {
         fprintf(g_emit_sink.stream, "\tcp (ix%+d)\n", sb->offset);
     } else {
-        /* Neither B/C nor D/E is safe scratch here: sb's own load may be
-         * register-resident (reg_alloc REG_BC/REG_E, whose live value IS
-         * that register - clobbering it corrupts every later read of sb,
-         * not just this comparison) or may internally recompute a no-ix-
-         * frame address through DE (emit_load_frame_addr_hl). L is never a
-         * register-allocation target in this codebase, so it's safe to
-         * park sa's already-read value there across sb's load, restoring
-         * A from the stack afterward for the actual compare. Found via a
-         * real miscompare in tests/ttt.c under -fstack-check specifically
-         * (which pushes a function through the no-ix-frame-ineligible,
-         * REG_BC-eligible path where the old `ld b,a` scratch silently
-         * stomped a live register-resident operand - passed every
-         * hand-built isolation test until one matched that exact shape). */
+        /* Keep the first operand out of B/C and D/E while the second load may
+         * need those pairs for address formation. */
         emit("\tpush af\n");
         emit_load_sym_byte_to_a(sb);
         emit("\tld l,a\n");

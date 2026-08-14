@@ -6,14 +6,12 @@
  * code that loads/stores a symbol's address or value (frame-relative or direct
  * for globals), including post-increment/decrement fast paths.
  *
- * MODULE: compiled as its own translation unit; register-allocation escape
- * state is declared in dcc_regalloc_internal.h.
+ * MODULE: compiled as its own translation unit.
  * Source provenance: monolith src/ddc.c lines 3829-4801.
  */
 
 #include "dcc.h"
 #include "dcc_mir.h"
-#include "dcc_regalloc_internal.h"
 
 static int block_scope_ids[MAX_SCOPE_DEPTH];
 static int block_scope_rename_counts[MAX_SCOPE_DEPTH];
@@ -794,33 +792,9 @@ void emit_runtime_call(const char *name)
         fprintf(g_emit_sink.stream, "\tcall %s\n", name);
 }
 
-
-int frame_sp_offset_for_sym(struct Sym *s)
-{
-    /* With normal frame, first parameter is ix+4.  With no IX frame,
-     * SP still points at the return address, so the same parameter is sp+2. */
-    return s->offset - 2;
-}
-
 void emit_load_frame_addr_hl(struct Sym *s)
 {
     int n;
-    /* A register-resident symbol (reg_alloc != REG_NONE) has no meaningful
-     * frame slot content - its live value lives in a register, synced back
-     * to the frame only where the feature that promoted it explicitly does
-     * so (which, for every candidate kind this file currently supports, is
-     * never). Computing its frame ADDRESS at all means some caller wants to
-     * read or write through that address, which would silently touch stale
-     * memory instead of the live register - a real hazard the exact-text
-     * safety scans in dcc_func.c cannot see, since this function's own
-     * output (push ix/pop hl + a numeric ld de,N/add hl,de or a plain
-     * inc/dec hl run) never contains "(ix" or touches b/c/d/e as a
-     * register operand. Flagging it here, structurally, at the one shared
-     * choke point every local/param address computation goes through
-     * (emit_load_sym_addr calls this for SC_LOCAL/SC_PARAM unconditionally)
-     * is exact where a text scan cannot be. */
-    if (s->reg_alloc != REG_NONE)
-        g_regalloc_address_escaped = 1;
     if (s->has_addr_cache) {
         /* This local array's address was materialized once, unconditionally,
          * right after the prologue allocated locals (see dcc_func.c) - it
@@ -831,25 +805,15 @@ void emit_load_frame_addr_hl(struct Sym *s)
         fprintf(g_emit_sink.stream, "\tld h,(ix%+d)\n", s->addr_cache_offset + 1);
         return;
     }
-    if (current_omit_ix_frame && s->storage == SC_PARAM) {
-        n = frame_sp_offset_for_sym(s);
-        if (n == 0) {
-            emit("\tpush sp\n\tpop hl\n");
-        } else {
-            fprintf(g_emit_sink.stream, "\tld hl,%d\n", n);
-            emit("\tadd hl,sp\n");
-        }
-    } else {
-        emit("\tpush ix\n");
-        emit("\tpop hl\n");
-        if (s->offset > 0 && s->offset <= 3) {
-            for (n = 0; n < s->offset; ++n) emit("\tinc hl\n");
-        } else if (s->offset < 0 && s->offset >= -3) {
-            for (n = 0; n < -s->offset; ++n) emit("\tdec hl\n");
-        } else if (s->offset != 0) {
-            fprintf(g_emit_sink.stream, "\tld de,%d\n", s->offset);
-            emit("\tadd hl,de\n");
-        }
+    emit("\tpush ix\n");
+    emit("\tpop hl\n");
+    if (s->offset > 0 && s->offset <= 3) {
+        for (n = 0; n < s->offset; ++n) emit("\tinc hl\n");
+    } else if (s->offset < 0 && s->offset >= -3) {
+        for (n = 0; n < -s->offset; ++n) emit("\tdec hl\n");
+    } else if (s->offset != 0) {
+        fprintf(g_emit_sink.stream, "\tld de,%d\n", s->offset);
+        emit("\tadd hl,de\n");
     }
 }
 
@@ -866,16 +830,6 @@ void emit_load_sym_addr(struct Sym *s)
     if (s->storage == SC_LOCAL || s->storage == SC_PARAM) {
         emit_load_frame_addr_hl(s);
     } else {
-        /* Defense in depth, mirroring emit_load_frame_addr_hl's own flag
-         * above: a reg_alloc'd global whose address is computed here means
-         * some caller wants to read/write through that address, bypassing
-         * the live BC-resident copy entirely - a hazard the eligibility
-         * gate's whole-file global_text_addr_taken_count check (dcc_loop_
-         * regalloc.c) should already have prevented from ever reaching
-         * here, but flagging it structurally at this shared choke point
-         * costs nothing and needs no text scan to be exact. */
-        if (s->reg_alloc != REG_NONE)
-            g_regalloc_address_escaped = 1;
         emit_extrn_if_needed(s);
         fprintf(g_emit_sink.stream, "\tld hl,%s\n", asm_name_for(sym_asm_name(s)));
     }
@@ -886,7 +840,6 @@ int sym_can_ix_direct(struct Sym *s)
 {
     int sz;
     if (!s) return 0;
-    if (s->reg_alloc != REG_NONE) return 0;
     if (s->storage != SC_LOCAL && s->storage != SC_PARAM) return 0;
     if (s->is_array) return 0;
     sz = type_size(s->type);
@@ -908,7 +861,6 @@ int local_offset_can_ix_direct(struct Sym *s, int off, int size)
 {
     int lo, hi;
     if (!s) return 0;
-    if (s->reg_alloc != REG_NONE) return 0;
     if (s->storage != SC_LOCAL && s->storage != SC_PARAM) return 0;
     if (s->is_vla) return 0;
     if (size < 1) size = 1;
@@ -942,54 +894,8 @@ void emit_store_global_word_direct(struct Sym *s)
 
 void emit_load_sym_value_direct(struct Sym *s)
 {
-    if (s->reg_alloc == REG_BC) {
-        emit("\tld l,c\n");
-        emit("\tld h,b\n");
-        return;
-    }
-    if (s->reg_alloc == REG_E) {
-        /* Narrowed by try_narrow_for_counter to unsigned char, so a plain
-         * zero-extend is always correct - no signed-byte sign-extend branch
-         * needed (unlike the ix-direct byte case below, which serves both
-         * signed and unsigned bytes). */
-        emit("\tld l,e\n");
-        emit("\tld h,0\n");
-        return;
-    }
-    if (s->reg_alloc == REG_IY) {
-        /* 25 T-states and 2 bytes, against 38 and 6 for the "ld l,(ix+d)" /
-         * "ld h,(ix+d+1)" frame reload this replaces. Modest per reference
-         * next to BC's 30, but it applies where BC cannot apply at all: this
-         * symbol's function contains calls, which disqualifies every
-         * caller-saved register outright. */
-        emit("\tpush iy\n");
-        emit("\tpop hl\n");
-        return;
-    }
     if (is_global_word_sym(s)) {
         emit_load_global_word_direct(s);
-        return;
-    }
-    if (current_omit_ix_frame && s->storage == SC_PARAM) {
-        if (type_size(s->type) == 1) {
-            emit_load_frame_addr_hl(s);
-            emit("\tld l,(hl)\n");
-            if ((s->type & TYPE_UNSIGNED) || type_is_bool(s->type))
-                emit("\tld h,0\n");
-            else
-                emit("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n");
-            if (type_is_bool(s->type))
-                emit_bool_normalize_hl(s->type);
-        } else if (type_size(s->type) == 4) {
-            emit_load_frame_addr_hl(s);
-            emit("\tld a,(hl)\n\tld l,a\n\tinc hl\n\tld a,(hl)\n\tld h,a\n");
-            emit("\tpush hl\n");
-            emit_load_frame_addr_hl(s);
-            emit("\tinc hl\n\tinc hl\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpop hl\n");
-        } else {
-            emit_load_frame_addr_hl(s);
-            emit("\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n");
-        }
         return;
     }
     if (type_size(s->type) == 1) {
@@ -1030,7 +936,7 @@ void emit_load_sym_value_direct(struct Sym *s)
  * of failing to assemble, corrupting an unrelated read). */
 int sym_word_load_is_two_byte_fetch(struct Sym *s)
 {
-    if (s == NULL || s->reg_alloc != REG_NONE)
+    if (s == NULL)
         return 0;
     if (s->is_array || s->is_const_value)
         return 0;
@@ -1039,8 +945,6 @@ int sym_word_load_is_two_byte_fetch(struct Sym *s)
     if (type_is_float(s->type) || type_ptr_depth(s->type) != 0)
         return 0;
     if (is_global_word_sym(s))
-        return 1;
-    if (current_omit_ix_frame && s->storage == SC_PARAM)
         return 1;
     return sym_can_ix_direct(s);
 }
@@ -1057,9 +961,6 @@ void emit_load_sym_low_byte_and_const(struct Sym *s, unsigned int mask)
     if (is_global_word_sym(s)) {
         emit_extrn_if_needed(s);
         fprintf(g_emit_sink.stream, "\tld a,(%s)\n", asm_name_for(sym_asm_name(s)));
-    } else if (current_omit_ix_frame && s->storage == SC_PARAM) {
-        emit_load_frame_addr_hl(s);
-        emit("\tld a,(hl)\n");
     } else {
         fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", s->offset);
     }
@@ -1082,11 +983,7 @@ int sym_is_direct_byte_fetch(struct Sym *s)
         return 0;
     if (type_size(s->type) != 1)
         return 0;
-    if (s->reg_alloc == REG_BC || s->reg_alloc == REG_E)
-        return 1;
     if (s->storage == SC_GLOBAL || s->storage == SC_EXTERN)
-        return 1;
-    if (current_omit_ix_frame && s->storage == SC_PARAM)
         return 1;
     return sym_can_ix_direct(s);
 }
@@ -1096,22 +993,9 @@ int sym_is_direct_byte_fetch(struct Sym *s)
  * confirmed sym_is_direct_byte_fetch(s). */
 void emit_load_sym_byte_to_a(struct Sym *s)
 {
-    if (s->reg_alloc == REG_BC) {
-        emit("\tld a,c\n");
-        return;
-    }
-    if (s->reg_alloc == REG_E) {
-        emit("\tld a,e\n");
-        return;
-    }
     if (s->storage == SC_GLOBAL || s->storage == SC_EXTERN) {
         emit_extrn_if_needed(s);
         fprintf(g_emit_sink.stream, "\tld a,(%s)\n", asm_name_for(sym_asm_name(s)));
-        return;
-    }
-    if (current_omit_ix_frame && s->storage == SC_PARAM) {
-        emit_load_frame_addr_hl(s);
-        emit("\tld a,(hl)\n");
         return;
     }
     fprintf(g_emit_sink.stream, "\tld a,(ix%+d)\n", s->offset);
@@ -1121,16 +1005,6 @@ void emit_load_sym_de_direct(struct Sym *s)
 {
     if (s == NULL)
         fatal("emit_load_sym_de_direct: missing symbol");
-    if (s->reg_alloc == REG_BC) {
-        emit("\tld e,c\n");
-        emit("\tld d,b\n");
-        return;
-    }
-    if (s->reg_alloc == REG_E) {
-        /* s's own live value already sits in e; only d needs setting. */
-        emit("\tld d,0\n");
-        return;
-    }
     if (is_global_word_sym(s)) {
         emit("\tpush hl\n");
         emit_load_global_word_direct(s);
@@ -1148,24 +1022,6 @@ void emit_load_sym_de_direct(struct Sym *s)
             emit("\tld a,e\n\trlca\n\tsbc a,a\n\tld d,a\n");
         if (type_is_bool(s->type))
             emit("\tld a,e\n\tor a\n\tld e,0\n\tjr z,$+3\n\tinc e\n\tld d,0\n");
-        return;
-    }
-    if (current_omit_ix_frame && s->storage == SC_PARAM) {
-        emit("\tpush hl\n");
-        if (type_size(s->type) == 1) {
-            emit_load_frame_addr_hl(s);
-            emit("\tld e,(hl)\n");
-            if ((s->type & TYPE_UNSIGNED) || type_is_bool(s->type))
-                emit("\tld d,0\n");
-            else
-                emit("\tld a,e\n\trlca\n\tsbc a,a\n\tld d,a\n");
-            if (type_is_bool(s->type))
-                emit("\tld a,e\n\tor a\n\tld e,0\n\tjr z,$+3\n\tinc e\n\tld d,0\n");
-        } else {
-            emit_load_frame_addr_hl(s);
-            emit("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n");
-        }
-        emit("\tpop hl\n");
         return;
     }
     if (!sym_can_ix_direct(s))
@@ -1186,40 +1042,6 @@ void emit_load_sym_de_direct(struct Sym *s)
 
 void emit_store_hl_to_sym_direct(struct Sym *s)
 {
-    if (s->reg_alloc == REG_E) {
-        if (type_is_bool(s->type))
-            emit_bool_normalize_hl(s->type);
-        emit("\tld e,l\n");
-        return;
-    }
-    if (s->reg_alloc == REG_BC) {
-        /* Loop-scoped write candidate (dcc_loop_regalloc.c's Phase 2, not
-         * the whole-function BC candidate - that one is read-only by
-         * construction and never reaches a store site at all). Word-sized
-         * (this reg_alloc target is only ever chosen for a 2-byte scalar -
-         * see loop_regalloc_find_bc_candidate's type_size(s->type) == 2
-         * check), so both halves need updating, unlike REG_E's single
-         * byte. The candidate's frame slot is intentionally left stale
-         * here - it's resynced once by a spill store the loop wrapper
-         * emits right after the loop, not on every write (see
-         * try_loop_regalloc_bc_write in dcc_loop_regalloc.c). */
-        if (type_is_bool(s->type))
-            emit_bool_normalize_hl(s->type);
-        emit("\tld c,l\n\tld b,h\n");
-        return;
-    }
-    if (s->reg_alloc == REG_IY) {
-        /* 25 T-states against 38 for the "ld (ix+d),l" / "ld (ix+d+1),h"
-         * frame store this replaces. As with the BC write candidate above,
-         * the frame slot is deliberately left stale - but unlike BC there is
-         * no spill to resync it later, and none is needed: this is a
-         * whole-function candidate whose address is never taken, so IY is the
-         * only thing that ever reads the value after entry. */
-        if (type_is_bool(s->type))
-            emit_bool_normalize_hl(s->type);
-        emit("\tpush hl\n\tpop iy\n");
-        return;
-    }
     if (is_global_word_sym(s)) {
         emit_store_global_word_direct(s);
         return;
@@ -1246,24 +1068,6 @@ void emit_store_hl_to_sym_direct(struct Sym *s)
         emit("\tpop de\n");
         emit_store_de_to_addr_hl(s->type);
         emit("\tex de,hl\n");
-        return;
-    }
-    if (current_omit_ix_frame && s->storage == SC_PARAM) {
-        if (type_size(s->type) == 1) {
-            if (type_is_bool(s->type))
-                emit_bool_normalize_hl(s->type);
-            emit("\tld e,l\n");
-            emit_load_frame_addr_hl(s);
-            emit("\tld (hl),e\n");
-        } else if (type_size(s->type) == 4) {
-            emit("\tpush de\n\tex de,hl\n");
-            emit_load_frame_addr_hl(s);
-            emit("\tld (hl),e\n\tinc hl\n\tld (hl),d\n\tinc hl\n\tpop de\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n");
-        } else {
-            emit("\tex de,hl\n");
-            emit_load_frame_addr_hl(s);
-            emit("\tld (hl),e\n\tinc hl\n\tld (hl),d\n");
-        }
         return;
     }
     if (type_size(s->type) == 1) {
@@ -1322,43 +1126,6 @@ int try_emit_post_update_sym_direct(struct Sym *s, int op)
 void emit_incdec_sym_direct(struct Sym *s, int op)
 {
     int done;
-
-    if (s->reg_alloc == REG_E) {
-        emit(op == TOK_INC ? "\tinc e\n" : "\tdec e\n");
-        return;
-    }
-    if (s->reg_alloc == REG_BC && type_ptr_depth(s->type) == 0) {
-        /* See the matching REG_BC branch in emit_store_hl_to_sym_direct -
-         * same loop-scoped write-candidate mechanism. inc bc/dec bc affect
-         * no flags, matching every other word-sized ++/-- fast path here.
-         * Pointer candidates deliberately fall through instead (see below):
-         * ++/-- on a pointer must scale by the pointee size, not a raw +1,
-         * and the generic type_ptr_depth(s->type) > 0 path just below
-         * already does that correctly via emit_load_sym_value_direct/
-         * emit_store_hl_to_sym_direct - both already REG_BC-aware - so
-         * there is nothing pointer-specific to add here. A short-circuit
-         * here unconditionally emitting inc bc/dec bc (raw +1/-1) silently
-         * broke every pointer candidate's ++/-- (advances by one byte
-         * instead of sizeof(*p)) - found via tests/tforcomm.c's `ptr++`
-         * inside a for-condition comma expression, a real wrong-answer
-         * bug, not just a missed optimization. */
-        emit(op == TOK_INC ? "\tinc bc\n" : "\tdec bc\n");
-        return;
-    }
-    if (s->reg_alloc == REG_IY && type_ptr_depth(s->type) == 0) {
-        /* 10 T-states, against roughly 82 for the frame-slot read-modify-
-         * write it replaces (two 19T loads, inc hl, two 19T stores). This is
-         * the single biggest per-reference saving IY offers, and the reason
-         * written parameters are worth promoting at all.
-         *
-         * Pointers deliberately fall through, exactly as they do for BC and
-         * for the same reason: ++/-- on a pointer must advance by the pointee
-         * size, not by one, and "inc iy" would silently advance by a byte.
-         * The generic path below scales correctly and is already REG_IY-aware
-         * through emit_load_sym_value_direct/emit_store_hl_to_sym_direct. */
-        emit(op == TOK_INC ? "\tinc iy\n" : "\tdec iy\n");
-        return;
-    }
 
     /* Global 16-bit integer (non-pointer): ld hl,(nn); inc/dec hl; ld (nn),hl.
      * inc hl / dec hl are atomic 16-bit ops so no byte-by-byte ripple needed. */
@@ -1785,4 +1552,3 @@ int sizeof_parse_primary_type(int *typep, int *sizep)
     *sizep = sz;
     return 1;
 }
-

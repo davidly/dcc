@@ -33,7 +33,7 @@ Microsoft's `L80` under ntvcm; `dcc-use-emulated-m80=true` selects Microsoft's
 
 | Path | What |
 | ---- | ---- |
-| `src/dcc/` | The compiler. `dcc.c` is the driver; `dcc_preproc.c` owns macros/lexer and `dcc_pp_expr.c` owns `#if` expressions. `dcc_func.c` parses functions/top-level declarations, `dcc_global_init.c` records file-scope initializers, and `dcc_regalloc.c`/`dcc_loop_regalloc.c` own speculative register allocation. `dcc_array_narrow.c` proves byte narrowing. **Codegen is a single AST path**: `dcc_ast.c`/`dcc_ast_build.c` build typed function-local ASTs and `dcc_ast_gen*.c` emits them. Low-level helpers live in `dcc_expr.c`, `dcc_ops.c`, `dcc_cmp.c`, `dcc_assign.c`, `dcc_stmt.c`, and `dcc_decl.c`. Focused contracts use `dcc_ast_gen_internal.h`, `dcc_preproc_internal.h`, and `dcc_regalloc_internal.h`; shared state is defined in `dcc_state.c`. |
+| `src/dcc/` | The compiler. `dcc.c` is the driver; `dcc_preproc.c` owns macros/lexer and `dcc_pp_expr.c` owns `#if` expressions. `dcc_func.c` parses functions/top-level declarations and performs one production metadata/MIR body walk; `dcc_global_init.c` records file-scope initializers. `dcc_mir*.c` owns generated production Z80. The AST emitter remains discard-only for declaration/inline metadata, and `dcc_array_narrow.c` proves byte narrowing. Focused contracts use `dcc_ast_gen_internal.h` and `dcc_preproc_internal.h`; shared state is defined in `dcc_state.c`. |
 | `src/dccpeep/` | Fixpoint peephole optimizer (`-Ot` time / `-Os` size). `dccpeep.c` owns the descriptor-driven scheduler and remaining general passes; `PeepContext` groups options, statistics, mutation versions, and indexes. `peep_lines.c` owns the mutable line program, opaque user-asm barriers, and edit transactions; `peep_parse.c`, `peep_effects.c`, `peep_control_flow.c`, and `peep_analyze.c` provide parsing, cached effects, indexed control flow, and safety analysis. Pass families live in `peep_pass_once.c` (micro-pattern dispatcher), `peep_pass_minmax.c` (board/game idioms), `peep_pass_loops.c` (loop registerization), `peep_pass_inline_temp.c` (compiler-tagged spills), and `peep_pass_control_flow.c` (label/branch rewrites); `peep_pass_stubs.c` and `peep_pass_final.c` own post-convergence size and cleanup passes. |
 | `src/dccrtlstrip/` | Runtime dead-block stripper. |
 | `DCCRTL.MAC` | The Z80-assembly C runtime (entrypoint, heap, argv, libc subset, float). |
@@ -242,13 +242,13 @@ Important performance lessons from recent work:
 	not suppression. Do not blanket-convert raw formatted writes to a
 	`scan_mode`-guarded emitter: verification buffers may need those bytes.
 
-## Register allocation
+## Legacy register allocation (historical)
 
-dcc allocates physical registers speculatively: pick a candidate, generate the
-whole body with it promoted, verify the emitted text, then commit or rewind.
-`dcc_regalloc.c` owns the whole-function attempts, `dcc_loop_regalloc.c` the
-loop-scoped ones, and `dcc_func.c` the candidate searches. `Sym.reg_alloc`
-carries the result: `REG_BC`, `REG_E` or `REG_IY`.
+The AST text-based no-IX, BC/E, loop-BC, and IY speculative allocators were
+removed after generated MIR recovered performance. MIR schedules/allocation
+now own production register claims. The notes below are retained only as
+historical constraints and rejected-design evidence; do not rebuild these
+retry drivers.
 
 **Which register, and why.** BC and E are caller-saved, so a function that
 contains a call cannot use them at all. IY is callee-saved and is therefore the
@@ -374,9 +374,11 @@ Hard-won rules, each of which cost a measured regression to learn:
 
 ### MIR backend
 
-Current production state (2026-08-14): every committed function body is a
+Current production state (2026-08-15): every committed function body is a
 generated MIR candidate. Legacy AST assembly is written to a per-function
 discard-only null sink and is never retained, measured, selected, or copied.
+Each body has one production metadata/MIR walk; there are no alternate legacy
+frame/register retries or generated-text postprocessors.
 Compatibility census `captured_*` columns are `-1`. Use
 `DCC_MIR_SELECT_FUNCTION` + `DCC_MIR_SELECT_CANDIDATE` or
 `scripts/mir-current-vs-parent.py` for A/B work; forced-legacy controls and
@@ -400,11 +402,10 @@ Enable a dump without changing codegen:
 ```sh
 DCC_MIR_FUNCTION=is_attacked ./dccmake tests/tchess.c \
     dcc-output=MI dcc-peep=false
-# Or DCC_MIR_REPORT=1 for every function attempt.
+# Or DCC_MIR_REPORT=1 for every function.
 ```
 
-Each dump names its emit-sink purpose because speculative regalloc can generate
-the same function more than once under a VERIFY sink. The verifier resolves
+Each dump names its emit-sink purpose. The verifier resolves
 branch labels, builds instruction successors, checks virtual use-before-def and
 duplicate definitions, solves iterative backwards virtual-value liveness, and
 reports block count, maximum live pressure and opaque-barrier count. The

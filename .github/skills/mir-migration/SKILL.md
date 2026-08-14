@@ -16,8 +16,9 @@ The production compiler is generated-MIR-only:
 - The AST emitter still runs against one per-function discard-only null sink
   for declaration/inline metadata side effects; its text is never retained,
   measured, selected, or copied.
-- Legacy speculative regalloc drivers may temporarily post-process a generated
-  MIR stream. Removing that isolated dependency is the remaining cleanup.
+- Each function has one production metadata/MIR body walk. Legacy no-IX,
+  BC/E, loop-BC, and IY retry drivers and their generated-text postprocessors
+  are gone.
 
 Do not reintroduce legacy output as an oracle. Compare generated candidates or
 current-vs-parent compilers, improve one structural class, and keep strict
@@ -509,5 +510,6 @@ The staged migration is complete when:
 3. peep and nopeep performance are accepted;
 4. large CFG compile time is bounded;
 5. legacy emission is no longer needed during normal function compilation;
-6. discard-only AST metadata replay and obsolete legacy register-allocation
-   drivers are removed in separate cleanup commits.
+6. obsolete legacy register-allocation retry drivers are removed;
+7. discard-only AST metadata replay is removed only after its declaration,
+   inline, debug, and deferred-body side effects have MIR-native owners.

@@ -11467,7 +11467,7 @@ static int mir_match_best_record_schedule(
 static int mir_match_reloaded_best_record_schedule(
     struct MirBestRecordSchedule *plan)
 {
-    static const unsigned char expected_opcodes[81] = {
+    static const unsigned char expected_opcodes[79] = {
         MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_CONST, MIR_NOP, MIR_STORE,
         MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL,
         MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP, MIR_BINARY,
@@ -11484,7 +11484,7 @@ static int mir_match_reloaded_best_record_schedule(
         MIR_PHI, MIR_BRANCH_FALSE, MIR_LOAD, MIR_NOP,
         MIR_INDEX_ADDRESS, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP,
         MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP,
-        MIR_LABEL, MIR_CONST, MIR_STORE, MIR_LOAD, MIR_RETURN
+        MIR_LABEL, MIR_LOAD, MIR_RETURN
     };
     static const struct MirRecoveryEdge edges[11] = {
         {17, 76}, {24, 58}, {28, 32}, {31, 52}, {42, 46},
@@ -11596,11 +11596,8 @@ static int mir_match_reloaded_best_record_schedule(
         mir.insns[73].immediate != '+' ||
         !mir_machine_same_location(&mir.insns[74], &mir.insns[10]) ||
         mir.insns[74].src1 != mir.insns[73].dst ||
-        !mir_machine_constant_equals(mir.insns[77].dst, 0) ||
-        !mir_machine_same_location(&mir.insns[78], &mir.insns[10]) ||
-        mir.insns[78].src1 != mir.insns[77].dst ||
-        !mir_machine_same_location(&mir.insns[79], &mir.insns[5]) ||
-        mir.insns[80].src1 != mir.insns[79].dst)
+        !mir_machine_same_location(&mir.insns[77], &mir.insns[5]) ||
+        mir.insns[78].src1 != mir.insns[77].dst)
         return mir_machine_reject(
             "best-record-schedule", "reloaded-update");
     plan->tasks_stack_offset = tasks_offset;
