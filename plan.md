@@ -3,6 +3,44 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-15 remove discard-only AST body emission (working tree)
+
+- Base HEAD: clean `1f73395`. No commit/push and no baseline change.
+- Function compilation now lowers MIR directly and runs explicit non-emitting
+  metadata processing for declaration/initializer replay, scopes/VLAs,
+  inline-temp types, string interning order, labels, diagnostics, debug events,
+  deferred static-body marking, and frame-planning hoists.
+- Removed `MirFunction.legacy_discard_stream`,
+  `MirFunction.selected_output_sink`, the null-device/discard/verify sink
+  purposes, and MIR output-sink restoration. No function opens or writes a
+  discard stream. `ast_gen_expr` now hard-fails if invoked while MIR function
+  lowering is active.
+- Deleted `dcc_ast_gen_stmt.c` and its Z80 statement/switch/loop/return
+  emitters. Added `dcc_ast_metadata.c` and `dcc_ast_stmt_meta.c`; renamed the
+  remaining parser APIs around processing/replay/MIR lifecycle rather than
+  emission. Removed obsolete switch jump-table helpers, return-jump rewrite
+  state, switch emitter state, break/continue label arrays, and generic
+  emit-sink push/restore APIs.
+- Strict censuses:
+  - normal **2378/2378**, selectors **1255 spilled / 523 scheduled /
+    505 homed / 90 hybrid / 5 regional**;
+  - stack **2378/2378**, selectors **1263 / 514 / 506 / 90 / 5**;
+  - extended **274/274** in both modes, selectors **115 spilled / 140 homed /
+    11 hybrid / 8 scheduled**.
+- Validation: canonical and CMake builds; MIR require-emit boundary;
+  diagnostics **106/106**; dccpeep **22/22**; representative debug `.DBG`
+  builds/runs (`tdecl`, `tvla`, `tinlinfb`); ASan/UBSan focused censuses
+  **225/225** in normal and stack modes; standard **314/314** plus all-standard
+  extended **196/196**, stack and no-stack, peep and nopeep. Checked stack
+  performance: **0 regressions / 929 improvements**.
+- Compiler C/header LOC: **216,018 -> 215,133** (**-885**). Task `src/dcc`
+  diff including build/docs files is **1,246 additions / 2,142 deletions /
+  -896 net**.
+- Serial census timing on this host: normal **46.02 -> 43.91 s**
+  (**-4.59%**), stack **45.83 -> 43.24 s** (**-5.65%**), combined
+  **91.85 -> 87.15 s** (**-5.12%**). Canonical parallel build:
+  **11.78 -> 11.35 s** (**-3.65%**).
+
 ## 2026-08-15 remove legacy function-generation retries (working tree)
 
 - Base HEAD: `081370f`. No commit or push was made, and no performance

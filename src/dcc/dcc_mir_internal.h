@@ -216,8 +216,6 @@ struct MirFunction {
     struct MirDebugEvent *debug_events;
     int debug_event_count;
     int debug_event_capacity;
-    FILE *legacy_discard_stream;
-    EmitSink selected_output_sink;
     struct MirObject objects[256];
     int object_count;
     int has_declared_register_object;

@@ -227,6 +227,8 @@ void emit_store_const_to_local_array_elem(struct Sym *s, int elem_type, int inde
     elem_size = type_size(elem_type);
     if (elem_size <= 0) elem_size = 2;
     mir_capture_init_constant(s, index * elem_size, elem_type, v);
+    if (mir_is_active())
+        return;
 
     emit_load_sym_addr(s);
     emit_add_const_to_hl((long)index * elem_size);
@@ -252,6 +254,8 @@ void emit_store_const_to_local_offset(struct Sym *s, int off, int type, long v)
     if (type_is_bool(type))
         v = v ? 1 : 0;
     mir_capture_init_constant(s, off, type, v);
+    if (mir_is_active())
+        return;
 
     if (local_offset_can_ix_direct(s, off, type_size(type))) {
         /* Constant initializer at a frame-relative offset that fits
@@ -323,7 +327,7 @@ void emit_store_expr_to_local_offset(struct Sym *s, int off, int type)
      * initializers) never shared it. */
     int fast = local_offset_can_ix_direct(s, off, type_size(type));
 
-    if (!fast) {
+    if (!fast && !mir_is_active()) {
         emit_load_sym_addr(s);
         emit_add_const_to_hl(off);
         emit("\tpush hl\n");
@@ -331,6 +335,8 @@ void emit_store_expr_to_local_offset(struct Sym *s, int off, int type)
 
     mir_set_init_expression_target(s, off, type);
     ast_emit_init_expr();
+    if (mir_is_active())
+        return;
 
     if (type_is_bool(type)) {
         if (!type_is_bool(g_expr.type))
@@ -1289,6 +1295,9 @@ static void emit_vla_alloc(struct Sym *s)
     g_lex.tok_line = r_tok_line;
     g_lex.tok = r_tok;
 
+    if (mir_is_active())
+        return;
+
     if (s->elem_size > 1)
         emit_mul_hl_const((long)s->elem_size);   /* HL = size in bytes */
 
@@ -1582,7 +1591,8 @@ void gen_local_decl_after_type(int base)
                 if (is_wide)
                     error_here("wide string cannot initialize char array");
                 mir_capture_init_char_array(s, lit, litlen + 1);
-                emit_init_auto_char_array_from_string(s, lit, litlen);
+                if (!mir_is_active())
+                    emit_init_auto_char_array_from_string(s, lit, litlen);
                 free(lit);
             } else if (s->is_array && g_lex.tok.kind == '{' && (type & TYPE_STRUCT) && type_ptr_depth(type) == 0) {
                 emit_init_auto_struct_array_from_list(s);
@@ -1596,12 +1606,17 @@ void gen_local_decl_after_type(int base)
                  * brace-wrapped scalar initializer, not an array/struct. */
                 int fast = sym_can_ix_direct(s);
                 next_token();
-                if (!fast) {
+                if (!fast && !mir_is_active()) {
                     emit_load_sym_addr(s);
                     emit("\tpush hl\n");
                 }
                 mir_set_initializer_target(s);
                 ast_emit_init_expr();
+                if (mir_is_active()) {
+                    accept(',');
+                    expect('}');
+                    goto initializer_done;
+                }
                 if (type_is_long(type)) {
                     if (type_is_float(g_expr.type))
                         emit_convert_float_to_intlike(type);
@@ -1630,6 +1645,8 @@ void gen_local_decl_after_type(int base)
                 int fast = sym_can_ix_direct(s);
                 if (parse_float_init_literal(&bits)) {
                     mir_capture_init_constant(s, 0, type, (long)bits);
+                    if (mir_is_active())
+                        goto initializer_done;
                     if (fast) {
                         /* Compile-time-constant float bits: write the 4
                          * immediate bytes straight to the frame slot, no
@@ -1653,12 +1670,14 @@ void gen_local_decl_after_type(int base)
                      * assignment.  The constant fast path above stays for
                      * smaller code.
                      */
-                    if (!fast) {
+                    if (!fast && !mir_is_active()) {
                         emit_load_sym_addr(s);
                         emit("\tpush hl\n");
                     }
                     mir_set_initializer_target(s);
                     ast_emit_init_expr();
+                    if (mir_is_active())
+                        goto initializer_done;
                     if (!type_is_float(g_expr.type))
                         emit_convert_int_to_float(g_expr.type);
                     if (fast)
@@ -1681,11 +1700,13 @@ void gen_local_decl_after_type(int base)
                  * value is in HL/DE:HL. */
                 int fast = sym_can_ix_direct(s);
                 mir_set_initializer_target(s);
-                if (!fast) {
+                if (!fast && !mir_is_active()) {
                     emit_load_sym_addr(s);
                     emit("\tpush hl\n");
                 }
                 ast_emit_init_expr();
+                if (mir_is_active())
+                    goto initializer_done;
                 if (type_is_long(type)) {
                     /* For long locals, emit_store_de_to_addr_hl pops the
                      * address itself via "pop de", so don't consume it here. */
@@ -1731,6 +1752,7 @@ void gen_local_decl_after_type(int base)
             g_frame.local_size -= bytes;
         }
 
+initializer_done:
         if (!accept(',')) break;
     }
 

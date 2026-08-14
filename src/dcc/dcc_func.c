@@ -12,23 +12,9 @@
  * Source provenance: monolith src/ddc.c lines 15880-17705.
  */
 
-#ifndef _WIN32
-/* fileno()/ftruncate() (used by emit_function_epilogue's dead-tail-jump
- * elision) are POSIX, so strict ISO C mode hides their declarations in
- * <stdio.h>/<unistd.h> unless a POSIX feature-test macro is visible before
- * those headers are first included - which happens via dcc.h below, so this
- * must come first. */
-#define _POSIX_C_SOURCE 200809L
-#endif
-
 #include "dcc.h"
 #include "dcc_ast.h"
 #include "dcc_mir.h"
-#ifdef _WIN32
-#include <io.h>
-#else
-#include <unistd.h>
-#endif
 
 static int inline_param_index(struct Sym *s, const char *name)
 {
@@ -1600,7 +1586,7 @@ void emit_debug_variable_end(struct Sym *s)
             current_debug_function, s->name, s->offset);
 }
 
-void emit_function_prologue(const char *name, int local_bytes)
+void begin_function_mir(const char *name, int local_bytes)
 {
     struct Sym *s;
     const char *aname;
@@ -1639,158 +1625,20 @@ void emit_function_prologue(const char *name, int local_bytes)
         strcmp(name, "main") == 0 &&
             (function_type & 15) == TYPE_INT &&
             type_ptr_depth(function_type) == 0);
-    emit("\tpush ix\n");
-    emit("\tld ix,0\n");
-    emit("\tadd ix,sp\n");
-
-    if (local_bytes > 0) {
-        fprintf(g_emit_sink.stream, "\tld hl,-%d\n", local_bytes);
-        emit("\tadd hl,sp\n");
-        emit("\tld sp,hl\n");
-    }
-
     for (i = 0; i < g_frame.nlocals; ++i)
         if (locals[i].storage == SC_PARAM)
             emit_debug_variable(&locals[i]);
-
-    /* -fstack-check: after the frame (saved IX + locals) is allocated, verify
-     * the stack has not grown past its reserve into the heap region.  Emitted
-     * last so dccpeep's shared-frame-stub pass can still fold the prologue
-     * (the call follows the recognised push-ix/locals sequence). */
-    if (opt_stack_check)
-        emit_runtime_call("__stchk");
-
-    /* Materialize any address-cached local arrays' addresses exactly once,
-     * unconditionally, here - after the recognised prologue sequence above
-     * (so as not to disturb dccpeep's shared-frame-stub folding of it) but
-     * before any user statement runs. Function entry trivially dominates
-     * every use site, so this is always safe regardless of which control-flow
-     * path a given call takes - see maybe_reserve_addr_cache_for_array's
-     * comment for why a naive "cache at first use" scheme would not be. */
-    for (i = 0; i < g_addr_cache_array_count; ++i) {
-        emit("\tpush ix\n\tpop hl\n");
-        if (g_addr_cache_arrays[i].array_offset != 0)
-            fprintf(g_emit_sink.stream, "\tld de,%d\n\tadd hl,de\n", g_addr_cache_arrays[i].array_offset);
-        fprintf(g_emit_sink.stream, "\tld (ix%+d),l\n", g_addr_cache_arrays[i].cache_slot_offset);
-        fprintf(g_emit_sink.stream, "\tld (ix%+d),h\n", g_addr_cache_arrays[i].cache_slot_offset + 1);
-    }
 }
 
-/* Every byte in buf[0..n) belongs to a complete comment line: each line
- * starts with ';' and ends with '\n' (a trailing partial line - no final
- * '\n' - fails this, since it means something is still being written). */
-static int all_comment_lines(const char *buf, long n)
+void finish_function_mir(int implicit_zero_return)
 {
-    long i = 0;
-
-    while (i < n) {
-        if (buf[i] != ';')
-            return 0;
-        while (i < n && buf[i] != '\n')
-            i++;
-        if (i >= n)
-            return 0;   /* no closing '\n': last line is incomplete */
-        i++;
-    }
-    return 1;
-}
-
-/*
- * If a "jp L<label>\n" sits at file offset jp_pos in `g_emit_sink.stream`, it is the tail
- * jump gen_return_ast just emitted for a `return` that turned out to be the
- * function's last statement: fall-through already reaches `label` (emitted
- * right after this call returns), so the jump is dead weight. Whatever has
- * been written since jp_pos, if anything, is either nothing, or a run of
- * "@dcc-var-end" scope-exit comments (-g emits one per local as it leaves
- * scope) - either way there is no real code in between. Verify the exact
- * bytes are there before touching anything: any mismatch (real code
- * followed, or the position doesn't line up) leaves the file untouched,
- * forgoing the optimization rather than risking dropping a jump that was
- * actually needed. Trailing comments are preserved (read into `tail`,
- * written back after truncating away just the jp line) so debug-info
- * fidelity is unaffected.
- */
-static void elide_redundant_tail_jp(long jp_pos, int label)
-{
-    char expect[32];
-    char actual[32];
-    char tail[4096];
-    long len, end_pos, tail_len;
-
-    if (jp_pos < 0)
-        return;
-    sprintf(expect, "\tjp L%d\n", label);
-    len = (long)strlen(expect);
-    if (len >= (long)sizeof(expect))
-        return;
-
-    fflush(g_emit_sink.stream);
-    end_pos = ftell(g_emit_sink.stream);
-    if (end_pos < 0 || end_pos < jp_pos + len)
-        return;
-    tail_len = end_pos - jp_pos - len;
-    if (tail_len >= (long)sizeof(tail))
-        return;
-
-    if (fseek(g_emit_sink.stream, jp_pos, SEEK_SET) != 0)
-        return;
-    if (fread(actual, 1, (size_t)len, g_emit_sink.stream) != (size_t)len) {
-        fseek(g_emit_sink.stream, end_pos, SEEK_SET);
-        return;
-    }
-    actual[len] = 0;
-    if (strcmp(actual, expect) != 0) {
-        fseek(g_emit_sink.stream, end_pos, SEEK_SET);
-        return;
-    }
-
-    if (tail_len > 0) {
-        if (fread(tail, 1, (size_t)tail_len, g_emit_sink.stream) != (size_t)tail_len) {
-            fseek(g_emit_sink.stream, end_pos, SEEK_SET);
-            return;
-        }
-        if (!all_comment_lines(tail, tail_len)) {
-            fseek(g_emit_sink.stream, end_pos, SEEK_SET);
-            return;
-        }
-    }
-
-    fflush(g_emit_sink.stream);
-#ifdef _WIN32
-    if (_chsize(_fileno(g_emit_sink.stream), jp_pos) != 0)
-        return;
-#else
-    if (ftruncate(fileno(g_emit_sink.stream), jp_pos) != 0)
-        return;
-#endif
-    fseek(g_emit_sink.stream, jp_pos, SEEK_SET);
-    if (tail_len > 0)
-        fwrite(tail, 1, (size_t)tail_len, g_emit_sink.stream);
-}
-
-void emit_function_epilogue(int implicit_zero_return)
-{
-    if (implicit_zero_return) {
-        emit("\tld hl,0\n");
-    } else if (opt_debug && !scan_mode &&
-               g_return_jp_check_label == current_return_label) {
-        elide_redundant_tail_jp(g_return_jp_check_pos, current_return_label);
-    }
-    g_return_jp_check_pos = -1;
-    g_return_jp_check_label = -1;
-    emit_label(current_return_label);
+    (void)implicit_zero_return;
     /* Map the shared return label to the function's closing brace when the
      * body always exits, so an early `return` that jumps here shows the
      * closing brace instead of inheriting the previous statement's line. */
     if (opt_debug && !scan_mode && g_func_close_line > 0)
-        ast_emit_debug_location(g_func_close_file, g_func_close_line);
+        ast_record_debug_location(g_func_close_file, g_func_close_line);
     g_func_close_line = 0;
-    /* Always emit ld sp,ix so returns from nested control flow restore the
-     * caller stack reliably. pass_elim_ix_frame and pass_shared_frame_stubs clean up the extra
-     * instruction for functions that never actually need the stack restore. */
-    emit("\tld sp,ix\n");
-    emit("\tpop ix\n");
-    emit("\tret\n");
     if (opt_debug && !scan_mode && current_debug_function[0] &&
         !mir_capture_debug_function_end(
             current_debug_function, current_debug_function_source_name))
@@ -3187,7 +3035,7 @@ void parse_function_or_global(int base_type)
                 s->stack_check_enabled = saved_stack_check;
 
                 nulabels = 0;
-                current_return_label = new_label();
+                (void)new_label();
                 current_return_type = type;
                 /* Restart the for-loop counter for the codegen pass so it
                  * lines up with the frame-sizing scan. */
@@ -3216,20 +3064,22 @@ void parse_function_or_global(int base_type)
                     s->deferred_body_file = tmpfile();
                     if (s->deferred_body_file == NULL)
                         fatal("cannot create deferred body temp file");
-                    saved_sink = emit_sink_push(s->deferred_body_file, EMIT_SINK_DEFERRED);
+                    saved_sink = g_emit_sink;
+                    g_emit_sink.stream = s->deferred_body_file;
+                    g_emit_sink.purpose = EMIT_SINK_DEFERRED;
                     g_inline_body_buffering++;
                     g_buffering_epoch++;
-                    emit_function_prologue(name, current_local_bytes);
-                    gen_compound();
+                    begin_function_mir(name, current_local_bytes);
+                    process_compound();
                     check_undefined_user_labels();
-                    emit_function_epilogue(0);
+                    finish_function_mir(0);
                     g_inline_body_buffering--;
-                    emit_sink_restore(&saved_sink);
+                    g_emit_sink = saved_sink;
                 } else {
-                    emit_function_prologue(name, current_local_bytes);
-                    gen_compound();
+                    begin_function_mir(name, current_local_bytes);
+                    process_compound();
                     check_undefined_user_labels();
-                    emit_function_epilogue(strcmp(name, "main") == 0 &&
+                    finish_function_mir(strcmp(name, "main") == 0 &&
                                            (type & 15) == TYPE_INT &&
                                            type_ptr_depth(type) == 0);
                 }

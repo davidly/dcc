@@ -3235,17 +3235,6 @@ static int mir_try_emit_z80(FILE *out)
     return 1;
 }
 
-static FILE *mir_restore_selected_output(void)
-{
-    FILE *destination = mir.selected_output_sink.stream;
-
-    emit_sink_restore(&mir.selected_output_sink);
-    if (mir.legacy_discard_stream != NULL)
-        fclose(mir.legacy_discard_stream);
-    mir.legacy_discard_stream = NULL;
-    return destination;
-}
-
 static int mir_try_generated_candidate(
     FILE **selected, const char **selector_name,
     const char **candidate_name, int *selected_label_id,
@@ -3467,11 +3456,9 @@ void mir_end_function(void)
     if (!mir.active)
         return;
     if (errors > 0) {
-        mir_restore_selected_output();
         goto finish;
     }
     if (!mir_dense_analysis_is_bounded()) {
-        mir_restore_selected_output();
         if (getenv("DCC_MIR_SELECT_REPORT") != NULL)
             fprintf(stderr,
                     "; MIR selection function=%s selector=none result=error "
@@ -3511,7 +3498,7 @@ void mir_end_function(void)
             mir_end_regional_home_plan();
     }
 
-    destination = mir_restore_selected_output();
+    destination = g_emit_sink.stream;
     if (!verified) {
         if (g_diag_error_count > 0 ||
             (getenv("DCC_MIR_REQUIRE_COMPLETE") != NULL &&

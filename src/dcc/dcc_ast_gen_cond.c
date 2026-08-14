@@ -6,6 +6,7 @@
  */
 #include <string.h>
 #include "dcc_ast_gen_internal.h"
+#include "dcc_mir.h"
 
 
 /* ------------------------------------------------------------------------- *
@@ -79,99 +80,6 @@ int ast_return_stmt_supported(const struct AstNode *n)
 
 /* Emit `return [expr] ;`: evaluate the value into the ABI return registers
  * when present, then jump to the function's shared return label. */
-void gen_return_ast(const struct AstNode *n)
-{
-    if (n->a == NULL && (current_return_type & 15) != TYPE_VOID)
-        warn_at(n->file, n->line, "'return' with no value, in function returning non-void");
-
-    if (n->a != NULL && type_is_struct_object(current_return_type)) {
-        if (n->a->kind == AST_CALL &&
-            ast_struct_return_call_assign_supported(current_return_type, n->a)) {
-            /* `return f(args);`: pass our own hidden return-buffer pointer
-             * straight through as f's destination - the callee writes the
-             * result in place, so no temp or copy is needed here. */
-            gen_struct_return_call_assign_ast(NULL, n->a);
-            g_expr.type = current_return_type;
-        } else {
-            int src_type;
-            gen_struct_addr_expr_ast(n->a, &src_type);
-            (void)src_type;
-            emit("\tex de,hl\n");
-            emit("\tld l,(ix+4)\n\tld h,(ix+5)\n");
-            emit_copy_de_to_hl_bytes(type_size(current_return_type));
-            g_expr.type = current_return_type;
-        }
-    } else if (n->a != NULL && type_size(current_return_type) == 1) {
-        if (n->a->kind == AST_IDENT) {
-            struct Sym *rs = find_sym(n->a->sval);
-            fprintf(g_emit_sink.stream, "\tld l,(ix%+d)\n", rs->offset);
-            if (current_return_type & TYPE_UNSIGNED)
-                emit("\tld h,0\n");
-            else
-                emit("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n");
-            if (type_is_bool(current_return_type) && rs->storage == SC_PARAM)
-                emit_bool_normalize_hl(current_return_type);
-            g_expr.type = current_return_type;
-        } else if (n->a->kind == AST_INT_LIT) {
-            fprintf(g_emit_sink.stream, "\tld hl,%ld\n", n->a->ival & 255);
-            g_expr.type = current_return_type;
-        } else {
-            ast_gen_expr(n->a);
-        }
-    } else if (n->a != NULL) {
-        int ptr_type;
-        int no_deref;
-        if ((current_return_type & (TYPE_PTR | TYPE_PTR2)) &&
-            n->a->kind == AST_CAST)
-            ast_gen_expr(n->a->a);
-        else if ((current_return_type & (TYPE_PTR | TYPE_PTR2)) &&
-                 ast_pointer_expr_type(n->a, &ptr_type, &no_deref))
-            gen_pointer_expr_ast(n->a, &ptr_type, &no_deref);
-        else
-            ast_gen_expr(n->a);
-    }
-    if (n->a != NULL) {
-        if (type_is_bool(current_return_type)) {
-            /* Only non-bool sources need normalising; a bool value is 0/1. */
-            if (!ast_expr_yields_bool01(n->a))
-                emit_bool_normalize_hl(g_expr.type);
-            g_expr.type = current_return_type;
-        } else if (type_is_float(current_return_type) && !type_is_float(g_expr.type)) {
-            emit_convert_int_to_float(g_expr.type);
-            g_expr.type = current_return_type;
-        } else if (!type_is_float(current_return_type) && type_is_float(g_expr.type)) {
-            emit_convert_float_to_intlike(current_return_type);
-            g_expr.type = current_return_type;
-        } else if (type_size(current_return_type) == 1 && !type_is_long(g_expr.type)) {
-            if (current_return_type & TYPE_UNSIGNED)
-                emit("\tld h,0\n");
-            else
-                emit("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n");
-            g_expr.type = current_return_type;
-        } else if (type_is_long(current_return_type) && !type_is_long(g_expr.type)) {
-            emit_promote_int_to_long(g_expr.type, current_return_type);
-            g_expr.type = current_return_type;
-        }
-    }
-    /*
-     * Record where this tail jump lands in `g_emit_sink.stream` so emit_function_epilogue
-     * can elide it when this return turns out to be the function's last
-     * statement (nothing else gets written before the epilogue label it
-     * targets). Debug (-g) builds only: dccpeep already removes this
-     * redundant jump in optimized builds, and -g skips dccpeep entirely for
-     * debug-stepping fidelity, so this is the only place it would otherwise
-     * survive to the final .mac.
-     */
-    if (opt_debug && !scan_mode) {
-        fflush(g_emit_sink.stream);
-        g_return_jp_check_pos = ftell(g_emit_sink.stream);
-        g_return_jp_check_label = current_return_label;
-    } else {
-        g_return_jp_check_pos = -1;
-    }
-    emit_jp_label("jp", current_return_label);
-}
-
 /* A comparison operand that reaches the plain-16-bit direct-branch
  * path: a non-const, non-array, size-2 plain-int (signed/unsigned) or pointer
  * identifier reachable by the direct load (IX-direct local/param or global
@@ -1430,12 +1338,12 @@ int ast_stmt_supported(const struct AstNode *n)
         int rename_count;
         /* Narrow slice: for ([init] ; [cond] ; [inc]) body.  The builder
          * stores init in a, cond in b, inc in c, and body in d.  A C99 for-init
-         * declaration arrives as an AST_DECL span; ast_gen_for_stmt replays it
-         * through declaration codegen and for-scope rename
+         * declaration arrives as an AST_DECL span; the metadata walker replays
+         * it through declaration parsing and for-scope rename
          * machinery.  An expression init excludes the transform-prone constant
          * assignment shape and must have no recorded for-scope renames.
          *
-         * This gate mirrors ast_gen_for_stmt's pre-order g_func_pass.for_seq numbering.
+         * This gate mirrors the metadata walker's pre-order for_seq numbering.
          * For a for-init declaration the loop variable's local slot does not
          * exist yet (codegen creates it only when the declaration is emitted),
          * so we replay the declaration with emission suppressed (scan_mode) to
@@ -1456,10 +1364,10 @@ int ast_stmt_supported(const struct AstNode *n)
          * gone. Reset unconditionally before reading it, so a plain
          * expression init reliably sees "no renames" instead of whatever a
          * decl-init loop that previously owned this for_seq slot left
-         * behind - matching the same reset in ast_gen_for_stmt. Not rolled
+         * behind - matching the same reset in ast_plan_for_metadata. Not rolled
          * back afterward: this probe's own speculative work IS rolled back
-         * below (nlocals/local_size/etc.), but the real ast_gen_for_stmt
-         * call that follows for this same for_seq always resets and
+         * below (nlocals/local_size/etc.), but the real metadata walk
+         * that follows for this same for_seq always resets and
          * re-records its own count independently regardless, so leaving
          * this slot at whatever this probe computed cannot affect it. */
         g_for_rename_count[for_seq] = 0;
@@ -1480,32 +1388,25 @@ int ast_stmt_supported(const struct AstNode *n)
             int decl_object_count;
             int decl_saw_nonobject;
             int s_scan_mode = scan_mode;
-            EmitSink saved_sink = g_emit_sink;
-            static FILE *sink = NULL;
 
             ok = ast_for_decl_storage_supported(n->a);
-            /* Redirect emission to a throwaway sink so the suppressed replay
-             * cannot leak partial output (scan_mode guards most but not every
-             * emit path), and set scan_mode so nested AST build/gen and the
-             * remaining guarded emits stay quiet.
-             *
-             * g_func_pass.for_decl_recording=1 (not 0): nothing pre-populates
-             * g_for_rename_count[for_seq] any more (see the matching comment
-             * in ast_gen_for_stmt - the hand-written frame-sizing scanner
+            /* g_func_pass.for_decl_recording=1 (not 0): nothing pre-populates
+            * g_for_rename_count[for_seq] any more (see ast_plan_for_metadata);
+            * the hand-written frame-sizing scanner
              * that used to do that recording is gone), so this probe must
              * record its own fresh count from the just-reset slot rather
              * than validate against a stale/zero one. */
-            if (sink == NULL)
-                sink = fopen(DCC_NULL_DEVICE, "w");
-            if (sink != NULL)
-                saved_sink = emit_sink_push(sink, EMIT_SINK_DISCARD);
             scan_mode = 1;
             g_func_pass.for_decl_seq = for_seq;
             g_func_pass.for_decl_rename_index = 0;
             g_func_pass.for_decl_recording = 1;
             g_for_decl_saw_nonobject = 0;
-            if (ok)
-                ast_emit_decl_span(n->a);
+            if (ok) {
+                if (mir_is_active())
+                    ast_replay_decl_span(n->a);
+                else
+                    ast_scan_decl_span(n->a);
+            }
             decl_object_count = g_func_pass.for_decl_rename_index;
             decl_saw_nonobject = g_for_decl_saw_nonobject;
             /* Declaration replay changes the symbols visible to the loop's
@@ -1535,7 +1436,6 @@ int ast_stmt_supported(const struct AstNode *n)
                 nflow = old_nflow;
             }
             scan_mode = s_scan_mode;
-            emit_sink_restore(&saved_sink);
 
             g_frame.nlocals = s_nlocals;
             g_frame.local_size = s_local_size;
@@ -1588,10 +1488,9 @@ int ast_stmt_supported(const struct AstNode *n)
          * *later* sibling referencing a block-local name cannot resolve it at
          * gate time because codegen only creates the local when the decl is
          * emitted.  So replay each declaration with emission suppressed
-         * (scan_mode + a throwaway g_emit_sink.stream sink) to materialise its local slots
-         * and scope, gate the remaining children while they resolve, then roll
-         * back every mutated codegen counter (ast_gen_stmt re-emits the decls
-         * for real). */
+         * in scan mode to materialise its local slots and scope, gate the
+         * remaining children while they resolve, then roll back every mutated
+         * parser counter. */
         int i;
         int ok;
         int has_decl;
@@ -1619,20 +1518,17 @@ int ast_stmt_supported(const struct AstNode *n)
             int s_static_seq = g_func_pass.static_local_seq;
             int s_has_call = current_function_has_call;
             int s_scan_mode = scan_mode;
-            EmitSink saved_sink = g_emit_sink;
-            static FILE *sink = NULL;
 
-            if (sink == NULL)
-                sink = fopen(DCC_NULL_DEVICE, "w");
-            if (sink != NULL)
-                saved_sink = emit_sink_push(sink, EMIT_SINK_DISCARD);
             scan_mode = 1;
             enter_scope();
             ok = 1;
             for (i = 0; i < n->list_len; ++i) {
                 struct AstNode *c = n->list[i];
                 if (c->kind == AST_DECL) {
-                    ast_emit_decl_span(c);
+                    if (mir_is_active())
+                        ast_replay_decl_span(c);
+                    else
+                        ast_scan_decl_span(c);
                 } else if (!ast_stmt_supported(c)) {
                     ok = 0;
                     break;
@@ -1640,7 +1536,6 @@ int ast_stmt_supported(const struct AstNode *n)
             }
             leave_scope();
             scan_mode = s_scan_mode;
-            emit_sink_restore(&saved_sink);
 
             g_frame.nlocals = s_nlocals;
             g_frame.local_size = s_local_size;

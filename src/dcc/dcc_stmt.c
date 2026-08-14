@@ -26,7 +26,7 @@ static int current_identifier_starts_label(void)
     return is_label;
 }
 
-void gen_compound(void)
+void process_compound(void)
 {
     int dead;
 
@@ -60,7 +60,7 @@ void gen_compound(void)
                 scan_static_local_decl_after_type(t);
             } else {
                 if (!g_decl.is_extern && !dead)
-                    ast_emit_debug_location(decl_tok.file, decl_line);
+                    ast_record_debug_location(decl_tok.file, decl_line);
                 if (dead)
                     asm_suppress_depth++;
                 gen_local_decl_after_type(t);
@@ -78,7 +78,7 @@ void gen_compound(void)
                     fatal("unsupported AST statement");
                 if (ast_stmt_has_reentry_label(n)) {
                     mir_capture_stmt(n);
-                    ast_gen_stmt(n);
+                    ast_process_stmt_metadata(n);
                     dead = ast_stmt_exits(n);
                 }
                 ast_arena_reset(&g_ast_arena);
@@ -93,13 +93,13 @@ void gen_compound(void)
         if (!dead) {
             /* Body falls through: the closing brace is a reachable step in
              * this scope, emitted here before the epilogue. */
-            ast_emit_debug_location(g_lex.tok.file, g_lex.tok_line);
+            ast_record_debug_location(g_lex.tok.file, g_lex.tok_line);
             if ((current_return_type & 15) != TYPE_VOID &&
                 strcmp(g_current_compiling_func, "main") != 0)
                 warn_at(g_lex.tok.file, g_lex.tok_line, "control reaches end of non-void function");
         } else {
             /* Body always exits: no in-block closing-brace marker is emitted,
-             * so hand the location to emit_function_epilogue, which maps the
+             * so hand the location to finish_function_mir, which maps the
              * shared return label to it (early returns jump there). */
             const char *cf = g_lex.tok.file[0] ? g_lex.tok.file :
                              (input_name ? input_name : "<input>");
@@ -112,63 +112,10 @@ void gen_compound(void)
     expect('}');
 }
 
-int switch_label_for_value(int value, int *case_vals, int *case_labs, int ncase, int default_lab, int lend)
-{
-    int i;
-    for (i = 0; i < ncase; ++i)
-        if (case_vals[i] == value)
-            return case_labs[i];
-    return default_lab >= 0 ? default_lab : lend;
-}
-
-void emit_switch_jump_table(int minv, int maxv,
-                                   int *case_vals, int *case_labs,
-                                   int ncase, int default_lab, int lend)
-{
-    int lok;
-    int ltab;
-    int v;
-    int target;
-
-    lok = new_label();
-    ltab = new_label();
-
-    if (minv != 0) {
-        fprintf(g_emit_sink.stream, "\tld de,%d\n", minv);
-        emit("\tor a\n\tsbc hl,de\n");
-        emit_jp_label("jp c,", default_lab >= 0 ? default_lab : lend);
-    }
-
-    emit("\tpush hl\n");
-    fprintf(g_emit_sink.stream, "\tld de,%d\n", maxv - minv);
-    emit("\tor a\n\tsbc hl,de\n");
-    emit("\tpop hl\n");
-    emit_jp_label("jp z,", lok);
-    emit_jp_label("jp nc,", default_lab >= 0 ? default_lab : lend);
-    emit_label(lok);
-
-    emit("\tadd hl,hl\n");
-    fprintf(g_emit_sink.stream, "\tld de,L%d\n", ltab);
-    emit("\tadd hl,de\n");
-    emit("\tld e,(hl)\n");
-    emit("\tinc hl\n");
-    emit("\tld d,(hl)\n");
-    emit("\tex de,hl\n");
-    emit("\tjp (hl)\n");
-
-    emit_label(ltab);
-    for (v = minv; v <= maxv; ++v) {
-        target = switch_label_for_value(v, case_vals, case_labs, ncase, default_lab, lend);
-        fprintf(g_emit_sink.stream, "\tdw L%d\n", target);
-    }
-}
-
 void gen_statement(void)
 {
-    if (ast_try_emit_statement())
+    if (ast_process_statement())
         return;
 
     fatal("unsupported AST statement");
 }
-
-

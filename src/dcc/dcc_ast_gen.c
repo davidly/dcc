@@ -15,7 +15,7 @@
  *   - dcc_ast_gen_support.c ast_gen_supported dispatch, call/struct gates, folds
  *   - dcc_ast_gen_expr.c    expression emitters (ast_gen_expr)
  *   - dcc_ast_gen_cond.c    statement-support gates, comparison/branch emitters
- *   - dcc_ast_gen_stmt.c    switch/for/statement emitters, ast_try_emit_statement
+ *   - dcc_ast_stmt_meta.c   statement parsing, sizing, and metadata analysis
  */
 #include "dcc.h"
 #include "dcc_ast.h"
@@ -103,11 +103,8 @@ int ast_ident_is_const(const char *name)
     return 0;
 }
 
-/* Switch codegen state (type/macro/externs declared in dcc_ast_gen_internal.h);
- * defined here, shared across the split AST codegen translation units. */
+/* Switch support-gate nesting. */
 int ast_switch_gate_depth;
-struct AstSwCtx ast_sw_ctx[AST_MAX_SW_NEST];
-int ast_sw_depth;
 
 /* Forward declaration: resolve 2-D array/field-array element type. */
 

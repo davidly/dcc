@@ -197,8 +197,6 @@ const char *mir_sink_name(int purpose)
 {
     switch (purpose) {
     case EMIT_SINK_FINAL: return "final";
-    case EMIT_SINK_DISCARD: return "discard";
-    case EMIT_SINK_VERIFY: return "verify";
     case EMIT_SINK_DEFERRED: return "deferred";
     default: return "unknown";
     }
@@ -3305,21 +3303,8 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
     mir.aggregate_temp_bytes = 0;
     mir.opaque_count = 0;
     mir_extended_integer_constant_conversion_fold_count = 0;
-    mir.legacy_discard_stream = NULL;
     mir_copy_name(mir.name, name);
     mir.active = 1;
-    /*
-     * The legacy AST emitter still drives declaration replay and metadata
-     * side effects while MIR is being built. Its assembly text is obsolete:
-     * write it directly to a discard-only sink, never retain, inspect, copy,
-     * or measure it. MIR selection restores selected_output_sink and commits
-     * only a generated MIR candidate.
-     */
-    mir.legacy_discard_stream = fopen(DCC_NULL_DEVICE, "w");
-    if (mir.legacy_discard_stream == NULL)
-        fatal("cannot create legacy discard-only sink");
-    mir.selected_output_sink =
-        emit_sink_push(mir.legacy_discard_stream, EMIT_SINK_DISCARD);
     mir_emit_label(mir_new_label());
     {
         int local;
@@ -3378,6 +3363,12 @@ void mir_capture_stmt(const struct AstNode *stmt)
     if (mir.active)
         mir_lower_stmt(stmt);
 }
+
+int mir_is_active(void)
+{
+    return mir.active;
+}
+
 
 void mir_note_declared_symbol(struct Sym *symbol)
 {

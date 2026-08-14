@@ -57,22 +57,6 @@
 #include <ctype.h>
 #include <time.h>
 
-/*
- * Portable null-device path for throwaway fopen() sinks (used to suppress
- * output during speculative/frame-sizing AST replay passes - see
- * ast_scan_for_stmt and the AST_FOR/AST_COMPOUND probes in
- * dcc_ast_gen_cond.c).  "/dev/null" does not exist on native Windows: MSVC's
- * fopen() there fails on it (it looks for a "dev" subdirectory), silently
- * leaving the caller's `g_emit_sink.stream` pointed at the real output file instead of a
- * sink - so the replay's speculative emission leaks into real output.  The
- * Windows null device is "NUL".
- */
-#ifdef _WIN32
-#define DCC_NULL_DEVICE "NUL"
-#else
-#define DCC_NULL_DEVICE "/dev/null"
-#endif
-
 /* ------------------------------------------------------------------------- *
  * Capacity / translation-limit macros.
  * ------------------------------------------------------------------------- */
@@ -320,8 +304,6 @@ typedef struct DeclState {
  * back for a commit/decline decision. */
 enum EmitSinkPurpose {
     EMIT_SINK_FINAL,
-    EMIT_SINK_DISCARD,
-    EMIT_SINK_VERIFY,
     EMIT_SINK_DEFERRED
 };
 
@@ -573,8 +555,6 @@ extern long g_src_generation;
  * (lex_save()/lex_restore()). */
 extern LexState g_lex;
 extern EmitSink g_emit_sink;
-EmitSink emit_sink_push(FILE *stream, int purpose);
-void emit_sink_restore(const EmitSink *saved);
 extern const char *input_name;
 extern const char *output_name;
 extern char current_file_name[256];
@@ -611,15 +591,8 @@ extern int nused_extrns;
 
 /* per-function code-generation state */
 extern int label_id;
-extern int current_return_label;
-/* Position in `g_emit_sink.stream` of a "jp current_return_label" tail jump gen_return_ast
- * just emitted (byte offset right before it), and the label it targets, or
- * (-1, -1) if none is pending. Debug (-g) builds only - see
- * emit_function_epilogue's elide_redundant_tail_jp. */
-extern long g_return_jp_check_pos;
-extern int g_return_jp_check_label;
 /* Closing-brace source location of the current function body, captured when
- * the body always exits so emit_function_epilogue can map the shared return
+ * the body always exits so finish_function_mir can map the shared return
  * label to the closing brace. 0 = none. */
 extern int g_func_close_line;
 extern char g_func_close_file[256];
@@ -632,9 +605,7 @@ extern int current_function_has_vla;
 extern int g_inline_body_buffering;
 extern int g_buffering_epoch;
 
-/* loop break/continue target stack + parser flags */
-extern int break_stack[MAX_FLOW];
-extern int cont_stack[MAX_FLOW];
+/* loop/switch nesting depth */
 extern int nflow;
 
 /* C99 for-init declaration scoping (see dcc_state.c for details) */
@@ -1105,9 +1076,7 @@ void emit_init_auto_array_from_list(struct Sym *s, int elem_type);
 void gen_local_decl_after_type(int base);
 
 /* ---- stmt ---- */
-void gen_compound(void);
-int switch_label_for_value(int value, int *case_vals, int *case_labs, int ncase, int default_lab, int lend);
-void emit_switch_jump_table(int minv, int maxv, int *case_vals, int *case_labs, int ncase, int default_lab, int lend);
+void process_compound(void);
 void gen_statement(void);
 
 /* ---- func ---- */
@@ -1122,13 +1091,13 @@ int old_style_param_list_starts(void);
 void parse_old_style_param_id_list(void);
 void parse_old_style_param_declarations(void);
 void parse_param_list(void);
-void emit_function_prologue(const char *name, int local_bytes);
+void begin_function_mir(const char *name, int local_bytes);
 void emit_debug_variable(struct Sym *s);
 void emit_debug_variable_end(struct Sym *s);
 void emit_debug_types_once(void);
 void emit_debug_global(struct Sym *s);
 void maybe_reserve_addr_cache_for_array(struct Sym *s, const char *name);
-void emit_function_epilogue(int implicit_zero_return);
+void finish_function_mir(int implicit_zero_return);
 void emit_needed_deferred_bodies(void);
 int is_inline_substitutable(struct Sym *s);
 void skip_initializer_or_decl_tail(void);

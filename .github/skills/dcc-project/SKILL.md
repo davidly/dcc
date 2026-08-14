@@ -33,7 +33,7 @@ Microsoft's `L80` under ntvcm; `dcc-use-emulated-m80=true` selects Microsoft's
 
 | Path | What |
 | ---- | ---- |
-| `src/dcc/` | The compiler. `dcc.c` is the driver; `dcc_preproc.c` owns macros/lexer and `dcc_pp_expr.c` owns `#if` expressions. `dcc_func.c` parses functions/top-level declarations and performs one production metadata/MIR body walk; `dcc_global_init.c` records file-scope initializers. `dcc_mir*.c` owns generated production Z80. The AST emitter remains discard-only for declaration/inline metadata, and `dcc_array_narrow.c` proves byte narrowing. Focused contracts use `dcc_ast_gen_internal.h` and `dcc_preproc_internal.h`; shared state is defined in `dcc_state.c`. |
+| `src/dcc/` | The compiler. `dcc.c` is the driver; `dcc_preproc.c` owns macros/lexer and `dcc_pp_expr.c` owns `#if` expressions. `dcc_func.c` parses functions/top-level declarations and performs one production metadata/MIR body walk; `dcc_ast_metadata.c` / `dcc_ast_stmt_meta.c` own non-emitting parser metadata; `dcc_global_init.c` records file-scope initializers; `dcc_mir*.c` owns generated production Z80. |
 | `src/dccpeep/` | Fixpoint peephole optimizer (`-Ot` time / `-Os` size). `dccpeep.c` owns the descriptor-driven scheduler and remaining general passes; `PeepContext` groups options, statistics, mutation versions, and indexes. `peep_lines.c` owns the mutable line program, opaque user-asm barriers, and edit transactions; `peep_parse.c`, `peep_effects.c`, `peep_control_flow.c`, and `peep_analyze.c` provide parsing, cached effects, indexed control flow, and safety analysis. Pass families live in `peep_pass_once.c` (micro-pattern dispatcher), `peep_pass_minmax.c` (board/game idioms), `peep_pass_loops.c` (loop registerization), `peep_pass_inline_temp.c` (compiler-tagged spills), and `peep_pass_control_flow.c` (label/branch rewrites); `peep_pass_stubs.c` and `peep_pass_final.c` own post-convergence size and cleanup passes. |
 | `src/dccrtlstrip/` | Runtime dead-block stripper. |
 | `DCCRTL.MAC` | The Z80-assembly C runtime (entrypoint, heap, argv, libc subset, float). |
@@ -375,10 +375,10 @@ Hard-won rules, each of which cost a measured regression to learn:
 ### MIR backend
 
 Current production state (2026-08-15): every committed function body is a
-generated MIR candidate. Legacy AST assembly is written to a per-function
-discard-only null sink and is never retained, measured, selected, or copied.
-Each body has one production metadata/MIR walk; there are no alternate legacy
-frame/register retries or generated-text postprocessors.
+generated MIR candidate. Explicit metadata walkers replay declarations,
+scopes/VLAs, inline temps, strings, labels, diagnostics, and debug events
+without running AST body assembly. There are no discard streams, alternate
+legacy frame/register retries, or generated-text postprocessors.
 Compatibility census `captured_*` columns are `-1`. Use
 `DCC_MIR_SELECT_FUNCTION` + `DCC_MIR_SELECT_CANDIDATE` or
 `scripts/mir-current-vs-parent.py` for A/B work; forced-legacy controls and

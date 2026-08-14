@@ -1,7 +1,7 @@
 /*
  * dcc_licm.c - general loop-invariant code motion for `for` loop bodies.
  *
- * dcc_ast_gen_stmt.c already hoists three narrow, single-statement-body
+ * dcc_ast_stmt_meta.c plans three narrow, single-statement-body
  * shapes (a loop-invariant lvalue address, a row-invariant 2D array read,
  * and a global-member value proven invariant via dcc_global_scan.c). This
  * file generalizes the same idea - "the same value gets recomputed every
@@ -56,8 +56,8 @@
  *      (only allocate a fresh copy of a node when something beneath it
  *      actually changed).
  *
- * Runs independently of, and after, the three narrow hoists in
- * ast_gen_for_stmt - only when none of them already produced a hoist_body,
+ * Runs independently of, and after, the three narrow metadata hoists -
+ * only when none of them already produced a hoist body,
  * to keep this file's interaction with that existing code trivial.
  */
 #include "dcc.h"
@@ -146,9 +146,7 @@ static void licm_scan_modified_switch_body(const struct AstNode *n, struct LicmM
  * exit (it jumps to the increment/condition test, still inside the loop's
  * normal flow), and a `switch` is scanned via licm_scan_modified_switch_
  * body below, which is break-aware - a `break` reached directly inside a
- * switch's own body targets that switch (via break_stack[nflow-1] at
- * whichever nesting level is innermost at runtime - see ast_gen_stmt's
- * AST_SWITCH/AST_BREAK cases, dcc_ast_gen_stmt.c), not this loop, so it
+ * switch's own body targets that switch, not this loop, so it
  * doesn't skip this loop's exit either. A `break` reached OUTSIDE any
  * switch still overflows here (the normal AST_BREAK case, declined via the
  * default case below) since THAT one does target this loop directly.
@@ -942,7 +940,7 @@ static struct AstNode *licm_apply_cse_to_stmt_list(const struct AstNode *body,
  * Returns a rewritten copy of the body to use in place of for_node->d, or
  * NULL if neither pass found anything, in which case the caller should keep
  * using the original body unchanged. */
-struct AstNode *ast_licm_hoist_invariants(const struct AstNode *for_node)
+struct AstNode *ast_licm_plan_invariants(const struct AstNode *for_node)
 {
     struct AstNode *cse_body;
     struct LicmModifiedNames pre_cse_mod;
@@ -979,8 +977,6 @@ struct AstNode *ast_licm_hoist_invariants(const struct AstNode *for_node)
          * was found to matter in practice. */
         sprintf(tmp_name, "#licm%d", g_func_pass.licm_seq++);
         temps[i] = add_local_alloc(tmp_name, ast_expr_type_for_sizeof(cands.nodes[i]), 2);
-        ast_gen_expr(cands.nodes[i]);   /* HL = the hoisted value, computed once */
-        emit_store_hl_to_sym_direct(temps[i]);
     }
 
     return licm_rewrite(cse_body, &cands, temps);

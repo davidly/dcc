@@ -218,6 +218,8 @@ int vla_active_scope_depth(void)
 void emit_vla_save_sp(int off)
 {
     mir_capture_vla_save(off);
+    if (mir_is_active())
+        return;
     emit("\tld hl,0\n\tadd hl,sp\n");   /* HL = SP */
     emit("\tpush hl\n");                /* stash SP value */
     emit("\tpush ix\n\tpop hl\n");      /* HL = IX */
@@ -230,6 +232,8 @@ void emit_vla_save_sp(int off)
 void emit_vla_restore_sp(int off)
 {
     mir_capture_vla_restore(off);
+    if (mir_is_active())
+        return;
     emit("\tpush ix\n\tpop hl\n");      /* HL = IX */
     fprintf(g_emit_sink.stream, "\tld de,%d\n\tadd hl,de\n", off);
     emit("\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n");  /* HL = saved SP */
@@ -389,7 +393,8 @@ void vla_resolve_fwd_gotos(int label_index, int real_id)
 
     /* Fall-through from the preceding statement must land on the real label,
      * not run into the stubs that sit just above it. */
-    emit_jp_label("jp", real_id);
+    if (!mir_is_active())
+        emit_jp_label("jp", real_id);
 
     for (i = 0; i < g_vla_fwd_ngoto; ++i) {
         struct VlaFwdGoto *g = &g_vla_fwd_gotos[i];
@@ -419,7 +424,8 @@ void vla_resolve_fwd_gotos(int label_index, int real_id)
         if (bad)
             continue;
 
-        emit_label(g->fixup_id);
+        if (!mir_is_active())
+            emit_label(g->fixup_id);
         /* Reclaim the goto's inner VLA scopes the label is not within: restore
          * the outermost such slot (which reclaims it and every deeper scope). */
         for (k = 1; k <= g->snap_depth && k < MAX_SCOPE_DEPTH; ++k) {
@@ -429,7 +435,8 @@ void vla_resolve_fwd_gotos(int label_index, int real_id)
                 break;
             }
         }
-        emit_jp_label("jp", real_id);
+        if (!mir_is_active())
+            emit_jp_label("jp", real_id);
     }
 }
 

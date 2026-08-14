@@ -199,11 +199,10 @@ Shared mutable state is defined once in
 `dcc_state.c`, with related fields grouped into the lifecycle structures
 described above.
 
-Production function text is generated-only MIR. After the frame-sizing scans,
-`dcc_func.c` performs one body walk for MIR lowering and declaration/inline
-metadata. The legacy AST emitter writes that walk to a discard-only sink; it
-does not retry alternate IX/BC/E/IY configurations, post-process text, or
-contribute bytes to the selected function.
+Production function text is generated-only MIR. Frame sizing and the production
+body walk use explicit non-emitting AST metadata processing for declarations,
+scopes/VLAs, inline temporaries, strings, labels, diagnostics, and debug events.
+There is no AST function-body assembly pass or discard sink.
 
 ```mermaid
 graph TB
@@ -271,8 +270,8 @@ The thick arrows are the dominant translation pipeline (front end → types →
 | Shared | `dcc.h`, `dcc_state.c`, `dcc_ast_gen_internal.h`, `dcc_preproc_internal.h` | Foundational contract, focused internal contracts, and shared state definitions |
 | Front end | `dcc.c`, `dcc_preproc.c`, `dcc_pp_expr.c`, `dcc_diag_emit.c`, `dcc_asmname.c` | Driver/CLI, macro engine + lexer, conditional-expression evaluation, diagnostics + emit primitives, C-name-to-asm-symbol mapping |
 | Types / symbols | `dcc_types.c`, `dcc_symbols.c`, `dcc_constexpr.c`, `dcc_fold.c` | Type system, symbol tables, constant-expression evaluation, constant folding |
-| Function-local AST | `dcc_ast.h`, `dcc_ast.c`, `dcc_ast_build.c`, `dcc_ast_gen.c` + `dcc_ast_gen_support.c` / `_expr.c` / `_cond.c` / `_stmt.c` (behind `dcc_ast_gen_internal.h`) | AST node storage, typed statement/expression building, MIR capture, and the discard-only metadata walker |
-| Legacy metadata helpers | `dcc_expr.c`, `dcc_ops.c`, `dcc_cmp.c`, `dcc_assign.c`, `dcc_stmt.c`, `dcc_decl.c`, `dcc_stmt_fast.c`, `dcc_array_narrow.c` | Declaration/inline/frame metadata side effects and conservative byte-narrowing analysis; emitted AST text is discarded |
+| Function-local AST | `dcc_ast.h`, `dcc_ast.c`, `dcc_ast_build.c`, `dcc_ast_metadata.c`, `dcc_ast_stmt_meta.c`, plus shared classifiers in `dcc_ast_gen*.c` | AST storage/building, direct MIR capture, and non-emitting parser metadata |
+| Shared initializer helpers | `dcc_expr.c`, `dcc_ops.c`, `dcc_cmp.c`, `dcc_assign.c`, `dcc_decl.c`, `dcc_stmt_fast.c`, `dcc_array_narrow.c` | Local/global initializer compatibility, type/support helpers, and conservative byte narrowing; not a production function-body backend |
 | MIR backend | `dcc_mir.c`, `dcc_mir_select.c`, `dcc_mir_homed_cfg.c`, `dcc_mir_spilled_cfg.c`, `dcc_mir_schedule.c`, `dcc_mir_target.c`, `dcc_mir_emit_common.c`, `dcc_mir_machine_*.c` | Persistent MIR, verification/allocation, generated-candidate selection, schedules, and production Z80 emission |
 | Top level / output | `dcc_func.c`, `dcc_global_init.c`, `dcc_data.c` | Function/frame parsing, one production metadata/MIR body walk, global initializer recording, deferred static-body placement, and data-section emission |
 

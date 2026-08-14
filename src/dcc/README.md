@@ -69,38 +69,24 @@ a single module and kept `static` there:
 - `include_dirs` / `num_include_dirs` → [`dcc.c`](dcc.c) (the include search
   path)
 
-### Function-local AST lowering
+### Function-local AST and MIR lowering
 
-Code generation is a single AST path. [`dcc_ast_build.c`](dcc_ast_build.c)
-parses one function-body statement or top-level expression into
-[`dcc_ast.h`](dcc_ast.h) nodes, and the split AST emitter
-([`dcc_ast_gen.c`](dcc_ast_gen.c), [`dcc_ast_gen_support.c`](dcc_ast_gen_support.c),
-[`dcc_ast_gen_expr.c`](dcc_ast_gen_expr.c), [`dcc_ast_gen_cond.c`](dcc_ast_gen_cond.c),
-and [`dcc_ast_gen_stmt.c`](dcc_ast_gen_stmt.c)) emits it; unsupported AST shapes
-are compiler errors. Expression nodes carry the result type that codegen needs,
-so mixed-width decisions such as `float`, `long`, pointer arithmetic, casts,
-array decay, and `?:` lowering come directly from the AST.
+[`dcc_ast_build.c`](dcc_ast_build.c) parses function statements into
+[`dcc_ast.h`](dcc_ast.h) nodes. MIR lowers each supported statement directly.
+[`dcc_ast_metadata.c`](dcc_ast_metadata.c) and
+[`dcc_ast_stmt_meta.c`](dcc_ast_stmt_meta.c) replay only parser metadata:
+declarations/initializers, scopes and VLA exits, inline-temp types, string-pool
+order, labels, diagnostics, and debug events. No AST function-body Z80 emitter
+or discard stream remains.
 
 Two stderr-only debugging knobs are available: `DCC_AST_REPORT=1` logs the
 `; AST-unsupported ...` statement/initializer that a support gate declined (it
 prints just before the `unsupported AST statement` fatal), and `DCC_AST_BUILD=2`
-dumps each built AST tree before it is emitted. Neither affects codegen.
+dumps each built AST tree before it is lowered. Neither affects codegen.
 
-The AST walker uses the low-level emit helpers in modules such
-as [`dcc_expr.c`](dcc_expr.c), [`dcc_ops.c`](dcc_ops.c),
-[`dcc_cmp.c`](dcc_cmp.c), [`dcc_symbols.c`](dcc_symbols.c), and
-[`dcc_decl.c`](dcc_decl.c). Local declarations are represented as captured
-spans and replayed through declaration codegen so the symbol table and stack
-frame match the frame-sizing scan exactly.
-
-Production function assembly is selected only from generated MIR candidates.
-The legacy AST emitter still runs once per function because declaration replay,
-inline-body bookkeeping, and related metadata side effects have not yet moved
-fully into MIR. Its text is written directly to a per-function discard-only
-sink: it is never retained, measured, replayed, or copied to production output.
-The parser no longer retries a body with alternate legacy frame/register
-configurations or post-processes selected MIR text; one metadata walk feeds one
-MIR selection.
+Local declarations remain captured lexer spans, but explicit scan/replay APIs
+now own their frame and initializer side effects. Production function assembly
+comes only from a selected generated MIR candidate.
 
 ---
 
@@ -131,7 +117,8 @@ graph TB
       subgraph AST["3 · Function-local AST"]
         ASTN["dcc_ast.c / dcc_ast.h<br/>arena · nodes"]
         ASTB["dcc_ast_build.c<br/>AST builder"]
-        ASTG["dcc_ast_gen*.c<br/>AST emitter (5 TUs)"]
+        ASTM["dcc_ast_metadata.c / dcc_ast_stmt_meta.c<br/>non-emitting metadata"]
+        ASTG["dcc_ast_gen*.c<br/>support + initializer compatibility"]
       end
 
       subgraph CG["4 · Code generation helpers"]
@@ -139,7 +126,7 @@ graph TB
         OPS["dcc_ops.c<br/>arithmetic · bitwise · shifts"]
         CMP["dcc_cmp.c<br/>compare · branch"]
         ASSIGN["dcc_assign.c<br/>assignment · float"]
-        STMT["dcc_stmt.c<br/>if · while · for · switch"]
+        STMT["dcc_stmt.c<br/>compound parser · MIR dispatch"]
         DECL["dcc_decl.c<br/>local decls · initializers"]
         SFAST["dcc_stmt_fast.c<br/>statement fast paths"]
     end
@@ -194,15 +181,16 @@ The arrows above show the dominant direction, not a hard layering restriction.
 | [`dcc_fold.c`](dcc_fold.c) | The `cf_*` constant-folding engine (with C type/promotion rules), `sizeof`/`offsetof` evaluation, and emission of folded constant results. |
 | [`dcc_ast.h`](dcc_ast.h), [`dcc_ast.c`](dcc_ast.c) | Function-local AST node definitions, list helpers, arena allocation, and debug dumping. |
 | [`dcc_ast_build.c`](dcc_ast_build.c) | AST builder for expressions and statements, including declaration-span capture for local declarations. |
-| [`dcc_ast_gen.c`](dcc_ast_gen.c), [`dcc_ast_gen_support.c`](dcc_ast_gen_support.c), [`dcc_ast_gen_expr.c`](dcc_ast_gen_expr.c), [`dcc_ast_gen_cond.c`](dcc_ast_gen_cond.c), [`dcc_ast_gen_stmt.c`](dcc_ast_gen_stmt.c), [`dcc_ast_gen_internal.h`](dcc_ast_gen_internal.h) | AST-driven Z80 emitter split by role: classifiers/type and lvalue resolvers, support dispatch/call/struct gates/folds, expression emitters, condition/branch emitters, and switch/for/statement emitters. Unsupported AST shapes are compiler errors in normal codegen. |
+| [`dcc_ast_gen.c`](dcc_ast_gen.c), [`dcc_ast_gen_support.c`](dcc_ast_gen_support.c), [`dcc_ast_gen_expr.c`](dcc_ast_gen_expr.c), [`dcc_ast_gen_cond.c`](dcc_ast_gen_cond.c), [`dcc_ast_gen_internal.h`](dcc_ast_gen_internal.h) | Shared AST type/support classifiers and local-initializer compatibility helpers. Function-body statement emission has been removed. |
+| [`dcc_ast_metadata.c`](dcc_ast_metadata.c), [`dcc_ast_stmt_meta.c`](dcc_ast_stmt_meta.c) | Non-emitting declaration, scope/VLA, inline, string, label, diagnostic, debug, and frame-sizing metadata walks. |
 | [`dcc_expr.c`](dcc_expr.c) | Shared low-level expression helpers for the AST emitter: load/store through HL, struct copies, casts and conversions, bitfield extract/insert, pre/post increment-decrement, call cleanup, and declaration-side parsing helpers. |
 | [`dcc_cmp.c`](dcc_cmp.c) | Relational/equality comparison codegen (signed/unsigned, 16- and 32-bit) and condition-to-branch lowering, including single-`cp` byte-operand comparators. |
 | [`dcc_ops.c`](dcc_ops.c) | Binary-operator/arithmetic helpers for `+ - * / %`, shifts, bitwise ops, 16/32-bit and unsigned variants, integer promotion, pointer element-size scaling, float comparisons, and nonzero tests. |
 | [`dcc_assign.c`](dcc_assign.c) | Shared assignment/float primitives for the AST emitter: materialising float constants and computing global byte-array element addresses. |
 | [`dcc_stmt_fast.c`](dcc_stmt_fast.c) | In-place increment/decrement helper for lvalue addresses already in HL, covering byte, 16-bit, and 32-bit operands. |
 | [`dcc_decl.c`](dcc_decl.c) | Local declaration and initializer codegen: scalars, arrays, structs/unions, bitfields, brace initializer lists, and const-scalar folding of local initializers. |
-| [`dcc_stmt.c`](dcc_stmt.c) | Statement dispatcher and lowering for compound blocks, `if`/`else`, `while`, `for`, `do`-`while`, `switch` (if-chain and jump-table strategies), `return`, `break`/`continue`, `goto`, and several pointer-walking loop idioms. |
-| [`dcc_func.c`](dcc_func.c) | Function and top-level declaration parsing: prototype and K&R parameter lists, prologue/epilogue and frame layout, the function-body scan, typedef declarations, and file-scope object parsing/emission. |
+| [`dcc_stmt.c`](dcc_stmt.c) | Compound-block parser and statement-to-MIR/metadata dispatcher. |
+| [`dcc_func.c`](dcc_func.c) | Function and top-level declaration parsing, frame sizing, MIR lifecycle, typedef declarations, and file-scope object parsing/emission. |
 | [`dcc_data.c`](dcc_data.c) | Data-section emission: the string-literal pool and global object storage with initializers, rendered as `DEFB`/`DEFW`. |
 | [`dcc.c`](dcc.c) | Driver and entry point: input file I/O, `#include` resolution and line-directive splicing, the active-source filtering pass, command-line option parsing, and `main()`. |
 
@@ -282,7 +270,7 @@ diff baseline_test_dcc.txt test_dcc.txt \
   module, prefer a `static` at the top of that module instead.
 - **After any change**, rebuild and run the regression suite. For pure
   refactors, the filtered diff must stay empty.
-- **Reaching for an operand's type before it is generated?** Carry it on the
-  AST node and lower through the split AST emitter (`dcc_ast_gen*.c`). Avoid
+- **Reaching for an operand's type before it is lowered?** Carry it on the
+  AST node and lower through MIR/shared AST support. Avoid
   adding new shallow source-text peeks; the AST is the source of truth for typed
   expressions.

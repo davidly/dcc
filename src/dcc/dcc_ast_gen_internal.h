@@ -10,12 +10,8 @@
 #include "dcc.h"
 #include "dcc_ast.h"
 
-/* Switch codegen state shared across the split AST codegen files. */
-#define AST_MAX_SW_NEST 8
-struct AstSwCtx { int *vals; int *labs; int n; int def_lab; };
+/* Switch support-gate nesting. */
 extern int ast_switch_gate_depth;
-extern struct AstSwCtx ast_sw_ctx[AST_MAX_SW_NEST];
-extern int ast_sw_depth;
 
 /* Maximum length of a pointer-to-array dereference chain
  * (*(*(...(p + i0)...) + iN)).  A chain of N layers indexes a pointer whose
@@ -224,7 +220,6 @@ void gen_cond_ast(const struct AstNode *n);
 void gen_postfix_ast(const struct AstNode *n);
 void ast_gen_expr(const struct AstNode *n);
 int ast_return_stmt_supported(const struct AstNode *n);
-void gen_return_ast(const struct AstNode *n);
 int ast_cmp_operand_ok(const struct AstNode *e);
 int ast_operand_is_ptr_ident(const struct AstNode *e);
 int ast_is_simple_cmp_cond(const struct AstNode *n);
@@ -281,23 +276,6 @@ void ast_gen_cond_branch(const struct AstNode *n, int label,
                                 int branch_when_true);
 int ast_switch_find_case(int value, int *vals, int ncase);
 int ast_switch_table_ok(int *case_vals, int ncase, int *minp, int *maxp);
-void ast_switch_collect_stmt(const struct AstNode *n, int *case_vals,
-                                    int *ncasep, int *have_defaultp);
-void ast_switch_collect(const struct AstNode *n, int *case_vals,
-                               int *ncasep, int *have_defaultp);
-void ast_switch_consume_scan_labels_stmt(const struct AstNode *n);
-void ast_switch_consume_scan_labels(const struct AstNode *n);
-void ast_switch_assign_labels_stmt(const struct AstNode *n, int *case_vals,
-                                          int *case_labs, int ncase,
-                                          int *default_labp);
-void ast_switch_assign_labels(const struct AstNode *n, int *case_vals,
-                                     int *case_labs, int ncase,
-                                     int *default_labp);
-void ast_gen_switch_stmt(const struct AstNode *n);
-void ast_gen_for_stmt(const struct AstNode *n);
-void ast_gen_while_stmt(const struct AstNode *n);
-void ast_gen_dowhile_stmt(const struct AstNode *n);
-void ast_gen_stmt(const struct AstNode *n);
-int ast_try_emit_statement(void);
+int ast_process_statement(void);
 
 #endif /* DCC_AST_GEN_INTERNAL_H */

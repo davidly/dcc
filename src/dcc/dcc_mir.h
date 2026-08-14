@@ -7,6 +7,7 @@ struct Sym;
 
 void mir_begin_function(const char *name, int sink_purpose, int has_vla,
 						int local_bytes, int implicit_zero_return);
+int mir_is_active(void);
 void mir_capture_stmt(const struct AstNode *stmt);
 void mir_begin_declaration(const struct AstNode *node);
 void mir_end_declaration(void);

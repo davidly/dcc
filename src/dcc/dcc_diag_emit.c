@@ -14,23 +14,6 @@
 #include "dcc.h"
 #include "dcc_preproc_internal.h"
 
-/* Starts a nestable output scope and returns the complete previous sink. Every
- * successful push must be paired with emit_sink_restore on every exit path. */
-EmitSink emit_sink_push(FILE *stream, int purpose)
-{
-    EmitSink saved;
-
-    saved = g_emit_sink;
-    g_emit_sink.stream = stream;
-    g_emit_sink.purpose = purpose;
-    return saved;
-}
-
-void emit_sink_restore(const EmitSink *saved)
-{
-    g_emit_sink = *saved;
-}
-
 void dcc_copy_str(char *dst, size_t dstsz, const char *src)
 {
     size_t i;
@@ -461,14 +444,8 @@ int new_label(void)
 
 void flush_pending_asm(void)
 {
-    /* Never flush into a suppressed/speculative context (asm_suppress_depth>0,
-     * e.g. the inline-candidate double-scan in dcc_func.c, or a dead-code
-     * replay in ast_gen_stmt's AST_COMPOUND case): that output either goes to
-     * a throwaway buffer or is discarded outright if the speculative attempt
-     * is abandoned, silently losing content that was legitimately buffered
-     * earlier during a real (non-suppressed) pass. Leave pending_asm_len
-     * untouched so the content survives to the next real flush point instead
-     * of being written once into a doomed buffer and considered "done". */
+    /* Never flush during a suppressed sizing/metadata pass. Leave the buffer
+     * intact for the next real output point. */
     if (asm_suppress_depth > 0)
         return;
     if (pending_asm_len > 0 && g_emit_sink.stream) {

@@ -157,7 +157,14 @@ struct AstNode *ast_new(struct AstArena *ar, int kind);
 /* Re-emit a captured local-declaration span through declaration codegen so the
  * local symbol table / frame offsets are rebuilt exactly as the frame-sizing
  * scan built them.  Defined in dcc_ast_build.c. */
-void ast_emit_decl_span(const struct AstNode *n);
+void ast_replay_decl_span(const struct AstNode *n);
+void ast_scan_decl_span(const struct AstNode *n);
+void ast_replay_compound_literal(const struct AstNode *n);
+void ast_process_expr_metadata(const struct AstNode *n);
+void ast_validate_expr_symbols(const struct AstNode *n);
+int ast_process_inline_call_metadata(
+    const struct AstNode *call, int result_dead);
+void ast_process_stmt_metadata(const struct AstNode *n);
 
 /* Non-emitting counterpart used by dcc_func.c's inliner eligibility scan:
  * seeks the lexer to an AST_DECL span's start (saving the caller's own
@@ -194,8 +201,7 @@ void ast_list_push(struct AstArena *ar, struct AstNode *parent,
 
 /* Detects the "cyclic byte fill" for-loop idiom (see dcc_ast_gen_support.c
  * for the full shape). Callable from both ast_build_for_stmt (build time,
- * to reserve the rolling-counter's frame slot) and ast_gen_for_stmt
- * (codegen time, to re-extract the same constants). */
+ * to reserve the rolling-counter's frame slot) and metadata planning. */
 int ast_for_mod_fill_supported(const struct AstNode *n, struct Sym **out_arr,
                                       long *out_init, long *out_base,
                                       long *out_mod, const char **out_ivar_name);
@@ -239,8 +245,7 @@ struct Sym *ast_sizeof_whole_vla_sym(const struct AstNode *n);
 
 /* Detects a for-loop whose whole body is one assignment to an array-element
  * lvalue whose address is provably the same on every iteration (see
- * dcc_ast_gen_support.c for the full shape and rationale). Callable from
- * ast_gen_for_stmt to decide whether to hoist the address computation. */
+ * dcc_ast_gen_support.c for the full shape and rationale). */
 int ast_for_hoist_lvalue_addr_supported(const struct AstNode *n,
                                                const char **out_ivar_name,
                                                const struct AstNode **out_lhs,
@@ -248,7 +253,7 @@ int ast_for_hoist_lvalue_addr_supported(const struct AstNode *n,
 
 /* Extracts a for-loop's induction-variable name and its body's assignment
  * rhs, for the caller to scan for row-invariant 2D array reads worth
- * hoisting (see dcc_ast_gen_stmt.c's ast_hoist_row_invariant_2d_reads).
+ * hoisting (see dcc_ast_stmt_meta.c).
  * Unlike ast_for_hoist_lvalue_addr_supported, this says nothing about the
  * lhs - it fires whether or not the lhs address is itself hoistable. */
 int ast_for_rhs_hoist_scan_supported(const struct AstNode *n,
@@ -260,9 +265,7 @@ int ast_for_rhs_hoist_scan_supported(const struct AstNode *n,
  * dcc_global_scan.c whole-file write scan), even though the rest of the
  * loop body is full of calls ordinary side-effect analysis can't see
  * through (see dcc_ast_gen_support.c for the full shape and rationale -
- * tests/cint.c's run() dispatch loop is the motivating case). Callable from
- * ast_gen_for_stmt to decide whether to cache that value once before the
- * loop instead of re-fetching it every iteration. */
+ * tests/cint.c's run() dispatch loop is the motivating case). */
 int ast_for_hoist_global_member_value_supported(const struct AstNode *n,
                                                   const struct AstNode **out_member,
                                                   int *out_val_type);
@@ -274,7 +277,8 @@ int ast_for_hoist_global_member_value_supported(const struct AstNode *n,
  * every iteration. Unlike the three hoists above, this is not limited to a
  * single-statement body. Returns a rewritten copy of for_node->d to use in
  * its place, or NULL if nothing qualifies (use for_node->d unchanged). */
-struct AstNode *ast_licm_hoist_invariants(const struct AstNode *for_node);
+struct AstNode *ast_licm_plan_invariants(const struct AstNode *for_node);
+void ast_plan_for_metadata(const struct AstNode *for_node);
 
 /* Set of names assigned, incremented/decremented, or address-taken anywhere
  * in a scanned subtree; ->overflowed means "assume everything is modified"
@@ -296,8 +300,7 @@ void licm_scan_modified(const struct AstNode *n, struct LicmModifiedNames *mod);
  * __divu (or __mods/__divs) - see dcc_ast_gen_support.c for the full shape/
  * rationale/safety argument (tests/e.c's `a[n] = x % n; x = ...+ x/n;` is
  * the motivating case, found via dccprof profiling). Unlike the for-loop-
- * specific hoists above, this applies to ANY compound block - callable
- * from ast_gen_stmt's own AST_COMPOUND case, not just for-loop bodies.
+ * specific hoists above, this applies to any compound metadata walk.
  * Returns a rewritten copy of the compound to use in its place, or NULL if
  * nothing qualifies (use the original compound unchanged). */
 struct AstNode *ast_divmod_fuse_compound(const struct AstNode *n);
@@ -333,7 +336,6 @@ void ast_dump(const struct AstNode *n, int depth);
 int ast_gen_supported(const struct AstNode *n);
 void ast_gen_expr(const struct AstNode *n);   /* emit; sets g_expr_type        */
 int ast_stmt_supported(const struct AstNode *n);
-void ast_gen_stmt(const struct AstNode *n);
 int ast_stmt_has_reentry_label(const struct AstNode *n);
 int ast_stmt_exits(const struct AstNode *n);
 int ast_last_statement_exits(void);
@@ -341,9 +343,7 @@ int ast_last_statement_exits(void);
 /* Reset the per-statement support-probe caches (ast_gen_supported and
  * friends memoize by AST node pointer within a single statement's checks;
  * arena nodes are reused across statements, so the cache must be dropped
- * before probing a freshly-built one - see dcc_ast_gen_support.c). Called
- * from dcc_stmt.c's gen_compound before ast_stmt_supported on a new node,
- * as well as from within the ast_gen_stmt* files themselves. */
+ * before probing a freshly-built one - see dcc_ast_gen_support.c). */
 void ast_support_cache_begin(void);
 
 /* Pure-AST emission of a declaration initializer's assignment-expression.
@@ -354,18 +354,13 @@ void ast_emit_struct_init_expr_assign(struct Sym *s);
 /* Statement hook.  Called from gen_statement to build the next statement from
  * the token stream and emit it from the AST.  Returns 0 only in scanner/debug
  * paths that deliberately bypass AST codegen. */
-int ast_try_emit_statement(void);
-void ast_emit_debug_location(const char *file, int line);
+int ast_process_statement(void);
+void ast_record_debug_location(const char *file, int line);
 
 /* For scan_function_body's frame-sizing scan (dcc_func.c): build and replay
- * the for-statement at the current token position through the same AST
- * builder/emitter the real codegen pass uses, with output redirected to a
- * throwaway sink. Keeps frame sizing - and any AST-level for-loop fast path
- * that reserves extra frame space - automatically in sync with the real
- * pass, by construction, instead of needing a hand-written parallel token
- * scanner kept in sync by hand. Returns 1 on success (tokens consumed,
- * locals sized); 0 if the AST builder declined (the real pass will report
- * this properly; the caller here should not treat 0 as fatal). */
+ * the statement at the current token position through the AST builder and
+ * non-emitting sizing walker. Returns 1 on success; 0 if the builder declined.
+ */
 int ast_scan_for_stmt(void);
 
 #endif /* DCC_AST_H */

@@ -13,9 +13,9 @@ The production compiler is generated-MIR-only:
 
 - Every function is lowered to MIR.
 - Production Z80 is copied only from a selected MIR candidate.
-- The AST emitter still runs against one per-function discard-only null sink
-  for declaration/inline metadata side effects; its text is never retained,
-  measured, selected, or copied.
+- Explicit non-emitting AST metadata processing owns declaration/initializer
+  replay, scopes/VLAs, inline temps, strings, labels, diagnostics, and debug
+  events. No function-body AST assembly pass or discard sink remains.
 - Each function has one production metadata/MIR body walk. Legacy no-IX,
   BC/E, loop-BC, and IY retry drivers and their generated-text postprocessors
   are gone.
@@ -46,9 +46,8 @@ require-emit coverage.
 | --- | --- |
 | MIR lowering, analysis, selectors, acceptance | `src/dcc/dcc_mir.c` |
 | MIR integration API | `src/dcc/dcc_mir.h` |
-| Discard-only AST metadata replay | `src/dcc/dcc_func.c` |
-| AST expression emission and static inlining | `src/dcc/dcc_ast_gen_expr.c` |
-| AST statement emission | `src/dcc/dcc_ast_gen_stmt.c` |
+| AST metadata replay | `src/dcc/dcc_ast_metadata.c`, `src/dcc/dcc_ast_stmt_meta.c` |
+| AST support/initializer compatibility | `src/dcc/dcc_ast_gen*.c`, `src/dcc/dcc_decl.c` |
 | Symbols, scopes, VLA metadata | `src/dcc/dcc_symbols.c` |
 | Runtime ABI | `DCCRTL.MAC` |
 | MIR census and snapshot comparison | `scripts/mir-migration-census.py` |
@@ -511,5 +510,5 @@ The staged migration is complete when:
 4. large CFG compile time is bounded;
 5. legacy emission is no longer needed during normal function compilation;
 6. obsolete legacy register-allocation retry drivers are removed;
-7. discard-only AST metadata replay is removed only after its declaration,
-   inline, debug, and deferred-body side effects have MIR-native owners.
+7. declaration, inline, string, label, debug, and deferred-body side effects
+   have explicit non-emitting owners.

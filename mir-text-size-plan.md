@@ -1,5 +1,18 @@
 # dcc MIR text-size fallback plan
 
+## 2026-08-15 full-MIR body-emitter cleanup
+
+The remaining discard-only AST body pass is removed at clean base `1f73395`.
+Function statements lower directly to MIR; explicit metadata walkers now own
+declarations/initializers, scopes/VLAs, inline temps, string order, labels,
+diagnostics, debug events, deferred static bodies, and frame-planning hoists.
+`dcc_ast_gen_stmt.c`, the null/discard sink, MIR sink restoration, and obsolete
+statement/switch/loop/return emit APIs/state are gone. Strict results are
+2378/2378 normal and stack, 274/274 extended per mode, 314/314 standard plus
+196/196 extended in stack/no-stack full mode, 106/106 diagnostics, 22/22
+dccpeep, 225/225 focused sanitizer functions per stack mode, and zero checked
+performance regressions. No baseline changed; no commit or push was made.
+
 Scope: this document is solely about closing the `text-size` fallback
 reason in `mir_try_emit_spilled_scalar_cfg` (`src/dcc/dcc_mir.c`), which
 SKILL.md's "Known root cause" section already identified as **systemic,

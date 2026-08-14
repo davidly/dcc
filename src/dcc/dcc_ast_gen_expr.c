@@ -27,6 +27,37 @@ static int ast_member_global_word_field(const struct AstNode *n, struct Sym **ou
 static void emit_load_global_field_word_direct(struct Sym *base, struct FieldDef *fd);
 static void emit_store_global_field_word_direct(struct Sym *base, struct FieldDef *fd);
 
+void ast_gen_dead_expr(const struct AstNode *n)
+{
+    if (n->kind == AST_COMMA) {
+        ast_gen_dead_expr(n->a);
+        ast_gen_dead_expr(n->b);
+    } else if (n->kind == AST_CAST && (n->type & 15) == TYPE_VOID) {
+        ast_gen_dead_expr(n->a);
+    } else if ((n->kind == AST_UNARY || n->kind == AST_POSTFIX) &&
+               (n->op == TOK_INC || n->op == TOK_DEC)) {
+        struct Sym *s = ast_deadincdec_sym_direct(n);
+        if (s != NULL) {
+            emit_incdec_sym_direct(s, n->op);
+        } else {
+            int type;
+            gen_deadincdec_addr_lvalue_ast(n, &type);
+            if (current_field_bit_width > 0)
+                emit_pre_incdec_lvalue(type, n->op);
+            else
+                emit_incdec_addr(type, n->op);
+        }
+    } else if (ast_is_local_self_add_stmt(n)) {
+        ast_emit_local_self_add_stmt(n);
+    } else if (n->kind == AST_IDENT) {
+        struct Sym *s = find_sym(n->sval);
+        if (s == NULL || s->is_volatile)
+            ast_gen_expr(n);
+    } else {
+        ast_gen_expr(n);
+    }
+}
+
 
 /* Recognize byte-truncation idioms that are common in hand-written portable C:
  *     (unsigned char)(x & 0xff)
@@ -746,38 +777,10 @@ void gen_unary_ast(const struct AstNode *n)
 
 static void gen_compound_literal_ast(const struct AstNode *n)
 {
-    struct AstCompoundLitSpan *sp = (struct AstCompoundLitSpan *)n->aux;
-    LexState _ls = lex_save();
-    /* Capture the fields we still need after the initializer is emitted.
-     * `n` itself lives in g_ast_init_arena, and emitting a non-constant field
-     * (e.g. .p = &(T){...}) re-enters ast_emit_init_expr, which builds into and
-     * then resets that same arena - overwriting this node with the last nested
-     * initializer. Reading n->sym/n->type afterwards would then yield the wrong
-     * (last nested) compound literal, so snapshot them now. The Sym pointer
-     * itself targets the stable locals[] table, so it stays valid. */
     struct Sym *clit_sym = n->sym;
     int clit_type = n->type;
 
-    g_lex.posi = sp->posi;
-    g_lex.tok_start_pos = sp->tok_start_pos;
-    g_lex.line_no = sp->line_no;
-    g_lex.tok_line = sp->tok_line;
-    g_lex.tok = sp->tok;
-
-    mir_begin_compound_literal(clit_sym);
-    if ((clit_type & TYPE_STRUCT) && type_ptr_depth(clit_type) == 0) {
-        emit_init_auto_struct_from_list(clit_sym);
-    } else if (accept('{')) {
-        emit_init_auto_struct_scalar(clit_sym, 0, clit_type);
-        if (g_lex.tok.kind == ',')
-            next_token();
-        expect('}');
-    } else {
-        emit_init_auto_struct_scalar(clit_sym, 0, clit_type);
-    }
-    mir_end_compound_literal(clit_sym);
-
-    lex_restore(&_ls);
+    ast_replay_compound_literal(n);
 
     emit_load_sym_addr(clit_sym);
     g_expr.type = type_add_ptr(clit_type);
@@ -1724,14 +1727,18 @@ void ast_emit_init_expr(void)
     n = ast_build_assign_expr(&g_ast_init_arena);
 
     _le = lex_save();
-
-    if (n != NULL) {
-        mir_capture_initializer(n);
-        g_expr.type = ast_expr_type_for_sizeof(n);
-        g_expr.long_from16 = 0;
-    }
+    if (n != NULL)
+        ast_validate_expr_symbols(n);
 
     if (n != NULL && ast_pointer_expr_type(n, &ptr_type, &no_deref)) {
+        if (mir_is_active()) {
+            mir_capture_initializer(n);
+            ast_process_expr_metadata(n);
+            g_expr.type = ast_expr_type_for_sizeof(n);
+            g_expr.long_from16 = 0;
+            ast_arena_reset(&g_ast_init_arena);
+            return;
+        }
         gen_pointer_expr_ast(n, &ptr_type, &no_deref);
         ast_arena_reset(&g_ast_init_arena);
         return;
@@ -1742,7 +1749,15 @@ void ast_emit_init_expr(void)
                       ast_pointer_assign_rhs_supported(n) ||
                       (n->kind == AST_CALL && ast_value_is_pointer_word(n) &&
                        ast_call_named_args_supported(n)))) {
-                ast_gen_expr(n);
+        if (mir_is_active()) {
+            mir_capture_initializer(n);
+            ast_process_expr_metadata(n);
+            g_expr.type = ast_expr_type_for_sizeof(n);
+            g_expr.long_from16 = 0;
+            ast_arena_reset(&g_ast_init_arena);
+            return;
+        }
+        ast_gen_expr(n);
         ast_arena_reset(&g_ast_init_arena);
         return;
     }
@@ -1783,6 +1798,8 @@ void ast_emit_struct_init_expr_assign(struct Sym *s)
     rhs = ast_build_assign_expr(&g_ast_init_arena);
 
     _le = lex_save();
+    if (rhs != NULL)
+        ast_validate_expr_symbols(rhs);
 
     lhs = ast_new(&g_ast_init_arena, AST_IDENT);
     lhs->sval = ast_arena_strdup(&g_ast_init_arena, s->name);
@@ -1791,6 +1808,11 @@ void ast_emit_struct_init_expr_assign(struct Sym *s)
 
     if (rhs != NULL)
         mir_capture_struct_initializer(s, rhs);
+    if (rhs != NULL && mir_is_active()) {
+        ast_process_expr_metadata(rhs);
+        ast_arena_reset(&g_ast_init_arena);
+        return;
+    }
 
     if (rhs != NULL && ast_struct_return_call_assign_supported(s->type, rhs)) {
         gen_struct_return_call_assign_ast(lhs, rhs);
@@ -3872,9 +3894,11 @@ static unsigned long g_inline_live_temp_mask;
 static const char *g_inline_local_src_name;
 static const char *g_inline_local_temp_name;
 
-static int emit_inline_arg_temps(const struct AstNode *n, struct Sym *fn,
-                                 const char **temp_names,
-                                 char temp_name_buf[MAX_PROTO_PARAMS][64])
+static int prepare_inline_arg_temps(
+    const struct AstNode *n, struct Sym *fn,
+    const char **temp_names,
+    char temp_name_buf[MAX_PROTO_PARAMS][64],
+    int emit_values)
 {
     struct Sym *temp_syms[MAX_PROTO_PARAMS];
     int temp_types[MAX_PROTO_PARAMS];
@@ -3955,9 +3979,14 @@ static int emit_inline_arg_temps(const struct AstNode *n, struct Sym *fn,
     for (i = n->list_len - 1; i >= 0; --i) {
         if (temp_names[i] == NULL)
             continue;
-        emit_inline_arg_temp_store(temp_syms[i], n->list[i], temp_types[i]);
-        if (fn->inline_param_use_count[i] == 1)
-            emit(";@dcc-inline-temp-single-use\n");
+        if (emit_values) {
+            emit_inline_arg_temp_store(
+                temp_syms[i], n->list[i], temp_types[i]);
+            if (fn->inline_param_use_count[i] == 1)
+                emit(";@dcc-inline-temp-single-use\n");
+        } else {
+            ast_process_expr_metadata(n->list[i]);
+        }
     }
     return 1;
 }
@@ -4031,8 +4060,10 @@ static struct AstNode *clone_inline_expr(struct AstArena *ar, struct Sym *fn,
  * back to a real, non-inlined call, exactly like emit_inline_arg_temps's
  * own failure path. temp_name_buf is caller-owned and must outlive the
  * g_inline_local_temp_name assignment the caller makes from it. */
-static int emit_inline_local_temp(struct Sym *fn, const struct AstNode *call,
-                                  const char **temp_names, char temp_name_buf[64])
+static int prepare_inline_local_temp(
+    struct Sym *fn, const struct AstNode *call,
+    const char **temp_names, char temp_name_buf[64],
+    int emit_values)
 {
     struct AstNode *init_substituted;
     struct Sym *tmp;
@@ -4069,7 +4100,11 @@ static int emit_inline_local_temp(struct Sym *fn, const struct AstNode *call,
     tmp->type = fn->inline_local_type;
 
     g_inline_live_temp_mask |= 1UL << slot;
-    emit_inline_arg_temp_store(tmp, init_substituted, fn->inline_local_type);
+    if (emit_values)
+        emit_inline_arg_temp_store(
+            tmp, init_substituted, fn->inline_local_type);
+    else
+        ast_process_expr_metadata(init_substituted);
     return 1;
 }
 
@@ -4103,13 +4138,15 @@ static int try_gen_inline_call_ast(const struct AstNode *n, struct Sym *fn_sym)
     }
 
     old_live_mask = g_inline_live_temp_mask;
-    if (!emit_inline_arg_temps(n, fn_sym, temp_names, temp_name_buf))
+    if (!prepare_inline_arg_temps(
+            n, fn_sym, temp_names, temp_name_buf, 1))
         return 0;
 
     old_local_src_name = g_inline_local_src_name;
     old_local_temp_name = g_inline_local_temp_name;
     if (fn_sym->has_inline_local) {
-        if (!emit_inline_local_temp(fn_sym, n, temp_names, local_temp_buf)) {
+        if (!prepare_inline_local_temp(
+                fn_sym, n, temp_names, local_temp_buf, 1)) {
             g_inline_live_temp_mask = old_live_mask;
             return 0;
         }
@@ -4124,7 +4161,7 @@ static int try_gen_inline_call_ast(const struct AstNode *n, struct Sym *fn_sym)
     src_expr = inline_substitution_body(fn_sym);
     if (fn_sym->inline_stmt_body != NULL) {
         stmt = clone_inline_expr(&g_ast_arena, fn_sym, src_expr, n, temp_names);
-        ast_gen_stmt(stmt);
+        ast_process_stmt_metadata(stmt);
     } else {
         expr = clone_inline_expr(&g_ast_arena, fn_sym, src_expr, n, temp_names);
         ast_gen_expr(expr);
@@ -4136,6 +4173,75 @@ static int try_gen_inline_call_ast(const struct AstNode *n, struct Sym *fn_sym)
     g_expr.type = (fn_sym->inline_stmt_expr != NULL || fn_sym->inline_stmt_body != NULL) ?
                   TYPE_VOID : fn_sym->type;
     g_expr.long_from16 = 0;
+    return 1;
+}
+
+int ast_process_inline_call_metadata(
+    const struct AstNode *n, int result_dead)
+{
+    struct Sym *fn_sym;
+    struct AstNode *body;
+    const struct AstNode *source;
+    const char *temp_names[MAX_PROTO_PARAMS];
+    char temp_name_buf[MAX_PROTO_PARAMS][64];
+    char local_temp_buf[64];
+    unsigned long old_live_mask;
+    const char *old_local_src_name;
+    const char *old_local_temp_name;
+    int i;
+
+    if (n == NULL || n->kind != AST_CALL ||
+        n->a == NULL || n->a->kind != AST_IDENT)
+        return 0;
+    fn_sym = find_global(n->a->sval);
+    if (opt_debug || fn_sym == NULL || !fn_sym->is_static ||
+        !fn_sym->is_inline ||
+        inline_substitution_body(fn_sym) == NULL)
+        return 0;
+    if ((fn_sym->inline_stmt_expr != NULL ||
+         fn_sym->inline_stmt_body != NULL) &&
+        !result_dead)
+        return 0;
+    if (g_inline_expand_depth >= 8 ||
+        n->list_len != fn_sym->proto_nargs ||
+        n->list_len > MAX_PROTO_PARAMS)
+        return 0;
+    for (i = 0; i < MAX_PROTO_PARAMS; ++i)
+        temp_names[i] = NULL;
+
+    old_live_mask = g_inline_live_temp_mask;
+    if (!prepare_inline_arg_temps(
+            n, fn_sym, temp_names, temp_name_buf, 0))
+        return 0;
+
+    old_local_src_name = g_inline_local_src_name;
+    old_local_temp_name = g_inline_local_temp_name;
+    if (fn_sym->has_inline_local) {
+        if (!prepare_inline_local_temp(
+                fn_sym, n, temp_names, local_temp_buf, 0)) {
+            g_inline_live_temp_mask = old_live_mask;
+            return 0;
+        }
+        g_inline_local_src_name = fn_sym->inline_local_name;
+        g_inline_local_temp_name = local_temp_buf;
+    } else {
+        g_inline_local_src_name = NULL;
+        g_inline_local_temp_name = NULL;
+    }
+
+    ++g_inline_expand_depth;
+    source = inline_substitution_body(fn_sym);
+    body = clone_inline_expr(
+        &g_ast_arena, fn_sym, source, n, temp_names);
+    if (fn_sym->inline_stmt_body != NULL)
+        ast_process_stmt_metadata(body);
+    else
+        ast_process_expr_metadata(body);
+    --g_inline_expand_depth;
+
+    g_inline_live_temp_mask = old_live_mask;
+    g_inline_local_src_name = old_local_src_name;
+    g_inline_local_temp_name = old_local_temp_name;
     return 1;
 }
 
@@ -5757,6 +5863,9 @@ void gen_postfix_ast(const struct AstNode *n)
 
 void ast_gen_expr(const struct AstNode *n)
 {
+    if (mir_is_active())
+        fatal("AST expression emission attempted during MIR function lowering");
+
     switch (n->kind) {
     case AST_INT_LIT:
         gen_int_lit(n);

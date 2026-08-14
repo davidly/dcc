@@ -90,12 +90,9 @@ int nused_extrns;
 
 /* ---- per-function code-generation state -------------------------------- */
 int label_id;
-int current_return_label;
-long g_return_jp_check_pos = -1;
-int g_return_jp_check_label = -1;
 /* Closing-brace source location of the current function body when the body
  * always exits (every path returns), so no in-block closing-brace marker was
- * emitted. emit_function_epilogue emits it at the shared return label so an
+ * emitted. finish_function_mir records it at the shared return point so an
  * early `return` that jumps to the epilogue maps to the closing brace rather
  * than inheriting the previous statement's source line. 0 = none. */
 int g_func_close_line;
@@ -109,9 +106,7 @@ int g_inline_body_buffering;
 int g_buffering_epoch;
 int current_function_has_vla;
 
-/* ---- loop break/continue target stack + parser flags ------------------- */
-int break_stack[MAX_FLOW];
-int cont_stack[MAX_FLOW];
+/* ---- loop/switch nesting depth ----------------------------------------- */
 int nflow;
 
 /* ---- C99 for-init declaration scoping ---------------------------------- */

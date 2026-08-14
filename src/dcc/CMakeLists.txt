@@ -49,11 +49,12 @@ set(DCC_SOURCES
     dcc_data.c
     dcc_ast.c           # function-local AST (arena + nodes)
     dcc_ast_build.c     # function-local AST builder
+    dcc_ast_metadata.c  # non-emitting function-body metadata replay
     dcc_ast_gen.c           # AST classifiers / type & lvalue resolvers
     dcc_ast_gen_support.c   # AST support dispatch, calls/structs/folds
     dcc_ast_gen_expr.c      # AST expression emitters
     dcc_ast_gen_cond.c      # AST condition and branch emitters
-    dcc_ast_gen_stmt.c      # AST statement/switch/for emitters
+    dcc_ast_stmt_meta.c     # AST statement parsing/sizing metadata
     dcc_mir.c               # analysis-only virtual-register MIR prototype
     dcc_mir_emit_common.c
     dcc_mir_homed_cfg.c
