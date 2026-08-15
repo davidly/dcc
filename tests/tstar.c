@@ -26,6 +26,7 @@
  * table for details.
  */
 #include <stdio.h>
+#include <unistd.h>
 
 static int fails;
 

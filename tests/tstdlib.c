@@ -1,3 +1,12 @@
+/* tstdlib.c - stdlib.h regression coverage, including atoi()/atol() etc.
+ * wraparound at dcc's Z80 target int/long widths.
+ *
+ * Host validation is skipped (tests/_test_overrides.json's "host": true):
+ * the *wrap16* checks deliberately overflow a 16-bit `int`, matching dcc's
+ * target where `int` is 2 bytes. A host's `int` is 4 bytes even under a
+ * 32-bit (-m32) compile - unlike `long`, there's no host compiler mode
+ * that reproduces a 16-bit `int`, so this can't be validated on any host.
+ */
 #include <stdio.h>
 #include <stdlib.h>
 

@@ -16,6 +16,7 @@
  * on. Reported rather than asserted; don't rely on this in portable code.
  */
 #include <stdio.h>
+#include <unistd.h>
 
 int main(void)
 {

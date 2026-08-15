@@ -12,6 +12,7 @@
  * at least visible and comparable across emulators.
  */
 #include <stdio.h>
+#include <unistd.h>
 
 static int fails;
 

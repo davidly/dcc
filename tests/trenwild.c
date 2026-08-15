@@ -23,6 +23,7 @@
  * whether the '?' came from the caller directly or from '*' expansion.
  */
 #include <stdio.h>
+#include <unistd.h>
 
 static int fails;
 

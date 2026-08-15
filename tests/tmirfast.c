@@ -26,6 +26,12 @@
  * under both the MIR and legacy backends, and under both nopeep and peep,
  * so a regression in the fast paths' semantics shows up as a wrong-answer
  * failure here rather than only as a byte-count change.
+ *
+ * Host validation is skipped (tests/_test_overrides.json's "host": true):
+ * several checks deliberately overflow/wrap a 16-bit `int`, matching dcc's
+ * Z80 target where `int` is 2 bytes. A host's `int` is 4 bytes even under
+ * a 32-bit (-m32) compile - unlike `long`, there's no host compiler mode
+ * that reproduces a 16-bit `int`, so this can't be validated on any host.
  */
 
 #include <stdio.h>
