@@ -1,0 +1,2 @@
+<source>:5: error DCC-E0921: cannot take address of register object near 'value'
+dcc: 1 error(s)

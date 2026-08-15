@@ -119,6 +119,7 @@ const char *dcc_diag_code_for_message(const char *msg)
     if (dcc_msg_has(msg, "wide string cannot initialize char array")) return "DCC-E0914";
     if (dcc_msg_has(msg, "bitfield initializer must be constant integer")) return "DCC-E0915";
     if (dcc_msg_has(msg, "incompatible integer to pointer assignment")) return "DCC-E0920";
+    if (dcc_msg_has(msg, "cannot take address of register object")) return "DCC-E0921";
     if (dcc_msg_has(msg, "unsupported sizeof expression")) return "DCC-E1001";
     if (dcc_msg_has(msg, "unsupported")) return "DCC-E1002";
     if (dcc_msg_has(msg, "malformed")) return "DCC-E1003";

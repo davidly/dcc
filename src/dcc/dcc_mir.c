@@ -1719,6 +1719,34 @@ static void mir_set_node_memory(struct MirInsn *insn,
         insn->memory_flags |= 4;
 }
 
+static int mir_reject_register_address(const struct AstNode *node)
+{
+    int index;
+
+    if (node == NULL)
+        return 0;
+    if (node->kind == AST_UNARY && node->op == '&' &&
+        node->a != NULL && node->a->kind == AST_IDENT) {
+        struct Sym *symbol = mir_ident_symbol(node->a);
+
+        if (symbol != NULL && symbol->is_register) {
+            dcc_error_at(node->file, node->line, -1,
+                         "cannot take address of register object",
+                         mir_ident_name(node->a));
+            return 1;
+        }
+    }
+    if (mir_reject_register_address(node->a) ||
+        mir_reject_register_address(node->b) ||
+        mir_reject_register_address(node->c) ||
+        mir_reject_register_address(node->d))
+        return 1;
+    for (index = 0; index < node->list_len; ++index)
+        if (mir_reject_register_address(node->list[index]))
+            return 1;
+    return 0;
+}
+
 static int mir_lower_lvalue_address(const struct AstNode *node)
 {
     struct MirInsn *insn;
@@ -1732,6 +1760,11 @@ static int mir_lower_lvalue_address(const struct AstNode *node)
     if (node->kind == AST_IDENT) {
         const char *name = mir_ident_name(node);
         symbol = mir_ident_symbol(node);
+        if (symbol != NULL && symbol->is_register) {
+            dcc_error_at(node->file, node->line, -1,
+                         "cannot take address of register object", name);
+            return -1;
+        }
         value = mir_new_value();
         insn = mir_emit(MIR_ADDRESS);
         insn->dst = value;
@@ -2123,6 +2156,8 @@ static int mir_lower_expr(const struct AstNode *node)
     case AST_SIZEOF_EXPR:
         {
             struct Sym *vla = ast_sizeof_whole_vla_sym(node->a);
+            if (mir_reject_register_address(node->a))
+                return -1;
             value = mir_new_value();
             if (vla != NULL && vla->vla_size_offset != 0) {
                 insn = mir_emit(MIR_VLA_SIZE);
@@ -7366,6 +7401,50 @@ static int mir_instruction_clobbers_caller_registers(
              (insn->immediate == '/' || insn->immediate == '%')));
 }
 
+/* Object promotion replaces named loads with SSA values, but parameter and
+ * PHI definitions plus retained stores still preserve enough provenance to
+ * apply C's `register` allocation hint after promotion. */
+static int mir_value_backs_declared_register_object(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int instruction;
+
+    if (definition != NULL && definition->object >= 0 &&
+        definition->object < mir.object_count &&
+        mir.objects[definition->object].is_register)
+        return 1;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_STORE &&
+            mir.insns[instruction].src1 == value &&
+            mir.insns[instruction].object >= 0 &&
+            mir.insns[instruction].object < mir.object_count &&
+            mir.objects[mir.insns[instruction].object].is_register)
+            return 1;
+    return 0;
+}
+
+static int mir_declared_register_value_use_count(int value)
+{
+    int count = 0;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode == MIR_STORE && insn->src1 == value &&
+            insn->object >= 0 && insn->object < mir.object_count &&
+            mir.objects[insn->object].is_register)
+            continue;
+        if (insn->src1 == value)
+            ++count;
+        if (insn->src2 == value)
+            ++count;
+        if (mir_call_uses_value(insn, value))
+            ++count;
+    }
+    return count;
+}
+
 int mir_iy_home_live_across_caller_clobber(void)
 {
     int instruction;
@@ -7394,6 +7473,7 @@ static void mir_allocate_registers(const unsigned char *live_in,
     int *color;
     int *fixed_color;
     int *preferences;
+    unsigned char *register_value;
     int i;
 
     memset(summary, 0, sizeof(*summary));
@@ -7428,10 +7508,15 @@ static void mir_allocate_registers(const unsigned char *live_in,
     fixed_color = (int *)malloc((size_t)value_count * sizeof(*fixed_color));
     preferences = (int *)calloc((size_t)value_count * MIR_COLOR_COUNT,
                                 sizeof(*preferences));
+    register_value = (unsigned char *)calloc((size_t)value_count, 1);
     if (interference == NULL || cross_call == NULL || cross_opaque == NULL ||
         degree == NULL || order == NULL || color == NULL || fixed_color == NULL ||
-        preferences == NULL)
+        preferences == NULL || register_value == NULL)
         fatal("out of memory simulating MIR allocation");
+
+    for (i = 0; i < value_count; ++i)
+        register_value[i] = (unsigned char)
+            mir_value_backs_declared_register_object(i);
 
     for (i = 0; i < mir.count; ++i) {
         const unsigned char *in = &live_in[(size_t)i * value_count];
@@ -7495,6 +7580,15 @@ static void mir_allocate_registers(const unsigned char *live_in,
         if (required2 >= 0 && insn->src2 >= 0)
             ++preferences[(size_t)insn->src2 * MIR_COLOR_COUNT + required2];
     }
+    for (i = 0; i < value_count; ++i) {
+        const struct MirInsn *definition = mir_definition(i);
+
+        if (definition != NULL && type_size(definition->type) <= 2 &&
+            register_value[i] &&
+            mir_declared_register_value_use_count(i) >= 2)
+            preferences[(size_t)i * MIR_COLOR_COUNT + MIR_COLOR_BC] +=
+                mir.count + 1;
+    }
     /* Stable selection sort is plenty for the small per-function prototype. */
     for (i = 0; i < value_count; ++i) {
         int best = i;
@@ -7512,11 +7606,15 @@ static void mir_allocate_registers(const unsigned char *live_in,
             int right_wide =
                 right_definition != NULL &&
                 type_size(right_definition->type) == 4;
+            int left_register = register_value[left];
+            int right_register = register_value[right];
             if (cross_call[right] > cross_call[left] ||
                 (cross_call[right] == cross_call[left] &&
                  (right_wide > left_wide ||
                   (right_wide == left_wide &&
-                   degree[right] > degree[left]))))
+                   (right_register > left_register ||
+                    (right_register == left_register &&
+                     degree[right] > degree[left]))))))
                 best = candidate;
         }
         if (best != i) {
@@ -7652,6 +7750,7 @@ static void mir_allocate_registers(const unsigned char *live_in,
     mir.allocation_phi_moves = summary->phi_moves;
 
     free(color);
+    free(register_value);
     free(preferences);
     free(fixed_color);
     free(order);

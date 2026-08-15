@@ -49,7 +49,7 @@ portability surprises when code is moved from a hosted desktop compiler.
 | Function declarations and prototypes | Supported |
 | Old-style function declarations and definitions | Supported |
 | `typedef` | Supported |
-| Storage classes: `auto`, `extern`, `register`, `static` | Supported; `auto` is a no-op and `register` is only a hint |
+| Storage classes: `auto`, `extern`, `register`, `static` | Supported; `auto` is a no-op and `register` is an MIR allocation hint (see below) |
 | Type qualifiers: `const`, `volatile` | Accepted for source compatibility; no CP/M/Z80 memory-model semantics are provided |
 | Expressions and usual arithmetic conversions | Supported within the target type model |
 | `if`, `switch`, loops, `break`, `continue`, `goto`, `return` | Supported |
@@ -58,6 +58,32 @@ portability surprises when code is moved from a hosted desktop compiler.
 | `__FILE__`, `__LINE__`, `__DATE__`, `__TIME__`, `__STDC__` | Supported |
 | String literals and adjacent string literal concatenation | Supported |
 | Global and automatic initializers | Supported |
+
+### The `register` storage class
+
+`register` is an optimization hint for automatic objects and function
+parameters, including old-style parameter declarations. DCC preserves the
+hint through declaration parsing and MIR object promotion, and the MIR
+register allocator gives profitable register-backed values priority over
+otherwise-equivalent candidates. The allocator can still choose a stack home
+when calls, interference, value width, fixed operands, or transfer costs make
+that choice better, so the keyword does not guarantee a particular Z80
+register.
+
+Taking the address of a register-qualified object is a constraint violation:
+
+```c
+void example(void)
+{
+	register int value;
+	int *pointer = &value; /* error DCC-E0921 */
+}
+```
+
+The same rule applies in an unevaluated expression such as `sizeof &value`
+and to register-qualified function parameters. Arrays, aggregates, wide
+values, and values live across calls may remain in memory while still
+retaining these language semantics.
 
 ## Missing from C89
 
@@ -70,7 +96,6 @@ portability surprises when code is moved from a hosted desktop compiler.
 | Wide-character library behavior | Outside the CP/M 2.2 target model |
 | Read-only storage for `const` objects | Outside the CP/M 2.2 memory model |
 | Strict `volatile` memory/device access semantics | Outside the CP/M 2.2 memory model |
-| Forced register allocation from `register` | Not implemented |
 
 ## C99 additions
 

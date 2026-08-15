@@ -112,7 +112,7 @@ static void test_call_around(void)
     chk(*p == 30, "ptr correct after advance+call");
 }
 
-/* 5. register int is silently treated as a plain local (pointer-only feature) */
+/* 5. register int remains correct when no physical-register home is profitable */
 static void test_register_int(void)
 {
     register int i;
@@ -204,6 +204,18 @@ static void test_long_indirect_shift_reg(void)
     chk(p == dummy,                  "BC intact after want_dead=0");
 }
 
+/* 9. A register-qualified parameter remains eligible after parameter parsing
+ * and is preferred for the loop-carried MIR value. */
+static int sum_down(register int n)
+{
+    int total;
+
+    total = 0;
+    while (n-- > 0)
+        total += n;
+    return total;
+}
+
 int main(void)
 {
     test_walk();
@@ -214,6 +226,7 @@ int main(void)
     test_postinc();
     test_write();
     test_long_indirect_shift_reg();
+    chk(sum_down(100) == 4950, "register parameter loop");
 
     if (g_ng == 0)
         printf("success\n");
