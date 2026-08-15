@@ -553,14 +553,24 @@ static int mir_emit_named_address_root_to_hl(FILE *out,
     int memory_type;
     int memory_storage;
     int memory_offset;
-    struct Sym *global = find_global(insn->name);
+    struct Sym *global;
 
     if (!mir_scalar_memory_location(insn, &memory_type,
                                     &memory_storage, &memory_offset))
         return 0;
-    if ((global != NULL && global->storage == SC_FUNC) ||
-        memory_storage == SC_GLOBAL || memory_storage == SC_EXTERN ||
+    /* Look up the global/extern symbol table entry only after confirming
+     * via memory_storage (mir_scalar_memory_location, which resolves this
+     * specific instruction's own object/declared-local binding) that this
+     * name is genuinely global/extern/a function here. A local variable
+     * whose name happens to match an unrelated library function (e.g. a
+     * local named "remove", colliding with stdio.h's remove() prototype)
+     * must not take this branch just because find_global() finds that
+     * unrelated global by the same name - doing so emits `extrn`/`ld
+     * hl,<label>` for the library function's address instead of this
+     * local's own frame address, corrupting every read through it. */
+    if (memory_storage == SC_GLOBAL || memory_storage == SC_EXTERN ||
         memory_storage == SC_FUNC) {
+        global = find_global(insn->name);
         const char *assembly_name = asm_name_for(
             global != NULL ? sym_asm_name(global)
                            : mir_declared_link_name(insn->name));
@@ -22602,35 +22612,27 @@ static int mir_unary_is_fusable_not_branch(int i)
 static int mir_match_double_logical_not(
     int outer_instruction, int *source_value)
 {
-    const struct MirInsn *outer;
-    const struct MirInsn *inner;
-    const struct MirInsn *source;
-    int instruction;
-
-    if (outer_instruction < 0 || outer_instruction >= mir.count)
-        return 0;
-    outer = &mir.insns[outer_instruction];
-    if (outer->opcode != MIR_UNARY || outer->immediate != '!')
-        return 0;
-    inner = mir_definition(outer->src1);
-    if (inner == NULL || inner->opcode != MIR_UNARY ||
-        inner->immediate != '!' ||
-        mir_value_use_count(inner->dst) != 1)
-        return 0;
-    source = mir_definition(inner->src1);
-    if (source != NULL && source->opcode == MIR_UNARY &&
-        source->immediate == '!')
-        return 0;
-    for (instruction = 0; instruction < mir.count; ++instruction) {
-        const struct MirInsn *use = &mir.insns[instruction];
-
-        if (use->opcode == MIR_UNARY && use->immediate == '!' &&
-            use->src1 == outer->dst)
-            return 0;
-    }
-    if (source_value != NULL)
-        *source_value = inner->src1;
-    return 1;
+    /* Disabled: this fusion elided the inner "!" and reloaded its source
+     * value again later, at the outer instruction's position - but that
+     * source value's liveness/backend-slot assignment was computed from
+     * the unmodified MIR graph, in which its only recorded use is the
+     * inner instruction, immediately after its own definition. The
+     * allocator is therefore free to reclaim its register or spill slot
+     * for any value defined from that point on, including the outer
+     * instruction's own destination - even though this fusion reads it
+     * again well after such a reuse could have (and, in a bloom-filter-
+     * style `!!(bits[a/8] & (1U << (a%8)))` used inline within a larger
+     * printf argument list, did) already happen, silently substituting an
+     * unrelated spilled value from outside the function's own frame.
+     * Fixing this needs the allocator itself to know about the fused,
+     * extended liveness before assigning slots/colors, not just a check
+     * available at this text-emission stage; until then, always fall
+     * back to the unfused double-unary emission, which independently
+     * freshly defines and stores each "!" result and does not depend on
+     * rereading a value whose recorded liveness already ended earlier. */
+    (void)outer_instruction;
+    (void)source_value;
+    return 0;
 }
 
 static int mir_unary_is_elided_double_not_inner(int instruction)
@@ -26390,11 +26392,44 @@ int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
     if (insn->object >= 0 && insn->object < mir.object_count) {
         const struct MirObject *object = &mir.objects[insn->object];
         *type = object->type;
+        /* A VLA identifier's MIR_LOAD/MIR_PARAM/MIR_ADDRESS fetches the
+         * base pointer vlaalloc stashed for it, typed as a pointer to the
+         * element type by mir_lower_expr's AST_IDENT case - but the
+         * object table records the array's plain element type (e.g.
+         * TYPE_BOOL for `bool v[n]`), since that is what indexed
+         * loads/stores through the object actually access. Trust the
+         * instruction's own type when it claims strictly more pointer
+         * depth than the object AND the name is a declared VLA whose
+         * element type is a single byte (bool/char) - using the object's
+         * element type instead would, for such a 1-byte element,
+         * normalize this pointer like any other narrow value (e.g. to 0
+         * or 1 for _Bool), corrupting every later index into the array.
+         * Scoping this to 1-byte VLA element names specifically (rather
+         * than any ptr-depth mismatch, or any VLA at all) matters: a
+         * wider (e.g. int) VLA element's own type already behaves enough
+         * like a pointer for the surrounding scalar-cfg machinery, and
+         * unconditionally trusting insn->type regressed tbig's
+         * long-arithmetic file I/O (non-VLA) and, applied to every VLA
+         * regardless of element width, cost tvla/tvlax a large constant
+         * per-access overhead multiplied across their stress-test loop
+         * counts. */
+        if (mir_declared_is_vla_object(insn->name) &&
+            type_size(*type) == 1 &&
+            type_ptr_depth(insn->type) > type_ptr_depth(*type))
+            *type = insn->type;
         *storage = object->storage;
         *offset = object->offset + (int)insn->immediate;
         return 1;
     }
     if (mir_declared_location(insn->name, type, storage, offset)) {
+        /* Same VLA base-pointer-vs-element-type reconciliation as the
+         * object-table branch above, for a name that only resolves
+         * through the declared-locals table (e.g. a fresh per-use reload
+         * synthesized without the alias-resolved object index attached). */
+        if (mir_declared_is_vla_object(insn->name) &&
+            type_size(*type) == 1 &&
+            type_ptr_depth(insn->type) > type_ptr_depth(*type))
+            *type = insn->type;
         *offset += (int)insn->immediate;
         return 1;
     }

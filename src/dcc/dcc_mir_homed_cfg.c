@@ -2239,17 +2239,23 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                  * still needs HL/DE scratch, handled conservatively by
                  * mir_emit_ix_offset_address_to_home. */
                 int memory_type, memory_storage, memory_offset;
-                struct Sym *global = find_global(insn->name);
+                struct Sym *global;
                 if (!mir_scalar_memory_location(insn, &memory_type,
                                                 &memory_storage,
                                                 &memory_offset))
                     goto done;
                 memory_offset = mir_homed_frame_offset(
                     memory_storage, memory_offset, uses_iy);
-                if ((global != NULL && global->storage == SC_FUNC) ||
-                    memory_storage == SC_GLOBAL ||
+                /* See dcc_mir_spilled_cfg.c's mir_emit_named_address_root_to_hl
+                 * for why global must not be looked up (and trusted) before
+                 * memory_storage confirms this instruction is actually
+                 * global/extern/a function - a local whose name collides
+                 * with an unrelated library function must keep its own
+                 * ix-relative address. */
+                if (memory_storage == SC_GLOBAL ||
                     memory_storage == SC_EXTERN ||
                     memory_storage == SC_FUNC) {
+                    global = find_global(insn->name);
                     const char *assembly_name = asm_name_for(
                         global != NULL ? sym_asm_name(global)
                                        : mir_declared_link_name(insn->name));
@@ -2357,6 +2363,25 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                 int instruction;
                 int preserve_hl_de;
                 int preserve_hl;
+                /* An expression-statement's assignment value (e.g. the
+                 * discarded result of `c->field = v;` used as a
+                 * statement) still lowers to a MIR_LOAD_INDIRECT of the
+                 * just-stored location with no real consumer. Skipping
+                 * dead scalar loads elsewhere in this file already
+                 * assumes such a value never needs a register - but here
+                 * it can still be assigned one (e.g. reusing a live
+                 * pointer parameter's own HL home with zero visible
+                 * uses), and the emission below unconditionally computes
+                 * into HL regardless, clobbering that other value's home
+                 * a later instruction still depends on (see a
+                 * back-to-back bitfield store through the same pointer:
+                 * the second field's address reuses the first
+                 * memberaddr's zero-offset HL binding, which this dead
+                 * load would otherwise silently overwrite). A volatile
+                 * access must still happen for its observable read. */
+                if (!mir_value_has_use(insn->dst) &&
+                    (insn->memory_flags & 1) == 0)
+                    break;
                 if (mir_homed_paired_byte_value(insn->dst))
                     break;
                 if ((insn->memory_size == 1 || insn->memory_size == 2) &&
@@ -2452,6 +2477,32 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     int preserve_bc = !preserve_bc_iy &&
                         mir_home_color_live_across(
                             instruction, MIR_COLOR_BC);
+                    /* insn->src1 (the field's address) can itself be
+                     * homed to HL - but this sequence unconditionally
+                     * reuses HL as scratch to shift/mask insn->src2's
+                     * value first. Reloading src1 afterward via
+                     * mir_emit_home_to_hl would then wrongly report
+                     * "already in HL" (it only consults the static
+                     * allocation color, unaware HL has since been
+                     * overwritten by that scratch use), silently
+                     * substituting the shifted value for the address
+                     * and corrupting the store. Move it into IY (a
+                     * push/pop pair, net stack-neutral) before the value
+                     * computation clobbers HL, then restore it from IY
+                     * instead of re-deriving it - a persistent stack
+                     * push here (rather than a same-instruction push/pop
+                     * round trip) would shift SP under any later
+                     * SP-relative parameter rematerialization in a
+                     * frameless function and corrupt an unrelated
+                     * access, so this must not change SP by the time the
+                     * next instruction runs. IY is free here unless this
+                     * same instruction also preserves a BC:IY pair
+                     * (preserve_bc_iy), a combination rare enough to
+                     * leave on the pre-existing (already broken for that
+                     * narrow overlap) path rather than risk clobbering
+                     * that pair's preserved value. */
+                    int src1_needs_stash = !preserve_bc_iy &&
+                        mir.allocation_colors[insn->src1] == MIR_COLOR_HL;
                     if (preserve_hl_de)
                         fputs("\tpush de\n\tpush hl\n", out);
                     if (preserve_bc_iy)
@@ -2459,6 +2510,11 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     if (preserve_hl) fputs("\tpush hl\n", out);
                     if (preserve_de) fputs("\tpush de\n", out);
                     if (preserve_bc) fputs("\tpush bc\n", out);
+                    if (src1_needs_stash) {
+                        if (!mir_emit_home_to_hl(out, insn->src1))
+                            goto done;
+                        fputs("\tpush hl\n\tpop iy\n", out);
+                    }
                     if (!mir_emit_home_to_hl(out, insn->src2))
                         goto done;
                     mir_emit_hl_and_const(
@@ -2468,7 +2524,9 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                         fputs("\tadd hl,hl\n", out);
                     mir_emit_hl_and_const(out, insn->bit_mask);
                     fputs("\tpush hl\n", out);
-                    if (!mir_emit_home_to_hl(out, insn->src1))
+                    if (src1_needs_stash)
+                        fputs("\tpush iy\n\tpop hl\n", out);
+                    else if (!mir_emit_home_to_hl(out, insn->src1))
                         goto done;
                     fputs("\tpush hl\n\tld a,(hl)\n\tinc hl\n"
                           "\tld h,(hl)\n\tld l,a\n", out);
@@ -3096,7 +3154,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
         default:
             goto done;
         }
-        if (mir_instruction_has_phi_fallthrough(i, 0) &&
+        if (mir_instruction_has_phi_fallthrough(i, 1) &&
             !mir_emit_homed_phi_copies(out, i, i + 1))
             goto done;
         mir_regional_after_instruction(i);

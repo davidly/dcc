@@ -7711,6 +7711,34 @@ static int pass_elim_ex_de_hl_before_ix_store(void)
  * back for a later pop into a different register (e.g. the xstrdup strcpy
  * loop).  Only hl is handled here.
  */
+/* True if `tmp` reads register h or l as a source operand: "ld r,h"/"ld r,l"
+ * (copying h or l into another register), or a single-operand instruction
+ * whose sole operand is exactly "h" or "l" ("or l"/"and h"/"cp l"/etc).
+ * Missing this class of read - as an earlier version of this file did - let
+ * hl_is_written_before_read_from below wrongly treat a "ld b,h / ld c,l"
+ * copy immediately after a removed "pop hl; push hl" pair as "neutral",
+ * concluding hl was safely overwritten before ever being read when it was
+ * in fact read (via b/c) first; that silently substituted a stale,
+ * since-clobbered hl for the value the pop/push pair was restoring from
+ * the stack. */
+static int line_reads_h_or_l(const char *tmp)
+{
+    const char *comma = strrchr(tmp, ',');
+    const char *operand;
+
+    if (comma != NULL) {
+        operand = comma + 1;
+    } else {
+        operand = strchr(tmp, ' ');
+        if (operand == NULL)
+            return 0;
+        ++operand;
+        while (*operand == ' ' || *operand == '\t')
+            ++operand;
+    }
+    return strcmp(operand, "h") == 0 || strcmp(operand, "l") == 0;
+}
+
 /* Returns 1 if HL is written (all of HL, or at least L with H following) before
  * it is read, scanning forward from line `start`.  Conservative: returns 0 if
  * uncertain.  Used to guard pop hl; push hl removal. */
@@ -7731,8 +7759,11 @@ static int hl_is_written_before_read_from(int start)
         if (strcmp(tmp, "inc hl") == 0) return 0;
         if (strcmp(tmp, "dec hl") == 0) return 0;
         if (strncmp(tmp, "add hl,", 7) == 0) return 0;
+        if (strncmp(tmp, "adc hl,", 7) == 0) return 0;
+        if (strncmp(tmp, "sbc hl,", 7) == 0) return 0;
         if (strcmp(tmp, "push hl") == 0) return 0;
         if (strcmp(tmp, "ex de,hl") == 0) return 0;
+        if (line_reads_h_or_l(tmp)) return 0;
         /* Otherwise neutral (push de, push bc, push ix, ld de,N, etc.) — keep scanning */
     }
     return 0; /* conservative: don't remove if undetermined */

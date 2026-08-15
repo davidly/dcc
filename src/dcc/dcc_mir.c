@@ -3737,15 +3737,46 @@ static int mir_initializer_type_at_offset(int aggregate_type, int offset)
 
     if (struct_id <= 0 || offset < 0)
         return 0;
+    /* A union can have several overlapping fields starting at the same
+     * offset (e.g. `union { char text[8]; struct { int code; }; }` both
+     * start at offset 0). mir_capture_initializer only reaches here to
+     * refine a type the caller already resolved by field NAME for a
+     * designated initializer (dcc_decl.c's find_field_def), typically to
+     * recurse into a nested aggregate the caller only tracked by offset -
+     * so a sibling union member that merely happens to share this byte
+     * must not silently override that already-correct field. Resolve any
+     * non-array field first: an array match is only unambiguous when it
+     * is the only field spanning this offset (an array-typed union
+     * member with no overlapping scalar/struct sibling, which the second
+     * loop below still covers exactly as before). */
     for (i = 0; i < nfield_defs; ++i) {
         const struct FieldDef *field = &field_defs[i];
         int relative;
         int nested_type;
         if (field->parent_struct_id != struct_id || field->is_promoted ||
+            field->is_array ||
             offset < field->offset || offset >= field->offset + field->size)
             continue;
         relative = offset - field->offset;
-        if (field->is_array && field->elem_size > 0) {
+        if (type_is_struct_object(field->type)) {
+            nested_type = mir_initializer_type_at_offset(field->type,
+                                                         relative);
+            if (nested_type != 0)
+                return nested_type;
+        }
+        if (relative == 0)
+            return field->type;
+    }
+    for (i = 0; i < nfield_defs; ++i) {
+        const struct FieldDef *field = &field_defs[i];
+        int relative;
+        int nested_type;
+        if (field->parent_struct_id != struct_id || field->is_promoted ||
+            !field->is_array || field->elem_size <= 0 ||
+            offset < field->offset || offset >= field->offset + field->size)
+            continue;
+        relative = offset - field->offset;
+        {
             int element_relative = relative % field->elem_size;
             if (type_is_struct_object(field->elem_type)) {
                 nested_type = mir_initializer_type_at_offset(
@@ -3756,14 +3787,6 @@ static int mir_initializer_type_at_offset(int aggregate_type, int offset)
             if (element_relative == 0)
                 return field->elem_type;
         }
-        if (type_is_struct_object(field->type)) {
-            nested_type = mir_initializer_type_at_offset(field->type,
-                                                         relative);
-            if (nested_type != 0)
-                return nested_type;
-        }
-        if (relative == 0)
-            return field->type;
     }
     return 0;
 }
@@ -5627,6 +5650,19 @@ void mir_resolve_deferred_metadata(void)
         if (insn->opcode == MIR_LOAD &&
             mir_declared_is_array_object(insn->name)) {
             insn->opcode = MIR_ADDRESS;
+            insn->type = type_add_ptr(named_type);
+        } else if (insn->opcode == MIR_LOAD &&
+                   mir_declared_is_vla_object(insn->name)) {
+            /* A VLA identifier load fetches the base pointer that
+             * mir_lower_expr's AST_IDENT case stashed with a pointer
+             * type (the runtime address computed by vlaalloc), not a
+             * value of the VLA's element type. Overwriting it with the
+             * bare element type here (as the generic MIR_LOAD case
+             * below does) silently drops the pointer bit - harmless for
+             * most element types, but for a 1-byte bool element the
+             * resulting "address" gets normalized to 0/1 like any other
+             * _Bool load, corrupting every subsequent index into the
+             * array and hanging on the resulting stray writes. */
             insn->type = type_add_ptr(named_type);
         } else if (insn->opcode == MIR_LOAD ||
                    insn->opcode == MIR_PARAM ||

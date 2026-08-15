@@ -936,11 +936,13 @@ static int mir_emit_regional_address_to_hl(FILE *out, int value)
             definition, &memory_type, &memory_storage,
             &memory_offset))
         return 0;
-    global = find_global(definition->name);
-    if ((global != NULL && global->storage == SC_FUNC) ||
-        memory_storage == SC_GLOBAL ||
+    /* See dcc_mir_spilled_cfg.c's mir_emit_named_address_root_to_hl for why
+     * global must only be trusted once memory_storage itself confirms this
+     * instruction is global/extern/a function. */
+    if (memory_storage == SC_GLOBAL ||
         memory_storage == SC_EXTERN ||
         memory_storage == SC_FUNC) {
+        global = find_global(definition->name);
         const char *assembly_name = asm_name_for(
             global != NULL ? sym_asm_name(global)
                            : mir_declared_link_name(definition->name));
