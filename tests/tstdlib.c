@@ -88,6 +88,12 @@ int main(void)
     check_int("atoinodig", atoi("abc"), 0);
     check_int("atoiempty", atoi(""), 0);
     check_int("atoiwide", atoi("32767"), 32767);
+    check_int("atoimin", atoi("-32768"), -32767 - 1);
+    check_int("atoinegzero", atoi("  -0"), 0);
+    check_int("atoiwrap16", atoi("65536"), 0);          /* 2^16 wraps to 0 */
+    check_int("atoiwrap16p1", atoi("65537"), 1);        /* 2^16+1 wraps to 1 */
+    check_int("atoiwrapbig", atoi("99999"), -31073);    /* 99999 mod 2^16, signed */
+    check_int("atoiwraphuge", atoi("4294967296"), 0);   /* huge input, deterministic wrap */
 
     /* atol: 32-bit decimal parse, same rules as atoi but full long range */
     check_long("atol0", atol("0"), 0L);
@@ -105,6 +111,10 @@ int main(void)
     check_long("atolnearmin", atol("-2147483647"), -2147483647L);
     check_long("atolmin", atol("-2147483648"), -2147483647L - 1L);
     check_long("atolnegzero", atol("  -0"), 0L);
+    check_long("atolwrap32", atol("4294967296"), 0L);              /* 2^32 wraps to 0 */
+    check_long("atolwrap32p1", atol("4294967297"), 1L);            /* 2^32+1 wraps to 1 */
+    check_long("atolwrapbig", atol("9999999999"), 1410065407L);    /* 9999999999 mod 2^32, signed */
+    check_long("atolwraphuge", atol("99999999999999999999"), 1661992959L); /* deterministic wrap, not UB crash */
 
     if (failures != 0)
         return 1;

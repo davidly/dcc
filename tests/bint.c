@@ -659,7 +659,7 @@ static void print_stats(void)
     if (!opt_verbose) return;
     for (i = 0; i < nsym; i++) if (sym[i].base >= 0) arrbytes += sym[i].size * INT_BYTES;
     fprintf(stderr, "\nBINT usage summary\n");
-    fprintf(stderr, "  Source bytes:          %ld / %ld\n", slen, MAXSRC);
+    fprintf(stderr, "  Source bytes:          %u / %u\n", (unsigned)slen, (unsigned)MAXSRC);
     fprintf(stderr, "  BASIC lines:           %d / %d\n", nlines, MAXPROG);
     fprintf(stderr, "  P-code instructions:   %d / %d\n", cp, MAXCODE);
     fprintf(stderr, "  Symbols:               %d / %d\n", nsym, MAXSYM);

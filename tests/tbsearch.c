@@ -144,6 +144,54 @@ static void t_bsearch_edges(void)
         fail("bsearch two-elem miss high");
 }
 
+/* ================================================= bsearch: wide comparator */
+/* Regression coverage for a real runtime bug: the comparator result's sign
+ * was tested via the Z80 flag left by "ld a,h / or l" (OR of the two bytes),
+ * which is NOT the sign bit of the 16-bit result whenever the low byte's own
+ * bit 7 is set while the high byte is 0 - e.g. +128 (0x0080) looks negative
+ * that way. cmp_int_asc above only ever returns -1/0/1, so it can't land in
+ * that range; this comparator returns the raw difference, and the array is
+ * spaced far enough apart that ordinary present-key lookups produce
+ * comparator results throughout (and beyond) the 128..255 danger zone. */
+static int wide[10];
+
+static int cmp_diff(const void *a, const void *b)
+{
+    int x = *(const int *)a;
+    int y = *(const int *)b;
+
+    return x - y;
+}
+
+static void t_bsearch_wide_comparator(void)
+{
+    int i;
+    int key;
+    const int *r;
+
+    for (i = 0; i < 10; i++)
+        wide[i] = i * 70;      /* 0,70,140,...,630 */
+
+    for (i = 0; i < 10; i++) {
+        key = i * 70;
+        r = (const int *)bsearch(&key, wide, (size_t)10, sizeof(int), cmp_diff);
+        if (r == 0 || *r != key)
+            fail("bsearch wide-comparator missed present key");
+    }
+    for (i = 0; i < 9; i++) {
+        key = i * 70 + 35;
+        r = (const int *)bsearch(&key, wide, (size_t)10, sizeof(int), cmp_diff);
+        if (r != 0)
+            fail("bsearch wide-comparator found absent gap key");
+    }
+    key = -35;
+    if (bsearch(&key, wide, (size_t)10, sizeof(int), cmp_diff) != 0)
+        fail("bsearch wide-comparator found below-min key");
+    key = 665;
+    if (bsearch(&key, wide, (size_t)10, sizeof(int), cmp_diff) != 0)
+        fail("bsearch wide-comparator found above-max key");
+}
+
 /* ============================================================ bsearch: struct */
 static struct rec recs[20];
 
@@ -175,6 +223,7 @@ int main(void)
 
     t_bsearch_int();
     t_bsearch_edges();
+    t_bsearch_wide_comparator();
     t_bsearch_struct();
 
     if (fails != 0) {

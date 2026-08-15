@@ -2693,8 +2693,8 @@ _abs:
         xor     a
         sub     l
         ld      l,a
-        ld      a,0
-        sbc     a,h
+        sbc     a,a             ; A = 0 - carry (sign-extend the borrow)
+        sub     h
         ld      h,a
         ret
 
@@ -2709,23 +2709,27 @@ _labs:
         push    bc
         bit     7,d
         ret     z
-        ld      a,l
-        cpl
+        xor     a
+        sub     l
         ld      l,a
-        ld      a,h
-        cpl
+        ; The sbc a,a/sub trick used in _abs only works when the outgoing
+        ; carry doesn't need to feed another limb: after a borrow (carry=1),
+        ; sbc a,a leaves A=FFh, and a plain SUB can never set carry off of
+        ; FFh (FFh < operand is never true for an 8-bit operand), so the
+        ; borrow chain would silently drop on the next limb. sbc a,r folds
+        ; the incoming carry into its own comparison, so it stays correct
+        ; across chained limbs - use it for h and e, whose carry-out must
+        ; propagate. The trick is safe again for d, since nothing consumes
+        ; its carry-out afterward.
+        ld      a,0
+        sbc     a,h
         ld      h,a
-        ld      a,e
-        cpl
+        ld      a,0
+        sbc     a,e
         ld      e,a
-        ld      a,d
-        cpl
+        sbc     a,a
+        sub     d
         ld      d,a
-        inc     hl
-        ld      a,h
-        or      l
-        ret     nz
-        inc     de
         ret
 
         public  _div
@@ -2892,48 +2896,56 @@ bs_loop:
         ld      hl,(__bs_num)
         ld      a,h
         or      l
-        jp      z,bs_nf                 ; num == 0 -> not found
+        jr      z,bs_nf                 ; num == 0 -> not found
         ; half = num >> 1
         srl     h
         rr      l
-        ld      (__bs_half),hl
+        push    hl                      ; save half across comparator
         ; here = base + half*size
         ld      de,(__bs_size)
         call    __mulu                  ; HL = half*size
         ld      de,(__bs_base)
-        add     hl,de
-        ld      (__bs_here),hl
+        add     hl,de                   ; HL = here
         ; compare(key, here): push here (b), push key (a)
-        push    hl
+        push    hl                      ; stack: half, here
         ld      hl,(__bs_key)
-        push    hl
+        push    hl                      ; stack: half, here, key
         ld      hl,(__bs_cmp)
         call    __call_hl
-        pop     bc
-        pop     bc
         ld      a,h
         or      l
         jr      z,bs_found              ; equal
+        ; S from "or l" reflects bit 7 of (h|l), not bit 7 of h - e.g.
+        ; h=00h,l=80h is +128 but would look negative via that flag - so
+        ; the sign of the 16-bit result needs its own explicit test.
         bit     7,h
-        jr      nz,bs_lt                ; result < 0 -> search lower half
+        jr      nz,bs_lt
         ; result > 0 -> search upper half: base = here+size; num = num-half-1
-        ld      hl,(__bs_here)
-        ld      de,(__bs_size)
+        ; DE = here, HL = half (key on top is unused for this branch)
+        pop     bc                      ; discard key
+        pop     de                      ; DE = here
+        pop     hl                      ; HL = half
+        ld      a,(__bs_num)            ; only original bit 0 is needed:
+        rra                             ; C = original num bit 0.
+        jr      c,bs_upper_num          ; num-half-1 = half   (num odd)
+        dec     hl                      ; num-half-1 = half-1 (num even)
+bs_upper_num:
+        ld      (__bs_num),hl
+        ld      hl,(__bs_size)
         add     hl,de
         ld      (__bs_base),hl
-        ld      hl,(__bs_num)
-        ld      de,(__bs_half)
-        or      a
-        sbc     hl,de
-        dec     hl
-        ld      (__bs_num),hl
         jp      bs_loop
 bs_lt:
-        ld      hl,(__bs_half)
+        ; result < 0: num = half
+        pop     bc                      ; discard key
+        pop     bc                      ; discard here
+        pop     hl                      ; recover half
         ld      (__bs_num),hl
         jp      bs_loop
 bs_found:
-        ld      hl,(__bs_here)
+        pop     bc                      ; discard key
+        pop     hl                      ; recover here
+        pop     bc                      ; discard half
         ret
 bs_nf:
         ld      hl,0
@@ -2943,8 +2955,6 @@ __bs_base:      dw      0
 __bs_num:       dw      0
 __bs_size:      dw      0
 __bs_cmp:       dw      0
-__bs_half:      dw      0
-__bs_here:      dw      0
 
         public  _qsort
 ; void qsort(void *base, size_t num, size_t size,
@@ -2956,85 +2966,121 @@ __bs_here:      dw      0
 ; in static scratch (the comparator may clobber all registers), so qsort is not
 ; re-entrant from within its own comparator -- acceptable for this runtime.
 _qsort:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)
+        ; __qs_gap initially holds num during setup, then is reused for gap.
+        pop     bc              ; return address
+        pop     hl              ; base
         ld      (__qs_base),hl
-        ld      l,(ix+6)
-        ld      h,(ix+7)
-        ld      (__qs_num),hl
-        ld      l,(ix+8)
-        ld      h,(ix+9)
+        pop     hl              ; num
+        ld      (__qs_gap),hl   ; temporary: num
+        pop     hl              ; size
         ld      (__qs_size),hl
-        ld      l,(ix+10)
-        ld      h,(ix+11)
+        pop     hl              ; cmp
         ld      (__qs_cmp),hl
-        ; if num < 2 nothing to do
-        ld      hl,(__qs_num)
-        ld      de,2
+
+        ; Restore caller's arguments.
+        push    hl              ; cmp
+        ld      hl,(__qs_size)
+        push    hl              ; size
+        ld      hl,(__qs_gap)
+        push    hl              ; num
+        ld      hl,(__qs_base)
+        push    hl              ; base
+        push    bc              ; return address
+
+        ; if num < 2, nothing to do
+        ld      hl,(__qs_gap)
+        ld      a,h
         or      a
-        sbc     hl,de
-        jp      c,qs_ret
+        jr      nz,qs_have2
+        ld      a,l
+        cp      2
+        ret     c
+
+qs_have2:
+        ; end = base + num*size
+        ld      de,(__qs_size)
+        call    __mulu
+        ld      de,(__qs_base)
+        add     hl,de
+        ld      (__qs_end),hl
+
         ; gap = num >> 1
-        ld      hl,(__qs_num)
+        ld      hl,(__qs_gap)
         srl     h
         rr      l
         ld      (__qs_gap),hl
+
 qs_gaploop:
         ; gapb = gap * size
         ld      hl,(__qs_gap)
         ld      de,(__qs_size)
         call    __mulu
         ld      (__qs_gapb),hl
-        ; i = gap ; pi = base + gapb
-        ld      hl,(__qs_base)
-        ld      de,(__qs_gapb)
+
+        ; pi = base + gapb
+        ld      de,(__qs_base)
         add     hl,de
         ld      (__qs_pi),hl
-        ld      hl,(__qs_gap)
-        ld      (__qs_i),hl
+
 qs_iloop:
-        ld      hl,(__qs_i)
-        ld      de,(__qs_num)
-        or      a
-        sbc     hl,de
-        jp      nc,qs_gapnext           ; i >= num -> end of this gap pass
-        ; pj = pi ; j = i
+        ; while pi < end
         ld      hl,(__qs_pi)
-        ld      (__qs_pj),hl
-        ld      hl,(__qs_i)
-        ld      (__qs_j),hl
-qs_inner:
-        ; while j >= gap
-        ld      hl,(__qs_j)
-        ld      de,(__qs_gap)
+        ld      de,(__qs_end)
         or      a
         sbc     hl,de
-        jr      c,qs_idone              ; j < gap -> stop
-        ; pprev = pj - gapb
-        ld      hl,(__qs_pj)
+        jp      nc,qs_gapnext
+
+        ; pj = pi.  Keep pj on the stack while walking backward.
+        ld      hl,(__qs_pi)
+        push    hl
+
+qs_inner:
+        ; Recover pj and calculate pprev = pj - gapb.
+        pop     hl              ; HL = pj
         ld      de,(__qs_gapb)
-        sbc     hl,de           ; carry already 0 (fell through "jr c,qs_idone" above)
-        ld      (__qs_pprev),hl
-        ; compare(pprev, pj): push pj (b), push pprev (a)
-        ld      hl,(__qs_pj)
+        or      a
+        sbc     hl,de           ; HL = pprev
+
+        ; Stop when pprev < base, equivalent to j < gap.
+        ;
+        ; Preserve pprev with push/pop; POP does not disturb flags.
         push    hl
-        ld      hl,(__qs_pprev)
-        push    hl
+        ld      de,(__qs_base)
+        or      a
+        sbc     hl,de
+        pop     hl              ; HL = pprev, flags still from compare
+        jr      c,qs_idone
+
+        ; compare(pprev, pj)
+        ;
+        ; BC = pprev
+        ; reconstruct pj as pprev + gapb
+        ld      b,h
+        ld      c,l
+        ld      de,(__qs_gapb)
+        add     hl,de           ; HL = pj
+
+        push    hl              ; b = pj
+        push    bc              ; a = pprev
+
         ld      hl,(__qs_cmp)
         call    __call_hl
-        pop     bc
-        pop     bc
+
+        ; Comparator arguments remain on the stack.
         ld      a,h
         or      l
-        jr      z,qs_idone              ; cmp == 0 -> ordered, stop
+        jr      z,qs_ordered
         bit     7,h
-        jr      nz,qs_idone             ; cmp < 0 -> ordered, stop
-        ; cmp > 0 -> swap *pprev and *pj (size bytes), then step down by gap
-        ld      hl,(__qs_pprev)
-        ld      de,(__qs_pj)
+        jr      nz,qs_ordered
+
+        ; cmp > 0:
+        ; recover pprev and pj directly from comparator arguments.
+        pop     hl              ; HL = pprev
+        pop     de              ; DE = pj
+
+        ; Save pprev as the next pj while swapping.
+        push    hl
+
         ld      bc,(__qs_size)
 qs_swap:
         ld      a,(de)
@@ -3049,26 +3095,25 @@ qs_swap:
         ld      a,b
         or      c
         jr      nz,qs_swap
-        ld      hl,(__qs_pprev)
-        ld      (__qs_pj),hl
-        ld      hl,(__qs_j)
-        ld      de,(__qs_gap)
-        or      a
-        sbc     hl,de
-        ld      (__qs_j),hl
+
+        ; saved pprev is now the next pj
         jp      qs_inner
+
+qs_ordered:
+        ; discard comparator arguments
+        pop     bc              ; pprev
+        pop     bc              ; pj
+
 qs_idone:
-        ; i++ ; pi += size
-        ld      hl,(__qs_i)
-        inc     hl
-        ld      (__qs_i),hl
+        ; pi += size
         ld      hl,(__qs_pi)
         ld      de,(__qs_size)
         add     hl,de
         ld      (__qs_pi),hl
         jp      qs_iloop
+
 qs_gapnext:
-        ; gap >>= 1 ; continue while gap > 0
+        ; gap >>= 1
         ld      hl,(__qs_gap)
         srl     h
         rr      l
@@ -3076,20 +3121,15 @@ qs_gapnext:
         ld      a,h
         or      l
         jp      nz,qs_gaploop
-qs_ret:
-        pop     ix
         ret
+
 __qs_base:      dw      0
-__qs_num:       dw      0
+__qs_end:       dw      0
 __qs_size:      dw      0
 __qs_cmp:       dw      0
 __qs_gap:       dw      0
 __qs_gapb:      dw      0
-__qs_i:         dw      0
 __qs_pi:        dw      0
-__qs_j:         dw      0
-__qs_pj:        dw      0
-__qs_pprev:     dw      0
 
 
         public  __r1u
@@ -3097,37 +3137,60 @@ __qs_pprev:     dw      0
 ; Input:  HL = dividend, E = divisor (1..255)
 ; Output: HL = remainder
 ; Used for unsigned x % C when C fits in one byte and is not a power of two.
+;
+; No E==0 guard: dccpeep only ever substitutes this in for a compile-time
+; constant divisor, and it explicitly refuses divv <= 0 (see peep_pass_once's
+; "Leave divide-by-zero ... alone"), so a live call with E==0 cannot happen
+; from dcc-generated code. A caller that violates the documented 1..255
+; contract directly (e.g. hand-written asm) gets an undefined result, not the
+; deterministic dividend-echo fallback __udivmod/__modu give for a runtime
+; divisor of zero.
 __r1u:
-        push    bc              ; B reused as the bit counter
+        push    bc
         push    af
-        ld      a,e
+
+        ; Values < 256 need only eight dividend bits.
+        ld      a,h
         or      a
-        jr      nz,R1U0
-        ; Undefined in C, but keep a deterministic fallback for divisor 0.
-        pop     af
-        pop     bc
-        ret
-R1U0:
-        ; Restoring division, one dividend bit per pass, but the partial
-        ; remainder is held in A alone rather than in a 16-bit register pair.
-        ; The loop invariant is A < E, so shifting one bit in can produce at
-        ; most 2*E-1 <= 509 - a 9-bit value whose top bit is exactly the carry
-        ; RLA leaves behind.  That removes the second half of the register
-        ; pair and with it the `rl b` / `ld a,b` / `or a` / `sbc a,0` chain the
-        ; 16-bit form needed, and frees B to drive a djnz.
-        xor     a               ; A = partial remainder, kept < E
-        ld      b,16            ; bit counter
-R1U1:
-        add     hl,hl           ; next dividend bit -> carry
-        rla                     ; A = 2*A + bit, carry = that value's 9th bit
-        jr      c,R1US          ; 9th bit set => value >= 256 > E, so E fits
+        jr      nz,R1U16
+        ld      h,l
+        ld      l,0
+        ld      b,8
+        jr      R1UC
+
+R1U16:
+        ld      b,16
+
+R1UC:
+        ; For E < 128, 2*remainder+bit can never exceed 255.
+        bit     7,e
+        jr      nz,R1UBIG
+
+        xor     a
+R1USMALL:
+        add     hl,hl
+        rla
         cp      e
-        jr      c,R1UN          ; still below E: nothing to subtract
-R1US:
-        sub     e               ; wraps correctly on the carry path too, where
-                                ; the true value is 256+A and 256+A-E < 256
-R1UN:
-        djnz    R1U1
+        jr      c,R1USNEXT
+        sub     e
+R1USNEXT:
+        djnz    R1USMALL
+        jr      R1UDONE
+
+R1UBIG:
+        xor     a
+R1UBL:
+        add     hl,hl
+        rla
+        jr      c,R1UBSUB
+        cp      e
+        jr      c,R1UBNEXT
+R1UBSUB:
+        sub     e
+R1UBNEXT:
+        djnz    R1UBL
+
+R1UDONE:
         ld      l,a
         ld      h,0
         pop     af
@@ -3173,9 +3236,12 @@ __r1s:
 ; -x and the high half of the negation never has to be formed.
 __r1p:
         push    af
+        ; Doubling H overflows out of the byte exactly when H's own bit 7
+        ; was set, so its carry is the 16-bit dividend's sign - same test
+        ; as "or a"/"jp m" on H alone, one byte shorter via "jr c".
         ld      a,h
-        or      a
-        jp      m,R1PN
+        add     a,a
+        jr      c,R1PN
         ; non-negative: the mask alone is the answer, and it clears H
         ld      a,l
         and     e
@@ -3213,13 +3279,24 @@ R1PN:
 ; of it, so in a module that also divides by a non-power of two its bytes are
 ; pure addition on top of the general divider.
 __q1p:
+        ; The only caller is dccpeep's constant-divisor substitution, which
+        ; always loads E fresh (the shift count) immediately before this
+        ; call and never expects it to survive after - so E is free to use
+        ; as the down-counter directly, and B/C are never touched at all.
         push    af
-        push    bc
-        ld      b,e             ; B = shift count, so DE is free from here
-        ld      a,h
-        or      a               ; S = sign of the dividend
-        ld      c,a             ; keep the sign byte across the shift
-        jp      p,Q1P0
+
+        bit     7,h
+        jr      nz,Q1PN
+
+Q1PP:
+        srl     h               ; logical: HL is a magnitude here
+        rr      l
+        dec     e
+        jr      nz,Q1PP
+        pop     af
+        ret
+
+Q1PN:
         ; negate HL: the low byte borrows into the high one, so "sbc a,a"
         ; turns that borrow into the 0FFh/0 that "sub h" then needs
         xor     a
@@ -3228,20 +3305,19 @@ __q1p:
         sbc     a,a
         sub     h
         ld      h,a             ; HL = |dividend|
-Q1P0:
-        srl     h               ; logical: HL is a magnitude here
+
+Q1PNL:
+        srl     h
         rr      l
-        djnz    Q1P0
-        bit     7,c
-        jr      z,Q1P1
+        dec     e
+        jr      nz,Q1PNL
+
         xor     a
         sub     l
         ld      l,a
         sbc     a,a
         sub     h
         ld      h,a
-Q1P1:
-        pop     bc
         pop     af
         ret
 
@@ -3674,9 +3750,9 @@ pf_loop:
         jp      z,pf_done
         inc     hl
         cp      '%'
-        jp      z,pf_percent
+        jr      z,pf_percent
         call    pf_emit_a
-        jp      pf_loop
+        jr      pf_loop
 
 pf_percent:
         xor     a
@@ -3696,7 +3772,7 @@ pf_pct_next:
         jp      z,pf_emit_and_loop
 
         cp      '-'
-        jp      z,pf_pct_left
+        jr      z,pf_pct_left
 
         ; '+' (force sign) and '#' (alternate form) are not implemented, but
         ; must still be recognized and skipped as no-op flags here rather
@@ -3710,24 +3786,24 @@ pf_pct_next:
         ; one argument, so only the '+'/'#' cosmetic effect itself is
         ; missing - nothing after it in the call is corrupted.
         cp      '+'
-        jp      z,pf_pct_next
+        jr      z,pf_pct_next
         cp      '#'
-        jp      z,pf_pct_next
+        jr      z,pf_pct_next
 
         cp      '.'
-        jp      z,pf_pct_dot
+        jr      z,pf_pct_dot
 
         ; C99 size_t length modifier.  In dcc, size_t is 16-bit, so
         ; %zu/%zd/%zi/%zx/%zX use the ordinary 16-bit integer handlers.
         cp      'z'
-        jp      z,pf_pct_z
+        jr      z,pf_pct_z
 
         ; Decimal field width: %2d / %3u / %8s etc.  A leading '0' (before any
         ; width digit) is the '0' zero-pad flag, not a width digit.
         cp      '0'
-        jp      c,pf_pct_done_width
+        jr      c,pf_pct_done_width
         cp      '9'+1
-        jp      nc,pf_pct_done_width
+        jr      nc,pf_pct_done_width
 
         cp      '0'
         jr      nz,pf_pct_acc
@@ -3736,7 +3812,7 @@ pf_pct_next:
         jr      nz,pf_pct_zero_digit    ; width already started: '0' is a digit
         ld      a,1
         ld      (pf_zero),a             ; leading '0' = zero-pad flag
-        jp      pf_pct_next
+        jr      pf_pct_next
 pf_pct_zero_digit:
         xor     a                       ; treat as digit value 0
         jr      pf_pct_acc2
@@ -3756,12 +3832,12 @@ pf_pct_acc2:
         add     a,e
         ld      (pf_width),a
         pop     de
-        jp      pf_pct_next
+        jr      pf_pct_next
 
 pf_pct_left:
         ld      a,1
         ld      (pf_left),a
-        jp      pf_pct_next
+        jr      pf_pct_next
 
 pf_pct_dot:
         ; Parse digits after '.' into pf_prec (e.g. %.4d  prec=4).
@@ -3776,9 +3852,9 @@ pf_pct_prec_loop:
         or      a
         jp      z,pf_done
         cp      '0'
-        jp      c,pf_pct_prec_done
+        jr      c,pf_pct_prec_done
         cp      '9'+1
-        jp      nc,pf_pct_prec_done
+        jr      nc,pf_pct_prec_done
         inc     hl
         sub     '0'
         ld      (pf_digit),a
@@ -3938,14 +4014,14 @@ pf_iprepad:
         or      a
         ret     nz
         ld      a,(pf_field)
-        jp      pf_pad_a
+        jr      pf_pad_a
 
 pf_ipostpad:
         ld      a,(pf_left)
         or      a
         ret     z
         ld      a,(pf_field)
-        jp      pf_pad_a
+        jr      pf_pad_a
 
 ; pf_zero_prec_blank: implement the C89 integer rule that an explicit
 ; precision of zero with a zero value emits no digits.  Call after building a
@@ -4945,7 +5021,7 @@ pf_f_nodot:
 pf_f_digloop:
         ld      a,(pf_fcnt)
         or      a
-        jp      z,pf_f_done
+        jr      z,pf_f_done
 
         ; frac *= 10.0f
         ld      hl,(pf_fl)
@@ -4995,11 +5071,11 @@ pf_f_digloop:
         ld      a,(pf_fcnt)
         dec     a
         ld      (pf_fcnt),a
-        jp      pf_f_digloop
+        jr      pf_f_digloop
 pf_f_done:
         ld      a,(pf_width)
         or      a
-        jp      z,pf_f_done_nowidth
+        jr      z,pf_f_done_nowidth
 
         ; NUL-terminate the accumulated text (pf_bufptr still points into
         ; pf_fwbuf here) so pf_emstr can replay it below, and measure its
@@ -5142,7 +5218,7 @@ pf_lng:
         ld      a,(hl)
         inc     hl
         cp      'd'
-        jp      z,pf_ld
+        jr      z,pf_ld
         cp      'u'
         jp      z,pf_lu
         cp      'x'
@@ -5150,7 +5226,7 @@ pf_lng:
         cp      'X'
         jp      z,pf_lxu
         cp      's'
-        jp      z,pf_ls
+        jr      z,pf_ls
         call    pf_emit_a
         jp      pf_loop
 
@@ -5724,6 +5800,37 @@ __asfl_pfx:
 ;
 ; CP/M 2.2 safely ignores unsupported BDOS functions, and emulators can
 ; intercept this call directly, so no version check is needed.
+;
+; Encoding choice and emulator implications:
+;
+; The CP/M 3 spec defines this value as: 0000h-FEFFh = no fatal error,
+; FF00h-FF7Fh = fatal error, FF80h-FFFCh reserved, FFFDh = killed by
+; hardware error, FFFEh = killed by Ctrl-C, FFFFh = "get" sentinel. Its
+; documented consumer is program chaining (BDOS 47) and the CCP's
+; SUBMIT ":" skip-next-command behavior, not a general host process
+; exit status.
+;
+; We deliberately do NOT use the FF00h-FF7Fh fatal band here. Instead we
+; pass the C int status through unchanged in the low byte (high byte 0
+; for 0..254, and 00FFh for -1), because ntvcm's own process exit code
+; is exactly this 16-bit value truncated to its low byte - i.e. ntvcm
+; gives exact Unix-style exit-code fidelity (exit(42) -> host exit 42,
+; exit(-1) -> host exit 255) as long as the low byte is used directly.
+;
+; That host-exit-code convention and the CP/M 3 fatal-error band are
+; mutually incompatible for negative/error codes: the fatal band
+; requires low byte 00h-7Fh, but the -1 -> 255 convention requires low
+; byte FFh. No single 16-bit value can satisfy both, so one has to give.
+; We chose exact ntvcm fidelity, since ntvcm is the primary/routine test
+; target. The consequence: emulators that faithfully implement the CP/M
+; 3 spec's fatal/non-fatal split (e.g. tnylpo, zxcc) only treat a
+; program as having failed when DE >= FF00h, which DCCRTL's encoding
+; never produces - so on those emulators, exit(-1) (and any other
+; nonzero dcc exit code) is reported as success, not failure. This is
+; an accepted tradeoff, not a bug: only ntvcm is expected to reflect
+; exact numeric exit codes to its host process; RunCPM, iz-cpm, cpmemu
+; and unpatched z88dk/cpm don't propagate an exit status via BDOS 108
+; at all, regardless of encoding.
 ; ------------------------------------------------------------
         public  __cpm_set_retcode
 __cpm_set_retcode:
@@ -5832,14 +5939,29 @@ stchk_end:
         db      0dh,0ah,'$'
 
         public  _atoi
+; int atoi(const char *nptr)
+;
+; Main HL   = accumulator
+; Shadow HL = string pointer
+; Shadow B  = 0 positive, FFh negative
+;
+; Clobbers DE and the alternate BC/DE/HL set.
 _atoi:
-        ; Leaf parser: fetch nptr without an IX frame and restore the
-        ; caller-cleanup stack before parsing.
-        pop     bc                      ; return address
+        pop     bc              ; return address
         ex      (sp),hl         ; HL = nptr
         push    bc
-        ld      de,0
-        ld      b,0
+
+        ; Move the string pointer to shadow HL.
+        push    hl
+        exx
+        pop     hl
+        ld      b,0             ; sign
+        exx
+
+        ld      hl,0            ; accumulator
+
+        ; Parse with shadow registers active.
+        exx
 at_ws:
         ld      a,(hl)
         cp      ' '
@@ -5849,51 +5971,66 @@ at_ws:
 at_ws_inc:
         inc     hl
         jr      at_ws
+
 at_sign:
         cp      '-'
         jr      nz,at_plus
-        ld      b,1
+        dec     b               ; FFh = negative
         inc     hl
         jr      at_digits
+
 at_plus:
-        cp      '+'             ; C89 atoi == (int)strtol(s,0,10): accept '+'
+        cp      '+'
         jr      nz,at_digits
         inc     hl
+
 at_digits:
         ld      a,(hl)
-        cp      '0'
-        jr      c,at_done_abs
-        cp      '9'+1
+        sub     '0'
+        cp      10
         jr      nc,at_done_abs
-        sub     '0'             ; A = digit value
-        push    hl              ; save string pointer
-        ld      h,d
-        ld      l,e             ; HL = accumulator
-        add     hl,hl           ; x2
-        ld      d,h
-        ld      e,l             ; DE = x2
-        add     hl,hl           ; x4
-        add     hl,hl           ; x8
-        add     hl,de           ; x8 + x2 = acc*10
-        ld      e,a
-        ld      d,0             ; DE = digit
-        add     hl,de           ; HL = acc*10 + digit
-        ex      de,hl           ; DE = new accumulator
-        pop     hl              ; restore string pointer
         inc     hl
+
+        ; Switch to main registers. A retains the digit.
+        exx
+
+        ; HL = HL * 10
+        ;
+        ; DE = x
+        ; HL = 2x
+        ; HL = 4x
+        ; HL = 5x
+        ; HL = 10x
+        ld      d,h
+        ld      e,l
+        add     hl,hl
+        add     hl,hl
+        add     hl,de
+        add     hl,hl
+
+        ; Add digit modulo 2^16.
+        add     a,l
+        ld      l,a
+        jr      nc,at_no_carry
+        inc     h
+at_no_carry:
+        exx
         jr      at_digits
+
 at_done_abs:
-        ex      de,hl
+        ; Shadow registers are active.
         ld      a,b
         or      a
-        jr      z,at_done
+        exx                    ; restore accumulator registers
+        ret     z
+
+        ; HL = -HL
         xor     a
         sub     l
         ld      l,a
-        ld      a,0
-        sbc     a,h
+        sbc     a,a
+        sub     h
         ld      h,a
-at_done:
         ret
 
         public  _atol
@@ -5902,19 +6039,30 @@ at_done:
 ; accepts an optional '+'/'-' sign, then consumes decimal digits.  Overflow
 ; wraps modulo 2^32 (same defined-behaviour stance as atoi's 2^16 wrap).
 ; Returns the signed long in DE:HL (DE = high word).
+;
+; No static scratch: the alternate register bank holds the pointer/sign
+; state (shadow HL = nptr, shadow B = 0/FFh sign) while the main bank's
+; DE:HL is the accumulator, so "exx" swaps context instead of touching
+; memory. EXX never affects AF, so A (the current digit, or the sign test
+; in atl_fin) survives every bank switch untouched.
 _atol:
-        ; The implementation already uses private scratch state, so the IX
-        ; frame served only to fetch nptr.
-        pop     bc                      ; return address
+        pop     bc              ; return address
         ex      (sp),hl         ; HL = nptr
         push    bc
-        ld      (__atl_p),hl            ; string pointer
+
+        ; Put pointer/sign in shadow registers.
+        push    hl
+        exx
+        pop     hl              ; shadow HL = nptr
+        ld      b,0             ; shadow B = sign
+        exx
+
+        ; Main DE:HL = accumulator.
         ld      hl,0
-        ld      (__atl_acc),hl
-        ld      (__atl_acc+2),hl        ; acc = 0
-        xor     a
-        ld      (__atl_neg),a
-        ld      hl,(__atl_p)
+        ld      de,0
+
+        ; Parse using shadow pointer.
+        exx
 atl_ws:
         ld      a,(hl)
         cp      ' '
@@ -5924,93 +6072,88 @@ atl_ws:
 atl_ws_i:
         inc     hl
         jr      atl_ws
+
 atl_sign:
         cp      '-'
         jr      nz,atl_plus
-        ld      a,1
-        ld      (__atl_neg),a
+        dec     b               ; B = FFh => negative
         inc     hl
-        jr      atl_pset
+        jr      atl_dig
+
 atl_plus:
         cp      '+'
-        jr      nz,atl_pset
+        jr      nz,atl_dig
         inc     hl
-atl_pset:
-        ld      (__atl_p),hl
+
 atl_dig:
-        ld      hl,(__atl_p)
+        ; Shadow registers active here.
         ld      a,(hl)
-        cp      '0'
-        jr      c,atl_fin
-        cp      '9'+1
-        jr      nc,atl_fin
         sub     '0'
-        ld      (__atl_d),a
+        cp      10
+        jr      nc,atl_fin
         inc     hl
-        ld      (__atl_p),hl
-        ; acc = acc*10 + digit, computed as acc*8 + acc*2 + digit
-        ld      hl,(__atl_acc)
-        ld      de,(__atl_acc+2)        ; DE:HL = acc
+
+        ; A = digit.  Switch to accumulator registers.
+        exx
+
+        ; DE:HL *= 10
+        ;
+        ; Form x2, keeping its low word in BC and spilling only its
+        ; high word.  Then turn DE:HL into x8 and add x2.
         add     hl,hl
         rl      e
-        rl      d                       ; DE:HL = acc*2
-        ld      (__atl_x2),hl
-        ld      a,e
-        ld      (__atl_x2+2),a
-        ld      a,d
-        ld      (__atl_x2+3),a          ; save acc*2
+        rl      d               ; DE:HL = acc*2
+        push    de              ; save high word of acc*2
+        ld      b,h
+        ld      c,l             ; BC = low word of acc*2
+
         add     hl,hl
         rl      e
-        rl      d                       ; acc*4
+        rl      d               ; acc*4
         add     hl,hl
         rl      e
-        rl      d                       ; DE:HL = acc*8
-        ld      bc,(__atl_x2)
-        add     hl,bc
+        rl      d               ; acc*8
+
+        add     hl,bc           ; low word of acc*10
         ex      de,hl
-        ld      bc,(__atl_x2+2)
-        adc     hl,bc
-        ex      de,hl                   ; DE:HL = acc*10
-        ld      a,(__atl_d)
-        ld      c,a
-        ld      b,0
-        add     hl,bc
-        jr      nc,atl_nc
-        inc     de
-atl_nc:
-        ld      (__atl_acc),hl
-        ld      (__atl_acc+2),de
-        jr      atl_dig
-atl_fin:
-        ld      hl,(__atl_acc)
-        ld      de,(__atl_acc+2)        ; DE:HL = acc
-        ld      a,(__atl_neg)
-        or      a
-        jr      z,atl_done
-        ld      a,l
-        cpl
+        pop     bc              ; BC = high word of acc*2
+        adc     hl,bc           ; high word of acc*10
+        ex      de,hl           ; DE:HL = acc*10
+
+        ; Add digit directly into the low byte.  A still contains digit.
+        add     a,l
         ld      l,a
-        ld      a,h
-        cpl
-        ld      h,a
-        ld      a,e
-        cpl
-        ld      e,a
-        ld      a,d
-        cpl
-        ld      d,a
-        inc     hl
-        ld      a,h
-        or      l
-        jr      nz,atl_done
+        jr      nc,atl_next
+        inc     h
+        jr      nz,atl_next
         inc     de
-atl_done:
+
+atl_next:
+        exx                    ; back to pointer/sign registers
+        jr      atl_dig
+
+atl_fin:
+        ; Shadow registers active.  Switch back to accumulator while
+        ; preserving the sign test in the flags.
+        ld      a,b
+        or      a
+        exx
+        ret     z
+
+        ; Negative: DE:HL = -DE:HL.
+        xor     a
+        sub     l
+        ld      l,a
+        ld      a,0
+        sbc     a,h
+        ld      h,a
+        ld      a,0
+        sbc     a,e
+        ld      e,a
+        sbc     a,a
+        sub     d
+        ld      d,a
         ret
-__atl_p:        dw      0
-__atl_acc:      ds      4
-__atl_x2:       ds      4
-__atl_neg:      db      0
-__atl_d:        db      0
 
         public  _atof
 ; float atof(const char *nptr)
@@ -12304,129 +12447,125 @@ sc_tmp_h:       dw      0
 ;
 ; jmp_buf layout (stored at the address passed as first arg):
 ;   [0,1] = saved return address (where setjmp "returns" to)
-;   [2,3] = saved SP  (= IX+4 at time of setjmp call, i.e. the SP
-;            after ret from setjmp, pointing at the env argument)
+;   [2,3] = saved SP  (the SP after ret from setjmp, i.e. pointing at
+;            the env argument, since the caller cleans its own args)
 ;   [4,5] = saved IX  (caller's frame pointer)
 ;   [6,7] = padding
 ;
-; Z80/dcc calling convention at entry to _setjmp:
-;   (IX+0,1) = old IX pushed by prologue
-;   (IX+2,3) = return address
-;   (IX+4,5) = env pointer (first argument = &jmp_buf)
+; Neither routine uses an IX frame: both fetch their stack arguments
+; directly via pop/push (args pushed right-to-left, so for longjmp(env,
+; val) - env is pushed last/shallowest, val first/deepest).
 ; ============================================================
 
         public  _setjmp
 _setjmp:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ; HL = env pointer (jmp_buf address)
-        ld      l,(ix+4)
-        ld      h,(ix+5)
+        pop     de              ; DE = return address
+        pop     hl              ; HL = env
+        push    hl              ; restore env argument
+        push    de              ; restore return address
 
         ; env[0,1] = return address
-        ld      a,(ix+2)
-        ld      (hl),a
-        inc     hl
-        ld      a,(ix+3)
-        ld      (hl),a
-        inc     hl
-
-        ; env[2,3] = saved SP = IX + 4
-        ;   (after ret from _setjmp, SP will point to env arg slot = IX+4)
-        push    ix
-        pop     de              ; DE = current IX value
         ld      a,e
-        add     a,4
         ld      (hl),a
         inc     hl
         ld      a,d
-        adc     a,0
         ld      (hl),a
         inc     hl
 
-        ; env[4,5] = saved IX (caller's frame pointer = old IX at (IX+0,1))
-        ld      a,(ix+0)
+        ; env[2,3] = saved SP.
+        ; SP is now the original entry SP.  Temporarily pushing HL makes
+        ; it SP-2, so SP+4 is the value after setjmp's RET: the env slot.
+        push    hl
+        ld      hl,4
+        add     hl,sp
+        ex      de,hl           ; DE = saved SP
+        pop     hl              ; HL = &env[2]
+
+        ld      a,e
         ld      (hl),a
         inc     hl
-        ld      a,(ix+1)
+        ld      a,d
+        ld      (hl),a
+        inc     hl
+
+        ; env[4,5] = caller's IX.
+        ; Since _setjmp has no frame, IX is still the caller's IX.
+        push    ix
+        pop     de
+        ld      a,e
+        ld      (hl),a
+        inc     hl
+        ld      a,d
         ld      (hl),a
 
         ; return 0
         ld      hl,0
-        ld      sp,ix
-        pop     ix
         ret
 
 ; ============================================================
         public  _longjmp
+; void longjmp(jmp_buf env, int val)
+;
+; Unlike setjmp, longjmp never returns to its own caller - it discards its
+; entire current stack/frame and resumes at the original setjmp call site.
+; That means anything stashed on longjmp's OWN stack cannot survive past
+; the SP switch below (once SP moves, the old stack is just unreachable
+; memory), so the return address and val are held in registers (DE/BC)
+; across that switch rather than in static scratch or a stack spill.
 _longjmp:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ; (IX+4,5) = env pointer
-        ; (IX+6,7) = val (must not be 0; if 0 return 1 per C standard)
+        pop     hl              ; return address of longjmp's own caller -
+                                ; discarded, since longjmp never returns here
+        pop     de              ; DE = env
+        pop     bc              ; BC = val
 
-        ; Get return value, ensure != 0
-        ld      l,(ix+6)
-        ld      h,(ix+7)
-        ld      a,h
-        or      l
-        jr      nz,lj_nonzero
-        ld      hl,1
-lj_nonzero:
-        ld      (lj_val),hl
+        ; C89: if val is 0, use 1 instead.
+        ld      a,b
+        or      c
+        jr      nz,lj_valok
+        ld      bc,1
+lj_valok:
+        push    bc              ; stash val - the old stack is still valid
+        ex      de,hl           ; HL = env
 
-        ; Load env pointer
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-
-        ; Read env[0,1] = saved return address
-        ld      a,(hl)
-        ld      (lj_retaddr),a
+        ; Read env[0,1] = saved return address, stash it too.
+        ld      e,(hl)
         inc     hl
-        ld      a,(hl)
-        ld      (lj_retaddr+1),a
+        ld      d,(hl)
         inc     hl
+        push    de
 
-        ; Read env[2,3] = saved SP
-        ld      a,(hl)
-        ld      (lj_sp),a
+        ; Read env[2,3] = saved SP into DE (short-lived: consumed below).
+        ld      e,(hl)
         inc     hl
-        ld      a,(hl)
-        ld      (lj_sp+1),a
+        ld      d,(hl)
         inc     hl
 
-        ; Read env[4,5] = saved IX
-        ld      a,(hl)
-        ld      (lj_ix),a
+        ; Read env[4,5] = saved IX into BC (short-lived: consumed below).
+        ld      c,(hl)
         inc     hl
-        ld      a,(hl)
-        ld      (lj_ix+1),a
+        ld      b,(hl)
 
-        ; Restore SP (points to env arg slot in original setjmp call frame)
-        ld      hl,(lj_sp)
-        ld      sp,hl
-
-        ; Restore IX (caller's frame pointer)
-        ld      hl,(lj_ix)
-        push    hl
+        ; Restore IX now, while the OLD stack is still valid (net
+        ; stack-neutral: push immediately followed by pop).
+        push    bc
         pop     ix
 
-        ; Push return address so RET jumps to setjmp call site
-        ld      hl,(lj_retaddr)
-        push    hl
+        ex      de,hl           ; HL = saved SP
 
-        ; Load return value into HL
-        ld      hl,(lj_val)
+        ; Recover the return address and val from the old stack - still
+        ; valid, since SP has not moved yet.
+        pop     de              ; DE = saved return address
+        pop     bc              ; BC = val
 
-        ; Jump to setjmp call site  HL is the return value
+        ; Switch to the original setjmp call frame's stack.
+        ld      sp,hl
+
+        ; Push the return address onto the NEW stack so RET jumps to the
+        ; setjmp call site, with the result in HL.
+        push    de
+        ld      h,b
+        ld      l,c
         ret
-
-lj_val:         dw      0
-lj_retaddr:     dw      0
-lj_sp:          dw      0
-lj_ix:          dw      0
 
 
 
@@ -12447,30 +12586,31 @@ lj_ix:          dw      0
 ; ============================================================
         public  _dopn
 _dopn:
-        push    ix
-        ld      ix,0
-        add     ix,sp
+        ; Fetch path without an IX frame.  The argument slot contents do
+        ; not have to be restored; only the caller-cleanup stack shape does.
+        pop     bc
+        ex      (sp),hl         ; HL = path
+        push    bc
+
+        ; Clearing the FCB needs all three register pairs (HL/DE/BC as
+        ; the LDIR source/dest/count), so stash path on the stack rather
+        ; than in a register.
+        push    hl
 
         ; Clear FCB.
-        ld      hl,__drfcb
         ld      de,__drfcb+1
         ld      bc,35
-        ld      (hl),0
+        xor     a
+        ld      (__drfcb),a
+        ld      hl,__drfcb
         ldir
 
-        ; Parse the caller's path/pattern into the FCB: optional "X:"
-        ; drive prefix, then name/ext with '?' passed through as a
-        ; wildcard and '*' expanded to fill the rest of the field with
-        ; '?' - identical to what unlink()/rename() already do.
-        ld      l,(ix+4)
-        ld      h,(ix+5)
+        ; Parse path/pattern.
+        pop     hl              ; HL = path
         ld      de,__drfcb
         call    __mkfcb
 
-        ; If nothing was actually specified - empty string, ".", or a bare
-        ; "X:" drive prefix - __mkfcb leaves the whole 11-byte name/ext as
-        ; spaces (it never matches a real file); fall back to a full
-        ; "match everything" wildcard scan, same as an explicit "*.*".
+        ; Empty name/ext means match everything.
         ld      hl,__drfcb+1
         ld      b,11
 __drchk:
@@ -12479,15 +12619,16 @@ __drchk:
         jr      nz,__drgo
         inc     hl
         djnz    __drchk
+
         ld      hl,__drfcb+1
         ld      b,11
 __drofq:
         ld      (hl),'?'
         inc     hl
         djnz    __drofq
-__drgo:
 
-        ; Set DMA buffer.
+__drgo:
+        ; Set directory DMA.
         ld      c,26
         ld      de,__drdma
         call    5
@@ -12497,80 +12638,78 @@ __drgo:
         ld      de,__drfcb
         call    5
         cp      0ffh
-        jr      nz,__droky
-        ld      hl,0
-        pop     ix
+        jr      z,__drnul
+
+        ; A = result index 0..3.  This also means a result is pending.
+        ld      (__dridx),a
+
+        ; Any non-NULL address can serve as our opaque DIR object.
+        ld      hl,__drfcb
         ret
 
-__droky:
-        ld      (__dridx),a
-        xor     a
-        ld      (__drdn),a
-        inc     a
-        ld      (__drhav),a
-        ld      hl,__dirob
-        pop     ix
+__drnul:
+        ld      hl,0
         ret
+
 
         public  _drd
 _drd:
-        push    ix
-        ld      ix,0
-        add     ix,sp
+        ; Fetch dirp without an IX frame.
+        pop     bc
+        ex      (sp),hl         ; HL = dirp
+        push    bc
 
-        ; NULL DIR* or done -> NULL.
-        ld      a,(ix+4)
-        or      (ix+5)
+        ; NULL DIR * -> NULL.
+        ld      a,h
+        or      l
         jr      z,__drnul
-        ld      a,(__drdn)
-        or      a
-        jr      nz,__drnul
 
-        ; If opendir already has a current result, consume it; otherwise
-        ; ask BDOS for the next result.
-        ld      a,(__drhav)
-        or      a
-        jr      nz,__drcur
+        ; __dridx doubles as both result index and enumeration state.
+        ld      a,(__dridx)
+        cp      0feh
+        jr      z,__drnul       ; done/closed
+        cp      0ffh
+        jr      nz,__drcur      ; 0..3: opendir/search-next result pending
 
-        ; A read()/write() since opendir may have repointed the BDOS DMA at a
-        ; caller buffer (the direct-DMA file I/O path does this), so search-next
-        ; would fill that buffer instead of __drdma.  Restore our directory DMA.
+        ; A read/write since the previous search may have changed DMA.
         ld      c,26
         ld      de,__drdma
         call    5
 
+        ; Search next.
         ld      c,18
         ld      de,__drfcb
         call    5
         cp      0ffh
-        jr      nz,__drnxt
-        ld      (__drdn),a
-__drnul:
-        ld      hl,0
-        pop     ix
-        ret
+        jr      nz,__drcur
 
-__drnxt:
+        ; FF -> FE = permanently done.
+        dec     a
         ld      (__dridx),a
-__drcur:
-        xor     a
-        ld      (__drhav),a
+        jr      __drnul
 
-        ; HL = __drdma + result_index * 32
-        ld      a,(__dridx)
-        add     a,a
-        add     a,a
-        add     a,a
-        add     a,a
-        add     a,a
+__drcur:
+        ; A = result index 0..3.
+        ;
+        ; result address = __drdma + index*32.
+        ; Since index is only 0..3, three RRCAs are equivalent to << 5:
+        ;   0 -> 00, 1 -> 20, 2 -> 40, 3 -> 60.
+        rrca
+        rrca
+        rrca
         ld      e,a
         ld      d,0
+
+        ; Mark this result consumed.  Next call performs Search Next.
+        ld      a,0ffh
+        ld      (__dridx),a
+
         ld      hl,__drdma
         add     hl,de
-        inc     hl              ; skip user byte; now at 8-byte name
+        inc     hl              ; skip user number
         ld      de,__drent
 
-        ; Copy base name, trimming spaces/high attribute bits.
+        ; Copy 8-byte base name, removing spaces and attribute bits.
         ld      b,8
 __drnam:
         ld      a,(hl)
@@ -12583,15 +12722,16 @@ __drnsp:
         inc     hl
         djnz    __drnam
 
-        ; Extension: if first ext char is non-space, add '.' and copy the
-        ; non-space extension chars.
+        ; Add extension only if it is nonempty.
         ld      a,(hl)
         and     7fh
         cp      ' '
         jr      z,__drter
+
         ld      a,'.'
         ld      (de),a
         inc     de
+
         ld      b,3
 __drext:
         ld      a,(hl)
@@ -12608,22 +12748,18 @@ __drter:
         xor     a
         ld      (de),a
         ld      hl,__drent
-        pop     ix
         ret
+
 
         public  _dcls
 _dcls:
-        ld      a,1
-        ld      (__drdn),a
+        ld      a,0feh
+        ld      (__dridx),a
         ld      hl,0
         ret
 
-; Opaque DIR object, FCB, DMA buffer, and one static dirent.  This API is
-; deliberately non-reentrant, matching the tiny CP/M runtime style.
-__dirob:        db      0
-__dridx:        db      0
-__drhav:        db      0
-__drdn:         db      1
+
+__dridx:        db      0feh
 __drfcb:        ds      36
 __drdma:        ds      128
 __drent:        ds      13

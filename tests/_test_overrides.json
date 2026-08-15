@@ -26,6 +26,7 @@
         { "suffix": "sieve", "args": "sieve.ada", "fixtures": ["SIEVE.ADA"] }
       ] },
     { "name": "bint", "args": "e.bas", "fixtures": ["E.BAS"],
+      "dcc_floatio": false, "dcc_longio": false,
       "extra_scenarios": [
         { "suffix": "ttt", "args": "ttt.bas", "fixtures": ["TTT.BAS"] },
         { "suffix": "sieve", "args": "sieve.bas", "fixtures": ["SIEVE.BAS"] }
