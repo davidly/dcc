@@ -304,6 +304,7 @@ struct MirByteComparisonPrint {
     struct Sym *function;
     int left_stack_offset;
     int right_stack_offset;
+    int width;
     int is_unsigned;
     int string_id;
 };
@@ -3602,12 +3603,14 @@ static int mir_match_pointer_difference_prints(
 }
 
 static int mir_machine_comparison_parameter(
-    int value, int *parameter_value)
+    int value, int *parameter_value,
+    int *parameter_width, int *parameter_unsigned)
 {
     const struct MirInsn *definition = mir_definition(value);
     const struct MirInsn *conversions[8];
     int conversion_count = 0;
     int current_type;
+    int original_type;
     int conversion;
 
     while (definition != NULL &&
@@ -3620,12 +3623,13 @@ static int mir_machine_comparison_parameter(
         definition = mir_definition(value);
     }
     if (definition == NULL || definition->opcode != MIR_PARAM ||
-        type_size(definition->type) != 1 ||
+        (type_size(definition->type) != 1 &&
+         type_size(definition->type) != 2) ||
         type_ptr_depth(definition->type) != 0 ||
         type_is_float(definition->type) ||
         (definition->type & 15) == TYPE_BOOL)
         return 0;
-    current_type = definition->type;
+    original_type = current_type = definition->type;
     for (conversion = conversion_count - 1;
          conversion >= 0; --conversion) {
         int target_type = conversions[conversion]->type;
@@ -3651,20 +3655,26 @@ static int mir_machine_comparison_parameter(
         }
         current_type = target_type;
     }
-    if (type_size(current_type) != 2 ||
-        (current_type & TYPE_UNSIGNED) != 0)
+    if (type_size(current_type) != 2)
         return 0;
     *parameter_value = definition->dst;
+    *parameter_width = type_size(original_type);
+    *parameter_unsigned =
+        (original_type & TYPE_UNSIGNED) != 0;
     return 1;
 }
 
 static int mir_machine_match_comparison_argument(
     int value, int operation, int left_parameter,
-    int right_parameter)
+    int right_parameter, int width, int is_unsigned)
 {
     const struct MirInsn *definition = mir_definition(value);
     int left;
+    int left_unsigned;
+    int left_width;
     int right;
+    int right_unsigned;
+    int right_width;
 
     while (definition != NULL &&
            definition->opcode == MIR_UNARY &&
@@ -3680,10 +3690,15 @@ static int mir_machine_match_comparison_argument(
            definition->opcode == MIR_BINARY &&
            definition->immediate == operation &&
            mir_machine_comparison_parameter(
-               definition->src1, &left) &&
+               definition->src1, &left,
+               &left_width, &left_unsigned) &&
            mir_machine_comparison_parameter(
-               definition->src2, &right) &&
-           left == left_parameter && right == right_parameter;
+               definition->src2, &right,
+               &right_width, &right_unsigned) &&
+           left == left_parameter && right == right_parameter &&
+           left_width == width && right_width == width &&
+           left_unsigned == is_unsigned &&
+           right_unsigned == is_unsigned;
 }
 
 static int mir_match_byte_comparison_print(
@@ -3715,7 +3730,8 @@ static int mir_match_byte_comparison_print(
             break;
         case MIR_PARAM:
             if (parameter_count >= 2 ||
-                type_size(insn->type) != 1 ||
+                (type_size(insn->type) != 1 &&
+                 type_size(insn->type) != 2) ||
                 type_is_float(insn->type) ||
                 type_ptr_depth(insn->type) != 0 ||
                 (insn->type & 15) == TYPE_BOOL)
@@ -3744,6 +3760,8 @@ static int mir_match_byte_comparison_print(
     }
     if (parameter_count != 2 || binary_count != 5 ||
         store_count != 5 || call_count != 1 || call == NULL ||
+        type_size(parameters[0]->type) !=
+            type_size(parameters[1]->type) ||
         ((parameters[0]->type & TYPE_UNSIGNED) != 0) !=
             ((parameters[1]->type & TYPE_UNSIGNED) != 0) ||
         !mir_machine_six_call_arguments(call, arguments))
@@ -3757,19 +3775,29 @@ static int mir_match_byte_comparison_print(
                 asm_name_for(sym_asm_name(plan->function)))) ||
         !mir_machine_match_comparison_argument(
             arguments[1], '<', parameters[0]->dst,
-            parameters[1]->dst) ||
+            parameters[1]->dst,
+            type_size(parameters[0]->type),
+            (parameters[0]->type & TYPE_UNSIGNED) != 0) ||
         !mir_machine_match_comparison_argument(
             arguments[2], TOK_LE, parameters[0]->dst,
-            parameters[1]->dst) ||
+            parameters[1]->dst,
+            type_size(parameters[0]->type),
+            (parameters[0]->type & TYPE_UNSIGNED) != 0) ||
         !mir_machine_match_comparison_argument(
             arguments[3], TOK_EQ, parameters[0]->dst,
-            parameters[1]->dst) ||
+            parameters[1]->dst,
+            type_size(parameters[0]->type),
+            (parameters[0]->type & TYPE_UNSIGNED) != 0) ||
         !mir_machine_match_comparison_argument(
             arguments[4], TOK_GE, parameters[0]->dst,
-            parameters[1]->dst) ||
+            parameters[1]->dst,
+            type_size(parameters[0]->type),
+            (parameters[0]->type & TYPE_UNSIGNED) != 0) ||
         !mir_machine_match_comparison_argument(
             arguments[5], '>', parameters[0]->dst,
-            parameters[1]->dst) ||
+            parameters[1]->dst,
+            type_size(parameters[0]->type),
+            (parameters[0]->type & TYPE_UNSIGNED) != 0) ||
         !mir_machine_parameter_value_offset(
             parameters[0]->dst, &plan->left_stack_offset) ||
         !mir_machine_parameter_value_offset(
@@ -3777,6 +3805,7 @@ static int mir_match_byte_comparison_print(
         return 0;
     plan->is_unsigned =
         (parameters[0]->type & TYPE_UNSIGNED) != 0;
+    plan->width = type_size(parameters[0]->type);
     plan->string_id = (int)string->immediate;
     return plan->function != NULL;
 }
@@ -22365,7 +22394,6 @@ static int mir_match_random_unique_init(
     const struct MirInsn *copy_call = &mir.insns[46];
     int duplicate_arguments[2];
     int copy_arguments[3];
-    int memory_type, memory_storage, memory_offset;
     int instruction;
 
     memset(plan, 0, sizeof(*plan));
@@ -30418,11 +30446,16 @@ static void mir_machine_emit_byte_comparison_push(
     int end_label = new_label();
 
     fprintf(out,
-            "\tld hl,%d\n\tadd hl,sp\n\tld c,(hl)\n"
+            "\tld hl,%d\n\tadd hl,sp\n\tld c,(hl)\n",
+            left_offset + pushed_words * 2);
+    if (plan->width == 2)
+        fputs("\tinc hl\n\tld b,(hl)\n", out);
+    fprintf(out,
             "\tld hl,%d\n\tadd hl,sp\n\tld e,(hl)\n",
-            left_offset + pushed_words * 2,
             right_offset + pushed_words * 2);
-    if (plan->is_unsigned) {
+    if (plan->width == 2) {
+        fputs("\tinc hl\n\tld d,(hl)\n", out);
+    } else if (plan->is_unsigned) {
         fputs("\tld b,0\n\tld d,0\n", out);
     } else {
         fputs("\tld a,c\n\trlca\n\tsbc a,a\n\tld b,a\n"
@@ -45709,7 +45742,28 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     {
         int call_runner_result =
-            mir_try_emit_call_runners(out, 0);
+            mir_try_emit_runtime_runners(out, 0);
+
+        if (call_runner_result >= 0)
+            return call_runner_result;
+    }
+    {
+        int call_runner_result =
+            mir_try_emit_interpreter_runners(out);
+
+        if (call_runner_result >= 0)
+            return call_runner_result;
+    }
+    {
+        int call_runner_result =
+            mir_try_emit_call_runners(out);
+
+        if (call_runner_result >= 0)
+            return call_runner_result;
+    }
+    {
+        int call_runner_result =
+            mir_try_emit_validation_runners(out, 0);
 
         if (call_runner_result >= 0)
             return call_runner_result;
@@ -45722,7 +45776,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out)
     }
     {
         int call_runner_result =
-            mir_try_emit_call_runners(out, 1);
+            mir_try_emit_validation_runners(out, 1);
 
         if (call_runner_result >= 0)
             return call_runner_result;

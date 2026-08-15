@@ -61,7 +61,10 @@ set(DCC_SOURCES
     dcc_mir_machine_emit.c # scheduled Z80 machine-template emission
     dcc_mir_machine_aggregate_checks.c # strict aggregate check schedules
     dcc_mir_machine_attention.c # strict attention-kernel schedules
-    dcc_mir_machine_call_runners.c # strict call/check orchestration schedules
+    dcc_mir_machine_runtime_runners.c # strict runtime/file/system schedules
+    dcc_mir_machine_interpreter_runners.c # strict interpreter/parser schedules
+    dcc_mir_machine_call_runners.c # strict call/control orchestration schedules
+    dcc_mir_machine_validation_runners.c # strict scope/wide validation schedules
     dcc_mir_machine_endgame.c # strict endgame machine schedules
     dcc_mir_machine_float_reports.c # strict float report/check schedules
     dcc_mir_machine_numeric.c # strict numeric kernel schedules

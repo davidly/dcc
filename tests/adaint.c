@@ -1161,7 +1161,7 @@ int main(int argc, char **argv)
     run();
     if (G->verbose) {
         fprintf(stderr, "\nADAINT usage summary\n");
-        fprintf(stderr, "  Source bytes: %ld / %ld\n", G->slen, MAXSRC);
+        fprintf(stderr, "  Source bytes: %u / %u\n", (unsigned)G->slen, (unsigned)MAXSRC);
         fprintf(stderr, "  Code:         %d / %d\n", G->cp, MAXCODE);
         fprintf(stderr, "  Symbols:      %d / %d\n", G->nsym, MAXSYM);
         fprintf(stderr, "  Functions:    %d / %d\n", G->nfunc, MAXFUNC);

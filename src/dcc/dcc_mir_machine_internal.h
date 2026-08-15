@@ -48,8 +48,23 @@ int mir_try_emit_scanner_kernels(FILE *out, int late);
 /* Returns -1 when no aggregate check schedule matches. */
 int mir_try_emit_aggregate_checks(FILE *out);
 
-/* Each phase preserves the moved runner's existing selector position. */
-int mir_try_emit_call_runners(FILE *out, int phase);
+enum MirStrictSpilledProfile {
+    MIR_STRICT_SPILLED_ADDRESS_REMAT = 1,
+    MIR_STRICT_SPILLED_GLOBAL_ARGUMENT,
+    MIR_STRICT_SPILLED_PHI_SLOT
+};
+
+/* Preserves the call/control orchestration selector band. */
+int mir_try_emit_call_runners(FILE *out);
+
+/* Phase 0 preserves the runtime/file/system band; phase 2 profiles spills. */
+int mir_try_emit_runtime_runners(FILE *out, int phase);
+
+/* Preserves the interpreter/parser selector band. */
+int mir_try_emit_interpreter_runners(FILE *out);
+
+/* Each phase preserves the validation runner's existing selector position. */
+int mir_try_emit_validation_runners(FILE *out, int phase);
 
 /* Each phase preserves the moved endgame schedule's selector position. */
 int mir_try_emit_endgame_runners(FILE *out, int phase);

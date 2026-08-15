@@ -11,7 +11,7 @@
 #include "dcc.h"
 #include "dcc_ast.h"
 #include "dcc_mir.h"
-#include "dcc_mir_internal.h"
+#include "dcc_mir_machine_internal.h"
 
 static int mir_has_member_address(void);
 static int mir_call_count(void);
@@ -19,6 +19,7 @@ static int mir_has_wide_values(void);
 static int mir_cost_regional_candidate_is_validated(void);
 static int mir_boolean_candidate_is_validated(void);
 static int mir_large_dense_switch_phi_candidate_is_eligible(void);
+static int mir_try_selector(FILE *out, int (*selector)(FILE *));
 
 static int mir_cost_policy_selects_alternative(void)
 {
@@ -2594,8 +2595,21 @@ static int mir_cost_regional_candidate_is_validated(void)
     int calls = mir_call_count();
     int return_kind = mir.return_type & 15;
 
-    if (mir.sink_purpose != EMIT_SINK_DEFERRED ||
-        return_kind != TYPE_VOID)
+    if (mir.sink_purpose != EMIT_SINK_DEFERRED)
+        return 0;
+    if (return_kind == TYPE_INT &&
+        mir.count == 605 && mir.next_value == 342 &&
+        blocks == 112 && calls == 2 && mir.local_bytes == 44 &&
+        mir_has_cfg_backedge() && !mir_has_wide_values() &&
+        mir_has_member_address())
+        return 1;
+    if (return_kind == TYPE_INT &&
+        mir.count == 92 && mir.next_value == 67 &&
+        blocks == 6 && calls == 4 && mir.local_bytes == 4 &&
+        !mir_has_cfg_backedge() && !mir_has_wide_values() &&
+        mir_has_member_address())
+        return 1;
+    if (return_kind != TYPE_VOID)
         return 0;
     return
         (mir.count == 736 && mir.next_value == 481 &&
@@ -2617,7 +2631,23 @@ static int mir_cost_regional_candidate_is_validated(void)
         (mir.count == 214 && mir.next_value == 150 &&
          blocks == 9 && calls == 21 && mir.local_bytes == 28 &&
          !mir_has_cfg_backedge() && !mir_has_wide_values() &&
-         mir_has_member_address());
+         mir_has_member_address()) ||
+        (mir.count == 309 && mir.next_value == 193 &&
+         blocks == 60 && calls == 7 && mir.local_bytes == 4 &&
+         !mir_has_cfg_backedge() && !mir_has_wide_values() &&
+         mir_has_member_address()) ||
+        (mir.count == 331 && mir.next_value == 225 &&
+         blocks == 53 && calls == 7 && mir.local_bytes == 0 &&
+         !mir_has_cfg_backedge() && !mir_has_wide_values() &&
+         mir_has_member_address()) ||
+        (mir.count == 237 && mir.next_value == 152 &&
+         blocks == 40 && calls == 8 && mir.local_bytes == 4 &&
+         !mir_has_cfg_backedge() && !mir_has_wide_values() &&
+         mir_has_member_address()) ||
+        (mir.count == 55 && mir.next_value == 38 &&
+         blocks == 7 && calls == 1 && mir.local_bytes == 2 &&
+         mir_has_cfg_backedge() && !mir_has_wide_values() &&
+         !mir_has_member_address());
 }
 
 static int mir_cost_candidate_is_selectable(
@@ -2718,16 +2748,41 @@ static enum MirCostCandidateKind mir_cost_selector_kind(
     return MIR_COST_CANDIDATE_SPILLED;
 }
 
+static const char *mir_strict_profile_candidate_name(
+    enum MirStrictSpilledProfile profile)
+{
+    if (profile == MIR_STRICT_SPILLED_ADDRESS_REMAT)
+        return "spilled-address-remat";
+    if (profile == MIR_STRICT_SPILLED_GLOBAL_ARGUMENT)
+        return "spilled-global-argument";
+    if (profile == MIR_STRICT_SPILLED_PHI_SLOT)
+        return "spilled-phi-slot";
+    return NULL;
+}
+
+static int mir_call_runner_strict_profile(
+    enum MirStrictSpilledProfile *profile)
+{
+    int result = mir_try_emit_runtime_runners(NULL, 2);
+
+    if (result < MIR_STRICT_SPILLED_ADDRESS_REMAT ||
+        result > MIR_STRICT_SPILLED_PHI_SLOT)
+        return 0;
+    *profile = (enum MirStrictSpilledProfile)result;
+    return 1;
+}
 
 static int mir_apply_mir_v1_policy(
     FILE **selected_stream, const char **selector_name,
     const char **candidate_name, int *selected_label_id, int label_base,
-    int select_alternative)
+    int select_alternative, const char *required_candidate)
 {
     const char *diagnostic_candidate =
         getenv("DCC_MIR_SELECT_CANDIDATE");
     const char *diagnostic_function =
         getenv("DCC_MIR_SELECT_FUNCTION");
+    const char *strict_candidate = NULL;
+    enum MirStrictSpilledProfile strict_profile;
     struct MirCostCandidateSpec incumbent_spec;
     struct MirCostCandidate incumbent;
     struct MirCostCandidate best;
@@ -2738,6 +2793,16 @@ static int mir_apply_mir_v1_policy(
         diagnostic_candidate = NULL;
     if (diagnostic_candidate != NULL)
         select_alternative = 1;
+    if (diagnostic_candidate == NULL && required_candidate != NULL) {
+        strict_candidate = required_candidate;
+        select_alternative = 1;
+    } else if (diagnostic_candidate == NULL &&
+        mir_call_runner_strict_profile(&strict_profile)) {
+        strict_candidate =
+            mir_strict_profile_candidate_name(strict_profile);
+        if (strict_candidate != NULL)
+            select_alternative = 1;
+    }
 
     incumbent_spec.name = "incumbent";
     incumbent_spec.selector_name = *selector_name;
@@ -2777,6 +2842,9 @@ static int mir_apply_mir_v1_policy(
          if (diagnostic_candidate != NULL)
              candidate.selectable =
                  !strcmp(diagnostic_candidate, candidate.spec->name);
+         else if (strict_candidate != NULL)
+             candidate.selectable =
+                 !strcmp(strict_candidate, candidate.spec->name);
         mir_cost_report_candidate(&candidate, 0);
         if (candidate.selectable &&
             mir_cost_candidate_is_better(&candidate, &best)) {
@@ -3238,7 +3306,7 @@ static int mir_try_emit_z80(FILE *out)
 static int mir_try_generated_candidate(
     FILE **selected, const char **selector_name,
     const char **candidate_name, int *selected_label_id,
-    int label_base)
+    int label_base, const char *required_candidate)
 {
     const char *emit_filter = getenv("DCC_MIR_EMIT_FUNCTION");
     const char *general_filter = getenv("DCC_MIR_GENERAL_FUNCTION");
@@ -3403,7 +3471,8 @@ static int mir_try_generated_candidate(
         mir_apply_mir_v1_policy(
             &generated, selector_name, candidate_name,
             selected_label_id, label_base,
-            mir_cost_policy_selects_alternative());
+            mir_cost_policy_selects_alternative(),
+            required_candidate);
 
     *selected = generated;
     label_id = *selected_label_id;
@@ -3511,7 +3580,7 @@ void mir_end_function(void)
     selected_label_id = candidate_label_base;
     if (!mir_try_generated_candidate(
             &generated, &selector_name, &candidate_name,
-            &selected_label_id, candidate_label_base)) {
+            &selected_label_id, candidate_label_base, NULL)) {
         failure_reason = "selector";
     } else if (!opt_debug) {
         struct MirInsn *original_insns = NULL;
@@ -3522,9 +3591,17 @@ void mir_end_function(void)
         int original_count = mir.count;
         const char *diagnostic_function =
             getenv("DCC_MIR_SELECT_FUNCTION");
+        enum MirStrictSpilledProfile strict_profile;
+        int strict_profile_valid =
+            mir_call_runner_strict_profile(&strict_profile);
+        const char *strict_candidate =
+            strict_profile_valid
+                ? mir_strict_profile_candidate_name(strict_profile)
+                : NULL;
         int validated_general_alternative =
             mir_boolean_candidate_is_validated() ||
             mir_large_dense_switch_phi_candidate_is_eligible() ||
+            strict_profile_valid ||
             (getenv("DCC_MIR_SELECT_CANDIDATE") != NULL &&
              diagnostic_function != NULL &&
              !strcmp(diagnostic_function, mir.name));
@@ -3545,7 +3622,7 @@ void mir_end_function(void)
             mir_try_generated_candidate(
                 &alternative, &alternative_selector,
                 &alternative_candidate, &alternative_label_id,
-                candidate_label_base) &&
+                candidate_label_base, strict_candidate) &&
             (validated_general_alternative ||
              !strcmp(alternative_selector,
                      "scheduled-machine-cfg")) &&

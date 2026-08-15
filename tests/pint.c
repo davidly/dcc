@@ -1497,7 +1497,7 @@ static void print_stats(void)
         return;
 
     fprintf(stderr, "\nPINT usage summary\n");
-    fprintf(stderr, "  Source bytes:             %ld / %ld\n", slen, MAXSRC);
+    fprintf(stderr, "  Source bytes:             %u / %u\n", (unsigned)slen, (unsigned)MAXSRC);
     fprintf(stderr, "  Bytecode instructions:    %d / %d\n", cp, code_limit);
     fprintf(stderr, "  Symbols:                  %d / %d\n", nsym, MAXSYM);
     fprintf(stderr, "  Procedures/functions:     %d / %d\n", nproc, MAXPROC);

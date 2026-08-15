@@ -275,6 +275,37 @@ The thick arrows are the dominant translation pipeline (front end → types →
 | MIR backend | `dcc_mir.c`, `dcc_mir_select.c`, `dcc_mir_homed_cfg.c`, `dcc_mir_spilled_cfg.c`, `dcc_mir_schedule.c`, `dcc_mir_target.c`, `dcc_mir_emit_common.c`, `dcc_mir_machine_*.c` | Persistent MIR, verification/allocation, generated-candidate selection, schedules, and production Z80 emission |
 | Top level / output | `dcc_func.c`, `dcc_global_init.c`, `dcc_data.c` | Function/frame parsing, one production metadata/MIR body walk, global initializer recording, deferred static-body placement, and data-section emission |
 
+### Strict machine-runner families
+
+The strict runner dispatch inside `dcc_mir_machine_emit.c` is order-sensitive.
+Its former 43,080-line call-runner translation unit is split along the static
+call graph into four compiled families:
+
+| Production order | Module | Source lines | Sole export | Phase ownership |
+| ---: | --- | ---: | --- | --- |
+| 1 | `dcc_mir_machine_runtime_runners.c` | 10,733 | `mir_try_emit_runtime_runners` | phase 0 runtime/file/system schedules; phase 2 spilled-profile query |
+| 2 | `dcc_mir_machine_interpreter_runners.c` | 7,212 | `mir_try_emit_interpreter_runners` | interpreter/parser schedules |
+| 3 | `dcc_mir_machine_call_runners.c` | 12,941 | `mir_try_emit_call_runners` | call/control orchestration |
+| 4 | `dcc_mir_machine_validation_runners.c` | 12,610 | `mir_try_emit_validation_runners` | phase 0 validation schedules; phase 1 fixed-index runner |
+
+These calls preserve the previous matcher order exactly. The dependency split
+duplicates only 13 small static helpers (each at most 32 source lines) instead
+of exporting a cross-family helper layer.
+
+Machine-runner families follow a zero-shared-state rule:
+
+- plans, candidates, and mutable matching state are automatic and attempt-local;
+- no family exports writable or read-only data, and no family owns writable
+  file-scope state;
+- module-local constant matcher tables may use internal linkage, but are never
+  part of the inter-module contract;
+- each family exports one dispatcher only. Shared declarations in
+  `dcc_mir_machine_internal.h` are function-only.
+
+Run `scripts/audit-c-module-exports.py` for every machine-runner family after
+changing a boundary; the audit must report the one allowed dispatcher and no
+exported data.
+
 ## Inside dccpeep: a fixpoint peephole optimizer
 
 `dccpeep` is DCC C Compiler's **machine-dependent optimizer**. It reads the emitted `.MAC`

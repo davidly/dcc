@@ -317,6 +317,13 @@ struct MirInvariantByteSumSchedule {
     int element_unsigned;
 };
 
+struct MirPrintableByteSanitizeSchedule {
+    int pointer_stack_offset;
+    int lower_bound;
+    int upper_bound;
+    int replacement;
+};
+
 struct MirSlidingMaximumSchedule {
     int input_stack_offset;
     int length_stack_offset;
@@ -9632,6 +9639,192 @@ static int mir_scanner_word_pointer_type(int type)
         type_size(type) == 2;
 }
 
+static int mir_match_printable_byte_sanitize_schedule(
+    struct MirPrintableByteSanitizeSchedule *plan)
+{
+    static const unsigned char expected_opcodes[61] = {
+        MIR_LABEL, MIR_PARAM, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL,
+        MIR_NOP, MIR_PHI, MIR_NOP, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_UNARY, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST,
+        MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_UNARY, MIR_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_CONST, MIR_LABEL, MIR_PHI, MIR_LABEL, MIR_JUMP, MIR_LABEL,
+        MIR_PHI, MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_NOP, MIR_CONST, MIR_STORE_INDIRECT, MIR_LABEL, MIR_LABEL,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL
+    };
+    const struct MirInsn *pointer = &mir.insns[1];
+    const struct MirInsn *initial_store = &mir.insns[4];
+    const struct MirInsn *index_phi = &mir.insns[7];
+    long lower;
+    long upper;
+    long replacement;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if ((size_t)mir.count != sizeof(expected_opcodes) ||
+        mir_cfg_block_count() != 12 || mir.local_bytes != 2 ||
+        mir.aggregate_temp_bytes != 0 || mir.has_vla ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode != expected_opcodes[instruction])
+            return mir_machine_reject(
+                "printable-byte-sanitize-schedule", "opcodes");
+        if ((insn->opcode == MIR_PARAM ||
+             insn->opcode == MIR_LOAD ||
+             insn->opcode == MIR_STORE) &&
+            !mir_machine_named_nonvolatile(insn))
+            return mir_machine_reject(
+                "printable-byte-sanitize-schedule",
+                "volatile-named-memory");
+        if ((insn->opcode == MIR_LOAD_INDIRECT ||
+             insn->opcode == MIR_STORE_INDIRECT) &&
+            ((insn->memory_flags & (1 | 8)) != 0 ||
+             insn->bit_width != 0))
+            return mir_machine_reject(
+                "printable-byte-sanitize-schedule",
+                "volatile-indirect-memory");
+    }
+    if (!mir_machine_parameter_value_offset(
+            pointer->dst, &plan->pointer_stack_offset) ||
+        !mir_scanner_char_pointer_type(pointer->type) ||
+        mir_machine_pointee_is_volatile(pointer) ||
+        !mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+        !mir_machine_unobservable_local_store(initial_store) ||
+        initial_store->src1 != mir.insns[2].dst ||
+        initial_store->object < 0 ||
+        index_phi->object != initial_store->object ||
+        !mir_machine_same_location(index_phi, initial_store) ||
+        index_phi->src1 != mir.insns[2].dst ||
+        index_phi->src2 != mir.insns[57].dst ||
+        index_phi->phi_pred1 != mir.insns[0].label ||
+        index_phi->phi_pred2 != mir.insns[54].label ||
+        !mir_scanner_signed_word_type(index_phi->type))
+        return mir_machine_reject(
+            "printable-byte-sanitize-schedule", "loop-state");
+    if (mir.insns[10].src1 != pointer->dst ||
+        mir.insns[10].src2 != index_phi->dst ||
+        mir.insns[10].immediate != 1 ||
+        mir.insns[10].memory_size != 1 ||
+        mir.insns[11].src1 != mir.insns[10].dst ||
+        mir.insns[11].memory_size != 1 ||
+        !mir_scanner_char_type(mir.insns[11].type) ||
+        mir.insns[12].src1 != mir.insns[11].dst ||
+        mir.insns[12].label != mir.insns[60].label)
+        return mir_machine_reject(
+            "printable-byte-sanitize-schedule", "terminator");
+    if (mir.insns[15].src1 != pointer->dst ||
+        mir.insns[15].src2 != index_phi->dst ||
+        mir.insns[15].immediate != 1 ||
+        mir.insns[16].src1 != mir.insns[15].dst ||
+        mir.insns[16].memory_size != 1 ||
+        mir.insns[17].src1 != mir.insns[16].dst ||
+        !mir_scanner_unsigned_byte_type(mir.insns[17].type) ||
+        mir.insns[19].src1 != mir.insns[17].dst ||
+        !mir_scanner_signed_word_type(mir.insns[19].type) ||
+        !mir_machine_evaluate_constant(
+            mir.insns[18].dst, &lower, 0) ||
+        lower <= 0 || lower > 255 ||
+        mir.insns[20].src1 != mir.insns[19].dst ||
+        mir.insns[20].src2 != mir.insns[18].dst ||
+        mir.insns[20].immediate != '<' ||
+        mir.insns[21].src1 != mir.insns[20].dst ||
+        mir.insns[21].label != mir.insns[25].label)
+        return mir_machine_reject(
+            "printable-byte-sanitize-schedule", "lower-bound");
+    if (mir.insns[28].src1 != pointer->dst ||
+        mir.insns[28].src2 != index_phi->dst ||
+        mir.insns[28].immediate != 1 ||
+        mir.insns[29].src1 != mir.insns[28].dst ||
+        mir.insns[29].memory_size != 1 ||
+        mir.insns[30].src1 != mir.insns[29].dst ||
+        !mir_scanner_unsigned_byte_type(mir.insns[30].type) ||
+        mir.insns[32].src1 != mir.insns[30].dst ||
+        !mir_scanner_signed_word_type(mir.insns[32].type) ||
+        !mir_machine_evaluate_constant(
+            mir.insns[31].dst, &upper, 0) ||
+        upper < lower || upper >= 255 ||
+        mir.insns[33].src1 != mir.insns[32].dst ||
+        mir.insns[33].src2 != mir.insns[31].dst ||
+        mir.insns[33].immediate != '>' ||
+        mir.insns[34].src1 != mir.insns[33].dst ||
+        mir.insns[34].label != mir.insns[38].label)
+        return mir_machine_reject(
+            "printable-byte-sanitize-schedule", "upper-bound");
+    if (!mir_machine_constant_equals(mir.insns[23].dst, 1) ||
+        mir.insns[24].label != mir.insns[44].label ||
+        !mir_machine_constant_equals(mir.insns[36].dst, 1) ||
+        mir.insns[37].label != mir.insns[40].label ||
+        !mir_machine_constant_equals(mir.insns[39].dst, 0) ||
+        mir.insns[41].src1 != mir.insns[36].dst ||
+        mir.insns[41].src2 != mir.insns[39].dst ||
+        mir.insns[41].phi_pred1 != mir.insns[35].label ||
+        mir.insns[41].phi_pred2 != mir.insns[38].label ||
+        mir.insns[43].label != mir.insns[44].label ||
+        mir.insns[45].src1 != mir.insns[23].dst ||
+        mir.insns[45].src2 != mir.insns[41].dst ||
+        mir.insns[45].phi_pred1 != mir.insns[22].label ||
+        mir.insns[45].phi_pred2 != mir.insns[42].label ||
+        mir.insns[46].src1 != mir.insns[45].dst ||
+        mir.insns[46].label != mir.insns[53].label)
+        return mir_machine_reject(
+            "printable-byte-sanitize-schedule", "condition-phis");
+    if (mir.insns[49].src1 != pointer->dst ||
+        mir.insns[49].src2 != index_phi->dst ||
+        mir.insns[49].immediate != 1 ||
+        !mir_machine_evaluate_constant(
+            mir.insns[51].dst, &replacement, 0) ||
+        replacement < 0 || replacement > 255 ||
+        mir.insns[52].src1 != mir.insns[49].dst ||
+        mir.insns[52].src2 != mir.insns[51].dst ||
+        mir.insns[52].memory_size != 1 ||
+        !mir_machine_constant_equals(mir.insns[56].dst, 1) ||
+        mir.insns[57].src1 != index_phi->dst ||
+        mir.insns[57].src2 != mir.insns[56].dst ||
+        mir.insns[57].immediate != '+' ||
+        !mir_machine_same_location(
+            &mir.insns[58], initial_store) ||
+        mir.insns[58].src1 != mir.insns[57].dst ||
+        mir.insns[59].label != mir.insns[5].label)
+        return mir_machine_reject(
+            "printable-byte-sanitize-schedule", "store-step");
+    plan->lower_bound = (int)lower;
+    plan->upper_bound = (int)upper;
+    plan->replacement = (int)replacement;
+    return 1;
+}
+
+static void mir_emit_printable_byte_sanitize_schedule(
+    FILE *out, const struct MirPrintableByteSanitizeSchedule *plan)
+{
+    int loop = new_label();
+    int replace = new_label();
+    int keep = new_label();
+
+    fprintf(out, "%s\n", MIR_EXACT_KERNEL_MARKER);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "L%d:\n\tld a,(de)\n\tor a\n\tret z\n"
+            "\tcp %d\n\tjp c,L%d\n"
+            "\tcp %d\n\tjp c,L%d\n"
+            "L%d:\n\tld a,%d\n\tld (de),a\n"
+            "L%d:\n\tinc de\n\tjp L%d\n",
+            plan->pointer_stack_offset,
+            loop, plan->lower_bound, replace,
+            plan->upper_bound + 1, keep,
+            replace, plan->replacement,
+            keep, loop);
+}
+
 static int mir_match_invariant_byte_sum_schedule(
     struct MirInvariantByteSumSchedule *plan)
 {
@@ -13493,6 +13686,8 @@ int mir_try_emit_scanner_kernels(FILE *out, int late)
             vla_affine_fill_sum_schedule;
         struct MirVlaConstantFillSumSchedule
             vla_constant_fill_sum_schedule;
+        struct MirPrintableByteSanitizeSchedule
+            printable_byte_sanitize_schedule;
         struct MirInvariantByteSumSchedule invariant_byte_sum_schedule;
         struct MirSlidingMaximumSchedule sliding_maximum_schedule;
         struct MirDigitLabelSchedule digit_label_schedule;
@@ -13575,6 +13770,12 @@ int mir_try_emit_scanner_kernels(FILE *out, int late)
                 &sliding_maximum_schedule)) {
             mir_emit_sliding_maximum_schedule(
                 out, &sliding_maximum_schedule);
+            return 1;
+        }
+        if (mir_match_printable_byte_sanitize_schedule(
+                &printable_byte_sanitize_schedule)) {
+            mir_emit_printable_byte_sanitize_schedule(
+                out, &printable_byte_sanitize_schedule);
             return 1;
         }
         if (mir_match_invariant_byte_sum_schedule(

@@ -27,6 +27,175 @@ struct MirGlobalByteOrSchedule {
     int mask;
 };
 
+struct MirWideRatioLoopSchedule {
+    struct Sym *print_function;
+    int header_string_id;
+    int row_string_id;
+    int done_string_id;
+    int limit;
+    char header_name[64];
+    char row_name[64];
+    char done_name[64];
+};
+
+struct MirWideConditionalAddSchedule {
+    int condition_stack_offset;
+    int left_stack_offset;
+    int right_stack_offset;
+};
+
+struct MirBinaryHeapPushSchedule {
+    int heap_stack_offset;
+    int value_stack_offset;
+    int size_offset;
+    int element_stride;
+    int capacity;
+};
+
+struct MirFixedBoardFillSchedule {
+    int board_stack_offset;
+    int row_count;
+    int column_count;
+    int row_stride;
+    int element_stride;
+    int weight_offset;
+    int generation_offset;
+    int character_base;
+    int weight_row_scale;
+};
+
+struct MirFixedCellsFillSchedule {
+    struct Sym *cells;
+    int cell_count;
+    int cell_stride;
+    int matrix_count;
+    int matrix_row_stride;
+    int tag_offset;
+    int cell_scale;
+    int row_scale;
+    int tag_scale;
+};
+
+struct MirWordMuldivReportSchedule {
+    struct Sym *print_function;
+    int left_stack_offset;
+    int right_stack_offset;
+    int string_ids[3];
+    int is_unsigned;
+    char print_names[3][64];
+};
+
+#define MIR_CONSTANT_CHECK_RUNNER_MAX_CALLS 40
+
+struct MirConstantCheckRunnerCall {
+    struct Sym *function;
+    unsigned int arguments[4];
+};
+
+struct MirConstantCheckRunnerSchedule {
+    struct MirConstantCheckRunnerCall
+        calls[MIR_CONSTANT_CHECK_RUNNER_MAX_CALLS];
+    struct Sym *checks;
+    struct Sym *failures;
+    struct Sym *print_function;
+    int call_count;
+    int summary_string_id;
+    int result_string_id;
+    int success_string_id;
+    int failure_string_id;
+    char summary_name[64];
+    char result_name[64];
+};
+
+#define MIR_WIDE_VALIDATION_MAX_CALLS 40
+
+struct MirWideValidationCall {
+    struct Sym *function;
+    unsigned long arguments[3];
+};
+
+struct MirWideValidationRunnerSchedule {
+    struct MirWideValidationCall calls[MIR_WIDE_VALIDATION_MAX_CALLS];
+    struct Sym *checker_function;
+    struct Sym *checks;
+    struct Sym *failures;
+    struct Sym *print_function;
+    int call_count;
+    int variant;
+    int loop_limit;
+    int loop_failure_string_id[2];
+    int summary_string_id;
+    int result_string_id;
+    int success_string_id;
+    int failure_string_id;
+    char loop_print_name[2][64];
+    char summary_name[64];
+    char result_name[64];
+};
+
+struct MirMulmodValidationRunnerSchedule {
+    struct Sym *values;
+    struct Sym *mulmod_function;
+    struct Sym *print_function;
+    unsigned int spot_arguments[6][3];
+    int mismatch_string_id;
+    int summary_string_id;
+    int spot_string_id;
+    int done_string_id;
+    char mismatch_print_name[64];
+    char summary_print_name[64];
+    char spot_print_names[6][64];
+    char done_print_name[64];
+    char values_name[64];
+};
+
+#define MIR_LONG_STALE_CHECKS 13
+
+struct MirLongStaleCheck {
+    unsigned long expected;
+    int string_id;
+};
+
+struct MirLongStaleRunnerSchedule {
+    struct Sym *signed_check;
+    struct Sym *unsigned_check;
+    struct Sym *signed_zero_function;
+    struct Sym *signed_two_function;
+    struct Sym *unsigned_zero_function;
+    struct Sym *unsigned_two_function;
+    struct MirLongStaleCheck checks[MIR_LONG_STALE_CHECKS];
+};
+
+#define MIR_LONG_CALL_CHECKS 21
+
+struct MirLongCallCheck {
+    struct Sym *value_function;
+    unsigned long arguments[3];
+    int argument_widths[3];
+    int argument_count;
+    int result_width;
+    unsigned long expected;
+    int string_id;
+};
+
+struct MirLongCallRunnerSchedule {
+    struct MirLongCallCheck checks[MIR_LONG_CALL_CHECKS];
+    struct Sym *check_function;
+};
+
+#define MIR_WIDEN_EDGE_CHECKS 19
+
+struct MirWidenEdgeRunnerSchedule {
+    struct Sym *signed_check;
+    struct Sym *unsigned_check;
+    struct Sym *signed_value_function;
+    struct Sym *unsigned_value_function;
+    struct MirLongStaleCheck checks[MIR_WIDEN_EDGE_CHECKS];
+};
+
+static void mir_numeric_emit_sp_wide_load(
+    FILE *out, int stack_offset);
+
 struct MirNarrowedDivmodLoopSchedule {
     struct Sym *check_function;
     int expected_offset;
@@ -397,6 +566,2773 @@ static int mir_numeric_unsigned_long_type(int type)
            (type & 15) == TYPE_LONG &&
            (type & TYPE_UNSIGNED) != 0 &&
            type_size(type) == 4;
+}
+
+static int mir_numeric_wide_parameter(
+    const struct MirInsn *parameter, int *stack_offset)
+{
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (parameter->opcode != MIR_PARAM ||
+        !mir_scalar_memory_location(
+            parameter, &memory_type, &memory_storage, &memory_offset) ||
+        memory_storage != SC_PARAM ||
+        type_ptr_depth(memory_type) != 0 ||
+        type_is_float(memory_type) ||
+        type_size(memory_type) != 4 ||
+        memory_offset < 4 || memory_offset + 3 > 127)
+        return 0;
+    *stack_offset = memory_offset - 2;
+    return 1;
+}
+
+static int mir_match_wide_conditional_add_schedule(
+    struct MirWideConditionalAddSchedule *plan)
+{
+    int expected_opcodes[21] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_NOP,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP, MIR_BINARY, MIR_LABEL,
+        MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_LABEL,
+        MIR_LABEL, MIR_PHI, MIR_NOP, MIR_STORE, MIR_NOP, MIR_RETURN
+    };
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 21 || mir_cfg_block_count() != 5 ||
+        mir.has_vla || mir.aggregate_temp_bytes != 0 ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        type_is_float(mir.return_type) ||
+        type_size(mir.return_type) != 4)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "wide-conditional-add-schedule", "opcodes");
+    if (!mir_numeric_wide_parameter(
+            &mir.insns[1], &plan->condition_stack_offset) ||
+        !mir_numeric_wide_parameter(
+            &mir.insns[2], &plan->left_stack_offset) ||
+        !mir_numeric_wide_parameter(
+            &mir.insns[3], &plan->right_stack_offset) ||
+        plan->left_stack_offset != plan->condition_stack_offset + 4 ||
+        plan->right_stack_offset != plan->left_stack_offset + 4)
+        return mir_machine_reject(
+            "wide-conditional-add-schedule", "parameters");
+    if (mir.insns[5].src1 != mir.insns[1].dst ||
+        mir.insns[5].label != mir.insns[11].label ||
+        mir.insns[8].src1 != mir.insns[2].dst ||
+        mir.insns[8].src2 != mir.insns[3].dst ||
+        mir.insns[8].immediate != '+' ||
+        type_size(mir.insns[8].secondary_offset) != 4 ||
+        type_is_float(mir.insns[8].secondary_offset) ||
+        mir.insns[10].label != mir.insns[15].label ||
+        !mir_machine_constant_equals(mir.insns[13].dst, 0) ||
+        mir.insns[16].src1 != mir.insns[8].dst ||
+        mir.insns[16].src2 != mir.insns[13].dst ||
+        mir.insns[16].phi_pred1 != mir.insns[9].label ||
+        mir.insns[16].phi_pred2 != mir.insns[14].label ||
+        mir.insns[18].src1 != mir.insns[16].dst ||
+        mir.insns[20].src1 != mir.insns[16].dst)
+        return mir_machine_reject(
+            "wide-conditional-add-schedule", "flow");
+    return 1;
+}
+
+static int mir_match_binary_heap_push_schedule(
+    struct MirBinaryHeapPushSchedule *plan)
+{
+    int expected_opcodes[105] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_NOP, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_RETURN, MIR_LABEL, MIR_NOP, MIR_MEMBER_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_MEMBER_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP,
+        MIR_STORE_INDIRECT, MIR_NOP, MIR_MEMBER_ADDRESS, MIR_NOP,
+        MIR_MEMBER_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY,
+        MIR_STORE_INDIRECT, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_PHI,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_NOP, MIR_MEMBER_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_NOP,
+        MIR_MEMBER_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_JUMP, MIR_LABEL,
+        MIR_NOP, MIR_NOP, MIR_MEMBER_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_STORE, MIR_NOP, MIR_MEMBER_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP, MIR_MEMBER_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_STORE_INDIRECT,
+        MIR_NOP, MIR_MEMBER_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP,
+        MIR_STORE_INDIRECT, MIR_NOP, MIR_NOP, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_LABEL, MIR_JUMP, MIR_LABEL
+    };
+    int data_members[4] = {17, 60, 65, 76};
+    int data_members_tail[3] = {82, 86, 92};
+    int instruction;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 105 || mir_cfg_block_count() != 6 ||
+        mir.has_vla || mir.aggregate_temp_bytes != 0 ||
+        !mir_has_cfg_backedge() || type_size(mir.return_type) != 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "binary-heap-push-schedule", "opcodes");
+    if (!mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->heap_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[2].dst, &plan->value_stack_offset) ||
+        plan->value_stack_offset != plan->heap_stack_offset + 2 ||
+        type_ptr_depth(mir.insns[1].type) == 0 ||
+        type_size(mir.insns[1].type) != 2 ||
+        mir_machine_pointee_is_volatile(&mir.insns[1]) ||
+        type_ptr_depth(mir.insns[2].type) != 0 ||
+        type_is_float(mir.insns[2].type) ||
+        (mir.insns[2].type & TYPE_UNSIGNED) != 0 ||
+        type_size(mir.insns[2].type) != 2)
+        return mir_machine_reject(
+            "binary-heap-push-schedule", "parameters");
+    plan->size_offset = (int)mir.insns[4].immediate;
+    plan->capacity = (int)mir.insns[6].immediate;
+    plan->element_stride = (int)mir.insns[19].immediate;
+    if (plan->size_offset <= 0 || plan->size_offset > 32767 ||
+        plan->capacity <= 1 || plan->capacity > 32767 ||
+        plan->size_offset != plan->capacity * 2 ||
+        plan->element_stride != 2 ||
+        mir.insns[4].src1 != mir.insns[1].dst ||
+        mir.insns[4].memory_size != 2 ||
+        mir.insns[5].src1 != mir.insns[4].dst ||
+        mir.insns[5].memory_size != 2 ||
+        mir.insns[7].src1 != mir.insns[5].dst ||
+        mir.insns[7].src2 != mir.insns[6].dst ||
+        mir.insns[7].immediate != TOK_GE ||
+        mir.insns[8].src1 != mir.insns[7].dst ||
+        mir.insns[8].label != mir.insns[10].label)
+        return mir_machine_reject(
+            "binary-heap-push-schedule", "capacity");
+    if (mir.insns[12].src1 != mir.insns[1].dst ||
+        mir.insns[12].immediate != plan->size_offset ||
+        mir.insns[13].src1 != mir.insns[12].dst ||
+        mir.insns[15].src1 != mir.insns[13].dst ||
+        mir.insns[17].src1 != mir.insns[1].dst ||
+        mir.insns[17].immediate != 0 ||
+        mir.insns[19].src1 != mir.insns[17].dst ||
+        mir.insns[19].src2 != mir.insns[13].dst ||
+        mir.insns[21].src1 != mir.insns[19].dst ||
+        mir.insns[21].src2 != mir.insns[2].dst ||
+        mir.insns[21].memory_size != 2 ||
+        mir.insns[23].src1 != mir.insns[1].dst ||
+        mir.insns[23].immediate != plan->size_offset ||
+        mir.insns[25].src1 != mir.insns[1].dst ||
+        mir.insns[25].immediate != plan->size_offset ||
+        mir.insns[26].src1 != mir.insns[25].dst ||
+        !mir_machine_constant_equals(mir.insns[27].dst, 1) ||
+        mir.insns[28].src1 != mir.insns[26].dst ||
+        mir.insns[28].src2 != mir.insns[27].dst ||
+        mir.insns[28].immediate != '+' ||
+        mir.insns[29].src1 != mir.insns[23].dst ||
+        mir.insns[29].src2 != mir.insns[28].dst)
+        return mir_machine_reject(
+            "binary-heap-push-schedule", "initialization");
+    for (item = 0; item < 4; ++item)
+        if (mir.insns[data_members[item]].src1 !=
+                mir.insns[1].dst ||
+            mir.insns[data_members[item]].immediate != 0)
+            return mir_machine_reject(
+                "binary-heap-push-schedule", "data-members");
+    for (item = 0; item < 3; ++item)
+        if (mir.insns[data_members_tail[item]].src1 !=
+                mir.insns[1].dst ||
+            mir.insns[data_members_tail[item]].immediate != 0)
+            return mir_machine_reject(
+                "binary-heap-push-schedule", "tail-members");
+    if (mir.insns[45].src1 != mir.insns[13].dst ||
+        mir.insns[45].src2 != mir.insns[100].src1 ||
+        mir.insns[45].phi_pred1 != mir.insns[10].label ||
+        mir.insns[45].phi_pred2 != mir.insns[102].label ||
+        !mir_machine_constant_equals(mir.insns[49].dst, 0) ||
+        mir.insns[50].src1 != mir.insns[45].dst ||
+        mir.insns[50].src2 != mir.insns[49].dst ||
+        mir.insns[50].immediate != '>' ||
+        mir.insns[51].label != mir.insns[104].label ||
+        !mir_machine_constant_equals(mir.insns[54].dst, 1) ||
+        mir.insns[55].src1 != mir.insns[45].dst ||
+        mir.insns[55].src2 != mir.insns[54].dst ||
+        mir.insns[55].immediate != '-' ||
+        !mir_machine_constant_equals(mir.insns[56].dst, 2) ||
+        mir.insns[57].src1 != mir.insns[55].dst ||
+        mir.insns[57].src2 != mir.insns[56].dst ||
+        mir.insns[57].immediate != '/' ||
+        mir.insns[58].src1 != mir.insns[57].dst ||
+        mir.insns[62].src2 != mir.insns[57].dst ||
+        mir.insns[67].src2 != mir.insns[45].dst ||
+        mir.insns[69].src1 != mir.insns[63].dst ||
+        mir.insns[69].src2 != mir.insns[68].dst ||
+        mir.insns[69].immediate != TOK_LE ||
+        mir.insns[70].src1 != mir.insns[69].dst ||
+        mir.insns[70].label != mir.insns[73].label ||
+        mir.insns[72].label != mir.insns[104].label ||
+        mir.insns[100].src1 != mir.insns[57].dst ||
+        mir.insns[103].label != mir.insns[42].label)
+        return mir_machine_reject(
+            "binary-heap-push-schedule", "loop");
+    return 1;
+}
+
+static int mir_match_fixed_board_fill_schedule(
+    struct MirFixedBoardFillSchedule *plan)
+{
+    int expected_opcodes[75] = {
+        MIR_LABEL, MIR_PARAM, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL,
+        MIR_NOP, MIR_PHI, MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_MEMBER_ADDRESS, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_LOAD, MIR_INDEX_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_CONST, MIR_NOP, MIR_CONST, MIR_UNARY,
+        MIR_BINARY, MIR_BINARY, MIR_LOAD, MIR_BINARY, MIR_UNARY,
+        MIR_STORE_INDIRECT, MIR_NOP, MIR_MEMBER_ADDRESS, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_LOAD, MIR_INDEX_ADDRESS,
+        MIR_MEMBER_ADDRESS, MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY,
+        MIR_LOAD, MIR_BINARY, MIR_STORE_INDIRECT, MIR_NOP, MIR_LABEL,
+        MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL,
+        MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_JUMP, MIR_LABEL, MIR_NOP, MIR_MEMBER_ADDRESS, MIR_CONST,
+        MIR_STORE_INDIRECT
+    };
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 75 || mir_cfg_block_count() != 7 ||
+        mir.has_vla || mir.aggregate_temp_bytes != 0 ||
+        !mir_has_cfg_backedge() || type_size(mir.return_type) != 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "fixed-board-fill-schedule", "opcodes");
+    if (!mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->board_stack_offset) ||
+        type_ptr_depth(mir.insns[1].type) == 0 ||
+        type_size(mir.insns[1].type) != 2 ||
+        mir_machine_pointee_is_volatile(&mir.insns[1]))
+        return mir_machine_reject(
+            "fixed-board-fill-schedule", "parameter");
+    plan->row_count = (int)mir.insns[9].immediate;
+    plan->column_count = (int)mir.insns[21].immediate;
+    plan->row_stride = (int)mir.insns[27].immediate;
+    plan->element_stride = (int)mir.insns[29].immediate;
+    plan->weight_offset = (int)mir.insns[47].immediate;
+    plan->generation_offset = (int)mir.insns[72].immediate;
+    plan->character_base = (int)mir.insns[31].immediate;
+    plan->weight_row_scale = (int)mir.insns[49].immediate;
+    if (plan->row_count <= 0 || plan->row_count > 32 ||
+        plan->column_count <= 0 || plan->column_count > 32 ||
+        plan->element_stride != 3 ||
+        plan->row_stride !=
+            plan->column_count * plan->element_stride ||
+        plan->weight_offset != 1 ||
+        plan->generation_offset !=
+            plan->row_count * plan->row_stride ||
+        plan->character_base < 0 || plan->character_base > 255 ||
+        plan->weight_row_scale <= 0 ||
+        !mir_machine_constant_equals(mir.insns[3].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[13].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[58].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[66].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[73].dst, 1))
+        return mir_machine_reject(
+            "fixed-board-fill-schedule", "constants");
+    if (mir.insns[25].src1 != mir.insns[1].dst ||
+        mir.insns[25].immediate != 0 ||
+        mir.insns[27].src1 != mir.insns[25].dst ||
+        mir.insns[29].src1 != mir.insns[27].dst ||
+        mir.insns[30].src1 != mir.insns[29].dst ||
+        mir.insns[30].immediate != 0 ||
+        mir.insns[40].src1 != mir.insns[30].dst ||
+        mir.insns[40].memory_size != 1 ||
+        mir.insns[42].src1 != mir.insns[1].dst ||
+        mir.insns[42].immediate != 0 ||
+        mir.insns[44].src1 != mir.insns[42].dst ||
+        mir.insns[46].src1 != mir.insns[44].dst ||
+        mir.insns[47].src1 != mir.insns[46].dst ||
+        mir.insns[54].src1 != mir.insns[47].dst ||
+        mir.insns[54].memory_size != 2 ||
+        mir.insns[72].src1 != mir.insns[1].dst ||
+        mir.insns[74].src1 != mir.insns[72].dst ||
+        mir.insns[74].memory_size != 2)
+        return mir_machine_reject(
+            "fixed-board-fill-schedule", "stores");
+    return 1;
+}
+
+static int mir_match_fixed_cells_fill_schedule(
+    struct MirFixedCellsFillSchedule *plan)
+{
+    int expected_opcodes[87] = {
+        MIR_LABEL, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST,
+        MIR_NOP, MIR_STORE, MIR_LABEL, MIR_PHI, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_ADDRESS, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_STORE, MIR_CONST, MIR_NOP, MIR_STORE,
+        MIR_LABEL, MIR_NOP, MIR_NOP, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_MEMBER_ADDRESS, MIR_LOAD,
+        MIR_INDEX_ADDRESS, MIR_LOAD, MIR_INDEX_ADDRESS, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_BINARY, MIR_LOAD, MIR_BINARY, MIR_CONST, MIR_BINARY,
+        MIR_UNARY, MIR_STORE_INDIRECT, MIR_LABEL, MIR_LOAD, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_LABEL, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_LOAD,
+        MIR_MEMBER_ADDRESS, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_STORE_INDIRECT, MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL
+    };
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 87 || mir_cfg_block_count() != 10 ||
+        mir.has_vla || mir.aggregate_temp_bytes != 0 ||
+        !mir_has_cfg_backedge() || type_size(mir.return_type) != 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "fixed-cells-fill-schedule", "opcodes");
+    plan->cells = find_global(mir.insns[15].name);
+    plan->cell_count = (int)mir.insns[11].immediate;
+    plan->cell_stride = (int)mir.insns[17].immediate;
+    plan->matrix_count = (int)mir.insns[26].immediate;
+    plan->matrix_row_stride = (int)mir.insns[43].immediate;
+    plan->tag_offset = (int)mir.insns[74].immediate;
+    plan->cell_scale = (int)mir.insns[47].immediate;
+    plan->row_scale = (int)mir.insns[50].immediate;
+    plan->tag_scale = (int)mir.insns[76].immediate;
+    if (plan->cells == NULL || !plan->cells->is_array ||
+        plan->cells->is_volatile ||
+        plan->cells->pointee_is_volatile ||
+        plan->cell_count <= 0 || plan->cell_count > 32 ||
+        plan->cells->array_len < plan->cell_count ||
+        plan->cells->elem_size != plan->cell_stride ||
+        plan->cell_stride != 6 ||
+        plan->matrix_count != 2 ||
+        plan->matrix_row_stride != 2 ||
+        mir.insns[45].immediate != 1 ||
+        plan->tag_offset != 4 ||
+        plan->cell_scale != 16 ||
+        plan->row_scale != 4 ||
+        plan->tag_scale != 100 ||
+        !mir_machine_constant_equals(mir.insns[5].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[19].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[29].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[37].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[55].dst, 255) ||
+        !mir_machine_constant_equals(mir.insns[61].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[68].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[82].dst, 1))
+        return mir_machine_reject(
+            "fixed-cells-fill-schedule", "layout");
+    if (mir.insns[17].src1 != mir.insns[15].dst ||
+        mir.insns[41].src1 != mir.insns[40].dst ||
+        mir.insns[43].src1 != mir.insns[41].dst ||
+        mir.insns[45].src1 != mir.insns[43].dst ||
+        mir.insns[58].src1 != mir.insns[45].dst ||
+        mir.insns[58].memory_size != 1 ||
+        mir.insns[74].src1 != mir.insns[73].dst ||
+        mir.insns[78].src1 != mir.insns[74].dst ||
+        mir.insns[78].memory_size != 2)
+        return mir_machine_reject(
+            "fixed-cells-fill-schedule", "stores");
+    return 1;
+}
+
+static void mir_emit_fixed_board_fill_schedule(
+    FILE *out, const struct MirFixedBoardFillSchedule *plan)
+{
+    int row;
+    int column;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n",
+            plan->board_stack_offset);
+    for (row = 0; row < plan->row_count; ++row)
+        for (column = 0; column < plan->column_count; ++column) {
+            int index = row * plan->column_count + column;
+            int weight = row * plan->weight_row_scale + column;
+
+            fprintf(out,
+                    "\tld (hl),%d\n\tinc hl\n"
+                    "\tld (hl),%d\n\tinc hl\n"
+                    "\tld (hl),%d\n\tinc hl\n",
+                    (plan->character_base + index) & 255,
+                    weight & 255, (weight >> 8) & 255);
+        }
+    fputs("\tld (hl),1\n\tinc hl\n\tld (hl),0\n\tret\n", out);
+}
+
+static void mir_emit_fixed_cells_fill_schedule(
+    FILE *out, const struct MirFixedCellsFillSchedule *plan)
+{
+    int cell;
+    int row;
+    int column;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_machine_emit_global_address_de(out, plan->cells, 0);
+    fputs("\tex de,hl\n", out);
+    for (cell = 0; cell < plan->cell_count; ++cell) {
+        for (row = 0; row < plan->matrix_count; ++row)
+            for (column = 0; column < plan->matrix_count; ++column)
+                fprintf(out, "\tld (hl),%d\n\tinc hl\n",
+                        (cell * plan->cell_scale +
+                         row * plan->row_scale + column) & 255);
+        fprintf(out,
+                "\tld (hl),%d\n\tinc hl\n"
+                "\tld (hl),%d\n\tinc hl\n",
+                (cell * plan->tag_scale) & 255,
+                ((cell * plan->tag_scale) >> 8) & 255);
+    }
+    fputs("\tret\n", out);
+}
+
+static void mir_emit_heap_size_address(
+    FILE *out, const struct MirBinaryHeapPushSchedule *plan)
+{
+    fputs("\tpush iy\n\tpop hl\n", out);
+    fprintf(out, "\tld de,%d\n\tadd hl,de\n",
+            plan->size_offset);
+}
+
+static void mir_emit_heap_element_address(
+    FILE *out, int frame_offset)
+{
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n\tadd hl,hl\n"
+            "\tpush iy\n\tpop de\n\tadd hl,de\n",
+            frame_offset, frame_offset + 1);
+}
+
+static void mir_emit_binary_heap_push_schedule(
+    FILE *out, const struct MirBinaryHeapPushSchedule *plan)
+{
+    enum {
+        INDEX = -2,
+        PARENT = -4
+    };
+    int loop = new_label();
+    int compare_low = new_label();
+    int swap = new_label();
+    int done = new_label();
+    int heap_offset = plan->heap_stack_offset + 4;
+    int value_offset = plan->value_stack_offset + 4;
+
+    fputs(";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
+          "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-4\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
+            "\tpush hl\n\tpop iy\n",
+            heap_offset, heap_offset + 1);
+    mir_emit_heap_size_address(out, plan);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n", out);
+    fprintf(out,
+            "\tld de,%d\n\tor a\n\tsbc hl,de\n\tjp nc,L%d\n",
+            plan->capacity, done);
+    mir_emit_heap_size_address(out, plan);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n", out);
+    fprintf(out, "\tld (ix%d),l\n\tld (ix%d),h\n",
+            INDEX, INDEX + 1);
+    mir_emit_heap_element_address(out, INDEX);
+    fprintf(out,
+            "\tld e,(ix+%d)\n\tld d,(ix+%d)\n"
+            "\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+            value_offset, value_offset + 1);
+    mir_emit_heap_size_address(out, plan);
+    fputs("\tinc (hl)\n\tjp nz,", out);
+    fprintf(out, "L%d\n\tinc hl\n\tinc (hl)\n", loop);
+
+    fprintf(out, "L%d:\n", loop);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tld a,h\n\tor l\n\tjp z,L%d\n"
+            "\tdec hl\n\tsrl h\n\trr l\n"
+            "\tld (ix%d),l\n\tld (ix%d),h\n",
+            INDEX, INDEX + 1, done, PARENT, PARENT + 1);
+    mir_emit_heap_element_address(out, PARENT);
+    fputs("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+          "\tdec hl\n\tpush hl\n", out);
+    mir_emit_heap_element_address(out, INDEX);
+    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tdec hl\n\tpush hl\n"
+          "\tld a,b\n\txor 128\n\tld h,a\n"
+          "\tld a,d\n\txor 128\n\tcp h\n", out);
+    fprintf(out,
+            "\tjp z,L%d\n\tjp c,L%d\n"
+            "\tpop hl\n\tpop hl\n\tjp L%d\n"
+            "L%d:\n\tld a,e\n\tcp c\n\tjp c,L%d\n"
+            "\tpop hl\n\tpop hl\n\tjp L%d\n"
+            "L%d:\n",
+            compare_low, swap, done,
+            compare_low, swap, done, swap);
+    fputs("\tpop hl\n\tld (hl),c\n\tinc hl\n\tld (hl),b\n"
+          "\tpop hl\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tld (ix%d),l\n\tld (ix%d),h\n\tjp L%d\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tpop iy\n"
+            ";@dcc.reg free=iy\n\tret\n",
+            PARENT, PARENT + 1, INDEX, INDEX + 1, loop,
+            done);
+}
+
+static int mir_match_word_muldiv_report_schedule(
+    struct MirWordMuldivReportSchedule *plan)
+{
+    int expected_opcodes[53] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_NOP, MIR_NOP, MIR_BINARY,
+        MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_NOP,
+        MIR_ARG, MIR_NOP, MIR_NOP, MIR_ARG, MIR_NOP, MIR_NOP, MIR_ARG,
+        MIR_CALL, MIR_NOP, MIR_NOP, MIR_BINARY, MIR_NOP, MIR_STORE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_NOP, MIR_ARG, MIR_NOP,
+        MIR_NOP, MIR_ARG, MIR_NOP, MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_NOP, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_NOP, MIR_NOP, MIR_ARG, MIR_NOP, MIR_NOP, MIR_ARG,
+        MIR_NOP, MIR_NOP, MIR_ARG, MIR_CALL
+    };
+    int operation_indices[3] = {5, 21, 38};
+    int store_indices[3] = {6, 23, 40};
+    int string_indices[3] = {7, 24, 41};
+    int call_indices[3] = {18, 35, 52};
+    int expected_operations[3] = {'*', '%', '/'};
+    int arguments[4];
+    int instruction;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 53 || mir_cfg_block_count() != 1 ||
+        mir.has_vla || mir.aggregate_temp_bytes != 0 ||
+        type_size(mir.return_type) != 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "word-muldiv-report-schedule", "opcodes");
+    if (!mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->left_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[2].dst, &plan->right_stack_offset) ||
+        plan->right_stack_offset != plan->left_stack_offset + 2 ||
+        type_ptr_depth(mir.insns[1].type) != 0 ||
+        type_ptr_depth(mir.insns[2].type) != 0 ||
+        type_is_float(mir.insns[1].type) ||
+        type_is_float(mir.insns[2].type) ||
+        type_size(mir.insns[1].type) != 2 ||
+        mir.insns[2].type != mir.insns[1].type)
+        return mir_machine_reject(
+            "word-muldiv-report-schedule", "parameters");
+    plan->is_unsigned =
+        (mir.insns[1].type & TYPE_UNSIGNED) != 0;
+    for (item = 0; item < 3; ++item) {
+        const struct MirInsn *operation =
+            &mir.insns[operation_indices[item]];
+        const struct MirInsn *store =
+            &mir.insns[store_indices[item]];
+        const struct MirInsn *call =
+            &mir.insns[call_indices[item]];
+
+        if (operation->src1 != mir.insns[1].dst ||
+            operation->src2 != mir.insns[2].dst ||
+            operation->immediate != expected_operations[item] ||
+            operation->secondary_offset != mir.insns[1].type ||
+            store->src1 != operation->dst ||
+            store->memory_size != 2 ||
+            (item != 0 &&
+             !mir_machine_same_location(
+                 &mir.insns[store_indices[0]], store)) ||
+            !mir_numeric_call_arguments(call, 4, arguments) ||
+            arguments[0] != mir.insns[string_indices[item]].dst ||
+            arguments[1] != mir.insns[1].dst ||
+            arguments[2] != mir.insns[2].dst ||
+            arguments[3] != operation->dst ||
+            (call->memory_flags & MIR_CALL_FLAG_VARIADIC) == 0 ||
+            call->base_name[0] == 0 ||
+            strlen(call->base_name) >=
+                sizeof(plan->print_names[item]))
+            return mir_machine_reject(
+                "word-muldiv-report-schedule", "operation");
+        if (item == 0) {
+            plan->print_function = find_global(call->name);
+        } else if (plan->print_function != find_global(call->name)) {
+            return mir_machine_reject(
+                "word-muldiv-report-schedule", "print-symbol");
+        }
+        plan->string_ids[item] =
+            (int)mir.insns[string_indices[item]].immediate;
+        snprintf(plan->print_names[item],
+                 sizeof(plan->print_names[item]), "%s",
+                 call->base_name);
+    }
+    return plan->print_function != NULL &&
+           plan->print_function->has_proto &&
+           plan->print_function->proto_variadic;
+}
+
+static int mir_numeric_global_word_load(
+    const struct MirInsn *load, struct Sym **symbol_out)
+{
+    int memory_type;
+    int memory_storage;
+    int memory_offset;
+
+    if (load->opcode != MIR_LOAD ||
+        !mir_machine_named_nonvolatile(load) ||
+        !mir_scalar_memory_location(
+            load, &memory_type, &memory_storage, &memory_offset) ||
+        (memory_storage != SC_GLOBAL &&
+         memory_storage != SC_EXTERN) ||
+        memory_offset != 0 ||
+        type_ptr_depth(memory_type) != 0 ||
+        type_size(memory_type) != 2)
+        return 0;
+    *symbol_out = find_global(load->name);
+    return *symbol_out != NULL && !(*symbol_out)->is_array &&
+           !(*symbol_out)->is_volatile;
+}
+
+static int mir_match_constant_check_runner_schedule(
+    struct MirConstantCheckRunnerSchedule *plan)
+{
+    int summary_instruction = -1;
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir_cfg_block_count() != 9 || mir.has_vla ||
+        mir.local_bytes != 0 || mir.aggregate_temp_bytes != 0 ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_size(mir.return_type) != 2)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        struct Sym *function;
+        int arguments[4];
+        int argument;
+
+        if (insn->opcode != MIR_CALL)
+            continue;
+        function = find_global(insn->name);
+        if ((insn->memory_flags & MIR_CALL_FLAG_VARIADIC) != 0) {
+            summary_instruction = instruction;
+            break;
+        }
+        if (plan->call_count >=
+                MIR_CONSTANT_CHECK_RUNNER_MAX_CALLS ||
+            function == NULL || !function->is_defined ||
+            function->is_funcptr || function->is_noreturn ||
+            !function->has_proto || function->proto_variadic ||
+            function->proto_nargs != 4 ||
+            (function->type & 15) != TYPE_VOID ||
+            !mir_numeric_call_arguments(insn, 4, arguments))
+            return 0;
+        plan->calls[plan->call_count].function = function;
+        for (argument = 0; argument < 4; ++argument) {
+            long value;
+
+            if (!mir_machine_evaluate_constant(
+                    arguments[argument], &value, 0))
+                return mir_machine_reject(
+                    "constant-check-runner-schedule",
+                    "nonconstant-argument");
+            plan->calls[plan->call_count].arguments[argument] =
+                (unsigned int)value;
+        }
+        ++plan->call_count;
+    }
+    if (plan->call_count < 8 ||
+        summary_instruction < 0 ||
+        summary_instruction + 27 >= mir.count ||
+        mir.count != summary_instruction + 28)
+        return 0;
+    for (instruction = 0;
+         instruction < summary_instruction; ++instruction) {
+        int opcode = mir.insns[instruction].opcode;
+
+        if (opcode != MIR_LABEL && opcode != MIR_CONST &&
+            opcode != MIR_NOP && opcode != MIR_ARG &&
+            opcode != MIR_CALL &&
+            opcode != MIR_STRING_ADDRESS &&
+            opcode != MIR_LOAD)
+            return mir_machine_reject(
+                "constant-check-runner-schedule", "prefix-opcode");
+    }
+    {
+        int tail_opcodes[28] = {
+            MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_CONST,
+            MIR_BINARY, MIR_BRANCH_FALSE, MIR_STRING_ADDRESS, MIR_LABEL,
+            MIR_JUMP, MIR_LABEL, MIR_STRING_ADDRESS, MIR_LABEL, MIR_LABEL,
+            MIR_PHI, MIR_ARG, MIR_CALL, MIR_LOAD, MIR_BRANCH_FALSE,
+            MIR_CONST, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_CONST,
+            MIR_LABEL, MIR_LABEL, MIR_PHI, MIR_RETURN
+        };
+        int tail;
+
+        for (tail = 0; tail < 28; ++tail)
+            if (mir.insns[summary_instruction + tail].opcode !=
+                tail_opcodes[tail])
+                return mir_machine_reject(
+                    "constant-check-runner-schedule",
+                    "tail-opcodes");
+    }
+    {
+        const struct MirInsn *summary =
+            &mir.insns[summary_instruction];
+        const struct MirInsn *result =
+            &mir.insns[summary_instruction + 16];
+        int summary_arguments[3];
+        int result_arguments[2];
+
+        if (!mir_numeric_call_arguments(
+                summary, 3, summary_arguments) ||
+            summary_arguments[0] !=
+                mir.insns[summary_instruction - 6].dst ||
+            summary_arguments[1] !=
+                mir.insns[summary_instruction - 4].dst ||
+            summary_arguments[2] !=
+                mir.insns[summary_instruction - 2].dst ||
+            mir.insns[summary_instruction - 6].opcode !=
+                MIR_STRING_ADDRESS ||
+            !mir_numeric_global_word_load(
+                &mir.insns[summary_instruction - 4],
+                &plan->checks) ||
+            !mir_numeric_global_word_load(
+                &mir.insns[summary_instruction - 2],
+                &plan->failures) ||
+            plan->checks == plan->failures ||
+            !mir_numeric_call_arguments(
+                result, 2, result_arguments) ||
+            result_arguments[0] !=
+                mir.insns[summary_instruction + 1].dst ||
+            result_arguments[1] !=
+                mir.insns[summary_instruction + 14].dst ||
+            strcmp(summary->name, result->name) != 0 ||
+            summary->base_name[0] == 0 ||
+            result->base_name[0] == 0 ||
+            strlen(summary->base_name) >=
+                sizeof(plan->summary_name) ||
+            strlen(result->base_name) >=
+                sizeof(plan->result_name))
+            return mir_machine_reject(
+                "constant-check-runner-schedule", "reports");
+        plan->print_function = find_global(summary->name);
+        if (plan->print_function == NULL ||
+            !plan->print_function->has_proto ||
+            !plan->print_function->proto_variadic)
+            return mir_machine_reject(
+                "constant-check-runner-schedule",
+                "print-symbol");
+        plan->summary_string_id =
+            (int)mir.insns[summary_instruction - 6].immediate;
+        plan->result_string_id =
+            (int)mir.insns[summary_instruction + 1].immediate;
+        snprintf(plan->summary_name,
+                 sizeof(plan->summary_name), "%s",
+                 summary->base_name);
+        snprintf(plan->result_name,
+                 sizeof(plan->result_name), "%s",
+                 result->base_name);
+    }
+    if (!mir_numeric_global_word_load(
+            &mir.insns[summary_instruction + 3],
+            &plan->failures) ||
+        !mir_machine_constant_equals(
+            mir.insns[summary_instruction + 4].dst, 0) ||
+        mir.insns[summary_instruction + 5].src1 !=
+            mir.insns[summary_instruction + 3].dst ||
+        mir.insns[summary_instruction + 5].src2 !=
+            mir.insns[summary_instruction + 4].dst ||
+        mir.insns[summary_instruction + 5].immediate != TOK_EQ ||
+        mir.insns[summary_instruction + 6].src1 !=
+            mir.insns[summary_instruction + 5].dst ||
+        mir.insns[summary_instruction + 6].label !=
+            mir.insns[summary_instruction + 10].label ||
+        mir.insns[summary_instruction + 9].label !=
+            mir.insns[summary_instruction + 13].label ||
+        mir.insns[summary_instruction + 14].src1 !=
+            mir.insns[summary_instruction + 7].dst ||
+        mir.insns[summary_instruction + 14].src2 !=
+            mir.insns[summary_instruction + 11].dst ||
+        mir.insns[summary_instruction + 14].phi_pred1 !=
+            mir.insns[summary_instruction + 8].label ||
+        mir.insns[summary_instruction + 14].phi_pred2 !=
+            mir.insns[summary_instruction + 12].label)
+        return mir_machine_reject(
+            "constant-check-runner-schedule", "result-branch");
+    plan->success_string_id =
+        (int)mir.insns[summary_instruction + 7].immediate;
+    plan->failure_string_id =
+        (int)mir.insns[summary_instruction + 11].immediate;
+    if (!mir_numeric_global_word_load(
+            &mir.insns[summary_instruction + 17],
+            &plan->failures) ||
+        mir.insns[summary_instruction + 18].src1 !=
+            mir.insns[summary_instruction + 17].dst ||
+        !mir_machine_constant_equals(
+            mir.insns[summary_instruction + 19].dst, 1) ||
+        !mir_machine_constant_equals(
+            mir.insns[summary_instruction + 23].dst, 0) ||
+        mir.insns[summary_instruction + 21].label !=
+            mir.insns[summary_instruction + 25].label ||
+        mir.insns[summary_instruction + 26].src1 !=
+            mir.insns[summary_instruction + 19].dst ||
+        mir.insns[summary_instruction + 26].src2 !=
+            mir.insns[summary_instruction + 23].dst ||
+        mir.insns[summary_instruction + 26].phi_pred1 !=
+            mir.insns[summary_instruction + 20].label ||
+        mir.insns[summary_instruction + 26].phi_pred2 !=
+            mir.insns[summary_instruction + 24].label ||
+        mir.insns[summary_instruction + 27].src1 !=
+            mir.insns[summary_instruction + 26].dst)
+        return mir_machine_reject(
+            "constant-check-runner-schedule", "return-branch");
+    return plan->summary_string_id >= 0 &&
+           plan->result_string_id >= 0 &&
+           plan->success_string_id >= 0 &&
+           plan->failure_string_id >= 0;
+}
+
+static int mir_match_wide_validation_runner_schedule(
+    struct MirWideValidationRunnerSchedule *plan)
+{
+    int prefix_end;
+    int summary_call;
+    int result_call;
+    int loop_failure_calls[2] = {-1, -1};
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count == 326 && mir_cfg_block_count() == 16 &&
+        mir.local_bytes == 20) {
+        plan->variant = 1;
+        plan->call_count = 28;
+        prefix_end = 197;
+        plan->loop_limit = (int)mir.insns[218].immediate;
+        loop_failure_calls[0] = 280;
+        summary_call = 298;
+        result_call = 314;
+    } else if (mir.count == 431 &&
+               mir_cfg_block_count() == 14 &&
+               mir.local_bytes == 20) {
+        plan->variant = 2;
+        plan->call_count = 38;
+        prefix_end = 295;
+        plan->loop_limit = (int)mir.insns[326].immediate;
+        loop_failure_calls[0] = 370;
+        loop_failure_calls[1] = 385;
+        summary_call = 403;
+        result_call = 419;
+    } else {
+        return 0;
+    }
+    if (mir.has_vla || mir.aggregate_temp_bytes != 0 ||
+        !mir_has_cfg_backedge() ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_size(mir.return_type) != 2 ||
+        plan->call_count > MIR_WIDE_VALIDATION_MAX_CALLS ||
+        plan->loop_limit <= 1 || plan->loop_limit > 255)
+        return 0;
+    for (instruction = 0;
+         instruction < plan->call_count; ++instruction) {
+        const struct MirInsn *call;
+        struct Sym *function;
+        int arguments[3];
+        int argument;
+        int call_index = -1;
+        int scan;
+
+        for (scan = instruction == 0 ? 0 :
+                 (plan->variant == 1
+                    ? 7 * instruction
+                    : 0);
+             scan < prefix_end; ++scan) {
+            if (mir.insns[scan].opcode != MIR_CALL)
+                continue;
+            {
+                int seen = 0;
+                int earlier;
+
+                for (earlier = 0; earlier < scan; ++earlier)
+                    if (mir.insns[earlier].opcode == MIR_CALL)
+                        ++seen;
+                if (seen == instruction) {
+                    call_index = scan;
+                    break;
+                }
+            }
+        }
+        if (call_index < 0)
+            return mir_machine_reject(
+                "wide-validation-runner-schedule", "call-count");
+        call = &mir.insns[call_index];
+        function = find_global(call->name);
+        if (function == NULL || !function->is_defined ||
+            function->is_funcptr || function->is_noreturn ||
+            !function->has_proto || function->proto_variadic ||
+            function->proto_nargs != 3 ||
+            (function->type & 15) != TYPE_VOID ||
+            !mir_numeric_call_arguments(call, 3, arguments))
+            return mir_machine_reject(
+                "wide-validation-runner-schedule", "checker-call");
+        if (plan->checker_function == NULL)
+            plan->checker_function = function;
+        else if (plan->checker_function != function)
+            return mir_machine_reject(
+                "wide-validation-runner-schedule",
+                "checker-identity");
+        plan->calls[instruction].function = function;
+        for (argument = 0; argument < 3; ++argument) {
+            long value;
+
+            if (!mir_machine_evaluate_constant(
+                    arguments[argument], &value, 0))
+                return mir_machine_reject(
+                    "wide-validation-runner-schedule",
+                    "constant-argument");
+            plan->calls[instruction].arguments[argument] =
+                (unsigned long)value & 0xffffffffUL;
+        }
+    }
+    for (instruction = 0; instruction < prefix_end; ++instruction) {
+        int opcode = mir.insns[instruction].opcode;
+
+        if (opcode != MIR_LABEL && opcode != MIR_CONST &&
+            opcode != MIR_NOP && opcode != MIR_ARG &&
+            opcode != MIR_CALL)
+            return mir_machine_reject(
+                "wide-validation-runner-schedule",
+                "prefix-opcode");
+    }
+    if (plan->variant == 1) {
+        if (!mir_machine_constant_equals(mir.insns[210].dst, 2) ||
+            !mir_machine_constant_equals(mir.insns[218].dst, 50) ||
+            !mir_machine_constant_equals(mir.insns[222].dst, 16) ||
+            !mir_machine_constant_equals(mir.insns[233].dst, 0) ||
+            !mir_machine_constant_equals(mir.insns[237].dst, 0) ||
+            !mir_machine_constant_equals(mir.insns[255].dst, 1) ||
+            !mir_machine_constant_equals(mir.insns[261].dst, 1) ||
+            !mir_machine_constant_equals(mir.insns[269].dst, 1) ||
+            !mir_machine_constant_equals(mir.insns[286].dst, 1))
+            return mir_machine_reject(
+                "wide-validation-runner-schedule",
+                "multiply-loop-constants");
+    } else {
+        if (!mir_machine_constant_equals(mir.insns[317].dst, 2) ||
+            !mir_machine_constant_equals(mir.insns[326].dst, 20) ||
+            !mir_machine_constant_equals(mir.insns[330].dst, 16) ||
+            !mir_machine_constant_equals(mir.insns[342].dst, 16) ||
+            !mir_machine_constant_equals(mir.insns[354].dst, 2) ||
+            !mir_machine_constant_equals(mir.insns[363].dst, 1) ||
+            !mir_machine_constant_equals(mir.insns[378].dst, 1) ||
+            !mir_machine_constant_equals(mir.insns[391].dst, 1))
+            return mir_machine_reject(
+                "wide-validation-runner-schedule",
+                "modulo-loop-constants");
+    }
+    {
+        int failure_count = plan->variant == 1 ? 1 : 2;
+        int failure;
+
+        for (failure = 0; failure < failure_count; ++failure) {
+            const struct MirInsn *call =
+                &mir.insns[loop_failure_calls[failure]];
+            int arguments[4];
+
+            if (!mir_numeric_call_arguments(
+                    call, plan->variant == 1 ? 4 : 2,
+                    arguments) ||
+                arguments[0] < 0 ||
+                mir_definition(arguments[0]) == NULL ||
+                mir_definition(arguments[0])->opcode !=
+                    MIR_STRING_ADDRESS ||
+                call->base_name[0] == 0 ||
+                strlen(call->base_name) >=
+                    sizeof(plan->loop_print_name[failure]))
+                return mir_machine_reject(
+                    "wide-validation-runner-schedule",
+                    "loop-report");
+            plan->loop_failure_string_id[failure] =
+                (int)mir_definition(arguments[0])->immediate;
+            snprintf(plan->loop_print_name[failure],
+                     sizeof(plan->loop_print_name[failure]), "%s",
+                     call->base_name);
+        }
+    }
+    {
+        const struct MirInsn *summary = &mir.insns[summary_call];
+        const struct MirInsn *result = &mir.insns[result_call];
+        int summary_arguments[3];
+        int result_arguments[2];
+
+        if (!mir_numeric_call_arguments(
+                summary, 3, summary_arguments) ||
+            !mir_numeric_call_arguments(
+                result, 2, result_arguments) ||
+            summary_arguments[0] < 0 ||
+            result_arguments[0] < 0 ||
+            mir_definition(summary_arguments[0]) == NULL ||
+            mir_definition(result_arguments[0]) == NULL ||
+            mir_definition(summary_arguments[0])->opcode !=
+                MIR_STRING_ADDRESS ||
+            mir_definition(result_arguments[0])->opcode !=
+                MIR_STRING_ADDRESS ||
+            !mir_numeric_global_word_load(
+                mir_definition(summary_arguments[1]),
+                &plan->checks) ||
+            !mir_numeric_global_word_load(
+                mir_definition(summary_arguments[2]),
+                &plan->failures) ||
+            plan->checks == plan->failures ||
+            summary->base_name[0] == 0 ||
+            result->base_name[0] == 0 ||
+            strlen(summary->base_name) >=
+                sizeof(plan->summary_name) ||
+            strlen(result->base_name) >=
+                sizeof(plan->result_name))
+            return mir_machine_reject(
+                "wide-validation-runner-schedule", "tail-reports");
+        plan->print_function = find_global(summary->name);
+        if (plan->print_function == NULL ||
+            plan->print_function != find_global(result->name) ||
+            !plan->print_function->has_proto ||
+            !plan->print_function->proto_variadic)
+            return mir_machine_reject(
+                "wide-validation-runner-schedule",
+                "tail-print-symbol");
+        plan->summary_string_id =
+            (int)mir_definition(summary_arguments[0])->immediate;
+        plan->result_string_id =
+            (int)mir_definition(result_arguments[0])->immediate;
+        snprintf(plan->summary_name, sizeof(plan->summary_name), "%s",
+                 summary->base_name);
+        snprintf(plan->result_name, sizeof(plan->result_name), "%s",
+                 result->base_name);
+        if (plan->variant == 1) {
+            plan->success_string_id =
+                (int)mir.insns[305].immediate;
+            plan->failure_string_id =
+                (int)mir.insns[309].immediate;
+        } else {
+            plan->success_string_id =
+                (int)mir.insns[410].immediate;
+            plan->failure_string_id =
+                (int)mir.insns[414].immediate;
+        }
+    }
+    return plan->summary_string_id >= 0 &&
+           plan->result_string_id >= 0 &&
+           plan->success_string_id >= 0 &&
+           plan->failure_string_id >= 0;
+}
+
+static int mir_match_mulmod_validation_runner_schedule(
+    struct MirMulmodValidationRunnerSchedule *plan)
+{
+    int spot_calls[6] = {220, 235, 250, 265, 280, 295};
+    int spot_prints[6] = {223, 238, 253, 268, 283, 298};
+    int arguments[6];
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 304 || mir_cfg_block_count() != 13 ||
+        mir.local_bytes != 28 || mir.aggregate_temp_bytes != 0 ||
+        mir.has_vla || !mir_has_cfg_backedge() ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_size(mir.return_type) != 2)
+        return 0;
+    if (mir.insns[100].name[0] == 0 ||
+        strlen(mir.insns[100].name) >= sizeof(plan->values_name) ||
+        mir.insns[100].opcode != MIR_ADDRESS ||
+        (mir.insns[100].memory_flags & (1 | 8)) != 0 ||
+        type_ptr_depth(mir.insns[100].type) == 0 ||
+        strcmp(mir.insns[100].name, mir.insns[106].name) != 0 ||
+        strcmp(mir.insns[100].name, mir.insns[112].name) != 0 ||
+        mir.insns[102].immediate != 2 ||
+        mir.insns[108].immediate != 2 ||
+        mir.insns[114].immediate != 2)
+        return mir_machine_reject(
+            "mulmod-validation-runner-schedule", "array-uses");
+    snprintf(plan->values_name, sizeof(plan->values_name), "%s",
+             mir.insns[100].name);
+    plan->values = find_global(
+        mir_declared_link_name(plan->values_name));
+    if (plan->values == NULL || !plan->values->is_array ||
+        plan->values->is_volatile ||
+        plan->values->pointee_is_volatile ||
+        plan->values->elem_size != 2 ||
+        plan->values->array_len < 26)
+        return mir_machine_reject(
+            "mulmod-validation-runner-schedule", "array-symbol");
+    if (!mir_machine_constant_equals(mir.insns[1].dst, 52) ||
+        !mir_machine_constant_equals(mir.insns[2].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[5].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[8].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[42].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[61].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[80].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[117].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[125].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[152].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[156].dst, 10))
+        return mir_machine_reject(
+            "mulmod-validation-runner-schedule", "constants");
+    if (!mir_numeric_call_arguments(
+            &mir.insns[135], 3, arguments))
+        return mir_machine_reject(
+            "mulmod-validation-runner-schedule", "loop-arguments");
+    if (
+        arguments[0] != mir.insns[103].dst ||
+        arguments[1] != mir.insns[109].dst ||
+        arguments[2] != mir.insns[115].dst) {
+        return mir_machine_reject(
+            "mulmod-validation-runner-schedule", "loop-values");
+    }
+    plan->mulmod_function = find_global(mir.insns[135].name);
+    if (plan->mulmod_function == NULL ||
+        !plan->mulmod_function->is_defined ||
+        !plan->mulmod_function->has_proto ||
+        plan->mulmod_function->proto_variadic ||
+        plan->mulmod_function->proto_nargs != 3 ||
+        type_size(plan->mulmod_function->type) != 4)
+        return mir_machine_reject(
+            "mulmod-validation-runner-schedule",
+            "mulmod-symbol");
+    if (mir.insns[139].src1 != mir.insns[103].dst ||
+        mir.insns[141].src1 != mir.insns[109].dst ||
+        mir.insns[142].src1 != mir.insns[139].dst ||
+        mir.insns[142].src2 != mir.insns[141].dst ||
+        mir.insns[142].immediate != '*' ||
+        mir.insns[144].src1 != mir.insns[115].dst ||
+        mir.insns[145].src1 != mir.insns[142].dst ||
+        mir.insns[145].src2 != mir.insns[144].dst ||
+        mir.insns[145].immediate != '%' ||
+        mir.insns[149].src1 != mir.insns[135].dst ||
+        mir.insns[149].src2 != mir.insns[145].dst ||
+        mir.insns[149].immediate != TOK_NE)
+        return mir_machine_reject(
+            "mulmod-validation-runner-schedule", "loop-arithmetic");
+    {
+        const struct MirInsn *mismatch_call = &mir.insns[173];
+        const struct MirInsn *summary_call = &mir.insns[208];
+        const struct MirInsn *done_call = &mir.insns[301];
+        int mismatch_arguments[6];
+        int summary_arguments[3];
+        int done_arguments[1];
+
+        if (!mir_numeric_call_arguments(
+                mismatch_call, 6, mismatch_arguments) ||
+            !mir_numeric_call_arguments(
+                summary_call, 3, summary_arguments) ||
+            !mir_numeric_call_arguments(
+                done_call, 1, done_arguments) ||
+            mismatch_arguments[0] != mir.insns[159].dst ||
+            mismatch_arguments[1] != mir.insns[103].dst ||
+            mismatch_arguments[2] != mir.insns[109].dst ||
+            mismatch_arguments[3] != mir.insns[115].dst ||
+            mismatch_arguments[4] != mir.insns[135].dst ||
+            mismatch_arguments[5] != mir.insns[145].dst ||
+            summary_arguments[0] != mir.insns[202].dst ||
+            done_arguments[0] != mir.insns[299].dst ||
+            mismatch_call->base_name[0] == 0 ||
+            summary_call->base_name[0] == 0 ||
+            done_call->base_name[0] == 0 ||
+            strlen(mismatch_call->base_name) >=
+                sizeof(plan->mismatch_print_name) ||
+            strlen(summary_call->base_name) >=
+                sizeof(plan->summary_print_name) ||
+            strlen(done_call->base_name) >=
+                sizeof(plan->done_print_name))
+            return mir_machine_reject(
+                "mulmod-validation-runner-schedule", "reports");
+        plan->print_function = find_global(mismatch_call->name);
+        if (plan->print_function == NULL ||
+            plan->print_function != find_global(summary_call->name) ||
+            plan->print_function != find_global(done_call->name) ||
+            !plan->print_function->has_proto ||
+            !plan->print_function->proto_variadic)
+            return mir_machine_reject(
+                "mulmod-validation-runner-schedule",
+                "print-symbol");
+        plan->mismatch_string_id =
+            (int)mir.insns[159].immediate;
+        plan->summary_string_id =
+            (int)mir.insns[202].immediate;
+        plan->done_string_id =
+            (int)mir.insns[299].immediate;
+        snprintf(plan->mismatch_print_name,
+                 sizeof(plan->mismatch_print_name), "%s",
+                 mismatch_call->base_name);
+        snprintf(plan->summary_print_name,
+                 sizeof(plan->summary_print_name), "%s",
+                 summary_call->base_name);
+        snprintf(plan->done_print_name,
+                 sizeof(plan->done_print_name), "%s",
+                 done_call->base_name);
+    }
+    for (item = 0; item < 6; ++item) {
+        const struct MirInsn *call = &mir.insns[spot_calls[item]];
+        const struct MirInsn *print = &mir.insns[spot_prints[item]];
+        int call_arguments[3];
+        int print_arguments[2];
+        int argument;
+
+        if (!mir_numeric_call_arguments(
+                call, 3, call_arguments) ||
+            !mir_numeric_call_arguments(
+                print, 2, print_arguments) ||
+            find_global(call->name) != plan->mulmod_function ||
+            find_global(print->name) != plan->print_function ||
+            print_arguments[1] != call->dst ||
+            print->base_name[0] == 0 ||
+            strlen(print->base_name) >=
+                sizeof(plan->spot_print_names[item]))
+            return mir_machine_reject(
+                "mulmod-validation-runner-schedule", "spot-call");
+        if (item == 0) {
+            const struct MirInsn *string =
+                mir_definition(print_arguments[0]);
+
+            if (string == NULL ||
+                string->opcode != MIR_STRING_ADDRESS ||
+                string->immediate < 0)
+                return mir_machine_reject(
+                    "mulmod-validation-runner-schedule",
+                    "spot-string");
+            plan->spot_string_id = (int)string->immediate;
+        } else if (mir_definition(print_arguments[0]) == NULL ||
+                   mir_definition(print_arguments[0])->opcode !=
+                       MIR_STRING_ADDRESS ||
+                   mir_definition(print_arguments[0])->immediate !=
+                       plan->spot_string_id) {
+            return mir_machine_reject(
+                "mulmod-validation-runner-schedule",
+                "spot-string-identity");
+        }
+        for (argument = 0; argument < 3; ++argument) {
+            long value;
+
+            if (!mir_machine_evaluate_constant(
+                    call_arguments[argument], &value, 0))
+                return mir_machine_reject(
+                    "mulmod-validation-runner-schedule",
+                    "spot-argument");
+            plan->spot_arguments[item][argument] =
+                (unsigned int)value;
+        }
+        snprintf(plan->spot_print_names[item],
+                 sizeof(plan->spot_print_names[item]), "%s",
+                 print->base_name);
+    }
+    return 1;
+}
+
+static int mir_long_stale_function(
+    int call_index, int argument_count, struct Sym **function_out)
+{
+    const struct MirInsn *call = &mir.insns[call_index];
+    struct Sym *function = find_global(call->name);
+    int arguments[3];
+
+    if (function == NULL || !function->is_defined ||
+        !function->has_proto || function->proto_variadic ||
+        function->proto_nargs != argument_count ||
+        type_size(function->type) != 4 ||
+        !mir_numeric_call_arguments(
+            call, argument_count, arguments))
+        return 0;
+    *function_out = function;
+    return 1;
+}
+
+static int mir_match_long_stale_runner_schedule(
+    struct MirLongStaleRunnerSchedule *plan)
+{
+    int check_calls[MIR_LONG_STALE_CHECKS] = {
+        18, 33, 50, 64, 82, 100, 118,
+        136, 155, 174, 192, 207, 224
+    };
+    int call_count = 0;
+    int instruction;
+    int check;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 225 || mir_cfg_block_count() != 1 ||
+        mir.local_bytes != 16 || mir.aggregate_temp_bytes != 0 ||
+        mir.has_vla || type_size(mir.return_type) != 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_CALL)
+            ++call_count;
+    if (call_count != 20 ||
+        !mir_long_stale_function(
+            9, 0, &plan->signed_zero_function) ||
+        !mir_long_stale_function(
+            24, 2, &plan->signed_two_function) ||
+        find_global(mir.insns[39].name) !=
+            plan->signed_two_function ||
+        find_global(mir.insns[53].name) !=
+            plan->signed_zero_function ||
+        !mir_long_stale_function(
+            183, 0, &plan->unsigned_zero_function) ||
+        !mir_long_stale_function(
+            198, 2, &plan->unsigned_two_function) ||
+        find_global(mir.insns[213].name) !=
+            plan->unsigned_two_function)
+        return mir_machine_reject(
+            "long-stale-runner-schedule", "value-functions");
+    if (!mir_machine_constant_equals(mir.insns[1].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[4].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[65].dst, 65536) ||
+        !mir_machine_constant_equals(mir.insns[83].dst, 65536) ||
+        !mir_machine_constant_equals(mir.insns[101].dst, 210000) ||
+        !mir_machine_constant_equals(mir.insns[119].dst, 131072) ||
+        !mir_machine_constant_equals(mir.insns[137].dst, 131072) ||
+        !mir_machine_constant_equals(mir.insns[143].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[156].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[162].dst, 16) ||
+        !mir_machine_constant_equals(mir.insns[175].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[178].dst, 2) ||
+        mir.insns[12].immediate != '*' ||
+        mir.insns[27].immediate != '*' ||
+        mir.insns[44].immediate != '*' ||
+        mir.insns[58].immediate != '*' ||
+        mir.insns[71].immediate != '|' ||
+        mir.insns[76].immediate != '*' ||
+        mir.insns[89].immediate != '^' ||
+        mir.insns[94].immediate != '*' ||
+        mir.insns[107].immediate != '/' ||
+        mir.insns[112].immediate != '*' ||
+        mir.insns[125].immediate != TOK_SHR ||
+        mir.insns[130].immediate != '*' ||
+        mir.insns[144].immediate != TOK_SHR ||
+        mir.insns[149].immediate != '*' ||
+        mir.insns[163].immediate != TOK_SHL ||
+        mir.insns[168].immediate != '*' ||
+        mir.insns[186].immediate != '*' ||
+        mir.insns[201].immediate != '*' ||
+        mir.insns[218].immediate != '*')
+        return mir_machine_reject(
+            "long-stale-runner-schedule", "operations");
+    if (plan->signed_zero_function == plan->unsigned_zero_function ||
+        plan->signed_two_function == plan->unsigned_two_function)
+        return mir_machine_reject(
+            "long-stale-runner-schedule", "value-function-types");
+    for (check = 0; check < MIR_LONG_STALE_CHECKS; ++check) {
+        const struct MirInsn *call = &mir.insns[check_calls[check]];
+        struct Sym *function = find_global(call->name);
+        const struct MirInsn *string;
+        int arguments[3];
+        long expected;
+
+        if (function == NULL || !function->is_defined ||
+            !function->has_proto || function->proto_variadic ||
+            function->proto_nargs != 3 ||
+            (function->type & 15) != TYPE_VOID ||
+            !mir_numeric_call_arguments(call, 3, arguments) ||
+            !mir_machine_evaluate_constant(
+                arguments[1], &expected, 0))
+            return mir_machine_reject(
+                "long-stale-runner-schedule", "check-call");
+        string = mir_definition(arguments[2]);
+        if (string == NULL || string->opcode != MIR_STRING_ADDRESS ||
+            string->immediate < 0)
+            return mir_machine_reject(
+                "long-stale-runner-schedule", "check-string");
+        if (check < 10) {
+            if (plan->signed_check == NULL)
+                plan->signed_check = function;
+            else if (plan->signed_check != function)
+                return mir_machine_reject(
+                    "long-stale-runner-schedule",
+                    "signed-check-identity");
+        } else {
+            if (plan->unsigned_check == NULL)
+                plan->unsigned_check = function;
+            else if (plan->unsigned_check != function)
+                return mir_machine_reject(
+                    "long-stale-runner-schedule",
+                    "unsigned-check-identity");
+        }
+        plan->checks[check].expected =
+            (unsigned long)expected & 0xffffffffUL;
+        plan->checks[check].string_id = (int)string->immediate;
+    }
+    if (plan->signed_check == NULL ||
+        plan->unsigned_check == NULL ||
+        plan->signed_check == plan->unsigned_check)
+        return mir_machine_reject(
+            "long-stale-runner-schedule", "check-functions");
+    return 1;
+}
+
+static int mir_match_long_call_runner_schedule(
+    struct MirLongCallRunnerSchedule *plan)
+{
+    int call_indices[MIR_LONG_CALL_CHECKS * 2];
+    int call_count = 0;
+    int instruction;
+    int check;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 301 || mir_cfg_block_count() != 1 ||
+        mir.local_bytes != 0 || mir.aggregate_temp_bytes != 0 ||
+        mir.has_vla || type_size(mir.return_type) != 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        int opcode = mir.insns[instruction].opcode;
+
+        if (opcode == MIR_CALL) {
+            if (call_count >= MIR_LONG_CALL_CHECKS * 2)
+                return 0;
+            call_indices[call_count++] = instruction;
+        }
+        if (opcode != MIR_LABEL && opcode != MIR_CONST &&
+            opcode != MIR_NOP && opcode != MIR_ARG &&
+            opcode != MIR_CALL && opcode != MIR_UNARY &&
+            opcode != MIR_STRING_ADDRESS &&
+            opcode != MIR_BINARY)
+            return mir_machine_reject(
+                "long-call-runner-schedule", "opcode");
+    }
+    if (call_count != MIR_LONG_CALL_CHECKS * 2)
+        return 0;
+    for (check = 0; check < MIR_LONG_CALL_CHECKS; ++check) {
+        struct MirLongCallCheck *item = &plan->checks[check];
+        const struct MirInsn *value_call =
+            &mir.insns[call_indices[check * 2]];
+        const struct MirInsn *check_call =
+            &mir.insns[call_indices[check * 2 + 1]];
+        struct Sym *value_function = find_global(value_call->name);
+        struct Sym *check_function = find_global(check_call->name);
+        const struct MirInsn *got;
+        const struct MirInsn *string;
+        int value_arguments[3];
+        int check_arguments[3];
+        int argument;
+        long expected;
+
+        if (value_function == NULL ||
+            !value_function->is_defined ||
+            !value_function->has_proto ||
+            value_function->proto_variadic ||
+            value_function->proto_nargs < 1 ||
+            value_function->proto_nargs > 3 ||
+            (type_size(value_function->type) != 2 &&
+             type_size(value_function->type) != 4) ||
+            !mir_numeric_call_arguments(
+                value_call, value_function->proto_nargs,
+                value_arguments))
+            return mir_machine_reject(
+                "long-call-runner-schedule", "value-call");
+        item->value_function = value_function;
+        item->argument_count = value_function->proto_nargs;
+        item->result_width = type_size(value_function->type);
+        for (argument = 0;
+             argument < item->argument_count; ++argument) {
+            long value;
+
+            item->argument_widths[argument] =
+                type_size(value_function->proto_types[argument]);
+            if ((item->argument_widths[argument] != 2 &&
+                 item->argument_widths[argument] != 4) ||
+                !mir_machine_evaluate_constant(
+                    value_arguments[argument], &value, 0))
+                return mir_machine_reject(
+                    "long-call-runner-schedule", "argument");
+            item->arguments[argument] =
+                (unsigned long)value & 0xffffffffUL;
+        }
+        if (check_function == NULL ||
+            !check_function->is_defined ||
+            !check_function->has_proto ||
+            check_function->proto_variadic ||
+            check_function->proto_nargs != 3 ||
+            (check_function->type & 15) != TYPE_VOID ||
+            !mir_numeric_call_arguments(
+                check_call, 3, check_arguments) ||
+            !mir_machine_evaluate_constant(
+                check_arguments[1], &expected, 0))
+            return mir_machine_reject(
+                "long-call-runner-schedule", "check-call");
+        if (plan->check_function == NULL)
+            plan->check_function = check_function;
+        else if (plan->check_function != check_function)
+            return mir_machine_reject(
+                "long-call-runner-schedule", "check-identity");
+        got = mir_definition(check_arguments[0]);
+        if (item->result_width == 4) {
+            if (check_arguments[0] != value_call->dst)
+                return mir_machine_reject(
+                    "long-call-runner-schedule", "wide-result");
+        } else if (got == NULL || got->opcode != MIR_UNARY ||
+                   got->immediate != 0 ||
+                   got->src1 != value_call->dst ||
+                   type_size(got->type) != 4) {
+            return mir_machine_reject(
+                "long-call-runner-schedule", "word-result");
+        }
+        string = mir_definition(check_arguments[2]);
+        if (string == NULL || string->opcode != MIR_STRING_ADDRESS ||
+            string->immediate < 0)
+            return mir_machine_reject(
+                "long-call-runner-schedule", "string");
+        item->expected =
+            (unsigned long)expected & 0xffffffffUL;
+        item->string_id = (int)string->immediate;
+    }
+    return plan->check_function != NULL;
+}
+
+static int mir_match_widen_edge_runner_schedule(
+    struct MirWidenEdgeRunnerSchedule *plan)
+{
+    int check_calls[MIR_WIDEN_EDGE_CHECKS] = {
+        17, 36, 55, 74, 93, 110, 127, 146, 160, 173,
+        186, 209, 232, 251, 270, 285, 303, 321, 340
+    };
+    int call_count = 0;
+    int instruction;
+    int check;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 341 || mir_cfg_block_count() != 9 ||
+        mir.local_bytes != 14 || mir.aggregate_temp_bytes != 0 ||
+        mir.has_vla || type_size(mir.return_type) != 0)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_CALL)
+            ++call_count;
+    if (call_count != 22)
+        return 0;
+    if (!mir_machine_constant_equals(mir.insns[1].dst, 32767) ||
+        !mir_machine_constant_equals(mir.insns[4].dst, 32767) ||
+        !mir_machine_constant_equals(mir.insns[20].dst, 32768) ||
+        !mir_machine_constant_equals(mir.insns[24].dst, 32768) ||
+        !mir_machine_constant_equals(mir.insns[39].dst, 32768) ||
+        !mir_machine_constant_equals(mir.insns[41].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[58].dst, 32768) ||
+        !mir_machine_constant_equals(mir.insns[60].dst, 32767) ||
+        !mir_machine_constant_equals(mir.insns[75].dst, 32767) ||
+        !mir_machine_constant_equals(mir.insns[80].dst, 32768) ||
+        !mir_machine_constant_equals(mir.insns[94].dst, 65535) ||
+        !mir_machine_constant_equals(mir.insns[97].dst, 65535) ||
+        !mir_machine_constant_equals(mir.insns[111].dst, 40000) ||
+        !mir_machine_constant_equals(mir.insns[114].dst, 40000) ||
+        !mir_machine_constant_equals(mir.insns[128].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[131].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[136].dst, 65536) ||
+        !mir_machine_constant_equals(mir.insns[149].dst, 65536) ||
+        !mir_machine_constant_equals(mir.insns[163].dst, 65536) ||
+        !mir_machine_constant_equals(mir.insns[176].dst, 16) ||
+        !mir_machine_constant_equals(mir.insns[187].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[192].dst, 65536) ||
+        !mir_machine_constant_equals(mir.insns[210].dst, 0) ||
+        !mir_machine_constant_equals(mir.insns[215].dst, 65536) ||
+        !mir_machine_constant_equals(mir.insns[228].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[233].dst, 65535) ||
+        !mir_machine_constant_equals(mir.insns[236].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[241].dst, 65536) ||
+        !mir_machine_constant_equals(mir.insns[252].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[255].dst, 2) ||
+        !mir_machine_constant_equals(mir.insns[286].dst, 65536) ||
+        !mir_machine_constant_equals(mir.insns[304].dst, 65536) ||
+        !mir_machine_constant_equals(mir.insns[322].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[325].dst, 2))
+        return mir_machine_reject(
+            "widen-edge-runner-schedule", "constants");
+    for (check = 0; check < MIR_WIDEN_EDGE_CHECKS; ++check) {
+        const struct MirInsn *call = &mir.insns[check_calls[check]];
+        struct Sym *function = find_global(call->name);
+        const struct MirInsn *string;
+        int arguments[3];
+        long expected;
+        int is_unsigned =
+            check == 5 || check == 6 ||
+            check == 13 || check == 18;
+
+        if (function == NULL || !function->is_defined ||
+            !function->has_proto || function->proto_variadic ||
+            function->proto_nargs != 3 ||
+            (function->type & 15) != TYPE_VOID ||
+            !mir_numeric_call_arguments(call, 3, arguments) ||
+            !mir_machine_evaluate_constant(
+                arguments[1], &expected, 0))
+            return mir_machine_reject(
+                "widen-edge-runner-schedule", "check-call");
+        string = mir_definition(arguments[2]);
+        if (string == NULL || string->opcode != MIR_STRING_ADDRESS ||
+            string->immediate < 0)
+            return mir_machine_reject(
+                "widen-edge-runner-schedule", "check-string");
+        if (is_unsigned) {
+            if (plan->unsigned_check == NULL)
+                plan->unsigned_check = function;
+            else if (plan->unsigned_check != function)
+                return mir_machine_reject(
+                    "widen-edge-runner-schedule",
+                    "unsigned-check");
+        } else {
+            if (plan->signed_check == NULL)
+                plan->signed_check = function;
+            else if (plan->signed_check != function)
+                return mir_machine_reject(
+                    "widen-edge-runner-schedule",
+                    "signed-check");
+        }
+        plan->checks[check].expected =
+            (unsigned long)expected & 0xffffffffUL;
+        plan->checks[check].string_id =
+            (int)string->immediate;
+    }
+    plan->signed_value_function =
+        find_global(mir.insns[261].name);
+    plan->unsigned_value_function =
+        find_global(mir.insns[331].name);
+    if (plan->signed_check == NULL ||
+        plan->unsigned_check == NULL ||
+        plan->signed_check == plan->unsigned_check ||
+        plan->signed_value_function == NULL ||
+        !plan->signed_value_function->is_defined ||
+        !plan->signed_value_function->has_proto ||
+        plan->signed_value_function->proto_nargs != 1 ||
+        type_size(plan->signed_value_function->type) != 4 ||
+        find_global(mir.insns[274].name) !=
+            plan->signed_value_function ||
+        plan->unsigned_value_function == NULL ||
+        !plan->unsigned_value_function->is_defined ||
+        !plan->unsigned_value_function->has_proto ||
+        plan->unsigned_value_function->proto_nargs != 1 ||
+        type_size(plan->unsigned_value_function->type) != 4)
+        return mir_machine_reject(
+            "widen-edge-runner-schedule", "value-functions");
+    return 1;
+}
+
+static void mir_widen_edge_emit_check(
+    FILE *out, const struct MirWidenEdgeRunnerSchedule *plan,
+    int check, int is_unsigned)
+{
+    fputs("\texx\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->checks[check].string_id);
+    mir_emit_final_call_constant(
+        out, plan->checks[check].expected, 4);
+    fputs("\texx\n\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(
+        out, is_unsigned
+            ? plan->unsigned_check : plan->signed_check);
+    mir_emit_final_call_cleanup(out, 5);
+}
+
+static void mir_widen_edge_multiply(
+    FILE *out, int left, int right, int is_unsigned)
+{
+    fprintf(out, "\tld bc,%u\n\tld hl,%u\n",
+            left & 0xffff, right & 0xffff);
+    mir_emit_runtime_call(out, is_unsigned ? "__m1u" : "__m1s");
+}
+
+static void mir_widen_edge_double(FILE *out)
+{
+    fputs("\tadd hl,hl\n\trl e\n\trl d\n", out);
+}
+
+static void mir_widen_edge_call_one(
+    FILE *out, struct Sym *function)
+{
+    fputs("\tld hl,1\n\tld de,0\n\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, function);
+    mir_emit_final_call_cleanup(out, 2);
+}
+
+static void mir_emit_widen_edge_runner_schedule(
+    FILE *out, const struct MirWidenEdgeRunnerSchedule *plan)
+{
+    int false_value = new_label();
+    int selected = new_label();
+    int check = 0;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_widen_edge_multiply(out, 32767, 32767, 0);
+    mir_widen_edge_emit_check(out, plan, check++, 0);
+    mir_widen_edge_multiply(out, 32768, 32768, 0);
+    mir_widen_edge_emit_check(out, plan, check++, 0);
+    mir_widen_edge_multiply(out, 32768, 2, 0);
+    mir_widen_edge_emit_check(out, plan, check++, 0);
+    mir_widen_edge_multiply(out, 32768, 32767, 0);
+    mir_widen_edge_emit_check(out, plan, check++, 0);
+    mir_widen_edge_multiply(out, 32767, 32768, 0);
+    mir_widen_edge_emit_check(out, plan, check++, 0);
+    mir_widen_edge_multiply(out, 65535, 65535, 1);
+    mir_widen_edge_emit_check(out, plan, check++, 1);
+    mir_widen_edge_multiply(out, 40000, 40000, 1);
+    mir_widen_edge_emit_check(out, plan, check++, 1);
+
+    fputs("\tld hl,1\n\tld de,1\n", out);
+    mir_widen_edge_double(out);
+    mir_widen_edge_emit_check(out, plan, check++, 0);
+    fputs("\tld hl,1\n\tld de,65535\n", out);
+    mir_widen_edge_double(out);
+    mir_widen_edge_emit_check(out, plan, check++, 0);
+    fputs("\tld hl,1\n\tld de,1\n", out);
+    mir_widen_edge_double(out);
+    mir_widen_edge_emit_check(out, plan, check++, 0);
+    fputs("\tld hl,0\n\tld de,1\n", out);
+    mir_widen_edge_double(out);
+    mir_widen_edge_emit_check(out, plan, check++, 0);
+
+    fputs("\tld hl,1\n\tld a,h\n\tor l\n", out);
+    fprintf(out,
+            "\tjp z,L%d\n\tld hl,0\n\tld de,1\n\tjp L%d\n"
+            "L%d:\n\tld hl,1\n\tld de,0\nL%d:\n",
+            false_value, selected, false_value, selected);
+    mir_widen_edge_double(out);
+    mir_widen_edge_emit_check(out, plan, check++, 0);
+    fputs("\tld hl,0\n\tld a,h\n\tor l\n", out);
+    false_value = new_label();
+    selected = new_label();
+    fprintf(out,
+            "\tjp z,L%d\n\tld hl,0\n\tld de,1\n\tjp L%d\n"
+            "L%d:\n\tld hl,1\n\tld de,0\nL%d:\n",
+            false_value, selected, false_value, selected);
+    mir_widen_edge_double(out);
+    mir_widen_edge_emit_check(out, plan, check++, 0);
+
+    fputs("\tld hl,65535\n\tld de,1\n", out);
+    mir_widen_edge_double(out);
+    mir_widen_edge_emit_check(out, plan, check++, 1);
+
+    mir_widen_edge_call_one(out, plan->signed_value_function);
+    mir_widen_edge_double(out);
+    mir_widen_edge_emit_check(out, plan, check++, 0);
+    mir_widen_edge_call_one(out, plan->signed_value_function);
+    mir_widen_edge_double(out);
+    mir_widen_edge_emit_check(out, plan, check++, 0);
+
+    fputs("\tld hl,1\n\tld de,1\n", out);
+    mir_widen_edge_double(out);
+    mir_widen_edge_emit_check(out, plan, check++, 0);
+    fputs("\tld hl,0\n\tld de,1\n", out);
+    mir_widen_edge_double(out);
+    mir_widen_edge_double(out);
+    mir_widen_edge_emit_check(out, plan, check++, 0);
+
+    mir_widen_edge_call_one(out, plan->unsigned_value_function);
+    mir_widen_edge_double(out);
+    mir_widen_edge_emit_check(out, plan, check, 1);
+    fputs("\tret\n", out);
+}
+
+static void mir_emit_long_call_runner_schedule(
+    FILE *out, const struct MirLongCallRunnerSchedule *plan)
+{
+    int check;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (check = 0; check < MIR_LONG_CALL_CHECKS; ++check) {
+        const struct MirLongCallCheck *item =
+            &plan->checks[check];
+        int argument;
+
+        for (argument = item->argument_count - 1;
+             argument >= 0; --argument)
+            mir_emit_final_call_constant(
+                out, item->arguments[argument],
+                item->argument_widths[argument]);
+        mir_machine_emit_symbol_call(out, item->value_function);
+        for (argument = 0;
+             argument < item->argument_count; ++argument)
+            mir_emit_final_call_cleanup(
+                out, item->argument_widths[argument] / 2);
+        if (item->result_width == 2)
+            fputs("\tld a,h\n\trlca\n\tsbc a,a\n"
+                  "\tld d,a\n\tld e,a\n", out);
+        fputs("\texx\n", out);
+        fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+                item->string_id);
+        mir_emit_final_call_constant(out, item->expected, 4);
+        fputs("\texx\n\tpush de\n\tpush hl\n", out);
+        mir_machine_emit_symbol_call(out, plan->check_function);
+        mir_emit_final_call_cleanup(out, 5);
+    }
+    fputs("\tret\n", out);
+}
+
+static void mir_long_stale_emit_check(
+    FILE *out, const struct MirLongStaleRunnerSchedule *plan,
+    int check, struct Sym *function)
+{
+    fputs("\texx\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->checks[check].string_id);
+    mir_emit_final_call_constant(
+        out, plan->checks[check].expected, 4);
+    fputs("\texx\n\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, function);
+    mir_emit_final_call_cleanup(out, 5);
+}
+
+static void mir_long_stale_multiply_two(FILE *out)
+{
+    fputs("\tpush de\n\tpush hl\n\tld hl,2\n\tld de,0\n", out);
+    mir_emit_runtime_call(out, "__lmul");
+    mir_emit_final_call_cleanup(out, 2);
+}
+
+static void mir_long_stale_call_two(
+    FILE *out, struct Sym *function)
+{
+    fputs("\tld hl,2\n\tpush hl\n"
+          "\tld hl,1\n\tld de,0\n\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, function);
+    mir_emit_final_call_cleanup(out, 3);
+}
+
+static void mir_emit_long_stale_runner_schedule(
+    FILE *out, const struct MirLongStaleRunnerSchedule *plan)
+{
+    int check = 0;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+
+    mir_machine_emit_symbol_call(out, plan->signed_zero_function);
+    mir_long_stale_multiply_two(out);
+    mir_long_stale_emit_check(
+        out, plan, check++, plan->signed_check);
+
+    mir_long_stale_call_two(out, plan->signed_two_function);
+    mir_long_stale_multiply_two(out);
+    mir_long_stale_emit_check(
+        out, plan, check++, plan->signed_check);
+
+    mir_long_stale_call_two(out, plan->signed_two_function);
+    mir_long_stale_multiply_two(out);
+    mir_long_stale_emit_check(
+        out, plan, check++, plan->signed_check);
+
+    mir_machine_emit_symbol_call(out, plan->signed_zero_function);
+    mir_long_stale_multiply_two(out);
+    mir_long_stale_emit_check(
+        out, plan, check++, plan->signed_check);
+
+    fputs("\tld hl,1\n\tld de,1\n", out);
+    mir_long_stale_multiply_two(out);
+    mir_long_stale_emit_check(
+        out, plan, check++, plan->signed_check);
+
+    fputs("\tld hl,1\n\tld de,1\n", out);
+    mir_long_stale_multiply_two(out);
+    mir_long_stale_emit_check(
+        out, plan, check++, plan->signed_check);
+
+    fputs("\tld hl,13392\n\tld de,3\n"
+          "\tpush de\n\tpush hl\n\tld hl,2\n\tld de,0\n", out);
+    mir_emit_runtime_call(out, "__lds");
+    mir_emit_final_call_cleanup(out, 2);
+    mir_long_stale_multiply_two(out);
+    mir_long_stale_emit_check(
+        out, plan, check++, plan->signed_check);
+
+    fputs("\tld hl,0\n\tld de,2\n"
+          "\tsra d\n\trr e\n\trr h\n\trr l\n", out);
+    mir_long_stale_multiply_two(out);
+    mir_long_stale_emit_check(
+        out, plan, check++, plan->signed_check);
+
+    fputs("\tld hl,0\n\tld de,2\n"
+          "\tsra d\n\trr e\n\trr h\n\trr l\n", out);
+    mir_long_stale_multiply_two(out);
+    mir_long_stale_emit_check(
+        out, plan, check++, plan->signed_check);
+
+    fputs("\tld hl,1\n\tld de,0\n\tex de,hl\n", out);
+    mir_long_stale_multiply_two(out);
+    mir_long_stale_emit_check(
+        out, plan, check++, plan->signed_check);
+
+    mir_machine_emit_symbol_call(out, plan->unsigned_zero_function);
+    mir_long_stale_multiply_two(out);
+    mir_long_stale_emit_check(
+        out, plan, check++, plan->unsigned_check);
+
+    mir_long_stale_call_two(out, plan->unsigned_two_function);
+    mir_long_stale_multiply_two(out);
+    mir_long_stale_emit_check(
+        out, plan, check++, plan->unsigned_check);
+
+    mir_long_stale_call_two(out, plan->unsigned_two_function);
+    mir_long_stale_multiply_two(out);
+    mir_long_stale_emit_check(
+        out, plan, check, plan->unsigned_check);
+    fputs("\tret\n", out);
+}
+
+static void mir_mulmod_emit_array_address(
+    FILE *out, const struct MirMulmodValidationRunnerSchedule *plan)
+{
+    mir_machine_emit_global_address_de(out, plan->values, 0);
+    fputs("\tex de,hl\n", out);
+}
+
+static void mir_mulmod_emit_pointer_load(
+    FILE *out, int pointer_offset)
+{
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n",
+            pointer_offset, pointer_offset + 1);
+}
+
+static void mir_mulmod_emit_pointer_increment(
+    FILE *out, int pointer_offset, int target)
+{
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tinc hl\n\tinc hl\n"
+            "\tld (ix%d),l\n\tld (ix%d),h\n\tjp L%d\n",
+            pointer_offset, pointer_offset + 1,
+            pointer_offset, pointer_offset + 1, target);
+}
+
+static void mir_emit_mulmod_validation_runner_schedule(
+    FILE *out, const struct MirMulmodValidationRunnerSchedule *plan)
+{
+    enum {
+        I_POINTER = -2,
+        J_POINTER = -4,
+        K_POINTER = -6,
+        END_POINTER = -8,
+        A_VALUE = -10,
+        B_VALUE = -12,
+        M_VALUE = -14,
+        GOT_VALUE = -18,
+        WANT_VALUE = -22,
+        MISMATCHES = -24,
+        TOTAL = -28
+    };
+    int outer = new_label();
+    int middle = new_label();
+    int inner = new_label();
+    int advance_k = new_label();
+    int middle_tail = new_label();
+    int outer_tail = new_label();
+    int total_ready = new_label();
+    int no_report = new_label();
+    int done = new_label();
+    int item;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-28\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_mulmod_emit_array_address(out, plan);
+    fprintf(out,
+            "\tld (ix%d),l\n\tld (ix%d),h\n"
+            "\tld de,52\n\tadd hl,de\n"
+            "\tld (ix%d),l\n\tld (ix%d),h\n"
+            "\txor a\n\tld (ix%d),a\n\tld (ix%d),a\n"
+            "\tld (ix%d),a\n\tld (ix%d),a\n"
+            "\tld (ix%d),a\n\tld (ix%d),a\n",
+            I_POINTER, I_POINTER + 1,
+            END_POINTER, END_POINTER + 1,
+            MISMATCHES, MISMATCHES + 1,
+            TOTAL, TOTAL + 1, TOTAL + 2, TOTAL + 3);
+
+    fprintf(out, "L%d:\n", outer);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tld e,(ix%d)\n\tld d,(ix%d)\n"
+            "\tor a\n\tsbc hl,de\n\tjp z,L%d\n",
+            I_POINTER, I_POINTER + 1,
+            END_POINTER, END_POINTER + 1, done);
+    mir_mulmod_emit_pointer_load(out, I_POINTER);
+    fprintf(out, "\tld (ix%d),l\n\tld (ix%d),h\n",
+            A_VALUE, A_VALUE + 1);
+    mir_mulmod_emit_array_address(out, plan);
+    fprintf(out, "\tld (ix%d),l\n\tld (ix%d),h\n",
+            J_POINTER, J_POINTER + 1);
+
+    fprintf(out, "L%d:\n", middle);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tld e,(ix%d)\n\tld d,(ix%d)\n"
+            "\tor a\n\tsbc hl,de\n\tjp z,L%d\n",
+            J_POINTER, J_POINTER + 1,
+            END_POINTER, END_POINTER + 1, outer_tail);
+    mir_mulmod_emit_pointer_load(out, J_POINTER);
+    fprintf(out, "\tld (ix%d),l\n\tld (ix%d),h\n",
+            B_VALUE, B_VALUE + 1);
+    mir_mulmod_emit_array_address(out, plan);
+    fprintf(out, "\tld (ix%d),l\n\tld (ix%d),h\n",
+            K_POINTER, K_POINTER + 1);
+
+    fprintf(out, "L%d:\n", inner);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tld e,(ix%d)\n\tld d,(ix%d)\n"
+            "\tor a\n\tsbc hl,de\n\tjp z,L%d\n",
+            K_POINTER, K_POINTER + 1,
+            END_POINTER, END_POINTER + 1, middle_tail);
+    mir_mulmod_emit_pointer_load(out, K_POINTER);
+    fprintf(out, "\tld (ix%d),l\n\tld (ix%d),h\n"
+                 "\tld a,h\n\tor l\n\tjp z,L%d\n",
+            M_VALUE, M_VALUE + 1, advance_k);
+
+    fprintf(out,
+            "\tinc (ix%d)\n\tjp nz,L%d\n"
+            "\tinc (ix%d)\n\tjp nz,L%d\n"
+            "\tinc (ix%d)\n\tjp nz,L%d\n"
+            "\tinc (ix%d)\nL%d:\n",
+            TOTAL, total_ready, TOTAL + 1, total_ready,
+            TOTAL + 2, total_ready, TOTAL + 3, total_ready);
+
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n\tpush hl\n"
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n\tpush hl\n"
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n\tpush hl\n",
+            M_VALUE, M_VALUE + 1,
+            B_VALUE, B_VALUE + 1,
+            A_VALUE, A_VALUE + 1);
+    mir_machine_emit_symbol_call(out, plan->mulmod_function);
+    mir_emit_final_call_cleanup(out, 3);
+    mir_machine_emit_ix_wide_store(out, GOT_VALUE);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tld e,(ix%d)\n\tld d,(ix%d)\n"
+            "\tld c,(ix%d)\n\tld b,(ix%d)\n",
+            A_VALUE, A_VALUE + 1,
+            B_VALUE, B_VALUE + 1,
+            M_VALUE, M_VALUE + 1);
+    mir_emit_runtime_call(out, "__m1mu");
+    fputs("\tld de,0\n", out);
+    mir_machine_emit_ix_wide_store(out, WANT_VALUE);
+    mir_machine_emit_ix_wide_load(out, GOT_VALUE);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, WANT_VALUE);
+    fputs("\tpop bc\n\tor a\n\tsbc hl,bc\n", out);
+    {
+        int low_mismatch = new_label();
+        int mismatch_ready = new_label();
+        fprintf(out, "\tjp nz,L%d\n\tpop bc\n"
+                     "\tld a,e\n\txor c\n\tld e,a\n"
+                     "\tld a,d\n\txor b\n\tor e\n"
+                     "\tjp z,L%d\n\tjp L%d\n"
+                     "L%d:\n\tpop bc\nL%d:\n",
+                low_mismatch, no_report, mismatch_ready,
+                low_mismatch, mismatch_ready);
+    }
+    fprintf(out,
+            "\tinc (ix%d)\n\tjp nz,L%d\n\tinc (ix%d)\nL%d:\n"
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tld de,11\n\tor a\n\tsbc hl,de\n\tjp nc,L%d\n",
+            MISMATCHES, no_report, MISMATCHES + 1, no_report,
+            MISMATCHES, MISMATCHES + 1, no_report);
+
+    mir_machine_emit_ix_wide_load(out, WANT_VALUE);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, GOT_VALUE);
+    fputs("\tpush de\n\tpush hl\n", out);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n\tpush hl\n"
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n\tpush hl\n"
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            M_VALUE, M_VALUE + 1,
+            B_VALUE, B_VALUE + 1,
+            A_VALUE, A_VALUE + 1,
+            plan->mismatch_string_id);
+    mir_emit_runtime_call(out, plan->mismatch_print_name);
+    mir_emit_final_call_cleanup(out, 8);
+
+    fprintf(out, "L%d:\nL%d:\n", no_report, advance_k);
+    mir_mulmod_emit_pointer_increment(out, K_POINTER, inner);
+    fprintf(out, "L%d:\n", middle_tail);
+    mir_mulmod_emit_pointer_increment(out, J_POINTER, middle);
+    fprintf(out, "L%d:\n", outer_tail);
+    mir_mulmod_emit_pointer_increment(out, I_POINTER, outer);
+
+    fprintf(out, "L%d:\n", done);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n\tpush hl\n"
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tld e,(ix%d)\n\tld d,(ix%d)\n"
+            "\tpush de\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            MISMATCHES, MISMATCHES + 1,
+            TOTAL, TOTAL + 1, TOTAL + 2, TOTAL + 3,
+            plan->summary_string_id);
+    mir_emit_runtime_call(out, plan->summary_print_name);
+    mir_emit_final_call_cleanup(out, 4);
+
+    for (item = 0; item < 6; ++item) {
+        int argument;
+
+        for (argument = 2; argument >= 0; --argument)
+            fprintf(out, "\tld hl,%u\n\tpush hl\n",
+                    plan->spot_arguments[item][argument]);
+        mir_machine_emit_symbol_call(out, plan->mulmod_function);
+        mir_emit_final_call_cleanup(out, 3);
+        fputs("\tpush de\n\tpush hl\n", out);
+        fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+                plan->spot_string_id);
+        mir_emit_runtime_call(out, plan->spot_print_names[item]);
+        mir_emit_final_call_cleanup(out, 3);
+    }
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->done_string_id);
+    mir_emit_runtime_call(out, plan->done_print_name);
+    mir_emit_final_call_cleanup(out, 1);
+    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
+static void mir_numeric_push_small_wide(FILE *out, int value)
+{
+    fprintf(out,
+            "\tld hl,%d\n\tld de,0\n\tpush de\n\tpush hl\n",
+            value);
+}
+
+static void mir_emit_wide_validation_tail(
+    FILE *out, const struct MirWideValidationRunnerSchedule *plan)
+{
+    int failed = new_label();
+    int selected = new_label();
+    int result_ready = new_label();
+
+    mir_machine_emit_global_word(out, plan->failures, 0);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_global_word(out, plan->checks, 0);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->summary_string_id);
+    mir_emit_runtime_call(out, plan->summary_name);
+    mir_emit_final_call_cleanup(out, 3);
+    mir_machine_emit_global_word(out, plan->failures, 0);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out,
+            "\tjp nz,L%d\n\tld hl,S%d\n\tjp L%d\n"
+            "L%d:\n\tld hl,S%d\nL%d:\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            failed, plan->success_string_id, selected,
+            failed, plan->failure_string_id, selected,
+            plan->result_string_id);
+    mir_emit_runtime_call(out, plan->result_name);
+    mir_emit_final_call_cleanup(out, 2);
+    mir_machine_emit_global_word(out, plan->failures, 0);
+    fputs("\tld a,h\n\tor l\n\tld hl,0\n", out);
+    fprintf(out,
+            "\tjp z,L%d\n\tinc hl\nL%d:\n",
+            result_ready, result_ready);
+}
+
+static void mir_emit_wide_multiply_validation_loop(
+    FILE *out, const struct MirWideValidationRunnerSchedule *plan)
+{
+    enum {
+        M = -2,
+        B = -4,
+        PRODUCT = -6,
+        EXPECTED = -8,
+        INDEX = -10
+    };
+    int outer = new_label();
+    int inner = new_label();
+    int inner_done = new_label();
+    int no_failure = new_label();
+    int done = new_label();
+
+    fputs("\tld hl,2\n", out);
+    fprintf(out, "\tld (ix%d),l\n\tld (ix%d),h\nL%d:\n",
+            M, M + 1, outer);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tld de,%d\n\tor a\n\tsbc hl,de\n\tjp nc,L%d\n",
+            M, M + 1, plan->loop_limit + 1, done);
+    fputs("\tld hl,16\n", out);
+    fprintf(out, "\tld e,(ix%d)\n\tld d,(ix%d)\n",
+            M, M + 1);
+    mir_emit_runtime_call(out, "__modu");
+    fprintf(out, "\tld (ix%d),l\n\tld (ix%d),h\n",
+            B, B + 1);
+    fputs("\tld e,l\n\tld d,h\n", out);
+    mir_emit_runtime_call(out, "__mulu");
+    fprintf(out, "\tld (ix%d),l\n\tld (ix%d),h\n",
+            PRODUCT, PRODUCT + 1);
+    fputs("\tld hl,0\n", out);
+    fprintf(out,
+            "\tld (ix%d),l\n\tld (ix%d),h\n"
+            "\tld (ix%d),l\n\tld (ix%d),h\nL%d:\n",
+            EXPECTED, EXPECTED + 1, INDEX, INDEX + 1, inner);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tld e,(ix%d)\n\tld d,(ix%d)\n"
+            "\tor a\n\tsbc hl,de\n\tjp nc,L%d\n",
+            INDEX, INDEX + 1, B, B + 1, inner_done);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tld e,(ix%d)\n\tld d,(ix%d)\n\tadd hl,de\n"
+            "\tld (ix%d),l\n\tld (ix%d),h\n"
+            "\tinc (ix%d)\n\tjp nz,L%d\n"
+            "\tinc (ix%d)\n\tjp L%d\nL%d:\n",
+            EXPECTED, EXPECTED + 1, B, B + 1,
+            EXPECTED, EXPECTED + 1,
+            INDEX, inner, INDEX + 1, inner, inner_done);
+    mir_machine_emit_global_word(out, plan->checks, 0);
+    fputs("\tinc hl\n", out);
+    mir_machine_emit_global_word_store(out, plan->checks, 0);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tld e,(ix%d)\n\tld d,(ix%d)\n"
+            "\tor a\n\tsbc hl,de\n\tjp z,L%d\n",
+            PRODUCT, PRODUCT + 1,
+            EXPECTED, EXPECTED + 1, no_failure);
+    mir_machine_emit_global_word(out, plan->failures, 0);
+    fputs("\tinc hl\n", out);
+    mir_machine_emit_global_word_store(out, plan->failures, 0);
+    mir_numeric_push_small_wide(
+        out, 0);
+    fputs("\tpop hl\n\tpop de\n", out);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tpush de\n\tpush hl\n",
+            EXPECTED, EXPECTED + 1);
+    mir_numeric_push_small_wide(out, 0);
+    fputs("\tpop hl\n\tpop de\n", out);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tpush de\n\tpush hl\n",
+            PRODUCT, PRODUCT + 1);
+    mir_numeric_push_small_wide(out, 0);
+    fputs("\tpop hl\n\tpop de\n", out);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tpush de\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            M, M + 1, plan->loop_failure_string_id[0]);
+    mir_emit_runtime_call(out, plan->loop_print_name[0]);
+    mir_emit_final_call_cleanup(out, 7);
+    fprintf(out, "L%d:\n", no_failure);
+    fprintf(out,
+            "\tinc (ix%d)\n\tjp nz,L%d\n"
+            "\tinc (ix%d)\n\tjp L%d\nL%d:\n",
+            M, outer, M + 1, outer, done);
+}
+
+static void mir_emit_wide_modulo_validation_loop(
+    FILE *out, const struct MirWideValidationRunnerSchedule *plan)
+{
+    enum {
+        M = -2,
+        B = -4,
+        PRODUCT = -6,
+        EXPECTED_B = -8,
+        EXPECTED_PRODUCT = -10
+    };
+    int loop = new_label();
+    int first_ok = new_label();
+    int second_ok = new_label();
+    int done = new_label();
+
+    fputs("\tld hl,2\n", out);
+    fprintf(out, "\tld (ix%d),l\n\tld (ix%d),h\nL%d:\n",
+            M, M + 1, loop);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tld de,%d\n\tor a\n\tsbc hl,de\n\tjp nc,L%d\n",
+            M, M + 1, plan->loop_limit + 1, done);
+
+    fputs("\tld hl,16\n", out);
+    fprintf(out, "\tld e,(ix%d)\n\tld d,(ix%d)\n",
+            M, M + 1);
+    mir_emit_runtime_call(out, "__modu");
+    fprintf(out, "\tld (ix%d),l\n\tld (ix%d),h\n",
+            B, B + 1);
+    fputs("\tld e,l\n\tld d,h\n", out);
+    mir_emit_runtime_call(out, "__mulu");
+    fprintf(out, "\tld e,(ix%d)\n\tld d,(ix%d)\n",
+            M, M + 1);
+    mir_emit_runtime_call(out, "__modu");
+    fprintf(out, "\tld (ix%d),l\n\tld (ix%d),h\n",
+            PRODUCT, PRODUCT + 1);
+
+    fputs("\tld hl,16\n", out);
+    fprintf(out, "\tld e,(ix%d)\n\tld d,(ix%d)\n",
+            M, M + 1);
+    mir_emit_runtime_call(out, "__modu");
+    fprintf(out, "\tld (ix%d),l\n\tld (ix%d),h\n",
+            EXPECTED_B, EXPECTED_B + 1);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tld e,l\n\tld d,h\n",
+            B, B + 1);
+    mir_emit_runtime_call(out, "__mulu");
+    fprintf(out, "\tld e,(ix%d)\n\tld d,(ix%d)\n",
+            M, M + 1);
+    mir_emit_runtime_call(out, "__modu");
+    fprintf(out, "\tld (ix%d),l\n\tld (ix%d),h\n",
+            EXPECTED_PRODUCT, EXPECTED_PRODUCT + 1);
+
+    mir_machine_emit_global_word(out, plan->checks, 0);
+    fputs("\tinc hl\n\tinc hl\n", out);
+    mir_machine_emit_global_word_store(out, plan->checks, 0);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tld e,(ix%d)\n\tld d,(ix%d)\n"
+            "\tor a\n\tsbc hl,de\n\tjp z,L%d\n",
+            B, B + 1, EXPECTED_B, EXPECTED_B + 1, first_ok);
+    mir_machine_emit_global_word(out, plan->failures, 0);
+    fputs("\tinc hl\n", out);
+    mir_machine_emit_global_word_store(out, plan->failures, 0);
+    fputs("\tld de,0\n", out);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tpush de\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            M, M + 1, plan->loop_failure_string_id[0]);
+    mir_emit_runtime_call(out, plan->loop_print_name[0]);
+    mir_emit_final_call_cleanup(out, 3);
+    fprintf(out, "L%d:\n", first_ok);
+
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tld e,(ix%d)\n\tld d,(ix%d)\n"
+            "\tor a\n\tsbc hl,de\n\tjp z,L%d\n",
+            PRODUCT, PRODUCT + 1,
+            EXPECTED_PRODUCT, EXPECTED_PRODUCT + 1, second_ok);
+    mir_machine_emit_global_word(out, plan->failures, 0);
+    fputs("\tinc hl\n", out);
+    mir_machine_emit_global_word_store(out, plan->failures, 0);
+    fputs("\tld de,0\n", out);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tpush de\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            M, M + 1, plan->loop_failure_string_id[1]);
+    mir_emit_runtime_call(out, plan->loop_print_name[1]);
+    mir_emit_final_call_cleanup(out, 3);
+    fprintf(out, "L%d:\n", second_ok);
+
+    fprintf(out,
+            "\tinc (ix%d)\n\tjp nz,L%d\n"
+            "\tinc (ix%d)\n\tjp L%d\nL%d:\n",
+            M, loop, M + 1, loop, done);
+}
+
+static void mir_emit_wide_validation_runner_schedule(
+    FILE *out, const struct MirWideValidationRunnerSchedule *plan)
+{
+    int call;
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-10\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (call = 0; call < plan->call_count; ++call) {
+        int argument;
+
+        for (argument = 2; argument >= 0; --argument)
+            mir_emit_final_call_constant(
+                out, plan->calls[call].arguments[argument], 4);
+        mir_machine_emit_symbol_call(
+            out, plan->calls[call].function);
+        mir_emit_final_call_cleanup(out, 6);
+    }
+    if (plan->variant == 1)
+        mir_emit_wide_multiply_validation_loop(out, plan);
+    else
+        mir_emit_wide_modulo_validation_loop(out, plan);
+    mir_emit_wide_validation_tail(out, plan);
+    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+}
+
+static void mir_emit_constant_check_runner_schedule(
+    FILE *out, const struct MirConstantCheckRunnerSchedule *plan)
+{
+    int failure = new_label();
+    int result_ready = new_label();
+    int call;
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    for (call = 0; call < plan->call_count; ++call) {
+        int argument;
+
+        for (argument = 3; argument >= 0; --argument)
+            fprintf(out, "\tld hl,%u\n\tpush hl\n",
+                    plan->calls[call].arguments[argument]);
+        mir_machine_emit_symbol_call(
+            out, plan->calls[call].function);
+        mir_emit_final_call_cleanup(out, 4);
+    }
+
+    mir_machine_emit_global_word(out, plan->failures, 0);
+    fputs("\tpush hl\n", out);
+    mir_machine_emit_global_word(out, plan->checks, 0);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->summary_string_id);
+    mir_emit_runtime_call(out, plan->summary_name);
+    mir_emit_final_call_cleanup(out, 3);
+
+    mir_machine_emit_global_word(out, plan->failures, 0);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out,
+            "\tjp nz,L%d\n\tld hl,S%d\n\tjp L%d\n"
+            "L%d:\n\tld hl,S%d\nL%d:\n\tpush hl\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            failure, plan->success_string_id, result_ready,
+            failure, plan->failure_string_id, result_ready,
+            plan->result_string_id);
+    mir_emit_runtime_call(out, plan->result_name);
+    mir_emit_final_call_cleanup(out, 2);
+
+    mir_machine_emit_global_word(out, plan->failures, 0);
+    fputs("\tld a,h\n\tor l\n\tld hl,0\n\tret z\n\tinc hl\n\tret\n",
+          out);
+}
+
+static void mir_word_muldiv_load_parameter(
+    FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n",
+            offset);
+}
+
+static void mir_word_muldiv_emit_report(
+    FILE *out, const struct MirWordMuldivReportSchedule *plan,
+    int item, int saved_words)
+{
+    int shifted = saved_words * 2;
+
+    mir_word_muldiv_load_parameter(
+        out, plan->right_stack_offset + shifted);
+    fputs("\tpush hl\n", out);
+    mir_word_muldiv_load_parameter(
+        out, plan->left_stack_offset + shifted + 2);
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->string_ids[item]);
+    mir_emit_runtime_call(out, plan->print_names[item]);
+    mir_emit_final_call_cleanup(out, 4);
+}
+
+static void mir_emit_word_muldiv_report_schedule(
+    FILE *out, const struct MirWordMuldivReportSchedule *plan)
+{
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+
+    mir_word_muldiv_load_parameter(
+        out, plan->left_stack_offset);
+    fputs("\tpush hl\n", out);
+    mir_word_muldiv_load_parameter(
+        out, plan->right_stack_offset + 2);
+    fputs("\tex de,hl\n\tpop hl\n", out);
+    mir_emit_runtime_call(out, "__mulu");
+    fputs("\tpush hl\n", out);
+    mir_word_muldiv_emit_report(out, plan, 0, 1);
+
+    mir_word_muldiv_load_parameter(
+        out, plan->left_stack_offset);
+    fputs("\tpush hl\n", out);
+    mir_word_muldiv_load_parameter(
+        out, plan->right_stack_offset + 2);
+    fputs("\tex de,hl\n\tpop hl\n", out);
+    mir_emit_runtime_call(
+        out, plan->is_unsigned ? "__udivmod" : "__sdivmod");
+    fputs("\tpush hl\n\tpush de\n", out);
+    mir_word_muldiv_emit_report(out, plan, 1, 2);
+    fputs("\tpop hl\n\tpush hl\n", out);
+    mir_word_muldiv_emit_report(out, plan, 2, 1);
+    fputs("\tret\n", out);
+}
+
+static void mir_numeric_emit_sp_wide_load(
+    FILE *out, int stack_offset)
+{
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n\tinc hl\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tld l,c\n\tld h,b\n",
+            stack_offset);
+}
+
+static void mir_emit_wide_conditional_add_schedule(
+    FILE *out, const struct MirWideConditionalAddSchedule *plan)
+{
+    int nonzero = new_label();
+
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld a,(hl)\n\tinc hl\n\tor (hl)\n\tinc hl\n"
+            "\tor (hl)\n\tinc hl\n\tor (hl)\n"
+            "\tjp nz,L%d\n\tld hl,0\n\tld de,0\n\tret\n"
+            "L%d:\n",
+            plan->condition_stack_offset, nonzero, nonzero);
+    mir_numeric_emit_sp_wide_load(out, plan->left_stack_offset);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_numeric_emit_sp_wide_load(out, plan->right_stack_offset + 4);
+    fputs("\tpop bc\n\tor a\n\tadd hl,bc\n"
+          "\tex de,hl\n\tpop bc\n\tadc hl,bc\n\tex de,hl\n\tret\n",
+          out);
+}
+
+static int mir_match_wide_ratio_loop_schedule(
+    struct MirWideRatioLoopSchedule *plan)
+{
+    int expected_opcodes[75] = {
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_NOP, MIR_CONST,
+        MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_PHI,
+        MIR_PHI, MIR_PHI, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP, MIR_NOP,
+        MIR_BINARY, MIR_STORE, MIR_NOP, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP, MIR_UNARY, MIR_NOP,
+        MIR_UNARY, MIR_BINARY, MIR_STORE, MIR_STRING_ADDRESS, MIR_ARG,
+        MIR_NOP, MIR_ARG, MIR_NOP, MIR_ARG, MIR_CALL, MIR_NOP,
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP,
+        MIR_LABEL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CALL, MIR_CONST,
+        MIR_RETURN
+    };
+    const struct MirInsn *header_call = &mir.insns[9];
+    const struct MirInsn *row_call = &mir.insns[61];
+    const struct MirInsn *done_call = &mir.insns[72];
+    int header_arguments[1];
+    int row_arguments[3];
+    int done_arguments[1];
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 75 || mir_cfg_block_count() != 4 ||
+        mir.local_bytes != 20 || mir.aggregate_temp_bytes != 0 ||
+        mir.has_vla || !mir_has_cfg_backedge() ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_size(mir.return_type) != 2)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "wide-ratio-loop-schedule", "opcodes");
+    if (!mir_numeric_unsigned_long_type(mir.insns[2].type) ||
+        !mir_numeric_unsigned_long_type(mir.insns[5].type) ||
+        !mir_numeric_unsigned_long_type(mir.insns[25].type) ||
+        !mir_machine_constant_equals(mir.insns[2].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[5].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[25].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[34].dst, 15) ||
+        !mir_machine_constant_equals(mir.insns[65].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[73].dst, 0))
+        return mir_machine_reject(
+            "wide-ratio-loop-schedule", "constants");
+    plan->limit = (int)mir.insns[34].immediate;
+    if (plan->limit <= 0 || plan->limit >= 32767)
+        return mir_machine_reject(
+            "wide-ratio-loop-schedule", "limit");
+    if (mir.insns[3].src1 != mir.insns[2].dst ||
+        mir.insns[6].src1 != mir.insns[5].dst ||
+        mir.insns[26].src1 != mir.insns[25].dst ||
+        mir.insns[28].src1 != mir.insns[2].dst ||
+        mir.insns[29].src1 != mir.insns[5].dst ||
+        mir.insns[30].src1 != mir.insns[25].dst ||
+        mir.insns[28].phi_pred1 != mir.insns[0].label ||
+        mir.insns[29].phi_pred1 != mir.insns[0].label ||
+        mir.insns[30].phi_pred1 != mir.insns[0].label ||
+        mir.insns[28].phi_pred2 != mir.insns[63].label ||
+        mir.insns[29].phi_pred2 != mir.insns[63].label ||
+        mir.insns[30].phi_pred2 != mir.insns[63].label)
+        return mir_machine_reject(
+            "wide-ratio-loop-schedule", "phis");
+    if (!mir_numeric_unsigned_long_type(mir.insns[28].type) ||
+        !mir_numeric_unsigned_long_type(mir.insns[29].type) ||
+        !mir_numeric_unsigned_long_type(mir.insns[30].type) ||
+        mir.insns[35].src1 != mir.insns[30].dst ||
+        mir.insns[35].src2 != mir.insns[34].dst ||
+        mir.insns[35].immediate != TOK_LE ||
+        mir.insns[36].src1 != mir.insns[35].dst ||
+        mir.insns[36].label != mir.insns[69].label ||
+        mir.insns[40].src1 != mir.insns[29].dst ||
+        mir.insns[40].src2 != mir.insns[28].dst ||
+        mir.insns[40].immediate != '+' ||
+        !mir_numeric_unsigned_long_type(
+            mir.insns[40].secondary_offset) ||
+        mir.insns[41].src1 != mir.insns[40].dst ||
+        mir.insns[44].src1 != mir.insns[29].dst ||
+        mir.insns[47].src1 != mir.insns[40].dst ||
+        mir.insns[50].src1 != mir.insns[40].dst ||
+        !type_is_float(mir.insns[50].type) ||
+        mir.insns[52].src1 != mir.insns[29].dst ||
+        !type_is_float(mir.insns[52].type) ||
+        mir.insns[53].src1 != mir.insns[50].dst ||
+        mir.insns[53].src2 != mir.insns[52].dst ||
+        mir.insns[53].immediate != '/' ||
+        !type_is_float(mir.insns[53].secondary_offset) ||
+        mir.insns[66].src1 != mir.insns[30].dst ||
+        mir.insns[66].src2 != mir.insns[65].dst ||
+        mir.insns[66].immediate != '+' ||
+        mir.insns[67].src1 != mir.insns[66].dst ||
+        mir.insns[68].label != mir.insns[27].label ||
+        mir.insns[74].src1 != mir.insns[73].dst)
+        return mir_machine_reject(
+            "wide-ratio-loop-schedule", "loop");
+    if (!mir_numeric_call_arguments(
+            header_call, 1, header_arguments) ||
+        !mir_numeric_call_arguments(
+            row_call, 3, row_arguments) ||
+        !mir_numeric_call_arguments(
+            done_call, 1, done_arguments))
+        return mir_machine_reject(
+            "wide-ratio-loop-schedule", "call-arguments");
+    if (
+        header_arguments[0] != mir.insns[7].dst ||
+        row_arguments[0] != mir.insns[55].dst ||
+        row_arguments[1] != mir.insns[30].dst ||
+        row_arguments[2] != mir.insns[53].dst ||
+        done_arguments[0] != mir.insns[70].dst)
+        return mir_machine_reject(
+            "wide-ratio-loop-schedule", "call-values");
+    if (
+        strcmp(header_call->name, row_call->name) != 0 ||
+        strcmp(header_call->name, done_call->name) != 0 ||
+        header_call->base_name[0] == 0 ||
+        row_call->base_name[0] == 0 ||
+        done_call->base_name[0] == 0 ||
+        strlen(header_call->base_name) >= sizeof(plan->header_name) ||
+        strlen(row_call->base_name) >= sizeof(plan->row_name) ||
+        strlen(done_call->base_name) >= sizeof(plan->done_name) ||
+        (header_call->memory_flags & MIR_CALL_FLAG_VARIADIC) == 0 ||
+        (row_call->memory_flags & MIR_CALL_FLAG_VARIADIC) == 0 ||
+        (done_call->memory_flags & MIR_CALL_FLAG_VARIADIC) == 0)
+        return mir_machine_reject(
+            "wide-ratio-loop-schedule", "calls");
+    plan->print_function = find_global(header_call->name);
+    if (plan->print_function == NULL ||
+        !plan->print_function->has_proto ||
+        !plan->print_function->proto_variadic)
+        return mir_machine_reject(
+            "wide-ratio-loop-schedule", "print-symbol");
+    plan->header_string_id = (int)mir.insns[7].immediate;
+    plan->row_string_id = (int)mir.insns[55].immediate;
+    plan->done_string_id = (int)mir.insns[70].immediate;
+    if (plan->header_string_id < 0 || plan->row_string_id < 0 ||
+        plan->done_string_id < 0)
+        return mir_machine_reject(
+            "wide-ratio-loop-schedule", "strings");
+    snprintf(plan->header_name, sizeof(plan->header_name), "%s",
+             header_call->base_name);
+    snprintf(plan->row_name, sizeof(plan->row_name), "%s",
+             row_call->base_name);
+    snprintf(plan->done_name, sizeof(plan->done_name), "%s",
+             done_call->base_name);
+    return 1;
+}
+
+static void mir_emit_wide_ratio_loop_schedule(
+    FILE *out, const struct MirWideRatioLoopSchedule *plan)
+{
+    enum {
+        PREVIOUS2 = -4,
+        PREVIOUS1 = -8,
+        INDEX = -12
+    };
+    int loop = new_label();
+    int no_low_carry = new_label();
+    int done = new_label();
+
+    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-12\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tld hl,1\n\tld de,0\n", out);
+    mir_machine_emit_ix_wide_store(out, PREVIOUS2);
+    mir_machine_emit_ix_wide_store(out, PREVIOUS1);
+    mir_machine_emit_ix_wide_store(out, INDEX);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->header_string_id);
+    mir_emit_runtime_call(out, plan->header_name);
+    mir_emit_final_call_cleanup(out, 1);
+
+    fprintf(out, "L%d:\n", loop);
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tld de,%d\n\tor a\n\tsbc hl,de\n"
+            "\tjp nc,L%d\n",
+            INDEX, INDEX + 1, plan->limit + 1, done);
+
+    mir_machine_emit_ix_wide_load(out, PREVIOUS1);
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, PREVIOUS2);
+    fputs("\tpop bc\n\tor a\n\tadd hl,bc\n"
+          "\tex de,hl\n\tpop bc\n\tadc hl,bc\n\tex de,hl\n"
+          "\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, PREVIOUS1);
+    mir_machine_emit_ix_wide_store(out, PREVIOUS2);
+    fputs("\tpop hl\n\tpop de\n", out);
+    mir_machine_emit_ix_wide_store(out, PREVIOUS1);
+
+    mir_emit_runtime_call(out, "__fulf");
+    fputs("\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, PREVIOUS2);
+    mir_emit_runtime_call(out, "__fulf");
+    mir_emit_runtime_call(out, "__fdf");
+    fputs("\tpop bc\n\tpop bc\n\tpush de\n\tpush hl\n", out);
+    mir_machine_emit_ix_wide_load(out, INDEX);
+    fputs("\tpush de\n\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->row_string_id);
+    mir_emit_runtime_call(out, plan->row_name);
+    mir_emit_final_call_cleanup(out, 5);
+
+    fputs("\tinc (ix-12)\n", out);
+    fprintf(out, "\tjp nz,L%d\n\tinc (ix-11)\n",
+            loop);
+    fprintf(out, "\tjp nz,L%d\n\tinc (ix-10)\n",
+            loop);
+    fprintf(out, "\tjp nz,L%d\n\tinc (ix-9)\nL%d:\n",
+            loop, no_low_carry);
+    fprintf(out, "\tjp L%d\n", loop);
+
+    fprintf(out, "L%d:\n\tld hl,S%d\n\tpush hl\n",
+            done, plan->done_string_id);
+    mir_emit_runtime_call(out, plan->done_name);
+    mir_emit_final_call_cleanup(out, 1);
+    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
 static int mir_lcs_int_type(int type)
@@ -10020,6 +12956,350 @@ static void mir_emit_identical_join_affine_schedule(
     fputs("\tret\n", out);
 }
 
+enum MirVolatileParameterKind {
+    MIR_VOLATILE_PARAMETER_ABS,
+    MIR_VOLATILE_PARAMETER_MASK,
+    MIR_VOLATILE_PARAMETER_SUM3
+};
+
+struct MirVolatileParameterSchedule {
+    enum MirVolatileParameterKind kind;
+    int parameter_offset;
+    int mask;
+};
+
+struct MirWideLengthSchedule {
+    int parameter_offset;
+};
+
+struct MirBoundedStringCompareSchedule {
+    int left_offset;
+    int right_offset;
+    int count_offset;
+};
+
+static int mir_numeric_name_is_volatile(const char *name)
+{
+    int declared;
+    struct Sym *global;
+
+    for (declared = 0; declared < mir.declared_count; ++declared)
+        if (!strcmp(mir.declared_names[declared], name))
+            return mir.declared_is_volatile[declared] != 0;
+    global = find_global(name);
+    return global != NULL && global->is_volatile;
+}
+
+static int mir_volatile_parameter_load(
+    int instruction, const struct MirInsn *parameter)
+{
+    const struct MirInsn *load = &mir.insns[instruction];
+
+    return load->opcode == MIR_LOAD &&
+           !strcmp(load->name, parameter->name) &&
+           type_size(load->type) == 2 &&
+           type_ptr_depth(load->type) == 0 &&
+           mir_numeric_name_is_volatile(load->name);
+}
+
+static int mir_match_volatile_parameter_schedule(
+    struct MirVolatileParameterSchedule *plan)
+{
+    const struct MirInsn *parameter = &mir.insns[1];
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.has_vla || mir.aggregate_temp_bytes != 0 ||
+        parameter->opcode != MIR_PARAM ||
+        type_size(parameter->type) != 2 ||
+        type_ptr_depth(parameter->type) != 0 ||
+        !mir_machine_parameter_value_offset(
+            parameter->dst, &plan->parameter_offset))
+        return 0;
+    if (mir.count == 16 && mir.next_value == 8 &&
+        mir_cfg_block_count() == 5 &&
+        (mir.return_type & 15) == TYPE_INT &&
+        mir_volatile_parameter_load(2, parameter) &&
+        mir.insns[3].opcode == MIR_CONST &&
+        mir_machine_constant_equals(mir.insns[3].dst, 0) &&
+        mir.insns[4].opcode == MIR_BINARY &&
+        mir.insns[4].src1 == mir.insns[2].dst &&
+        mir.insns[4].src2 == mir.insns[3].dst &&
+        mir.insns[4].immediate == '<' &&
+        mir.insns[5].opcode == MIR_BRANCH_FALSE &&
+        mir_volatile_parameter_load(6, parameter) &&
+        mir.insns[7].opcode == MIR_UNARY &&
+        mir.insns[7].src1 == mir.insns[6].dst &&
+        mir.insns[7].immediate == '-' &&
+        mir_volatile_parameter_load(11, parameter) &&
+        mir.insns[14].opcode == MIR_PHI &&
+        mir.insns[14].src1 == mir.insns[7].dst &&
+        mir.insns[14].src2 == mir.insns[11].dst &&
+        mir.insns[15].opcode == MIR_RETURN &&
+        mir.insns[15].src1 == mir.insns[14].dst) {
+        plan->kind = MIR_VOLATILE_PARAMETER_ABS;
+        return 1;
+    }
+    if (mir.count == 6 && mir.next_value == 4 &&
+        mir_cfg_block_count() == 1 &&
+        (mir.return_type & 15) == TYPE_INT &&
+        (mir.return_type & TYPE_UNSIGNED) != 0 &&
+        mir_volatile_parameter_load(2, parameter) &&
+        mir.insns[3].opcode == MIR_CONST &&
+        mir.insns[4].opcode == MIR_BINARY &&
+        mir.insns[4].src1 == mir.insns[2].dst &&
+        mir.insns[4].src2 == mir.insns[3].dst &&
+        mir.insns[4].immediate == '&' &&
+        mir.insns[5].opcode == MIR_RETURN &&
+        mir.insns[5].src1 == mir.insns[4].dst) {
+        long mask;
+
+        if (!mir_machine_evaluate_constant(
+                mir.insns[3].dst, &mask, 0) ||
+            mask < 0 || mask > 255)
+            return mir_machine_reject(
+                "volatile-parameter", "mask");
+        plan->kind = MIR_VOLATILE_PARAMETER_MASK;
+        plan->mask = (int)mask;
+        return 1;
+    }
+    if (mir.count == 17 && mir.next_value == 12 &&
+        mir_cfg_block_count() == 1 &&
+        (mir.return_type & 15) == TYPE_INT &&
+        mir.local_bytes == 2 &&
+        mir_volatile_parameter_load(2, parameter) &&
+        mir_volatile_parameter_load(6, parameter) &&
+        mir_volatile_parameter_load(11, parameter) &&
+        mir.insns[7].opcode == MIR_BINARY &&
+        mir.insns[7].src1 == mir.insns[2].dst &&
+        mir.insns[7].src2 == mir.insns[6].dst &&
+        mir.insns[7].immediate == '+' &&
+        mir.insns[12].opcode == MIR_BINARY &&
+        mir.insns[12].src1 == mir.insns[7].dst &&
+        mir.insns[12].src2 == mir.insns[11].dst &&
+        mir.insns[12].immediate == '+' &&
+        mir.insns[16].opcode == MIR_RETURN &&
+        mir.insns[16].src1 == mir.insns[12].dst) {
+        plan->kind = MIR_VOLATILE_PARAMETER_SUM3;
+        return 1;
+    }
+    return 0;
+}
+
+static void mir_emit_volatile_parameter_load(
+    FILE *out, const struct MirVolatileParameterSchedule *plan,
+    const char *pair)
+{
+    int offset = plan->parameter_offset + 2;
+
+    if (!strcmp(pair, "hl"))
+        fprintf(out,
+                "\tld l,(ix+%d)\n\tld h,(ix+%d)\n",
+                offset, offset + 1);
+    else
+        fprintf(out,
+                "\tld e,(ix+%d)\n\tld d,(ix+%d)\n",
+                offset, offset + 1);
+}
+
+static void mir_emit_volatile_parameter_schedule(
+    FILE *out, const struct MirVolatileParameterSchedule *plan)
+{
+    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+          "\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    if (plan->kind == MIR_VOLATILE_PARAMETER_ABS) {
+        int nonnegative = new_label();
+        int done = new_label();
+
+        mir_emit_volatile_parameter_load(out, plan, "hl");
+        fputs("\tbit 7,h\n", out);
+        fprintf(out, "\tjr z,L%d\n", nonnegative);
+        mir_emit_volatile_parameter_load(out, plan, "hl");
+        fputs("\txor a\n\tsub l\n\tld l,a\n"
+              "\tsbc a,a\n\tsub h\n\tld h,a\n", out);
+        fprintf(out, "\tjr L%d\nL%d:\n", done, nonnegative);
+        mir_emit_volatile_parameter_load(out, plan, "hl");
+        fprintf(out, "L%d:\n", done);
+    } else if (plan->kind == MIR_VOLATILE_PARAMETER_MASK) {
+        mir_emit_volatile_parameter_load(out, plan, "hl");
+        fputs("\tld h,0\n\tld a,l\n", out);
+        fprintf(out, "\tand %d\n\tld l,a\n", plan->mask);
+    } else {
+        mir_emit_volatile_parameter_load(out, plan, "de");
+        mir_emit_volatile_parameter_load(out, plan, "hl");
+        fputs("\tadd hl,de\n\tex de,hl\n", out);
+        mir_emit_volatile_parameter_load(out, plan, "hl");
+        fputs("\tadd hl,de\n", out);
+    }
+    fputs("\tpop ix\n\tret\n", out);
+}
+
+static int mir_match_wide_length_schedule(
+    struct MirWideLengthSchedule *plan)
+{
+    const int expected_opcodes[26] = {
+        MIR_LABEL, MIR_PARAM, MIR_LOAD, MIR_STORE, MIR_LABEL,
+        MIR_LOAD, MIR_LOAD, MIR_LOAD_INDIRECT, MIR_CONST, MIR_NOP,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_LOAD,
+        MIR_BINARY, MIR_CONST, MIR_BINARY, MIR_NOP, MIR_RETURN
+    };
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 26 || mir.next_value != 17 ||
+        mir_cfg_block_count() != 4 || mir.has_vla ||
+        mir.aggregate_temp_bytes != 0 ||
+        type_ptr_depth(mir.return_type) != 0 ||
+        type_size(mir.return_type) != 2 ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->parameter_offset) ||
+        type_ptr_depth(mir.insns[1].type) != 1 ||
+        type_size(mir.insns[1].type) != 2)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "wide-length", "opcodes");
+    return mir.insns[7].src1 == mir.insns[6].dst &&
+           mir.insns[10].immediate == TOK_NE &&
+           mir.insns[10].src1 == mir.insns[7].dst &&
+           mir_machine_constant_equals(mir.insns[8].dst, 0) &&
+           mir.insns[11].src1 == mir.insns[10].dst &&
+           mir.insns[14].immediate == '+' &&
+           mir.insns[14].src1 == mir.insns[12].dst &&
+           mir_machine_constant_equals(mir.insns[13].dst, 2) &&
+           mir.insns[15].src1 == mir.insns[14].dst &&
+           mir.insns[17].label == mir.insns[4].label &&
+           mir.insns[21].immediate == '-' &&
+           mir.insns[23].immediate == '/' &&
+           mir_machine_constant_equals(mir.insns[22].dst, 2) &&
+           mir.insns[25].src1 == mir.insns[23].dst;
+}
+
+static void mir_emit_wide_length_schedule(
+    FILE *out, const struct MirWideLengthSchedule *plan)
+{
+    int loop = new_label();
+    int done = new_label();
+
+    fputs(MIR_EXACT_KERNEL_MARKER "\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "\tld hl,%d\n\tadd hl,sp\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tex de,hl\n\tld bc,0\nL%d:\n"
+            "\tld a,(hl)\n\tinc hl\n\tor (hl)\n\tinc hl\n"
+            "\tjp z,L%d\n\tinc bc\n\tjp L%d\n"
+            "L%d:\n\tld l,c\n\tld h,b\n\tret\n",
+            plan->parameter_offset, loop, done, loop, done);
+}
+
+static int mir_match_bounded_string_compare_schedule(
+    struct MirBoundedStringCompareSchedule *plan)
+{
+    const int expected_opcodes[61] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_LABEL,
+        MIR_LOAD, MIR_LOAD, MIR_PHI, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LOAD, MIR_LOAD_INDIRECT, MIR_UNARY,
+        MIR_NOP, MIR_STORE, MIR_LOAD, MIR_LOAD_INDIRECT, MIR_UNARY,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP, MIR_UNARY, MIR_UNARY,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP, MIR_UNARY, MIR_NOP,
+        MIR_UNARY, MIR_BINARY, MIR_RETURN, MIR_LABEL, MIR_NOP, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_CONST, MIR_RETURN,
+        MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_NOP, MIR_LABEL, MIR_JUMP, MIR_LABEL, MIR_CONST,
+        MIR_RETURN
+    };
+    int instruction;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 61 || mir.next_value != 42 ||
+        mir_cfg_block_count() != 6 || mir.local_bytes != 2 ||
+        mir.aggregate_temp_bytes != 0 || mir.has_vla ||
+        !mir_has_cfg_backedge() ||
+        (mir.return_type & 15) != TYPE_INT ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->left_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[2].dst, &plan->right_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[3].dst, &plan->count_offset))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "bounded-string-compare", "opcodes");
+    return type_ptr_depth(mir.insns[1].type) == 1 &&
+           type_ptr_depth(mir.insns[2].type) == 1 &&
+           type_size(mir.insns[1].type) == 2 &&
+           type_size(mir.insns[2].type) == 2 &&
+           type_size(mir.insns[3].type) == 2 &&
+           mir.insns[10].immediate == '>' &&
+           mir_machine_constant_equals(mir.insns[9].dst, 0) &&
+           mir.insns[13].src1 == mir.insns[12].dst &&
+           mir.insns[18].src1 == mir.insns[17].dst &&
+           mir.insns[26].immediate == TOK_NE &&
+           mir.insns[32].immediate == '-' &&
+           mir.insns[38].immediate == TOK_EQ &&
+           mir_machine_constant_equals(mir.insns[36].dst, 0) &&
+           mir.insns[45].immediate == '+' &&
+           mir.insns[49].immediate == '+' &&
+           mir.insns[53].immediate == '-' &&
+           mir_machine_constant_equals(mir.insns[44].dst, 1) &&
+           mir_machine_constant_equals(mir.insns[48].dst, 1) &&
+           mir_machine_constant_equals(mir.insns[52].dst, 1) &&
+           mir.insns[57].label == mir.insns[4].label &&
+           mir_machine_constant_equals(mir.insns[59].dst, 0);
+}
+
+static void mir_emit_bounded_string_compare_schedule(
+    FILE *out, const struct MirBoundedStringCompareSchedule *plan)
+{
+    int loop = new_label();
+    int equal = new_label();
+    int difference = new_label();
+    int done = new_label();
+    int left = plan->left_offset + 2;
+    int right = plan->right_offset + 2;
+    int count = plan->count_offset + 2;
+
+    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+          "\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fprintf(out,
+            "L%d:\n\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
+            "\tld a,h\n\tor l\n\tjp z,L%d\n\tbit 7,h\n"
+            "\tjp nz,L%d\n"
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tld e,(hl)\n"
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tld a,(hl)\n"
+            "\tcp e\n\tjp nz,L%d\n\tor a\n\tjp z,L%d\n"
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tinc hl\n"
+            "\tld (ix+%d),l\n\tld (ix+%d),h\n"
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tinc hl\n"
+            "\tld (ix+%d),l\n\tld (ix+%d),h\n"
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tdec hl\n"
+            "\tld (ix+%d),l\n\tld (ix+%d),h\n\tjp L%d\n"
+            "L%d:\n\tld l,e\n\tld h,0\n\tld e,a\n\tld d,0\n"
+            "\tor a\n\tsbc hl,de\n\tjp L%d\n"
+            "L%d:\n\tld hl,0\nL%d:\n\tpop ix\n\tret\n",
+            loop, count, count + 1,
+            equal, equal,
+            left, left + 1,
+            right, right + 1,
+            difference, equal,
+            left, left + 1, left, left + 1,
+            right, right + 1, right, right + 1,
+            count, count + 1, count, count + 1, loop,
+            difference, done, equal, done);
+}
+
 int mir_try_emit_numeric_kernels(FILE *out, int phase)
 {
     if (phase == 0) {
@@ -10035,6 +13315,18 @@ int mir_try_emit_numeric_kernels(FILE *out, int phase)
         struct MirLowByteAffineSchedule low_byte_affine_plan;
         struct MirContiguousWordSetSchedule contiguous_set_plan;
         struct MirGlobalByteOrSchedule byte_or_plan;
+        struct MirWideConditionalAddSchedule conditional_add_plan;
+        struct MirBinaryHeapPushSchedule heap_push_plan;
+        struct MirFixedBoardFillSchedule board_fill_plan;
+        struct MirFixedCellsFillSchedule cells_fill_plan;
+        struct MirWideRatioLoopSchedule wide_ratio_plan;
+        struct MirWordMuldivReportSchedule word_muldiv_plan;
+        struct MirConstantCheckRunnerSchedule constant_check_plan;
+        struct MirWideValidationRunnerSchedule wide_validation_plan;
+        struct MirMulmodValidationRunnerSchedule mulmod_validation_plan;
+        struct MirLongStaleRunnerSchedule long_stale_plan;
+        struct MirLongCallRunnerSchedule long_call_plan;
+        struct MirWidenEdgeRunnerSchedule widen_edge_plan;
         struct MirWordRotateSchedule rotate_plan;
         struct MirExpectedAreaSchedule expected_area_plan;
         struct MirSignedLongNewtonSqrtSchedule signed_sqrt_plan;
@@ -10046,9 +13338,98 @@ int mir_try_emit_numeric_kernels(FILE *out, int phase)
         struct MirRepeatedInvariantAddSchedule repeated_add_plan;
         struct MirWordConstantShiftSchedule shift_plan;
         struct MirIdenticalJoinAffineSchedule join_plan;
+        struct MirVolatileParameterSchedule volatile_parameter;
+        struct MirWideLengthSchedule wide_length;
+        struct MirBoundedStringCompareSchedule bounded_compare;
 
+        if (mir_match_bounded_string_compare_schedule(
+                &bounded_compare)) {
+            mir_emit_bounded_string_compare_schedule(
+                out, &bounded_compare);
+            return 1;
+        }
+        if (mir_match_wide_length_schedule(&wide_length)) {
+            mir_emit_wide_length_schedule(out, &wide_length);
+            return 1;
+        }
+        if (mir_match_volatile_parameter_schedule(
+                &volatile_parameter)) {
+            mir_emit_volatile_parameter_schedule(
+                out, &volatile_parameter);
+            return 1;
+        }
         if (mir_match_global_byte_or_schedule(&byte_or_plan)) {
             mir_emit_global_byte_or_schedule(out, &byte_or_plan);
+            return 1;
+        }
+        if (mir_match_wide_conditional_add_schedule(
+                &conditional_add_plan)) {
+            mir_emit_wide_conditional_add_schedule(
+                out, &conditional_add_plan);
+            return 1;
+        }
+        if (mir_match_binary_heap_push_schedule(
+                &heap_push_plan)) {
+            mir_emit_binary_heap_push_schedule(
+                out, &heap_push_plan);
+            return 1;
+        }
+        if (mir_match_fixed_board_fill_schedule(
+                &board_fill_plan)) {
+            mir_emit_fixed_board_fill_schedule(
+                out, &board_fill_plan);
+            return 1;
+        }
+        if (mir_match_fixed_cells_fill_schedule(
+                &cells_fill_plan)) {
+            mir_emit_fixed_cells_fill_schedule(
+                out, &cells_fill_plan);
+            return 1;
+        }
+        if (mir_match_word_muldiv_report_schedule(
+                &word_muldiv_plan)) {
+            mir_emit_word_muldiv_report_schedule(
+                out, &word_muldiv_plan);
+            return 1;
+        }
+        if (mir_match_constant_check_runner_schedule(
+                &constant_check_plan)) {
+            mir_emit_constant_check_runner_schedule(
+                out, &constant_check_plan);
+            return 1;
+        }
+        if (mir_match_wide_validation_runner_schedule(
+                &wide_validation_plan)) {
+            mir_emit_wide_validation_runner_schedule(
+                out, &wide_validation_plan);
+            return 1;
+        }
+        if (mir_match_mulmod_validation_runner_schedule(
+                &mulmod_validation_plan)) {
+            mir_emit_mulmod_validation_runner_schedule(
+                out, &mulmod_validation_plan);
+            return 1;
+        }
+        if (mir_match_long_stale_runner_schedule(
+                &long_stale_plan)) {
+            mir_emit_long_stale_runner_schedule(
+                out, &long_stale_plan);
+            return 1;
+        }
+        if (mir_match_long_call_runner_schedule(
+                &long_call_plan)) {
+            mir_emit_long_call_runner_schedule(
+                out, &long_call_plan);
+            return 1;
+        }
+        if (mir_match_widen_edge_runner_schedule(
+                &widen_edge_plan)) {
+            mir_emit_widen_edge_runner_schedule(
+                out, &widen_edge_plan);
+            return 1;
+        }
+        if (mir_match_wide_ratio_loop_schedule(&wide_ratio_plan)) {
+            mir_emit_wide_ratio_loop_schedule(out, &wide_ratio_plan);
             return 1;
         }
         if (mir_match_contiguous_word_set_schedule(

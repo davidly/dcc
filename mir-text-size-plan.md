@@ -1,5 +1,184 @@
 # dcc MIR text-size fallback plan
 
+## 2026-08-15 machine call-runner architecture split
+
+The oversized 43,080-line call-runner module is now four compiled static-call
+graph families: runtime/file/system (**10,733 lines**), interpreter/parser
+(**7,212**), call/control orchestration (**12,941**), and scope/wide
+validation (**12,610**). Each owns one dispatch export; phase placement keeps
+the original 113 matcher calls in the exact production order. Thirteen tiny
+cross-family helpers (maximum 32 lines) are duplicated with internal linkage,
+so the shared header gains dispatch declarations only.
+
+The zero-state rule is explicit: plans and mutable matching state are
+attempt-local, no family owns writable file-scope state, no family exports
+read-only or writable data, and module-local constant tables never enter the
+inter-module contract. All four export audits pass.
+
+Normal and stack censuses remain byte-identical at **2425/2425**, with hashes
+`014c4fe7696fdca0ea937870d39ca02d6f3cc557a965b0f041966208bc52bd0d`
+and
+`535f6130691b1e03dfa420168013deac7660dc157455c590ed1d1d8dba26ed5e`.
+The combined extended census is byte-identical at **274/274 per mode**, hash
+`58752c344a3ebe00884c34082632149d2b0d2023a38401db771270ae219a2592`.
+Canonical/CMake builds, standard full stack/no-stack **329/329**, diagnostics,
+dccpeep fixtures, checked performance, and extended full stack/no-stack
+**196/196** pass. No baseline, behavior, commit, or push changed.
+
+## 2026-08-15 T544 latest-main final performance closure
+
+The supplied whole-branch ledger had **44 positive metrics** across 25 apps,
+plus `tctxflt.truth_tern_zero` and a nonterminating `bint`. T544 closes all
+three classes without changing baselines. Strict, attempt-local schedules in
+the existing semantic family modules recover the remaining report, file/BDOS,
+search/sort, allocator, float/PI, volatile/string, chess, and Wumpus shapes.
+Shared backend fixes cover nested truth branches, 16-bit comparison reports,
+full-width float truth, and safe zero-frame stack handoffs. The final allocator
+pattern helper is frameless and the wide-string runner shares one noreturn
+failure thunk.
+
+The definitive latest-main compiler A/B is **100/100 output- and
+side-effect-identical**, with **0 positive metrics out of 200**:
+
+| configuration | cycles | bytes |
+|---|---:|---:|
+| stack peep | -526,702,304 | -4,736 |
+| stack nopeep | -1,147,929,342 | -16,512 |
+| no-stack peep | -523,809,663 | -4,864 |
+| no-stack nopeep | -1,144,526,729 | -17,024 |
+
+`build/t544-ab/results.tsv` contains every row. A renamed edge matrix changes
+all **82** scheduled target function identifiers and passes **100/100**
+stack/no-stack peep/nopeep comparisons, preserves **328** scheduled
+selections, and also has zero positive metrics
+(`build/t544-edge-ab/results.tsv`).
+
+Final proof:
+
+- affected checked stack: **25/25**, **0 regressions / 92 improvements**;
+- standard full stack/no-stack: **329/329 runnable** in peep/nopeep;
+- exact `pwsh ./scripts/runall.ps1 -Mode full`:
+  **Regressions: 0 / Improvements: 1158**;
+- whole strict census: **2425/2425** normal and stack;
+- extended strict census: **274/274** per mode;
+- focused GCC ASan/UBSan: **324/324** per mode;
+- extended runtime: **196/196** in stack and no-stack peep/nopeep;
+- diagnostics **106/106**, dccpeep **22/22**, require-emit, canonical/CMake,
+  runtime-IY, export/global-data, prohibited-mechanism, baseline, and diff
+  audits pass.
+
+`tctxflt` now masks the float sign bit while testing all four bytes, so positive
+and negative zero are false. `bint` passes E, TTT, and Sieve after a
+materialized-zero comparison consumes its stack handoff in a frameless
+function; framed functions retain the faster SP-restoring form. New matching
+uses structure, types, constants, storage, volatility, prototypes, arguments,
+and CFG/value relationships only. There is no application/function-name gate,
+selected shape hash, shared plan data, padding, capture/legacy output, baseline
+change, commit, or push.
+
+## 2026-08-15 latest-main numeric/math recovery
+
+The 15-app numeric/math cohort began with **69 positive cycle/size metrics**.
+Strict automatic numeric, long, float, PHI, heap, validation-driver, and
+modular-product schedules plus shared spilled-backend corrections reduce the
+final controlled latest-main compiler A/B to **0 positive metrics out of
+120**, with **60/60 identical outputs**. Totals are
+**-7,331,786 cycles / -5,248 bytes** stack peep,
+**-10,068,843 / -7,680** stack nopeep,
+**-7,332,632 / -5,120** no-stack peep, and
+**-10,069,293 / -7,424** no-stack nopeep.
+
+The remaining target-family historical shape hashes were removed from
+`ttrig`'s factorial/exp/log kernels and `tdivmod`'s signed/unsigned checker.
+Those paths now validate opcode sequences, CFG/PHI relationships, value
+dependencies, types, constants, storage identity, volatility, prototypes,
+call-site arguments, and recursive identity. Plans and opcode tables are
+attempt-local; the exported writable/read-only data symbol set is unchanged,
+and there is no application/function-name literal, selected hash, capture or
+legacy stream, or padding. Dynamic call identity preserves the checker's
+actual variadic print target.
+
+Final gates are **15/15** affected apps in every stack/peep combination,
+renamed/failure A/B **64/64** with **232** schedule selections, structural
+near misses **24/24 rejected**, focused census and ASan/UBSan **173/173** plus
+`tptrrhs` **11/11** in each mode, whole census **2425/2425** in each mode, and
+strict extended census **274/274 per mode**. Require-emit, 106 diagnostics,
+22 dccpeep fixtures, CMake, runtime IY, export/shared-data, prohibited
+mechanism, and diff audits pass. Broad mulmod, float-special whole-function,
+and unrestricted PHI-copy experiments were rejected and removed. Exact
+per-app rows, selected functions, and the out-of-scope whole-runtime probe are
+recorded in `plan.md`; the machine-readable A/B is
+`build/numeric-final5-ab.tsv`. Numeric/math latest-main debt is zero. No
+baseline, commit, or push was made.
+
+## 2026-08-15 latest-main interpreter recovery
+
+The merged file-I/O branch began with nine positive latest-main size metrics
+across `fint`, `forint`, `adaint`, `a1`, `cobint`, `pint`, and `bint`;
+`trw` and `cint` were already non-positive but remained in every gate. Strict,
+attempt-local, name-free schedules now share structural file-loader, lexer,
+parser, VM, symbol, and bytecode kernels across the Forth, Fortran, Ada,
+COBOL, Pascal, BASIC, and A1 families. Narrow validated regional tuples cover
+the remaining profitable CFG fragments. There is no shared writable family
+data and no application/function-name or selected-hash eligibility.
+
+Static generated text across the 429 target functions falls
+**112,345 bytes normal** and **113,692 bytes stack**. The largest recovered
+functions are `fint:next` **-16,369**, `adaint:next` **-13,797**,
+`cobint:compile_perform` **-7,558**, `forint:parse_source` **-7,080**,
+`cobint:tokenize_stmt` **-6,668**, `pint:next` **-5,265**,
+`adaint:skip_ws` **-5,101**, and `forint:parse_decl` **-4,713** bytes.
+The final census is **429/429 MIR**: normal
+**217 spilled / 90 scheduled / 78 homed / 34 hybrid / 10 regional** and
+stack **219 / 88 / 78 / 34 / 10**.
+
+The compiler-only `4826ed6` A/B, with current optimizer/runtime/tools held
+constant, has **0 positive rows out of 36**. Totals are
+**-771,575,868 cycles / -2,304 bytes** stack peep,
+**-2,013,005,589 / -28,672** stack nopeep,
+**-770,743,401 / -2,560** no-stack peep, and
+**-2,012,786,114 / -28,800** no-stack nopeep. Primary output and side effects
+match **36/36**; the full edge matrix matches **188/188**.
+
+ASan/UBSan covers **429/429 + 11/11 `tptrrhs`** in each stack mode. Current
+and reference full peep+nopeep runs pass **9/9** in stack and no-stack modes;
+the checked current run reports **0 regressions / 36 improvements**.
+Require-emit, 106 diagnostics, 22 dccpeep fixtures, CMake, export/shared-state,
+runtime IY, name-free/dead-experiment, and diff audits pass. Disabled Pascal,
+Fortran, and symbol experiments and an inactive ensure schedule were deleted;
+the Pascal helper aliasing casts were removed. Exact per-app tables, hot
+profiles, edge classification, and the pre-existing runtime-alias audit debt
+are recorded in `plan.md`. No baseline, capture/legacy output, padding,
+commit, or push was made.
+
+## 2026-08-15 latest-main file-I/O/parser parity
+
+At base `55d4172`, newest `origin/main` `4826ed6` exposed the requested
+file-I/O/parser cohort as a mix of spilled-frame/call overhead, hot scanner
+loops, materialized zero comparisons, and PUBLIC-block runtime linkage.
+Strict name-free schedules were added to the call-runner/scanner families for
+the repeated report/read/existence/sanitize forms and the deep-exec,
+sparse-file, Ctrl-Z, wildcard, errno, and directory-pattern workloads.
+Family-owned strict spilled profiles cover the measured address/PHI cases;
+the shared spilled backend now materializes scalar equality against zero
+without loading/subtracting a zero operand; the buffered-read schedule uses
+compact wide-offset checks. Upstream `bdd5e81`'s relocation of `__tmpf_fd`
+was applied without changing cleanup semantics.
+
+The focused census remains 47/47 MIR and moves from 45 spilled / 1 homed / 1
+scheduled to 17 spilled / 30 scheduled in both stack modes. Controlled
+newest-main compiler A/B has zero positive cycle or size rows across all 17
+apps and both peep modes (combined delta **-11,662,443 cycles / -4,096
+bytes**). Direct latest-main-baseline validation is **17/17, 0 regressions,
+51 improvements**. Full normal/stack censuses are 2425/2425; extended is
+274/274 per stack mode. Standard correctness is 329/329 runnable in stack
+and no-stack full mode; extended is 196/196 in both; diagnostics, dccpeep,
+the require-emit boundary, ASan/UBSan, export/shared-state, and IY audits
+pass. The supplied broad debt falls 171 -> 132 metrics, with the requested
+cohort closed. Exact per-app numbers and validation commands are recorded in
+`plan.md`. No baseline, name/hash gate, padding workaround, commit, or push
+was made.
+
 ## 2026-08-15 full-MIR body-emitter cleanup
 
 The remaining discard-only AST body pass is removed at clean base `1f73395`.
@@ -21957,3 +22136,120 @@ Final strict results:
 No baseline changed. No commit or push was made. The remaining discard-only
 AST metadata walk is intentionally deferred until its side effects have
 MIR-native owners.
+
+## Item T542: recover the latest-main numeric/math cohort (2026-08-15)
+
+The next controlled compiler-only A/B covered `tlmul`, `tlmod`, `tm1mu`,
+`tmatha`, `tmathf`, `tmuldiv`, `tpowfsp`, `trig`, `ttrig`, `tlongopt`,
+`too`, `tphi`, `tlngcond`, `tlngnarw`, and `tdivmod`. Latest
+`origin/main` `e4e0d3` is compiler-identical to the pinned `4826ed6`
+reference used for the run; current optimizer/runtime/sources/tools were
+held fixed.
+
+The starting matrix had 69 positive cycle/size metrics. The final
+`build/numeric-final5-ab.tsv` has 60/60 output matches and zero positive
+metrics:
+
+- stack peep **-7,331,786 cycles / -5,248 bytes**;
+- stack nopeep **-10,068,843 / -7,680**;
+- no-stack peep **-7,332,632 / -5,120**;
+- no-stack nopeep **-10,069,293 / -7,424**.
+
+Strict name-free numeric, float-report, and endgame schedules recover
+ratio/PHI loops, conditional wide adds, multiply/divide reports,
+long-call drivers, heap operations, fixed aggregate fills, float tolerance
+and sweeps, inverse/trig/power kernels, and modular products. Shared spilled
+backend corrections cover float rematerialization, zero-frame epilogues,
+compact extern-wide loads, PHI argument handoff, and constant-return
+suffixes. Broad mulmod fusion and unsafe PHI filtering were measured,
+regressed, and removed.
+
+Validation is recorded in detail at the top of `plan.md`: renamed/failure
+edge A/B 64/64, 24/24 structural near misses rejected, focused and
+sanitized 173/173 MIR per mode, whole 2425/2425, extended 274/274 per mode,
+diagnostics 106/106, dccpeep 22/22, require-emit/build/export/IY/IDE/diff
+audits clean. The merged branch's already-existing `tctxflt` failure and
+`bint` timeout reproduce outside this cohort. Numeric/math debt is zero;
+no baseline, commit, or push was made.
+
+## Item T543: recover aggregate, ABI, alias, and promotion regressions (2026-08-15)
+
+The following cohort began with 51 positive latest-main cycle/size
+comparisons:
+
+`tanonagg`, `targs`, `taddr`, `tc89qual`, `tc89uac`, `tcptrarr`,
+`tinlnpar`, `tinline`, `tinitreg`, `tptr2dv`, `tptrinit`, `tpromo2`,
+`tsretmem`, `tstructv`, `tunion`, `tunion2`, and `tunary32`.
+
+The final compiler-only A/B is 68/68 output-identical and has zero positive
+metrics:
+
+| configuration | aggregate cycle delta | aggregate byte delta |
+|---|---:|---:|
+| stack peep | -93,421 | -8,064 |
+| stack nopeep | -122,575 | -9,344 |
+| no-stack peep | -93,925 | -7,808 |
+| no-stack nopeep | -123,079 | -9,344 |
+
+Two shared shapes also change `cobint.vpush` and `tstructi.sum_pair`; their
+eight latest-main rows are all improvements. `tfloat4` has hash-only
+placement changes and also improves in all four rows. Across all 20
+census-changed apps, the four cycle/byte totals are respectively
+**-43,631,621/-9,216**, **-157,833,204/-15,872**,
+**-42,967,478/-9,088**, and **-157,833,479/-15,872**.
+`build/aggregate-final-ab.tsv`, `build/aggregate-extra-ab.tsv`, and
+`build/aggregate-hash-ab.tsv` contain the exact rows; the cohort table is at
+the top of `plan.md`.
+
+The reusable implementation is split by semantic family:
+
+- aggregate checks: target-width aggregate field sums, scalar global
+  append, local initializer/check interpretation with byte-accurate
+  1/2/4-byte state, and union alias execution;
+- call runners: argv traversal, nullable string failure reporting,
+  conditional parameter assignment, list prepend/reverse, pointer-table
+  calls, qualified/volatile loads, address checks, aggregate-return member
+  use, inline-stack operations, union-value ABI, and the complete
+  struct-value call/copy/return runner;
+- endgame: target-width constant-flow interpretation across locals,
+  branches and PHIs for promotion/unary checks, while retaining actual and
+  expected call arguments separately.
+
+The schedules preserve hidden aggregate-return destinations, odd/even
+by-value argument byte counts, source-order calls, caller cleanup,
+variadic argument order, pointer aliases, explicit copies, volatile
+near-miss rejection, signed/unsigned promotion, and callee-saved IY rules.
+All plan storage is function-local. Matching contains no source/app/function
+name, output text, hash, capture/legacy stream, padding, shared plan data, or
+baseline.
+
+Final static proof:
+
+- focused normal and stack: **98/98 MIR**, each
+  **38 spilled / 36 scheduled / 24 homed**;
+- 27 focused selector changes: **-51,367 generated bytes / -5,067
+  instructions** in each mode, zero positive changed metric;
+- whole normal/stack: **2425/2425 MIR**, **-51,627 / -5,091**, zero
+  positive changed metric and no captured field;
+- final whole selectors: normal
+  **1219 spilled / 643 scheduled / 480 homed / 73 hybrid / 10 regional**;
+  stack **1225 / 636 / 481 / 73 / 10**;
+- extended: **274/274 MIR** per mode.
+
+Runtime and safety proof:
+
+- checked affected stack/no-stack full runs: **20/20 passed**, peep/nopeep,
+  zero checked regression;
+- renamed latest-main A/B: **68/68** matches, 144 scheduled selections;
+- structural/volatile near misses: **34/34** require-emit compiles reduce
+  their app's scheduled count;
+- ASan/UBSan focused census: **98/98** per mode;
+- diagnostics **106/106**, dccpeep **22/22**, require-emit, canonical build,
+  module export/shared-data, runtime-IY, IDE, prohibited-gate, and diff
+  audits pass.
+
+The out-of-scope full stack run still exposes the merged branch's pre-existing
+`tctxflt.truth_tern_zero`, `bint` timeout, and 44 unrelated baseline
+regressions. None belongs to the 20 changed apps. Requested
+aggregate/ABI/promotion debt is zero. No baseline changed and no commit or
+push was made.

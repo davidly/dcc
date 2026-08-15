@@ -2,6 +2,7 @@
   "apps": [
     { "name": "ttt", "args": "10" },
     { "name": "pint", "args": "e.pas", "stack_size": 768, "fixtures": ["E.PAS"],
+      "dcc_floatio": false, "dcc_longio": false,
       "extra_scenarios": [
         { "suffix": "ttt", "args": "ttt.pas", "fixtures": ["TTT.PAS"] },
         { "suffix": "sieve", "args": "sieve.pas", "fixtures": ["SIEVE.PAS"] }
@@ -13,11 +14,13 @@
         { "suffix": "sieve", "args": "sieve.cob", "fixtures": ["SIEVE.COB"] }
       ] },
     { "name": "forint", "args": "e.for", "fixtures": ["E.FOR"],
+      "dcc_floatio": false, "dcc_longio": false,
       "extra_scenarios": [
         { "suffix": "ttt", "args": "ttt.for", "fixtures": ["TTT.FOR"] },
         { "suffix": "sieve", "args": "sieve.for", "fixtures": ["SIEVE.FOR"] }
       ] },
     { "name": "adaint", "args": "e.ada", "fixtures": ["E.ADA"],
+      "dcc_floatio": false, "dcc_longio": false,
       "extra_scenarios": [
         { "suffix": "ttt", "args": "ttt.ada", "fixtures": ["TTT.ADA"] },
         { "suffix": "sieve", "args": "sieve.ada", "fixtures": ["SIEVE.ADA"] }
@@ -28,14 +31,14 @@
         { "suffix": "sieve", "args": "sieve.bas", "fixtures": ["SIEVE.BAS"] }
       ] },
     { "name": "fint", "args": "e.f", "fixtures": ["E.F"],
+      "dcc_floatio": false, "dcc_longio": false,
       "extra_scenarios": [
         { "suffix": "ttt", "args": "ttt.f", "fixtures": ["TTT.F"] },
         { "suffix": "sieve", "args": "sieve.f", "fixtures": ["SIEVE.F"] }
       ] },
     { "name": "attnc99", "host": true, "stack_size": 512, "fixtures": ["ATTN.WTS", "ATTN.IN"] },
     { "name": "attnc11", "host": true, "stack_size": 512, "fixtures": ["ATTN.WTS", "ATTN.IN"] },
-    { "name": "cint", "args": "eu.cin", "stack_size": 768,
-      "dcc_floatio": false, "dcc_longio": false, "fixtures": ["eu.cin"] },
+    { "name": "cint", "args": "eu.cin", "dcc_floatio": false, "dcc_longio": false, "fixtures": ["eu.cin"] },
     { "name": "a1", "args": "-l:HELLO.BAS", "dcc_floatio": false, "dcc_longio": false, "fixtures": ["HELLO.BAS"] },
     { "name": "texfile", "fixtures": ["DATA.TXT"] },
     { "name": "wumpus", "args": "-c" },
@@ -78,7 +81,7 @@
     { "name": "trw2", "host": true },
     { "name": "trwold", "host": true },
     { "name": "tbig", "host": true },
-    { "name": "ttrig", "host": true, "stack_size": 544 },
+    { "name": "ttrig", "host": true },
     { "name": "ptrig", "ignore": true },
     { "name": "tallocx", "host": true },
     { "name": "tmalloch", "host": true },
