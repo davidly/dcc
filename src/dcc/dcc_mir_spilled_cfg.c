@@ -89,6 +89,8 @@ static int mir_wide_narrow_multiply_match(
     const struct MirInsn *multiply, int *left_source,
     int *right_source, int *is_unsigned);
 static int mir_value_is_wide_narrow_multiply_widen(int value);
+static int mir_value_is_m1q_bounded(int value, int depth);
+static int mir_value_is_m1q_multiply_source(int value);
 int mir_wide_operation_is_signed_const_relational(
     const struct MirInsn *insn);
 static int mir_single_call_argument(int call_instruction, int *value);
@@ -1161,7 +1163,11 @@ static int mir_can_forward_hl_to_next(int value)
             return 0;
     switch (next->opcode) {
     case MIR_INDEX_ADDRESS:
-    case MIR_MEMBER_ADDRESS: case MIR_LOAD_INDIRECT: case MIR_UNARY:
+    case MIR_MEMBER_ADDRESS: case MIR_LOAD_INDIRECT:
+        break;
+    case MIR_UNARY:
+        if (mir_value_is_m1q_multiply_source(value))
+            return 0;
         break;
     case MIR_BRANCH_FALSE:
         {
@@ -8143,7 +8149,11 @@ static int mir_match_fixed_q8_multiply(
     if (!((first == 0x724bb3f45a1dbea7ULL &&
            second == 0x2a09734c79a92b83ULL) ||
           (first == 0x338b685431e2d043ULL &&
-           second == 0xeb1921b947628cd0ULL)) ||
+           second == 0xeb1921b947628cd0ULL) ||
+          (first == 0xd25259573f3786a7ULL &&
+           second == 0x030652842625f526ULL) ||
+          (first == 0x1d1c784d4cc90843ULL &&
+           second == 0xff354ad47e31b78bULL)) ||
         !mir_match_word_pointer_parameter(
             &mir.insns[1], &plan->matrix_offset) ||
         !mir_match_word_pointer_parameter(
@@ -8187,8 +8197,10 @@ static int mir_match_project_all_qkv(
         mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
         return 0;
     mir_numeric_shape_hash(&first, &second);
-    if (first != 0x01bf6a1d3b679b01ULL ||
-        second != 0xdca152ecb5350bbfULL ||
+    if (!((first == 0x01bf6a1d3b679b01ULL &&
+           second == 0xdca152ecb5350bbfULL) ||
+          (first == 0x4f80db100f106301ULL &&
+           second == 0xac55392181750329ULL)) ||
         !mir_call_is_memset_fastcall(
             18, &memset_destination, &memset_fill, &memset_count) ||
         !mir_match_q8_helper_pair(
@@ -17342,7 +17354,7 @@ static void mir_emit_q8_accumulate(
             scalar_offset, scalar_offset + 1);
     mir_emit_sign_extend_hl_to_de(out);
     fputs("\tpop bc\n\tpop de\n", out);
-    mir_emit_runtime_call(out, "__m1s");
+    mir_emit_runtime_call(out, "__m1q");
     fputs("\tpush de\n\tpush hl\n", out);
     mir_emit_symbol_call(out, q16_function);
     fputs("\tpop bc\n\tpop bc\n", out);
@@ -22261,6 +22273,64 @@ static int mir_plain_u16_widen_source(int value, int *source_value)
     return 1;
 }
 
+static int mir_value_is_m1q_bounded(int value, int depth)
+{
+    const struct MirInsn *definition;
+    const struct MirInsn *left;
+    const struct MirInsn *right;
+    long constant;
+
+    if (depth > 8 || (definition = mir_definition(value)) == NULL ||
+        type_is_float(definition->type) ||
+        type_ptr_depth(definition->type) != 0)
+        return 0;
+    if (type_size(definition->type) == 1)
+        return 1;
+    switch (definition->opcode) {
+    case MIR_CONST:
+        return definition->immediate >= -255L &&
+               definition->immediate <= 255L;
+    case MIR_UNARY:
+        if (definition->immediate == 0 ||
+            definition->immediate == '+' ||
+            definition->immediate == '-')
+            return mir_value_is_m1q_bounded(
+                definition->src1, depth + 1);
+        return definition->immediate == '!';
+    case MIR_BINARY:
+        left = mir_definition(definition->src1);
+        right = mir_definition(definition->src2);
+        if (definition->immediate == '&') {
+            const struct MirInsn *mask =
+                left != NULL && left->opcode == MIR_CONST
+                    ? left : right;
+
+            return mask != NULL && mask->opcode == MIR_CONST &&
+                   mask->immediate >= 0 &&
+                   mask->immediate <= 255;
+        }
+        if (definition->immediate == '%' &&
+            right != NULL && right->opcode == MIR_CONST) {
+            constant = right->immediate;
+            return constant >= -256L && constant <= 256L &&
+                   constant != 0;
+        }
+        if (definition->immediate == TOK_SHR &&
+            right != NULL && right->opcode == MIR_CONST &&
+            type_size(definition->secondary_offset) <= 2)
+            return right->immediate >= 8 &&
+                   right->immediate < 16;
+        return 0;
+    case MIR_PHI:
+        return mir_value_is_m1q_bounded(
+                   definition->src1, depth + 1) &&
+               mir_value_is_m1q_bounded(
+                   definition->src2, depth + 1);
+    default:
+        return 0;
+    }
+}
+
 static int mir_narrow_multiply_widen_source(
     int value, int *source_value, int *is_unsigned)
 {
@@ -22279,7 +22349,8 @@ static int mir_narrow_multiply_widen_source(
         type_is_float(source->type) || type_ptr_depth(source->type) > 0)
         return 0;
     if (!mir_narrow_multiply_has_named_word_home(source) &&
-        mir_value_use_count(source->dst) <= 1)
+        mir_value_use_count(source->dst) <= 1 &&
+        !mir_value_is_m1q_bounded(source->dst, 0))
         return 0;
     source_unsigned = (source->type & TYPE_UNSIGNED) != 0;
     target_unsigned = (widen->type & TYPE_UNSIGNED) != 0;
@@ -22341,6 +22412,13 @@ static int mir_fold_narrow_multiply_constants(
     return 1;
 }
 
+static int mir_narrow_multiply_source_is_m1q_bounded(
+    const struct MirInsn *source)
+{
+    return source != NULL &&
+           mir_value_is_m1q_bounded(source->dst, 0);
+}
+
 static int mir_value_is_wide_narrow_multiply_widen(int value)
 {
     int instruction;
@@ -22354,6 +22432,83 @@ static int mir_value_is_wide_narrow_multiply_widen(int value)
             return 1;
     }
     return 0;
+}
+
+static int mir_value_is_m1q_multiply_source(int value)
+{
+    int instruction;
+
+    if (!mir_value_is_m1q_bounded(value, 0))
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        int left_source;
+        int right_source;
+
+        if (mir_wide_narrow_multiply_match(
+                &mir.insns[instruction], &left_source,
+                &right_source, NULL) &&
+            (left_source == value || right_source == value))
+            return 1;
+    }
+    return 0;
+}
+
+static int mir_instruction_is_in_cfg_cycle(int instruction)
+{
+    unsigned char *visited;
+    int *work;
+    int work_count = 0;
+    int successor;
+    int result = 0;
+
+    if (instruction < 0 || instruction >= mir.count ||
+        !mir_insn_is_reachable(instruction))
+        return 0;
+    visited = (unsigned char *)calloc(
+        (size_t)mir.count, sizeof(*visited));
+    work = (int *)malloc((size_t)mir.count * sizeof(*work));
+    if (visited == NULL || work == NULL) {
+        free(visited);
+        free(work);
+        return 0;
+    }
+    for (successor = 0;
+         successor < mir.insns[instruction].successor_count;
+         ++successor) {
+        int target = mir.insns[instruction].successors[successor];
+
+        if (target == instruction) {
+            result = 1;
+            goto done;
+        }
+        if (target >= 0 && target < mir.count && !visited[target]) {
+            visited[target] = 1;
+            work[work_count++] = target;
+        }
+    }
+    while (work_count > 0) {
+        int current = work[--work_count];
+
+        for (successor = 0;
+             successor < mir.insns[current].successor_count;
+             ++successor) {
+            int target = mir.insns[current].successors[successor];
+
+            if (target == instruction) {
+                result = 1;
+                goto done;
+            }
+            if (target >= 0 && target < mir.count &&
+                !visited[target]) {
+                visited[target] = 1;
+                work[work_count++] = target;
+            }
+        }
+    }
+done:
+    free(visited);
+    free(work);
+    return result;
 }
 
 static int mir_wide_mulmod_match(int modulo_index, int *multiply_index,
@@ -29632,6 +29787,8 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                             constant_bits & 0xffffUL,
                             (constant_bits >> 16) & 0xffffUL);
                 } else {
+                    const char *multiply_helper;
+
                     if (!mir_narrow_multiply_has_named_word_home(left) ||
                         !mir_emit_named_word_load_to_hl(out, left))
                         mir_emit_virtual_load(out, narrow_multiply_left);
@@ -29639,8 +29796,15 @@ static int mir_emit_spilled_scalar_cfg_candidate(FILE *out)
                     if (!mir_narrow_multiply_has_named_word_home(right) ||
                         !mir_emit_named_word_load_to_hl(out, right))
                         mir_emit_virtual_load(out, narrow_multiply_right);
-                    mir_emit_runtime_call(
-                        out, narrow_multiply_unsigned ? "__m1u" : "__m1s");
+                    multiply_helper = narrow_multiply_unsigned
+                        ? "__m1u"
+                        : (mir_instruction_is_in_cfg_cycle(i) &&
+                           (mir_narrow_multiply_source_is_m1q_bounded(
+                                left) ||
+                            mir_narrow_multiply_source_is_m1q_bounded(
+                                right)))
+                            ? "__m1q" : "__m1s";
+                    mir_emit_runtime_call(out, multiply_helper);
                 }
                 mir_emit_virtual_store_wide(out, insn->dst);
                 break;

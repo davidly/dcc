@@ -8583,6 +8583,81 @@ __m8u:
 
 ; __m1s: signed 16x16 -> 32 multiply, register ABI.
 ;   Entry: BC = LHS low word, HL = RHS low word.  Exit: DE:HL = product.
+; __m1q has the same ABI and uses an 8-bit multiplier when either operand is
+; in -255..255. It falls through to the exact full-width helper otherwise.
+        public  __m1q
+__m1q:
+        ld      a,h
+        or      a
+        jr      z,lm1q_byte
+        inc     a
+        jr      nz,lm1q_try_left
+        ld      a,l
+        or      a
+        jr      nz,lm1q_byte
+lm1q_try_left:
+        ld      a,b
+        or      a
+        jr      z,lm1q_swap
+        inc     a
+        jp      nz,__m1s
+        ld      a,c
+        or      a
+        jp      z,__m1s
+lm1q_swap:
+        ld      d,h
+        ld      e,l
+        ld      h,b
+        ld      l,c
+        ld      b,d
+        ld      c,e
+lm1q_byte:
+        ld      a,b
+        xor     h
+        push    af
+        bit     7,b
+        jr      z,lm1q_ap
+        xor     a
+        sub     c
+        ld      c,a
+        sbc     a,a
+        sub     b
+        ld      b,a
+lm1q_ap:
+        bit     7,h
+        jr      z,lm1q_bp
+        xor     a
+        sub     l
+        ld      l,a
+        ld      h,0
+lm1q_bp:
+        ld      e,l
+        ld      hl,0
+        ld      a,4
+lm1q_b:
+        or      a
+        bit     0,e
+        jr      z,$+3
+        add     hl,bc
+        rr      h
+        rr      l
+        rr      e
+        or      a
+        bit     0,e
+        jr      z,$+3
+        add     hl,bc
+        rr      h
+        rr      l
+        rr      e
+        dec     a
+        jr      nz,lm1q_b
+        ld      d,h
+        ld      h,l
+        ld      l,e
+        ld      e,d
+        ld      d,0
+        jp      lm1s_sign
+
         public  __m1s
 __m1s:
         ld      a,b
@@ -8648,6 +8723,7 @@ lm1s_b:
         dec     a
         jr      nz,lm1s_b
         ex      de,hl                   ; HL = low, DE = high
+lm1s_sign:
         pop     af
         bit     7,a
         ret     z

@@ -1,5 +1,41 @@
 # dcc MIR text-size fallback plan
 
+## 2026-08-16 bounded Q8 multiply recovery
+
+The current compiler reproduced the reported wall-time regression in the
+documented source variant: making only `clamp_to_model_value` out of line
+caused `project_all_qkv`, `transposed_multiply_8x16`, and
+`transposed_multiply_16x10` to miss their fused schedules. The result measured
+**397,983,195 Z80 cycles** and retained five dynamically hot `__m1s` call
+sites, executed **131,072 times** per inference run.
+
+The WIP mechanism is ported to the current generated-only backend:
+
+- `__m1q` preserves the signed register ABI and exact `__m1s` fallback while
+  using eight multiply steps when either operand is in **-255..255**;
+- all five fused fixed-Q8 sites use it;
+- both inline and out-of-line clamp fingerprints retain the existing detailed
+  semantic/CFG/array/helper checks;
+- generic widened signed multiplies select it only with a conservative bounded
+  MIR proof and actual CFG-cycle membership.
+
+`tattnout` permanently rebuilds the canonical source with only the clamp
+qualifier removed. It and `attnc11` both measure
+**287,727,239 / 22,144 peep** and **290,267,064 / 23,040 nopeep** in the checked
+stack build. `tlongopt` keeps straight-line products on `__m1s`, selects
+`__m1q` in bounded loops, and validates the runtime over a 19x19 grid covering
+both short paths, `-256`, and full fallback.
+
+The final no-stack ESP32-equivalent proof app measures
+**272,357,415 cycles / 18,688 bytes**, down from **397,983,195 / 19,200**
+before fused selection: **-31.57% cycles**. At the reported ESP32 emulator
+rate, 14.6 seconds scales to approximately **10.0 seconds**.
+
+Census is **2492/2492 MIR** in both modes with no missing selection. Final
+strict stack/no-stack full+extended runs pass **332/332 runnable apps** in each
+mode; stack reports **0 regressions / 1151 improvements**. ASan/UBSan,
+diagnostics, dccpeep, canonical/CMake, runtime-IY, and diff checks pass.
+
 ## 2026-08-15 wide-add carry-clear removal
 
 The reported `gen_binop32` dead carry clear was still active in generated-only

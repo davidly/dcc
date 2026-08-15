@@ -3,6 +3,40 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-16 bounded Q8 multiply recovery
+
+- Reproduced the ESP32-like source form by removing only
+  `clamp_to_model_value`'s `inline` qualifier. On current dcc it missed the
+  fused `project_all_qkv` and two transposed-projection schedules and measured
+  **397,983,195 Z80 cycles**. Five hot `__m1s` call sites account for
+  **131,072 signed multiplies** per inference run.
+- Ported the reviewed WIP runtime helper as `__m1q`: the ABI remains
+  `BC,HL -> DE:HL`; either operand in **-255..255** takes an exact eight-step
+  path, operands are swapped when only the left is bounded, `-256` is rejected,
+  and all other pairs fall through to `__m1s`.
+- The five fused Q8 sites now call `__m1q`. The documented out-of-line clamp
+  fingerprints are admitted only behind the existing full shape, CFG,
+  parameter, array, helper-prototype, offset, and constant checks. The new
+  `tattnout` app compiles the same ATTNC11 source with only that qualifier
+  removed and pins both source forms permanently. Both report
+  **287,727,239 / 22,144 peep** and **290,267,064 / 23,040 nopeep** under the
+  checked stack build.
+- Generic signed 16x16-to-32 multiplication selects `__m1q` when MIR proves an
+  operand bounded through byte type, constant, cast/unary, `!`, `& 255`,
+  `% 256`, 8--15-bit right shift, or two bounded PHI inputs, and the multiply
+  belongs to a real CFG cycle. Straight-line and unproved products retain
+  `__m1s`; unsigned products retain `__m1u`.
+- `tlongopt` pins the generic cost boundary and directly tests `__m1q` across
+  a 19x19 operand grid, including short, swapped, `-256`, and full-width
+  fallback paths. The final no-stack ESP32-equivalent proof app falls from
+  **397,983,195 to 272,357,415 cycles (-31.57%)**, projecting the reported
+  **14.6 seconds to approximately 10.0 seconds** at the same emulator rate.
+- Corpus coverage is **2492/2492 MIR** in both modes with no missing selection.
+  Final strict stack/no-stack full+extended runs pass **332/332 runnable apps**
+  in each mode; stack reports **0 regressions / 1151 improvements**.
+  ASan/UBSan, diagnostics, dccpeep, canonical/CMake, runtime-IY, and diff
+  checks pass.
+
 ## 2026-08-15 wide-add carry-clear removal (working tree)
 
 - Confirmed the reported `gen_binop32` issue remained production-visible after
