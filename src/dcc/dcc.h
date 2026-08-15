@@ -6,8 +6,7 @@
  * Function bodies lower through a typed,
  * function-local AST. This header holds broadly shared target constants, core
  * records, state declarations, and cross-module APIs; narrower contracts live
- * in dcc_ast_gen_internal.h, dcc_preproc_internal.h, and
- * dcc_regalloc_internal.h.
+ * in dcc_ast_gen_internal.h and dcc_preproc_internal.h.
  *
  * This foundational contract includes:
  *   1. System headers used across the compiler.
@@ -38,8 +37,6 @@
  *   dcc_stmt.c      token-to-AST statement bridge + switch helpers
  *   dcc_func.c      functions/top-level declarations + inline-body capture
  *   dcc_global_init.c file-scope object initializer parsing (record path)
- *   dcc_regalloc.c  speculative no-IX / BC-register-allocation codegen
- *   dcc_loop_regalloc.c loop-scoped BC register allocation
  *   dcc_global_scan.c whole-file lexical global-write/address scan
  *   dcc_array_narrow.c conservative byte-narrowing proof
  *   dcc_licm.c      loop-invariant code motion and loop-local CSE
@@ -59,22 +56,6 @@
 #include <string.h>
 #include <ctype.h>
 #include <time.h>
-
-/*
- * Portable null-device path for throwaway fopen() sinks (used to suppress
- * output during speculative/frame-sizing AST replay passes - see
- * ast_scan_for_stmt and the AST_FOR/AST_COMPOUND probes in
- * dcc_ast_gen_cond.c).  "/dev/null" does not exist on native Windows: MSVC's
- * fopen() there fails on it (it looks for a "dev" subdirectory), silently
- * leaving the caller's `g_emit_sink.stream` pointed at the real output file instead of a
- * sink - so the replay's speculative emission leaks into real output.  The
- * Windows null device is "NUL".
- */
-#ifdef _WIN32
-#define DCC_NULL_DEVICE "NUL"
-#else
-#define DCC_NULL_DEVICE "/dev/null"
-#endif
 
 /* ------------------------------------------------------------------------- *
  * Capacity / translation-limit macros.
@@ -165,6 +146,9 @@
 #define SC_FUNC        4
 #define SC_EXTERN      5
 #define SC_REGISTER    6   /* unused; reserved */
+
+#define MIR_EXACT_KERNEL_MARKER ";@dcc.mir exact-kernel"
+#define MIR_PHI_SLOT_MARKER ";@dcc.mir phi-slot"
 
 /* ------------------------------------------------------------------------- *
  * Lexer token kinds. Single-character tokens use their ASCII code; multi-byte
@@ -296,6 +280,7 @@ typedef struct FunctionPassState {
     int for_decl_rename_index;
     int for_decl_recording;
     int scope_depth;
+    int block_seq;
     int static_local_func_index;
     int static_local_seq;
     int compound_literal_seq;
@@ -319,8 +304,6 @@ typedef struct DeclState {
  * back for a commit/decline decision. */
 enum EmitSinkPurpose {
     EMIT_SINK_FINAL,
-    EMIT_SINK_DISCARD,
-    EMIT_SINK_VERIFY,
     EMIT_SINK_DEFERRED
 };
 
@@ -371,15 +354,18 @@ struct Sym {
     int dims[MAX_ARRAY_DIMS];   /* dims[0] may be 0 until inferred for a[][N] */
     char runtime_stride_name[64]; /* parameter name for a runtime inner VLA bound */
     int needs_extrn; /* 1 = symbol has external linkage and may need EXTRN if referenced */
+    int mir_extrn_attempt_stamp; /* last mir_extrn_begin_attempt() generation
+                                  * this symbol already had its EXTRN written
+                                  * for; see mir_extrn_should_emit() (dcc_mir_select.c).
+                                  * Zero-initialized with the rest of struct Sym,
+                                  * and generation numbers start at 1, so a
+                                  * fresh symbol never spuriously matches. */
     int is_defined;  /* 1 = this translation unit emits storage/PUBLIC for the symbol */
     int is_static;   /* file-scope static: internal linkage, mangle and do not PUBLIC */
     int is_volatile; /* object declared with the volatile qualifier: access-
                       * contracting fast paths must decline for it */
     int pointee_is_volatile; /* immediate pointed-to type is volatile */
-    int is_register; /* object declared with the register qualifier: a
-                      * signal dcc_loop_regalloc.c uses to decline promoting
-                      * anything ELSE in a loop that also contains one - see
-                      * loop_regalloc_sym_eligible's comment for why. */
+    int is_register; /* object declared with the register qualifier */
     int is_inline;   /* function declared with inline specifier */
     int is_noreturn; /* function declared with _Noreturn: licm_scan_modified
                       * (dcc_licm.c) tolerates a call to it in an otherwise-
@@ -424,16 +410,7 @@ struct Sym {
                             * per-function address-cache scan) */
     int addr_cache_offset; /* frame offset of the 2-byte pointer slot holding
                             * this array's address, valid when has_addr_cache */
-    int reg_alloc;         /* REG_NONE or REG_BC - this pointer parameter is
-                            * resident in BC for the whole function body
-                            * instead of a frame slot (see dcc_func.c's
-                            * find_bc_regalloc_candidate /
-                            * try_speculative_bc_regalloc_function_body) */
 };
-
-#define REG_NONE 0
-#define REG_BC   1
-#define REG_E    2
 
 struct Def {
     char name[64];
@@ -578,8 +555,6 @@ extern long g_src_generation;
  * (lex_save()/lex_restore()). */
 extern LexState g_lex;
 extern EmitSink g_emit_sink;
-EmitSink emit_sink_push(FILE *stream, int purpose);
-void emit_sink_restore(const EmitSink *saved);
 extern const char *input_name;
 extern const char *output_name;
 extern char current_file_name[256];
@@ -616,15 +591,8 @@ extern int nused_extrns;
 
 /* per-function code-generation state */
 extern int label_id;
-extern int current_return_label;
-/* Position in `g_emit_sink.stream` of a "jp current_return_label" tail jump gen_return_ast
- * just emitted (byte offset right before it), and the label it targets, or
- * (-1, -1) if none is pending. Debug (-g) builds only - see
- * emit_function_epilogue's elide_redundant_tail_jp. */
-extern long g_return_jp_check_pos;
-extern int g_return_jp_check_label;
 /* Closing-brace source location of the current function body, captured when
- * the body always exits so emit_function_epilogue can map the shared return
+ * the body always exits so finish_function_mir can map the shared return
  * label to the closing brace. 0 = none. */
 extern int g_func_close_line;
 extern char g_func_close_file[256];
@@ -632,14 +600,12 @@ extern int current_return_type;
 extern int parse_function_return_type;
 extern int current_local_bytes;
 extern int max_function_local_bytes;
-extern int current_omit_ix_frame;
 extern int current_function_has_call;
+extern int current_function_has_vla;
 extern int g_inline_body_buffering;
 extern int g_buffering_epoch;
 
-/* loop break/continue target stack + parser flags */
-extern int break_stack[MAX_FLOW];
-extern int cont_stack[MAX_FLOW];
+/* loop/switch nesting depth */
 extern int nflow;
 
 /* C99 for-init declaration scoping (see dcc_state.c for details) */
@@ -654,6 +620,9 @@ const char *resolve_local_rename(const char *name);
 void make_for_rename_name(char *dst, int dstsz, const char *from, int for_seq, int rename_index);
 void add_for_scope_rename(int for_seq, const char *from);
 const char *enter_for_decl_rename(const char *name);
+const char *enter_block_decl_rename(const char *name);
+const char *enter_static_local_rename(const char *name,
+                                      const char *backing_name);
 void push_for_rename(const char *from, const char *to);
 void pop_for_rename(void);
 
@@ -702,6 +671,10 @@ void reset_preproc_scan_state(void);
 int global_text_write_count(const char *name);
 int global_text_addr_taken_count(const char *name);
 int global_text_written_in_function(const char *name, const char *func);
+int global_text_field_write_count(const char *base, const char *field);
+int global_text_field_addr_taken_count(const char *base, const char *field);
+int global_text_field_written_in_function(
+    const char *base, const char *field, const char *func);
 
 /* user-defined goto labels (function-scoped) */
 extern char ulabel_names[MAX_USER_LABELS][64];
@@ -922,7 +895,6 @@ void emit_extrn_if_needed(struct Sym *s);
 void emit_deferred_extrns(void);
 void emit_runtime_extrn_if_needed(const char *name);
 void emit_runtime_call(const char *name);
-int frame_sp_offset_for_sym(struct Sym *s);
 void emit_load_frame_addr_hl(struct Sym *s);
 void emit_load_sym_addr(struct Sym *s);
 int sym_can_ix_direct(struct Sym *s);
@@ -1104,9 +1076,7 @@ void emit_init_auto_array_from_list(struct Sym *s, int elem_type);
 void gen_local_decl_after_type(int base);
 
 /* ---- stmt ---- */
-void gen_compound(void);
-int switch_label_for_value(int value, int *case_vals, int *case_labs, int ncase, int default_lab, int lend);
-void emit_switch_jump_table(int minv, int maxv, int *case_vals, int *case_labs, int ncase, int default_lab, int lend);
+void process_compound(void);
 void gen_statement(void);
 
 /* ---- func ---- */
@@ -1118,20 +1088,18 @@ void copy_parsed_prototype_to_sym(struct Sym *s);
 void copy_funcptr_prototype_to_sym(struct Sym *s, int direct_declarator);
 void remember_proto_param_type(int type);
 int old_style_param_list_starts(void);
-void recompute_param_offsets(void);
 void parse_old_style_param_id_list(void);
 void parse_old_style_param_declarations(void);
 void parse_param_list(void);
-int current_function_param_count(void);
-int current_function_safe_to_omit_ix(int return_type, int local_bytes);
-void emit_function_prologue(const char *name, int local_bytes, int omit_ix_frame);
+void begin_function_mir(const char *name, int local_bytes);
 void emit_debug_variable(struct Sym *s);
 void emit_debug_variable_end(struct Sym *s);
 void emit_debug_types_once(void);
 void emit_debug_global(struct Sym *s);
 void maybe_reserve_addr_cache_for_array(struct Sym *s, const char *name);
-void emit_function_epilogue(int implicit_zero_return);
+void finish_function_mir(int implicit_zero_return);
 void emit_needed_deferred_bodies(void);
+int is_inline_substitutable(struct Sym *s);
 void skip_initializer_or_decl_tail(void);
 int local_name_address_taken_ahead(const char *name);
 int local_name_address_taken_in_function(const char *name);

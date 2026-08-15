@@ -777,15 +777,9 @@ void parse_array_declarator_dims(int base_type,
                     skip_array_dim_to_close();
                     n = 0;
                 } else {
-                    /* No need to also gate this on asm_suppress_depth==0 -
-                     * dcc_error_at (via error_here) already checks it
-                     * internally before printing anything. Calling it
-                     * unconditionally instead means g_diag_error_count (its
-                     * unconditional counter, checked by the speculative
-                     * regalloc/no-IX-frame wrappers in dcc_func.c) still
-                     * increments even while suppressed - otherwise a real
-                     * error here could be silently lost if the speculative
-                     * attempt it occurred in went on to be committed. */
+                    /* dcc_error_at already suppresses printing during a
+                     * structural scan while still recording that the parse
+                     * encountered a real diagnostic. */
                     error_here("variable inner dimensions in variable-length arrays are not supported; use malloc and an explicit pointer");
                     skip_array_dim_to_close();
                     n = 0;
@@ -1600,4 +1594,3 @@ void emit_pre_incdec_lvalue(int type, int op)
     }
     g_expr.type = type;
 }
-

@@ -2,6 +2,96 @@
 
 Developer utility scripts for the `dcc` (CP/M-80 / Z80) toolchain.
 
+## `mir-migration-census.py`
+
+Measures generated MIR selection across `tests/*.c` and compares two snapshots
+to produce the smallest `runall.ps1 -Apps ...` validation command for a
+compiler change.
+
+The script is read-only with respect to test and performance baselines. It
+compiles each source with `DCC_MIR_SELECT_REPORT=1` and
+`DCC_MIR_REQUIRE_EMIT=1`, deduplicates buffered/final reports by
+`(app, function)`, and writes a stable tab-separated snapshot containing the
+selected generated selector, assembly-text size, instruction count, hash, and
+CFG block count. Compatibility `captured_*` columns remain present with `-1`;
+no legacy text is retained or measured.
+
+### Fast staged MIR workflow
+
+```sh
+# 1. Snapshot before changing a selector or MIR optimization.
+python3 scripts/mir-migration-census.py \
+  --output build/mir-before.tsv
+
+# 2. Edit and rebuild dcc.
+sh src/dcc/build-dcc.sh
+
+# 3. Measure the new rollout and print newly accepted/regressed functions plus
+#    the exact focused validation command for affected apps.
+python3 scripts/mir-migration-census.py \
+  --output build/mir-after.tsv \
+  --compare build/mir-before.tsv \
+  --fail-on-regression
+
+# 4. Run the printed command, for example:
+pwsh ./scripts/runall.ps1 -Apps tret,tatexit -Mode full -RunTimeout 20
+```
+
+Use `--apps app1,app2` while developing a local change. Run the complete census
+only when the focused hypothesis succeeds. Reserve an unfiltered
+`runall.ps1 -Mode full` for a material coverage milestone instead of every
+selector iteration.
+
+Apps marked `ignore` in `tests/_test_overrides.json` are skipped by default, so
+the complete census matches the runnable app suite. Pass `--include-ignored`
+when deliberately investigating those sources. Per-app `dcc_args` overrides
+are forwarded automatically.
+
+`--fail-on-regression` returns nonzero when a previously reported MIR selection
+disappears or becomes non-MIR. Run the generated focused command whenever a
+selected hash or generated metric changes.
+
+### MIR-only cost-policy matrix
+
+`--cost-policy-output` records the generated MIR candidates considered by the
+`mir-v1` policy. The TSV includes emitted machine bytes/instructions,
+loop-weighted T-states, helper calls, frame/spill costs, allocator and stream
+moves, prologue/callee-save costs, register homes, eligibility, score, and
+output hash. With no explicit `--cost-policy`, the option uses the production
+`mir-v1` default; pass `--cost-policy mir-v1-report` to report without adopting
+alternatives.
+
+```sh
+python3 scripts/mir-migration-census.py \
+  --cost-policy mir-v1 \
+  --cost-policy-output build/mir-cost.tsv \
+  --output build/mir-selected.tsv
+```
+
+## `mir-current-vs-parent.py`
+
+Runs strict normal and stack-check censuses with a current compiler and a
+separately built parent compiler, then reports selection/hash changes:
+
+```sh
+python3 scripts/mir-current-vs-parent.py \
+  --parent-compiler build/parent/dcc \
+  --apps cint,cobint
+```
+
+This replaces forced-legacy A/B and fallback-bisection utilities.
+
+For one generated-candidate runtime comparison, use the diagnostic controls:
+
+```sh
+DCC_MIR_SELECT_FUNCTION=parse_move \
+DCC_MIR_SELECT_CANDIDATE=spilled-rhs-forward \
+  pwsh ./scripts/runall.ps1 -Apps tchess -Mode full
+```
+
+Candidate names are the `candidate` values in `--cost-policy-output`; no
+legacy stream is involved.
+
 ## `publish-package.ps1`
 
 Publishes or republishes the binary package release. By default it reads the

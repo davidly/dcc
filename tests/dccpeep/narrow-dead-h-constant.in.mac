@@ -1,0 +1,33 @@
+_narrow_dead_h:
+;@dcc.mir byte-slot
+	ld hl,0
+	inc l
+	ld a,l
+	ld (_sink),a
+	ld hl,42
+	ld a,l
+	ld (_sink),a
+	ld hl,65532
+	ld a,l
+	ld (_sink),a
+	ld l,a
+	ld a,l
+	ld (_sink),a
+	inc l
+	ld a,l
+	ld (_sink),a
+	ld de,37
+	ld a,e
+	ld (_sink),a
+	ld d,0
+	ld bc,29
+	ld a,c
+	ld (_sink),a
+	ld b,0
+	ld hl,1
+	ld l,(ix-8)
+	ld h,(ix-7)
+	push hl
+	call _word
+	pop bc
+	ret

@@ -2,10 +2,11 @@
 
 This folder holds **project-scoped** agent skills that ship with the dcc repo
 (`dcc-cpm-z80/` for writing CP/M apps with dcc, `dcc-project/` for developing
-the dcc toolchain itself, and `mkdocs-stdlib-docs/` for maintaining generated
+the dcc toolchain itself, `mir-migration/` for coordinating the staged MIR
+backend rollout, and `mkdocs-stdlib-docs/` for maintaining generated
 standard-library reference pages). Any clone of this repo picks them up
-automatically when opened in an agent that supports skills (e.g. GitHub Copilot
-in VS Code).
+automatically when opened in an agent that supports skills (e.g. GitHub
+Copilot in VS Code).
 
 A skill is just a folder containing a `SKILL.md` (plus optional `references/`,
 `scripts/`, `assets/`). The folder name must match the `name:` in `SKILL.md`'s

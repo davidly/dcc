@@ -64,7 +64,10 @@ enum PeepRegisterMask {
     PEEP_REG_L  = 1u << 6,
     PEEP_REG_IX = 1u << 7,
     PEEP_REG_IY = 1u << 8,
-    PEEP_REG_SP = 1u << 9
+    PEEP_REG_SP = 1u << 9,
+    PEEP_REG_BC = PEEP_REG_B | PEEP_REG_C,
+    PEEP_REG_DE = PEEP_REG_D | PEEP_REG_E,
+    PEEP_REG_HL = PEEP_REG_H | PEEP_REG_L
 };
 
 enum PeepFlagMask {
@@ -267,6 +270,10 @@ int peep_basic_block_count(void);
 int peep_registers_dead_after(int line, unsigned registers);
 int peep_flags_dead_after(int line, unsigned flags);
 
+/* Analysis-only frame-slot register-allocation census. Runs after structural
+ * convergence under -fstats; changes no program text. */
+void peep_frame_alloc_analyze(void);
+
 /* Size-mode shared-helper passes. */
 int pass_shared_frame_stubs(void);
 int pass_lvar_stubs(void);
@@ -292,6 +299,13 @@ int pass_elim_redundant_carry_clear(void);
 /* Single-scan micro-pattern dispatcher (peep_pass_once.c). */
 int pass_once(void);
 
+/* Guard for local-alloc rewrites: HL (the fresh allocation's address) must
+ * be provably dead before deleting its definition. Shared between
+ * peep_pass_once.c's early N=1/2 rewrite and peep_pass_final.c's
+ * post-convergence N=3/4 rewrite (peep_pass_once.c). */
+int local_alloc_hl_result_dead(int start);
+int pass_local_alloc_wide(void);
+
 /* Shared helpers used across the optimizer and the board passes. */
 int is_uncond_jp(const char *s);
 int is_jump_line(const char *s);
@@ -299,6 +313,24 @@ int label_name_at(int i, char *out);
 int line_is_label_name(int i, const char *name);
 int peep_is_public_line(const char *s);
 int bc_regalloc_claimed_before(int at);
+int peep_register_claimed_in_range(unsigned mask, int begin, int end);
+int peep_register_claimed_from(unsigned mask, int at);
+int peep_register_claimed_in_file(unsigned mask);
+int peep_register_available_in_range(
+    unsigned mask, int begin, int end, const char *own_tag);
+/* Interval forms of the same question. dcc publishes its own BC claims as
+ * paired "@dcc.reg claim=bc" / "@dcc.reg free=bc" directives, so ownership
+ * is a set of intervals rather than a single "claimed from here onward"
+ * point; a pass must ask about the span it actually intends to modify. */
+int bc_regalloc_claimed_in_range(int begin, int end);
+int bc_regalloc_claimed_from(int at);
+/* Shared "is this register already spoken for anywhere in this function?"
+ * scan. `own_tag`, when non-NULL, names the peep tag the CALLING pass writes,
+ * so its own earlier segment-scoped claims in the same function do not veto a
+ * later unrelated one. See the definition in dccpeep.c for why everything
+ * else that touches the register still counts. */
+int peep_reg_used_in_function(int at, const char *own_tag,
+                              int (*line_uses_reg)(const char *));
 int stride_parse_ld_r_ix_neg(const char *s, char r, int *n);
 void strip_label_colon(char *s);
 int jump_target_any(const char *s, char *out);
@@ -330,6 +362,7 @@ int pass_global_board_const_offsets(void);
 /* Loop-scoped registerization passes (peep_pass_loops.c). */
 int pass_byte_loop_counter_to_reg_c(void);
 int pass_word_loop_var_to_reg_bc(void);
+int pass_narrow_bc_loop_bound_to_reg_c(void);
 int pass_byte_loop_var_to_reg_c(void);
 int pass_byte_for_counter_to_reg_c(void);
 int pass_byte_for_counter_to_reg_e(void);

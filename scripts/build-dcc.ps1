@@ -297,6 +297,54 @@ function Get-UnixCompiler {
     return "gcc"
 }
 
+# Compiles each source to its own object file in parallel runspaces (one
+# process invocation per file, no shared state between them), then returns
+# the object paths in stable source-name order for a deterministic link
+# command. The C compiler does not parallelize across multiple input files
+# within a single invocation, so compiling N files one at a time in this
+# loop previously ran effectively single-threaded even on a many-core
+# machine; each file is an independent compiler subprocess, so this is safe
+# to run concurrently up to the machine's processor count.
+function Invoke-ParallelCompileSources {
+    param(
+        [System.IO.FileInfo[]]$Sources,
+        [string]$Compiler,
+        [string[]]$BaseCflags,
+        [string]$ObjDir,
+        [string]$IncludeDir
+    )
+
+    $throttle = [Environment]::ProcessorCount
+    $results = $Sources | ForEach-Object -ThrottleLimit $throttle -Parallel {
+        $source = $_
+        $compiler = $using:Compiler
+        $baseCflags = $using:BaseCflags
+        $objDir = $using:ObjDir
+        $includeDir = $using:IncludeDir
+        $object = Join-Path $objDir ([System.IO.Path]::ChangeExtension($source.Name, ".o"))
+        $arguments = @($baseCflags) + @("-I", $includeDir, "-c", $source.FullName, "-o", $object)
+        $output = & $compiler @arguments 2>&1
+        [PSCustomObject]@{
+            Name     = $source.Name
+            Object   = $object
+            ExitCode = $LASTEXITCODE
+            Output   = ($output | Out-String)
+        }
+    }
+
+    foreach ($result in ($results | Sort-Object Name)) {
+        Write-Host "  compiling $($result.Name)"
+        if ($result.Output) {
+            Write-Host $result.Output.TrimEnd()
+        }
+        if ($result.ExitCode -ne 0) {
+            throw "compiling $($result.Name) failed with exit code $($result.ExitCode)"
+        }
+    }
+
+    return ($results | Sort-Object Name | ForEach-Object Object)
+}
+
 function Build-UnixNative {
     Remove-MisplacedArtifacts
 
@@ -356,13 +404,8 @@ function Build-UnixNative {
     New-BuildDirectory $dccObjDir
 
     $dccSources = Get-ChildItem -Path (Join-Path $repoRoot "src\dcc") -Filter "*.c" | Sort-Object Name
-    $dccObjects = @()
-    foreach ($source in $dccSources) {
-        $object = Join-Path $dccObjDir ([System.IO.Path]::ChangeExtension($source.Name, ".o"))
-        $dccObjects += $object
-        $arguments = @($baseCflags) + @("-I", (Join-Path $repoRoot "src\dcc"), "-c", $source.FullName, "-o", $object)
-        Invoke-Checked $compiler $arguments "compiling $($source.Name)"
-    }
+    $dccObjects = Invoke-ParallelCompileSources -Sources $dccSources -Compiler $compiler `
+        -BaseCflags $baseCflags -ObjDir $dccObjDir -IncludeDir (Join-Path $repoRoot "src\dcc")
     Invoke-Checked $compiler (@($baseCflags) + $dccObjects + $linkFlags + @("-o", $dccOut)) "linking dcc"
 
     $tools = @(
@@ -379,12 +422,9 @@ function Build-UnixNative {
         $toolOut = Join-Path $repoRoot $tool.Name
         New-BuildDirectory $toolObjDir
 
-        $toolObjects = @()
-        foreach ($source in $tool.Sources) {
-            $toolObject = Join-Path $toolObjDir ([System.IO.Path]::ChangeExtension((Split-Path $source -Leaf), ".o"))
-            $toolObjects += $toolObject
-            Invoke-Checked $compiler (@($baseCflags) + @("-I", (Split-Path $source -Parent), "-c", $source, "-o", $toolObject)) "compiling $($tool.Name):$(Split-Path $source -Leaf)"
-        }
+        $toolSources = $tool.Sources | ForEach-Object { Get-Item $_ }
+        $toolObjects = Invoke-ParallelCompileSources -Sources $toolSources -Compiler $compiler `
+            -BaseCflags $baseCflags -ObjDir $toolObjDir -IncludeDir (Split-Path $tool.Sources[0] -Parent)
         Invoke-Checked $compiler (@($baseCflags) + $toolObjects + $linkFlags + @("-o", $toolOut)) "linking $($tool.Name)"
     }
 

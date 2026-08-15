@@ -212,7 +212,7 @@ static int peep_line_in_function(int line, const char *func)
  * is __stchk: its documented prologue-helper contract clobbers HL before the
  * function body can depend on registers.
  */
-static int local_alloc_hl_result_dead(int start)
+int local_alloc_hl_result_dead(int start)
 {
     int j;
     char tmp[MAX_LINE];
@@ -882,6 +882,18 @@ static int try_local_alloc_at(int i)
      * dcc's by-value struct/union argument copy uses HL from this very
      * sequence as the copy destination; rewriting that shape corrupted
      * the outgoing argument bytes and the stack.
+     *
+     * N=3/4 are deliberately NOT handled here even though they are also
+     * both smaller and faster (see pass_local_alloc_wide in
+     * peep_pass_final.c for why): pass_once runs first in the
+     * fixed-point pass list, so eagerly rewriting "ld hl,-4"/"ld hl,-3"
+     * this early would permanently destroy that exact text before
+     * function-specific frame-shrinking passes elsewhere in the list
+     * (e.g. pass_shrink_minmax_frame3_after_score_cache /
+     * pass_shrink_minmax_frame2_after_loop_ctr_b, which look for that
+     * literal text once dead locals are proven unused) ever get a
+     * chance to reduce the allocation further - confirmed via ttt.c's
+     * _MinMax regressing when this was tried inline here.
      */
     if (eq(i, "ld hl,-1") &&
         eq(i + 1, "add hl,sp") &&
@@ -1125,8 +1137,80 @@ static int try_small_positive_offset_at(int i)
     return 0;
 }
 
+static int subtract_one_transfer_is_safe(int i, unsigned flags)
+{
+    int transferred = 0;
+    int transfer_line = -1;
+    int j;
+
+    for (j = i + 3; j < nlines; ++j) {
+        const PeepLineInfo *info = peep_line_info(j);
+        if (info == NULL || info->kind == PEEP_LINE_LABEL ||
+            info->kind == PEEP_LINE_DIRECTIVE ||
+            info->kind == PEEP_LINE_OPAQUE)
+            return 0;
+        if (info->kind != PEEP_LINE_INSTRUCTION)
+            continue;
+        if (!transferred && eq(j, "ex de,hl")) {
+            if (j + 1 >= nlines || !eq(j + 1, "pop hl"))
+                return 0;
+            transferred = 1;
+            transfer_line = j;
+        } else if (!transferred &&
+                   ((info->effects.reads | info->effects.writes) &
+                    (PEEP_REG_D | PEEP_REG_E)) != 0)
+            return 0;
+        if ((info->effects.unknown && j != transfer_line) ||
+            info->effects.control_flow ||
+            (info->effects.flags_read & flags) != 0)
+            return 0;
+        flags &= ~info->effects.flags_written;
+        if (transferred && flags == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static int subtract_one_bc_loop_flags_dead(int i, unsigned flags)
+{
+    const PeepFlowLine *jump_flow;
+    int j;
+
+    if (i + 5 >= nlines || !eq(i + 3, "ld c,l") ||
+        !eq(i + 4, "ld b,h") ||
+        (strncmp(lines[i + 5], "jr ", 3) != 0 &&
+         strncmp(lines[i + 5], "jp ", 3) != 0))
+        return 0;
+    jump_flow = peep_flow_line(i + 5);
+    if (jump_flow == NULL || jump_flow->successor_count != 1)
+        return 0;
+    for (j = jump_flow->successors[0]; j < nlines; ++j) {
+        const PeepLineInfo *info = peep_line_info(j);
+        if (info == NULL || info->kind == PEEP_LINE_DIRECTIVE ||
+            info->kind == PEEP_LINE_OPAQUE)
+            return 0;
+        if (info->kind != PEEP_LINE_INSTRUCTION)
+            continue;
+        if (info->effects.unknown || info->effects.control_flow ||
+            (info->effects.flags_read & flags) != 0)
+            return 0;
+        flags &= ~info->effects.flags_written;
+        if (flags == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static int subtract_one_call_argument_is_safe(int i)
+{
+    return i + 5 < nlines && eq(i + 3, "push hl") &&
+           !strncmp(lines[i + 4], "call ", 5) && eq(i + 5, "pop bc");
+}
+
 static int try_subtract_one_at(int i)
 {
+    const unsigned all_flags = PEEP_FLAG_C | PEEP_FLAG_Z |
+                               PEEP_FLAG_S | PEEP_FLAG_PV;
     /*
      * HL -= 1 via signed subtract:
      *   ld de,1
@@ -1174,7 +1258,11 @@ static int try_subtract_one_at(int i)
         eq(i + 1, "or a") &&
         eq(i + 2, "sbc hl,de") &&
         i + 3 < nlines &&
-        strncmp(lines[i + 3], "jp ", 3) != 0) {
+                (((peep_flags_dead_after(i + 2, all_flags) ||
+                     subtract_one_bc_loop_flags_dead(i, all_flags)) &&
+                    peep_registers_dead_after(i + 2, PEEP_REG_D | PEEP_REG_E)) ||
+                     subtract_one_transfer_is_safe(i, all_flags) ||
+                     subtract_one_call_argument_is_safe(i))) {
         replace1_tagged(i, "dec hl", "sbc_de1_to_dec");
         delete_n(i + 1, 2);
         return 1;
@@ -1370,6 +1458,78 @@ static int try_byte_zero_test_at(int i)
     return 0;
 }
 
+static int bc_dead_before_use(int start)
+{
+    int j;
+
+    for (j = start; j < nlines; ++j) {
+        const PeepLineInfo *info = peep_line_info(j);
+        char clean[MAX_LINE];
+
+        if (info == NULL || info->kind == PEEP_LINE_LABEL ||
+            info->kind == PEEP_LINE_OPAQUE)
+            return 0;
+        if (info->kind == PEEP_LINE_DIRECTIVE) {
+            strip_peep_comment_lower_copy(clean, lines[j]);
+            if (strncmp(clean, "extrn ", 6) == 0)
+                continue;
+            return 0;
+        }
+        if (info->kind != PEEP_LINE_INSTRUCTION)
+            continue;
+        strip_peep_comment_lower_copy(clean, lines[j]);
+        if (strncmp(clean, "call _", 6) == 0 &&
+            clean[6] != '_' &&
+            strchr(clean + 5, ',') == NULL)
+            return 1;
+        if (strcmp(clean, "ret") == 0)
+            return 1;
+        if ((info->effects.reads &
+             (PEEP_REG_B | PEEP_REG_C)) != 0)
+            return 0;
+        if ((info->effects.writes &
+             (PEEP_REG_B | PEEP_REG_C)) ==
+            (PEEP_REG_B | PEEP_REG_C))
+            return 1;
+        if (info->effects.control_flow || info->effects.unknown)
+            return 0;
+    }
+    return 0;
+}
+
+static int function_has_inline_simple_store_marker(int line)
+{
+    int start;
+    int end;
+    int i;
+
+    find_function_bounds_any(line, &start, &end);
+    for (i = start; i < end; ++i)
+        if (strstr(lines[i], ";@dcc.mir inline-simple-store") != NULL)
+            return 1;
+    return 0;
+}
+
+static int try_hl_bc_hl_roundtrip_at(int i)
+{
+    if (i + 3 >= nlines ||
+        !function_has_inline_simple_store_marker(i) ||
+        !eq(i, "ld c,l") || !eq(i + 1, "ld b,h") ||
+        !eq(i + 2, "ld l,c") || !eq(i + 3, "ld h,b"))
+        return 0;
+    if (peep_registers_dead_after(
+            i + 3, PEEP_REG_B | PEEP_REG_C) ||
+        bc_dead_before_use(i + 4)) {
+        delete_n(i, 4);
+    } else {
+        replace1_tagged(
+            i, "ld c,l",
+            "hl_bc_hl_copyback");
+        delete_n(i + 2, 2);
+    }
+    return 1;
+}
+
 int pass_once(void)
 {
     int i;
@@ -1380,6 +1540,12 @@ int pass_once(void)
     changed = 0;
 
     for (i = 0; i < nlines; i++) {
+        if (try_hl_bc_hl_roundtrip_at(i)) {
+            changed = 1;
+            if (i > 0) i--;
+            continue;
+        }
+
         if (try_global_moves_postinc_at(i)) {
             changed = 1;
             if (i > 0) i--;
@@ -1696,4 +1862,3 @@ int pass_once(void)
 
     return changed;
 }
-

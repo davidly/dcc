@@ -1,0 +1,31 @@
+_narrow_dead_h:
+;@dcc.mir byte-slot
+	ld l,0 ; peep: narrow_dead_h_const
+	inc l
+	ld a,l
+	ld (_sink),a
+	ld l,42 ; peep: narrow_dead_h_const
+	ld a,l
+	ld (_sink),a
+	ld l,252 ; peep: narrow_dead_h_const
+	ld a,l
+	ld (_sink),a
+	ld l,a
+	ld (_sink),a
+	inc l
+	ld a,l
+	ld (_sink),a
+	ld e,37 ; peep: narrow_dead_d_const
+	ld a,e
+	ld (_sink),a
+	ld d,0
+	ld c,29 ; peep: narrow_dead_b_const
+	ld a,c
+	ld (_sink),a
+	ld b,0
+	ld l,(ix-8)
+	ld h,(ix-7)
+	push hl
+	call _word
+	pop bc
+	ret

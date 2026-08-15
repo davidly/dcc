@@ -195,7 +195,11 @@ static model_value_t logarithm_table[256] = {
 };
 
 /* --- forward declarations --- */
-static inline model_value_t clamp_to_model_value(weight_value_t value);
+#ifndef ATTNC11_CLAMP_INLINE
+#define ATTNC11_CLAMP_INLINE inline
+#endif
+static ATTNC11_CLAMP_INLINE model_value_t clamp_to_model_value(
+    weight_value_t value);
 static inline model_value_t q16_to_q8(weight_value_t value);
 static inline model_value_t multiply_q8(model_value_t left,
                                          model_value_t right);
@@ -278,7 +282,8 @@ static uint16_t elapsed_seconds(void);
 /* ============================================================ */
 
 /* clamp a 32-bit value to a signed 16-bit model value */
-static inline model_value_t clamp_to_model_value(weight_value_t value)
+static ATTNC11_CLAMP_INLINE model_value_t clamp_to_model_value(
+    weight_value_t value)
 {
     if (value > MODEL_VALUE_MAX)
         return MODEL_VALUE_MAX;

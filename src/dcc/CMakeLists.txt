@@ -44,22 +44,40 @@ set(DCC_SOURCES
     dcc_stmt.c
     dcc_func.c
     dcc_global_init.c   # file-scope object initializer parsing (split from dcc_func.c)
-    dcc_regalloc.c      # speculative no-IX / BC-regalloc codegen (split from dcc_func.c)
-    dcc_loop_regalloc.c # loop-scoped BC register allocation
     dcc_array_narrow.c  # conservative byte-narrowing proof
     dcc_licm.c          # loop-invariant code motion / CSE
     dcc_data.c
     dcc_ast.c           # function-local AST (arena + nodes)
     dcc_ast_build.c     # function-local AST builder
+    dcc_ast_metadata.c  # non-emitting function-body metadata replay
     dcc_ast_gen.c           # AST classifiers / type & lvalue resolvers
     dcc_ast_gen_support.c   # AST support dispatch, calls/structs/folds
     dcc_ast_gen_expr.c      # AST expression emitters
     dcc_ast_gen_cond.c      # AST condition and branch emitters
-    dcc_ast_gen_stmt.c      # AST statement/switch/for emitters
+    dcc_ast_stmt_meta.c     # AST statement parsing/sizing metadata
+    dcc_mir.c               # analysis-only virtual-register MIR prototype
+    dcc_mir_emit_common.c
+    dcc_mir_homed_cfg.c
+    dcc_mir_machine_emit.c # scheduled Z80 machine-template emission
+    dcc_mir_machine_aggregate_checks.c # strict aggregate check schedules
+    dcc_mir_machine_attention.c # strict attention-kernel schedules
+    dcc_mir_machine_runtime_runners.c # strict runtime/file/system schedules
+    dcc_mir_machine_interpreter_runners.c # strict interpreter/parser schedules
+    dcc_mir_machine_call_runners.c # strict call/control orchestration schedules
+    dcc_mir_machine_validation_runners.c # strict scope/wide validation schedules
+    dcc_mir_machine_endgame.c # strict endgame machine schedules
+    dcc_mir_machine_float_reports.c # strict float report/check schedules
+    dcc_mir_machine_numeric.c # strict numeric kernel schedules
+    dcc_mir_machine_scanners.c # strict scanner/parser schedules
+    dcc_mir_select.c
+    dcc_mir_schedule.c      # shadow sparse live-segment scheduler
+    dcc_mir_spilled_cfg.c
+    dcc_mir_target.c        # shadow Z80 constraints and template costs
 )
 
 add_executable(dcc ${DCC_SOURCES} dcc.h dcc_ast_gen_internal.h
-                   dcc_preproc_internal.h dcc_regalloc_internal.h)
+                   dcc_preproc_internal.h dcc_mir.h
+                   dcc_mir_machine_internal.h)
 target_include_directories(dcc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|AppleClang")

@@ -553,7 +553,7 @@ void parse_preprocessor_line(void)
          * Buffer into pending_asm_buf rather than writing directly: the
          * tokenizer may re-visit this position during scan_function_body()
          * pre-passes (which save/restore posi).  flush_pending_asm() is
-         * called from emit_function_epilogue() and emit_data() to emit the
+         * called from finish_function_mir() and emit_data() to emit the
          * content exactly once at the correct output position. */
         char line[512]; int li = 0; int ch;
         if (peekc() == '\001') getc_src();
@@ -2544,4 +2544,3 @@ void expect(int k)
     }
     next_token();
 }
-

@@ -42,6 +42,8 @@
 
 #define MAX_GLOBAL_SCAN_NAMES 512
 #define MAX_GLOBAL_SCAN_WRITES 1024
+#define MAX_GLOBAL_SCAN_FIELDS 1024
+#define MAX_GLOBAL_SCAN_FIELD_WRITES 2048
 
 struct GlobalScanEntry {
     char name[64];
@@ -61,6 +63,26 @@ struct GlobalScanWrite {
 static struct GlobalScanWrite g_scan_writes[MAX_GLOBAL_SCAN_WRITES];
 static int g_scan_nwrites;
 
+struct GlobalScanFieldEntry {
+    char base[64];
+    char field[64];
+    int write_count;
+    int addr_taken_count;
+};
+
+static struct GlobalScanFieldEntry g_scan_field_entries[MAX_GLOBAL_SCAN_FIELDS];
+static int g_scan_nfield_entries;
+
+struct GlobalScanFieldWrite {
+    char base[64];
+    char field[64];
+    char func[64];
+};
+
+static struct GlobalScanFieldWrite
+    g_scan_field_writes[MAX_GLOBAL_SCAN_FIELD_WRITES];
+static int g_scan_nfield_writes;
+
 static struct GlobalScanEntry *find_or_add_scan_entry(const char *name)
 {
     int i;
@@ -79,6 +101,30 @@ static struct GlobalScanEntry *find_or_add_scan_entry(const char *name)
     g_scan_entries[g_scan_nentries].write_count = 0;
     g_scan_entries[g_scan_nentries].addr_taken_count = 0;
     return &g_scan_entries[g_scan_nentries++];
+}
+
+static struct GlobalScanFieldEntry *find_or_add_scan_field_entry(
+    const char *base, const char *field)
+{
+    int i;
+
+    for (i = 0; i < g_scan_nfield_entries; ++i)
+        if (!strcmp(g_scan_field_entries[i].base, base) &&
+            !strcmp(g_scan_field_entries[i].field, field))
+            return &g_scan_field_entries[i];
+
+    if (g_scan_nfield_entries >= MAX_GLOBAL_SCAN_FIELDS) {
+        g_scan_overflowed = 1;
+        return NULL;
+    }
+
+    strncpy(g_scan_field_entries[g_scan_nfield_entries].base, base, 63);
+    g_scan_field_entries[g_scan_nfield_entries].base[63] = 0;
+    strncpy(g_scan_field_entries[g_scan_nfield_entries].field, field, 63);
+    g_scan_field_entries[g_scan_nfield_entries].field[63] = 0;
+    g_scan_field_entries[g_scan_nfield_entries].write_count = 0;
+    g_scan_field_entries[g_scan_nfield_entries].addr_taken_count = 0;
+    return &g_scan_field_entries[g_scan_nfield_entries++];
 }
 
 static void record_write(const char *name, const char *func)
@@ -101,6 +147,36 @@ static void record_write(const char *name, const char *func)
 static void record_addr_taken(const char *name)
 {
     struct GlobalScanEntry *e = find_or_add_scan_entry(name);
+    if (e != NULL)
+        e->addr_taken_count++;
+}
+
+static void record_field_write(const char *base, const char *field,
+                               const char *func)
+{
+    struct GlobalScanFieldEntry *e =
+        find_or_add_scan_field_entry(base, field);
+    if (e != NULL)
+        e->write_count++;
+
+    if (g_scan_nfield_writes >= MAX_GLOBAL_SCAN_FIELD_WRITES) {
+        g_scan_overflowed = 1;
+        return;
+    }
+    strncpy(g_scan_field_writes[g_scan_nfield_writes].base, base, 63);
+    g_scan_field_writes[g_scan_nfield_writes].base[63] = 0;
+    strncpy(g_scan_field_writes[g_scan_nfield_writes].field, field, 63);
+    g_scan_field_writes[g_scan_nfield_writes].field[63] = 0;
+    strncpy(g_scan_field_writes[g_scan_nfield_writes].func,
+            func ? func : "", 63);
+    g_scan_field_writes[g_scan_nfield_writes].func[63] = 0;
+    g_scan_nfield_writes++;
+}
+
+static void record_field_addr_taken(const char *base, const char *field)
+{
+    struct GlobalScanFieldEntry *e =
+        find_or_add_scan_field_entry(base, field);
     if (e != NULL)
         e->addr_taken_count++;
 }
@@ -195,12 +271,26 @@ void scan_global_write_info(void)
             char name[64];
             LexState _ls = lex_save();
             int next_kind;
+            int field_kind = TOK_EOF;
+            int field_next_kind = TOK_EOF;
+            char field_name[64];
 
             strncpy(name, g_lex.tok.text, 63);
             name[63] = 0;
+            field_name[0] = 0;
 
             next_token();
             next_kind = g_lex.tok.kind;
+            if (next_kind == '.' || next_kind == TOK_ARROW) {
+                next_token();
+                field_kind = g_lex.tok.kind;
+                if (field_kind == TOK_ID) {
+                    strncpy(field_name, g_lex.tok.text, 63);
+                    field_name[63] = 0;
+                    next_token();
+                    field_next_kind = g_lex.tok.kind;
+                }
+            }
 
             lex_restore(&_ls);
 
@@ -217,6 +307,19 @@ void scan_global_write_info(void)
                 record_write(name, func_at_depth0);
             } else if (token_starts_assignment_or_incdec(next_kind)) {
                 record_write(name, func_at_depth0);
+            }
+
+            if (field_kind == TOK_ID) {
+                if (prev_kind == '&' && field_next_kind != '.' &&
+                    field_next_kind != TOK_ARROW &&
+                    field_next_kind != '[') {
+                    record_field_addr_taken(name, field_name);
+                } else if (prev_kind == TOK_INC || prev_kind == TOK_DEC) {
+                    record_field_write(name, field_name, func_at_depth0);
+                } else if (token_starts_assignment_or_incdec(
+                               field_next_kind)) {
+                    record_field_write(name, field_name, func_at_depth0);
+                }
             }
 
             if (paren_depth == 0 && brace_depth == 0) {
@@ -320,6 +423,47 @@ int global_text_written_in_function(const char *name, const char *func)
     for (i = 0; i < g_scan_nwrites; ++i)
         if (!strcmp(g_scan_writes[i].name, name) &&
             !strcmp(g_scan_writes[i].func, func))
+            return 1;
+    return 0;
+}
+
+int global_text_field_write_count(const char *base, const char *field)
+{
+    int i;
+
+    if (g_scan_overflowed)
+        return 999;
+    for (i = 0; i < g_scan_nfield_entries; ++i)
+        if (!strcmp(g_scan_field_entries[i].base, base) &&
+            !strcmp(g_scan_field_entries[i].field, field))
+            return g_scan_field_entries[i].write_count;
+    return 0;
+}
+
+int global_text_field_addr_taken_count(const char *base, const char *field)
+{
+    int i;
+
+    if (g_scan_overflowed)
+        return 999;
+    for (i = 0; i < g_scan_nfield_entries; ++i)
+        if (!strcmp(g_scan_field_entries[i].base, base) &&
+            !strcmp(g_scan_field_entries[i].field, field))
+            return g_scan_field_entries[i].addr_taken_count;
+    return 0;
+}
+
+int global_text_field_written_in_function(
+    const char *base, const char *field, const char *func)
+{
+    int i;
+
+    if (g_scan_overflowed)
+        return 1;
+    for (i = 0; i < g_scan_nfield_writes; ++i)
+        if (!strcmp(g_scan_field_writes[i].base, base) &&
+            !strcmp(g_scan_field_writes[i].field, field) &&
+            !strcmp(g_scan_field_writes[i].func, func))
             return 1;
     return 0;
 }

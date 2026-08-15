@@ -1008,6 +1008,7 @@ static int line_starts_function_marker(const char *line)
  * passes defined earlier in the file than that. */
 static int line_is_regalloc_bc_priming(const char *line);
 int bc_regalloc_claimed_before(int at);
+int bc_regalloc_claimed_in_range(int begin, int end);
 
 static int pass_cache_noix_byte_param_reload(void)
 {
@@ -1403,16 +1404,16 @@ static int pass_ix_array_byte_addr(void)
 
 
 /*
- * IY is otherwise completely unused across dcc's own codegen and all of
- * DCCRTL.MAC (verified: zero occurrences), unlike BC which the codegen and
- * runtime use constantly. That makes it a second, near-unconditionally-safe
- * register slot for pass_byte_loop_counter_to_reg_iyl below - EXCEPT for
+ * IY is preserved by dcc-generated callees and the reviewed DCCRTL paths,
+ * unlike BC which the codegen and runtime use constantly. That makes it a
+ * second, near-unconditionally-safe register slot for
+ * pass_byte_loop_counter_to_reg_iyl below - EXCEPT for
  * calls into another function in this SAME translation unit, which might
  * itself have one of its own loops promoted to IYL by this same pass and
  * would silently stomp this loop's live counter across the call. This scan
  * (run once, before the fixed-point pass loop) collects every function
  * entry-point label in the file so that pass can tell those calls apart
- * from RTL/library calls (which never touch IY).
+ * from RTL/library calls (whose reviewed paths preserve IY).
  *
  * Matches the two shapes dcc_func.c's emit_function_prologue emits:
  *   public NAME       (non-static)      ; static function ORIGNAME (static)
@@ -1796,25 +1797,38 @@ static int pass_const_divmod_helpers(void)
 }
 
 
+/* Every caller passes either a string literal (a handful of chars) or a
+ * name out of original_extrn_names[MAX_ORIGINAL_EXTRNS][64], which
+ * strncpy(..., name, 63) already truncates to 63 chars - so "extrn "/
+ * "call " (<=6 chars) plus name plus the nul always fits well inside
+ * want's MAX_LINE (512) bytes. GCC can't see that bound through the
+ * const char * parameter, so -Wformat-truncation flags a truncation that
+ * can't actually happen; suppressed locally rather than widening `name`'s
+ * type or growing want past what any real caller can produce. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
+
 static int peep_is_exact_extrn_for(const char *line, const char *name)
 {
     char clean[MAX_LINE];
-    char want[64];
+    char want[MAX_LINE];
 
     strip_peep_comment_copy(clean, line);
-    sprintf(want, "extrn %s", name);
+    snprintf(want, sizeof(want), "extrn %s", name);
     return strcmp(clean, want) == 0;
 }
 
 static int peep_is_exact_call_for(const char *line, const char *name)
 {
     char clean[MAX_LINE];
-    char want[64];
+    char want[MAX_LINE];
 
     strip_peep_comment_copy(clean, line);
-    sprintf(want, "call %s", name);
+    snprintf(want, sizeof(want), "call %s", name);
     return strcmp(clean, want) == 0;
 }
+
+#pragma GCC diagnostic pop
 
 static int peep_line_is_divmod_extrn(const char *line)
 {
@@ -1899,6 +1913,116 @@ static void pass_fix_divmod_extrns(void)
 static int peep_line_is_mulu_extrn(const char *line)
 {
     return peep_is_exact_extrn_for(line, "__mulu");
+}
+
+/*
+ * pass_fix_missing_extrns:
+ *
+ * peep_pass_once.c's duplicate-declaration cleanup ("Duplicate declarations
+ * anywhere before code are safe to remove") keeps only the textually first
+ * "extrn X" line for a given symbol and deletes later ones as redundant.
+ * That is correct only if the first occurrence's own basic block is never
+ * later deleted by dead/unreachable-code elimination. When a symbol is
+ * called from multiple blocks and the block holding the surviving "extrn X"
+ * is itself unreachable (e.g. a compile-time-false `assert()` whose call
+ * site is folded away), every remaining "call X" in the file is left
+ * without any "extrn X" declaration. M80/L80 then resolve the undeclared
+ * symbol to address 0 instead of erroring, so the bug silently manifests
+ * as a wild jump to the CP/M warm-boot vector at runtime instead of a link
+ * error - exactly the failure mode this pass prevents.
+ *
+ * Mirrors pass_fix_divmod_extrns/pass_fix_mulu_extrn's established shape,
+ * generalized to every symbol declared "extrn" in the original input: strip
+ * all remaining declarations for that symbol, then re-insert exactly one if
+ * any reference to it still exists in the final code.
+ */
+#define MAX_ORIGINAL_EXTRNS 256
+static char original_extrn_names[MAX_ORIGINAL_EXTRNS][64];
+static int original_extrn_count;
+
+static void capture_original_extrns(void)
+{
+    int i;
+    char name[128];
+    char extra;
+
+    original_extrn_count = 0;
+    for (i = 0; i < nlines && original_extrn_count < MAX_ORIGINAL_EXTRNS; ++i) {
+        int j;
+        int dup = 0;
+
+        if (sscanf(lines[i], "extrn %127s %c", name, &extra) != 1)
+            continue;
+        for (j = 0; j < original_extrn_count; ++j) {
+            if (strcmp(original_extrn_names[j], name) == 0) {
+                dup = 1;
+                break;
+            }
+        }
+        if (!dup)
+            strncpy(original_extrn_names[original_extrn_count++], name, 63);
+    }
+}
+
+/* Non-zero if `name` is still referenced by any surviving instruction, i.e.
+ * used as an operand/target rather than merely declared via extrn/public. */
+static int symbol_still_referenced(const char *name)
+{
+    int i;
+    size_t len = strlen(name);
+
+    for (i = 0; i < nlines; ++i) {
+        const char *p = lines[i];
+
+        if (strncmp(p, "extrn ", 6) == 0 || strncmp(p, "public ", 7) == 0)
+            continue;
+        p = strstr(lines[i], name);
+        while (p != NULL) {
+            char before = (p == lines[i]) ? 0 : p[-1];
+            char after = p[len];
+            int before_ok = !(isalnum((unsigned char)before) || before == '_');
+            int after_ok = !(isalnum((unsigned char)after) || after == '_');
+
+            if (before_ok && after_ok)
+                return 1;
+            p = strstr(p + 1, name);
+        }
+    }
+    return 0;
+}
+
+static void pass_fix_missing_extrns(void)
+{
+    int k;
+
+    for (k = 0; k < original_extrn_count; ++k) {
+        const char *name = original_extrn_names[k];
+        int i;
+        int has_extrn = 0;
+
+        for (i = 0; i < nlines; ++i) {
+            if (peep_is_exact_extrn_for(lines[i], name)) {
+                has_extrn = 1;
+                break;
+            }
+        }
+        if (has_extrn)
+            continue;
+        if (!symbol_still_referenced(name))
+            continue;
+
+        {
+            /* name is original_extrn_names[k], already bounded to 63
+             * chars - see the -Wformat-truncation comment above
+             * peep_is_exact_extrn_for for why this can't truncate. */
+            char line[MAX_LINE];
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wformat-truncation"
+            snprintf(line, sizeof(line), "extrn %s", name);
+#pragma GCC diagnostic pop
+            insert_line(0, line);
+        }
+    }
 }
 
 /*
@@ -2084,13 +2208,158 @@ int stride_parse_ld_r_ix_neg(const char *s, char r, int *n); /* forward */
  * Safety checks: abort if any line in the body contains "(ix" (live IX usage)
  * or if an un-removed local-allocation sequence is present.
  */
+/* Upper bound on distinct reachable-or-duplicate epilogues tracked per
+ * function by pass_elim_ix_frame().  A function with more early-return
+ * paths than this is left untouched entirely (see the epi_count overflow
+ * check below) - always safe, just misses an optimization opportunity
+ * that essentially never occurs in practice. */
+#define MAX_ELIM_IX_EPILOGUES 64
+
+static int ix_pair_only_dead_push_stores(
+    int off, int func_start, int func_end)
+{
+    char pat_hi[24];
+    char pat_lo[24];
+    int found = 0;
+    int i;
+
+    sprintf(pat_lo, "(ix%+d)", off);
+    sprintf(pat_hi, "(ix%+d)", off + 1);
+    for (i = func_start; i < func_end; ++i) {
+        int store_off;
+
+        if (strstr(lines[i], pat_lo) == NULL &&
+            strstr(lines[i], pat_hi) == NULL)
+            continue;
+        if (i + 2 < func_end &&
+            peep_parse_st_ix_pair(lines[i], lines[i + 1], &store_off) &&
+            store_off == off && eq(i + 2, "push hl")) {
+            found = 1;
+            ++i;
+            continue;
+        }
+        return 0;
+    }
+    return found;
+}
+
+static int ix_pair_store_dead_after_push(
+    int store_line, int off, int func_start, int func_end)
+{
+    static unsigned char visited[MAX_LINES];
+    static int queue[MAX_LINES];
+    char pat_hi[24];
+    char pat_lo[24];
+    const PeepFlowLine *start_flow;
+    int head = 0;
+    int tail = 0;
+    int successor;
+
+    sprintf(pat_lo, "(ix%+d)", off);
+    sprintf(pat_hi, "(ix%+d)", off + 1);
+    memset(visited, 0, (size_t)nlines);
+    start_flow = peep_flow_line(store_line + 2);
+    if (start_flow == NULL)
+        return 0;
+    for (successor = 0;
+         successor < start_flow->successor_count; ++successor)
+        queue[tail++] = start_flow->successors[successor];
+
+    while (head < tail) {
+        const PeepFlowLine *flow;
+        const PeepLineInfo *info;
+        int i = queue[head++];
+        int store_off;
+
+        if (i < func_start || i >= func_end || visited[i])
+            continue;
+        visited[i] = 1;
+        info = peep_line_info(i);
+        if (info != NULL && info->kind == PEEP_LINE_OPAQUE)
+            return 0;
+        if (strstr(lines[i], pat_lo) != NULL ||
+            strstr(lines[i], pat_hi) != NULL) {
+            if (i + 1 < func_end &&
+                peep_parse_st_ix_pair(
+                    lines[i], lines[i + 1], &store_off) &&
+                store_off == off)
+                continue;
+            return 0;
+        }
+        flow = peep_flow_line(i);
+        if (flow == NULL)
+            return 0;
+        for (successor = 0;
+             successor < flow->successor_count; ++successor) {
+            if (tail >= MAX_LINES)
+                return 0;
+            queue[tail++] = flow->successors[successor];
+        }
+    }
+    return 1;
+}
+
+static int function_has_frame_address_escape(int func_start, int func_end)
+{
+    int i;
+
+    for (i = func_start; i < func_end; ++i) {
+        const PeepLineInfo *info = peep_line_info(i);
+        long unused_offset;
+
+        if (info != NULL && info->kind == PEEP_LINE_OPAQUE)
+            return 1;
+        if (scan_ix_frame_addr(i, &unused_offset))
+            return 1;
+        if (eq(i, "add hl,sp"))
+            return 1;
+    }
+    return 0;
+}
+
+/*
+ * MIR stack-forwarded PHI arguments leave their incoming constants in HL,
+ * push that value on the edge, and never read the temporary IX slot that the
+ * correctness-first backend assigned. Remove those write-only pairs only
+ * after selection is final.
+ */
+static int pass_remove_dead_phi_argument_slots(void)
+{
+    int changed = 0;
+    int i;
+
+    for (i = 0; i + 2 < nlines; ++i) {
+        int func_end;
+        int func_start;
+        int off;
+
+        if (!peep_parse_st_ix_pair(lines[i], lines[i + 1], &off) ||
+            !eq(i + 2, "push hl"))
+            continue;
+        find_function_bounds_any(i, &func_start, &func_end);
+        if (function_has_frame_address_escape(func_start, func_end) ||
+            (!ix_pair_only_dead_push_stores(
+                 off, func_start, func_end) &&
+             !ix_pair_store_dead_after_push(
+                 i, off, func_start, func_end)))
+            continue;
+        delete_n(i, 2);
+        changed = 1;
+        if (i > 0)
+            --i;
+    }
+
+    return changed;
+}
+
 static int pass_elim_ix_frame(void)
 {
     int i, j;
     int changed;
     int next_func;
     int has_ix_use;
-    int epi;
+    int epi_positions[MAX_ELIM_IX_EPILOGUES];
+    int epi_count;
 
     changed = 0;
 
@@ -2107,15 +2376,43 @@ static int pass_elim_ix_frame(void)
             }
         }
 
-        /* Scan the body for IX usage and locate the epilogue */
+        /* Scan the body for IX usage and locate every epilogue occurrence.
+         *
+         * A function can legitimately contain more than one matching
+         * epilogue - either multiple reachable early-return paths, or a
+         * genuinely reachable epilogue followed by a dead-code duplicate
+         * dcc sometimes emits after an unconditional return.  A single
+         * "epi" slot that gets overwritten by whichever match is found
+         * *last* silently drops the earlier, actually-reachable epilogue:
+         * the prologue is removed on the (correct) assumption that some
+         * epilogue was found, but the wrong occurrence gets its "ld
+         * sp,ix / pop ix" stripped, leaving the real return path still
+         * restoring SP/IX from a frame pointer that no longer exists.
+         * That corrupts SP with whatever garbage IX held on entry, and
+         * the following "pop ix; ret" then returns to a garbage address -
+         * this is exactly what tests/extended-tests 00062 et al. exposed
+         * under -fstack-check, where the __stchk call between the
+         * prologue and body pushed the reachable epilogue earlier than a
+         * dead-code copy the old single-slot scan preferred. */
         has_ix_use = 0;
-        epi = -1;
+        epi_count = 0;
         for (j = i + 3; j < next_func; j++) {
-            /* Locate epilogue first.  Its IX references are the only ones
-             * allowed when deciding whether the frame pointer is dead. */
+            /* Locate epilogue occurrences first.  Their IX references are
+             * the only ones allowed when deciding whether the frame
+             * pointer is dead. */
             if (eq(j, "ld sp,ix") && j + 2 < next_func &&
                 eq(j + 1, "pop ix") && eq(j + 2, "ret")) {
-                epi = j;
+                if (epi_count >= MAX_ELIM_IX_EPILOGUES) {
+                    /* More epilogues than we can track individually:
+                     * bail out on this function rather than removing the
+                     * prologue while only deleting the first N epilogues,
+                     * which would leave the remaining ones dangling on a
+                     * now-nonexistent frame pointer - the same corruption
+                     * this rewrite exists to fix. */
+                    has_ix_use = 1;
+                    break;
+                }
+                epi_positions[epi_count++] = j;
                 j += 1;
                 continue;
             }
@@ -2168,10 +2465,17 @@ static int pass_elim_ix_frame(void)
             }
         }
 
-        if (!has_ix_use && epi >= 0) {
+        if (!has_ix_use && epi_count > 0) {
+            int k;
+
             delete_n(i, 3);     /* remove push ix / ld ix,0 / add ix,sp */
-            epi -= 3;
-            delete_n(epi, 2);   /* remove ld sp,ix / pop ix; "ret" stays */
+            /* Delete every epilogue occurrence, highest index first, so
+             * that earlier positions in epi_positions[] stay valid as
+             * later ones are removed. */
+            for (k = epi_count - 1; k >= 0; k--) {
+                int epipos = epi_positions[k] - 3;
+                delete_n(epipos, 2); /* remove ld sp,ix / pop ix; "ret" stays */
+            }
             changed = 1;
             i--;                /* re-examine same position after deletions */
         }
@@ -2463,6 +2767,70 @@ static int pass_word_load_push_de_call(void)
 }
 
 /*
+ * MIR-shape counterpart of pass_word_load_push_de_call just above. The MIR
+ * backend loads the same by-reference word through hl/a rather than
+ * directly into de - hl is still the source pointer when the low byte is
+ * read, and there's no "ld l,(hl)" that wouldn't clobber that pointer
+ * before the high byte's read, so it stages the low byte through a first:
+ *
+ *   ld a,(hl)
+ *   inc hl
+ *   ld h,(hl)
+ *   ld l,a
+ *   push hl
+ *   call _func
+ *
+ * de doesn't have that problem - it's a different register pair than the
+ * source pointer hl, so both bytes can load into it directly with no
+ * scratch needed, one instruction shorter overall. Same precondition as
+ * the pass above and for the same reason: only safe when de's transient
+ * value isn't part of the call's own ABI. */
+static int pass_word_load_push_de_call_mir(void)
+{
+    int i;
+    int changed = 0;
+    int call_line;
+
+    for (i = 0; i + 5 < nlines; ++i) {
+        if (!eq(i,     "ld a,(hl)")) continue;
+        if (!eq(i + 1, "inc hl")) continue;
+        if (!eq(i + 2, "ld h,(hl)")) continue;
+        if (!eq(i + 3, "ld l,a")) continue;
+        if (!eq(i + 4, "push hl")) continue;
+
+        /* The call may be preceded by an extrn declaration for its own
+         * first reference, same as pass_long_load_push_no_ex_call handles
+         * elsewhere in this file. */
+        call_line = i + 5;
+        if (call_line < nlines && strncmp(lines[call_line], "extrn ", 6) == 0)
+            call_line++;
+        if (call_line >= nlines ||
+            !peep_call_uses_stack_args_only(lines[call_line]))
+            continue;
+        {
+            char call_text[MAX_LINE];
+            const char *callee;
+
+            strip_peep_comment_copy(call_text, lines[call_line]);
+            callee = strncmp(call_text, "call ", 5) == 0
+                ? call_text + 5 : "";
+            if (!strcmp(callee, "_free") ||
+                is_local_func_label(callee))
+                continue;
+        }
+
+        replace1_tagged(i, "ld e,(hl)", "word_load_push_de_call_mir");
+        replace1_tagged(i + 2, "ld d,(hl)", "word_load_push_de_call_mir");
+        replace1_tagged(i + 3, "push de", "word_load_push_de_call_mir");
+        delete_n(i + 4, 1);
+        changed = 1;
+        if (i > 0) --i;
+    }
+
+    return changed;
+}
+
+/*
  * A 32-bit value loaded from memory is often pushed immediately as a long or
  * float stack argument:
  *
@@ -2733,6 +3101,106 @@ static int pass_signed_cmp_const_low0(void)
 
         replace1_tagged(i, "ld a,h", "signed_cmp_const_low0");
         replace1(i + 1, "xor 80h");
+        sprintf(line, "cp %d", ((imm >> 8) ^ 0x80) & 255);
+        replace1(i + 2, line);
+        delete_n(i + 3, 6);
+        changed = 1;
+        if (i > 0)
+            --i;
+    }
+
+    return changed;
+}
+
+/*
+ * MIR-shape counterpart of pass_signed_cmp_const_low0 just above, for the
+ * no-swap case: unlike the ex-de,hl-swapped shape
+ * pass_signed_cmp_const_bias_fold_mir handles, when the MIR backend
+ * happens to load the variable operand into HL first (the constant lands
+ * directly in DE, no swap needed), the shape matches legacy's own exactly
+ * except for decimal `xor 128` instead of hex `xor 80h` - "or a" is still
+ * present before the sbc, because at the point in the fixed-point loop
+ * where this pass runs, pass_elim_redundant_carry_clear (which would
+ * otherwise prove the preceding xor already clears carry and drop it)
+ * hasn't had its turn yet.
+ *
+ *     ld de,IMM            ld a,h
+ *     ld a,h               xor 128
+ *     xor 128         ==>  cp (IMM>>8)^0x80
+ *     ld h,a               jp nc,L / jp c,L   (unchanged)
+ *     ld a,d
+ *     xor 128
+ *     ld d,a
+ *     or a
+ *     sbc hl,de
+ *     jp nc,L / jp c,L
+ *
+ * Same precondition as the pass above: IMM's low byte must be 0, so the
+ * 16-bit subtract's outcome is fully determined by the high byte alone.
+ * H already holds the variable here (no ex de,hl in this shape, so no
+ * operand-role swap to account for - see pass_signed_cmp_const_bias_fold_
+ * mir's comment for what happens when there is one, and why this pass
+ * deliberately doesn't try to also handle that case - matching a shape
+ * with a swap in it to this pass's fold would need the same carry-flag
+ * re-derivation that fold's comment describes, not a copy-paste of this
+ * one).
+ */
+static int pass_signed_cmp_const_low0_mir(void)
+{
+    int i;
+    int changed;
+    int imm;
+    char line[128];
+
+    changed = 0;
+
+    for (i = 0; i + 8 < nlines; ++i) {
+        if (!peep_parse_ld_de_signed(lines[i], &imm))
+            continue;
+        if (imm <= 0 || imm > 32767 || (imm & 255) != 0)
+            continue;
+        if (!eq(i + 1, "ld a,h"))
+            continue;
+        if (!eq(i + 2, "xor 128"))
+            continue;
+        if (!eq(i + 3, "ld h,a"))
+            continue;
+        if (!eq(i + 4, "ld a,d"))
+            continue;
+        if (!eq(i + 5, "xor 128"))
+            continue;
+        if (!eq(i + 6, "ld d,a"))
+            continue;
+        /* Unlike the shape pass_signed_cmp_const_bias_fold_mir handles
+         * (which never has one, since the last xor before it already
+         * clears carry - see that pass's own comment), this shape still
+         * has "or a" here: at the point in the fixed-point loop where this
+         * pass runs, no other pass has removed it yet. Confirmed by
+         * tracing an actual compile - an earlier version of this pattern
+         * omitted "or a" on the assumption it wouldn't be present (based
+         * on inspecting only the fully-converged final output, where a
+         * later, separate pass had already removed it), and as a result
+         * never matched anything at all in the pipeline's actual running
+         * order. */
+        if (!eq(i + 7, "or a"))
+            continue;
+        if (!eq(i + 8, "sbc hl,de"))
+            continue;
+        if (i + 9 >= nlines)
+            continue;
+        /* jp_to_jr runs once, as the very last cleanup step after this
+         * whole fixed-point loop has already converged (see its own call
+         * site), so at the point this pass actually runs the branch is
+         * still in "jp" form - "jr" is accepted too regardless, in case a
+         * future reordering changes that. */
+        if (strncmp(lines[i + 9], "jp nc,", 6) != 0 &&
+            strncmp(lines[i + 9], "jp c,", 5) != 0 &&
+            strncmp(lines[i + 9], "jr nc,", 6) != 0 &&
+            strncmp(lines[i + 9], "jr c,", 5) != 0)
+            continue;
+
+        replace1_tagged(i, "ld a,h", "signed_cmp_const_low0_mir");
+        replace1(i + 1, "xor 128");
         sprintf(line, "cp %d", ((imm >> 8) ^ 0x80) & 255);
         replace1(i + 2, line);
         delete_n(i + 3, 6);
@@ -3176,8 +3644,8 @@ static int pass_ix_pair_load_to_de(void)
 }
 
 /*
- * BC-resident counterpart of pass_ix_pair_load_to_de above: a loop-scoped
- * register-allocation candidate (dcc_loop_regalloc.c) parked in BC loads
+ * BC-resident counterpart of pass_ix_pair_load_to_de above: a compiler-owned
+ * value parked in BC loads
  * into DE via the same generic "push hl / load into hl / ex de,hl / pop hl"
  * scaffolding used for any expression operand, since dcc's codegen has no
  * AST-level knowledge, at a generic operand-evaluation call site, that the
@@ -3214,14 +3682,14 @@ static int pass_bc_pair_load_to_de(void)
 /* Returns 1 if instruction s is safe to skip over when checking whether a
  * reload of HL from (ix+off_lo)/(ix+off_hi) is redundant.  An instruction
  * is safe when it neither modifies L/H nor writes to the two stored slots. */
-static int hl_store_reload_safe_intervening(const char *s, int off_lo, int off_hi)
+static int hl_store_reload_safe_intervening(
+    const char *s, int off_lo, int off_hi)
 {
     char tmp[MAX_LINE];
     char store_lo[64], store_hi[64];
 
     strip_peep_comment_copy(tmp, s);
-    if (starts_label(tmp))          return 0; /* label: unknown incoming HL */
-    /* Instructions that write to L or H */
+    if (starts_label(tmp))          return 0;
     if (strncmp(tmp, "ld l,",   5) == 0) return 0;
     if (strncmp(tmp, "ld h,",   5) == 0) return 0;
     if (strncmp(tmp, "ld hl,",  6) == 0) return 0;
@@ -3233,7 +3701,7 @@ static int hl_store_reload_safe_intervening(const char *s, int off_lo, int off_h
     if (strcmp (tmp, "pop hl")      == 0) return 0;
     if (strcmp (tmp, "ex de,hl")    == 0) return 0;
     if (strcmp (tmp, "ex (sp),hl")  == 0) return 0;
-    /* Jumps/calls: would need dataflow analysis */
+    if (strcmp (tmp, "exx")         == 0) return 0;
     if (strncmp(tmp, "jp ",   3) == 0) return 0;
     if (strncmp(tmp, "jr ",   3) == 0) return 0;
     if (strncmp(tmp, "call ", 5) == 0) return 0;
@@ -3245,6 +3713,20 @@ static int hl_store_reload_safe_intervening(const char *s, int off_lo, int off_h
     if (strncmp(tmp, store_lo, strlen(store_lo)) == 0) return 0;
     if (strncmp(tmp, store_hi, strlen(store_hi)) == 0) return 0;
     return 1;
+}
+
+static int byte_slot_reload_safe_intervening(int line)
+{
+    const PeepLineInfo *info = peep_line_info(line);
+
+    return info != NULL &&
+           (info->kind == PEEP_LINE_INSTRUCTION ||
+            info->kind == PEEP_LINE_BLANK ||
+            info->kind == PEEP_LINE_COMMENT) &&
+           !info->effects.unknown &&
+           !info->effects.control_flow &&
+           (info->effects.writes & PEEP_REG_HL) == 0 &&
+           (info->effects.memory_written & PEEP_MEM_FRAME) == 0;
 }
 
 static int pass_remove_ix_store_reload_hl(void)
@@ -3265,7 +3747,34 @@ static int pass_remove_ix_store_reload_hl(void)
                 }
                 break;
             }
-            if (!hl_store_reload_safe_intervening(lines[j], off, off + 1))
+            if (!hl_store_reload_safe_intervening(
+                    lines[j], off, off + 1))
+                break;
+        }
+    }
+    for (i = 0; i + 1 < nlines; ++i) {
+        char clean[MAX_LINE];
+        char *end;
+
+        if (strstr(lines[i], ";@dcc.mir byte-slot") == NULL)
+            continue;
+        strip_peep_comment_copy(clean, lines[i]);
+        if (strncmp(clean, "ld (ix", 6) != 0)
+            continue;
+        off = (int)strtol(clean + 6, &end, 10);
+        if (*end != ')' || end[1] != ',' ||
+            end[2] != 'l' || end[3] != 0)
+            continue;
+        sprintf(expected_lo, "ld l,(ix%+d)", off);
+        for (j = i + 1; j < nlines && j <= i + 10; ++j) {
+            if (eq(j, expected_lo)) {
+                delete_n(j, 1);
+                changed = 1;
+                if (i > 0)
+                    --i;
+                break;
+            }
+            if (!byte_slot_reload_safe_intervening(j))
                 break;
         }
     }
@@ -3546,6 +4055,102 @@ static int pass_signed_cmp_const_bias_fold(void)
         replace1_tagged(i, line, "signed_cmp_const_bias_fold");
         /* Keep the H bias at i+1..i+3; delete the D bias triple at i+4..i+6. */
         delete_n(i + 4, 3);
+        changed = 1;
+        if (i > 0)
+            --i;
+    }
+
+    return changed;
+}
+
+/*
+ * MIR-shape counterpart of pass_signed_cmp_const_bias_fold just above. The
+ * MIR backend materializes both operands into registers before comparing,
+ * rather than folding the sign-bias into a compile-time constant the way
+ * legacy's codegen does, so a signed comparison against a constant comes
+ * out as:
+ *
+ *     ld de,IMM            ld de,BIASED_IMM
+ *     ex de,hl             ex de,hl
+ *     ld a,h          ==>  ld a,d
+ *     xor 128              xor 128
+ *     ld h,a               ld d,a
+ *     ld a,d               or a
+ *     xor 128              sbc hl,de
+ *     ld d,a
+ *     or a
+ *     sbc hl,de
+ *
+ * instead of the already-biased-constant form the pass above recognizes.
+ * Two differences keep that pass from matching this shape at all: the
+ * extra `ex de,hl`, and `xor 128` vs `xor 80h` - the identical value (0x80,
+ * the sign bit), but a decimal literal here instead of the hex literal
+ * that pass's string match requires.
+ *
+ * The ex de,hl means the two bias triples bias the OPPOSITE operands from
+ * what their register names suggest at a glance, and from what the
+ * legacy-shape pass above folds: ld de,IMM / ex de,hl puts the constant in
+ * HL and the variable in DE, so the H-bias triple (ld a,h/xor 128/ld h,a)
+ * biases the CONSTANT, and the D-bias triple biases the VARIABLE. A first
+ * version of this pass got that backwards - kept the (pointless, foldable)
+ * H-bias and deleted the (required, runtime) D-bias, silently miscomputing
+ * every such comparison. Confirmed via tests/tstring.c: `argc > 1 ? ... :
+ * ...` failed with cascading garbage output starting at the very next
+ * memcpy/memcmp test, caught by the full suite (not by hand-tracing the
+ * fold's logic closely enough the first time, which is exactly why the
+ * fix below was re-verified against the fold's actual operand each was
+ * biasing, not just pattern-matched against the sibling pass's shape).
+ *
+ * Correct fold: pre-bias the constant in the ld de line, before the swap
+ * (constant known at compile time, so its own bias can happen there);
+ * delete the now-redundant H-bias triple; leave the ex de,hl and the
+ * D-bias triple untouched, since the D-bias operates on the variable and
+ * must still happen at runtime. Does not attempt to also remove the ex
+ * de,hl - doing that would require swapping sbc hl,de's operand order too,
+ * which flips the sense of every flag the branch after it tests; not
+ * worth the risk for one more instruction when this already saves 3 per
+ * site (the H-bias triple), matching the sibling pass's own savings.
+ */
+static int pass_signed_cmp_const_bias_fold_mir(void)
+{
+    int i;
+    int changed;
+    int imm;
+    unsigned int biased;
+    char line[128];
+
+    changed = 0;
+
+    for (i = 0; i + 9 < nlines; ++i) {
+        if (!peep_parse_ld_de_signed(lines[i], &imm))
+            continue;
+        if (!eq(i + 1, "ex de,hl"))
+            continue;
+        if (!eq(i + 2, "ld a,h"))
+            continue;
+        if (!eq(i + 3, "xor 128"))
+            continue;
+        if (!eq(i + 4, "ld h,a"))
+            continue;
+        if (!eq(i + 5, "ld a,d"))
+            continue;
+        if (!eq(i + 6, "xor 128"))
+            continue;
+        if (!eq(i + 7, "ld d,a"))
+            continue;
+        if (!eq(i + 8, "or a"))
+            continue;
+        if (!eq(i + 9, "sbc hl,de"))
+            continue;
+
+        biased = ((unsigned int)imm ^ 0x8000u) & 0xffffu;
+        sprintf(line, "ld de,%u", biased);
+        replace1_tagged(i, line, "signed_cmp_const_bias_fold_mir");
+        /* Delete only the now-redundant H-bias triple (i+2..i+4), which
+         * biases the constant this fold already pre-biased above. Leave
+         * ex de,hl (i+1) and the D-bias triple (i+5..i+7, which biases the
+         * variable and must still run at runtime) untouched. */
+        delete_n(i + 2, 3); /* ld a,h / xor 128 / ld h,a */
         changed = 1;
         if (i > 0)
             --i;
@@ -4071,9 +4676,9 @@ static int pass_ldir_memset_rotated(void)
          * may already have a whole-function or earlier-loop candidate live
          * in BC right through this exact point, invisible to a match that
          * never had any reason to look at B/C. See
-         * bc_regalloc_claimed_before's own comment; same collision class
+         * bc_regalloc_claimed_from's own comment; same collision class
          * pass_cache_global_word_reload was fixed for. */
-        if (bc_regalloc_claimed_before(i))
+        if (bc_regalloc_claimed_from(i))
             continue;
 
         /* All checks passed.  Replace the rotated loop with LDIR. */
@@ -4298,10 +4903,10 @@ static int pass_stride_loop_to_ptr(void)
          * keeps BC live as the end-address for the loop's entire new
          * duration, and dcc's own reg_alloc may already have a
          * whole-function or earlier-loop candidate live in BC right
-         * through this exact point. See bc_regalloc_claimed_before's own
+         * through this exact point. See bc_regalloc_claimed_from's own
          * comment; same collision class pass_cache_global_word_reload was
          * fixed for. */
-        if (bc_regalloc_claimed_before(i))
+        if (bc_regalloc_claimed_from(i))
             continue;
 
         /* Pattern matched. Delete old block and insert pointer-walk version.
@@ -4576,10 +5181,8 @@ static int pass_reuse_sbc_result_for_flagcheck_rotated(void)
  * whole-file write-once proof already relies on for its (much narrower)
  * global-hoist fast path, just re-derived here textually since dccpeep has
  * no access to that C-source-level analysis. */
-/* True if `line` is dcc's own reg_alloc priming load for a loop-scoped or
- * whole-function BC candidate (dcc_loop_regalloc.c/dcc_func.c emit this
- * exact pair, with a leading tab in dcc's own output, right before the
- * candidate's live range begins: "\tld c,(ix%+d)\n" / "\tld b,(ix%+d)\n") -
+/* True if `line` is an older dcc BC priming load (with a leading tab in
+ * dcc's own output): "\tld c,(ix%+d)\n" / "\tld b,(ix%+d)\n" -
  * confirmed by grep to be the ONLY place dcc's own codegen ever emits "ld
  * c,(ix" or "ld b,(ix" at all, so this text signature is unambiguous. The
  * comparison below has no leading tab because read_file's own trim() has
@@ -4590,48 +5193,333 @@ static int pass_reuse_sbc_result_for_flagcheck_rotated(void)
  * for by dcc's own codegen from this point in the function onward - see
  * that pass's own use of this for why a purely per-segment view (line_
  * clobbers_bc) isn't enough here. */
+/* True if `line` is a compiler-side register claim from dcc covering BC.
+ *
+ * Two forms are recognised, in order of preference:
+ *
+ *  1. The explicit "@dcc.reg claim=bc ..." directive emitted by MIR
+ *     schedules. This states the register, the scope, the symbol and
+ *     what the claim is worth, and - crucially - is paired with an
+ *     "@dcc.reg free=bc" directive at the point the candidate's live range
+ *     actually ends. Being told is strictly better than inferring: it is
+ *     what lets bc_regalloc_claimed_in_range below give a real interval
+ *     answer instead of the old "claimed once, claimed for the rest of the
+ *     function" approximation.
+ *
+ *  2. The legacy text signature "ld c,(ix" / "ld b,(ix", the priming pair
+ *     dcc emits for a local/param candidate, plus the older bare
+ *     "@dcc-regalloc-bc-prime" marker used for globals. Kept because it
+ *     costs nothing and fails safe: a claim inferred this way simply has
+ *     no matching free, so it falls back to exactly the old whole-function
+ *     behaviour rather than to something unsound. */
 static int line_is_regalloc_bc_priming(const char *line)
 {
     char clean[MAX_LINE];
 
+    if (strstr(line, "@dcc.reg claim=bc") != NULL)
+        return 1;
     if (strstr(line, "@dcc-regalloc-bc-prime") != NULL)
         return 1;
     strip_peep_comment_copy(clean, line);
     return strncmp(clean, "ld c,(ix", 8) == 0 || strncmp(clean, "ld b,(ix", 8) == 0;
 }
 
-/* Shared by every dccpeep pass that wants to write its own value into B, C,
- * or the BC pair (a loop counter, a cached pointer, a packed call argument,
- * ...): true if dcc's own reg_alloc priming line for a loop-scoped or
- * whole-function BC candidate appears anywhere between the start of the
- * function containing line `at` and `at` itself. Deliberately conservative,
- * matching pass_cache_global_word_reload's own reg_alloc_seen tracking
- * (this is in fact the same check, generalized to a single callable
- * primitive instead of that pass's own local forward-scan state - see this
- * function's own commit history for why the two were unified): once a
- * priming line has appeared anywhere earlier in the function, BC is treated
- * as spoken for through the rest of that function, not just until some
- * text-detected spill point - a real reg_alloc candidate's spill, if it has
- * one, would genuinely free BC back up before the function ends, but
- * reliably proving that from text alone isn't worth the complexity for what
- * stays a missed optimization either way, never a correctness risk.
- *
- * A caller with a candidate insertion point that isn't itself the very
- * start of a loop/segment (e.g. a whole-function pass like the _MinMax
- * family below) should pass the END of its own scan range instead of a
- * single point, so the backward scan still covers every line the pass is
- * about to touch, not just a prefix of it. */
-int bc_regalloc_claimed_before(int at)
+/* True if `line` ends a compiler-side BC claim. */
+static int line_is_regalloc_bc_release(const char *line)
+{
+    return strstr(line, "@dcc.reg free=bc") != NULL;
+}
+
+static unsigned peep_register_name_mask(const char *name, size_t length)
+{
+    if (length == 1) {
+        switch (name[0]) {
+        case 'a': return PEEP_REG_A;
+        case 'b': return PEEP_REG_B;
+        case 'c': return PEEP_REG_C;
+        case 'd': return PEEP_REG_D;
+        case 'e': return PEEP_REG_E;
+        case 'h': return PEEP_REG_H;
+        case 'l': return PEEP_REG_L;
+        default: return 0;
+        }
+    }
+    if (length == 2 && !strncmp(name, "bc", 2))
+        return PEEP_REG_BC;
+    if (length == 2 && !strncmp(name, "de", 2))
+        return PEEP_REG_DE;
+    if (length == 2 && !strncmp(name, "hl", 2))
+        return PEEP_REG_HL;
+    if (length == 2 && !strncmp(name, "ix", 2))
+        return PEEP_REG_IX;
+    if (length == 2 && !strncmp(name, "iy", 2))
+        return PEEP_REG_IY;
+    if (length == 2 && !strncmp(name, "sp", 2))
+        return PEEP_REG_SP;
+    if (length == 5 && !strncmp(name, "hl:de", 5))
+        return PEEP_REG_HL | PEEP_REG_DE;
+    if (length == 5 && !strncmp(name, "bc:iy", 5))
+        return PEEP_REG_BC | PEEP_REG_IY;
+    return 0;
+}
+
+static unsigned peep_register_directive_mask(
+    const char *line, const char *directive)
+{
+    const char *name = strstr(line, directive);
+    const char *end;
+
+    if (name == NULL)
+        return 0;
+    name += strlen(directive);
+    end = name;
+    while ((*end >= 'a' && *end <= 'z') || *end == ':')
+        ++end;
+    return peep_register_name_mask(name, (size_t)(end - name));
+}
+
+int peep_register_claimed_in_range(unsigned mask, int begin, int end)
+{
+    int func_start, func_end;
+    unsigned live = 0;
+    int i;
+
+    if (mask == 0)
+        return 0;
+    if (begin < 0)
+        begin = 0;
+    if (end > nlines)
+        end = nlines;
+    if (begin >= end)
+        return 0;
+    find_function_bounds_any(begin, &func_start, &func_end);
+    if (func_end < end)
+        end = func_end;
+    for (i = func_start; i < end; ++i) {
+        unsigned released = peep_register_directive_mask(
+            lines[i], "@dcc.reg free=");
+        unsigned claimed = peep_register_directive_mask(
+            lines[i], "@dcc.reg claim=");
+
+        live &= ~released;
+        live |= claimed;
+        if ((mask & PEEP_REG_BC) != 0 &&
+            claimed == 0 &&
+            line_is_regalloc_bc_priming(lines[i]))
+            live |= PEEP_REG_BC;
+        if ((live & mask) != 0 && i >= begin) {
+            if (getenv("DCCPEEP_REGISTER_REPORT") != NULL)
+                fprintf(stderr,
+                        "register-blocked reason=claim mask=%x "
+                        "begin=%d end=%d line=%d live=%x\n",
+                        mask, begin, end, i, live);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int peep_register_claimed_from(unsigned mask, int at)
+{
+    int func_start, func_end;
+
+    find_function_bounds_any(at, &func_start, &func_end);
+    return peep_register_claimed_in_range(mask, at, func_end);
+}
+
+int peep_register_claimed_in_file(unsigned mask)
 {
     int i;
 
-    for (i = at - 1; i >= 0; i--) {
-        if (line_starts_function_marker(lines[i]))
-            return 0;
-        if (line_is_regalloc_bc_priming(lines[i]))
+    for (i = 0; i < nlines; ++i)
+        if ((peep_register_directive_mask(
+                 lines[i], "@dcc.reg claim=") & mask) != 0)
             return 1;
+    return 0;
+}
+
+static void peep_report_register_directives(void)
+{
+    int i;
+
+    if (getenv("DCCPEEP_REGISTER_REPORT") == NULL)
+        return;
+    for (i = 0; i < nlines; ++i) {
+        unsigned claimed = peep_register_directive_mask(
+            lines[i], "@dcc.reg claim=");
+        unsigned released = peep_register_directive_mask(
+            lines[i], "@dcc.reg free=");
+
+        if (claimed != 0)
+            fprintf(stderr,
+                    "register-claim action=claim line=%d mask=%x\n",
+                    i, claimed);
+        if (released != 0)
+            fprintf(stderr,
+                    "register-claim action=free line=%d mask=%x\n",
+                    i, released);
+    }
+}
+
+int peep_register_available_in_range(
+    unsigned mask, int begin, int end, const char *own_tag)
+{
+    int i;
+
+    if (peep_register_claimed_in_range(mask, begin, end))
+        return 0;
+    if (begin < 0)
+        begin = 0;
+    if (end > nlines)
+        end = nlines;
+    for (i = begin; i < end; ++i) {
+        const PeepLineInfo *info;
+
+        if (own_tag != NULL && strstr(lines[i], own_tag) != NULL)
+            continue;
+        info = peep_line_info(i);
+        if (info == NULL || info->kind != PEEP_LINE_INSTRUCTION)
+            continue;
+        if (info->effects.unknown) {
+            if (getenv("DCCPEEP_REGISTER_REPORT") != NULL)
+                fprintf(stderr,
+                        "register-blocked reason=unknown mask=%x "
+                        "begin=%d end=%d line=%d\n",
+                        mask, begin, end, i);
+            return 0;
+        }
+        if (((info->effects.reads | info->effects.writes) & mask) != 0) {
+            if (getenv("DCCPEEP_REGISTER_REPORT") != NULL)
+                fprintf(stderr,
+                        "register-blocked reason=liveness mask=%x "
+                        "begin=%d end=%d line=%d reads=%x writes=%x\n",
+                        mask, begin, end, i,
+                        info->effects.reads, info->effects.writes);
+            return 0;
+        }
+    }
+    return 1;
+}
+
+/* Does dcc's own compiler-side BC reservation cover ANY line in
+ * [begin,end)?
+ *
+ * This is the query every dccpeep pass that wants to write into B, C or BC
+ * really needs, and the one the old point-valued bc_regalloc_claimed_before
+ * could only approximate. It walks forward from the start of the enclosing
+ * function tracking claim/free directives, so a claim that dcc has
+ * explicitly released - a loop-scoped candidate whose loop has ended - stops
+ * blocking every later line in that function. That single change is the
+ * largest source of recovered opportunity here: a 20-line loop claim in a
+ * 400-line function used to forfeit BC for the other 380 lines, so
+ * pass_cache_global_word_reload, pass_cache_ix_local_word_reload,
+ * pass_hoist_index_ptr_to_bc and pass_byte_loop_counter_to_reg_c all
+ * declined regions where BC was in fact dead.
+ *
+ * A claim with no matching free (a whole-function candidate, or one
+ * inferred from the legacy text signature) stays live to the end of the
+ * function, preserving the previous behaviour exactly for those cases.
+ * Callers must pass the true span they intend to modify, not just its first
+ * line: with intervals in play, an unclaimed start no longer implies an
+ * unclaimed remainder. */
+int bc_regalloc_claimed_in_range(int begin, int end)
+{
+    return peep_register_claimed_in_range(
+        PEEP_REG_BC, begin, end);
+}
+
+/* Point form of the range query above, kept for the callers whose affected
+ * span really is a single line. Everything with a wider span must use
+ * bc_regalloc_claimed_in_range and pass that span, or it will miss a claim
+ * that opens partway through it. */
+int bc_regalloc_claimed_before(int at)
+{
+    return bc_regalloc_claimed_in_range(at, at + 1);
+}
+
+/* "Is BC spoken for anywhere from `at` to the end of its function?" - the
+ * right question for a pass that inserts priming at `at` and then relies on
+ * BC staying its own for the remainder of the body (the loop-registerisation
+ * passes, which have no cheap upper bound on where the promoted value is
+ * last read).
+ *
+ * Strictly safer than the point query these callers used before: that only
+ * looked at claims already open at `at`, so a claim dcc opened LATER in the
+ * same function was invisible to it. It is also strictly more permissive
+ * where it matters, because a claim that dcc has already released before
+ * `at` no longer counts - which is the whole point of the free directive. */
+int bc_regalloc_claimed_from(int at)
+{
+    return peep_register_claimed_from(PEEP_REG_BC, at);
+}
+
+/* Is line `k` inside a dcc BC claim that dcc explicitly RELEASES - i.e. one
+ * with a matching "@dcc.reg free=bc" directive?
+ *
+ * This is what lets the whole-function "is B or C touched anywhere?" gates
+ * become precise without becoming unsafe. Those gates exist to catch
+ * whole-function BC reservations made by other passes, which they detect by
+ * the blunt proxy of any B/C mention anywhere in the body. dcc's own
+ * loop-scoped priming and uses trip that proxy - "ld c,(ix+d)", "ld l,c" and
+ * friends are all B/C mentions - so a single promoted loop used to disqualify
+ * BC caching for the entire rest of the function even though dcc had already
+ * told us, via the free directive, precisely where that value dies.
+ *
+ * Only CLOSED intervals qualify. A whole-function claim (scope=func) emits no
+ * free and so is never skipped, and neither is a claim inferred from the
+ * legacy text signature, which likewise has no free - both keep their old,
+ * fully conservative treatment. Any B/C use that is not inside a span dcc has
+ * both claimed and released still counts, so an unrelated pass's reservation
+ * is as visible as it ever was. */
+int line_in_released_bc_claim(int k)
+{
+    int func_start, func_end;
+    int i, open_at;
+
+    if (k < 0 || k >= nlines)
+        return 0;
+    find_function_bounds_any(k, &func_start, &func_end);
+
+    open_at = -1;
+    for (i = func_start; i < func_end; i++) {
+        if (line_is_regalloc_bc_release(lines[i])) {
+            if (open_at >= 0 && k >= open_at && k <= i)
+                return 1;
+            open_at = -1;
+            continue;
+        }
+        if (line_is_regalloc_bc_priming(lines[i]) && open_at < 0)
+            open_at = i;
     }
     return 0;
+}
+
+/* Has dcc claimed IY for a register-allocated candidate ANYWHERE in this
+ * file?
+ *
+ * IY ownership is program-scoped the moment dcc uses it, and this is the one
+ * question every dccpeep pass that wants IY must ask. dcc's IY candidate is
+ * callee-saved and stays live ACROSS CALLS - that is the entire reason it can
+ * be allocated in a function containing calls, where no caller-saved register
+ * can. dccpeep's own IY uses are not callee-saved: pass_cache_ix_spill_via_iy
+ * borrows IY over a straight-line span, and pass_promote_ix_pointer_to_iy
+ * holds it for a function, neither saving the incoming value. That was sound
+ * while dcc never emitted IY at all, because no caller could have anything
+ * live in it. Once dcc allocates IY, a callee that borrows it destroys its
+ * caller's promoted value.
+ *
+ * Confirmed as a real miscompile on tests/wumpus.c: dcc gave cturn's "g"
+ * pointer to IY, and pass_cache_ix_spill_via_iy independently borrowed IY
+ * inside a function cturn calls, so "g" came back corrupted and the game took
+ * a different branch.
+ *
+ * File scope, not function scope, and deliberately so: the hazard is a
+ * CALLEE's borrow of IY, so checking only the function a pass is editing
+ * would miss exactly the case that breaks. dcc runs first, so its claim is
+ * always visible here by the time any pass asks. */
+int dcc_iy_claimed_in_file(void)
+{
+    return peep_register_claimed_in_file(PEEP_REG_IY);
 }
 
 static int global_write_count_in_file(const char *name)
@@ -4713,8 +5601,7 @@ static int pass_cache_global_word_reload(void)
         int noc;
         int delta;
 
-        /* dcc's own reg_alloc mechanism (dcc_loop_regalloc.c/dcc_func.c)
-         * keeps a loop-scoped or whole-function candidate resident in BC
+        /* A compiler-side MIR claim can keep a value resident in BC
          * across a span this pass cannot see in the surrounding text at
          * all: the priming load ("ld c,(ix+d)"/"ld b,(ix+d+1)") and the
          * candidate's own later reads/writes are the ONLY textual b/c
@@ -4807,7 +5694,7 @@ static int pass_cache_global_word_reload(void)
          * otherwise-unrelated tests before this threshold was raised). */
         if (best_count >= 3 && global_write_count_in_file(best_sym) <= 1 &&
             !symbol_written_in_range(best_sym, segstart, i) &&
-            !bc_regalloc_claimed_before(i)) {
+            !bc_regalloc_claimed_in_range(segstart, i + 1)) {
             noc = 0;
             for (j = segstart; j < i; j++) {
                 if (!peep_parse_ld_hl_paren_sym(lines[j], sym)) continue;
@@ -4926,7 +5813,7 @@ static int pass_cache_global_word_reload_de(void)
 
         if (best_count >= 3 && global_write_count_in_file(best_sym) <= 1 &&
             !symbol_written_in_range(best_sym, segstart, i) &&
-            !bc_regalloc_claimed_before(i)) {
+            !bc_regalloc_claimed_in_range(segstart, i + 1)) {
             noc = 0;
             for (j = segstart; j < i; j++) {
                 if (!peep_parse_ld_de_paren_sym(lines[j], sym)) continue;
@@ -5174,6 +6061,93 @@ static int peep_parse_ld_hl_ix_pair(int i, int *n)
     return 1;
 }
 
+/* Parse the two-line "ld (ix-N),l" / "ld (ix-(N-1)),h" shape dcc's own
+ * codegen always emits for a 16-bit ix-relative local's word store - the
+ * store-side counterpart of peep_parse_ld_hl_ix_pair just above. *n is the
+ * low byte's offset magnitude (N). Returns 1 and implicitly consumes lines
+ * i and i+1 on success. */
+static int peep_parse_st_hl_ix_pair(int i, int *n)
+{
+    char tmp[MAX_LINE];
+    const char *p;
+    int lo;
+    char hpat[32];
+
+    strip_peep_comment_copy(tmp, lines[i]);
+    if (strncmp(tmp, "ld (ix-", 7) != 0)
+        return 0;
+    p = tmp + 7;
+    if (*p < '0' || *p > '9')
+        return 0;
+    lo = 0;
+    while (*p >= '0' && *p <= '9')
+        lo = lo * 10 + (*p++ - '0');
+    if (strcmp(p, "),l") != 0 || lo <= 1)
+        return 0;
+
+    if (i + 1 >= nlines)
+        return 0;
+    sprintf(hpat, "ld (ix-%d),h", lo - 1);
+    if (!eq(i + 1, hpat))
+        return 0;
+
+    *n = lo;
+    return 1;
+}
+
+/*
+ * mir-text-size: a phi merge into a homed local can be reached by more than
+ * one alias label immediately preceding the same merge point (e.g. an
+ * empty `else` arm whose only content is materializing a constant before
+ * falling through several consecutive labels into the merge). Each such
+ * alias label independently re-resolves and re-emits the identical reload-
+ * then-store copy, producing this exact 4-line block twice back to back:
+ *
+ *   ld l,(ix-M)      ld l,(ix-M)
+ *   ld h,(ix-(M-1))  ld h,(ix-(M-1))
+ *   ld (ix-N),l  ==>  (deleted - dead repeat of the block on the left)
+ *   ld (ix-(N-1)),h
+ *
+ * The second occurrence is pure waste: it reloads and re-stores the exact
+ * same value to the exact same destination with nothing in between that
+ * could have changed it. Fixing this at its source (the MIR emitter that
+ * decides which edges need a phi copy) was tried and reverted - it also
+ * changes the byte counts the backend's own candidate-selection cost model
+ * compares, which shifted which of several competing code-generation
+ * strategies won for unrelated constructs elsewhere in the same function,
+ * regressing some apps while improving others (confirmed via full-suite
+ * measurement, not a hypothetical). Collapsing the duplicate here instead,
+ * strictly after the backend has already committed to its output, cannot
+ * perturb any selection decision - dccpeep only ever cleans up text that
+ * already "won".
+ */
+static int pass_dedup_ix_pair_reload_store(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 7 < nlines; ++i) {
+        int load_off, store_off;
+        int load_off2, store_off2;
+
+        if (!peep_parse_ld_hl_ix_pair(i, &load_off))
+            continue;
+        if (!peep_parse_st_hl_ix_pair(i + 2, &store_off))
+            continue;
+        if (!peep_parse_ld_hl_ix_pair(i + 4, &load_off2))
+            continue;
+        if (!peep_parse_st_hl_ix_pair(i + 6, &store_off2))
+            continue;
+        if (load_off != load_off2 || store_off != store_off2)
+            continue;
+
+        delete_n(i + 4, 4);
+        changed = 1;
+    }
+
+    return changed;
+}
+
 /* Is ix-offset `off` (the low byte; off-1 is the paired high byte) written
  * to - via any "ld (ix-off),R" or "ld (ix-off),imm" - anywhere in
  * [start,end)? A write's destination always has a trailing comma right
@@ -5270,28 +6244,60 @@ static int ix_offset_written_in_range(int off, int start, int end)
  * overlap this pass's own candidate span still declines), but simple, and
  * matches this codebase's own established default of forgoing a smaller
  * optimization rather than risking a data-corrupting one. */
+/* Shared implementation behind every "is this register already spoken for
+ * anywhere in this function?" gate.
+ *
+ * Three passes needed the same three-part answer and each had spelled it out
+ * separately: scan the enclosing function, skip the lines THIS pass itself
+ * tagged on an earlier segment, and report any remaining use of the register.
+ * The tag exclusion is what makes a segment-scoped cache legal at all - each
+ * one is bounded by its own hazard scan, so an already-closed cache earlier in
+ * the same function must not veto a later unrelated one. Without it only the
+ * very first segment in any function could ever benefit, which measured as
+ * most of pass_cache_ix_local_word_reload's value on tests/bint.c alone.
+ *
+ * Everything else that mentions the register still counts, by design: dcc's
+ * own compiler priming, pass_word_loop_var_to_reg_bc,
+ * pass_byte_loop_var_to_reg_c, pass_promote_ix_pointer_to_iy, or anything
+ * this file does not have a name for yet. Deliberately more conservative than
+ * strictly necessary - a function that uses the register only where it
+ * provably cannot overlap the caller's span still declines - but simple, and
+ * in keeping with this codebase's default of forgoing a smaller optimisation
+ * rather than risking a data-corrupting one. */
+int peep_reg_used_in_function(int at, const char *own_tag,
+                                     int (*line_uses_reg)(const char *))
+{
+    int func_start, func_end;
+    int k;
+
+    find_function_bounds_any(at, &func_start, &func_end);
+    for (k = func_start; k < func_end; ++k) {
+        if (own_tag != NULL && strstr(lines[k], own_tag) != NULL)
+            continue;
+        if (line_uses_reg(lines[k]))
+            return 1;
+    }
+    return 0;
+}
+
 static int ix_cache_bc_used_in_function(int at)
 {
     int func_start, func_end;
     int k;
 
-    /* Lines this pass itself already tagged, from an earlier (necessarily
-     * lower-indexed - segments are processed in file order) segment in
-     * this same function, are excluded: those caches are segment-scoped
-     * (bounded by line_clobbers_bc the same way any other candidate
-     * segment is), not whole-function reservations, so an already-closed
-     * one from earlier in this function must not prevent a later,
-     * unrelated segment from caching something of its own - without this
-     * exclusion, only the very first segment in any given function could
-     * ever benefit, which measured as most of this pass's value on
-     * tests/bint.c alone. Everything else that mentions B or C - dcc's own
-     * compiler priming, pass_word_loop_var_to_reg_bc,
-     * pass_byte_loop_var_to_reg_c, or anything this file doesn't have a
-     * name for yet - still counts, by design (see this function's own
-     * comment above). */
     find_function_bounds_any(at, &func_start, &func_end);
     for (k = func_start; k < func_end; ++k) {
         if (strstr(lines[k], "ix_local_word_cache"))
+            continue;
+        /* Lines dcc has both claimed and explicitly released are accounted
+         * for: they are that candidate's own priming and uses, and dcc has
+         * told us exactly where its live range ends. The caller separately
+         * proves its own segment does not overlap any claim
+         * (bc_regalloc_claimed_in_range), so a released span elsewhere in
+         * the function is no reason to forfeit BC here - which under the
+         * old blanket scan it always was. This extra allowance is why this
+         * one cannot simply call peep_reg_used_in_function. */
+        if (line_in_released_bc_claim(k))
             continue;
         if (line_clobbers_bc(lines[k]))
             return 1;
@@ -5363,7 +6369,7 @@ static int pass_cache_ix_local_word_reload(void)
          * same "don't rewrite a pattern some other, more specific pass might
          * still want to match in its original form" caution applies, and
          * >= 3 is the threshold already proven safe for that. */
-        if (best_count >= 3 && !bc_regalloc_claimed_before(i) &&
+        if (best_count >= 3 && !bc_regalloc_claimed_in_range(segstart, i + 1) &&
             !ix_cache_bc_used_in_function(i)) {
             noc = 0;
             for (j = segstart; j < i; j++) {
@@ -5453,17 +6459,12 @@ static int line_is_call_or_rst(const char *line)
  * function, or its whole-file scope in that pass's own case. */
 static int iy_used_in_function(int at)
 {
-    int func_start, func_end;
-    int k;
-
-    find_function_bounds_any(at, &func_start, &func_end);
-    for (k = func_start; k < func_end; ++k) {
-        if (strstr(lines[k], "ix_spill_iy") != NULL)
-            continue;
-        if (line_mentions_iy(lines[k]))
-            return 1;
-    }
-    return 0;
+    /* dcc's own IY candidate is callee-saved and live across calls, so a
+     * borrow anywhere in the file can corrupt it - see
+     * dcc_iy_claimed_in_file's own comment for the wumpus.c miscompile. */
+    if (dcc_iy_claimed_in_file())
+        return 1;
+    return peep_reg_used_in_function(at, "ix_spill_iy", line_mentions_iy);
 }
 
 /* Is ix-offset `off` (signed, as returned by peep_parse_st_ix_pair/
@@ -5995,7 +6996,7 @@ static int parse_small_add_a(const char *line, int *amount)
  * IY. The candidate must have one HL initialization, only canonical HL/DE
  * reloads, and one small carry-skip increment whose flags are dead at the
  * loop target. Calls may only target same-file functions (the whole file is
- * proven IY-free) or DCCRTL's __ helpers, which never touch IY. */
+ * proven IY-free) or DCCRTL's reviewed IY-preserving helpers. */
 static int pass_promote_ix_pointer_to_iy(void)
 {
     int i, k;
@@ -7222,8 +8223,10 @@ static int pass_hoist_index_ptr_to_bc(void)
              * Check through the shared ownership guard so both IX-based
              * local/parameter primes and marker-tagged global primes are
              * covered, along with BC claims made by an earlier peephole
-             * iteration. */
-            if (bc_regalloc_claimed_before(func_end))
+             * iteration. The priming this pass inserts sits before the loop
+             * header and stays live to the end of the function, so the span
+             * asked about is the whole function body. */
+            if (bc_regalloc_claimed_in_range(func_start, func_end))
                 continue;
             for (k = func_start; k < func_end; ++k) {
                 if (jump_target(lines[k], tgt) && strcmp(tgt, label) == 0) {
@@ -7833,7 +8836,8 @@ static int pass_walk_row_cached_float_index(void)
          * walking pointer across the call - the exact hazard scan_local_
          * func_labels/is_local_func_label exist to catch (see
          * pass_byte_loop_counter_to_reg_iyl's own identical check). An RTL
-         * call (e.g. __fmaf) is fine - DCCRTL.MAC never touches IY. */
+         * call (e.g. __fmaf) is fine because reviewed DCCRTL paths preserve
+         * IY. */
         {
             int call_ok = 1;
             for (k = i + 1; k < loop_end && call_ok; ++k) {
@@ -8469,6 +9473,67 @@ static int pass_elim_redundant_ld_h_zero(void)
     return changed;
 }
 
+static int function_has_mir_byte_slots(int line)
+{
+    int end;
+    int start;
+    int scan;
+
+    find_function_bounds_any(line, &start, &end);
+    for (scan = start; scan < end; ++scan)
+        if (strstr(lines[scan], ";@dcc.mir byte-slot") != NULL)
+            return 1;
+    return 0;
+}
+
+static int pass_narrow_dead_h_constant(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i < nlines; ++i) {
+        const PeepLineInfo *info = peep_line_info(i);
+        char replacement[32];
+        const char *low_register;
+        const char *tag;
+        unsigned high_register;
+
+        if (!function_has_mir_byte_slots(i) ||
+            info == NULL || info->opcode != PEEP_OPCODE_LD ||
+            info->left.kind != PEEP_OPERAND_REGISTER ||
+            info->right.kind != PEEP_OPERAND_IMMEDIATE ||
+            !info->right.immediate_valid)
+            continue;
+        if (info->left.registers == PEEP_REG_HL) {
+            low_register = "l";
+            high_register = PEEP_REG_H;
+            tag = "narrow_dead_h_const";
+        } else if (info->left.registers == PEEP_REG_DE) {
+            low_register = "e";
+            high_register = PEEP_REG_D;
+            tag = "narrow_dead_d_const";
+        } else if (info->left.registers == PEEP_REG_BC) {
+            low_register = "c";
+            high_register = PEEP_REG_B;
+            tag = "narrow_dead_b_const";
+        } else
+            continue;
+        if (!peep_registers_dead_after(i, high_register))
+            continue;
+        snprintf(replacement, sizeof(replacement), "ld %s,%ld",
+                 low_register, info->right.immediate & 255L);
+        replace1_tagged(i, replacement, tag);
+        changed = 1;
+    }
+    for (i = 0; i + 1 < nlines; ++i)
+        if ((eq(i, "ld l,a") && eq(i + 1, "ld a,l")) ||
+            (eq(i, "ld h,a") && eq(i + 1, "ld a,h"))) {
+            delete_n(i + 1, 1);
+            changed = 1;
+        }
+    return changed;
+}
+
 /* Parse an IX offset string (e.g. "+8", "-2") to an integer. */
 
 
@@ -8867,6 +9932,8 @@ int main(int argc, char **argv)
     }
 
     read_file(infile);
+    peep_report_register_directives();
+    capture_original_extrns();
 
     /* Needed by both pass_byte_loop_counter_to_reg_iyl (undocumented-Z80
      * only, gated below) and pass_walk_row_cached_float_index (always on -
@@ -8882,11 +9949,13 @@ int main(int argc, char **argv)
         { "pass_byte_minmax_patterns", pass_byte_minmax_patterns, 0 },
         { "pass_dead_hl_load_before_ldhl", pass_dead_hl_load_before_ldhl, 0 },
         { "pass_word_load_push_de_call", pass_word_load_push_de_call, 0 },
+        { "pass_word_load_push_de_call_mir", pass_word_load_push_de_call_mir, 0 },
         { "pass_long_load_push_no_ex_call", pass_long_load_push_no_ex_call, 0 },
         { "pass_elim_loop_back_signed_bias", pass_elim_loop_back_signed_bias, 0 },
         { "pass_cp_zero_to_or_a", pass_cp_zero_to_or_a, 0 },
         { "pass_hl_cmp_zero_to_or_hl", pass_hl_cmp_zero_to_or_hl, 0 },
         { "pass_signed_cmp_const_low0", pass_signed_cmp_const_low0, 0 },
+        { "pass_signed_cmp_const_low0_mir", pass_signed_cmp_const_low0_mir, 0 },
         { "pass_zeroext_byte_cmp_const", pass_zeroext_byte_cmp_const, 0 },
         { "pass_byte_cmp_push_pop_hl", pass_byte_cmp_push_pop_hl, 0 },
         { "pass_word_switch_cmp_avoid_push_pop", pass_word_switch_cmp_avoid_push_pop, 0 },
@@ -8895,6 +9964,7 @@ int main(int argc, char **argv)
         { "pass_minmax_score_b_cache", pass_minmax_score_b_cache, 0 },
         { "pass_minmax_save_board_addr", pass_minmax_save_board_addr, 0 },
         { "pass_elim_redundant_ld_a_reg", pass_elim_redundant_ld_a_reg, 0 },
+        { "pass_dedup_ix_pair_reload_store", pass_dedup_ix_pair_reload_store, 0 },
         { "pass_minmax_elim_label_reload", pass_minmax_elim_label_reload, 0 },
         { "pass_elim_c_reload_after_store", pass_elim_c_reload_after_store, 0 },
         { "pass_and1_ix_to_bit", pass_and1_ix_to_bit, 0 },
@@ -8971,6 +10041,7 @@ int main(int argc, char **argv)
         { "pass_cache_global_word_reload", pass_cache_global_word_reload, 0 },
         { "pass_cache_global_word_reload_de", pass_cache_global_word_reload_de, 0 },
         { "pass_word_loop_var_to_reg_bc", pass_word_loop_var_to_reg_bc, 0 },
+        { "pass_narrow_bc_loop_bound_to_reg_c", pass_narrow_bc_loop_bound_to_reg_c, 0 },
         { "pass_byte_loop_var_to_reg_c", pass_byte_loop_var_to_reg_c, 0 },
         { "pass_labels", pass_labels, 0 },
     };
@@ -8992,6 +10063,27 @@ int main(int argc, char **argv)
         peep_context.stats.iterations = passes;
     } while (changed && passes < 30);
 
+    /* Widen the local-alloc "ld hl,-N / add hl,sp / ld sp,hl" -> N x "dec sp"
+     * rewrite to N=3/4 (peep_pass_once.c's pass_once already handles N=1/2
+     * inside the fixed-point loop above). This MUST run only after the
+     * fixed-point loop has fully converged: function-specific frame-shrink
+     * passes inside that loop (pass_shrink_minmax_frame3_after_score_cache,
+     * pass_shrink_minmax_frame2_after_loop_ctr_b) look for the exact
+     * "ld hl,-4"/"ld hl,-3" text once they have proven the corresponding
+     * (ix-N) slot is dead, and each such reduction may only become provable
+     * on a later fixed-point iteration than the one where the allocation
+     * first appears at that size. Running this widening inside the
+     * fixed-point loop (even positioned after those two passes) still let it
+     * consume "ld hl,-3" on an iteration where the frame had *just* been
+     * shrunk from -4 to -3 but the (ix-3) elimination the -3-to-2 shrink
+     * depends on had not yet converged that same iteration, permanently
+     * blocking the deeper shrink - confirmed via ttt.c's _MinMax settling at
+     * an unnecessary 3-byte frame instead of its true 2-byte minimum. Placed
+     * here, after every such shrink opportunity is fully exhausted, it only
+     * ever fires on allocations that are already at their true minimum
+     * size. */
+    RUN_PASS(pass_local_alloc_wide);
+
     /* General signed-compare constant-bias fold runs once after the main loop
      * converges.  It rewrites a signed 16-bit compare against a constant
      * (ld de,CONST + a 6-instruction xor-80h bias) into the already-biased
@@ -9008,6 +10100,13 @@ int main(int argc, char **argv)
      * fold to -Ot where trading shared code size for fewer inline instructions
      * is the goal. */
     if (!peep_context.options.optimize_size && RUN_PASS(pass_signed_cmp_const_bias_fold))
+        RUN_PASS(pass_labels);
+    /* MIR-shape counterpart of the fold just above - see that pass's
+     * comment for what differs and why neither pattern matches the other's
+     * shape. Same placement (once, post-convergence, time-mode only) for
+     * the same reason: it must not run before loop-recognizing structural
+     * passes have had a chance to see the un-folded comparison. */
+    if (!peep_context.options.optimize_size && RUN_PASS(pass_signed_cmp_const_bias_fold_mir))
         RUN_PASS(pass_labels);
     if (!peep_context.options.optimize_size && RUN_PASS(pass_signed_zero_branch))
         RUN_PASS(pass_labels);
@@ -9124,6 +10223,8 @@ int main(int argc, char **argv)
     if (RUN_PASS(pass_cache_ix_spill_via_iy))
         RUN_PASS(pass_labels);
 
+    RUN_PASS(pass_remove_dead_phi_argument_slots);
+
     /* Run frame elimination after all other passes have converged, then
      * clean up any newly unreferenced labels created by the removal.
      *
@@ -9191,6 +10292,7 @@ int main(int argc, char **argv)
 
     pass_fix_divmod_extrns();
     pass_fix_mulu_extrn();
+    pass_fix_missing_extrns();
 
     /* Final cleanup: drop dead 16-bit reloads, then relax in-range absolute
      * jumps to relative jumps.  Both run after every structural pass so they
@@ -9198,6 +10300,7 @@ int main(int argc, char **argv)
      * it shrinks code and can bring more branches into jr range. */
     RUN_PASS(pass_dup_ix_load_to_reg_copy);
     RUN_PASS(pass_fold_const_sign_extend);
+    RUN_PASS(pass_narrow_dead_h_constant);
     do {
         changed = 0;
         if (RUN_PASS(pass_elim_dead_register_loads))
@@ -9209,6 +10312,15 @@ int main(int argc, char **argv)
     RUN_PASS(pass_elim_redundant_carry_clear);
     RUN_PASS(pass_elim_dead_reg16_reload);
     RUN_PASS(pass_jp_to_jr);
+
+    /* Machine-level register-allocation census on the exact final line stream
+     * that is about to be written, so reported line numbers correlate with
+     * .PRN/profile annotations. Frameless functions have no `(ix+n)` traffic
+     * worth analysing anyway. Analysis-only; -fstats prints the summary, and
+     * DCCPEEP_FRAME_REPORT additionally prints each candidate endpoint. */
+    if (peep_context.options.stats_enabled ||
+        getenv("DCCPEEP_FRAME_REPORT") != NULL)
+        peep_frame_alloc_analyze();
 
     write_file(outfile);
     if (peep_context.options.stats_enabled)

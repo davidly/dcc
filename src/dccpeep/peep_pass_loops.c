@@ -131,10 +131,11 @@ int pass_byte_loop_counter_to_reg_c(void)
          * shapes above, but that alone doesn't prove BC is actually free
          * here - dcc's own reg_alloc may already hold a whole-function or
          * earlier-loop candidate resident in BC across this exact point,
-         * invisible to a scan confined to [i+3, loop_end) alone. See
-         * bc_regalloc_claimed_before's own comment; this is the same
-         * collision class pass_cache_global_word_reload was fixed for. */
-        if (bc_regalloc_claimed_before(i))
+         * invisible to a scan confined to [i+3, loop_end) alone. The
+         * counter this pass puts in C is live only for the loop, so the
+         * span to ask about is exactly [i, loop_end) - a claim dcc has
+         * already released before the loop no longer blocks it. */
+        if (bc_regalloc_claimed_in_range(i, loop_end))
             continue;
 
         /* In-place replacements first, while every index computed above is
@@ -379,13 +380,7 @@ int pass_word_loop_var_to_reg_bc(void)
          * this variable safely read again after the loop under the
          * whole-function requirement. Reverted to the simpler, strictly
          * safe whole-function scope. */
-        bc_used_elsewhere = 0;
-        for (j = func_start; j < func_end; j++) {
-            if (line_clobbers_bc(lines[j])) {
-                bc_used_elsewhere = 1;
-                break;
-            }
-        }
+        bc_used_elsewhere = peep_reg_used_in_function(i, NULL, line_clobbers_bc);
         if (bc_used_elsewhere)
             continue;
 
@@ -419,6 +414,154 @@ int pass_word_loop_var_to_reg_bc(void)
                 changed = 1;
             }
         }
+    }
+
+    return changed;
+}
+
+/*
+ * pass_narrow_bc_loop_bound_to_reg_c:
+ *
+ * pass_word_loop_var_to_reg_bc (just above) is deliberately general: it
+ * relocates an arbitrary 16-bit loop-carried variable from its frame slot
+ * into BC, preserving the exact same wide arithmetic throughout - it has
+ * no idea whether the variable's actual runtime range ever fits a byte.
+ * When it is specifically a `for (i = 0; i < N; i++)` counter with
+ * N < 256 - recognizable by the single-sided bias-compare MIR emits for
+ * this exact idiom, where the constant side is pre-biased at compile
+ * time and only the variable's high byte needs a runtime xor (see
+ * pass_signed_cmp_const_bias_fold_mir's own comment for the sibling,
+ * ex-de,hl-swapped member of this family) - i is provably byte-range for
+ * the whole loop and B is always 0, so the comparison's whole eight-
+ * instruction wide-arithmetic sequence collapses to a plain byte cp
+ * against C's own low byte directly - no new register claim needed at
+ * all, since pass_word_loop_var_to_reg_bc already guarantees C holds the
+ * exact, always-current counter value everywhere in the function.
+ *
+ * An earlier version of this pass tried to shadow the counter into E
+ * instead of reading C directly, on the theory that a narrower register
+ * might read/compare marginally cheaper - that needed E free for the
+ * whole loop body, which tests/tctresc.c's find_mismatch (this pass's
+ * motivating case) fails outright: pass_ix_pair_load_to_de already uses
+ * d/e for an unrelated address computation earlier in the same loop
+ * body. Reading C directly needs no such freedom - it only ever adds a
+ * "ld a,c" in front of the existing, already-safe C, so it carries none
+ * of that risk and fires unconditionally wherever the shape matches.
+ *
+ * Same "enumerate exactly what's recognized, decline on anything else"
+ * discipline as its siblings: requires the counter to start at the
+ * literal constant 0 and to be incremented by exactly the standard
+ * "inc hl" re-prime MIR emits for this idiom (proving it can never
+ * exceed the compared bound, which this pass already requires to be
+ * under 256) - both checked, but neither is rewritten, since nothing
+ * about them needs to change once the comparison itself no longer cares
+ * that C/B is a 16-bit pair.
+ */
+int pass_narrow_bc_loop_bound_to_reg_c(void)
+{
+    int i, k;
+    int changed;
+    char label[128];
+    int label_line;
+    int loop_end;
+    int imm, bound;
+    int increment_found;
+
+    changed = 0;
+
+    for (i = 0; i + 10 < nlines; ++i) {
+        if (!eq(i, "ld c,l") || !eq(i + 1, "ld b,h"))
+            continue;
+        if (!starts_label(lines[i + 2]))
+            continue;
+        if (!label_name_at(i + 2, label))
+            continue;
+        label_line = i + 2;
+
+        /* The init value must be exactly the constant 0 - "ld hl,0"
+         * shortly before this priming, skipping only intervening,
+         * unrelated stores (same bounded backward scan idiom
+         * pass_byte_for_counter_to_reg_e uses for its own init line). */
+        {
+            int found_init = 0;
+            int scan_lo = i - 8;
+            if (scan_lo < 0)
+                scan_lo = 0;
+            for (k = i - 1; k >= scan_lo; --k) {
+                if (starts_label(lines[k]))
+                    break;
+                if (eq(k, "ld hl,0")) {
+                    found_init = 1;
+                    break;
+                }
+            }
+            if (!found_init)
+                continue;
+        }
+
+        loop_end = find_last_loop_back(label_line + 1, label, 1);
+        if (loop_end < label_line + 10)
+            continue;
+
+        /* Comparison must be the very next thing after the label - the
+         * exact single-sided bias-compare shape MIR emits for a
+         * byte-range constant bound. The swapped ex-de,hl variant needs
+         * different arithmetic entirely and is not handled here (see
+         * pass_signed_cmp_const_bias_fold_mir's own comment). */
+        if (!eq(label_line + 1, "ld l,c") || !eq(label_line + 2, "ld h,b"))
+            continue;
+        if (!peep_parse_ld_de_signed(lines[label_line + 3], &imm))
+            continue;
+        if (imm < 0x8001 || imm > 0x80ff)
+            continue;
+        bound = imm - 0x8000;
+        if (!eq(label_line + 4, "ld a,h"))
+            continue;
+        if (!eq(label_line + 5, "xor 128"))
+            continue;
+        if (!eq(label_line + 6, "ld h,a"))
+            continue;
+        if (!eq(label_line + 7, "sbc hl,de"))
+            continue;
+        {
+            char t[MAX_LINE];
+            strip_peep_comment_copy(t, lines[label_line + 8]);
+            if (strncmp(t, "jp nc, ", 7) != 0 && strncmp(t, "jr nc,", 6) != 0)
+                continue;
+        }
+
+        /* Somewhere in the loop body, the counter must be incremented by
+         * exactly +1 via the standard reload-then-inc shape - proof that
+         * it can never step past the bound just matched above, so C's
+         * low byte alone (B always 0) is a safe stand-in for the whole
+         * pair for the rest of this loop's life. Existence only: the
+         * increment itself is not rewritten, since it stays correct
+         * exactly as pass_word_loop_var_to_reg_bc left it. */
+        increment_found = 0;
+        for (k = label_line + 9; k + 2 <= loop_end; ++k) {
+            if (eq(k, "ld l,c") && eq(k + 1, "ld h,b") && eq(k + 2, "inc hl")) {
+                increment_found = 1;
+                break;
+            }
+        }
+        if (!increment_found)
+            continue;
+
+        /* Replace the whole eight-instruction bias-compare with a
+         * three-instruction byte cp against c directly, preserving the
+         * original branch (whichever exact jp/jr form it already is) at
+         * its now-shifted position. */
+        {
+            char line[64];
+
+            replace1_tagged(label_line + 1, "ld a,c",
+                            "narrow_bc_loop_bound_to_reg_c");
+            sprintf(line, "cp %d", bound);
+            replace1(label_line + 2, line);
+            delete_n(label_line + 3, 5);
+        }
+
+        changed = 1;
     }
 
     return changed;
@@ -727,9 +870,9 @@ int pass_byte_for_counter_to_reg_c(void)
 
         /* line_touches_bc above only covers this loop's own body - it can't
          * see a whole-function or earlier-loop reg_alloc candidate primed
-         * before this loop and still live here. See
-         * bc_regalloc_claimed_before's own comment. */
-        if (bc_regalloc_claimed_before(i))
+         * before this loop and still live here. Asked over the loop's own
+         * span, since that is exactly how long this pass needs C. */
+        if (bc_regalloc_claimed_in_range(i, loop_end))
             continue;
 
         /* In-place replacements first, while every index computed above is
@@ -965,11 +1108,11 @@ int pass_byte_for_counter_to_reg_e(void)
  * site; the nested-loop collision check below now recognizes the "db
  * 0FDh," prefix instead of an "IY" name prefix.
  *
- * Because nothing else touches IY (see scan_local_func_labels above), this
- * pass allows ANY call inside the loop body, not just __mods/__divs, except
- * one that is_local_func_label flags as another function in this same file
- * - declined exactly like pass_byte_loop_counter_to_reg_c declines a call
- * that isn't __mods/__divs.
+ * Because ordinary runtime calls preserve IY (see scan_local_func_labels
+ * above), this pass allows ANY call inside the loop body, not just
+ * __mods/__divs, except one that is_local_func_label flags as another
+ * function in this same file - declined exactly like
+ * pass_byte_loop_counter_to_reg_c declines a call that isn't __mods/__divs.
  *
  * "ld l,(ix+off)" can't become a single "ld l,iyl": the FD prefix redirects
  * EVERY H/L reference in an instruction, so "ld l,iyl" would actually

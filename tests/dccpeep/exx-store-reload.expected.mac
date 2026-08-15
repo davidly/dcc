@@ -1,0 +1,8 @@
+_TEST:
+	ld (ix-2),l
+	ld (ix-1),h
+	exx
+	ld l,(ix-2)
+	ld h,(ix-1)
+	exx
+	ret

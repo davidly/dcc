@@ -10,8 +10,7 @@
  * an AstNode tree from the current lexer position and emits no assembly.
  * Compound-literal and optimization shapes may reserve compiler-generated
  * locals while building, so speculative callers must restore lexer/frame state
- * when discarding a tree. The AST emitter consumes the result; unsupported
- * shapes are compiler errors in normal codegen.
+ * when discarding a tree. MIR and the metadata walkers consume the result.
  */
 #include "dcc.h"
 #include "dcc_ast.h"
@@ -216,10 +215,15 @@ int ast_expr_type_for_sizeof(const struct AstNode *n)
         if ((n->op == '+' || n->op == '-') && lhs_pointer) {
             if (n->op == '-' && rhs_pointer)
                 return TYPE_INT;
+            if (ast_expr_is_array_decay(n->a) || ast_expr_is_array_row(n->a))
+                return type_add_ptr(lt);
             return type_ptr_depth(lt) > 0 ? lt : type_add_ptr(lt);
         }
-        if (n->op == '+' && rhs_pointer)
+        if (n->op == '+' && rhs_pointer) {
+            if (ast_expr_is_array_decay(n->b) || ast_expr_is_array_row(n->b))
+                return type_add_ptr(rt);
             return type_ptr_depth(rt) > 0 ? rt : type_add_ptr(rt);
+        }
         return common_arith_type(lt, rt);
     }
     case AST_LOGAND:
@@ -653,9 +657,12 @@ static struct AstNode *p_unary(struct AstArena *ar)
     if (k == '-' || k == '+' || k == '!' || k == '~' ||
         k == '*' || k == '&' || k == TOK_INC || k == TOK_DEC) {
         struct AstNode *operand;
+        struct AstNode *unary;
         next_token();
         operand = p_unary(ar);
-        return ast_unary(ar, k, operand, 0);
+        unary = ast_unary(ar, k, operand, 0);
+        unary->type = ast_expr_type_for_sizeof(unary);
+        return unary;
     }
 
     if (k == TOK_SIZEOF) {
@@ -748,6 +755,14 @@ static struct AstNode *p_binary(struct AstArena *ar, int min_level)
         else {
             lhs = ast_binary(ar, AST_BINARY, k, lhs, rhs, 0);
             lhs->peek_type = peek;
+            lhs->type = ast_expr_type_for_sizeof(lhs);
+            if (k == TOK_SHL || k == TOK_SHR)
+                lhs->operand_type = promote_int_type(
+                    ast_expr_type_for_sizeof(lhs->a));
+            else
+                lhs->operand_type = common_arith_type(
+                    ast_expr_type_for_sizeof(lhs->a),
+                    ast_expr_type_for_sizeof(lhs->b));
         }
     }
     return lhs;
@@ -764,7 +779,11 @@ static struct AstNode *p_conditional(struct AstArena *ar)
         if (g_lex.tok.kind == ':')
             next_token();
         else_e = p_conditional(ar);
-        return ast_cond(ar, c, then_e, else_e, 0);
+        {
+            struct AstNode *conditional = ast_cond(ar, c, then_e, else_e, 0);
+            conditional->type = ast_expr_type_for_sizeof(conditional);
+            return conditional;
+        }
     }
     return c;
 }
@@ -1081,9 +1100,8 @@ static struct AstNode *ast_build_for_stmt(struct AstArena *ar)
 
     if (starts_type()) {
         /* C99 for-init declaration `for (int i = 0; ...)`: capture it as an
-         * AST_DECL span (consumes through the first ';') and let
-         * ast_gen_for_stmt replay it via declaration codegen and for-scope
-         * rename machinery. */
+         * AST_DECL span (consumes through the first ';') for direct metadata
+         * replay and for-scope rename handling. */
         init = ast_build_decl_span(ar);
         if (init == NULL)
             return NULL;
@@ -1117,13 +1135,13 @@ static struct AstNode *ast_build_for_stmt(struct AstArena *ar)
     n->c = inc;
     n->d = body;
 
-    /* The cyclic-byte-fill fast path (ast_gen_for_stmt) needs a one-byte
+    /* The cyclic-byte-fill metadata plan needs a one-byte
      * frame slot for its rolling counter. Local frame layout is finalised
      * during this build pass (add_local_alloc grows the running frame size
      * as declarations/temporaries are encountered), before codegen emits the
      * function prologue - so the slot must be reserved here, not later at
      * codegen time. Stash the resulting Sym* on the node (AST_FOR does not
-     * otherwise use n->sym) for ast_gen_for_stmt to pick up. */
+     * otherwise use n->sym) for the metadata planner to pick up. */
     if (ast_for_mod_fill_supported(n, NULL, NULL, NULL, NULL, NULL))
         n->sym = add_local_alloc("#modfill", TYPE_CHAR | TYPE_UNSIGNED, 1);
 
@@ -1287,7 +1305,7 @@ void ast_decl_span_restore(const struct DeclSpanSave *save)
  * offsets match the frame-sizing scan), then the
  * lexer is restored - leaving no net cursor movement for the surrounding AST
  * walk. */
-void ast_emit_decl_span(const struct AstNode *n)
+void ast_replay_decl_span(const struct AstNode *n)
 {
     struct DeclSpan *sp = (struct DeclSpan *)n->aux;
     LexState _ls = lex_save();
@@ -1321,6 +1339,38 @@ void ast_emit_decl_span(const struct AstNode *n)
     }
 
     lex_restore(&_ls);
+}
+
+void ast_scan_decl_span(const struct AstNode *n)
+{
+    struct DeclSpan *sp = (struct DeclSpan *)n->aux;
+    LexState saved = lex_save();
+
+    g_lex.posi = sp->posi;
+    g_lex.tok_start_pos = sp->tok_start_pos;
+    g_lex.line_no = sp->line_no;
+    g_lex.tok_line = sp->tok_line;
+    g_lex.tok = sp->tok;
+
+    if (g_lex.tok.kind == TOK_STATIC_ASSERT) {
+        parse_static_assert_decl();
+    } else if (g_lex.tok.kind == TOK_TYPEDEF) {
+        parse_typedef_decl();
+    } else {
+        int type;
+        int is_static_local;
+
+        g_decl.is_extern = 0;
+        is_static_local = (g_lex.tok.kind == TOK_STATIC);
+        type = parse_base_type();
+        if (g_lex.tok.kind == ';')
+            next_token();
+        else if (is_static_local)
+            scan_static_local_decl_after_type(type);
+        else
+            scan_local_decl_after_type(type);
+    }
+    lex_restore(&saved);
 }
 
 /* Build a brace-delimited block `{ stmt* }`.  Local declarations (and

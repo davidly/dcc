@@ -1,0 +1,101 @@
+_unsafe_join:
+	ld a,b
+	cp 224
+	jp nz,Lunsafe
+	ld a,c
+	cpl
+	ld c,a
+	ld b,96
+Lunsafe:
+	ld a,b
+	cp 96
+	ret
+
+_safe_target:
+	ld a,e
+	cp 3
+	jp nz,Lsafe
+	ld hl,6
+	ret ; peep: jp_to_plain_ret
+Lsafe:
+	cp 4
+	ret
+
+_cross_function_target:
+	ld a,d
+	cp 1
+	jp nz,Lcross
+	ld hl,2
+	ret ; peep: jp_to_plain_ret
+Lcross:
+	ld a,d
+	cp 2
+	ret
+
+_cross_function_entry:
+	jr Lcross ; peep: jp_to_jr
+
+_expression_target:
+	ld a,h
+	cp 1
+	jp nz,Lexpr
+	ld hl,2
+	ret ; peep: jp_to_plain_ret
+Lexpr:
+	ld a,h
+	cp 2
+	ret
+
+_expression_entry:
+	jp Lexpr+0
+
+_safe_second:
+	ld a,l
+	cp 5
+	jp nz,Lsafe2
+	ld de,4
+	ret ; peep: jp_to_plain_ret
+Lsafe2:
+	cp 6
+	ret
+
+_conditional_return:
+	ld a,e
+	cp 1
+	jp nz,Lcret
+	ld a,d
+	ret z
+Lcret:
+	ld a,e
+	cp 2
+	ret
+
+_user_asm_target:
+	ld a,b
+	cp 1
+	jp nz,Luser
+	ld hl,2
+	ret ; peep: jp_to_plain_ret
+Luser:
+	ld a,b
+	cp 2
+	ret
+
+; dcc user asm begin
+	jp Luser
+; dcc user asm end
+	ret
+
+_case_target:
+	ld a,c
+	cp 1
+	jp nz,Lcase
+	ld hl,2
+	ret ; peep: jp_to_plain_ret
+Lcase:
+	ld a,c
+	cp 2
+	ret
+
+_case_reference:
+	jp lcase

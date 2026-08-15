@@ -27,6 +27,7 @@
 #endif
 
 #include "dcc.h"
+#include "dcc_mir.h"
 #include "dcc_preproc_internal.h"
 #include "dcc_ast.h"
 
@@ -1760,13 +1761,7 @@ int main(int argc, char **argv)
     if (!strcmp(output_name, "-")) {
         g_emit_sink.stream = stdout;
     } else {
-        /* "w+" (not "w"): emit_function_epilogue's elide_redundant_tail_jp
-         * (-g builds only) needs to seek back and read a few just-written
-         * bytes to verify a tail "jp" is safe to elide before truncating it
-         * away. Read-write vs. write-only otherwise behaves identically for
-         * this file (still created/truncated fresh, still written
-         * sequentially). */
-        g_emit_sink.stream = fopen(output_name, "w+");
+        g_emit_sink.stream = fopen(output_name, "w");
         if (!g_emit_sink.stream) fatal("cannot open output");
     }
 
@@ -1784,6 +1779,7 @@ int main(int argc, char **argv)
 
     parse_translation_unit();
     emit_needed_deferred_bodies();
+    mir_finish_translation_unit();
     emit_data();
     emit_deferred_extrns();
     emit("\n\tend\n");

@@ -1,0 +1,29 @@
+_byte_slot_reload:
+	ld (ix-2),l ;@dcc.mir byte-slot
+	ld l,(ix-2)
+	ld h,0
+	inc l
+	ld a,(ix-2)
+	ld (_sink),a
+	ld (ix-3),l ;@dcc.mir byte-slot
+	ld a,c
+	ld l,(ix-3)
+	inc l
+	ld a,(ix-3)
+	ld (_sink),a
+	ld (ix-4),l ;@dcc.mir byte-slot
+	call _opaque
+	ld l,(ix-4)
+	ld a,l
+	ld (_sink),a
+	ld (ix-5),l ;@dcc.mir byte-slot
+	inc (ix-5)
+	ld l,(ix-5)
+	ld a,l
+	ld (_sink),a
+	ld (ix-6),l ;@dcc.mir byte-slot
+	srl l
+	ld l,(ix-6)
+	ld a,l
+	ld (_sink),a
+	ret

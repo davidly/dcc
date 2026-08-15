@@ -7,6 +7,10 @@ struct LongBox { int32_t l; int32_t a[2]; };
 
 static int32_t glive;
 static int32_t glarr[2];
+static int m1q_grid_values[] = {
+    -32768, -32767, -1024, -257, -256, -255, -129, -128, -1,
+    0, 1, 127, 128, 254, 255, 256, 257, 1024, 32767
+};
 
 static void chk(long got, long want, char *name)
 {
@@ -105,6 +109,102 @@ static unsigned long ret_ubig2(unsigned long first, unsigned int second)
     return 131072UL;
 }
 
+static long mul_s8_s16(signed char left, int right)
+{
+    return (long)left * right;
+}
+
+static long mul_u8_s16(unsigned char left, int right)
+{
+    return (long)left * right;
+}
+
+static long mul_mask_s16(int left, int right)
+{
+    return (long)(left & 255) * right;
+}
+
+static long mul_mod_s16(int left, int right)
+{
+    return (long)(left % 256) * right;
+}
+
+static long mul_shift_s16(int left, int right)
+{
+    return (long)(left >> 8) * right;
+}
+
+static long mul_phi_s16(signed char left, signed char alternate,
+                        int choose_left, int right)
+{
+    return (long)(choose_left ? left : alternate) * right;
+}
+
+static long mul_s8_loop(signed char left, int right, int count)
+{
+    long total = 0;
+
+    while (count-- > 0)
+        total += (long)left * right;
+    return total;
+}
+
+static long mul_s16_s8_loop(int left, signed char right, int count)
+{
+    long total = 0;
+
+    while (count-- > 0)
+        total += (long)left * right;
+    return total;
+}
+
+extern long m1q_direct(int left, int right);
+
+#asm
+	public _m1q_direct
+	extrn __m1q
+_m1q_direct:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld c,(ix+4)
+	ld b,(ix+5)
+	ld l,(ix+6)
+	ld h,(ix+7)
+	call __m1q
+	pop ix
+	ret
+#endasm
+
+static void test_m1q_grid(void)
+{
+    int left;
+    int right;
+
+    for (left = 0;
+         left < (int)(sizeof(m1q_grid_values) /
+                      sizeof(m1q_grid_values[0]));
+         ++left)
+        for (right = 0;
+             right < (int)(sizeof(m1q_grid_values) /
+                           sizeof(m1q_grid_values[0]));
+             ++right) {
+            long expected =
+                (long)m1q_grid_values[left] *
+                m1q_grid_values[right];
+            long actual = m1q_direct(
+                m1q_grid_values[left], m1q_grid_values[right]);
+
+            if (actual != expected) {
+                printf("FAIL m1q grid %d * %d got=%ld want=%ld\n",
+                       m1q_grid_values[left], m1q_grid_values[right],
+                       actual, expected);
+                fails++;
+                return;
+            }
+        }
+}
+
 static void test_widen_mul_edges(void)
 {
     int a, b, cond;
@@ -138,6 +238,21 @@ static void test_widen_mul_edges(void)
     ua = 40000U;
     ub = 40000U;
     chku((unsigned long)ua * ub, 1600000000UL, "u16mul 40000");
+
+    chk(mul_s8_s16(-128, -32768), 4194304L, "s8s16 minneg");
+    chk(mul_s8_s16(127, 32767), 4161409L, "s8s16 maxpos");
+    chk(mul_u8_s16(255, -32768), -8355840L, "u8s16 signed rhs");
+    chk(mul_mask_s16(0x12ff, -30000), -7650000L, "mask s16");
+    chk(mul_mod_s16(-511, 30000), -7650000L, "mod s16");
+    chk(mul_shift_s16(-32768, 30000), -3840000L, "shift s16");
+    chk(mul_phi_s16(-128, 127, 0, 32767), 4161409L, "phi s16");
+    chk(mul_s8_loop(-17, 30000, 7), -3570000L, "s8 loop");
+    chk(mul_s8_loop(-128, -32768, 1), 4194304L, "s8 loop min");
+    chk(mul_s16_s8_loop(-32768, -128, 1), 4194304L, "s8 rhs");
+    chk(m1q_direct(-32768, 32767), -1073709056L, "m1q fallback");
+    chk(m1q_direct(-256, 30000), -7680000L, "m1q minus256");
+    chk(m1q_direct(-32768, 255), -8355840L, "m1q right");
+    chk(m1q_direct(-255, -32768), 8355840L, "m1q swap");
 
     a = 1;
     b = 2;
@@ -478,6 +593,7 @@ static void test_local_long_assign_value(void)
 
 int main(void)
 {
+    test_m1q_grid();
     test_widen_mul_edges();
     test_stale_marker_boundaries();
     test_unary_widen_mul();

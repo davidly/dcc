@@ -114,7 +114,7 @@ void gen_binop32(int op, int lhs_type)
     const char *rname;
     switch (op) {
     case '+':
-        emit("\tpop bc\n\tor a\n\tadd hl,bc\n");
+        emit("\tpop bc\n\tadd hl,bc\n");
         emit("\tex de,hl\n\tpop bc\n\tadc hl,bc\n\tex de,hl\n");
         break;
     case '-':
@@ -914,5 +914,4 @@ void emit_test_expr_nonzero(int expr_type, int true_label, int branch_when_true)
     else
         emit_jp_label("jp z,", true_label);
 }
-
 

@@ -14,9 +14,10 @@ later with a non-local jump.
 ## Runtime model
 
 `jmp_buf` is an 8-byte buffer holding the saved return address, stack pointer,
-IX frame pointer, and padding. DCC C Compiler declares `setjmp` as an ordinary function;
-the runtime entry still reads the caller frame so the call behaves like the C89
-non-local jump primitive.
+IX frame pointer, and callee-saved IY register. DCC C Compiler declares
+`setjmp` as an ordinary function; the frameless runtime entry captures the
+caller context directly so the call behaves like the C89 non-local jump
+primitive.
 
 `setjmp(env)` returns `0` when the context is saved directly. A later
 `longjmp(env, val)` restores that context and makes the saved `setjmp` return
@@ -53,4 +54,4 @@ int main(void)
 
 After a `longjmp`, automatic variables in the restored function have the same
 practical caveats as C89: values changed after `setjmp` should not be relied on
-unless they are stored in stable storage.
+unless they are `volatile`.

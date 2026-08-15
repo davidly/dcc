@@ -14,23 +14,6 @@
 #include "dcc.h"
 #include "dcc_preproc_internal.h"
 
-/* Starts a nestable output scope and returns the complete previous sink. Every
- * successful push must be paired with emit_sink_restore on every exit path. */
-EmitSink emit_sink_push(FILE *stream, int purpose)
-{
-    EmitSink saved;
-
-    saved = g_emit_sink;
-    g_emit_sink.stream = stream;
-    g_emit_sink.purpose = purpose;
-    return saved;
-}
-
-void emit_sink_restore(const EmitSink *saved)
-{
-    g_emit_sink = *saved;
-}
-
 void dcc_copy_str(char *dst, size_t dstsz, const char *src)
 {
     size_t i;
@@ -353,18 +336,10 @@ void dcc_error_at(const char *file, int line, long ofs, const char *msg, const c
     const char *fn;
     const char *code;
 
-    /* Counted unconditionally, even while suppressed below - this is the
-     * only signal try_speculative_bc_regalloc_function_body (dcc_func.c) has
-     * that a genuine error occurred during a speculatively-generated,
-     * possibly-discarded function body: asm_suppress_depth prevents this
-     * function from printing or bumping the real `errors` counter (so a
-     * discarded attempt's error isn't shown to the user prematurely, before
-     * the real fallback pass re-encounters and correctly reports it exactly
-     * once), but silently committing a speculative attempt that hit a real
-     * error would ship broken code with NO diagnostic at all. Comparing this
-     * counter before/after a suppressed attempt lets that caller force a
-     * decline whenever it increased, regardless of what the regalloc-
-     * specific safety checks concluded. */
+    /* Counted unconditionally, even while suppressed below, so structural
+     * parser probes and constant-expression attempts can detect that their
+     * tentative parse diagnosed an error without printing it. MIR emission
+     * also refuses to commit after any real diagnostic. */
     g_diag_error_count++;
 
     /* asm_suppress_depth marks source text being parsed for its structural
@@ -401,12 +376,9 @@ int warnings = 0;
 
 /* Non-fatal diagnostic: doesn't touch `errors` or exit(), so a warning never
  * changes whether the compile succeeds. Suppressed under asm_suppress_depth
- * for the same reason dcc_error_at is (see its comment) - a speculative,
- * possibly-discarded codegen attempt (narrowing, inline-candidate scanning,
- * the no-ix/bc-regalloc speculative function-body attempts in dcc_func.c)
- * must not print a diagnostic about code that might never actually ship;
- * only the real, kept compilation of a given function runs outside any
- * suppressed region.
+ * for the same reason dcc_error_at is (see its comment): narrowing and
+ * inline-candidate probes must not print a diagnostic from a structural
+ * parse whose output is never committed.
  *
  * Also suppressed once a real error has already been reported anywhere in
  * the compile: a missing/malformed return expression already produces its
@@ -472,14 +444,8 @@ int new_label(void)
 
 void flush_pending_asm(void)
 {
-    /* Never flush into a suppressed/speculative context (asm_suppress_depth>0,
-     * e.g. the inline-candidate double-scan in dcc_func.c, or a dead-code
-     * replay in ast_gen_stmt's AST_COMPOUND case): that output either goes to
-     * a throwaway buffer or is discarded outright if the speculative attempt
-     * is abandoned, silently losing content that was legitimately buffered
-     * earlier during a real (non-suppressed) pass. Leave pending_asm_len
-     * untouched so the content survives to the next real flush point instead
-     * of being written once into a doomed buffer and considered "done". */
+    /* Never flush during a suppressed sizing/metadata pass. Leave the buffer
+     * intact for the next real output point. */
     if (asm_suppress_depth > 0)
         return;
     if (pending_asm_len > 0 && g_emit_sink.stream) {
@@ -578,4 +544,3 @@ int getc_src(void)
 
 int define_number_value(const char *name, long *out, int depth);
 void strip_macro_replacement_comments(char *s);
-
