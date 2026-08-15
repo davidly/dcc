@@ -108,7 +108,7 @@
     { "name": "twild", "host": true },
     { "name": "cpmenumd", "perf_ignore": true },
     { "name": "terrno", "host": true },
-    { "name": "ttime", "dcc_args": "dcc-peep=false", "perf_ignore": true, "host": true },
+    { "name": "ttime", "perf_ignore": true, "host": true },
     { "name": "tc89c2", "perf_ignore": true },
     { "name": "tlimits", "host": true, "requires-32bit-linux-host-compiler": true },
     { "name": "tlmul", "host": true, "requires-32bit-linux-host-compiler": true },
