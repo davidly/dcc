@@ -1805,8 +1805,10 @@ static int pass_const_divmod_helpers(void)
  * const char * parameter, so -Wformat-truncation flags a truncation that
  * can't actually happen; suppressed locally rather than widening `name`'s
  * type or growing want past what any real caller can produce. */
+#ifdef __GNUC__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-truncation"
+#endif
 
 static int peep_is_exact_extrn_for(const char *line, const char *name)
 {
@@ -1828,7 +1830,9 @@ static int peep_is_exact_call_for(const char *line, const char *name)
     return strcmp(clean, want) == 0;
 }
 
+#ifdef __GNUC__
 #pragma GCC diagnostic pop
+#endif
 
 static int peep_line_is_divmod_extrn(const char *line)
 {
@@ -2016,10 +2020,14 @@ static void pass_fix_missing_extrns(void)
              * chars - see the -Wformat-truncation comment above
              * peep_is_exact_extrn_for for why this can't truncate. */
             char line[MAX_LINE];
+#ifdef __GNUC__
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wformat-truncation"
+#endif
             snprintf(line, sizeof(line), "extrn %s", name);
+#ifdef __GNUC__
 #pragma GCC diagnostic pop
+#endif
             insert_line(0, line);
         }
     }
