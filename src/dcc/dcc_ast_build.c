@@ -1217,8 +1217,8 @@ static struct AstNode *ast_build_decl_span(struct AstArena *ar)
             return NULL;
         /* C99/C11 6.8.5p3 permits only object declarations with storage class
          * auto or register in a for-init declaration.  dcc treats auto/register
-         * as ordinary automatic locals (no Z80 register allocation - the hint
-         * is a no-op, exactly as in block scope), so they are accepted.  The
+         * as automatic locals; `register` remains an allocation hint, exactly
+         * as in block scope.  The
          * remaining explicit storage classes and function specifiers
          * (static/extern/typedef/inline) are rejected here; direct function and
          * type/tag-only declarations are caught separately during replay. */

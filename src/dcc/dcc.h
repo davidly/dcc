@@ -365,7 +365,11 @@ struct Sym {
     int is_volatile; /* object declared with the volatile qualifier: access-
                       * contracting fast paths must decline for it */
     int pointee_is_volatile; /* immediate pointed-to type is volatile */
-    int is_register; /* object declared with the register qualifier */
+    int is_register; /* object declared with the register qualifier: an MIR
+                      * allocation hint copied onto MirObject and consulted by
+                      * mir_allocate_registers to bias profitable
+                      * register-backed values ahead of otherwise equivalent
+                      * candidates - see mir_value_backs_declared_register_object. */
     int is_inline;   /* function declared with inline specifier */
     int is_noreturn; /* function declared with _Noreturn: licm_scan_modified
                       * (dcc_licm.c) tolerates a call to it in an otherwise-

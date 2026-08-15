@@ -1333,6 +1333,7 @@ void parse_old_style_param_id_list(void)
 void parse_old_style_param_declarations(void)
 {
     int base;
+    int base_is_register;
     int base_is_volatile;
     int base_pointee_is_volatile;
     int type;
@@ -1341,6 +1342,7 @@ void parse_old_style_param_declarations(void)
 
     while (g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '{' && starts_type()) {
         base = parse_base_type();
+        base_is_register = g_decl.is_register;
         base_is_volatile = g_decl.is_volatile;
         base_pointee_is_volatile = g_decl.pointee_is_volatile;
 
@@ -1377,6 +1379,7 @@ void parse_old_style_param_declarations(void)
             } else {
                 int pi;
                 s->type = type;
+                s->is_register = base_is_register;
                 s->is_volatile = g_decl.is_volatile;
                 s->pointee_is_volatile = g_decl.pointee_is_volatile;
                 if (g_ptr_array_dim_count > 0) {
@@ -1489,6 +1492,7 @@ void parse_param_list(void)
             add_param_alloc(name, type);
             ps = find_local(name);
             if (ps != NULL) {
+                ps->is_register = g_decl.is_register;
                 ps->is_volatile = g_decl.is_volatile;
                 ps->pointee_is_volatile = g_decl.pointee_is_volatile;
             }
