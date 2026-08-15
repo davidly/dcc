@@ -2449,6 +2449,23 @@ int mir_fold_constant_binary(int op, long left, long right,
     int is_unsigned = (operand_type & TYPE_UNSIGNED) != 0;
     long value;
     unsigned long mask;
+    unsigned long uleft, uright;
+
+    mask = type_bytes == 2 ? 0xffffUL
+         : type_bytes == 4 ? 0xffffffffUL : (unsigned long)-1L;
+    /* / , % and >> need is_unsigned dispatched on the OPERANDS, not just
+     * the result: on a host where long is only 32 bits (MSVC), an
+     * unsigned constant needing the top half of the 32-bit range (e.g.
+     * 4294967295) is negative as a long, so plain "left % right" runs
+     * signed truncating-toward-zero division/modulo on it - a different
+     * operation from the unsigned one the target actually performs, not
+     * just a differently-truncated result. A 64-bit host long
+     * (Linux/macOS) never goes negative for a 32-bit-wide value, so
+     * signed and unsigned agree there by accident, which is why this was
+     * invisible on that host. Same reasoning as ast_fold_binary_target
+     * (dcc_ast_gen_support.c), which already gets this right. */
+    uleft = (unsigned long)left & mask;
+    uright = (unsigned long)right & mask;
 
     switch (op) {
     case '+': value = left + right; break;
@@ -2457,12 +2474,12 @@ int mir_fold_constant_binary(int op, long left, long right,
     case '/':
         if (right == 0)
             return 0;
-        value = left / right;
+        value = is_unsigned ? (long)(uleft / uright) : left / right;
         break;
     case '%':
         if (right == 0)
             return 0;
-        value = left % right;
+        value = is_unsigned ? (long)(uleft % uright) : left % right;
         break;
     case '&': value = left & right; break;
     case '|': value = left | right; break;
@@ -2475,13 +2492,11 @@ int mir_fold_constant_binary(int op, long left, long right,
     case TOK_SHR:
         if (right < 0 || right >= type_bytes * 8)
             return 0;
-        value = left >> right;
+        value = is_unsigned ? (long)(uleft >> right) : left >> right;
         break;
     default:
         return 0;
     }
-    mask = type_bytes == 2 ? 0xffffUL
-         : type_bytes == 4 ? 0xffffffffUL : (unsigned long)-1L;
     value = (long)((unsigned long)value & mask);
     if (!is_unsigned) {
         if (type_bytes == 2 && (value & 0x8000L) != 0)

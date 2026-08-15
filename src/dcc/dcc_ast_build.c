@@ -505,12 +505,34 @@ static struct AstNode *p_primary(struct AstArena *ar)
     case TOK_NUM:
     case TOK_CHARLIT:
         {
-            long v = (g_lex.tok.kind == TOK_NUM) ? (long)strtoul(g_lex.tok.text, NULL, 0) : g_lex.tok.val;
+            long v;
+            unsigned long uv = 0;
             int ty;
+            int is_long;
+            if (g_lex.tok.kind == TOK_NUM) {
+                /* Use cf_parse_integer_literal_bits, not strtoul, and
+                 * classify on uv (the literal's raw 32-bit unsigned bit
+                 * pattern), not v: on a host where long is only 32 bits
+                 * (MSVC), a constant needing the full unsigned 32-bit
+                 * range (e.g. 4294967295) wraps negative when narrowed
+                 * into a 32-bit signed long, so neither "v > 0xffff" nor
+                 * "v < -32768" would be true - silently misclassifying a
+                 * genuinely 32-bit constant as a 16-bit int and
+                 * truncating it throughout codegen. A 64-bit host long
+                 * (Linux/macOS) never wraps here, so this is a no-
+                 * behavior-change there. Same hazard already fixed in
+                 * cf_parse_primary (dcc_fold.c) and emit_init_numeric
+                 * (dcc_data.c); this AST-building path had been missed. */
+                uv = cf_parse_integer_literal_bits(g_lex.tok.text);
+                v = (long)uv;
+            } else {
+                v = g_lex.tok.val;
+            }
             /* Mirror gen_primary's literal classification so the codegen
              * walker can reproduce its emit exactly. */
-            int is_long = (v > 0xffffL || v < -32768L ||
-                           (g_lex.tok.kind == TOK_NUM && g_tok_long_suffix));
+            is_long = (g_lex.tok.kind == TOK_NUM)
+                ? (uv > 0xffffUL || g_tok_long_suffix)
+                : (v > 0xffffL || v < -32768L);
             ty = is_long ? TYPE_LONG : TYPE_INT;
             if (g_lex.tok.kind == TOK_NUM && g_tok_unsigned_suffix)
                 ty |= TYPE_UNSIGNED;
