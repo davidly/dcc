@@ -173,9 +173,15 @@ static const char *g_ep;
 static const char *g_cep;
 static _Noreturn void die(const char *s)
 {
+    /* Not "cond ? g_pc->text : """ - g_pc->text (char*) and the ""
+     * literal (read-only in zsdcc's model) unify to a non-const type in
+     * a ternary, which zsdcc flags as losing the literal's const
+     * qualifier. Assigning through a const char* instead avoids the
+     * ternary/literal mix. */
+    const char *t = "";
+    if (g_stmts && g_pc >= g_stmts && g_pc < g_stmts + g_ns) t = g_pc->text;
     fprintf(stderr, "forint:%s near pc=%d '%s'\n", s,
-        (g_stmts && g_pc) ? (int)(g_pc - g_stmts) : -1,
-        (g_stmts && g_pc >= g_stmts && g_pc < g_stmts + g_ns) ? g_pc->text : "");
+        (g_stmts && g_pc) ? (int)(g_pc - g_stmts) : -1, t);
     exit(1);
 }
 static void *xcalloc(unsigned int n, unsigned int z)
@@ -436,7 +442,6 @@ static int primary(void)
         return get_sym_val(si,0);
     }
     die("bad expr");
-    return 0;
 }
 static int term(void)
 {
@@ -1009,7 +1014,7 @@ static void decode_action(struct Stmt *st,char *q)
 static void decode_stmts(void)
 {
     int i,lab,nl;
-    char buf[MAXLINE],*s,*p,*q,*r;
+    char buf[MAXLINE],*s,*p,*q;
     struct Stmt *st;
     for(i=0;i<g_ns;i++)
     {

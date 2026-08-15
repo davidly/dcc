@@ -165,8 +165,14 @@ static void add_var_name(const char *name, int sc, int esz, int count);
 
 static void die(const char *s)
 {
-    fprintf(stderr, "adaint:%d: %s near '%s'\n", G ? G->line : 0, s,
-            G ? G->text : "");
+    /* Not "G ? G->text : """ - G->text (char[]) and the "" literal
+     * (read-only in zsdcc's model) unify to a non-const type in a
+     * ternary, which zsdcc flags as losing the literal's const
+     * qualifier. Assigning through a const char* instead avoids the
+     * ternary/literal mix. */
+    const char *t = "";
+    if (G) t = G->text;
+    fprintf(stderr, "adaint:%d: %s near '%s'\n", G ? G->line : 0, s, t);
     exit(1);
 }
 
@@ -483,7 +489,9 @@ static int store_op(int sc, int esz, int arr)
 
 static int parse_const_expr(void)
 {
-    int v, op;
+    int v = 0, op;   /* die() calls exit(1); this init only silences host
+                       * compilers that don't know that (v is genuinely
+                       * unreachable-uninitialized here) */
     if (G->tok == '-') { next(); return -parse_const_expr(); }
     if (G->tok == T_NUM) { v = G->ival; next(); }
     else if (G->tok == T_ID) { v = G->sym[find_sym(G->text)].val; next(); }
@@ -726,7 +734,7 @@ static void while_stmt(void)
 static void for_stmt(void)
 {
     char name[MAXNAME];
-    int si, top, jz, start, endv;
+    int si, top, jz, endv;
     next();
     if (G->tok != T_ID) die("for var");
     strcpy(name, G->text); next();
@@ -757,7 +765,6 @@ static void for_stmt(void)
     emit_store_lvalue(si, 0);
     emit(OP_JMP, top, 0);
     patch(jz, G->cp);
-    (void)start;
 }
 
 static void return_stmt(void)
@@ -1017,7 +1024,7 @@ static int call_func(int fi, struct Ins *retpc, int argc)
 
 static void run(void)
 {
-    int a, b, v, argc, i;
+    int a, b, v;
     struct Ins *in;
     G->stp = G->st;
     G->fp = 0;
@@ -1072,7 +1079,6 @@ static void run(void)
         case OP_NL: printf("\n"); break;
         default: die("bad op");
         }
-        (void)argc; (void)i;
         in++;
     }
 }
