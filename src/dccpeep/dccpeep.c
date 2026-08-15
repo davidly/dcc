@@ -1963,8 +1963,12 @@ static void capture_original_extrns(void)
                 break;
             }
         }
-        if (!dup)
-            strncpy(original_extrn_names[original_extrn_count++], name, 63);
+        if (!dup) {
+            char *dst = original_extrn_names[original_extrn_count];
+            strncpy(dst, name, 63);
+            dst[63] = 0;
+            ++original_extrn_count;
+        }
     }
 }
 
