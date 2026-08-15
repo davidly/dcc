@@ -6796,31 +6796,6 @@ int mir_next_phi_in_block(int block_start, int from)
     return -1;
 }
 
-static int mir_phi_edge_uses_value(int predecessor, int successor, int value)
-{
-    int first = mir_first_phi_or_block_end(successor);
-    int predecessor_label;
-
-    if (first < 0 || first >= mir.count || mir.insns[first].opcode != MIR_PHI)
-        return 0;
-    predecessor_label = mir_block_label_before(predecessor);
-    while (first < mir.count) {
-        const struct MirInsn *phi = &mir.insns[first];
-        if (phi->opcode == MIR_NOP) {
-            ++first;
-            continue;
-        }
-        if (phi->opcode != MIR_PHI)
-            break;
-        if (predecessor_label == phi->phi_pred1 && value == phi->src1)
-            return 1;
-        if (predecessor_label == phi->phi_pred2 && value == phi->src2)
-            return 1;
-        ++first;
-    }
-    return 0;
-}
-
 static int mir_call_uses_value_uncached(const struct MirInsn *call, int value)
 {
     int i;
@@ -9531,13 +9506,47 @@ int mir_verify_and_dump(void)
             unsigned char *out = &live_out[(size_t)i * mir.next_value];
             int value;
             int successor;
+            int insn_is_call = (insn->opcode == MIR_CALL ||
+                                 insn->opcode == MIR_CALL_AGGREGATE);
+            /* mir_first_phi_or_block_end(successor) and the predecessor's
+             * block label (mir_block_label_before) don't depend on `value`,
+             * but this loop evaluates every value for every instruction on
+             * every fixed-point iteration - precompute both once per
+             * instruction instead of once per (successor, value) pair, the
+             * same loop-invariant-hoisting rationale as insn_is_call above.
+             * successors[] is fixed-size 2 (struct MirInsn), so these are
+             * too. */
+            int successor_valid[2];
+            int successor_is_phi[2];
+            int successor_phi_first[2];
+            int predecessor_label = -1;
+            int predecessor_label_known = 0;
+
+            for (successor = 0; successor < insn->successor_count; ++successor) {
+                successor_valid[successor] =
+                    insn->successors[successor] >= 0 &&
+                    insn->successors[successor] < mir.count;
+                if (!successor_valid[successor]) {
+                    successor_is_phi[successor] = 0;
+                    continue;
+                }
+                successor_phi_first[successor] =
+                    mir_first_phi_or_block_end(insn->successors[successor]);
+                successor_is_phi[successor] =
+                    successor_phi_first[successor] >= 0 &&
+                    successor_phi_first[successor] < mir.count &&
+                    mir.insns[successor_phi_first[successor]].opcode == MIR_PHI;
+                if (successor_is_phi[successor] && !predecessor_label_known) {
+                    predecessor_label = mir_block_label_before(i);
+                    predecessor_label_known = 1;
+                }
+            }
 
             for (value = 0; value < mir.next_value; ++value) {
                 int next_out = 0;
                 int next_in;
                 for (successor = 0; successor < insn->successor_count; ++successor) {
-                    if (insn->successors[successor] < 0 ||
-                        insn->successors[successor] >= mir.count) {
+                    if (!successor_valid[successor]) {
                         fprintf(stderr,
                                 "; MIR %s: instruction %d has invalid successor %d\n",
                                 mir.name, i, insn->successors[successor]);
@@ -9546,15 +9555,32 @@ int mir_verify_and_dump(void)
                     }
                     next_out |= live_in[(size_t)insn->successors[successor] *
                                         mir.next_value + value];
-                    if (mir_phi_edge_uses_value(
-                            i, insn->successors[successor], value))
-                        next_out = 1;
+                    if (successor_is_phi[successor]) {
+                        int first = successor_phi_first[successor];
+                        while (first < mir.count) {
+                            const struct MirInsn *phi = &mir.insns[first];
+                            if (phi->opcode == MIR_NOP) {
+                                ++first;
+                                continue;
+                            }
+                            if (phi->opcode != MIR_PHI)
+                                break;
+                            if ((predecessor_label == phi->phi_pred1 &&
+                                 value == phi->src1) ||
+                                (predecessor_label == phi->phi_pred2 &&
+                                 value == phi->src2)) {
+                                next_out = 1;
+                                break;
+                            }
+                            ++first;
+                        }
+                    }
                 }
                 next_in = next_out && value != insn->dst;
                 if (insn->opcode != MIR_PHI &&
                     (value == insn->src1 || value == insn->src2))
                     next_in = 1;
-                if (mir_call_uses_value(insn, value))
+                if (insn_is_call && mir_call_uses_value(insn, value))
                     next_in = 1;
                 if (out[value] != next_out || in[value] != next_in) {
                     out[value] = (unsigned char)next_out;
