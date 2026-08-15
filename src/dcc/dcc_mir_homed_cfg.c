@@ -364,7 +364,7 @@ static int mir_homed_wide_increment_component(int value)
 }
 
 static int mir_emit_homed_wide_indirect_increment(
-    FILE *out, const struct MirInsn *store)
+    MirStream *out, const struct MirInsn *store)
 {
     int instruction = (int)(store - mir.insns);
     int preserve_hl_de =
@@ -377,23 +377,23 @@ static int mir_emit_homed_wide_indirect_increment(
     int byte;
 
     if (preserve_hl_de)
-        fputs("\tpush de\n\tpush hl\n", out);
+        mir_stream_puts("\tpush de\n\tpush hl\n", out);
     if (preserve_hl)
-        fputs("\tpush hl\n", out);
+        mir_stream_puts("\tpush hl\n", out);
     if (!mir_emit_home_to_hl(out, store->src1))
         return 0;
     for (byte = 0; byte < 4; ++byte) {
-        fputs("\tinc (hl)\n", out);
+        mir_stream_puts("\tinc (hl)\n", out);
         if (byte != 3) {
-            fprintf(out, "\tjp nz, L%d\n", done_label);
-            fputs("\tinc hl\n", out);
+            mir_stream_printf(out, "\tjp nz, L%d\n", done_label);
+            mir_stream_puts("\tinc hl\n", out);
         }
     }
-    fprintf(out, "L%d:\n", done_label);
+    mir_stream_printf(out, "L%d:\n", done_label);
     if (preserve_hl)
-        fputs("\tpop hl\n", out);
+        mir_stream_puts("\tpop hl\n", out);
     if (preserve_hl_de)
-        fputs("\tpop hl\n\tpop de\n", out);
+        mir_stream_puts("\tpop hl\n\tpop de\n", out);
     return 1;
 }
 
@@ -462,7 +462,7 @@ static int mir_homed_stack_forwarded_wide_rhs(
 }
 
 static int mir_emit_homed_wide_comparison_instruction(
-    FILE *out, const struct MirInsn *insn)
+    MirStream *out, const struct MirInsn *insn)
 {
     int instruction = (int)(insn - mir.insns);
     int stack_rhs = mir_homed_stack_forwarded_wide_rhs(
@@ -484,11 +484,11 @@ static int mir_emit_homed_wide_comparison_instruction(
         dst_color != MIR_COLOR_BC &&
         mir_home_color_live_across(instruction, MIR_COLOR_BC);
 
-    if (preserve_hl_de) fputs("\tpush de\n\tpush hl\n", out);
-    if (preserve_bc_iy) fputs("\tpush iy\n\tpush bc\n", out);
-    if (preserve_hl) fputs("\tpush hl\n", out);
-    if (preserve_de) fputs("\tpush de\n", out);
-    if (preserve_bc) fputs("\tpush bc\n", out);
+    if (preserve_hl_de) mir_stream_puts("\tpush de\n\tpush hl\n", out);
+    if (preserve_bc_iy) mir_stream_puts("\tpush iy\n\tpush bc\n", out);
+    if (preserve_hl) mir_stream_puts("\tpush hl\n", out);
+    if (preserve_de) mir_stream_puts("\tpush de\n", out);
+    if (preserve_bc) mir_stream_puts("\tpush bc\n", out);
     if ((!stack_rhs &&
          !mir_emit_wide_home_to_stack(out, insn->src1)) ||
         (!stack_rhs &&
@@ -499,16 +499,16 @@ static int mir_emit_homed_wide_comparison_instruction(
         !mir_emit_wide_operation(out, insn) ||
         !mir_emit_hl_to_home(out, insn->dst))
         return 0;
-    if (preserve_bc) fputs("\tpop bc\n", out);
-    if (preserve_de) fputs("\tpop de\n", out);
-    if (preserve_hl) fputs("\tpop hl\n", out);
-    if (preserve_bc_iy) fputs("\tpop bc\n\tpop iy\n", out);
-    if (preserve_hl_de) fputs("\tpop hl\n\tpop de\n", out);
+    if (preserve_bc) mir_stream_puts("\tpop bc\n", out);
+    if (preserve_de) mir_stream_puts("\tpop de\n", out);
+    if (preserve_hl) mir_stream_puts("\tpop hl\n", out);
+    if (preserve_bc_iy) mir_stream_puts("\tpop bc\n\tpop iy\n", out);
+    if (preserve_hl_de) mir_stream_puts("\tpop hl\n\tpop de\n", out);
     return 1;
 }
 
 static int mir_emit_homed_condition_jump(
-    FILE *out, int value, int instruction, int label, int jump_if_true)
+    MirStream *out, int value, int instruction, int label, int jump_if_true)
 {
     const struct MirInsn *condition = mir_definition(value);
     if (condition != NULL && type_size(condition->type) == 4) {
@@ -520,31 +520,31 @@ static int mir_emit_homed_condition_jump(
             mir_home_color_live_across(
                 instruction, MIR_COLOR_DE);
         if (preserve_hl_de)
-            fputs("\tpush de\n\tpush hl\n", out);
+            mir_stream_puts("\tpush de\n\tpush hl\n", out);
         if (!mir_emit_wide_home_to_hl_de(out, value))
             return 0;
-        fputs("\tld a,d\n", out);
+        mir_stream_puts("\tld a,d\n", out);
         if (type_is_float(condition->type))
-            fputs("\tand 7fh\n", out);
-        fputs("\tor e\n\tor h\n\tor l\n", out);
+            mir_stream_puts("\tand 7fh\n", out);
+        mir_stream_puts("\tor e\n\tor h\n\tor l\n", out);
         if (preserve_hl_de)
-            fputs("\tpop hl\n\tpop de\n", out);
+            mir_stream_puts("\tpop hl\n\tpop de\n", out);
     } else {
         int preserve_hl = mir.allocation_colors[value] != MIR_COLOR_HL;
         if (preserve_hl)
-            fputs("\tpush hl\n", out);
+            mir_stream_puts("\tpush hl\n", out);
         if (!mir_emit_home_to_hl(out, value))
             return 0;
-        fputs("\tld a,h\n\tor l\n", out);
+        mir_stream_puts("\tld a,h\n\tor l\n", out);
         if (preserve_hl)
-            fputs("\tpop hl\n", out);
+            mir_stream_puts("\tpop hl\n", out);
     }
-    fprintf(out, jump_if_true ? "\tjp nz, L%d\n" : "\tjp z, L%d\n",
+    mir_stream_printf(out, jump_if_true ? "\tjp nz, L%d\n" : "\tjp z, L%d\n",
             label);
     return 1;
 }
 
-static int mir_emit_homed_truth_jump(FILE *out, int value, int instruction,
+static int mir_emit_homed_truth_jump(MirStream *out, int value, int instruction,
                                      int true_label)
 {
     return mir_emit_homed_condition_jump(
@@ -667,7 +667,7 @@ static const struct MirInsn *mir_homed_immediate_wide_named_store(
 }
 
 static int mir_emit_current_wide_named_store(
-    FILE *out, const struct MirInsn *store)
+    MirStream *out, const struct MirInsn *store)
 {
     int memory_type, memory_storage, memory_offset;
     struct Sym *global;
@@ -683,14 +683,14 @@ static int mir_emit_current_wide_named_store(
     if ((memory_storage == SC_EXTERN ||
          (global != NULL && global->needs_extrn)) &&
         mir_extrn_should_emit(global))
-        fprintf(out, "\textrn %s\n", assembly_name);
-    fprintf(out, "\tld (%s),hl\n\tld (%s+2),de\n",
+        mir_stream_printf(out, "\textrn %s\n", assembly_name);
+    mir_stream_printf(out, "\tld (%s),hl\n\tld (%s+2),de\n",
             assembly_name, assembly_name);
     return 1;
 }
 
 static int mir_emit_homed_wide_binary_instruction(
-    FILE *out, const struct MirInsn *insn,
+    MirStream *out, const struct MirInsn *insn,
     int *stored_directly)
 {
     int instruction = (int)(insn - mir.insns);
@@ -719,11 +719,11 @@ static int mir_emit_homed_wide_binary_instruction(
     long constant;
 
     *stored_directly = 0;
-    if (preserve_hl_de) fputs("\tpush de\n\tpush hl\n", out);
-    if (preserve_bc_iy) fputs("\tpush iy\n\tpush bc\n", out);
-    if (preserve_hl) fputs("\tpush hl\n", out);
-    if (preserve_de) fputs("\tpush de\n", out);
-    if (preserve_bc) fputs("\tpush bc\n", out);
+    if (preserve_hl_de) mir_stream_puts("\tpush de\n\tpush hl\n", out);
+    if (preserve_bc_iy) mir_stream_puts("\tpush iy\n\tpush bc\n", out);
+    if (preserve_hl) mir_stream_puts("\tpush hl\n", out);
+    if (preserve_de) mir_stream_puts("\tpush de\n", out);
+    if (preserve_bc) mir_stream_puts("\tpush bc\n", out);
     if (mir_homed_wide_constant_binary(insn, &constant)) {
         unsigned long bits = (unsigned long)constant;
         unsigned int low = (unsigned int)(bits & 0xffffUL);
@@ -732,16 +732,16 @@ static int mir_emit_homed_wide_binary_instruction(
             return 0;
         if (insn->immediate == '+' && bits == 1) {
             int no_carry = new_label();
-            fputs("\tinc hl\n\tld a,h\n\tor l\n", out);
-            fprintf(out, "\tjp nz, L%d\n\tinc de\nL%d:\n",
+            mir_stream_puts("\tinc hl\n\tld a,h\n\tor l\n", out);
+            mir_stream_printf(out, "\tjp nz, L%d\n\tinc de\nL%d:\n",
                     no_carry, no_carry);
         } else if (insn->immediate == '-' && bits == 1) {
             int no_borrow = new_label();
-            fputs("\tld a,h\n\tor l\n", out);
-            fprintf(out, "\tjp nz, L%d\n\tdec de\nL%d:\n\tdec hl\n",
+            mir_stream_puts("\tld a,h\n\tor l\n", out);
+            mir_stream_printf(out, "\tjp nz, L%d\n\tdec de\nL%d:\n\tdec hl\n",
                     no_borrow, no_borrow);
         } else if (insn->immediate == '+' || insn->immediate == '-') {
-            fprintf(out, "\tld bc,%u\n\t%s\n\tex de,hl\n\tld bc,%u\n\t%s\n"
+            mir_stream_printf(out, "\tld bc,%u\n\t%s\n\tex de,hl\n\tld bc,%u\n\t%s\n"
                          "\tex de,hl\n",
                     low, insn->immediate == '+' ? "add hl,bc"
                                                 : "or a\n\tsbc hl,bc",
@@ -759,7 +759,7 @@ static int mir_emit_homed_wide_binary_instruction(
         } else {
             const char *operation = insn->immediate == '&' ? "and" :
                                     insn->immediate == '|' ? "or" : "xor";
-            fprintf(out,
+            mir_stream_printf(out,
                     "\tld a,l\n\t%s %u\n\tld l,a\n"
                     "\tld a,h\n\t%s %u\n\tld h,a\n"
                     "\tld a,e\n\t%s %u\n\tld e,a\n"
@@ -793,11 +793,11 @@ static int mir_emit_homed_wide_binary_instruction(
             return 0;
         }
     }
-    if (preserve_bc) fputs("\tpop bc\n", out);
-    if (preserve_de) fputs("\tpop de\n", out);
-    if (preserve_hl) fputs("\tpop hl\n", out);
-    if (preserve_bc_iy) fputs("\tpop bc\n\tpop iy\n", out);
-    if (preserve_hl_de) fputs("\tpop hl\n\tpop de\n", out);
+    if (preserve_bc) mir_stream_puts("\tpop bc\n", out);
+    if (preserve_de) mir_stream_puts("\tpop de\n", out);
+    if (preserve_hl) mir_stream_puts("\tpop hl\n", out);
+    if (preserve_bc_iy) mir_stream_puts("\tpop bc\n\tpop iy\n", out);
+    if (preserve_hl_de) mir_stream_puts("\tpop hl\n\tpop de\n", out);
     return 1;
 }
 
@@ -850,7 +850,7 @@ static int mir_homed_deferred_wide_rhs_consumer(int instruction)
 }
 
 static int mir_emit_homed_deferred_wide_rhs(
-    FILE *out, const struct MirInsn *unary,
+    MirStream *out, const struct MirInsn *unary,
     const struct MirInsn *consumer)
 {
     const struct MirInsn *source = mir_definition(unary->src1);
@@ -902,7 +902,7 @@ static int mir_homed_deferred_wide_load_pair_consumer(
 }
 
 static int mir_emit_homed_named_wide_load_to_hl_de(
-    FILE *out, const struct MirInsn *load)
+    MirStream *out, const struct MirInsn *load)
 {
     int memory_type, memory_storage, memory_offset;
     struct Sym *global;
@@ -921,13 +921,13 @@ static int mir_emit_homed_named_wide_load_to_hl_de(
     if ((memory_storage == SC_EXTERN ||
          (global != NULL && global->needs_extrn)) &&
         mir_extrn_should_emit(global))
-        fprintf(out, "\textrn %s\n", assembly_name);
-    fprintf(out, "\tld hl,(%s)\n\tld de,(%s+2)\n",
+        mir_stream_printf(out, "\textrn %s\n", assembly_name);
+    mir_stream_printf(out, "\tld hl,(%s)\n\tld de,(%s+2)\n",
             assembly_name, assembly_name);
     return 1;
 }
 
-static int mir_emit_homed_wide_indirect_load(FILE *out,
+static int mir_emit_homed_wide_indirect_load(MirStream *out,
                                              const struct MirInsn *insn)
 {
     int instruction = (int)(insn - mir.insns);
@@ -955,21 +955,21 @@ static int mir_emit_homed_wide_indirect_load(FILE *out,
         insn->dst, next_instruction);
     stack_rhs = mir_homed_stack_forwarded_wide_rhs(
         insn->dst, next_instruction);
-    if (preserve_hl_de) fputs("\tpush de\n\tpush hl\n", out);
-    if (preserve_bc_iy) fputs("\tpush iy\n\tpush bc\n", out);
-    if (preserve_hl) fputs("\tpush hl\n", out);
-    if (preserve_de) fputs("\tpush de\n", out);
+    if (preserve_hl_de) mir_stream_puts("\tpush de\n\tpush hl\n", out);
+    if (preserve_bc_iy) mir_stream_puts("\tpush iy\n\tpush bc\n", out);
+    if (preserve_hl) mir_stream_puts("\tpush hl\n", out);
+    if (preserve_de) mir_stream_puts("\tpush de\n", out);
     if (!mir_emit_home_to_hl(out, insn->src1))
         return 0;
     if (dst_color == MIR_COLOR_HL_DE &&
         mir_homed_cfg_depends_on_dynamic_index() &&
         mir.allocation_colors[insn->src1] != MIR_COLOR_DE &&
         mir.allocation_colors[insn->src1] != MIR_COLOR_HL_DE) {
-        fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tinc hl\n"
+        mir_stream_puts("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tinc hl\n"
               "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n"
               "\tex de,hl\n", out);
     } else {
-        fputs("\tpush hl\n\tld a,(hl)\n\tinc hl\n"
+        mir_stream_puts("\tpush hl\n\tld a,(hl)\n\tinc hl\n"
               "\tld h,(hl)\n\tld l,a\n\tex (sp),hl\n"
               "\tinc hl\n\tinc hl\n\tld e,(hl)\n\tinc hl\n"
               "\tld d,(hl)\n\tpop hl\n", out);
@@ -977,15 +977,15 @@ static int mir_emit_homed_wide_indirect_load(FILE *out,
     if (!forward_rhs && !stack_rhs &&
         !mir_emit_hl_de_to_wide_home(out, insn->dst))
         return 0;
-    if (preserve_de) fputs("\tpop de\n", out);
-    if (preserve_hl) fputs("\tpop hl\n", out);
-    if (preserve_bc_iy) fputs("\tpop bc\n\tpop iy\n", out);
+    if (preserve_de) mir_stream_puts("\tpop de\n", out);
+    if (preserve_hl) mir_stream_puts("\tpop hl\n", out);
+    if (preserve_bc_iy) mir_stream_puts("\tpop bc\n\tpop iy\n", out);
     if (preserve_hl_de && !stack_rhs)
-        fputs("\tpop hl\n\tpop de\n", out);
+        mir_stream_puts("\tpop hl\n\tpop de\n", out);
     return 1;
 }
 
-static int mir_emit_homed_wide_indirect_store(FILE *out,
+static int mir_emit_homed_wide_indirect_store(MirStream *out,
                                               const struct MirInsn *insn)
 {
     int instruction = (int)(insn - mir.insns);
@@ -1000,28 +1000,28 @@ static int mir_emit_homed_wide_indirect_store(FILE *out,
     int preserve_bc =
         mir_home_color_live_across(instruction, MIR_COLOR_BC);
 
-    if (preserve_hl_de) fputs("\tpush de\n\tpush hl\n", out);
-    if (preserve_bc_iy) fputs("\tpush iy\n\tpush bc\n", out);
-    if (preserve_hl) fputs("\tpush hl\n", out);
-    if (preserve_de) fputs("\tpush de\n", out);
-    if (preserve_bc) fputs("\tpush bc\n", out);
+    if (preserve_hl_de) mir_stream_puts("\tpush de\n\tpush hl\n", out);
+    if (preserve_bc_iy) mir_stream_puts("\tpush iy\n\tpush bc\n", out);
+    if (preserve_hl) mir_stream_puts("\tpush hl\n", out);
+    if (preserve_de) mir_stream_puts("\tpush de\n", out);
+    if (preserve_bc) mir_stream_puts("\tpush bc\n", out);
     if (!mir_emit_home_push(out, insn->src1))
         return 0;
     if (!mir_emit_wide_home_to_hl_de(out, insn->src2))
         return 0;
-    fputs("\tpop bc\n\tpush de\n\tex de,hl\n"
+    mir_stream_puts("\tpop bc\n\tpush de\n\tex de,hl\n"
           "\tld h,b\n\tld l,c\n\tld (hl),e\n\tinc hl\n"
           "\tld (hl),d\n\tinc hl\n\tpop de\n"
           "\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
-    if (preserve_bc) fputs("\tpop bc\n", out);
-    if (preserve_de) fputs("\tpop de\n", out);
-    if (preserve_hl) fputs("\tpop hl\n", out);
-    if (preserve_bc_iy) fputs("\tpop bc\n\tpop iy\n", out);
-    if (preserve_hl_de) fputs("\tpop hl\n\tpop de\n", out);
+    if (preserve_bc) mir_stream_puts("\tpop bc\n", out);
+    if (preserve_de) mir_stream_puts("\tpop de\n", out);
+    if (preserve_hl) mir_stream_puts("\tpop hl\n", out);
+    if (preserve_bc_iy) mir_stream_puts("\tpop bc\n\tpop iy\n", out);
+    if (preserve_hl_de) mir_stream_puts("\tpop hl\n\tpop de\n", out);
     return 1;
 }
 
-static int mir_emit_homed_wide_named_load(FILE *out,
+static int mir_emit_homed_wide_named_load(MirStream *out,
                                           const struct MirInsn *insn,
                                           const char *assembly_name)
 {
@@ -1040,18 +1040,18 @@ static int mir_emit_homed_wide_named_load(FILE *out,
         dst_color != MIR_COLOR_HL_DE &&
         mir_home_color_live_across(instruction, MIR_COLOR_DE);
 
-    if (preserve_hl_de) fputs("\tpush de\n\tpush hl\n", out);
-    if (preserve_bc_iy) fputs("\tpush iy\n\tpush bc\n", out);
-    if (preserve_hl) fputs("\tpush hl\n", out);
-    if (preserve_de) fputs("\tpush de\n", out);
-    fprintf(out, "\tld hl,(%s)\n\tld de,(%s+2)\n",
+    if (preserve_hl_de) mir_stream_puts("\tpush de\n\tpush hl\n", out);
+    if (preserve_bc_iy) mir_stream_puts("\tpush iy\n\tpush bc\n", out);
+    if (preserve_hl) mir_stream_puts("\tpush hl\n", out);
+    if (preserve_de) mir_stream_puts("\tpush de\n", out);
+    mir_stream_printf(out, "\tld hl,(%s)\n\tld de,(%s+2)\n",
             assembly_name, assembly_name);
     if (!mir_emit_hl_de_to_wide_home(out, insn->dst))
         return 0;
-    if (preserve_de) fputs("\tpop de\n", out);
-    if (preserve_hl) fputs("\tpop hl\n", out);
-    if (preserve_bc_iy) fputs("\tpop bc\n\tpop iy\n", out);
-    if (preserve_hl_de) fputs("\tpop hl\n\tpop de\n", out);
+    if (preserve_de) mir_stream_puts("\tpop de\n", out);
+    if (preserve_hl) mir_stream_puts("\tpop hl\n", out);
+    if (preserve_bc_iy) mir_stream_puts("\tpop bc\n\tpop iy\n", out);
+    if (preserve_hl_de) mir_stream_puts("\tpop hl\n\tpop de\n", out);
     return 1;
 }
 
@@ -1078,7 +1078,7 @@ static int mir_homed_previous_wide_value_in_hl_de(
                previous, MIR_COLOR_DE);
 }
 
-static int mir_emit_homed_wide_named_store(FILE *out,
+static int mir_emit_homed_wide_named_store(MirStream *out,
                                            const struct MirInsn *insn,
                                            const char *assembly_name)
 {
@@ -1097,27 +1097,27 @@ static int mir_emit_homed_wide_named_store(FILE *out,
         mir_home_color_live_across(instruction, MIR_COLOR_BC);
 
     if (!direct) {
-        if (preserve_hl_de) fputs("\tpush de\n\tpush hl\n", out);
-        if (preserve_bc_iy) fputs("\tpush iy\n\tpush bc\n", out);
-        if (preserve_hl) fputs("\tpush hl\n", out);
-        if (preserve_de) fputs("\tpush de\n", out);
-        if (preserve_bc) fputs("\tpush bc\n", out);
+        if (preserve_hl_de) mir_stream_puts("\tpush de\n\tpush hl\n", out);
+        if (preserve_bc_iy) mir_stream_puts("\tpush iy\n\tpush bc\n", out);
+        if (preserve_hl) mir_stream_puts("\tpush hl\n", out);
+        if (preserve_de) mir_stream_puts("\tpush de\n", out);
+        if (preserve_bc) mir_stream_puts("\tpush bc\n", out);
         if (!mir_emit_wide_home_to_hl_de(out, insn->src1))
             return 0;
     }
-    fprintf(out, "\tld (%s),hl\n\tld (%s+2),de\n",
+    mir_stream_printf(out, "\tld (%s),hl\n\tld (%s+2),de\n",
             assembly_name, assembly_name);
     if (!direct) {
-        if (preserve_bc) fputs("\tpop bc\n", out);
-        if (preserve_de) fputs("\tpop de\n", out);
-        if (preserve_hl) fputs("\tpop hl\n", out);
-        if (preserve_bc_iy) fputs("\tpop bc\n\tpop iy\n", out);
-        if (preserve_hl_de) fputs("\tpop hl\n\tpop de\n", out);
+        if (preserve_bc) mir_stream_puts("\tpop bc\n", out);
+        if (preserve_de) mir_stream_puts("\tpop de\n", out);
+        if (preserve_hl) mir_stream_puts("\tpop hl\n", out);
+        if (preserve_bc_iy) mir_stream_puts("\tpop bc\n\tpop iy\n", out);
+        if (preserve_hl_de) mir_stream_puts("\tpop hl\n\tpop de\n", out);
     }
     return 1;
 }
 
-static int mir_emit_homed_wide_frame_load(FILE *out,
+static int mir_emit_homed_wide_frame_load(MirStream *out,
                                            const struct MirInsn *insn,
                                            int offset)
 {
@@ -1136,24 +1136,24 @@ static int mir_emit_homed_wide_frame_load(FILE *out,
         dst_color != MIR_COLOR_HL_DE &&
         mir_home_color_live_across(instruction, MIR_COLOR_DE);
 
-    if (preserve_hl_de) fputs("\tpush de\n\tpush hl\n", out);
-    if (preserve_bc_iy) fputs("\tpush iy\n\tpush bc\n", out);
-    if (preserve_hl) fputs("\tpush hl\n", out);
-    if (preserve_de) fputs("\tpush de\n", out);
-    fprintf(out,
+    if (preserve_hl_de) mir_stream_puts("\tpush de\n\tpush hl\n", out);
+    if (preserve_bc_iy) mir_stream_puts("\tpush iy\n\tpush bc\n", out);
+    if (preserve_hl) mir_stream_puts("\tpush hl\n", out);
+    if (preserve_de) mir_stream_puts("\tpush de\n", out);
+    mir_stream_printf(out,
             "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
             "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
             offset, offset + 1, offset + 2, offset + 3);
     if (!mir_emit_hl_de_to_wide_home(out, insn->dst))
         return 0;
-    if (preserve_de) fputs("\tpop de\n", out);
-    if (preserve_hl) fputs("\tpop hl\n", out);
-    if (preserve_bc_iy) fputs("\tpop bc\n\tpop iy\n", out);
-    if (preserve_hl_de) fputs("\tpop hl\n\tpop de\n", out);
+    if (preserve_de) mir_stream_puts("\tpop de\n", out);
+    if (preserve_hl) mir_stream_puts("\tpop hl\n", out);
+    if (preserve_bc_iy) mir_stream_puts("\tpop bc\n\tpop iy\n", out);
+    if (preserve_hl_de) mir_stream_puts("\tpop hl\n\tpop de\n", out);
     return 1;
 }
 
-static int mir_emit_homed_wide_frame_store(FILE *out,
+static int mir_emit_homed_wide_frame_store(MirStream *out,
                                             const struct MirInsn *insn,
                                             int offset)
 {
@@ -1176,30 +1176,30 @@ static int mir_emit_homed_wide_frame_store(FILE *out,
         source_offset == offset)
         return 1;
     if (!direct) {
-        if (preserve_hl_de) fputs("\tpush de\n\tpush hl\n", out);
-        if (preserve_bc_iy) fputs("\tpush iy\n\tpush bc\n", out);
-        if (preserve_hl) fputs("\tpush hl\n", out);
-        if (preserve_de) fputs("\tpush de\n", out);
-        if (preserve_bc) fputs("\tpush bc\n", out);
+        if (preserve_hl_de) mir_stream_puts("\tpush de\n\tpush hl\n", out);
+        if (preserve_bc_iy) mir_stream_puts("\tpush iy\n\tpush bc\n", out);
+        if (preserve_hl) mir_stream_puts("\tpush hl\n", out);
+        if (preserve_de) mir_stream_puts("\tpush de\n", out);
+        if (preserve_bc) mir_stream_puts("\tpush bc\n", out);
         if (!mir_emit_wide_home_to_hl_de(out, insn->src1))
             return 0;
     }
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld (ix%+d),l\n\tld (ix%+d),h\n"
             "\tld (ix%+d),e\n\tld (ix%+d),d\n",
             offset, offset + 1, offset + 2, offset + 3);
     if (!direct) {
-        if (preserve_bc) fputs("\tpop bc\n", out);
-        if (preserve_de) fputs("\tpop de\n", out);
-        if (preserve_hl) fputs("\tpop hl\n", out);
-        if (preserve_bc_iy) fputs("\tpop bc\n\tpop iy\n", out);
-        if (preserve_hl_de) fputs("\tpop hl\n\tpop de\n", out);
+        if (preserve_bc) mir_stream_puts("\tpop bc\n", out);
+        if (preserve_de) mir_stream_puts("\tpop de\n", out);
+        if (preserve_hl) mir_stream_puts("\tpop hl\n", out);
+        if (preserve_bc_iy) mir_stream_puts("\tpop bc\n\tpop iy\n", out);
+        if (preserve_hl_de) mir_stream_puts("\tpop hl\n\tpop de\n", out);
     }
     return 1;
 }
 
 static int mir_emit_homed_constant_absolute_load(
-    FILE *out, const struct MirInsn *insn)
+    MirStream *out, const struct MirInsn *insn)
 {
     char operand[160];
     int instruction = (int)(insn - mir.insns);
@@ -1213,36 +1213,36 @@ static int mir_emit_homed_constant_absolute_load(
             out, insn->src1, operand, sizeof(operand)))
         return 0;
     if (preserve_hl_de)
-        fputs("\tpush de\n\tpush hl\n", out);
+        mir_stream_puts("\tpush de\n\tpush hl\n", out);
     if (preserve_hl)
-        fputs("\tpush hl\n", out);
+        mir_stream_puts("\tpush hl\n", out);
     if (insn->memory_size == 1) {
-        fprintf(out, "\tld a,(%s)\n\tld l,a\n", operand);
+        mir_stream_printf(out, "\tld a,(%s)\n\tld l,a\n", operand);
         if (type_is_bool(insn->type)) {
             int end_label = new_label();
-            fputs("\tld a,l\n\tor a\n\tld hl,0\n", out);
-            fprintf(out, "\tjp z, L%d\n\tinc hl\nL%d:\n",
+            mir_stream_puts("\tld a,l\n\tor a\n\tld hl,0\n", out);
+            mir_stream_printf(out, "\tjp z, L%d\n\tinc hl\nL%d:\n",
                     end_label, end_label);
         } else if ((insn->type & TYPE_UNSIGNED) != 0) {
-            fputs("\tld h,0\n", out);
+            mir_stream_puts("\tld h,0\n", out);
         } else {
             mir_emit_signed_byte_extend(out);
         }
     } else {
-        fprintf(out, "\tld hl,(%s)\n", operand);
+        mir_stream_printf(out, "\tld hl,(%s)\n", operand);
     }
     if (mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
         !mir_emit_hl_to_home(out, insn->dst))
         return 0;
     if (preserve_hl)
-        fputs("\tpop hl\n", out);
+        mir_stream_puts("\tpop hl\n", out);
     if (preserve_hl_de)
-        fputs("\tpop hl\n\tpop de\n", out);
+        mir_stream_puts("\tpop hl\n\tpop de\n", out);
     return 1;
 }
 
 static int mir_emit_homed_constant_absolute_store(
-    FILE *out, const struct MirInsn *insn)
+    MirStream *out, const struct MirInsn *insn)
 {
     char operand[160];
     int instruction = (int)(insn - mir.insns);
@@ -1256,19 +1256,19 @@ static int mir_emit_homed_constant_absolute_store(
             out, insn->src1, operand, sizeof(operand)))
         return 0;
     if (preserve_hl_de)
-        fputs("\tpush de\n\tpush hl\n", out);
+        mir_stream_puts("\tpush de\n\tpush hl\n", out);
     if (preserve_hl)
-        fputs("\tpush hl\n", out);
+        mir_stream_puts("\tpush hl\n", out);
     if (!mir_emit_home_to_hl(out, insn->src2))
         return 0;
     if (insn->memory_size == 1)
-        fprintf(out, "\tld a,l\n\tld (%s),a\n", operand);
+        mir_stream_printf(out, "\tld a,l\n\tld (%s),a\n", operand);
     else
-        fprintf(out, "\tld (%s),hl\n", operand);
+        mir_stream_printf(out, "\tld (%s),hl\n", operand);
     if (preserve_hl)
-        fputs("\tpop hl\n", out);
+        mir_stream_puts("\tpop hl\n", out);
     if (preserve_hl_de)
-        fputs("\tpop hl\n\tpop de\n", out);
+        mir_stream_puts("\tpop hl\n\tpop de\n", out);
     return 1;
 }
 
@@ -1408,7 +1408,7 @@ static int mir_homed_paired_byte_value(int value)
 }
 
 static int mir_emit_homed_paired_byte_call(
-    FILE *out, int call_index, const char *assembly_name,
+    MirStream *out, int call_index, const char *assembly_name,
     const struct Sym *callee)
 {
     struct MirPairedByteCall pair;
@@ -1423,22 +1423,22 @@ static int mir_emit_homed_paired_byte_call(
     if (!mir_emit_home_to_hl(out, pair.base))
         return 0;
     if (pair.offsets[lower_index] != 0)
-        fprintf(out, "\tld de,%d\n\tadd hl,de\n",
+        mir_stream_printf(out, "\tld de,%d\n\tadd hl,de\n",
                 pair.offsets[lower_index]);
-    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tld h,0\n", out);
+    mir_stream_puts("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tld h,0\n", out);
     for (argument = 1; argument >= 0; --argument) {
         if (argument == lower_index)
-            fputs("\tld l,e\n", out);
+            mir_stream_puts("\tld l,e\n", out);
         else if (argument == upper_index)
-            fputs("\tld l,d\n", out);
+            mir_stream_puts("\tld l,d\n", out);
         else
             return 0;
-        fputs("\tpush hl\n", out);
+        mir_stream_puts("\tpush hl\n", out);
     }
     if (callee->needs_extrn &&
         mir_extrn_should_emit_name(assembly_name))
-        fprintf(out, "\textrn %s\n", assembly_name);
-    fprintf(out, "\tcall %s\n\tpop bc\n\tpop bc\n", assembly_name);
+        mir_stream_printf(out, "\textrn %s\n", assembly_name);
+    mir_stream_printf(out, "\tcall %s\n\tpop bc\n\tpop bc\n", assembly_name);
     if (type_ptr_depth(mir.insns[call_index].type) > 0 ||
         (mir.insns[call_index].type & 15) != TYPE_VOID)
         return mir_emit_hl_to_home(
@@ -1446,7 +1446,7 @@ static int mir_emit_homed_paired_byte_call(
     return 1;
 }
 
-int mir_try_emit_homed_scalar_cfg(FILE *out)
+int mir_try_emit_homed_scalar_cfg(MirStream *out)
 {
     int *labels;
     int uses_iy;
@@ -2049,7 +2049,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                         if ((memory_storage == SC_EXTERN ||
                              (global != NULL && global->needs_extrn)) &&
                             mir_extrn_should_emit(global))
-                            fprintf(out, "\textrn %s\n", assembly_name);
+                            mir_stream_printf(out, "\textrn %s\n", assembly_name);
                         if (!mir_emit_homed_wide_named_store(
                                 out, insn, assembly_name))
                             goto done;
@@ -2073,16 +2073,16 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     mir.allocation_colors[insn->src1] != MIR_COLOR_HL &&
                     mir_home_color_live_across(instruction, MIR_COLOR_HL);
                 if (preserve_hl_de)
-                    fputs("\tpush de\n\tpush hl\n", out);
+                    mir_stream_puts("\tpush de\n\tpush hl\n", out);
                 if (preserve_hl)
-                    fputs("\tpush hl\n", out);
+                    mir_stream_puts("\tpush hl\n", out);
                 if (!mir_emit_home_to_hl(out, insn->src1))
                     goto done;
                 if (memory_storage == SC_LOCAL ||
                     memory_storage == SC_PARAM) {
-                    fprintf(out, "\tld (ix%+d),l\n", memory_offset);
+                    mir_stream_printf(out, "\tld (ix%+d),l\n", memory_offset);
                     if (type_size(memory_type) == 2)
-                        fprintf(out, "\tld (ix%+d),h\n",
+                        mir_stream_printf(out, "\tld (ix%+d),h\n",
                                 memory_offset + 1);
                 } else {
                     struct Sym *global = find_global(insn->name);
@@ -2092,17 +2092,17 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     if ((memory_storage == SC_EXTERN ||
                          (global != NULL && global->needs_extrn)) &&
                         mir_extrn_should_emit(global))
-                        fprintf(out, "\textrn %s\n", assembly_name);
+                        mir_stream_printf(out, "\textrn %s\n", assembly_name);
                     if (type_size(memory_type) == 1)
-                        fprintf(out, "\tld a,l\n\tld (%s),a\n",
+                        mir_stream_printf(out, "\tld a,l\n\tld (%s),a\n",
                                 assembly_name);
                     else
-                        fprintf(out, "\tld (%s),hl\n", assembly_name);
+                        mir_stream_printf(out, "\tld (%s),hl\n", assembly_name);
                 }
                 if (preserve_hl)
-                    fputs("\tpop hl\n", out);
+                    mir_stream_puts("\tpop hl\n", out);
                 if (preserve_hl_de)
-                    fputs("\tpop hl\n\tpop de\n", out);
+                    mir_stream_puts("\tpop hl\n\tpop de\n", out);
             }
             break;
         case MIR_LOAD:
@@ -2117,7 +2117,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     if (!mir_emit_homed_named_wide_load_to_hl_de(
                             out, insn))
                         goto done;
-                    fputs("\tpush de\n\tpush hl\n", out);
+                    mir_stream_puts("\tpush de\n\tpush hl\n", out);
                     deferred_wide_left = insn->dst;
                     break;
                 }
@@ -2153,7 +2153,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                         if ((memory_storage == SC_EXTERN ||
                              (global != NULL && global->needs_extrn)) &&
                             mir_extrn_should_emit(global))
-                            fprintf(out, "\textrn %s\n", assembly_name);
+                            mir_stream_printf(out, "\textrn %s\n", assembly_name);
                         if (!mir_emit_homed_wide_named_load(
                                 out, insn, assembly_name))
                             goto done;
@@ -2168,20 +2168,20 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
                     mir_home_color_live_across(instruction, MIR_COLOR_HL);
                 if (preserve_hl_de)
-                    fputs("\tpush de\n\tpush hl\n", out);
+                    mir_stream_puts("\tpush de\n\tpush hl\n", out);
                 if (preserve_hl)
-                    fputs("\tpush hl\n", out);
+                    mir_stream_puts("\tpush hl\n", out);
                 if (memory_storage == SC_LOCAL ||
                     memory_storage == SC_PARAM) {
                     if (type_size(memory_type) == 1) {
-                        fprintf(out, "\tld l,(ix%+d)\n", memory_offset);
+                        mir_stream_printf(out, "\tld l,(ix%+d)\n", memory_offset);
                     } else if (memory_offset >= -128 &&
                         memory_offset + 1 <= 127) {
-                        fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+                        mir_stream_printf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
                                 memory_offset, memory_offset + 1);
                     } else {
-                        fputs("\tpush ix\n\tpop hl\n", out);
-                        fprintf(out,
+                        mir_stream_puts("\tpush ix\n\tpop hl\n", out);
+                        mir_stream_printf(out,
                                 "\tld de,%d\n\tadd hl,de\n"
                                 "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n"
                                 "\tld l,a\n",
@@ -2196,21 +2196,21 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                          (memory_storage == SC_FUNC && global != NULL &&
                           global->needs_extrn)) &&
                         mir_extrn_should_emit(global))
-                        fprintf(out, "\textrn %s\n", assembly_name);
+                        mir_stream_printf(out, "\textrn %s\n", assembly_name);
                     if (type_size(memory_type) == 1)
-                        fprintf(out, "\tld a,(%s)\n\tld l,a\n",
+                        mir_stream_printf(out, "\tld a,(%s)\n\tld l,a\n",
                                 assembly_name);
                     else
-                        fprintf(out, "\tld hl,(%s)\n", assembly_name);
+                        mir_stream_printf(out, "\tld hl,(%s)\n", assembly_name);
                 }
                 if (type_size(memory_type) == 1) {
                     if (type_is_bool(memory_type)) {
                         int end_label = new_label();
-                        fputs("\tld a,l\n\tor a\n\tld hl,0\n", out);
-                        fprintf(out, "\tjp z, L%d\n\tinc hl\nL%d:\n",
+                        mir_stream_puts("\tld a,l\n\tor a\n\tld hl,0\n", out);
+                        mir_stream_printf(out, "\tjp z, L%d\n\tinc hl\nL%d:\n",
                                 end_label, end_label);
                     } else if ((memory_type & TYPE_UNSIGNED) != 0) {
-                        fputs("\tld h,0\n", out);
+                        mir_stream_puts("\tld h,0\n", out);
                     } else {
                         mir_emit_signed_byte_extend(out);
                     }
@@ -2218,9 +2218,9 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                 if (!mir_emit_hl_to_home(out, insn->dst))
                     goto done;
                 if (preserve_hl)
-                    fputs("\tpop hl\n", out);
+                    mir_stream_puts("\tpop hl\n", out);
                 if (preserve_hl_de)
-                    fputs("\tpop hl\n\tpop de\n", out);
+                    mir_stream_puts("\tpop hl\n\tpop de\n", out);
             }
             break;
         case MIR_ADDRESS:
@@ -2257,7 +2257,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                          (global != NULL && global->storage == SC_FUNC &&
                           global->needs_extrn)) &&
                         mir_extrn_should_emit(global))
-                        fprintf(out, "\textrn %s\n", assembly_name);
+                        mir_stream_printf(out, "\textrn %s\n", assembly_name);
                     if (!mir_emit_label_address_to_home(out, insn->dst,
                                                         assembly_name))
                         goto done;
@@ -2322,9 +2322,9 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                         mir_home_color_live_across(
                             instruction, MIR_COLOR_DE);
                     if (preserve_hl_de)
-                        fputs("\tpush de\n\tpush hl\n", out);
-                    if (preserve_hl) fputs("\tpush hl\n", out);
-                    if (preserve_de) fputs("\tpush de\n", out);
+                        mir_stream_puts("\tpush de\n\tpush hl\n", out);
+                    if (preserve_hl) mir_stream_puts("\tpush hl\n", out);
+                    if (preserve_de) mir_stream_puts("\tpush de\n", out);
                     if (!mir_emit_home_push(out, insn->src1))
                         goto done;
                     {
@@ -2341,14 +2341,14 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     if (insn->immediate != 1)
                         mir_emit_mul_hl_const(
                             out, (unsigned long)insn->immediate & 0xffffUL);
-                    fputs("\tpop de\n\tadd hl,de\n", out);
+                    mir_stream_puts("\tpop de\n\tadd hl,de\n", out);
                     if (dst_color != MIR_COLOR_HL &&
                         !mir_emit_hl_to_home(out, insn->dst))
                         goto done;
-                    if (preserve_de) fputs("\tpop de\n", out);
-                    if (preserve_hl) fputs("\tpop hl\n", out);
+                    if (preserve_de) mir_stream_puts("\tpop de\n", out);
+                    if (preserve_hl) mir_stream_puts("\tpop hl\n", out);
                     if (preserve_hl_de)
-                        fputs("\tpop hl\n\tpop de\n", out);
+                        mir_stream_puts("\tpop hl\n\tpop de\n", out);
                 }
             }
             break;
@@ -2382,25 +2382,25 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
                     mir_home_color_live_across(instruction, MIR_COLOR_HL);
                 if (preserve_hl_de)
-                    fputs("\tpush de\n\tpush hl\n", out);
+                    mir_stream_puts("\tpush de\n\tpush hl\n", out);
                 if (preserve_hl)
-                    fputs("\tpush hl\n", out);
+                    mir_stream_puts("\tpush hl\n", out);
                 if (!mir_emit_home_to_hl(out, insn->src1))
                     goto done;
                 if (insn->memory_size == 1) {
-                    fputs("\tld l,(hl)\n", out);
+                    mir_stream_puts("\tld l,(hl)\n", out);
                     if (type_is_bool(insn->type)) {
                         int end_label = new_label();
-                        fputs("\tld a,l\n\tor a\n\tld hl,0\n", out);
-                        fprintf(out, "\tjp z, L%d\n\tinc hl\nL%d:\n",
+                        mir_stream_puts("\tld a,l\n\tor a\n\tld hl,0\n", out);
+                        mir_stream_printf(out, "\tjp z, L%d\n\tinc hl\nL%d:\n",
                                 end_label, end_label);
                     } else if ((insn->type & TYPE_UNSIGNED) != 0) {
-                        fputs("\tld h,0\n", out);
+                        mir_stream_puts("\tld h,0\n", out);
                     } else {
                         mir_emit_signed_byte_extend(out);
                     }
                 } else {
-                    fputs("\tld a,(hl)\n\tinc hl\n"
+                    mir_stream_puts("\tld a,(hl)\n\tinc hl\n"
                           "\tld h,(hl)\n\tld l,a\n", out);
                 }
                 if (insn->bit_width > 0)
@@ -2408,8 +2408,8 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                 if (mir.allocation_colors[insn->dst] != MIR_COLOR_HL &&
                     !mir_emit_hl_to_home(out, insn->dst))
                     goto done;
-                if (preserve_hl) fputs("\tpop hl\n", out);
-                if (preserve_hl_de) fputs("\tpop hl\n\tpop de\n", out);
+                if (preserve_hl) mir_stream_puts("\tpop hl\n", out);
+                if (preserve_hl_de) mir_stream_puts("\tpop hl\n\tpop de\n", out);
             }
             break;
         case MIR_STORE_INDIRECT:
@@ -2453,39 +2453,39 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                         mir_home_color_live_across(
                             instruction, MIR_COLOR_BC);
                     if (preserve_hl_de)
-                        fputs("\tpush de\n\tpush hl\n", out);
+                        mir_stream_puts("\tpush de\n\tpush hl\n", out);
                     if (preserve_bc_iy)
-                        fputs("\tpush iy\n\tpush bc\n", out);
-                    if (preserve_hl) fputs("\tpush hl\n", out);
-                    if (preserve_de) fputs("\tpush de\n", out);
-                    if (preserve_bc) fputs("\tpush bc\n", out);
+                        mir_stream_puts("\tpush iy\n\tpush bc\n", out);
+                    if (preserve_hl) mir_stream_puts("\tpush hl\n", out);
+                    if (preserve_de) mir_stream_puts("\tpush de\n", out);
+                    if (preserve_bc) mir_stream_puts("\tpush bc\n", out);
                     if (!mir_emit_home_to_hl(out, insn->src2))
                         goto done;
                     mir_emit_hl_and_const(
                         out, insn->bit_width >= 16
                             ? 0xffffU : (1U << insn->bit_width) - 1U);
                     for (shift = 0; shift < insn->bit_shift; ++shift)
-                        fputs("\tadd hl,hl\n", out);
+                        mir_stream_puts("\tadd hl,hl\n", out);
                     mir_emit_hl_and_const(out, insn->bit_mask);
-                    fputs("\tpush hl\n", out);
+                    mir_stream_puts("\tpush hl\n", out);
                     if (!mir_emit_home_to_hl(out, insn->src1))
                         goto done;
-                    fputs("\tpush hl\n\tld a,(hl)\n\tinc hl\n"
+                    mir_stream_puts("\tpush hl\n\tld a,(hl)\n\tinc hl\n"
                           "\tld h,(hl)\n\tld l,a\n", out);
                     mir_emit_hl_and_const(
                         out, (~insn->bit_mask) & 0xffffU);
-                    fputs("\tpop bc\n\tpop de\n"
+                    mir_stream_puts("\tpop bc\n\tpop de\n"
                           "\tld a,l\n\tor e\n\tld l,a\n"
                           "\tld a,h\n\tor d\n\tld h,a\n"
                           "\tex de,hl\n\tld h,b\n\tld l,c\n"
                           "\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
-                    if (preserve_bc) fputs("\tpop bc\n", out);
-                    if (preserve_de) fputs("\tpop de\n", out);
-                    if (preserve_hl) fputs("\tpop hl\n", out);
+                    if (preserve_bc) mir_stream_puts("\tpop bc\n", out);
+                    if (preserve_de) mir_stream_puts("\tpop de\n", out);
+                    if (preserve_hl) mir_stream_puts("\tpop hl\n", out);
                     if (preserve_bc_iy)
-                        fputs("\tpop bc\n\tpop iy\n", out);
+                        mir_stream_puts("\tpop bc\n\tpop iy\n", out);
                     if (preserve_hl_de)
-                        fputs("\tpop hl\n\tpop de\n", out);
+                        mir_stream_puts("\tpop hl\n\tpop de\n", out);
                     break;
                 }
                 /* Item 23: preserve any OTHER value still live in hl/de
@@ -2506,32 +2506,32 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                 preserve_de = !preserve_hl_de &&
                     mir_home_color_live_across(instruction, MIR_COLOR_DE);
                 if (preserve_hl_de)
-                    fputs("\tpush de\n\tpush hl\n", out);
-                if (preserve_hl) fputs("\tpush hl\n", out);
-                if (preserve_de) fputs("\tpush de\n", out);
+                    mir_stream_puts("\tpush de\n\tpush hl\n", out);
+                if (preserve_hl) mir_stream_puts("\tpush hl\n", out);
+                if (preserve_de) mir_stream_puts("\tpush de\n", out);
                 if (mir.allocation_colors[insn->src2] == MIR_COLOR_HL) {
                     /* Loading the address into HL first would destroy a
                      * value already homed there. Preserve the value before
                      * materializing the address, then arrange address/value
                      * in HL/DE without rereading either home. */
-                    fputs("\tpush hl\n", out);
+                    mir_stream_puts("\tpush hl\n", out);
                     if (!mir_emit_home_to_hl(out, insn->src1))
                         goto done;
-                    fputs("\tex de,hl\n\tpop hl\n\tex de,hl\n", out);
+                    mir_stream_puts("\tex de,hl\n\tpop hl\n\tex de,hl\n", out);
                 } else {
                     if (!mir_emit_home_to_hl(out, insn->src1))
                         goto done;
-                    fputs("\tpush hl\n", out);
+                    mir_stream_puts("\tpush hl\n", out);
                     if (!mir_emit_home_to_hl(out, insn->src2))
                         goto done;
-                    fputs("\tex de,hl\n\tpop hl\n", out);
+                    mir_stream_puts("\tex de,hl\n\tpop hl\n", out);
                 }
-                fputs("\tld (hl),e\n", out);
+                mir_stream_puts("\tld (hl),e\n", out);
                 if (insn->memory_size != 1)
-                    fputs("\tinc hl\n\tld (hl),d\n", out);
-                if (preserve_de) fputs("\tpop de\n", out);
-                if (preserve_hl) fputs("\tpop hl\n", out);
-                if (preserve_hl_de) fputs("\tpop hl\n\tpop de\n", out);
+                    mir_stream_puts("\tinc hl\n\tld (hl),d\n", out);
+                if (preserve_de) mir_stream_puts("\tpop de\n", out);
+                if (preserve_hl) mir_stream_puts("\tpop hl\n", out);
+                if (preserve_hl_de) mir_stream_puts("\tpop hl\n\tpop de\n", out);
             }
             break;
         case MIR_COPY_AGGREGATE:
@@ -2562,27 +2562,27 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                  int preserve_bc = !preserve_bc_iy &&
                      mir_home_color_live_across(instruction, MIR_COLOR_BC);
                  if (preserve_hl_de)
-                     fputs("\tpush de\n\tpush hl\n", out);
+                     mir_stream_puts("\tpush de\n\tpush hl\n", out);
                  if (preserve_bc_iy)
-                     fputs("\tpush iy\n\tpush bc\n", out);
-                 if (preserve_hl) fputs("\tpush hl\n", out);
-                 if (preserve_de) fputs("\tpush de\n", out);
-                 if (preserve_bc) fputs("\tpush bc\n", out);
+                     mir_stream_puts("\tpush iy\n\tpush bc\n", out);
+                 if (preserve_hl) mir_stream_puts("\tpush hl\n", out);
+                 if (preserve_de) mir_stream_puts("\tpush de\n", out);
+                 if (preserve_bc) mir_stream_puts("\tpush bc\n", out);
                 if (!mir_emit_home_to_hl(out, insn->src1))
                     goto done;
-                fputs("\tpush hl\n", out);
+                mir_stream_puts("\tpush hl\n", out);
                 if (!mir_emit_home_to_hl(out, insn->src2))
                     goto done;
-                fputs("\tpop de\n", out);
+                mir_stream_puts("\tpop de\n", out);
                 if (insn->memory_size > 0)
-                    fprintf(out, "\tld bc,%d\n\tldir\n", insn->memory_size);
-                if (preserve_bc) fputs("\tpop bc\n", out);
-                if (preserve_de) fputs("\tpop de\n", out);
-                if (preserve_hl) fputs("\tpop hl\n", out);
+                    mir_stream_printf(out, "\tld bc,%d\n\tldir\n", insn->memory_size);
+                if (preserve_bc) mir_stream_puts("\tpop bc\n", out);
+                if (preserve_de) mir_stream_puts("\tpop de\n", out);
+                if (preserve_hl) mir_stream_puts("\tpop hl\n", out);
                 if (preserve_bc_iy)
-                    fputs("\tpop bc\n\tpop iy\n", out);
+                    mir_stream_puts("\tpop bc\n\tpop iy\n", out);
                 if (preserve_hl_de)
-                    fputs("\tpop hl\n\tpop de\n", out);
+                    mir_stream_puts("\tpop hl\n\tpop de\n", out);
             }
             break;
         case MIR_LABEL:
@@ -2592,7 +2592,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
              * nothing ever jumps to - see mir_label_is_jump_target's
              * comment in dcc_mir.c for why this is always safe. */
             if (mir_label_is_jump_target(insn->label))
-                fprintf(out, "L%d:\n", labels[insn->label]);
+                mir_stream_printf(out, "L%d:\n", labels[insn->label]);
             break;
         case MIR_PARAM:
             if (!mir_value_has_use(insn->dst))
@@ -2616,18 +2616,18 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
             if (type_size(object->type) == 4) {
                 int offset = object->offset + (uses_iy ? 2 : 0);
                 if (mir.allocation_colors[insn->dst] == MIR_COLOR_HL_DE)
-                    fprintf(out,
+                    mir_stream_printf(out,
                             "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
                             "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
                             offset, offset + 1, offset + 2, offset + 3);
                 else if (mir.allocation_colors[insn->dst] ==
                          MIR_COLOR_BC_IY) {
-                    fputs("\tpush hl\n", out);
-                    fprintf(out,
+                    mir_stream_puts("\tpush hl\n", out);
+                    mir_stream_printf(out,
                             "\tld c,(ix%+d)\n\tld b,(ix%+d)\n"
                             "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
                             offset, offset + 1, offset + 2, offset + 3);
-                    fputs("\tpush hl\n\tpop iy\n\tpop hl\n", out);
+                    mir_stream_puts("\tpush hl\n\tpop iy\n\tpop hl\n", out);
                 } else {
                     goto done;
                 }
@@ -2776,7 +2776,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
              * unreachable-jump elision too. */
             if (!mir_target_is_noop_fallthrough(i, target) &&
                 mir_insn_is_reachable(i))
-                fprintf(out, "\tjp L%d\n", labels[insn->label]);
+                mir_stream_printf(out, "\tjp L%d\n", labels[insn->label]);
             break;
         case MIR_BRANCH_FALSE:
             target = mir_find_label(insn->label);
@@ -2808,11 +2808,11 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                         if (true_has_phi &&
                             !mir_emit_homed_phi_copies(out, i, i + 1))
                             goto done;
-                        fprintf(out, "\tjp L%d\nL%d:\n",
+                        mir_stream_printf(out, "\tjp L%d\nL%d:\n",
                                 continue_label, false_stub);
                         if (!mir_emit_homed_phi_copies(out, i, target))
                             goto done;
-                        fprintf(out, "\tjp L%d\nL%d:\n",
+                        mir_stream_printf(out, "\tjp L%d\nL%d:\n",
                                 labels[insn->label], continue_label);
                     }
                     break;
@@ -2837,11 +2837,11 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                         !mir_emit_homed_phi_copies(out, i, i + 1))
                         goto done;
                     if (false_has_phi) {
-                        fprintf(out, "\tjp L%d\nL%d:\n",
+                        mir_stream_printf(out, "\tjp L%d\nL%d:\n",
                                 continue_label, false_label);
                         if (!mir_emit_homed_phi_copies(out, i, target))
                             goto done;
-                        fprintf(out, "\tjp L%d\nL%d:\n",
+                        mir_stream_printf(out, "\tjp L%d\nL%d:\n",
                                 labels[insn->label], continue_label);
                     }
                     break;
@@ -2864,7 +2864,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                 goto done;
             if (!mir_emit_homed_phi_copies(out, i, target))
                 goto done;
-            fprintf(out, "\tjp L%d\nL%d:\n", labels[insn->label], true_label);
+            mir_stream_printf(out, "\tjp L%d\nL%d:\n", labels[insn->label], true_label);
             if (i + 1 < mir.count &&
                 !mir_emit_homed_phi_copies(out, i, i + 1))
                 goto done;
@@ -2900,7 +2900,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                         !mir_emit_home_push(out, fill_value) ||
                         !mir_emit_home_push(out, count_value))
                         goto done;
-                    fputs("\tpop bc\n\tpop de\n\tpop hl\n", out);
+                    mir_stream_puts("\tpop bc\n\tpop de\n\tpop hl\n", out);
                     mir_emit_runtime_call(out, "__msf");
                     if (type_ptr_depth(insn->type) > 0 ||
                         (insn->type & 15) != TYPE_VOID) {
@@ -2921,7 +2921,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     if (!mir_emit_home_push(out, s_value) ||
                         !mir_emit_home_push(out, c_value))
                         goto done;
-                    fputs("\tpop hl\n\tld a,l\n\tpop hl\n", out);
+                    mir_stream_puts("\tpop hl\n\tld a,l\n\tpop hl\n", out);
                     mir_emit_runtime_call(out, "__chf");
                     if (!mir_emit_hl_to_home(out, insn->dst))
                         goto done;
@@ -2931,7 +2931,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     if (!mir_emit_home_push(out, s_value) ||
                         !mir_emit_home_push(out, c_value))
                         goto done;
-                    fputs("\tpop hl\n\tld a,l\n\tpop hl\n", out);
+                    mir_stream_puts("\tpop hl\n\tld a,l\n\tpop hl\n", out);
                     mir_emit_runtime_call(out, "__rcf");
                     if (!mir_emit_hl_to_home(out, insn->dst))
                         goto done;
@@ -2943,7 +2943,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                         !mir_emit_home_push(out, c_value) ||
                         !mir_emit_home_push(out, n_value))
                         goto done;
-                    fputs("\tpop bc\n\tpop de\n\tpop hl\n", out);
+                    mir_stream_puts("\tpop bc\n\tpop de\n\tpop hl\n", out);
                     mir_emit_runtime_call(out, "__mhf");
                     if (!mir_emit_hl_to_home(out, insn->dst))
                         goto done;
@@ -2955,7 +2955,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                         !mir_emit_home_push(out, s2_value) ||
                         !mir_emit_home_push(out, n_value))
                         goto done;
-                    fputs("\tpop bc\n\tpop hl\n\tpop de\n", out);
+                    mir_stream_puts("\tpop bc\n\tpop hl\n\tpop de\n", out);
                     mir_emit_runtime_call(out, "__cmpf");
                     if (!mir_emit_hl_to_home(out, insn->dst))
                         goto done;
@@ -2967,7 +2967,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                         !mir_emit_home_push(out, fill_value) ||
                         !mir_emit_home_push(out, n_value))
                         goto done;
-                    fputs("\tpop bc\n\tpop hl\n\tpop de\n", out);
+                    mir_stream_puts("\tpop bc\n\tpop hl\n\tpop de\n", out);
                     mir_emit_runtime_call(out, "__mcf");
                     if (!mir_emit_hl_to_home(out, insn->dst))
                         goto done;
@@ -2978,7 +2978,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     if (!mir_emit_home_push(out, s1_value) ||
                         !mir_emit_home_push(out, s2_value))
                         goto done;
-                    fputs("\tpop hl\n\tpop de\n", out);
+                    mir_stream_puts("\tpop hl\n\tpop de\n", out);
                     mir_emit_runtime_call(out, rtl_name);
                     if (!mir_emit_hl_to_home(out, insn->dst))
                         goto done;
@@ -2989,7 +2989,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     if (!mir_emit_home_push(out, fn_value) ||
                         !mir_emit_home_push(out, dearg_value))
                         goto done;
-                    fputs("\tpop de\n\tpop hl\n\tld c,l\n", out);
+                    mir_stream_puts("\tpop de\n\tpop hl\n\tld c,l\n", out);
                     mir_emit_runtime_call(out, rtl_name);
                     if (type_ptr_depth(insn->type) > 0 ||
                         (insn->type & 15) != TYPE_VOID) {
@@ -3032,10 +3032,10 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     goto done;
                 if (callee->needs_extrn &&
                     mir_extrn_should_emit_name(assembly_name))
-                    fprintf(out, "\textrn %s\n", assembly_name);
-                fprintf(out, "\tcall %s\n", assembly_name);
+                    mir_stream_printf(out, "\textrn %s\n", assembly_name);
+                mir_stream_printf(out, "\tcall %s\n", assembly_name);
                 for (argument = 0; argument < argument_bytes / 2; ++argument)
-                    fputs("\tpop bc\n", out);
+                    mir_stream_puts("\tpop bc\n", out);
                 if (type_ptr_depth(insn->type) > 0 ||
                     (insn->type & 15) != TYPE_VOID) {
                     if (mir_homed_wide_type_supported(insn->type)) {
@@ -3079,17 +3079,17 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
              * behavior for that (believed unreachable in practice for
              * this acyclic selector, but not proven, so guarded here). */
             if (frameless) {
-                fputs("\tret\n", out);
+                mir_stream_puts("\tret\n", out);
             } else if (return_count > 1 &&
                        (last_insn_is_return ||
                         (mir.return_type & 15) == TYPE_VOID) &&
                        !(last_insn_is_return && i == mir.count - 1)) {
                 if (shared_epilogue_label < 0)
                     shared_epilogue_label = new_label();
-                fprintf(out, "\tjp L%d\n", shared_epilogue_label);
+                mir_stream_printf(out, "\tjp L%d\n", shared_epilogue_label);
             } else {
                 if (shared_epilogue_label >= 0)
-                    fprintf(out, "L%d:\n", shared_epilogue_label);
+                    mir_stream_printf(out, "L%d:\n", shared_epilogue_label);
                 mir_emit_home_epilogue(out, uses_iy);
             }
             break;
@@ -3110,10 +3110,10 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
     if ((mir.return_type & 15) == TYPE_VOID &&
         (mir.count == 0 || mir.insns[mir.count - 1].opcode != MIR_RETURN)) {
         if (frameless) {
-            fputs("\tret\n", out);
+            mir_stream_puts("\tret\n", out);
         } else {
             if (shared_epilogue_label >= 0)
-                fprintf(out, "L%d:\n", shared_epilogue_label);
+                mir_stream_printf(out, "L%d:\n", shared_epilogue_label);
             mir_emit_home_epilogue(out, uses_iy);
         }
     }

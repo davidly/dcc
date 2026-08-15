@@ -13,6 +13,7 @@
 #include "dcc.h"
 #include "dcc_ast.h"
 #include "dcc_mir.h"
+#include "dcc_mir_stream.h"
 
 #define MIR_AGGREGATE_FORWARD_OFFSET (-32768L)
 #define MIR_AGGREGATE_VALUE_DEST_OFFSET (-32767L)
@@ -471,73 +472,73 @@ void mir_end_strict_phi_fallthrough(void);
 int mir_instruction_has_phi_fallthrough(int instruction,
                                         int require_next_label);
 int mir_strict_phi_fallthrough_was_used(void);
-int mir_emit_constant_to_home(FILE *out, int value, long immediate);
-int mir_emit_hl_to_home(FILE *out, int value);
+int mir_emit_constant_to_home(MirStream *out, int value, long immediate);
+int mir_emit_hl_to_home(MirStream *out, int value);
 int mir_home_spill_offset(int value, int *offset);
 int mir_home_spill_bytes(void);
 void mir_extrn_begin_attempt(void);
 int mir_extrn_should_emit(struct Sym *sym);
 int mir_extrn_should_emit_name(const char *name);
-void mir_emit_runtime_call(FILE *out, const char *name);
+void mir_emit_runtime_call(MirStream *out, const char *name);
 void mir_clear_debug_events(void);
-void mir_emit_debug_events(FILE *out, int point);
-void mir_emit_home_epilogue(FILE *out, int uses_iy);
-void mir_emit_home_prologue(FILE *out, int uses_iy);
-int mir_emit_home_push(FILE *out, int value);
-int mir_emit_home_to_hl(FILE *out, int value);
-int mir_emit_homed_binary_instruction(FILE *out,
+void mir_emit_debug_events(MirStream *out, int point);
+void mir_emit_home_epilogue(MirStream *out, int uses_iy);
+void mir_emit_home_prologue(MirStream *out, int uses_iy);
+int mir_emit_home_push(MirStream *out, int value);
+int mir_emit_home_to_hl(MirStream *out, int value);
+int mir_emit_homed_binary_instruction(MirStream *out,
                                              const struct MirInsn *insn,
                                              int allow_comparison);
 int mir_type_uses_unsigned_comparison(int type);
-int mir_emit_homed_constant_binary_instruction(FILE *out,
+int mir_emit_homed_constant_binary_instruction(MirStream *out,
                                                        const struct MirInsn *insn,
                                                        int operation, long value);
-int mir_emit_homed_compare_false(FILE *out,
+int mir_emit_homed_compare_false(MirStream *out,
                                         const struct MirInsn *compare,
                                         int false_label);
-int mir_emit_homed_phi_copies(FILE *out, int predecessor,
+int mir_emit_homed_phi_copies(MirStream *out, int predecessor,
                                      int successor);
-int mir_emit_homed_unary_instruction(FILE *out,
+int mir_emit_homed_unary_instruction(MirStream *out,
                                             const struct MirInsn *insn);
-int mir_emit_ix_offset_address_to_home(FILE *out, int value,
+int mir_emit_ix_offset_address_to_home(MirStream *out, int value,
                                                int offset);
-void mir_emit_iy_prologue(FILE *out);
-int mir_emit_label_address_to_home(FILE *out, int value,
+void mir_emit_iy_prologue(MirStream *out);
+int mir_emit_label_address_to_home(MirStream *out, int value,
                                            const char *assembly_name);
-int mir_emit_load_param(FILE *out, const struct MirInsn *param);
-int mir_emit_load_param_de(FILE *out, const struct MirInsn *param);
-int mir_emit_load_param_wide(FILE *out, const struct MirInsn *param);
-int mir_emit_pointer_offset_address_to_home(FILE *out, int dst,
+int mir_emit_load_param(MirStream *out, const struct MirInsn *param);
+int mir_emit_load_param_de(MirStream *out, const struct MirInsn *param);
+int mir_emit_load_param_wide(MirStream *out, const struct MirInsn *param);
+int mir_emit_pointer_offset_address_to_home(MirStream *out, int dst,
                                                     int base, long offset);
-void mir_emit_prologue(FILE *out);
-int mir_emit_wide_operation(FILE *out, const struct MirInsn *insn);
-void mir_emit_scalar_compare(FILE *out, int operation, int is_unsigned);
-void mir_emit_scalar_compare_biased_right(FILE *out, int operation);
-void mir_emit_signed_byte_extend(FILE *out);
-void mir_emit_hl_and_const(FILE *out, unsigned int mask);
-void mir_emit_hl_or_const(FILE *out, unsigned int mask);
-void mir_emit_bitfield_extract(FILE *out, const struct MirInsn *insn);
-void mir_emit_scalar_shift(FILE *out, int operation, int is_unsigned,
+void mir_emit_prologue(MirStream *out);
+int mir_emit_wide_operation(MirStream *out, const struct MirInsn *insn);
+void mir_emit_scalar_compare(MirStream *out, int operation, int is_unsigned);
+void mir_emit_scalar_compare_biased_right(MirStream *out, int operation);
+void mir_emit_signed_byte_extend(MirStream *out);
+void mir_emit_hl_and_const(MirStream *out, unsigned int mask);
+void mir_emit_hl_or_const(MirStream *out, unsigned int mask);
+void mir_emit_bitfield_extract(MirStream *out, const struct MirInsn *insn);
+void mir_emit_scalar_shift(MirStream *out, int operation, int is_unsigned,
                            int count_value);
-void mir_emit_scalar_shift_by_constant(FILE *out, int operation,
+void mir_emit_scalar_shift_by_constant(MirStream *out, int operation,
                                        int is_unsigned, long count);
-int mir_emit_stack_word_param_to_home(FILE *out, int value, int offset);
-int mir_emit_stack_byte_param_to_home(FILE *out, int value, int offset,
+int mir_emit_stack_word_param_to_home(MirStream *out, int value, int offset);
+int mir_emit_stack_byte_param_to_home(MirStream *out, int value, int offset,
                                       int type);
 int mir_ulong_log2_pow2(unsigned long v);
 int mir_mul_const_fast_path_eligible(unsigned long multiplier, int dst);
-void mir_emit_mul_hl_const(FILE *out, unsigned long multiplier);
-void mir_emit_wide_shift_by_constant(FILE *out, int is_left,
+void mir_emit_mul_hl_const(MirStream *out, unsigned long multiplier);
+void mir_emit_wide_shift_by_constant(MirStream *out, int is_left,
                                      int is_unsigned, long count);
-void mir_emit_word_and_constant(FILE *out, char hi_reg, char lo_reg,
+void mir_emit_word_and_constant(MirStream *out, char hi_reg, char lo_reg,
                                  unsigned int word_mask);
-int mir_emit_wide_constant_to_home(FILE *out, int value, long immediate);
-int mir_emit_wide_home_to_hl_de(FILE *out, int value);
-int mir_emit_hl_de_to_wide_home(FILE *out, int value);
-int mir_emit_wide_home_to_stack(FILE *out, int value);
-int mir_emit_cast(FILE *out, int source_type, int target_type);
-int mir_emit_word_param_to_home(FILE *out, int value, int offset);
-int mir_emit_byte_param_to_home(FILE *out, int value, int offset, int type);
+int mir_emit_wide_constant_to_home(MirStream *out, int value, long immediate);
+int mir_emit_wide_home_to_hl_de(MirStream *out, int value);
+int mir_emit_hl_de_to_wide_home(MirStream *out, int value);
+int mir_emit_wide_home_to_stack(MirStream *out, int value);
+int mir_emit_cast(MirStream *out, int source_type, int target_type);
+int mir_emit_word_param_to_home(MirStream *out, int value, int offset);
+int mir_emit_byte_param_to_home(MirStream *out, int value, int offset, int type);
 int mir_find_label(int label);
 int mir_label_is_jump_target(int label);
 int mir_insn_is_reachable(int i);
@@ -567,7 +568,7 @@ int mir_resolve_named_address(
 int mir_resolve_isolated_global_field_address(
     int value, struct MirResolvedNamedAddress *out);
 int mir_prepare_constant_absolute_operand(
-    FILE *out, int value, char *operand, size_t operand_size);
+    MirStream *out, int value, char *operand, size_t operand_size);
 int mir_object_is_fully_promoted(int object);
 int mir_object_address_taken(int object);
 int mir_store_is_dead(int instruction);
@@ -602,7 +603,7 @@ int mir_regional_store_uses_object_home(const struct MirInsn *store);
 const struct MirRegionalSegment *mir_regional_segment_for(
     int value, int instruction);
 void mir_regional_begin_emission(void);
-int mir_regional_before_instruction(FILE *out, int instruction);
+int mir_regional_before_instruction(MirStream *out, int instruction);
 void mir_regional_after_instruction(int instruction);
 void mir_resolve_deferred_metadata(void);
 int mir_prune_constant_unreachable(void);
@@ -640,9 +641,9 @@ void mir_reset_boolean_phi_branch_simplification_count(void);
 void mir_forward_immediate_phi_returns(void);
 int mir_phi_return_forwarding_count_value(void);
 void mir_reset_phi_return_forwarding_count(void);
-int mir_try_emit_homed_scalar_cfg(FILE *out);
-int mir_try_emit_compacted_regional_homed_cfg(FILE *out);
-int mir_try_emit_scheduled_machine_cfg(FILE *out);
+int mir_try_emit_homed_scalar_cfg(MirStream *out);
+int mir_try_emit_compacted_regional_homed_cfg(MirStream *out);
+int mir_try_emit_scheduled_machine_cfg(MirStream *out);
 int mir_homed_cfg_depends_on_unary_not_branch(void);
 int mir_homed_cfg_was_frameless(void);
 int mir_cfg_block_count(void);
@@ -650,10 +651,10 @@ unsigned mir_use_cache_generation_id(void);
 int mir_homed_cfg_depends_on_word_store(void);
 int mir_homed_cfg_depends_on_dynamic_index(void);
 int mir_homed_cfg_depends_on_constant_absolute(void);
-long mir_stream_size(FILE *stream);
-int mir_stream_instruction_count(FILE *stream);
-int mir_try_emit_homed_scalar_dag(FILE *out);
-int mir_try_emit_scalar_dag(FILE *out);
+long mir_stream_size(MirStream *stream);
+int mir_stream_instruction_count(MirStream *stream);
+int mir_try_emit_homed_scalar_dag(MirStream *out);
+int mir_try_emit_scalar_dag(MirStream *out);
 int mir_spilled_cfg_depends_on_constant_absolute(void);
 int mir_spilled_cfg_depends_on_dynamic_index_base_forwarding(void);
 int mir_spilled_cfg_depends_on_direct_byte_param(void);
@@ -728,7 +729,7 @@ void mir_begin_promoted_local_slot_reuse(void);
 void mir_end_promoted_local_slot_reuse(void);
 int mir_spilled_cfg_depends_on_promoted_local_slot_reuse(void);
 int mir_spilled_cfg_depends_on_wide_store_forwarding(void);
-int mir_try_emit_spilled_scalar_cfg(FILE *out);
+int mir_try_emit_spilled_scalar_cfg(MirStream *out);
 int mir_spilled_cfg_depends_on_dead_store_forwarding(void);
 int mir_value_has_use(int value);
 int mir_value_has_use_after(int value, int instruction);
@@ -742,7 +743,7 @@ void mir_schedule_report_shadow_plan(void);
 const struct MirInsn *mir_definition(int value);
 struct MirInsn *mir_mutable_definition(int value);
 int mir_load_is_single_call_argument(int value, int size);
-void mir_emit_virtual_load(FILE *out, int value);
+void mir_emit_virtual_load(MirStream *out, int value);
 int mir_value_is_wide(int value);
 int mir_value_is_selfstore_incdec(int value);
 

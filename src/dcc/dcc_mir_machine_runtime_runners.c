@@ -775,7 +775,7 @@ static struct Sym *mir_call_recovery_function(
 }
 
 static void mir_call_recovery_emit_named_call(
-    FILE *out, struct Sym *function, const char *call_name)
+    MirStream *out, struct Sym *function, const char *call_name)
 {
     const char *assembly_name =
         asm_name_for(sym_asm_name(function));
@@ -1286,16 +1286,16 @@ static int mir_match_exec_recursion_schedule(
 }
 
 static void mir_emit_exec_recursion_failure_increment(
-    FILE *out, const struct MirExecRecursionSchedule *plan)
+    MirStream *out, const struct MirExecRecursionSchedule *plan)
 {
     mir_machine_emit_global_word(out, plan->failure_count, 0);
-    fputs("\tinc hl\n", out);
+    mir_stream_puts("\tinc hl\n", out);
     mir_machine_emit_global_word_store(
         out, plan->failure_count, 0);
 }
 
 static void mir_emit_exec_recursion_schedule(
-    FILE *out, const struct MirExecRecursionSchedule *plan)
+    MirStream *out, const struct MirExecRecursionSchedule *plan)
 {
     int recursive_case = new_label();
     int exec_case = new_label();
@@ -1306,13 +1306,13 @@ static void mir_emit_exec_recursion_schedule(
     int return_failure = new_label();
     int epilogue = new_label();
 
-    fprintf(out,
+    mir_stream_printf(out,
             "%s\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
             "\tld hl,-10\n\tadd hl,sp\n\tld sp,hl\n",
             MIR_EXACT_KERNEL_MARKER);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
             "\tld a,h\n\tor l\n\tjp nz,L%d\n"
             "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
@@ -1338,15 +1338,15 @@ static void mir_emit_exec_recursion_schedule(
     mir_call_recovery_emit_named_call(
         out, plan->execv_function, plan->execv_name);
     mir_emit_final_call_cleanup(out, 2);
-    fprintf(out, "\tjp L%d\nL%d:\n", base_ready, exec_case);
-    fprintf(out,
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", base_ready, exec_case);
+    mir_stream_printf(out,
             "\tld hl,S%d\n\tpush hl\n"
             "\tld hl,S%d\n\tpush hl\n",
             plan->empty_string_id, plan->file_string_id);
     mir_call_recovery_emit_named_call(
         out, plan->exec_function, plan->exec_name);
     mir_emit_final_call_cleanup(out, 2);
-    fprintf(out,
+    mir_stream_printf(out,
             "L%d:\n\tinc hl\n\tld a,h\n\tor l\n\tdec hl\n"
             "\tjp z,L%d\n\tpush hl\n"
             "\tld hl,S%d\n\tpush hl\n",
@@ -1356,8 +1356,8 @@ static void mir_emit_exec_recursion_schedule(
         out, plan->print_function, plan->print_name);
     mir_emit_final_call_cleanup(out, 2);
     mir_emit_exec_recursion_failure_increment(out, plan);
-    fprintf(out, "\tjp L%d\nL%d:\n", return_failure, base_success);
-    fprintf(out,
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", return_failure, base_success);
+    mir_stream_printf(out,
             "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tjp L%d\n"
             "L%d:\n"
             "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
@@ -1385,7 +1385,7 @@ static void mir_emit_exec_recursion_schedule(
     mir_call_recovery_emit_named_call(
         out, plan->recursive_function, plan->recursive_name);
     mir_emit_final_call_cleanup(out, 3);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld (ix%+d),l\n\tld (ix%+d),h\n"
             "\tld e,(ix+%d)\n\tld d,(ix+%d)\n"
             "\tor a\n\tsbc hl,de\n\tjp z,L%d\n"
@@ -1409,8 +1409,8 @@ static void mir_emit_exec_recursion_schedule(
         out, plan->print_function, plan->print_name);
     mir_emit_final_call_cleanup(out, 4);
     mir_emit_exec_recursion_failure_increment(out, plan);
-    fprintf(out, "\tjp L%d\nL%d:\n", return_failure, result_valid);
-    fprintf(out,
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", return_failure, result_valid);
+    mir_stream_printf(out,
             "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
             "\tld e,(ix+%d)\n\tld d,(ix+%d)\n\tadd hl,de\n"
             "\tex de,hl\n"
@@ -1436,7 +1436,7 @@ static void mir_emit_exec_recursion_schedule(
         out, plan->print_function, plan->print_name);
     mir_emit_final_call_cleanup(out, 4);
     mir_emit_exec_recursion_failure_increment(out, plan);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tjp L%d\nL%d:\n"
             "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tjp L%d\n"
             "L%d:\n\tld hl,%d\n"
@@ -1499,7 +1499,7 @@ static int mir_sparse_match_call(
 }
 
 static void mir_sparse_emit_call(
-    FILE *out, struct Sym *function, const char *call_name)
+    MirStream *out, struct Sym *function, const char *call_name)
 {
     if (function == NULL)
         mir_emit_runtime_call(out, call_name);
@@ -1508,7 +1508,7 @@ static void mir_sparse_emit_call(
 }
 
 static void mir_sparse_emit_print(
-    FILE *out, const struct MirSparseFileSchedule *plan, int call)
+    MirStream *out, const struct MirSparseFileSchedule *plan, int call)
 {
     if ((plan->print_flags[call] & MIR_CALL_FLAG_FORMAT_HEX) != 0)
         mir_emit_runtime_call(out, "__pfehx");
@@ -1837,27 +1837,27 @@ static int mir_match_sparse_file_schedule(
     return 1;
 }
 
-static void mir_sparse_emit_local_address(FILE *out, int offset)
+static void mir_sparse_emit_local_address(MirStream *out, int offset)
 {
-    fputs("\tpush ix\n\tpop hl\n", out);
+    mir_stream_puts("\tpush ix\n\tpop hl\n", out);
     if (offset != 0)
-        fprintf(out, "\tld de,%d\n\tadd hl,de\n", offset);
+        mir_stream_printf(out, "\tld de,%d\n\tadd hl,de\n", offset);
 }
 
 static void mir_sparse_emit_stream_push(
-    FILE *out, const struct MirSparseFileSchedule *plan)
+    MirStream *out, const struct MirSparseFileSchedule *plan)
 {
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n",
             plan->stream_offset, plan->stream_offset + 1);
 }
 
 static void mir_sparse_emit_seek(
-    FILE *out, const struct MirSparseFileSchedule *plan,
+    MirStream *out, const struct MirSparseFileSchedule *plan,
     unsigned long offset, int origin)
 {
-    fprintf(out, "\tld hl,%d\n\tpush hl\n", origin);
-    fprintf(out,
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n", origin);
+    mir_stream_printf(out,
             "\tld hl,%lu\n\tld de,%lu\n\tpush de\n\tpush hl\n",
             offset & 0xffffUL, (offset >> 16) & 0xffffUL);
     mir_sparse_emit_stream_push(out, plan);
@@ -1867,32 +1867,32 @@ static void mir_sparse_emit_seek(
 }
 
 static void mir_sparse_emit_wide_store(
-    FILE *out, int offset)
+    MirStream *out, int offset)
 {
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld (ix%+d),l\n\tld (ix%+d),h\n"
             "\tld (ix%+d),e\n\tld (ix%+d),d\n",
             offset, offset + 1, offset + 2, offset + 3);
 }
 
 static void mir_sparse_emit_wide_load(
-    FILE *out, int offset)
+    MirStream *out, int offset)
 {
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
             "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
             offset, offset + 1, offset + 2, offset + 3);
 }
 
 static void mir_sparse_emit_wide_equal_push(
-    FILE *out, const struct MirSparseFileSchedule *plan,
+    MirStream *out, const struct MirSparseFileSchedule *plan,
     unsigned long expected)
 {
     int equal = new_label();
     int done = new_label();
 
     mir_sparse_emit_wide_load(out, plan->length_offset);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld a,l\n\txor %lu\n\tld l,a\n"
             "\tld a,h\n\txor %lu\n\tor l\n\tld l,a\n"
             "\tld a,e\n\txor %lu\n\tor l\n\tld l,a\n"
@@ -1907,7 +1907,7 @@ static void mir_sparse_emit_wide_equal_push(
 }
 
 static void mir_emit_sparse_file_schedule(
-    FILE *out, const struct MirSparseFileSchedule *plan)
+    MirStream *out, const struct MirSparseFileSchedule *plan)
 {
     int first_opened = new_label();
     int second_opened = new_label();
@@ -1920,26 +1920,26 @@ static void mir_emit_sparse_file_schedule(
     int summary_success = new_label();
     int epilogue = new_label();
 
-    fprintf(out,
+    mir_stream_printf(out,
             "%s\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
             "\tld hl,-312\n\tadd hl,sp\n\tld sp,hl\n",
             MIR_EXACT_KERNEL_MARKER);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
 
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
     mir_sparse_emit_call(
         out, plan->unlink_function, plan->unlink_name);
     mir_emit_final_call_cleanup(out, 1);
 
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,S%d\n\tpush hl\n"
             "\tld hl,S%d\n\tpush hl\n",
             plan->strings[1], plan->strings[0]);
     mir_sparse_emit_call(
         out, plan->open_function, plan->open_name);
     mir_emit_final_call_cleanup(out, 2);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld (ix%+d),l\n\tld (ix%+d),h\n"
             "\tld a,h\n\tor l\n\tjp nz,L%d\n"
             "\tld hl,S%d\n\tpush hl\n",
@@ -1947,12 +1947,12 @@ static void mir_emit_sparse_file_schedule(
             first_opened, plan->strings[2]);
     mir_sparse_emit_print(out, plan, 0);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out, "\tld hl,1\n\tjp L%d\nL%d:\n",
+    mir_stream_printf(out, "\tld hl,1\n\tjp L%d\nL%d:\n",
             epilogue, first_opened);
 
     mir_sparse_emit_seek(out, plan, 5000, 0);
     mir_sparse_emit_stream_push(out, plan);
-    fputs("\tld hl,90\n\tpush hl\n", out);
+    mir_stream_puts("\tld hl,90\n\tpush hl\n", out);
     mir_sparse_emit_call(
         out, plan->putc_function, plan->putc_name);
     mir_emit_final_call_cleanup(out, 2);
@@ -1961,14 +1961,14 @@ static void mir_emit_sparse_file_schedule(
         out, plan->close_function, plan->close_name);
     mir_emit_final_call_cleanup(out, 1);
 
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,S%d\n\tpush hl\n"
             "\tld hl,S%d\n\tpush hl\n",
             plan->strings[9], plan->strings[0]);
     mir_sparse_emit_call(
         out, plan->open_function, plan->open_name);
     mir_emit_final_call_cleanup(out, 2);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld (ix%+d),l\n\tld (ix%+d),h\n"
             "\tld a,h\n\tor l\n\tjp nz,L%d\n"
             "\tld hl,S%d\n\tpush hl\n",
@@ -1976,7 +1976,7 @@ static void mir_emit_sparse_file_schedule(
             second_opened, plan->strings[3]);
     mir_sparse_emit_print(out, plan, 1);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out, "\tld hl,1\n\tjp L%d\nL%d:\n",
+    mir_stream_printf(out, "\tld hl,1\n\tjp L%d\nL%d:\n",
             epilogue, second_opened);
 
     mir_sparse_emit_seek(out, plan, 0, 2);
@@ -1987,26 +1987,26 @@ static void mir_emit_sparse_file_schedule(
     mir_sparse_emit_wide_store(out, plan->length_offset);
 
     mir_sparse_emit_wide_load(out, plan->length_offset);
-    fputs("\tpush de\n\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[10]);
+    mir_stream_puts("\tpush de\n\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[10]);
     mir_sparse_emit_print(out, plan, 2);
     mir_emit_final_call_cleanup(out, 3);
 
     mir_sparse_emit_wide_equal_push(out, plan, 5120);
     mir_sparse_emit_wide_equal_push(out, plan, 5001);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[11]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[11]);
     mir_sparse_emit_print(out, plan, 3);
     mir_emit_final_call_cleanup(out, 3);
 
     mir_sparse_emit_seek(out, plan, 0, 0);
     mir_sparse_emit_stream_push(out, plan);
-    fputs("\tld hl,300\n\tpush hl\n\tld hl,1\n\tpush hl\n", out);
+    mir_stream_puts("\tld hl,300\n\tpush hl\n\tld hl,1\n\tpush hl\n", out);
     mir_sparse_emit_local_address(out, plan->buffer_offset);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_sparse_emit_call(
         out, plan->read_function, plan->read_name);
     mir_emit_final_call_cleanup(out, 4);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld (ix%+d),l\n\tld (ix%+d),h\n\tpush hl\n"
             "\tld hl,S%d\n\tpush hl\n",
             plan->count_offset, plan->count_offset + 1,
@@ -2014,12 +2014,12 @@ static void mir_emit_sparse_file_schedule(
     mir_sparse_emit_print(out, plan, 4);
     mir_emit_final_call_cleanup(out, 2);
 
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
             "\tld a,h\n\tor l\n\tjp z,L%d\n",
             plan->count_offset, plan->count_offset + 1, skip_scan);
     mir_sparse_emit_local_address(out, plan->buffer_offset);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld b,(hl)\n\tinc hl\n"
             "\tld e,(ix%+d)\n\tld d,(ix%+d)\n\tdec de\n"
             "L%d:\n\tld a,d\n\tor e\n\tjp z,L%d\n"
@@ -2032,19 +2032,19 @@ static void mir_emit_sparse_file_schedule(
             scan_uniform, plan->strings[4]);
     mir_sparse_emit_print(out, plan, 5);
     mir_emit_final_call_cleanup(out, 2);
-    fprintf(out, "\tjp L%d\nL%d:\n", scan_report_done, scan_mismatch);
-    fputs("\tld l,b\n\tld h,0\n\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[5]);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", scan_report_done, scan_mismatch);
+    mir_stream_puts("\tld l,b\n\tld h,0\n\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[5]);
     mir_sparse_emit_print(out, plan, 6);
     mir_emit_final_call_cleanup(out, 2);
-    fprintf(out, "L%d:\nL%d:\n", scan_report_done, skip_scan);
+    mir_stream_printf(out, "L%d:\nL%d:\n", scan_report_done, skip_scan);
 
     mir_sparse_emit_seek(out, plan, 5000, 0);
     mir_sparse_emit_stream_push(out, plan);
     mir_sparse_emit_call(
         out, plan->getc_function, plan->getc_name);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld (ix%+d),l\n\tld (ix%+d),h\n"
             "\tld de,63\n\tld a,h\n\tor a\n\tjp nz,L%d\n"
             "\tld a,l\n\tcp 32\n\tjp c,L%d\n"
@@ -2057,8 +2057,8 @@ static void mir_emit_sparse_file_schedule(
     mir_sparse_emit_print(out, plan, 7);
     mir_emit_final_call_cleanup(out, 3);
 
-    fputs("\tld hl,90\n\tpush hl\n", out);
-    fprintf(out,
+    mir_stream_puts("\tld hl,90\n\tpush hl\n", out);
+    mir_stream_printf(out,
             "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
             "\tld hl,S%d\n\tpush hl\n",
             plan->count_offset, plan->count_offset + 1,
@@ -2071,26 +2071,26 @@ static void mir_emit_sparse_file_schedule(
     mir_sparse_emit_call(
         out, plan->close_function, plan->close_name);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
     mir_sparse_emit_call(
         out, plan->unlink_function, plan->unlink_name);
     mir_emit_final_call_cleanup(out, 1);
 
     mir_machine_emit_global_word(out, plan->failure_count, 0);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out,
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out,
             "\tjp z,L%d\n\tpush hl\n"
             "\tld hl,S%d\n\tpush hl\n",
             summary_success, plan->strings[6]);
     mir_sparse_emit_print(out, plan, 8);
     mir_emit_final_call_cleanup(out, 2);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,1\n\tjp L%d\nL%d:\n"
             "\tld hl,S%d\n\tpush hl\n",
             epilogue, summary_success, plan->strings[7]);
     mir_sparse_emit_print(out, plan, 9);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,0\nL%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
             epilogue);
 }
@@ -2423,7 +2423,7 @@ static int mir_match_ctrlz_file_schedule(
 }
 
 static void mir_ctrlz_emit_print(
-    FILE *out, const struct MirCtrlZFileSchedule *plan, int call)
+    MirStream *out, const struct MirCtrlZFileSchedule *plan, int call)
 {
     if ((plan->print_flags[call] & MIR_CALL_FLAG_FORMAT_HEX) != 0)
         mir_emit_runtime_call(out, "__pfehx");
@@ -2434,60 +2434,60 @@ static void mir_ctrlz_emit_print(
 }
 
 static void mir_ctrlz_emit_failure_increment(
-    FILE *out, const struct MirCtrlZFileSchedule *plan)
+    MirStream *out, const struct MirCtrlZFileSchedule *plan)
 {
     mir_machine_emit_global_word(out, plan->failure_count, 0);
-    fputs("\tinc hl\n", out);
+    mir_stream_puts("\tinc hl\n", out);
     mir_machine_emit_global_word_store(
         out, plan->failure_count, 0);
 }
 
 static void mir_ctrlz_emit_buffer_address(
-    FILE *out, const struct MirCtrlZFileSchedule *plan)
+    MirStream *out, const struct MirCtrlZFileSchedule *plan)
 {
     mir_sparse_emit_local_address(out, plan->buffer_offset);
 }
 
 static void mir_ctrlz_emit_stream_push(
-    FILE *out, const struct MirCtrlZFileSchedule *plan)
+    MirStream *out, const struct MirCtrlZFileSchedule *plan)
 {
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n",
             plan->stream_offset, plan->stream_offset + 1);
 }
 
 static void mir_ctrlz_emit_open(
-    FILE *out, const struct MirCtrlZFileSchedule *plan, int mode_string)
+    MirStream *out, const struct MirCtrlZFileSchedule *plan, int mode_string)
 {
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,S%d\n\tpush hl\n"
             "\tld hl,S%d\n\tpush hl\n",
             mode_string, plan->strings[0]);
     mir_sparse_emit_call(
         out, plan->open_function, plan->open_name);
     mir_emit_final_call_cleanup(out, 2);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld (ix%+d),l\n\tld (ix%+d),h\n",
             plan->stream_offset, plan->stream_offset + 1);
 }
 
 static void mir_ctrlz_emit_gets(
-    FILE *out, const struct MirCtrlZFileSchedule *plan)
+    MirStream *out, const struct MirCtrlZFileSchedule *plan)
 {
     mir_ctrlz_emit_stream_push(out, plan);
-    fputs("\tld hl,32\n\tpush hl\n", out);
+    mir_stream_puts("\tld hl,32\n\tpush hl\n", out);
     mir_ctrlz_emit_buffer_address(out, plan);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_sparse_emit_call(
         out, plan->gets_function, plan->gets_name);
     mir_emit_final_call_cleanup(out, 3);
 }
 
 static void mir_ctrlz_emit_integer_check(
-    FILE *out, const struct MirCtrlZFileSchedule *plan,
+    MirStream *out, const struct MirCtrlZFileSchedule *plan,
     int name_string, int expected)
 {
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld de,%d\n\tpush de\n\tpush hl\n"
             "\tld hl,S%d\n\tpush hl\n",
             expected, name_string);
@@ -2498,7 +2498,7 @@ static void mir_ctrlz_emit_integer_check(
 }
 
 static void mir_emit_ctrlz_file_schedule(
-    FILE *out, const struct MirCtrlZFileSchedule *plan)
+    MirStream *out, const struct MirCtrlZFileSchedule *plan)
 {
     int first_opened = new_label();
     int first_line_ok = new_label();
@@ -2512,7 +2512,7 @@ static void mir_emit_ctrlz_file_schedule(
     int summary_success = new_label();
     int epilogue = new_label();
 
-    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
           ";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
           "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-42\n\tadd hl,sp\n\tld sp,hl\n", out);
@@ -2522,7 +2522,7 @@ static void mir_emit_ctrlz_file_schedule(
     mir_sparse_emit_call(
         out, plan->fixture_function, plan->fixture_name);
     mir_ctrlz_emit_open(out, plan, plan->strings[1]);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
             "\tld a,h\n\tor l\n\tjp nz,L%d\n"
             "\tld hl,S%d\n\tpush hl\n",
@@ -2530,35 +2530,35 @@ static void mir_emit_ctrlz_file_schedule(
             first_opened, plan->strings[2]);
     mir_ctrlz_emit_print(out, plan, 0);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out, "\tld hl,1\n\tjp L%d\nL%d:\n",
+    mir_stream_printf(out, "\tld hl,1\n\tjp L%d\nL%d:\n",
             epilogue, first_opened);
 
     mir_ctrlz_emit_gets(out, plan);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld a,h\n\tor l\n\tjp nz,L%d\n"
             "\tld hl,S%d\n\tpush hl\n",
             first_line_ok, plan->strings[3]);
     mir_ctrlz_emit_print(out, plan, 1);
     mir_emit_final_call_cleanup(out, 1);
     mir_ctrlz_emit_failure_increment(out, plan);
-    fprintf(out, "\tjp L%d\nL%d:\n", after_first_line, first_line_ok);
-    fprintf(out,
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", after_first_line, first_line_ok);
+    mir_stream_printf(out,
             "\tld hl,S%d\n\tpush hl\n",
             plan->strings[5]);
     mir_ctrlz_emit_buffer_address(out, plan);
-    fputs("\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[4]);
+    mir_stream_puts("\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[4]);
     mir_sparse_emit_call(
         out, plan->string_check_function,
         plan->string_check_name);
     mir_emit_final_call_cleanup(out, 3);
-    fprintf(out, "L%d:\n", after_first_line);
+    mir_stream_printf(out, "L%d:\n", after_first_line);
 
     mir_ctrlz_emit_gets(out, plan);
-    fputs("\tld a,h\n\tor l\n\tld hl,0\n", out);
+    mir_stream_puts("\tld a,h\n\tor l\n\tld hl,0\n", out);
     {
         int second_null = new_label();
-        fprintf(out,
+        mir_stream_printf(out,
                 "\tjp z,L%d\n\tinc hl\nL%d:\n",
                 second_null, second_null);
     }
@@ -2568,10 +2568,10 @@ static void mir_emit_ctrlz_file_schedule(
     mir_ctrlz_emit_stream_push(out, plan);
     mir_sparse_emit_call(out, plan->eof_function, plan->eof_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tld a,h\n\tor l\n\tld hl,0\n", out);
+    mir_stream_puts("\tld a,h\n\tor l\n\tld hl,0\n", out);
     {
         int eof_zero = new_label();
-        fprintf(out,
+        mir_stream_printf(out,
                 "\tjp z,L%d\n\tinc hl\nL%d:\n",
                 eof_zero, eof_zero);
     }
@@ -2584,7 +2584,7 @@ static void mir_emit_ctrlz_file_schedule(
     mir_emit_final_call_cleanup(out, 1);
 
     mir_ctrlz_emit_open(out, plan, plan->strings[8]);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
             "\tld a,h\n\tor l\n\tjp nz,L%d\n"
             "\tld hl,S%d\n\tpush hl\n",
@@ -2592,17 +2592,17 @@ static void mir_emit_ctrlz_file_schedule(
             binary_opened, plan->strings[9]);
     mir_ctrlz_emit_print(out, plan, 2);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out, "\tld hl,1\n\tjp L%d\nL%d:\n",
+    mir_stream_printf(out, "\tld hl,1\n\tjp L%d\nL%d:\n",
             epilogue, binary_opened);
 
     mir_ctrlz_emit_stream_push(out, plan);
-    fputs("\tld hl,32\n\tpush hl\n\tld hl,1\n\tpush hl\n", out);
+    mir_stream_puts("\tld hl,32\n\tpush hl\n\tld hl,1\n\tpush hl\n", out);
     mir_ctrlz_emit_buffer_address(out, plan);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_sparse_emit_call(
         out, plan->read_function, plan->read_name);
     mir_emit_final_call_cleanup(out, 4);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld (ix%+d),l\n\tld (ix%+d),h\n",
             plan->total_offset, plan->total_offset + 1);
     mir_ctrlz_emit_stream_push(out, plan);
@@ -2610,21 +2610,21 @@ static void mir_emit_ctrlz_file_schedule(
         out, plan->close_function, plan->close_name);
     mir_emit_final_call_cleanup(out, 1);
 
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
             "\tld hl,S%d\n\tpush hl\n",
             plan->total_offset, plan->total_offset + 1,
             plan->strings[10]);
     mir_ctrlz_emit_print(out, plan, 3);
     mir_emit_final_call_cleanup(out, 2);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
             "\tld de,19\n\tor a\n\tsbc hl,de\n"
             "\tld hl,0\n",
             plan->total_offset, plan->total_offset + 1);
     {
         int total_small = new_label();
-        fprintf(out,
+        mir_stream_printf(out,
                 "\tjp c,L%d\n\tinc hl\nL%d:\n",
                 total_small, total_small);
     }
@@ -2632,20 +2632,20 @@ static void mir_emit_ctrlz_file_schedule(
         out, plan, plan->strings[11], 1);
 
     mir_ctrlz_emit_buffer_address(out, plan);
-    fputs("\tld de,6\n\tadd hl,de\n\tld l,(hl)\n\tld h,0\n", out);
+    mir_stream_puts("\tld de,6\n\tadd hl,de\n\tld l,(hl)\n\tld h,0\n", out);
     mir_ctrlz_emit_integer_check(
         out, plan, plan->strings[12], 26);
     mir_ctrlz_emit_buffer_address(out, plan);
-    fputs("\tld de,7\n\tadd hl,de\n\tld l,(hl)\n\tld h,0\n", out);
+    mir_stream_puts("\tld de,7\n\tadd hl,de\n\tld l,(hl)\n\tld h,0\n", out);
     mir_ctrlz_emit_integer_check(
         out, plan, plan->strings[13], 108);
     mir_ctrlz_emit_buffer_address(out, plan);
-    fputs("\tld de,18\n\tadd hl,de\n\tld l,(hl)\n\tld h,0\n", out);
+    mir_stream_puts("\tld de,18\n\tadd hl,de\n\tld l,(hl)\n\tld h,0\n", out);
     mir_ctrlz_emit_integer_check(
         out, plan, plan->strings[14], 10);
 
     mir_ctrlz_emit_open(out, plan, plan->strings[8]);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
             "\tld a,h\n\tor l\n\tjp nz,L%d\n"
             "\tld hl,S%d\n\tpush hl\n",
@@ -2653,81 +2653,81 @@ static void mir_emit_ctrlz_file_schedule(
             getc_opened, plan->strings[15]);
     mir_ctrlz_emit_print(out, plan, 4);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out, "\tld hl,1\n\tjp L%d\nL%d:\n",
+    mir_stream_printf(out, "\tld hl,1\n\tjp L%d\nL%d:\n",
             epilogue, getc_opened);
 
-    fputs("\tld iy,0\n", out);
-    fprintf(out, "L%d:\n", getc_loop);
+    mir_stream_puts("\tld iy,0\n", out);
+    mir_stream_printf(out, "L%d:\n", getc_loop);
     mir_ctrlz_emit_stream_push(out, plan);
     mir_sparse_emit_call(
         out, plan->getc_function, plan->getc_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tld d,h\n\tld e,l\n\tinc hl\n"
+    mir_stream_puts("\tld d,h\n\tld e,l\n\tinc hl\n"
           "\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n", getc_done);
-    fputs("\tpush iy\n\tpop hl\n\tld a,h\n\tor a\n", out);
-    fprintf(out, "\tjp nz,L%d\n\tld a,l\n\tcp 6\n\tjp nz,L%d\n",
+    mir_stream_printf(out, "\tjp z,L%d\n", getc_done);
+    mir_stream_puts("\tpush iy\n\tpop hl\n\tld a,h\n\tor a\n", out);
+    mir_stream_printf(out, "\tjp nz,L%d\n\tld a,l\n\tcp 6\n\tjp nz,L%d\n",
             not_eighteen, not_six);
-    fputs("\tld hl,26\n\tpush hl\n\tpush de\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[16]);
+    mir_stream_puts("\tld hl,26\n\tpush hl\n\tpush de\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[16]);
     mir_sparse_emit_call(
         out, plan->integer_check_function,
         plan->integer_check_name);
     mir_emit_final_call_cleanup(out, 3);
-    fprintf(out, "\tjp L%d\nL%d:\n", not_eighteen, not_six);
-    fputs("\tld a,l\n\tcp 18\n", out);
-    fprintf(out, "\tjp nz,L%d\n", not_eighteen);
-    fputs("\tld hl,10\n\tpush hl\n\tpush de\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[17]);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", not_eighteen, not_six);
+    mir_stream_puts("\tld a,l\n\tcp 18\n", out);
+    mir_stream_printf(out, "\tjp nz,L%d\n", not_eighteen);
+    mir_stream_puts("\tld hl,10\n\tpush hl\n\tpush de\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[17]);
     mir_sparse_emit_call(
         out, plan->integer_check_function,
         plan->integer_check_name);
     mir_emit_final_call_cleanup(out, 3);
-    fprintf(out, "L%d:\n\tinc iy\n", not_eighteen);
-    fputs("\tpush iy\n\tpop hl\n\tld a,h\n\tor a\n", out);
-    fprintf(out, "\tjp nz,L%d\n\tld a,l\n\tcp 201\n",
+    mir_stream_printf(out, "L%d:\n\tinc iy\n", not_eighteen);
+    mir_stream_puts("\tpush iy\n\tpop hl\n\tld a,h\n\tor a\n", out);
+    mir_stream_printf(out, "\tjp nz,L%d\n\tld a,l\n\tcp 201\n",
             getc_done);
-    fprintf(out, "\tjp nc,L%d\n\tjp L%d\nL%d:\n",
+    mir_stream_printf(out, "\tjp nc,L%d\n\tjp L%d\nL%d:\n",
             getc_done, getc_loop, getc_done);
 
     mir_ctrlz_emit_stream_push(out, plan);
     mir_sparse_emit_call(
         out, plan->close_function, plan->close_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tpush iy\n\tpop hl\n\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[18]);
+    mir_stream_puts("\tpush iy\n\tpop hl\n\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[18]);
     mir_ctrlz_emit_print(out, plan, 5);
     mir_emit_final_call_cleanup(out, 2);
-    fputs("\tpush iy\n\tpop hl\n\tld de,19\n"
+    mir_stream_puts("\tpush iy\n\tpop hl\n\tld de,19\n"
           "\tor a\n\tsbc hl,de\n\tld hl,0\n", out);
     {
         int count_small = new_label();
-        fprintf(out,
+        mir_stream_printf(out,
                 "\tjp c,L%d\n\tinc hl\nL%d:\n",
                 count_small, count_small);
     }
     mir_ctrlz_emit_integer_check(
         out, plan, plan->strings[19], 1);
 
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
     mir_sparse_emit_call(
         out, plan->unlink_function, plan->unlink_name);
     mir_emit_final_call_cleanup(out, 1);
     mir_machine_emit_global_word(out, plan->failure_count, 0);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out,
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out,
             "\tjp z,L%d\n\tpush hl\n"
             "\tld hl,S%d\n\tpush hl\n",
             summary_success, plan->strings[20]);
     mir_ctrlz_emit_print(out, plan, 6);
     mir_emit_final_call_cleanup(out, 2);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,1\n\tjp L%d\nL%d:\n"
             "\tld hl,S%d\n\tpush hl\n",
             epilogue, summary_success, plan->strings[21]);
     mir_ctrlz_emit_print(out, plan, 7);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,0\nL%d:\n\tld sp,ix\n\tpop ix\n\tpop iy\n"
             ";@dcc.reg free=iy\n\tret\n",
             epilogue);
@@ -2881,7 +2881,7 @@ static int mir_match_wildcard_open_schedule(
 }
 
 static void mir_wildcard_emit_print(
-    FILE *out, const struct MirWildcardOpenSchedule *plan, int call)
+    MirStream *out, const struct MirWildcardOpenSchedule *plan, int call)
 {
     if ((plan->print_flags[call] & MIR_CALL_FLAG_FORMAT_HEX) != 0)
         mir_emit_runtime_call(out, "__pfehx");
@@ -2891,74 +2891,74 @@ static void mir_wildcard_emit_print(
         out, plan->print_function, plan->print_names[call]);
 }
 
-static void mir_wildcard_store_stream(FILE *out)
+static void mir_wildcard_store_stream(MirStream *out)
 {
-    fputs("\tld (ix-2),l\n\tld (ix-1),h\n", out);
+    mir_stream_puts("\tld (ix-2),l\n\tld (ix-1),h\n", out);
 }
 
-static void mir_wildcard_push_stream(FILE *out)
+static void mir_wildcard_push_stream(MirStream *out)
 {
-    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n", out);
+    mir_stream_puts("\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n", out);
 }
 
 static void mir_emit_wildcard_open_schedule(
-    FILE *out, const struct MirWildcardOpenSchedule *plan)
+    MirStream *out, const struct MirWildcardOpenSchedule *plan)
 {
     int null_result = new_label();
     int result_ready = new_label();
     int done = new_label();
 
-    fprintf(out,
+    mir_stream_printf(out,
             "%s\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
             "\tld hl,-18\n\tadd hl,sp\n\tld sp,hl\n",
             MIR_EXACT_KERNEL_MARKER);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
     mir_sparse_emit_call(
         out, plan->unlink_function, plan->unlink_name);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
     mir_sparse_emit_call(
         out, plan->unlink_function, plan->unlink_name);
     mir_emit_final_call_cleanup(out, 1);
 
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,S%d\n\tpush hl\n\tld hl,S%d\n\tpush hl\n",
             plan->strings[2], plan->strings[0]);
     mir_sparse_emit_call(out, plan->open_function, plan->open_name);
     mir_emit_final_call_cleanup(out, 2);
     mir_wildcard_store_stream(out);
     mir_wildcard_push_stream(out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[3]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[3]);
     mir_sparse_emit_call(out, plan->puts_function, plan->puts_name);
     mir_emit_final_call_cleanup(out, 2);
     mir_wildcard_push_stream(out);
     mir_sparse_emit_call(out, plan->close_function, plan->close_name);
     mir_emit_final_call_cleanup(out, 1);
 
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,S%d\n\tpush hl\n\tld hl,S%d\n\tpush hl\n",
             plan->strings[2], plan->strings[1]);
     mir_sparse_emit_call(out, plan->open_function, plan->open_name);
     mir_emit_final_call_cleanup(out, 2);
     mir_wildcard_store_stream(out);
     mir_wildcard_push_stream(out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[4]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[4]);
     mir_sparse_emit_call(out, plan->puts_function, plan->puts_name);
     mir_emit_final_call_cleanup(out, 2);
     mir_wildcard_push_stream(out);
     mir_sparse_emit_call(out, plan->close_function, plan->close_name);
     mir_emit_final_call_cleanup(out, 1);
 
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,S%d\n\tpush hl\n\tld hl,S%d\n\tpush hl\n",
             plan->strings[6], plan->strings[5]);
     mir_sparse_emit_call(out, plan->open_function, plan->open_name);
     mir_emit_final_call_cleanup(out, 2);
     mir_wildcard_store_stream(out);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out,
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out,
             "\tjp z,L%d\n\tld hl,S%d\n\tjp L%d\n"
             "L%d:\n\tld hl,S%d\nL%d:\n\tpush hl\n"
             "\tld hl,S%d\n\tpush hl\n",
@@ -2968,40 +2968,40 @@ static void mir_emit_wildcard_open_schedule(
     mir_wildcard_emit_print(out, plan, 0);
     mir_emit_final_call_cleanup(out, 2);
 
-    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n"
+    mir_stream_puts("\tld l,(ix-2)\n\tld h,(ix-1)\n"
           "\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n", done);
+    mir_stream_printf(out, "\tjp z,L%d\n", done);
     mir_wildcard_push_stream(out);
-    fputs("\tld hl,15\n\tpush hl\n\tld hl,1\n\tpush hl\n", out);
-    fputs("\tpush ix\n\tpop hl\n\tld de,-18\n\tadd hl,de\n"
+    mir_stream_puts("\tld hl,15\n\tpush hl\n\tld hl,1\n\tpush hl\n", out);
+    mir_stream_puts("\tpush ix\n\tpop hl\n\tld de,-18\n\tadd hl,de\n"
           "\tpush hl\n", out);
     mir_sparse_emit_call(out, plan->read_function, plan->read_name);
     mir_emit_final_call_cleanup(out, 4);
-    fputs("\tex de,hl\n\tpush ix\n\tpop hl\n"
+    mir_stream_puts("\tex de,hl\n\tpush ix\n\tpop hl\n"
           "\tld bc,-18\n\tadd hl,bc\n\tadd hl,de\n"
           "\txor a\n\tld (hl),a\n", out);
-    fputs("\tpush ix\n\tpop hl\n\tld de,-18\n\tadd hl,de\n"
+    mir_stream_puts("\tpush ix\n\tpop hl\n\tld de,-18\n\tadd hl,de\n"
           "\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[10]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[10]);
     mir_wildcard_emit_print(out, plan, 1);
     mir_emit_final_call_cleanup(out, 2);
     mir_wildcard_push_stream(out);
     mir_sparse_emit_call(out, plan->close_function, plan->close_name);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out, "L%d:\n", done);
+    mir_stream_printf(out, "L%d:\n", done);
 
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
     mir_sparse_emit_call(
         out, plan->unlink_function, plan->unlink_name);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
     mir_sparse_emit_call(
         out, plan->unlink_function, plan->unlink_name);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[11]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[11]);
     mir_wildcard_emit_print(out, plan, 2);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+    mir_stream_puts("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
 static int mir_match_wildcard_create_schedule(
@@ -3129,7 +3129,7 @@ static int mir_match_wildcard_create_schedule(
 }
 
 static void mir_wildcard_create_print(
-    FILE *out, const struct MirWildcardCreateSchedule *plan, int call)
+    MirStream *out, const struct MirWildcardCreateSchedule *plan, int call)
 {
     if ((plan->print_flags[call] & MIR_CALL_FLAG_FORMAT_HEX) != 0)
         mir_emit_runtime_call(out, "__pfehx");
@@ -3140,7 +3140,7 @@ static void mir_wildcard_create_print(
 }
 
 static void mir_emit_wildcard_create_schedule(
-    FILE *out, const struct MirWildcardCreateSchedule *plan)
+    MirStream *out, const struct MirWildcardCreateSchedule *plan)
 {
     int no_stream = new_label();
     int loop = new_label();
@@ -3149,90 +3149,90 @@ static void mir_emit_wildcard_create_schedule(
     int summary_success = new_label();
     int epilogue = new_label();
 
-    fprintf(out,
+    mir_stream_printf(out,
             "%s\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
             "\tld hl,-4\n\tadd hl,sp\n\tld sp,hl\n"
             "\txor a\n\tld (ix-4),a\n\tld (ix-3),a\n",
             MIR_EXACT_KERNEL_MARKER);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,S%d\n\tpush hl\n\tld hl,S%d\n\tpush hl\n",
             plan->strings[1], plan->strings[0]);
     mir_sparse_emit_call(out, plan->open_function, plan->open_name);
     mir_emit_final_call_cleanup(out, 2);
-    fputs("\tld (ix-2),l\n\tld (ix-1),h\n"
+    mir_stream_puts("\tld (ix-2),l\n\tld (ix-1),h\n"
           "\tld a,h\n\tor l\n\tld hl,0\n", out);
     {
         int not_null = new_label();
-        fprintf(out,
+        mir_stream_printf(out,
                 "\tjp nz,L%d\n\tinc hl\nL%d:\n",
                 not_null, not_null);
     }
-    fputs("\tld de,1\n\tpush de\n\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[2]);
+    mir_stream_puts("\tld de,1\n\tpush de\n\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[2]);
     mir_sparse_emit_call(
         out, plan->integer_check_function,
         plan->integer_check_name);
     mir_emit_final_call_cleanup(out, 3);
-    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n"
+    mir_stream_puts("\tld l,(ix-2)\n\tld h,(ix-1)\n"
           "\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n\tpush hl\n", no_stream);
+    mir_stream_printf(out, "\tjp z,L%d\n\tpush hl\n", no_stream);
     mir_sparse_emit_call(out, plan->close_function, plan->close_name);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out, "L%d:\n", no_stream);
+    mir_stream_printf(out, "L%d:\n", no_stream);
 
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[3]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[3]);
     mir_sparse_emit_call(
         out, plan->directory_open_function,
         plan->directory_open_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tld (ix-2),l\n\tld (ix-1),h\n", out);
-    fprintf(out, "L%d:\n", loop);
-    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n", out);
+    mir_stream_puts("\tld (ix-2),l\n\tld (ix-1),h\n", out);
+    mir_stream_printf(out, "L%d:\n", loop);
+    mir_stream_puts("\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n", out);
     mir_sparse_emit_call(
         out, plan->directory_read_function,
         plan->directory_read_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n", loop_done);
-    fputs("\tld de,2\n\tpush de\n", out);
-    fprintf(out, "\tld de,S%d\n\tpush de\n\tpush hl\n",
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n", loop_done);
+    mir_stream_puts("\tld de,2\n\tpush de\n", out);
+    mir_stream_printf(out, "\tld de,S%d\n\tpush de\n\tpush hl\n",
             plan->strings[4]);
     mir_sparse_emit_call(
         out, plan->compare_function, plan->compare_name);
     mir_emit_final_call_cleanup(out, 3);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp nz,L%d\n\tld hl,1\n"
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp nz,L%d\n\tld hl,1\n"
                  "\tld (ix-4),l\n\tld (ix-3),h\n"
                  "L%d:\n\tjp L%d\nL%d:\n",
             not_match, not_match, loop, loop_done);
-    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n", out);
+    mir_stream_puts("\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n", out);
     mir_sparse_emit_call(
         out, plan->directory_close_function,
         plan->directory_close_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tld de,0\n\tpush de\n"
+    mir_stream_puts("\tld de,0\n\tpush de\n"
           "\tld l,(ix-4)\n\tld h,(ix-3)\n\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[5]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[5]);
     mir_sparse_emit_call(
         out, plan->integer_check_function,
         plan->integer_check_name);
     mir_emit_final_call_cleanup(out, 3);
     mir_machine_emit_global_word(out, plan->failure_count, 0);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out,
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out,
             "\tjp z,L%d\n\tpush hl\n\tld hl,S%d\n\tpush hl\n",
             summary_success, plan->strings[6]);
     mir_wildcard_create_print(out, plan, 0);
     mir_emit_final_call_cleanup(out, 2);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,1\n\tjp L%d\nL%d:\n"
             "\tld hl,S%d\n\tpush hl\n",
             epilogue, summary_success, plan->strings[7]);
     mir_wildcard_create_print(out, plan, 1);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,0\nL%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
             epilogue);
 }
@@ -3509,33 +3509,33 @@ static int mir_match_errno_exercise_schedule(
 }
 
 static void mir_errno_store(
-    FILE *out, const struct MirErrnoExerciseSchedule *plan, int value)
+    MirStream *out, const struct MirErrnoExerciseSchedule *plan, int value)
 {
-    fprintf(out, "\tld hl,%d\n", value);
+    mir_stream_printf(out, "\tld hl,%d\n", value);
     mir_machine_emit_global_word_store(
         out, plan->errno_object, 0);
 }
 
 static void mir_errno_increment_failures(
-    FILE *out, const struct MirErrnoExerciseSchedule *plan)
+    MirStream *out, const struct MirErrnoExerciseSchedule *plan)
 {
     mir_machine_emit_global_word(out, plan->failure_count, 0);
-    fputs("\tinc hl\n", out);
+    mir_stream_puts("\tinc hl\n", out);
     mir_machine_emit_global_word_store(
         out, plan->failure_count, 0);
 }
 
 static void mir_errno_push_tmpname(
-    FILE *out, const struct MirErrnoExerciseSchedule *plan, int index)
+    MirStream *out, const struct MirErrnoExerciseSchedule *plan, int index)
 {
     mir_machine_emit_global_word(
         out, plan->tmpnames,
         plan->tmpnames_offset + 2 * index);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
 }
 
 static void mir_errno_emit_print(
-    FILE *out, const struct MirErrnoExerciseSchedule *plan, int call)
+    MirStream *out, const struct MirErrnoExerciseSchedule *plan, int call)
 {
     if ((plan->print_flags[call] & MIR_CALL_FLAG_FORMAT_HEX) != 0)
         mir_emit_runtime_call(out, "__pfehx");
@@ -3546,11 +3546,11 @@ static void mir_errno_emit_print(
 }
 
 static void mir_errno_expect_word(
-    FILE *out, struct Sym *function, const char *call_name,
+    MirStream *out, struct Sym *function, const char *call_name,
     int name_string, int expected)
 {
-    fputs("\tld c,l\n\tld b,h\n", out);
-    fprintf(out,
+    mir_stream_puts("\tld c,l\n\tld b,h\n", out);
+    mir_stream_printf(out,
             "\tld hl,%d\n\tpush hl\n"
             "\tld l,c\n\tld h,b\n\tpush hl\n"
             "\tld hl,S%d\n\tpush hl\n",
@@ -3560,13 +3560,13 @@ static void mir_errno_expect_word(
 }
 
 static void mir_errno_expect_long(
-    FILE *out, const struct MirErrnoExerciseSchedule *plan,
+    MirStream *out, const struct MirErrnoExerciseSchedule *plan,
     int name_string, int expected)
 {
-    fprintf(out, "\texx\n\tld hl,%d\n\tpush hl\n\texx\n",
+    mir_stream_printf(out, "\texx\n\tld hl,%d\n\tpush hl\n\texx\n",
             expected);
-    fputs("\tpush de\n\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", name_string);
+    mir_stream_puts("\tpush de\n\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", name_string);
     mir_sparse_emit_call(
         out, plan->expect_long_function,
         plan->expect_long_name);
@@ -3574,43 +3574,43 @@ static void mir_errno_expect_long(
 }
 
 static void mir_errno_expect_fd(
-    FILE *out, const struct MirErrnoExerciseSchedule *plan,
+    MirStream *out, const struct MirErrnoExerciseSchedule *plan,
     int name_string)
 {
-    fputs("\tld c,l\n\tld b,h\n\tpush bc\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", name_string);
+    mir_stream_puts("\tld c,l\n\tld b,h\n\tpush bc\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", name_string);
     mir_sparse_emit_call(
         out, plan->expect_fd_function,
         plan->expect_fd_name);
     mir_emit_final_call_cleanup(out, 2);
 }
 
-static void mir_errno_fds_address(FILE *out)
+static void mir_errno_fds_address(MirStream *out)
 {
-    fputs("\tpush iy\n\tpop hl\n\tadd hl,hl\n"
+    mir_stream_puts("\tpush iy\n\tpop hl\n\tadd hl,hl\n"
           "\tpush ix\n\tpop de\n\tadd hl,de\n"
           "\tld de,-16\n\tadd hl,de\n", out);
 }
 
 static void mir_errno_print_errno_string(
-    FILE *out, const struct MirErrnoExerciseSchedule *plan,
+    MirStream *out, const struct MirErrnoExerciseSchedule *plan,
     int format_string, int print_call)
 {
     mir_machine_emit_global_word(out, plan->errno_object, 0);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_sparse_emit_call(
         out, plan->strerror_function, plan->strerror_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_machine_emit_global_word(out, plan->errno_object, 0);
-    fputs("\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", format_string);
+    mir_stream_puts("\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", format_string);
     mir_errno_emit_print(out, plan, print_call);
     mir_emit_final_call_cleanup(out, 3);
 }
 
 static void mir_emit_errno_exercise_schedule(
-    FILE *out, const struct MirErrnoExerciseSchedule *plan)
+    MirStream *out, const struct MirErrnoExerciseSchedule *plan)
 {
     int loop = new_label();
     int loop_done = new_label();
@@ -3636,40 +3636,40 @@ static void mir_emit_errno_exercise_schedule(
     int summary_success = new_label();
     int epilogue = new_label();
 
-    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
           ";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
           "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-34\n\tadd hl,sp\n\tld sp,hl\n", out);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    fputs("\tld hl,0\n", out);
+    mir_stream_puts("\tld hl,0\n", out);
     mir_machine_emit_global_word_store(out, plan->failure_count, 0);
-    fputs("\tld a,88\n\tld (ix-21),a\n", out);
+    mir_stream_puts("\tld a,88\n\tld (ix-21),a\n", out);
     mir_errno_store(out, plan, 0);
 
-    fputs("\tld iy,0\n", out);
-    fprintf(out,
+    mir_stream_puts("\tld iy,0\n", out);
+    mir_stream_printf(out,
             "L%d:\n\tpush iy\n\tpop hl\n\tld de,9\n"
             "\tor a\n\tsbc hl,de\n\tjp nc,L%d\n",
             loop, loop_done);
-    fputs("\tpush iy\n\tpop hl\n\tadd hl,hl\n", out);
-    fprintf(out, "\tld de,%s%+d\n\tadd hl,de\n"
+    mir_stream_puts("\tpush iy\n\tpop hl\n\tadd hl,hl\n", out);
+    mir_stream_printf(out, "\tld de,%s%+d\n\tadd hl,de\n"
                  "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n",
             asm_name_for(sym_asm_name(plan->tmpnames)),
             plan->tmpnames_offset);
     mir_sparse_emit_call(
         out, plan->unlink_function, plan->unlink_name);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out, "\tinc iy\n\tjp L%d\nL%d:\n", loop, loop_done);
+    mir_stream_printf(out, "\tinc iy\n\tjp L%d\nL%d:\n", loop, loop_done);
 
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
     mir_sparse_emit_call(
         out, plan->unlink_function, plan->unlink_name);
     mir_emit_final_call_cleanup(out, 1);
 
     mir_errno_store(out, plan, 0);
-    fputs("\tld hl,0\n\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
+    mir_stream_puts("\tld hl,0\n\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
     mir_sparse_emit_call(out, plan->open_function, plan->open_name);
     mir_emit_final_call_cleanup(out, 2);
     mir_errno_expect_word(
@@ -3677,7 +3677,7 @@ static void mir_emit_errno_exercise_schedule(
         plan->expect_errno_name, plan->strings[1], 2);
 
     mir_errno_store(out, plan, 0);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
     mir_sparse_emit_call(
         out, plan->unlink_function, plan->unlink_name);
     mir_emit_final_call_cleanup(out, 1);
@@ -3686,7 +3686,7 @@ static void mir_emit_errno_exercise_schedule(
         plan->expect_errno_name, plan->strings[2], 2);
 
     mir_errno_store(out, plan, 0);
-    fputs("\tld hl,4\n\tpush hl\n"
+    mir_stream_puts("\tld hl,4\n\tpush hl\n"
           "\tpush ix\n\tpop hl\n\tld de,-29\n\tadd hl,de\n\tpush hl\n"
           "\tld hl,99\n\tpush hl\n", out);
     mir_sparse_emit_call(out, plan->read_function, plan->read_name);
@@ -3696,7 +3696,7 @@ static void mir_emit_errno_exercise_schedule(
         plan->expect_errno_name, plan->strings[3], 9);
 
     mir_errno_store(out, plan, 0);
-    fputs("\tld hl,1\n\tpush hl\n"
+    mir_stream_puts("\tld hl,1\n\tpush hl\n"
           "\tpush ix\n\tpop hl\n\tld de,-21\n\tadd hl,de\n\tpush hl\n"
           "\tld hl,99\n\tpush hl\n", out);
     mir_sparse_emit_call(out, plan->write_function, plan->write_name);
@@ -3706,7 +3706,7 @@ static void mir_emit_errno_exercise_schedule(
         plan->expect_errno_name, plan->strings[4], 9);
 
     mir_errno_store(out, plan, 0);
-    fputs("\tld hl,99\n\tpush hl\n", out);
+    mir_stream_puts("\tld hl,99\n\tpush hl\n", out);
     mir_sparse_emit_call(out, plan->close_function, plan->close_name);
     mir_emit_final_call_cleanup(out, 1);
     mir_errno_expect_word(
@@ -3714,7 +3714,7 @@ static void mir_emit_errno_exercise_schedule(
         plan->expect_errno_name, plan->strings[5], 9);
 
     mir_errno_store(out, plan, 0);
-    fputs("\tld hl,0\n\tpush hl\n"
+    mir_stream_puts("\tld hl,0\n\tpush hl\n"
           "\tld hl,0\n\tld de,0\n\tpush de\n\tpush hl\n"
           "\tld hl,99\n\tpush hl\n", out);
     mir_sparse_emit_call(out, plan->seek_function, plan->seek_name);
@@ -3722,258 +3722,258 @@ static void mir_emit_errno_exercise_schedule(
     mir_errno_expect_long(out, plan, plan->strings[6], 9);
 
     mir_errno_store(out, plan, 0);
-    fputs("\tld hl,578\n\tpush hl\n", out);
+    mir_stream_puts("\tld hl,578\n\tpush hl\n", out);
     mir_errno_push_tmpname(out, plan, 0);
     mir_sparse_emit_call(out, plan->open_function, plan->open_name);
     mir_emit_final_call_cleanup(out, 2);
-    fputs("\tld (ix-18),l\n\tld (ix-17),h\n", out);
+    mir_stream_puts("\tld (ix-18),l\n\tld (ix-17),h\n", out);
     mir_errno_expect_fd(out, plan, plan->strings[7]);
-    fputs("\tld l,(ix-18)\n\tld h,(ix-17)\n\tld de,3\n"
+    mir_stream_puts("\tld l,(ix-18)\n\tld h,(ix-17)\n\tld de,3\n"
           "\tld a,h\n\txor 128\n\tld h,a\n"
           "\tld a,d\n\txor 128\n\tld d,a\n"
           "\tor a\n\tsbc hl,de\n", out);
-    fprintf(out, "\tjp c,L%d\n", valid_fd_done);
+    mir_stream_printf(out, "\tjp c,L%d\n", valid_fd_done);
     mir_errno_store(out, plan, 0);
-    fputs("\tld hl,99\n\tpush hl\n"
+    mir_stream_puts("\tld hl,99\n\tpush hl\n"
           "\tld hl,0\n\tld de,0\n\tpush de\n\tpush hl\n"
           "\tld l,(ix-18)\n\tld h,(ix-17)\n\tpush hl\n", out);
     mir_sparse_emit_call(out, plan->seek_function, plan->seek_name);
     mir_emit_final_call_cleanup(out, 4);
     mir_errno_expect_long(out, plan, plan->strings[8], 22);
-    fputs("\tld l,(ix-18)\n\tld h,(ix-17)\n\tpush hl\n", out);
+    mir_stream_puts("\tld l,(ix-18)\n\tld h,(ix-17)\n\tpush hl\n", out);
     mir_sparse_emit_call(out, plan->close_function, plan->close_name);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out, "L%d:\n", valid_fd_done);
+    mir_stream_printf(out, "L%d:\n", valid_fd_done);
 
     mir_errno_store(out, plan, 0);
-    fputs("\tld a,1\n\tld (ix-32),a\n\tld iy,0\n", out);
-    fprintf(out,
+    mir_stream_puts("\tld a,1\n\tld (ix-32),a\n\tld iy,0\n", out);
+    mir_stream_printf(out,
             "L%d:\n\tpush iy\n\tpop hl\n\tld de,8\n"
             "\tor a\n\tsbc hl,de\n\tjp nc,L%d\n"
             "\tld hl,578\n\tpush hl\n",
             open_loop, open_loop_done);
-    fputs("\tpush iy\n\tpop hl\n\tadd hl,hl\n", out);
-    fprintf(out, "\tld de,%s%+d\n\tadd hl,de\n"
+    mir_stream_puts("\tpush iy\n\tpop hl\n\tadd hl,hl\n", out);
+    mir_stream_printf(out, "\tld de,%s%+d\n\tadd hl,de\n"
                  "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n",
             asm_name_for(sym_asm_name(plan->tmpnames)),
             plan->tmpnames_offset);
     mir_sparse_emit_call(out, plan->open_function, plan->open_name);
     mir_emit_final_call_cleanup(out, 2);
-    fputs("\tld c,l\n\tld b,h\n", out);
+    mir_stream_puts("\tld c,l\n\tld b,h\n", out);
     mir_errno_fds_address(out);
-    fputs("\tld (hl),c\n\tinc hl\n\tld (hl),b\n"
+    mir_stream_puts("\tld (hl),c\n\tinc hl\n\tld (hl),b\n"
           "\tld h,b\n\tld l,c\n\tld de,3\n"
           "\tld a,h\n\txor 128\n\tld h,a\n"
           "\tld a,d\n\txor 128\n\tld d,a\n"
           "\tor a\n\tsbc hl,de\n", out);
     {
         int open_ok = new_label();
-        fprintf(out, "\tjp nc,L%d\n\txor a\n\tld (ix-32),a\nL%d:\n",
+        mir_stream_printf(out, "\tjp nc,L%d\n\txor a\n\tld (ix-32),a\nL%d:\n",
                 open_ok, open_ok);
     }
-    fprintf(out, "\tinc iy\n\tjp L%d\nL%d:\n",
+    mir_stream_printf(out, "\tinc iy\n\tjp L%d\nL%d:\n",
             open_loop, open_loop_done);
 
     mir_errno_store(out, plan, 0);
-    fputs("\tld hl,578\n\tpush hl\n", out);
+    mir_stream_puts("\tld hl,578\n\tpush hl\n", out);
     mir_errno_push_tmpname(out, plan, 8);
     mir_sparse_emit_call(out, plan->open_function, plan->open_name);
     mir_emit_final_call_cleanup(out, 2);
-    fputs("\tld (ix-20),l\n\tld (ix-19),h\n"
+    mir_stream_puts("\tld (ix-20),l\n\tld (ix-19),h\n"
           "\tld a,(ix-32)\n\tor a\n", out);
-    fprintf(out, "\tjp z,L%d\n", setup_failed);
+    mir_stream_printf(out, "\tjp z,L%d\n", setup_failed);
     mir_errno_expect_word(
         out, plan->expect_errno_function,
         plan->expect_errno_name, plan->strings[9], 24);
-    fprintf(out, "\tjp L%d\nL%d:\n", after_overflow, setup_failed);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", after_overflow, setup_failed);
     mir_machine_emit_global_word(out, plan->errno_object, 0);
-    fputs("\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[10]);
+    mir_stream_puts("\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[10]);
     mir_errno_emit_print(out, plan, 0);
     mir_emit_final_call_cleanup(out, 2);
     mir_errno_increment_failures(out, plan);
-    fputs("\tld l,(ix-20)\n\tld h,(ix-19)\n\tld de,3\n"
+    mir_stream_puts("\tld l,(ix-20)\n\tld h,(ix-19)\n\tld de,3\n"
           "\tld a,h\n\txor 128\n\tld h,a\n"
           "\tld a,d\n\txor 128\n\tld d,a\n"
           "\tor a\n\tsbc hl,de\n", out);
     {
         int no_overflow_close = new_label();
-        fprintf(out, "\tjp c,L%d\n"
+        mir_stream_printf(out, "\tjp c,L%d\n"
                      "\tld l,(ix-20)\n\tld h,(ix-19)\n\tpush hl\n",
                 no_overflow_close);
         mir_sparse_emit_call(out, plan->close_function, plan->close_name);
         mir_emit_final_call_cleanup(out, 1);
-        fprintf(out, "L%d:\n", no_overflow_close);
+        mir_stream_printf(out, "L%d:\n", no_overflow_close);
     }
-    fprintf(out, "L%d:\n", after_overflow);
+    mir_stream_printf(out, "L%d:\n", after_overflow);
 
-    fputs("\tld iy,0\n", out);
-    fprintf(out,
+    mir_stream_puts("\tld iy,0\n", out);
+    mir_stream_printf(out,
             "L%d:\n\tpush iy\n\tpop hl\n\tld de,8\n"
             "\tor a\n\tsbc hl,de\n\tjp nc,L%d\n",
             close_loop, close_done);
     mir_errno_fds_address(out);
-    fputs("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+    mir_stream_puts("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
           "\tld h,b\n\tld l,c\n\tld de,3\n"
           "\tld a,h\n\txor 128\n\tld h,a\n"
           "\tld a,d\n\txor 128\n\tld d,a\n"
           "\tor a\n\tsbc hl,de\n", out);
-    fprintf(out, "\tjp c,L%d\n\tpush bc\n", close_skip);
+    mir_stream_printf(out, "\tjp c,L%d\n\tpush bc\n", close_skip);
     mir_sparse_emit_call(out, plan->close_function, plan->close_name);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out, "L%d:\n\tinc iy\n\tjp L%d\nL%d:\n",
+    mir_stream_printf(out, "L%d:\n\tinc iy\n\tjp L%d\nL%d:\n",
             close_skip, close_loop, close_done);
 
-    fputs("\tld iy,0\n", out);
-    fprintf(out,
+    mir_stream_puts("\tld iy,0\n", out);
+    mir_stream_printf(out,
             "L%d:\n\tpush iy\n\tpop hl\n\tld de,9\n"
             "\tor a\n\tsbc hl,de\n\tjp nc,L%d\n",
             unlink_loop, unlink_done);
-    fputs("\tpush iy\n\tpop hl\n\tadd hl,hl\n", out);
-    fprintf(out, "\tld de,%s%+d\n\tadd hl,de\n"
+    mir_stream_puts("\tpush iy\n\tpop hl\n\tadd hl,hl\n", out);
+    mir_stream_printf(out, "\tld de,%s%+d\n\tadd hl,de\n"
                  "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n",
             asm_name_for(sym_asm_name(plan->tmpnames)),
             plan->tmpnames_offset);
     mir_sparse_emit_call(
         out, plan->unlink_function, plan->unlink_name);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out, "\tinc iy\n\tjp L%d\nL%d:\n",
+    mir_stream_printf(out, "\tinc iy\n\tjp L%d\nL%d:\n",
             unlink_loop, unlink_done);
 
     mir_errno_store(out, plan, 0);
-    fputs("\tld hl,99\n\tpush hl\n", out);
+    mir_stream_puts("\tld hl,99\n\tpush hl\n", out);
     mir_sparse_emit_call(out, plan->tell_function, plan->tell_name);
     mir_emit_final_call_cleanup(out, 1);
     mir_errno_expect_long(out, plan, plan->strings[11], 9);
 
-    fputs("\tld a,90\n\tld (ix-29),a\n", out);
+    mir_stream_puts("\tld a,90\n\tld (ix-29),a\n", out);
     mir_errno_store(out, plan, 0);
-    fputs("\tld hl,99\n\tpush hl\n\tld hl,8\n\tpush hl\n"
+    mir_stream_puts("\tld hl,99\n\tpush hl\n\tld hl,8\n\tpush hl\n"
           "\tpush ix\n\tpop hl\n\tld de,-29\n\tadd hl,de\n\tpush hl\n",
           out);
     mir_sparse_emit_call(out, plan->gets_function, plan->gets_name);
     mir_emit_final_call_cleanup(out, 3);
-    fputs("\tld c,l\n\tld b,h\n\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp nz,L%d\n", fgets_failed);
+    mir_stream_puts("\tld c,l\n\tld b,h\n\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp nz,L%d\n", fgets_failed);
     mir_machine_emit_global_word(out, plan->errno_object, 0);
-    fputs("\tld de,9\n\tor a\n\tsbc hl,de\n", out);
-    fprintf(out, "\tjp nz,L%d\n", fgets_failed);
-    fputs("\tld a,(ix-29)\n\tcp 90\n", out);
-    fprintf(out, "\tjp nz,L%d\n", fgets_failed);
+    mir_stream_puts("\tld de,9\n\tor a\n\tsbc hl,de\n", out);
+    mir_stream_printf(out, "\tjp nz,L%d\n", fgets_failed);
+    mir_stream_puts("\tld a,(ix-29)\n\tcp 90\n", out);
+    mir_stream_printf(out, "\tjp nz,L%d\n", fgets_failed);
     mir_errno_print_errno_string(
         out, plan, plan->strings[12], 1);
-    fprintf(out, "\tjp L%d\nL%d:\n", fgets_done, fgets_failed);
-    fputs("\tld a,(ix-29)\n\tld l,a\n\tld h,0\n\tpush hl\n", out);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", fgets_done, fgets_failed);
+    mir_stream_puts("\tld a,(ix-29)\n\tld l,a\n\tld h,0\n\tpush hl\n", out);
     mir_machine_emit_global_word(out, plan->errno_object, 0);
-    fputs("\tpush hl\n\tld hl,0\n\tld a,b\n\tor c\n", out);
+    mir_stream_puts("\tpush hl\n\tld hl,0\n\tld a,b\n\tor c\n", out);
     {
         int fgr_null = new_label();
-        fprintf(out, "\tjp z,L%d\n\tinc hl\nL%d:\n\tpush hl\n",
+        mir_stream_printf(out, "\tjp z,L%d\n\tinc hl\nL%d:\n\tpush hl\n",
                 fgr_null, fgr_null);
     }
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[13]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[13]);
     mir_errno_emit_print(out, plan, 2);
     mir_emit_final_call_cleanup(out, 4);
     mir_errno_increment_failures(out, plan);
-    fprintf(out, "L%d:\n", fgets_done);
+    mir_stream_printf(out, "L%d:\n", fgets_done);
 
     mir_errno_store(out, plan, 0);
-    fputs("\tld hl,0\n\tpush hl\n\tld hl,99\n\tpush hl\n"
+    mir_stream_puts("\tld hl,0\n\tpush hl\n\tld hl,99\n\tpush hl\n"
           "\tld hl,0\n\tpush hl\n\tld hl,1\n\tpush hl\n", out);
     mir_sparse_emit_call(
         out, plan->setvbuf_function, plan->setvbuf_name);
     mir_emit_final_call_cleanup(out, 4);
-    fputs("\tld c,l\n\tld b,h\n\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n", setvbuf_failed);
+    mir_stream_puts("\tld c,l\n\tld b,h\n\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n", setvbuf_failed);
     mir_machine_emit_global_word(out, plan->errno_object, 0);
-    fputs("\tld de,22\n\tor a\n\tsbc hl,de\n", out);
-    fprintf(out, "\tjp nz,L%d\n", setvbuf_failed);
+    mir_stream_puts("\tld de,22\n\tor a\n\tsbc hl,de\n", out);
+    mir_stream_printf(out, "\tjp nz,L%d\n", setvbuf_failed);
     mir_errno_print_errno_string(
         out, plan, plan->strings[14], 3);
-    fprintf(out, "\tjp L%d\nL%d:\n", setvbuf_done, setvbuf_failed);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", setvbuf_done, setvbuf_failed);
     mir_machine_emit_global_word(out, plan->errno_object, 0);
-    fputs("\tpush hl\n\tpush bc\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[15]);
+    mir_stream_puts("\tpush hl\n\tpush bc\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[15]);
     mir_errno_emit_print(out, plan, 4);
     mir_emit_final_call_cleanup(out, 3);
     mir_errno_increment_failures(out, plan);
-    fprintf(out, "L%d:\n", setvbuf_done);
+    mir_stream_printf(out, "L%d:\n", setvbuf_done);
 
-    fputs("\tld a,1\n\tld (ix-33),a\n", out);
+    mir_stream_puts("\tld a,1\n\tld (ix-33),a\n", out);
     mir_errno_store(out, plan, 0);
-    fputs("\tld iy,0\n", out);
-    fprintf(out,
+    mir_stream_puts("\tld iy,0\n", out);
+    mir_stream_printf(out,
             "L%d:\n\tpush iy\n\tpop hl\n\tld de,4\n"
             "\tor a\n\tsbc hl,de\n\tjp nc,L%d\n",
             tmp_loop, tmp_loop_done);
     mir_sparse_emit_call(
         out, plan->tmpfile_function, plan->tmpfile_name);
-    fputs("\tld a,h\n\tor l\n", out);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
     {
         int tmp_opened = new_label();
-        fprintf(out, "\tjp nz,L%d\n\txor a\n\tld (ix-33),a\nL%d:\n",
+        mir_stream_printf(out, "\tjp nz,L%d\n\txor a\n\tld (ix-33),a\nL%d:\n",
                 tmp_opened, tmp_opened);
     }
-    fprintf(out, "\tinc iy\n\tjp L%d\nL%d:\n",
+    mir_stream_printf(out, "\tinc iy\n\tjp L%d\nL%d:\n",
             tmp_loop, tmp_loop_done);
     mir_errno_store(out, plan, 0);
     mir_sparse_emit_call(
         out, plan->tmpfile_function, plan->tmpfile_name);
-    fputs("\tld (ix-31),l\n\tld (ix-30),h\n"
+    mir_stream_puts("\tld (ix-31),l\n\tld (ix-30),h\n"
           "\tld a,(ix-33)\n\tor a\n", out);
-    fprintf(out, "\tjp z,L%d\n", tmp_setup_failed);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp nz,L%d\n", tmp_check_failed);
+    mir_stream_printf(out, "\tjp z,L%d\n", tmp_setup_failed);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp nz,L%d\n", tmp_check_failed);
     mir_machine_emit_global_word(out, plan->errno_object, 0);
-    fputs("\tld de,24\n\tor a\n\tsbc hl,de\n", out);
-    fprintf(out, "\tjp nz,L%d\n", tmp_check_failed);
+    mir_stream_puts("\tld de,24\n\tor a\n\tsbc hl,de\n", out);
+    mir_stream_printf(out, "\tjp nz,L%d\n", tmp_check_failed);
     mir_errno_print_errno_string(
         out, plan, plan->strings[16], 5);
-    fprintf(out, "\tjp L%d\nL%d:\n", tmp_done, tmp_check_failed);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", tmp_done, tmp_check_failed);
     mir_machine_emit_global_word(out, plan->errno_object, 0);
-    fputs("\tpush hl\n\tld l,(ix-31)\n\tld h,(ix-30)\n"
+    mir_stream_puts("\tpush hl\n\tld l,(ix-31)\n\tld h,(ix-30)\n"
           "\tld a,h\n\tor l\n\tld hl,0\n", out);
     {
         int no_tfover = new_label();
-        fprintf(out, "\tjp z,L%d\n\tinc hl\nL%d:\n\tpush hl\n",
+        mir_stream_printf(out, "\tjp z,L%d\n\tinc hl\nL%d:\n\tpush hl\n",
                 no_tfover, no_tfover);
     }
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[17]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[17]);
     mir_errno_emit_print(out, plan, 6);
     mir_emit_final_call_cleanup(out, 3);
     mir_errno_increment_failures(out, plan);
-    fprintf(out, "\tjp L%d\nL%d:\n", tmp_done, tmp_setup_failed);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", tmp_done, tmp_setup_failed);
     mir_machine_emit_global_word(out, plan->errno_object, 0);
-    fputs("\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[18]);
+    mir_stream_puts("\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[18]);
     mir_errno_emit_print(out, plan, 7);
     mir_emit_final_call_cleanup(out, 2);
     mir_errno_increment_failures(out, plan);
-    fputs("\tld l,(ix-31)\n\tld h,(ix-30)\n"
+    mir_stream_puts("\tld l,(ix-31)\n\tld h,(ix-30)\n"
           "\tld a,h\n\tor l\n", out);
     {
         int no_tmp_close = new_label();
-        fprintf(out, "\tjp z,L%d\n\tpush hl\n", no_tmp_close);
+        mir_stream_printf(out, "\tjp z,L%d\n\tpush hl\n", no_tmp_close);
         mir_sparse_emit_call(
             out, plan->fclose_function, plan->fclose_name);
         mir_emit_final_call_cleanup(out, 1);
-        fprintf(out, "L%d:\n", no_tmp_close);
+        mir_stream_printf(out, "L%d:\n", no_tmp_close);
     }
-    fprintf(out, "L%d:\n", tmp_done);
+    mir_stream_printf(out, "L%d:\n", tmp_done);
 
     mir_machine_emit_global_word(out, plan->failure_count, 0);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n\tpush hl\n", summary_success);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[19]);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n\tpush hl\n", summary_success);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[19]);
     mir_errno_emit_print(out, plan, 8);
     mir_emit_final_call_cleanup(out, 2);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,1\n\tjp L%d\nL%d:\n"
             "\tld hl,S%d\n\tpush hl\n",
             epilogue, summary_success, plan->strings[20]);
     mir_errno_emit_print(out, plan, 9);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,0\nL%d:\n\tld sp,ix\n\tpop ix\n\tpop iy\n"
             ";@dcc.reg free=iy\n\tret\n",
             epilogue);
@@ -4133,7 +4133,7 @@ static int mir_match_directory_pattern_schedule(
 }
 
 static void mir_directory_pattern_print(
-    FILE *out, const struct MirDirectoryPatternSchedule *plan, int call)
+    MirStream *out, const struct MirDirectoryPatternSchedule *plan, int call)
 {
     if ((plan->print_flags[call] & MIR_CALL_FLAG_FORMAT_HEX) != 0)
         mir_emit_runtime_call(out, "__pfehx");
@@ -4144,29 +4144,29 @@ static void mir_directory_pattern_print(
 }
 
 static void mir_directory_pattern_create(
-    FILE *out, const struct MirDirectoryPatternSchedule *plan,
+    MirStream *out, const struct MirDirectoryPatternSchedule *plan,
     int name_string, int content_string)
 {
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,S%d\n\tpush hl\n"
             "\tld hl,S%d\n\tpush hl\n",
             plan->strings[2], name_string);
     mir_sparse_emit_call(out, plan->open_function, plan->open_name);
     mir_emit_final_call_cleanup(out, 2);
-    fputs("\tld (ix-2),l\n\tld (ix-1),h\n\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", content_string);
+    mir_stream_puts("\tld (ix-2),l\n\tld (ix-1),h\n\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", content_string);
     mir_sparse_emit_call(out, plan->puts_function, plan->puts_name);
     mir_emit_final_call_cleanup(out, 2);
-    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n", out);
+    mir_stream_puts("\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n", out);
     mir_sparse_emit_call(out, plan->close_function, plan->close_name);
     mir_emit_final_call_cleanup(out, 1);
 }
 
 static void mir_directory_pattern_check(
-    FILE *out, const struct MirDirectoryPatternSchedule *plan,
+    MirStream *out, const struct MirDirectoryPatternSchedule *plan,
     int value_offset, int name_string, int expected)
 {
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,%d\n\tpush hl\n"
             "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n"
             "\tld hl,S%d\n\tpush hl\n",
@@ -4176,7 +4176,7 @@ static void mir_directory_pattern_check(
 }
 
 static void mir_emit_directory_pattern_schedule(
-    FILE *out, const struct MirDirectoryPatternSchedule *plan)
+    MirStream *out, const struct MirDirectoryPatternSchedule *plan)
 {
     int opened = new_label();
     int loop = new_label();
@@ -4186,17 +4186,17 @@ static void mir_emit_directory_pattern_schedule(
     int summary_success = new_label();
     int epilogue = new_label();
 
-    fprintf(out,
+    mir_stream_printf(out,
             "%s\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
             "\tld hl,-10\n\tadd hl,sp\n\tld sp,hl\n",
             MIR_EXACT_KERNEL_MARKER);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
     mir_sparse_emit_call(
         out, plan->unlink_function, plan->unlink_name);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
     mir_sparse_emit_call(
         out, plan->unlink_function, plan->unlink_name);
     mir_emit_final_call_cleanup(out, 1);
@@ -4204,58 +4204,58 @@ static void mir_emit_directory_pattern_schedule(
         out, plan, plan->strings[0], plan->strings[3]);
     mir_directory_pattern_create(
         out, plan, plan->strings[1], plan->strings[4]);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[5]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[5]);
     mir_sparse_emit_call(
         out, plan->directory_open_function,
         plan->directory_open_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tld (ix-2),l\n\tld (ix-1),h\n"
+    mir_stream_puts("\tld (ix-2),l\n\tld (ix-1),h\n"
           "\tld a,h\n\tor l\n", out);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tjp nz,L%d\n\tld hl,S%d\n\tpush hl\n",
             opened, plan->strings[6]);
     mir_directory_pattern_print(out, plan, 0);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out, "\tld hl,1\n\tjp L%d\nL%d:\n",
+    mir_stream_printf(out, "\tld hl,1\n\tjp L%d\nL%d:\n",
             epilogue, opened);
-    fputs("\txor a\n\tld (ix-4),a\n\tld (ix-3),a\n"
+    mir_stream_puts("\txor a\n\tld (ix-4),a\n\tld (ix-3),a\n"
           "\tld (ix-6),a\n\tld (ix-5),a\n"
           "\tld (ix-8),a\n\tld (ix-7),a\n", out);
-    fprintf(out, "L%d:\n", loop);
-    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n", out);
+    mir_stream_printf(out, "L%d:\n", loop);
+    mir_stream_puts("\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n", out);
     mir_sparse_emit_call(
         out, plan->directory_read_function,
         plan->directory_read_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tld (ix-10),l\n\tld (ix-9),h\n"
+    mir_stream_puts("\tld (ix-10),l\n\tld (ix-9),h\n"
           "\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n"
+    mir_stream_printf(out, "\tjp z,L%d\n"
                  "\tinc (ix-4)\n\tjp nz,L%d\n\tinc (ix-3)\nL%d:\n",
             loop_done, not_first, not_first);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[7]);
-    fputs("\tld l,(ix-10)\n\tld h,(ix-9)\n\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[7]);
+    mir_stream_puts("\tld l,(ix-10)\n\tld h,(ix-9)\n\tpush hl\n", out);
     mir_sparse_emit_call(
         out, plan->compare_function, plan->compare_name);
     mir_emit_final_call_cleanup(out, 2);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp nz,L%d\n\tld hl,1\n"
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp nz,L%d\n\tld hl,1\n"
                  "\tld (ix-6),l\n\tld (ix-5),h\nL%d:\n",
             not_second, not_second);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[8]);
-    fputs("\tld l,(ix-10)\n\tld h,(ix-9)\n\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[8]);
+    mir_stream_puts("\tld l,(ix-10)\n\tld h,(ix-9)\n\tpush hl\n", out);
     mir_sparse_emit_call(
         out, plan->compare_function, plan->compare_name);
     mir_emit_final_call_cleanup(out, 2);
-    fputs("\tld a,h\n\tor l\n", out);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
     {
         int next = new_label();
-        fprintf(out, "\tjp nz,L%d\n\tld hl,1\n"
+        mir_stream_printf(out, "\tjp nz,L%d\n\tld hl,1\n"
                      "\tld (ix-8),l\n\tld (ix-7),h\nL%d:\n"
                      "\tjp L%d\n",
                 next, next, loop);
     }
-    fprintf(out, "L%d:\n", loop_done);
-    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n", out);
+    mir_stream_printf(out, "L%d:\n", loop_done);
+    mir_stream_puts("\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n", out);
     mir_sparse_emit_call(
         out, plan->directory_close_function,
         plan->directory_close_name);
@@ -4266,28 +4266,28 @@ static void mir_emit_directory_pattern_schedule(
         out, plan, -6, plan->strings[10], 1);
     mir_directory_pattern_check(
         out, plan, -8, plan->strings[11], 0);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
     mir_sparse_emit_call(
         out, plan->unlink_function, plan->unlink_name);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
     mir_sparse_emit_call(
         out, plan->unlink_function, plan->unlink_name);
     mir_emit_final_call_cleanup(out, 1);
     mir_machine_emit_global_word(out, plan->failure_count, 0);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out,
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out,
             "\tjp z,L%d\n\tpush hl\n\tld hl,S%d\n\tpush hl\n",
             summary_success, plan->strings[12]);
     mir_directory_pattern_print(out, plan, 1);
     mir_emit_final_call_cleanup(out, 2);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,1\n\tjp L%d\nL%d:\n"
             "\tld hl,S%d\n\tpush hl\n",
             epilogue, summary_success, plan->strings[13]);
     mir_directory_pattern_print(out, plan, 2);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,0\nL%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
             epilogue);
 }
@@ -4388,18 +4388,18 @@ static int mir_match_integer_report_schedule(
 }
 
 static void mir_emit_integer_report_schedule(
-    FILE *out, const struct MirIntegerReportSchedule *plan)
+    MirStream *out, const struct MirIntegerReportSchedule *plan)
 {
     int success = new_label();
     int done = new_label();
     int failure = new_label();
 
-    fprintf(out,
+    mir_stream_printf(out,
             "%s\n",
             MIR_EXACT_KERNEL_MARKER);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,%d\n\tadd hl,sp\n"
             "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n\tinc hl\n"
             "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
@@ -4419,10 +4419,10 @@ static void mir_emit_integer_report_schedule(
         out, plan->print_function, plan->print_name);
     mir_emit_final_call_cleanup(out, 4);
     mir_machine_emit_global_word(out, plan->failure_count, 0);
-    fputs("\tinc hl\n", out);
+    mir_stream_puts("\tinc hl\n", out);
     mir_machine_emit_global_word_store(
         out, plan->failure_count, 0);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tjp L%d\nL%d:\n\tpush bc\n\tpush hl\n"
             "\tld hl,S%d\n\tpush hl\n",
             done, success,
@@ -4430,7 +4430,7 @@ static void mir_emit_integer_report_schedule(
     mir_call_recovery_emit_named_call(
         out, plan->print_function, plan->print_name);
     mir_emit_final_call_cleanup(out, 3);
-    fprintf(out,
+    mir_stream_printf(out,
             "L%d:\n\tret\n",
             done);
 }
@@ -4548,17 +4548,17 @@ static int mir_match_string_report_schedule(
 }
 
 static void mir_emit_string_report_schedule(
-    FILE *out, const struct MirStringReportSchedule *plan)
+    MirStream *out, const struct MirStringReportSchedule *plan)
 {
     int success = new_label();
     int done = new_label();
 
-    fprintf(out,
+    mir_stream_printf(out,
             "%s\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n",
             MIR_EXACT_KERNEL_MARKER);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tpush hl\n"
             "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tpush hl\n",
             plan->expected_stack_offset + 2,
@@ -4568,7 +4568,7 @@ static void mir_emit_string_report_schedule(
     mir_call_recovery_emit_named_call(
         out, plan->compare_function, plan->compare_name);
     mir_emit_final_call_cleanup(out, 2);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld a,h\n\tor l\n\tjp z,L%d\n"
             "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tpush hl\n"
             "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tpush hl\n"
@@ -4586,10 +4586,10 @@ static void mir_emit_string_report_schedule(
         out, plan->print_function, plan->print_name);
     mir_emit_final_call_cleanup(out, 4);
     mir_machine_emit_global_word(out, plan->failure_count, 0);
-    fputs("\tinc hl\n", out);
+    mir_stream_puts("\tinc hl\n", out);
     mir_machine_emit_global_word_store(
         out, plan->failure_count, 0);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tjp L%d\nL%d:\n"
             "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tpush hl\n"
             "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tpush hl\n"
@@ -4603,7 +4603,7 @@ static void mir_emit_string_report_schedule(
     mir_call_recovery_emit_named_call(
         out, plan->print_function, plan->print_name);
     mir_emit_final_call_cleanup(out, 3);
-    fprintf(out,
+    mir_stream_printf(out,
             "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
             done);
 }
@@ -4741,18 +4741,18 @@ static int mir_match_read_exact_schedule(
 }
 
 static void mir_emit_read_exact_schedule(
-    FILE *out, const struct MirReadExactSchedule *plan)
+    MirStream *out, const struct MirReadExactSchedule *plan)
 {
     int opened = new_label();
     int done = new_label();
 
-    fprintf(out,
+    mir_stream_printf(out,
             "%s\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
             "\tld hl,-2\n\tadd hl,sp\n\tld sp,hl\n",
             MIR_EXACT_KERNEL_MARKER);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,S%d\n\tpush hl\n"
             "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tpush hl\n",
             plan->mode_string_id,
@@ -4761,7 +4761,7 @@ static void mir_emit_read_exact_schedule(
     mir_call_recovery_emit_named_call(
         out, plan->open_function, plan->open_name);
     mir_emit_final_call_cleanup(out, 2);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld (ix-2),l\n\tld (ix-1),h\n"
             "\tld a,h\n\tor l\n\tjp nz,L%d\n"
             "\tld hl,S%d\n\tpush hl\n"
@@ -4772,9 +4772,9 @@ static void mir_emit_read_exact_schedule(
     mir_call_recovery_emit_named_call(
         out, plan->copy_function, plan->copy_name);
     mir_emit_final_call_cleanup(out, 2);
-    fprintf(out, "\tjp L%d\nL%d:\n", done, opened);
-    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n", out);
-    fprintf(out,
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", done, opened);
+    mir_stream_puts("\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n", out);
+    mir_stream_printf(out,
             "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tpush hl\n"
             "\tld hl,1\n\tpush hl\n"
             "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tpush hl\n",
@@ -4785,7 +4785,7 @@ static void mir_emit_read_exact_schedule(
     mir_call_recovery_emit_named_call(
         out, plan->read_function, plan->read_name);
     mir_emit_final_call_cleanup(out, 4);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tex de,hl\n"
             "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
             "\tadd hl,de\n\txor a\n\tld (hl),a\n"
@@ -4795,7 +4795,7 @@ static void mir_emit_read_exact_schedule(
     mir_call_recovery_emit_named_call(
         out, plan->close_function, plan->close_name);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out,
+    mir_stream_printf(out,
             "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
             done);
 }
@@ -4867,14 +4867,14 @@ static int mir_match_file_exists_schedule(
 }
 
 static void mir_emit_file_exists_schedule(
-    FILE *out, const struct MirFileExistsSchedule *plan)
+    MirStream *out, const struct MirFileExistsSchedule *plan)
 {
     int opened = new_label();
 
-    fprintf(out, "%s\n", MIR_EXACT_KERNEL_MARKER);
+    mir_stream_printf(out, "%s\n", MIR_EXACT_KERNEL_MARKER);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,%d\n\tadd hl,sp\n"
             "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
             "\tld hl,S%d\n\tpush hl\n\tpush de\n",
@@ -4882,14 +4882,14 @@ static void mir_emit_file_exists_schedule(
     mir_call_recovery_emit_named_call(
         out, plan->open_function, plan->open_name);
     mir_emit_final_call_cleanup(out, 2);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld a,h\n\tor l\n\tjp nz,L%d\n\tret\n"
             "L%d:\n\tpush hl\n",
             opened, opened);
     mir_call_recovery_emit_named_call(
         out, plan->close_function, plan->close_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tld hl,1\n\tret\n", out);
+    mir_stream_puts("\tld hl,1\n\tret\n", out);
 }
 
 static struct Sym *mir_recovery_direct_call(
@@ -4953,7 +4953,7 @@ static struct Sym *mir_recovery_named_call(
 }
 
 static void mir_emit_recovery_call(
-    FILE *out, struct Sym *function, const char *call_name)
+    MirStream *out, struct Sym *function, const char *call_name)
 {
     const char *ordinary_name =
         asm_name_for(sym_asm_name(function));
@@ -5279,28 +5279,28 @@ static int mir_match_nonlocal_descent_schedule(
 }
 
 static void mir_emit_nonlocal_descent_schedule(
-    FILE *out, const struct MirNonlocalDescentSchedule *plan)
+    MirStream *out, const struct MirNonlocalDescentSchedule *plan)
 {
     int recursive = new_label();
 
-    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
           "\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
             plan->frame_bytes);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    fputs("\tld l,(ix+4)\n\tld h,(ix+5)\n"
+    mir_stream_puts("\tld l,(ix+4)\n\tld h,(ix+5)\n"
           "\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp nz,L%d\n", recursive);
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tjp nz,L%d\n", recursive);
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->jump_value);
-    fprintf(out, "\tld hl,%s\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%s\n\tpush hl\n",
             asm_name_for(sym_asm_name(plan->environment)));
     mir_call_recovery_emit_named_call(
         out, plan->jump_function, plan->jump_name);
-    fprintf(out, "L%d:\n", recursive);
-    fprintf(out,
+    mir_stream_printf(out, "L%d:\n", recursive);
+    mir_stream_printf(out,
             "\tld l,(ix+10)\n\tld h,(ix+11)\n"
             "\tld de,%d\n\tadd hl,de\n\tpush hl\n"
             "\tld l,(ix+8)\n\tld h,(ix+9)\n"
@@ -5570,11 +5570,11 @@ static int mir_match_nonlocal_runner_schedule(
 }
 
 static void mir_nonlocal_emit_check(
-    FILE *out, const struct MirNonlocalRunnerSchedule *plan,
+    MirStream *out, const struct MirNonlocalRunnerSchedule *plan,
     int string_slot)
 {
-    fputs("\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+    mir_stream_puts("\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n",
             plan->strings[string_slot]);
     mir_call_recovery_emit_named_call(
         out, plan->check_function, plan->check_name);
@@ -5582,11 +5582,11 @@ static void mir_nonlocal_emit_check(
 }
 
 static void mir_nonlocal_marker_condition(
-    FILE *out, const struct MirNonlocalRunnerSchedule *plan)
+    MirStream *out, const struct MirNonlocalRunnerSchedule *plan)
 {
     int done = new_label();
 
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld l,(ix%d)\n\tld h,(ix%d)\n\tpush hl\n"
             "\tld l,(ix%d)\n\tld h,(ix%d)\n"
             "\tld de,%d\n\tadd hl,de\n\tex de,hl\n"
@@ -5598,7 +5598,7 @@ static void mir_nonlocal_marker_condition(
 }
 
 static void mir_emit_nonlocal_runner_schedule(
-    FILE *out, const struct MirNonlocalRunnerSchedule *plan)
+    MirStream *out, const struct MirNonlocalRunnerSchedule *plan)
 {
     int loop = new_label();
     int loop_body = new_label();
@@ -5610,15 +5610,15 @@ static void mir_emit_nonlocal_runner_schedule(
     int success = new_label();
     int return_done = new_label();
 
-    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
           "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-6\n\tadd hl,sp\n\tld sp,hl\n", out);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    fputs("\tld hl,0\n", out);
+    mir_stream_puts("\tld hl,0\n", out);
     mir_machine_emit_global_word_store(
         out, plan->failure_count, 0);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,0\n\tld (ix%d),l\n\tld (ix%d),h\n"
             "L%d:\n"
             "\tld a,(ix%d)\n\tor a\n\tjp m,L%d\n"
@@ -5635,29 +5635,29 @@ static void mir_emit_nonlocal_runner_schedule(
             plan->cycle_offset, plan->cycle_offset + 1,
             plan->marker_base,
             plan->marker_offset, plan->marker_offset + 1);
-    fprintf(out, "\tld hl,%s\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%s\n\tpush hl\n",
             asm_name_for(sym_asm_name(plan->environment)));
     mir_call_recovery_emit_named_call(
         out, plan->save_function, plan->save_name);
-    fputs("\tpop bc\n", out);
-    fprintf(out,
+    mir_stream_puts("\tpop bc\n", out);
+    mir_stream_printf(out,
             "\tld (ix%d),l\n\tld (ix%d),h\n"
             "\tld a,h\n\tor l\n\tjp z,L%d\n",
             plan->result_offset, plan->result_offset + 1,
             direct_path);
 
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld de,%d\n\tor a\n\tsbc hl,de\n"
             "\tld hl,0\n\tjp nz,L%d\n\tinc hl\nL%d:\n",
             plan->jump_value, value_ok, value_ok);
     mir_nonlocal_emit_check(out, plan, 2);
     mir_nonlocal_marker_condition(out, plan);
     mir_nonlocal_emit_check(out, plan, 3);
-    fprintf(out, "\tjp L%d\nL%d:\n", join, direct_path);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", join, direct_path);
 
     mir_nonlocal_marker_condition(out, plan);
     mir_nonlocal_emit_check(out, plan, 0);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,%d\n\tpush hl\n"
             "\tld hl,%d\n\tpush hl\n"
             "\tld hl,%d\n\tpush hl\n"
@@ -5669,10 +5669,10 @@ static void mir_emit_nonlocal_runner_schedule(
     mir_call_recovery_emit_named_call(
         out, plan->descent_function, plan->descent_name);
     mir_emit_final_call_cleanup(out, 4);
-    fputs("\tld hl,0\n", out);
+    mir_stream_puts("\tld hl,0\n", out);
     mir_nonlocal_emit_check(out, plan, 1);
 
-    fprintf(out,
+    mir_stream_printf(out,
             "L%d:\n"
             "\tinc (ix%d)\n\tjp nz,L%d\n"
             "\tinc (ix%d)\nL%d:\n\tjp L%d\n"
@@ -5682,21 +5682,21 @@ static void mir_emit_nonlocal_runner_schedule(
             loop_done);
     mir_machine_emit_global_word(
         out, plan->failure_count, 0);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n\tpush hl\n", success);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n\tpush hl\n", success);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n",
             plan->strings[4]);
     mir_call_recovery_emit_named_call(
         out, plan->print_function, plan->print_names[0]);
     mir_emit_final_call_cleanup(out, 2);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,1\n\tjp L%d\nL%d:\n"
             "\tld hl,S%d\n\tpush hl\n",
             return_done, success, plan->strings[5]);
     mir_call_recovery_emit_named_call(
         out, plan->print_function, plan->print_names[1]);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,0\nL%d:\n"
             "\tld sp,ix\n\tpop ix\n\tret\n",
             return_done);
@@ -5831,12 +5831,12 @@ static int mir_match_fixed_binary_checks_schedule(
 }
 
 static void mir_emit_fixed_binary_checks_schedule(
-    FILE *out, const struct MirFixedBinaryChecksSchedule *plan)
+    MirStream *out, const struct MirFixedBinaryChecksSchedule *plan)
 {
     int done = new_label();
     int item;
 
-    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
           "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-2\n\tadd hl,sp\n\tld sp,hl\n"
           "\tld (ix-2),1\n", out);
@@ -5845,14 +5845,14 @@ static void mir_emit_fixed_binary_checks_schedule(
     for (item = 0; item < 5; ++item) {
         int equal = new_label();
 
-        fprintf(out, "\tld hl,%d\n\tpush hl\n",
+        mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
                 plan->right[item] & 0xffff);
-        fprintf(out, "\tld hl,%d\n\tpush hl\n",
+        mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
                 plan->left[item] & 0xffff);
         mir_emit_recovery_call(
             out, plan->target_function, plan->target_name);
         mir_emit_final_call_cleanup(out, 2);
-        fprintf(out,
+        mir_stream_printf(out,
                 "\tld de,%d\n\tor a\n\tsbc hl,de\n"
                 "\tjr z,L%d\n\tld hl,S%d\n\tpush hl\n",
                 plan->expected[item] & 0xffff,
@@ -5860,18 +5860,18 @@ static void mir_emit_fixed_binary_checks_schedule(
         mir_emit_recovery_call(
             out, plan->print_function, plan->print_name);
         mir_emit_final_call_cleanup(out, 1);
-        fprintf(out,
+        mir_stream_printf(out,
                 "\txor a\n\tld (ix-2),a\nL%d:\n",
                 equal);
     }
-    fputs("\tld a,(ix-2)\n\tor a\n", out);
-    fprintf(out,
+    mir_stream_puts("\tld a,(ix-2)\n\tor a\n", out);
+    mir_stream_printf(out,
             "\tjr z,L%d\n\tld hl,S%d\n\tpush hl\n",
             done, plan->success_string);
     mir_emit_recovery_call(
         out, plan->print_function, plan->print_name);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out,
+    mir_stream_printf(out,
             "L%d:\n\tld a,(ix-2)\n\txor 1\n"
             "\tld l,a\n\tld h,0\n"
             "\tld sp,ix\n\tpop ix\n\tret\n",
@@ -5957,42 +5957,42 @@ static int mir_match_function_pointer_print_schedule(
 }
 
 static void mir_emit_function_pointer_print_schedule(
-    FILE *out, const struct MirFunctionPointerPrintSchedule *plan)
+    MirStream *out, const struct MirFunctionPointerPrintSchedule *plan)
 {
     int item;
 
-    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
           "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-8\n\tadd hl,sp\n\tld sp,hl\n",
           out);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
     for (item = 0; item < 5; ++item)
-        fprintf(out, "\tld (ix%+d),%d\n",
+        mir_stream_printf(out, "\tld (ix%+d),%d\n",
                 -5 + item, plan->message[item] & 255);
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->leaf_argument & 0xffff);
     mir_emit_recovery_call(
         out, plan->leaf_function, plan->leaf_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tld (ix-8),l\n\tld (ix-7),h\n", out);
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_puts("\tld (ix-8),l\n\tld (ix-7),h\n", out);
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->forward_argument & 0xffff);
-    fprintf(out, "\tld hl,%s\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%s\n\tpush hl\n",
             plan->leaf_name);
     mir_emit_recovery_call(
         out, plan->forward_function, plan->forward_name);
     mir_emit_final_call_cleanup(out, 2);
-    fputs("\tpush hl\n"
+    mir_stream_puts("\tpush hl\n"
           "\tld l,(ix-8)\n\tld h,(ix-7)\n\tpush hl\n"
           "\tpush ix\n\tpop hl\n\tld de,-5\n\tadd hl,de\n\tpush hl\n",
           out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n",
             plan->format_string);
     mir_emit_recovery_call(
         out, plan->print_function, plan->print_name);
     mir_emit_final_call_cleanup(out, 4);
-    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+    mir_stream_puts("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
 static int mir_match_port_io_schedule(
@@ -6083,37 +6083,37 @@ static int mir_match_port_io_schedule(
 }
 
 static void mir_emit_port_io_schedule(
-    FILE *out, const struct MirPortIoSchedule *plan)
+    MirStream *out, const struct MirPortIoSchedule *plan)
 {
     int outside = new_label();
     int selected = new_label();
 
-    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
           "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-2\n\tadd hl,sp\n\tld sp,hl\n",
           out);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->output_value & 0xffff);
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->port & 0xffff);
     mir_emit_recovery_call(
         out, plan->output_function, plan->output_name);
     mir_emit_final_call_cleanup(out, 2);
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->port & 0xffff);
     mir_emit_recovery_call(
         out, plan->input_function, plan->input_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tld (ix-2),l\n\tld (ix-1),h\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+    mir_stream_puts("\tld (ix-2),l\n\tld (ix-1),h\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n",
             plan->strings[0]);
     mir_emit_recovery_call(
         out, plan->print_function, plan->print_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tld a,(ix-1)\n\tor a\n", out);
-    fprintf(out,
+    mir_stream_puts("\tld a,(ix-1)\n\tor a\n", out);
+    mir_stream_printf(out,
             "\tjr nz,L%d\n\tld hl,S%d\n\tjr L%d\n"
             "L%d:\n\tld hl,S%d\nL%d:\n\tpush hl\n"
             "\tld hl,S%d\n\tpush hl\n",
@@ -6123,12 +6123,12 @@ static void mir_emit_port_io_schedule(
     mir_emit_recovery_call(
         out, plan->print_function, plan->print_name);
     mir_emit_final_call_cleanup(out, 2);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n",
             plan->strings[4]);
     mir_emit_recovery_call(
         out, plan->print_function, plan->print_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+    mir_stream_puts("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
 static int mir_match_signed_idiom_report_schedule(
@@ -6268,33 +6268,33 @@ static int mir_match_signed_idiom_report_schedule(
 }
 
 static void mir_emit_signed_idiom_multiply(
-    FILE *out, const struct MirSignedIdiomReportSchedule *plan,
+    MirStream *out, const struct MirSignedIdiomReportSchedule *plan,
     int multiplier)
 {
     int offset = plan->argc_stack_offset + 2;
 
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,%d\n"
             "\tld e,(ix+%d)\n\tld d,(ix+%d)\n",
             multiplier & 0xffff, offset, offset + 1);
     mir_emit_runtime_call(out, "__mulu");
 }
 
-static void mir_emit_signed_idiom_abs(FILE *out)
+static void mir_emit_signed_idiom_abs(MirStream *out)
 {
     int nonnegative = new_label();
 
-    fputs("\tbit 7,h\n", out);
-    fprintf(out, "\tjr z,L%d\n", nonnegative);
-    fputs("\txor a\n\tsub l\n\tld l,a\n"
+    mir_stream_puts("\tbit 7,h\n", out);
+    mir_stream_printf(out, "\tjr z,L%d\n", nonnegative);
+    mir_stream_puts("\txor a\n\tsub l\n\tld l,a\n"
           "\tsbc a,a\n\tsub h\n\tld h,a\n", out);
-    fprintf(out, "L%d:\n", nonnegative);
+    mir_stream_printf(out, "L%d:\n", nonnegative);
 }
 
 static void mir_emit_signed_idiom_report_schedule(
-    FILE *out, const struct MirSignedIdiomReportSchedule *plan)
+    MirStream *out, const struct MirSignedIdiomReportSchedule *plan)
 {
-    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
           "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-2\n\tadd hl,sp\n\tld sp,hl\n",
           out);
@@ -6302,35 +6302,35 @@ static void mir_emit_signed_idiom_report_schedule(
         mir_emit_runtime_call(out, "__stchk");
 
     mir_emit_signed_idiom_multiply(out, plan, plan->multipliers[6]);
-    fputs("\tld h,0\n\tpush hl\n", out);
+    mir_stream_puts("\tld h,0\n\tpush hl\n", out);
     mir_emit_signed_idiom_multiply(out, plan, plan->multipliers[5]);
-    fputs("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n", out);
+    mir_stream_puts("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n", out);
     mir_emit_signed_idiom_abs(out);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_signed_idiom_multiply(out, plan, plan->multipliers[4]);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_signed_idiom_multiply(out, plan, plan->multipliers[3]);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_signed_idiom_multiply(out, plan, plan->multipliers[2]);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
 
     mir_emit_signed_idiom_multiply(out, plan, plan->multipliers[0]);
-    fputs("\tld (ix-2),l\n\tld (ix-1),h\n"
+    mir_stream_puts("\tld (ix-2),l\n\tld (ix-1),h\n"
           "\tpush hl\n\tpush hl\n\tpush hl\n", out);
     mir_emit_signed_idiom_abs(out);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_signed_idiom_multiply(out, plan, plan->multipliers[1]);
     mir_emit_signed_idiom_abs(out);
-    fputs("\tpush hl\n"
+    mir_stream_puts("\tpush hl\n"
           "\tld l,(ix-2)\n\tld h,(ix-1)\n", out);
     mir_emit_signed_idiom_abs(out);
-    fputs("\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+    mir_stream_puts("\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n",
             plan->format_string);
     mir_emit_recovery_call(
         out, plan->print_function, plan->print_name);
     mir_emit_final_call_cleanup(out, 12);
-    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+    mir_stream_puts("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
 static int mir_match_buffered_example_schedule(
@@ -6474,45 +6474,45 @@ static int mir_match_buffered_example_schedule(
 }
 
 static void mir_emit_buffered_example_stream(
-    FILE *out, const struct MirBufferedExampleSchedule *plan)
+    MirStream *out, const struct MirBufferedExampleSchedule *plan)
 {
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->stream_value & 0xffff);
 }
 
 static void mir_emit_buffered_example_schedule(
-    FILE *out, const struct MirBufferedExampleSchedule *plan)
+    MirStream *out, const struct MirBufferedExampleSchedule *plan)
 {
     int loop = new_label();
     int done = new_label();
     int configured = new_label();
     int incremented = new_label();
 
-    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
           "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-6\n\tadd hl,sp\n\tld sp,hl\n",
           out);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->buffer_size & 0xffff);
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->full_mode & 0xffff);
-    fprintf(out, "\tld hl,%s\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%s\n\tpush hl\n",
             plan->buffer_name);
     mir_emit_buffered_example_stream(out, plan);
     mir_emit_recovery_call(
         out, plan->set_buffer_function, plan->set_buffer_name);
     mir_emit_final_call_cleanup(out, 4);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjr z,L%d\n\tld hl,S%d\n\tpush hl\n",
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjr z,L%d\n\tld hl,S%d\n\tpush hl\n",
             configured, plan->strings[0]);
     mir_emit_recovery_call(
         out, plan->puts_function, plan->puts_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tld hl,1\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+    mir_stream_puts("\tld hl,1\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 
-    fprintf(out,
+    mir_stream_printf(out,
             "L%d:\n\txor a\n"
             "\tld (ix-6),a\n\tld (ix-5),a\n"
             "\tld (ix-4),a\n\tld (ix-3),a\n"
@@ -6522,34 +6522,34 @@ static void mir_emit_buffered_example_schedule(
             "\tjr nc,L%d\n",
             configured, plan->first_index,
             loop, plan->last_index + 1, done);
-    fputs("\tld l,(ix-4)\n\tld h,(ix-3)\n\tpush hl\n"
+    mir_stream_puts("\tld l,(ix-4)\n\tld h,(ix-3)\n\tpush hl\n"
           "\tld l,(ix-6)\n\tld h,(ix-5)\n\tpush hl\n"
           "\tld l,(ix-2)\n\tld h,(ix-1)\n\tpush hl\n",
           out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n",
             plan->strings[1]);
     mir_emit_recovery_call(
         out, plan->print_function, plan->print_name);
     mir_emit_final_call_cleanup(out, 4);
 
-    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n"
+    mir_stream_puts("\tld l,(ix-2)\n\tld h,(ix-1)\n"
           "\tld e,l\n\tld d,h\n", out);
     mir_emit_runtime_call(out, "__mulu");
-    fputs("\tld e,(ix-6)\n\tld d,(ix-5)\n"
+    mir_stream_puts("\tld e,(ix-6)\n\tld d,(ix-5)\n"
           "\tadd hl,de\n\tld (ix-6),l\n\tld (ix-5),h\n"
           "\tinc (ix-2)\n", out);
-    fprintf(out, "\tjr nz,L%d\n\tinc (ix-1)\nL%d:\n",
+    mir_stream_printf(out, "\tjr nz,L%d\n\tinc (ix-1)\nL%d:\n",
             incremented, incremented);
-    fprintf(out, "\tjr L%d\n", loop);
+    mir_stream_printf(out, "\tjr L%d\n", loop);
 
-    fprintf(out, "L%d:\n", done);
+    mir_stream_printf(out, "L%d:\n", done);
     mir_emit_buffered_example_stream(out, plan);
     mir_emit_recovery_call(
         out, plan->flush_function, plan->flush_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tld l,(ix-4)\n\tld h,(ix-3)\n\tpush hl\n"
+    mir_stream_puts("\tld l,(ix-4)\n\tld h,(ix-3)\n\tpush hl\n"
           "\tld l,(ix-6)\n\tld h,(ix-5)\n\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n",
             plan->strings[2]);
     mir_emit_recovery_call(
         out, plan->print_function, plan->print_name);
@@ -6558,15 +6558,15 @@ static void mir_emit_buffered_example_schedule(
     mir_emit_recovery_call(
         out, plan->flush_function, plan->flush_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tld hl,0\n\tpush hl\n", out);
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_puts("\tld hl,0\n\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->line_mode & 0xffff);
-    fputs("\tld hl,0\n\tpush hl\n", out);
+    mir_stream_puts("\tld hl,0\n\tpush hl\n", out);
     mir_emit_buffered_example_stream(out, plan);
     mir_emit_recovery_call(
         out, plan->set_buffer_function, plan->set_buffer_name);
     mir_emit_final_call_cleanup(out, 4);
-    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+    mir_stream_puts("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
 static int mir_match_simple_file_io_schedule(
@@ -6742,130 +6742,130 @@ static int mir_match_simple_file_io_schedule(
     return plan->buffer_size == 64;
 }
 
-static void mir_emit_simple_file_buffer(FILE *out)
+static void mir_emit_simple_file_buffer(MirStream *out)
 {
-    fputs("\tpush iy\n", out);
+    mir_stream_puts("\tpush iy\n", out);
 }
 
-static void mir_emit_simple_file_load_stream(FILE *out)
+static void mir_emit_simple_file_load_stream(MirStream *out)
 {
-    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n", out);
+    mir_stream_puts("\tld l,(ix-2)\n\tld h,(ix-1)\n", out);
 }
 
 static void mir_emit_simple_file_open(
-    FILE *out, const struct MirSimpleFileIoSchedule *plan,
+    MirStream *out, const struct MirSimpleFileIoSchedule *plan,
     int path_string, int mode_string)
 {
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", mode_string);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", path_string);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", mode_string);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", path_string);
     mir_emit_recovery_call(out, plan->open_function, plan->open_name);
     mir_emit_final_call_cleanup(out, 2);
-    fputs("\tld (ix-2),l\n\tld (ix-1),h\n", out);
+    mir_stream_puts("\tld (ix-2),l\n\tld (ix-1),h\n", out);
 }
 
 static void mir_emit_simple_file_puts(
-    FILE *out, const struct MirSimpleFileIoSchedule *plan,
+    MirStream *out, const struct MirSimpleFileIoSchedule *plan,
     int string_id)
 {
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
     mir_emit_recovery_call(out, plan->puts_function, plan->puts_name);
     mir_emit_final_call_cleanup(out, 1);
 }
 
 static void mir_emit_simple_file_io_schedule(
-    FILE *out, const struct MirSimpleFileIoSchedule *plan)
+    MirStream *out, const struct MirSimpleFileIoSchedule *plan)
 {
     int write_ok = new_label();
     int read_ok = new_label();
     int loop = new_label();
     int done = new_label();
 
-    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
           ";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
           "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-68\n\tadd hl,sp\n\tld sp,hl\n", out);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    fputs("\tpush ix\n\tpop iy\n"
+    mir_stream_puts("\tpush ix\n\tpop iy\n"
           "\tld de,-68\n\tadd iy,de\n", out);
 
     mir_emit_simple_file_open(
         out, plan, plan->strings[3], plan->strings[4]);
-    fputs("\tld a,(ix-2)\n\tor (ix-1)\n", out);
-    fprintf(out, "\tjr nz,L%d\n", write_ok);
+    mir_stream_puts("\tld a,(ix-2)\n\tor (ix-1)\n", out);
+    mir_stream_printf(out, "\tjr nz,L%d\n", write_ok);
     mir_emit_simple_file_puts(out, plan, plan->strings[0]);
-    fputs("\tld hl,1\n\tld sp,ix\n\tpop ix\n\tpop iy\n"
+    mir_stream_puts("\tld hl,1\n\tld sp,ix\n\tpop ix\n\tpop iy\n"
           ";@dcc.reg free=iy\n\tret\n", out);
-    fprintf(out, "L%d:\n", write_ok);
+    mir_stream_printf(out, "L%d:\n", write_ok);
 
     mir_emit_simple_file_load_stream(out);
-    fputs("\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[5]);
+    mir_stream_puts("\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[5]);
     mir_emit_recovery_call(
         out, plan->puts_stream_function,
         plan->puts_stream_name);
     mir_emit_final_call_cleanup(out, 2);
     mir_emit_simple_file_load_stream(out);
-    fputs("\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[6]);
+    mir_stream_puts("\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[6]);
     mir_emit_recovery_call(
         out, plan->puts_stream_function,
         plan->puts_stream_name);
     mir_emit_final_call_cleanup(out, 2);
-    fputs("\tld hl,3\n\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[7]);
+    mir_stream_puts("\tld hl,3\n\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[7]);
     mir_emit_simple_file_load_stream(out);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->file_print_function,
         plan->file_print_name);
     mir_emit_final_call_cleanup(out, 3);
     mir_emit_simple_file_load_stream(out);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->close_function, plan->close_name);
     mir_emit_final_call_cleanup(out, 1);
 
     mir_emit_simple_file_open(
         out, plan, plan->strings[3], plan->strings[8]);
-    fputs("\tld a,(ix-2)\n\tor (ix-1)\n", out);
-    fprintf(out, "\tjr nz,L%d\n", read_ok);
+    mir_stream_puts("\tld a,(ix-2)\n\tor (ix-1)\n", out);
+    mir_stream_printf(out, "\tjr nz,L%d\n", read_ok);
     mir_emit_simple_file_puts(out, plan, plan->strings[1]);
-    fputs("\tld hl,1\n\tld sp,ix\n\tpop ix\n\tpop iy\n"
+    mir_stream_puts("\tld hl,1\n\tld sp,ix\n\tpop ix\n\tpop iy\n"
           ";@dcc.reg free=iy\n\tret\n", out);
-    fprintf(out,
+    mir_stream_printf(out,
             "L%d:\n\txor a\n\tld (ix-4),a\n\tld (ix-3),a\n"
             "L%d:\n",
             read_ok, loop);
     mir_emit_simple_file_load_stream(out);
-    fputs("\tpush hl\n", out);
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_puts("\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->buffer_size);
     mir_emit_simple_file_buffer(out);
     mir_emit_recovery_call(
         out, plan->gets_function, plan->gets_name);
     mir_emit_final_call_cleanup(out, 3);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjr z,L%d\n", done);
-    fputs("\tld l,(ix-4)\n\tld h,(ix-3)\n\tinc hl\n"
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjr z,L%d\n", done);
+    mir_stream_puts("\tld l,(ix-4)\n\tld h,(ix-3)\n\tinc hl\n"
           "\tld (ix-4),l\n\tld (ix-3),h\n", out);
     mir_emit_simple_file_buffer(out);
-    fputs("\tld l,(ix-4)\n\tld h,(ix-3)\n\tpush hl\n",
+    mir_stream_puts("\tld l,(ix-4)\n\tld h,(ix-3)\n\tpush hl\n",
           out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[2]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[2]);
     mir_emit_recovery_call(
         out, plan->print_function, plan->print_name);
     mir_emit_final_call_cleanup(out, 3);
-    fprintf(out, "\tjr L%d\nL%d:\n", loop, done);
+    mir_stream_printf(out, "\tjr L%d\nL%d:\n", loop, done);
 
     mir_emit_simple_file_load_stream(out);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->close_function, plan->close_name);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->formatted_value & 0xffff);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[9]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[9]);
     mir_emit_simple_file_buffer(out);
     mir_emit_recovery_call(
         out, plan->string_print_function,
@@ -6875,12 +6875,12 @@ static void mir_emit_simple_file_io_schedule(
     mir_emit_recovery_call(
         out, plan->puts_function, plan->puts_name);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[3]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[3]);
     mir_emit_recovery_call(
         out, plan->unlink_function, plan->unlink_name);
     mir_emit_final_call_cleanup(out, 1);
     mir_emit_simple_file_puts(out, plan, plan->strings[10]);
-    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tpop iy\n"
+    mir_stream_puts("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tpop iy\n"
           ";@dcc.reg free=iy\n\tret\n", out);
 }
 
@@ -7125,7 +7125,7 @@ static int mir_match_function_pointer_runtime_schedule(
 }
 
 static void mir_emit_function_pointer_global_call(
-    FILE *out, struct Sym *pointer, int words)
+    MirStream *out, struct Sym *pointer, int words)
 {
     mir_machine_emit_global_word(out, pointer, 0);
     mir_emit_runtime_call(out, "__call_hl");
@@ -7133,136 +7133,136 @@ static void mir_emit_function_pointer_global_call(
 }
 
 static void mir_emit_function_pointer_print(
-    FILE *out, const struct MirFunctionPointerRuntimeSchedule *plan,
+    MirStream *out, const struct MirFunctionPointerRuntimeSchedule *plan,
     int format_string, int words)
 {
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", format_string);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", format_string);
     mir_emit_recovery_call(
         out, plan->print_function, plan->print_name);
     mir_emit_final_call_cleanup(out, words + 1);
 }
 
 static void mir_emit_function_pointer_address(
-    FILE *out, struct Sym *symbol)
+    MirStream *out, struct Sym *symbol)
 {
-    fprintf(out, "\tld hl,%s\n",
+    mir_stream_printf(out, "\tld hl,%s\n",
             asm_name_for(sym_asm_name(symbol)));
 }
 
 static void mir_emit_function_pointer_runtime_schedule(
-    FILE *out, const struct MirFunctionPointerRuntimeSchedule *plan)
+    MirStream *out, const struct MirFunctionPointerRuntimeSchedule *plan)
 {
     int found = new_label();
     int offset_ready = new_label();
     int byte;
 
-    fputs(MIR_EXACT_KERNEL_MARKER "\n", out);
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n", out);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
 
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
     mir_emit_function_pointer_global_call(
         out, plan->pointer_globals[0], 1);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_function_pointer_print(out, plan, plan->strings[0], 1);
 
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->search_character);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
     mir_emit_function_pointer_global_call(
         out, plan->pointer_globals[1], 2);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_function_pointer_print(out, plan, plan->strings[2], 1);
 
-    fputs("\tld hl,3\n\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[4]);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[3]);
+    mir_stream_puts("\tld hl,3\n\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[4]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[3]);
     mir_emit_function_pointer_global_call(
         out, plan->pointer_globals[2], 3);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_function_pointer_print(out, plan, plan->strings[0], 1);
-    fputs("\tld hl,3\n\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[3]);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[3]);
+    mir_stream_puts("\tld hl,3\n\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[3]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[3]);
     mir_emit_function_pointer_global_call(
         out, plan->pointer_globals[2], 3);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_function_pointer_print(out, plan, plan->strings[0], 1);
 
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->memory_count);
-    fputs("\tld hl,90\n\tpush hl\n", out);
+    mir_stream_puts("\tld hl,90\n\tpush hl\n", out);
     mir_emit_function_pointer_address(out, plan->buffers[0]);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_function_pointer_global_call(
         out, plan->pointer_globals[3], 3);
     for (byte = plan->memory_count - 1; byte >= 0; --byte) {
-        fprintf(out, "\tld a,(%s%+d)\n\tld l,a\n"
+        mir_stream_printf(out, "\tld a,(%s%+d)\n\tld l,a\n"
                 "\trlca\n\tsbc a,a\n\tld h,a\n\tpush hl\n",
                 asm_name_for(sym_asm_name(plan->buffers[0])), byte);
     }
     mir_emit_function_pointer_print(out, plan, plan->strings[5], 8);
 
-    fprintf(out, "\tld hl,%d\n\tpush hl\n", plan->bdos_character);
-    fprintf(out, "\tld hl,%d\n\tpush hl\n", plan->bdos_function);
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n", plan->bdos_character);
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n", plan->bdos_function);
     mir_emit_function_pointer_global_call(
         out, plan->pointer_globals[4], 2);
     mir_emit_function_pointer_print(out, plan, plan->strings[6], 0);
 
-    fprintf(out, "\tld hl,%d\n\tpush hl\n", plan->copy_count);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n", plan->copy_count);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
     mir_emit_function_pointer_address(out, plan->buffers[1]);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_function_pointer_global_call(
         out, plan->pointer_globals[5], 3);
-    fprintf(out, "\txor a\n\tld (%s+%d),a\n",
+    mir_stream_printf(out, "\txor a\n\tld (%s+%d),a\n",
             asm_name_for(sym_asm_name(plan->buffers[1])),
             plan->copy_count);
     mir_emit_function_pointer_address(out, plan->buffers[1]);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_function_pointer_print(out, plan, plan->strings[2], 1);
 
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
     mir_emit_recovery_call(
         out, plan->length_function, plan->length_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tpush hl\n", out);
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_puts("\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->search_character);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
     mir_emit_function_pointer_global_call(
         out, plan->pointer_globals[6], 3);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjr nz,L%d\n\tld hl,65535\n\tjr L%d\nL%d:\n",
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjr nz,L%d\n\tld hl,65535\n\tjr L%d\nL%d:\n",
             found, offset_ready, found);
-    fprintf(out, "\tld de,S%d\n\tor a\n\tsbc hl,de\nL%d:\n",
+    mir_stream_printf(out, "\tld de,S%d\n\tor a\n\tsbc hl,de\nL%d:\n",
             plan->strings[1], offset_ready);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_function_pointer_print(out, plan, plan->strings[0], 1);
 
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
     mir_emit_function_pointer_address(out, plan->buffers[2]);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_function_pointer_global_call(
         out, plan->pointer_globals[7], 2);
     mir_emit_function_pointer_address(out, plan->buffers[2]);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_function_pointer_print(out, plan, plan->strings[2], 1);
 
-    fputs("\tld hl,111\n\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
+    mir_stream_puts("\tld hl,111\n\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
     mir_emit_function_pointer_global_call(
         out, plan->pointer_globals[8], 2);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_function_pointer_print(out, plan, plan->strings[2], 1);
 
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[7]);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[7]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
     mir_emit_function_pointer_global_call(
         out, plan->pointer_globals[9], 2);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_function_pointer_print(out, plan, plan->strings[2], 1);
-    fputs("\tld hl,0\n\tret\n", out);
+    mir_stream_puts("\tld hl,0\n\tret\n", out);
 }
 
 static int mir_match_snprintf_sequence_schedule(
@@ -7399,21 +7399,21 @@ static int mir_match_snprintf_sequence_schedule(
         plan->sizes[6] == 3;
 }
 
-static void mir_emit_snprintf_buffer(FILE *out)
+static void mir_emit_snprintf_buffer(MirStream *out)
 {
-    fputs("\tpush iy\n", out);
+    mir_stream_puts("\tpush iy\n", out);
 }
 
 static void mir_emit_snprintf_call(
-    FILE *out, const struct MirSnprintfSequenceSchedule *plan,
+    MirStream *out, const struct MirSnprintfSequenceSchedule *plan,
     int size, int format_string, int has_value, int value)
 {
     if (has_value) {
-        fprintf(out, "\tld hl,%d\n\tpush hl\n",
+        mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
                 value & 0xffff);
     }
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", format_string);
-    fprintf(out, "\tld hl,%d\n\tpush hl\n", size);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", format_string);
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n", size);
     mir_emit_snprintf_buffer(out);
     mir_emit_recovery_call(
         out, plan->format_function, plan->format_name);
@@ -7421,37 +7421,37 @@ static void mir_emit_snprintf_call(
 }
 
 static void mir_emit_snprintf_result(
-    FILE *out, const struct MirSnprintfSequenceSchedule *plan,
+    MirStream *out, const struct MirSnprintfSequenceSchedule *plan,
     int print_string)
 {
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_snprintf_buffer(out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", print_string);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", print_string);
     mir_emit_recovery_call(
         out, plan->print_function, plan->print_name);
     mir_emit_final_call_cleanup(out, 3);
 }
 
 static void mir_emit_snprintf_buffer_print(
-    FILE *out, const struct MirSnprintfSequenceSchedule *plan)
+    MirStream *out, const struct MirSnprintfSequenceSchedule *plan)
 {
     mir_emit_snprintf_buffer(out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[9]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[9]);
     mir_emit_recovery_call(
         out, plan->print_function, plan->print_name);
     mir_emit_final_call_cleanup(out, 2);
 }
 
 static void mir_emit_snprintf_sequence_schedule(
-    FILE *out, const struct MirSnprintfSequenceSchedule *plan)
+    MirStream *out, const struct MirSnprintfSequenceSchedule *plan)
 {
-    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
           ";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
           "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-32\n\tadd hl,sp\n\tld sp,hl\n", out);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    fputs("\tpush ix\n\tpop iy\n\tld de,-32\n\tadd iy,de\n", out);
+    mir_stream_puts("\tpush ix\n\tpop iy\n\tld de,-32\n\tadd iy,de\n", out);
 
     mir_emit_snprintf_call(
         out, plan, plan->sizes[0], plan->strings[0],
@@ -7467,12 +7467,12 @@ static void mir_emit_snprintf_sequence_schedule(
         out, plan, plan->sizes[3], plan->strings[4], 0, 0);
     mir_emit_snprintf_result(out, plan, plan->strings[1]);
 
-    fputs("\tld (iy+0),81\n", out);
+    mir_stream_puts("\tld (iy+0),81\n", out);
     mir_emit_snprintf_call(
         out, plan, plan->sizes[4], plan->strings[4], 0, 0);
-    fputs("\tpush hl\n\tld l,(iy+0)\n"
+    mir_stream_puts("\tpush hl\n\tld l,(iy+0)\n"
           "\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[5]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[5]);
     mir_emit_recovery_call(
         out, plan->print_function, plan->print_name);
     mir_emit_final_call_cleanup(out, 3);
@@ -7484,35 +7484,35 @@ static void mir_emit_snprintf_sequence_schedule(
         out, plan, plan->sizes[6], plan->strings[7], 0, 0);
     mir_emit_snprintf_result(out, plan, plan->strings[1]);
 
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->helper_values[2] & 0xffff);
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->helper_values[1] & 0xffff);
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->helper_values[0] & 0xffff);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[8]);
-    fputs("\tld hl,4\n\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[8]);
+    mir_stream_puts("\tld hl,4\n\tpush hl\n", out);
     mir_emit_snprintf_buffer(out);
     mir_emit_recovery_call(
         out, plan->variadic_helper, plan->helper_name);
     mir_emit_final_call_cleanup(out, 6);
     mir_emit_snprintf_buffer_print(out, plan);
 
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->helper_values[3] & 0xffff);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[11]);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[10]);
-    fputs("\tld hl,32\n\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[11]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[10]);
+    mir_stream_puts("\tld hl,32\n\tpush hl\n", out);
     mir_emit_snprintf_buffer(out);
     mir_emit_recovery_call(
         out, plan->variadic_helper, plan->helper_name);
     mir_emit_final_call_cleanup(out, 5);
     mir_emit_snprintf_buffer_print(out, plan);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[12]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[12]);
     mir_emit_recovery_call(
         out, plan->print_function, plan->print_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tpop iy\n"
+    mir_stream_puts("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tpop iy\n"
           ";@dcc.reg free=iy\n\tret\n", out);
 }
 
@@ -7764,105 +7764,105 @@ static int mir_match_legacy_file_roundtrip_schedule(
 }
 
 static void mir_legacy_roundtrip_load_word(
-    FILE *out, int offset)
+    MirStream *out, int offset)
 {
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
             offset, offset + 1);
 }
 
 static void mir_legacy_roundtrip_store_word(
-    FILE *out, int offset)
+    MirStream *out, int offset)
 {
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld (ix%+d),l\n\tld (ix%+d),h\n",
             offset, offset + 1);
 }
 
 static void mir_legacy_roundtrip_push_buffer(
-    FILE *out, const struct MirLegacyFileRoundtripSchedule *plan)
+    MirStream *out, const struct MirLegacyFileRoundtripSchedule *plan)
 {
-    fprintf(out, "\tld hl,%s\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%s\n\tpush hl\n",
             asm_name_for(sym_asm_name(plan->buffer)));
 }
 
 static void mir_legacy_roundtrip_failure(
-    FILE *out, const struct MirLegacyFileRoundtripSchedule *plan,
+    MirStream *out, const struct MirLegacyFileRoundtripSchedule *plan,
     int string_id)
 {
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
     mir_emit_recovery_call(
         out, plan->failure_function, plan->failure_name);
 }
 
 static void mir_legacy_roundtrip_open(
-    FILE *out, const struct MirLegacyFileRoundtripSchedule *plan,
+    MirStream *out, const struct MirLegacyFileRoundtripSchedule *plan,
     int flags, int failure_string)
 {
     int opened = new_label();
 
-    fprintf(out, "\tld hl,%d\n\tpush hl\n", flags);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n", flags);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
     mir_emit_recovery_call(
         out, plan->open_function, plan->open_name);
     mir_emit_final_call_cleanup(out, 2);
     mir_legacy_roundtrip_store_word(out, -2);
-    fputs("\tinc hl\n\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjr nz,L%d\n", opened);
+    mir_stream_puts("\tinc hl\n\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjr nz,L%d\n", opened);
     mir_legacy_roundtrip_failure(out, plan, failure_string);
-    fprintf(out, "L%d:\n", opened);
+    mir_stream_printf(out, "L%d:\n", opened);
 }
 
 static void mir_legacy_roundtrip_close(
-    FILE *out, const struct MirLegacyFileRoundtripSchedule *plan)
+    MirStream *out, const struct MirLegacyFileRoundtripSchedule *plan)
 {
     mir_legacy_roundtrip_load_word(out, -2);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->close_function, plan->close_name);
     mir_emit_final_call_cleanup(out, 1);
 }
 
 static void mir_legacy_roundtrip_io(
-    FILE *out, const struct MirLegacyFileRoundtripSchedule *plan,
+    MirStream *out, const struct MirLegacyFileRoundtripSchedule *plan,
     struct Sym *function, const char *call_name)
 {
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->buffer_bytes);
     mir_legacy_roundtrip_push_buffer(out, plan);
     mir_legacy_roundtrip_load_word(out, -2);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_recovery_call(out, function, call_name);
     mir_emit_final_call_cleanup(out, 3);
 }
 
 static void mir_legacy_roundtrip_check_count(
-    FILE *out, const struct MirLegacyFileRoundtripSchedule *plan,
+    MirStream *out, const struct MirLegacyFileRoundtripSchedule *plan,
     int failure_string)
 {
     int matched = new_label();
 
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld de,%d\n\tor a\n\tsbc hl,de\n",
             plan->buffer_bytes);
-    fprintf(out, "\tjr z,L%d\n", matched);
+    mir_stream_printf(out, "\tjr z,L%d\n", matched);
     mir_legacy_roundtrip_failure(out, plan, failure_string);
-    fprintf(out, "L%d:\n", matched);
+    mir_stream_printf(out, "L%d:\n", matched);
 }
 
 static void mir_legacy_roundtrip_fill(
-    FILE *out, const struct MirLegacyFileRoundtripSchedule *plan,
+    MirStream *out, const struct MirLegacyFileRoundtripSchedule *plan,
     int biased)
 {
     int loop = new_label();
 
     mir_legacy_roundtrip_load_word(out, -4);
     if (biased) {
-        fprintf(out, "\tld de,%d\n\tadd hl,de\n",
+        mir_stream_printf(out, "\tld de,%d\n\tadd hl,de\n",
                 plan->rewrite_bias);
     }
-    fputs("\tex de,hl\n", out);
-    fprintf(out,
+    mir_stream_puts("\tex de,hl\n", out);
+    mir_stream_printf(out,
             "\tld hl,%s\n\tld b,%d\nL%d:\n"
             "\tld (hl),e\n\tinc hl\n\tld (hl),d\n\tinc hl\n"
             "\tdjnz L%d\n",
@@ -7871,7 +7871,7 @@ static void mir_legacy_roundtrip_fill(
 }
 
 static void mir_legacy_roundtrip_verify(
-    FILE *out, const struct MirLegacyFileRoundtripSchedule *plan,
+    MirStream *out, const struct MirLegacyFileRoundtripSchedule *plan,
     int biased, int failure_string)
 {
     int loop = new_label();
@@ -7879,93 +7879,93 @@ static void mir_legacy_roundtrip_verify(
 
     mir_legacy_roundtrip_load_word(out, -4);
     if (biased) {
-        fprintf(out, "\tld de,%d\n\tadd hl,de\n",
+        mir_stream_printf(out, "\tld de,%d\n\tadd hl,de\n",
                 plan->rewrite_bias);
     }
-    fputs("\tex de,hl\n", out);
-    fprintf(out,
+    mir_stream_puts("\tex de,hl\n", out);
+    mir_stream_printf(out,
             "\tld hl,%s\n\tld b,%d\nL%d:\n"
             "\tld a,(hl)\n\tcp e\n",
             asm_name_for(sym_asm_name(plan->buffer)),
             plan->buffer_elements, loop);
-    fprintf(out, "\tjr nz,L%d\n", matched);
-    fputs("\tinc hl\n\tld a,(hl)\n\tcp d\n", out);
-    fprintf(out, "\tjr nz,L%d\n\tinc hl\n\tdjnz L%d\n",
+    mir_stream_printf(out, "\tjr nz,L%d\n", matched);
+    mir_stream_puts("\tinc hl\n\tld a,(hl)\n\tcp d\n", out);
+    mir_stream_printf(out, "\tjr nz,L%d\n\tinc hl\n\tdjnz L%d\n",
             matched, loop);
     {
         int done = new_label();
 
-        fprintf(out, "\tjr L%d\nL%d:\n",
+        mir_stream_printf(out, "\tjr L%d\nL%d:\n",
                 done, matched);
         mir_legacy_roundtrip_failure(
             out, plan, failure_string);
-        fprintf(out, "L%d:\n", done);
+        mir_stream_printf(out, "L%d:\n", done);
     }
 }
 
-static void mir_legacy_roundtrip_make_offset(FILE *out)
+static void mir_legacy_roundtrip_make_offset(MirStream *out)
 {
     int shift;
 
     mir_legacy_roundtrip_load_word(out, -4);
-    fputs("\tld de,0\n", out);
+    mir_stream_puts("\tld de,0\n", out);
     for (shift = 0; shift < 6; ++shift)
-        fputs("\tadd hl,hl\n\trl e\n\trl d\n", out);
+        mir_stream_puts("\tadd hl,hl\n\trl e\n\trl d\n", out);
     mir_legacy_roundtrip_store_word(out, -8);
-    fputs("\tex de,hl\n", out);
+    mir_stream_puts("\tex de,hl\n", out);
     mir_legacy_roundtrip_store_word(out, -6);
 }
 
 static void mir_legacy_roundtrip_seek(
-    FILE *out, const struct MirLegacyFileRoundtripSchedule *plan)
+    MirStream *out, const struct MirLegacyFileRoundtripSchedule *plan)
 {
     int matched = new_label();
 
     mir_legacy_roundtrip_make_offset(out);
-    fputs("\tld hl,0\n\tpush hl\n", out);
+    mir_stream_puts("\tld hl,0\n\tpush hl\n", out);
     mir_legacy_roundtrip_load_word(out, -6);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_legacy_roundtrip_load_word(out, -8);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_legacy_roundtrip_load_word(out, -2);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->seek_function, plan->seek_name);
     mir_emit_final_call_cleanup(out, 4);
     mir_legacy_roundtrip_store_word(out, -12);
-    fputs("\tex de,hl\n", out);
+    mir_stream_puts("\tex de,hl\n", out);
     mir_legacy_roundtrip_store_word(out, -10);
     mir_legacy_roundtrip_load_word(out, -12);
-    fputs("\tld c,(ix-8)\n\tld b,(ix-7)\n"
+    mir_stream_puts("\tld c,(ix-8)\n\tld b,(ix-7)\n"
           "\tor a\n\tsbc hl,bc\n", out);
-    fprintf(out, "\tjr nz,L%d\n", matched);
+    mir_stream_printf(out, "\tjr nz,L%d\n", matched);
     mir_legacy_roundtrip_load_word(out, -10);
-    fputs("\tld c,(ix-6)\n\tld b,(ix-5)\n"
+    mir_stream_puts("\tld c,(ix-6)\n\tld b,(ix-5)\n"
           "\tor a\n\tsbc hl,bc\n", out);
     {
         int ok = new_label();
 
-        fprintf(out, "\tjr z,L%d\nL%d:\n", ok, matched);
+        mir_stream_printf(out, "\tjr z,L%d\nL%d:\n", ok, matched);
         mir_legacy_roundtrip_load_word(out, -6);
-        fputs("\tpush hl\n", out);
+        mir_stream_puts("\tpush hl\n", out);
         mir_legacy_roundtrip_load_word(out, -8);
-        fputs("\tpush hl\n", out);
+        mir_stream_puts("\tpush hl\n", out);
         mir_legacy_roundtrip_load_word(out, -10);
-        fputs("\tpush hl\n", out);
+        mir_stream_puts("\tpush hl\n", out);
         mir_legacy_roundtrip_load_word(out, -12);
-        fputs("\tpush hl\n", out);
-        fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+        mir_stream_puts("\tpush hl\n", out);
+        mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n",
                 plan->strings[7]);
         mir_emit_runtime_call(out, plan->offset_print_name);
         mir_emit_final_call_cleanup(out, 5);
         mir_legacy_roundtrip_failure(
             out, plan, plan->strings[8]);
-        fprintf(out, "L%d:\n", ok);
+        mir_stream_printf(out, "L%d:\n", ok);
     }
 }
 
 static void mir_emit_legacy_file_roundtrip_schedule(
-    FILE *out, const struct MirLegacyFileRoundtripSchedule *plan)
+    MirStream *out, const struct MirLegacyFileRoundtripSchedule *plan)
 {
     int first_loop = new_label();
     int first_done = new_label();
@@ -7980,53 +7980,53 @@ static void mir_emit_legacy_file_roundtrip_schedule(
     int fourth_verify = new_label();
     int unlink_ok = new_label();
 
-    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
           "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-12\n\tadd hl,sp\n\tld sp,hl\n", out);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->create_flags);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
     mir_emit_recovery_call(
         out, plan->create_function, plan->create_name);
     mir_emit_final_call_cleanup(out, 2);
     mir_legacy_roundtrip_store_word(out, -2);
-    fputs("\tinc hl\n\tld a,h\n\tor l\n", out);
+    mir_stream_puts("\tinc hl\n\tld a,h\n\tor l\n", out);
     {
         int created = new_label();
 
-        fprintf(out, "\tjr nz,L%d\n", created);
+        mir_stream_printf(out, "\tjr nz,L%d\n", created);
         mir_legacy_roundtrip_failure(out, plan, plan->strings[1]);
-        fprintf(out, "L%d:\n", created);
+        mir_stream_printf(out, "L%d:\n", created);
     }
-    fputs("\tld hl,0\n", out);
+    mir_stream_puts("\tld hl,0\n", out);
     mir_legacy_roundtrip_store_word(out, -4);
-    fprintf(out, "L%d:\n", first_loop);
+    mir_stream_printf(out, "L%d:\n", first_loop);
     mir_legacy_roundtrip_load_word(out, -4);
-    fprintf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n",
+    mir_stream_printf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n",
             plan->iterations);
-    fprintf(out, "\tjp nc,L%d\n", first_done);
+    mir_stream_printf(out, "\tjp nc,L%d\n", first_done);
     mir_legacy_roundtrip_fill(out, plan, 0);
     mir_legacy_roundtrip_io(
         out, plan, plan->write_function, plan->write_name);
     mir_legacy_roundtrip_check_count(
         out, plan, plan->strings[2]);
     mir_legacy_roundtrip_load_word(out, -4);
-    fputs("\tinc hl\n", out);
+    mir_stream_puts("\tinc hl\n", out);
     mir_legacy_roundtrip_store_word(out, -4);
-    fprintf(out, "\tjp L%d\nL%d:\n", first_loop, first_done);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", first_loop, first_done);
     mir_legacy_roundtrip_close(out, plan);
 
     mir_legacy_roundtrip_open(
         out, plan, plan->read_flags, plan->strings[3]);
-    fputs("\tld hl,0\n", out);
+    mir_stream_puts("\tld hl,0\n", out);
     mir_legacy_roundtrip_store_word(out, -4);
-    fprintf(out, "L%d:\n", second_loop);
+    mir_stream_printf(out, "L%d:\n", second_loop);
     mir_legacy_roundtrip_load_word(out, -4);
-    fprintf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n",
+    mir_stream_printf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n",
             plan->iterations);
-    fprintf(out, "\tjp nc,L%d\n", second_done);
+    mir_stream_printf(out, "\tjp nc,L%d\n", second_done);
     mir_legacy_roundtrip_io(
         out, plan, plan->read_function, plan->read_name);
     mir_legacy_roundtrip_check_count(
@@ -8034,22 +8034,22 @@ static void mir_emit_legacy_file_roundtrip_schedule(
     mir_legacy_roundtrip_verify(
         out, plan, 0, plan->strings[5]);
     mir_legacy_roundtrip_load_word(out, -4);
-    fputs("\tinc hl\n", out);
+    mir_stream_puts("\tinc hl\n", out);
     mir_legacy_roundtrip_store_word(out, -4);
-    fprintf(out, "\tjp L%d\nL%d:\n", second_loop, second_done);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", second_loop, second_done);
     mir_legacy_roundtrip_close(out, plan);
 
     mir_legacy_roundtrip_open(
         out, plan, plan->write_flags, plan->strings[6]);
-    fputs("\tld hl,0\n", out);
+    mir_stream_puts("\tld hl,0\n", out);
     mir_legacy_roundtrip_store_word(out, -4);
-    fprintf(out, "L%d:\n", third_loop);
+    mir_stream_printf(out, "L%d:\n", third_loop);
     mir_legacy_roundtrip_load_word(out, -4);
-    fprintf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n",
+    mir_stream_printf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n",
             plan->iterations);
-    fprintf(out, "\tjp nc,L%d\n", third_done);
-    fputs("\tld a,(ix-4)\n", out);
-    fprintf(out, "\tand %d\n\tjp nz,L%d\n",
+    mir_stream_printf(out, "\tjp nc,L%d\n", third_done);
+    mir_stream_puts("\tld a,(ix-4)\n", out);
+    mir_stream_printf(out, "\tand %d\n\tjp nz,L%d\n",
             plan->rewrite_stride - 1, third_skip);
     mir_legacy_roundtrip_seek(out, plan);
     mir_legacy_roundtrip_fill(out, plan, 1);
@@ -8057,53 +8057,53 @@ static void mir_emit_legacy_file_roundtrip_schedule(
         out, plan, plan->write_function, plan->write_name);
     mir_legacy_roundtrip_check_count(
         out, plan, plan->strings[9]);
-    fprintf(out, "L%d:\n", third_skip);
+    mir_stream_printf(out, "L%d:\n", third_skip);
     mir_legacy_roundtrip_load_word(out, -4);
-    fputs("\tinc hl\n", out);
+    mir_stream_puts("\tinc hl\n", out);
     mir_legacy_roundtrip_store_word(out, -4);
-    fprintf(out, "\tjp L%d\nL%d:\n", third_loop, third_done);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", third_loop, third_done);
     mir_legacy_roundtrip_close(out, plan);
 
     mir_legacy_roundtrip_open(
         out, plan, plan->read_flags, plan->strings[3]);
-    fprintf(out, "\tld hl,%d\n",
+    mir_stream_printf(out, "\tld hl,%d\n",
             plan->iterations - 1);
     mir_legacy_roundtrip_store_word(out, -4);
-    fprintf(out, "L%d:\n", fourth_loop);
+    mir_stream_printf(out, "L%d:\n", fourth_loop);
     mir_legacy_roundtrip_seek(out, plan);
     mir_legacy_roundtrip_io(
         out, plan, plan->read_function, plan->read_name);
     mir_legacy_roundtrip_check_count(
         out, plan, plan->strings[9]);
-    fputs("\tld a,(ix-4)\n", out);
-    fprintf(out, "\tand %d\n\tjp nz,L%d\n",
+    mir_stream_puts("\tld a,(ix-4)\n", out);
+    mir_stream_printf(out, "\tand %d\n\tjp nz,L%d\n",
             plan->rewrite_stride - 1, fourth_plain);
     mir_legacy_roundtrip_verify(
         out, plan, 1, plan->strings[5]);
-    fprintf(out, "\tjp L%d\nL%d:\n",
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n",
             fourth_verify, fourth_plain);
     mir_legacy_roundtrip_verify(
         out, plan, 0, plan->strings[5]);
-    fprintf(out, "L%d:\n", fourth_verify);
+    mir_stream_printf(out, "L%d:\n", fourth_verify);
     mir_legacy_roundtrip_load_word(out, -4);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n\tdec hl\n", fourth_done);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n\tdec hl\n", fourth_done);
     mir_legacy_roundtrip_store_word(out, -4);
-    fprintf(out, "\tjp L%d\nL%d:\n",
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n",
             fourth_loop, fourth_done);
     mir_legacy_roundtrip_close(out, plan);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
     mir_emit_recovery_call(
         out, plan->unlink_function, plan->unlink_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjr z,L%d\n", unlink_ok);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjr z,L%d\n", unlink_ok);
     mir_legacy_roundtrip_failure(out, plan, plan->strings[11]);
-    fprintf(out, "L%d:\n\tld hl,S%d\n\tpush hl\n",
+    mir_stream_printf(out, "L%d:\n\tld hl,S%d\n\tpush hl\n",
             unlink_ok, plan->strings[12]);
     mir_emit_runtime_call(out, plan->final_print_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+    mir_stream_puts("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
 static int mir_match_sliding_window_driver_schedule(
@@ -8218,74 +8218,74 @@ static int mir_match_sliding_window_driver_schedule(
 }
 
 static void mir_sliding_driver_ix_address(
-    FILE *out, int offset)
+    MirStream *out, int offset)
 {
-    fputs("\tpush ix\n\tpop hl\n", out);
+    mir_stream_puts("\tpush ix\n\tpop hl\n", out);
     if (offset != 0)
-        fprintf(out, "\tld de,%d\n\tadd hl,de\n", offset);
+        mir_stream_printf(out, "\tld de,%d\n\tadd hl,de\n", offset);
 }
 
 static void mir_emit_sliding_window_driver_schedule(
-    FILE *out, const struct MirSlidingWindowDriverSchedule *plan)
+    MirStream *out, const struct MirSlidingWindowDriverSchedule *plan)
 {
     int failed = new_label();
     int done = new_label();
     int item;
 
-    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
           "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-30\n\tadd hl,sp\n\tld sp,hl\n", out);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
     for (item = 0; item < 8; ++item) {
-        fprintf(out, "\tld hl,%d\n"
+        mir_stream_printf(out, "\tld hl,%d\n"
                 "\tld (ix%+d),l\n\tld (ix%+d),h\n",
                 plan->input_values[item] & 0xffff,
                 -28 + item * 2, -27 + item * 2);
     }
     mir_sliding_driver_ix_address(out, -12);
-    fputs("\tpush hl\n", out);
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_puts("\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->window_size);
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->input_count);
     mir_sliding_driver_ix_address(out, -28);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->window_function, plan->window_name);
     mir_emit_final_call_cleanup(out, 4);
-    fputs("\tld (ix-30),l\n\tld (ix-29),h\n", out);
+    mir_stream_puts("\tld (ix-30),l\n\tld (ix-29),h\n", out);
     for (item = 2; item >= 0; --item) {
         int offset = -12 + plan->output_indices[item] * 2;
 
-        fprintf(out,
+        mir_stream_printf(out,
                 "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n",
                 offset, offset + 1);
     }
-    fputs("\tld l,(ix-30)\n\tld h,(ix-29)\n\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+    mir_stream_puts("\tld l,(ix-30)\n\tld h,(ix-29)\n\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n",
             plan->format_string);
     mir_emit_recovery_call(
         out, plan->print_function, plan->print_name);
     mir_emit_final_call_cleanup(out, 5);
-    fputs("\tld l,(ix-30)\n\tld h,(ix-29)\n", out);
-    fprintf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n",
+    mir_stream_puts("\tld l,(ix-30)\n\tld h,(ix-29)\n", out);
+    mir_stream_printf(out, "\tld de,%d\n\tor a\n\tsbc hl,de\n",
             plan->expected_count);
-    fprintf(out, "\tjp nz,L%d\n", failed);
+    mir_stream_printf(out, "\tjp nz,L%d\n", failed);
     for (item = 0; item < 3; ++item) {
         int offset = -12 + plan->output_indices[item] * 2;
 
-        fprintf(out,
+        mir_stream_printf(out,
                 "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
                 "\tld de,%d\n\tor a\n\tsbc hl,de\n"
                 "\tjp nz,L%d\n",
                 offset, offset + 1,
                 plan->output_values[item], failed);
     }
-    fputs("\tld hl,0\n", out);
-    fprintf(out, "\tjp L%d\nL%d:\n\tld hl,1\nL%d:\n",
+    mir_stream_puts("\tld hl,0\n", out);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n\tld hl,1\nL%d:\n",
             done, failed, done);
-    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+    mir_stream_puts("\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
 static int mir_match_narrow_string_workload_schedule(
@@ -8531,101 +8531,101 @@ static int mir_match_narrow_string_workload_schedule(
     return symbol == plan->atoi_function;
 }
 
-static void mir_narrow_load_word(FILE *out, int offset)
+static void mir_narrow_load_word(MirStream *out, int offset)
 {
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld l,(ix%d)\n\tld h,(ix%d)\n",
             offset, offset + 1);
 }
 
-static void mir_narrow_store_word(FILE *out, int offset)
+static void mir_narrow_store_word(MirStream *out, int offset)
 {
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld (ix%d),l\n\tld (ix%d),h\n",
             offset, offset + 1);
 }
 
-static void mir_narrow_increment_word(FILE *out, int offset)
+static void mir_narrow_increment_word(MirStream *out, int offset)
 {
     int done = new_label();
 
-    fprintf(out,
+    mir_stream_printf(out,
             "\tinc (ix%d)\n\tjp nz,L%d\n"
             "\tinc (ix%d)\nL%d:\n",
             offset, done, offset + 1, done);
 }
 
 static void mir_narrow_ix_address(
-    FILE *out, int offset)
+    MirStream *out, int offset)
 {
-    fputs("\tpush ix\n\tpop hl\n", out);
+    mir_stream_puts("\tpush ix\n\tpop hl\n", out);
     if (offset != 0)
-        fprintf(out, "\tld de,%d\n\tadd hl,de\n", offset);
+        mir_stream_printf(out, "\tld de,%d\n\tadd hl,de\n", offset);
 }
 
 static void mir_narrow_global_address(
-    FILE *out, struct Sym *symbol, int index_offset)
+    MirStream *out, struct Sym *symbol, int index_offset)
 {
     mir_narrow_load_word(out, index_offset);
-    fprintf(out, "\tld de,%s\n\tadd hl,de\n",
+    mir_stream_printf(out, "\tld de,%s\n\tadd hl,de\n",
             asm_name_for(sym_asm_name(symbol)));
 }
 
-static void mir_narrow_load_bc(FILE *out, int offset)
+static void mir_narrow_load_bc(MirStream *out, int offset)
 {
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld c,(ix%d)\n\tld b,(ix%d)\n",
             offset, offset + 1);
 }
 
 static void mir_narrow_global_address_de(
-    FILE *out, struct Sym *symbol, int index_offset)
+    MirStream *out, struct Sym *symbol, int index_offset)
 {
     mir_narrow_global_address(out, symbol, index_offset);
-    fputs("\tex de,hl\n", out);
+    mir_stream_puts("\tex de,hl\n", out);
 }
 
 static void mir_narrow_fast_length(
-    FILE *out, struct Sym *symbol, int index_offset)
+    MirStream *out, struct Sym *symbol, int index_offset)
 {
     mir_narrow_global_address(out, symbol, index_offset);
     mir_emit_runtime_call(out, "__slf");
 }
 
 static void mir_narrow_fast_find_character(
-    FILE *out, struct Sym *symbol, int index_offset,
+    MirStream *out, struct Sym *symbol, int index_offset,
     int character, int count_offset)
 {
     mir_narrow_global_address(out, symbol, index_offset);
-    fprintf(out, "\tld e,%d\n", character);
+    mir_stream_printf(out, "\tld e,%d\n", character);
     mir_narrow_load_bc(out, count_offset);
     mir_emit_runtime_call(out, "__mhf");
 }
 
 static void mir_narrow_fast_compare(
-    FILE *out, struct Sym *left, struct Sym *right,
+    MirStream *out, struct Sym *left, struct Sym *right,
     int index_offset, int count_offset)
 {
     mir_narrow_global_address(out, right, index_offset);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_narrow_global_address_de(out, left, index_offset);
-    fputs("\tpop hl\n", out);
+    mir_stream_puts("\tpop hl\n", out);
     mir_narrow_load_bc(out, count_offset);
     mir_emit_runtime_call(out, "__cmpf");
 }
 
 static void mir_narrow_random_mod(
-    FILE *out, const struct MirNarrowStringWorkloadSchedule *plan,
+    MirStream *out, const struct MirNarrowStringWorkloadSchedule *plan,
     int modulus)
 {
     mir_emit_recovery_call(
         out, plan->random_function, plan->random_name);
-    fprintf(out, "\tld de,%d\n", modulus);
+    mir_stream_printf(out, "\tld de,%d\n", modulus);
     mir_emit_runtime_call(out, "__modu");
 }
 
 static void mir_narrow_print(
-    FILE *out, const struct MirNarrowStringWorkloadSchedule *plan,
+    MirStream *out, const struct MirNarrowStringWorkloadSchedule *plan,
     int words)
 {
     mir_emit_recovery_call(
@@ -8634,58 +8634,58 @@ static void mir_narrow_print(
 }
 
 static void mir_narrow_exit(
-    FILE *out, const struct MirNarrowStringWorkloadSchedule *plan)
+    MirStream *out, const struct MirNarrowStringWorkloadSchedule *plan)
 {
-    fputs("\tld hl,1\n\tpush hl\n", out);
+    mir_stream_puts("\tld hl,1\n\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->exit_function, plan->exit_name);
 }
 
 static void mir_narrow_loop_test(
-    FILE *out, int offset, int bound, int done)
+    MirStream *out, int offset, int bound, int done)
 {
     mir_narrow_load_word(out, offset);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld de,%d\n\tor a\n\tsbc hl,de\n\tjp nc,L%d\n",
             bound, done);
 }
 
-static void mir_narrow_push_word(FILE *out, int offset)
+static void mir_narrow_push_word(MirStream *out, int offset)
 {
     mir_narrow_load_word(out, offset);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
 }
 
 static void mir_narrow_push_global_index(
-    FILE *out, struct Sym *symbol, int index_offset)
+    MirStream *out, struct Sym *symbol, int index_offset)
 {
     mir_narrow_global_address(out, symbol, index_offset);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
 }
 
 static void mir_narrow_failure_four(
-    FILE *out, const struct MirNarrowStringWorkloadSchedule *plan,
+    MirStream *out, const struct MirNarrowStringWorkloadSchedule *plan,
     int string_id)
 {
     mir_narrow_push_word(out, MIR_NARROW_END);
     mir_narrow_push_word(out, MIR_NARROW_START);
     mir_narrow_push_word(out, MIR_NARROW_LEN);
     mir_narrow_push_word(out, MIR_NARROW_I);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
     mir_narrow_print(out, plan, 5);
     mir_narrow_exit(out, plan);
 }
 
 static void mir_narrow_restore_primary(
-    FILE *out, const struct MirNarrowStringWorkloadSchedule *plan)
+    MirStream *out, const struct MirNarrowStringWorkloadSchedule *plan)
 {
     mir_narrow_global_address(out, plan->primary, MIR_NARROW_END);
-    fprintf(out, "\tld a,(ix%d)\n\tld (hl),a\n",
+    mir_stream_printf(out, "\tld a,(ix%d)\n\tld (hl),a\n",
             MIR_NARROW_ORIG);
 }
 
 static void mir_emit_narrow_string_workload_schedule(
-    FILE *out, const struct MirNarrowStringWorkloadSchedule *plan)
+    MirStream *out, const struct MirNarrowStringWorkloadSchedule *plan)
 {
     int default_loop_count = new_label();
     int loop_count_ready = new_label();
@@ -8720,21 +8720,21 @@ static void mir_emit_narrow_string_workload_schedule(
     int print_loop = new_label();
     int print_done = new_label();
 
-    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
           "\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
             MIR_NARROW_FRAME_BYTES);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
 
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
             "\tld de,1\n\tor a\n\tsbc hl,de\n"
             "\tjp z,L%d\n",
             plan->argc_offset + 2, plan->argc_offset + 3,
             default_loop_count);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
             "\tinc hl\n\tinc hl\n"
             "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
@@ -8743,25 +8743,25 @@ static void mir_emit_narrow_string_workload_schedule(
     mir_emit_recovery_call(
         out, plan->atoi_function, plan->atoi_name);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out, "\tjp L%d\nL%d:\n\tld hl,1\nL%d:\n",
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n\tld hl,1\nL%d:\n",
             loop_count_ready, default_loop_count,
             loop_count_ready);
     mir_narrow_store_word(out, MIR_NARROW_LOOP_COUNT);
-    fputs("\tld hl,0\n", out);
+    mir_stream_puts("\tld hl,0\n", out);
     mir_narrow_store_word(out, MIR_NARROW_LOOPS);
-    fprintf(out, "L%d:\n", outer_loop);
+    mir_stream_printf(out, "L%d:\n", outer_loop);
     mir_narrow_load_word(out, MIR_NARROW_LOOPS);
-    fputs("\tld a,h\n\txor 128\n\tld h,a\n\tpush hl\n", out);
+    mir_stream_puts("\tld a,h\n\txor 128\n\tld h,a\n\tpush hl\n", out);
     mir_narrow_load_word(out, MIR_NARROW_LOOP_COUNT);
-    fputs("\tld a,h\n\txor 128\n\tld h,a\n\tex de,hl\n\tpop hl\n"
+    mir_stream_puts("\tld a,h\n\txor 128\n\tld h,a\n\tex de,hl\n\tpop hl\n"
           "\tor a\n\tsbc hl,de\n", out);
-    fprintf(out, "\tjp nc,L%d\n", outer_done);
+    mir_stream_printf(out, "\tjp nc,L%d\n", outer_done);
 
-    fputs("\tld hl,317\n\tpush hl\n", out);
+    mir_stream_puts("\tld hl,317\n\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->seed_function, plan->seed_name);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,%s\n\tld bc,4096\n\tld d,97\nL%d:\n"
             "\tld (hl),d\n\tinc hl\n\tinc d\n\tld a,d\n\tcp 123\n"
             "\tjp nz,L%d\n\tld d,97\nL%d:\n"
@@ -8769,121 +8769,121 @@ static void mir_emit_narrow_string_workload_schedule(
             asm_name_for(sym_asm_name(plan->primary)),
             fill_loop, fill_letter_done, fill_letter_done, fill_loop);
 
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[0]);
     mir_narrow_print(out, plan, 1);
-    fputs("\tld hl,0\n", out);
+    mir_stream_puts("\tld hl,0\n", out);
     mir_narrow_store_word(out, MIR_NARROW_I);
-    fprintf(out, "L%d:\n", length_loop);
+    mir_stream_printf(out, "L%d:\n", length_loop);
     mir_narrow_loop_test(
         out, MIR_NARROW_I, 1000, length_done);
     mir_narrow_random_mod(out, plan, 300);
     mir_narrow_store_word(out, MIR_NARROW_START);
     mir_narrow_random_mod(out, plan, 3000);
-    fputs("\tinc hl\n", out);
-    fprintf(out,
+    mir_stream_puts("\tinc hl\n", out);
+    mir_stream_printf(out,
             "\tld e,(ix%d)\n\tld d,(ix%d)\n\tadd hl,de\n",
             MIR_NARROW_START, MIR_NARROW_START + 1);
     mir_narrow_store_word(out, MIR_NARROW_END);
-    fputs("\tor a\n\tsbc hl,de\n", out);
+    mir_stream_puts("\tor a\n\tsbc hl,de\n", out);
     mir_narrow_store_word(out, MIR_NARROW_LEN);
     mir_narrow_global_address(out, plan->primary, MIR_NARROW_END);
-    fputs("\tld a,(hl)\n", out);
-    fprintf(out, "\tld (ix%d),a\n\txor a\n\tld (hl),a\n",
+    mir_stream_puts("\tld a,(hl)\n", out);
+    mir_stream_printf(out, "\tld (ix%d),a\n\txor a\n\tld (hl),a\n",
             MIR_NARROW_ORIG);
     mir_narrow_fast_length(
         out, plan->primary, MIR_NARROW_START);
     mir_narrow_store_word(out, MIR_NARROW_AUX);
-    fputs("\tex de,hl\n", out);
+    mir_stream_puts("\tex de,hl\n", out);
     mir_narrow_load_word(out, MIR_NARROW_LEN);
-    fputs("\tor a\n\tsbc hl,de\n", out);
-    fprintf(out, "\tjp z,L%d\n", length_ok);
+    mir_stream_puts("\tor a\n\tsbc hl,de\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n", length_ok);
     mir_narrow_push_word(out, MIR_NARROW_END);
     mir_narrow_push_word(out, MIR_NARROW_START);
     mir_narrow_push_word(out, MIR_NARROW_AUX);
     mir_narrow_push_word(out, MIR_NARROW_LEN);
     mir_narrow_push_word(out, MIR_NARROW_I);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[1]);
     mir_narrow_print(out, plan, 6);
     mir_narrow_exit(out, plan);
-    fprintf(out, "L%d:\n", length_ok);
+    mir_stream_printf(out, "L%d:\n", length_ok);
     mir_narrow_restore_primary(out, plan);
     mir_narrow_increment_word(out, MIR_NARROW_I);
-    fprintf(out, "\tjp L%d\nL%d:\n", length_loop, length_done);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", length_loop, length_done);
 
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[2]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[2]);
     mir_narrow_print(out, plan, 1);
-    fputs("\tld hl,0\n", out);
+    mir_stream_puts("\tld hl,0\n", out);
     mir_narrow_store_word(out, MIR_NARROW_I);
-    fprintf(out, "L%d:\n", find_loop);
+    mir_stream_printf(out, "L%d:\n", find_loop);
     mir_narrow_loop_test(
         out, MIR_NARROW_I, 1000, find_done);
     mir_narrow_random_mod(out, plan, 300);
     mir_narrow_store_word(out, MIR_NARROW_START);
     mir_narrow_random_mod(out, plan, 70);
-    fputs("\tinc hl\n", out);
-    fprintf(out,
+    mir_stream_puts("\tinc hl\n", out);
+    mir_stream_printf(out,
             "\tld e,(ix%d)\n\tld d,(ix%d)\n\tadd hl,de\n",
             MIR_NARROW_START, MIR_NARROW_START + 1);
     mir_narrow_store_word(out, MIR_NARROW_END);
-    fputs("\tor a\n\tsbc hl,de\n", out);
+    mir_stream_puts("\tor a\n\tsbc hl,de\n", out);
     mir_narrow_store_word(out, MIR_NARROW_LEN);
     mir_narrow_global_address(out, plan->primary, MIR_NARROW_END);
-    fputs("\tld a,(hl)\n", out);
-    fprintf(out, "\tld (ix%d),a\n\tld (hl),33\n",
+    mir_stream_puts("\tld a,(hl)\n", out);
+    mir_stream_printf(out, "\tld (ix%d),a\n\tld (hl),33\n",
             MIR_NARROW_ORIG);
     mir_narrow_global_address(
         out, plan->primary, MIR_NARROW_START);
-    fputs("\tld a,33\n", out);
+    mir_stream_puts("\tld a,33\n", out);
     mir_emit_runtime_call(out, "__chf");
     mir_narrow_store_word(out, MIR_NARROW_POINTER);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp nz,L%d\n", first_present);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp nz,L%d\n", first_present);
     mir_narrow_failure_four(out, plan, plan->strings[3]);
-    fprintf(out, "L%d:\n", first_present);
+    mir_stream_printf(out, "L%d:\n", first_present);
     mir_narrow_global_address(out, plan->primary, MIR_NARROW_END);
-    fputs("\tex de,hl\n", out);
+    mir_stream_puts("\tex de,hl\n", out);
     mir_narrow_load_word(out, MIR_NARROW_POINTER);
-    fputs("\tor a\n\tsbc hl,de\n", out);
-    fprintf(out, "\tjp z,L%d\n", first_correct);
+    mir_stream_puts("\tor a\n\tsbc hl,de\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n", first_correct);
     mir_narrow_failure_four(out, plan, plan->strings[4]);
-    fprintf(out, "L%d:\n", first_correct);
+    mir_stream_printf(out, "L%d:\n", first_correct);
     mir_narrow_global_address(
         out, plan->primary, MIR_NARROW_START);
-    fputs("\tld a,33\n", out);
+    mir_stream_puts("\tld a,33\n", out);
     mir_emit_runtime_call(out, "__rcf");
     mir_narrow_store_word(out, MIR_NARROW_POINTER);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp nz,L%d\n", last_present);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp nz,L%d\n", last_present);
     mir_narrow_failure_four(out, plan, plan->strings[5]);
-    fprintf(out, "L%d:\n", last_present);
+    mir_stream_printf(out, "L%d:\n", last_present);
     mir_narrow_global_address(out, plan->primary, MIR_NARROW_END);
-    fputs("\tex de,hl\n", out);
+    mir_stream_puts("\tex de,hl\n", out);
     mir_narrow_load_word(out, MIR_NARROW_POINTER);
-    fputs("\tor a\n\tsbc hl,de\n", out);
-    fprintf(out, "\tjp z,L%d\n", last_correct);
+    mir_stream_puts("\tor a\n\tsbc hl,de\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n", last_correct);
     mir_narrow_failure_four(out, plan, plan->strings[6]);
-    fprintf(out, "L%d:\n", last_correct);
+    mir_stream_printf(out, "L%d:\n", last_correct);
     mir_narrow_global_address(
         out, plan->primary, MIR_NARROW_START);
-    fputs("\tld a,36\n", out);
+    mir_stream_puts("\tld a,36\n", out);
     mir_emit_runtime_call(out, "__chf");
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n", absent_character);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n", absent_character);
     mir_narrow_failure_four(out, plan, plan->strings[7]);
-    fprintf(out, "L%d:\n", absent_character);
+    mir_stream_printf(out, "L%d:\n", absent_character);
     mir_narrow_restore_primary(out, plan);
     mir_narrow_increment_word(out, MIR_NARROW_I);
-    fprintf(out, "\tjp L%d\nL%d:\n", find_loop, find_done);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", find_loop, find_done);
 
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[8]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[8]);
     mir_narrow_print(out, plan, 1);
     mir_narrow_ix_address(out, MIR_NARROW_ALPHA);
-    fputs("\tex de,hl\n", out);
-    fprintf(out, "\tld hl,S%d\n", plan->strings[9]);
+    mir_stream_puts("\tex de,hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n", plan->strings[9]);
     mir_emit_runtime_call(out, "__scf");
-    fputs("\tld hl,0\n", out);
+    mir_stream_puts("\tld hl,0\n", out);
     mir_narrow_store_word(out, MIR_NARROW_I);
-    fprintf(out, "L%d:\n", string_loop);
+    mir_stream_printf(out, "L%d:\n", string_loop);
     mir_narrow_loop_test(
         out, MIR_NARROW_I, 1000, string_done);
     mir_narrow_random_mod(out, plan, 300);
@@ -8892,15 +8892,15 @@ static void mir_emit_narrow_string_workload_schedule(
     mir_narrow_store_word(out, MIR_NARROW_OFFSET);
     mir_emit_recovery_call(
         out, plan->random_function, plan->random_name);
-    fputs("\tpush hl\n\tld hl,26\n", out);
-    fprintf(out,
+    mir_stream_puts("\tpush hl\n\tld hl,26\n", out);
+    mir_stream_printf(out,
             "\tld e,(ix%d)\n\tld d,(ix%d)\n"
             "\tor a\n\tsbc hl,de\n\tex de,hl\n\tpop hl\n",
             MIR_NARROW_OFFSET, MIR_NARROW_OFFSET + 1);
     mir_emit_runtime_call(out, "__modu");
-    fputs("\tinc hl\n", out);
+    mir_stream_puts("\tinc hl\n", out);
     mir_narrow_store_word(out, MIR_NARROW_LEN);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld e,(ix%d)\n\tld d,(ix%d)\n\tadd hl,de\n"
             "\tld de,26\n\tor a\n\tsbc hl,de\n"
             "\tjp c,L%d\n\tjp z,L%d\n",
@@ -8908,120 +8908,120 @@ static void mir_emit_narrow_string_workload_schedule(
             string_bounds_ok, string_bounds_ok);
     mir_narrow_push_word(out, MIR_NARROW_LEN);
     mir_narrow_push_word(out, MIR_NARROW_OFFSET);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[10]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[10]);
     mir_narrow_print(out, plan, 3);
     mir_narrow_exit(out, plan);
-    fprintf(out, "L%d:\n", string_bounds_ok);
+    mir_stream_printf(out, "L%d:\n", string_bounds_ok);
     mir_narrow_ix_address(out, MIR_NARROW_ALPHA);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_narrow_load_word(out, MIR_NARROW_OFFSET);
-    fputs("\tex de,hl\n\tpop hl\n\tadd hl,de\n", out);
+    mir_stream_puts("\tex de,hl\n\tpop hl\n\tadd hl,de\n", out);
     mir_narrow_store_word(out, MIR_NARROW_POINTER);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_narrow_global_address_de(
         out, plan->primary, MIR_NARROW_START);
-    fputs("\tpop hl\n", out);
+    mir_stream_puts("\tpop hl\n", out);
     mir_emit_runtime_call(out, "__ssf");
     mir_narrow_store_word(out, MIR_NARROW_AUX);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp nz,L%d\n", string_present);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp nz,L%d\n", string_present);
     mir_narrow_push_word(out, MIR_NARROW_POINTER);
     mir_narrow_push_word(out, MIR_NARROW_LEN);
     mir_narrow_push_word(out, MIR_NARROW_OFFSET);
     mir_narrow_push_word(out, MIR_NARROW_START);
     mir_narrow_push_word(out, MIR_NARROW_I);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[11]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[11]);
     mir_narrow_print(out, plan, 6);
     mir_narrow_exit(out, plan);
-    fprintf(out, "L%d:\n", string_present);
+    mir_stream_printf(out, "L%d:\n", string_present);
     mir_narrow_load_word(out, MIR_NARROW_AUX);
-    fputs("\tex de,hl\n", out);
+    mir_stream_puts("\tex de,hl\n", out);
     mir_narrow_load_word(out, MIR_NARROW_POINTER);
     mir_narrow_load_bc(out, MIR_NARROW_LEN);
     mir_emit_runtime_call(out, "__cmpf");
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n", string_equal);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n", string_equal);
     mir_narrow_push_word(out, MIR_NARROW_POINTER);
     mir_narrow_push_word(out, MIR_NARROW_LEN);
     mir_narrow_push_word(out, MIR_NARROW_OFFSET);
     mir_narrow_push_word(out, MIR_NARROW_START);
     mir_narrow_push_word(out, MIR_NARROW_I);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[12]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[12]);
     mir_narrow_print(out, plan, 6);
     mir_narrow_exit(out, plan);
-    fprintf(out, "L%d:\n", string_equal);
+    mir_stream_printf(out, "L%d:\n", string_equal);
     mir_narrow_global_address_de(
         out, plan->primary, MIR_NARROW_START);
-    fprintf(out, "\tld hl,S%d\n", plan->strings[13]);
+    mir_stream_printf(out, "\tld hl,S%d\n", plan->strings[13]);
     mir_emit_runtime_call(out, "__ssf");
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n", missing_pattern);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n", missing_pattern);
     mir_narrow_push_word(out, MIR_NARROW_OFFSET);
     mir_narrow_push_word(out, MIR_NARROW_START);
     mir_narrow_push_word(out, MIR_NARROW_I);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[14]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[14]);
     mir_narrow_print(out, plan, 4);
     mir_narrow_exit(out, plan);
-    fprintf(out, "L%d:\n", missing_pattern);
+    mir_stream_printf(out, "L%d:\n", missing_pattern);
     mir_narrow_increment_word(out, MIR_NARROW_I);
-    fprintf(out, "\tjp L%d\nL%d:\n", string_loop, string_done);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", string_loop, string_done);
 
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[15]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[15]);
     mir_narrow_print(out, plan, 1);
-    fprintf(out, "\tld hl,%s\n\tld e,97\n\tld bc,0\n",
+    mir_stream_printf(out, "\tld hl,%s\n\tld e,97\n\tld bc,0\n",
             asm_name_for(sym_asm_name(plan->primary)));
     mir_emit_runtime_call(out, "__mhf");
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n", memory_zero_ok);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[16]);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n", memory_zero_ok);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[16]);
     mir_narrow_print(out, plan, 1);
     mir_narrow_exit(out, plan);
-    fprintf(out, "L%d:\n\tld hl,0\n", memory_zero_ok);
+    mir_stream_printf(out, "L%d:\n\tld hl,0\n", memory_zero_ok);
     mir_narrow_store_word(out, MIR_NARROW_I);
-    fprintf(out, "L%d:\n", memory_loop);
+    mir_stream_printf(out, "L%d:\n", memory_loop);
     mir_narrow_loop_test(
         out, MIR_NARROW_I, 1000, memory_done);
     mir_narrow_random_mod(out, plan, 300);
     mir_narrow_store_word(out, MIR_NARROW_START);
     mir_narrow_random_mod(out, plan, 3000);
-    fputs("\tinc hl\n", out);
-    fprintf(out,
+    mir_stream_puts("\tinc hl\n", out);
+    mir_stream_printf(out,
             "\tld e,(ix%d)\n\tld d,(ix%d)\n\tadd hl,de\n",
             MIR_NARROW_START, MIR_NARROW_START + 1);
     mir_narrow_store_word(out, MIR_NARROW_END);
-    fputs("\tor a\n\tsbc hl,de\n", out);
+    mir_stream_puts("\tor a\n\tsbc hl,de\n", out);
     mir_narrow_store_word(out, MIR_NARROW_LEN);
     mir_narrow_global_address(
         out, plan->primary, MIR_NARROW_START);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_narrow_global_address_de(
         out, plan->secondary, MIR_NARROW_START);
-    fputs("\tpop hl\n", out);
+    mir_stream_puts("\tpop hl\n", out);
     mir_narrow_load_bc(out, MIR_NARROW_LEN);
     mir_emit_runtime_call(out, "__mcf");
     mir_narrow_fast_compare(
         out, plan->secondary, plan->primary,
         MIR_NARROW_START, MIR_NARROW_LEN);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n", memory_copy_ok);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n", memory_copy_ok);
     mir_narrow_failure_four(out, plan, plan->strings[17]);
-    fprintf(out, "L%d:\n", memory_copy_ok);
+    mir_stream_printf(out, "L%d:\n", memory_copy_ok);
     mir_narrow_global_address(
         out, plan->secondary, MIR_NARROW_START);
-    fputs("\tld e,0\n", out);
+    mir_stream_puts("\tld e,0\n", out);
     mir_narrow_load_bc(out, MIR_NARROW_LEN);
     mir_emit_runtime_call(out, "__msf");
     mir_narrow_fast_compare(
         out, plan->secondary, plan->zeroes,
         MIR_NARROW_START, MIR_NARROW_LEN);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n", memory_zero_compare_ok);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n", memory_zero_compare_ok);
     mir_narrow_failure_four(out, plan, plan->strings[18]);
-    fprintf(out, "L%d:\n", memory_zero_compare_ok);
+    mir_stream_printf(out, "L%d:\n", memory_zero_compare_ok);
 
     mir_narrow_load_word(out, MIR_NARROW_LEN);
-    fputs("\tsrl h\n\trr l\n", out);
-    fprintf(out,
+    mir_stream_puts("\tsrl h\n\trr l\n", out);
+    mir_stream_printf(out,
             "\tld e,(ix%d)\n\tld d,(ix%d)\n\tadd hl,de\n"
             "\tld de,%s\n\tadd hl,de\n\tld (hl),33\n",
             MIR_NARROW_START, MIR_NARROW_START + 1,
@@ -9031,71 +9031,71 @@ static void mir_emit_narrow_string_workload_schedule(
         33, MIR_NARROW_LEN);
     mir_narrow_store_word(out, MIR_NARROW_POINTER);
     mir_narrow_load_word(out, MIR_NARROW_LEN);
-    fputs("\tsrl h\n\trr l\n", out);
-    fprintf(out,
+    mir_stream_puts("\tsrl h\n\trr l\n", out);
+    mir_stream_printf(out,
             "\tld e,(ix%d)\n\tld d,(ix%d)\n\tadd hl,de\n"
             "\tld de,%s\n\tadd hl,de\n\tex de,hl\n",
             MIR_NARROW_START, MIR_NARROW_START + 1,
             asm_name_for(sym_asm_name(plan->secondary)));
     mir_narrow_load_word(out, MIR_NARROW_POINTER);
-    fputs("\tor a\n\tsbc hl,de\n", out);
-    fprintf(out, "\tjp z,L%d\n", memory_pointer_ok);
+    mir_stream_puts("\tor a\n\tsbc hl,de\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n", memory_pointer_ok);
     mir_narrow_failure_four(out, plan, plan->strings[19]);
-    fprintf(out, "L%d:\n", memory_pointer_ok);
+    mir_stream_printf(out, "L%d:\n", memory_pointer_ok);
 
     mir_narrow_load_word(out, MIR_NARROW_START);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld e,(ix%d)\n\tld d,(ix%d)\n\tadd hl,de\n\tdec hl\n"
             "\tld de,%s\n\tadd hl,de\n\tld (hl),63\n",
             MIR_NARROW_LEN, MIR_NARROW_LEN + 1,
             asm_name_for(sym_asm_name(plan->secondary)));
     mir_narrow_load_word(out, MIR_NARROW_LEN);
-    fputs("\tdec hl\n\tld c,l\n\tld b,h\n", out);
+    mir_stream_puts("\tdec hl\n\tld c,l\n\tld b,h\n", out);
     mir_narrow_global_address(
         out, plan->secondary, MIR_NARROW_START);
-    fputs("\tld e,63\n", out);
+    mir_stream_puts("\tld e,63\n", out);
     mir_emit_runtime_call(out, "__mhf");
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n", memory_count_ok);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n", memory_count_ok);
     mir_narrow_failure_four(out, plan, plan->strings[20]);
-    fprintf(out, "L%d:\n", memory_count_ok);
+    mir_stream_printf(out, "L%d:\n", memory_count_ok);
     mir_narrow_fast_find_character(
         out, plan->secondary, MIR_NARROW_START,
         64, MIR_NARROW_LEN);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n", memory_missing_ok);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n", memory_missing_ok);
     mir_narrow_failure_four(out, plan, plan->strings[21]);
-    fprintf(out, "L%d:\n", memory_missing_ok);
+    mir_stream_printf(out, "L%d:\n", memory_missing_ok);
     mir_narrow_increment_word(out, MIR_NARROW_I);
-    fprintf(out, "\tjp L%d\nL%d:\n", memory_loop, memory_done);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", memory_loop, memory_done);
 
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[22]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[22]);
     mir_narrow_print(out, plan, 1);
-    fputs("\tld hl,0\n", out);
+    mir_stream_puts("\tld hl,0\n", out);
     mir_narrow_store_word(out, MIR_NARROW_I);
-    fprintf(out, "L%d:\n", print_loop);
+    mir_stream_printf(out, "L%d:\n", print_loop);
     mir_narrow_loop_test(
         out, MIR_NARROW_I, 20, print_done);
     mir_narrow_load_word(out, MIR_NARROW_I);
-    fputs("\tld de,37\n", out);
+    mir_stream_puts("\tld de,37\n", out);
     mir_emit_runtime_call(out, "__mulu");
-    fputs("\tld de,300\n", out);
+    mir_stream_puts("\tld de,300\n", out);
     mir_emit_runtime_call(out, "__modu");
     mir_narrow_store_word(out, MIR_NARROW_START);
     mir_narrow_load_word(out, MIR_NARROW_I);
-    fputs("\tld de,17\n", out);
+    mir_stream_puts("\tld de,17\n", out);
     mir_emit_runtime_call(out, "__mulu");
-    fputs("\tld de,70\n", out);
+    mir_stream_puts("\tld de,70\n", out);
     mir_emit_runtime_call(out, "__modu");
-    fputs("\tinc hl\n", out);
+    mir_stream_puts("\tinc hl\n", out);
     mir_narrow_store_word(out, MIR_NARROW_LEN);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld e,(ix%d)\n\tld d,(ix%d)\n\tadd hl,de\n",
             MIR_NARROW_START, MIR_NARROW_START + 1);
     mir_narrow_store_word(out, MIR_NARROW_END);
     mir_narrow_global_address(out, plan->primary, MIR_NARROW_END);
-    fputs("\tld a,(hl)\n", out);
-    fprintf(out, "\tld (ix%d),a\n\txor a\n\tld (hl),a\n",
+    mir_stream_puts("\tld a,(hl)\n", out);
+    mir_stream_printf(out, "\tld (ix%d),a\n\txor a\n\tld (hl),a\n",
             MIR_NARROW_ORIG);
     mir_narrow_fast_length(
         out, plan->primary, MIR_NARROW_START);
@@ -9104,18 +9104,18 @@ static void mir_emit_narrow_string_workload_schedule(
         out, plan->primary, MIR_NARROW_START);
     mir_narrow_push_word(out, MIR_NARROW_AUX);
     mir_narrow_push_word(out, MIR_NARROW_LEN);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[23]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[23]);
     mir_narrow_print(out, plan, 4);
     mir_narrow_restore_primary(out, plan);
     mir_narrow_increment_word(out, MIR_NARROW_I);
-    fprintf(out, "\tjp L%d\nL%d:\n", print_loop, print_done);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", print_loop, print_done);
 
     mir_narrow_increment_word(out, MIR_NARROW_LOOPS);
-    fprintf(out, "\tjp L%d\n", outer_loop);
-    fprintf(out, "L%d:\n", outer_done);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[24]);
+    mir_stream_printf(out, "\tjp L%d\n", outer_loop);
+    mir_stream_printf(out, "L%d:\n", outer_done);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[24]);
     mir_narrow_print(out, plan, 1);
-    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+    mir_stream_puts("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
 static int mir_match_bdos_driver_schedule(
@@ -9255,16 +9255,16 @@ static int mir_match_bdos_driver_schedule(
 }
 
 static void mir_bdos_driver_fast_call(
-    FILE *out, const char *runtime_name,
+    MirStream *out, const char *runtime_name,
     int function_number, int argument)
 {
-    fprintf(out, "\tld c,%d\n\tld de,%d\n",
+    mir_stream_printf(out, "\tld c,%d\n\tld de,%d\n",
             function_number, argument);
     mir_emit_runtime_call(out, runtime_name);
 }
 
 static void mir_bdos_driver_print(
-    FILE *out, const struct MirBdosDriverSchedule *plan,
+    MirStream *out, const struct MirBdosDriverSchedule *plan,
     int words)
 {
     mir_emit_recovery_call(
@@ -9273,51 +9273,51 @@ static void mir_bdos_driver_print(
 }
 
 static void mir_bdos_driver_choose_string(
-    FILE *out, const struct MirBdosDriverSchedule *plan,
+    MirStream *out, const struct MirBdosDriverSchedule *plan,
     int condition, int invert)
 {
     int false_label = new_label();
     int done = new_label();
 
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, invert ? "\tjp nz,L%d\n" : "\tjp z,L%d\n",
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, invert ? "\tjp nz,L%d\n" : "\tjp z,L%d\n",
             false_label);
-    fprintf(out, "\tld hl,S%d\n\tjp L%d\nL%d:\n\tld hl,S%d\nL%d:\n",
+    mir_stream_printf(out, "\tld hl,S%d\n\tjp L%d\nL%d:\n\tld hl,S%d\nL%d:\n",
             plan->strings[condition ? 0 : 1], done, false_label,
             plan->strings[condition ? 1 : 0], done);
 }
 
 static void mir_emit_bdos_driver_schedule(
-    FILE *out, const struct MirBdosDriverSchedule *plan)
+    MirStream *out, const struct MirBdosDriverSchedule *plan)
 {
     int copy_done = new_label();
     int major_yes = new_label();
     int major_done = new_label();
     int compare_done = new_label();
 
-    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
           "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-136\n\tadd hl,sp\n\tld sp,hl\n", out);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[3]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[3]);
     mir_bdos_driver_print(out, plan, 1);
 
-    fputs("\tld a,(128)\n\tld l,a\n\tld h,0\n"
+    mir_stream_puts("\tld a,(128)\n\tld l,a\n\tld h,0\n"
           "\tld (ix-130),l\n\tld (ix-129),h\n"
           "\tld c,l\n\tld b,h\n\tld hl,129\n"
           "\tpush ix\n\tpop de\n\tpush hl\n"
           "\tld hl,-128\n\tadd hl,de\n\tex de,hl\n\tpop hl\n"
           "\tld a,b\n\tor c\n", out);
-    fprintf(out, "\tjp z,L%d\n\tldir\nL%d:\n"
+    mir_stream_printf(out, "\tjp z,L%d\n\tldir\nL%d:\n"
             "\txor a\n\tld (de),a\n",
             copy_done, copy_done);
-    fputs("\tld l,(ix-130)\n\tld h,(ix-129)\n\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[4]);
+    mir_stream_puts("\tld l,(ix-130)\n\tld h,(ix-129)\n\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[4]);
     mir_bdos_driver_print(out, plan, 2);
-    fputs("\tpush ix\n\tpop hl\n\tld de,-128\n\tadd hl,de\n\tpush hl\n",
+    mir_stream_puts("\tpush ix\n\tpop hl\n\tld de,-128\n\tadd hl,de\n\tpush hl\n",
           out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[5]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[5]);
     mir_bdos_driver_print(out, plan, 2);
 
     mir_bdos_driver_fast_call(out, "__bdosf", 2, 72);
@@ -9325,31 +9325,31 @@ static void mir_emit_bdos_driver_schedule(
     mir_bdos_driver_fast_call(out, "__bdosf", 2, 33);
     mir_bdos_driver_fast_call(out, "__bdosf", 2, 13);
     mir_bdos_driver_fast_call(out, "__bdosf", 2, 10);
-    fprintf(out, "\tld c,9\n\tld de,%s\n",
+    mir_stream_printf(out, "\tld c,9\n\tld de,%s\n",
             plan->message_name);
     mir_emit_runtime_call(out, "__bdosf");
     mir_bdos_driver_fast_call(out, "__bdosf", 2, 13);
     mir_bdos_driver_fast_call(out, "__bdosf", 2, 10);
 
     mir_bdos_driver_fast_call(out, "__bdosf", 12, 0);
-    fputs("\tld (ix-132),l\n\tld (ix-131),h\n", out);
+    mir_stream_puts("\tld (ix-132),l\n\tld (ix-131),h\n", out);
     mir_bdos_driver_fast_call(out, "__bhlf", 12, 0);
-    fputs("\tld (ix-134),l\n\tld (ix-133),h\n"
+    mir_stream_puts("\tld (ix-134),l\n\tld (ix-133),h\n"
           "\tld hl,0\n\tpush hl\n\tld hl,12\n\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->full_function, plan->full_name);
     mir_emit_final_call_cleanup(out, 2);
-    fputs("\tld (ix-136),l\n\tld (ix-135),h\n", out);
+    mir_stream_puts("\tld (ix-136),l\n\tld (ix-135),h\n", out);
 
-    fputs("\tld l,(ix-132)\n\tld h,(ix-131)\n"
+    mir_stream_puts("\tld l,(ix-132)\n\tld h,(ix-131)\n"
           "\tld b,4\n", out);
     {
         int shift_loop = new_label();
-        fprintf(out, "L%d:\n\tsrl h\n\trr l\n\tdjnz L%d\n",
+        mir_stream_printf(out, "L%d:\n\tsrl h\n\trr l\n\tdjnz L%d\n",
                 shift_loop, shift_loop);
     }
-    fputs("\tld a,l\n\tand 15\n\tcp 2\n", out);
-    fprintf(out, "\tjp z,L%d\n\tcp 3\n\tjp z,L%d\n"
+    mir_stream_puts("\tld a,l\n\tand 15\n\tcp 2\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n\tcp 3\n\tjp z,L%d\n"
             "\tld hl,S%d\n\tjp L%d\nL%d:\n\tld hl,S%d\nL%d:\n"
             "\tpush hl\n\tld hl,S%d\n\tpush hl\n",
             major_yes, major_yes, plan->strings[1],
@@ -9357,40 +9357,40 @@ static void mir_emit_bdos_driver_schedule(
             plan->strings[2]);
     mir_bdos_driver_print(out, plan, 2);
 
-    fputs("\tld l,(ix-132)\n\tld h,(ix-131)\n"
+    mir_stream_puts("\tld l,(ix-132)\n\tld h,(ix-131)\n"
           "\tld e,(ix-134)\n\tld d,(ix-133)\n"
           "\tor a\n\tsbc hl,de\n\tld hl,0\n", out);
-    fprintf(out, "\tjp nz,L%d\n\tinc l\nL%d:\n",
+    mir_stream_printf(out, "\tjp nz,L%d\n\tinc l\nL%d:\n",
             compare_done, compare_done);
     mir_bdos_driver_choose_string(out, plan, 1, 0);
-    fputs("\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[6]);
+    mir_stream_puts("\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[6]);
     mir_bdos_driver_print(out, plan, 2);
 
-    fputs("\tld l,(ix-134)\n\tld h,(ix-133)\n"
+    mir_stream_puts("\tld l,(ix-134)\n\tld h,(ix-133)\n"
           "\tld e,(ix-136)\n\tld d,(ix-135)\n"
           "\tor a\n\tsbc hl,de\n\tld hl,0\n", out);
     {
         int equal = new_label();
-        fprintf(out, "\tjp nz,L%d\n\tinc l\nL%d:\n",
+        mir_stream_printf(out, "\tjp nz,L%d\n\tinc l\nL%d:\n",
                 equal, equal);
     }
     mir_bdos_driver_choose_string(out, plan, 1, 0);
-    fputs("\tpush hl\n", out);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[7]);
+    mir_stream_puts("\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[7]);
     mir_bdos_driver_print(out, plan, 2);
 
     mir_bdos_driver_fast_call(out, "__bdosf", 11, 0);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[8]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[8]);
     mir_bdos_driver_print(out, plan, 1);
     mir_bdos_driver_fast_call(out, "__bdosf", 6, 255);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[9]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[9]);
     mir_bdos_driver_print(out, plan, 1);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[10]);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[10]);
     mir_emit_recovery_call(
         out, plan->string_function, plan->string_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+    mir_stream_puts("\tld hl,0\n\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
 static int mir_match_line_reader_schedule(
@@ -9440,7 +9440,7 @@ static int mir_match_line_reader_schedule(
 }
 
 static void mir_emit_line_reader_schedule(
-    FILE *out, const struct MirLineReaderSchedule *plan)
+    MirStream *out, const struct MirLineReaderSchedule *plan)
 {
     int present = new_label();
     int loop = new_label();
@@ -9449,21 +9449,21 @@ static void mir_emit_line_reader_schedule(
     int buffer = plan->buffer_offset + 2;
     int size = plan->size_offset + 2;
 
-    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
           "\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n",
             plan->stream_value);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tpush hl\n"
             "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tpush hl\n",
             size, size + 1, buffer, buffer + 1);
     mir_emit_recovery_call(
         out, plan->read_function, plan->read_name);
     mir_emit_final_call_cleanup(out, 3);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp nz,L%d\n"
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp nz,L%d\n"
             "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
             "\txor a\n\tld (hl),a\n\tjp L%d\n"
             "L%d:\nL%d:\n\tld a,(hl)\n\tor a\n\tjp z,L%d\n"
@@ -9516,7 +9516,7 @@ static int mir_match_adjacency_scan_schedule(
 }
 
 static void mir_emit_adjacency_scan_schedule(
-    FILE *out, const struct MirAdjacencyScanSchedule *plan)
+    MirStream *out, const struct MirAdjacencyScanSchedule *plan)
 {
     int loop = new_label();
     int next = new_label();
@@ -9525,11 +9525,11 @@ static void mir_emit_adjacency_scan_schedule(
     int from = plan->from_offset + 2;
     int target = plan->target_offset + 2;
 
-    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
           "\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
             "\tld e,l\n\tld d,h\n\tadd hl,hl\n\tadd hl,de\n"
             "\tadd hl,hl\n\tld de,%s\n\tadd hl,de\n"
@@ -9635,24 +9635,24 @@ static int mir_match_bsearch_edge_schedule(
 }
 
 static void mir_bsearch_edge_key(
-    FILE *out, int value)
+    MirStream *out, int value)
 {
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,%d\n\tld (ix-2),l\n\tld (ix-1),h\n",
             value & 0xffff);
 }
 
 static void mir_bsearch_edge_call(
-    FILE *out, const struct MirBsearchEdgeSchedule *plan,
+    MirStream *out, const struct MirBsearchEdgeSchedule *plan,
     int count)
 {
-    fprintf(out, "\tld hl,%s\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%s\n\tpush hl\n",
             asm_name_for(sym_asm_name(plan->compare_function)));
-    fputs("\tld hl,2\n\tpush hl\n", out);
-    fprintf(out, "\tld hl,%d\n\tpush hl\n", count);
-    fprintf(out, "\tld hl,%s\n\tpush hl\n",
+    mir_stream_puts("\tld hl,2\n\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n", count);
+    mir_stream_printf(out, "\tld hl,%s\n\tpush hl\n",
             asm_name_for(sym_asm_name(plan->array)));
-    fputs("\tpush ix\n\tpop hl\n\tld de,-2\n\tadd hl,de\n"
+    mir_stream_puts("\tpush ix\n\tpop hl\n\tld de,-2\n\tadd hl,de\n"
           "\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->search_function, plan->search_name);
@@ -9660,32 +9660,32 @@ static void mir_bsearch_edge_call(
 }
 
 static void mir_bsearch_edge_fail(
-    FILE *out, const struct MirBsearchEdgeSchedule *plan,
+    MirStream *out, const struct MirBsearchEdgeSchedule *plan,
     int string_id)
 {
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
     mir_emit_recovery_call(
         out, plan->failure_function, plan->failure_name);
     mir_emit_final_call_cleanup(out, 1);
 }
 
 static void mir_bsearch_edge_expect_miss(
-    FILE *out, const struct MirBsearchEdgeSchedule *plan,
+    MirStream *out, const struct MirBsearchEdgeSchedule *plan,
     int key, int count, int failure)
 {
     int matched = new_label();
 
     mir_bsearch_edge_key(out, key);
     mir_bsearch_edge_call(out, plan, count);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n", matched);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n", matched);
     mir_bsearch_edge_fail(
         out, plan, plan->failure_strings[failure]);
-    fprintf(out, "L%d:\n", matched);
+    mir_stream_printf(out, "L%d:\n", matched);
 }
 
 static void mir_bsearch_edge_expect_hit(
-    FILE *out, const struct MirBsearchEdgeSchedule *plan,
+    MirStream *out, const struct MirBsearchEdgeSchedule *plan,
     int key, int count, int expected, int failure)
 {
     int failed = new_label();
@@ -9693,32 +9693,32 @@ static void mir_bsearch_edge_expect_hit(
 
     mir_bsearch_edge_key(out, key);
     mir_bsearch_edge_call(out, plan, count);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n"
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n"
             "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
             "\tld hl,%d\n\tor a\n\tsbc hl,de\n"
             "\tjp z,L%d\nL%d:\n",
             failed, expected, done, failed);
     mir_bsearch_edge_fail(
         out, plan, plan->failure_strings[failure]);
-    fprintf(out, "L%d:\n", done);
+    mir_stream_printf(out, "L%d:\n", done);
 }
 
 static void mir_emit_bsearch_edge_schedule(
-    FILE *out, const struct MirBsearchEdgeSchedule *plan)
+    MirStream *out, const struct MirBsearchEdgeSchedule *plan)
 {
-    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
           "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tdec sp\n\tdec sp\n", out);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
     mir_bsearch_edge_expect_miss(out, plan, 0, 0, 0);
-    fprintf(out, "\tld hl,55\n\tld (%s),hl\n",
+    mir_stream_printf(out, "\tld hl,55\n\tld (%s),hl\n",
             asm_name_for(sym_asm_name(plan->array)));
     mir_bsearch_edge_expect_hit(out, plan, 55, 1, 55, 1);
     mir_bsearch_edge_expect_miss(out, plan, 54, 1, 2);
     mir_bsearch_edge_expect_miss(out, plan, 56, 1, 3);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,10\n\tld (%s),hl\n"
             "\tld hl,20\n\tld (%s+2),hl\n",
             asm_name_for(sym_asm_name(plan->array)),
@@ -9728,7 +9728,7 @@ static void mir_emit_bsearch_edge_schedule(
     mir_bsearch_edge_expect_miss(out, plan, 5, 2, 6);
     mir_bsearch_edge_expect_miss(out, plan, 15, 2, 7);
     mir_bsearch_edge_expect_miss(out, plan, 25, 2, 8);
-    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+    mir_stream_puts("\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
 static int mir_match_bsearch_integer_schedule(
@@ -9806,17 +9806,17 @@ static int mir_match_bsearch_integer_schedule(
 }
 
 static void mir_bsearch_integer_increment(
-    FILE *out)
+    MirStream *out)
 {
     int done = new_label();
 
-    fputs("\tinc (ix-4)\n", out);
-    fprintf(out, "\tjp nz,L%d\n\tinc (ix-3)\nL%d:\n",
+    mir_stream_puts("\tinc (ix-4)\n", out);
+    mir_stream_printf(out, "\tjp nz,L%d\n\tinc (ix-3)\nL%d:\n",
             done, done);
 }
 
 static void mir_emit_bsearch_integer_schedule(
-    FILE *out, const struct MirBsearchEdgeSchedule *plan)
+    MirStream *out, const struct MirBsearchEdgeSchedule *plan)
 {
     int init_loop = new_label();
     int present_loop = new_label();
@@ -9827,57 +9827,57 @@ static void mir_emit_bsearch_integer_schedule(
     int absent_done = new_label();
     int absent_ok = new_label();
 
-    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
           "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-4\n\tadd hl,sp\n\tld sp,hl\n", out);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,%s\n\tld de,0\n\tld b,51\nL%d:\n"
             "\tld (hl),e\n\tinc hl\n\tld (hl),d\n\tinc hl\n"
             "\tinc de\n\tinc de\n\tdjnz L%d\n",
             asm_name_for(sym_asm_name(plan->array)),
             init_loop, init_loop);
 
-    fputs("\txor a\n\tld (ix-4),a\n\tld (ix-3),a\n", out);
-    fprintf(out, "L%d:\n\tld a,(ix-3)\n\tor a\n", present_loop);
-    fprintf(out, "\tjp nz,L%d\n\tld a,(ix-4)\n\tcp 51\n"
+    mir_stream_puts("\txor a\n\tld (ix-4),a\n\tld (ix-3),a\n", out);
+    mir_stream_printf(out, "L%d:\n\tld a,(ix-3)\n\tor a\n", present_loop);
+    mir_stream_printf(out, "\tjp nz,L%d\n\tld a,(ix-4)\n\tcp 51\n"
             "\tjp nc,L%d\n", present_done, present_done);
-    fputs("\tld l,(ix-4)\n\tld h,(ix-3)\n\tadd hl,hl\n"
+    mir_stream_puts("\tld l,(ix-4)\n\tld h,(ix-3)\n\tadd hl,hl\n"
           "\tld (ix-2),l\n\tld (ix-1),h\n", out);
     mir_bsearch_edge_call(out, plan, 51);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n"
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n"
             "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
             "\tld l,(ix-2)\n\tld h,(ix-1)\n"
             "\tor a\n\tsbc hl,de\n\tjp z,L%d\nL%d:\n",
             present_failed, present_ok, present_failed);
     mir_bsearch_edge_fail(
         out, plan, plan->failure_strings[0]);
-    fprintf(out, "L%d:\n", present_ok);
+    mir_stream_printf(out, "L%d:\n", present_ok);
     mir_bsearch_integer_increment(out);
-    fprintf(out, "\tjp L%d\nL%d:\n", present_loop, present_done);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", present_loop, present_done);
 
-    fputs("\txor a\n\tld (ix-4),a\n\tld (ix-3),a\n", out);
-    fprintf(out, "L%d:\n\tld a,(ix-3)\n\tor a\n", absent_loop);
-    fprintf(out, "\tjp nz,L%d\n\tld a,(ix-4)\n\tcp 50\n"
+    mir_stream_puts("\txor a\n\tld (ix-4),a\n\tld (ix-3),a\n", out);
+    mir_stream_printf(out, "L%d:\n\tld a,(ix-3)\n\tor a\n", absent_loop);
+    mir_stream_printf(out, "\tjp nz,L%d\n\tld a,(ix-4)\n\tcp 50\n"
             "\tjp nc,L%d\n", absent_done, absent_done);
-    fputs("\tld l,(ix-4)\n\tld h,(ix-3)\n\tadd hl,hl\n\tinc hl\n"
+    mir_stream_puts("\tld l,(ix-4)\n\tld h,(ix-3)\n\tadd hl,hl\n\tinc hl\n"
           "\tld (ix-2),l\n\tld (ix-1),h\n", out);
     mir_bsearch_edge_call(out, plan, 51);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n", absent_ok);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n", absent_ok);
     mir_bsearch_edge_fail(
         out, plan, plan->failure_strings[1]);
-    fprintf(out, "L%d:\n", absent_ok);
+    mir_stream_printf(out, "L%d:\n", absent_ok);
     mir_bsearch_integer_increment(out);
-    fprintf(out, "\tjp L%d\nL%d:\n", absent_loop, absent_done);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", absent_loop, absent_done);
 
     mir_bsearch_edge_expect_miss(out, plan, -1, 51, 2);
     mir_bsearch_edge_expect_miss(out, plan, 101, 51, 3);
     mir_bsearch_edge_expect_hit(out, plan, 0, 51, 0, 4);
     mir_bsearch_edge_expect_hit(out, plan, 100, 51, 100, 5);
-    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+    mir_stream_puts("\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
 static int mir_match_qsort_edge_schedule(
@@ -9971,14 +9971,14 @@ static int mir_match_qsort_edge_schedule(
 }
 
 static void mir_qsort_edge_call(
-    FILE *out, const struct MirQsortEdgeSchedule *plan,
+    MirStream *out, const struct MirQsortEdgeSchedule *plan,
     int count)
 {
-    fprintf(out, "\tld hl,%s\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,%s\n\tpush hl\n",
             asm_name_for(sym_asm_name(plan->compare_function)));
-    fputs("\tld hl,2\n\tpush hl\n", out);
-    fprintf(out, "\tld hl,%d\n\tpush hl\n", count);
-    fprintf(out, "\tld hl,%s\n\tpush hl\n",
+    mir_stream_puts("\tld hl,2\n\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n", count);
+    mir_stream_printf(out, "\tld hl,%s\n\tpush hl\n",
             asm_name_for(sym_asm_name(plan->array)));
     mir_emit_recovery_call(
         out, plan->sort_function, plan->sort_name);
@@ -9986,10 +9986,10 @@ static void mir_qsort_edge_call(
 }
 
 static void mir_qsort_edge_fail(
-    FILE *out, const struct MirQsortEdgeSchedule *plan,
+    MirStream *out, const struct MirQsortEdgeSchedule *plan,
     int failure)
 {
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n",
             plan->failure_strings[failure]);
     mir_emit_recovery_call(
         out, plan->failure_function, plan->failure_name);
@@ -9997,47 +9997,47 @@ static void mir_qsort_edge_fail(
 }
 
 static void mir_qsort_edge_check_word(
-    FILE *out, const struct MirQsortEdgeSchedule *plan,
+    MirStream *out, const struct MirQsortEdgeSchedule *plan,
     int offset, int expected, int failure)
 {
     int matched = new_label();
 
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,(%s%+d)\n\tld de,%d\n"
             "\tor a\n\tsbc hl,de\n\tjp z,L%d\n",
             asm_name_for(sym_asm_name(plan->array)),
             offset, expected & 0xffff, matched);
     mir_qsort_edge_fail(out, plan, failure);
-    fprintf(out, "L%d:\n", matched);
+    mir_stream_printf(out, "L%d:\n", matched);
 }
 
 static void mir_qsort_edge_fill(
-    FILE *out, const struct MirQsortEdgeSchedule *plan,
+    MirStream *out, const struct MirQsortEdgeSchedule *plan,
     int start, int delta)
 {
     int loop = new_label();
 
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,%s\n\tld de,%d\n\tld b,20\nL%d:\n"
             "\tld (hl),e\n\tinc hl\n\tld (hl),d\n\tinc hl\n",
             asm_name_for(sym_asm_name(plan->array)),
             start, loop);
     if (delta > 0)
-        fputs("\tinc de\n", out);
+        mir_stream_puts("\tinc de\n", out);
     else if (delta < 0)
-        fputs("\tdec de\n", out);
-    fprintf(out, "\tdjnz L%d\n", loop);
+        mir_stream_puts("\tdec de\n", out);
+    mir_stream_printf(out, "\tdjnz L%d\n", loop);
 }
 
 static void mir_qsort_edge_verify_sequence(
-    FILE *out, const struct MirQsortEdgeSchedule *plan,
+    MirStream *out, const struct MirQsortEdgeSchedule *plan,
     int expected, int constant, int failure)
 {
     int loop = new_label();
     int failed = new_label();
     int done = new_label();
 
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,%s\n\tld de,%d\n\tld b,20\nL%d:\n"
             "\tld a,(hl)\n\tcp e\n\tjp nz,L%d\n"
             "\tinc hl\n\tld a,(hl)\n\tcp d\n\tjp nz,L%d\n"
@@ -10045,28 +10045,28 @@ static void mir_qsort_edge_verify_sequence(
             asm_name_for(sym_asm_name(plan->array)),
             expected, loop, failed, failed);
     if (!constant)
-        fputs("\tinc de\n", out);
-    fprintf(out, "\tdjnz L%d\n\tjp L%d\nL%d:\n",
+        mir_stream_puts("\tinc de\n", out);
+    mir_stream_printf(out, "\tdjnz L%d\n\tjp L%d\nL%d:\n",
             loop, done, failed);
     mir_qsort_edge_fail(out, plan, failure);
-    fprintf(out, "L%d:\n", done);
+    mir_stream_printf(out, "L%d:\n", done);
 }
 
 static void mir_emit_qsort_edge_schedule(
-    FILE *out, const struct MirQsortEdgeSchedule *plan)
+    MirStream *out, const struct MirQsortEdgeSchedule *plan)
 {
-    fputs(MIR_EXACT_KERNEL_MARKER "\n", out);
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n", out);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    fprintf(out, "\tld hl,85\n\tld (%s),hl\n",
+    mir_stream_printf(out, "\tld hl,85\n\tld (%s),hl\n",
             asm_name_for(sym_asm_name(plan->array)));
     mir_qsort_edge_call(out, plan, 0);
     mir_qsort_edge_check_word(out, plan, 0, 85, 0);
-    fprintf(out, "\tld hl,42\n\tld (%s),hl\n",
+    mir_stream_printf(out, "\tld hl,42\n\tld (%s),hl\n",
             asm_name_for(sym_asm_name(plan->array)));
     mir_qsort_edge_call(out, plan, 1);
     mir_qsort_edge_check_word(out, plan, 0, 42, 1);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,9\n\tld (%s),hl\n"
             "\tld hl,4\n\tld (%s+2),hl\n",
             asm_name_for(sym_asm_name(plan->array)),
@@ -10074,7 +10074,7 @@ static void mir_emit_qsort_edge_schedule(
     mir_qsort_edge_call(out, plan, 2);
     mir_qsort_edge_check_word(out, plan, 0, 4, 2);
     mir_qsort_edge_check_word(out, plan, 2, 9, 2);
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,1\n\tld (%s),hl\n"
             "\tld hl,7\n\tld (%s+2),hl\n",
             asm_name_for(sym_asm_name(plan->array)),
@@ -10092,7 +10092,7 @@ static void mir_emit_qsort_edge_schedule(
     mir_qsort_edge_fill(out, plan, 7, 0);
     mir_qsort_edge_call(out, plan, 20);
     mir_qsort_edge_verify_sequence(out, plan, 7, 1, 6);
-    fputs("\tret\n", out);
+    mir_stream_puts("\tret\n", out);
 }
 
 static int mir_match_allocator_byte_helper_schedule(
@@ -10202,66 +10202,66 @@ static int mir_match_allocator_byte_helper_schedule(
 }
 
 static void mir_allocator_pattern_value(
-    FILE *out, int slot_offset, int index_offset)
+    MirStream *out, int slot_offset, int index_offset)
 {
     int slot = slot_offset + 2;
 
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld e,(ix+%d)\n\tld d,(ix+%d)\n\tld hl,37\n",
             slot, slot + 1);
     mir_emit_runtime_call(out, "__mulu");
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     if (index_offset >= 0) {
         int index = index_offset + 2;
-        fprintf(out,
+        mir_stream_printf(out,
                 "\tld e,(ix+%d)\n\tld d,(ix+%d)\n",
                 index, index + 1);
     } else {
-        fprintf(out,
+        mir_stream_printf(out,
                 "\tld e,(ix%d)\n\tld d,(ix%d)\n",
                 index_offset, index_offset + 1);
     }
-    fputs("\tld hl,13\n", out);
+    mir_stream_puts("\tld hl,13\n", out);
     mir_emit_runtime_call(out, "__mulu");
-    fputs("\tpop de\n\tadd hl,de\n\tld de,91\n\tadd hl,de\n"
+    mir_stream_puts("\tpop de\n\tadd hl,de\n\tld de,91\n\tadd hl,de\n"
           "\tld a,l\n", out);
 }
 
 static void mir_allocator_pattern_value_stack(
-    FILE *out, int slot_offset, int index_offset)
+    MirStream *out, int slot_offset, int index_offset)
 {
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,%d\n\tadd hl,sp\n"
             "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tld hl,37\n",
             slot_offset);
     mir_emit_runtime_call(out, "__mulu");
-    fputs("\tpush hl\n", out);
-    fprintf(out,
+    mir_stream_puts("\tpush hl\n", out);
+    mir_stream_printf(out,
             "\tld hl,%d\n\tadd hl,sp\n"
             "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tld hl,13\n",
             index_offset + 2);
     mir_emit_runtime_call(out, "__mulu");
-    fputs("\tpop de\n\tadd hl,de\n\tld de,91\n\tadd hl,de\n", out);
+    mir_stream_puts("\tpop de\n\tadd hl,de\n\tld de,91\n\tadd hl,de\n", out);
 }
 
 static void mir_emit_allocator_byte_helper_schedule(
-    FILE *out, const struct MirAllocatorByteHelperSchedule *plan)
+    MirStream *out, const struct MirAllocatorByteHelperSchedule *plan)
 {
     int loop = new_label();
     int done = new_label();
     int pointer_ok = new_label();
     int value_ok = new_label();
 
-    fputs(MIR_EXACT_KERNEL_MARKER "\n", out);
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n", out);
     if (plan->kind == MIR_ALLOCATOR_PATTERN) {
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_allocator_pattern_value_stack(
             out, plan->slot_offset, plan->count_offset);
-        fputs("\tld h,0\n\tret\n", out);
+        mir_stream_puts("\tld h,0\n\tret\n", out);
         return;
     }
-    fputs("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+    mir_stream_puts("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tdec sp\n\tdec sp\n", out);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
@@ -10269,7 +10269,7 @@ static void mir_emit_allocator_byte_helper_schedule(
         plan->kind == MIR_ALLOCATOR_ZERO_CHECK) {
         int pointer = plan->pointer_offset + 2;
 
-        fprintf(out,
+        mir_stream_printf(out,
                 "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
                 "\tld a,h\n\tor l\n\tjp nz,L%d\n"
                 "\tld hl,S%d\n\tpush hl\n",
@@ -10278,57 +10278,57 @@ static void mir_emit_allocator_byte_helper_schedule(
         mir_emit_recovery_call(
             out, plan->failure_function, plan->failure_name);
         mir_emit_final_call_cleanup(out, 1);
-        fprintf(out, "L%d:\n", pointer_ok);
+        mir_stream_printf(out, "L%d:\n", pointer_ok);
     }
-    fputs("\txor a\n\tld (ix-2),a\n\tld (ix-1),a\n", out);
-    fprintf(out, "L%d:\n", loop);
-    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n", out);
+    mir_stream_puts("\txor a\n\tld (ix-2),a\n\tld (ix-1),a\n", out);
+    mir_stream_printf(out, "L%d:\n", loop);
+    mir_stream_puts("\tld l,(ix-2)\n\tld h,(ix-1)\n", out);
     {
         int count = plan->count_offset + 2;
-        fprintf(out,
+        mir_stream_printf(out,
                 "\tld e,(ix+%d)\n\tld d,(ix+%d)\n"
                 "\tor a\n\tsbc hl,de\n\tjp nc,L%d\n",
                 count, count + 1, done);
     }
-    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n", out);
+    mir_stream_puts("\tld l,(ix-2)\n\tld h,(ix-1)\n", out);
     {
         int pointer = plan->pointer_offset + 2;
 
-        fprintf(out,
+        mir_stream_printf(out,
                 "\tld e,(ix+%d)\n\tld d,(ix+%d)\n"
                 "\tadd hl,de\n",
                 pointer, pointer + 1);
     }
     if (plan->kind == MIR_ALLOCATOR_FILL) {
-        fputs("\tpush hl\n", out);
+        mir_stream_puts("\tpush hl\n", out);
         mir_allocator_pattern_value(
             out, plan->slot_offset, -2);
-        fputs("\tpop hl\n\tld (hl),a\n", out);
+        mir_stream_puts("\tpop hl\n\tld (hl),a\n", out);
     } else {
-        fputs("\tld a,(hl)\n", out);
+        mir_stream_puts("\tld a,(hl)\n", out);
         if (plan->kind == MIR_ALLOCATOR_CHECK) {
-            fputs("\tpush af\n", out);
+            mir_stream_puts("\tpush af\n", out);
             mir_allocator_pattern_value(
                 out, plan->slot_offset, -2);
-            fputs("\tld e,a\n\tpop af\n\tcp e\n", out);
+            mir_stream_puts("\tld e,a\n\tpop af\n\tcp e\n", out);
         } else {
-            fputs("\tor a\n", out);
+            mir_stream_puts("\tor a\n", out);
         }
-        fprintf(out, "\tjp z,L%d\n", value_ok);
+        mir_stream_printf(out, "\tjp z,L%d\n", value_ok);
         {
             int message = plan->message_offset + 2;
-            fprintf(out,
+            mir_stream_printf(out,
                     "\tld l,(ix+%d)\n\tld h,(ix+%d)\n\tpush hl\n",
                     message, message + 1);
         }
         mir_emit_recovery_call(
             out, plan->failure_function, plan->failure_name);
         mir_emit_final_call_cleanup(out, 1);
-        fprintf(out, "L%d:\n", value_ok);
+        mir_stream_printf(out, "L%d:\n", value_ok);
     }
-    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n\tinc hl\n"
+    mir_stream_puts("\tld l,(ix-2)\n\tld h,(ix-1)\n\tinc hl\n"
           "\tld (ix-2),l\n\tld (ix-1),h\n", out);
-    fprintf(out, "\tjp L%d\nL%d:\n"
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n"
             "\tld sp,ix\n\tpop ix\n\tret\n",
             loop, done);
 }
@@ -10411,36 +10411,36 @@ static int mir_match_allocator_large_schedule(
 }
 
 static void mir_allocator_large_fail(
-    FILE *out, const struct MirAllocatorLargeSchedule *plan,
+    MirStream *out, const struct MirAllocatorLargeSchedule *plan,
     int string_id)
 {
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
     mir_emit_recovery_call(
         out, plan->failure_function, plan->failure_name);
 }
 
 static void mir_allocator_large_allocate(
-    FILE *out, const struct MirAllocatorLargeSchedule *plan,
+    MirStream *out, const struct MirAllocatorLargeSchedule *plan,
     int size, int offset, int failure_string)
 {
     int ok = new_label();
 
-    fprintf(out, "\tld hl,%d\n\tpush hl\n", size);
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n", size);
     mir_emit_recovery_call(
         out, plan->allocate_function, plan->allocate_name);
     mir_emit_final_call_cleanup(out, 1);
-    fprintf(out, "\tld (ix%d),l\n\tld (ix%d),h\n"
+    mir_stream_printf(out, "\tld (ix%d),l\n\tld (ix%d),h\n"
             "\tld a,h\n\tor l\n\tjp nz,L%d\n",
             offset, offset + 1, ok);
     mir_allocator_large_fail(out, plan, failure_string);
-    fprintf(out, "L%d:\n", ok);
+    mir_stream_printf(out, "L%d:\n", ok);
 }
 
 static void mir_allocator_large_free(
-    FILE *out, const struct MirAllocatorLargeSchedule *plan,
+    MirStream *out, const struct MirAllocatorLargeSchedule *plan,
     int offset)
 {
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld l,(ix%d)\n\tld h,(ix%d)\n\tpush hl\n",
             offset, offset + 1);
     mir_emit_recovery_call(
@@ -10449,7 +10449,7 @@ static void mir_allocator_large_free(
 }
 
 static void mir_emit_allocator_large_schedule(
-    FILE *out, const struct MirAllocatorLargeSchedule *plan)
+    MirStream *out, const struct MirAllocatorLargeSchedule *plan)
 {
     int edges_failed = new_label();
     int edges_ok = new_label();
@@ -10457,60 +10457,60 @@ static void mir_emit_allocator_large_schedule(
     int first_wrap_ok = new_label();
     int second_wrap_ok = new_label();
 
-    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
           "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-6\n\tadd hl,sp\n\tld sp,hl\n", out);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
     mir_allocator_large_allocate(
         out, plan, 32768, -2, plan->strings[0]);
-    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n"
+    mir_stream_puts("\tld l,(ix-2)\n\tld h,(ix-1)\n"
           "\tld (hl),18\n\tld de,32767\n\tadd hl,de\n\tld (hl),52\n"
           "\tld l,(ix-2)\n\tld h,(ix-1)\n\tld a,(hl)\n\tcp 18\n"
           "\tjp nz,L", out);
-    fprintf(out, "%d\n\tld de,32767\n\tadd hl,de\n"
+    mir_stream_printf(out, "%d\n\tld de,32767\n\tadd hl,de\n"
             "\tld a,(hl)\n\tcp 52\n\tjp z,L%d\nL%d:\n",
             edges_failed, edges_ok, edges_failed);
     mir_allocator_large_fail(out, plan, plan->strings[1]);
-    fprintf(out, "L%d:\n", edges_ok);
+    mir_stream_printf(out, "L%d:\n", edges_ok);
     mir_allocator_large_free(out, plan, -2);
 
     mir_allocator_large_allocate(
         out, plan, 32, -4, plan->strings[2]);
-    fputs("\tld l,(ix-4)\n\tld h,(ix-3)\n"
+    mir_stream_puts("\tld l,(ix-4)\n\tld h,(ix-3)\n"
           "\tld (hl),86\n\tld de,31\n\tadd hl,de\n\tld (hl),120\n",
           out);
     mir_allocator_large_free(out, plan, -4);
     mir_allocator_large_allocate(
         out, plan, 32768, -2, plan->strings[3]);
-    fputs("\tld l,(ix-2)\n\tld h,(ix-1)\n"
+    mir_stream_puts("\tld l,(ix-2)\n\tld h,(ix-1)\n"
           "\tld e,(ix-4)\n\tld d,(ix-3)\n"
           "\tor a\n\tsbc hl,de\n", out);
-    fprintf(out, "\tjp z,L%d\n", same);
+    mir_stream_printf(out, "\tjp z,L%d\n", same);
     mir_allocator_large_fail(out, plan, plan->strings[4]);
-    fprintf(out, "L%d:\n", same);
+    mir_stream_printf(out, "L%d:\n", same);
     mir_allocator_large_free(out, plan, -2);
 
     mir_allocator_large_allocate(
         out, plan, 1, -4, plan->strings[5]);
-    fputs("\tld hl,65000\n\tpush hl\n", out);
+    mir_stream_puts("\tld hl,65000\n\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->allocate_function, plan->allocate_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n", first_wrap_ok);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n", first_wrap_ok);
     mir_allocator_large_fail(out, plan, plan->strings[6]);
-    fprintf(out, "L%d:\n\tld hl,65535\n\tpush hl\n",
+    mir_stream_printf(out, "L%d:\n\tld hl,65535\n\tpush hl\n",
             first_wrap_ok);
     mir_emit_recovery_call(
         out, plan->allocate_function, plan->allocate_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n", second_wrap_ok);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n", second_wrap_ok);
     mir_allocator_large_fail(out, plan, plan->strings[7]);
-    fprintf(out, "L%d:\n", second_wrap_ok);
+    mir_stream_printf(out, "L%d:\n", second_wrap_ok);
     mir_allocator_large_free(out, plan, -4);
-    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+    mir_stream_puts("\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
 static int mir_match_grow_fallback_schedule(
@@ -10607,61 +10607,61 @@ static int mir_match_grow_fallback_schedule(
 }
 
 static void mir_grow_fallback_call_one(
-    FILE *out, struct Sym *function, const char *name,
+    MirStream *out, struct Sym *function, const char *name,
     int value)
 {
-    fprintf(out, "\tld hl,%d\n\tpush hl\n", value);
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n", value);
     mir_emit_recovery_call(out, function, name);
     mir_emit_final_call_cleanup(out, 1);
 }
 
-static void mir_grow_fallback_store(FILE *out, int offset)
+static void mir_grow_fallback_store(MirStream *out, int offset)
 {
-    fprintf(out, "\tld (ix%d),l\n\tld (ix%d),h\n",
+    mir_stream_printf(out, "\tld (ix%d),l\n\tld (ix%d),h\n",
             offset, offset + 1);
 }
 
-static void mir_grow_fallback_load(FILE *out, int offset)
+static void mir_grow_fallback_load(MirStream *out, int offset)
 {
-    fprintf(out, "\tld l,(ix%d)\n\tld h,(ix%d)\n",
+    mir_stream_printf(out, "\tld l,(ix%d)\n\tld h,(ix%d)\n",
             offset, offset + 1);
 }
 
 static void mir_grow_fallback_fail(
-    FILE *out, const struct MirGrowFallbackSchedule *plan,
+    MirStream *out, const struct MirGrowFallbackSchedule *plan,
     int string_id)
 {
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
     mir_emit_recovery_call(
         out, plan->failure_function, plan->failure_name);
 }
 
 static void mir_grow_fallback_fill(
-    FILE *out, const struct MirGrowFallbackSchedule *plan,
+    MirStream *out, const struct MirGrowFallbackSchedule *plan,
     int pointer_offset, int count, int pattern)
 {
-    fprintf(out, "\tld hl,%d\n\tpush hl\n", pattern);
-    fprintf(out, "\tld hl,%d\n\tpush hl\n", count);
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n", pattern);
+    mir_stream_printf(out, "\tld hl,%d\n\tpush hl\n", count);
     mir_grow_fallback_load(out, pointer_offset);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->fill_function, plan->fill_name);
     mir_emit_final_call_cleanup(out, 3);
 }
 
 static void mir_grow_fallback_free(
-    FILE *out, const struct MirGrowFallbackSchedule *plan,
+    MirStream *out, const struct MirGrowFallbackSchedule *plan,
     int pointer_offset)
 {
     mir_grow_fallback_load(out, pointer_offset);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->free_function, plan->free_name);
     mir_emit_final_call_cleanup(out, 1);
 }
 
 static void mir_emit_grow_fallback_schedule(
-    FILE *out, const struct MirGrowFallbackSchedule *plan)
+    MirStream *out, const struct MirGrowFallbackSchedule *plan)
 {
     int allocation_failed = new_label();
     int allocations_ok = new_label();
@@ -10672,7 +10672,7 @@ static void mir_emit_grow_fallback_schedule(
     int increment_done = new_label();
     int pointer;
 
-    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
           "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-12\n\tadd hl,sp\n\tld sp,hl\n", out);
     if (opt_stack_check)
@@ -10693,60 +10693,60 @@ static void mir_emit_grow_fallback_schedule(
         out, plan->allocate_function, plan->allocate_name, 16);
     mir_grow_fallback_store(out, -10);
     for (pointer = -2; pointer >= -10; pointer -= 2) {
-        fprintf(out,
+        mir_stream_printf(out,
                 "\tld a,(ix%d)\n\tor (ix%d)\n\tjp z,L%d\n",
                 pointer, pointer + 1, allocation_failed);
     }
-    fprintf(out, "\tjp L%d\nL%d:\n",
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n",
             allocations_ok, allocation_failed);
     mir_grow_fallback_fail(out, plan, plan->strings[0]);
-    fprintf(out, "L%d:\n", allocations_ok);
+    mir_stream_printf(out, "L%d:\n", allocations_ok);
     mir_grow_fallback_fill(out, plan, -2, 100, 27);
     mir_grow_fallback_fill(out, plan, -6, 48, 28);
     mir_grow_fallback_free(out, plan, -2);
     mir_grow_fallback_free(out, plan, -8);
-    fputs("\tld hl,80\n\tpush hl\n", out);
+    mir_stream_puts("\tld hl,80\n\tpush hl\n", out);
     mir_grow_fallback_load(out, -6);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->resize_function, plan->resize_name);
     mir_emit_final_call_cleanup(out, 2);
     mir_grow_fallback_store(out, -12);
-    fputs("\tld e,(ix-2)\n\tld d,(ix-1)\n"
+    mir_stream_puts("\tld e,(ix-2)\n\tld d,(ix-1)\n"
           "\tor a\n\tsbc hl,de\n", out);
-    fprintf(out, "\tjp z,L%d\n", moved_ok);
+    mir_stream_printf(out, "\tjp z,L%d\n", moved_ok);
     mir_grow_fallback_fail(out, plan, plan->strings[1]);
-    fprintf(out, "L%d:\n", moved_ok);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[2]);
-    fputs("\tld hl,28\n\tpush hl\n\tld hl,48\n\tpush hl\n", out);
+    mir_stream_printf(out, "L%d:\n", moved_ok);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[2]);
+    mir_stream_puts("\tld hl,28\n\tpush hl\n\tld hl,48\n\tpush hl\n", out);
     mir_grow_fallback_load(out, -12);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->check_function, plan->check_name);
     mir_emit_final_call_cleanup(out, 4);
-    fputs("\tld hl,48\n\tld (ix-8),l\n\tld (ix-7),h\n", out);
-    fprintf(out, "L%d:\n\tld a,(ix-7)\n\tor a\n", loop);
-    fprintf(out, "\tjp nz,L%d\n\tld a,(ix-8)\n\tcp 80\n"
+    mir_stream_puts("\tld hl,48\n\tld (ix-8),l\n\tld (ix-7),h\n", out);
+    mir_stream_printf(out, "L%d:\n\tld a,(ix-7)\n\tor a\n", loop);
+    mir_stream_printf(out, "\tjp nz,L%d\n\tld a,(ix-8)\n\tcp 80\n"
             "\tjp nc,L%d\n", loop_done, loop_done);
-    fputs("\tld l,(ix-8)\n\tld h,(ix-7)\n\tpush hl\n"
+    mir_stream_puts("\tld l,(ix-8)\n\tld h,(ix-7)\n\tpush hl\n"
           "\tld hl,27\n\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->pattern_function, plan->pattern_name);
     mir_emit_final_call_cleanup(out, 2);
-    fputs("\tld e,l\n\tld l,(ix-8)\n\tld h,(ix-7)\n"
+    mir_stream_puts("\tld e,l\n\tld l,(ix-8)\n\tld h,(ix-7)\n"
           "\tld c,(ix-12)\n\tld b,(ix-11)\n\tadd hl,bc\n"
           "\tld a,(hl)\n\tcp e\n", out);
-    fprintf(out, "\tjp z,L%d\n", byte_ok);
+    mir_stream_printf(out, "\tjp z,L%d\n", byte_ok);
     mir_grow_fallback_fail(out, plan, plan->strings[3]);
-    fprintf(out, "L%d:\n\tinc (ix-8)\n", byte_ok);
-    fprintf(out,
+    mir_stream_printf(out, "L%d:\n\tinc (ix-8)\n", byte_ok);
+    mir_stream_printf(out,
             "\tjp nz,L%d\n\tinc (ix-7)\nL%d:\n\tjp L%d\n",
             increment_done, increment_done, loop);
-    fprintf(out, "L%d:\n", loop_done);
+    mir_stream_printf(out, "L%d:\n", loop_done);
     mir_grow_fallback_free(out, plan, -12);
     mir_grow_fallback_free(out, plan, -4);
     mir_grow_fallback_free(out, plan, -10);
-    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+    mir_stream_puts("\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
 static int mir_match_allocator_stress_schedule(
@@ -10878,112 +10878,112 @@ static int mir_match_allocator_stress_schedule(
         mir_machine_constant_equals(mir.insns[428].dst, 35);
 }
 
-static void mir_allocator_load_word(FILE *out, int offset)
+static void mir_allocator_load_word(MirStream *out, int offset)
 {
-    fprintf(out, "\tld l,(ix%d)\n\tld h,(ix%d)\n",
+    mir_stream_printf(out, "\tld l,(ix%d)\n\tld h,(ix%d)\n",
             offset, offset + 1);
 }
 
-static void mir_allocator_store_word(FILE *out, int offset)
+static void mir_allocator_store_word(MirStream *out, int offset)
 {
-    fprintf(out, "\tld (ix%d),l\n\tld (ix%d),h\n",
+    mir_stream_printf(out, "\tld (ix%d),l\n\tld (ix%d),h\n",
             offset, offset + 1);
 }
 
-static void mir_allocator_increment(FILE *out, int offset, int amount)
+static void mir_allocator_increment(MirStream *out, int offset, int amount)
 {
     mir_allocator_load_word(out, offset);
     if (amount == 1)
-        fputs("\tinc hl\n", out);
+        mir_stream_puts("\tinc hl\n", out);
     else
-        fprintf(out, "\tld de,%d\n\tadd hl,de\n", amount);
+        mir_stream_printf(out, "\tld de,%d\n\tadd hl,de\n", amount);
     mir_allocator_store_word(out, offset);
 }
 
 static void mir_allocator_index_address(
-    FILE *out, int helper_label)
+    MirStream *out, int helper_label)
 {
-    fprintf(out, "\tcall L%d\n", helper_label);
+    mir_stream_printf(out, "\tcall L%d\n", helper_label);
 }
 
 static void mir_allocator_load_indexed(
-    FILE *out, int helper_label)
+    MirStream *out, int helper_label)
 {
     mir_allocator_index_address(out, helper_label);
-    fputs("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n", out);
+    mir_stream_puts("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n", out);
 }
 
 static void mir_allocator_store_indexed(
-    FILE *out, int helper_label, int value_offset)
+    MirStream *out, int helper_label, int value_offset)
 {
     mir_allocator_index_address(out, helper_label);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_allocator_load_word(out, value_offset);
-    fputs("\tex de,hl\n\tpop hl\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+    mir_stream_puts("\tex de,hl\n\tpop hl\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
           out);
 }
 
 static void mir_allocator_store_indexed_constant(
-    FILE *out, int helper_label, int value)
+    MirStream *out, int helper_label, int value)
 {
     mir_allocator_index_address(out, helper_label);
-    fprintf(out, "\tld de,%d\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
+    mir_stream_printf(out, "\tld de,%d\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n",
             value);
 }
 
 static void mir_allocator_random_mod(
-    FILE *out, const struct MirAllocatorStressSchedule *plan,
+    MirStream *out, const struct MirAllocatorStressSchedule *plan,
     int modulus)
 {
     mir_emit_recovery_call(
         out, plan->random_function, plan->random_name);
-    fprintf(out, "\tld de,%d\n", modulus);
+    mir_stream_printf(out, "\tld de,%d\n", modulus);
     mir_emit_runtime_call(out, "__modu");
 }
 
 static void mir_allocator_stress_fail(
-    FILE *out, const struct MirAllocatorStressSchedule *plan,
+    MirStream *out, const struct MirAllocatorStressSchedule *plan,
     int string_id)
 {
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
     mir_emit_recovery_call(
         out, plan->failure_function, plan->failure_name);
 }
 
 static void mir_allocator_check(
-    FILE *out, const struct MirAllocatorStressSchedule *plan,
+    MirStream *out, const struct MirAllocatorStressSchedule *plan,
     int pointer_offset, int size_offset, int seed_offset,
     int string_id)
 {
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", string_id);
     mir_allocator_load_word(out, seed_offset);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_allocator_load_word(out, size_offset);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_allocator_load_word(out, pointer_offset);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->check_function, plan->check_name);
     mir_emit_final_call_cleanup(out, 4);
 }
 
 static void mir_allocator_fill(
-    FILE *out, const struct MirAllocatorStressSchedule *plan,
+    MirStream *out, const struct MirAllocatorStressSchedule *plan,
     int pointer_offset, int size_offset, int seed_offset)
 {
     mir_allocator_load_word(out, seed_offset);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_allocator_load_word(out, size_offset);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_allocator_load_word(out, pointer_offset);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->fill_function, plan->fill_name);
     mir_emit_final_call_cleanup(out, 3);
 }
 
 static void mir_emit_allocator_stress_schedule(
-    FILE *out, const struct MirAllocatorStressSchedule *plan)
+    MirStream *out, const struct MirAllocatorStressSchedule *plan)
 {
     int init_loop = new_label();
     int stress_loop = new_label();
@@ -11009,12 +11009,12 @@ static void mir_emit_allocator_stress_schedule(
     int sizes_address = new_label();
     int body = new_label();
 
-    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
           "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-14\n\tadd hl,sp\n\tld sp,hl\n", out);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
-    fprintf(out,
+    mir_stream_printf(out,
             "\tjp L%d\n"
             "L%d:\n\tld l,(ix-4)\n\tld h,(ix-3)\n"
             "\tadd hl,hl\n\tld de,%s\n\tadd hl,de\n\tret\n"
@@ -11027,69 +11027,69 @@ static void mir_emit_allocator_stress_schedule(
             sizes_address,
             asm_name_for(sym_asm_name(plan->sizes)),
             body);
-    fprintf(out, "\tld hl,44257\n\tld (%s),hl\n",
+    mir_stream_printf(out, "\tld hl,44257\n\tld (%s),hl\n",
             asm_name_for(sym_asm_name(plan->seed)));
-    fprintf(out,
+    mir_stream_printf(out,
             "\tld hl,%s\n\tld de,%s\n\tld b,48\n\txor a\nL%d:\n"
             "\tld (hl),a\n\tld (de),a\n\tinc hl\n\tinc de\n"
             "\tdjnz L%d\n",
             asm_name_for(sym_asm_name(plan->slots)),
             asm_name_for(sym_asm_name(plan->sizes)),
             init_loop, init_loop);
-    fputs("\txor a\n\tld (ix-2),a\n\tld (ix-1),a\n", out);
-    fprintf(out, "L%d:\n", stress_loop);
+    mir_stream_puts("\txor a\n\tld (ix-2),a\n\tld (ix-1),a\n", out);
+    mir_stream_printf(out, "L%d:\n", stress_loop);
     mir_allocator_load_word(out, MIR_ALLOC_I);
-    fputs("\tld de,420\n\tor a\n\tsbc hl,de\n", out);
-    fprintf(out, "\tjp nc,L%d\n", stress_done);
+    mir_stream_puts("\tld de,420\n\tor a\n\tsbc hl,de\n", out);
+    mir_stream_printf(out, "\tjp nc,L%d\n", stress_done);
     mir_allocator_random_mod(out, plan, 24);
     mir_allocator_store_word(out, MIR_ALLOC_INDEX);
     mir_allocator_load_indexed(out, slots_address);
     mir_allocator_store_word(out, MIR_ALLOC_POINTER);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n", empty_slot);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n", empty_slot);
 
     mir_allocator_load_indexed(out, sizes_address);
     mir_allocator_store_word(out, MIR_ALLOC_SIZE);
     mir_allocator_load_word(out, MIR_ALLOC_INDEX);
-    fputs("\tld de,11\n\tadd hl,de\n", out);
+    mir_stream_puts("\tld de,11\n\tadd hl,de\n", out);
     mir_allocator_store_word(out, MIR_ALLOC_KEEP);
     mir_allocator_check(
         out, plan, MIR_ALLOC_POINTER, MIR_ALLOC_SIZE,
         MIR_ALLOC_KEEP, plan->strings[0]);
     mir_allocator_random_mod(out, plan, 4);
     mir_allocator_store_word(out, MIR_ALLOC_OPERATION);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp nz,L%d\n", free_slot);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp nz,L%d\n", free_slot);
     mir_allocator_load_word(out, MIR_ALLOC_SIZE);
     mir_allocator_store_word(out, MIR_ALLOC_OLD);
     mir_allocator_random_mod(out, plan, 220);
-    fputs("\tinc hl\n", out);
+    mir_stream_puts("\tinc hl\n", out);
     mir_allocator_store_word(out, MIR_ALLOC_SIZE);
     mir_allocator_load_word(out, MIR_ALLOC_SIZE);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_allocator_load_word(out, MIR_ALLOC_POINTER);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->resize_function, plan->resize_name);
     mir_emit_final_call_cleanup(out, 2);
     mir_allocator_store_word(out, MIR_ALLOC_POINTER);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp nz,L%d\n", realloc_nonnull);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp nz,L%d\n", realloc_nonnull);
     mir_allocator_stress_fail(out, plan, plan->strings[1]);
-    fprintf(out, "L%d:\n", realloc_nonnull);
+    mir_stream_printf(out, "L%d:\n", realloc_nonnull);
     mir_allocator_load_word(out, MIR_ALLOC_OLD);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_allocator_load_word(out, MIR_ALLOC_SIZE);
-    fputs("\tex de,hl\n\tpop hl\n\tor a\n\tsbc hl,de\n", out);
-    fprintf(out, "\tjp c,L%d\n", realloc_keep_old);
+    mir_stream_puts("\tex de,hl\n\tpop hl\n\tor a\n\tsbc hl,de\n", out);
+    mir_stream_printf(out, "\tjp c,L%d\n", realloc_keep_old);
     mir_allocator_load_word(out, MIR_ALLOC_SIZE);
-    fprintf(out, "\tjp L%d\nL%d:\n",
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n",
             realloc_keep_ready, realloc_keep_old);
     mir_allocator_load_word(out, MIR_ALLOC_OLD);
-    fprintf(out, "L%d:\n", realloc_keep_ready);
+    mir_stream_printf(out, "L%d:\n", realloc_keep_ready);
     mir_allocator_store_word(out, MIR_ALLOC_KEEP);
     mir_allocator_load_word(out, MIR_ALLOC_INDEX);
-    fputs("\tld de,11\n\tadd hl,de\n", out);
+    mir_stream_puts("\tld de,11\n\tadd hl,de\n", out);
     mir_allocator_store_word(out, MIR_ALLOC_OPERATION);
     mir_allocator_check(
         out, plan, MIR_ALLOC_POINTER, MIR_ALLOC_KEEP,
@@ -11099,146 +11099,146 @@ static void mir_emit_allocator_stress_schedule(
     mir_allocator_store_indexed(
         out, sizes_address, MIR_ALLOC_SIZE);
     mir_allocator_load_word(out, MIR_ALLOC_INDEX);
-    fputs("\tld de,11\n\tadd hl,de\n", out);
+    mir_stream_puts("\tld de,11\n\tadd hl,de\n", out);
     mir_allocator_store_word(out, MIR_ALLOC_OPERATION);
     mir_allocator_fill(
         out, plan, MIR_ALLOC_POINTER, MIR_ALLOC_SIZE,
         MIR_ALLOC_OPERATION);
-    fprintf(out, "\tjp L%d\n", iteration_done);
+    mir_stream_printf(out, "\tjp L%d\n", iteration_done);
 
-    fprintf(out, "L%d:\n", free_slot);
+    mir_stream_printf(out, "L%d:\n", free_slot);
     mir_allocator_load_word(out, MIR_ALLOC_POINTER);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->free_function, plan->free_name);
     mir_emit_final_call_cleanup(out, 1);
     mir_allocator_store_indexed_constant(out, slots_address, 0);
     mir_allocator_store_indexed_constant(out, sizes_address, 0);
-    fprintf(out, "\tjp L%d\n", iteration_done);
+    mir_stream_printf(out, "\tjp L%d\n", iteration_done);
 
-    fprintf(out, "L%d:\n", empty_slot);
+    mir_stream_printf(out, "L%d:\n", empty_slot);
     mir_allocator_random_mod(out, plan, 220);
-    fputs("\tinc hl\n", out);
+    mir_stream_puts("\tinc hl\n", out);
     mir_allocator_store_word(out, MIR_ALLOC_SIZE);
     mir_emit_recovery_call(
         out, plan->random_function, plan->random_name);
-    fputs("\tbit 0,l\n", out);
-    fprintf(out, "\tjp z,L%d\n", calloc_branch);
-    fputs("\tld hl,1\n\tpush hl\n", out);
+    mir_stream_puts("\tbit 0,l\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n", calloc_branch);
+    mir_stream_puts("\tld hl,1\n\tpush hl\n", out);
     mir_allocator_load_word(out, MIR_ALLOC_SIZE);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->clear_allocate_function,
         plan->clear_allocate_name);
     mir_emit_final_call_cleanup(out, 2);
     mir_allocator_store_word(out, MIR_ALLOC_POINTER);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp nz,L%d\n", calloc_nonnull);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp nz,L%d\n", calloc_nonnull);
     mir_allocator_stress_fail(out, plan, plan->strings[3]);
-    fprintf(out, "L%d:\n", calloc_nonnull);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[4]);
+    mir_stream_printf(out, "L%d:\n", calloc_nonnull);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[4]);
     mir_allocator_load_word(out, MIR_ALLOC_SIZE);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_allocator_load_word(out, MIR_ALLOC_POINTER);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->zero_check_function, plan->zero_check_name);
     mir_emit_final_call_cleanup(out, 3);
-    fprintf(out, "\tjp L%d\nL%d:\n", allocated, calloc_branch);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", allocated, calloc_branch);
     mir_allocator_load_word(out, MIR_ALLOC_SIZE);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->allocate_function, plan->allocate_name);
     mir_emit_final_call_cleanup(out, 1);
     mir_allocator_store_word(out, MIR_ALLOC_POINTER);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp nz,L%d\n", malloc_nonnull);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp nz,L%d\n", malloc_nonnull);
     mir_allocator_stress_fail(out, plan, plan->strings[5]);
-    fprintf(out, "L%d:\nL%d:\n", malloc_nonnull, allocated);
+    mir_stream_printf(out, "L%d:\nL%d:\n", malloc_nonnull, allocated);
     mir_allocator_store_indexed(
         out, slots_address, MIR_ALLOC_POINTER);
     mir_allocator_store_indexed(
         out, sizes_address, MIR_ALLOC_SIZE);
     mir_allocator_load_word(out, MIR_ALLOC_INDEX);
-    fputs("\tld de,11\n\tadd hl,de\n", out);
+    mir_stream_puts("\tld de,11\n\tadd hl,de\n", out);
     mir_allocator_store_word(out, MIR_ALLOC_OPERATION);
     mir_allocator_fill(
         out, plan, MIR_ALLOC_POINTER, MIR_ALLOC_SIZE,
         MIR_ALLOC_OPERATION);
 
-    fprintf(out, "L%d:\n", iteration_done);
+    mir_stream_printf(out, "L%d:\n", iteration_done);
     mir_allocator_increment(out, MIR_ALLOC_I, 1);
-    fprintf(out, "\tjp L%d\nL%d:\n", stress_loop, stress_done);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", stress_loop, stress_done);
 
-    fputs("\tld hl,0\n", out);
+    mir_stream_puts("\tld hl,0\n", out);
     mir_allocator_store_word(out, MIR_ALLOC_I);
-    fprintf(out, "L%d:\n", cleanup_even);
+    mir_stream_printf(out, "L%d:\n", cleanup_even);
     mir_allocator_load_word(out, MIR_ALLOC_I);
-    fputs("\tld de,24\n\tor a\n\tsbc hl,de\n", out);
-    fprintf(out, "\tjp nc,L%d\n", cleanup_even_done);
+    mir_stream_puts("\tld de,24\n\tor a\n\tsbc hl,de\n", out);
+    mir_stream_printf(out, "\tjp nc,L%d\n", cleanup_even_done);
     mir_allocator_load_word(out, MIR_ALLOC_I);
     mir_allocator_store_word(out, MIR_ALLOC_INDEX);
     mir_allocator_load_indexed(out, slots_address);
     mir_allocator_store_word(out, MIR_ALLOC_POINTER);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n", cleanup_even_skip);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n", cleanup_even_skip);
     mir_allocator_load_indexed(out, sizes_address);
     mir_allocator_store_word(out, MIR_ALLOC_SIZE);
     mir_allocator_load_word(out, MIR_ALLOC_I);
-    fputs("\tld de,11\n\tadd hl,de\n", out);
+    mir_stream_puts("\tld de,11\n\tadd hl,de\n", out);
     mir_allocator_store_word(out, MIR_ALLOC_KEEP);
     mir_allocator_check(
         out, plan, MIR_ALLOC_POINTER, MIR_ALLOC_SIZE,
         MIR_ALLOC_KEEP, plan->strings[6]);
     mir_allocator_load_word(out, MIR_ALLOC_POINTER);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->free_function, plan->free_name);
     mir_emit_final_call_cleanup(out, 1);
     mir_allocator_store_indexed_constant(out, slots_address, 0);
-    fprintf(out, "L%d:\n", cleanup_even_skip);
+    mir_stream_printf(out, "L%d:\n", cleanup_even_skip);
     mir_allocator_increment(out, MIR_ALLOC_I, 2);
-    fprintf(out, "\tjp L%d\nL%d:\n", cleanup_even, cleanup_even_done);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", cleanup_even, cleanup_even_done);
 
-    fputs("\tld hl,1\n", out);
+    mir_stream_puts("\tld hl,1\n", out);
     mir_allocator_store_word(out, MIR_ALLOC_I);
-    fprintf(out, "L%d:\n", cleanup_odd);
+    mir_stream_printf(out, "L%d:\n", cleanup_odd);
     mir_allocator_load_word(out, MIR_ALLOC_I);
-    fputs("\tld de,24\n\tor a\n\tsbc hl,de\n", out);
-    fprintf(out, "\tjp nc,L%d\n", cleanup_odd_done);
+    mir_stream_puts("\tld de,24\n\tor a\n\tsbc hl,de\n", out);
+    mir_stream_printf(out, "\tjp nc,L%d\n", cleanup_odd_done);
     mir_allocator_load_word(out, MIR_ALLOC_I);
     mir_allocator_store_word(out, MIR_ALLOC_INDEX);
     mir_allocator_load_indexed(out, slots_address);
     mir_allocator_store_word(out, MIR_ALLOC_POINTER);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp z,L%d\n", cleanup_odd_skip);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp z,L%d\n", cleanup_odd_skip);
     mir_allocator_load_indexed(out, sizes_address);
     mir_allocator_store_word(out, MIR_ALLOC_SIZE);
     mir_allocator_load_word(out, MIR_ALLOC_I);
-    fputs("\tld de,11\n\tadd hl,de\n", out);
+    mir_stream_puts("\tld de,11\n\tadd hl,de\n", out);
     mir_allocator_store_word(out, MIR_ALLOC_KEEP);
     mir_allocator_check(
         out, plan, MIR_ALLOC_POINTER, MIR_ALLOC_SIZE,
         MIR_ALLOC_KEEP, plan->strings[7]);
     mir_allocator_load_word(out, MIR_ALLOC_POINTER);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->free_function, plan->free_name);
     mir_emit_final_call_cleanup(out, 1);
     mir_allocator_store_indexed_constant(out, slots_address, 0);
-    fprintf(out, "L%d:\n", cleanup_odd_skip);
+    mir_stream_printf(out, "L%d:\n", cleanup_odd_skip);
     mir_allocator_increment(out, MIR_ALLOC_I, 2);
-    fprintf(out, "\tjp L%d\nL%d:\n", cleanup_odd, cleanup_odd_done);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", cleanup_odd, cleanup_odd_done);
 
-    fputs("\tld hl,12000\n\tpush hl\n", out);
+    mir_stream_puts("\tld hl,12000\n\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->allocate_function, plan->allocate_name);
     mir_emit_final_call_cleanup(out, 1);
     mir_allocator_store_word(out, MIR_ALLOC_POINTER);
-    fputs("\tld a,h\n\tor l\n", out);
-    fprintf(out, "\tjp nz,L%d\n", final_nonnull);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp nz,L%d\n", final_nonnull);
     mir_allocator_stress_fail(out, plan, plan->strings[8]);
-    fprintf(out, "L%d:\n"
+    mir_stream_printf(out, "L%d:\n"
             "\tld hl,12000\n\tld (ix-8),l\n\tld (ix-7),h\n"
             "\tld hl,35\n\tld (ix-6),l\n\tld (ix-5),h\n",
             final_nonnull);
@@ -11249,14 +11249,14 @@ static void mir_emit_allocator_stress_schedule(
         out, plan, MIR_ALLOC_POINTER, MIR_ALLOC_SIZE,
         MIR_ALLOC_OPERATION, plan->strings[9]);
     mir_allocator_load_word(out, MIR_ALLOC_POINTER);
-    fputs("\tpush hl\n", out);
+    mir_stream_puts("\tpush hl\n", out);
     mir_emit_recovery_call(
         out, plan->free_function, plan->free_name);
     mir_emit_final_call_cleanup(out, 1);
-    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+    mir_stream_puts("\tld sp,ix\n\tpop ix\n\tret\n", out);
 }
 
-int mir_try_emit_runtime_runners(FILE *out, int phase)
+int mir_try_emit_runtime_runners(MirStream *out, int phase)
 {
     if (phase == 2) {
         enum MirStrictSpilledProfile profile;

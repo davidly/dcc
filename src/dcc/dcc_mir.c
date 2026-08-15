@@ -372,7 +372,7 @@ int mir_capture_debug_function_end(
     return mir_capture_debug_text(text);
 }
 
-void mir_emit_debug_events(FILE *out, int point)
+void mir_emit_debug_events(MirStream *out, int point)
 {
     int event;
 
@@ -380,7 +380,7 @@ void mir_emit_debug_events(FILE *out, int point)
         return;
     for (event = 0; event < mir.debug_event_count; ++event)
         if (mir.debug_events[event].point == point)
-            fputs(mir.debug_events[event].text, out);
+            mir_stream_puts(mir.debug_events[event].text, out);
 }
 
 static int mir_user_label(const char *name)
@@ -9077,7 +9077,7 @@ int mir_regional_parameter_location(int value, int *offset, int *type)
 }
 
 static int mir_regional_emit_slot_to_color(
-    FILE *out, int value, int color)
+    MirStream *out, int value, int color)
 {
     int offset;
 
@@ -9085,30 +9085,30 @@ static int mir_regional_emit_slot_to_color(
         return 0;
     switch (color) {
     case MIR_COLOR_HL:
-        fprintf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+        mir_stream_printf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
                 offset, offset + 1);
         return 1;
     case MIR_COLOR_DE:
-        fprintf(out, "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+        mir_stream_printf(out, "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
                 offset, offset + 1);
         return 1;
     case MIR_COLOR_BC:
-        fprintf(out, "\tld c,(ix%+d)\n\tld b,(ix%+d)\n",
+        mir_stream_printf(out, "\tld c,(ix%+d)\n\tld b,(ix%+d)\n",
                 offset, offset + 1);
         return 1;
     case MIR_COLOR_HL_DE:
-        fprintf(out,
+        mir_stream_printf(out,
                 "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
                 "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
                 offset, offset + 1, offset + 2, offset + 3);
         return 1;
     case MIR_COLOR_BC_IY:
-        fputs("\tpush hl\n", out);
-        fprintf(out,
+        mir_stream_puts("\tpush hl\n", out);
+        mir_stream_printf(out,
                 "\tld c,(ix%+d)\n\tld b,(ix%+d)\n"
                 "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
                 offset, offset + 1, offset + 2, offset + 3);
-        fputs("\tpush hl\n\tpop iy\n\tpop hl\n", out);
+        mir_stream_puts("\tpush hl\n\tpop iy\n\tpop hl\n", out);
         return 1;
     default:
         return 0;
@@ -9116,7 +9116,7 @@ static int mir_regional_emit_slot_to_color(
 }
 
 static int mir_regional_emit_color_to_slot(
-    FILE *out, int value, int color)
+    MirStream *out, int value, int color)
 {
     int offset;
 
@@ -9124,30 +9124,30 @@ static int mir_regional_emit_color_to_slot(
         return 0;
     switch (color) {
     case MIR_COLOR_HL:
-        fprintf(out, "\tld (ix%+d),l\n\tld (ix%+d),h\n",
+        mir_stream_printf(out, "\tld (ix%+d),l\n\tld (ix%+d),h\n",
                 offset, offset + 1);
         return 1;
     case MIR_COLOR_DE:
-        fprintf(out, "\tld (ix%+d),e\n\tld (ix%+d),d\n",
+        mir_stream_printf(out, "\tld (ix%+d),e\n\tld (ix%+d),d\n",
                 offset, offset + 1);
         return 1;
     case MIR_COLOR_BC:
-        fprintf(out, "\tld (ix%+d),c\n\tld (ix%+d),b\n",
+        mir_stream_printf(out, "\tld (ix%+d),c\n\tld (ix%+d),b\n",
                 offset, offset + 1);
         return 1;
     case MIR_COLOR_HL_DE:
-        fprintf(out,
+        mir_stream_printf(out,
                 "\tld (ix%+d),l\n\tld (ix%+d),h\n"
                 "\tld (ix%+d),e\n\tld (ix%+d),d\n",
                 offset, offset + 1, offset + 2, offset + 3);
         return 1;
     case MIR_COLOR_BC_IY:
-        fprintf(out, "\tld (ix%+d),c\n\tld (ix%+d),b\n",
+        mir_stream_printf(out, "\tld (ix%+d),c\n\tld (ix%+d),b\n",
                 offset, offset + 1);
-        fputs("\tpush hl\n\tpush iy\n\tpop hl\n", out);
-        fprintf(out, "\tld (ix%+d),l\n\tld (ix%+d),h\n",
+        mir_stream_puts("\tpush hl\n\tpush iy\n\tpop hl\n", out);
+        mir_stream_printf(out, "\tld (ix%+d),l\n\tld (ix%+d),h\n",
                 offset + 2, offset + 3);
-        fputs("\tpop hl\n", out);
+        mir_stream_puts("\tpop hl\n", out);
         return 1;
     default:
         return 0;
@@ -9198,7 +9198,7 @@ void mir_regional_begin_emission(void)
 }
 
 static int mir_regional_spill_region(
-    FILE *out, int region)
+    MirStream *out, int region)
 {
     int segment;
 
@@ -9221,7 +9221,7 @@ static int mir_regional_spill_region(
 }
 
 static int mir_regional_ensure_value(
-    FILE *out, int value, int instruction)
+    MirStream *out, int value, int instruction)
 {
     const struct MirRegionalSegment *segment;
 
@@ -9238,7 +9238,7 @@ static int mir_regional_ensure_value(
     return 1;
 }
 
-int mir_regional_before_instruction(FILE *out, int instruction)
+int mir_regional_before_instruction(MirStream *out, int instruction)
 {
     const struct MirInsn *insn;
     int region;
