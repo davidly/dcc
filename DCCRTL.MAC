@@ -7003,7 +7003,9 @@ rdzero:
         ret
 
 rdfile:
-        call    __chkfd
+        ; A still holds (ix+4) from the stdin check above - __chkfda skips
+        ; the redundant reload __chkfd would otherwise do.
+        call    __chkfda
         jp      c,rdbad
         ld      l,(ix+6)
         ld      h,(ix+7)
@@ -7098,7 +7100,9 @@ _write:
         jp      z,wrcon
         cp      2
         jp      z,wrcon
-        call    __chkfd
+        ; A still holds (ix+4): cp doesn't touch it, so __chkfda skips the
+        ; redundant reload __chkfd would otherwise do.
+        call    __chkfda
         jp      c,wrbadfd
         ; A write changes file data and reuses __dma as scratch, so the read
         ; sector cache is no longer guaranteed to reflect disk contents.
@@ -7258,9 +7262,9 @@ _lseek:
         ld      a,(ix+10)
         or      a
         jr      z,lsset
-        cp      1
+        dec     a
         jr      z,lscur
-        cp      2
+        dec     a
         jr      z,lsend
         jp      lsinval
 
@@ -7300,8 +7304,13 @@ lscur:
         ld      (hl),a
 
 lsret:
-        ; Return full 32-bit offset in DE:HL.
-        call    __offp
+        ; Return full 32-bit offset in DE:HL. Every path into here (lsset,
+        ; lscur, and lsend's jr) leaves HL pointing at offset byte 3, its
+        ; last store having just landed there with no further inc hl - so
+        ; back up to byte 0 instead of re-deriving the pointer via __offp.
+        dec     hl
+        dec     hl
+        dec     hl              ; HL = offset byte 0
         ld      e,(hl)          ; byte 0
         inc     hl
         ld      d,(hl)          ; byte 1
@@ -7376,23 +7385,64 @@ lsbadret:
 
 _fsync:
 _fdatasync:
+        ; POSIX: flush this fd's data (and, for fsync, metadata) to durable
+        ; storage. CP/M's BDOS offers no per-file distinction, only a single
+        ; global "flush buffers" (fn 48, CP/M 3+), so both entry points
+        ; share it - there's nothing to split between fsync's data+metadata
+        ; and fdatasync's data-only contract on this platform.
+        ;
+        ; Called unconditionally, no version check first, on the same
+        ; precedent already used for BDOS 108 (__cpm_set_retcode) and BDOS
+        ; 105 (time()): CP/M 2.2 is documented to ignore an unrecognized
+        ; BDOS function safely. That precedent does NOT hold universally for
+        ; fn 48 specifically, though - checked against ntvcm, x64os,
+        ; RunCPM, zxcc, z88dk/cpm, and iz-cpm (both its default and --cpm3
+        ; report modes):
+        ;   - ntvcm, x64os, RunCPM, zxcc all implement fn 48 and return
+        ;     cleanly (ntvcm's is a no-op stub; x64os/zxcc/RunCPM perform a
+        ;     real flush/sync).
+        ;   - z88dk/cpm doesn't implement it: its handler for ANY
+        ;     unrecognized BDOS call is a register dump followed by exit(1).
+        ;   - iz-cpm doesn't implement it in either report mode: it prints
+        ;     a diagnostic and silently stops the guest program - host exit
+        ;     code 0, but no guest instruction after the call ever runs
+        ;     (confirmed empirically with a before/after-print probe COM;
+        ;     "safely ignores" it is not).
+        ; No BDOS-12 version check can separate "safe" from "unsafe" here:
+        ; ntvcm and x64os both report CP/M 2.2 in the low version byte (a
+        ; gate would disable the call on the two backends where it actually
+        ; does something), while iz-cpm's --cpm3 mode reports CP/M 3.1 and
+        ; still lacks fn 48. Called anyway: real flush semantics on capable
+        ; backends are judged worth the failure mode on the two that don't
+        ; implement it.
+        ld      c,48
+        call    5
         ld      hl,0
         ret
 
-; Validate fd in A or (ix+4). Sets __slot. Carry set on error.
+; Validate fd in (ix+4), sets __slot. Carry set on error, clear on success.
+;
+; __chkfda is the same check starting from A already holding fd, for a
+; caller that has it there anyway (e.g. from its own earlier "ld a,(ix+4)"
+; used for something else) and would otherwise reload it redundantly.
+;
+; Range check: A-FIRSTFD compared unsigned against MAXFD-FIRSTFD folds the
+; original two-sided bounds check (fd < FIRSTFD, fd >= MAXFD) into one -
+; fd < FIRSTFD makes the subtraction wrap to a value >= MAXFD-FIRSTFD, so
+; it's caught by the same "jr nc,cfbad" as fd too large.
 __chkfd:
         ld      a,(ix+4)
-        cp      FIRSTFD
-        jr      c,cfbad
-        cp      MAXFD
-        jr      nc,cfbad
+__chkfda:
         sub     FIRSTFD
+        cp      MAXFD-FIRSTFD
+        jr      nc,cfbad
+
         ld      (__slot),a
         call    __usep
         ld      a,(hl)
         or      a
-        jr      z,cfbad
-        ret
+        ret     nz
+
 cfbad:
         scf
         ret
@@ -7465,10 +7515,10 @@ __offp:
 ; __slot -> HL = 32-bit tracked-length dword (see __fdlen)
 __lenp:
         ld      a,(__slot)
+        add     a,a
+        add     a,a             ; slot * 4 bytes per length entry, done in A
+        ld      l,a             ; (slot fits well under 64, no overflow risk)
         ld      h,0
-        ld      l,a
-        add     hl,hl
-        add     hl,hl           ; *4 bytes per length entry
         ld      de,__fdlen
         add     hl,de
         ret
@@ -7658,38 +7708,31 @@ __rdsz:
         inc     hl
         ld      b,(hl)          ; BC = 16-bit record count
 
-        ; BC * 128 -> A:HL, where A is byte 2 and byte 3 is zero (max
-        ; record count 0FFFFh * 128 fits comfortably in 23 bits).
-        ld      l,c
-        ld      h,b
-        xor     a
-        add     hl,hl
-        rla
-        add     hl,hl
-        rla
-        add     hl,hl
-        rla
-        add     hl,hl
-        rla
-        add     hl,hl
-        rla
-        add     hl,hl
-        rla
-        add     hl,hl
-        rla
+        ; BC * 128, done as one right shift instead of seven left shifts:
+        ; shifting BC right by 1 places bits 1..8 of the original count into
+        ; the low byte of the shifted pair and bits 9..15 into the high
+        ; byte - exactly result bytes 1 and 2 of BC*128 (byte 3 is always
+        ; zero; max record count 0FFFFh * 128 fits in 23 bits) - while the
+        ; bit shifted out (original bit 0) is byte 0's only possible set
+        ; bit, so LD A,0 / RRA (LD leaves carry untouched) turns it into
+        ; 00h or 80h without ever touching HL.
+        srl     b
+        rr      c               ; B = result byte 2, C = result byte 1
+        ld      a,0
+        rra                     ; A = result byte 0
 
-        push    af
-        push    hl
+        push    bc              ; B = byte 2, C = byte 1
+        push    af              ; A = byte 0
         call    __lenp
-        pop     de              ; DE = low word
-        ld      (hl),e
-        inc     hl
-        ld      (hl),d
-        inc     hl
         pop     af
-        ld      (hl),a
+        pop     bc
+        ld      (hl),a          ; byte 0
         inc     hl
-        ld      (hl),0
+        ld      (hl),c          ; byte 1
+        inc     hl
+        ld      (hl),b          ; byte 2
+        inc     hl
+        ld      (hl),0          ; byte 3
         ret
 
 ; A = slot 0..3, returns HL = FCB
