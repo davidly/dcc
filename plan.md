@@ -3,6 +3,48 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-15 newest-main merge delta closure
+
+- Merged base `8871c27` exposed a new `tsjdeep` regression and a runtime ABI
+  defect: retained-home `main` kept the automatic `marker` in callee-saved IY,
+  but `longjmp` bypassed the intervening epilogues without restoring IY. The
+  existing padding word in `jmp_buf` now saves and restores IY, and `tsetjiy`
+  exercises that ABI directly. Strict runtime-family schedules still recover
+  the recursive `_Noreturn` descent and repeated save/resume driver's
+  performance; the driver materializes its marker in frame storage.
+- The three newest-main performance deltas are recovered structurally:
+  attention adds the missing ordinary matrix-product/store kernel; the
+  interpreter family emits the bounded ASCII uppercase-copy loop directly;
+  and the narrow-string workload uses the existing register fastcall ABIs for
+  string/memory primitives. No baseline, padding, source/function-name,
+  selected-hash, capture, or legacy-output gate is used.
+- Checked stack full metrics are now:
+  `tsjdeep` **48,925/5,760 peep** and **50,025/5,760 nopeep**;
+  `attnc11` **338,486,871/22,144** and **341,026,696/22,912**;
+  `tstring` **754,619,397/9,472** and **762,174,464/9,472**;
+  `forint` **632,555,166/25,472** and **661,233,397/27,136**.
+  All four requested regressions are non-positive; `cobint` also inherits the
+  uppercase kernel and improves.
+- Whole strict censuses are **2431/2431 MIR**. Normal selectors are
+  **1185 spilled / 685 scheduled / 482 homed / 71 hybrid / 8 regional**;
+  stack selectors are **1191 / 678 / 483 / 71 / 8**. Extended strict coverage
+  is byte-identical at **274/274 per mode**. The changed generated rows are all
+  non-increasing.
+- Renamed current-vs-latest-main edge A/B passes **16/16** stack/no-stack
+  peep/nopeep outputs with zero positive metrics. Structural near misses
+  (changed recursion increment, accumulator seed, case-conversion helper, and
+  string workload seed) all decline the new schedule. GCC ASan/UBSan strict
+  censuses pass **182/182** functions per mode plus all **16** renamed/near-miss
+  compiles.
+- Exact full stack reports **331 runnable passed / 10 skipped**,
+  **0 regressions / 1155 improvements**, diagnostics and dccpeep clean.
+  Full no-stack is also **331/331**. Extended full stack/no-stack is
+  **196/196**. Require-emit, canonical/CMake builds, runtime-IY,
+  changed-family export/global-data, prohibited-gate, IDE diagnostic, and
+  `git diff --check` audits pass. No existing performance baseline moved;
+  new test `tsetjiy` has initial peep/nopeep baselines
+  **21,856/5,376** and **21,854/5,376**.
+
 ## 2026-08-15 machine call-runner architecture split (working tree)
 
 - The 43,080-line `dcc_mir_machine_call_runners.c` is split along its static

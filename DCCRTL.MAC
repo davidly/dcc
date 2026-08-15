@@ -12450,7 +12450,7 @@ sc_tmp_h:       dw      0
 ;   [2,3] = saved SP  (the SP after ret from setjmp, i.e. pointing at
 ;            the env argument, since the caller cleans its own args)
 ;   [4,5] = saved IX  (caller's frame pointer)
-;   [6,7] = padding
+;   [6,7] = saved IY  (callee-saved MIR register home)
 ;
 ; Neither routine uses an IX frame: both fetch their stack arguments
 ; directly via pop/push (args pushed right-to-left, so for longjmp(env,
@@ -12491,6 +12491,18 @@ _setjmp:
         ; env[4,5] = caller's IX.
         ; Since _setjmp has no frame, IX is still the caller's IX.
         push    ix
+        pop     de
+        ld      a,e
+        ld      (hl),a
+        inc     hl
+        ld      a,d
+        ld      (hl),a
+
+        ; env[6,7] = caller's IY.
+        ; A non-local return bypasses every intervening callee epilogue,
+        ; so longjmp must restore the callee-saved register itself.
+        inc     hl
+        push    iy
         pop     de
         ld      a,e
         ld      (hl),a
@@ -12549,6 +12561,15 @@ lj_valok:
         ; stack-neutral: push immediately followed by pop).
         push    bc
         pop     ix
+
+        ; Read env[6,7] and restore the caller's IY.  DE still holds the
+        ; saved SP while BC is free after restoring IX.
+        inc     hl
+        ld      c,(hl)
+        inc     hl
+        ld      b,(hl)
+        push    bc
+        pop     iy
 
         ex      de,hl           ; HL = saved SP
 

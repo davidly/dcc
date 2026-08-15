@@ -263,6 +263,12 @@ struct MirFortranStatementAppendSchedule {
     int failure_string_id;
 };
 
+struct MirFortranUppercaseSchedule {
+    int destination_stack_offset;
+    int source_stack_offset;
+    int limit;
+};
+
 struct MirFortranDeclarationSchedule {
     struct Sym *space_function;
     struct Sym *alnum_function;
@@ -5611,6 +5617,162 @@ static void mir_emit_fortran_statement_append_schedule(
     fputs("\tret\n", out);
 }
 
+static int mir_match_fortran_uppercase_schedule(
+    struct MirFortranUppercaseSchedule *plan)
+{
+    static const unsigned char expected_opcodes[55] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_CONST, MIR_NOP,
+        MIR_STORE, MIR_LABEL, MIR_NOP, MIR_NOP, MIR_PHI,
+        MIR_NOP, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST,
+        MIR_JUMP, MIR_LABEL, MIR_CONST, MIR_LABEL, MIR_PHI,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_NOP, MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_UNARY, MIR_UNARY, MIR_ARG, MIR_CALL, MIR_UNARY,
+        MIR_STORE_INDIRECT, MIR_LABEL, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_NOP,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST,
+        MIR_STORE_INDIRECT
+    };
+    struct Sym *uppercase_function;
+    int arguments[1];
+    int instruction;
+    long limit;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 55 || mir.next_value != 38 ||
+        mir_cfg_block_count() != 7 || mir.local_bytes != 2 ||
+        mir.aggregate_temp_bytes != 0 || mir.has_vla ||
+        !mir_has_cfg_backedge() ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+            expected_opcodes[instruction])
+            return mir_machine_reject(
+                "fortran-uppercase", "opcodes");
+    if (!mir_machine_parameter_value_offset(
+            mir.insns[1].dst,
+            &plan->destination_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[2].dst,
+            &plan->source_stack_offset) ||
+        plan->destination_stack_offset != 2 ||
+        plan->source_stack_offset != 4 ||
+        type_ptr_depth(mir.insns[1].type) != 1 ||
+        type_ptr_depth(mir.insns[2].type) != 1 ||
+        (mir.insns[1].type & 15) != TYPE_CHAR ||
+        (mir.insns[2].type & 15) != TYPE_CHAR ||
+        type_size(mir.insns[1].type) != 2 ||
+        type_size(mir.insns[2].type) != 2 ||
+        mir_machine_pointee_is_volatile(&mir.insns[1]) ||
+        mir_machine_pointee_is_volatile(&mir.insns[2]))
+        return mir_machine_reject(
+            "fortran-uppercase", "parameters");
+    if (!mir_machine_constant_equals(mir.insns[3].dst, 0) ||
+        !mir_machine_unobservable_local_store(&mir.insns[5]) ||
+        mir.insns[5].src1 != mir.insns[3].dst ||
+        mir.insns[9].src1 != mir.insns[3].dst ||
+        mir.insns[9].src2 != mir.insns[45].dst ||
+        mir.insns[9].phi_pred1 != mir.insns[0].label ||
+        mir.insns[9].phi_pred2 != mir.insns[42].label ||
+        mir.insns[9].object != mir.insns[5].object ||
+        mir.insns[12].src1 != mir.insns[2].dst ||
+        mir.insns[12].src2 != mir.insns[9].dst ||
+        mir.insns[12].immediate != 1 ||
+        mir.insns[12].memory_size != 1 ||
+        mir.insns[13].src1 != mir.insns[12].dst ||
+        mir.insns[13].memory_size != 1 ||
+        mir.insns[14].src1 != mir.insns[13].dst ||
+        mir.insns[14].label != mir.insns[24].label ||
+        !mir_machine_evaluate_constant(
+            mir.insns[18].dst, &limit, 0) ||
+        limit <= 0 || limit > 255 ||
+        mir.insns[19].src1 != mir.insns[9].dst ||
+        mir.insns[19].src2 != mir.insns[18].dst ||
+        mir.insns[19].immediate != '<' ||
+        mir.insns[20].src1 != mir.insns[19].dst ||
+        mir.insns[20].label != mir.insns[24].label ||
+        !mir_machine_constant_equals(mir.insns[22].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[25].dst, 0) ||
+        mir.insns[27].src1 != mir.insns[22].dst ||
+        mir.insns[27].src2 != mir.insns[25].dst ||
+        mir.insns[27].phi_pred1 != mir.insns[21].label ||
+        mir.insns[27].phi_pred2 != mir.insns[24].label ||
+        mir.insns[28].src1 != mir.insns[27].dst ||
+        mir.insns[28].label != mir.insns[48].label)
+        return mir_machine_reject(
+            "fortran-uppercase", "loop");
+    if (mir.insns[31].src1 != mir.insns[1].dst ||
+        mir.insns[31].src2 != mir.insns[9].dst ||
+        mir.insns[31].immediate != 1 ||
+        mir.insns[31].memory_size != 1 ||
+        mir.insns[34].src1 != mir.insns[2].dst ||
+        mir.insns[34].src2 != mir.insns[9].dst ||
+        mir.insns[34].immediate != 1 ||
+        mir.insns[34].memory_size != 1 ||
+        mir.insns[35].src1 != mir.insns[34].dst ||
+        mir.insns[35].memory_size != 1 ||
+        mir.insns[36].src1 != mir.insns[35].dst ||
+        mir.insns[37].src1 != mir.insns[36].dst ||
+        !mir_machine_call_arguments(
+            &mir.insns[39], 1, arguments) ||
+        arguments[0] != mir.insns[37].dst ||
+        (uppercase_function =
+             mir_interpreter_file_function(39, 0, 1)) == NULL ||
+        strcmp(asm_name_for(sym_asm_name(uppercase_function)),
+               "__ctu") ||
+        mir.insns[40].src1 != mir.insns[39].dst ||
+        mir.insns[41].src1 != mir.insns[31].dst ||
+        mir.insns[41].src2 != mir.insns[40].dst ||
+        mir.insns[41].memory_size != 1)
+        return mir_machine_reject(
+            "fortran-uppercase", "conversion");
+    if (!mir_machine_constant_equals(mir.insns[44].dst, 1) ||
+        mir.insns[45].src1 != mir.insns[9].dst ||
+        mir.insns[45].src2 != mir.insns[44].dst ||
+        mir.insns[45].immediate != '+' ||
+        mir.insns[46].src1 != mir.insns[45].dst ||
+        mir.insns[47].label != mir.insns[6].label ||
+        mir.insns[51].src1 != mir.insns[1].dst ||
+        mir.insns[51].src2 != mir.insns[9].dst ||
+        mir.insns[51].immediate != 1 ||
+        mir.insns[51].memory_size != 1 ||
+        !mir_machine_constant_equals(mir.insns[53].dst, 0) ||
+        mir.insns[54].src1 != mir.insns[51].dst ||
+        mir.insns[54].src2 != mir.insns[53].dst ||
+        mir.insns[54].memory_size != 1)
+        return mir_machine_reject(
+            "fortran-uppercase", "completion");
+    plan->limit = (int)limit;
+    return 1;
+}
+
+static void mir_emit_fortran_uppercase_schedule(
+    FILE *out, const struct MirFortranUppercaseSchedule *plan)
+{
+    int loop = new_label();
+    int store = new_label();
+    int done = new_label();
+
+    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+          "\tld hl,2\n\tadd hl,sp\n"
+          "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+          "\tinc hl\n\tld a,(hl)\n\tinc hl\n"
+          "\tld h,(hl)\n\tld l,a\n", out);
+    fprintf(out, "\tld b,%d\nL%d:\n", plan->limit, loop);
+    fputs("\tld a,(hl)\n\tor a\n", out);
+    fprintf(out, "\tjp z,L%d\n", done);
+    fputs("\tcp 97\n", out);
+    fprintf(out, "\tjp c,L%d\n", store);
+    fputs("\tcp 123\n", out);
+    fprintf(out, "\tjp nc,L%d\n\tsub 32\nL%d:\n"
+            "\tld (de),a\n\tinc de\n\tinc hl\n"
+            "\tdjnz L%d\nL%d:\n\txor a\n\tld (de),a\n\tret\n",
+            store, store, loop, done);
+}
+
 static int mir_match_fortran_declaration_schedule(
     struct MirFortranDeclarationSchedule *plan)
 {
@@ -7079,6 +7241,7 @@ int mir_try_emit_interpreter_runners(FILE *out)
     struct MirCobPerformSchedule cob_perform_plan;
     struct MirCobChainSchedule cob_chain_plan;
     struct MirFortranStatementAppendSchedule fortran_append_plan;
+    struct MirFortranUppercaseSchedule fortran_uppercase_plan;
     struct MirFortranDeclarationSchedule fortran_decl_plan;
     struct MirFortranSourceSchedule fortran_source_plan;
     struct MirFortranLhsSchedule fortran_lhs_plan;
@@ -7160,6 +7323,12 @@ int mir_try_emit_interpreter_runners(FILE *out)
                 &fortran_append_plan)) {
             mir_emit_fortran_statement_append_schedule(
                 out, &fortran_append_plan);
+            return 1;
+        }
+        if (mir_match_fortran_uppercase_schedule(
+                &fortran_uppercase_plan)) {
+            mir_emit_fortran_uppercase_schedule(
+                out, &fortran_uppercase_plan);
             return 1;
         }
         if (mir_match_fortran_declaration_schedule(

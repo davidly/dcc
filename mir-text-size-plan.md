@@ -1,5 +1,46 @@
 # dcc MIR text-size fallback plan
 
+## 2026-08-15 newest-main merge delta closure
+
+Merged base `8871c27` exposed one semantic and three checked-performance
+deltas. `tsjdeep` exposed that `longjmp` restored SP and IX but left the
+callee-saved IY value from the abandoned deepest frame. The existing fourth
+`jmp_buf` word now saves and restores IY, and `tsetjiy` verifies the ABI
+directly. A strict runtime-family schedule still emits the recursive
+`_Noreturn` descent and the repeated save/resume driver with the marker in
+frame memory to recover the benchmark without a global register-allocation
+penalty.
+
+The remaining deltas use existing semantic families:
+
+- attention: ordinary signed-word matrix product with wide accumulation,
+  Q16-to-word saturation, and direct output store;
+- interpreter: bounded ASCII uppercase copy with exact pointer/limit/call
+  proof;
+- runtime: narrow-string workload calls `__slf`, `__chf`, `__rcf`, `__scf`,
+  `__ssf`, `__cmpf`, `__mhf`, `__mcf`, and `__msf` through their verified
+  register ABIs.
+
+Stack full measurements are:
+
+| app | peep cycles/bytes | nopeep cycles/bytes |
+|---|---:|---:|
+| `tsjdeep` | 48,925 / 5,760 | 50,025 / 5,760 |
+| `attnc11` | 338,486,871 / 22,144 | 341,026,696 / 22,912 |
+| `tstring` | 754,619,397 / 9,472 | 762,174,464 / 9,472 |
+| `forint` | 632,555,166 / 25,472 | 661,233,397 / 27,136 |
+
+Whole strict coverage is **2431/2431** in both modes. Extended coverage
+is unchanged at **274/274** per mode. Renamed latest-main A/B is **16/16**
+output-identical with zero positive metrics; changed-constant/helper near
+misses decline. ASan/UBSan covers **182/182** functions per mode and all 16
+edge compiles. Exact full stack is **331/331 runnable, 0 regressions, 1155
+improvements**; no-stack is also **331/331**; extended is **196/196** in both
+modes. Diagnostics, dccpeep, require-emit, canonical/CMake, export/global-data,
+runtime-IY, prohibited-gate, IDE, and diff audits pass. No existing performance
+baseline moved; `tsetjiy` adds its initial baseline. No padding, name/hash gate,
+or capture/legacy output was used.
+
 ## 2026-08-15 machine call-runner architecture split
 
 The oversized 43,080-line call-runner module is now four compiled static-call

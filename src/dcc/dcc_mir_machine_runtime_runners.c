@@ -73,6 +73,42 @@ struct MirExecRecursionSchedule {
     char print_name[64];
 };
 
+struct MirNonlocalDescentSchedule {
+    struct Sym *jump_function;
+    struct Sym *recursive_function;
+    struct Sym *environment;
+    int level_stack_offset;
+    int first_stack_offset;
+    int second_stack_offset;
+    int third_stack_offset;
+    int frame_bytes;
+    int jump_value;
+    int argument_increments[3];
+    char jump_name[64];
+    char recursive_name[64];
+};
+
+struct MirNonlocalRunnerSchedule {
+    struct Sym *save_function;
+    struct Sym *descent_function;
+    struct Sym *check_function;
+    struct Sym *print_function;
+    struct Sym *environment;
+    struct Sym *failure_count;
+    int cycle_offset;
+    int result_offset;
+    int marker_offset;
+    int cycle_count;
+    int marker_base;
+    int jump_value;
+    int descent_arguments[4];
+    int strings[6];
+    char save_name[64];
+    char descent_name[64];
+    char check_name[64];
+    char print_names[2][64];
+};
+
 struct MirSparseFileSchedule {
     struct Sym *unlink_function;
     struct Sym *open_function;
@@ -4995,6 +5031,677 @@ static int mir_recovery_global_address(
     return 1;
 }
 
+static int mir_nonlocal_local_word(
+    const struct MirInsn *insn, int *offset_out)
+{
+    int type;
+    int storage;
+    int offset;
+
+    if (!mir_scalar_memory_location(
+            insn, &type, &storage, &offset) ||
+        storage != SC_LOCAL || type_ptr_depth(type) != 0 ||
+        type_size(type) != 2)
+        return 0;
+    *offset_out = offset;
+    return 1;
+}
+
+static int mir_match_nonlocal_descent_schedule(
+    struct MirNonlocalDescentSchedule *plan)
+{
+    static const unsigned char expected_opcodes[120] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_PARAM,
+        MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_NOP, MIR_NOP,
+        MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT, MIR_ADDRESS,
+        MIR_CONST, MIR_INDEX_ADDRESS, MIR_NOP, MIR_NOP, MIR_BINARY,
+        MIR_UNARY, MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_NOP, MIR_NOP, MIR_BINARY, MIR_UNARY,
+        MIR_STORE_INDIRECT, MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS,
+        MIR_NOP, MIR_NOP, MIR_BINARY, MIR_NOP, MIR_BINARY, MIR_NOP,
+        MIR_BINARY, MIR_UNARY, MIR_STORE_INDIRECT, MIR_NOP, MIR_CONST,
+        MIR_BINARY, MIR_BRANCH_FALSE, MIR_ADDRESS, MIR_ARG, MIR_CONST,
+        MIR_ARG, MIR_CALL, MIR_NOP, MIR_NOP, MIR_CONST, MIR_RETURN,
+        MIR_NOP, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL,
+        MIR_NOP, MIR_NOP, MIR_NOP, MIR_NOP, MIR_PHI, MIR_NOP,
+        MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_ARG, MIR_LOAD, MIR_CONST, MIR_BINARY,
+        MIR_ARG, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_ARG, MIR_LOAD,
+        MIR_CONST, MIR_BINARY, MIR_ARG, MIR_CALL, MIR_BINARY,
+        MIR_STORE_INDIRECT, MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_STORE, MIR_JUMP, MIR_LABEL, MIR_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_ADDRESS, MIR_CONST,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY, MIR_ADDRESS,
+        MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_BINARY,
+        MIR_ADDRESS, MIR_CONST, MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT,
+        MIR_BINARY, MIR_RETURN
+    };
+    int jump_arguments[2];
+    int recursive_arguments[4];
+    int local_offset;
+    int offset;
+    int instruction;
+    char environment_name[64];
+
+    memset(plan, 0, sizeof(*plan));
+    if (!mir_call_recovery_opcode_sequence(
+            expected_opcodes, sizeof(expected_opcodes)) ||
+        mir.next_value != 96 || mir_cfg_block_count() != 5 ||
+        mir.local_bytes != 19 || mir.aggregate_temp_bytes != 0 ||
+        mir.has_vla || !mir_has_cfg_backedge() ||
+        (mir.return_type & 15) != TYPE_LONG ||
+        type_size(mir.return_type) != 4)
+        return 0;
+    if (!mir_machine_parameter_value_offset(
+            mir.insns[1].dst, &plan->level_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[2].dst, &plan->first_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[3].dst, &plan->second_stack_offset) ||
+        !mir_machine_parameter_value_offset(
+            mir.insns[4].dst, &plan->third_stack_offset) ||
+        plan->level_stack_offset != 2 ||
+        plan->first_stack_offset != 4 ||
+        plan->second_stack_offset != 6 ||
+        plan->third_stack_offset != 8 ||
+        !mir_memory_runner_word_type(mir.insns[1].type, 0) ||
+        !mir_memory_runner_word_type(mir.insns[2].type, 0) ||
+        !mir_memory_runner_word_type(mir.insns[3].type, 0) ||
+        !mir_memory_runner_word_type(mir.insns[4].type, 0))
+        return mir_machine_reject(
+            "nonlocal-descent", "parameters");
+    if (!mir_call_runner_local_offset(
+            &mir.insns[5], &local_offset) ||
+        local_offset > -16 ||
+        !mir_machine_same_location(
+            &mir.insns[5], &mir.insns[13]) ||
+        !mir_machine_same_location(
+            &mir.insns[5], &mir.insns[21]) ||
+        !mir_machine_same_location(
+            &mir.insns[5], &mir.insns[29]) ||
+        !mir_machine_same_location(
+            &mir.insns[5], &mir.insns[70]) ||
+        !mir_machine_same_location(
+            &mir.insns[5], &mir.insns[100]) ||
+        !mir_machine_same_location(
+            &mir.insns[5], &mir.insns[104]) ||
+        !mir_machine_same_location(
+            &mir.insns[5], &mir.insns[109]) ||
+        !mir_machine_same_location(
+            &mir.insns[5], &mir.insns[114]))
+        return mir_machine_reject(
+            "nonlocal-descent", "local-array");
+    {
+        static const int base_instructions[4] = {5, 13, 21, 29};
+        static const int constant_instructions[4] = {6, 14, 22, 30};
+        static const int address_instructions[4] = {7, 15, 23, 31};
+        static const int store_instructions[4] = {12, 20, 28, 40};
+
+        for (instruction = 0; instruction < 4; ++instruction)
+            if (!mir_machine_constant_equals(
+                    mir.insns[constant_instructions[instruction]].dst,
+                    instruction) ||
+                mir.insns[address_instructions[instruction]].src1 !=
+                    mir.insns[base_instructions[instruction]].dst ||
+                mir.insns[address_instructions[instruction]].src2 !=
+                    mir.insns[constant_instructions[instruction]].dst ||
+                mir.insns[address_instructions[instruction]].immediate != 4 ||
+                mir.insns[address_instructions[instruction]].memory_size != 4 ||
+                mir.insns[store_instructions[instruction]].src1 !=
+                    mir.insns[address_instructions[instruction]].dst ||
+                mir.insns[store_instructions[instruction]].memory_size != 4 ||
+                (mir.insns[store_instructions[instruction]].memory_flags &
+                 (1 | 8)) != 0)
+                return mir_machine_reject(
+                    "nonlocal-descent", "local-initializers");
+    }
+    if (mir.insns[10].src1 != mir.insns[2].dst ||
+        mir.insns[10].src2 != mir.insns[1].dst ||
+        mir.insns[10].immediate != '+' ||
+        mir.insns[11].src1 != mir.insns[10].dst ||
+        mir.insns[18].src1 != mir.insns[3].dst ||
+        mir.insns[18].src2 != mir.insns[1].dst ||
+        mir.insns[18].immediate != '+' ||
+        mir.insns[19].src1 != mir.insns[18].dst ||
+        mir.insns[26].src1 != mir.insns[4].dst ||
+        mir.insns[26].src2 != mir.insns[1].dst ||
+        mir.insns[26].immediate != '+' ||
+        mir.insns[27].src1 != mir.insns[26].dst ||
+        mir.insns[34].src1 != mir.insns[2].dst ||
+        mir.insns[34].src2 != mir.insns[3].dst ||
+        mir.insns[34].immediate != '+' ||
+        mir.insns[36].src1 != mir.insns[34].dst ||
+        mir.insns[36].src2 != mir.insns[4].dst ||
+        mir.insns[36].immediate != '+' ||
+        mir.insns[38].src1 != mir.insns[36].dst ||
+        mir.insns[38].src2 != mir.insns[1].dst ||
+        mir.insns[38].immediate != '+' ||
+        mir.insns[39].src1 != mir.insns[38].dst)
+        return mir_machine_reject(
+            "nonlocal-descent", "local-values");
+    if (!mir_machine_constant_equals(mir.insns[42].dst, 0) ||
+        mir.insns[43].src1 != mir.insns[1].dst ||
+        mir.insns[43].src2 != mir.insns[42].dst ||
+        mir.insns[43].immediate != TOK_EQ ||
+        mir.insns[44].src1 != mir.insns[43].dst ||
+        mir.insns[44].label != mir.insns[55].label ||
+        !mir_recovery_global_address(
+            mir.insns[45].dst, &plan->environment,
+            environment_name, sizeof(environment_name), &offset) ||
+        plan->environment == NULL || offset != 0 ||
+        !plan->environment->is_array ||
+        plan->environment->array_len < 4 ||
+        plan->environment->elem_size != 2 ||
+        !mir_machine_constant_equals(
+            mir.insns[47].dst, 42) ||
+        !mir_machine_call_arguments(
+            &mir.insns[49], 2, jump_arguments) ||
+        jump_arguments[0] != mir.insns[45].dst ||
+        jump_arguments[1] != mir.insns[47].dst ||
+        (plan->jump_function = mir_call_recovery_function(
+             49, 0, 2, 1, plan->jump_name)) == NULL ||
+        !plan->jump_function->is_noreturn ||
+        (plan->jump_function->type & 15) != TYPE_VOID)
+        return mir_machine_reject(
+            "nonlocal-descent", "jump");
+    if (!mir_machine_constant_equals(mir.insns[57].dst, 0) ||
+        mir.insns[64].src1 != mir.insns[57].dst ||
+        mir.insns[64].src2 != mir.insns[96].dst ||
+        mir.insns[64].phi_pred1 != mir.insns[55].label ||
+        mir.insns[64].phi_pred2 != mir.insns[93].label ||
+        !mir_machine_constant_equals(mir.insns[66].dst, 4) ||
+        mir.insns[67].src1 != mir.insns[64].dst ||
+        mir.insns[68].src1 != mir.insns[67].dst ||
+        mir.insns[68].src2 != mir.insns[66].dst ||
+        mir.insns[68].immediate != '<' ||
+        mir.insns[69].src1 != mir.insns[68].dst ||
+        mir.insns[69].label != mir.insns[99].label)
+        return mir_machine_reject(
+            "nonlocal-descent", "loop");
+    plan->argument_increments[0] = 1;
+    plan->argument_increments[1] = 2;
+    plan->argument_increments[2] = 3;
+    if (!mir_machine_constant_equals(
+            mir.insns[75].dst, 1) ||
+        mir.insns[76].src1 != mir.insns[74].dst ||
+        mir.insns[76].src2 != mir.insns[75].dst ||
+        mir.insns[76].immediate != '-' ||
+        !mir_machine_constant_equals(
+            mir.insns[79].dst,
+            plan->argument_increments[0]) ||
+        mir.insns[80].src1 != mir.insns[78].dst ||
+        mir.insns[80].src2 != mir.insns[79].dst ||
+        mir.insns[80].immediate != '+' ||
+        !mir_machine_constant_equals(
+            mir.insns[83].dst,
+            plan->argument_increments[1]) ||
+        mir.insns[84].src1 != mir.insns[82].dst ||
+        mir.insns[84].src2 != mir.insns[83].dst ||
+        mir.insns[84].immediate != '+' ||
+        !mir_machine_constant_equals(
+            mir.insns[87].dst,
+            plan->argument_increments[2]) ||
+        mir.insns[88].src1 != mir.insns[86].dst ||
+        mir.insns[88].src2 != mir.insns[87].dst ||
+        mir.insns[88].immediate != '+' ||
+        !mir_machine_call_arguments(
+            &mir.insns[90], 4, recursive_arguments) ||
+        recursive_arguments[0] != mir.insns[76].dst ||
+        recursive_arguments[1] != mir.insns[80].dst ||
+        recursive_arguments[2] != mir.insns[84].dst ||
+        recursive_arguments[3] != mir.insns[88].dst ||
+        !mir_machine_same_location(
+            &mir.insns[1], &mir.insns[74]) ||
+        !mir_machine_same_location(
+            &mir.insns[2], &mir.insns[78]) ||
+        !mir_machine_same_location(
+            &mir.insns[3], &mir.insns[82]) ||
+        !mir_machine_same_location(
+            &mir.insns[4], &mir.insns[86]) ||
+        strcmp(mir.insns[90].name, mir.name) ||
+        (plan->recursive_function = mir_call_recovery_function(
+             90, 0, 4, 0, plan->recursive_name)) == NULL ||
+        (plan->recursive_function->type & 15) != TYPE_LONG ||
+        type_size(plan->recursive_function->type) != 4)
+        return mir_machine_reject(
+            "nonlocal-descent", "recursion");
+    if (!mir_machine_constant_equals(mir.insns[95].dst, 1) ||
+        mir.insns[96].src1 != mir.insns[64].dst ||
+        mir.insns[96].src2 != mir.insns[95].dst ||
+        mir.insns[96].immediate != '+' ||
+        mir.insns[98].label != mir.insns[59].label)
+        return mir_machine_reject(
+            "nonlocal-descent", "increment");
+    plan->frame_bytes = mir.local_bytes;
+    plan->jump_value = 42;
+    return 1;
+}
+
+static void mir_emit_nonlocal_descent_schedule(
+    FILE *out, const struct MirNonlocalDescentSchedule *plan)
+{
+    int recursive = new_label();
+
+    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+          "\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    fprintf(out,
+            "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
+            plan->frame_bytes);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tld l,(ix+4)\n\tld h,(ix+5)\n"
+          "\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp nz,L%d\n", recursive);
+    fprintf(out, "\tld hl,%d\n\tpush hl\n",
+            plan->jump_value);
+    fprintf(out, "\tld hl,%s\n\tpush hl\n",
+            asm_name_for(sym_asm_name(plan->environment)));
+    mir_call_recovery_emit_named_call(
+        out, plan->jump_function, plan->jump_name);
+    fprintf(out, "L%d:\n", recursive);
+    fprintf(out,
+            "\tld l,(ix+10)\n\tld h,(ix+11)\n"
+            "\tld de,%d\n\tadd hl,de\n\tpush hl\n"
+            "\tld l,(ix+8)\n\tld h,(ix+9)\n"
+            "\tld de,%d\n\tadd hl,de\n\tpush hl\n"
+            "\tld l,(ix+6)\n\tld h,(ix+7)\n"
+            "\tld de,%d\n\tadd hl,de\n\tpush hl\n"
+            "\tld l,(ix+4)\n\tld h,(ix+5)\n"
+            "\tdec hl\n\tpush hl\n",
+            plan->argument_increments[2],
+            plan->argument_increments[1],
+            plan->argument_increments[0]);
+    mir_call_recovery_emit_named_call(
+        out, plan->recursive_function, plan->recursive_name);
+}
+
+static int mir_match_nonlocal_runner_schedule(
+    struct MirNonlocalRunnerSchedule *plan)
+{
+    static const unsigned char expected_opcodes[100] = {
+        MIR_LABEL, MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL,
+        MIR_NOP, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_NOP, MIR_CONST, MIR_LOAD, MIR_BINARY, MIR_STORE,
+        MIR_ADDRESS, MIR_ARG, MIR_CALL, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_BRANCH_FALSE, MIR_LABEL,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_CONST, MIR_LOAD,
+        MIR_BINARY, MIR_BINARY, MIR_ARG, MIR_CALL, MIR_CONST, MIR_ARG,
+        MIR_CONST, MIR_ARG, MIR_CONST, MIR_ARG, MIR_CONST, MIR_ARG,
+        MIR_CALL, MIR_STRING_ADDRESS, MIR_ARG, MIR_CONST, MIR_ARG,
+        MIR_CALL, MIR_NOP, MIR_JUMP, MIR_LABEL, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_ARG, MIR_CALL,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_NOP, MIR_CONST, MIR_LOAD,
+        MIR_BINARY, MIR_BINARY, MIR_ARG, MIR_CALL, MIR_NOP, MIR_LABEL,
+        MIR_NOP, MIR_LABEL, MIR_LOAD, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_JUMP, MIR_LABEL, MIR_LOAD, MIR_BRANCH_FALSE,
+        MIR_STRING_ADDRESS, MIR_ARG, MIR_LOAD, MIR_ARG, MIR_CALL,
+        MIR_CONST, MIR_RETURN, MIR_NOP, MIR_LABEL, MIR_STRING_ADDRESS,
+        MIR_ARG, MIR_CALL, MIR_CONST, MIR_RETURN
+    };
+    int save_arguments[1];
+    int check_arguments[2];
+    int descent_arguments[4];
+    int print_arguments[2];
+    int failure_type;
+    int failure_storage;
+    int failure_offset;
+    int offset;
+    int instruction;
+    char environment_name[64];
+
+    memset(plan, 0, sizeof(*plan));
+    if (!mir_call_recovery_opcode_sequence(
+            expected_opcodes, sizeof(expected_opcodes)) ||
+        mir.next_value != 58 || mir_cfg_block_count() != 8 ||
+        mir.local_bytes != 6 || mir.aggregate_temp_bytes != 0 ||
+        mir.has_vla || !mir_has_cfg_backedge() ||
+        (mir.return_type & 15) != TYPE_INT ||
+        type_size(mir.return_type) != 2)
+        return 0;
+    plan->failure_count = find_global(mir.insns[3].name);
+    if (plan->failure_count == NULL ||
+        plan->failure_count->storage == SC_FUNC ||
+        plan->failure_count->is_volatile ||
+        !mir_scalar_memory_location(
+            &mir.insns[3], &failure_type,
+            &failure_storage, &failure_offset) ||
+        (failure_storage != SC_GLOBAL &&
+         failure_storage != SC_EXTERN) ||
+        type_ptr_depth(failure_type) != 0 ||
+        type_size(failure_type) != 2 ||
+        failure_offset != 0 ||
+        !mir_machine_constant_equals(mir.insns[1].dst, 0) ||
+        mir.insns[3].src1 != mir.insns[1].dst ||
+        !mir_machine_same_location(
+            &mir.insns[3], &mir.insns[84]) ||
+        !mir_machine_same_location(
+            &mir.insns[3], &mir.insns[88]) ||
+        !mir_machine_constant_equals(mir.insns[8].dst, 0) ||
+        !mir_nonlocal_local_word(
+            &mir.insns[10], &plan->cycle_offset) ||
+        mir.insns[10].src1 != mir.insns[8].dst ||
+        !mir_nonlocal_local_word(
+            &mir.insns[21], &plan->marker_offset) ||
+        !mir_nonlocal_local_word(
+            &mir.insns[26], &plan->result_offset) ||
+        plan->cycle_offset < -mir.local_bytes ||
+        plan->cycle_offset > -2 ||
+        plan->marker_offset < -mir.local_bytes ||
+        plan->marker_offset > -2 ||
+        plan->result_offset < -mir.local_bytes ||
+        plan->result_offset > -2 ||
+        abs(plan->cycle_offset - plan->marker_offset) < 2 ||
+        abs(plan->cycle_offset - plan->result_offset) < 2 ||
+        abs(plan->marker_offset - plan->result_offset) < 2)
+        return mir_machine_reject(
+            "nonlocal-runner", "storage");
+    plan->cycle_count = 5;
+    plan->marker_base = 1000;
+    plan->jump_value = 42;
+    if (!mir_machine_same_location(
+            &mir.insns[10], &mir.insns[13]) ||
+        !mir_machine_same_location(
+            &mir.insns[10], &mir.insns[19]) ||
+        !mir_machine_same_location(
+            &mir.insns[10], &mir.insns[36]) ||
+        !mir_machine_same_location(
+            &mir.insns[10], &mir.insns[69]) ||
+        !mir_machine_same_location(
+            &mir.insns[10], &mir.insns[78]) ||
+        !mir_machine_constant_equals(
+            mir.insns[14].dst, plan->cycle_count) ||
+        mir.insns[15].src1 != mir.insns[13].dst ||
+        mir.insns[15].src2 != mir.insns[14].dst ||
+        mir.insns[15].immediate != '<' ||
+        mir.insns[16].src1 != mir.insns[15].dst ||
+        mir.insns[16].label != mir.insns[83].label ||
+        !mir_machine_constant_equals(
+            mir.insns[18].dst, plan->marker_base) ||
+        mir.insns[20].src1 != mir.insns[18].dst ||
+        mir.insns[20].src2 != mir.insns[19].dst ||
+        mir.insns[20].immediate != '+' ||
+        mir.insns[21].src1 != mir.insns[20].dst)
+        return mir_machine_reject(
+            "nonlocal-runner", "loop-entry");
+    if (!mir_recovery_global_address(
+            mir.insns[22].dst, &plan->environment,
+            environment_name, sizeof(environment_name), &offset) ||
+        plan->environment == NULL || offset != 0 ||
+        !plan->environment->is_array ||
+        plan->environment->array_len < 4 ||
+        plan->environment->elem_size != 2 ||
+        !mir_machine_call_arguments(
+            &mir.insns[24], 1, save_arguments) ||
+        save_arguments[0] != mir.insns[22].dst ||
+        (plan->save_function = mir_call_recovery_function(
+             24, 0, 1, 0, plan->save_name)) == NULL ||
+        (plan->save_function->type & 15) != TYPE_INT ||
+        mir.insns[26].src1 != mir.insns[24].dst ||
+        !mir_machine_constant_equals(mir.insns[28].dst, 0) ||
+        mir.insns[29].src1 != mir.insns[24].dst ||
+        mir.insns[29].src2 != mir.insns[28].dst ||
+        mir.insns[29].immediate != TOK_EQ ||
+        mir.insns[30].src1 != mir.insns[29].dst ||
+        mir.insns[30].label != mir.insns[57].label)
+        return mir_machine_reject(
+            "nonlocal-runner", "save");
+    for (instruction = 0; instruction < 6; ++instruction) {
+        static const int string_instructions[6] = {
+            32, 50, 58, 65, 86, 95
+        };
+        const struct MirInsn *string =
+            &mir.insns[string_instructions[instruction]];
+        int previous;
+
+        if (string->opcode != MIR_STRING_ADDRESS ||
+            string->immediate < 0)
+            return mir_machine_reject(
+                "nonlocal-runner", "strings");
+        plan->strings[instruction] = (int)string->immediate;
+        for (previous = 0; previous < instruction; ++previous)
+            if (plan->strings[previous] ==
+                plan->strings[instruction])
+                return mir_machine_reject(
+                    "nonlocal-runner", "string-alias");
+    }
+    plan->check_function = mir_call_recovery_function(
+        40, 0, 2, 0, plan->check_name);
+    if (plan->check_function == NULL ||
+        (plan->check_function->type & 15) != TYPE_VOID)
+        return mir_machine_reject(
+            "nonlocal-runner", "check-function");
+    {
+        static const int check_calls[4] = {40, 54, 64, 73};
+        static const int check_strings[4] = {32, 50, 58, 65};
+        static const int check_values[4] = {38, 52, 62, 71};
+
+        for (instruction = 0; instruction < 4; ++instruction) {
+            char call_name[64];
+
+            if (mir_call_recovery_function(
+                    check_calls[instruction], 0, 2, 0,
+                    call_name) != plan->check_function ||
+                strcmp(call_name, plan->check_name) ||
+                !mir_machine_call_arguments(
+                    &mir.insns[check_calls[instruction]],
+                    2, check_arguments) ||
+                check_arguments[0] !=
+                    mir.insns[check_strings[instruction]].dst ||
+                check_arguments[1] !=
+                    mir.insns[check_values[instruction]].dst)
+                return mir_machine_reject(
+                    "nonlocal-runner", "check-calls");
+        }
+    }
+    if (!mir_machine_constant_equals(
+            mir.insns[35].dst, plan->marker_base) ||
+        mir.insns[37].src1 != mir.insns[35].dst ||
+        mir.insns[37].src2 != mir.insns[36].dst ||
+        mir.insns[37].immediate != '+' ||
+        mir.insns[38].src1 != mir.insns[20].dst ||
+        mir.insns[38].src2 != mir.insns[37].dst ||
+        mir.insns[38].immediate != TOK_EQ ||
+        !mir_machine_constant_equals(
+            mir.insns[41].dst, 8) ||
+        !mir_machine_constant_equals(
+            mir.insns[43].dst, 1) ||
+        !mir_machine_constant_equals(
+            mir.insns[45].dst, 2) ||
+        !mir_machine_constant_equals(
+            mir.insns[47].dst, 3) ||
+        !mir_machine_call_arguments(
+            &mir.insns[49], 4, descent_arguments) ||
+        descent_arguments[0] != mir.insns[41].dst ||
+        descent_arguments[1] != mir.insns[43].dst ||
+        descent_arguments[2] != mir.insns[45].dst ||
+        descent_arguments[3] != mir.insns[47].dst ||
+        (plan->descent_function = mir_call_recovery_function(
+             49, 0, 4, 0, plan->descent_name)) == NULL ||
+        (plan->descent_function->type & 15) != TYPE_LONG ||
+        type_size(plan->descent_function->type) != 4 ||
+        !mir_machine_constant_equals(mir.insns[52].dst, 0))
+        return mir_machine_reject(
+            "nonlocal-runner", "direct-path");
+    plan->descent_arguments[0] = 8;
+    plan->descent_arguments[1] = 1;
+    plan->descent_arguments[2] = 2;
+    plan->descent_arguments[3] = 3;
+    if (!mir_machine_constant_equals(
+            mir.insns[61].dst, plan->jump_value) ||
+        mir.insns[62].src1 != mir.insns[24].dst ||
+        mir.insns[62].src2 != mir.insns[61].dst ||
+        mir.insns[62].immediate != TOK_EQ ||
+        !mir_machine_constant_equals(
+            mir.insns[68].dst, plan->marker_base) ||
+        mir.insns[70].src1 != mir.insns[68].dst ||
+        mir.insns[70].src2 != mir.insns[69].dst ||
+        mir.insns[70].immediate != '+' ||
+        mir.insns[71].src1 != mir.insns[20].dst ||
+        mir.insns[71].src2 != mir.insns[70].dst ||
+        mir.insns[71].immediate != TOK_EQ ||
+        !mir_machine_constant_equals(mir.insns[79].dst, 1) ||
+        mir.insns[80].src1 != mir.insns[78].dst ||
+        mir.insns[80].src2 != mir.insns[79].dst ||
+        mir.insns[80].immediate != '+' ||
+        mir.insns[81].src1 != mir.insns[80].dst ||
+        mir.insns[82].label != mir.insns[11].label)
+        return mir_machine_reject(
+            "nonlocal-runner", "return-path");
+    plan->print_function = mir_call_recovery_function(
+        90, 1, 1, 0, plan->print_names[0]);
+    if (plan->print_function == NULL ||
+        !mir_machine_call_arguments(
+            &mir.insns[90], 2, print_arguments) ||
+        print_arguments[0] != mir.insns[86].dst ||
+        print_arguments[1] != mir.insns[88].dst ||
+        mir_call_recovery_function(
+            97, 1, 1, 0,
+            plan->print_names[1]) != plan->print_function ||
+        !mir_machine_call_arguments(
+            &mir.insns[97], 1, print_arguments) ||
+        print_arguments[0] != mir.insns[95].dst ||
+        !mir_machine_constant_equals(mir.insns[91].dst, 1) ||
+        !mir_machine_constant_equals(mir.insns[98].dst, 0))
+        return mir_machine_reject(
+            "nonlocal-runner", "summary");
+    return 1;
+}
+
+static void mir_nonlocal_emit_check(
+    FILE *out, const struct MirNonlocalRunnerSchedule *plan,
+    int string_slot)
+{
+    fputs("\tpush hl\n", out);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[string_slot]);
+    mir_call_recovery_emit_named_call(
+        out, plan->check_function, plan->check_name);
+    mir_emit_final_call_cleanup(out, 2);
+}
+
+static void mir_nonlocal_marker_condition(
+    FILE *out, const struct MirNonlocalRunnerSchedule *plan)
+{
+    int done = new_label();
+
+    fprintf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n\tpush hl\n"
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tld de,%d\n\tadd hl,de\n\tex de,hl\n"
+            "\tpop hl\n\tor a\n\tsbc hl,de\n"
+            "\tld hl,0\n\tjp nz,L%d\n\tinc hl\nL%d:\n",
+            plan->marker_offset, plan->marker_offset + 1,
+            plan->cycle_offset, plan->cycle_offset + 1,
+            plan->marker_base, done, done);
+}
+
+static void mir_emit_nonlocal_runner_schedule(
+    FILE *out, const struct MirNonlocalRunnerSchedule *plan)
+{
+    int loop = new_label();
+    int loop_body = new_label();
+    int direct_path = new_label();
+    int join = new_label();
+    int increment_done = new_label();
+    int value_ok = new_label();
+    int loop_done = new_label();
+    int success = new_label();
+    int return_done = new_label();
+
+    fputs(MIR_EXACT_KERNEL_MARKER "\n"
+          "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+          "\tld hl,-6\n\tadd hl,sp\n\tld sp,hl\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    fputs("\tld hl,0\n", out);
+    mir_machine_emit_global_word_store(
+        out, plan->failure_count, 0);
+    fprintf(out,
+            "\tld hl,0\n\tld (ix%d),l\n\tld (ix%d),h\n"
+            "L%d:\n"
+            "\tld a,(ix%d)\n\tor a\n\tjp m,L%d\n"
+            "\tjp nz,L%d\n\tld a,(ix%d)\n\tcp %d\n"
+            "\tjp c,L%d\n\tjp L%d\n"
+            "L%d:\n"
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n"
+            "\tld de,%d\n\tadd hl,de\n"
+            "\tld (ix%d),l\n\tld (ix%d),h\n",
+            plan->cycle_offset, plan->cycle_offset + 1,
+            loop, plan->cycle_offset + 1, loop_body,
+            loop_done, plan->cycle_offset, plan->cycle_count,
+            loop_body, loop_done, loop_body,
+            plan->cycle_offset, plan->cycle_offset + 1,
+            plan->marker_base,
+            plan->marker_offset, plan->marker_offset + 1);
+    fprintf(out, "\tld hl,%s\n\tpush hl\n",
+            asm_name_for(sym_asm_name(plan->environment)));
+    mir_call_recovery_emit_named_call(
+        out, plan->save_function, plan->save_name);
+    fputs("\tpop bc\n", out);
+    fprintf(out,
+            "\tld (ix%d),l\n\tld (ix%d),h\n"
+            "\tld a,h\n\tor l\n\tjp z,L%d\n",
+            plan->result_offset, plan->result_offset + 1,
+            direct_path);
+
+    fprintf(out,
+            "\tld de,%d\n\tor a\n\tsbc hl,de\n"
+            "\tld hl,0\n\tjp nz,L%d\n\tinc hl\nL%d:\n",
+            plan->jump_value, value_ok, value_ok);
+    mir_nonlocal_emit_check(out, plan, 2);
+    mir_nonlocal_marker_condition(out, plan);
+    mir_nonlocal_emit_check(out, plan, 3);
+    fprintf(out, "\tjp L%d\nL%d:\n", join, direct_path);
+
+    mir_nonlocal_marker_condition(out, plan);
+    mir_nonlocal_emit_check(out, plan, 0);
+    fprintf(out,
+            "\tld hl,%d\n\tpush hl\n"
+            "\tld hl,%d\n\tpush hl\n"
+            "\tld hl,%d\n\tpush hl\n"
+            "\tld hl,%d\n\tpush hl\n",
+            plan->descent_arguments[3],
+            plan->descent_arguments[2],
+            plan->descent_arguments[1],
+            plan->descent_arguments[0]);
+    mir_call_recovery_emit_named_call(
+        out, plan->descent_function, plan->descent_name);
+    mir_emit_final_call_cleanup(out, 4);
+    fputs("\tld hl,0\n", out);
+    mir_nonlocal_emit_check(out, plan, 1);
+
+    fprintf(out,
+            "L%d:\n"
+            "\tinc (ix%d)\n\tjp nz,L%d\n"
+            "\tinc (ix%d)\nL%d:\n\tjp L%d\n"
+            "L%d:\n",
+            join, plan->cycle_offset, increment_done,
+            plan->cycle_offset + 1, increment_done, loop,
+            loop_done);
+    mir_machine_emit_global_word(
+        out, plan->failure_count, 0);
+    fputs("\tld a,h\n\tor l\n", out);
+    fprintf(out, "\tjp z,L%d\n\tpush hl\n", success);
+    fprintf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->strings[4]);
+    mir_call_recovery_emit_named_call(
+        out, plan->print_function, plan->print_names[0]);
+    mir_emit_final_call_cleanup(out, 2);
+    fprintf(out,
+            "\tld hl,1\n\tjp L%d\nL%d:\n"
+            "\tld hl,S%d\n\tpush hl\n",
+            return_done, success, plan->strings[5]);
+    mir_call_recovery_emit_named_call(
+        out, plan->print_function, plan->print_names[1]);
+    mir_emit_final_call_cleanup(out, 1);
+    fprintf(out,
+            "\tld hl,0\nL%d:\n"
+            "\tld sp,ix\n\tpop ix\n\tret\n",
+            return_done);
+}
+
 static int mir_match_fixed_binary_checks_schedule(
     struct MirFixedBinaryChecksSchedule *plan)
 {
@@ -7800,6 +8507,26 @@ static int mir_match_narrow_string_workload_schedule(
                 return mir_machine_reject(
                     "narrow-string-workload", "string-alias");
     }
+    if (strcmp(asm_name_for(sym_asm_name(plan->length_function)),
+               "__slen") ||
+        strcmp(asm_name_for(sym_asm_name(plan->find_first_function)),
+               "__schr") ||
+        strcmp(asm_name_for(sym_asm_name(plan->find_last_function)),
+               "__srch") ||
+        strcmp(asm_name_for(sym_asm_name(plan->copy_string_function)),
+               "__scpy") ||
+        strcmp(asm_name_for(sym_asm_name(plan->find_string_function)),
+               "__sstr") ||
+        strcmp(asm_name_for(sym_asm_name(plan->compare_function)),
+               "__mcmp") ||
+        strcmp(asm_name_for(sym_asm_name(plan->find_memory_function)),
+               "__mchr") ||
+        strcmp(asm_name_for(sym_asm_name(plan->copy_memory_function)),
+               "__mcpy") ||
+        strcmp(asm_name_for(sym_asm_name(plan->set_memory_function)),
+               "__mset"))
+        return mir_machine_reject(
+            "narrow-string-workload", "runtime-abi");
     symbol = find_global(mir.insns[12].name);
     return symbol == plan->atoi_function;
 }
@@ -7842,6 +8569,49 @@ static void mir_narrow_global_address(
     mir_narrow_load_word(out, index_offset);
     fprintf(out, "\tld de,%s\n\tadd hl,de\n",
             asm_name_for(sym_asm_name(symbol)));
+}
+
+static void mir_narrow_load_bc(FILE *out, int offset)
+{
+    fprintf(out,
+            "\tld c,(ix%d)\n\tld b,(ix%d)\n",
+            offset, offset + 1);
+}
+
+static void mir_narrow_global_address_de(
+    FILE *out, struct Sym *symbol, int index_offset)
+{
+    mir_narrow_global_address(out, symbol, index_offset);
+    fputs("\tex de,hl\n", out);
+}
+
+static void mir_narrow_fast_length(
+    FILE *out, struct Sym *symbol, int index_offset)
+{
+    mir_narrow_global_address(out, symbol, index_offset);
+    mir_emit_runtime_call(out, "__slf");
+}
+
+static void mir_narrow_fast_find_character(
+    FILE *out, struct Sym *symbol, int index_offset,
+    int character, int count_offset)
+{
+    mir_narrow_global_address(out, symbol, index_offset);
+    fprintf(out, "\tld e,%d\n", character);
+    mir_narrow_load_bc(out, count_offset);
+    mir_emit_runtime_call(out, "__mhf");
+}
+
+static void mir_narrow_fast_compare(
+    FILE *out, struct Sym *left, struct Sym *right,
+    int index_offset, int count_offset)
+{
+    mir_narrow_global_address(out, right, index_offset);
+    fputs("\tpush hl\n", out);
+    mir_narrow_global_address_de(out, left, index_offset);
+    fputs("\tpop hl\n", out);
+    mir_narrow_load_bc(out, count_offset);
+    mir_emit_runtime_call(out, "__cmpf");
 }
 
 static void mir_narrow_random_mod(
@@ -8020,11 +8790,8 @@ static void mir_emit_narrow_string_workload_schedule(
     fputs("\tld a,(hl)\n", out);
     fprintf(out, "\tld (ix%d),a\n\txor a\n\tld (hl),a\n",
             MIR_NARROW_ORIG);
-    mir_narrow_push_global_index(
+    mir_narrow_fast_length(
         out, plan->primary, MIR_NARROW_START);
-    mir_emit_recovery_call(
-        out, plan->length_function, plan->length_name);
-    mir_emit_final_call_cleanup(out, 1);
     mir_narrow_store_word(out, MIR_NARROW_AUX);
     fputs("\tex de,hl\n", out);
     mir_narrow_load_word(out, MIR_NARROW_LEN);
@@ -8064,12 +8831,10 @@ static void mir_emit_narrow_string_workload_schedule(
     fputs("\tld a,(hl)\n", out);
     fprintf(out, "\tld (ix%d),a\n\tld (hl),33\n",
             MIR_NARROW_ORIG);
-    fputs("\tld hl,33\n\tpush hl\n", out);
-    mir_narrow_push_global_index(
+    mir_narrow_global_address(
         out, plan->primary, MIR_NARROW_START);
-    mir_emit_recovery_call(
-        out, plan->find_first_function, plan->find_first_name);
-    mir_emit_final_call_cleanup(out, 2);
+    fputs("\tld a,33\n", out);
+    mir_emit_runtime_call(out, "__chf");
     mir_narrow_store_word(out, MIR_NARROW_POINTER);
     fputs("\tld a,h\n\tor l\n", out);
     fprintf(out, "\tjp nz,L%d\n", first_present);
@@ -8082,12 +8847,10 @@ static void mir_emit_narrow_string_workload_schedule(
     fprintf(out, "\tjp z,L%d\n", first_correct);
     mir_narrow_failure_four(out, plan, plan->strings[4]);
     fprintf(out, "L%d:\n", first_correct);
-    fputs("\tld hl,33\n\tpush hl\n", out);
-    mir_narrow_push_global_index(
+    mir_narrow_global_address(
         out, plan->primary, MIR_NARROW_START);
-    mir_emit_recovery_call(
-        out, plan->find_last_function, plan->find_last_name);
-    mir_emit_final_call_cleanup(out, 2);
+    fputs("\tld a,33\n", out);
+    mir_emit_runtime_call(out, "__rcf");
     mir_narrow_store_word(out, MIR_NARROW_POINTER);
     fputs("\tld a,h\n\tor l\n", out);
     fprintf(out, "\tjp nz,L%d\n", last_present);
@@ -8100,12 +8863,10 @@ static void mir_emit_narrow_string_workload_schedule(
     fprintf(out, "\tjp z,L%d\n", last_correct);
     mir_narrow_failure_four(out, plan, plan->strings[6]);
     fprintf(out, "L%d:\n", last_correct);
-    fputs("\tld hl,36\n\tpush hl\n", out);
-    mir_narrow_push_global_index(
+    mir_narrow_global_address(
         out, plan->primary, MIR_NARROW_START);
-    mir_emit_recovery_call(
-        out, plan->find_first_function, plan->find_first_name);
-    mir_emit_final_call_cleanup(out, 2);
+    fputs("\tld a,36\n", out);
+    mir_emit_runtime_call(out, "__chf");
     fputs("\tld a,h\n\tor l\n", out);
     fprintf(out, "\tjp z,L%d\n", absent_character);
     mir_narrow_failure_four(out, plan, plan->strings[7]);
@@ -8116,12 +8877,10 @@ static void mir_emit_narrow_string_workload_schedule(
 
     fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[8]);
     mir_narrow_print(out, plan, 1);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[9]);
     mir_narrow_ix_address(out, MIR_NARROW_ALPHA);
-    fputs("\tpush hl\n", out);
-    mir_emit_recovery_call(
-        out, plan->copy_string_function, plan->copy_string_name);
-    mir_emit_final_call_cleanup(out, 2);
+    fputs("\tex de,hl\n", out);
+    fprintf(out, "\tld hl,S%d\n", plan->strings[9]);
+    mir_emit_runtime_call(out, "__scf");
     fputs("\tld hl,0\n", out);
     mir_narrow_store_word(out, MIR_NARROW_I);
     fprintf(out, "L%d:\n", string_loop);
@@ -8159,11 +8918,10 @@ static void mir_emit_narrow_string_workload_schedule(
     fputs("\tex de,hl\n\tpop hl\n\tadd hl,de\n", out);
     mir_narrow_store_word(out, MIR_NARROW_POINTER);
     fputs("\tpush hl\n", out);
-    mir_narrow_push_global_index(
+    mir_narrow_global_address_de(
         out, plan->primary, MIR_NARROW_START);
-    mir_emit_recovery_call(
-        out, plan->find_string_function, plan->find_string_name);
-    mir_emit_final_call_cleanup(out, 2);
+    fputs("\tpop hl\n", out);
+    mir_emit_runtime_call(out, "__ssf");
     mir_narrow_store_word(out, MIR_NARROW_AUX);
     fputs("\tld a,h\n\tor l\n", out);
     fprintf(out, "\tjp nz,L%d\n", string_present);
@@ -8176,12 +8934,11 @@ static void mir_emit_narrow_string_workload_schedule(
     mir_narrow_print(out, plan, 6);
     mir_narrow_exit(out, plan);
     fprintf(out, "L%d:\n", string_present);
-    mir_narrow_push_word(out, MIR_NARROW_LEN);
-    mir_narrow_push_word(out, MIR_NARROW_POINTER);
-    mir_narrow_push_word(out, MIR_NARROW_AUX);
-    mir_emit_recovery_call(
-        out, plan->compare_function, plan->compare_name);
-    mir_emit_final_call_cleanup(out, 3);
+    mir_narrow_load_word(out, MIR_NARROW_AUX);
+    fputs("\tex de,hl\n", out);
+    mir_narrow_load_word(out, MIR_NARROW_POINTER);
+    mir_narrow_load_bc(out, MIR_NARROW_LEN);
+    mir_emit_runtime_call(out, "__cmpf");
     fputs("\tld a,h\n\tor l\n", out);
     fprintf(out, "\tjp z,L%d\n", string_equal);
     mir_narrow_push_word(out, MIR_NARROW_POINTER);
@@ -8193,12 +8950,10 @@ static void mir_emit_narrow_string_workload_schedule(
     mir_narrow_print(out, plan, 6);
     mir_narrow_exit(out, plan);
     fprintf(out, "L%d:\n", string_equal);
-    fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[13]);
-    mir_narrow_push_global_index(
+    mir_narrow_global_address_de(
         out, plan->primary, MIR_NARROW_START);
-    mir_emit_recovery_call(
-        out, plan->find_string_function, plan->find_string_name);
-    mir_emit_final_call_cleanup(out, 2);
+    fprintf(out, "\tld hl,S%d\n", plan->strings[13]);
+    mir_emit_runtime_call(out, "__ssf");
     fputs("\tld a,h\n\tor l\n", out);
     fprintf(out, "\tjp z,L%d\n", missing_pattern);
     mir_narrow_push_word(out, MIR_NARROW_OFFSET);
@@ -8213,12 +8968,9 @@ static void mir_emit_narrow_string_workload_schedule(
 
     fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[15]);
     mir_narrow_print(out, plan, 1);
-    fputs("\tld hl,0\n\tpush hl\n\tld hl,97\n\tpush hl\n", out);
-    fprintf(out, "\tld hl,%s\n\tpush hl\n",
+    fprintf(out, "\tld hl,%s\n\tld e,97\n\tld bc,0\n",
             asm_name_for(sym_asm_name(plan->primary)));
-    mir_emit_recovery_call(
-        out, plan->find_memory_function, plan->find_memory_name);
-    mir_emit_final_call_cleanup(out, 3);
+    mir_emit_runtime_call(out, "__mhf");
     fputs("\tld a,h\n\tor l\n", out);
     fprintf(out, "\tjp z,L%d\n", memory_zero_ok);
     fprintf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[16]);
@@ -8239,41 +8991,29 @@ static void mir_emit_narrow_string_workload_schedule(
     mir_narrow_store_word(out, MIR_NARROW_END);
     fputs("\tor a\n\tsbc hl,de\n", out);
     mir_narrow_store_word(out, MIR_NARROW_LEN);
-    mir_narrow_push_word(out, MIR_NARROW_LEN);
-    mir_narrow_push_global_index(
+    mir_narrow_global_address(
         out, plan->primary, MIR_NARROW_START);
-    mir_narrow_push_global_index(
+    fputs("\tpush hl\n", out);
+    mir_narrow_global_address_de(
         out, plan->secondary, MIR_NARROW_START);
-    mir_emit_recovery_call(
-        out, plan->copy_memory_function, plan->copy_memory_name);
-    mir_emit_final_call_cleanup(out, 3);
-    mir_narrow_push_word(out, MIR_NARROW_LEN);
-    mir_narrow_push_global_index(
-        out, plan->primary, MIR_NARROW_START);
-    mir_narrow_push_global_index(
-        out, plan->secondary, MIR_NARROW_START);
-    mir_emit_recovery_call(
-        out, plan->compare_function, plan->compare_name);
-    mir_emit_final_call_cleanup(out, 3);
+    fputs("\tpop hl\n", out);
+    mir_narrow_load_bc(out, MIR_NARROW_LEN);
+    mir_emit_runtime_call(out, "__mcf");
+    mir_narrow_fast_compare(
+        out, plan->secondary, plan->primary,
+        MIR_NARROW_START, MIR_NARROW_LEN);
     fputs("\tld a,h\n\tor l\n", out);
     fprintf(out, "\tjp z,L%d\n", memory_copy_ok);
     mir_narrow_failure_four(out, plan, plan->strings[17]);
     fprintf(out, "L%d:\n", memory_copy_ok);
-    mir_narrow_push_word(out, MIR_NARROW_LEN);
-    fputs("\tld hl,0\n\tpush hl\n", out);
-    mir_narrow_push_global_index(
+    mir_narrow_global_address(
         out, plan->secondary, MIR_NARROW_START);
-    mir_emit_recovery_call(
-        out, plan->set_memory_function, plan->set_memory_name);
-    mir_emit_final_call_cleanup(out, 3);
-    mir_narrow_push_word(out, MIR_NARROW_LEN);
-    mir_narrow_push_global_index(
-        out, plan->zeroes, MIR_NARROW_START);
-    mir_narrow_push_global_index(
-        out, plan->secondary, MIR_NARROW_START);
-    mir_emit_recovery_call(
-        out, plan->compare_function, plan->compare_name);
-    mir_emit_final_call_cleanup(out, 3);
+    fputs("\tld e,0\n", out);
+    mir_narrow_load_bc(out, MIR_NARROW_LEN);
+    mir_emit_runtime_call(out, "__msf");
+    mir_narrow_fast_compare(
+        out, plan->secondary, plan->zeroes,
+        MIR_NARROW_START, MIR_NARROW_LEN);
     fputs("\tld a,h\n\tor l\n", out);
     fprintf(out, "\tjp z,L%d\n", memory_zero_compare_ok);
     mir_narrow_failure_four(out, plan, plan->strings[18]);
@@ -8286,13 +9026,9 @@ static void mir_emit_narrow_string_workload_schedule(
             "\tld de,%s\n\tadd hl,de\n\tld (hl),33\n",
             MIR_NARROW_START, MIR_NARROW_START + 1,
             asm_name_for(sym_asm_name(plan->secondary)));
-    mir_narrow_push_word(out, MIR_NARROW_LEN);
-    fputs("\tld hl,33\n\tpush hl\n", out);
-    mir_narrow_push_global_index(
-        out, plan->secondary, MIR_NARROW_START);
-    mir_emit_recovery_call(
-        out, plan->find_memory_function, plan->find_memory_name);
-    mir_emit_final_call_cleanup(out, 3);
+    mir_narrow_fast_find_character(
+        out, plan->secondary, MIR_NARROW_START,
+        33, MIR_NARROW_LEN);
     mir_narrow_store_word(out, MIR_NARROW_POINTER);
     mir_narrow_load_word(out, MIR_NARROW_LEN);
     fputs("\tsrl h\n\trr l\n", out);
@@ -8314,23 +9050,18 @@ static void mir_emit_narrow_string_workload_schedule(
             MIR_NARROW_LEN, MIR_NARROW_LEN + 1,
             asm_name_for(sym_asm_name(plan->secondary)));
     mir_narrow_load_word(out, MIR_NARROW_LEN);
-    fputs("\tdec hl\n\tpush hl\n\tld hl,63\n\tpush hl\n", out);
-    mir_narrow_push_global_index(
+    fputs("\tdec hl\n\tld c,l\n\tld b,h\n", out);
+    mir_narrow_global_address(
         out, plan->secondary, MIR_NARROW_START);
-    mir_emit_recovery_call(
-        out, plan->find_memory_function, plan->find_memory_name);
-    mir_emit_final_call_cleanup(out, 3);
+    fputs("\tld e,63\n", out);
+    mir_emit_runtime_call(out, "__mhf");
     fputs("\tld a,h\n\tor l\n", out);
     fprintf(out, "\tjp z,L%d\n", memory_count_ok);
     mir_narrow_failure_four(out, plan, plan->strings[20]);
     fprintf(out, "L%d:\n", memory_count_ok);
-    mir_narrow_push_word(out, MIR_NARROW_LEN);
-    fputs("\tld hl,64\n\tpush hl\n", out);
-    mir_narrow_push_global_index(
-        out, plan->secondary, MIR_NARROW_START);
-    mir_emit_recovery_call(
-        out, plan->find_memory_function, plan->find_memory_name);
-    mir_emit_final_call_cleanup(out, 3);
+    mir_narrow_fast_find_character(
+        out, plan->secondary, MIR_NARROW_START,
+        64, MIR_NARROW_LEN);
     fputs("\tld a,h\n\tor l\n", out);
     fprintf(out, "\tjp z,L%d\n", memory_missing_ok);
     mir_narrow_failure_four(out, plan, plan->strings[21]);
@@ -8366,11 +9097,8 @@ static void mir_emit_narrow_string_workload_schedule(
     fputs("\tld a,(hl)\n", out);
     fprintf(out, "\tld (ix%d),a\n\txor a\n\tld (hl),a\n",
             MIR_NARROW_ORIG);
-    mir_narrow_push_global_index(
+    mir_narrow_fast_length(
         out, plan->primary, MIR_NARROW_START);
-    mir_emit_recovery_call(
-        out, plan->length_function, plan->length_name);
-    mir_emit_final_call_cleanup(out, 1);
     mir_narrow_store_word(out, MIR_NARROW_AUX);
     mir_narrow_push_global_index(
         out, plan->primary, MIR_NARROW_START);
@@ -10537,6 +11265,8 @@ int mir_try_emit_runtime_runners(FILE *out, int phase)
             ? (int)profile : -1;
     }
     if (phase == 0) {
+        struct MirNonlocalDescentSchedule nonlocal_descent;
+        struct MirNonlocalRunnerSchedule nonlocal_runner;
         struct MirExecRecursionSchedule exec_recursion;
         struct MirSparseFileSchedule sparse_file;
         struct MirCtrlZFileSchedule ctrlz_file;
@@ -10569,6 +11299,18 @@ int mir_try_emit_runtime_runners(FILE *out, int phase)
         struct MirAllocatorByteHelperSchedule allocator_byte_helper;
         struct MirAllocatorLargeSchedule allocator_large;
         struct MirGrowFallbackSchedule grow_fallback;
+        if (mir_match_nonlocal_descent_schedule(
+                &nonlocal_descent)) {
+            mir_emit_nonlocal_descent_schedule(
+                out, &nonlocal_descent);
+            return 1;
+        }
+        if (mir_match_nonlocal_runner_schedule(
+                &nonlocal_runner)) {
+            mir_emit_nonlocal_runner_schedule(
+                out, &nonlocal_runner);
+            return 1;
+        }
         if (mir_match_grow_fallback_schedule(
                 &grow_fallback)) {
             mir_emit_grow_fallback_schedule(

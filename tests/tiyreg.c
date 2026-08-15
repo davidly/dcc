@@ -3,11 +3,11 @@
  *
  * IY is the only register dcc can allocate in a function that CONTAINS CALLS.
  * It is callee-saved (the function pushes the caller's IY ahead of its frame
- * and pops it after restoring IX), DCCRTL contains no IY instruction at all -
- * verified by scripts/rtl-iy-safety.py - and CP/M's 8080-coded BDOS has no
- * index registers to clobber it with. Every caller-saved register (BC, DE, E)
- * is disqualified from such a function outright, which is why these bodies
- * previously received no register allocation of any kind.
+ * and pops it after restoring IX), DCCRTL's reviewed IY paths preserve or
+ * restore it - verified by scripts/rtl-iy-safety.py - and CP/M's 8080-coded
+ * BDOS has no index registers to clobber it with. Every caller-saved register
+ * (BC, DE, E) is disqualified from such a function outright, which is why
+ * these bodies previously received no register allocation of any kind.
  *
  * The helpers called here have EXTERNAL linkage on purpose. A small static
  * callee may be inline-substituted, after which the caller no longer counts

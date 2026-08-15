@@ -1108,11 +1108,11 @@ int pass_byte_for_counter_to_reg_e(void)
  * site; the nested-loop collision check below now recognizes the "db
  * 0FDh," prefix instead of an "IY" name prefix.
  *
- * Because nothing else touches IY (see scan_local_func_labels above), this
- * pass allows ANY call inside the loop body, not just __mods/__divs, except
- * one that is_local_func_label flags as another function in this same file
- * - declined exactly like pass_byte_loop_counter_to_reg_c declines a call
- * that isn't __mods/__divs.
+ * Because ordinary runtime calls preserve IY (see scan_local_func_labels
+ * above), this pass allows ANY call inside the loop body, not just
+ * __mods/__divs, except one that is_local_func_label flags as another
+ * function in this same file - declined exactly like
+ * pass_byte_loop_counter_to_reg_c declines a call that isn't __mods/__divs.
  *
  * "ld l,(ix+off)" can't become a single "ld l,iyl": the FD prefix redirects
  * EVERY H/L reference in an instruction, so "ld l,iyl" would actually

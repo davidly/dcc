@@ -1404,16 +1404,16 @@ static int pass_ix_array_byte_addr(void)
 
 
 /*
- * IY is otherwise completely unused across dcc's own codegen and all of
- * DCCRTL.MAC (verified: zero occurrences), unlike BC which the codegen and
- * runtime use constantly. That makes it a second, near-unconditionally-safe
- * register slot for pass_byte_loop_counter_to_reg_iyl below - EXCEPT for
+ * IY is preserved by dcc-generated callees and the reviewed DCCRTL paths,
+ * unlike BC which the codegen and runtime use constantly. That makes it a
+ * second, near-unconditionally-safe register slot for
+ * pass_byte_loop_counter_to_reg_iyl below - EXCEPT for
  * calls into another function in this SAME translation unit, which might
  * itself have one of its own loops promoted to IYL by this same pass and
  * would silently stomp this loop's live counter across the call. This scan
  * (run once, before the fixed-point pass loop) collects every function
  * entry-point label in the file so that pass can tell those calls apart
- * from RTL/library calls (which never touch IY).
+ * from RTL/library calls (whose reviewed paths preserve IY).
  *
  * Matches the two shapes dcc_func.c's emit_function_prologue emits:
  *   public NAME       (non-static)      ; static function ORIGNAME (static)
@@ -6996,7 +6996,7 @@ static int parse_small_add_a(const char *line, int *amount)
  * IY. The candidate must have one HL initialization, only canonical HL/DE
  * reloads, and one small carry-skip increment whose flags are dead at the
  * loop target. Calls may only target same-file functions (the whole file is
- * proven IY-free) or DCCRTL's __ helpers, which never touch IY. */
+ * proven IY-free) or DCCRTL's reviewed IY-preserving helpers. */
 static int pass_promote_ix_pointer_to_iy(void)
 {
     int i, k;
@@ -8836,7 +8836,8 @@ static int pass_walk_row_cached_float_index(void)
          * walking pointer across the call - the exact hazard scan_local_
          * func_labels/is_local_func_label exist to catch (see
          * pass_byte_loop_counter_to_reg_iyl's own identical check). An RTL
-         * call (e.g. __fmaf) is fine - DCCRTL.MAC never touches IY. */
+         * call (e.g. __fmaf) is fine because reviewed DCCRTL paths preserve
+         * IY. */
         {
             int call_ok = 1;
             for (k = i + 1; k < loop_end && call_ok; ++k) {

@@ -258,8 +258,9 @@ two facts, both load-bearing:
 1. Every dcc function claiming IY pushes the caller's IY ahead of its frame and
 	pops it after restoring IX. `frame_first_param_offset()` accounts for the
 	word this occupies by shifting every parameter by 2.
-2. Nothing else in a linked image writes IY. `DCCRTL.MAC` contains no IY
-	instruction, and CP/M 2.2's BDOS is 8080 code with no index registers. Run
+2. Runtime IY use is confined to reviewed paths: `__extln` preserves it on
+	every return, while `_setjmp`/`_longjmp` save and restore it in `jmp_buf`.
+	CP/M 2.2's BDOS is 8080 code with no index registers. Run
 	`python3 scripts/rtl-iy-safety.py` after any runtime edit; it exits non-zero
 	if the invariant breaks.
 
