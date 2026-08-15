@@ -1,891 +1,219 @@
 ---
 name: dcc-project
-description: 'Develop, build, and test the dcc toolchain itself — the host programs dcc (C89-base front end with selected C99/C11 features -> Z80/M80 assembler), dccpeep (peephole optimizer), and dccrtlstrip (runtime stripper), plus the DCCRTL.MAC Z80 runtime. Use when modifying or debugging compiler/optimizer/runtime sources under src/, running the regression suite (runall.ps1), building one app (dccmake), or rebuilding the host tools (build-dcc.ps1). NOT for writing ordinary C apps that target CP/M — use the dcc-cpm-z80 skill for that.'
-argument-hint: 'Describe the dcc-project task (change codegen, run the test suite, build a single app, rebuild host tools)'
+description: 'Develop, build, test, and optimize the dcc host toolchain: dcc, dccpeep, dccrtlstrip, dccmake, m80c, l80c, and DCCRTL.MAC. Use for compiler, MIR backend, optimizer, runtime, regression-suite, or toolchain build work. Use dcc-cpm-z80 for ordinary target applications.'
+argument-hint: 'Describe the dcc toolchain task'
 ---
 
-# dcc project (compiler / optimizer / runtime development)
+# dcc project
 
-dcc is a **cross** toolchain: the host programs `dcc`, `dccpeep`, and
-`dccrtlstrip` compile with a modern compiler and run on your desktop. They emit
-Z80 assembly and CP/M 2.2 `.COM` files that run under an emulator such as
-**ntvcm**. This skill is about changing and validating *those tools and the
-runtime*, not about authoring CP/M apps (use `dcc-cpm-z80` for that).
+dcc is a cross toolchain. Host programs emit Z80 assembly and CP/M 2.2
+executables:
 
-## When to use
+`dcc -> dccpeep (optional) -> dccrtlstrip -> m80c -> l80c -> ntvcm`
 
-- Editing compiler/optimizer/runtime sources under `src/` or `DCCRTL.MAC`.
-- Running the regression suite or reproducing a single test failure.
-- Rebuilding the host tools after a source change.
+Production function bodies are generated from MIR only. AST processing after
+parsing is metadata-only; legacy body emission, capture/replay, and speculative
+legacy register-allocation retries do not exist.
 
-## Toolchain pipeline
+## Source map
 
-One `.c` file becomes a `.COM` through a short pipeline (each stage hands a file
-to the next):
+| Surface | Location |
+| --- | --- |
+| Driver, parser, symbols | `src/dcc/dcc.c`, `dcc_func.c`, `dcc_symbols.c` |
+| Preprocessor | `src/dcc/dcc_preproc.c`, `dcc_pp_expr.c` |
+| Non-emitting AST metadata | `dcc_ast_metadata.c`, `dcc_ast_stmt_meta.c` |
+| MIR lowering and verification | `dcc_mir.c`, `dcc_mir.h` |
+| MIR selection and cost policy | `dcc_mir_select.c` |
+| General homed/spilled emitters | `dcc_mir_homed_cfg.c`, `dcc_mir_spilled_cfg.c` |
+| Shared MIR emission | `dcc_mir_emit_common.c`, `dcc_mir_target.c`, `dcc_mir_schedule.c` |
+| Exact machine schedules | `dcc_mir_machine_*.c` |
+| Peephole optimizer | `src/dccpeep/` |
+| Runtime stripper | `src/dccrtlstrip/` |
+| Z80 runtime | `DCCRTL.MAC` |
+| Tests and checked performance | `tests/`, `tests/perf_baselines.csv` |
 
-`dcc` (.c → .MAC) → `dccpeep` (.MAC → .MAC, optional) + `dccrtlstrip`
-(DCCRTL.MAC → RTLMIN.MAC, keep only referenced routines) → `m80c` (assemble) →
-`L80` (link → .COM). `dccmake` uses native host `m80c` by default and runs
-Microsoft's `L80` under ntvcm; `dcc-use-emulated-m80=true` selects Microsoft's
-`M80` under ntvcm for assembly instead.
-
-## Source layout
-
-| Path | What |
-| ---- | ---- |
-| `src/dcc/` | The compiler. `dcc.c` is the driver; `dcc_preproc.c` owns macros/lexer and `dcc_pp_expr.c` owns `#if` expressions. `dcc_func.c` parses functions/top-level declarations and performs one production metadata/MIR body walk; `dcc_ast_metadata.c` / `dcc_ast_stmt_meta.c` own non-emitting parser metadata; `dcc_global_init.c` records file-scope initializers; `dcc_mir*.c` owns generated production Z80. |
-| `src/dccpeep/` | Fixpoint peephole optimizer (`-Ot` time / `-Os` size). `dccpeep.c` owns the descriptor-driven scheduler and remaining general passes; `PeepContext` groups options, statistics, mutation versions, and indexes. `peep_lines.c` owns the mutable line program, opaque user-asm barriers, and edit transactions; `peep_parse.c`, `peep_effects.c`, `peep_control_flow.c`, and `peep_analyze.c` provide parsing, cached effects, indexed control flow, and safety analysis. Pass families live in `peep_pass_once.c` (micro-pattern dispatcher), `peep_pass_minmax.c` (board/game idioms), `peep_pass_loops.c` (loop registerization), `peep_pass_inline_temp.c` (compiler-tagged spills), and `peep_pass_control_flow.c` (label/branch rewrites); `peep_pass_stubs.c` and `peep_pass_final.c` own post-convergence size and cleanup passes. |
-| `src/dccrtlstrip/` | Runtime dead-block stripper. |
-| `DCCRTL.MAC` | The Z80-assembly C runtime (entrypoint, heap, argv, libc subset, float). |
-| `tests/` | `*.c` test apps + `tests/baselines/<app>.txt` expected stdout + `tests/_test_overrides.json` (per-app args/stdin/stack/ignore). |
-| `scripts/` | `runall.ps1`, `runall-extended.ps1`, `build-dcc.ps1`, `stacksize.*`. |
-| `docs/docs/en/appendix/00-architecture.md` | In-depth architecture reference. |
-
-Convention: source `.c` files are **lowercase** (only dcc reads them); generated
-`.MAC`, `.REL`, `.PRN`, `.COM` are **UPPERCASE** (CP/M filenames). Matters on
-case-sensitive (Linux) filesystems.
-
-## Prerequisites
-
-The scripts expect the `ntvcm` emulator on your `PATH` (it runs `L80`, optional
-emulated `M80`, and the built `.COM` files), along with the host tools `dcc`,
-`dccpeep`, `dccrtlstrip`, and `m80c` — these land in the repo root after a build,
-so add the repo root and ntvcm's directory to `PATH`. Override tools with the
-corresponding environment/settings controls when they are not on `PATH`.
-
-## Run the regression tests
-
-Builds every `tests/*.c` app and diffs stdout against its baseline. Runs in
-parallel by default; the stack-overflow guard (`-fstack-check`) is on by default.
-
-```pwsh
-pwsh ./scripts/runall.ps1                 # default: fast, optimized CP/M Z80 binary
-pwsh ./scripts/runall.ps1 -Help           # show help and exit
-pwsh ./scripts/runall.ps1 -Mode fast      # default unless otherwise stated by the agent/developer
-pwsh ./scripts/runall.ps1 -Mode nopeep    # unoptimized CP/M Z80 binary
-pwsh ./scripts/runall.ps1 -Serial         # sequential fallback (debugging)
-pwsh ./scripts/runall.ps1 -Extended       # also run the c-testsuite extended corpus
-pwsh ./scripts/runall.ps1 -KeepBuild      # keep build/run-<pid>/ for debugging
-```
-
-In parallel mode each invocation is isolated under a per-invocation
-`build/run-<pid>/` folder that is removed automatically on exit (so `build/`
-does not fill up with one folder per run); pass `-KeepBuild` to retain it for
-inspection. `runall-extended.ps1` uses the same `run-<pid>` isolation, cleanup,
-and `-KeepBuild` behavior under `build/extended-tests/`.
-
-The default `-Mode fast` builds each app once as an optimized CP/M Z80 binary.
-Use `-Mode full` to build each app twice, once optimized and once unoptimized,
-and verify both against the same baseline. Exit code 0 = all passed, 1 = one or
-more failed. Add `-Report` to append per-app cycle/size metrics to
-`perf_results.csv`. Add `-Extended` when a regular regression run should also
-run the imported c-testsuite single-exec corpus through `runall-extended.ps1`;
-that runner initializes the `tests/extended-tests` submodule automatically when
-the corpus is not present on disk.
-
-## Test baselines and overrides
-
-Each runnable `tests/<app>.c` test has expected stdout in
-`tests/baselines/<app>.txt`. `runall.ps1` builds the app, runs the resulting
-`.COM` under the emulator, normalizes line endings for comparison, and checks
-that stdout matches the baseline for that app. In `-Mode full`, the fast and
-nopeep builds must both match the same baseline; a baseline mismatch means the
-program output changed and should be investigated before updating the expected
-text.
-
-`tests/_test_overrides.json` is the per-app run configuration used by
-`runall.ps1`. Use it instead of hard-coding special cases in the runner:
-
-- `args`: command-line arguments passed to the CP/M app (for example interpreter
-	input files or test depth flags).
-- `stdin`: text piped to the app's stdin for keyboard/input-oriented tests.
-- `stack_size`: per-app stack reserve override when the default stack is too
-	small.
-- `ignore`: skip an app that should not be built or compared in the full suite.
-- `perf_ignore`: exclude an app from cycle-count comparison. Some apps are not
-	cycle-deterministic even with a byte-identical `.COM` - `tkbd` varies by
-	several percent between runs - so a "regression" there means nothing. When
-	comparing two builds by hand, exclude these before drawing conclusions.
-
-When adding or changing a test, update `_test_overrides.json` for its runtime
-needs first, then regenerate or edit `tests/baselines/<app>.txt` only when the
-new output is the intended behavior. New runnable tests need a
-`tests/perf_baselines.csv` row; expanding an existing test's workload normally
-requires updating that row too. Measure both modes with `-Mode full` and change
-only the affected row/columns.
-Measure those values with the normal `runall.ps1` stack-check build (for
-example `pwsh ./scripts/runall.ps1 -Mode full`, then copy the reported new
-app/mode cycle counts) rather than ad-hoc `dccmake` runs, because stack-check
-changes the cycle counts. Avoid broad `-UpdatePerfBaseline` updates unless the
-task explicitly requires them. `-Report` is a separate no-stack-check historical
-report and must not supply checked performance baselines.
-
-When running test apps directly under `ntvcm` for benchmarking or debugging,
-look up the app in `_test_overrides.json` first and pass the same `args`,
-`stdin`, and stack assumptions that `runall.ps1` would use. Some apps are
-interpreters, expect keyboard input, or are intentionally ignored; raw direct
-`ntvcm APP.COM` runs can hang or measure the wrong workload. On macOS, if no
-`timeout` command is installed, use a small Perl alarm wrapper for ad-hoc direct
-runs, for example:
+Add exact schedules to the appropriate `dcc_mir_machine_<family>.c` module,
+not the core emitter. Family modules use automatic plan state, export one
+dispatcher, and define no writable or read-only global data:
 
 ```sh
-perl -e 'alarm shift; exec @ARGV' 30 ntvcm -p -s:0 APP.COM ARGS...
+python3 scripts/audit-c-module-exports.py \
+  src/dcc/dcc_mir_machine_attention.c \
+  --allow-function mir_try_emit_attention_kernels
 ```
 
-## Build / debug a single app
+## Build
 
-Use `dccmake` to drive the full pipeline for one app — ideal for reproducing a
-failing test in isolation:
-
-```sh
-dccmake tests/sieve.c dcc-output=SIEVE dcc-peep=true
-dccmake tests/sieve.c dcc-output=SIEVE dcc-peep=false
-```
-
-`dccmake` accepts positional `.c` inputs or `dcc-input=main.c,module.c`, and the
-output base must be CP/M 8.3-clean. Common settings are:
-
-```sh
-dccmake tests/app.c dcc-output=APP dcc-peep=true dcc-stack-bytes=768
-dccmake main.c module.c dcc-output=APP dcc-include-directory=include
-dccmake tests/e.c dcc-output=E
-```
-
-Literal `printf`-family formats select float and long runtime variants per call
-without flags. Use `dcc-floatio=true` / `dcc-flongio=true` only when a test must
-force those variants globally; the suite's explicit overrides are also used to
-exercise each formatted-I/O runtime entry point deliberately.
-
-To compare a suspected optimizer bug, build once with `dcc-peep=true` and once
-with `dcc-peep=false`, then diff the run output or generated `build/<NAME>.MAC`.
-Tool commands can be pinned with settings such as `dcc-tool=./dcc`,
-`dccpeep-tool=./dccpeep`, `dccrtlstrip-tool=./dccrtlstrip`, and
-`ntvcm-tool=ntvcm`; `DCC_AST_REPORT=1` logs `; AST-unsupported ...` for the
-statement/initializer a support gate declined, and `DCC_AST_BUILD=2` dumps each
-built AST tree to stderr before it is emitted.
-
-## Rebuild the host tools after a source change
-
-For compiler-only edits, the fastest host build is:
+Fast compiler-only build:
 
 ```sh
 sh src/dcc/build-dcc.sh
 ```
 
-It links every `src/dcc/*.c`; when adding a module, also add it to the explicit
-`src/dcc/CMakeLists.txt` source list.
-
-The `dcc` implementation is host code, not code for the Z80 target. It may use
-portable C11 supported by modern Clang, GCC, and MSVC; do not constrain it to
-the language subset that dcc accepts as input. Keep vendor-only extensions
-behind platform guards.
+Canonical all-tool build:
 
 ```pwsh
-pwsh ./scripts/build-dcc.ps1            # MSVC on Windows, clang on macOS, gcc on Linux
+pwsh ./scripts/build-dcc.ps1
 ```
 
-Or the platform root scripts: `m.bat` (Windows/MSVC), `m.sh` (Linux/gcc),
-`mmacos.sh` (macOS/clang). All three produce `dcc`, `dccpeep`, `dccrtlstrip` in
-the repo root. Rebuild before re-running `runall.ps1` so tests exercise your
-change.
-
-## Performance and optimizer work
-
-Use measured signals before changing codegen, `dccpeep`, or `DCCRTL.MAC`:
-
-- Run `pwsh ./scripts/run-dccpeep-tests.ps1` for direct optimizer fixtures.
-	Fixture stems ending in `.os` run with `-Os`; stems ending in `.undoc` run
-	with `-fundocumented-z80`. Use `dccpeep -fstats input.mac output.mac` for
-	iteration, pass-change, and line-mutation counts without changing output.
-- Pure `dccpeep` refactors must produce byte-identical optimized `.MAC` output
-	over the saved raw compiler-output corpus. Optimizer improvements may lower
-	checked peep cycle/size baselines, but must never raise them or change nopeep
-	columns. Shared `-Os` helpers must meet their complete linked-stub break-even
-	count before rewriting.
-
-- For cycle measurements, run CP/M binaries with `ntvcm -p -s:0` and compare
-	the reported `Z80 cycles`; full-speed execution does not change the emulated
-	cycle total.
-- For direct benchmark runs, honor `tests/_test_overrides.json` and use a
-	timeout/alarm wrapper so input-driven or long-running apps do not hang the
-	session.
-- If the local `ntvcm` build has the profiling extension, `-g:<file>` writes a
-	`pc,count,asm` CSV. Sort it with `sort -t, -k2 -nr file.prof | head` and map
-	hot PCs back to generated `.PRN`/`.MAC` or runtime labels before optimizing.
-- For broad compiler-vs-peephole comparisons, keep the peephole version fixed
-	and compare post-peephole instruction counts. Peephole tag counts alone can
-	mislead: fewer tags may mean the compiler emitted the optimized form directly.
-
-Important performance lessons from recent work:
-
-- `dccpeep` has many shape-specific passes. A compiler change that improves
-	no-peep output can still regress the shipping path if it hides canonical loop
-	shapes such as stride loops or compare-fusion patterns. Check peep output and
-	dynamic cycles before keeping such changes.
-- Prefer small, falsifiable peephole passes with tight guards. Good generic
-	candidates are repeated residual patterns across many optimized `.MAC` files,
-	especially when the next consumer proves registers/flags are dead. Exclude
-	register-ABI helpers such as `__call_hl` and `__m1s` from ordinary
-	stack-argument rewrites.
-- Runtime helper changes can dominate app performance. Profile first: fixed
-	point and long-heavy apps often spend most cycles in `DCCRTL.MAC` helpers such
-	as multiply, divide, shift, or string/memory routines.
-- `DCCRTL.MAC` is copied by `dccrtlstrip`; do not rely on assembler macro
-	features such as `REPT` unless the runtime/tooling already supports them.
-	Manual unrolling should be size-bounded and justified by measured wins.
-- For AST constant folding, avoid host undefined behavior and host-only
-	semantics. Fold only when target signed/unsigned behavior is provably the
-	same, and use unsigned host arithmetic for low-bit shift folds when needed.
-- Proof-based optimizations must conservatively decline unknown or recursive
-	shapes. Recursive walks over captured ASTs need cycle/depth guards.
-- `EmitSink` purpose (FINAL/DISCARD/VERIFY/DEFERRED) describes the destination,
-	not suppression. Do not blanket-convert raw formatted writes to a
-	`scan_mode`-guarded emitter: verification buffers may need those bytes.
-
-## Legacy register allocation (historical)
-
-The AST text-based no-IX, BC/E, loop-BC, and IY speculative allocators were
-removed after generated MIR recovered performance. MIR schedules/allocation
-now own production register claims. The notes below are retained only as
-historical constraints and rejected-design evidence; do not rebuild these
-retry drivers.
-
-**Which register, and why.** BC and E are caller-saved, so a function that
-contains a call cannot use them at all. IY is callee-saved and is therefore the
-only register available in such functions - which is most of them. That rests on
-two facts, both load-bearing:
-
-1. Every dcc function claiming IY pushes the caller's IY ahead of its frame and
-	pops it after restoring IX. `frame_first_param_offset()` accounts for the
-	word this occupies by shifting every parameter by 2.
-2. Runtime IY use is confined to reviewed paths: `__extln` preserves it on
-	every return, while `_setjmp`/`_longjmp` save and restore it in `jmp_buf`.
-	CP/M 2.2's BDOS is 8080 code with no index registers. Run
-	`python3 scripts/rtl-iy-safety.py` after any runtime edit; it exits non-zero
-	if the invariant breaks.
-
-**Ownership is published, not inferred.** dcc emits
-`;@dcc.reg claim=<reg> scope=... sym=... kind=... val=<cycles>` and a matching
-`;@dcc.reg free=<reg>` where the live range ends. dccpeep reads these as
-intervals (`bc_regalloc_claimed_in_range` / `_from`), so a loop-scoped claim
-stops forfeiting the register for the rest of the function. A pass must ask
-about the span it actually intends to modify - an unclaimed start no longer
-implies an unclaimed remainder. `peep_reg_used_in_function()` is the shared
-"is this register spoken for here" scan.
-
-**dccpeep's IY passes are not callee-saved.** If dcc has claimed IY anywhere in
-the file, they must stand down (`dcc_iy_claimed_in_file`). File scope, not
-function scope: the hazard is a *callee* borrowing IY and destroying its
-caller's promoted value. This was a real miscompile on `wumpus.c`.
-
-**Cost model.** References are weighted by loop nesting (8 per level, tracked in
-`scan_function_body_ident_counts`) and converted to cycles by
-`regalloc_estimate_value`. Record the value at the decision point and publish
-that same number - do not recompute it at the emission site, or the claim will
-advertise something other than what was decided.
-
-Hard-won rules, each of which cost a measured regression to learn:
-
-- **Verify against the corpus, not against intuition.** Every plausible-sounding
-	arbitration improvement here measured at exactly zero. A census of declined
-	IY candidates attributed 1035 to value, 257 to non-word types, 96 each to
-	written and char parameters, 13 to address-taken, and **zero to register
-	contention**. Candidate *supply* is the constraint, not arbitration. Measure
-	where the losses are before building machinery.
-- **Do not add a `reg_alloc` arm to `gen_deref_addr_ast`'s plain-identifier
-	path.** Promoting a dereferenced pointer defeats dccpeep's cross-iteration
-	hoisting of the invariant pointer reload, which is worth more. `p->field` via
-	`gen_member_addr_ast` is safe and necessary; `*p` and `p[i]` are not.
-- **Loop weighting must respect unbraced bodies.** `for (...) if (c) { ... }`
-	will attribute the `if`'s brace to the loop unless the scan consumes the loop
-	header and only accepts a `{` as the body when it is the first token after
-	the closing `)`. That defect scored a parameter at 65 from two references and
-	cost 1.1M cycles.
-- **Written parameters are eligible for IY but not for BC.** BC's read-only bar
-	exists because `regalloc_buffer_finalize`'s reload-repair treats the frame
-	slot as a valid shadow. IY needs no repair, so the slot is simply dead and no
-	spill is required. `inc iy` is 10 T-states against roughly 82 for the frame
-	read-modify-write - the largest per-reference saving available.
-- **Exclude functions containing a VLA.** They manage SP through per-scope
-	`#vlasp` slots rather than purely `ld sp,ix`; a callee-save push on top of
-	that is not worth the risk, and measured as a loss.
-- **`buf_has_foreign_iy_use` asks whether anything WRITES IY**, not whether text
-	matches. Indexed accesses `(iy+d)` only read it. `inc iy`/`dec iy` are dcc's
-	own. An exact push/pop count guard rejects every real candidate - do not add
-	one.
-- **`current_function_has_call` is not reliable at speculative-attempt time.**
-	Inline substitution saves and restores it around a callee, leaving it holding
-	that callee's value. Derive per-function facts in
-	`scan_function_body_ident_counts` instead.
-- **Do not promote LOCALS to IY on reference count.** This was tried in full and
-	reverted: net +5.0M cycles. A parameter always arrives in memory, so the
-	"38 T-states becomes 25" model holds. A short-lived local whose live range
-	fits in one basic block is already kept in HL or A by dccpeep and never
-	touches the frame, so promoting it manufactures push/pop traffic. `trw`'s
-	`check_buf` lost 14.8% of the whole application this way. Raising the local
-	threshold does not separate them - `fint`'s `next()` has a local scoring
-	three times the bar that still loses 5.2M. The needed discriminator is
-	liveness across basic blocks, which the token scan cannot supply; a retry
-	must give the candidate search a real CFG first.
-- **Know what IY is worth before planning around it.** Reading it costs
-	`push iy` / `pop hl` = 25 T-states against 38 for a frame word, so only 13 are
-	saved. BC is `ld l,c` / `ld h,b` = 8, saving 30 - more than twice as much.
-	`(iy+d)` is 19, identical to `(ix+d)`, so there is no gain in using IY merely
-	as a second base pointer.
-- **Widening candidate supply has failed three times running. Stop proposing
-	it without first improving the model.** Locals-by-reference-count (+5.0M),
-	relaxing the loop scan's control-exit gate so `return`/`break` no longer
-	disqualify a loop (+10.8M, tchess +3.0%), and adding best-value arbitration
-	between loop-BC and whole-function IY (+9,943, neutral) were each implemented
-	fully, measured, and reverted.
-
-	The common cause is that the cost model prices a promotion against an assumed
-	*memory* baseline, when the real baseline is whatever dccpeep would otherwise
-	have done - which is frequently a register already. Every candidate admitted
-	on that basis is a coin flip. Until the compiler can see cross-block liveness
-	and model what the peephole would do with a value, admitting more candidates
-	loses more than it wins. The existing tight gates are load-bearing, not
-	timidity.
-- **A machine-level allocator in dccpeep was analysed and the rewrite phase was
-	falsified.** `peep_frame_alloc.c` is the retained analysis-only result. It
-	treats `(ix+n)` slots as eagerly-spilled virtual registers, uses the existing
-	CFG/effects/liveness, computes conservative reaching definitions (calls,
-	opaque instructions and indirect writes kill frame definitions), and reports
-	same-block, cross-block, parameter-entry, full-span and split-region
-	candidates under `-fstats`. `DCCPEEP_FRAME_REPORT=1` additionally prints exact
-	line endpoints for profile correlation. It changes no program text.
-
-	The measured stop condition is decisive. Across the complete corpus, 39,196
-	surviving frame loads reduce to 1,025 loads with a unique cross-block store,
-	5,030 parameter-entry loads and 4,049 ambiguous loads at joins. Endpoint-only
-	availability leaves 2,688 loads, but requiring BC/DE to be free over the
-	complete value range leaves just 27 values / 60 uses / 387 static T-states.
-	Live-range splitting recovers only 48 regions / 102 uses / 618 static
-	T-states. tchess - where frame access is 39.3% of executed app cycles - has
-	zero full-span candidates and one two-use DE split region worth 11T
-	statically; dynamic profile correlation shows that region is cold.
-
-	Therefore do **not** implement rewriting, written-value spill splitting, or
-	retire existing allocators on top of this analysis: the plan explicitly made
-	those phases conditional on material candidate supply, and the supply is
-	orders of magnitude too small. The 39.3% frame-access headline is real, but
-	almost all of it occurs while BC/DE already carry live values, crosses calls,
-	or has multiple reaching definitions. Capturing it requires a different
-	compiler IR/allocation architecture, not another dccpeep pass.
-
-### MIR backend
-
-Current production state (2026-08-15): every committed function body is a
-generated MIR candidate. Explicit metadata walkers replay declarations,
-scopes/VLAs, inline temps, strings, labels, diagnostics, and debug events
-without running AST body assembly. There are no discard streams, alternate
-legacy frame/register retries, or generated-text postprocessors.
-Compatibility census `captured_*` columns are `-1`. Use
-`DCC_MIR_SELECT_FUNCTION` + `DCC_MIR_SELECT_CANDIDATE` or
-`scripts/mir-current-vs-parent.py` for A/B work; forced-legacy controls and
-`legacy-v69` no longer exist. The chronology below describes how the backend
-reached this state and contains historical fallback-era wording.
-
-`src/dcc/dcc_mir.c` / `dcc_mir.h` are the analysis-only first slice of that
-different architecture. dcc builds one statement AST at a time and resets its
-arena immediately after emission, so the prototype lowers each statement into
-a persistent per-function stream *before* physical Z80 register assignment.
-The stream has unlimited virtual values, loads/stores, constants, unary/binary
-operations, indexed loads, calls/arguments, labels, branches, phi-like merges
-and returns. `&&` is lowered with real short-circuit control flow - the RHS is
-not reachable from the false-LHS edge - rather than an eager binary operation.
-Unsupported semantics (currently member expressions, compound assignments,
-`||`, conditional expressions, switch/goto and declaration replay) remain
-explicit `opaque` barriers rather than being represented incorrectly.
-
-Enable a dump without changing codegen:
+CMake is the independent compiler build check:
 
 ```sh
-DCC_MIR_FUNCTION=is_attacked ./dccmake tests/tchess.c \
-    dcc-output=MI dcc-peep=false
-# Or DCC_MIR_REPORT=1 for every function.
+cmake -S src/dcc -B build/cmake-dcc -DCMAKE_BUILD_TYPE=Release
+cmake --build build/cmake-dcc --parallel
 ```
 
-Each dump names its emit-sink purpose. The verifier resolves
-branch labels, builds instruction successors, checks virtual use-before-def and
-duplicate definitions, solves iterative backwards virtual-value liveness, and
-reports block count, maximum live pressure and opaque-barrier count. The
-The first `is_attacked` milestone was 25 MIR blocks, 100 virtual values,
-max-live 49, 12 opaque barriers and 0 verifier errors. Adding semantic
-AST_INDEX and AST_LOGAND lowering removes every barrier in that function: 49
-blocks, 222 virtual values, max-live 26, 0 opaque barriers, 0 verifier errors.
-The edge-specific liveness gate is cleared for AST_LOGAND phis: each input records its supplying
-predecessor label and is live only on that incoming edge. `is_attacked`'s
-max-live pressure drops from the conservative 26 to 3 before object promotion.
+New compiler modules must also be added to `src/dcc/CMakeLists.txt`.
+Source `.c` names are lowercase; generated CP/M artifacts are uppercase.
 
-The prototype also has conservative scalar mem2reg. Exact `Sym` metadata gives
-an object identity only to non-volatile, non-array, 1/2-byte locals and
-parameters whose address is never taken. Parameters receive explicit entry
-definitions. Forward dataflow folds a load only when every CFG predecessor
-agrees on one stored virtual value; ambiguous joins and opaque barriers remain
-memory operations rather than getting synthetic object phis. On `is_attacked`,
-six objects fold 14 loads and expose four persistent values crossing calls.
+## Focused app loop
 
-`mir_simulate_allocation` builds virtual-value interference from MIR liveness
-and greedily colors HL/DE/BC/IY. Values crossing calls may use only callee-saved
-IY; opaque-crossing values spill. HL-fixed operation results are boundary
-constraints, not lifetime-long precolors: if the allocated home differs, the
-simulation counts a register move, which models live-range splitting. For
-`is_attacked`: max-live 4 after object promotion, zero spills, four
-call-crossing values, and 19 required fixed-result moves. This is analysis,
-not emitted Z80; instruction-specific operand constraints still need to be
-added before the coloring is authoritative.
+Use `dccmake` for one application:
 
-The first emitted-Z80 gate is opt-in through
-`DCC_MIR_EMIT_FUNCTION=<exact-name>`. `mir_begin_function` redirects the
-existing body to a temporary stream after its assembler label while preserving
-the original FINAL/VERIFY/DEFERRED sink purpose; at
-`mir_end_function`, verified MIR is emitted to a second temporary stream and
-committed only if the strict selector accepts it. Otherwise the captured
-existing body is copied back byte-for-byte. Partial MIR output can therefore
-never contaminate fallback.
+```sh
+./dccmake tests/tlong.c dcc-output=TLONG dcc-peep=true
+./dccmake tests/tlong.c dcc-output=TLONG dcc-peep=false
+```
 
-`DCC_MIR_CANDIDATES=1` dry-runs all strict selectors and reports accepted
-function names without replacing code. `DCC_MIR_EMIT_ALL=1` transactionally
-tries every function, but automatically commits only the allocation-backed
-countdown and accumulator loop selectors with measured wins. Exact-name mode
-retains the straight-line and comparison selectors for development. Automatic
-use of those selectors caused 29 perf-baseline regressions because existing
-dccpeep already removes more frame traffic from tiny helpers; semantic
-acceptance is therefore not a profitability decision. Emit-all is quiet unless
-one of the explicit MIR report variables is also set. The automatic gate
-accepts only ordinary 16-bit `int` returns, rejects pointer parameters because
-MIR does not yet represent pointer-arithmetic scaling, and emits the
-standard `extrn __stchk / call __stchk` immediately after establishing IX when
-`-fstack-check` is active. Both the default stack-check and no-stack-check fast
-correctness suites pass all 309 runnable apps with emit-all enabled, including
-diagnostics and dccpeep fixtures. Full peep+nopeep validation also passes all
-correctness and checked performance baselines.
+Honor `tests/_test_overrides.json` when running a binary directly. It owns
+arguments, stdin, fixtures, stack size, ignored apps, and nondeterministic
+performance exclusions. Always use a timeout:
 
-The initial selector intentionally supports only one straight-line word return:
-a parameter, a constant, parameter +/- constant, or two parameters added or
-subtracted. It emits the ordinary IX frame and epilogue and recognizes `+/-1`
-as `inc/dec hl`.
+```sh
+timeout 30 ntvcm -p -s:0 build/TLONG.COM
+```
 
-Plain scalar declaration initializers are captured explicitly because they
-bypass statement AST emission. `mir_set_initializer_target` in `dcc_decl.c`
-names the local, and `ast_emit_init_expr` lowers the initializer and records a
-MIR store. Conservative mem2reg can then remove the local object entirely.
-`int x=a+1; return x+2;` emits as parameter `a + 3`, with no frame slot.
+On macOS use a Perl alarm wrapper when GNU `timeout` is unavailable.
 
-Focused runtime tests `local1(39)`, `sum2(20,22)` and `diff2(50,8)` all emit
-MIR and return 42; targeting unsupported `mul2` reports `result=fallback`,
-produces a byte-identical original body, and also returns 42.
+## Regression runner
 
-The first CFG selector accepts exactly
-`if (a <comparison> b) return C1; return C2;` for word parameters and constant
-returns. `== != < >= > <=` are supported; `>` and `<=` normalize by swapping
-operands. Signed order biases both high-byte sign bits before the ordinary
-16-bit subtract; unsigned/pointer order uses carry directly. Boundary tests
-cover `-1/1` and `65535u/1u` for all four relational directions. Other branch
-graphs still fall back transactionally.
-Do not widen this subset without a focused runtime comparison and a fallback
-identity check.
+```pwsh
+pwsh ./scripts/runall.ps1 -Apps tlong -Mode full -RunTimeout 30
+pwsh ./scripts/runall.ps1 -Mode fast -FailFast
+pwsh ./scripts/runall.ps1 -Mode full -Extended
+pwsh ./scripts/runall.ps1 -Mode full -Extended -NoStackCheck
+```
 
-Scalar compound assignments and prefix/postfix inc/dec lower as explicit
-load/binary/store operations. At a labeled two-predecessor join, the first
-ambiguous object load may become an object phi when both predecessor states
-provide distinct known values; the phi is associated with those predecessor
-labels and dataflow is rerun. Unlabeled or multi-predecessor joins remain
-memory. This is enough to form induction-variable SSA for simple loops.
+`-Mode full` runs peep and nopeep. Parallel execution is isolated under
+per-run build directories and uses all cores by default; use `-Serial` only to
+diagnose ordering or resource issues.
 
-The first allocation-backed loop selector accepts exactly
-`while (n > 0) --n; return n;` for one word parameter. It materializes `n` in
-BC at entry, keeps it there across the complete loop, and copies BC to HL only
-for the return. Signed and unsigned termination checks are separate. Against
-the existing peep-optimized compiler on 40 calls of `down(30000)`, cycles fall
-from 67,225,169 to 60,022,609: **-7,202,560 / -10.71%**, identical output.
+For MIR work, make focused and release runs strict:
 
-Loop headers now receive object-merge placeholders for every promotable object
-known before the loop. At a labeled two-predecessor header, each placeholder
-can become an edge-specific object phi; mem2reg reruns after insertion. This
-allows values first used after the loop condition (such as accumulators) to
-stay in SSA rather than remaining ambiguous memory.
+```sh
+DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 \
+  pwsh ./scripts/runall.ps1 -Apps app1,app2 -Mode full
+```
 
-The corresponding two-register selector accepts exactly
-`sum=0; while(n>0){sum+=n;--n;} return sum;`. BC holds `n`, DE holds `sum`, and
-the update uses `ex de,hl / add hl,bc / ex de,hl`; neither value touches the
-frame in the loop. On 4000 calls of `accum(100)`, peep cycles fall from
-62,476,309 to 29,356,309: **-33,120,000 / -53.0%**, identical 16-bit output.
+Do not push compiler/runtime changes until both strict full+extended commands
+pass:
 
-The first automatic selector exercised by the checked corpus accepts unsigned
-constant-division loops of the exact form
-`q=0; while(K<=r){r-=K;++q;} return q;`, where `K` is a positive 16-bit
-constant. BC holds the remainder and DE the quotient; `HL=BC-K` supplies both
-the carry-based unsigned test and the next remainder. On `tcrcfix:bcd_div10`,
-the stack-check full suite reports peep cycles **-5.75%**, peep size **-128
-bytes / -1.22%**, and nopeep cycles **-7.95%**, with identical output. This is
-the model for automatic rollout: a strict semantic shape plus measured
-profitability against both existing backend modes.
+```sh
+DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 \
+  pwsh ./scripts/runall.ps1 -Mode full -Extended -RunTimeout 30 -FailuresOnly
+DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 \
+  pwsh ./scripts/runall.ps1 -Mode full -Extended -NoStackCheck \
+  -RunTimeout 30 -FailuresOnly
+```
 
-The first automatic three-register selector accepts the exact repeated-
-invariant-add shape `total=0; for(i=0;i<K;++i){total+=factor;total+=factor;}`.
-It chooses the most useful transformed value rather than blindly caching a
-source object: IY holds callee-saved `2*factor`, BC holds the induction value,
-and DE holds the accumulator. Saving IY before IX shifts parameter offsets by
-two; the MIR emitter accounts for that, emits `__stchk` after both saves, and
-restores IX then IY. A byte-narrowed induction object is accepted only when its
-positive constant bound fits 0..255. On `tbcint:scale_by`, the full stack-check
-suite reports peep cycles **-6.66%** and nopeep cycles **-14.92%**, with
-identical output and all performance baselines passing. This demonstrates the
-unified policy directly: BC and DE carry mutable loop state while IY carries
-the profitable invariant that would otherwise consume repeated frame loads.
+## Tests and baselines
 
-Object mem2reg uses three distinct negative states: `UNREACHED` is lattice
-bottom for an instruction/backedge not visited by the fixed-point iteration,
-`UNDEFINED` means a reachable path has no safe object value, and `AMBIGUOUS`
-means reachable predecessors disagree. Never initialize loop dataflow with
-`UNDEFINED`: meeting an entry parameter with an unvisited backedge would then
-falsely make an invariant ambiguous. With `UNREACHED` as the identity element,
-`scale_by` promotes both factor loads to its entry parameter SSA value; the
-reported max-live becomes the truthful four values and allocation simulation
-uses IY. Selector discovery must also ignore stores with `object < 0` and must
-not inspect phi fields before the relevant phi exists; ASan/UBSan on `tcaslv`
-is the focused regression check for this boundary.
+- Expected stdout is `tests/baselines/<app>.txt`.
+- Per-app execution details belong in `tests/_test_overrides.json`.
+- New runnable apps require a `tests/perf_baselines.csv` row.
+- Measure checked baselines with the normal stack-check `runall.ps1` path.
+- Update only rows whose workload intentionally changed; never move a baseline
+  to hide a compiler or optimizer regression.
+- `-Report` is a separate no-stack historical report, not a checked baseline.
+- Keep peep and nopeep both non-regressing.
 
-"Complete MIR" means semantic coverage, not merely replacing opaque nodes:
+## Performance investigation
 
-- every supported AST expression and statement lowers without `MIR_OPAQUE`;
-- constants preserve kind and type (integer, float bits, string address), and
-	runtime VLA `sizeof` remains an explicit load rather than a folded constant;
-- lvalues are addresses plus typed/volatile memory operations, so member,
-	index, dereference, aggregate and alias behavior remains visible;
-- all control transfers, including short circuit, ternary, switch, goto and
-	labels, produce verified CFG edges and edge-specific phi inputs;
-- instruction selection records Z80 operand/result constraints separately
-	from global allocation; spills, call clobbers and callee saves are explicit;
-- transactional fallback stays available until general MIR emission passes
-	correctness and profitability gates in both peep and nopeep modes.
+Start from measured machine behavior:
 
-Use `DCC_MIR_COVERAGE=1` for named per-function opaque-kind reports and
-`DCC_MIR_REQUIRE_COMPLETE=1` as the strict gate: it exits nonzero at the first
-incomplete function. After LOGOR/conditional CFG, typed float/string constants
-and static/dynamic `sizeof` lowering, a compile-only `tests/*.c` census has no
-opaque instances of those kinds. Remaining counts are: member 4845, assignment
-4737, declaration 944, postfix 431, switch 125, label 81, goto 68 and compound
-literal 47. `tgnuexpr` is the expected census build failure because it is a
-negative GNU statement-expression diagnostic test.
+```sh
+timeout 30 ntvcm -p -s:0 -g:build/app.prof build/APP.COM
+sort -t, -k2,2nr build/app.prof | head
+```
 
-The first-class lvalue layer separates address formation from memory effects:
-object, multidimensional index and member addresses feed typed indirect
-loads/stores. Index instructions retain the resolved byte stride after the AST
-arena is gone; member accesses retain width, volatility and bitfield
-shift/mask. Assignment and prefix/postfix updates evaluate a nontrivial lvalue
-address exactly once. Pointer increment/decrement uses pointee stride rather
-than integer `1`. Exact-shape emitters reject these operations until the
-general backend owns their constraints.
+The profile `count` column is accumulated Z80 cycles, not invocation count.
+Map PCs through linked `.SYM` and module `.PRN` files. For a `CALL`, divide its
+profile count by 17 to obtain executions.
 
-Switch lowers to an ordinary compare/branch CFG with real case/default labels,
-source fallthrough and nested contexts. A switch pushes a break target while
-inheriting an enclosing loop's continue target. Named goto/label also lower to
-real edges for functions without VLAs. Functions flagged by the sizing scan as
-having a VLA deliberately retain goto/label barriers until MIR models scope
-save/restore; do not infer this property from the rebuilt local table.
+Use:
 
-After the lvalue and non-VLA control-flow milestone, the focused eight-app
-verifier set has zero errors and switch has zero corpus barriers. Remaining
-compile-only census counts are: declaration 1108, member 192, assignment 45,
-compound literal 31, VLA-sensitive label 17 and goto 15, and unary 16. Counts
-include speculative function attempts and are a trend metric, not unique AST
-node counts.
+```pwsh
+pwsh ./scripts/dccprof.ps1 app
+pwsh ./scripts/run-dccpeep-tests.ps1
+```
 
-Declarations use lexical placeholders because nested compound ASTs are lowered
-before declaration codegen replays their token spans. `mir_begin_declaration`
-and `mir_end_declaration` capture initializer/runtime instructions appended by
-that replay and splice them immediately after the original placeholder; C99
-for-init declarations must use the same lifecycle. Without this splice, a
-nested initializer can appear after later statements and the MIR is not
-semantic even if it verifies. Ordinary and for-init declarations now have zero
-barriers in `tdecl` and `tc99scpe`.
+Important rules:
 
-Match declaration replays to their stable `AST_DECL` node, not replay order:
-nested C99 declarations can be replayed in a different order from lexical MIR
-lowering. Parsing may also capture a nested initializer before its statement
-placeholder exists. Mark that span provisional and NOP it when the matching
-declaration replay supplies the correctly positioned span; otherwise a
-side-effecting initializer such as `va_arg` executes once before the loop and
-once inside it.
+- Fewer source lines, assembly text bytes, or static instructions do not prove
+  a runtime win.
+- A change can improve nopeep while hiding a profitable dccpeep shape; measure
+  both outputs.
+- Runtime helpers can dominate whole applications. Profile before changing
+  compiler schedules.
+- CP/M `.COM` sizes are 128-byte quantized; use `.PRN`/symbol addresses when
+  exact linked byte movement matters.
+- Host-dispatch-based emulators may price instructions differently from Z80
+  T-states. Compare dynamic instruction mix as well as authentic cycles when
+  real hardware diverges from ntvcm.
 
-VLA replay records explicit scope-SP save, scaled byte allocation, base/size
-frame slots and restore operations. Actual `mir_set_vla_target` events retain
-an `AST_DECL` barrier until scope-end and flow-exit restores are spliced into
-their exact CFG positions; broad `current_function_has_vla` is suitable for
-conservative goto gating but not for marking every declaration incomplete.
-After declaration capture, remaining corpus counts are: VLA declaration 391,
-member 192, assignment 45, compound literal 31, VLA-sensitive label 17/goto
-15 and unary 16.
+## Runtime ABI rules
 
-Member-array indexing must retain dimensions from `FieldDef`, not infer stride
-from the scalar result type. For a field such as `Node *cells[2][3]`, the first
-index stride is six bytes and the second is two. A member rooted on a local not
-yet replayed may use `ast_unique_field_by_name` only when unambiguous; ambiguous
-names require deferred resolution through the declaration-created MIR object's
-type, never an arbitrary same-name field.
+- `int`, pointers, and `size_t` are 16-bit; `long` and `float` are 32-bit.
+- BC/DE are caller-saved. IY is callee-saved and may hold call-crossing MIR
+  values.
+- Generated IY users save and restore it. `__extln` preserves it;
+  `_setjmp`/`_longjmp` save and restore it in `jmp_buf`.
+- Run after every runtime edit:
 
-Deferred member fixups retain the base symbol name and arrow/dot mode on a
-provisional member address. At function end, reconnect unresolved named loads
-to declaration-created objects or typed declaration stores, resolve the owning
-`FieldDef`, and propagate the resolved field type through nested member loads.
-Array fields alias the provisional value load back to their address. A fixup
-that still cannot resolve becomes `MIR_OPAQUE`; never guess among ambiguous
-same-name fields. This reduces the aggregate-heavy `too` test to zero barriers
-and removes all general assignment barriers from the corpus. Remaining counts:
-VLA declaration 391, member 58, compound literal 31, VLA label 17/goto 15 and
-unary 16.
+```sh
+python3 scripts/rtl-iy-safety.py
+python3 scripts/audit-runtime-coverage.py
+```
 
-Compound literals now use structured initializer events at the shared
-local-offset store boundary: target symbol, byte offset, target type and either
-constant bits or a captured expression. Events are spliced before a durable
-compound-address definition, recursively for nested literals. Do not replace
-that address while splicing: doing so leaves its virtual value undefined and
-can duplicate the final initializer definition. `tclit` covers scalar, struct,
-designated, nested, argument, assignment, address-taken and struct-return forms
-with zero barriers.
+Runtime blocks are stripped by reference. A new helper that jumps into another
+runtime block must retain that dependency explicitly. Validate both its fast
+path and fallback through a linked CP/M test.
 
-Struct-return calls use `MIR_CALL_AGGREGATE`: the result is the address of the
-AST-reserved hidden temporary, not an HL scalar. Member accesses apply offsets
-to that address. Every replayed declaration publishes stable source-to-internal
-symbol identity and type to MIR; this is required for uninitialized aggregates
-and C99 for-init renames (`i` -> `i#...`) that are unknown when the body AST is
-first captured. Canonicalize those identities before SSA promotion.
+## Sanitizers and script tests
 
-VLA allocation and control are fully positioned: lexical scope exits and
-break/continue/goto edges receive stable restore placeholders, then replayed
-scope metadata fills or removes each placeholder. Forward gotos retain their
-target name until label replay resolves the exact restore. `tvla` reports zero
-barriers with explicit allocation/save/restore instructions.
+Use ASan/UBSan when changing CFG, liveness, allocation, ownership, or recursive
+proofs:
 
-Semantic MIR completeness is now machine-proved: direct compiler runs with
-`DCC_MIR_REQUIRE_COMPLETE=1` pass every non-negative `tests/*.c` source;
-`tgnuexpr` is excluded because its GNU statement expressions are deliberately
-rejected by the parser. The arbitrary 4096-value verifier cap was removed;
-`tptrrhs` verifies with 6231 virtual values. The full stack-check peep+nopeep
-suite passes 309 runnable apps, diagnostics, dccpeep fixtures and performance
-baselines with emit-all enabled.
+```sh
+cmake -S src/dcc -B build/cmake-sanitize -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_C_FLAGS='-fsanitize=address,undefined -fno-omit-frame-pointer'
+cmake --build build/cmake-sanitize --parallel
+ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 \
+  ./dcc -stack 512 -I . tests/app.c -o build/SANAPP.MAC
+pwsh ./scripts/build-dcc.ps1
+```
 
-The first general instruction selector is exact-name opt-in and consumes an
-arbitrary side-effect-free 16-bit scalar MIR DAG rather than matching source
-shapes. It supports parameters, constants, casts/unary operations, nested
-arithmetic/bitwise operations, signed/unsigned division/remainder helpers, all
-six comparisons and variable shifts through a uniform HL/DE evaluation
-contract. `tkandr:default_int` proves nested multiply/add (dccpeep can still
-rewrite generic `__mulu`), `tcodegen:isneg` proves signed comparison, and
-`tchess:rank_of` proves signed right shift.
+Run repository Python tool tests with:
 
-Always hard-timeout direct emulator checks. On macOS, where GNU `timeout` is
-not normally installed, use `perl -e 'alarm 15; exec @ARGV' ntvcm ...` and
-check exit 142 for timeout. Supply the app's exact `_test_overrides.json`
-arguments: tchess without `-c -p:1` legitimately waits at `move:` and can look
-like a generated-code hang.
+```sh
+python3 -m unittest discover -s scripts/tests -p 'test_*.py'
+```
 
-Register allocation now retains its result instead of reporting and discarding
-it. Every virtual value has an HL/DE/BC/IY lifetime home or a deterministic
-numbered spill slot; fixed-result and operand registers remain boundary
-constraints, not lifetime precolors. Call-crossing values may use only
-callee-saved IY, so `is_attacked`'s nine crossing values produce one IY home
-and eight spills, while `scale_by` colors without spills. Detailed MIR dumps
-show `home=` or `spill=` on each definition. Emission must consume these homes
-and insert boundary moves/saves; do not regress to source-symbol claims.
+## Change discipline
 
-The correctness-first general backend emits small IX-addressable 16-bit scalar
-CFGs using deterministic two-byte virtual spill slots below the established
-local frame. It supports labels, branches, multiple returns, edge-specific phi
-copies (including intermediate label chains), local/parameter memory,
-member/index addresses, typed indirect loads/stores and direct scalar calls.
-This is a general MIR opcode walk, not a source-shape recognizer. It remains
-exact-name opt-in and caps the combined frame at 120 bytes until colored homes
-replace universal virtual spills.
+- Preserve unrelated dirty files and user worktrees.
+- Use structural/type/CFG/value proofs, never application or function names.
+- Keep semantic gates separate from profitability gates.
+- Decline unknown, cyclic, volatile, aliased, or unsupported shapes.
+- Use bounded recursion and conservative allocation failure behavior in
+  compiler proofs.
+- Do not reintroduce legacy generated output as an oracle or fallback.
+- For behavior-preserving refactors, compare raw compiler output and
+  diagnostics before/after, then run the suite. `tstdc` may differ only in
+  embedded `__TIME__`.
+- Keep generated census/profile artifacts under `build/`; do not commit them.
+- Record durable negative experiments in `mir-text-size-plan.md` and concise
+  current state in `plan.md`.
 
-Every `MIR_ARG` and scalar/aggregate call carries a stable call-site ID. This
-is required because outer arguments and nested-call arguments interleave in
-the instruction stream; argument index alone is ambiguous. The backend gathers
-only matching IDs, pushes in reverse ABI order, calls the resolved assembler
-symbol, performs caller cleanup and stores the HL result. Timeout-tested
-harnesses cover three-return CFG (`clampi`), conditional and loop phis,
-pointer/member/index updates, and nested calls. `DCC_MIR_SELECT_REPORT=1`
-reports preflight reason or failing instruction for transactional fallback.
-
-Virtual spill storage uses conservative linear live intervals and reuses a slot
-only when the previous interval ends before the next definition. Call arguments
-are semantic uses at their matching `MIR_CALL`, not merely at the earlier
-`MIR_ARG`; otherwise an outer argument can be assigned the same slot as a
-nested call result and silently change `19` to `16`. Call-site-aware liveness
-must feed both interference coloring and backend intervals. The nested-call
-harness requires four reusable slots; CFG and memory harnesses remain correct
-under hard timeouts.
-
-The general backend also supports global/extern scalar storage, 16-bit
-bitfield extraction/read-modify-write, and width-aware one/two-unit virtual
-slots. Wide slots grow downward with the frame: the high word is at
-`offset-2`, not `offset+2`; partial-tail allocation must append both units
-rather than overlap one live unit. Long and float values use DE:HL and the
-established runtime fastcall helpers. Mixed integer/long/float casts use the
-same conversion helpers as the AST backend.
-
-Typed MIR required an AST contract fix: `AST_BINARY` now retains both its C
-expression result type and its effective operand/common computation type.
-Comparisons return `int` but may compare long/float operands; arithmetic must
-not infer width from a formerly-zero node type. Named memory operations also
-resolve declaration/global type before interval sizing. Timeout harnesses prove
-long `70000 + 12345*2 = 94690`, float `1.5 + 2.25*2 = 6.00`, and mixed casts
-`69998 4.50` in emitted code.
-
-The general backend now executes VLA save/size/allocation/base/restore opcodes,
-global/extern byte/word storage, 16-bit bitfields, aggregate byte copies, and
-one/two-unit long/float virtual values. VLA identifiers load their runtime base
-pointer from the frame slot; they are not fixed-array addresses. Phi discovery
-must skip promoted NOPs between labels and phis, or loop induction values are
-never initialized. `tvla:vla_1d` passes the complete tvla baseline under a hard
-timeout.
-
-Wide virtual units grow downward and never overlap a partial free tail. Named
-memory types must resolve before interval sizing, and unary AST nodes must carry
-durable dereference/result type. Aggregate dereference yields an address;
-`MIR_COPY_AGGREGATE` copies bytes explicitly rather than pretending a struct is
-a scalar. Timeout harnesses pass long and float arithmetic, mixed casts, global
-storage, bitfields, VLA execution and aggregate assignment. The strict compiler
-corpus and full stack-check peep+nopeep suite pass all 309 runnable apps,
-diagnostics, dccpeep fixtures and performance baselines.
-
-General rollout is a separate opt-in gate: `DCC_MIR_GENERAL_CANDIDATES=1`
-dry-runs it, `DCC_MIR_GENERAL_FUNCTION=name` isolates one function through the
-same backend, and `DCC_MIR_EMIT_GENERAL=1` transactionally tries all permitted
-functions. The conservative policy caps 64 MIR instructions, 64 frame bytes
-and 16-byte aggregate copies; it declines variadic calls, VLA-owning functions,
-runtime/multidimensional stride parameters and pointer subtraction. Exact-name
-general mode retains those paths for focused development.
-
-Rollout differential testing found several load-bearing rules: void/fallthrough
-functions need an implicit epilogue; strings need a durable pool ID before MIR
-emission; dcc arguments are pushed in reverse source index order; call argument
-uses belong at the matching call; phi source uses belong on incoming edges;
-and textual intervals must extend loop invariants across backward edges.
-Variadic calls carry per-call printf-family symbols, hook flags and promoted
-argument types. Model `va_start`, `va_arg` and `va_end` as explicit MIR
-intrinsics, never ordinary calls or guessed dereferences. `va_start` stores the
-address immediately after the last fixed parameter; `va_arg` returns the old
-pointer's typed value and advances the local `va_list` by at least two bytes;
-`va_end` clears it. Exact-general timeout tests cover vprintf/vfprintf/vsprintf
-forwarding and int, long, pointer and declaration-initializer `va_arg` uses.
-Automatic rollout still excludes call-heavy variadic functions on
-profitability grounds. Do not weaken that exclusion merely to increase the
-candidate count.
-The initial general census found 5307 accepted speculative attempts / 1542
-unique names before rollout restrictions, averaging 5.18 reusable slots and a
-maximum of 15. Conservative multi-function rollout now permits only pure,
-single-return, 16-bit scalar DAGs without declarations, calls, memory effects,
-CFG joins, pointers or wide values. It passes all 309 fast-mode apps plus
-diagnostics and dccpeep fixtures. The full peep+nopeep run is also correctness-
-clean but reports 87 performance regressions because the correctness-first
-backend spills every value. Consequently `DCC_MIR_EMIT_GENERAL` remains
-experimental and must not be folded into default/automatic emission. Automatic
-MIR remains limited to selectors with measured wins until the emitter consumes
-retained physical homes and boundary moves.
-
-Routing the pure subset through the register/stack DAG selector instead of
-universal spills reduces checked regressions from 87 to 50, but still fails the
-zero-regression profitability gate (notably tcodegen, tarray6 and runtime-heavy
-apps). Therefore this gate remains opt-in as a differential-development tool.
-Production automatic emission is intentionally the measured loop-selector set;
-"complete MIR" does not mean replacing demonstrably faster established code.
-
-After direct retained-home emission and frameless stack-relative parameter
-loads, a narrower pure subset (at least one parameter; one 16-bit return; no
-spills, declarations, calls, memory, CFG joins, pointers or helper-clobbering
-ops) passes the full zero-regression gate. Constants/parameters materialize
-directly in HL/DE/BC/IY, boundary operand registers preserve unrelated live
-homes, and IY save/parameter offsets follow the callee-save ABI. This subset is
-now part of `DCC_MIR_EMIT_ALL` alongside measured loop selectors. The broader
-spill/CFG backend remains available through exact general mode but is not
-automatic.
-
-Frameless home emission is essential for profitability: word parameters load
-relative to SP and avoid IX save/restore when no locals or IY home are needed.
-Zero-input constant helpers remain on established codegen. Inline retained-home
-comparisons were correct but regressed `tcodegen` by 160 cycles, so that
-experiment was removed from automatic home emission; comparisons remain in the
-general CFG backend. The integrated frameless arithmetic/bitwise subset passes
-the full peep+nopeep zero-regression gate.
-
-Every selector in a fallback chain must write to its own temporary stream;
-outer function-level transactions do not prevent a declining selector's partial
-text from contaminating the next selector. Phi edge liveness and backend
-intervals must scan every consecutive phi, not only the first. Retained-home
-CFG emission uses parallel push-all/pop-reverse edge copies and is available in
-exact general mode. Ternary and loop-phi harnesses pass, but `sum_to` is still
-317 cycles slower because comparison booleans and conservative boundary saves
-are materialized, so home CFG is not automatic yet.
-
-Direct zero-test branches remove that boolean overhead (`sum_to` becomes 269
-cycles faster), and exact retained-home CFG now handles parallel multi-phi edge
-copies, promoted-only local frames, branches, ternaries and loops. A conservative
-69-function rollout passes all correctness gates but produces 29 checked
-performance regressions, including existing specialized-loop cases. Therefore
-arbitrary home CFG remains exact-development only.
-
-Production home-CFG fallback is narrower: require a real backedge phi, no
-spills and no IY home, and try it only after the four specialized loop
-selectors. Requiring control flow first removed straight-line helpers that paid
-the CFG frame cost (29 regressions fell to 12); requiring a loop phi removed
-branch/switch/ternary regressions; rejecting IY removed the final two regressing
-three-live-value loops. The three-register `sum_to` prototype remains eligible
-and 269 cycles faster. `tmircfg` permanently exercises this automatic fallback.
-Do not retire the specialized selectors: the general backend remains slower on
-their shapes, while measured specialized wins include 53% for the accumulator,
-5.75--7.95% for unsigned constant division, and 6.66--14.92% for repeated
-invariant addition.
-
-Load-bearing validation follows milestone cadence rather than running the full
-suite after every small lowering edit:
-
-- For each edit: build dcc, dump the directly affected function(s), require
-	zero verifier errors, and run focused runtime baselines only if emit-all can
-	reach the changed graph.
-- At a semantic-family milestone: run the focused verifier set (`tchess`,
-	`tiyreg`, `forint`, `tptrlhs`, `tbool`, `tforblk`, `tswitch`, `tvla`) and a
-	compile-only coverage census.
-- Run ASan/UBSan when CFG/dataflow/allocation ownership changes or a crash is
-	plausible. The CFG successor arrays are fixed-size, so malformed construction
-	must report an invalid edge rather than index a liveness matrix out of bounds.
-- Raw compiler `.MAC` must be byte-identical to a clean pre-change worktree.
-	`tstdc` is the expected exception because it embeds `__TIME__`; inspect its
-	diff and require that to be the only changed bytes.
-- Run full peep+nopeep `runall.ps1` only for shared CFG/dataflow changes,
-	emitted-code milestones, default-enablement gates and final integration.
-
-Do not enable MIR emission by default yet. The next architectural gate is replacing opaque
-barriers for the integer/pointer subset and proving that MIR CFG/liveness
-matches current generated control flow. Physical allocation comes only after
-that representation is semantically complete for one whole function.
-
-## Behavior-preserving compiler refactors
-
-For parser/codegen restructuring, build before/after compilers and require zero
-`.MAC` differences across `tests/*.c` plus zero stderr differences across
-`tests/diagnostics/*.c`, then run `runall.ps1`. Move a new untracked `.c` module
-aside while building the baseline because `build-dcc.sh` globs all sources.
-
-Useful corpus-mining tactics:
-
-- Build a deterministic sample from `tests/*.c` by sorted filename when a full
-	corpus pass is too slow; record the sample rule and failures/ignored apps.
-- Mine optimized `.MAC` output for repeated n-grams after stripping comments and
-	labels, then inspect concrete contexts before writing a pass.
-- Validate a new pass with: rebuild host tools, rebuild affected apps, count the
-	new `; peep:` tag, compare size/cycles on affected apps, then run
-	`pwsh ./scripts/runall.ps1 -Mode full`.
-
-## Typical workflow
-
-1. Change a source file under `src/` (or `DCCRTL.MAC`).
-2. `pwsh ./scripts/build-dcc.ps1` to rebuild the host tools.
-3. `dccmake tests/<app>.c dcc-output=<APP> dcc-peep=true` to reproduce/iterate
-	on one case.
-4. `pwsh ./scripts/runall.ps1` to confirm no regressions across all apps; use
-   `pwsh ./scripts/runall.ps1 -Extended` when the extended c-testsuite corpus
-   should be included too.
+For MIR selector, schedule, allocation, or cost-policy work, also use the
+`mir-migration` skill.
