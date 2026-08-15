@@ -1395,8 +1395,8 @@ static int mir_match_interpreter_file_schedule(
     int allocate_instruction;
     int read_instruction;
     int maximum_instruction;
-    int source_instruction;
-    int length_instruction;
+    int source_instruction = -1;
+    int length_instruction = -1;
     int source_base = -1;
     int source_member = -1;
     int length_base = -1;
