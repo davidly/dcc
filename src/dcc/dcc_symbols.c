@@ -504,11 +504,45 @@ struct Sym *find_local(const char *name)
     return NULL;
 }
 
+/* Hash index over globals[], keyed by name. add_global (the sole inserter -
+ * globals[] is otherwise append-only for the whole compile: nglobals never
+ * resets or decrements) is the only place that needs to update this, since
+ * every other reference to globals[] is a lookup through find_global.
+ *
+ * Buckets/chain links store (index + 1), 0 meaning empty/end-of-chain, so
+ * the static arrays' default zero-initialization already leaves the table
+ * empty - no explicit init pass needed for a process that compiles exactly
+ * one translation unit before exiting. */
+#define GLOBAL_HASH_BUCKETS 2048
+static int global_hash_buckets[GLOBAL_HASH_BUCKETS];
+static int global_hash_next[MAX_SYMS];
+
+static unsigned global_name_hash(const char *name)
+{
+    unsigned h = 0;
+    while (*name)
+        h = h * 131u + (unsigned char)*name++;
+    return h & (GLOBAL_HASH_BUCKETS - 1);
+}
+
+static void global_hash_insert(int index)
+{
+    unsigned h = global_name_hash(globals[index].name);
+    global_hash_next[index] = global_hash_buckets[h];
+    global_hash_buckets[h] = index + 1;
+}
+
 struct Sym *find_global(const char *name)
 {
-    int i;
-    for (i = nglobals - 1; i >= 0; --i)
-        if (!strcmp(globals[i].name, name)) return &globals[i];
+    unsigned h = global_name_hash(name);
+    int slot = global_hash_buckets[h];
+
+    while (slot) {
+        int index = slot - 1;
+        if (!strcmp(globals[index].name, name))
+            return &globals[index];
+        slot = global_hash_next[index];
+    }
     return NULL;
 }
 
@@ -564,6 +598,7 @@ struct Sym *add_global(const char *name, int type, int storage)
     s->type = type;
     s->storage = storage;
     s->size = type_size(type);
+    global_hash_insert(nglobals - 1);
     return s;
 }
 
