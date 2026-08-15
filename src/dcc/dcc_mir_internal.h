@@ -646,6 +646,7 @@ int mir_try_emit_scheduled_machine_cfg(FILE *out);
 int mir_homed_cfg_depends_on_unary_not_branch(void);
 int mir_homed_cfg_was_frameless(void);
 int mir_cfg_block_count(void);
+unsigned mir_use_cache_generation_id(void);
 int mir_homed_cfg_depends_on_word_store(void);
 int mir_homed_cfg_depends_on_dynamic_index(void);
 int mir_homed_cfg_depends_on_constant_absolute(void);

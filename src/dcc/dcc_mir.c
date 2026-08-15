@@ -94,6 +94,18 @@ int mir_emit_instruction_index = -1;
  * state it belongs with. */
 static void mir_invalidate_use_cache(void);
 static int mir_use_cache_scope_active;
+
+/* mir_cfg_block_count (dcc_mir_select.c) is a pure function of mir.insns -
+ * every mutation site that could change its answer (mir_emit's append,
+ * every in-place opcode/count rewrite already audited for the def-use
+ * cache above, plus the count/content restores in dcc_mir_select.c's
+ * candidate rollback paths, which are always followed by a
+ * mir_verify_and_dump call that itself invalidates first) already calls
+ * mir_invalidate_use_cache. Piggybacking on that same signal via a
+ * monotonic generation counter means mir_cfg_block_count's own cache
+ * inherits this cache's already-verified invalidation coverage instead of
+ * re-deriving (and re-risking getting wrong) its own. */
+static unsigned mir_use_cache_generation;
 int mir_forwarded_hl_value = -1;
 int mir_forwarded_hl_instruction = -1;
 int mir_forwarded_wide_value = -1;
@@ -6622,6 +6634,12 @@ static int mir_use_cache_insn_capacity;
 static void mir_invalidate_use_cache(void)
 {
     mir_use_cache_dirty = 1;
+    ++mir_use_cache_generation;
+}
+
+unsigned mir_use_cache_generation_id(void)
+{
+    return mir_use_cache_generation;
 }
 
 static void mir_ensure_use_cache(void)

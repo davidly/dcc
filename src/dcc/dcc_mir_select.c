@@ -2958,15 +2958,56 @@ static void mir_report_spilled_candidate_matrix(int label_base)
     label_id = label_id_save;
 }
 
+/* Called from ~700 sites across the machine-emit/runner files as a
+ * shape-matching precondition, on the order of 10^7 times per compile - a
+ * full O(mir.count) rescan on every call was the single largest self-time
+ * contributor in a profile of the whole test corpus. Cached, keyed on
+ * mir_use_cache_generation_id() (see its own comment in dcc_mir.c for why
+ * that's a safe invalidation signal to reuse here without re-deriving it).
+ * DCC_MIR_CFG_CACHE_VERIFY=1 recomputes the uncached answer on every call
+ * too and fatals on a mismatch. Deliberately a separate env var from the
+ * def-use cache's own DCC_MIR_CACHE_VERIFY: turning both on at once means
+ * every one of THAT cache's own ~10^9 calls also re-verifies, which is
+ * minutes slower and has nothing to do with this cache's own correctness. */
+static int mir_cfg_block_count_verify_enabled(void)
+{
+    static int flag = -1;
+    if (flag < 0)
+        flag = getenv("DCC_MIR_CFG_CACHE_VERIFY") != NULL;
+    return flag;
+}
+
 int mir_cfg_block_count(void)
 {
-    int blocks = 0;
+    static unsigned cached_generation;
+    static int cached_blocks;
+    static int cache_valid;
+    unsigned generation = mir_use_cache_generation_id();
+    int blocks;
     int i;
 
+    if (cache_valid && generation == cached_generation &&
+        !mir_cfg_block_count_verify_enabled())
+        return cached_blocks;
+
+    blocks = 0;
     for (i = 0; i < mir.count; ++i) {
         if (mir.insns[i].opcode == MIR_LABEL)
             ++blocks;
     }
+
+    if (cache_valid && generation == cached_generation &&
+        blocks != cached_blocks) {
+        fprintf(stderr,
+                "; MIR CACHE MISMATCH mir_cfg_block_count function=%s "
+                "cached=%d actual=%d\n",
+                mir.name, cached_blocks, blocks);
+        fatal("MIR use-cache mismatch");
+    }
+
+    cached_generation = generation;
+    cached_blocks = blocks;
+    cache_valid = 1;
     return blocks;
 }
 
