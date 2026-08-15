@@ -23084,7 +23084,7 @@ int mir_emit_wide_operation(FILE *out, const struct MirInsn *insn)
     }
     switch ((int)insn->immediate) {
     case '+':
-        fputs("\tpop bc\n\tor a\n\tadd hl,bc\n"
+        fputs("\tpop bc\n\tadd hl,bc\n"
               "\tex de,hl\n\tpop bc\n\tadc hl,bc\n\tex de,hl\n", out);
         return 1;
     case '-':

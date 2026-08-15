@@ -7804,7 +7804,7 @@ static void mir_endgame_emit_long_add(
 {
     mir_endgame_emit_long_push(out);
     mir_endgame_emit_long_bits(out, bits);
-    fputs("\tpop bc\n\tor a\n\tadd hl,bc\n"
+    fputs("\tpop bc\n\tadd hl,bc\n"
           "\tex de,hl\n\tpop bc\n\tadc hl,bc\n"
           "\tex de,hl\n", out);
 }
@@ -8805,7 +8805,7 @@ static void mir_endgame_scope_long_sum(FILE *out)
     mir_machine_emit_ix_wide_load(out, MIR_ENDGAME_SCOPE_WIDE);
     fputs("\tpush de\n\tpush hl\n", out);
     mir_machine_emit_ix_wide_load(out, MIR_ENDGAME_SCOPE_WIDE_ITER);
-    fputs("\tpop bc\n\tor a\n\tadd hl,bc\n"
+    fputs("\tpop bc\n\tadd hl,bc\n"
           "\tex de,hl\n\tpop bc\n\tadc hl,bc\n\tex de,hl\n", out);
     mir_machine_emit_ix_wide_store(out, MIR_ENDGAME_SCOPE_WIDE);
     {
@@ -10935,7 +10935,7 @@ static void mir_emit_no_stack_wide_binary(
             "\tld e,(ix+%d)\n\tld d,(ix+%d)\n"
             "\tpop bc\n\tpush de\n\tpush hl\n"
             "\tld l,c\n\tld h,b\n\tld a,h\n\trlca\n\tsbc a,a\n"
-            "\tld d,a\n\tld e,a\n\tpop bc\n\tor a\n\tadd hl,bc\n"
+            "\tld d,a\n\tld e,a\n\tpop bc\n\tadd hl,bc\n"
             "\tex de,hl\n\tpop bc\n\tadc hl,bc\n\tex de,hl\n",
             numerator, numerator + 1, numerator + 2, numerator + 3,
             integer, integer + 1,

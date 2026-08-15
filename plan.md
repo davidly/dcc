@@ -3,6 +3,25 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-15 wide-add carry-clear removal (working tree)
+
+- Confirmed the reported `gen_binop32` issue remained production-visible after
+  the MIR migration: `tlong.lsum` selected `spilled-scalar-cfg`, and both raw
+  and peep output contained `pop bc / or a / add hl,bc`. `ADD HL,BC` does not
+  consume incoming carry; its carry-out is the value consumed by the following
+  high-word `ADC HL,BC`, which also overwrites the other flags.
+- Removed the dead `OR A` from the legacy helper and all seven MIR templates in
+  spilled, numeric, attention, and endgame families. Subtraction's carry clear
+  is unchanged.
+- Strict stack/no-stack census remains **2431/2431 MIR** with unchanged selector
+  totals. Exactly **71 functions / 25 apps** change in each mode, removing
+  **93 target instructions** and **558 generated text bytes**. All 25 affected
+  apps pass strict stack and no-stack peep/nopeep checks with zero performance
+  regressions. Final strict stack and no-stack full+extended runs pass
+  **331/331 runnable apps** in each mode; stack reports **0 regressions / 1155
+  improvements**, and extended, diagnostics, dccpeep, canonical/CMake, module
+  export/state, and diff checks pass.
+
 ## 2026-08-15 newest-main merge delta closure
 
 - Merged base `8871c27` exposed a new `tsjdeep` regression and a runtime ABI

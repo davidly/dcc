@@ -3105,7 +3105,7 @@ static void mir_emit_wide_conditional_add_schedule(
     mir_numeric_emit_sp_wide_load(out, plan->left_stack_offset);
     fputs("\tpush de\n\tpush hl\n", out);
     mir_numeric_emit_sp_wide_load(out, plan->right_stack_offset + 4);
-    fputs("\tpop bc\n\tor a\n\tadd hl,bc\n"
+    fputs("\tpop bc\n\tadd hl,bc\n"
           "\tex de,hl\n\tpop bc\n\tadc hl,bc\n\tex de,hl\n\tret\n",
           out);
 }
@@ -3298,7 +3298,7 @@ static void mir_emit_wide_ratio_loop_schedule(
     mir_machine_emit_ix_wide_load(out, PREVIOUS1);
     fputs("\tpush de\n\tpush hl\n", out);
     mir_machine_emit_ix_wide_load(out, PREVIOUS2);
-    fputs("\tpop bc\n\tor a\n\tadd hl,bc\n"
+    fputs("\tpop bc\n\tadd hl,bc\n"
           "\tex de,hl\n\tpop bc\n\tadc hl,bc\n\tex de,hl\n"
           "\tpush de\n\tpush hl\n", out);
     mir_machine_emit_ix_wide_load(out, PREVIOUS1);

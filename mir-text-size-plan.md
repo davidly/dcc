@@ -1,5 +1,24 @@
 # dcc MIR text-size fallback plan
 
+## 2026-08-15 wide-add carry-clear removal
+
+The reported `gen_binop32` dead carry clear was still active in generated-only
+production: `tlong.lsum` selected `spilled-scalar-cfg`, and dccpeep retained the
+same `pop bc / or a / add hl,bc` sequence. The low-word `ADD HL,BC` ignores
+incoming carry and produces the carry consumed by the high-word `ADC HL,BC`;
+that `ADC` also replaces the remaining flags before they are observable.
+
+The legacy helper and all seven MIR copies in spilled, numeric, attention, and
+endgame emission now omit `OR A`. Long subtraction retains its required clear.
+Strict before/after censuses remain **2431/2431 MIR** with identical selector
+totals. Both modes change the same **71 functions / 25 apps**, removing
+**93 target instructions** and **558 generated text bytes**. Strict focused
+stack/no-stack full-mode validation passes all 25 apps with zero regressions.
+Final strict stack and no-stack full+extended runs pass **331/331 runnable
+apps** in each mode; stack reports **0 regressions / 1155 improvements**, and
+extended, diagnostics, dccpeep, canonical/CMake, module export/state, and diff
+checks pass.
+
 ## 2026-08-15 newest-main merge delta closure
 
 Merged base `8871c27` exposed one semantic and three checked-performance

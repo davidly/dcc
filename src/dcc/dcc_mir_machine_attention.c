@@ -2193,7 +2193,7 @@ static void mir_emit_matrix_product_wide_sum(FILE *out)
           "\tld l,c\n\tld h,b\n"
           "\tld a,h\n\trlca\n\tsbc a,a\n"
           "\tld d,a\n\tld e,a\n"
-          "\tpop bc\n\tor a\n\tadd hl,bc\n"
+          "\tpop bc\n\tadd hl,bc\n"
           "\tex de,hl\n\tpop bc\n\tadc hl,bc\n\tex de,hl\n",
           out);
 }
