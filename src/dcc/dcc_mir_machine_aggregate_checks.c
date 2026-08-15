@@ -1,5 +1,7 @@
 /* dcc_mir_machine_aggregate_checks.c - strict aggregate check schedules. */
 
+#include <limits.h>
+
 #include "dcc_mir_machine_internal.h"
 
 struct MirVlaSmoothPlan {
@@ -13401,9 +13403,17 @@ static int mir_anonymous_initializer_constant(
     if (instruction < 0 || instruction >= mir.count ||
         mir.insns[instruction].opcode != MIR_CONST ||
         !mir_machine_evaluate_constant(
-            mir.insns[instruction].dst, &value, 0) ||
-        value < -2147483647L - 1L || value > 0xffffffffL)
+            mir.insns[instruction].dst, &value, 0))
         return 0;
+#if LONG_MAX > 0xffffffffL
+    /* On LP64 hosts long can exceed 32 bits; reject values too wide to fit
+     * as either a signed or unsigned 32-bit constant. On ILP32/LLP64 hosts
+     * long is already exactly 32 bits, so every value is in range and this
+     * check would be a tautology - skip it there instead of emitting a
+     * comparison the compiler (correctly) flags as always-false. */
+    if (value < -2147483647L - 1L || value > 0xffffffffL)
+        return 0;
+#endif
     *value_out = (int)(unsigned long)value;
     return 1;
 }
