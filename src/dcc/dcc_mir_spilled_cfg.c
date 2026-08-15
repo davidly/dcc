@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include "dcc.h"
 #include "dcc_ast.h"
 #include "dcc_mir.h"
@@ -222,29 +223,44 @@ static void mir_numeric_shape_hash_ex(
 
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
+        /* insn->immediate is `long`, whose width is host-dependent (64
+         * bits on Linux/macOS, only 32 on MSVC/Windows and 32-bit Linux).
+         * A negative wide (32-bit target) constant like -32768 is stored
+         * bit-identically on every host, but widening it straight to
+         * unsigned long long sign-extends through whatever the host long
+         * happens to be first - giving a small value like
+         * 0xFFFFFFFFFFFF8000 on a 32-bit host vs. the intended
+         * 0x00000000FFFF8000 on a 64-bit one. That fed a different value
+         * into this hash depending on host long width alone, silently
+         * failing every exact-shape match (mir_match_long_clamp and
+         * friends) on 32-bit hosts even though the MIR shape was
+         * identical. Route through uint32_t explicitly, matching every
+         * other field below (already effectively 32-bit via unsigned int,
+         * made explicit here too), so the hash is byte-for-byte the same
+         * on every host regardless of long's width. */
         unsigned long long immediate =
-            (unsigned long long)insn->immediate;
+            (unsigned long long)(uint32_t)insn->immediate;
         unsigned long long values[] = {
-            (unsigned long long)(unsigned int)insn->opcode,
-            (unsigned long long)(unsigned int)insn->dst,
-            (unsigned long long)(unsigned int)insn->src1,
-            (unsigned long long)(unsigned int)insn->src2,
-            (unsigned long long)(unsigned int)insn->type,
+            (unsigned long long)(uint32_t)insn->opcode,
+            (unsigned long long)(uint32_t)insn->dst,
+            (unsigned long long)(uint32_t)insn->src1,
+            (unsigned long long)(uint32_t)insn->src2,
+            (unsigned long long)(uint32_t)insn->type,
             immediate,
-            (unsigned long long)(unsigned int)insn->label,
-            (unsigned long long)(unsigned int)insn->phi_pred1,
-            (unsigned long long)(unsigned int)insn->phi_pred2,
-            (unsigned long long)(unsigned int)insn->successors[0],
-            (unsigned long long)(unsigned int)insn->successors[1],
-            (unsigned long long)(unsigned int)insn->successor_count,
-            (unsigned long long)(unsigned int)insn->object,
-            (unsigned long long)(unsigned int)insn->memory_size,
-            (unsigned long long)(unsigned int)insn->memory_flags,
-            (unsigned long long)(unsigned int)insn->bit_width,
-            (unsigned long long)(unsigned int)insn->bit_shift,
-            (unsigned long long)insn->bit_mask,
-            (unsigned long long)(unsigned int)insn->secondary_offset,
-            (unsigned long long)(unsigned int)insn->inline_temp_id
+            (unsigned long long)(uint32_t)insn->label,
+            (unsigned long long)(uint32_t)insn->phi_pred1,
+            (unsigned long long)(uint32_t)insn->phi_pred2,
+            (unsigned long long)(uint32_t)insn->successors[0],
+            (unsigned long long)(uint32_t)insn->successors[1],
+            (unsigned long long)(uint32_t)insn->successor_count,
+            (unsigned long long)(uint32_t)insn->object,
+            (unsigned long long)(uint32_t)insn->memory_size,
+            (unsigned long long)(uint32_t)insn->memory_flags,
+            (unsigned long long)(uint32_t)insn->bit_width,
+            (unsigned long long)(uint32_t)insn->bit_shift,
+            (unsigned long long)(uint32_t)insn->bit_mask,
+            (unsigned long long)(uint32_t)insn->secondary_offset,
+            (unsigned long long)(uint32_t)insn->inline_temp_id
         };
         size_t value;
 
@@ -8087,8 +8103,8 @@ static int mir_match_long_q8(struct MirLongQ8 *plan)
         type_ptr_depth(mir.return_type) != 0)
         return 0;
     mir_numeric_shape_hash(&first, &second);
-    if (first != 0x3e78af9f426763b5ULL ||
-        second != 0x0bd7ff18f51fc098ULL ||
+    if (first != 0x301c4ce8426763b5ULL ||
+        second != 0x1c95068ceddb0b7cULL ||
         !mir_match_long_parameter(
             &mir.insns[1], &plan->parameter_offset))
         return 0;
@@ -8119,8 +8135,8 @@ static int mir_match_attention_score(
         type_ptr_depth(mir.return_type) != 0)
         return 0;
     mir_numeric_shape_hash(&first, &second);
-    if (first != 0xa0bddf5fc9fce415ULL ||
-        second != 0x008943f66359b784ULL ||
+    if (first != 0xad99caf6c9fce415ULL ||
+        second != 0xc3ffc6fd15a3d71bULL ||
         !mir_match_word_pointer_parameter(
             &mir.insns[1], &plan->query_offset) ||
         !mir_match_word_pointer_parameter(
@@ -9229,11 +9245,11 @@ static int mir_match_vla_stable(struct MirVlaStable *plan)
     mir_numeric_shape_hash(&first, &second);
     shape_matches =
         (mir.count == 117 && mir_cfg_block_count() == 11 &&
-         first == 0xf5513ffad6bab8cbULL &&
-         second == 0x23dcdcb08d7fc7fdULL) ||
+         first == 0x1cc94bb7d6bab8cbULL &&
+         second == 0xbf56fdc9c7ed9deaULL) ||
         (mir.count == 124 && mir_cfg_block_count() == 12 &&
-         first == 0x943b06f83473bd23ULL &&
-         second == 0xe04babd4caf6a923ULL);
+         first == 0x0c6da5093473bd23ULL &&
+         second == 0x2cc5022c1e694718ULL);
     if (!shape_matches ||
         !mir_match_signed_word_parameter(1, &plan->iter_offset) ||
         !mir_match_signed_word_parameter(2, &plan->count_offset))
@@ -9256,10 +9272,10 @@ static int mir_match_nested_vla_stable(
         (mir.return_type & TYPE_UNSIGNED) != 0)
         return 0;
     mir_numeric_shape_hash(&first, &second);
-    if (!((first == 0x095fb534fc902d2fULL &&
-           second == 0x4380531b194d7ebaULL) ||
-          (first == 0x616a92478500d38cULL &&
-           second == 0x2275806d6088e31dULL)) ||
+    if (!((first == 0xa2a78a16fc902d2fULL &&
+           second == 0x8bddd0a885a69b89ULL) ||
+          (first == 0x3554ede98500d38cULL &&
+           second == 0xc0096f819a7bd0adULL)) ||
         !mir_match_signed_word_parameter(1, &plan->outer_offset) ||
         !mir_match_signed_word_parameter(2, &plan->inner_offset) ||
         !mir_match_signed_word_parameter(3, &plan->count_offset))
@@ -9286,8 +9302,8 @@ static int mir_match_vla_loop_result(
         (mir.return_type & TYPE_UNSIGNED) != 0)
         return 0;
     mir_numeric_shape_hash(&first, &second);
-    if (first != 0x3c45e1068dd972d4ULL ||
-        second != 0x82dc400dd84e3594ULL ||
+    if (first != 0xf31770608dd972d4ULL ||
+        second != 0xcf1dd19085aacdedULL ||
         !mir_match_signed_word_parameter(1, &plan->iter_offset) ||
         !mir_match_signed_word_parameter(2, &plan->count_offset))
         return 0;
