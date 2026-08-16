@@ -64,4 +64,30 @@ or a
 ld sp,ix
 pop ix
 ret
+; static function counted
+_ZC:
+push ix
+ld ix,0
+add ix,sp
+ld hl,-3
+add hl,sp
+ld sp,hl
+ld hl,200
+ld (ix-2),l
+ld (ix-1),h
+ld (ix-3),8
+LC:
+ld l,(ix-2)
+ld h,(ix-1)
+ld a,(hl)
+inc hl
+ld b,(hl)
+inc hl
+ld (ix-2),l
+ld (ix-1),h
+dec (ix-3)
+jp nz, LC
+ld sp,ix
+pop ix
+ret
 end
