@@ -1338,8 +1338,27 @@ int ast_pointer_expr_type(const struct AstNode *n, int *out_type,
             *out_no_deref = 0;
             return 1;
         }
+        /* ast_index_pointer_expr_elem_type's own contract is just "what type
+         * does indexing this pointer expression produce" - it hands back
+         * whatever element type it finds, pointer or not, which is exactly
+         * right for its other caller (gen_index_addr_ast, which wants the
+         * indexed VALUE's type regardless of pointer-ness). Every sibling
+         * check in this same case (above and below) re-verifies
+         * type_ptr_depth(member_type) > 0 before trusting its result as "n
+         * itself is a pointer expression" - this one didn't, so
+         * `((int *)p)[0] + a` (index a cast pointer at a constant 0, then
+         * add a plain int) misclassified the whole '+' as pointer
+         * arithmetic: member_type came back as plain int, ptr_depth 0, but
+         * fell through to the accept branch anyway, then
+         * gen_binary_try_fast_preeval's pointer-arithmetic fast path scaled
+         * `a` by sizeof(int) as if it were an array index. Confirmed via a
+         * 20-line standalone repro (`x[0] = x[0] + a` on a cast void*
+         * doubled every delta) and traced back from tests/cobint.c's
+         * documented bump_var/check_idx_bump miscompile - the same shape,
+         * `var[vi].v` cast-and-indexed on both sides of a read-modify-write. */
         if (ast_index_pointer_array_elem_type(n, &member_type) ||
-            ast_index_pointer_expr_elem_type(n, &member_type) ||
+            (ast_index_pointer_expr_elem_type(n, &member_type) &&
+             type_ptr_depth(member_type) > 0) ||
             (n->a != NULL && n->a->kind == AST_MEMBER &&
              (ast_member_pointer_array_field_elem_type(n->a, &member_type) ||
               (ast_member_lvalue_type(n->a, &member_type) &&
