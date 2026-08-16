@@ -7711,62 +7711,80 @@ static int pass_elim_ex_de_hl_before_ix_store(void)
  * back for a later pop into a different register (e.g. the xstrdup strcpy
  * loop).  Only hl is handled here.
  */
-/* True if `tmp` reads register h or l as a source operand: "ld r,h"/"ld r,l"
- * (copying h or l into another register), or a single-operand instruction
- * whose sole operand is exactly "h" or "l" ("or l"/"and h"/"cp l"/etc).
- * Missing this class of read - as an earlier version of this file did - let
- * hl_is_written_before_read_from below wrongly treat a "ld b,h / ld c,l"
- * copy immediately after a removed "pop hl; push hl" pair as "neutral",
- * concluding hl was safely overwritten before ever being read when it was
- * in fact read (via b/c) first; that silently substituted a stale,
- * since-clobbered hl for the value the pop/push pair was restoring from
- * the stack. */
-static int line_reads_h_or_l(const char *tmp)
-{
-    const char *comma = strrchr(tmp, ',');
-    const char *operand;
-
-    if (comma != NULL) {
-        operand = comma + 1;
-    } else {
-        operand = strchr(tmp, ' ');
-        if (operand == NULL)
-            return 0;
-        ++operand;
-        while (*operand == ' ' || *operand == '\t')
-            ++operand;
-    }
-    return strcmp(operand, "h") == 0 || strcmp(operand, "l") == 0;
-}
-
 /* Returns 1 if HL is written (all of HL, or at least L with H following) before
  * it is read, scanning forward from line `start`.  Conservative: returns 0 if
  * uncertain.  Used to guard pop hl; push hl removal. */
 static int hl_is_written_before_read_from(int start)
 {
     int j;
-    char tmp[MAX_LINE];
-    char lo_off[32];
+    int ix_low_written = 0;
+    char low_offset[32];
+    unsigned pending = PEEP_REG_HL;
+
+    /*
+     * Keep the measured direct-store form: BC replaces both bytes of HL
+     * before the reconstructed word is consumed by the following store.
+     * Other byte-at-a-time register copies stay conservative because their
+     * code-layout change is not uniformly profitable.
+     */
+    if (start + 2 < nlines &&
+        eq(start, "ld h,b") && eq(start + 1, "ld l,c")) {
+        const PeepLineInfo *consumer = peep_line_info(start + 2);
+
+        if (consumer != NULL &&
+            consumer->kind == PEEP_LINE_INSTRUCTION &&
+            !consumer->effects.unknown &&
+            !consumer->effects.control_flow &&
+            (consumer->effects.reads & PEEP_REG_HL) == PEEP_REG_HL &&
+            (consumer->effects.writes & PEEP_REG_HL) == 0 &&
+            consumer->effects.memory_written != 0)
+            return 1;
+    }
 
     for (j = start; j < start + 4 && j < nlines; j++) {
-        strip_peep_comment_copy(tmp, lines[j]);
-        /* Instructions that fully write HL without first reading it */
-        if (strncmp(tmp, "ld hl,", 6) == 0) return 1;   /* ld hl,N  or  ld hl,(x) */
-        if (peep_parse_ld_l_ix(lines[j], lo_off)) return 1; /* ld l,(ix+N) — H follows */
-        if (strcmp(tmp, "pop hl") == 0) return 1;
-        /* Instructions that read HL */
-        if (strncmp(tmp, "ld ", 3) == 0 && strstr(tmp, "(hl)") != NULL) return 0;
-        if (strcmp(tmp, "inc hl") == 0) return 0;
-        if (strcmp(tmp, "dec hl") == 0) return 0;
-        if (strncmp(tmp, "add hl,", 7) == 0) return 0;
-        if (strncmp(tmp, "adc hl,", 7) == 0) return 0;
-        if (strncmp(tmp, "sbc hl,", 7) == 0) return 0;
-        if (strcmp(tmp, "push hl") == 0) return 0;
-        if (strcmp(tmp, "ex de,hl") == 0) return 0;
-        if (line_reads_h_or_l(tmp)) return 0;
-        /* Otherwise neutral (push de, push bc, push ix, ld de,N, etc.) — keep scanning */
+        const PeepLineInfo *info = peep_line_info(j);
+
+        if (info == NULL)
+            return 0;
+        if (line_starts_function_marker(lines[j]))
+            return 0;
+        if (info->kind == PEEP_LINE_BLANK ||
+            info->kind == PEEP_LINE_COMMENT ||
+            info->kind == PEEP_LINE_LABEL)
+            continue;
+        /*
+         * An ordinary C call takes arguments from the stack, so the
+         * incoming HL value is not part of its ABI. Treat it as a barrier
+         * neither read nor overwrite: a later caller instruction must still
+         * prove that HL is replaced before use. Register-ABI helpers and
+         * conditional calls remain barriers.
+         */
+        if (info->kind == PEEP_LINE_INSTRUCTION &&
+            info->opcode == PEEP_OPCODE_CALL &&
+            peep_call_uses_stack_args_only(lines[j]))
+            continue;
+        if (info->kind != PEEP_LINE_INSTRUCTION ||
+            info->effects.unknown || info->effects.control_flow)
+            return 0;
+        if ((info->effects.reads & pending) != 0)
+            return 0;
+        if ((info->effects.writes & pending) != 0) {
+            unsigned written = info->effects.writes & pending;
+
+            if (pending == PEEP_REG_HL && written != pending) {
+                if (written != PEEP_REG_L ||
+                    !peep_parse_ld_l_ix(lines[j], low_offset))
+                    return 0;
+                ix_low_written = 1;
+            } else if (pending != PEEP_REG_HL && !ix_low_written) {
+                return 0;
+            }
+            pending &= ~written;
+        }
+        if (pending == 0)
+            return 1;
     }
-    return 0; /* conservative: don't remove if undetermined */
+    return 0;
 }
 
 static int pass_elim_redundant_pop_push(void)
@@ -7774,6 +7792,27 @@ static int pass_elim_redundant_pop_push(void)
     int i, changed = 0;
 
     for (i = 0; i + 1 < nlines; i++) {
+        /*
+         * Copying HL after `ex de,hl` requires the pop/push restore. Move
+         * that copy before the exchange instead; the following pop restores
+         * the same final HL and stack state without the extra round trip.
+         */
+        if (i >= 2 && i + 4 < nlines &&
+            eq(i - 2, "push hl") && eq(i - 1, "ex de,hl") &&
+            eq(i, "pop hl") && eq(i + 1, "push hl") &&
+            eq(i + 2, "ld b,h") && eq(i + 3, "ld c,l") &&
+            eq(i + 4, "pop hl")) {
+            replace1_tagged(i - 2, "ld b,h",
+                            "redundant_pop_push_reorder");
+            replace1(i - 1, "ld c,l");
+            replace1(i, "push hl");
+            replace1(i + 1, "ex de,hl");
+            replace1(i + 2, "pop hl");
+            delete_n(i + 3, 2);
+            changed = 1;
+            i = i > 2 ? i - 3 : -1;
+            continue;
+        }
         if (eq(i, "pop hl") && eq(i + 1, "push hl") &&
             hl_is_written_before_read_from(i + 2)) {
             delete_n(i, 2);

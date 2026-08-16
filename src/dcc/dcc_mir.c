@@ -3042,6 +3042,7 @@ static void mir_lower_stmt(const struct AstNode *node)
             mir.declaration_placeholders[mir.declaration_count] =
                 (int)(insn - mir.insns);
             mir.declaration_scope_ends[mir.declaration_count] = -1;
+            mir.declaration_scope_labels[mir.declaration_count] = -1;
             mir.declaration_nodes[mir.declaration_count] = node;
             mir.declaration_consumed[mir.declaration_count] = 0;
             ++mir.declaration_count;
@@ -3197,7 +3198,8 @@ static void mir_lower_stmt(const struct AstNode *node)
         --mir.flow_depth;
         if (node->a != NULL && node->a->kind == AST_DECL)
             for (i = 0; i < mir.declaration_count; ++i)
-                if (mir.declaration_nodes[i] == node->a) {
+                if (mir.declaration_nodes[i] == node->a &&
+                    mir.declaration_scope_ends[i] < 0) {
                     mir.declaration_scope_ends[i] = mir.count;
                     break;
                 }
@@ -3230,6 +3232,13 @@ static void mir_lower_stmt(const struct AstNode *node)
         mir_emit_jump(top_label);
         mir_emit_label(end_label);
         --mir.flow_depth;
+        if (node->a != NULL && node->a->kind == AST_DECL)
+            for (i = 0; i < mir.declaration_count; ++i)
+                if (mir.declaration_nodes[i] == node->a &&
+                    mir.declaration_scope_labels[i] < 0) {
+                    mir.declaration_scope_labels[i] = end_label;
+                    break;
+                }
         return;
     case AST_BREAK:
         if (mir.flow_depth > 0) {
@@ -3737,18 +3746,11 @@ static int mir_initializer_type_at_offset(int aggregate_type, int offset)
 
     if (struct_id <= 0 || offset < 0)
         return 0;
-    /* A union can have several overlapping fields starting at the same
-     * offset (e.g. `union { char text[8]; struct { int code; }; }` both
-     * start at offset 0). mir_capture_initializer only reaches here to
-     * refine a type the caller already resolved by field NAME for a
-     * designated initializer (dcc_decl.c's find_field_def), typically to
-     * recurse into a nested aggregate the caller only tracked by offset -
-     * so a sibling union member that merely happens to share this byte
-     * must not silently override that already-correct field. Resolve any
-     * non-array field first: an array match is only unambiguous when it
-     * is the only field spanning this offset (an array-typed union
-     * member with no overlapping scalar/struct sibling, which the second
-     * loop below still covers exactly as before). */
+    /*
+     * Offset-only fallback is ambiguous for overlapping union fields.
+     * Callers preserve an already selected type first; unresolved targets
+     * retain the established scalar-before-array preference here.
+     */
     for (i = 0; i < nfield_defs; ++i) {
         const struct FieldDef *field = &field_defs[i];
         int relative;
@@ -3791,6 +3793,42 @@ static int mir_initializer_type_at_offset(int aggregate_type, int offset)
     return 0;
 }
 
+static int mir_initializer_offset_has_type(int aggregate_type, int offset,
+                                           int expected_type)
+{
+    int struct_id = base_struct_id_from_type(aggregate_type);
+    int i;
+
+    if (struct_id <= 0 || offset < 0)
+        return 0;
+    for (i = 0; i < nfield_defs; ++i) {
+        const struct FieldDef *field = &field_defs[i];
+        int relative;
+
+        if (field->parent_struct_id != struct_id || field->is_promoted ||
+            offset < field->offset || offset >= field->offset + field->size)
+            continue;
+        relative = offset - field->offset;
+        if (field->is_array && field->elem_size > 0) {
+            int element_relative = relative % field->elem_size;
+            if (element_relative == 0 && field->elem_type == expected_type)
+                return 1;
+            if (type_is_struct_object(field->elem_type) &&
+                mir_initializer_offset_has_type(
+                    field->elem_type, element_relative, expected_type))
+                return 1;
+        } else {
+            if (relative == 0 && field->type == expected_type)
+                return 1;
+            if (type_is_struct_object(field->type) &&
+                mir_initializer_offset_has_type(
+                    field->type, relative, expected_type))
+                return 1;
+        }
+    }
+    return 0;
+}
+
 void mir_capture_init_constant(struct Sym *symbol, int offset, int type,
                                long value)
 {
@@ -3803,11 +3841,15 @@ void mir_capture_init_constant(struct Sym *symbol, int offset, int type,
     {
         int aggregate_type = type_ptr_depth(symbol->type) > 0
             ? type_decay_ptr(symbol->type) : symbol->type;
-        if (type_is_struct_object(aggregate_type)) {
-        int layout_type = mir_initializer_type_at_offset(aggregate_type,
-                                                         offset);
-        if (layout_type != 0)
-            type = layout_type;
+        /* Byte stores also represent aggregate padding/zero-fill. */
+        if (type_size(type) > 1 &&
+            type_is_struct_object(aggregate_type) &&
+            !mir_initializer_offset_has_type(
+                aggregate_type, offset, type)) {
+            int layout_type = mir_initializer_type_at_offset(
+                aggregate_type, offset);
+            if (layout_type != 0)
+                type = layout_type;
         }
     }
     result = mir_new_value();
@@ -3916,11 +3958,15 @@ void mir_capture_initializer(const struct AstNode *expr)
         {
             int aggregate_type = type_ptr_depth(target->type) > 0
                 ? type_decay_ptr(target->type) : target->type;
-            if (type_is_struct_object(aggregate_type)) {
-            int layout_type = mir_initializer_type_at_offset(aggregate_type,
-                                                             offset);
-            if (layout_type != 0)
-                target_type = layout_type;
+            /* Byte stores also represent aggregate padding/zero-fill. */
+            if (type_size(target_type) > 1 &&
+                type_is_struct_object(aggregate_type) &&
+                !mir_initializer_offset_has_type(
+                    aggregate_type, offset, target_type)) {
+                int layout_type = mir_initializer_type_at_offset(
+                    aggregate_type, offset);
+                if (layout_type != 0)
+                    target_type = layout_type;
             }
         }
         value = mir_lower_expr(expr);
@@ -5604,22 +5650,31 @@ void mir_resolve_deferred_metadata(void)
         int declaration = mir.alias_declaration_indices[i];
         int first = 0;
         int last = mir.count;
+        int scope_label = -1;
         int instruction;
         if (declaration >= 0 && declaration < mir.declaration_count) {
             first = mir.declaration_placeholders[declaration];
             last = mir.declaration_scope_ends[declaration];
+            scope_label = mir.declaration_scope_labels[declaration];
             if (first < 0)
                 first = 0;
             if (last < first || last > mir.count)
                 last = mir.count;
-            for (instruction = first; instruction < last; ++instruction)
-                if (mir.insns[instruction].opcode == MIR_BRANCH_FALSE) {
-                    int target = mir_find_label(mir.insns[instruction].label);
-                    if (target > instruction) {
-                        last = target + 1;
-                        break;
+            if (scope_label >= 0) {
+                int scope_end = mir_find_label(scope_label);
+                if (scope_end >= first)
+                    last = scope_end + 1;
+            } else {
+                for (instruction = first; instruction < last; ++instruction)
+                    if (mir.insns[instruction].opcode == MIR_BRANCH_FALSE) {
+                        int target =
+                            mir_find_label(mir.insns[instruction].label);
+                        if (target > instruction) {
+                            last = target + 1;
+                            break;
+                        }
                     }
-                }
+            }
         }
         for (instruction = first; instruction < last; ++instruction) {
             struct MirInsn *insn = &mir.insns[instruction];
@@ -5652,28 +5707,9 @@ void mir_resolve_deferred_metadata(void)
             insn->opcode = MIR_ADDRESS;
             insn->type = type_add_ptr(named_type);
         } else if (insn->opcode == MIR_LOAD &&
-                   mir_declared_is_vla_object(insn->name) &&
-                   type_size(named_type) == 1) {
-            /* A VLA identifier load fetches the base pointer that
-             * mir_lower_expr's AST_IDENT case stashed with a pointer
-             * type (the runtime address computed by vlaalloc), not a
-             * value of the VLA's element type. Overwriting it with the
-             * bare element type here (as the generic MIR_LOAD case
-             * below does) silently drops the pointer bit - harmless for
-             * most element types, but for a 1-byte bool element the
-             * resulting "address" gets normalized to 0/1 like any other
-             * _Bool load, corrupting every subsequent index into the
-             * array and hanging on the resulting stray writes. Scoped to
-             * 1-byte VLA elements specifically (matching
-             * dcc_mir_spilled_cfg.c's mir_scalar_memory_location's own
-             * narrowing): retyping every VLA load's dst here, including
-             * wider (e.g. int) elements, broke dcc_mir_spilled_cfg.c's
-             * mir_match_vla_stable/mir_match_nested_vla_stable exact
-             * structural matchers (which expect the load's type to stay
-             * the plain element type for those), falling back from their
-             * hand-tuned emission to generic spilled-scalar-cfg codegen
-             * and costing tvla/tvlax's VLA-address-stability stress
-             * tests a large constant per-iteration overhead. */
+                   mir_declared_is_vla_object(insn->name)) {
+            /* A VLA identifier loads its saved base pointer, not an
+             * element. Keep the pointer type assigned during lowering. */
             insn->type = type_add_ptr(named_type);
         } else if (insn->opcode == MIR_LOAD ||
                    insn->opcode == MIR_PARAM ||

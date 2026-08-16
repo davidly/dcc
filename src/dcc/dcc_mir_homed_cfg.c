@@ -2477,31 +2477,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     int preserve_bc = !preserve_bc_iy &&
                         mir_home_color_live_across(
                             instruction, MIR_COLOR_BC);
-                    /* insn->src1 (the field's address) can itself be
-                     * homed to HL - but this sequence unconditionally
-                     * reuses HL as scratch to shift/mask insn->src2's
-                     * value first. Reloading src1 afterward via
-                     * mir_emit_home_to_hl would then wrongly report
-                     * "already in HL" (it only consults the static
-                     * allocation color, unaware HL has since been
-                     * overwritten by that scratch use), silently
-                     * substituting the shifted value for the address
-                     * and corrupting the store. Move it into IY (a
-                     * push/pop pair, net stack-neutral) before the value
-                     * computation clobbers HL, then restore it from IY
-                     * instead of re-deriving it - a persistent stack
-                     * push here (rather than a same-instruction push/pop
-                     * round trip) would shift SP under any later
-                     * SP-relative parameter rematerialization in a
-                     * frameless function and corrupt an unrelated
-                     * access, so this must not change SP by the time the
-                     * next instruction runs. IY is free here unless this
-                     * same instruction also preserves a BC:IY pair
-                     * (preserve_bc_iy), a combination rare enough to
-                     * leave on the pre-existing (already broken for that
-                     * narrow overlap) path rather than risk clobbering
-                     * that pair's preserved value. */
-                    int src1_needs_stash = !preserve_bc_iy &&
+                    int src1_needs_stash =
                         mir.allocation_colors[insn->src1] == MIR_COLOR_HL;
                     if (preserve_hl_de)
                         fputs("\tpush de\n\tpush hl\n", out);
@@ -2513,9 +2489,20 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     if (src1_needs_stash) {
                         if (!mir_emit_home_to_hl(out, insn->src1))
                             goto done;
-                        fputs("\tpush hl\n\tpop iy\n", out);
+                        if (mir.allocation_colors[insn->src2] ==
+                                MIR_COLOR_HL ||
+                            mir.allocation_colors[insn->src2] ==
+                                MIR_COLOR_HL_DE ||
+                            mir_regional_rematerialization_kind(
+                                insn->src2) ==
+                                MIR_REGIONAL_REMAT_ADDRESS)
+                            goto done;
+                        fputs("\tex de,hl\n", out);
                     }
-                    if (!mir_emit_home_to_hl(out, insn->src2))
+                    if (!(src1_needs_stash &&
+                          mir.allocation_colors[insn->src2] ==
+                              MIR_COLOR_DE) &&
+                        !mir_emit_home_to_hl(out, insn->src2))
                         goto done;
                     mir_emit_hl_and_const(
                         out, insn->bit_width >= 16
@@ -2525,7 +2512,7 @@ int mir_try_emit_homed_scalar_cfg(FILE *out)
                     mir_emit_hl_and_const(out, insn->bit_mask);
                     fputs("\tpush hl\n", out);
                     if (src1_needs_stash)
-                        fputs("\tpush iy\n\tpop hl\n", out);
+                        fputs("\tex de,hl\n", out);
                     else if (!mir_emit_home_to_hl(out, insn->src1))
                         goto done;
                     fputs("\tpush hl\n\tld a,(hl)\n\tinc hl\n"

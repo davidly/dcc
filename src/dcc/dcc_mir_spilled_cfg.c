@@ -9224,11 +9224,11 @@ static int mir_match_vla_stable(struct MirVlaStable *plan)
     mir_numeric_shape_hash(&first, &second);
     shape_matches =
         (mir.count == 117 && mir_cfg_block_count() == 11 &&
-         first == 0xf5513ffad6bab8cbULL &&
-         second == 0x23dcdcb08d7fc7fdULL) ||
+         first == 0x1b91de989e19fa2bULL &&
+         second == 0xebd18a382b7eb2cfULL) ||
         (mir.count == 124 && mir_cfg_block_count() == 12 &&
-         first == 0x943b06f83473bd23ULL &&
-         second == 0xe04babd4caf6a923ULL);
+         first == 0x9e92380f159feaa3ULL &&
+         second == 0x3a4ab6d55af84cfbULL);
     if (!shape_matches ||
         !mir_match_signed_word_parameter(1, &plan->iter_offset) ||
         !mir_match_signed_word_parameter(2, &plan->count_offset))
@@ -9251,10 +9251,10 @@ static int mir_match_nested_vla_stable(
         (mir.return_type & TYPE_UNSIGNED) != 0)
         return 0;
     mir_numeric_shape_hash(&first, &second);
-    if (!((first == 0x095fb534fc902d2fULL &&
-           second == 0x4380531b194d7ebaULL) ||
-          (first == 0x616a92478500d38cULL &&
-           second == 0x2275806d6088e31dULL)) ||
+    if (!((first == 0xe701964f314a498fULL &&
+           second == 0x2fc2c3a3c1703590ULL) ||
+          (first == 0x0c77fb29bf43f54cULL &&
+           second == 0x97c84b8ae7e934c3ULL)) ||
         !mir_match_signed_word_parameter(1, &plan->outer_offset) ||
         !mir_match_signed_word_parameter(2, &plan->inner_offset) ||
         !mir_match_signed_word_parameter(3, &plan->count_offset))
@@ -9281,8 +9281,8 @@ static int mir_match_vla_loop_result(
         (mir.return_type & TYPE_UNSIGNED) != 0)
         return 0;
     mir_numeric_shape_hash(&first, &second);
-    if (first != 0x3c45e1068dd972d4ULL ||
-        second != 0x82dc400dd84e3594ULL ||
+    if (first != 0xc52c09253e5e08c4ULL ||
+        second != 0xe906b77dc606d0d5ULL ||
         !mir_match_signed_word_parameter(1, &plan->iter_offset) ||
         !mir_match_signed_word_parameter(2, &plan->count_offset))
         return 0;
@@ -22616,7 +22616,6 @@ static int mir_match_double_logical_not(
     const struct MirInsn *inner;
     const struct MirInsn *source;
     int inner_instruction;
-    int color;
     int slot;
     int instruction;
 
@@ -22641,34 +22640,32 @@ static int mir_match_double_logical_not(
             use->src1 == outer->dst)
             return 0;
     }
-    /* Eliding the inner "!" defers consuming inner->src1 (the value this
-     * fusion collapses to a single test) from the inner instruction's own
-     * position to the outer instruction's, later, position - but the
-     * allocator computed inner->src1's liveness/register-color/backend-
-     * slot assignment from the unmodified MIR graph, in which its only
-     * recorded use IS the inner instruction; that liveness ends there, so
-     * the allocator is free to reuse its exact storage for anything
-     * defined afterward. Reject the fusion whenever some other value gets
-     * defined into that same color or backend slot before the outer
-     * instruction's position - that reuse is exactly what let a
-     * bloom-filter-style `!!(bits[a/8] & (1U << (a%8)))` used inline
-     * within a larger printf argument list silently substitute an
-     * unrelated spilled value for inner->src1. When no such reuse exists
-     * in between (the common case, e.g. two adjacent `!!x != !!y`
-     * comparisons each over a simple parameter), the fusion remains
-     * exactly as valid as it always was. */
+    /*
+     * Fusion moves the source's use from the inner `!` to the outer `!`.
+     * It is safe only when the source can be recreated there or its backend
+     * slot remains untouched over the extended live range.
+     */
     inner_instruction = (int)(inner - mir.insns);
-    color = inner->src1 >= 0 ? mir.allocation_colors[inner->src1] : -1;
+    for (instruction = inner_instruction + 1;
+         instruction < outer_instruction;
+         ++instruction)
+        if (mir.insns[instruction].opcode != MIR_NOP)
+            return 0;
     slot = -1;
     if (inner->src1 >= 0 && mir.backend_slots != NULL)
         slot = mir.backend_slots[inner->src1];
-    for (instruction = inner_instruction; instruction < outer_instruction;
+    if (slot < 0 &&
+        !mir_scalar_constant_is_rematerializable(inner->src1) &&
+        !mir_string_address_is_rematerializable(inner->src1) &&
+        !mir_address_is_rematerializable(inner->src1) &&
+        !mir_value_has_direct_named_home(inner->src1))
+        return 0;
+    for (instruction = inner_instruction + 1;
+         instruction < outer_instruction;
          ++instruction) {
         int dst = mir.insns[instruction].dst;
         if (dst < 0 || dst == inner->src1)
             continue;
-        if (color >= 0 && mir.allocation_colors[dst] == color)
-            return 0;
         if (slot >= 0 && mir.backend_slots != NULL &&
             mir.backend_slots[dst] == slot)
             return 0;
@@ -26435,29 +26432,8 @@ int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
     if (insn->object >= 0 && insn->object < mir.object_count) {
         const struct MirObject *object = &mir.objects[insn->object];
         *type = object->type;
-        /* A VLA identifier's MIR_LOAD/MIR_PARAM/MIR_ADDRESS fetches the
-         * base pointer vlaalloc stashed for it, typed as a pointer to the
-         * element type by mir_lower_expr's AST_IDENT case - but the
-         * object table records the array's plain element type (e.g.
-         * TYPE_BOOL for `bool v[n]`), since that is what indexed
-         * loads/stores through the object actually access. Trust the
-         * instruction's own type when it claims strictly more pointer
-         * depth than the object AND the name is a declared VLA whose
-         * element type is a single byte (bool/char) - using the object's
-         * element type instead would, for such a 1-byte element,
-         * normalize this pointer like any other narrow value (e.g. to 0
-         * or 1 for _Bool), corrupting every later index into the array.
-         * Scoping this to 1-byte VLA element names specifically (rather
-         * than any ptr-depth mismatch, or any VLA at all) matters: a
-         * wider (e.g. int) VLA element's own type already behaves enough
-         * like a pointer for the surrounding scalar-cfg machinery, and
-         * unconditionally trusting insn->type regressed tbig's
-         * long-arithmetic file I/O (non-VLA) and, applied to every VLA
-         * regardless of element width, cost tvla/tvlax a large constant
-         * per-access overhead multiplied across their stress-test loop
-         * counts. */
+        /* A VLA identifier load fetches its saved base pointer. */
         if (mir_declared_is_vla_object(insn->name) &&
-            type_size(*type) == 1 &&
             type_ptr_depth(insn->type) > type_ptr_depth(*type))
             *type = insn->type;
         *storage = object->storage;
@@ -26465,12 +26441,7 @@ int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
         return 1;
     }
     if (mir_declared_location(insn->name, type, storage, offset)) {
-        /* Same VLA base-pointer-vs-element-type reconciliation as the
-         * object-table branch above, for a name that only resolves
-         * through the declared-locals table (e.g. a fresh per-use reload
-         * synthesized without the alias-resolved object index attached). */
         if (mir_declared_is_vla_object(insn->name) &&
-            type_size(*type) == 1 &&
             type_ptr_depth(insn->type) > type_ptr_depth(*type))
             *type = insn->type;
         *offset += (int)insn->immediate;
