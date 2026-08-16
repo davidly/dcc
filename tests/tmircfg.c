@@ -1,3 +1,11 @@
+/**
+ * @file tmircfg.c
+ * @brief Smoke-tests MIR lowering and emission for a loop CFG.
+ *
+ * @par Coverage
+ * sum_to() creates a backedge and loop-carried values for both the countdown
+ * and accumulator, exercising basic blocks, liveness, and PHI-edge handling.
+ */
 #include <stdio.h>
 
 static int sum_to(int n)

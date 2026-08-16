@@ -1,9 +1,15 @@
-/* dcc_mir_homed_cfg.c - the mir_try_emit_homed_scalar_cfg selector: emits
- * Z80 for acyclic control flow whose scalar values can all stay in
- * fixed "home" registers/temporaries without a full backend spill
- * frame.
+/**
+ * @file dcc_mir_homed_cfg.c
+ * @brief Emits the fixed-home scalar CFG candidate.
  *
- * Part of the dcc_mir.c MIR backend split; see dcc_mir_internal.h.
+ * @par Role
+ * Proves and emits supported acyclic control flow when scalar values can stay
+ * in allocated register or temporary homes, avoiding the general spill-slot
+ * frame. It handles home-aware calls, PHI edges, memory operations, and
+ * selected forwarding/fusion forms.
+ *
+ * @par Key entry point
+ * mir_try_emit_homed_scalar_cfg().
  */
 #include <stdio.h>
 #include <stdlib.h>

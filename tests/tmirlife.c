@@ -1,5 +1,11 @@
-/*
- * tmirlife.c - MIR physical-lifetime and helper-ABI regressions.
+/**
+ * @file tmirlife.c
+ * @brief Validates MIR physical lifetimes and helper-call ABI handling.
+ *
+ * @par Coverage
+ * Exercises late PHI uses, spill-slot values across calls and loops, regional
+ * address homes, dead definitions, wide scanner arguments/returns, byte
+ * sign extension, and float helper results.
  */
 #include <stdio.h>
 

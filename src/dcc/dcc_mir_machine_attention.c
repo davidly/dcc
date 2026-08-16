@@ -1,4 +1,15 @@
-/* dcc_mir_machine_attention.c - strict attention-kernel schedules. */
+/**
+ * @file dcc_mir_machine_attention.c
+ * @brief Emits exact Z80 schedules for attention-model kernels.
+ *
+ * @par Role
+ * Matches complete MIR shapes for matrix products, vector maxima, fixed and
+ * variable softmax, and the multi-stage backward pass, then emits their
+ * specialized schedules.
+ *
+ * @par Key entry point
+ * mir_try_emit_attention_kernels().
+ */
 
 #include "dcc_mir_machine_internal.h"
 

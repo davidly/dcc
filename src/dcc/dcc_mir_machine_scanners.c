@@ -1,4 +1,15 @@
-/* dcc_mir_machine_scanners.c - strict scanner/parser schedules. */
+/**
+ * @file dcc_mir_machine_scanners.c
+ * @brief Emits exact schedules for scanners, parsers, and text kernels.
+ *
+ * @par Role
+ * Matches character/token scans, bounded parsing, preprocessing, text
+ * transforms, board/path scans, VLA loops, and symbol-table operations.
+ * The late flag preserves the symbol/path family's later selector band.
+ *
+ * @par Key entry point
+ * mir_try_emit_scanner_kernels().
+ */
 
 #include "dcc_mir_machine_internal.h"
 

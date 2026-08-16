@@ -1,4 +1,17 @@
-/* dcc_mir_machine_emit.c - Z80 emission from scheduled MIR templates. */
+/**
+ * @file dcc_mir_machine_emit.c
+ * @brief Coordinates structurally exact MIR-to-Z80 machine schedules.
+ *
+ * @par Role
+ * Implements shared exact-schedule matching/emission utilities, retains the
+ * general exact-template families, and dispatches specialized
+ * dcc_mir_machine_*.c families in selector-policy order.
+ *
+ * @par Key entry point
+ * mir_try_emit_scheduled_machine_cfg() returns emitted output only after a
+ * matcher has proved the complete supported MIR shape. Candidate selection
+ * and profitability remain in dcc_mir_select.c.
+ */
 
 #include "dcc_mir_machine_internal.h"
 #include <stdint.h>

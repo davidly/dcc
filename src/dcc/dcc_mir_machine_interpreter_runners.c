@@ -1,4 +1,15 @@
-/* dcc_mir_machine_interpreter_runners.c - strict control/interpreter schedules. */
+/**
+ * @file dcc_mir_machine_interpreter_runners.c
+ * @brief Emits exact schedules for interpreter and language-tool kernels.
+ *
+ * @par Role
+ * Covers file loading plus lexer, parser, storage, arithmetic, and control
+ * kernels used by the Forth, Pascal, Ada, COBOL, BASIC, and Fortran
+ * workloads.
+ *
+ * @par Key entry point
+ * mir_try_emit_interpreter_runners().
+ */
 
 #include "dcc_mir_machine_internal.h"
 

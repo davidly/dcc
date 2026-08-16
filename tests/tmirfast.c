@@ -1,37 +1,17 @@
-/*
- * tmirfast.c -- DCC regression tests
+/**
+ * @file tmirfast.c
+ * @brief Validates MIR scalar constant and comparison fast paths.
  *
- * Permanent regression fixture for MIR Plan-100 Phase 3 constant/comparison
- * fast paths added in Items 25/27/30/31:
- *   - Item 25: compare-with-zero fast path (ld a,h / or l) for equality and
- *     inequality against constant 0, avoiding a full 16-bit subtract.
- *   - Item 27: sign-bit test fast path (bit 7,h) for signed < and >= against
- *     constant 0.
- *   - Item 30: shift-and-subtract fast path ((x << k) - x) for multipliers
- *     that are a bottom-aligned run of ones (7, 15, 31, 63, 127, 255),
- *     including multipliers large enough to have previously exceeded the
- *     naive per-bit op-count cap and fallen back to a runtime __mulu call.
- *   - Item 31: fused inc (ix+n) / dec (ix+n) in-place update for a bare
- *     x++;/x--; on a 16-bit local or parameter whose incremented value is
- *     never read again (dead-after-increment), replacing a full
- *     load/add-or-sub/store round trip.
+ * @par Coverage
+ * Exercises equality/sign tests against zero, shift/subtract multiplication
+ * by runs-of-one constants, and in-place increment/decrement when the updated
+ * value is dead or observed through an alias. Extra live values make the
+ * spill-slot candidate plausible without making selector choice part of the
+ * correctness contract.
  *
- * Each helper below has enough surrounding locals/arithmetic to give the
- * MIR selector a chance to accept the function through the spilled-scalar-
- * cfg path rather than falling back on text-size or being handled entirely
- * by the fully-registerized homed-scalar-cfg path (which would not exercise
- * these fast paths at all); whether a given helper is actually accepted
- * into MIR on any given day is a selector heuristic, not a correctness
- * requirement of this fixture; either way, the assertions below must hold
- * under both the MIR and legacy backends, and under both nopeep and peep,
- * so a regression in the fast paths' semantics shows up as a wrong-answer
- * failure here rather than only as a byte-count change.
- *
- * Host validation is skipped (tests/_test_overrides.json's "host": true):
- * several checks deliberately overflow/wrap a 16-bit `int`, matching dcc's
- * Z80 target where `int` is 2 bytes. A host's `int` is 4 bytes even under
- * a 32-bit (-m32) compile - unlike `long`, there's no host compiler mode
- * that reproduces a 16-bit `int`, so this can't be validated on any host.
+ * @par Platform note
+ * Checks depend on dcc's 16-bit wrapping int semantics, so host execution is
+ * disabled in tests/_test_overrides.json.
  */
 
 #include <stdio.h>

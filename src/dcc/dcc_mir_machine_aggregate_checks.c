@@ -1,4 +1,15 @@
-/* dcc_mir_machine_aggregate_checks.c - strict aggregate check schedules. */
+/**
+ * @file dcc_mir_machine_aggregate_checks.c
+ * @brief Emits exact schedules for aggregate and data-layout operations.
+ *
+ * @par Role
+ * Handles proven array, matrix, VLA, record, union, bitfield, initializer,
+ * pointer-layout, and aggregate validation shapes that benefit from a
+ * dedicated machine schedule.
+ *
+ * @par Key entry point
+ * mir_try_emit_aggregate_checks().
+ */
 
 #include <limits.h>
 

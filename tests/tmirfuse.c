@@ -1,19 +1,12 @@
-/*
- * tmirfuse.c -- DCC regression tests
+/**
+ * @file tmirfuse.c
+ * @brief Validates MIR comparison-to-branch fusion.
  *
- * Permanent regression fixture for MIR Plan-100 Items 1/4: fusing a scalar
- * comparison directly into its consuming branch (mir_try_emit_spilled_scalar_cfg /
- * mir_emit_fused_comparison_branch), including the logical-not extension.
- * Exercises every comparison operator, signed and unsigned, bare and negated,
- * across boundary values (INT_MIN/INT_MAX, 0/-1, unsigned wraparound) so a
- * future regression in the fused branch polarity or sign handling shows up
- * as a wrong-answer failure here rather than only as a byte-count change.
- *
- * Expected output:
- *   tmirfuse: all tests passed
- *
- * Expected exit status:
- *   0
+ * @par Coverage
+ * Exercises all signed comparison operators, unsigned relational operators,
+ * logical negation, boundary values, spill-pressure forms, and chained
+ * conditions. It detects wrong branch polarity or signedness in fused
+ * comparison emission.
  */
 
 #include <stdio.h>

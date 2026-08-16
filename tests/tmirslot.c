@@ -1,26 +1,11 @@
-/*
- * tmirslot.c -- DCC regression tests
+/**
+ * @file tmirslot.c
+ * @brief Validates MIR backend-slot liveness and value forwarding.
  *
- * Permanent regression fixture for MIR Plan-100 Item 21: backend-slot
- * live-range hygiene / dead-store elimination (Items 13/15/16/17/18).
- * Exercises:
- *   - immediate use of a call result across a backend slot boundary;
- *   - a value forwarded across a single-predecessor label (Item 15's
- *     label-forwarding extension of Item 13's HL-forwarding);
- *   - a value forwarded straight into a store with no intervening use;
- *   - a slot written but never read again anywhere in the function
- *     (dead-store elision, Item 16);
- *   - per-object backward liveness for a promoted local that is stored
- *     but never subsequently loaded (Item 17);
- *   - a phi destination that is dead on one incoming path but live on
- *     another, so the copy must still be emitted for the live path
- *     while the dead-path skip (Item 18) does not misfire.
- *
- * Expected output:
- *   tmirslot: all tests passed
- *
- * Expected exit status:
- *   0
+ * @par Coverage
+ * Exercises immediate call-result use, forwarding across labels and stores,
+ * dead slot/local stores, PHI values live on only one incoming path, and
+ * values that must survive a caller-clobbering call.
  */
 
 #include <stdio.h>

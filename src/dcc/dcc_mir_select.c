@@ -1,9 +1,17 @@
-/* dcc_mir_select.c - loop selectors (countdown/accumulator/unsigned-
- * division/repeated-invariant-add), the general CFG rollout and
- * comparison-branch selectors, the top-level mir_try_emit_z80
- * dispatcher, and mir_end_function's generated-candidate commit entry point.
+/**
+ * @file dcc_mir_select.c
+ * @brief Builds, compares, selects, and commits generated MIR candidates.
  *
- * Part of the dcc_mir.c MIR backend split; see dcc_mir_internal.h.
+ * @par Role
+ * Owns mir_end_function(), candidate attempt isolation, selector ordering,
+ * mir-v1 cost policy, diagnostics, and the final copy to the real output
+ * stream. It also contains compact loop, regional rollout, and
+ * comparison-branch selectors that arbitrate with the general emitters.
+ *
+ * @par Boundary
+ * Each candidate writes to its own MirStream. This module selects only among
+ * generated candidates; lowering and verification live in dcc_mir.c, while
+ * candidate implementations live in the emitter modules.
  */
 #include <stdio.h>
 #include <stdlib.h>

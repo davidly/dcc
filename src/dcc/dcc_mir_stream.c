@@ -1,6 +1,10 @@
-/*
- * dcc_mir_stream.c - implementation of the portable in-memory scratch
- * stream declared in dcc_mir_stream.h. See that header for rationale.
+/**
+ * @file dcc_mir_stream.c
+ * @brief Implements the in-memory stream used for isolated MIR candidates.
+ *
+ * @par Role
+ * Owns the growable buffer and the FILE-like read, write, seek, rewind, copy,
+ * and final-file transfer operations declared in dcc_mir_stream.h.
  */
 
 #include "dcc_mir_stream.h"

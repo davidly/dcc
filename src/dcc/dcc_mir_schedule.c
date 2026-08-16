@@ -1,7 +1,15 @@
-/* dcc_mir_schedule.c - shadow sparse register scheduling for MIR.
+/**
+ * @file dcc_mir_schedule.c
+ * @brief Builds the diagnostic sparse register schedule for MIR.
  *
- * The first stage builds live segments split at CFG and call boundaries and
- * accounts for edge-specific PHI uses. It deliberately emits no Z80 yet.
+ * @par Role
+ * Splits virtual-value live ranges at CFG and call boundaries, accounts for
+ * edge-specific PHI uses, assigns legal target colors or spill/rematerialize
+ * outcomes, and summarizes pressure and boundary moves.
+ *
+ * @par Boundary
+ * mir_build_shadow_schedule() and mir_schedule_report_shadow_plan() analyze
+ * only; they do not affect candidate selection or emit Z80.
  */
 
 #include "dcc_mir_internal.h"

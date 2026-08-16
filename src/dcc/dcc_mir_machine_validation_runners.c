@@ -1,4 +1,15 @@
-/* dcc_mir_machine_validation_runners.c - strict scope/wide/validation schedules. */
+/**
+ * @file dcc_mir_machine_validation_runners.c
+ * @brief Emits exact schedules for compiler and runtime validation harnesses.
+ *
+ * @par Role
+ * Matches complete test-runner shapes for scope, calls, wide/indexed values,
+ * callbacks, allocation, memory, files, directories, and buffered console
+ * behavior. The phase argument preserves distinct selector positions.
+ *
+ * @par Key entry point
+ * mir_try_emit_validation_runners().
+ */
 
 #include "dcc_mir_machine_internal.h"
 

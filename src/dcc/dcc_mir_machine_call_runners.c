@@ -1,4 +1,15 @@
-/* dcc_mir_machine_call_runners.c - strict call/check orchestration schedules. */
+/**
+ * @file dcc_mir_machine_call_runners.c
+ * @brief Emits exact schedules for call-heavy orchestration functions.
+ *
+ * @par Role
+ * Matches functions dominated by argument packing, ABI-sensitive calls,
+ * allocation/file/system call sequences, aggregate-value calls, and
+ * call-containing control loops, then emits one complete schedule.
+ *
+ * @par Key entry point
+ * mir_try_emit_call_runners().
+ */
 
 #include "dcc_mir_machine_internal.h"
 

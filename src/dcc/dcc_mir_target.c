@@ -1,9 +1,15 @@
-/* dcc_mir_target.c - shadow Z80 constraints for MIR scheduling.
+/**
+ * @file dcc_mir_target.c
+ * @brief Models Z80 constraints for the diagnostic shadow scheduler.
  *
- * This module describes physical register aliases, call clobbers and the
- * cheapest legal instruction-template class for each semantic MIR opcode.
- * It does not select or emit code yet; DCC_MIR_TARGET_REPORT exposes the
- * model without changing production output.
+ * @par Role
+ * Maps semantic MIR instructions to legal register colors, fixed inputs and
+ * outputs, call clobbers, aliasing, and approximate template costs.
+ *
+ * @par Boundary
+ * mir_target_constraint_for_insn() feeds dcc_mir_schedule.c, and
+ * mir_target_report_shadow_plan() reports the model. This module neither
+ * selects a production candidate nor emits Z80.
  */
 
 #include "dcc_mir_internal.h"

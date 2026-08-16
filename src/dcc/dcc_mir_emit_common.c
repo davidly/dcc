@@ -1,10 +1,15 @@
-/* dcc_mir_emit_common.c - shared scalar-value emission helpers used by
- * more than one MIR selector (homed prologue/epilogue, home<->HL/DE
- * moves, PHI copies, comparison fusion helpers) plus the
- * mir_try_emit_scalar_dag / mir_try_emit_homed_scalar_dag selectors
- * that are built directly on top of them.
+/**
+ * @file dcc_mir_emit_common.c
+ * @brief Provides scalar Z80 emission shared by multiple MIR candidates.
  *
- * Part of the dcc_mir.c MIR backend split; see dcc_mir_internal.h.
+ * @par Role
+ * Implements home/register moves, prologues and epilogues, address
+ * resolution, casts, arithmetic, comparisons, PHI copies, and other reusable
+ * scalar operations. It also owns the straight-line scalar DAG candidates.
+ *
+ * @par Key entry points
+ * mir_try_emit_scalar_dag(), mir_try_emit_homed_scalar_dag(), and the
+ * mir_emit_* helpers declared in dcc_mir_internal.h.
  */
 #include <stdio.h>
 #include <stdlib.h>
