@@ -1,12 +1,18 @@
-/*
- * dcc_data.c - data-section emission.
+/**
+ * @file dcc_data.c
+ * @brief Emits string, initialized-data, BSS, and stack-layout assembly.
  *
- * Writes the assembled data segment: the string-literal pool and global
- * object storage with their initializers, rendered as DEFB/DEFW (numbers and
- * label references) by emit_data().
+ * @par Role
+ * Serializes string literals and global initializer records, marks required
+ * externs, lays out uninitialized objects for application or module mode, and
+ * publishes data, BSS, heap, and stack boundary symbols.
  *
- * MODULE: compiled as its own translation unit; shared declarations are in dcc.h.
- * Source provenance: monolith src/ddc.c lines 17706-17974.
+ * @par Key entry points
+ * emit_data(), emit_init_numeric(), and emit_init_label_or_number().
+ *
+ * @par Boundary
+ * dcc_global_init.c builds initializer records and dcc_symbols.c owns the
+ * referenced symbols. This module emits data layout, not function bodies.
  */
 
 #include "dcc.h"

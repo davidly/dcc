@@ -1,10 +1,19 @@
-/* qsort.c - sample: sorting with the runtime qsort.
+/**
+ * @file qsort.c
+ * @brief Demonstrates dcc's runtime qsort in ascending and descending order.
  *
- * qsort is now part of the dcc runtime (DCCRTL.MAC).  This file used to supply
- * a C implementation of qsort for programs to link against, back when the
- * runtime did not provide one; it now simply demonstrates calling the built-in
- * function.  See tqsort.c for the full unit test and the "Searching and
- * sorting" section of the dcc C89 reference guide.
+ * @par Role
+ * Provides a deterministic, no-input CP/M sample that prints a fixed integer
+ * array before sorting, after ascending sorting, and after descending sorting,
+ * with an explicit ascending-order check.
+ *
+ * @par Key entry points
+ * main() drives the sample; cmp_int_asc(), cmp_int_desc(), and show() provide
+ * callbacks and output.
+ *
+ * @par Boundary
+ * DCCRTL.MAC owns the qsort implementation. tests/tqsort.c provides the
+ * comprehensive validation; this file is an API example, not a replacement.
  */
 
 #include <stdio.h>

@@ -1,13 +1,22 @@
-/*
- * dcc_expr.c - low-level expression/declarator parsing and emit helpers.
+/**
+ * @file dcc_expr.c
+ * @brief Houses shared declarator, expression, and target-value utilities.
  *
- * Implements memory loads/stores through HL, struct copies, conversions,
- * bitfield access, increment/decrement, and call cleanup used by the AST
- * emitter. It also parses sizeof operands, function-pointer/array declarators,
- * initializer atoms, enum constants, and user-label bookkeeping.
+ * @par Role
+ * Parses sizeof operands and function-pointer/array declarators, counts
+ * initializer shapes, tracks user labels, and implements common memory,
+ * aggregate, conversion, bitfield, call-cleanup, and increment/decrement
+ * primitives.
  *
- * MODULE: compiled as its own translation unit; shared declarations are in dcc.h.
- * Source provenance: monolith src/ddc.c lines 5373-8841.
+ * @par Key entry points
+ * parse_sizeof_expr_operand(), parse_funcptr_declarator(),
+ * parse_array_declarator_dims(), emit_load_from_hl(),
+ * emit_store_de_to_addr_hl(), and define_user_label().
+ *
+ * @par Boundary
+ * dcc_ast_build.c owns general expression grammar and dcc_types.c owns the
+ * target type model. These helpers do not form a production body fallback;
+ * final function bodies come from selected MIR candidates.
  */
 
 #include "dcc.h"

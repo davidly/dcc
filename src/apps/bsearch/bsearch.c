@@ -1,10 +1,17 @@
-/* bsearch.c - sample: searching with the runtime bsearch.
+/**
+ * @file bsearch.c
+ * @brief Demonstrates dcc's runtime bsearch with present and absent keys.
  *
- * bsearch is now part of the dcc runtime (DCCRTL.MAC).  This file used to
- * supply a C implementation of bsearch for programs to link against, back when
- * the runtime did not provide one; it now simply demonstrates calling the
- * built-in function.  See tbsearch.c for the full unit test and the "Searching
- * and sorting" section of the dcc C89 reference guide.
+ * @par Role
+ * Provides a deterministic, no-input CP/M sample that searches a fixed sorted
+ * integer array and prints the index of each hit or a not-found result.
+ *
+ * @par Key entry points
+ * main() drives the sample; cmp_int() supplies the ordering callback.
+ *
+ * @par Boundary
+ * DCCRTL.MAC owns the bsearch implementation. tests/tbsearch.c provides the
+ * comprehensive validation; this file is an API example, not a replacement.
  */
 
 #include <stdio.h>

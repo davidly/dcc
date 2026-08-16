@@ -1,11 +1,19 @@
-/*
- * dcc_stmt.c - statement code generation.
+/**
+ * @file dcc_stmt.c
+ * @brief Traverses function compounds and bridges statements into AST/MIR.
  *
- * Compound-block parsing plus shared statement/codegen helpers used by the AST
- * emitter. Statement lowering itself lives in dcc_ast_gen*.c.
+ * @par Role
+ * Parses compound-block sequencing, dispatches declarations and statements,
+ * maintains lexical/VLA scopes, suppresses unreachable work while preserving
+ * re-entry labels, and records closing-brace diagnostics and debug locations.
  *
- * MODULE: compiled as its own translation unit; shared declarations are in dcc.h.
- * Source provenance: monolith src/ddc.c lines 13992-15879.
+ * @par Key entry points
+ * process_compound() and gen_statement().
+ *
+ * @par Boundary
+ * gen_statement() is a frontend bridge to AST processing and MIR capture, not
+ * a legacy body emitter. AST modules own statement structure and metadata;
+ * selected MIR candidates alone provide production function bodies.
  */
 
 #include "dcc.h"

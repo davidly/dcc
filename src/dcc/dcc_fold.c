@@ -1,13 +1,20 @@
-/*
- * dcc_fold.c - compile-time constant folding and sizeof/offsetof.
+/**
+ * @file dcc_fold.c
+ * @brief Evaluates typed compile-time expressions into ConstVal results.
  *
- * The cf_* value engine evaluates constant sub-expressions (with C type and
- * promotion rules) to fold them to immediates; plus sizeof/offsetof operand
- * evaluation and emission of folded constant results. struct ConstVal is
- * declared in dcc.h.
+ * @par Role
+ * Implements the constant-expression precedence parser, target-width masks,
+ * promotions, casts, arithmetic, comparisons, logical operations, conditional
+ * expressions, integer/float literals, and sizeof/offsetof folding.
  *
- * MODULE: compiled as its own translation unit; shared declarations are in dcc.h.
- * Source provenance: monolith src/ddc.c lines 4806-5372.
+ * @par Key entry points
+ * try_parse_const_expr_value(), try_parse_integer_const_expr_value(),
+ * cf_parse_cond(), cf_convert_to_type(), and emit_const_value().
+ *
+ * @par Boundary
+ * dcc_constexpr.c applies declaration-specific validity and range rules.
+ * Runtime expression capture and production function-body selection belong to
+ * the AST and MIR layers.
  */
 
 #include "dcc.h"

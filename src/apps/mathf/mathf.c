@@ -1,16 +1,21 @@
-/*
- * mathf.c - single-precision <math.h> transcendental functions for dcc.
+/**
+ * @file mathf.c
+ * @brief Preserves historical C implementations of dcc math routines.
  *
- * HISTORICAL ONLY. This originally generated the math routines merged into
- * DCCRTL.MAC (see git history for the build/merge procedure that used to
- * apply). That block is now hand-maintained directly in DCCRTL.MAC, has
- * diverged from this file, and must NOT be regenerated from here - doing
- * so would silently discard hand-applied fixes (e.g. Inf/NaN/domain
- * handling) that only exist in the assembly. Kept for reference/context,
- * not as a build input.
+ * @par Role
+ * Retains 32-bit-float reference implementations for exponential, logarithmic,
+ * hyperbolic, trigonometric, inverse-trigonometric, and decomposition APIs.
+ * The file has no main() or standalone I/O; it formerly generated routines
+ * merged into DCCRTL.MAC.
  *
- * Constraints honoured: no double (32-bit float only), 16-bit int, 32-bit long.
- * Trig/inverse-trig polynomials are the verified approximations from trig.c.
+ * @par Key entry points
+ * expf(), logf(), powf(), sinf(), cosf(), tanf(), atanf(), atan2f(), asinf(),
+ * acosf(), frexpf(), ldexpf(), and modff().
+ *
+ * @par Boundary
+ * This is historical reference material, not a runtime build input.
+ * DCCRTL.MAC is the hand-maintained source of truth and contains fixes absent
+ * here; tests/tmathf.c validates the active runtime implementations.
  */
 
 #include <math.h>

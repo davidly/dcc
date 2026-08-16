@@ -1,9 +1,20 @@
-/*
- * dccpeep.c - fixed-point peephole optimizer for dcc-generated Z80/M80 assembly.
+/**
+ * @file dccpeep.c
+ * @brief Orchestrates dcc's Z80/M80 peephole optimizer.
  *
- * main() preserves the order of convergent, post-convergence, size-mode, and
- * final-cleanup passes. Individual passes return nonzero when they rewrite the
- * shared line program declared in dccpeep_internal.h.
+ * @par Role
+ * Owns command-line handling, pass statistics, the fixed-point,
+ * post-convergence, size-mode, and final-cleanup schedule, plus the core
+ * transformations and register-claim queries not split into focused modules.
+ *
+ * @par Key entry points
+ * main() reads an assembly file, runs the ordered pass pipeline, and writes
+ * the settled line program.
+ *
+ * @par Boundary
+ * peep_lines.c owns line storage and I/O; the peep_* analysis modules and
+ * peep_pass_* families own their focused contracts. Pass ordering remains
+ * solely in this file.
  */
 #include "dccpeep_internal.h"
 

@@ -1,36 +1,20 @@
-/*
- * strconv.c - C89 string-conversion / tokenising helpers for dcc.
+/**
+ * @file strconv.c
+ * @brief Defines C89 sources for dcc runtime string conversion and tokenising.
  *
- * SOURCE OF TRUTH for strtol/strtoul/strtok, which are folded into DCCRTL.MAC
- * the same way as mathf.c (the math.h routines).  Written in portable dcc C89
- * on top of the runtime's existing helpers (strspn/strpbrk for strtok, the
- * 32-bit long divide/modulo primitives for strtol/strtoul, and errno).
+ * @par Role
+ * Provides the source-of-truth implementations of strtol(), strtoul(), and
+ * strtok() that are compiled with dcc, optimized, label-renamed, and merged
+ * into DCCRTL.MAC. The conversion routines report endpoints and range errors;
+ * strtok() keeps its required scan state. There is no main() or console I/O.
  *
- * Build/merge procedure (identical in spirit to src/apps/mathf/mathf.c):
- *   1. dcc -c strconv.c -o strconv.mac
- *   2. dccpeep strconv.mac strconv.peep.mac   (ma.sh peeps apps, NOT the
- *      runtime, so merged blocks must be pre-optimized here)
- *   3. strip: "extrn " lines (those helpers live in DCCRTL.MAC and resolve
- *      locally), the "; dcc stage-1d" banner and the "cseg" line.  KEEP the
- *      data for strtok's saved pointer (see note below).
- *   4. rename local labels L<n> -> SCL<n> (perl -pe 's/\bL(\d+)\b/SCL$1/g')
- *      AND compiler temporaries _Z<n> -> SCZ<n>, so they cannot collide with
- *      an app's own L<n>/_Z<n> labels (the same whole-token collision class
- *      that bit the math merge; see repo memory).
- *   5. splice the public blocks into DCCRTL.MAC before "end start".
+ * @par Key entry points
+ * strtol(), strtoul(), and strtok().
  *
- * NAME MANGLING: L80 only honours 6 significant characters in external
- * symbols, so the literal publics _strtol/_strtoul/_strtok all collapse to
- * "_STRTO" and collide.  dcc therefore maps these C names to short runtime
- * labels in src/dcc/dcc_asmname.c (and the src/ddc.c monolith copy):
- *   strtol -> __stol, strtoul -> __stou, strtok -> __stok.
- * The merged runtime blocks use those mangled public labels.
- *
- * NOTE on strtok state: C89 strtok keeps a saved pointer between calls.  The
- * static below compiles to a single 2-byte cell; when merging, that cell is
- * carried into DCCRTL.MAC as an explicit "dw 0" so the routine keeps its state.
- *
- * Constraints honoured: no double (long is 32-bit), 16-bit int, signed char.
+ * @par Boundary
+ * Existing DCCRTL helpers provide long arithmetic, errno, strspn(), and
+ * strpbrk(); dcc_asmname.c maps the public names to __stol, __stou, and
+ * __stok for LINK-80. tests/tstrconv.c validates the merged runtime code.
  */
 
 #include <stdlib.h>

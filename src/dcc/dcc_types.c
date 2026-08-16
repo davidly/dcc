@@ -1,14 +1,20 @@
-/*
- * dcc_types.c - type system and aggregate/typedef parsing.
+/**
+ * @file dcc_types.c
+ * @brief Implements the target type model and aggregate/type-name parsing.
  *
- * Base-type and declarator parsing (parse_base_type/parse_type), struct/union
- * and typedef tables, bitfield layout, type sizing/promotion/arithmetic
- * helpers, and enum-constant lookup. find_enum_const() is relocated here from
- * the monolith's declaration block (its only caller is the global-init parser).
+ * @par Role
+ * Encodes size and pointer-depth operations, array dimensions and strides,
+ * target-size checks, struct/union and bitfield layout, typedef and enum
+ * lookup, qualifiers, base types, declarators, and abstract type names.
  *
- * MODULE: compiled as its own translation unit; shared declarations are in dcc.h.
- * Source provenance: monolith src/ddc.c line 467-474 (find_enum_const) then
- * lines 2872-3559.
+ * @par Key entry points
+ * type_size(), type_ptr_depth(), parse_base_type(), parse_type(),
+ * parse_type_name_decl(), parse_struct_definition(), and find_field_def().
+ *
+ * @par Boundary
+ * Function declarators are completed by dcc_expr.c and dcc_func.c; typed
+ * constant evaluation lives in dcc_fold.c and dcc_constexpr.c. This module
+ * defines types and emits no function-body code.
  */
 
 #include "dcc.h"

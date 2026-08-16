@@ -1,21 +1,19 @@
-/* peep_frame_alloc.c - machine-level frame-slot value analysis.
+/**
+ * @file peep_frame_alloc.c
+ * @brief Measures promotion opportunities for surviving IX frame slots.
  *
- * dcc's `(ix+n)` frame slots are virtual registers that have been eagerly
- * spilled. This module discovers the subset whose surviving post-convergence
- * machine code proves can be promoted back into a physical register.
+ * @par Role
+ * Runs an analysis-only post-convergence census over byte-slot definitions
+ * and loads, using basic-block scans, function reaching definitions, effects,
+ * and liveness to estimate safe BC/DE promotion spans and cycle savings.
  *
- * Phase 1 is analysis-only and deliberately basic-block scoped. A slot value
- * starts at a direct store to `(ix+n)`, has one reaching definition by
- * construction inside the block, and ends at the last direct load before the
- * next store. Calls, opaque instructions, labels and control transfers are
- * block boundaries through the existing CFG, so nothing here guesses across
- * control-flow joins. The report is emitted only under -fstats and changes no
- * program text.
+ * @par Key entry points
+ * peep_frame_alloc_analyze() emits aggregate statistics and optional candidate
+ * detail without changing program text.
  *
- * This first answers the question the source-level heuristics could not:
- * after every structural peephole pass has run, how much real frame traffic is
- * still present in spans where BC or DE is genuinely dead? Only if that census
- * is material should rewriting be enabled.
+ * @par Boundary
+ * This module measures opportunities but performs no allocation or rewrite.
+ * peep_effects.c and peep_dataflow.c own the machine facts it consumes.
  */
 #include "dccpeep_internal.h"
 

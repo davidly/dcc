@@ -1,52 +1,21 @@
-/*
-* l80c.c - portable, host-native LINK-80-compatible linker.
-*
-* Companion to m80c: where m80c assembles .MAC to LINK-80-compatible .REL
-* on the host (unbounded memory instead of CP/M 64K tables), l80c links
-* those .REL files into a CP/M .COM image on the host too. The real
-* l80.com still runs as a CP/M program under the ntvcm emulator, so its
-* own symbol/relocation workspace is bounded by that emulated 64K - large
-* nopeep builds can exhaust it well before the target program itself would
-* not fit. l80c removes that host-side ceiling.
-*
-* REL bitstream format (reverse-engineered from src/m80c/m80c.c's writer,
-* which this file mirrors byte-for-byte):
-*
-*   Top-level items, decoded from a bitstream (MSB-first within each byte):
-*     0                          -> literal byte for the current segment
-*     1 00 cccc                  -> special item, code cccc (0-15)
-*     1 tt <16-bit value>        -> link value of type tt (1=CODE,2=DATA,3=COMM),
-*                                    a relocatable value stored at the current
-*                                    location in the current segment
-*
-*   Special item codes actually emitted by m80c (and consumed here):
-*     2  name                    module name
-*     0  name                    entry symbol preview (informational; skipped)
-*    10  type,value               data (DSEG) segment size
-*    13  type,value               code (CSEG) segment size
-*    11  type,value               set location counter (type selects the
-*                                  active segment for subsequent byte/link items)
-*     7  type,value,name          define public symbol
-*     6  type,value,name          external reference chain head
-*    14  type,value               end module (byte-aligns afterward)
-*    15  (none)                   end file
-*
-* EXTRN references are threaded as a backward linked list through the
-* code/data stream itself: each reference's 2-byte slot holds the *previous*
-* reference's location (as an ordinary CODE/DATA link value, so the generic
-* relocation pass below turns it into an absolute address for free); the
-* first reference in a chain is written as literal 0x00,0x00 (never
-* fixed up, so it remains 0 - the walk terminator, since address 0 is never
-* a valid CP/M code/data target).
-*
-* Scope: CSEG/DSEG only (this toolchain's generated code never emits ASEG
-* as a distinct segment or COMMON blocks - confirmed empirically against
-* DCCRTL.MAC and every test's generated .MAC). Anything else is a hard,
-* loud error rather than a silent miscompile.
-*
-* Build:
-*   cc -std=c89 -Wall -Wextra -O2 -o l80c l80c.c
-*/
+/**
+ * @file l80c.c
+ * @brief Links dcc LINK-80 modules into host-produced CP/M .COM images.
+ *
+ * @par Role
+ * Reads M80-compatible .REL bitstreams, lays out each module's CSEG and DSEG,
+ * relocates link values, resolves PUBLIC symbols and EXTRN chains, and writes
+ * a padded .COM image plus a linked .SYM map. Optional per-module .SYM files
+ * contribute relocated local symbols.
+ *
+ * @par Key entry points
+ * main(), load_rel_file(), load_module_syms(), and sym_define().
+ *
+ * @par Boundary
+ * Complements m80c and replaces emulated L80 for normal dccmake builds,
+ * avoiding L80's CP/M workspace ceiling. It accepts the CSEG/DSEG records used
+ * by this toolchain and rejects unsupported ASEG, COMMON, or unknown records.
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

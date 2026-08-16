@@ -1,9 +1,20 @@
-/* peep_pass_minmax.c - application-specific board/game passes.
+/**
+ * @file peep_pass_minmax.c
+ * @brief Optimizes exact board-game and minimax assembly idioms.
  *
- * These passes target patterns emitted by the bundled ttt/chess sample
- * programs (the _MinMax, _FindSolution, board, winner, and posn-function
- * idioms). They are opt-in by pattern match: each declines unless it finds
- * the exact application shape, so they are inert on ordinary programs.
+ * @par Role
+ * Implements the bundled ttt/chess pattern family for position functions,
+ * MinMax/FindSolution frames and calls, board-address reuse, winner checks,
+ * byte returns, and register caches.
+ *
+ * @par Key entry points
+ * pass_posfunc_b_cache(), the pass_minmax_*() family,
+ * pass_winner_check_dec_a(), and pass_global_board_const_offsets().
+ *
+ * @par Boundary
+ * Rewrites require exact application symbols, function context, or narrowly
+ * emitted shapes, so unrelated programs remain inert. General loop, branch,
+ * and local-pattern passes belong to their dedicated modules.
  */
 #include "dccpeep_internal.h"
 

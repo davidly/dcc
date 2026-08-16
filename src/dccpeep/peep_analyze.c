@@ -1,4 +1,21 @@
-/* peep_analyze.c - shared register and function-bound safety analysis. */
+/**
+ * @file peep_analyze.c
+ * @brief Provides lightweight conservative safety queries over assembly text.
+ *
+ * @par Role
+ * Detects register-pair clobbers and textual register uses, wraps indexed
+ * function-bound lookup, and records local function labels used to prevent
+ * unsafe register borrowing across calls.
+ *
+ * @par Key entry points
+ * line_clobbers_bc(), line_touches_reg_pair(), find_function_bounds(),
+ * find_function_bounds_any(), and scan_local_func_labels().
+ *
+ * @par Boundary
+ * This module does not build structured effects, CFGs, or liveness; those
+ * belong to peep_effects.c and peep_dataflow.c. Unrecognized text is treated
+ * conservatively by each query.
+ */
 #include "dccpeep_internal.h"
 
 #define MAX_LOCAL_FUNC_LABELS 8192

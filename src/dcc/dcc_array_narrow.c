@@ -1,14 +1,21 @@
-/*
- * dcc_array_narrow.c - conservative proof engine for narrowing eligible local
- * int arrays, register scalars, and for-loop counters to unsigned char.
+/**
+ * @file dcc_array_narrow.c
+ * @brief Proves when selected local integers can use unsigned-byte storage.
  *
- * The proof checks that every stored value is non-negative and <=255 and that
- * no writable alias escapes its scope. Dependencies are discovered
- * coinductively, then every write is verified against the small supported rule
- * set (literals, bounded arithmetic, group references, array reads, and simple
- * no-argument calls). Unknown shapes, aliases, recursive calls, or exhausted
- * limits decline narrowing; they never guess. Normal byte codegen then handles
- * accepted candidates without a separate lowering path.
+ * @par Role
+ * Conservatively analyzes function-local ASTs for bounded writes, dependency
+ * groups, alias escape, simple call results, and exact counting-loop shapes.
+ * It covers eligible arrays, register scalars, and for-loop counters and
+ * declines unknown, recursive, aliased, or over-limit cases.
+ *
+ * @par Key entry points
+ * narrow_array_is_byte_safe(), narrow_scalar_is_byte_safe(), and
+ * narrow_for_counter_is_byte_safe().
+ *
+ * @par Boundary
+ * This module proves safety only; callers choose storage and perform normal
+ * byte lowering. It neither mutates the source tree nor emits a production
+ * function body.
  */
 
 #include "dcc.h"

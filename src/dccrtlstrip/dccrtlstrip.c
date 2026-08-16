@@ -1,13 +1,20 @@
-/*
- * dccrtlstrip.c - conservative pre-link reducer for dccrtl.mac
+/**
+ * @file dccrtlstrip.c
+ * @brief Produces a conservative per-application subset of DCCRTL.MAC.
  *
- * Usage:
- *   dccrtlstrip [-k symbol ...] -r dccrtl.mac -o rtlmin.mac app.mac [app2.mac ...]
+ * @par Role
+ * Reads the full runtime, one or more application .MAC files, and optional
+ * explicit roots; groups runtime text around PUBLIC entry points, follows
+ * assembly references to a fixed point, and writes RTLMIN.MAC with required
+ * preludes, aliases, data, and filtered PUBLIC directives.
  *
- * This version treats PUBLIC directives as runtime block boundaries, not
- * arbitrary labels.  That is important for routines like _printf whose body
- * contains private labels/data such as __pf_run, pf_sink, etc.  Splitting on
- * every label can keep only the entry stub and strip the real body.
+ * @par Key entry points
+ * main(), build_blocks(), scan_app(), mark_reachable(), and write_output().
+ *
+ * @par Boundary
+ * Runs after dcc/dccpeep emit application assembly and before M80/m80c
+ * assembles the selected runtime. It performs conservative textual
+ * reachability analysis, not assembly or linking.
  */
 #include <stdio.h>
 #include <stdlib.h>

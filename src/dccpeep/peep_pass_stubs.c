@@ -1,7 +1,20 @@
-/* peep_pass_stubs.c - size-oriented shared-helper rewrites.
+/**
+ * @file peep_pass_stubs.c
+ * @brief Factors repeated instruction sequences through shared size helpers.
  *
- * These passes run after fixed-point optimization. Their order remains in
- * dccpeep.c because later passes consume forms produced by earlier ones.
+ * @par Role
+ * Replaces exact frame, local, argument, static-load, comparison, bitwise,
+ * and sign-extension sequences with calls or jumps to shared runtime helpers,
+ * adding the required external declarations.
+ *
+ * @par Key entry points
+ * pass_shared_frame_stubs(), pass_lvar_stubs(), pass_svar_stubs(),
+ * pass_larg_stubs(), and the remaining pass_*_stub() helpers.
+ *
+ * @par Boundary
+ * These are size-mode, post-convergence rewrites. dccpeep.c owns their order
+ * because later stub passes consume forms produced by earlier ones; runtime
+ * helper implementations live outside dccpeep.
  */
 #include "dccpeep_internal.h"
 

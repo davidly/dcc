@@ -1,64 +1,20 @@
-/*
- * dcc_licm.c - general loop-invariant code motion for `for` loop bodies.
+/**
+ * @file dcc_licm.c
+ * @brief Plans AST metadata for scalar LICM and loop-local CSE temporaries.
  *
- * dcc_ast_stmt_meta.c plans three narrow, single-statement-body
- * shapes (a loop-invariant lvalue address, a row-invariant 2D array read,
- * and a global-member value proven invariant via dcc_global_scan.c). This
- * file generalizes the same idea - "the same value gets recomputed every
- * iteration even though it can't actually change" - to loop bodies of any
- * shape (multiple statements, nested ifs), for the narrower but still very
- * common case of a pure scalar-arithmetic subexpression (no memory access,
- * no calls, no side effects) that doesn't depend on anything the loop
- * itself modifies.
+ * @par Role
+ * During frame-sizing and metadata walks, scans for-loop ASTs for modified
+ * names, models pure invariant or profitably repeated scalar arithmetic,
+ * allocates the required compiler temporaries, and builds copy-on-write
+ * rewrites without changing the original tree.
  *
- * Motivating case (tests/00040.c, an 8-queens solver profiled at 98.5% of
- * total runtime in one function):
+ * @par Key entry points
+ * ast_licm_plan_invariants().
  *
- *     int chk(int x, int y)
- *     {
- *         int i, r;
- *         for (r=i=0; i<8; i++) {
- *             r = r + t[x + 8*i];
- *             r = r + t[i + 8*y];   -- 8*y recomputed every iteration
- *             ...
- *         }
- *     }
- *
- * `y` is a parameter, never assigned anywhere in the loop, so `8*y` is the
- * same value on every one of the loop's iterations - and this shape (a
- * multi-statement body with several `if`s) doesn't match any of the three
- * existing narrow hoists at all.
- *
- * Design, deliberately conservative at every step (an unrecognized shape or
- * anything that could plausibly break the invariance argument is always a
- * decline, never a guess - matching dcc_array_narrow.c/dcc_global_scan.c):
- *
- *   1. Scan the loop's condition, increment, and body for every plain
- *      identifier that is assigned, incremented/decremented, or has its
- *      address taken anywhere - that's the set nothing invariant may depend
- *      on. Any function call anywhere, or any statement/expression shape
- *      this doesn't specifically recognize, marks the WHOLE set as
- *      "modified" (i.e. declines every candidate), since a call could modify
- *      anything through an escaped pointer or global that a purely lexical
- *      scan can't rule out.
- *   2. Walk the body looking for the largest (outermost) subexpressions that
- *      are pure scalar arithmetic (int-sized, no pointers, no memory access,
- *      no calls) and reference only locals/params outside that modified
- *      set - never descending further into an eligible subexpression once
- *      found, so `t[x + 8*i]`'s inner `8*i` is correctly left alone (`i` is
- *      modified) while `t[i + 8*y]`'s inner `8*y` is found and taken whole.
- *   3. For each distinct candidate (by structural equality - the same
- *      subexpression appearing more than once shares one temp), compute its
- *      value once, into a fresh compiler-temp local, before the loop.
- *   4. Return a rewritten copy of the body with every occurrence replaced by
- *      a reference to its temp; the original body node is never mutated,
- *      matching ast_hoist_row_invariant_2d_reads's sharing discipline
- *      (only allocate a fresh copy of a node when something beneath it
- *      actually changed).
- *
- * Runs independently of, and after, the three narrow metadata hoists -
- * only when none of them already produced a hoist body,
- * to keep this file's interaction with that existing code trivial.
+ * @par Boundary
+ * Calls, memory-dependent values, aliases, unsupported shapes, and exhausted
+ * limits cause conservative decline. These AST rewrites are planning support,
+ * not production output; MIR owns function capture, selection, and emission.
  */
 #include "dcc.h"
 #include "dcc_ast.h"

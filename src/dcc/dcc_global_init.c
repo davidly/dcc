@@ -1,16 +1,20 @@
-/*
- * dcc_global_init.c - file-scope (global/static) object initializer parsing.
+/**
+ * @file dcc_global_init.c
+ * @brief Records file-scope object initializers for later data emission.
  *
- * Parses a global object's initializer from the token stream and records the
- * initialized-data image (bytes + relocatable label references) on the symbol,
- * for later emission by the data section. It is the "record" counterpart to
- * dcc_decl.c's "emit" path for automatic (local) initializers.
+ * @par Role
+ * Parses scalar, array, struct/union, bitfield, string, compound-literal, and
+ * designated initializers into each symbol's byte-and-relocation image,
+ * including padding, overwrites, and inferred array bounds.
  *
- * Entry points (declared in dcc.h): parse_global_init_type / _array / _struct
- * / _list, the parse_global_scalar_array_* helpers, parse_global_init_atom,
- * and the append_global_* image builders. Everything else here is file-local.
+ * @par Key entry points
+ * parse_global_init_list(), parse_global_init_type(),
+ * parse_global_init_array(), parse_global_init_struct(),
+ * parse_global_init_atom(), and append_global_init().
  *
- * MODULE: compiled as its own translation unit; shared declarations are in dcc.h.
+ * @par Boundary
+ * dcc_data.c serializes the recorded image, while dcc_decl.c handles automatic
+ * objects. This module records data and emits no function body.
  */
 #include "dcc.h"
 

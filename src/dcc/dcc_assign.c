@@ -1,15 +1,18 @@
-/*
- * dcc_assign.c - shared assignment/float emit helpers for the AST emitter.
+/**
+ * @file dcc_assign.c
+ * @brief Supplies small target helpers shared by assignment-related paths.
  *
- * Low-level primitives the AST emitter calls while lowering assignments and
- * float values: emit_load_float_bits materialises a 32-bit float constant into
- * the DE:HL register pair, and emit_global_byte_array_index_addr computes the
- * address of a byte-array element at a global symbol (constant or ix-relative
- * index). Assignment statement/expression lowering itself lives in the AST
- * emitter (dcc_ast_gen*.c).
+ * @par Role
+ * Materializes a 32-bit float bit pattern in DE:HL and computes the address of
+ * an indexed global byte-array element for constant or frame-local indices.
  *
- * MODULE: compiled as its own translation unit; shared declarations are in dcc.h.
- * Source provenance: monolith src/ddc.c lines 11521-12417.
+ * @par Key entry points
+ * emit_load_float_bits() and emit_global_byte_array_index_addr().
+ *
+ * @par Boundary
+ * This file does not own assignment semantics or candidate selection.
+ * Production function-body output is committed only through selected MIR
+ * candidates.
  */
 
 #include "dcc.h"

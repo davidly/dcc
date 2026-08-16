@@ -1,7 +1,19 @@
-/* peep_pass_control_flow.c - label and branch rewrite passes.
+/**
+ * @file peep_pass_control_flow.c
+ * @brief Implements label and branch simplification passes.
  *
- * These passes remove dead/adjacent labels, thread or shortcut branches,
- * and collapse jumps to plain returns.
+ * @par Role
+ * Collapses adjacent labels, removes unreferenced labels when safe, folds
+ * branch-over-jump shapes, threads and shortcuts jump targets, and replaces
+ * jumps to plain returns.
+ *
+ * @par Key entry points
+ * pass_labels(), pass_branch_over_jump(), pass_jump_thread(),
+ * pass_cond_skip_shortcut(), and pass_jp_to_plain_ret().
+ *
+ * @par Boundary
+ * peep_control_flow.c owns shared label indexes and textual branch queries;
+ * this module owns only rewrites. dccpeep.c decides when they run.
  */
 #include "dccpeep_internal.h"
 

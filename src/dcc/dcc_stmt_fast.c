@@ -1,13 +1,17 @@
-/*
- * dcc_stmt_fast.c - in-place increment/decrement address-form emit helper.
+/**
+ * @file dcc_stmt_fast.c
+ * @brief Emits an in-place increment or decrement through an HL address.
  *
- * emit_incdec_addr emits an in-place ++/-- on the lvalue whose address is
- * already in HL, sized for the operand type: a single inc/dec (hl) for bytes,
- * or a multi-byte ripple with early-out for 16- and 32-bit operands. Called by
- * the AST emitter when lowering pre/post increment and decrement.
+ * @par Role
+ * Updates byte, 16-bit, or 32-bit lvalues with compact Z80 sequences, using
+ * carry/borrow ripple and early exits for multi-byte objects.
  *
- * MODULE: compiled as its own translation unit; shared declarations are in dcc.h.
- * Source provenance: monolith src/ddc.c lines 12418-13127.
+ * @par Key entry points
+ * emit_incdec_addr().
+ *
+ * @par Boundary
+ * Callers resolve the lvalue, type, and pre/post value semantics. This target
+ * helper neither analyzes statements nor selects a production MIR candidate.
  */
 
 #include "dcc.h"
