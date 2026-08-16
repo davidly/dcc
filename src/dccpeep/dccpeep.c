@@ -7196,6 +7196,57 @@ static int parse_mutable_iy_increment(int line, int offset, int func_start,
            flags_dead_after_resolved_jump(line + 5, func_start, func_end);
 }
 
+static int mutable_iy_postincrement_pair(int line, int offset)
+{
+    char first[MAX_LINE], second[MAX_LINE];
+    int loaded_offset, stored_offset;
+
+    if (line < 0 || line + 7 >= nlines ||
+        !peep_parse_ld_ix_pair(lines[line], lines[line + 1], &loaded_offset) ||
+        loaded_offset != offset ||
+        !eq(line + 3, "inc hl") || !eq(line + 5, "inc hl") ||
+        !peep_parse_st_ix_pair(lines[line + 6], lines[line + 7],
+                               &stored_offset) ||
+        stored_offset != offset)
+        return 0;
+    strip_peep_comment_copy(first, lines[line + 2]);
+    strip_peep_comment_copy(second, lines[line + 4]);
+    return strncmp(first, "ld ", 3) == 0 && strstr(first, "(hl)") != NULL &&
+           strncmp(second, "ld ", 3) == 0 && strstr(second, "(hl)") != NULL;
+}
+
+/* A low-reference pointer is still profitable when its load/store round trip
+ * executes at least five times: each IY replacement saves 26T, enough to pay
+ * for preserving incoming IY in the vacated frame slot. Require the canonical
+ * constant IX-byte counter immediately outside the loop header. */
+static int mutable_iy_counted_loop_trip_count(int line, int func_start,
+                                               int func_end)
+{
+    int k;
+
+    for (k = line + 8; k + 1 < func_end; ++k) {
+        char condition[16], target[128];
+        int counter_offset, target_line, q;
+
+        if (!peep_parse_dec_ix_byte(lines[k], &counter_offset) ||
+            !peep_parse_any_cond_jump(lines[k + 1], condition, target) ||
+            strcmp(condition, "nz") != 0)
+            continue;
+        target_line = find_label_line_in_range(target, func_start, func_end);
+        if (target_line < func_start || target_line > line)
+            continue;
+        for (q = target_line - 1; q >= func_start && q >= target_line - 8; --q) {
+            int init_offset, init_value;
+            if (peep_parse_ld_ix_byte_imm(lines[q], &init_offset, &init_value) &&
+                init_offset == counter_offset)
+                return init_value;
+            if (starts_label(lines[q]))
+                break;
+        }
+    }
+    return 0;
+}
+
 static int early_block_requires_initialized_pointer(int line, int func_start,
                                                     int func_end,
                                                     int first_ref)
@@ -7224,7 +7275,9 @@ static int early_block_requires_initialized_pointer(int line, int func_start,
 /* Cache a heavily used mutable frame pointer in documented IY. The vacated
  * frame slot saves incoming IY, making the rewrite ABI-safe across calls and
  * recursion. Every slot reference must be a canonical pair load/store or the
- * standard small carry-skip increment, and every return a normal IX epilogue. */
+ * standard small carry-skip increment. Low-reference candidates additionally
+ * require a canonical post-increment pair in a profitable constant-count
+ * loop. Every return must use a normal IX epilogue. */
 static int pass_cache_mutable_ix_pointer_in_iy(void)
 {
     int i;
@@ -7255,6 +7308,7 @@ static int pass_cache_mutable_ix_pointer_in_iy(void)
         for (candidate_line = func_start + 1;
              candidate_line + 1 < func_end; ++candidate_line) {
             int offset, refs = 0, increments = 0;
+            int counted_postincrements = 0;
             int first_ref = -1, last_ref = -1;
             int epilogues = 0, prologue = -1, safe = 1;
             char low_pat[24], high_pat[24], off_text[16];
@@ -7298,6 +7352,12 @@ static int pass_cache_mutable_ix_pointer_in_iy(void)
                     if (first_ref < 0) first_ref = k;
                     last_ref = k + 1;
                     ++refs;
+                    if (mutable_iy_postincrement_pair(k, offset) &&
+                        mutable_iy_counted_loop_trip_count(k, func_start,
+                                                          func_end) >= 5) {
+                        ++increments;
+                        ++counted_postincrements;
+                    }
                     ++k;
                     continue;
                 }
@@ -7322,7 +7382,8 @@ static int pass_cache_mutable_ix_pointer_in_iy(void)
                 if (strstr(clean, low_pat) || strstr(clean, high_pat))
                     safe = 0;
             }
-            if (!safe || prologue < 0 || epilogues == 0 || refs < 8 ||
+            if (!safe || prologue < 0 || epilogues == 0 ||
+                (refs < 8 && counted_postincrements == 0) ||
                 first_ref != candidate_line)
                 continue;
             for (k = func_start + 1; k < first_ref; ++k) {
