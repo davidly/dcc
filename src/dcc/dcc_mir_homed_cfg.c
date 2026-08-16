@@ -1889,10 +1889,13 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
             {
                 struct Sym *callee = find_global(insn->name);
                 int is_indirect = strcmp(insn->name, "<indirect>") == 0;
-                /* IY is callee-saved by the dcc ABI and by the runtime
-                 * helpers that use it. Only an indirect call, whose target
-                 * cannot be checked against that contract, remains
-                 * excluded here. */
+                /* The emission pass explicitly saves/restores IY (and BC)
+                 * around this call whenever mir_home_color_live_across
+                 * says a homed value is live across it, so this no longer
+                 * depends on every possible callee honoring an IY
+                 * callee-saved contract. Only an indirect call, whose
+                 * target and argument shape cannot be validated here,
+                 * remains excluded. */
                 if (is_indirect || callee == NULL)
                     return mir_homed_reject("call-target");
                 if ((insn->memory_flags & MIR_CALL_FLAG_FORMAT_RUNTIME) != 0 &&
@@ -2881,6 +2884,7 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
                 int argument_bytes = 0;
                 int argument;
                 int scan;
+                int preserve_bc_iy;
                 int dest_value, fill_value, count_value;
                 int s_value, c_value;
                 int s1_value, s2_value, n_value;
@@ -3009,6 +3013,18 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
                         ++call_arg_count;
                     }
                 argument = call_arg_count - 1;
+                /* A value homed in IY (or the BC:IY pair) is only
+                 * callee-saved in practice if every callee actually
+                 * preserves it; a call selector, or a recursive call
+                 * back into a caller that spilled its own IY-homed
+                 * value, is under no such obligation. Guard it
+                 * explicitly here, the same way every other
+                 * instruction handler in this file protects a
+                 * live-across color before clobbering it. */
+                preserve_bc_iy = mir_home_color_live_across(
+                    i, MIR_COLOR_BC_IY);
+                if (preserve_bc_iy)
+                    mir_stream_puts("\tpush iy\n\tpush bc\n", out);
                 for (scan = i - 1; scan >= 0; --scan) {
                     const struct MirInsn *arg = &mir.insns[scan];
                     int size;
@@ -3036,6 +3052,8 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
                 mir_stream_printf(out, "\tcall %s\n", assembly_name);
                 for (argument = 0; argument < argument_bytes / 2; ++argument)
                     mir_stream_puts("\tpop bc\n", out);
+                if (preserve_bc_iy)
+                    mir_stream_puts("\tpop bc\n\tpop iy\n", out);
                 if (type_ptr_depth(insn->type) > 0 ||
                     (insn->type & 15) != TYPE_VOID) {
                     if (mir_homed_wide_type_supported(insn->type)) {
