@@ -11797,16 +11797,18 @@ _feof:
         ex      (sp),hl
         push    bc
         ld      a,l
+        ; sub FIRSTFD's wraparound alone is enough to reject fd < FIRSTFD:
+        ; the smallest wrapped result is 256-FIRSTFD, always >= NFILES for
+        ; this RTL's fixed constants (same trick as the MAXFD-FIRSTFD check
+        ; above), so no separate carry check is needed.
         sub     FIRSTFD
-        jr      c,feof_no
         cp      NFILES
         jr      nc,feof_no
-        ld      h,0
         ld      l,a
+        ld      h,0
         ld      de,__fdeof
         add     hl,de
-        ld      a,(hl)
-        ld      l,a
+        ld      l,(hl)
         ld      h,0
         ret
 feof_no:
