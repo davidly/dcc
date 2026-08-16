@@ -1,0 +1,5 @@
+prefix: No such file
+Bad file descriptor
+Invalid argument
+again: Too many open files
+tperror ok

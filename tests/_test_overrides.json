@@ -132,6 +132,7 @@
     { "name": "tlog", "host": true },
     { "name": "tphi", "host": true },
     { "name": "tprintf", "host": true },
+    { "name": "tperror", "host": true },
     { "name": "spsmash", "ignore": true },
     { "name": "sieveu", "ignore": true },
     { "name": "tttu", "ignore": true },

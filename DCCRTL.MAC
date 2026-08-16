@@ -12974,23 +12974,20 @@ __drent:        ds      13
         public  _perror
 _perror:
         ; void perror(const char *str) - single pointer argument, and
-        ; __conout preserves HL across every call in the loops below;
-        ; IX-free leaf.
+        ; __conout preserves HL across every call below (including
+        ; through __prstr); IX-free leaf.
         pop     bc
         ex      (sp),hl         ; HL = str
         push    bc
         ld      a,h
         or      l
         jr      z,__prmsg
-__prlp:
+        ; C89/C99: the "str: " prefix only prints when str is non-NULL
+        ; *and* non-empty - perror("") must print just the message.
         ld      a,(hl)
         or      a
-        jr      z,__prcol
-        ld      e,a
-        call    __conout
-        inc     hl
-        jr      __prlp
-__prcol:
+        jr      z,__prmsg
+        call    __prstr
         ld      e,':'
         call    __conout
         ld      e,' '
@@ -13000,19 +12997,22 @@ __prmsg:
         push    hl
         call    _strerror
         pop     de
-__prlp2:
-        ld      a,(hl)
-        or      a
-        jr      z,__prend
-        ld      e,a
-        call    __conout
-        inc     hl
-        jr      __prlp2
-__prend:
+        call    __prstr
         ld      e,0ah
         call    __conout
         ld      hl,0
         ret
+
+; Print the NUL-terminated string at HL via __conout. HL is left just
+; past the terminating NUL.
+__prstr:
+        ld      a,(hl)
+        or      a
+        ret     z
+        ld      e,a
+        call    __conout
+        inc     hl
+        jr      __prstr
 
 
 
