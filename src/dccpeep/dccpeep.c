@@ -3235,6 +3235,152 @@ static int pass_signed_cmp_const_low0_mir(void)
     return changed;
 }
 
+static int parse_carry_branch(const char *s, char *mnemonic, char *cond, char *label)
+{
+    char clean[MAX_LINE];
+    const char *p;
+    int i;
+
+    strip_peep_comment_copy(clean, s);
+
+    if (!strncmp(clean, "jp c,", 5)) {
+        strcpy(mnemonic, "jp"); strcpy(cond, "c"); p = clean + 5;
+    } else if (!strncmp(clean, "jp nc,", 6)) {
+        strcpy(mnemonic, "jp"); strcpy(cond, "nc"); p = clean + 6;
+    } else if (!strncmp(clean, "jr c,", 5)) {
+        strcpy(mnemonic, "jr"); strcpy(cond, "c"); p = clean + 5;
+    } else if (!strncmp(clean, "jr nc,", 6)) {
+        strcpy(mnemonic, "jr"); strcpy(cond, "nc"); p = clean + 6;
+    } else {
+        return 0;
+    }
+
+    while (*p == ' ' || *p == '\t')
+        p++;
+    i = 0;
+    while (*p && *p != ' ' && *p != '\t' && i < 120)
+        label[i++] = *p++;
+    label[i] = 0;
+    return i > 0;
+}
+
+/*
+ * pass_fold_signed_cmp_via_bytes:
+ *
+ * DCC's signed 16-bit comparison codegen biases both operands' high bytes
+ * by XOR 128 (shifting the signed range so an ordinary unsigned SBC HL,DE
+ * gives the right carry) and only ever wants that carry - confirmed via
+ * tests/cobint.c: dozens of occurrences of this exact 7-instruction shape
+ * in one program, most immediately followed by a bare carry branch with
+ * nothing else in between. HL and DE's post-SBC contents go completely
+ * unused in every one of those; the whole 45 T-state sequence is spent
+ * purely to read one flag.
+ *
+ * The classic Z80 alternative gets the same signed-comparison carry from
+ * three 8-bit ops plus one overflow-flag sign correction: subtract the low
+ * bytes (for the borrow into the high half), subtract the high bytes, then
+ * fix A's sign bit through the P/V (overflow) flag exactly when the 8-bit
+ * high-byte subtraction itself signed-overflowed, and rotate that corrected
+ * sign into the carry bit.
+ *
+ *     ld a,h              ld a,l
+ *     xor 128             sub e
+ *     ld h,a       ==>    ld a,h
+ *     ld a,d              sbc a,d
+ *     xor 128             jp po,LSnn
+ *     ld d,a              xor 128
+ *     sbc hl,de    LSnn:  rlca
+ *     jp/jr c/nc,L        jp/jr c/nc,L   (unchanged)
+ *
+ * "sub e", not "sub a,e": M80 accepts SBC's two-operand register form
+ * ("sbc a,d" assembles to the correct 9Ah) but silently mis-assembles SUB's
+ * ("sub a,e" assembles to 97h - plain SUB A, self-subtract, silently
+ * dropping the second operand) - confirmed by disassembling the actual
+ * .COM bytes after a from-scratch standalone repro kept failing despite
+ * the algorithm checking out symbolically by hand and by an exhaustive
+ * 200,000-case Python model of the real Z80 flag semantics. Every other
+ * candidate was ruled out first and in this order: the dccpeep pass
+ * mechanics (a hand-edited copy of the pre-dccpeep .mac failed identically,
+ * proving the bug lived in the instruction choice, not in replace1/
+ * insert_line), the jp po/LABEL encoding and the branch's own relative
+ * offset (both individually confirmed correct via a raw hex dump - M80's
+ * own .PRN address column is not reliable evidence either way, since it
+ * visibly lags by a line for forward-referenced labels), and only then the
+ * individual instructions - isolating SUB's silent operand loss by writing
+ * each operand to memory and printing it back, one instruction at a time,
+ * until the exact instruction and exact wrong opcode byte were caught red-
+ * handed. ntvcm's own flag emulation was never at fault.
+ *
+ * Only fires when the immediately following line is a bare NC/C branch -
+ * the shape this codegen always produces to test the sign it just computed
+ * - and only when H, L, D, and E are all provably dead afterward
+ * (peep_registers_dead_after, the same CFG-based liveness peep_flags_dead_
+ * after already relies on): the replacement's rotate only reproduces the
+ * flag, not HL/DE's post-SBC contents, unlike the original.
+ */
+static int pass_fold_signed_cmp_via_bytes(void)
+{
+    int i;
+    int changed = 0;
+    static int label_counter;
+    const unsigned regs = PEEP_REG_H | PEEP_REG_L | PEEP_REG_D | PEEP_REG_E;
+
+    for (i = 0; i + 6 < nlines; i++) {
+        char mnemonic[8], cond[8], target[128];
+        char label[8];
+        char skipline[24];
+        char jumpline[160];
+        int has_or_a;
+        int sbc_at;
+        int branch_at;
+
+        if (!eq(i, "ld a,h") || !eq(i + 1, "xor 128") || !eq(i + 2, "ld h,a") ||
+            !eq(i + 3, "ld a,d") || !eq(i + 4, "xor 128") || !eq(i + 5, "ld d,a"))
+            continue;
+
+        has_or_a = eq(i + 6, "or a");
+        sbc_at = has_or_a ? i + 7 : i + 6;
+        branch_at = sbc_at + 1;
+        if (!eq(sbc_at, "sbc hl,de") || branch_at >= nlines)
+            continue;
+        if (!parse_carry_branch(lines[branch_at], mnemonic, cond, target))
+            continue;
+        if (!peep_registers_dead_after(branch_at, regs))
+            continue;
+        /* The original SBC HL,DE also sets Z (and S, P/V) meaningfully -
+         * confirmed as a real miscompile via tests/forint.c, where a "<="
+         * comparison chains "jp c,L / jp z,L" off the one SBC to test
+         * carry-or-zero: RLCA's own Z reflects whether the rotated byte is
+         * zero, not whether the two original 16-bit operands were equal,
+         * so that second branch silently tested the wrong thing and hung
+         * a loop that needed its own "==" boundary to terminate. Requiring
+         * every other flag dead too, not just the carry this fold
+         * reproduces, is the same margin peep_flags_dead_after already
+         * gives pass_fold_const_sub_via_stack and pass_elim_zero_add_via_
+         * stack for ADD HL,DE's narrower flag substitution. */
+        if (!peep_flags_dead_after(branch_at, PEEP_FLAG_Z | PEEP_FLAG_S | PEEP_FLAG_PV))
+            continue;
+
+        sprintf(label, "LS%d", label_counter++);
+        sprintf(skipline, "%s:", label);
+        sprintf(jumpline, "jp po,%s", label);
+
+        replace1_tagged(i, "ld a,l", "fold_signed_cmp_via_bytes");
+        replace1(i + 1, "sub e");
+        replace1(i + 2, "ld a,h");
+        replace1(i + 3, "sbc a,d");
+        replace1(i + 4, jumpline);
+        replace1(i + 5, "xor 128");
+        if (has_or_a)
+            delete_n(i + 6, 1);
+        insert_line(i + 6, skipline);
+        replace1(i + 7, "rlca");
+        changed = 1;
+    }
+
+    return changed;
+}
+
 static int pass_zeroext_byte_cmp_const(void)
 {
     int i;
@@ -11225,6 +11371,7 @@ int main(int argc, char **argv)
         { "pass_hl_cmp_zero_to_or_hl", pass_hl_cmp_zero_to_or_hl, 0 },
         { "pass_signed_cmp_const_low0", pass_signed_cmp_const_low0, 0 },
         { "pass_signed_cmp_const_low0_mir", pass_signed_cmp_const_low0_mir, 0 },
+        { "pass_fold_signed_cmp_via_bytes", pass_fold_signed_cmp_via_bytes, 0 },
         { "pass_zeroext_byte_cmp_const", pass_zeroext_byte_cmp_const, 0 },
         { "pass_byte_cmp_push_pop_hl", pass_byte_cmp_push_pop_hl, 0 },
         { "pass_word_switch_cmp_avoid_push_pop", pass_word_switch_cmp_avoid_push_pop, 0 },
