@@ -16,7 +16,7 @@ L1:
 	inc e
 	ld a,e
 	cp 128
-	jr c,L1 ; peep: jp_to_jr
+	jp c, L1
 	ret
 	public _decline
 _decline:
@@ -36,7 +36,7 @@ L2:
 	inc e
 	ld a,e
 	cp 128
-	jr c,L2 ; peep: jp_to_jr
+	jp c, L2
 	ret
 	public _compare
 _compare:
@@ -55,14 +55,14 @@ L3:
 	ld a,(bc) ; peep: walk_hoisted_index_ptr
 	cp d ; peep: walk_hoisted_index_ptr
 	inc bc ; peep: walk_hoisted_index_ptr
-	jr z,L4 ; peep: jp_to_jr
+	jp z, L4
 	ld hl,0
-	jr L5 ; peep: jp_to_jr
+	jp L5
 L4:
 	inc e
 	ld a,e
 	cp 128
-	jr c,L3 ; peep: jp_to_jr
+	jp c, L3
 	ld hl,1
 L5:
 	ld sp,ix

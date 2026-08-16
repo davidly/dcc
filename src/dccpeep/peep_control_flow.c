@@ -206,7 +206,7 @@ static int label_targeted_only_within(const char *label_name,
     char tgt[128];
 
     for (k = scan_lo; k < scan_hi; ++k) {
-        if (jump_target(lines[k], tgt) && strcmp(tgt, label_name) == 0) {
+        if (jump_target_any(lines[k], tgt) && strcmp(tgt, label_name) == 0) {
             if (k < range_lo || k >= range_hi)
                 return 0;
         }

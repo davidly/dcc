@@ -8,7 +8,7 @@ LCDEC:
 	ld e,c
 	ld d,0
 	call __mods
-	jr LCDEC ; peep: jp_to_jr
+	jp LCDEC
 LCDEXIT:
 	ret
 ; incrementing counter promoted to E because BC is live
@@ -33,7 +33,7 @@ LIDEC:
 	db 0FDh,05Dh ; peep: byte_loop_counter_to_reg_iyl
 	ld d,0
 	call _external
-	jr LIDEC ; peep: jp_to_jr
+	jp LIDEC
 LIDEXIT:
 	ret
 ; non-RTL call requires incrementing IYL promotion
