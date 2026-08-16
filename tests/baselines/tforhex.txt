@@ -1,0 +1,2 @@
+tforhex hexdump=DEADBEEF
+tforhex passed with great success

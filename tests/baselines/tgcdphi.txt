@@ -1,0 +1,2 @@
+tgcdphi lcm=36,140
+tgcdphi passed with great success
