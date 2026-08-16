@@ -6952,15 +6952,16 @@ _unlink:
         ex      (sp),hl         ; HL = path
         push    bc
 
-        ; Zero the scratch FCB (drive + 8-char name + 3-char ext = 12 bytes)
-        push    hl              ; save path across the clear loop below
+        ; Zero the scratch FCB (drive + 8-char name + 3-char ext = 12
+        ; bytes): self-propagating LDIR fill, same idiom as _rename's
+        ; FCB clear - seed byte 0, then LDIR copies each already-zeroed
+        ; byte into the next.
+        push    hl              ; save path across the clear below
         ld      hl,__ulfcb
-        ld      b,12
-        xor     a
-ulclr:
-        ld      (hl),a
-        inc     hl
-        djnz    ulclr
+        ld      de,__ulfcb+1
+        ld      bc,11
+        ld      (hl),0
+        ldir
         pop     hl              ; HL = path
 
         ; Build FCB from path string
