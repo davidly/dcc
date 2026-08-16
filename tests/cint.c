@@ -876,7 +876,7 @@ static void skip_typedef(void)
 
 static void global_decl_or_func(void)
 {
-    int esz, si, count, bytes, fi, isfunc, nparam, p_esz;
+    int esz, si, count, bytes, fi, nparam, p_esz;
     char name[MAXNAME], pname[MAXNAME];
     esz = type_esize();
     if (esz < 0) die("global type");

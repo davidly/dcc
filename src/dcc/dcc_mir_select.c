@@ -19,7 +19,7 @@ static int mir_has_wide_values(void);
 static int mir_cost_regional_candidate_is_validated(void);
 static int mir_boolean_candidate_is_validated(void);
 static int mir_large_dense_switch_phi_candidate_is_eligible(void);
-static int mir_try_selector(FILE *out, int (*selector)(FILE *));
+static int mir_try_selector(MirStream *out, int (*selector)(MirStream *));
 
 static int mir_cost_policy_selects_alternative(void)
 {
@@ -115,13 +115,13 @@ static void mir_require_emitted_function(const char *reason)
 struct MirCandidateDescriptor {
     const char *name;
     const char *stream_error;
-    int (*selector)(FILE *);
+    int (*selector)(MirStream *);
     unsigned long spilled_features;
 };
 
 struct MirCandidateResult {
     const struct MirCandidateDescriptor *descriptor;
-    FILE *stream;
+    MirStream *stream;
     int emitted;
     int label_id_after;
     long generated_size;
@@ -145,17 +145,17 @@ static int mir_regional_full_hl_reload(
             mir_regional_line_is(high, "\tld l,c\n"));
 }
 
-static FILE *mir_compact_regional_candidate(FILE *input)
+static MirStream *mir_compact_regional_candidate(MirStream *input)
 {
     char **lines = NULL;
     int count = 0;
     int capacity = 0;
     char buffer[512];
-    FILE *output;
+    MirStream *output;
     int i;
 
-    rewind(input);
-    while (fgets(buffer, sizeof(buffer), input) != NULL) {
+    mir_stream_rewind(input);
+    while (mir_stream_gets(buffer, sizeof(buffer), input) != NULL) {
         size_t length = strlen(buffer) + 1;
         char *copy;
 
@@ -174,7 +174,7 @@ static FILE *mir_compact_regional_candidate(FILE *input)
         memcpy(copy, buffer, length);
         lines[count++] = copy;
     }
-    output = tmpfile();
+    output = mir_stream_open();
     if (output == NULL)
         fatal("cannot create compacted regional MIR stream");
     /*
@@ -203,7 +203,7 @@ static FILE *mir_compact_regional_candidate(FILE *input)
             mir_regional_line_is(lines[i + 4], "\tld l,c\n") &&
             mir_regional_line_is(lines[i + 5], "\tex de,hl\n") &&
             mir_regional_line_is(lines[i + 6], "\tpop hl\n")) {
-            fputs("\tpush de\n\tpop hl\n\tld d,b\n\tld e,c\n",
+            mir_stream_puts("\tpush de\n\tpop hl\n\tld d,b\n\tld e,c\n",
                   output);
             i += 7;
             continue;
@@ -226,9 +226,9 @@ static FILE *mir_compact_regional_candidate(FILE *input)
             strcpy(high, lines[i + 4]);
             low[4] = 'e';
             high[4] = 'd';
-            fputs("\tpush de\n\tpop hl\n", output);
-            fputs(low, output);
-            fputs(high, output);
+            mir_stream_puts("\tpush de\n\tpop hl\n", output);
+            mir_stream_puts(low, output);
+            mir_stream_puts(high, output);
             i += 7;
             continue;
         }
@@ -240,9 +240,9 @@ static FILE *mir_compact_regional_candidate(FILE *input)
             mir_regional_line_is(lines[i + 3], "\tpop hl\n") &&
             mir_regional_line_is(lines[i + 4], "\tpush hl\n") &&
             mir_regional_line_is(lines[i + 5], "\tpush de\n")) {
-            fputs("\tpush hl\n\tld de,", output);
-            fputs(lines[i + 1] + 7, output);
-            fputs("\tpush de\n", output);
+            mir_stream_puts("\tpush hl\n\tld de,", output);
+            mir_stream_puts(lines[i + 1] + 7, output);
+            mir_stream_puts("\tpush de\n", output);
             i += 6;
             continue;
         }
@@ -254,7 +254,7 @@ static FILE *mir_compact_regional_candidate(FILE *input)
             mir_regional_line_is(lines[i + 3], "\tpop hl\n") &&
             mir_regional_line_is(lines[i + 4], "\tex de,hl\n") &&
             mir_regional_line_is(lines[i + 5], "\tpop hl\n")) {
-            fputs("\tpop hl\n", output);
+            mir_stream_puts("\tpop hl\n", output);
             i += 6;
             continue;
         }
@@ -264,7 +264,7 @@ static FILE *mir_compact_regional_candidate(FILE *input)
             mir_regional_line_is(lines[i + 1], "\tpush hl\n") &&
             mir_regional_line_is(lines[i + 2], "\tpush de\n") &&
             mir_regional_line_is(lines[i + 3], "\tpop hl\n")) {
-            fputs("\tpush de\n\tpop hl\n", output);
+            mir_stream_puts("\tpush de\n\tpop hl\n", output);
             i += 4;
             continue;
         }
@@ -274,12 +274,12 @@ static FILE *mir_compact_regional_candidate(FILE *input)
             mir_regional_line_is(lines[i + 1], "\tpush hl\n") &&
             mir_regional_full_hl_reload(
                 lines[i + 2], lines[i + 3])) {
-            fputs(lines[i + 2], output);
-            fputs(lines[i + 3], output);
+            mir_stream_puts(lines[i + 2], output);
+            mir_stream_puts(lines[i + 3], output);
             i += 4;
             continue;
         }
-        fputs(lines[i], output);
+        mir_stream_puts(lines[i], output);
         ++i;
     }
     for (i = 0; i < count; ++i)
@@ -288,19 +288,19 @@ static FILE *mir_compact_regional_candidate(FILE *input)
     return output;
 }
 
-static FILE *mir_compact_adjacent_exx(
-    FILE *input, int *elided_instructions)
+static MirStream *mir_compact_adjacent_exx(
+    MirStream *input, int *elided_instructions)
 {
     char previous[512];
     char current[512];
     int have_previous = 0;
-    FILE *output = tmpfile();
+    MirStream *output = mir_stream_open();
 
     if (output == NULL)
         fatal("cannot create compacted MIR stream");
     *elided_instructions = 0;
-    rewind(input);
-    while (fgets(current, sizeof(current), input) != NULL) {
+    mir_stream_rewind(input);
+    while (mir_stream_gets(current, sizeof(current), input) != NULL) {
         if (!have_previous) {
             strcpy(previous, current);
             have_previous = 1;
@@ -312,32 +312,32 @@ static FILE *mir_compact_adjacent_exx(
             have_previous = 0;
             continue;
         }
-        fputs(previous, output);
+        mir_stream_puts(previous, output);
         strcpy(previous, current);
     }
     if (have_previous)
-        fputs(previous, output);
+        mir_stream_puts(previous, output);
     return output;
 }
 
-int mir_try_emit_compacted_regional_homed_cfg(FILE *out)
+int mir_try_emit_compacted_regional_homed_cfg(MirStream *out)
 {
-    FILE *raw;
-    FILE *first;
-    FILE *second;
-    FILE *final;
+    MirStream *raw;
+    MirStream *first;
+    MirStream *second;
+    MirStream *final;
     char buffer[4096];
     int active;
     int emitted;
     int exx_elided = 0;
     int label_base = label_id;
 
-    raw = tmpfile();
+    raw = mir_stream_open();
     if (raw == NULL)
         fatal("cannot create regional MIR stream");
     active = mir_begin_regional_home_plan();
     if (!active) {
-        fclose(raw);
+        mir_stream_close(raw);
         return 0;
     }
     mir_begin_hybrid_homed_selection();
@@ -346,19 +346,19 @@ int mir_try_emit_compacted_regional_homed_cfg(FILE *out)
     mir_end_regional_home_plan();
     if (!emitted) {
         label_id = label_base;
-        fclose(raw);
+        mir_stream_close(raw);
         return 0;
     }
     first = mir_compact_regional_candidate(raw);
     second = mir_compact_regional_candidate(first);
     final = mir_compact_adjacent_exx(second, &exx_elided);
-    rewind(final);
-    while (fgets(buffer, sizeof(buffer), final) != NULL)
-        fputs(buffer, out);
-    fclose(final);
-    fclose(second);
-    fclose(first);
-    fclose(raw);
+    mir_stream_rewind(final);
+    while (mir_stream_gets(buffer, sizeof(buffer), final) != NULL)
+        mir_stream_puts(buffer, out);
+    mir_stream_close(final);
+    mir_stream_close(second);
+    mir_stream_close(first);
+    mir_stream_close(raw);
     return 1;
 }
 
@@ -470,7 +470,7 @@ static void mir_end_all_spilled_fallback_optimizations(void)
     mir_configure_spilled_fallback_features(MIR_SPILLED_FEATURES_ALL, 0);
 }
 
-static int mir_try_emit_general_rollout(FILE *out)
+static int mir_try_emit_general_rollout(MirStream *out)
 {
     int i;
     int frame_bytes;
@@ -536,7 +536,7 @@ static int mir_is_const_value(int value, long expected)
  * Keep it in BC for the complete loop: this is the first emitted path that
  * consumes a MIR allocation decision rather than merely using fixed HL/DE
  * expression conventions. */
-static int mir_try_emit_countdown_loop(FILE *out)
+static int mir_try_emit_countdown_loop(MirStream *out)
 {
     const struct MirInsn *parameter = NULL;
     const struct MirInsn *phi = NULL;
@@ -600,22 +600,22 @@ static int mir_try_emit_countdown_loop(FILE *out)
     end_label = new_label();
 
     mir_emit_prologue(out);
-    fprintf(out, "\tld c,(ix%+d)\n", object->offset);
-    fprintf(out, "\tld b,(ix%+d)\n", object->offset + 1);
-    fprintf(out, "L%d:\n", top_label);
+    mir_stream_printf(out, "\tld c,(ix%+d)\n", object->offset);
+    mir_stream_printf(out, "\tld b,(ix%+d)\n", object->offset + 1);
+    mir_stream_printf(out, "L%d:\n", top_label);
     if (unsigned_value) {
-        fputs("\tld a,b\n\tor c\n", out);
-        fprintf(out, "\tjp z, L%d\n", end_label);
+        mir_stream_puts("\tld a,b\n\tor c\n", out);
+        mir_stream_printf(out, "\tjp z, L%d\n", end_label);
     } else {
-        fputs("\tld a,b\n\tor a\n", out);
-        fprintf(out, "\tjp m, L%d\n", end_label);
-        fputs("\tor c\n", out);
-        fprintf(out, "\tjp z, L%d\n", end_label);
+        mir_stream_puts("\tld a,b\n\tor a\n", out);
+        mir_stream_printf(out, "\tjp m, L%d\n", end_label);
+        mir_stream_puts("\tor c\n", out);
+        mir_stream_printf(out, "\tjp z, L%d\n", end_label);
     }
-    fputs("\tdec bc\n", out);
-    fprintf(out, "\tjp L%d\n", top_label);
-    fprintf(out, "L%d:\n", end_label);
-    fputs("\tld l,c\n\tld h,b\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+    mir_stream_puts("\tdec bc\n", out);
+    mir_stream_printf(out, "\tjp L%d\n", top_label);
+    mir_stream_printf(out, "L%d:\n", end_label);
+    mir_stream_puts("\tld l,c\n\tld h,b\n\tld sp,ix\n\tpop ix\n\tret\n", out);
     return 1;
 }
 
@@ -627,7 +627,7 @@ static int mir_try_emit_countdown_loop(FILE *out)
  *
  * BC holds n and DE holds sum. Both values are object phis at the header and
  * neither is written back to the frame inside the loop. */
-static int mir_try_emit_accumulator_loop(FILE *out)
+static int mir_try_emit_accumulator_loop(MirStream *out)
 {
     const struct MirInsn *parameter = NULL;
     const struct MirInsn *n_phi = NULL;
@@ -711,23 +711,23 @@ static int mir_try_emit_accumulator_loop(FILE *out)
     top_label = new_label();
     end_label = new_label();
     mir_emit_prologue(out);
-    fprintf(out, "\tld c,(ix%+d)\n", mir.objects[n_object].offset);
-    fprintf(out, "\tld b,(ix%+d)\n", mir.objects[n_object].offset + 1);
-    fputs("\tld de,0\n", out);
-    fprintf(out, "L%d:\n", top_label);
+    mir_stream_printf(out, "\tld c,(ix%+d)\n", mir.objects[n_object].offset);
+    mir_stream_printf(out, "\tld b,(ix%+d)\n", mir.objects[n_object].offset + 1);
+    mir_stream_puts("\tld de,0\n", out);
+    mir_stream_printf(out, "L%d:\n", top_label);
     if (unsigned_value) {
-        fputs("\tld a,b\n\tor c\n", out);
-        fprintf(out, "\tjp z, L%d\n", end_label);
+        mir_stream_puts("\tld a,b\n\tor c\n", out);
+        mir_stream_printf(out, "\tjp z, L%d\n", end_label);
     } else {
-        fputs("\tld a,b\n\tor a\n", out);
-        fprintf(out, "\tjp m, L%d\n", end_label);
-        fputs("\tor c\n", out);
-        fprintf(out, "\tjp z, L%d\n", end_label);
+        mir_stream_puts("\tld a,b\n\tor a\n", out);
+        mir_stream_printf(out, "\tjp m, L%d\n", end_label);
+        mir_stream_puts("\tor c\n", out);
+        mir_stream_printf(out, "\tjp z, L%d\n", end_label);
     }
-    fputs("\tex de,hl\n\tadd hl,bc\n\tex de,hl\n\tdec bc\n", out);
-    fprintf(out, "\tjp L%d\n", top_label);
-    fprintf(out, "L%d:\n", end_label);
-    fputs("\tex de,hl\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+    mir_stream_puts("\tex de,hl\n\tadd hl,bc\n\tex de,hl\n\tdec bc\n", out);
+    mir_stream_printf(out, "\tjp L%d\n", top_label);
+    mir_stream_printf(out, "L%d:\n", end_label);
+    mir_stream_puts("\tex de,hl\n\tld sp,ix\n\tpop ix\n\tret\n", out);
     return 1;
 }
 
@@ -739,7 +739,7 @@ static int mir_try_emit_accumulator_loop(FILE *out)
  *
  * BC holds r and DE holds q. Adding -K to BC in HL provides both the
  * unsigned loop test (carry means r >= K) and the updated remainder. */
-static int mir_try_emit_unsigned_division_loop(FILE *out)
+static int mir_try_emit_unsigned_division_loop(MirStream *out)
 {
     const struct MirInsn *parameter = NULL;
     const struct MirInsn *remainder_phi = NULL;
@@ -839,17 +839,17 @@ static int mir_try_emit_unsigned_division_loop(FILE *out)
     top_label = new_label();
     end_label = new_label();
     mir_emit_prologue(out);
-    fprintf(out, "\tld c,(ix%+d)\n", mir.objects[remainder_object].offset);
-    fprintf(out, "\tld b,(ix%+d)\n",
+    mir_stream_printf(out, "\tld c,(ix%+d)\n", mir.objects[remainder_object].offset);
+    mir_stream_printf(out, "\tld b,(ix%+d)\n",
             mir.objects[remainder_object].offset + 1);
-    fputs("\tld de,0\n", out);
-    fprintf(out, "L%d:\n", top_label);
-    fprintf(out, "\tld hl,%ld\n\tadd hl,bc\n", -divisor);
-    fprintf(out, "\tjp nc, L%d\n", end_label);
-    fputs("\tld b,h\n\tld c,l\n\tinc de\n", out);
-    fprintf(out, "\tjp L%d\n", top_label);
-    fprintf(out, "L%d:\n", end_label);
-    fputs("\tex de,hl\n\tld sp,ix\n\tpop ix\n\tret\n", out);
+    mir_stream_puts("\tld de,0\n", out);
+    mir_stream_printf(out, "L%d:\n", top_label);
+    mir_stream_printf(out, "\tld hl,%ld\n\tadd hl,bc\n", -divisor);
+    mir_stream_printf(out, "\tjp nc, L%d\n", end_label);
+    mir_stream_puts("\tld b,h\n\tld c,l\n\tinc de\n", out);
+    mir_stream_printf(out, "\tjp L%d\n", top_label);
+    mir_stream_printf(out, "L%d:\n", end_label);
+    mir_stream_puts("\tex de,hl\n\tld sp,ix\n\tpop ix\n\tret\n", out);
     return 1;
 }
 
@@ -862,7 +862,7 @@ static int mir_try_emit_unsigned_division_loop(FILE *out)
  *     }
  *
  * IY holds the loop-invariant 2*factor, BC holds i and DE holds total. */
-static int mir_try_emit_repeated_invariant_add_loop(FILE *out)
+static int mir_try_emit_repeated_invariant_add_loop(MirStream *out)
 {
     const struct MirInsn *parameter = NULL;
     const struct MirInsn *total_phi = NULL;
@@ -992,17 +992,17 @@ static int mir_try_emit_repeated_invariant_add_loop(FILE *out)
     top_label = new_label();
     end_label = new_label();
     mir_emit_iy_prologue(out);
-    fprintf(out, "\tld l,(ix%+d)\n", mir.objects[factor_object].offset + 2);
-    fprintf(out, "\tld h,(ix%+d)\n", mir.objects[factor_object].offset + 3);
-    fputs("\tadd hl,hl\n\tpush hl\n\tpop iy\n", out);
-    fputs("\tld bc,0\n\tld de,0\n", out);
-    fprintf(out, "L%d:\n", top_label);
-    fprintf(out, "\tld hl,%ld\n\tadd hl,bc\n", -limit);
-    fprintf(out, "\tjp c, L%d\n", end_label);
-    fputs("\tpush iy\n\tpop hl\n\tadd hl,de\n\tex de,hl\n\tinc bc\n", out);
-    fprintf(out, "\tjp L%d\n", top_label);
-    fprintf(out, "L%d:\n", end_label);
-    fputs("\tex de,hl\n\tld sp,ix\n\tpop ix\n\tpop iy\n\tret\n", out);
+    mir_stream_printf(out, "\tld l,(ix%+d)\n", mir.objects[factor_object].offset + 2);
+    mir_stream_printf(out, "\tld h,(ix%+d)\n", mir.objects[factor_object].offset + 3);
+    mir_stream_puts("\tadd hl,hl\n\tpush hl\n\tpop iy\n", out);
+    mir_stream_puts("\tld bc,0\n\tld de,0\n", out);
+    mir_stream_printf(out, "L%d:\n", top_label);
+    mir_stream_printf(out, "\tld hl,%ld\n\tadd hl,bc\n", -limit);
+    mir_stream_printf(out, "\tjp c, L%d\n", end_label);
+    mir_stream_puts("\tpush iy\n\tpop hl\n\tadd hl,de\n\tex de,hl\n\tinc bc\n", out);
+    mir_stream_printf(out, "\tjp L%d\n", top_label);
+    mir_stream_printf(out, "L%d:\n", end_label);
+    mir_stream_puts("\tex de,hl\n\tld sp,ix\n\tpop ix\n\tpop iy\n\tret\n", out);
     return 1;
 }
 
@@ -1012,7 +1012,7 @@ static int mir_try_emit_repeated_invariant_add_loop(FILE *out)
  *
  * (or !=). This validates labels, branch polarity, two live inputs and
  * multiple exits without claiming general relational/comparison support. */
-static int mir_try_emit_comparison_branch(FILE *out)
+static int mir_try_emit_comparison_branch(MirStream *out)
 {
     const struct MirInsn *branch = NULL;
     const struct MirInsn *compare;
@@ -1117,23 +1117,23 @@ static int mir_try_emit_comparison_branch(FILE *out)
             if (!mir_emit_load_param_wide(out, left))
                 return 0;
             if (is_float)
-                fputs("\tld a,d\n\tand 127\n\tor e\n\tor h\n\tor l\n", out);
+                mir_stream_puts("\tld a,d\n\tand 127\n\tor e\n\tor h\n\tor l\n", out);
             else
-                fputs("\tld a,d\n\tor e\n\tor h\n\tor l\n", out);
+                mir_stream_puts("\tld a,d\n\tor e\n\tor h\n\tor l\n", out);
         } else {
             if (!mir_emit_load_param(out, left))
                 return 0;
-            fputs("\tld a,h\n\tor l\n", out);
+            mir_stream_puts("\tld a,h\n\tor l\n", out);
         }
-        fprintf(out, "\tjp z, L%d\n", false_label);
+        mir_stream_printf(out, "\tjp z, L%d\n", false_label);
         {
             int epilogue_label = new_label();
-            fprintf(out, "\tld hl,%ld\n", true_value->immediate);
-            fprintf(out, "\tjp L%d\n", epilogue_label);
-            fprintf(out, "L%d:\n", false_label);
-            fprintf(out, "\tld hl,%ld\n", false_value->immediate);
-            fprintf(out, "L%d:\n", epilogue_label);
-            fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+            mir_stream_printf(out, "\tld hl,%ld\n", true_value->immediate);
+            mir_stream_printf(out, "\tjp L%d\n", epilogue_label);
+            mir_stream_printf(out, "L%d:\n", false_label);
+            mir_stream_printf(out, "\tld hl,%ld\n", false_value->immediate);
+            mir_stream_printf(out, "L%d:\n", epilogue_label);
+            mir_stream_puts("\tld sp,ix\n\tpop ix\n\tret\n", out);
         }
         return 1;
     }
@@ -1153,21 +1153,21 @@ static int mir_try_emit_comparison_branch(FILE *out)
         mir_emit_prologue(out);
         if (!mir_emit_load_param_wide(out, left))
             return 0;
-        fputs("\tpush de\n\tpush hl\n", out);
+        mir_stream_puts("\tpush de\n\tpush hl\n", out);
         if (!mir_emit_load_param_wide(out, right))
             return 0;
         if (!mir_emit_wide_operation(out, compare))
             return 0;
-        fputs("\tld a,h\n\tor l\n", out);
-        fprintf(out, "\tjp z, L%d\n", false_label);
+        mir_stream_puts("\tld a,h\n\tor l\n", out);
+        mir_stream_printf(out, "\tjp z, L%d\n", false_label);
         {
             int epilogue_label = new_label();
-            fprintf(out, "\tld hl,%ld\n", true_value->immediate);
-            fprintf(out, "\tjp L%d\n", epilogue_label);
-            fprintf(out, "L%d:\n", false_label);
-            fprintf(out, "\tld hl,%ld\n", false_value->immediate);
-            fprintf(out, "L%d:\n", epilogue_label);
-            fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+            mir_stream_printf(out, "\tld hl,%ld\n", true_value->immediate);
+            mir_stream_printf(out, "\tjp L%d\n", epilogue_label);
+            mir_stream_printf(out, "L%d:\n", false_label);
+            mir_stream_printf(out, "\tld hl,%ld\n", false_value->immediate);
+            mir_stream_printf(out, "L%d:\n", epilogue_label);
+            mir_stream_puts("\tld sp,ix\n\tpop ix\n\tret\n", out);
         }
         return 1;
     }
@@ -1195,18 +1195,18 @@ static int mir_try_emit_comparison_branch(FILE *out)
     if (!unsigned_compare && (operation == '<' || operation == TOK_GE)) {
         /* Bias the sign bit on both operands, mapping signed order onto
          * unsigned order before the ordinary 16-bit subtract. */
-        fputs("\tld a,h\n\txor 80h\n\tld h,a\n"
+        mir_stream_puts("\tld a,h\n\txor 80h\n\tld h,a\n"
               "\tld a,d\n\txor 80h\n\tld d,a\n", out);
     }
-    fputs("\tor a\n\tsbc hl,de\n", out);
+    mir_stream_puts("\tor a\n\tsbc hl,de\n", out);
     if (operation == TOK_EQ)
-        fprintf(out, "\tjp nz, L%d\n", false_label);
+        mir_stream_printf(out, "\tjp nz, L%d\n", false_label);
     else if (operation == TOK_NE)
-        fprintf(out, "\tjp z, L%d\n", false_label);
+        mir_stream_printf(out, "\tjp z, L%d\n", false_label);
     else if (operation == '<')
-        fprintf(out, "\tjp nc, L%d\n", false_label);
+        mir_stream_printf(out, "\tjp nc, L%d\n", false_label);
     else
-        fprintf(out, "\tjp c, L%d\n", false_label);
+        mir_stream_printf(out, "\tjp c, L%d\n", false_label);
     /* Share one epilogue between both return paths instead of calling
      * mir_emit_return_constant twice (which would duplicate
      * "ld sp,ix / pop ix / ret" in full for each side). Legacy's own
@@ -1218,12 +1218,12 @@ static int mir_try_emit_comparison_branch(FILE *out)
      * dead-epilogue passes were tuned to legacy's merged shape. */
     {
         int epilogue_label = new_label();
-        fprintf(out, "\tld hl,%ld\n", true_value->immediate);
-        fprintf(out, "\tjp L%d\n", epilogue_label);
-        fprintf(out, "L%d:\n", false_label);
-        fprintf(out, "\tld hl,%ld\n", false_value->immediate);
-        fprintf(out, "L%d:\n", epilogue_label);
-        fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+        mir_stream_printf(out, "\tld hl,%ld\n", true_value->immediate);
+        mir_stream_printf(out, "\tjp L%d\n", epilogue_label);
+        mir_stream_printf(out, "L%d:\n", false_label);
+        mir_stream_printf(out, "\tld hl,%ld\n", false_value->immediate);
+        mir_stream_printf(out, "L%d:\n", epilogue_label);
+        mir_stream_puts("\tld sp,ix\n\tpop ix\n\tret\n", out);
     }
     return 1;
 }
@@ -1307,18 +1307,18 @@ int mir_extrn_should_emit_name(const char *name)
     return 1;
 }
 
-void mir_emit_runtime_call(FILE *out, const char *name)
+void mir_emit_runtime_call(MirStream *out, const char *name)
 {
     if (mir_extrn_should_emit_name(name))
-        fprintf(out, "\textrn %s\n", name);
-    fprintf(out, "\tcall %s\n", name);
+        mir_stream_printf(out, "\textrn %s\n", name);
+    mir_stream_printf(out, "\tcall %s\n", name);
 }
 
 /* Isolate every selector attempt in its own stream so partial output from a
  * declining candidate cannot contaminate the next generated candidate. */
-static int mir_try_selector(FILE *out, int (*selector)(FILE *))
+static int mir_try_selector(MirStream *out, int (*selector)(MirStream *))
 {
-    FILE *candidate = tmpfile();
+    MirStream *candidate = mir_stream_open();
     int accepted;
     int character;
 
@@ -1327,11 +1327,11 @@ static int mir_try_selector(FILE *out, int (*selector)(FILE *))
     mir_extrn_begin_attempt();
     accepted = selector(candidate);
     if (accepted) {
-        rewind(candidate);
-        while ((character = fgetc(candidate)) != EOF)
-            fputc(character, out);
+        mir_stream_rewind(candidate);
+        while ((character = mir_stream_getc(candidate)) != EOF)
+            mir_stream_putc(character, out);
     }
-    fclose(candidate);
+    mir_stream_close(candidate);
     return accepted;
 }
 
@@ -1350,7 +1350,7 @@ static void mir_build_spilled_candidate(
     struct MirCandidateResult *result, int label_base)
 {
     result->descriptor = candidate;
-    result->stream = tmpfile();
+    result->stream = mir_stream_open();
     result->emitted = 0;
     result->label_id_after = label_base;
     result->generated_size = -1;
@@ -1382,23 +1382,23 @@ static void mir_build_spilled_candidate(
 static void mir_close_candidate_result(struct MirCandidateResult *result)
 {
     if (result->stream != NULL)
-        fclose(result->stream);
+        mir_stream_close(result->stream);
     result->stream = NULL;
 }
 
 
-long mir_stream_size(FILE *stream)
+long mir_stream_size(MirStream *stream)
 {
-    long position = ftell(stream);
+    long position = mir_stream_tell(stream);
     long size;
     char line[512];
 
-    if (position < 0 || fseek(stream, 0, SEEK_END) != 0)
+    if (position < 0 || mir_stream_seek(stream, 0, SEEK_END) != 0)
         return -1;
-    size = ftell(stream);
-    if (size < 0 || fseek(stream, 0, SEEK_SET) != 0)
+    size = mir_stream_tell(stream);
+    if (size < 0 || mir_stream_seek(stream, 0, SEEK_SET) != 0)
         return -1;
-    while (fgets(line, sizeof(line), stream) != NULL)
+    while (mir_stream_gets(line, sizeof(line), stream) != NULL)
         if (strstr(line, ";@dcc.reg claim=iy ") == line &&
             strstr(line, " kind=mir val=0") != NULL)
             /* Register-ownership metadata changes dccpeep policy but emits
@@ -1407,34 +1407,25 @@ long mir_stream_size(FILE *stream)
             size -= (long)strlen(line);
         else if (strstr(line, MIR_PHI_SLOT_MARKER) == line)
             size -= (long)strlen(line);
-    if (fseek(stream, position, SEEK_SET) != 0)
+    if (mir_stream_seek(stream, position, SEEK_SET) != 0)
         return -1;
     return size;
 }
 
-static unsigned long mir_copy_selected_stream(FILE *source, FILE *destination)
+static unsigned long mir_copy_selected_stream(MirStream *source, FILE *destination)
 {
-    unsigned long hash = 2166136261UL;
-    int character;
-
-    rewind(source);
-    while ((character = fgetc(source)) != EOF) {
-        hash ^= (unsigned long)(unsigned char)character;
-        hash = (hash * 16777619UL) & 0xffffffffUL;
-        fputc(character, destination);
-    }
-    return hash;
+    return mir_stream_copy_to_file(source, destination);
 }
 
-int mir_stream_instruction_count(FILE *stream)
+int mir_stream_instruction_count(MirStream *stream)
 {
     char line[512];
-    long position = ftell(stream);
+    long position = mir_stream_tell(stream);
     int count = 0;
 
-    if (position < 0 || fseek(stream, 0, SEEK_SET) != 0)
+    if (position < 0 || mir_stream_seek(stream, 0, SEEK_SET) != 0)
         return -1;
-    while (fgets(line, sizeof(line), stream) != NULL) {
+    while (mir_stream_gets(line, sizeof(line), stream) != NULL) {
         char *text = line;
         char *end;
         while (*text == ' ' || *text == '\t')
@@ -1451,24 +1442,24 @@ int mir_stream_instruction_count(FILE *stream)
             continue;
         ++count;
     }
-    if (fseek(stream, position, SEEK_SET) != 0)
+    if (mir_stream_seek(stream, position, SEEK_SET) != 0)
         return -1;
     return count;
 }
 
-static unsigned long mir_stream_hash(FILE *stream)
+static unsigned long mir_stream_hash(MirStream *stream)
 {
     unsigned long hash = 2166136261UL;
-    long position = ftell(stream);
+    long position = mir_stream_tell(stream);
     int character;
 
-    if (position < 0 || fseek(stream, 0, SEEK_SET) != 0)
+    if (position < 0 || mir_stream_seek(stream, 0, SEEK_SET) != 0)
         return 0;
-    while ((character = fgetc(stream)) != EOF) {
+    while ((character = mir_stream_getc(stream)) != EOF) {
         hash ^= (unsigned long)(unsigned char)character;
         hash = (hash * 16777619UL) & 0xffffffffUL;
     }
-    if (fseek(stream, position, SEEK_SET) != 0)
+    if (mir_stream_seek(stream, position, SEEK_SET) != 0)
         return 0;
     return hash;
 }
@@ -1921,7 +1912,7 @@ static void mir_cost_v1_instruction_cost(
  * conditional branches) using the priors above. Code bytes are a
  * static size metric and are therefore summed unweighted. */
 static void mir_estimate_stream_cost(
-    FILE *stream, struct MirCostComponents *out)
+    MirStream *stream, struct MirCostComponents *out)
 {
     char buffer[512];
     char **owned = NULL;
@@ -1953,11 +1944,11 @@ static void mir_estimate_stream_cost(
     out->score = 0.0;
     out->max_loop_depth = 0;
 
-    position = ftell(stream);
-    if (position < 0 || fseek(stream, 0, SEEK_SET) != 0)
+    position = mir_stream_tell(stream);
+    if (position < 0 || mir_stream_seek(stream, 0, SEEK_SET) != 0)
         return;
 
-    while (fgets(buffer, sizeof(buffer), stream) != NULL) {
+    while (mir_stream_gets(buffer, sizeof(buffer), stream) != NULL) {
         char *copy;
         char *text, *end;
 
@@ -1989,7 +1980,7 @@ static void mir_estimate_stream_cost(
         trimmed[count] = text;
         ++count;
     }
-    fseek(stream, position, SEEK_SET);
+    mir_stream_seek(stream, position, SEEK_SET);
 
     for (i = 0; i < count; ++i) {
         size_t length = strlen(trimmed[i]);
@@ -2230,7 +2221,7 @@ struct MirCostCandidateSpec {
 
 struct MirCostCandidate {
     const struct MirCostCandidateSpec *spec;
-    FILE *stream;
+    MirStream *stream;
     int emitted;
     int selectable;
     int label_id_after;
@@ -2435,7 +2426,7 @@ static void mir_cost_build_candidate(
     candidate->label_id_after = label_base;
     candidate->text_bytes = -1;
     candidate->text_instructions = -1;
-    candidate->stream = tmpfile();
+    candidate->stream = mir_stream_open();
     if (candidate->stream == NULL)
         fatal("cannot create MIR cost candidate stream");
 
@@ -2484,18 +2475,18 @@ static void mir_cost_build_candidate(
     candidate->label_id_after = label_id;
     if (candidate->emitted &&
         spec->kind == MIR_COST_CANDIDATE_REGIONAL) {
-        FILE *first = mir_compact_regional_candidate(candidate->stream);
-        FILE *second = mir_compact_regional_candidate(first);
+        MirStream *first = mir_compact_regional_candidate(candidate->stream);
+        MirStream *second = mir_compact_regional_candidate(first);
 
-        fclose(candidate->stream);
-        fclose(first);
+        mir_stream_close(candidate->stream);
+        mir_stream_close(first);
         candidate->stream = second;
     }
     if (candidate->emitted) {
-        FILE *compacted =
+        MirStream *compacted =
             mir_compact_adjacent_exx(candidate->stream, &exx_elided);
 
-        fclose(candidate->stream);
+        mir_stream_close(candidate->stream);
         candidate->stream = compacted;
         mir_cost_measure_candidate(candidate);
     }
@@ -2773,7 +2764,7 @@ static int mir_call_runner_strict_profile(
 }
 
 static int mir_apply_mir_v1_policy(
-    FILE **selected_stream, const char **selector_name,
+    MirStream **selected_stream, const char **selector_name,
     const char **candidate_name, int *selected_label_id, int label_base,
     int select_alternative, const char *required_candidate)
 {
@@ -2849,22 +2840,22 @@ static int mir_apply_mir_v1_policy(
         if (candidate.selectable &&
             mir_cost_candidate_is_better(&candidate, &best)) {
             if (best.stream != NULL)
-                fclose(best.stream);
+                mir_stream_close(best.stream);
             best = candidate;
             candidate.stream = NULL;
         }
         if (candidate.stream != NULL)
-            fclose(candidate.stream);
+            mir_stream_close(candidate.stream);
     }
     if (!select_alternative || !best.emitted ||
         (diagnostic_candidate == NULL &&
          !mir_cost_candidate_is_better(&best, &incumbent))) {
         if (best.stream != NULL)
-            fclose(best.stream);
+            mir_stream_close(best.stream);
         *candidate_name = "incumbent";
         return 0;
     }
-    fclose(*selected_stream);
+    mir_stream_close(*selected_stream);
     *selected_stream = best.stream;
     *selector_name = best.spec->selector_name;
     *candidate_name = best.spec->name;
@@ -3024,7 +3015,7 @@ static int mir_has_inline_substitution_call(void)
 }
 
 static int mir_selected_stream_has_direct_call(
-    FILE *selected, const char *assembly_name)
+    MirStream *selected, const char *assembly_name)
 {
     char line[512];
     char target[128];
@@ -3033,20 +3024,20 @@ static int mir_selected_stream_has_direct_call(
 
     if (selected == NULL || assembly_name == NULL)
         return 0;
-    position = ftell(selected);
-    rewind(selected);
-    while (fgets(line, sizeof(line), selected) != NULL)
+    position = mir_stream_tell(selected);
+    mir_stream_rewind(selected);
+    while (mir_stream_gets(line, sizeof(line), selected) != NULL)
         if (sscanf(line, " call %127s", target) == 1 &&
             strcmp(target, assembly_name) == 0) {
             found = 1;
             break;
         }
     if (position >= 0)
-        fseek(selected, position, SEEK_SET);
+        mir_stream_seek(selected, position, SEEK_SET);
     return found;
 }
 
-static void mir_mark_selected_inline_call_bodies_needed(FILE *selected)
+static void mir_mark_selected_inline_call_bodies_needed(MirStream *selected)
 {
     int i;
 
@@ -3216,20 +3207,20 @@ static int mir_has_inline_temp_identity_overwrite(void)
     return 0;
 }
 
-static int mir_stream_contains_text(FILE *stream, const char *needle)
+static int mir_stream_contains_text(MirStream *stream, const char *needle)
 {
     char line[512];
-    long position = ftell(stream);
+    long position = mir_stream_tell(stream);
     int found = 0;
 
-    if (position < 0 || fseek(stream, 0, SEEK_SET) != 0)
+    if (position < 0 || mir_stream_seek(stream, 0, SEEK_SET) != 0)
         return 0;
-    while (fgets(line, sizeof(line), stream) != NULL)
+    while (mir_stream_gets(line, sizeof(line), stream) != NULL)
         if (strstr(line, needle) != NULL) {
             found = 1;
             break;
         }
-    if (fseek(stream, position, SEEK_SET) != 0)
+    if (mir_stream_seek(stream, position, SEEK_SET) != 0)
         return 0;
     return found;
 }
@@ -3254,7 +3245,7 @@ static int mir_has_bool_value(void)
     return 0;
 }
 
-static int mir_try_emit_z80(FILE *out)
+static int mir_try_emit_z80(MirStream *out)
 {
     const struct MirInsn *return_insn = NULL;
     const struct MirInsn *parameter;
@@ -3323,35 +3314,35 @@ static int mir_try_emit_z80(FILE *out)
             !mir_emit_load_param_de(out, right_parameter))
             return 0;
         if (two_parameter_operation == '+')
-            fputs("\tadd hl,de\n", out);
+            mir_stream_puts("\tadd hl,de\n", out);
         else
-            fputs("\tor a\n\tsbc hl,de\n", out);
+            mir_stream_puts("\tor a\n\tsbc hl,de\n", out);
         constant = 0;
     } else if (parameter != NULL) {
         if (!mir_emit_load_param(out, parameter))
             return 0;
     } else {
-        fprintf(out, "\tld hl,%ld\n", constant);
+        mir_stream_printf(out, "\tld hl,%ld\n", constant);
         constant = 0;
     }
     if (constant == 1)
-        fputs("\tinc hl\n", out);
+        mir_stream_puts("\tinc hl\n", out);
     else if (constant == -1)
-        fputs("\tdec hl\n", out);
+        mir_stream_puts("\tdec hl\n", out);
     else if (constant != 0)
-        fprintf(out, "\tld de,%ld\n\tadd hl,de\n", constant);
-    fputs("\tld sp,ix\n\tpop ix\n\tret\n", out);
+        mir_stream_printf(out, "\tld de,%ld\n\tadd hl,de\n", constant);
+    mir_stream_puts("\tld sp,ix\n\tpop ix\n\tret\n", out);
     return 1;
 }
 
 static int mir_try_generated_candidate(
-    FILE **selected, const char **selector_name,
+    MirStream **selected, const char **selector_name,
     const char **candidate_name, int *selected_label_id,
     int label_base, const char *required_candidate)
 {
     const char *emit_filter = getenv("DCC_MIR_EMIT_FUNCTION");
     const char *general_filter = getenv("DCC_MIR_GENERAL_FUNCTION");
-    FILE *generated = tmpfile();
+    MirStream *generated = mir_stream_open();
     int emitted = 0;
     int default_policy = 0;
 
@@ -3404,7 +3395,7 @@ static int mir_try_generated_candidate(
     }
 
     if (default_policy && !emitted) {
-        FILE *general_candidate = tmpfile();
+        MirStream *general_candidate = mir_stream_open();
         int general_emitted;
         int general_label_id_after;
 
@@ -3424,7 +3415,7 @@ static int mir_try_generated_candidate(
             (!emitted ||
              mir_stream_size(general_candidate) <
                  mir_stream_size(generated))) {
-            fclose(generated);
+            mir_stream_close(generated);
             generated = general_candidate;
             general_candidate = NULL;
             *selector_name = "general-rollout";
@@ -3432,7 +3423,7 @@ static int mir_try_generated_candidate(
             *selected_label_id = general_label_id_after;
         }
         if (general_candidate != NULL)
-            fclose(general_candidate);
+            mir_stream_close(general_candidate);
     }
 
     if (default_policy && emitted &&
@@ -3446,7 +3437,7 @@ static int mir_try_generated_candidate(
           !mir_has_phi_instruction() &&
           mir_cfg_block_count() <= 18) ||
          mir_has_wide_values())) {
-        FILE *spilled_candidate = tmpfile();
+        MirStream *spilled_candidate = mir_stream_open();
         int spilled_emitted;
         int spilled_label_id_after;
 
@@ -3471,14 +3462,14 @@ static int mir_try_generated_candidate(
              (mir.allocation_spill_count != 0 &&
               mir_stream_instruction_count(spilled_candidate) <
                   mir_stream_instruction_count(generated)))) {
-            fclose(generated);
+            mir_stream_close(generated);
             generated = spilled_candidate;
             spilled_candidate = NULL;
             *selector_name = "spilled-scalar-cfg";
             *selected_label_id = spilled_label_id_after;
         }
         if (spilled_candidate != NULL)
-            fclose(spilled_candidate);
+            mir_stream_close(spilled_candidate);
     }
 
     if (default_policy && !emitted) {
@@ -3490,17 +3481,17 @@ static int mir_try_generated_candidate(
     }
 
     if (!emitted) {
-        fclose(generated);
+        mir_stream_close(generated);
         label_id = label_base;
         return 0;
     }
 
     {
         int elided_instructions = 0;
-        FILE *compacted =
+        MirStream *compacted =
             mir_compact_adjacent_exx(generated, &elided_instructions);
 
-        fclose(generated);
+        mir_stream_close(generated);
         generated = compacted;
     }
 
@@ -3521,7 +3512,7 @@ static int mir_try_generated_candidate(
 }
 
 static int mir_generated_stream_is_better(
-    FILE *candidate, FILE *incumbent)
+    MirStream *candidate, MirStream *incumbent)
 {
     struct MirCostComponents candidate_cost;
     struct MirCostComponents incumbent_cost;
@@ -3552,7 +3543,7 @@ static int mir_boolean_candidate_is_validated(void)
 void mir_end_function(void)
 {
     FILE *destination;
-    FILE *generated = NULL;
+    MirStream *generated = NULL;
     const char *selector_name = "none";
     const char *candidate_name = "none";
     const char *failure_reason = NULL;
@@ -3625,7 +3616,7 @@ void mir_end_function(void)
         failure_reason = "selector";
     } else if (!opt_debug) {
         struct MirInsn *original_insns = NULL;
-        FILE *alternative = NULL;
+        MirStream *alternative = NULL;
         const char *alternative_selector = "none";
         const char *alternative_candidate = "none";
         int alternative_label_id = candidate_label_base;
@@ -3676,7 +3667,7 @@ void mir_end_function(void)
                   mir_stream_instruction_count(generated))))
             use_alternative = 1;
         if (use_alternative) {
-            fclose(generated);
+            mir_stream_close(generated);
             generated = alternative;
             alternative = NULL;
             selector_name = alternative_selector;
@@ -3686,7 +3677,7 @@ void mir_end_function(void)
             mir_compute_dead_local_suffix();
         } else {
             if (alternative != NULL)
-                fclose(alternative);
+                mir_stream_close(alternative);
             mir.count = original_count;
             if (original_count > 0)
                 memcpy(mir.insns, original_insns,
@@ -3704,7 +3695,7 @@ void mir_end_function(void)
 
     if (failure_reason != NULL) {
         if (generated != NULL)
-            fclose(generated);
+            mir_stream_close(generated);
         label_id = candidate_label_base;
         if (g_diag_error_count > 0 ||
             (getenv("DCC_MIR_REQUIRE_COMPLETE") != NULL &&
@@ -3746,7 +3737,7 @@ void mir_end_function(void)
                 type_size(mir.return_type));
     if (getenv("DCC_MIR_CANDIDATE_MATRIX") != NULL)
         mir_report_spilled_candidate_matrix(candidate_label_base);
-    fclose(generated);
+    mir_stream_close(generated);
 
 finish:
     mir_clear_debug_events();

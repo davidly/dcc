@@ -532,6 +532,7 @@ You can also pass a compiler explicitly:
             if ($item.host) { $appOverrides[$item.name]['host'] = $item.host }
             if ($item.'requires-32bit-linux-host-compiler') { $appOverrides[$item.name]['requires32'] = $true }
             if ($item.'requires-non-msvc-host-compiler') { $appOverrides[$item.name]['requiresNonMsvc'] = $true }
+            if ($item.'requires-non-macos-host-compiler') { $appOverrides[$item.name]['requiresNonMacos'] = $true }
             if ($item.'host-cflags') { $appOverrides[$item.name]['hostCflags'] = $item.'host-cflags' }
         }
     }
@@ -566,6 +567,11 @@ You can also pass a compiler explicitly:
     function Get-RequiresNonMsvcApp {
         param([string]$Name, [System.Collections.IDictionary]$Overrides)
         return ($Overrides.ContainsKey($Name) -and $Overrides[$Name]['requiresNonMsvc'])
+    }
+
+    function Get-RequiresNonMacosApp {
+        param([string]$Name, [System.Collections.IDictionary]$Overrides)
+        return ($Overrides.ContainsKey($Name) -and $Overrides[$Name]['requiresNonMacos'])
     }
 
     function Get-AppHostCflags {
@@ -639,6 +645,13 @@ You can also pass a compiler explicitly:
             # MSVC-specific C99 gaps (no VLAs, no array-parameter qualifiers,
             # static _Bool initializers not normalized to 0/1) that gcc/clang
             # handle fine - skip only on MSVC, still validate elsewhere.
+            $skippedByHostConfig++
+            continue
+        }
+        if ($IsMacOS -and (Get-RequiresNonMacosApp -Name $appName -Overrides $appOverrides)) {
+            # Apple's libc formats some floating-point edge cases differently
+            # from glibc/dcc's own target printf (e.g. the sign bit of a
+            # negated NaN) - skip only on macOS, still validate elsewhere.
             $skippedByHostConfig++
             continue
         }

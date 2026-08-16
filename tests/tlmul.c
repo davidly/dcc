@@ -21,6 +21,13 @@
  * using '*' to compute the expected value would only prove __lmul is
  * self-consistent, not correct, since it would route the "want" side
  * through the exact same routine being tested.
+ *
+ * Host validation is skipped on a normal (LP64) 64-bit host, where
+ * `unsigned long` is 8 bytes and so never wraps mod 2^32 the way dcc's
+ * 32-bit `unsigned long` does - see tests/_test_overrides.json's
+ * requires-32bit-linux-host-compiler, which still validates this file
+ * under a 32-bit (-m32) Linux host compiler, where `unsigned long` really
+ * is 4 bytes and the expected wraparound matches.
  */
 #include <stdio.h>
 

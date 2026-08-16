@@ -6808,7 +6808,15 @@ opnowc:
         ld      c,15            ; open existing
         call    5
         pop     de
-        cp      0ffh
+        ; BDOS returns 0FFh on failure, 0..3 (directory code) on success.
+        ; inc wraps 0FFh -> 00h, setting Z - the same test as cp 0ffh but
+        ; 1 byte/3 T-states cheaper, since only the zero/nonzero outcome
+        ; is ever branched on here (never A's actual numeric value). Used
+        ; the same way at every other BDOS-failure check in this file
+        ; where the numeric result itself isn't needed afterward
+        ; (opendir's __drgo/_drd are the exception: they keep cp 0ffh
+        ; because they store or branch on A's actual 0..3 index value).
+        inc     a
         jr      z,opmake_new    ; doesn't exist yet: create fresh
         call    __rdsz          ; capture the real length
         call    __apseek        ; position the offset at end-of-file
@@ -6817,7 +6825,7 @@ opnowc:
 opexist:
         ld      c,15            ; open existing
         call    5
-        cp      0ffh
+        inc     a               ; inc-a/0FFh wrap idiom (see _open's comment above)
         jr      z,opfail_noent
         call    __rdsz          ; directory is authoritative right after
                                  ; open: capture the real length now
@@ -6831,7 +6839,7 @@ opmake:
 opmake_new:
         ld      c,22            ; make new
         call    5
-        cp      0ffh
+        inc     a               ; inc-a/0FFh wrap idiom (see _open's comment above)
         jr      z,opfail_nospc
 
 opok:
@@ -6916,7 +6924,7 @@ tmpf_cl_done:
         ld      (hl),a
         ld      (__rdcv),a
         pop     af
-        cp      0ffh
+        inc     a               ; inc-a/0FFh wrap idiom (see _open's comment above)
         jr      z,clio
 clok:
         ld      hl,0
@@ -6964,8 +6972,9 @@ ulclr:
         ld      c,19
         call    5
 
-        ; A = 0ffh on failure, 0..3 (directory code) on success
-        cp      0ffh
+        ; A = 0ffh on failure, 0..3 (directory code) on success (inc-a/
+        ; 0FFh wrap idiom - see _open's comment above)
+        inc     a
         jr      z,ul_fail
         ld      hl,0
         ret
@@ -8112,10 +8121,22 @@ __ulfcb:
 ; ============================================================
         public  _rename
 _rename:
-        ; int rename(const char *old, const char *new) - IX-free. old is
-        ; kept in DE across the clear loop below (which only touches
-        ; HL/B/A); new is stashed on the stack until it is needed after
-        ; the first __mkfcb call.
+        ; int rename(const char *old, const char *new) - IX-free. new is
+        ; stashed on the stack until it is needed after the first
+        ; __mkfcb call.
+
+        ; Zero the 32-byte rename FCB first, before old/new are popped
+        ; off the stack - the LDIR fill below needs HL/DE/BC itself, so
+        ; doing this while they're still free avoids clobbering either
+        ; pointer. Self-propagating fill: seed byte 0, then LDIR copies
+        ; each already-zeroed byte into the next (same idiom as
+        ; __xfcbb's clear in __xmain).
+        ld      hl,__rnfcb
+        ld      (hl),0
+        ld      de,__rnfcb+1
+        ld      bc,31
+        ldir
+
         pop     bc              ; return address
         pop     hl              ; old
         pop     de              ; new
@@ -8126,25 +8147,15 @@ _rename:
         push    de              ; stash new for later
         ex      de,hl           ; DE = old
 
-        ; Zero the 32-byte rename FCB.
-        ld      hl,__rnfcb
-        ld      b,32
-        xor     a
-rnclr:
-        ld      (hl),a
-        inc     hl
-        djnz    rnclr
-
         ; Old name -> FCB[0..11].
         ex      de,hl           ; HL = old
         ld      de,__rnfcb
         call    __mkfcb
 
-        ; New name -> FCB[16..27].
-        ld      hl,__rnfcb
-        ld      de,16
-        add     hl,de
-        ex      de,hl           ; DE = __rnfcb + 16
+        ; New name -> FCB[16..27]. __rnfcb is a fixed label, so the
+        ; offset is resolved at assemble time - no runtime pointer
+        ; arithmetic needed.
+        ld      de,__rnfcb+16
         pop     hl              ; HL = new (stashed earlier)
         call    __mkfcb
 
@@ -8153,7 +8164,9 @@ rnclr:
         ld      c,23
         call    5
 
-        cp      0ffh
+        ; A = 0ffh on failure, 0..3 (directory code) on success (inc-a/
+        ; 0FFh wrap idiom - see _open's comment above).
+        inc     a
         jr      z,rnfail
         ld      hl,0
         ret
@@ -11201,7 +11214,7 @@ tf_found:
         pop     de
         ; HL = fd or 0FFFFh on failure
         ld      a,h
-        cp      0ffh
+        inc     a               ; inc-a/0FFh wrap idiom (see _open's comment above)
         jr      z,tf_fail
         ; Store fd in slot
         push    hl
@@ -11558,16 +11571,16 @@ _fseek:
 
         ; lseek failure is -1L == DE:HL all ones.
         ld      a,h
-        cp      0ffh
+        inc     a               ; inc-a/0FFh wrap idiom (see _open's comment above)
         jr      nz,fseek_ok_clear
         ld      a,l
-        cp      0ffh
+        inc     a
         jr      nz,fseek_ok_clear
         ld      a,d
-        cp      0ffh
+        inc     a
         jr      nz,fseek_ok_clear
         ld      a,e
-        cp      0ffh
+        inc     a
         jr      nz,fseek_ok_clear
         jr      fseek_bad
 
@@ -12119,10 +12132,10 @@ sc_s_end_check:
 sc_conv_c:
         ld      hl,(sc_width)
         ld      a,h
-        cp      0ffh
+        inc     a               ; inc-a/0FFh wrap idiom (see _open's comment above)
         jr      nz,sc_c_width_known
         ld      a,l
-        cp      0ffh
+        inc     a
         jr      nz,sc_c_width_known
         ld      hl,1
         ld      (sc_width),hl
@@ -12361,10 +12374,10 @@ sc_get_file:
         call    __getc
         pop     bc
         ld      a,h
-        cp      0ffh
+        inc     a               ; inc-a/0FFh wrap idiom (see _open's comment above)
         jr      nz,sc_get_file_ok
         ld      a,l
-        cp      0ffh
+        inc     a               ; inc-a/0FFh wrap idiom (see _open's comment above)
         jr      z,sc_get_eof
 sc_get_file_ok:
         ld      a,l
@@ -16809,10 +16822,10 @@ _nextafterf:
         ld      e,(ix+10)
         ld      d,(ix+11)
         ld      a,l
-        cp      0ffh
+        inc     a               ; inc-a/0FFh wrap idiom (see _open's comment above)
         jp      nz,NXGEN
         ld      a,h
-        cp      0ffh
+        inc     a
         jp      nz,NXGEN
         ld      a,e
         cp      07fh
@@ -16837,10 +16850,10 @@ _nextafterf:
         ld      e,(ix+6)
         ld      d,(ix+7)
         ld      a,l
-        cp      0ffh
+        inc     a               ; inc-a/0FFh wrap idiom (see _open's comment above)
         jr      nz,NXFMAX_NE
         ld      a,h
-        cp      0ffh
+        inc     a
         jr      nz,NXFMAX_NE
         ld      a,e
         cp      07fh
@@ -20828,7 +20841,7 @@ __xmain:
         ld      de,__xfcbb
         ld      c,15
         call    5
-        cp      0ffh
+        inc     a               ; inc-a/0FFh wrap idiom (see _open's comment above)
         jr      nz,xm_open
         ld      hl,0ffffh       ; open failed
         ret
@@ -21280,7 +21293,7 @@ _time:
                                          ; write it to the buffer, only to A
 
         ld      a,(__time_buf+2)
-        cp      0ffh
+        inc     a               ; inc-a/0FFh wrap idiom (see _open's comment above)
         jr      z,tim_unavailable       ; sentinel survived: no real clock
 
         ld      hl,(__time_buf)         ; HL = cpm_day_count

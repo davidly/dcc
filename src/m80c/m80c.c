@@ -353,7 +353,16 @@ static int parse_primary(Asm *a, Expr *e) {
                 buf[i-1]=0;
             }
         }
-        v=strtol(buf,NULL,base);
+        /* strtoul, not strtol: dcc emits numeric literals whose magnitude
+         * can exceed LONG_MAX while still fitting comfortably in 32-bit
+         * unsigned (e.g. a 16-bit negative constant like -32768 embedded
+         * as its 32-bit two's-complement decimal text, 4294934528, since
+         * M80 only ever consumes the low 16 bits of an expression value).
+         * strtol clamps such a value to LONG_MAX on a 32-bit-long host
+         * (MSVC/Windows) instead of preserving its bit pattern; strtoul
+         * doesn't need to clamp at all here, since unsigned long is
+         * guaranteed at least 32 bits on every host this assembles on. */
+        v=(long)strtoul(buf,NULL,base);
         e->v=v;
         return 1;
     }

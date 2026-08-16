@@ -26,6 +26,7 @@
  * touching the shared __fdlen) is where that idea actually landed safely.
  */
 #include <stdio.h>
+#include <unistd.h>
 
 static int fails;
 

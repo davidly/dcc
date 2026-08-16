@@ -24,7 +24,16 @@
  * fixed on the perf/unified-regalloc branch (confirmed empirically); once
  * that branch merges, drop the dcc-peep=false override above and confirm
  * this file passes with peephole enabled again. This affects any program
- * built normally (peephole on, the default), not just this test. */
+ * built normally (peephole on, the default), not just this test.
+ *
+ * Host validation of this whole file is skipped (tests/_test_overrides.json's
+ * "host": true on "ttime"): dcc's RTL gmtime()/localtime()/asctime()/ctime()
+ * deliberately null-check their argument and return NULL for a NULL time_t*,
+ * a defensive behavior this file tests directly (see the "returns NULL"
+ * checks below) - but passing NULL to those functions is undefined behavior
+ * per the C standard, and neither glibc nor Apple's libc null-check it; both
+ * just dereference it and segfault. Not a dcc bug, just a defensive
+ * guarantee the C standard doesn't require a host libc to offer. */
 #include <stdio.h>
 #include <string.h>
 #include <time.h>

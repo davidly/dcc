@@ -14,6 +14,7 @@
 #include <stdio.h>
 #include <dirent.h>
 #include <string.h>
+#include <unistd.h>
 
 static int fails;
 

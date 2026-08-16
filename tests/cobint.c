@@ -573,13 +573,15 @@ static void compile_expr(void)
 
 static void compile_rel_one(void)
 {
-    int notf, op;
+    int notf, op = 0;
     if (tpeek() == '(') tp++;
     compile_expr();
     notf = 0;
     if (acc(KW_NOT)) notf = 1;
     if (tpeek() == '=' || tpeek() == '<' || tpeek() == '>') op = tget();
-    else die("relop");
+    else die("relop");    /* die() calls exit(1); this init only silences
+                            * host compilers that don't know that (op is
+                            * genuinely unreachable-uninitialized here) */
     compile_expr();
     if (tpeek() == ')') tp++;
     if (op == '=') emit(OP_EQ, 0, 0);

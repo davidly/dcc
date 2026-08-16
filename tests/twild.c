@@ -9,6 +9,7 @@
  * of the three survive.
  */
 #include <stdio.h>
+#include <unistd.h>
 
 static int fails;
 
