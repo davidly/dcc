@@ -1,0 +1,43 @@
+; static function accept
+_ZA:
+	exx ; peep: wide_iy_increment
+	ld de,4 ; peep: wide_iy_increment
+	add iy,de ; peep: wide_iy_increment
+	exx ; peep: wide_iy_increment
+	or a
+	ret
+; static function carry_live
+_ZC:
+	inc iy
+	inc iy
+	inc iy
+	inc iy
+	jp c,LC
+LC:
+	ret
+; static function resolved_backedge
+_ZR:
+	jr LRI ; peep: jp_to_jr
+LR:
+	ld a,(iy+0)
+	ex de,hl
+	cp 10
+	jp (hl)
+LRI:
+	exx ; peep: wide_iy_increment
+	ld de,5 ; peep: wide_iy_increment
+	add iy,de ; peep: wide_iy_increment
+	exx ; peep: wide_iy_increment
+	jp LR
+; static function exx_owned
+_ZE:
+	exx ; peep: ix_spill_exx
+	exx ; peep: ix_spill_exx
+	inc iy
+	inc iy
+	inc iy
+	inc iy
+	inc iy
+	or a
+	ret
+	end

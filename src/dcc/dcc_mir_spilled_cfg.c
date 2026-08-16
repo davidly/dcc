@@ -18103,6 +18103,13 @@ static void mir_emit_forth_die(
     mir_emit_symbol_call(out, plan->die_function);
 }
 
+static void mir_emit_dense_byte_table_index_from_a(MirStream *out)
+{
+    /* The caller proves a normalized index in [0,127], so doubling cannot
+     * lose a ninth address bit before the word-table lookup. */
+    mir_stream_puts("\tadd a,a\n\tld l,a\n\tld h,0\n", out);
+}
+
 static void mir_emit_forth_run(
     MirStream *out, const struct MirForthRun *plan)
 {
@@ -18162,15 +18169,16 @@ static void mir_emit_forth_run(
             "\tadd hl,de\n\tpush hl\n\tpop iy\n"
             "L%d:\n"
             "\tld a,(iy%+d)\n\tor a\n\tjp nz, L%d\n"
-            "\tld a,(iy%+d)\n\tcp %d\n\tjp nc, L%d\n"
-            "\tld l,a\n\tld h,0\n\tadd hl,hl\n"
+            "\tld a,(iy%+d)\n\tcp %d\n\tjp nc, L%d\n",
+            dispatch,
+            plan->instruction_op_offset + 1, bad_opcode,
+            plan->instruction_op_offset, plan->opcode_count, bad_opcode);
+    mir_emit_dense_byte_table_index_from_a(out);
+    mir_stream_printf(out,
             "\tld de,L%d\n\tadd hl,de\n"
             "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
             "\tex de,hl\n\tjp (hl)\n"
             "L%d:\n",
-            dispatch,
-            plan->instruction_op_offset + 1, bad_opcode,
-            plan->instruction_op_offset, plan->opcode_count, bad_opcode,
             table, table);
     for (item = 0; item < plan->opcode_count; ++item)
         mir_stream_printf(out, "\tdw L%d\n", cases[item]);
@@ -19173,14 +19181,15 @@ static void mir_emit_basic_run(
     mir_emit_forth_frame_load(out, BASIC_CODE);
     mir_stream_printf(out,
             "\tpush hl\n\tpop iy\n"
-            "L%d:\n\tld a,(iy%+d)\n\tcp %d\n\tjp nc, L%d\n"
-            "\tld l,a\n\tld h,0\n\tadd hl,hl\n"
+            "L%d:\n\tld a,(iy%+d)\n\tcp %d\n\tjp nc, L%d\n",
+            dispatch, plan->instruction_op_offset,
+            plan->opcode_count, bad_opcode);
+    mir_emit_dense_byte_table_index_from_a(out);
+    mir_stream_printf(out,
             "\tld de,L%d\n\tadd hl,de\n"
             "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
             "\tex de,hl\n\tjp (hl)\n"
             "L%d:\n",
-            dispatch, plan->instruction_op_offset,
-            plan->opcode_count, bad_opcode,
             table, table);
     for (item = 0; item < plan->opcode_count; ++item)
         mir_stream_printf(out, "\tdw L%d\n", cases[item]);
@@ -19783,15 +19792,16 @@ static void mir_emit_fortran_eval(
     mir_stream_printf(out,
             "\tjp nc, L%d\n"
             "\tld a,(iy%+d)\n\tor a\n\tjp nz, L%d\n"
-            "\tld a,(iy%+d)\n\tdec a\n\tcp %d\n\tjp nc, L%d\n"
-            "\tld l,a\n\tld h,0\n\tadd hl,hl\n"
+            "\tld a,(iy%+d)\n\tdec a\n\tcp %d\n\tjp nc, L%d\n",
+            done,
+            plan->token_op_offset + 1, next,
+            plan->token_op_offset, plan->opcode_count, next);
+    mir_emit_dense_byte_table_index_from_a(out);
+    mir_stream_printf(out,
             "\tld de,L%d\n\tadd hl,de\n"
             "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
             "\tex de,hl\n\tjp (hl)\n"
             "L%d:\n",
-            done,
-            plan->token_op_offset + 1, next,
-            plan->token_op_offset, plan->opcode_count, next,
             table, table);
     for (item = 0; item < plan->opcode_count; ++item)
         mir_stream_printf(out, "\tdw L%d\n", cases[item]);
@@ -20115,14 +20125,15 @@ static void mir_emit_c_run(MirStream *out, const struct MirCRun *plan)
     mir_stream_puts("\tinc hl\n", out);
     mir_emit_forth_frame_store(out, MIR_CRUN_PC);
     mir_stream_printf(out,
-            "\tld a,(iy%+d)\n\tcp %d\n\tjp nc, L%d\n"
-            "\tld l,a\n\tld h,0\n\tadd hl,hl\n"
+            "\tld a,(iy%+d)\n\tcp %d\n\tjp nc, L%d\n",
+            plan->instruction_op_offset,
+            plan->opcode_count, bad_opcode);
+    mir_emit_dense_byte_table_index_from_a(out);
+    mir_stream_printf(out,
             "\tld de,L%d\n\tadd hl,de\n"
             "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
             "\tex de,hl\n\tjp (hl)\n"
             "L%d:\n",
-            plan->instruction_op_offset,
-            plan->opcode_count, bad_opcode,
             table, table);
     for (item = 0; item < plan->opcode_count; ++item)
         mir_stream_printf(out, "\tdw L%d\n", cases[item]);
@@ -23696,6 +23707,7 @@ struct MirDenseByteSwitch {
     int condition;
     int condition_size;
     int condition_in_hl;
+    int condition_in_a;
     int default_label;
     int end_instruction;
     int case_count;
@@ -25848,28 +25860,39 @@ static void mir_emit_dense_byte_switch(
     int table_label = new_label();
     int width =
         dispatch->maximum_case - dispatch->minimum_case + 1;
+    int index_scaled_in_a = 0;
     int value;
 
-    if (!dispatch->condition_in_hl)
+    if (!dispatch->condition_in_hl && !dispatch->condition_in_a)
         mir_emit_virtual_load(out, dispatch->condition);
     if (dispatch->condition_size == 2)
         mir_stream_printf(out, "\tld a,h\n\tor a\n\tjp nz, L%d\n",
                 labels[dispatch->default_label]);
     if (width < 256) {
         if (dispatch->minimum_case != 0) {
-            mir_stream_printf(out, "\tld a,l\n\tsub %d\n"
+            if (!dispatch->condition_in_a)
+                mir_stream_puts("\tld a,l\n", out);
+            mir_stream_printf(out, "\tsub %d\n"
                          "\tjp c, L%d\n",
                     dispatch->minimum_case,
                     labels[dispatch->default_label]);
-        } else {
+        } else if (!dispatch->condition_in_a) {
             mir_stream_puts("\tld a,l\n", out);
         }
         mir_stream_printf(out, "\tcp %d\n\tjp nc, L%d\n",
                 width, labels[dispatch->default_label]);
-        if (dispatch->minimum_case != 0)
+        if (dispatch->condition_in_a && width <= 128) {
+            mir_emit_dense_byte_table_index_from_a(out);
+            index_scaled_in_a = 1;
+        } else if (dispatch->minimum_case != 0 ||
+                   dispatch->condition_in_a) {
             mir_stream_puts("\tld l,a\n\tld h,0\n", out);
+        }
+    } else if (dispatch->condition_in_a) {
+        mir_stream_puts("\tld l,a\n\tld h,0\n", out);
     }
-    mir_stream_puts("\tadd hl,hl\n", out);
+    if (!index_scaled_in_a)
+        mir_stream_puts("\tadd hl,hl\n", out);
     mir_stream_printf(out, "\tld de,L%d\n\tadd hl,de\n"
                  "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
                  "\tex de,hl\n\tjp (hl)\nL%d:\n",
@@ -25920,7 +25943,8 @@ static int mir_match_dense_byte_switch_condition_load(
          memory_storage != SC_EXTERN) ||
         !mir_match_dense_byte_switch(
             instruction + 3, dispatch) ||
-        dispatch->condition != load->dst)
+        dispatch->condition != load->dst ||
+        mir_value_use_count(load->dst) != dispatch->case_count)
         return 0;
     dispatch->condition_in_hl = 1;
     return 1;
@@ -26160,6 +26184,7 @@ static int mir_match_dense_postincrement_index_switch(
             plan->dispatch.case_count)
         return 0;
     plan->dispatch.condition_in_hl = 1;
+    plan->dispatch.condition_in_a = 1;
     plan->skip_through = plan->dispatch.end_instruction;
     plan->base_address_value = base_member->dst;
     plan->increment_instruction = (int)(increment - mir.insns);
@@ -26197,7 +26222,7 @@ static int mir_emit_dense_postincrement_index_switch(
         return 0;
     mir_stream_printf(out, "\tld de,(%s)\n\tadd hl,de\n"
                  "\tld (ix%+d),l\n\tld (ix%+d),h\n"
-                 "\tld l,(hl)\n\tld h,0\n",
+                  "\tld a,(hl)\n",
             operand, plan->element_offset, plan->element_offset + 1);
     mir_emit_dense_byte_switch(out, labels, &plan->dispatch);
     return 1;
@@ -26250,10 +26275,12 @@ static int mir_emit_dense_byte_switch_condition_load(
         !mir_emit_named_word_load_to_hl(
             out, &mir.insns[instruction]))
         return 0;
-    if (dispatch->condition_size == 1)
-        mir_stream_puts("\tld l,(hl)\n\tld h,0\n", out);
-    else
+    if (dispatch->condition_size == 1) {
+        mir_stream_puts("\tld a,(hl)\n", out);
+        dispatch->condition_in_a = 1;
+    } else {
         mir_stream_puts("\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n", out);
+    }
     mir_emit_dense_byte_switch(out, labels, dispatch);
     return 1;
 }

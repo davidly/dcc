@@ -1,0 +1,48 @@
+; static function accept
+_ZA:
+inc iy
+inc iy
+inc iy
+inc iy
+jp LA
+LA:
+or a
+ret
+; static function carry_live
+_ZC:
+inc iy
+inc iy
+inc iy
+inc iy
+jp c,LC
+LC:
+ret
+; static function resolved_backedge
+_ZR:
+jp LRI
+LR:
+ld a,(iy+0)
+ex de,hl
+cp 10
+jp (hl)
+LRI:
+inc iy
+inc iy
+inc iy
+inc iy
+inc iy
+jp LR
+; static function exx_owned
+_ZE:
+exx ; peep: ix_spill_exx
+exx ; peep: ix_spill_exx
+inc iy
+inc iy
+inc iy
+inc iy
+inc iy
+jp LE
+LE:
+or a
+ret
+end
