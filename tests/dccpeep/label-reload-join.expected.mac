@@ -33,7 +33,7 @@ Lcross:
 	ret
 
 _cross_function_entry:
-	jr Lcross ; peep: jp_to_jr
+	jp Lcross
 
 _expression_target:
 	ld a,h

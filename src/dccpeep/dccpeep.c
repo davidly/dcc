@@ -7154,6 +7154,274 @@ static int pass_promote_ix_pointer_to_iy(void)
     return 0;
 }
 
+static int parse_mutable_iy_increment(int line, int offset, int func_start,
+                                      int func_end, int *amount)
+{
+    char clean[MAX_LINE], offbuf[32], storebuf[32], highbuf[160], target[128];
+    char tail_target[128];
+    char *end;
+    long value;
+    int parsed_offset, stored_offset;
+
+    if (line < func_start || line + 5 >= func_end ||
+        !peep_parse_ld_a_ix(lines[line], offbuf) ||
+        !parse_ix_off_numeric(offbuf, &parsed_offset) ||
+        parsed_offset != offset)
+        return 0;
+    strip_peep_comment_copy(clean, lines[line + 1]);
+    if (strncmp(clean, "add a,", 6) != 0)
+        return 0;
+    value = strtol(clean + 6, &end, 10);
+    if (*end || value < 1 || value > 8)
+        return 0;
+    *amount = (int)value;
+    if (!peep_parse_ld_ix_a(lines[line + 2], storebuf) ||
+        !parse_ix_off_numeric(storebuf, &stored_offset) ||
+        stored_offset != offset ||
+        !peep_parse_inc_ix_byte(lines[line + 4], &stored_offset) ||
+        stored_offset != offset + 1 ||
+        !jump_target_any(lines[line + 3], target))
+        return 0;
+    sprintf(highbuf, "jr nc,%s", target);
+    if (!eq(line + 3, highbuf)) {
+        sprintf(highbuf, "jp nc, %s", target);
+        if (!eq(line + 3, highbuf))
+            return 0;
+    }
+    if (line_is_label_name(line + 5, target))
+        return flags_dead_after_resolved_jump(line + 6, func_start, func_end);
+    return (is_uncond_jp(lines[line + 5]) || is_uncond_jr(lines[line + 5])) &&
+           jump_target_any(lines[line + 5], tail_target) &&
+           strcmp(target, tail_target) == 0 &&
+           flags_dead_after_resolved_jump(line + 5, func_start, func_end);
+}
+
+static int early_block_requires_initialized_pointer(int line, int func_start,
+                                                    int func_end,
+                                                    int first_ref)
+{
+    char label[128], target[128];
+    int label_line, k, incoming = 0;
+
+    for (label_line = line; label_line > func_start; --label_line)
+        if (label_name_at(label_line, label))
+            break;
+    if (label_line <= func_start || label_line == 0 ||
+        (!is_uncond_jp(lines[label_line - 1]) &&
+         !is_uncond_jr(lines[label_line - 1]) &&
+         strncmp(lines[label_line - 1], "ret", 3) != 0))
+        return 0;
+    for (k = func_start + 1; k < func_end; ++k) {
+        if (!jump_target_any(lines[k], target) || strcmp(target, label) != 0)
+            continue;
+        if (k < first_ref)
+            return 0;
+        ++incoming;
+    }
+    return incoming > 0;
+}
+
+/* Cache a heavily used mutable frame pointer in documented IY. The vacated
+ * frame slot saves incoming IY, making the rewrite ABI-safe across calls and
+ * recursion. Every slot reference must be a canonical pair load/store or the
+ * standard small carry-skip increment, and every return a normal IX epilogue. */
+static int pass_cache_mutable_ix_pointer_in_iy(void)
+{
+    int i;
+
+    build_user_asm_mask();
+    for (i = 0; i < nlines; ++i) {
+        int func_start, func_end;
+        int candidate_line, best_offset = 0, best_refs = 0;
+        int best_increments = -1;
+        int k;
+
+        if (strncmp(lines[i], "; static function ", 18) != 0)
+            continue;
+        find_function_bounds_any(i + 1, &func_start, &func_end);
+        if (func_start != i)
+            continue;
+        if (mask_range_is_user_asm(func_start, func_end))
+            continue;
+        for (k = func_start + 1; k < func_end; ++k) {
+            long unused_offset;
+            if (line_mentions_iy(lines[k]) ||
+                scan_ix_frame_addr(k, &unused_offset))
+                break;
+        }
+        if (k < func_end)
+            continue;
+
+        for (candidate_line = func_start + 1;
+             candidate_line + 1 < func_end; ++candidate_line) {
+            int offset, refs = 0, increments = 0;
+            int first_ref = -1, last_ref = -1;
+            int epilogues = 0, prologue = -1, safe = 1;
+            char low_pat[24], high_pat[24], off_text[16];
+
+            if (!peep_parse_st_ix_pair(lines[candidate_line],
+                                       lines[candidate_line + 1], &offset) ||
+                offset >= 0)
+                continue;
+            peep_format_ix_off(off_text, offset);
+            sprintf(low_pat, "(ix%s)", off_text);
+            peep_format_ix_off(off_text, offset + 1);
+            sprintf(high_pat, "(ix%s)", off_text);
+            for (k = func_start + 1; k < func_end && safe; ++k) {
+                int parsed_offset, amount;
+                char clean[MAX_LINE];
+
+                if (eq(k, "add ix,sp") && prologue < 0)
+                    prologue = k;
+                if (eq(k, "ret")) {
+                    if (k < 2 || !eq(k - 1, "pop ix") ||
+                        !eq(k - 2, "ld sp,ix")) {
+                        safe = 0;
+                        break;
+                    }
+                    ++epilogues;
+                }
+                if (k + 1 < func_end &&
+                    peep_parse_st_ix_pair(lines[k], lines[k + 1],
+                                          &parsed_offset) &&
+                    parsed_offset == offset) {
+                    if (first_ref < 0) first_ref = k;
+                    last_ref = k + 1;
+                    ++refs;
+                    ++k;
+                    continue;
+                }
+                if (k + 1 < func_end &&
+                    peep_parse_ld_ix_pair(lines[k], lines[k + 1],
+                                          &parsed_offset) &&
+                    parsed_offset == offset) {
+                    if (first_ref < 0) first_ref = k;
+                    last_ref = k + 1;
+                    ++refs;
+                    ++k;
+                    continue;
+                }
+                if (peep_parse_ld_de_ix_pair(k, &parsed_offset) &&
+                    parsed_offset == offset) {
+                    if (first_ref < 0) first_ref = k;
+                    last_ref = k + 1;
+                    ++refs;
+                    ++k;
+                    continue;
+                }
+                if (parse_mutable_iy_increment(k, offset, func_start,
+                                               func_end, &amount)) {
+                    if (first_ref < 0) first_ref = k;
+                    last_ref = k + 5;
+                    ++refs;
+                    ++increments;
+                    k += 5;
+                    continue;
+                }
+                strip_peep_comment_copy(clean, lines[k]);
+                if (strstr(clean, low_pat) || strstr(clean, high_pat))
+                    safe = 0;
+            }
+            if (!safe || prologue < 0 || epilogues == 0 || refs < 8 ||
+                first_ref != candidate_line)
+                continue;
+            for (k = func_start + 1; k < first_ref; ++k) {
+                char target[128];
+                int target_line;
+                if (!jump_target_any(lines[k], target))
+                    continue;
+                target_line = find_label_line_in_range(target, func_start,
+                                                       func_end);
+                if (target_line > first_ref && target_line <= last_ref &&
+                    !early_block_requires_initialized_pointer(k, func_start,
+                                                              func_end,
+                                                              first_ref)) {
+                    safe = 0;
+                    break;
+                }
+            }
+            if (safe && increments > 0 &&
+                (increments > best_increments ||
+                         (increments == best_increments && refs > best_refs))) {
+                best_increments = increments;
+                best_refs = refs;
+                best_offset = offset;
+            }
+        }
+        if (best_refs == 0)
+            continue;
+
+        for (k = func_start + 1; k < func_end; ++k) {
+            int parsed_offset, amount, q;
+            if (k + 1 < func_end &&
+                peep_parse_st_ix_pair(lines[k], lines[k + 1],
+                                      &parsed_offset) &&
+                parsed_offset == best_offset) {
+                replace1_tagged(k, "push hl", "mutable_ix_pointer_to_iy");
+                replace1(k + 1, "pop iy");
+                ++k;
+            } else if (k + 1 < func_end &&
+                       peep_parse_ld_ix_pair(lines[k], lines[k + 1],
+                                             &parsed_offset) &&
+                       parsed_offset == best_offset) {
+                replace1_tagged(k, "push iy", "mutable_ix_pointer_to_iy");
+                replace1(k + 1, "pop hl");
+                ++k;
+            } else if (peep_parse_ld_de_ix_pair(k, &parsed_offset) &&
+                       parsed_offset == best_offset) {
+                replace1_tagged(k, "push iy", "mutable_ix_pointer_to_iy");
+                replace1(k + 1, "pop de");
+                ++k;
+            } else if (parse_mutable_iy_increment(k, best_offset, func_start,
+                                                  func_end, &amount)) {
+                int direct_tail = is_uncond_jp(lines[k + 5]) ||
+                                  is_uncond_jr(lines[k + 5]);
+                char tail[MAX_LINE];
+                if (direct_tail)
+                    strcpy(tail, lines[k + 5]);
+                for (q = 0; q < amount; ++q)
+                    replace1_tagged(k + q, "inc iy",
+                                    "mutable_ix_pointer_to_iy");
+                if (direct_tail) {
+                    replace1(k + amount, tail);
+                    delete_n(k + amount + 1, 5 - amount);
+                    func_end -= 5 - amount;
+                    k += amount;
+                } else {
+                    delete_n(k + amount, 6 - amount);
+                    func_end -= 6 - amount;
+                    k += amount - 1;
+                }
+            }
+        }
+        for (k = func_end - 1; k > func_start; --k) {
+            char low[48], high[48];
+            if (!eq(k, "ld sp,ix"))
+                continue;
+            sprintf(low, "ld e,(ix%+d)", best_offset);
+            sprintf(high, "ld d,(ix%+d)", best_offset + 1);
+            insert_line_tagged(k, "pop iy", "mutable_ix_pointer_to_iy");
+            insert_line(k, "push de");
+            insert_line(k, high);
+            insert_line(k, low);
+            func_end += 4;
+        }
+        for (k = func_start + 1; k < func_end; ++k) {
+            char low[48], high[48];
+            if (!eq(k, "add ix,sp"))
+                continue;
+            sprintf(low, "ld (ix%+d),e", best_offset);
+            sprintf(high, "ld (ix%+d),d", best_offset + 1);
+            insert_line_tagged(k + 1, "push iy", "mutable_ix_pointer_to_iy");
+            insert_line(k + 2, "pop de");
+            insert_line(k + 3, low);
+            insert_line(k + 4, high);
+            return 1;
+        }
+    }
+    return 0;
+}
+
 /* Parse "ld (ix-N),R" for a single 8-bit register R, extracting N. Unlike
  * stride_parse_ld_ix_neg_r (which shares this exact shape but doesn't
  * strip a trailing peep-comment tag before comparing), this pass runs
@@ -8311,7 +8579,7 @@ static int pass_hoist_index_ptr_to_bc(void)
             if (bc_regalloc_claimed_in_range(func_start, func_end))
                 continue;
             for (k = func_start; k < func_end; ++k) {
-                if (jump_target(lines[k], tgt) && strcmp(tgt, label) == 0) {
+                if (jump_target_any(lines[k], tgt) && strcmp(tgt, label) == 0) {
                     if (k <= i || k > loop_end) { external_entry = 1; break; }
                 }
             }
@@ -9616,6 +9884,45 @@ static int pass_narrow_dead_h_constant(void)
     return changed;
 }
 
+/* Combine the exit test and backedge in DCC's byte-length scan:
+ *
+ *   ld b,0; L: ld a,(hl); or a; jp z,E; inc hl; inc b; jp L; E:
+ *
+ * Speculatively advance HL/B, loop on nonzero, then undo B for the NUL byte.
+ * HL remains one byte past the terminator, so require it dead at E. */
+static int pass_strlen_byte_counter(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 8 < nlines; ++i) {
+        char head[128], exit_label[128], back_target[128];
+        char condition[16];
+        char jump[160];
+
+        if (!eq(i, "ld b,0") || !label_name_at(i + 1, head) ||
+            !eq(i + 2, "ld a,(hl)") || !eq(i + 3, "or a") ||
+            !peep_parse_any_cond_jump(lines[i + 4], condition, exit_label) ||
+            strcmp(condition, "z") != 0 ||
+            !eq(i + 5, "inc hl") || !eq(i + 6, "inc b") ||
+            !jump_target(lines[i + 7], back_target) ||
+            strcmp(back_target, head) != 0 ||
+            !line_is_label_name(i + 8, exit_label) ||
+            !peep_registers_dead_after(i + 8, PEEP_REG_H | PEEP_REG_L))
+            continue;
+
+        replace1_tagged(i + 3, "inc hl", "strlen_byte_counter");
+        replace1(i + 4, "inc b");
+        replace1(i + 5, "or a");
+        sprintf(jump, "jp nz, %s", head);
+        replace1(i + 6, jump);
+        replace1(i + 7, "dec b");
+        changed = 1;
+        i += 8;
+    }
+    return changed;
+}
+
 /* Parse an IX offset string (e.g. "+8", "-2") to an integer. */
 
 
@@ -10090,6 +10397,7 @@ int main(int argc, char **argv)
         { "pass_elim_zero_add_hl", pass_elim_zero_add_hl, 0 },
         { "pass_const_hl_doubles", pass_const_hl_doubles, 0 },
         { "pass_deref_byte_cmp", pass_deref_byte_cmp, 0 },
+        { "pass_strlen_byte_counter", pass_strlen_byte_counter, 0 },
         { "pass_cpir", pass_cpir, 0 },
         { "pass_byte_global_ptr_array_addr", pass_byte_global_ptr_array_addr, 0 },
         { "pass_byte_ix_predec_zero_test", pass_byte_ix_predec_zero_test, 0 },
@@ -10279,6 +10587,11 @@ int main(int argc, char **argv)
     RUN_PASS(pass_elim_dup_ix_word_array_addr_after_push);
 
     if (RUN_PASS(pass_promote_ix_pointer_to_iy)) {
+        RUN_PASS(pass_remove_unreferenced_labels);
+        RUN_PASS(pass_labels);
+    }
+
+    while (RUN_PASS(pass_cache_mutable_ix_pointer_in_iy)) {
         RUN_PASS(pass_remove_unreferenced_labels);
         RUN_PASS(pass_labels);
     }

@@ -151,9 +151,250 @@ static int find_label_line(const LabelIndexEntry *labels, int count,
     return -1;
 }
 
+static int branch_skips_return(int branch, int target)
+{
+    int i;
+
+    if (target <= branch)
+        return 0;
+    for (i = branch + 1; i < target; ++i) {
+        char clean[MAX_LINE];
+        strip_peep_comment_copy(clean, lines[i]);
+        if (strcmp(clean, "ret") == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static int likely_zero_call_result(int branch)
+{
+    char label[128];
+    char clean[MAX_LINE];
+    int i;
+
+    if (branch < 3 || !parse_jp_z_label(lines[branch], label))
+        return 0;
+    strip_peep_comment_copy(clean, lines[branch - 1]);
+    if (strcmp(clean, "or l") != 0)
+        return 0;
+    strip_peep_comment_copy(clean, lines[branch - 2]);
+    if (strcmp(clean, "ld a,h") != 0)
+        return 0;
+
+    for (i = branch - 3; i >= 0 && i >= branch - 7; --i) {
+        strip_peep_comment_copy(clean, lines[i]);
+        if (strncmp(clean, "call ", 5) == 0)
+            return 1;
+        if (starts_label(lines[i]) || peep_is_public_line(lines[i]))
+            break;
+    }
+    return 0;
+}
+
+static int likely_nonzero_call_result(int branch)
+{
+    char label[128];
+    char clean[MAX_LINE];
+    int i;
+
+    if (branch < 3 || !parse_jp_nz_label(lines[branch], label))
+        return 0;
+    strip_peep_comment_copy(clean, lines[branch - 1]);
+    if (strcmp(clean, "or l") != 0)
+        return 0;
+    strip_peep_comment_copy(clean, lines[branch - 2]);
+    if (strcmp(clean, "ld a,h") != 0)
+        return 0;
+    for (i = branch - 3; i >= 0 && i >= branch - 7; --i) {
+        strip_peep_comment_copy(clean, lines[i]);
+        if (strncmp(clean, "call ", 5) == 0)
+            return 1;
+        if (starts_label(lines[i]) || peep_is_public_line(lines[i]))
+            break;
+    }
+    return 0;
+}
+
+static int likely_nonzero_word_parameter(int branch)
+{
+    char label[128];
+    char clean[MAX_LINE];
+
+    if (branch < 4 || !parse_jp_nz_label(lines[branch], label))
+        return 0;
+    strip_peep_comment_copy(clean, lines[branch - 1]);
+    if (strcmp(clean, "or l") != 0)
+        return 0;
+    strip_peep_comment_copy(clean, lines[branch - 2]);
+    if (strcmp(clean, "ld a,h") != 0)
+        return 0;
+    strip_peep_comment_copy(clean, lines[branch - 3]);
+    if (strncmp(clean, "ld h,(ix+", 9) != 0)
+        return 0;
+    strip_peep_comment_copy(clean, lines[branch - 4]);
+    return strncmp(clean, "ld l,(ix+", 9) == 0;
+}
+
+static int branch_skips_call_to_epilogue(int branch, int target)
+{
+    int i;
+    int saw_call = 0;
+
+    if (target <= branch)
+        return 0;
+    for (i = branch + 1; i < target; ++i) {
+        char clean[MAX_LINE];
+        strip_peep_comment_copy(clean, lines[i]);
+        if (strncmp(clean, "call ", 5) == 0)
+            saw_call = 1;
+    }
+    if (!saw_call)
+        return 0;
+    for (i = target + 1; i < nlines && i <= target + 5; ++i) {
+        char clean[MAX_LINE];
+        strip_peep_comment_copy(clean, lines[i]);
+        if (strcmp(clean, "ret") == 0)
+            return 1;
+        if (starts_label(lines[i]) || peep_is_public_line(lines[i]))
+            break;
+    }
+    return 0;
+}
+
+static int branch_skips_value_to_epilogue(int branch, int target)
+{
+    char clean[MAX_LINE];
+    int i;
+
+    if (branch < 2 || target != branch + 3 ||
+        !starts_label(lines[branch + 1]))
+        return 0;
+    strip_peep_comment_copy(clean, lines[branch - 1]);
+    if (strncmp(clean, "ld h,(ix", 8) != 0)
+        return 0;
+    strip_peep_comment_copy(clean, lines[branch - 2]);
+    if (strncmp(clean, "ld l,(ix", 8) != 0)
+        return 0;
+    strip_peep_comment_copy(clean, lines[branch + 2]);
+    if (strncmp(clean, "ld hl,", 6) != 0)
+        return 0;
+    for (i = target + 1; i < nlines && i <= target + 5; ++i) {
+        strip_peep_comment_copy(clean, lines[i]);
+        if (strcmp(clean, "ret") == 0)
+            return 1;
+        if (starts_label(lines[i]) || peep_is_public_line(lines[i]))
+            break;
+    }
+    return 0;
+}
+
+static int likely_taken_e_counter_backedge(int branch, int target)
+{
+    char label[128];
+    char clean[MAX_LINE];
+    int bound;
+    int init;
+    int k;
+
+    if (target >= branch || branch < 3 ||
+        !parse_jp_c_label(lines[branch], label) ||
+        !peep_parse_cp_const(lines[branch - 1], &bound))
+        return 0;
+    strip_peep_comment_copy(clean, lines[branch - 2]);
+    if (strcmp(clean, "ld a,e") != 0)
+        return 0;
+    strip_peep_comment_copy(clean, lines[branch - 3]);
+    if (strcmp(clean, "inc e") != 0)
+        return 0;
+
+    for (k = target - 1; k >= 0 && k >= target - 12; --k) {
+        if (starts_label(lines[k]) || peep_is_public_line(lines[k]))
+            break;
+        if (peep_parse_ld_e_imm8(lines[k], &init))
+            return init >= 0 && bound - init >= 16;
+    }
+    return 0;
+}
+
+static int loop_has_small_constant_bound(int target, int backedge,
+                                         const LabelIndexEntry *labels,
+                                         int label_count)
+{
+    int i;
+    int limit = target + 12;
+
+    if (limit > backedge)
+        limit = backedge;
+    for (i = target + 1; i + 1 < limit; ++i) {
+        char exit_label[128];
+        char definition[130];
+        int bound;
+        int exit_line;
+
+        if (!peep_parse_cp_const(lines[i], &bound) || bound < 0 || bound > 4)
+            continue;
+        if (i == target + 1)
+            continue;
+        if (!jump_target_any(lines[i + 1], exit_label) ||
+            strchr(lines[i + 1], ',') == NULL)
+            continue;
+        sprintf(definition, "%s:", exit_label);
+        exit_line = find_label_line(labels, label_count, definition);
+        if (exit_line > backedge)
+            return 1;
+    }
+    return 0;
+}
+
+static int is_forward_diamond_arm(int branch, int target,
+                                  const LabelIndexEntry *labels,
+                                  int label_count)
+{
+    char other_target[128];
+    char definition[130];
+    int i;
+
+    if (target <= branch)
+        return 0;
+    if (strchr(lines[branch], ',') != NULL) {
+        for (i = target - 1; i > branch; --i) {
+            const PeepLineInfo *info = peep_line_info(i);
+            int other_line;
+            if (starts_label(lines[i]))
+                return 0;
+            if (info != NULL && (info->kind == PEEP_LINE_BLANK ||
+                                 info->kind == PEEP_LINE_COMMENT))
+                continue;
+            if (!is_uncond_jp(lines[i]) ||
+                !jump_target_any(lines[i], other_target))
+                return 0;
+            sprintf(definition, "%s:", other_target);
+            other_line = find_label_line(labels, label_count, definition);
+            return other_line > target;
+        }
+        return 0;
+    }
+    if (branch + 1 >= nlines || !starts_label(lines[branch + 1]))
+        return 0;
+    for (i = branch - 1; i >= 0 && i >= branch - 16; --i) {
+        char conditional_target[128];
+        int conditional_line;
+        if (starts_label(lines[i]) || peep_is_public_line(lines[i]))
+            break;
+        if (!jump_target_any(lines[i], conditional_target) ||
+            strchr(lines[i], ',') == NULL)
+            continue;
+        sprintf(definition, "%s:", conditional_target);
+        conditional_line = find_label_line(labels, label_count, definition);
+        return conditional_line == branch + 1;
+    }
+    return 0;
+}
+
 int pass_jp_to_jr(void)
 {
     static int addr[MAX_LINES];   /* upper-bound byte address of each line */
+    static int hot_loop_depth[MAX_LINES + 1];
     LabelIndexEntry *labels;
     int label_count = 0;
     int i;
@@ -174,14 +415,73 @@ int pass_jp_to_jr(void)
     }
     qsort(labels, (size_t)label_count, sizeof(*labels), compare_label_entries);
 
+        /* Mark structurally proven high-trip byte-counter loops.  This lets time
+         * mode retain jp cc for their direct backedges and return-skipping
+         * continuation branches.  jp cc is a steady 10 T-states, while jr cc
+         * costs 12 when taken (7 when not taken).  Size mode deliberately keeps
+         * the old shorten-everything policy. */
+        memset(hot_loop_depth, 0,
+            (size_t)(nlines + 1) * sizeof(hot_loop_depth[0]));
+    for (i = 0; i < nlines; ++i) {
+        char lab[128];
+        char def[130];
+        int target;
+
+        if (!jump_target_any(lines[i], lab))
+            continue;
+        sprintf(def, "%s:", lab);
+        target = find_label_line(labels, label_count, def);
+        if (target >= 0 && likely_taken_e_counter_backedge(i, target)) {
+            hot_loop_depth[target]++;
+            hot_loop_depth[i + 1]--;
+        }
+    }
+    for (i = 1; i < nlines; ++i)
+        hot_loop_depth[i] += hot_loop_depth[i - 1];
+
     do {
         int pc = 0;
+        int shortenable_count = 0;
+        int short_small_backedges = 0;
         changed = 0;
 
         /* Assign an upper-bound address to every line. */
         for (i = 0; i < nlines; i++) {
             addr[i] = pc;
             pc += instr_size_upper(i);
+        }
+
+        for (i = 0; i < nlines; ++i) {
+            char lab[128], def[130];
+            int conditional, target, disp;
+            if (!jr_convertible(i, lab))
+                continue;
+            sprintf(def, "%s:", lab);
+            target = find_label_line(labels, label_count, def);
+            if (target < 0)
+                continue;
+            disp = addr[target] - (addr[i] + 2);
+            if (disp < -128 || disp > 127)
+                continue;
+            conditional = strchr(lines[i], ',') != NULL;
+            if ((!conditional &&
+                 ((target < i &&
+                   !loop_has_small_constant_bound(target, i, labels,
+                                                  label_count)) ||
+                  branch_skips_value_to_epilogue(i, target))) ||
+                (conditional &&
+                 (likely_taken_e_counter_backedge(i, target) ||
+                  (likely_zero_call_result(i) &&
+                   branch_skips_call_to_epilogue(i, target)) ||
+                  (likely_nonzero_word_parameter(i) &&
+                   branch_skips_call_to_epilogue(i, target)) ||
+                  (hot_loop_depth[i] > 0 &&
+                   branch_skips_return(i, target)))))
+                continue;
+            ++shortenable_count;
+            if (target < i &&
+                loop_has_small_constant_bound(target, i, labels, label_count))
+                ++short_small_backedges;
         }
 
         for (i = 0; i < nlines; i++) {
@@ -199,6 +499,34 @@ int pass_jp_to_jr(void)
             target = find_label_line(labels, label_count, def);
             if (target < 0)
                 continue;
+
+            if (!peep_context.options.optimize_size) {
+                int conditional = strchr(lines[i], ',') != NULL;
+                 if ((!conditional &&
+                                         ((target < i &&
+                                             (!loop_has_small_constant_bound(target, i, labels,
+                                                                                                 label_count) ||
+                                                short_small_backedges == 2)) ||
+                                            (shortenable_count <= 2 && target > i &&
+                                               is_forward_diamond_arm(i, target, labels,
+                                                                      label_count)) ||
+                      branch_skips_value_to_epilogue(i, target))) ||
+                    (conditional &&
+                     (likely_taken_e_counter_backedge(i, target) ||
+                                            (shortenable_count <= 2 &&
+                                             is_forward_diamond_arm(i, target, labels,
+                                                                                            label_count)) ||
+                             (likely_zero_call_result(i) &&
+                              branch_skips_call_to_epilogue(i, target)) ||
+                                                         (shortenable_count <= 2 &&
+                                                            likely_nonzero_call_result(i) &&
+                                                            branch_skips_return(i, target)) ||
+                              (likely_nonzero_word_parameter(i) &&
+                               branch_skips_call_to_epilogue(i, target)) ||
+                      (hot_loop_depth[i] > 0 &&
+                       branch_skips_return(i, target)))))
+                    continue;
+            }
 
             /* Opaque user assembly may contain directives or macros whose
              * encoded size this text-level estimator cannot bound. */
