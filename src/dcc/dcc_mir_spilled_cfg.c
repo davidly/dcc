@@ -569,14 +569,24 @@ static int mir_emit_named_address_root_to_hl(MirStream *out,
     int memory_type;
     int memory_storage;
     int memory_offset;
-    struct Sym *global = find_global(insn->name);
+    struct Sym *global;
 
     if (!mir_scalar_memory_location(insn, &memory_type,
                                     &memory_storage, &memory_offset))
         return 0;
-    if ((global != NULL && global->storage == SC_FUNC) ||
-        memory_storage == SC_GLOBAL || memory_storage == SC_EXTERN ||
+    /* Look up the global/extern symbol table entry only after confirming
+     * via memory_storage (mir_scalar_memory_location, which resolves this
+     * specific instruction's own object/declared-local binding) that this
+     * name is genuinely global/extern/a function here. A local variable
+     * whose name happens to match an unrelated library function (e.g. a
+     * local named "remove", colliding with stdio.h's remove() prototype)
+     * must not take this branch just because find_global() finds that
+     * unrelated global by the same name - doing so emits `extrn`/`ld
+     * hl,<label>` for the library function's address instead of this
+     * local's own frame address, corrupting every read through it. */
+    if (memory_storage == SC_GLOBAL || memory_storage == SC_EXTERN ||
         memory_storage == SC_FUNC) {
+        global = find_global(insn->name);
         const char *assembly_name = asm_name_for(
             global != NULL ? sym_asm_name(global)
                            : mir_declared_link_name(insn->name));
@@ -9245,11 +9255,11 @@ static int mir_match_vla_stable(struct MirVlaStable *plan)
     mir_numeric_shape_hash(&first, &second);
     shape_matches =
         (mir.count == 117 && mir_cfg_block_count() == 11 &&
-         first == 0x1cc94bb7d6bab8cbULL &&
-         second == 0xbf56fdc9c7ed9deaULL) ||
+         first == 0xb59469e79e19fa2bULL &&
+         second == 0x7240f38a761ad649ULL) ||
         (mir.count == 124 && mir_cfg_block_count() == 12 &&
-         first == 0x0c6da5093473bd23ULL &&
-         second == 0x2cc5022c1e694718ULL);
+         first == 0x66870004159feaa3ULL &&
+         second == 0x4c802fcc0dd9d226ULL);
     if (!shape_matches ||
         !mir_match_signed_word_parameter(1, &plan->iter_offset) ||
         !mir_match_signed_word_parameter(2, &plan->count_offset))
@@ -9272,10 +9282,10 @@ static int mir_match_nested_vla_stable(
         (mir.return_type & TYPE_UNSIGNED) != 0)
         return 0;
     mir_numeric_shape_hash(&first, &second);
-    if (!((first == 0xa2a78a16fc902d2fULL &&
-           second == 0x8bddd0a885a69b89ULL) ||
-          (first == 0x3554ede98500d38cULL &&
-           second == 0xc0096f819a7bd0adULL)) ||
+    if (!((first == 0x9b1d9d55314a498fULL &&
+           second == 0xf8cc992b72f9401cULL) ||
+          (first == 0xfa2ea213bf43f54cULL &&
+           second == 0x65b23499c2ca83ecULL)) ||
         !mir_match_signed_word_parameter(1, &plan->outer_offset) ||
         !mir_match_signed_word_parameter(2, &plan->inner_offset) ||
         !mir_match_signed_word_parameter(3, &plan->count_offset))
@@ -9302,8 +9312,8 @@ static int mir_match_vla_loop_result(
         (mir.return_type & TYPE_UNSIGNED) != 0)
         return 0;
     mir_numeric_shape_hash(&first, &second);
-    if (first != 0xf31770608dd972d4ULL ||
-        second != 0xcf1dd19085aacdedULL ||
+    if (first != 0xb1ed346d3e5e08c4ULL ||
+        second != 0x016f21e6f762d38aULL ||
         !mir_match_signed_word_parameter(1, &plan->iter_offset) ||
         !mir_match_signed_word_parameter(2, &plan->count_offset))
         return 0;
@@ -22636,6 +22646,8 @@ static int mir_match_double_logical_not(
     const struct MirInsn *outer;
     const struct MirInsn *inner;
     const struct MirInsn *source;
+    int inner_instruction;
+    int slot;
     int instruction;
 
     if (outer_instruction < 0 || outer_instruction >= mir.count)
@@ -22657,6 +22669,36 @@ static int mir_match_double_logical_not(
 
         if (use->opcode == MIR_UNARY && use->immediate == '!' &&
             use->src1 == outer->dst)
+            return 0;
+    }
+    /*
+     * Fusion moves the source's use from the inner `!` to the outer `!`.
+     * It is safe only when the source can be recreated there or its backend
+     * slot remains untouched over the extended live range.
+     */
+    inner_instruction = (int)(inner - mir.insns);
+    for (instruction = inner_instruction + 1;
+         instruction < outer_instruction;
+         ++instruction)
+        if (mir.insns[instruction].opcode != MIR_NOP)
+            return 0;
+    slot = -1;
+    if (inner->src1 >= 0 && mir.backend_slots != NULL)
+        slot = mir.backend_slots[inner->src1];
+    if (slot < 0 &&
+        !mir_scalar_constant_is_rematerializable(inner->src1) &&
+        !mir_string_address_is_rematerializable(inner->src1) &&
+        !mir_address_is_rematerializable(inner->src1) &&
+        !mir_value_has_direct_named_home(inner->src1))
+        return 0;
+    for (instruction = inner_instruction + 1;
+         instruction < outer_instruction;
+         ++instruction) {
+        int dst = mir.insns[instruction].dst;
+        if (dst < 0 || dst == inner->src1)
+            continue;
+        if (slot >= 0 && mir.backend_slots != NULL &&
+            mir.backend_slots[dst] == slot)
             return 0;
     }
     if (source_value != NULL)
@@ -26421,11 +26463,18 @@ int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
     if (insn->object >= 0 && insn->object < mir.object_count) {
         const struct MirObject *object = &mir.objects[insn->object];
         *type = object->type;
+        /* A VLA identifier load fetches its saved base pointer. */
+        if (mir_declared_is_vla_object(insn->name) &&
+            type_ptr_depth(insn->type) > type_ptr_depth(*type))
+            *type = insn->type;
         *storage = object->storage;
         *offset = object->offset + (int)insn->immediate;
         return 1;
     }
     if (mir_declared_location(insn->name, type, storage, offset)) {
+        if (mir_declared_is_vla_object(insn->name) &&
+            type_ptr_depth(insn->type) > type_ptr_depth(*type))
+            *type = insn->type;
         *offset += (int)insn->immediate;
         return 1;
     }

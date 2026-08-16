@@ -145,6 +145,7 @@ struct MirFunction {
     int switch_depth;
     int declaration_placeholders[1024];
     int declaration_scope_ends[1024];
+    int declaration_scope_labels[1024];
     const struct AstNode *declaration_nodes[1024];
     unsigned char declaration_consumed[1024];
     int declaration_count;

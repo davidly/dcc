@@ -1,0 +1,2 @@
+tforjmp jump=1,0
+tforjmp passed with great success

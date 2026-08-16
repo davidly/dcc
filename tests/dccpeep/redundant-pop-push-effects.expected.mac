@@ -1,0 +1,94 @@
+	cseg
+
+_overwrite_word:
+	ld hl,1234
+	ret
+
+_overwrite_bytes:
+	ld l,(ix+0)
+	ld h,(ix+1)
+	ret
+
+_read_high:
+	pop hl
+	push hl
+	ld b,h
+	ld hl,1234
+	ret
+
+_read_low_after_high_write:
+	pop hl
+	push hl
+	ld h,0
+	ld c,l
+	ld l,0
+	ret
+
+_byte_register_overwrite:
+	pop hl
+	push hl
+	ld h,b
+	ld l,c
+	ret
+
+_byte_register_store:
+	ld h,b
+	ld l,c
+	ld (saved),hl
+	ret
+
+_read_address:
+	pop hl
+	push hl
+	ld a,(hl)
+	ld hl,1234
+	ret
+
+_exchange_reads_hl:
+	pop hl
+	push hl
+	ex de,hl
+	ld hl,1234
+	ret
+
+_alu_reads_hl:
+	pop hl
+	push hl
+	sbc hl,de
+	jp z,_alu_done
+_alu_done:
+	ret
+
+_stack_argument_call:
+	call _ordinary
+	pop bc
+	ld hl,1234
+	ret
+
+_register_argument_call:
+	pop hl
+	push hl
+	call __mhf
+	ld hl,1234
+	ret
+
+_conditional_call:
+	pop hl
+	push hl
+	call z,_ordinary
+	ld hl,1234
+	ret
+
+_label_then_overwrite:
+	pop iy
+	ld l,(ix+0)
+	ld h,(ix+1)
+	ret
+
+_copy_before_exchange:
+	ld b,h ; peep: redundant_pop_push_reorder
+	ld c,l
+	push hl
+	ex de,hl
+	pop hl
+	ret
