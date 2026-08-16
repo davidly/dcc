@@ -2688,7 +2688,14 @@ static int mir_cost_candidate_is_selectable(
     if (spec->kind != MIR_COST_CANDIDATE_SPILLED)
         return 0;
     if (spec->features == MIR_SPILLED_FEATURES_PHI_SLOT)
-        return 1;
+        /*
+         * Phi-slot cleanup cannot yet share a candidate with the spilled
+         * backend's pre-pushed PHI call-argument handoff when that PHI also
+         * spans an earlier caller clobber. The cleanup can otherwise retain
+         * its established call/PHI coverage.
+         */
+        return !mir_late_phi_crosses_caller_clobber() ||
+               !mir_spilled_cfg_has_phi_argument_stack_handoff();
     return spec->features == MIR_SPILLED_FEATURES_RHS ||
            spec->features == MIR_SPILLED_FEATURES_STORE_ADDRESS ||
            spec->features == MIR_SPILLED_FEATURES_WIDE_LHS ||

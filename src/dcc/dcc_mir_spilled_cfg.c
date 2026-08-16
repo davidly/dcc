@@ -547,6 +547,11 @@ static int mir_has_phi_first_call_argument_candidate(void)
     return 0;
 }
 
+int mir_spilled_cfg_has_phi_argument_stack_handoff(void)
+{
+    return mir_has_phi_first_call_argument_candidate();
+}
+
 static int mir_virtual_offset(int value)
 {
     int slot = value;

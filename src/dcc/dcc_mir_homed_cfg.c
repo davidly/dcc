@@ -1388,6 +1388,29 @@ static int mir_homed_paired_byte_call(
     return mir_value_use_count(out->base) == 2;
 }
 
+int mir_homed_call_uses_guardable_stack_path(int instruction)
+{
+    const char *rtl_name;
+    struct MirPairedByteCall paired_byte_call;
+    int a, b, c;
+
+    return instruction >= 0 && instruction < mir.count &&
+           mir.insns[instruction].opcode == MIR_CALL &&
+           !mir_homed_paired_byte_call(
+               instruction, &paired_byte_call) &&
+           !mir_call_is_memset_fastcall(instruction, &a, &b, &c) &&
+           !mir_call_is_strlen_fastcall(instruction, &a) &&
+           !mir_call_is_strchr_fastcall(instruction, &a, &b) &&
+           !mir_call_is_strrchr_fastcall(instruction, &a, &b) &&
+           !mir_call_is_memchr_fastcall(instruction, &a, &b, &c) &&
+           !mir_call_is_memcmp_fastcall(instruction, &a, &b, &c) &&
+           !mir_call_is_memcpy_fastcall(instruction, &a, &b, &c) &&
+           !mir_call_is_de_hl_fastcall(
+               instruction, &rtl_name, &a, &b) &&
+           !mir_call_is_bdos_family_fastcall(
+               instruction, &rtl_name, &a, &b);
+}
+
 static int mir_homed_paired_byte_value(int value)
 {
     int call_index;
@@ -1470,6 +1493,9 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
 
     mir_homed_cfg_frameless = 0;
     mir_homed_cfg_used_unary_not_branch = 0;
+    if (mir_hybrid_homed_selection &&
+        !mir_regional_home_plan_is_active())
+        mir_reallocate_call_spanning_phi_homes();
     /* Phase 1 (mir-migration-plan-to-100pct.md), Item 8: a corpus-wide
      * zero-spill-fallback survey found "return-type" (base type != int)
      * is by far the single largest homed-scalar-cfg rejection cause
@@ -2930,6 +2956,8 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
                 int argument;
                 int scan;
                 int preserve_bc_iy;
+                int preserve_bc;
+                int preserve_de;
                 int dest_value, fill_value, count_value;
                 int s_value, c_value;
                 int s1_value, s2_value, n_value;
@@ -3058,18 +3086,21 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
                         ++call_arg_count;
                     }
                 argument = call_arg_count - 1;
-                /* A value homed in IY (or the BC:IY pair) is only
-                 * callee-saved in practice if every callee actually
-                 * preserves it; a call selector, or a recursive call
-                 * back into a caller that spilled its own IY-homed
-                 * value, is under no such obligation. Guard it
-                 * explicitly here, the same way every other
-                 * instruction handler in this file protects a
-                 * live-across color before clobbering it. */
+                /* IY alone is callee-saved. A wide BC:IY home also
+                 * contains caller-saved BC, so preserve the pair if one
+                 * remains live across this call. */
                 preserve_bc_iy = mir_home_color_live_across(
                     i, MIR_COLOR_BC_IY);
+                preserve_bc = mir_home_color_live_across(
+                    i, MIR_COLOR_BC);
+                preserve_de = mir_home_color_live_across(
+                    i, MIR_COLOR_DE);
                 if (preserve_bc_iy)
                     mir_stream_puts("\tpush iy\n\tpush bc\n", out);
+                if (preserve_bc)
+                    mir_stream_puts("\tpush bc\n", out);
+                if (preserve_de)
+                    mir_stream_puts("\tpush de\n", out);
                 for (scan = i - 1; scan >= 0; --scan) {
                     const struct MirInsn *arg = &mir.insns[scan];
                     int size;
@@ -3096,6 +3127,10 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
                     mir_stream_printf(out, "\textrn %s\n", assembly_name);
                 mir_stream_printf(out, "\tcall %s\n", assembly_name);
                 for (argument = 0; argument < argument_bytes / 2; ++argument)
+                    mir_stream_puts("\tpop bc\n", out);
+                if (preserve_de)
+                    mir_stream_puts("\tpop de\n", out);
+                if (preserve_bc)
                     mir_stream_puts("\tpop bc\n", out);
                 if (preserve_bc_iy)
                     mir_stream_puts("\tpop bc\n\tpop iy\n", out);

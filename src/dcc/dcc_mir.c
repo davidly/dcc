@@ -6950,6 +6950,34 @@ int mir_value_has_use_after(int value, int instruction)
     return 0;
 }
 
+static int mir_late_phi_can_use_call_guards(
+    int phi_instruction, int *first_instruction);
+
+static int mir_guarded_late_phi_color_live_across(
+    int instruction, int color)
+{
+    int phi_instruction;
+
+    for (phi_instruction = instruction + 1;
+         phi_instruction < mir.count;
+         ++phi_instruction) {
+        const struct MirInsn *phi = &mir.insns[phi_instruction];
+        int first_instruction;
+
+        if (phi->opcode == MIR_LABEL)
+            break;
+        if (phi->opcode != MIR_PHI || phi->dst < 0 ||
+            mir.allocation_colors[phi->dst] != color ||
+            !mir_value_has_use(phi->dst) ||
+            !mir_late_phi_can_use_call_guards(
+                phi_instruction, &first_instruction))
+            continue;
+        if (instruction >= first_instruction)
+            return 1;
+    }
+    return 0;
+}
+
 /* True if a value occupies `color` on both sides of this instruction.
  * Prefer the verifier's CFG-aware liveness so mutually exclusive branch
  * values do not cause unnecessary saves; the textual scan is retained for
@@ -6967,7 +6995,8 @@ int mir_home_color_live_across(int instruction, int color)
                 mir.live_in[row + value] != 0 &&
                 mir.live_out[row + value] != 0)
                 return 1;
-        return 0;
+        return mir_guarded_late_phi_color_live_across(
+            instruction, color);
     }
 
     for (value = 0; value < mir.next_value; ++value) {
@@ -6985,7 +7014,8 @@ int mir_home_color_live_across(int instruction, int color)
         if (mir_value_has_use_after(value, instruction))
             return 1;
     }
-    return 0;
+    return mir_guarded_late_phi_color_live_across(
+        instruction, color);
 }
 
 static int mir_value_use_count_uncached(int value)
@@ -9360,6 +9390,10 @@ void mir_regional_after_instruction(int instruction)
         mir_regional_register_valid[insn->dst] = 1;
 }
 
+static int mir_build_call_spanning_phi_liveness(
+    unsigned char **live_in, unsigned char **live_out,
+    int allow_call_guards);
+
 /* Item 20d (mir-migration-plan-to-100pct.md): permanent (non-disposable)
  * wide-coloring probe for mir_try_emit_homed_scalar_cfg. Re-runs the
  * shared allocator with allow_wide_colors=1 using the persisted
@@ -9388,6 +9422,10 @@ int mir_probe_wide_colors_for_homed(
     int *saved_spills;
     int saved_spill_count;
     struct MirAllocationSummary summary;
+    unsigned char *extended_live_in = NULL;
+    unsigned char *extended_live_out = NULL;
+    const unsigned char *allocation_live_in = mir.live_in;
+    const unsigned char *allocation_live_out = mir.live_out;
     int narrow_spills = 0;
     int wide_spills = 0;
     int ok;
@@ -9408,8 +9446,16 @@ int mir_probe_wide_colors_for_homed(
            (size_t)value_count * sizeof(*saved_spills));
     saved_spill_count = mir.allocation_spill_count;
 
-    mir_allocate_registers(mir.live_in, mir.live_out, &summary, 1,
+    if (bounded_hybrid &&
+        mir_build_call_spanning_phi_liveness(
+            &extended_live_in, &extended_live_out, 0)) {
+        allocation_live_in = extended_live_in;
+        allocation_live_out = extended_live_out;
+    }
+    mir_allocate_registers(allocation_live_in, allocation_live_out, &summary, 1,
                            rematerializable, bounded_hybrid);
+    free(extended_live_out);
+    free(extended_live_in);
 
     for (value = 0; value < mir.allocation_spill_count; ++value) {
         int member;
@@ -9461,6 +9507,182 @@ int mir_probe_wide_colors_for_homed(
     free(saved_colors);
     free(saved_spills);
     return ok;
+}
+
+static int mir_late_phi_prefix_crosses_caller_clobber(
+    int phi_instruction, int *first_instruction)
+{
+    int block_start = mir_block_start_for_instruction(phi_instruction);
+    int instruction;
+    int crosses_clobber = 0;
+
+    *first_instruction = phi_instruction;
+    for (instruction = block_start;
+         instruction < phi_instruction;
+         ++instruction) {
+        int opcode = mir.insns[instruction].opcode;
+
+        if (opcode == MIR_LABEL || opcode == MIR_NOP || opcode == MIR_PHI)
+            continue;
+        if (*first_instruction == phi_instruction)
+            *first_instruction = instruction;
+        if (mir_instruction_clobbers_caller_registers(
+                &mir.insns[instruction]))
+            crosses_clobber = 1;
+    }
+    return crosses_clobber;
+}
+
+/*
+ * A late PHI's edge copy already occupies its assigned home at block entry.
+ * Keep the original allocation when the prefix can be made safe with a
+ * caller-save around ordinary void calls. Other shapes still need extended
+ * liveness because an instruction or return value may share that home.
+ */
+static int mir_late_phi_can_use_call_guards(
+    int phi_instruction, int *first_instruction)
+{
+    const struct MirInsn *phi = &mir.insns[phi_instruction];
+    int block_start = mir_block_start_for_instruction(phi_instruction);
+    int color;
+    int instruction;
+    int has_call = 0;
+
+    *first_instruction = phi_instruction;
+    if (phi->dst < 0 || mir.allocation_colors == NULL)
+        return 0;
+    color = mir.allocation_colors[phi->dst];
+    if (color != MIR_COLOR_DE && color != MIR_COLOR_BC)
+        return 0;
+    for (instruction = block_start;
+         instruction < phi_instruction;
+         ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode == MIR_LABEL || insn->opcode == MIR_NOP)
+            continue;
+        if (*first_instruction == phi_instruction)
+            *first_instruction = instruction;
+        if (insn->dst >= 0 && insn->dst != phi->dst &&
+            mir_color_shares_slot(
+                mir.allocation_colors[insn->dst], color))
+            return 0;
+        if (insn->opcode == MIR_PHI)
+            continue;
+        if ((insn->src1 >= 0 && insn->src1 != phi->dst &&
+             mir_color_shares_slot(
+                 mir.allocation_colors[insn->src1], color)) ||
+            (insn->src2 >= 0 && insn->src2 != phi->dst &&
+             mir_color_shares_slot(
+                 mir.allocation_colors[insn->src2], color)))
+            return 0;
+        if (insn->opcode == MIR_ARG)
+            continue;
+        if (insn->opcode == MIR_CONST && type_size(insn->type) <= 2)
+            continue;
+        if (insn->opcode == MIR_CALL &&
+            type_ptr_depth(insn->type) == 0 &&
+            (insn->type & 15) == TYPE_VOID &&
+            mir_homed_call_uses_guardable_stack_path(instruction)) {
+            has_call = 1;
+            continue;
+        }
+        return 0;
+    }
+    return has_call;
+}
+
+int mir_late_phi_crosses_caller_clobber(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        int first_instruction;
+
+        if (mir.insns[instruction].opcode == MIR_PHI &&
+            mir.insns[instruction].dst >= 0 &&
+            mir_value_has_use(mir.insns[instruction].dst) &&
+            mir_late_phi_prefix_crosses_caller_clobber(
+                instruction, &first_instruction))
+            return 1;
+    }
+    return 0;
+}
+
+static int mir_extend_call_spanning_phi_liveness(
+    unsigned char *live_in, unsigned char *live_out,
+    int allow_call_guards)
+{
+    int phi_instruction;
+    int extended = 0;
+
+    for (phi_instruction = 0;
+         phi_instruction < mir.count;
+         ++phi_instruction) {
+        const struct MirInsn *phi = &mir.insns[phi_instruction];
+        int first_instruction;
+        int instruction;
+
+        if (phi->opcode != MIR_PHI || phi->dst < 0 ||
+            !live_out[(size_t)phi_instruction * mir.next_value + phi->dst] ||
+            !mir_late_phi_prefix_crosses_caller_clobber(
+                phi_instruction, &first_instruction))
+            continue;
+        if (allow_call_guards &&
+            mir_late_phi_can_use_call_guards(
+                phi_instruction, &first_instruction))
+            continue;
+        for (instruction = first_instruction;
+             instruction < phi_instruction;
+             ++instruction) {
+            live_in[(size_t)instruction * mir.next_value + phi->dst] = 1;
+            live_out[(size_t)instruction * mir.next_value + phi->dst] = 1;
+        }
+        extended = 1;
+    }
+    return extended;
+}
+
+static int mir_build_call_spanning_phi_liveness(
+    unsigned char **live_in, unsigned char **live_out,
+    int allow_call_guards)
+{
+    size_t bytes;
+
+    *live_in = NULL;
+    *live_out = NULL;
+    if (!mir_late_phi_crosses_caller_clobber())
+        return 0;
+    bytes = (size_t)mir.count * mir.next_value;
+    *live_in = (unsigned char *)malloc(bytes);
+    *live_out = (unsigned char *)malloc(bytes);
+    if (*live_in == NULL || *live_out == NULL)
+        fatal("out of memory extending late PHI liveness");
+    memcpy(*live_in, mir.live_in, bytes);
+    memcpy(*live_out, mir.live_out, bytes);
+    if (!mir_extend_call_spanning_phi_liveness(
+            *live_in, *live_out, allow_call_guards)) {
+        free(*live_out);
+        free(*live_in);
+        *live_in = NULL;
+        *live_out = NULL;
+        return 0;
+    }
+    return 1;
+}
+
+void mir_reallocate_call_spanning_phi_homes(void)
+{
+    unsigned char *live_in;
+    unsigned char *live_out;
+    struct MirAllocationSummary summary;
+
+    if (!mir_build_call_spanning_phi_liveness(
+            &live_in, &live_out, 1))
+        return;
+    mir_allocate_registers(live_in, live_out, &summary, 0, NULL, 0);
+    free(live_out);
+    free(live_in);
 }
 
 int mir_verify_and_dump(void)
