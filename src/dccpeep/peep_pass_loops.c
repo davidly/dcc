@@ -1108,11 +1108,10 @@ int pass_byte_for_counter_to_reg_e(void)
  * site; the nested-loop collision check below now recognizes the "db
  * 0FDh," prefix instead of an "IY" name prefix.
  *
- * Because ordinary runtime calls preserve IY (see scan_local_func_labels
- * above), this pass allows ANY call inside the loop body, not just
- * __mods/__divs, except one that is_local_func_label flags as another
- * function in this same file - declined exactly like
- * pass_byte_loop_counter_to_reg_c declines a call that isn't __mods/__divs.
+ * Incoming IY is saved before the single-entry loop and restored at its
+ * unique exit. Ordinary calls may therefore occur inside the loop because
+ * the dcc ABI requires every callee to preserve IY; same-file IY claims
+ * still decline the optimization to avoid overlapping a compiler home.
  *
  * "ld l,(ix+off)" can't become a single "ld l,iyl": the FD prefix redirects
  * EVERY H/L reference in an instruction, so "ld l,iyl" would actually
@@ -1142,6 +1141,8 @@ int pass_byte_loop_counter_to_reg_iyl(void)
     const char *p;
 
     changed = 0;
+    if (dcc_iy_claimed_in_file())
+        return 0;
 
     for (i = 0; i + 2 < nlines; ++i) {
         if (!starts_label(lines[i]))
@@ -1158,6 +1159,8 @@ int pass_byte_loop_counter_to_reg_iyl(void)
          * other label in between (single-entry, single-exit body). */
         loop_end = find_straight_line_loop_back(i + 3, label);
         if (loop_end < 0)
+            continue;
+        if (!iy_loop_borrow_safe(i, loop_end, label, target))
             continue;
 
         sprintf(pat_ix, "(ix%+d)", off);
@@ -1220,6 +1223,10 @@ int pass_byte_loop_counter_to_reg_iyl(void)
         if (!ok)
             continue;
 
+        /* Restore at the unique exit first, while its index is still stable. */
+        insert_line_tagged(loop_end + 2, "pop iy",
+                           "byte_loop_counter_to_reg_iyl_abi");
+
         /* In-place replacements first, while every index computed above is
          * still valid. The "ld l,(ix+off)" shape is the one exception -
          * expanding to two lines shifts everything after it, so loop_end
@@ -1252,6 +1259,8 @@ int pass_byte_loop_counter_to_reg_iyl(void)
         sprintf(prime, "ld a,(ix%+d)", off);
         insert_line(i, prime);
         insert_line_tagged(i + 1, "db 0FDh,06Fh", "byte_loop_counter_to_reg_iyl");
+        insert_line_tagged(i, "push iy",
+                           "byte_loop_counter_to_reg_iyl_abi");
 
         changed = 1;
     }
@@ -1272,14 +1281,11 @@ int pass_byte_loop_counter_to_reg_iyl(void)
  *     cp K
  *     jp c, LOOP
  *
- * Same IYL promotion and same call-safety rule (scan_local_func_labels/
- * is_local_func_label) as pass_byte_loop_counter_to_reg_iyl. The writeback
- * is nearly free here: IYLDA already has to reload the fresh value into A
- * for the "cp K" comparison, so one more "ld (ix+off),a" covers every
- * iteration's writeback at essentially no extra cost - unlike the
- * decrementing pass (and unlike the "ld l,(ix+off)" shape below, which
- * still needs its own dedicated two-line expansion for the same H/L-
- * substitution reason documented there).
+ * Same IYL promotion and ABI preservation rule as
+ * pass_byte_loop_counter_to_reg_iyl. The writeback is nearly free here:
+ * IYLDA already has to reload the fresh value into A for the "cp K"
+ * comparison, so one more "ld (ix+off),a" covers every iteration's
+ * writeback at essentially no extra cost.
  */
 int pass_byte_incr_loop_counter_to_reg_iyl(void)
 {
@@ -1300,6 +1306,8 @@ int pass_byte_incr_loop_counter_to_reg_iyl(void)
     const char *p;
 
     changed = 0;
+    if (dcc_iy_claimed_in_file())
+        return 0;
 
     for (i = 0; i + 3 < nlines; ++i) {
         if (!peep_parse_inc_ix_byte(lines[i], &off))
@@ -1330,6 +1338,8 @@ int pass_byte_incr_loop_counter_to_reg_iyl(void)
             }
         }
         if (loop_start < 0)
+            continue;
+        if (!iy_loop_borrow_safe(loop_start, i + 3, label, NULL))
             continue;
 
         sprintf(pat_ix, "(ix%+d)", off);
@@ -1369,6 +1379,10 @@ int pass_byte_incr_loop_counter_to_reg_iyl(void)
         if (!ok)
             continue;
 
+        /* The conditional backedge falls through to this unique restore. */
+        insert_line_tagged(i + 4, "pop iy",
+                           "byte_incr_loop_counter_to_reg_iyl_abi");
+
         /* In-place replacements first, bumping i in lockstep with the one
          * two-line expansion (mirrors pass_byte_loop_counter_to_reg_iyl). */
         for (k = loop_start + 1; k < i; ++k) {
@@ -1401,6 +1415,8 @@ int pass_byte_incr_loop_counter_to_reg_iyl(void)
             sprintf(primeload, "ld a,(ix%+d)", off);
             insert_line(loop_start, primeload);
             insert_line_tagged(loop_start + 1, "db 0FDh,06Fh", "byte_incr_loop_counter_to_reg_iyl");
+            insert_line_tagged(loop_start, "push iy",
+                               "byte_incr_loop_counter_to_reg_iyl_abi");
         }
 
         changed = 1;

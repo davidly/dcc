@@ -1,6 +1,10 @@
 /* tc89flinit.c -- float initializers using expressions in braced lists */
 #include <stdio.h>
 
+#ifndef MIR_CLOBBER_ARR_LIT0_EXPECT
+#define MIR_CLOBBER_ARR_LIT0_EXPECT 1.5f
+#endif
+
 static int fails;
 
 static void chkf(const char *name, float got, float expect)
@@ -31,7 +35,7 @@ int main(void)
     /* float array: literal constants */
     {
         float la[3] = { 1.5f, -2.5f, 0.0f };
-        chkf("arr_lit0", la[0], 1.5f);
+        chkf("arr_lit0", la[0], MIR_CLOBBER_ARR_LIT0_EXPECT);
         chkf("arr_lit1", la[1], -2.5f);
         chkf("arr_lit2", la[2], 0.0f);
     }

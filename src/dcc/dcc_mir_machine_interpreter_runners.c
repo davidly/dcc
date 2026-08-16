@@ -264,6 +264,7 @@ struct MirFortranStatementAppendSchedule {
 };
 
 struct MirFortranUppercaseSchedule {
+    struct Sym *uppercase_function;
     int destination_stack_offset;
     int source_stack_offset;
     int limit;
@@ -1940,6 +1941,7 @@ static void mir_emit_forth_lexer_schedule(
     int epilogue = new_label();
 
     mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
+          ";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
           "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-6\n\tadd hl,sp\n\tld sp,hl\n",
           out);
@@ -2127,7 +2129,8 @@ static void mir_emit_forth_lexer_schedule(
     mir_stream_printf(out, "\tjp L%d\nL%d:\n", epilogue, not_number);
     mir_forth_set_token(out, plan, 256);
     mir_stream_printf(out,
-            "L%d:\n\tld sp,ix\n\tpop ix\n\tpop iy\n\tret\n",
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tpop iy\n"
+            ";@dcc.reg free=iy\n\tret\n",
             epilogue);
 }
 
@@ -3475,7 +3478,9 @@ static void mir_emit_ada_whitespace_schedule(
     common.position_offset = plan->position_offset;
     common.length_offset = plan->length_offset;
     common.source_offset = plan->source_offset;
-    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n\tpush iy\n", out);
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
+          ";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
+          "\tpush iy\n", out);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
     mir_machine_emit_global_word(out, plan->state, 0);
@@ -3552,8 +3557,9 @@ static void mir_emit_ada_whitespace_schedule(
     mir_stream_puts("\tcp 10\n", out);
     mir_stream_printf(out, "\tjp z,L%d\n", outer);
     mir_forth_increment_position(out, &common);
-    mir_stream_printf(out, "\tjp L%d\nL%d:\n\tpop iy\n\tret\n"
-            "L%d:\n\tpop iy\n\tret\n",
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n\tpop iy\n"
+            ";@dcc.reg free=iy\n\tret\n"
+            "L%d:\n\tpop iy\n;@dcc.reg free=iy\n\tret\n",
             at_loop, done, no_at_comment);
 }
 
@@ -3868,6 +3874,7 @@ static void mir_emit_ada_lexer_schedule(
     common.position_offset = plan->position_offset;
     common.text_offset = plan->text_offset;
     mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
+          ";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
           "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-4\n\tadd hl,sp\n\tld sp,hl\n", out);
     if (opt_stack_check)
@@ -4077,7 +4084,8 @@ static void mir_emit_ada_lexer_schedule(
             "\tld (iy%+d),a\n\txor a\n\tld (iy%+d),a\n",
             plan->text_offset, plan->text_offset + 1);
     mir_stream_printf(out,
-            "L%d:\n\tld sp,ix\n\tpop ix\n\tpop iy\n\tret\n",
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tpop iy\n"
+            ";@dcc.reg free=iy\n\tret\n",
             epilogue);
 }
 
@@ -4756,6 +4764,7 @@ static void mir_emit_cob_tokenizer_schedule(
     int done = new_label();
 
     mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
+          ";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
           "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-76\n\tadd hl,sp\n\tld sp,hl\n", out);
     if (opt_stack_check)
@@ -4963,7 +4972,8 @@ static void mir_emit_cob_tokenizer_schedule(
         out, plan->state, plan->token_count_offset);
     mir_stream_puts("\tex de,hl\n\tpop hl\n"
           "\tld (hl),e\n\tinc hl\n\tld (hl),d\n"
-          "\tld sp,ix\n\tpop ix\n\tpop iy\n\tret\n", out);
+          "\tld sp,ix\n\tpop ix\n\tpop iy\n"
+          ";@dcc.reg free=iy\n\tret\n", out);
 }
 
 static int mir_match_cob_perform_schedule(
@@ -5635,7 +5645,10 @@ static int mir_match_fortran_uppercase_schedule(
         MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP, MIR_CONST,
         MIR_STORE_INDIRECT
     };
+    const struct MirInsn *call = &mir.insns[39];
+    const struct MirInsn *argument = &mir.insns[38];
     struct Sym *uppercase_function;
+    const char *assembly_name;
     int arguments[1];
     int instruction;
     long limit;
@@ -5714,21 +5727,58 @@ static int mir_match_fortran_uppercase_schedule(
         mir.insns[34].memory_size != 1 ||
         mir.insns[35].src1 != mir.insns[34].dst ||
         mir.insns[35].memory_size != 1 ||
+        type_ptr_depth(mir.insns[35].type) != 0 ||
+        (mir.insns[35].type & 15) != TYPE_CHAR ||
+        (mir.insns[35].type & TYPE_UNSIGNED) != 0 ||
+        type_size(mir.insns[35].type) != 1 ||
         mir.insns[36].src1 != mir.insns[35].dst ||
+        mir.insns[36].immediate != 0 ||
+        type_ptr_depth(mir.insns[36].type) != 0 ||
+        (mir.insns[36].type & 15) != TYPE_CHAR ||
+        (mir.insns[36].type & TYPE_UNSIGNED) == 0 ||
+        type_size(mir.insns[36].type) != 1 ||
         mir.insns[37].src1 != mir.insns[36].dst ||
+        mir.insns[37].immediate != 0 ||
+        type_ptr_depth(mir.insns[37].type) != 0 ||
+        (mir.insns[37].type & 15) != TYPE_INT ||
+        (mir.insns[37].type & TYPE_UNSIGNED) != 0 ||
+        type_size(mir.insns[37].type) != 2 ||
         !mir_machine_call_arguments(
-            &mir.insns[39], 1, arguments) ||
+            call, 1, arguments) ||
         arguments[0] != mir.insns[37].dst ||
         (uppercase_function =
              mir_interpreter_file_function(39, 0, 1)) == NULL ||
-        strcmp(asm_name_for(sym_asm_name(uppercase_function)),
-               "__ctu") ||
-        mir.insns[40].src1 != mir.insns[39].dst ||
+        call->memory_flags != 0 ||
+        call->type != uppercase_function->type ||
+        type_ptr_depth(uppercase_function->type) != 0 ||
+        (uppercase_function->type & 15) != TYPE_INT ||
+        (uppercase_function->type & TYPE_UNSIGNED) != 0 ||
+        type_size(uppercase_function->type) != 2 ||
+        uppercase_function->proto_types[0] !=
+            mir.insns[37].type ||
+        argument->src1 != mir.insns[37].dst ||
+        argument->secondary_offset != call->secondary_offset ||
+        argument->immediate != 0 ||
+        argument->type != uppercase_function->proto_types[0] ||
+        mir.insns[40].src1 != call->dst ||
+        mir.insns[40].immediate != 0 ||
+        type_ptr_depth(mir.insns[40].type) != 0 ||
+        (mir.insns[40].type & 15) != TYPE_CHAR ||
+        (mir.insns[40].type & TYPE_UNSIGNED) != 0 ||
+        type_size(mir.insns[40].type) != 1 ||
         mir.insns[41].src1 != mir.insns[31].dst ||
         mir.insns[41].src2 != mir.insns[40].dst ||
-        mir.insns[41].memory_size != 1)
+        mir.insns[41].memory_size != 1 ||
+        (mir.insns[41].memory_flags & (1 | 8)) != 0)
         return mir_machine_reject(
             "fortran-uppercase", "conversion");
+    assembly_name =
+        asm_name_for(sym_asm_name(uppercase_function));
+    if (strcmp(assembly_name, "__ctu") ||
+        (call->base_name[0] != 0 &&
+         strcmp(call->base_name, assembly_name)))
+        return mir_machine_reject(
+            "fortran-uppercase", "call-name");
     if (!mir_machine_constant_equals(mir.insns[44].dst, 1) ||
         mir.insns[45].src1 != mir.insns[9].dst ||
         mir.insns[45].src2 != mir.insns[44].dst ||
@@ -5745,6 +5795,7 @@ static int mir_match_fortran_uppercase_schedule(
         mir.insns[54].memory_size != 1)
         return mir_machine_reject(
             "fortran-uppercase", "completion");
+    plan->uppercase_function = uppercase_function;
     plan->limit = (int)limit;
     return 1;
 }
@@ -5871,6 +5922,7 @@ static void mir_emit_fortran_declaration_schedule(
     int done = new_label();
 
     mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
+          ";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
           "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-34\n\tadd hl,sp\n\tld sp,hl\n", out);
     if (opt_stack_check)
@@ -5993,7 +6045,9 @@ static void mir_emit_fortran_declaration_schedule(
             "\tjp z,L%d\n\tcp ','\n\tjp z,L%d\n"
             "\tinc iy\n\tjp L%d\n",
             no_add, comma_scan, done, separators, comma_scan);
-    mir_stream_printf(out, "L%d:\n\tld sp,ix\n\tpop ix\n\tpop iy\n\tret\n",
+    mir_stream_printf(out,
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tpop iy\n"
+            ";@dcc.reg free=iy\n\tret\n",
             done);
 }
 
@@ -6327,6 +6381,7 @@ static void mir_emit_fortran_lhs_schedule(
     int no_close = new_label();
 
     mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
+          ";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
           "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-28\n\tadd hl,sp\n\tld sp,hl\n", out);
     if (opt_stack_check)
@@ -6396,7 +6451,8 @@ static void mir_emit_fortran_lhs_schedule(
     mir_stream_printf(out,
             "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
             "\tld (hl),e\n\tinc hl\n\tld (hl),d\n"
-            "L%d:\n\tld sp,ix\n\tpop ix\n\tpop iy\n\tret\n",
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tpop iy\n"
+            ";@dcc.reg free=iy\n\tret\n",
             plan->index_pointer_stack_offset + 4,
             plan->index_pointer_stack_offset + 5,
             no_index);

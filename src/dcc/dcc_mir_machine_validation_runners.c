@@ -68,6 +68,8 @@ struct MirLongIndexCallRunner {
     int unsafe_count;
     int unsafe_expected;
     int unsafe_calls_expected;
+    int safe_sum_unsigned;
+    int unsafe_sum_unsigned;
     int copy_fastcall;
     int length_fastcall;
     char copy_runtime_name[16];
@@ -498,6 +500,139 @@ static struct Sym *mir_long_index_call_function(int instruction)
         (call->memory_flags & MIR_CALL_FLAG_VARIADIC) != 0)
         return NULL;
     return find_global(call->name);
+}
+
+static int mir_long_index_signed_long_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+        (type & 15) == TYPE_LONG &&
+        (type & TYPE_UNSIGNED) == 0 &&
+        type_size(type) == 4;
+}
+
+static int mir_long_index_char_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+        (type & 15) == TYPE_CHAR &&
+        type_size(type) == 2;
+}
+
+static int mir_long_index_sum_call(
+    int call_instruction, int first_arg_instruction,
+    int second_arg_instruction, int conversion_instruction,
+    struct Sym **function_out, int *is_unsigned_out)
+{
+    const struct MirInsn *call = &mir.insns[call_instruction];
+    const struct MirInsn *first_arg =
+        &mir.insns[first_arg_instruction];
+    const struct MirInsn *second_arg =
+        &mir.insns[second_arg_instruction];
+    const struct MirInsn *conversion =
+        &mir.insns[conversion_instruction];
+    struct Sym *function = find_global(call->name);
+    const char *assembly_name;
+    int arguments[2];
+
+    if (call->opcode != MIR_CALL ||
+        call->src1 >= 0 ||
+        call->secondary_offset < 0 ||
+        call->memory_flags != 0 ||
+        function == NULL ||
+        function->storage != SC_FUNC ||
+        function->is_funcptr ||
+        function->is_noreturn ||
+        !function->has_proto ||
+        function->proto_variadic ||
+        function->proto_nargs != 2 ||
+        call->type != function->type ||
+        type_ptr_depth(function->type) != 0 ||
+        (function->type & 15) != TYPE_INT ||
+        type_size(function->type) != 2 ||
+        type_ptr_depth(function->proto_types[0]) != 1 ||
+        (function->proto_types[0] & 15) != TYPE_INT ||
+        (function->proto_types[0] & TYPE_UNSIGNED) != 0 ||
+        type_size(function->proto_types[0]) != 2 ||
+        type_ptr_depth(function->proto_types[1]) != 0 ||
+        (function->proto_types[1] & 15) != TYPE_INT ||
+        (function->proto_types[1] & TYPE_UNSIGNED) != 0 ||
+        type_size(function->proto_types[1]) != 2 ||
+        !mir_machine_two_call_arguments(call, arguments) ||
+        first_arg->opcode != MIR_ARG ||
+        first_arg->secondary_offset != call->secondary_offset ||
+        first_arg->immediate != 0 ||
+        first_arg->src1 != arguments[0] ||
+        first_arg->type != function->proto_types[0] ||
+        second_arg->opcode != MIR_ARG ||
+        second_arg->secondary_offset != call->secondary_offset ||
+        second_arg->immediate != 1 ||
+        second_arg->src1 != arguments[1] ||
+        second_arg->type != function->proto_types[1] ||
+        conversion->opcode != MIR_UNARY ||
+        conversion->src1 != call->dst ||
+        conversion->immediate != 0 ||
+        !mir_long_index_signed_long_type(conversion->type))
+        return 0;
+    assembly_name = asm_name_for(sym_asm_name(function));
+    if (call->base_name[0] != 0 &&
+        strcmp(call->base_name, assembly_name))
+        return 0;
+    *function_out = function;
+    *is_unsigned_out =
+        (function->type & TYPE_UNSIGNED) != 0;
+    return 1;
+}
+
+static int mir_long_index_check_call(
+    int call_instruction, const int argument_instructions[3],
+    struct Sym **function_out)
+{
+    const struct MirInsn *call = &mir.insns[call_instruction];
+    struct Sym *function = find_global(call->name);
+    const char *assembly_name;
+    int arguments[3];
+    int argument;
+
+    if (call->opcode != MIR_CALL ||
+        call->src1 >= 0 ||
+        call->secondary_offset < 0 ||
+        call->memory_flags != 0 ||
+        function == NULL ||
+        function->storage != SC_FUNC ||
+        function->is_funcptr ||
+        function->is_noreturn ||
+        !function->has_proto ||
+        function->proto_variadic ||
+        function->proto_nargs != 3 ||
+        call->type != function->type ||
+        type_ptr_depth(function->type) != 0 ||
+        (function->type & 15) != TYPE_VOID ||
+        type_size(function->type) != 0 ||
+        !mir_long_index_signed_long_type(
+            function->proto_types[0]) ||
+        !mir_long_index_signed_long_type(
+            function->proto_types[1]) ||
+        !mir_long_index_char_pointer_type(
+            function->proto_types[2]) ||
+        !mir_machine_three_call_arguments(call, arguments))
+        return 0;
+    assembly_name = asm_name_for(sym_asm_name(function));
+    if (call->base_name[0] != 0 &&
+        strcmp(call->base_name, assembly_name))
+        return 0;
+    for (argument = 0; argument < 3; ++argument) {
+        const struct MirInsn *arg =
+            &mir.insns[argument_instructions[argument]];
+
+        if (arg->opcode != MIR_ARG ||
+            arg->secondary_offset != call->secondary_offset ||
+            arg->immediate != argument ||
+            arg->src1 != arguments[argument] ||
+            arg->type != function->proto_types[argument])
+            return 0;
+    }
+    if (*function_out == NULL)
+        *function_out = function;
+    return *function_out == function;
 }
 
 static int mir_long_index_constant(int instruction, int *value_out)
@@ -3337,6 +3472,13 @@ static int mir_match_for_increment_runner(
 static int mir_match_long_index_call_runner(
     struct MirLongIndexCallRunner *plan)
 {
+    static const int long_check_calls[5] = {
+        17, 42, 88, 104, 113
+    };
+    static const int long_check_arguments[5][3] = {
+        {9, 14, 16}, {36, 39, 41}, {82, 85, 87},
+        {98, 101, 103}, {107, 110, 112}
+    };
     static const int expected_opcodes[148] = {
         MIR_LABEL, MIR_ADDRESS, MIR_ARG, MIR_STRING_ADDRESS,
         MIR_ARG, MIR_CALL, MIR_ADDRESS, MIR_ARG,
@@ -3379,6 +3521,7 @@ static int mir_match_long_index_call_runner(
     int arguments[3];
     int call_argument;
     int instruction;
+    int item;
     int fast_arg0;
     int fast_arg1;
     const char *runtime_name = NULL;
@@ -3449,16 +3592,28 @@ static int mir_match_long_index_call_runner(
         mir_long_index_call_function(8);
     plan->length_function =
         mir_long_index_call_function(12);
-    plan->long_check_function =
-        mir_long_index_call_function(17);
     plan->copy_function =
         mir_long_index_call_function(20);
     plan->string_check_function =
         mir_long_index_call_function(27);
-    plan->safe_sum_function =
-        mir_long_index_call_function(80);
-    plan->unsafe_sum_function =
-        mir_long_index_call_function(96);
+    for (item = 0; item < 5; ++item)
+        if (!mir_long_index_check_call(
+                long_check_calls[item],
+                long_check_arguments[item],
+                &plan->long_check_function))
+            return mir_machine_reject(
+                "long-index-call-runner",
+                "long-check-contract");
+    if (!mir_long_index_sum_call(
+            80, 77, 79, 81,
+            &plan->safe_sum_function,
+            &plan->safe_sum_unsigned) ||
+        !mir_long_index_sum_call(
+            96, 93, 95, 97,
+            &plan->unsafe_sum_function,
+            &plan->unsafe_sum_unsigned))
+        return mir_machine_reject(
+            "long-index-call-runner", "sum-contract");
     plan->print_function = find_global(mir.insns[120].name);
     if (plan->copy_string_function == NULL ||
         plan->count_function == NULL ||
@@ -7887,24 +8042,26 @@ static void mir_long_index_emit_string_check(
 static void mir_long_index_emit_sum_check(
     MirStream *out, const struct MirLongIndexCallRunner *plan,
     struct Sym *function, int count, int expected,
-    int string_id)
+    int string_id, int result_unsigned)
 {
     mir_stream_printf(out,
             "\tld hl,S%d\n\tpush hl\n"
             "\tld hl,%d\n"
-            "\tld a,h\n\trlca\n\tsbc a,a\n"
-            "\tld d,a\n\tld e,a\n"
+            "\tld de,%d\n"
             "\tpush de\n\tpush hl\n"
             "\tld hl,%d\n\tpush hl\n",
-            string_id, expected, count);
+            string_id, expected, expected < 0 ? -1 : 0, count);
     mir_long_index_emit_global_address(
         out, plan->inline_values);
     mir_stream_puts("\tpush hl\n", out);
     mir_machine_emit_symbol_call(out, function);
-    mir_stream_puts("\tpop bc\n\tpop bc\n"
-          "\tld a,h\n\trlca\n\tsbc a,a\n"
-          "\tld d,a\n\tld e,a\n"
-          "\tpush de\n\tpush hl\n", out);
+    mir_stream_puts("\tpop bc\n\tpop bc\n", out);
+    if (result_unsigned)
+        mir_stream_puts("\tld de,0\n", out);
+    else
+        mir_stream_puts("\tld a,h\n\trlca\n\tsbc a,a\n"
+              "\tld d,a\n\tld e,a\n", out);
+    mir_stream_puts("\tpush de\n\tpush hl\n", out);
     mir_machine_emit_symbol_call(
         out, plan->long_check_function);
     mir_stream_puts("\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n\tpop bc\n",
@@ -7968,14 +8125,16 @@ static void mir_emit_long_index_call_runner(
     mir_long_index_emit_sum_check(
         out, plan, plan->safe_sum_function,
         plan->safe_count, plan->safe_expected,
-        plan->safe_sum_string_id);
+        plan->safe_sum_string_id,
+        plan->safe_sum_unsigned);
     mir_stream_puts("\tld hl,0\n", out);
     mir_machine_emit_global_word_store(
         out, plan->unsafe_call_count, 0);
     mir_long_index_emit_sum_check(
         out, plan, plan->unsafe_sum_function,
         plan->unsafe_count, plan->unsafe_expected,
-        plan->unsafe_sum_string_id);
+        plan->unsafe_sum_string_id,
+        plan->unsafe_sum_unsigned);
 
     mir_machine_emit_global_word(
         out, plan->unsafe_call_count, 0);

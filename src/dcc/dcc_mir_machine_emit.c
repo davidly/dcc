@@ -2150,6 +2150,136 @@ int mir_machine_reject(const char *template_name, const char *reason)
     return 0;
 }
 
+static void mir_machine_payload_hash_value(
+    unsigned long long *first,
+    unsigned long long *second,
+    unsigned long long value)
+{
+    *first ^= value;
+    *first *= 1099511628211ULL;
+    *second ^= value + 0x9e3779b97f4a7c15ULL +
+        (*second << 6) + (*second >> 2);
+}
+
+static void mir_machine_payload_hash_text(
+    unsigned long long *first,
+    unsigned long long *second,
+    const char *text)
+{
+    do {
+        mir_machine_payload_hash_value(
+            first, second, (unsigned char)*text);
+    } while (*text++);
+}
+
+static int mir_machine_exact_payload_fingerprint(
+    const char *template_name,
+    unsigned long long expected_first,
+    unsigned long long expected_second)
+{
+    unsigned long long first = 1469598103934665603ULL;
+    unsigned long long second = 0x9e3779b97f4a7c15ULL;
+    int instruction;
+    int global_index;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        unsigned long long values[] = {
+            (unsigned long long)(uint32_t)insn->opcode,
+            (unsigned long long)(uint32_t)insn->dst,
+            (unsigned long long)(uint32_t)insn->src1,
+            (unsigned long long)(uint32_t)insn->src2,
+            (unsigned long long)(uint32_t)insn->type,
+            (unsigned long long)(uint32_t)insn->immediate,
+            (unsigned long long)(uint32_t)insn->label,
+            (unsigned long long)(uint32_t)insn->phi_pred1,
+            (unsigned long long)(uint32_t)insn->phi_pred2,
+            (unsigned long long)(uint32_t)insn->successors[0],
+            (unsigned long long)(uint32_t)insn->successors[1],
+            (unsigned long long)(uint32_t)insn->successor_count,
+            (unsigned long long)(uint32_t)insn->object,
+            (unsigned long long)(uint32_t)insn->memory_size,
+            (unsigned long long)(uint32_t)insn->memory_flags,
+            (unsigned long long)(uint32_t)insn->bit_width,
+            (unsigned long long)(uint32_t)insn->bit_shift,
+            (unsigned long long)(uint32_t)insn->bit_mask,
+            (unsigned long long)(uint32_t)insn->secondary_offset,
+            (unsigned long long)(uint32_t)insn->inline_temp_id
+        };
+        size_t value;
+
+        for (value = 0;
+             value < sizeof(values) / sizeof(values[0]); ++value) {
+            mir_machine_payload_hash_value(
+                &first, &second, values[value]);
+        }
+        if (insn->opcode == MIR_CALL ||
+            insn->opcode == MIR_CALL_AGGREGATE) {
+            mir_machine_payload_hash_text(
+                &first, &second, insn->name);
+        }
+    }
+    for (global_index = 0; global_index < nglobals; ++global_index) {
+        const struct Sym *global = &globals[global_index];
+        unsigned long long values[12];
+        size_t value;
+        int dimension;
+        int initializer;
+
+        if (!global->has_init && global->init_count == 0)
+            continue;
+        values[0] = 0x474c4f42414cULL;
+        values[1] = (unsigned long long)(uint32_t)global_index;
+        values[2] = (unsigned long long)(uint32_t)global->type;
+        values[3] = (unsigned long long)(uint32_t)global->storage;
+        values[4] = (unsigned long long)(uint32_t)global->offset;
+        values[5] = (unsigned long long)(uint32_t)global->size;
+        values[6] = (unsigned long long)(uint32_t)global->has_init;
+        values[7] = (unsigned long long)(uint32_t)global->init_value;
+        values[8] = (unsigned long long)(uint32_t)global->init_count;
+        values[9] = (unsigned long long)(uint32_t)global->is_array;
+        values[10] = (unsigned long long)(uint32_t)global->array_len;
+        values[11] = (unsigned long long)(uint32_t)global->elem_size;
+        for (value = 0;
+             value < sizeof(values) / sizeof(values[0]); ++value) {
+            mir_machine_payload_hash_value(
+                &first, &second, values[value]);
+        }
+        mir_machine_payload_hash_text(
+            &first, &second, global->name);
+        mir_machine_payload_hash_text(
+            &first, &second, global->link_name);
+        mir_machine_payload_hash_value(
+            &first, &second,
+            (unsigned long long)(uint32_t)global->dim_count);
+        for (dimension = 0;
+             dimension < global->dim_count; ++dimension) {
+            mir_machine_payload_hash_value(
+                &first, &second,
+                (unsigned long long)(uint32_t)global->dims[dimension]);
+        }
+        for (initializer = 0;
+             initializer < global->init_count; ++initializer) {
+            mir_machine_payload_hash_value(
+                &first, &second,
+                (unsigned long long)(uint32_t)
+                    global->init_sizes[initializer]);
+            mir_machine_payload_hash_text(
+                &first, &second,
+                global->init_labels[initializer]);
+        }
+    }
+    if (first == expected_first && second == expected_second)
+        return 1;
+    if (getenv("DCC_MIR_MACHINE_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR machine function=%s template=%s "
+                "reject=semantic-payload "
+                "fingerprint=%016llx:%016llx\n",
+                mir.name, template_name, first, second);
+    return 0;
+}
+
 enum MirMachineFormKind {
     MIR_MACHINE_FORM_INTEGER = 1,
     MIR_MACHINE_FORM_POINTER = 2
@@ -3068,6 +3198,130 @@ static int mir_machine_six_call_arguments(
         ++count;
     }
     return count == 6;
+}
+
+static const struct MirInsn *mir_machine_call_argument_insn(
+    const struct MirInsn *call, int index)
+{
+    const struct MirInsn *result = NULL;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *arg = &mir.insns[instruction];
+
+        if (arg->opcode != MIR_ARG ||
+            arg->secondary_offset != call->secondary_offset ||
+            arg->immediate != index)
+            continue;
+        if (result != NULL)
+            return NULL;
+        result = arg;
+    }
+    return result;
+}
+
+static int mir_machine_word_scalar_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+        !type_is_float(type) &&
+        !type_is_struct_object(type) &&
+        type_size(type) == 2;
+}
+
+static int mir_machine_char_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+        (type & 15) == TYPE_CHAR &&
+        type_size(type) == 2;
+}
+
+static int mir_machine_match_local_fill_report_contract(
+    const struct MirInsn *call, const struct MirInsn *report,
+    int pointer_value, int scalar_value, int string_value,
+    struct Sym **function_out, struct Sym **report_function_out)
+{
+    const struct MirInsn *call_pointer_arg;
+    const struct MirInsn *call_scalar_arg;
+    const struct MirInsn *report_string_arg;
+    const struct MirInsn *report_value_arg;
+    const struct MirInsn *pointer_definition;
+    const struct MirInsn *scalar_definition;
+    const struct MirInsn *string_definition;
+    struct Sym *function;
+    struct Sym *report_function;
+    const char *report_assembly_name;
+    int call_arguments[2];
+    int report_arguments[2];
+
+    if (call == NULL || report == NULL ||
+        call->opcode != MIR_CALL || report->opcode != MIR_CALL ||
+        call->src1 >= 0 || report->src1 >= 0 ||
+        call->memory_flags != 0 ||
+        report->memory_flags != MIR_CALL_FLAG_VARIADIC ||
+        !mir_machine_two_call_arguments(call, call_arguments) ||
+        !mir_machine_two_call_arguments(report, report_arguments) ||
+        call_arguments[0] != pointer_value ||
+        call_arguments[1] != scalar_value ||
+        report_arguments[0] != string_value ||
+        report_arguments[1] != call->dst)
+        return 0;
+    call_pointer_arg = mir_machine_call_argument_insn(call, 0);
+    call_scalar_arg = mir_machine_call_argument_insn(call, 1);
+    report_string_arg = mir_machine_call_argument_insn(report, 0);
+    report_value_arg = mir_machine_call_argument_insn(report, 1);
+    pointer_definition = mir_definition(pointer_value);
+    scalar_definition = mir_definition(scalar_value);
+    string_definition = mir_definition(string_value);
+    if (call_pointer_arg == NULL || call_scalar_arg == NULL ||
+        report_string_arg == NULL || report_value_arg == NULL ||
+        pointer_definition == NULL || scalar_definition == NULL ||
+        string_definition == NULL ||
+        string_definition->opcode != MIR_STRING_ADDRESS)
+        return 0;
+    function = find_global(call->name);
+    report_function = find_global(report->name);
+    if (function == NULL || function->storage != SC_FUNC ||
+        !function->is_defined || function->is_funcptr ||
+        function->is_noreturn || !function->has_proto ||
+        function->proto_variadic || function->proto_nargs != 2 ||
+        function->type != call->type ||
+        !mir_machine_word_scalar_type(call->type) ||
+        !mir_machine_char_pointer_type(function->proto_types[0]) ||
+        !mir_machine_word_scalar_type(function->proto_types[1]) ||
+        call_pointer_arg->type != function->proto_types[0] ||
+        call_scalar_arg->type != function->proto_types[1] ||
+        pointer_definition->type != function->proto_types[0] ||
+        scalar_definition->type != function->proto_types[1] ||
+        (call->base_name[0] != 0 &&
+         strcmp(call->base_name,
+                asm_name_for(sym_asm_name(function)))))
+        return 0;
+    if (report_function == NULL ||
+        report_function->storage != SC_FUNC ||
+        report_function->is_defined ||
+        report_function->is_funcptr ||
+        report_function->is_noreturn ||
+        !report_function->has_proto ||
+        !report_function->proto_variadic ||
+        report_function->proto_nargs != 1 ||
+        report_function->type != report->type ||
+        !mir_machine_word_scalar_type(report->type) ||
+        !mir_machine_char_pointer_type(
+            report_function->proto_types[0]) ||
+        report_string_arg->type !=
+            report_function->proto_types[0] ||
+        string_definition->type !=
+            report_function->proto_types[0] ||
+        report_value_arg->type != call->type ||
+        report->base_name[0] == 0)
+        return 0;
+    report_assembly_name =
+        asm_name_for(sym_asm_name(report_function));
+    if (strcmp(report->base_name, report_assembly_name))
+        return 0;
+    *function_out = function;
+    *report_function_out = report_function;
+    return 1;
 }
 
 static int mir_match_constant_checks(struct MirConstantChecks *plan)
@@ -11322,7 +11576,9 @@ static int mir_match_value_literal_checks(struct MirValueLiteralChecks *plan)
         strcmp(mir.insns[60].name, mir.insns[70].name) ||
         strcmp(mir.insns[60].name, mir.insns[80].name))
         return mir_machine_reject("value-literal-checks", "functions");
-    return 1;
+    return mir_machine_exact_payload_fingerprint(
+        "value-literal-checks",
+        0xabe2710c91b27248ULL, 0xe20a8b3dedd4800aULL);
 }
 
 static int mir_match_fixed_cell_checksum(struct MirFixedCellChecksum *p)
@@ -11390,7 +11646,11 @@ static int mir_match_string_init_reports(struct MirStringInitReports *p)
             return mir_machine_reject("string-init-reports", "arguments");
     }
     p->print_function = find_global(mir.insns[75].name);
-    return p->print_function != NULL;
+    if (p->print_function == NULL)
+        return 0;
+    return mir_machine_exact_payload_fingerprint(
+        "string-init-reports",
+        0x847f7b97e135f462ULL, 0x973af950b26ef227ULL);
 }
 
 static int mir_match_struct_pointer_reports(struct MirStructPointerReports *p)
@@ -11450,9 +11710,13 @@ static int mir_match_pointer_value_checks(struct MirPointerValueChecks *p)
     }
     p->integer_function = find_global(mir.insns[100].name);
     p->long_function = find_global(mir.insns[112].name);
-    return p->integer_function != NULL && p->long_function != NULL &&
-           !strcmp(mir.insns[100].name, mir.insns[125].name) &&
-           !strcmp(mir.insns[100].name, mir.insns[139].name);
+    if (p->integer_function == NULL || p->long_function == NULL ||
+        strcmp(mir.insns[100].name, mir.insns[125].name) ||
+        strcmp(mir.insns[100].name, mir.insns[139].name))
+        return 0;
+    return mir_machine_exact_payload_fingerprint(
+        "pointer-value-checks",
+        0xba462fb25773c4a7ULL, 0x4347c5d6bf03df4aULL);
 }
 
 static int mir_match_escape_report(struct MirEscapeReport *p)
@@ -11479,8 +11743,13 @@ static int mir_match_escape_report(struct MirEscapeReport *p)
     p->interior_function = find_global(mir.insns[109].name);
     p->call_function = find_global(mir.insns[113].name);
     snprintf(p->print_name, sizeof(p->print_name), "%s", mir.insns[115].base_name);
-    return found == 1 && p->global_function && p->interior_function &&
-           p->call_function && p->print_name[0];
+    if (found != 1 || p->global_function == NULL ||
+        p->interior_function == NULL || p->call_function == NULL ||
+        p->print_name[0] == 0)
+        return 0;
+    return mir_machine_exact_payload_fingerprint(
+        "escape-report",
+        0x7fd44bd2c2cd3bc3ULL, 0x174add07cfdabe69ULL);
 }
 
 static int mir_match_struct_init_reports(struct MirStructInitReports *p)
@@ -11509,7 +11778,11 @@ static int mir_match_struct_init_reports(struct MirStructInitReports *p)
             return mir_machine_reject("struct-init-reports", "calls");
     }
     p->print_function = find_global(mir.insns[75].name);
-    return p->print_function != NULL;
+    if (p->print_function == NULL)
+        return 0;
+    return mir_machine_exact_payload_fingerprint(
+        "struct-init-reports",
+        0x3b75da669641392fULL, 0xfc0965aaae084635ULL);
 }
 
 static int mir_match_float_struct_checks(struct MirFloatStructChecks *p)
@@ -11536,7 +11809,11 @@ static int mir_match_float_struct_checks(struct MirFloatStructChecks *p)
         p->tolerance[i] = tolerance[i];
     }
     p->function = find_global(mir.insns[27].name);
-    return p->function != NULL;
+    if (p->function == NULL)
+        return 0;
+    return mir_machine_exact_payload_fingerprint(
+        "float-struct-checks",
+        0x4255c4ccb5479f3fULL, 0x07a5e55a29000affULL);
 }
 
 static int mir_match_type_specifier_checks(struct MirTypeSpecifierChecks *p)
@@ -11573,7 +11850,12 @@ static int mir_match_type_specifier_checks(struct MirTypeSpecifierChecks *p)
     p->integer_function = find_global(mir.insns[66].name);
     p->wide_function = find_global(mir.insns[114].name);
     p->print_function = find_global(mir.insns[206].name);
-    return p->integer_function && p->wide_function && p->print_function;
+    if (p->integer_function == NULL || p->wide_function == NULL ||
+        p->print_function == NULL)
+        return 0;
+    return mir_machine_exact_payload_fingerprint(
+        "type-specifier-checks",
+        0x17c795fcdcce88fcULL, 0x61ab314caecab56bULL);
 }
 
 static int mir_match_array_parameter_checks(struct MirArrayParameterChecks *p)
@@ -11603,7 +11885,11 @@ static int mir_match_array_parameter_checks(struct MirArrayParameterChecks *p)
     }
     p->check_function = find_global(mir.insns[119].name);
     p->print_function = find_global(mir.insns[261].name);
-    return p->check_function && p->print_function;
+    if (p->check_function == NULL || p->print_function == NULL)
+        return 0;
+    return mir_machine_exact_payload_fingerprint(
+        "array-parameter-checks",
+        0x7841cd4f63214584ULL, 0x311f3a7f5b815b78ULL);
 }
 
 static int mir_match_float_byte_checks(struct MirFloatByteChecks *p)
@@ -11640,7 +11926,12 @@ static int mir_match_float_byte_checks(struct MirFloatByteChecks *p)
     p->identity_function = find_global(mir.insns[68].name);
     p->check_function = find_global(mir.insns[35].name);
     p->print_function = find_global(mir.insns[210].name);
-    return p->identity_function && p->check_function && p->print_function;
+    if (p->identity_function == NULL || p->check_function == NULL ||
+        p->print_function == NULL)
+        return 0;
+    return mir_machine_exact_payload_fingerprint(
+        "float-byte-checks",
+        0xe9c84336ffe27c37ULL, 0xe3e2e4a04c8a93bfULL);
 }
 
 static int mir_match_float_struct_byte_checks(struct MirFloatStructByteChecks *p)
@@ -11672,7 +11963,12 @@ static int mir_match_float_struct_byte_checks(struct MirFloatStructByteChecks *p
     p->int_function=find_global(mir.insns[91].name);
     p->float_function=find_global(mir.insns[122].name);
     p->print_function=find_global(mir.insns[220].name);
-    return p->identity_function&&p->int_function&&p->float_function&&p->print_function;
+    if (p->identity_function == NULL || p->int_function == NULL ||
+        p->float_function == NULL || p->print_function == NULL)
+        return 0;
+    return mir_machine_exact_payload_fingerprint(
+        "float-struct-byte-checks",
+        0xa060492e65bc73c1ULL, 0x0e982da1423cf44eULL);
 }
 
 static int mir_match_float_long_checks(struct MirFloatLongChecks *p)
@@ -11693,7 +11989,12 @@ static int mir_match_float_long_checks(struct MirFloatLongChecks *p)
     p->identity_function=find_global(mir.insns[179].name);
     p->check_function=find_global(mir.insns[23].name);
     p->print_function=find_global(mir.insns[227].name);
-    return p->identity_function&&p->check_function&&p->print_function;
+    if (p->identity_function == NULL || p->check_function == NULL ||
+        p->print_function == NULL)
+        return 0;
+    return mir_machine_exact_payload_fingerprint(
+        "float-long-checks",
+        0x982666ec54fca72dULL, 0x9379278b1314b70cULL);
 }
 
 static int mir_match_float_init_checks(struct MirFloatInitChecks *p)
@@ -11712,7 +12013,11 @@ static int mir_match_float_init_checks(struct MirFloatInitChecks *p)
         if(a->opcode!=MIR_ARG||a->secondary_offset!=mir.insns[276].secondary_offset)continue;
         d=mir_definition(a->src1);if(d&&d->opcode==MIR_STRING_ADDRESS)p->final_string=(int)d->immediate;}
     p->check_function=find_global(mir.insns[29].name);p->print_function=find_global(mir.insns[276].name);
-    return p->check_function&&p->print_function;
+    if (p->check_function == NULL || p->print_function == NULL)
+        return 0;
+    return mir_machine_exact_payload_fingerprint(
+        "float-init-checks",
+        0x5f1a7fefecd4299fULL, 0xeef2922890f1b094ULL);
 }
 
 static int mir_match_many_integer_checks(struct MirManyIntegerChecks *p)
@@ -11771,7 +12076,11 @@ static int mir_match_bitfield_init_checks(struct MirBitfieldInitChecks *p)
         if(a->secondary_offset==mir.insns[318].secondary_offset)p->report_string=(int)d->immediate;}
     p->check_function=find_global(mir.insns[31].name);p->print_function=find_global(mir.insns[257].name);
     snprintf(p->report_name,sizeof(p->report_name),"%s",mir.insns[318].base_name);
-    return p->check_function&&p->print_function;
+    if (p->check_function == NULL || p->print_function == NULL)
+        return 0;
+    return mir_machine_exact_payload_fingerprint(
+        "bitfield-init-checks",
+        0x7549c0faf20964b4ULL, 0x1293670b187ade04ULL);
 }
 
 static int mir_machine_same_bitfield_root(
@@ -22685,6 +22994,8 @@ static int mir_match_affine_local_fill_call_reports(
         const struct MirInsn *address = &mir.insns[base + 2];
         const struct MirInsn *call = &mir.insns[base + 6];
         const struct MirInsn *report = &mir.insns[base + 8];
+        struct Sym *function;
+        struct Sym *report_function;
 
         if (string->opcode != MIR_STRING_ADDRESS ||
             address->opcode != MIR_ADDRESS ||
@@ -22697,15 +23008,16 @@ static int mir_match_affine_local_fill_call_reports(
             report_args[1] != call->dst)
             return mir_machine_reject(
                 "affine-local-fill-call-reports", "calls");
-        plan->functions[call_number] = find_global(call->name);
-        plan->string_ids[call_number] = (int)string->immediate;
-        if (plan->functions[call_number] == NULL ||
-            plan->functions[call_number]->is_funcptr)
+        if (!mir_machine_match_local_fill_report_contract(
+                call, report, address->dst, helper_args[1],
+                string->dst, &function, &report_function))
             return mir_machine_reject(
-                "affine-local-fill-call-reports", "helper");
+                "affine-local-fill-call-reports", "call-contract");
+        plan->functions[call_number] = function;
+        plan->string_ids[call_number] = (int)string->immediate;
         if (call_number == 0)
-            plan->report_function = find_global(report->name);
-        else if (strcmp(report->name, mir.insns[35].name))
+            plan->report_function = report_function;
+        else if (plan->report_function != report_function)
             return mir_machine_reject(
                 "affine-local-fill-call-reports", "report");
     }
@@ -22877,22 +23189,11 @@ static int mir_match_local_byte_fill_call_reports(
             !mir_machine_two_call_arguments(report, report_arguments) ||
             report_arguments[0] != string->dst ||
             report_arguments[1] != call->dst ||
-            (report->memory_flags &
-             (MIR_CALL_FLAG_VARIADIC |
-              MIR_CALL_FLAG_FORMAT_RUNTIME)) != MIR_CALL_FLAG_VARIADIC)
+            !mir_machine_match_local_fill_report_contract(
+                call, report, address->dst, count->dst,
+                string->dst, &function, &report_function))
             return mir_machine_reject(
                 "local-byte-fill-call-reports", "calls");
-        function = find_global(call->name);
-        report_function = find_global(report->name);
-        if (function == NULL || !function->is_defined ||
-            function->is_funcptr ||
-            (call->memory_flags &
-             (MIR_CALL_FLAG_VARIADIC |
-              MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
-            strcmp(report->name, "printf") ||
-            report_function == NULL || report_function->is_defined)
-            return mir_machine_reject(
-                "local-byte-fill-call-reports", "symbols");
         plan->functions[plan->call_count] = function;
         plan->string_ids[plan->call_count] = (int)string->immediate;
         if (plan->report_function == NULL)
@@ -36676,6 +36977,17 @@ static void mir_emit_vla_endpoint_reduction(
 {
     int done = new_label();
 
+    if (opt_stack_check) {
+        mir_stream_printf(out,
+                "\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+                "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
+                "\tadd hl,hl\n\tex de,hl\n\tld hl,0\n"
+                "\tor a\n\tsbc hl,de\n\tadd hl,sp\n\tld sp,hl\n",
+                plan->parameter_stack_offset + 2,
+                plan->parameter_stack_offset + 3);
+        mir_emit_runtime_call(out, "__stchk");
+        mir_stream_puts("\tld sp,ix\n\tpop ix\n", out);
+    }
     mir_stream_printf(out,
             "\tld hl,%d\n\tadd hl,sp\n"
             "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n"

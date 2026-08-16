@@ -817,6 +817,17 @@ static int mir_home_spill_width(int value)
     return definition != NULL && type_size(definition->type) == 4 ? 4 : 2;
 }
 
+static int mir_home_is_byte_object(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    /* Pooled scalar spill slots stay word-sized. Only a regional named
+     * object home may use its value's true byte width. */
+    return definition != NULL &&
+           type_size(definition->type) == 1 &&
+           mir_regional_object_home_offset(value, NULL);
+}
+
 static int mir_home_spill_slot_width(int spill)
 {
     int value;
@@ -1028,8 +1039,12 @@ int mir_emit_home_to_hl(MirStream *out, int value)
     default:
         if (!mir_home_spill_offset(value, &offset))
             return 0;
-        mir_stream_printf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
-                offset, offset + 1);
+        mir_stream_printf(out, "\tld l,(ix%+d)\n", offset);
+        if (mir_home_is_byte_object(value))
+            mir_emit_byte_extension(
+                out, MIR_COLOR_HL, mir_definition(value)->type);
+        else
+            mir_stream_printf(out, "\tld h,(ix%+d)\n", offset + 1);
         return 1;
     }
 }
@@ -1059,10 +1074,16 @@ static int mir_emit_home_to_de(MirStream *out, int value)
     default:
         if (!mir_home_spill_offset(value, &offset))
             return 0;
-        mir_stream_puts("\tpush hl\n", out);
-        mir_stream_printf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
-                offset, offset + 1);
-        mir_stream_puts("\tex de,hl\n\tpop hl\n", out);
+        if (mir_home_is_byte_object(value)) {
+            mir_stream_printf(out, "\tld e,(ix%+d)\n", offset);
+            mir_emit_byte_extension(
+                out, MIR_COLOR_DE, mir_definition(value)->type);
+        } else {
+            mir_stream_puts("\tpush hl\n", out);
+            mir_stream_printf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+                    offset, offset + 1);
+            mir_stream_puts("\tex de,hl\n\tpop hl\n", out);
+        }
         return 1;
     }
 }
@@ -1079,8 +1100,9 @@ int mir_emit_hl_to_home(MirStream *out, int value)
     default:
         if (!mir_home_spill_offset(value, &offset))
             return 0;
-        mir_stream_printf(out, "\tld (ix%+d),l\n\tld (ix%+d),h\n",
-                offset, offset + 1);
+        mir_stream_printf(out, "\tld (ix%+d),l\n", offset);
+        if (!mir_home_is_byte_object(value))
+            mir_stream_printf(out, "\tld (ix%+d),h\n", offset + 1);
         return 1;
     }
 }
@@ -1201,8 +1223,12 @@ int mir_emit_home_push(MirStream *out, int value)
         if (!mir_home_spill_offset(value, &offset))
             return 0;
         mir_stream_puts("\tpush hl\n", out);
-        mir_stream_printf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
-                offset, offset + 1);
+        mir_stream_printf(out, "\tld l,(ix%+d)\n", offset);
+        if (mir_home_is_byte_object(value))
+            mir_emit_byte_extension(
+                out, MIR_COLOR_HL, mir_definition(value)->type);
+        else
+            mir_stream_printf(out, "\tld h,(ix%+d)\n", offset + 1);
         mir_stream_puts("\tex (sp),hl\n", out);
         return 1;
     }
@@ -1357,8 +1383,10 @@ int mir_emit_constant_to_home(MirStream *out, int value, long immediate)
             return 0;
         mir_stream_puts("\tpush hl\n", out);
         mir_stream_printf(out,
-                "\tld hl,%ld\n\tld (ix%+d),l\n\tld (ix%+d),h\n",
-                immediate & 0xffffL, offset, offset + 1);
+                "\tld hl,%ld\n\tld (ix%+d),l\n",
+                immediate & 0xffffL, offset);
+        if (!mir_home_is_byte_object(value))
+            mir_stream_printf(out, "\tld (ix%+d),h\n", offset + 1);
         mir_stream_puts("\tpop hl\n", out);
         return 1;
     }
@@ -1569,8 +1597,10 @@ int mir_emit_byte_param_to_home(MirStream *out, int value, int offset, int type)
         mir_stream_puts("\tpush hl\n", out);
         mir_stream_printf(out, "\tld l,(ix%+d)\n", offset);
         mir_emit_byte_extension(out, MIR_COLOR_HL, type);
-        mir_stream_printf(out, "\tld (ix%+d),l\n\tld (ix%+d),h\n",
-                spill_offset, spill_offset + 1);
+        mir_stream_printf(out, "\tld (ix%+d),l\n", spill_offset);
+        if (!mir_home_is_byte_object(value))
+            mir_stream_printf(out, "\tld (ix%+d),h\n",
+                    spill_offset + 1);
         mir_stream_puts("\tpop hl\n", out);
         return 1;
     }
@@ -1616,8 +1646,13 @@ static int mir_emit_push_home(MirStream *out, int value)
         if (!mir_home_spill_offset(value, &offset))
             return 0;
         mir_stream_puts("\texx\n", out);
-        mir_stream_printf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n\tpush hl\n",
-                offset, offset + 1);
+        mir_stream_printf(out, "\tld l,(ix%+d)\n", offset);
+        if (mir_home_is_byte_object(value))
+            mir_emit_byte_extension(
+                out, MIR_COLOR_HL, mir_definition(value)->type);
+        else
+            mir_stream_printf(out, "\tld h,(ix%+d)\n", offset + 1);
+        mir_stream_puts("\tpush hl\n", out);
         mir_stream_puts("\texx\n", out);
         return 1;
     }
@@ -1657,8 +1692,9 @@ static int mir_emit_pop_home(MirStream *out, int value)
         if (!mir_home_spill_offset(value, &offset))
             return 0;
         mir_stream_puts("\texx\n", out);
-        mir_stream_printf(out, "\tpop hl\n\tld (ix%+d),l\n\tld (ix%+d),h\n",
-                offset, offset + 1);
+        mir_stream_printf(out, "\tpop hl\n\tld (ix%+d),l\n", offset);
+        if (!mir_home_is_byte_object(value))
+            mir_stream_printf(out, "\tld (ix%+d),h\n", offset + 1);
         mir_stream_puts("\texx\n", out);
         return 1;
     }
@@ -1672,8 +1708,8 @@ static int mir_homed_values_share_home(int left, int right)
     if (mir_regional_object_home_offset(left, &left_offset) &&
         mir_regional_object_home_offset(right, &right_offset) &&
         left_offset == right_offset &&
-        mir_home_spill_width(left) ==
-            mir_home_spill_width(right))
+        type_size(mir_definition(left)->type) ==
+            type_size(mir_definition(right)->type))
         return 1;
     if (mir.allocation_colors[left] >= 0 ||
         mir.allocation_colors[right] >= 0)

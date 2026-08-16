@@ -8344,6 +8344,37 @@ static int mir_regional_source_backs_object(int value, int object)
     return 0;
 }
 
+static int mir_regional_object_home_bounds(
+    const struct MirObject *object, int width)
+{
+    int effective_local_bytes;
+
+    if (width != 1 && width != 2 && width != 4)
+        return 0;
+    if (object->storage == SC_LOCAL) {
+        effective_local_bytes = mir_effective_local_bytes();
+        return object->offset >= -effective_local_bytes &&
+               object->offset < 0 &&
+               object->offset + width <= 0 &&
+               object->offset >= -128;
+    }
+    if (object->storage == SC_PARAM) {
+        /* Saving IY shifts every parameter by two bytes. Prove both the
+         * shifted and unshifted layouts before admitting the home. */
+        return object->offset >= -128 &&
+               object->offset + 2 + width - 1 <= 127;
+    }
+    return 0;
+}
+
+static int mir_regional_value_has_width(int value, int width)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    return definition != NULL &&
+           type_size(definition->type) == width;
+}
+
 static int mir_regional_object_home_for_value(int value)
 {
     int instruction;
@@ -8353,6 +8384,7 @@ static int mir_regional_object_home_for_value(int value)
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *phi = &mir.insns[instruction];
         const struct MirObject *object;
+        int width;
 
         if (phi->opcode != MIR_PHI ||
             phi->object < 0 || phi->object >= mir.object_count ||
@@ -8361,13 +8393,15 @@ static int mir_regional_object_home_for_value(int value)
              phi->src2 != value))
             continue;
         object = &mir.objects[phi->object];
+        width = type_size(phi->type);
         if ((object->storage != SC_LOCAL &&
              object->storage != SC_PARAM) ||
-            type_size(object->type) != type_size(phi->type) ||
+            type_size(object->type) != width ||
+            !mir_regional_object_home_bounds(object, width) ||
+            !mir_regional_value_has_width(phi->dst, width) ||
+            !mir_regional_value_has_width(phi->src1, width) ||
+            !mir_regional_value_has_width(phi->src2, width) ||
             mir_object_address_taken(phi->object) ||
-            (object->storage == SC_LOCAL &&
-             (object->offset >= 0 ||
-              -object->offset > mir_effective_local_bytes())) ||
             !mir_regional_source_backs_object(phi->src1, phi->object) ||
             !mir_regional_source_backs_object(phi->src2, phi->object))
             continue;
@@ -8380,13 +8414,19 @@ int mir_regional_object_home_offset(int value, int *offset)
 {
     int object = mir_regional_object_home_for_value(value);
     int result;
+    int width;
 
     if (object < 0)
         return 0;
+    width = type_size(mir.objects[object].type);
+    if (!mir_regional_object_home_bounds(&mir.objects[object], width))
+        fatal("regional MIR object home escaped its proven bounds");
     result = mir.objects[object].offset;
     if (mir.objects[object].storage == SC_PARAM &&
         mir_home_uses_iy())
         result += 2;
+    if (result < -128 || result + width - 1 > 127)
+        fatal("regional MIR object home exceeds IX displacement range");
     if (offset != NULL)
         *offset = result;
     return 1;
@@ -9246,33 +9286,106 @@ int mir_regional_parameter_location(int value, int *offset, int *type)
     return 1;
 }
 
+static int mir_regional_slot_is_byte_object(int value, int *type)
+{
+    const struct MirInsn *definition;
+    int width;
+
+    if (!mir_regional_object_home_offset(value, NULL))
+        return 0;
+    definition = mir_definition(value);
+    if (definition == NULL)
+        fatal("regional MIR object home has no definition");
+    width = type_size(definition->type);
+    if (width != 1 && width != 2 && width != 4)
+        fatal("regional MIR object home has invalid width");
+    if (type != NULL)
+        *type = definition->type;
+    return width == 1;
+}
+
+static void mir_regional_emit_byte_extension(
+    MirStream *out, int color, int type)
+{
+    int end_label;
+
+    if (type_is_bool(type)) {
+        end_label = new_label();
+        if (color == MIR_COLOR_HL)
+            mir_stream_puts("\tld a,l\n\tor a\n\tld hl,0\n", out);
+        else if (color == MIR_COLOR_DE)
+            mir_stream_puts("\tld a,e\n\tor a\n\tld de,0\n", out);
+        else
+            mir_stream_puts("\tld a,c\n\tor a\n\tld bc,0\n", out);
+        mir_stream_printf(out, "\tjp z, L%d\n", end_label);
+        if (color == MIR_COLOR_HL)
+            mir_stream_puts("\tinc hl\n", out);
+        else if (color == MIR_COLOR_DE)
+            mir_stream_puts("\tinc de\n", out);
+        else
+            mir_stream_puts("\tinc bc\n", out);
+        mir_stream_printf(out, "L%d:\n", end_label);
+    } else if ((type & TYPE_UNSIGNED) != 0) {
+        if (color == MIR_COLOR_HL)
+            mir_stream_puts("\tld h,0\n", out);
+        else if (color == MIR_COLOR_DE)
+            mir_stream_puts("\tld d,0\n", out);
+        else
+            mir_stream_puts("\tld b,0\n", out);
+    } else if (color == MIR_COLOR_HL) {
+        mir_emit_signed_byte_extend(out);
+    } else if (color == MIR_COLOR_DE) {
+        mir_stream_puts(
+            "\tld a,e\n\tadd a,a\n\tsbc a,a\n\tld d,a\n", out);
+    } else {
+        mir_stream_puts(
+            "\tld a,c\n\tadd a,a\n\tsbc a,a\n\tld b,a\n", out);
+    }
+}
+
 static int mir_regional_emit_slot_to_color(
     MirStream *out, int value, int color)
 {
     int offset;
+    int type;
+    int byte_object;
 
     if (!mir_home_spill_offset(value, &offset))
         return 0;
+    byte_object = mir_regional_slot_is_byte_object(value, &type);
     switch (color) {
     case MIR_COLOR_HL:
-        mir_stream_printf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
-                offset, offset + 1);
+        mir_stream_printf(out, "\tld l,(ix%+d)\n", offset);
+        if (byte_object)
+            mir_regional_emit_byte_extension(out, color, type);
+        else
+            mir_stream_printf(out, "\tld h,(ix%+d)\n", offset + 1);
         return 1;
     case MIR_COLOR_DE:
-        mir_stream_printf(out, "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
-                offset, offset + 1);
+        mir_stream_printf(out, "\tld e,(ix%+d)\n", offset);
+        if (byte_object)
+            mir_regional_emit_byte_extension(out, color, type);
+        else
+            mir_stream_printf(out, "\tld d,(ix%+d)\n", offset + 1);
         return 1;
     case MIR_COLOR_BC:
-        mir_stream_printf(out, "\tld c,(ix%+d)\n\tld b,(ix%+d)\n",
-                offset, offset + 1);
+        mir_stream_printf(out, "\tld c,(ix%+d)\n", offset);
+        if (byte_object)
+            mir_regional_emit_byte_extension(out, color, type);
+        else
+            mir_stream_printf(out, "\tld b,(ix%+d)\n", offset + 1);
         return 1;
     case MIR_COLOR_HL_DE:
+        if (byte_object)
+            return 0;
         mir_stream_printf(out,
                 "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
                 "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
                 offset, offset + 1, offset + 2, offset + 3);
         return 1;
     case MIR_COLOR_BC_IY:
+        if (byte_object)
+            return 0;
         mir_stream_puts("\tpush hl\n", out);
         mir_stream_printf(out,
                 "\tld c,(ix%+d)\n\tld b,(ix%+d)\n"
@@ -9289,29 +9402,38 @@ static int mir_regional_emit_color_to_slot(
     MirStream *out, int value, int color)
 {
     int offset;
+    int byte_object;
 
     if (!mir_home_spill_offset(value, &offset))
         return 0;
+    byte_object = mir_regional_slot_is_byte_object(value, NULL);
     switch (color) {
     case MIR_COLOR_HL:
-        mir_stream_printf(out, "\tld (ix%+d),l\n\tld (ix%+d),h\n",
-                offset, offset + 1);
+        mir_stream_printf(out, "\tld (ix%+d),l\n", offset);
+        if (!byte_object)
+            mir_stream_printf(out, "\tld (ix%+d),h\n", offset + 1);
         return 1;
     case MIR_COLOR_DE:
-        mir_stream_printf(out, "\tld (ix%+d),e\n\tld (ix%+d),d\n",
-                offset, offset + 1);
+        mir_stream_printf(out, "\tld (ix%+d),e\n", offset);
+        if (!byte_object)
+            mir_stream_printf(out, "\tld (ix%+d),d\n", offset + 1);
         return 1;
     case MIR_COLOR_BC:
-        mir_stream_printf(out, "\tld (ix%+d),c\n\tld (ix%+d),b\n",
-                offset, offset + 1);
+        mir_stream_printf(out, "\tld (ix%+d),c\n", offset);
+        if (!byte_object)
+            mir_stream_printf(out, "\tld (ix%+d),b\n", offset + 1);
         return 1;
     case MIR_COLOR_HL_DE:
+        if (byte_object)
+            return 0;
         mir_stream_printf(out,
                 "\tld (ix%+d),l\n\tld (ix%+d),h\n"
                 "\tld (ix%+d),e\n\tld (ix%+d),d\n",
                 offset, offset + 1, offset + 2, offset + 3);
         return 1;
     case MIR_COLOR_BC_IY:
+        if (byte_object)
+            return 0;
         mir_stream_printf(out, "\tld (ix%+d),c\n\tld (ix%+d),b\n",
                 offset, offset + 1);
         mir_stream_puts("\tpush hl\n\tpush iy\n\tpop hl\n", out);

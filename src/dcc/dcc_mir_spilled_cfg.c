@@ -110,6 +110,10 @@ static int mir_call_uses_inline_simple_indexed_store(
 int mir_store_is_dead(int instruction);
 static int mir_divmod_partner(int instruction);
 static int mir_call_has_odd_argument_bytes(const struct MirInsn *call);
+static int mir_call_uses_generic_stack_arguments(int instruction);
+static unsigned mir_call_argument_staging_clobbers_before(
+    int argument_instruction, int call_instruction);
+static void mir_assert_no_pending_call_cache_bc_writer(int staged_value);
 static int mir_binary_only_constant(int value);
 static int mir_stack_forward_target(int value, int *dynamic_index);
 static int mir_stack_backend_slot_forwardable(
@@ -326,6 +330,7 @@ static int mir_spilled_cfg_used_promoted_local_slot;
 #define MIR_BACKEND_SLOT_WIDE_ARGUMENT_STACK_CACHE (-3)
 #define MIR_BACKEND_SLOT_NARROW_ARGUMENT_DIRECT_PUSH (-4)
 #define MIR_BACKEND_SLOT_PHI_ARGUMENT_STACK (-5)
+#define MIR_PHYSICAL_CLOBBER_BC 1u
 
 static int mir_runtime_stride_store_match(
     int instruction, int *memory_offset_out, int *store_instruction_out)
@@ -2964,6 +2969,9 @@ static void mir_emit_hl_offset_from_ix(MirStream *out, int offset)
     }
 }
 
+/* A NULL stream performs the same eligibility query without emission, so
+ * call-cache planning and argument staging cannot disagree about whether the
+ * virtual-load fallback (and its scratch registers) will be used. */
 static int mir_emit_rematerialized_argument(MirStream *out, int value, int size)
 {
     const struct MirInsn *definition = mir_definition(value);
@@ -2975,6 +2983,8 @@ static int mir_emit_rematerialized_argument(MirStream *out, int value, int size)
 
         if (mir_widened_param_is_single_call_argument(
                 value, &offset, &source_type)) {
+            if (out == NULL)
+                return 1;
             mir_stream_printf(out,
                     "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
                     offset, offset + 1);
@@ -2997,6 +3007,8 @@ static int mir_emit_rematerialized_argument(MirStream *out, int value, int size)
         if (!mir_scalar_memory_location(definition, &memory_type,
                                         &memory_storage, &memory_offset))
             return 0;
+        if (out == NULL)
+            return 1;
         global = find_global(definition->name);
         assembly_name = asm_name_for(
             global != NULL ? sym_asm_name(global)
@@ -3022,6 +3034,8 @@ static int mir_emit_rematerialized_argument(MirStream *out, int value, int size)
         if (!mir_stable_pointer_argument_address(
                 definition->src1, &root, &memory_storage, &member_offset))
             return 0;
+        if (out == NULL)
+            return 1;
         global = find_global(root->name);
         assembly_name = asm_name_for(
             global != NULL ? sym_asm_name(global)
@@ -3044,6 +3058,8 @@ static int mir_emit_rematerialized_argument(MirStream *out, int value, int size)
         if (!mir_scalar_memory_location(definition, &memory_type,
                                         &memory_storage, &memory_offset))
             return 0;
+        if (out == NULL)
+            return 1;
         mir_stream_printf(out, "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
                 memory_offset, memory_offset + 1);
         if (size == 4)
@@ -3062,6 +3078,8 @@ static int mir_emit_rematerialized_argument(MirStream *out, int value, int size)
         if (!mir_scalar_memory_location(definition, &memory_type,
                                         &memory_storage, &memory_offset))
             return 0;
+        if (out == NULL)
+            return 1;
         if (memory_storage == SC_GLOBAL ||
             memory_storage == SC_EXTERN) {
             global = find_global(definition->name);
@@ -3085,6 +3103,8 @@ static int mir_emit_rematerialized_argument(MirStream *out, int value, int size)
 
     if (!mir_call_only_constant(value))
         return 0;
+    if (out == NULL)
+        return 1;
     if (definition->opcode == MIR_STRING_ADDRESS) {
         mir_stream_printf(out, "\tld hl,S%ld\n", definition->immediate);
         return 1;
@@ -3928,6 +3948,11 @@ static int mir_call_argument_cache_target_for_state(
             break;
         }
     if (call_instruction < 0)
+        return -1;
+    if (!mir_value_is_wide(value) &&
+        (mir_call_argument_staging_clobbers_before(
+             argument_instruction, call_instruction) &
+         MIR_PHYSICAL_CLOBBER_BC) != 0)
         return -1;
     for (instruction = definition_instruction + 1;
          instruction < call_instruction; ++instruction) {
@@ -5535,6 +5560,122 @@ static int mir_value_has_direct_named_home(int value)
     if (local_home)
         mir_spilled_cfg_used_stable_pointer_local_home = 1;
     return 1;
+}
+
+/*
+ * Describe the scratch registers used by the same virtual-load paths that
+ * argument staging calls. Wide out-of-range named homes and backend slots
+ * assemble their low word in BC; all other current load forms preserve BC.
+ */
+static unsigned mir_virtual_load_physical_clobbers(int value)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    unsigned long float_bits;
+    int object_iy_offset;
+    int object_offset;
+    int object_storage;
+    int selfstore_store_index;
+    int iy_offset;
+    int offset;
+    /* Slot planning runs before the emitter sets mir_virtual_iy_base. The
+     * slots allocated so far are a lower bound on the final frame, so once
+     * they cross the threshold IY availability is already proven. */
+    int has_virtual_iy =
+        mir_virtual_iy_base ||
+        mir_effective_local_bytes() + mir.aggregate_temp_bytes +
+            2 * mir_backend_frame_slot_count > 140;
+
+    if (definition != NULL &&
+        definition->opcode == MIR_UNARY &&
+        mir_float_constant_expression_bits(value, &float_bits))
+        return 0;
+    if (mir_wide_constant_is_rematerializable(value) ||
+        (definition != NULL &&
+         (definition->opcode == MIR_CONST ||
+          definition->opcode == MIR_FLOAT_CONST) &&
+         type_size(definition->type) == 4 &&
+         mir.backend_slots != NULL &&
+         mir.backend_slots[value] < 0))
+        return 0;
+    if (!mir_definition_is_wide(definition))
+        return 0;
+    if (mir_value_has_direct_named_home(value)) {
+        if (!mir_direct_named_home_location(
+                definition, &object_storage, &object_offset) &&
+            !mir_binary_is_selfstore_wide_increment(
+                (int)(definition - mir.insns),
+                &selfstore_store_index, &object_offset))
+            fatal("missing direct wide MIR named-home offset");
+        object_iy_offset = object_offset + mir_effective_local_bytes() +
+                           mir.aggregate_temp_bytes;
+        if ((has_virtual_iy && object_iy_offset >= -128 &&
+             object_iy_offset + 3 <= 127) ||
+            (object_offset >= -128 && object_offset + 3 <= 127))
+            return 0;
+        return MIR_PHYSICAL_CLOBBER_BC;
+    }
+    offset = mir_virtual_offset(value);
+    iy_offset = mir_virtual_iy_offset(value);
+    if ((has_virtual_iy && iy_offset - 2 >= -128 &&
+         iy_offset + 1 <= 127) ||
+        (offset - 2 >= -128 && offset + 1 <= 127))
+        return 0;
+    return MIR_PHYSICAL_CLOBBER_BC;
+}
+
+static unsigned mir_call_argument_staging_clobbers(
+    const struct MirInsn *arg)
+{
+    int size = type_size(arg->type);
+
+    if (type_is_struct_object(arg->type))
+        return MIR_PHYSICAL_CLOBBER_BC;
+    if (size != 4 ||
+        mir_emit_rematerialized_argument(NULL, arg->src1, size))
+        return 0;
+    return mir_virtual_load_physical_clobbers(arg->src1);
+}
+
+static unsigned mir_call_argument_staging_clobbers_before(
+    int argument_instruction, int call_instruction)
+{
+    const struct MirInsn *argument = &mir.insns[argument_instruction];
+    const struct MirInsn *call = &mir.insns[call_instruction];
+    unsigned clobbers = 0;
+    int instruction;
+
+    if (call->opcode != MIR_CALL &&
+        call->opcode != MIR_CALL_AGGREGATE)
+        return 0;
+    if (call->opcode == MIR_CALL &&
+        !mir_call_uses_generic_stack_arguments(call_instruction))
+        return 0;
+    for (instruction = 0; instruction < call_instruction; ++instruction) {
+        const struct MirInsn *candidate = &mir.insns[instruction];
+
+        if (candidate->opcode != MIR_ARG ||
+            candidate->secondary_offset != call->secondary_offset ||
+            candidate->immediate <= argument->immediate)
+            continue;
+        clobbers |= mir_call_argument_staging_clobbers(
+            candidate);
+    }
+    return clobbers;
+}
+
+static void mir_assert_no_pending_call_cache_bc_writer(int staged_value)
+{
+    char message[256];
+
+    if (mir_cached_call_value < 0 ||
+        mir_cached_call_instruction != mir_emit_instruction_index)
+        return;
+    snprintf(message, sizeof(message),
+             "MIR BC writer crosses pending call cache in %s "
+             "at instruction %d (cached value %d, staged value %d)",
+             mir.name, mir_emit_instruction_index,
+             mir_cached_call_value, staged_value);
+    fatal(message);
 }
 
 static int mir_bool_call_named_home(
@@ -15045,6 +15186,7 @@ static void mir_emit_virtual_load_wide(MirStream *out, int value)
                     object_offset, object_offset + 1,
                     object_offset + 2, object_offset + 3);
         } else {
+            mir_assert_no_pending_call_cache_bc_writer(value);
             mir_stream_puts("\tpush ix\n\tpop hl\n", out);
             mir_stream_printf(out, "\tld de,%d\n\tadd hl,de\n", object_offset);
             mir_stream_puts("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
@@ -15069,6 +15211,7 @@ static void mir_emit_virtual_load_wide(MirStream *out, int value)
                 "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
                 offset, offset + 1, offset - 2, offset - 1);
     } else {
+        mir_assert_no_pending_call_cache_bc_writer(value);
         mir_stream_puts("\tpush ix\n\tpop hl\n", out);
         mir_stream_printf(out, "\tld de,%d\n\tadd hl,de\n", offset);
         mir_stream_puts("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
@@ -28159,6 +28302,9 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
         goto done;
     }
     if (mir_match_fortran_eval(&fortran_eval)) {
+        mir_stream_printf(out,
+                ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n",
+                mir.name);
         mir_stream_puts("\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
               "\tld hl,-16\n\tadd hl,sp\n\tld sp,hl\n", out);
         if (opt_stack_check)
@@ -28169,6 +28315,9 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
         goto done;
     }
     if (mir_match_basic_run(&basic_run)) {
+        mir_stream_printf(out,
+                ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n",
+                mir.name);
         mir_stream_puts("\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
               "\tld hl,-32\n\tadd hl,sp\n\tld sp,hl\n", out);
         if (opt_stack_check)
@@ -28179,6 +28328,9 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
         goto done;
     }
     if (mir_match_float_sum(&float_sum)) {
+        mir_stream_printf(out,
+                ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n",
+                mir.name);
         mir_stream_puts("\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
               "\tdec sp\n\tdec sp\n", out);
         if (opt_stack_check)
@@ -28209,6 +28361,9 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
         goto done;
     }
     if (mir_match_float_matrix_multiply(&float_matrix_multiply)) {
+        mir_stream_printf(out,
+                ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n",
+                mir.name);
         mir_stream_puts("\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
               "\tld hl,-15\n\tadd hl,sp\n\tld sp,hl\n", out);
         if (opt_stack_check)
@@ -28228,6 +28383,9 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
         goto done;
     }
     if (mir_match_forth_run(&forth_run)) {
+        mir_stream_printf(out,
+                ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n",
+                mir.name);
         mir_stream_puts("\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
               "\tld hl,-32\n\tadd hl,sp\n\tld sp,hl\n", out);
         if (opt_stack_check)
@@ -30829,6 +30987,8 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                         mir_stream_printf(out,
                                 "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
                                 size);
+                        mir_assert_no_pending_call_cache_bc_writer(
+                            arg->src1);
                         mir_stream_printf(out, "\tex de,hl\n\tld bc,%d\n\tldir\n",
                                 size);
                         argument_bytes += size;
@@ -30960,6 +31120,8 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                         mir_stream_puts("\tex de,hl\n", out);
                         mir_stream_printf(out, "\tld hl,-%d\n\tadd hl,sp\n\tld sp,hl\n",
                                 size);
+                        mir_assert_no_pending_call_cache_bc_writer(
+                            arg->src1);
                         mir_stream_printf(out, "\tex de,hl\n\tld bc,%d\n\tldir\n",
                                 size);
                         argument_bytes += size;

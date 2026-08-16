@@ -6908,21 +6908,67 @@ static int mir_recovery_indirect_call(
     struct Sym **pointer_out)
 {
     const struct MirInsn *call = &mir.insns[call_instruction];
+    const struct MirInsn *load = &mir.insns[load_instruction];
+    struct Sym *pointer;
     int arguments[9];
     int argument;
+    int instruction;
 
-    *pointer_out = mir_recovery_global_load_symbol(load_instruction);
-    if (*pointer_out == NULL ||
+    pointer = mir_recovery_global_load_symbol(load_instruction);
+    if (pointer == NULL ||
+        !pointer->is_funcptr ||
+        !pointer->has_proto ||
+        pointer->proto_variadic ||
+        pointer->proto_nargs != argument_count ||
+        load->type != pointer->type ||
         call->opcode != MIR_CALL ||
-        call->src1 != mir.insns[load_instruction].dst ||
+        call->src1 != load->dst ||
         call->src1 < 0 ||
+        strcmp(call->name, "<indirect>") ||
+        call->secondary_offset < 0 ||
+        call->memory_flags != 0 ||
+        call->type != type_decay_ptr(pointer->type) ||
         !mir_machine_call_arguments(
             call, argument_count, arguments))
         return 0;
-    for (argument = 0; argument < argument_count; ++argument)
+    for (argument = 0; argument < argument_count; ++argument) {
+        const struct MirInsn *definition;
+        const struct MirInsn *owned_arg = NULL;
+
         if (arguments[argument] !=
             mir.insns[argument_instructions[argument]].dst)
             return 0;
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+            const struct MirInsn *candidate = &mir.insns[instruction];
+
+            if (candidate->opcode == MIR_ARG &&
+                candidate->secondary_offset ==
+                    call->secondary_offset &&
+                candidate->immediate == argument) {
+                if (owned_arg != NULL)
+                    return 0;
+                owned_arg = candidate;
+            }
+        }
+        if (owned_arg == NULL ||
+            owned_arg->src1 != arguments[argument] ||
+            owned_arg->type != pointer->proto_types[argument] ||
+            type_size(owned_arg->type) != 2)
+            return 0;
+        definition = mir_definition(owned_arg->src1);
+        if (definition == NULL ||
+            type_size(definition->type) != 2)
+            return 0;
+        if (type_ptr_depth(owned_arg->type) != 0) {
+            if (type_ptr_depth(definition->type) !=
+                type_ptr_depth(owned_arg->type))
+                return 0;
+        } else if (type_ptr_depth(definition->type) != 0 ||
+                   type_is_float(definition->type)) {
+            return 0;
+        }
+    }
+    *pointer_out = pointer;
     return 1;
 }
 

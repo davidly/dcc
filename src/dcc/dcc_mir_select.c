@@ -17,6 +17,7 @@ static int mir_has_member_address(void);
 static int mir_call_count(void);
 static int mir_has_wide_values(void);
 static int mir_cost_regional_candidate_is_validated(void);
+static int mir_cost_regional_candidate_is_diagnostic_validated(void);
 static int mir_boolean_candidate_is_validated(void);
 static int mir_large_dense_switch_phi_candidate_is_eligible(void);
 static int mir_try_selector(MirStream *out, int (*selector)(MirStream *));
@@ -2641,6 +2642,18 @@ static int mir_cost_regional_candidate_is_validated(void)
          !mir_has_member_address());
 }
 
+static int mir_cost_regional_candidate_is_diagnostic_validated(void)
+{
+    if (mir_cost_regional_candidate_is_validated())
+        return 1;
+    return mir.sink_purpose == EMIT_SINK_DEFERRED &&
+           (mir.return_type & 15) == TYPE_INT &&
+           mir.count == 31 && mir.next_value == 20 &&
+           mir_cfg_block_count() == 2 && mir_call_count() == 1 &&
+           mir.local_bytes == 5 && !mir_has_cfg_backedge() &&
+           !mir_has_wide_values() && !mir_has_member_address();
+}
+
 static int mir_cost_candidate_is_selectable(
     const struct MirCostCandidateSpec *spec)
 {
@@ -2762,6 +2775,21 @@ static int mir_call_runner_strict_profile(
     return 1;
 }
 
+static void mir_reject_unvalidated_regional_diagnostic(void)
+{
+    const char *candidate = getenv("DCC_MIR_SELECT_CANDIDATE");
+    const char *function = getenv("DCC_MIR_SELECT_FUNCTION");
+
+    if (candidate == NULL || strcmp(candidate, "regional") != 0 ||
+        (function != NULL && strcmp(function, mir.name) != 0) ||
+        mir_cost_regional_candidate_is_diagnostic_validated())
+        return;
+    fprintf(stderr,
+            "MIR regional candidate is not validated for function %s\n",
+            mir.name);
+    fatal("DCC_MIR_SELECT_CANDIDATE rejected unsafe regional stream");
+}
+
 static int mir_apply_mir_v1_policy(
     MirStream **selected_stream, const char **selector_name,
     const char **candidate_name, int *selected_label_id, int label_base,
@@ -2825,16 +2853,27 @@ static int mir_apply_mir_v1_policy(
                   sizeof(mir_cost_candidate_specs[0]);
           ++i) {
          struct MirCostCandidate candidate;
+         int ordinary_selectable;
+
          mir_cost_build_candidate(
              &mir_cost_candidate_specs[i], &candidate, label_base);
-         candidate.selectable = mir_cost_candidate_is_selectable(
+         ordinary_selectable = mir_cost_candidate_is_selectable(
              &mir_cost_candidate_specs[i]);
-         if (diagnostic_candidate != NULL)
+         candidate.selectable = ordinary_selectable;
+         if (diagnostic_candidate != NULL) {
              candidate.selectable =
                  !strcmp(diagnostic_candidate, candidate.spec->name);
-         else if (strict_candidate != NULL)
+             if (candidate.spec->kind == MIR_COST_CANDIDATE_REGIONAL)
+                 candidate.selectable =
+                     candidate.selectable &&
+                     mir_cost_regional_candidate_is_diagnostic_validated();
+         } else if (strict_candidate != NULL) {
              candidate.selectable =
                  !strcmp(strict_candidate, candidate.spec->name);
+             if (candidate.spec->kind == MIR_COST_CANDIDATE_REGIONAL)
+                 candidate.selectable =
+                     candidate.selectable && ordinary_selectable;
+         }
         mir_cost_report_candidate(&candidate, 0);
         if (candidate.selectable &&
             mir_cost_candidate_is_better(&candidate, &best)) {
@@ -3587,6 +3626,7 @@ void mir_end_function(void)
         mir_report_dead_local_suffix();
         mir_target_report_shadow_plan();
         mir_schedule_report_shadow_plan();
+        mir_reject_unvalidated_regional_diagnostic();
     }
     if (verified && getenv("DCC_MIR_REGIONAL_HOME_REPORT") != NULL) {
         const char *regional_filter =

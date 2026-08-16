@@ -5506,32 +5506,116 @@ int line_in_released_bc_claim(int k)
     return 0;
 }
 
-/* Has dcc claimed IY for a register-allocated candidate ANYWHERE in this
- * file?
- *
- * IY ownership is program-scoped the moment dcc uses it, and this is the one
- * question every dccpeep pass that wants IY must ask. dcc's IY candidate is
- * callee-saved and stays live ACROSS CALLS - that is the entire reason it can
- * be allocated in a function containing calls, where no caller-saved register
- * can. dccpeep's own IY uses are not callee-saved: pass_cache_ix_spill_via_iy
- * borrows IY over a straight-line span, and pass_promote_ix_pointer_to_iy
- * holds it for a function, neither saving the incoming value. That was sound
- * while dcc never emitted IY at all, because no caller could have anything
- * live in it. Once dcc allocates IY, a callee that borrows it destroys its
- * caller's promoted value.
- *
- * Confirmed as a real miscompile on tests/wumpus.c: dcc gave cturn's "g"
- * pointer to IY, and pass_cache_ix_spill_via_iy independently borrowed IY
- * inside a function cturn calls, so "g" came back corrupted and the game took
- * a different branch.
- *
- * File scope, not function scope, and deliberately so: the hazard is a
- * CALLEE's borrow of IY, so checking only the function a pass is editing
- * would miss exactly the case that breaks. dcc runs first, so its claim is
- * always visible here by the time any pass asks. */
+/* Has dcc claimed IY anywhere in this assembly file? This remains useful
+ * local-contention information: a dccpeep pass must not overlap a compiler
+ * IY home in the same file. It is not an ABI proof. A separately peepholed
+ * caller is invisible here, so every dccpeep IY borrower also preserves its
+ * incoming IY value independently of this answer. */
 int dcc_iy_claimed_in_file(void)
 {
     return peep_register_claimed_in_file(PEEP_REG_IY);
+}
+
+static int line_mentions_sp_token(const char *line)
+{
+    char clean[MAX_LINE];
+    const char *p;
+
+    strip_peep_comment_lower_copy(clean, line);
+    p = clean;
+    while (*p) {
+        if ((p == clean ||
+             (!isalnum((unsigned char)p[-1]) && p[-1] != '_')) &&
+            p[0] == 's' && p[1] == 'p' &&
+            (!isalnum((unsigned char)p[2]) && p[2] != '_'))
+            return 1;
+        ++p;
+    }
+    return 0;
+}
+
+/* Prove that a stack-saved IY borrow covering [loop_start,loop_end] cannot
+ * be entered after the save or exited before the restore. Calls are allowed:
+ * IY is callee-saved by the dcc ABI. The body must be a single linear stack
+ * path whose explicit pushes and pops balance without ever consuming the
+ * saved IY word. All jumps must be the backedge or an optional single restore
+ * label immediately after it. */
+int iy_loop_borrow_safe(int loop_start, int loop_end,
+                        const char *header, const char *exit_target)
+{
+    int func_start, func_end;
+    int exit_line;
+    int k;
+    int stack_depth;
+    char target[128];
+    char clean[MAX_LINE];
+
+    if (loop_start < 0 || loop_end <= loop_start || header == NULL)
+        return 0;
+    find_function_bounds_any(loop_start, &func_start, &func_end);
+    if (loop_end >= func_end ||
+        !loop_body_internal_labels_safe(loop_start + 1, loop_end))
+        return 0;
+
+    exit_line = -1;
+    if (exit_target != NULL) {
+        exit_line = find_label_line_in_range(exit_target, func_start, func_end);
+        if (exit_line != loop_end + 1)
+            return 0;
+        strip_peep_comment_copy(clean, lines[loop_end]);
+        if (!jump_target_any(clean, target) || strcmp(target, header) != 0 ||
+            strchr(clean, ',') != NULL)
+            return 0;
+    }
+
+    for (k = func_start; k < func_end; ++k) {
+        if (!jump_target_any(lines[k], target))
+            continue;
+        if (strcmp(target, header) == 0 &&
+            (k <= loop_start || k > loop_end))
+            return 0;
+        if (exit_target != NULL && strcmp(target, exit_target) == 0 &&
+            (k <= loop_start || k > loop_end))
+            return 0;
+    }
+
+    stack_depth = 0;
+    for (k = loop_start + 1; k <= loop_end; ++k) {
+        const PeepLineInfo *info;
+
+        if (jump_target_any(lines[k], target)) {
+            if ((strcmp(target, header) == 0 ||
+                 (exit_target != NULL && strcmp(target, exit_target) == 0)) &&
+                stack_depth == 0)
+                continue;
+            return 0;
+        }
+
+        info = peep_line_info(k);
+        if (info != NULL && info->opcode == PEEP_OPCODE_CALL)
+            continue;
+        if (info != NULL && info->opcode == PEEP_OPCODE_PUSH) {
+            ++stack_depth;
+            continue;
+        }
+        if (info != NULL && info->opcode == PEEP_OPCODE_POP) {
+            if (--stack_depth < 0)
+                return 0;
+            continue;
+        }
+        if (info != NULL && info->effects.control_flow)
+            return 0;
+        if (info != NULL &&
+            ((((info->effects.reads | info->effects.writes) & PEEP_REG_SP) != 0) ||
+             (((info->effects.memory_read | info->effects.memory_written) &
+               PEEP_MEM_STACK) != 0)))
+            return 0;
+        strip_peep_comment_lower_copy(clean, lines[k]);
+        if (!strncmp(clean, "djnz", 4) || line_mentions_sp_token(lines[k]))
+            return 0;
+    }
+
+    return stack_depth == 0;
 }
 
 static int global_write_count_in_file(const char *name)
@@ -6454,29 +6538,73 @@ static int line_is_call_or_rst(const char *line)
     return 0;
 }
 
-/* Is IY mentioned anywhere in the function containing line `at`, EXCLUDING
- * lines this same pass already tagged (ix_spill_iy) from an earlier
- * candidate elsewhere in the same function? The exclusion matters: switch
- * cases are mutually exclusive at runtime, so two DIFFERENT cases (e.g.
- * fint.c's OP_ADD and OP_SUB, each independently store/reload their own
- * short-lived temp) never actually contend for IY even though both this
- * pass's rewrites live in the same function's text - without the
- * exclusion, only the first candidate in any given function could ever
- * benefit, the same "only the very first segment could benefit" trap
- * ix_cache_bc_used_in_function's own comment (just above) already
- * documents and works around for the BC case. Everything else that
- * mentions IY - dcc's own compiler output (never emits it) or
- * pass_promote_ix_pointer_to_iy's whole-function reservation - still
- * counts, by design: those really do need to reserve IY for the entire
- * function, or its whole-file scope in that pass's own case. */
-static int iy_used_in_function(int at)
+static int exx_spill_span_line_safe(int line)
 {
-    /* dcc's own IY candidate is callee-saved and live across calls, so a
-     * borrow anywhere in the file can corrupt it - see
-     * dcc_iy_claimed_in_file's own comment for the wumpus.c miscompile. */
-    if (dcc_iy_claimed_in_file())
+    const PeepLineInfo *info;
+    char clean[MAX_LINE];
+
+    info = peep_line_info(line);
+    if (info == NULL || info->kind == PEEP_LINE_OPAQUE ||
+        info->kind == PEEP_LINE_DIRECTIVE || info->kind == PEEP_LINE_LABEL)
+        return 0;
+    if (info->kind == PEEP_LINE_BLANK || info->kind == PEEP_LINE_COMMENT)
         return 1;
-    return peep_reg_used_in_function(at, "ix_spill_iy", line_mentions_iy);
+    if (info->effects.control_flow ||
+        ((info->effects.reads | info->effects.writes) &
+         (PEEP_REG_BC | PEEP_REG_DE)) != 0 ||
+        ((info->effects.reads | info->effects.writes) & PEEP_REG_SP) != 0 ||
+        ((info->effects.memory_read | info->effects.memory_written) &
+         PEEP_MEM_STACK) != 0)
+        return 0;
+    if (!info->effects.unknown)
+        return 1;
+
+    strip_peep_comment_lower_copy(clean, lines[line]);
+    return !strcmp(clean, "nop") || !strcmp(clean, "ex de,hl");
+}
+
+static int function_uses_exx(int at)
+{
+    int func_start, func_end;
+    int line;
+
+    find_function_bounds_any(at, &func_start, &func_end);
+    for (line = func_start; line < func_end; ++line)
+        if (eq(line, "exx") &&
+            strstr(lines[line], "ix_spill_exx") == NULL)
+            return 1;
+    return 0;
+}
+
+static int bc_dead_on_straight_exit(int start, int func_end)
+{
+    int line;
+    char clean[MAX_LINE];
+
+    for (line = start; line < func_end; ++line) {
+        const PeepLineInfo *info = peep_line_info(line);
+
+        if (info == NULL || info->kind == PEEP_LINE_OPAQUE ||
+            info->kind == PEEP_LINE_DIRECTIVE ||
+            info->kind == PEEP_LINE_LABEL)
+            return 0;
+        if (info->kind == PEEP_LINE_BLANK ||
+            info->kind == PEEP_LINE_COMMENT)
+            continue;
+        if (info->opcode == PEEP_OPCODE_RET)
+            return eq(line, "ret");
+        if (info->effects.unknown) {
+            strip_peep_comment_lower_copy(clean, lines[line]);
+            if (!strcmp(clean, "nop") || !strcmp(clean, "ex de,hl"))
+                continue;
+            return 0;
+        }
+        if (info->effects.control_flow ||
+            ((info->effects.reads | info->effects.writes) &
+             PEEP_REG_BC) != 0)
+            return 0;
+    }
+    return 0;
 }
 
 /* Is ix-offset `off` (signed, as returned by peep_parse_st_ix_pair/
@@ -6507,7 +6635,7 @@ static int ix_offset_pair_referenced_outside(int off, int func_start, int func_e
 }
 
 /*
- * pass_cache_ix_spill_via_iy:
+ * pass_cache_ix_spill_via_exx:
  *
  * A block-scoped C temp materialized once from a computed value and read
  * back exactly once shortly after (e.g. `{ int _t = lst[--lsp]; lst[lsp-1]
@@ -6525,30 +6653,30 @@ static int ix_offset_pair_referenced_outside(int off, int func_start, int func_e
  * ix_cache_bc_used_in_function's own deliberately whole-function-
  * conservative check (see its comment) correctly declines to disturb.
  *
- * IY, however, is very often completely unused in exactly these functions.
- * Cache the value there instead, via push/pop - the same documented-Z80
- * idiom pass_promote_ix_pointer_to_iy already uses, not the undocumented
- * ld iyl/iyh 8-bit forms: `push hl` / `pop iy` to store (25T), `push iy` /
- * `pop de` to reload (25T) - 50T total, still a real ~34% cut.
+ * Cache the value in the alternate HL bank. BC is stack-saved because EXX
+ * swaps it too; the span proof excludes BC/DE use, calls, control flow, and
+ * stack mutation. At the reload, a second EXX exposes the cached HL, the
+ * value is pushed, and a third EXX restores the live HL before DE receives
+ * the cached value. This is 54T versus the original 76T and 7 bytes versus
+ * 12. When a straight-line epilogue proves BC dead, its save/restore is
+ * omitted for 33T and 5 bytes. No ABI-visible callee-saved register is
+ * borrowed.
  *
  * Narrower than pass_promote_ix_pointer_to_iy's whole-function register
- * promotion: IY only needs to survive a short, straight-line span here, so
- * this requires - rather than proving every call in the whole file is
- * IY-safe - simply that no call/rst and no label fall between the store
- * and the matched reload (a call to code outside this file could touch IY
- * in ways this file's text can't see; a label would let some other path
- * reach the reload without ever running the store). Requires IY to be
- * unused elsewhere in the containing function (iy_used_in_function mirrors
- * ix_cache_bc_used_in_function's own per-function conservatism, just for
- * IY - see its own comment for why switch-case candidates still coexist
- * safely despite this), and the frame slot to be referenced nowhere else
- * in the function at all (ix_offset_pair_referenced_outside - stronger
+ * promotion: the alternate bank only needs to survive a short, straight-line
+ * span here, so this requires simply that no call, control-flow edge, label,
+ * BC/DE access, or stack mutation falls between the store and matched reload.
+ * Both H and L must be redefined before either is read, because EXX moves the
+ * cached value out of the main HL bank for the duration of the span.
+ * The function must not use EXX independently because the alternate bank has
+ * no liveness metadata. The frame slot must be referenced nowhere else in the
+ * function at all (ix_offset_pair_referenced_outside - stronger
  * than pass_cache_ix_local_word_reload needs, since that pass keeps the
  * real memory slot around for its first, unrewritten occurrence - this
  * pass eliminates the memory slot's only store and only reload both, so
  * nothing else may depend on it holding the value).
  */
-static int pass_cache_ix_spill_via_iy(void)
+static int pass_cache_ix_spill_via_exx(void)
 {
     int i;
     int changed = 0;
@@ -6557,26 +6685,39 @@ static int pass_cache_ix_spill_via_iy(void)
         int off, reload_off;
         int func_start, func_end;
         int reload_line;
+        int save_bc;
         int k;
+        unsigned hl_written;
 
         if (!peep_parse_st_ix_pair(lines[i], lines[i + 1], &off))
             continue;
 
-        if (iy_used_in_function(i))
+        if (function_uses_exx(i))
             continue;
 
         find_function_bounds_any(i, &func_start, &func_end);
 
         reload_line = -1;
+        hl_written = 0;
         for (k = i + 2; k < func_end; ++k) {
+            const PeepLineInfo *info;
             int other_off;
 
             if (starts_label(lines[k]) || line_starts_function_marker(lines[k]) ||
                 line_is_call_or_rst(lines[k]))
                 break;
             if (peep_parse_ld_de_ix_pair(k, &reload_off) && reload_off == off) {
-                reload_line = k;
+                if ((hl_written & PEEP_REG_HL) == PEEP_REG_HL)
+                    reload_line = k;
                 break;
+            }
+            if (!exx_spill_span_line_safe(k))
+                break;
+            info = peep_line_info(k);
+            if (info != NULL && !info->effects.unknown) {
+                if ((info->effects.reads & PEEP_REG_HL & ~hl_written) != 0)
+                    break;
+                hl_written |= info->effects.writes & PEEP_REG_HL;
             }
             /* A DIFFERENT local's own store (e.g. tests/tstruct.c's
              * `i = "Karina"; j = "Winter";` - two distinct register-char*
@@ -6604,10 +6745,22 @@ static int pass_cache_ix_spill_via_iy(void)
                                               i, i + 1, reload_line, reload_line + 1))
             continue;
 
-        replace1_tagged(i, "push hl", "ix_spill_iy");
-        replace1_tagged(i + 1, "pop iy", "ix_spill_iy");
-        replace1_tagged(reload_line, "push iy", "ix_spill_iy");
-        replace1(reload_line + 1, "pop de");
+        save_bc = !bc_dead_on_straight_exit(
+            reload_line + 2, func_end);
+        if (save_bc) {
+            replace1_tagged(i, "push bc", "ix_spill_exx");
+            replace1_tagged(i + 1, "exx", "ix_spill_exx");
+        } else {
+            replace1_tagged(i, "exx", "ix_spill_exx");
+            delete_n(i + 1, 1);
+            --reload_line;
+        }
+        replace1_tagged(reload_line, "exx", "ix_spill_exx");
+        replace1_tagged(reload_line + 1, "push hl", "ix_spill_exx");
+        insert_line_tagged(reload_line + 2, "exx", "ix_spill_exx");
+        insert_line_tagged(reload_line + 3, "pop de", "ix_spill_exx");
+        if (save_bc)
+            insert_line_tagged(reload_line + 4, "pop bc", "ix_spill_exx");
         changed = 1;
     }
 
@@ -7004,15 +7157,87 @@ static int parse_small_add_a(const char *line, int *amount)
     return 1;
 }
 
+static int find_ix_frame_save_point(int func_start, int func_end,
+                                    int required_bytes, int *save_at)
+{
+    int add_ix_sp;
+    int frame_bytes;
+    int k;
+    char value_text[64];
+    char *end;
+    long value;
+
+    add_ix_sp = -1;
+    for (k = func_start + 1; k < func_end; ++k) {
+        if (eq(k, "add ix,sp")) {
+            if (add_ix_sp >= 0)
+                return 0;
+            add_ix_sp = k;
+        }
+    }
+    if (add_ix_sp < 0)
+        return 0;
+
+    k = add_ix_sp + 1;
+    frame_bytes = 0;
+    if (k + 2 < func_end &&
+        parse_ld_hl_imm(lines[k], value_text, sizeof(value_text)) &&
+        eq(k + 1, "add hl,sp") && eq(k + 2, "ld sp,hl")) {
+        value = strtol(value_text, &end, 0);
+        if (*end || value >= 0 || value < -32767)
+            return 0;
+        frame_bytes = (int)-value;
+        k += 3;
+    } else {
+        while (k < func_end && eq(k, "dec sp")) {
+            ++frame_bytes;
+            ++k;
+        }
+    }
+    if (required_bytes <= 0 || frame_bytes < required_bytes)
+        return 0;
+
+    *save_at = k;
+    return 1;
+}
+
+static void insert_save_iy_to_ix_slot(int at, int offset, const char *tag)
+{
+    char low[48], high[48];
+
+    sprintf(low, "ld (ix%+d),c", offset);
+    sprintf(high, "ld (ix%+d),b", offset + 1);
+    insert_line_tagged(at++, "push iy", tag);
+    insert_line_tagged(at++, "pop bc", tag);
+    insert_line_tagged(at++, low, tag);
+    insert_line_tagged(at, high, tag);
+}
+
+static void insert_restore_iy_from_ix_slot(int at, int offset,
+                                           const char *tag)
+{
+    char low[48], high[48];
+
+    sprintf(low, "ld c,(ix%+d)", offset);
+    sprintf(high, "ld b,(ix%+d)", offset + 1);
+    insert_line_tagged(at++, low, tag);
+    insert_line_tagged(at++, high, tag);
+    insert_line_tagged(at++, "push bc", tag);
+    insert_line_tagged(at, "pop iy", tag);
+}
+
 /* Promote one frame-resident pointer in a closed static helper to documented
  * IY. The candidate must have one HL initialization, only canonical HL/DE
  * reloads, and one small carry-skip increment whose flags are dead at the
- * loop target. Calls may only target same-file functions (the whole file is
- * proven IY-free) or DCCRTL's reviewed IY-preserving helpers. */
+ * loop target. Incoming IY is saved in the vacated frame slot before any
+ * body path and restored at every canonical epilogue. Calls may only target
+ * same-file functions or DCCRTL's reviewed IY-preserving helpers. */
 static int pass_promote_ix_pointer_to_iy(void)
 {
     int i, k;
 
+    if (dcc_iy_claimed_in_file())
+        return 0;
     for (i = 0; i < nlines; ++i)
         if (line_mentions_iy(lines[i]))
             return 0;
@@ -7023,6 +7248,8 @@ static int pass_promote_ix_pointer_to_iy(void)
         int best_candidate_loads = -1;
         int loads[128], load_kinds[128], load_count = 0;
         int safe = 1;
+        int save_at;
+        int epilogues;
         char low_pat[24], high_pat[24];
 
         if (strncmp(lines[i], "; static function ", 18) != 0)
@@ -7130,14 +7357,36 @@ static int pass_promote_ix_pointer_to_iy(void)
                     break;
                 }
             }
-            if (jump_target_any(clean, target) &&
-                target[0] != '(' &&
-                find_label_line_in_range(target, func_start, func_end) < 0) {
+            if (jump_target_any(clean, target)) {
+                if (target[0] == '(' ||
+                    find_label_line_in_range(
+                        target, func_start, func_end) < 0) {
+                    safe = 0;
+                    break;
+                }
+            }
+        }
+        if (!safe || init_line < 0 || load_count < 3 ||
+            init_line >= increment_line || offset >= 0 ||
+            !find_ix_frame_save_point(func_start, func_end, -offset,
+                                      &save_at))
+            continue;
+
+        epilogues = 0;
+        for (k = func_start + 1; k < func_end; ++k) {
+            const PeepLineInfo *info;
+
+            info = peep_line_info(k);
+            if (info == NULL || info->opcode != PEEP_OPCODE_RET)
+                continue;
+            if (!eq(k, "ret") || k < func_start + 3 ||
+                !eq(k - 1, "pop ix") || !eq(k - 2, "ld sp,ix")) {
                 safe = 0;
                 break;
             }
+            ++epilogues;
         }
-        if (!safe || init_line < 0 || load_count < 3 || init_line >= increment_line)
+        if (!safe || epilogues == 0)
             continue;
 
         replace1_tagged(init_line, "push hl", "ix_pointer_to_iy");
@@ -7149,6 +7398,17 @@ static int pass_promote_ix_pointer_to_iy(void)
         for (k = 0; k < increment_amount; ++k)
             replace1_tagged(increment_line + k, "inc iy", "ix_pointer_to_iy");
         delete_n(increment_line + increment_amount, 5 - increment_amount);
+
+        find_function_bounds_any(func_start + 1, &func_start, &func_end);
+        for (k = func_end - 1; k > func_start; --k) {
+            if (eq(k, "ld sp,ix") && k + 2 < func_end &&
+                eq(k + 1, "pop ix") && eq(k + 2, "ret")) {
+                insert_restore_iy_from_ix_slot(
+                    k, offset, "ix_pointer_to_iy_abi");
+            }
+        }
+        insert_save_iy_to_ix_slot(save_at, offset,
+                                  "ix_pointer_to_iy_abi");
         return 1;
     }
     return 0;
@@ -7272,12 +7532,60 @@ static int early_block_requires_initialized_pointer(int line, int func_start,
     return incoming > 0;
 }
 
+static int local_jump_table_dispatch(int line, int func_start, int func_end)
+{
+    char table[128], expected[160], clean[MAX_LINE];
+    int entry;
+    int entries = 0;
+
+    if (line < func_start + 6 || line + 2 >= func_end ||
+        !eq(line, "jp (hl)") ||
+        !eq(line - 4, "ld e,(hl)") ||
+        !eq(line - 3, "inc hl") ||
+        !eq(line - 2, "ld d,(hl)") ||
+        !eq(line - 1, "ex de,hl") ||
+        !label_name_at(line + 1, table))
+        return 0;
+    sprintf(expected, "ld de,%s", table);
+    if (!eq(line - 6, expected) || !eq(line - 5, "add hl,de"))
+        return 0;
+
+    for (entry = line + 2; entry < func_end; ++entry) {
+        char target[128];
+        char *p, *end;
+        size_t length;
+
+        strip_peep_comment_copy(clean, lines[entry]);
+        if (strncmp(clean, "dw ", 3))
+            break;
+        p = clean + 3;
+        while (*p == ' ' || *p == '\t')
+            ++p;
+        end = p;
+        while (*end && *end != ' ' && *end != '\t' && *end != ',')
+            ++end;
+        length = (size_t)(end - p);
+        while (*end == ' ' || *end == '\t')
+            ++end;
+        if (length == 0 || length >= sizeof(target) || *end != 0)
+            return 0;
+        memcpy(target, p, length);
+        target[length] = 0;
+        if (find_label_line_in_range(target, func_start, func_end) < 0)
+            return 0;
+        ++entries;
+    }
+    return entries > 0;
+}
+
 /* Cache a heavily used mutable frame pointer in documented IY. The vacated
- * frame slot saves incoming IY, making the rewrite ABI-safe across calls and
- * recursion. Every slot reference must be a canonical pair load/store or the
- * standard small carry-skip increment. Low-reference candidates additionally
- * require a canonical post-increment pair in a profitable constant-count
- * loop. Every return must use a normal IX epilogue. */
+ * frame slot saves incoming IY after the frame is allocated and restores it
+ * without disturbing DE:HL return values, making the rewrite ABI-safe across
+ * calls and recursion. Every slot reference must be a canonical pair
+ * load/store or the standard small carry-skip increment. Low-reference
+ * candidates additionally require a canonical post-increment pair in a
+ * profitable constant-count loop. Every return must use a normal IX
+ * epilogue. */
 static int pass_cache_mutable_ix_pointer_in_iy(void)
 {
     int i;
@@ -7287,6 +7595,7 @@ static int pass_cache_mutable_ix_pointer_in_iy(void)
         int func_start, func_end;
         int candidate_line, best_offset = 0, best_refs = 0;
         int best_increments = -1;
+        int save_at;
         int k;
 
         if (strncmp(lines[i], "; static function ", 18) != 0)
@@ -7323,12 +7632,14 @@ static int pass_cache_mutable_ix_pointer_in_iy(void)
             sprintf(high_pat, "(ix%s)", off_text);
             for (k = func_start + 1; k < func_end && safe; ++k) {
                 int parsed_offset, amount;
-                char clean[MAX_LINE];
+                const PeepLineInfo *info;
+                char clean[MAX_LINE], target[128];
 
                 if (eq(k, "add ix,sp") && prologue < 0)
                     prologue = k;
-                if (eq(k, "ret")) {
-                    if (k < 2 || !eq(k - 1, "pop ix") ||
+                info = peep_line_info(k);
+                if (info != NULL && info->opcode == PEEP_OPCODE_RET) {
+                    if (!eq(k, "ret") || k < 2 || !eq(k - 1, "pop ix") ||
                         !eq(k - 2, "ld sp,ix")) {
                         safe = 0;
                         break;
@@ -7381,6 +7692,14 @@ static int pass_cache_mutable_ix_pointer_in_iy(void)
                 strip_peep_comment_copy(clean, lines[k]);
                 if (strstr(clean, low_pat) || strstr(clean, high_pat))
                     safe = 0;
+                if (jump_target_any(clean, target) &&
+                    ((target[0] == '(' &&
+                      !local_jump_table_dispatch(
+                          k, func_start, func_end)) ||
+                     (target[0] != '(' &&
+                      find_label_line_in_range(
+                          target, func_start, func_end) < 0)))
+                    safe = 0;
             }
             if (!safe || prologue < 0 || epilogues == 0 ||
                 (refs < 8 && counted_postincrements == 0) ||
@@ -7410,6 +7729,9 @@ static int pass_cache_mutable_ix_pointer_in_iy(void)
             }
         }
         if (best_refs == 0)
+            continue;
+        if (!find_ix_frame_save_point(func_start, func_end, -best_offset,
+                                      &save_at))
             continue;
 
         for (k = func_start + 1; k < func_end; ++k) {
@@ -7456,29 +7778,16 @@ static int pass_cache_mutable_ix_pointer_in_iy(void)
             }
         }
         for (k = func_end - 1; k > func_start; --k) {
-            char low[48], high[48];
-            if (!eq(k, "ld sp,ix"))
+            if (!eq(k, "ld sp,ix") || k + 2 >= func_end ||
+                !eq(k + 1, "pop ix") || !eq(k + 2, "ret"))
                 continue;
-            sprintf(low, "ld e,(ix%+d)", best_offset);
-            sprintf(high, "ld d,(ix%+d)", best_offset + 1);
-            insert_line_tagged(k, "pop iy", "mutable_ix_pointer_to_iy");
-            insert_line(k, "push de");
-            insert_line(k, high);
-            insert_line(k, low);
-            func_end += 4;
+            insert_restore_iy_from_ix_slot(
+                k, best_offset, "mutable_ix_pointer_to_iy_abi");
+            func_end += 6;
         }
-        for (k = func_start + 1; k < func_end; ++k) {
-            char low[48], high[48];
-            if (!eq(k, "add ix,sp"))
-                continue;
-            sprintf(low, "ld (ix%+d),e", best_offset);
-            sprintf(high, "ld (ix%+d),d", best_offset + 1);
-            insert_line_tagged(k + 1, "push iy", "mutable_ix_pointer_to_iy");
-            insert_line(k + 2, "pop de");
-            insert_line(k + 3, low);
-            insert_line(k + 4, high);
-            return 1;
-        }
+        insert_save_iy_to_ix_slot(
+            save_at, best_offset, "mutable_ix_pointer_to_iy_abi");
+        return 1;
     }
     return 0;
 }
@@ -9166,11 +9475,11 @@ static int pass_walk_hoisted_index_ptr(void)
  *   push de
  *   push hl             ; ...packed as a stack argument for a call
  *
- * IY is otherwise free here (see pass_byte_loop_counter_to_reg_iyl's own
- * comment: nothing else in dcc's codegen or DCCRTL.MAC ever touches it) -
- * primed once, before the loop, to exactly this element's address, IY can
- * then just walk forward by the float stride (4) every iteration instead of
- * rebuilding the address from the cached row base and k from scratch:
+ * IY is primed once, before the loop, to exactly this element's address and
+ * then walks forward by the float stride (4) every iteration instead of
+ * rebuilding the address from the cached row base and k from scratch.
+ * Incoming IY is stack-saved before the single-entry loop and restored on
+ * its only exit:
  *
  *   push iy              ; copy the walking pointer into hl for the read
  *   pop hl
@@ -9226,6 +9535,8 @@ static int pass_walk_row_cached_float_index(void)
     int scan_limit;
 
     changed = 0;
+    if (dcc_iy_claimed_in_file())
+        return 0;
 
     for (i = 0; i < nlines; ++i) {
         if (!starts_label(lines[i]))
@@ -9238,6 +9549,8 @@ static int pass_walk_row_cached_float_index(void)
         if (loop_end < i + 22)
             continue;
         if (!loop_body_internal_labels_safe(i + 1, loop_end))
+            continue;
+        if (!iy_loop_borrow_safe(i, loop_end, label, NULL))
             continue;
 
         /* IY is a single register: a call anywhere in this loop's body to
@@ -9389,7 +9702,9 @@ static int pass_walk_row_cached_float_index(void)
             continue;
 
         /* Commit back-to-front (highest index first) so earlier indices
-         * stay valid for later edits: de_gap, then match_k, then i. */
+         * stay valid for later edits: restore, de_gap, match_k, then i. */
+        insert_line_tagged(loop_end + 1, "pop iy",
+                           "walk_row_cached_float_index_abi");
         insert_line_tagged(de_gap, "ld de,4", "walk_row_cached_float_index");
         insert_line_tagged(de_gap + 1, "add iy,de", "walk_row_cached_float_index");
 
@@ -9417,6 +9732,8 @@ static int pass_walk_row_cached_float_index(void)
             }
             insert_line_tagged(i, ld_row_hi, "walk_row_cached_float_index");
             insert_line_tagged(i, ld_row_lo, "walk_row_cached_float_index");
+            insert_line_tagged(i, "push iy",
+                               "walk_row_cached_float_index_abi");
         }
 
         changed = 1;
@@ -10657,26 +10974,10 @@ int main(int argc, char **argv)
         RUN_PASS(pass_labels);
     }
 
-    /* pass_cache_ix_spill_via_iy runs after pass_promote_ix_pointer_to_iy,
-     * not before: that pass's own whole-FILE "IY unused anywhere" gate (see
-     * its own comment) would see this pass's rewrites and decline for the
-     * entire file if this ran first, and its whole-function register
-     * promotion is a substantially bigger win (a value live for a whole
-     * function, not just one short span) than this pass's own per-spill
-     * saving - confirmed as a real regression (forint +2.6%) when this was
-     * tried in the other order: this pass had already claimed IY somewhere
-     * low-value in forint.c before pass_promote_ix_pointer_to_iy got a
-     * chance at eval_e's much more valuable token-pointer promotion, and
-     * that pass's whole-file gate then declined entirely. Running after
-     * means this pass's own per-function iy_used_in_function check simply
-     * sees pass_promote_ix_pointer_to_iy's already-claimed functions (their
-     * rewrites mention "iy") and correctly skips them, same as it already
-     * does for its own earlier candidates elsewhere in a file. Same
-     * post-convergence placement rationale as pass_cache_ix_local_word_
-     * reload (own precondition can be satisfied on an earlier main-loop
-     * iteration than a structural, loop-recognizing pass's own). Purely
-     * local, so a single pass suffices; pass_labels tidies up. */
-    if (RUN_PASS(pass_cache_ix_spill_via_iy))
+    /* This short-span EXX cache runs post-convergence for the same reason as
+     * pass_cache_ix_local_word_reload: earlier structural rewrites can expose
+     * its store/reload shape. It is purely local, so one pass suffices. */
+    if (RUN_PASS(pass_cache_ix_spill_via_exx))
         RUN_PASS(pass_labels);
 
     RUN_PASS(pass_remove_dead_phi_argument_slots);
