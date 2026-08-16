@@ -7111,6 +7111,118 @@ static int function_uses_exx(int at)
     return 0;
 }
 
+static int function_uses_any_exx(int at)
+{
+    int func_start, func_end;
+    int line;
+
+    find_function_bounds_any(at, &func_start, &func_end);
+    for (line = func_start; line < func_end; ++line)
+        if (eq(line, "exx"))
+            return 1;
+    return 0;
+}
+
+static int carry_overwritten_after_local_jump(int line, int func_start,
+                                              int func_end)
+{
+    char clean[MAX_LINE], target[128];
+    int target_line;
+    int k;
+
+    if (line < func_start || line >= func_end ||
+        !jump_target_any(lines[line], target) || target[0] == '(')
+        return 0;
+    strip_peep_comment_lower_copy(clean, lines[line]);
+    if ((strncmp(clean, "jp ", 3) != 0 &&
+         strncmp(clean, "jr ", 3) != 0) || strchr(clean, ',') != NULL)
+        return 0;
+    target_line = find_label_line_in_range(target, func_start, func_end);
+    if (target_line < 0)
+        return 0;
+
+    for (k = target_line + 1;
+         k < func_end && k <= target_line + 24; ++k) {
+        const PeepLineInfo *info = peep_line_info(k);
+
+        if (info == NULL || info->kind == PEEP_LINE_DIRECTIVE ||
+            info->kind == PEEP_LINE_OPAQUE)
+            return 0;
+        if (info->kind != PEEP_LINE_INSTRUCTION)
+            continue;
+        if (info->effects.unknown) {
+            strip_peep_comment_lower_copy(clean, lines[k]);
+            if (strcmp(clean, "ex de,hl") != 0)
+                return 0;
+            continue;
+        }
+        if (!strcmp(info->mnemonic, "adc") ||
+            !strcmp(info->mnemonic, "sbc") ||
+            (info->effects.flags_read & PEEP_FLAG_C) != 0)
+            return 0;
+        if (strcmp(info->mnemonic, "inc") != 0 &&
+            strcmp(info->mnemonic, "dec") != 0 &&
+            (info->effects.flags_written & PEEP_FLAG_C) != 0)
+            return 1;
+        if (info->effects.control_flow)
+            return 0;
+    }
+    return 0;
+}
+
+/* Replace a profitable run of native IY increments with a balanced use of
+ * the alternate DE bank. EXX preserves every visible register, and the
+ * function-wide ownership check ensures no generated or user-written EXX
+ * depends on the alternate bank. ADD IY,DE changes carry while INC IY does
+ * not, so CFG liveness or a bounded direct-backedge scan must prove carry
+ * overwritten before any read after the complete run. */
+static int pass_fold_wide_iy_increment(void)
+{
+    int i;
+    int changed = 0;
+
+    build_user_asm_mask();
+    for (i = nlines - 1; i >= 0; --i) {
+        int func_start, func_end;
+        int k;
+
+        if (strncmp(lines[i], "; static function ", 18) != 0 &&
+            strncmp(lines[i], "public ", 7) != 0)
+            continue;
+        find_function_bounds_any(i + 1, &func_start, &func_end);
+        if (func_start != i ||
+            mask_range_is_user_asm(func_start, func_end) ||
+            function_uses_any_exx(i))
+            continue;
+
+        for (k = func_end - 1; k > func_start; --k) {
+            int run_end;
+            int count;
+            char immediate[48];
+
+            if (!eq(k, "inc iy"))
+                continue;
+            run_end = k;
+            while (k > func_start + 1 && eq(k - 1, "inc iy"))
+                --k;
+            count = run_end - k + 1;
+            if (count < 4 ||
+                (!peep_flags_dead_after(run_end, PEEP_FLAG_C) &&
+                 !carry_overwritten_after_local_jump(
+                     run_end + 1, func_start, func_end)))
+                continue;
+            replace1_tagged(k, "exx", "wide_iy_increment");
+            sprintf(immediate, "ld de,%d", count);
+            replace1_tagged(k + 1, immediate, "wide_iy_increment");
+            replace1_tagged(k + 2, "add iy,de", "wide_iy_increment");
+            replace1_tagged(k + 3, "exx", "wide_iy_increment");
+            delete_n(k + 4, count - 4);
+            changed = 1;
+        }
+    }
+    return changed;
+}
+
 static int bc_dead_on_straight_exit(int start, int func_end)
 {
     int line;
@@ -8284,7 +8396,14 @@ static int pass_cache_mutable_ix_pointer_in_iy(void)
                        peep_parse_ld_ix_pair(lines[k], lines[k + 1],
                                              &parsed_offset) &&
                        parsed_offset == best_offset) {
-                if (k + 6 < func_end && eq(k + 2, "inc hl") &&
+                if (k + 2 < func_end && eq(k + 2, "ld a,(hl)") &&
+                    peep_registers_dead_after(
+                        k + 2, PEEP_REG_H | PEEP_REG_L)) {
+                    replace1_tagged(k, "ld a,(iy+0)",
+                                    "mutable_ix_pointer_to_iy");
+                    delete_n(k + 1, 2);
+                    func_end -= 2;
+                } else if (k + 6 < func_end && eq(k + 2, "inc hl") &&
                     eq(k + 3, "ld a,(hl)") && eq(k + 4, "inc hl") &&
                     eq(k + 5, "ld h,(hl)") && eq(k + 6, "ld l,a")) {
                     replace1_tagged(k, "ld l,(iy+1)",
@@ -8490,6 +8609,11 @@ static int peep_parse_ld_de_small_const(const char *s, int *k)
  * boundary for it to violate) and the exact same ix-relative slot the
  * original sequence already reads and writes, for a strictly shorter span
  * than the original already occupied.
+ *
+ * The equivalent five-line form with INC HL instead of LD DE,1/ADD HL,DE
+ * is also accepted, but only when CFG liveness proves A, HL, and every flag
+ * dead after the store. INC HL preserves flags and A while the replacement
+ * does not, so this stricter proof is required for that input form.
  */
 /* True if "hl" is mentioned at all - as a register or as a "(hl)"
  * dereference, read or write, no distinction - anywhere from line `from`
@@ -8531,23 +8655,39 @@ static int pass_small_const_incr_carry_skip(void)
     int i;
     int changed = 0;
     static int label_counter;
+    const unsigned all_flags = PEEP_FLAG_C | PEEP_FLAG_Z |
+                               PEEP_FLAG_S | PEEP_FLAG_PV;
 
-    for (i = 0; i + 5 < nlines; i++) {
+    build_user_asm_mask();
+    for (i = 0; i + 4 < nlines; i++) {
         int lo, hi, k;
         int st_lo, st_hi;
+        int inc_form;
+        int store_at;
         char label[48];
         char line1[32], line2[32], line3[32], line4[64], line5[32];
 
         if (!peep_parse_ld_hl_ix_pair(i, &lo))
             continue;
         hi = lo - 1;
-        if (!peep_parse_ld_de_small_const(lines[i + 2], &k))
+        inc_form = eq(i + 2, "inc hl");
+        if (inc_form) {
+            k = 1;
+            store_at = i + 3;
+        } else {
+            if (i + 5 >= nlines ||
+                !peep_parse_ld_de_small_const(lines[i + 2], &k) ||
+                !eq(i + 3, "add hl,de"))
+                continue;
+            store_at = i + 4;
+        }
+        if (!peep_parse_st_ix_neg_reg(
+                lines[store_at], 'l', &st_lo) || st_lo != lo)
             continue;
-        if (!eq(i + 3, "add hl,de"))
+        if (!peep_parse_st_ix_neg_reg(
+                lines[store_at + 1], 'h', &st_hi) || st_hi != hi)
             continue;
-        if (!peep_parse_st_ix_neg_reg(lines[i + 4], 'l', &st_lo) || st_lo != lo)
-            continue;
-        if (!peep_parse_st_ix_neg_reg(lines[i + 5], 'h', &st_hi) || st_hi != hi)
+        if (mask_range_is_user_asm(i, store_at + 1))
             continue;
 
         /* The original "ld (ix-N),l / ld (ix-(N-1)),h" store leaves the
@@ -8571,8 +8711,14 @@ static int pass_small_const_incr_carry_skip(void)
          * corrupting an unrelated struct field). hl_relied_on_after's own
          * comment covers why it's deliberately blunt about what counts as
          * "relying on it". */
-        if (hl_relied_on_after(i + 6))
+        if (inc_form) {
+            if (!peep_registers_dead_after(
+                    store_at + 1, PEEP_REG_A | PEEP_REG_H | PEEP_REG_L) ||
+                !peep_flags_dead_after(store_at + 1, all_flags))
+                continue;
+        } else if (hl_relied_on_after(i + 6)) {
             continue;
+        }
 
         /* Real M80 (unlike dcc's own m80c) only honors the first 6
          * significant characters of a symbol - see dcc_asmname.c's own
@@ -8600,9 +8746,13 @@ static int pass_small_const_incr_carry_skip(void)
         {
             char labelline[56];
             sprintf(labelline, "%s:", label);
-            replace1(i + 5, labelline);
+            if (inc_form)
+                insert_line(i + 5, labelline);
+            else
+                replace1(i + 5, labelline);
         }
         changed = 1;
+        build_user_asm_mask();
     }
 
     return changed;
@@ -11786,6 +11936,8 @@ int main(int argc, char **argv)
         RUN_PASS(pass_remove_unreferenced_labels);
         RUN_PASS(pass_labels);
     }
+
+    RUN_PASS(pass_fold_wide_iy_increment);
 
     /* This short-span EXX cache runs post-convergence for the same reason as
      * pass_cache_ix_local_word_reload: earlier structural rewrites can expose

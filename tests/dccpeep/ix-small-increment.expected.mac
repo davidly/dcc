@@ -1,0 +1,65 @@
+; static function accept
+_ZA:
+	ld a,(ix-2) ; peep: small_const_incr_carry_skip
+	add a,1
+	ld (ix-2),a
+	jr nc,LI0 ; peep: jp_to_jr
+	inc (ix-1)
+LI0:
+	ld a,(iy+0)
+	cp 10
+	ld hl,0
+	ld e,(ix-2)
+	ld d,(ix-1)
+	ret
+; static function a_live
+_ZAL:
+	ld a,7
+	ld l,(ix-2)
+	ld h,(ix-1)
+	inc hl
+	ld (ix-2),l
+	ld (ix-1),h
+	or a
+	ld e,(ix-2)
+	ld d,(ix-1)
+	ret
+; static function hl_live
+_ZHL:
+	ld l,(ix-2)
+	ld h,(ix-1)
+	inc hl
+	ld (ix-2),l
+	ld (ix-1),h
+	ld a,(hl)
+	ld e,(ix-2)
+	ld d,(ix-1)
+	ret
+; static function flags_live
+_ZFL:
+	or a
+	ld l,(ix-2)
+	ld h,(ix-1)
+	inc hl
+	ld (ix-2),l
+	ld (ix-1),h
+	jp z,LF
+LF:
+	ld e,(ix-2)
+	ld d,(ix-1)
+	ret
+; static function user_asm
+; dcc user asm begin
+	ld l,(ix-2)
+	ld h,(ix-1)
+	inc hl
+	ld (ix-2),l
+	ld (ix-1),h
+; dcc user asm end
+	ld a,(iy+0)
+	cp 10
+	ld hl,0
+	ld e,(ix-2)
+	ld d,(ix-1)
+	ret
+	end
