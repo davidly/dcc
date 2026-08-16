@@ -11866,16 +11866,17 @@ _ferror:
         ex      (sp),hl
         push    bc
         ld      a,l
+        ; sub FIRSTFD's wraparound alone is enough to reject fd < FIRSTFD
+        ; (see _feof's identical check for why) - no separate carry check
+        ; needed.
         sub     FIRSTFD
-        jr      c,ferr_no
         cp      NFILES
         jr      nc,ferr_no
-        ld      h,0
         ld      l,a
+        ld      h,0
         ld      de,__fderr
         add     hl,de
-        ld      a,(hl)
-        ld      l,a
+        ld      l,(hl)
         ld      h,0
         ret
 ferr_no:
