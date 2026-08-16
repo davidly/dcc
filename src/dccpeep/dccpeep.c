@@ -3381,6 +3381,61 @@ static int pass_fold_signed_cmp_via_bytes(void)
     return changed;
 }
 
+/*
+ * pass_word_zero_test_via_mem:
+ *
+ * DCC's standard word-load idiom ("ld a,(hl)/inc hl/ld h,(hl)/ld l,a",
+ * seen throughout this whole codebase) assembles the loaded word fully
+ * into HL even when the only thing done with it next is a 16-bit zero
+ * test ("ld a,h/or l") - confirmed via tests/cobint.c's OP_AND/OP_OR
+ * handlers, where each vpop()'d operand is checked against zero for
+ * short-circuit evaluation and never used as a value again. Z80 can OR
+ * directly against a memory operand, so the high byte never needs to
+ * land in H at all: read the low byte into A as before, advance the
+ * pointer, then OR straight against *(hl) (now the high byte) instead of
+ * finishing the word assembly first.
+ *
+ *     ld a,(hl)            ld a,(hl)
+ *     inc hl               inc hl
+ *     ld h,(hl)     ==>    or (hl)
+ *     ld l,a
+ *     ld a,h
+ *     or l
+ *
+ * "or (hl)" confirmed to assemble to the correct Z80 opcode (B6h) via a
+ * standalone repro before writing this pass, given this file's history
+ * with M80 syntax surprises on other instructions.
+ *
+ * Only fires when H and L are both provably dead afterward
+ * (peep_registers_dead_after): unlike the original, this never puts the
+ * loaded word's value in HL at all, only its zero-ness in the flags.
+ */
+static int pass_word_zero_test_via_mem(void)
+{
+    int i;
+    int changed = 0;
+    const unsigned regs = PEEP_REG_H | PEEP_REG_L;
+
+    for (i = 0; i + 5 < nlines; i++) {
+        if (!eq(i, "ld a,(hl)") || !eq(i + 1, "inc hl") ||
+            !eq(i + 2, "ld h,(hl)") || !eq(i + 3, "ld l,a") ||
+            !eq(i + 4, "ld a,h") || !eq(i + 5, "or l"))
+            continue;
+        if (!peep_registers_dead_after(i + 5, regs))
+            continue;
+
+        replace1_tagged(i, "ld a,(hl)", "word_zero_test_via_mem");
+        replace1(i + 1, "inc hl");
+        replace1(i + 2, "or (hl)");
+        delete_n(i + 3, 3);
+        changed = 1;
+        if (i > 0)
+            --i;
+    }
+
+    return changed;
+}
+
 static int pass_zeroext_byte_cmp_const(void)
 {
     int i;
@@ -6616,6 +6671,59 @@ static int peep_parse_st_hl_ix_pair(int i, int *n)
 
     *n = lo;
     return 1;
+}
+
+/*
+ * pass_ix_word_zero_test_via_mem:
+ *
+ * ix-relative counterpart of pass_word_zero_test_via_mem above: dcc's
+ * standard ix-relative word reload ("ld l,(ix-N)/ld h,(ix-(N-1))") still
+ * assembles the full word into HL even when the only thing done with it
+ * next is a 16-bit zero test ("ld a,h/or l") - confirmed via
+ * tests/cobint.c's OP_AND/OP_OR handlers, immediately after
+ * pass_word_zero_test_via_mem has already collapsed the sibling (hl)-
+ * addressed load for the other operand. Z80's OR can address an ix-
+ * relative byte directly (already used elsewhere in this file - see
+ * pass_zeroext_byte_cmp_const below), so the low byte never needs to
+ * land in L at all.
+ *
+ *     ld l,(ix-N)          ld a,(ix-(N-1))
+ *     ld h,(ix-(N-1)) ==>  or (ix-N)
+ *     ld a,h
+ *     or l
+ *
+ * Only fires when H and L are both provably dead afterward
+ * (peep_registers_dead_after): unlike the original, this never puts the
+ * reloaded word's value in HL at all, only its zero-ness in the flags.
+ */
+static int pass_ix_word_zero_test_via_mem(void)
+{
+    int i;
+    int changed = 0;
+    const unsigned regs = PEEP_REG_H | PEEP_REG_L;
+
+    for (i = 0; i + 3 < nlines; i++) {
+        int n;
+        char loline[32], orline[32];
+
+        if (!peep_parse_ld_hl_ix_pair(i, &n))
+            continue;
+        if (!eq(i + 2, "ld a,h") || !eq(i + 3, "or l"))
+            continue;
+        if (!peep_registers_dead_after(i + 3, regs))
+            continue;
+
+        sprintf(loline, "ld a,(ix-%d)", n - 1);
+        sprintf(orline, "or (ix-%d)", n);
+        replace1_tagged(i, loline, "ix_word_zero_test_via_mem");
+        replace1(i + 1, orline);
+        delete_n(i + 2, 2);
+        changed = 1;
+        if (i > 0)
+            --i;
+    }
+
+    return changed;
 }
 
 /*
@@ -11372,6 +11480,7 @@ int main(int argc, char **argv)
         { "pass_signed_cmp_const_low0", pass_signed_cmp_const_low0, 0 },
         { "pass_signed_cmp_const_low0_mir", pass_signed_cmp_const_low0_mir, 0 },
         { "pass_fold_signed_cmp_via_bytes", pass_fold_signed_cmp_via_bytes, 0 },
+        { "pass_word_zero_test_via_mem", pass_word_zero_test_via_mem, 0 },
         { "pass_zeroext_byte_cmp_const", pass_zeroext_byte_cmp_const, 0 },
         { "pass_byte_cmp_push_pop_hl", pass_byte_cmp_push_pop_hl, 0 },
         { "pass_word_switch_cmp_avoid_push_pop", pass_word_switch_cmp_avoid_push_pop, 0 },
@@ -11576,6 +11685,18 @@ int main(int argc, char **argv)
      * up. */
     if (RUN_PASS(pass_cache_ix_local_word_reload))
         RUN_PASS(pass_labels);
+
+    /* pass_ix_word_zero_test_via_mem consumes the same "ld l,(ix-N)/ld
+     * h,(ix-(N-1))" reload text pass_cache_ix_local_word_reload just above
+     * matches for its own, more valuable BC-caching transformation across
+     * repeated reloads of the same local - confirmed as a real, measured
+     * regression on tests/tvlapk.c when this ran earlier in the shared
+     * fixed-point loop (claiming a segment's first reload, the one that
+     * would have become the cache's own establishing point, permanently
+     * blocking the cache for that local's other reloads in the same
+     * segment). Purely local like every other pass in this section, so a
+     * single pass suffices with no pass_labels follow-up. */
+    RUN_PASS(pass_ix_word_zero_test_via_mem);
 
     RUN_PASS(pass_cache_ix_long_param_reload);
     RUN_PASS(pass_preserve_ix_pointer_compare);
