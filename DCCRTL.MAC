@@ -11895,62 +11895,90 @@ ferr_no:
 ; public caller's frame so varargs can be read by byte offset, just like
 ; the printf engine above.
 ; ============================================================
+        ; All three entry points below are IX-free: rather than binding IX
+        ; to the caller's frame so sc_next_arg can reconstruct IX+offset
+        ; on every vararg fetch (the original approach), each computes an
+        ; absolute pointer to the first vararg once, up front, and stores
+        ; it in sc_argp - sc_next_arg then just dereferences and advances
+        ; it directly. sc_fp is gone too: sc_src now holds either the
+        ; %s source string pointer or the FILE/console fd depending on
+        ; sc_kind, which is fixed for the whole call, so the two uses
+        ; never overlap.
         public  _scanf
 _scanf:
-        push    ix
-        ld      ix,0
-        add     ix,sp
+        ; int scanf(const char *format, ...) - format @ SP+2 before any
+        ; pushes, first vararg @ SP+4.
+        ld      hl,4
+        add     hl,sp
+        ld      (sc_argp),hl            ; sc_argp = &vararg1
         xor     a
         inc     a
         ld      (sc_kind),a             ; 1 = FILE/console source
         ld      hl,0
-        ld      (sc_fp),hl              ; stdin fd
-        ld      l,(ix+4)
-        ld      h,(ix+5)                ; format
-        ld      de,6                    ; first vararg offset
+        ld      (sc_src),hl             ; stdin fd
+        ld      hl,2
+        add     hl,sp
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)                  ; DE = format
+        ex      de,hl
         call    __scan_run
-        pop     ix
         ret
 
         public  _sscanf
 _sscanf:
-        push    ix
-        ld      ix,0
-        add     ix,sp
+        ; int sscanf(const char *str, const char *format, ...) - str @
+        ; SP+2, format @ SP+4, first vararg @ SP+6 (before any pushes).
+        ld      hl,6
+        add     hl,sp
+        ld      (sc_argp),hl            ; sc_argp = &vararg1
         xor     a
         ld      (sc_kind),a             ; 0 = string source
-        ld      l,(ix+4)
-        ld      h,(ix+5)
+        ld      hl,2
+        add     hl,sp
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)                  ; DE = str
+        ex      de,hl
         ld      (sc_src),hl
-        ld      l,(ix+6)
-        ld      h,(ix+7)                ; format
-        ld      de,8                    ; first vararg offset
+        ld      hl,4
+        add     hl,sp
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)                  ; DE = format
+        ex      de,hl
         call    __scan_run
-        pop     ix
         ret
 
         public  _fscanf
         public  __scan_run
 _fscanf:
-        push    ix
-        ld      ix,0
-        add     ix,sp
+        ; int fscanf(FILE *fp, const char *format, ...) - fp @ SP+2,
+        ; format @ SP+4, first vararg @ SP+6 (before any pushes).
+        ld      hl,6
+        add     hl,sp
+        ld      (sc_argp),hl            ; sc_argp = &vararg1
         xor     a
         inc     a
         ld      (sc_kind),a             ; 1 = FILE/console source
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      (sc_fp),hl
-        ld      l,(ix+6)
-        ld      h,(ix+7)                ; format
-        ld      de,8                    ; first vararg offset
+        ld      hl,2
+        add     hl,sp
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)                  ; DE = fp
+        ex      de,hl
+        ld      (sc_src),hl
+        ld      hl,4
+        add     hl,sp
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)                  ; DE = format
+        ex      de,hl
         call    __scan_run
-        pop     ix
         ret
 
 __scan_run:
         ld      (sc_fmt),hl
-        ld      (sc_argoff),de
         ld      hl,0
         ld      (sc_count),hl
         ld      a,(sc_kind)
@@ -11967,7 +11995,7 @@ sc_init_file_pushback:
         cp      1
         jr      nz,sc_init_clear_pushback
         ld      hl,(sc_ufp)
-        ld      de,(sc_fp)
+        ld      de,(sc_src)
         or      a
         sbc     hl,de
         ld      a,h
@@ -12045,7 +12073,9 @@ sc_width_start:
         ld      (sc_width),hl
 sc_width_loop:
         sub     '0'
-        ld      (sc_digit),a
+        ld      c,a                     ; digit - A isn't touched by the
+                                         ; HL/DE-only arithmetic below, so
+                                         ; a register holds it fine
         ld      hl,(sc_width)
         add     hl,hl                   ; 2*w
         ld      d,h
@@ -12053,10 +12083,8 @@ sc_width_loop:
         add     hl,hl                   ; 4*w
         add     hl,hl                   ; 8*w
         add     hl,de                   ; 10*w
-        ld      a,(sc_digit)
-        ld      e,a
-        ld      d,0
-        add     hl,de
+        ld      b,0
+        add     hl,bc
         ld      (sc_width),hl
         call    sc_fmt_get
         cp      '0'
@@ -12104,25 +12132,15 @@ sc_match_percent:
         jp      sc_match_fail
 
 sc_conv_d:
-        ld      a,10
-        ld      (sc_base),a
-        xor     a
-        ld      (sc_auto),a
-        jp      sc_scan_number
 sc_conv_u:
         ld      a,10
-        ld      (sc_base),a
-        xor     a
-        ld      (sc_auto),a
-        jp      sc_scan_number
+        jr      sc_conv_base
 sc_conv_o:
         ld      a,8
-        ld      (sc_base),a
-        xor     a
-        ld      (sc_auto),a
-        jp      sc_scan_number
+        jr      sc_conv_base
 sc_conv_x:
         ld      a,16
+sc_conv_base:
         ld      (sc_base),a
         xor     a
         ld      (sc_auto),a
@@ -12147,22 +12165,26 @@ sc_conv_s:
 sc_s_loop:
         call    sc_get_w
         jr      c,sc_s_end_check
-        ld      (sc_ch),a
+        ld      b,a                     ; preserve char - sc_is_space
+                                         ; doesn't touch A, but B survives
+                                         ; every other call below too
         call    sc_is_space
         jr      nc,sc_s_store
-        ld      a,(sc_ch)
+        ld      a,b
         call    sc_unget
         jr      sc_s_end_check
 sc_s_store:
         ld      a,(sc_assign)
         or      a
         jr      z,sc_s_count
-        ld      a,(sc_ch)
+        ld      a,b
         call    sc_store_char
 sc_s_count:
-        ld      a,(sc_ndig)
-        inc     a
-        ld      (sc_ndig),a
+        ld      a,1
+        ld      (sc_ndig),a             ; sc_ndig is just a "matched >=1"
+                                         ; flag, not a real count - a real
+                                         ; counter would wrap at 256
+                                         ; matched chars and read as 0
         ld      hl,(sc_width)
         ld      a,h
         or      l
@@ -12182,16 +12204,12 @@ sc_s_end_check:
 sc_conv_c:
         ld      hl,(sc_width)
         ld      a,h
-        inc     a               ; inc-a/0FFh wrap idiom (see _open's comment above)
-        jr      nz,sc_c_width_known
-        ld      a,l
+        and     l               ; H&L == FFh iff both bytes are FFh
         inc     a
         jr      nz,sc_c_width_known
         ld      hl,1
         ld      (sc_width),hl
 sc_c_width_known:
-        xor     a
-        ld      (sc_ndig),a
         ld      a,(sc_assign)
         or      a
         jr      z,sc_c_loop
@@ -12204,16 +12222,15 @@ sc_c_loop:
         jr      z,sc_c_done
         call    sc_get_w
         jp      c,sc_input_fail
-        ld      (sc_ch),a
+        ld      b,a                     ; preserve char across sc_assign
+                                         ; check below (sc_ndig bookkeeping
+                                         ; removed: %c's loop terminates on
+                                         ; sc_width, never reads sc_ndig)
         ld      a,(sc_assign)
         or      a
-        jr      z,sc_c_count
-        ld      a,(sc_ch)
+        jr      z,sc_c_loop
+        ld      a,b
         call    sc_store_char
-sc_c_count:
-        ld      a,(sc_ndig)
-        inc     a
-        ld      (sc_ndig),a
         jr      sc_c_loop
 sc_c_done:
         ld      a,(sc_assign)
@@ -12308,18 +12325,19 @@ sc_num_prefix_hex:
         jp      c,sc_match_fail
 
 sc_num_have_char:
-        ld      (sc_ch),a
+        ld      b,a                     ; preserve candidate char across
+                                         ; sc_digit_value (uses C, not B)
         call    sc_digit_value
         jr      nc,sc_num_digit_ok
-        ld      a,(sc_ch)
+        ld      a,b
         call    sc_unget
         jr      sc_num_end_check
 sc_num_digit_ok:
-        ld      (sc_digit),a
-        call    sc_muladd_digit
-        ld      a,(sc_ndig)
-        inc     a
-        ld      (sc_ndig),a
+        call    sc_muladd_digit         ; A already = digit
+        ld      a,1
+        ld      (sc_ndig),a             ; boolean "matched >=1 digit" flag
+                                         ; (see sc_conv_s's sc_ndig comment
+                                         ; for why not a real counter)
         ld      hl,(sc_width)
         ld      a,h
         or      l
@@ -12364,8 +12382,6 @@ sc_store_num16:
         jp      sc_loop
 
 sc_done:
-        ld      hl,(sc_count)
-        ret
 sc_match_fail:
         ld      hl,(sc_count)
         ret
@@ -12391,8 +12407,8 @@ sc_get_w:
         jr      z,sc_get_w_fail
         dec     hl
         ld      (sc_width),hl
-        call    sc_get
-        ret
+        jp      sc_get                  ; tail call: sc_get's own ret
+                                         ; returns straight to our caller
 sc_get_w_fail:
         scf
         ret
@@ -12419,17 +12435,14 @@ sc_get_source:
         or      a
         ret
 sc_get_file:
-        ld      hl,(sc_fp)
+        ld      hl,(sc_src)
         push    hl
         call    __getc
         pop     bc
         ld      a,h
-        inc     a               ; inc-a/0FFh wrap idiom (see _open's comment above)
-        jr      nz,sc_get_file_ok
-        ld      a,l
-        inc     a               ; inc-a/0FFh wrap idiom (see _open's comment above)
+        and     l               ; H&L == FFh iff both bytes are FFh
+        inc     a
         jr      z,sc_get_eof
-sc_get_file_ok:
         ld      a,l
         or      a
         ret
@@ -12443,7 +12456,7 @@ sc_unget:
         ld      (sc_ukind),a
         or      a
         jr      z,sc_unget_set
-        ld      hl,(sc_fp)
+        ld      hl,(sc_src)
         ld      (sc_ufp),hl
 sc_unget_set:
         ld      a,1
@@ -12478,27 +12491,23 @@ sc_digit_value:
         jr      c,sc_digit_bad
         cp      '9'+1
         jr      c,sc_digit_dec
-        cp      'A'
-        jr      c,sc_digit_lower
-        cp      'F'+1
-        jr      c,sc_digit_upper
-sc_digit_lower:
+        ; Not a decimal digit: fold 'A'-'F' and 'a'-'f' to one path by
+        ; forcing the case bit on - 'A'|20h='a', 'F'|20h='f', and an
+        ; already-lowercase letter is unchanged, so both cases land here.
+        or      20h
         cp      'a'
         jr      c,sc_digit_bad
         cp      'f'+1
         jr      nc,sc_digit_bad
         sub     'a'-10
         jr      sc_digit_check_base
-sc_digit_upper:
-        sub     'A'-10
-        jr      sc_digit_check_base
 sc_digit_dec:
         sub     '0'
 sc_digit_check_base:
         ld      c,a
         ld      a,(sc_base)
-        cp      c
-        jr      z,sc_digit_bad
+        dec     a
+        cp      c                       ; digit valid iff digit <= base-1
         jr      c,sc_digit_bad
         ld      a,c
         or      a
@@ -12507,54 +12516,61 @@ sc_digit_bad:
         scf
         ret
 
+; Entry: A = digit (0..15). value (32-bit, DE:HL convention with HL=low,
+; DE=high) is multiplied by sc_base (8/10/16) and the digit added in,
+; without spilling anything through memory.
 sc_muladd_digit:
+        push    af                      ; preserve digit across the multiply
         ld      hl,(sc_val_l)
         ld      de,(sc_val_h)
-        add     hl,hl           ; value * 2
+        add     hl,hl                   ; x2
         rl      e
         rl      d
         ld      a,(sc_base)
         cp      10
-        jr      nz,sc_muladd_not10
-        ld      (sc_tmp_l),hl   ; save value * 2
-        ld      (sc_tmp_h),de
-        add     hl,hl           ; value * 4
+        jr      z,sc_ma10
+        ; x2 -> x4 -> x8
+        add     hl,hl
         rl      e
         rl      d
-        add     hl,hl           ; value * 8
-        rl      e
-        rl      d
-        ld      bc,(sc_tmp_l)
-        add     hl,bc           ; value * 10
-        ld      bc,(sc_tmp_h)
-        ex      de,hl
-        adc     hl,bc
-        ex      de,hl
-        jr      sc_muladd_store
-sc_muladd_not10:
-        add     hl,hl           ; value * 4
-        rl      e
-        rl      d
-        add     hl,hl           ; value * 8
+        add     hl,hl
         rl      e
         rl      d
         cp      8
-        jr      z,sc_muladd_store
-        add     hl,hl           ; value * 16
+        jr      z,sc_ma_digit
+        ; base 16: x8 -> x16
+        add     hl,hl
         rl      e
         rl      d
-sc_muladd_store:
+        jr      sc_ma_digit
+sc_ma10:
+        ; x10 = x8 + x2. DE:HL currently holds x2.
+        push    de                      ; save x2's high word
+        ld      b,h
+        ld      c,l                     ; BC = x2's low word
+        add     hl,hl                   ; x4
+        rl      e
+        rl      d
+        add     hl,hl                   ; x8
+        rl      e
+        rl      d
+        add     hl,bc                   ; x8_low + x2_low = x10's low word
+        ex      de,hl                   ; HL = x8's high word, DE = x10_low
+        pop     bc                      ; BC = x2's high word
+        adc     hl,bc                   ; x8_high + x2_high + carry = x10_high
+        ex      de,hl                   ; HL = x10_low, DE = x10_high
+sc_ma_digit:
+        pop     af                      ; digit
+        ; Add the digit directly into the 32-bit DE:HL value.
+        add     a,l
+        ld      l,a
+        jr      nc,sc_ma_store
+        inc     h
+        jr      nz,sc_ma_store
+        inc     de
+sc_ma_store:
         ld      (sc_val_l),hl
         ld      (sc_val_h),de
-        ld      a,(sc_digit)
-        ld      c,a
-        ld      b,0
-        add     hl,bc
-        ld      (sc_val_l),hl
-        ret     nc
-        ld      hl,(sc_val_h)
-        inc     hl
-        ld      (sc_val_h),hl
         ret
 
 sc_neg_val:
@@ -12570,19 +12586,12 @@ sc_neg_val:
         ret
 
 sc_next_arg:
-        ld      hl,(sc_argoff)
-        ld      e,l
-        ld      d,h
-        push    ix
-        pop     hl
-        add     hl,de
+        ld      hl,(sc_argp)
         ld      e,(hl)
         inc     hl
         ld      d,(hl)
-        ld      hl,(sc_argoff)
         inc     hl
-        inc     hl
-        ld      (sc_argoff),hl
+        ld      (sc_argp),hl
         ex      de,hl
         ret
 
@@ -12609,20 +12618,15 @@ sc_base:        db      10
 sc_auto:        db      0
 sc_sign:        db      0
 sc_ndig:        db      0
-sc_digit:       db      0
-sc_ch:          db      0
 sc_src:         dw      0
-sc_fp:          dw      0
 sc_ufp:         dw      0
 sc_fmt:         dw      0
-sc_argoff:      dw      0
+sc_argp:        dw      0
 sc_count:       dw      0
 sc_width:       dw      0
 sc_dest:        dw      0
 sc_val_l:       dw      0
 sc_val_h:       dw      0
-sc_tmp_l:       dw      0
-sc_tmp_h:       dw      0
 
 ; ============================================================
 ; setjmp / longjmp  (C89)
