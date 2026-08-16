@@ -1,21 +1,23 @@
-/*
- * dcc_ast_gen.c - AST-driven code generation (classifiers / type & lvalue
- * resolvers).
+/**
+ * @file dcc_ast_gen.c
+ * @brief Implements shared AST type, value, lvalue, and address classifiers.
  *
- * The function-local AST is the codegen path.  This walker produces Z80
- * assembly by calling the shared low-level emit helpers; unsupported AST shapes
- * are compiler errors.
+ * @par Role
+ * Resolves scalar, pointer, array, member, dereference, aggregate, comparison,
+ * and assignment shapes used by statement gating, MIR lowering, initializer
+ * handling, and retained low-level AST helpers.
  *
- * Expression and statement lowering emits tight, peephole-friendly byte
- * sequences that the dccpeep patterns and regression baselines depend on.
+ * @par Key entry points
+ * ast_pointer_expr_type(), ast_member_lvalue_type(),
+ * ast_index_composite_elem_type(), ast_value_is_plain_int(), and the other
+ * ast_*_supported()/ast_*_type() predicates declared in
+ * dcc_ast_gen_internal.h.
  *
- * The AST codegen module is split across several translation units that share
- * prototypes via dcc_ast_gen_internal.h:
- *   - dcc_ast_gen.c         classifiers / type & lvalue resolvers (this file)
- *   - dcc_ast_gen_support.c ast_gen_supported dispatch, call/struct gates, folds
- *   - dcc_ast_gen_expr.c    expression emitters (ast_gen_expr)
- *   - dcc_ast_gen_cond.c    statement-support gates, comparison/branch emitters
- *   - dcc_ast_stmt_meta.c   statement parsing, sizing, and metadata analysis
+ * @par Boundary
+ * Despite the historical gen name, this module is not a production
+ * function-body fallback. dcc_ast_gen_expr.c owns expression helpers,
+ * dcc_ast_gen_cond.c owns condition/statement gates, and MIR owns final body
+ * emission.
  */
 #include "dcc.h"
 #include "dcc_ast.h"

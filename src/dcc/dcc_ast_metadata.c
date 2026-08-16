@@ -1,11 +1,20 @@
-/*
- * dcc_ast_metadata.c - non-emitting function-body AST metadata walk.
+/**
+ * @file dcc_ast_metadata.c
+ * @brief Replays non-emitting metadata from function-body ASTs.
  *
- * MIR owns production function code generation.  This walker preserves the
- * parser side effects that historically happened while the legacy AST emitter
- * traversed a supported statement: declaration replay, lexical scopes,
- * for-init renames, VLA control metadata, user-label diagnostics, debug
- * events, and AST transforms that reserve compiler temporaries.
+ * @par Role
+ * Walks expressions and statements to preserve declaration replay, lexical
+ * scopes, for-init renames, VLA save/restore facts, inline expansion metadata,
+ * strings, user-label diagnostics, static-function references, debug events,
+ * and temporary-reserving AST plans.
+ *
+ * @par Key entry points
+ * ast_process_stmt_metadata(), ast_process_expr_metadata(),
+ * ast_validate_expr_symbols(), and ast_replay_compound_literal().
+ *
+ * @par Boundary
+ * MIR owns production function code generation. This walker records frontend
+ * side effects only and does not select or emit a function-body candidate.
  */
 
 #include "dcc.h"

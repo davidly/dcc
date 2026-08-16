@@ -1,8 +1,23 @@
-/*
- * dcc_ast_gen_internal.h - private contract shared by dcc_ast_gen*.c.
+/**
+ * @file dcc_ast_gen_internal.h
+ * @brief Declares the private contract shared by split AST helper modules.
  *
- * Contains AST shape classifiers, emit helpers, and switch/codegen state.
- * Do not include it outside the AST codegen module.
+ * @par Role
+ * Exposes cross-file type/lvalue classifiers, support gates, constant folds,
+ * condition analysis, retained expression helpers, and shared statement state
+ * used by dcc_ast_gen*.c and dcc_ast_stmt_meta.c.
+ *
+ * @par Module split
+ * - dcc_ast_gen.c: type, value, lvalue, pointer, member, and index resolution.
+ * - dcc_ast_gen_support.c: support dispatch, call gates, folds, and proofs.
+ * - dcc_ast_gen_expr.c: initializer/inline handling and expression helpers.
+ * - dcc_ast_gen_cond.c: statement/condition gates and branch-shape helpers.
+ * - dcc_ast_stmt_meta.c: statement capture, sizing, and control metadata.
+ *
+ * @par Boundary
+ * Do not include this header outside the AST helper module. Public AST data
+ * and entry points belong in dcc_ast.h; production body emission belongs to
+ * MIR.
  */
 #ifndef DCC_AST_GEN_INTERNAL_H
 #define DCC_AST_GEN_INTERNAL_H

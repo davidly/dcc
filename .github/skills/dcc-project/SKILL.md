@@ -21,6 +21,7 @@ legacy register-allocation retries do not exist.
 | --- | --- |
 | Driver, parser, symbols | `src/dcc/dcc.c`, `dcc_func.c`, `dcc_symbols.c` |
 | Preprocessor | `src/dcc/dcc_preproc.c`, `dcc_pp_expr.c` |
+| Function-local AST | `dcc_ast.c`, `dcc_ast.h`, `dcc_ast_build.c`, `dcc_ast_gen*.c` |
 | Non-emitting AST metadata | `dcc_ast_metadata.c`, `dcc_ast_stmt_meta.c` |
 | MIR lowering and verification | `dcc_mir.c`, `dcc_mir.h` |
 | MIR selection and cost policy | `dcc_mir_select.c` |
@@ -41,6 +42,23 @@ python3 scripts/audit-c-module-exports.py \
   src/dcc/dcc_mir_machine_attention.c \
   --allow-function mir_try_emit_attention_kernels
 ```
+
+## AST/MIR module documentation
+
+All `src/dcc/dcc_ast*.c/.h` and `src/dcc/dcc_mir*.c/.h` files use concise
+Doxygen-style file headers for human and agent navigation:
+
+- `@file` and `@brief` identify the module and primary purpose.
+- `@par Role` states what the file owns.
+- `@par Key entry points` names the principal callable surface when useful.
+- `@par Boundary` states what neighboring modules own and what this file does
+  not do.
+
+Keep the AST module map in `dcc_ast.h` and the MIR module map in
+`dcc_mir_internal.h` current when adding, removing, renaming, or moving
+modules. Do not describe `dcc_ast_gen*` as a production function-body fallback;
+AST processing after parsing is metadata/classification support and production
+body Z80 comes only from selected MIR candidates.
 
 ## Build
 

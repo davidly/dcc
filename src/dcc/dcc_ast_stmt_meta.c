@@ -1,5 +1,20 @@
-/*
- * dcc_ast_stmt_meta.c - statement parsing, sizing, and metadata analysis.
+/**
+ * @file dcc_ast_stmt_meta.c
+ * @brief Coordinates statement acceptance, MIR capture, and metadata analysis.
+ *
+ * @par Role
+ * Builds and support-checks one statement, captures accepted semantics into
+ * MIR, runs the non-emitting metadata walk, and tracks fallthrough/re-entry
+ * behavior. It also owns scan-mode statement sizing and loop metadata plans
+ * that reserve safe optimization temporaries.
+ *
+ * @par Key entry points
+ * ast_process_statement(), ast_scan_for_stmt(), ast_stmt_exits(),
+ * ast_stmt_has_reentry_label(), and ast_plan_for_metadata().
+ *
+ * @par Boundary
+ * Statement legality classifiers live in dcc_ast_gen_cond.c; final body Z80
+ * comes from a selected MIR candidate rather than this orchestration layer.
  */
 #include <string.h>
 #include "dcc_ast_gen_internal.h"

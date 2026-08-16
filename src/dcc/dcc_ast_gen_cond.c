@@ -1,8 +1,19 @@
-/*
- * dcc_ast_gen_cond.c - statement-support gates, comparison/condition branch emitters.
+/**
+ * @file dcc_ast_gen_cond.c
+ * @brief Classifies statements and condition/branch AST shapes.
  *
- * Split from dcc_ast_gen.c; part of the AST codegen module.  Shared
- * prototypes live in dcc_ast_gen_internal.h.
+ * @par Role
+ * Implements statement admission, return/expression checks, comparison and
+ * truth-condition classifiers, switch-table analysis, and retained branch
+ * helpers shared by AST expression/initializer machinery.
+ *
+ * @par Key entry points
+ * ast_stmt_supported(), ast_return_stmt_supported(), ast_expr_stmt_supported(),
+ * ast_gen_cond_branch(), and the ast_is_*_cond() predicates.
+ *
+ * @par Boundary
+ * dcc_ast_stmt_meta.c captures accepted production statements into MIR; these
+ * gates and helpers do not constitute a body-codegen fallback.
  */
 #include <string.h>
 #include "dcc_ast_gen_internal.h"
