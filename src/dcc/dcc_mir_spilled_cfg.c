@@ -22612,27 +22612,70 @@ static int mir_unary_is_fusable_not_branch(int i)
 static int mir_match_double_logical_not(
     int outer_instruction, int *source_value)
 {
-    /* Disabled: this fusion elided the inner "!" and reloaded its source
-     * value again later, at the outer instruction's position - but that
-     * source value's liveness/backend-slot assignment was computed from
-     * the unmodified MIR graph, in which its only recorded use is the
-     * inner instruction, immediately after its own definition. The
-     * allocator is therefore free to reclaim its register or spill slot
-     * for any value defined from that point on, including the outer
-     * instruction's own destination - even though this fusion reads it
-     * again well after such a reuse could have (and, in a bloom-filter-
-     * style `!!(bits[a/8] & (1U << (a%8)))` used inline within a larger
-     * printf argument list, did) already happen, silently substituting an
-     * unrelated spilled value from outside the function's own frame.
-     * Fixing this needs the allocator itself to know about the fused,
-     * extended liveness before assigning slots/colors, not just a check
-     * available at this text-emission stage; until then, always fall
-     * back to the unfused double-unary emission, which independently
-     * freshly defines and stores each "!" result and does not depend on
-     * rereading a value whose recorded liveness already ended earlier. */
-    (void)outer_instruction;
-    (void)source_value;
-    return 0;
+    const struct MirInsn *outer;
+    const struct MirInsn *inner;
+    const struct MirInsn *source;
+    int inner_instruction;
+    int color;
+    int slot;
+    int instruction;
+
+    if (outer_instruction < 0 || outer_instruction >= mir.count)
+        return 0;
+    outer = &mir.insns[outer_instruction];
+    if (outer->opcode != MIR_UNARY || outer->immediate != '!')
+        return 0;
+    inner = mir_definition(outer->src1);
+    if (inner == NULL || inner->opcode != MIR_UNARY ||
+        inner->immediate != '!' ||
+        mir_value_use_count(inner->dst) != 1)
+        return 0;
+    source = mir_definition(inner->src1);
+    if (source != NULL && source->opcode == MIR_UNARY &&
+        source->immediate == '!')
+        return 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *use = &mir.insns[instruction];
+
+        if (use->opcode == MIR_UNARY && use->immediate == '!' &&
+            use->src1 == outer->dst)
+            return 0;
+    }
+    /* Eliding the inner "!" defers consuming inner->src1 (the value this
+     * fusion collapses to a single test) from the inner instruction's own
+     * position to the outer instruction's, later, position - but the
+     * allocator computed inner->src1's liveness/register-color/backend-
+     * slot assignment from the unmodified MIR graph, in which its only
+     * recorded use IS the inner instruction; that liveness ends there, so
+     * the allocator is free to reuse its exact storage for anything
+     * defined afterward. Reject the fusion whenever some other value gets
+     * defined into that same color or backend slot before the outer
+     * instruction's position - that reuse is exactly what let a
+     * bloom-filter-style `!!(bits[a/8] & (1U << (a%8)))` used inline
+     * within a larger printf argument list silently substitute an
+     * unrelated spilled value for inner->src1. When no such reuse exists
+     * in between (the common case, e.g. two adjacent `!!x != !!y`
+     * comparisons each over a simple parameter), the fusion remains
+     * exactly as valid as it always was. */
+    inner_instruction = (int)(inner - mir.insns);
+    color = inner->src1 >= 0 ? mir.allocation_colors[inner->src1] : -1;
+    slot = -1;
+    if (inner->src1 >= 0 && mir.backend_slots != NULL)
+        slot = mir.backend_slots[inner->src1];
+    for (instruction = inner_instruction; instruction < outer_instruction;
+         ++instruction) {
+        int dst = mir.insns[instruction].dst;
+        if (dst < 0 || dst == inner->src1)
+            continue;
+        if (color >= 0 && mir.allocation_colors[dst] == color)
+            return 0;
+        if (slot >= 0 && mir.backend_slots != NULL &&
+            mir.backend_slots[dst] == slot)
+            return 0;
+    }
+    if (source_value != NULL)
+        *source_value = inner->src1;
+    return 1;
 }
 
 static int mir_unary_is_elided_double_not_inner(int instruction)

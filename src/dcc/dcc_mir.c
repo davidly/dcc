@@ -5652,7 +5652,8 @@ void mir_resolve_deferred_metadata(void)
             insn->opcode = MIR_ADDRESS;
             insn->type = type_add_ptr(named_type);
         } else if (insn->opcode == MIR_LOAD &&
-                   mir_declared_is_vla_object(insn->name)) {
+                   mir_declared_is_vla_object(insn->name) &&
+                   type_size(named_type) == 1) {
             /* A VLA identifier load fetches the base pointer that
              * mir_lower_expr's AST_IDENT case stashed with a pointer
              * type (the runtime address computed by vlaalloc), not a
@@ -5662,7 +5663,17 @@ void mir_resolve_deferred_metadata(void)
              * most element types, but for a 1-byte bool element the
              * resulting "address" gets normalized to 0/1 like any other
              * _Bool load, corrupting every subsequent index into the
-             * array and hanging on the resulting stray writes. */
+             * array and hanging on the resulting stray writes. Scoped to
+             * 1-byte VLA elements specifically (matching
+             * dcc_mir_spilled_cfg.c's mir_scalar_memory_location's own
+             * narrowing): retyping every VLA load's dst here, including
+             * wider (e.g. int) elements, broke dcc_mir_spilled_cfg.c's
+             * mir_match_vla_stable/mir_match_nested_vla_stable exact
+             * structural matchers (which expect the load's type to stay
+             * the plain element type for those), falling back from their
+             * hand-tuned emission to generic spilled-scalar-cfg codegen
+             * and costing tvla/tvlax's VLA-address-stability stress
+             * tests a large constant per-iteration overhead. */
             insn->type = type_add_ptr(named_type);
         } else if (insn->opcode == MIR_LOAD ||
                    insn->opcode == MIR_PARAM ||
