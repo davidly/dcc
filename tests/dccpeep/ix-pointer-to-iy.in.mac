@@ -104,4 +104,59 @@ LCEND:
 ld sp,ix
 pop ix
 ret
+; static function wide
+_ZW:
+push ix
+ld ix,0
+add ix,sp
+dec sp
+dec sp
+ld hl,300
+ld (ix-2),l
+ld (ix-1),h
+call __safe
+ld l,(ix-2)
+ld h,(ix-1)
+ld l,(hl)
+ld h,0
+call __safe
+ld l,(ix-2)
+ld h,(ix-1)
+inc hl
+ld a,(hl)
+inc hl
+ld h,(hl)
+ld l,a
+call __safe
+ld l,(ix-2)
+ld h,(ix-1)
+ld a,(hl)
+call __safe
+ld l,(ix-2)
+ld h,(ix-1)
+ld a,(hl)
+call __safe
+ld l,(ix-2)
+ld h,(ix-1)
+ld a,(hl)
+call __safe
+ld l,(ix-2)
+ld h,(ix-1)
+ld a,(hl)
+call __safe
+ld l,(ix-2)
+ld h,(ix-1)
+ld a,(hl)
+call __safe
+ld a,(ix-2)
+add a,5
+ld (ix-2),a
+jr nc,LWS
+inc (ix-1)
+LWS:
+ld a,e
+or a
+ld sp,ix
+pop ix
+ret
 end
