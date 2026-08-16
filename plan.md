@@ -3,6 +3,109 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-16 physical-lifetime and call-ABI repair (complete)
+
+Goal: repair the six wrong-code classes confirmed by the audit, close the
+three related static hazards with the same reusable proofs where applicable,
+and add permanent structural regressions.
+
+### Invariants
+
+- Every value placed in a register, spill slot, or argument-stack position
+  before its textual MIR definition is represented in allocation/interference
+  state or protected by an emitter-local proof.
+- Every call path preserves each physically live caller-saved register unit;
+  callee-saved IY, wide pair homes, return registers, argument order, and stack
+  cleanup remain explicit.
+- PHI edge copies are parallel and edge-specific. Backend slot reuse,
+  pre-pushed arguments, rematerialization, and deferred emission must not
+  silently lengthen or overlap a value's physical lifetime.
+- A selector optimization may decline conservatively, but it may not rely on
+  app names, function names, source spelling, or a known callee happening not
+  to clobber a register.
+
+### Parallel workstreams
+
+1. **Homed/shared emission:** enumerate every edge/pre-definition emission and
+   compare its physical footprint with CFG liveness, allocation colors, and
+   scratch-preservation predicates.
+2. **Spilled/backend slots:** audit PHI-slot cleanup, slot aliasing, pre-pushed
+   call arguments, and all other handoffs whose storage lifetime differs from
+   the defining MIR instruction.
+3. **Call paths:** audit generic calls, fastcalls, aggregate calls, runtime
+   helpers, recursion, returns, and all scalar/wide caller-save combinations.
+4. **Detection:** build structural probes that force relevant candidates and
+   compare peep/nopeep behavior, including near-miss PHI/call shapes and stack
+   checking.
+
+### Execution and exit criteria
+
+- Reconfirm every reproducer against upstream-derived `main` before editing.
+- Model physical PHI lifetimes consistently across homed allocation, spilled
+  intervals, regional occupancy, and IY ownership.
+- Make PHI handoff edge resolution single-source and exact.
+- Model regional address-rematerialization scratch units and every physically
+  emitted destination clobber.
+- Require complete helper ABI proofs in scanner exact schedules.
+- Add permanent source and forced-candidate regressions for each distinct
+  failure mode.
+- Run ASan/UBSan, require-emit, stack/no-stack censuses, all changed apps, and
+  both strict full+extended release gates with no peep/nopeep regression.
+- Commit the complete result on `fix/mir-physical-lifetimes`; do not push
+  unless requested.
+
+### Audit outcome
+
+- Six additional wrong-code classes were runtime-confirmed: homed and spilled
+  early-PHI lifetime overlap, PHI argument-handoff omission, undeclared DE
+  scratch during regional address rematerialization, dead-definition home
+  clobber, and scanner exact-schedule ABI under-validation.
+- Three related mechanisms remain high-confidence static hazards without a
+  runtime reproducer. Candidate forcing was reviewed and classified as
+  intentional diagnostic/exact-profile behavior, not a separate defect.
+- Full audit evidence and recommendations are recorded in
+  `build/mir-physical-lifetime-audit.md`.
+
+### Repair outcome
+
+- Late PHI destinations now become live at their physical block-entry copy,
+  and stable recoloring preserves the prior textual allocation unless that
+  physical lifetime creates a real conflict. Wide homes use the same rule.
+- Homed calls guard physically live caller-saved DE/BC units; emitted
+  destinations interfere with live-out homes; regional IX-relative address
+  formation preserves DE exactly when a DE or HL:DE home is live.
+- Spilled PHI intervals start at the physical copy. PHI argument-stack
+  handoff now pushes on every required edge while recognizing an identical
+  push already established across consecutive label fallthroughs.
+- Scanner exact schedules validate call/result agreement, result width, and
+  every helper parameter/result ABI, ARG ownership, byte-promotion chain, and
+  result consumer before accepting a decimal, uppercase, or comment-strip
+  shape.
+- `tmirlife` permanently covers the natural lifetime, scratch, destination,
+  scanner ABI, and same-ABI signed-byte conversion near-miss cases.
+  `run-mir-lifetime-tests.ps1` additionally forces the regional and
+  `cint.primary` PHI-slot candidates through peep/nopeep and stack/no-stack
+  execution and requires the signed-byte shape to reach the new semantic
+  rejection guard.
+
+### Final validation
+
+- Strict ordinary and stack censuses are both **2578/2578 MIR (100%)** with
+  no missing selections. The only new rows are `tmirlife`; existing generated
+  changes are confined to the repaired `pint` regional lifetime shapes.
+- Both strict full+extended release gates pass **355 runnable apps / 10
+  skipped**, peep and nopeep, with diagnostics and dccpeep clean; the stack
+  gate reports **0 performance regressions**.
+- Forced F1-F6 matrices, focused changed apps, ASan/UBSan compiler runs,
+  **109 diagnostics**, **23 dccpeep fixtures**, and **10 Python tests** pass.
+  `tmirlife` starts at **74,661/79,480 cycles** and **10,112/10,880 bytes**
+  peep/nopeep under stack checking.
+- The canonical all-tool build and runtime IY audit pass. The independent
+  CMake build remains blocked by the pre-existing omission of
+  `dcc_mir_stream.c` from `src/dcc/CMakeLists.txt`; the base revision has the
+  same omission. The runtime-coverage audit likewise retains the base
+  revision's 17 already-unaccounted formatted-I/O labels.
+
 ## 2026-08-16 bounded Q8 multiply recovery
 
 - Reproduced the ESP32-like source form by removing only

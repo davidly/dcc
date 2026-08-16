@@ -547,6 +547,7 @@ int mir_target_is_noop_fallthrough(int instruction, int target);
 int mir_first_nonlabel_successor(int successor);
 int mir_first_phi_or_block_end(int successor);
 int mir_next_phi_in_block(int block_start, int from);
+int mir_phi_physical_start(int phi_instruction);
 int mir_fold_constant_binary(int op, long left, long right,
                                     int operand_type, long *result);
 int mir_fold_constant_compare(int op, long left, long right,
@@ -557,8 +558,7 @@ int mir_has_phi_instruction(void);
 int mir_has_cfg_backedge(void);
 int mir_general_comparison_count(void);
 int mir_home_color_live_across(int instruction, int color);
-int mir_late_phi_crosses_caller_clobber(void);
-void mir_reallocate_call_spanning_phi_homes(void);
+int mir_de_home_live_in(int instruction);
 int mir_homed_call_uses_guardable_stack_path(int instruction);
 int mir_home_uses_iy(void);
 int mir_constant_absolute_access_supported(const struct MirInsn *insn);
@@ -708,7 +708,6 @@ void mir_end_block_cse_address_rematerialization(void);
 int mir_address_rematerialization_candidate_count(void);
 void mir_begin_phi_slot_cleanup(void);
 void mir_end_phi_slot_cleanup(void);
-int mir_spilled_cfg_has_phi_argument_stack_handoff(void);
 int mir_spilled_cfg_depends_on_indirect_store_address_forwarding(void);
 int mir_spilled_cfg_indirect_store_address_forwarding_uses(void);
 void mir_begin_indirect_store_address_forwarding(void);

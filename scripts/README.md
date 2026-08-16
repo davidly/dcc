@@ -92,6 +92,19 @@ DCC_MIR_SELECT_CANDIDATE=spilled-rhs-forward \
 Candidate names are the `candidate` values in `--cost-policy-output`; no
 legacy stream is involved.
 
+## `run-mir-lifetime-tests.ps1`
+
+Runs the physical-lifetime candidates that require diagnostic forcing in both
+peep/nopeep and stack/no-stack modes. It verifies that `regional_address`
+selects `regional` before exercising DE preservation in `tmirlife`, and that
+`cint.primary` selects `spilled-phi-slot` before running both CINT workloads.
+It also requires the same-ABI signed-byte scanner near-match to reach and
+decline the bounded-decimal schedule's argument-conversion guard.
+
+```sh
+pwsh ./scripts/run-mir-lifetime-tests.ps1
+```
+
 ## `publish-package.ps1`
 
 Publishes or republishes the binary package release. By default it reads the
