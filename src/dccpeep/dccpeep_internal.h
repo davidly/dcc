@@ -318,6 +318,9 @@ int peep_register_claimed_from(unsigned mask, int at);
 int peep_register_claimed_in_file(unsigned mask);
 int peep_register_available_in_range(
     unsigned mask, int begin, int end, const char *own_tag);
+int dcc_iy_claimed_in_file(void);
+int iy_loop_borrow_safe(int loop_start, int loop_end,
+                        const char *header, const char *exit_target);
 /* Interval forms of the same question. dcc publishes its own BC claims as
  * paired "@dcc.reg claim=bc" / "@dcc.reg free=bc" directives, so ownership
  * is a set of intervals rather than a single "claimed from here onward"

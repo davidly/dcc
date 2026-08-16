@@ -1,6 +1,10 @@
 #include <stdio.h>
 #include <stdint.h>
 
+#ifndef MIR_CLOBBER_G_NAME_V
+#define MIR_CLOBBER_G_NAME_V 1000
+#endif
+
 struct Name {
     char s[4];
     unsigned int v;
@@ -12,7 +16,7 @@ struct WrapName {
     char tail[3];
 };
 
-static struct Name g_name = { "abc", 1000 };
+static struct Name g_name = { "abc", MIR_CLOBBER_G_NAME_V };
 static struct Name g_short = { "x", 2000 };
 static struct WrapName g_wrap = { 7, { "yz", 3000 }, "pq" };
 static struct Name g_arr[2] = { { "hi", 4000 }, { "bye", 5000 } };

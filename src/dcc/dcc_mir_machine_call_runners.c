@@ -4709,21 +4709,50 @@ static int mir_call_safe_word_pointer_type(int type)
         type_size(type) == 2;
 }
 
-static int mir_call_safe_same_direct_function(
-    const struct MirInsn *call, struct Sym **function)
+static int mir_call_safe_bool_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+        (type & 15) == TYPE_BOOL &&
+        type_size(type) == 1;
+}
+
+static int mir_call_safe_direct_function(
+    const struct MirInsn *arg, const struct MirInsn *call,
+    int argument_value, int parameter_type, int result_type,
+    struct Sym **function)
 {
     struct Sym *candidate;
+    int collected_argument;
+    const char *assembly_name;
 
     if (call->opcode != MIR_CALL ||
-        !strcmp(call->name, "<indirect>") ||
-        (call->memory_flags &
-         (MIR_CALL_FLAG_VARIADIC |
-          MIR_CALL_FLAG_FORMAT_RUNTIME)) != 0 ||
-        (type_size(call->type) != 0 &&
-         !mir_call_safe_signed_word_type(call->type)))
+        call->src1 >= 0 ||
+        call->secondary_offset < 0 ||
+        call->memory_flags != 0 ||
+        arg->opcode != MIR_ARG ||
+        arg->secondary_offset != call->secondary_offset ||
+        arg->immediate != 0 ||
+        arg->src1 != argument_value ||
+        arg->type != parameter_type ||
+        !mir_machine_single_call_argument(
+            call, &collected_argument) ||
+        collected_argument != argument_value)
         return 0;
     candidate = find_global(call->name);
-    if (candidate == NULL || candidate->is_funcptr)
+    if (candidate == NULL ||
+        candidate->storage != SC_FUNC ||
+        candidate->is_funcptr ||
+        candidate->is_noreturn ||
+        !candidate->has_proto ||
+        candidate->proto_variadic ||
+        candidate->proto_nargs != 1 ||
+        candidate->proto_types[0] != parameter_type ||
+        candidate->type != result_type ||
+        call->type != candidate->type)
+        return 0;
+    assembly_name = asm_name_for(sym_asm_name(candidate));
+    if (call->base_name[0] != 0 &&
+        strcmp(call->base_name, assembly_name))
         return 0;
     if (*function == NULL)
         *function = candidate;
@@ -4751,7 +4780,6 @@ static int mir_match_call_safe_countdown_sum_schedule(
     const struct MirInsn *counter_phi = &mir.insns[6];
     const struct MirInsn *total_phi = &mir.insns[8];
     struct Sym *call_function = NULL;
-    int argument;
     int instruction;
 
     memset(plan, 0, sizeof(*plan));
@@ -4827,12 +4855,11 @@ static int mir_match_call_safe_countdown_sum_schedule(
         mir.insns[23].memory_size != 2 ||
         !mir_call_safe_signed_word_type(mir.insns[23].type) ||
         (mir.insns[23].memory_flags & (1 | 8)) != 0 ||
-        !mir_machine_single_call_argument(
-            &mir.insns[25], &argument) ||
-        argument != mir.insns[23].dst ||
         !mir_call_safe_signed_word_type(mir.insns[25].type) ||
-        !mir_call_safe_same_direct_function(
-            &mir.insns[25], &call_function))
+        !mir_call_safe_direct_function(
+            &mir.insns[24], &mir.insns[25],
+            mir.insns[23].dst, mir.insns[23].type,
+            mir.insns[25].type, &call_function))
         return mir_machine_reject(
             "call-safe-countdown-sum-schedule", "indexed-call");
     if (mir.insns[27].immediate != '+' ||
@@ -4853,22 +4880,20 @@ static int mir_match_call_safe_countdown_sum_schedule(
         mir.insns[34].src1 != mir.insns[15].dst ||
         mir.insns[34].src2 != mir.insns[33].dst ||
         mir.insns[34].immediate != '+' ||
-        !mir_machine_single_call_argument(
-            &mir.insns[36], &argument) ||
-        argument != mir.insns[34].dst ||
         !mir_call_safe_signed_word_type(mir.insns[36].type) ||
-        !mir_call_safe_same_direct_function(
-            &mir.insns[36], &call_function) ||
+        !mir_call_safe_direct_function(
+            &mir.insns[35], &mir.insns[36],
+            mir.insns[34].dst, mir.insns[34].type,
+            mir.insns[36].type, &call_function) ||
         !mir_machine_constant_equals(mir.insns[38].dst, 1) ||
         mir.insns[39].src1 != mir.insns[15].dst ||
         mir.insns[39].src2 != mir.insns[38].dst ||
         mir.insns[39].immediate != '-' ||
-        !mir_machine_single_call_argument(
-            &mir.insns[41], &argument) ||
-        argument != mir.insns[39].dst ||
         !mir_call_safe_signed_word_type(mir.insns[41].type) ||
-        !mir_call_safe_same_direct_function(
-            &mir.insns[41], &call_function) ||
+        !mir_call_safe_direct_function(
+            &mir.insns[40], &mir.insns[41],
+            mir.insns[39].dst, mir.insns[39].type,
+            mir.insns[41].type, &call_function) ||
         mir.insns[42].immediate != '+' ||
         !((mir.insns[42].src1 == mir.insns[36].dst &&
            mir.insns[42].src2 == mir.insns[41].dst) ||
@@ -4946,7 +4971,6 @@ static int mir_match_call_safe_member_sum_schedule(
     const struct MirInsn *total_phi = &mir.insns[11];
     const struct MirInsn *index_phi = &mir.insns[12];
     struct Sym *call_function = NULL;
-    int argument;
     int member;
     int instruction;
 
@@ -5029,11 +5053,12 @@ static int mir_match_call_safe_member_sum_schedule(
     for (member = 0; member < 3; ++member) {
         const struct MirInsn *call = &mir.insns[22 + member * 9];
 
-        if (!mir_machine_single_call_argument(call, &argument) ||
-            argument != mir.insns[20 + member * 9].dst ||
-            !mir_call_safe_signed_word_type(call->type) ||
-            !mir_call_safe_same_direct_function(
-                call, &call_function))
+        if (!mir_call_safe_signed_word_type(call->type) ||
+            !mir_call_safe_direct_function(
+                &mir.insns[21 + member * 9], call,
+                mir.insns[20 + member * 9].dst,
+                mir.insns[20 + member * 9].type,
+                call->type, &call_function))
             return mir_machine_reject(
                 "call-safe-member-sum-schedule", "calls");
     }
@@ -5265,7 +5290,6 @@ static int mir_match_constant_do_while_schedule(
     long third_initial;
     long break_count;
     long fourth_count;
-    int argument;
     int call;
     int instruction;
 
@@ -5462,17 +5486,17 @@ static int mir_match_constant_do_while_schedule(
         return mir_machine_reject(
             "constant-do-while-schedule", "fourth-loop");
     for (call = 0; call < 8; ++call)
-        if (!mir_machine_single_call_argument(
-                &mir.insns[call_instructions[call]], &argument) ||
-            argument != mir.insns[argument_values[call]].dst ||
-            mir.insns[argument_values[call]].src1 !=
+        if (mir.insns[argument_values[call]].src1 !=
                 mir.insns[comparison_values[call]].dst ||
             mir.insns[argument_values[call]].immediate != 0 ||
-            type_size(
-                mir.insns[call_instructions[call]].type) != 0 ||
-            !mir_call_safe_same_direct_function(
+            !mir_call_safe_bool_type(
+                mir.insns[argument_values[call]].type) ||
+            !mir_call_safe_direct_function(
+                &mir.insns[call_instructions[call] - 1],
                 &mir.insns[call_instructions[call]],
-                &check_function))
+                mir.insns[argument_values[call]].dst,
+                mir.insns[argument_values[call]].type,
+                TYPE_VOID, &check_function))
             return mir_machine_reject(
                 "constant-do-while-schedule", "calls");
     plan->check_function = check_function;
@@ -11389,7 +11413,9 @@ static void mir_emit_word_table_runner_schedule(
     int loop = new_label();
     int done = new_label();
 
-    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n\tpush iy\n", out);
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
+          ";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
+          "\tpush iy\n", out);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
     mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n",
@@ -11409,7 +11435,8 @@ static void mir_emit_word_table_runner_schedule(
     mir_stream_printf(out, "\tjp L%d\nL%d:\n\tld hl,S%d\n\tpush hl\n",
             loop, done, plan->done_string_id);
     mir_emit_runtime_call(out, plan->print_name);
-    mir_stream_puts("\tpop bc\n\tld hl,0\n\tpop iy\n\tret\n", out);
+    mir_stream_puts("\tpop bc\n\tld hl,0\n\tpop iy\n"
+          ";@dcc.reg free=iy\n\tret\n", out);
 }
 
 static int mir_match_seek_check_schedule(
@@ -11979,6 +12006,7 @@ static void mir_emit_intel_hex_load_schedule(
     int eof_ok = new_label();
 
     mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
+          ";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
           "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-126\n\tadd hl,sp\n\tld sp,hl\n",
           out);
@@ -12044,7 +12072,8 @@ static void mir_emit_intel_hex_load_schedule(
     mir_stream_printf(out, "L%d:\n\tpush iy\n", done);
     mir_machine_emit_symbol_call(out, plan->close_function);
     mir_stream_puts("\tpop bc\n\tld hl,1\n"
-          "\tld sp,ix\n\tpop ix\n\tpop iy\n\tret\n", out);
+          "\tld sp,ix\n\tpop ix\n\tpop iy\n"
+          ";@dcc.reg free=iy\n\tret\n", out);
 }
 
 static void mir_roundtrip_load_ix_word(
@@ -12197,6 +12226,7 @@ static void mir_emit_file_roundtrip_schedule(
     int value_ready = new_label();
 
     mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
+          ";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
           "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-8\n\tadd hl,sp\n\tld sp,hl\n",
           out);
@@ -12323,7 +12353,8 @@ static void mir_emit_file_roundtrip_schedule(
     mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->strings[19]);
     mir_emit_runtime_call(out, plan->print_names[5]);
     mir_roundtrip_cleanup(out, 2);
-    mir_stream_puts("\tld sp,ix\n\tpop ix\n\tpop iy\n\tret\n", out);
+    mir_stream_puts("\tld sp,ix\n\tpop ix\n\tpop iy\n"
+          ";@dcc.reg free=iy\n\tret\n", out);
 }
 
 static void mir_emit_room_message(
@@ -12360,7 +12391,9 @@ static void mir_emit_room_resolution_schedule(
     int bat = new_label();
     int done = new_label();
 
-    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n\tpush iy\n", out);
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
+          ";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
+          "\tpush iy\n", out);
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
     mir_stream_printf(out,
@@ -12386,7 +12419,7 @@ static void mir_emit_room_resolution_schedule(
     mir_machine_emit_symbol_call(out, plan->random_room_function);
     mir_stream_printf(out,
             "\tld (iy%+d),l\n\tld (iy%+d),h\n\tjp L%d\n"
-            "L%d:\n\tpop iy\n\tret\n",
+            "L%d:\n\tpop iy\n;@dcc.reg free=iy\n\tret\n",
             plan->location_offset, plan->location_offset + 1,
             loop, done);
 }
@@ -12604,6 +12637,7 @@ static void mir_emit_arrow_path_schedule(
     int epilogue = new_label();
 
     mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
+          ";@dcc.reg claim=iy scope=function sym=mir kind=mir val=0\n"
           "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
           "\tld hl,-6\n\tadd hl,sp\n\tld sp,hl\n",
           out);
@@ -12696,7 +12730,8 @@ static void mir_emit_arrow_path_schedule(
     mir_stream_printf(out,
             "\tjp L%d\nL%d:\n\tld hl,1\n\tjp L%d\n"
             "L%d:\n\tld hl,2\nL%d:\n"
-            "\tld sp,ix\n\tpop ix\n\tpop iy\n\tret\n",
+            "\tld sp,ix\n\tpop ix\n\tpop iy\n"
+            ";@dcc.reg free=iy\n\tret\n",
             epilogue, return_win, epilogue,
             return_loss, epilogue);
 }

@@ -1,5 +1,9 @@
 #include <stdio.h>
 
+#ifndef MIR_CLOBBER_G_PAIR_A
+#define MIR_CLOBBER_G_PAIR_A 3
+#endif
+
 typedef unsigned char u8;
 typedef unsigned int u16;
 
@@ -25,7 +29,7 @@ struct BigInit {
     struct Pair p;
 };
 
-static struct Pair g_pair = { 3, 1000, 7 };
+static struct Pair g_pair = { MIR_CLOBBER_G_PAIR_A, 1000, 7 };
 static struct Wrap g_wrap = { { 4, 2000, 8 }, 9, 10, 11 };
 static struct Pair g_pairs[2] = { { 5, 3000, 9 }, { 6, 4000, 10 } };
 

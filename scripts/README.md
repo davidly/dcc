@@ -105,6 +105,19 @@ decline the bounded-decimal schedule's argument-conversion guard.
 pwsh ./scripts/run-mir-lifetime-tests.ps1
 ```
 
+## `run-mir-clobber-tests.ps1`
+
+Runs the MIR emission-clobber and exact-schedule near-match regressions in
+peep/nopeep and stack/no-stack modes. It covers argument-staging register
+clobbers, exact-call ABI, call-identity and semantic-payload guards, IY
+ownership, regional validation, and stack-checked VLA reductions.
+The IY coverage includes separately peepholed caller/callee modules, so
+callee-save preservation is tested across assembly-file boundaries.
+
+```sh
+pwsh ./scripts/run-mir-clobber-tests.ps1
+```
+
 ## `publish-package.ps1`
 
 Publishes or republishes the binary package release. By default it reads the

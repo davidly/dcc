@@ -4409,6 +4409,121 @@ static void mir_emit_float_tolerance_schedule(
             done);
 }
 
+static int mir_float_comparison_float_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+        type_is_float(type) &&
+        type_size(type) == 4;
+}
+
+static int mir_float_comparison_signed_word_type(int type)
+{
+    return type_ptr_depth(type) == 0 &&
+        !type_is_float(type) &&
+        (type & 15) == TYPE_INT &&
+        (type & TYPE_UNSIGNED) == 0 &&
+        type_size(type) == 2;
+}
+
+static int mir_float_comparison_char_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+        (type & 15) == TYPE_CHAR &&
+        type_size(type) == 2;
+}
+
+static int mir_float_comparison_unary_call(
+    int argument_instruction, int call_instruction,
+    int expected_value, struct Sym **function_out)
+{
+    const struct MirInsn *argument =
+        &mir.insns[argument_instruction];
+    const struct MirInsn *call = &mir.insns[call_instruction];
+    struct Sym *function = find_global(call->name);
+    const char *assembly_name;
+    int arguments[MIR_FLOAT_REPORT_MAX_CALL_ARGS];
+
+    if (call->opcode != MIR_CALL ||
+        call->src1 >= 0 ||
+        call->secondary_offset < 0 ||
+        call->memory_flags != 0 ||
+        function == NULL ||
+        function->storage != SC_FUNC ||
+        function->is_funcptr ||
+        function->is_noreturn ||
+        !function->has_proto ||
+        function->proto_variadic ||
+        function->proto_nargs != 1 ||
+        call->type != function->type ||
+        !mir_float_comparison_float_type(function->type) ||
+        !mir_float_comparison_float_type(
+            function->proto_types[0]) ||
+        argument->opcode != MIR_ARG ||
+        argument->secondary_offset != call->secondary_offset ||
+        argument->immediate != 0 ||
+        argument->src1 != expected_value ||
+        argument->type != function->proto_types[0] ||
+        !mir_float_report_call_arguments(call, 1, arguments) ||
+        arguments[0] != expected_value)
+        return 0;
+    assembly_name = asm_name_for(sym_asm_name(function));
+    if (strcmp(assembly_name, "_fabsf") ||
+        (call->base_name[0] != 0 &&
+         strcmp(call->base_name, assembly_name)))
+        return 0;
+    *function_out = function;
+    return 1;
+}
+
+static int mir_float_comparison_print_call(
+    int call_instruction, const int argument_instructions[6],
+    const int expected_values[6], struct Sym **function_out)
+{
+    const struct MirInsn *call = &mir.insns[call_instruction];
+    struct Sym *function = find_global(call->name);
+    const char *assembly_name;
+    int arguments[MIR_FLOAT_REPORT_MAX_CALL_ARGS];
+    int argument;
+
+    if (call->opcode != MIR_CALL ||
+        call->src1 >= 0 ||
+        call->secondary_offset < 0 ||
+        call->memory_flags != MIR_CALL_FLAG_VARIADIC ||
+        function == NULL ||
+        function->storage != SC_FUNC ||
+        function->is_funcptr ||
+        function->is_noreturn ||
+        !function->has_proto ||
+        !function->proto_variadic ||
+        function->proto_nargs != 1 ||
+        call->type != function->type ||
+        !mir_float_comparison_signed_word_type(function->type) ||
+        !mir_float_comparison_char_pointer_type(
+            function->proto_types[0]) ||
+        !mir_float_report_call_arguments(call, 6, arguments))
+        return 0;
+    assembly_name = asm_name_for(sym_asm_name(function));
+    if (call->base_name[0] != 0 &&
+        strcmp(call->base_name, assembly_name))
+        return 0;
+    for (argument = 0; argument < 6; ++argument) {
+        const struct MirInsn *arg =
+            &mir.insns[argument_instructions[argument]];
+        int expected_type = argument == 0
+            ? function->proto_types[0] : TYPE_BOOL;
+
+        if (arguments[argument] != expected_values[argument] ||
+            arg->opcode != MIR_ARG ||
+            arg->secondary_offset != call->secondary_offset ||
+            arg->immediate != argument ||
+            arg->src1 != expected_values[argument] ||
+            arg->type != expected_type)
+            return 0;
+    }
+    *function_out = function;
+    return 1;
+}
+
 static int mir_match_float_comparison_report_schedule(
     struct MirFloatComparisonReportSchedule *plan)
 {
@@ -4436,6 +4551,13 @@ static int mir_match_float_comparison_report_schedule(
     };
     const int epsilon_constants[5] = {18, 34, 46, 59, 83};
     const int zero_constants[3] = {14, 30, 75};
+    const int print_argument_instructions[6] = {
+        99, 101, 103, 105, 107, 109
+    };
+    const int print_values[6] = {
+        98, 43, 72, 48, 96, 27
+    };
+    struct Sym *print_function;
     int arguments[MIR_FLOAT_REPORT_MAX_CALL_ARGS];
     int instruction;
     int item;
@@ -4459,16 +4581,21 @@ static int mir_match_float_comparison_report_schedule(
         mir.insns[5].src1 != mir.insns[1].dst ||
         mir.insns[5].src2 != mir.insns[2].dst ||
         mir.insns[5].immediate != '-' ||
-        !type_is_float(mir.insns[5].type))
+        !mir_float_comparison_float_type(mir.insns[1].type) ||
+        !mir_float_comparison_float_type(mir.insns[2].type) ||
+        !mir_float_comparison_float_type(mir.insns[5].type) ||
+        !mir_machine_unobservable_local_store(&mir.insns[7]) ||
+        mir.insns[7].src1 != mir.insns[5].dst ||
+        mir.insns[7].memory_size != 4)
         return mir_machine_reject(
             "float-comparison-report", "parameters");
-    plan->absolute_function = find_global(mir.insns[10].name);
-    if (plan->absolute_function == NULL ||
-        mir.insns[10].opcode != MIR_CALL ||
-        mir.insns[10].src1 >= 0 ||
-        !mir_float_report_call_arguments(
-            &mir.insns[10], 1, arguments) ||
-        arguments[0] != mir.insns[5].dst)
+    if (!mir_float_comparison_unary_call(
+            9, 10, mir.insns[5].dst,
+            &plan->absolute_function) ||
+        !mir_machine_unobservable_local_store(&mir.insns[12]) ||
+        mir.insns[12].src1 != mir.insns[10].dst ||
+        mir.insns[12].memory_size != 4 ||
+        mir.insns[12].object == mir.insns[7].object)
         return mir_machine_reject(
             "float-comparison-report", "absolute");
     for (item = 0; item < 5; ++item) {
@@ -4499,29 +4626,84 @@ static int mir_match_float_comparison_report_schedule(
         mir.insns[84].immediate != '<')
         return mir_machine_reject(
             "float-comparison-report", "comparisons");
-    if (!mir_float_report_call_arguments(
-            &mir.insns[110], 6, arguments))
+    if (mir.insns[15].src1 != mir.insns[5].dst ||
+        mir.insns[15].src2 != mir.insns[14].dst ||
+        mir.insns[16].src1 != mir.insns[15].dst ||
+        mir.insns[16].label != mir.insns[24].label ||
+        mir.insns[19].src1 != mir.insns[10].dst ||
+        mir.insns[19].src2 != mir.insns[18].dst ||
+        mir.insns[20].src1 != mir.insns[19].dst ||
+        mir.insns[20].label != mir.insns[24].label ||
+        mir.insns[27].src1 != mir.insns[22].dst ||
+        mir.insns[27].src2 != mir.insns[25].dst ||
+        mir.insns[27].phi_pred1 != mir.insns[21].label ||
+        mir.insns[27].phi_pred2 != mir.insns[24].label ||
+        mir.insns[28].src1 != mir.insns[27].dst ||
+        mir.insns[31].src1 != mir.insns[5].dst ||
+        mir.insns[31].src2 != mir.insns[30].dst ||
+        mir.insns[32].src1 != mir.insns[31].dst ||
+        mir.insns[32].label != mir.insns[40].label ||
+        mir.insns[35].src1 != mir.insns[10].dst ||
+        mir.insns[35].src2 != mir.insns[34].dst ||
+        mir.insns[36].src1 != mir.insns[35].dst ||
+        mir.insns[36].label != mir.insns[40].label ||
+        mir.insns[43].src1 != mir.insns[38].dst ||
+        mir.insns[43].src2 != mir.insns[41].dst ||
+        mir.insns[43].phi_pred1 != mir.insns[37].label ||
+        mir.insns[43].phi_pred2 != mir.insns[40].label ||
+        mir.insns[44].src1 != mir.insns[43].dst ||
+        mir.insns[47].src1 != mir.insns[10].dst ||
+        mir.insns[47].src2 != mir.insns[46].dst ||
+        mir.insns[48].src1 != mir.insns[47].dst ||
+        (mir.insns[48].type & 15) != TYPE_BOOL ||
+        mir.insns[49].src1 != mir.insns[48].dst ||
+        mir.insns[52].src1 != mir.insns[5].dst ||
+        mir.insns[52].src2 != mir.insns[51].dst ||
+        mir.insns[53].src1 != mir.insns[52].dst ||
+        mir.insns[53].label != mir.insns[57].label ||
+        mir.insns[60].src1 != mir.insns[10].dst ||
+        mir.insns[60].src2 != mir.insns[59].dst ||
+        mir.insns[61].src1 != mir.insns[60].dst ||
+        mir.insns[61].label != mir.insns[65].label ||
+        mir.insns[68].src1 != mir.insns[63].dst ||
+        mir.insns[68].src2 != mir.insns[66].dst ||
+        mir.insns[68].phi_pred1 != mir.insns[62].label ||
+        mir.insns[68].phi_pred2 != mir.insns[65].label ||
+        mir.insns[72].src1 != mir.insns[55].dst ||
+        mir.insns[72].src2 != mir.insns[68].dst ||
+        mir.insns[72].phi_pred1 != mir.insns[54].label ||
+        mir.insns[72].phi_pred2 != mir.insns[69].label ||
+        mir.insns[73].src1 != mir.insns[72].dst ||
+        mir.insns[76].src1 != mir.insns[5].dst ||
+        mir.insns[76].src2 != mir.insns[75].dst ||
+        mir.insns[77].src1 != mir.insns[76].dst ||
+        mir.insns[77].label != mir.insns[81].label ||
+        mir.insns[84].src1 != mir.insns[10].dst ||
+        mir.insns[84].src2 != mir.insns[83].dst ||
+        mir.insns[85].src1 != mir.insns[84].dst ||
+        mir.insns[85].label != mir.insns[89].label ||
+        mir.insns[92].src1 != mir.insns[87].dst ||
+        mir.insns[92].src2 != mir.insns[90].dst ||
+        mir.insns[92].phi_pred1 != mir.insns[86].label ||
+        mir.insns[92].phi_pred2 != mir.insns[89].label ||
+        mir.insns[96].src1 != mir.insns[79].dst ||
+        mir.insns[96].src2 != mir.insns[92].dst ||
+        mir.insns[96].phi_pred1 != mir.insns[78].label ||
+        mir.insns[96].phi_pred2 != mir.insns[93].label ||
+        mir.insns[97].src1 != mir.insns[96].dst)
         return mir_machine_reject(
-            "float-comparison-report", "print-arguments");
-    if (arguments[0] != mir.insns[98].dst ||
-        arguments[1] != mir.insns[43].dst ||
-        arguments[2] != mir.insns[72].dst ||
-        arguments[3] != mir.insns[48].dst ||
-        arguments[4] != mir.insns[96].dst ||
-        arguments[5] != mir.insns[27].dst)
-        return mir_machine_reject(
-            "float-comparison-report", "print-values");
-    if (
-        (mir.insns[110].memory_flags &
-         MIR_CALL_FLAG_VARIADIC) == 0)
+            "float-comparison-report", "comparison-graph");
+    for (item = 0; item < 6; ++item)
+        arguments[item] = mir.insns[print_values[item]].dst;
+    if (!mir_float_comparison_print_call(
+            110, print_argument_instructions,
+            arguments, &print_function))
         return mir_machine_reject(
             "float-comparison-report", "print");
     plan->epsilon_bits =
         (unsigned long)mir.insns[epsilon_constants[0]].immediate;
     plan->format_string_id = (int)mir.insns[98].immediate;
     {
-        struct Sym *print_function =
-            find_global(mir.insns[110].name);
         const char *print_name =
             mir.insns[110].base_name[0] != 0
                 ? mir.insns[110].base_name

@@ -36,6 +36,8 @@ _ZA:
 push ix
 ld ix,0
 add ix,sp
+dec sp
+dec sp
 ld hl,100
 ld (ix-2),l
 ld (ix-1),h
@@ -87,6 +89,18 @@ ld (ix-2),l
 ld (ix-1),h
 dec (ix-3)
 jp nz, LC
+ld hl,0
+add hl,hl
+ld de,LCT
+add hl,de
+ld e,(hl)
+inc hl
+ld d,(hl)
+ex de,hl
+jp (hl)
+LCT:
+dw LCEND
+LCEND:
 ld sp,ix
 pop ix
 ret

@@ -30,6 +30,15 @@ LDS:
 	ret
 ; static function accept
 _ZA:
+	push ix
+	ld ix,0
+	add ix,sp
+	dec sp
+	dec sp
+	push iy ; peep: ix_pointer_to_iy_abi
+	pop bc ; peep: ix_pointer_to_iy_abi
+	ld (ix-2),c ; peep: ix_pointer_to_iy_abi
+	ld (ix-1),b ; peep: ix_pointer_to_iy_abi
 	ld hl,100
 	push hl ; peep: ix_pointer_to_iy
 	pop iy
@@ -48,19 +57,25 @@ _ZA:
 	inc iy ; peep: ix_pointer_to_iy
 	inc iy ; peep: ix_pointer_to_iy
 	or a
+	ld c,(ix-2) ; peep: ix_pointer_to_iy_abi
+	ld b,(ix-1) ; peep: ix_pointer_to_iy_abi
+	push bc ; peep: ix_pointer_to_iy_abi
+	pop iy ; peep: ix_pointer_to_iy_abi
+	ld sp,ix
+	pop ix
 	ret
 ; static function counted
 _ZC:
 	push ix
 	ld ix,0
 	add ix,sp
-	push iy ; peep: mutable_ix_pointer_to_iy
-	pop de
-	ld (ix-2),e
-	ld (ix-1),d
 	dec sp ; peep: local_alloc_wide
 	dec sp ; peep: local_alloc_wide
 	dec sp ; peep: local_alloc_wide
+	push iy ; peep: mutable_ix_pointer_to_iy_abi
+	pop bc ; peep: mutable_ix_pointer_to_iy_abi
+	ld (ix-2),c ; peep: mutable_ix_pointer_to_iy_abi
+	ld (ix-1),b ; peep: mutable_ix_pointer_to_iy_abi
 	ld hl,200
 	push hl ; peep: mutable_ix_pointer_to_iy
 	pop iy
@@ -76,10 +91,22 @@ LC:
 	pop iy
 	dec (ix-3)
 	jr nz,LC ; peep: jp_to_jr
-	ld e,(ix-2)
-	ld d,(ix-1)
-	push de
-	pop iy ; peep: mutable_ix_pointer_to_iy
+	ld hl,0
+	add hl,hl
+	ld de,LCT
+	add hl,de
+	ld e,(hl)
+	inc hl
+	ld d,(hl)
+	ex de,hl
+	jp (hl)
+LCT:
+	dw LCEND
+LCEND:
+	ld c,(ix-2) ; peep: mutable_ix_pointer_to_iy_abi
+	ld b,(ix-1) ; peep: mutable_ix_pointer_to_iy_abi
+	push bc ; peep: mutable_ix_pointer_to_iy_abi
+	pop iy ; peep: mutable_ix_pointer_to_iy_abi
 	ld sp,ix
 	pop ix
 	ret

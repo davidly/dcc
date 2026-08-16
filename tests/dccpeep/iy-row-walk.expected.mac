@@ -1,0 +1,44 @@
+; static function row_walk
+_ZR:
+	push ix
+	ld ix,0
+	add ix,sp
+	dec sp
+	dec sp
+	dec sp
+	dec sp
+	ld (ix-1),0
+	push iy ; peep: walk_row_cached_float_index_abi
+	ld l,(ix-4) ; peep: walk_row_cached_float_index
+	ld h,(ix-3) ; peep: walk_row_cached_float_index
+	push hl ; peep: walk_row_cached_float_index
+	pop iy ; peep: walk_row_cached_float_index
+LROW:
+	push iy ; peep: walk_row_cached_float_index
+	pop hl ; peep: walk_row_cached_float_index
+	ld e,(hl)
+	inc hl
+	ld d,(hl)
+	inc hl
+	ld a,(hl)
+	inc hl
+	ld h,(hl)
+	ld l,a
+	ex de,hl
+	push de
+	push hl
+	ld de,4 ; peep: walk_row_cached_float_index
+	add iy,de ; peep: walk_row_cached_float_index
+	ld d,0
+	call __fmaf
+	pop bc
+	pop bc
+	inc (ix-1)
+	ld a,(ix-1)
+	cp 3
+	jp c,LROW
+	pop iy ; peep: walk_row_cached_float_index_abi
+	ld sp,ix
+	pop ix
+	ret
+	end

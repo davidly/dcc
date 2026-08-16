@@ -10,6 +10,10 @@
 #include <stdio.h>
 #include <stdint.h>
 
+#ifndef MIR_CLOBBER_GMIX_A
+#define MIR_CLOBBER_GMIX_A 1
+#endif
+
 // Bit-field layout for a 16-bit RGB565 pixel. Plain unsigned keeps it portable.
 struct Rgb565 {
     unsigned blue  : 5;
@@ -32,7 +36,7 @@ struct Mix {
 };
 
 // Global designated bit-field initializers exercise the data-image writer.
-static struct Mix gmix = { .a = 1, .d = 2, .b = 3 };          // revisit unit 0
+static struct Mix gmix = { .a = MIR_CLOBBER_GMIX_A, .d = 2, .b = 3 }; // revisit unit 0
 static struct Rgb565 grev = { .red = 7, .blue = 6, .green = 5 }; // reversed
 
 static void check(const char *name, int got, int want, int *fails)

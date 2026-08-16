@@ -1,0 +1,44 @@
+; static function row_walk
+_ZR:
+push ix
+ld ix,0
+add ix,sp
+dec sp
+dec sp
+dec sp
+dec sp
+ld (ix-1),0
+LROW:
+ld l,(ix-4)
+ld h,(ix-3)
+push hl
+ld l,(ix-1)
+ld h,0
+add hl,hl
+add hl,hl
+ex de,hl
+pop hl
+add hl,de
+ld e,(hl)
+inc hl
+ld d,(hl)
+inc hl
+ld a,(hl)
+inc hl
+ld h,(hl)
+ld l,a
+ex de,hl
+push de
+push hl
+ld d,0
+call __fmaf
+pop bc
+pop bc
+inc (ix-1)
+ld a,(ix-1)
+cp 3
+jp c,LROW
+ld sp,ix
+pop ix
+ret
+end

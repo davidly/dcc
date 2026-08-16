@@ -1,0 +1,30 @@
+;@dcc.reg claim=iy scope=function sym=caller kind=mir val=0
+cseg
+
+public _borrow
+_borrow:
+push ix
+ld ix,0
+add ix,sp
+dec sp
+dec sp
+ld hl,18
+ld (ix-2),l
+ld (ix-1),h
+nop
+ld e,(ix-2)
+ld d,(ix-1)
+ld sp,ix
+pop ix
+ret
+
+LIDEC:
+dec (ix-5)
+jp z,LIDEXIT
+ld e,(ix-5)
+ld d,0
+call _external
+jp LIDEC
+LIDEXIT:
+ret
+end
