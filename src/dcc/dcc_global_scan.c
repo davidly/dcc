@@ -1,41 +1,21 @@
-/*
- * dcc_global_scan.c - whole-translation-unit lexical scan of which
- * identifiers are ever written to or have their address taken, and (for
- * writes) which function that happens in.
+/**
+ * @file dcc_global_scan.c
+ * @brief Collects conservative whole-file global write and address facts.
  *
- * This exists to let a codegen fast path (see ast_for_hoist_global_member_
- * value_supported, dcc_ast_gen_support.c) prove a global variable's value is
- * invariant across an entire function's execution - specifically, across a
- * hot loop full of calls that the compiler cannot otherwise rule out as
- * reassigning it. dcc compiles in a single forward pass over the source, so
- * while generating one function it has no way to know whether some
- * later-defined function also reassigns a given global; this module runs a
- * dedicated pre-pass over the *entire* file first (before any real parsing
- * or codegen begins) purely to answer that one question, then rewinds all
- * lexer/preprocessor state as if it had never run.
+ * @par Role
+ * Runs a one-time lexical prepass over the finalized source, records writes
+ * and address-taking for names and direct fields with enclosing-function
+ * attribution, then restores source, lexer, macro, and option state before
+ * normal parsing begins.
  *
- * This is a lexical pattern match, not a semantic one: it does not resolve
- * identifiers through the real symbol table (which does not exist yet at
- * pre-pass time) and only recognises "this token looks like a write to name
- * X" from token-kind adjacency (an identifier immediately followed by an
- * assignment/increment/decrement operator, or immediately preceded by one,
- * or immediately preceded by '&', and not immediately preceded by '.' or
- * "->" - which would make it a struct member name, not a variable
- * reference). A local variable or struct field that happens to share a
- * global's name can therefore be counted as if it were a write to that
- * global; this is always the SAFE direction (it only makes the analysis
- * more conservative, never less), which is what matters here.
+ * @par Key entry points
+ * scan_global_write_info(), global_text_write_count(),
+ * global_text_addr_taken_count(), and the global_text_field_*() queries.
  *
- * What this does NOT prove: that the one recorded writer function can never
- * be re-entered from within the call graph of the function asking the
- * question. That would need real interprocedural call-graph analysis, which
- * this module does not attempt. The residual assumption is: once a global
- * has been written by its one writer, nothing later in the program's
- * execution calls that writer again. This holds for the ordinary "init once,
- * then treat as read-only" idiom this feature targets, and is exactly the
- * shape ast_for_hoist_global_member_value_supported requires (a single
- * textual write site outside the function being optimised) before it will
- * ever consider the global invariant.
+ * @par Boundary
+ * This is token-pattern analysis, not symbol resolution or call-graph proof;
+ * shadowing and uncertain shapes may only add conservative false positives.
+ * It builds no AST or symbols and emits no code.
  */
 
 #include "dcc.h"

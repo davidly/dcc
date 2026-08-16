@@ -1,4 +1,20 @@
-/* peep_lines.c - dccpeep line storage, mutation, and file I/O. */
+/**
+ * @file peep_lines.c
+ * @brief Owns dccpeep's mutable line program and assembly file I/O.
+ *
+ * @par Role
+ * Allocates and frees line text, preserves user-assembly text behind opaque
+ * placeholders, tracks program versions and edit statistics, provides
+ * transactional mutations, and reads and writes normalized assembly files.
+ *
+ * @par Key entry points
+ * peep_context_init(), peep_edit_begin(), replace1(), delete_n(),
+ * insert_line(), read_file(), and write_file().
+ *
+ * @par Boundary
+ * Passes must mutate through this API and cannot rewrite opaque user assembly.
+ * Parsing, effects, dataflow, and pass scheduling belong to other modules.
+ */
 #include "dccpeep_internal.h"
 
 char *lines[MAX_LINES];

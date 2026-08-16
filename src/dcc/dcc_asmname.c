@@ -1,14 +1,19 @@
-/*
- * dcc_asmname.c - C identifier -> M80 assembler symbol mapping.
+/**
+ * @file dcc_asmname.c
+ * @brief Maps C identifiers and runtime calls to safe M80 symbol names.
  *
- * Decides how each C name is spelled in the emitted assembly: when a name must
- * be mangled (to dodge M80's 6-significant-char publics and reserved words),
- * when it maps to a fixed runtime-library entry point, and caches the
- * allocated assembler names in the shared asm_names[] table.
+ * @par Role
+ * Applies reserved-name and short-significance mangling, recognizes fixed
+ * runtime labels and internal publics, selects printf-family variants, caches
+ * assigned names, and diagnoses collisions among emitted PUBLIC symbols.
  *
- * MODULE: its own translation unit. Uses struct AsmName / MAX_ASM_NAMES and the
- * asm_names[] table; all shared declarations come from the umbrella header dcc.h.
- * Source provenance: monolith src/ddc.c lines 207-336.
+ * @par Key entry points
+ * asm_name_for(), asm_name_for_runtime(), asm_name_for_pf_call(),
+ * asm_name_must_mangle(), and asm_name_check_public_collision().
+ *
+ * @par Boundary
+ * Symbol ownership and EXTRN tracking belong to dcc_symbols.c; callers that
+ * emit declarations decide when a mapped name becomes PUBLIC.
  */
 
 #include "dcc.h"

@@ -1,17 +1,17 @@
-/*
- * dcc_state.c - definitions of the shared mutable state for the dcc compiler.
+/**
+ * @file dcc_state.c
+ * @brief Defines compiler-wide mutable state declared by dcc.h.
  *
- * Defines cross-module compiler state declared in dcc.h and focused internal
- * headers. Truly module-local state remains static in its owning file.
+ * @par Role
+ * Instantiates shared option, type, symbol, lexer, preprocessing, function,
+ * scope, diagnostic, initializer, debug, and emission state. Related live
+ * fields are grouped in lifecycle records such as LexState, FrameState,
+ * ExprState, FunctionPassState, DeclState, and EmitSink.
  *
- * Why dcc keeps so much shared state: parser, AST builder, and codegen helpers
- * share a large amount of "current position" state (the source buffer, the
- * lookahead token, the symbol tables, per-function codegen flags, ...).
- * Related live fields are grouped by lifecycle in LexState, FrameState,
- * ExprState, FunctionPassState, DeclState, and EmitSink rather than exposed as
- * independent scalars.
- *
- * Source provenance: monolith src/ddc.c lines 199-203, 347-348, 378-489.
+ * @par Boundary
+ * This file provides storage, not behavior. State used by only one module
+ * remains static in that owner rather than becoming part of the shared
+ * contract.
  */
 
 #include "dcc.h"

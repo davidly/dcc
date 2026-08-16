@@ -1,9 +1,18 @@
-/*
- * dcc_pp_expr.c - preprocessor #if/#elif constant-expression evaluator.
+/**
+ * @file dcc_pp_expr.c
+ * @brief Evaluates preprocessor #if and #elif expression text.
  *
- * The evaluator parses an already-expanded expression string using a compact
- * recursive-descent precedence ladder. Only pp_eval_simple_expr is shared;
- * cursor state and precedence helpers are private to this translation unit.
+ * @par Role
+ * Implements a private recursive-descent precedence parser for integer and
+ * character constants, defined(), unary and binary operators, logical
+ * short-circuiting, and conditional expressions.
+ *
+ * @par Key entry points
+ * pp_eval_simple_expr().
+ *
+ * @par Boundary
+ * Macro-table lookup is provided by dcc_preproc.c. This evaluator implements
+ * preprocessing arithmetic, not the typed C constant semantics in dcc_fold.c.
  */
 
 #include "dcc_preproc_internal.h"

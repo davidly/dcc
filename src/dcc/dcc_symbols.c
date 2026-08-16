@@ -1,13 +1,22 @@
-/*
- * dcc_symbols.c - symbol tables and symbol-access code generation.
+/**
+ * @file dcc_symbols.c
+ * @brief Owns symbol lookup, scopes, linkage bookkeeping, and symbol access.
  *
- * Lookup/allocation of locals, parameters and globals; the string-literal
- * pool; EXTRN bookkeeping (emit_extrn_if_needed/emit_deferred_extrns); and the
- * code that loads/stores a symbol's address or value (frame-relative or direct
- * for globals), including post-increment/decrement fast paths.
+ * @par Role
+ * Allocates globals, locals, parameters, temporaries, and strings; manages
+ * block and for-init renames plus VLA scope/fixup state; tracks deferred
+ * EXTRNs and runtime calls; and supplies frame/global address, load, store,
+ * sizeof, and offsetof helpers.
  *
- * MODULE: compiled as its own translation unit.
- * Source provenance: monolith src/ddc.c lines 3829-4801.
+ * @par Key entry points
+ * find_sym(), add_global(), add_local_alloc(), enter_scope(), leave_scope(),
+ * emit_extrn_if_needed(), emit_runtime_call(), emit_load_sym_addr(), and
+ * sizeof_parse_primary_type().
+ *
+ * @par Boundary
+ * dcc_state.c stores shared tables, dcc_asmname.c maps target spellings, and
+ * dcc_types.c owns type construction. Low-level access helpers here do not
+ * choose production function-body candidates; MIR does.
  */
 
 #include "dcc.h"

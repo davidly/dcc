@@ -1,14 +1,21 @@
-/*
- * dcc_preproc.c - preprocessor, macro engine, and lexer.
+/**
+ * @file dcc_preproc.c
+ * @brief Implements directive handling, macro expansion, and tokenization.
  *
- * Handles #define/#undef/#if/#ifdef directives, object- and function-like
- * macro expansion (including # stringize and ## paste), conditional-directive
- * handling, and the main tokenizer next_token() that feeds the parser. The
- * #if expression evaluator lives in dcc_pp_expr.c.
+ * @par Role
+ * Owns the macro table and conditional stack, processes active directives and
+ * pragmas, expands object/function/variadic macros with stringize and paste,
+ * rewrites source ranges safely, decodes literals, and supplies the parser's
+ * one-token lexer with save/restore support.
  *
- * MODULE: compiled as its own translation unit; macro-table entry points shared
- * with the driver/evaluator are declared in dcc_preproc_internal.h.
- * Source provenance: monolith src/ddc.c lines 692-2871.
+ * @par Key entry points
+ * next_token(), parse_preprocessor_line(), add_define(), remove_define(),
+ * macro_expand_argument_text(), lex_save(), and lex_restore().
+ *
+ * @par Boundary
+ * dcc.c owns recursive include expansion and the initial inactive-source
+ * filter; dcc_pp_expr.c evaluates directive expressions. C grammar and
+ * production body generation are outside this module.
  */
 
 #include "dcc.h"

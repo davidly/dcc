@@ -1,12 +1,21 @@
-/*
- * dcc_decl.c - local declaration and initializer code generation.
+/**
+ * @file dcc_decl.c
+ * @brief Parses function-local declarations and their initialization plans.
  *
- * Emits storage and initialisation for function-local declarations: scalars,
- * arrays, structs/unions and bitfields, brace-enclosed initializer lists, and
- * const-scalar folding of local initializers into immediates.
+ * @par Role
+ * Allocates automatic objects, folds eligible constant locals, handles scalar,
+ * array, aggregate, bitfield, string, and VLA initialization, and keeps local
+ * declaration replay consistent with frame sizing and MIR capture.
  *
- * MODULE: compiled as its own translation unit.
- * Source provenance: monolith src/ddc.c lines 13128-13991.
+ * @par Key entry points
+ * gen_local_decl_after_type(), try_const_fold_local(),
+ * emit_init_auto_struct_from_list(), emit_init_auto_array_from_list(), and
+ * emit_zero_local_bytes().
+ *
+ * @par Boundary
+ * File-scope initializers are recorded by dcc_global_init.c. Expression trees
+ * and metadata come from the AST modules, while selected MIR candidates alone
+ * provide production function bodies.
  */
 
 #include "dcc.h"

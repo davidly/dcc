@@ -1,7 +1,19 @@
-/* peep_effects.c - cached structured line classification and effects.
+/**
+ * @file peep_effects.c
+ * @brief Classifies lines and caches conservative machine effects.
  *
- * Recognized instructions receive conservative register/flag summaries.
- * Unknown instructions remain explicitly unsafe rather than being guessed.
+ * @par Role
+ * Splits recognized Z80/M80 instructions into operands and records register,
+ * flag, memory, opcode, and control-flow effects for the current line-program
+ * version.
+ *
+ * @par Key entry points
+ * peep_line_info() lazily returns the structured classification for one line.
+ *
+ * @par Boundary
+ * peep_dataflow.c consumes these summaries to build liveness. Unknown
+ * instructions and user assembly remain explicitly opaque, and this module
+ * never rewrites source lines.
  */
 #include "dccpeep_internal.h"
 

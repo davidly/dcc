@@ -1,4 +1,20 @@
-/* peep_dataflow.c - versioned CFG, basic blocks, and backwards liveness. */
+/**
+ * @file peep_dataflow.c
+ * @brief Builds dccpeep's versioned CFG and backward liveness solution.
+ *
+ * @par Role
+ * Derives per-function successors and basic blocks, then solves register and
+ * flag liveness against the current line-program version for safety queries.
+ *
+ * @par Key entry points
+ * peep_flow_line(), peep_basic_block(), peep_basic_block_count(),
+ * peep_registers_dead_after(), and peep_flags_dead_after().
+ *
+ * @par Boundary
+ * peep_effects.c classifies individual instructions and
+ * peep_control_flow.c owns shared textual label indexes. This module never
+ * mutates the line program, and unknown effects remain fully live.
+ */
 #include "dccpeep_internal.h"
 
 #define PEEP_ALL_REGISTERS ((1u << 10) - 1u)

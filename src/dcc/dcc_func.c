@@ -1,15 +1,21 @@
-/*
- * dcc_func.c - function and top-level declaration parsing.
+/**
+ * @file dcc_func.c
+ * @brief Parses file-scope declarations and coordinates function capture.
  *
- * Parameter lists (prototype and K&R old-style), function prologue/epilogue
- * and frame layout, inline/narrowing candidate capture, the function-body scan,
- * typedef declarations, and
- * top-level declaration dispatch (parse_function_or_global,
- * parse_translation_unit). File-scope initializer parsing is in
- * dcc_global_init.c.
+ * @par Role
+ * Handles prototype and K&R parameter lists, typedefs, top-level declaration
+ * dispatch, frame-sizing scans, inline and narrowing metadata, debug records,
+ * deferred static bodies, and the begin/end lifecycle for each MIR function.
  *
- * MODULE: compiled as its own translation unit.
- * Source provenance: monolith src/ddc.c lines 15880-17705.
+ * @par Key entry points
+ * parse_translation_unit(), parse_function_or_global(), scan_function_body(),
+ * begin_function_mir(), finish_function_mir(), and
+ * emit_needed_deferred_bodies().
+ *
+ * @par Boundary
+ * dcc_stmt.c traverses compound bodies and dcc_global_init.c records file-scope
+ * initializers. This module coordinates MIR capture; selected MIR candidates,
+ * never AST or legacy output, supply production function bodies.
  */
 
 #include "dcc.h"

@@ -1,14 +1,21 @@
-/*
- * dcc_diag_emit.c - diagnostics, allocation, and low-level emit primitives.
+/**
+ * @file dcc_diag_emit.c
+ * @brief Provides diagnostics, source locations, allocation, and text output.
  *
- * The compiler's "plumbing": fatal()/error_here() error reporting,
- * source_location_at() for #line-aware positions, allocation and checked
- * stream-reading helpers, EmitSink switching, assembly-output primitives, and
- * raw source character readers (peekc/getc_src).
+ * @par Role
+ * Maps diagnostics to stable codes, renders source-aware errors and warnings,
+ * caches #line-adjusted locations, supplies checked allocation and stream
+ * loading, manages assembly labels/text primitives, and reads translated
+ * source characters including trigraphs.
  *
- * MODULE: compiled as its own translation unit; macro helpers used for source
- * rendering are declared in dcc_preproc_internal.h.
- * Source provenance: monolith src/ddc.c lines 495-691.
+ * @par Key entry points
+ * dcc_error_at(), error_here(), warn_at(), source_location_at(), xmalloc(),
+ * emit(), emit_label(), peekc(), and getc_src().
+ *
+ * @par Boundary
+ * Parsers decide which diagnostics to issue, and MIR/data modules decide what
+ * assembly to produce. This module supplies shared reporting and output
+ * plumbing without owning those higher-level policies.
  */
 
 #include "dcc.h"

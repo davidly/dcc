@@ -1,7 +1,21 @@
-/* peep_pass_final.c - terminal relaxation and cleanup passes.
+/**
+ * @file peep_pass_final.c
+ * @brief Implements post-convergence and terminal cleanup passes.
  *
- * These rewrites run after fixed-point and size-mode passes so their address
- * estimates and dead-load decisions see the final instruction stream.
+ * @par Role
+ * Uses the settled instruction stream to fold constant sign extension,
+ * remove dead register loads, epilogue pops, and carry clears, widen tiny
+ * local-allocation rewrites, and relax safely in-range JP instructions to JR.
+ *
+ * @par Key entry points
+ * pass_jp_to_jr(), pass_fold_const_sign_extend(),
+ * pass_elim_dead_register_loads(), pass_elim_redundant_carry_clear(), and
+ * pass_local_alloc_wide().
+ *
+ * @par Boundary
+ * These passes depend on converged shapes, final code size, effects, or
+ * liveness and therefore run only at dedicated sites in dccpeep.c; they do
+ * not own phase ordering or general fixed-point optimization.
  */
 #include "dccpeep_internal.h"
 

@@ -1,7 +1,20 @@
-/* peep_control_flow.c - shared labels, jumps, and conservative reachability.
+/**
+ * @file peep_control_flow.c
+ * @brief Indexes labels and functions for conservative control-flow queries.
  *
- * This module owns textual branch/label parsing and bounded control-flow
- * queries used by multiple pass families. Unknown syntax remains conservative.
+ * @par Role
+ * Owns textual label and jump parsing, versioned label/function indexes,
+ * function-bound lookup, bounded label searches, and loop-body reachability
+ * checks shared by multiple pass families.
+ *
+ * @par Key entry points
+ * jump_target(), jump_target_any(), peep_indexed_function_bounds(),
+ * find_label_line_in_range(), and loop_body_internal_labels_safe().
+ *
+ * @par Boundary
+ * peep_dataflow.c owns CFG construction and liveness, while
+ * peep_pass_control_flow.c owns label and branch rewrites. Unknown branch
+ * syntax remains conservative here.
  */
 #include "dccpeep_internal.h"
 

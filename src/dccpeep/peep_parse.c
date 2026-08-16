@@ -1,4 +1,20 @@
-/* peep_parse.c - stateless Z80/M80 instruction parsers and formatters. */
+/**
+ * @file peep_parse.c
+ * @brief Provides parsers and formatters for emitted Z80/M80 text shapes.
+ *
+ * @par Role
+ * Recognizes and formats exact jump, immediate, IX-frame, register-pair, and
+ * symbol operand forms shared by peephole passes.
+ *
+ * @par Key entry points
+ * The parse_*() and peep_parse_*() helpers declared in
+ * dccpeep_internal.h, together with peep_make_*() formatters.
+ *
+ * @par Boundary
+ * These helpers neither own nor mutate the line program and do not infer
+ * effects or control flow. Unsupported or ambiguous syntax simply fails to
+ * match.
+ */
 #include "dccpeep_internal.h"
 
 int parse_ld_hl_imm(const char *s, char *val, size_t val_size)

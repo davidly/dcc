@@ -1,9 +1,20 @@
-/*
- * dcc_constexpr.c - integer constant-expression context wrappers.
+/**
+ * @file dcc_constexpr.c
+ * @brief Applies declaration-context rules to typed constant expressions.
  *
- * Typed constant evaluation is implemented by the ConstVal engine in
- * dcc_fold.c.  This module provides the context-specific conversions used by
- * declarations and parses the C11 _Static_assert declaration.
+ * @par Role
+ * Wraps the ConstVal evaluator with range and validity checks for array
+ * bounds, designators, enumerators, integer and long contexts; parses
+ * _Static_assert declarations; and recognizes tokens that can start a type.
+ *
+ * @par Key entry points
+ * parse_typed_const_int_expr(), parse_typed_array_bound_expr(),
+ * parse_typed_const_long_expr(), parse_typed_enum_const_expr(),
+ * parse_static_assert_decl(), and starts_type().
+ *
+ * @par Boundary
+ * dcc_fold.c owns typed expression evaluation. This module validates specific
+ * declaration contexts and emits no function-body code.
  */
 
 #include "dcc.h"

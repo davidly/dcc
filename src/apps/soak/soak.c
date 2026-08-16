@@ -1,39 +1,22 @@
-/* tsoak.c - long-running soak test for the dcc C runtime.
+/**
+ * @file soak.c
+ * @brief Runs deterministic long-duration validation of the dcc runtime.
  *
- * Purpose
- * -------
- * Hammer the two subsystems that this runtime-memory pass touched:
+ * @par Role
+ * Builds as a no-input CP/M target that churns the heap, creates and verifies
+ * temporary files, stresses interleaved buffered I/O, and exercises string,
+ * memory, formatted-conversion, qsort, and bsearch routines. It checks all
+ * generated data, prints progress and a final summary, and exits on any
+ * mismatch while treating transient allocation failure as expected load.
  *
- *   1. the heap allocator  - malloc / calloc / realloc / free, with random
- *      sizes, random operation order, in-place shrink/grow, and full data
- *      integrity verification of every live block;
- *   2. the buffered file I/O layer - fopen / fwrite / fread / fseek / rewind /
- *      fgets / fclose / unlink, including multi-record files, partial records,
- *      random-access seeks (which exercise the read sector cache), and the
- *      rewind seek-to-zero path, plus a multi-file interleaved phase that holds
- *      several files open at once to stress the shared-DMA read sector cache.
+ * @par Key entry points
+ * main() schedules the run; file_roundtrip(), multifile_stress(),
+ * string_stress(), format_stress(), sort_stress(), and sort_edges() implement
+ * the self-checking phases.
  *
- * It also runs three CPU/heap phases that drive runtime library routines the
- * loops above do not touch, each self-checking against a trivial oracle:
- *   3. string / memory routines (strcpy/strcat/strchr/strstr/memcpy/memmove/
- *      memset/memcmp/memchr/strdup) over heap buffers;
- *   4. printf / scanf numeric round-trips (sprintf/sscanf/atoi);
- *   5. qsort + bsearch (now runtime routines) over a heap array of ~400
- *      elements, comparator via a function pointer; the sort is checked
- *      element-for-element against an independent insertion-sort oracle and
- *      bsearch against every present key plus absent sentinels, with a
- *      separate boundary-case pass (empty, single, two, sorted, reverse,
- *      all-equal, heavy duplicates, and a descending comparator).
- *
- * The test is fully deterministic (its own LCG PRNG), validates everything it
- * writes, and treats any mismatch as a hard failure with positional context.
- * Transient out-of-memory is expected under churn and handled softly (it frees
- * a block and continues), so the only way the test stops early is a genuine
- * runtime defect.
- *
- * It runs ITERS iterations of heap churn and performs a file round-trip every
- * FILE_EVERY iterations, printing a diagnostic line every DIAG_EVERY iterations
- * so progress is visible during the (intentionally long) run.
+ * @par Boundary
+ * This application validates DCCRTL through the normal dcc target pipeline; it
+ * does not implement the runtime services it stresses.
  */
 
 #include <stdio.h>

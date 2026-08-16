@@ -1,8 +1,20 @@
-/*
- * dccmake - small build driver for the dcc CP/M pipeline.
+/**
+ * @file dccmake.c
+ * @brief Drives complete dcc builds of CP/M applications.
  *
- * Pipeline:
- *   dcc -> optional dccpeep -> ntvcm M80 -> dccrtlstrip -> ntvcm M80 -> ntvcm L80
+ * @par Role
+ * Reads dccmake.txt and command-line settings, validates CP/M names, compiles
+ * one or more C sources to .MAC, optionally optimizes them, assembles the
+ * application and reduced runtime, and links the final .COM plus requested
+ * listing, symbol, and debug artifacts.
+ *
+ * @par Key entry points
+ * main() loads configuration; run_build() invokes each pipeline stage.
+ *
+ * @par Boundary
+ * dcc and dccpeep produce application assembly, dccrtlstrip selects runtime
+ * blocks, and m80c/M80 plus l80c/L80 assemble and link. This driver configures
+ * and invokes those tools but does not implement their transformations.
  */
 /* CLOCK_MONOTONIC/clock_gettime (used by now_ms() below) are POSIX, not
  * plain C11 - glibc only declares them if a feature-test macro requesting

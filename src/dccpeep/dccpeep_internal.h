@@ -1,7 +1,31 @@
-/* dccpeep_internal.h - private line-program contract for dccpeep modules.
+/**
+ * @file dccpeep_internal.h
+ * @brief Defines the private line-program and pass contract for dccpeep.
  *
- * Passes may mutate only through this API: user-assembly entries are opaque,
- * and the scheduler in dccpeep.c remains the sole owner of pass ordering.
+ * @par Role
+ * Declares shared options, statistics, line/effect/CFG representations,
+ * mutation transactions, parsing and analysis helpers, and pass entry points.
+ *
+ * @par Module map
+ * - dccpeep.c: CLI, pass scheduling, core rewrites, and register claims.
+ * - peep_lines.c: line ownership, opaque user assembly, mutation, and I/O.
+ * - peep_parse.c: exact Z80/M80 text parsers and formatters.
+ * - peep_analyze.c: lightweight register and function safety queries.
+ * - peep_control_flow.c: label, jump, function, and loop-bound queries.
+ * - peep_effects.c: cached line classification and machine effects.
+ * - peep_dataflow.c: versioned CFG, basic blocks, and liveness.
+ * - peep_frame_alloc.c: analysis-only frame-slot promotion census.
+ * - peep_pass_once.c: ordered single-scan local rewrites.
+ * - peep_pass_control_flow.c: label and branch rewrite passes.
+ * - peep_pass_inline_temp.c: tagged inline-temporary spill rewrites.
+ * - peep_pass_loops.c: loop-scoped register promotion.
+ * - peep_pass_minmax.c: exact board-game and minimax rewrites.
+ * - peep_pass_stubs.c: size-mode shared-helper factoring.
+ * - peep_pass_final.c: terminal relaxation and dead-state cleanup.
+ *
+ * @par Boundary
+ * This header is private to dccpeep. Passes mutate only through the line API,
+ * user-assembly entries remain opaque, and dccpeep.c alone orders passes.
  */
 #ifndef DCCPEEP_INTERNAL_H
 #define DCCPEEP_INTERNAL_H

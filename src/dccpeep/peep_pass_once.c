@@ -1,9 +1,20 @@
-/* peep_pass_once.c - the single-scan micro-pattern dispatcher.
+/**
+ * @file peep_pass_once.c
+ * @brief Dispatches ordered local peephole patterns in one line scan.
  *
- * pass_once() walks the line program once, trying a fixed ordered list of
- * small local rewrites (the try_*_at helpers) at each position. It is the
- * highest-volume pass in the fixpoint loop; all of its helpers are private
- * to this file and invoked only from pass_once itself.
+ * @par Role
+ * Walks the line program once and applies a fixed-priority set of private
+ * try_*_at() rewrites for boolean materialization, comparisons, stack and
+ * allocation sequences, redundant jumps, and other short local shapes.
+ *
+ * @par Key entry points
+ * pass_once() runs the scan; local_alloc_hl_result_dead() exposes the shared
+ * safety proof used by terminal local-allocation cleanup.
+ *
+ * @par Boundary
+ * The try_*_at() helpers are private and one invocation is only one scan.
+ * dccpeep.c provides fixed-point repetition and ordering against other pass
+ * families.
  */
 #include "dccpeep_internal.h"
 

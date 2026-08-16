@@ -1,13 +1,21 @@
-/*
- * dcc_ops.c - binary-operator and arithmetic code generation.
+/**
+ * @file dcc_ops.c
+ * @brief Implements shared arithmetic typing and Z80 operator primitives.
  *
- * Lowering for +, -, *, /, %, shifts and bitwise operators across 16- and
- * 32-bit and unsigned variants, integer promotion to the common type, the
- * element-size scaling used by pointer arithmetic, and the float-compare and
- * nonzero-test helpers the AST emitter calls into.
+ * @par Role
+ * Provides integer promotions and common types, 16- and 32-bit arithmetic,
+ * comparisons, shifts, masks, constant multiply/divide scaling, pointer
+ * element scaling, float comparisons, and nonzero tests.
  *
- * MODULE: compiled as its own translation unit; shared declarations are in dcc.h.
- * Source provenance: monolith src/ddc.c lines 10185-11520.
+ * @par Key entry points
+ * gen_binop_typed(), gen_binop32_typed(), common_arith_type(),
+ * emit_mul_hl_const(), scale_hl_by_elem_size(), and
+ * emit_test_expr_nonzero().
+ *
+ * @par Boundary
+ * Callers own expression semantics and operand placement. These are reusable
+ * target helpers, not an alternate function-body generator; production bodies
+ * are emitted from selected MIR candidates.
  */
 
 #include "dcc.h"

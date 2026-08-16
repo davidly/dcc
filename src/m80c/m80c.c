@@ -1,32 +1,22 @@
-/* RELFIX29: emit M80 location-counter records for trailing DS/ORG gaps too. */
-/* RELFIX17: add indexed BIT/RES/SET b,(IX/IY+d); prior fixes through RELFIX16. */
-/*
-* m80clone.c - portable C89, deliberately conservative clone of Microsoft M80
-*
-* This is a clean-room implementation scaffold aimed at building large CP/M
-* Z80/8080 assembly files on modern hosts and emitting LINK-80 compatible REL.
-*
-* RELFIX5 drop 2026-06-28: fixes LD A,(addr)/LD (addr),A absolute memory forms so they are not misassembled as immediate
-* loads; also treats . as the current location counter in expressions.
-* Status in this drop:
-*   - two-pass assembler, unbounded host memory instead of CP/M 64K tables
-*   - M80-style command line: obj,prn=source /Z /I /L /R /H /O /X /M
-*   - labels, public labels via FOO::, PUBLIC/ENTRY, EXTRN/EXT, NAME/TITLE
-*   - EQU, SET, ORG, ASEG/CSEG/DSEG, DB/DEFB, DW/DEFW, DS/DEFS, END
-*   - .RADIX, IF/ELSE/ENDIF/IFE/IFNDEF/IFDEF
-*   - 8080 opcodes plus a useful Z80 core: IX/IY indexed loads, CB/ED prefix
-*     ops, JR/DJNZ, EXX, LDI/R/D, CPI/R/D, IN/OUT forms, IM, RST, relative tests
-*   - PRN listing and SYM symbol listing
-*   - REL bitstream writer with module name, public definitions, program size,
-*     data bytes, program/data relative words, end-module and end-file items
-*
-* Not yet complete M80: macro bodies (MACRO/REPT/IRP/IRPC/LOCAL/EXITM), .COMMENT,
-* cross-reference .CRF, all listing controls, and some obscure expression forms.
-* The structure is intentionally table-free and easy to extend.
-*
-* Build:
-*   cc -std=c89 -Wall -Wextra -O2 -o m80clone m80clone.c
-*/
+/**
+ * @file m80c.c
+ * @brief Implements dcc's host-native, LINK-80-compatible M80 assembler.
+ *
+ * @par Role
+ * Two-pass assembles M80-style .MAC source with the 8080/Z80 instructions,
+ * directives, conditionals, relocations, and debug markers used by dcc. It
+ * emits LINK-80 .REL plus requested .PRN and .SYM files, source .DBG data, and
+ * per-module .LNK size metadata.
+ *
+ * @par Key entry points
+ * main(), parse_cmd(), assemble_pass(), write_rel(), write_sym(), and
+ * write_debug().
+ *
+ * @par Boundary
+ * Consumes assembly from dcc/dccpeep or dccrtlstrip; l80c or L80 owns final
+ * layout and linking. This clean-room implementation deliberately covers the
+ * M80 surface used by the dcc toolchain rather than every historical feature.
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

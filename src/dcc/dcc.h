@@ -1,52 +1,34 @@
-/*
- * dcc.h - foundational shared contract for the modular dcc compiler.
+/**
+ * @file dcc.h
+ * @brief Defines the shared compiler contract and CP/M/Z80 target model.
  *
- * dcc uses C89 as its base language plus selected C99/C11 features suitable
- * for CP/M/Z80, and emits Z80 assembly for the M80-compatible toolchain.
- * Function bodies lower through a typed,
- * function-local AST. This header holds broadly shared target constants, core
- * records, state declarations, and cross-module APIs; narrower contracts live
- * in dcc_ast_gen_internal.h and dcc_preproc_internal.h.
+ * @par Role
+ * Provides common system includes, translation limits, token/type/storage
+ * constants, core records, shared-state declarations, and cross-module APIs.
+ * Function declarations are grouped by their owning module; the corresponding
+ * storage definitions live in dcc_state.c.
  *
- * This foundational contract includes:
- *   1. System headers used across the compiler.
- *   2. Capacity / translation-limit macros (MAX_*).
- *   3. Type-kind, storage-class and token-kind constants.
- *   4. The core record types (Token, Sym, Def, AsmName, TypeDef, FieldDef,
- *      StructDef, ConstVal, ByteOperand).
- *   5. `extern` declarations for the shared global state (defined once in
- *      dcc_state.c).
- *   6. Broadly used cross-module functions, grouped by owning module.
+ * @par Module map
+ * - dcc.c: command-line driver, source loading, includes, and stage ordering.
+ * - dcc_preproc.c / dcc_pp_expr.c: macro-aware lexing and directive
+ *   expressions.
+ * - dcc_types.c / dcc_constexpr.c / dcc_fold.c: types and constant semantics.
+ * - dcc_symbols.c / dcc_asmname.c: symbols, scopes, linkage, and target names.
+ * - dcc_func.c / dcc_stmt.c / dcc_decl.c: declarations, body traversal, and
+ *   local initialization.
+ * - dcc_global_init.c / dcc_data.c: file-scope initializer records and data
+ *   layout.
+ * - dcc_array_narrow.c / dcc_licm.c: conservative frontend proofs and plans.
+ * - dcc_expr.c / dcc_cmp.c / dcc_ops.c / dcc_assign.c / dcc_stmt_fast.c:
+ *   shared typing and low-level target helpers.
+ * - dcc_ast*.c: function-local trees, MIR capture support, and metadata only.
+ * - dcc_mir*.c: production function capture, selection, scheduling, and
+ *   emission.
  *
- * Module .c files and their responsibilities:
- *   dcc_state.c     definitions of cross-module compiler state
- *   dcc_asmname.c   C identifier -> M80 assembler symbol mapping
- *   dcc_diag_emit.c diagnostics, allocation, emit primitives, char input
- *   dcc_preproc.c   preprocessor + macro engine + lexer (next_token)
- *   dcc_pp_expr.c   preprocessor #if/#elif expression evaluator
- *   dcc_types.c     type system, struct/union/typedef parsing
- *   dcc_constexpr.c integer constant-expression parser
- *   dcc_symbols.c   symbol tables + symbol-access codegen + EXTRN
- *   dcc_fold.c      constant folding + sizeof/offsetof
- *   dcc_expr.c      declarator parsing + low-level expression emit helpers
- *   dcc_cmp.c       comparison + conditional-branch codegen
- *   dcc_ops.c       binary-operator / arithmetic codegen
- *   dcc_assign.c    float constants + global byte-array address helper
- *   dcc_stmt_fast.c in-place increment/decrement address helper
- *   dcc_decl.c      local declaration + initializer codegen
- *   dcc_stmt.c      token-to-AST statement bridge + switch helpers
- *   dcc_func.c      functions/top-level declarations + inline-body capture
- *   dcc_global_init.c file-scope object initializer parsing (record path)
- *   dcc_global_scan.c whole-file lexical global-write/address scan
- *   dcc_array_narrow.c conservative byte-narrowing proof
- *   dcc_licm.c      loop-invariant code motion and loop-local CSE
- *   dcc_ast*.c      function-local AST storage, building, gates and emission
- *   dcc_data.c      data-section emission
- *   dcc.c           driver: file I/O, #include, CLI, and main()
- *
- * Examples of state intentionally kept private to its owner:
- *   - pp_expr_p / pp_expr_depth        (dcc_pp_expr.c: #if expression cursor)
- *   - include_dirs / num_include_dirs  (dcc.c: include search path)
+ * @par Boundary
+ * Focused AST, MIR, and preprocessor contracts live in their dedicated
+ * headers. Post-parse AST work is not a body-codegen fallback: production
+ * function bodies come only from selected MIR candidates.
  */
 #ifndef DCC_H
 #define DCC_H

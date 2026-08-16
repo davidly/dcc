@@ -1,7 +1,19 @@
-/* peep_pass_inline_temp.c - compiler-tagged temporary spill rewrites.
+/**
+ * @file peep_pass_inline_temp.c
+ * @brief Rewrites compiler-tagged inline-temporary spills.
  *
- * These passes consume dcc inline-temporary markers, replace safe memory
- * spills with register/stack forms, then remove any surviving markers.
+ * @par Role
+ * Consumes dcc inline-temporary markers, proves safe register-bank or stack
+ * substitutions for their memory spills, applies those rewrites, and removes
+ * markers that survive optimization.
+ *
+ * @par Key entry points
+ * pass_inline_temp_spill_to_stack() and pass_remove_inline_temp_markers().
+ *
+ * @par Boundary
+ * This module acts only on compiler-emitted marker contracts; it does not
+ * discover arbitrary spills. dccpeep.c controls rewrite and marker-removal
+ * ordering.
  */
 #include "dccpeep_internal.h"
 

@@ -43,10 +43,12 @@ python3 scripts/audit-c-module-exports.py \
   --allow-function mir_try_emit_attention_kernels
 ```
 
-## AST/MIR module documentation
+## C module documentation
 
-All `src/dcc/dcc_ast*.c/.h` and `src/dcc/dcc_mir*.c/.h` files use concise
-Doxygen-style file headers for human and agent navigation:
+Every maintained C and header module under `src/` uses a concise Doxygen-style
+file header for human and agent navigation. Tests, archived snapshots,
+generated/build output, and external fixtures are outside this blanket rule
+unless their own subsystem requires it.
 
 - `@file` and `@brief` identify the module and primary purpose.
 - `@par Role` states what the file owns.
@@ -54,11 +56,13 @@ Doxygen-style file headers for human and agent navigation:
 - `@par Boundary` states what neighboring modules own and what this file does
   not do.
 
-Keep the AST module map in `dcc_ast.h` and the MIR module map in
-`dcc_mir_internal.h` current when adding, removing, renaming, or moving
-modules. Do not describe `dcc_ast_gen*` as a production function-body fallback;
-AST processing after parsing is metadata/classification support and production
-body Z80 comes only from selected MIR candidates.
+Keep the source map above, the AST map in `dcc_ast.h`, the MIR map in
+`dcc_mir_internal.h`, and subsystem maps in private headers current when
+adding, removing, renaming, or moving modules. Update a file's header whenever
+its ownership or boundary changes. Do not describe `dcc_ast_gen*` as a
+production function-body fallback: AST processing after parsing is
+metadata/classification support and production body Z80 comes only from
+selected MIR candidates.
 
 ## Build
 

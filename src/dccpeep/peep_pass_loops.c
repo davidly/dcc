@@ -1,8 +1,18 @@
-/* peep_pass_loops.c - loop-scoped registerization passes.
+/**
+ * @file peep_pass_loops.c
+ * @brief Promotes proven loop variables and bounds into registers.
  *
- * These passes promote proven byte/word loop variables into BC, C, E, or
- * IYL. Register-specific rewrites remain separate; only their exact shared
- * proof helpers live in this module.
+ * @par Role
+ * Matches exact byte and word loop shapes, proves slot, escape, call, and
+ * register-ownership safety, then promotes counters or bounds into BC, C, E,
+ * or IYL for the loop's live interval.
+ *
+ * @par Key entry points
+ * The pass_*_to_reg_*() loop passes declared in dccpeep_internal.h.
+ *
+ * @par Boundary
+ * This is pattern-specific loop registerization, not general frame allocation.
+ * dccpeep.c owns pass order and the opt-in gate for undocumented IYL forms.
  */
 #include "dccpeep_internal.h"
 

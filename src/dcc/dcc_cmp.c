@@ -1,14 +1,21 @@
-/*
- * dcc_cmp.c - comparison and conditional-branch code generation.
+/**
+ * @file dcc_cmp.c
+ * @brief Implements shared Z80 comparison and conditional-branch primitives.
  *
- * Relational/equality comparison codegen (signed and unsigned, 16- and 32-bit)
- * and the direct condition-to-branch lowering used by if/while/for. Includes
- * the byte-operand fast comparators that emit a single cp + conditional jump.
- * struct ByteOperand is declared in dcc.h.
+ * @par Role
+ * Materializes 16-bit comparison results, emits signed and unsigned branches,
+ * supports direct byte operands, and provides small-constant local-variable
+ * branch fast paths.
  *
- * MODULE: compiled as its own translation unit; shared declarations are in dcc.h.
- * Source provenance: monolith src/ddc.c lines 8842-9235 and 9242-10184
- * (the struct ByteOperand definition at 9236-9241 is hoisted to dcc.h).
+ * @par Key entry points
+ * gen_cmp_typed(), emit_cmp_branch_true(), emit_cmp_branch_false(),
+ * emit_byte_cmp_branch_after_cp(), and
+ * emit_cmp_const_branch_for_signed_local16().
+ *
+ * @par Boundary
+ * Callers establish operand types and registers. This module supplies target
+ * primitives but does not parse expressions or select production body
+ * candidates; final function bodies are MIR-selected.
  */
 
 #include "dcc.h"

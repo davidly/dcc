@@ -1,15 +1,22 @@
-/*
- * dcc.c - compiler driver and entry point (the program's main translation unit).
+/**
+ * @file dcc.c
+ * @brief Drives one source translation from command line to M80 assembly.
  *
- * Ties the pipeline together: reads the input file, resolves #include
- * directives and splices line directives, runs the active-source filtering
- * pass, parses command-line options (-o/-c/-f/-I/-D/-U/...), and contains
- * main(). The include search path (include_dirs/num_include_dirs, capped by
- * MAX_INCLUDE_DIRS) is kept module-local (static) here.
+ * @par Role
+ * Parses compiler options, reads and splices source files, expands recursive
+ * includes, filters inactive preprocessing branches, initializes compilation
+ * state, and sequences translation-unit parsing, MIR finalization, data
+ * emission, and deferred extern emission.
  *
- * MODULE: its own translation unit, using dcc.h plus the focused preprocessor
- * and AST contracts.
- * Source provenance: monolith src/ddc.c lines 17975-18841.
+ * @par Key entry points
+ * main(), preprocess_includes_file(), filter_active_preprocessor_source(), and
+ * splice_backslash_newlines().
+ *
+ * @par Boundary
+ * dcc_preproc.c owns token-level preprocessing and lexing; frontend modules
+ * own parsing; selected MIR candidates are the only source of production
+ * function bodies. This file orchestrates those stages rather than lowering
+ * function bodies itself.
  */
 
 /*
