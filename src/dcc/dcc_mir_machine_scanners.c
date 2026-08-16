@@ -12840,13 +12840,15 @@ static int mir_emit_c_state_lexer_regional(MirStream *out)
     return mir_try_emit_compacted_regional_homed_cfg(out);
 }
 
-static int mir_match_comment_strip_function(
-    const struct MirInsn *call, int argument_count,
-    struct Sym **function_out)
+static int mir_match_scanner_word_call(
+    const struct MirInsn *arg, const struct MirInsn *call,
+    int expected_value, int result_width, struct Sym **function_out)
 {
     struct Sym *function;
+    int argument_value;
 
     if (call->opcode != MIR_CALL || call->src1 >= 0 ||
+        call->secondary_offset < 0 ||
         (call->memory_flags &
          (MIR_CALL_FLAG_VARIADIC |
           MIR_CALL_FLAG_FORMAT_RUNTIME |
@@ -12856,13 +12858,50 @@ static int mir_match_comment_strip_function(
     if (function == NULL || function->storage != SC_FUNC ||
         function->is_funcptr || !function->has_proto ||
         function->proto_variadic ||
-        function->proto_nargs != argument_count ||
+        function->proto_nargs != 1 ||
+        call->type != function->type ||
+        type_size(function->type) != result_width ||
         (call->base_name[0] != 0 &&
          strcmp(call->base_name,
                 asm_name_for(sym_asm_name(function)))))
         return 0;
+    if (type_size(function->proto_types[0]) != 2 ||
+        !mir_machine_single_call_argument(call, &argument_value) ||
+        argument_value != expected_value ||
+        arg->opcode != MIR_ARG ||
+        arg->secondary_offset != call->secondary_offset ||
+        arg->immediate != 0 ||
+        arg->src1 != expected_value ||
+        arg->type != function->proto_types[0])
+        return 0;
     *function_out = function;
     return 1;
+}
+
+static int mir_match_scanner_byte_to_word(
+    int address_instruction, int load_instruction,
+    int byte_cast_instruction, int word_cast_instruction)
+{
+    const struct MirInsn *address = &mir.insns[address_instruction];
+    const struct MirInsn *load = &mir.insns[load_instruction];
+    const struct MirInsn *byte_cast = &mir.insns[byte_cast_instruction];
+    const struct MirInsn *word_cast = &mir.insns[word_cast_instruction];
+
+    return mir_scanner_char_pointer_type(address->type) &&
+        load->opcode == MIR_LOAD_INDIRECT &&
+        load->src1 == address->dst &&
+        load->memory_size == 1 &&
+        (load->memory_flags & (1 | 8)) == 0 &&
+        load->bit_width == 0 &&
+        mir_scanner_char_type(load->type) &&
+        byte_cast->opcode == MIR_UNARY &&
+        byte_cast->immediate == 0 &&
+        byte_cast->src1 == load->dst &&
+        mir_scanner_unsigned_byte_type(byte_cast->type) &&
+        word_cast->opcode == MIR_UNARY &&
+        word_cast->immediate == 0 &&
+        word_cast->src1 == byte_cast->dst &&
+        mir_scanner_signed_word_type(word_cast->type);
 }
 
 static int mir_match_bounded_decimal_parse_schedule(
@@ -12946,16 +12985,40 @@ static int mir_match_bounded_decimal_parse_schedule(
             output->dst, &plan->output_stack_offset))
         return mir_machine_reject(
             "bounded-decimal-parse-schedule", "parameters");
-    if (!mir_match_comment_strip_function(
-            &mir.insns[13], 1, &space_function) ||
-        !mir_match_comment_strip_function(
-            &mir.insns[151], 1, &plan->space_function) ||
+    if (!mir_match_scanner_byte_to_word(8, 9, 10, 11) ||
+        !mir_match_scanner_word_call(
+            &mir.insns[12], &mir.insns[13],
+            mir.insns[11].dst, 2, &space_function) ||
+        mir.insns[14].src1 != mir.insns[13].dst ||
+        !mir_match_scanner_byte_to_word(42, 43, 44, 45) ||
+        !mir_match_scanner_word_call(
+            &mir.insns[46], &mir.insns[47],
+            mir.insns[45].dst, 2, &digit_function) ||
+        mir.insns[48].immediate != '!' ||
+        mir.insns[48].src1 != mir.insns[47].dst ||
+        mir.insns[49].src1 != mir.insns[48].dst ||
+        !mir_match_scanner_byte_to_word(68, 69, 70, 71) ||
+        !mir_match_scanner_word_call(
+            &mir.insns[72], &mir.insns[73],
+            mir.insns[71].dst, 2, &plan->digit_function) ||
+        mir.insns[74].src1 != mir.insns[73].dst ||
+        !mir_match_scanner_byte_to_word(146, 147, 148, 149) ||
+        !mir_match_scanner_word_call(
+            &mir.insns[150], &mir.insns[151],
+            mir.insns[149].dst, 2, &plan->space_function) ||
+        mir.insns[152].src1 != mir.insns[151].dst)
+        return mir_machine_reject(
+            "bounded-decimal-parse-schedule",
+            "argument-conversion");
+    if (
         space_function != plan->space_function ||
-        !mir_match_comment_strip_function(
-            &mir.insns[47], 1, &digit_function) ||
-        !mir_match_comment_strip_function(
-            &mir.insns[73], 1, &plan->digit_function) ||
-        digit_function != plan->digit_function)
+        digit_function != plan->digit_function ||
+        !mir_scanner_signed_word_type(space_function->type) ||
+        !mir_scanner_signed_word_type(
+            space_function->proto_types[0]) ||
+        !mir_scanner_signed_word_type(digit_function->type) ||
+        !mir_scanner_signed_word_type(
+            digit_function->proto_types[0]))
         return mir_machine_reject(
             "bounded-decimal-parse-schedule", "calls");
     if (!mir_machine_constant_equals(mir.insns[16].dst, 1) ||
@@ -13120,11 +13183,23 @@ static int mir_match_bounded_uppercase_schedule(
         !mir_machine_constant_equals(mir.insns[22].dst, 1) ||
         !mir_machine_constant_equals(mir.insns[44].dst, 1) ||
         !mir_machine_constant_equals(mir.insns[53].dst, 0) ||
-        !mir_match_comment_strip_function(
-            &mir.insns[39], 1, &plan->upper_function) ||
-        mir.insns[38].src1 != mir.insns[37].dst ||
+        !mir_match_scanner_byte_to_word(34, 35, 36, 37) ||
+        !mir_match_scanner_word_call(
+            &mir.insns[38], &mir.insns[39],
+            mir.insns[37].dst, 2, &plan->upper_function) ||
+        !mir_scanner_signed_word_type(plan->upper_function->type) ||
+        !mir_scanner_signed_word_type(
+            plan->upper_function->proto_types[0]) ||
+        mir.insns[40].immediate != 0 ||
+        mir.insns[40].src1 != mir.insns[39].dst ||
+        !mir_scanner_char_type(mir.insns[40].type))
+        return mir_machine_reject(
+            "bounded-uppercase-schedule",
+            "argument-conversion");
+    if (
         mir.insns[41].src1 != mir.insns[31].dst ||
         mir.insns[41].src2 != mir.insns[40].dst ||
+        mir.insns[41].bit_width != 0 ||
         mir.insns[54].src1 != mir.insns[51].dst ||
         mir.insns[54].src2 != mir.insns[53].dst)
         return mir_machine_reject(
@@ -13569,20 +13644,43 @@ static int mir_match_comment_strip_schedule(
         !mir_machine_parameter_value_offset(
             parameter->dst, &plan->input_stack_offset) ||
         !mir_machine_same_location(parameter, &mir.insns[2]) ||
-        mir.insns[3].src1 != mir.insns[2].dst ||
-        !mir_match_comment_strip_function(
-            &mir.insns[4], 1, &plan->length_function) ||
+        !mir_match_scanner_word_call(
+            &mir.insns[3], &mir.insns[4],
+            mir.insns[2].dst, 2, &plan->length_function) ||
+        type_ptr_depth(plan->length_function->type) != 0 ||
+        type_is_float(plan->length_function->type) ||
+        (plan->length_function->type & 15) != TYPE_INT ||
+        !mir_scanner_char_pointer_type(
+            plan->length_function->proto_types[0]) ||
         mir.insns[7].immediate != '+' ||
         mir.insns[7].src1 != mir.insns[4].dst ||
         mir.insns[7].src2 != mir.insns[5].dst ||
         !mir_machine_constant_equals(mir.insns[5].dst, 1) ||
-        mir.insns[8].src1 != mir.insns[7].dst ||
-        !mir_match_comment_strip_function(
-            &mir.insns[9], 1, &plan->allocate_function) ||
-        !mir_match_comment_strip_function(
-            &mir.insns[18], 1, &plan->error_function) ||
-        mir.insns[16].immediate < 0 ||
-        mir.insns[17].src1 != mir.insns[16].dst)
+        !mir_match_scanner_word_call(
+            &mir.insns[8], &mir.insns[9],
+            mir.insns[7].dst, 2, &plan->allocate_function) ||
+        type_ptr_depth(plan->allocate_function->type) == 0 ||
+        type_size(plan->allocate_function->type) != 2 ||
+        type_ptr_depth(
+            plan->allocate_function->proto_types[0]) != 0 ||
+        type_is_float(plan->allocate_function->proto_types[0]) ||
+        (plan->allocate_function->proto_types[0] & 15) != TYPE_INT ||
+        mir.insns[11].immediate != 0 ||
+        mir.insns[11].src1 != mir.insns[9].dst ||
+        !mir_scanner_char_pointer_type(mir.insns[11].type) ||
+        mir.insns[12].src1 != mir.insns[11].dst ||
+        !mir_machine_same_location(&mir.insns[12], &mir.insns[13]) ||
+        mir.insns[14].immediate != '!' ||
+        mir.insns[14].src1 != mir.insns[13].dst ||
+        mir.insns[15].src1 != mir.insns[14].dst ||
+        !mir_match_scanner_word_call(
+            &mir.insns[17], &mir.insns[18],
+            mir.insns[16].dst, 0, &plan->error_function) ||
+        type_ptr_depth(plan->error_function->type) != 0 ||
+        (plan->error_function->type & 15) != TYPE_VOID ||
+        !mir_scanner_char_pointer_type(
+            plan->error_function->proto_types[0]) ||
+        mir.insns[16].immediate < 0)
         return mir_machine_reject(
             "comment-strip-schedule", "entry");
     if (

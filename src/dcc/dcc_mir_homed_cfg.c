@@ -1493,9 +1493,6 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
 
     mir_homed_cfg_frameless = 0;
     mir_homed_cfg_used_unary_not_branch = 0;
-    if (mir_hybrid_homed_selection &&
-        !mir_regional_home_plan_is_active())
-        mir_reallocate_call_spanning_phi_homes();
     /* Phase 1 (mir-migration-plan-to-100pct.md), Item 8: a corpus-wide
      * zero-spill-fallback survey found "return-type" (base type != int)
      * is by far the single largest homed-scalar-cfg rejection cause
@@ -2045,6 +2042,7 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
         int true_label;
         int preserve_hl;
 
+        mir_emit_instruction_index = i;
         if (!mir_regional_before_instruction(out, i))
             goto done;
         switch (insn->opcode) {
@@ -3218,6 +3216,7 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
     mir_homed_cfg_frameless = frameless;
     accepted = 1;
 done:
+    mir_emit_instruction_index = -1;
     if (!accepted && wide_saved_colors != NULL) {
         memcpy(mir.allocation_colors, wide_saved_colors,
                (size_t)mir.next_value * sizeof(*wide_saved_colors));

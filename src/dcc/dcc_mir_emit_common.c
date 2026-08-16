@@ -957,8 +957,17 @@ static int mir_emit_regional_address_to_hl(MirStream *out, int value)
     if (memory_storage == SC_PARAM && mir_home_uses_iy())
         memory_offset += 2;
     mir_stream_puts("\tpush ix\n\tpop hl\n", out);
-    if (memory_offset != 0)
-        mir_stream_printf(out, "\tld de,%d\n\tadd hl,de\n", memory_offset);
+    if (memory_offset != 0) {
+        int preserve_de =
+            mir_de_home_live_in(mir_emit_instruction_index);
+
+        if (preserve_de)
+            mir_stream_puts("\tpush de\n", out);
+        mir_stream_printf(out,
+            "\tld de,%d\n\tadd hl,de\n", memory_offset);
+        if (preserve_de)
+            mir_stream_puts("\tpop de\n", out);
+    }
     return 1;
 }
 

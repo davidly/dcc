@@ -547,11 +547,6 @@ static int mir_has_phi_first_call_argument_candidate(void)
     return 0;
 }
 
-int mir_spilled_cfg_has_phi_argument_stack_handoff(void)
-{
-    return mir_has_phi_first_call_argument_candidate();
-}
-
 static int mir_virtual_offset(int value)
 {
     int slot = value;
@@ -13400,7 +13395,10 @@ static int mir_prepare_backend_slots(void)
     for (i = 0; i < mir.count; ++i) {
         const struct MirInsn *insn = &mir.insns[i];
         if (insn->dst >= 0) {
-            first[insn->dst] = i;
+            first[insn->dst] =
+                insn->opcode == MIR_PHI
+                    ? mir_phi_physical_start(i)
+                    : i;
             last[insn->dst] = i;
         }
         if (insn->src1 >= 0 && last[insn->src1] < i)
@@ -23508,6 +23506,27 @@ static int mir_collect_phi_copies_for_edge(int predecessor, int successor,
     return copy_count;
 }
 
+static int mir_phi_argument_already_prepushed(
+    int predecessor, int successor, int source, int destination)
+{
+    int prior_sources[MAX_FLOW];
+    int prior_destinations[MAX_FLOW];
+    int prior_count;
+
+    if (predecessor <= 0 || successor < 0 ||
+        successor >= mir.count ||
+        mir.insns[predecessor].opcode != MIR_LABEL ||
+        mir.insns[successor].opcode != MIR_LABEL ||
+        !mir_instruction_has_phi_fallthrough(predecessor - 1, 1))
+        return 0;
+    prior_count = mir_collect_phi_copies_for_edge(
+        predecessor - 1, predecessor,
+        prior_sources, prior_destinations);
+    return prior_count == 1 &&
+           prior_sources[0] == source &&
+           prior_destinations[0] == destination;
+}
+
 /* Item T32: true only when the edge from `predecessor` to `successor`
  * definitely has no phi copies to run (a hard-fail collection is treated as
  * "not provably empty" so the caller falls back to the general path, which
@@ -26362,14 +26381,6 @@ static int mir_phi_copy_group_is_disjoint(const int *sources,
     return 1;
 }
 
-static int mir_instruction_block_label(int instruction)
-{
-    for (; instruction >= 0; --instruction)
-        if (mir.insns[instruction].opcode == MIR_LABEL)
-            return mir.insns[instruction].label;
-    return -1;
-}
-
 static int mir_emit_spilled_phi_copies(MirStream *out, int predecessor,
                                        int successor)
 {
@@ -26387,20 +26398,12 @@ static int mir_emit_spilled_phi_copies(MirStream *out, int predecessor,
             mir.backend_slots != NULL &&
             mir.backend_slots[destinations[copy]] ==
                 MIR_BACKEND_SLOT_PHI_ARGUMENT_STACK) {
-            const struct MirInsn *phi =
-                mir_definition(destinations[copy]);
-            int block_label =
-                mir_instruction_block_label(predecessor);
-
             if (copy_count != 1 ||
                 mir_value_is_wide(sources[copy]))
                 return 0;
-            if (phi == NULL || phi->opcode != MIR_PHI)
-                return 0;
-            if (!((sources[copy] == phi->src1 &&
-                   block_label == phi->phi_pred1) ||
-                  (sources[copy] == phi->src2 &&
-                   block_label == phi->phi_pred2)))
+            if (mir_phi_argument_already_prepushed(
+                    predecessor, successor, sources[copy],
+                    destinations[copy]))
                 return 1;
             mir_emit_virtual_load(out, sources[copy]);
             mir_stream_puts("\tpush hl\n", out);

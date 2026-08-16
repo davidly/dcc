@@ -89,6 +89,7 @@
     { "name": "tunaryp", "host": true },
     { "name": "tunbf", "host": true },
     { "name": "tmirfast", "host": true },
+    { "name": "tmirlife", "host": true },
     { "name": "tstdlib", "host": true },
     { "name": "tap", "host": true },
     { "name": "tkandr", "host": true },
