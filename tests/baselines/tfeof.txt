@@ -1,0 +1,19 @@
+PASS feof_false_after_open: 0
+PASS feof_false_at_exact_end: 0
+PASS read_past_end_is_EOF: -1
+PASS feof_true_after_crossing_end: 1
+PASS feof_still_true_on_recheck: 1
+PASS feof_still_true_on_recheck2: 1
+PASS feof_false_after_clearerr: 0
+PASS still_at_end_after_clearerr: -1
+PASS feof_true_again: 1
+PASS first_stream_at_eof: 1
+PASS second_stream_unaffected: 0
+PASS second_stream_first_byte: 66
+PASS second_stream_still_not_eof: 0
+PASS fread_reads_exact_128: 128
+PASS feof_true_after_short_fread: 1
+PASS feof_false_on_fresh_empty_file: 0
+PASS empty_file_first_read_is_EOF: -1
+PASS feof_true_on_empty_file: 1
+tfeof ok

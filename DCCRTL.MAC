@@ -735,6 +735,10 @@ __fgetc:
         ret
 
 fgc_no_pb:
+        push    bc              ; save fp across the _read call below (_read
+                                 ; is free to clobber BC internally, so the
+                                 ; copy pushed for its own argument isn't a
+                                 ; safe place to read fp back from afterward)
         ld      hl,1
         push    hl              ; count
         ld      hl,___getc_ch
@@ -746,6 +750,7 @@ fgc_no_pb:
         add     hl,sp
         ld      sp,hl
         ex      de,hl
+        pop     bc              ; restore fp saved above
 
         ; success iff _read returned 1
         ld      a,h
@@ -761,6 +766,25 @@ fgc_no_pb:
         ret
 
 getc_bad:
+        ; EOF or error: set the EOF flag for this fd, matching _fread's
+        ; "if bytes_read < nbytes set EOF" behavior (elsewhere in this
+        ; file) - without this, feof() never reports true after a
+        ; fgetc()/getc() call that itself returned EOF, only after
+        ; fread()/fgets(), violating C89 7.9.7.5. BC = fp, saved above.
+        ; Checks both bounds (unlike _fread's own version of this check,
+        ; which only checks the lower one): a garbage fp far above the
+        ; valid range must not index past the NFILES-byte __fdeof array.
+        ld      a,c
+        sub     FIRSTFD
+        jr      c,gcbad_noeof
+        cp      NFILES
+        jr      nc,gcbad_noeof
+        ld      l,a
+        ld      h,0
+        ld      de,__fdeof
+        add     hl,de
+        ld      (hl),1
+gcbad_noeof:
         ld      hl,0ffffh       ; EOF
         ret
 
@@ -11435,6 +11459,12 @@ frd_have_nbytes:
         ld      a,(ix+10)
         sub     FIRSTFD
         jr      c,frd_neof
+        ; This only checked the lower bound, unlike _feof's equivalent
+        ; check: a garbage fp far above the valid range (e.g. (FILE*)200)
+        ; indexed past the NFILES-byte __fdeof array. Add the same upper
+        ; bound __fgetc's EOF-flag fix already checks.
+        cp      NFILES
+        jr      nc,frd_neof
         ld      h,0
         ld      l,a
         ld      de,__fdeof
@@ -11442,6 +11472,17 @@ frd_have_nbytes:
         ld      (hl),1
 frd_neof:
         pop     hl                      ; bytes_read
+        ; _read() returns -1 (0FFFFh) specifically for EBADF (a bad fd) -
+        ; every other path it can take returns a genuine non-negative
+        ; count (0..nbytes). Feeding that sentinel straight into the
+        ; divide below would return a huge garbage item count instead of
+        ; "nothing read" for a bad fp (e.g. fread((FILE*)99,...)).
+        ld      a,h
+        and     l
+        inc     a
+        jr      nz,frd_have_bytes
+        ld      hl,0
+frd_have_bytes:
         ; return bytes_read / size
         ld      a,(ix+7)
         or      a

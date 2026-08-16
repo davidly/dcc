@@ -169,6 +169,35 @@ int main(void)
         }
     }
 
+    /* feof() on an out-of-range fd must report false, not crash - the
+     * fd-range check itself (not an EBADF/errno path: feof() has no
+     * error return, so "not EOF" is the only sane answer for a bad fp). */
+    r = feof((FILE *)99);
+    if (r == 0) {
+        printf("PASS feof bad fd rv=%d\n", r);
+    } else {
+        printf("FAIL feof bad fd rv=%d\n", r);
+        fails++;
+    }
+
+    /* fread() on an out-of-range fd must report 0 items read, not crash
+     * or wrap the internal _read()-EBADF sentinel into a garbage count -
+     * fread() has no errno-reporting convention of its own here, so
+     * "nothing read" is the only sane answer for a bad fp. */
+    {
+        char frbuf[4];
+        size_t fr;
+
+        frbuf[0] = 'Z';
+        fr = fread(frbuf, 1, sizeof(frbuf), (FILE *)99);
+        if (fr == 0 && frbuf[0] == 'Z') {
+            printf("PASS fread bad fd rv=%u\n", (unsigned)fr);
+        } else {
+            printf("FAIL fread bad fd rv=%u buf0=%d\n", (unsigned)fr, (int)frbuf[0]);
+            fails++;
+        }
+    }
+
     /* setvbuf() with an out-of-range mode must fail with EINVAL. */
     errno = 0;
     r = setvbuf(stdout, NULL, 99, 0);
