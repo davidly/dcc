@@ -110,4 +110,58 @@ LCEND:
 	ld sp,ix
 	pop ix
 	ret
+; static function wide
+_ZW:
+	push ix
+	ld ix,0
+	add ix,sp
+	dec sp
+	dec sp
+	push iy ; peep: mutable_ix_pointer_to_iy_abi
+	pop bc ; peep: mutable_ix_pointer_to_iy_abi
+	ld (ix-2),c ; peep: mutable_ix_pointer_to_iy_abi
+	ld (ix-1),b ; peep: mutable_ix_pointer_to_iy_abi
+	ld hl,300
+	push hl ; peep: mutable_ix_pointer_to_iy
+	pop iy
+	call __safe
+	ld l,(iy+0) ; peep: mutable_ix_pointer_to_iy
+	ld h,0
+	call __safe
+	ld l,(iy+1) ; peep: mutable_ix_pointer_to_iy
+	ld h,(iy+2)
+	call __safe
+	push iy ; peep: mutable_ix_pointer_to_iy
+	pop hl
+	ld a,(hl)
+	call __safe
+	push iy ; peep: mutable_ix_pointer_to_iy
+	pop hl
+	ld a,(hl)
+	call __safe
+	push iy ; peep: mutable_ix_pointer_to_iy
+	pop hl
+	ld a,(hl)
+	call __safe
+	push iy ; peep: mutable_ix_pointer_to_iy
+	pop hl
+	ld a,(hl)
+	call __safe
+	push iy ; peep: mutable_ix_pointer_to_iy
+	pop hl
+	ld a,(hl)
+	call __safe
+	exx ; peep: mutable_ix_pointer_to_iy
+	ld de,5 ; peep: mutable_ix_pointer_to_iy
+	add iy,de ; peep: mutable_ix_pointer_to_iy
+	exx ; peep: mutable_ix_pointer_to_iy
+	ld a,e
+	or a
+	ld c,(ix-2) ; peep: mutable_ix_pointer_to_iy_abi
+	ld b,(ix-1) ; peep: mutable_ix_pointer_to_iy_abi
+	push bc ; peep: mutable_ix_pointer_to_iy_abi
+	pop iy ; peep: mutable_ix_pointer_to_iy_abi
+	ld sp,ix
+	pop ix
+	ret
 	end

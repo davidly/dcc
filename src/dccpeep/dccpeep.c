@@ -8119,8 +8119,10 @@ static int local_jump_table_dispatch(int line, int func_start, int func_end)
  * calls and recursion. Every slot reference must be a canonical pair
  * load/store or the standard small carry-skip increment. Low-reference
  * candidates additionally require a canonical post-increment pair in a
- * profitable constant-count loop. Every return must use a normal IX
- * epilogue. */
+ * profitable constant-count loop. Canonical byte and offset-one word reads
+ * use IY-indexed loads directly. Increments of four or more use a balanced
+ * EXX/add sequence only when the function has no independent EXX ownership.
+ * Every return must use a normal IX epilogue. */
 static int pass_cache_mutable_ix_pointer_in_iy(void)
 {
     int i;
@@ -8282,8 +8284,26 @@ static int pass_cache_mutable_ix_pointer_in_iy(void)
                        peep_parse_ld_ix_pair(lines[k], lines[k + 1],
                                              &parsed_offset) &&
                        parsed_offset == best_offset) {
-                replace1_tagged(k, "push iy", "mutable_ix_pointer_to_iy");
-                replace1(k + 1, "pop hl");
+                if (k + 6 < func_end && eq(k + 2, "inc hl") &&
+                    eq(k + 3, "ld a,(hl)") && eq(k + 4, "inc hl") &&
+                    eq(k + 5, "ld h,(hl)") && eq(k + 6, "ld l,a")) {
+                    replace1_tagged(k, "ld l,(iy+1)",
+                                    "mutable_ix_pointer_to_iy");
+                    replace1(k + 1, "ld h,(iy+2)");
+                    delete_n(k + 2, 5);
+                    func_end -= 5;
+                } else if (k + 3 < func_end && eq(k + 2, "ld l,(hl)") &&
+                    eq(k + 3, "ld h,0")) {
+                    replace1_tagged(k, "ld l,(iy+0)",
+                                    "mutable_ix_pointer_to_iy");
+                    replace1(k + 1, "ld h,0");
+                    delete_n(k + 2, 2);
+                    func_end -= 2;
+                } else {
+                    replace1_tagged(k, "push iy",
+                                    "mutable_ix_pointer_to_iy");
+                    replace1(k + 1, "pop hl");
+                }
                 ++k;
             } else if (peep_parse_ld_de_ix_pair(k, &parsed_offset) &&
                        parsed_offset == best_offset) {
@@ -8294,21 +8314,39 @@ static int pass_cache_mutable_ix_pointer_in_iy(void)
                                                   func_end, &amount)) {
                 int direct_tail = is_uncond_jp(lines[k + 5]) ||
                                   is_uncond_jr(lines[k + 5]);
+                int replacement_count;
+                char increment[MAX_LINE];
                 char tail[MAX_LINE];
                 if (direct_tail)
                     strcpy(tail, lines[k + 5]);
-                for (q = 0; q < amount; ++q)
-                    replace1_tagged(k + q, "inc iy",
+                if (amount >= 4 && !function_uses_exx(k)) {
+                    replace1_tagged(k, "exx",
                                     "mutable_ix_pointer_to_iy");
-                if (direct_tail) {
-                    replace1(k + amount, tail);
-                    delete_n(k + amount + 1, 5 - amount);
-                    func_end -= 5 - amount;
-                    k += amount;
+                    sprintf(increment, "ld de,%d", amount);
+                    replace1_tagged(k + 1, increment,
+                                    "mutable_ix_pointer_to_iy");
+                    replace1_tagged(k + 2, "add iy,de",
+                                    "mutable_ix_pointer_to_iy");
+                    replace1_tagged(k + 3, "exx",
+                                    "mutable_ix_pointer_to_iy");
+                    replacement_count = 4;
                 } else {
-                    delete_n(k + amount, 6 - amount);
-                    func_end -= 6 - amount;
-                    k += amount - 1;
+                    for (q = 0; q < amount; ++q)
+                        replace1_tagged(k + q, "inc iy",
+                                        "mutable_ix_pointer_to_iy");
+                    replacement_count = amount;
+                }
+                if (direct_tail) {
+                    replace1(k + replacement_count, tail);
+                    delete_n(k + replacement_count + 1,
+                             5 - replacement_count);
+                    func_end -= 5 - replacement_count;
+                    k += replacement_count;
+                } else {
+                    delete_n(k + replacement_count,
+                             6 - replacement_count);
+                    func_end -= 6 - replacement_count;
+                    k += replacement_count - 1;
                 }
             }
         }
