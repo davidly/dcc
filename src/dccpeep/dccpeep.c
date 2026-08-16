@@ -5667,6 +5667,167 @@ static int symbol_written_in_range(const char *name, int start, int end)
 }
 
 /*
+ * pass_cache_global_word_field_reload:
+ *
+ * "ld hl,(NAME)" immediately followed by "ld de,N / add hl,de" computes the
+ * address of a constant-offset field reached through a runtime pointer
+ * variable NAME - e.g. an interpreter's central state allocated on the heap
+ * and referenced through a global pointer (`static struct State *G;`),
+ * where every G->field access needs NAME's value loaded before the field's
+ * offset can be added. Unlike pass_fold_hl_base_const_offset just above,
+ * NAME's own value is not a link-time constant, so LABEL+N can't fold into
+ * a single assembler expression the way a plain static struct's field
+ * address can - the address has to be computed at runtime, every time.
+ *
+ * A stack-based interpreter's inlined push/pop helper is exactly the shape
+ * that pays for this repeatedly: popv()'s "G->stp = G->stp - 1; return
+ * *G->stp;" references G->stp's address three times (the AST-level inliner
+ * clones the whole expression at each of popv/pushv's separate call sites
+ * with no shared subexpression elimination across them), and a single
+ * `b = popv(); a = popv(); pushv(a OP b);` opcode handler chains three such
+ * calls - all reaching for the identical G->stp address, recomputed from
+ * scratch every time. Confirmed via tests/adaint.c's run() dispatch loop:
+ * 173 occurrences of "ld de,112" (G->stp's own offset alone) in one
+ * function.
+ *
+ * Shares pass_cache_global_word_reload's entire hazard-segmentation, BC-
+ * ownership, and single-total-write safety machinery (see that pass's own
+ * comment for the two miscompiles fixed there, both equally applicable
+ * here since this differs only in what's cached) - not NAME's bare value,
+ * but NAME's-value-plus-a-specific-constant-offset, i.e. the field ADDRESS
+ * itself. The first "ld hl,(NAME)/ld de,N/add hl,de" triple in a segment is
+ * kept as the real computation with a "ld c,l/ld b,h" cache-store appended;
+ * each repeat triple for the identical (NAME, N) pair collapses to
+ * "ld l,c/ld h,b".
+ *
+ * >= 2, not >= 3 like the bare-value pass: caching still costs a fixed 8
+ * T-states (ld c,l/ld b,h), but each avoided triple here saves 29 T-states
+ * (37 for "ld hl,(nn)"+"ld de,nn"+"add hl,de" vs 8 for the two-instruction
+ * replacement) rather than the bare-value pass's single-reload 8T saving -
+ * a single avoided repeat already clears the fixed cache-store cost by a
+ * wide margin, where the bare-value pass's near-equal cost/benefit forced
+ * the higher threshold.
+ *
+ * Runs before pass_cache_global_word_reload in the fixed-point list so it
+ * sees the untouched three-line triple on the first pass; any bare
+ * "ld hl,(NAME)" occurrences this pass doesn't consume (a different
+ * constant offset, or no offset at all) remain for that later pass's own
+ * scan of the same segment.
+ */
+static int pass_cache_global_word_field_reload(void)
+{
+    int i;
+    int changed = 0;
+    int segstart;
+
+    segstart = 0;
+    for (i = 0; i <= nlines; i++) {
+        int j, k;
+        char sym[128], best_sym[128];
+        char off_text[64];
+        int off, best_off;
+        int best_count;
+        struct { char name[128]; int off; int count; } seen[32];
+        int nseen;
+        int occ[64];
+        int noc;
+        int delta;
+
+        if (i < nlines && !line_clobbers_bc(lines[i]) &&
+            !starts_label(lines[i]) && !line_starts_function_marker(lines[i]))
+            continue;
+
+        /* [segstart, i) is one hazard-free segment. Find the best repeated
+         * (NAME, N) field-address triple within it. A triple's second line
+         * is examined via j+1 and third via j+2, so the last candidate
+         * start is i-1 (checked against the segment end i, not nlines -
+         * the triple must not reach past this segment's own hazard). */
+        nseen = 0;
+        for (j = segstart; j + 2 < i; j++) {
+            if (!peep_parse_ld_hl_paren_sym(lines[j], sym))
+                continue;
+            if (!parse_ld_de_imm(lines[j + 1], off_text, sizeof(off_text)))
+                continue;
+            if (!parse_nonneg_int(off_text, &off) || off == 0)
+                continue;
+            if (!eq(j + 2, "add hl,de"))
+                continue;
+            for (k = 0; k < nseen; k++)
+                if (seen[k].off == off && !strcmp(seen[k].name, sym)) break;
+            if (k == nseen) {
+                if (nseen < 32) {
+                    strcpy(seen[nseen].name, sym);
+                    seen[nseen].off = off;
+                    seen[nseen].count = 1;
+                    nseen++;
+                }
+            } else {
+                seen[k].count++;
+            }
+        }
+
+        best_count = 0;
+        best_sym[0] = 0;
+        best_off = 0;
+        for (k = 0; k < nseen; k++) {
+            if (seen[k].count > best_count) {
+                best_count = seen[k].count;
+                strcpy(best_sym, seen[k].name);
+                best_off = seen[k].off;
+            }
+        }
+
+        /* Mirrors pass_cache_global_word_reload's identical guard: any of
+         * the three global-word-cache passes' still-pending load is a
+         * hazard for a brand new cache store landing in the same BC
+         * register (see that pass's own comment for the tptrlhs.c
+         * miscompile this guards against). */
+        if (i < nlines && strstr(lines[i], "global_word_cache_load"))
+            best_count = 0;
+
+        if (best_count >= 2 && global_write_count_in_file(best_sym) <= 1 &&
+            !symbol_written_in_range(best_sym, segstart, i) &&
+            !bc_regalloc_claimed_in_range(segstart, i + 1)) {
+            noc = 0;
+            for (j = segstart; j + 2 < i; j++) {
+                if (!peep_parse_ld_hl_paren_sym(lines[j], sym)) continue;
+                if (strcmp(sym, best_sym) != 0) continue;
+                if (!parse_ld_de_imm(lines[j + 1], off_text, sizeof(off_text))) continue;
+                if (!parse_nonneg_int(off_text, &off) || off != best_off) continue;
+                if (!eq(j + 2, "add hl,de")) continue;
+                if (noc < 64) occ[noc++] = j;
+            }
+
+            delta = 0;
+            /* Last occurrence first: only insert_line/delete_n ever shift
+             * indices, and only at or after the edit point, so earlier
+             * (not yet processed) entries in occ[], including occ[0],
+             * stay valid throughout. */
+            for (k = noc - 1; k >= 1; k--) {
+                replace1_tagged(occ[k], "ld l,c", "global_word_cache_load_field");
+                replace1(occ[k] + 1, "ld h,b");
+                delete_n(occ[k] + 2, 1);
+                delta -= 1;
+                changed = 1;
+            }
+
+            /* occ[0]'s own triple is left as the real computation; cache
+             * the address it leaves in HL right after it. */
+            insert_line_tagged(occ[0] + 3, "ld c,l", "global_word_cache_store_field");
+            insert_line(occ[0] + 4, "ld b,h");
+            delta += 2;
+            changed = 1;
+
+            i += delta;
+        }
+
+        segstart = i + 1;
+    }
+
+    return changed;
+}
+
+/*
  * pass_cache_global_word_reload:
  *
  * "ld hl,(NAME)" for a word-sized global reloads it from memory at every
@@ -5831,6 +5992,115 @@ static int pass_cache_global_word_reload(void)
         }
 
         segstart = i + 1;
+    }
+
+    return changed;
+}
+
+/* Textual write-detection for pass_elim_redundant_cache_reload below: 1 if
+ * `line` writes to B, C, H, L, BC, or HL; 0 otherwise. Unlike
+ * line_clobbers_bc (which treats any mention of "b" or "c" as a hazard,
+ * because it has no idea whether a subsequent instruction reads or writes
+ * them), this only needs to rule out writes - a plain register read, like
+ * the "l"/"h" sources in "ld (ix-38),l" / "ld (ix-37),h" (a spill of a
+ * just-restored HL to an ix-relative local), does not disturb a value
+ * already sitting in BC or HL and must not be treated as a hazard here. */
+static int line_writes_bc_or_hl(const char *line)
+{
+    char clean[MAX_LINE];
+    char dest[16];
+    const char *p;
+    int i;
+
+    strip_peep_comment_lower_copy(clean, line);
+
+    if (!strncmp(clean, "call", 4) &&
+        (clean[4] == ' ' || clean[4] == '\t') &&
+        strcmp(clean, "call __stchk") != 0)
+        return 1;
+    if (!strncmp(clean, "jp", 2) || !strncmp(clean, "jr", 2) ||
+        !strncmp(clean, "ret", 3) || !strncmp(clean, "djnz", 4) ||
+        !strcmp(clean, "exx") || !strncmp(clean, "ex ", 3) ||
+        !strncmp(clean, "rst", 3))
+        return 1;
+    if (!strncmp(clean, "pop ", 4)) {
+        p = clean + 4;
+        return !strcmp(p, "bc") || !strcmp(p, "hl");
+    }
+    if (!strncmp(clean, "ld ", 3)) {
+        p = clean + 3;
+        i = 0;
+        while (*p && *p != ',' && i < (int)sizeof(dest) - 1)
+            dest[i++] = *p++;
+        dest[i] = 0;
+        return !strcmp(dest, "b") || !strcmp(dest, "c") ||
+               !strcmp(dest, "h") || !strcmp(dest, "l") ||
+               !strcmp(dest, "bc") || !strcmp(dest, "hl");
+    }
+    if (!strncmp(clean, "inc ", 4) || !strncmp(clean, "dec ", 4)) {
+        p = clean + 4;
+        return !strcmp(p, "b") || !strcmp(p, "c") ||
+               !strcmp(p, "h") || !strcmp(p, "l") ||
+               !strcmp(p, "bc") || !strcmp(p, "hl");
+    }
+    if (!strncmp(clean, "add hl,", 7) || !strncmp(clean, "adc hl,", 7) ||
+        !strncmp(clean, "sbc hl,", 7))
+        return 1;
+
+    return 0;
+}
+
+/*
+ * pass_elim_redundant_cache_reload:
+ *
+ * pass_cache_global_word_reload and pass_cache_global_word_field_reload each
+ * collapse every repeated occurrence within a hazard-free segment into its
+ * own independent "ld l,c ; peep: global_word_cache_load[...]" / "ld h,b"
+ * restore, written back at that occurrence's own original location. When a
+ * segment repeats the same cached value three or more times, two of those
+ * restores can land back to back with nothing between them but register-
+ * preserving instructions - confirmed via tests/adaint.c's run() dispatch
+ * loop, where a field address is restored, immediately spilled to an
+ * ix-relative local ("ld (ix-38),l" / "ld (ix-37),h"), and then restored
+ * again a line later for a dereference that follows: 17 sites, all of the
+ * identical restore/spill/restore shape.
+ *
+ * The second restore in such a pair is provably dead: BC has not been
+ * touched since the first restore already put its value in HL (verified via
+ * line_writes_bc_or_hl, not line_clobbers_bc - a spill's "l"/"h" register
+ * *reads* must not be mistaken for the write that would actually invalidate
+ * this), so HL already holds what the second restore recomputes. Deleting
+ * it is a pure two-line removal with no replacement needed.
+ *
+ * Runs after the caching passes above in the fixed-point list, since it
+ * cleans up a pattern only they produce.
+ */
+static int pass_elim_redundant_cache_reload(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 1 < nlines; i++) {
+        int j;
+
+        if (!eq(i, "ld l,c") || !strstr(lines[i], "global_word_cache_load"))
+            continue;
+        if (!eq(i + 1, "ld h,b"))
+            continue;
+
+        for (j = i + 2; j + 1 < nlines; j++) {
+            if (starts_label(lines[j]) || line_starts_function_marker(lines[j]))
+                break;
+            if (eq(j, "ld l,c") && strstr(lines[j], "global_word_cache_load")) {
+                if (eq(j + 1, "ld h,b")) {
+                    delete_n(j, 2);
+                    changed = 1;
+                }
+                break;
+            }
+            if (line_writes_bc_or_hl(lines[j]))
+                break;
+        }
     }
 
     return changed;
@@ -8566,6 +8836,145 @@ static int pass_elim_zero_add_hl(void)
     return changed;
 }
 
+/* True if `line` touches the stack pointer or transfers control - anything
+ * that would make it unsafe to silently drop a push/pop pair spanning this
+ * line, used by pass_elim_zero_add_via_stack below. */
+static int line_touches_sp_or_flow(const char *line)
+{
+    char clean[MAX_LINE];
+
+    strip_peep_comment_lower_copy(clean, line);
+    return !strncmp(clean, "push ", 5) || !strncmp(clean, "pop ", 4) ||
+           !strncmp(clean, "call", 4) || !strncmp(clean, "ret", 3) ||
+           !strncmp(clean, "jp", 2) || !strncmp(clean, "jr", 2) ||
+           !strncmp(clean, "djnz", 4) || strstr(clean, "(sp)") != NULL ||
+           !strncmp(clean, "ld sp,", 6) || !strncmp(clean, "add sp,", 7) ||
+           starts_label(line);
+}
+
+/*
+ * pass_elim_zero_add_via_stack:
+ *
+ * A zero materialized via a push/pop round trip rather than loaded straight
+ * into DE (the shape pass_elim_zero_add_hl above already handles) still
+ * degrades to a no-op ADD once the round trip completes - the pushed 0 is
+ * unreachable in between and comes back out of the stack unchanged no
+ * matter what non-stack work happens while it sits there. Confirmed via
+ * tests/adaint.c's mem_get_byte/mem_set_byte inlining, where the index
+ * argument's own address computation lands between the push and the pop:
+ *
+ *     ld hl,0                (idx-scaling instructions run here,
+ *     push hl                 leaving HL holding a new value -
+ *     ...                      the pushed 0 is untouched)
+ *     pop de
+ *     add hl,de
+ *
+ * Deleting all four lines leaves HL exactly as the middle instructions left
+ * it. Declines whenever anything between the push and the pop touches the
+ * stack pointer, transfers control, or crosses a label - any of which could
+ * mean this exact push isn't the one this exact pop retrieves - and,
+ * mirroring pass_elim_zero_add_hl, whenever the ADD's own flags are still
+ * live afterward.
+ */
+static int pass_elim_zero_add_via_stack(void)
+{
+    int i;
+    int changed = 0;
+    const unsigned all_flags = PEEP_FLAG_C | PEEP_FLAG_Z | PEEP_FLAG_S | PEEP_FLAG_PV;
+
+    for (i = 0; i + 1 < nlines; i++) {
+        int j;
+
+        if (!eq(i, "ld hl,0") || !eq(i + 1, "push hl"))
+            continue;
+
+        for (j = i + 2; j + 1 < nlines; j++) {
+            if (eq(j, "pop de")) {
+                if (eq(j + 1, "add hl,de") &&
+                    peep_flags_dead_after(j + 1, all_flags)) {
+                    delete_n(j, 2);
+                    delete_n(i, 2);
+                    changed = 1;
+                    if (i > 0)
+                        i--;
+                }
+                break;
+            }
+            if (line_touches_sp_or_flow(lines[j]))
+                break;
+        }
+    }
+
+    return changed;
+}
+
+/*
+ * pass_push_hl_pop_de_to_ex:
+ *
+ * "push hl / pop de" is DCC's generic idiom for copying HL into DE while
+ * something else is about to be computed into HL - the copy itself doesn't
+ * care that PUSH/POP round-trips through memory rather than swapping
+ * registers directly. EX DE,HL produces the identical DE (old HL) in one
+ * instruction instead of two, but it also overwrites HL with the OLD DE,
+ * where PUSH/POP leaves HL holding its own old value unchanged - safe to
+ * substitute only when nothing reads HL again before the very next
+ * instructions overwrite it outright.
+ *
+ * Rather than a general HL-liveness scan, this only fires the single shape
+ * confirmed pervasive in tests/adaint.c's run() dispatch: the copy is
+ * immediately followed by "ld l,SRC1"/"ld h,SRC2" restoring HL from some
+ * other source (typically an ix-relative spill slot) with neither SRC
+ * referencing H, L, or HL - a complete, adjacent overwrite that makes HL's
+ * pre-copy value provably dead the instant the pop completes, regardless of
+ * what EX DE,HL leaves there in the meantime.
+ *
+ *     push hl              ex de,hl
+ *     pop de        ==>    ld l,SRC1
+ *     ld l,SRC1            ld h,SRC2
+ *     ld h,SRC2
+ *
+ * Registered last among the fixed-point passes (just before pass_labels):
+ * many earlier passes above also key off a literal "push hl"/"pop de" text
+ * shape as part of larger, more valuable rewrites (register-cache reloads,
+ * ix-spill collapses, and others found throughout this file). Running this
+ * pass early was tried and measured a net slowdown on tests/adaint.c
+ * despite passing every correctness suite - convincing evidence that an
+ * earlier slot let this consume push/pop pairs before a bigger rewrite
+ * elsewhere got its own turn to match them, a real but silent regression
+ * class fixed-point convergence order can produce. Running last lets every
+ * other pass claim a push/pop pair first; this only mops up whatever
+ * survives untouched to the very end.
+ */
+static int pass_push_hl_pop_de_to_ex(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 3 < nlines; i++) {
+        const char *op1, *op2;
+        char clean2[MAX_LINE], clean3[MAX_LINE];
+
+        if (!eq(i, "push hl") || !eq(i + 1, "pop de"))
+            continue;
+
+        strip_peep_comment_copy(clean2, lines[i + 2]);
+        strip_peep_comment_copy(clean3, lines[i + 3]);
+        if (strncmp(clean2, "ld l,", 5) != 0 || strncmp(clean3, "ld h,", 5) != 0)
+            continue;
+        op1 = clean2 + 5;
+        op2 = clean3 + 5;
+        if (line_touches_reg_pair(op1, "l", "h", "hl") ||
+            line_touches_reg_pair(op2, "l", "h", "hl"))
+            continue;
+
+        replace1_tagged(i, "ex de,hl", "push_hl_pop_de_to_ex");
+        delete_n(i + 1, 1);
+        changed = 1;
+    }
+
+    return changed;
+}
+
 /*
  * Fold a constant left shift emitted as repeated HL doublings:
  *
@@ -8613,6 +9022,88 @@ static int pass_const_hl_doubles(void)
         sprintf(line, "ld hl,%u", folded);
         replace1_tagged(i, line, "const_hl_doubles");
         delete_n(i + 1, count);
+        changed = 1;
+        if (i > 0)
+            i--;
+    }
+
+    return changed;
+}
+
+/*
+ * pass_fold_const_sub_via_stack:
+ *
+ * DCC's generic codegen for "expr - K" (K a compile-time integer literal)
+ * round-trips through the evaluation stack even when K is small: push the
+ * left operand, materialize K into HL, push it too, then pop both back out
+ * in reverse order and subtract with SBC HL,DE. pass_global_ptr_word_predec_
+ * load elsewhere in this file already recognizes one hardcoded instance of
+ * this shape (an int* global's "ptr - 1", from popv()'s pointer-decrement
+ * idiom) - this is the same seven-instruction idiom, generalized to any
+ * preceding HL value and any constant K, wherever what follows doesn't need
+ * SBC HL,DE's flags.
+ *
+ * Confirmed via tests/adaint.c's run() dispatch: every popv() call
+ * decrementing G->stp by INTB hits this exact shape right after the field's
+ * address is restored from cache (see pass_cache_global_word_field_reload
+ * above) - 49 occurrences in one function, none of which
+ * pass_global_ptr_word_predec_load can reach, since that pass requires a
+ * bare "ld hl,(SYM)" start and a matching "ld (SYM),hl" store immediately
+ * after, neither of which matches a cached field address restored into HL
+ * mid-expression rather than a plain global symbol.
+ *
+ *     push hl              ld de,-K
+ *     ld hl,K       ==>    add hl,de
+ *     push hl
+ *     pop de
+ *     pop hl
+ *     or a
+ *     sbc hl,de
+ *
+ * ADD HL,DE and SBC HL,DE compute the same 16-bit result but set different
+ * flags (ADD HL,DE leaves S/Z/P-V untouched; SBC HL,DE sets them from the
+ * subtraction) - only safe when nothing downstream reads any flag SBC HL,DE
+ * would have set, checked via the same peep_flags_dead_after machinery
+ * pass_elim_zero_add_hl above relies on for its own, narrower ADD HL,DE
+ * flag question.
+ */
+static int pass_fold_const_sub_via_stack(void)
+{
+    int i;
+    int changed = 0;
+    const unsigned all_flags = PEEP_FLAG_C | PEEP_FLAG_Z | PEEP_FLAG_S | PEEP_FLAG_PV;
+
+    for (i = 0; i + 6 < nlines; i++) {
+        char imm_text[64];
+        char line[64];
+        int value;
+
+        if (!eq(i, "push hl"))
+            continue;
+        if (!parse_ld_hl_imm(lines[i + 1], imm_text, sizeof(imm_text)))
+            continue;
+        if (!parse_nonneg_int(imm_text, &value))
+            continue;
+        if (!eq(i + 2, "push hl"))
+            continue;
+        if (!eq(i + 3, "pop de"))
+            continue;
+        if (!eq(i + 4, "pop hl"))
+            continue;
+        if (!eq(i + 5, "or a"))
+            continue;
+        if (!eq(i + 6, "sbc hl,de"))
+            continue;
+        if (!peep_flags_dead_after(i + 6, all_flags))
+            continue;
+
+        if (value == 0)
+            sprintf(line, "ld de,0");
+        else
+            sprintf(line, "ld de,-%d", value);
+        replace1_tagged(i, line, "fold_const_sub_via_stack");
+        replace1(i + 1, "add hl,de");
+        delete_n(i + 2, 5);
         changed = 1;
         if (i > 0)
             i--;
@@ -10784,7 +11275,9 @@ int main(int argc, char **argv)
         { "pass_elim_redundant_pop_push", pass_elim_redundant_pop_push, 0 },
         { "pass_double_de_before_add", pass_double_de_before_add, 0 },
         { "pass_elim_zero_add_hl", pass_elim_zero_add_hl, 0 },
+        { "pass_elim_zero_add_via_stack", pass_elim_zero_add_via_stack, 0 },
         { "pass_const_hl_doubles", pass_const_hl_doubles, 0 },
+        { "pass_fold_const_sub_via_stack", pass_fold_const_sub_via_stack, 0 },
         { "pass_deref_byte_cmp", pass_deref_byte_cmp, 0 },
         { "pass_strlen_byte_counter", pass_strlen_byte_counter, 0 },
         { "pass_cpir", pass_cpir, 0 },
@@ -10817,11 +11310,14 @@ int main(int argc, char **argv)
         { "pass_const_divmod_helpers", pass_const_divmod_helpers, 0 },
         { "pass_mulu_const", pass_mulu_const, 0 },
         { "pass_cache_noix_byte_param_reload", pass_cache_noix_byte_param_reload, 0 },
+        { "pass_cache_global_word_field_reload", pass_cache_global_word_field_reload, 0 },
         { "pass_cache_global_word_reload", pass_cache_global_word_reload, 0 },
+        { "pass_elim_redundant_cache_reload", pass_elim_redundant_cache_reload, 0 },
         { "pass_cache_global_word_reload_de", pass_cache_global_word_reload_de, 0 },
         { "pass_word_loop_var_to_reg_bc", pass_word_loop_var_to_reg_bc, 0 },
         { "pass_narrow_bc_loop_bound_to_reg_c", pass_narrow_bc_loop_bound_to_reg_c, 0 },
         { "pass_byte_loop_var_to_reg_c", pass_byte_loop_var_to_reg_c, 0 },
+        { "pass_push_hl_pop_de_to_ex", pass_push_hl_pop_de_to_ex, 0 },
         { "pass_labels", pass_labels, 0 },
     };
     size_t fixed_pass_count = sizeof(fixed_point_passes) / sizeof(fixed_point_passes[0]);
