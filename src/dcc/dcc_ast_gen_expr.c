@@ -1,8 +1,21 @@
-/*
- * dcc_ast_gen_expr.c - expression emitters (ast_gen_expr).
+/**
+ * @file dcc_ast_gen_expr.c
+ * @brief Provides AST expression helpers, initializer capture, and inline
+ * metadata.
  *
- * Split from dcc_ast_gen.c; part of the AST codegen module.  Shared
- * prototypes live in dcc_ast_gen_internal.h.
+ * @par Role
+ * Owns expression dispatch and retained low-level gen_* helpers, parses and
+ * captures scalar/aggregate declaration initializers, and clones inline
+ * bodies for either value setup or non-emitting metadata traversal.
+ *
+ * @par Key entry points
+ * ast_emit_init_expr(), ast_emit_struct_init_expr_assign(),
+ * ast_process_inline_call_metadata(), and ast_gen_expr().
+ *
+ * @par Boundary
+ * When MIR is active, initializer semantics go through mir_capture_initializer()
+ * or mir_capture_struct_initializer(). Production function-body output is
+ * never selected from this AST helper layer.
  */
 #include <string.h>
 #include "dcc_ast_gen_internal.h"

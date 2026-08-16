@@ -1,10 +1,16 @@
-/*
- * dcc_ast.c - function-local AST: arena allocator and node constructors.
+/**
+ * @file dcc_ast.c
+ * @brief Owns function-local AST storage and node construction.
  *
- * See dcc_ast.h for the design rationale. This module owns arena block
- * allocation, reset/destruction, string/memory copies, node construction, and
- * small AST query helpers. Parsing and emission live in dcc_ast_build.c and
- * dcc_ast_gen*.c.
+ * @par Role
+ * Implements arena block allocation and reset, arena-owned string/memory
+ * copies, AstNode constructors, child-list growth, and small tree/name
+ * queries. It contains no parser, MIR lowering, metadata walk, or target-code
+ * selection.
+ *
+ * @par Key entry points
+ * ast_arena_init(), ast_arena_alloc(), ast_arena_reset(), ast_new(), and the
+ * ast_*() node constructors declared in dcc_ast.h.
  */
 #include "dcc.h"
 #include "dcc_ast.h"

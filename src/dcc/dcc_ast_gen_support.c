@@ -1,8 +1,20 @@
-/*
- * dcc_ast_gen_support.c - ast_gen_supported dispatch, call/struct gates, const folds.
+/**
+ * @file dcc_ast_gen_support.c
+ * @brief Implements AST support gates, constant folds, and structural proofs.
  *
- * Split from dcc_ast_gen.c; part of the AST codegen module.  Shared
- * prototypes live in dcc_ast_gen_internal.h.
+ * @par Role
+ * Caches expression-shape admission, validates call/argument, pointer,
+ * aggregate, and assignment forms, folds target-width constants, and proves
+ * reusable loop/address transformations used by MIR capture and metadata
+ * planning.
+ *
+ * @par Key entry points
+ * ast_gen_supported(), ast_support_cache_begin(), ast_const_*_fold(),
+ * ast_call_*_supported(), and the ast_for_*_supported() proof helpers.
+ *
+ * @par Boundary
+ * A successful gate proves the frontend understands a shape; it does not
+ * select a production body emitter or establish profitability.
  */
 #include <string.h>
 #include <stdint.h>

@@ -1,16 +1,21 @@
-/*
- * dcc_ast_build.c - function-local AST builder.
+/**
+ * @file dcc_ast_build.c
+ * @brief Parses function tokens into expression and statement ASTs.
  *
- * dcc lowers function bodies through a function-local AST (see dcc_ast.h).
+ * @par Role
+ * Implements recursive-descent expression parsing, statement/block parsing,
+ * declaration-span capture/replay, sizeof typing, arena initialization, and
+ * diagnostic AST dumps. Building may reserve compiler-generated locals, so
+ * speculative callers must restore lexer and frame state when discarding a
+ * tree.
  *
- * ast_build_expr() is a recursive-descent expression parser that mirrors the
- * source grammar (including dcc's C99 conveniences -
- * it operates purely on the token stream, so for-init/mid-block expressions
- * and // comments are handled transparently by the shared lexer).  It builds
- * an AstNode tree from the current lexer position and emits no assembly.
- * Compound-literal and optimization shapes may reserve compiler-generated
- * locals while building, so speculative callers must restore lexer/frame state
- * when discarding a tree. MIR and the metadata walkers consume the result.
+ * @par Key entry points
+ * ast_build_expr(), ast_build_assign_expr(), ast_build_stmt(),
+ * ast_replay_decl_span(), ast_scan_decl_span(), and ast_build_init().
+ *
+ * @par Boundary
+ * This module emits no target code. MIR capture, metadata replay, and retained
+ * semantic classifiers consume its trees.
  */
 #include "dcc.h"
 #include "dcc_ast.h"

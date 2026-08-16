@@ -45,6 +45,12 @@ Use `dcc-project` for build, test, runtime, and baseline conventions.
 | Exact schedule dispatch | `dcc_mir_machine_emit.c` |
 | Exact schedule families | `dcc_mir_machine_*.c` |
 
+AST and MIR C/header modules follow the Doxygen file-header convention defined
+in the `dcc-project` skill: `@file`, `@brief`, explicit role, key entry points,
+and module boundaries. Keep the module maps in `dcc_ast.h` and
+`dcc_mir_internal.h` current whenever files move or responsibilities change.
+Never document `dcc_ast_gen*` as a production body-codegen fallback.
+
 Place new schedules in the closest family module. Keep plan/matcher state
 automatic and expose only that module's dispatch function:
 

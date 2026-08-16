@@ -1,26 +1,38 @@
-/*
- * dcc_ast.h - function-local abstract syntax tree for dcc.
+/**
+ * @file dcc_ast.h
+ * @brief Defines dcc's function-local AST and its shared frontend API.
  *
- * dcc now lowers function bodies through a function-local AST.  The parser
- * builds one statement/expression tree at a time, then hands it to the AST
- * codegen walker.  Nothing outside a function is represented here (top-level
- * declarations, types, structs and the preprocessor keep using the existing
- * tables) - hence "function-local".
+ * @par Role
+ * Declares arena storage, node kinds and payloads, constructors, parsers,
+ * semantic classifiers, statement analysis, and metadata entry points. The
+ * parser builds one statement or expression tree at a time; production
+ * function semantics are captured into MIR, while post-parse AST traversal
+ * preserves declarations, scopes/VLAs, inline temporaries, strings, labels,
+ * diagnostics, and debug events.
  *
- * Design constraints:
- *   - Portable C11 source for modern Clang, GCC, and MSVC host compilers.
- *   - Must be able to drive the shared emit_* helpers,
- *     so the AST records exactly the information those helpers need (resolved
- *     struct Sym*, dcc type codes, operator token kinds, folded literals).
- *   - Arena-allocated and reset per function so there is no per-node free and
- *     no long-lived heap growth across a translation unit.
+ * @par Design
+ * Nodes are arena-allocated and use fixed generic child slots plus optional
+ * child lists. They carry resolved symbols, dcc type codes, operators, folded
+ * literals, and source locations needed by MIR lowering and metadata replay.
+ * Top-level declarations, types, structs, and preprocessing remain outside
+ * this function-local representation.
  *
- * The node payload is a deliberately small, fixed struct with a handful of
- * generic child slots (a..d) plus an optional child LIST (for compound-
- * statement bodies and call argument lists).  This keeps construction cheap
- * and avoids a sprawling tagged union while still expressing every C89
- * construct dcc accepts, including its C99 extensions (for-init declarations,
- * mid-block declarations, // comments are a lexer concern and need no node).
+ * @par Module map
+ * - dcc_ast.c: arena ownership, node construction, and small tree queries.
+ * - dcc_ast_build.c: token-to-AST expression and statement parsing.
+ * - dcc_ast_stmt_meta.c: statement gating, MIR capture, sizing, exit analysis.
+ * - dcc_ast_metadata.c: non-emitting declaration/scope/debug metadata replay.
+ * - dcc_ast_gen.c: type, lvalue, pointer, member, and index classifiers.
+ * - dcc_ast_gen_support.c: support gates, constant folds, structural proofs.
+ * - dcc_ast_gen_expr.c: initializer capture, inline metadata, expression
+ *   helpers.
+ * - dcc_ast_gen_cond.c: statement/condition gates and branch-shape helpers.
+ * - dcc_ast_gen_internal.h: private contract shared by the split modules.
+ *
+ * @par Boundary
+ * The dcc_ast_gen* helpers do not provide a production body-codegen fallback.
+ * dcc_mir.h exposes function capture; dcc_mir_select.c owns generated
+ * candidate selection.
  */
 #ifndef DCC_AST_H
 #define DCC_AST_H
