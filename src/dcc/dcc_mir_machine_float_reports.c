@@ -1,4 +1,15 @@
-/* dcc_mir_machine_float_reports.c - strict float schedules. */
+/**
+ * @file dcc_mir_machine_float_reports.c
+ * @brief Emits exact floating-point kernels and report schedules.
+ *
+ * @par Role
+ * Matches float sweeps, transcendental wrappers, normalization and log
+ * series, pi computations, tolerance/comparison reports, and raw conversion
+ * checks while preserving the target's 32-bit float ABI.
+ *
+ * @par Key entry point
+ * mir_try_emit_float_reports().
+ */
 
 #include "dcc_mir_machine_internal.h"
 

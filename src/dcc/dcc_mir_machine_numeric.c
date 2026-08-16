@@ -1,4 +1,15 @@
-/* dcc_mir_machine_numeric.c - strict numeric kernel schedules. */
+/**
+ * @file dcc_mir_machine_numeric.c
+ * @brief Emits exact schedules for numeric and algorithmic kernels.
+ *
+ * @par Role
+ * Matches fixed/wide arithmetic, affine loops, shifts, roots, searches,
+ * dynamic programming, board algorithms, and numeric validation runners.
+ * Its phase argument preserves each family's selector position.
+ *
+ * @par Key entry point
+ * mir_try_emit_numeric_kernels().
+ */
 
 #include "dcc_mir_machine_internal.h"
 

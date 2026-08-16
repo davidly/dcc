@@ -1,3 +1,13 @@
+/**
+ * @file dcc_mir_machine_internal.h
+ * @brief Declares the private interface shared by exact-schedule modules.
+ *
+ * @par Role
+ * Exposes semantic proof helpers, common Z80 emission helpers, exact-family
+ * dispatchers, and phase/profile contracts used by dcc_mir_machine_emit.c and
+ * the dcc_mir_machine_*.c family modules. It is not a frontend or general MIR
+ * API.
+ */
 #ifndef DCC_MIR_MACHINE_INTERNAL_H
 #define DCC_MIR_MACHINE_INTERNAL_H
 

@@ -1,14 +1,20 @@
-/* dcc_mir.c - MIR core: lowering, capture API, CFG/dataflow analysis,
- * register allocation, and generated-candidate selection plumbing.
+/**
+ * @file dcc_mir.c
+ * @brief Builds, analyzes, allocates, and verifies a function's MIR.
  *
- * This is one of several dcc_mir_*.c translation units that together
- * implement the typed virtual-register machine IR and transactional
- * backend described in dcc_mir_internal.h. See that header for the
- * shared IR types and cross-file helper prototypes.
+ * @par Role
+ * Owns the current MirFunction and lowers frontend capture events into typed
+ * virtual-register instructions. It also repairs metadata, builds the CFG and
+ * def-use information, runs liveness and home allocation, canonicalizes MIR,
+ * and verifies or reports the completed function.
  *
- * Set DCC_MIR_REPORT=1 to dump every generated function attempt, or
- * DCC_MIR_FUNCTION=name to restrict the dump. Production function output is
- * always selected from generated MIR candidates.
+ * @par Key entry points
+ * mir_begin_function(), the mir_capture_*() API, mir_verify_and_dump(), and
+ * mir_finish_translation_unit().
+ *
+ * @par Boundary
+ * dcc_mir_select.c owns candidate ordering and final output commit; emitter
+ * modules consume the verified state declared in dcc_mir_internal.h.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,23 +23,6 @@
 #include "dcc_ast.h"
 #include "dcc_mir.h"
 #include "dcc_mir_internal.h"
-
-/* dcc_mir.c - typed virtual-register machine IR and generated backend.
- *
- * dcc currently assigns HL/DE/BC while walking one statement AST at a time.
- * This module is the first vertical slice toward a real allocator: before an
- * AST is emitted, lower it into a persistent per-function stream of unlimited
- * virtual values, then build CFG successors and solve virtual-value liveness.
- *
- * Set DCC_MIR_REPORT=1 to dump every generated function attempt, or
- * DCC_MIR_FUNCTION=name to restrict the dump.
- */
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include "dcc.h"
-#include "dcc_ast.h"
-#include "dcc_mir.h"
 
 
 struct MirFunction mir;

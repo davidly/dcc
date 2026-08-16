@@ -1,11 +1,37 @@
+/**
+ * @file dcc_mir_internal.h
+ * @brief Defines the private data model and cross-module contracts of MIR.
+ *
+ * @par Role
+ * Central source of truth for MIR opcodes, instructions, objects, functions,
+ * liveness/allocation records, target constraints, shared state, and helpers
+ * used by more than one MIR translation unit. Frontend code must use
+ * dcc_mir.h instead.
+ *
+ * @par Module map
+ * - dcc_mir.c: lowering, metadata repair, CFG/dataflow, allocation, verifier.
+ * - dcc_mir_select.c: candidate orchestration, cost policy, output commit.
+ * - dcc_mir_emit_common.c: shared scalar/home emission and DAG candidates.
+ * - dcc_mir_homed_cfg.c: fixed-home CFG candidate.
+ * - dcc_mir_spilled_cfg.c: general spill-slot CFG candidate.
+ * - dcc_mir_target.c: diagnostic Z80 constraint model.
+ * - dcc_mir_schedule.c: diagnostic sparse schedule model.
+ * - dcc_mir_stream.c/.h: transactional in-memory candidate streams.
+ * - dcc_mir_machine_emit.c: exact-schedule coordinator and common machinery.
+ * - dcc_mir_machine_internal.h: private exact-schedule family interface.
+ * - dcc_mir_machine_attention.c: attention and softmax kernels.
+ * - dcc_mir_machine_aggregate_checks.c: aggregate/data-layout kernels.
+ * - dcc_mir_machine_call_runners.c: call-heavy orchestration kernels.
+ * - dcc_mir_machine_endgame.c: late and no-stack schedule bands.
+ * - dcc_mir_machine_float_reports.c: floating-point kernels and reports.
+ * - dcc_mir_machine_interpreter_runners.c: interpreter and lexer kernels.
+ * - dcc_mir_machine_numeric.c: numeric and algorithmic kernels.
+ * - dcc_mir_machine_runtime_runners.c: runtime, file, and system kernels.
+ * - dcc_mir_machine_scanners.c: scanner, parser, and text kernels.
+ * - dcc_mir_machine_validation_runners.c: validation-harness kernels.
+ */
 #ifndef DCC_MIR_INTERNAL_H
 #define DCC_MIR_INTERNAL_H
-
-/* Internal MIR module header: shared IR types, global compiler state,
- * and prototypes for helpers that cross the dcc_mir_*.c file split.
- * Not part of the public dcc_mir.h API - only the dcc_mir_*.c
- * translation units that implement the MIR backend include this.
- */
 
 #include <stdio.h>
 #include <stdlib.h>

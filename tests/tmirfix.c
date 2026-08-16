@@ -1,5 +1,11 @@
-/*
- * tmirfix.c - regressions found by the generated compiler test archive.
+/**
+ * @file tmirfix.c
+ * @brief Collects MIR correctness regressions found by archive testing.
+ *
+ * @par Coverage
+ * Exercises union/designated initialization, bitfield stores, boolean
+ * normalization, indexed byte formatting, scoped declarations, VLAs with
+ * narrow and wide elements, and local/global name collisions.
  */
 #include <stdbool.h>
 #include <stdint.h>

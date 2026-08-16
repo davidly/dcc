@@ -1,4 +1,16 @@
-/* dcc_mir_machine_endgame.c - strict endgame machine schedules. */
+/**
+ * @file dcc_mir_machine_endgame.c
+ * @brief Owns late and no-stack exact-schedule bands.
+ *
+ * @par Role
+ * Preserves the final selector ordering for no-stack kernels and broad
+ * array, numeric, scope, conversion, file, formatting, and float validation
+ * runners. Phase 0 handles the early no-stack band; later phases handle the
+ * late runner band and its aggregate handoff.
+ *
+ * @par Key entry point
+ * mir_try_emit_endgame_runners().
+ */
 
 #include "dcc_mir_machine_internal.h"
 

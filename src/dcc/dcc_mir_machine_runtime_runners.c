@@ -1,4 +1,16 @@
-/* dcc_mir_machine_runtime_runners.c - strict runtime/file/system schedules. */
+/**
+ * @file dcc_mir_machine_runtime_runners.c
+ * @brief Emits exact schedules for runtime, file, and system workloads.
+ *
+ * @par Role
+ * Covers allocation, nonlocal control, process/BDOS calls, file and directory
+ * I/O, string/report helpers, sorting/search edges, and related runtime
+ * drivers. Phase 2 classifies strict spilled-candidate profiles without
+ * emitting.
+ *
+ * @par Key entry point
+ * mir_try_emit_runtime_runners().
+ */
 
 #include "dcc_mir_machine_internal.h"
 

@@ -1,21 +1,16 @@
-/*
- * dcc_mir_stream.h - portable in-memory scratch stream for MIR candidate
- * codegen, replacing tmpfile()-backed FILE* scratch streams.
+/**
+ * @file dcc_mir_stream.h
+ * @brief Declares the portable in-memory stream for MIR candidate output.
  *
- * MirStream mimics the small subset of ISO C stdio semantics the MIR
- * backend's candidate-matrix codegen actually uses (sequential and
- * seek/rewind text writes and reads; never a real file, never platform
- * I/O). tmpfile() is cheap on Linux (anonymous tmpfs-backed) but touches
- * the real filesystem on every call on Windows, and the candidate matrix
- * creates one scratch stream per codegen attempt per function - this
- * type removes that filesystem traffic entirely, uniformly on every
- * platform.
+ * @par Role
+ * MirStream supplies the small sequential and seekable stdio subset needed by
+ * candidate emitters without touching the filesystem. Candidate attempts stay
+ * isolated until selection; mir_stream_copy_to_file() is the sole boundary to
+ * the compiler's real FILE output.
  *
- * Every field of the underlying struct (defined privately in
- * dcc_mir_stream.c) is stdint.h/stddef.h fixed-width, so behavior is
- * identical on LP64 (Linux/macOS 64-bit), LLP64 (MSVC), and ILP32
- * (32-bit Linux). MirStream is opaque here; callers only ever hold a
- * MirStream*, exactly like FILE*.
+ * @par Design
+ * The type is opaque and implemented in dcc_mir_stream.c. Its byte-oriented
+ * state has identical semantics on LP64, LLP64, and ILP32 hosts.
  */
 
 #ifndef DCC_MIR_STREAM_H

@@ -1,10 +1,15 @@
-/* dcc_mir_spilled_cfg.c - the mir_try_emit_spilled_scalar_cfg selector
- * (the dominant selector, covering most of the corpus) plus its
- * exclusive helpers: virtual IY/offset addressing, HL/stack value
- * forwarding, comparison fusion, fastcall shape detection, and
- * backend-slot preparation.
+/**
+ * @file dcc_mir_spilled_cfg.c
+ * @brief Emits the general spill-slot scalar CFG candidate.
  *
- * Part of the dcc_mir.c MIR backend split; see dcc_mir_internal.h.
+ * @par Role
+ * Covers most functions by assigning MIR values to backend frame slots and
+ * emitting arbitrary supported CFGs. It owns virtual-IY addressing, slot
+ * preparation, call ABI handling, PHI transfers, value forwarding,
+ * comparison/branch fusion, and general scalar/wide instruction emission.
+ *
+ * @par Key entry point
+ * mir_try_emit_spilled_scalar_cfg().
  */
 
 /* fmemopen() (used below for elided-epilogue byte accounting) is a POSIX
