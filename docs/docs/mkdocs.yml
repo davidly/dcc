@@ -36,6 +36,7 @@ nav:
       - "stdio.h: Console and file I/O": en/standard-lib/05-stdio.md
       - "stdlib.h: Memory and utilities": en/standard-lib/06-stdlib.md
       - "string.h: String handling": en/standard-lib/14-string.md
+      - "time.h: Date and time": en/standard-lib/15-time.md
       - System and CP/M services: en/10-system-and-cpm.md
   - Limitations: en/11-limitations.md
   - Worked examples: en/12-examples.md

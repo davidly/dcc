@@ -6223,8 +6223,10 @@ at_ws:
         ld      a,(hl)
         cp      ' '
         jr      z,at_ws_inc
-        cp      9
-        jr      nz,at_sign
+        cp      9               ; C whitespace: \t..\r
+        jr      c,at_sign
+        cp      14
+        jr      nc,at_sign
 at_ws_inc:
         inc     hl
         jr      at_ws
@@ -6292,7 +6294,7 @@ at_done_abs:
 
         public  _atol
 ; long atol(const char *nptr)
-; Like atoi but builds a 32-bit accumulator.  Skips leading spaces/tabs,
+; Like atoi but builds a 32-bit accumulator.  Skips leading C whitespace,
 ; accepts an optional '+'/'-' sign, then consumes decimal digits.  Overflow
 ; wraps modulo 2^32 (same defined-behaviour stance as atoi's 2^16 wrap).
 ; Returns the signed long in DE:HL (DE = high word).
@@ -6324,8 +6326,10 @@ atl_ws:
         ld      a,(hl)
         cp      ' '
         jr      z,atl_ws_i
-        cp      9
-        jr      nz,atl_sign
+        cp      9               ; C whitespace: \t..\r
+        jr      c,atl_sign
+        cp      14
+        jr      nc,atl_sign
 atl_ws_i:
         inc     hl
         jr      atl_ws
@@ -6420,6 +6424,8 @@ atl_fin:
 ; digits, optional decimal point, and optional e/E signed exponent.
 ; Also accepts nan, inf, and infinity (case-insensitive).  Overflow
 ; returns signed infinity; underflow returns signed zero.
+; __atf_range records numeric range exits for the strtod wrapper; atof itself
+; does not alter errno.
 ; Note: standard C89 atof returns double; this returns float because
 ; dcc has no double type.
 _atof:
@@ -6444,6 +6450,7 @@ _atof:
         ld      (__atf_edig),a
         ld      (__atf_sd),a            ; saw a mantissa digit = 0
         ld      (__atf_ndig),a          ; kept significant digits = 0
+        ld      (__atf_range),a         ; numeric overflow/underflow = 0
         ld      hl,(__atf_p)
 atf_ws:
         ld      a,(hl)
@@ -6670,10 +6677,15 @@ atf_elp:
         ld      a,1
         ld      (__atf_edig),a
         ld      hl,(__atf_expo)
-        ld      de,400                  ; bound parse work for huge exponents
+        ld      de,6553                 ; 65535 covers any possible digit count
         or      a
         sbc     hl,de
+        jr      c,atf_ecalc
+        jr      nz,atf_esat
+        ld      a,c
+        cp      6                       ; 6553*10+5 still fits
         jr      nc,atf_esat
+atf_ecalc:
         ld      hl,(__atf_expo)
         add     hl,hl
         ld      d,h
@@ -6684,15 +6696,9 @@ atf_elp:
         ld      e,c
         ld      d,0
         add     hl,de                   ; HL = expo*10 + digit
-        ld      de,400
-        or      a
-        sbc     hl,de
-        jr      c,atf_estore_orig
-atf_esat:
-        ld      hl,400
         jr      atf_estore
-atf_estore_orig:
-        add     hl,de                   ; undo compare: restore computed expo
+atf_esat:
+        ld      hl,65535
 atf_estore:
         ld      (__atf_expo),hl
         ld      hl,(__atf_p)
@@ -6709,24 +6715,66 @@ atf_net:
         jr      z,atf_net_go
         ld      (__atf_p),hl            ; "1e" leaves endptr at 'e'
 atf_net_go:
-        ; net_exp = (eneg ? -(expo+frac) : expo-frac)
-        ld      hl,(__atf_expo)
-        ld      de,(__atf_frac)
+        ; Combine the signed explicit exponent, fractional count, and skipped
+        ; integer count as a 32-bit value, then clamp only the final result.
         ld      a,(__atf_eneg)
-        or      a                       ; clears carry
-        jr      z,atf_net_pos
-        ; negative exponent: net = -(expo + frac)
-        add     hl,de
-        ex      de,hl
-        ld      hl,0
-        or      a                       ; clear carry before sbc
-        sbc     hl,de
-        jr      atf_net_sv
-atf_net_pos:
-        sbc     hl,de                   ; HL = expo - frac (carry=0)
-atf_net_sv:
+        or      a
+        jr      nz,atf_net_neg_exp
+        ld      hl,(__atf_expo)
         ld      de,(__atf_adj)
-        add     hl,de                   ; account for skipped integer digits
+        add     hl,de
+        jr      nc,atf_net_pos_no_carry
+        ld      de,(__atf_frac)
+        or      a
+        sbc     hl,de
+        jr      nc,atf_net_clamp_pos
+        jr      atf_net_pos_small
+atf_net_pos_no_carry:
+        ld      de,(__atf_frac)
+        or      a
+        sbc     hl,de
+        jr      nc,atf_net_pos_small
+        jr      atf_net_neg_small
+atf_net_neg_exp:
+        ld      hl,(__atf_frac)
+        ld      de,(__atf_expo)
+        add     hl,de
+        jr      nc,atf_net_neg_no_carry
+        ld      de,(__atf_adj)
+        ex      de,hl
+        or      a
+        sbc     hl,de
+        jr      c,atf_net_clamp_neg
+        jr      atf_net_neg_small
+atf_net_neg_no_carry:
+        ld      de,(__atf_adj)
+        ex      de,hl
+        or      a
+        sbc     hl,de
+        jr      nc,atf_net_pos_small
+atf_net_neg_small:
+        ld      de,0ffb3h               ; -77 is the smallest scaled exponent
+        or      a
+        sbc     hl,de
+        jr      c,atf_net_clamp_neg
+        add     hl,de
+        jr      atf_net_sv
+atf_net_pos_small:
+        ld      de,39
+        or      a
+        sbc     hl,de
+        jr      c,atf_net_pos_restore
+        ld      hl,39
+        jr      atf_net_sv
+atf_net_pos_restore:
+        add     hl,de
+        jr      atf_net_sv
+atf_net_clamp_pos:
+        ld      hl,39
+        jr      atf_net_sv
+atf_net_clamp_neg:
+        ld      hl,-78
+atf_net_sv:
         ld      (__atf_net),hl
         ; Zero stays zero regardless of exponent range.
         ld      hl,(__atf_mant)
@@ -6735,17 +6783,17 @@ atf_net_sv:
         ld      hl,(__atf_mant+2)
         or      h
         or      l
-        jr      z,atf_sign_bit
+        jp      z,atf_sign_bit
         ld      hl,(__atf_net)
         ld      a,h
         or      l
-        jr      z,atf_sign_bit          ; net == 0: no scaling needed
+        jp      z,atf_sign_bit          ; net == 0: no scaling needed
         bit     7,h
         jr      nz,atf_neg_net          ; net < 0: divide by 10
         ld      de,39                   ; > FLT_MAX decimal range -> infinity
         or      a
         sbc     hl,de
-        jr      nc,atf_make_inf
+        jp      nc,atf_range_inf
         ld      hl,(__atf_net)
 atf_pos_net:
         ; mant *= 10.0f, net times
@@ -6760,12 +6808,16 @@ atf_pos_net:
         pop     bc
         ld      (__atf_mant),hl
         ld      (__atf_mant+2),de
-        ld      hl,(__atf_net)
-        dec     hl
-        ld      (__atf_net),hl
-        ld      a,h
-        or      l
+        ld      a,(__atf_net)
+        dec     a
+        ld      (__atf_net),a
         jr      nz,atf_pos_net
+        ld      a,d
+        and     7fh
+        cp      7fh
+        jr      nz,atf_sign_bit
+        bit     7,e
+        jr      nz,atf_range_inf
         jr      atf_sign_bit
 atf_neg_net:
         ld      de,(__atf_net)
@@ -6775,7 +6827,7 @@ atf_neg_net:
         ld      de,78                   ; FLT_MAX*10^-78 < FLT_MIN for any
         or      a                       ; mantissa, so this always underflows
         sbc     hl,de
-        jr      nc,atf_make_zero
+        jr      nc,atf_range_zero
         ; mant /= 10.0f, |net| times (net is negative, counting toward 0)
         ld      hl,(__atf_mant)
         ld      de,(__atf_mant+2)
@@ -6788,12 +6840,16 @@ atf_neg_net:
         pop     bc
         ld      (__atf_mant),hl
         ld      (__atf_mant+2),de
-        ld      hl,(__atf_net)
-        inc     hl                      ; towards 0
-        ld      (__atf_net),hl
-        ld      a,h
-        or      l
+        ld      a,(__atf_net)
+        inc     a                       ; towards 0; range is only -77..-1
+        ld      (__atf_net),a
         jr      nz,atf_neg_net
+        ld      a,d
+        and     7fh
+        or      e
+        or      h
+        or      l
+        jr      z,atf_range_zero
 atf_sign_bit:
         ld      hl,(__atf_mant)
         ld      de,(__atf_mant+2)
@@ -6806,10 +6862,16 @@ atf_apply_sign:
         ld      d,a                     ; set IEEE 754 sign bit
 atf_ret:
         ret
+atf_range_inf:
+        ld      a,1
+        ld      (__atf_range),a
 atf_make_inf:
         ld      hl,0
         ld      de,07f80h
         jr      atf_apply_sign
+atf_range_zero:
+        ld      a,1
+        ld      (__atf_range),a
 atf_make_zero:
         ld      hl,0
         ld      de,0
@@ -6829,6 +6891,7 @@ __atf_edig:     db      0
 __atf_sd:       db      0
 __atf_ndig:     db      0
 __atf_d:        db      0
+__atf_range:    db      0
 
         public  _strtod
 _strtod:
@@ -6836,6 +6899,7 @@ _strtod:
 ; Note: C89 strtod returns double; dcc returns float (no double type).
 ; Delegates to _atof for the conversion; __atf_p is left pointing at the
 ; first character not consumed, which is stored through endptr if non-null.
+; Numeric overflow/underflow sets ERANGE after preserving the float result.
         pop     bc                      ; return address
         pop     hl                      ; nptr
         pop     de                      ; endptr
@@ -6858,6 +6922,12 @@ _strtod:
         inc     hl
         ld      (hl),d
 std_noep:
+        ld      a,(__atf_range)
+        or      a
+        jr      z,std_no_range
+        ld      hl,ERANGE
+        ld      (_errno),hl
+std_no_range:
         pop     hl
         pop     de                      ; restore float result
         ret
@@ -22752,11 +22822,11 @@ __lcnv:
 ; after _difftime) build on that: since this target has no timezone
 ; database, localtime() is just gmtime() under another name - the BDOS
 ; clock's raw reading already *is* "local" time, with no UTC offset to
-; apply. clock() and strftime() remain stubs.
+; apply. clock() remains unavailable; strftime() provides fixed-C-locale
+; formatting.
 ; ============================================================
         public  _clock
         public  _time
-        public  _difftime
 
 _clock:
 ; clock_t clock(void) -- returns (clock_t)-1 (unavailable)
@@ -22764,25 +22834,34 @@ _clock:
         ld      de,0ffffh
         ret
 
-; __bcd2bin: A = packed BCD byte (each nibble 0-9) -> A = binary value.
-; Preserves BC, DE, HL.
+; __bcd2bin: A = packed BCD byte -> A = binary value.  Carry is set when
+; either nibble is not decimal.  Preserves BC, DE, HL.
 __bcd2bin:
         push    bc
         ld      b,a             ; B = original packed byte
         and     0fh             ; A = units digit
+        cp      10
+        jr      nc,bcd_bad
         ld      c,a             ; C = units
         ld      a,b
+        and     0f0h
+        cp      0a0h
+        jr      nc,bcd_bad
         rrca
         rrca
         rrca
         rrca
-        and     0fh             ; A = tens digit (0-9)
         ld      b,a
         add     a,a             ; tens*2
         add     a,a             ; tens*4
         add     a,b             ; tens*5
         add     a,a             ; tens*10
         add     a,c             ; tens*10 + units
+        or      a               ; valid: clear carry
+        pop     bc
+        ret
+bcd_bad:
+        scf
         pop     bc
         ret
 
@@ -22797,11 +22876,9 @@ _time:
 ; together, so a surviving sentinel means the call didn't run - fall back to
 ; (time_t)-1, matching this function's pre-BDOS-105 stub behavior, rather
 ; than returning a fabricated-looking but wrong timestamp.
-; Otherwise convert to a Unix time_t: unix_days = cpm_day_count + 2921 (CP/M
-; day 1 is Unix day 2922 - i.e. day 0 is Unix day 2921; matches ntvcm/RunCPM's
-; own reverse conversion), then seconds = unix_days*86400 + hour*3600 +
-; minute*60 + sec, accumulated as a 32-bit value via __lmul (32x32->32) and
-; __mulu (16x16->16, safe here since minute*60+second never exceeds 3599).
+; Otherwise validate the packed BCD fields and pass the binary fields to
+; __tmcv.  That checked core enforces dcc's signed 32-bit time_t cutoff:
+; 2038-01-19 03:14:07 succeeds, while the next second returns/stores -1.
         push    ix
         ld      ix,0
         add     ix,sp
@@ -22818,62 +22895,38 @@ _time:
         inc     a               ; inc-a/0FFh wrap idiom (see _open's comment above)
         jr      z,tim_unavailable       ; sentinel survived: no real clock
 
-        ld      hl,(__time_buf)         ; HL = cpm_day_count
-        ld      de,2921
-        add     hl,de                   ; HL = unix_days
-        ex      de,hl                   ; DE = unix_days
-
-        ; acc = unix_days * 86400 (0x00015180)
-        ld      hl,0
-        push    hl                      ; LHS high = 0
-        push    de                      ; LHS low = unix_days
-        ld      de,1
-        ld      hl,5180h
-        call    __lmul                  ; DE:HL = product (high:low)
-        pop     bc
-        pop     bc                      ; discard LHS (caller-cleanup convention)
-        ld      (__time_acc_l),hl
-        ld      (__time_acc_h),de
-
-        ; acc += hour * 3600
-        ld      a,(__time_buf+2)
-        call    __bcd2bin
-        ld      e,a
-        ld      d,0                     ; DE = hour (0-23)
-        ld      hl,0
-        push    hl                      ; LHS high = 0
-        push    de                      ; LHS low = hour
-        ld      de,0
-        ld      hl,3600
-        call    __lmul                  ; DE:HL = hour*3600 (high:low)
-        pop     bc
-        pop     bc
-        ld      bc,(__time_acc_l)
-        add     hl,bc
-        ld      (__time_acc_l),hl
-        ld      hl,(__time_acc_h)
-        adc     hl,de
-        ld      (__time_acc_h),hl
-
-        ; acc += minute*60 + second (fits in 16 bits: max 59*60+59 = 3599)
-        ld      a,(__time_buf+3)
-        call    __bcd2bin
-        ld      h,0
-        ld      l,a                     ; HL = minute
-        ld      de,60
-        call    __mulu                  ; HL = minute*60
         ld      a,(__time_sec_bcd)
         call    __bcd2bin
-        ld      e,a
-        ld      d,0
-        add     hl,de                   ; HL = minute*60 + second
-        ld      de,(__time_acc_l)
-        add     hl,de
+        jr      c,tim_unavailable
+        ld      (__time_sec_bcd),a
+        ld      a,(__time_buf+3)
+        call    __bcd2bin
+        jr      c,tim_unavailable
+        ld      (__time_buf+3),a
+        ld      a,(__time_buf+2)
+        call    __bcd2bin
+        jr      c,tim_unavailable
+        ld      (__time_buf+2),a
+
+        ld      a,(__time_sec_bcd)
+        ld      l,a
+        ld      h,0
+        push    hl                      ; second (rightmost argument)
+        ld      a,(__time_buf+3)
+        ld      l,a
+        push    hl                      ; minute
+        ld      a,(__time_buf+2)
+        ld      l,a
+        push    hl                      ; hour
+        ld      hl,(__time_buf)
+        push    hl                      ; CP/M day count (leftmost argument)
+        call    __tmcv
+        pop     bc
+        pop     bc
+        pop     bc
+        pop     bc
         ld      (__time_acc_l),hl
-        ld      hl,(__time_acc_h)
-        ld      de,0
-        adc     hl,de
-        ld      (__time_acc_h),hl
+        ld      (__time_acc_h),de
         jr      tim_store
 
 tim_unavailable:
@@ -22908,6 +22961,120 @@ __time_sec_bcd: db      0
 __time_acc_l:   dw      0
 __time_acc_h:   dw      0
 
+        public  __tmcv
+__tmcv:
+; Internal standard-ABI conversion core:
+; time_t __tmcv(unsigned cpm_day, unsigned hour,
+;                 unsigned minute, unsigned second)
+; CP/M day 1 is 1978-01-01, Unix day 2922; day 0 therefore maps to Unix
+; day 2921 (1977-12-31), matching ntvcm and RunCPM.  The last representable
+; signed time_t is CP/M day 21934 at 03:14:07.
+        push    ix
+        ld      ix,0
+        add     ix,sp
+
+        ld      a,(ix+7)
+        or      a
+        jp      nz,tmc_bad
+        ld      a,(ix+6)
+        cp      24
+        jp      nc,tmc_bad
+        ld      a,(ix+9)
+        or      a
+        jp      nz,tmc_bad
+        ld      a,(ix+8)
+        cp      60
+        jp      nc,tmc_bad
+        ld      a,(ix+11)
+        or      a
+        jp      nz,tmc_bad
+        ld      a,(ix+10)
+        cp      60
+        jp      nc,tmc_bad
+
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      bc,21935
+        or      a
+        sbc     hl,bc
+        jp      nc,tmc_bad
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      bc,21934
+        or      a
+        sbc     hl,bc
+        jr      nz,tmc_build
+        ld      a,(ix+6)
+        cp      3
+        jr      c,tmc_build
+        jp      nz,tmc_bad
+        ld      a,(ix+8)
+        cp      14
+        jr      c,tmc_build
+        jp      nz,tmc_bad
+        ld      a,(ix+10)
+        cp      8
+        jp      nc,tmc_bad
+
+tmc_build:
+        ld      l,(ix+4)
+        ld      h,(ix+5)
+        ld      bc,2921
+        add     hl,bc                   ; Unix day (0 -> 2921)
+        ld      de,0
+        push    de
+        push    hl                      ; pushed Unix day, zero-extended
+        ld      de,1
+        ld      hl,5180h                ; 86400
+        call    __lmul
+        pop     bc
+        pop     bc
+        push    de
+        push    hl                      ; accumulated day seconds
+
+        ld      l,(ix+6)
+        ld      h,0
+        ld      de,0
+        push    de
+        push    hl
+        ld      hl,3600
+        call    __lmul
+        pop     bc
+        pop     bc
+        pop     bc
+        add     hl,bc
+        ex      de,hl
+        pop     bc
+        adc     hl,bc
+        ex      de,hl
+
+        push    de
+        push    hl
+        ld      l,(ix+8)
+        ld      h,0
+        ld      de,60
+        call    __mulu
+        ld      c,(ix+10)
+        ld      b,0
+        add     hl,bc
+        ld      e,0
+        ld      d,0
+        pop     bc
+        add     hl,bc
+        ex      de,hl
+        pop     bc
+        adc     hl,bc
+        ex      de,hl
+        pop     ix
+        ret
+
+tmc_bad:
+        ld      hl,0ffffh
+        ld      de,0ffffh
+        pop     ix
+        ret
+
+        public  _difftime
 _difftime:
 ; float difftime(time_t t1, time_t t0)
 ; Note: C89 returns double; dcc returns float (no double type).
@@ -22938,24 +23105,44 @@ _difftime:
         sbc     hl,de           ; HL = t1_hi - t0_hi - borrow
         ex      de,hl           ; DE = result high
         pop     hl              ; HL = result low
-        call    __flf           ; convert signed 32-bit DE:HL to float
+        jp      po,dif_signed   ; P/V from the high-word SBC is 32-bit overflow
+        bit     7,(ix+7)
+        jr      nz,dif_neg_over
+        call    __fulf          ; positive 33-bit result: low 32 bits are magnitude
         pop     ix
         ret
 
-; ================= BEGIN generated calendar functions (from calendar.c, peephole-optimized) =================
-; gmtime localtime(__ltim) asctime ctime mktime -- regenerate: dcc -c calendar.c -o calendar.mac | dccpeep,
-; then rename generated L<n>/_Z<n>/S<n> labels to CDL<n>/CDZ<n>/CDS<n> (collision-avoidance, same idea as the
-; strconv.c-derived block's SCL<n>/SCZ<n> rename below). dcc's own codegen already special-cases "localtime"
-; to call __ltim directly (see dcc_asmname.c), so no manual rename is needed for that one specifically.
-; Two more hand-applied cleanups on top of the raw regenerated+peepholed output, both dead "or a"
-; carry-clears dcc's codegen emits reflexively: (1) cal_days_in_month's first sbc hl,de, right after
-; push ix/ld ix,0/add ix,sp - C is already clear there (see _difftime's header comment for the proof);
-; (2) every "pop bc / or a / add hl,bc" 32-bit-add sequence - ADD HL,rr never reads incoming carry (only
-; ADC does), so clearing it first is always dead code regardless of context, not just here. Both are
-; general dcc codegen habits, not calendar.c-specific, so a full fix belongs in the compiler - noted,
-; not chased further right now (see peep_pass_once.c's KNOWN BUG comment for why: same "wait for the
-; feature branch, don't create merge friction" reasoning applies to touching shared codegen right now).
-; Regenerating this block from calendar.c will reintroduce both patterns; reapply this same trim.
+dif_neg_over:
+        ; Negative 33-bit result: negate the wrapped low 32 bits to recover
+        ; the unsigned magnitude, convert it, then apply the float sign.
+        xor     a
+        sub     l
+        ld      l,a
+        ld      a,0
+        sbc     a,h
+        ld      h,a
+        ld      a,0
+        sbc     a,e
+        ld      e,a
+        ld      a,0
+        sbc     a,d
+        ld      d,a
+        call    __fulf
+        set     7,d
+        pop     ix
+        ret
+
+dif_signed:
+        call    __flf           ; in-range signed 32-bit result
+        pop     ix
+        ret
+
+; ================= BEGIN calendar functions =================
+; gmtime and the shared CDZ calendar helpers were generated from calendar.c
+; and peephole-optimized; localtime is its ABI tail alias.  asctime and mktime
+; are now hand-maintained checked implementations, while ctime remains the
+; simple asctime(localtime(tp)) composition.  Generated CDL/CDZ names are kept
+; collision-free from the other embedded C-derived runtime blocks.
         public _gmtime
 _gmtime:
         push ix
@@ -22995,6 +23182,11 @@ __ltim:
 
         public _asctime
 _asctime:
+; char *asctime(const struct tm *tp)
+; Validate every field before touching the fixed 26-byte static buffer, then
+; emit the exact C layout directly.  This keeps bad table indices from being
+; dereferenced and makes the write bound structural rather than formatter-
+; dependent.  Supported years are 0000..9999.
         push ix
         ld ix,0
         add ix,sp
@@ -23002,105 +23194,184 @@ _asctime:
         ld h,(ix+5)
         ld a,h
         or l
-        jr nz,CDL187 ; peep: jp_to_jr
-        ld hl,0
-        jp CDL186
-CDL187:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,10
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        ex de,hl
-        ld de,1900
-        add hl,de
+        jp z,asc_bad
         push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        ex de,hl
-        push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        inc hl
-        inc hl
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        ex de,hl
-        push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,4
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        ex de,hl
-        push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,6
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        ex de,hl
-        push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,8
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        ex de,hl
-        add hl,hl
-        ld de,CDZ0008
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        ex de,hl
-        push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,12
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        ex de,hl
-        add hl,hl
-        ld de,CDZ0009
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        ex de,hl
-        push hl
-        ld hl,CDS19
-        push hl
-        ld hl,CDZ0010
-        push hl
-        call _sprintf
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        pop bc
-        ld hl,CDZ0010
-CDL186:
-        ld sp,ix
+        pop ix                  ; IX = tp; original IX remains saved on stack
+
+        ld      a,(ix+13)       ; tm_wday: 0..6
+        or      a
+        jp      nz,asc_bad
+        ld      a,(ix+12)
+        cp      7
+        jp      nc,asc_bad
+        ld      a,(ix+9)        ; tm_mon: 0..11
+        or      a
+        jp      nz,asc_bad
+        ld      a,(ix+8)
+        cp      12
+        jp      nc,asc_bad
+        ld      a,(ix+7)        ; tm_mday: 1..31
+        or      a
+        jp      nz,asc_bad
+        ld      a,(ix+6)
+        dec     a
+        cp      31
+        jp      nc,asc_bad
+        ld      a,(ix+5)        ; tm_hour: 0..23
+        or      a
+        jp      nz,asc_bad
+        ld      a,(ix+4)
+        cp      24
+        jp      nc,asc_bad
+        ld      a,(ix+3)        ; tm_min: 0..59
+        or      a
+        jp      nz,asc_bad
+        ld      a,(ix+2)
+        cp      60
+        jp      nc,asc_bad
+        ld      a,(ix+1)        ; tm_sec: 0..60 (leap second accepted)
+        or      a
+        jp      nz,asc_bad
+        ld      a,(ix+0)
+        cp      61
+        jp      nc,asc_bad
+
+        ld      l,(ix+10)       ; actual year = tm_year + 1900
+        ld      h,(ix+11)
+        ld      bc,1900
+        add     hl,bc
+        bit     7,h
+        jp      nz,asc_bad
+        ld      bc,10000
+        or      a
+        sbc     hl,bc
+        jp      nc,asc_bad
+        add     hl,bc
+        push    hl              ; validated actual year
+
+        ld      de,CDZ0010
+
+        ld      l,(ix+12)       ; weekday table index * 3
+        ld      h,0
+        ld      c,l
+        ld      b,0
+        add     hl,hl
+        add     hl,bc
+        ld      bc,CDS0
+        add     hl,bc
+        ld      bc,3
+        ldir
+        ld      a,' '
+        ld      (de),a
+        inc     de
+
+        ld      l,(ix+8)        ; month table index * 3
+        ld      h,0
+        ld      c,l
+        ld      b,0
+        add     hl,hl
+        add     hl,bc
+        ld      bc,CDS1
+        add     hl,bc
+        ld      bc,3
+        ldir
+        ld      a,' '
+        ld      (de),a
+        inc     de
+
+        ld      a,(ix+6)        ; day, space-padded
+        cp      10
+        jr      nc,asc_day2
+        ld      a,' '
+        ld      (de),a
+        inc     de
+        ld      a,(ix+6)
+        add     a,'0'
+        ld      (de),a
+        inc     de
+        jr      asc_day_done
+asc_day2:
+        call    asc_2d
+asc_day_done:
+        ld      a,' '
+        ld      (de),a
+        inc     de
+        ld      a,(ix+4)
+        call    asc_2d
+        ld      a,':'
+        ld      (de),a
+        inc     de
+        ld      a,(ix+2)
+        call    asc_2d
+        ld      a,':'
+        ld      (de),a
+        inc     de
+        ld      a,(ix+0)
+        call    asc_2d
+        ld      a,' '
+        ld      (de),a
+        inc     de
+
+        pop     hl              ; actual year
+        ld      bc,1000
+        call    asc_digit
+        ld      bc,100
+        call    asc_digit
+        ld      bc,10
+        call    asc_digit
+        ld      a,l
+        add     a,'0'
+        ld      (de),a
+        inc     de
+        ld      a,10
+        ld      (de),a
+        inc     de
+        xor     a
+        ld      (de),a
+        ld      hl,CDZ0010
         pop ix
+        ret
+
+asc_bad:
+        ld      hl,0
+        pop     ix
+        ret
+
+; A = 0..99, DE = output.  Emit two zero-padded decimal digits.
+asc_2d:
+        ld      c,a
+        ld      b,'0'
+asc_2d_loop:
+        ld      a,c
+        cp      10
+        jr      c,asc_2d_done
+        sub     10
+        ld      c,a
+        inc     b
+        jr      asc_2d_loop
+asc_2d_done:
+        ld      a,b
+        ld      (de),a
+        inc     de
+        ld      a,c
+        add     a,'0'
+        ld      (de),a
+        inc     de
+        ret
+
+; HL = nonnegative remainder, BC = decimal place, DE = output.
+asc_digit:
+        ld      a,'0'
+asc_digit_loop:
+        or      a
+        sbc     hl,bc
+        jr      c,asc_digit_done
+        inc     a
+        jr      asc_digit_loop
+asc_digit_done:
+        add     hl,bc
+        ld      (de),a
+        inc     de
         ret
 
         public _ctime
@@ -23121,503 +23392,437 @@ _ctime:
 
         public _mktime
 _mktime:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld hl,-18
-        add hl,sp
-        ld sp,hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld a,h
-        or l
-        jr nz,CDL241 ; peep: jp_to_jr
-        ld hl,65535
-        ld de,65535 ; peep: fold_const_sxt
-        jp CDL240
-CDL241:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,10
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        ex de,hl
-        ld de,1900
-        add hl,de
-        ld (ix-2),l
-        ld (ix-1),h
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,8
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        ex de,hl
-        ld (ix-4),l
-        ld (ix-3),h
-        ld c,(ix-4)
-        ld b,(ix-3)
-CDL244:
-        ld l,c
-        ld h,b
-        bit 7,h ; peep: signed_zero_branch
-        jr z,CDL245 ; peep: jp_to_jr
-        ld l,c
-        ld h,b
-        ld de,12
-        add hl,de
-        ld c,l
-        ld b,h
-        ld a,(ix-2)
-        dec (ix-2)
-        or a
-        jr nz,CDL244 ; peep: jp_to_jr
-        dec (ix-1)
-        jr CDL244 ; peep: jp_to_jr
-CDL245:
-        ld (ix-4),c
-        ld (ix-3),b
-        ld c,(ix-4)
-        ld b,(ix-3)
-CDL247:
-        ld l,c
-        ld h,b
-        ld de,32779 ; peep: signed_cmp_const_bias_fold
-        ld a,h
-        xor 80h
-        ld h,a
-        sbc hl,de
-        jr z,CDL248 ; peep: jp_to_jr
-        jr c,CDL248 ; peep: jp_to_jr
-        ld l,c
-        ld h,b
-        ld de,12
-        sbc hl,de
-        ld c,l
-        ld b,h
-        inc (ix-2)
-        jr nz,CDL247 ; peep: jp_to_jr
-        inc (ix-1)
-        jr CDL247 ; peep: jp_to_jr
-CDL248:
-        ld (ix-4),c
-        ld (ix-3),b
-        ld l,(ix-2)
-        ld h,(ix-1)
-        ld de,34738 ; peep: signed_cmp_const_bias_fold
-        ld a,h
-        xor 80h
-        ld h,a
-        sbc hl,de
-        jr nc,CDL250 ; peep: jp_to_jr
-        ld hl,65535
-        ld de,65535 ; peep: fold_const_sxt
-        jp CDL240
-CDL250:
-        ld hl,0
-        ld de,0 ; peep: fold_const_sxt
-        ld (ix-12),l
-        ld (ix-11),h
-        ld (ix-10),e
-        ld (ix-9),d
-        ld hl,1970
-        ld (ix-8),l
-        ld (ix-7),h
-CDL251:
-        ld l,(ix-8)
-        ld h,(ix-7)
-        ld e,(ix-2) ; peep: ix_pair_load_to_de
-        ld d,(ix-1)
-        ld a,h
-        xor 80h
-        ld h,a
-        ld a,d
-        xor 80h
-        ld d,a
-        sbc hl,de
-        jr nc,CDL253 ; peep: jp_to_jr
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
-        push de
-        push hl
-        ld l,(ix-8)
-        ld h,(ix-7)
-        push hl
-        call CDZ0001
-        pop bc
-        ld a,h
-        or l
-        jr z,CDL254 ; peep: jp_to_jr
-        ld hl,366
-        ld de,0
-        jr CDL255 ; peep: jp_to_jr
-CDL254:
-        ld hl,365
-        ld de,0
-CDL255:
-        pop bc
-        add hl,bc
-        ex de,hl
-        pop bc
-        adc hl,bc
-        ex de,hl
-        ld (ix-12),l
-        ld (ix-11),h
-        ld (ix-10),e
-        ld (ix-9),d
-        inc (ix-8)
-        jp nz, CDL251
-        inc (ix-7)
-        jp CDL251
-CDL253:
-        ld hl,0
-        ld (ix-6),l
-        ld (ix-5),h
-CDL257:
-        ld l,(ix-6)
-        ld h,(ix-5)
-        ld e,(ix-4) ; peep: ix_pair_load_to_de
-        ld d,(ix-3)
-        ld a,h
-        xor 80h
-        ld h,a
-        ld a,d
-        xor 80h
-        ld d,a
-        sbc hl,de
-        jr nc,CDL259 ; peep: jp_to_jr
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
-        push de
-        push hl
-        ld l,(ix-6)
-        ld h,(ix-5)
-        push hl
-        ld l,(ix-2)
-        ld h,(ix-1)
-        push hl
-        call CDZ0002
-        pop bc
-        pop bc
-        ld a,h
+; time_t mktime(struct tm *tp)
+; Normalize month, date, and clock fields into a checked day/second pair
+; before applying the 1970 lower bound or signed-time_t upper bound.  No
+; caller field is written until the final value has been proved representable.
+; The final breakdown swaps through the caller object so an unrelated mktime
+; does not clobber gmtime/localtime's shared returned object.
+        ld      hl,2
+        add     hl,sp
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        ld      a,d
+        or      e
+        jp      z,mkt_fail
+        ld      (__mkt_ptr),de
+
+        ; tm_year outside this conservative window cannot be brought into
+        ; 1970..2038 by any 16-bit month/day/hour/minute/second combination.
+        ld      hl,(__mkt_ptr)
+        ld      bc,10
+        add     hl,bc
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        ex      de,hl
+        bit     7,h
+        jr      z,mkt_year_pos
+        ld      de,0f448h               ; -3000
+        or      a
+        sbc     hl,de
+        jp      c,mkt_fail
+        jr      mkt_year_ok
+mkt_year_pos:
+        ld      de,3201
+        or      a
+        sbc     hl,de
+        jp      nc,mkt_fail
+mkt_year_ok:
+        ld      hl,(__mkt_ptr)
+        ld      bc,10
+        add     hl,bc
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        ex      de,hl
+        ld      de,1900
+        add     hl,de
+        ld      (__mkt_year),hl
+
+        ld      hl,(__mkt_ptr)
+        ld      bc,8
+        add     hl,bc
+        ld      c,(hl)
+        inc     hl
+        ld      b,(hl)                  ; BC = tm_mon
+mkt_mon_neg:
+        bit     7,b
+        jr      z,mkt_mon_pos
+        ld      h,b
+        ld      l,c
+        ld      de,12
+        add     hl,de
+        ld      b,h
+        ld      c,l
+        ld      hl,(__mkt_year)
+        dec     hl
+        ld      (__mkt_year),hl
+        jr      mkt_mon_neg
+mkt_mon_pos:
+        ld      h,b
+        ld      l,c
+        ld      de,12
+        or      a
+        sbc     hl,de
+        jr      c,mkt_mon_done
+        ld      b,h
+        ld      c,l
+        ld      hl,(__mkt_year)
+        inc     hl
+        ld      (__mkt_year),hl
+        jr      mkt_mon_pos
+mkt_mon_done:
+        ld      (__mkt_mon),bc
+
+        ; The remaining fields can move the date by less than 100 years.
+        ld      hl,(__mkt_year)
+        bit     7,h
+        jp      nz,mkt_fail
+        ld      de,1870
+        or      a
+        sbc     hl,de
+        jp      c,mkt_fail
+        ld      hl,(__mkt_year)
+        ld      de,2141
+        or      a
+        sbc     hl,de
+        jp      nc,mkt_fail
+
+        ld      hl,0
+        ld      (__mkt_days),hl
+        ld      (__mkt_days+2),hl
+        ld      hl,(__mkt_year)
+        ld      de,1970
+        or      a
+        sbc     hl,de
+        jr      c,mkt_year_past
+        jr      z,mkt_year_done
+
+        ld      hl,1970
+        ld      (__mkt_loop),hl
+mkt_year_future:
+        ld      hl,(__mkt_loop)
+        ld      de,(__mkt_year)
+        or      a
+        sbc     hl,de
+        jr      nc,mkt_year_done
+        ld      hl,(__mkt_loop)
+        push    hl
+        call    CDZ0001
+        pop     bc
+        ld      a,h
+        or      l
+        ld      hl,365
+        jr      z,mkt_year_add
+        inc     hl
+mkt_year_add:
+        call    mkt_add16
+        ld      hl,(__mkt_loop)
+        inc     hl
+        ld      (__mkt_loop),hl
+        jr      mkt_year_future
+
+mkt_year_past:
+        ld      hl,1969
+        ld      (__mkt_loop),hl
+mkt_year_back:
+        ld      hl,(__mkt_loop)
+        ld      de,(__mkt_year)
+        or      a
+        sbc     hl,de
+        jr      c,mkt_year_done
+        ld      hl,(__mkt_loop)
+        push    hl
+        call    CDZ0001
+        pop     bc
+        ld      a,h
+        or      l
+        ld      hl,-365
+        jr      z,mkt_year_sub
+        dec     hl
+mkt_year_sub:
+        call    mkt_add16
+        ld      hl,(__mkt_loop)
+        dec     hl
+        ld      (__mkt_loop),hl
+        jr      mkt_year_back
+
+mkt_year_done:
+        ld      hl,0
+        ld      (__mkt_loop),hl
+mkt_month_loop:
+        ld      hl,(__mkt_loop)
+        ld      de,(__mkt_mon)
+        or      a
+        sbc     hl,de
+        jr      nc,mkt_month_done
+        ld      hl,(__mkt_loop)
+        push    hl
+        ld      hl,(__mkt_year)
+        push    hl
+        call    CDZ0002
+        pop     bc
+        pop     bc
+        call    mkt_add16
+        ld      hl,(__mkt_loop)
+        inc     hl
+        ld      (__mkt_loop),hl
+        jr      mkt_month_loop
+
+mkt_month_done:
+        ld      hl,(__mkt_ptr)
+        ld      bc,6
+        add     hl,bc
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        ex      de,hl
+        call    mkt_add16               ; add tm_mday
+        ld      hl,-1
+        call    mkt_add16               ; day 1 is offset zero
+
+        ; total clock seconds fits signed 32 bits for all 16-bit fields.
+        ld      hl,(__mkt_ptr)
+        ld      bc,4
+        add     hl,bc
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        ex      de,hl
+        ld      a,h
         rlca
-        sbc a,a
-        ld d,a
-        ld e,a
-        pop bc
-        add hl,bc
-        ex de,hl
-        pop bc
-        adc hl,bc
-        ex de,hl
-        ld (ix-12),l
-        ld (ix-11),h
-        ld (ix-10),e
-        ld (ix-9),d
-        inc (ix-6)
-        jp nz, CDL257
-        inc (ix-5)
-        jp CDL257
-CDL259:
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld e,(ix-10)
-        ld d,(ix-9)
-        push de
-        push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,6
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        ex de,hl
-        dec hl ; peep: sbc_de1_to_dec
-        ld a,h
+        sbc     a,a
+        ld      d,a
+        ld      e,a
+        push    de
+        push    hl
+        ld      hl,3600
+        ld      de,0
+        call    __lmul
+        pop     bc
+        pop     bc
+        ld      (__mkt_time),hl
+        ld      (__mkt_time+2),de
+
+        ld      hl,(__mkt_ptr)
+        inc     hl
+        inc     hl
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        ex      de,hl
+        ld      a,h
         rlca
-        sbc a,a
-        ld d,a
-        ld e,a
-        pop bc
-        add hl,bc
-        ex de,hl
-        pop bc
-        adc hl,bc
-        ex de,hl
-        ld (ix-12),l
-        ld (ix-11),h
-        ld (ix-10),e
-        ld (ix-9),d
-        ld e,(ix-10)
-        ld d,(ix-9)
-        push de
-        push hl
-        ld hl,20864
-        ld de,1
-        call __lmul
-        pop bc
-        pop bc
-        push de
-        push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,4
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        ex de,hl
-        ld a,h
+        sbc     a,a
+        ld      d,a
+        ld      e,a
+        push    de
+        push    hl
+        ld      hl,60
+        ld      de,0
+        call    __lmul
+        pop     bc
+        pop     bc
+        call    mkt_time_add
+
+        ld      hl,(__mkt_ptr)
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        ex      de,hl
+        ld      a,h
         rlca
-        sbc a,a
-        ld d,a
-        ld e,a
-        push de
-        push hl
-        ld hl,3600
-        ld de,0
-        call __lmul
-        pop bc
-        pop bc
-        pop bc
-        add hl,bc
-        ex de,hl
-        pop bc
-        adc hl,bc
-        ex de,hl
-        push de
-        push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        inc hl
-        inc hl
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        ex de,hl
-        ld a,h
-        rlca
-        sbc a,a
-        ld d,a
-        ld e,a
-        push de
-        push hl
-        ld hl,60
-        ld de,0
-        call __lmul
-        pop bc
-        pop bc
-        pop bc
-        add hl,bc
-        ex de,hl
-        pop bc
-        adc hl,bc
-        ex de,hl
-        push de
-        push hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        ex de,hl
-        ld a,h
-        rlca
-        sbc a,a
-        ld d,a
-        ld e,a
-        pop bc
-        add hl,bc
-        ex de,hl
-        pop bc
-        adc hl,bc
-        ex de,hl
-        ld (ix-16),l
-        ld (ix-15),h
-        ld (ix-14),e
-        ld (ix-13),d
-        ld e,(ix-14)
-        ld d,(ix-13)
-        ld a,d
-        xor 80h
-        ld d,a
-        ld bc,0
-        sbc hl,bc
-        ex de,hl
-        ld bc,32768
-        sbc hl,bc
-        jr nc,CDL261 ; peep: jp_to_jr
-        ld hl,65535
-        ld de,65535 ; peep: fold_const_sxt
-        jp CDL240
-CDL261:
-        ld l,(ix-16)
-        ld h,(ix-15)
-        ld e,(ix-14)
-        ld d,(ix-13)
-        push de
-        push hl
-        call CDZ0004
-        pop bc
-        pop bc
-        ld (ix-18),l
-        ld (ix-17),h
-        ld l,(ix+4)
-        ld h,(ix+5)
-        push hl
-        ld l,(ix-18)
-        ld h,(ix-17)
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        pop hl
-        ld (hl),e
-        inc hl
-        ld (hl),d
-        ld l,(ix+4)
-        ld h,(ix+5)
-        inc hl
-        inc hl
-        push hl
-        ld l,(ix-18)
-        ld h,(ix-17)
-        inc hl
-        inc hl
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        pop hl
-        ld (hl),e
-        inc hl
-        ld (hl),d
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,4
-        add hl,de
-        push hl
-        ld l,(ix-18)
-        ld h,(ix-17)
-        ld de,4
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        pop hl
-        ld (hl),e
-        inc hl
-        ld (hl),d
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,6
-        add hl,de
-        push hl
-        ld l,(ix-18)
-        ld h,(ix-17)
-        ld de,6
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        pop hl
-        ld (hl),e
-        inc hl
-        ld (hl),d
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,8
-        add hl,de
-        push hl
-        ld l,(ix-18)
-        ld h,(ix-17)
-        ld de,8
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        pop hl
-        ld (hl),e
-        inc hl
-        ld (hl),d
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,10
-        add hl,de
-        push hl
-        ld l,(ix-18)
-        ld h,(ix-17)
-        ld de,10
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        pop hl
-        ld (hl),e
-        inc hl
-        ld (hl),d
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,12
-        add hl,de
-        push hl
-        ld l,(ix-18)
-        ld h,(ix-17)
-        ld de,12
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        pop hl
-        ld (hl),e
-        inc hl
-        ld (hl),d
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,14
-        add hl,de
-        push hl
-        ld l,(ix-18)
-        ld h,(ix-17)
-        ld de,14
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        pop hl
-        ld (hl),e
-        inc hl
-        ld (hl),d
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld de,16
-        add hl,de
-        push hl
-        ld l,(ix-18)
-        ld h,(ix-17)
-        ld de,16
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        pop hl
-        ld (hl),e
-        inc hl
-        ld (hl),d
-        ld l,(ix-16)
-        ld h,(ix-15)
-        ld e,(ix-14)
-        ld d,(ix-13)
-CDL240:
-        ld sp,ix
-        pop ix
+        sbc     a,a
+        ld      d,a
+        ld      e,a
+        call    mkt_time_add
+
+        ; Common case: already-normal clock fields need no signed long
+        ; quotient/remainder normalization.
+        ld      hl,(__mkt_ptr)
+        ld      a,(hl)                  ; tm_sec low
+        cp      60
+        jr      nc,mkt_clock_div
+        inc     hl
+        ld      a,(hl)                  ; tm_sec high
+        or      a
+        jr      nz,mkt_clock_div
+        inc     hl
+        ld      a,(hl)                  ; tm_min low
+        cp      60
+        jr      nc,mkt_clock_div
+        inc     hl
+        ld      a,(hl)                  ; tm_min high
+        or      a
+        jr      nz,mkt_clock_div
+        inc     hl
+        ld      a,(hl)                  ; tm_hour low
+        cp      24
+        jr      nc,mkt_clock_div
+        inc     hl
+        ld      a,(hl)                  ; tm_hour high
+        or      a
+        jr      z,mkt_clock_normal
+
+mkt_clock_div:
+        ld      hl,(__mkt_time)
+        ld      de,(__mkt_time+2)
+        push    de
+        push    hl
+        ld      hl,5180h
+        ld      de,1
+        call    __lds
+        pop     bc
+        pop     bc
+        ld      bc,(__mkt_days)
+        add     hl,bc
+        ld      (__mkt_days),hl
+        ex      de,hl
+        ld      bc,(__mkt_days+2)
+        adc     hl,bc
+        ld      (__mkt_days+2),hl
+
+        ld      hl,(__mkt_time)
+        ld      de,(__mkt_time+2)
+        push    de
+        push    hl
+        ld      hl,5180h
+        ld      de,1
+        call    __lms
+        pop     bc
+        pop     bc
+        ld      (__mkt_time),hl
+        ld      (__mkt_time+2),de
+        bit     7,d
+        jr      z,mkt_clock_normal
+        ld      bc,5180h
+        add     hl,bc
+        ld      (__mkt_time),hl
+        ex      de,hl
+        ld      bc,1
+        adc     hl,bc
+        ld      (__mkt_time+2),hl
+        ld      hl,-1
+        call    mkt_add16
+
+mkt_clock_normal:
+        ld      hl,(__mkt_days+2)
+        bit     7,h
+        jp      nz,mkt_fail
+        ld      a,h
+        or      l
+        jp      nz,mkt_fail
+        ld      hl,(__mkt_days)
+        ld      de,24856
+        or      a
+        sbc     hl,de
+        jp      nc,mkt_fail
+        ld      hl,(__mkt_days)
+        ld      de,24855
+        or      a
+        sbc     hl,de
+        jr      nz,mkt_make_result
+        ld      hl,(__mkt_time+2)
+        ld      a,h
+        or      l
+        jp      nz,mkt_fail
+        ld      hl,(__mkt_time)
+        ld      de,11648
+        or      a
+        sbc     hl,de
+        jp      nc,mkt_fail
+
+mkt_make_result:
+        ; The result is now known representable, so the caller destination can
+        ; temporarily hold the prior shared gmtime/localtime object.
+        ld      hl,CDZ0005
+        ld      de,(__mkt_ptr)
+        ld      bc,18
+        ldir
+
+        ld      hl,(__mkt_days)
+        ld      de,0
+        push    de
+        push    hl
+        ld      hl,5180h
+        ld      de,1
+        call    __lmul
+        pop     bc
+        pop     bc
+        ld      bc,(__mkt_time)
+        add     hl,bc
+        ld      (__mkt_result),hl
+        ex      de,hl
+        ld      bc,(__mkt_time+2)
+        adc     hl,bc
+        ld      (__mkt_result+2),hl
+        ex      de,hl
+
+        ; CDZ0004 writes the shared object.  Swap its new breakdown into *tp
+        ; and the staged prior value back into CDZ0005.  Exact aliasing
+        ; (mktime(gmtime(...))) is also safe.
+        push    de
+        push    hl
+        call    CDZ0004
+        pop     bc
+        pop     bc
+        ld      de,(__mkt_ptr)
+        ld      b,18
+mkt_swap_tm:
+        ld      a,(de)
+        ld      c,(hl)
+        ld      (hl),a
+        ld      a,c
+        ld      (de),a
+        inc     hl
+        inc     de
+        djnz    mkt_swap_tm
+        ld      hl,(__mkt_result)
+        ld      de,(__mkt_result+2)
         ret
+
+mkt_fail:
+        ld      hl,0ffffh
+        ld      de,0ffffh
+        ret
+
+; Add signed HL to the 32-bit day accumulator.
+mkt_add16:
+        ld      c,l
+        ld      b,h
+        ld      a,h
+        rlca
+        sbc     a,a
+        ld      e,a
+        ld      d,a
+        ld      hl,(__mkt_days)
+        add     hl,bc
+        ld      (__mkt_days),hl
+        ld      hl,(__mkt_days+2)
+        adc     hl,de
+        ld      (__mkt_days+2),hl
+        ret
+
+; Add DE:HL to the 32-bit clock-seconds accumulator.
+mkt_time_add:
+        ld      bc,(__mkt_time)
+        add     hl,bc
+        ld      (__mkt_time),hl
+        ex      de,hl
+        ld      bc,(__mkt_time+2)
+        adc     hl,bc
+        ld      (__mkt_time+2),hl
+        ret
+
+__mkt_ptr:     dw      0
+__mkt_year:    dw      0
+__mkt_mon:     dw      0
+__mkt_loop:    dw      0
+__mkt_days:    ds      4
+__mkt_time:    ds      4
+__mkt_result:  ds      4
 
         public __cal_core
 __cal_core:
@@ -24024,85 +24229,602 @@ CDZ0005:
 
         public __asc_data
 __asc_data:
-; string literals
+; Fixed three-byte names indexed only after asctime range validation.
 CDS0:
-        db 83,117,110,0
+        db 83,117,110
+        db 77,111,110
+        db 84,117,101
+        db 87,101,100
+        db 84,104,117
+        db 70,114,105
+        db 83,97,116
 CDS1:
-        db 77,111,110,0
-CDS2:
-        db 84,117,101,0
-CDS3:
-        db 87,101,100,0
-CDS4:
-        db 84,104,117,0
-CDS5:
-        db 70,114,105,0
-CDS6:
-        db 83,97,116,0
-CDS7:
-        db 74,97,110,0
-CDS8:
-        db 70,101,98,0
-CDS9:
-        db 77,97,114,0
-CDS10:
-        db 65,112,114,0
-CDS11:
-        db 77,97,121,0
-CDS12:
-        db 74,117,110,0
-CDS13:
-        db 74,117,108,0
-CDS14:
-        db 65,117,103,0
-CDS15:
-        db 83,101,112,0
-CDS16:
-        db 79,99,116,0
-CDS17:
-        db 78,111,118,0
-CDS18:
-        db 68,101,99,0
-CDS19:
-        db 37,115,32,37,115,32,37,50,100,32,37,48,50,100,58,37,48,50,100,58,37,48,50,100,32,37,100,10,0
-
-; asctime-only initialized globals
-CDZ0009:
-        dw CDS0
-        dw CDS1
-        dw CDS2
-        dw CDS3
-        dw CDS4
-        dw CDS5
-        dw CDS6
-CDZ0008:
-        dw CDS7
-        dw CDS8
-        dw CDS9
-        dw CDS10
-        dw CDS11
-        dw CDS12
-        dw CDS13
-        dw CDS14
-        dw CDS15
-        dw CDS16
-        dw CDS17
-        dw CDS18
+        db 74,97,110
+        db 70,101,98
+        db 77,97,114
+        db 65,112,114
+        db 77,97,121
+        db 74,117,110
+        db 74,117,108
+        db 65,117,103
+        db 83,101,112
+        db 79,99,116
+        db 78,111,118
+        db 68,101,99
 
 ; asctime-only uninitialized global
 CDZ0010:
         ds 26
 
-; ================= END generated calendar functions =================
+; ================= END calendar functions =================
 
         public  _strftime
 _strftime:
 ; size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tp)
-; Still a stub (returns 0, writes nothing) - a real implementation is a
-; separate, much bigger project (a format-string mini-interpreter), unlike
-; gmtime/localtime/asctime/ctime/mktime above which just needed the shared
-; time_t<->struct-tm breakdown.
+; Compact fixed-C-locale C89 formatter plus the documented %C century
+; extension.  max==0 returns 0 without reading any pointer.  With max>0, NULL
+; pointers, invalid tm fields, unknown conversions, and a trailing '%' return
+; 0; a non-NULL destination always receives a terminated prefix.  On
+; insufficient space the longest prefix that fits is terminated and 0 is
+; returned.  %Z expands to an empty string because this target has no timezone
+; database.  The whole implementation and its private name tables stay in this
+; one PUBLIC block so a strftime-only program does not retain mktime, gmtime,
+; asctime, sprintf, or the shared calendar core.
+        push    ix
+        ld      ix,0
+        add     ix,sp
+
+        ld      l,(ix+6)
+        ld      h,(ix+7)
+        ld      a,h
+        or      l
+        jr      z,SFTZERO
+        ld      e,(ix+4)
+        ld      d,(ix+5)
+        ld      a,d
+        or      e
+        jr      nz,SFTDST
+SFTZERO:
         ld      hl,0
+        pop     ix
         ret
+
+SFTDST:
+        dec     hl
+        add     hl,de
+        ; Keep base on the stack and the hot output/end pointers in the
+        ; alternate HL/DE pair.  SFTPUTC can then preserve all primary
+        ; parser/emitter registers without static pointer loads and stores.
+        push    de
+        push    de
+        push    hl
+        exx
+        pop     de
+        pop     hl
+        exx
+        xor     a
+        ld      (de),a
+
+        ld      c,(ix+8)
+        ld      b,(ix+9)
+        ld      a,b
+        or      c
+        jp      z,SFTFAIL
+        ld      l,(ix+10)
+        ld      h,(ix+11)
+        ld      a,h
+        or      l
+        jp      z,SFTFAIL
+        push    hl
+        pop     ix
+
+        ; Validate every range-bearing member before interpreting fmt.  The
+        ; first five words share compact upper-bound checks from SFTLIM.
+        push    bc
+        push    ix
+        pop     de
+        ld      hl,SFTLIM
+        ld      b,5
+SFTVL:
+        ld      a,(de)
+        ld      c,a
+        inc     de
+        ld      a,(de)
+        inc     de
+        or      a
+        jr      nz,SFTVBAD
+        ld      a,c
+        cp      (hl)
+        jr      nc,SFTVBAD
+        inc     hl
+        djnz    SFTVL
+        ld      a,(ix+6)        ; tm_mday additionally excludes zero
+        or      a
+        jr      z,SFTVBAD
+
+        ; tm_year may represent calendar years 0..34667.  Negative values are
+        ; valid down to -1900; adding 1900 carries exactly for that range.
+        ld      a,(de)
+        ld      l,a
+        inc     de
+        ld      a,(de)
+        ld      h,a
+        inc     de
+        bit     7,h
+        jr      z,SFTYOK
+        ld      bc,1900
+        add     hl,bc
+        jr      nc,SFTVBAD
+SFTYOK:
+        ld      a,(de)          ; tm_wday: 0..6
+        ld      c,a
+        inc     de
+        ld      a,(de)
+        inc     de
+        or      a
+        jr      nz,SFTVBAD
+        ld      a,c
+        cp      7
+        jr      nc,SFTVBAD
+        ld      a,(de)          ; tm_yday: 0..365
+        ld      l,a
+        inc     de
+        ld      a,(de)
+        ld      h,a
+        ld      bc,366
+        or      a
+        sbc     hl,bc
+        jr      nc,SFTVBAD
+        pop     bc
+        jr      SFTLOOP
+SFTVBAD:
+        pop     bc
+        jr      SFTFAIL
+
+SFTLOOP:
+        ld      a,(bc)
+        inc     bc
+        or      a
+        jr      z,SFTDONE
+        cp      37              ; '%'
+        jr      z,SFTCONV
+        call    SFTPUTC
+        jr      c,SFTFAIL
+        jr      SFTLOOP
+
+SFTCONV:
+        ld      a,(bc)
+        inc     bc
+        or      a               ; incomplete trailing '%'
+        jr      z,SFTFAIL
+        ld      d,a
+        ld      hl,SFTTAB
+SFTSCAN:
+        ld      a,(hl)
+        or      a
+        jr      z,SFTFAIL       ; unknown conversion
+        cp      d
+        inc     hl
+        jr      z,SFTFOUND
+        inc     hl
+        jr      SFTSCAN
+SFTFOUND:
+        ld      e,(hl)
+        ld      d,0
+        ld      hl,SFTHPCT
+        add     hl,de
+        ld      de,SFTAFTER
+        push    de
+        jp      (hl)
+SFTAFTER:
+        jr      c,SFTFAIL
+        jr      SFTLOOP
+
+SFTDONE:
+        exx
+        push    hl
+        exx
+        pop     hl
+        pop     de
+        or      a
+        sbc     hl,de
+        pop     ix
+        ret
+SFTFAIL:
+        pop     de
+        ld      hl,0
+        pop     ix
+        ret
+
+; SFTPUTC writes A only before the reserved final-NUL address.
+; It preserves BC, DE, and HL and returns carry set on exhaustion.
+SFTPUTC:
+        exx
+        or      a
+        sbc     hl,de
+        jr      z,SFTFULL
+        add     hl,de
+        ld      (hl),a
+        inc     hl
+        ld      (hl),0
+        exx
+        or      a
+        ret
+SFTFULL:
+        exx
+        scf
+        ret
+
+; Emit one decimal place.  HL is the nonnegative value, DE the place value;
+; A returns the digit and HL the remainder.  Callers use descending places,
+; so the digit is always 0..9.
+SFTDIG:
+        ld      a,48
+        or      a
+SFTDGL:
+        sbc     hl,de
+        jr      c,SFTDGD
+        inc     a
+        jr      SFTDGL
+SFTDGD:
+        add     hl,de
+        ret
+
+SFT2:
+        ld      de,10
+        call    SFTDIG
+        call    SFTPUTC
+        ret     c
+        ld      a,l
+        add     a,48
+        jp      SFTPUTC
+
+SFT3:
+        ld      de,100
+        call    SFTDIG
+        call    SFTPUTC
+        ret     c
+        jp      SFT2
+
+SFTYVAL:
+        ld      l,(ix+10)
+        ld      h,(ix+11)
+        ld      de,1900
+        add     hl,de
+        ret
+
+SFTYEAR:
+        call    SFTCENT
+        ret     c
+        jp      SFT2
+
+SFTY2:
+        call    SFTYVAL
+        ld      de,10000
+        call    SFTDIG
+        ld      de,1000
+        call    SFTDIG
+        ld      de,100
+        call    SFTDIG
+        jp      SFT2
+
+; Return HL pointing at one of the 19 concatenated C-locale names.  A is
+; weekday 0..6, or month+7.  Bit 7 terminates each name, avoiding NUL
+; separators while the offset table keeps lookup bounded and fast.
+SFTNPTR:
+        ld      e,a
+        ld      d,0
+        ld      hl,SFTOFF
+        add     hl,de
+        ld      e,(hl)
+        ld      d,0
+        ld      hl,SFTNAMES
+        add     hl,de
+        ret
+
+SFTCPY3:
+        ld      d,3
+SFTC3L:
+        ld      a,(hl)
+        and     7fh
+        call    SFTPUTC
+        ret     c
+        inc     hl
+        dec     d
+        jr      nz,SFTC3L
+        ret
+
+SFTCPYA:
+        ld      a,(hl)
+        ld      e,a
+        and     7fh
+        call    SFTPUTC
+        ret     c
+        bit     7,e
+        ret     nz
+        inc     hl
+        jr      SFTCPYA
+
+SFTSP:
+        ld      a,32
+        jp      SFTPUTC
+
+SFTTIME:
+        ld      l,(ix+4)
+        ld      h,0
+        call    SFT2
+        ret     c
+        ld      a,58
+        call    SFTPUTC
+        ret     c
+        ld      l,(ix+2)
+        ld      h,0
+        call    SFT2
+        ret     c
+        ld      a,58
+        call    SFTPUTC
+        ret     c
+        ld      l,(ix+0)
+        ld      h,0
+        jp      SFT2
+
+SFTDATE:
+        ld      l,(ix+8)
+        ld      h,0
+        inc     hl
+        call    SFT2
+        ret     c
+        ld      a,47
+        call    SFTPUTC
+        ret     c
+        ld      l,(ix+6)
+        ld      h,0
+        call    SFT2
+        ret     c
+        ld      a,47
+        call    SFTPUTC
+        ret     c
+        jp      SFTY2
+
+SFTCDAY:
+        ld      a,(ix+6)
+        cp      10
+        jr      nc,SFTCD2
+        ld      e,a
+        ld      a,32
+        call    SFTPUTC
+        ret     c
+        ld      a,e
+        add     a,48
+        jp      SFTPUTC
+SFTCD2:
+        ld      l,(ix+6)
+        ld      h,0
+        jp      SFT2
+
+SFTCOMP:
+        ld      a,(ix+12)
+        call    SFTNPTR
+        call    SFTCPY3
+        ret     c
+        call    SFTSP
+        ret     c
+        ld      a,(ix+8)
+        add     a,7
+        call    SFTNPTR
+        call    SFTCPY3
+        ret     c
+        call    SFTSP
+        ret     c
+        call    SFTCDAY
+        ret     c
+        call    SFTSP
+        ret     c
+        call    SFTTIME
+        ret     c
+        call    SFTSP
+        ret     c
+        jp      SFTYEAR
+
+; Conversion handlers return carry set on overflow.  The parser invokes them
+; through SFTTAB, so shared numeric/name emitters keep the dispatcher compact.
+SFTHPCT:
+        ld      a,37
+        jp      SFTPUTC
+SFTCENT:
+        call    SFTYVAL
+        ld      de,10000
+        call    SFTDIG
+        cp      48
+        jr      z,SFTYR4
+        call    SFTPUTC
+        ret     c
+SFTYR4:
+        ld      de,1000
+        call    SFTDIG
+        call    SFTPUTC
+        ret     c
+        ld      de,100
+        call    SFTDIG
+        jp      SFTPUTC
+SFTHA3:
+        ld      a,(ix+12)
+        call    SFTNPTR
+        jp      SFTCPY3
+SFTHAF:
+        ld      a,(ix+12)
+        call    SFTNPTR
+        jp      SFTCPYA
+SFTHB3:
+        ld      a,(ix+8)
+        add     a,7
+        call    SFTNPTR
+        jp      SFTCPY3
+SFTHBF:
+        ld      a,(ix+8)
+        add     a,7
+        call    SFTNPTR
+        jp      SFTCPYA
+SFTHC:
+        jp      SFTCOMP
+SFTHD:
+        ld      l,(ix+6)
+        ld      h,0
+        jp      SFT2
+SFTHH:
+        ld      l,(ix+4)
+        ld      h,0
+        jp      SFT2
+SFTHI:
+        ld      a,(ix+4)
+        cp      12
+        jr      c,SFTI12
+        sub     12
+SFTI12:
+        or      a
+        jr      nz,SFTINZ
+        ld      a,12
+SFTINZ:
+        ld      l,a
+        ld      h,0
+        jp      SFT2
+SFTHJ:
+        ld      l,(ix+14)
+        ld      h,(ix+15)
+        inc     hl
+        jp      SFT3
+SFTHMO:
+        ld      l,(ix+8)
+        ld      h,0
+        inc     hl
+        jp      SFT2
+SFTHMI:
+        ld      l,(ix+2)
+        ld      h,0
+        jp      SFT2
+SFTHP:
+        ld      a,(ix+4)
+        cp      12
+        ld      a,65
+        jr      c,SFTPM
+        ld      a,80
+SFTPM:
+        call    SFTPUTC
+        ret     c
+        ld      a,77
+        jp      SFTPUTC
+SFTHS:
+        ld      l,(ix+0)
+        ld      h,0
+        jp      SFT2
+SFTHX:
+        jp      SFTDATE
+SFTHXT:
+        jp      SFTTIME
+SFTHY:
+        jp      SFTY2
+SFTHYF:
+        jp      SFTYEAR
+SFTHZ:
+        xor     a               ; no timezone database: empty replacement
+        ret
+SFTHU:
+        ld      l,(ix+14)
+        ld      h,(ix+15)
+        ld      e,(ix+12)
+        ld      d,0
+        or      a
+        sbc     hl,de
+        ld      de,7
+        add     hl,de
+        jr      SFTWK2
+SFTHW1:
+        ld      a,(ix+12)
+        add     a,48
+        jp      SFTPUTC
+SFTHW:
+        ld      a,(ix+12)
+        or      a
+        jr      z,SFTWSUN
+        dec     a
+        jr      SFTWIDX
+SFTWSUN:
+        ld      a,6
+SFTWIDX:
+        ld      e,a
+        ld      d,0
+        ld      l,(ix+14)
+        ld      h,(ix+15)
+        or      a
+        sbc     hl,de
+        ld      de,7
+        add     hl,de
+SFTWK2:
+        ld      de,7
+        xor     a
+SFTWKL:
+        or      a
+        sbc     hl,de
+        jr      c,SFTWKD
+        inc     a
+        jr      SFTWKL
+SFTWKD:
+        ld      l,a
+        ld      h,0
+        jp      SFT2
+
+SFTTAB:
+        db      37,SFTHPCT-SFTHPCT
+        db      97,SFTHA3-SFTHPCT
+        db      65,SFTHAF-SFTHPCT
+        db      98,SFTHB3-SFTHPCT
+        db      66,SFTHBF-SFTHPCT
+        db      67,SFTCENT-SFTHPCT
+        db      99,SFTHC-SFTHPCT
+        db      89,SFTHYF-SFTHPCT
+        db      109,SFTHMO-SFTHPCT
+        db      100,SFTHD-SFTHPCT
+        db      72,SFTHH-SFTHPCT
+        db      77,SFTHMI-SFTHPCT
+        db      83,SFTHS-SFTHPCT
+        db      121,SFTHY-SFTHPCT
+        db      85,SFTHU-SFTHPCT
+        db      87,SFTHW-SFTHPCT
+        db      119,SFTHW1-SFTHPCT
+        db      120,SFTHX-SFTHPCT
+        db      88,SFTHXT-SFTHPCT
+        db      73,SFTHI-SFTHPCT
+        db      112,SFTHP-SFTHPCT
+        db      106,SFTHJ-SFTHPCT
+        db      90,SFTHZ-SFTHPCT
+        db      0
+
+SFTLIM:
+        db      61,60,24,32,12
+
+; Concatenated full names for the fixed C locale.  The high bit marks each
+; final byte; abbreviated names reuse the first three bytes.
+SFTOFF:
+        db      0,6,12,19,28,36,42,50,57,65,70,75,78,82,86,92,101,108,116
+SFTNAMES:
+        db      83,117,110,100,97,249
+        db      77,111,110,100,97,249
+        db      84,117,101,115,100,97,249
+        db      87,101,100,110,101,115,100,97,249
+        db      84,104,117,114,115,100,97,249
+        db      70,114,105,100,97,249
+        db      83,97,116,117,114,100,97,249
+        db      74,97,110,117,97,114,249
+        db      70,101,98,114,117,97,114,249
+        db      77,97,114,99,232
+        db      65,112,114,105,236
+        db      77,97,249
+        db      74,117,110,229
+        db      74,117,108,249
+        db      65,117,103,117,115,244
+        db      83,101,112,116,101,109,98,101,242
+        db      79,99,116,111,98,101,242
+        db      78,111,118,101,109,98,101,242
+        db      68,101,99,101,109,98,101,242
 
         end     start

@@ -40,6 +40,7 @@ HEADER_BY_PREFIX: Mapping[str, str] = {
     "STDBOOL": "stdbool.h",
     "STDDEF": "stddef.h",
     "STDINT": "stdint.h",
+    "TIME": "time.h",
 }
 
 

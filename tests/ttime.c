@@ -63,12 +63,12 @@ static void test_time(void)
     t1 = time(NULL);
     have_clock = (t1 != (time_t)-1);
     check("time(NULL) returns -1 or a plausible epoch",
-          !have_clock || (t1 > 1577836800L && t1 < 2147483647L));
+          !have_clock || (t1 > 1577836800L && t1 <= 2147483647L));
 
     if (have_clock) {
         time(&t2);
         check("time(&tp) matches time(NULL) within a few seconds",
-              t2 >= t1 && t2 - t1 < 5);
+              t2 == (time_t)-1 || (t2 >= t1 && t2 - t1 < 5));
 
         tstored = 0;
         t1 = time(&tstored);

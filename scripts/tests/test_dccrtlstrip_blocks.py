@@ -87,6 +87,22 @@ class DccRtlStripBlockTests(unittest.TestCase):
         self.assertNotIn("__mbs_n:", rtl)
         self.assertNotIn("_mbstowcs:", rtl)
 
+    def test_strtod_range_state_keeps_only_required_conversion_blocks(self):
+        rtl = self.strip_root("_atof")
+        self.assertIn("__atf_range:", rtl)
+        self.assertNotIn("_strtod:", rtl)
+        self.assertNotIn("_errno:", rtl)
+
+        rtl = self.strip_root("_strtod")
+        self.assertIn("_atof:", rtl)
+        self.assertIn("__atf_range:", rtl)
+        self.assertIn("_errno:", rtl)
+
+        for symbol in ("_atoi", "_atol"):
+            rtl = self.strip_root(symbol)
+            self.assertNotIn("__atf_range:", rtl)
+            self.assertNotIn("_errno:", rtl)
+
     def test_exec_does_not_keep_multibyte_counters(self):
         rtl = self.strip_root("_exec")
         self.assertIn("_exec:", rtl)
@@ -132,6 +148,7 @@ class DccRtlStripBlockTests(unittest.TestCase):
             self.assertIn("_gmtime:", rtl)
             self.assertIn("__cal_core:", rtl)
             self.assertIn("CDZ0004:", rtl)
+            self.assertNotIn("mkt_swap_tm:", rtl)
             self.assertNotIn("_mktime:", rtl)
             self.assertNotIn("_difftime:", rtl)
             self.assertNotIn("__asc_data:", rtl)
@@ -140,15 +157,39 @@ class DccRtlStripBlockTests(unittest.TestCase):
         rtl = self.strip_root("_asctime")
         self.assertIn("__asc_data:", rtl)
         self.assertIn("CDS0:", rtl)
+        self.assertIn("CDS1:", rtl)
         self.assertNotIn("__cal_core:", rtl)
         self.assertNotIn("_mktime:", rtl)
         self.assertNotIn("_difftime:", rtl)
+        self.assertNotIn("_sprintf:", rtl)
+
+    def test_time_keeps_checked_conversion_core(self):
+        rtl = self.strip_root("_time")
+        self.assertIn("_time:", rtl)
+        self.assertIn("__tmcv:", rtl)
+        self.assertNotIn("_difftime:", rtl)
+        self.assertNotIn("_mktime:", rtl)
 
     def test_mktime_keeps_core_without_other_public_time_functions(self):
         rtl = self.strip_root("_mktime")
         self.assertIn("__cal_core:", rtl)
+        self.assertIn("mkt_swap_tm:", rtl)
         self.assertNotIn("_difftime:", rtl)
         self.assertNotIn("__asc_data:", rtl)
+
+    def test_strftime_is_self_contained(self):
+        rtl = self.strip_root("_strftime")
+        self.assertIn("_strftime:", rtl)
+        self.assertIn("SFTNAMES:", rtl)
+        for marker in (
+            "_mktime:",
+            "_gmtime:",
+            "__cal_core:",
+            "_asctime:",
+            "__asc_data:",
+            "_sprintf:",
+        ):
+            self.assertNotIn(marker, rtl)
 
     def test_accepted_fastcall_entries_exclude_general_prologues(self):
         pairs = (

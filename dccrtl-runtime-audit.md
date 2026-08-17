@@ -6,7 +6,7 @@ is a findings/backlog document for a future, separate fix-implementation pass.
 ## Follow-up implementation status
 
 The audit itself remains a read-only snapshot. Follow-up work on this branch has
-implemented the first ten repair batches:
+implemented all eleven repair batches:
 
 - Batch 1 fixed **SS-C1**, **SH-F1**, **CT-F1**, **SJ-F1**, and **EC-F1**.
 - Batch 2 fixed add/sub subnormal handling, nearest-even rounding, conversion
@@ -80,10 +80,10 @@ implemented the first ten repair batches:
     modulo/fused forms from reverting to signed helpers, while signed casts of
     unsigned high-bit operands continue to select signed helpers.
   - Exec/calendar accepted **XM-O1** through **XM-O4** and **EC-F12**.
-    **EC-F13** remains rejected because its direct asctime formatter added
-    193 runtime bytes and 256 COM bytes when `sprintf()` was independently
-    retained; the fixed-layout alternative also overlaps open **EC-F10**
-    range/safety semantics.
+    **EC-F13** was rejected in that batch because its direct asctime formatter
+    added 193 runtime bytes and 256 COM bytes when `sprintf()` was independently
+    retained; Batch 11 later superseded that experiment with the smaller
+    range-checked fixed-layout implementation required by **EC-F10**.
   - The reviewed 41-byte gap after `__stchk` was removed completely. Emulator
     address alignment is not a valid Z80 optimization, and the gap added 34
     exact stripped bytes to ordinary stack-checked applications. Revised
@@ -130,15 +130,60 @@ implemented the first ten repair batches:
   byte-`<=20h` delimiter rule. Before replacing the caller's stack, the loader
   uses BDOS function 35 to approve an exact record count and layout below the
   16-byte stack gap, 36-byte FCB, and 44-byte exact-count trampoline.
+- Batch 11 fixed **EC-F2** through **EC-F10** and **EC-F13**.
+  `mktime()` now normalizes month/date/clock fields into a checked day/second
+  pair before applying the 1970 and signed-2038 range limits, never mutates a
+  rejected input, cannot accept a post-2106 modulo-2^32 wrap, and restores the
+  shared `gmtime`/`localtime` result after breaking down an unrelated caller
+  object. `time()` validates BDOS packed BCD and the CP/M-day cutoff before
+  constructing its signed `time_t`. `difftime()` detects signed subtraction
+  overflow and converts the exact unsigned magnitude before applying the
+  result sign.
+  `asctime()` validates every table index and numeric field before directly
+  emitting its fixed 26-byte layout, so invalid inputs leave the static buffer
+  untouched. The direct layout also resolves **EC-F13** without retaining
+  `sprintf()`. `atof`/`strtod` now combine large explicit exponents with
+  fractional and skipped-integer digit counts before applying float-range
+  bounds, preserving large exact cancellations. `strtod` sets `ERANGE` only
+  for numeric overflow/underflow, not explicit infinity/NaN or exact zero.
+  `atoi`/`atol` skip all C89 whitespace bytes without retaining unrelated
+  conversion blocks. `strftime()` is a bounded fixed-C-locale formatter
+  covering every C89 conversion available from `struct tm`, plus the
+  documented `%C` century extension. It rejects malformed formats and invalid
+  fields deterministically, preserves NUL termination at every positive bound,
+  and remains a self-contained `dccrtlstrip` block that does not retain the
+  calendar core or `mktime`.
+  Final review leaves the strftime-only replacement at 968 exact bytes, only
+  five bytes above the prior 963-byte integration while adding `%C`; the
+  original supplied implementation cost 1,042 bytes. The full runtime grows by
+  1,191 exact bytes: calendar/time +98, conversion/errno +125, and strftime
+  +968. Isolated and combined RTLMIN probes are exactly additive, confirming
+  that strftime does not acquire calendar-core ownership.
 
-**PF-F11** remains deferred because defensive NULL `%s` handling would add cost
-to every valid `%s` call. Subnormal multiply/divide/square-root work from
-**FC-F2** also remains open: the correct designs measured so far add too much
-linked code for the target. **FI-1** remains excluded because an 8 MiB CP/M
-file is outside this target's practical media limits. **FI-9** is limited by
-CP/M 2.2: BDOS function 48 is not universal and cannot guarantee pending FCB
-metadata durability. `freopen` cannot preserve the numeric identity of
-`stdin`/`stdout`/`stderr` without replacing the runtime's numeric `FILE *` ABI.
+**Overall repair status: 11/11 batches complete.** The remaining limitations
+are deliberate target or measured-size decisions, not unintegrated audit work:
+
+- **PF-F11** remains deferred because defensive NULL `%s` handling would add
+  cost to every valid `%s` call.
+- Subnormal multiply/divide/square-root work from **FC-F2** remains open because
+  the correct designs measured so far add too much linked code for the target.
+- **FI-1** remains excluded because an 8 MiB CP/M file is outside this target's
+  practical media limits. **FI-9** remains limited by the absence of a universal
+  CP/M 2.2 metadata-flush service.
+- `freopen` cannot preserve the numeric identity of
+  `stdin`/`stdout`/`stderr` without replacing the runtime's numeric `FILE *`
+  ABI.
+- Calendar time remains a signed 32-bit, timezone-free model: `time()` depends
+  on optional BDOS function 105, the representable range ends at
+  2038-01-19 03:14:07, and `strftime()` deliberately uses only the fixed C
+  locale with an empty `%Z`.
+- DCC has no distinct `double`; `atof`, `strtod`, and `difftime` therefore use
+  the target's single-precision `float`.
+
+The completed 11/11 state passes both strict full+extended suites: 410
+applications found, 400 passed, 10 intentionally skipped, and zero failed in
+both stack-check and no-stack modes. Runtime coverage reconciles all 408 public
+labels and all 196 standard app-callable APIs.
 
 ## Scope & method
 
@@ -1840,74 +1885,41 @@ equivalence are internally consistent, not bugs.
   `public _strftime` immediately before its actual body (or move the body
   beside the declaration); add a standalone `strftime`-only strip/link
   regression test.
-- **EC-F2 — `_mktime` accepts wrapped, unrepresentable post-2106 dates
-  instead of returning `-1`.** `:21959-22060`. Confidence: high. Internal
-  date arithmetic wraps modulo 2³²; for `2106-02-08 00:00:00` (true epoch
-  `4295030400`), the wrapped value `63104` passes the sign-only rejection
-  test and is normalized to a bogus `1970-01-01 17:31:44`, contradicting the
-  documented "doesn't fit in `time_t` ⇒ `-1`, leave `*tp` unchanged"
-  contract. **Fix direction:** use checked multiply/add against
-  `INT32_MAX` before any round-trip or mutation of `*tp`.
-- **EC-F3 — Premature exponent saturation breaks otherwise-exact
-  cancellation in `atof`/`strtod`.** `:6329-6515`. Confidence: high. The
-  explicit exponent is capped at 400 *before* combining with the internal
-  digit-count adjustment; an input like `"1"` followed by 499 zeros and
-  `"e-499"` (exactly `1.0`) ends up with a net exponent that overflows to
-  infinity because the 499 was capped to 400 before combining. **Fix
-  direction:** combine explicit exponent, fractional-digit count, and
-  skipped-digit adjustment with saturating arithmetic *first*; clamp only
-  the final combined effective exponent.
-- **EC-F4 — `_strftime` implements none of its C89 contract; it's a
-  nonfunctional stub.** `:22642-22649`. Confidence: high. It always
-  returns `0` and writes nothing — even `strftime(buf,1,"",&tm)` should
-  write `buf[0]='\0'` and return `0`; this leaves the buffer byte
-  untouched. **Fix direction:** implement a bounded C-locale format
-  interpreter that always reserves room for the terminating NUL and returns
-  `0` on insufficient space.
-- **EC-F5 — `time()` wraps at the 2038 boundary instead of reporting
-  failure.** `:21363-21418`. Confidence: high. At `2038-01-19 03:14:08`
-  (Unix `2147483648`), 32-bit arithmetic produces `0x80000000`, a negative
-  `time_t`, silently — later dates can eventually wrap positive again. Not
-  representable by a signed 32-bit `time_t`. **Fix direction:** check the
-  BDOS date/time against the signed-`time_t` cutoff and return/store `-1`
-  when out of range.
-- **EC-F6 — `_strtod` never sets `errno=ERANGE` on overflow/underflow.**
-  Range exits `:6576-6583`; wrapper `:6600-6631`. Confidence: high.
-  `strtod("1e9999",...)`→`+Inf` and `strtod("1e-9999",...)`→`0`, both with
-  `errno` left unchanged. **Fix direction:** carry an overflow/underflow
-  status from `_atof` into `_strtod`; distinguish an explicit literal
-  `"inf"`/exact-zero input from a genuine range error.
-- **EC-F7 — `atoi`/`atol` skip only space and tab, rejecting other C89
-  whitespace.** `_atoi`(`:5989-5997`), `_atol`(`:6090-6098`). Confidence:
-  high. `atoi("\n42")`/`atol("\r-7")` both return `0` instead of the parsed
-  value; C89 requires skipping the full whitespace set (`\t`-`\r` plus
-  space) — which `_atof` already does correctly. **Fix direction:** reuse
-  `_atof`'s existing whitespace range check.
-- **EC-F8 — `_mktime` validates the year before day/month-field
-  normalization runs, so equally-out-of-range inputs are inconsistently
-  accepted/rejected.** `:21763-21958`. Confidence: medium.
-  `{tm_year=69,tm_mon=12,tm_mday=1}` succeeds (normalizes to 1970-01-01)
-  because month normalization happens first, but the structurally similar
-  `{69,11,32}` is rejected because day normalization happens after the year
-  check. **Fix direction:** normalize all fields into checked total seconds
-  before applying the representability/lower-bound test.
+- **EC-F2 — fixed in Batch 11.** `_mktime` now range-checks normalized days
+  and seconds before multiplying, rejects the complete unsigned-32-bit edge
+  and its wrap successor, copies the normalized `struct tm` only after a
+  signed `time_t` result is proved, and preserves an unrelated shared
+  `gmtime`/`localtime` result.
+- **EC-F3 — fixed in Batch 11.** `atof`/`strtod` combine the full explicit
+  exponent with fractional and skipped-integer digit counts before clamping
+  the final effective exponent, preserving large exact cancellations.
+- **EC-F4 — fixed in Batch 11.** `_strftime` is a bounded fixed-C-locale
+  interpreter for every C89 conversion available from `struct tm`, plus the
+  documented `%C` century extension. It always reserves the terminating NUL
+  and returns `0` on insufficient space. Malformed formats and invalid fields
+  follow the deterministic policy documented in `time.h`; its private tables
+  remain in a standalone strip block.
+- **EC-F5 — fixed in Batch 11.** `time()` validates packed BCD and checks
+  CP/M day 21934 against `03:14:07` before arithmetic; the following second
+  and all later dates return/store `-1`.
+- **EC-F6 — fixed in Batch 11.** `strtod` consumes the private range status
+  from `atof`, sets `ERANGE` for numeric overflow/underflow, and leaves
+  `errno` unchanged for explicit infinity/NaN and exact zero.
+- **EC-F7 — fixed in Batch 11.** `atoi` and `atol` skip space and every byte
+  from `0x09` through `0x0d`, with each routine retaining only its own
+  conversion block.
+- **EC-F8 — fixed in Batch 11.** Month, civil-day, and signed clock offsets
+  are combined before lower/upper range checks, so both month- and day-based
+  crossings into 1970 normalize consistently.
 
 ### Robustness
 
-- **EC-F9 — `_difftime` can integer-overflow before converting to
-  `float`.** `:21466-21483`. Confidence: medium. `difftime(2147483647L,-1L)`
-  wraps the subtraction to `0x80000000`, returning approximately
-  `-2147483648` instead of `+2147483648`. **Fix direction:** detect
-  subtraction overflow and convert a 33-bit signed magnitude rather than
-  converting each operand separately (which loses precision for small
-  differences of huge values).
-- **EC-F10 — `_asctime` has unchecked table indices and an unbounded write
-  into its fixed 26-byte buffer.** `:21656-21690`; buffer `:22637`.
-  Confidence: medium. `tm_mon`/`tm_wday` index fixed tables without range
-  validation; `_sprintf` writes without a length bound, so e.g.
-  `tm_year=8100` needs 27 bytes (with NUL) and overflows by one. **Fix
-  direction:** validate indices; use bounded fixed-format emission and
-  reject unsupported year/field ranges.
+- **EC-F9 — fixed in Batch 11.** `_difftime` detects signed subtraction
+  overflow, converts the wrapped low 32 bits as an unsigned magnitude, and
+  applies the mathematical sign after conversion.
+- **EC-F10 — fixed in Batch 11.** `_asctime` rejects bad weekday/month/date/
+  clock/year fields before any write, emits exactly 25 characters plus NUL,
+  and leaves its static buffer unchanged on failure.
 
 ### Optimisation
 
@@ -1923,11 +1935,10 @@ equivalence are internally consistent, not bugs.
   `gmtime` instead of building/tearing down its own IX frame around an
   identical call. `__ltim` (`:21583-21594`). Confidence: high. **Measure:** `.COM` bytes and
   `ntvcm -p` on a repeated-`localtime` microbenchmark.
-- **EC-F13 — rejected in Batch 8.** `_asctime` still pulls in the entire general
-  `sprintf` formatter for one fixed 26-byte output layout. `:21686-21690`. Confidence: high.
-  **Fix direction:** emit weekday/month text and fixed decimal fields
-  directly into the static buffer. **Measure:** minimal `asctime`-only
-  `.COM` size and per-call `ntvcm -p`.
+- **EC-F13 — fixed in Batch 11 after its Batch 8 variant was rejected.**
+  `_asctime` now emits validated fixed decimal/name fields directly. The
+  asctime-only runtime no longer retains `sprintf`; combined retention was
+  remeasured with the EC-F10 safety checks in place.
 
 ---
 

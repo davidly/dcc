@@ -1,0 +1,50 @@
+PASS CP/M day 0 epoch mapping
+PASS CP/M day 1 is 1978-01-01
+PASS time core accepts 2038 final second
+PASS time core rejects 2038 next second
+PASS time core rejects later day
+PASS time core rejects 16-bit day wrap pattern
+PASS time core rejects hour 24
+PASS time core rejects minute 60
+PASS time core rejects second 60
+PASS difftime positive overflow
+PASS difftime positive full span
+PASS difftime negative full span
+PASS difftime negative boundary
+PASS difftime preserves high-value unit delta
+PASS difftime signed bit patterns forward
+PASS difftime signed bit patterns reverse
+PASS mktime day crosses 1970 before range check
+PASS mktime month crosses 1970
+PASS mktime negative month plus day normalizes
+PASS mktime negative second borrows
+PASS mktime positive second carries
+PASS mktime large hour normalizes without overflow
+PASS mktime day zero borrows month
+PASS mktime accepts 2000 leap day
+PASS mktime normalizes non-leap February
+PASS mktime accepts signed time_t maximum
+PASS mktime rejects 2038 first unrepresentable second
+PASS mktime rejects unsigned 32-bit maximum pattern
+PASS mktime rejects unsigned 32-bit wrap second
+PASS mktime rejects post-2106 wrapped date
+PASS mktime rejects pre-epoch normalized value
+PASS mktime rejects extreme fields without mutation
+PASS gmtime accepts positive maximum bit pattern
+PASS gmtime rejects sign-bit time_t pattern
+PASS gmtime rejects all-ones time_t pattern
+PASS mktime preserves prior gmtime result
+PASS asctime valid fixed layout
+PASS asctime bounded year 9999 and leap second
+PASS asctime rejects negative weekday
+PASS asctime rejects weekday 7
+PASS asctime rejects negative month
+PASS asctime rejects month 12
+PASS asctime rejects day zero
+PASS asctime rejects day 32
+PASS asctime rejects hour 24
+PASS asctime rejects minute 60
+PASS asctime rejects second 61
+PASS asctime rejects five-digit year
+PASS asctime rejects negative actual year
+tcalb11 passed

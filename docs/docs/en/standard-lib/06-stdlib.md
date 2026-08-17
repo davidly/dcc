@@ -46,9 +46,9 @@ free(p);
 
 ## Conversion
 
-`atoi`/`atol` skip leading spaces/tabs, accept an optional `+`/`-` sign, then
-consume decimal digits; conversion stops at the first non-digit. Overflow wraps
-modulo the type width.
+`atoi`/`atol` skip the full C whitespace set (space and bytes `\t` through
+`\r`), accept an optional `+`/`-` sign, then consume decimal digits; conversion
+stops at the first non-digit. Overflow wraps modulo the type width.
 
 ```c
 int  n = atoi("  -123xyz");   /* -123  */
@@ -84,6 +84,10 @@ writes no elements and returns zero.
 and returns IEEE 754 single precision. C89 `atof` normally returns `double`, which DCC C Compiler
 does not have. It accepts ordinary decimal text with an optional exponent, plus the case-insensitive
 spellings `nan`, `inf`, and `infinity`. Overflow returns signed infinity; underflow returns signed zero.
+`strtod` uses the same parser and reports the first unconsumed byte through
+`endptr`. Numeric overflow and underflow set `errno` to `ERANGE`; explicit
+infinity/NaN spellings and an exact zero with a large exponent are not range
+errors.
 
 ## Integer arithmetic helpers
 

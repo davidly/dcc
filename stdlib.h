@@ -40,9 +40,9 @@ int  atexit( void (*func)(void) );
 int rand(void);
 /** Seed the pseudo-random number generator. */
 void srand(unsigned int seed);
-/** Convert the leading decimal text in nptr to int. */
+/** Convert leading decimal text in nptr to int after skipping C whitespace. */
 int atoi(const char *nptr);
-/** Convert the leading decimal text in nptr to long. */
+/** Convert leading decimal text in nptr to long after skipping C whitespace. */
 long atol(const char *nptr);
 /** Convert the leading decimal text in nptr to float.
  *  Note: C89 atof normally returns double; dcc has no double type,
@@ -55,7 +55,9 @@ long strtol(const char *nptr, char **endptr, int base);
 /** Convert text in nptr to unsigned long using base 2 through 36, or base 0 for auto-detection. */
 unsigned long strtoul(const char *nptr, char **endptr, int base);
 /** Convert leading floating-point text in nptr to float; sets *endptr past consumed input.
- *  Note: C89 strtod returns double; dcc returns float (no double type). */
+ *  Note: C89 strtod returns double; dcc returns float (no double type).
+ *  Numeric overflow returns signed infinity and underflow returns signed zero;
+ *  both set errno to ERANGE.  Explicit inf/nan spellings are not range errors. */
 float strtod(const char *nptr, char **endptr);
 /** Absolute value of a signed int. */
 int abs(int j);

@@ -194,10 +194,11 @@ prototype. See `tbdos.c`, `crc.c` in the dcc repo.
 
 `<locale.h>`, `<signal.h>`, and `<time.h>` are present, but CP/M 2.2 lacks the
 corresponding hosted services. Locale is fixed to `"C"`; `signal` returns
-`SIG_ERR`; non-`SIGABRT` raises are no-ops; clock/calendar queries return their
-documented unavailable values; and time conversion/formatting routines return
-`NULL` or `0` as documented in the headers. `<stdbool.h>`/`<stdint.h>` are also
-present as C99-style conveniences.
+`SIG_ERR`; non-`SIGABRT` raises are no-ops; `clock()` is unavailable, while
+`time()` uses BDOS 105 where implemented. Calendar conversion is timezone-free,
+and `strftime()` supports every C89 conversion in a fixed C locale plus `%C`
+for the calendar century; `%Z` is empty because there is no timezone database.
+`<stdbool.h>`/`<stdint.h>` are also present as C99-style conveniences.
 
 ## `#pragma` support
 

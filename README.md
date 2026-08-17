@@ -162,14 +162,34 @@ Memory layout is what you would expect; CP/M loads .COM files in just one way. B
 
 ## Time functions
 
-`time()`, `difftime()`, `mktime()`, `asctime()`, `ctime()`, `gmtime()`, and `localtime()` are fully implemented (see `time.h`). `clock()` and `strftime()` remain stubs - `clock()` always returns `(clock_t)-1`, and `strftime()` always writes nothing and returns 0.
+`time()`, `difftime()`, `mktime()`, `asctime()`, `ctime()`, `gmtime()`,
+`localtime()`, and `strftime()` are fully implemented (see `time.h`).
+`clock()` remains unavailable and always returns `(clock_t)-1`.
 
 A few characteristics worth knowing about before relying on the implemented ones:
 
-- **`time()` is the only one that can fail; the rest are pure calendar arithmetic.** `gmtime()`, `localtime()`, `asctime()`, `ctime()`, `mktime()`, and `difftime()` all operate purely on `time_t`/`struct tm` values you already have - they always work, with or without a real clock. Only `time()` itself depends on the underlying BDOS actually having a clock to read (see below); it returns `(time_t)-1` when it doesn't, the same "no clock" value every one of these functions returned before this support existed.
+- **`time_t` is a signed 32-bit `long`.** The representable Unix range is
+  1970-01-01 through 2038-01-19 03:14:07. `time()` returns/stores `-1` for a
+  later BDOS clock value; `mktime()` returns `-1` without changing its input
+  when normalization lands outside that range. `gmtime()`/`localtime()` reject
+  negative bit patterns. `asctime()` also returns `NULL` for invalid table
+  indices, date/clock fields, or years outside 0000..9999 rather than risking
+  its fixed 26-byte buffer.
+- **Calendar arithmetic is deterministic without a real clock.** `gmtime()`,
+  `localtime()`, `asctime()`, `ctime()`, `mktime()`, and `difftime()` operate
+  only on values supplied by the caller. Their documented range checks still
+  apply, but they do not depend on BDOS clock availability. `gmtime()` and
+  `localtime()` share one returned object; an unrelated `mktime()` call does
+  not overwrite it.
 - **Seconds resolution only.** The underlying BDOS call reports whole seconds, with no sub-second component - anything needing finer timing (benchmarking, frame pacing) needs its own mechanism, not these functions.
 - **No timezone concept.** CP/M has no timezone database, so `localtime()` is simply `gmtime()` under another name, and the `time_t` `time()` returns is exactly the BDOS clock's raw wall-clock reading with no UTC offset applied in either direction. In practice, the "UTC" `time_t` this runtime produces is really just the host/emulator's local wall clock, relabeled - if your app genuinely needs UTC, correct for the local offset yourself.
-- **Availability depends on the specific emulator/BIOS, not the CP/M version it reports.** `time()` calls BDOS function 105 ("Get Date and Time", introduced in CP/M 3.0) unconditionally, with no BDOS-12 version check first - deliberately, since ntvcm and RunCPM both answer it correctly while still reporting themselves as CP/M 2.2 (a version check would just disable the real clock on the two emulators that matter most here). When the underlying BDOS genuinely doesn't implement the call, `time()` detects that (a sentinel byte written before the call, checked after) and returns `(time_t)-1` rather than a fabricated-looking but wrong timestamp. See the "Other CP/M emulators" section above for which ones were actually confirmed to support this, and `tests/ttime.c` for the regression coverage (its expected output doesn't depend on which case a given run hits).
+- **Fixed C-locale formatting.** `strftime()` supports all C89 conversions
+  available from `struct tm` plus `%C` for the calendar century, uses
+  deterministic C-locale names and composite forms, and emits an empty `%Z`.
+  It rejects malformed formats and invalid fields, preserves NUL termination
+  at every positive bound, and does not normalize or cross-check the supplied
+  fields.
+- **Availability depends on the specific emulator/BIOS, not the CP/M version it reports.** `time()` calls BDOS function 105 ("Get Date and Time", introduced in CP/M 3.0) unconditionally, with no BDOS-12 version check first - deliberately, since ntvcm and RunCPM both answer it correctly while still reporting themselves as CP/M 2.2 (a version check would just disable the real clock on the two emulators that matter most here). When the underlying BDOS genuinely doesn't implement the call, `time()` detects that (a sentinel byte written before the call, checked after) and returns `(time_t)-1` rather than a fabricated-looking but wrong timestamp. CP/M day 1 is 1978-01-01; dcc maps day 0 to Unix day 2921 (1977-12-31) and range-checks the resulting signed `time_t`. See the "Other CP/M emulators" section above for confirmed support and `tests/ttime.c` / `tests/tcalb11.c` for regression coverage.
 
 ## Benchmarks
 
