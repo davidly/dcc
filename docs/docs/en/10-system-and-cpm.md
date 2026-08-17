@@ -38,6 +38,23 @@ if (fd >= 0) {
 }
 ```
 
+Access modes are enforced: `read()` on an `O_WRONLY` descriptor and `write()`
+on an `O_RDONLY` descriptor fail with `EBADF`. `O_CREAT` alone preserves an
+existing file and starts at offset zero; `O_TRUNC` truncates only an existing
+file unless `O_CREAT` is also present. `O_RDONLY | O_TRUNC` is rejected with
+`EINVAL`. A zero-length write never changes the file position or tracked
+length.
+
+Because both `int` and the low-level return type are 16-bit signed values, one
+`read()` or `write()` reports at most `INT_MAX` (32,767) bytes. A larger request
+is performed as a legal short transfer of at most 32,767 bytes; loop until the
+requested total is complete. This avoids successful counts becoming
+indistinguishable from `-1`.
+
+`lseek()` rejects a negative final position, signed arithmetic overflow, and a
+nonzero high byte in `whence`, leaving the old position unchanged. Successful
+`lseek()` and `close()` operations discard any pending `ungetc()` pushback.
+
 !!! tip "Single file I/O core"
     `open`/`read`/`write`/`close`/`lseek`/`unlink`/`fsync`/`fdatasync` share one
     FCB/DMA core. The first file call links that core; additional file calls are
@@ -118,14 +135,15 @@ Practical implications:
 - Don't assume `fread(buf, 1, sizeof(buf), f)` stops exactly at a text file's
   logical end; check for the file's own EOF convention (Ctrl-Z) if you rely on
   padding not leaking into the buffer.
-- `ftell()`/`fseek(f, 0, SEEK_END)` report the record-rounded length, not
-  necessarily the exact byte count your program last wrote.
-- `fopen(path, "a")`'s append position is computed by scanning the last record
-  backward for a run of trailing Ctrl-Z bytes and starting the append right
-  after the real data, so appending doesn't itself introduce fresh padding
-  in the middle of a file — but a pre-existing trailing Ctrl-Z written as real
-  text-EOF data can still shift where "end" is judged to be, same caveat as
-  above.
+- Ordinary streams initially use the record-rounded directory length for
+  `fseek(f, 0, SEEK_END)`. An append stream replaces that value with its
+  trimmed logical end so later append writes can restore it after a seek.
+- `fopen(path, "a")` computes the logical end by scanning the last record
+  backward for a run of trailing Ctrl-Z bytes. Every nonempty write restores
+  that stream's tracked logical end first, so an intervening `fseek()` cannot
+  redirect an append write into the middle of the file. A pre-existing
+  trailing Ctrl-Z written as real text-EOF data can still shift where "end" is
+  judged to be, as described above.
 
 ### Record-count overflow at exactly 8 MB
 
@@ -166,13 +184,36 @@ across every DCCRTL target rather than only on hosts whose emulator happens to
 do its own glob expansion. See `tests/tstar.c`.
 
 `rename()` with an ambiguous FCB (either the old or new name) is rejected
-outright (nonzero return, nothing renamed) — this is correct, spec-compliant
-behavior, not a limitation worth working around. (CP/M 2.2's own BDOS source
+outright (`-1`, `errno = EINVAL`, nothing renamed) — this is correct,
+spec-compliant behavior, not a limitation worth working around. Cross-drive
+renames are also rejected before BDOS (`-1`, `errno = EXDEV`); a missing drive
+prefix is resolved through the current CP/M drive before comparison. (CP/M
+2.2's own BDOS source
 technically loops over ambiguous *old*-name matches the same way delete does,
 but that's undocumented, and it would just copy the new name's bytes verbatim
 — `?` and all — into every match, producing garbage entries rather than any
 kind of sensible template substitution; no tested BDOS implementation actually
 does this.) See `tests/trenwild.c`.
+
+### Low-level read errors versus EOF
+
+BDOS random-read statuses 1 and 4 mean unwritten data/extent and remain the
+runtime's EOF-or-hole result. Unambiguous failures such as an invalid FCB,
+media change, verification failure, hardware error, or out-of-range record set
+`errno` and the stream error indicator instead. If earlier records were
+transferred, `read()` returns that positive partial count; otherwise it returns
+`-1`.
+
+### `fsync()` and `fdatasync()` on CP/M
+
+Both functions first require a currently open real-file descriptor. They then
+issue BDOS function 48 with `E = 0` and report its documented hardware-error
+return as `EIO`. CP/M 2.2 itself has no function 48: some emulators implement
+or safely ignore it, while others terminate the guest on the unsupported call.
+On implementations that support it, the call flushes global disk buffers. It
+cannot force still-pending FCB
+allocation/extent metadata to the directory without closing the file, so
+`close()` remains the operation that finalizes that metadata.
 
 `fopen()`/`open()` for **reading** an ambiguous name is genuinely
 implementation-defined: real BDOS's open call happens to reuse the same

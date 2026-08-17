@@ -146,6 +146,7 @@ const char *asm_name_for_runtime(const char *cname)
     if (!strcmp(cname, "islower")) return "__clo";
     if (!strcmp(cname, "isxdigit")) return "__cxd";
     if (!strcmp(cname, "isprint")) return "__cpr";
+    if (!strcmp(cname, "isgraph")) return "__cgr";
     if (!strcmp(cname, "iscntrl")) return "__cct";
     if (!strcmp(cname, "ispunct")) return "__cpu";
     if (!strcmp(cname, "toupper")) return "__ctu";

@@ -18,7 +18,7 @@ int isxdigit(int c);
 /** Test for an ASCII printable character, including space. */
 int isprint(int c);
 /** Test for an ASCII printable character other than space. */
-#define isgraph(c) (isprint(c) && !isspace(c))
+int isgraph(int c);
 /** Test for an ASCII control character. */
 int iscntrl(int c);
 /** Test for an ASCII punctuation character. */

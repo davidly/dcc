@@ -23,8 +23,10 @@ UGC_MAX  equ     11
 ENOENT   equ     2
 EIO      equ     5
 EBADF    equ     9
+EXDEV    equ     18
 EINVAL   equ     22
 EMFILE   equ     24
+EFBIG    equ     27
 ENOSPC   equ     28
 
         cseg
@@ -496,15 +498,31 @@ ___fpc_ch:
         public  _clearerr
 _clearerr:
         ; void clearerr(FILE *fp)
-        ; Clear the EOF and error indicators for this stream's slot.
+        ; Clear the EOF and error indicators for this stream.
         pop     bc              ; return address
         ex      (sp),hl         ; HL = fp
         push    bc
+        ld      a,h
+        or      a
+        jr      nz,clrerr_done
         ld      a,l
+        or      a
+        jr      nz,clrerr_file
+        ld      (__ceof),a
+        ld      hl,0
+        ret
+clrerr_file:
         sub     FIRSTFD
-        jr      c,clrerr_done
         cp      NFILES
         jr      nc,clrerr_done
+        jp      __fclr
+clrerr_done:
+        ld      hl,0
+        ret
+
+        public  __fclr
+; A = validated real-file slot. Clear both stream indicators.
+__fclr:
         ld      h,0
         ld      l,a
         ld      de,__fdeof
@@ -515,7 +533,6 @@ _clearerr:
         ld      de,__fderr
         add     hl,de
         ld      (hl),0
-clrerr_done:
         ld      hl,0
         ret
 
@@ -652,10 +669,14 @@ _strerror:
         jr      z,__se05
         cp      EBADF
         jr      z,__se09
+        cp      EXDEV
+        jr      z,__se18
         cp      EINVAL
         jr      z,__se22
         cp      EMFILE
         jr      z,__se24
+        cp      EFBIG
+        jr      z,__se27
         cp      ENOSPC
         jr      z,__se28
         cp      33
@@ -673,11 +694,17 @@ __se05:
 __se09:
         ld      hl,__sem09
         ret
+__se18:
+        ld      hl,__sem18
+        ret
 __se22:
         ld      hl,__sem22
         ret
 __se24:
         ld      hl,__sem24
+        ret
+__se27:
+        ld      hl,__sem27
         ret
 __se28:
         ld      hl,__sem28
@@ -693,8 +720,10 @@ __seuk:         db      'Error',0
 __sem02:        db      'No such file',0
 __sem05:        db      'I/O error',0
 __sem09:        db      'Bad file descriptor',0
+__sem18:        db      'Cross-device link',0
 __sem22:        db      'Invalid argument',0
 __sem24:        db      'Too many open files',0
+__sem27:        db      'File too large',0
 __sem28:        db      'No space left on device',0
 __sem33:        db      'Domain error',0
 __sem34:        db      'Range error',0
@@ -713,24 +742,13 @@ __fgetc:
         push    bc              ; restore caller-cleanup argument
         push    hl              ; restore return address
 
-        ; Check the per-fd pushback buffer set by ungetc().
-        ld      a,c             ; fd (low byte)
-        cp      UGC_MAX
-        jr      nc,fgc_no_pb    ; fd out of range
-        ld      l,a
-        ld      h,0
-        ld      de,__ugv
-        add     hl,de
-        ld      a,(hl)          ; pushback-valid flag
+        ; Consume stream pushback before falling through to _read.
+        ld      a,b
         or      a
-        jr      z,fgc_no_pb
-        xor     a
-        ld      (hl),a          ; consume: clear valid flag
-        ld      l,c
-        ld      h,0
-        ld      de,__ugc
-        add     hl,de
-        ld      l,(hl)          ; return pushed-back char as int (0..255)
+        jr      nz,fgc_no_pb
+        call    __ugget
+        jr      c,fgc_no_pb
+        ld      l,a
         ld      h,0
         ret
 
@@ -766,36 +784,17 @@ fgc_no_pb:
         ret
 
 getc_bad:
-        ; EOF or error: set the EOF flag for this fd, matching _fread's
-        ; "if bytes_read < nbytes set EOF" behavior (elsewhere in this
-        ; file) - without this, feof() never reports true after a
-        ; fgetc()/getc() call that itself returned EOF, only after
-        ; fread()/fgets(), violating C89 7.9.7.5. BC = fp, saved above.
-        ; Checks both bounds (unlike _fread's own version of this check,
-        ; which only checks the lower one): a garbage fp far above the
-        ; valid range must not index past the NFILES-byte __fdeof array.
-        ld      a,c
-        sub     FIRSTFD
-        jr      c,gcbad_noeof
-        cp      NFILES
-        jr      nc,gcbad_noeof
-        ld      l,a
-        ld      h,0
-        ld      de,__fdeof
-        add     hl,de
-        ld      (hl),1
-gcbad_noeof:
+        ; _read owns EOF/error classification.
         ld      hl,0ffffh       ; EOF
         ret
 
         public  __ugvalid
 __ugvalid:
 ; Per-fd pushback-valid flags shared by ungetc() and file-backed scanf.
-; Split from the character bytes so close/lseek retain only this small block.
+; Split from the character bytes so open/close/lseek retain only this block.
 __ugv:  ds      UGC_MAX         ; valid flags
 
-; Entry: A = validated fd. Clear stream pushback after close/seek.
-; Reuse is therefore clean without charging every successful open.
+; Entry: A = validated fd. Clear stream pushback after open/close/seek.
 __ugclear:
         ld      l,a
         ld      h,0
@@ -810,20 +809,55 @@ ___getc_ch:
         db      0
 __ugc:  ds      UGC_MAX         ; pushed-back characters
 
-; Entry: B = character, C = validated fd. Return HL = character.
+        public  __ugget
+; Entry: C = fd. Carry clear/A = consumed byte, or carry set if none.
+__ugget:
+        ld      a,c
+        cp      UGC_MAX
+        jr      nc,ugg_none
+        ld      l,c
+        ld      h,0
+        ld      de,__ugv
+        add     hl,de
+        ld      a,(hl)
+        or      a
+        jr      z,ugg_none
+        ld      (hl),0
+        ld      l,c
+        ld      h,0
+        ld      de,__ugc
+        add     hl,de
+        ld      a,(hl)
+        or      a                       ; clear carry, including for byte 0
+        ret
+ugg_none:
+        scf
+        ret
+
+        public  __ugput
+; Entry: B = character, C = validated fd. Return HL = character on success,
+; or EOF with carry set if this stream already has its guaranteed byte.
 __ugput:
+        ld      l,c
+        ld      h,0
+        ld      de,__ugv
+        add     hl,de
+        ld      a,(hl)
+        or      a
+        jr      nz,ugp_fail
+        ld      (hl),1
         ld      l,c
         ld      h,0
         ld      de,__ugc
         add     hl,de
         ld      (hl),b
-        ld      l,c
-        ld      h,0
-        ld      de,__ugv
-        add     hl,de
-        ld      (hl),1
         ld      h,0
         ld      l,b
+        or      a                       ; clear carry
+        ret
+ugp_fail:
+        ld      hl,0ffffh
+        scf
         ret
 
         public  __getc
@@ -850,12 +884,38 @@ _ungetc:
         jr      z,ugc_fail      ; d=ff and e=ff: c == -1
 
         ; Check fd in range.
+        ld      a,b
+        or      a
+        jr      nz,ugc_fail
         ld      a,c             ; stream/fd low byte
         cp      UGC_MAX
         jr      nc,ugc_fail
 
         ld      b,e
-        jp      __ugput
+        call    __ugput
+        ret     c
+
+        ; A successful ungetc makes EOF false while the byte is pending.
+        ld      a,c
+        or      a
+        jr      nz,ugc_file
+        ld      (__ceof),a
+        ld      h,0
+        ld      l,b
+        ret
+ugc_file:
+        sub     FIRSTFD
+        ret     c
+        cp      NFILES
+        ret     nc
+        ld      l,a
+        ld      h,0
+        ld      de,__fdeof
+        add     hl,de
+        ld      (hl),0
+        ld      h,0
+        ld      l,b
+        ret
 
 ugc_fail:
         ld      hl,0ffffh       ; EOF
@@ -869,17 +929,16 @@ _remove:
         public  __gchr
 __gchr:
         ; Check pushback for stdin (fd=0) before blocking on BDOS fn 1.
-        ld      hl,__ugv        ; __ugv[0]
-        ld      a,(hl)
-        or      a
-        jr      z,gchr_no_pb
-        xor     a
-        ld      (hl),a          ; consume valid flag
-        ld      hl,__ugc        ; __ugc[0]
-        ld      l,(hl)
+        ld      c,0
+        call    __ugget
+        jr      c,gchr_no_pb
+        ld      l,a
         ld      h,0
         ret
 gchr_no_pb:
+        ld      a,(__ceof)
+        or      a
+        jr      nz,gchr_eof_ret
         call    __cflush        ; show any pending prompt before blocking
         ld      c,1
         call    5               ; BDOS fn 1: blocking console input, echoes A
@@ -896,8 +955,15 @@ gchr_ret:
         ld      l,a
         ret
 gchr_eof:
+        ld      a,1
+        ld      (__ceof),a
+gchr_eof_ret:
         ld      hl,0ffffh       ; EOF sentinel consumed by _read
         ret
+
+        public  __ceofst
+__ceofst:
+__ceof: db      0               ; stdin EOF indicator
 
         public  __kbht
 __kbht:
@@ -5796,14 +5862,10 @@ __tmpf_dispatch:
         ld      hl,(__tmpf_hook)
         jp      (hl)
 ; __tmpf_fd lives here (in the always-resident _exit block), not in
-; _tmpfile's own block: _close's cleanup scan reads it to see whether a
-; closing fd belongs to a still-open tmpfile(), and dccrtlstrip treats
-; each PUBLIC-to-PUBLIC span as one atomic inclusion unit, so leaving
-; this array inside _tmpfile's block would drag all of _tmpfile (and
-; transitively _tmpnam) into every program that ever closes a file, even
-; one that never calls tmpfile() itself.  Literal 4, not NTMP (defined
-; much later in the file, in _tmpfile's own block) - a forward reference
-; to it here inside a ds risks a phase error in a two-pass assembler.
+; _tmpfile's own block: both the exit hook and ordinary-close hook dispatch
+; into the optional tmpfile block at run time, without a static _close ->
+; _tmpfile dependency that would defeat dccrtlstrip isolation. Literal 4,
+; not NTMP (defined later) avoids a forward-reference phase risk in ds.
 __tmpf_fd:      ds      4               ; fd per slot (0 = free); must match NTMP
 
 ; ============================================================
@@ -6801,6 +6863,9 @@ _errno:
         public  __usep
         public  __ebadf
         public  __ioerr
+        public  __exdev
+        public  __efbig
+        public  __rwerr
         public  __chkfd
         public  __setrr
         public  __chunk
@@ -6815,7 +6880,7 @@ FIRSTFD  equ     3
 ; C89 (7.9.3) requires FOPEN_MAX >= 8 streams open at once, including the three
 ; standard streams.  Here stdin/stdout/stderr are console pseudo-FILEs that do
 ; not consume a real-file slot, so 8 real-file slots comfortably satisfies the
-; standard.  The per-slot cost is one FCB (FCBSIZE) plus 7 bytes of state; the
+; standard. The per-slot cost is one FCB (FCBSIZE) plus 11 bytes of state; the
 ; 128-byte DMA buffer and the read sector cache stay single/shared.
 NFILES   equ     8
 MAXFD    equ     FIRSTFD+NFILES
@@ -6826,7 +6891,7 @@ FCBSIZE  equ     36
 ; Minimal CP/M byte-stream file I/O.
 ;
 ; fd 0 = stdin, fd 1 = stdout, fd 2 = stderr.
-; real files are fd 3..6.
+; real files are fd FIRSTFD..MAXFD-1 (currently 3..10).
 ;
 ; One shared 128-byte DMA buffer. 32-bit current offsets, but lseek returns low 16 bits.
 ; ------------------------------------------------------------
@@ -6836,6 +6901,17 @@ _open:
         ld      ix,0
         add     ix,sp
 
+        ; Reject the reserved access mode and O_TRUNC without write access.
+        ; The private high flag used by fopen("a") does not affect this test.
+        ld      a,(ix+6)
+        and     3
+        cp      3
+        jp      z,opfail_inval_pre
+        bit     1,(ix+7)        ; O_TRUNC
+        jr      z,opflagsok
+        or      a               ; O_RDONLY | O_TRUNC is not meaningful here
+        jp      z,opfail_inval_pre
+opflagsok:
         ld      hl,__fduse
         ld      b,NFILES
         xor     a
@@ -6856,7 +6932,24 @@ opfind:
 opslot:
         ld      a,e
         ld      (__slot),a
-        ld      (hl),1
+        ; Consolidated per-slot mode: bit 0 read, bit 1 write, bit 2 append,
+        ; bit 3 binary. Zero remains the free-slot marker.
+        ld      a,(ix+6)
+        and     3
+        ld      c,1                     ; O_RDONLY -> read
+        or      a
+        jr      z,opmode
+        ld      c,2                     ; O_WRONLY -> write
+        dec     a
+        jr      z,opmode
+        inc     c                       ; O_RDWR -> read | write
+opmode:
+        bit     7,(ix+7)                ; private fopen append marker
+        jr      z,opmodestore
+        set     2,c
+opmodestore:
+        ld      a,c
+        ld      (hl),a
         ; A new file occupies this slot: any cached record for the slot number
         ; belonged to a previous file, so drop the read sector cache.
         xor     a
@@ -6934,24 +7027,17 @@ opwsc1:
         djnz    opwsc1
 opnowc:
 
-        ; Create/truncate only if O_CREAT or O_TRUNC is set.
-        ; Test uses:
-        ;   O_CREAT = 0100 octal = 0040h
-        ;   O_TRUNC = 01000 octal = 0200h
-        ;   O_RDWR  = 2, which must NOT truncate.
+        ; O_TRUNC is independent of O_CREAT: probe first, require an existing
+        ; file when O_CREAT is absent, and never issue fn 22 after a failed
+        ; delete. Reset the probe-opened FCB before delete/make.
         bit     1,(ix+7)        ; O_TRUNC high byte
-        jr      nz,opmake       ; "w": always delete + recreate
+        jr      nz,optrunc
 
         bit     6,(ix+6)        ; O_CREAT low byte
-        jr      z,opexist       ; neither set ("r"): must already exist
+        jr      z,opexist       ; neither set: file must already exist
 
-        ; O_CREAT without O_TRUNC ("a"): per C89 7.9.5.3, appended output
-        ; must go after any existing content, not overwrite it - so if the
-        ; file is already there, keep it and position at its end rather
-        ; than falling into opmake's unconditional delete+recreate (which
-        ; is correct only for "w"/O_TRUNC, and used to also run for "a").
-        ; Nothing to delete when creating fresh, so that path skips
-        ; straight to fn 22 via opmake_new.
+        ; Plain low-level O_CREAT starts at offset zero.  fopen("a") sets a
+        ; private high flag so only stdio append performs __apseek.
         push    de
         ld      c,15            ; open existing
         call    5
@@ -6967,7 +7053,8 @@ opnowc:
         inc     a
         jr      z,opmake_new    ; doesn't exist yet: create fresh
         call    __rdsz          ; capture the real length
-        call    __apseek        ; position the offset at end-of-file
+        bit     7,(ix+7)        ; private fopen("a") marker
+        call    nz,__apseek
         jr      opok
 
 opexist:
@@ -6979,11 +7066,27 @@ opexist:
                                  ; open: capture the real length now
         jr      opok
 
-opmake:
+optrunc:
         push    de
-        ld      c,19            ; delete old, ignore status
+        ld      c,15            ; probe existence without creating
         call    5
         pop     de
+        push    af
+        call    __fcbfresh      ; fn 15 mutates make/delete control fields
+        pop     af
+        inc     a
+        jr      nz,optrunc_exists
+        bit     6,(ix+6)        ; absent and creation not permitted
+        jr      z,opfail_noent
+        jr      opmake_new
+
+optrunc_exists:
+        push    de
+        ld      c,19            ; delete the existing file before remaking it
+        call    5
+        pop     de
+        inc     a
+        jr      z,opfail_io
 opmake_new:
         ld      c,22            ; make new
         call    5
@@ -6993,6 +7096,7 @@ opmake_new:
 opok:
         ld      a,(__slot)
         add     a,FIRSTFD
+        call    __ugclear       ; successful open/reuse starts without pushback
         ld      h,0
         ld      l,a
         pop     ix
@@ -7004,6 +7108,9 @@ opfail_noent:
 opfail_nospc:
         call    __nospc
         jr      opfail_common
+opfail_io:
+        call    __ioerr
+        jr      opfail_common
 opwbad:
         call    __einval
 opfail_common:
@@ -7013,70 +7120,50 @@ opfail_common:
         ld      hl,0ffffh
         pop     ix
         ret
+opfail_inval_pre:
+        call    __einval
+        ld      hl,0ffffh
+        pop     ix
+        ret
 
 _close:
         push    ix
         ld      ix,0
         add     ix,sp
+        ld      a,(ix+5)
+        or      a
+        jr      nz,clbad
         ld      a,(ix+4)
         cp      FIRSTFD
         jr      c,clok
-        cp      MAXFD
-        jr      nc,clbad
-
-        ; If this fd belongs to a still-registered tmpfile() (see _tmpfile /
-        ; __tmpf_cleanup below), clear its __tmpf_fd[] slot now so
-        ; __tmpf_cleanup doesn't try to close (and unlink) it again at exit.
-        ; Closing an already-closed fd a second time is harmless on most
-        ; CP/M BDOS implementations, but not guaranteed - at least one
-        ; emulator treats a double BDOS close as a hard error.
-        ; __tmpf_hook is 0 unless _tmpfile was ever called (same idiom as
-        ; _exit's tmpfile-cleanup check above), so this costs ~8 bytes in
-        ; programs that never call tmpfile and only scans __tmpf_fd in ones
-        ; that do. LD r,r' doesn't touch flags, so the zero check survives
-        ; the round trip through D while A (the fd) is borrowed.
-        ld      d,a                     ; stash fd - about to reuse A
-        ld      hl,(__tmpf_hook)
-        ld      a,h
-        or      l
-        ld      a,d                     ; restore fd; flags unaffected by LD
-        jr      z,tmpf_cl_done
-        push    bc
-        push    hl
-        ld      hl,__tmpf_fd
-        ld      b,NTMP
-tmpf_cl_scan:
-        cp      (hl)
-        jr      z,tmpf_cl_clear
-        inc     hl
-        djnz    tmpf_cl_scan
-        jr      tmpf_cl_pop
-tmpf_cl_clear:
-        ld      (hl),0
-tmpf_cl_pop:
-        pop     hl
-        pop     bc
-tmpf_cl_done:
-
-        sub     FIRSTFD
-        ld      (__slot),a
+        call    __chkfdl
+        jr      c,clbad
+        ld      a,(__slot)
         call    __fcbp
         ex      de,hl
         ld      c,16            ; close file
         call    5
-        push    af
+        inc     a               ; 0ffh -> 0 on failure
+        jr      z,clio
+
+        ; Release state only after BDOS accepted the close. A failed close
+        ; preserves mode, pushback, and tmpfile registration for retry.
         ld      a,(__slot)
         call    __usep
-        ; invalidate the read sector cache: this slot is closing
         xor     a
         ld      (hl),a
         ld      (__rdcv),a
         ld      a,(__slot)
         add     a,FIRSTFD
         call    __ugclear       ; closed fd must not retain readable pushback
-        pop     af
-        inc     a               ; inc-a/0FFh wrap idiom (see _open's comment above)
-        jr      z,clio
+        ld      hl,(__tmpf_hook)
+        ld      a,h
+        or      l
+        jr      z,clok
+        ld      a,(__slot)
+        add     a,FIRSTFD
+        scf                             ; ordinary-close hook dispatch
+        call    __tmpf_dispatch
 clok:
         ld      hl,0
         pop     ix
@@ -7140,39 +7227,62 @@ _read:
         ld      ix,0
         add     ix,sp
 
+        ld      a,(ix+5)
+        or      a
+        jp      nz,rdbad
         ld      a,(ix+4)
         or      a
         jr      nz,rdfile
-        ; stdin: return one blocking char if count > 0.
-        ld      a,(ix+8)
-        or      (ix+9)
-        jr      z,rdzero
-        call    __gchr          ; blocking console input, with stdin pushback
-        ld      a,h
-        or      a
-        jr      nz,rdzero       ; H!=0 -> EOF sentinel (0FFFFh): 0 bytes read
-        ld      a,l
-        ld      l,(ix+6)
-        ld      h,(ix+7)
-        ld      (hl),a
-        ld      hl,1
-        pop     ix
-        ret
-rdzero:
-        ld      hl,0
-        pop     ix
-        ret
-
-rdfile:
-        ; A still holds (ix+4) from the stdin check above - __chkfda skips
-        ; the redundant reload __chkfd would otherwise do.
-        call    __chkfda
-        jp      c,rdbad
+        ; stdin: honor the requested count, stopping at Ctrl-Z/EOF. __gchr
+        ; consumes pending stdin pushback before blocking for console input.
         ld      l,(ix+6)
         ld      h,(ix+7)
         ld      (__rwbuf),hl
         ld      l,(ix+8)
         ld      h,(ix+9)
+        bit     7,h             ; int return cannot represent > INT_MAX
+        jr      z,rdcon_count
+        ld      hl,07fffh
+rdcon_count:
+        ld      (__rwrem),hl
+        ld      hl,0
+        ld      (__rwcnt),hl
+rdcon_loop:
+        ld      hl,(__rwrem)
+        ld      a,h
+        or      l
+        jp      z,rddone
+        call    __gchr
+        ld      a,h
+        or      a
+        jp      nz,rddone       ; EOF sentinel
+        ld      de,(__rwbuf)
+        ld      a,l
+        ld      (de),a
+        inc     de
+        ld      (__rwbuf),de
+        ld      hl,(__rwcnt)
+        inc     hl
+        ld      (__rwcnt),hl
+        ld      hl,(__rwrem)
+        dec     hl
+        ld      (__rwrem),hl
+        jr      rdcon_loop
+
+rdfile:
+        call    __chkfdl
+        jp      c,rdbad
+        bit     0,a
+        jp      z,rdmode
+        ld      l,(ix+6)
+        ld      h,(ix+7)
+        ld      (__rwbuf),hl
+        ld      l,(ix+8)
+        ld      h,(ix+9)
+        bit     7,h             ; int return cannot represent > INT_MAX
+        jr      z,rdcountok
+        ld      hl,07fffh       ; a legal short read; caller may continue
+rdcountok:
         ld      (__rwrem),hl
         ld      hl,0
         ld      (__rwcnt),hl
@@ -7181,7 +7291,7 @@ rdloop:
         ld      hl,(__rwrem)
         ld      a,h
         or      l
-        jr      z,rddone
+        jp      z,rddone
         call    __setrr
         call    __chunk
 
@@ -7201,7 +7311,13 @@ rdloop:
         ld      c,33            ; random read
         call    5
         or      a
-        jr      nz,rddone       ; EOF/error returns short count
+        jr      z,rd_direct_ok
+        cp      1               ; unwritten data: EOF/hole
+        jr      z,rdeof
+        cp      4               ; unwritten extent: EOF/hole
+        jr      z,rdeof
+        jr      rdioerr
+rd_direct_ok:
         call    __advio
         jr      rdloop
 
@@ -7223,7 +7339,13 @@ rd_dma:
         ld      c,33            ; random read
         call    5
         or      a
-        jr      nz,rddone       ; EOF/error returns short count
+        jr      z,rd_dma_ok
+        cp      1               ; unwritten data: EOF/hole
+        jr      z,rdeof
+        cp      4               ; unwritten extent: EOF/hole
+        jr      z,rdeof
+        jr      rdioerr
+rd_dma_ok:
         call    __rdsto         ; __dma now caches this (slot, record)
 
 rd_copy:
@@ -7239,12 +7361,35 @@ rd_copy:
         ld      b,0
         ldir
         call    __advio
-        jr      rdloop
+        jp      rdloop
 
+rdeof:
+        ld      a,(__slot)
+        ld      h,0
+        ld      l,a
+        ld      de,__fdeof
+        add     hl,de
+        ld      (hl),1
 rddone:
         ld      hl,(__rwcnt)
         pop     ix
         ret
+rdioerr:
+        ; Preserve a positive partial count, but mark the stream and errno.
+        ; With no transferred bytes, report the conventional -1 failure.
+        call    __rwerr
+        ld      hl,(__rwcnt)
+        ld      a,h
+        or      l
+        jr      nz,rderrret
+        ld      hl,0ffffh
+rderrret:
+        pop     ix
+        ret
+rdmode:
+        xor     a
+        call    __rwerr          ; valid stream: set its error indicator
+        jp      rdbad            ; refine errno to EBADF
 rdbad:
         call    __ebadf
         ld      hl,0ffffh
@@ -7256,27 +7401,46 @@ _write:
         ld      ix,0
         add     ix,sp
 
+        ld      a,(ix+5)
+        or      a
+        jp      nz,wrbadfd
         ld      a,(ix+4)
         cp      1
         jp      z,wrcon
         cp      2
         jp      z,wrcon
-        ; A still holds (ix+4): cp doesn't touch it, so __chkfda skips the
-        ; redundant reload __chkfd would otherwise do.
-        call    __chkfda
+        call    __chkfdl
         jp      c,wrbadfd
-        ; A write changes file data and reuses __dma as scratch, so the read
-        ; sector cache is no longer guaranteed to reflect disk contents.
-        xor     a
-        ld      (__rdcv),a
+        bit     1,a
+        jp      z,wrmode
         ld      l,(ix+6)
         ld      h,(ix+7)
         ld      (__rwbuf),hl
         ld      l,(ix+8)
         ld      h,(ix+9)
+        bit     7,h             ; int return cannot represent > INT_MAX
+        jr      z,wrcountok
+        ld      hl,07fffh       ; a legal short write; caller may continue
+wrcountok:
         ld      (__rwrem),hl
         ld      hl,0
         ld      (__rwcnt),hl
+        ld      hl,(__rwrem)
+        ld      a,h
+        or      l
+        jp      z,wrdone        ; count==0 must not invalidate/extend anything
+
+        ; C append streams reposition to their tracked end before every
+        ; nonempty write, so an intervening seek cannot redirect the write.
+        ld      a,(__slot)
+        call    __usep
+        bit     2,(hl)
+        call    nz,__apset
+
+        ; A nonempty write changes data and reuses __dma as scratch, so the
+        ; shared read sector cache is no longer trustworthy.
+        xor     a
+        ld      (__rdcv),a
 
 wrloop:
         ld      hl,(__rwrem)
@@ -7302,12 +7466,12 @@ wrloop:
         ld      c,34            ; random write
         call    5
         or      a
-        jp      nz,wrnospc
+        jp      nz,wrerror
         call    __advio
         jr      wrloop
 
-        ; For partial records, read old data first. If it fails,
-        ; zero-fill the shared DMA buffer.
+        ; For partial records, preserve old bytes. Only CP/M's documented
+        ; unwritten-hole statuses may be synthesized as Ctrl-Z padding.
 wrrd:
         ld      de,__dma
         ld      c,26
@@ -7319,6 +7483,11 @@ wrrd:
         call    5
         or      a
         jr      z,wrcopy
+        cp      1               ; reading unwritten data
+        jr      z,wrzero
+        cp      4               ; reading an unwritten extent
+        jp      nz,wrerror
+wrzero:
         call    __zerdm
 
 wrcopy:
@@ -7346,7 +7515,7 @@ wrcopy:
         ld      c,34            ; random write
         call    5
         or      a
-        jp      nz,wrnospc
+        jp      nz,wrerror
         call    __advio
         jp      wrloop
 
@@ -7367,6 +7536,10 @@ wrcon:
         ld      (__rwbuf),hl
         ld      l,(ix+8)
         ld      h,(ix+9)
+        bit     7,h
+        jr      z,wccountok
+        ld      hl,07fffh
+wccountok:
         ld      (__rwrem),hl
         ld      hl,0
         ld      (__rwcnt),hl
@@ -7395,16 +7568,32 @@ wrbadfd:
         ld      hl,0ffffh
         pop     ix
         ret
-wrnospc:
-        ; A real write error (disk full / record write rejected).  __slot is
-        ; valid here (we passed __chkfd), so record a stream error for ferror().
-        ld      a,(__slot)
-        ld      h,0
-        ld      l,a
-        ld      de,__fderr
-        add     hl,de
-        ld      (hl),1
-        call    __nospc
+wrmode:
+        xor     a
+        call    __rwerr          ; valid stream: set its error indicator
+        jp      wrbadfd           ; refine errno to EBADF
+wrerror:
+        ; CP/M fn 34: 2=disk full and 5=directory full. Status 6 is an
+        ; unrepresentable record (EFBIG); all other real failures are EIO.
+        cp      2
+        jr      z,wrspace
+        cp      5
+        jr      z,wrspace
+        call    __rwerr
+        jr      wrfailed
+wrspace:
+        call    __rwerr          ; records the stream error
+        call    __nospc          ; refine errno from EIO to ENOSPC
+wrfailed:
+        ld      hl,(__rwcnt)
+        ld      a,h
+        or      l
+        jr      z,wrtotalfail
+        call    __extln          ; retain length for records already written
+        ld      hl,(__rwcnt)
+        pop     ix
+        ret
+wrtotalfail:
         ld      hl,0ffffh
         pop     ix
         ret
@@ -7420,6 +7609,9 @@ _lseek:
         ; ix+4/5   fd
         ; ix+6..9  offset, low word then high word
         ; ix+10/11 whence
+        ld      a,(ix+11)
+        or      a
+        jp      nz,lsinval
         ld      a,(ix+10)
         or      a
         jr      z,lsset
@@ -7430,65 +7622,15 @@ _lseek:
         jp      lsinval
 
 lsset:
-        ; Set current offset from full 32-bit argument.
-        call    __offp
-        ld      a,(ix+6)
-        ld      (hl),a
-        inc     hl
-        ld      a,(ix+7)
-        ld      (hl),a
-        inc     hl
-        ld      a,(ix+8)
-        ld      (hl),a
-        inc     hl
-        ld      a,(ix+9)
-        ld      (hl),a
-        jr      lsret
+        ld      e,(ix+6)
+        ld      d,(ix+7)
+        ld      c,(ix+8)
+        ld      b,(ix+9)
+        jr      lscheck
 
 lscur:
-        ; Add full 32-bit delta to current offset.
         call    __offp
-        ld      a,(hl)
-        add     a,(ix+6)
-        ld      (hl),a
-        inc     hl
-        ld      a,(hl)
-        adc     a,(ix+7)
-        ld      (hl),a
-        inc     hl
-        ld      a,(hl)
-        adc     a,(ix+8)
-        ld      (hl),a
-        inc     hl
-        ld      a,(hl)
-        adc     a,(ix+9)
-        ld      (hl),a
-
-lsret:
-        ; A successful positioning operation discards stream pushback.
-        push    hl
-        ld      a,(ix+4)
-        call    __ugclear
-        pop     hl
-
-        ; Return full 32-bit offset in DE:HL. Every path into here (lsset,
-        ; lscur, and lsend's jr) leaves HL pointing at offset byte 3, its
-        ; last store having just landed there with no further inc hl - so
-        ; back up to byte 0 instead of re-deriving the pointer via __offp.
-        dec     hl
-        dec     hl
-        dec     hl              ; HL = offset byte 0
-        ld      e,(hl)          ; byte 0
-        inc     hl
-        ld      d,(hl)          ; byte 1
-        inc     hl
-        push    de              ; low word
-        ld      e,(hl)          ; byte 2
-        inc     hl
-        ld      d,(hl)          ; byte 3
-        pop     hl              ; HL = low word, DE = high word
-        pop     ix
-        ret
+        jr      lsbase
 
 lsend:
         ; SEEK_END: base off __fdlen (kept accurate by __extln on every
@@ -7497,6 +7639,7 @@ lsend:
         ; on-disk directory as of the file's last close, which is stale
         ; for a file that has been written to since it was opened.
         call    __lenp
+lsbase:
         ld      e,(hl)
         inc     hl
         ld      d,(hl)
@@ -7522,6 +7665,12 @@ lsend:
         adc     a,h
         ld      b,a             ; result byte 3
 
+lscheck:
+        ; lseek positions are signed long values. A negative result also
+        ; catches signed positive overflow; do not commit it to __fdoff.
+        bit     7,b
+        jp      nz,lsinval
+
         push    bc
         push    de
 
@@ -7536,7 +7685,29 @@ lsend:
         ld      (hl),c
         inc     hl
         ld      (hl),b
-        jr      lsret
+
+lsret:
+        ; A successful positioning operation discards stream pushback.
+        push    hl
+        ld      a,(ix+4)
+        call    __ugclear
+        pop     hl
+
+        ; Return full 32-bit offset in DE:HL. HL points at offset byte 3.
+        dec     hl
+        dec     hl
+        dec     hl
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        inc     hl
+        push    de
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        pop     hl
+        pop     ix
+        ret
 
 lsbadfd:
         call    __ebadf
@@ -7582,24 +7753,53 @@ _fdatasync:
         ; still lacks fn 48. Called anyway: real flush semantics on capable
         ; backends are judged worth the failure mode on the two that don't
         ; implement it.
+        pop     bc              ; IX-free access to the single fd argument
+        ex      (sp),hl
+        push    bc
+        ld      a,h
+        or      a
+        jr      nz,syncbad
+        ld      a,l
+        sub     FIRSTFD
+        cp      NFILES
+        jr      nc,syncbad
+        ld      e,a
+        ld      d,0
+        ld      hl,__fduse
+        add     hl,de
+        ld      a,(hl)
+        or      a
+        jr      z,syncbad
+        ld      e,0             ; flush writes; do not discard read buffers
         ld      c,48
         call    5
+        inc     a               ; 0FFh is the documented hardware error
+        jr      z,syncio
         ld      hl,0
         ret
+syncbad:
+        ld      hl,EBADF
+        jr      syncerr
+syncio:
+        ld      hl,EIO
+syncerr:
+        ld      (_errno),hl
+        ld      hl,0ffffh
+        ret
 
-; Validate fd in (ix+4), sets __slot. Carry set on error, clear on success.
-;
-; __chkfda is the same check starting from A already holding fd, for a
-; caller that has it there anyway (e.g. from its own earlier "ld a,(ix+4)"
-; used for something else) and would otherwise reload it redundantly.
+; Validate the complete 16-bit fd in (ix+4), set __slot, and return the
+; encoded access mode from __fduse in A. Carry is set on error.
 ;
 ; Range check: A-FIRSTFD compared unsigned against MAXFD-FIRSTFD folds the
 ; original two-sided bounds check (fd < FIRSTFD, fd >= MAXFD) into one -
 ; fd < FIRSTFD makes the subtraction wrap to a value >= MAXFD-FIRSTFD, so
 ; it's caught by the same "jr nc,cfbad" as fd too large.
 __chkfd:
+        ld      a,(ix+5)
+        or      a
+        jr      nz,cfbad
+__chkfdl:
         ld      a,(ix+4)
-__chkfda:
         sub     FIRSTFD
         cp      MAXFD-FIRSTFD
         jr      nc,cfbad
@@ -7660,7 +7860,7 @@ __rdsto:
         ld      (__rdcv),a
         ret
 
-; A = slot 0..3, returns HL = fd_used slot
+; A = slot 0..NFILES-1, returns HL = encoded __fduse slot
 __usep:
         ld      h,0
         ld      l,a
@@ -7690,6 +7890,28 @@ __lenp:
         add     hl,de
         ret
 
+; Copy the tracked length to the current offset before each append write.
+__apset:
+        call    __lenp
+        push    hl
+        call    __offp
+        ex      de,hl                   ; DE = destination offset
+        pop     hl                      ; HL = source length
+        ld      bc,4
+        ldir
+        ret
+
+; Commit _open's initially trimmed append position as the tracked end.
+__aplen:
+        call    __offp
+        push    hl
+        call    __lenp
+        ex      de,hl                   ; DE = destination length
+        pop     hl                      ; HL = source offset
+        ld      bc,4
+        ldir
+        ret
+
 ; Positions a freshly (re)opened existing file at end-of-file for _open's
 ; "a" (append) path, per C89 7.9.5.3. __fdlen[__slot] must already be
 ; current (call __rdsz first) - but __rdsz deliberately only stores the
@@ -7703,10 +7925,9 @@ __lenp:
 ; (not just "any 0x1A anywhere") is deliberate - it leaves an embedded,
 ; non-trailing 0x1A (real data in the middle of a record, as in
 ; tctrlz.c) alone, only stripping padding actually at the tail.
-; __fdlen itself is never touched here - unlike this one append-
-; positioning use, ftell()/fread() must keep reporting/serving the
-; record-rounded view (see __rdsz's comment on why trimming there breaks
-; existing software that does its own explicit ^Z scan on top of it).
+; The trimmed position is committed to both __fdoff and __fdlen for append
+; streams, allowing every later nonempty write to restore the same tracked
+; logical end after an intervening seek.
 __apseek:
         call    __lenp          ; HL -> __fdlen[slot]
         ld      e,(hl)
@@ -7829,6 +8050,7 @@ apseek_write:
         ld      (hl),c
         inc     hl
         ld      (hl),b
+        call    __aplen
         ret
 
 apseek_setoff:
@@ -7841,6 +8063,7 @@ apseek_setoff:
         ld      (hl),a
         inc     hl
         ld      (hl),a
+        call    __aplen
         ret
 
 ; Query BDOS fn 35 (compute file size) for __slot's FCB, convert the
@@ -8107,6 +8330,22 @@ __zerdm:
         ldir
         ret
 
+; DE = FCB. Reset fields 12..35 after an existence-probe open so the same
+; name/drive can safely be passed to delete and make. Preserves DE.
+__fcbfresh:
+        push    de
+        ex      de,hl
+        ld      bc,12
+        add     hl,bc
+        ld      (hl),0
+        ld      d,h
+        ld      e,l
+        inc     de
+        ld      bc,23
+        ldir
+        pop     de
+        ret
+
 ; HL = filename string, DE = FCB address.
 __mkfcb:
         ld      (__mffcb),de
@@ -8229,6 +8468,24 @@ __upa:
         sub     20h
         ret
 
+; A = failed BDOS random-I/O status. Mark this slot's stdio error indicator
+; and classify status 6 (record out of range) separately from generic I/O.
+__rwerr:
+        ld      hl,EIO
+        cp      6
+        jr      nz,rwe_mark
+        ld      l,EFBIG
+rwe_mark:
+        push    hl
+        ld      a,(__slot)
+        ld      h,0
+        ld      l,a
+        ld      de,__fderr
+        add     hl,de
+        ld      (hl),1
+        pop     hl
+        jp      __seter
+
 __seter:
         ld      (_errno),hl
         ret
@@ -8241,11 +8498,17 @@ __ioerr:
 __ebadf:
         ld      hl,EBADF
         jr      __seter
+__exdev:
+        ld      hl,EXDEV
+        jr      __seter
 __einval:
         ld      hl,EINVAL
         jr      __seter
 __emfil:
         ld      hl,EMFILE
+        jr      __seter
+__efbig:
+        ld      hl,EFBIG
         jr      __seter
 __nospc:
         ld      hl,ENOSPC
@@ -8303,10 +8566,8 @@ _rename:
         push    bc              ; restore return address
 
         push    de              ; stash new for later
-        ex      de,hl           ; DE = old
 
         ; Old name -> FCB[0..11].
-        ex      de,hl           ; HL = old
         ld      de,__rnfcb
         call    __mkfcb
 
@@ -8317,6 +8578,43 @@ _rename:
         pop     hl              ; HL = new (stashed earlier)
         call    __mkfcb
 
+        ; fn 23 has no defined ambiguous-name semantics. __mkfcb expands '*'
+        ; to '?', so one scan covers both wildcard spellings in both names.
+        ld      hl,__rnfcb+1
+        ld      b,27            ; old name, gap/drive, and new name
+rnscan:
+        ld      a,(hl)
+        cp      '?'
+        jr      z,rnwild
+        inc     hl
+        djnz    rnscan
+
+        ; Rename is same-drive only. Resolve one default-drive byte through
+        ; BDOS fn 25 when necessary, then compare effective 1-based drives.
+        ld      a,(__rnfcb)
+        ld      b,a
+        ld      a,(__rnfcb+16)
+        cp      b
+        jr      z,rndriveok
+        ld      a,(__rnfcb)
+        or      a
+        jr      z,rnresolve
+        ld      a,(__rnfcb+16)
+        or      a
+        jr      nz,rnxdev
+rnresolve:
+        ld      c,25
+        call    5               ; A = current drive, 0-based
+        inc     a
+        ld      b,a
+        ld      a,(__rnfcb)
+        or      a
+        jr      nz,rndrivecmp
+        ld      a,(__rnfcb+16)
+rndrivecmp:
+        cp      b
+        jr      nz,rnxdev
+rndriveok:
         ; BDOS fn 23: rename file.
         ld      de,__rnfcb
         ld      c,23
@@ -8330,6 +8628,14 @@ _rename:
         ret
 rnfail:
         call    __enoent
+        ld      hl,0ffffh
+        ret
+rnwild:
+        call    __einval
+        ld      hl,0ffffh
+        ret
+rnxdev:
+        call    __exdev
         ld      hl,0ffffh
         ret
 
@@ -8356,7 +8662,7 @@ __rdck:         ds      4       ; key: slot, then FCB random-record bytes r0,r1,
 __fdeof:        ds      NFILES  ; EOF flag per slot (index = fd - FIRSTFD)
 __fderr:        ds      NFILES  ; error flag per slot
 __fduse:
-        ds      NFILES
+        ds      NFILES          ; 0=free; bits: read, write, append, binary
 __fdoff:
         ds      NFILES*4
 
@@ -10313,6 +10619,19 @@ __ldv_sign:     db      0
 ; Character classification and conversion
 ; ============================================================
 
+        public  __ctarg
+; Load the low byte of an int c for an ASCII classifier.
+; Returns Z for a zero high byte, NZ otherwise; A is the low byte when valid.
+__ctarg:
+        ld      hl,5            ; helper return + caller return + high byte
+        add     hl,sp
+        ld      a,(hl)
+        or      a
+        ret     nz
+        dec     hl
+        ld      a,(hl)
+        ret
+
 ; ---- _toupper(int c) ----
 ; Returns c converted to upper-case if 'a'<=c<='z', else c unchanged.
 ; Arg: c @ IX+4/5.  Return: HL = result.
@@ -10324,6 +10643,9 @@ __ctu:
         inc     hl
         ld      h,(hl)          ; H = c high byte
         ld      l,a             ; HL = c (full int)
+        inc     h
+        dec     h
+        jr      nz,toup_done
         cp      'a'             ; c < 'a' -> leave as-is
         jr      c,toup_done
         cp      'z'+1           ; c > 'z' -> leave as-is
@@ -10339,9 +10661,8 @@ toup_done:
 ; Recognises: SP HT LF VT FF CR.
         public  __csp
 __csp:
-        ld      hl,2
-        add     hl,sp
-        ld      a,(hl)
+        call    __ctarg
+        jr      nz,issp_no
         cp      ' '
         jr      z,issp_yes
         cp      09h             ; HT
@@ -10359,9 +10680,8 @@ issp_yes:
 ; Returns HL=1 if '0'<=c<='9', HL=0 otherwise.
         public  __cdg
 __cdg:
-        ld      hl,2
-        add     hl,sp
-        ld      a,(hl)
+        call    __ctarg
+        jr      nz,isdig_no
         cp      '0'
         jr      c,isdig_no
         cp      '9'+1
@@ -10377,9 +10697,8 @@ isdig_no:
 
         public  __caa
 __caa:
-        ld      hl,2
-        add     hl,sp
-        ld      a,(hl)
+        call    __ctarg
+        jr      nz,ialp_no
         cp      'A'
         jr      c,ialp_no
         cp      'Z'+1
@@ -10397,9 +10716,8 @@ ialp_yes:
 
         public  __can
 __can:
-        ld      hl,2
-        add     hl,sp
-        ld      a,(hl)
+        call    __ctarg
+        jr      nz,ialn_no
         cp      '0'
         jr      c,ialn_alpha
         cp      '9'+1
@@ -10422,9 +10740,8 @@ ialn_yes:
 
         public  __cup
 __cup:
-        ld      hl,2
-        add     hl,sp
-        ld      a,(hl)
+        call    __ctarg
+        jr      nz,isup_no
         cp      'A'
         jr      c,isup_no
         cp      'Z'+1
@@ -10437,9 +10754,8 @@ isup_no:
 
         public  __clo
 __clo:
-        ld      hl,2
-        add     hl,sp
-        ld      a,(hl)
+        call    __ctarg
+        jr      nz,islo_no
         cp      'a'
         jr      c,islo_no
         cp      'z'+1
@@ -10452,9 +10768,8 @@ islo_no:
 
         public  __cxd
 __cxd:
-        ld      hl,2
-        add     hl,sp
-        ld      a,(hl)
+        call    __ctarg
+        jr      nz,ixdg_no
         cp      '0'
         jr      c,ixdg_alpha
         cp      '9'+1
@@ -10478,9 +10793,8 @@ ixdg_yes:
 
         public  __cpr
 __cpr:
-        ld      hl,2
-        add     hl,sp
-        ld      a,(hl)
+        call    __ctarg
+        jr      nz,iprt_no
         cp      20h
         jr      c,iprt_no
         cp      7fh
@@ -10491,15 +10805,29 @@ iprt_no:
         ld      hl,0
         ret
 
+        public  __cgr
+__cgr:
+        call    __ctarg
+        jr      nz,igrf_no
+        cp      21h
+        jr      c,igrf_no
+        cp      7fh
+        jr      nc,igrf_no
+        ld      hl,1
+        ret
+igrf_no:
+        ld      hl,0
+        ret
+
         public  __cct
 __cct:
-        ld      hl,2
-        add     hl,sp
-        ld      a,(hl)
+        call    __ctarg
+        jr      nz,icnt_no
         cp      20h
         jr      c,icnt_yes
         cp      7fh
         jr      z,icnt_yes
+icnt_no:
         ld      hl,0
         ret
 icnt_yes:
@@ -10508,9 +10836,8 @@ icnt_yes:
 
         public  __cpu
 __cpu:
-        ld      hl,2
-        add     hl,sp
-        ld      a,(hl)
+        call    __ctarg
+        jr      nz,ipnc_no
         ; printable, not space, and not alnum
         cp      21h
         jr      c,ipnc_no
@@ -10543,6 +10870,9 @@ __ctl:
         inc     hl
         ld      h,(hl)          ; H = c high byte
         ld      l,a             ; HL = c (full int)
+        inc     h
+        dec     h
+        jr      nz,tolo_done
         cp      'A'
         jr      c,tolo_done
         cp      'Z'+1
@@ -10567,21 +10897,32 @@ _fgets:
         ; if size <= 0 return NULL immediately
         ld      l,(ix+6)
         ld      h,(ix+7)
+        bit     7,h
+        jp      nz,fgets_null
         ld      a,h
         or      l
         jp      z,fgets_null
 
-        ; dispatch on fp: < 3  console, >= 3  file
+        ; Check an already-reported EOF before attempting another read.
+        ld      a,(ix+9)
+        or      a
+        jr      nz,fgf_setup            ; let _read reject a wide descriptor
         ld      a,(ix+8)
+        or      a
+        jr      nz,fgf_real_check
+        ld      a,(__ceof)
+        or      a
+        jp      nz,fgets_null
+        jr      fgf_setup
+fgf_real_check:
         cp      FIRSTFD
-        jp      c,fgets_con
+        jr      c,fgf_setup             ; stdout/stderr: let _read reject
         cp      MAXFD
         jr      nc,fgf_setup            ; fd out of range: skip the __fdeof
                                          ; slot lookup below (would index past
                                          ; the array) - _read's own fd check
                                          ; rejects this below with EBADF.
 
-        ; ---- File path ----
         ; Check EOF flag for this slot
         sub     FIRSTFD                 ; A = slot
         ld      h,0
@@ -10609,26 +10950,18 @@ fgf_loop:
         or      l
         jp      z,fgets_term            ; buffer full
 
-        ; Check pushback buffer before calling _read.
-        ld      a,(ix+8)                ; fd (low byte)
-        cp      UGC_MAX
-        jr      nc,fgf_no_pb
-        ld      l,a
-        ld      h,0
-        ld      de,__ugv
-        add     hl,de
-        ld      a,(hl)
+        ; Real-file fread/fgets consume the guaranteed pushback byte before
+        ; low-level I/O. stdin pushback is owned by _read/__gchr.
+        ld      a,(ix+9)
         or      a
-        jr      z,fgf_no_pb
-        xor     a
-        ld      (hl),a                  ; consume: clear valid flag
-        ld      l,(ix+8)
-        ld      h,0
-        ld      de,__ugc
-        add     hl,de
-        ld      a,(hl)
-        ld      (__fgets_ch),a          ; treat as if _read returned it
-        jr      fgf_have_ch
+        jr      nz,fgf_no_pb
+        ld      c,(ix+8)
+        ld      a,c
+        cp      FIRSTFD
+        jr      c,fgf_no_pb
+        call    __ugget
+        jr      c,fgf_no_pb
+        jr      fgf_store               ; pushed Ctrl-Z is guaranteed input
 
 fgf_no_pb:
         ; _read(fp, &__fgets_ch, 1)
@@ -10659,9 +10992,26 @@ fgf_no_pb:
 fgf_have_ch:
         ld      a,(__fgets_ch)
         cp      1ah                     ; Ctrl-Z = CP/M EOF marker
-        jr      z,fgf_eof
+        jr      nz,fgf_store
+        ld      a,(ix+8)
+        sub     FIRSTFD
+        ld      l,a
+        ld      h,0
+        ld      de,__fduse
+        add     hl,de
+        bit     3,(hl)                  ; binary stream: Ctrl-Z is ordinary data
+        jr      nz,fgf_binary_ctrlz
+        ld      h,0
+        ld      l,a
+        ld      de,__fdeof
+        add     hl,de
+        ld      (hl),1
+        jr      fgf_eof
+fgf_binary_ctrlz:
+        ld      a,1ah
 
         ; store char
+fgf_store:
         ld      hl,(__fgets_ptr)
         ld      (hl),a
         inc     hl
@@ -10670,23 +11020,11 @@ fgf_have_ch:
         dec     hl
         ld      (__fgets_rem),hl
         cp      0ah                     ; LF  end of line
-        jr      z,fgets_term
+        jp      z,fgets_term
         jr      fgf_loop
 
 fgf_eof:
-        ; set EOF flag for this slot (skip for an out-of-range fd, which
-        ; never had a slot to flag - writing __fdeof[fd-FIRSTFD] unchecked
-        ; would corrupt unrelated static data for a large bad fd)
-        ld      a,(ix+8)
-        cp      MAXFD
-        jr      nc,fgf_eof_flagged
-        sub     FIRSTFD
-        ld      h,0
-        ld      l,a
-        ld      de,__fdeof
-        add     hl,de
-        ld      (hl),1
-fgf_eof_flagged:
+        ; _read owns EOF/error classification for both console and files.
         ; if no chars were stored  return NULL
         ld      hl,(__fgets_ptr)
         ld      de,(__fgets_start)
@@ -10695,51 +11033,6 @@ fgf_eof_flagged:
         jp      z,fgets_null            ; ptr == start  nothing read
         ; else: NUL-terminate and return buf
         jr      fgets_term
-
-        ; ---- Console path ----
-fgets_con:
-        ; HL still = size (loaded at top); compute rem = size-1
-        ld      l,(ix+6)
-        ld      h,(ix+7)
-        dec     hl
-        ld      (__fgets_rem),hl
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      (__fgets_ptr),hl
-        call    __cflush                ; show any pending prompt before input
-
-fgets_loop:
-        ld      hl,(__fgets_rem)
-        ld      a,h
-        or      l
-        jr      z,fgets_term
-
-        ld      c,1
-        call    5                       ; BDOS fn 1: console input  A
-
-        cp      1ah                     ; Ctrl-Z  EOF
-        jr      z,fgets_term
-
-        cp      0dh                     ; CR  translate to LF, end line
-        jr      nz,fgets_store
-        ld      e,0ah
-        ld      c,2
-        call    5                       ; echo LF
-        ld      a,0ah
-
-fgets_store:
-        ld      b,a
-        ld      hl,(__fgets_ptr)
-        ld      (hl),b
-        inc     hl
-        ld      (__fgets_ptr),hl
-        ld      hl,(__fgets_rem)
-        dec     hl
-        ld      (__fgets_rem),hl
-        ld      a,b
-        cp      0ah
-        jr      z,fgets_term
-        jr      fgets_loop
 
 fgets_term:
         ld      hl,(__fgets_ptr)
@@ -11233,16 +11526,58 @@ _fopen:
         add     ix,sp
         ld      l,(ix+6)
         ld      h,(ix+7)
-        ld      a,(hl)                  ; first char of mode
-        ld      hl,0
+        ld      a,h
+        or      l
+        jp      z,fo_bad
+        ld      a,(hl)                  ; first character
+        inc     hl
         cp      'r'
-        jr      z,fo_doit               ; flags=0: open existing
-        ld      hl,0240h
+        jr      z,fo_read
         cp      'w'
-        jr      z,fo_doit               ; flags=O_CREAT|O_TRUNC
-        ld      hl,0040h                ; "a" or other: O_CREAT only
+        jr      z,fo_write
+        cp      'a'
+        jp      nz,fo_bad
+        ld      de,8041h                ; private append | O_CREAT | O_WRONLY
+        ld      b,6                     ; write | append
+        jr      fo_opts
+fo_read:
+        ld      de,0                    ; O_RDONLY
+        ld      b,1                     ; read
+        jr      fo_opts
+fo_write:
+        ld      de,0241h                ; O_CREAT | O_TRUNC | O_WRONLY
+        ld      b,2                     ; write
+fo_opts:
+fo_opt_loop:
+        ld      a,(hl)
+        or      a
+        jr      z,fo_doit
+        cp      'b'
+        jr      z,fo_binary
+        cp      '+'
+        jr      nz,fo_bad
+        ld      a,b
+        and     3
+        cp      3
+        jr      z,fo_bad                ; duplicate '+'
+        ld      a,e
+        and     0fch
+        or      2                       ; O_RDWR
+        ld      e,a
+        set     0,b
+        set     1,b                     ; read | write
+        inc     hl
+        jr      fo_opt_loop
+fo_binary:
+        bit     3,b
+        jr      nz,fo_bad               ; duplicate 'b'
+        set     3,b
+        inc     hl
+        jr      fo_opt_loop
 fo_doit:
-        push    hl                      ; flags (second arg to _open)
+        ld      a,b
+        ld      (__fo_mode),a
+        push    de                      ; flags (second arg to _open)
         ld      l,(ix+4)
         ld      h,(ix+5)
         push    hl                      ; path (first arg)
@@ -11252,26 +11587,26 @@ fo_doit:
         ld      a,h
         cp      0FFh
         jr      z,fo_fail               ; _open returned -1
-        ; Clear EOF and error flags for the new slot
-        push    hl                      ; save fd
+        push    hl
         ld      a,l
         sub     FIRSTFD
-        ld      e,a
-        ld      d,0
-        ld      hl,__fdeof
-        add     hl,de
-        xor     a
+        push    af
+        call    __usep
+        ld      a,(__fo_mode)
         ld      (hl),a
-        ld      hl,__fderr
-        add     hl,de
-        ld      (hl),a
-        pop     hl                      ; restore fd = FILE*
+        pop     af
+        call    __fclr
+        pop     hl
         pop     ix
         ret
+fo_bad:
+        call    __einval
 fo_fail:
         ld      hl,0
         pop     ix
         ret
+
+__fo_mode:      db      0
 
 ; ============================================================
 ; _fclose(fp)
@@ -11284,10 +11619,9 @@ _fclose:
 ; tmpnam / tmpfile  (C89 7.9.4.3 / 7.9.4.4)
 ; ============================================================
 ;
-; tmpnam generates names of the form "T%03d.TMP" (T000.TMP..T999.TMP).
-; tmpfile creates a file and registers it for removal in _exit via the
-; __tmpf_hook set in the _exit block.  The file is removed at program
-; termination; fclose alone does not remove it.
+; tmpnam generates unused names of the form "T%03d.TMP"
+; (T000.TMP..T999.TMP). tmpfile registers its file for removal on fclose()
+; or normal program termination.
 ;
 ; Constants (kept in sync with stdio.h):
 ;   L_tmpnam = 13  -- minimum buffer size for tmpnam (room for "T999.TMP\0")
@@ -11307,6 +11641,23 @@ _tmpnam:
         push    ix
         ld      ix,0
         add     ix,sp
+
+        ; CP/M search-first writes a 128-byte directory record to the current
+        ; DMA address. Reserve a private FCB plus DMA area on the stack so a
+        ; collision probe cannot overwrite a caller buffer left as the DMA
+        ; target by an earlier direct read.
+        ld      hl,-164                 ; 36-byte FCB + 128-byte DMA
+        add     hl,sp
+        ld      sp,hl
+        ld      (__tn_fcbp),hl
+        ld      de,36
+        add     hl,de
+        ex      de,hl
+        ld      c,26
+        call    5                       ; private search DMA
+
+        ld      hl,1000
+        ld      (__tn_left),hl
         ld      l,(ix+4)
         ld      h,(ix+5)
         ld      a,h
@@ -11315,6 +11666,7 @@ _tmpnam:
         ld      hl,__tn_buf             ; NULL arg: use internal buffer
 tn_use:
         ld      (__tn_ptr),hl
+tn_next:
         ; Increment 3-digit decimal counter stored as individual digit chars.
         ; __tn_d0 = units, __tn_d1 = tens, __tn_d2 = hundreds.
         ; Starts at '0'-1 so first call produces '0'.
@@ -11359,22 +11711,77 @@ tn_build:
         ld      (hl),'P'
         inc     hl
         ld      (hl),0
+
+        ; Build an exact CP/M FCB for the same generated name.
+        ld      hl,(__tn_fcbp)
+        ld      d,h
+        ld      e,l
+        inc     de
+        ld      bc,35
+        ld      (hl),0
+        ldir
         ld      hl,(__tn_ptr)
+        ld      de,(__tn_fcbp)
+        inc     de
+        ld      bc,4
+        ldir                            ; "Tnnn"
+        ld      b,4
+tn_spc:
+        ld      a,' '
+        ld      (de),a
+        inc     de
+        djnz    tn_spc
+        inc     hl                      ; skip '.'
+        ld      bc,3
+        ldir                            ; "TMP"
+
+        ld      de,(__tn_fcbp)
+        ld      c,17                    ; search first
+        call    5
+        inc     a                       ; 0ffh -> 0 means no collision
+        jr      z,tn_unique
+
+        ld      hl,(__tn_left)
+        dec     hl
+        ld      (__tn_left),hl
+        ld      a,h
+        or      l
+        jp      nz,tn_next
+
+        ld      hl,0                    ; all TMP_MAX names collide
+        jr      tn_return
+tn_unique:
+        ld      hl,(__tn_ptr)
+tn_return:
+        push    hl
+        ld      de,80h
+        ld      c,26
+        call    5                       ; restore CP/M's conventional DMA
+        pop     hl
+        ld      sp,ix
         pop     ix
         ret
+
+; tmpnam storage stays in the tmpnam strip block.
+__tn_d0:        db      '0'-1           ; units digit; first call -> '0'
+__tn_d1:        db      '0'
+__tn_d2:        db      '0'
+__tn_ptr:       dw      0
+__tn_fcbp:      dw      0
+__tn_left:      dw      0
+__tn_buf:       ds      9               ; internal buffer for tmpnam(NULL)
 
         public  _tmpfile
 ; FILE *tmpfile(void)
 ; Creates a temporary binary file (w+ mode) and returns its FILE*.
-; The file is removed at program termination via the __tmpf_hook
-; registered in _exit.  Returns NULL if no slot is free (errno = EMFILE)
-; or open fails (errno set by _open).
+; The file is removed by fclose() or at normal program termination.
+; Returns NULL if no slot is free (errno = EMFILE) or open fails.
 _tmpfile:
         push    ix
         ld      ix,0
         add     ix,sp
         ; Register exit-cleanup hook (sets __tmpf_hook in _exit block).
-        ld      hl,__tmpf_cleanup
+        ld      hl,__tmpf_hook_entry
         ld      (__tmpf_hook),hl
         ; Find an empty slot in __tmpf_fd (0 = free).
         ld      hl,__tmpf_fd
@@ -11408,8 +11815,11 @@ tf_found:
         push    hl
         call    _tmpnam
         pop     de
-        ; _open(name, O_CREAT|O_TRUNC) = _open(name, 0240h)
-        ld      hl,0240h                ; O_CREAT | O_TRUNC
+        ld      a,h
+        or      l
+        jr      z,tf_fail
+        ; tmpfile streams are update streams.
+        ld      hl,0242h                ; O_RDWR | O_CREAT | O_TRUNC
         push    hl
         ld      hl,(__tf_nmptr)
         push    hl
@@ -11420,6 +11830,15 @@ tf_found:
         ld      a,h
         inc     a               ; inc-a/0FFh wrap idiom (see _open's comment above)
         jr      z,tf_fail
+        push    hl
+        ld      a,l
+        sub     FIRSTFD
+        push    af
+        call    __usep
+        ld      (hl),11                 ; read | write | binary
+        pop     af
+        call    __fclr
+        pop     hl
         ; Store fd in slot
         push    hl
         ld      a,(__tf_slot)
@@ -11438,9 +11857,52 @@ tf_fail:
         pop     ix
         ret
 
+; The shared indirect hook preserves dccrtlstrip isolation without a second
+; always-resident pointer. _exit's OR test enters with carry clear and routes
+; to cleanup; _close sets carry and leaves A = the successfully closed fd.
+__tmpf_hook_entry:
+        jr      nc,__tmpf_cleanup
+
+; A = successfully closed fd. Remove and unregister a matching tmpfile.
+; A failed unlink leaves a 0ffh marker so normal-exit cleanup retries it.
+__tmpf_closed:
+        ld      hl,__tmpf_fd
+        ld      b,NTMP
+tf_closed_scan:
+        cp      (hl)
+        jr      z,tf_closed_found
+        inc     hl
+        djnz    tf_closed_scan
+        ret
+tf_closed_found:
+        push    hl
+        ld      (hl),0ffh
+        ld      de,__tmpf_fd
+        or      a
+        sbc     hl,de
+        add     hl,hl
+        add     hl,hl
+        add     hl,hl
+        add     hl,hl
+        ld      de,__tmpf_nm
+        add     hl,de
+        push    hl
+        call    _unlink
+        pop     de
+        pop     de                      ; DE = registry slot
+        ld      a,h
+        or      l
+        ret     nz
+        xor     a
+        ld      (de),a
+        ret
+
 __tmpf_cleanup:
         ; Close and unlink all registered temp files.
         ; Called from _exit via the __tmpf_dispatch trampoline.
+        ; Disable ordinary-close dispatch while this exit-only sweep runs.
+        ld      hl,0
+        ld      (__tmpf_hook),hl
         ld      b,NTMP
         ld      c,0                     ; C = slot index
         ld      hl,__tmpf_fd
@@ -11450,23 +11912,31 @@ tf_cl_lp:
         jr      z,tf_cl_nx
         push    bc
         push    hl                      ; save __tmpf_fd[slot] ptr
-        ; _close(fd) — ignoring errors; must close before unlink
+        cp      0ffh
+        jr      z,tf_cl_unlink           ; already closed; retry unlink only
+        ; Mark closed-pending before _close so its ordinary-close hook does
+        ; not recursively process this same registry slot.
         ld      e,a
         ld      d,0
+        ld      (hl),0ffh
         push    de
         call    _close
         pop     de
-        ; clear fd slot and compute name pointer.
-        ; NOTE: do NOT use C here — BDOS fn 16 (inside _close) corrupts C.
-        ; Derive slot from pointer arithmetic: slot = (&__tmpf_fd[slot]) - __tmpf_fd
+        ld      a,h
+        and     l
+        inc     a
+        jr      nz,tf_cl_unlink
+        pop     hl                      ; close failed: restore fd registration
+        ld      (hl),e
+        pop     bc
+        jr      tf_cl_nx
+tf_cl_unlink:
         pop     hl                      ; HL = &__tmpf_fd[slot]
-        xor     a
-        ld      (hl),a                  ; clear fd slot
         push    hl                      ; save &__tmpf_fd[slot] for later restore
         ; slot = HL - __tmpf_fd
         ld      de,__tmpf_fd
-        sbc     hl,de                   ; HL = slot (0..NTMP-1); carry already 0
-                                         ; (the "xor a" above already cleared it)
+        or      a
+        sbc     hl,de                   ; HL = slot (0..NTMP-1)
         ; &__tmpf_nm[slot] = __tmpf_nm + slot * TN_NSZ (slot << 4)
         add     hl,hl
         add     hl,hl
@@ -11477,7 +11947,15 @@ tf_cl_lp:
         push    hl
         call    _unlink
         pop     de
-        pop     hl                      ; restore &__tmpf_fd[slot] ptr
+        pop     de                      ; DE = &__tmpf_fd[slot]
+        ld      a,h
+        or      l
+        jr      nz,tf_cl_keep
+        xor     a
+        ld      (de),a
+tf_cl_keep:
+        ld      h,d
+        ld      l,e
         pop     bc
 tf_cl_nx:
         inc     hl
@@ -11485,22 +11963,16 @@ tf_cl_nx:
         djnz    tf_cl_lp
         ret
 
-; tmpnam/tmpfile storage
-__tn_d0:        db      '0'-1           ; units digit; '0'-1 so first call -> '0'
-__tn_d1:        db      '0'
-__tn_d2:        db      '0'
-__tn_ptr:       dw      0
-__tn_buf:       ds      9               ; internal buffer for tmpnam(NULL)
+; tmpfile storage
 __tf_slot:      db      0
 __tf_nmptr:     dw      0
 __tmpf_nm:      ds      NTMP*TN_NSZ     ; name per slot (16 bytes each)
 
 ; ============================================================
 ; _freopen(path, mode, stream)  (C89 7.9.5.4)
-; Closes stream, then opens path/mode on the same fd slot.
-; Because _open always takes the lowest free slot and the slot
-; freed by fclose is the lowest available, the returned FILE*
-; equals stream on success.  Returns HL = FILE* or 0 on error.
+; Closes a real-file stream, then opens path/mode on the same fd slot.
+; Lower free slots are temporarily reserved while fopen runs, preserving
+; stream identity without changing _open's low-level allocation policy.
 ; path @ IX+4/5, mode @ IX+6/7, stream @ IX+8/9
 ; ============================================================
         public  _freopen
@@ -11508,11 +11980,46 @@ _freopen:
         push    ix
         ld      ix,0
         add     ix,sp
+        ld      a,(ix+9)
+        or      a
+        jr      nz,fr_bad
+        ld      a,(ix+8)
+        sub     FIRSTFD
+        cp      NFILES
+        jr      nc,fr_bad
+        ld      (__fr_slot),a
+        call    __usep
+        ld      a,(hl)
+        or      a
+        jr      z,fr_bad
+
         ld      l,(ix+8)
         ld      h,(ix+9)
         push    hl                      ; stream arg to fclose
         call    _fclose
         pop     de                      ; clean 2 bytes (ignore close result)
+        ld      a,h
+        and     l
+        inc     a
+        jr      z,fr_fail
+
+        ; Make the target slot the first free slot visible to _open.
+        ld      a,(__fr_slot)
+        ld      b,a
+        ld      hl,__fduse
+fr_mask_loop:
+        ld      a,b
+        or      a
+        jr      z,fr_open
+        ld      a,(hl)
+        or      a
+        jr      nz,fr_mask_next
+        ld      (hl),80h                ; reservation, never a live mode
+fr_mask_next:
+        inc     hl
+        djnz    fr_mask_loop
+
+fr_open:
         ld      l,(ix+6)
         ld      h,(ix+7)
         push    hl                      ; mode arg to fopen
@@ -11522,8 +12029,35 @@ _freopen:
         call    _fopen
         pop     de
         pop     de                      ; clean 4 bytes
+        push    hl
+
+        ; Release only the temporary reservations; live modes remain intact.
+        ld      a,(__fr_slot)
+        ld      b,a
+        ld      hl,__fduse
+fr_unmask_loop:
+        ld      a,b
+        or      a
+        jr      z,fr_unmask_done
+        ld      a,(hl)
+        cp      80h
+        jr      nz,fr_unmask_next
+        ld      (hl),0
+fr_unmask_next:
+        inc     hl
+        djnz    fr_unmask_loop
+fr_unmask_done:
+        pop     hl
         pop     ix
         ret                             ; HL = FILE* or 0
+fr_bad:
+        call    __ebadf
+fr_fail:
+        ld      hl,0
+        pop     ix
+        ret
+
+__fr_slot:      db      0
 
 ; ============================================================
 ; __fps(str, fp)
@@ -11592,12 +12126,11 @@ _fread:
         push    ix
         ld      ix,0
         add     ix,sp
-        ; size == 0 -> 0 items (also avoids divide-by-zero in the item count)
         ld      l,(ix+6)
-        ld      h,(ix+7)                ; HL = size
+        ld      h,(ix+7)
         ld      a,h
         or      l
-        jr      z,frd_zero
+        jp      z,frd_zero
         ld      a,h
         or      a
         jr      nz,frd_generic
@@ -11608,61 +12141,75 @@ _fread:
         ld      h,(ix+9)                ; size == 1: nbytes = count
         jr      frd_have_nbytes
 frd_generic:
-        ; nbytes = size * count, rejecting 16-bit overflow
         ld      e,(ix+8)
-        ld      d,(ix+9)                ; DE = count
-        call    __ckmul                 ; HL = size*count; carry set on overflow
-        jr      c,frd_zero              ; overflow -> read nothing
+        ld      d,(ix+9)
+        call    __ckmul
+        jp      c,frd_zero
 frd_have_nbytes:
-        ld      (__frw_nb),hl
-        ; _read(fp, buf, nbytes)
-        push    hl                      ; nbytes
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        push    hl                      ; buf
+        ld      a,h
+        or      l
+        jp      z,frd_zero
+        ld      e,(ix+4)
+        ld      d,(ix+5)
+        call    __frw_init
+
+        ; Preserve Batch 4's real-file pushback ordering. stdin is left to
+        ; _read/__gchr, which owns console pushback and EOF state.
+        ld      a,(ix+11)
+        or      a
+        jr      nz,frd_read_all
+        ld      a,(ix+10)
+        cp      FIRSTFD
+        jr      c,frd_read_all
+        sub     FIRSTFD
+        cp      NFILES
+        jr      nc,frd_read_all
+        call    __usep
+        ld      a,(hl)
+        or      a
+        jr      z,frd_read_all
+        ld      c,(ix+10)
+        call    __ugget
+        jr      c,frd_loop
+        ld      hl,(__frw_ptr)
+        ld      (hl),a
+        ld      de,1
+        ld      bc,1
+        call    __frw_adv
+        jr      z,frd_done
+        jr      frd_loop
+
+frd_read_all:
+frd_loop:
+        ld      hl,(__frw_rem)
+        bit     7,h
+        jr      z,frd_chunk
+        ld      hl,07fffh
+frd_chunk:
+        push    hl                      ; count <= INT_MAX
+        ld      hl,(__frw_ptr)
+        push    hl                      ; current buffer
         ld      l,(ix+10)
         ld      h,(ix+11)
         push    hl                      ; fp
         call    _read
-        ex      de,hl
-        ld      hl,6
-        add     hl,sp
-        ld      sp,hl
-        ex      de,hl                   ; HL = bytes_read
-        ; if bytes_read < nbytes  set EOF
-        push    hl
-        ld      de,(__frw_nb)
-        or      a
-        sbc     hl,de
-        jr      nc,frd_neof
-        ld      a,(ix+10)
-        sub     FIRSTFD
-        jr      c,frd_neof
-        ; This only checked the lower bound, unlike _feof's equivalent
-        ; check: a garbage fp far above the valid range (e.g. (FILE*)200)
-        ; indexed past the NFILES-byte __fdeof array. Add the same upper
-        ; bound __fgetc's EOF-flag fix already checks.
-        cp      NFILES
-        jr      nc,frd_neof
-        ld      h,0
-        ld      l,a
-        ld      de,__fdeof
-        add     hl,de
-        ld      (hl),1
-frd_neof:
-        pop     hl                      ; bytes_read
-        ; _read() returns -1 (0FFFFh) specifically for EBADF (a bad fd) -
-        ; every other path it can take returns a genuine non-negative
-        ; count (0..nbytes). Feeding that sentinel straight into the
-        ; divide below would return a huge garbage item count instead of
-        ; "nothing read" for a bad fp (e.g. fread((FILE*)99,...)).
+        pop     bc                      ; discard fp
+        pop     bc                      ; discard buffer
+        pop     bc                      ; BC = requested chunk
         ld      a,h
         and     l
         inc     a
-        jr      nz,frd_have_bytes
-        ld      hl,0
-frd_have_bytes:
-        ; return bytes_read / size
+        jr      z,frd_done              ; total error: retain prior bytes
+        ld      a,h
+        or      l
+        jr      z,frd_done              ; EOF
+        ex      de,hl                   ; DE = positive bytes read
+        call    __frw_adv               ; carry = positive short transfer
+        jr      c,frd_done
+        jr      nz,frd_loop
+
+frd_done:
+        ld      hl,(__frw_got)
         ld      a,(ix+7)
         or      a
         jr      nz,frd_divide
@@ -11681,7 +12228,46 @@ frd_zero:
         pop     ix
         ret
 
-__frw_nb:       dw      0
+        public  __frw_state
+__frw_state:
+; Shared fread/fwrite transfer state. The stdio layer may accumulate the full
+; 16-bit request even though each low-level call is capped at INT_MAX.
+__frw_init:
+        ld      (__frw_rem),hl
+        ld      (__frw_ptr),de
+        ld      hl,0
+        ld      (__frw_got),hl
+        ret
+
+; DE = positive transferred bytes, BC = requested chunk.
+; Advance state. Return carry for a short transfer; otherwise Z means done.
+__frw_adv:
+        ld      hl,(__frw_got)
+        add     hl,de
+        ld      (__frw_got),hl
+        ld      hl,(__frw_ptr)
+        add     hl,de
+        ld      (__frw_ptr),hl
+        ld      hl,(__frw_rem)
+        or      a
+        sbc     hl,de
+        ld      (__frw_rem),hl
+        ld      a,d
+        cp      b
+        ret     c
+        jr      nz,frwa_left
+        ld      a,e
+        cp      c
+        ret     c
+frwa_left:
+        ld      hl,(__frw_rem)
+        ld      a,h
+        or      l
+        ret
+
+__frw_rem:      dw      0
+__frw_ptr:      dw      0
+__frw_got:      dw      0
 
 ; ============================================================
 ; _fwrite(buf, size, count, fp)
@@ -11698,7 +12284,7 @@ _fwrite:
         ld      h,(ix+7)
         ld      a,h
         or      l
-        jr      z,fwr_zero
+        jp      z,fwr_zero
         ld      a,h
         or      a
         jr      nz,fwr_generic
@@ -11713,23 +12299,45 @@ fwr_generic:
         ld      e,(ix+8)
         ld      d,(ix+9)
         call    __ckmul                 ; HL = size*count; carry set on overflow
-        jr      c,fwr_zero              ; overflow -> write nothing
+        jp      c,fwr_zero              ; overflow -> write nothing
 fwr_have_nbytes:
-        ; _write(fp, buf, nbytes)
-        push    hl                      ; nbytes
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        push    hl                      ; buf
+        ld      a,h
+        or      l
+        jp      z,fwr_zero
+        ld      e,(ix+4)
+        ld      d,(ix+5)
+        call    __frw_init
+
+fwr_loop:
+        ld      hl,(__frw_rem)
+        bit     7,h
+        jr      z,fwr_chunk
+        ld      hl,07fffh
+fwr_chunk:
+        push    hl                      ; count <= INT_MAX
+        ld      hl,(__frw_ptr)
+        push    hl                      ; current buffer
         ld      l,(ix+10)
         ld      h,(ix+11)
         push    hl                      ; fp
         call    _write
-        ex      de,hl
-        ld      hl,6
-        add     hl,sp
-        ld      sp,hl
-        ex      de,hl                   ; HL = bytes_written
-        ; return bytes_written / size
+        pop     bc                      ; discard fp
+        pop     bc                      ; discard buffer
+        pop     bc                      ; BC = requested chunk
+        ld      a,h
+        and     l
+        inc     a
+        jr      z,fwr_done              ; total error: retain prior bytes
+        ld      a,h
+        or      l
+        jr      z,fwr_done
+        ex      de,hl                   ; DE = positive bytes written
+        call    __frw_adv               ; carry = positive short transfer
+        jr      c,fwr_done
+        jr      nz,fwr_loop
+
+fwr_done:
+        ld      hl,(__frw_got)
         ld      a,(ix+7)
         or      a
         jr      nz,fwr_divide
@@ -11964,7 +12572,8 @@ _fsetpos:
         public  _rewind
 _rewind:
         ; void rewind(FILE *fp) - single pointer argument; IX-free, same
-        ; idiom as _unlink. rewind(fp) == (void)lseek(fd, 0L, SEEK_SET).
+        ; idiom as _unlink. rewind(fp) == (void)lseek(fd, 0L, SEEK_SET),
+        ; and clears both EOF and error indicators for a valid stream.
         ; offset is a 32-bit long, so it must be pushed as two words;
         ; pushing a single word (as an earlier version did) misaligned
         ; the frame so _lseek read a garbage whence, fell through to
@@ -11973,12 +12582,28 @@ _rewind:
         ex      (sp),hl         ; HL = fp
         push    bc
 
-        push    hl              ; save fp across the _lseek call below
+        ld      a,h
+        or      a
+        jr      nz,rewind_bad
+        ld      c,l             ; C = fd
+        ld      a,l
+        sub     FIRSTFD
+        cp      NFILES
+        jr      nc,rewind_bad
+        ld      b,a             ; B = slot
+        call    __usep
+        ld      a,(hl)
+        or      a
+        jr      z,rewind_bad
+        ld      a,b
+        call    __fclr
 
         ld      de,0
         push    de              ; whence = 0 (SEEK_SET)
         push    de              ; offset high word = 0
         push    de              ; offset low word = 0
+        ld      h,0
+        ld      l,c
         push    hl              ; fp
         call    _lseek
         ; Discard 8 bytes of arguments (return value unused: rewind is void).
@@ -11987,19 +12612,12 @@ _rewind:
         pop     de
         pop     de
 
-        ; clear EOF flag
-        pop     hl              ; HL = fp (saved above)
-        ld      a,l
-        sub     FIRSTFD
-        jr      c,rewind_done
-        ld      l,a
-        ld      h,0
-        ld      de,__fdeof
-        add     hl,de
-        ld      (hl),0
 rewind_done:
         ld      hl,0
         ret
+rewind_bad:
+        call    __ebadf
+        jr      rewind_done
 
 ; ============================================================
 ; _feof(fp)    returns HL=1 if EOF, HL=0 otherwise.
@@ -12010,6 +12628,17 @@ _feof:
         pop     bc
         ex      (sp),hl
         push    bc
+        ld      a,h
+        or      l
+        jr      nz,feof_real
+        ld      a,(__ceof)
+        ld      l,a
+        ld      h,0
+        ret
+feof_real:
+        ld      a,h
+        or      a
+        jr      nz,feof_no
         ld      a,l
         ; sub FIRSTFD's wraparound alone is enough to reject fd < FIRSTFD:
         ; the smallest wrapped result is 256-FIRSTFD, always >= NFILES for

@@ -52,6 +52,8 @@
     { "name": "targs", "args": "a bb ccc dddd eeeee", "host": true },
     { "name": "tkbd", "stdin": "x", "perf_ignore": true },
     { "name": "tscanin", "stdin": "42 -7 hello", "host": true },
+    { "name": "tfcons", "stdin": "ABCD\u001a", "perf_ignore": true },
+    { "name": "tugpath", "stdin": "ath\nine\n\u001a" },
     { "name": "tpfauto", "dcc_floatio": false, "dcc_longio": false },
     { "name": "tpfio", "dcc_floatio": true, "dcc_longio": false },
     { "name": "tplng", "dcc_floatio": false, "dcc_longio": true },

@@ -6,7 +6,7 @@ is a findings/backlog document for a future, separate fix-implementation pass.
 ## Follow-up implementation status
 
 The audit itself remains a read-only snapshot. Follow-up work on this branch has
-implemented the first three repair batches:
+implemented the first five repair batches:
 
 - Batch 1 fixed **SS-C1**, **SH-F1**, **CT-F1**, **SJ-F1**, and **EC-F1**.
 - Batch 2 fixed add/sub subnormal handling, nearest-even rounding, conversion
@@ -15,11 +15,30 @@ implemented the first three repair batches:
   plus stale scanner documentation **SJ-F7**. File-backed formatted output now
   streams in 128-byte CP/M-record chunks, and the new state remains isolated in
   a `dccrtlstrip` block used only by `fprintf`/`vfprintf`.
+- Batch 4 fixed **CI-2** through **CI-5**, **CT-F3**, and **CT-F4** by giving
+  each stream one shared pushback byte, consuming it through all read paths,
+  clearing EOF on success, and clearing stale state on open, close, and seek.
+  Full-width stream validation prevents wide `FILE *` values from aliasing
+  another descriptor's pushback, and a pushed-back Ctrl-Z remains guaranteed
+  input rather than being reinterpreted as fresh text EOF.
+- Batch 5 fixed the actionable parts of **FI-2** through **FI-12**, **CT-F2**,
+  **CT-F5** through **CT-F13**, and **CT-F15** through **CT-F19**. The runtime
+  now retains read/write/append/binary modes in the existing descriptor-state
+  byte, validates full-width descriptors and positions, implements strict
+  `fopen` modes and per-write append positioning, preserves partial-transfer
+  semantics, loops `fread`/`fwrite` over the low-level `INT_MAX` limit, removes
+  closed temporary files, checks `tmpnam` collisions, and enforces documented
+  rename errors. The ctype helpers now reject out-of-range values, and
+  `isgraph(expr)` evaluates its argument once.
 
 **PF-F11** remains deferred because defensive NULL `%s` handling would add cost
 to every valid `%s` call. Subnormal multiply/divide/square-root work from
 **FC-F2** also remains open: the correct designs measured so far add too much
-linked code for the target.
+linked code for the target. **FI-1** remains excluded because an 8 MiB CP/M
+file is outside this target's practical media limits. **FI-9** is limited by
+CP/M 2.2: BDOS function 48 is not universal and cannot guarantee pending FCB
+metadata durability. `freopen` cannot preserve the numeric identity of
+`stdin`/`stdout`/`stderr` without replacing the runtime's numeric `FILE *` ABI.
 
 ## Scope & method
 
