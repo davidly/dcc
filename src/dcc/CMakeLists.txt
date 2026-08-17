@@ -69,9 +69,16 @@ set(DCC_SOURCES
     dcc_mir_machine_float_reports.c # strict float report/check schedules
     dcc_mir_machine_numeric.c # strict numeric kernel schedules
     dcc_mir_machine_scanners.c # strict scanner/parser schedules
+    dcc_mir_machine_containers.c # array/stack/append/row-store kernels
+    dcc_mir_machine_wide_records.c # wide-value and record-oriented kernels
+    dcc_mir_machine_structural_checks.c # structural/literal validation kernels
+    dcc_mir_machine_float_recursion.c # float polynomial and recursive kernels
+    dcc_mir_machine_byte_scans.c # byte/row scanning and fill kernels
+    dcc_mir_machine_constant_folding.c # constant-folding and result-switch kernels
     dcc_mir_select.c
     dcc_mir_schedule.c      # shadow sparse live-segment scheduler
     dcc_mir_spilled_cfg.c
+    dcc_mir_stream.c        # transactional in-memory candidate streams
     dcc_mir_target.c        # shadow Z80 constraints and template costs
 )
 
