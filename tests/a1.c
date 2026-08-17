@@ -211,39 +211,62 @@ void set_nz( uint8_t x )
 
 #ifdef Z80_ASM_OPTS
 #asm
-        ; get_mem( uint16_t address ) -> uint8_t * -- Z80 optimized, SP-relative
-        ; SP+4/5 after push ix = address low/high; returns HL = mem_base[addr>>12]+addr
-        ; 3 rrca + and 01eh extracts 2*(addr>>12) directly (vs 4 rrca + and 0fh + add a,a)
-        ; DE holds address throughout; reused for final add via ex de,hl + add hl,bc
-        ; overall app runtime is about 33% faster with this over the C version of get_mem()
         public _get_mem
 _get_mem:
-        ld hl,2
-        add hl,sp               ; hl = &address arg (low byte at sp+4)
-        ld e,(hl)               ; e = address low
-        inc hl
-        ld d,(hl)               ; d = address high;  de = full address
-        ld a,d                  ; a = high byte for page index
-        rrca
-        rrca
-        rrca
-        and 01eh                ; a = 2*(address>>12): word offset into mem_base
-        ld l,a
-        ld h,0
-        ld bc,_mem_base
-        add hl,bc               ; hl = &mem_base[address>>12]
-        ld c,(hl)
-        inc hl
-        ld b,(hl)               ; bc = base pointer (mem_base[address>>12])
-        ld a,b
-        or c                    ; Z if base == NULL
-        jr z,_get_mem_bad
-        ex de,hl                ; hl = address (from de);  de now irrelevant
-        add hl,bc               ; hl = base + address
-        ret
-_get_mem_bad:
-        push de                 ; push address as argument to bad_address
-        call _bad_address       ; never returns (calls exit(1))
+        ld      hl,2
+        add     hl,sp
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)          ; DE = address
+
+        ld      a,d
+
+        ; Put E/F first: instruction fetches from BASIC/monitor make
+        ; these extremely common.
+        cp      0e0h
+        jr      nc,_gm_hi
+
+        ; 0000-7fff RAM?
+        cp      080h
+        jr      c,_gm_ram
+
+        ; d000-dfff
+        cp      0d0h
+        jr      nc,_gm_d
+
+_gm_bad:
+        push    de
+        call    _bad_address
+        ret                     ; not reached
+
+_gm_hi:
+        cp      0f0h
+        jr      nc,_gm_f
+
+_gm_e:
+        ld      bc,_m_e000-0e000h
+        jr      _gm_add
+
+_gm_f:
+        ld      bc,_m_ff00-0ff00h
+        jr      _gm_add
+
+_gm_d:
+        ld      bc,_m_d000-0d000h
+        jr      _gm_add
+
+_gm_ram:
+        cp      040h
+        jr      nc,_gm_4
+        ld      bc,_m_0000
+        jr      _gm_add
+
+_gm_4:
+        ld      bc,_m_4000-04000h
+
+_gm_add:
+        ex      de,hl
+        add     hl,bc
         ret
 #endasm
 #else
@@ -430,130 +453,205 @@ void op_bcd_math( uint8_t math, uint8_t rhs )
 
 #ifdef Z80_ASM_OPTS
 #asm
-        ; op_math( uint8_t op, uint8_t rhs ) -- Z80 optimized, SP-relative arg access
-        ; SP+2 = op, SP+4 = rhs (DCC zero-extends byte args to 16 bits on push,
-        ; caller cleans the stack after return, same convention as get_mem/op_cmp).
-        ; Dispatches 6502 ORA/AND/EOR/ADC/CMP/SBC for cpu.a. The CMP case is done
-        ; inline here (was previously a nested call to op_cmp) using the exact same
-        ; sub/rlca/cp-carry-inversion technique op_cmp itself uses. ADC/SBC flag
-        ; extraction reuses the push-af/pop-de trick to read the Z80 C and P/V out of
-        ; a single adc a,r: bit0 of F is the new carry, bit2 (reached via two rrca)
-        ; is the P/V (signed overflow) flag -- both match 6502 ADC/SBC semantics
-        ; directly. Decimal-mode ADC/SBC is rare and stays a call-out to op_bcd_math.
+        ; op_math( uint8_t op, uint8_t rhs )
+        ;
+        ; DCC calling convention:
+        ;   SP+2 = op
+        ;   SP+4 = rhs
+        ;
+        ; cpu layout:
+        ;   _cpu+0   a
+        ;   _cpu+6   fNegative
+        ;   _cpu+7   fOverflow
+        ;   _cpu+8   fDecimal
+        ;   _cpu+10  fZero
+        ;   _cpu+11  fCarry
+        ;
+        ; op & E0h:
+        ;   00 ORA
+        ;   20 AND
+        ;   40 EOR
+        ;   60 ADC
+        ;   C0 CMP
+        ;   E0 SBC
+
         public _op_math
 _op_math:
-        ld hl,2
-        add hl,sp
-        ld a,(hl)               ; a = op
-        and 0e0h                ; a = op & 0xe0
-        ld b,a                  ; b = masked op, preserved across dispatch
-        inc hl
-        inc hl
-        ld c,(hl)               ; c = rhs
-        cp 0c0h
-        jp z,_opm_cmp
-        ld a,(_cpu+8)           ; cpu.fDecimal
-        or a
-        jp z,_opm_notdec
-        ld a,b
-        cp 0e0h
-        jp z,_opm_bcd
-        cp 60h
-        jp z,_opm_bcd
-_opm_notdec:
-        ld a,b
-        cp 0e0h
-        jp nz,_opm_notsbc
-        ld a,c
-        cpl                     ; rhs = ~rhs (== 255 - rhs), then fall through as adc
-        ld c,a
-        jp _opm_adc
-_opm_notsbc:
-        ld a,b
-        cp 60h
-        jp z,_opm_adc
-        or a
-        jp z,_opm_ora
-        cp 20h
-        jp z,_opm_and
-        ld a,(_cpu)
-        xor c
-        jp _opm_store
+        ; Fetch arguments.
+        ld      hl,2
+        add     hl,sp
+        ld      a,(hl)               ; op
+        and     0e0h
+        ld      b,a                  ; B = masked op
+        inc     hl
+        inc     hl
+        ld      c,(hl)               ; C = rhs
+
+        ; CMP is completely separate.
+        cp      0c0h
+        jp      z,_opm_cmp
+
+        ; Only ADC/SBC care about decimal mode.  Do this test before
+        ; inspecting fDecimal so ORA/AND/EOR avoid that memory access.
+        cp      60h
+        jp      z,_opm_arith
+        cp      0e0h
+        jp      z,_opm_arith
+
+        ; Logical operations: 00=ORA, 20=AND, 40=EOR.
+        or      a
+        jp      z,_opm_ora
+        cp      20h
+        jp      z,_opm_and
+
+        ; EOR
+        ld      a,(_cpu)
+        xor     c
+        jp      _opm_store
+
 _opm_ora:
-        ld a,(_cpu)
-        or c
-        jp _opm_store
+        ld      a,(_cpu)
+        or      c
+        jp      _opm_store
+
 _opm_and:
-        ld a,(_cpu)
-        and c
-        jp _opm_store
+        ld      a,(_cpu)
+        and     c
+        jp      _opm_store
+
+
+        ; ------------------------------------------------------------
+        ; ADC / SBC
+        ; ------------------------------------------------------------
+_opm_arith:
+        ; Decimal mode matters only here.
+        ld      a,(_cpu+8)
+        or      a
+        jp      nz,_opm_bcd
+
+        ; Binary SBC is ADC with one's-complement rhs:
+        ;     A - rhs - !C == A + ~rhs + C
+        ld      a,b
+        cp      0e0h
+        jp      nz,_opm_adc
+
+        ld      a,c
+        cpl
+        ld      c,a
+
 _opm_adc:
-        ld a,(_cpu+11)          ; cpu.fCarry
-        or a
-        jp z,_opm_adc_go
-        scf
-_opm_adc_go:
-        ld a,(_cpu)
-        adc a,c
-        push af
-        pop de                  ; d = result, e = flags (F)
-        ld a,e
-        and 1
-        ld (_cpu+11),a          ; cpu.fCarry = Z80 carry from the adc
-        ld a,e
-        rrca
-        rrca
-        and 1
-        ld (_cpu+7),a           ; cpu.fOverflow = Z80 P/V from the adc
-        ld a,d                  ; a = result
+        ; cpu.fCarry is 0 or 1.  RRA copies bit 0 directly into the
+        ; real Z80 carry.  LD A,(nn) below preserves that carry.
+        ;
+        ; This replaces:
+        ;     ld a,(_cpu+11)
+        ;     or a
+        ;     jp z,...
+        ;     scf
+        ld      a,(_cpu+11)
+        rra
+        ld      a,(_cpu)
+        adc     a,c
+
+        ; Save both result and Z80 flags.
+        ; D = result
+        ; E = F
+        push    af
+        pop     de
+
+        ; 6502 carry = Z80 ADC carry.
+        ld      a,e
+        and     1
+        ld      (_cpu+11),a
+
+        ; 6502 overflow = Z80 P/V.
+        ; No need to normalize to 1: bool fields only require zero/nonzero.
+        ld      a,e
+        and     4
+        ld      (_cpu+7),a
+
+        ld      a,d                  ; result
+        jp      _opm_store
+
+
+        ; ------------------------------------------------------------
+        ; Common result store for ORA/AND/EOR/ADC/SBC.
+        ;
+        ; A = result.
+        ; ------------------------------------------------------------
 _opm_store:
-        ld (_cpu),a             ; cpu.a = result
-        ld c,a
-        rlca
-        ld a,0
-        adc a,0
-        ld (_cpu+6),a           ; cpu.fNegative
-        ld a,c
-        or a
-        ld a,0
-        jp nz,_opm_zdone
-        inc a
-_opm_zdone:
-        ld (_cpu+10),a          ; cpu.fZero
+        ld      (_cpu),a
+        ld      c,a                  ; preserve result
+
+        ; Negative = result bit 7.
+        ; Store 80h directly rather than converting it to 0/1.
+        and     080h
+        ld      (_cpu+6),a
+
+        ; Zero = (result == 0).
+        ;
+        ; For an 8-bit unsigned value:
+        ;     CP 1 sets carry iff A == 0.
+        ; LD does not alter carry, so ADC A,0 converts that carry to 0/1.
+        ld      a,c
+        cp      1
+        ld      a,0
+        adc     a,0
+        ld      (_cpu+10),a
         ret
+
+
+        ; ------------------------------------------------------------
+        ; CMP
+        ;
+        ; Z80 SUB gives exactly the result needed for N/Z.
+        ; Z80 carry after SUB means borrow (lhs < rhs), which is the
+        ; inverse of the 6502 CMP carry.  CCF therefore gives the
+        ; desired 6502 carry directly; no second comparison is needed.
+        ; ------------------------------------------------------------
 _opm_cmp:
-        ld a,(_cpu)             ; a = cpu.a (lhs)
-        ld b,a                  ; b = lhs, preserved for the carry re-check below
-        sub c                   ; a = lhs - rhs
-        ld d,a                  ; d = subtraction result
-        rlca
-        and 1
-        ld (_cpu+6),a           ; cpu.fNegative = bit7 of (lhs - rhs)
-        ld a,d
-        or a
-        ld a,0
-        jp nz,_opm_cmp_zdone
-        inc a
-_opm_cmp_zdone:
-        ld (_cpu+10),a          ; cpu.fZero
-        ld a,b
-        cp c
-        ld a,0
-        jp c,_opm_cmp_cdone     ; Z80 carry set == borrow == lhs < rhs
-        inc a
-_opm_cmp_cdone:
-        ld (_cpu+11),a          ; cpu.fCarry = (lhs >= rhs)
+        ld      a,(_cpu)
+        sub     c
+        ld      d,a                  ; D = comparison result
+
+        ; 6502 C = !Z80 borrow.
+        ccf
+        ld      a,0                  ; LD preserves carry
+        adc     a,0
+        ld      (_cpu+11),a
+
+        ; Negative = result bit 7.
+        ld      a,d
+        and     080h
+        ld      (_cpu+6),a
+
+        ; Zero = (result == 0).
+        ld      a,d
+        cp      1
+        ld      a,0
+        adc     a,0
+        ld      (_cpu+10),a
         ret
+
+
+        ; ------------------------------------------------------------
+        ; Decimal ADC/SBC remains in C.
+        ;
+        ; B = masked op (60h ADC or E0h SBC)
+        ; C = original rhs
+        ; ------------------------------------------------------------
 _opm_bcd:
-        ld l,c
-        ld h,0
-        push hl                 ; push rhs
-        ld l,b
-        ld h,0
-        push hl                 ; push masked op ("math")
-        call _op_bcd_math
-        pop hl
-        pop hl
+        ld      l,c
+        ld      h,0
+        push    hl                     ; rhs
+
+        ld      l,b
+        ld      h,0
+        push    hl                     ; math
+
+        call    _op_bcd_math
+        pop     hl
+        pop     hl
         ret
 #endasm
 #else
