@@ -36,17 +36,10 @@ int main()
     printf("%f\n", r);                 /* ~15.185088 */
 
     a = 3.14159f; b = 2.71828f; r = a * b;
-    printf("%f\n", r);                 /* 8.539721 (dcc's __fmul truncates
-                                           rather than rounds - matches the
-                                           pre-rewrite implementation
-                                           exactly, verified by differential
-                                           testing against it) */
+    printf("%f\n", r);                 /* 8.539722 - nearest-even */
 
     a = 65536.0f; b = 65536.0f; r = a * b;
-    printf("%f\n", r);                 /* 4294967295.000000 - float's
-                                           24-bit mantissa can't represent
-                                           2^32 exactly; again matches the
-                                           pre-rewrite implementation */
+    printf("%f\n", r);                 /* 4294967296.000000 - exact power of two */
 
     return 0;
 }

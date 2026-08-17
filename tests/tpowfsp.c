@@ -1,16 +1,8 @@
 /*
  * tpowfsp.c - special-value regression coverage for dccrtl.mac's powf.
- * Most special cases (y==0, Inf operands, NaN operands, negative base
- * with integer exponent) already worked correctly, inherited for free
- * from the earlier expf/logf/comparison fixes this session. The one
- * confirmed gap: x==0 with y<0 is a pole error per C99 7.12.7.4 and
- * must give Infinity, but the original code returned a bare 0.0f
- * regardless of y's sign.
- *
- * Known remaining gap, NOT fixed here: powf(-0.0f, negative-odd-integer)
- * should be -Infinity (sign depends on whether y is an odd integer) but
- * currently gives +Infinity - a minor sign-of-infinity nuance, not
- * tested below (the fix only checks y's sign, not its parity).
+ * This original special-value smoke test remains alongside tb6pow.c,
+ * which covers the complete Batch 6 NaN, infinite-exponent, direct
+ * integer-parity, and signed-zero corrections.
  */
 #include <stdio.h>
 #include <math.h>

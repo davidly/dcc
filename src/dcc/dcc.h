@@ -502,6 +502,7 @@ extern int opt_no_narrow;   /* -fno-narrow: disable every int-array/scalar/for-c
                               * output difference from any other cause - see
                               * scripts/runall.ps1 -NarrowDiff. */
 extern int opt_debug;       /* -g: emit source-level debug annotations */
+extern int g_main_has_args; /* final app reserves hidden argc/argv startup BSS */
 
 /* typedef table */
 extern struct TypeDef typedefs[MAX_TYPEDEFS];

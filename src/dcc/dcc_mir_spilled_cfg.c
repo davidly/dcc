@@ -15040,6 +15040,36 @@ static int mir_call_result_direct_reload_indirect_store_target(int value)
     return target;
 }
 
+static int mir_divmod_same_block(int first, int second)
+{
+    int lower = first < second ? first : second;
+    int upper = first < second ? second : first;
+    int i;
+
+    for (i = lower + 1; i <= upper; ++i)
+        if (mir.insns[i].opcode == MIR_LABEL)
+            return 0;
+    for (i = lower; i < upper; ++i)
+        if (mir.insns[i].opcode == MIR_JUMP ||
+            mir.insns[i].opcode == MIR_BRANCH_FALSE ||
+            mir.insns[i].opcode == MIR_RETURN)
+            return 0;
+    return 1;
+}
+
+static int mir_divmod_crosses_call(int first, int second)
+{
+    int lower = first < second ? first : second;
+    int upper = first < second ? second : first;
+    int i;
+
+    for (i = lower + 1; i < upper; ++i)
+        if (mir.insns[i].opcode == MIR_CALL ||
+            mir.insns[i].opcode == MIR_CALL_AGGREGATE)
+            return 1;
+    return 0;
+}
+
 static int mir_divmod_partner(int instruction)
 {
     const struct MirInsn *candidate;
@@ -15049,14 +15079,19 @@ static int mir_divmod_partner(int instruction)
         return -1;
     candidate = &mir.insns[instruction];
     if (candidate->opcode != MIR_BINARY ||
-        (candidate->immediate != '/' && candidate->immediate != '%') ||
-        type_size(candidate->secondary_offset) > 2)
+        (candidate->immediate != '/' && candidate->immediate != '%'))
         return -1;
     for (partner = 0; partner < mir.count; ++partner) {
         const struct MirInsn *other = &mir.insns[partner];
         if (partner == instruction || other->opcode != MIR_BINARY ||
             other->src1 != candidate->src1 || other->src2 != candidate->src2 ||
             other->secondary_offset != candidate->secondary_offset)
+            continue;
+        /* Eager wide results held across a call increased frame pressure
+         * enough to grow nopeep code despite saving the second divide. */
+        if (type_size(candidate->secondary_offset) == 4 &&
+            (!mir_divmod_same_block(instruction, partner) ||
+             mir_divmod_crosses_call(instruction, partner)))
             continue;
         if ((candidate->immediate == '/' && other->immediate == '%') ||
             (candidate->immediate == '%' && other->immediate == '/'))
@@ -21161,17 +21196,15 @@ static void mir_emit_long_spigot(
     mir_stream_puts("\tpush de\n\tpush hl\n", out);
     mir_emit_forth_frame_load(out, DIVISOR);
     mir_stream_puts("\tld de,0\n", out);
-    mir_emit_runtime_call(out, "__lms");
-    mir_stream_puts("\tpop bc\n\tpop bc\n", out);
-    mir_emit_pointer_long_store(out, POINTER);
-
-    mir_emit_frame_long_load(out, ACCUMULATOR);
-    mir_stream_puts("\tpush de\n\tpush hl\n", out);
-    mir_emit_forth_frame_load(out, DIVISOR);
-    mir_stream_puts("\tld de,0\n", out);
     mir_emit_runtime_call(out, "__lds");
     mir_stream_puts("\tpop bc\n\tpop bc\n", out);
     mir_emit_frame_long_store(out, ACCUMULATOR);
+    if (mir_extrn_should_emit_name("__lrlo"))
+        mir_stream_puts("\textrn __lrlo\n", out);
+    if (mir_extrn_should_emit_name("__lrhi"))
+        mir_stream_puts("\textrn __lrhi\n", out);
+    mir_stream_puts("\tld hl,(__lrlo)\n\tld de,(__lrhi)\n", out);
+    mir_emit_pointer_long_store(out, POINTER);
     mir_emit_forth_frame_load(out, INDEX);
     mir_stream_puts("\tdec hl\n", out);
     mir_emit_forth_frame_store(out, INDEX);
@@ -21934,6 +21967,7 @@ static void mir_emit_byte_sieve(
     int scan = new_label();
     int scan_tail = new_label();
     int mark = new_label();
+    int mark_check = new_label();
     int mark_in_range = new_label();
     int mark_done = new_label();
     int scan_done = new_label();
@@ -21967,17 +22001,19 @@ static void mir_emit_byte_sieve(
     mir_stream_printf(out,
             "\tjp c, L%d\n\tld de,%s+%d\n"
             "L%d:\n"
-            "\tld a,h\n\tcp d\n\tjp c, L%d\n\tjp nz, L%d\n"
-            "\tld a,l\n\tcp e\n\tjp nc, L%d\n"
+            "\tld a,h\n\tcp d\n\tjr nc,L%d\n"
             "L%d:\n\tld (hl),0\n\tadd hl,bc\n"
-            "\tjp c, L%d\n\tjp L%d\n"
+            "\tjp nc,L%d\n\tjp L%d\n"
+            "L%d:\n\tjp nz,L%d\n"
+            "\tld a,l\n\tcp e\n\tjp c,L%d\n"
             "L%d:\n\tpop bc\n\tld hl,%s\n\tadd hl,bc\n",
             mark_done, flags_name, plan->maximum_index + 1,
             mark,
-            mark_in_range, mark_done,
-            mark_done,
+            mark_check,
             mark_in_range,
-            mark_done, mark,
+            mark, mark_done,
+            mark_check, mark_done,
+            mark_in_range,
             mark_done, flags_name);
     mir_stream_printf(out,
             "\tinc (ix-2)\n\tjp nz, L%d\n\tinc (ix-1)\n"
@@ -30189,6 +30225,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
             if (type_size(insn->secondary_offset) == 4) {
                 struct MirInsn swapped_comparison;
                 const struct MirInsn *operation_insn = insn;
+                int divmod_partner = mir_divmod_partner(i);
                 int mulmod_left;
                 int mulmod_right;
                 int mulmod_modulus;
@@ -30231,6 +30268,55 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                     mir_emit_runtime_call(out, "__m1mu");
                     mir_stream_puts("\tld de,0\n", out);
                     mir_emit_virtual_store_wide(out, insn->dst);
+                    break;
+                }
+                if (divmod_partner >= 0) {
+                    const struct MirInsn *other = &mir.insns[divmod_partner];
+                    int modulo_value = insn->immediate == '%' ? insn->dst
+                                                               : other->dst;
+                    int division_value = insn->immediate == '/' ? insn->dst
+                                                                 : other->dst;
+                    int saved_instruction = mir_emit_instruction_index;
+                    int positive_label = new_label();
+
+                    if (divmod_partner < i)
+                        break;
+                    mir_emit_virtual_load_wide(out, insn->src1);
+                    mir_stream_puts("\tpush de\n\tpush hl\n", out);
+                    mir_emit_virtual_load_wide(out, insn->src2);
+                    mir_emit_runtime_call(
+                        out, (insn->secondary_offset & TYPE_UNSIGNED) != 0
+                                 ? "__ldu" : "__lds");
+                    mir_stream_puts("\tpop bc\n\tpop bc\n", out);
+                    mir_emit_instruction_index = -1;
+                    mir_emit_virtual_store_wide(out, division_value);
+                    mir_emit_instruction_index = saved_instruction;
+
+                    if ((insn->secondary_offset & TYPE_UNSIGNED) == 0) {
+                        mir_emit_virtual_load_wide(out, insn->src1);
+                        mir_stream_puts("\tbit 7,d\n", out);
+                    }
+                    if (mir_extrn_should_emit_name("__lrlo"))
+                        mir_stream_puts("\textrn __lrlo\n", out);
+                    if (mir_extrn_should_emit_name("__lrhi"))
+                        mir_stream_puts("\textrn __lrhi\n", out);
+                    mir_stream_puts(
+                        "\tld hl,(__lrlo)\n\tld de,(__lrhi)\n", out);
+                    if ((insn->secondary_offset & TYPE_UNSIGNED) == 0) {
+                        mir_stream_printf(out, "\tjp z,L%d\n", positive_label);
+                        mir_stream_puts(
+                            "\tld a,l\n\tcpl\n\tld l,a\n"
+                            "\tld a,h\n\tcpl\n\tld h,a\n"
+                            "\tld a,e\n\tcpl\n\tld e,a\n"
+                            "\tld a,d\n\tcpl\n\tld d,a\n"
+                            "\tinc hl\n\tld a,h\n\tor l\n", out);
+                        mir_stream_printf(
+                            out, "\tjr nz,L%d\n\tinc de\nL%d:\n",
+                            positive_label, positive_label);
+                    }
+                    mir_emit_instruction_index = -1;
+                    mir_emit_virtual_store_wide(out, modulo_value);
+                    mir_emit_instruction_index = saved_instruction;
                     break;
                 }
                 int fuse_skip = mir_binary_is_fusable_comparison(i);

@@ -78,6 +78,13 @@ Standard C89 `malloc`/`free`/`qsort`/`bsearch`/`atoi`/`strtol`/… are present;
 - `bdos(fn, dearg)` — calls the CP/M BDOS directly (`fn`→C, `dearg`→DE; byte
   result in the low byte). FCB/DMA-style calls return data through the memory
   `dearg` points at, not the return value. See `tbdos.c`/`crc.c`.
+- `bios(fn, arg)` / `bioshl(fn, arg)` — call the CP/M BIOS jump table with
+  `arg` copied into BC and DE (and its low byte in C). `bios` returns A
+  zero-extended; `bioshl` returns the full HL result.
+- `biosreg(fn, bcarg, dearg)` — calls the BIOS with independent BC and DE
+  values and returns HL. Use this compatible extension for multi-register
+  forms such as SECTRAN and CP/M 3 SELDSK; the two-argument wrappers are
+  unchanged.
 - `atof` and `strtod` return `float` (single precision), not `double`.
 
 The full C89 stdlib surface is present. CP/M-specific limits still apply:
@@ -140,10 +147,13 @@ unsuffixed alias (`sqrt`, `pow`, …) that stays single-precision, so portable
 source compiles unchanged. `nextafterf` is a dcc extra.
 
 Caveats: transcendentals are polynomial approximations (~**5–6 correct decimal
-digits**), and `sin`/`cos`/`tan` range-reduction via `fmodf` degrades for very
-large arguments. There is **no** `double` or `long double`; `HUGE_VAL` is the
-largest finite 32-bit float, and literal `%f` formats are detected automatically
-by dcc.
+digits**). The compact `sin`/`cos`/`tan` range reduction supports finite
+arguments with magnitude below 32768 and returns NaN at or above that cutoff
+rather than silently producing an unrelated phase. There is **no** `double` or
+`long double`; `HUGE_VAL` is the largest finite 32-bit float, and literal `%f`
+formats are detected automatically by dcc. `math_errhandling` is `MATH_ERRNO`:
+domain errors set `EDOM`, and pole, overflow, and underflow errors set `ERANGE`;
+CP/M has no floating-point exception facility.
 
 ## setjmp.h / stdarg.h / stddef.h
 
@@ -184,10 +194,11 @@ prototype. See `tbdos.c`, `crc.c` in the dcc repo.
 
 `<locale.h>`, `<signal.h>`, and `<time.h>` are present, but CP/M 2.2 lacks the
 corresponding hosted services. Locale is fixed to `"C"`; `signal` returns
-`SIG_ERR`; non-`SIGABRT` raises are no-ops; clock/calendar queries return their
-documented unavailable values; and time conversion/formatting routines return
-`NULL` or `0` as documented in the headers. `<stdbool.h>`/`<stdint.h>` are also
-present as C99-style conveniences.
+`SIG_ERR`; non-`SIGABRT` raises are no-ops; `clock()` is unavailable, while
+`time()` uses BDOS 105 where implemented. Calendar conversion is timezone-free,
+and `strftime()` supports every C89 conversion in a fixed C locale plus `%C`
+for the calendar century; `%Z` is empty because there is no timezone database.
+`<stdbool.h>`/`<stdint.h>` are also present as C99-style conveniences.
 
 ## `#pragma` support
 

@@ -1,0 +1,2044 @@
+# DCCRTL.MAC deep audit — correctness & optimisation review
+
+**Status: AUDIT ONLY.** No runtime code was changed to produce this report. This
+is a findings/backlog document for a future, separate fix-implementation pass.
+
+## Follow-up implementation status
+
+The audit itself remains a read-only snapshot. Follow-up work on this branch has
+implemented all eleven repair batches:
+
+- Batch 1 fixed **SS-C1**, **SH-F1**, **CT-F1**, **SJ-F1**, and **EC-F1**.
+- Batch 2 fixed add/sub subnormal handling, nearest-even rounding, conversion
+  rounding, and the `nextafterf()` infinity edge from **FC-F2/FC-F3**.
+- Batch 3 fixed **PF-F1** through **PF-F10** and **SJ-F2** through **SJ-F5**,
+  plus stale scanner documentation **SJ-F7**. File-backed formatted output now
+  streams in 128-byte CP/M-record chunks, and the new state remains isolated in
+  a `dccrtlstrip` block used only by `fprintf`/`vfprintf`.
+- Batch 4 fixed **CI-2** through **CI-5**, **CT-F3**, and **CT-F4** by giving
+  each stream one shared pushback byte, consuming it through all read paths,
+  clearing EOF on success, and clearing stale state on open, close, and seek.
+  Full-width stream validation prevents wide `FILE *` values from aliasing
+  another descriptor's pushback, and a pushed-back Ctrl-Z remains guaranteed
+  input rather than being reinterpreted as fresh text EOF.
+- Batch 5 fixed the actionable parts of **FI-2** through **FI-12**, **CT-F2**,
+  **CT-F5** through **CT-F13**, and **CT-F15** through **CT-F19**. The runtime
+  now retains read/write/append/binary modes in the existing descriptor-state
+  byte, validates full-width descriptors and positions, implements strict
+  `fopen` modes and per-write append positioning, preserves partial-transfer
+  semantics, loops `fread`/`fwrite` over the low-level `INT_MAX` limit, removes
+  closed temporary files, checks `tmpnam` collisions, and enforces documented
+  rename errors. The ctype helpers now reject out-of-range values, and
+  `isgraph(expr)` evaluates its argument once.
+- Batch 6 fixed **MT-F1** through **MT-F15**. `expf`, `powf`, trig,
+  hyperbolic, `frexpf`, `ldexpf`, and `modff` now classify special values,
+  signed zero, parity, subnormals, and range boundaries consistently. True
+  domain/range exits report `EDOM`/`ERANGE` without misclassifying NaN
+  propagation. The compact trig implementation deliberately returns NaN for
+  finite `|x| >= 32768`; a code-heavy Payne-Hanek reducer was not added.
+- Batch 7 fixed **CT-F14**, **MT-F16**, **EC-F11**, **CI-12**, **XM-O5**,
+  **SM-F8**, and **SS-O4**, and accepted the non-regressing subset of
+  **SM-F1**. Shared tmpfile constants, hyperbolic scratch, calendar helpers,
+  pushback/file state, multibyte counters, and the divmod cache now live in
+  their owning or shared strip blocks. Five fastcall entries use zero-byte
+  `EQU` dependencies to share following cores without retaining unreachable
+  general-call prologues, and `__q2u` is a true `D16U` alias. The `__chf`,
+  `__rcf`, `__ssf`, and `__msf` reorderings remain rejected: canonical
+  whole-program profiling showed that accepting the latter two with `__scf`
+  shifted a hot heap-backed instruction stream across 256-byte boundaries,
+  adding 446,945 nopeep cycles despite shrinking the COM. Complete divmod-cache
+  removal also remains rejected because its measured cycle cost outweighed its
+  size saving.
+- Batch 8 integrated five independently measured slices:
+  - Heap/console accepted **SH-F2** through **SH-F4**, **CI-10**, **CI-11**,
+    **CI-13**, and **CI-14**. Heap wrappers now tail-transfer, `calloc` avoids
+    its IX frame and unreachable zero-fill counts, allocator walks keep live
+    values in registers, console output avoids redundant saves and empty-reset
+    writes, BIOS dispatch uses an 8-bit documented-function offset, and
+    one-byte file I/O discards arguments with caller-saved pops. **SH-F5**
+    remains rejected: predecessor growth added 120 exact bytes (128 linked COM
+    bytes) to every realloc runtime for only 9,076 cycles across 200 ordinary
+    operations.
+  - Formatted/file I/O accepted the remaining live part of **PF-O1**, plus
+    **PF-O2**, **FI-13**, and the remaining live sites from **CT-F20**.
+    **PF-O1**'s `pf_print_u32`, **FI-14**, and the `_fread`/`_fwrite` portions
+    of **CT-F20** were already absent or optimized at the base. **SJ-F6**
+    remains rejected because its split scanner loops added 32 exact runtime
+    bytes and grew the nopeep scanner COM by 128 bytes.
+  - String/sort accepted **SM-F3** through **SM-F7** and **SS-O1**, **SS-O2**,
+    **SS-O3**, **SS-O5**, **SS-O6**, **SS-O7**, and **SS-O8**. The `-Os`
+    frame and helper thresholds include retained runtime-body costs. No
+    neutral or regressive SM/SS variant was retained: the one/two-frame and
+    zero-net helper cases remain rejected by their measured cost gates.
+  - Arithmetic/float accepted **LA-F2** through **LA-F8**, **FC-F6**,
+    **FC-F7**, and **MT-F18**; **MT-F17** was already fixed at the base.
+    AST-time type repair, 16-bit div/mod repair, and fusion across calls remain
+    rejected; pairing is 32-bit-only, same-block, and no-call. LA-F2's
+    post-promotion repair now preserves the effective type of a direct
+    equal-width 32-bit cast on either operand before representation-identity
+    casts are removed. This prevents `(unsigned long)a / b` and the matching
+    modulo/fused forms from reverting to signed helpers, while signed casts of
+    unsigned high-bit operands continue to select signed helpers.
+  - Exec/calendar accepted **XM-O1** through **XM-O4** and **EC-F12**.
+    **EC-F13** was rejected in that batch because its direct asctime formatter
+    added 193 runtime bytes and 256 COM bytes when `sprintf()` was independently
+    retained; Batch 11 later superseded that experiment with the smaller
+    range-checked fixed-layout implementation required by **EC-F10**.
+  - The reviewed 41-byte gap after `__stchk` was removed completely. Emulator
+    address alignment is not a valid Z80 optimization, and the gap added 34
+    exact stripped bytes to ordinary stack-checked applications. Revised
+    cumulative measurements use the naturally linked runtime layout only;
+    address placement is not a production or performance-selection gate.
+    Two structural cycle improvements replace the gap: the proven byte-sieve
+    marking schedule now makes its common in-range path fall through and uses
+    one no-carry loop branch, while `__mulu` executes a fully unrolled
+    four-iteration path when the selected multiplier fits in a nibble. The
+    latter adds useful executable code rather than unreachable bytes and
+    improves every linked multiplication probe measured.
+  - With no alignment bytes, exact stack-checked base-to-revised deltas are:
+    sieve `-864,232/-1,800,362` cycles (peep/nopeep), `-43` RTLMIN bytes,
+    and `-128/-128` COM bytes; pint `-4,849,430/-4,845,060` cycles,
+    `-32` RTLMIN bytes, and `0/-128` COM bytes; cobint
+    `-9,695,077/-9,238,205` cycles, `-36` RTLMIN bytes, and `0/-128`
+    COM bytes. The unchanged-app-MAC pint/cobint results also confirm that the
+    linked runtime improvement, not application-specific selection, supplies
+    their recovery.
+- Batch 9 fixed **CI-1**, **CI-6**, **CI-8**, and **CI-9**, supplied the
+  compatible `biosreg(fn,bcarg,dearg)` extension for **CI-7**, accepted
+  **SM-F2** and **LA-F1**, and documented **LA-F9**. Startup now bounds the
+  complete 127-byte CP/M command tail, rejects wrapped startup scratch before
+  heap-limit acceptance, and `_setvbuf` and `_strerror` validate their full
+  16-bit inputs. The ordinary 16/32-bit signed/unsigned divide helpers use the
+  same deterministic zero-divisor pair; specialized fused `__m1mu` documents
+  its 16-bit `low16(a*b)` dividend sentinel.
+  `bios()`/`bioshl()` retain their existing ABI, and `LONG_MIN/-1` remains
+  documented undefined C behavior with the runtime's two's-complement result.
+- Batch 10 fixed **XM-C1** through **XM-C4** and **XM-R1** through
+  **XM-R3**. The conversion slice fixed **XM-C1**, **XM-C2**, and **XM-C3**:
+  `strtol`/`strtoul` now recognize `0x` only when a hexadecimal digit follows,
+  so bare/incomplete prefixes convert the leading zero and report the exact
+  endpoint without manufacturing `ERANGE`. The fixed single-byte execution
+  encoding now rejects nonzero `wchar_t` high bytes: `wctomb` writes nothing
+  and returns `-1`, while `wcstombs` returns `(size_t)-1` without storing a
+  truncated offending byte. The latter uses no static counter and preserves
+  the 16-bit `size_t` count model. Exec producers stage and accept the full
+  127-byte CP/M payload, reject a 128th byte with `E2BIG`, and omit CR only
+  when byte `00FFh` is payload. `execv` rejects empty or delimiter-containing
+  arguments with `EINVAL` while direct CP/M quote and backslash bytes remain
+  literal. Exec path construction accepts only an unambiguous CP/M 8.3 name
+  with an optional A: through P: prefix; default FCBs use startup's complete
+  byte-`<=20h` delimiter rule. Before replacing the caller's stack, the loader
+  uses BDOS function 35 to approve an exact record count and layout below the
+  16-byte stack gap, 36-byte FCB, and 44-byte exact-count trampoline.
+- Batch 11 fixed **EC-F2** through **EC-F10** and **EC-F13**.
+  `mktime()` now normalizes month/date/clock fields into a checked day/second
+  pair before applying the 1970 and signed-2038 range limits, never mutates a
+  rejected input, cannot accept a post-2106 modulo-2^32 wrap, and restores the
+  shared `gmtime`/`localtime` result after breaking down an unrelated caller
+  object. `time()` validates BDOS packed BCD and the CP/M-day cutoff before
+  constructing its signed `time_t`. `difftime()` detects signed subtraction
+  overflow and converts the exact unsigned magnitude before applying the
+  result sign.
+  `asctime()` validates every table index and numeric field before directly
+  emitting its fixed 26-byte layout, so invalid inputs leave the static buffer
+  untouched. The direct layout also resolves **EC-F13** without retaining
+  `sprintf()`. `atof`/`strtod` now combine large explicit exponents with
+  fractional and skipped-integer digit counts before applying float-range
+  bounds, preserving large exact cancellations. `strtod` sets `ERANGE` only
+  for numeric overflow/underflow, not explicit infinity/NaN or exact zero.
+  `atoi`/`atol` skip all C89 whitespace bytes without retaining unrelated
+  conversion blocks. `strftime()` is a bounded fixed-C-locale formatter
+  covering every C89 conversion available from `struct tm`, plus the
+  documented `%C` century extension. It rejects malformed formats and invalid
+  fields deterministically, preserves NUL termination at every positive bound,
+  and remains a self-contained `dccrtlstrip` block that does not retain the
+  calendar core or `mktime`.
+  Final review leaves the strftime-only replacement at 968 exact bytes, only
+  five bytes above the prior 963-byte integration while adding `%C`; the
+  original supplied implementation cost 1,042 bytes. The full runtime grows by
+  1,191 exact bytes: calendar/time +98, conversion/errno +125, and strftime
+  +968. Isolated and combined RTLMIN probes are exactly additive, confirming
+  that strftime does not acquire calendar-core ownership.
+
+**Overall repair status: 11/11 batches complete.** The remaining limitations
+are deliberate target or measured-size decisions, not unintegrated audit work:
+
+- **PF-F11** remains deferred because defensive NULL `%s` handling would add
+  cost to every valid `%s` call.
+- Subnormal multiply/divide/square-root work from **FC-F2** remains open because
+  the correct designs measured so far add too much linked code for the target.
+- **FI-1** remains excluded because an 8 MiB CP/M file is outside this target's
+  practical media limits. **FI-9** remains limited by the absence of a universal
+  CP/M 2.2 metadata-flush service.
+- `freopen` cannot preserve the numeric identity of
+  `stdin`/`stdout`/`stderr` without replacing the runtime's numeric `FILE *`
+  ABI.
+- Calendar time remains a signed 32-bit, timezone-free model: `time()` depends
+  on optional BDOS function 105, the representable range ends at
+  2038-01-19 03:14:07, and `strftime()` deliberately uses only the fixed C
+  locale with an empty `%Z`.
+- DCC has no distinct `double`; `atof`, `strtod`, and `difftime` therefore use
+  the target's single-precision `float`.
+
+The completed 11/11 state passes both strict full+extended suites: 410
+applications found, 400 passed, 10 intentionally skipped, and zero failed in
+both stack-check and no-stack modes. Runtime coverage reconciles all 408 public
+labels and all 196 standard app-callable APIs.
+
+## Scope & method
+
+- Target: `DCCRTL.MAC` (24,092 lines, 407 public labels), the single
+  hand-maintained Z80/CP-M-80 C runtime for `dcc`. Per-app `RTLMIN.MAC` is
+  generated by `dccrtlstrip` at link time and was out of scope (never
+  hand-edited).
+- The file was partitioned into 13 functionally-coherent, non-overlapping
+  sections and each was reviewed independently, in parallel, **read-only**, by
+  a `gpt-5.6-sol` sub-agent with full context on the runtime ABI, the
+  `dccrtlstrip` public-label block-splitting mechanism, and the three prior
+  runtime audit docs (`archive/c-runtime-optimisations-bug-fixes.md`,
+  `archive/runtime-performance-optimisation.md`,
+  `archive/runtime-memory-optimisations.md`), so as not to re-report
+  already-fixed or already-documented/deferred issues.
+- Every finding below is attributed to its section and carries the
+  sub-agent's confidence rating. Several of the most severe findings were
+  independently spot-verified by the orchestrating session against the actual
+  current source (see the subnormal-add trace under finding **FC-F2**).
+- No file, other than this report, was modified. No build or regression run
+  was performed as part of this audit; **every fix arising from this backlog
+  must still pass the project's normal gate**: the full regression suite
+  bit-exact against `tests/baselines/*.txt` in both `peep` and `nopeep` modes,
+  and, for optimisations, a measured `ntvcm -p` cycle count plus size
+  comparison before/after (line/instruction count alone does not prove a
+  win).
+
+## Baseline tooling check (run before the section audits)
+
+- `python3 scripts/rtl-iy-safety.py` → **PASS**. IY references remain confined
+  to the three audited paths (`__extln`, `_setjmp`/`_longjmp`).
+- `python3 scripts/audit-runtime-coverage.py` → **FAIL (exit 1)**. 17 public
+  labels are "UNEXPECTED (unaccounted)": `_dcc_nan` (a data symbol, line
+  13176) and 16 real formatted-I/O label variants that the script's static
+  `FMT_PUBLIC`/`FMT_FUNCS` lists don't know about: the float-only ("fio")
+  variants `_fpfio,_snfio,_spfio,_vffio,_vnfio,_vpfio,_vsfio` and the
+  float+long ("lio") variants `_fplio,_snlio,_splio,_vflio,_vnlio,_vplio,_vslio`
+  for `sprintf/fprintf/vprintf/vsprintf/vfprintf/snprintf/vsnprintf`, plus the
+  long-only `_snlng`/`_vnlng` for `snprintf`/`vsnprintf`. **This is a tooling
+  gap** (the script drifted out of sync as the runtime grew these variants),
+  not proof of a runtime bug — but see the "Coverage of the 16 tooling-gap
+  labels" note under **Section 5** below: the printf-engine section agent
+  additionally determined that 5 of these 16 labels
+  (`_vpfio,_vsfio,_vffio,_vnfio,_vnlng`) appear **untested** by the default
+  Linux `runall.ps1`/`ma.sh` path because it never emits the negative
+  `-fno-*io` flags that would exercise them, so this is not purely cosmetic.
+  Recommended fix: update `scripts/audit-runtime-coverage.py`'s label lists to
+  include all current variants (restores the guardrail), and separately
+  decide whether the 5 untested labels need dedicated test coverage.
+
+---
+
+## READ THIS FIRST — highest-severity findings across the whole runtime
+
+These are the items with the most severe, concrete, verified impact,
+independent of which section found them. Full detail, exact lines, and
+suggested direction for each are in the per-section lists below (find them by
+their bold tag, e.g. **FC-F2**, **PF-F1**).
+
+1. **[Float core] Subnormal float arithmetic is catastrophically broken**
+   across add/mul/div/scale/sqrt. `1.4e-45f + 1.4e-45f` (the two smallest
+   positive subnormals) returns `1.6e32f` (raw `0x75000000`) instead of
+   `2.8e-45f` — independently re-traced and confirmed by this session (see
+   **FC-F2**). Any program that produces or consumes subnormal floats gets
+   silently, wildly wrong answers.
+2. **[scanf] `sc_get_file` clobbers register B, breaking ALL literal-character
+   matching** in `fscanf`/`scanf` reading from a file or console — e.g.
+   `fscanf(fp,"A=%d",&v)` fails to match the literal `"A="`. This is in the
+   very recently, fully-rewritten scanf core (see **SJ-F1**).
+3. **[printf] `%f` field-width staging double-counts the emitted length**,
+   corrupting the byte count passed to `_write` for non-console `fprintf` —
+   real files get writes of garbage/OOB bytes (see **PF-F1**).
+4. **[printf] The `%f` width scratch buffer (32 bytes) overflows for legal
+   precisions ≥ 30**, corrupting adjacent formatter state (see **PF-F2**), and
+   **[printf] non-console `fprintf`/`vfprintf` use an unbounded 256-byte
+   static buffer** that overflows for any output ≥ 256 characters (see **PF-F3**).
+5. **[ctype/stdio] `_fseek` discards `_lseek`'s actual result**, so most
+   `fseek` failures are reported as success, and out-of-range `FILE*` values
+   can write out of bounds into the `__fdeof` array (see **CT-F1**).
+6. **[console I/O] `argv` overflows with ≥ 17 command-tail arguments**
+   (corrupts `argv`/`__argbuf`) and is missing the required `argv[argc]=NULL`
+   at exactly 16 (see **CI-1**).
+7. **[Exit/calendar] `_strftime`'s `public` declaration and its function body
+   sit in two different `dccrtlstrip` blocks** — any program that calls only
+   `strftime()` (not `mktime()`) silently loses the body and fails to link
+   (see **EC-F1**). This is exactly the class of stripper-boundary regression
+   the review was asked to watch for.
+8. **[Heap] `realloc` has a lost-carry bug on large top-of-heap growth**
+   (e.g. growing to within 2 bytes of the 64K wrap) that corrupts `__brk` and
+   accepts an impossible request instead of failing (see **SH-F1**).
+9. **[Sort] `qsort`'s inner-loop backward walk can underflow a pointer**,
+   feeding an invalid address to the user comparator and corrupting memory
+   for certain size/count combinations (see **SS-C1**).
+10. **[File I/O] `__rdsz` drops the FCB's third record-count byte**, so files
+    ≥ 8 MiB report length 0 and mis-seek/append (see **FI-1**); **fd validation
+    only checks the low byte of a 16-bit `int`**, so e.g. fd `0x0100` aliases
+    stdin and `_close` doesn't verify the slot is even open (see **FI-2**).
+11. **[ungetc/pushback — found from 3 angles]** `_ungetc` doesn't check for an
+    already-pending pushback byte (a second `ungetc` silently destroys the
+    first), never clears EOF on success, and pushback state outlives
+    `close`/`fseek`/descriptor reuse; several read paths (console `fgets`,
+    `gets`, real-file `fread`) don't honor pending pushback at all, and the
+    scanner's own separate pushback isn't visible to stream-level pushback
+    either (see **CI-2..CI-5**, **CT-F3..CT-F4**, **SJ-F3**).
+12. **[Math] `powf`'s C99 special-value handling is extensively wrong**:
+    negative base with a non-integer exponent should be NaN but returns 0;
+    several NaN-table holes; sign of `±0` results lost; infinite exponents
+    misclassified for negative bases (see **MT-F2..MT-F5**). **`tanf` returns 0
+    at the rounded float π/2** instead of the correct huge value due to
+    catastrophic-cancellation range reduction (see **MT-F6**).
+13. **[exec] Multiple unbounded-copy buffer overflows** in the command-tail
+    and path-construction helpers used by `exec`/`execv` (see **XM-C4**,
+    **XM-R1**, **XM-R2**).
+14. **[File I/O] `_open`'s `O_CREAT`/`O_TRUNC` low-level semantics are
+    inverted/wrong**, and `_rename` doesn't enforce its documented
+    wildcard-rejection or cross-drive (`EXDEV`) contract (see **FI-4**, **FI-10**).
+15. **[stdio] `_fwrite` turns a write failure into either a huge (`0xffff`)
+    or falsely-successful item count** (see **CT-F2**), and **`_mktime`
+    accepts wrapped, unrepresentable post-2106 dates** instead of returning
+    `-1` (see **EC-F2**).
+
+---
+
+## Section 1 — Startup + heap allocator + memory lifecycle
+
+`DCCRTL.MAC:1-170` (`start:`) and `:9487-10184` (`_malloc/_calloc/_free/__real/__frcoal/__mlh/__lmd`).
+
+**Checked correct, not re-reported:** the startup SP/heap-limit wraparound
+check (lines ~64-74) is already wrap-safe; the BSS-zero loop is correct for
+lengths 0/1/large; calloc overflow-checking, realloc free-path coalescing,
+boundary-tag coalescing, in-place shrink/growth and `__brk` trimming are
+already fixed per `archive/runtime-memory-optimisations.md` /
+`archive/c-runtime-optimisations-bug-fixes.md`; the documented `0xffff`
+odd-size round-to-zero realloc defect is fixed (lines 9605-9610; **SH-F1**
+below is a distinct even-size bug); no routine here touches IY.
+
+### Correctness
+
+- **SH-F1 — Lost carry corrupts heap during large top-block `realloc`.**
+  `DCCRTL.MAC:9759-9764` (`rl_try_grow_top` in `__real`), corruption committed
+  at 9773-9783. Confidence: high. The carry from `old_ptr + new_size` is
+  overwritten by a following `add hl,FTRSIZE` before it's tested. For
+  `realloc(p, 0xfffe)`: `p+0xfffe` wraps to `p-2` (sets carry), then `+2`
+  (footer size) produces `p` with carry now clear — the wrap is missed, growth
+  is wrongly accepted, `__brk` moves backward to `p`, and the footer address
+  wraps onto the header, corrupting heap state while still returning
+  non-NULL. **Fix direction:** test carry immediately after both additions
+  (as the sibling `mh_extend` path does), before comparing against
+  `__hlimit`; keep `rl_do_alloc` as the fallback. Add a focused
+  `realloc(p,65534U)` regression checking NULL-or-unchanged-old-contents plus
+  subsequent allocator integrity.
+
+### Optimisation
+
+- **SH-F2 — `_malloc`/`_free` can tail-transfer instead of call+return.**
+  `DCCRTL.MAC:9500-9504` / `9839-9843`. Confidence: high. Both wrappers
+  restore the return address before `call helper; ret`; replacing with a tail
+  `jp`/`jr` lets the helper's own `ret` return directly to the C caller.
+  `dccrtlstrip` reachability is unaffected (it recognizes JP/JR references).
+  **Measure:** `ntvcm -p` on alloc/free-heavy loops, peep+nopeep, plus final
+  `.COM` size.
+- **SH-F3 — `calloc` has an avoidable IX frame and two impossible-to-hit count
+  branches.** `DCCRTL.MAC:9539-9577`. Confidence: high. After a non-NULL
+  `__mlh` return, `__ml_need` is always even and ≥ 2 (9970-9982), so the
+  zero-count and count-one checks (9557-9565) can never fire; args can be read
+  directly off the incoming stack, skipping the IX setup/epilogues entirely
+  while naturally preserving the caller's IX. **Measure:** `ntvcm -p` for
+  success/zero-product/overflow/failure paths; code size.
+- **SH-F4 — Avoidable static-memory spills in realloc/malloc walks.**
+  `DCCRTL.MAC:9652-9688`, `10010-10155`. Confidence: high. `__rl_hdr` is
+  stored then immediately reloaded across instructions that don't touch HL
+  (shrink and top-growth paths); `__rl_thdr` is reloaded at 9688 while HL
+  still holds it; every visited free block writes `__ml_usiz` even though the
+  too-small branch can reconstruct `user_size` from HL+DE already in hand.
+  **Measure:** `ntvcm -p` on free-list-scan/shrink/top-growth cases; malloc
+  block and final `.COM` size.
+- **SH-F5 — Realloc can't exploit a smaller free predecessor plus the current
+  block.** `DCCRTL.MAC:9704-9797`. Confidence: medium. Growth only absorbs a
+  *following* free block; a predecessor-plus-current combined extent large
+  enough to satisfy the request is not tried, so a realloc that could succeed
+  by shifting the block down instead fails or falls back to a slower path.
+  **Fix direction:** after in-place paths fail, inspect the predecessor
+  footer and, if the combined extent suffices, copy the data down and
+  restamp. **Measure:** `ntvcm -p`, peak `__brk`, and near-limit success rate
+  for this shape vs. normal realloc paths; code-size cost of `__real` growth.
+
+---
+
+## Section 2 — Low-level console/keyboard/BDOS/BIOS I/O + stream setup
+
+`DCCRTL.MAC:171-1206`: `__build_argv`, `__conout`, `__pchr`/`__fpc`,
+`_clearerr`, `_setbuf`/`_setvbuf`, `_strerror`, `__putc`/`__fgetc`/`__getc`,
+`_ungetc`, `_remove`, `__gchr`/`__kbht`/`__gtch`, `_bdos`/`_bdoshl`,
+`_bios`/`_bioshl`, `_inp`/`_outp`.
+
+**Checked correct, not re-reported:** `_clearerr`/`ferror` fixes and the
+deliberate read-side EOF/error ambiguity are already documented and fixed
+(`archive/runtime-memory-optimisations.md:39-60`); real-file `setvbuf`
+no-op behavior and the shared stdout/stderr console buffer are intentional,
+documented behavior; `_remove`'s alias to `_unlink` (incl. wildcard deletion)
+is a documented CP/M deviation, not a bug; the BDOS-fn-6 pending-byte design
+in `__kbht`/`__gtch` (including its NUL limitation) is deliberate and
+documented; `_strerror` covers every errno the runtime actually generates
+plus `EDOM`/`ERANGE` — omitted messages for other declared-but-unused errno
+constants is not treated as a defect; no routine here touches IY.
+
+### Correctness
+
+- **CI-1 — fixed in Batch 9.** `argv` now reserves 66 16-bit entries (64
+  maximum tail arguments, `argv[0]`, and NULL), and `__build_argv` explicitly
+  writes the terminator for empty through maximum-capacity tails. Length bytes
+  above CP/M's valid 127-byte maximum are deterministically clamped to 127.
+  Startup rejects unsigned `__hstart < __bsse` before heap-limit acceptance,
+  so the compiler's `__bsse+260` scratch expression cannot wrap to a falsely
+  acceptable low heap start.
+- **CI-2 — A second successful `ungetc` destroys the first pending byte.**
+  `DCCRTL.MAC:807-846` (`_ungetc`). Confidence: high. `_ungetc` never checks
+  `__ugv[fd]` before overwriting `__ugc[fd]`; two successive successful
+  `ungetc` calls silently lose the first byte instead of the second call
+  failing. **Fix direction:** check the valid flag first; return `EOF` without
+  modifying existing state when already occupied.
+- **CI-3 — Successful `ungetc` does not clear EOF.** `DCCRTL.MAC:768-786`
+  (`__fgetc` sets `__fdeof`), `:829-841` (`_ungetc` doesn't clear it).
+  Confidence: high. After reading EOF then successfully pushing a byte back,
+  `feof()` remains true; worse, `fgets` (`:10450-10459`) rejects the stream
+  before even checking pushback. **Fix direction:** clear the slot's
+  `__fdeof` on a successful real-stream pushback.
+- **CI-4 — Pushback survives seek and descriptor reuse.**
+  `DCCRTL.MAC:793-796` (`__ugv`/`__ugc`). Confidence: high. Nothing clears
+  these arrays on close/reopen or successful `fseek` (`:11629-11640`), so a
+  stale pushed-back byte can resurface on an unrelated later stream that
+  reuses the same fd slot, or survive a seek that must discard it. **Fix
+  direction:** clear the slot on descriptor allocation/close and on
+  successful `fseek`/`rewind`/`freopen`; consider moving pushback state to its
+  own block to avoid new `dccrtlstrip` coupling.
+- **CI-5 — Several read paths don't honor pending pushback at all.**
+  `DCCRTL.MAC:793-846`, console `fgets` path `:10566-10584`, `_fread`
+  `:11439-11447`. Confidence: high. `ungetc` on stdin bypasses console
+  `fgets`/`gets` entirely (they call BDOS directly); `fgetc`→`ungetc`→`fread`
+  skips the pushed byte and returns the *next* one instead; a pushed-back
+  `0x1A` is treated by real-file `fgets` as physical EOF. **Fix direction:**
+  centralize pushback consumption in one shared stream-read helper used by
+  every read entry point. *(Independently confirmed/refined from the
+  ctype/stdio section — see CT-F3.)*
+- **CI-6 — fixed in Batch 9.** `_setvbuf` rejects a nonzero high byte before
+  dispatching the low-byte `_IOFBF`/`_IOLBF`/`_IONBF` modes; rejected aliases
+  return `-1` with `EINVAL`.
+- **CI-7 — fixed compatibly in Batch 9.** Existing two-argument
+  `bios()`/`bioshl()` source, function-pointer, and linked stack ABIs are
+  unchanged. New `biosreg(fn,bcarg,dearg)` independently loads BC and DE,
+  dispatches through the BIOS table, and returns HL for practical SECTRAN and
+  CP/M 3 SELDSK-class forms.
+- **CI-8 — fixed in Batch 9.** Both parser states now recognize space and tab
+  delimiters, including leading and repeated mixtures.
+- **CI-9 — fixed in Batch 9.** `_strerror` rejects any nonzero high byte before
+  entering its compact low-byte dispatch. Supported positive errno values keep
+  their existing messages; wide and negative aliases return the existing
+  deterministic `"Error"` fallback.
+
+### Optimisation
+
+- **CI-10 — Redundant register saves in the hottest `__conout` path.**
+  `DCCRTL.MAC:283-311`. Confidence: high. `__conout` pushes/pops `BC/DE/HL`
+  even though the callees it uses (`__cob_put`, `__cflush`) already preserve
+  them; ~6 bytes / 63 T-states removable per character — and `__conout` is in
+  every program's always-present baseline. **Measure:** `ntvcm -p` on fixed
+  buffered-output workloads; linked `.COM` size.
+- **CI-11 — Empty `__cflush` needlessly rewrites an already-zero count.**
+  `DCCRTL.MAC:349-405`. Confidence: high. **Measure:** `ntvcm -p` for
+  repeated empty flushes; linked size.
+- **CI-12 — Pushback data placement drags file-I/O into `getchar`-only
+  programs.** `DCCRTL.MAC:708-869`. Confidence: high. `__ugv`/`__ugc` are
+  private to the `__fgetc` public block, so `__gchr` (used by plain
+  `getchar`) retains all of `__fgetc`, which calls `_read` and pulls in the
+  whole file-I/O core. **Fix direction:** split pushback state into its own
+  small public block (`dccrtlstrip`-boundary change — verify reachability).
+  **Measure:** `getchar`-only `.COM` size; `ntvcm -p` unaffected.
+- **CI-13 — BIOS dispatch table-offset math is wider than it needs to be.**
+  `DCCRTL.MAC:1132-1139`. Confidence: high. Documented BIOS functions fit in
+  8 bits; an 8-bit `3*fn` computation replaces the current 16-bit HL/BC
+  sequence (~25 T-states / 3 bytes saved). **Measure:** tight BIOS-status-loop
+  `ntvcm -p`; code size.
+- **CI-14 — Expensive 3-word stack discard after 1-byte file I/O.**
+  `DCCRTL.MAC:462-467`, `748-752` (`__fpc`, `__fgetc`). Confidence: high.
+  `ex de,hl` + `HL=6;add hl,sp;ld sp,hl` can be three `pop de` (smaller,
+  faster, and legal since `DE` is caller-saved). **Measure:** cached
+  per-character file read/write `ntvcm -p`; linked size.
+
+---
+
+## Section 3 — `string.h`/`mem*` primitives + integer multiply/divide core
+
+`DCCRTL.MAC:1207-2708`: `__slen`..`__mset` (strlen/strcpy/strcmp/strcat/
+strspn/strdup/memcpy/memmove/memset/memcmp family) plus
+`__mulu`/`__udivmod`/`__divu`/`__modu`/`__divs`/`__mods`/`__sdivmod`.
+
+**Checked correct, not re-reported:** `memmove` overlap-direction (`LDDR`
+backward path), bounded division, the `__mulu` small-operand path, and
+`strcspn`/`strspn` counter removal are already fixed
+(`archive/c-runtime-optimisations-bug-fixes.md:86-115`); `memchr`'s `CPIR`
+optimisation is already applied (`archive/runtime-performance-optimisation.md:229-240`);
+static-scratch/cache non-reentrancy is an accepted, documented model-wide
+limitation, not a new finding; overlap direction, zero-length ops, string
+termination, `strdup` allocation-failure propagation, `INT_MIN` sign
+correction, zero remainders, stack balance and IY preservation were all
+individually verified correct. **No defined-input correctness defect was
+found in this section** beyond the divide-by-zero sentinel inconsistency
+below.
+
+### Robustness
+
+- **SM-F2 — accepted in Batch 9.** Signed 16-bit standalone and fused paths
+  detect zero before negative-dividend normalization, preserving the same
+  `0xffff` quotient and original-dividend remainder used by unsigned helpers.
+  C still leaves division by zero undefined.
+
+### Optimisation
+
+- **SM-F1 — Fastcall entry blocks retain unreachable general-call
+  prologues.** `DCCRTL.MAC:1239-2276` (`__scf`,`__icf`,`__rcf`,`__chf`,
+  `__ssf`,`__mhf`,`__cmpf`,`__mcf`,`__msf`). Confidence: high. Each fastcall
+  block jumps into a private core inside the *following* general-call public
+  block, so `dccrtlstrip` also retains that general-call prologue even though
+  it's unreachable from the fastcall entry (direct calls use the fast
+  entries — see `dcc_ast_gen_expr.c:4385-4659`). **Fix direction:** reorder
+  like `__slen`/`__slf` (general entry first, explicit jump into a following
+  fast/core block) — this is a `public`-block-order change; verify
+  `dccrtlstrip` reachability and function-pointer call sites. **Measure:**
+  `ntvcm -p` for direct and function-pointer calls; per-symbol retained size.
+- **SM-F3 — `strncpy` padding uses a scalar loop instead of `LDIR` off the
+  already-copied NUL.** `DCCRTL.MAC:1975-1984`. Confidence: high. Also a dead
+  `xor a` (overwritten before use). **Fix direction:** after guarding
+  `BC==0`, set `HL=DE-1` and `LDIR` the existing NUL through the remaining
+  destination. **Measure:** `ntvcm -p` for zero/one-byte/long padding; size.
+- **SM-F4 — Branchless sign-extension is available for 4 comparison
+  tails.** `DCCRTL.MAC:1300-2085` (`__scmp`,`__sicm`,`__ncmp`,`__mcmp`).
+  Confidence: high. `sbc a,a / ld h,a` replaces a branchy `ld h,0 / ret nc /
+  ld h,0ffh`, preserving the exact -255..255 result. **Measure:** `ntvcm -p`
+  both mismatch orderings; block sizes.
+- **SM-F5 — `strxfrm` scans the copied prefix twice.** `DCCRTL.MAC:1730-1762`.
+  Confidence: medium. For `n>0` it fully scans `s2` for length, then rescans
+  the copied prefix. **Fix direction:** single walk, copying while capacity
+  remains then continuing a length-only scan. **Measure:** `ntvcm -p` for
+  n=0/truncation/exact-fit/excess; code/data size.
+- **SM-F6 — Set-membership scans (`strcspn`/`strpbrk`/`strspn`) reload the
+  invariant source byte every inner iteration.** `DCCRTL.MAC:1774-1880`.
+  Confidence: high. **Fix direction:** cache the outer source char once in
+  `C`; keep an explicit empty-set fast path. **Measure:** `ntvcm -p` across
+  set lengths 0/1/many; block sizes.
+- **SM-F7 — Ten signed-negation sites use a costlier idiom than the one
+  already used elsewhere.** `DCCRTL.MAC:2551-2702` (`__divs`,`__mods`,
+  `__sdivmod`). Confidence: high. `sbc a,a / sub h` (already used in `_abs`)
+  is cheaper than `ld a,0 / sbc a,h`. **Measure:** `ntvcm -p` all sign
+  combinations incl. `INT_MIN`/exact-zero remainder; block size.
+- **SM-F8 — Fused-divmod's 9-byte result cache lives inside `__udivmod`'s
+  block, so direct fused-only callers retain it unused.** `DCCRTL.MAC:2353-2428`.
+  Confidence: high. **Fix direction:** move the cache to a dedicated block
+  referenced only by `__divu`/`__modu` (new public-block boundary). **Measure:**
+  unchanged `ntvcm -p` after the move; fused-only `.COM` size; separately,
+  profile whether the cache is still worthwhile now that compiler fusion
+  catches proven pairs.
+
+---
+
+## Section 4 — Sort/search/abs/div + compiler codegen frame stubs
+
+`DCCRTL.MAC:2709-3725`: `_abs`,`_labs`,`_div`,`_ldiv`,`_bsearch`,`_qsort`,
+`__r1u/__r1s/__r1p/__q1p/__q2u/__r2u/__q2s/__r2s`, and the **extremely
+hot** compiler codegen stubs `__en0/__entr/__lve/__la1-3/__lv1-8/__sv1-6/
+__phix/__ldwl/__wand/__icmp/__sxde/__sxhl` used in essentially every
+generated function's prologue/epilogue/load/store sequences.
+
+**Checked correct, not re-reported:** `qsort`/`bsearch` non-reentrancy is
+explicitly accepted (`archive/runtime-memory-optimisations.md:240-243`);
+`abs(INT_MIN)`/`labs(LONG_MIN)` signed-division semantics are documented
+(`archive/c-runtime-optimisations-bug-fixes.md:216-220`); the bounded `D16U`
+fallback and qsort's alternate-AF swap are already-documented optimisations;
+`_ldiv` already avoids a second division via `__ldv_rem_*` reuse; the
+6-character external-name limitation on default `_bsearch` naming is a known
+toolchain limitation.
+
+### Correctness
+
+- **SS-C1 — `qsort`'s backward walk can underflow a pointer, corrupting
+  memory via the user comparator.** `DCCRTL.MAC:3061-3076` (`qs_inner`).
+  Confidence: high. `pj-gapb` can wrap below the array base, but the carry
+  is discarded before the `pprev<base` test. Example: `base=0x1000, size=2,
+  num=4098` — after a swap at `pj=0x2002`, the next `pj=0x1000`; subtracting
+  `gapb=0x1002` yields `0xFFFE` *with carry*, which the unsigned compare
+  then treats as `>= base`, so the comparator is invoked on an invalid
+  pointer and the subsequent swap can corrupt memory. **Fix direction:**
+  branch to `qs_idone` on carry immediately after `sbc hl,de` (this also
+  makes a later `or a` redundant), or restore integer `j`-index tracking.
+  Add a low-address/large-gap regression.
+- **SS-C2 — `bsearch`'s declared return type doesn't match the C standard.**
+  `stdlib.h:69` vs. `DCCRTL.MAC:2884`. Confidence: high. C requires `void
+  *bsearch(...)`; the header declares `const void *`, which rejects/warns on
+  valid assignment to a writable element pointer (the ABI itself is fine —
+  HL already returns the raw pointer). **Fix direction:** change the header
+  declaration/doc to `void *`; no runtime change needed.
+
+### Optimisation
+
+*(These stubs are the hottest code in the runtime — even a 1-cycle change
+multiplies across nearly every call/return in every program.)*
+
+- **SS-O1 — `__en0` can `pop hl` directly instead of `pop de`+`ex de,hl`.**
+  `DCCRTL.MAC:3524-3530`. Confidence: high. DE's incoming value is discarded
+  and DE is caller-saved. Saves 1 byte / 4 T-states on **every** `__en0`
+  entry. **Measure:** linked size and `ntvcm -p` on call-heavy programs.
+- **SS-O2 — `_div` should call the already-fused `__sdivmod` once instead of
+  `__divs` then `__mods`.** `DCCRTL.MAC:2767-2795`. Confidence: high. Removes
+  reload/sign-wrapper/cache-check overhead and lets `dccrtlstrip` drop
+  `__divs`/`__mods` when otherwise unused. **Measure:** `_div`-only linked
+  size; division microbenchmark cycles.
+- **SS-O3 — The frame-stub peephole rewrite pass can *increase* output size
+  at current thresholds.** `DCCRTL.MAC:3519-3554`;
+  `src/dccpeep/peep_pass_stubs.c:37-123`. Confidence: high. Measured cases
+  show some rewrites growing a function by up to 9 bytes and adding ~45
+  T-states per invocation without accounting for the one-time helper-body
+  cost. **Fix direction:** count local/no-local functions first and apply a
+  whole-program cost model including the shared `__lve`. **Measure:** exact
+  linked bytes and `ntvcm -p` for synthetic 1-3-framed-function programs.
+- **SS-O4 — `__q2u` carries an unneeded call/return layer; making it an
+  alias immediately before `D16U` would remove it entirely.**
+  `DCCRTL.MAC:3356-3412`. Confidence: high. `call D16U/ret` → `jp D16U` saves
+  1 byte/17 T-states per quotient; the full alias form **moves a public
+  entry label** and needs `dccrtlstrip` re-validation. **Measure:** constant
+  unsigned-division loops; linked size.
+- **SS-O5 — `_ldiv` reloads and re-walks its result pointer unnecessarily.**
+  `DCCRTL.MAC:2822-2865`. Confidence: high. BC already equals `result+3`
+  after storing the quotient and is untouched by the remainder-sign fixup;
+  the reload+4×`inc` can become one `inc bc`. Saves ~9 bytes/56 T-states per
+  call. **Measure:** `_ldiv` linked size; `tstdlib` cycles.
+- **SS-O6 — `__r1s` redundantly saves/restores BC that it never modifies**
+  (the callee `__r1u` already saves/restores it). `DCCRTL.MAC:3229-3248`.
+  Confidence: high. **Measure:** negative-modulo-constant microbenchmark;
+  linked size.
+- **SS-O7 — Three peephole-stub rewrite thresholds (`__ldwl`,`__sxde`,
+  `__sxhl`) permit zero-net-size rewrites that still cost cycles per site.**
+  `src/dccpeep/peep_pass_stubs.c:353-480`; `DCCRTL.MAC:3668-3724`. Confidence:
+  high. **Fix direction:** raise the minimum-site thresholds (suggested 6/4/6
+  respectively) unless whole-program analysis proves the helper is already
+  included. **Measure:** exact-threshold synthetic cases; linked bytes and
+  cycles.
+- **SS-O8 — A cheaper terminal 16-bit negation idiom (already used
+  elsewhere in `__q1p`) is reusable in 3 more places.** `__r1s`, `__q2s`,
+  `__r2s` (`DCCRTL.MAC:3237-3506`). Confidence: medium. `sbc a,a/sub h` saves
+  1 byte/3 T-states per negation where outgoing carry is dead. **Measure:**
+  signed constant divide/modulo cycles, size, both regression modes.
+
+---
+
+## Section 5 — `printf` engine, all variants
+
+`DCCRTL.MAC:3726-5641` (engine core `_printf`/`__pf_run`/`pf_*`, `__pf32h`,
+the float/long/float+long variant families and their many sibling labels)
+and `:10684-11049` (`_sprintf`/`_snprintf`/`_fprintf`/`v*` family/`_puts`).
+This is the largest, most complex section (~2900 lines); the sub-agent
+prioritized the shared engine core and float/long dispatch over the thin
+wrappers and reported no sub-range as only-skimmed.
+
+**Checked correct, not re-reported:** `pf_div10`, `pf_build_u`,
+`pf_divu32_10` are already-fixed prior optimisations
+(`archive/c-runtime-optimisations-bug-fixes.md:65-84`); the unsupported
+`+`/space/`#`/`*`-width/`%e`/`%g`/`%p`/`%n` surface and `%lo` are documented
+known-absent features, not defects (**PF-F7** below is specifically about
+unsafe *cursor desynchronization* from the missing space-flag no-op, which
+is a new, distinct issue from "space isn't implemented"); precision ≥ 10
+float-rounding limitation is explicitly already flagged in-file
+(`DCCRTL.MAC:4954-4956`); `INT_MIN`/`LONG_MIN`, unsigned decimal/hex/octal,
+normal va-list offsets, `snprintf` n=0/1 capping, IX/IY preservation and
+stack balance in the supported paths were all verified correct.
+
+**Coverage of the 16 tooling-gap labels** (see the baseline check above):
+the intent is full coverage via `tests/tpfio.c`, `tests/tplng.c`,
+`tests/tpflio.c` plus `tests/_test_overrides.json`, but `scripts/runall.sh`
+never translates a `false` override into an explicit `-fno-*io` flag, and a
+non-literal format conservatively resolves to the combined "lio" path — so
+under the default Linux `runall.ps1` path, **`_vpfio`, `_vsfio`, `_vffio`,
+`_vnfio`, `_vnlng` appear untested** (the other 11 of the 16 do appear
+exercised); a runner that emits explicit negative flags (e.g.
+`runall-x64os.ps1`) does exercise all 16.
+
+### Correctness
+
+- **PF-F1 — `%f` field-width output is counted twice.** `pf_emit_a`
+  (`:4341-4387`), `pf_f`/`pf_f_done` (`:4870-5168`). Confidence: high.
+  Scratch-buffer emission increments the running char count, then padding
+  and the real replay increment it *again*. `sprintf(buf,"%5.1f",1.0f)`
+  returns `8` although `strlen(buf)==5`; for non-console `fprintf` this
+  inflated count is handed straight to `_write`, which then reads/writes
+  past the real text (including the NUL and stale bytes). **Fix direction:**
+  snapshot/restore the count around scratch generation, or use a staging
+  emitter that doesn't touch the logical output counter.
+- **PF-F2 — `%f` width scratch buffer (32 bytes, `pf_fwbuf`) overflows for
+  legal fixed precisions.** `:4870-5203`. Confidence: high. `%1.30f`
+  produces exactly 32 content bytes and writes its NUL one past the buffer
+  (over `pf_fl`); `%1.31f`+ overwrites live formatter state. **Fix
+  direction:** replace with a counted/two-pass design or a verified bound
+  check before writing — don't just enlarge the buffer without covering
+  max precision across the full float range.
+- **PF-F3 — Non-console `fprintf`/`vfprintf` format into a fixed 256-byte
+  static buffer (`__pf_fbuf`) with no bound.** `:4718`, `:10783-10996`.
+  Confidence: high. Exactly 256 formatted characters writes the NUL one
+  byte out of bounds; longer output overwrites adjacent data/code. **Fix
+  direction:** stream/chunk-flush to the file sink instead of formatting the
+  whole result into one fixed buffer.
+- **PF-F4 — `%ls` destroys the live character count.**
+  `pf_ls`/`pf_wstrlen_hl` (`:5257-5299`). Confidence: high.
+  `pf_wstrlen_hl` uses `C` as scratch without preserving the formatter's
+  live count register, so `sprintf(buf,"%ls",L"A")` returns `2` for a
+  1-byte result, and an empty wide string after other output can *reset*
+  the running count. Its 8-bit internal length also wraps past 255 chars.
+  **Fix direction:** preserve the live count register; track wide-string
+  length independently as 16-bit/saturating.
+- **PF-F5 — `%.Ns` scans past the permitted precision bound looking for a
+  NUL.** `pf_s`/`pf__slen_hl` (`:4134-4426`). Confidence: high. A
+  non-NUL-terminated N-byte buffer is a valid `"%.Ns"` argument, but the
+  implementation does a full `strlen` *before* clamping to precision,
+  reading beyond the valid object (even `"%.0s"` scans the whole string
+  before emitting nothing). **Fix direction:** when precision is present, do
+  a bounded scan of at most `pf_prec` bytes and use that directly.
+- **PF-F6 — `%f` on finite values ≥ 2³² formats incorrectly.**
+  `pf_f_rounded` (`:4996-5011`) via `__fful` (`:16781-16796`). Confidence:
+  high. The integer part routes through unsigned-32-bit `__fful`, which
+  saturates at exponent ≥159, so e.g. `4294967296.0f` begins from the
+  saturated `4294967295` and the fractional-part subtraction is likewise
+  wrong. **Fix direction:** extract the fixed-decimal integer part across
+  the full finite IEEE-single range rather than through `unsigned long`.
+- **PF-F7 — The unimplemented space flag desynchronizes the argument
+  cursor** (unlike `+`/`#`, which are deliberately consumed as no-ops).
+  `pf_pct_next` (`:3789-3830`); compiler mirror `dcc_asmname.c:280`.
+  Confidence: high. `printf("% d %d",1,2)` emits the literal `" d"` without
+  consuming the first argument, so the *second* conversion prints `1`
+  instead of `2`; `"% f"` also fails to select the float variant since the
+  compiler's format scanner likewise omits space. **Fix direction:** consume
+  space as a no-op flag in both the runtime dispatcher and the compiler's
+  format scanner.
+- **PF-F8 — `%li` and `%lf` silently fail to consume their argument.**
+  `pf_lng` (`:5240-5255`); selector `dcc_asmname.c:291-300`. Confidence:
+  high. `pf_lng` only handles `d,u,x,X,s`; `%li` falls through and leaves the
+  4-byte long unread (a later `%d` then consumes its low word instead);
+  `%lf` is selected as needing both long+float support, but the long hook
+  emits a literal `f` and never reads the float argument either. **Fix
+  direction:** alias `i`→`pf_ld`; re-dispatch `f` through the float hook
+  while preserving the advanced format pointer.
+- **PF-F9 — Width and precision accumulate and store as a single byte,
+  silently wrapping mod 256.** `:3845-3898`, `pf_width`/`pf_prec`
+  (`:4653-4662`). Confidence: high. `%256d` becomes width 0; `%.256s`
+  becomes explicit precision 0 (emits nothing); signed field-length
+  arithmetic can also wrap when precision 255 + sign = length 256. **Fix
+  direction:** use 16-bit width/precision/length counters, or explicitly
+  reject/saturate overflow.
+- **PF-F10 — `fprintf`/`vfprintf` ignore `_write`'s failure return.**
+  `:10805-10996`; failure source `:7271-7284`. Confidence: high. `_write`
+  returns `0xffff` on disk-full/bad-fd, but both wrappers discard it and
+  return the positive formatted count regardless, violating the documented
+  negative-on-error contract. **Fix direction:** propagate `_write`'s result;
+  return negative on failure with a consistent partial-write policy.
+- **PF-F11 — `%s` with a NULL pointer has no defensive handling.**
+  `pf_s`/`pf__slen_hl` (`:4134-4426`). Confidence: high. A NULL `%s`
+  argument scans from CP/M address zero, potentially emitting low-memory
+  contents; NULL is outside the strict NUL-terminated-string contract so
+  this is robustness rather than a conformance defect. **Fix direction:**
+  optionally special-case NULL to emit a fixed placeholder such as
+  `"(null)"`.
+
+### Optimisation
+
+- **PF-O1 — Two internal helpers end `call X / ret` and could tail-jump.**
+  `pf_zfd_print` (`:4092-4094`), `pf_print_u32` (`:4831-4834`). Confidence:
+  high. **Measure:** linked `.COM` size and `ntvcm -p` for integer/float
+  printf-family workloads, peep+nopeep.
+- **PF-O2 — `pf_hex_byte`/`pf_hex_nib` appear dead** (current hex builders
+  use `pf_hex_nib_char`; a repo-wide reference search found no other
+  callers). `:4575-4608`. Confidence: high. **Measure:** hex-using `.COM`
+  size before/after removal; confirm `ntvcm -p` cycles unchanged.
+
+---
+
+## Section 6 — Low-level fd-based file I/O + FCB/DMA/sector-cache core
+
+`DCCRTL.MAC:6663-8310`: `_open/_read/_write/_close/_unlink/_lseek/_fsync/
+_fdatasync`, `__chkfd/__advio/__rdhit/__zerdm/__mkfcb`, `_rename`,
+per-fd state arrays, `__fcbs`/`__dma`, and `_srand`/`_rand`.
+
+**Checked correct, not re-reported:** `_clearerr`/`ferror`/`__fderr`
+write-error tracking is already fixed
+(`archive/runtime-memory-optimisations.md:39-60`); the read-cache
+miss-invalidation and open/close/write invalidation fixes are already
+applied and the current cache-key logic is coherent
+(`archive/runtime-memory-optimisations.md:107-140`); record-rounded lengths,
+readable `0x1A` padding, trailing-`0x1A` append ambiguity, and non-atomic
+append are documented/deferred CP/M limitations
+(`docs/docs/en/10-system-and-cpm.md:97-128,235-243`); the accepted risk of
+unsupported-BDOS-fn-48 emulator termination was not duplicated (**FI-9**
+below only concerns implementations where fn 48 *does* return);
+`NFILES=8`/`UGC_MAX=11` and per-fd array dimensions are consistent;
+`_srand`/`_rand` correctly implement the documented 16-bit xorshift.
+
+### Correctness
+
+- **FI-1 — `__rdsz` drops the FCB's third record-count byte (R2), so
+  maximum-size files report length 0.** `:7730-7769`; callers `:6845-6854`.
+  Confidence: high. BDOS fn 35 returns a 3-byte record count; only R0/R1 are
+  read, R2 is forced to zero. At 65,536 records (8 MiB), the true count
+  `00 00 01` becomes length 0, so `SEEK_END` returns 0 and append-mode
+  positions at record 0 instead of EOF. **Fix direction:** fold all three
+  fn-35 bytes into a 32-bit byte length; check fn-35's failure status; add
+  reopen+`SEEK_END`/append boundary tests.
+- **FI-2 — fd validation checks only the low byte of a 16-bit `int`; `_close`
+  doesn't verify the slot is in use.** `_close` (`:6893-6942`), `_read`
+  (`:7011-7043`), `_write` (`:7127-7140`), `__chkfd`/`__chkfda` (`:7467-7478`).
+  Confidence: high. `0x0100` aliases stdin, `0x0103` aliases real fd 3, etc.;
+  `_close` also reaches BDOS fn 16 with a stale FCB for a closed/never-opened
+  slot. **Fix direction:** require the fd high byte to be zero before
+  console dispatch/slot arithmetic; have `_close` check `__fduse` and return
+  `EBADF` otherwise.
+- **FI-3 — `open()` access-mode flags (`O_RDONLY`/`O_WRONLY`/`O_RDWR`) are
+  parsed but never stored or enforced.** `opslot` (`:6732-6735`), `_open`
+  (`:6813-6822`), `_read`/`_write` (`:7042`,`:7139`). Confidence: high. A
+  descriptor opened `O_WRONLY` can still be `read()` and vice versa. **Fix
+  direction:** record access mode per slot and reject wrong-direction
+  operations with `EBADF`.
+- **FI-4 — `O_CREAT`/`O_TRUNC` low-level semantics are inverted/wrong.**
+  `opmake`/`opmake_new` (`:6818-6867`). Confidence: high. `O_CREAT` without
+  `O_TRUNC` always append-positions (should start at offset 0 for an
+  ordinary create); `O_TRUNC` without `O_CREAT` deletes-then-creates instead
+  of returning `ENOENT`; the delete status from fn 19 is ignored entirely,
+  so a failed delete can be followed by a fn-22 create CP/M treats as a
+  fatal "make existing file" error. **Fix direction:** separate stdio-append
+  from low-level `O_CREAT`; probe existence before truncating; require
+  successful deletion before create; invoke fn 22 only when creation is
+  actually permitted.
+- **FI-5 — A zero-length `write()` can still extend the tracked file
+  length.** `wrloop`/`wrfdone` (`:7154-7230`). Confidence: high.
+  `write(fd,buf,0)` after seeking past EOF skips the BDOS write but still
+  falls into the length-extending path, enlarging `__fdlen` (and later
+  `SEEK_END`/append behavior) without touching the actual file. **Fix
+  direction:** return 0 immediately for `count==0` before cache invalidation
+  and length update.
+- **FI-6 — Write errors lose partial progress, leave length stale, and
+  collapse all BDOS fn-34 statuses to `ENOSPC`.** `wrnospc` and related
+  (`:7175-7282`). Confidence: high. Any nonzero fn-34 status returns `-1`
+  even after earlier records succeeded (advanced offset not reflected in
+  length); distinct statuses (2=disk full, 5=dir full, 6=record out of
+  range, 8=locked, 9=invalid FCB, 10/11=media/verify error, 0xFF=hardware)
+  are all mapped to `ENOSPC`. **Fix direction:** on partial failure, extend
+  length for the bytes actually transferred and return that count when
+  nonzero; map error codes to distinct errno values (`EFBIG`, lock error,
+  `EIO`, etc.).
+- **FI-7 — Partial-write pre-read errors can zero-fill bytes that
+  shouldn't be touched.** `wrrd` (`:7182-7195`). Confidence: high. Any
+  nonzero fn-33 status triggers `__zerdm` (zero-fill), which is correct only
+  for the documented unwritten-hole codes (1/4); genuine range/FCB/media/
+  hardware errors (6,9,10,11,0xFF) instead get the untouched bytes replaced
+  with `0x1A`. **Fix direction:** zero-fill only for confirmed
+  unwritten-hole statuses; abort with `__fderr`/errno set for real I/O
+  failures.
+- **FI-8 — `lseek()` accepts negative/overflowing/unrepresentable
+  offsets.** `lsset/lscur/lsend` (`:7305-7407`), `__setrr` (`:7790-7847`).
+  Confidence: high. No sign/overflow/range check is applied; `__setrr` then
+  silently drops offset bit 31 forming the CP/M random-record bytes, so
+  e.g. `0x80000000` produces the *same* record bytes as offset 0 and can
+  redirect I/O to record 0. **Fix direction:** compute into scratch, reject
+  negative/overflowed/unrepresentable results with `EINVAL`/`EFBIG`, and
+  leave the old position unchanged on rejection.
+- **FI-9 — `fsync`/`fdatasync` report success without validating the fd or
+  correctly driving BDOS fn 48.** `:7420-7455`. Confidence: high. The fd
+  argument is never actually read (so invalid/closed fds "succeed"); the `E`
+  flag for fn 48 is left arbitrary; a hardware-error (`A=0xFF`) result is
+  ignored; dirty FCB/extent/allocation metadata isn't necessarily made
+  durable by fn 48 alone. **Fix direction:** validate the fd/slot fully, set
+  `E` explicitly, check the fn-48 status, and be honest about what durability
+  is actually achieved (or route through a safe close/reopen for metadata).
+- **FI-10 — `_rename` doesn't enforce its documented wildcard-rejection or
+  cross-drive semantics.** `_rename`/`rnfail` (`:8148-8200`); wildcard
+  expansion `__mkfcb` (`:8034-8088`). Confidence: high. Both parsed FCBs go
+  straight to BDOS fn 23 without an ambiguous-name (`?`) check, so a
+  wildcard old-name can rename multiple entries and a wildcard new-name can
+  write literal `?` bytes on real CP/M, though the documentation promises
+  rejection; drive bytes also aren't compared, so a genuine cross-drive
+  rename returns `ENOENT` (via `rnfail`) instead of `EXDEV`. **Fix
+  direction:** scan both parsed 11-byte names for `?` and return `EINVAL`;
+  canonicalize default drives via BDOS fn 25 and reject differing drives
+  with `EXDEV`.
+- **FI-11 — Unambiguous random-read failures are silently reported as
+  EOF.** `_read` (`:7074-7099`). Confidence: medium. The documented
+  ambiguity justifies treating fn-33 codes 1/4 as EOF/unwritten-hole, but
+  codes 9/10/11/0xFF (invalid FCB, media change, verify error, hardware
+  error) are genuine failures currently given the same treatment with no
+  errno/`__fderr` set. **Fix direction:** keep 1/4 as EOF; classify the
+  others as real failures.
+- **FI-12 — Successful transfer counts above `INT_MAX` are
+  unrepresentable.** `_read`/`_write` (`:7047-7234`). Confidence: high.
+  `size_t` is 16-bit unsigned but the public return is a 16-bit *signed*
+  `int`; a successful 65,535-byte transfer is bit-identical to `-1`. **Fix
+  direction:** cap each public transfer result at `INT_MAX` and let callers
+  loop, or add an internal unsigned-count helper for stdio's larger
+  requests.
+
+### Optimisation
+
+- **FI-13 — Repeated FCB-address reconstruction in the partial-write and
+  `__rdsz` paths.** `wrrd` (`:7188-7220`), `__rdsz` (`:7731-7743`).
+  Confidence: high. **Measure:** `ntvcm -p` on partial-write/open-heavy
+  `fileops`/`tfio`/`trw`; `.COM` size, peep+nopeep.
+- **FI-14 — `_rename` has a cancelling `ex de,hl` / `ex de,hl` pair with no
+  intervening state change.** `:8172-8177`. Confidence: high. **Measure:**
+  `ntvcm -p`/size for `trename`/`trenwild`, peep+nopeep.
+
+---
+
+## Section 7 — 32-bit `long` arithmetic
+
+`DCCRTL.MAC:8311-9486`: `__lmul` and multiply-helper variants, `__ldu`/
+`__lmu` (long divide/modulo — home of the previously-fixed zero-interior-byte
+bug), `__lds`/`__lms` (signed divide/modulo), and the compare family
+`__ltu/__leu/__lgu/__lku/__lts/__lks/__lgs/__les`.
+
+**Zero-interior-byte sibling scan (top priority for this section): PASS.**
+The historic `__lmu` bug (`call nz` skipping a zero dividend byte that
+appeared *after* a nonzero byte, corrupting the shift/remainder chain) is
+confirmed still fixed and not regressed — traced byte-by-byte for
+`16777217 % 7` (bytes `01 00 00 01`): only the *leading* zero bytes before
+the first nonzero byte are skipped; every byte from the first nonzero byte
+onward, including interior zeros, is processed unconditionally through the
+call ladder, yielding the correct quotient/remainder. Every sibling routine
+(`__lmul`,`__m1u`,`__m8u`,`__m1q`,`__m1s`,`__m1mu`,`__lds`,`__lms`, and all
+compares) was checked for the same class of bug: conditional branches in
+those routines only ever skip a *value-independent* add/shift-position, or
+skip the low word only when the high word has already decided a compare —
+none reproduces the interior-zero-byte defect.
+
+**Checked correct, not re-reported:** existing register-based `__lmul`,
+the shared signed fast path, direct IX loads, and the comparison-epilogue
+optimisation are already applied; splitting modulo into a separate core and
+adding a divisor-one fast path were considered and explicitly deferred
+(profiling tradeoff, not a defect); ABI (DE:HL convention, IX/stack
+restore, IY untouched, only caller-saved BC/DE clobbered) verified correct
+throughout.
+
+### Robustness
+
+- **LA-F1 — accepted in Batch 9.** The long core checks the complete divisor
+  before its leading-byte skip and returns quotient `0xffffffff` with the
+  original dividend remainder. Signed, unsigned, standalone, and paired
+  divide/remainder paths now expose the same pair. Specialized fused `__m1mu`
+  instead defines its modulus-zero dividend sentinel at its 16-bit result
+  width as `low16(a*b)`, not either input operand or the full 32-bit product.
+- **LA-F9 — documented in Batch 9; no executable special case.**
+  `LONG_MIN/-1` remains undefined C behavior. DCC's runtime follows
+  two's-complement wrap to `LONG_MIN` with remainder zero rather than adding a
+  trap or saturation branch.
+
+### Optimisation
+
+- **LA-F2 — Adjacent long `%` then `/` on the same operands recompute the
+  whole division instead of reusing the core's already-produced pair.**
+  Wrappers `:8846-9181`; core contract `:8876-8880`. Confidence: high.
+  `tests/tpi.c:22-23` has exactly this shape (`d % b` then `d /= b`); generic
+  compiler div/mod fusion currently excludes anything wider than 2 bytes
+  (`dcc_mir_spilled_cfg.c:15043-15053`, `dcc_ast_gen_support.c:2466-2468`).
+  **Fix direction:** extend compiler divmod fusion to 32-bit values, or
+  expose a fused long helper/cache (mirroring `_ldiv`'s existing remainder
+  reuse). **Measure:** `ntvcm -p` on `tpi` and a generic adjacent-long-divmod
+  microbenchmark; final size.
+- **LA-F3 — The fast 16-bit-divisor path still pays for the general path's
+  output zero-initialization.** `__ludivmod_core` (`:8882-9013`).
+  Confidence: high. ~74 avoidable T-states per 16-bit-divisor call. **Fix
+  direction:** dispatch on divisor width before initializing. **Measure:**
+  `ntvcm -p` on `tpi`/`pihex`/`tlmod`; linked size.
+- **LA-F4 — Three `or a` carry-clears in the general divider are dead**
+  (`ADD HL,HL` never consumes incoming carry). `:8897,8924,8934`. Confidence:
+  high. ~256 T-states per general (32-bit-divisor) division. **Measure:**
+  `ntvcm -p` for divisors > 65535; linked size.
+- **LA-F5 — `__lmul`'s low-result spill to static memory can instead stay
+  on the stack.** `:8393-8434`; scratch `:10165-10166`. Confidence: high.
+  `__lm_res_h` is entirely unreferenced (dead). **Measure:** `ntvcm -p` for
+  `tpi`/`tmuldiv`; size.
+- **LA-F6 — Five `ld sp,ix` epilogues are redundant** (SP already equals
+  IX on every path reaching them, matching a prior, already-applied fix to
+  the comparison routines). `:8434,8849,8872,9130,9198`. Confidence: high.
+  **Measure:** size and `ntvcm -p`; ~2 bytes/10 T-states per removed site.
+- **LA-F7 — Unsigned-compare result materialization is unnecessarily
+  branchy** — carry can convert directly to boolean via
+  zero+rotate-carry (`<`/`>`) or `sbc hl,hl`+`inc` (`<=`/`>=`). `__ltu`
+  (`:9232`), `__leu` (`:9260`), `__lgu` (`:9289`), `__lku` (`:9317`).
+  Confidence: high. **Measure:** comparison-heavy cycles and size.
+- **LA-F8 — `__m1mu` always runs 8 provably-empty leading iterations when
+  the multiplier's high byte is zero.** `:8550-8585`. Confidence: medium.
+  **Fix direction:** for `D==0`, shift byte-position instead of bit-looping
+  8 empty times; return immediately for a zero multiplier/multiplicand.
+  **Measure:** `ntvcm -p` on `pihex`/powermod-style workloads; size.
+
+---
+
+## Section 8 — `ctype.h` + `FILE*`-buffered stdio
+
+`DCCRTL.MAC:10185-10683` (ctype helpers, `_fgets`, `_gets`) and
+`:11050-11906` (`_fopen/_fclose/_tmpnam/_tmpfile/_freopen/_fread/_fwrite/
+_fseek/_ftell/_fgetpos/_fsetpos/_rewind/_feof/_ferror`).
+
+**Pushback-interaction verdict (specifically requested):** **partially
+confirms, partially refutes** the console/BDOS section's `_ungetc` findings.
+Real-file `_fgets` (`:10478-10498`) *does* correctly check and consume
+`__ugv[fd]`/`__ugc[fd]` — refuting a blanket claim there. But **console**
+`fgets`/`gets` call BDOS directly and ignore stdin pushback entirely, and
+real-file `_fread` calls `_read` directly with no pushback check either —
+confirming the gap for those specific paths (see **CT-F3**, cross-referenced
+from **CI-5**).
+
+**Checked correct, not re-reported:** functional `clearerr`/`ferror`,
+`fgetc`'s EOF flagging, `_fread`'s bad-fd clamp/fd-bounds check, the
+size-product overflow check, `size==0` handling, the size-1 fast path,
+8 real file slots, and the corrected `rewind` call-frame are all already
+fixed per `archive/runtime-memory-optimisations.md` and recent commits;
+initial-append preservation and seek-to-end are fixed (**CT-F6** below is
+specifically about writes *after* a later reposition, a distinct case);
+`tmpfile` double-close prevention is fixed (**CT-F8** is the distinct
+close-time non-removal gap); CP/M record-rounded lengths, trailing-Ctrl-Z
+padding ambiguity and sparse-gap fill are documented/deferred; immediate
+read-after-write sequencing is governed by the C rule and file output here
+is write-through, so no separate buffering defect exists; no ABI/IY/stack
+issue was found outside **CT-F1**.
+
+### Correctness
+
+- **CT-F1 — `_fseek` discards `_lseek`'s actual result.**
+  `:11603-11638` (`fseek_ok_clear`). Confidence: high. After calling
+  `_lseek`, the argument-cleanup sequence pushes/pops such that the value
+  actually tested is the *original* `offset_hi`/`whence` arguments, not the
+  saved `_lseek` result — so `fseek(f,0,99)` gets `_lseek==-1` internally but
+  tests an unrelated stack value and reports success; for an out-of-range
+  `fp`, it also clears `__fdeof` at an out-of-bounds array index. **Fix
+  direction:** remove the two spurious result-pushes; discard the four
+  arguments with four `pop bc` so `DE:HL` (the real result) survives intact;
+  add a defensive `fp` range check before touching `__fdeof`.
+- **CT-F2 — `_fwrite` turns any write failure into a huge or falsely
+  successful item count.** `:11538-11567`; failure source `wrnospc`
+  (`:7271-7282`). Confidence: high. `_write` returns `0xffff` on disk
+  failure (even after partial output); with `size=1` this becomes item count
+  `65535`; with `size=32768,nmemb=1` it divides down to a falsely-successful
+  `1`. **Fix direction:** preserve the accumulated successful byte count on a
+  valid-stream failure, clamp a genuine total failure to 0 items, and return
+  only complete items.
+- **CT-F3 — Pushback is honored inconsistently across read paths** (see
+  cross-reference to **CI-5** above for the full picture): console `fgets`/
+  `gets` and real-file `fread` ignore pending pushback; real-file `fgets`
+  handles it but then can mistake a pushed-back `0x1A` for physical EOF;
+  because `_fgets` checks `__fdeof` *before* pushback, the `_ungetc` EOF-clear
+  gap (**CI-3**) prevents a pending byte from ever being reached. **Fix
+  direction:** centralize pushback consumption; distinguish a pushed `0x1A`
+  from real physical EOF; check pushback before the cached-EOF gate.
+- **CT-F4 — Pushback survives seeks, closes, and descriptor reuse** (same
+  root cause as **CI-4**, confirmed from this section's side too): `_fopen`
+  (`:11077-11089`), `_fseek` (`:11629-11638`), `_rewind` (`:11818-11826`),
+  and the close path (`:6893-6968`) none clear `__ugv`. **Fix direction:**
+  clear the fd's pushback-valid flag after successful open/close/`fseek`/
+  `fsetpos`/`rewind`.
+- **CT-F5 — Every ctype helper aliases out-of-range `int` values through
+  the low byte only.** `:10186-10422` (`__ctu,__csp,__cdg,__caa,__can,
+  __cup,__clo,__cxd,__cpr,__cct,__cpu,__ctl`). Confidence: high.
+  `isdigit(0x0130)==1`, `iscntrl(0x0100)==1`, `toupper(0x0161)==0x0041` —
+  under the full-`int` C99 contract these should be false/unchanged (ASCII
+  0/127/128-255 and EOF(-1) themselves are handled correctly; it's other
+  nonzero-high-byte values that leak through). **Fix direction:** require a
+  zero high byte before ASCII classification; have converters return the
+  original full value otherwise.
+- **CT-F6 — `fopen`'s mode string is barely parsed and not retained.**
+  `:11051-11068`. Confidence: high. Only the first character is inspected;
+  no per-slot mode state is stored, so: append writes aren't forced back to
+  EOF after an intervening `fseek`; `"rb"`'s binary intent has no effect (so
+  `fgets` still treats `0x1A` as EOF); malformed modes (`""`,`"q"`) silently
+  create/open a file instead of failing. **Fix direction:** validate the
+  C89 mode grammar, store access/binary/append state per slot, and force
+  each append-mode write back to the current logical EOF.
+- **CT-F7 — `tmpnam` never checks for name collisions.** `:11127-11184`.
+  Confidence: high. It only increments a 3-digit counter with no existence
+  probe; `T000.TMP` collides on the very first call in a directory that
+  already has one, and the counter wraps onto active names after 1000
+  calls. **Fix direction:** probe candidate existence/active slots, retry up
+  to `TMP_MAX`, return `NULL` when exhausted.
+- **CT-F8 — Closing a `tmpfile()` stream leaves the backing file on disk.**
+  `:11188-11259` (`_tmpfile`); `_close` (`:6903-6934`). Confidence: high.
+  `_close` clears the registry entry but never unlinks the recorded name, so
+  normal-exit cleanup skips it too — C requires automatic removal on close
+  or normal termination. **Fix direction:** on a registered temp fd, close
+  and unlink its name before freeing the registry entry (keep the
+  registration if the close itself fails).
+- **CT-F9 — `freopen` doesn't reliably preserve the `stream` identity.**
+  `:11328-11349`; lowest-slot allocation in `_open` (`:6713-6728`).
+  Confidence: high. It assumes the just-closed slot is the lowest free slot;
+  if a lower slot happens to already be free, the new open lands elsewhere,
+  violating "returns `stream`"; `freopen(...,stdin)` similarly opens a new
+  real fd while global `stdin` stays console fd 0. **Fix direction:** reopen
+  directly into the designated slot and preserve stream identity, including
+  for the standard streams.
+- **CT-F10 — Console EOF handling is inconsistent across entry points.**
+  `_fgets` (`:10577-10618`), `_gets` (`:10634-10680`), `_feof`
+  (`:11835-11858`). Confidence: high. An immediate Ctrl-Z on console input
+  makes `_gets` return an empty string instead of `NULL`; `_feof(stdin)`
+  always returns 0 because only real-file slots have an EOF flag. **Fix
+  direction:** track stdin EOF explicitly; return `NULL` from `gets` when
+  Ctrl-Z arrives before any character; have `clearerr`/`ungetc` update that
+  state too.
+- **CT-F11 — `rewind` doesn't clear the error indicator, only EOF.**
+  `:11792-11830`. Confidence: high. After a disk-full write sets
+  `__fderr`, `rewind(f)` leaves `ferror(f)` true — `rewind` is required to
+  clear both. **Fix direction:** clear both slot indicators, ideally via a
+  shared state-reset helper.
+- **CT-F12 — `fseek`/`lseek` accept negative/overflowed final positions
+  and only test the low byte of `whence`.** `_fseek` (`:11576-11647`),
+  `_lseek` (`:7285-7389`). Confidence: high (same root defect family as
+  **FI-8**, seen again from this section's wrapper). **Fix direction:**
+  validate the complete signed result and the full 16-bit `whence` before
+  committing.
+- **CT-F13 — `tmpfile` doesn't reset EOF/error flags on a reused slot.**
+  `:11193-11257`; contrast `_fopen`'s reset at `:11077-11089`. Confidence:
+  high. A slot whose previous file hit EOF can make `feof(tmpfile())`
+  immediately true. **Fix direction:** move slot-indicator initialization
+  into one shared successful-open helper used by both `_fopen` and
+  `_tmpfile`.
+- **CT-F14 — `NTMP`/`TN_NSZ` constants sit in the wrong `dccrtlstrip`
+  block.** Defined at `:11118-11119` (inside `_fclose`'s block per the
+  scan) but consumed by `_close` and `_tmpfile`, neither of which depends on
+  `_fclose`. Confidence: medium. A program that only closes files or only
+  calls `tmpfile()` (never `fclose`) can end up missing these constants
+  under `dccrtlstrip`. **Fix direction:** move these zero-cost EQUs into the
+  always-kept preamble or an explicit shared prelude.
+- **CT-F16 — `fread(stdin)` performs at most one character regardless of
+  the requested size.** `:11437-11487`; `_read`'s stdin path
+  (`:7016-7035`). Confidence: medium. `fread(buf,2,1,stdin)` copies one byte
+  and returns 0 complete items with no EOF/error indicated. **Fix
+  direction:** loop console reads until the requested count, EOF, or error.
+
+### Robustness
+
+- **CT-F15 — Negative `fgets` sizes are treated as a huge buffer.**
+  `:10434-10441`. Confidence: high. The documented `size<=0` check only
+  tests zero; `size=-1` becomes remaining-count `0xfffe`, permitting a
+  massive overwrite. **Fix direction:** reject a set sign bit as well as
+  zero.
+- **CT-F17 — `_fread`'s `0xffff`-means-`EBADF` clamp aliases a maximal
+  successful transfer.** `:11474-11487`. Confidence: high. `size=1,
+  nmemb=65535` legitimately returns `0xffff` from `_read` on success too,
+  and is misreported as 0 items. **Fix direction:** disambiguate via
+  explicit fd/status checks, or chunk large transfers.
+- **CT-F18 — An out-of-range `rewind(fp)` can write beyond the `__fdeof`
+  array.** `:11818-11826`. Confidence: high. Same class as the `_fseek`
+  bounds gap in **CT-F1**; e.g. `rewind((FILE*)200)` after a failed
+  `_lseek` still subtracts `FIRSTFD` and writes out of bounds. **Fix
+  direction:** require the computed slot `< NFILES` before touching any
+  per-slot state.
+- **CT-F19 — `isgraph(expr)`'s macro expansion evaluates its argument
+  twice.** `ctype.h:21`. Confidence: high. `isgraph(s[i++])` can increment
+  `i` twice and classify two different bytes. **Fix direction:** implement
+  `isgraph` as a real runtime function with its own assembler mapping
+  instead of a two-evaluation macro.
+
+**Position round-trip verdict:** `_fgetpos`/`_fsetpos` correctly round-trip
+all four offset bytes when there's no pending pushback (`:11709-11776`);
+error propagation is broken only by **CT-F1**, and pushback interaction is
+the separate gap in **CT-F3**/**CT-F4**.
+
+### Optimisation
+
+- **CT-F20 — Six call sites use an expensive 3-word stack-discard sequence
+  where three `pop bc` (or one `pop bc` for a 1-word discard) would do.**
+  `_fgets` (`:10509`), `_gets` (`:10648`), `__fps` (`:11398`), `_fread`
+  (`:11448`), `_fwrite` (`:11548`), `_fgetpos` (`:11709,11737`). Confidence:
+  high. **Measure:** linked `.COM` size and `ntvcm -p` for `tfio`/`tfpos`/
+  `ttmp`/`fileops`, peep+nopeep.
+
+---
+
+## Section 9 — `scanf` family + `setjmp`/`longjmp` + directory ops + `perror`
+
+`DCCRTL.MAC:11907-13018`: `_scanf/_sscanf/_fscanf/__scan_run` (the shared
+core, **very recently and fully rewritten** — "IX-free, absolute vararg
+pointer, leaner arithmetic" — given the most skeptical read in this audit),
+`_setjmp/_longjmp`, `_dopn/_drd/_dcls` (opendir/readdir/closedir), `_perror`.
+
+**setjmp/longjmp verdict: CORRECT.** The exact IY save/restore instruction
+sequences required by `scripts/rtl-iy-safety.py`'s
+`reviewed_nonlocal_jump_regions()` proof were independently re-verified at
+`:12691-12697`/`:12754-12758`, including reasoning beyond "the script still
+passes": `_setjmp` saves entry-SP+2 plus IX/IY; `_longjmp` restores IX/IY
+while the old stack is still active, recovers the saved return address/value,
+switches SP, pushes the saved return address, and returns — this remains
+correct through arbitrary nested call depth.
+
+**Scanf `"%d %s %f"` trace (as requested):** `%d` advances the vararg
+pointer by 2, `%s` by another 2; `%f` is simply absent from the dispatch
+table (`:12107-12124`), so the call returns assignment-count `2`, leaves the
+float argument's pointer unread and the float itself unchanged — floating
+input and scansets are documented as not-yet-implemented
+(`docs/docs/en/standard-lib/05-stdio.md:122-165`), so this specific gap is
+known/expected, not a new finding.
+
+**Checked correct, not re-reported:** vararg entry offsets and the two-byte
+per-argument advancement are correct and stack-balanced throughout; `perror`
+(NULL/empty prefix, `_errno` linkage, balanced `_strerror` call, CR/LF
+output) is correct, with prior fixes already documented
+(`archive/runtime-performance-optimisation.md:287-350`); normal directory
+iteration (result-index rotation, bounded 13-byte name construction, EOD
+handling, the already-fixed DMA restore) is sound.
+
+### Correctness
+
+- **SJ-F1 — `sc_get_file` clobbers register `B`, breaking literal-character
+  matching from file/console input.** `sc_loop` (`:12023-12029`) saves the
+  expected literal character in `B`, but `sc_get_file` (`:12437-12447`) does
+  `pop bc` to discard an argument — since valid fds have a zero high byte,
+  this zeroes `B`. Confidence: **very high**. `fscanf(fp,"A=%d",&v)` on input
+  `"A=42"` therefore fails to match the leading `"A="` and returns 0;
+  `scanf` has the identical defect (`sscanf` is unaffected because its
+  string-source path never clobbers `BC`). **Fix direction:** preserve the
+  format character across the `sc_get` call at this site, restoring it
+  before the match/carry branch; add file- and console-literal-prefix
+  regression tests.
+- **SJ-F2 — Leading-zero lookahead for `%i`/`%x` double-consumes field
+  width.** `sc_num_after_sign`/`sc_num_not_auto` (`:12267-12318`).
+  Confidence: **very high**. After a leading `0`, the routine peeks the next
+  character via `sc_get_w` (consuming 1 unit of width), un-gets it if it's
+  not `x`, then fetches it *again* later — both fetches decrement
+  `sc_width`. Traced: `sscanf("07Z","%2i%c",&v,&ch)` yields `v=0, ch='7'`
+  instead of the correct `v=7, ch='Z'`; `%2x` on `"0fZ"` fails analogously.
+  **Fix direction:** refund the width before un-getting, or process the
+  already-read lookahead character directly instead of re-fetching it.
+- **SJ-F3 — Scanner-private pushback (`sc_ungot`/`sc_unch`) is invisible
+  to the stream-level per-fd pushback mechanism.** `:11984-12006`,
+  `:12416-12464` vs. the runtime pushback at `:716-805`. Confidence: **very
+  high**. After `fscanf(fp,"%d",&v)` reads `"12x"`, the physical file
+  position is already past `x`, and `x` exists only in the scanner-private
+  variable — a following `fgetc(fp)` bypasses it entirely; scanning a second
+  fd clobbers the first fd's pending character; a seek/rewind or fd reuse
+  can expose stale scanner state. **Fix direction:** route file/console
+  scanning through the stream-level per-fd pushback instead of a private
+  global; keep a private mechanism only for `sscanf`'s in-memory source;
+  ensure seek/close/reopen clear it.
+- **SJ-F4 — Every directory handle aliases one global enumeration.**
+  `_dopn/_drd/_dcls` (`:12807-12970`). Confidence: high. `_dopn` always
+  returns the same `&__drfcb`; opening a second directory overwrites the
+  first's in-progress scan state, `readdir()` on the "first" handle then
+  reads the second's results, and `closedir()` on either invalidates both.
+  `_drd`/`_dcls` accept any non-NULL pointer / ignore their argument
+  entirely. **Fix direction:** give each handle real per-handle state, or
+  explicitly detect/reject a second concurrent open and validate the handle
+  in `readdir`/`closedir`.
+- **SJ-F5 — `opendir`'s no-match path is indistinguishable from failure
+  and leaves stale `errno`/state.** `__drgo`/`__drnul` (`:12843-12859`).
+  Confidence: medium. BDOS "search first" returning failure (0xFF) jumps to
+  the same NULL-return label used for a normal empty result; `errno` isn't
+  set and `__dridx` isn't reset, so `perror("opendir")` after an
+  empty-directory `opendir` reports an unrelated stale error. **Fix
+  direction:** define zero-match semantics explicitly (prefer a "done"
+  handle whose first `readdir` returns `NULL`), or set a defined error and
+  reset state before returning `NULL`.
+- **SJ-F7 — The in-file scanner banner comment is stale relative to the
+  actual (rewritten) implementation.** `:11894-11902`. Confidence: very
+  high (documentation defect only). It claims IX-bound offset varargs; the
+  code beneath is IX-free with an absolute `sc_argp`. **Fix direction:**
+  update the comment to match the audited ABI.
+
+### Optimisation
+
+- **SJ-F6 — Assignment-suppression (`sc_assign`) is re-tested every
+  character inside `%s`/`%c`'s hot copy loop** even though it's invariant
+  for the whole conversion. `:12176-12233`. Confidence: medium. **Measure:**
+  `ntvcm -p` for long `%s`/wide `%c`; linked size, peep+nopeep — worth doing
+  only if splitting assigned/suppressed loops doesn't cost more size than it
+  saves.
+
+---
+
+## Section 10 — Float/IEEE-754 core: classification, predicates, arithmetic
+
+`DCCRTL.MAC:13019-17100`: classification, the **very recently changed**
+predicates (`__feqf/__fnef/__fcmpsf/__fltf/__fgtf/__flef/__fgef` — most
+recent commit to the whole file: "Speed up float predicates with bit-shift
+masking tricks"), conversions, add/sub, mul, div, round/floor/ceil, fmod,
+sqrt, float↔long conversions, `nextafterf`. No sub-range was only skimmed
+except two callee-only cross-checks (`__fmaf`/`__fmadd` scheduling and the
+`_fmodf` reduction loop), both reviewed closely enough to find no defect.
+
+**Recent predicate-optimisation commit verdict: CORRECT, no regression.**
+Traced `0x80000000`(`-0`)→`__fzro`, `0x7FC00000`(qNaN)→`__fnan`,
+`0x7F800000`(+Inf)→`__finf` (not NaN), `0x7F7FFFFF`(FLT_MAX, `D=0x7F`)
+correctly classified finite despite the high exponent byte, negative-vs-
+negative ordering (`-3` vs `-2`), `+0`/`-0` equality, NaN unordered
+(`==` false, `!=` true), and infinity ordering — all correct. **This
+session independently re-confirmed the subnormal-arithmetic finding below
+(FC-F2) by tracing the actual current instructions** (see the "READ THIS
+FIRST" section and the trace embedded there).
+
+**Checked correct, not re-reported:** `_floorf`/`_ceilf`/`_fmodf`
+special/subnormal handling is sound, with strong raw-bit test coverage
+already in `tests/tfmodfsp.c:78-117`; the documented add/mul
+truncate-instead-of-round-to-nearest limitation (**FC-F3**/**FC-F4** below)
+already has a prior note at `archive/c-runtime-optimisations-bug-fixes.md:289-296`
+— included here with concrete failing inputs because it's directly
+adjacent to the newly-found subnormal defect, not because it's unknown; the
+known, deferred large-argument `sqrtf` accuracy limit (commit `69798ca`) was
+not re-reported; no ABI/IY/stack-balance defect was found.
+
+### Correctness
+
+- **FC-F2 — Subnormal operands/results are corrupted throughout
+  add/sub/mul/div/scale/sqrt.** Add/sub: `FANZ_ENTRY`/`FNORMR`/`FUNR`/`FPKR`
+  (`:13990-14274`); mul/fmadd: `FMBODY`/`FMZERO_E` etc. (`:14545-15131`);
+  div: `FD_ORDINARY` etc. (`:15626-15869`); sqrt/scale
+  (`:16456-16699`). Confidence: **high — independently re-traced and
+  confirmed by this session against the live source** (see "READ THIS FIRST"
+  for the full byte-level trace). Concrete failures: `0x00000001+0x00000001`
+  (min subnormal + itself, correct answer `0x00000002`) returns `0x75000000`
+  because `FNORMR`'s renormalize loop's `djnz` decrements the *exponent*
+  register starting from 0 (subnormal) and wraps through 234 iterations
+  instead of recognizing "still subnormal, don't renormalize this far";
+  `0x00000001+0.0` incorrectly returns `0`; `0x00800000*0x3F000000` (min
+  normal × 0.5, correct answer `0x00400000`) returns `0` via a wrong
+  exponent-zero-means-multiply-by-zero shortcut; `0x7F800000*0x00000001`
+  (Inf × subnormal) wrongly returns NaN instead of Inf; `sqrtf` of any
+  subnormal reaches an internal all-exponent-zero division and returns NaN.
+  **Fix direction:** normalize exponent-zero significands using an effective
+  exponent of 1 and a signed internal exponent throughout, explicitly
+  prevent `FNORMR`'s zero-exponent `djnz` wraparound, and gradually pack
+  subnormal results instead of flushing/garbling them; `_fmodf`'s existing
+  subnormal handling is a working model to follow.
+- **FC-F1 — `nextafterf(+Inf, finite)` returns NaN instead of the adjacent
+  finite value.** `_nextafterf`/`NXFMAX_NZ`/`NXINC` (`:16878-17067`).
+  Confidence: high. For `x=+Inf,y=FLT_MAX`: the FLT_MAX fast path doesn't
+  match, `x` isn't NaN, isn't FLT_MAX, isn't zero, and has positive sign, so
+  it falls into the plain-increment path, which turns `0x7F800000` into
+  `0x7F800001` — a signaling NaN — instead of `0x7F7FFFFF`. **Fix
+  direction:** special-case `±Inf` in this fast path (or route it through
+  the comparison-based `NXGEN` path, which already picks the right
+  direction).
+- **FC-F3 — Add/sub alignment truncates instead of rounding to nearest.**
+  `FALGNR`/`FSHR` (`:14037-14309`). Confidence: high (context: already
+  noted at `archive/c-runtime-optimisations-bug-fixes.md:289-296`).
+  `0x3F800000 + 0x33C00000` (`1.0 + 3·2⁻²⁵`, 0.75 ULP above 1.0) truncates the
+  negligible-looking smaller operand instead of rounding up, returning
+  `0x3F800000` where round-to-nearest requires `0x3F800001`. **Fix
+  direction:** carry guard/round/sticky bits through alignment and the
+  mantissa-overflow shift; apply ties-to-even before packing.
+- **FC-F4 — Multiply and fused multiply-add discard a round-up remainder
+  the same way.** `FMDONE`/`FMNOC` (`:14802-14849`), `FQDONE`/`FQNOC`
+  (`:15392-15421`). Confidence: high; already partly documented via
+  `tests/tfmedge.c:38-42`. For `a=0x3F800348, b=0x3F801384`, the exact
+  significand product's discarded remainder exceeds the halfway point, so
+  the no-carry path truncates to `0x3F8016CC` instead of rounding up to
+  `0x3F8016CD`; `__fmadd` inherits the same error for a `+0` addend. **Fix
+  direction:** retain guard+sticky from the discarded product bytes and
+  increment (with mantissa-carry-into-exponent) when required.
+- **FC-F5 — Runtime long→float conversion doesn't implement its own
+  documented nearest-rounding contract.** `__fulf`/`__flf` (`:16718-16779`);
+  caller mapping `dcc_expr.c:1270-1279`. Confidence: high. `LONG_MAX
+  =0x7FFFFFFF` normalizes with one shift to `0xFFFFFFFE`/exponent 157, and
+  the pack step silently discards the low byte (`0xFE`), producing
+  `2147483520` instead of the nearest single `2147483648`
+  (`0x4F000000`); `ULONG_MAX` similarly rounds down instead of up. This
+  contradicts `docs/docs/en/03-types-and-conventions.md:28-30`'s
+  documented nearest-rounding guarantee. **Fix direction:** round the
+  discarded bits with guard/sticky and ties-to-even, including exponent
+  carry-out; test with raw-bit comparisons using runtime (non-constant-
+  folded) long values.
+
+### Optimisation
+
+- **FC-F6 — The recent predicate bit-masking trick (commit `f68ca74`)
+  hasn't been extended to several adjacent comparisons that could use the
+  same identities.** `:13235-13644` (various). Confidence: high. Estimated
+  ~36 bytes / ~20 T-states per common positive ordered comparison, applying
+  only where the resulting carry is dead. **Measure:** assembled/stripped
+  size and `ntvcm -p` on `tc89fcmp`/`tctxflt` and a comparison-heavy loop,
+  peep+nopeep.
+- **FC-F7 — `_fabsf` misses an available tail-call.** `:15911-15921`.
+  Confidence: high. `call __fabs / ret` → `jp __fabs` (or inline the single
+  `res 7,d`). **Measure:** `.COM` size and `ntvcm -p` on a repeated-`fabsf`
+  microbenchmark (~1 byte/17 T-states expected per call).
+
+---
+
+## Section 11 — Transcendental math (generated-then-hand-maintained)
+
+`DCCRTL.MAC:17101-19955`: `_expf/_logf/_log10f/_powf/_sinhf/_coshf/_tanhf/
+_sinf/_cosf/_tanf/_atanf/_atan2f/_asinf/_acosf/_frexpf/_ldexpf/_modff`. This
+block is explicitly hand-maintained now (no longer regenerated from
+`mathf.c`), so it was treated as first-class code, not skimmed as "generated
+output." A few coefficient-by-coefficient polynomial ranges were spot-checked
+rather than formally exhausted (see the list at the end of this section).
+
+**Checked correct, not re-reported:** existing special-value fixes for
+`_expf` (NaN/Inf), `_logf` (NaN/zero/negative/Inf), `_atan2f` (Inf/NaN,
+zero-zero combinations), `_asinf`/`_acosf` domain returns, `_frexpf`/
+`_ldexpf` (Inf/NaN), and `_modff` (Inf) were verified present and correct;
+the documented `powf(-0, negative-odd)` defect (`tests/tpowfsp.c:10-13`) is
+subsumed by **MT-F5** below; ordinary 5-6-digit polynomial approximation
+error is explicitly already documented
+(`docs/docs/en/standard-lib/08-math.md:80-86`) and not re-reported; no ABI,
+IY, or stack-balance defect was found; misleading comments in `_expf`/
+`_atan2f`/`_modff` were noted but not counted as functional defects.
+
+### Correctness
+
+- **MT-F1 — `expf` overflows to `+Inf` too early.** `:17150-17165`.
+  Confidence: high. The overflow threshold test uses `88.0` where the true
+  overflow point is near `logf(FLT_MAX) ≈ 88.72284`; `expf(88.5f)` returns
+  `+Inf` although the true result (`≈2.723e38`) is representable. **Fix
+  direction:** move the threshold to ~88.72284f with an explicit separate
+  `+Inf` case.
+- **MT-F2 — `powf(negative, non-integer)` returns 0 instead of the
+  required NaN/domain error.** `:17721-17773` (`_powf`/`MFL19`). Confidence:
+  high. `powf(-2.0f, 0.5f)`: the fractional-exponent branch returns `0`
+  outright. **Fix direction:** return quiet NaN and report the domain error
+  on this branch.
+- **MT-F3 — `powf` has several NaN-input special-case holes.**
+  `:17649-17773`. Confidence: high. `powf(NAN,0.5f)` and `powf(-2,NAN)` both
+  wrongly return 0 (or Inf, depending on NaN sign bit) via the
+  negative-base path; `powf(0.0f,NAN)` returns 0/Inf instead of propagating
+  NaN; `powf(1.0f,NAN)` computes `NAN*logf(1)` and returns NaN where C99
+  requires exactly `1`. **Fix direction:** reorder special-casing as:
+  `y==0` → `x==1` → NaN checks → zero/infinity table → ordinary computation.
+- **MT-F4 — Infinite/very-large integral exponents are misclassified for
+  negative bases.** `:17721-17773`. Confidence: high. Integer-ness of `y`
+  is currently detected via a signed-`long` round-trip of `abs(y)`, which
+  saturates for `powf(-2,+Inf)`/`powf(-1,+Inf)` and fails the round-trip
+  check, wrongly returning 0 instead of `+Inf`/`1`; representable integral
+  exponents ≥ 2³¹ fail the same way. **Fix direction:** classify infinite
+  exponents first; determine integrality/parity directly from the float's
+  exponent/mantissa bits rather than via a `long` conversion.
+- **MT-F5 — `powf` loses the sign required for a `±0` result.**
+  `:17664-17687`. Confidence: high. The zero-base branch only inspects the
+  *exponent's* sign, so `powf(-0.0f,3.0f)` returns `+0` (should be `-0`) and
+  `powf(-0.0f,-3.0f)` returns `+Inf` (should be `-Inf`). **Fix direction:**
+  combine the base's sign with the exponent's finite-integer parity before
+  selecting the zero/infinity branch.
+- **MT-F6 — `tanf` returns 0 at the rounded float value of π/2** instead of
+  the correct very-large result. `:18522-18736`. Confidence: high. At input
+  bits `0x3fc90fdb` (`1.5707963705f`), range reduction subtracts the
+  operand from the *same stored constant* it was derived from, producing an
+  exact-zero residual (correct `tanf` here is ≈ `-2.29e7`, not 0); the
+  inversion path then explicitly special-cases a zero reduced-polynomial
+  result as tangent-zero. **Fix direction:** reduce using split high/low π
+  constants (Cody–Waite-style) so the true residual from π/2 survives
+  instead of cancelling to exactly zero; don't treat a zero reduced value as
+  automatically tangent-zero.
+- **MT-F7 — Large finite trig arguments can have a wholly wrong phase, not
+  just reduced precision.** `_sinf`(`:18080-18138`), `_cosf`(`:18291-18349`),
+  `_tanf`(`:18522-18582`). Confidence: high. Range reduction uses a single
+  rounded-float π constant; for `1e20f`, `sinf` returns ≈`-0.9147` where the
+  correct value is ≈`+0.6566` — a large-magnitude limitation is already
+  documented (`docs/docs/en/standard-lib/08-math.md:82-86`), but the error
+  is catastrophic rather than merely low-bit degradation. **Fix direction:**
+  Cody–Waite plus large-argument (Payne–Hanek-style) reduction, or enforce a
+  documented supported-magnitude cutoff rather than silently mis-phasing.
+- **MT-F8 — `sinf(-0)` and `atanf(-0)` return `+0` instead of preserving
+  the sign.** `_sinf`(`:18202-18267`), `_atanf`(`:18786-18990`). Confidence:
+  high. Polynomial evaluation of `-0` cubed then summed with the core's
+  zero-sum path (which favors `+0` for a same-value opposite-sign-looking
+  sum) loses the sign. **Fix direction:** early-return the original operand
+  for either signed zero.
+- **MT-F9 — `atan2f` still mishandles `y=-0` with finite nonzero `x`.**
+  `:19175-19247`. Confidence: high. `atan2f(-0,+1)` returns `+0` (should be
+  `-0`); `atan2f(-0,-1)` returns `+π` (should be `-π`). **Fix direction:**
+  handle `y==0` explicitly before division, using `y`'s sign for the result.
+- **MT-F10 — `sinhf`/`tanhf` lose signed zero and flush tiny nonzero
+  inputs to zero.** `_sinhf`(`:17875-17907`), `_tanhf`(`:18007-18055`).
+  Confidence: high. `sinhf(-0)`/`tanhf(-0)` both return `+0`; for
+  `x=1e-8f`, the intermediate `expf`-based formula rounds to exactly `1`, so
+  both return `0` instead of ≈`1e-8`. **Fix direction:** return `x` directly
+  for zero; use a small-argument polynomial or `expm1`-style formulation for
+  tiny inputs.
+- **MT-F11 — `sinhf`/`coshf` overflow to `Inf` before the true result
+  does.** `:17875-17953`. Confidence: high. At `x=89.0f`, the intermediate
+  `expf(x)` is already `+Inf` even though `sinhf(89)`/`coshf(89)`
+  (≈`2.245e38`) are both still representable. **Fix direction:** for large
+  magnitude, evaluate a scaled form (e.g. `expf(|x|-ln2)`) that avoids the
+  overflowing intermediate.
+- **MT-F12 — `frexpf`/`ldexpf` don't support subnormals** (and `_logf`
+  inherits the bug via `frexpf`). `_frexpf`(`:19652-19680`),
+  `_ldexpf`(`:19746-19821`). Confidence: high. `frexpf` of the minimum
+  subnormal returns the wrong mantissa/exponent pair (`≈0.5f`/`-126` instead
+  of `0.5f`/`-148`); `ldexpf(minsubnormal,0)` flushes to `0` instead of
+  returning the input unchanged. **Fix direction:** normalize subnormal
+  significands with a signed effective exponent; generate subnormal outputs
+  by shift/round instead of flushing them; fix `_logf`'s dependency
+  automatically once `frexpf` is fixed.
+- **MT-F13 — `ldexpf`'s exponent arithmetic wraps for large positive
+  `int`.** `:19747-19793`. Confidence: high. `ldexpf(1.0f,32767)` computes
+  a biased exponent that wraps into the signed-negative range and is
+  misread as underflow, returning `0` instead of `+Inf`. **Fix direction:**
+  bound-check `n` against overflow/underflow *before* the addition, or sum
+  in a wider signed representation.
+- **MT-F14 — Decomposition functions erase a required negative-zero
+  sign.** `_frexpf`(`:19633-19650`), `_ldexpf`(`:19733-19744`),
+  `_modff`(`:19934-19944`). Confidence: high. `frexpf(-0)`/`ldexpf(-0,n)`
+  explicitly return all-zero (losing sign); `modff(-3.0f,&i)`'s exact-zero
+  fractional part loses the required negative sign too. **Fix direction:**
+  return the original zero (with sign) from `frexpf`/`ldexpf`; copy the
+  input's sign onto a zero fractional result in `modff`.
+- **MT-F15 — No math-error-reporting mechanism is observable anywhere in
+  this block.** e.g. `_expf`(`:17162-17184`), `_logf`(`:17405-17434`),
+  `_asinf`(`:19333-19342`); `math.h:1-92`. Confidence: medium. Domain/pole/
+  overflow/underflow branches never set `errno`, and `math.h` defines
+  neither `math_errhandling` nor `MATH_ERRNO`/`MATH_ERREXCEPT` even though
+  `EDOM` exists (`errno.h:71-74`). **Fix direction:** if C89/C99 errno-based
+  math error reporting is intended, expose `MATH_ERRNO` and set `EDOM`/
+  `ERANGE` on the appropriate branches (careful to exclude ordinary NaN
+  propagation).
+
+### Optimisation
+
+- **MT-F16 — Hyperbolic scratch data physically lives inside `_tanhf`'s
+  block, so `_sinhf`/`_coshf` alone pull in the whole `_tanhf` body via
+  `dccrtlstrip` transitivity.** Public boundaries `:17862,17909,17955`;
+  scratch `:18058-18063`. Confidence: high. **Fix direction:** move the
+  shared `__hyp_*` scratch to a dedicated shared prelude/data block, or use
+  per-routine scratch. **Measure:** stripped/`.COM` size for sinh-only and
+  cosh-only probes; confirm `ntvcm -p` unaffected.
+- **MT-F17 — `tanf` performs an unreachable denominator-zero comparison.**
+  `:18691-18705`. Confidence: high. Prior reduction guarantees `|r|≤π/4`,
+  making `15-6r²` always ≥ 11.29 (never zero, and NaN also compares
+  false), so the `__feqf`+dead-branch is unreachable. **Measure:** repeated
+  `tanf` `ntvcm -p`; stripped/assembled size.
+- **MT-F18 — `modff` calls the general `floorf`/`ceilf` plus a subtraction
+  on every call where a direct exponent/mantissa mask would do.**
+  `:19883-19944`. Confidence: high. **Fix direction:** construct the
+  integral part via exponent/mantissa masks; return directly for `|x|<1`
+  and `|x|≥2²³`, reserving subtraction for the middle range. **Measure:**
+  focused `modff` `ntvcm -p`, stripped lines, `.COM` bytes.
+
+### Batch 8 execution results
+
+Executed from exact base `83e2ce12e7e608399e5f51d20336ecdced339526`
+in the isolated `build/b8-arith-float` worktree. Measurements and the
+reproducible peep/nopeep probe harness are under `build/b8-measurements/` and
+`build/b8-probes/`; generated artifacts are intentionally ignored.
+
+- **LA-F2 accepted, with a profitability boundary.** Wide div/mod pairing now
+  runs after object promotion has exposed the real declared operand types,
+  only within one basic block and without an intervening call. One `__lds` or
+  `__ldu` call produces both results; public stripped-runtime aliases
+  `__lrlo`/`__lrhi` expose the remainder, and signed remainder correction
+  follows the dividend sign. `LAFUSE`, against a correct no-fusion compiler,
+  fell from 4,872,208 to 2,689,288 cycles peep and 4,875,940 to 2,693,020
+  nopeep (both -2,182,920), with `.COM` 3,584 to 3,456 bytes and exact
+  `RTLMIN` end `0A6F` to `09DE`. The `tpi` exact schedule fell from
+  88,617,879 to 63,418,405 peep and 89,342,929 to 64,143,455 nopeep
+  (both -25,199,474), with unchanged 2,816-byte `.COM` and `RTLMIN` end
+  `08C5`. `tldmfus` adds signed, unsigned, reversed-order, negative-remainder,
+  and high-bit coverage (8 checks, zero failures). A broader cross-call
+  pairing experiment was rejected: it made stack-check `tmuldiv` nopeep grow
+  8,832 to 8,960 bytes despite its cycle win. The no-intervening-call gate
+  removes that regression; final `tmuldiv` is 8,832 bytes in both modes.
+  Repairing all div/mod widths was also rejected after full regression found
+  unsigned 16-bit `rand()%constant` had become signed; repair is deliberately
+  limited to 32-bit operations, restoring `tstr` byte-for-byte to the base
+  compiler output.
+- **LA-F3/LA-F4/LA-F6 accepted.** Divider output initialization now follows
+  the 16-bit-divisor dispatch, three dead carry clears are gone, and five
+  redundant `ld sp,ix` restores are removed. `LAD16` improved by 50,400
+  cycles in each mode and `LAD32` by 95,760, with unchanged 2,944-byte
+  `.COM` files; exact `RTLMIN` end moved `0954` to `0949`.
+- **LA-F5 accepted.** `__lmul` uses balanced stack storage instead of writable
+  result scratch. `LAMUL` improved by 10,000 cycles in each mode, retained its
+  2,688-byte `.COM`, and moved exact `RTLMIN` end `08CB` to `08B7`.
+- **LA-F7 accepted.** Unsigned long comparison boolean materialization is
+  shorter. `LACMP` improved by 11,000 cycles in each mode with unchanged
+  2,944-byte `.COM`; exact `RTLMIN` end moved `08A0` to `0896`.
+- **LA-F8 accepted.** `__m1mu` skips eight empty high-byte iterations for a
+  byte-sized multiplier and keeps the modulus in `BC` at every loop edge.
+  Against the pre-change runtime, `M1MUL` improved by 578,967 cycles,
+  `tm1mu` by 24,962,763, and `pihex` by 233,003,475 in each mode, without
+  `.COM` growth or output changes.
+- **FC-F6/FC-F7 accepted.** The predicates use zero/exponent/sign identities,
+  and `_fabsf` clears the sign bit inline. `FCMP` improved by 66,066 cycles
+  in each mode (peep `.COM` 6,400 to 6,272); `FABSF` improved by 27,000 in
+  each mode with unchanged 4,736-byte `.COM`. Existing special-value and
+  rounding workloads remained bit-exact.
+- **MT-F17 confirmed already present at the base tip.** Reverse-restoring the
+  unreachable denominator-zero comparison cost 41,130 cycles in each mode,
+  grew `.COM` 6,272 to 6,400 bytes, and moved exact `RTLMIN` end `1730` to
+  `1794`, with identical output. No source change was needed.
+- **MT-F18 accepted.** `_modff` now handles signed zero, `|x|<1`, `|x|>=2^23`,
+  infinities, and NaNs directly and masks the middle-range mantissa before
+  the one required subtraction. `MODFF` improved by 1,467,520 cycles in each
+  mode; peep `.COM` fell 4,480 to 3,968 and nopeep 4,608 to 4,224, with exact
+  `RTLMIN` ends `0EC1` to `0D27` and `0F7B` to `0DE1`. `tmodfsp` adds 38
+  bit-exact signed-zero, subnormal, mask-boundary, infinity, and NaN checks.
+
+Validation used the worktree runtime explicitly in every build. Both strict
+full+extended stack-check and no-stack regressions passed (389 run, 10
+skipped, zero failures in each mode pair), as did the focused peep/nopeep
+tests, final stack/no-stack MIR censuses (no missing MIR selections),
+ASan/UBSan affected-app compiles, Python and MIR script tests, runtime
+coverage (404 public labels reconciled, zero unexpected), IY safety, stripper
+EQU/block tests, and an assembled 1,451-`JR` range audit. The new remainder
+aliases survived stripping and linked in both optimized and unoptimized
+`tldmfus`; stack/register ABI checks passed throughout.
+
+### Batch 9 integration results
+
+Integrated from exact base `3508d133ebb569eb99c26a039db244ed45889b0b`
+in the detached `build/b9-integrated` worktree. The three submitted artifact
+sets and their hashes/manifests were verified before semantic merging.
+
+- **CI-1/CI-8 completed with bounded, non-overlapping storage.** A 127-byte
+  CP/M tail containing one-character arguments separated by tabs has
+  `2*n-1 <= 127`, hence at most 64 tail arguments. With 16-bit pointers the
+  vector is exactly `(argv[0] + 64 arguments + NULL) * 2 = 132` bytes, and the
+  copied tail is `127 + NUL = 128` bytes. The compiler reserves the contiguous
+  half-open scratch range `[__bsse,__hstart)` with `__hstart=__bsse+260`;
+  vector `[__bsse,__bsse+132)` and tail copy
+  `[__bsse+132,__hstart)` therefore cannot overlap each other, C BSS
+  `[__bssb,__bsse)`, the heap starting at `__hstart`, or the stack reserve
+  validated above it. Before accepting any heap limit, startup now rejects
+  unsigned `__hstart < __bsse`; the generated near-64K BSS regression proves
+  rejection at `__bsse=0xFEFC`, while boundary checks prove `0xFEFB` remains
+  valid. `targlim` checks the normal addresses, 16-bit pointer width,
+  program-name slot, empty/repeated terminators, exact 63/64 tab-separated
+  capacities, and deterministic 128/255 length clamping.
+- **CI-6/CI-9 completed.** `_setvbuf` rejects nonzero mode high bytes with
+  `EINVAL`; `_strerror` rejects wide and negative low-byte aliases. Focused
+  `tsvbmod` and `terrwid` pass in peep/nopeep modes.
+- **CI-7 completed without ABI replacement.** `bios()` and `bioshl()` retain
+  their two-argument source, stack, fastcall, and return conventions.
+  `biosreg(fn,bcarg,dearg)` is a separate ordinary C stack-ABI block that
+  independently restores BC/DE, tail-dispatches through the BIOS table, and
+  returns HL. `tbiosrg` verifies A, C, BC, HL, SELDSK, SECTRAN, direct-call,
+  and function-pointer forms; stripper tests prove `_biosreg` and the
+  convenience wrappers do not retain one another. Existing `tbios` remains
+  byte-identical; the revision-wide startup recovery improves it by four
+  cycles in each mode without changing the BIOS paths.
+- **SM-F2/LA-F1/LA-F9 completed.** The 27-check `tdivzero` test covers every
+  signed/unsigned 16/32-bit standalone and fused zero-divisor path, high-bit
+  operands, `__m1mu`, and `LONG_MIN/-1`. Ordinary zero-divisor paths expose an
+  all-ones quotient and original-dividend remainder; a discriminating
+  `0x8001*3` case fixes `__m1mu`'s specialized sentinel at `low16(a*b)`.
+  `LONG_MIN/-1` remains documented undefined C behavior with DCC's
+  two's-complement wrap and zero remainder; no trap/saturation branch was added.
+- **Cumulative size was recovered rather than baselined away.** Moving the
+  260-byte argv/tail scratch above BSS removes loaded storage and BSS-clear
+  cycles. The wrap check is offset by emitting the absolute BSS byte count,
+  using `__hstart` directly as the fixed heap base, and making the accepted
+  heap-limit path fall through. Full-runtime CSEG moved `82B3h -> 8278h`
+  (-59 bytes) despite all
+  Batch 9 features; the argument-startup probe moved `02D4h -> 024Eh`
+  (-134 exact runtime bytes), `.COM` 1024 -> 896, with +132 cycles. The
+  main(void) strip control remains byte-identical and improves by four cycles.
+  Only the revised new/direct `tdivzero` performance row was regenerated.
+
+Final validation passed the canonical build, focused peep/nopeep tests,
+30 Python tests, 31 dccpeep fixtures, strict MkDocs, IY safety, runtime
+coverage (173/173 mapped APIs, 404 public labels, zero unexpected), full
+runtime assembly, and all 1,452 `JR` displacements. Both strict full+extended
+stack and no-stack suites found 405 apps: 395 passed, 10 skipped, zero failed;
+diagnostics, dccpeep, extended tests, and the checked performance run passed.
+
+### Batch 10 integrated results
+
+Implemented from exact base `576fb53a4fe97b8ac41734f75f555749dcf0f0a5`
+in detached worktree `build/b10-integrated`.
+
+- **XM-C1 completed.** `strtol` and `strtoul` recognize `0x`/`0X` only when a
+  hexadecimal digit follows. Bare and incomplete prefixes convert the leading
+  zero, leave `endptr` at `x`/`X`, and do not change `errno`.
+- **XM-C2/XM-C3 completed.** The fixed single-byte execution encoding accepts
+  only `wchar_t` values through `0x00FF`. `wctomb` returns `-1` before writing
+  an unrepresentable value; `wcstombs` returns `(size_t)-1` without storing its
+  truncated low byte, while any representable prefix may remain.
+- **XM-C4 completed with one 127-byte staged payload.** `exec()` validates and
+  copies through NUL/CR into private exec-owned scratch before open, stack
+  abandonment, high-memory writes, FCB clearing, or destination copying.
+  `execv()` builds into the same staged representation. `__xsctl` copies the
+  authoritative 0..127 length to `0081h..00FFh`; CR is omitted only at exactly
+  127 bytes. A 128th text byte returns `-1` with `errno=E2BIG`.
+- **XM-R3 completed without a quoting protocol.** The existing direct CP/M
+  parser treats bytes through ASCII space as delimiters and quote/backslash as
+  literals. Giving quote or backslash a new escape meaning would change direct
+  invocation, while a private marker would be an ABI/protocol extension.
+  `execv()` therefore rejects empty or delimiter-containing arguments with
+  `EINVAL`; representable quote/backslash arguments remain byte-exact.
+- **XM-R1 completed with bounded CP/M syntax.** `__xacom` accepts only an
+  unambiguous CP/M 2.2 file reference: optional A: through P:, 1..8 primary
+  bytes, optional 1..3 filetype bytes, and none of CP/M's forbidden component
+  characters. Extensionless names receive `.COM`; the maximum drive-qualified
+  result is 14 bytes plus NUL in the 16-byte `__xpbuf`. `__xwcp` writes at most
+  15 bytes plus NUL and scans only within the authoritative tail length.
+  Default FCB parsing uses every byte through ASCII space as a delimiter,
+  matching startup for spaces, tabs, and control whitespace.
+- **XM-R2 completed with a record-exact preflight.** After open and before
+  changing SP, BDOS function 35 supplies `R2:R1:R0`. Nonzero R2 cannot fit the
+  16-bit TPA. For the remaining count, `__xfit` computes
+  `floor((FBASE-80-16-0100h)/128)` and rejects larger images. The approved
+  count is embedded in the 44-byte trampoline, which performs exactly that
+  many successful sequential reads, warm-boots on any early nonzero status,
+  and never reads a grown extra record. SP is placed at `FBASE-80`; protected
+  ranges are stack `[F-96,F-80)`, FCB `[F-80,F-44)`, and trampoline
+  `[F-44,F)`.
+- **Errors are deterministic.** Invalid paths set `EINVAL`, failed opens set
+  `ENOENT`, unsafe record-rounded images set `EFBIG`, oversized tails set
+  `E2BIG`, and unrepresentable `execv` arguments set `EINVAL`.
+- **Coverage is 8.3-safe, structural, and emulated.** `tconv10`, `texargs`, and
+  `texbnd08` cover the conversion, command-tail, argument, path, and synthetic
+  loader boundaries without sharing persistent state. `test_exec_loader_safety.py`
+  exhaustively compares the helper formula with exact half-open ranges for all
+  65,536 FBASE values and checks the function-35-before-SP instruction order,
+  record shifts, 128-byte DMA trampoline, and bounded path/word-copy structure.
+- **The blocking review revision is covered directly.** `texargs` exercises a
+  caller-local tail, a source beginning at `0080h`, and a source spanning the
+  default FCB/DMA boundary; accepts exact 127-byte `exec` and `execv` payloads;
+  rejects 128 bytes; checks payload byte 127 at `00FFh`; and verifies FCB1/FCB2
+  bytes after tab/control delimiters. Structural tests exhaust all FBASE
+  values, enforce scratch block ownership, and model early failure, exact
+  completion, and post-preflight growth.
+- **The cumulative result remains smaller than the independent slices.**
+  Full-runtime CSEG is `8278h -> 83B6h`, +318 bytes, which is 24 bytes below
+  the +342 sum of the three input slices despite the review hardening.
+  Exact-base `texec` retains +279 RTLMIN bytes and +256 COM bytes;
+  `texecdp` retains +283 RTLMIN bytes and +256 COM bytes. Unrelated
+  `main(void)` and `mblen` controls remain byte- and cycle-identical.
+- **Exact measurements preserve generated application code and output.**
+  Base/final application MAC and target-output hashes match throughout the
+  matrix. Exact-base `texec` improves by 402 cycles in both modes because the
+  approved-count trampoline no longer performs an EOF probe; `texecdp` is
+  +7,884 cycles. Conversion deltas remain +46 RTLMIN bytes for
+  `strtol`/`strtoul`, -6 for `wctomb`, and -1 for `wcstombs`.
+- **Final validation passed.** Canonical build, 41 Python tests, 31 dccpeep
+  fixtures, strict MkDocs, IY safety, runtime coverage (407 public labels,
+  zero unexpected; 173 mapped APIs and 196 standard APIs fully covered), full
+  runtime assembly, and all 1,489 `JR` displacements passed. Both strict
+  full+extended stack and no-stack suites found 408 apps: 398 passed, 10
+  skipped, zero failed; diagnostics, dccpeep, extended tests, and checked
+  performance passed.
+
+The exact matrix and hashes are in
+`build/b10-integrated-measurements.tsv`,
+`build/b10-integrated-report.md`, and
+`build/b10-integrated-sha256.tsv`.
+
+### Sub-ranges only spot-checked rather than formally exhausted
+
+`:17185-17364` (`expf` coefficients), `:17435-17592` (`logf` coefficients),
+`:18202-18500` (`sinf`/`cosf` coefficients), `:18890-18990` (`atanf`
+coefficients), `:19343-19554` (`asinf` coefficients) — Horner-scheme
+push/pop staging was checked but not exhaustively re-derived
+coefficient-by-coefficient; the preceding float core (Section 10) was not
+re-audited here, only its documented helper/signed-zero contract was relied
+upon.
+
+---
+
+## Section 12 — Generated `strtol`/`strtoul`/`strtok` + env/locale/multibyte + `exec`
+
+`DCCRTL.MAC:21173-22639`: the strconv.c-derived block (`sc_isspace,
+sc_isdigit,__stol,__stou,__stok`), `_getenv/_system/_mblen/_mbtowc/_wctomb/
+_mbstowcs/_wcstombs`, and `_exec/_execv/__xmain` plus its scratch data.
+
+**Known, deliberately-deferred pattern — seen and correctly skipped:** the
+documented dead `or a` carry-clear codegen habit in the generated strconv
+block (e.g. `:20381`) was identified and correctly *not* re-reported, per
+the in-file comment explaining it's a general dcc-codegen habit deferred to
+a future compiler-side fix.
+
+**Checked correct, not re-reported:** the already-fixed `strtol`→`modff`
+strip-block coupling is confirmed present/fixed; the already-fixed
+failed-exec caller-stack-corruption low-memory precheck (`:20891-20911`) is
+present; ordinary overflow clamps/sign handling, `strtok`, `getenv`,
+`mblen`, and `mbtowc`/`mbstowcs` were traced correctly.
+
+### Correctness
+
+- **XM-C1 — fixed in the Batch 10 conversion slice.** `strtol`/`strtoul`
+  formerly mishandled a bare/incomplete `0x` prefix.
+  `__stox_core` (`:20130-20500`); generated-source counterpart
+  `src/apps/strconv/strconv.c:61-126`. Confidence: high. `strtol("0xG",
+  &end,0)` formerly consumed `0x` then found no hex digit and reset `end`
+  back to `nptr`, instead of the correct partial conversion (value `0`,
+  `end` pointing at `'x'`); the same happened for bare `"0x"`.
+  **Resolution:** the prefix is recognized only when a hexadecimal digit
+  follows; the generated source and optimized hand-copy remain in sync.
+- **XM-C2 — fixed in the Batch 10 conversion slice.** `wctomb` formerly
+  accepted wide characters it could not represent.
+  `_wctomb` (`:20740-20759`). Confidence: high. With `MB_CUR_MAX==1`, a
+  nonzero high byte (e.g. `0x0100`, `0x0141`) is not representable.
+  **Resolution:** when `s!=NULL`, the function rejects it with `-1` before
+  storing anything; the `s==NULL` state query remains zero.
+- **XM-C3 — fixed in the Batch 10 conversion slice.** `wcstombs` formerly
+  silently truncated an unrepresentable wide string instead of returning
+  `(size_t)-1`. `_wcstombs`
+  (`:20805-20843`). Confidence: high. `{0x0141,0}` formerly became `"A"`;
+  `{0x0100,0}` was mistaken for an empty string because only the low byte of
+  each `wchar_t` was examined. **Resolution:** both bytes are checked before
+  each write; only an all-zero value terminates, and a nonzero high byte
+  returns `(size_t)-1` without writing the offending element.
+- **XM-C4 — fixed in Batch 10.** `exec` validates and stages the complete raw
+  tail through NUL/CR before any loader side effect, and `execv` accounts for
+  every separator and argument byte before writing. Both accept 127 text bytes
+  and reject a 128th with `E2BIG`; `__xsctl` copies the authoritative 0..127
+  length to `0081h..00FFh` and omits CR only when no byte remains.
+- **XM-C5 — `system()`'s header documentation contradicts the runtime's
+  actual (correct) behavior.** `_system` (`:20635-20655`) vs.
+  `stdlib.h:84-85`. Confidence: high. The runtime correctly returns `0` for
+  `system(NULL)`; the header comment claims it "always returns -1". **Fix
+  direction:** correct the header documentation; do not change the runtime.
+
+### Robustness
+
+- **XM-R1 — fixed in Batch 10.** `__xacom` validates an optional A: through P:
+  drive prefix, a 1..8-byte primary name, an optional 1..3-byte filetype, and
+  CP/M 2.2's unambiguous-name character rules before copying. Its longest
+  output is 14 bytes plus NUL. `__xwcp` writes at most 15 bytes plus NUL and
+  advances only within the staged length to a delimiter byte `<=20h`.
+- **XM-R2 — fixed in Batch 10.** After open and before changing SP, `__xmain`
+  calls BDOS function 35 and validates the complete three-byte record count.
+  For FBASE `F`, an `n`-record image writes the exact half-open DMA range
+  `[0100h,0100h+n*128)` and is accepted only when its end is at or below
+  `F-96`. The protected half-open ranges are stack gap `[F-96,F-80)`, FCB
+  `[F-80,F-44)`, and trampoline `[F-44,F)`. SP starts at `F-80`; setup uses at
+  most 10 of the 16 stack bytes. The approved count is patched into the
+  trampoline, which performs exactly `n` successful reads, warm-boots on an
+  early nonzero status, and ignores records added after preflight.
+- **XM-R3 — fixed in Batch 10 without changing direct invocation.** The CP/M
+  startup parser still treats bytes through ASCII space as delimiters and
+  keeps quote/backslash literal. `execv` therefore rejects empty or
+  delimiter-containing arguments with `EINVAL`; representable quote and
+  backslash arguments round-trip byte-for-byte.
+
+### Optimisation
+
+- **XM-O1 — fixed in Batch 8.** The former `strtol`/`strtoul` NULL-`endptr`
+  test performed an unnecessary 32-bit comparison (and a dead `ld de,0`
+  before an `ex de,hl`) where a direct 16-bit `H|L` test and store would do. `SCL93`
+  (`:20458-20484`). Confidence: high. **Measure:** linked size and
+  `ntvcm -p` for NULL/non-NULL `endptr`.
+- **XM-O2 — fixed in Batch 8.** `_system` formerly built an unneeded IX frame
+  for a function that only reads one stack argument. `:20640-20655`.
+  Confidence: high.
+  **Measure:** `_system`-only linked size; `ntvcm -p` per call.
+- **XM-O3 — fixed in Batch 8.** Successful `exec` formerly recomputed an
+  already-correct SP a second time. Initial setup (`:20921-20925`), redundant
+  recompute (`:20966-20971`). Confidence: high. **Measure:** exec-core size and
+  successful-exec setup `ntvcm -p`.
+- **XM-O4 — fixed in Batch 8.** `__xclfb`'s clear loop formerly reloaded `A=0`
+  on every one of its 16 iterations instead of once before the loop.
+  `:21121-21127`. Confidence: high. **Measure:** exec-setup `ntvcm -p` and size.
+- **XM-O5 — Multibyte-stub scratch counters are retained by every
+  multibyte function even when only one (e.g. `mblen` alone) is used**,
+  because they sit in the shared consecutive-`public` prelude.
+  `:20661-20667`. Confidence: high. **Fix direction:** move each counter
+  into its owning conversion's own block, or eliminate the static counters
+  entirely. **Measure:** stripped/`.COM` size for a one-multibyte-function
+  program.
+
+---
+
+## Section 13 — `atoi`/`atof`/`strtod` + `exit`/`atexit`/`abort`/`assert` + `signal`/`locale`/time/calendar
+
+`DCCRTL.MAC:5642-6663` (`_exit,_atexit,_abort,__asfl,__cpm_set_retcode,
+__stchk,_atoi,_atol,_atof,_strtod,_fflush` + stdio globals) and
+`:21194-22651` (`_signal,_raise,_setlocale,_clock,_time,_difftime,
+_strftime`, and the generated calendar block `_gmtime/__ltim/_asctime/
+_ctime/_mktime`).
+
+**Known, deliberately-deferred pattern — seen and correctly skipped:** the
+documented dead `sbc hl,de` (in `cal_days_in_month`'s prologue) and dead
+`or a`-before-`pop bc/add hl,bc` carry-clears in the generated calendar
+block (`:21492-21500` and throughout) were identified and correctly *not*
+re-reported, per the in-file comment deferring this to a future
+compiler-side fix.
+
+**Checked correct, not re-reported:** `_atexit` correctly caps registration
+at 32 (returns nonzero on a 33rd) and dispatches LIFO; `_abort`/`__asfl`
+bypass atexit handlers and don't return, with assertion-message formatting
+matching `assert.h`; `__stchk` correctly accepts `SP==__hlimit` (prior
+sign/boundary bugs already fixed); the previously-documented
+`atoi("+...")` bug is fixed; leap-year logic correctly implements the
+`%4`/`%100`/`%400` rule, the month-length table is correct, and
+`(days+4)%7` correctly gives Thursday for 1970-01-01; the documented CP/M
+signal degeneracy, fixed-"C" locale, and timezone-free `localtime==gmtime`
+equivalence are internally consistent, not bugs.
+
+### Correctness
+
+- **EC-F1 — `_strftime`'s `public` declaration and its function body are in
+  two different `dccrtlstrip` blocks — a `strftime`-only program fails to
+  link.** Declaration `:21301`; body actually lives inside the `_mktime`
+  block starting at `:21722` (the block whose public-run *ends* at
+  `_gmtime`, line 21550, is what `dccrtlstrip` associates with the
+  `_strftime` declaration, per `src/dccrtlstrip/dccrtlstrip.c:663-770`).
+  Confidence: high. A program that calls `strftime()` but not `mktime()`
+  keeps the declaration but not the body, producing an undefined-symbol
+  link failure; existing tests likely mask this by also exercising
+  `mktime`. **This is exactly the class of `dccrtlstrip` block-boundary
+  regression the review was asked to watch for.** **Fix direction:** move
+  `public _strftime` immediately before its actual body (or move the body
+  beside the declaration); add a standalone `strftime`-only strip/link
+  regression test.
+- **EC-F2 — fixed in Batch 11.** `_mktime` now range-checks normalized days
+  and seconds before multiplying, rejects the complete unsigned-32-bit edge
+  and its wrap successor, copies the normalized `struct tm` only after a
+  signed `time_t` result is proved, and preserves an unrelated shared
+  `gmtime`/`localtime` result.
+- **EC-F3 — fixed in Batch 11.** `atof`/`strtod` combine the full explicit
+  exponent with fractional and skipped-integer digit counts before clamping
+  the final effective exponent, preserving large exact cancellations.
+- **EC-F4 — fixed in Batch 11.** `_strftime` is a bounded fixed-C-locale
+  interpreter for every C89 conversion available from `struct tm`, plus the
+  documented `%C` century extension. It always reserves the terminating NUL
+  and returns `0` on insufficient space. Malformed formats and invalid fields
+  follow the deterministic policy documented in `time.h`; its private tables
+  remain in a standalone strip block.
+- **EC-F5 — fixed in Batch 11.** `time()` validates packed BCD and checks
+  CP/M day 21934 against `03:14:07` before arithmetic; the following second
+  and all later dates return/store `-1`.
+- **EC-F6 — fixed in Batch 11.** `strtod` consumes the private range status
+  from `atof`, sets `ERANGE` for numeric overflow/underflow, and leaves
+  `errno` unchanged for explicit infinity/NaN and exact zero.
+- **EC-F7 — fixed in Batch 11.** `atoi` and `atol` skip space and every byte
+  from `0x09` through `0x0d`, with each routine retaining only its own
+  conversion block.
+- **EC-F8 — fixed in Batch 11.** Month, civil-day, and signed clock offsets
+  are combined before lower/upper range checks, so both month- and day-based
+  crossings into 1970 normalize consistently.
+
+### Robustness
+
+- **EC-F9 — fixed in Batch 11.** `_difftime` detects signed subtraction
+  overflow, converts the wrapped low 32 bits as an unsigned magnitude, and
+  applies the mathematical sign after conversion.
+- **EC-F10 — fixed in Batch 11.** `_asctime` rejects bad weekday/month/date/
+  clock/year fields before any write, emits exactly 25 characters plus NUL,
+  and leaves its static buffer unchanged on failure.
+
+### Optimisation
+
+- **EC-F11 — Shared calendar helpers/tables are split across the wrong
+  `dccrtlstrip` blocks, so `gmtime` alone drags in `_mktime` and then even
+  `_difftime`.** `CDZ0001` in `_difftime`'s block (`:21505-21548`);
+  `CDZ0002`/`CDZ0004` and tables inside the large `_mktime` block
+  (`:22223-22638`). Confidence: high. **Fix direction:** give shared
+  calendar helpers/data their own dedicated internal public blocks, and
+  separate the asctime-only tables out. **Measure:** minimal
+  `gmtime`/`localtime`/`asctime`-only `.COM` size and `ntvcm -p` before/after.
+- **EC-F12 — fixed in Batch 8.** `localtime` now tail-jumps directly into
+  `gmtime` instead of building/tearing down its own IX frame around an
+  identical call. `__ltim` (`:21583-21594`). Confidence: high. **Measure:** `.COM` bytes and
+  `ntvcm -p` on a repeated-`localtime` microbenchmark.
+- **EC-F13 — fixed in Batch 11 after its Batch 8 variant was rejected.**
+  `_asctime` now emits validated fixed decimal/name fields directly. The
+  asctime-only runtime no longer retains `sprintf`; combined retention was
+  remeasured with the EC-F10 safety checks in place.
+
+---
+
+## Cross-cutting: `dccrtlstrip` public-block-boundary findings
+
+The user's stripper clarification (`DCCRTL.MAC` is split into blocks by
+`public` labels; `dccrtlstrip` keeps a block only if something reachable
+references a symbol in it) turned out to matter concretely — **one finding
+is a real, confirmed link-failure bug** (EC-F1), and several optimisation
+findings are specifically about block placement causing unwanted transitive
+retention. Collected here for visibility since they cut across sections:
+
+| Finding | Effect |
+| --- | --- |
+| **EC-F1** | `_strftime`'s declaration and body are in *different* blocks — **a `strftime`-only program fails to link.** Correctness, not just size. |
+| **CT-F14** | `NTMP`/`TN_NSZ` constants live in `_fclose`'s block but are used by `_close`/`_tmpfile`, which don't depend on `_fclose`. |
+| **MT-F16** | Hyperbolic scratch data lives inside `_tanhf`'s block, so `sinhf`/`coshf` alone drag in all of `_tanhf`. |
+| **EC-F11** | Shared calendar helpers/tables are split across `_difftime`'s and `_mktime`'s blocks, so `gmtime` alone drags in `_mktime` and `_difftime`. |
+| **CI-12** | `ungetc`'s pushback state lives inside `__fgetc`'s block, so plain `getchar` drags in the whole file-I/O core. |
+| **XM-O5** | Multibyte-conversion scratch counters sit in a shared prelude, so any one multibyte function retains all of them. |
+| **SM-F1** | Several fastcall entries jump into a *following* general-call block's private core, so the (unreachable-from-fastcall) general-call prologue is retained anyway. |
+| **SM-F8** | The fused-divmod result cache lives inside `__udivmod`'s block, so direct fused-only callers retain it unused. |
+| **SS-O4** | Making `__q2u` a true alias of `D16U` (rather than call+ret) would move a public entry label. |
+
+**Recommendation for the future fix pass:** treat **EC-F1** as a correctness
+fix (any severity/urgency label), and treat the rest as a batch of
+"`dccrtlstrip` block-hygiene" optimisations that should be measured together
+(stripped-`RTLMIN.MAC` line count and linked `.COM` size for minimal
+single-feature programs, before/after) since they're all the same class of
+fix and share the same validation approach.
+
+## Meta-finding: `scripts/audit-runtime-coverage.py` needs updating
+
+Confirmed in the baseline check at the top of this report and refined by the
+printf-engine section (which additionally identified 5 of the 16
+unaccounted labels as apparently untested by the default Linux runner path).
+This script is a valuable guardrail (it caught real drift here) but needs
+its static label lists refreshed to match the runtime's current formatted-
+I/O surface. Recommended as a quick, low-risk, high-value first fix
+independent of everything else in this report.
+
+## Full list of "checked and explicitly not re-reported" items
+
+Every section's sub-agent was instructed to check the three prior runtime
+audit docs and the two known-deferred codegen patterns before reporting, to
+avoid re-litigating settled ground. In addition to what's noted inline in
+each section above, the following were explicitly re-verified as still
+correct/still-fixed during this pass: the `__lmu` zero-interior-byte fix
+(Section 7); `clearerr`/`ferror` functionality (Sections 2 and 8);
+`memmove`/bounded-division/`memchr` optimisations (Section 3); `qsort`/
+`bsearch` non-reentrancy and `abs`/`labs` signed-overflow semantics (Section
+4); `pf_div10`/`pf_build_u`/`pf_divu32_10` (Section 5); the read-cache
+invalidation fixes and `NFILES`/`UGC_MAX` sizing (Section 6); `_ldiv`'s
+remainder reuse (Section 4); `setjmp`/`longjmp`'s IY save/restore (Section
+9); the recent float-predicate optimisation commit (Section 10); several
+already-documented math special-value fixes (Section 11); the `strtol`→
+`modff` strip coupling and failed-exec stack-corruption precheck (Section
+12); `_atexit`'s 32-registration cap/LIFO order, `__stchk`'s boundary
+handling, and leap-year/weekday calculation correctness (Section 13). The
+two deliberately-deferred dead-code codegen patterns (dead `or a`
+carry-clears in the generated strconv/calendar blocks, and the calendar
+block's one dead `sbc hl,de`) were seen and correctly excluded from every
+section that touches those blocks.
+
+## Recommended next steps (for a future, separate fix-implementation pass)
+
+This audit intentionally made **no code changes**. Suggested order of
+attack for a follow-up session:
+
+1. **Fix `scripts/audit-runtime-coverage.py`'s label lists** (cheap, restores
+   a guardrail, no runtime risk).
+2. **Fix the handful of highest-confidence, self-contained correctness bugs
+   with the smallest blast radius first**, each gated by the normal full
+   regression suite in both `peep`/`nopeep`: **EC-F1** (`strftime` link
+   failure — add a standalone regression first, since existing tests
+   apparently mask it), **SJ-F1** (`sc_get_file` clobbers B — likely breaks
+   real programs using `fscanf`/`scanf` with literal text today), **CT-F1**
+   (`_fseek` result), **SH-F1** (`realloc` lost carry), **SS-C1** (`qsort`
+   pointer underflow).
+3. **Then the float-core subnormal defect (FC-F2)** — this is the most
+   invasive fix (touches add/mul/div/scale/sqrt) and the highest-value one;
+   budget real design time for it and add dedicated subnormal regression
+   tests (`tests/` already has good raw-bit float test precedent to follow,
+   e.g. `tfmodfsp.c`, `tfmedge.c`).
+4. **Printf/scanf buffer-safety fixes** (**PF-F2**, **PF-F3**, **PF-F1**,
+   **SJ-F3**) — these affect any program doing real file-based formatted
+   I/O or interleaved `fscanf`/`fgetc`.
+5. **The `_ungetc`/pushback family** (**CI-2..CI-5**, **CT-F3**,**CT-F4**) as
+   one coordinated fix, since they share a root cause and read paths.
+6. **File-I/O correctness batch** (Section 6's `FI-*` findings) — largely
+   independent of each other, can be tackled incrementally with per-bug
+   regressions.
+7. **`powf`/trig special-value batch** (Section 11's `MT-*` findings) —
+   also largely independent per-function.
+8. **`dccrtlstrip` block-hygiene batch** (table above) — do together, single
+   measurement pass across minimal single-feature programs.
+9. **Everything else** (remaining optimisations) — pick opportunistically;
+   each must still be measured with `ntvcm -p` before/after per the
+   project's "line count doesn't prove a win" rule, and every change of any
+   kind must pass the strict full+extended regression gate
+   (`DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 pwsh
+   ./scripts/runall.ps1 -Mode full -Extended -RunTimeout 30 -FailuresOnly`,
+   both with and without `-NoStackCheck`) before it's considered done.

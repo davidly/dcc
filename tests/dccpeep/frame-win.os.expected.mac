@@ -1,0 +1,28 @@
+	extrn __entr
+	extrn __lve
+	cseg
+	public _f1
+_f1:
+	ld hl,-2
+	call __entr ; peep: shared_frame
+	ld a,(ix-2)
+	jp __lve ; peep: shared_frame
+
+	public _f2
+_f2:
+	ld hl,-2
+	call __entr ; peep: shared_frame
+	ld a,(ix-2)
+	jp __lve ; peep: shared_frame
+
+	public _f3
+_f3:
+	ld hl,-2
+	call __entr ; peep: shared_frame
+	ld a,(ix-2)
+	jp __lve ; peep: shared_frame
+
+	public _tail
+_tail:
+	ret
+	end

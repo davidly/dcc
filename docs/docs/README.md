@@ -84,4 +84,4 @@ symbol tables from documented declarations. Use markers such as
 `<!-- MATH-SYMBOL-TABLE: all sorted -->` when an alphabetical symbol table reads
 better. Other standard-library pages use the same hook with prefixes such as
 `STDLIB`, `STRING`, `CTYPE`, `ASSERT`, `ERRNO`, `FLOAT`, `LIMITS`, `SETJMP`,
-`STDARG`, `STDBOOL`, `STDDEF`, and `STDINT`.
+`STDARG`, `STDBOOL`, `STDDEF`, `STDINT`, and `TIME`.

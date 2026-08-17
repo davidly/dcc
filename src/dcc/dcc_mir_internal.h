@@ -131,6 +131,8 @@ struct MirInsn {
     unsigned int bit_mask;
     int secondary_offset;
     int inline_temp_id;
+    /* Low/high bytes retain direct left/right 32-bit div/mod cast types. */
+    int divmod_cast_types;
     char name[64];
     char base_name[64];
 };

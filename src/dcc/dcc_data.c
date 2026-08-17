@@ -331,10 +331,21 @@ void emit_data(void)
             bss_off += bss_size;
         }
 
+        emit("\tpublic\t__bssn\n");
+        fprintf(g_emit_sink.stream, "__bssn\tequ\t%d\n", bss_off);
         fprintf(g_emit_sink.stream, "__bsse\tequ\t__bssb+%d\n", bss_off);
-        fprintf(g_emit_sink.stream, "__hstart\tequ\t__bsse\n");
+        if (g_main_has_args) {
+            /*
+             * argc/argv startup needs a 132-byte vector and a 128-byte
+             * command-tail copy. Reserve them immediately above the C BSS,
+             * outside the range startup must zero, and include them in
+             * __hstart so heap and stack can never overlap the scratch.
+             */
+            fprintf(g_emit_sink.stream, "__hstart\tequ\t__bsse+260\n");
+        } else {
+            fprintf(g_emit_sink.stream, "__hstart\tequ\t__bsse\n");
+        }
         emit("\tpublic\t__bsse\n");
         emit("\tpublic\t__hstart\n");
     }
 }
-

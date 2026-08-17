@@ -3101,14 +3101,14 @@ void parse_function_or_global(int base_type)
                 if (strcmp(name, "main") == 0) {
                     int has_args = !((s->has_proto  && s->proto_nargs == 0) ||
                                      (!s->has_proto && pre_params_nlocals == 0));
+                    g_main_has_args = has_args;
                     fprintf(g_emit_sink.stream, "\n\tpublic __mrun\n");
                     if (has_args) {
                         fprintf(g_emit_sink.stream, "\textrn __build_argv\n");
                         fprintf(g_emit_sink.stream, "\textrn __argc\n");
-                        fprintf(g_emit_sink.stream, "\textrn argv\n");
                         fprintf(g_emit_sink.stream, "__mrun:\n");
                         fprintf(g_emit_sink.stream, "\tcall __build_argv\n");
-                        fprintf(g_emit_sink.stream, "\tld hl,argv\n");
+                        fprintf(g_emit_sink.stream, "\tld hl,__bsse\n");
                         fprintf(g_emit_sink.stream, "\tpush hl\n");
                         fprintf(g_emit_sink.stream, "\tld hl,(__argc)\n");
                         fprintf(g_emit_sink.stream, "\tpush hl\n");

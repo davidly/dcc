@@ -52,10 +52,15 @@
     { "name": "targs", "args": "a bb ccc dddd eeeee", "host": true },
     { "name": "tkbd", "stdin": "x", "perf_ignore": true },
     { "name": "tscanin", "stdin": "42 -7 hello", "host": true },
+    { "name": "tfcons", "stdin": "ABCD\u001a", "perf_ignore": true },
+    { "name": "tugpath", "stdin": "ath\nine\n\u001a" },
     { "name": "tpfauto", "dcc_floatio": false, "dcc_longio": false },
     { "name": "tpfio", "dcc_floatio": true, "dcc_longio": false },
     { "name": "tplng", "dcc_floatio": false, "dcc_longio": true },
     { "name": "tpflio", "dcc_floatio": true, "dcc_longio": true },
+    { "name": "tldcast", "dcc_floatio": false, "dcc_longio": true },
+    { "name": "tldmfus", "dcc_floatio": false, "dcc_longio": true },
+    { "name": "tmodfsp", "dcc_floatio": false, "dcc_longio": true },
     { "name": "tvplain", "dcc_floatio": false, "dcc_longio": false },
     { "name": "tvla", "stack_size": 8192, "requires-non-msvc-host-compiler": true },
     { "name": "tvlapk", "stack_size": 2048, "requires-non-msvc-host-compiler": true },
@@ -148,6 +153,10 @@
     { "name": "tc99apar", "requires-non-msvc-host-compiler": true },
     { "name": "tpfinf", "requires-non-msvc-host-compiler": true, "requires-non-macos-host-compiler": true },
     { "name": "ttrace", "ignore": true },
-    { "name": "texecdp", "stack_size": 2048 }
+    { "name": "texecdp", "stack_size": 2048 },
+    { "name": "texargs", "stack_size": 1024,
+      "extra_scenarios": [
+        { "suffix": "direct", "args": "DIRECT A\"B C\\D" }
+      ] }
   ]
 }

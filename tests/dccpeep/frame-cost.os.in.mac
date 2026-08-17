@@ -1,0 +1,27 @@
+cseg
+public _f1
+_f1:
+push ix
+ld ix,0
+add ix,sp
+ld hl,-2
+add hl,sp
+ld sp,hl
+ld a,(ix-2)
+ld sp,ix
+pop ix
+ret
+
+public _f2
+_f2:
+push ix
+ld ix,0
+add ix,sp
+ld hl,-2
+add hl,sp
+ld sp,hl
+ld a,(ix-2)
+ld sp,ix
+pop ix
+ret
+end

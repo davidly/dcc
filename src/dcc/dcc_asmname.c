@@ -146,6 +146,7 @@ const char *asm_name_for_runtime(const char *cname)
     if (!strcmp(cname, "islower")) return "__clo";
     if (!strcmp(cname, "isxdigit")) return "__cxd";
     if (!strcmp(cname, "isprint")) return "__cpr";
+    if (!strcmp(cname, "isgraph")) return "__cgr";
     if (!strcmp(cname, "iscntrl")) return "__cct";
     if (!strcmp(cname, "ispunct")) return "__cpu";
     if (!strcmp(cname, "toupper")) return "__ctu";
@@ -277,7 +278,8 @@ void asm_scan_format_specifiers(const char *s, int *needs_float, int *needs_long
             ++i;
             continue;
         }
-        while (i < len && (s[i] == '-' || s[i] == '+' || s[i] == '#' || s[i] == '0'))
+        while (i < len && (s[i] == '-' || s[i] == '+' || s[i] == ' ' ||
+                           s[i] == '#' || s[i] == '0'))
             ++i;
         while (i < len && s[i] >= '0' && s[i] <= '9')
             ++i;

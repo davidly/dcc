@@ -137,6 +137,7 @@ static void test_fscanf_file(void)
 {
     FILE *fp;
     int n;
+    int literal_value;
     int value;
     int auto_value;
     char ch;
@@ -196,6 +197,30 @@ static void test_fscanf_file(void)
     n = fscanf(fp, "%c", &ch);
     check_int("fscanf split count 2", n, 1);
     check_int("fscanf split char", ch, 'x');
+
+    fclose(fp);
+    remove("TSCAN.TMP");
+
+    fp = fopen("TSCAN.TMP", "w");
+    if (fp == NULL) {
+        printf("FAIL fopen write literal\n");
+        failures++;
+        return;
+    }
+    fputs("A=42", fp);
+    fclose(fp);
+
+    fp = fopen("TSCAN.TMP", "r");
+    if (fp == NULL) {
+        printf("FAIL fopen read literal\n");
+        failures++;
+        return;
+    }
+
+    literal_value = 0;
+    n = fscanf(fp, "A=%d", &literal_value);
+    check_int("fscanf literal count", n, 1);
+    check_int("fscanf literal value", literal_value, 42);
 
     fclose(fp);
     remove("TSCAN.TMP");

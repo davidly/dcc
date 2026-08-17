@@ -1,0 +1,23 @@
+	extrn __ldwl
+	extrn __sxhl
+	extrn __sxde
+; six __ldwl candidates save one linked byte
+	call __ldwl ; peep: ldwl
+	call __ldwl ; peep: ldwl
+	call __ldwl ; peep: ldwl
+	call __ldwl ; peep: ldwl
+	call __ldwl ; peep: ldwl
+	call __ldwl ; peep: ldwl
+; four __sxde candidates save two linked bytes
+	call __sxde ; peep: sxde
+	call __sxde ; peep: sxde
+	call __sxde ; peep: sxde
+	call __sxde ; peep: sxde
+; six __sxhl candidates save one linked byte
+	call __sxhl ; peep: sxhl
+	call __sxhl ; peep: sxhl
+	call __sxhl ; peep: sxhl
+	call __sxhl ; peep: sxhl
+	call __sxhl ; peep: sxhl
+	call __sxhl ; peep: sxhl
+	end
