@@ -529,7 +529,7 @@ _opm_arith:
         or      a
         jp      nz,_opm_bcd
 
-        ; Binary SBC is ADC with one's-complement rhs:
+        ; Binary SBC is ADC with ones-complement rhs:
         ;     A - rhs - !C == A + ~rhs + C
         ld      a,b
         cp      0e0h
@@ -698,7 +698,7 @@ void op_math( uint8_t op, uint8_t rhs )
 }
 #endif
 
-static void op_pop_pf()
+static void op_pop_pf( void )
 {
     uint8_t pf = pop();
     cpu.fNegative = ( pf & 0x80 );
@@ -709,7 +709,7 @@ static void op_pop_pf()
     cpu.fCarry = ( pf & 1 ); 
 }
 
-void op_php()
+void op_php( void )
 {
     uint8_t pf = 0x30;
     if ( cpu.fNegative ) pf |= 0x80;
@@ -723,7 +723,7 @@ void op_php()
 
 #ifdef APPLE1_TRACE
 static char ac_flags[ 7 ];
-char * render_flags()
+char * render_flags( void )
 {
     ac_flags[ 0 ] = cpu.fNegative ? 'N' : 'n';
     ac_flags[ 1 ] = cpu.fOverflow ? 'V' : 'v';
@@ -736,7 +736,7 @@ char * render_flags()
 }
 #endif //APPLE1_TRACE
 
-void emulate()
+void emulate( void )
 {
     uint8_t op, val;
     uint16_t address;
@@ -1306,11 +1306,11 @@ uint8_t m_e000[ 4096 ] = /* woz basic */
     0x36, 0xE8, 0x20, 0xB7, 0xE5, 0x4C, 0x5B, 0xE8, 0xE0, 0x80, 0xD0, 0x01, 0x88, 0x4C, 0x0C, 0xE0,
 };
 
-void m_halt()
+void m_halt( void )
 {
 }
 
-uint8_t m_hook()
+uint8_t m_hook( void )
 {
     uint16_t address;
     address = cpu.pc;
@@ -1340,7 +1340,7 @@ void m_hard_exit( char * msg )
     exit( 1 );
 }
 
-void load_input_file()
+void load_input_file( void )
 {
     char * result;
     char acLine[ 120 ];
@@ -1359,7 +1359,7 @@ void load_input_file()
     }
 }
 
-int getc_load_file()
+int getc_load_file( void )
 {
     char c;
 
