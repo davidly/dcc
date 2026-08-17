@@ -140,10 +140,13 @@ unsuffixed alias (`sqrt`, `pow`, …) that stays single-precision, so portable
 source compiles unchanged. `nextafterf` is a dcc extra.
 
 Caveats: transcendentals are polynomial approximations (~**5–6 correct decimal
-digits**), and `sin`/`cos`/`tan` range-reduction via `fmodf` degrades for very
-large arguments. There is **no** `double` or `long double`; `HUGE_VAL` is the
-largest finite 32-bit float, and literal `%f` formats are detected automatically
-by dcc.
+digits**). The compact `sin`/`cos`/`tan` range reduction supports finite
+arguments with magnitude below 32768 and returns NaN at or above that cutoff
+rather than silently producing an unrelated phase. There is **no** `double` or
+`long double`; `HUGE_VAL` is the largest finite 32-bit float, and literal `%f`
+formats are detected automatically by dcc. `math_errhandling` is `MATH_ERRNO`:
+domain errors set `EDOM`, and pole, overflow, and underflow errors set `ERANGE`;
+CP/M has no floating-point exception facility.
 
 ## setjmp.h / stdarg.h / stddef.h
 

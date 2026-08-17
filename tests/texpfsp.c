@@ -1,14 +1,8 @@
 /*
  * texpfsp.c - C99 7.12.6.19 special-value regression coverage for
- * dccrtl.mac's expf. Its two range comparisons (x<-88 underflow-to-0,
- * x>=88 overflow) already returned the right ANSWER for -Inf (correctly
- * < -88) and +Inf (correctly not < 88, so it fell into the same branch
- * as ordinary overflow) - the real gap was NaN, which compares false
- * against everything and fell through to the overflow branch, silently
- * returning a finite 3.4e38f approximation instead of propagating NaN.
- * That same branch's return value is now also a real +Infinity instead
- * of the 3.4e38f approximation, for both the NaN-adjacent +Inf case and
- * ordinary large-finite overflow (e.g. expf(100)).
+ * dccrtl.mac's expf. NaN propagation and real Infinity overflow results
+ * were added before Batch 6; the current implementation also gives +Inf
+ * its own path and uses the finite overflow boundary near 88.72284f.
  */
 #include <stdio.h>
 #include <math.h>

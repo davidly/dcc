@@ -22,6 +22,12 @@ unsuffixed math names (`sqrt`, `sin`, `pow`, and so on) as `double` functions,
 but this runtime has no `double`, so [`math.h`](08-math.md) maps those names to
 the single-precision `...f` functions with macros.
 
+`math_errhandling` is `MATH_ERRNO`. Domain errors set `errno` to `EDOM`;
+pole, overflow, and underflow errors set it to `ERANGE`. Ordinary NaN and
+infinity propagation does not set `errno`. CP/M has no floating-point
+exception facility, so `MATH_ERREXCEPT` is defined for source compatibility
+but is not selected by `math_errhandling`.
+
 !!! warning "Float is the biggest size lever"
     A single `float` operator links the shared normalise/round core, and the
     transcendental functions (`expf`/`logf`/`powf` and the trig/hyperbolic
@@ -82,8 +88,11 @@ I/O subset.
 The transcendental routines (`expf`/`logf`/`powf`, the trig and hyperbolic
 families) are single-precision polynomial and series approximations: expect
 roughly 5-6 significant digits on ordinary ranges, not full `float` round-trip
-accuracy. The range-reduction in `sinf`/`cosf`/`tanf` uses `fmodf`, so accuracy
-gradually degrades for very large arguments.
+accuracy. The compact `sinf`/`cosf`/`tanf` range reduction is supported for
+finite arguments with magnitude below 32768. At or above that cutoff the
+functions return NaN rather than silently report a result with an unrelated
+phase; accuracy gradually degrades as a supported argument approaches the
+cutoff.
 
 ## Precision and mixed-type gotchas
 

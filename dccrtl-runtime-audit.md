@@ -6,7 +6,7 @@ is a findings/backlog document for a future, separate fix-implementation pass.
 ## Follow-up implementation status
 
 The audit itself remains a read-only snapshot. Follow-up work on this branch has
-implemented the first five repair batches:
+implemented the first six repair batches:
 
 - Batch 1 fixed **SS-C1**, **SH-F1**, **CT-F1**, **SJ-F1**, and **EC-F1**.
 - Batch 2 fixed add/sub subnormal handling, nearest-even rounding, conversion
@@ -30,6 +30,12 @@ implemented the first five repair batches:
   closed temporary files, checks `tmpnam` collisions, and enforces documented
   rename errors. The ctype helpers now reject out-of-range values, and
   `isgraph(expr)` evaluates its argument once.
+- Batch 6 fixed **MT-F1** through **MT-F15**. `expf`, `powf`, trig,
+  hyperbolic, `frexpf`, `ldexpf`, and `modff` now classify special values,
+  signed zero, parity, subnormals, and range boundaries consistently. True
+  domain/range exits report `EDOM`/`ERANGE` without misclassifying NaN
+  propagation. The compact trig implementation deliberately returns NaN for
+  finite `|x| >= 32768`; a code-heavy Payne-Hanek reducer was not added.
 
 **PF-F11** remains deferred because defensive NULL `%s` handling would add cost
 to every valid `%s` call. Subnormal multiply/divide/square-root work from

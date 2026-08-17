@@ -7,6 +7,12 @@
 #define HUGE_VAL 3.40282347e+38F
 /** C99 float-flavored HUGE_VAL; true IEEE-754 infinity, unlike HUGE_VAL. */
 #define HUGE_VALF INFINITY
+/** Math errors are reported through errno. */
+#define MATH_ERRNO 1
+/** Floating-point exceptions are not available on CP/M. */
+#define MATH_ERREXCEPT 2
+/** dcc reports math errors through errno, not floating-point exceptions. */
+#define math_errhandling MATH_ERRNO
 
 /**
  * IEEE-754 positive infinity, as a genuine compile-time constant: dcc's

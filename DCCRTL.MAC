@@ -19,7 +19,7 @@ FTRSIZE          equ     2
 ; Keep in sync with MAXFD = FIRSTFD+NFILES at the _open block.
 UGC_MAX  equ     11
 
-; errno values used by the CP/M file layer.  Keep these in sync with errno.h.
+; errno values used by the runtime. Keep these in sync with errno.h.
 ENOENT   equ     2
 EIO      equ     5
 EBADF    equ     9
@@ -28,6 +28,8 @@ EINVAL   equ     22
 EMFILE   equ     24
 EFBIG    equ     27
 ENOSPC   equ     28
+EDOM     equ     33
+ERANGE   equ     34
 
         cseg
 ; start: must be the very first thing in the linked image - CP/M loads a
@@ -16936,7 +16938,7 @@ _fmodf:
         call    __finf
         ld      a,h
         or      l
-        jp      nz,FMDNAN       ; x is +/-Inf: domain error -> NaN
+        jp      nz,FMDDOM       ; x is +/-Inf: domain error -> NaN
         ld      l,(ix+8)
         ld      h,(ix+9)
         ld      e,(ix+10)
@@ -16966,9 +16968,8 @@ FMDNOTYINF:
         ld      a,(ix+8)
         or      b
         jr      nz,FMDNZ
-        ld      hl,0
-        ld      de,7fc0h
-        jp      FMDRET
+FMDDOM:
+        call    __medom
 FMDNAN:
         ld      d,7fh
         ld      e,0c0h
@@ -17275,7 +17276,7 @@ _sqrtf:
         jr      z,FMSNOTINF
         ld      d,(ix+7)
         bit     7,d
-        jp      nz,FMSNAN       ; x is -Inf: domain error -> NaN
+        jp      nz,FMSDOM       ; x is -Inf: domain error -> NaN
         jp      FMSID           ; x is +Inf: sqrt(+Inf) = +Inf, unchanged
 FMSNOTINF:
 
@@ -17291,6 +17292,8 @@ FMSNOTINF:
         ld      d,(ix+7)
         bit     7,d
         jp      z,FMSPOS        ; x > 0 and finite: the ordinary case
+FMSDOM:
+        call    __medom
 FMSNAN:
         ld      d,7fh
         ld      e,0c0h
@@ -17933,7 +17936,18 @@ NXINC:
         inc     h
         jp      nz,NXRET
         inc     e
-        jp      nz,NXRET
+        jr      z,NXINCD
+        ld      a,e
+        cp      80h
+        jr      nz,NXRET
+        ld      a,d
+        inc     a
+        add     a,a
+        jr      nz,NXRET
+        call    __merng
+        ld      hl,0
+        jr      NXRET
+NXINCD:
         inc     d
         jr      NXRET ; peep: jp_to_jr
 
@@ -17980,23 +17994,26 @@ NXLT:   db      0
 ; leftovers from that history, not a sign this is machine-generated.
 
 
+        public __medom
+        public __merng
+__medom:
+        ld      hl,EDOM
+        ld      (_errno),hl
+        ret
+__merng:
+        ld      hl,ERANGE
+        ld      (_errno),hl
+        ret
 
         public _expf
 _expf:
         ; float expf(float x)
         ; IX-free; locals moved to static scratch (already non-reentrant).
         ;
-        ; C99 7.12.6.19 special-value handling, checked before the two
-        ; range comparisons below. Those already happen to return the
-        ; right ANSWER for -Inf (correctly less than -88.0, so it falls
-        ; into the x<-88 underflow-to-0 case) and for +Inf (correctly
-        ; NOT less than 88.0, so it falls into the same branch as
-        ; ordinary overflow - just needed that branch's return value
-        ; upgraded from a finite 3.4e38f approximation to a real
-        ; +Infinity, below). NaN was the real gap: it compares false
-        ; against everything, so "x < 88.0" was false and it fell all
-        ; the way to the overflow branch, silently returning 3.4e38f
-        ; instead of propagating NaN.
+        ; C99 7.12.6.19 special values are classified directly from the
+        ; raw bits before the finite range checks. Positive finite values
+        ; below 0x42b17218 (88.722839f) remain representable. NaN and
+        ; infinity propagation does not set errno.
         pop bc                  ; return address
         pop hl                  ; x low word
         pop de                  ; x high word
@@ -18006,54 +18023,65 @@ _expf:
         push hl                 ; restore x low word
         push bc                 ; restore return address
 
-        ld hl,(__expf_x)
-        ld de,(__expf_x+2)
-        call __fnan
-        ld a,h
+        ld a,d
+        inc a
+        add a,a
+        jr nz,MXRANG
+        bit 7,e
+        jr z,MXRANG
+        ld a,e
+        add a,a
+        or h
         or l
-        jr z,MFEXPNOTNAN
+        jr z,MXINF
+MXQNAN:
         ld d,7fh
         ld e,0c0h
         ld hl,0
-        ret ; peep: jp_to_plain_ret
-MFEXPNOTNAN:
-
-        ld hl,(__expf_x)
-        ld de,(__expf_x+2)
+        ret
+MXINF:
+        bit 7,d
+        jr nz,MXZRET           ; -Infinity -> +0
+        jr MXIRET              ; +Infinity -> +Infinity
+MXRANG:
+        bit 7,d
+        jr nz,MXNEG
         push de
         push hl
-        ld hl,0
-        ld de,17072
+        ld hl,29207             ; previous float below 0x42b17218
+        ld de,17073             ; so previous < x implements x >= threshold
         call __fltf
         pop bc
         pop bc
         ld a,h
         or l
-        jr      z,MFL2 ; peep: jp_to_jr
-        ld d,7fh                ; x >= 88.0 (including +Infinity): overflow
-        ld e,80h                ; -> +Infinity (was a finite 3.4e38f
-        ld hl,0                 ; approximation)
-        ret ; peep: jp_to_plain_ret
-MFL2:
-        ld hl,(__expf_x)
-        ld de,(__expf_x+2)
-        push de
-        push hl
+        jr z,MXNORM
+        call __merng
+MXIRET:
+        ld d,7fh
+        ld e,80h
         ld hl,0
-        ld de,17072
+        ret
+MXNEG:
+        res 7,d                 ; preserve the existing x < -88 underflow
         ld a,d
-        xor 80h
-        ld d,a
-        call __fgtf
-        pop bc
-        pop bc
+        cp 42h
+        jr c,MXNORM
+        jr nz,MXUNDF
+        ld a,e
+        cp 0b0h
+        jr c,MXNORM
+        jr nz,MXUNDF
         ld a,h
         or l
-        jr      z,MFL4 ; peep: jp_to_jr
+        jr z,MXNORM
+MXUNDF:
+        call    __merng
+MXZRET:
         ld hl,0
         ld de,0
-        ret ; peep: jp_to_plain_ret
-MFL4:
+        ret
+MXNORM:
         ld hl,(__expf_x)
         ld de,(__expf_x+2)
         push de
@@ -18223,15 +18251,24 @@ MFL7:
         ld (__expf_poly),hl
         ld (__expf_poly+2),de
         ld hl,(__expf_n)
-        push hl
+        ld b,l
+        ld c,h
         ld hl,(__expf_poly)
         ld de,(__expf_poly+2)
-        push de
-        push hl
-        call _ldexpf
-        pop bc
-        pop bc
-        pop bc
+        inc c
+        jr z,MXSCAL
+        bit 7,b
+        jr z,MXSCAL
+        dec b                   ; n=128: scale by 127, then by one more bit
+        call __fscale_pow2
+        ld b,1
+MXSCAL:
+        call __fscale_pow2
+        ld a,d
+        or e
+        ret nz                  ; scaler emits normalized values or exact zero
+        call __merng            ; finite input rounded/flushed to zero
+        ld hl,0
 MFL1:
         ret
 
@@ -18282,7 +18319,7 @@ _logf:
 
         ld a,(__logf_x+3)
         bit 7,a
-        jp nz,MFLOGNAN          ; x < 0 (and not -0.0, ruled out above): NaN
+        jp nz,MFLOGDOMAIN       ; x < 0 (and not -0.0, ruled out above): NaN
 
         ld hl,(__logf_x)
         ld de,(__logf_x+2)
@@ -18298,7 +18335,11 @@ MFLOGNAN:
         ld e,0c0h
         ld hl,0
         ret ; peep: jp_to_plain_ret
+MFLOGDOMAIN:
+        call __medom
+        jr MFLOGNAN
 MFLOGNINF:
+        call __merng
         ld d,0ffh
         ld e,80h
         ld hl,0
@@ -18499,7 +18540,8 @@ _log10f:
         public _powf
 _powf:
         ; float powf(float x, float y)
-        ; IX-free; locals moved to static scratch (already non-reentrant).
+        ; C99 special-value ordering and integer parity are classified from
+        ; the raw IEEE-754 bits; no signed-long round trip is involved.
         pop bc                  ; return address
         pop hl                  ; x low word
         pop de                  ; x high word
@@ -18517,64 +18559,153 @@ _powf:
         push de                 ; restore x high word
         push hl                 ; restore x low word
         push bc                 ; restore return address
+
+        ; y == +/-0 -> 1, even when x is NaN.
         ld hl,(__powf_y)
         ld de,(__powf_y+2)
-        push de
-        push hl
-        ld hl,0
-        ld de,0
-        call __feqf
-        pop bc
-        pop bc
+        call __fzro
         ld a,h
         or l
-        jr      z,MFL15 ; peep: jp_to_jr
-        ld hl,0
-        ld de,16256
-        ret ; peep: jp_to_plain_ret
-MFL15:
-        ; if (x == 0.0f) ... - y != 0 is already established by the
-        ; check above, so only its sign matters here. C99 7.12.7.4: x==0
-        ; with y<0 is a pole error -> Infinity, not the 0.0f mathf.c's
-        ; original C source unconditionally returned regardless of y's
-        ; sign (correct only for y>0, silently wrong - a bare 0 instead
-        ; of a pole error - for y<0).
+        jp nz,MP6ONE
+
+        ; x == +1 -> 1, even when y is NaN.
+        ld hl,(__powf_x)
+        ld de,(__powf_x+2)
+        ld a,d
+        cp 3fh
+        jr nz,MP6NX1
+        ld a,e
+        cp 80h
+        jr nz,MP6NX1
+        ld a,h
+        or l
+        jp z,MP6ONE
+MP6NX1:
+        ; Remaining NaN operands produce a canonical quiet NaN.
+        ld hl,(__powf_y)
+        ld de,(__powf_y+2)
+        call __fnan
+        ld a,h
+        or l
+        jp nz,MP6NAN
+        ld hl,(__powf_x)
+        ld de,(__powf_x+2)
+        call __fnan
+        ld a,h
+        or l
+        jp nz,MP6NAN
+
+        ; Infinite y depends only on |x| relative to 1. The result is
+        ; always positive, including for negative zero/infinity bases.
+        ld a,(__powf_y+2)
+        add a,a
+        ld a,(__powf_y+3)
+        rla
+        inc a
+        jr nz,MP6NYI
+        ld hl,(__powf_x)
+        ld de,(__powf_x+2)
+        res 7,d
+        ld a,d
+        cp 3fh
+        jr c,MP6ILT
+        jr nz,MP6IGT
+        ld a,e
+        cp 80h
+        jr c,MP6ILT
+        jr nz,MP6IGT
+        ld a,h
+        or l
+        jp z,MP6ONE
+MP6IGT:
+        ld a,(__powf_y+3)
+        bit 7,a
+        jp nz,MP6ZER
+        jp MP6INF
+MP6ILT:
+        ld a,(__powf_y+3)
+        bit 7,a
+        jp nz,MP6INF
+        jp MP6ZER
+
+MP6NYI:
+        ; Zero bases need odd-integer parity to preserve a negative sign.
         ld hl,(__powf_x)
         ld de,(__powf_x+2)
         call __fzro
         ld a,h
         or l
-        jp z,MFL17              ; x != 0: ordinary path continues
+        jp nz,MP6XZ
+
+        ; Infinite bases use the same parity rule for signed zero/Inf.
+        ld a,(__powf_x+2)
+        add a,a
+        ld a,(__powf_x+3)
+        rla
+        inc a
+        jp z,MP6XI
+
+        ld a,(__powf_x+3)
+        bit 7,a
+        jr nz,MP6NEG
+        ld a,2                 ; positive finite base: no sign adjustment
+        jr MP6BASE
+
+MP6XZ:
+        ld c,0
+        jr MP6XSP
+MP6XI:
+        ld c,1
+MP6XSP:
+        ld e,0
+        ld a,(__powf_x+3)
+        bit 7,a
+        jr z,MP6XNS
+        call MP6YCL
+        cp 1
+        jr nz,MP6XNS
+        ld e,80h
+MP6XNS:
         ld a,(__powf_y+3)
         bit 7,a
-        jr z,MFPOWZP            ; y > 0: return 0.0f, unchanged
-        ld d,7fh                ; y < 0: pole error -> +Infinity
+        jr z,MP6XMG
+        ld a,c
+        or a
+        call z,__merng
+        ld a,c
+        xor 1
+        ld c,a
+MP6XMG:
+        ld a,c
+        or a
+        jr z,MP6XOZ
+        ld a,7fh
+        or e
+        ld d,a
         ld e,80h
         ld hl,0
-        ret ; peep: jp_to_plain_ret
-MFPOWZP:
+        ret
+MP6XOZ:
+        ld d,e
+        ld e,0
         ld hl,0
-        ld de,0
-        ret ; peep: jp_to_plain_ret
-MFL17:
-        ld hl,(__powf_x)
-        ld de,(__powf_x+2)
-        push de
-        push hl
-        ld hl,0
-        ld de,0
-        call __fltf
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr      z,MFL19 ; peep: jp_to_jr
+        ret
+
+MP6NEG:
+        call MP6YCL
+        or a
+        jr nz,MP6BASE
+        call __medom
+        jr MP6NAN
+MP6BASE:
+        push af                 ; 1=odd result sign, 2=positive/even
         ld hl,(__powf_y)
         ld de,(__powf_y+2)
         push de
         push hl
         ld hl,(__powf_x)
         ld de,(__powf_x+2)
+        res 7,d
         push de
         push hl
         call _logf
@@ -18588,151 +18719,126 @@ MFL17:
         call _expf
         pop bc
         pop bc
-        ret ; peep: jp_to_plain_ret
-MFL19:
-        ld hl,(__powf_y)
-        ld de,(__powf_y+2)
-        push de
-        push hl
+        pop af
+        cp 1
+        ret nz
+        set 7,d
+        ret
+
+MP6ONE:
+        ld hl,0
+        ld de,16256
+        ret
+MP6NAN:
+        ld d,7fh
+        ld e,0c0h
+        ld hl,0
+        ret
+MP6INF:
+        ld d,7fh
+        ld e,80h
+        ld hl,0
+        ret
+MP6ZER:
         ld hl,0
         ld de,0
-        call __fgtf
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr      z,MFL21 ; peep: jp_to_jr
+        ret
+
+        ; Return A=0 for non-integer, 1 for odd integer, 2 for even integer.
+        ; All finite values with unbiased exponent >23 are even integers.
+MP6YCL:
+        ld a,(__powf_y+2)
+        add a,a
+        ld a,(__powf_y+3)
+        rla
+        cp 127
+        jr c,MP6YNI
+        sub 127
+        cp 23
+        jr z,MP6Y23
+        jr nc,MP6YEV
+        ld b,a
+        ld a,23
+        sub b
+        ld b,a
+        ld a,(__powf_y+2)
+        and 7fh
+        or 80h
         ld hl,(__powf_y)
-        ld de,(__powf_y+2)
-        ld a,d
-        xor 80h
-        ld d,a
-        jr      MFL22 ; peep: jp_to_jr
-MFL21:
+MP6YSH:
+        srl a
+        rr h
+        rr l
+        jr c,MP6YNI
+        djnz MP6YSH
+        jr MP6YPAR
+MP6Y23:
         ld hl,(__powf_y)
-        ld de,(__powf_y+2)
-MFL22:
-        ld (__powf_ay),hl
-        ld (__powf_ay+2),de
-        call __ffl
-        ld (__powf_iy),hl
-        ld (__powf_iy+2),de
-        ld hl,(__powf_ay)
-        ld de,(__powf_ay+2)
-        push de
-        push hl
-        ld hl,(__powf_iy)
-        ld de,(__powf_iy+2)
-        call __flf
-        call __fsf
-        pop bc
-        pop bc
-        ld (__powf_fy),hl
-        ld (__powf_fy+2),de
-        push de
-        push hl
-        ld hl,0
-        ld de,0
-        call __fnef
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr      z,MFL23 ; peep: jp_to_jr
-        ld hl,0
-        ld de,0
-        ret ; peep: jp_to_plain_ret
-MFL23:
-        ld hl,(__powf_y)
-        ld de,(__powf_y+2)
-        push de
-        push hl
-        ld hl,(__powf_x)
-        ld de,(__powf_x+2)
-        ld a,d
-        xor 80h
-        ld d,a
-        push de
-        push hl
-        call _logf
-        pop bc
-        pop bc
-        call __fmf
-        pop bc
-        pop bc
-        push de
-        push hl
-        call _expf
-        pop bc
-        pop bc
-        ld (__powf_result),hl
-        ld (__powf_result+2),de
-        ld hl,(__powf_iy)
-        ld de,(__powf_iy+2)
-        push de
-        push hl
-        ld hl,1
-        ld de,0
-        pop bc
-        ld a,l
-        and c
-        ld l,a
-        ld a,h
-        and b
-        ld h,a
-        ex de,hl
-        pop bc
-        ld a,l
-        and c
-        ld l,a
-        ld a,h
-        and b
-        ld h,a
-        ex de,hl
-        push de
-        push hl
-        ld hl,0
-        ld de,0
-        pop bc
-        ld a,c
-        xor l
-        ld l,a
-        ld a,b
-        xor h
-        or l
-        ld l,a
-        pop bc
-        ld a,c
-        xor e
-        or l
-        ld l,a
-        ld a,b
-        xor d
-        or l
-        jr      z,MFL26 ; peep: jp_to_jr
-        ld hl,(__powf_result)
-        ld de,(__powf_result+2)
-        ld a,d
-        xor 80h
-        ld d,a
-        ld (__powf_result),hl
-        ld (__powf_result+2),de
-MFL26:
-        ld hl,(__powf_result)
-        ld de,(__powf_result+2)
-MFL14:
+MP6YPAR:
+        bit 0,l
+        jr z,MP6YEV
+        ld a,1
+        ret
+MP6YEV:
+        ld a,2
+        ret
+MP6YNI:
+        xor a
         ret
 
 __powf_x:       ds      4
 __powf_y:       ds      4
-__powf_ay:      ds      4
-__powf_iy:      ds      4
-__powf_fy:      ds      4
-__powf_result:  ds      4
+
+        public __hyp_large
+__hyp_large:
+        ; For |x| >= 88, sinhf/coshf are exp(|x|)/2 to float precision.
+        ; Compute this as 4*exp(|x|-ln(8)) so expf's finite input stays below
+        ; its overflow threshold throughout the representable result range.
+        ld      hl,(__hyp_xlo)
+        ld      de,(__hyp_xhi)
+        res     7,d
+        call    __finf
+        ld      a,h
+        or      l
+        jr      z,hyp_large_finite
+        ld      hl,(__hyp_xlo)
+        ld      de,(__hyp_xhi)
+        res     7,d
+        ret
+hyp_large_finite:
+        ld      hl,(__hyp_xlo)
+        ld      de,(__hyp_xhi)
+        res     7,d
+        push    de
+        push    hl
+        ld      hl,5522                 ; ln(8)
+        ld      de,16389
+        call    __fsf
+        pop     bc
+        pop     bc
+        push    de
+        push    hl
+        call    _expf
+        pop     bc
+        pop     bc
+        ld      b,2
+        call    __fscale_pow2
+        ld      (__hyp_alo),hl
+        ld      (__hyp_ahi),de
+        call    __finf
+        ld      a,h
+        or      l
+        jr      z,hyp_large_done
+        call    __merng
+hyp_large_done:
+        ld      hl,(__hyp_alo)
+        ld      de,(__hyp_ahi)
+        ret
 
         public _sinhf
 _sinhf:
-        ; sinhf(x) = (expf(x) - expf(-x)) / 2.
+        ; Moderate x uses (expf(x) - expf(-x)) / 2; large x uses the
+        ; scaled helper above to avoid an overflowing intermediate.
         ; Preserve the caller-cleaned argument layout without an IX frame.
         pop     bc
         pop     hl
@@ -18743,6 +18849,28 @@ _sinhf:
         ld      (__hyp_xlo),hl
         ld      (__hyp_xhi),de
 
+        ; sinh(x) rounds to x for |x| < 2^-13.  This also preserves either
+        ; signed zero and avoids exp(x)-exp(-x) cancellation for tiny inputs.
+        ld      a,d
+        add     a,a
+        cp      72h
+        ret     c
+        ld      a,d
+        and     7fh
+        cp      42h
+        jr      c,sinh_regular
+        jr      nz,sinh_large
+        ld      a,e
+        cp      0b0h
+        jr      c,sinh_regular
+sinh_large:
+        call    __hyp_large
+        ld      a,(__hyp_xhi+1)
+        and     80h
+        or      d
+        ld      d,a
+        ret
+sinh_regular:
         push    de
         push    hl
         call    _expf
@@ -18779,7 +18907,8 @@ _sinhf:
 
         public _coshf
 _coshf:
-        ; coshf(x) = (expf(x) + expf(-x)) / 2.
+        ; Moderate x uses (expf(x) + expf(-x)) / 2; large x uses the
+        ; scaled helper above to avoid an overflowing intermediate.
         pop     bc
         pop     hl
         pop     de
@@ -18789,6 +18918,17 @@ _coshf:
         ld      (__hyp_xlo),hl
         ld      (__hyp_xhi),de
 
+        ld      a,d
+        and     7fh
+        cp      42h
+        jr      c,cosh_regular
+        jr      nz,cosh_large
+        ld      a,e
+        cp      0b0h
+        jr      c,cosh_regular
+cosh_large:
+        jp      __hyp_large
+cosh_regular:
         push    de
         push    hl
         call    _expf
@@ -18835,6 +18975,12 @@ _tanhf:
         ld      (__hyp_xlo),hl
         ld      (__hyp_xhi),de
 
+        ; tanh(x) rounds to x for |x| < 2^-13.  Preserve signed zero and
+        ; bypass the exp(2*x)-1 cancellation that otherwise flushes tiny x.
+        ld      a,d
+        add     a,a
+        cp      72h
+        ret     c
         ; Keep the compiler-generated saturation thresholds exactly:
         ; x < 10.0f => continue, otherwise return +1.0f.
         push    de
@@ -18933,6 +19079,30 @@ __hyp_ahi:      dw      0
 __hyp_blo:      dw      0
 __hyp_bhi:      dw      0
 
+        public __trg
+__trg:
+        ; Compact shared magnitude gate for sinf/cosf/tanf.  Carry set means
+        ; |x| < 32768 and reduction is supported.  At and beyond the cutoff,
+        ; return quiet NaN with carry clear rather than a silently wrong phase.
+        ; Infinity additionally reports a domain error; NaN does not.
+        ld      a,d
+        add     a,a
+        cp      8eh
+        ret     c
+        cp      0feh
+        jr      nz,trg_nan
+        ld      a,e
+        add     a,a
+        or      h
+        or      l
+        jr      nz,trg_nan
+        call    __medom
+trg_nan:
+        or      a
+        ld      hl,0
+        ld      de,7fc0h
+        ret
+
         public _sinf
 _sinf:
         ; float sinf(float x)
@@ -18947,6 +19117,17 @@ _sinf:
         push bc                 ; restore return address
         ld (__sinf_x),hl
         ld (__sinf_x+2),de
+
+        ; Preserve either signed zero before polynomial evaluation.
+        ld a,d
+        add a,a
+        or e
+        or h
+        or l
+        ret z
+
+        call __trg
+        ret nc
 
         ld hl,4059
         ld de,16585
@@ -19154,6 +19335,9 @@ _cosf:
         push bc                 ; restore return address
         ld (__cosf_x),hl
         ld (__cosf_x+2),de
+
+        call __trg
+        ret nc
 
         ld hl,0
         ld de,16256
@@ -19388,6 +19572,10 @@ _tanf:
         push de                 ; restore x high word
         push hl                 ; restore x low word
         push bc                 ; restore return address
+
+        call __trg
+        ret nc
+
         ld hl,0
         ld (__tanf_sign),hl
         ld hl,4059
@@ -19476,6 +19664,13 @@ MFL56:
         call __fsf
         pop bc
         pop bc
+        push de
+        push hl
+        ld hl,48430
+        ld de,45883
+        call __faf
+        pop bc
+        pop bc
         ld (__tanf_r),hl
         ld (__tanf_r+2),de
         ld hl,1
@@ -19507,6 +19702,13 @@ MFL59:
         ld hl,(__tanf_r)
         ld de,(__tanf_r+2)
         call __fsf
+        pop bc
+        pop bc
+        push de
+        push hl
+        ld hl,48430
+        ld de,13115
+        call __faf
         pop bc
         pop bc
         ld (__tanf_r),hl
@@ -19561,20 +19763,9 @@ MFL60:
         pop bc
         ld (__tanf_den),hl
         ld (__tanf_den+2),de
-        push de
-        push hl
-        ld hl,0
-        ld de,0
-        call __feqf
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr      z,MFL63 ; peep: jp_to_jr
-        ld hl,0
-        ld de,0
-        ret ; peep: jp_to_plain_ret
-MFL63:
+        ; Range reduction guarantees |r| <= pi/4, so 15-6*r*r is > 11
+        ; and cannot be zero.  Divide directly; the old dead zero return also
+        ; masked pole residuals as tangent zero.
         ld hl,(__tanf_num)
         ld de,(__tanf_num+2)
         push de
@@ -19590,22 +19781,6 @@ MFL63:
         ld a,h
         or l
         jr      z,MFL66 ; peep: jp_to_jr
-        ld hl,(__tanf_result)
-        ld de,(__tanf_result+2)
-        push de
-        push hl
-        ld hl,0
-        ld de,0
-        call __feqf
-        pop bc
-        pop bc
-        ld a,h
-        or l
-        jr      z,MFL67 ; peep: jp_to_jr
-        ld hl,0
-        ld de,0
-        jr      MFL54 ; peep: jp_to_jr
-MFL67:
         ld hl,0
         ld de,16256
         push de
@@ -19645,6 +19820,14 @@ _atanf:
         push bc                 ; restore return address
         ld (__atanf_x),hl
         ld (__atanf_x+2),de
+
+        ; Preserve either signed zero before the offset/polynomial path.
+        ld a,d
+        add a,a
+        or e
+        or h
+        or l
+        ret z
 
         ld hl,0
         ld de,16256
@@ -19975,6 +20158,16 @@ MATAN2XORD:
         ld      de,16329        ; half_pi
         jr      MATAN2SGNY ; peep: jp_to_jr
 MATAN2ORD:
+        ; A zero y has a sign-defined result for every finite x.  Handle it
+        ; before the x==0 and ratio paths, then both paths know y is nonzero.
+        ld      de,(__atan2_yhi)
+        ld      hl,(__atan2_ylo)
+        ld      a,d
+        add     a,a
+        or      e
+        or      h
+        or      l
+        jr      z,atan2_return_zero
 
         ; if (x == 0.0f)
         ld      de,(__atan2_xhi)
@@ -19990,58 +20183,24 @@ MATAN2ORD:
         or      l
         jr      z,atan2_nonzero_x
 
-        ; Preserve the former zero-denominator behavior exactly.
-        ld      de,(__atan2_yhi)
-        ld      hl,(__atan2_ylo)
-        push    de
-        push    hl
-        ld      hl,0
-        ld      de,0
-        call    __fltf
-        pop     bc
-        pop     bc
-        ld      a,h
-        or      l
-        jr      z,atan2_check_positive_y
+        ; y is known nonzero here: x==0 returns half-pi with y's sign.
         ld      hl,4059
         ld      de,16329
-        ret
-
-atan2_check_positive_y:
-        ld      de,(__atan2_yhi)
-        ld      hl,(__atan2_ylo)
-        push    de
-        push    hl
-        ld      hl,0
-        ld      de,0
-        call    __fgtf
-        pop     bc
-        pop     bc
-        ld      a,h
-        or      l
-        jr      z,atan2_return_zero
-        ld      hl,4059
-        ld      de,16329
-        ld      a,d
-        xor     80h
-        ld      d,a
-        ret
+        jr      MATAN2SGNY
 
 atan2_return_zero:
-        ; y == 0 (either sign) and x == 0 (either sign): C99's table
-        ; distinguishes all four sign combinations - x>=0 gives a zero
-        ; with y's sign, x<0 gives PI with y's sign (previously always a
-        ; bare +0.0f regardless of either sign).
+        ; y == 0 (either sign), with any finite x: x>=0 gives a zero with
+        ; y's sign, while x<0 gives PI with y's sign.
         ld      a,(__atan2_xhi+1)
         bit     7,a
         jr      nz,MATAN2_00N
         ld      hl,0
         ld      de,0
-        jp      MATAN2SGNY
+        jr      MATAN2SGNY
 MATAN2_00N:
         ld      hl,4059
         ld      de,16457        ; pi
-        jp      MATAN2SGNY
+        jr      MATAN2SGNY
 
 atan2_nonzero_x:
         ; q = y / x
@@ -20207,6 +20366,7 @@ Lskrl_18944:
         ; the ordinary path below and is already correct, so only the
         ; return value on this branch needed to change, not the
         ; threshold test itself).
+        call __medom
         ld d,7fh
         ld e,0c0h
         ld hl,0
@@ -20501,7 +20661,7 @@ MFREXPID:
         ret
 MFREXPORD:
 
-        ; Treat either signed zero as zero, matching the former __feq call.
+        ; Preserve either signed zero and store exponent zero.
         ld      hl,(__frexp_xlo)
         ld      de,(__frexp_xhi)
         ld      a,d
@@ -20516,8 +20676,8 @@ MFREXPORD:
         ld      (hl),a
         inc     hl
         ld      (hl),a
-        ld      hl,0
-        ld      de,0
+        ld      hl,(__frexp_xlo)
+        ld      de,(__frexp_xhi)
         ret
 
 frexp_nonzero:
@@ -20530,22 +20690,45 @@ frexp_nonzero:
         rlca
         and     1
         or      c
+        or      a
+        jr      z,frexp_subnormal
         sub     126
         ld      c,a
         sbc     a,a
         ld      b,a
+        ld      hl,(__frexp_xlo)
+        ld      de,(__frexp_xhi)
+        jr      frexp_store
+
+frexp_subnormal:
+        ; Normalize the 23-bit subnormal significand. For each left shift,
+        ; the frexp exponent falls by one; -125 is the pre-shift value.
+        ld      bc,-125
+        ld      hl,(__frexp_xlo)
+        ld      de,(__frexp_xhi)
+frexp_subnormal_loop:
+        bit     7,e
+        jr      nz,frexp_store
+        add     hl,hl
+        rl      e
+        dec     bc
+        jr      frexp_subnormal_loop
+
+frexp_store:
+        push    de
+        push    hl
         ld      hl,(__frexp_eptr)
         ld      (hl),c
         inc     hl
         ld      (hl),b
+        pop     hl
+        pop     de
 
         ; Preserve sign and fraction, but force biased exponent 126.
-        ld      hl,(__frexp_xlo)
-        ld      de,(__frexp_xhi)
         ld      a,e
         and     7fh
         ld      e,a
-        ld      a,d
+        ld      a,(__frexp_xhi+1)
         and     80h
         or      3fh
         ld      d,a
@@ -20557,9 +20740,8 @@ __frexp_eptr:  dw      0
 
         public _ldexpf
 _ldexpf:
-        ; Hand-written exponent adjustment.  This preserves the former
-        ; overflow/underflow policy while replacing the generated 23-bit
-        ; shift loops and 32-bit mask/or sequences with byte operations.
+        ; Hand-written exponent adjustment with normal and subnormal inputs,
+        ; rounded subnormal outputs, and pre-add range bounds.
         ;
         ; cdecl stack: return, x low, x high, exponent adjustment
         pop     bc
@@ -20575,14 +20757,7 @@ _ldexpf:
         push    hl
         push    bc
 
-        ; ldexp(Inf, n) = Inf and ldexp(NaN, n) = NaN, x unmodified in
-        ; both cases (IEEE-754 semantics; not a case the C99 base text
-        ; calls out, but every real libm agrees). The exponent-adjust
-        ; below has no self-correction for either: it happily reads the
-        ; raw exponent-255 field, adds n, and treats the (near-certain)
-        ; overflow like any ordinary one - Inf/NaN's mantissa bits come
-        ; back as the finite 3.4e38f overflow substitute (see below)
-        ; instead of staying Inf/NaN.
+        ; Preserve Inf and NaN without setting errno.
         ld      hl,(__ldexp_xlo)
         ld      de,(__ldexp_xhi)
         call    __fnan
@@ -20601,7 +20776,7 @@ MLDEXPID:
         ret
 MLDEXPORD:
 
-        ; Treat either signed zero as zero.
+        ; Preserve either signed zero.
         ld      hl,(__ldexp_xlo)
         ld      de,(__ldexp_xhi)
         ld      a,d
@@ -20610,85 +20785,201 @@ MLDEXPORD:
         or      h
         or      l
         jr      nz,ldexp_nonzero
-        ld      hl,0
-        ld      de,0
+        ld      hl,(__ldexp_xlo)
+        ld      de,(__ldexp_xhi)
         ret
 
 ldexp_nonzero:
-        ; Extract the old biased exponent and add the signed adjustment.
+        ; n==0 is bit-identical for every finite value, including subnormals.
+        ld      hl,(__ldexp_n)
+        ld      a,h
+        or      l
+        jr      nz,ldexp_bound_n
+        ld      hl,(__ldexp_xlo)
+        ld      de,(__ldexp_xhi)
+        ret
+
+ldexp_bound_n:
+        ; Bound n before exponent addition to prevent signed 16-bit wrap.
+        bit     7,h
+        jr      nz,ldexp_bound_negative
+        ld      de,277
+        or      a
+        sbc     hl,de
+        jp      nc,ldexp_overflow
+        jr      ldexp_prepare
+ldexp_bound_negative:
+        ld      de,-277
+        or      a
+        sbc     hl,de
+        jp      c,ldexp_underflow
+
+ldexp_prepare:
+        ; Build a normalized 24-bit significand in E:HL and its unbiased
+        ; exponent in __ldexp_newexp. Normalize subnormal inputs first.
+        ld      hl,(__ldexp_xlo)
+        ld      de,(__ldexp_xhi)
         ld      a,d
         and     7fh
         add     a,a
-        ld      l,a
+        ld      c,a
         ld      a,e
         rlca
         and     1
-        or      l
+        or      c
+        jr      z,ldexp_normalize_subnormal
+        sub     127
         ld      l,a
-        ld      h,0
+        sbc     a,a
+        ld      h,a
+        ld      (__ldexp_newexp),hl
+        ld      hl,(__ldexp_xlo)
+        ld      de,(__ldexp_xhi)
+        ld      a,e
+        and     7fh
+        or      80h
+        ld      e,a
+        jr      ldexp_significand_ready
+
+ldexp_normalize_subnormal:
+        ld      bc,-126
+        ld      hl,(__ldexp_xlo)
+        ld      de,(__ldexp_xhi)
+ldexp_normalize_loop:
+        bit     7,e
+        jr      nz,ldexp_normalized
+        add     hl,hl
+        rl      e
+        dec     bc
+        jr      ldexp_normalize_loop
+ldexp_normalized:
+        ld      (__ldexp_newexp),bc
+
+ldexp_significand_ready:
+        ld      (__ldexp_xlo),hl
+        ld      a,e
+        ld      (__ldexp_xhi),a
+
+        ; q = normalized unbiased exponent + n.
+        ld      hl,(__ldexp_newexp)
         ld      de,(__ldexp_n)
         add     hl,de
         ld      (__ldexp_newexp),hl
 
-        ; Signed comparison: new exponent >= 255.
-        ld      de,33023                ; 8000h-biased representation of 255
+        ; q > 127 overflows.
+        bit     7,h
+        jr      nz,ldexp_check_normal
         ld      a,h
-        xor     80h
-        ld      h,a
+        or      a
+        jp      nz,ldexp_overflow
+        ld      a,l
+        cp      128
+        jp      nc,ldexp_overflow
+
+ldexp_check_normal:
+        ; q >= -126 is a normal result.
+        ld      hl,(__ldexp_newexp)
+        bit     7,h
+        jr      z,ldexp_pack_normal
+        ld      de,-126
         or      a
         sbc     hl,de
-        jr      c,ldexp_not_overflow
+        jr      nc,ldexp_pack_normal
 
-        ; Overflow: signed Infinity (was a finite 3.4e38f saturation
-        ; constant - upgraded to match the real-Infinity overflow
-        ; convention this session's expf fix already established, now
-        ; that real Infinity is cheaply available and isinf() can
-        ; detect it).
-        ld      hl,0
-        ld      de,7f80h
+        ; q < -150 is below half the minimum subnormal and rounds to zero.
+        ld      hl,(__ldexp_newexp)
+        ld      de,-150
+        or      a
+        sbc     hl,de
+        jp      c,ldexp_underflow
+
+        ; Subnormal result: shift by -126-q with guard/sticky ties-to-even.
+        ld      hl,-126
+        ld      de,(__ldexp_newexp)
+        or      a
+        sbc     hl,de
+        ld      b,l
+        ld      hl,(__ldexp_xlo)
+        ld      a,(__ldexp_xhi)
+        ld      e,a
+        ld      c,0
+ldexp_denorm_loop:
+        srl     e
+        rr      h
+        rr      l
+        dec     b
+        jr      z,ldexp_denorm_last
+        jr      nc,ldexp_denorm_loop
+        set     0,c
+        jr      ldexp_denorm_loop
+ldexp_denorm_last:
+        jr      nc,ldexp_denorm_rounded
+        set     1,c
+        bit     0,c
+        jr      nz,ldexp_denorm_round_up
+        bit     0,l
+        jr      z,ldexp_denorm_rounded
+ldexp_denorm_round_up:
+        inc     l
+        jr      nz,ldexp_denorm_rounded
+        inc     h
+        jr      nz,ldexp_denorm_rounded
+        inc     e
+ldexp_denorm_rounded:
         ld      a,(__ldexp_xhi+1)
         and     80h
-        jr      z,ldexp_done
-        ld      a,d
-        xor     80h
         ld      d,a
-ldexp_done:
+        ld      a,c
+        or      a
+        ret     z
+        push    de
+        push    hl
+        call    __merng
+        pop     hl
+        pop     de
         ret
 
-ldexp_not_overflow:
+ldexp_pack_normal:
         ld      hl,(__ldexp_newexp)
-        ld      a,h
-        or      l
-        jr      z,ldexp_underflow
-        bit     7,h
-        jr      nz,ldexp_underflow
-
-        ; Install exponent bits directly into D:E.
-        ld      b,h
-        ld      c,l                     ; BC = new biased exponent
+        ld      de,127
+        add     hl,de
+        ld      c,l                     ; new biased exponent, 1..254
         ld      hl,(__ldexp_xlo)
-        ld      de,(__ldexp_xhi)
+        ld      a,(__ldexp_xhi)
+        and     7fh
+        ld      e,a
         ld      a,c
         and     1
         rrca
-        ld      b,a                     ; bit 7 for E
-        ld      a,e
-        and     7fh
-        or      b
+        or      e
         ld      e,a
         ld      a,c
         srl     a
         and     7fh
-        ld      b,a
-        ld      a,d
+        ld      c,a
+        ld      a,(__ldexp_xhi+1)
         and     80h
-        or      b
+        or      c
+        ld      d,a
+        ret
+
+ldexp_overflow:
+        call    __merng
+        ld      hl,0
+        ld      de,7f80h
+        ld      a,(__ldexp_xhi+1)
+        and     80h
+        or      d
         ld      d,a
         ret
 
 ldexp_underflow:
+        call    __merng
         ld      hl,0
-        ld      de,0
+        ld      a,(__ldexp_xhi+1)
+        and     80h
+        ld      d,a
+        ld      e,0
         ret
 
 __ldexp_xlo:    dw      0
@@ -20812,6 +21103,15 @@ modff_have_int:
         call    __fsf
         pop     bc
         pop     bc
+        ld      a,d
+        and     7fh
+        or      e
+        or      h
+        or      l
+        ret     nz
+        ld      a,(__modff_xhi+1)
+        and     80h
+        ld      d,a
         ret
 
 __modff_xlo:    dw      0
