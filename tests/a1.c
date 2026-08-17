@@ -326,15 +326,26 @@ static uint8_t op_rotate( uint8_t op, uint8_t val )
         cpu.fCarry = ( 0x80 & val ); // !! ( 0x80 & val );
         val <<= 1;
     }
-    else if ( 0x20 == op ) /* rol */   
+    else if ( 0x20 == op ) /* rol */
     {
         oldCarry = cpu.fCarry;
         cpu.fCarry = ( 0x80 & val ); // !! ( 0x80 & val );
+#ifdef SDCC
+        /* bool is guaranteed 0 or 1, so OR it in directly instead of a separate
+           "if (oldCarry) val |= 1" -- zsdcc's -SO3 optimizer was found to
+           incorrectly eliminate that conditional OR entirely (verified with a
+           standalone repro: every carry-in==1 case came out one low). dcc
+           generates measurably slower code for this branch-free form (its
+           branchy codegen is already good here), so it keeps the original
+           below; only SDCC needs the workaround. */
+        val = ( val << 1 ) | oldCarry;
+#else
         val <<= 1;
         if ( oldCarry )
             val |= 1;
+#endif
     }
-    else if ( 0x40 == op ) /* lsr */   
+    else if ( 0x40 == op ) /* lsr */
     {
         cpu.fCarry = ( val & 1 );
         val >>= 1;
@@ -343,9 +354,13 @@ static uint8_t op_rotate( uint8_t op, uint8_t val )
     {
         oldCarry = cpu.fCarry;
         cpu.fCarry = ( val & 1 );
+#ifdef SDCC
+        val = ( val >> 1 ) | ( oldCarry << 7 );
+#else
         val >>= 1;
         if ( oldCarry )
             val |= 0x80;
+#endif
     }
 
     set_nz( val );
