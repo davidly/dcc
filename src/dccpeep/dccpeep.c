@@ -3436,6 +3436,274 @@ static int pass_word_zero_test_via_mem(void)
     return changed;
 }
 
+/* Parse "and <const>" -> const text, verbatim (whatever numeric literal dcc
+ * used). Returns 1 on match. */
+static int parse_and_const(int i, char *constant)
+{
+    char clean[MAX_LINE];
+    if (i < 0 || i >= nlines)
+        return 0;
+    strip_peep_comment_copy(clean, lines[i]);
+    if (strncmp(clean, "and ", 4) != 0)
+        return 0;
+    strcpy(constant, clean + 4);
+    return constant[0] != 0;
+}
+
+/* Parse "ld (<dest>),a" -> dest text. Returns 1 on match. */
+static int parse_ld_paren_a_store(int i, char *dest)
+{
+    char clean[MAX_LINE];
+    size_t len;
+    if (i < 0 || i >= nlines)
+        return 0;
+    strip_peep_comment_copy(clean, lines[i]);
+    if (strncmp(clean, "ld (", 4) != 0)
+        return 0;
+    len = strlen(clean);
+    if (len < 8 || strcmp(clean + len - 3, "),a") != 0)
+        return 0;
+    len = len - 3 - 4;
+    memcpy(dest, clean + 4, len);
+    dest[len] = 0;
+    return len > 0;
+}
+
+/* Parse "jr z,<L>" / "jr nz,<L>" / "jp z,<L>" / "jp nz,<L>" -> cond ("z" or
+ * "nz"), label. Both mnemonics are accepted since this pass runs in the
+ * shared fixed-point loop alongside pass_jp_to_jr: by the time it fires the
+ * branch is usually already a jr, but jp survives when the target is out of
+ * jr's range. */
+static int parse_znz_jump(int i, char *cond, char *label)
+{
+    char clean[MAX_LINE];
+    const char *p;
+    int n;
+    if (i < 0 || i >= nlines)
+        return 0;
+    strip_peep_comment_copy(clean, lines[i]);
+    if (!strncmp(clean, "jr z,", 5))       { strcpy(cond, "z");  p = clean + 5; }
+    else if (!strncmp(clean, "jr nz,", 6)) { strcpy(cond, "nz"); p = clean + 6; }
+    else if (!strncmp(clean, "jp z,", 5))  { strcpy(cond, "z");  p = clean + 5; }
+    else if (!strncmp(clean, "jp nz,", 6)) { strcpy(cond, "nz"); p = clean + 6; }
+    else return 0;
+    while (*p == ' ' || *p == '\t')
+        p++;
+    n = 0;
+    while (p[n] && n < 120) { label[n] = p[n]; n++; }
+    label[n] = 0;
+    return n > 0;
+}
+
+/* Count z/nz jumps (jr or jp) to a label anywhere in the file, used to
+ * confirm a label this pass is about to delete isn't also targeted from
+ * somewhere outside the exact instance being matched. */
+static int count_znz_jumps_to(const char *label)
+{
+    int k, count = 0;
+    char cond[8], lab[128];
+    for (k = 0; k < nlines; k++)
+        if (parse_znz_jump(k, cond, lab) && strcmp(lab, label) == 0)
+            count++;
+    return count;
+}
+
+/*
+ * pass_narrow_byte_and_mask_to_bool:
+ *
+ * dcc's codegen for "bool_field = (byte_expr) & CONST" always promotes the
+ * byte to a 16-bit HL pair (per C's usual arithmetic conversions) before
+ * the AND, then normalizes the masked result to a strict 0/1 _Bool via a
+ * widen/test/conditional-increment dance -- even though the whole thing is
+ * an 8-bit operation start to finish. Confirmed via a1.c's set_nz() macro
+ * (cpu.fNegative = (x) & 0x80): 14 instructions for what a hand-written
+ * version does in 3.
+ *
+ * Matched shape (L already holds the byte value from whatever loaded it --
+ * either "ld l,a" after a global/absolute load, which only has an A-sized
+ * form, or "ld l,(ix+d)" directly for a stack local; this pass doesn't
+ * touch that load, it just anchors on the zero-extend that always follows
+ * it):
+ *     ld h,0
+ *     ld a,l
+ *     and <CONST>
+ *     ld l,a
+ *     ld a,h
+ *     or l
+ *     ld hl,0
+ *     jr z,<L>          (or jp z,<L>)
+ *     inc hl
+ * <L>:
+ *     ld a,l
+ *     ld (<DEST>),a
+ *
+ * Replaced with:
+ *     ld a,l
+ *     and <CONST>
+ *     neg
+ *     ld a,0
+ *     adc a,0
+ *     ld l,a
+ *     ld h,0
+ *     ld (<DEST>),a
+ *
+ * NEG computes 0-A; that only borrows (sets carry) when A was nonzero, so
+ * it turns "was the masked byte nonzero" directly into the carry flag. LD
+ * A,0 doesn't touch flags, so ADC A,0 then reads that carry into a clean
+ * 0/1. The trailing "ld l,a / ld h,0" reproduces H=0/L=result, the same
+ * end state the original left HL in -- dcc's calling convention returns
+ * values in HL, and the peephole layer can't prove from the .MAC alone
+ * that a given function is void, so HL is never provably dead right
+ * before a ret; matching the original's HL exactly sidesteps needing
+ * that proof at all.
+ */
+static int pass_narrow_byte_and_mask_to_bool(void)
+{
+    int i, changed = 0;
+    char constant[64], dest[128], cond[8], label[128];
+    char and_line[80], ld_line[160];
+
+    for (i = 0; i + 11 < nlines; i++) {
+        if (!eq(i, "ld h,0") || !eq(i + 1, "ld a,l"))
+            continue;
+        if (!parse_and_const(i + 2, constant))
+            continue;
+        if (!eq(i + 3, "ld l,a") || !eq(i + 4, "ld a,h") || !eq(i + 5, "or l") ||
+            !eq(i + 6, "ld hl,0"))
+            continue;
+        if (!parse_znz_jump(i + 7, cond, label) || strcmp(cond, "z") != 0)
+            continue;
+        if (!eq(i + 8, "inc hl"))
+            continue;
+        if (!line_is_label_name(i + 9, label))
+            continue;
+        if (!eq(i + 10, "ld a,l"))
+            continue;
+        if (!parse_ld_paren_a_store(i + 11, dest))
+            continue;
+        if (count_znz_jumps_to(label) != 1)
+            continue;
+
+        /* L=result/H=0 is reproduced explicitly (rather than requiring H/L
+         * dead) since the original left them in that state as an observable
+         * side effect: dcc's calling convention returns values in HL, and
+         * the peephole layer has no way to know from the .MAC alone whether
+         * a given function is void, so H is conservatively never provably
+         * dead right before a ret. Two extra instructions buys unconditional
+         * safety instead of a liveness proof that routinely can't be made. */
+        sprintf(and_line, "and %s", constant);
+        sprintf(ld_line, "ld (%s),a", dest);
+        replace1_tagged(i, "ld a,l", "narrow_byte_and_mask_to_bool");
+        replace1(i + 1, and_line);
+        replace1(i + 2, "neg");
+        replace1(i + 3, "ld a,0");
+        replace1(i + 4, "adc a,0");
+        replace1(i + 5, "ld l,a");
+        replace1(i + 6, "ld h,0");
+        replace1(i + 7, ld_line);
+        delete_n(i + 8, 4);
+        changed = 1;
+        if (i > 0)
+            --i;
+    }
+    return changed;
+}
+
+/*
+ * pass_narrow_byte_not_to_bool:
+ *
+ * dcc's codegen for "bool_field = !(byte_expr)" widens the byte to HL,
+ * computes the zero test, and normalizes it to a strict 0/1 _Bool -- then,
+ * because "!x" is itself a boolean-context C expression, immediately
+ * re-normalizes that already-strict 0/1 result a second time before the
+ * assignment: an entirely redundant identity operation on a value that's
+ * already exactly 0 or 1. Confirmed via a1.c's set_nz() macro
+ * (cpu.fZero = !(x)): 16 instructions for what a hand-written version
+ * does in 4.
+ *
+ * Matched shape (L already holds the byte value from whatever loaded it --
+ * see pass_narrow_byte_and_mask_to_bool above for why this anchors on the
+ * zero-extend rather than the load itself):
+ *     ld h,0
+ *     ld a,h
+ *     or l
+ *     ld hl,0
+ *     jr nz,<L1>
+ *     inc l
+ * <L1>:
+ *     ld a,h
+ *     or l
+ *     ld hl,0
+ *     jr z,<L2>
+ *     inc hl
+ * <L2>:
+ *     ld a,l
+ *     ld (<DEST>),a
+ *
+ * Replaced with:
+ *     ld a,l
+ *     cp 1
+ *     ld a,0
+ *     adc a,0
+ *     ld l,a
+ *     ld h,0
+ *     ld (<DEST>),a
+ *
+ * CP 1 sets the carry iff A < 1, i.e. iff A was exactly 0 (A is a byte,
+ * 0-255, so that's the only way to be less than 1). LD A,0 doesn't touch
+ * flags, so ADC A,0 turns that carry into a clean 0/1 directly -- the
+ * whole "!x" plus its redundant re-normalization in one step. The trailing
+ * "ld l,a / ld h,0" reproduces the original's H=0/L=result end state; see
+ * pass_narrow_byte_and_mask_to_bool above for why that's cheaper than
+ * proving HL dead.
+ */
+static int pass_narrow_byte_not_to_bool(void)
+{
+    int i, changed = 0;
+    char dest[128], cond1[8], label1[128], cond2[8], label2[128];
+    char ld_line[160];
+
+    for (i = 0; i + 14 < nlines; i++) {
+        if (!eq(i, "ld h,0") ||
+            !eq(i + 1, "ld a,h") || !eq(i + 2, "or l") || !eq(i + 3, "ld hl,0"))
+            continue;
+        if (!parse_znz_jump(i + 4, cond1, label1) || strcmp(cond1, "nz") != 0)
+            continue;
+        if (!eq(i + 5, "inc l"))
+            continue;
+        if (!line_is_label_name(i + 6, label1))
+            continue;
+        if (!eq(i + 7, "ld a,h") || !eq(i + 8, "or l") || !eq(i + 9, "ld hl,0"))
+            continue;
+        if (!parse_znz_jump(i + 10, cond2, label2) || strcmp(cond2, "z") != 0)
+            continue;
+        if (!eq(i + 11, "inc hl"))
+            continue;
+        if (!line_is_label_name(i + 12, label2))
+            continue;
+        if (!eq(i + 13, "ld a,l"))
+            continue;
+        if (!parse_ld_paren_a_store(i + 14, dest))
+            continue;
+        if (count_znz_jumps_to(label1) != 1 || count_znz_jumps_to(label2) != 1)
+            continue;
+
+        sprintf(ld_line, "ld (%s),a", dest);
+        replace1_tagged(i, "ld a,l", "narrow_byte_not_to_bool");
+        replace1(i + 1, "cp 1");
+        replace1(i + 2, "ld a,0");
+        replace1(i + 3, "adc a,0");
+        replace1(i + 4, "ld l,a");
+        replace1(i + 5, "ld h,0");
+        replace1(i + 6, ld_line);
+        delete_n(i + 7, 8);
+        changed = 1;
+        if (i > 0)
+            --i;
+    }
+    return changed;
+}
+
 static int pass_zeroext_byte_cmp_const(void)
 {
     int i;
@@ -11669,6 +11937,8 @@ int main(int argc, char **argv)
         { "pass_signed_cmp_const_low0_mir", pass_signed_cmp_const_low0_mir, 0 },
         { "pass_fold_signed_cmp_via_bytes", pass_fold_signed_cmp_via_bytes, 0 },
         { "pass_word_zero_test_via_mem", pass_word_zero_test_via_mem, 0 },
+        { "pass_narrow_byte_and_mask_to_bool", pass_narrow_byte_and_mask_to_bool, 0 },
+        { "pass_narrow_byte_not_to_bool", pass_narrow_byte_not_to_bool, 0 },
         { "pass_zeroext_byte_cmp_const", pass_zeroext_byte_cmp_const, 0 },
         { "pass_byte_cmp_push_pop_hl", pass_byte_cmp_push_pop_hl, 0 },
         { "pass_word_switch_cmp_avoid_push_pop", pass_word_switch_cmp_avoid_push_pop, 0 },
