@@ -788,12 +788,43 @@ gcbad_noeof:
         ld      hl,0ffffh       ; EOF
         ret
 
+        public  __ugvalid
+__ugvalid:
+; Per-fd pushback-valid flags shared by ungetc() and file-backed scanf.
+; Split from the character bytes so close/lseek retain only this small block.
+__ugv:  ds      UGC_MAX         ; valid flags
+
+; Entry: A = validated fd. Clear stream pushback after close/seek.
+; Reuse is therefore clean without charging every successful open.
+__ugclear:
+        ld      l,a
+        ld      h,0
+        ld      de,__ugv
+        add     hl,de
+        ld      (hl),0
+        ret
+
+        public  __ugchars
+__ugchars:
 ___getc_ch:
         db      0
-; Per-fd pushback buffer for ungetc().  __ugv[fd]=1 means __ugc[fd] is valid.
-; Indexed 0..UGC_MAX-1 directly by fd (0=stdin, 3..10=real files).
-__ugv:  ds      UGC_MAX         ; valid flags
 __ugc:  ds      UGC_MAX         ; pushed-back characters
+
+; Entry: B = character, C = validated fd. Return HL = character.
+__ugput:
+        ld      l,c
+        ld      h,0
+        ld      de,__ugc
+        add     hl,de
+        ld      (hl),b
+        ld      l,c
+        ld      h,0
+        ld      de,__ugv
+        add     hl,de
+        ld      (hl),1
+        ld      h,0
+        ld      l,b
+        ret
 
         public  __getc
 __getc:
@@ -823,27 +854,8 @@ _ungetc:
         cp      UGC_MAX
         jr      nc,ugc_fail
 
-        ; Keep the character byte in B; the fd remains in C.
         ld      b,e
-
-        ; __ugc[fd] = c & 0xff
-        ld      h,0
-        ld      l,c
-        ld      de,__ugc
-        add     hl,de
-        ld      (hl),b
-
-        ; __ugv[fd] = 1
-        ld      l,c
-        ld      h,0
-        ld      de,__ugv
-        add     hl,de
-        ld      (hl),1
-
-        ; Return c & 0xff.
-        ld      h,0
-        ld      l,b
-        ret
+        jp      __ugput
 
 ugc_fail:
         ld      hl,0ffffh       ; EOF
@@ -3813,6 +3825,8 @@ pf_pct_next:
         jr      z,pf_pct_next
         cp      '#'
         jr      z,pf_pct_next
+        cp      ' '
+        jr      z,pf_pct_next
 
         cp      '.'
         jr      z,pf_pct_dot
@@ -3843,17 +3857,10 @@ pf_pct_zero_digit:
 pf_pct_acc:
         sub     '0'
 pf_pct_acc2:
-        ld      (pf_digit),a
         push    de              ; DE is the vararg byte offset; preserve it.
+        ld      e,a             ; E = next decimal digit
         ld      a,(pf_width)
-        add     a,a             ; 2*w
-        ld      e,a
-        add     a,a             ; 4*w
-        add     a,a             ; 8*w
-        add     a,e             ; 10*w
-        ld      e,a
-        ld      a,(pf_digit)
-        add     a,e
+        call    pf_acc_sat
         ld      (pf_width),a
         pop     de
         jr      pf_pct_next
@@ -3881,17 +3888,10 @@ pf_pct_prec_loop:
         jr      nc,pf_pct_prec_done
         inc     hl
         sub     '0'
-        ld      (pf_digit),a
         push    de
+        ld      e,a             ; E = next decimal digit
         ld      a,(pf_prec)
-        add     a,a             ; 2*p
-        ld      e,a
-        add     a,a             ; 4*p
-        add     a,a             ; 8*p
-        add     a,e             ; 10*p
-        ld      e,a
-        ld      a,(pf_digit)
-        add     a,e
+        call    pf_acc_sat
         ld      (pf_prec),a
         pop     de
         jr      pf_pct_prec_loop
@@ -3899,6 +3899,23 @@ pf_pct_prec_done:
         ; A = format specifier char, HL points to it (not yet consumed)
         inc     hl
         jr      pf_pct_done_width ; peep: jp_to_jr
+
+; Accumulate one decimal width/precision digit without byte wrap.
+; IN: A = current value, E = next digit. OUT: A = min(10*A+E, 255).
+; D/E are scratch; callers preserve the live vararg offset around this call.
+pf_acc_sat:
+        cp      26              ; 26*10 is already beyond one byte
+        jr      nc,pf_acc_max
+        ld      d,a
+        add     a,a             ; 2*n
+        add     a,a             ; 4*n
+        add     a,d             ; 5*n
+        add     a,a             ; 10*n (at most 250)
+        add     a,e
+        ret     nc
+pf_acc_max:
+        ld      a,255
+        ret
 
 pf_pct_z:
         ld      a,(hl)
@@ -4136,42 +4153,34 @@ pf_s:
         call    pf_arg_hl
         push    de
         push    hl
-        call    pf__slen_hl       ; DE = strlen(HL), HL preserved by stack below.
-                                   ; DE, not BC: BC is pf_emit_a's running
-                                   ; output-char count, live across this call -
-                                   ; see pf__slen_hl's own comment.
-        ld      (pf_slen),de      ; pf_slen (16-bit): pf_digit is 8-bit and shared
-                                   ; with integer/float digit counts elsewhere,
-                                   ; which never need more than a byte, so %s
-                                   ; gets its own wide counter instead of
-                                   ; widening every other pf_digit use too.
-        ; An explicit precision (%.Ns) caps both the field-width padding
-        ; calculation and the actual emit count at min(strlen, N) - C89's
-        ; "at most N characters, stopping at a NUL first" rule. Previously
-        ; pf_haveprec/pf_prec were parsed correctly but never consulted
-        ; here, so %.Ns always printed the whole string regardless of N.
+        ; With an explicit precision, scan at most that many bytes. A
+        ; non-NUL-terminated N-byte object is valid for %.Ns, and %.0s must
+        ; not dereference the argument at all. DE is free here because the
+        ; caller's vararg offset is already saved on the stack.
         ld      a,(pf_haveprec)
         or      a
-        jr      z,pf_s_no_clamp
-        ld      hl,(pf_slen)
-        ld      a,h
+        jr      z,pf_s_full_scan
+        ld      a,(pf_prec)
+        ld      e,a               ; E = bytes left within the precision
+        ld      d,0               ; D = bounded length found
         or      a
-        jr      z,pf_s_check_prec ; strlen < 256: need the real comparison
-        ; strlen >= 256: pf_prec (a single byte, 0..255) is always smaller,
-        ; so it always clamps - apply it directly, nothing to compare.
-        ld      a,(pf_prec)
-        ld      l,a
-        ld      h,0
-        ld      (pf_slen),hl
-        jr      pf_s_no_clamp
-pf_s_check_prec:
-        ld      a,(pf_prec)
-        cp      l
-        jr      nc,pf_s_no_clamp  ; precision >= strlen: nothing to clamp
-        ld      l,a
-        ld      h,0
-        ld      (pf_slen),hl      ; clamp the printed/padded length to precision
-pf_s_no_clamp:
+        jr      z,pf_s_len_ready  ; %.0s: no read from the argument
+pf_s_bound_scan:
+        ld      a,(hl)
+        or      a
+        jr      z,pf_s_bound_done
+        inc     hl
+        inc     d
+        dec     e
+        jr      nz,pf_s_bound_scan
+pf_s_bound_done:
+        ld      e,d
+        ld      d,0
+        jr      pf_s_len_ready
+pf_s_full_scan:
+        call    pf__slen_hl       ; DE = full 16-bit strlen(HL)
+pf_s_len_ready:
+        ld      (pf_slen),de      ; wide only where an unbounded %s needs it
         ld      a,(pf_left)
         or      a
         jr      nz,pf_s_no_prepad
@@ -4250,7 +4259,8 @@ pf_d:
         ld      a,1             ; sign length = 1 ('-')
         call    pf_zsetup       ; honour the '0' zero-pad flag
         call    pf_efflen       ; A = max(digits, precision)
-        inc     a               ; width includes the '-'
+        cp      255             ; include '-' without wrapping 255 to zero
+        adc     a,0
         call    pf_iprepad
         ld      a,'-'
         call    pf_emit_a
@@ -4347,8 +4357,13 @@ pf_emit_a:
         ld      a,h
         or      l
         jr      z,pfe_con       ; pf_sink=0  console
-        inc     a               ; a=h; sink=0FFFFh (unbounded buffer) -> h=0FFh -> wraps to 0
-        jr      z,pfe_buf       ; unbounded buffer: sprintf/fprintf/vsprintf/vfprintf
+        inc     h
+        jr      z,pfe_buf       ; FFFFh: unbounded sprintf/vsprintf
+        dec     h
+        jr      z,pfe_bufn      ; h=0: bounded snprintf/vsnprintf buffer
+        ld      bc,pfe_epilogue
+        push    bc
+        jp      (hl)                    ; emitter RETs directly to pfe_epilogue
 
 ; Bounded buffer (snprintf/vsnprintf, pf_sink=1): write only while pf_bufcnt <
 ; pf_bufmax, discard past the cap. BC (the running char count returned to the
@@ -4404,9 +4419,10 @@ pfe_con:
 ; the real running count with the strlen value - every character emitted
 ; afterward got counted on top of that instead of the true prior total
 ; (confirmed: sprintf(buf,"%s","hi") returned 4, not 2). BC is scratch
-; ONLY within this function's own loop, saved/restored around it.
+; ONLY within this function's own loop, saved/restored around it. The sole
+; caller already saved the source pointer for the later emit pass, so this
+; helper may leave HL advanced to the terminating NUL.
 pf__slen_hl:
-        push    hl
         push    bc
         ld      bc,0
 pfsl1:
@@ -4420,7 +4436,6 @@ pfsl2:
         ld      d,b
         ld      e,c
         pop     bc
-        pop     hl
         ret
 
 ; pf_div10: constant-time unsigned divide of HL by 10.
@@ -4710,12 +4725,10 @@ pf_oct_hook:
 
 ; printf/sprintf/fprintf/snprintf shared sink and buffer (here so they stay in
 ; the _printf block; placing them elsewhere forces dccrtlstrip to keep that block)
-pf_sink:        dw      0       ; 0=console, 0FFFFh=unbounded buffer, 1=bounded buffer
-pf_bufptr:      dw      0       ; write pointer for sprintf/fprintf/snprintf
-pf_bufcnt:      dw      0       ; snprintf/vsnprintf: chars written into buf so far
-pf_bufmax:      dw      0       ; snprintf/vsnprintf: cap on pf_bufcnt (n-1, or 0 if n=0)
-__pf_cnt:       dw      0       ; char count saved by fprintf
-__pf_fbuf:      ds      256     ; static buffer for fprintf
+pf_sink:        dw      0       ; 0=console, FFFFh=string, 1=bounded, else emitter
+pf_bufptr:      dw      0       ; active string/file write pointer
+pf_bufcnt:      dw      0       ; bounded-string count; low byte is file chunk count
+pf_bufmax:      dw      0       ; snprintf cap; reused as the descriptor in file mode
 
 
 ; ---- 32-bit printf helpers (_pffio and _pflng only) -------------------------
@@ -4826,13 +4839,6 @@ pfbu32_1:
         pop     ix
         ret
 
-; pf_print_u32: print __pf32_l/__pf32_h as unsigned decimal (no field width).
-; Used by the %f float formatter for the integer part.
-pf_print_u32:
-        call    pf_build_u32    ; A = count, HL -> first digit
-        call    pf_emstr
-        ret
-
 __pf32_l:       dw      0
 __pf32_h:       dw      0
 
@@ -4854,31 +4860,9 @@ pf_f:
         call    pf_arg_dehl     ; loads __pf32_l/__pf32_h with raw float bits, advances DE by 4
         push    de
 
-        ; Field width support: the sign/integer-part/fraction pipeline below
-        ; is tightly interleaved with emission (unlike %d/%x/%o, which build
-        ; their digits into pf_decbuf first and pad afterward), so doing the
-        ; same "know the length before padding" trick here would need a much
-        ; larger restructuring. Instead, when a width was requested, redirect
-        ; this whole conversion's output into a scratch buffer by reusing
-        ; pf_emit_a's existing sprintf-style buffer-write mode (pf_sink/
-        ; pf_bufptr) - the entire body below runs completely unchanged,
-        ; unaware it is writing to pf_fwbuf instead of the real destination.
-        ; pf_f_done then measures the buffered text, restores the real
-        ; sink, and pads+replays it via the existing pf_pad_a/pf_emstr
-        ; helpers. When no width was given, none of this runs at all, so
-        ; the common case is exactly as before.
-        ld      a,(pf_width)
-        or      a
-        jr      z,pf_f_nowidth
-        ld      hl,(pf_sink)
-        ld      (pf_fwsink),hl
-        ld      hl,(pf_bufptr)
-        ld      (pf_fwbptr),hl
-        ld      hl,0ffffh
-        ld      (pf_sink),hl
-        ld      hl,pf_fwbuf
-        ld      (pf_bufptr),hl
-pf_f_nowidth:
+        ; Width never needs a staging buffer: after rounding, pf_build_u32
+        ; gives the integer digit count, and precision fixes the remaining
+        ; length.  Keep only the sign bit until that exact length is known.
 
         ; C99 7.19.6.1p6: a NaN or infinite value ignores the '0' flag
         ; (always space-padded, never zero-padded) and prints as
@@ -4887,6 +4871,9 @@ pf_f_nowidth:
         ; here rather than calling both __fnan and __finf.
         ld      hl,(__pf32_l)
         ld      de,(__pf32_h)
+        ld      a,d
+        and     80h
+        ld      (pf_fneg),a
         ld      a,d
         and     7fh
         cp      7fh
@@ -4907,12 +4894,15 @@ pf_f_showinf:
         ld      hl,pf_inf_text
 pf_f_show_special:
         xor     a
-        ld      (pf_zero),a
-        bit     7,d
-        jr      z,pf_f_special_pos
-        ld      a,'-'
-        call    pf_emit_a
-pf_f_special_pos:
+        ld      (pf_zero),a             ; nan/inf are always space padded
+        ld      a,(pf_fneg)
+        or      a
+        ld      a,3
+        jr      z,pf_f_special_len
+        inc     a
+pf_f_special_len:
+        call    pf_f_prepad
+        call    pf_f_signzero
         call    pf_emstr
         jp      pf_f_done
 
@@ -4925,11 +4915,11 @@ pf_f_normal:
         ld      hl,(__pf32_h)
         ld      (pf_fh),hl
 
-        ; Sign and absolute value.
-        bit     7,h
+        ; Absolute value.  The sign itself is emitted only after the exact
+        ; field length is known, so zero fill can follow rather than precede it.
+        ld      a,(pf_fneg)
+        or      a
         jr      z,pf_f_absdone
-        ld      a,'-'
-        call    pf_emit_a
         ld      hl,(__pf32_h)
         res     7,h
         ld      (__pf32_h),hl
@@ -4995,6 +4985,72 @@ pf_f_prec_known:
         ld      (pf_fh),de
 pf_f_rounded:
 
+        ; Finite values at or above 2^32 are exact integers in IEEE single
+        ; precision, but __fful saturates them to 0xffffffff. Build those
+        ; integer digits directly from the 24-bit significand, repeatedly
+        ; doubling a little-endian decimal digit vector for the remaining
+        ; binary exponent. This covers the complete finite single range
+        ; (at most 39 decimal digits) without a general bignum dependency.
+        ld      hl,(pf_fh)
+        ld      a,l
+        add     a,a
+        ld      a,h
+        rla
+        cp      159
+        jr      c,pf_f_u32
+        sub     150             ; significand needs this many left shifts
+        ; The 39-digit work vector is transient. Keep it on the stack instead
+        ; of permanently growing every float-enabled image by 39 bytes.
+        ; The saved running count immediately above it is reloaded before
+        ; emission; calls then use stack below the vector and cannot overwrite
+        ; unread digits.
+        push    bc
+        ld      hl,-39
+        add     hl,sp
+        ld      sp,hl
+        call    pf_fbig_build
+
+        ld      e,b              ; builder returns decimal digit count in B
+        ld      d,0
+        ld      hl,39
+        add     hl,sp
+        ld      c,(hl)           ; restore the live printf character count
+        inc     hl
+        ld      b,(hl)
+        push    de               ; preserve the digit count across padding
+        call    pf_f_length
+        call    pf_f_prepad
+        call    pf_f_signzero
+        pop     de
+        ld      hl,0
+        add     hl,sp
+        add     hl,de
+pf_fbig_emit:
+        dec     hl
+        ld      a,(hl)
+        add     a,'0'
+        call    pf_emit_a
+        dec     e
+        jr      nz,pf_fbig_emit
+
+        ld      hl,41            ; discard 39-byte vector plus saved BC
+        add     hl,sp
+        ld      sp,hl
+        ld      a,(pf_fcnt)
+        or      a
+        jp      z,pf_f_done
+        ld      a,'.'
+        call    pf_emit_a
+pf_fbig_zero:
+        ld      a,'0'
+        call    pf_emit_a
+        ld      a,(pf_fcnt)
+        dec     a
+        ld      (pf_fcnt),a
+        jr      nz,pf_fbig_zero
+        jp      pf_f_done
+
+pf_f_u32:
         ; Integer part = (unsigned long)abs(f).
         ld      hl,(pf_fl)
         ld      de,(pf_fh)
@@ -5008,7 +5064,14 @@ pf_f_rounded:
         ld      (pf_ftl),hl
         ld      (pf_fth),de
 
-        call    pf_print_u32
+        call    pf_build_u32    ; A = integer digits, HL -> first digit
+        push    hl
+        ld      e,a
+        call    pf_f_length
+        call    pf_f_prepad
+        call    pf_f_signzero
+        pop     hl
+        call    pf_emstr
 
         ; C89: an explicit zero precision (%.0f) prints no decimal point at
         ; all, not just no fractional digits - pf_fcnt is the final chosen
@@ -5020,7 +5083,7 @@ pf_f_rounded:
         call    pf_emit_a
 pf_f_nodot:
 
-        ; pf_print_u32 destroys __pf32_l/__pf32_h; restore integer part from pf_ftl/pf_fth.
+        ; pf_build_u32 destroys __pf32_l/__pf32_h; restore integer part from pf_ftl/pf_fth.
         ld      hl,(pf_ftl)
         ld      de,(pf_fth)
         push    bc
@@ -5097,79 +5160,68 @@ pf_f_digloop:
         ld      (pf_fcnt),a
         jr      pf_f_digloop
 pf_f_done:
-        ld      a,(pf_width)
-        or      a
-        jr      z,pf_f_done_nowidth
-
-        ; NUL-terminate the accumulated text (pf_bufptr still points into
-        ; pf_fwbuf here) so pf_emstr can replay it below, and measure its
-        ; length while pf_bufptr still reflects the scratch buffer.
-        ld      hl,(pf_bufptr)
-        ld      (hl),0
-        ld      de,pf_fwbuf
-        sbc     hl,de           ; HL = length; carry already 0 (the "or a" that
-                                 ; tested pf_width above already cleared it)
-        ld      a,l
-
-        ; Restore the real sink/bufptr now that the length is captured.
-        push    af
-        ld      hl,(pf_fwsink)
-        ld      (pf_sink),hl
-        ld      hl,(pf_fwbptr)
-        ld      (pf_bufptr),hl
-        pop     af
-        ld      (pf_digit),a    ; stash length - pf_digit is the same "content
-                                  ; length for padding" scratch pf_x/pf_u/pf_o
-                                  ; already use, and must survive the
-                                  ; pf_emstr call below to be reused for the
-                                  ; post-pad case.
-
         ld      a,(pf_left)
         or      a
-        jr      nz,pf_f_w_left  ; left-justified: '0' flag is always ignored
-
-        ; Right-justified: the '0' flag calls for zero-fill instead of
-        ; space-fill - but the fill must land AFTER a leading '-', matching
-        ; %05d's existing "-0042" (not "000-42") placement. The buffered
-        ; text already has the sign as its first byte if negative, so emit
-        ; that byte first when present, pad using the ORIGINAL total length
-        ; (the sign counts toward the field width either way), then replay
-        ; the rest of the buffer starting past the sign.
-        ld      a,(pf_zero)
-        or      a
-        jr      z,pf_f_w_spad
-        ld      a,(pf_fwbuf)
-        cp      '-'
-        jr      nz,pf_f_w_zpad_nosign
-        ld      a,'-'
-        call    pf_emit_a
+        jr      z,pf_f_done_nowidth
         ld      a,(pf_digit)
-        call    pf_zpad_a
-        ld      hl,pf_fwbuf+1
-        call    pf_emstr
-        jr      pf_f_done_nowidth
-pf_f_w_zpad_nosign:
-        ld      a,(pf_digit)
-        call    pf_zpad_a
-        ld      hl,pf_fwbuf
-        call    pf_emstr
-        jr      pf_f_done_nowidth
-pf_f_w_spad:
-        ld      a,(pf_digit)
-        call    pf_pad_a
-        ld      hl,pf_fwbuf
-        call    pf_emstr
-        jr      pf_f_done_nowidth
-
-pf_f_w_left:
-        ld      hl,pf_fwbuf
-        call    pf_emstr        ; '0' flag ignored: plain space post-pad only
-        ld      a,(pf_digit)
-        call    pf_pad_a
+        call    pf_pad_a                ; trailing spaces for left justification
 pf_f_done_nowidth:
         pop     de
         pop     hl
         jp      pf_loop
+
+; Return the complete field length in A from integer digit count E.
+pf_f_length:
+        ld      a,(pf_fneg)
+        or      a
+        jr      z,pf_f_len_nosign
+        inc     e
+pf_f_len_nosign:
+        ld      a,(pf_fcnt)
+        or      a
+        jr      z,pf_f_len_integer
+        inc     a                       ; precision + decimal point
+        jr      z,pf_f_len_sat          ; precision 255 overflowed
+        add     a,e
+        ret     nc
+        jr      pf_f_len_sat
+pf_f_len_integer:
+        ld      a,e
+        ret
+pf_f_len_sat:
+        ld      a,255                   ; width is only 8-bit: >=255 needs no pad
+        ret
+
+; Save the known total field length and emit leading spaces when applicable.
+; A zero-padded field is deferred until after pf_f_signzero emits its sign.
+pf_f_prepad:
+        ld      (pf_digit),a
+        ld      a,(pf_left)
+        or      a
+        ret     nz
+        ld      a,(pf_zero)
+        or      a
+        ret     nz
+        ld      a,(pf_digit)
+        jp      pf_pad_a
+
+; Emit a pending sign, then any requested zero fill.  pf_digit is the complete
+; content length, including sign, decimal point, and fractional digits.
+pf_f_signzero:
+        ld      a,(pf_fneg)
+        or      a
+        jr      z,pf_f_sz_zero
+        ld      a,'-'
+        call    pf_emit_a
+pf_f_sz_zero:
+        ld      a,(pf_left)
+        or      a
+        ret     nz
+        ld      a,(pf_zero)
+        or      a
+        ret     z
+        ld      a,(pf_digit)
+        jp      pf_zpad_a
 
 ; Emit (pf_width - A) '0' characters, if positive. A is content length.
 ; Same structure/contract as pf_pad_a, used only by %f's zero-pad path.
@@ -5191,16 +5243,75 @@ pf_zpad_loop:
         jr      nz,pf_zpad_loop
         ret
 
-pf_fwsink:  dw 0
-pf_fwbptr:  dw 0
-pf_fwbuf:   ds 32
-
+pf_fneg:    db 0
 pf_fl:      dw 0
 pf_fh:      dw 0
 pf_ftl:     dw 0
 pf_fth:     dw 0
 pf_fiw:     dw 0
 pf_fcnt:    db 0
+
+; Build the exact integer digits for a finite positive IEEE single >= 2^32.
+; IN: A = biased exponent - 150 (9..104).
+; OUT: caller's 39-byte stack vector = numeric digits, least significant first;
+;      B = digit count (10..39).
+; At entry SP points to the return address immediately below that vector.
+; BC, DE, HL and the shared __pf32 value are scratch.
+pf_fbig_build:
+        ld      c,a
+        ld      b,0
+        ld      hl,(pf_fl)
+        ld      de,(pf_fh)
+        ld      a,e
+        and     7fh
+        or      80h
+        ld      e,a
+        ld      d,0
+        ld      (__pf32_l),hl
+        ld      (__pf32_h),de
+        ld      hl,2
+        add     hl,sp
+pf_fbig_seed:
+        call    pf_divu32_10
+        ld      (hl),a
+        inc     hl
+        inc     b
+        ld      de,(__pf32_h)
+        ld      a,d
+        or      e
+        ld      de,(__pf32_l)
+        or      d
+        or      e
+        jr      nz,pf_fbig_seed
+
+pf_fbig_shift:
+        ld      hl,2
+        add     hl,sp
+        ld      d,b
+        ld      e,0
+pf_fbig_double:
+        ld      a,(hl)
+        add     a,a
+        add     a,e
+        ld      e,0
+        cp      10
+        jr      c,pf_fbig_store
+        sub     10
+        inc     e
+pf_fbig_store:
+        ld      (hl),a
+        inc     hl
+        dec     d
+        jr      nz,pf_fbig_double
+        ld      a,e
+        or      a
+        jr      z,pf_fbig_next
+        ld      (hl),a
+        inc     b
+pf_fbig_next:
+        dec     c
+        jr      nz,pf_fbig_shift
+        ret
 
 pf_rndtab:
         dw      00000H,03F00H        ; 0.5e-0
@@ -5243,6 +5354,8 @@ pf_lng:
         inc     hl
         cp      'd'
         jr      z,pf_ld
+        cp      'i'
+        jr      z,pf_ld
         cp      'u'
         jp      z,pf_lu
         cp      'x'
@@ -5251,6 +5364,12 @@ pf_lng:
         jp      z,pf_lxu
         cp      's'
         jr      z,pf_ls
+        cp      'f'
+        jr      nz,pf_lng_unknown
+        push    hl                      ; pf_f expects the advanced fmt pointer
+        ld      hl,(pf_float_hook)
+        jp      (hl)
+pf_lng_unknown:
         call    pf_emit_a
         jp      pf_loop
 
@@ -5282,6 +5401,7 @@ pf_ls_done:
 
 pf_wstrlen_hl:
         push    hl
+        push    bc
         ld      c,0
 pf_wstrlen_loop:
         ld      a,(hl)
@@ -5292,9 +5412,12 @@ pf_wstrlen_loop:
         or      e
         jr      z,pf_wstrlen_done
         inc     c
-        jr      pf_wstrlen_loop
+        jr      nz,pf_wstrlen_loop
+        dec     c                       ; saturate at 255: width is only 8-bit
+        jr      pf_wstrlen_done         ; no later length can need padding
 pf_wstrlen_done:
         ld      a,c
+        pop     bc
         pop     hl
         ret
 
@@ -5315,7 +5438,8 @@ pf_ld:
         ld      a,1             ; sign length = 1 ('-')
         call    pf_zsetup       ; honour the '0' zero-pad flag
         call    pf_efflen       ; A = max(digits, precision)
-        inc     a               ; +1 for '-'
+        cp      255             ; include '-' without wrapping 255 to zero
+        adc     a,0
         call    pf_iprepad
         ld      a,'-'
         call    pf_emit_a
@@ -6947,6 +7071,9 @@ tmpf_cl_done:
         xor     a
         ld      (hl),a
         ld      (__rdcv),a
+        ld      a,(__slot)
+        add     a,FIRSTFD
+        call    __ugclear       ; closed fd must not retain readable pushback
         pop     af
         inc     a               ; inc-a/0FFh wrap idiom (see _open's comment above)
         jr      z,clio
@@ -7338,6 +7465,12 @@ lscur:
         ld      (hl),a
 
 lsret:
+        ; A successful positioning operation discards stream pushback.
+        push    hl
+        ld      a,(ix+4)
+        call    __ugclear
+        pop     hl
+
         ; Return full 32-bit offset in DE:HL. Every path into here (lsset,
         ; lscur, and lsend's jr) leaves HL pointing at offset byte 3, its
         ; last store having just landed there with no further inc hl - so
@@ -10760,9 +10893,77 @@ snp_done:
         ret
 
 ; ============================================================
+; Shared fprintf/vfprintf streaming sink.  This is a separate strip block:
+; only the file wrappers name pf_file_setup/pf_fflush; pf_emit_a reaches
+; pf_file_emit only through the function address stored in pf_sink.
+; A 128-byte chunk matches one CP/M record.  pf_bufcnt's low byte is always
+; 0..127 on entry to pf_file_emit; doubling 128 sets carry and triggers flush.
+; ============================================================
+        public  __pffile
+__pffile:
+pf_file_setup:
+        ld      (pf_bufmax),hl
+        xor     a
+        ld      (pf_bufcnt),a
+        ld      hl,pf_file_emit
+        ld      (pf_sink),hl
+        ret
+
+pf_file_emit:
+        ld      a,(pf_bufcnt)
+        ld      l,a
+        ld      h,0
+        ld      bc,__pf_fbuf
+        add     hl,bc
+        ld      (hl),e
+        inc     a
+        ld      (pf_bufcnt),a
+        add     a,a                     ; count 128 sets carry
+        call    c,pf_fflush
+        ret
+
+; After a write error, pf_sink is redirected here.  pf_emit_a still increments
+; BC for each discarded character, preserving the logical formatter count.
+pf_file_discard:
+        ret
+pf_file_discard_lo equ pf_file_discard AND 0ffh
+
+pf_fflush:
+        ld      a,(pf_bufcnt)
+        or      a
+        ret     z
+        ld      l,a
+        ld      h,0
+        push    bc
+        push    hl                      ; count
+        ld      hl,__pf_fbuf
+        push    hl                      ; buffer
+        ld      hl,(pf_bufmax)
+        push    hl                      ; descriptor
+        call    _write
+        inc     h                       ; FFFFh -> H=00; success is H=00/01
+        pop     de
+        pop     de
+        pop     de                      ; discard _write arguments
+        jr      z,pf_fflush_error
+        xor     a
+        ld      (pf_bufcnt),a
+        pop     bc
+        ret
+pf_fflush_error:
+        xor     a
+        ld      (pf_bufcnt),a
+        ld      hl,pf_file_discard
+        ld      (pf_sink),hl
+        pop     bc
+        ret
+
+__pf_fbuf:      ds      128
+
+; ============================================================
 ; _fprintf(fp, fmt, ...)
 ; IX+4=fp, IX+6=fmt, IX+8=first vararg
-; Formats into __pf_fbuf, then writes to fp via _write.
+; Streams fixed 256-byte chunks to fp via pf_fflush.
 ; ============================================================
         public  _fprintf
 _fprintf:
@@ -10772,47 +10973,35 @@ _fprintf:
         push    bc
         push    de
 
-        ; For stdout/stderr, stream directly to the console.  The old path
-        ; formatted into the fixed 256-byte __pf_fbuf and then called _write;
-        ; that was fragile for status/progress output and any longer fprintf.
+        ; stdout/stderr retain the direct console sink.
         ld      a,(ix+4)
         cp      1
         jr      z,fpcn
         cp      2
         jr      z,fpcn
 
-        ld      hl,__pf_fbuf
-        ld      (pf_bufptr),hl          ; output to static buffer
-        ld      hl,0FFFFh
-        ld      (pf_sink),hl            ; buffer mode
-        ld      l,(ix+6)
-        ld      h,(ix+7)                ; HL = fmt
-        ld      de,8                    ; first vararg at IX+8
-        ld      bc,0
-        call    __pf_run                ; IX = _fprintf's frame
-        ld      h,b
-        ld      l,c
-        ld      (__pf_cnt),hl           ; save count
-        ld      hl,(pf_bufptr)
-        ld      (hl),0                  ; NUL-terminate
-        ; _write(fp, __pf_fbuf, count)
-        ld      hl,(__pf_cnt)
-        push    hl                      ; count
-        ld      hl,__pf_fbuf
-        push    hl                      ; buf
         ld      l,(ix+4)
         ld      h,(ix+5)
-        push    hl                      ; fp
-        call    _write
-        ex      de,hl
-        ld      hl,6
-        add     hl,sp
-        ld      sp,hl                   ; clean 3 args
-        ld      hl,(__pf_cnt)           ; return char count
+        call    pf_file_setup
+        ld      l,(ix+6)
+        ld      h,(ix+7)
+        ld      de,8
+        ld      bc,0
+        call    __pf_run
+        call    pf_fflush               ; final partial chunk, if any
+        ld      a,(pf_sink)
+        cp      pf_file_discard_lo
+        jr      z,pf_file_failed
+        ld      h,b
+        ld      l,c
+pf_file_return:
         pop     de
         pop     bc
         pop     ix
         ret
+pf_file_failed:
+        ld      hl,0ffffh
+        jr      pf_file_return
 
 fpcn:
         ld      hl,0
@@ -10963,42 +11152,31 @@ _vfprintf:
         jr      z,vfpcn
 
         ld      l,(ix+4)
-        ld      h,(ix+5)                ; fp
-        push    hl                      ; save fp (IX is about to become ap)
-        ld      hl,__pf_fbuf
-        ld      (pf_bufptr),hl          ; output to static buffer
-        ld      hl,0FFFFh
-        ld      (pf_sink),hl            ; buffer mode
+        ld      h,(ix+5)
+        call    pf_file_setup
         ld      l,(ix+8)
-        ld      h,(ix+9)                ; HL = ap
+        ld      h,(ix+9)
         push    hl
         ld      l,(ix+6)
-        ld      h,(ix+7)                ; HL = fmt
-        pop     ix                      ; IX = ap
+        ld      h,(ix+7)
+        pop     ix
         ld      de,0
         ld      bc,0
         call    __pf_run
+        call    pf_fflush
+        ld      a,(pf_sink)
+        cp      pf_file_discard_lo
+        jr      z,vpf_file_failed
         ld      h,b
         ld      l,c
-        ld      (__pf_cnt),hl           ; save count
-        ld      hl,(pf_bufptr)
-        ld      (hl),0                  ; NUL-terminate
-        pop     bc                      ; BC = saved fp
-        ; _write(fp, __pf_fbuf, count)
-        ld      hl,(__pf_cnt)
-        push    hl                      ; count
-        ld      hl,__pf_fbuf
-        push    hl                      ; buf
-        push    bc                      ; fp
-        call    _write
-        ld      hl,6
-        add     hl,sp
-        ld      sp,hl                   ; clean 3 args
-        ld      hl,(__pf_cnt)           ; return char count
+vpf_file_return:
         pop     de
         pop     bc
         pop     ix
         ret
+vpf_file_failed:
+        ld      hl,0ffffh
+        jr      vpf_file_return
 
 vfpcn:
         ld      hl,0
@@ -11886,19 +12064,10 @@ ferr_no:
 ;   %d %i %u %x %X %o %c %s
 ;
 ; Deliberately not implemented here: floating input, scansets, %n, %p.
-; All three public entry points share __scan_run.  IX stays bound to the
-; public caller's frame so varargs can be read by byte offset, just like
-; the printf engine above.
+; All three public entry points share __scan_run.  Their IX-free entry
+; stubs compute an absolute first-vararg pointer in sc_argp; sc_src holds
+; either the string pointer or FILE/console fd selected by fixed sc_kind.
 ; ============================================================
-        ; All three entry points below are IX-free: rather than binding IX
-        ; to the caller's frame so sc_next_arg can reconstruct IX+offset
-        ; on every vararg fetch (the original approach), each computes an
-        ; absolute pointer to the first vararg once, up front, and stores
-        ; it in sc_argp - sc_next_arg then just dereferences and advances
-        ; it directly. sc_fp is gone too: sc_src now holds either the
-        ; %s source string pointer or the FILE/console fd depending on
-        ; sc_kind, which is fixed for the whole call, so the two uses
-        ; never overlap.
         public  _scanf
 _scanf:
         ; int scanf(const char *format, ...) - format @ SP+2 before any
@@ -11978,27 +12147,8 @@ __scan_run:
         ld      (sc_count),hl
         ld      a,(sc_kind)
         or      a
-        jr      nz,sc_init_file_pushback
-        xor     a
-        ld      (sc_ungot),a
-        jr      sc_init_done
-sc_init_file_pushback:
-        ld      a,(sc_ungot)
-        or      a
-        jr      z,sc_init_done
-        ld      a,(sc_ukind)
-        cp      1
-        jr      nz,sc_init_clear_pushback
-        ld      hl,(sc_ufp)
-        ld      de,(sc_src)
-        or      a
-        sbc     hl,de
-        ld      a,h
-        or      l
-        jr      z,sc_init_done
-sc_init_clear_pushback:
-        xor     a
-        ld      (sc_ungot),a
+        jr      nz,sc_init_done
+        ld      (sc_ungot),a            ; private pushback is string-only
 sc_init_done:
 
 sc_loop:
@@ -12280,7 +12430,11 @@ sc_num_after_sign:
         jr      z,sc_num_prefix_hex
         cp      'X'
         jr      z,sc_num_prefix_hex
+sc_num_unget_zero:
         call    sc_unget
+        ld      hl,(sc_width)           ; lookahead will be fetched again
+        inc     hl                      ; so charge its field width only once
+        ld      (sc_width),hl
 sc_num_process_zero:
         ld      a,'0'
         jr      sc_num_have_char
@@ -12307,9 +12461,7 @@ sc_num_not_auto:
         jr      z,sc_num_prefix_hex
         cp      'X'
         jr      z,sc_num_prefix_hex
-        call    sc_unget
-        ld      a,'0'
-        jr      sc_num_have_char
+        jr      sc_num_unget_zero
 sc_num_use_b:
         ld      a,b
         jr      sc_num_have_char
@@ -12410,18 +12562,18 @@ sc_get_w_fail:
         ret
 
 sc_get:
+        ld      a,(sc_kind)
+        or      a
+        jr      nz,sc_get_file
         ld      a,(sc_ungot)
         or      a
-        jr      z,sc_get_source
+        jr      z,sc_get_string
         xor     a
         ld      (sc_ungot),a
         ld      a,(sc_unch)
         or      a
         ret
-sc_get_source:
-        ld      a,(sc_kind)
-        or      a
-        jr      nz,sc_get_file
+sc_get_string:
         ld      hl,(sc_src)
         ld      a,(hl)
         or      a
@@ -12447,17 +12599,19 @@ sc_get_eof:
         ret
 
 sc_unget:
-        ld      (sc_unch),a
+        ld      b,a
         ld      a,(sc_kind)
-        ld      (sc_ukind),a
         or      a
-        jr      z,sc_unget_set
-        ld      hl,(sc_src)
-        ld      (sc_ufp),hl
-sc_unget_set:
+        jr      nz,sc_unget_file
+        ld      a,b
+        ld      (sc_unch),a
         ld      a,1
         ld      (sc_ungot),a
         ret
+sc_unget_file:
+        ld      hl,(sc_src)
+        ld      c,l
+        jp      __ugput                 ; stream-visible, per-fd pushback
 
 sc_skip_input_space:
         call    sc_get
@@ -12605,9 +12759,8 @@ sc_inc_count:
         ret
 
 sc_kind:        db      0
-sc_ungot:       db      0
+sc_ungot:       db      0               ; string-source pushback only
 sc_unch:        db      0
-sc_ukind:       db      0
 sc_assign:      db      0
 sc_long:        db      0
 sc_base:        db      10
@@ -12615,7 +12768,6 @@ sc_auto:        db      0
 sc_sign:        db      0
 sc_ndig:        db      0
 sc_src:         dw      0
-sc_ufp:         dw      0
 sc_fmt:         dw      0
 sc_argp:        dw      0
 sc_count:       dw      0
@@ -12795,6 +12947,15 @@ _dopn:
         ex      (sp),hl         ; HL = path
         push    bc
 
+        ; CP/M BDOS owns one global Search First/Search Next enumeration.
+        ; Reject a second live DIR rather than pretending handles are concurrent.
+        ld      a,(__dridx)
+        cp      4
+        jr      z,__dropen
+        call    __emfil
+        jr      __drnul
+__dropen:
+
         ; Clearing the FCB needs all three register pairs (HL/DE/BC as
         ; the LDIR source/dest/count), so stash path on the stack rather
         ; than in a register.
@@ -12841,13 +13002,14 @@ __drgo:
         ld      de,__drfcb
         call    5
         cp      0ffh
-        jr      z,__drnul
-
-        ; A = result index 0..3.  This also means a result is pending.
+        jr      nz,__drok
+        dec     a               ; FF -> FE: valid handle, already done
+__drok:
+        ; A = 0..3 (result pending) or FE (no match/done).
         ld      (__dridx),a
-
-        ; Any non-NULL address can serve as our opaque DIR object.
-        ld      hl,__drfcb
+        ld      hl,0
+        ld      (_errno),hl     ; successful opendir, including no match
+        ld      hl,1            ; the only valid opaque handle
         ret
 
 __drnul:
@@ -12862,15 +13024,12 @@ _drd:
         ex      (sp),hl         ; HL = dirp
         push    bc
 
-        ; NULL DIR * -> NULL.
-        ld      a,h
-        or      l
+        call    __drval
         jr      z,__drnul
 
         ; __dridx doubles as both result index and enumeration state.
-        ld      a,(__dridx)
         cp      0feh
-        jr      z,__drnul       ; done/closed
+        jr      z,__drnul       ; valid handle, enumeration done
         cp      0ffh
         jr      nz,__drcur      ; 0..3: opendir/search-next result pending
 
@@ -12956,13 +13115,34 @@ __drter:
 
         public  _dcls
 _dcls:
-        ld      a,0feh
+        ; Fetch dirp without an IX frame.
+        pop     bc
+        ex      (sp),hl         ; HL = dirp
+        push    bc
+        call    __drval
+        ret     z
+        ld      a,4
         ld      (__dridx),a
-        ld      hl,0
         ret
 
+; Validate the one opaque handle and reject use after close. On success,
+; Z is clear, A is the current state, and HL=0. On failure Z is set,
+; errno=EINVAL, and HL=-1 (closedir's required error result).
+__drval:
+        dec     hl              ; the sole valid opaque handle is (DIR *)1
+        ld      a,h
+        or      l
+        jr      nz,__drbad
+        ld      a,(__dridx)
+        cp      4
+        ret     nz
+__drbad:
+        call    __einval
+        ld      hl,0ffffh
+        xor     a
+        ret
 
-__dridx:        db      0feh
+__dridx:        db      4       ; 4 closed, FE done, FF next, 0..3 pending
 __drfcb:        ds      36
 __drdma:        ds      128
 __drent:        ds      13

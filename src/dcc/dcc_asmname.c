@@ -277,7 +277,8 @@ void asm_scan_format_specifiers(const char *s, int *needs_float, int *needs_long
             ++i;
             continue;
         }
-        while (i < len && (s[i] == '-' || s[i] == '+' || s[i] == '#' || s[i] == '0'))
+        while (i < len && (s[i] == '-' || s[i] == '+' || s[i] == ' ' ||
+                           s[i] == '#' || s[i] == '0'))
             ++i;
         while (i < len && s[i] >= '0' && s[i] <= '9')
             ++i;

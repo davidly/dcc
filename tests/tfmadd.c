@@ -64,14 +64,7 @@ int main()
     printf("%f\n", r);                 /* 3.800000 - mantissa-overflow-ish add */
 
     r = local_case(100000.0f, 100000.0f, 1.0f);
-    printf("%f\n", r);                 /* large product, addend negligible;
-                                           prints "4294967295.//////" due to
-                                           a known, separate, pre-existing
-                                           dcc printf float-to-string
-                                           limitation at this magnitude (see
-                                           tests/tfdedge.c) - not related to
-                                           fmadd, kept to document the
-                                           quirk is unchanged here too */
+    printf("%f\n", r);                 /* large product, addend negligible */
 
     return 0;
 }

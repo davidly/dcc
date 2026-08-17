@@ -3,6 +3,24 @@
 **Status: AUDIT ONLY.** No runtime code was changed to produce this report. This
 is a findings/backlog document for a future, separate fix-implementation pass.
 
+## Follow-up implementation status
+
+The audit itself remains a read-only snapshot. Follow-up work on this branch has
+implemented the first three repair batches:
+
+- Batch 1 fixed **SS-C1**, **SH-F1**, **CT-F1**, **SJ-F1**, and **EC-F1**.
+- Batch 2 fixed add/sub subnormal handling, nearest-even rounding, conversion
+  rounding, and the `nextafterf()` infinity edge from **FC-F2/FC-F3**.
+- Batch 3 fixed **PF-F1** through **PF-F10** and **SJ-F2** through **SJ-F5**,
+  plus stale scanner documentation **SJ-F7**. File-backed formatted output now
+  streams in 128-byte CP/M-record chunks, and the new state remains isolated in
+  a `dccrtlstrip` block used only by `fprintf`/`vfprintf`.
+
+**PF-F11** remains deferred because defensive NULL `%s` handling would add cost
+to every valid `%s` call. Subnormal multiply/divide/square-root work from
+**FC-F2** also remains open: the correct designs measured so far add too much
+linked code for the target.
+
 ## Scope & method
 
 - Target: `DCCRTL.MAC` (22,651 lines, 375 `public` symbols), the single
