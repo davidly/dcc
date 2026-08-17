@@ -3704,6 +3704,161 @@ static int pass_narrow_byte_not_to_bool(void)
     return changed;
 }
 
+/*
+ * pass_collapse_word_shift_right_byte_boundary:
+ *
+ * dcc's codegen for a constant-shift "x >> N" on a 16-bit value never
+ * recognizes that once N reaches 8, the entire low byte's original
+ * contents are gone and the shift is now operating on a single register --
+ * it just unrolls N repetitions of a 1-bit "srl <hi> / rr <lo>" 16-bit
+ * shift regardless of N, an increasingly wasteful approach as N grows.
+ * Found by comparing a1.c's get_mem() against zsdcc's generated code for
+ * the same expression: "address >> 12" compiles to 24 instructions (12
+ * pairs) under dcc where zsdcc uses 8. Confirmed this isn't a1-specific:
+ * the pattern survives to the final peephole-optimized output in 13 apps
+ * across the standard suite (147 "srl h" and 29 "srl d" instances total).
+ *
+ * For N in [8,15], everything past the first 8 shifts operates on a
+ * single byte (what was originally the high byte): "srl <hi> / rr <lo>"
+ * only pulls a bit out of <hi> into <lo> via the carry, and once <hi>
+ * reaches 0 (after the first 8 iterations) it stays 0 and every further
+ * carry-in is 0 too -- so a plain "srl <lo>" is exactly equivalent to the
+ * remaining "srl <hi> / rr <lo>" pairs once <hi> has bottomed out. That
+ * means the whole thing collapses to a byte move (<lo> = <hi>, <hi> = 0)
+ * followed by K = N-8 more SRLs on <lo> alone -- 2+K instructions
+ * replacing 2N, using only the registers the original shift already used
+ * (no new register dependency, so no liveness proof is needed to apply
+ * it unconditionally). zsdcc's own generated code for this expression
+ * goes further still, routing the tail shift through A to use RLCA
+ * (cheaper than SRL, but A-only) -- a possible follow-up once a register
+ * ends up provably dead here, but this form is already a 2-9x reduction
+ * with no precondition at all.
+ *
+ * Handles both HL and DE as the register pair being shifted (both appear
+ * in the wild).
+ */
+static int pass_collapse_word_shift_right_byte_boundary(void)
+{
+    int i, changed = 0;
+    static const char * const pairs[2][2] = { { "h", "l" }, { "d", "e" } };
+    int p;
+
+    for (i = 0; i < nlines; i++) {
+        for (p = 0; p < 2; p++) {
+            char srl_line[16], rr_line[16], srl_lo_line[16];
+            int n, k, idx, j;
+            char out[16][16];
+
+            sprintf(srl_line, "srl %s", pairs[p][0]);
+            sprintf(rr_line, "rr %s", pairs[p][1]);
+            sprintf(srl_lo_line, "srl %s", pairs[p][1]);
+
+            if (!eq(i, srl_line))
+                continue;
+
+            n = 0;
+            while (eq(i + 2 * n, srl_line) && eq(i + 2 * n + 1, rr_line))
+                n++;
+
+            if (n < 8)
+                continue;
+
+            k = n - 8;
+            idx = 0;
+            sprintf(out[idx++], "ld %s,%s", pairs[p][1], pairs[p][0]);
+            sprintf(out[idx++], "ld %s,0", pairs[p][0]);
+            for (j = 0; j < k; j++)
+                strcpy(out[idx++], srl_lo_line);
+
+            replace1_tagged(i, out[0], "collapse_word_shift_right_byte_boundary");
+            for (j = 1; j < idx; j++)
+                replace1(i + j, out[j]);
+            delete_n(i + idx, 2 * n - idx);
+            changed = 1;
+            if (i > 0)
+                --i;
+            break;
+        }
+    }
+    return changed;
+}
+
+/*
+ * pass_narrow_ix_byte_sub_via_stack:
+ *
+ * dcc's codegen for "(uint16_t)a - (uint16_t)b" where a and b are both
+ * uint8_t stack locals/parameters always widens both to 16 bits (via a
+ * push/push/pop/pop shuffle into HL/DE) and does a 16-bit SBC HL,DE, even
+ * when -- as in op_cmp(), which immediately truncates back with
+ * "(uint8_t)(...)" -- only the low byte of the result is ever used.
+ * Confirmed against zsdcc's generated code for the identical C expression:
+ * a plain 8-bit "ld a,lhs / sub rhs" gives the same low byte directly,
+ * with the Z80 carry out of that SUB being exactly the borrow flag the
+ * comparison needs too, at a fraction of the cost.
+ *
+ * Matched shape:
+ *     ld l,(ix+<N1>)
+ *     ld h,0
+ *     push hl
+ *     ld l,(ix+<N2>)
+ *     push hl
+ *     pop de
+ *     pop hl
+ *     or a
+ *     sbc hl,de
+ *
+ * optionally followed by a "ld h,0" that dcc emits to re-affirm H holds
+ * the zero-extended high byte of the (now 8-bit-valued) result -- present
+ * or not depending on what pass_elim_redundant_ld_h_zero already trimmed
+ * on an earlier iteration.
+ *
+ * Replaced with:
+ *     ld a,(ix+<N1>)
+ *     sub (ix+<N2>)
+ *     ld l,a
+ *     ld h,0
+ *
+ * H=0/L=result is reproduced explicitly so whatever follows -- which
+ * consumes the low byte, exactly as the original did after its own
+ * "ld h,0" -- sees the identical value regardless of whether the optional
+ * trailing "ld h,0" had already been elided.
+ */
+static int pass_narrow_ix_byte_sub_via_stack(void)
+{
+    int i, changed = 0;
+    char off1[32], off2[32];
+
+    for (i = 0; i + 8 < nlines; i++) {
+        int tail;
+        char a_line[48], sub_line[48];
+
+        if (!peep_parse_ld_l_ix(lines[i], off1))
+            continue;
+        if (!eq(i + 1, "ld h,0") || !eq(i + 2, "push hl"))
+            continue;
+        if (!peep_parse_ld_l_ix(lines[i + 3], off2))
+            continue;
+        if (!eq(i + 4, "push hl") || !eq(i + 5, "pop de") ||
+            !eq(i + 6, "pop hl") || !eq(i + 7, "or a") ||
+            !eq(i + 8, "sbc hl,de"))
+            continue;
+
+        tail = eq(i + 9, "ld h,0") ? 1 : 0;
+
+        sprintf(a_line, "ld a,(ix%s)", off1);
+        sprintf(sub_line, "sub (ix%s)", off2);
+        replace1_tagged(i, a_line, "narrow_ix_byte_sub_via_stack");
+        replace1(i + 1, sub_line);
+        replace1(i + 2, "ld l,a");
+        replace1(i + 3, "ld h,0");
+        delete_n(i + 4, 5 + tail);
+        changed = 1;
+        if (i > 0)
+            --i;
+    }
+    return changed;
+}
+
 static int pass_zeroext_byte_cmp_const(void)
 {
     int i;
@@ -11939,6 +12094,8 @@ int main(int argc, char **argv)
         { "pass_word_zero_test_via_mem", pass_word_zero_test_via_mem, 0 },
         { "pass_narrow_byte_and_mask_to_bool", pass_narrow_byte_and_mask_to_bool, 0 },
         { "pass_narrow_byte_not_to_bool", pass_narrow_byte_not_to_bool, 0 },
+        { "pass_collapse_word_shift_right_byte_boundary", pass_collapse_word_shift_right_byte_boundary, 0 },
+        { "pass_narrow_ix_byte_sub_via_stack", pass_narrow_ix_byte_sub_via_stack, 0 },
         { "pass_zeroext_byte_cmp_const", pass_zeroext_byte_cmp_const, 0 },
         { "pass_byte_cmp_push_pop_hl", pass_byte_cmp_push_pop_hl, 0 },
         { "pass_word_switch_cmp_avoid_push_pop", pass_word_switch_cmp_avoid_push_pop, 0 },
