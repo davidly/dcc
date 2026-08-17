@@ -3064,13 +3064,13 @@ qs_inner:
         ld      de,(__qs_gapb)
         or      a
         sbc     hl,de           ; HL = pprev
+        jr      c,qs_idone
 
         ; Stop when pprev < base, equivalent to j < gap.
         ;
         ; Preserve pprev with push/pop; POP does not disturb flags.
         push    hl
         ld      de,(__qs_base)
-        or      a
         sbc     hl,de
         pop     hl              ; HL = pprev, flags still from compare
         jr      c,qs_idone
@@ -9759,6 +9759,7 @@ rl_try_grow_top:
         ld      hl,(__rl_old)
         ld      de,(__rl_size)
         add     hl,de
+        jr      c,rl_do_alloc           ; address wrap -> cannot grow here
         ld      de,FTRSIZE
         add     hl,de                   ; HL = new block end = ptr+new_size+FTRSIZE
         jp      c,rl_do_alloc           ; address wrap -> cannot grow here
@@ -11602,14 +11603,8 @@ _fseek:
 
         call    _lseek
 
-        ; Pop 8 bytes of arguments.
-        push    de
-        push    hl
-        ld      hl,8
-        add     hl,sp
-        ld      sp,hl
-        pop     hl
-        pop     de
+        ; Discard the arguments without clobbering the DE:HL result.
+        ld      sp,ix
 
         ; lseek failure is -1L == DE:HL all ones.
         ld      a,h
@@ -12020,8 +12015,9 @@ sc_loop:
         cp      '%'
         jp      z,sc_percent
 
-        ld      b,a
+        push    af
         call    sc_get
+        pop     bc
         jp      c,sc_input_fail
         cp      b
         jp      z,sc_loop
@@ -21298,7 +21294,6 @@ __lcnv:
         public  _clock
         public  _time
         public  _difftime
-        public  _strftime
 
 _clock:
 ; clock_t clock(void) -- returns (clock_t)-1 (unavailable)
@@ -22639,6 +22634,7 @@ CDZ0010:
 
 ; ================= END generated calendar functions =================
 
+        public  _strftime
 _strftime:
 ; size_t strftime(char *s, size_t max, const char *fmt, const struct tm *tp)
 ; Still a stub (returns 0, writes nothing) - a real implementation is a

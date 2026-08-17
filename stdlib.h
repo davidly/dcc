@@ -66,7 +66,7 @@ div_t div(int numer, int denom);
 /** Signed long division returning quotient and remainder. */
 ldiv_t ldiv(long numer, long denom);
 /** Binary-search a sorted array. */
-const void *bsearch(const void *key, const void *base, size_t num, size_t size, int (*compare)(const void *, const void *));
+void *bsearch(const void *key, const void *base, size_t num, size_t size, int (*compare)(const void *, const void *));
 /** Sort an array in place. */
 void qsort(void *base, size_t num, size_t size, int (*compare)(const void *, const void *));
 
@@ -81,7 +81,9 @@ void free( void *ptr );
 
 /** Search the environment for name; always returns NULL on CP/M 2.2. */
 char *getenv(const char *name);
-/** Execute a shell command; always returns -1 on CP/M 2.2 (no command processor). */
+/** Execute a shell command. CP/M 2.2 has no command processor: system(NULL)
+ * correctly reports that via 0 (false), and any non-NULL command returns -1
+ * (unsupported). */
 int system(const char *string);
 
 /* Multibyte / wide-character conversion (C89 7.10.7 / 7.10.8).

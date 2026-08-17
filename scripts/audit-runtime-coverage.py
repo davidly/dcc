@@ -22,24 +22,49 @@ IGNORE_HEADERS = {
     "errno.h",
 }
 
-FMT_FUNCS = ["printf", "fprintf", "sprintf", "vprintf", "vfprintf", "vsprintf"]
+FMT_FUNCS = [
+    "printf",
+    "fprintf",
+    "sprintf",
+    "snprintf",
+    "vprintf",
+    "vfprintf",
+    "vsprintf",
+    "vsnprintf",
+]
 FMT_PUBLIC = [
     "_printf",
     "_pffio",
     "_pflng",
     "_pflio",
     "_sprintf",
+    "_spfio",
     "_splng",
+    "_splio",
+    "_snfio",
+    "_snlng",
+    "_snlio",
     "_fprintf",
+    "_fpfio",
     "_fplng",
+    "_fplio",
     "_vprintf",
+    "_vpfio",
     "_vplng",
+    "_vplio",
     "_vsprintf",
+    "_vsfio",
     "_vslng",
+    "_vslio",
+    "_vnfio",
+    "_vnlng",
+    "_vnlio",
     "_vfprintf",
+    "_vffio",
     "_vflng",
+    "_vflio",
 ]
-KNOWN_PUBLIC_DATA = {"_stdin", "_stdout", "_stderr", "_errno"}
+KNOWN_PUBLIC_DATA = {"_stdin", "_stdout", "_stderr", "_errno", "_dcc_nan"}
 
 # Public labels that are compiler/runtime internals rather than user-callable C
 # APIs. They are reached by generated code (integer/long/float arithmetic,
@@ -169,25 +194,17 @@ def app_flags(overrides, app):
 
 
 def formatted_label(func, floatio, longio):
-    if func == "printf":
-        if floatio and longio:
-            return "_pflio"
-        if floatio:
-            return "_pffio"
-        if longio:
-            return "_pflng"
-        return "_printf"
-
-    if longio:
-        return {
-            "sprintf": "_splng",
-            "fprintf": "_fplng",
-            "vprintf": "_vplng",
-            "vsprintf": "_vslng",
-            "vfprintf": "_vflng",
-        }.get(func, "_" + func)
-
-    return "_" + func
+    variants = {
+        "printf": ("_printf", "_pflng", "_pffio", "_pflio"),
+        "sprintf": ("_sprintf", "_splng", "_spfio", "_splio"),
+        "snprintf": ("_snprintf", "_snlng", "_snfio", "_snlio"),
+        "fprintf": ("_fprintf", "_fplng", "_fpfio", "_fplio"),
+        "vprintf": ("_vprintf", "_vplng", "_vpfio", "_vplio"),
+        "vsprintf": ("_vsprintf", "_vslng", "_vsfio", "_vslio"),
+        "vsnprintf": ("_vsnprintf", "_vnlng", "_vnfio", "_vnlio"),
+        "vfprintf": ("_vfprintf", "_vflng", "_vffio", "_vflio"),
+    }
+    return variants[func][(2 if floatio else 0) + (1 if longio else 0)]
 
 
 def audit_api_coverage(root, public_labels, labels, compiler_map, test_text):

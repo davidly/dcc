@@ -1,9 +1,10 @@
 /* tqsort.c - comprehensive unit tests for the runtime qsort.
  *
  * qsort is exercised across multiple element sizes (int, a 6-byte struct, a
- * 5-byte odd-sized record, single bytes, and char* pointers) and comparator
- * directions, with results checked against an independent insertion-sort
- * oracle, plus the empty/single/sorted/reverse/all-equal edge cases.
+ * 5-byte odd-sized record, single bytes, char* pointers, and large records)
+ * and comparator directions, with results checked against an independent
+ * insertion-sort oracle, plus the empty/single/sorted/reverse/all-equal edge
+ * cases.
  * (bsearch is covered by tbsearch.c and atol by tstdlib.c.)
  *
  * The test prints diagnostics only on failure and a single success line, so the
@@ -114,6 +115,121 @@ static void oracle_sort(int *a, int n)
         }
         a[j + 1] = key;
     }
+}
+
+/*
+ * Six 8K records make the initial three-record Shell gap 24K.  At the low
+ * static-data address used by a CP/M .COM, subtracting that gap from record
+ * zero wraps onto record five.  The extra pair is observable without touching
+ * an invalid address, and the following walk is rejected by the comparator.
+ */
+#define LARGE_COUNT 6
+#define LARGE_SIZE 8192U
+#define LARGE_BYTES 49152U
+
+static unsigned char large_records[LARGE_BYTES];
+static int large_wrap_pairs;
+static int large_wrap_swaps;
+static int large_bad_pointers;
+
+static unsigned char *large_record(int i)
+{
+    return large_records + (unsigned int)i * LARGE_SIZE;
+}
+
+static int large_record_index(const void *p)
+{
+    int i;
+
+    for (i = 0; i < LARGE_COUNT; i++)
+        if (p == (const void *)large_record(i))
+            return i;
+    return -1;
+}
+
+static int large_key(const unsigned char *p)
+{
+    return (int)p[0] + ((int)p[1] << 8);
+}
+
+static int cmp_large(const void *a, const void *b)
+{
+    int ia = large_record_index(a);
+    int ib = large_record_index(b);
+    int ka;
+    int kb;
+
+    if (ia < 0 || ib < 0) {
+        large_bad_pointers++;
+        return 0;
+    }
+
+    ka = large_key((const unsigned char *)a);
+    kb = large_key((const unsigned char *)b);
+
+    if (ia == 5 && ib == 0)
+        large_wrap_pairs++;
+    if (ia == 2 && ib == 5 && large_key(large_record(0)) == 5 &&
+            large_key(large_record(5)) == 1)
+        large_wrap_swaps++;
+
+    if (ka < kb)
+        return -1;
+    if (ka > kb)
+        return 1;
+    return 0;
+}
+
+static void t_qsort_large_gap(void)
+{
+    static const int input[LARGE_COUNT] = { 4, 3, 2, 1, 0, 5 };
+    int expected[LARGE_COUNT];
+    unsigned char *p;
+    unsigned char fill;
+    int content_bad;
+    int i;
+    unsigned int j;
+
+    large_wrap_pairs = 0;
+    large_wrap_swaps = 0;
+    large_bad_pointers = 0;
+
+    for (i = 0; i < LARGE_COUNT; i++) {
+        expected[i] = input[i];
+        p = large_record(i);
+        fill = (unsigned char)(0x40 + input[i]);
+        memset(p, fill, LARGE_SIZE);
+        p[0] = (unsigned char)input[i];
+        p[1] = 0;
+    }
+    oracle_sort(expected, LARGE_COUNT);
+
+    qsort(large_records, LARGE_COUNT, LARGE_SIZE, cmp_large);
+
+    for (i = 0; i < LARGE_COUNT; i++)
+        if (large_key(large_record(i)) != expected[i]) {
+            fail("qsort large-gap order");
+            break;
+        }
+
+    content_bad = 0;
+    for (i = 0; i < LARGE_COUNT && !content_bad; i++) {
+        p = large_record(i);
+        fill = (unsigned char)(0x40 + expected[i]);
+        for (j = 2U; j < LARGE_SIZE; j++)
+            if (p[j] != fill) {
+                content_bad = 1;
+                break;
+            }
+    }
+    if (content_bad)
+        fail("qsort large-gap content");
+    if (large_wrap_pairs != 0)
+        fail("qsort large-gap wrapped comparator pair");
+    if (large_wrap_swaps != 0)
+        fail("qsort large-gap wrapped swap");
+    if (large_bad_pointers != 0)
+        fail("qsort large-gap invalid comparator pointer");
 }
 
 /* ============================================================ qsort: ints */
@@ -301,6 +417,7 @@ int main(void)
 
     t_qsort_int();
     t_qsort_int_edges();
+    t_qsort_large_gap();
     t_qsort_desc();
     t_qsort_struct();
     t_qsort_r5();
