@@ -23,6 +23,7 @@ UGC_MAX  equ     11
 ; errno values used by the runtime. Keep these in sync with errno.h.
 ENOENT   equ     2
 EIO      equ     5
+E2BIG    equ     7
 EBADF    equ     9
 EXDEV    equ     18
 EINVAL   equ     22
@@ -234,8 +235,6 @@ ba_copy:
         or      a
         jr      z,ba_done_copy
         ld      a,(hl)
-        cp      0dh
-        jr      z,ba_done_copy
         ld      (de),a
         inc     hl
         inc     de
@@ -21379,6 +21378,23 @@ SCL48:
         sbc hl,de
         jr      nz,SCL44 ; peep: jp_to_jr
 SCL57:
+        ; A 0x/0X prefix is part of the subject sequence only when a
+        ; hexadecimal digit follows it. Otherwise the leading zero remains
+        ; the conversion and endptr points at the x/X.
+        ld hl,(__stox_p)
+        inc hl
+        inc hl
+        ld a,(hl)
+        cp '0'
+        jr c,SCL57I
+        cp '9'+1
+        jr c,SCL57D
+        and 0dfh               ; fold a-f to A-F
+        cp 'A'
+        jr c,SCL57I
+        cp 'F'+1
+        jr nc,SCL57I
+SCL57D:
         ld hl,(__stox_p)
         inc hl ; peep: ld_de2_to_inc
         inc hl
@@ -21386,6 +21402,24 @@ SCL57:
         ld hl,16
         ld (__stox_base),hl
         jr      SCL45 ; peep: jp_to_jr
+SCL57I:
+        ; The already-confirmed leading zero is the complete conversion.
+        ; Return it directly instead of running the long cutoff/multiply core.
+        ld hl,(__stox_p)
+        inc hl
+        ld de,(__stox_endptr)
+        ld a,d
+        or e
+        jr z,SCL57R
+        ex de,hl
+        ld (hl),e
+        inc hl
+        ld (hl),d
+SCL57R:
+        ld hl,0
+        ld d,h
+        ld e,l
+        ret
 SCL44:
         ld hl,(__stox_base)
         ld a,h ; peep: cmp0_or_hl
@@ -21917,24 +21951,30 @@ mbw_zero:
         ret
 
 _wctomb:
-; int wctomb(char *s, wchar_t wc) -- s@IX+4, wc@IX+6
-; Returns 0 if s==NULL (no state-dep encoding), else stores (char)wc and returns 1.
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      a,h
-        or      l
+; int wctomb(char *s, wchar_t wc) -- entry stack: ret, s, wc
+; Returns 0 if s==NULL (no state-dependent encoding), -1 when wc is not
+; representable as one execution byte, otherwise stores wc and returns 1.
+        pop     bc              ; return address
+        pop     de              ; s
+        pop     hl              ; wc
+        push    hl              ; restore caller arguments
+        push    de
+        push    bc
+        ld      a,d
+        or      e
         jr      z,wcm_null
-        ld      a,(ix+6)
-        ld      (hl),a
+        ld      a,h
+        or      a
+        jr      nz,wcm_err
+        ld      a,l
+        ld      (de),a
         ld      hl,1
-        pop     ix
         ret
 wcm_null:
         ld      hl,0
-        pop     ix
+        ret
+wcm_err:
+        ld      hl,0ffffh
         ret
 
 _mbstowcs:
@@ -21990,21 +22030,20 @@ _wcstombs:
         add     ix,sp
         ld      l,(ix+8)
         ld      h,(ix+9)
-        ld      (__wcs_n),hl            ; save n
         ld      c,(ix+6)
         ld      b,(ix+7)                ; BC = src (wchar_t *)
         ld      e,(ix+4)
         ld      d,(ix+5)                ; DE = dst
-        ld      hl,0                    ; HL = count
+        push    de                      ; initial dst for return count
 wcs_lp:
-        push    hl
-        ld      hl,(__wcs_n)
         ld      a,h
         or      l
-        jr      z,wcs_nexhausted
-        dec     hl
-        ld      (__wcs_n),hl
-        pop     hl
+        jr      z,wcs_done
+        inc     bc
+        ld      a,(bc)                  ; high byte of wchar_t
+        or      a
+        jr      nz,wcs_err              ; not representable in one byte
+        dec     bc
         ld      a,(bc)                  ; low byte of wchar_t
         or      a
         jr      z,wcs_null
@@ -22012,148 +22051,125 @@ wcs_lp:
         inc     de
         inc     bc
         inc     bc                      ; advance wchar_t* by 2
-        inc     hl
+        dec     hl
         jr      wcs_lp
 wcs_null:
         ld      (de),a
-        jr      wcs_ret
-wcs_nexhausted:
+        ; fall through
+wcs_done:
         pop     hl
-wcs_ret:
+        ex      de,hl                   ; HL = final dst, DE = initial dst
+        or      a
+        sbc     hl,de                   ; converted byte count (16-bit size_t)
         pop     ix
         ret
-
-__wcs_n:        dw      0               ; scratch: remaining n for wcstombs
+wcs_err:
+        pop     de                      ; discard initial dst
+        ld      hl,0ffffh               ; (size_t)-1
+        pop     ix
+        ret
 
         public  _exec
         public  _execv
         public  __xmain
-; XTCOD=31 (trampoline code bytes), XTSGP=16 (stack gap below trampoline)
+        public  __xfit
+        public  __xacom
+        public  __xwcp
+XTCOD   equ     44              ; trampoline code bytes
+XTSGP   equ     16              ; stack gap below the high FCB
+XTFCBS  equ     36              ; CP/M FCB bytes copied high
+XTBLK   equ     XTFCBS+XTCOD    ; FCB plus trampoline below FBASE
+XTCNTO  equ     1               ; record-count immediate in __xtemp
+XTFCBO  equ     21              ; FCB-address immediate in __xtemp
 
 ; int exec(const char *path, const char *cmdtail)
 _exec:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)        ; HL = path
-        ld      e,(ix+6)
-        ld      d,(ix+7)        ; DE = cmdtail
-        call    __xmain
-        pop     ix
+        pop     bc              ; return address
+        pop     hl              ; path
+        pop     de              ; cmdtail
+        push    de              ; restore caller arguments
+        push    hl
+        push    bc
+        push    hl              ; preserve path while staging the raw tail
+        call    __xcpct
+        pop     hl              ; POP preserves the staging result
+        jr      c,ex_bad
+        jp      __xmain
+ex_bad:
+        ld      hl,0ffffh
+        ret
+
+; __xcpct(DE=cmdtail): validate and stage a raw exec tail in private scratch.
+; NUL and CR terminate the source. Up to 127 payload bytes are copied before
+; any open, stack switch, high-memory write, default-FCB clear, or 0080h copy.
+; Carry is set with errno=E2BIG only when a 128th payload byte is present.
+__xcpct:
+        ld      hl,__xctbf
+        ld      b,127
+        ld      a,d
+        or      e
+        jr      z,xcp_done
+xcp_lp:
+        ld      a,(de)
+        or      a
+        jr      z,xcp_done
+        cp      0dh
+        jr      z,xcp_done
+        ld      (hl),a
+        inc     de
+        inc     hl
+        djnz    xcp_lp
+        ld      a,(de)
+        or      a
+        jr      z,xcp_done
+        cp      0dh
+        jr      z,xcp_done
+        ld      hl,E2BIG
+        ld      (_errno),hl
+        scf
+        ret
+xcp_done:
+        ld      a,127
+        sub     b
+        ld      (__xctln),a
+        xor     a
+        ld      (hl),a          ; NUL after the staged payload, including byte 127
         ret
 
 ; int execv(const char *path, char **argv)
 _execv:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      l,(ix+6)
-        ld      h,(ix+7)        ; HL = argv
+        pop     bc              ; return address
+        pop     de              ; path
+        pop     hl              ; argv
+        push    hl              ; restore caller arguments
+        push    de
+        push    bc
         ld      a,h
         or      l
         jr      z,ev_noav       ; NULL argv
-        call    __xmkct         ; build cmdtail in __xctbf from argv[1..]
-        jr      ev_have
+        push    de              ; preserve path
+        call    __xmkct         ; validate/build staged tail from argv[1..]
+        pop     hl              ; path; POP preserves carry
+        jr      c,ev_bad
+        jp      __xmain
 ev_noav:
         xor     a
-        ld      (__xctbf),a     ; empty cmdtail
-ev_have:
-        ld      l,(ix+4)
-        ld      h,(ix+5)        ; HL = path
-        ld      de,__xctbf
-        call    __xmain
-        pop     ix
+        ld      (__xctln),a
+        ld      (__xctbf),a
+        ex      de,hl           ; HL = path
+        jp      __xmain
+ev_bad:
+        ld      hl,0ffffh
         ret
 
-; __xmain(HL=path, DE=cmdtail): shared exec implementation
-__xmain:
-        ld      (__xpath),hl
-        ld      (__xctls),de
-
-        ; Build and open a low-memory FCB while the caller stack is active.
-        ; A failed exec must return without disturbing that stack.
-        ld      hl,__xfcbb
-        ld      de,__xfcbb+1
-        ld      bc,35
-        xor     a
-        ld      (hl),a
-        ldir
-        ld      hl,(__xpath)
-        ld      de,__xpbuf
-        call    __xacom
-        ld      de,__xfcbb
-        ld      hl,__xpbuf
-        call    __mkfcb
-        ld      de,__xfcbb
-        ld      c,15
-        call    5
-        inc     a               ; inc-a/0FFh wrap idiom (see _open's comment above)
-        jr      nz,xm_open
-        ld      hl,0ffffh       ; open failed
-        ret
-
-xm_open:
-        ; Compute trampoline base: BDOS entry - (36 FCB bytes + 31 code bytes)
-        ld      hl,(0006h)      ; HL = BDOS entry point (word at 0006h)
-        ld      bc,67           ; 36 (FCB) + 31 (code) = trampoline block size
-        or      a
-        sbc     hl,bc           ; HL = tramp_base = BDOS - 67
-        ld      (__xbase),hl
-
-        ; Keep calls and BDOS workspace below the high-memory FCB.
-        ld      bc,16
-        or      a
-        sbc     hl,bc
-        ld      sp,hl
-
-        ; Copy the opened FCB above the now-safe stack.
-        ld      hl,__xfcbb
-        ld      de,(__xbase)
-        ld      bc,36
-        ldir
-
-xm_ok:
-        ; Patch trampoline template: write FCB address into the ld de,0 immediate
-        ld      hl,(__xbase)    ; HL = FCB address = tramp_base
-        ld      a,l
-        ld      (__xtemp+13),a  ; lo byte of FCB address
-        ld      a,h
-        ld      (__xtemp+14),a  ; hi byte of FCB address
-
-        ; Set up command tail (0080h) and default FCBs (005Ch, 006Ch)
-        ld      hl,(__xctls)
-        call    __xsctl
-
-        ; __xsctl's call __mkfcb pushes a return address onto the stack that
-        ; lands exactly on FCB[32] (cr).  Zero cr now, after __xsctl returns,
-        ; so the first fn 20 reads from the start of the file.
-        ld      hl,(__xbase)
-        ld      de,32
-        add     hl,de
-        xor     a
-        ld      (hl),a          ; FCB[32] = CR = 0
-
-        ; Compute and save trampoline entry = tramp_base + 36 (FCB size)
-        ld      hl,(__xbase)
-        ld      bc,36
-        add     hl,bc
-        ld      (__xtrep),hl
-
-        ; Copy patched template (31 bytes) to trampoline entry address
-        ex      de,hl           ; DE = trampoline entry (destination)
-        ld      hl,__xtemp
-        ld      bc,31
-        ldir
-
-        ; The stack was already switched to tramp_base-16 before setup and
-        ; every intervening call is balanced, so jump using that same safe SP.
-        ld      hl,(__xtrep)
-        jp      (hl)
-
-; __xmkct(HL=argv): build cmdtail in __xctbf from argv[1..] (" arg1 arg2 ...")
+; __xmkct(HL=argv): build the staged tail from argv[1..] (" arg1 arg2 ...").
+; The direct startup parser has no quoting/escape convention, so empty
+; arguments or bytes through ASCII space are rejected with EINVAL. Quote and
+; backslash remain literal. A payload above 127 bytes is rejected with E2BIG.
 __xmkct:
         ld      de,__xctbf
+        ld      a,127
+        ld      (__xctln),a     ; remaining capacity until xmk_dn
         inc     hl
         inc     hl              ; skip argv[0] pointer (2 bytes)
 xmk_lp:
@@ -22165,17 +22181,32 @@ xmk_lp:
         or      c
         jr      z,xmk_dn        ; NULL pointer = end of argv
         push    hl              ; save argv index
-        push    de              ; save output pointer
         ld      h,b
         ld      l,c             ; HL = argv[i] string
-        pop     de
+        ld      a,(hl)
+        or      a
+        jr      z,xmk_iv        ; empty argument cannot round-trip
+        ld      a,(__xctln)
+        or      a
+        jr      z,xmk_bg
+        dec     a
+        ld      (__xctln),a
         ld      a,' '
-        ld      (de),a          ; space separator before each argument
+        ld      (de),a          ; separator before every argument
         inc     de
 xmk_cs:
         ld      a,(hl)
         or      a
         jr      z,xmk_ce
+        cp      ' '+1
+        jr      c,xmk_iv        ; startup would split/drop this argument
+        ld      c,a
+        ld      a,(__xctln)
+        or      a
+        jr      z,xmk_bg
+        dec     a
+        ld      (__xctln),a
+        ld      a,c
         ld      (de),a
         inc     hl
         inc     de
@@ -22185,115 +22216,180 @@ xmk_ce:
         jr      xmk_lp
 xmk_dn:
         xor     a
-        ld      (de),a          ; null-terminate __xctbf
+        ld      (de),a          ; NUL after at most 127 staged bytes
+        ld      a,(__xctln)
+        ld      b,a
+        ld      a,127
+        sub     b
+        ld      (__xctln),a     ; convert remaining capacity to payload length
+        ret
+xmk_iv:
+        ld      hl,EINVAL
+        jr      xmk_err
+xmk_bg:
+        ld      hl,E2BIG
+xmk_err:
+        pop     bc              ; discard saved argv index
+        ld      (_errno),hl
+        scf
         ret
 
-; __xacom(HL=src, DE=dest): copy path to dest, appending ".COM" if no '.' present
-__xacom:
-        ld      b,0             ; B = dot-seen flag
-xac_cp:
-        ld      a,(hl)
-        or      a
-        jr      z,xac_dn
-        cp      '.'
-        jr      nz,xac_nd
-        ld      b,1             ; found a dot
-xac_nd:
-        ld      (de),a
-        inc     hl
-        inc     de
-        jr      xac_cp
-xac_dn:
-        ld      a,b
-        or      a
-        jr      nz,xac_hd       ; had dot: just null-terminate
-        ld      a,'.'
-        ld      (de),a
-        inc     de
-        ld      a,'C'
-        ld      (de),a
-        inc     de
-        ld      a,'O'
-        ld      (de),a
-        inc     de
-        ld      a,'M'
-        ld      (de),a
-        inc     de
-xac_hd:
+; __xmain(HL=path): shared implementation; the tail is already staged.
+__xmain:
+        ; Validate the path, then build/open a low-memory FCB while the caller
+        ; stack is active. A failed exec must return without disturbing it.
+        ld      de,__xpbuf
+        call    __xacom
+        jr      c,xm_inval
+        ld      hl,__xfcbb
+        ld      de,__xfcbb+1
+        ld      bc,35
         xor     a
-        ld      (de),a          ; null-terminate
+        ld      (hl),a
+        ldir
+        ld      de,__xfcbb
+        ld      hl,__xpbuf
+        call    __mkfcb
+        ld      de,__xfcbb
+        ld      c,15
+        call    5
+        inc     a               ; inc-a/0FFh wrap idiom (see _open's comment above)
+        jr      nz,xm_open
+xm_noent:
+        ld      hl,ENOENT
+        jr      xm_error
+xm_inval:
+        ld      hl,EINVAL
+        jr      xm_error
+xm_big:
+        ld      hl,EFBIG
+xm_error:
+        ld      (_errno),hl
+        ld      hl,0ffffh
         ret
 
-; __xsctl(HL=cmdtail): set 0080h length byte, 0081h text, FCB1, FCB2
+xm_open:
+        ; Function 35 returns the virtual file size in 128-byte records.
+        ; Preflight it while the caller's stack is still live: each successful
+        ; function-20 read writes one complete record at the current DMA, so
+        ; the rounded loaded range must end before the loader's stack gap.
+        ld      de,__xfcbb
+        ld      c,35
+        call    5
+        ld      e,(__xfcbb+33)  ; DE = low 16 bits of record count
+        ld      d,(__xfcbb+34)
+        ld      a,(__xfcbb+35)  ; A = upper record-count byte R2
+        ld      hl,(0006h)      ; HL = FBASE, the exclusive TPA limit
+        call    __xfit
+        jr      c,xm_big
+        ld      (__xtemp+XTCNTO),de
+        ld      (__xbase),hl
+
+        ; SP starts at the FCB base, so pushes use the reserved 16-byte gap
+        ; immediately below it.  The deepest setup path uses ten bytes;
+        ; the exact-count trampoline uses eight, and FDOS switches to its own
+        ; local stack on entry.
+        ld      sp,hl
+
+        ; Copy the opened FCB above the now-safe stack.
+        ld      hl,__xfcbb
+        ld      de,(__xbase)
+        ld      bc,36
+        ldir
+
+xm_ok:
+        ; Patch the approved high FCB address into the trampoline template.
+        ld      hl,(__xbase)
+        ld      a,l
+        ld      (__xtemp+XTFCBO),a
+        ld      a,h
+        ld      (__xtemp+XTFCBO+1),a
+
+        ; Set up command tail (0080h) and default FCBs (005Ch, 006Ch)
+        call    __xsctl
+
+        ; Reset the copied high FCB's current-record field after setup so the
+        ; first function-20 read starts at record zero.
+        ld      hl,(__xbase)
+        ld      de,32
+        add     hl,de
+        xor     a
+        ld      (hl),a          ; FCB[32] = CR = 0
+
+        ; Compute and save trampoline entry = tramp_base + 36 (FCB size)
+        ld      hl,(__xbase)
+        ld      bc,XTFCBS
+        add     hl,bc
+        ld      (__xtrep),hl
+
+        ; Copy the patched exact-record trampoline to its high-memory address.
+        ex      de,hl           ; DE = trampoline entry (destination)
+        ld      hl,__xtemp
+        ld      bc,XTCOD
+        ldir
+
+        ; The stack was already switched to tramp_base before setup and every
+        ; intervening call is balanced, so jump using that same safe SP.
+        ld      hl,(__xtrep)
+        jp      (hl)
+
+; __xsctl: publish the authoritative staged tail and build default FCB1/FCB2.
+; A 127-byte payload occupies 0081h..00FFh and has no CR because the length
+; byte is authoritative. Shorter payloads retain the conventional trailing CR.
+; FCB parsing is bounded by __xctln and uses startup's delimiter rule <= 20h.
 __xsctl:
         ; Clear FCB1 (16 bytes at 005Ch) then FCB2 (16 bytes at 006Ch)
         ld      de,005ch
         call    __xclfb         ; clears 005Ch-006Bh; DE = 006Ch on return
         call    __xclfb         ; clears 006Ch-007Bh
 
-        ; Null or empty cmdtail -> write empty tail and return
-        ld      a,h
-        or      l
-        jr      z,xsc_em
-        ld      a,(hl)
-        or      a
-        jr      z,xsc_em
-
-        ; Copy cmdtail to 0081h; count bytes in B; append CR
-        ld      de,0081h
+        ; Copy exactly the staged 0..127 bytes into the CP/M command tail.
+        ld      a,(__xctln)
+        ld      (0080h),a
+        ld      c,a
         ld      b,0
-xsc_cp:
-        ld      a,(hl)
+        ld      hl,__xctbf
+        ld      de,0081h
+        ld      a,c
         or      a
-        jr      z,xsc_es
-        cp      0dh
-        jr      z,xsc_es
-        ld      (de),a
-        inc     hl
-        inc     de
-        inc     b
-        jr      xsc_cp
-xsc_es:
+        jr      z,xsc_cr
+        ldir
+        ld      a,(__xctln)
+        cp      127
+        jr      z,xsc_parse     ; DE wrapped to 0100h; 00FFh is payload
+xsc_cr:
         ld      a,0dh
-        ld      (de),a          ; CR terminator
-        ld      a,b
-        ld      (0080h),a       ; length byte
+        ld      (de),a
 
-        ; FCB1 from first whitespace-delimited word in tail
-        ld      hl,0081h
-        call    __xsksp         ; skip leading spaces; HL -> first non-space
-        ld      a,(hl)
+xsc_parse:
+        ; FCB1 from the first length-bounded startup-delimited word.
+        ld      hl,__xctbf
+        ld      a,(__xctln)
+        ld      b,a
+        call    __xsksp
+        ld      a,b
         or      a
-        ret     z
-        cp      0dh
         ret     z
         ld      de,__xpbuf
-        call    __xwcp          ; copy word to __xpbuf; HL -> delimiter
-        push    hl              ; save position after first word
+        call    __xwcp          ; HL/B remain at delimiter/end
+        push    hl
+        push    bc
         ld      de,005ch
         ld      hl,__xpbuf
         call    __mkfcb
-        pop     hl              ; restore position after first word
+        pop     bc
+        pop     hl
 
-        ; FCB2 from second word
+        ; FCB2 from the second length-bounded startup-delimited word.
         call    __xsksp
-        ld      a,(hl)
+        ld      a,b
         or      a
-        ret     z
-        cp      0dh
         ret     z
         ld      de,__xpbuf
         call    __xwcp
         ld      de,006ch
         ld      hl,__xpbuf
         call    __mkfcb
-        ret
-
-xsc_em:
-        xor     a
-        ld      (0080h),a       ; length = 0
-        ld      a,0dh
-        ld      (0081h),a       ; CR at 0081h
         ret
 
 ; __xclfb(DE=buf): zero 16 bytes at DE (for clearing default FCB slots)
@@ -22306,64 +22402,248 @@ xclf_l:
         djnz    xclf_l
         ret
 
-; __xsksp(HL=ptr): advance HL past space characters
+; __xsksp(HL=ptr, B=remaining): consume delimiters through ASCII space.
 __xsksp:
+        ld      a,b
+        or      a
+        ret     z
         ld      a,(hl)
-        cp      ' '
-        ret     nz
+        cp      ' '+1
+        ret     nc
         inc     hl
+        dec     b
         jr      __xsksp
 
-; __xwcp(HL=src, DE=dest): copy space/NUL/CR-delimited word from HL to DE
-; Null-terminates dest. Returns HL = position of delimiter.
-__xwcp:
-xwc_lp:
+; ---- shared exec/execv scratch, retained only with __xmain ----
+__xbase:        dw      0       ; FCB base = FBASE-XTBLK
+__xtrep:        dw      0       ; trampoline entry = FBASE-XTCOD
+__xfcbb:        ds      XTFCBS  ; low-memory FCB used through preflight
+__xpbuf:        ds      16      ; path/FCB word scratch (15 bytes plus NUL)
+__xctbf:        ds      128     ; staged 0..127 byte command-tail payload + NUL
+__xctln:        db      0       ; authoritative staged payload length
+
+; Exact-record trampoline (XTCOD=44 bytes). The approved record count and high
+; FCB address are patched before this template is copied. It performs exactly
+; that many successful sequential 128-byte reads. Any early nonzero status
+; warm-boots instead of executing a partial image; growth after fn 35 is ignored
+; because no extra read is attempted. A 0100h return address remains on the
+; reserved stack while the loop uses at most six additional bytes.
+__xtemp:
+        db      001h,000h,000h  ; ld bc,0      approved records; patch 1,2
+        db      021h,000h,001h  ; ld hl,0100h  current DMA
+        db      0e5h            ; push hl      child entry return
+        db      078h             ; ld a,b
+        db      0b1h             ; or c
+        db      0c8h             ; ret z        zero-record image
+        db      0c5h             ; push bc      remaining record count
+        db      0e5h             ; push hl      current DMA       <- loop
+        db      0ebh             ; ex de,hl
+        db      00eh,01ah       ; ld c,26h     set DMA
+        db      0cdh,005h,000h  ; call 5
+        db      0e1h             ; pop hl
+        db      0e5h             ; push hl
+        db      011h,000h,000h  ; ld de,0      high FCB; patch 21,22
+        db      00eh,014h       ; ld c,20h     sequential read
+        db      0cdh,005h,000h  ; call 5
+        db      0e1h             ; pop hl
+        db      0c1h             ; pop bc
+        db      0b7h             ; or a
+        db      0c2h,000h,000h  ; jp nz,0000h early EOF/error
+        db      011h,080h,000h  ; ld de,0080h
+        db      019h             ; add hl,de    next DMA
+        db      00bh             ; dec bc
+        db      078h             ; ld a,b
+        db      0b1h             ; or c
+        db      020h,0dfh       ; jr nz,loop  (-33)
+        db      0c9h             ; ret          exactly complete -> 0100h
+
+; __xfit(HL=FBASE, DE=record count, A=R2): validate the exact loader layout.
+; A successful n-record load writes [0100h,0100h+n*128).  The reserved ranges
+; are stack [FBASE-96,FBASE-80), FCB [FBASE-80,FBASE-44), and trampoline
+; [FBASE-44,FBASE). Return carry clear with HL=FBASE-80 only when the rounded
+; load ends at or below FBASE-96; otherwise return carry set.
+__xfit:
+        or      a
+        jr      nz,xft_bad      ; a nonzero upper byte cannot fit a 16-bit TPA
+        ld      bc,XTBLK
+        sbc     hl,bc           ; HL = high-memory FCB base
+        ret     c               ; malformed FBASE below the reserved block
+        push    hl              ; preserve successful return value
+        ld      bc,0110h        ; 0100h TPA base + 16-byte stack gap
+        sbc     hl,bc           ; bytes available for complete DMA records
+        jr      c,xft_done
+        ld      b,7
+xft_shift:
+        srl     h
+        rr      l
+        djnz    xft_shift       ; HL = floor(available bytes / 128)
+        or      a
+        sbc     hl,de           ; carry iff record count exceeds capacity
+xft_done:
+        pop     hl              ; POP preserves the fit/reject carry
+        ret
+xft_bad:
+        scf
+        ret
+
+; __xacom(HL=src, DE=dest): validate/copy a CP/M unambiguous file reference.
+; Accepts an optional A:..P: drive, a 1..8 byte name, and an optional 1..3 byte
+; extension.  Lowercase is accepted; __mkfcb uppercases it.  If the extension
+; is absent, append ".COM".  The longest output is 14 bytes plus NUL, so a
+; 16-byte destination is sufficient.  Carry is set on invalid syntax.
+__xacom:
+        ld      a,h
+        or      l
+        jr      z,xac_bad       ; NULL path
         ld      a,(hl)
         or      a
-        jr      z,xwc_dn
-        cp      0dh
-        jr      z,xwc_dn
-        cp      ' '
-        jr      z,xwc_dn
+        jr      z,xac_bad       ; empty path
+        inc     hl
+        ld      a,(hl)
+        dec     hl
+        cp      ':'
+        jr      nz,xac_name
+        ld      a,(hl)
+        call    __upa
+        cp      'A'
+        jr      c,xac_bad
+        cp      'P'+1
+        jr      nc,xac_bad
+        ld      (de),a
+        inc     de
+        ld      a,':'
+        ld      (de),a
+        inc     de
+        inc     hl
+        inc     hl
+
+xac_name:
+        ld      a,(hl)
+        or      a
+        jr      z,xac_bad
+        cp      '.'
+        jr      z,xac_bad
+        ld      b,8
+xac_nloop:
+        ld      a,(hl)
+        or      a
+        jr      z,xac_noext
+        cp      '.'
+        jr      z,xac_dot
+        call    __xvch
+        jr      c,xac_bad
         ld      (de),a
         inc     hl
         inc     de
-        jr      xwc_lp
+        djnz    xac_nloop
+        ld      a,(hl)
+        or      a
+        jr      z,xac_addcom
+        cp      '.'
+        jr      nz,xac_bad
+
+xac_dot:
+        ld      a,'.'
+        ld      (de),a
+        inc     de
+        inc     hl
+        ld      b,3
+xac_eloop:
+        ld      a,(hl)
+        or      a
+        jr      z,xac_extdone
+        call    __xvch          ; also rejects another '.' or ':'
+        jr      c,xac_bad
+        ld      (de),a
+        inc     hl
+        inc     de
+        djnz    xac_eloop
+        ld      a,(hl)
+        or      a
+        jr      nz,xac_bad      ; extension longer than three bytes
+        jr      xac_done
+
+xac_extdone:
+        ld      a,b
+        cp      3
+        jr      z,xac_bad       ; a trailing '.' is not a filetype
+        jr      xac_done
+
+xac_noext:
+xac_addcom:
+        ld      a,'.'
+        ld      (de),a
+        inc     de
+        ld      a,'C'
+        ld      (de),a
+        inc     de
+        ld      a,'O'
+        ld      (de),a
+        inc     de
+        ld      a,'M'
+        ld      (de),a
+        inc     de
+xac_done:
+        xor     a
+        ld      (de),a          ; null-terminate
+        ret
+xac_bad:
+        scf
+        ret
+
+; A = candidate filename byte.  Carry set for control/high bytes or any
+; character CP/M 2.2 forbids in an unambiguous filename component.
+__xvch:
+        cp      ' '+1
+        ret     c
+        cp      07fh
+        jr      nc,xac_bad
+        push    hl
+        push    bc
+        ld      hl,__xill
+        ld      bc,17
+        cpir
+        pop     bc
+        pop     hl
+        jr      z,xac_bad
+        or      a               ; valid: clear carry
+        ret
+
+__xill:
+        db      '<','>','.',',',';',':','=','?','*','[',']','%','|','(',')','/','\'
+
+; __xwcp(HL=src, DE=dest, B=remaining): copy at most 15 bytes of the
+; current >20h word and NUL-terminate it. Continue scanning a longer word
+; without writes, bounded by B. Return HL/B at the delimiter or length end.
+__xwcp:
+        ld      c,15
+xwc_lp:
+        ld      a,b
+        or      a
+        jr      z,xwc_dn
+        ld      a,(hl)
+        cp      ' '+1
+        jr      c,xwc_dn
+        ld      (de),a
+        inc     hl
+        inc     de
+        dec     b
+        dec     c
+        jr      nz,xwc_lp
+xwc_skip:
+        ld      a,b
+        or      a
+        jr      z,xwc_dn
+        ld      a,(hl)
+        cp      ' '+1
+        jr      c,xwc_dn
+        inc     hl
+        dec     b
+        jr      xwc_skip
 xwc_dn:
         xor     a
         ld      (de),a
         ret
-
-; ---- exec/execv scratch data ----
-__xbase:        dw      0       ; trampoline base address (= FCB address)
-__xtrep:        dw      0       ; trampoline entry = __xbase + FCBSIZE
-__xfcbb:        ds      36      ; low-memory FCB used for the open pre-check
-__xpath:        dw      0       ; saved path argument
-__xctls:        dw      0       ; saved cmdtail argument
-__xpbuf:        ds      16      ; path scratch buffer (8+1+3+NUL = 13 max)
-__xctbf:        ds      128     ; execv: cmdtail build buffer
-
-; Trampoline code template (XTCOD = 31 bytes).
-; The FCB at __xbase is already open (BDOS fn 15 called before copy).
-; Reads the .COM image sequentially from 0100h using fn 26 + fn 20,
-; then jumps to 0100h.  Bytes 13-14 are patched with __xbase (lo, hi).
-__xtemp:
-        db      021h,000h,001h  ; ld hl,0100h          offsets  0- 2
-        db      0e5h            ; push hl               offset   3  <- tloop
-        db      0ebh            ; ex de,hl              offset   4
-        db      00eh,01ah       ; ld c,26h              offsets  5- 6
-        db      0cdh,005h,000h  ; call 5                offsets  7- 9
-        db      0e1h            ; pop hl                offset  10
-        db      0e5h            ; push hl               offset  11
-        db      011h,000h,000h  ; ld de,0  PATCH 13,14  offsets 12-14
-        db      00eh,014h       ; ld c,20h              offsets 15-16
-        db      0cdh,005h,000h  ; call 5                offsets 17-19
-        db      0e1h            ; pop hl                offset  20
-        db      0b7h            ; or a                  offset  21
-        db      0c2h,000h,001h  ; jp nz,0100h           offsets 22-24
-        db      011h,080h,000h  ; ld de,0080h           offsets 25-27
-        db      019h            ; add hl,de             offset  28
-        db      018h,0e4h       ; jr tloop  (-28)       offsets 29-30
 
 ; ============================================================
 ; signal / raise  (C89 7.7)

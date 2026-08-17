@@ -59,7 +59,8 @@ long strtol(const char *nptr, char **endptr, int base)
     }
 
     if ((base == 0 || base == 16) &&
-        s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        s[0] == '0' && (s[1] == 'x' || s[1] == 'X') &&
+        sc_digit((unsigned char)s[2]) < 16) {
         s += 2;
         base = 16;
     } else if (base == 0) {
@@ -119,7 +120,8 @@ unsigned long strtoul(const char *nptr, char **endptr, int base)
     }
 
     if ((base == 0 || base == 16) &&
-        s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) {
+        s[0] == '0' && (s[1] == 'x' || s[1] == 'X') &&
+        sc_digit((unsigned char)s[2]) < 16) {
         s += 2;
         base = 16;
     } else if (base == 0) {

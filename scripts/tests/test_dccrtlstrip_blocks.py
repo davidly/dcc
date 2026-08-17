@@ -71,7 +71,7 @@ class DccRtlStripBlockTests(unittest.TestCase):
         self.assertIn("__ugget:", rtl)
         self.assertIn("_read:", rtl)
 
-    def test_multibyte_counters_stay_in_owning_blocks(self):
+    def test_multibyte_state_stays_in_owning_blocks(self):
         rtl = self.strip_root("_mblen")
         self.assertNotIn("__mbs_n:", rtl)
         self.assertNotIn("__wcs_n:", rtl)
@@ -83,7 +83,7 @@ class DccRtlStripBlockTests(unittest.TestCase):
         self.assertNotIn("_wcstombs:", rtl)
 
         rtl = self.strip_root("_wcstombs")
-        self.assertIn("__wcs_n:", rtl)
+        self.assertNotIn("__wcs_n:", rtl)
         self.assertNotIn("__mbs_n:", rtl)
         self.assertNotIn("_mbstowcs:", rtl)
 
@@ -92,6 +92,19 @@ class DccRtlStripBlockTests(unittest.TestCase):
         self.assertIn("_exec:", rtl)
         self.assertNotIn("__mbs_n:", rtl)
         self.assertNotIn("__wcs_n:", rtl)
+
+    def test_exec_stage_scratch_stays_in_common_exec_block(self):
+        for symbol in ("_exec", "_execv"):
+            rtl = self.strip_root(symbol)
+            self.assertIn("__xctbf:", rtl)
+            self.assertIn("__xctln:", rtl)
+            self.assertIn("__xtemp:", rtl)
+
+        for symbol in ("__xfit", "__xacom", "__xwcp", "_mblen"):
+            rtl = self.strip_root(symbol)
+            self.assertNotIn("__xctbf:", rtl)
+            self.assertNotIn("__xctln:", rtl)
+            self.assertNotIn("__xtemp:", rtl)
 
     def test_tmpnam_does_not_keep_tmpfile_constants(self):
         rtl = self.strip_root("_tmpnam")

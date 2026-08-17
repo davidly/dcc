@@ -1,0 +1,17 @@
+PASS reject_exec_128
+PASS reject_execv_128
+PASS reject_many_64
+PASS reject_empty
+PASS reject_space
+PASS reject_tab
+PASS exec_stack_source
+PASS exec_exact_127
+PASS execv_exact_127
+PASS exec_overlap_0080
+PASS exec_low_fcb_dma
+PASS default_fcb_control_delimiters
+PASS execv_quote_backslash
+PASS direct_space_tab_literals
+PASS execv_exact_126
+PASS execv_many_63
+texargs ok

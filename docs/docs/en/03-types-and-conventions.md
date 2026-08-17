@@ -84,7 +84,13 @@ above the complete scratch range.
 The CP/M startup ABI has no error-return channel. If a malformed environment
 supplies a length byte from 128 through 255, DCC deterministically truncates the
 tail to the first 127 bytes before parsing it. Quoting and escape processing are
-not added by the runtime parser.
+not added by the runtime parser: quote and backslash are literal bytes. This
+preserves direct CP/M invocation semantics. Consequently, `execv()` rejects an
+empty argument or an argument containing a byte through ASCII space with
+`EINVAL`, rather than silently splitting or dropping it. `exec()` and `execv()`
+emit up to the full 127-byte payload through byte `0xFF`; the length byte is
+authoritative, so a trailing CR is present only when the payload is shorter.
+An attempted 128th text byte fails with `E2BIG`.
 
 ## Integer limits (`limits.h`)
 

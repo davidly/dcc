@@ -29,6 +29,16 @@ and the single source-of-truth runtime.
 - **Wide-character Unicode library behavior is not implemented.** `wchar_t` is a
   16-bit integer typedef, but the DCC C Compiler does not provide a hosted wide-character
   Unicode runtime.
+- **`execv()` cannot encode empty or whitespace-containing arguments.** The
+  direct CP/M startup parser has no quoting or escaping syntax; quote and
+  backslash remain literal for compatibility. `execv()` rejects arguments that
+  would split or disappear with `EINVAL`, and both `exec()` and `execv()` reject
+  generated command tails above 127 text bytes with `E2BIG`.
+- **Executable paths use strict CP/M 8.3 syntax.** `exec()`/`execv()` accept an
+  optional `A:` through `P:` drive, a one-to-eight byte name, and an optional
+  one-to-three byte filetype; `.COM` is supplied when absent. Invalid paths use
+  `EINVAL`, missing files use `ENOENT`, and record-rounded images that cannot
+  fit safely in the TPA use `EFBIG`.
 
 ## Runtime and environment limits
 

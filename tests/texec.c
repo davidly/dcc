@@ -1,4 +1,5 @@
 /* texec.c - self-contained exec/execv test; execs itself with a marker arg */
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -52,20 +53,22 @@ int main( int argc, char **argv )
 
     /* parent mode */
     printf( "parent: exec missing file\n" );
+    errno = 0;
     r = exec( "nosuchfi", "" );
-    if ( r != -1 )
+    if ( r != -1 || errno != ENOENT )
     {
-        printf( "FAIL: exec missing returned %d\n", r );
+        printf( "FAIL: exec missing returned %d errno %d\n", r, errno );
         return 1;
     }
 
     printf( "parent: execv missing file\n" );
     av[ 0 ] = "nosuchfi";
     av[ 1 ] = (char *) 0;
+    errno = 0;
     r = execv( "nosuchfi", av );
-    if ( r != -1 )
+    if ( r != -1 || errno != ENOENT )
     {
-        printf( "FAIL: execv missing returned %d\n", r );
+        printf( "FAIL: execv missing returned %d errno %d\n", r, errno );
         return 1;
     }
 

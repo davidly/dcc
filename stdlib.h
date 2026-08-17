@@ -87,18 +87,20 @@ char *getenv(const char *name);
 int system(const char *string);
 
 /* Multibyte / wide-character conversion (C89 7.10.7 / 7.10.8).
- * C/ASCII locale: MB_CUR_MAX=1; every char is its own single-byte sequence. */
+ * C locale: MB_CUR_MAX=1; byte values 0x00..0xFF map to equal-valued wchar_t
+ * values. Wider values are not representable in the execution encoding. */
 /** Maximum bytes in a multibyte character in the current locale. */
 #define MB_CUR_MAX 1
 /** Length of the multibyte character at s, examining at most n bytes. */
 int mblen(const char *s, size_t n);
 /** Convert the multibyte character at s into *pwc; examine at most n bytes. */
 int mbtowc(wchar_t *pwc, const char *s, size_t n);
-/** Convert wide character wc into the multibyte sequence at s. */
+/** Convert wc into one byte at s, or return -1 if wc is unrepresentable. */
 int wctomb(char *s, wchar_t wc);
 /** Convert at most n multibyte characters from s into the wchar_t array pwcs. */
 size_t mbstowcs(wchar_t *pwcs, const char *s, size_t n);
-/** Convert at most n wide characters from pwcs into the char array s. */
+/** Convert at most n bytes from pwcs into s; return (size_t)-1 on an
+ *  unrepresentable wide character. */
 size_t wcstombs(char *s, const wchar_t *pwcs, size_t n);
 
 /* dcc extensions (not C89) for talking to CP/M and hardware directly:
@@ -144,14 +146,25 @@ int  biosreg( int fn, int bcarg, int dearg );
 int  inp( unsigned port );
 /** Write an 8-bit Z80 I/O port. */
 void outp( unsigned port, unsigned val );
-/** Load and run path, replacing this process.  cmdtail is copied to 0x81
- *  (e.g. " ARG1 ARG2"); the first two whitespace-delimited args also seed
- *  the default FCBs at 0x5C and 0x6C.  Returns -1 if the file is not found;
+/** Load and run path, replacing this process. cmdtail is copied through its
+ *  first NUL or CR into private staging before loader side effects, then to
+ *  0x81 (e.g. " ARG1 ARG2"). At most 127 text bytes are accepted; a trailing
+ *  CR is written when space remains. The first two arguments, delimited by
+ *  bytes through ASCII space, also seed the default FCBs at 0x5C and 0x6C.
+ *  path must be an unambiguous CP/M 8.3
+ *  filename with an optional A: through P: drive prefix; ".COM" is appended
+ *  when no extension is present. Returns -1 with errno=E2BIG for an oversized
+ *  tail, EINVAL for an invalid path, ENOENT when the file cannot be opened, or
+ *  EFBIG when its 128-byte-record-rounded image cannot fit safely in the TPA;
  *  does not return on success. */
 int  exec( const char *path, const char *cmdtail );
 /** Like exec() but builds the command tail from argv[1..] (argv[0] is the
  *  conventional program name and is ignored for CP/M purposes).
- *  argv must be a NULL-terminated array of string pointers. */
+ *  argv must be a NULL-terminated array of string pointers. Because DCC's
+ *  direct CP/M startup parser deliberately has no quoting/escape syntax, each
+ *  argument must be nonempty and contain no byte through ASCII space; quote
+ *  and backslash are ordinary bytes. Returns -1 with errno=EINVAL when an
+ *  argument cannot round-trip, or errno=E2BIG above the 127-byte tail limit. */
 int  execv( const char *path, char **argv );
 
 #endif

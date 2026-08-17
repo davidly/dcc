@@ -153,6 +153,10 @@
     { "name": "tc99apar", "requires-non-msvc-host-compiler": true },
     { "name": "tpfinf", "requires-non-msvc-host-compiler": true, "requires-non-macos-host-compiler": true },
     { "name": "ttrace", "ignore": true },
-    { "name": "texecdp", "stack_size": 2048 }
+    { "name": "texecdp", "stack_size": 2048 },
+    { "name": "texargs", "stack_size": 1024,
+      "extra_scenarios": [
+        { "suffix": "direct", "args": "DIRECT A\"B C\\D" }
+      ] }
   ]
 }

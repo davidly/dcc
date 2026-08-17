@@ -60,13 +60,25 @@ accept an optional sign, honour a `0x`/`0X` prefix for base 16 and a leading `0`
 for base 8 when `base` is 0, and accept digits/letters up to `base`-1 for any
 base from 2 to 36. The unused tail is reported through `*end` when `end` is
 non-`NULL`. On overflow they clamp to `LONG_MAX`/`LONG_MIN` (or `ULONG_MAX`) and
-set `errno` to `ERANGE`.
+set `errno` to `ERANGE`. A `0x` prefix is recognized only when a hexadecimal
+digit follows it; for `"0x"` or `"0xG"` the leading zero is converted and
+`end` points at the `x`, without changing `errno`.
 
 ```c
 char *end;
 long  v = strtol("  -0x1Ag", &end, 0);            /* v = -26, *end = 'g'  */
 unsigned long u = strtoul("4294967295", NULL, 10); /* ULONG_MAX */
 ```
+
+## Multibyte and wide characters
+
+DCC uses a fixed single-byte execution encoding (`MB_CUR_MAX == 1`).
+Byte values `0x00` through `0xFF` map to equal-valued 16-bit `wchar_t` values.
+A wider value is unrepresentable: `wctomb` returns `-1` without writing a
+truncated byte, and `wcstombs` returns `(size_t)-1` at the offending element.
+`wcstombs` may already have stored a representable prefix, as permitted by C,
+but never stores the truncated offending value. With `n == 0`, it examines and
+writes no elements and returns zero.
 
 `atof` is available as a DCC C Compiler extension: it is declared as `float atof(const char *nptr)`
 and returns IEEE 754 single precision. C89 `atof` normally returns `double`, which DCC C Compiler
@@ -97,6 +109,37 @@ complete programs.
 The exit code is surfaced through CP/M 3.0 BDOS call 108, which emulators such
 as ntvcm reflect in their own process exit code. Returning a value from `main`
 has the same effect.
+
+`exec()` and `execv()` replace the current program through the CP/M command-tail
+area. DCC accepts the full 127-byte payload in `0x81..0xFF`; the length byte is
+authoritative, so the conventional trailing CR is omitted only at that exact
+maximum. A 128th byte returns `-1` with `errno == E2BIG`. `exec()` validates
+and copies its caller-owned source into private staging before opening the
+image, abandoning the caller stack, clearing FCBs, or writing the destination
+tail, so stack-local and overlapping low-memory sources are safe.
+
+The executable path must be an unambiguous CP/M 8.3 name: an optional
+`A:` through `P:` drive, one to eight filename bytes, and an optional one to
+three byte filetype. DCC appends `.COM` when the filetype is absent. Invalid
+syntax returns `EINVAL`, a failed open returns `ENOENT`, and an executable whose
+128-byte-record-rounded image cannot fit below the loader's reserved high-memory
+stack/FCB/trampoline ranges returns `EFBIG`.
+
+The BDOS function 35 record count is also the loader's exact read contract. The
+high-memory trampoline performs exactly that many successful sequential reads,
+never reads a newly grown extra record, and warm-boots rather than jumping to a
+partial image if any approved read returns a nonzero status.
+
+The startup parser intentionally keeps direct CP/M behavior: bytes through
+ASCII space delimit arguments, while quote and backslash are literal bytes and
+have no escaping role. Therefore `execv()` can round-trip only nonempty
+arguments containing bytes above ASCII space. It returns `-1` with
+`errno == EINVAL` for empty arguments or arguments containing spaces, tabs, or
+other delimiter bytes rather than silently changing `argv`.
+
+The first two command-tail words seed CP/M's default FCB1 and FCB2. Their
+delimiter rule is identical to startup argument parsing: every byte through
+ASCII space, including tab and control whitespace, is a delimiter.
 
 ## Pseudo-random numbers
 
