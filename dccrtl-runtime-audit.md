@@ -6,7 +6,7 @@ is a findings/backlog document for a future, separate fix-implementation pass.
 ## Follow-up implementation status
 
 The audit itself remains a read-only snapshot. Follow-up work on this branch has
-implemented the first seven repair batches:
+implemented the first eight repair batches:
 
 - Batch 1 fixed **SS-C1**, **SH-F1**, **CT-F1**, **SJ-F1**, and **EC-F1**.
 - Batch 2 fixed add/sub subnormal handling, nearest-even rounding, conversion
@@ -49,6 +49,60 @@ implemented the first seven repair batches:
   adding 446,945 nopeep cycles despite shrinking the COM. Complete divmod-cache
   removal also remains rejected because its measured cycle cost outweighed its
   size saving.
+- Batch 8 integrated five independently measured slices:
+  - Heap/console accepted **SH-F2** through **SH-F4**, **CI-10**, **CI-11**,
+    **CI-13**, and **CI-14**. Heap wrappers now tail-transfer, `calloc` avoids
+    its IX frame and unreachable zero-fill counts, allocator walks keep live
+    values in registers, console output avoids redundant saves and empty-reset
+    writes, BIOS dispatch uses an 8-bit documented-function offset, and
+    one-byte file I/O discards arguments with caller-saved pops. **SH-F5**
+    remains rejected: predecessor growth added 120 exact bytes (128 linked COM
+    bytes) to every realloc runtime for only 9,076 cycles across 200 ordinary
+    operations.
+  - Formatted/file I/O accepted the remaining live part of **PF-O1**, plus
+    **PF-O2**, **FI-13**, and the remaining live sites from **CT-F20**.
+    **PF-O1**'s `pf_print_u32`, **FI-14**, and the `_fread`/`_fwrite` portions
+    of **CT-F20** were already absent or optimized at the base. **SJ-F6**
+    remains rejected because its split scanner loops added 32 exact runtime
+    bytes and grew the nopeep scanner COM by 128 bytes.
+  - String/sort accepted **SM-F3** through **SM-F7** and **SS-O1**, **SS-O2**,
+    **SS-O3**, **SS-O5**, **SS-O6**, **SS-O7**, and **SS-O8**. The `-Os`
+    frame and helper thresholds include retained runtime-body costs. No
+    neutral or regressive SM/SS variant was retained: the one/two-frame and
+    zero-net helper cases remain rejected by their measured cost gates.
+  - Arithmetic/float accepted **LA-F2** through **LA-F8**, **FC-F6**,
+    **FC-F7**, and **MT-F18**; **MT-F17** was already fixed at the base.
+    AST-time type repair, 16-bit div/mod repair, and fusion across calls remain
+    rejected; pairing is 32-bit-only, same-block, and no-call. LA-F2's
+    post-promotion repair now preserves the effective type of a direct
+    equal-width 32-bit cast on either operand before representation-identity
+    casts are removed. This prevents `(unsigned long)a / b` and the matching
+    modulo/fused forms from reverting to signed helpers, while signed casts of
+    unsigned high-bit operands continue to select signed helpers.
+  - Exec/calendar accepted **XM-O1** through **XM-O4** and **EC-F12**.
+    **EC-F13** remains rejected because its direct asctime formatter added
+    193 runtime bytes and 256 COM bytes when `sprintf()` was independently
+    retained; the fixed-layout alternative also overlaps open **EC-F10**
+    range/safety semantics.
+  - The reviewed 41-byte gap after `__stchk` was removed completely. Emulator
+    address alignment is not a valid Z80 optimization, and the gap added 34
+    exact stripped bytes to ordinary stack-checked applications. Revised
+    cumulative measurements use the naturally linked runtime layout only;
+    address placement is not a production or performance-selection gate.
+    Two structural cycle improvements replace the gap: the proven byte-sieve
+    marking schedule now makes its common in-range path fall through and uses
+    one no-carry loop branch, while `__mulu` executes a fully unrolled
+    four-iteration path when the selected multiplier fits in a nibble. The
+    latter adds useful executable code rather than unreachable bytes and
+    improves every linked multiplication probe measured.
+  - With no alignment bytes, exact stack-checked base-to-revised deltas are:
+    sieve `-864,232/-1,800,362` cycles (peep/nopeep), `-43` RTLMIN bytes,
+    and `-128/-128` COM bytes; pint `-4,849,430/-4,845,060` cycles,
+    `-32` RTLMIN bytes, and `0/-128` COM bytes; cobint
+    `-9,695,077/-9,238,205` cycles, `-36` RTLMIN bytes, and `0/-128`
+    COM bytes. The unchanged-app-MAC pint/cobint results also confirm that the
+    linked runtime improvement, not application-specific selection, supplies
+    their recovery.
 
 **PF-F11** remains deferred because defensive NULL `%s` handling would add cost
 to every valid `%s` call. Subnormal multiply/divide/square-root work from
@@ -61,7 +115,7 @@ metadata durability. `freopen` cannot preserve the numeric identity of
 
 ## Scope & method
 
-- Target: `DCCRTL.MAC` (22,651 lines, 375 `public` symbols), the single
+- Target: `DCCRTL.MAC` (23,704 lines, 404 public labels), the single
   hand-maintained Z80/CP-M-80 C runtime for `dcc`. Per-app `RTLMIN.MAC` is
   generated by `dccrtlstrip` at link time and was out of scope (never
   hand-edited).
@@ -1421,6 +1475,75 @@ IY, or stack-balance defect was found; misleading comments in `_expf`/
   and `|x|≥2²³`, reserving subtraction for the middle range. **Measure:**
   focused `modff` `ntvcm -p`, stripped lines, `.COM` bytes.
 
+### Batch 8 execution results
+
+Executed from exact base `83e2ce12e7e608399e5f51d20336ecdced339526`
+in the isolated `build/b8-arith-float` worktree. Measurements and the
+reproducible peep/nopeep probe harness are under `build/b8-measurements/` and
+`build/b8-probes/`; generated artifacts are intentionally ignored.
+
+- **LA-F2 accepted, with a profitability boundary.** Wide div/mod pairing now
+  runs after object promotion has exposed the real declared operand types,
+  only within one basic block and without an intervening call. One `__lds` or
+  `__ldu` call produces both results; public stripped-runtime aliases
+  `__lrlo`/`__lrhi` expose the remainder, and signed remainder correction
+  follows the dividend sign. `LAFUSE`, against a correct no-fusion compiler,
+  fell from 4,872,208 to 2,689,288 cycles peep and 4,875,940 to 2,693,020
+  nopeep (both -2,182,920), with `.COM` 3,584 to 3,456 bytes and exact
+  `RTLMIN` end `0A6F` to `09DE`. The `tpi` exact schedule fell from
+  88,617,879 to 63,418,405 peep and 89,342,929 to 64,143,455 nopeep
+  (both -25,199,474), with unchanged 2,816-byte `.COM` and `RTLMIN` end
+  `08C5`. `tldmfus` adds signed, unsigned, reversed-order, negative-remainder,
+  and high-bit coverage (8 checks, zero failures). A broader cross-call
+  pairing experiment was rejected: it made stack-check `tmuldiv` nopeep grow
+  8,832 to 8,960 bytes despite its cycle win. The no-intervening-call gate
+  removes that regression; final `tmuldiv` is 8,832 bytes in both modes.
+  Repairing all div/mod widths was also rejected after full regression found
+  unsigned 16-bit `rand()%constant` had become signed; repair is deliberately
+  limited to 32-bit operations, restoring `tstr` byte-for-byte to the base
+  compiler output.
+- **LA-F3/LA-F4/LA-F6 accepted.** Divider output initialization now follows
+  the 16-bit-divisor dispatch, three dead carry clears are gone, and five
+  redundant `ld sp,ix` restores are removed. `LAD16` improved by 50,400
+  cycles in each mode and `LAD32` by 95,760, with unchanged 2,944-byte
+  `.COM` files; exact `RTLMIN` end moved `0954` to `0949`.
+- **LA-F5 accepted.** `__lmul` uses balanced stack storage instead of writable
+  result scratch. `LAMUL` improved by 10,000 cycles in each mode, retained its
+  2,688-byte `.COM`, and moved exact `RTLMIN` end `08CB` to `08B7`.
+- **LA-F7 accepted.** Unsigned long comparison boolean materialization is
+  shorter. `LACMP` improved by 11,000 cycles in each mode with unchanged
+  2,944-byte `.COM`; exact `RTLMIN` end moved `08A0` to `0896`.
+- **LA-F8 accepted.** `__m1mu` skips eight empty high-byte iterations for a
+  byte-sized multiplier and keeps the modulus in `BC` at every loop edge.
+  Against the pre-change runtime, `M1MUL` improved by 578,967 cycles,
+  `tm1mu` by 24,962,763, and `pihex` by 233,003,475 in each mode, without
+  `.COM` growth or output changes.
+- **FC-F6/FC-F7 accepted.** The predicates use zero/exponent/sign identities,
+  and `_fabsf` clears the sign bit inline. `FCMP` improved by 66,066 cycles
+  in each mode (peep `.COM` 6,400 to 6,272); `FABSF` improved by 27,000 in
+  each mode with unchanged 4,736-byte `.COM`. Existing special-value and
+  rounding workloads remained bit-exact.
+- **MT-F17 confirmed already present at the base tip.** Reverse-restoring the
+  unreachable denominator-zero comparison cost 41,130 cycles in each mode,
+  grew `.COM` 6,272 to 6,400 bytes, and moved exact `RTLMIN` end `1730` to
+  `1794`, with identical output. No source change was needed.
+- **MT-F18 accepted.** `_modff` now handles signed zero, `|x|<1`, `|x|>=2^23`,
+  infinities, and NaNs directly and masks the middle-range mantissa before
+  the one required subtraction. `MODFF` improved by 1,467,520 cycles in each
+  mode; peep `.COM` fell 4,480 to 3,968 and nopeep 4,608 to 4,224, with exact
+  `RTLMIN` ends `0EC1` to `0D27` and `0F7B` to `0DE1`. `tmodfsp` adds 38
+  bit-exact signed-zero, subnormal, mask-boundary, infinity, and NaN checks.
+
+Validation used the worktree runtime explicitly in every build. Both strict
+full+extended stack-check and no-stack regressions passed (389 run, 10
+skipped, zero failures in each mode pair), as did the focused peep/nopeep
+tests, final stack/no-stack MIR censuses (no missing MIR selections),
+ASan/UBSan affected-app compiles, Python and MIR script tests, runtime
+coverage (404 public labels reconciled, zero unexpected), IY safety, stripper
+EQU/block tests, and an assembled 1,451-`JR` range audit. The new remainder
+aliases survived stripping and linked in both optimized and unoptimized
+`tldmfus`; stack/register ABI checks passed throughout.
+
 ### Sub-ranges only spot-checked rather than formally exhausted
 
 `:17185-17364` (`expf` coefficients), `:17435-17592` (`logf` coefficients),
@@ -1519,21 +1642,22 @@ present; ordinary overflow clamps/sign handling, `strtok`, `getenv`,
 
 ### Optimisation
 
-- **XM-O1 — `strtol`/`strtoul`'s NULL-`endptr` test performs an
-  unnecessary 32-bit comparison** (and a dead `ld de,0` before an `ex
-  de,hl`) where a direct 16-bit `H|L` test and store would do. `SCL93`
+- **XM-O1 — fixed in Batch 8.** The former `strtol`/`strtoul` NULL-`endptr`
+  test performed an unnecessary 32-bit comparison (and a dead `ld de,0`
+  before an `ex de,hl`) where a direct 16-bit `H|L` test and store would do. `SCL93`
   (`:20458-20484`). Confidence: high. **Measure:** linked size and
   `ntvcm -p` for NULL/non-NULL `endptr`.
-- **XM-O2 — `_system` builds an unneeded IX frame** for a function that
-  only reads one stack argument. `:20640-20655`. Confidence: high.
+- **XM-O2 — fixed in Batch 8.** `_system` formerly built an unneeded IX frame
+  for a function that only reads one stack argument. `:20640-20655`.
+  Confidence: high.
   **Measure:** `_system`-only linked size; `ntvcm -p` per call.
-- **XM-O3 — Successful `exec` recomputes an already-correct SP a second
-  time.** Initial setup (`:20921-20925`), redundant recompute
-  (`:20966-20971`). Confidence: high. **Measure:** exec-core size and
+- **XM-O3 — fixed in Batch 8.** Successful `exec` formerly recomputed an
+  already-correct SP a second time. Initial setup (`:20921-20925`), redundant
+  recompute (`:20966-20971`). Confidence: high. **Measure:** exec-core size and
   successful-exec setup `ntvcm -p`.
-- **XM-O4 — `__xclfb`'s clear loop reloads `A=0` on every one of its 16
-  iterations** instead of once before the loop. `:21121-21127`. Confidence:
-  high. **Measure:** exec-setup `ntvcm -p` and size.
+- **XM-O4 — fixed in Batch 8.** `__xclfb`'s clear loop formerly reloaded `A=0`
+  on every one of its 16 iterations instead of once before the loop.
+  `:21121-21127`. Confidence: high. **Measure:** exec-setup `ntvcm -p` and size.
 - **XM-O5 — Multibyte-stub scratch counters are retained by every
   multibyte function even when only one (e.g. `mblen` alone) is used**,
   because they sit in the shared consecutive-`public` prelude.
@@ -1665,12 +1789,12 @@ equivalence are internally consistent, not bugs.
   calendar helpers/data their own dedicated internal public blocks, and
   separate the asctime-only tables out. **Measure:** minimal
   `gmtime`/`localtime`/`asctime`-only `.COM` size and `ntvcm -p` before/after.
-- **EC-F12 — `localtime` can tail-jump directly into `gmtime`** instead of
-  building/tearing down its own IX frame around an identical call.
-  `__ltim` (`:21583-21594`). Confidence: high. **Measure:** `.COM` bytes and
+- **EC-F12 — fixed in Batch 8.** `localtime` now tail-jumps directly into
+  `gmtime` instead of building/tearing down its own IX frame around an
+  identical call. `__ltim` (`:21583-21594`). Confidence: high. **Measure:** `.COM` bytes and
   `ntvcm -p` on a repeated-`localtime` microbenchmark.
-- **EC-F13 — `_asctime` pulls in the entire general `sprintf` formatter**
-  for one fixed 26-byte output layout. `:21686-21690`. Confidence: high.
+- **EC-F13 — rejected in Batch 8.** `_asctime` still pulls in the entire general
+  `sprintf` formatter for one fixed 26-byte output layout. `:21686-21690`. Confidence: high.
   **Fix direction:** emit weekday/month text and fixed decimal fields
   directly into the static buffer. **Measure:** minimal `asctime`-only
   `.COM` size and per-call `ntvcm -p`.

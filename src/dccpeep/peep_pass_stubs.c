@@ -39,6 +39,69 @@ int pass_shared_frame_stubs(void)
     int i, j;
     int changed = 0;
     int used_entr = 0, used_en0 = 0, used_lve = 0;
+    int local_count = 0, no_local_epi_count = 0, no_local_prologue_count = 0;
+    int inline_saving, helper_cost;
+
+    /*
+     * Count candidate prologues and canonical epilogues before rewriting.
+     * The replacement saves nine bytes per local-frame function and seven
+     * per complete no-local function.  A no-local prologue without the
+     * canonical epilogue saves five bytes.  The pass also pulls the 13-byte
+     * __entr or 11-byte __en0 helper plus the shared five-byte __lve into
+     * the linked runtime.
+     */
+    for (i = 0; i + 2 < nlines; ++i) {
+        int next_func, epi, has_locals;
+
+        if (!eq(i, "push ix") || !eq(i + 1, "ld ix,0") ||
+            !eq(i + 2, "add ix,sp"))
+            continue;
+
+        next_func = nlines;
+        for (j = i + 3; j < nlines; ++j) {
+            if (strncmp(lines[j], "public ", 7) == 0 ||
+                is_global_asm_label_line(j)) {
+                next_func = j;
+                break;
+            }
+        }
+
+        has_locals =
+            i + 5 < next_func &&
+            strncmp(lines[i + 3], "ld hl,-", 7) == 0 &&
+            eq(i + 4, "add hl,sp") &&
+            eq(i + 5, "ld sp,hl");
+        epi = -1;
+        for (j = i + (has_locals ? 6 : 3); j + 2 < next_func; ++j) {
+            if (eq(j, "ld sp,ix") && eq(j + 1, "pop ix") &&
+                eq(j + 2, "ret")) {
+                epi = j;
+                break;
+            }
+        }
+        if (has_locals) {
+            if (epi >= 0)
+                ++local_count;
+        } else if (epi >= 0) {
+            ++no_local_epi_count;
+        } else {
+            ++no_local_prologue_count;
+        }
+    }
+
+    inline_saving =
+        9 * local_count +
+        7 * no_local_epi_count +
+        5 * no_local_prologue_count;
+    helper_cost = 0;
+    if (local_count > 0)
+        helper_cost += 13;
+    if (no_local_epi_count > 0 || no_local_prologue_count > 0)
+        helper_cost += 11;
+    if (local_count > 0 || no_local_epi_count > 0)
+        helper_cost += 5;
+    if (inline_saving <= helper_cost)
+        return 0;
 
     for (i = 0; i + 2 < nlines; i++) {
         int next_func, epi, has_locals;
@@ -355,7 +418,7 @@ int pass_ldwl_stub(void)
     int i, changed = 0, used = 0;
     const char *pattern[] = { "ld e,(hl)", "inc hl", "ld d,(hl)", "ex de,hl" };
 
-    if (count_exact_sequence(pattern, 4) < 5)
+    if (count_exact_sequence(pattern, 4) < 6)
         return 0;
 
     for (i = 0; i + 3 < nlines; i++) {
@@ -441,7 +504,7 @@ int pass_sxde_stub(void)
     int i, changed = 0, used = 0;
     const char *pattern[] = { "ld a,h", "rlca", "sbc a,a", "ld d,a", "ld e,a" };
 
-    if (count_exact_sequence(pattern, 5) < 3)
+    if (count_exact_sequence(pattern, 5) < 4)
         return 0;
 
     for (i = 0; i + 4 < nlines; i++) {
@@ -467,7 +530,7 @@ int pass_sxhl_stub(void)
     int i, changed = 0, used = 0;
     const char *pattern[] = { "ld a,l", "rlca", "sbc a,a", "ld h,a" };
 
-    if (count_exact_sequence(pattern, 4) < 5)
+    if (count_exact_sequence(pattern, 4) < 6)
         return 0;
 
     for (i = 0; i + 3 < nlines; i++) {
@@ -486,4 +549,3 @@ int pass_sxhl_stub(void)
 
     return changed;
 }
-

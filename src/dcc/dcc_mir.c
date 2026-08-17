@@ -5617,6 +5617,87 @@ static int mir_unary_is_representation_identity(
     return 1;
 }
 
+static int mir_divmod_cast_operand_type(int value)
+{
+    const struct MirInsn *cast = mir_definition(value);
+    const struct MirInsn *source;
+
+    if (cast == NULL || cast->opcode != MIR_UNARY ||
+        cast->immediate != 0 || cast->src1 < 0 ||
+        type_size(cast->type) != 4 || type_ptr_depth(cast->type) != 0 ||
+        type_is_float(cast->type))
+        return 0;
+    source = mir_definition(cast->src1);
+    if (source == NULL || type_size(source->type) != 4 ||
+        type_ptr_depth(source->type) != 0 || type_is_float(source->type))
+        return 0;
+    return cast->type & 0xff;
+}
+
+static void mir_preserve_divmod_cast_types(void)
+{
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        struct MirInsn *consumer = &mir.insns[instruction];
+        int left_type;
+        int right_type;
+
+        if (consumer->opcode != MIR_BINARY ||
+            (consumer->immediate != '/' && consumer->immediate != '%') ||
+            type_size(consumer->secondary_offset) != 4)
+            continue;
+        left_type = mir_divmod_cast_operand_type(consumer->src1);
+        right_type = mir_divmod_cast_operand_type(consumer->src2);
+        if (left_type != 0)
+            consumer->divmod_cast_types =
+                (consumer->divmod_cast_types & ~0xff) |
+                left_type;
+        if (right_type != 0)
+            consumer->divmod_cast_types =
+                (consumer->divmod_cast_types & 0xff) |
+                (right_type << 8);
+    }
+}
+
+static void mir_repair_divmod_types(void)
+{
+    int i;
+
+    for (i = 0; i < mir.count; ++i) {
+        struct MirInsn *insn = &mir.insns[i];
+        struct MirInsn *left;
+        struct MirInsn *right;
+        int left_type;
+        int right_type;
+        int repaired_type;
+        /* Narrow lowering already preserves explicit unsigned casts; deriving
+         * those again from promoted definitions changed rand()%constant. */
+        if (insn->opcode != MIR_BINARY ||
+            (insn->immediate != '/' && insn->immediate != '%') ||
+            insn->src1 < 0 || insn->src2 < 0 ||
+            type_size(insn->secondary_offset) != 4)
+            continue;
+        left = mir_mutable_definition(insn->src1);
+        right = mir_mutable_definition(insn->src2);
+        if (left == NULL || right == NULL ||
+            type_ptr_depth(left->type) != 0 ||
+            type_ptr_depth(right->type) != 0)
+            continue;
+        left_type = left->type;
+        right_type = right->type;
+        if ((insn->divmod_cast_types & 0xff) != 0)
+            left_type = insn->divmod_cast_types & 0xff;
+        if ((insn->divmod_cast_types & 0xff00) != 0)
+            right_type = (insn->divmod_cast_types >> 8) & 0xff;
+        repaired_type = common_arith_type(left_type, right_type);
+        if (type_size(repaired_type) != 4)
+            continue;
+        insn->type = repaired_type;
+        insn->secondary_offset = repaired_type;
+    }
+}
+
 void mir_resolve_deferred_metadata(void)
 {
 
@@ -6187,6 +6268,7 @@ void mir_resolve_deferred_metadata(void)
             }
         }
     }
+    mir_preserve_divmod_cast_types();
     for (i = 0; i < mir.count; ++i) {
         struct MirInsn *insn = &mir.insns[i];
         struct MirInsn *source;
@@ -9862,6 +9944,11 @@ int mir_verify_and_dump(void)
      * always-on cache picks up the post-promotion definitions instead of
      * whatever was cached (if anything) before this ran. */
     mir_invalidate_use_cache();
+    /*
+     * Promotion exposes the declared types behind stale lowering-time
+     * conversions, so refresh div/mod signedness before selection/emission.
+     */
+    mir_repair_divmod_types();
 
     /* Object promotion rewrites uses and removes load definitions. Rebuild
      * the simple defined-value check from the transformed stream. */

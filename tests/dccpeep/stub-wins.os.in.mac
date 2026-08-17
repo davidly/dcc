@@ -1,4 +1,4 @@
-; five __ldwl candidates stay inline: helper inclusion makes five size-neutral
+; six __ldwl candidates save one linked byte
 ld e,(hl)
 inc hl
 ld d,(hl)
@@ -19,7 +19,11 @@ ld e,(hl)
 inc hl
 ld d,(hl)
 ex de,hl
-; three __sxde candidates stay inline: helper inclusion makes three size-neutral
+ld e,(hl)
+inc hl
+ld d,(hl)
+ex de,hl
+; four __sxde candidates save two linked bytes
 ld a,h
 rlca
 sbc a,a
@@ -35,7 +39,16 @@ rlca
 sbc a,a
 ld d,a
 ld e,a
-; five __sxhl candidates stay inline: helper inclusion makes five size-neutral
+ld a,h
+rlca
+sbc a,a
+ld d,a
+ld e,a
+; six __sxhl candidates save one linked byte
+ld a,l
+rlca
+sbc a,a
+ld h,a
 ld a,l
 rlca
 sbc a,a

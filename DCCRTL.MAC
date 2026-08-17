@@ -285,9 +285,6 @@ __argbuf:
         public  __conout
 COBSZ   equ     128
 __conout:
-        push    bc
-        push    de
-        push    hl
         ld      a,e
         cp      0ah             ; LF?
         jr      nz,co_one
@@ -309,9 +306,6 @@ co_line:
         jr      nz,co_ret
         call    __cflush
 co_ret:
-        pop     hl
-        pop     de
-        pop     bc
         ret
 
 ; __cob_put: append the character in A to the console buffer; flush if it is
@@ -353,7 +347,7 @@ __cflush:
         ld      bc,(__cobcnt)
         ld      a,b
         or      c
-        jr      z,cf_reset      ; nothing buffered
+        jr      z,cf_done       ; already reset: nothing buffered
         ld      hl,(__cob_ptr)
 cf_outer:
         ld      a,b
@@ -402,6 +396,7 @@ cf_emit:
 cf_reset:
         ld      hl,0
         ld      (__cobcnt),hl
+cf_done:
         pop     hl
         pop     de
         pop     bc
@@ -464,11 +459,9 @@ __fpc:
         call    _write
 
         ; Clean 3 args while preserving _write return in HL.
-        ex      de,hl
-        ld      hl,6
-        add     hl,sp
-        ld      sp,hl
-        ex      de,hl
+        pop     de
+        pop     de
+        pop     de
 
         ; Success iff _write returned 1 byte.
         ld      a,h
@@ -765,11 +758,9 @@ fgc_no_pb:
         push    hl              ; buf
         push    bc              ; fp/fd
         call    _read
-        ex      de,hl
-        ld      hl,6
-        add     hl,sp
-        ld      sp,hl
-        ex      de,hl
+        pop     de
+        pop     de
+        pop     de
         pop     bc              ; restore fp saved above
 
         ; success iff _read returned 1
@@ -1209,14 +1200,11 @@ bioshl_core:
 ; Exit:  BC = DE = dearg (C already held dearg's low byte before the jump);
 ;        HL/A hold whatever the invoked BIOS function returned.
 __bios_dispatch:
-        ld      l,c
-        ld      h,0             ; HL = fn (zero-extended); C still holds fn
-        add     hl,hl           ; HL = fn*2
-        ld      b,0             ; BC = fn (C untouched since the ld/add
-                                 ; above only ever wrote H and L)
-        add     hl,bc           ; HL = fn*2 + fn = fn*3
-        ld      b,h
-        ld      c,l             ; BC = fn*3 (jump-table byte offset)
+        ld      a,c
+        add     a,a             ; documented BIOS fn 0..16: A = fn*2
+        add     a,c             ; A = fn*3 (jump-table byte offset)
+        ld      c,a
+        ld      b,0             ; BC = zero-extended offset
         push    de              ; stash dearg while HL/DE compute the target
         ld      hl,(0001h)      ; HL = WBOOT jump-table entry address (the
                                  ; word CP/M jumps to on warm boot is jump-
@@ -1370,9 +1358,8 @@ sp2:
         ; A still holds *s1 after CP (HL), so compute *s1 - *s2 directly.
         sub     (hl)
         ld      l,a
-        ld      h,0
-        ret     nc
-        ld      h,0ffh
+        sbc     a,a
+        ld      h,a
         ret
 
 sp3:
@@ -1432,9 +1419,8 @@ sicm_diff:
         ld      a,b
         sub     c
         ld      l,a
-        ld      h,0
-        ret     nc
-        ld      h,0ffh
+        sbc     a,a
+        ld      h,a
         ret
 sicm_eq:
         ld      hl,0
@@ -1688,9 +1674,8 @@ sncmp_diff:
         ; A still holds *s1 after CP (HL), so compute *s1 - *s2 directly.
         sub     (hl)
         ld      l,a
-        ld      h,0
-        ret     nc
-        ld      h,0ffh
+        sbc     a,a
+        ld      h,a
         ret
 sncmp_equal:
         ld      hl,0
@@ -1796,77 +1781,70 @@ _strxfrm:
         push    hl              ; save n
         ld      h,b
         ld      l,c             ; HL = s2
-        push    hl              ; save s2
-
-        ld      de,0            ; DE = strlen(s2)
-sxf_len:
-        ld      a,(hl)
-        or      a
-        jr      z,sxf_have_len
-        inc     hl
-        inc     de
-        jr      sxf_len
-sxf_have_len:
-        ld      (sxf_lenv),de
-        pop     hl              ; HL = s2
         pop     bc              ; BC = n
         pop     de              ; DE = s1
+        push    hl              ; save s2 for the returned source length
 
+sxf_copy:
         ld      a,b
         or      c
-        jr      z,sxf_done
-sxf_lp:
+        jr      z,sxf_scan
         ld      a,(hl)
-        ld      (de),a
         or      a
-        jr      z,sxf_done
+        jr      z,sxf_terminate
+        ld      (de),a
         inc     hl
         inc     de
         dec     bc
-        ld      a,b
-        or      c
-        jr      nz,sxf_lp
+        jr      sxf_copy
+
+sxf_scan:
+        ld      a,(hl)
+        or      a
+        jr      z,sxf_done
+        inc     hl
+        jr      sxf_scan
+
+sxf_terminate:
+        ld      (de),a          ; A is the source NUL
 sxf_done:
-        ld      hl,(sxf_lenv)
+        pop     de              ; DE = original s2
+        sbc     hl,de           ; carry was cleared by the NUL test
         ret
-sxf_lenv:
-        dw      0
 
         public  __scsp
 __scsp:
         ; size_t strcspn(const char *s, const char *reject)
-        ; IX-free. HL walks s; reject is reloaded from the caller stack.
+        ; IX-free. HL walks s; the saved reject pointer resets DE each pass.
         ld      hl,2
         add     hl,sp
         ld      e,(hl)
         inc     hl
-        ld      d,(hl)
+        ld      d,(hl)          ; DE = s
+        inc     hl
+        ld      c,(hl)
+        inc     hl
+        ld      b,(hl)          ; BC = reject
+        push    bc              ; saved reject pointer
         ex      de,hl           ; HL = s
 scsp_outer:
-        ld      a,(hl)
+        ld      c,(hl)          ; invariant source byte for the inner scan
+        ld      a,c
         or      a
         jr      z,scsp_ret_count
-        push    hl              ; save current s
-        ld      hl,6            ; reject is at SP+6 after the push
-        add     hl,sp
-        ld      e,(hl)
-        inc     hl
-        ld      d,(hl)          ; DE = reject
-        pop     hl              ; restore current s
+        pop     de
+        push    de              ; DE = reject start
 scsp_inner:
         ld      a,(de)
-        or      a
-        jr      z,scsp_no_match
-        ld      c,a
-        ld      a,(hl)
         cp      c
         jr      z,scsp_ret_count
         inc     de
-        jr      scsp_inner
-scsp_no_match:
+        or      a               ; reject NUL cannot match non-NUL C
+        jr      nz,scsp_inner
         inc     hl
         jr      scsp_outer
 scsp_ret_count:
+        pop     de              ; discard saved reject
         ex      de,hl           ; DE = current s
         ld      hl,2
         add     hl,sp
@@ -1881,78 +1859,77 @@ scsp_ret_count:
         public  __spbr
 __spbr:
         ; char *strpbrk(const char *s, const char *accept)
-        ; IX-free. HL walks s; accept is reloaded from the caller stack.
+        ; IX-free. HL walks s; the saved accept pointer resets DE each pass.
         ld      hl,2
         add     hl,sp
         ld      e,(hl)
         inc     hl
-        ld      d,(hl)
+        ld      d,(hl)          ; DE = s
+        inc     hl
+        ld      c,(hl)
+        inc     hl
+        ld      b,(hl)          ; BC = accept
+        push    bc              ; saved accept pointer
         ex      de,hl           ; HL = s
 spbr_outer:
-        ld      a,(hl)
+        ld      c,(hl)          ; invariant source byte for the inner scan
+        ld      a,c
         or      a
         jr      z,spbr_none
-        push    hl
-        ld      hl,6            ; accept is at SP+6 after the push
-        add     hl,sp
-        ld      e,(hl)
-        inc     hl
-        ld      d,(hl)
-        pop     hl
+        pop     de
+        push    de              ; DE = accept start
 spbr_inner:
         ld      a,(de)
-        or      a
-        jr      z,spbr_no_match
-        ld      c,a
-        ld      a,(hl)
         cp      c
         jr      z,spbr_found
         inc     de
-        jr      spbr_inner
-spbr_no_match:
+        or      a               ; accept NUL cannot match non-NUL C
+        jr      nz,spbr_inner
         inc     hl
         jr      spbr_outer
 spbr_found:
+        pop     de              ; discard saved accept
         ret
 spbr_none:
+        pop     de              ; discard saved accept
         ld      hl,0
         ret
 
         public  __sspn
 __sspn:
         ; size_t strspn(const char *s, const char *accept)
-        ; IX-free. HL walks s; accept is reloaded from the caller stack.
+        ; IX-free. HL walks s; the saved accept pointer resets DE each pass.
         ld      hl,2
         add     hl,sp
         ld      e,(hl)
         inc     hl
-        ld      d,(hl)
+        ld      d,(hl)          ; DE = s
+        inc     hl
+        ld      c,(hl)
+        inc     hl
+        ld      b,(hl)          ; BC = accept
+        push    bc              ; saved accept pointer
         ex      de,hl           ; HL = s
 sspn_outer:
-        ld      a,(hl)
+        ld      c,(hl)          ; invariant source byte for the inner scan
+        ld      a,c
         or      a
         jr      z,sspn_ret_count
-        push    hl
-        ld      hl,6            ; accept is at SP+6 after the push
-        add     hl,sp
-        ld      e,(hl)
-        inc     hl
-        ld      d,(hl)
-        pop     hl
+        pop     de
+        push    de              ; DE = accept start
 sspn_inner:
         ld      a,(de)
-        or      a
-        jr      z,sspn_ret_count
-        ld      c,a
-        ld      a,(hl)
         cp      c
         jr      z,sspn_match
         inc     de
-        jr      sspn_inner
+        or      a               ; accept NUL cannot match non-NUL C
+        jr      nz,sspn_inner
+        jr      sspn_ret_count
 sspn_match:
         inc     hl
         jr      sspn_outer
 sspn_ret_count:
+        pop     de              ; discard saved accept
         ex      de,hl           ; DE = current s
         ld      hl,2
         add     hl,sp
@@ -2043,16 +2020,13 @@ nc1lp:
         dec     bc
         or      a
         jr      nz,nc1lp
-        xor     a
-nc1pd:
         ld      a,b
         or      c
         jr      z,nc1dn
-        xor     a               ; count test above clobbered A
-        ld      (de),a
-        inc     de
-        dec     bc
-        jr      nc1pd
+        ld      h,d
+        ld      l,e
+        dec     hl              ; copy the NUL already stored at DE-1
+        ldir
 nc1dn:
         pop     hl
         ret
@@ -2150,9 +2124,8 @@ mc2dkl:
 mc2dtl:
         sub     (hl)            ; A = *s1 - *s2
         ld      l,a
-        ld      h,0
-        ret     nc
-        ld      h,0ffh
+        sbc     a,a
+        ld      h,a
         ret
 
         public  __mmov
@@ -2377,7 +2350,8 @@ __mulu:
         ; HL = multiplier, DE = multiplicand, product returned in HL.
         ; Multiplication is commutative and the result is taken mod 2^16, so
         ; pick an operand with a zero high byte as the multiplier and run only
-        ; 8 iterations.  The multiplicand is shifted with sla e/rl d, which is
+        ; 8 iterations, or four unrolled iterations when its high nibble is
+        ; also zero. The multiplicand is shifted with sla e/rl d, which is
         ; cheaper than ex de,hl/add hl,hl/ex de,hl.
         ld      a,h
         or      a
@@ -2389,6 +2363,9 @@ __mulu:
 mul8:
         ld      c,l             ; C = 8-bit multiplier
         ld      hl,0            ; HL = product
+        ld      a,c
+        and     0f0h
+        jr      z,mul4
         ld      b,8
 mul8l:
         srl     c
@@ -2398,6 +2375,31 @@ mul8s:
         sla     e
         rl      d
         djnz    mul8l
+        jr      muldone
+
+mul4:
+        srl     c
+        jr      nc,mul4s0
+        add     hl,de
+mul4s0:
+        sla     e
+        rl      d
+        srl     c
+        jr      nc,mul4s1
+        add     hl,de
+mul4s1:
+        sla     e
+        rl      d
+        srl     c
+        jr      nc,mul4s2
+        add     hl,de
+mul4s2:
+        sla     e
+        rl      d
+        srl     c
+        jr      nc,muldone
+        add     hl,de
+muldone:
         pop     af
         pop     bc
         ret
@@ -2621,8 +2623,8 @@ __divs:
         xor     a
         sub     l
         ld      l,a
-        ld      a,0
-        sbc     a,h
+        sbc     a,a
+        sub     h
         ld      h,a
 __ds_lpos:
         ld      a,d
@@ -2635,8 +2637,8 @@ __ds_lpos:
         xor     a
         sub     l
         ld      l,a
-        ld      a,0
-        sbc     a,h
+        sbc     a,a
+        sub     h
         ld      h,a
         ex      de,hl
 __ds_rpos:
@@ -2647,8 +2649,8 @@ __ds_rpos:
         xor     a
         sub     l
         ld      l,a
-        ld      a,0
-        sbc     a,h
+        sbc     a,a
+        sub     h
         ld      h,a
 __ds_done:
         pop     bc
@@ -2671,8 +2673,8 @@ __mods:
         xor     a
         sub     l
         ld      l,a
-        ld      a,0
-        sbc     a,h
+        sbc     a,a
+        sub     h
         ld      h,a
 __ms_lpos:
         ld      a,d
@@ -2682,8 +2684,8 @@ __ms_lpos:
         xor     a
         sub     l
         ld      l,a
-        ld      a,0
-        sbc     a,h
+        sbc     a,a
+        sub     h
         ld      h,a
         ex      de,hl
 __ms_rpos:
@@ -2694,8 +2696,8 @@ __ms_rpos:
         xor     a
         sub     l
         ld      l,a
-        ld      a,0
-        sbc     a,h
+        sbc     a,a
+        sub     h
         ld      h,a
 __ms_done:
         pop     bc
@@ -2729,8 +2731,8 @@ __sdivmod:
         xor     a
         sub     l
         ld      l,a
-        ld      a,0
-        sbc     a,h
+        sbc     a,a
+        sub     h
         ld      h,a
 __sdm_lpos:
         ld      a,d
@@ -2743,8 +2745,8 @@ __sdm_lpos:
         xor     a
         sub     l
         ld      l,a
-        ld      a,0
-        sbc     a,h
+        sbc     a,a
+        sub     h
         ld      h,a
         ex      de,hl
 __sdm_rpos:
@@ -2756,8 +2758,8 @@ __sdm_rpos:
         xor     a
         sub     l
         ld      l,a
-        ld      a,0
-        sbc     a,h
+        sbc     a,a
+        sub     h
         ld      h,a
         pop     de
 __sdm_qdone:
@@ -2769,8 +2771,8 @@ __sdm_qdone:
         xor     a
         sub     l
         ld      l,a
-        ld      a,0
-        sbc     a,h
+        sbc     a,a
+        sub     h
         ld      h,a
         ex      de,hl
         pop     hl
@@ -2840,7 +2842,7 @@ _div:
         ld      h,(ix+7)        ; HL = numer
         ld      e,(ix+8)
         ld      d,(ix+9)        ; DE = denom
-        call    __divs          ; HL = quotient
+        call    __sdivmod       ; HL = quotient, DE = remainder
         ld      c,(ix+4)
         ld      b,(ix+5)        ; BC = result pointer
         ld      a,l
@@ -2848,20 +2850,11 @@ _div:
         inc     bc
         ld      a,h
         ld      (bc),a
-
-        ld      l,(ix+6)
-        ld      h,(ix+7)        ; HL = numer
-        ld      e,(ix+8)
-        ld      d,(ix+9)        ; DE = denom
-        call    __mods          ; HL = remainder
-        ld      c,(ix+4)
-        ld      b,(ix+5)
-        inc     bc
         inc     bc              ; BC = &result->rem
-        ld      a,l
+        ld      a,e
         ld      (bc),a
         inc     bc
-        ld      a,h
+        ld      a,d
         ld      (bc),a
         ld      l,(ix+4)
         ld      h,(ix+5)
@@ -2929,12 +2922,7 @@ _ldiv:
         jr      nz,ldiv_rem_ready
         inc     de
 ldiv_rem_ready:
-        ld      c,(ix+4)
-        ld      b,(ix+5)
-        inc     bc
-        inc     bc
-        inc     bc
-        inc     bc              ; BC = &result->rem
+        inc     bc              ; quotient store left BC at result+3
         ld      a,l
         ld      (bc),a
         inc     bc
@@ -3302,7 +3290,6 @@ __r1s:
         ld      a,h
         or      a
         jp      p,__r1u
-        push    bc
         xor     a
         sub     l
         ld      l,a
@@ -3313,10 +3300,9 @@ __r1s:
         xor     a
         sub     l
         ld      l,a
-        ld      a,0
-        sbc     a,h
+        sbc     a,a
+        sub     h
         ld      h,a
-        pop     bc
         ret
 
 
@@ -3527,8 +3513,8 @@ Q2SRP:
         xor     a
         sub     l
         ld      l,a
-        ld      a,0
-        sbc     a,h
+        sbc     a,a
+        sub     h
         ld      h,a
 Q2SDN:
         pop     bc
@@ -3571,8 +3557,8 @@ R2SRP:
         xor     a
         sub     l
         ld      l,a
-        ld      a,0
-        sbc     a,h
+        sbc     a,a
+        sub     h
         ld      h,a
 R2SDN:
         pop     bc
@@ -3591,11 +3577,10 @@ R2SDN:
 ;
         public  __en0
 __en0:
-        pop     de              ; DE = return-to-body address
+        pop     hl              ; HL = return-to-body address
         push    ix              ; save caller's frame pointer
         ld      ix,0
         add     ix,sp           ; IX = frame  (params at IX+4, IX+6, ...)
-        ex      de,hl           ; HL = body address (DE = old HL, discarded)
         jp      (hl)
 
 ; __entr  frame setup WITH local-variable allocation (13 inline bytes -> 6).
@@ -4164,8 +4149,7 @@ pf_zfd_zloop:
         dec     d
         jr      nz,pf_zfd_zloop
 pf_zfd_print:
-        call    pf_emstr
-        ret
+        jp      pf_emstr
 
 pf_c:
         push    hl
@@ -4644,34 +4628,6 @@ pf_hnc_up:
         pop     af
         ret
 
-pf_hex_byte:
-        push    af
-        rrca
-        rrca
-        rrca
-        rrca
-        call    pf_hex_nib
-        pop     af
-pf_hex_nib:
-        and     0fh
-        add     a,'0'
-        cp      '9'+1
-        jr      c,pfh1
-        ; A-F (or a-f): base 'A' is '9'+1+7; for lowercase add a further 20h.
-        add     a,7
-        push    af
-        ld      a,(pf_hexup)
-        or      a
-        jr      nz,pfh_up
-        pop     af
-        add     a,20h           ; lowercase a-f for %x/%lx
-        jr      pfh1
-pfh_up:
-        pop     af              ; uppercase A-F for %X/%lX
-pfh1:
-        call    pf_emit_a
-        ret
-
 ; pf_ocb16: convert HL (unsigned 16-bit) to minimal octal text.
 ; Out: A = digit count, HL -> first digit in pf_decbuf, null-terminated.
 ; Preserves BC and DE. Unlike decimal (base 10, needs a real divide) octal
@@ -4910,7 +4866,7 @@ _pffio:
 
 ; pf_f is the %f handler installed via pf_float_hook when _pffio is active.
 ; It lives in the _pffio block so dccrtlstrip omits it for non-float builds.
-; Uses pf_arg_dehl, pf_print_u32, __pf32_l/__pf32_h from the __pf32h block,
+; Uses pf_arg_dehl, pf_build_u32, __pf32_l/__pf32_h from the __pf32h block,
 ; and pf_prec/pf_emit_a from the _printf block.
 pf_f:
         ; HL (fmt ptr) already pushed by the %f dispatch in pf_pct_done_width
@@ -7470,6 +7426,7 @@ wrrd:
         ld      a,(__slot)
         call    __fcbp
         ex      de,hl
+        push    de              ; retain this slot's FCB for the write below
         ld      c,33
         call    5
         or      a
@@ -7477,7 +7434,9 @@ wrrd:
         cp      1               ; reading unwritten data
         jr      z,wrzero
         cp      4               ; reading an unwritten extent
-        jp      nz,wrerror
+        jr      z,wrzero
+        pop     de              ; discard the retained FCB on the error exit
+        jp      wrerror
 wrzero:
         call    __zerdm
 
@@ -7500,9 +7459,7 @@ wrcopy:
         ld      de,__dma
         ld      c,26
         call    5
-        ld      a,(__slot)
-        call    __fcbp
-        ex      de,hl
+        pop     de              ; retained FCB for this partial record
         ld      c,34            ; random write
         call    5
         or      a
@@ -8077,12 +8034,11 @@ apseek_setoff:
 __rdsz:
         ld      a,(__slot)
         call    __fcbp
+        push    hl              ; retain the FCB across BDOS function 35
         ex      de,hl
         ld      c,35
         call    5
-
-        ld      a,(__slot)
-        call    __fcbp
+        pop     hl
         ld      de,33
         add     hl,de
         ld      c,(hl)
@@ -8820,7 +8776,7 @@ lmul_b:
         rr      e
         dec     a
         jr      nz,lmul_b
-        ld      (__lm_res_l),de         ; result low = base low (final)
+        push    de                      ; save result low
         push    hl                      ; save base high
 
         ; --- result high = base_high + low16(Xlo*Yhi) + low16(Xhi*Ylo) ------
@@ -8860,8 +8816,7 @@ lmul_skip2:
                                          ; whichever is on top; term2 contributes 0)
 lmul_done:
         ex      de,hl                   ; DE = result high
-        ld      hl,(__lm_res_l)         ; HL = result low
-        ld      sp,ix
+        pop     hl                      ; HL = result low
         pop     ix
         ret
 
@@ -8918,46 +8873,11 @@ lm1u_b:
         ex      de,hl
         ret
 
-; __m1mu: unsigned (a * b) % m for three 16-bit operands, computed without
-; ever materializing a 32-bit intermediate product or invoking the general
-; 32-bit long-divide (__lmu) - both of which the common C89
-; "((uint32_t)a * (uint32_t)b) % m" overflow-safe-multiply idiom otherwise
-; needs (profiled at ~59% of total runtime combined, in pihex.c's
-; powermod16). dcc emits a call here instead whenever it can prove, at
-; compile time, that a, b, and m in exactly that expression shape all
-; originate as plain (not-already-long) unsigned values - see the '%' case
-; in gen_long_arith_ast (dcc_ast_gen_expr.c).
-;
+; __m1mu: unsigned (a*b)%m without a 32-bit product or long division.
 ;   Entry: HL = a, DE = b, BC = m.  Exit: HL = (a * b) % m.
 ;   Clobbers AF/BC/DE.
-;
-; Algorithm: reduce a mod m once up front - a fast inline compare/subtract
-; when a is already < m (a single "sbc hl,bc" - true for every call this
-; exists for: modular-exponentiation style code, where the multiplicands are
-; themselves always prior mod-m results), falling back to a real division
-; (__udivmod, called directly - skipping __modu's operand-cache check, which
-; is pure overhead here since these operands are never the same call to
-; call) only when a >= m. Then build the product bit-by-bit over b's 16
-; bits, MSB first: double the running accumulator every step (mod m) and
-; conditionally add the fixed a0 = a%m into it when that step's bit of b is
-; set (also mod m) - the standard binary double-and-add modular
-; multiplication used for modexp on hardware without a wide multiply/divide.
-; Every intermediate value this touches stays under 2*m <= 131070, i.e.
-; never more than the 17 bits a carry-extended Z80 register pair already
-; represents exactly, so nothing here ever needs the 32-bit width the naive
-; C idiom implies.
-;
-; Register allocation is the whole story for this routine's performance: HL
-; is pinned to the accumulator for the entire loop and never spilled to
-; memory (nothing else needs HL as scratch - a two-earlier version stored
-; and reloaded it every iteration and lost most of its win to that alone),
-; DE is pinned to b's remaining bits, shifted in place each iteration
-; (self-updating, no store-back needed - an earlier version kept b in
-; memory instead, shifting a loaded copy and writing it back every
-; iteration, which alone cost more than this whole routine now does). Only
-; m and the fixed a0 - needed at different moments, never simultaneously -
-; share BC, reloaded from memory when each is needed (m unconditionally
-; once per iteration, a0 only on the ~half of iterations whose bit is set).
+; Reduce a once, then use MSB-first double-and-add. HL is the accumulator,
+; DE the remaining multiplier bits, and BC the modulus at every loop edge.
         public  __m1mu
 __m1mu:
         or      a
@@ -8965,33 +8885,30 @@ __m1mu:
         jr      nc,__mmu_r0_divide  ; a >= m (rare/never for the code this
                                      ; exists for): needs a real division
         add     hl,bc            ; a < m (the common case): undo -> HL = a
-        jr      __mmu_r0_have
-__mmu_r0_divide:
-        add     hl,bc            ; undo -> HL = a (need the real value to divide)
-        push    de               ; save b
-        ld      d,b
-        ld      e,c              ; DE = m (divisor)
-        call    __udivmod        ; HL = a/m (discarded), DE = a % m
-        ex      de,hl            ; HL = a % m
-        pop     de               ; DE = b (restored)
 __mmu_r0_have:
         ld      (__mmu_a0),hl    ; a0 = a % m, fixed for the whole loop
         ld      (__mmu_m),bc
         ld      hl,0             ; acc = 0; HL stays pinned to acc from here on
+        ld      a,d
+        or      a
         ld      a,16
+        jr      nz,__mmu_loop
+        ; Skip eight empty MSB-first iterations when D is zero.
+        ld      d,e
+        ld      e,0
+        ld      a,8
 __mmu_loop:
         add     hl,hl            ; acc *= 2 (mod 65536; carry = true overflow)
         jr      c,__mmu_dbl_ge   ; overflowed 16 bits -> true value >= 65536 > m,
                                   ; and (mod-65536 wraparound) HL - m already
                                   ; equals the correct reduced value
-        ld      bc,(__mmu_m)
-        sbc     hl,bc            ; trial acc-m; carry already 0 (fell through
+        sbc     hl,bc            ; BC is m at every loop edge; trial acc-m,
+                                 ; carry already 0 (fell through
                                  ; "jr c,__mmu_dbl_ge" above)
         jr      nc,__mmu_dbl_done  ; >= m: keep reduced value
         add     hl,bc            ; < m: undo, keep acc as-is
         jr      __mmu_dbl_done
 __mmu_dbl_ge:
-        ld      bc,(__mmu_m)
         or      a
         sbc     hl,bc
 __mmu_dbl_done:
@@ -9015,6 +8932,16 @@ __mmu_no_add:
         jr      nz,__mmu_loop
 
         ret                      ; HL already = acc = (a * b) % m
+
+__mmu_r0_divide:
+        ; Rare a>=m fallback; (a-m)%m == a%m.
+        push    de               ; save b
+        ld      d,b
+        ld      e,c              ; DE = m (divisor)
+        call    __udivmod        ; HL = (a-m)/m (discarded), DE = a % m
+        ex      de,hl            ; HL = a % m
+        pop     de               ; DE = b (restored)
+        jr      __mmu_r0_have
 
 __mmu_a0:
         dw      0
@@ -9276,7 +9203,6 @@ __ldu:
         call    __ludivmod_core
         ld      hl,(__ldv_quo_l)
         ld      de,(__ldv_quo_h)
-        ld      sp,ix
         pop     ix
         ret
 
@@ -9299,7 +9225,6 @@ __lmu:
         call    __ludivmod_core
         ld      hl,(__ldv_rem_l)
         ld      de,(__ldv_rem_h)
-        ld      sp,ix
         pop     ix
         ret
 
@@ -9309,22 +9234,22 @@ __lmu:
 ; scratch, then apply the sign themselves to whichever of __ldv_quo/
 ; __ldv_rem they return. Always computes BOTH outputs; clobbers AF/BC/DE/HL.
 __ludivmod_core:
-        ld      hl,0
-        ld      (__ldv_rem_l),hl
-        ld      (__ldv_rem_h),hl
-        ld      (__ldv_quo_l),hl
-        ld      (__ldv_quo_h),hl
         ; Fast path: divisor fits in 16 bits.
         ld      hl,(__ldv_dvs_h)
         ld      a,h
         or      l
         jp      z,ludm_dvs16
+        ; Only the general shift path needs zeroed outputs.
+        ld      hl,0
+        ld      (__ldv_rem_l),hl
+        ld      (__ldv_rem_h),hl
+        ld      (__ldv_quo_l),hl
+        ld      (__ldv_quo_h),hl
         ld      b,32
 ludm_loop:
         push    bc
         ; Shift {rem:dvd} left 1 (64-bit)
         ld      hl,(__ldv_dvd_l)
-        or      a
         add     hl,hl
         ld      (__ldv_dvd_l),hl
         ld      hl,(__ldv_dvd_h)
@@ -9351,7 +9276,6 @@ ludm_loop:
         ex      de,hl
         ld      (__ldv_rem_l),hl
         ld      hl,(__ldv_quo_l)
-        or      a
         add     hl,hl
         inc     l
         ld      (__ldv_quo_l),hl
@@ -9361,7 +9285,6 @@ ludm_loop:
         jr      ludm_next
 ludm_no_sub:
         ld      hl,(__ldv_quo_l)
-        or      a
         add     hl,hl
         ld      (__ldv_quo_l),hl
         ld      hl,(__ldv_quo_h)
@@ -9557,7 +9480,6 @@ ldivs_dvs_pos:
 ldivs_pos_result:
         ld      hl,(__ldv_quo_l)
         ld      de,(__ldv_quo_h)
-        ld      sp,ix
         pop     ix
         ret
 
@@ -9625,7 +9547,6 @@ lmods_dvs_pos:
 lmods_pos_result:
         ld      hl,(__ldv_rem_l)
         ld      de,(__ldv_rem_h)
-        ld      sp,ix
         pop     ix
         ret
 
@@ -9661,9 +9582,7 @@ __ltu:
         sbc     hl,de
 ltu_tail:
         ld      hl,0
-        jr      nc,ltu_done
-        inc     l
-ltu_done:
+        rl      l               ; carry -> 0/1
         pop     ix
         ret
 
@@ -9689,10 +9608,8 @@ __leu:
         sbc     hl,de
 leu_tail:
         ; carry set iff RHS < LHS, i.e. LHS > RHS
-        ld      hl,1
-        jr      nc,leu_done ; RHS >= LHS, so LHS <= RHS: return 1
-        ld      l,0
-leu_done:
+        sbc     hl,hl           ; 0 if LHS<=RHS, -1 otherwise
+        inc     hl              ; 1 if LHS<=RHS, 0 otherwise
         pop     ix
         ret
 
@@ -9718,9 +9635,7 @@ __lgu:
         sbc     hl,de
 gtu_tail:
         ld      hl,0
-        jr      nc,gtu_done
-        inc     l
-gtu_done:
+        rl      l               ; carry -> 0/1
         pop     ix
         ret
 
@@ -9745,10 +9660,8 @@ __lku:
         or      a
         sbc     hl,de
 geu_tail:
-        ld      hl,1
-        jr      nc,geu_done
-        ld      l,0
-geu_done:
+        sbc     hl,hl           ; -1 if LHS<RHS, 0 otherwise
+        inc     hl              ; 0 if LHS<RHS, 1 otherwise
         pop     ix
         ret
 
@@ -9930,8 +9843,7 @@ _malloc:
         pop     bc              ; return address
         ex      (sp),hl         ; HL = requested size
         push    bc
-        call    __mlh
-        ret
+        jp      __mlh
 
         public  __ckmul
 ; Internal: HL = a, DE = b.  Returns HL = a*b (low 16 bits) and carry set
@@ -9966,44 +9878,35 @@ __ck_a:         dw      0
 
         public  _calloc
 _calloc:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)        ; HL = nmemb
-        ld      e,(ix+6)
-        ld      d,(ix+7)        ; DE = size
+        pop     bc              ; return address
+        pop     hl              ; nmemb
+        pop     de              ; size
+        push    de              ; restore caller-cleanup arguments
+        push    hl
+        push    bc
         call    __ckmul         ; HL = nmemb*size; carry set on overflow
         jr      c,ca_ovf        ; overflow -> behave like allocation failure
-        call    __mlh     ; HL = ptr or 0; __ml_need = total size
+        call    __mlh           ; HL = ptr or 0; __ml_need = rounded size
         push    hl              ; save ptr for return
         ld      a,h
         or      l
         jr      z,ca_done       ; NULL: skip zero fill
-        ; Zero fill __ml_need bytes starting at HL
+        ; A successful __mlh request is always even and at least 2 bytes.
         ld      de,(__ml_need)
         ld      b,d
         ld      c,e             ; BC = count
-        ld      a,b
-        or      c
-        jr      z,ca_done       ; nothing to zero
         xor     a
         ld      (hl),a          ; write first zero
         dec     bc
-        ld      a,b
-        or      c
-        jr      z,ca_done       ; count was 1
         ld      d,h
         ld      e,l
         inc     de              ; DE = ptr+1
         ldir                    ; fill remaining bytes
 ca_done:
         pop     hl              ; return ptr (or 0)
-        pop     ix
         ret
 ca_ovf:
         ld      hl,0
-        pop     ix
         ret
 
 
@@ -10082,11 +9985,9 @@ rl_shrink_split:
         ld      hl,(__rl_old)
         ld      de,0-HDRSIZE
         add     hl,de                   ; HL = header
-        ld      (__rl_hdr),hl
         ld      de,(__rl_size)
         ld      b,d
         ld      c,e                     ; BC = new size (used, flag clear)
-        ld      hl,(__rl_hdr)
         call    __wr_hf
 
         ; tail user size = slack - (HDRSIZE+FTRSIZE)
@@ -10115,7 +10016,6 @@ rl_shrink_split:
         ; double-count the flag bit as part of the size.
         ld      bc,(__rl_tsz)           ; BC = tail user size (true)
         ld      de,(__rl_tsz)           ; DE = packed(used) = tail_size
-        ld      hl,(__rl_thdr)
         call    __wr_hf
 
         ; Coalesce the freed tail forward (and trim __brk if it is the top).
@@ -10206,11 +10106,9 @@ rl_grow_ok:
         ld      hl,(__rl_old)
         ld      de,0-HDRSIZE
         add     hl,de                   ; HL = header
-        ld      (__rl_hdr),hl
         ld      de,(__rl_size)
         ld      b,d
         ld      c,e                     ; BC = new size
-        ld      hl,(__rl_hdr)
         call    __wr_hf                 ; header+footer, used, size=new
         ld      hl,(__rl_old)
         pop     ix
@@ -10260,7 +10158,6 @@ __rl_old:       dw      0
 __rl_new:       dw      0
 __rl_size:      dw      0
 __rl_cnt:       dw      0
-__rl_hdr:       dw      0
 __rl_tsz:       dw      0
 __rl_thdr:      dw      0
 
@@ -10270,8 +10167,7 @@ _free:
         pop     bc
         ex      (sp),hl         ; HL = ptr
         push    bc
-        call    __frcoal        ; mark free + coalesce neighbours (handles NULL)
-        ret
+        jp      __frcoal        ; mark free + coalesce neighbours (handles NULL)
 
         public  __frcoal
 ; Internal: HL = user pointer (may be NULL).  Marks the block free and merges
@@ -10438,7 +10334,6 @@ mh_walk:
         ld      a,e
         and     0feh
         ld      e,a
-        ld      (__ml_usiz),de  ; save true size in case block is too small
 
         ; Compare user_size (DE) >= need (HL = __ml_need)
         ld      hl,(__ml_need)
@@ -10517,8 +10412,9 @@ mh_split:
 
 mh_skip_free:
         ; Free but too small: advance by HDRSIZE + FTRSIZE + user_size
+        add     hl,de           ; reconstruct user_size from remainder + need
+        ex      de,hl
         ld      hl,(__ml_p)
-        ld      de,(__ml_usiz)
         ld      bc,HDRSIZE+FTRSIZE
         add     hl,bc
         add     hl,de
@@ -10583,7 +10479,6 @@ mh_oom:
 ; Allocator temporaries
 __ml_need:      dw      0
 __ml_p:         dw      0
-__ml_usiz:      dw      0
 __ml_fp:        dw      0
 
         public  __lmd
@@ -10593,14 +10488,16 @@ __lm_lhs_l:     dw      0
 __lm_lhs_h:     dw      0
 __lm_rhs_l:     dw      0
 __lm_rhs_h:     dw      0
-__lm_res_l:     dw      0
-__lm_res_h:     dw      0
 
 __ldv_dvs_l:    dw      0
 __ldv_dvs_h:    dw      0
 __ldv_dvd_l:    dw      0
 __ldv_dvd_h:    dw      0
+        public  __lrlo
+__lrlo:
 __ldv_rem_l:    dw      0
+        public  __lrhi
+__lrhi:
 __ldv_rem_h:    dw      0
 __ldv_quo_l:    dw      0
 __ldv_quo_h:    dw      0
@@ -10964,11 +10861,9 @@ fgf_no_pb:
         ld      h,(ix+9)
         push    hl                      ; fp
         call    _read
-        ex      de,hl                   ; DE = bytes read
-        ld      hl,6
-        add     hl,sp
-        ld      sp,hl                   ; clean 3 args
-        ex      de,hl                   ; HL = bytes read
+        pop     bc                      ; discard fp
+        pop     bc                      ; discard buffer
+        pop     bc                      ; discard count
 
         ; Treat anything but exactly 1 byte read as EOF, including a -1
         ; (0FFFFh) error return (e.g. EBADF) - h!=0 catches that case before
@@ -11063,11 +10958,9 @@ _gets:
         ld      h,(ix+5)
         push    hl                      ; buf
         call    _fgets
-        ex      de,hl                   ; DE = fgets result
-        ld      hl,6
-        add     hl,sp
-        ld      sp,hl                   ; clean 3 args
-        ex      de,hl                   ; HL = fgets result (buf or 0)
+        pop     bc                      ; discard buf
+        pop     bc                      ; discard size
+        pop     bc                      ; discard fp
 
         ld      a,h
         or      l
@@ -12097,11 +11990,9 @@ fputs_sl_done:
         ld      h,(ix+7)
         push    hl                      ; fp
         call    _write
-        ex      de,hl
-        ld      hl,6
-        add     hl,sp
-        ld      sp,hl
-        ex      de,hl                   ; HL = _write return value
+        pop     bc                      ; discard fp
+        pop     bc                      ; discard string
+        pop     bc                      ; discard length
         pop     ix
         ret
 
@@ -12476,12 +12367,10 @@ _fgetpos:
         inc     a
         jr      z,fgpos_bad
 
-        ; Save DE:HL before adjusting SP to discard the stream arg.
+        ; Save DE:HL before discarding the stream arg.
         ld      (__fgpos_lo),hl
         ld      (__fgpos_hi),de
-        ld      hl,2
-        add     hl,sp
-        ld      sp,hl           ; discard stream arg
+        pop     bc              ; discard stream arg
 
         ; Write 4 bytes to *pos (low word then high word, LE)
         ld      l,(ix+6)
@@ -12505,9 +12394,7 @@ _fgetpos:
         ret
 
 fgpos_bad:
-        ld      hl,2
-        add     hl,sp
-        ld      sp,hl
+        pop     bc              ; discard stream arg
         ld      hl,0ffffh
         pop     ix
         ret
@@ -14029,13 +13916,13 @@ __feqf:
 __feqf_diff:
         ; Raw-different -> equal only for +0 vs -0.
         ld      a,d
-        and     7fh
+        add     a,a
         or      e
         or      h
         or      l
         jr      nz,__feqf_false
         ld      a,(ix+7)
-        and     7fh
+        add     a,a
         or      (ix+6)
         or      (ix+5)
         or      (ix+4)
@@ -14081,13 +13968,13 @@ __fnef:
 
 __fnef_diff:
         ld      a,d
-        and     7fh
+        add     a,a
         or      e
         or      h
         or      l
         jr      nz,__fnef_true
         ld      a,(ix+7)
-        and     7fh
+        add     a,a
         or      (ix+6)
         or      (ix+5)
         or      (ix+4)
@@ -14149,39 +14036,39 @@ __fnef_ret:
         public  __fcmpsf
 __fcmpsf:
         ld      a,d
-        and     7fh
-        cp      7fh
+        inc     a
+        add     a,a
         jr      nz,__fcmpsf_bnan
         bit     7,e
         jr      z,__fcmpsf_bnan
         ld      a,e
-        and     7fh
+        add     a,a
         or      h
         or      l
         jp      nz,__fcunf
 
 __fcmpsf_bnan:
         ld      a,(ix+7)
-        and     7fh
-        cp      7fh
+        inc     a
+        add     a,a
         jr      nz,__fcmpsf_zero
         bit     7,(ix+6)
         jr      z,__fcmpsf_zero
         ld      a,(ix+6)
-        and     7fh
+        add     a,a
         or      (ix+5)
         or      (ix+4)
         jp      nz,__fcunf
 
 __fcmpsf_zero:
         ld      a,d
-        and     7fh
+        add     a,a
         or      e
         or      h
         or      l
         jr      nz,__fcsgf
         ld      a,(ix+7)
-        and     7fh
+        add     a,a
         or      (ix+6)
         or      (ix+5)
         or      (ix+4)
@@ -14189,8 +14076,8 @@ __fcmpsf_zero:
 __fcsgf:
         ld      a,d
         xor     (ix+7)
-        and     80h
-        jr      z,__fcsmf
+        rla
+        jr      nc,__fcsmf
         ld      a,d
         bit     7,a
         jp      nz,__fcltf
@@ -14261,15 +14148,15 @@ __fltf:
         ld      b,a
         ld      a,(ix+7)
         or      b               ; both sign bits must be 0
-        and     80h
-        jr      nz,__fltf_slow
+        rla
+        jr      c,__fltf_slow
         ld      a,d
-        and     7fh
-        cp      7fh
+        inc     a
+        add     a,a
         jr      z,__fltf_slow   ; a: D&7F==7F => might be NaN/Inf
         ld      a,(ix+7)
-        and     7fh
-        cp      7fh
+        inc     a
+        add     a,a
         jr      z,__fltf_slow   ; b: D&7F==7F => might be NaN/Inf
         ld      a,d
         cp      (ix+7)
@@ -14315,15 +14202,15 @@ __fgtf:
         ld      b,a
         ld      a,(ix+7)
         or      b
-        and     80h
-        jr      nz,__fgtf_slow
+        rla
+        jr      c,__fgtf_slow
         ld      a,d
-        and     7fh
-        cp      7fh
+        inc     a
+        add     a,a
         jr      z,__fgtf_slow
         ld      a,(ix+7)
-        and     7fh
-        cp      7fh
+        inc     a
+        add     a,a
         jr      z,__fgtf_slow
         ld      a,(ix+7)        ; compare b vs a (b < a means a > b)
         cp      d
@@ -14369,15 +14256,15 @@ __flef:
         ld      b,a
         ld      a,(ix+7)
         or      b
-        and     80h
-        jr      nz,__flef_slow
+        rla
+        jr      c,__flef_slow
         ld      a,d
-        and     7fh
-        cp      7fh
+        inc     a
+        add     a,a
         jr      z,__flef_slow
         ld      a,(ix+7)
-        and     7fh
-        cp      7fh
+        inc     a
+        add     a,a
         jr      z,__flef_slow
         ld      a,d
         cp      (ix+7)
@@ -14426,15 +14313,15 @@ __fgef:
         ld      b,a
         ld      a,(ix+7)
         or      b
-        and     80h
-        jr      nz,__fgef_slow
+        rla
+        jr      c,__fgef_slow
         ld      a,d
-        and     7fh
-        cp      7fh
+        inc     a
+        add     a,a
         jr      z,__fgef_slow
         ld      a,(ix+7)
-        and     7fh
-        cp      7fh
+        inc     a
+        add     a,a
         jr      z,__fgef_slow
         ld      a,d
         cp      (ix+7)
@@ -16749,14 +16636,14 @@ FP5:    db      0
         public  _fabsf
 _fabsf:
         ; float fabsf(float x) - single 4-byte argument fits in HL:DE
-        ; across the restore-and-call; IX-free leaf.
+        ; across the restore; IX-free leaf.
         pop     bc
         pop     hl
         pop     de
         push    de
         push    hl
         push    bc
-        call    __fabs
+        res     7,d
         ret
 
         public  _floorf
@@ -20997,92 +20884,64 @@ _modff:
         push    hl                      ; restore x low
         push    bc                      ; restore return address
 
-        ; C99 7.12.6.12: if x is infinite, *iptr = x and the return value
-        ; is a zero with the same sign as x - NaN needs no special case
-        ; (floorf(NaN) now correctly gives NaN for *iptr, from the fix
-        ; just above, and NaN-NaN correctly stays NaN for the return
-        ; value too), but Inf does: floorf(Inf)/ceilf(Inf) now correctly
-        ; give Inf for *iptr, but "x - ip" below would then compute
-        ; Inf-Inf, an invalid operation that correctly gives NaN (an
-        ; earlier fix this session) - not the required signed zero.
+        ; Extract the raw exponent.  Truncation toward zero is just a
+        ; mantissa mask for finite 1<=|x|<2^23; smaller/larger values and
+        ; NaN/Inf return directly without calling floorf/ceilf or subtracting.
         ld      hl,(__modff_xlo)
         ld      de,(__modff_xhi)
-        call    __finf
-        ld      a,h
-        or      l
-        jp      z,MFMODFORD
-        ld      hl,(__modff_iptr)
-        ld      a,(__modff_xlo)
-        ld      (hl),a
-        inc     hl
-        ld      a,(__modff_xlo+1)
-        ld      (hl),a
-        inc     hl
-        ld      a,(__modff_xhi)
-        ld      (hl),a
-        inc     hl
-        ld      a,(__modff_xhi+1)
-        ld      (hl),a
-        ld      a,(__modff_xhi+1)
-        and     80h
-        ld      d,a
-        ld      e,0
-        ld      hl,0
-        ret
-MFMODFORD:
-
-        ; Preserve the original test and operation order:
-        ;     i = (x <= 0.0f) ? floorf(x) : ceilf(x);
-        ld      de,(__modff_xhi)
-        ld      hl,(__modff_xlo)
-        push    de
-        push    hl
-        ld      hl,0
-        ld      de,0
-        call    __flef
-        pop     bc
-        pop     bc
-        ld      a,h
-        or      l
-        jr      z,modff_use_ceil
-
-        ld      de,(__modff_xhi)
-        ld      hl,(__modff_xlo)
-        push    de
-        push    hl
-        call    _floorf
-        pop     bc
-        pop     bc
-        jr      modff_have_int
-
-modff_use_ceil:
-        ld      de,(__modff_xhi)
-        ld      hl,(__modff_xlo)
-        push    de
-        push    hl
-        call    _ceilf
-        pop     bc
-        pop     bc
-
-modff_have_int:
         ld      (__modff_ilo),hl
         ld      (__modff_ihi),de
-
-        ; *iptr = integral part
-        ld      bc,(__modff_iptr)
-        ld      a,l
-        ld      (bc),a
-        inc     bc
-        ld      a,h
-        ld      (bc),a
-        inc     bc
         ld      a,e
-        ld      (bc),a
-        inc     bc
+        add     a,a                     ; carry = exponent bit 0
         ld      a,d
-        ld      (bc),a
+        rla                             ; A = exponent, sign shifted out
+        ld      c,a                     ; C = biased exponent
+        cp      255
+        jp      z,modff_special
+        cp      127
+        jr      c,modff_small
+        cp      150
+        jp      nc,modff_integral
 
-        ; Return x - integral part in DE:HL.
+        ; Clear the fractional mantissa bits in the one byte containing
+        ; the integer/fraction boundary; all lower bytes become zero.
+        cp      143
+        jr      c,modff_mask_h
+        ld      a,150
+        sub     c
+        ld      b,a
+        ld      a,(__modff_ilo)
+        call    modff_mask_byte
+        ld      (__modff_ilo),a
+        jr      modff_masked
+
+modff_mask_h:
+        cp      135
+        jr      c,modff_mask_e
+        xor     a
+        ld      (__modff_ilo),a
+        ld      a,142
+        sub     c
+        ld      b,a
+        ld      a,(__modff_ilo+1)
+        call    modff_mask_byte
+        ld      (__modff_ilo+1),a
+        jr      modff_masked
+
+modff_mask_e:
+        ld      hl,0
+        ld      (__modff_ilo),hl
+        ld      a,134
+        sub     c
+        ld      b,a
+        ld      a,(__modff_ihi)
+        call    modff_mask_byte
+        ld      (__modff_ihi),a
+
+modff_masked:
+        call    modff_store_int
+
+        ; Only the middle exponent range needs arithmetic for the fraction.
         ld      de,(__modff_xhi)
         ld      hl,(__modff_xlo)
         push    de
@@ -21093,7 +20952,7 @@ modff_have_int:
         pop     bc
         pop     bc
         ld      a,d
-        and     7fh
+        add     a,a
         or      e
         or      h
         or      l
@@ -21101,6 +20960,73 @@ modff_have_int:
         ld      a,(__modff_xhi+1)
         and     80h
         ld      d,a
+        ret
+
+modff_small:
+        ; |x|<1: integral part is signed zero and fraction is x.
+        ld      hl,0
+        ld      (__modff_ilo),hl
+        ld      a,(__modff_xhi+1)
+        and     80h
+        ld      d,a
+        ld      e,0
+        ld      (__modff_ihi),de
+        call    modff_store_int
+        ld      hl,(__modff_xlo)
+        ld      de,(__modff_xhi)
+        ret
+
+modff_integral:
+        ; Finite |x|>=2^23 has no representable fractional bits.
+        call    modff_store_int
+modff_signed_zero:
+        ld      a,(__modff_xhi+1)
+        and     80h
+        ld      d,a
+        ld      e,0
+        ld      hl,0
+        ret
+
+modff_special:
+        ; Store either NaN or infinity unchanged.  NaN is also the returned
+        ; fraction; infinity returns a zero with the same sign.
+        call    modff_store_int
+        ld      hl,(__modff_xlo)
+        ld      de,(__modff_xhi)
+        ld      a,e
+        add     a,a
+        or      h
+        or      l
+        ret     nz
+        jr      modff_signed_zero
+
+modff_mask_byte:
+        ; A &= 0xff << B, for B in 0..7.
+        ld      c,a
+        ld      a,b
+        or      a
+        ld      a,c
+        ret     z
+        ld      a,0ffh
+modff_mask_loop:
+        add     a,a
+        djnz    modff_mask_loop
+        and     c
+        ret
+
+modff_store_int:
+        ld      bc,(__modff_iptr)
+        ld      a,(__modff_ilo)
+        ld      (bc),a
+        inc     bc
+        ld      a,(__modff_ilo+1)
+        ld      (bc),a
+        inc     bc
+        ld      a,(__modff_ihi)
+        ld      (bc),a
+        inc     bc
+        ld      a,(__modff_ihi+1)
+        ld      (bc),a
         ret
 
 __modff_xlo:    dw      0
@@ -21616,33 +21542,10 @@ SCL92:
         ld (__stox_acc),hl
         ld (__stox_acc+2),de
 SCL93:
-        ld hl,0
-        ld de,0
-        ld bc,(__stox_endptr) ; peep: defer_global_push_reload
-        push de
-        push hl
-        ld h,b
-        ld l,c
-        ld de,0
-        pop bc
-        ld a,c
-        xor l
-        ld l,a
+        ld bc,(__stox_endptr)
         ld a,b
-        xor h
-        or l
-        ld l,a
-        pop bc
-        ld a,c
-        xor e
-        or l
-        ld l,a
-        ld a,b
-        xor d
-        or l
+        or c
         jr      z,SCL101 ; peep: jp_to_jr
-        ld hl,(__stox_endptr) ; peep: ix_frame_ptr_deadd
-        push hl
         ld hl,(__stox_any)
         ld a,h
         or l
@@ -21654,7 +21557,8 @@ SCL104:
         ld hl,(__stox_nptr)
 SCL105:
         ex de,hl
-        pop hl
+        ld h,b
+        ld l,c
         ld (hl),e
         inc hl
         ld (hl),d
@@ -21798,20 +21702,14 @@ _getenv:
 ; ============================================================
         public  _system
 _system:
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      l,(ix+4)
-        ld      h,(ix+5)
-        ld      a,h
-        or      l
-        jr      nz,sys_fail
+        ld      hl,2
+        add     hl,sp
+        ld      a,(hl)
+        inc     hl
+        or      (hl)
         ld      hl,0            ; NULL: no command processor
-        pop     ix
-        ret
-sys_fail:
-        ld      hl,0ffffh       ; -1: not supported
-        pop     ix
+        ret     z
+        dec     hl              ; -1: not supported
         ret
 
 ; ============================================================
@@ -22125,12 +22023,8 @@ xm_ok:
         ld      bc,31
         ldir
 
-        ; Switch to safe stack below trampoline, then jump (no return)
-        ld      hl,(__xbase)
-        ld      bc,16           ; 16-byte stack gap below trampoline
-        or      a
-        sbc     hl,bc           ; HL = tramp_base - 16
-        ld      sp,hl           ; new stack
+        ; The stack was already switched to tramp_base-16 before setup and
+        ; every intervening call is balanced, so jump using that same safe SP.
         ld      hl,(__xtrep)
         jp      (hl)
 
@@ -22282,8 +22176,8 @@ xsc_em:
 ; __xclfb(DE=buf): zero 16 bytes at DE (for clearing default FCB slots)
 __xclfb:
         ld      b,16
-xclf_l:
         xor     a
+xclf_l:
         ld      (de),a
         inc     de
         djnz    xclf_l
@@ -22694,16 +22588,7 @@ CDL168:
 
         public __ltim
 __ltim:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld l,(ix+4)
-        ld h,(ix+5)
-        push hl
-        call _gmtime
-        ld sp,ix
-        pop ix
-        ret
+        jp _gmtime
 
         public _asctime
 _asctime:

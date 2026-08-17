@@ -116,6 +116,7 @@ class DccRtlStripBlockTests(unittest.TestCase):
     def test_gmtime_and_localtime_keep_only_calendar_core(self):
         for symbol in ("_gmtime", "__ltim"):
             rtl = self.strip_root(symbol)
+            self.assertIn("_gmtime:", rtl)
             self.assertIn("__cal_core:", rtl)
             self.assertIn("CDZ0004:", rtl)
             self.assertNotIn("_mktime:", rtl)
