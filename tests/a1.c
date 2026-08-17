@@ -81,7 +81,7 @@ extern void m_store( uint16_t address );
 extern void m_hard_exit( char * msg );
 
 /* the 6502 functional tests 6502FUN.HEX runs in 19.3 seconds with C and 15.1 seconds with assembly */
-#ifdef _DCC_
+#if defined( _DCC_ ) || defined( SDCC )
 #define Z80_ASM_OPTS    /* use Z80 asm for set_nz and get_mem; undef for C fallback */
 #endif
 
@@ -210,6 +210,86 @@ void set_nz( uint8_t x )
 #endif
 
 #ifdef Z80_ASM_OPTS
+#ifdef SDCC
+/* get_mem( uint16_t address ) -> uint8_t * -- zsdcc port of the dcc version
+   below. Unlike dcc, zsdcc requires an #asm block used as a whole function
+   body to sit inside a real C function signature -- a bare #asm/#endasm
+   with its own "public"/label at file scope (dcc's style, used in the
+   #else branch below) does not parse under zsdcc; confirmed empirically
+   after the bare form produced a "token -> __endasm" syntax error whose
+   cause was not obvious from the message alone. zsdcc also gives
+   #asm-bodied functions no automatic prologue/epilogue at all (confirmed
+   empirically: without one, IX holds whatever the caller left it as, not
+   a valid frame pointer), so this sets up and tears down its own IX frame
+   exactly like a normal compiler-generated function would. Parameter and
+   return conventions (packed byte params, (ix+4)/(ix+5), pointer return
+   in HL) were confirmed the same way: standalone test functions built
+   with the exact zcc flags used for this file, run under ntvcm and
+   checked against known correct results, since the exact ABI for this
+   target and compiler combination is not documented anywhere. */
+uint8_t * get_mem( uint16_t address )
+{
+#asm
+        push    ix
+        ld      ix,0
+        add     ix,sp
+        ld      e,(ix+4)
+        ld      d,(ix+5)        ; DE = address
+
+        ld      a,d
+
+        ; Put E/F first: instruction fetches from BASIC/monitor make
+        ; these extremely common.
+        cp      0e0h
+        jr      nc,_gm_hi
+
+        ; 0000-7fff RAM?
+        cp      080h
+        jr      c,_gm_ram
+
+        ; d000-dfff
+        cp      0d0h
+        jr      nc,_gm_d
+
+_gm_bad:
+        push    de
+        call    _bad_address
+        pop     ix
+        ret                     ; not reached
+
+_gm_hi:
+        cp      0f0h
+        jr      nc,_gm_f
+
+_gm_e:
+        ld      bc,_m_e000-0e000h
+        jr      _gm_add
+
+_gm_f:
+        ld      bc,_m_ff00-0ff00h
+        jr      _gm_add
+
+_gm_d:
+        ld      bc,_m_d000-0d000h
+        jr      _gm_add
+
+_gm_ram:
+        cp      040h
+        jr      nc,_gm_4
+        ld      bc,_m_0000
+        jr      _gm_add
+
+_gm_4:
+        ld      bc,_m_4000-04000h
+
+_gm_add:
+        ex      de,hl
+        add     hl,bc
+        pop     ix
+        ret
+#endasm
+}
+#else
 #asm
         public _get_mem
 _get_mem:
@@ -269,6 +349,7 @@ _gm_add:
         add     hl,bc
         ret
 #endasm
+#endif
 #else
 uint8_t * get_mem( uint16_t address )
 {
@@ -452,6 +533,185 @@ void op_bcd_math( uint8_t math, uint8_t rhs )
 }
 
 #ifdef Z80_ASM_OPTS
+#ifdef SDCC
+/* op_math( uint8_t op, uint8_t rhs ) -- zsdcc port of the dcc version below.
+   See the get_mem SDCC block above for why this needs a real C function
+   signature wrapping the #asm body (dcc's bare-#asm style, used in the
+   #else branch below, does not parse under zsdcc), and for how the
+   calling convention here (manual IX frame; (ix+4)=op, (ix+5)=rhs, packed
+   with no padding since both are bytes) was confirmed empirically.
+   Calling a two-byte-param function (op_bcd_math, for the decimal path)
+   also needed empirical confirmation: zsdcc packs both arguments into a
+   single 16-bit push (E=first param, D=second param) rather than the two
+   separate zero-extended pushes the dcc version uses, so only one
+   push/pop is needed around the call.
+
+   cpu layout:
+     _cpu+0   a
+     _cpu+6   fNegative
+     _cpu+7   fOverflow
+     _cpu+8   fDecimal
+     _cpu+10  fZero
+     _cpu+11  fCarry
+
+   op & E0h:
+     00 ORA
+     20 AND
+     40 EOR
+     60 ADC
+     C0 CMP
+     E0 SBC
+*/
+void op_math( uint8_t op, uint8_t rhs )
+{
+#asm
+        push    ix
+        ld      ix,0
+        add     ix,sp
+        ; Fetch arguments (packed, no padding between the two bytes).
+        ld      a,(ix+4)             ; op
+        and     0e0h
+        ld      b,a                  ; B = masked op
+        ld      c,(ix+5)             ; C = rhs
+
+        ; CMP is completely separate.
+        cp      0c0h
+        jp      z,_opm_cmp
+
+        ; Only ADC/SBC care about decimal mode.  Do this test before
+        ; inspecting fDecimal so ORA/AND/EOR avoid that memory access.
+        cp      60h
+        jp      z,_opm_arith
+        cp      0e0h
+        jp      z,_opm_arith
+
+        ; Logical operations: 00=ORA, 20=AND, 40=EOR.
+        or      a
+        jp      z,_opm_ora
+        cp      20h
+        jp      z,_opm_and
+
+        ; EOR
+        ld      a,(_cpu)
+        xor     c
+        jp      _opm_store
+
+_opm_ora:
+        ld      a,(_cpu)
+        or      c
+        jp      _opm_store
+
+_opm_and:
+        ld      a,(_cpu)
+        and     c
+        jp      _opm_store
+
+
+        ; ------------------------------------------------------------
+        ; ADC / SBC
+        ; ------------------------------------------------------------
+_opm_arith:
+        ; Decimal mode matters only here.
+        ld      a,(_cpu+8)
+        or      a
+        jp      nz,_opm_bcd
+
+        ; Binary SBC is ADC with ones-complement rhs:
+        ;     A - rhs - !C == A + ~rhs + C
+        ld      a,b
+        cp      0e0h
+        jp      nz,_opm_adc
+
+        ld      a,c
+        cpl
+        ld      c,a
+
+_opm_adc:
+        ld      a,(_cpu+11)
+        rra
+        ld      a,(_cpu)
+        adc     a,c
+
+        push    af
+        pop     de
+
+        ld      a,e
+        and     1
+        ld      (_cpu+11),a
+
+        ld      a,e
+        and     4
+        ld      (_cpu+7),a
+
+        ld      a,d                  ; result
+        jp      _opm_store
+
+
+        ; ------------------------------------------------------------
+        ; Common result store for ORA/AND/EOR/ADC/SBC.
+        ;
+        ; A = result.
+        ; ------------------------------------------------------------
+_opm_store:
+        ld      (_cpu),a
+        ld      c,a                  ; preserve result
+
+        and     080h
+        ld      (_cpu+6),a
+
+        ld      a,c
+        cp      1
+        ld      a,0
+        adc     a,0
+        ld      (_cpu+10),a
+        pop     ix
+        ret
+
+
+        ; ------------------------------------------------------------
+        ; CMP
+        ; ------------------------------------------------------------
+_opm_cmp:
+        ld      a,(_cpu)
+        sub     c
+        ld      d,a                  ; D = comparison result
+
+        ccf
+        ld      a,0
+        adc     a,0
+        ld      (_cpu+11),a
+
+        ld      a,d
+        and     080h
+        ld      (_cpu+6),a
+
+        ld      a,d
+        cp      1
+        ld      a,0
+        adc     a,0
+        ld      (_cpu+10),a
+        pop     ix
+        ret
+
+
+        ; ------------------------------------------------------------
+        ; Decimal ADC/SBC remains in C.
+        ;
+        ; B = masked op (60h ADC or E0h SBC), C = original rhs. Packed
+        ; into DE (E=math=first param, D=rhs=second param) for the call,
+        ; per the packed-argument convention noted above.
+        ; ------------------------------------------------------------
+_opm_bcd:
+        ld      e,b
+        ld      d,c
+        push    de
+        call    _op_bcd_math
+        pop     de
+        pop     ix
+        ret
+#endasm
+}
+#else
 #asm
         ; op_math( uint8_t op, uint8_t rhs )
         ;
@@ -654,6 +914,7 @@ _opm_bcd:
         pop     hl
         ret
 #endasm
+#endif
 #else
 void op_math( uint8_t op, uint8_t rhs )
 {
