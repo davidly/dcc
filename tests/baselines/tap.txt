@@ -1,8 +1,8 @@
 starting, should tend towards 1.2020569031595942854...
 first implementation...
   at           10 iterations: 1.197532
-  at          100 iterations: 1.202002
-  at         1000 iterations: 1.202034
+  at          100 iterations: 1.202007
+  at         1000 iterations: 1.202051
 second implementation...
   at           10 iterations: 1.666667
   at          100 iterations: 1.190476

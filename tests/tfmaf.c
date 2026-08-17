@@ -150,9 +150,9 @@ int main(void)
     okf("neg_general", fmaf_(bits(0xc0490fdbUL), bits(0x402df854UL), -1.0f),
         bits(0xc118a2c0UL));
     okf("asym_swap1", fmaf_(bits(0x40e00001UL), bits(0x3dcccd02UL), 2.0f),
-        bits(0x402cccd8UL));
+        bits(0x402cccd9UL));
     okf("asym_swap2", fmaf_(bits(0x3dcccd02UL), bits(0x40e00001UL), 2.0f),
-        bits(0x402cccd8UL));
+        bits(0x402cccd9UL));
     okf("zero_product", fmaf_(0.0f, bits(0x40490fdbUL), 5.0f), 5.0f);
     okf("zero_addend", fmaf_(bits(0x40490fdbUL), bits(0x402df854UL), 0.0f),
         bits(0x4108a2c0UL));

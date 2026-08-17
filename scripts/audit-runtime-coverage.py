@@ -72,7 +72,7 @@ KNOWN_PUBLIC_DATA = {"_stdin", "_stdout", "_stderr", "_errno", "_dcc_nan"}
 # are startup entry/data symbols. None can be called by a C name, so they are
 # exercised indirectly by higher-level tests, not by a direct call to the label.
 INTERNAL_LABEL_PREFIXES = ("__", "pf_", "sc_")
-INTERNAL_LABEL_NAMES = {"start", "argv"}
+INTERNAL_LABEL_NAMES = {"start", "argv", "FPACKR", "FUNR", "FPKR", "FSHR"}
 
 
 def is_internal_label(sym):

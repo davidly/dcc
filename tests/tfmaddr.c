@@ -105,21 +105,13 @@ int main(void)
     okf("neg_general", fmaddr(bits(0xc0490fdbUL), bits(0x402df854UL), -1.0f),
         bits(0xc118a2c0UL));
 
-    /* asymmetric a/b, swapped both ways - guards against an operand mixup:
-     * a genuine bug in the register reshuffle (as opposed to a rounding
-     * nuance) would make these two disagree with each other, not just
-     * differ from a textbook-perfect FMA. Expected value is 1 ULP below
-     * a fully-correct single-rounding fma(a,b,c) (computed independently
-     * in Python via exact Fraction arithmetic: true result bit pattern is
-     * 0x402cccd9) - confirmed via a byte-for-byte A/B rebuild against the
-     * pre-register-resident DCCRTL.MAC that this 1-ULP gap is a
-     * preexisting rounding characteristic of the fallback's mantissa
-     * accumulation, reproduced unchanged by this rewrite, not a
-     * regression it introduced. */
+    /* asymmetric a/b, swapped both ways - guards against an operand mixup.
+     * Expected value is the independently computed, correctly rounded
+     * single-rounding result. */
     okf("asym_swap1", fmaddr(bits(0x40e00001UL), bits(0x3dcccd02UL), 2.0f),
-        bits(0x402cccd8UL));
+        bits(0x402cccd9UL));
     okf("asym_swap2", fmaddr(bits(0x3dcccd02UL), bits(0x40e00001UL), 2.0f),
-        bits(0x402cccd8UL));
+        bits(0x402cccd9UL));
 
     /* zero product (a==0) */
     okf("zero_product", fmaddr(0.0f, bits(0x40490fdbUL), 5.0f), 5.0f);

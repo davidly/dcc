@@ -29,12 +29,8 @@ int main()
     printf("%f\n", r);                 /* 2.500000 - exact, no rounding */
 
     a = 100.0f; b = 7.0f; r = a / b;
-    printf("%f\n", r);                 /* 14.285715 - irregular quotient;
-                                           verified identical to the
-                                           pre-rewrite implementation via
-                                           differential testing (round-half-
-                                           up rounds the last displayed digit
-                                           up from the true 14.285714...) */
+    printf("%f\n", r);                 /* 14.285716 with nearest-even
+                                           multiplication in float formatting */
 
     a = -17.0f; b = 3.0f; r = a / b;
     printf("%f\n", r);                 /* -5.666667 - negative dividend */
