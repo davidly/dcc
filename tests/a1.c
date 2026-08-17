@@ -8,6 +8,11 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <stdlib.h>
+
+#ifdef SDCC
+    typedef unsigned char uint8_t;
+#endif
 
 /*
    6502 emulator targeted at CP/M 2.2.
@@ -27,10 +32,10 @@ extern uint8_t m_ff00[ 256 ];   /* woz monitor */
 #define OP_HALT 0xff
 #define OP_RTS 0x60
 
-extern void emulate();
-extern void end_emulation();
-extern void soft_reset();
-extern void power_on();
+extern void emulate( void );
+extern void end_emulation( void );
+extern void soft_reset( void );
+extern void power_on( void );
 extern uint8_t * get_mem( uint16_t address );
 
 /* use #define instead of functions because old compilers don't inline functions */
@@ -68,14 +73,16 @@ struct MOS_6502
 
 extern struct MOS_6502 cpu;
 
-extern void m_halt(); 
-extern uint8_t m_hook();
+extern void m_halt( void ); 
+extern uint8_t m_hook( void );
 extern uint8_t m_load( uint16_t address );
 extern void m_store( uint16_t address );
 extern void m_hard_exit( char * msg );
 
 /* the 6502 functional tests 6502FUN.HEX runs in 19.3 seconds with C and 15.1 seconds with assembly */
+#ifdef _DCC_
 #define Z80_ASM_OPTS    /* use Z80 asm for set_nz and get_mem; undef for C fallback */
+#endif
 
 struct MOS_6502 cpu;
 
@@ -84,8 +91,8 @@ static uint8_t g_State = 0;
 #define stateEndEmulation 2
 #define stateSoftReset 4
 
-void end_emulation() { g_State |= stateEndEmulation; }
-void soft_reset() { g_State |= stateSoftReset; }
+void end_emulation( void ) { g_State |= stateEndEmulation; }
+void soft_reset( void ) { g_State |= stateSoftReset; }
 
 /*
     The Apple 1 shipped with 4k of RAM, and that's generally plenty.
@@ -265,7 +272,7 @@ static inline uint8_t pop( void )
     return * ( (uint8_t *) m_0000 + 0x0100 + ++cpu.sp );
 }
 
-void power_on()
+void power_on( void )
 {
     cpu.pc = get_word( 0xfffc );
     cpu.fInterruptDisable = true;
@@ -413,7 +420,7 @@ void op_bcd_math( uint8_t math, uint8_t rhs )
         ; Dispatches 6502 ORA/AND/EOR/ADC/CMP/SBC for cpu.a. The CMP case is done
         ; inline here (was previously a nested call to op_cmp) using the exact same
         ; sub/rlca/cp-carry-inversion technique op_cmp itself uses. ADC/SBC flag
-        ; extraction reuses the push-af/pop-de trick to read Z80's C and P/V out of
+        ; extraction reuses the push-af/pop-de trick to read the Z80 C and P/V out of
         ; a single adc a,r: bit0 of F is the new carry, bit2 (reached via two rrca)
         ; is the P/V (signed overflow) flag -- both match 6502 ADC/SBC semantics
         ; directly. Decimal-mode ADC/SBC is rare and stays a call-out to op_bcd_math.
@@ -1385,7 +1392,7 @@ uint16_t hextoui( char * p )
     return result;
 }
 
-static uint16_t read_hex( p, len ) char * p; uint8_t len;
+static uint16_t read_hex( char * p, uint8_t len )
 {
     uint16_t result;
     char save;
