@@ -6,7 +6,7 @@ is a findings/backlog document for a future, separate fix-implementation pass.
 ## Follow-up implementation status
 
 The audit itself remains a read-only snapshot. Follow-up work on this branch has
-implemented the first six repair batches:
+implemented the first seven repair batches:
 
 - Batch 1 fixed **SS-C1**, **SH-F1**, **CT-F1**, **SJ-F1**, and **EC-F1**.
 - Batch 2 fixed add/sub subnormal handling, nearest-even rounding, conversion
@@ -36,6 +36,19 @@ implemented the first six repair batches:
   domain/range exits report `EDOM`/`ERANGE` without misclassifying NaN
   propagation. The compact trig implementation deliberately returns NaN for
   finite `|x| >= 32768`; a code-heavy Payne-Hanek reducer was not added.
+- Batch 7 fixed **CT-F14**, **MT-F16**, **EC-F11**, **CI-12**, **XM-O5**,
+  **SM-F8**, and **SS-O4**, and accepted the non-regressing subset of
+  **SM-F1**. Shared tmpfile constants, hyperbolic scratch, calendar helpers,
+  pushback/file state, multibyte counters, and the divmod cache now live in
+  their owning or shared strip blocks. Five fastcall entries use zero-byte
+  `EQU` dependencies to share following cores without retaining unreachable
+  general-call prologues, and `__q2u` is a true `D16U` alias. The `__chf`,
+  `__rcf`, `__ssf`, and `__msf` reorderings remain rejected: canonical
+  whole-program profiling showed that accepting the latter two with `__scf`
+  shifted a hot heap-backed instruction stream across 256-byte boundaries,
+  adding 446,945 nopeep cycles despite shrinking the COM. Complete divmod-cache
+  removal also remains rejected because its measured cycle cost outweighed its
+  size saving.
 
 **PF-F11** remains deferred because defensive NULL `%s` handling would add cost
 to every valid `%s` call. Subnormal multiply/divide/square-root work from

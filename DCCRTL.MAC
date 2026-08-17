@@ -789,6 +789,8 @@ getc_bad:
         ; _read owns EOF/error classification.
         ld      hl,0ffffh       ; EOF
         ret
+___getc_ch:
+        db      0
 
         public  __ugvalid
 __ugvalid:
@@ -807,8 +809,6 @@ __ugclear:
 
         public  __ugchars
 __ugchars:
-___getc_ch:
-        db      0
 __ugc:  ds      UGC_MAX         ; pushed-back characters
 
         public  __ugget
@@ -1316,33 +1316,24 @@ __slf:
         dec     hl
         ret
 
+        public  __scpy
+__scpy:
+        ; char *strcpy(char *dst, const char *src)
+        ; IX-free entry. Preserve the caller-cleanup argument layout, then
+        ; fall through the zero-byte stripper dependency into __scf.
+        pop     bc              ; return address
+        pop     de              ; DE = dst
+        ex      (sp),hl         ; HL = src
+        push    de              ; restore dst
+        push    bc              ; restore return address
+DPSCF   equ     __scf           ; dccrtlstrip dependency; emits no bytes
+
         public  __scf
 __scf:
         ; fastcall char *strcpy(char *dst, const char *src)
         ; Entry: DE=dst, HL=src directly (matching __cmpf's DE/HL
         ; convention). Named __scf, not __scpyf: __scpyf would 6-char-
         ; truncate to __SCPY, colliding with __scpy itself.
-        ld      b,d
-        ld      c,e             ; BC = dst (return value) - scpy_core reads
-                                 ; the copy loop's dst progress from DE, but
-                                 ; the return value comes from BC, which the
-                                 ; general __scpy entry below also sets up
-                                 ; before falling into scpy_core. Missing
-                                 ; this the first time round produced a
-                                 ; correct copy but a garbage return value,
-                                 ; caught by a strcpy() == dst comparison
-                                 ; test rather than the copied content.
-        jr      scpy_core
-
-        public  __scpy
-__scpy:
-        ; char *strcpy(char *dst, const char *src)
-        ; IX-free entry. Preserve the caller-cleanup argument layout.
-        pop     bc              ; return address
-        pop     de              ; DE = dst
-        ex      (sp),hl         ; HL = src
-        push    de              ; restore dst
-        push    bc              ; restore return address
         ld      b,d
         ld      c,e             ; BC = original dst
 scpy_core:
@@ -1388,17 +1379,6 @@ sp3:
         ld      hl,0
         ret
 
-        public  __icf
-__icf:
-        ; fastcall int stricmp(const char *s1, const char *s2)
-        ; Entry: DE=s1, HL=s2 directly (matching __cmpf's DE/HL
-        ; convention). Named __icf, not __sicmpf: M80 truncates public
-        ; symbols to 6 significant characters, and __sicmpf truncates to
-        ; __SICMP, which doesn't collide with anything here, but __icf
-        ; keeps the same short "letter+f" fastcall style as __chf/__rcf
-        ; rather than inventing a new pattern for one function.
-        jr      sicm_core
-
         public  __sicm
 __sicm:
         ; int stricmp(const char *s1, const char *s2)
@@ -1411,6 +1391,17 @@ __sicm:
         ex      (sp),hl         ; HL = s2
         push    de              ; restore s1
         push    bc              ; restore return address
+DPSIF   equ     __icf           ; dccrtlstrip dependency; emits no bytes
+
+        public  __icf
+__icf:
+        ; fastcall int stricmp(const char *s1, const char *s2)
+        ; Entry: DE=s1, HL=s2 directly (matching __cmpf's DE/HL
+        ; convention). Named __icf, not __sicmpf: M80 truncates public
+        ; symbols to 6 significant characters, and __sicmpf truncates to
+        ; __SICMP, which doesn't collide with anything here, but __icf
+        ; keeps the same short "letter+f" fastcall style as __chf/__rcf
+        ; rather than inventing a new pattern for one function.
 sicm_core:
         ld      a,(de)
         cp      'A'
@@ -1705,14 +1696,6 @@ sncmp_equal:
         ld      hl,0
         ret
 
-        public  __mhf
-__mhf:
-        ; fastcall void *memchr(const void *s, int c, size_t n)
-        ; Entry: HL=s, E=c (low byte), BC=n directly (matching __msf's
-        ; HL/E/BC convention). Named __mhf, not __mchrf: __mchrf would
-        ; 6-char-truncate to __MCHR, colliding with __mchr itself.
-        jr      mchr_core
-
         public  __mchr
 __mchr:
         ; void *memchr(const void *s, int c, size_t n)
@@ -1725,6 +1708,14 @@ __mchr:
         push    de              ; restore c
         push    hl              ; restore s
         push    af              ; restore return address
+DPMHF   equ     __mhf           ; dccrtlstrip dependency; emits no bytes
+
+        public  __mhf
+__mhf:
+        ; fastcall void *memchr(const void *s, int c, size_t n)
+        ; Entry: HL=s, E=c (low byte), BC=n directly (matching __msf's
+        ; HL/E/BC convention). Named __mhf, not __mchrf: __mchrf would
+        ; 6-char-truncate to __MCHR, colliding with __mchr itself.
 mchr_core:
         ld      a,b
         or      c
@@ -2066,15 +2057,6 @@ nc1dn:
         pop     hl
         ret
 
-        public  __cmpf
-__cmpf:
-        ; fastcall int memcmp(const void *s1, const void *s2, size_t n)
-        ; Entry: DE = s1, HL = s2, BC = n (already the hot loop's own
-        ; layout below) - skips both the caller's push-3/call/pop-3 general
-        ; convention and this routine's own stack-reconstruction marshaling
-        ; entirely.  See dcc_ast_gen_expr.c's memcmp call-site codegen.
-        jr      mcmp_core
-
         public  __mcmp
 __mcmp:
         ; int memcmp(const void *s1, const void *s2, size_t n)
@@ -2098,6 +2080,15 @@ __mcmp:
         ex      de,hl           ; HL = s2
         pop     bc              ; BC = n
         pop     de              ; DE = s1
+DPCMF   equ     __cmpf          ; dccrtlstrip dependency; emits no bytes
+
+        public  __cmpf
+__cmpf:
+        ; fastcall int memcmp(const void *s1, const void *s2, size_t n)
+        ; Entry: DE = s1, HL = s2, BC = n (already the hot loop's own
+        ; layout below) - skips both the caller's push-3/call/pop-3 general
+        ; convention and this routine's own stack-reconstruction marshaling
+        ; entirely.  See dcc_ast_gen_expr.c's memcmp call-site codegen.
 mcmp_core:
         ld      a,b
         or      c
@@ -2270,17 +2261,6 @@ snc_term:
         pop     hl
         ret
 
-        public  __mcf
-__mcf:
-        ; fastcall void *memcpy(void *dst, const void *src, size_t n)
-        ; Entry: DE=dst, HL=src, BC=n directly (matching __cmpf's DE/HL/BC
-        ; convention). Named __mcf, not __mcpyf: M80 truncates public
-        ; symbols to 6 significant characters, and __mcpyf truncates to
-        ; __MCPY, colliding with __mcpy itself (the same mistake as
-        ; __msf's first attempt, __msetf).
-        push    de              ; return dst
-        jr      mcpy_core
-
         public  __mcpy
 __mcpy:
         ; void *memcpy(void *dst, const void *src, size_t n)
@@ -2304,6 +2284,16 @@ __mcpy:
         ex      de,hl           ; HL = src
         pop     bc              ; BC = n
         pop     de              ; DE = dst
+DPMCF   equ     __mcf           ; dccrtlstrip dependency; emits no bytes
+
+        public  __mcf
+__mcf:
+        ; fastcall void *memcpy(void *dst, const void *src, size_t n)
+        ; Entry: DE=dst, HL=src, BC=n directly (matching __cmpf's DE/HL/BC
+        ; convention). Named __mcf, not __mcpyf: M80 truncates public
+        ; symbols to 6 significant characters, and __mcpyf truncates to
+        ; __MCPY, colliding with __mcpy itself (the same mistake as
+        ; __msf's first attempt, __msetf).
         push    de              ; return dst
 mcpy_core:
         ld      a,b
@@ -2431,11 +2421,6 @@ mu2:
         ret
 
         public  __udivmod
-        public  __divu
-        public  __modu
-        public  __divs
-        public  __mods
-        public  __sdivmod
 __udivmod:
         ; Unsigned 16-bit divide, hybrid bounded. Also directly callable as
         ; a fused divmod: both results are always computed together, so a
@@ -2493,9 +2478,11 @@ dms_rs_done:
         pop     bc
         ret
 
-; Divide-result cache shared by __divu, __modu, __divs, __mods.
-; Lives in the __udivmod prelude so dccrtlstrip keeps it whenever any of
-; those entry points is referenced, without forcing __mods: to be kept.
+; Divide-result cache shared by __divu, __modu, __divs, __mods.  Its own
+; public block keeps fused-only __udivmod callers from retaining these bytes;
+; references to the private cache labels retain this block for cached entries.
+        public  __dmcx
+__dmcx:
 __dmval:
         db      0
 __dmc_lhs:
@@ -2507,6 +2494,7 @@ __dmquot:
 __dmrem:
         dw      0
 
+        public  __divu
 __divu:
         ; Faster cache-aware unsigned divide.
         ; Input:  HL = dividend, DE = divisor
@@ -2557,6 +2545,7 @@ du_miss_save:
         ld      hl,(__dmquot)
         ret
 
+        public  __modu
 __modu:
         ; Cache-aware unsigned modulo.  Same cache as __divu, so x%n then x/n
         ; (or x/n then x%n) with identical operands calls __udivmod once.
@@ -2613,6 +2602,7 @@ dm_miss:
 ; these without any spill/reload - if that ever changes, update this
 ; comment and the pass's
 ; whitelist of safe-to-cross call targets together.
+        public  __divs
 __divs:
         ; Fast path: if both operands are non-negative, signed division is
         ; identical to unsigned division.  This avoids the sign-wrapper
@@ -2664,6 +2654,7 @@ __ds_done:
         pop     bc
         ret
 
+        public  __mods
 __mods:
         ; Fast path: if both operands are non-negative, signed modulo is
         ; identical to unsigned modulo.  Jump directly so cache pairing with
@@ -2721,6 +2712,7 @@ __ms_done:
 ; Input:  HL = signed dividend, DE = signed divisor
 ; Output: HL = quotient (truncates toward zero), DE = remainder (dividend's
 ;         sign) - both computed together, matching __udivmod's own contract.
+        public  __sdivmod
 __sdivmod:
         ; Fast path: both non-negative -> identical to unsigned divmod.
         ld      a,h
@@ -3433,6 +3425,7 @@ Q1PNL:
 ; Fixed 16-iteration unsigned divider for constant divisors.
 ; dccpeep rewrites ld de,<const> / call __div*/__mod* to these short
 ; public names.  Names are 5 chars and unique under short external matching.
+__q2u:
 D16U:
         ; Input:  HL = dividend, DE = divisor
         ; Output: HL = quotient, DE = remainder
@@ -3485,10 +3478,6 @@ D16U3:
 D16UD:
         pop     af
         pop     bc
-        ret
-
-__q2u:
-        call    D16U             ; fixed divider quotient
         ret
 
 __r2u:
@@ -11625,14 +11614,6 @@ _fclose:
 ; (T000.TMP..T999.TMP). tmpfile registers its file for removal on fclose()
 ; or normal program termination.
 ;
-; Constants (kept in sync with stdio.h):
-;   L_tmpnam = 13  -- minimum buffer size for tmpnam (room for "T999.TMP\0")
-;   TMP_MAX  = 1000 -- distinct names available per session
-;   NTMP     = 4   -- simultaneous tmpfile handles
-;   TN_NSZ   = 16  -- bytes per name slot (power-of-2; >= 9 for "T000.TMP\0")
-NTMP     equ    4
-TN_NSZ   equ    16
-
         public  _tmpnam
 ; char *tmpnam(char *s)
 ; Returns a pointer to a generated filename not currently matching any
@@ -11774,6 +11755,12 @@ __tn_left:      dw      0
 __tn_buf:       ds      9               ; internal buffer for tmpnam(NULL)
 
         public  _tmpfile
+; Private tmpfile constants (kept in sync with stdio.h):
+;   NTMP   = 4  -- simultaneous tmpfile handles
+;   TN_NSZ = 16 -- bytes per name slot (power-of-2; >= 9 for "T000.TMP\0")
+; Keep these in _tmpfile's strip block: no other current block consumes them.
+NTMP     equ    4
+TN_NSZ   equ    16
 ; FILE *tmpfile(void)
 ; Creates a temporary binary file (w+ mode) and returns its FILE*.
 ; The file is removed by fclose() or at normal program termination.
@@ -19071,6 +19058,8 @@ tanh_calculate:
         pop     bc
         ret
 
+        public __hypd
+__hypd:
 ; Shared private scratch for the non-reentrant floating-point runtime wrappers.
 __hyp_xlo:      dw      0
 __hyp_xhi:      dw      0
@@ -21834,8 +21823,6 @@ sys_fail:
         public  _wctomb
         public  _mbstowcs
         public  _wcstombs
-__mbs_n:        dw      0               ; scratch: remaining n for mbstowcs
-__wcs_n:        dw      0               ; scratch: remaining n for wcstombs
 
 _mblen:
 ; int mblen(const char *s, size_t n) -- s@IX+4, n@IX+6
@@ -21973,6 +21960,8 @@ mbs_ret:
         pop     ix
         ret
 
+__mbs_n:        dw      0               ; scratch: remaining n for mbstowcs
+
 _wcstombs:
 ; size_t wcstombs(char *s, const wchar_t *pwcs, size_t n) -- s@IX+4, pwcs@IX+6, n@IX+8
         push    ix
@@ -22012,6 +22001,8 @@ wcs_nexhausted:
 wcs_ret:
         pop     ix
         ret
+
+__wcs_n:        dw      0               ; scratch: remaining n for wcstombs
 
         public  _exec
         public  _execv
@@ -22668,55 +22659,6 @@ _difftime:
 ; not chased further right now (see peep_pass_once.c's KNOWN BUG comment for why: same "wait for the
 ; feature branch, don't create merge friction" reasoning applies to touching shared codegen right now).
 ; Regenerating this block from calendar.c will reintroduce both patterns; reapply this same trim.
-
-
-
-; static function cal_is_leap
-CDZ0001:
-        ld hl,2
-        add hl,sp
-        ld a,(hl)
-        inc hl
-        ld h,(hl)
-        ld l,a
-        ld e,3
-        call __r1p
-        ld a,h ; peep: cmp0_or_hl
-        or l
-        jr z,CDL15 ; peep: jp_to_jr
-        ld hl,0
-        ret ; peep: jp_to_plain_ret
-CDL15:
-        ld hl,2
-        add hl,sp
-        ld a,(hl)
-        inc hl
-        ld h,(hl)
-        ld l,a
-        ld e,100
-        call __r1s ; peep: const_divmod_helper
-        ld a,h ; peep: cmp0_or_hl
-        or l
-        jr z,CDL18 ; peep: jp_to_jr
-        ld hl,1
-        ret ; peep: jp_to_plain_ret
-CDL18:
-        ld hl,2
-        add hl,sp
-        ld a,(hl)
-        inc hl
-        ld h,(hl)
-        ld l,a
-        ld de,400
-        call __r2s ; peep: const_divmod_helper
-        ld a,h ; peep: cmp0_or_hl
-        or l
-        ld hl,0 ; peep: bool_from_cmp
-        jr nz,CDL14 ; peep: jp_to_jr
-        inc l
-CDL14:
-        ret
-
         public _gmtime
 _gmtime:
         push ix
@@ -23389,6 +23331,58 @@ CDL240:
         pop ix
         ret
 
+        public __cal_core
+__cal_core:
+; Shared calendar conversion helpers and data. Keeping these in their own
+; strip block lets gmtime/localtime reuse mktime's generated helpers without
+; retaining mktime itself, while asctime's formatting tables remain separate.
+
+; static function cal_is_leap
+CDZ0001:
+        ld hl,2
+        add hl,sp
+        ld a,(hl)
+        inc hl
+        ld h,(hl)
+        ld l,a
+        ld e,3
+        call __r1p
+        ld a,h ; peep: cmp0_or_hl
+        or l
+        jr z,CDL15 ; peep: jp_to_jr
+        ld hl,0
+        ret ; peep: jp_to_plain_ret
+CDL15:
+        ld hl,2
+        add hl,sp
+        ld a,(hl)
+        inc hl
+        ld h,(hl)
+        ld l,a
+        ld e,100
+        call __r1s ; peep: const_divmod_helper
+        ld a,h ; peep: cmp0_or_hl
+        or l
+        jr z,CDL18 ; peep: jp_to_jr
+        ld hl,1
+        ret ; peep: jp_to_plain_ret
+CDL18:
+        ld hl,2
+        add hl,sp
+        ld a,(hl)
+        inc hl
+        ld h,(hl)
+        ld l,a
+        ld de,400
+        call __r2s ; peep: const_divmod_helper
+        ld a,h ; peep: cmp0_or_hl
+        or l
+        ld hl,0 ; peep: bool_from_cmp
+        jr nz,CDL14 ; peep: jp_to_jr
+        inc l
+CDL14:
+        ret
+
 ; static function cal_days_in_month
 CDZ0002:
         push ix
@@ -23723,6 +23717,25 @@ CDL139:
         pop ix
         ret
 
+; Calendar-only initialized and scratch data.
+CDZ0003:
+        dw 31
+        dw 28
+        dw 31
+        dw 30
+        dw 31
+        dw 30
+        dw 31
+        dw 31
+        dw 30
+        dw 31
+        dw 30
+        dw 31
+CDZ0005:
+        ds 18
+
+        public __asc_data
+__asc_data:
 ; string literals
 CDS0:
         db 83,117,110,0
@@ -23765,20 +23778,7 @@ CDS18:
 CDS19:
         db 37,115,32,37,115,32,37,50,100,32,37,48,50,100,58,37,48,50,100,58,37,48,50,100,32,37,100,10,0
 
-; initialized globals
-CDZ0003:
-        dw 31
-        dw 28
-        dw 31
-        dw 30
-        dw 31
-        dw 30
-        dw 31
-        dw 31
-        dw 30
-        dw 31
-        dw 30
-        dw 31
+; asctime-only initialized globals
 CDZ0009:
         dw CDS0
         dw CDS1
@@ -23801,9 +23801,7 @@ CDZ0008:
         dw CDS17
         dw CDS18
 
-; module uninitialized globals
-CDZ0005:
-        ds 18
+; asctime-only uninitialized global
 CDZ0010:
         ds 26
 

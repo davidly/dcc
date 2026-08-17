@@ -819,6 +819,36 @@ static void add_refs_from_line(const char *line)
         return;
     }
 
+    if (!strcmp(op, "equ")) {
+        p = skipws(p);
+        if (parse_ident_token(&p, sym))
+            add_root(sym);
+        return;
+    }
+
+    /*
+     * M80 also accepts the traditional no-colon form "label EQU symbol".
+     * EQU emits no bytes, so runtime blocks use it to express a zero-cost
+     * dependency when execution deliberately falls through a PUBLIC boundary.
+     */
+    {
+        const char *q;
+        char directive[64];
+        int j;
+
+        q = p;
+        if (parse_ident_token(&q, directive)) {
+            for (j = 0; directive[j]; ++j)
+                directive[j] = (char)tolower((unsigned char)directive[j]);
+            if (!strcmp(directive, "equ")) {
+                q = skipws(q);
+                if (parse_ident_token(&q, sym))
+                    add_root(sym);
+                return;
+            }
+        }
+    }
+
     if (!strcmp(op, "call") || !strcmp(op, "jp") || !strcmp(op, "jr")) {
         /* jp z,label has condition first. */
         p = skipws(p);
