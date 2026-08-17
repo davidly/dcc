@@ -12,6 +12,7 @@
 
 #ifdef SDCC
     typedef unsigned char uint8_t;
+    #include <conio.h>  /* kbhit(), getch() */
 #endif
 
 /*
