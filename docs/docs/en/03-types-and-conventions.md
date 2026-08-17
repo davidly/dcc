@@ -66,6 +66,26 @@ macros that match the target model:
 The runtime has no 64-bit integer support, so `stdint.h` intentionally stops at
 the 32-bit `long` family.
 
+## Command-line arguments
+
+CP/M supplies one 128-byte command-tail area: a length byte followed by at most
+127 text bytes. DCC treats nonzero bytes through ASCII space as delimiters
+(including spaces and tabs), sets `argv[0]` to an empty string, and always
+writes the required `argv[argc] == NULL` terminator. A valid maximum-length tail
+can therefore contain at most 64 one-byte arguments separated by single
+delimiters.
+
+The 66-entry pointer vector and 128-byte tail copy occupy 260 contiguous
+startup-scratch bytes immediately above the application's synthetic BSS.
+They add no bytes to the loaded `.COM` and are outside the range startup must
+zero; `__hstart` includes them, and the memory check keeps the stack reserve
+above the complete scratch range.
+
+The CP/M startup ABI has no error-return channel. If a malformed environment
+supplies a length byte from 128 through 255, DCC deterministically truncates the
+tail to the first 127 bytes before parsing it. Quoting and escape processing are
+not added by the runtime parser.
+
 ## Integer limits (`limits.h`)
 
 See [Integer limits](standard-lib/04-limits.md) for the generated `limits.h`
@@ -252,4 +272,3 @@ int a[n][3];
 memset(a, 0, sizeof a);        /* run-time value: n * 3 * sizeof(int) */
 sizeof a[0];                  /* compile-time row size: 3 * sizeof(int) */
 ```
-

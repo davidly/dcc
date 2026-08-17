@@ -298,6 +298,29 @@ byte result comes back in the low byte of the returned `int`. Calls whose useful
 result is an FCB/DMA region (directory and file operations) return their data
 through the memory `dearg` points at, not in the return value.
 
+The BIOS jump table is also available when an application genuinely needs
+machine-specific services:
+
+```c
+int bios(int fn, int arg);                    /* byte result from A */
+int bioshl(int fn, int arg);                  /* full result from HL */
+int biosreg(int fn, int bcarg, int dearg);    /* independent BC/DE, result HL */
+```
+
+`bios()` and `bioshl()` are the source-compatible convenience forms: `arg` is
+copied into `BC` and `DE`, and its low byte is therefore also in `C`. That
+covers the ordinary no-argument, character-in-`C`, and one-word-in-`BC` CP/M
+2.2 calls. Use `biosreg()` only when the BIOS contract needs two different
+register values, notably `SECTRAN` (logical sector in `BC`, translation-table
+address in `DE`) or CP/M 3 `SELDSK` (drive in `C`, login flag in `E`).
+`biosreg()` returns the full `HL` result used by those calls.
+
+BIOS disk services are hardware- and emulator-specific. In particular, ntvcm
+provides the standard 17-entry jump table but implements console functions
+only; its disk BIOS entries diagnose an unhandled call. Prefer BDOS file APIs
+for portable CP/M programs, and use BIOS disk calls only where the target BIOS
+is known.
+
 ### Non-blocking console input
 
 The standard input calls (`getchar`, `getc`, `fgets`, `scanf`) are blocking

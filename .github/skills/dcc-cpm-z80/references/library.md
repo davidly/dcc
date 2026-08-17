@@ -78,6 +78,13 @@ Standard C89 `malloc`/`free`/`qsort`/`bsearch`/`atoi`/`strtol`/… are present;
 - `bdos(fn, dearg)` — calls the CP/M BDOS directly (`fn`→C, `dearg`→DE; byte
   result in the low byte). FCB/DMA-style calls return data through the memory
   `dearg` points at, not the return value. See `tbdos.c`/`crc.c`.
+- `bios(fn, arg)` / `bioshl(fn, arg)` — call the CP/M BIOS jump table with
+  `arg` copied into BC and DE (and its low byte in C). `bios` returns A
+  zero-extended; `bioshl` returns the full HL result.
+- `biosreg(fn, bcarg, dearg)` — calls the BIOS with independent BC and DE
+  values and returns HL. Use this compatible extension for multi-register
+  forms such as SECTRAN and CP/M 3 SELDSK; the two-argument wrappers are
+  unchanged.
 - `atof` and `strtod` return `float` (single precision), not `double`.
 
 The full C89 stdlib surface is present. CP/M-specific limits still apply:

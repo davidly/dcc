@@ -1596,6 +1596,7 @@ int main(int argc, char **argv)
     opt_stack_check = 0;
     opt_no_narrow = 0;
     opt_debug = 0;
+    g_main_has_args = 0;
     max_function_local_bytes = 0;
 
     add_define("_DCC_", "1");

@@ -32,6 +32,21 @@ behaviours that follow from the 16-bit `int` / 32-bit `long` model.
 - `%` requires integer operands. For a floating-point remainder use
   [`fmodf`](standard-lib/08-math.md); `floatx % floaty` is rejected at compile time.
 
+!!! note "Undefined integer division cases"
+    C leaves `/` and `%` undefined when the divisor is zero, and also leaves
+    `LONG_MIN / -1L` undefined because the mathematical quotient is not
+    representable. Portable programs must prevent these cases.
+
+    For deterministic runtime diagnostics, DCC's 16- and 32-bit signed and
+    unsigned divide/remainder helpers currently use an all-ones quotient and
+    the unchanged dividend as the remainder for a zero divisor. The specialized
+    fused `(unsigned16 * unsigned16) % unsigned16` helper has a 16-bit result
+    ABI; for a zero modulus its fused dividend sentinel is therefore
+    `low16(a * b)`, not either input operand or the full 32-bit product.
+    `LONG_MIN / -1L` follows two's-complement wraparound (`LONG_MIN`) and
+    `LONG_MIN % -1L` yields zero. These fallbacks are runtime behavior, not a
+    portable C guarantee.
+
 ## Mixed-type arithmetic conversions
 
 Mixed-type expressions follow the usual arithmetic conversions: **`float`

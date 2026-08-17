@@ -166,6 +166,19 @@ class DccRtlStripBlockTests(unittest.TestCase):
             self.assertIn(fast + ":", rtl)
             self.assertIn(general + ":", rtl)
 
+    def test_biosreg_is_independent_of_convenience_wrappers(self):
+        rtl = self.strip_roots("__biosf", "__bhf")
+        self.assertIn("__bios_dispatch:", rtl)
+        self.assertNotIn("_biosreg:", rtl)
+        self.assertNotIn("__biosreg_dispatch:", rtl)
+
+        rtl = self.strip_root("_biosreg")
+        self.assertIn("_biosreg:", rtl)
+        self.assertIn("__biosreg_dispatch:", rtl)
+        self.assertNotIn("__bios_dispatch:", rtl)
+        self.assertNotIn("__biosf:", rtl)
+        self.assertNotIn("__bhf:", rtl)
+
     def test_fused_divmod_excludes_cache_but_cached_entries_keep_it(self):
         rtl = self.strip_root("__udivmod")
         self.assertIn("__udivmod:", rtl)

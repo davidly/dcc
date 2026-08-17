@@ -6,7 +6,7 @@ is a findings/backlog document for a future, separate fix-implementation pass.
 ## Follow-up implementation status
 
 The audit itself remains a read-only snapshot. Follow-up work on this branch has
-implemented the first eight repair batches:
+implemented the first nine repair batches:
 
 - Batch 1 fixed **SS-C1**, **SH-F1**, **CT-F1**, **SJ-F1**, and **EC-F1**.
 - Batch 2 fixed add/sub subnormal handling, nearest-even rounding, conversion
@@ -103,6 +103,16 @@ implemented the first eight repair batches:
     COM bytes. The unchanged-app-MAC pint/cobint results also confirm that the
     linked runtime improvement, not application-specific selection, supplies
     their recovery.
+- Batch 9 fixed **CI-1**, **CI-6**, **CI-8**, and **CI-9**, supplied the
+  compatible `biosreg(fn,bcarg,dearg)` extension for **CI-7**, accepted
+  **SM-F2** and **LA-F1**, and documented **LA-F9**. Startup now bounds the
+  complete 127-byte CP/M command tail, rejects wrapped startup scratch before
+  heap-limit acceptance, and `_setvbuf` and `_strerror` validate their full
+  16-bit inputs. The ordinary 16/32-bit signed/unsigned divide helpers use the
+  same deterministic zero-divisor pair; specialized fused `__m1mu` documents
+  its 16-bit `low16(a*b)` dividend sentinel.
+  `bios()`/`bioshl()` retain their existing ABI, and `LONG_MIN/-1` remains
+  documented undefined C behavior with the runtime's two's-complement result.
 
 **PF-F11** remains deferred because defensive NULL `%s` handling would add cost
 to every valid `%s` call. Subnormal multiply/divide/square-root work from
@@ -320,15 +330,13 @@ constants is not treated as a defect; no routine here touches IY.
 
 ### Correctness
 
-- **CI-1 — `argv` table overflow / missing terminator capacity.**
-  `DCCRTL.MAC:187-271` (`__build_argv`, `argv`). Confidence: high. `argv` is
-  sized for only 17 pointers (`argv[0]`..`argv[16]`). At 16 tail arguments,
-  `argv[17]` (the required NULL terminator) overlaps `__argbuf` and isn't
-  NULL; at 17 arguments the write lands *at* `__argbuf`, corrupting the first
-  argument string. A 127-byte tail can contain up to 64 one-character args.
-  **Fix direction:** size for the true maximum (64 tail args + argv[0] + NULL
-  = 66 pointers) and explicitly write `argv[argc]=NULL`, or enforce/document
-  a safe lower limit.
+- **CI-1 — fixed in Batch 9.** `argv` now reserves 66 16-bit entries (64
+  maximum tail arguments, `argv[0]`, and NULL), and `__build_argv` explicitly
+  writes the terminator for empty through maximum-capacity tails. Length bytes
+  above CP/M's valid 127-byte maximum are deterministically clamped to 127.
+  Startup rejects unsigned `__hstart < __bsse` before heap-limit acceptance,
+  so the compiler's `__bsse+260` scratch expression cannot wrap to a falsely
+  acceptable low heap start.
 - **CI-2 — A second successful `ungetc` destroys the first pending byte.**
   `DCCRTL.MAC:807-846` (`_ungetc`). Confidence: high. `_ungetc` never checks
   `__ugv[fd]` before overwriting `__ugc[fd]`; two successive successful
@@ -358,28 +366,20 @@ constants is not treated as a defect; no routine here touches IY.
   centralize pushback consumption in one shared stream-read helper used by
   every read entry point. *(Independently confirmed/refined from the
   ctype/stdio section — see CT-F3.)*
-- **CI-6 — `_setvbuf` validates only the low byte of `mode`.**
-  `DCCRTL.MAC:564-588`. Confidence: high. Only `(ix+8)` is checked, so
-  `0x0100`/`0x0101`/`0x0102` are wrongly accepted as `_IOFBF`/`_IOLBF`/`_IONBF`
-  instead of `EINVAL`. **Fix direction:** require the high byte `(ix+9)==0`
-  before testing the low byte.
-- **CI-7 — Generic BIOS wrapper can't marshal multi-register BIOS calls.**
-  `DCCRTL.MAC:1061-1067`, `1131-1152` (`__bios_dispatch`). Confidence: high.
-  `SECTRAN`/`SELDSK`-class functions need distinct `BC`/`DE` inputs, but the
-  convenience wrapper copies one argument into both, so e.g.
-  `bioshl(16, table)` puts the table address in `BC` (should hold the sector)
-  instead. **Fix direction:** keep the one-register convenience API, add a
-  `fn,bcarg,dearg` 3-argument wrapper (new public block/header mapping
-  needed).
-- **CI-8 — Command-tail delimiter recognizes only space, not tab.**
-  `DCCRTL.MAC:222-253` (`__build_argv`). Confidence: medium. A tail like
-  `A<TAB>B` becomes one argument containing a literal tab. **Fix direction:**
-  use a shared delimiter test covering space and tab (at minimum).
-- **CI-9 — `_strerror` aliases unrelated 16-bit values via the low byte only.**
-  `DCCRTL.MAC:643-665`. Confidence: high. `strerror(0x0102)` / `strerror(-254)`
-  both return `"No such file"` because their low byte matches `ENOENT`. **Fix
-  direction:** require `H==0` (or compare the full 16-bit value) before
-  matching a known positive errno.
+- **CI-6 — fixed in Batch 9.** `_setvbuf` rejects a nonzero high byte before
+  dispatching the low-byte `_IOFBF`/`_IOLBF`/`_IONBF` modes; rejected aliases
+  return `-1` with `EINVAL`.
+- **CI-7 — fixed compatibly in Batch 9.** Existing two-argument
+  `bios()`/`bioshl()` source, function-pointer, and linked stack ABIs are
+  unchanged. New `biosreg(fn,bcarg,dearg)` independently loads BC and DE,
+  dispatches through the BIOS table, and returns HL for practical SECTRAN and
+  CP/M 3 SELDSK-class forms.
+- **CI-8 — fixed in Batch 9.** Both parser states now recognize space and tab
+  delimiters, including leading and repeated mixtures.
+- **CI-9 — fixed in Batch 9.** `_strerror` rejects any nonzero high byte before
+  entering its compact low-byte dispatch. Supported positive errno values keep
+  their existing messages; wide and negative aliases return the existing
+  deterministic `"Error"` fallback.
 
 ### Optimisation
 
@@ -433,14 +433,10 @@ below.
 
 ### Robustness
 
-- **SM-F2 — Signed divide-by-zero result depends on dividend sign.**
-  `DCCRTL.MAC:2379-2385` (`__udivmod`), `2536-2582` (`__divs`), `2644-2702`
-  (`__sdivmod`). Confidence: medium. `__udivmod` defines divisor-zero as
-  quotient `0xffff`/remainder=dividend; `__divs` negates a negative dividend
-  before hitting that path, then re-negates the sentinel, so `-7/0` and `7/0`
-  produce *different* sentinels even though C leaves this undefined. **Fix
-  direction:** detect `DE==0` before sign normalization and route straight to
-  `__divu`/`__udivmod` for a single, consistent sentinel.
+- **SM-F2 — accepted in Batch 9.** Signed 16-bit standalone and fused paths
+  detect zero before negative-dividend normalization, preserving the same
+  `0xffff` quotient and original-dividend remainder used by unsigned helpers.
+  C still leaves division by zero undefined.
 
 ### Optimisation
 
@@ -871,31 +867,16 @@ throughout.
 
 ### Robustness
 
-- **LA-F1 — Division/modulo-by-zero policy is internally inconsistent
-  and depends on control flow, not just on the (undefined) zero divisor.**
-  `ludm_dvs16`/`ldqr_byte` (`:8887-9055`). Confidence: high. There is no
-  low-word zero-divisor check before the leading-zero-skip proof (which
-  assumes a nonzero divisor). Traced: `1UL/0UL` (bytes `00 00 00 01`) skips
-  the three leading zero quotient bytes, then the final byte's trial
-  subtractions all succeed against a zero divisor, setting every quotient
-  bit and yielding quotient `0x000000ff`/remainder `1` — while `0UL/0UL`
-  yields quotient `0` (all bytes skipped) and `0x01000001UL/0UL` yields
-  `0xffffffff`: three different sentinels depending on dividend shape, and
-  none matching the explicit, documented 16-bit convention
-  (`quotient=0xffff`, remainder=dividend) used by `__udivmod`. C leaves
-  div-by-zero undefined, so this is not a standards violation, but it's an
-  inconsistency worth a single deliberate policy. **Fix direction:** test
-  the full divisor before entering `ludm_dvs16` and pick one deterministic
-  policy (ideally matching the 16-bit helper) or trap; apply consistently to
-  the signed wrappers and `__m1mu`'s modulus-zero case too.
-- **LA-F9 — `LONG_MIN / -1` is unchecked (standards-undefined, not a
-  defect).** `__lds`/`__lms` (`:9083-9197`). Confidence: high. Ordinary
-  signed cases correctly truncate toward zero with dividend-signed
-  remainder; `LONG_MIN/-1` returns `LONG_MIN` unchanged (unrepresentable
-  quotient) and `LONG_MIN % -1` returns 0 — C89/C99 impose no requirement
-  here, so this is documented as a note rather than a bug. **Suggested:**
-  document the two's-complement wrap policy explicitly, or add detection if
-  deterministic trap/saturate behavior is ever desired.
+- **LA-F1 — accepted in Batch 9.** The long core checks the complete divisor
+  before its leading-byte skip and returns quotient `0xffffffff` with the
+  original dividend remainder. Signed, unsigned, standalone, and paired
+  divide/remainder paths now expose the same pair. Specialized fused `__m1mu`
+  instead defines its modulus-zero dividend sentinel at its 16-bit result
+  width as `low16(a*b)`, not either input operand or the full 32-bit product.
+- **LA-F9 — documented in Batch 9; no executable special case.**
+  `LONG_MIN/-1` remains undefined C behavior. DCC's runtime follows
+  two's-complement wrap to `LONG_MIN` with remainder zero rather than adding a
+  trap or saturation branch.
 
 ### Optimisation
 
@@ -1543,6 +1524,64 @@ coverage (404 public labels reconciled, zero unexpected), IY safety, stripper
 EQU/block tests, and an assembled 1,451-`JR` range audit. The new remainder
 aliases survived stripping and linked in both optimized and unoptimized
 `tldmfus`; stack/register ABI checks passed throughout.
+
+### Batch 9 integration results
+
+Integrated from exact base `3508d133ebb569eb99c26a039db244ed45889b0b`
+in the detached `build/b9-integrated` worktree. The three submitted artifact
+sets and their hashes/manifests were verified before semantic merging.
+
+- **CI-1/CI-8 completed with bounded, non-overlapping storage.** A 127-byte
+  CP/M tail containing one-character arguments separated by tabs has
+  `2*n-1 <= 127`, hence at most 64 tail arguments. With 16-bit pointers the
+  vector is exactly `(argv[0] + 64 arguments + NULL) * 2 = 132` bytes, and the
+  copied tail is `127 + NUL = 128` bytes. The compiler reserves the contiguous
+  half-open scratch range `[__bsse,__hstart)` with `__hstart=__bsse+260`;
+  vector `[__bsse,__bsse+132)` and tail copy
+  `[__bsse+132,__hstart)` therefore cannot overlap each other, C BSS
+  `[__bssb,__bsse)`, the heap starting at `__hstart`, or the stack reserve
+  validated above it. Before accepting any heap limit, startup now rejects
+  unsigned `__hstart < __bsse`; the generated near-64K BSS regression proves
+  rejection at `__bsse=0xFEFC`, while boundary checks prove `0xFEFB` remains
+  valid. `targlim` checks the normal addresses, 16-bit pointer width,
+  program-name slot, empty/repeated terminators, exact 63/64 tab-separated
+  capacities, and deterministic 128/255 length clamping.
+- **CI-6/CI-9 completed.** `_setvbuf` rejects nonzero mode high bytes with
+  `EINVAL`; `_strerror` rejects wide and negative low-byte aliases. Focused
+  `tsvbmod` and `terrwid` pass in peep/nopeep modes.
+- **CI-7 completed without ABI replacement.** `bios()` and `bioshl()` retain
+  their two-argument source, stack, fastcall, and return conventions.
+  `biosreg(fn,bcarg,dearg)` is a separate ordinary C stack-ABI block that
+  independently restores BC/DE, tail-dispatches through the BIOS table, and
+  returns HL. `tbiosrg` verifies A, C, BC, HL, SELDSK, SECTRAN, direct-call,
+  and function-pointer forms; stripper tests prove `_biosreg` and the
+  convenience wrappers do not retain one another. Existing `tbios` remains
+  byte-identical; the revision-wide startup recovery improves it by four
+  cycles in each mode without changing the BIOS paths.
+- **SM-F2/LA-F1/LA-F9 completed.** The 27-check `tdivzero` test covers every
+  signed/unsigned 16/32-bit standalone and fused zero-divisor path, high-bit
+  operands, `__m1mu`, and `LONG_MIN/-1`. Ordinary zero-divisor paths expose an
+  all-ones quotient and original-dividend remainder; a discriminating
+  `0x8001*3` case fixes `__m1mu`'s specialized sentinel at `low16(a*b)`.
+  `LONG_MIN/-1` remains documented undefined C behavior with DCC's
+  two's-complement wrap and zero remainder; no trap/saturation branch was added.
+- **Cumulative size was recovered rather than baselined away.** Moving the
+  260-byte argv/tail scratch above BSS removes loaded storage and BSS-clear
+  cycles. The wrap check is offset by emitting the absolute BSS byte count,
+  using `__hstart` directly as the fixed heap base, and making the accepted
+  heap-limit path fall through. Full-runtime CSEG moved `82B3h -> 8278h`
+  (-59 bytes) despite all
+  Batch 9 features; the argument-startup probe moved `02D4h -> 024Eh`
+  (-134 exact runtime bytes), `.COM` 1024 -> 896, with +132 cycles. The
+  main(void) strip control remains byte-identical and improves by four cycles.
+  Only the revised new/direct `tdivzero` performance row was regenerated.
+
+Final validation passed the canonical build, focused peep/nopeep tests,
+30 Python tests, 31 dccpeep fixtures, strict MkDocs, IY safety, runtime
+coverage (173/173 mapped APIs, 404 public labels, zero unexpected), full
+runtime assembly, and all 1,452 `JR` displacements. Both strict full+extended
+stack and no-stack suites found 405 apps: 395 passed, 10 skipped, zero failed;
+diagnostics, dccpeep, extended tests, and the checked performance run passed.
 
 ### Sub-ranges only spot-checked rather than formally exhausted
 

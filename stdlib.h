@@ -121,6 +121,12 @@ size_t wcstombs(char *s, const wchar_t *pwcs, size_t n);
  *               byte in A; returns HL exactly as the BIOS call left it. A is
  *               not mirrored into L the way BDOS conventionally does, so
  *               bioshl() on a byte-returning function is not meaningful.
+ *   biosreg()   calls the BIOS with independent 16-bit BC and DE arguments
+ *               and returns HL exactly.  Use it for multi-register forms such
+ *               as sectran (sector in BC, translation-table address in DE)
+ *               and CP/M 3 seldsk (drive in C, login flag in E).  The existing
+ *               bios()/bioshl() two-argument ABI remains the one-register
+ *               convenience form.
  *   inp()/outp() do direct Z80 8-bit port I/O.  inp() runs IN A,(port) and
  *               returns the byte zero-extended to int (0..255); outp() runs
  *               OUT (port),A.  Only the low 8 bits of port are significant. */
@@ -132,6 +138,8 @@ int  bdoshl( int fn, int dearg );
 int  bios( int fn, int dearg );
 /** Call the CP/M BIOS jump table directly, returning the full HL result. */
 int  bioshl( int fn, int dearg );
+/** Call the CP/M BIOS with independent BC and DE arguments, returning HL. */
+int  biosreg( int fn, int bcarg, int dearg );
 /** Read an 8-bit Z80 I/O port. */
 int  inp( unsigned port );
 /** Write an 8-bit Z80 I/O port. */

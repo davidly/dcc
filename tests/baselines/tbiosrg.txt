@@ -1,0 +1,9 @@
+tbiosrg start
+status A/no-arg: yes
+C byte arg: yes
+BC word arg: yes
+SELDSK convenience: yes
+SELDSK separate BC/DE: yes
+SECTRAN direct: yes
+SECTRAN fnptr: yes
+tbiosrg 7/7

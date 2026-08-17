@@ -8,6 +8,7 @@
         extrn   __hstart   ; heap start
         extrn   __bssb     ; bss begin
         extrn   __bsse     ; bss end
+        extrn   __bssn     ; bss byte count
         extrn   __stack_size ; bytes reserved above heap for C stack
         public  __brk
         public  __hlimit   ; heap limit
@@ -45,8 +46,10 @@ start:
         ; require it to be both (a) non-underflowing (SP >= __stack_size) and
         ; (b) >= __hstart.
         ;
-        ; Done with two runtime 16-bit subtractions, each guarded by its own
-        ; borrow test, rather than the old compile-time `ld hl,__hstart+
+        ; Done with three runtime 16-bit subtractions, each guarded by its own
+        ; borrow test.  The first rejects __hstart < __bsse, which means the
+        ; compiler's 260-byte argv scratch addition wrapped.  The other two
+        ; replace the old compile-time `ld hl,__hstart+
         ; __stack_size` immediate: that sum is only 16 bits wide and WRAPS
         ; modulo 65536 whenever __hstart is high (e.g. a large BSS) plus a
         ; large stack reserve - the wrapped-low threshold then passed the
@@ -54,9 +57,8 @@ start:
         ; layout (heap limit below heap start) through.  Neither subtraction
         ; below can be fooled by wraparound because each borrow is tested.
         ;
-        ; The first subtraction already produces __hlimit, so it is stored
-        ; here and NOT recomputed below - keeping this wrap-safe check within
-        ; a couple of cycles of the old single-compare version.
+        ; The second subtraction already produces __hlimit, so it is stored
+        ; here and NOT recomputed below.
 
         ; The default stack is in the ccp (or wherever an emulator wants it).
         ; Set the stack to the bdos vector. The first push will decrement sp then write.
@@ -64,9 +66,15 @@ start:
 
         ld      hl, (0006h)     ; HL now holds the raw BDOS entry address
         ld      sp, hl          ; Custom stack is now active at top of TPA
-       
-        ld      de,__stack_size
+        exx                     ; preserve the accepted stack top in alternate HL
+        ld      hl,__hstart
+        ld      de,__bsse
         or      a
+        sbc     hl,de           ; carry iff argv scratch addition wrapped
+        exx
+        jr      c,mem_low
+
+        ld      de,__stack_size
         sbc     hl,de           ; HL = SP - __stack_size (candidate __hlimit)
         jr      c,mem_low       ; SP < __stack_size: underflow, TPA too small
         ld      (__hlimit),hl   ; commit __hlimit (validated just below)
@@ -75,30 +83,14 @@ start:
                                  ; is already 0 here from the "jr c,mem_low" not
                                  ; taken above, and no flag-affecting instruction
                                  ; runs in between
-        jr      nc,mem_ok       ; __hlimit >= __hstart: enough room
-mem_low:
-        ld      de,mem_low_msg
-        ld      c,9
-        call    5
-        ld      hl,00ffh
-        call    __cpm_set_retcode
-        jp      0000h
+        jr      c,mem_low        ; __hlimit < __hstart: TPA too small
 mem_ok:
-        ; __hlimit was stored above.
-        ; __brk = __hbase = __hstart (label at end of user module)
+        ; __hlimit was stored above. __hstart is the fixed heap base.
         ld      hl,__hstart
-        ld      (__hbase),hl
         ld      (__brk),hl
 
         ; Zero BSS (C89: uninitialized globals must be zero at startup)
-        ld      hl,__bsse
-        ld      de,__bssb
-        sbc     hl,de           ; HL = __bsse - __bssb = BSS length; carry is
-                                 ; already 0 here (mem_ok: is reached only via
-                                 ; "jr nc,mem_ok" above, and nothing in between
-                                 ; touches flags)
-        ld      b,h
-        ld      c,l
+        ld      bc,__bssn
         ld      a,b
         or      c
         jr      z,bss_done
@@ -119,6 +111,14 @@ bss_done:
         call    _exit                   ; -> __cflush, __cpm_set_retcode, jp 0000h
         ; unreachable
 
+mem_low:
+        ld      de,mem_low_msg
+        ld      c,9
+        call    5
+        ld      hl,00ffh
+        call    __cpm_set_retcode
+        jp      0000h
+
 mem_low_msg:
         db      0dh,0ah,'?out of ram: TPA too small',0dh,0ah,'$'
 
@@ -126,7 +126,6 @@ mem_low_msg:
 ; block (data, not code, so its position relative to start: doesn't matter
 ; for execution) so allocator code itself is not pulled in just because
 ; start initializes __brk/__hlimit.
-__hbase:        dw      0
 __brk:          dw      0
 __hlimit:       dw      0
 
@@ -149,7 +148,7 @@ __hlimit:       dw      0
 ; forced to pull in the other's block just to reach this helper.
 ;
 ; It used to sit here with no PUBLIC of its own, physically inside the
-; same always-linked block as __hbase/__brk/__hlimit above - which meant
+; same always-linked block as __brk/__hlimit above - which meant
 ; dccrtlstrip's block-splitting (drawn at PUBLIC-label positions, not at
 ; real dependency edges) silently swept it into __hlimit's block, and
 ; __hlimit is a reachability root for every program (start: writes it
@@ -179,28 +178,56 @@ __wr_hf:
 ;   0080h = length
 ;   0081h = text
 ;
+; CP/M defines at most 127 text bytes.  A malformed length byte above 127 is
+; truncated to 127 because startup has no error-return channel.
+;
 ; Builds:
 ;   argc = 1 + whitespace-delimited command-tail args
 ;   argv[0] = ""
 ;   argv[1..] = pointers into __argbuf
+;   argv[argc] = NULL
+;
+; A 127-byte tail can hold at most 64 one-byte arguments separated by one
+; delimiter, so argv reserves 64 tail pointers plus argv[0] and the NULL.
+; The 66 16-bit entries occupy exactly 132 bytes; the following 128-byte
+; __argbuf holds 127 text bytes plus NUL.  At maximum capacity the final
+; pointer/NULL writes end at argv+131 and the text NUL is __argbuf+127.
+; The final application compiler reserves both objects contiguously from
+; __bsse through __hstart, above the zeroed C BSS. They add no loaded .COM
+; bytes or BSS-clear cycles, and the startup memory check keeps the stack
+; reserve above the complete scratch range.
 
         public  __build_argv
         public  __argc
-        public  argv
 
 __build_argv:
         ld      hl,argv0
-        ld      (argv),hl
+        ld      de,__bsse
+        ex      de,hl           ; HL = vector base, DE = argv[0] empty string
+        ld      (hl),e
+        inc     hl
+        ld      (hl),d
+        inc     hl
+        xor     a
+        ld      (hl),a
+        inc     hl
+        ld      (hl),a          ; initial argv[1] = NULL
         ld      hl,1
         ld      (__argc),hl
 
         ld      a,(80h)
         or      a
         ret     z
+        jp      p,ba_len_ok
+        ld      a,127
+ba_len_ok:
 
         ld      b,a
-        ld      hl,81h
-        ld      de,__argbuf
+        ld      de,__bsse
+        ld      hl,132
+        add     hl,de
+        ex      de,hl           ; DE = command-tail copy
+        ld      hl,81h          ; HL = CP/M command tail
 
 ba_copy:
         ld      a,b
@@ -219,16 +246,20 @@ ba_done_copy:
         xor     a
         ld      (de),a
 
-        ld      hl,__argbuf
-        ld      de,argv+2
+        ld      hl,__bsse
+        ld      de,132
+        add     hl,de           ; HL = command-tail copy
+        ld      de,__bsse
+        inc     de
+        inc     de              ; DE = &argv[1]
         ld      c,1
 
 ba_skip_spaces:
         ld      a,(hl)
         or      a
         jr      z,ba_finish
-        cp      ' '
-        jr      nz,ba_arg_start
+        cp      ' '+1           ; space/tab/control whitespace is below '!'
+        jr      nc,ba_arg_start
         inc     hl
         jr      ba_skip_spaces
 
@@ -245,8 +276,8 @@ ba_scan_arg:
         ld      a,(hl)
         or      a
         jr      z,ba_finish
-        cp      ' '
-        jr      z,ba_end_arg
+        cp      ' '+1
+        jr      c,ba_end_arg
         inc     hl
         jr      ba_scan_arg
 
@@ -257,6 +288,9 @@ ba_end_arg:
         jr      ba_skip_spaces
 
 ba_finish:
+        ld      (de),a          ; A=0 from either parser NUL test
+        inc     de
+        ld      (de),a
         ld      h,0
         ld      l,c
         ld      (__argc),hl
@@ -267,12 +301,6 @@ __argc:
 
 argv0:
         db      0
-
-argv:
-        ds      34
-
-__argbuf:
-        ds      128
 
 ; __conout: output char in E to console with LF->CR/LF translation.
 ; Buffered: the character is appended to __cobuf and the buffer is flushed to
@@ -583,7 +611,10 @@ _setvbuf:
         push    ix
         ld      ix,0
         add     ix,sp
-        ld      a,(ix+8)                ; mode (low byte; int is 16-bit)
+        ld      a,(ix+9)                ; mode is a full 16-bit int
+        or      a
+        jr      nz,svb_bad
+        ld      a,(ix+8)
         cp      3
         jr      nc,svb_bad              ; mode > 2: invalid
         ld      a,(ix+5)                ; only stdout/stderr (fd 1/2) use this
@@ -657,6 +688,9 @@ _strerror:
         pop     bc              ; return address
         ex      (sp),hl         ; HL = errnum
         push    bc
+        ld      a,h
+        or      a
+        jr      nz,__se_unknown
         ld      a,l
         cp      ENOENT
         jr      z,__se02
@@ -678,6 +712,7 @@ _strerror:
         jr      z,__se33
         cp      34
         jr      z,__se34
+__se_unknown:
         ld      hl,__seuk
         ret
 __se02:
@@ -1222,6 +1257,59 @@ __bios_dispatch:
                                  ; already on the stack (pushed by our own
                                  ; caller's "call __bios_dispatch") is popped
                                  ; by the invoked BIOS function's own RET
+
+
+; biosreg(fn, bcarg, dearg)
+; Extended BIOS wrapper for calls that need BC and DE to carry distinct
+; values. The existing bios()/bioshl() two-argument ABI remains the compact
+; one-register convenience interface above.
+;
+; C prototype:
+;     extern int biosreg(int fn, int bcarg, int dearg);
+;
+; Arguments:
+;     fn    -> BIOS function number
+;     bcarg -> loaded into BC
+;     dearg -> loaded into DE
+;
+; Return:
+;     HL exactly as returned by the BIOS. This is the useful result convention
+;     for the multi-register BIOS calls: SECTRAN returns the translated sector
+;     in HL, and CP/M 3 SELDSK can take the drive in C plus its login flag in E
+;     while returning the DPH address in HL.
+        public  _biosreg
+_biosreg:
+        ; IX-free normal C entry. Restore the caller-cleanup argument layout
+        ; before entering the BIOS so direct and function-pointer calls share
+        ; exactly the public stack ABI.
+        pop     af              ; return address
+        pop     hl              ; function number
+        pop     bc              ; BC argument
+        pop     de              ; DE argument
+        push    de
+        push    bc
+        push    hl
+        push    af
+        ld      a,l             ; function number (low byte)
+        jp      __biosreg_dispatch
+
+; Entry: A = fn, BC = bcarg, DE = dearg
+; Exit:  BC/DE reach the BIOS unchanged; HL/A hold the BIOS result.
+__biosreg_dispatch:
+        push    bc              ; preserve the two independent BIOS arguments
+        push    de
+        ld      c,a
+        add     a,a
+        add     a,c             ; A = fn*3 (jump-table byte offset)
+        ld      c,a
+        ld      b,0
+        ld      hl,(0001h)
+        ld      de,-3
+        add     hl,de           ; HL = jump-table base
+        add     hl,bc           ; HL = selected entry
+        pop     de
+        pop     bc
+        jp      (hl)
 
 
 ; inp(port) / outp(port, val)
@@ -2446,8 +2534,11 @@ __udivmod:
         ld      a,d
         or      e
         jr      nz,dms_rs0
-        ld      d,h             ; divide by zero: quotient = 0xffff,
-        ld      e,l             ; remainder = original dividend
+        ; C leaves division by zero undefined, but every integer helper uses
+        ; this deterministic fallback: all-ones quotient, original dividend
+        ; remainder.  Signed wrappers must preserve this raw sentinel too.
+        ld      d,h
+        ld      e,l
         ld      hl,0ffffh
         jr      dms_rs_done
 
@@ -2612,6 +2703,12 @@ __divs:
         ld      a,h
         or      d
         jp      p,__divu
+        ; A zero divisor is non-negative, so only a negative dividend reaches
+        ; this check.  Bypass sign normalization to keep the unsigned
+        ; all-ones quotient sentinel instead of negating it to 1.
+        ld      a,d
+        or      e
+        jp      z,__divu
         push    bc
         ld      b,0             ; bit0: quotient negative?
         ld      a,h
@@ -2720,6 +2817,10 @@ __sdivmod:
         ld      a,h
         or      d
         jp      p,__udivmod
+        ; Preserve __udivmod's raw zero-divisor quotient/remainder pair.
+        ld      a,d
+        or      e
+        jp      z,__udivmod
         push    bc
         ld      b,0             ; b: dividend was negative? (remainder sign)
         ld      c,0             ; c: quotient negative? (xor of both signs)
@@ -8880,6 +8981,9 @@ lm1u_b:
 ; DE the remaining multiplier bits, and BC the modulus at every loop edge.
         public  __m1mu
 __m1mu:
+        ; With m==0, the existing fallback seeds a0=a and naturally returns
+        ; low16(a*b): the fused dividend sentinel at this helper's 16-bit
+        ; result width, not either input operand or the full 32-bit product.
         or      a
         sbc     hl,bc            ; trial a - m (BC = m, straight from entry)
         jr      nc,__mmu_r0_divide  ; a >= m (rare/never for the code this
@@ -9322,7 +9426,9 @@ ludm_dvs16:
         ; need to.
         ld      de,(__ldv_dvs_l)        ; DE = divisor
         ld      hl,0                    ; HL = partial remainder
-
+        ld      a,d
+        or      e
+        jp      z,ludm_dvs16_zero
         ld      a,(__ldv_dvd_h+1)       ; byte 3 (MSB)
         or      a
         jr      nz,ludm_b3
@@ -9364,6 +9470,21 @@ ludm_dvs16_done:
         ld      (__ldv_rem_l),hl        ; remainder low word
         ld      hl,0
         ld      (__ldv_rem_h),hl        ; remainder high word = 0
+        ret
+
+ludm_dvs16_zero:
+        ; Deterministic zero-divisor fallback, matching __udivmod: quotient
+        ; all ones and remainder equal to the unsigned magnitude dividend.
+        ; Clearing the quotient sign prevents __lds from negating the
+        ; sentinel; __lms recovers the dividend sign directly from its frame.
+        ld      (__ldv_sign),a          ; A is zero on this path
+        dec     hl
+        ld      (__ldv_quo_l),hl
+        ld      (__ldv_quo_h),hl
+        ld      hl,(__ldv_dvd_l)
+        ld      (__ldv_rem_l),hl
+        ld      hl,(__ldv_dvd_h)
+        ld      (__ldv_rem_h),hl
         ret
 
 ldqr_byte:
@@ -9465,6 +9586,9 @@ ldivs_dvd_pos:
 ldivs_dvs_pos:
         call    __ludivmod_core
         ; Apply sign to quotient
+        ; LONG_MIN/-1 deliberately follows the ordinary two's-complement
+        ; magnitude path: it wraps to LONG_MIN, while the remainder is zero.
+        ; Both operations are undefined by C, so no trap/saturation is added.
         ld      a,(__ldv_sign)
         bit     7,a
         jr      z,ldivs_pos_result
@@ -9501,7 +9625,6 @@ __lms:
         ld      (__ldv_dvd_h),hl
         ; sign of result = sign of dividend
         ld      a,(ix+7)
-        ld      (__ldv_sign),a
         ; If dvd negative: negate
         bit     7,a
         jr      z,lmods_dvd_pos
@@ -9532,7 +9655,7 @@ lmods_dvd_pos:
 lmods_dvs_pos:
         call    __ludivmod_core
         ; Apply sign to remainder
-        ld      a,(__ldv_sign)
+        ld      a,(ix+7)
         bit     7,a
         jr      z,lmods_pos_result
         ld      de,(__ldv_rem_l)
@@ -9833,7 +9956,7 @@ les_done:
 ; Header/footer layout: bit 0 is the free flag; bits 15-1 are the even user
 ; size.  See __wr_hf for the boundary-tag invariants.
 ;
-; __hbase / __brk / __hlimit are set by start:.
+; __hstart is the fixed heap base; __brk / __hlimit are set by start:.
 ; ============================================================
 
         public  _malloc
@@ -10177,7 +10300,7 @@ _free:
 ;
 ; The preceding block's identity is found in O(1) via its footer - the 2
 ; bytes immediately before this block's own header - instead of a linear
-; scan from __hbase; see __wr_hf's header comment for the packed
+; scan from __hstart; see __wr_hf's header comment for the packed
 ; header/footer format this depends on.
 ; Corrupts AF, BC, DE, HL.  Does not use IX.
 __frcoal:
@@ -10200,7 +10323,7 @@ __frcoal:
         ; read the 2 bytes just before our own header - the preceding
         ; block's footer - to see if it is free.
         ld      hl,(__fr_hdr)
-        ld      de,(__hbase)
+        ld      de,__hstart
         or      a
         sbc     hl,de
         jp      z,fr_coal       ; this IS the first block: no predecessor
@@ -10308,8 +10431,8 @@ mh_rnd_ok:
 mh_sz_ok:
         ld      (__ml_need),hl
 
-        ; Walk free list from __hbase to __brk
-        ld      hl,(__hbase)
+        ; Walk free list from __hstart to __brk
+        ld      hl,__hstart
         ld      (__ml_p),hl
 
 mh_walk:
