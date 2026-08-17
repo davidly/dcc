@@ -31,7 +31,7 @@ extern void emulate();
 extern void end_emulation();
 extern void soft_reset();
 extern void power_on();
-extern uint8_t * get_mem();
+extern uint8_t * get_mem( uint16_t address );
 
 /* use #define instead of functions because old compilers don't inline functions */
 
@@ -49,6 +49,15 @@ extern uint8_t * get_mem();
 #define get_word_pagewrap( addr ) ( (uint16_t) get_byte( addr ) | \
     ( (uint16_t) get_byte( ( (addr) & 0xff00 ) | ( ( (addr) + 1 ) & 0xff ) ) << 8 ) )
 
+/* Zero page (0x0000-0x00ff) is always bank 0 (m_0000) and is never memory-mapped I/O,
+   so these bypass the get_mem() bank lookup / function call entirely for the zero-page
+   addressing modes (a8, a8,x, a8,y and the zero-page pointer bytes used by (a8,x)/(a8),y).
+   Wraparound to a uint8_t index reproduces the same page-0 wrap as get_word_pagewrap. */
+#define get_zp_byte( addr ) ( m_0000[ (uint8_t) (addr) ] )
+#define set_zp_byte( addr, value ) ( m_0000[ (uint8_t) (addr) ] = (value) )
+#define get_word_pagewrap_zp( addr ) ( (uint16_t) get_zp_byte( addr ) | \
+    ( (uint16_t) get_zp_byte( (addr) + 1 ) << 8 ) )
+
 struct MOS_6502
 {
     uint8_t a, x, y, sp;
@@ -61,9 +70,9 @@ extern struct MOS_6502 cpu;
 
 extern void m_halt(); 
 extern uint8_t m_hook();
-extern uint8_t m_load();
-extern void m_store();
-extern void m_hard_exit();
+extern uint8_t m_load( uint16_t address );
+extern void m_store( uint16_t address );
+extern void m_hard_exit( char * msg );
 
 /* the 6502 functional tests 6502FUN.HEX runs in 19.3 seconds with C and 15.1 seconds with assembly */
 #define Z80_ASM_OPTS    /* use Z80 asm for set_nz and get_mem; undef for C fallback */
@@ -142,7 +151,7 @@ uint8_t * mem_base[ 16 ] =
     m_ff00 - 0xff00        /* f000 */
 };
 
-void bad_address( address ) uint16_t address;
+void bad_address( uint16_t address )
 {
     printf( "apple 1 app used a bad address %04x\n", address );
     exit( 1 );
@@ -155,7 +164,7 @@ void bad_address( address ) uint16_t address;
 #else // set_nz() is a function either in assembly or C
 
 #ifdef Z80_ASM_OPTS
-extern void set_nz();
+extern void set_nz( uint8_t x );
 #asm
         ; set_nz( uint8_t x ) -- Z80 optimized, SP-relative arg access
         ; SP+4 after push ix = x (DCC zero-extends byte args to 16 bits on push)
@@ -184,7 +193,7 @@ _snz_zero:
         ret
 #endasm
 #else
-void set_nz( x ) uint8_t x;
+void set_nz( uint8_t x )
 {
     cpu.fNegative = ( (int8_t) x < 0 );
     cpu.fZero = !x;
@@ -230,7 +239,7 @@ _get_mem_bad:
         ret
 #endasm
 #else
-uint8_t * get_mem( address ) uint16_t address;
+uint8_t * get_mem( uint16_t address )
 {
     uint8_t * base;
     base = mem_base[ address >> 12 ];
@@ -299,7 +308,7 @@ static uint8_t ins_len_6502[ 256 ] =    /* length of instructions */
     /*f8*/ 1, 3, 0, 0, 0, 3, 3, 1
 };
 
-static uint8_t op_rotate( op, val ) uint8_t op; uint8_t val;
+static uint8_t op_rotate( uint8_t op, uint8_t val )
 {
     bool oldCarry;
 
@@ -335,20 +344,20 @@ static uint8_t op_rotate( op, val ) uint8_t op; uint8_t val;
     return val;
 }
 
-static inline void op_cmp( lhs, rhs ) uint8_t lhs; uint8_t rhs;
+static inline void op_cmp( uint8_t lhs, uint8_t rhs )
 {
     set_nz( (uint8_t) ( (uint16_t) lhs - (uint16_t) rhs ) );
     cpu.fCarry = ( lhs >= rhs );
 }
 
-static void op_bit( val ) uint8_t val;
+static void op_bit( uint8_t val )
 {
     cpu.fNegative = ( val & 0x80 );
     cpu.fOverflow = ( val & 0x40 );
     cpu.fZero = ! ( cpu.a & val );
 }
 
-static void op_bcd_math( math, rhs ) uint8_t math; uint8_t rhs;
+void op_bcd_math( uint8_t math, uint8_t rhs )
 {
     uint8_t alo, ahi, rlo, rhi, ad, rd, result;
 
@@ -396,12 +405,141 @@ static void op_bcd_math( math, rhs ) uint8_t math; uint8_t rhs;
     cpu.a = ( ( result / 10 ) << 4 ) + ( result % 10 );
 }
 
-static void op_math( op, rhs ) uint8_t op; uint8_t rhs;
+#ifdef Z80_ASM_OPTS
+#asm
+        ; op_math( uint8_t op, uint8_t rhs ) -- Z80 optimized, SP-relative arg access
+        ; SP+2 = op, SP+4 = rhs (DCC zero-extends byte args to 16 bits on push,
+        ; caller cleans the stack after return, same convention as get_mem/op_cmp).
+        ; Dispatches 6502 ORA/AND/EOR/ADC/CMP/SBC for cpu.a. The CMP case is done
+        ; inline here (was previously a nested call to op_cmp) using the exact same
+        ; sub/rlca/cp-carry-inversion technique op_cmp itself uses. ADC/SBC flag
+        ; extraction reuses the push-af/pop-de trick to read Z80's C and P/V out of
+        ; a single adc a,r: bit0 of F is the new carry, bit2 (reached via two rrca)
+        ; is the P/V (signed overflow) flag -- both match 6502 ADC/SBC semantics
+        ; directly. Decimal-mode ADC/SBC is rare and stays a call-out to op_bcd_math.
+        public _op_math
+_op_math:
+        ld hl,2
+        add hl,sp
+        ld a,(hl)               ; a = op
+        and 0e0h                ; a = op & 0xe0
+        ld b,a                  ; b = masked op, preserved across dispatch
+        inc hl
+        inc hl
+        ld c,(hl)               ; c = rhs
+        cp 0c0h
+        jp z,_opm_cmp
+        ld a,(_cpu+8)           ; cpu.fDecimal
+        or a
+        jp z,_opm_notdec
+        ld a,b
+        cp 0e0h
+        jp z,_opm_bcd
+        cp 60h
+        jp z,_opm_bcd
+_opm_notdec:
+        ld a,b
+        cp 0e0h
+        jp nz,_opm_notsbc
+        ld a,c
+        cpl                     ; rhs = ~rhs (== 255 - rhs), then fall through as adc
+        ld c,a
+        jp _opm_adc
+_opm_notsbc:
+        ld a,b
+        cp 60h
+        jp z,_opm_adc
+        or a
+        jp z,_opm_ora
+        cp 20h
+        jp z,_opm_and
+        ld a,(_cpu)
+        xor c
+        jp _opm_store
+_opm_ora:
+        ld a,(_cpu)
+        or c
+        jp _opm_store
+_opm_and:
+        ld a,(_cpu)
+        and c
+        jp _opm_store
+_opm_adc:
+        ld a,(_cpu+11)          ; cpu.fCarry
+        or a
+        jp z,_opm_adc_go
+        scf
+_opm_adc_go:
+        ld a,(_cpu)
+        adc a,c
+        push af
+        pop de                  ; d = result, e = flags (F)
+        ld a,e
+        and 1
+        ld (_cpu+11),a          ; cpu.fCarry = Z80 carry from the adc
+        ld a,e
+        rrca
+        rrca
+        and 1
+        ld (_cpu+7),a           ; cpu.fOverflow = Z80 P/V from the adc
+        ld a,d                  ; a = result
+_opm_store:
+        ld (_cpu),a             ; cpu.a = result
+        ld c,a
+        rlca
+        ld a,0
+        adc a,0
+        ld (_cpu+6),a           ; cpu.fNegative
+        ld a,c
+        or a
+        ld a,0
+        jp nz,_opm_zdone
+        inc a
+_opm_zdone:
+        ld (_cpu+10),a          ; cpu.fZero
+        ret
+_opm_cmp:
+        ld a,(_cpu)             ; a = cpu.a (lhs)
+        ld b,a                  ; b = lhs, preserved for the carry re-check below
+        sub c                   ; a = lhs - rhs
+        ld d,a                  ; d = subtraction result
+        rlca
+        and 1
+        ld (_cpu+6),a           ; cpu.fNegative = bit7 of (lhs - rhs)
+        ld a,d
+        or a
+        ld a,0
+        jp nz,_opm_cmp_zdone
+        inc a
+_opm_cmp_zdone:
+        ld (_cpu+10),a          ; cpu.fZero
+        ld a,b
+        cp c
+        ld a,0
+        jp c,_opm_cmp_cdone     ; Z80 carry set == borrow == lhs < rhs
+        inc a
+_opm_cmp_cdone:
+        ld (_cpu+11),a          ; cpu.fCarry = (lhs >= rhs)
+        ret
+_opm_bcd:
+        ld l,c
+        ld h,0
+        push hl                 ; push rhs
+        ld l,b
+        ld h,0
+        push hl                 ; push masked op ("math")
+        call _op_bcd_math
+        pop hl
+        pop hl
+        ret
+#endasm
+#else
+void op_math( uint8_t op, uint8_t rhs )
 {
-    uint16_t res16; 
+    uint16_t res16;
     uint8_t result;
 
-    op &= 0xe0; 
+    op &= 0xe0;
     if ( 0xc0 == op )
     {
         op_cmp( cpu.a, rhs );
@@ -437,6 +575,7 @@ static void op_math( op, rhs ) uint8_t op; uint8_t rhs;
 
     set_nz( cpu.a );
 }
+#endif
 
 static void op_pop_pf()
 {
@@ -502,12 +641,12 @@ void emulate()
             }
             case 0x01: case 0x21: case 0x41: case 0x61: case 0xc1: case 0xe1:          /* ora/and/eor/adc/cmp/sbc (a8, x) */
             {
-                op_math( op, get_byte( get_word_pagewrap( (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.x ) ) ) );
+                op_math( op, get_byte( get_word_pagewrap_zp( (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.x ) ) ) );
                 break;
             }
             case 0x05: case 0x25: case 0x45: case 0x65: case 0xc5: case 0xe5:          /* ora/and/eor/adc/cmp/sbc a8 */
             {
-                op_math( op, get_byte( get_byte( cpu.pc + 1 ) ) );
+                op_math( op, get_zp_byte( get_byte( cpu.pc + 1 ) ) );
                 break;
             }
             case 0x09: case 0x29: case 0x49: case 0x69: case 0xc9: case 0xe9:          /* ora/and/eor/adc/cmp/sbc #d8 */
@@ -522,12 +661,12 @@ void emulate()
             }
             case 0x11: case 0x31: case 0x51: case 0x71: case 0xd1: case 0xf1:          /* ora/and/eor/adc/cmp/sbc (a8), y */
             {
-                op_math( op, get_byte( cpu.y + get_word_pagewrap( get_byte( cpu.pc + 1 ) ) ) );
+                op_math( op, get_byte( cpu.y + get_word_pagewrap_zp( get_byte( cpu.pc + 1 ) ) ) );
                 break;
             }
-            case 0x15: case 0x35: case 0x55: case 0x75: case 0xd5: case 0xf5:          /* ora/and/eor/adc/cmp/sbc a8, x */  
+            case 0x15: case 0x35: case 0x55: case 0x75: case 0xd5: case 0xf5:          /* ora/and/eor/adc/cmp/sbc a8, x */
             {
-                op_math( op, get_byte( (uint8_t) ( cpu.x + get_byte( cpu.pc + 1 ) ) ) );
+                op_math( op, get_zp_byte( cpu.x + get_byte( cpu.pc + 1 ) ) );
                 break;
             }
             case 0x19: case 0x39: case 0x59: case 0x79: case 0xd9: case 0xf9:          /* ora/and/eor/adc/cmp/sbc a16, y */
@@ -540,14 +679,18 @@ void emulate()
                 op_math( op, get_byte( cpu.x + get_word( cpu.pc + 1 ) ) );
                 break;
             }
-            case 0x06: case 0x26: case 0x46: case 0x66: { address = get_byte( cpu.pc + 1 ); goto _rot_complete; }             /* asl/rol/lsr/ror a8 */
+            case 0x06: case 0x26: case 0x46: case 0x66: { address = get_byte( cpu.pc + 1 ); goto _rot_complete_zp; }             /* asl/rol/lsr/ror a8 */
             case 0x0e: case 0x2e: case 0x4e: case 0x6e: { address = get_word( cpu.pc + 1 ); goto _rot_complete; }             /* asl/rol/lsr/ror a16 */
-            case 0x16: case 0x36: case 0x56: case 0x76: { address = (uint8_t) ( cpu.x + get_byte( cpu.pc + 1 ) ); goto _rot_complete; } /* asl/rol/lsr/ror a8, x */
+            case 0x16: case 0x36: case 0x56: case 0x76: { address = (uint8_t) ( cpu.x + get_byte( cpu.pc + 1 ) ); goto _rot_complete_zp; } /* asl/rol/lsr/ror a8, x */
             case 0x1e: case 0x3e: case 0x5e: case 0x7e:                                                                       /* asl/rol/lsr/ror a16, x */
             {
                 address = cpu.x + get_word( cpu.pc + 1 );
 _rot_complete:
                 pb = get_mem( address ); /* avoid two calls to get_mem */
+                *pb = op_rotate( op, *pb );
+                break;
+_rot_complete_zp:  /* page 0 target: index directly, no get_mem() call needed */
+                pb = m_0000 + (uint8_t) address;
                 *pb = op_rotate( op, *pb );
                 break;
             }
@@ -582,7 +725,7 @@ _branch_complete:
                 cpu.pc = get_word( cpu.pc + 1 );
                 continue;
             }
-            case 0x24: { op_bit( get_byte( get_byte( cpu.pc + 1 ) ) ); break; }        /* bit a8 NVZ */
+            case 0x24: { op_bit( get_zp_byte( get_byte( cpu.pc + 1 ) ) ); break; }        /* bit a8 NVZ */
             case 0x28: { op_pop_pf(); break; }                                         /* plp NZCIDV */
             case 0x2c: { op_bit( get_byte( get_word( cpu.pc + 1 ) ) ); break; }        /* bit a16 NVZ */
             case 0x38: { cpu.fCarry = true; break; }                                   /* sec */
@@ -607,12 +750,12 @@ _op_rts:
             case 0x6a: case 0x4a: case 0x2a: case 0x0a: { cpu.a = op_rotate( op, cpu.a ); break; } /* asl, rol, lsr, ror */
             case 0x6c: { cpu.pc = get_word_pagewrap( get_word( cpu.pc + 1 ) ); continue; }         /* jmp (a16) */
             case 0x78: { cpu.fInterruptDisable = true; break; }                                    /* sei */
-            case 0x81: { address = get_word_pagewrap( (uint8_t) ( cpu.x + get_byte( cpu.pc + 1 ) ) ); goto _st_complete; } /* sta (a8, x) */
-            case 0x84: case 0x85: case 0x86: { address = get_byte( cpu.pc + 1 ); goto _st_complete; }             /* sty/sta/stx a8 */
+            case 0x81: { address = get_word_pagewrap_zp( (uint8_t) ( cpu.x + get_byte( cpu.pc + 1 ) ) ); goto _st_complete; } /* sta (a8, x) */
+            case 0x84: case 0x85: case 0x86: { address = get_byte( cpu.pc + 1 ); goto _st_complete_zp; }             /* sty/sta/stx a8 */
             case 0x8c: case 0x8d: case 0x8e: { address = get_word( cpu.pc + 1 ); goto _st_complete; }             /* sty/sta/stx a16 */
-            case 0x91: { address = cpu.y + get_word_pagewrap( get_byte( cpu.pc + 1 ) ); goto _st_complete; }      /* sta (a8), y */
-            case 0x94: case 0x95: { address = (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.x ); goto _st_complete; }  /* sta/sty a8, x */
-            case 0x96: { address = (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.y ); goto _st_complete; }             /* stx a8, y */
+            case 0x91: { address = cpu.y + get_word_pagewrap_zp( get_byte( cpu.pc + 1 ) ); goto _st_complete; }      /* sta (a8), y */
+            case 0x94: case 0x95: { address = (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.x ); goto _st_complete_zp; }  /* sta/sty a8, x */
+            case 0x96: { address = (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.y ); goto _st_complete_zp; }             /* stx a8, y */
             case 0x99: { address = get_word( cpu.pc + 1 ) + cpu.y; goto _st_complete; }                           /* sta a16, y */
             case 0x9d:                                                                                            /* sta a16, x */
             {
@@ -622,18 +765,21 @@ _st_complete:
                 if ( 0xd012 == address )                                               /* apple 1 memory-mapped I/O */
                     m_store( address );
                 break;
+_st_complete_zp:  /* page 0 target: no I/O mapping possible, index directly */
+                set_zp_byte( address, ( op & 1 ) ? cpu.a : ( op & 2 ) ? cpu.x : cpu.y );
+                break;
             }
             case 0x88: { cpu.y--; set_nz( cpu.y ); break; }                            /* dey */
             case 0x8a: { cpu.a = cpu.x; set_nz( cpu.a ); break; }                      /* txa */
             case 0x98: { cpu.a = cpu.y; set_nz( cpu.a ); break; }                      /* tya */
             case 0x9a: { cpu.sp = cpu.x; break; }                                      /* txs no flags set */
             case 0xa0: case 0xa2: case 0xa9: { address = cpu.pc + 1; goto _ld_complete; }                         /* ldy/ldx/lda #d8 */
-            case 0xa1: { address = get_word_pagewrap( (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.x ) ); goto _ld_complete; } /* lda (a8, x) */
-            case 0xa4 : case 0xa5: case  0xa6: { address = get_byte( cpu.pc + 1 ); goto _ld0_complete; }          /* ldy/lda/ldx a8 */
+            case 0xa1: { address = get_word_pagewrap_zp( (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.x ) ); goto _ld_complete; } /* lda (a8, x) */
+            case 0xa4 : case 0xa5: case  0xa6: { address = get_byte( cpu.pc + 1 ); goto _ld0_complete_zp; }          /* ldy/lda/ldx a8 */
             case 0xac: case 0xad: case 0xae:{ address = get_word( cpu.pc + 1 ); goto _ld_complete; }              /* ldy/lda/ldx a16 */
-            case 0xb1: { address = cpu.y + get_word_pagewrap( (uint16_t) get_byte( cpu.pc + 1 ) ); goto _ld_complete; }    /* lda (a8), y */
-            case 0xb4: case 0xb5: { address = (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.x ); goto _ld0_complete; } /* ldy/lda a8, x */
-            case 0xb6: { address = (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.y ); goto _ld0_complete; }            /* ldx a8, y */
+            case 0xb1: { address = cpu.y + get_word_pagewrap_zp( (uint16_t) get_byte( cpu.pc + 1 ) ); goto _ld_complete; }    /* lda (a8), y */
+            case 0xb4: case 0xb5: { address = (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.x ); goto _ld0_complete_zp; } /* ldy/lda a8, x */
+            case 0xb6: { address = (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.y ); goto _ld0_complete_zp; }            /* ldx a8, y */
             case 0xb9 : case 0xbe: { address = get_word( cpu.pc + 1 ) + cpu.y; goto _ld_complete; }               /* lda/ldx a16, y */
             case 0xbc: case 0xbd:                                                                                 /* ldy/lda a16, x */
             {
@@ -657,7 +803,18 @@ _gstate_set:
 _ld0_complete:  /* load from page 0 so no need for memory-mapped I/O check */
                 val = get_byte( address );
                 set_nz( val );
-        
+
+                if ( op & 1 )
+                    cpu.a = val;
+                else if ( op & 2 )
+                    cpu.x = val;
+                else
+                    cpu.y = val;
+                break;
+_ld0_complete_zp:  /* page 0 source: index directly, no get_mem() call needed */
+                val = get_zp_byte( address );
+                set_nz( val );
+
                 if ( op & 1 )
                     cpu.a = val;
                 else if ( op & 2 )
@@ -671,15 +828,23 @@ _ld0_complete:  /* load from page 0 so no need for memory-mapped I/O check */
             case 0xb8: { cpu.fOverflow = false; break; }                               /* clv */
             case 0xba: { cpu.x = cpu.sp; set_nz( cpu.x ); break; }                     /* tsx */
             case 0xc0: { op_cmp( cpu.y, get_byte( cpu.pc + 1 ) ); break; }             /* cpy #d8 */
-            case 0xc4: { op_cmp( cpu.y, get_byte( get_byte( cpu.pc + 1 ) ) ); break; } /* cpy a8 */
-            case 0xc6 : case 0xe6: { address = get_byte( cpu.pc + 1 ); goto _crement_complete; }         /* inc/dec a8 */
+            case 0xc4: { op_cmp( cpu.y, get_zp_byte( get_byte( cpu.pc + 1 ) ) ); break; } /* cpy a8 */
+            case 0xc6 : case 0xe6: { address = get_byte( cpu.pc + 1 ); goto _crement_complete_zp; }         /* inc/dec a8 */
             case 0xce : case 0xee: { address = get_word( cpu.pc + 1 ); goto _crement_complete; }         /* inc/dec a16 */
-            case 0xd6 : case 0xf6: { address = (uint8_t) ( cpu.x + get_byte( cpu.pc + 1 ) ); goto _crement_complete; } /* inc/dec a8, x */
+            case 0xd6 : case 0xf6: { address = (uint8_t) ( cpu.x + get_byte( cpu.pc + 1 ) ); goto _crement_complete_zp; } /* inc/dec a8, x */
             case 0xde : case 0xfe:                                                                       /* inc/dec a16, x */
             {
                 address = cpu.x + get_word( cpu.pc + 1 );
 _crement_complete:
                 pb = get_mem( address );
+                if ( op >= 0xe6 )
+                    (*pb)++;
+                else
+                    (*pb)--;
+                set_nz( *pb );
+                break;
+_crement_complete_zp:  /* page 0 target: index directly, no get_mem() call needed */
+                pb = m_0000 + (uint8_t) address;
                 if ( op >= 0xe6 )
                     (*pb)++;
                 else
@@ -692,7 +857,7 @@ _crement_complete:
             case 0xcc: { op_cmp( cpu.y, get_byte( get_word( cpu.pc + 1 ) ) ); break; } /* cpy a16 */
             case 0xd8: { cpu.fDecimal = false; break; }                                /* cld */
             case 0xe0: { op_cmp( cpu.x, get_byte( cpu.pc + 1 ) ); break; }             /* cpx #d8 */
-            case 0xe4: { op_cmp( cpu.x, get_byte( get_byte( cpu.pc + 1 ) ) ); break; } /* cpx a8 */
+            case 0xe4: { op_cmp( cpu.x, get_zp_byte( get_byte( cpu.pc + 1 ) ) ); break; } /* cpx a8 */
             case 0xe8: { cpu.x++; set_nz( cpu.x ); break; }                            /* inx */
             case 0xea: { break; }                                                      /* nop */
             case 0xec: { op_cmp( cpu.x, get_byte( get_word( cpu.pc + 1 ) ) ); break; } /* cpx a16 */
@@ -716,7 +881,7 @@ static FILE * g_loadFile = 0;
 static char kbd_char = 0;
 static bool kbd_available = false;
 
-static void usage( err ) char * err;
+static void usage( char * err )
 {
     if ( err )
         printf( "error: %s\n", err );
@@ -1048,7 +1213,7 @@ uint8_t m_hook()
     return OP_RTS;
 }
 
-void m_hard_exit( msg )  char * msg;
+void m_hard_exit( char * msg )
 {
     printf( "%s", msg );
     exit( 1 );
@@ -1086,7 +1251,7 @@ int getc_load_file()
     return c;
 }
 
-uint8_t m_load( address ) uint16_t address;
+uint8_t m_load( uint16_t address )
 {
     char ch;
     int next;
@@ -1169,7 +1334,7 @@ uint8_t m_load( address ) uint16_t address;
     return get_byte( address );
 }
 
-void m_store( address ) uint16_t address;
+void m_store( uint16_t address )
 {
     char ch;
 
@@ -1188,12 +1353,12 @@ void m_store( address ) uint16_t address;
     }
 }
 
-static bool ishex( c ) char c;
+static bool ishex( char c )
 {
     return ( ( c >= 'A' && c <= 'F' ) || ( c >= 'a' && c <= 'f' ) || ( c >= ' ' && c <= '9' ) );
 }
 
-uint16_t hextoui( p ) char * p;
+uint16_t hextoui( char * p )
 {
     char c;
     uint16_t i, result;
@@ -1232,7 +1397,7 @@ static uint16_t read_hex( p, len ) char * p; uint8_t len;
     return result;
 }
 
-static bool load_intel( fp ) FILE * fp;
+static bool load_intel( FILE * fp )
 {
     char * buf;
     uint8_t reclen, rectyp, x, val;
@@ -1275,7 +1440,7 @@ static bool load_intel( fp ) FILE * fp;
     return true;
 }
 
-bool loadFile( filePath ) char * filePath;
+bool loadFile( char * filePath )
 {
     bool ok;
     FILE * fp;
@@ -1348,7 +1513,7 @@ bool loadFile( filePath ) char * filePath;
     return ok;
 }
 
-void invoke_command( pcFile ) char * pcFile;
+void invoke_command( char * pcFile )
 {
     bool ok;
     power_on();
@@ -1380,7 +1545,7 @@ void invoke_command( pcFile ) char * pcFile;
     emulate();
 }
 
-int main( argc, argv ) int argc; char * argv[];
+int main( int argc, char * argv[] )
 {
     int i;
     char * pcHEX, *parg, c, lower;
