@@ -177,14 +177,21 @@ macOS, and gcc on Linux by default:
 
 ntvcm is a C++ project. Build it from its own directory.
 
+Use the `mr.bat` / `mrmac.sh` / `mr.sh` scripts below, not `m.bat` / `mmac.sh`
+/ `m.sh`. The `r` versions build release configurations of the emulator with
+asserts compiled out, so the resulting `ntvcm` runs faster. The plain
+(non-`r`) scripts build debug configurations with asserts enabled, which are
+useful when debugging ntvcm itself but not for day-to-day CP/M app work.
+
 === "Windows"
 
     Open a Developer PowerShell or Developer Command Prompt so the Microsoft
-    C/C++ compiler (`cl`) is on your `PATH`, then run the Windows build script:
+    C/C++ compiler (`cl`) is on your `PATH`, then run the Windows release build
+    script:
 
     ```powershell
     cd ntvcm
-    .\m.bat
+    .\mr.bat
     ```
 
     Produces `ntvcm.exe`.
@@ -192,36 +199,38 @@ ntvcm is a C++ project. Build it from its own directory.
 === "macOS"
 
     Open a terminal where the Xcode Command Line Tools are available, then run
-    the macOS build script:
+    the macOS release build script:
 
     ```bash
     cd ntvcm
-    chmod +x mmac.sh
-    ./mmac.sh
+    chmod +x mrmac.sh
+    ./mrmac.sh
     ```
 
     Produces the `ntvcm` executable.
 
 === "Ubuntu"
 
-    Open a terminal where `g++` is available, then run the Linux build script:
+    Open a terminal where `g++` is available, then run the Linux release build
+    script:
 
     ```bash
     cd ntvcm
-    chmod +x m.sh
-    ./m.sh
+    chmod +x mr.sh
+    ./mr.sh
     ```
 
     Produces the `ntvcm` executable.
 
 === "Ubuntu ARM64"
 
-    Open a terminal where `g++` is available, then run the Linux build script:
+    Open a terminal where `g++` is available, then run the Linux release build
+    script:
 
     ```bash
     cd ntvcm
-    chmod +x m.sh
-    ./m.sh
+    chmod +x mr.sh
+    ./mr.sh
     ```
 
     Produces the `ntvcm` executable.
@@ -230,11 +239,11 @@ ntvcm is a C++ project. Build it from its own directory.
 
     Open a Developer PowerShell or Developer Command Prompt for ARM64 so the
     Microsoft C/C++ compiler (`cl`) is on your `PATH`, then run the Windows
-    build script:
+    release build script:
 
     ```powershell
     cd ntvcm
-    .\m.bat
+    .\mr.bat
     ```
 
     Produces `ntvcm.exe`.
