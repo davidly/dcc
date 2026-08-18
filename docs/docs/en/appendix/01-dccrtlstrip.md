@@ -1,10 +1,26 @@
 # Appendix: runtime optimization
 
-`DCCRTL.MAC` is a single ~19,000-line runtime, but most programs use only a
+`DCCRTL.MAC` is a single roughly 25,000-line runtime, but most programs use only a
 fraction of it. The normal DCC C Compiler build flow runs `dccrtlstrip` before the final
 L80 link to remove unreferenced routines. This appendix explains how it decides
 what to keep and what each library feature costs in code size once its
 transitive dependencies are linked.
+
+## Direct usage
+
+The normal build helpers invoke `dccrtlstrip` automatically. To run it directly:
+
+```sh
+dccrtlstrip [-k symbol]... -r DCCRTL.MAC -o RTLMIN.MAC app.mac [app2.mac ...]
+```
+
+| Option or argument | Purpose |
+| --- | --- |
+| `-r <file>` | Full runtime source to analyze |
+| `-o <file>` | Reduced runtime file to write |
+| `-k <symbol>` | Keep an explicit runtime root; repeat for additional symbols |
+| `-root <symbol>` | Alias for `-k` |
+| `app.mac ...` | One or more application assembly modules to scan for runtime references |
 
 ## How `dccrtlstrip` decides what to keep
 

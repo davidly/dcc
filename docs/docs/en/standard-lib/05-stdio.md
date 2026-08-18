@@ -105,7 +105,9 @@ Field width and flags:
 - A positive precision on `printf` `%f` (`%.2f`) controls the number of digits
   after the decimal point. Without a positive precision, `%f` prints six
   fractional digits. `%f` always emits a decimal point.
-- String precision (`%.3s`) is not implemented; `%s` prints the whole string.
+- A precision on `%s` (`%.3s`) limits output to at most that many characters,
+  stopping at NUL first when the string is shorter. `%.0s` emits no characters
+  and does not dereference the string argument.
 
 ```c
 printf("|%6d|%-6d|%.4d|\n", 42, 42, 42);   /* |    42|42    |0042| */

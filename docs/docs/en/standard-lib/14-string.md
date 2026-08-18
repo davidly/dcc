@@ -9,7 +9,8 @@ Include [`string.h`](14-string.md) for byte-string and raw memory operations.
 ## Runtime model
 
 The string and memory functions operate on byte strings and raw byte buffers.
-`strcoll` is equivalent to `strcmp`; the DCC C Compiler has no locale model.
+In the fixed [`C` locale](17-locale.md), `strcoll` is equivalent to `strcmp`
+and `strxfrm` uses the identity transform.
 
 ## String and memory operations
 

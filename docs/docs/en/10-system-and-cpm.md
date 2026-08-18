@@ -60,7 +60,7 @@ nonzero high byte in `whence`, leaving the old position unchanged. Successful
     FCB/DMA core. The first file call links that core; additional file calls are
     nearly free. See the [appendix](appendix/01-dccrtlstrip.md).
 
-## `dirent.h` — directory enumeration
+## `dirent.h` — directory enumeration {#dirent-directory-enumeration}
 
 Include `dirent.h`. CP/M has no subdirectories, so this enumerates files on the
 selected drive.
@@ -263,7 +263,7 @@ than relying on either outcome. See `tests/trenamex.c`.
 (case-insensitive) followed by `:` is parsed into the FCB's drive byte, and the
 rest of the name follows normal 8.3 rules. There is no directory/path concept
 beyond this single-letter drive prefix — CP/M has no subdirectories at all (see
-[`dirent.h`](#direnth--directory-enumeration) above).
+[`dirent.h`](#dirent-directory-enumeration) above).
 
 ### 8.3 filenames and truncation collisions
 

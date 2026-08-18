@@ -22,8 +22,10 @@ from typing import Dict, Iterable, List, Mapping
 MARKER_RE = re.compile(r"<!--\s*(?P<prefix>[A-Z][A-Z0-9]*)-(?P<kind>FUNCTION|SYMBOL)-TABLE\s*:\s*(?P<names>.*?)\s*-->")
 FUNCTION_RE = re.compile(r"\b(?P<name>[A-Za-z_]\w*)\s*\(")
 DEFINE_RE = re.compile(r"^#\s*define\s+(?P<name>[A-Za-z_]\w*)\b")
+TYPEDEF_FUNCTION_PTR_RE = re.compile(r"^typedef\b.*\(\s*\*\s*(?P<name>[A-Za-z_]\w*)\s*\)\s*\([^;]*\)\s*;")
 TYPEDEF_RE = re.compile(r"^typedef\b.*\b(?P<name>[A-Za-z_]\w*)\s*(?:\[[^\]]*\])?\s*;")
 EXTERN_RE = re.compile(r"^extern\b.*\b(?P<name>[A-Za-z_]\w*)\s*;")
+STRUCT_RE = re.compile(r"^struct\s+(?P<name>[A-Za-z_]\w*)\s*\{")
 
 HEADER_BY_PREFIX: Mapping[str, str] = {
     "STDIO": "stdio.h",
@@ -35,6 +37,8 @@ HEADER_BY_PREFIX: Mapping[str, str] = {
     "ERRNO": "errno.h",
     "FLOAT": "float.h",
     "LIMITS": "limits.h",
+    "LOCALE": "locale.h",
+    "SIGNAL": "signal.h",
     "SETJMP": "setjmp.h",
     "STDARG": "stdarg.h",
     "STDBOOL": "stdbool.h",
@@ -115,7 +119,7 @@ def _extract_doxygen_summary(lines: List[str], start: int) -> tuple[str, int]:
 
 
 def _non_function_symbol_name(declaration: str) -> str:
-    for pattern in (DEFINE_RE, TYPEDEF_RE, EXTERN_RE):
+    for pattern in (DEFINE_RE, TYPEDEF_FUNCTION_PTR_RE, TYPEDEF_RE, EXTERN_RE, STRUCT_RE):
         match = pattern.match(declaration)
         if match:
             return match.group("name")
@@ -192,7 +196,8 @@ def _parse_header_symbols(header: Path) -> Dict[str, DocEntry]:
         name = _non_function_symbol_name(declaration)
         if name:
             if pending_summary:
-                entries[name] = DocEntry(signature=name, summary=pending_summary)
+                signature = f"struct {name}" if STRUCT_RE.match(declaration) else name
+                entries[name] = DocEntry(signature=signature, summary=pending_summary)
             pending_summary = ""
         index += 1
 
