@@ -11990,6 +11990,152 @@ static int pass_cpir(void)
  * (unlike folding straight to add hl,hl, which would require DE to be dead).
  * Saves 4 bytes and two (ix+d) memory accesses per occurrence.
  * ------------------------------------------------------------------------- */
+/* ------------------------------------------------------------------------- *
+ * pass_elim_dup_iy_field_capture:
+ *
+ * When two sibling static-inline calls in the same case/statement are each
+ * passed the same simple argument (e.g. cobint.c's OP_ADD_TO_S: var_set(vi,
+ * 0, var_get(vi, 0) + a) - var_get and var_set both take the same `vi`),
+ * dcc's inliner independently re-materializes that argument into a fresh
+ * #itmpN frame slot for each call site, even when the two materializations
+ * are adjacent and nothing between them could have changed the source. For
+ * a "mutable pointer kept in iy" field (pass_cache_mutable_ix_pointer_in_iy's
+ * own output - e.g. `in->a`, a struct field read through iy), that shows up
+ * textually as:
+ *
+ *     ld l,(iy+N)          ld l,(iy+N)
+ *     ld h,(iy+N+1)   ->   ld h,(iy+N+1)
+ *     ld (ix-A),l          ld (ix-A),l
+ *     ld (ix-A+1),h        ld (ix-A+1),h
+ *     ...                  ...
+ *     ld l,(iy+N)          (deleted - capture A's slot already has it)
+ *     ld h,(iy+N+1)
+ *     ld (ix-B),l
+ *     ld (ix-B+1),h
+ *     ...                  ...
+ *     ld l,(ix-B)          ld l,(ix-A)
+ *     ld h,(ix-B+1)        ld h,(ix-A+1)
+ *
+ * paying a full 4-instruction, 2-memory-access re-capture (the iy+d reads
+ * are 19 T-states apiece) to reproduce a value already sitting in capture
+ * A's slot.
+ *
+ * Deliberately narrow and quick to bail rather than searching past anything
+ * ambiguous: this only ever wants the exact "two adjacent parameter
+ * re-materializations, one clean consumer" shape a sibling pair of inlined
+ * calls produces, not a coincidental textual match found deep inside
+ * unrelated code. Every window bails the whole search (not just this
+ * candidate) the moment it sees a label (a case/statement boundary - iy's
+ * own field-object could differ across one), a call/rst, or *any* other
+ * mention of "iy" (covers iy being reassigned, saved, or restored -
+ * confirming iy itself, not just field offset N, is unchanged the whole
+ * way through is what makes "same offset" mean "same value"). Capture A's
+ * slot is required to go unwritten between capture A and the eventual use
+ * (ix_offset_pair_referenced_outside-style text match); capture B's slot is
+ * required to have no OTHER textual mention before the one clean read this
+ * pass rewires - anything else (a byte-only access, a second write, a shape
+ * this pass doesn't model) declines the whole candidate instead of guessing.
+ * ------------------------------------------------------------------------- */
+#define PEEP_DUP_IY_CAPTURE_SEARCH_WINDOW 10
+#define PEEP_DUP_IY_CAPTURE_USE_WINDOW 12
+
+static int ix_slot_written_signed(int off, int start, int end)
+{
+    char pat_lo[24], pat_hi[24];
+    int i;
+
+    sprintf(pat_lo, "(ix%+d),", off);
+    sprintf(pat_hi, "(ix%+d),", off + 1);
+    for (i = start; i < end && i < nlines; i++) {
+        if (strstr(lines[i], pat_lo) != NULL || strstr(lines[i], pat_hi) != NULL)
+            return 1;
+    }
+    return 0;
+}
+
+static int ix_slot_mentioned_signed(int off, int line)
+{
+    char pat_lo[24], pat_hi[24];
+
+    if (line < 0 || line >= nlines)
+        return 0;
+    sprintf(pat_lo, "(ix%+d)", off);
+    sprintf(pat_hi, "(ix%+d)", off + 1);
+    return strstr(lines[line], pat_lo) != NULL || strstr(lines[line], pat_hi) != NULL;
+}
+
+static int pass_elim_dup_iy_field_capture(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 3 < nlines; i++) {
+        int src_off_a, dst_off_a;
+        int j, k;
+        int src_off_b, dst_off_b;
+        int use_line;
+        int found_b;
+
+        if (!peep_parse_ld_iy_pair(lines[i], lines[i + 1], &src_off_a))
+            continue;
+        if (!peep_parse_st_ix_pair(lines[i + 2], lines[i + 3], &dst_off_a))
+            continue;
+
+        found_b = 0;
+        dst_off_b = 0;
+        j = i + 4;
+        for (; j < nlines && j < i + 4 + PEEP_DUP_IY_CAPTURE_SEARCH_WINDOW; j++) {
+            if (starts_label(lines[j]) || line_is_call_or_rst(lines[j]))
+                break;
+            if (j + 3 < nlines &&
+                peep_parse_ld_iy_pair(lines[j], lines[j + 1], &src_off_b) &&
+                src_off_b == src_off_a &&
+                peep_parse_st_ix_pair(lines[j + 2], lines[j + 3], &dst_off_b) &&
+                dst_off_b != dst_off_a) {
+                found_b = 1;
+                break;
+            }
+            if (strstr(lines[j], "iy") != NULL)
+                break;
+        }
+        if (!found_b)
+            continue;
+
+        use_line = -1;
+        for (k = j + 4; k < nlines && k < j + 4 + PEEP_DUP_IY_CAPTURE_USE_WINDOW; k++) {
+            int test_off;
+
+            if (starts_label(lines[k]) || line_is_call_or_rst(lines[k]))
+                break;
+            if (k + 1 < nlines && peep_parse_ld_ix_pair(lines[k], lines[k + 1], &test_off) &&
+                test_off == dst_off_b) {
+                use_line = k;
+                break;
+            }
+            if (ix_slot_mentioned_signed(dst_off_b, k))
+                break;
+        }
+        if (use_line < 0)
+            continue;
+
+        if (ix_slot_written_signed(dst_off_a, i + 4, use_line))
+            continue;
+
+        delete_n(j, 4);
+        use_line -= 4;
+        {
+            char newline[MAX_LINE];
+            sprintf(newline, "ld l,(ix%+d)", dst_off_a);
+            replace1_tagged(use_line, newline, "elim_dup_iy_field_capture");
+            sprintf(newline, "ld h,(ix%+d)", dst_off_a + 1);
+            replace1(use_line + 1, newline);
+        }
+        changed = 1;
+    }
+
+    return changed;
+}
+
 static int pass_dup_ix_load_to_reg_copy(void)
 {
     int i;
@@ -12447,6 +12593,7 @@ int main(int argc, char **argv)
      * jumps to relative jumps.  Both run after every structural pass so they
      * only tidy the settled instruction stream; dead-load removal first since
      * it shrinks code and can bring more branches into jr range. */
+    RUN_PASS(pass_elim_dup_iy_field_capture);
     RUN_PASS(pass_dup_ix_load_to_reg_copy);
     RUN_PASS(pass_fold_const_sign_extend);
     RUN_PASS(pass_narrow_dead_h_constant);

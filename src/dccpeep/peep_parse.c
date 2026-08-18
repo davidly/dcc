@@ -449,6 +449,84 @@ int peep_parse_ld_ix_pair(const char *s1, const char *s2, int *off)
     return 1;
 }
 
+int peep_parse_ld_l_iy(const char *s, char *off)
+{
+    char tmp[MAX_LINE];
+    const char *p;
+    int i;
+
+    strip_peep_comment_copy(tmp, s);
+
+    if (strncmp(tmp, "ld l,(iy", 8) != 0)
+        return 0;
+
+    p = tmp + 8;
+    i = 0;
+    while (*p && *p != ')' && i < 31)
+        off[i++] = *p++;
+    off[i] = 0;
+
+    if (*p != ')' || p[1] != 0)
+        return 0;
+
+    return i > 0;
+}
+
+int peep_parse_ld_h_iy(const char *s, char *off)
+{
+    char tmp[MAX_LINE];
+    const char *p;
+    int i;
+
+    strip_peep_comment_copy(tmp, s);
+
+    if (strncmp(tmp, "ld h,(iy", 8) != 0)
+        return 0;
+
+    p = tmp + 8;
+    i = 0;
+    while (*p && *p != ')' && i < 31)
+        off[i++] = *p++;
+    off[i] = 0;
+
+    if (*p != ')' || p[1] != 0)
+        return 0;
+
+    return i > 0;
+}
+
+/* Same "l then h, adjacent offsets" shape as peep_parse_ld_ix_pair, just
+ * against an (iy+N) source instead of (ix-N) - used to recognize dcc's
+ * "mutable pointer kept in iy" field reads (pass_cache_mutable_ix_pointer_
+ * in_iy's own output), where off is the small positive struct-field byte
+ * offset (0 for the low byte, +1 for the high byte) rather than a frame
+ * offset. */
+int peep_parse_ld_iy_pair(const char *s1, const char *s2, int *off)
+{
+    char loff[32];
+    char hoff[32];
+    int lo;
+    int hi;
+    char *endp;
+
+    if (!peep_parse_ld_l_iy(s1, loff))
+        return 0;
+    if (!peep_parse_ld_h_iy(s2, hoff))
+        return 0;
+
+    lo = (int)strtol(loff, &endp, 10);
+    if (*endp != 0)
+        return 0;
+    hi = (int)strtol(hoff, &endp, 10);
+    if (*endp != 0)
+        return 0;
+    if (hi != lo + 1)
+        return 0;
+
+    *off = lo;
+    return 1;
+}
+
 int peep_parse_st_ix_pair(const char *s1, const char *s2, int *off)
 {
     char tmp1[MAX_LINE];
