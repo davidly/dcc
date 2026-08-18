@@ -480,8 +480,10 @@ Any line printed is a pair you must rename or make `static`.
 ## Memory layout
 
 CP/M loads `.COM` files in one way. BSS begins immediately after the loaded
-image, and the loader sets `SP` to the highest free byte. The heap grows on
-demand between the end of BSS and the bottom of the stack. Because there is no
-guard between them by default, size the stack deliberately with `-stack` for
-programs with deep recursion or large frames — or build with `-fstack-check`
-(above) to turn an overflow into a clean `?stack overflow` exit.
+image. The CP/M loader itself sets `SP` to its own small CCP stack, not to the
+top of free memory; DCCRTL's startup code is what then sets `SP` to the
+highest free byte before your program runs. The heap grows on demand between
+the end of BSS and the bottom of the stack. Because there is no guard between
+them by default, size the stack deliberately with `-stack` for programs with
+deep recursion or large frames — or build with `-fstack-check` (above) to turn
+an overflow into a clean `?stack overflow` exit.
