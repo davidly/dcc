@@ -76,11 +76,14 @@ For new library hooks, prefer the same pattern with the uppercase header stem:
 <!-- ERRNO-SYMBOL-TABLE: all -->
 <!-- FLOAT-SYMBOL-TABLE: all -->
 <!-- LIMITS-SYMBOL-TABLE: all -->
+<!-- LOCALE-SYMBOL-TABLE: all -->
 <!-- SETJMP-SYMBOL-TABLE: all -->
+<!-- SIGNAL-SYMBOL-TABLE: all -->
 <!-- STDARG-SYMBOL-TABLE: all -->
 <!-- STDBOOL-SYMBOL-TABLE: all -->
 <!-- STDDEF-SYMBOL-TABLE: all -->
 <!-- STDINT-SYMBOL-TABLE: all -->
+<!-- TIME-SYMBOL-TABLE: all -->
 ```
 
 Marker behavior should be consistent across libraries:

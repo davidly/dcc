@@ -206,7 +206,7 @@ build so you rarely call the stages directly (get each tool's own flags with
   to link the final `.COM`. Set `dcc-use-emulated-m80=true` to assemble with
   Microsoft's `M80` under `ntvcm` instead.
 
-**Build/run one program** (compile → peephole → strip runtime → m80c → L80):
+**Build/run one program** (compile → peephole → m80c → strip runtime → m80c → L80):
 
 ```sh
 dccmake foo.c dcc-output=FOO dcc-peep=true   # foo.c -> build/FOO.COM
