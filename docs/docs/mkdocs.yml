@@ -27,8 +27,10 @@ nav:
       - "errno.h: Error reporting": en/standard-lib/02-errno.md
       - "float.h: Floating-point limits": en/standard-lib/03-float.md
       - "limits.h: Integer limits": en/standard-lib/04-limits.md
+      - "locale.h: Localization": en/standard-lib/17-locale.md
       - "math.h: Floating point math": en/standard-lib/08-math.md
       - "setjmp.h: Non-local jumps": en/standard-lib/09-setjmp.md
+      - "signal.h: Signal handling": en/standard-lib/16-signal.md
       - "stdarg.h: Variadic arguments": en/standard-lib/10-stdarg.md
       - "stdbool.h: Boolean type": en/standard-lib/11-stdbool.md
       - "stddef.h: Common definitions": en/standard-lib/12-stddef.md

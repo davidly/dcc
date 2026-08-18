@@ -83,5 +83,5 @@ symbol tables from documented declarations. Use markers such as
 `<!-- STDIO-SYMBOL-TABLE: all -->` to include symbols in header order, or
 `<!-- MATH-SYMBOL-TABLE: all sorted -->` when an alphabetical symbol table reads
 better. Other standard-library pages use the same hook with prefixes such as
-`STDLIB`, `STRING`, `CTYPE`, `ASSERT`, `ERRNO`, `FLOAT`, `LIMITS`, `SETJMP`,
-`STDARG`, `STDBOOL`, `STDDEF`, `STDINT`, and `TIME`.
+`STDLIB`, `STRING`, `CTYPE`, `ASSERT`, `ERRNO`, `FLOAT`, `LIMITS`, `LOCALE`,
+`SETJMP`, `SIGNAL`, `STDARG`, `STDBOOL`, `STDDEF`, `STDINT`, and `TIME`.

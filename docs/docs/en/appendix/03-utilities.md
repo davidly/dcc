@@ -29,8 +29,9 @@ dcc-ma <name> [mode] [options]
 ```
 
 - `<name>` — Test app name (e.g., `triangle`, `sieve`, `ttt`)
-- `[mode]` — Build mode: `full` (both builds, default), `fast` (optimized), or
-  `nopeep` (unoptimized)
+- `[mode]` — Build mode: `full` (both builds), `fast` (optimized), or `nopeep`
+  (unoptimized). The shell driver defaults to `fast`; the PowerShell driver
+  defaults to `full`.
 
 ### Build Driver Examples
 
@@ -56,19 +57,29 @@ dcc-ma cobint --mode fast --build-dir mybuild
 
 | Parameter | Default | Purpose |
 | --------- | ------- | ------- |
-| `-Name` | (required) | App name without `.c` extension |
-| `-Mode` | `full` | Build mode: `full`, `fast`, or `nopeep` |
-| `-BuildDir` | `build` | Build directory for artifacts |
-| `-Emulator` | `ntvcm` | Emulator command for CP/M tools |
+| `-Name` / positional name | (required) | App name without `.c` extension |
+| `-Mode` / `--mode` | `fast` (shell), `full` (PowerShell) | Build mode: `full`, `fast`, or `nopeep` |
+| `-SourcePath` / `--source-path` | Search by name | Explicit C source path |
+| `-BuildDir` / `--build-dir` | `build` | Build directory for artifacts |
+| `-Emulator` / `--emulator` | `ntvcm` | Emulator command for CP/M tools |
+| `-UseEmulatedM80` / `--emulated-m80` | off | Assemble with M80.COM under `ntvcm` instead of native `m80c` |
+| `-UseEmulatedL80` / `--emulated-l80` | off | Link with L80.COM under `ntvcm` instead of native `l80c` |
+
+The wrapper accepts only the parameters above. Use `dccmake` directly for
+project settings such as debug builds, per-format overrides, and multi-module
+input lists.
 
 ### Environment Variables
 
 - `DCC_STACK_SIZE` — C stack reserve in bytes; when unset, `dcc` uses its default
 - `DCC_FORCE_STACK_CHECK` — Force `-fstack-check` on all builds
 - `DCC_FLOATIO` — Set to `1` to force `%f` support on every `printf`-family call
-- `DCC_NO_FLOATIO` — Set to `1` to force `%f` support off on every `printf`-family call
 - `DCC_LONGIO` — Set to `1` to force long-format support on every `printf`-family call
-- `DCC_NO_LONGIO` — Set to `1` to force long-format support off on every `printf`-family call
+- `DCC_ALLOW_UNDOCUMENTED_Z80` — Shell driver only: set to `1` to allow
+  dccpeep passes that use the Z80's undocumented IYH/IYL opcodes; with
+  `dccmake`, use `dcc-allow-undocumented-z80=true`
+- `DCC_USE_EMULATED_M80`, `DCC_USE_EMULATED_L80` — Set to `1` to select the
+  real CP/M assembler or linker under `ntvcm`
 - `DCC_ARGS` — Extra whitespace-separated `dcc` options such as `-DNAME=1 -UOLD`
 - `NTVCM_ARGS` — Extra whitespace-separated `ntvcm` options such as `-p -s:4000000`
 - `DCC_HOME` — DCC C Compiler package/install root; used to find `include/`, `lib/`, and CP/M tools
@@ -207,12 +218,20 @@ dccmake dcc-peep=false
 | `dcc-no-floatio` | `false` | Force `%f` support off even for matching literals or the non-literal fallback |
 | `dcc-flongio` | `false` | Force long-format support on every `printf`-family call when true; literal formats are normally detected per call |
 | `dcc-no-longio` | `false` | Force long-format support off even for matching literals or the non-literal fallback |
+| `dcc-hexio` | `false` | Force `%x`/`%X` support on every `printf`-family call |
+| `dcc-no-hexio` | `false` | Force `%x`/`%X` support off, even for matching formats |
+| `dcc-octio` | `false` | Force `%o` support on every `printf`-family call |
+| `dcc-no-octio` | `false` | Force `%o` support off, even for matching formats |
 | `dcc-stack-bytes` | `512` | Stack reserve passed to `dcc` with `-stack` |
 | `dcc-stack-check` | Environment/default | Pass `-fstack-check` to `dcc` |
+| `dcc-no-narrow` | `false` | Pass `-fno-narrow` to disable byte-narrowing passes |
+| `dcc-debug` | `false` | Emit source-level debug metadata; requires native `m80c` |
 | `dcc-include-directory` | Auto-adds `.` when standard headers are in the current directory | Comma-separated include directories; `dcc-include` is an alias |
 | `dcc-define` | none | Comma-separated `NAME[=value]` entries passed to `dcc` as `-D`; `dcc-defines` is an alias |
 | `dcc-undefine` | none | Comma-separated names passed to `dcc` as `-U`; `dcc-undefines` is an alias |
 | `dcc-peep` | `true` | Run `dccpeep` after compiling each `.MAC` file |
+| `dcc-peep-debug` | `false` | Run `dccpeep` even in a debug build; optimized source-line locations may be unreliable |
+| `dcc-allow-undocumented-z80` | `false` | Pass `-fundocumented-z80` to `dccpeep` |
 | `dcc-build-dir` | `build` | Artifact directory |
 | `dcc-runtime` | `DCC_RUNTIME`, local `DCCRTL.MAC`, or `DCCRTL.MAC` | Runtime source passed to `dccrtlstrip` |
 | `dcc-tool` | `DCC`, local `dcc`, or `dcc` | DCC compiler command |
@@ -226,12 +245,19 @@ dccmake dcc-peep=false
 | `l80c-tool` | `L80C`, local `l80c`, or `l80c` | Native host linker command (default, no `ntvcm`) |
 | `dcc-use-emulated-l80` | `false` | Link with real `L80.COM` under `ntvcm` instead of native `l80c` |
 
-With all four float/long settings at their default `false`, `dccmake` passes no
-formatted-I/O override to dcc and adds no forced keep root to `dccrtlstrip`.
-dcc therefore performs its normal per-call format detection. In particular,
-`dcc-floatio=false` and `dcc-flongio=false` are neutral; use
-`dcc-no-floatio=true` or `dcc-no-longio=true` only when support must be forced
-off.
+`dccmake` initializes its Boolean settings from the matching environment
+variables before reading `dccmake.txt`: `DCC_FLOATIO`, `DCC_NO_FLOATIO`,
+`DCC_LONGIO`, `DCC_NO_LONGIO`, `DCC_HEXIO`, `DCC_NO_HEXIO`, `DCC_OCTIO`,
+`DCC_NO_OCTIO`, `DCC_FORCE_STACK_CHECK`, `DCC_NO_NARROW`, `DCC_DEBUG`,
+`DCC_PEEP_DEBUG`, `DCC_ALLOW_UNDOCUMENTED_Z80`, `DCC_USE_EMULATED_M80`, and
+`DCC_USE_EMULATED_L80`. File settings and then command-line settings override
+those defaults.
+
+With all formatted-I/O settings at their default `false`, `dccmake` passes no
+override to dcc and adds no forced keep root to `dccrtlstrip`. dcc therefore
+performs its normal per-call detection for float, long, hexadecimal, and octal
+formats. The force-on settings are neutral when false; use a `dcc-no-*io`
+setting only when that format support must be forced off.
 
 Source input basenames and the output name must be CP/M 8.3-clean. For example,
 `module1.c` is valid, but a generated module output base longer than eight
@@ -245,8 +271,16 @@ characters is not.
 | `-fno-floatio` | `dcc-no-floatio=true` |
 | `-fl`, `-flongio` | `dcc-flongio=true` |
 | `-fno-longio` | `dcc-no-longio=true` |
+| `-fhexio` | `dcc-hexio=true` |
+| `-fno-hexio` | `dcc-no-hexio=true` |
+| `-foctio` | `dcc-octio=true` |
+| `-fno-octio` | `dcc-no-octio=true` |
 | `-s <bytes>`, `-stack <bytes>`, `-stack=<bytes>` | `dcc-stack-bytes=<bytes>` |
 | `-fstack-check` | `dcc-stack-check=true` |
+| `-fno-narrow` | `dcc-no-narrow=true` |
+| `-g` | `dcc-debug=true` |
+| `-femulated-m80` | `dcc-use-emulated-m80=true` |
+| `-femulated-l80` | `dcc-use-emulated-l80=true` |
 | `-I <dir>`, `-Idir` | Add an include directory |
 | `-D <name>[=value]`, `-Dname=value` | Pass a define to `dcc` |
 | `-U <name>`, `-Uname` | Pass an undefine to `dcc` |
@@ -254,6 +288,22 @@ characters is not.
 
 `-c` and `-module` are rejected because `dccmake` decides module mode from the
 input order.
+
+## Peephole Optimizer (`dccpeep`)
+
+`dccmake` runs `dccpeep` after compilation when `dcc-peep=true`. It can also be
+invoked directly:
+
+```sh
+dccpeep [-Ot|-Os] [-fundocumented-z80] [-fstats] input.mac output.mac
+```
+
+| Option | Purpose |
+| ------ | ------- |
+| `-Ot` | Optimize for execution time (default) |
+| `-Os` | Optimize for code size |
+| `-fundocumented-z80` | Allow passes that use undocumented Z80 opcodes |
+| `-fstats` | Print optimization statistics |
 
 ## Test Suite Runner (`runall.ps1`)
 
@@ -263,19 +313,26 @@ runtime arguments, stack sizes, and optional DCC C Compiler build flags.
 
 Runs in parallel by default:
 
-- Each app builds in its own `build/<app>/` subdirectory so concurrent builds
-  don't clobber shared artifacts.
-- The whole run is isolated under a per-invocation `build/run-<pid>/` folder that
-  is removed automatically on exit; pass `-KeepBuild` to retain it for debugging.
-- A live `[ n/total] PASS/FAIL` status prints as each app completes.
+- Each app builds in its own directory below a per-invocation
+  `<build-root>/run-<pid>/` folder, so concurrent builds do not clobber shared
+  artifacts.
+- The per-invocation folder is removed automatically on exit; pass `-KeepBuild`
+  to retain it. On Linux, the build root defaults to `/dev/shm/dcc-runall` when
+  available; elsewhere it defaults to `build`.
+- Failures print as each app completes. PASS lines are suppressed by default;
+  pass `-FailuresOnly:$false` to show every result.
 - Use `-Serial` to fall back to sequential builds in the shared `build/`
   directory.
 - Pass `-Extended` to also run the imported c-testsuite single-exec corpus
   (via `runall-extended.ps1`) after the main suite.
 - The lightweight stack-overflow guard (`-fstack-check`) is **on by default**;
   pass `-NoStackCheck` to build without it.
-- Pass `-Report` to append per-app run time and `.COM` size measurements to a
-  CSV report. Report mode implies `-NoStackCheck`.
+- Z80 cycle counts and `.COM` sizes are checked against
+  `tests/perf_baselines.csv` by default, with no separate benchmark pass. Use
+  `-NoPerfCheck` to skip this check or `-UpdatePerfBaseline` after an intentional
+  measured change.
+- Pass `-Report` to append cycles, `.COM` sizes, and clock-normalized times to a
+  historical CSV report. Report mode implies `-NoStackCheck`.
 
 ### Test Runner Usage
 
@@ -297,9 +354,13 @@ With no options, the suite runs in parallel, enables `-fstack-check`, and uses
 ./scripts/runall.ps1 -Emulator altair
 ./scripts/runall.ps1 -Mode fast            # optimized build only
 ./scripts/runall.ps1 -Mode nopeep          # unoptimized build only
+./scripts/runall.ps1 -Apps tprintf,tlong   # selected apps only
+./scripts/runall.ps1 -FailFast             # stop dispatching after a failure
+./scripts/runall.ps1 -FailuresOnly:$false  # include PASS lines
 ./scripts/runall.ps1 -Extended             # also run extended c-testsuite
-./scripts/runall.ps1 -KeepBuild            # keep build/run-<pid>/ for debugging
+./scripts/runall.ps1 -KeepBuild            # keep the per-run build folder
 ./scripts/runall.ps1 -Report               # also append perf_results.csv
+./scripts/runall.ps1 -Mode full -UpdatePerfBaseline
 ```
 
 ### Build Modes
@@ -321,17 +382,29 @@ The `-Mode` parameter selects which optimization pass(es) to build and verify.
 | --------- | ------- | ------- |
 | `-Emulator` | `ntvcm` | Emulator command for running .COM files |
 | `-NoStackCheck` | (off) | Disable `-fstack-check` (the guard is ON by default) |
+| `-UseEmulatedM80` | (off) | Assemble with M80.COM under `ntvcm` instead of native `m80c` |
+| `-UseEmulatedL80` | (off) | Link with L80.COM under `ntvcm` instead of native `l80c` |
 | `-BuildDir` | `build` | Build directory for artifacts |
+| `-NoRamDisk` | (off) | On Linux, disable the automatic `/dev/shm/dcc-runall` build root |
 | `-BaselineDir` | `tests/baselines` | Directory of per-app `<app>.txt` baselines |
 | `-Mode` | `fast` | Build mode: `fast` (optimized), `nopeep` (unoptimized), or `full` |
+| `-Apps` | all tests | Comma-separated app names to run |
+| `-RunTimeout` | `60` | Per-build and per-emulator-run timeout in seconds |
 | `-Help` | (off) | Show help text and exit without building or running tests |
 | `-Extended` | (off) | Also run the extended c-testsuite corpus after the main suite |
 | `-Serial` | (off) | Run sequentially instead of the default parallel mode |
 | `-ThrottleLimit` | CPU core count | Max concurrent apps in parallel mode |
-| `-KeepBuild` | (off) | Keep the per-invocation `build/run-<pid>/` folder instead of removing it on exit (parallel mode) |
-| `-Report` | (off) | Append per-app execution time and `.COM` size metrics to a CSV report; implies `-NoStackCheck` |
+| `-KeepBuild` | (off) | Keep the per-invocation run folder instead of removing it on exit (parallel mode) |
+| `-FailFast` | (off) | Stop dispatching new apps after the first correctness or performance failure |
+| `-FailuresOnly` | on | Suppress PASS lines; pass `-FailuresOnly:$false` for full output |
+| `-Report` | (off) | Append cycle, normalized-time, and `.COM` size metrics to a CSV report; implies `-NoStackCheck` |
 | `-ReportFile` | `perf_results.csv` | CSV path used by `-Report` |
-| `-ReportClockHz` | `1000000000` | ntvcm clock speed used for measured app runs in report mode; set to `0` for full-speed report runs |
+| `-ReportClockHz` | `400000000` | Nominal clock used to derive report milliseconds from Z80 cycles; does not throttle execution |
+| `-NoPerfCheck` | (off) | Skip the default cycle-count and `.COM` size regression check |
+| `-UpdatePerfBaseline` | (off) | Update checked performance columns for the modes built by this run |
+| `-PerfBaselineFile` | `tests/perf_baselines.csv` | Checked cycle-count and `.COM` size baseline |
+| `-NarrowDiff` | (off) | Compare normal and `-fno-narrow` runs to detect narrowing behavior changes |
+| `-TimingBreakdown` | (off) | Print suite-phase and aggregate build-pipeline timing percentages |
 
 ### Output
 
@@ -379,6 +452,7 @@ host-only skip settings.
 ./scripts/validate-unit-test.ps1              # validate every runnable test
 ./scripts/validate-unit-test.ps1 -App tprintf # validate one test app
 ./scripts/validate-unit-test.ps1 -CC clang    # use clang on Linux/macOS
+./scripts/validate-unit-test.ps1 -Serial      # sequential fallback
 ./scripts/validate-unit-test.ps1 -Help        # show help and exit
 ```
 
@@ -391,6 +465,8 @@ host-only skip settings.
 | `-CC` | platform default | C compiler override on macOS/Linux; ignored on Windows |
 | `-App` | all tests | Validate one test app, without the `.c` extension |
 | `-RunTimeout` | `10` | Seconds to allow each host executable to run |
+| `-Serial` | (off) | Run sequentially instead of the default parallel mode |
+| `-ThrottleLimit` | CPU core count | Max concurrent apps in parallel mode |
 | `-Help` | (off) | Show help text and exit without building or running tests |
 
 ### Linux 32-bit Validation
@@ -441,7 +517,14 @@ one test, keyed by `name`:
 ```json
 {
   "apps": [
-    { "name": "<app>", "args": "<string>", "stdin": "<string>", "stack_size": <int>, "dcc_args": "<string>", "dcc_floatio": <bool>, "dcc_longio": <bool>, "ignore": <bool> }
+    {
+      "name": "<app>",
+      "args": "<string>",
+      "fixtures": ["<file>"],
+      "extra_scenarios": [
+        { "suffix": "<name>", "args": "<string>", "fixtures": ["<file>"] }
+      ]
+    }
   ]
 }
 ```
@@ -455,32 +538,50 @@ one test, keyed by `name`:
 | `dcc_args` | string | no | `""` | Extra DCC C Compiler build arguments passed through `dccmake` (for example `-DNAME=1 -UOLD`) |
 | `dcc_floatio` | boolean | no | environment/default | True forces `-ffloatio`; false leaves per-call auto-detection active for this app |
 | `dcc_longio` | boolean | no | environment/default | True forces `-flongio`; false leaves per-call auto-detection active for this app |
+| `fixtures` | string array | no | `[]` | Files from `tests/` copied into the app build directory under uppercase CP/M names |
+| `extra_scenarios` | object array | no | `[]` | Additional argument/input/fixture scenarios run against the same built `.COM` |
 | `ignore` | boolean | no | `false` | When `true`, the test is skipped entirely (not built or run) |
+| `perf_ignore` | boolean | no | `false` | Exclude nondeterministic apps from cycle-count regression checks |
+| `narrow_diff_ignore` | boolean | no | `false` | Exclude layout-sensitive apps from `-NarrowDiff` |
+| `host` | boolean | no | `false` | Skip ordinary host validation; with the 32-bit requirement below, allow only the Linux `-m32` path |
+| `requires-32bit-linux-host-compiler` | boolean | no | `false` | With `host: true`, allow host validation only when Linux GCC's probed `-m32` mode is active |
+| `requires-non-msvc-host-compiler` | boolean | no | `false` | Skip host validation under MSVC |
+| `requires-non-macos-host-compiler` | boolean | no | `false` | Skip host validation on macOS |
+| `host-cflags` | string | no | `""` | Replace the default GCC/Clang flags for this app's host build |
 
-Entries with none of the optional properties have no effect, so an app only
-appears here if it overrides at least one default.
+Each `extra_scenarios` object accepts a required `suffix` plus optional `args`,
+`stdin`, and `fixtures`. It reuses the primary `.COM` and compares output with
+`tests/baselines/<app>_<suffix>.txt`. Entries with none of the optional
+properties have no effect, so an app only appears here if it overrides at least
+one default.
 
 ### Example
 
 ```json
 {
   "apps": [
-    { "name": "ttt", "args": "10" },
-    { "name": "pint", "args": "e.pas" },
-    { "name": "tkbd", "stdin": "x" },
-    { "name": "cobint", "args": "e.cob", "stack_size": 1536 },
-    { "name": "triangle", "stack_size": 768 },
-    { "name": "na", "ignore": true },
-    { "name": "tc89fltb", "ignore": true },
-    { "name": "spsmash", "ignore": true }
+    {
+      "name": "pint",
+      "args": "e.pas",
+      "stack_size": 768,
+      "fixtures": ["E.PAS"],
+      "extra_scenarios": [
+        { "suffix": "ttt", "args": "ttt.pas", "fixtures": ["TTT.PAS"] }
+      ]
+    },
+    { "name": "tkbd", "stdin": "x", "perf_ignore": true },
+    { "name": "tstackov", "host": true, "narrow_diff_ignore": true },
+    { "name": "na", "ignore": true }
   ]
 }
 ```
 
 ### Common reasons to add an entry
 
-- **Program reads a data file** — interpreters like `pint`, `cobint`, `forint`
-  take a fixture filename as `args` (e.g. `e.pas`, `e.cob`).
+- **Program reads a data file** — declare it in `fixtures` and pass its CP/M
+  name in `args`; only that app's build directory receives the file.
+- **One binary needs several datasets** — use `extra_scenarios` to rerun the
+  same `.COM` with separate arguments, fixtures, and baselines.
 - **Program reads from stdin** — set `stdin` for tests that require scripted
   keyboard/input text (for example, `tkbd` expects `x`).
 - **Deep recursion** — apps such as `triangle` (768) and `cobint` (1536) need a
@@ -489,6 +590,12 @@ appears here if it overrides at least one default.
 - **Cannot be auto-tested** — set `ignore: true` for interactive programs
   (`na`, an editor that waits for keystrokes), tests that intentionally fail to
   compile (`tc89fltb`), or deliberate stack-smashers (`spsmash`).
+- **Results are inherently nondeterministic** — use `perf_ignore` for timing-
+  or filesystem-sensitive apps, and `narrow_diff_ignore` only when output
+  legitimately depends on stack layout.
+- **Host compiler coverage is conditional** — use the host requirement fields
+  for ABI, compiler, or libc differences; `host-cflags` handles per-test C mode
+  or optimizer requirements.
 
 To change a test's run behavior, edit `tests/_test_overrides.json` and re-run
 the suite. See also `tests/README.md` in the repository for how tests,
@@ -496,13 +603,15 @@ baselines, and this file relate.
 
 ## Performance Reporting (`runall.ps1 -Report`)
 
-`runall.ps1 -Report` collects performance data during the normal verified test
-suite. It appends per-app execution time and `.COM` size metrics to a CSV report,
-while still checking output against the usual baselines.
+`runall.ps1 -Report` appends historical performance data during the normal
+verified suite; it does not add a separate benchmark pass. Every `ntvcm` run
+already uses `-p -s:0`, so execution remains unthrottled while the runner records
+the emulator's host-independent Z80 cycle count and the `.COM` size.
 
-Report mode implies `-NoStackCheck` so timings reflect normal builds. When using
-`ntvcm`, measured app runs use a fixed 1 GHz emulator clock by default; set
-`-ReportClockHz 0` for full-speed report runs.
+Report mode implies `-NoStackCheck`. The `peep_ms` and `nopeep_ms` values are
+derived as `cycles / ReportClockHz * 1000`, using a default nominal clock of
+400 MHz; `ReportClockHz` never changes emulator speed. Set it to `0` to leave
+the derived millisecond fields empty while retaining cycles and sizes.
 
 ```pwsh
 ./scripts/runall.ps1 -Report
@@ -514,27 +623,37 @@ Results are written to `perf_results.csv` by default. **Results append to the
 file**, so each report run adds a new row per app:
 
 ```csv
-machine,utc-timestamp,app,peep_ms,peep_size,nopeep_ms,nopeep_size
-mycomputer,2026-06-16T07:18:39Z,tstring,17000,6400,19000,6912
-mycomputer,2026-06-16T07:18:39Z,sieve,1000,2176,3000,2304
-mycomputer,2026-06-16T07:24:21Z,tstring,17000,6400,17000,6912
-mycomputer,2026-06-16T07:24:21Z,sieve,1000,2176,3000,2304
+machine,os,utc-timestamp,app,peep_ms,peep_cycles,peep_size,nopeep_ms,nopeep_cycles,nopeep_size,clock_hz
+z80-lab,macOS,2026-08-18T12:00:00Z,sieve,0.75,300000,2176,,,,400000000
 ```
 
 **Columns:**
 
 - `machine` — Name of the machine running the benchmark
+- `os` — Host operating-system name
 - `utc-timestamp` — UTC timestamp (ISO 8601 format, e.g., `2026-06-16T07:18:39Z`)
 - `app` — Application name
-- `peep_ms` — Execution time in milliseconds (optimized with dccpeep)
+- `peep_ms` — Clock-normalized milliseconds for the optimized build
+- `peep_cycles` — Z80 cycles reported for the optimized build
 - `peep_size` — Binary size in bytes (optimized)
-- `nopeep_ms` — Execution time in milliseconds (unoptimized)
+- `nopeep_ms` — Clock-normalized milliseconds for the unoptimized build
+- `nopeep_cycles` — Z80 cycles reported for the unoptimized build
 - `nopeep_size` — Binary size in bytes (unoptimized)
+- `clock_hz` — Nominal `ReportClockHz` used for the millisecond calculation
 
 The `-ReportFile` parameter controls the output path. The `-Mode` parameter
 controls which CSV columns are populated: `-Mode full` fills both `peep_*` and
 `nopeep_*`; single-mode runs fill only the selected mode's columns. In the CSV,
 `peep_*` columns hold optimized-build measurements.
+
+### Checked performance baselines
+
+Normal stack-checked runs compare each built mode's cycle count and `.COM` size
+with `tests/perf_baselines.csv`. This check is on by default and uses the same
+execution as output verification. `-NoPerfCheck`, `-NoStackCheck`, and `-Report`
+skip it. After an intentional, verified change, run with
+`-UpdatePerfBaseline`; only the mode columns built by that invocation are
+rewritten.
 
 ## Stack Size Measurement (`stacksize.sh` / `stacksize.bat`)
 

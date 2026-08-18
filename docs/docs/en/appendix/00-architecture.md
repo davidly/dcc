@@ -281,13 +281,13 @@ graph TB
 | Group | Modules | Responsibility |
 | --- | --- | --- |
 | Shared | `dcc.h`, `dcc_state.c`, subsystem `*_internal.h` files | Target model, shared contracts, and lifecycle-owned compiler state |
-| Front end | `dcc.c`, `dcc_preproc.c`, `dcc_pp_expr.c`, `dcc_func.c`, `dcc_stmt.c`, `dcc_diag_emit.c` | Driver, preprocessing/lexing, declarations/statements, frame scan, and diagnostics |
-| Types / symbols | `dcc_types.c`, `dcc_symbols.c`, `dcc_constexpr.c`, `dcc_fold.c` | Type system, symbol tables, constant-expression evaluation, constant folding |
-| Typed AST / metadata | `dcc_ast.c`, `dcc_ast_build.c`, `dcc_ast_gen*.c`, `dcc_ast_metadata.c`, `dcc_ast_stmt_meta.c` | Transient typed trees, semantic classifiers, and non-emitting declaration/scope replay |
+| Front end | `dcc.c`, `dcc_preproc.c`, `dcc_pp_expr.c`, `dcc_func.c`, `dcc_stmt.c`, `dcc_diag_emit.c`, `dcc_global_scan.c` | Driver, preprocessing/lexing, declarations/statements, conservative global-use prepass, frame scan, and diagnostics |
+| Types / symbols | `dcc_types.c`, `dcc_symbols.c`, `dcc_constexpr.c`, `dcc_fold.c`, `dcc_asmname.c` | Type system, symbol tables, constant evaluation/folding, and M80-safe assembly-name mapping |
+| Typed AST / metadata | `dcc_ast.c`, `dcc_ast_build.c`, `dcc_ast_gen*.c`, `dcc_ast_metadata.c`, `dcc_ast_stmt_meta.c`, `dcc_licm.c` | Transient typed trees, semantic classifiers, and non-emitting LICM/CSE planning and declaration/scope replay |
 | Compatibility helpers | `dcc_expr.c`, `dcc_ops.c`, `dcc_cmp.c`, `dcc_assign.c`, `dcc_decl.c`, `dcc_stmt_fast.c`, `dcc_array_narrow.c` | Shared initializer/type behavior and conservative source proofs; not a production body emitter |
-| MIR core | `dcc_mir.c`, `dcc_mir_emit_common.c`, `dcc_mir_target.c`, `dcc_mir_schedule.c` | Persistent IR, metadata repair, CFG/verifier, liveness, target constraints, common emission |
+| MIR core | `dcc_mir.c`, `dcc_mir_emit_common.c`, `dcc_mir_target.c`, `dcc_mir_schedule.c`, `dcc_mir_stream.c` | Persistent IR, metadata repair, CFG/verifier, liveness, target constraints, isolated candidate streams, and common emission |
 | MIR selection | `dcc_mir_select.c`, `dcc_mir_homed_cfg.c`, `dcc_mir_spilled_cfg.c` | Transactional generated candidates, homes/spills, and `mir-v1` selection |
-| Machine schedules | `dcc_mir_machine_emit.c`, `dcc_mir_machine_*.c` | Exact structural matchers and specialized Z80 streams |
+| Machine schedules | `dcc_mir_machine_emit.c` (coordinator), `dcc_mir_machine_*.c` (families) | Exact structural matchers and specialized Z80 streams |
 | Top level / output | `dcc_func.c`, `dcc_global_init.c`, `dcc_data.c` | Function/frame parsing, one production metadata/MIR body walk, global initializer recording, deferred static-body placement, and data-section emission |
 
 ### Exact machine-schedule families
@@ -298,14 +298,20 @@ dispatch. Cohesive schedules live in separately compiled families:
 | Family module | Responsibility |
 | --- | --- |
 | `dcc_mir_machine_attention.c` | Matrix, attention, and fixed-point kernels |
+| `dcc_mir_machine_byte_scans.c` | Byte/row scans, fills, copies, hashes, records, and file-line kernels |
+| `dcc_mir_machine_constant_folding.c` | Constant/result flows, result switches, and indexed-member schedules |
+| `dcc_mir_machine_containers.c` | Array, container, stack, comparison, and reduction schedules |
+| `dcc_mir_machine_float_recursion.c` | Floating-point, recursive, tree, and byte-status kernels |
 | `dcc_mir_machine_numeric.c` | Integer, long, fixed-point, and math kernels |
 | `dcc_mir_machine_float_reports.c` | Float reports and checks |
 | `dcc_mir_machine_scanners.c` | Scan, parse, and traversal loops |
 | `dcc_mir_machine_aggregate_checks.c` | Aggregate, array, and struct checks |
+| `dcc_mir_machine_structural_checks.c` | Literal, bitset, sieve, string, structure, and bitfield validations |
 | `dcc_mir_machine_runtime_runners.c` | Runtime, file, and system orchestration |
 | `dcc_mir_machine_interpreter_runners.c` | Interpreter and parser runners |
 | `dcc_mir_machine_call_runners.c` | Call/control orchestration |
 | `dcc_mir_machine_validation_runners.c` | Scope, wide-value, and validation runners |
+| `dcc_mir_machine_wide_records.c` | Wide arithmetic, aggregate updates, and record-oriented schedules |
 | `dcc_mir_machine_endgame.c` | Large final exact schedule families |
 
 Machine families follow a zero-shared-state rule:
@@ -394,10 +400,10 @@ Key design points:
 
 ## The runtime: a block-structured library sized for stripping
 
-The runtime `DCCRTL.MAC` is a single ~19,000-line assembly source, but its
+The runtime `DCCRTL.MAC` is a single roughly 25,000-line assembly source, but its
 *architecture* is what makes the toolchain's "pay only for what you use"
 property possible. Rather than one monolithic blob, the runtime is written as
-**~280 parsed blocks** around `public` entry points and shared preludes. A
+hundreds of parsed blocks around `public` entry points and shared preludes. A
 program never links the whole library — `dccrtlstrip` keeps only the blocks the
 application actually references (the mark-and-sweep details are in the companion
 appendix [*Runtime optimization*](01-dccrtlstrip.md)). The architectural
@@ -405,8 +411,8 @@ consequence is that **every routine has a well-defined, measurable size cost**.
 
 ```mermaid
 flowchart TB
-    subgraph RT["DCCRTL.MAC (~19,000 lines, ~280 parsed blocks)"]
-      BASE["always-present baseline<br/>~297 lines, 7 blocks<br/>(start, argv/console, heap, exit)"]
+    subgraph RT["DCCRTL.MAC (block-structured runtime)"]
+      BASE["always-present baseline<br/>(start, argv/console, heap, exit)"]
         IO["stdio blocks<br/>printf, file I/O core"]
         MEM["memory blocks<br/>malloc/free/realloc"]
         LONG["32-bit long blocks"]
@@ -435,7 +441,7 @@ The gap between the two is the whole story of the runtime's size architecture: a
 small `self` with a large `marginal` means the routine sits on top of a big
 shared substrate (the file-I/O core, or the float arithmetic core).
 
-### The always-present baseline (~297 lines)
+### The always-present baseline
 
 Seven blocks are always linked because they are reachable from the forced
 `start` root: program entry and heap/BSS setup, the command-tail `argv` builder
@@ -490,10 +496,11 @@ the runtime and rebuilding the docs is all that is needed to refresh them.
 - Machine-dependent optimization is split out into **`dccpeep`**, a
   fixpoint peephole optimizer over the assembly text, with separate time (`-Ot`)
   and size (`-Os`) strategies.
-- The runtime `DCCRTL.MAC` is **block-structured** (~280 parsed blocks over a
-  ~297-line baseline), so every routine has a measurable
+- The runtime `DCCRTL.MAC` is **block-structured** into hundreds of public
+  blocks, so every routine has a measurable
   `self`/`marginal` size cost and `dccrtlstrip` can link only the blocks a
-  program references.
+  program references. The exact current totals are generated on the
+  [runtime size page](02-runtime-sizes.md).
 - The back half of the pipeline uses native **`m80c`**/**`l80c`** (or
   Microsoft **`M80`**/**`L80`** under `ntvcm`) for assembly and linking - a
   shared LINK-80-compatible `.REL` object format that DCC C Compiler consumes

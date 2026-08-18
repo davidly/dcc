@@ -9,7 +9,7 @@ argument-hint: 'Describe the dcc toolchain task'
 dcc is a cross toolchain. Host programs emit Z80 assembly and CP/M 2.2
 executables:
 
-`dcc -> dccpeep (optional) -> dccrtlstrip -> m80c -> l80c -> ntvcm`
+`dcc -> dccpeep (optional) -> m80c -> dccrtlstrip -> m80c -> l80c -> ntvcm`
 
 Production function bodies are generated from MIR only. AST processing after
 parsing is metadata-only; legacy body emission, capture/replay, and speculative
