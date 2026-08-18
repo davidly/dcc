@@ -225,6 +225,14 @@ int ast_for_mod_fill_supported(const struct AstNode *n, struct Sym **out_arr,
 int ast_expr_references_ident(const struct AstNode *n, const char *name);
 int ast_expr_has_side_effects(const struct AstNode *n);
 
+/* True if `n` provably yields exactly 0 or 1 on its own: a bool-typed
+ * subexpression, a 0/1 integer literal, `!`, a comparison operator, `&&`/
+ * `||`, or a cast to bool - the same proof dcc_ast_gen_expr.c trusts
+ * elsewhere for an RHS being stored into a bool. Used by dcc_func.c to gate
+ * inlining a bool-returning function's return expression, since splicing it
+ * directly at a call site bypasses AST_RETURN's own 0/1 canonicalization. */
+int ast_expr_yields_bool01(const struct AstNode *n);
+
 /* Byte-memory word-packing idiom (mem_get_word/mem_set_word-shaped code -
  * see dcc_ast_gen_support.c for the full rationale): `arr[E] | (arr[E+1]
  * << 8)` for a read, `arr[E] = lo; arr[E+1] = hi;` for a write, where E is

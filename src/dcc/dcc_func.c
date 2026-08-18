@@ -468,7 +468,7 @@ static void record_inline_function_if_simple(struct Sym *s)
         return;
     if ((s->type & 15) != TYPE_VOID &&
         (!(type_size(s->type) == 1 || type_size(s->type) == 2 || type_size(s->type) == 4) ||
-         type_is_bool(s->type) || type_is_struct_object(s->type)))
+         type_is_struct_object(s->type)))
         return;
 
     nparams = 0;
@@ -525,6 +525,18 @@ static void record_inline_function_if_simple(struct Sym *s)
     if (ret_expr == NULL)
         return;
     if (!inline_expr_is_simple(s, ret_expr))
+        return;
+    /* A bool-returning function normally gets its 0/1 canonicalization from
+     * AST_RETURN's own codegen (mir_lower_conversion on the return value) -
+     * substituting ret_expr directly at a call site bypasses that entirely,
+     * so only accept it here when ret_expr already provably yields 0/1 on
+     * its own (ast_expr_yields_bool01: a bool-typed subexpression, a 0/1
+     * literal, `!`, a comparison, `&&`/`||`, or a cast to bool - the same
+     * proof dcc_ast_gen_expr.c already trusts elsewhere for an RHS being
+     * stored into a bool). Anything else (e.g. `return some_int_expr;` used
+     * where C's implicit bool conversion would normally truncate/canonicalize
+     * it) is declined rather than risk splicing in a non-canonical value. */
+    if (type_is_bool(s->type) && !ast_expr_yields_bool01(ret_expr))
         return;
 
     s->inline_return_expr = ret_expr;
