@@ -48,6 +48,11 @@ static unsigned long ret_high_only(void)
     return 0x00010000UL;
 }
 
+static long ret_negative_one(void)
+{
+    return -1L;
+}
+
 static void use_after_long_return(void)
 {
     unsigned long x;
@@ -175,6 +180,10 @@ static void test_compares(void)
 
     cki("eq high-only", 0x00010000UL == ret_high_only(), 1);
     cki("ne high-only", 0x00010000UL != ret_high_only(), 0);
+    cki("call signed < zero", ret_negative_one() < 0L, 1);
+    cki("call signed >= zero", ret_negative_one() >= 0L, 0);
+    cki("call signed > -2", ret_negative_one() > -2L, 1);
+    cki("call signed <= -2", ret_negative_one() <= -2L, 0);
 }
 
 static void test_compound(void)

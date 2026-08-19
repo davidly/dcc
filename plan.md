@@ -3,11 +3,23 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-19 Doctor startup correctness repair (complete)
+
+- The external DXISAM `DOCTOR.COM` now verifies all three tables and renders
+  the Riverside Doctors Surgery UI in both peep and nopeep builds. The fixed
+  images are **48,512/56,960 bytes** peep/nopeep.
+- The failure was a MIR wide-result forwarding bug, not an application or
+  database issue. A `long` call result forwarded on the Z80 stack into a
+  signed constant comparison was neither restored to DE:HL nor removed from
+  the stack; `read_data_slot()` consequently returned through address zero.
+- `tlongreg` now covers all four signed relational operators with a direct
+  `long` call on the left and a constant on the right.
+
 ## 2026-08-19 Doctor MIR size recovery (complete)
 
-- Default MIR+dccpeep now links the external DXISAM `DOCTOR.COM` at exactly
-  **48,640 bytes**, matching the historical emitter; nopeep is **56,960
-  bytes**. The reproduced MIR starting point was 59,264 bytes.
+- Default MIR+dccpeep now links the external DXISAM `DOCTOR.COM` at
+  **48,512 bytes**, 128 bytes below the historical emitter; nopeep is
+  **56,960 bytes**. The reproduced MIR starting point was 59,264 bytes.
 - The recovery is generic and default-on: MIR spill/PHI/call/register-home
   improvements plus safe normal-policy dccpeep transforms. The experimental
   speed/size mode and all temporary isolation gates are removed.
@@ -16,7 +28,7 @@ current execution plan and handoff.
   preserving profitable dense call plans and the exact Doctor outputs.
 - Upstream `main` through `b8ee820b` is merged, including fastcall support,
   new inline/function-call coverage, MIR query caching, and dccpeep control-
-  flow/cache work. The merged tree preserves Doctor at **48,640/56,960
+  flow/cache work. The merged tree preserves Doctor at **48,512/56,960
   bytes** peep/nopeep.
 - Strict full+extended stack and no-stack runs each pass 402 runnable apps
   with 10 configured skips and zero regressions. Ordinary and stack censuses

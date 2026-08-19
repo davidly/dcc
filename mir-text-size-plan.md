@@ -22350,6 +22350,28 @@ regressions. None belongs to the 20 changed apps. Requested
 aggregate/ABI/promotion debt is zero. No baseline changed and no commit or
 push was made.
 
+## Doctor startup correctness repair (2026-08-19)
+
+The size-recovered external DXISAM `DOCTOR.COM` loaded its generated database
+but returned to CP/M during the first `table_verify()` call. Peep and nopeep
+failed identically, while the last legacy AST emitter verified all three
+tables and rendered the surgery UI. Hybrid links isolated the failure to the
+MIR-generated ISAMDB module.
+
+`read_data_slot()` exposed the generic backend bug. Its `lseek()` result is a
+signed `long` used directly by `< 0L`. Wide call-result forwarding pushed
+DE:HL onto the Z80 stack, but the signed-constant relational fast path then
+compared the materialized zero instead of restoring the call result. The four
+bytes also remained on the stack; because this leaf function had no local
+frame to reset SP, its epilogue popped those bytes as IX and returned through
+address zero.
+
+The wide binary emitter now restores a stack-forwarded left operand to DE:HL
+before using the signed-constant relational fast path. `tlongreg` permanently
+covers `<`, `>=`, `>`, and `<=` with a direct signed-long call result and a
+constant right operand. Corrected Doctor images are **48,512/56,960 bytes**
+peep/nopeep.
+
 ## Doctor post-MIR linked-size recovery (2026-08-18)
 
 `DOCTOR.COM` from the external DXISAM application measured 59,264 bytes with

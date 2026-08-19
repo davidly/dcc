@@ -32104,17 +32104,16 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 }
                 int fuse_skip = mir_binary_is_fusable_comparison(i);
                 /* Item T395/follow-on: the signed-constant-relational
-                 * fast path only ever consumes src2's compile-time
-                 * literal value, never a loaded runtime form - skip
-                 * both the defensive push of src1 and the load of src2
-                 * below when it applies (and neither operand is
-                 * already using the unrelated stack-forwarding
-                 * optimization), leaving DE:HL holding src1 untouched,
-                 * exactly what mir_emit_wide_operation's fast path
-                 * needs. */
+                 * fast path only consumes src2's literal value. A
+                 * stack-forwarded src1 must first be restored to DE:HL;
+                 * otherwise the comparison ignores the call result and
+                 * leaves four bytes on the real stack. */
                 int signed_const_relational_fastpath =
-                    !stack_forwarded_left && !stack_forwarded_right &&
+                    !stack_forwarded_right &&
                     mir_wide_operation_is_signed_const_relational(insn);
+                if (stack_forwarded_left &&
+                    signed_const_relational_fastpath)
+                    mir_stream_puts("\tpop hl\n\tpop de\n", out);
                 if (stack_forwarded_right) {
                     mir_emit_virtual_load_wide(out, insn->src1);
                 } else if (!stack_forwarded_left) {
