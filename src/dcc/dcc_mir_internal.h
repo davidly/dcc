@@ -103,7 +103,8 @@ enum MirCallFlag {
     MIR_CALL_FLAG_FORMAT_RUNTIME =
         MIR_CALL_FLAG_FORMAT_HEX | MIR_CALL_FLAG_FORMAT_OCTAL,
     MIR_CALL_FLAG_INLINE_SUBSTITUTABLE = 2048,
-    MIR_CALL_FLAG_VARIADIC = 4096
+    MIR_CALL_FLAG_VARIADIC = 4096,
+    MIR_CALL_FLAG_REVERSE_CONDITIONAL_ARGS = 32768
 };
 
 enum MirMemoryFlag {
@@ -751,7 +752,9 @@ void mir_begin_block_cse_address_rematerialization(void);
 void mir_end_block_cse_address_rematerialization(void);
 int mir_address_rematerialization_candidate_count(void);
 void mir_begin_phi_slot_cleanup(void);
+void mir_begin_boolean_phi_branch_folding(void);
 void mir_end_phi_slot_cleanup(void);
+void mir_end_boolean_phi_branch_folding(void);
 int mir_spilled_cfg_depends_on_indirect_store_address_forwarding(void);
 int mir_spilled_cfg_indirect_store_address_forwarding_uses(void);
 void mir_begin_indirect_store_address_forwarding(void);
@@ -779,6 +782,7 @@ int mir_spilled_cfg_depends_on_promoted_local_slot_reuse(void);
 int mir_spilled_cfg_depends_on_wide_store_forwarding(void);
 int mir_try_emit_spilled_scalar_cfg(MirStream *out);
 int mir_spilled_cfg_depends_on_dead_store_forwarding(void);
+int mir_spilled_cfg_emitted_frame_bytes(void);
 int mir_value_has_use(int value);
 int mir_value_has_use_after(int value, int instruction);
 int mir_value_use_count(int value);

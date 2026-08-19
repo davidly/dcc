@@ -26,8 +26,8 @@ static int mir_call_count(void);
 static int mir_has_wide_values(void);
 static int mir_cost_regional_candidate_is_validated(void);
 static int mir_cost_regional_candidate_is_diagnostic_validated(void);
-static int mir_boolean_candidate_is_validated(void);
 static int mir_large_dense_switch_phi_candidate_is_eligible(void);
+static int mir_boolean_candidate_is_validated(void);
 static int mir_try_selector(MirStream *out, int (*selector)(MirStream *));
 
 static int mir_cost_policy_selects_alternative(void)
@@ -95,6 +95,9 @@ static void mir_require_emitted_function(const char *reason)
 #define MIR_SPILLED_FEATURE_WIDE_BINARY_RHS       (1UL << 11)
 #define MIR_SPILLED_FEATURE_WIDE_STORE            (1UL << 12)
 #define MIR_SPILLED_FEATURE_PHI_SLOT              (1UL << 13)
+#define MIR_SPILLED_FEATURE_BOOLEAN_PHI_BRANCH    (1UL << 14)
+#define MIR_SPILLED_FEATURE_STABLE_SCALAR_LOCAL   (1UL << 15)
+#define MIR_SPILLED_FEATURE_ADDRESS_REMAT         (1UL << 16)
 
 #define MIR_SPILLED_FEATURES_RHS \
     (MIR_SPILLED_FEATURE_RHS_STACK | MIR_SPILLED_FEATURE_STORE_VALUE | \
@@ -117,9 +120,20 @@ static void mir_require_emitted_function(const char *reason)
      MIR_SPILLED_FEATURE_PROMOTED_LOCAL_SLOT)
 #define MIR_SPILLED_FEATURES_ALL \
     (MIR_SPILLED_FEATURES_PROMOTED_LOCAL | \
-     MIR_SPILLED_FEATURE_WIDE_BINARY_RHS | MIR_SPILLED_FEATURE_WIDE_STORE)
+     MIR_SPILLED_FEATURE_WIDE_BINARY_RHS | MIR_SPILLED_FEATURE_WIDE_STORE | \
+     MIR_SPILLED_FEATURE_STABLE_SCALAR_LOCAL | \
+     MIR_SPILLED_FEATURE_ADDRESS_REMAT)
+#define MIR_SPILLED_FEATURES_ALL_NO_PREPACK \
+    (MIR_SPILLED_FEATURES_ALL & \
+     ~MIR_SPILLED_FEATURE_CONSTANT_PREPACK)
 #define MIR_SPILLED_FEATURES_PHI_SLOT \
     (MIR_SPILLED_FEATURES_ALL | MIR_SPILLED_FEATURE_PHI_SLOT)
+#define MIR_SPILLED_FEATURES_BOOLEAN_PHI_BRANCH \
+    (MIR_SPILLED_FEATURES_PHI_SLOT | \
+     MIR_SPILLED_FEATURE_BOOLEAN_PHI_BRANCH)
+#define MIR_SPILLED_FEATURES_BOOLEAN_PHI_BRANCH_NO_PREPACK \
+    (MIR_SPILLED_FEATURES_BOOLEAN_PHI_BRANCH & \
+     ~MIR_SPILLED_FEATURE_CONSTANT_PREPACK)
 
 struct MirCandidateDescriptor {
     const char *name;
@@ -466,6 +480,24 @@ static void mir_configure_spilled_fallback_features(
             mir_begin_phi_slot_cleanup();
         else
             mir_end_phi_slot_cleanup();
+    }
+    if ((features & MIR_SPILLED_FEATURE_BOOLEAN_PHI_BRANCH) != 0) {
+        if (enabled)
+            mir_begin_boolean_phi_branch_folding();
+        else
+            mir_end_boolean_phi_branch_folding();
+    }
+    if ((features & MIR_SPILLED_FEATURE_STABLE_SCALAR_LOCAL) != 0) {
+        if (enabled)
+            mir_begin_stable_pointer_local_homes();
+        else
+            mir_end_stable_pointer_local_homes();
+    }
+    if ((features & MIR_SPILLED_FEATURE_ADDRESS_REMAT) != 0) {
+        if (enabled)
+            mir_begin_address_rematerialization();
+        else
+            mir_end_address_rematerialization();
     }
 }
 
@@ -1508,7 +1540,10 @@ static const struct MirSpilledCandidateTableEntry {
     {"stack-argument", MIR_SPILLED_FEATURES_CALL_STACK},
     {"promoted-local-slot", MIR_SPILLED_FEATURES_PROMOTED_LOCAL},
     {"all", MIR_SPILLED_FEATURES_ALL},
-    {"phi-slot", MIR_SPILLED_FEATURES_PHI_SLOT}
+    {"phi-slot", MIR_SPILLED_FEATURES_PHI_SLOT},
+    {"boolean-phi-branch", MIR_SPILLED_FEATURES_BOOLEAN_PHI_BRANCH},
+    {"boolean-phi-branch-no-prepack",
+     MIR_SPILLED_FEATURES_BOOLEAN_PHI_BRANCH_NO_PREPACK}
 };
 #define MIR_SPILLED_CANDIDATE_TABLE_COUNT \
     (int)(sizeof(mir_spilled_candidate_table) / \
@@ -2237,6 +2272,7 @@ struct MirCostCandidate {
     long text_bytes;
     int text_instructions;
     int frame_bytes;
+    int emitted_frame_bytes;
     int slots;
     int spills;
     int fixed_moves;
@@ -2290,10 +2326,17 @@ static const struct MirCostCandidateSpec mir_cost_candidate_specs[] = {
      MIR_COST_CANDIDATE_SPILLED, MIR_SPILLED_FEATURES_CALL_STACK},
     {"spilled-promoted-local-slot", "spilled-scalar-cfg",
      MIR_COST_CANDIDATE_SPILLED, MIR_SPILLED_FEATURES_PROMOTED_LOCAL},
+    {"spilled-all-no-prepack", "spilled-scalar-cfg",
+     MIR_COST_CANDIDATE_SPILLED, MIR_SPILLED_FEATURES_ALL_NO_PREPACK},
     {"spilled-all", "spilled-scalar-cfg",
      MIR_COST_CANDIDATE_SPILLED, MIR_SPILLED_FEATURES_ALL},
     {"spilled-phi-slot", "spilled-scalar-cfg",
-     MIR_COST_CANDIDATE_SPILLED, MIR_SPILLED_FEATURES_PHI_SLOT}
+     MIR_COST_CANDIDATE_SPILLED, MIR_SPILLED_FEATURES_PHI_SLOT},
+    {"spilled-boolean-phi-branch", "spilled-scalar-cfg",
+     MIR_COST_CANDIDATE_SPILLED, MIR_SPILLED_FEATURES_BOOLEAN_PHI_BRANCH},
+    {"spilled-boolean-phi-branch-no-prepack", "spilled-scalar-cfg",
+     MIR_COST_CANDIDATE_SPILLED,
+     MIR_SPILLED_FEATURES_BOOLEAN_PHI_BRANCH_NO_PREPACK}
 };
 
 static void mir_cost_save_state(struct MirCostStateSnapshot *snapshot)
@@ -2394,6 +2437,10 @@ static void mir_cost_measure_candidate(struct MirCostCandidate *candidate)
         candidate->frame_bytes =
             mir_effective_local_bytes() + mir.aggregate_temp_bytes +
             2 * candidate->slots;
+        candidate->emitted_frame_bytes =
+            mir_spilled_cfg_emitted_frame_bytes() > 0
+            ? mir_spilled_cfg_emitted_frame_bytes()
+            : candidate->frame_bytes;
     } else {
         candidate->slots =
             candidate->spills +
@@ -2402,6 +2449,7 @@ static void mir_cost_measure_candidate(struct MirCostCandidate *candidate)
         candidate->frame_bytes =
             mir_effective_local_bytes() + mir.aggregate_temp_bytes +
             2 * candidate->slots;
+        candidate->emitted_frame_bytes = candidate->frame_bytes;
     }
     candidate->hash = mir_stream_hash(candidate->stream);
     mir_estimate_stream_cost(candidate->stream, &candidate->machine);
@@ -2577,6 +2625,15 @@ static int mir_cost_candidate_is_better(
     }
     if (candidate_is_validated_regional != best_is_validated_regional)
         return candidate_is_validated_regional;
+    if (candidate->machine.bytes == best->machine.bytes &&
+        candidate->machine.instructions == best->machine.instructions &&
+        candidate->machine.tstates == best->machine.tstates &&
+        candidate->machine.helper_calls == best->machine.helper_calls &&
+        candidate->machine.helper_tstates ==
+            best->machine.helper_tstates &&
+        candidate->emitted_frame_bytes != best->emitted_frame_bytes)
+        return candidate->emitted_frame_bytes <
+               best->emitted_frame_bytes;
     if (candidate->score < best->score - 0.001)
         return 1;
     if (candidate->score > best->score + 0.001)
@@ -2708,7 +2765,11 @@ static int mir_cost_candidate_is_selectable(
         return 0;
     if (spec->kind != MIR_COST_CANDIDATE_SPILLED)
         return 0;
-    return spec->features == MIR_SPILLED_FEATURES_PHI_SLOT ||
+    return spec->features == MIR_SPILLED_FEATURES_BOOLEAN_PHI_BRANCH ||
+           spec->features ==
+               MIR_SPILLED_FEATURES_BOOLEAN_PHI_BRANCH_NO_PREPACK ||
+           spec->features == MIR_SPILLED_FEATURES_PHI_SLOT ||
+           spec->features == MIR_SPILLED_FEATURES_ALL_NO_PREPACK ||
            spec->features == MIR_SPILLED_FEATURES_RHS ||
            spec->features == MIR_SPILLED_FEATURES_STORE_ADDRESS ||
            spec->features == MIR_SPILLED_FEATURES_WIDE_LHS ||
@@ -2863,6 +2924,10 @@ static int mir_apply_mir_v1_policy(
          struct MirCostCandidate candidate;
          int ordinary_selectable;
 
+         if (diagnostic_candidate == NULL && strict_candidate == NULL &&
+             (mir_cost_candidate_specs[i].features &
+              MIR_SPILLED_FEATURE_BOOLEAN_PHI_BRANCH) != 0)
+             continue;
          mir_cost_build_candidate(
              &mir_cost_candidate_specs[i], &candidate, label_base);
          ordinary_selectable = mir_cost_candidate_is_selectable(
@@ -2892,6 +2957,59 @@ static int mir_apply_mir_v1_policy(
         }
         if (candidate.stream != NULL)
             mir_stream_close(candidate.stream);
+    }
+    if (diagnostic_candidate == NULL && strict_candidate == NULL) {
+        const struct MirCostCandidate *baseline = &incumbent;
+        struct MirCostCandidate baseline_copy;
+        int found_boolean_candidate = 0;
+
+        /*
+         * Establish the normal winner first. Folding may then improve an
+         * already-spilled function, but cannot displace a homed candidate or
+         * trade estimated bytes for cycles (or vice versa).
+         */
+        if (select_alternative && best.emitted &&
+            mir_cost_candidate_is_better(&best, &incumbent))
+            baseline = &best;
+        baseline_copy = *baseline;
+        for (i = 0;
+             i < sizeof(mir_cost_candidate_specs) /
+                     sizeof(mir_cost_candidate_specs[0]);
+             ++i) {
+            const struct MirCostCandidateSpec *spec =
+                &mir_cost_candidate_specs[i];
+            struct MirCostCandidate candidate;
+
+            if ((spec->features &
+                 MIR_SPILLED_FEATURE_BOOLEAN_PHI_BRANCH) == 0)
+                continue;
+            found_boolean_candidate = 1;
+            mir_cost_build_candidate(spec, &candidate, label_base);
+            candidate.selectable =
+                baseline_copy.spec->kind ==
+                    MIR_COST_CANDIDATE_SPILLED &&
+                mir_cost_candidate_is_selectable(spec) &&
+                candidate.machine.bytes <=
+                    baseline_copy.machine.bytes &&
+                candidate.machine.tstates <=
+                    baseline_copy.machine.tstates;
+            mir_cost_report_candidate(&candidate, 0);
+            if (candidate.selectable &&
+                mir_cost_candidate_is_better(
+                    &candidate, &baseline_copy) &&
+                (!best.emitted ||
+                 mir_cost_candidate_is_better(
+                     &candidate, &best))) {
+                if (best.stream != NULL)
+                    mir_stream_close(best.stream);
+                best = candidate;
+                candidate.stream = NULL;
+            }
+            if (candidate.stream != NULL)
+                mir_stream_close(candidate.stream);
+        }
+        if (!found_boolean_candidate)
+            fatal("missing MIR boolean-PHI candidate");
     }
     if (!select_alternative || !best.emitted ||
         (diagnostic_candidate == NULL &&
@@ -3574,6 +3692,29 @@ static int mir_generated_stream_is_better(
     return candidate_cost.bytes < incumbent_cost.bytes;
 }
 
+/*
+ * Boolean-PHI simplification is semantic, but small static-cost wins can move
+ * work onto a hotter branch and lose at runtime. Admit previously unvalidated
+ * shapes only when the generated machine candidate dominates by a margin well
+ * beyond the measured small-branch noise, without adding helper work.
+ */
+static int mir_boolean_alternative_substantially_dominates(
+    MirStream *candidate, MirStream *incumbent)
+{
+    struct MirCostComponents candidate_cost;
+    struct MirCostComponents incumbent_cost;
+
+    mir_estimate_stream_cost(candidate, &candidate_cost);
+    mir_estimate_stream_cost(incumbent, &incumbent_cost);
+    return candidate_cost.bytes + 64 <= incumbent_cost.bytes &&
+           candidate_cost.instructions + 8 <=
+               incumbent_cost.instructions &&
+           candidate_cost.tstates + 128.0 <= incumbent_cost.tstates &&
+           candidate_cost.helper_calls <= incumbent_cost.helper_calls &&
+           candidate_cost.helper_tstates <=
+               incumbent_cost.helper_tstates + 0.001;
+}
+
 static int mir_boolean_candidate_is_validated(void)
 {
     return mir.sink_purpose == EMIT_SINK_DEFERRED &&
@@ -3703,6 +3844,8 @@ void mir_end_function(void)
                 &alternative_candidate, &alternative_label_id,
                 candidate_label_base, strict_candidate) &&
             (validated_general_alternative ||
+             mir_boolean_alternative_substantially_dominates(
+                 alternative, generated) ||
              !strcmp(alternative_selector,
                      "scheduled-machine-cfg")) &&
             (mir_generated_stream_is_better(alternative, generated) ||

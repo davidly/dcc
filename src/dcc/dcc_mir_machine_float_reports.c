@@ -4018,7 +4018,7 @@ static void mir_float_sweep_load_iy(MirStream *out, int offset)
 
 static void mir_float_sweep_advance(MirStream *out)
 {
-    mir_stream_puts("\tinc iy\n\tinc iy\n\tinc iy\n\tinc iy\n", out);
+    mir_stream_puts("\texx\n\tld de,4\n\tadd iy,de\n\texx\n", out);
 }
 
 static void mir_float_sweep_unary_report(

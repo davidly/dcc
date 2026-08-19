@@ -1,0 +1,64 @@
+_load_dead:
+	push ix
+	pop hl
+	ld de,-10
+	add hl,de
+	ld a,(hl)
+	inc hl
+	ld h,(hl)
+	ld l,a
+	or a
+	ld a,0
+	ld de,0
+	ret
+_load_a_live:
+	push ix
+	pop hl
+	ld de,-12
+	add hl,de
+	ld a,(hl)
+	inc hl
+	ld h,(hl)
+	ld l,a
+	or a
+	ld c,a
+	ld de,0
+	ret
+_load_de_live:
+	push ix
+	pop hl
+	ld de,-14
+	add hl,de
+	ld a,(hl)
+	inc hl
+	ld h,(hl)
+	ld l,a
+	xor a
+	ld a,0
+	ld c,e
+	ret
+_load_both_live:
+	push ix
+	pop hl
+	ld de,-16
+	add hl,de
+	ld a,(hl)
+	inc hl
+	ld h,(hl)
+	ld l,a
+	ld c,a
+	ld b,e
+	ret
+_load_carry_live:
+	push ix
+	pop hl
+	ld de,-18
+	add hl,de
+	ld a,(hl)
+	inc hl
+	ld h,(hl)
+	ld l,a
+	jp c,_carry_set
+	ret
+_carry_set:
+	ret

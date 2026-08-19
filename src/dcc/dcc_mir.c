@@ -2830,8 +2830,11 @@ static int mir_lower_expr(const struct AstNode *node)
         return value;
     case AST_CALL:
         {
+        int *argument_types = NULL;
+        int *argument_values = NULL;
         int call_id = mir.next_call_id++;
         int callee_value = -1;
+        int reverse_conditional_arguments = 0;
         const char *syntactic_name = node->a != NULL &&
                                      node->a->kind == AST_IDENT
             ? node->a->sval : "<indirect>";
@@ -2894,15 +2897,46 @@ static int mir_lower_expr(const struct AstNode *node)
                 call_prototype = mir_ident_symbol(callee);
             callee_value = mir_lower_expr(callee);
         }
+        if (function_symbol != NULL && node->list_len >= 3) {
+            int conditional_argument_count = 0;
+
+            reverse_conditional_arguments = 1;
+            for (i = node->list_len - 1; i >= 0; --i) {
+                int argument_type =
+                    ast_expr_type_for_sizeof(node->list[i]);
+                if (node->list[i]->kind != AST_COND ||
+                    type_is_struct_object(argument_type) ||
+                    type_size(argument_type) <= 0 ||
+                    type_size(argument_type) > 2)
+                    break;
+                ++conditional_argument_count;
+            }
+            if (conditional_argument_count < 3)
+                reverse_conditional_arguments = 0;
+        }
+        if (reverse_conditional_arguments) {
+            argument_types = (int *)malloc(
+                (size_t)node->list_len * sizeof(*argument_types));
+            argument_values = (int *)malloc(
+                (size_t)node->list_len * sizeof(*argument_values));
+            if (argument_types == NULL || argument_values == NULL)
+                fatal("out of memory lowering reverse MIR arguments");
+        }
         for (i = 0; i < node->list_len; ++i) {
-            int argument_type = ast_expr_type_for_sizeof(node->list[i]);
+            int argument_index = reverse_conditional_arguments
+                ? node->list_len - 1 - i : i;
+            int argument_type =
+                ast_expr_type_for_sizeof(node->list[argument_index]);
             struct Sym nested_temporary;
-            if (call_prototype != NULL && i < call_prototype->proto_nargs) {
-                argument_type = call_prototype->proto_types[i];
+            if (call_prototype != NULL &&
+                argument_index < call_prototype->proto_nargs) {
+                argument_type =
+                    call_prototype->proto_types[argument_index];
             }
             if (type_is_struct_object(argument_type) &&
-                node->list[i]->kind == AST_CALL) {
-                const struct Sym *temporary = node->list[i]->sym;
+                node->list[argument_index]->kind == AST_CALL) {
+                const struct Sym *temporary =
+                    node->list[argument_index]->sym;
                 if (temporary == NULL) {
                     int size = type_size(argument_type);
                     memset(&nested_temporary, 0, sizeof(nested_temporary));
@@ -2915,11 +2949,12 @@ static int mir_lower_expr(const struct AstNode *node)
                     strcpy(nested_temporary.name, "#miragg");
                     temporary = &nested_temporary;
                 }
-                left = mir_lower_aggregate_call_address(node->list[i],
-                                                        temporary);
+                left = mir_lower_aggregate_call_address(
+                    node->list[argument_index], temporary);
             } else
-                left = mir_lower_expr(node->list[i]);
-            if (call_prototype == NULL || i >= call_prototype->proto_nargs) {
+                left = mir_lower_expr(node->list[argument_index]);
+            if (call_prototype == NULL ||
+                argument_index >= call_prototype->proto_nargs) {
                 const struct MirInsn *argument_definition =
                     mir_definition(left);
                 if (argument_definition != NULL &&
@@ -2928,11 +2963,27 @@ static int mir_lower_expr(const struct AstNode *node)
             }
             if (!type_is_struct_object(argument_type))
                 left = mir_lower_conversion(left, argument_type);
-            insn = mir_emit(MIR_ARG);
-            insn->src1 = left;
-            insn->type = argument_type;
-            insn->immediate = i;
-            insn->secondary_offset = call_id;
+            if (reverse_conditional_arguments) {
+                argument_types[argument_index] = argument_type;
+                argument_values[argument_index] = left;
+            } else {
+                insn = mir_emit(MIR_ARG);
+                insn->src1 = left;
+                insn->type = argument_type;
+                insn->immediate = argument_index;
+                insn->secondary_offset = call_id;
+            }
+        }
+        if (reverse_conditional_arguments) {
+            for (i = 0; i < node->list_len; ++i) {
+                insn = mir_emit(MIR_ARG);
+                insn->src1 = argument_values[i];
+                insn->type = argument_types[i];
+                insn->immediate = i;
+                insn->secondary_offset = call_id;
+            }
+            free(argument_values);
+            free(argument_types);
         }
         value = mir_new_value();
         insn = mir_emit(MIR_CALL);
@@ -2946,6 +2997,9 @@ static int mir_lower_expr(const struct AstNode *node)
         if ((function_symbol != NULL && function_symbol->proto_variadic) ||
             (call_prototype != NULL && call_prototype->proto_variadic))
             insn->memory_flags |= MIR_CALL_FLAG_VARIADIC;
+        if (reverse_conditional_arguments)
+            insn->memory_flags |=
+                MIR_CALL_FLAG_REVERSE_CONDITIONAL_ARGS;
         if (function_symbol != NULL) {
             if (mir_inline_substitutable(function_symbol))
                 insn->memory_flags |= MIR_CALL_FLAG_INLINE_SUBSTITUTABLE;

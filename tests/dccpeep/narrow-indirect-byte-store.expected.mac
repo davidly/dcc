@@ -1,0 +1,28 @@
+_narrow_store:
+	ld e,l ; peep: narrow_indirect_byte_store
+	pop hl
+	ld (hl),e
+	xor a
+	ld de,0
+	ret
+
+_narrow_store_exchange:
+	ld e,l ; peep: narrow_indirect_byte_store_after_exchange
+	push iy
+	pop hl
+	ld (hl),e
+	xor a
+	ld d,0
+	ret
+
+_narrow_store_de_live:
+	ld a,l
+	rlca
+	sbc a,a
+	ld h,a
+	push hl
+	pop de
+	pop hl
+	ld (hl),e
+	ld a,d
+	ret
