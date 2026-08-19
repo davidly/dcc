@@ -45,7 +45,10 @@
       "extra_scenarios": [
         { "suffix": "ttt", "args": "ttt.c", "fixtures": ["ttt.c"] }
       ] },
-    { "name": "a1", "args": "-l:HELLO.BAS", "dcc_floatio": false, "dcc_longio": false, "fixtures": ["HELLO.BAS"] },
+    { "name": "a1", "args": "-l:HELLO.BAS", "dcc_floatio": false, "dcc_longio": false, "fixtures": ["HELLO.BAS"],
+      "extra_scenarios": [
+        { "suffix": "6502fun", "args": "-x -a:400 6502FUN.HEX", "fixtures": ["6502FUN.HEX"] }
+      ] },
     { "name": "texfile", "fixtures": ["DATA.TXT"] },
     { "name": "wumpus", "args": "-c" },
     { "name": "tchess", "args": "-c -p:1" },
