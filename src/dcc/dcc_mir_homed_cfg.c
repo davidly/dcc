@@ -2476,10 +2476,41 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
                 int preserve_hl_de;
                 int preserve_hl;
                 int preserve_de;
+                const struct MirInsn *stored =
+                    mir_definition(insn->src2);
                 if ((insn->memory_size == 1 || insn->memory_size == 2) &&
                     mir_homed_constant_absolute_access_supported(insn)) {
                     if (!mir_emit_homed_constant_absolute_store(out, insn))
                         goto done;
+                    break;
+                }
+                if (insn->bit_width == 0 && stored != NULL &&
+                    stored->opcode == MIR_CONST &&
+                    (insn->memory_size == 1 ||
+                     (insn->memory_size == 2 &&
+                      (stored->immediate & 0xffffL) == 0))) {
+                    instruction = (int)(insn - mir.insns);
+                    preserve_hl_de = mir_home_color_live_across(
+                        instruction, MIR_COLOR_HL_DE);
+                    preserve_hl = !preserve_hl_de &&
+                        mir_home_color_live_across(
+                            instruction, MIR_COLOR_HL);
+                    if (preserve_hl_de)
+                        mir_stream_puts("\tpush de\n\tpush hl\n", out);
+                    if (preserve_hl)
+                        mir_stream_puts("\tpush hl\n", out);
+                    if (!mir_emit_home_to_hl(out, insn->src1))
+                        goto done;
+                    if (insn->memory_size == 1)
+                        mir_stream_printf(out, "\tld (hl),%ld\n",
+                            stored->immediate & 255L);
+                    else
+                        mir_stream_puts(
+                            "\tld (hl),0\n\tinc hl\n\tld (hl),0\n", out);
+                    if (preserve_hl)
+                        mir_stream_puts("\tpop hl\n", out);
+                    if (preserve_hl_de)
+                        mir_stream_puts("\tpop hl\n\tpop de\n", out);
                     break;
                 }
                 if (mir_homed_wide_indirect_increment(

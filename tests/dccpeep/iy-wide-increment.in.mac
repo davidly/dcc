@@ -45,4 +45,22 @@ jp LE
 LE:
 or a
 ret
+; static function direct_load
+_ZL:
+ld hl,42
+push hl
+pop iy
+ld hl,0
+ld a,(iy+0)
+ret
+; static function direct_increment
+_ZI:
+push iy
+pop hl
+inc hl
+push hl
+pop iy
+ld hl,0
+ld a,(iy+0)
+ret
 end

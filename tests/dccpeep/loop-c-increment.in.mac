@@ -6,4 +6,23 @@ inc (ix-3)
 ld a,(ix-3)
 cp 4
 jp c, LCINC
+; promoted zero-based word counter with a byte-sized bound
+ld hl,0
+ld c,l
+LBOUND:
+ld l,c
+ld h,0
+ld de,32772
+ld a,h
+xor 128
+ld h,a
+sbc hl,de
+jp nc, LBOUND_EXIT
+ld l,c
+ld h,0
+inc hl
+ld c,l
+jp LBOUND
+LBOUND_EXIT:
+ret
 end

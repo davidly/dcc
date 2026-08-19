@@ -9,6 +9,7 @@ struct Flags {
 };
 
 static int failures;
+static int short_trace;
 static _Bool global_true = 42;
 static _Bool global_false = 0;
 static _Bool global_arr[4] = { 0, 2, -3, 0 };
@@ -53,6 +54,47 @@ static int count_true(const _Bool *p, int n)
 static _Bool ternary_bool(int cond)
 {
     return cond ? 88 : 0;
+}
+
+static int trace_bool(int tag)
+{
+    short_trace = short_trace * 10 + tag;
+    return tag & 1;
+}
+
+static void check_short_circuit_phi(void)
+{
+    int result;
+    int side;
+
+    short_trace = 0;
+    result = trace_bool(2) || trace_bool(4) || trace_bool(5);
+    check_int(result, 1, "or true result");
+    check_int(short_trace, 245, "or true short circuit");
+
+    short_trace = 0;
+    result = trace_bool(3) && trace_bool(5) && trace_bool(6);
+    check_int(result, 0, "and false result");
+    check_int(short_trace, 356, "and false short circuit");
+
+    short_trace = 0;
+    result = trace_bool(2) || trace_bool(4) || trace_bool(6);
+    check_int(result, 0, "or false result");
+    check_int(short_trace, 246, "or false full evaluation");
+
+    short_trace = 0;
+    result = trace_bool(3) && trace_bool(5) && trace_bool(7);
+    check_int(result, 1, "and true result");
+    check_int(short_trace, 357, "and true full evaluation");
+
+    short_trace = 0;
+    side = 0;
+    result = (trace_bool(2) && (side = 1)) ||
+             (trace_bool(3) && (side = 2)) ||
+             trace_bool(5);
+    check_int(result, 1, "side-effect result");
+    check_int(short_trace, 23, "side-effect short circuit");
+    check_int(side, 2, "side-effect merged value");
 }
 
 static void check_locals(void)
@@ -229,6 +271,7 @@ int main(void)
     check_operators();
     check_compound_ops();
     check_varargs_and_ternary();
+    check_short_circuit_phi();
     if (failures == 0)
         printf("test tbool completed with great success\n");
     return failures;

@@ -1,10 +1,22 @@
 	ld c,0 ; peep: byte_for_counter_to_reg_c
 LCINC:
-	ld l,c
-	ld h,0
 	inc c ; peep: byte_for_counter_to_reg_c
 	ld a,c
 	cp 4
 	jr c,LCINC ; peep: jp_to_jr
 	ld (ix-3),c
+; promoted zero-based word counter with a byte-sized bound
+	ld hl,0
+	ld c,l
+LBOUND:
+	ld a,c ; peep: narrow_bc_loop_bound_to_reg_c
+	cp 4
+	jr nc,LBOUND_EXIT ; peep: jp_to_jr
+	ld l,c
+	ld h,0
+	inc hl
+	ld c,l
+	jr LBOUND ; peep: jp_to_jr
+LBOUND_EXIT:
+	ret
 	end

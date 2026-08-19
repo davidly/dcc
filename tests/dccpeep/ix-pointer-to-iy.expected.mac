@@ -42,8 +42,6 @@ _ZA:
 	ld hl,100
 	push hl ; peep: ix_pointer_to_iy
 	pop iy
-	push iy ; peep: ix_pointer_to_iy
-	pop hl
 	ld a,(hl)
 	call __safe
 	push iy ; peep: ix_pointer_to_iy

@@ -22349,3 +22349,78 @@ The out-of-scope full stack run still exposes the merged branch's pre-existing
 regressions. None belongs to the 20 changed apps. Requested
 aggregate/ABI/promotion debt is zero. No baseline changed and no commit or
 push was made.
+
+## Doctor post-MIR linked-size recovery (2026-08-18)
+
+`DOCTOR.COM` from the external DXISAM application measured 59,264 bytes with
+the generated-only MIR backend, versus the historical emitter's exact
+48,640-byte linked image. The legacy payload was 48,588 raw bytes
+(19,617 Doctor, 23,456 ISAMDB, and 5,515 runtime), padded by Link-80 to
+48,640 bytes. The final default MIR build is also **48,640 bytes**; its
+no-peephole build is **56,960 bytes**.
+
+The recovery is generic and default-on. The retained work removes backend
+spill/reload traffic, shortens PHI and comparison materialization, improves
+call argument staging and narrow call-value caching, uses direct named byte
+stores and stable register homes, folds constant return/boolean values, and
+adds safe dccpeep provenance, shuffle, indexed-load/store, and loop
+transformations. MIR candidate selection reports actual emitted frame bytes
+and uses them only to break otherwise machine-identical ties. IY homes remain
+callee-saved and account for shifted frame/parameter offsets.
+
+The final IY profitability correction addresses the last release-gate
+regression. Repeated local-address values used only by one `MIR_ARG` are
+rebuilt from IX by argument emission, so counting each as a direct IY saving
+can admit an unprofitable root. The cost now charges a two-use safety margin
+when such values contribute to an address-root candidate. It still permits a
+dense call/register plan to justify IY, while rejecting the weak union-find
+case that crossed a 128-byte linked-size boundary. This restores
+`tunfphi` nopeep from 5,760 to its 5,632-byte baseline without regressing
+`tpfargs`, `trw2`, Doctor, or ISAMDB.
+
+The experimental dccpeep speed/size mode was removed. All retained peepholes
+run under the normal default policy and have no accepted runtime trade.
+Likewise, temporary compiler feature-disable gates and diagnostic controls
+used during isolation were removed.
+
+Rejected experiments remain useful negative evidence:
+
+- unrestricted PHI argument staging corrupted path-sensitive stack state;
+- direct byte-object PHI increment/decrement left the backend PHI slot stale
+  and caused loop timeouts;
+- forcing selected IY roots into call-only address rematerialization fixed one
+  size boundary but regressed `tpfargs` cycles;
+- excluding every call-only address from IY profitability also fixed the
+  boundary but removed profitable dense call/register plans;
+- the requested additional 10% Doctor reduction had only roughly
+  1.1--1.7 KiB of credible no-regression opportunities, well short of
+  4,864 bytes, so stretch work stopped as requested.
+
+Permanent coverage includes the new `tbytephi` byte-PHI/backedge workload,
+expanded argument and boolean cases, and dccpeep fixtures for global cache
+handoff, HL/DE load shuffles, IX-relative word loads, narrow indirect byte
+stores, IY increments, and promoted-C loop bounds. Existing performance
+baselines were not moved to accept compiler regressions; baseline changes are
+limited to intentional new or expanded workloads.
+
+Final verification:
+
+- both strict full+extended release gates pass **401 runnable applications /
+  10 skipped** in stack and no-stack modes, peep and nopeep, with zero
+  regressions;
+- ordinary and stack censuses each accept **2,822/2,822** functions and pass
+  `--fail-on-regression`;
+- extended coverage passes **274/274 MIR** in each mode, and require-emit
+  passes all seven boundary checks;
+- all **35** dccpeep fixtures are correct and idempotent;
+- Doctor is **48,640/56,960 bytes** peep/nopeep;
+- focused final metrics are non-regressing:
+  `tunfphi` **27,115/31,149 cycles, 5,632/5,632 bytes**,
+  `tpfargs` **686,840/697,271, 8,576/8,704**,
+  `tbytephi` **11,843/12,639, 5,504/5,632**, and
+  `trw2` **2,036,487,686/2,661,220,919, 10,496/11,008**;
+- DOCGEN peep/nopeep generated identical databases containing 8 doctors,
+  240 patients, and 720 history records, matching the known-good files;
+- ASan/UBSan compiles, 44 Python tests, runtime coverage
+  (**173/173 APIs**), RTL IY safety, canonical/CMake builds, and diff checks
+  pass.

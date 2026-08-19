@@ -320,7 +320,7 @@ static int pass_fold_hl_label_word_deref(void)
 
     changed = 0;
     build_user_asm_mask();
-    for (i = 0; i + 4 < nlines; ++i) {
+    for (i = 0; i + 3 < nlines; ++i) {
         if (!input_is_dcc_generated || mask_range_is_user_asm(i, i + 4))
             continue;
         if (!parse_ld_hl_imm(lines[i], label, sizeof(label)))
@@ -9819,6 +9819,58 @@ static int pass_push_hl_pop_de_to_ex(void)
         const char *op1, *op2;
         char clean2[MAX_LINE], clean3[MAX_LINE];
 
+        if (eq(i, "push hl") && eq(i + 2, "pop de")) {
+            strip_peep_comment_copy(clean2, lines[i + 1]);
+            if (strncmp(clean2, "ld hl,", 6) == 0) {
+                replace1_tagged(i, "ex de,hl",
+                                "push_hl_load_pop_de_to_ex");
+                delete_n(i + 2, 1);
+                changed = 1;
+                continue;
+            }
+        }
+        if (eq(i, "push hl")) {
+            int pop_line;
+
+            strip_peep_comment_copy(clean2, lines[i + 1]);
+            strip_peep_comment_copy(clean3, lines[i + 2]);
+            if (strncmp(clean2, "ld l,", 5) == 0 &&
+                strncmp(clean3, "ld h,", 5) == 0 &&
+                !line_touches_reg_pair(
+                    clean2 + 5, "l", "h", "hl") &&
+                !line_touches_reg_pair(
+                    clean3 + 5, "l", "h", "hl") &&
+                !line_touches_reg_pair(
+                    clean2 + 5, "d", "e", "de") &&
+                !line_touches_reg_pair(
+                    clean3 + 5, "d", "e", "de")) {
+                pop_line = i + 3;
+                while (pop_line < nlines &&
+                       pop_line <= i + 5 &&
+                       (eq(pop_line, "add hl,hl") ||
+                        eq(pop_line, "inc hl") ||
+                        eq(pop_line, "dec hl") ||
+                        eq(pop_line, "ld b,h") ||
+                        eq(pop_line, "ld c,l")))
+                    ++pop_line;
+                if (pop_line < nlines && eq(pop_line, "pop de")) {
+                    replace1_tagged(i, "ex de,hl",
+                                    "push_hl_load_pop_de_to_ex");
+                    delete_n(pop_line, 1);
+                    changed = 1;
+                    continue;
+                }
+            }
+        }
+        if (eq(i, "push hl") &&
+            (eq(i + 1, "push ix") || eq(i + 1, "push iy")) &&
+            eq(i + 2, "pop hl") && eq(i + 3, "pop de")) {
+            replace1_tagged(i, "ex de,hl",
+                            "push_hl_load_pop_de_to_ex");
+            delete_n(i + 3, 1);
+            changed = 1;
+            continue;
+        }
         if (!eq(i, "push hl") || !eq(i + 1, "pop de"))
             continue;
 
@@ -9837,6 +9889,373 @@ static int pass_push_hl_pop_de_to_ex(void)
         changed = 1;
     }
 
+    return changed;
+}
+
+/*
+ * Address formation often leaves the value being offset in DE only because
+ * the generic stack-copy cleanup produced EX DE,HL:
+ *
+ *     ex de,hl
+ *     ld hl,BASE
+ *     add hl,de
+ *
+ * Loading BASE into DE instead computes the same sum one byte shorter.  ADD
+ * preserves the same flags because addition is commutative; require DE dead
+ * afterward because the shorter form leaves BASE there instead of the
+ * original value.
+ */
+static int pass_add_hl_immediate_direct_de(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 2 < nlines; ++i) {
+        char immediate[128];
+        char load[MAX_LINE];
+
+        if (!eq(i, "ex de,hl") ||
+            !parse_ld_hl_imm(
+                lines[i + 1], immediate, sizeof(immediate)) ||
+            immediate[0] == '(' || !eq(i + 2, "add hl,de") ||
+            !peep_registers_dead_after(
+                i + 2, PEEP_REG_D | PEEP_REG_E))
+            continue;
+        snprintf(load, sizeof(load), "ld de,%s", immediate);
+        replace1_tagged(i, load, "add_hl_immediate_direct_de");
+        delete_n(i + 1, 1);
+        changed = 1;
+    }
+    return changed;
+}
+
+static int pass_combine_hl_constant_adds(void)
+{
+    const unsigned flags =
+        PEEP_FLAG_C | PEEP_FLAG_Z | PEEP_FLAG_S | PEEP_FLAG_PV;
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 3 < nlines; ++i) {
+        int first;
+        int second;
+        int combined;
+        char load[64];
+
+        if (!peep_parse_ld_de_signed(lines[i], &first) ||
+            !eq(i + 1, "add hl,de") ||
+            !peep_parse_ld_de_signed(lines[i + 2], &second) ||
+            !eq(i + 3, "add hl,de") ||
+            !peep_flags_dead_after(i + 3, flags))
+            continue;
+        combined = (first + second) & 0xffff;
+        if (combined > 32767)
+            combined -= 65536;
+        snprintf(load, sizeof(load), "ld de,%d", combined);
+        if (peep_registers_dead_after(
+                i + 3, PEEP_REG_D | PEEP_REG_E)) {
+            replace1_tagged(i, load, "combine_hl_constant_adds");
+            delete_n(i + 2, 2);
+        } else {
+            replace1_tagged(
+                i, load, "combine_hl_constant_adds_preserve_de");
+            delete_n(i + 3, 1);
+        }
+        changed = 1;
+    }
+    return changed;
+}
+
+static int pass_ix_offset_word_load_direct(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 8 < nlines; ++i) {
+        int offset;
+        int preserve_a;
+        int preserve_de;
+        char low[64];
+        char high[64];
+        char accumulator[64];
+        char de[64];
+
+        if (!eq(i, "push ix") || !eq(i + 1, "pop hl") ||
+            !peep_parse_ld_de_signed(lines[i + 2], &offset) ||
+            !eq(i + 3, "add hl,de") ||
+            !eq(i + 4, "ld a,(hl)") || !eq(i + 5, "inc hl") ||
+            !eq(i + 6, "ld h,(hl)") || !eq(i + 7, "ld l,a") ||
+            offset < -128 || offset + 1 > 127 ||
+            !peep_flags_dead_after(i + 7, PEEP_FLAG_C))
+            continue;
+        preserve_a =
+            !peep_registers_dead_after(i + 7, PEEP_REG_A);
+        preserve_de = !peep_registers_dead_after(
+            i + 7, PEEP_REG_D | PEEP_REG_E);
+        if (preserve_a && preserve_de)
+            continue;
+        snprintf(low, sizeof(low), "ld l,(ix%+d)", offset);
+        snprintf(high, sizeof(high), "ld h,(ix%+d)", offset + 1);
+        snprintf(accumulator, sizeof(accumulator),
+                 "ld a,(ix%+d)", offset);
+        snprintf(de, sizeof(de), "ld de,%d", offset);
+        delete_n(i, 8);
+        insert_line_tagged(i, low, "ix_offset_word_load_direct");
+        insert_line(i + 1, high);
+        if (preserve_a)
+            insert_line(i + 2, accumulator);
+        if (preserve_de)
+            insert_line(i + 2 + preserve_a, de);
+        changed = 1;
+    }
+    return changed;
+}
+
+static int pass_elim_redundant_iy_hl_copyback(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 4 < nlines; ++i) {
+        char load[MAX_LINE];
+
+        strip_peep_comment_copy(load, lines[i]);
+        if (strncmp(load, "ld hl,", 6) == 0 &&
+            eq(i + 1, "push hl") && eq(i + 2, "pop iy") &&
+            strstr(lines[i + 1], "pointer_to_iy") == NULL &&
+            !(i + 4 < nlines &&
+              eq(i + 3, "push iy") && eq(i + 4, "pop hl")) &&
+            peep_registers_dead_after(
+                i + 2, PEEP_REG_H | PEEP_REG_L)) {
+            char direct[MAX_LINE];
+
+            snprintf(direct, sizeof(direct), "ld iy,%s", load + 6);
+            replace1_tagged(i, direct, "direct_iy_load");
+            delete_n(i + 1, 2);
+            changed = 1;
+            continue;
+        }
+        if (i + 4 < nlines &&
+            eq(i, "push iy") && eq(i + 1, "pop hl") &&
+            eq(i + 2, "inc hl") &&
+            eq(i + 3, "push hl") && eq(i + 4, "pop iy") &&
+            peep_registers_dead_after(
+                i + 4, PEEP_REG_H | PEEP_REG_L)) {
+            replace1_tagged(i, "inc iy", "direct_iy_increment");
+            delete_n(i + 1, 4);
+            changed = 1;
+            continue;
+        }
+        if (eq(i, "push hl") && eq(i + 1, "pop iy") &&
+            eq(i + 2, "push iy") && eq(i + 3, "pop hl")) {
+            delete_n(i + 2, 2);
+            changed = 1;
+            continue;
+        }
+        if (eq(i, "push iy") && eq(i + 1, "pop hl") &&
+            eq(i + 2, "push hl") && eq(i + 3, "pop iy")) {
+            delete_n(i + 2, 2);
+            changed = 1;
+        }
+    }
+    return changed;
+}
+
+static int pass_elim_redundant_hl_de_stack_shuffle(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 4 < nlines; ++i) {
+        if (!eq(i, "push hl") || !eq(i + 1, "push de") ||
+            !eq(i + 2, "pop hl") || !eq(i + 3, "ex de,hl") ||
+            !eq(i + 4, "pop hl"))
+            continue;
+        delete_n(i, 5);
+        changed = 1;
+        if (i > 0)
+            --i;
+    }
+    return changed;
+}
+
+static int pass_ix_zero_store_before_hl_overwrite(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 4 < nlines; ++i) {
+        int store_offset;
+        int load_offset;
+        char low[MAX_LINE];
+        char high[MAX_LINE];
+
+        if (!eq(i, "ld hl,0") ||
+            !peep_parse_st_ix_pair(
+                lines[i + 1], lines[i + 2], &store_offset) ||
+            !peep_parse_ld_ix_pair(
+                lines[i + 3], lines[i + 4], &load_offset))
+            continue;
+        snprintf(low, sizeof(low), "ld (ix%+d),0", store_offset);
+        snprintf(high, sizeof(high), "ld (ix%+d),0", store_offset + 1);
+        replace1_tagged(i, low, "ix_zero_store_before_hl_overwrite");
+        replace1(i + 1, high);
+        delete_n(i + 2, 1);
+        changed = 1;
+    }
+    return changed;
+}
+
+static int pass_ix_const_store_when_hl_dead(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 2 < nlines; ++i) {
+        char immediate_text[64];
+        char low[MAX_LINE];
+        char high[MAX_LINE];
+        int immediate;
+        int store_offset;
+
+        if (!parse_ld_hl_imm(
+                lines[i], immediate_text, sizeof(immediate_text)) ||
+            !parse_nonneg_int(immediate_text, &immediate) ||
+            immediate > 65535 ||
+            !peep_parse_st_ix_pair(
+                lines[i + 1], lines[i + 2], &store_offset) ||
+            !peep_registers_dead_after(
+                i + 2, PEEP_REG_H | PEEP_REG_L))
+            continue;
+        snprintf(low, sizeof(low), "ld (ix%+d),%d",
+                 store_offset, immediate & 255);
+        snprintf(high, sizeof(high), "ld (ix%+d),%d",
+                 store_offset + 1, (immediate >> 8) & 255);
+        replace1_tagged(i, low, "ix_const_store_hl_dead");
+        replace1(i + 1, high);
+        delete_n(i + 2, 1);
+        changed = 1;
+    }
+    return changed;
+}
+
+static int pass_narrow_indirect_byte_store(void)
+{
+    const unsigned flags =
+        PEEP_FLAG_C | PEEP_FLAG_Z | PEEP_FLAG_S | PEEP_FLAG_PV;
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 7 < nlines; ++i) {
+        if (!eq(i, "ld a,l") || !eq(i + 1, "rlca") ||
+            !eq(i + 2, "sbc a,a") || !eq(i + 3, "ld h,a") ||
+            !eq(i + 4, "push hl") || !eq(i + 5, "pop de") ||
+            !eq(i + 6, "pop hl") || !eq(i + 7, "ld (hl),e") ||
+            !peep_flags_dead_after(i + 7, flags) ||
+            !peep_registers_dead_after(i + 7, PEEP_REG_D))
+            continue;
+        replace1_tagged(i, "ld e,l", "narrow_indirect_byte_store");
+        delete_n(i + 1, 5);
+        changed = 1;
+    }
+    return changed;
+}
+
+static int pass_narrow_indirect_byte_store_after_exchange(void)
+{
+    const unsigned flags =
+        PEEP_FLAG_C | PEEP_FLAG_Z | PEEP_FLAG_S | PEEP_FLAG_PV;
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 6 < nlines; ++i) {
+        unsigned pending_hl = PEEP_REG_H | PEEP_REG_L;
+        int store = -1;
+        int j;
+
+        if (!eq(i, "ld a,l") || !eq(i + 1, "rlca") ||
+            !eq(i + 2, "sbc a,a") || !eq(i + 3, "ld h,a") ||
+            !eq(i + 4, "ex de,hl"))
+            continue;
+        for (j = i + 5; j < nlines && j <= i + 10; ++j) {
+            const PeepLineInfo *info;
+
+            if (eq(j, "ld (hl),e")) {
+                if (pending_hl == 0)
+                    store = j;
+                break;
+            }
+            info = peep_line_info(j);
+            if (info->kind != PEEP_LINE_INSTRUCTION ||
+                info->effects.unknown || info->effects.control_flow ||
+                info->effects.flags_read != 0 ||
+                (info->effects.reads & pending_hl) != 0 ||
+                (info->effects.reads & PEEP_REG_DE) != 0 ||
+                (info->effects.writes & PEEP_REG_DE) != 0)
+                break;
+            pending_hl &= ~info->effects.writes;
+        }
+        if (store < 0 || !peep_flags_dead_after(store, flags) ||
+            !peep_registers_dead_after(store, PEEP_REG_D))
+            continue;
+        replace1_tagged(
+            i, "ld e,l", "narrow_indirect_byte_store_after_exchange");
+        delete_n(i + 1, 4);
+        changed = 1;
+    }
+    return changed;
+}
+
+static int pass_push_cached_bc_before_hl_overwrite(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 3 < nlines; ++i) {
+        char next[MAX_LINE];
+        int overwrite_offset;
+
+        if (!eq(i, "ld l,c") || !eq(i + 1, "ld h,b") ||
+            !eq(i + 2, "push hl"))
+            continue;
+        strip_peep_comment_copy(next, lines[i + 3]);
+        if (strncmp(next, "ld hl,", 6) != 0 &&
+            !(i + 4 < nlines &&
+              peep_parse_ld_ix_pair(
+                  lines[i + 3], lines[i + 4], &overwrite_offset)))
+            continue;
+        replace1_tagged(
+            i, "push bc", "global_word_cache_load_push_cached_bc");
+        delete_n(i + 1, 2);
+        changed = 1;
+    }
+    return changed;
+}
+
+static int pass_push_iy_call_argument_direct(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 4 < nlines; ++i) {
+        char call_line[MAX_LINE];
+        int followed_by_call;
+
+        if (!eq(i, "push iy") || !eq(i + 1, "pop hl") ||
+            !eq(i + 2, "push hl"))
+            continue;
+        strip_peep_comment_copy(call_line, lines[i + 3]);
+        followed_by_call = strncmp(call_line, "call ", 5) == 0;
+        if (!followed_by_call && strncmp(call_line, "extrn ", 6) == 0) {
+            strip_peep_comment_copy(call_line, lines[i + 4]);
+            followed_by_call = strncmp(call_line, "call ", 5) == 0;
+        }
+        if (!followed_by_call &&
+            !(eq(i + 3, "ld l,c") && eq(i + 4, "ld h,b")))
+            continue;
+        delete_n(i + 1, 2);
+        changed = 1;
+    }
     return changed;
 }
 
@@ -12188,7 +12607,15 @@ int main(int argc, char **argv)
         { "pass_word_loop_var_to_reg_bc", pass_word_loop_var_to_reg_bc, 0 },
         { "pass_narrow_bc_loop_bound_to_reg_c", pass_narrow_bc_loop_bound_to_reg_c, 0 },
         { "pass_byte_loop_var_to_reg_c", pass_byte_loop_var_to_reg_c, 0 },
+        { "pass_elim_redundant_iy_hl_copyback", pass_elim_redundant_iy_hl_copyback, 0 },
+        { "pass_elim_redundant_hl_de_stack_shuffle", pass_elim_redundant_hl_de_stack_shuffle, 0 },
+        { "pass_ix_zero_store_before_hl_overwrite", pass_ix_zero_store_before_hl_overwrite, 0 },
+        { "pass_push_cached_bc_before_hl_overwrite", pass_push_cached_bc_before_hl_overwrite, 0 },
+        { "pass_push_iy_call_argument_direct", pass_push_iy_call_argument_direct, 0 },
         { "pass_push_hl_pop_de_to_ex", pass_push_hl_pop_de_to_ex, 0 },
+        { "pass_combine_hl_constant_adds", pass_combine_hl_constant_adds, 0 },
+        { "pass_ix_offset_word_load_direct", pass_ix_offset_word_load_direct, 0 },
+        { "pass_add_hl_immediate_direct_de", pass_add_hl_immediate_direct_de, 0 },
         { "pass_labels", pass_labels, 0 },
     };
     size_t fixed_pass_count = sizeof(fixed_point_passes) / sizeof(fixed_point_passes[0]);
@@ -12363,6 +12790,7 @@ int main(int argc, char **argv)
         RUN_PASS(pass_remove_unreferenced_labels);
         RUN_PASS(pass_labels);
     }
+    RUN_PASS(pass_elim_redundant_iy_hl_copyback);
 
     RUN_PASS(pass_fold_wide_iy_increment);
 
@@ -12450,8 +12878,14 @@ int main(int argc, char **argv)
     RUN_PASS(pass_dup_ix_load_to_reg_copy);
     RUN_PASS(pass_fold_const_sign_extend);
     RUN_PASS(pass_narrow_dead_h_constant);
+    RUN_PASS(pass_narrow_indirect_byte_store);
+    RUN_PASS(pass_narrow_indirect_byte_store_after_exchange);
     do {
         changed = 0;
+        if (RUN_PASS(pass_add_hl_immediate_direct_de))
+            changed = 1;
+        if (RUN_PASS(pass_combine_hl_constant_adds))
+            changed = 1;
         if (RUN_PASS(pass_elim_dead_register_loads))
             changed = 1;
         if (RUN_PASS(pass_remove_ix_store_reload_hl))
@@ -12460,6 +12894,8 @@ int main(int argc, char **argv)
     RUN_PASS(pass_elim_dead_epilogue_cleanup_pops);
     RUN_PASS(pass_elim_redundant_carry_clear);
     RUN_PASS(pass_elim_dead_reg16_reload);
+    RUN_PASS(pass_elim_redundant_iy_hl_copyback);
+    RUN_PASS(pass_ix_const_store_when_hl_dead);
     RUN_PASS(pass_jp_to_jr);
 
     /* Machine-level register-allocation census on the exact final line stream

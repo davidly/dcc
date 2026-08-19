@@ -40,4 +40,16 @@ _ZE:
 	inc iy
 	or a
 	ret
+; static function direct_load
+_ZL:
+	ld iy,42 ; peep: direct_iy_load
+	ld hl,0
+	ld a,(iy+0)
+	ret
+; static function direct_increment
+_ZI:
+	inc iy ; peep: direct_iy_increment
+	ld hl,0
+	ld a,(iy+0)
+	ret
 	end

@@ -471,6 +471,7 @@ int pass_narrow_bc_loop_bound_to_reg_c(void)
 {
     int i, k;
     int changed;
+    int byte_counter;
     char label[128];
     int label_line;
     int loop_end;
@@ -480,13 +481,15 @@ int pass_narrow_bc_loop_bound_to_reg_c(void)
     changed = 0;
 
     for (i = 0; i + 10 < nlines; ++i) {
-        if (!eq(i, "ld c,l") || !eq(i + 1, "ld b,h"))
+        if (!eq(i, "ld c,l"))
             continue;
-        if (!starts_label(lines[i + 2]))
+        byte_counter = starts_label(lines[i + 1]);
+        if (!byte_counter &&
+            (!eq(i + 1, "ld b,h") || !starts_label(lines[i + 2])))
             continue;
-        if (!label_name_at(i + 2, label))
+        label_line = i + (byte_counter ? 1 : 2);
+        if (!label_name_at(label_line, label))
             continue;
-        label_line = i + 2;
 
         /* The init value must be exactly the constant 0 - "ld hl,0"
          * shortly before this priming, skipping only intervening,
@@ -518,7 +521,9 @@ int pass_narrow_bc_loop_bound_to_reg_c(void)
          * byte-range constant bound. The swapped ex-de,hl variant needs
          * different arithmetic entirely and is not handled here (see
          * pass_signed_cmp_const_bias_fold_mir's own comment). */
-        if (!eq(label_line + 1, "ld l,c") || !eq(label_line + 2, "ld h,b"))
+        if (!eq(label_line + 1, "ld l,c") ||
+            !eq(label_line + 2,
+                byte_counter ? "ld h,0" : "ld h,b"))
             continue;
         if (!peep_parse_ld_de_signed(lines[label_line + 3], &imm))
             continue;
@@ -549,7 +554,9 @@ int pass_narrow_bc_loop_bound_to_reg_c(void)
          * exactly as pass_word_loop_var_to_reg_bc left it. */
         increment_found = 0;
         for (k = label_line + 9; k + 2 <= loop_end; ++k) {
-            if (eq(k, "ld l,c") && eq(k + 1, "ld h,b") && eq(k + 2, "inc hl")) {
+            if (eq(k, "ld l,c") &&
+                eq(k + 1, byte_counter ? "ld h,0" : "ld h,b") &&
+                eq(k + 2, "inc hl")) {
                 increment_found = 1;
                 break;
             }
@@ -718,8 +725,23 @@ int pass_byte_loop_var_to_reg_c(void)
         if (bad)
             continue;
 
+        for (j = backedge_line + 1; j < func_end; ++j) {
+            char t[MAX_LINE];
+            char off_txt[32];
+
+            strip_peep_comment_lower_copy(t, lines[j]);
+            sprintf(off_txt, "(ix%d)", off);
+            if (strstr(t, off_txt) != NULL) {
+                if (strncmp(t, "ld (ix", 6) != 0)
+                    bad = 1;
+                break;
+            }
+        }
+        if (bad)
+            continue;
+
         bc_used_elsewhere = 0;
-        for (j = func_start; j < func_end; j++) {
+        for (j = func_start; j <= backedge_line; j++) {
             if (line_clobbers_bc(lines[j])) {
                 bc_used_elsewhere = 1;
                 break;
@@ -728,7 +750,7 @@ int pass_byte_loop_var_to_reg_c(void)
         if (bc_used_elsewhere)
             continue;
 
-        for (j = func_start; j < func_end; j++) {
+        for (j = func_start; j <= backedge_line; j++) {
             char t[MAX_LINE];
 
             strip_peep_comment_lower_copy(t, lines[j]);

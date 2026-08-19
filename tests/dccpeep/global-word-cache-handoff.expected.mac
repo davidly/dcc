@@ -1,0 +1,20 @@
+	cseg
+
+_cache_handoff:
+	ld hl,(FIRST)
+	ld c,l ; peep: global_word_cache_store
+	ld b,h
+	push hl
+	ld hl,(SECOND)
+	inc hl ; peep: ld_de1_to_inc
+	ld hl,(SECOND)
+	inc hl ; peep: ld_de2_to_inc
+	inc hl
+	ld hl,(SECOND)
+	inc hl ; peep: ld_de3_to_inc
+	inc hl
+	inc hl
+	push bc ; peep: global_word_cache_load_push_cached_bc
+	push bc ; peep: global_word_cache_load_push_cached_bc
+	ld hl,3
+	ret

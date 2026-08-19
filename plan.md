@@ -3,6 +3,26 @@
 `mir-text-size-plan.md` is the authoritative experiment log. This file is the
 current execution plan and handoff.
 
+## 2026-08-19 Doctor MIR size recovery (complete)
+
+- Default MIR+dccpeep now links the external DXISAM `DOCTOR.COM` at exactly
+  **48,640 bytes**, matching the historical emitter; nopeep is **56,960
+  bytes**. The reproduced MIR starting point was 59,264 bytes.
+- The recovery is generic and default-on: MIR spill/PHI/call/register-home
+  improvements plus safe normal-policy dccpeep transforms. The experimental
+  speed/size mode and all temporary isolation gates are removed.
+- The final IY address-root cost correction discounts two rematerialized
+  call-only address uses. It restores `tunfphi` nopeep to 5,632 bytes while
+  preserving profitable dense call plans and the exact Doctor outputs.
+- Strict full+extended stack and no-stack runs each pass 401 runnable apps
+  with 10 configured skips and zero regressions. Ordinary and stack censuses
+  pass 2,822/2,822 functions; extended coverage is 274/274 per mode.
+- Require-emit, 35 dccpeep fixtures, ASan/UBSan, 44 Python tests, runtime
+  coverage, RTL IY safety, CMake/canonical builds, and diff checks pass.
+- The optional additional 10% reduction was stopped: credible remaining
+  no-regression opportunities were far below 4,864 bytes. No further Doctor
+  optimization is planned.
+
 ## 2026-08-16 physical-lifetime and call-ABI repair (complete)
 
 Goal: repair the six wrong-code classes confirmed by the audit, close the
