@@ -50,10 +50,12 @@ _sl16_done:
 #endasm
 
 char * names[3] = { "zero", "one", "twotwo" };
+uint16_t vals[2] = { 7, 70 };
 
 int main( void )
 {
-    uint16_t x, y, z, nn;
+    uint16_t x, y, z, nn, mm;
+    uint16_t w, v;
 
     x = double_it( 21 );
     y = add2( 100, 23 );
@@ -65,5 +67,27 @@ int main( void )
     printf( "strlen(zero)=%u\n", strlen16( names[ nn++ ] ) );
     printf( "strlen(one)=%u\n", strlen16( names[ nn++ ] ) );
     printf( "strlen(twotwo)=%u\n", strlen16( names[ nn++ ] ) );
+
+    /* Regression for a __fastcall call-site codegen bug: dcc normally
+     * evaluates a call's arguments left to right, so the LAST-declared one
+     * is usually the last thing computed before the call, and may still be
+     * sitting in HL via the compiler's "forward this value directly,
+     * skip a real store" optimization (see mir_take_forwarded_hl_call_
+     * argument's comment in dcc_mir_spilled_cfg.c). The hardcoded
+     * memset/memcpy/... fastcalls already guard against that by pushing
+     * the forwarded value before loading any earlier argument; the
+     * user-__fastcall path (mir_call_is_user_fastcall) didn't, so loading
+     * an EARLIER, trivially-foldable argument (a bare constant here)
+     * clobbered HL before the forwarded LAST argument's real value (a
+     * genuine memory read, not a constant - vals[] is deliberately
+     * non-const-indexed via mm++ so it can't fold away) was ever used.
+     * Both fastcall registers ended up holding the first argument's value
+     * and the second/third arguments were silently lost. Found while
+     * applying __fastcall to tests/a1.c's op_math(). */
+    mm = 0;
+    w = add2( 5, vals[ mm++ ] );
+    v = combine3( 2, 3, vals[ mm++ ] );
+    printf( "add2(5,vals[0]=7)=%u\n", w );
+    printf( "combine3(2,3,vals[1]=70)=%u\n", v );
     return 0;
 }

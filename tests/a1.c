@@ -557,6 +557,15 @@ void op_bcd_math( uint8_t math, uint8_t rhs )
     cpu.a = ( ( result / 10 ) << 4 ) + ( result % 10 );
 }
 
+/* __fastcall (dcc-specific: see the DCC #asm body further down): op and rhs
+   arrive directly in HL and DE instead of on the stack - op_math is the
+   dispatch point for every ORA/AND/EOR/ADC/SBC/CMP instruction across every
+   addressing mode (8+ call sites in emulate()'s switch), so it's called
+   about as often as get_mem, the original __fastcall motivating case. */
+#if defined( _DCC_ )
+extern void __fastcall op_math( uint8_t op, uint8_t rhs );
+#endif
+
 #ifdef Z80_ASM_OPTS
 #ifdef SDCC
 /* op_math( uint8_t op, uint8_t rhs ) -- zsdcc port of the dcc version below.
@@ -740,9 +749,7 @@ _opm_bcd:
 #asm
         ; op_math( uint8_t op, uint8_t rhs )
         ;
-        ; DCC calling convention:
-        ;   SP+2 = op
-        ;   SP+4 = rhs
+        ; DCC __fastcall convention: op in HL, rhs in DE (both zero-extended).
         ;
         ; cpu layout:
         ;   _cpu+0   a
@@ -762,15 +769,13 @@ _opm_bcd:
 
         public _op_math
 _op_math:
-        ; Fetch arguments.
-        ld      hl,2
-        add     hl,sp
-        ld      a,(hl)               ; op
+        ; __fastcall (see the extern declaration above): op arrives in HL
+        ; and rhs in DE, both zero-extended, so the stack-argument-fetch
+        ; prologue collapses to two register moves.
+        ld      a,l                  ; op
         and     0e0h
         ld      b,a                  ; B = masked op
-        inc     hl
-        inc     hl
-        ld      c,(hl)               ; C = rhs
+        ld      c,e                  ; C = rhs
 
         ; CMP is completely separate.
         cp      0c0h

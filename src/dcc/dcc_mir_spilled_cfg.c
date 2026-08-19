@@ -32916,19 +32916,43 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                     } else if (callee->proto_nargs == 1) {
                         mir_emit_spilled_arg_to_hl(out, fastcall_values[0]);
                     } else if (callee->proto_nargs == 2) {
-                        mir_emit_spilled_arg_to_hl(out, fastcall_values[0]);
-                        mir_stream_puts("\tpush hl\n", out);
-                        mir_emit_spilled_arg_to_hl(out, fastcall_values[1]);
-                        mir_stream_puts("\tex de,hl\n\tpop hl\n", out);
+                        /* The last-declared argument is the one normally
+                         * evaluated immediately before this call, so it may
+                         * already be sitting in HL via forwarding (see
+                         * mir_take_forwarded_hl_call_argument) - preserve it
+                         * with a push before loading the earlier argument
+                         * can clobber it, exactly as the hardcoded
+                         * memset/memcpy/... fastcalls below already do. */
+                        if (mir_take_forwarded_hl_call_argument(
+                                fastcall_values[1])) {
+                            mir_stream_puts("\tpush hl\n", out);
+                            mir_emit_spilled_arg_to_hl(out, fastcall_values[0]);
+                            mir_stream_puts("\tpop de\n", out);
+                        } else {
+                            mir_emit_spilled_arg_to_hl(out, fastcall_values[0]);
+                            mir_stream_puts("\tpush hl\n", out);
+                            mir_emit_spilled_arg_to_hl(out, fastcall_values[1]);
+                            mir_stream_puts("\tex de,hl\n\tpop hl\n", out);
+                        }
                     } else {
-                        mir_emit_spilled_arg_to_hl(out, fastcall_values[0]);
-                        mir_stream_puts("\tpush hl\n", out);
-                        mir_emit_spilled_arg_to_hl(out, fastcall_values[1]);
-                        mir_stream_puts("\tpush hl\n", out);
-                        mir_emit_spilled_arg_to_hl(out, fastcall_values[2]);
-                        mir_stream_puts(
-                            "\tld b,h\n\tld c,l\n\tpop hl\n\tex de,hl\n\tpop hl\n",
-                            out);
+                        if (mir_take_forwarded_hl_call_argument(
+                                fastcall_values[2])) {
+                            mir_stream_puts("\tpush hl\n", out);
+                            mir_emit_spilled_arg_to_hl(out, fastcall_values[0]);
+                            mir_stream_puts("\tpush hl\n", out);
+                            mir_emit_spilled_arg_to_hl(out, fastcall_values[1]);
+                            mir_stream_puts(
+                                "\tex de,hl\n\tpop hl\n\tpop bc\n", out);
+                        } else {
+                            mir_emit_spilled_arg_to_hl(out, fastcall_values[0]);
+                            mir_stream_puts("\tpush hl\n", out);
+                            mir_emit_spilled_arg_to_hl(out, fastcall_values[1]);
+                            mir_stream_puts("\tpush hl\n", out);
+                            mir_emit_spilled_arg_to_hl(out, fastcall_values[2]);
+                            mir_stream_puts(
+                                "\tld b,h\n\tld c,l\n\tpop hl\n\tex de,hl\n\tpop hl\n",
+                                out);
+                        }
                     }
                     if ((callee->needs_extrn) &&
                         mir_extrn_should_emit_name(assembly_name))

@@ -4,3 +4,5 @@ combine3(10,5,3)=33
 strlen(zero)=4
 strlen(one)=3
 strlen(twotwo)=6
+add2(5,vals[0]=7)=12
+combine3(2,3,vals[1]=70)=80
