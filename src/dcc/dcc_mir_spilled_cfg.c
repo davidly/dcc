@@ -22658,7 +22658,7 @@ static int mir_narrow_multiply_source_is_m1q_bounded(
            mir_value_is_m1q_bounded(source->dst, 0);
 }
 
-static int mir_value_is_wide_narrow_multiply_widen(int value)
+static int mir_value_is_wide_narrow_multiply_widen_uncached(int value)
 {
     int instruction;
 
@@ -22671,6 +22671,90 @@ static int mir_value_is_wide_narrow_multiply_widen(int value)
             return 1;
     }
     return 0;
+}
+
+static int mir_wide_narrow_multiply_widen_verify_enabled(void)
+{
+    static int flag = -1;
+    if (flag < 0)
+        flag = getenv("DCC_MIR_WIDEN_CACHE_VERIFY") != NULL;
+    return flag;
+}
+
+/* Called once per value queried by mir_prepare_backend_slots,
+ * mir_can_forward_hl_de_to_next, and the spilled-scalar-cfg instruction
+ * dispatch's own pattern chain - on the order of 10^4 times per compile,
+ * each an uncached O(mir.count) rescan of the whole function calling
+ * mir_wide_narrow_multiply_match (profiled: ~15M calls on a1.c alone,
+ * dcc's largest self-time contributor after register allocation's own
+ * interference check). Same cache shape as mir_cfg_block_count
+ * (dcc_mir_select.c) - keyed on mir_use_cache_generation_id() rather than
+ * re-deriving its own invalidation coverage, since every mutation site that
+ * could change this answer already bumps that generation for the def-use
+ * cache. Unlike mir_cfg_block_count's single cached scalar, the cached
+ * payload here is one bit per value (a value either is or isn't some
+ * multiply's widened operand), so a single O(mir.count) pass rebuilds the
+ * whole set at once - turning the O(values * instructions) pattern into
+ * O(values + instructions) - rather than caching one value's answer at a
+ * time. DCC_MIR_WIDEN_CACHE_VERIFY=1 recomputes the uncached answer for
+ * every query too and fatals on a mismatch, mirroring
+ * DCC_MIR_CFG_CACHE_VERIFY's own role for that cache. */
+static int mir_value_is_wide_narrow_multiply_widen(int value)
+{
+    static unsigned cached_generation;
+    static unsigned char *cached_set;
+    static int cached_set_capacity;
+    static int cache_valid;
+    unsigned generation = mir_use_cache_generation_id();
+    int result;
+
+    if (cache_valid && generation == cached_generation &&
+        !mir_wide_narrow_multiply_widen_verify_enabled()) {
+        return (value >= 0 && value < cached_set_capacity)
+            ? cached_set[value] : 0;
+    }
+
+    if (mir.next_value > cached_set_capacity) {
+        unsigned char *grown = (unsigned char *)realloc(
+            cached_set, (size_t)mir.next_value);
+        if (mir.next_value && !grown)
+            fatal("out of memory building MIR wide-narrow-multiply-widen cache");
+        cached_set = grown;
+        cached_set_capacity = mir.next_value;
+    }
+    if (cached_set_capacity > 0)
+        memset(cached_set, 0, (size_t)cached_set_capacity);
+    {
+        int instruction;
+
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+            const struct MirInsn *multiply = &mir.insns[instruction];
+
+            if (!mir_wide_narrow_multiply_match(multiply, NULL, NULL, NULL))
+                continue;
+            if (multiply->src1 >= 0 && multiply->src1 < cached_set_capacity)
+                cached_set[multiply->src1] = 1;
+            if (multiply->src2 >= 0 && multiply->src2 < cached_set_capacity)
+                cached_set[multiply->src2] = 1;
+        }
+    }
+
+    result = (value >= 0 && value < cached_set_capacity)
+        ? cached_set[value] : 0;
+
+    if (cache_valid && generation == cached_generation &&
+        result != mir_value_is_wide_narrow_multiply_widen_uncached(value)) {
+        fprintf(stderr,
+            "; MIR CACHE MISMATCH mir_value_is_wide_narrow_multiply_widen "
+            "function=%s value=%d cached=%d uncached=%d\n",
+            mir.name, value, result,
+            mir_value_is_wide_narrow_multiply_widen_uncached(value));
+        fatal("MIR use-cache mismatch");
+    }
+
+    cached_generation = generation;
+    cache_valid = 1;
+    return result;
 }
 
 static int mir_value_is_m1q_multiply_source(int value)
