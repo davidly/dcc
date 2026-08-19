@@ -346,6 +346,16 @@ int mir_machine_global_address_offset(
         *offset_out = memory_offset;
         return 1;
     }
+    if (definition->opcode == MIR_MEMBER_ADDRESS &&
+        (definition->memory_flags & (1 | 8)) == 0) {
+        long base_offset;
+
+        if (!mir_machine_global_address_offset(
+                definition->src1, root_out, &base_offset, depth + 1))
+            return 0;
+        *offset_out = base_offset + definition->immediate;
+        return *offset_out >= -32768 && *offset_out <= 32767;
+    }
     if (definition->opcode == MIR_BINARY &&
         definition->immediate == '+') {
         long constant;
