@@ -11093,8 +11093,6 @@ static int mir_match_no_stack_character_store(
 static void mir_emit_no_stack_character_store(
     MirStream *out, const struct MirNoStackCharacterStore *plan)
 {
-    const char *memory_name =
-        mir_no_stack_declare_symbol(out, plan->memory_function);
     const char *print_name =
         mir_no_stack_declare_symbol(out, plan->print_function);
     const char *flush_name =
@@ -11109,7 +11107,10 @@ static void mir_emit_no_stack_character_store(
             "\tld hl,53266\n"
             "\tld e,(ix+%d)\n\tld d,(ix+%d)\n"
             "\tor a\n\tsbc hl,de\n\tjp nz,L%d\n"
-            "\tld hl,53266\n\tpush hl\n\tcall %s\n\tpop bc\n"
+            "\tld hl,53266\n",
+            parameter, parameter + 1, done);
+    mir_machine_emit_hl_scalar_call(out, plan->memory_function);
+    mir_stream_printf(out,
             "\tld a,(hl)\n\tand 127\n\tld (ix-1),a\n"
             "\tcp 127\n\tjp z,L%d\n\tcp 10\n\tjp z,L%d\n"
             "\tcp 13\n\tjp nz,L%d\n"
@@ -11120,16 +11121,16 @@ static void mir_emit_no_stack_character_store(
             "\tpop bc\n\tpop bc\n"
             "\tld hl,1\n\tpush hl\n\tcall %s\n\tpop bc\n"
             "L%d:\n"
-            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n"
-            "\tpush hl\n\tcall %s\n\tpop bc\n"
-            "\tld a,(ix-1)\n\tld (hl),a\n"
-            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
-            parameter, parameter + 1, done,
-            memory_name, skip_print, skip_print,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n",
+            skip_print, skip_print,
             character_ready, character_ready,
             plan->format_string, print_name, flush_name,
-            skip_print, parameter, parameter + 1,
-            memory_name, done);
+            skip_print, parameter, parameter + 1);
+    mir_machine_emit_hl_scalar_call(out, plan->memory_function);
+    mir_stream_printf(out,
+            "\tld a,(ix-1)\n\tld (hl),a\n"
+            "L%d:\n\tld sp,ix\n\tpop ix\n\tret\n",
+            done);
 }
 
 static int mir_match_no_stack_command_invoke(
@@ -11298,8 +11299,6 @@ static void mir_emit_no_stack_command_invoke(
     const char *exit_name = plan->exit_function != NULL
         ? mir_no_stack_declare_symbol(out, plan->exit_function)
         : plan->exit_name;
-    const char *memory_name =
-        mir_no_stack_declare_symbol(out, plan->memory_function);
     const char *emulate_name =
         mir_no_stack_declare_symbol(out, plan->emulate_function);
     const char *cpu_name = asm_name_for(sym_asm_name(plan->cpu));
@@ -11342,19 +11341,22 @@ static void mir_emit_no_stack_command_invoke(
             start_name, cpu_name, plan->pc_offset,
             cpu_name, plan->sp_offset,
             hooks_name, hooks_done);
-    for (hook = 0; hook < 4; ++hook)
+    for (hook = 0; hook < 4; ++hook) {
         mir_stream_printf(out,
-                "\tld hl,%d\n\tpush hl\n\tcall %s\n\tpop bc\n"
-                "\tld (hl),15\n",
-                plan->hook_addresses[hook], memory_name);
+                "\tld hl,%d\n", plan->hook_addresses[hook]);
+        mir_machine_emit_hl_scalar_call(out, plan->memory_function);
+        mir_stream_puts("\tld (hl),15\n", out);
+    }
     mir_stream_printf(out,
             "L%d:\n\tld a,(%s)\n\tor a\n\tjp z,L%d\n"
-            "\tld hl,%d\n\tpush hl\n\tcall %s\n\tpop bc\n"
+            "\tld hl,%d\n",
+            hooks_done, exit_monitor_name, halt_done,
+            plan->halt_address);
+    mir_machine_emit_hl_scalar_call(out, plan->memory_function);
+    mir_stream_printf(out,
             "\tld (hl),255\n"
             "L%d:\n\tcall %s\n"
             "\tld sp,ix\n\tpop ix\n\tret\n",
-            hooks_done, exit_monitor_name, halt_done,
-            plan->halt_address, memory_name,
             halt_done, emulate_name);
 }
 

@@ -278,6 +278,16 @@ void mir_machine_emit_symbol_call(
     mir_stream_printf(out, "\tcall %s\n", name);
 }
 
+void mir_machine_emit_hl_scalar_call(
+    MirStream *out, struct Sym *symbol)
+{
+    if (!symbol->is_fastcall)
+        mir_stream_puts("\tpush hl\n", out);
+    mir_machine_emit_symbol_call(out, symbol);
+    if (!symbol->is_fastcall)
+        mir_stream_puts("\tpop bc\n", out);
+}
+
 int mir_machine_parameter_value_offset(
     int value, int *stack_offset)
 {
