@@ -330,6 +330,73 @@ static int likely_taken_e_counter_backedge(int branch, int target)
     return 0;
 }
 
+/* Split 16-bit "reg_pair <= const" loop-bound test compiled as two 8-bit
+ * comparisons - high byte first (falling through to the low-byte check
+ * only on an exact high-byte match), each branching back to the same
+ * loop-continue label:
+ *   ld a,<hi>  / cp <hi_bound> / jp c,label / jp nz,exit
+ *   ld a,<lo>  / cp <lo_bound> / jp c,label
+ * Both jp c instances are near-always-taken loop back-edges once the loop
+ * has run for more than a handful of high-byte values; jp cc is a flat 10
+ * T-states while jr cc costs 12 when taken, so shortening either is a net
+ * timing loss despite the byte saved. */
+/* The middle exit branch ("jp nz,exit") is not itself protected - it is
+ * legitimately shortened to jr on an earlier fixed-point iteration of this
+ * same pass, same as jump_target_any's "jp or jr" tolerance documented
+ * above. Accept either spelling so re-scans after that conversion still
+ * recognize the surrounding idiom. */
+static int is_nz_branch_either_form(const char *s)
+{
+    char clean[MAX_LINE];
+    strip_peep_comment_copy(clean, s);
+    return strncmp(clean, "jp nz, ", 7) == 0 || strncmp(clean, "jr nz,", 6) == 0;
+}
+
+static int likely_taken_word_range_backedge(int branch, int target)
+{
+    char hi_label[128], lo_label[128];
+    char clean[MAX_LINE];
+    int hi, lo;
+    int k;
+    char hi_reg, lo_reg;
+
+    if (target >= branch || branch < 2)
+        return 0;
+
+    for (k = branch - 6; k <= branch - 2; ++k) {
+        if (k < 0 || k + 6 >= nlines)
+            continue;
+        if (branch != k + 2 && branch != k + 6)
+            continue;
+
+        strip_peep_comment_copy(clean, lines[k]);
+        if (strlen(clean) != 6 || strncmp(clean, "ld a,", 5) != 0)
+            continue;
+        hi_reg = clean[5];
+        if (hi_reg != 'b' && hi_reg != 'd' && hi_reg != 'h')
+            continue;
+        lo_reg = (hi_reg == 'b') ? 'c' : (hi_reg == 'd') ? 'e' : 'l';
+
+        if (!peep_parse_cp_const(lines[k + 1], &hi) ||
+            !parse_jp_c_label(lines[k + 2], hi_label) ||
+            !is_nz_branch_either_form(lines[k + 3]))
+            continue;
+
+        strip_peep_comment_copy(clean, lines[k + 4]);
+        if (strlen(clean) != 6 || strncmp(clean, "ld a,", 5) != 0 ||
+            clean[5] != lo_reg)
+            continue;
+
+        if (!peep_parse_cp_const(lines[k + 5], &lo) ||
+            !parse_jp_c_label(lines[k + 6], lo_label) ||
+            strcmp(hi_label, lo_label) != 0)
+            continue;
+
+        return 1;
+    }
+    return 0;
+}
+
 static int loop_has_small_constant_bound(int target, int backedge,
                                          const LabelIndexEntry *labels,
                                          int label_count)
@@ -445,7 +512,8 @@ int pass_jp_to_jr(void)
             continue;
         sprintf(def, "%s:", lab);
         target = find_label_line(labels, label_count, def);
-        if (target >= 0 && likely_taken_e_counter_backedge(i, target)) {
+        if (target >= 0 && (likely_taken_e_counter_backedge(i, target) ||
+                            likely_taken_word_range_backedge(i, target))) {
             hot_loop_depth[target]++;
             hot_loop_depth[i + 1]--;
         }
@@ -485,6 +553,7 @@ int pass_jp_to_jr(void)
                   branch_skips_value_to_epilogue(i, target))) ||
                 (conditional &&
                  (likely_taken_e_counter_backedge(i, target) ||
+                  likely_taken_word_range_backedge(i, target) ||
                   (likely_zero_call_result(i) &&
                    branch_skips_call_to_epilogue(i, target)) ||
                   (likely_nonzero_word_parameter(i) &&
@@ -527,6 +596,7 @@ int pass_jp_to_jr(void)
                       branch_skips_value_to_epilogue(i, target))) ||
                     (conditional &&
                      (likely_taken_e_counter_backedge(i, target) ||
+                      likely_taken_word_range_backedge(i, target) ||
                                             (shortenable_count <= 2 &&
                                              is_forward_diamond_arm(i, target, labels,
                                                                                             label_count)) ||
