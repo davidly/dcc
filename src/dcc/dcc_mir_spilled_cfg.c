@@ -3324,6 +3324,23 @@ int mir_call_is_strlen_fastcall(int call_index, int *s_value)
     return 1;
 }
 
+/* __fastcall for a user-declared function (as opposed to the hardcoded
+ * strlen/strchr/memcmp/... cases above, which are each a specific
+ * well-known DCCRTL entry point): matches whenever callee->is_fastcall is
+ * set. dcc_func.c's validate_fastcall_prototype already guarantees, at the
+ * point a function can ever reach that state, that it has <=3 parameters,
+ * each an eligible type (char/short/int/pointer - no long/float/struct),
+ * and no varargs - so callee->proto_nargs is always a safe argc here.
+ * Fills values[0..callee->proto_nargs-1] in declaration order; a 0-argument
+ * __fastcall function matches trivially with nothing to fill. */
+int mir_call_is_user_fastcall(int call_index, struct Sym *callee, int *values)
+{
+    if (callee == NULL || !callee->is_fastcall)
+        return 0;
+    return mir_call_matches_fastcall_shape(call_index, callee->name,
+                                            callee->proto_nargs, values);
+}
+
 /* Legacy fastcall for strchr(s,c): DCCRTL's __chf takes s in HL and c's
  * low byte in A, returning the match (or 0) in HL. */
 int mir_call_is_strchr_fastcall(int call_index, int *s_value,
@@ -4038,6 +4055,7 @@ static int mir_call_uses_generic_stack_arguments(int instruction)
 {
     const char *rtl_name;
     int a, b, c;
+    int fastcall_values[3];
 
     return !mir_call_is_memset_fastcall(instruction, &a, &b, &c) &&
            !mir_call_uses_inline_memory_store(instruction, NULL, NULL) &&
@@ -4053,7 +4071,10 @@ static int mir_call_uses_generic_stack_arguments(int instruction)
            !mir_call_is_memcpy_fastcall(instruction, &a, &b, &c) &&
            !mir_call_is_de_hl_fastcall(instruction, &rtl_name, &a, &b) &&
            !mir_call_is_bdos_family_fastcall(
-               instruction, &rtl_name, &a, &b);
+               instruction, &rtl_name, &a, &b) &&
+           !mir_call_is_user_fastcall(
+               instruction, find_global(mir.insns[instruction].name),
+               fastcall_values);
 }
 
 static void mir_emit_prepacked_constant_arguments(
@@ -30873,6 +30894,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 int s_value, c_value;
                 int s1_value, s2_value, n_value;
                 int fn_value, dearg_value;
+                int fastcall_values[3];
                 int inline_memory_arguments[4];
                 int inline_simple_store_arguments[3];
                 int inline_typed_store_arguments[3];
@@ -31142,6 +31164,41 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                         mir_stream_puts("\tex de,hl\n\tpop hl\n\tld c,l\n", out);
                     }
                     mir_emit_runtime_call(out, rtl_name);
+                    if (type_ptr_depth(insn->type) > 0 ||
+                        (insn->type & 15) != TYPE_VOID) {
+                        if (type_size(insn->type) == 4)
+                            mir_emit_virtual_store_wide(out, insn->dst);
+                        else
+                            mir_emit_virtual_store(out, insn->dst);
+                    }
+                    break;
+                }
+                if (!is_indirect &&
+                    mir_call_is_user_fastcall(i, callee, fastcall_values)) {
+                    if (callee->proto_nargs == 0) {
+                        /* Nothing to load - same no-argument shape a normal
+                         * call would use, minus the (empty) push/pop. */
+                    } else if (callee->proto_nargs == 1) {
+                        mir_emit_spilled_arg_to_hl(out, fastcall_values[0]);
+                    } else if (callee->proto_nargs == 2) {
+                        mir_emit_spilled_arg_to_hl(out, fastcall_values[0]);
+                        mir_stream_puts("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, fastcall_values[1]);
+                        mir_stream_puts("\tex de,hl\n\tpop hl\n", out);
+                    } else {
+                        mir_emit_spilled_arg_to_hl(out, fastcall_values[0]);
+                        mir_stream_puts("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, fastcall_values[1]);
+                        mir_stream_puts("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, fastcall_values[2]);
+                        mir_stream_puts(
+                            "\tld b,h\n\tld c,l\n\tpop hl\n\tex de,hl\n\tpop hl\n",
+                            out);
+                    }
+                    if ((callee->needs_extrn) &&
+                        mir_extrn_should_emit_name(assembly_name))
+                        mir_stream_printf(out, "\textrn %s\n", assembly_name);
+                    mir_stream_printf(out, "\tcall %s\n", assembly_name);
                     if (type_ptr_depth(insn->type) > 0 ||
                         (insn->type & 15) != TYPE_VOID) {
                         if (type_size(insn->type) == 4)

@@ -1229,6 +1229,35 @@ void clear_parsed_prototype(void)
         g_proto_types[i] = 0;
 }
 
+/* __fastcall eligibility: up to 3 parameters, each a char/short/int/pointer
+ * (nothing that needs more than one 16-bit register pair or a hidden
+ * pointer - long, float, struct/union by value), no varargs, no struct
+ * return, and a real prototype (rules out K&R old-style parameter lists,
+ * which never populate proto_types). Call after copy_parsed_prototype_to_sym
+ * so proto_nargs/proto_types/proto_variadic are current. See gen_fastcall_
+ * user_call in dcc_ast_gen_expr.c for the matching HL/DE/BC codegen. */
+void validate_fastcall_prototype(struct Sym *s)
+{
+    int i;
+
+    if (!s->is_fastcall)
+        return;
+    if (!s->has_proto)
+        error_here("__fastcall function must have a prototyped parameter list");
+    if (s->proto_variadic)
+        error_here("__fastcall function cannot be variadic");
+    if (s->proto_nargs > 3)
+        error_here("__fastcall function may have at most 3 parameters");
+    for (i = 0; i < s->proto_nargs; ++i) {
+        int t = s->proto_types[i];
+        if (type_is_struct_object(t) || type_is_long(t) || type_is_float(t) ||
+            type_size(t) > 2)
+            error_here("__fastcall parameter must be char, short, int, or a pointer");
+    }
+    if (type_is_struct_object(s->type))
+        error_here("__fastcall function cannot return a struct or union");
+}
+
 void copy_parsed_prototype_to_sym(struct Sym *s)
 {
     int i;
@@ -2887,6 +2916,12 @@ void parse_function_or_global(int base_type)
         is_funcret_funcptr_decl = 0;
         direct_funcptr_decl = 0;
         name[0] = 0;
+        /* __fastcall is per-declarator (like MSVC placement, between the
+         * return type/pointers and the function name), not a shared
+         * declaration specifier like static/inline/extern above - reset it
+         * fresh for each comma-separated declarator so `int foo(int),
+         * __fastcall bar(int);` doesn't leak __fastcall onto foo. */
+        g_decl.is_fastcall = 0;
 
         /* Each declarator starts again from the shared declaration-specifier
          * base type.  This is the important C declarator rule for forms like:
@@ -2897,6 +2932,14 @@ void parse_function_or_global(int base_type)
             object_is_volatile = skip_type_qualifiers_volatile();
             type = type_add_ptr(type);
             base_is_func_typedef = 0;
+        }
+
+        /* MSVC placement: RETTYPE __fastcall name(...), after any pointers
+         * and before the declarator name - not a storage-class-style prefix
+         * specifier, so it is not accepted in parse_base_type. */
+        if (g_lex.tok.kind == TOK_FASTCALL) {
+            g_decl.is_fastcall = 1;
+            next_token();
         }
 
         if (parse_funcptr_declarator(&type, name, sizeof(name))) {
@@ -2945,8 +2988,16 @@ void parse_function_or_global(int base_type)
         /* Function declarator or definition. */
         if (is_funcret_funcptr_decl || (g_funcptr_decl_array_len == 0 && accept('('))) {
             s = add_global(name, type, SC_FUNC);
+            /* Unlike is_inline (an optimization hint dcc tolerates picking up
+             * from any one declaration), a __fastcall mismatch between
+             * declarations is a real ABI disagreement between call sites
+             * compiled against each one - so it's checked, not OR'd in,
+             * once a prototype already exists for this symbol. */
+            if (s->has_proto && s->is_fastcall != g_decl.is_fastcall)
+                error_here("__fastcall specifier does not match previous declaration");
             s->is_inline |= g_decl.is_inline;
             s->is_noreturn |= g_decl.is_noreturn;
+            s->is_fastcall |= g_decl.is_fastcall;
             parse_function_return_type = type;
             if (g_ptr_array_dim_count > 0) {
                 int pi;
@@ -2964,6 +3015,7 @@ void parse_function_or_global(int base_type)
             if (!is_funcret_funcptr_decl)
                 parse_param_list();
             copy_parsed_prototype_to_sym(s);
+            validate_fastcall_prototype(s);
             if (!is_funcret_funcptr_decl)
                 expect(')');
 
@@ -2975,6 +3027,16 @@ void parse_function_or_global(int base_type)
                 parse_old_style_param_declarations();
 
             if (g_lex.tok.kind == '{') {
+                /* Phase 1 of __fastcall: dcc does not yet generate a
+                 * register-argument-aware prologue for a compiled C body, so
+                 * a __fastcall function must be declared extern and defined
+                 * out of line as hand-written #asm reading HL/DE/BC directly
+                 * (see _get_mem in tests/a1.c for the established pattern
+                 * this mirrors - an extern prototype with the real body in a
+                 * freestanding #asm block, never seen here as a '{' body). */
+                if (s->is_fastcall)
+                    error_here("__fastcall function bodies are not yet supported; "
+                               "declare it extern and define it as a hand-written #asm block");
                 /* Set once here, covering both frame-sizing scan passes below
                  * and the real codegen pass later in this same block, so a
                  * hoist decision keyed on "am I compiling function X" (see

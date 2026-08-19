@@ -697,6 +697,7 @@ int parse_base_type(void)
     g_decl.pointee_is_volatile = 0;
     g_decl.is_inline = 0;
     g_decl.is_noreturn = 0;
+    g_decl.is_fastcall = 0;
     g_parse_type_was_enum = 0;
 
     /* C89 declaration specifiers are order-independent. */

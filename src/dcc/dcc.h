@@ -197,6 +197,7 @@
 #define TOK_BOOL       316
 #define TOK_STATIC_ASSERT 317
 #define TOK_NORETURN   318
+#define TOK_FASTCALL   319
 #define TOK_SWITCH     300
 #define TOK_CASE       301
 #define TOK_DEFAULT    302
@@ -275,6 +276,7 @@ typedef struct DeclState {
     int is_static;
     int is_inline;
     int is_noreturn;
+    int is_fastcall;
     int is_const;
     int is_volatile;
     int pointee_is_volatile;
@@ -358,6 +360,16 @@ struct Sym {
                       * disqualifying eligibility scan, since nothing after
                       * the call in that control-flow path is ever reached -
                       * whatever it clobbers can't matter. */
+    int is_fastcall; /* function declared with __fastcall: up to 3 eligible
+                      * (char/short/int/pointer, non-variadic) parameters are
+                      * passed directly in HL, then DE, then BC instead of on
+                      * the stack - see gen_fastcall_user_call in
+                      * dcc_ast_gen_expr.c and validate_fastcall_prototype in
+                      * dcc_func.c. Phase 1: the function must be declared
+                      * extern and defined out of line as hand-written #asm
+                      * reading its arguments directly out of those
+                      * registers - dcc does not yet generate a __fastcall-
+                      * aware prologue for a plain C function body. */
     struct AstNode *inline_return_expr; /* simple static inline body, if captured */
     struct AstNode *inline_stmt_expr;   /* simple void inline expression body */
     struct AstNode *inline_stmt_body;   /* simple void inline statement body */
@@ -1072,6 +1084,7 @@ void skip_prototype_array_suffixes(int *ptype);
 void skip_prototype_function_suffix(void);
 void clear_parsed_prototype(void);
 void copy_parsed_prototype_to_sym(struct Sym *s);
+void validate_fastcall_prototype(struct Sym *s);
 void copy_funcptr_prototype_to_sym(struct Sym *s, int direct_declarator);
 void remember_proto_param_type(int type);
 int old_style_param_list_starts(void);

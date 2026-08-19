@@ -496,6 +496,8 @@ int mir_call_is_strchr_fastcall(int call_index, int *s_value,
 int mir_call_is_strlen_fastcall(int call_index, int *s_value);
 int mir_call_is_strrchr_fastcall(int call_index, int *s_value,
                                        int *c_value);
+int mir_call_is_user_fastcall(int call_index, struct Sym *callee,
+                                    int *values);
 int mir_call_uses_value(const struct MirInsn *call, int value);
 int mir_compare_definition_for_branch(int instruction);
 int mir_direct_branch_for_unary_not(int instruction);
