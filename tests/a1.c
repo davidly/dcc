@@ -41,9 +41,15 @@ extern void power_on( void );
    further down) passes address directly in HL instead of on the stack -
    get_mem is called for every single 6502 memory access, so the caller's
    push/pop and the callee's stack-argument-fetch prologue that convention
-   would otherwise cost are worth avoiding here specifically. */
+   would otherwise cost are worth avoiding here specifically. zsdcc's own
+   __z88dk_fastcall (see get_mem's SDCC #asm body further down) gets the
+   same treatment for the same reason. This top-level declaration must
+   agree with whichever one the actual definition below ends up using -
+   zsdcc rejects a mismatched extern/definition pair outright. */
 #if defined( _DCC_ )
 extern uint8_t * __fastcall get_mem( uint16_t address );
+#elif defined( SDCC )
+extern uint8_t * get_mem( uint16_t address ) __z88dk_fastcall;
 #else
 extern uint8_t * get_mem( uint16_t address );
 #endif
@@ -245,21 +251,22 @@ void set_nz( uint8_t x )
    cause was not obvious from the message alone. zsdcc also gives
    #asm-bodied functions no automatic prologue/epilogue at all (confirmed
    empirically: without one, IX holds whatever the caller left it as, not
-   a valid frame pointer), so this sets up and tears down its own IX frame
-   exactly like a normal compiler-generated function would. Parameter and
-   return conventions (packed byte params, (ix+4)/(ix+5), pointer return
-   in HL) were confirmed the same way: standalone test functions built
-   with the exact zcc flags used for this file, run under ntvcm and
-   checked against known correct results, since the exact ABI for this
-   target and compiler combination is not documented anywhere. */
-uint8_t * get_mem( uint16_t address )
+   a valid frame pointer) -- __z88dk_fastcall (z88dk's zsdcc integration
+   supports exactly one register-passed argument, delivered in HL, with
+   *no* compiler-inserted prologue/epilogue at all for a hand-#asm body,
+   confirmed via standalone test functions built with the exact zcc flags
+   used for this file, run under ntvcm and checked against known correct
+   results) removes the need for any IX frame here entirely: the address
+   arrives directly in HL, one register-swap away from where the rest of
+   this routine already expects it (matching dcc's own __fastcall get_mem
+   below), and there was never any other use of IX in this body to justify
+   the frame in the first place. */
+uint8_t * get_mem( uint16_t address ) __z88dk_fastcall;
+
+uint8_t * get_mem( uint16_t address ) __z88dk_fastcall
 {
 #asm
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ld      e,(ix+4)
-        ld      d,(ix+5)        ; DE = address
+        ex      de,hl           ; DE = address (__z88dk_fastcall delivers it in HL)
 
         ld      a,d
 
@@ -279,7 +286,6 @@ uint8_t * get_mem( uint16_t address )
 _gm_bad:
         push    de
         call    _bad_address
-        pop     ix
         ret                     ; not reached
 
 _gm_hi:
@@ -310,7 +316,6 @@ _gm_4:
 _gm_add:
         ex      de,hl
         add     hl,bc
-        pop     ix
         ret
 #endasm
 }
@@ -570,15 +575,21 @@ extern void __fastcall op_math( uint8_t op, uint8_t rhs );
 #ifdef SDCC
 /* op_math( uint8_t op, uint8_t rhs ) -- zsdcc port of the dcc version below.
    See the get_mem SDCC block above for why this needs a real C function
-   signature wrapping the #asm body (dcc's bare-#asm style, used in the
-   #else branch below, does not parse under zsdcc), and for how the
-   calling convention here (manual IX frame; (ix+4)=op, (ix+5)=rhs, packed
-   with no padding since both are bytes) was confirmed empirically.
+   signature wrapping the #asm body. __sdcccall(1) (zsdcc's register-passing
+   convention, distinct from __z88dk_fastcall which is capped at exactly one
+   argument) delivers up to a few scalar arguments in registers rather than
+   on the stack; for two byte-sized parameters specifically it was confirmed
+   empirically (same standalone-function-under-ntvcm method as get_mem
+   above) to deliver the first in A and the second in L, with *no*
+   compiler-inserted IX frame at all - removing both the manual frame this
+   body used to set up and the (ix+4)/(ix+5) fetch, matching dcc's own
+   __fastcall op_math below (op in a register, rhs in a register).
    Calling a two-byte-param function (op_bcd_math, for the decimal path)
    also needed empirical confirmation: zsdcc packs both arguments into a
    single 16-bit push (E=first param, D=second param) rather than the two
    separate zero-extended pushes the dcc version uses, so only one
-   push/pop is needed around the call.
+   push/pop is needed around the call - op_bcd_math itself is a plain
+   (non-fastcall) function, so that convention is unaffected by this change.
 
    cpu layout:
      _cpu+0   a
@@ -596,17 +607,15 @@ extern void __fastcall op_math( uint8_t op, uint8_t rhs );
      C0 CMP
      E0 SBC
 */
-void op_math( uint8_t op, uint8_t rhs )
+void op_math( uint8_t op, uint8_t rhs ) __sdcccall(1);
+
+void op_math( uint8_t op, uint8_t rhs ) __sdcccall(1)
 {
 #asm
-        push    ix
-        ld      ix,0
-        add     ix,sp
-        ; Fetch arguments (packed, no padding between the two bytes).
-        ld      a,(ix+4)             ; op
+        ; __sdcccall(1): op already in A, rhs already in L - no frame needed.
         and     0e0h
         ld      b,a                  ; B = masked op
-        ld      c,(ix+5)             ; C = rhs
+        ld      c,l                  ; C = rhs
 
         ; CMP is completely separate.
         cp      0c0h
@@ -698,7 +707,6 @@ _opm_store:
         ld      a,0
         adc     a,0
         ld      (_cpu+10),a
-        pop     ix
         ret
 
 
@@ -724,7 +732,6 @@ _opm_cmp:
         ld      a,0
         adc     a,0
         ld      (_cpu+10),a
-        pop     ix
         ret
 
 
@@ -741,7 +748,6 @@ _opm_bcd:
         push    de
         call    _op_bcd_math
         pop     de
-        pop     ix
         ret
 #endasm
 }
