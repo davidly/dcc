@@ -51,6 +51,8 @@ void mir_machine_emit_vla_allocate_rows(
     MirStream *out, unsigned long row_bytes);
 void mir_machine_emit_float_bits(MirStream *out, unsigned long bits);
 void mir_machine_emit_symbol_call(MirStream *out, struct Sym *symbol);
+/* Emit one scalar argument already in HL using the callee's declared ABI. */
+void mir_machine_emit_hl_scalar_call(MirStream *out, struct Sym *symbol);
 void mir_machine_emit_ix_wide_load(MirStream *out, int offset);
 void mir_machine_emit_ix_wide_store(MirStream *out, int offset);
 void mir_emit_final_call_constant(MirStream *out, unsigned long value, int width);
