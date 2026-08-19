@@ -2997,6 +2997,7 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
                 int s_value, c_value;
                 int s1_value, s2_value, n_value;
                 int fn_value, dearg_value;
+                int fastcall_values[3];
                 const char *rtl_name;
                 struct MirPairedByteCall paired_byte_call;
                 if (mir_homed_paired_byte_call(
@@ -3103,6 +3104,46 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
                         goto done;
                     mir_stream_puts("\tpop de\n\tpop hl\n\tld c,l\n", out);
                     mir_emit_runtime_call(out, rtl_name);
+                    if (type_ptr_depth(insn->type) > 0 ||
+                        (insn->type & 15) != TYPE_VOID) {
+                        if (!mir_emit_hl_to_home(out, insn->dst))
+                            goto done;
+                    }
+                    break;
+                }
+                if (mir_call_is_user_fastcall(i, callee, fastcall_values)) {
+                    if (callee->proto_nargs == 1) {
+                        /* No stack round-trip needed for the single-argument
+                         * case - same direct load strlen's fastcall above
+                         * uses. This is the shape get_mem()-style hot leaf
+                         * calls take, so it's worth not paying for a
+                         * push+pop that a 2-or-3-argument call can't avoid
+                         * (those still need the stack to get later arguments
+                         * out of HL and into DE/BC). */
+                        if (!mir_emit_home_to_hl(out, fastcall_values[0]))
+                            goto done;
+                    } else {
+                        /* Push every argument (in declaration order, so
+                         * arg0 ends up deepest) then pop them back in
+                         * reverse into BC, DE, HL - same push-all/pop-all-
+                         * reversed shape as memset's fastcall above, just
+                         * generalized to any argument count up to 3 instead
+                         * of a fixed 3, and to the target's own mangled name
+                         * instead of a fixed DCCRTL runtime entry point. */
+                        for (scan = 0; scan < callee->proto_nargs; ++scan)
+                            if (!mir_emit_home_push(out, fastcall_values[scan]))
+                                goto done;
+                        if (callee->proto_nargs >= 3)
+                            mir_stream_puts("\tpop bc\n", out);
+                        if (callee->proto_nargs >= 2)
+                            mir_stream_puts("\tpop de\n", out);
+                        if (callee->proto_nargs >= 1)
+                            mir_stream_puts("\tpop hl\n", out);
+                    }
+                    if (callee->needs_extrn &&
+                        mir_extrn_should_emit_name(assembly_name))
+                        mir_stream_printf(out, "\textrn %s\n", assembly_name);
+                    mir_stream_printf(out, "\tcall %s\n", assembly_name);
                     if (type_ptr_depth(insn->type) > 0 ||
                         (insn->type & 15) != TYPE_VOID) {
                         if (!mir_emit_hl_to_home(out, insn->dst))

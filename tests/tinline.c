@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <stdbool.h>
 
 static inline int helper_add(int a, int b)
 {
@@ -323,6 +324,92 @@ static int inline_temp_collision_check(void)
            edge_inner_count * 10 + edge_outer_count;
 }
 
+/* Regression test for inlining a bool-returning static inline function.
+ * record_inline_function_if_simple used to decline every bool-returning
+ * candidate outright, regardless of body shape: a plain `return
+ * comparison;`/`return a && b;` predicate like these never got inlined, only
+ * ever called, even though its return expression is exactly the kind of
+ * provably-0/1 shape (see ast_expr_yields_bool01) AST_RETURN's own codegen
+ * would canonicalize for free anyway. The fix lets a bool return through
+ * when ast_expr_yields_bool01 proves it - this doesn't change *what* gets
+ * computed (isEvenB/inRangeB still return the right 0/1 either way), so a
+ * plain correctness check can't catch a regression on its own; this test's
+ * cycle count is tracked in tests/perf_baselines.csv so a reintroduced
+ * blanket bool decline (paying real call/ret overhead per iteration again)
+ * shows up as a measurable perf regression. */
+static inline bool isEvenB(int x)
+{
+    return (x & 1) == 0;
+}
+
+static inline bool inRangeB(int x, int lo, int hi)
+{
+    return x >= lo && x <= hi;
+}
+
+static int inline_bool_check(void)
+{
+    int i, evens, inrange;
+
+    evens = 0;
+    inrange = 0;
+    for (i = 0; i < 200; i++) {
+        if (isEvenB(i)) evens++;
+        if (inRangeB(i, 100, 199)) inrange++;
+    }
+    return evens * 100 + inrange;
+}
+
+/* Regression test for pass_cache_global_array_word_reload: two sibling
+ * static-inline calls that each take the same global-array-element
+ * argument (multiply_a(cache_arr[i]) + multiply_b(cache_arr[i])) used to
+ * each recompute the full base+index address arithmetic from scratch, 11
+ * instructions apiece - unlike a struct-field argument shared between
+ * sibling calls (see pass_elim_dup_iy_field_capture above), there is no
+ * already-captured slot for a peephole pass to reuse here, since a
+ * single-use inline body just consumes the freshly-computed value directly
+ * instead of spilling it anywhere. pass_cache_global_array_word_reload
+ * caches the first computation in BC and rewrites the repeat to a
+ * 2-instruction register read. This doesn't change *what* gets computed
+ * (multiply_a/multiply_b still see the correct element either way), so a
+ * plain correctness check can't catch a regression on its own; this test's
+ * cycle count is tracked in tests/perf_baselines.csv so a reintroduced
+ * from-scratch recompute shows up as a measurable perf regression. */
+static int cache_arr[8];
+
+static inline int multiply_a(int v)
+{
+    return v * 3 + 1;
+}
+
+static inline int multiply_b(int v)
+{
+    return v * 5 + 2;
+}
+
+/* Not itself inline: idx must be a genuine ix-relative parameter, not a
+ * loop induction variable pass_word_loop_var_to_reg_bc has already promoted
+ * to BC (which would both change the index's addressing mode away from the
+ * "(ix+d)" shape this pass matches, and legitimately claim BC for the whole
+ * loop, leaving none free for this pass's own cache). */
+static int combine_at(int idx)
+{
+    return multiply_a(cache_arr[idx]) + multiply_b(cache_arr[idx]);
+}
+
+static int inline_array_cache_check(void)
+{
+    int i, total;
+
+    for (i = 0; i < 8; i++)
+        cache_arr[i] = i;
+
+    total = 0;
+    for (i = 0; i < 8; i++)
+        total += combine_at(i);
+    return total;
+}
+
 int main(void)
 {
     printf("static inline: %d %d\n", scale3(7), helper_sub(helper_add(10, 5), 3));
@@ -334,5 +421,7 @@ int main(void)
     printf("inline temp collision check: %d\n", inline_temp_collision_check());
     printf("inline readwrite check: %d\n", inline_readwrite_check());
     printf("inline read order check: %d\n", inline_read_order_check());
+    printf("inline bool check: %d\n", inline_bool_check());
+    printf("inline array cache check: %d\n", inline_array_cache_check());
     return 0;
 }

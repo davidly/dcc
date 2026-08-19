@@ -7,3 +7,5 @@ inline volatile check: 14
 inline temp collision check: 5844
 inline readwrite check: 101
 inline read order check: 34
+inline bool check: 10100
+inline array cache check: 248

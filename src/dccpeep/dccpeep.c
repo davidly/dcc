@@ -6844,6 +6844,230 @@ static int pass_cache_global_word_reload_de(void)
     return changed;
 }
 
+/* ------------------------------------------------------------------------- *
+ * pass_cache_global_array_word_reload:
+ *
+ * Two sibling inline calls whose single-use bodies each take the same
+ * global-array-element argument (e.g. `lookupA(arr[i]) + lookupB(arr[i])`)
+ * each get that argument inlined as its own from-scratch address
+ * computation - unlike pass_cache_global_word_reload's plain "ld hl,(NAME)"
+ * scalar reload, an array element needs its own base-plus-index arithmetic,
+ * so there is no already-captured slot to simply reuse (the way sibling
+ * calls sharing a struct-field argument have - see
+ * pass_elim_dup_iy_field_capture above). Recognizes the fixed 11-instruction
+ * shape dcc emits for `GLOBAL[idx]` (idx a stable ix-relative value: a
+ * parameter, or any local this pass's own safety checks below confirm is
+ * unmodified across the span):
+ *
+ *     ld hl,SYM        ld hl,SYM
+ *     push hl          push hl
+ *     ld l,(ix+N)      ld l,(ix+N)
+ *     ld h,(ix+N+1)    ld h,(ix+N+1)
+ *     add hl,hl        add hl,hl
+ *     pop de     ->    pop de
+ *     add hl,de        add hl,de
+ *     ld a,(hl)        ld a,(hl)
+ *     inc hl           inc hl
+ *     ld h,(hl)        ld h,(hl)
+ *     ld l,a           ld l,a
+ *     ...              ld c,l   ; cache store, right after the kept original
+ *                      ld b,h
+ *     [repeat]         ld l,c   ; cache load, replaces every repeat in full
+ *                      ld h,b
+ *
+ * Shares pass_cache_global_word_reload's entire hazard-segmentation
+ * machinery (line_clobbers_bc segment boundaries, bc_regalloc_claimed_in_
+ * range against dcc's own reg_alloc, symbol_written_in_range and
+ * global_write_count_in_file for the array symbol itself) verbatim - see
+ * that pass's own comment for why each of those is load-bearing, not just
+ * defensive: this exact neighborhood has produced three independent real
+ * miscompiles (forint.c's eval_e, a cobint.c segment-crossing-a-function-
+ * boundary case, tests/tptrlhs.c's gpwrap/gpleaf) before those checks
+ * existed. Two additions specific to caching an ELEMENT rather than a whole
+ * symbol's own value:
+ *
+ *   - ix_slot_written_signed(off, ...): the index itself must not change
+ *     between occurrences (symbol_written_in_range alone only proves the
+ *     ARRAY's base is stable, not that idx still selects the same element).
+ *
+ *   - computed_ptr_write_in_range: any "ld (hl)," or "ld (de)," store in the
+ *     span is treated as a hazard even though it never mentions the array
+ *     symbol by name - unlike a whole-symbol write (always "ld (NAME),"),
+ *     an element write goes through a freshly-computed address that this
+ *     pass cannot prove is or isn't the same array, so it declines rather
+ *     than assume no aliasing. Frame-relative ("ld (ix+d),") and stack
+ *     (push/pop) stores don't count: neither can ever alias a global
+ *     array's own storage.
+ *
+ * Threshold is >= 2 occurrences, not the >= 3 the plain scalar-reload passes
+ * require: those cost 8T to cache and save 8T per avoided reload (a wash at
+ * 2), but here every avoided occurrence saves the entire 11-instruction
+ * recomputation for an 8T caching cost, a clear win even at 2.
+ * ------------------------------------------------------------------------- */
+/* Defined alongside pass_elim_dup_iy_field_capture further down this file;
+ * forward-declared here since pass_cache_global_array_word_reload below
+ * needs the same signed-ix-offset write check. */
+static int ix_slot_written_signed(int off, int start, int end);
+
+static int computed_ptr_write_in_range(int start, int end)
+{
+    char clean[MAX_LINE];
+    int i;
+
+    for (i = start; i < end && i < nlines; i++) {
+        strip_peep_comment_copy(clean, lines[i]);
+        if (strncmp(clean, "ld (hl),", 8) == 0 ||
+            strncmp(clean, "ld (de),", 8) == 0)
+            return 1;
+    }
+    return 0;
+}
+
+static int peep_parse_global_array_word_read(int i, char *sym, int *off)
+{
+    char tmp[MAX_LINE];
+    const char *p;
+    int n;
+
+    if (i < 0 || i + 10 >= nlines)
+        return 0;
+
+    strip_peep_comment_copy(tmp, lines[i]);
+    if (strncmp(tmp, "ld hl,", 6) != 0)
+        return 0;
+    p = tmp + 6;
+    if (*p == 0 || *p == '(')
+        return 0;
+    n = 0;
+    while (*p && n < 120)
+        sym[n++] = *p++;
+    sym[n] = 0;
+    /* Reject a folded struct-field offset form ("SYM+96") - see
+     * peep_parse_ld_hl_paren_sym's own comment for why the later literal-
+     * text symbol lookups in this pass need a bare global name. */
+    if (strchr(sym, '+') != NULL)
+        return 0;
+
+    if (!eq(i + 1, "push hl"))
+        return 0;
+    if (!peep_parse_ld_ix_pair(lines[i + 2], lines[i + 3], off))
+        return 0;
+    if (!eq(i + 4, "add hl,hl"))
+        return 0;
+    if (!eq(i + 5, "pop de"))
+        return 0;
+    if (!eq(i + 6, "add hl,de"))
+        return 0;
+    if (!eq(i + 7, "ld a,(hl)"))
+        return 0;
+    if (!eq(i + 8, "inc hl"))
+        return 0;
+    if (!eq(i + 9, "ld h,(hl)"))
+        return 0;
+    if (!eq(i + 10, "ld l,a"))
+        return 0;
+
+    return 1;
+}
+
+static int pass_cache_global_array_word_reload(void)
+{
+    int i;
+    int changed = 0;
+    int segstart;
+
+    segstart = 0;
+    for (i = 0; i <= nlines; i++) {
+        int j, k;
+        char sym[128], best_sym[128];
+        int off, best_off, best_count;
+        struct { char name[128]; int off; int count; } seen[16];
+        int nseen;
+        int occ[32];
+        int noc;
+        int delta;
+
+        if (i < nlines && !line_clobbers_bc(lines[i]) &&
+            !starts_label(lines[i]) && !line_starts_function_marker(lines[i]))
+            continue;
+
+        nseen = 0;
+        for (j = segstart; j < i; j++) {
+            if (!peep_parse_global_array_word_read(j, sym, &off))
+                continue;
+            for (k = 0; k < nseen; k++)
+                if (!strcmp(seen[k].name, sym) && seen[k].off == off)
+                    break;
+            if (k == nseen) {
+                if (nseen < 16) {
+                    strcpy(seen[nseen].name, sym);
+                    seen[nseen].off = off;
+                    seen[nseen].count = 1;
+                    nseen++;
+                }
+            } else {
+                seen[k].count++;
+            }
+        }
+
+        best_count = 0;
+        best_sym[0] = 0;
+        best_off = 0;
+        for (k = 0; k < nseen; k++) {
+            if (seen[k].count > best_count) {
+                best_count = seen[k].count;
+                strcpy(best_sym, seen[k].name);
+                best_off = seen[k].off;
+            }
+        }
+
+        if (i < nlines && (strstr(lines[i], "global_word_cache_load") ||
+                            strstr(lines[i], "global_array_word_cache_load")))
+            best_count = 0;
+
+        if (best_count >= 2 &&
+            global_write_count_in_file(best_sym) <= 1 &&
+            !symbol_written_in_range(best_sym, segstart, i) &&
+            !computed_ptr_write_in_range(segstart, i) &&
+            !ix_slot_written_signed(best_off, segstart, i) &&
+            !bc_regalloc_claimed_in_range(segstart, i + 1)) {
+            noc = 0;
+            for (j = segstart; j < i; j++) {
+                if (!peep_parse_global_array_word_read(j, sym, &off))
+                    continue;
+                if (strcmp(sym, best_sym) != 0 || off != best_off)
+                    continue;
+                if (noc < 32) occ[noc++] = j;
+            }
+
+            delta = 0;
+            /* Last occurrence first: each edit only ever shifts indices at
+             * or after its own position, so earlier (not yet processed)
+             * entries in occ[], including occ[0], stay valid. */
+            for (k = noc - 1; k >= 1; k--) {
+                delete_n(occ[k], 11);
+                insert_line_tagged(occ[k], "ld l,c", "global_array_word_cache_load");
+                insert_line(occ[k] + 1, "ld h,b");
+                delta += 2 - 11;
+                changed = 1;
+            }
+
+            /* occ[0] is left as the real computation, with the cache primed
+             * right after it. */
+            insert_line_tagged(occ[0] + 11, "ld c,l", "global_array_word_cache_store");
+            insert_line(occ[0] + 12, "ld b,h");
+            delta += 2;
+            changed = 1;
+
+            i += delta;
+        }
+
+        segstart = i + 1;
+    }
+
+    return changed;
+}
+
 /* Parse "push R" or "pop R" for R in {hl,de,bc,af,ix,iy}, reporting which
  * via *reg (lowercase, e.g. "hl") and which mnemonic via *is_push (1 push,
  * 0 pop). Returns 0 for anything else, including a push/pop of a single
@@ -12409,6 +12633,152 @@ static int pass_cpir(void)
  * (unlike folding straight to add hl,hl, which would require DE to be dead).
  * Saves 4 bytes and two (ix+d) memory accesses per occurrence.
  * ------------------------------------------------------------------------- */
+/* ------------------------------------------------------------------------- *
+ * pass_elim_dup_iy_field_capture:
+ *
+ * When two sibling static-inline calls in the same case/statement are each
+ * passed the same simple argument (e.g. cobint.c's OP_ADD_TO_S: var_set(vi,
+ * 0, var_get(vi, 0) + a) - var_get and var_set both take the same `vi`),
+ * dcc's inliner independently re-materializes that argument into a fresh
+ * #itmpN frame slot for each call site, even when the two materializations
+ * are adjacent and nothing between them could have changed the source. For
+ * a "mutable pointer kept in iy" field (pass_cache_mutable_ix_pointer_in_iy's
+ * own output - e.g. `in->a`, a struct field read through iy), that shows up
+ * textually as:
+ *
+ *     ld l,(iy+N)          ld l,(iy+N)
+ *     ld h,(iy+N+1)   ->   ld h,(iy+N+1)
+ *     ld (ix-A),l          ld (ix-A),l
+ *     ld (ix-A+1),h        ld (ix-A+1),h
+ *     ...                  ...
+ *     ld l,(iy+N)          (deleted - capture A's slot already has it)
+ *     ld h,(iy+N+1)
+ *     ld (ix-B),l
+ *     ld (ix-B+1),h
+ *     ...                  ...
+ *     ld l,(ix-B)          ld l,(ix-A)
+ *     ld h,(ix-B+1)        ld h,(ix-A+1)
+ *
+ * paying a full 4-instruction, 2-memory-access re-capture (the iy+d reads
+ * are 19 T-states apiece) to reproduce a value already sitting in capture
+ * A's slot.
+ *
+ * Deliberately narrow and quick to bail rather than searching past anything
+ * ambiguous: this only ever wants the exact "two adjacent parameter
+ * re-materializations, one clean consumer" shape a sibling pair of inlined
+ * calls produces, not a coincidental textual match found deep inside
+ * unrelated code. Every window bails the whole search (not just this
+ * candidate) the moment it sees a label (a case/statement boundary - iy's
+ * own field-object could differ across one), a call/rst, or *any* other
+ * mention of "iy" (covers iy being reassigned, saved, or restored -
+ * confirming iy itself, not just field offset N, is unchanged the whole
+ * way through is what makes "same offset" mean "same value"). Capture A's
+ * slot is required to go unwritten between capture A and the eventual use
+ * (ix_offset_pair_referenced_outside-style text match); capture B's slot is
+ * required to have no OTHER textual mention before the one clean read this
+ * pass rewires - anything else (a byte-only access, a second write, a shape
+ * this pass doesn't model) declines the whole candidate instead of guessing.
+ * ------------------------------------------------------------------------- */
+#define PEEP_DUP_IY_CAPTURE_SEARCH_WINDOW 10
+#define PEEP_DUP_IY_CAPTURE_USE_WINDOW 12
+
+static int ix_slot_written_signed(int off, int start, int end)
+{
+    char pat_lo[24], pat_hi[24];
+    int i;
+
+    sprintf(pat_lo, "(ix%+d),", off);
+    sprintf(pat_hi, "(ix%+d),", off + 1);
+    for (i = start; i < end && i < nlines; i++) {
+        if (strstr(lines[i], pat_lo) != NULL || strstr(lines[i], pat_hi) != NULL)
+            return 1;
+    }
+    return 0;
+}
+
+static int ix_slot_mentioned_signed(int off, int line)
+{
+    char pat_lo[24], pat_hi[24];
+
+    if (line < 0 || line >= nlines)
+        return 0;
+    sprintf(pat_lo, "(ix%+d)", off);
+    sprintf(pat_hi, "(ix%+d)", off + 1);
+    return strstr(lines[line], pat_lo) != NULL || strstr(lines[line], pat_hi) != NULL;
+}
+
+static int pass_elim_dup_iy_field_capture(void)
+{
+    int i;
+    int changed = 0;
+
+    for (i = 0; i + 3 < nlines; i++) {
+        int src_off_a, dst_off_a;
+        int j, k;
+        int src_off_b, dst_off_b;
+        int use_line;
+        int found_b;
+
+        if (!peep_parse_ld_iy_pair(lines[i], lines[i + 1], &src_off_a))
+            continue;
+        if (!peep_parse_st_ix_pair(lines[i + 2], lines[i + 3], &dst_off_a))
+            continue;
+
+        found_b = 0;
+        dst_off_b = 0;
+        j = i + 4;
+        for (; j < nlines && j < i + 4 + PEEP_DUP_IY_CAPTURE_SEARCH_WINDOW; j++) {
+            if (starts_label(lines[j]) || line_is_call_or_rst(lines[j]))
+                break;
+            if (j + 3 < nlines &&
+                peep_parse_ld_iy_pair(lines[j], lines[j + 1], &src_off_b) &&
+                src_off_b == src_off_a &&
+                peep_parse_st_ix_pair(lines[j + 2], lines[j + 3], &dst_off_b) &&
+                dst_off_b != dst_off_a) {
+                found_b = 1;
+                break;
+            }
+            if (strstr(lines[j], "iy") != NULL)
+                break;
+        }
+        if (!found_b)
+            continue;
+
+        use_line = -1;
+        for (k = j + 4; k < nlines && k < j + 4 + PEEP_DUP_IY_CAPTURE_USE_WINDOW; k++) {
+            int test_off;
+
+            if (starts_label(lines[k]) || line_is_call_or_rst(lines[k]))
+                break;
+            if (k + 1 < nlines && peep_parse_ld_ix_pair(lines[k], lines[k + 1], &test_off) &&
+                test_off == dst_off_b) {
+                use_line = k;
+                break;
+            }
+            if (ix_slot_mentioned_signed(dst_off_b, k))
+                break;
+        }
+        if (use_line < 0)
+            continue;
+
+        if (ix_slot_written_signed(dst_off_a, i + 4, use_line))
+            continue;
+
+        delete_n(j, 4);
+        use_line -= 4;
+        {
+            char newline[MAX_LINE];
+            sprintf(newline, "ld l,(ix%+d)", dst_off_a);
+            replace1_tagged(use_line, newline, "elim_dup_iy_field_capture");
+            sprintf(newline, "ld h,(ix%+d)", dst_off_a + 1);
+            replace1(use_line + 1, newline);
+        }
+        changed = 1;
+    }
+
+    return changed;
+}
+
 static int pass_dup_ix_load_to_reg_copy(void)
 {
     int i;
@@ -12604,6 +12974,7 @@ int main(int argc, char **argv)
         { "pass_cache_global_word_reload", pass_cache_global_word_reload, 0 },
         { "pass_elim_redundant_cache_reload", pass_elim_redundant_cache_reload, 0 },
         { "pass_cache_global_word_reload_de", pass_cache_global_word_reload_de, 0 },
+        { "pass_cache_global_array_word_reload", pass_cache_global_array_word_reload, 0 },
         { "pass_word_loop_var_to_reg_bc", pass_word_loop_var_to_reg_bc, 0 },
         { "pass_narrow_bc_loop_bound_to_reg_c", pass_narrow_bc_loop_bound_to_reg_c, 0 },
         { "pass_byte_loop_var_to_reg_c", pass_byte_loop_var_to_reg_c, 0 },
@@ -12875,6 +13246,7 @@ int main(int argc, char **argv)
      * jumps to relative jumps.  Both run after every structural pass so they
      * only tidy the settled instruction stream; dead-load removal first since
      * it shrinks code and can bring more branches into jr range. */
+    RUN_PASS(pass_elim_dup_iy_field_capture);
     RUN_PASS(pass_dup_ix_load_to_reg_copy);
     RUN_PASS(pass_fold_const_sign_extend);
     RUN_PASS(pass_narrow_dead_h_constant);

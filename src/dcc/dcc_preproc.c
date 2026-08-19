@@ -723,6 +723,7 @@ int keyword_kind(const char *s)
     if (!strcmp(s, "goto"))  return TOK_GOTO;
     if (!strcmp(s, "do")) return TOK_DO;
     if (!strcmp(s, "inline")) return TOK_INLINE;
+    if (!strcmp(s, "__fastcall")) return TOK_FASTCALL;
     return TOK_ID;
 }
 

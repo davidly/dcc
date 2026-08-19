@@ -3664,6 +3664,23 @@ int mir_call_is_strlen_fastcall(int call_index, int *s_value)
     return 1;
 }
 
+/* __fastcall for a user-declared function (as opposed to the hardcoded
+ * strlen/strchr/memcmp/... cases above, which are each a specific
+ * well-known DCCRTL entry point): matches whenever callee->is_fastcall is
+ * set. dcc_func.c's validate_fastcall_prototype already guarantees, at the
+ * point a function can ever reach that state, that it has <=3 parameters,
+ * each an eligible type (char/short/int/pointer - no long/float/struct),
+ * and no varargs - so callee->proto_nargs is always a safe argc here.
+ * Fills values[0..callee->proto_nargs-1] in declaration order; a 0-argument
+ * __fastcall function matches trivially with nothing to fill. */
+int mir_call_is_user_fastcall(int call_index, struct Sym *callee, int *values)
+{
+    if (callee == NULL || !callee->is_fastcall)
+        return 0;
+    return mir_call_matches_fastcall_shape(call_index, callee->name,
+                                            callee->proto_nargs, values);
+}
+
 /* Legacy fastcall for strchr(s,c): DCCRTL's __chf takes s in HL and c's
  * low byte in A, returning the match (or 0) in HL. */
 int mir_call_is_strchr_fastcall(int call_index, int *s_value,
@@ -4378,6 +4395,7 @@ static int mir_call_uses_generic_stack_arguments(int instruction)
 {
     const char *rtl_name;
     int a, b, c;
+    int fastcall_values[3];
 
     return !mir_call_is_memset_fastcall(instruction, &a, &b, &c) &&
            !mir_call_uses_inline_memory_store(instruction, NULL, NULL) &&
@@ -4393,7 +4411,10 @@ static int mir_call_uses_generic_stack_arguments(int instruction)
            !mir_call_is_memcpy_fastcall(instruction, &a, &b, &c) &&
            !mir_call_is_de_hl_fastcall(instruction, &rtl_name, &a, &b) &&
            !mir_call_is_bdos_family_fastcall(
-               instruction, &rtl_name, &a, &b);
+               instruction, &rtl_name, &a, &b) &&
+           !mir_call_is_user_fastcall(
+               instruction, find_global(mir.insns[instruction].name),
+               fastcall_values);
 }
 
 static void mir_emit_prepacked_constant_arguments(
@@ -23736,7 +23757,7 @@ static int mir_narrow_multiply_source_is_m1q_bounded(
            mir_value_is_m1q_bounded(source->dst, 0);
 }
 
-static int mir_value_is_wide_narrow_multiply_widen(int value)
+static int mir_value_is_wide_narrow_multiply_widen_uncached(int value)
 {
     int instruction;
 
@@ -23749,6 +23770,90 @@ static int mir_value_is_wide_narrow_multiply_widen(int value)
             return 1;
     }
     return 0;
+}
+
+static int mir_wide_narrow_multiply_widen_verify_enabled(void)
+{
+    static int flag = -1;
+    if (flag < 0)
+        flag = getenv("DCC_MIR_WIDEN_CACHE_VERIFY") != NULL;
+    return flag;
+}
+
+/* Called once per value queried by mir_prepare_backend_slots,
+ * mir_can_forward_hl_de_to_next, and the spilled-scalar-cfg instruction
+ * dispatch's own pattern chain - on the order of 10^4 times per compile,
+ * each an uncached O(mir.count) rescan of the whole function calling
+ * mir_wide_narrow_multiply_match (profiled: ~15M calls on a1.c alone,
+ * dcc's largest self-time contributor after register allocation's own
+ * interference check). Same cache shape as mir_cfg_block_count
+ * (dcc_mir_select.c) - keyed on mir_use_cache_generation_id() rather than
+ * re-deriving its own invalidation coverage, since every mutation site that
+ * could change this answer already bumps that generation for the def-use
+ * cache. Unlike mir_cfg_block_count's single cached scalar, the cached
+ * payload here is one bit per value (a value either is or isn't some
+ * multiply's widened operand), so a single O(mir.count) pass rebuilds the
+ * whole set at once - turning the O(values * instructions) pattern into
+ * O(values + instructions) - rather than caching one value's answer at a
+ * time. DCC_MIR_WIDEN_CACHE_VERIFY=1 recomputes the uncached answer for
+ * every query too and fatals on a mismatch, mirroring
+ * DCC_MIR_CFG_CACHE_VERIFY's own role for that cache. */
+static int mir_value_is_wide_narrow_multiply_widen(int value)
+{
+    static unsigned cached_generation;
+    static unsigned char *cached_set;
+    static int cached_set_capacity;
+    static int cache_valid;
+    unsigned generation = mir_use_cache_generation_id();
+    int result;
+
+    if (cache_valid && generation == cached_generation &&
+        !mir_wide_narrow_multiply_widen_verify_enabled()) {
+        return (value >= 0 && value < cached_set_capacity)
+            ? cached_set[value] : 0;
+    }
+
+    if (mir.next_value > cached_set_capacity) {
+        unsigned char *grown = (unsigned char *)realloc(
+            cached_set, (size_t)mir.next_value);
+        if (mir.next_value && !grown)
+            fatal("out of memory building MIR wide-narrow-multiply-widen cache");
+        cached_set = grown;
+        cached_set_capacity = mir.next_value;
+    }
+    if (cached_set_capacity > 0)
+        memset(cached_set, 0, (size_t)cached_set_capacity);
+    {
+        int instruction;
+
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+            const struct MirInsn *multiply = &mir.insns[instruction];
+
+            if (!mir_wide_narrow_multiply_match(multiply, NULL, NULL, NULL))
+                continue;
+            if (multiply->src1 >= 0 && multiply->src1 < cached_set_capacity)
+                cached_set[multiply->src1] = 1;
+            if (multiply->src2 >= 0 && multiply->src2 < cached_set_capacity)
+                cached_set[multiply->src2] = 1;
+        }
+    }
+
+    result = (value >= 0 && value < cached_set_capacity)
+        ? cached_set[value] : 0;
+
+    if (cache_valid && generation == cached_generation &&
+        result != mir_value_is_wide_narrow_multiply_widen_uncached(value)) {
+        fprintf(stderr,
+            "; MIR CACHE MISMATCH mir_value_is_wide_narrow_multiply_widen "
+            "function=%s value=%d cached=%d uncached=%d\n",
+            mir.name, value, result,
+            mir_value_is_wide_narrow_multiply_widen_uncached(value));
+        fatal("MIR use-cache mismatch");
+    }
+
+    cached_generation = generation;
+    cache_valid = 1;
+    return result;
 }
 
 static int mir_value_is_narrow_multiply_source(int value)
@@ -32508,6 +32613,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 int s_value, c_value;
                 int s1_value, s2_value, n_value;
                 int fn_value, dearg_value;
+                int fastcall_values[3];
                 int inline_memory_arguments[4];
                 int inline_simple_store_arguments[3];
                 int inline_typed_store_arguments[3];
@@ -32777,6 +32883,41 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                         mir_stream_puts("\tex de,hl\n\tpop hl\n\tld c,l\n", out);
                     }
                     mir_emit_runtime_call(out, rtl_name);
+                    if (type_ptr_depth(insn->type) > 0 ||
+                        (insn->type & 15) != TYPE_VOID) {
+                        if (type_size(insn->type) == 4)
+                            mir_emit_virtual_store_wide(out, insn->dst);
+                        else
+                            mir_emit_virtual_store(out, insn->dst);
+                    }
+                    break;
+                }
+                if (!is_indirect &&
+                    mir_call_is_user_fastcall(i, callee, fastcall_values)) {
+                    if (callee->proto_nargs == 0) {
+                        /* Nothing to load - same no-argument shape a normal
+                         * call would use, minus the (empty) push/pop. */
+                    } else if (callee->proto_nargs == 1) {
+                        mir_emit_spilled_arg_to_hl(out, fastcall_values[0]);
+                    } else if (callee->proto_nargs == 2) {
+                        mir_emit_spilled_arg_to_hl(out, fastcall_values[0]);
+                        mir_stream_puts("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, fastcall_values[1]);
+                        mir_stream_puts("\tex de,hl\n\tpop hl\n", out);
+                    } else {
+                        mir_emit_spilled_arg_to_hl(out, fastcall_values[0]);
+                        mir_stream_puts("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, fastcall_values[1]);
+                        mir_stream_puts("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, fastcall_values[2]);
+                        mir_stream_puts(
+                            "\tld b,h\n\tld c,l\n\tpop hl\n\tex de,hl\n\tpop hl\n",
+                            out);
+                    }
+                    if ((callee->needs_extrn) &&
+                        mir_extrn_should_emit_name(assembly_name))
+                        mir_stream_printf(out, "\textrn %s\n", assembly_name);
+                    mir_stream_printf(out, "\tcall %s\n", assembly_name);
                     if (type_ptr_depth(insn->type) > 0 ||
                         (insn->type & 15) != TYPE_VOID) {
                         if (type_size(insn->type) == 4)

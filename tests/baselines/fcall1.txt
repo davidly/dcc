@@ -1,0 +1,6 @@
+double_it(21)=42
+add2(100,23)=123
+combine3(10,5,3)=33
+strlen(zero)=4
+strlen(one)=3
+strlen(twotwo)=6

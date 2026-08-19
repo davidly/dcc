@@ -37,7 +37,16 @@ extern void emulate( void );
 extern void end_emulation( void );
 extern void soft_reset( void );
 extern void power_on( void );
+/* __fastcall (dcc-specific: see get_mem's own #if defined( _DCC_ ) asm body
+   further down) passes address directly in HL instead of on the stack -
+   get_mem is called for every single 6502 memory access, so the caller's
+   push/pop and the callee's stack-argument-fetch prologue that convention
+   would otherwise cost are worth avoiding here specifically. */
+#if defined( _DCC_ )
+extern uint8_t * __fastcall get_mem( uint16_t address );
+#else
 extern uint8_t * get_mem( uint16_t address );
+#endif
 
 /* use #define instead of functions because old compilers don't inline functions */
 
@@ -52,8 +61,13 @@ extern uint8_t * get_mem( uint16_t address );
    wrap within page 0 when the pointer address is $xxFF) and is also the source of the
    famous JMP ($xxFF) indirect bug. get_word() must not be used for these pointer
    fetches; this replicates the hardware quirk instead. */
-#define get_word_pagewrap( addr ) ( (uint16_t) get_byte( addr ) | \
-    ( (uint16_t) get_byte( ( (addr) & 0xff00 ) | ( ( (addr) + 1 ) & 0xff ) ) << 8 ) )
+/* addr is used more than once below; a macro would re-evaluate (and re-call get_mem
+   for) a non-trivial argument expression at every call site, so this is a function. */
+static inline uint16_t get_word_pagewrap( uint16_t addr )
+{
+    return (uint16_t) get_byte( addr ) |
+           ( (uint16_t) get_byte( ( addr & 0xff00 ) | ( ( addr + 1 ) & 0xff ) ) << 8 );
+}
 
 /* Zero page (0x0000-0x00ff) is always bank 0 (m_0000) and is never memory-mapped I/O,
    so these bypass the get_mem() bank lookup / function call entirely for the zero-page
@@ -61,6 +75,17 @@ extern uint8_t * get_mem( uint16_t address );
    Wraparound to a uint8_t index reproduces the same page-0 wrap as get_word_pagewrap. */
 #define get_zp_byte( addr ) ( m_0000[ (uint8_t) (addr) ] )
 #define set_zp_byte( addr, value ) ( m_0000[ (uint8_t) (addr) ] = (value) )
+/* addr is used more than once below, matching get_word_pagewrap() above. A
+   static-inline-function conversion was tried here too, and it does remove a
+   real duplicated get_mem() call at every one of this macro's call sites (all
+   of which pass an argument containing a get_byte() call) - but measured
+   against tests/perf_baselines.csv it made the tracked a1 workload's Z80
+   cycle count slightly *worse* (~0.5%), not better: this macro's hot call
+   sites (6502 indirect-Y addressing, exercised >1000 times by that baseline)
+   apparently pay more in extra register/stack traffic for materializing addr
+   as a real parameter than they save by not calling get_mem() twice. Left as
+   a macro; get_word_pagewrap() above, called from just the one JMP-indirect
+   site, measured neutral-to-positive and was converted. */
 #define get_word_pagewrap_zp( addr ) ( (uint16_t) get_zp_byte( addr ) | \
     ( (uint16_t) get_zp_byte( (addr) + 1 ) << 8 ) )
 
@@ -290,14 +315,14 @@ _gm_add:
 #endasm
 }
 #else
+/* __fastcall (see the extern declaration above): address arrives directly
+   in HL, so the whole callee stack-argument-fetch prologue the generic
+   convention would need collapses to one swap into DE, which is where the
+   rest of this routine already expects it. */
 #asm
         public _get_mem
 _get_mem:
-        ld      hl,2
-        add     hl,sp
-        ld      e,(hl)
-        inc     hl
-        ld      d,(hl)          ; DE = address
+        ex      de,hl           ; DE = address
 
         ld      a,d
 

@@ -166,6 +166,36 @@ typedef struct PeepBasicBlock {
     int function_end;
 } PeepBasicBlock;
 
+/* Reverse jump-target index: for a given label name, every line that jumps
+ * to it (jp or jr form). Two-level, mirroring a classic chained hash table:
+ * PeepJumpLabelGroup is one entry per distinct label name actually jumped
+ * to (chained on hash collision via next_group); PeepJumpRefEntry is one
+ * entry per jump line targeting that label (chained per-group via
+ * next_ref). Built alongside labels[] in ensure_control_flow_indexes,
+ * gated by the same version check - see find_last_loop_back and
+ * label_targeted_only_within in peep_control_flow.c for the O(nlines)
+ * linear scans this replaces with O(references to this one label). */
+typedef struct PeepJumpRefEntry {
+    int line;
+    int is_jp;      /* 1 = "jp " form, 0 = "jr " form (jump_target_any's
+                       * "any" callers want both; jump_target-only callers
+                       * want just the is_jp entries). */
+    int next_ref;
+} PeepJumpRefEntry;
+
+typedef struct PeepJumpLabelGroup {
+    char name[128];         /* owned copy - a jump target's extracted text
+                              * isn't a stable pointer into lines[] the way
+                              * a label definition's own line is, so this
+                              * mirrors the fixed-size buffers jump_target/
+                              * jump_target_any already use for the same
+                              * text rather than pooling/owning a strdup */
+    int first_ref;
+    int next_group;
+} PeepJumpLabelGroup;
+
+#define PEEP_JUMPREF_HASH_SIZE 16411
+
 typedef struct PeepIndexes {
     PeepLabelIndexEntry *labels;
     int label_count;
@@ -185,6 +215,13 @@ typedef struct PeepIndexes {
     unsigned long version;
     unsigned long line_info_version;
     unsigned long flow_version;
+    int jumpref_buckets[PEEP_JUMPREF_HASH_SIZE];
+    PeepJumpLabelGroup *jumpref_groups;
+    int jumpref_group_count;
+    int jumpref_group_capacity;
+    PeepJumpRefEntry *jumpref_entries;
+    int jumpref_entry_count;
+    int jumpref_entry_capacity;
 } PeepIndexes;
 
 typedef struct PeepContext {
@@ -262,6 +299,9 @@ int peep_parse_ld_e_ix(const char *s, char *off);
 int peep_parse_ld_d_ix(const char *s, char *off);
 int peep_parse_ld_ix_pair(const char *s1, const char *s2, int *off);
 int peep_parse_st_ix_pair(const char *s1, const char *s2, int *off);
+int peep_parse_ld_l_iy(const char *s, char *off);
+int peep_parse_ld_h_iy(const char *s, char *off);
+int peep_parse_ld_iy_pair(const char *s1, const char *s2, int *off);
 int peep_parse_jp_same_z_c(int iz, int ic, char *lab);
 int peep_parse_dec_ix_byte(const char *s, int *off);
 int peep_parse_ld_ix_byte_imm(const char *s, int *off, int *val);
