@@ -14,9 +14,13 @@ current execution plan and handoff.
 - The final IY address-root cost correction discounts two rematerialized
   call-only address uses. It restores `tunfphi` nopeep to 5,632 bytes while
   preserving profitable dense call plans and the exact Doctor outputs.
-- Strict full+extended stack and no-stack runs each pass 401 runnable apps
+- Upstream `main` through `b8ee820b` is merged, including fastcall support,
+  new inline/function-call coverage, MIR query caching, and dccpeep control-
+  flow/cache work. The merged tree preserves Doctor at **48,640/56,960
+  bytes** peep/nopeep.
+- Strict full+extended stack and no-stack runs each pass 402 runnable apps
   with 10 configured skips and zero regressions. Ordinary and stack censuses
-  pass 2,822/2,822 functions; extended coverage is 274/274 per mode.
+  pass 2,831/2,831 functions; extended coverage is 274/274 per mode.
 - Require-emit, 35 dccpeep fixtures, ASan/UBSan, 44 Python tests, runtime
   coverage, RTL IY safety, CMake/canonical builds, and diff checks pass.
 - The optional additional 10% reduction was stopped: credible remaining
