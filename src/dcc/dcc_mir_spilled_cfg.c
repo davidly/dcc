@@ -27139,6 +27139,31 @@ static int mir_match_dense_byte_switch(
     return 1;
 }
 
+/* Below this many cases, a table sized to just [minimum_case,maximum_case]
+ * plus an explicit bounds check (the mir_match_dense_byte_switch-populated
+ * targets[] array covers the full 0-255 range regardless, so no matcher
+ * change is needed either way) stays cheaper than widening. Above it, the
+ * bounds check's own runtime cost (17 T-states/dispatch when minimum_case
+ * is 0, 34 when it isn't - both the "is it too low" and "is it too high"
+ * compares - paid on *every* dispatch, not just the misses) outweighs the
+ * table's one-time size cost of widening to the full byte range (a flat
+ * (256-width)*2 extra bytes), for any switch dispatched often enough to
+ * matter. No profile data is available to the compiler to pick this
+ * precisely; 30 was chosen to land just below tests/cobint.c's run_bc
+ * bytecode dispatch (35 cases, 821255 dispatches in cobint's own tracked
+ * e.cob baseline - removing its bounds check alone was worth ~2.2% of
+ * cobint's total runtime) without triggering on much smaller/colder
+ * switches where the extra table bytes wouldn't be worth spending blindly.
+ * Unlike __builtin_unreachable()-style "trust me" defaults (GCC/Clang/MSVC
+ * all support these, and use exactly this same widened-table-no-bounds-
+ * check codegen once trusted), this is never a soundness gap: every one of
+ * the 256 table entries carries a real, defined target (dispatch->targets[]
+ * already has this data for indices outside [minimum_case,maximum_case] -
+ * default_label, not garbage), so a genuinely out-of-range value at runtime
+ * still reaches the switch's own default case correctly - it just does so
+ * via the table instead of an explicit compare. */
+#define MIR_DENSE_SWITCH_WIDEN_THRESHOLD 30
+
 static void mir_emit_dense_byte_switch(
     MirStream *out, const int *labels,
     const struct MirDenseByteSwitch *dispatch)
@@ -27146,6 +27171,7 @@ static void mir_emit_dense_byte_switch(
     int table_label = new_label();
     int width =
         dispatch->maximum_case - dispatch->minimum_case + 1;
+    int widen = width >= MIR_DENSE_SWITCH_WIDEN_THRESHOLD && width < 256;
     int index_scaled_in_a = 0;
     int value;
 
@@ -27154,7 +27180,7 @@ static void mir_emit_dense_byte_switch(
     if (dispatch->condition_size == 2)
         mir_stream_printf(out, "\tld a,h\n\tor a\n\tjp nz, L%d\n",
                 labels[dispatch->default_label]);
-    if (width < 256) {
+    if (!widen && width < 256) {
         if (dispatch->minimum_case != 0) {
             if (!dispatch->condition_in_a)
                 mir_stream_puts("\tld a,l\n", out);
@@ -27175,6 +27201,10 @@ static void mir_emit_dense_byte_switch(
             mir_stream_puts("\tld l,a\n\tld h,0\n", out);
         }
     } else if (dispatch->condition_in_a) {
+        /* Widened (this branch also still covers the pre-existing
+         * genuinely-256-wide case): index by the raw, unnormalized
+         * condition byte directly into a full 0-255 table below - no
+         * subtraction, no bounds check, either can be skipped. */
         mir_stream_puts("\tld l,a\n\tld h,0\n", out);
     }
     if (!index_scaled_in_a)
@@ -27183,12 +27213,16 @@ static void mir_emit_dense_byte_switch(
                  "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
                  "\tex de,hl\n\tjp (hl)\nL%d:\n",
             table_label, table_label);
-    for (value = dispatch->minimum_case;
-         value <= dispatch->maximum_case; ++value) {
-        int target = dispatch->targets[value] >= 0
-            ? dispatch->targets[value]
-            : dispatch->default_label;
-        mir_stream_printf(out, "\tdw L%d\n", labels[target]);
+    {
+        int fill_start = widen ? 0 : dispatch->minimum_case;
+        int fill_end = widen ? 255 : dispatch->maximum_case;
+
+        for (value = fill_start; value <= fill_end; ++value) {
+            int target = dispatch->targets[value] >= 0
+                ? dispatch->targets[value]
+                : dispatch->default_label;
+            mir_stream_printf(out, "\tdw L%d\n", labels[target]);
+        }
     }
 }
 

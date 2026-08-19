@@ -8190,13 +8190,25 @@ static int pass_cache_ix_long_param_reload(void)
     return changed;
 }
 
-static int all_compare_flags_dead_from(int start)
+static int local_jump_table_dispatch(int line, int func_start, int func_end);
+
+/* A jump into a recognized dense-switch table (`jp (hl)` fed by the
+ * canonical table-dispatch idiom) always lands at compiler-generated case
+ * code, which never assumes an incoming flag state - C has no way to
+ * observe ambient flags. Treat that as a proof of "dead" so bounds-check
+ * removal (which deletes the `cp` that used to satisfy this scanner) does
+ * not accidentally block unrelated IY/flags-liveness optimizations. */
+static int all_compare_flags_dead_from_bounded(int start, int func_start,
+                                               int func_end)
 {
     int i;
     char clean[MAX_LINE];
 
     for (i = start; i < start + 20 && i < nlines; ++i) {
         strip_peep_comment_copy(clean, lines[i]);
+        if (eq(i, "jp (hl)") &&
+            local_jump_table_dispatch(i, func_start, func_end))
+            return 1;
         if (starts_label(clean) || !strncmp(clean, "jp ", 3) ||
             !strncmp(clean, "jr ", 3) || !strncmp(clean, "ret", 3) ||
             !strncmp(clean, "djnz", 4))
@@ -8211,6 +8223,11 @@ static int all_compare_flags_dead_from(int start)
     return 0;
 }
 
+static int all_compare_flags_dead_from(int start)
+{
+    return all_compare_flags_dead_from_bounded(start, 0, nlines);
+}
+
 static int is_uncond_jr(const char *s);
 
 static int flags_dead_after_resolved_jump(int line, int func_start, int func_end)
@@ -8218,14 +8235,16 @@ static int flags_dead_after_resolved_jump(int line, int func_start, int func_end
     char target[128];
     int target_line;
 
-    if (all_compare_flags_dead_from(line))
+    if (all_compare_flags_dead_from_bounded(line, func_start, func_end))
         return 1;
     if (line < 0 || line >= func_end ||
         (!is_uncond_jp(lines[line]) && !is_uncond_jr(lines[line])) ||
         !jump_target_any(lines[line], target))
         return 0;
     target_line = find_label_line_in_range(target, func_start, func_end);
-    return target_line >= 0 && all_compare_flags_dead_from(target_line + 1);
+    return target_line >= 0 &&
+           all_compare_flags_dead_from_bounded(target_line + 1, func_start,
+                                               func_end);
 }
 
 /* Preserve an IX-loaded pointer across `left < right` loop-bound tests.
