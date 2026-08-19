@@ -908,32 +908,12 @@ static void add_refs_from_line(const char *line)
 }
 
 
-static int symbol_mentioned_in_clean_line(const char *clean, const char *sym)
-{
-    const char *p;
-    int n;
-
-    n = (int)strlen(sym);
-    if (n <= 0)
-        return 0;
-
-    p = clean;
-    while ((p = strstr(p, sym)) != NULL) {
-        int before_ok;
-        int after_ok;
-        before_ok = (p == clean) || !is_ident_char2((unsigned char)p[-1]);
-        after_ok = !is_ident_char2((unsigned char)p[n]);
-        if (before_ok && after_ok)
-            return 1;
-        p++;
-    }
-    return 0;
-}
-
 static void add_known_runtime_refs_from_line(const char *line)
 {
-    int i;
     char clean[MAX_LINE];
+    const char *p;
+    char tok[128];
+    int idx;
 
     /*
      * Fallback root scan: after the runtime has been parsed, every PUBLIC and
@@ -950,11 +930,34 @@ static void add_known_runtime_refs_from_line(const char *line)
      * strip_comment_copy calls, ~75% of dccrtlstrip's total runtime). `line`
      * is a pure function of its own text regardless of which symbol is being
      * looked for, so strip it once here instead.
-     */
+     *
+     * This used to also loop over every runtime symbol (syms[i], i < nsyms)
+     * and strstr-search this one line for each - the intended semantics were
+     * always "does this line mention an exact runtime symbol as a whole
+     * identifier token", which is symmetric: walking the line's own tokens
+     * once and hash-looking-up each against syms[] (via add_sym's own
+     * case-sensitive sym_index_find/sym_buckets index, already fully built
+     * by build_blocks() before scan_app ever runs) finds exactly the same
+     * matches, replacing an O(line length * nsyms) strstr scan with an
+     * O(line length) tokenize plus O(1) lookups per token - profiled as the
+     * dominant remaining cost on cobint.c's ~13K-line .MAC after the
+     * strip_comment_copy fix above (is_ident_char2 alone: ~685K calls per
+     * run, almost entirely from strstr's own inner loop against every
+     * candidate position for every one of nsyms symbols). is_ident_start
+     * gates each position exactly like parse_ident_token's own leading
+     * check, so this never extracts a token parse_ident_token itself
+     * wouldn't have accepted, and never skips over one either. */
     strip_comment_copy(line, clean, sizeof(clean));
-    for (i = 0; i < nsyms; ++i) {
-        if (symbol_mentioned_in_clean_line(clean, syms[i].name))
-            add_root(syms[i].name);
+    p = clean;
+    while (*p) {
+        if (is_ident_start((unsigned char)*p)) {
+            parse_ident_token(&p, tok);
+            idx = sym_index_find(tok);
+            if (idx >= 0)
+                add_root(syms[idx].name);
+        } else {
+            p++;
+        }
     }
 }
 
