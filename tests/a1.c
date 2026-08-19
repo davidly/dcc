@@ -37,7 +37,16 @@ extern void emulate( void );
 extern void end_emulation( void );
 extern void soft_reset( void );
 extern void power_on( void );
+/* __fastcall (dcc-specific: see get_mem's own #if defined( _DCC_ ) asm body
+   further down) passes address directly in HL instead of on the stack -
+   get_mem is called for every single 6502 memory access, so the caller's
+   push/pop and the callee's stack-argument-fetch prologue that convention
+   would otherwise cost are worth avoiding here specifically. */
+#if defined( _DCC_ )
+extern uint8_t * __fastcall get_mem( uint16_t address );
+#else
 extern uint8_t * get_mem( uint16_t address );
+#endif
 
 /* use #define instead of functions because old compilers don't inline functions */
 
@@ -306,14 +315,14 @@ _gm_add:
 #endasm
 }
 #else
+/* __fastcall (see the extern declaration above): address arrives directly
+   in HL, so the whole callee stack-argument-fetch prologue the generic
+   convention would need collapses to one swap into DE, which is where the
+   rest of this routine already expects it. */
 #asm
         public _get_mem
 _get_mem:
-        ld      hl,2
-        add     hl,sp
-        ld      e,(hl)
-        inc     hl
-        ld      d,(hl)          ; DE = address
+        ex      de,hl           ; DE = address
 
         ld      a,d
 
