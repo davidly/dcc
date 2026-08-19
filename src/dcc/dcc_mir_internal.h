@@ -266,6 +266,7 @@ struct MirFunction {
     int has_declared_register_object;
     char declared_names[MAX_LOCALS][64];
     int declared_types[MAX_LOCALS];
+    int declared_type_unstable[MAX_LOCALS];
     int declared_storage[MAX_LOCALS];
     int declared_offsets[MAX_LOCALS];
     int declared_sizes[MAX_LOCALS];
@@ -511,6 +512,7 @@ int mir_declared_is_vla_object(const char *name);
 const char *mir_declared_link_name(const char *name);
 int mir_declared_location(const char *name, int *type, int *storage,
                                  int *offset);
+int mir_declared_type_is_unstable(const char *name);
 int mir_direct_branch_for_comparison(int instruction);
 int mir_edge_phi_names_predecessor(int predecessor, int successor);
 void mir_begin_strict_phi_fallthrough(void);

@@ -746,8 +746,26 @@ static int mir_get_object(const struct Sym *sym, const char *name)
     if (!mir_object_eligible(sym))
         return -1;
     index = mir_find_object(name);
-    if (index >= 0)
+    if (index >= 0) {
+        /* #itmpN inline-call-argument slots (dcc_ast_gen_expr.c's
+         * prepare_inline_arg_temps) are a fixed pool of names reused, with a
+         * fresh type/offset stamped per call, across every unrelated
+         * static-inline call site in the function. A real C identifier's
+         * mir.objects[] entry is created once and correctly kept fixed for
+         * its whole lifetime, but for these compiler-synthetic slots that
+         * would leave every later call site sharing the *first* caller's
+         * type - found via tests/a1.c's get_word_pagewrap(): a later
+         * unrelated call reusing the same slot with a narrower (uint8_t)
+         * parameter left mir_scalar_memory_location() reporting the earlier
+         * uint16_t argument's own load/store as 1 byte wide, silently
+         * dropping its high byte. */
+        if (sym != NULL && mir_declared_type_is_unstable(name)) {
+            mir.objects[index].type = sym->type;
+            mir.objects[index].storage = sym->storage;
+            mir.objects[index].offset = sym->offset;
+        }
         return index;
+    }
     if (mir.object_count >= (int)(sizeof(mir.objects) / sizeof(mir.objects[0])))
         return -1;
     index = mir.object_count++;
@@ -3484,6 +3502,27 @@ void mir_note_declared_symbol(struct Sym *symbol)
             return;
         mir_copy_name(mir.declared_names[i], symbol->name);
         ++mir.declared_count;
+        mir.declared_type_unstable[i] = 0;
+    } else if (mir.declared_types[i] != symbol->type) {
+        /* Most re-declarations of an existing name are the same variable
+         * seen again (e.g. every AST_IDENT for it) and keep the same type,
+         * so this rarely trips - but #itmpN inline-call-argument slots
+         * (dcc_ast_gen_expr.c's prepare_inline_arg_temps) are a small pool
+         * of names *reused with a fresh type per call* across unrelated
+         * static-inline call sites, and mir.declared_types[] only has room
+         * for one type per name. Once a name is seen with more than one
+         * type, mir_scalar_memory_location()/mir_resolve_deferred_metadata()
+         * must stop trusting this shared, name-indexed table for it (it can
+         * only ever reflect the *last* call site by the time backend
+         * emission runs) and fall back to each instruction's own
+         * already-correct recorded type instead - found via tests/a1.c's
+         * get_word_pagewrap(), where a later call reusing the same #itmp
+         * slot with a narrower (uint8_t) parameter left this table
+         * reporting 1 byte for an earlier, still-live uint16_t argument,
+         * silently dropping its high byte. Scoped to only the names that
+         * actually conflict so the common case (a stable-typed name) keeps
+         * every existing table-based optimization untouched. */
+        mir.declared_type_unstable[i] = 1;
     }
     mir.declared_types[i] = symbol->type;
     mir.declared_storage[i] = symbol->storage;
@@ -4735,6 +4774,15 @@ int mir_declared_location(const char *name, int *type, int *storage,
     return 0;
 }
 
+int mir_declared_type_is_unstable(const char *name)
+{
+    int i;
+    for (i = 0; i < mir.declared_count; ++i)
+        if (strcmp(mir.declared_names[i], name) == 0)
+            return mir.declared_type_unstable[i];
+    return 0;
+}
+
 const char *mir_declared_link_name(const char *name)
 {
     int declared;
@@ -5820,6 +5868,23 @@ void mir_resolve_deferred_metadata(void)
         struct MirInsn *insn = &mir.insns[i];
         int named_type;
         if (insn->name[0] == 0)
+            continue;
+        /* #itmpN inline-call-argument slots (dcc_ast_gen_expr.c's
+         * prepare_inline_arg_temps) are a fixed pool of 16 names reused,
+         * with a fresh type stamped per call, across every unrelated
+         * static-inline call site in the function - unlike a real C99
+         * declaration, the same name legitimately holds different types
+         * across these disjoint, non-overlapping lifetimes, and each
+         * instruction below already recorded the correct type for its own
+         * call site when it was built. mir_named_type() has no notion of
+         * "which call site" and would return whichever type the *last*
+         * call site to reuse this slot happened to stamp, silently
+         * retyping every earlier call's already-correct load/param/merge
+         * to match it - found via tests/a1.c's get_word_pagewrap(), where
+         * a later call site reusing the same #itmp slot with a narrower
+         * (uint8_t) parameter retroactively truncated an earlier, still-
+         * live-in-this-loop uint16_t argument load to a byte. */
+        if (mir_declared_type_is_unstable(insn->name))
             continue;
         named_type = mir_named_type(insn->name);
         if (named_type == 0)

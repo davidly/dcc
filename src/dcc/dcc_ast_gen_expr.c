@@ -3981,6 +3981,14 @@ static int prepare_inline_arg_temps(
             continue;
         temp_syms[i]->type = temp_types[i];
         temp_names[i] = temp_name_buf[i];
+        /* Keep the MIR "declared" table (dcc_mir.c's mir_note_declared_
+         * symbol/mir_declared_type_is_unstable) in sync with this retag, so
+         * it can tell a #itmp slot reused with a consistent type (the
+         * common case, left fully optimized) apart from one reused across
+         * call sites with genuinely different types - see the long comment
+         * on mir_note_declared_symbol's type-change branch for why that
+         * distinction matters. */
+        mir_note_declared_symbol(temp_syms[i]);
     }
 
     /* Reserve every selected slot while arguments are evaluated. A nested

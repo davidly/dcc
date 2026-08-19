@@ -28248,6 +28248,23 @@ int mir_scalar_memory_location(const struct MirInsn *insn, int *type,
         if (mir_declared_is_vla_object(insn->name) &&
             type_ptr_depth(insn->type) > type_ptr_depth(*type))
             *type = insn->type;
+        /* #itmpN inline-call-argument slots (dcc_ast_gen_expr.c's
+         * prepare_inline_arg_temps) share one mir.declared_types[] entry
+         * per name across every unrelated static-inline call site that
+         * reuses that slot in this function - mir_note_declared_symbol
+         * keeps it updated as each call site's AST is walked, but by the
+         * time this function runs (backend emission, after the whole
+         * function's MIR is built) it holds only the *last* call site's
+         * type, for every instruction sharing the name. Each such
+         * instruction already recorded its own correct type when it was
+         * built (see dcc_mir.c's AST_IDENT/store lowering), so prefer that
+         * over the shared table for these synthetic, non-lexically-scoped
+         * names. Found via tests/a1.c's get_word_pagewrap(): a later call
+         * reusing the slot with a uint8_t parameter left this table
+         * reporting 1 byte for an earlier, still-live uint16_t argument's
+         * own store, silently dropping its high byte. */
+        if (mir_declared_type_is_unstable(insn->name))
+            *type = insn->type;
         *offset += (int)insn->immediate;
         return 1;
     }
