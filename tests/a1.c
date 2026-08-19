@@ -196,41 +196,80 @@ void bad_address( uint16_t address )
     exit( 1 );
 }
 
-#if true // this macro removes the function call overhead and is faster
+#if true // Measured: even a zero-argument-overhead __fastcall call (both
+         // dcc and zsdcc - see the function bodies below, kept as a
+         // correctness-checked reference/fallback rather than deleted)
+         // loses to this macro. set_nz's body is only ~8 Z80 instructions;
+         // a bare CALL+RET is already 27 T-states of pure overhead
+         // (17+10) that no calling-convention optimization removes, since
+         // fastcall only ever avoids argument-passing cost, never the
+         // call/return itself - for something this small that overhead
+         // alone rivals or exceeds the whole computation. Measured via
+         // a1's tracked scenarios: dcc's HELLO.BAS baseline got ~5.5%
+         // *worse* (9,808,887 -> 10,349,446 cycles) and its 6502
+         // functional-test scenario only ~0.6% better; zsdcc's functional
+         // test got ~0.5% worse (37,203,611,649 -> 37,397,779,759). Net:
+         // not a win on either compiler, unlike get_mem/op_math (both
+         // called from within far larger surrounding expressions/bodies
+         // where the call overhead was a much smaller fraction of the
+         // total, and where get_mem in particular is frequently called
+         // from macro-expanded call chains the macro form of set_nz
+         // never had to contend with). This function form's asm bodies
+         // also fix two real, never-caught bugs the dead code had before
+         // this measurement (wrong cpu struct offsets: _cpu+7/+11 instead
+         // of the correct _cpu+6/+10 for fNegative/fZero - see op_math's
+         // cpu layout comment above), so it's a correct, ready-to-flip
+         // reference if a future compiler/optimizer change ever makes a
+         // bare CALL+RET cheap enough to close this gap.
 
 #define set_nz( x ) cpu.fNegative = ( ( x ) & 0x80 ), cpu.fZero = ! ( x )
 
-#else // set_nz() is a function either in assembly or C
+#else // set_nz() is a function: hand-asm __fastcall (dcc)/__z88dk_fastcall
+      // (zsdcc), or plain C for any other compiler.
+
+#if defined( _DCC_ )
+extern void __fastcall set_nz( uint8_t x );
+#endif
 
 #ifdef Z80_ASM_OPTS
-extern void set_nz( uint8_t x );
+#ifdef SDCC
+void set_nz( uint8_t x ) __z88dk_fastcall;
+
+/* __z88dk_fastcall: x arrives directly in L, no frame needed - same
+   branch-free flag-computation idiom op_math's SDCC block above uses
+   (CP 1 / LD A,0 / ADC A,0 to turn "A==0" into a clean 0/1 without a
+   jump). */
+void set_nz( uint8_t x ) __z88dk_fastcall
+{
 #asm
-        ; set_nz( uint8_t x ) -- Z80 optimized, SP-relative arg access
-        ; SP+4 after push ix = x (DCC zero-extends byte args to 16 bits on push)
-        ; fNegative stored as 0 or 0x80 (truthy); fZero stored as 0 or 1
+        ld      a,l
+        and     080h
+        ld      (_cpu+6),a      ; cpu.fNegative = x & 0x80
+        ld      a,l
+        cp      1
+        ld      a,0
+        adc     a,0
+        ld      (_cpu+10),a     ; cpu.fZero = (x == 0) ? 1 : 0
+#endasm
+}
+#else
+/* __fastcall (see the extern declaration above): x arrives directly in L
+   (zero-extended in HL), no frame needed - same branch-free idiom as the
+   SDCC block above and as op_math's own DCC block. */
+#asm
         public _set_nz
 _set_nz:
-        push ix
-        ld hl,4
-        add hl,sp
-        ld a,(hl)               ; a = x
-        or a                    ; Z if x == 0 (leaves A unchanged)
-        jr z,_snz_zero
-        and 080h                ; a = 0x80 if bit7 set (negative), 0 if positive
-        ld (_cpu+7),a           ; cpu.fNegative: 0x80 (truthy) or 0
-        jr z,_snz_done          ; positive: a=0 after and, fZero=0, skip xor
-        xor a                   ; negative: clear a so fZero=0
-_snz_done:
-        ld (_cpu+11),a          ; cpu.fZero = 0 (x != 0)
-        pop ix
-        ret
-_snz_zero:
-        ld (_cpu+7),a           ; a=0: cpu.fNegative=0
-        inc a                   ; a=1
-        ld (_cpu+11),a          ; cpu.fZero=1
-        pop ix
+        ld      a,l
+        and     080h
+        ld      (_cpu+6),a      ; cpu.fNegative = x & 0x80
+        ld      a,l
+        cp      1
+        ld      a,0
+        adc     a,0
+        ld      (_cpu+10),a     ; cpu.fZero = (x == 0) ? 1 : 0
         ret
 #endasm
+#endif
 #else
 void set_nz( uint8_t x )
 {
