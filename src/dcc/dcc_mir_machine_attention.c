@@ -1901,6 +1901,30 @@ static int mir_match_backward_function_abi(
     }
 }
 
+static int mir_backward_semantic_instructions(
+    const struct MirInsn **instructions, int capacity)
+{
+    int count = 0;
+    int instruction;
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+        const struct MirInsn *next = instruction + 1 < mir.count
+            ? &mir.insns[instruction + 1] : NULL;
+
+        if ((insn->opcode == MIR_ADDRESS ||
+             insn->opcode == MIR_MEMBER_ADDRESS) &&
+            next != NULL && next->opcode == MIR_MEMBER_ADDRESS &&
+            next->src1 == insn->dst &&
+            mir_value_use_count(insn->dst) == 1)
+            continue;
+        if (count >= capacity)
+            return -1;
+        instructions[count++] = insn;
+    }
+    return count;
+}
+
 static int mir_match_backward_pass_schedule(
     struct MirBackwardPassSchedule *plan)
 {
@@ -2026,16 +2050,20 @@ static int mir_match_backward_pass_schedule(
     int instruction;
     int call;
     int edge;
+    const struct MirInsn *instructions[730];
+    int instruction_count = mir_backward_semantic_instructions(
+        instructions, (int)(sizeof(instructions) / sizeof(instructions[0])));
 
     memset(plan, 0, sizeof(*plan));
-    if (mir.has_vla || mir.count != 730 ||
+    if (mir.has_vla || instruction_count != 730 ||
         mir_cfg_block_count() != 37 ||
         (mir.return_type & 15) != TYPE_VOID ||
         mir.aggregate_temp_bytes != 0)
         return 0;
-    for (instruction = 0; instruction < mir.count; ++instruction) {
-        const struct MirInsn *insn = &mir.insns[instruction];
-        char code = mir_backward_opcode_code(insn->opcode);
+    for (instruction = 0; instruction < instruction_count; ++instruction) {
+        const struct MirInsn *insn = instructions[instruction];
+        char code = insn->opcode == MIR_MEMBER_ADDRESS
+            ? 'A' : mir_backward_opcode_code(insn->opcode);
 
         if (code == 0 || code != expected_opcodes[instruction])
             return mir_machine_reject(
@@ -2057,7 +2085,8 @@ static int mir_match_backward_pass_schedule(
                 return mir_machine_reject(
                     "backward-pass-schedule", "binary-operations");
             ++binary;
-        } else if (insn->opcode == MIR_ADDRESS) {
+        } else if (insn->opcode == MIR_ADDRESS ||
+               insn->opcode == MIR_MEMBER_ADDRESS) {
             struct MirBackwardLocation *expected;
             struct Sym *root;
             long offset;
@@ -2100,7 +2129,7 @@ static int mir_match_backward_pass_schedule(
 
     for (call = 0; call < 24; ++call) {
         const struct MirInsn *insn =
-            &mir.insns[expected_calls[call].instruction];
+            instructions[expected_calls[call].instruction];
         struct Sym *function;
         int arguments[5] = {-1, -1, -1, -1, -1};
         int argument;
@@ -2133,39 +2162,39 @@ static int mir_match_backward_pass_schedule(
              argument < expected_calls[call].count;
              ++argument)
             if (mir_definition(arguments[argument]) !=
-                &mir.insns[expected_calls[call].arguments[argument]])
+                instructions[expected_calls[call].arguments[argument]])
                 return mir_machine_reject(
                     "backward-pass-schedule", "call-arguments");
     }
 
     for (edge = 0; edge < 12; ++edge) {
         const struct MirInsn *branch =
-            &mir.insns[expected_branches[edge].instruction];
+            instructions[expected_branches[edge].instruction];
 
         if (mir_definition(branch->src1) !=
-                &mir.insns[expected_branches[edge].source] ||
+                instructions[expected_branches[edge].source] ||
             branch->label !=
-                mir.insns[expected_branches[edge].label].label)
+                instructions[expected_branches[edge].label]->label)
             return mir_machine_reject(
                 "backward-pass-schedule", "branches");
     }
     for (edge = 0; edge < 12; ++edge)
-        if (mir.insns[expected_jumps[edge].instruction].label !=
-            mir.insns[expected_jumps[edge].label].label)
+        if (instructions[expected_jumps[edge].instruction]->label !=
+            instructions[expected_jumps[edge].label]->label)
             return mir_machine_reject(
                 "backward-pass-schedule", "jumps");
     for (edge = 0; edge < 8; ++edge) {
         const struct MirInsn *phi =
-            &mir.insns[expected_phis[edge].instruction];
+            instructions[expected_phis[edge].instruction];
 
         if (mir_definition(phi->src1) !=
-                &mir.insns[expected_phis[edge].source1] ||
+                instructions[expected_phis[edge].source1] ||
             mir_definition(phi->src2) !=
-                &mir.insns[expected_phis[edge].source2] ||
+                instructions[expected_phis[edge].source2] ||
             phi->phi_pred1 !=
-                mir.insns[expected_phis[edge].predecessor1].label ||
+                instructions[expected_phis[edge].predecessor1]->label ||
             phi->phi_pred2 !=
-                mir.insns[expected_phis[edge].predecessor2].label ||
+                instructions[expected_phis[edge].predecessor2]->label ||
             !mir_match_matrix_product_word_type(phi->type))
             return mir_machine_reject(
                 "backward-pass-schedule", "phis");

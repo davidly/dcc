@@ -88,13 +88,59 @@ _Static_assert(AB == 3*S*D, "ATTNC11 workspace offsets changed");
 _Static_assert(AB + S*S == 3*S*D + S*S, "ATTNC11 workspace size changed");
 _Static_assert(WBYTES == 4864, "ATTNC11 weight file payload changed");
 
-/* --- Q16 weight accumulators (native little-endian int32_t) --- */
-static weight_value_t token_weights_q16[V*D];
-static weight_value_t position_weights_q16[S*D];
-static weight_value_t query_weights_q16[D*D];
-static weight_value_t key_weights_q16[D*D];
-static weight_value_t value_weights_q16[D*D];
-static weight_value_t output_weights_q16[D*V];
+/* Keep training storage nested here: exact MIR schedules must preserve the
+ * accumulated member offsets rather than depending on standalone globals. */
+static union {
+    struct {
+        weight_value_t token_weights_q16[V*D];
+        weight_value_t position_weights_q16[S*D];
+        weight_value_t query_weights_q16[D*D];
+        weight_value_t key_weights_q16[D*D];
+        weight_value_t value_weights_q16[D*D];
+        weight_value_t output_weights_q16[D*V];
+
+        model_value_t token_gradients[V*D];
+        model_value_t position_gradients[S*D];
+        model_value_t query_weight_gradients[D*D];
+        model_value_t key_weight_gradients[D*D];
+        model_value_t value_weight_gradients[D*D];
+        model_value_t output_weight_gradients[D*V];
+
+        model_value_t logit_gradients[V];
+        model_value_t attention_output_gradients[S*D];
+        model_value_t attention_score_gradients[S*S];
+        model_value_t query_state_gradients[S*D];
+        model_value_t key_state_gradients[S*D];
+        model_value_t value_state_gradients[S*D];
+        model_value_t embedding_gradients[S*D];
+        model_value_t gradient_column[D];
+    } training;
+    model_value_t projection_cache[S*V*3*D];
+} mode_workspace;
+
+#define token_weights_q16 mode_workspace.training.token_weights_q16
+#define position_weights_q16 mode_workspace.training.position_weights_q16
+#define query_weights_q16 mode_workspace.training.query_weights_q16
+#define key_weights_q16 mode_workspace.training.key_weights_q16
+#define value_weights_q16 mode_workspace.training.value_weights_q16
+#define output_weights_q16 mode_workspace.training.output_weights_q16
+#define token_gradients mode_workspace.training.token_gradients
+#define position_gradients mode_workspace.training.position_gradients
+#define query_weight_gradients mode_workspace.training.query_weight_gradients
+#define key_weight_gradients mode_workspace.training.key_weight_gradients
+#define value_weight_gradients mode_workspace.training.value_weight_gradients
+#define output_weight_gradients mode_workspace.training.output_weight_gradients
+#define logit_gradients mode_workspace.training.logit_gradients
+#define attention_output_gradients \
+    mode_workspace.training.attention_output_gradients
+#define attention_score_gradients \
+    mode_workspace.training.attention_score_gradients
+#define query_state_gradients mode_workspace.training.query_state_gradients
+#define key_state_gradients mode_workspace.training.key_state_gradients
+#define value_state_gradients mode_workspace.training.value_state_gradients
+#define embedding_gradients mode_workspace.training.embedding_gradients
+#define gradient_column mode_workspace.training.gradient_column
+#define projection_cache mode_workspace.projection_cache
 
 /* --- Q8 weight copies (rebuilt from the Q16 accumulators) --- */
 static model_value_t token_weights_q8[V*D];
@@ -104,29 +150,11 @@ static model_value_t key_weights_q8[D*D];
 static model_value_t value_weights_q8[D*D];
 static model_value_t output_weights_q8[D*V];
 
-/* --- Q15 gradient accumulators --- */
-static model_value_t token_gradients[V*D];
-static model_value_t position_gradients[S*D];
-static model_value_t query_weight_gradients[D*D];
-static model_value_t key_weight_gradients[D*D];
-static model_value_t value_weight_gradients[D*D];
-static model_value_t output_weight_gradients[D*V];
-
 /* --- forward state --- */
 static model_value_t embeddings[S*D];
 static model_value_t attention_output[S*D];
 static model_value_t logits[S*V];
 static model_value_t attention_workspace[3*S*D + S*S];
-
-/* --- backward workspace --- */
-static model_value_t logit_gradients[V];
-static model_value_t attention_output_gradients[S*D];
-static model_value_t attention_score_gradients[S*S];
-static model_value_t query_state_gradients[S*D];
-static model_value_t key_state_gradients[S*D];
-static model_value_t value_state_gradients[S*D];
-static model_value_t embedding_gradients[S*D];
-static model_value_t gradient_column[D];
 
 /* --- training data / state --- */
 static model_value_t tokens[S];
