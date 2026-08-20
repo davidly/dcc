@@ -1,0 +1,39 @@
+; dcc stage-1d output
+_decimal:
+ld l,(ix-1)
+ld h,0
+ld de,32770
+ld a,h
+xor 128
+ld h,a
+sbc hl,de
+jp nc,_sink
+_hex:
+ld l,(ix+4)
+ld h,0
+ld de,32768
+ld a,h
+xor 80h
+ld h,a
+sbc hl,de
+jp z,_sink
+_constant_out_of_range:
+ld l,(ix-2)
+ld h,0
+ld de,33024
+ld a,h
+xor 128
+ld h,a
+sbc hl,de
+jp c,_sink
+_not_zero_extended:
+ld l,(ix-3)
+ld h,1
+ld de,32769
+ld a,h
+xor 128
+ld h,a
+sbc hl,de
+jp nz,_sink
+ret
+end

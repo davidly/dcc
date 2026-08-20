@@ -1,0 +1,52 @@
+; dcc stage-1d output
+	push bc ; peep: aggregate_swap_ldir
+	pop de
+	ld hl,13
+	add hl,de
+	ex de,hl
+	ld b,13
+Laswap_1:
+	ld c,(hl)
+	ld a,(de)
+	ld (hl),a
+	ld a,c
+	ld (de),a
+	inc hl
+	inc de
+	djnz Laswap_1
+; Different final size must remain unchanged.
+	ld l,c
+	ld h,b
+	ex de,hl
+	ld hl,_other_temp
+	ex de,hl
+	ld bc,7
+	ldir
+	ld hl,(_other)
+	ld (ix-6),l
+	ld (ix-5),h
+	ld hl,(_other)
+	ld de,7
+	add hl,de
+	ld (ix-8),l
+	ld (ix-7),h
+	ld l,(ix-6)
+	ld h,(ix-5)
+	ex de,hl
+	ld l,(ix-8)
+	ld h,(ix-7)
+	ld bc,7
+	ldir
+	ld hl,(_other)
+	ld de,7
+	add hl,de
+	ld (ix-6),l
+	ld (ix-5),h
+	ex de,hl
+	ld hl,_other_temp
+	ld bc,6
+	ldir
+	ld l,(ix-6)
+	ld h,(ix-5)
+	ret
+	end

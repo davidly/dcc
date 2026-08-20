@@ -1,0 +1,68 @@
+; dcc stage-1d output
+ld l,c
+ld h,b
+ex de,hl
+ld hl,_temp
+ex de,hl
+ld bc,13
+ldir
+ld hl,(_left)
+ld (ix-2),l
+ld (ix-1),h
+ld hl,(_left)
+ld de,13
+add hl,de
+ld (ix-4),l
+ld (ix-3),h
+ld l,(ix-2)
+ld h,(ix-1)
+ex de,hl
+ld l,(ix-4)
+ld h,(ix-3)
+ld bc,13
+ldir
+ld hl,(_left)
+ld de,13
+add hl,de
+ld (ix-2),l
+ld (ix-1),h
+ex de,hl
+ld hl,_temp
+ld bc,13
+ldir
+; Different final size must remain unchanged.
+ld l,c
+ld h,b
+ex de,hl
+ld hl,_other_temp
+ex de,hl
+ld bc,7
+ldir
+ld hl,(_other)
+ld (ix-6),l
+ld (ix-5),h
+ld hl,(_other)
+ld de,7
+add hl,de
+ld (ix-8),l
+ld (ix-7),h
+ld l,(ix-6)
+ld h,(ix-5)
+ex de,hl
+ld l,(ix-8)
+ld h,(ix-7)
+ld bc,7
+ldir
+ld hl,(_other)
+ld de,7
+add hl,de
+ld (ix-6),l
+ld (ix-5),h
+ex de,hl
+ld hl,_other_temp
+ld bc,6
+ldir
+ld l,(ix-6)
+ld h,(ix-5)
+ret
+end

@@ -3874,6 +3874,38 @@ static int pass_zeroext_byte_cmp_const(void)
             continue;
         if (!eq(i + 1, "ld h,0"))
             continue;
+
+        /* MIR may fold the signed-compare bias into the constant before
+         * dccpeep sees it.  Since H starts at zero, xor 128 maps the byte
+         * value into 0x8000..0x80ff; comparing it with 0x8000+N is exactly
+         * an unsigned byte comparison with N. */
+        if (i + 7 < nlines &&
+            peep_parse_ld_de_signed(lines[i + 2], &imm) &&
+            imm >= 32768 && imm <= 33023 &&
+            eq(i + 3, "ld a,h") &&
+            (eq(i + 4, "xor 128") || eq(i + 4, "xor 80h")) &&
+            eq(i + 5, "ld h,a") &&
+            eq(i + 6, "sbc hl,de") &&
+            (strncmp(lines[i + 7], "jp z,", 5) == 0 ||
+             strncmp(lines[i + 7], "jp nz,", 6) == 0 ||
+             strncmp(lines[i + 7], "jp c,", 5) == 0 ||
+             strncmp(lines[i + 7], "jp nc,", 6) == 0)) {
+            imm -= 32768;
+            sprintf(newline, "ld a,(ix%s)", off);
+            replace1_tagged(i, newline, "zeroext_byte_cmp_biased_const");
+            if (imm == 0)
+                replace1(i + 1, "or a");
+            else {
+                sprintf(newline, "cp %d", imm);
+                replace1(i + 1, newline);
+            }
+            replace1(i + 2, lines[i + 7]);
+            delete_n(i + 3, 5);
+            changed = 1;
+            if (i > 0) --i;
+            continue;
+        }
+
         if (!peep_parse_ld_de_0_to_255(lines[i + 2], &imm))
             continue;
 
@@ -3929,6 +3961,132 @@ static int pass_zeroext_byte_cmp_const(void)
         }
     }
 
+    return changed;
+}
+
+static int parse_ld_bc_positive_byte(const char *line, int *value)
+{
+    char text[MAX_LINE];
+    char extra;
+
+    strip_peep_comment_copy(text, line);
+    if (sscanf(text, "ld bc,%d %c", value, &extra) != 1)
+        return 0;
+    return *value > 0 && *value <= 255;
+}
+
+static int parse_store_ix_pair(const char *low, const char *high, int *offset)
+{
+    char low_text[MAX_LINE];
+    char expected[48];
+    char extra;
+
+    strip_peep_comment_copy(low_text, low);
+    if (sscanf(low_text, "ld (ix%d),l %c", offset, &extra) != 1)
+        return 0;
+    sprintf(expected, "ld (ix%+d),h", *offset + 1);
+    return strcmp(high, expected) == 0;
+}
+
+/* Collapse the canonical DCC aggregate-swap sequence
+ *
+ *     temp = *left; *left = *(left + size); *(left + size) = temp;
+ *
+ * from three equal-size LDIR copies into one in-place byte-swap loop.  The
+ * matcher proves that all three sizes, both source addresses, the temporary,
+ * and the two compiler spill pairs agree before replacing the sequence. */
+static int pass_aggregate_swap_ldir(void)
+{
+    int i;
+    int changed = 0;
+    int size;
+    int second_size;
+    int third_size;
+    int first_spill;
+    int second_spill;
+    int final_spill;
+    int third_start;
+    char temp[128];
+    char pointer[128];
+    char repeated_pointer[128];
+    char line[160];
+    char loop[64];
+
+    for (i = 0; i + 28 < nlines; ++i) {
+        if (!input_is_dcc_generated ||
+            !eq(i, "ld l,c") || !eq(i + 1, "ld h,b") ||
+            !eq(i + 2, "ex de,hl") ||
+            !parse_ld_hl_imm(lines[i + 3], temp, sizeof(temp)) ||
+            temp[0] == '(' || !eq(i + 4, "ex de,hl") ||
+            !parse_ld_bc_positive_byte(lines[i + 5], &size) ||
+            !eq(i + 6, "ldir") ||
+            !parse_ld_hl_imm(lines[i + 7], pointer, sizeof(pointer)) ||
+            pointer[0] != '(' ||
+            !parse_store_ix_pair(lines[i + 8], lines[i + 9], &first_spill) ||
+            !parse_ld_hl_imm(lines[i + 10], repeated_pointer,
+                             sizeof(repeated_pointer)) ||
+            strcmp(pointer, repeated_pointer) != 0)
+            continue;
+        sprintf(line, "ld de,%d", size);
+        if (!eq(i + 11, line) || !eq(i + 12, "add hl,de") ||
+            !parse_store_ix_pair(lines[i + 13], lines[i + 14], &second_spill))
+            continue;
+        sprintf(line, "ld l,(ix%+d)", first_spill);
+        if (!eq(i + 15, line)) continue;
+        sprintf(line, "ld h,(ix%+d)", first_spill + 1);
+        if (!eq(i + 16, line) || !eq(i + 17, "ex de,hl")) continue;
+        sprintf(line, "ld l,(ix%+d)", second_spill);
+        if (!eq(i + 18, line)) continue;
+        sprintf(line, "ld h,(ix%+d)", second_spill + 1);
+        if (!eq(i + 19, line) ||
+            !parse_ld_bc_positive_byte(lines[i + 20], &second_size) ||
+            second_size != size || !eq(i + 21, "ldir") ||
+            !parse_ld_hl_imm(lines[i + 22], repeated_pointer,
+                             sizeof(repeated_pointer)) ||
+            strcmp(pointer, repeated_pointer) != 0)
+            continue;
+        sprintf(line, "ld de,%d", size);
+        if (!eq(i + 23, line) || !eq(i + 24, "add hl,de"))
+            continue;
+        third_start = i + 25;
+        if (third_start + 1 < nlines &&
+            parse_store_ix_pair(lines[third_start], lines[third_start + 1],
+                                &final_spill)) {
+            if (final_spill != first_spill)
+                continue;
+            third_start += 2;
+        }
+        if (!eq(third_start, "ex de,hl") ||
+            !parse_ld_hl_imm(lines[third_start + 1], repeated_pointer,
+                             sizeof(repeated_pointer)) ||
+            strcmp(temp, repeated_pointer) != 0 ||
+            !parse_ld_bc_positive_byte(lines[third_start + 2], &third_size) ||
+            third_size != size || !eq(third_start + 3, "ldir"))
+            continue;
+
+        sprintf(loop, "Laswap_%d", i);
+        replace1_tagged(i, "push bc", "aggregate_swap_ldir");
+        replace1(i + 1, "pop de");
+        sprintf(line, "ld hl,%d", size);
+        replace1(i + 2, line);
+        replace1(i + 3, "add hl,de");
+        replace1(i + 4, "ex de,hl");
+        sprintf(line, "ld b,%d", size);
+        replace1(i + 5, line);
+        sprintf(line, "%s:", loop);
+        replace1(i + 6, line);
+        replace1(i + 7, "ld c,(hl)");
+        replace1(i + 8, "ld a,(de)");
+        replace1(i + 9, "ld (hl),a");
+        replace1(i + 10, "ld a,c");
+        replace1(i + 11, "ld (de),a");
+        replace1(i + 12, "inc hl");
+        replace1(i + 13, "inc de");
+        sprintf(line, "djnz %s", loop);
+        replace1(i + 14, line);
+        delete_n(i + 15, third_start - i - 11);
+        changed = 1;
+    }
     return changed;
 }
 
@@ -12991,6 +13149,7 @@ int main(int argc, char **argv)
         { "pass_cache_noix_byte_param_reload", pass_cache_noix_byte_param_reload, 0 },
         { "pass_cache_global_word_field_reload", pass_cache_global_word_field_reload, 0 },
         { "pass_cache_global_word_reload", pass_cache_global_word_reload, 0 },
+        { "pass_aggregate_swap_ldir", pass_aggregate_swap_ldir, 0 },
         { "pass_elim_redundant_cache_reload", pass_elim_redundant_cache_reload, 0 },
         { "pass_cache_global_word_reload_de", pass_cache_global_word_reload_de, 0 },
         { "pass_cache_global_array_word_reload", pass_cache_global_array_word_reload, 0 },
