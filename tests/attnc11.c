@@ -67,6 +67,11 @@ typedef int32_t weight_value_t;
 #define FM_VALID 2
 #define FM_INFER 3
 
+#define PCACHE_DISABLED 0
+#define PCACHE_COLD 1
+#define PCACHE_PENDING 2
+#define PCACHE_READY 3
+
 /* Trained weights are saved here so inference can reload them. */
 #define WFILE "ATTN.WTS"
 
@@ -88,8 +93,8 @@ _Static_assert(AB == 3*S*D, "ATTNC11 workspace offsets changed");
 _Static_assert(AB + S*S == 3*S*D + S*S, "ATTNC11 workspace size changed");
 _Static_assert(WBYTES == 4864, "ATTNC11 weight file payload changed");
 
-/* Keep training storage nested here: exact MIR schedules must preserve the
- * accumulated member offsets rather than depending on standalone globals. */
+/* Training needs the Q16 weights and backward state together.  Fixed-weight
+ * inference needs neither after Q8 conversion, so it reuses this storage. */
 static union {
     struct {
         weight_value_t token_weights_q16[V*D];
@@ -155,6 +160,9 @@ static model_value_t embeddings[S*D];
 static model_value_t attention_output[S*D];
 static model_value_t logits[S*V];
 static model_value_t attention_workspace[3*S*D + S*S];
+static bool projection_cache_valid[S*V];
+static model_value_t first_projection_tokens[S];
+static unsigned char projection_cache_state;
 
 /* --- training data / state --- */
 static model_value_t tokens[S];
@@ -223,11 +231,7 @@ static model_value_t logarithm_table[256] = {
 };
 
 /* --- forward declarations --- */
-#ifndef ATTNC11_CLAMP_INLINE
-#define ATTNC11_CLAMP_INLINE inline
-#endif
-static ATTNC11_CLAMP_INLINE model_value_t clamp_to_model_value(
-    weight_value_t value);
+static model_value_t clamp_to_model_value(weight_value_t value);
 static inline model_value_t q16_to_q8(weight_value_t value);
 static inline model_value_t multiply_q8(model_value_t left,
                                          model_value_t right);
@@ -260,6 +264,8 @@ static void transposed_matrix_vector_multiply(
     model_value_t *matrix, model_value_t *input, model_value_t *output,
     unsigned char rows, unsigned char columns);
 static void project_all_qkv(void);
+static void cache_projected_qkv(model_value_t *cached_tokens);
+static void project_cached_qkv(void);
 static void transposed_multiply_8x16(model_value_t *matrix,
                                      model_value_t *input,
                                      model_value_t *output);
@@ -310,8 +316,7 @@ static uint16_t elapsed_seconds(void);
 /* ============================================================ */
 
 /* clamp a 32-bit value to a signed 16-bit model value */
-static ATTNC11_CLAMP_INLINE model_value_t clamp_to_model_value(
-    weight_value_t value)
+static model_value_t clamp_to_model_value(weight_value_t value)
 {
     if (value > MODEL_VALUE_MAX)
         return MODEL_VALUE_MAX;
@@ -573,6 +578,73 @@ static void project_all_qkv(void)
     }
 }
 
+static void cache_projected_qkv(model_value_t *cached_tokens)
+{
+    int cache_index;
+    model_value_t *cached;
+    unsigned char row;
+
+    for (row = 0; row < S; row++) {
+        cache_index = row * V + cached_tokens[row];
+        cached = &projection_cache[cache_index * 3 * D];
+        memcpy(cached, &attention_workspace[QB + row * D],
+               D * (int)sizeof(model_value_t));
+        memcpy(cached + D, &attention_workspace[KB + row * D],
+               D * (int)sizeof(model_value_t));
+        memcpy(cached + 2 * D, &attention_workspace[VB + row * D],
+               D * (int)sizeof(model_value_t));
+        projection_cache_valid[cache_index] = true;
+    }
+}
+
+/* Reuse fixed-weight projections for repeated position/digit pairs. */
+static void project_cached_qkv(void)
+{
+    int cache_index;
+    unsigned char row, i, j;
+    model_value_t sc;
+    model_value_t *vin, *voutq, *voutk, *voutv, *cached;
+    model_value_t *matq, *matk, *matv;
+
+    memset(&attention_workspace[QB], 0,
+           3 * S * D * (int)sizeof(model_value_t));
+    vin = embeddings;
+    voutq = &attention_workspace[QB];
+    voutk = &attention_workspace[KB];
+    voutv = &attention_workspace[VB];
+    for (row = 0; row < S; row++) {
+        cache_index = row * V + tokens[row];
+        cached = &projection_cache[cache_index * 3 * D];
+        if (projection_cache_valid[cache_index]) {
+            memcpy(voutq, cached, D * (int)sizeof(model_value_t));
+            memcpy(voutk, cached + D, D * (int)sizeof(model_value_t));
+            memcpy(voutv, cached + 2 * D,
+                   D * (int)sizeof(model_value_t));
+            vin += D;
+        } else {
+            matq = query_weights_q8;
+            matk = key_weights_q8;
+            matv = value_weights_q8;
+            for (i = 0; i < D; i++) {
+                sc = *vin++;
+                for (j = 0; j < D; j++) {
+                    add_clamped(&voutq[j], multiply_q8(*matq++, sc));
+                    add_clamped(&voutk[j], multiply_q8(*matk++, sc));
+                    add_clamped(&voutv[j], multiply_q8(*matv++, sc));
+                }
+            }
+            memcpy(cached, voutq, D * (int)sizeof(model_value_t));
+            memcpy(cached + D, voutk, D * (int)sizeof(model_value_t));
+            memcpy(cached + 2 * D, voutv,
+                   D * (int)sizeof(model_value_t));
+            projection_cache_valid[cache_index] = true;
+        }
+        voutq += D;
+        voutk += D;
+        voutv += D;
+    }
+}
+
 static void transposed_multiply_8x16(model_value_t *matrix,
                                      model_value_t *input,
                                      model_value_t *output)
@@ -647,7 +719,20 @@ static void forward_attention(void)
     unsigned char i, j;
 
     /* Step 1-3: Q = X.Wq, K = X.Wk, V = X.Wv */
-    project_all_qkv();
+    if (projection_cache_state == PCACHE_DISABLED)
+        project_all_qkv();
+    else if (projection_cache_state == PCACHE_COLD) {
+        project_all_qkv();
+        memcpy(first_projection_tokens, tokens,
+               S * (int)sizeof(model_value_t));
+        projection_cache_state = PCACHE_PENDING;
+    } else {
+        if (projection_cache_state == PCACHE_PENDING) {
+            cache_projected_qkv(first_projection_tokens);
+            projection_cache_state = PCACHE_READY;
+        }
+        project_cached_qkv();
+    }
     /* Step 4: S[i][j] = (Q[i] . K[j]) / sqrt(d), sqrt(16)=4 -> >>2 */
     query = &attention_workspace[QB];
     score = &attention_workspace[AB];
@@ -1046,26 +1131,26 @@ static void report_training(void)
 /* final test: 10 samples */
 static void test_random_samples(void)
 {
-    int sample, position, prediction, sample_correct, correct_samples;
+    int sample, pos, prediction, sample_correct, correct_samples;
 
     correct_samples = 0;
     convert_weights_to_q8();
     for (sample = 0; sample < 10; sample++) {
         generate_sample();
         forward_pass();
-        for (position = 0; position < S; position++) {
-            vector_maximum(&logits[position * V], V, &prediction);
-            test_predictions[position] = prediction;
+        for (pos = 0; pos < S; pos++) {
+            vector_maximum(&logits[pos * V], V, &prediction);
+            test_predictions[pos] = prediction;
         }
         printf(" ");
-        for (position = 0; position < S; position++)
-            printf("%d ", tokens[position]);
+        for (pos = 0; pos < S; pos++)
+            printf("%d ", tokens[pos]);
         printf("-> ");
-        for (position = 0; position < S; position++)
-            printf("%d ", test_predictions[position]);
+        for (pos = 0; pos < S; pos++)
+            printf("%d ", test_predictions[pos]);
         sample_correct = 1;
-        for (position = 0; position < S; position++)
-            if (test_predictions[position] != targets[position])
+        for (pos = 0; pos < S; pos++)
+            if (test_predictions[pos] != targets[pos])
                 sample_correct = 0;
         if (sample_correct) {
             correct_samples = correct_samples + 1;
@@ -1080,22 +1165,22 @@ static void test_random_samples(void)
  * The task is to reverse the sequence, so the expected output is the
  * input read backwards; score the prediction against it.
  * Assumes convert_weights_to_q8() has already built the Q8 weight copies.
- * Returns 1 if every position is correct, else 0. */
+ * Returns 1 if every pos is correct, else 0. */
 static bool infer_sequence(void)
 {
-    int position, prediction;
+    int pos, prediction;
     bool sequence_correct;
 
     forward_pass();
     printf(" ");
-    for (position = 0; position < S; position++)
-        printf("%d ", tokens[position]);
+    for (pos = 0; pos < S; pos++)
+        printf("%d ", tokens[pos]);
     printf("-> ");
     sequence_correct = true;
-    for (position = 0; position < S; position++) {
-        vector_maximum(&logits[position * V], V, &prediction);
+    for (pos = 0; pos < S; pos++) {
+        vector_maximum(&logits[pos * V], V, &prediction);
         printf("%d ", prediction);
-        if (prediction != tokens[S - 1 - position])
+        if (prediction != tokens[S - 1 - pos])
             sequence_correct = false;
     }
     if (sequence_correct)
@@ -1176,7 +1261,7 @@ static int load_weights(void)
 /* same ports ATTNZ80.MAC uses:                                  */
 /*                                                               */
 /*   OUT 37,0 -> start/reset host stopwatch 0                    */
-/*   OUT 37,1 -> latch elapsed seconds (4-byte big-endian long)  */
+/*   OUT 37,2 -> latch elapsed milliseconds (big-endian long)   */
 /*   IN  200  -> read those 4 bytes back, MSB first              */
 /*                                                               */
 /* The ports are no-ops under a bare CP/M emulator that lacks    */
@@ -1190,16 +1275,16 @@ extern void outp(unsigned port, unsigned val);
 #define SWPORT 37               /* host stopwatch 0         */
 #define RDPORT 200              /* request-buffer read-back */
 
-/* read the latched 4-byte big-endian elapsed seconds; low 16 bits */
-static uint16_t elapsed_seconds(void)
+/* read the latched 4-byte big-endian elapsed milliseconds */
+static uint32_t elapsed_milliseconds(void)
 {
-    int hi, lo;
+    uint32_t elapsed;
 
-    inp(RDPORT);                /* byte 0 (MSB) - ignore */
-    inp(RDPORT);                /* byte 1       - ignore */
-    hi = inp(RDPORT);           /* byte 2                */
-    lo = inp(RDPORT);           /* byte 3 (LSB)          */
-    return (unsigned)((hi << 8) | lo);
+    elapsed = (uint32_t)inp(RDPORT) << 24;
+    elapsed |= (uint32_t)inp(RDPORT) << 16;
+    elapsed |= (uint32_t)inp(RDPORT) << 8;
+    elapsed |= (uint32_t)inp(RDPORT);
+    return elapsed;
 }
 
 /* ============================================================ */
@@ -1280,6 +1365,8 @@ int main(int argc, char *argv[])
         return 1;
     }
     convert_weights_to_q8();        /* build Q8 weight copies once */
+    memset(projection_cache_valid, 0, S * V * (int)sizeof(bool));
+    projection_cache_state = PCACHE_COLD;
 
     outp(SWPORT, 0);                /* start host stopwatch 0 */
     sequence_count = run_inference_file(filename);
@@ -1294,9 +1381,9 @@ int main(int argc, char *argv[])
         test_random_samples();
         return 0;
     }
-    outp(SWPORT, 1);                /* latch elapsed seconds */
+    outp(SWPORT, 2);                /* latch elapsed milliseconds */
 
     printf("\naccuracy  %2d/%d\n", file_hits, sequence_count);
-    printf("run time  %u s\n", elapsed_seconds());
+    printf("run time  %lu ms\n", (unsigned long)elapsed_milliseconds());
     return 0;
 }
