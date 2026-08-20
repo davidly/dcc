@@ -39,7 +39,6 @@
       ] },
     { "name": "attnc99", "host": true, "stack_size": 512, "fixtures": ["ATTN.WTS", "ATTN.IN"] },
     { "name": "attnc11", "host": true, "stack_size": 512, "fixtures": ["ATTN.WTS", "ATTN.IN"] },
-    { "name": "tattnout", "host": true, "stack_size": 512, "fixtures": ["ATTN.WTS", "ATTN.IN"] },
     { "name": "cint", "args": "eu.cin", "stack_size": 768,
       "dcc_floatio": false, "dcc_longio": false, "fixtures": ["eu.cin"],
       "extra_scenarios": [

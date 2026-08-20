@@ -19,8 +19,7 @@ The WIP mechanism is ported to the current generated-only backend:
 - generic widened signed multiplies select it only with a conservative bounded
   MIR proof and actual CFG-cycle membership.
 
-`tattnout` permanently rebuilds the canonical source with only the clamp
-qualifier removed. It and `attnc11` both measure
+The inline and out-of-line clamp source forms both measured
 **287,727,239 / 22,144 peep** and **290,267,064 / 23,040 nopeep** in the checked
 stack build. `tlongopt` keeps straight-line products on `__m1s`, selects
 `__m1q` in bounded loops, and validates the runtime over a 19x19 grid covering

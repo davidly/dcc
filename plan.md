@@ -155,9 +155,8 @@ and add permanent structural regressions.
   and all other pairs fall through to `__m1s`.
 - The five fused Q8 sites now call `__m1q`. The documented out-of-line clamp
   fingerprints are admitted only behind the existing full shape, CFG,
-  parameter, array, helper-prototype, offset, and constant checks. The new
-  `tattnout` app compiles the same ATTNC11 source with only that qualifier
-  removed and pins both source forms permanently. Both report
+  parameter, array, helper-prototype, offset, and constant checks. The inline
+  and out-of-line clamp source forms both reported
   **287,727,239 / 22,144 peep** and **290,267,064 / 23,040 nopeep** under the
   checked stack build.
 - Generic signed 16x16-to-32 multiplication selects `__m1q` when MIR proves an
