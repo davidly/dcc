@@ -18,4 +18,4 @@ loading weights from ATTN.WTS ...
  7 6 9 6 4 1 2 3 -> 3 2 1 4 6 9 6 7  ok
 
 accuracy  14/14
-run time  {{UINT}} s
+run time  {{UINT}} ms
