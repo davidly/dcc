@@ -718,6 +718,10 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                             (n->op == TOK_ANDEQ || n->op == TOK_OREQ ||
                              n->op == TOK_XOREQ))) {
             if (n->op != '=') {
+                if ((n->op == TOK_SHLEQ || n->op == TOK_SHREQ) &&
+                    ast_is_plain_int_type(s->type) &&
+                    type_size(s->type) == 2)
+                    return ast_value_is_plain_int(n->b);
                 if ((n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
                      n->op == TOK_ANDEQ || n->op == TOK_OREQ ||
                      n->op == TOK_XOREQ) &&
