@@ -121,11 +121,64 @@ class L80cCorrectnessTests(unittest.TestCase):
             bytes([0x21, 0x00, 0x01, 0xC9]),
         )
 
-    def test_nonstandard_origin_is_rejected(self):
-        self.assemble("ORIGIN", "\tCSEG\n\tRET\n\tEND\n")
-        result = self.link("/P:200,ORIGIN")
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("CP/M .COM programs load at 0100", result.stderr)
+    def test_high_origin_inserts_start_jump_and_padding(self):
+        self.assemble(
+            "HIGH",
+            "\tCSEG\n\tNOP\nSTART:\n\tRET\n\tEND START\n",
+        )
+        result = self.link("/P:200,HIGH", "-o", "HIGH")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        image = (self.workspace / "HIGH.COM").read_bytes()
+        self.assertEqual(image[:3], bytes([0xC3, 0x01, 0x02]))
+        self.assertEqual(image[3:0x100], bytes(0xFD))
+        self.assertEqual(image[0x100:0x102], bytes([0x00, 0xC9]))
+
+    def test_zero_origin_uses_copy_bootstrap(self):
+        self.assemble(
+            "ZERO",
+            "\tCSEG\nSTART:\n\tLD C,0\n\tJP 5\n\tEND START\n",
+        )
+        result = self.link("/P:0,ZERO", "-o", "ZERO")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        image = (self.workspace / "ZERO.COM").read_bytes()
+        self.assertEqual(image[:3], bytes([0xC3, 0x08, 0x01]))
+        self.assertEqual(image[3:8], bytes([0x0E, 0x00, 0xC3, 0x05, 0x00]))
+        self.assertEqual(
+            image[8:30],
+            bytes(
+                [
+                    0x21,
+                    0x03,
+                    0x01,
+                    0x11,
+                    0x00,
+                    0x00,
+                    0x01,
+                    0x05,
+                    0x00,
+                    0x7E,
+                    0x12,
+                    0x23,
+                    0x13,
+                    0x0B,
+                    0x78,
+                    0xB1,
+                    0xC2,
+                    0x11,
+                    0x01,
+                    0xC3,
+                    0x00,
+                    0x00,
+                ]
+            ),
+        )
+
+    def test_origin_inside_entry_slot_suppresses_jump(self):
+        self.assemble("ENTRY101", "\tCSEG\n\tRET\n\tEND\n")
+        result = self.link("/P:101,ENTRY101", "-o", "ENTRY101")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        image = (self.workspace / "ENTRY101.COM").read_bytes()
+        self.assertEqual(image[:2], bytes([0x00, 0xC9]))
 
     def test_invalid_origin_is_rejected(self):
         self.assemble("BADORG", "\tCSEG\n\tRET\n\tEND\n")

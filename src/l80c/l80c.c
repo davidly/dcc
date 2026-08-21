@@ -14,8 +14,9 @@
  * @par Boundary
  * Complements m80c and replaces emulated L80 for normal dccmake builds,
  * avoiding L80's CP/M workspace ceiling. It accepts the CSEG/DSEG records used
- * by this toolchain and rejects unsupported ASEG, COMMON, unknown records, and
- * non-0100 origins that would require a LINK-80 relocation bootstrap.
+ * by this toolchain and rejects unsupported ASEG, COMMON, or unknown records.
+ * Nonstandard program origins receive a CP/M entry jump or relocation
+ * bootstrap so the linked image still starts execution at address 0100H.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -209,6 +210,9 @@ typedef struct {
     long cseg_size, dseg_size;
     U8 *code, *data;
     long cseg_base, dseg_base; /* filled in during layout */
+    int has_start;
+    int start_type;
+    long start_value;
 } Module;
 
 static Module g_modules[MAXMOD];
@@ -419,6 +423,15 @@ static void load_rel_file(const char *path) {
                         break;
                     }
                     case 14:
+                        if (valtype != T_ABS && valtype != T_CODE &&
+                            valtype != T_DATA)
+                            die("module %s: start address has unsupported "
+                                "segment type %d", m->name, valtype);
+                        if (valtype != T_ABS || val != 0) {
+                            m->has_start = 1;
+                            m->start_type = valtype;
+                            m->start_value = val;
+                        }
                         align_in(&r); /* RELFIX20: end-module is followed by a byte-aligned end-file */
                         break;
                     case 15:
@@ -527,7 +540,7 @@ int main(int argc, char **argv) {
     int have_outname = 0;
     int i;
     long running;
-    long total_len;
+    long total_len, output_len, start_address;
     U8 *image;
     PublicSym *p;
     Fixup *mf;
@@ -541,7 +554,7 @@ int main(int argc, char **argv) {
     outname[0] = 0;
 
     if (argc < 2) {
-        fprintf(stderr, "usage: %s [/P:100,]module1,module2,...,moduleN[/switches] [-o out.COM] [-v]\n", g_progname);
+        fprintf(stderr, "usage: %s [/P:origin,]module1,module2,...,moduleN[/switches] [-o out.COM] [-v]\n", g_progname);
         return 2;
     }
 
@@ -602,9 +615,8 @@ int main(int argc, char **argv) {
     }
 
     if (nmodlist == 0) die("no modules given");
-    if (origin != 0x100)
-        die("unsupported origin %04lX: CP/M .COM programs load at 0100",
-            origin & 0xffff);
+    if (origin < 0 || origin >= MAXORIGIN)
+        die("origin out of range");
 
     if (!have_outname) {
         bounded_copy(outname, sizeof(outname), modlist[nmodlist - 1]);
@@ -660,6 +672,20 @@ int main(int argc, char **argv) {
     total_len = running - origin;
     if (total_len <= 0) die("empty program");
     if (origin + total_len > MAXORIGIN) die("program too large: extends past 0xFFFF");
+
+    start_address = origin;
+    for (i = 0; i < g_nmodules; i++) {
+        Module *m = &g_modules[i];
+        if (!m->has_start) continue;
+        if (m->start_type == T_CODE)
+            start_address = m->cseg_base + m->start_value;
+        else if (m->start_type == T_DATA)
+            start_address = m->dseg_base + m->start_value;
+        else
+            start_address = m->start_value;
+    }
+    if (start_address < 0 || start_address >= MAXORIGIN)
+        die("start address out of range");
 
     image = (U8 *)calloc((size_t)total_len, 1);
     if (!image) die("out of memory allocating %ld-byte image", total_len);
@@ -743,20 +769,77 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* Emit the .COM image: a flat memory image starting at 0x100, where
-       CP/M loads headerless .COM programs. */
+    /* Emit a CP/M-loadable image. At or above 0100H, file offsets map
+       directly to memory and a leading JP reaches origins above the three-byte
+       entry slot. Below 0100H, a compact loader after the payload copies it
+       down before transferring control. */
     suffix_path(outpath, sizeof(outpath), outname, ".COM");
     outf = fopen(outpath, "wb");
     if (!outf) die("cannot create %s", outpath);
-    if (total_len > 0 &&
-        fwrite(image, 1, (size_t)total_len, outf) != (size_t)total_len)
-        die("short write to %s", outpath);
+    if (origin >= 0x100) {
+        long prefix = origin - 0x100;
+        if (prefix >= 3) {
+            if (fputc(0xc3, outf) == EOF ||
+                fputc((int)(start_address & 0xff), outf) == EOF ||
+                fputc((int)((start_address >> 8) & 0xff), outf) == EOF)
+                die("short write to %s", outpath);
+            prefix -= 3;
+        }
+        while (prefix-- > 0)
+            if (fputc(0, outf) == EOF)
+                die("short write to %s", outpath);
+        if (fwrite(image, 1, (size_t)total_len, outf) !=
+            (size_t)total_len)
+            die("short write to %s", outpath);
+        output_len = origin - 0x100 + total_len;
+    } else {
+        enum { BOOTSTRAP_SIZE = 22 };
+        long source = 0x103;
+        long loader = source + total_len;
+        long loop = loader + 9;
+        U8 bootstrap[BOOTSTRAP_SIZE];
+
+        output_len = 3 + total_len + BOOTSTRAP_SIZE;
+        if (output_len > 0xff00)
+            die("program too large for a CP/M relocation bootstrap");
+
+        bootstrap[0] = 0x21; /* LD HL,source */
+        bootstrap[1] = (U8)(source & 0xff);
+        bootstrap[2] = (U8)((source >> 8) & 0xff);
+        bootstrap[3] = 0x11; /* LD DE,origin */
+        bootstrap[4] = (U8)(origin & 0xff);
+        bootstrap[5] = (U8)((origin >> 8) & 0xff);
+        bootstrap[6] = 0x01; /* LD BC,length */
+        bootstrap[7] = (U8)(total_len & 0xff);
+        bootstrap[8] = (U8)((total_len >> 8) & 0xff);
+        bootstrap[9] = 0x7e; /* copy: LD A,(HL) */
+        bootstrap[10] = 0x12; /* LD (DE),A */
+        bootstrap[11] = 0x23; /* INC HL */
+        bootstrap[12] = 0x13; /* INC DE */
+        bootstrap[13] = 0x0b; /* DEC BC */
+        bootstrap[14] = 0x78; /* LD A,B */
+        bootstrap[15] = 0xb1; /* OR C */
+        bootstrap[16] = 0xc2; /* JP NZ,copy */
+        bootstrap[17] = (U8)(loop & 0xff);
+        bootstrap[18] = (U8)((loop >> 8) & 0xff);
+        bootstrap[19] = 0xc3; /* JP start */
+        bootstrap[20] = (U8)(start_address & 0xff);
+        bootstrap[21] = (U8)((start_address >> 8) & 0xff);
+
+        if (fputc(0xc3, outf) == EOF ||
+            fputc((int)(loader & 0xff), outf) == EOF ||
+            fputc((int)((loader >> 8) & 0xff), outf) == EOF ||
+            fwrite(image, 1, (size_t)total_len, outf) !=
+                (size_t)total_len ||
+            fwrite(bootstrap, 1, BOOTSTRAP_SIZE, outf) != BOOTSTRAP_SIZE)
+            die("short write to %s", outpath);
+    }
     {
         /* CP/M files are made of 128-byte records; pad with zeros to the
            next boundary (ntvcm and real CP/M both load a non-padded image
            fine, but a zero-padded tail is the conventional, disk-friendly
            shape and avoids surprises in tools that assume it). */
-        long pad = (128 - (total_len % 128)) % 128;
+        long pad = (128 - (output_len % 128)) % 128;
         while (pad-- > 0)
             if (fputc(0, outf) == EOF)
                 die("short write to %s", outpath);
