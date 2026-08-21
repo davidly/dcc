@@ -9287,8 +9287,8 @@ static int pass_cache_mutable_ix_pointer_in_iy(void)
                     k += replacement_count;
                 } else {
                     delete_n(k + replacement_count,
-                             6 - replacement_count);
-                    func_end -= 6 - replacement_count;
+                             5 - replacement_count);
+                    func_end -= 5 - replacement_count;
                     k += replacement_count - 1;
                 }
             }

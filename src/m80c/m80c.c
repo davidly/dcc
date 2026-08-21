@@ -55,6 +55,7 @@ struct Sym {
     int is_public;
     int is_extern;
     int is_set;
+    int label_defs;
     int refs;
     int chain_valid;
     int chain_type;
@@ -386,7 +387,10 @@ static int parse_primary(Asm *a, Expr *e) {
         } else {
             e->v=0;
             e->type=T_ABS;
-            if(a->pass==2) e->undef=1;
+            if(a->pass==2) {
+                e->undef=1;
+                seterr(a,"undefined symbol");
+            }
         }
         return 1;
     }
@@ -552,6 +556,19 @@ static void emitw(Asm *a,Expr e) {
     emitb(a,(int)(e.v&255));
     emitb(a,(int)((e.v>>8)&255));
     if(a->pass==2 && (type==T_CODE || type==T_DATA || type==T_COMM)) add_fixup(a,seg,off,type,e.v);
+}
+static int relative_disp(Asm *a,Expr e,long here) {
+    long disp=e.v-(here+2);
+    if(a->pass==2) {
+        if(e.undef) {
+            if(e.ext[0]) seterr(a,"external relative target");
+        } else if(e.type!=T_ABS && e.type!=cur_type(a)) {
+            seterr(a,"relative target in different segment");
+        } else if(disp < -128 || disp > 127) {
+            seterr(a,"relative branch out of range");
+        }
+    }
+    return (int)disp;
 }
 static int reg8(const char *s) {
     static const char *r[] = {
@@ -846,8 +863,8 @@ static int assemble_op(Asm *a,char *op,char *args) {
     if(streqi(op,"STC")||streqi(op,"SCF")) O1(0x37);
     if(streqi(op,"CMC")||streqi(op,"CCF")) O1(0x3f);
     if(streqi(op,"DAA")) O1(0x27);
-    if(streqi(op,"RLC")||streqi(op,"RLCA")) O1(0x07);
-    if(streqi(op,"RRC")||streqi(op,"RRCA")) O1(0x0f);
+    if(streqi(op,"RLCA")||(streqi(op,"RLC")&&n==0)) O1(0x07);
+    if(streqi(op,"RRCA")||(streqi(op,"RRC")&&n==0)) O1(0x0f);
     if(streqi(op,"RAL")||streqi(op,"RLA")) O1(0x17);
     if(streqi(op,"RAR")||streqi(op,"RRA")) O1(0x1f);
     if(streqi(op,"XCHG")||streqi(op,"EXDEHL")) O1(0xeb);
@@ -875,7 +892,7 @@ static int assemble_op(Asm *a,char *op,char *args) {
     if(streqi(op,"LDIR")) O2(0xed,0xb0);
     if(streqi(op,"LDD")) O2(0xed,0xa8);
     if(streqi(op,"LDDR")) O2(0xed,0xb8);
-    if(streqi(op,"CPI")) O2(0xed,0xa1);
+    if(a->z80 && streqi(op,"CPI") && n==0) O2(0xed,0xa1);
     if(streqi(op,"CPIR")) O2(0xed,0xb1);
     if(streqi(op,"CPD")) O2(0xed,0xa9);
     if(streqi(op,"CPDR")) O2(0xed,0xb9);
@@ -1052,7 +1069,7 @@ static int assemble_op(Asm *a,char *op,char *args) {
         e=eval(a,s);
         O2(0xf6,(int)e.v);
     }
-    if(streqi(op,"CMP")||streqi(op,"CP")||streqi(op,"CPI")) {
+    if(streqi(op,"CMP")||streqi(op,"CP")||(!a->z80&&streqi(op,"CPI"))) {
         const char *s=(n==2&&streqi(av[0],"A"))?av[1]:(n?av[0]:args);
         if(emit_indexed_alu(a,"CP",s)) return 1;
         r=reg8(s);
@@ -1126,16 +1143,16 @@ static int assemble_op(Asm *a,char *op,char *args) {
     }
     if(streqi(op,"JR")||streqi(op,"DJNZ")) {
         long here=*cur_lc_ptr(a);
-        if(streqi(op,"DJNZ")) {
+        if(streqi(op,"DJNZ") && n==1) {
             e=eval(a,av[0]);
             emitb(a,0x10);
-            emitb(a,(int)(e.v-(here+2)));
+            emitb(a,relative_disp(a,e,here));
             return 1;
         }
         if(n==1) {
             e=eval(a,av[0]);
             emitb(a,0x18);
-            emitb(a,(int)(e.v-(here+2)));
+            emitb(a,relative_disp(a,e,here));
             return 1;
         }
         if(n==2) {
@@ -1147,7 +1164,7 @@ static int assemble_op(Asm *a,char *op,char *args) {
             if(opc>=0) {
                 e=eval(a,av[1]);
                 emitb(a,opc);
-                emitb(a,(int)(e.v-(here+2)));
+                emitb(a,relative_disp(a,e,here));
                 return 1;
             }
         }
@@ -1290,11 +1307,19 @@ static void record_static_name(Asm *a,const char *orig) {
 }
 static void define_label(Asm *a,const char *name,int pub) {
     Sym *s=sym_find(a,name,1);
-    if(a->pass==1 || s->is_set) {
+    if(a->pass==1) {
+        if(s->label_defs==0) {
+            s->value=*cur_lc_ptr(a);
+            s->type=cur_type(a);
+            s->defined=1;
+        }
+        s->label_defs++;
+    } else if(s->is_set) {
         s->value=*cur_lc_ptr(a);
         s->type=cur_type(a);
         s->defined=1;
     }
+    if(a->pass==2 && s->label_defs>1) seterr(a,"multiply defined symbol");
     if(pub) s->is_public=1;
     if(a->pending_static_name[0]) {
         free(s->orig_name);
@@ -1417,6 +1442,10 @@ static void do_ds(Asm *a,char *args) {
     Expr e=eval(a,args);
     long i,oldlc;
     oldlc=*cur_lc_ptr(a);
+    if(e.v<0) {
+        seterr(a,"negative storage size");
+        return;
+    }
     if(a->init_ds) for(i=0;i<e.v;i++) emitb(a,0);
     else {
         reserve_gap(a,oldlc,e.v);
@@ -1443,6 +1472,10 @@ static void pseudo(Asm *a,char *label,char *op,char *args) {
     if(streqi(op,"ORG")) {
         long oldlc=*cur_lc_ptr(a);
         e=eval(a,args);
+        if(e.v<0) {
+            seterr(a,"negative origin");
+            return;
+        }
         if(e.v>oldlc) reserve_gap(a,oldlc,e.v-oldlc);
         *cur_lc_ptr(a)=e.v;
         return;

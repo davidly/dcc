@@ -7050,6 +7050,7 @@ static void mir_emit_interpreter_file_schedule(
     int opened = new_label();
     int first_seek_ok = new_label();
     int bounds_ok = new_label();
+    int bounds_error = new_label();
     int second_seek_ok = new_label();
     int allocated = new_label();
     int read_ok = new_label();
@@ -7123,14 +7124,14 @@ static void mir_emit_interpreter_file_schedule(
     mir_interpreter_file_load_ix_word(out, -10);
     mir_stream_puts("\tbit 7,h\n", out);
     mir_stream_printf(out, "\tjp nz,L%d\n\tld a,h\n\tor l\n",
-            trim_done);
-    mir_stream_printf(out, "\tjp nz,L%d\n", trim_done);
+            bounds_error);
+    mir_stream_printf(out, "\tjp nz,L%d\n", bounds_error);
     mir_interpreter_file_load_ix_word(out, -4);
     mir_stream_printf(out,
             "\tld de,%d\n\tor a\n\tsbc hl,de\n"
             "\tjp c,L%d\n",
             plan->maximum_source + 1, bounds_ok);
-    mir_stream_printf(out, "L%d:\n", trim_done);
+    mir_stream_printf(out, "L%d:\n", bounds_error);
     mir_interpreter_file_load_ix_word(out, -2);
     mir_stream_puts("\tpush hl\n", out);
     mir_machine_emit_symbol_call(out, plan->close_function);
