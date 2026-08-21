@@ -1,3 +1,19 @@
+/**
+ * @file calc1024.c
+ * @brief Signed 1024-bit integer implementation for the CALC regression.
+ *
+ * @par Role
+ * This module implements parsing, formatting, comparison, arithmetic, and
+ * bitwise operations over fixed little-endian arrays of 32-bit limbs. The
+ * portable C path deliberately exercises reusable wide-integer compiler
+ * patterns; Z80_ASM_OPTS selects equivalent hand-written kernels for the
+ * comparison build.
+ *
+ * @par Boundary
+ * The public integer contract is declared in calc1024.h. This layer has no
+ * parser or console responsibilities, and calcdoub builds decimal arithmetic
+ * on top of it.
+ */
 #include "calc1024.h"
 
 #define SIGN_BIT 0x80000000UL

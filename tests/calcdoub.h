@@ -1,3 +1,15 @@
+/**
+ * @file calcdoub.h
+ * @brief Public decimal-arithmetic contract for the CALC front end.
+ *
+ * @par Role
+ * Defines the coefficient/exponent representation and decimal operations used
+ * for mixed numeric expressions.
+ *
+ * @par Boundary
+ * CalcDouble is implemented by calcdoub.c on top of CalcInt1024; expression
+ * syntax, promotion policy, and user interaction remain in calc.c.
+ */
 #pragma once
 
 #include "calc1024.h"

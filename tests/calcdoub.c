@@ -1,3 +1,16 @@
+/**
+ * @file calcdoub.c
+ * @brief Decimal coefficient/exponent arithmetic for the CALC regression.
+ *
+ * @par Role
+ * Implements normalized decimal parsing, formatting, comparison, arithmetic,
+ * rounding, and integer powers using a signed CalcInt1024 coefficient and a
+ * decimal exponent. CalcDouble is not the target's native floating type.
+ *
+ * @par Boundary
+ * calc1024 supplies all coefficient arithmetic. This module does not parse
+ * expressions or perform console I/O; calc.c owns those responsibilities.
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
