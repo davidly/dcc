@@ -24361,6 +24361,21 @@ void mir_emit_wide_shift_by_constant(MirStream *out, int is_left,
 
     if (count <= 0)
         return;
+    if (count == 31) {
+        if (is_left)
+            mir_stream_puts(
+                "\tld a,l\n\trrca\n\tand 128\n\tld d,a\n"
+                "\tld e,0\n\tld hl,0\n", out);
+        else if (is_unsigned)
+            mir_stream_puts(
+                "\tld a,d\n\trlca\n\tand 1\n\tld l,a\n"
+                "\tld h,0\n\tld de,0\n", out);
+        else
+            mir_stream_puts(
+                "\tld a,d\n\trlca\n\tsbc a,a\n\tld l,a\n"
+                "\tld h,a\n\tld e,a\n\tld d,a\n", out);
+        return;
+    }
     bytes = (int)(count / 8);
     bits = (int)(count % 8);
 

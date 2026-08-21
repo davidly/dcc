@@ -450,6 +450,20 @@ struct MirWordConstantShiftSchedule {
     int is_unsigned;
 };
 
+struct MirLongLimbShiftSchedule {
+    int parameter_stack_offset;
+    int member_offset;
+    int byte_count;
+    int is_left;
+};
+
+struct MirLongLimbArithmeticSchedule {
+    int parameter_stack_offsets[3];
+    int member_offset;
+    int byte_count;
+    int is_add;
+};
+
 struct MirRepeatedInvariantAddSchedule {
     int factor_stack_offset;
     int limit;
@@ -12642,6 +12656,622 @@ static void mir_emit_word_constant_shift_schedule(
     mir_stream_puts("\tret\n", out);
 }
 
+static int mir_numeric_unsigned_long_pointer_type(int type)
+{
+    return type_ptr_depth(type) == 1 &&
+           !type_is_float(type) &&
+           (type & 15) == TYPE_LONG &&
+           (type & TYPE_UNSIGNED) != 0 &&
+           type_size(type) == 2;
+}
+
+static int mir_match_long_limb_shift_schedule(
+    struct MirLongLimbShiftSchedule *plan)
+{
+    static const int left_opcodes[51] = {
+        MIR_LABEL, MIR_PARAM, MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_CONST, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_PHI, MIR_PHI,
+        MIR_NOP, MIR_CONST, MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE,
+        MIR_NOP, MIR_MEMBER_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_NOP, MIR_STORE,
+        MIR_NOP, MIR_MEMBER_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_NOP, MIR_MEMBER_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY, MIR_NOP, MIR_BINARY,
+        MIR_STORE_INDIRECT, MIR_NOP, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_LABEL, MIR_NOP, MIR_CONST, MIR_BINARY, MIR_STORE,
+        MIR_JUMP, MIR_LABEL
+    };
+    static const int right_opcodes[54] = {
+        MIR_LABEL, MIR_PARAM, MIR_CONST, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_NOP, MIR_CONST, MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP,
+        MIR_PHI, MIR_PHI, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_MEMBER_ADDRESS, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY,
+        MIR_NOP, MIR_STORE, MIR_NOP, MIR_MEMBER_ADDRESS, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_NOP, MIR_MEMBER_ADDRESS, MIR_NOP,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_CONST, MIR_BINARY,
+        MIR_NOP, MIR_CONST, MIR_BINARY, MIR_BINARY, MIR_STORE_INDIRECT,
+        MIR_NOP, MIR_NOP, MIR_STORE, MIR_NOP, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL
+    };
+    const int *expected_opcodes;
+    const struct MirInsn *parameter;
+    const struct MirInsn *member;
+    int member_indices[3];
+    int index_indices[3];
+    int load_indices[2];
+    int store_indices[5];
+    int member_count;
+    int instruction;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if ((mir.count != 51 && mir.count != 54) ||
+        mir_cfg_block_count() != 4 || !mir_has_cfg_backedge() ||
+        mir.has_vla || mir.aggregate_temp_bytes != 0 ||
+        type_size(mir.return_type) != 0)
+        return 0;
+    plan->is_left = mir.count == 51;
+    expected_opcodes = plan->is_left ? left_opcodes : right_opcodes;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+                expected_opcodes[instruction])
+            return mir_machine_reject(
+                "long-limb-shift-schedule", "opcodes");
+
+    parameter = &mir.insns[1];
+    if (type_ptr_depth(parameter->type) != 1 ||
+        type_size(parameter->type) != 2 ||
+        !mir_machine_named_nonvolatile(parameter) ||
+        mir_machine_pointee_is_volatile(parameter) ||
+        !mir_machine_parameter_value_offset(
+            parameter->dst, &plan->parameter_stack_offset))
+        return mir_machine_reject(
+            "long-limb-shift-schedule", "parameter");
+
+    if (plan->is_left) {
+        member_indices[0] = 18;
+        member_indices[1] = 27;
+        member_indices[2] = 31;
+        index_indices[0] = 20;
+        index_indices[1] = 29;
+        index_indices[2] = 33;
+        load_indices[0] = 21;
+        load_indices[1] = 34;
+        store_indices[0] = 4;
+        store_indices[1] = 7;
+        store_indices[2] = 25;
+        store_indices[3] = 42;
+        store_indices[4] = 48;
+    } else {
+        member_indices[0] = 19;
+        member_indices[1] = 28;
+        member_indices[2] = 32;
+        index_indices[0] = 21;
+        index_indices[1] = 30;
+        index_indices[2] = 34;
+        load_indices[0] = 22;
+        load_indices[1] = 35;
+        store_indices[0] = 4;
+        store_indices[1] = 9;
+        store_indices[2] = 26;
+        store_indices[3] = 45;
+        store_indices[4] = 51;
+    }
+    member = &mir.insns[member_indices[0]];
+    plan->member_offset = (int)member->immediate;
+    plan->byte_count = member->memory_size;
+    if (plan->member_offset < 0 || plan->byte_count < 4 ||
+        plan->byte_count > 256 || (plan->byte_count & 3) != 0 ||
+        plan->member_offset + plan->byte_count - 1 > 32767 ||
+        !mir_numeric_unsigned_long_pointer_type(member->type) ||
+        (member->memory_flags & (1 | 8)) != 0 ||
+        member->bit_width != 0)
+        return mir_machine_reject(
+            "long-limb-shift-schedule", "member");
+    member_count = plan->byte_count / 4;
+    for (item = 0; item < 3; ++item) {
+        const struct MirInsn *current_member =
+            &mir.insns[member_indices[item]];
+        const struct MirInsn *index =
+            &mir.insns[index_indices[item]];
+
+        if (current_member->src1 != parameter->dst ||
+            current_member->immediate != plan->member_offset ||
+            current_member->memory_size != plan->byte_count ||
+            current_member->memory_flags != member->memory_flags ||
+            current_member->type != member->type ||
+            current_member->bit_width != 0 ||
+            index->src1 != current_member->dst ||
+            index->src2 != mir.insns[plan->is_left ? 11 : 13].dst ||
+            index->immediate != 4 || index->memory_size != 4 ||
+            index->memory_flags != 0 || index->bit_width != 0 ||
+            !mir_numeric_unsigned_long_pointer_type(index->type))
+            return mir_machine_reject(
+                "long-limb-shift-schedule", "addresses");
+    }
+    for (item = 0; item < 2; ++item) {
+        const struct MirInsn *load = &mir.insns[load_indices[item]];
+
+        if (load->src1 !=
+                mir.insns[index_indices[item == 0 ? 0 : 2]].dst ||
+            !mir_numeric_unsigned_long_type(load->type) ||
+            load->memory_size != 4 || load->memory_flags != 0 ||
+            load->bit_width != 0)
+            return mir_machine_reject(
+                "long-limb-shift-schedule", "loads");
+    }
+    for (item = 0; item < 5; ++item)
+        if (!mir_machine_unobservable_local_store(
+                &mir.insns[store_indices[item]]))
+            return mir_machine_reject(
+                "long-limb-shift-schedule", "local-stores");
+
+    if (plan->is_left) {
+        if (!mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+            !mir_machine_constant_equals(mir.insns[6].dst, 0) ||
+            !mir_machine_constant_equals(
+                mir.insns[13].dst, member_count) ||
+            mir.insns[10].src1 != mir.insns[2].dst ||
+            mir.insns[10].src2 != mir.insns[23].dst ||
+            mir.insns[10].phi_pred1 != mir.insns[0].label ||
+            mir.insns[10].phi_pred2 != mir.insns[44].label ||
+            mir.insns[11].src1 != mir.insns[6].dst ||
+            mir.insns[11].src2 != mir.insns[47].dst ||
+            mir.insns[11].phi_pred1 != mir.insns[0].label ||
+            mir.insns[11].phi_pred2 != mir.insns[44].label ||
+            mir.insns[14].src1 != mir.insns[11].dst ||
+            mir.insns[15].src1 != mir.insns[14].dst ||
+            mir.insns[15].src2 != mir.insns[13].dst ||
+            mir.insns[15].immediate != '<' ||
+            mir.insns[16].src1 != mir.insns[15].dst ||
+            mir.insns[16].label != mir.insns[50].label ||
+            !mir_machine_constant_equals(mir.insns[22].dst, 31) ||
+            mir.insns[23].src1 != mir.insns[21].dst ||
+            mir.insns[23].src2 != mir.insns[22].dst ||
+            mir.insns[23].immediate != TOK_SHR ||
+            !mir_numeric_unsigned_long_type(mir.insns[23].type) ||
+            !mir_machine_constant_equals(mir.insns[35].dst, 1) ||
+            mir.insns[36].src1 != mir.insns[34].dst ||
+            mir.insns[36].src2 != mir.insns[35].dst ||
+            mir.insns[36].immediate != TOK_SHL ||
+            mir.insns[38].src1 != mir.insns[36].dst ||
+            mir.insns[38].src2 != mir.insns[10].dst ||
+            mir.insns[38].immediate != '|' ||
+            mir.insns[39].src1 != mir.insns[29].dst ||
+            mir.insns[39].src2 != mir.insns[38].dst ||
+            mir.insns[39].memory_size != 4 ||
+            mir.insns[39].memory_flags != 0 ||
+            mir.insns[42].src1 != mir.insns[23].dst ||
+            !mir_machine_constant_equals(mir.insns[46].dst, 1) ||
+            mir.insns[47].src1 != mir.insns[11].dst ||
+            mir.insns[47].src2 != mir.insns[46].dst ||
+            mir.insns[47].immediate != '+' ||
+            mir.insns[48].src1 != mir.insns[47].dst ||
+            mir.insns[49].label != mir.insns[8].label)
+            return mir_machine_reject(
+                "long-limb-shift-schedule", "left-flow");
+    } else {
+        if (!mir_machine_constant_equals(mir.insns[2].dst, 0) ||
+            !mir_machine_constant_equals(
+                mir.insns[7].dst, member_count - 1) ||
+            mir.insns[12].src1 != mir.insns[2].dst ||
+            mir.insns[12].src2 != mir.insns[24].dst ||
+            mir.insns[12].phi_pred1 != mir.insns[0].label ||
+            mir.insns[12].phi_pred2 != mir.insns[47].label ||
+            mir.insns[13].src1 != mir.insns[7].dst ||
+            mir.insns[13].src2 != mir.insns[50].dst ||
+            mir.insns[13].phi_pred1 != mir.insns[0].label ||
+            mir.insns[13].phi_pred2 != mir.insns[47].label ||
+            !mir_machine_constant_equals(mir.insns[15].dst, 0) ||
+            mir.insns[16].src1 != mir.insns[13].dst ||
+            mir.insns[16].src2 != mir.insns[15].dst ||
+            mir.insns[16].immediate != TOK_GE ||
+            mir.insns[17].src1 != mir.insns[16].dst ||
+            mir.insns[17].label != mir.insns[53].label ||
+            !mir_machine_constant_equals(mir.insns[23].dst, 1) ||
+            mir.insns[24].src1 != mir.insns[22].dst ||
+            mir.insns[24].src2 != mir.insns[23].dst ||
+            mir.insns[24].immediate != '&' ||
+            !mir_machine_constant_equals(mir.insns[36].dst, 1) ||
+            mir.insns[37].src1 != mir.insns[35].dst ||
+            mir.insns[37].src2 != mir.insns[36].dst ||
+            mir.insns[37].immediate != TOK_SHR ||
+            !mir_machine_constant_equals(mir.insns[39].dst, 31) ||
+            mir.insns[40].src1 != mir.insns[12].dst ||
+            mir.insns[40].src2 != mir.insns[39].dst ||
+            mir.insns[40].immediate != TOK_SHL ||
+            mir.insns[41].src1 != mir.insns[37].dst ||
+            mir.insns[41].src2 != mir.insns[40].dst ||
+            mir.insns[41].immediate != '|' ||
+            mir.insns[42].src1 != mir.insns[30].dst ||
+            mir.insns[42].src2 != mir.insns[41].dst ||
+            mir.insns[42].memory_size != 4 ||
+            mir.insns[42].memory_flags != 0 ||
+            mir.insns[45].src1 != mir.insns[24].dst ||
+            !mir_machine_constant_equals(mir.insns[49].dst, 1) ||
+            mir.insns[50].src1 != mir.insns[13].dst ||
+            mir.insns[50].src2 != mir.insns[49].dst ||
+            mir.insns[50].immediate != '-' ||
+            mir.insns[51].src1 != mir.insns[50].dst ||
+            mir.insns[52].label != mir.insns[10].label)
+            return mir_machine_reject(
+                "long-limb-shift-schedule", "right-flow");
+    }
+    return 1;
+}
+
+static void mir_emit_long_limb_shift_schedule(
+    MirStream *out, const struct MirLongLimbShiftSchedule *plan)
+{
+    int loop = new_label();
+    int address_offset = plan->member_offset;
+
+    if (!plan->is_left)
+        address_offset += plan->byte_count - 1;
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
+          "\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_stream_printf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n",
+            plan->parameter_stack_offset + 2,
+            plan->parameter_stack_offset + 3);
+    if (address_offset != 0)
+        mir_stream_printf(out,
+            "\tld de,%d\n\tadd hl,de\n", address_offset);
+    mir_stream_printf(out,
+            "\tld b,%d\n\tor a\nL%d:\n\t%s (hl)\n\t%s hl\n"
+            "\tdjnz L%d\n\tpop ix\n\tret\n",
+            plan->byte_count & 255, loop,
+            plan->is_left ? "rl" : "rr",
+            plan->is_left ? "inc" : "dec", loop);
+}
+
+static int mir_match_long_limb_arithmetic_schedule(
+    struct MirLongLimbArithmeticSchedule *plan)
+{
+    static const int add_opcodes[83] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_CONST, MIR_NOP,
+        MIR_STORE, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_PHI, MIR_PHI, MIR_NOP, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP,
+        MIR_MEMBER_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP,
+        MIR_MEMBER_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_NOP, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP,
+        MIR_UNARY, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_CONST, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE, MIR_CONST,
+        MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_MEMBER_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP, MIR_STORE_INDIRECT,
+        MIR_LOAD, MIR_NOP, MIR_STORE, MIR_NOP, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL
+    };
+    static const int subtract_opcodes[87] = {
+        MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_CONST, MIR_NOP,
+        MIR_STORE, MIR_NOP, MIR_CONST, MIR_STORE, MIR_LABEL, MIR_NOP,
+        MIR_NOP, MIR_NOP, MIR_PHI, MIR_PHI, MIR_NOP, MIR_CONST,
+        MIR_UNARY, MIR_BINARY, MIR_BRANCH_FALSE, MIR_NOP,
+        MIR_MEMBER_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_NOP, MIR_STORE, MIR_NOP, MIR_NOP,
+        MIR_MEMBER_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_NOP, MIR_MEMBER_ADDRESS, MIR_NOP, MIR_INDEX_ADDRESS,
+        MIR_LOAD_INDIRECT, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_NOP, MIR_UNARY, MIR_BINARY, MIR_NOP, MIR_STORE, MIR_NOP,
+        MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST, MIR_BINARY,
+        MIR_BRANCH_FALSE, MIR_LABEL, MIR_CONST, MIR_JUMP, MIR_LABEL,
+        MIR_CONST, MIR_LABEL, MIR_PHI, MIR_BRANCH_FALSE, MIR_CONST,
+        MIR_NOP, MIR_STORE, MIR_LABEL, MIR_NOP, MIR_MEMBER_ADDRESS,
+        MIR_NOP, MIR_INDEX_ADDRESS, MIR_NOP, MIR_STORE_INDIRECT,
+        MIR_LOAD, MIR_NOP, MIR_STORE, MIR_NOP, MIR_LABEL, MIR_NOP,
+        MIR_CONST, MIR_BINARY, MIR_STORE, MIR_JUMP, MIR_LABEL
+    };
+    const int *expected_opcodes;
+    const struct MirInsn *first_member;
+    int member_indices[4];
+    int member_parameters[4];
+    int index_indices[4];
+    int load_indices[3];
+    int local_store_indices[9];
+    int member_count;
+    int member_total;
+    int load_total;
+    int instruction;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if ((mir.count != 83 && mir.count != 87) ||
+        mir_cfg_block_count() != 8 || !mir_has_cfg_backedge() ||
+        mir.has_vla || mir.aggregate_temp_bytes != 0 ||
+        type_size(mir.return_type) != 0)
+        return 0;
+    plan->is_add = mir.count == 83;
+    expected_opcodes = plan->is_add ? add_opcodes : subtract_opcodes;
+    for (instruction = 0; instruction < mir.count; ++instruction)
+        if (mir.insns[instruction].opcode !=
+                expected_opcodes[instruction])
+            return mir_machine_reject(
+                "long-limb-arithmetic-schedule", "opcodes");
+    for (item = 0; item < 3; ++item)
+        if (mir.insns[item + 1].type != mir.insns[1].type ||
+            type_ptr_depth(mir.insns[item + 1].type) != 1 ||
+            type_size(mir.insns[item + 1].type) != 2 ||
+            !mir_machine_named_nonvolatile(&mir.insns[item + 1]) ||
+            mir_machine_pointee_is_volatile(&mir.insns[item + 1]) ||
+            !mir_machine_parameter_value_offset(
+                mir.insns[item + 1].dst,
+                &plan->parameter_stack_offsets[item]))
+            return mir_machine_reject(
+                "long-limb-arithmetic-schedule", "parameters");
+    if (plan->parameter_stack_offsets[1] !=
+            plan->parameter_stack_offsets[0] + 2 ||
+        plan->parameter_stack_offsets[2] !=
+            plan->parameter_stack_offsets[1] + 2)
+        return mir_machine_reject(
+            "long-limb-arithmetic-schedule", "parameter-layout");
+
+    if (plan->is_add) {
+        member_indices[0] = 22;
+        member_indices[1] = 30;
+        member_indices[2] = 67;
+        member_parameters[0] = 1;
+        member_parameters[1] = 2;
+        member_parameters[2] = 3;
+        index_indices[0] = 24;
+        index_indices[1] = 32;
+        index_indices[2] = 69;
+        load_indices[0] = 25;
+        load_indices[1] = 33;
+        local_store_indices[0] = 6;
+        local_store_indices[1] = 9;
+        local_store_indices[2] = 27;
+        local_store_indices[3] = 36;
+        local_store_indices[4] = 41;
+        local_store_indices[5] = 47;
+        local_store_indices[6] = 64;
+        local_store_indices[7] = 74;
+        local_store_indices[8] = 80;
+        member_total = 3;
+        load_total = 2;
+    } else {
+        member_indices[0] = 22;
+        member_indices[1] = 30;
+        member_indices[2] = 39;
+        member_indices[3] = 71;
+        member_parameters[0] = 1;
+        member_parameters[1] = 2;
+        member_parameters[2] = 2;
+        member_parameters[3] = 3;
+        index_indices[0] = 24;
+        index_indices[1] = 32;
+        index_indices[2] = 41;
+        index_indices[3] = 73;
+        load_indices[0] = 25;
+        load_indices[1] = 33;
+        load_indices[2] = 42;
+        local_store_indices[0] = 6;
+        local_store_indices[1] = 9;
+        local_store_indices[2] = 27;
+        local_store_indices[3] = 36;
+        local_store_indices[4] = 45;
+        local_store_indices[5] = 51;
+        local_store_indices[6] = 68;
+        local_store_indices[7] = 78;
+        local_store_indices[8] = 84;
+        member_total = 4;
+        load_total = 3;
+    }
+    first_member = &mir.insns[member_indices[0]];
+    plan->member_offset = (int)first_member->immediate;
+    plan->byte_count = first_member->memory_size;
+    if (plan->member_offset < 0 || plan->byte_count < 4 ||
+        plan->byte_count > 256 || (plan->byte_count & 3) != 0 ||
+        plan->member_offset + plan->byte_count - 1 > 32767 ||
+        !mir_numeric_unsigned_long_pointer_type(first_member->type) ||
+        (first_member->memory_flags & (1 | 4 | 8)) != 0 ||
+        first_member->bit_width != 0)
+        return mir_machine_reject(
+            "long-limb-arithmetic-schedule", "member");
+    member_count = plan->byte_count / 4;
+    for (item = 0; item < member_total; ++item) {
+        const struct MirInsn *member =
+            &mir.insns[member_indices[item]];
+        const struct MirInsn *index =
+            &mir.insns[index_indices[item]];
+
+        if (member->src1 != mir.insns[member_parameters[item]].dst ||
+            member->type != first_member->type ||
+            member->immediate != plan->member_offset ||
+            member->memory_size != plan->byte_count ||
+            member->memory_flags != first_member->memory_flags ||
+            member->bit_width != 0 ||
+            index->src1 != member->dst ||
+            index->src2 != mir.insns[15].dst ||
+            index->immediate != 4 || index->memory_size != 4 ||
+            index->memory_flags != 0 || index->bit_width != 0 ||
+            !mir_numeric_unsigned_long_pointer_type(index->type))
+            return mir_machine_reject(
+                "long-limb-arithmetic-schedule", "addresses");
+    }
+    for (item = 0; item < load_total; ++item) {
+        const struct MirInsn *load = &mir.insns[load_indices[item]];
+
+        if (load->src1 != mir.insns[index_indices[item]].dst ||
+            !mir_numeric_unsigned_long_type(load->type) ||
+            load->memory_size != 4 || load->memory_flags != 0 ||
+            load->bit_width != 0)
+            return mir_machine_reject(
+                "long-limb-arithmetic-schedule", "loads");
+    }
+    for (item = 0; item < 9; ++item)
+        if (!mir_machine_unobservable_local_store(
+                &mir.insns[local_store_indices[item]]))
+            return mir_machine_reject(
+                "long-limb-arithmetic-schedule", "local-stores");
+
+    if (!mir_machine_constant_equals(mir.insns[4].dst, 0) ||
+        mir.insns[6].src1 != mir.insns[4].dst ||
+        !mir_machine_constant_equals(mir.insns[8].dst, 0) ||
+        mir.insns[9].src1 != mir.insns[8].dst ||
+        mir.insns[14].src1 != mir.insns[4].dst ||
+        mir.insns[14].src2 !=
+            mir.insns[plan->is_add ? 72 : 76].dst ||
+        mir.insns[14].phi_pred1 != mir.insns[0].label ||
+        mir.insns[14].phi_pred2 !=
+            mir.insns[plan->is_add ? 76 : 80].label ||
+        mir.insns[15].src1 != mir.insns[8].dst ||
+        mir.insns[15].src2 !=
+            mir.insns[plan->is_add ? 79 : 83].dst ||
+        mir.insns[15].phi_pred1 != mir.insns[0].label ||
+        mir.insns[15].phi_pred2 !=
+            mir.insns[plan->is_add ? 76 : 80].label ||
+        !mir_machine_constant_equals(mir.insns[17].dst, member_count) ||
+        mir.insns[18].src1 != mir.insns[15].dst ||
+        mir.insns[19].src1 != mir.insns[18].dst ||
+        mir.insns[19].src2 != mir.insns[17].dst ||
+        mir.insns[19].immediate != '<' ||
+        mir.insns[20].src1 != mir.insns[19].dst ||
+        mir.insns[20].label != mir.insns[plan->is_add ? 82 : 86].label)
+        return mir_machine_reject(
+            "long-limb-arithmetic-schedule", "loop");
+
+    if (plan->is_add) {
+        if (mir.insns[27].src1 != mir.insns[25].dst ||
+            mir.insns[34].src1 != mir.insns[25].dst ||
+            mir.insns[34].src2 != mir.insns[33].dst ||
+            mir.insns[34].immediate != '+' ||
+            mir.insns[36].src1 != mir.insns[34].dst ||
+            mir.insns[39].src1 != mir.insns[34].dst ||
+            mir.insns[39].src2 != mir.insns[25].dst ||
+            mir.insns[39].immediate != '<' ||
+            mir.insns[41].src1 != mir.insns[39].dst ||
+            mir.insns[44].src1 != mir.insns[14].dst ||
+            mir.insns[45].src1 != mir.insns[34].dst ||
+            mir.insns[45].src2 != mir.insns[44].dst ||
+            mir.insns[45].immediate != '+' ||
+            mir.insns[47].src1 != mir.insns[45].dst ||
+            mir.insns[49].src1 != mir.insns[14].dst ||
+            !mir_machine_constant_equals(mir.insns[51].dst, 0) ||
+            mir.insns[52].src1 != mir.insns[45].dst ||
+            mir.insns[52].src2 != mir.insns[51].dst ||
+            mir.insns[52].immediate != TOK_EQ ||
+            mir.insns[53].src1 != mir.insns[52].dst ||
+            mir.insns[60].src1 != mir.insns[55].dst ||
+            mir.insns[60].src2 != mir.insns[58].dst ||
+            mir.insns[60].phi_pred1 != mir.insns[54].label ||
+            mir.insns[60].phi_pred2 != mir.insns[57].label ||
+            mir.insns[61].src1 != mir.insns[60].dst ||
+            !mir_machine_constant_equals(mir.insns[62].dst, 1) ||
+            mir.insns[64].src1 != mir.insns[62].dst ||
+            mir.insns[71].src1 != mir.insns[69].dst ||
+            mir.insns[71].src2 != mir.insns[45].dst ||
+            mir.insns[71].memory_size != 4 ||
+            mir.insns[71].memory_flags != 0 ||
+            !mir_machine_same_location(
+                &mir.insns[41], &mir.insns[72]) ||
+            !mir_machine_same_location(
+                &mir.insns[64], &mir.insns[72]) ||
+            mir.insns[74].src1 != mir.insns[72].dst ||
+            !mir_machine_constant_equals(mir.insns[78].dst, 1) ||
+            mir.insns[79].src1 != mir.insns[15].dst ||
+            mir.insns[79].src2 != mir.insns[78].dst ||
+            mir.insns[79].immediate != '+' ||
+            mir.insns[80].src1 != mir.insns[79].dst ||
+            mir.insns[81].label != mir.insns[10].label)
+            return mir_machine_reject(
+                "long-limb-arithmetic-schedule", "add-flow");
+    } else {
+        if (mir.insns[27].src1 != mir.insns[25].dst ||
+            mir.insns[34].src1 != mir.insns[25].dst ||
+            mir.insns[34].src2 != mir.insns[33].dst ||
+            mir.insns[34].immediate != '-' ||
+            mir.insns[36].src1 != mir.insns[34].dst ||
+            mir.insns[42].src1 != mir.insns[41].dst ||
+            mir.insns[43].src1 != mir.insns[25].dst ||
+            mir.insns[43].src2 != mir.insns[42].dst ||
+            mir.insns[43].immediate != '<' ||
+            mir.insns[45].src1 != mir.insns[43].dst ||
+            mir.insns[48].src1 != mir.insns[14].dst ||
+            mir.insns[49].src1 != mir.insns[34].dst ||
+            mir.insns[49].src2 != mir.insns[48].dst ||
+            mir.insns[49].immediate != '-' ||
+            mir.insns[51].src1 != mir.insns[49].dst ||
+            mir.insns[53].src1 != mir.insns[14].dst ||
+            !mir_machine_constant_equals(mir.insns[55].dst, 0) ||
+            mir.insns[56].src1 != mir.insns[34].dst ||
+            mir.insns[56].src2 != mir.insns[55].dst ||
+            mir.insns[56].immediate != TOK_EQ ||
+            mir.insns[57].src1 != mir.insns[56].dst ||
+            mir.insns[64].src1 != mir.insns[59].dst ||
+            mir.insns[64].src2 != mir.insns[62].dst ||
+            mir.insns[64].phi_pred1 != mir.insns[58].label ||
+            mir.insns[64].phi_pred2 != mir.insns[61].label ||
+            mir.insns[65].src1 != mir.insns[64].dst ||
+            !mir_machine_constant_equals(mir.insns[66].dst, 1) ||
+            mir.insns[68].src1 != mir.insns[66].dst ||
+            mir.insns[75].src1 != mir.insns[73].dst ||
+            mir.insns[75].src2 != mir.insns[49].dst ||
+            mir.insns[75].memory_size != 4 ||
+            mir.insns[75].memory_flags != 0 ||
+            !mir_machine_same_location(
+                &mir.insns[45], &mir.insns[76]) ||
+            !mir_machine_same_location(
+                &mir.insns[68], &mir.insns[76]) ||
+            mir.insns[78].src1 != mir.insns[76].dst ||
+            !mir_machine_constant_equals(mir.insns[82].dst, 1) ||
+            mir.insns[83].src1 != mir.insns[15].dst ||
+            mir.insns[83].src2 != mir.insns[82].dst ||
+            mir.insns[83].immediate != '+' ||
+            mir.insns[84].src1 != mir.insns[83].dst ||
+            mir.insns[85].label != mir.insns[10].label)
+            return mir_machine_reject(
+                "long-limb-arithmetic-schedule", "subtract-flow");
+    }
+    return 1;
+}
+
+static void mir_emit_long_limb_arithmetic_schedule(
+    MirStream *out, const struct MirLongLimbArithmeticSchedule *plan)
+{
+    int loop = new_label();
+
+    mir_stream_puts(MIR_EXACT_KERNEL_MARKER "\n"
+          "\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n", out);
+    if (opt_stack_check)
+        mir_emit_runtime_call(out, "__stchk");
+    mir_stream_printf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n",
+            plan->parameter_stack_offsets[2] + 4,
+            plan->parameter_stack_offsets[2] + 5);
+    mir_machine_emit_hl_offset(out, plan->member_offset, 0);
+    mir_stream_puts("\tpush hl\n\tpop iy\n", out);
+    mir_stream_printf(out,
+            "\tld e,(ix+%d)\n\tld d,(ix+%d)\n",
+            plan->parameter_stack_offsets[0] + 4,
+            plan->parameter_stack_offsets[0] + 5);
+    if (plan->member_offset != 0) {
+        mir_stream_puts("\tex de,hl\n", out);
+        mir_machine_emit_hl_offset(out, plan->member_offset, 0);
+        mir_stream_puts("\tex de,hl\n", out);
+    }
+    mir_stream_printf(out,
+            "\tld l,(ix+%d)\n\tld h,(ix+%d)\n",
+            plan->parameter_stack_offsets[1] + 4,
+            plan->parameter_stack_offsets[1] + 5);
+    mir_machine_emit_hl_offset(out, plan->member_offset, 0);
+    mir_stream_printf(out,
+            "\tld b,%d\n\tor a\nL%d:\n\tld a,(de)\n\t%s a,(hl)\n"
+            "\tld (iy+0),a\n\tinc de\n\tinc hl\n\tinc iy\n"
+            "\tdjnz L%d\n\tpop ix\n\tpop iy\n"
+            ";@dcc.reg free=iy\n\tret\n",
+            plan->byte_count & 255, loop,
+            plan->is_add ? "adc" : "sbc", loop);
+}
+
 static int mir_match_repeated_invariant_add_schedule(
     struct MirRepeatedInvariantAddSchedule *plan)
 {
@@ -13348,6 +13978,8 @@ int mir_try_emit_numeric_kernels(MirStream *out, int phase)
         struct MirModp2DriverSchedule modp2_plan;
         struct MirRepeatedInvariantAddSchedule repeated_add_plan;
         struct MirWordConstantShiftSchedule shift_plan;
+        struct MirLongLimbShiftSchedule limb_shift_plan;
+        struct MirLongLimbArithmeticSchedule limb_arithmetic_plan;
         struct MirIdenticalJoinAffineSchedule join_plan;
         struct MirVolatileParameterSchedule volatile_parameter;
         struct MirWideLengthSchedule wide_length;
@@ -13462,6 +14094,16 @@ int mir_try_emit_numeric_kernels(MirStream *out, int phase)
         }
         if (mir_match_word_constant_shift_schedule(&shift_plan)) {
             mir_emit_word_constant_shift_schedule(out, &shift_plan);
+            return 1;
+        }
+        if (mir_match_long_limb_shift_schedule(&limb_shift_plan)) {
+            mir_emit_long_limb_shift_schedule(out, &limb_shift_plan);
+            return 1;
+        }
+        if (mir_match_long_limb_arithmetic_schedule(
+                &limb_arithmetic_plan)) {
+            mir_emit_long_limb_arithmetic_schedule(
+                out, &limb_arithmetic_plan);
             return 1;
         }
         if (mir_match_repeated_invariant_add_schedule(

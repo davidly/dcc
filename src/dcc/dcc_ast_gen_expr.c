@@ -2814,6 +2814,33 @@ static void gen_assign_ident_ast(const struct AstNode *n)
     }
 
     if (!sym_can_ix_direct(s) && !is_global_word_sym(s) &&
+        (n->op == TOK_SHLEQ || n->op == TOK_SHREQ) &&
+        ast_is_plain_int_type(s->type) &&
+        type_size(s->type) == 2) {
+        int want_dead = expr_result_dead;
+
+        emit_load_sym_addr(s);
+        emit("\tpush hl\n");
+        emit_load_from_hl(s->type);
+        emit("\tpush hl\n");
+
+        saved_dead = expr_result_dead;
+        expr_result_dead = 0;
+        ast_gen_expr(n->b);
+        expr_result_dead = saved_dead;
+
+        emit("\tld b,l\n\tpop hl\n");
+        emit_shift_loop(n->op, s->type);
+        emit("\tex de,hl\n\tpop hl\n");
+        emit_store_de_to_addr_hl(s->type);
+        if (!want_dead)
+            emit("\tex de,hl\n");
+        g_expr.type = s->type;
+        g_expr.long_from16 = 0;
+        return;
+    }
+
+    if (!sym_can_ix_direct(s) && !is_global_word_sym(s) &&
         (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ ||
          n->op == TOK_ANDEQ || n->op == TOK_OREQ || n->op == TOK_XOREQ) &&
         ast_is_plain_int_type(s->type) &&
