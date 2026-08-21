@@ -55,7 +55,7 @@ int is_label_referenced(const char *lab)
     lablen = (int)strlen(lab);
 
     for (i = 0; i < nlines; i++) {
-        if (jump_target(lines[i], tgt) && strcmp(tgt, lab) == 0)
+        if (jump_target_any(lines[i], tgt) && strcmp(tgt, lab) == 0)
             return 1;
 
         /* Be conservative for data or non-jump references. */

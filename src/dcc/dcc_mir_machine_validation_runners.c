@@ -11766,6 +11766,7 @@ static void mir_emit_cast_logical_runner(
     int and_false = new_label();
     int and_value = new_label();
     int nested_or = new_label();
+    int nested_true = new_label();
     int nested_false = new_label();
     int nested_value = new_label();
     int offset;
@@ -11812,9 +11813,9 @@ static void mir_emit_cast_logical_runner(
             "\tld a,1\n\tjp L%d\n"
             "L%d:\n\txor a\n"
             "L%d:\n\tld (ix-12),a\n",
-            nested_or, nested_value,
+            nested_or, nested_true,
             nested_or, nested_false,
-            nested_value, nested_false,
+            nested_true, nested_false,
             nested_value, nested_false, nested_value);
 
     mir_stream_puts("\tld l,(ix-12)\n\tld h,0\n\tpush hl\n", out);

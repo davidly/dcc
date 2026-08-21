@@ -5315,6 +5315,7 @@ static void mir_emit_star_comment_scan_schedule(
     int delimiter = new_label();
     int done = new_label();
     int fast_body = new_label();
+    int fast_character = new_label();
     int fast_delimiter = new_label();
     int fast_done = new_label();
     int fast_line_ready = new_label();
@@ -5362,9 +5363,9 @@ static void mir_emit_star_comment_scan_schedule(
             "\tpush hl\n\tpush de\n",
             fast_loop, fast_body, fast_done,
             fast_done, fast_body,
-            plan->opening_character & 255, fast_body,
+            plan->opening_character & 255, fast_character,
             plan->closing_character & 255, fast_delimiter,
-            fast_body, '\n', fast_line_ready);
+            fast_character, '\n', fast_line_ready);
     mir_machine_emit_global_word(
         out, plan->line_root, plan->line_offset);
     mir_stream_puts("\tinc hl\n", out);

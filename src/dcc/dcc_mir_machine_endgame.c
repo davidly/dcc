@@ -8157,6 +8157,7 @@ static void mir_emit_endgame_binary_runner(
     int hex_done = new_label();
     int no_colon = new_label();
     int infinite_spaces = new_label();
+    int infinite_spaces_loop = new_label();
     int no_extra = new_label();
     int space_loop = new_label();
     int space_done = new_label();
@@ -8276,7 +8277,8 @@ static void mir_emit_endgame_binary_runner(
             no_colon, no_colon, hex_loop, hex_done,
             infinite_spaces, no_extra, no_extra, no_extra,
             space_done, space_loop, space_loop, space_done,
-            text_loop, infinite_spaces, infinite_spaces, infinite_spaces);
+            text_loop, infinite_spaces, infinite_spaces_loop,
+            infinite_spaces_loop);
 
     mir_stream_printf(out,
             "L%d:\n"

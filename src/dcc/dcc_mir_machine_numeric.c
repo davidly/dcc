@@ -2570,6 +2570,7 @@ static void mir_emit_mulmod_validation_runner_schedule(
     int middle_tail = new_label();
     int outer_tail = new_label();
     int total_ready = new_label();
+    int mismatch_count_ready = new_label();
     int no_report = new_label();
     int done = new_label();
     int item;
@@ -2678,7 +2679,8 @@ static void mir_emit_mulmod_validation_runner_schedule(
             "\tinc (ix%d)\n\tjp nz,L%d\n\tinc (ix%d)\nL%d:\n"
             "\tld l,(ix%d)\n\tld h,(ix%d)\n"
             "\tld de,11\n\tor a\n\tsbc hl,de\n\tjp nc,L%d\n",
-            MISMATCHES, no_report, MISMATCHES + 1, no_report,
+            MISMATCHES, mismatch_count_ready,
+            MISMATCHES + 1, mismatch_count_ready,
             MISMATCHES, MISMATCHES + 1, no_report);
 
     mir_machine_emit_ix_wide_load(out, WANT_VALUE);
