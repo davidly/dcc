@@ -1,3 +1,37 @@
+/**
+ * @file calc.c
+ * @brief Expression-calculator front end used as an end-to-end DCC regression.
+ *
+ * @par Scenario
+ * The test runner supplies deterministic command-line expressions that cover
+ * signed 1024-bit integers, decimal arithmetic, division, modulus, powers,
+ * bitwise operations, and equality. With no arguments, the same evaluator is
+ * an interactive CP/M console calculator.
+ *
+ * @par Role
+ * This module owns tokenization, recursive-descent parsing, mixed integer and
+ * decimal dispatch, result formatting, commands, and BDOS console interaction.
+ *
+ * @par Build variants
+ * The portable build leaves Z80_ASM_OPTS undefined:
+ * @code{.sh}
+ * ./dccmake tests/calc.c tests/calc1024.c tests/calcdoub.c \
+ *   dcc-output=CALC
+ * @endcode
+ * The comparison build enables the optional hand-written integer kernels for
+ * every translation unit and uses calcopt.c as the front-end wrapper:
+ * @code{.sh}
+ * ./dccmake tests/calcopt.c tests/calc1024.c tests/calcdoub.c \
+ *   dcc-define=Z80_ASM_OPTS dcc-output=CALCOPT
+ * @endcode
+ * dcc-peep=true or false controls the separate peephole pass for either build;
+ * it does not select between portable C and the Z80 kernels.
+ *
+ * @par Boundary
+ * calc1024 owns integer representation and arithmetic; calcdoub owns decimal
+ * representation and arithmetic. calcopt.c may include this file to build the
+ * identical front end with optional Z80 arithmetic kernels enabled.
+ */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
