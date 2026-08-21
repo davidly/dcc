@@ -58,7 +58,7 @@ class M80cCorrectnessTests(unittest.TestCase):
 
     def linked_bytes(self, name):
         subprocess.run(
-            [str(self.l80c), "/P:0," + name, "-o", name],
+            [str(self.l80c), "/P:100," + name, "-o", name],
             cwd=self.workspace,
             text=True,
             capture_output=True,

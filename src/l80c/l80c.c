@@ -14,13 +14,15 @@
  * @par Boundary
  * Complements m80c and replaces emulated L80 for normal dccmake builds,
  * avoiding L80's CP/M workspace ceiling. It accepts the CSEG/DSEG records used
- * by this toolchain and rejects unsupported ASEG, COMMON, or unknown records.
+ * by this toolchain and rejects unsupported ASEG, COMMON, unknown records, and
+ * non-0100 origins that would require a LINK-80 relocation bootstrap.
  */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
 #include <stdarg.h>
+#include <errno.h>
 
 typedef unsigned char U8;
 typedef unsigned short U16;
@@ -89,6 +91,21 @@ static void bounded_append(char *dst, size_t dst_size, const char *src) {
     if (len > room) len = room;
     memcpy(dst + used, src, len);
     dst[used + len] = 0;
+}
+static int ends_with_com(const char *s) {
+    size_t n = strlen(s);
+    return n >= 4 &&
+        s[n - 4] == '.' &&
+        toupper((unsigned char)s[n - 3]) == 'C' &&
+        toupper((unsigned char)s[n - 2]) == 'O' &&
+        toupper((unsigned char)s[n - 1]) == 'M';
+}
+static void normalize_output_base(char *name) {
+    size_t n = strlen(name);
+    if (ends_with_com(name))
+        name[n - 4] = 0;
+    if (name[0] == 0)
+        die("empty output name");
 }
 
 /* ---------------------------------------------------------------- */
@@ -214,9 +231,12 @@ static void add_fixup(int seg, long off, int type) {
     g_fixups = f;
 }
 
-static void ensure_room(long size, long need, const char *what, const char *modname) {
-    if (need < 0 || need > size)
-        die("module %s: %s offset %ld out of range (segment size %ld)", modname, what, need, size);
+static void ensure_room(long size, long offset, long width,
+                        const char *what, const char *modname) {
+    if (offset < 0 || width < 0 || offset > size || width > size - offset)
+        die("module %s: %s range %ld..%ld out of bounds "
+            "(segment size %ld)", modname, what, offset,
+            offset + width, size);
 }
 
 /* ---------------------------------------------------------------- */
@@ -278,10 +298,12 @@ static void load_rel_file(const char *path) {
         if (lead == 0) {
             int b = (int)bits_in(&r, 8);
             if (cur_seg == SEG_CODE) {
-                ensure_room(m->cseg_size, cur_code_lc, "code", m->name);
+                ensure_room(m->cseg_size, cur_code_lc, 1,
+                            "code", m->name);
                 m->code[cur_code_lc++] = (U8)b;
             } else {
-                ensure_room(m->dseg_size, cur_data_lc, "data", m->name);
+                ensure_room(m->dseg_size, cur_data_lc, 1,
+                            "data", m->name);
                 m->data[cur_data_lc++] = (U8)b;
             }
             continue;
@@ -296,7 +318,8 @@ static void load_rel_file(const char *path) {
                 int seg = cur_seg;
                 long off = (seg == SEG_CODE) ? cur_code_lc : cur_data_lc;
                 U8 *arr;
-                ensure_room(seg == SEG_CODE ? m->cseg_size : m->dseg_size, off, "link", m->name);
+                ensure_room(seg == SEG_CODE ? m->cseg_size : m->dseg_size,
+                            off, 2, "link", m->name);
                 arr = (seg == SEG_CODE) ? m->code : m->data;
                 arr[off] = (U8)(val & 0xff);
                 arr[off + 1] = (U8)((val >> 8) & 0xff);
@@ -358,9 +381,13 @@ static void load_rel_file(const char *path) {
                         if (!have_cseg_size || !have_dseg_size)
                             die("module %s: set-LC item before segment sizes were declared", m->name);
                         if (valtype == T_CODE) {
+                            ensure_room(m->cseg_size, val, 0,
+                                        "code LC", m->name);
                             cur_seg = SEG_CODE;
                             cur_code_lc = val;
                         } else if (valtype == T_DATA) {
+                            ensure_room(m->dseg_size, val, 0,
+                                        "data LC", m->name);
                             cur_seg = SEG_DATA;
                             cur_data_lc = val;
                         } else {
@@ -496,7 +523,7 @@ int main(int argc, char **argv) {
     long origin = 0x100;
     char *modlist[MAXMOD];
     int nmodlist = 0;
-    char outname[MAXNAME + 4];
+    char outname[512];
     int have_outname = 0;
     int i;
     long running;
@@ -514,7 +541,7 @@ int main(int argc, char **argv) {
     outname[0] = 0;
 
     if (argc < 2) {
-        fprintf(stderr, "usage: %s [/P:origin,]module1,module2,...,moduleN[/switches] [-o out.COM] [-v]\n", g_progname);
+        fprintf(stderr, "usage: %s [/P:100,]module1,module2,...,moduleN[/switches] [-o out.COM] [-v]\n", g_progname);
         return 2;
     }
 
@@ -535,7 +562,11 @@ int main(int argc, char **argv) {
         while (tok) {
             if (tok[0] == '/') {
                 if ((tok[1] == 'P' || tok[1] == 'p') && tok[2] == ':') {
-                    origin = strtol(tok + 3, NULL, 16);
+                    char *end;
+                    errno = 0;
+                    origin = strtol(tok + 3, &end, 16);
+                    if (tok[3] == 0 || *end != 0 || errno == ERANGE)
+                        die("invalid origin: %s", tok + 3);
                 }
                 /* other leading switches: ignored */
             } else {
@@ -571,11 +602,14 @@ int main(int argc, char **argv) {
     }
 
     if (nmodlist == 0) die("no modules given");
-    if (origin < 0 || origin >= MAXORIGIN) die("origin out of range");
+    if (origin != 0x100)
+        die("unsupported origin %04lX: CP/M .COM programs load at 0100",
+            origin & 0xffff);
 
     if (!have_outname) {
         bounded_copy(outname, sizeof(outname), modlist[nmodlist - 1]);
     }
+    normalize_output_base(outname);
 
     /* Load every module named on the command line, in order. Module names
        are matched to files by appending .REL (trying both the given case
@@ -709,12 +743,13 @@ int main(int argc, char **argv) {
         }
     }
 
-    /* Emit the .COM image: a flat memory image starting at `origin`,
-       which CP/M always loads at 0x100 - no header. */
+    /* Emit the .COM image: a flat memory image starting at 0x100, where
+       CP/M loads headerless .COM programs. */
     suffix_path(outpath, sizeof(outpath), outname, ".COM");
     outf = fopen(outpath, "wb");
     if (!outf) die("cannot create %s", outpath);
-    if (total_len > 0 && fwrite(image, 1, (size_t)total_len, outf) != (size_t)total_len)
+    if (total_len > 0 &&
+        fwrite(image, 1, (size_t)total_len, outf) != (size_t)total_len)
         die("short write to %s", outpath);
     {
         /* CP/M files are made of 128-byte records; pad with zeros to the
@@ -722,9 +757,12 @@ int main(int argc, char **argv) {
            fine, but a zero-padded tail is the conventional, disk-friendly
            shape and avoids surprises in tools that assume it). */
         long pad = (128 - (total_len % 128)) % 128;
-        while (pad-- > 0) fputc(0, outf);
+        while (pad-- > 0)
+            if (fputc(0, outf) == EOF)
+                die("short write to %s", outpath);
     }
-    fclose(outf);
+    if (fclose(outf) != 0)
+        die("cannot finish writing %s", outpath);
 
     /* .SYM: final linked symbol table, ADDR<TAB>NAME pairs, matching the
        format dccprof.py already parses from real L80's output - now with
