@@ -110,6 +110,73 @@ or environment variables first, then from the local checkout or `PATH`.
 | `m80.com` | CP/M assembler | Real Microsoft assembler; assembles `.MAC` to `.REL` under `ntvcm` when `dcc-use-emulated-m80=true` |
 | `l80.com` | CP/M linker | Real Microsoft linker; links `.REL` files to `.COM` under `ntvcm` when `dcc-use-emulated-l80=true` |
 
+## Native Linker (`l80c`)
+
+`l80c` is the host-native linker used by the normal DCC build pipeline. It
+consumes the LINK-80-compatible `.REL` files produced by `m80c`, resolves
+PUBLIC/EXTRN symbols, relocates CSEG and DSEG values, and writes a CP/M `.COM`
+image plus a linked `.SYM` file. Unlike `L80.COM`, it uses host memory rather
+than CP/M's 64K address space, so large links do not exhaust the linker's own
+workspace.
+
+### l80c CLI usage
+
+```text
+l80c [/P:origin,]module1,module2,...,output/N/E/Y [-o output[.COM]] [-v]
+```
+
+Module and output names conventionally use CP/M uppercase spelling. `.REL` is
+added to module names automatically. Repeating the final module with `/N/E/Y`,
+as in a Microsoft LINK-80 command, does not link it twice.
+
+| Option | Default | Purpose |
+| ------ | ------- | ------- |
+| `/P:<hex-address>` | `100` | Set the linked program origin. The address must fit in 16 bits. |
+| `output/N/E/Y` | Last module | Select the output basename using conventional LINK-80 syntax. `/N`, `/E`, and `/Y` do not otherwise change native non-interactive linking. |
+| `-o <name>` | Output marker or last module | Select the output basename explicitly. Either `APP` or `APP.COM` produces `APP.COM` and `APP.SYM`. |
+| `-v` | off | Print loaded modules, origin, linked size, and output path. |
+
+The normal DCC command is:
+
+```sh
+l80c "/P:100,RTLMIN,FOO,FOO/N/E/Y"
+```
+
+### Program origins
+
+Use `/P:100` for ordinary CP/M applications. CP/M loads a headerless `.COM`
+file at `0100H`, so this origin writes the linked program directly with no
+entry wrapper.
+
+`l80c` also implements LINK-80-compatible nonstandard origins:
+
+- `0101H` or `0102H`: place the program at that address without generating a
+  jump because the program occupies part of LINK-80's `0100H`-`0102H` entry
+  slot.
+- Above `0102H`: put `JP <start-address>` at `0100H`, pad to the requested
+  origin, and place the relocated program there.
+- Below `0100H`: store the payload after the CP/M entry point and add a small
+  8080/Z80-compatible bootstrap that copies it to the linked origin before
+  jumping to the program start.
+
+Nonstandard origins are useful for fixed-address code, overlays or separately
+loaded modules, programs reserving low TPA space for a loader or shared data,
+and system utilities that deliberately relocate or take over the machine.
+High origins remain normal CP/M programs through the generated entry jump.
+Low origins, especially zero, overwrite CP/M low memory and therefore suit only
+specialized programs that do not expect CP/M services to remain intact.
+
+!!! important "Not a bare-metal output mode"
+    `/P:0` still produces a CP/M-loadable `.COM` with an entry/copy bootstrap.
+    It does not emit a raw image beginning at file offset zero. A future
+    bare-metal target should use a separate explicit raw-binary option so its
+    startup, memory map, stack, and runtime assumptions are unambiguous.
+
+Native `l80c` currently supports the CSEG/DSEG REL records used by DCC. It
+rejects ASEG, COMMON, malformed records, undefined externals, duplicate globals,
+and images extending past `FFFFH` rather than guessing and producing a bad
+executable.
+
 ## Build Pipeline Helper (`dccmake`)
 
 `dccmake` is the lower-level build helper used by the test runner and by

@@ -40,6 +40,12 @@ path because it keeps unused library routines out of the final `.COM` file. The
 script resolves each tool from your `PATH` or from the `DCC`, `DCCPEEP`, and
 `DCCRTLSTRIP` environment variables.
 
+The native linker normally uses `/P:100`, CP/M's standard `.COM` load address.
+For fixed-address, overlay, or relocating system programs, `l80c` also supports
+LINK-80-style nonstandard origins and generates the required CP/M entry
+jump/bootstrap. See [Native Linker (`l80c`)](appendix/03-utilities.md#native-linker-l80c)
+for its CLI options, origin layouts, and limitations.
+
 ??? note "The manual pipeline (click to expand)"
 
     For manual builds or custom build systems, the full pipeline for `foo.c` is
