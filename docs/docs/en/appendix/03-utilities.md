@@ -62,8 +62,8 @@ dcc-ma cobint --mode fast --build-dir mybuild
 | `-SourcePath` / `--source-path` | Search by name | Explicit C source path |
 | `-BuildDir` / `--build-dir` | `build` | Build directory for artifacts |
 | `-Emulator` / `--emulator` | `ntvcm` | Emulator command for CP/M tools |
-| `-UseEmulatedM80` / `--emulated-m80` | off | Assemble with M80.COM under `ntvcm` instead of native `m80c` |
-| `-UseEmulatedL80` / `--emulated-l80` | off | Link with L80.COM under `ntvcm` instead of native `l80c` |
+| `-UseEmulatedM80` / `--emulated-m80` | off | Assemble with M80.COM under `ntvcm` instead of native [`m80c`](#native-assembler-m80c) |
+| `-UseEmulatedL80` / `--emulated-l80` | off | Link with L80.COM under `ntvcm` instead of native [`l80c`](#native-linker-l80c) |
 
 The wrapper accepts only the parameters above. Use `dccmake` directly for
 project settings such as debug builds, per-format overrides, and multi-module
@@ -104,16 +104,59 @@ or environment variables first, then from the local checkout or `PATH`.
 | `dccpeep` | Peephole optimizer | Host command that rewrites generated `.MAC` files when `dcc-peep=true` |
 | `dccrtlstrip` | Runtime stripper | Host command that scans app `.MAC` files and writes a reduced runtime; see [DCCRTL strip appendix](01-dccrtlstrip.md) |
 | `DCCRTL.MAC` | Runtime source | Full CP/M runtime consumed by `dccrtlstrip` |
-| `m80c` | Native assembler | Host command, LINK-80-`.REL`-compatible; default assembler, no `ntvcm` needed |
-| `l80c` | Native linker | Host command, consumes the same `.REL` format; default linker, no `ntvcm` needed |
+| [`m80c`](#native-assembler-m80c) | Native assembler | Host command, LINK-80-`.REL`-compatible; default assembler, no `ntvcm` needed |
+| [`l80c`](#native-linker-l80c) | Native linker | Host command, consumes the same `.REL` format; default linker, no `ntvcm` needed |
 | `ntvcm` | CP/M emulator | Only needed for the real M80/L80 fallback path, and to run the final `.COM` programs |
 | `m80.com` | CP/M assembler | Real Microsoft assembler; assembles `.MAC` to `.REL` under `ntvcm` when `dcc-use-emulated-m80=true` |
 | `l80.com` | CP/M linker | Real Microsoft linker; links `.REL` files to `.COM` under `ntvcm` when `dcc-use-emulated-l80=true` |
 
+## Native Assembler (`m80c`)
+
+`m80c` is the host-native assembler used by the normal DCC build pipeline. It
+accepts the 8080 and Z80 source forms used by DCC, performs two assembly passes,
+and writes LINK-80-compatible `.REL` objects without running Microsoft
+`M80.COM` under an emulator.
+
+### m80c CLI usage
+
+```text
+m80c [rel-output[,listing-output]]=source[.MAC] [options]
+```
+
+An omitted extension defaults to `.MAC`, `.REL`, or `.PRN` as appropriate.
+Use `*` in an output position to suppress that explicit name. Output basenames
+use CP/M-style uppercase spelling.
+
+Common examples:
+
+```sh
+m80c "=FOO.MAC" /X /O /Z /L
+m80c "FOO.REL,FOO.PRN=FOO.MAC" /Z
+m80c "=FOO.MAC" /X /O /Z /L /C
+```
+
+| Option | Default | Purpose |
+| ------ | ------- | ------- |
+| `/Z` | on | Select Z80 mnemonic interpretation. For example, operand-free `CPI` is the Z80 block-compare instruction. |
+| `/I` | off | Select Intel 8080 mnemonic interpretation. For example, `CPI value` is immediate compare. |
+| `/L` | off | Write the `.PRN` assembly listing. |
+| `/R` | when a REL output is named | Request `.REL` object output. |
+| `/O` | off | Request `.REL` object output in the conventional M80 command form. Native listings remain hexadecimal. |
+| `/H` | accepted | Select hexadecimal listing compatibility; hexadecimal is already the native listing format. |
+| `/M` | off | Materialize `DS` storage as zero bytes instead of leaving reserved gaps. |
+| `/C` | off | Write the per-module `.SYM` sidecar used by native [`l80c`](#native-linker-l80c) to preserve relocated local symbols. |
+| `/X` | accepted | Accepted for M80 command compatibility; native `m80c` has no separate cross-reference output mode. |
+
+The assembler always writes `.LNK` segment-size metadata. When DCC source debug
+markers are present, it also writes `.DBG` source/symbol metadata; `/C` is not
+required for `.DBG`. Assembly errors are recorded in the listing when `/L` is
+enabled and cause a nonzero exit status.
+
 ## Native Linker (`l80c`)
 
 `l80c` is the host-native linker used by the normal DCC build pipeline. It
-consumes the LINK-80-compatible `.REL` files produced by `m80c`, resolves
+consumes the LINK-80-compatible `.REL` files produced by
+[`m80c`](#native-assembler-m80c), resolves
 PUBLIC/EXTRN symbols, relocates CSEG and DSEG values, and writes a CP/M `.COM`
 image plus a linked `.SYM` file. Unlike `L80.COM`, it uses host memory rather
 than CP/M's 64K address space, so large links do not exhaust the linker's own
@@ -182,11 +225,13 @@ executable.
 `dccmake` is the lower-level build helper used by the test runner and by
 repeatable local builds. It compiles one or more C source files, optionally runs
 `dccpeep`, strips the runtime with `dccrtlstrip`, then assembles and links with
-native `m80c`/`l80c` by default (or the real M80/L80 under `ntvcm` when
+native [`m80c`](#native-assembler-m80c)/[`l80c`](#native-linker-l80c) by
+default (or the real M80/L80 under `ntvcm` when
 `dcc-use-emulated-m80`/`dcc-use-emulated-l80` is set - real L80 runs inside
 `ntvcm`'s emulated 64K CP/M address space, so its own symbol/relocation
 workspace can run out of memory on large `nopeep` builds well before the
-target program itself would not fit; `l80c` has no such ceiling).
+target program itself would not fit; [`l80c`](#native-linker-l80c) has no such
+ceiling).
 
 Use `dccmake` directly when you want one command that owns the whole DCC C
 Compiler pipeline but still lets you choose the exact source files, output name,
@@ -292,7 +337,7 @@ dccmake dcc-peep=false
 | `dcc-stack-bytes` | `512` | Stack reserve passed to `dcc` with `-stack` |
 | `dcc-stack-check` | Environment/default | Pass `-fstack-check` to `dcc` |
 | `dcc-no-narrow` | `false` | Pass `-fno-narrow` to disable byte-narrowing passes |
-| `dcc-debug` | `false` | Emit source-level debug metadata; requires native `m80c` |
+| `dcc-debug` | `false` | Emit source-level debug metadata; requires native [`m80c`](#native-assembler-m80c) |
 | `dcc-include-directory` | Auto-adds `.` when standard headers are in the current directory | Comma-separated include directories; `dcc-include` is an alias |
 | `dcc-define` | none | Comma-separated `NAME[=value]` entries passed to `dcc` as `-D`; `dcc-defines` is an alias |
 | `dcc-undefine` | none | Comma-separated names passed to `dcc` as `-U`; `dcc-undefines` is an alias |
@@ -306,11 +351,11 @@ dccmake dcc-peep=false
 | `dccrtlstrip-tool` | `DCCRTLSTRIP`, local `dccrtlstrip`, or `dccrtlstrip` | Runtime stripper command |
 | `ntvcm-tool` | `NTVCM` or `ntvcm` | Emulator command used to run M80/L80 (only when either is emulated) |
 | `m80-command` | `M80` or `m80` | CP/M assembler command passed to `ntvcm`; emulated-M80 path only |
-| `m80c-tool` | `M80C`, local `m80c`, or `m80c` | Native host assembler command (default, no `ntvcm`) |
-| `dcc-use-emulated-m80` | `false` | Assemble with real `M80.COM` under `ntvcm` instead of native `m80c` |
+| `m80c-tool` | `M80C`, local `m80c`, or `m80c` | Native host assembler command (default, no `ntvcm`); see [`m80c`](#native-assembler-m80c) |
+| `dcc-use-emulated-m80` | `false` | Assemble with real `M80.COM` under `ntvcm` instead of native [`m80c`](#native-assembler-m80c) |
 | `l80-command` | `L80` or `l80` | CP/M linker command passed to `ntvcm`; emulated-L80 path only |
-| `l80c-tool` | `L80C`, local `l80c`, or `l80c` | Native host linker command (default, no `ntvcm`) |
-| `dcc-use-emulated-l80` | `false` | Link with real `L80.COM` under `ntvcm` instead of native `l80c` |
+| `l80c-tool` | `L80C`, local `l80c`, or `l80c` | Native host linker command (default, no `ntvcm`); see [`l80c`](#native-linker-l80c) |
+| `dcc-use-emulated-l80` | `false` | Link with real `L80.COM` under `ntvcm` instead of native [`l80c`](#native-linker-l80c) |
 
 `dccmake` initializes its Boolean settings from the matching environment
 variables before reading `dccmake.txt`: `DCC_FLOATIO`, `DCC_NO_FLOATIO`,
@@ -449,8 +494,8 @@ The `-Mode` parameter selects which optimization pass(es) to build and verify.
 | --------- | ------- | ------- |
 | `-Emulator` | `ntvcm` | Emulator command for running .COM files |
 | `-NoStackCheck` | (off) | Disable `-fstack-check` (the guard is ON by default) |
-| `-UseEmulatedM80` | (off) | Assemble with M80.COM under `ntvcm` instead of native `m80c` |
-| `-UseEmulatedL80` | (off) | Link with L80.COM under `ntvcm` instead of native `l80c` |
+| `-UseEmulatedM80` | (off) | Assemble with M80.COM under `ntvcm` instead of native [`m80c`](#native-assembler-m80c) |
+| `-UseEmulatedL80` | (off) | Link with L80.COM under `ntvcm` instead of native [`l80c`](#native-linker-l80c) |
 | `-BuildDir` | `build` | Build directory for artifacts |
 | `-NoRamDisk` | (off) | On Linux, disable the automatic `/dev/shm/dcc-runall` build root |
 | `-BaselineDir` | `tests/baselines` | Directory of per-app `<app>.txt` baselines |

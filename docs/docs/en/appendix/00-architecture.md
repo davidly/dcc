@@ -2,18 +2,24 @@
 
 This appendix describes the DCC C Compiler toolchain: the compiler `dcc`, the peephole
 optimizer `dccpeep`, the runtime size reducer `dccrtlstrip`, and the assembler
-and linker - either the host-native `m80c`/`l80c`, or the Microsoft `M80`/`L80`
-originals running under `ntvcm`.
+and linker - either the host-native
+[`m80c`](03-utilities.md#native-assembler-m80c)/[`l80c`](03-utilities.md#native-linker-l80c),
+or the Microsoft `M80`/`L80` originals running under `ntvcm`.
 
 !!! note "Host-resident tools"
-  `dcc`, `dccpeep`, `dccrtlstrip`, `m80c`, and `l80c` run on Windows, macOS,
-  and Linux. They never run on a Z80. They emit Z80 assembly text and CP/M
+  `dcc`, `dccpeep`, `dccrtlstrip`,
+  [`m80c`](03-utilities.md#native-assembler-m80c), and
+  [`l80c`](03-utilities.md#native-linker-l80c) run on Windows, macOS, and
+  Linux. They never run on a Z80. They emit Z80 assembly text and CP/M
   `.COM` files that run under CP/M-80, for example via the `ntvcm` emulator.
-  `m80c`/`l80c` are clean-room, LINK-80-object-format-compatible
+  [`m80c`](03-utilities.md#native-assembler-m80c)/
+  [`l80c`](03-utilities.md#native-linker-l80c) are clean-room,
+  LINK-80-object-format-compatible
   reimplementations of `M80`/`L80` with unbounded host memory instead of
   CP/M's own 64K tables - large `nopeep` builds can exhaust real `L80`'s own
   in-emulator linking workspace well before the target program itself would
-  not fit; `l80c` has no such ceiling. They are the default; pass
+  not fit; [`l80c`](03-utilities.md#native-linker-l80c) has no such ceiling.
+  They are the default; pass
   `dcc-use-emulated-m80=true`/`dcc-use-emulated-l80=true` to `dccmake` (or
   `--emulated-m80`/`--emulated-l80` to `ma.sh`/`ma.ps1`) to use the real
   `M80.COM`/`L80.COM` under `ntvcm` instead, e.g. to cross-check output.
@@ -33,14 +39,14 @@ flowchart LR
     DCC --> MAC([".MAC assembly"])
     MAC --> PEEP["dccpeep<br/>peephole optimizer"]
     PEEP --> MAC2([".MAC optimized"])
-    MAC2 --> M80A["m80c / M80<br/>assemble"]
+    MAC2 --> M80A["m80c<br/>assemble"]
     RTL([" DCCRTL.MAC<br/>full runtime"]) --> STRIP["dccrtlstrip<br/>dead-block removal"]
     MAC2 -. references .-> STRIP
     STRIP --> RTLMIN([" RTLMIN.MAC<br/>used routines only"])
-    RTLMIN --> M80B["m80c / M80<br/>assemble"]
+    RTLMIN --> M80B["m80c<br/>assemble"]
     M80A --> REL([" app.REL"])
     M80B --> RRTL([" RTLMIN.REL"])
-    REL --> L80["l80c / L80<br/>link"]
+    REL --> L80["l80c<br/>link"]
     RRTL --> L80
     L80 --> COM([".COM executable"])
 ```
@@ -50,8 +56,8 @@ flowchart LR
 | Compile | `dcc` | `.c` | `.MAC` | Parse typed AST, lower and verify MIR, then select Z80/M80 assembly |
 | Optimize | `dccpeep` | `.MAC` | `.MAC` | Local peephole rewriting of the asm |
 | Reduce runtime | `dccrtlstrip` | `DCCRTL.MAC` + app `.MAC` | `RTLMIN.MAC` | Keep only the runtime routines the app references |
-| Assemble | `m80c` or `M80` | `.MAC` | `.REL` | Object code (relocatable); `dccmake` uses native `m80c` by default |
-| Link | `l80c` or `L80` | `.REL` files | `.COM` | Resolve symbols into a CP/M executable; `dccmake` uses native `l80c` by default |
+| Assemble | [`m80c`](03-utilities.md#native-assembler-m80c) | `.MAC` | `.REL` | Object code (relocatable); `dccmake` uses native `m80c` by default |
+| Link | [`l80c`](03-utilities.md#native-linker-l80c) | `.REL` files | `.COM` | Resolve symbols into a CP/M executable; `dccmake` uses native `l80c` by default |
 
 The `dccpeep` stage is optional (`./scripts/ma.ps1 name -Mode nopeep` skips it
 when run from PowerShell in the DCC C Compiler checkout). `dccrtlstrip` runs against the
@@ -501,7 +507,9 @@ the runtime and rebuilding the docs is all that is needed to refresh them.
   `self`/`marginal` size cost and `dccrtlstrip` can link only the blocks a
   program references. The exact current totals are generated on the
   [runtime size page](02-runtime-sizes.md).
-- The back half of the pipeline uses native **`m80c`**/**`l80c`** (or
+- The back half of the pipeline uses native
+  **[`m80c`](03-utilities.md#native-assembler-m80c)**/
+  **[`l80c`](03-utilities.md#native-linker-l80c)** (or
   Microsoft **`M80`**/**`L80`** under `ntvcm`) for assembly and linking - a
   shared LINK-80-compatible `.REL` object format that DCC C Compiler consumes
   as a fixed target rather than needing to invent its own.

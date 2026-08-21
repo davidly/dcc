@@ -20,11 +20,13 @@ Before configuring a project:
 2. Install the [Microsoft C/C++ extensions for VS Code](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpp-devtools){: target="_blank" }.
 3. Make `dccmake` available on `PATH`, or use its absolute path in the build
    task.
-4. Make sure `dccmake` can find `dcc`, `dccpeep`, `dccrtlstrip`, `m80c`,
+4. Make sure `dccmake` can find `dcc`, `dccpeep`, `dccrtlstrip`,
+   [`m80c`](appendix/03-utilities.md#native-assembler-m80c),
    `DCCRTL.MAC`, and ntvcm as described on [The toolchain](00-setup-toolchain.md)
    page.
 
-Debug metadata requires the native `m80c` assembler. Do not set
+Debug metadata requires the native
+[`m80c`](appendix/03-utilities.md#native-assembler-m80c) assembler. Do not set
 `dcc-use-emulated-m80=true` for a debug build.
 
 ## Add the build task
@@ -197,7 +199,8 @@ multiple application threads.
 ## No-peep debug builds
 
 No-peep is the default and recommended mode for source debugging. `dccmake -g`
-keeps every `;@dcc-line` marker where DCC emitted it, and `m80c` records those
+keeps every `;@dcc-line` marker where DCC emitted it, and
+[`m80c`](appendix/03-utilities.md#native-assembler-m80c) records those
 locations in the `.DBG` file before linking relocates them to final addresses.
 
 In this mode, source breakpoints and source stepping have strong coverage across
