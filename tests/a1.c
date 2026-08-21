@@ -1320,7 +1320,7 @@ _crement_complete_zp:  /* page 0 target: index directly, no get_mem() call neede
             case 0xec: { op_cmp( cpu.x, get_byte( get_word( cpu.pc + 1 ) ) ); break; } /* cpx a16 */
             case 0xf8: { cpu.fDecimal = true; break; }                                 /* sed */
             case 0xff: { m_halt(); goto _all_done; }                                   /* halt */
-            default: { char errmsg[40]; sprintf( errmsg, "unknown mos6502 opcode %02x\n", op ); m_hard_exit( errmsg ); }
+            default: { printf( "unknown mos6502 opcode %02x\n", op ); m_hard_exit( "\n" ); }
         }
 
         cpu.pc += ins_len_6502[ op ];
