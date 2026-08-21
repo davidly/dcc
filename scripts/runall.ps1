@@ -1020,6 +1020,10 @@ function Invoke-ComRunAndCompare {
         Pop-Location
     }
 
+    # CP/M output may use CR, while host tools and checked-in baselines may
+    # use CRLF or LF. Canonicalize all three forms before parsing or comparing.
+    $output = (($output -replace "`r`n", "`n") -replace "`r", "`n")
+
     # In report mode ntvcm is run with -p, which appends a performance block
     # to stdout at app exit, e.g.:
     #     elapsed milliseconds:               10
@@ -1051,7 +1055,7 @@ function Invoke-ComRunAndCompare {
     }
 
     if ($HasBaseline) {
-        $actual = ($output -replace "`r`n", "`n").TrimEnd("`n")
+        $actual = $output.TrimEnd("`n")
         if (-not (Test-MatchesBaseline -Actual $actual -Baseline $Expected -Placeholders $Placeholders)) {
             $Lines.Add("    ${DiffPrefix}OUTPUT MISMATCH (vs $BaselinePath)")
             $expLines = if ($Expected) { @($Expected -split "`n") } else { @() }
@@ -1142,7 +1146,7 @@ function Invoke-AppTest {
     $hasBaseline = Test-Path $blPath -PathType Leaf
     $expected = $null
     if ($hasBaseline) {
-        $expected = (((Get-Content -Path $blPath -Raw) -replace "`r`n", "`n")).TrimEnd("`n")
+        $expected = ((((Get-Content -Path $blPath -Raw) -replace "`r`n", "`n") -replace "`r", "`n")).TrimEnd("`n")
     }
 
     # Same, per extra scenario - each gets its own baseline file
@@ -1153,7 +1157,7 @@ function Invoke-AppTest {
         $sHasBaseline = Test-Path $sBlPath -PathType Leaf
         $sExpected = $null
         if ($sHasBaseline) {
-            $sExpected = (((Get-Content -Path $sBlPath -Raw) -replace "`r`n", "`n")).TrimEnd("`n")
+            $sExpected = ((((Get-Content -Path $sBlPath -Raw) -replace "`r`n", "`n") -replace "`r", "`n")).TrimEnd("`n")
         }
         $scenarioBaselines[$scenario.suffix] = [pscustomobject]@{
             Path        = $sBlPath
@@ -1327,10 +1331,12 @@ function Invoke-NarrowDiffTest {
     # Strip the ntvcm -p performance block: cycle counts legitimately differ
     # between a narrowed and unnarrowed build (that's the whole point of
     # narrowing), so it is not itself a correctness signal here.
-    $outNarrow = [regex]::Replace($outNarrow, '(?s)\r?\n\s*elapsed milliseconds:.*$', '')
-    $outNoNarrow = [regex]::Replace($outNoNarrow, '(?s)\r?\n\s*elapsed milliseconds:.*$', '')
-    $normNarrow = ($outNarrow -replace "`r`n", "`n").TrimEnd("`n")
-    $normNoNarrow = ($outNoNarrow -replace "`r`n", "`n").TrimEnd("`n")
+    $outNarrow = (($outNarrow -replace "`r`n", "`n") -replace "`r", "`n")
+    $outNoNarrow = (($outNoNarrow -replace "`r`n", "`n") -replace "`r", "`n")
+    $outNarrow = [regex]::Replace($outNarrow, '(?s)\n\s*elapsed milliseconds:.*$', '')
+    $outNoNarrow = [regex]::Replace($outNoNarrow, '(?s)\n\s*elapsed milliseconds:.*$', '')
+    $normNarrow = $outNarrow.TrimEnd("`n")
+    $normNoNarrow = $outNoNarrow.TrimEnd("`n")
 
     # Normalize __DATE__/__TIME__-shaped text before comparing: these two
     # builds are compiled moments apart, so a program that prints __DATE__ or
@@ -1387,7 +1393,7 @@ function Get-Baseline {
     $path = Join-Path $BaselineDir "$app.txt"
     if (Test-Path $path -PathType Leaf) {
         # Return raw expected output, normalized to LF.
-        return ((Get-Content -Path $path -Raw) -replace "`r`n", "`n")
+        return (((Get-Content -Path $path -Raw) -replace "`r`n", "`n") -replace "`r", "`n")
     }
     return $null
 }
