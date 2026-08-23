@@ -118,6 +118,24 @@ if ! command -v timeout >/dev/null 2>&1; then
     fi
 fi
 
+# wait -n (block until any one background job finishes, instead of a named
+# one) needs bash 4.3+; macOS ships 3.2. Prefer it wherever it's actually
+# available (any normal Linux bash) - only fall back to a short poll loop
+# where it genuinely isn't, since the poll adds up to ~0.1s of scheduling
+# latency per worker-slot wait, which is measurable in a run with hundreds
+# of short tests even though it's negligible for any single one.
+have_wait_n=1
+if [ "${BASH_VERSINFO[0]}" -lt 4 ] || { [ "${BASH_VERSINFO[0]}" -eq 4 ] && [ "${BASH_VERSINFO[1]}" -lt 3 ]; }; then
+    have_wait_n=0
+fi
+wait_for_a_worker() {
+    if [ "$have_wait_n" -eq 1 ]; then
+        wait -n "${worker_pids[@]}" 2>/dev/null || true
+    else
+        sleep 0.1
+    fi
+}
+
 # Make the selected ma.sh absolute. Workers and ma.sh both enter other
 # directories, so no helper or native-tool path may remain relative.
 case "$ma_script" in
@@ -655,12 +673,7 @@ for app in "${applications[@]}"; do
     while :; do
         reap_finished_workers
         [ "${#worker_pids[@]}" -lt "$jobs_count" ] && break
-        # wait -n (block until any one job finishes) needs bash 4.3+; macOS
-        # ships 3.2. reap_finished_workers already does a kill -0 poll over
-        # worker_pids, so a short sleep between polls gets the same effect
-        # portably, just with up to ~0.1s latency instead of instant wakeup -
-        # negligible against multi-second test runs.
-        sleep 0.1
+        wait_for_a_worker
         reap_finished_workers
     done
 
@@ -688,12 +701,7 @@ done
 while [ "${#worker_pids[@]}" -gt 0 ]; do
     reap_finished_workers
     if [ "${#worker_pids[@]}" -gt 0 ]; then
-        # wait -n (block until any one job finishes) needs bash 4.3+; macOS
-        # ships 3.2. reap_finished_workers already does a kill -0 poll over
-        # worker_pids, so a short sleep between polls gets the same effect
-        # portably, just with up to ~0.1s latency instead of instant wakeup -
-        # negligible against multi-second test runs.
-        sleep 0.1
+        wait_for_a_worker
     fi
 done
 
