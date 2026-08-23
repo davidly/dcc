@@ -14,7 +14,8 @@ while (($#)); do
 done
 [[ -x $dcc ]] || command -v "$dcc" >/dev/null 2>&1 || { echo "dcc not found: $dcc" >&2; exit 2; }
 mkdir -p "$build_dir" "$baseline_dir"
-mapfile -t tests < <(find "$test_dir" -maxdepth 1 -type f -name '*.c' | sort)
+tests=()
+while IFS= read -r diag_test; do tests+=("$diag_test"); done < <(find "$test_dir" -maxdepth 1 -type f -name '*.c' | sort)
 ((${#tests[@]})) || { echo "No diagnostic tests found in $test_dir" >&2; exit 1; }
 fail=0
 for src in "${tests[@]}"; do

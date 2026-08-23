@@ -80,12 +80,43 @@ case "$jobs_count" in
     ''|*[!0-9]*|0) echo "invalid jobs count: $jobs_count" >&2; exit 2 ;;
 esac
 
-for command_name in find sort perl setsid; do
+for command_name in find sort perl; do
     command -v "$command_name" >/dev/null 2>&1 || {
         echo "required command not found: $command_name" >&2
         exit 2
     }
 done
+
+# setsid(1) (util-linux) puts a command in a fresh session/process group so
+# the whole subtree can be killed at once via "kill -- -PGID". macOS/BSD
+# don't ship it, but Perl's POSIX::setsid() gives the same effect (and perl
+# is already required above) - exec from within the backgrounded function
+# itself, not a plain call, so no extra fork sits between $! and the new
+# group's actual PGID.
+if command -v setsid >/dev/null 2>&1; then
+    setsid_cmd() { setsid "$@"; }
+else
+    setsid_cmd() {
+        exec perl -e 'use POSIX qw(setsid); setsid(); exec { $ARGV[0] } @ARGV or die "exec failed: $!"' -- "$@"
+    }
+fi
+
+# GNU timeout isn't available on macOS/BSD either (no coreutils by
+# default). Rather than reimplementing --foreground/--kill-after semantics,
+# per-test timeout enforcement is simply unavailable there: run_timeout=0
+# already means "no timeout" (see run_group_with_timeout), so route through
+# that same path. Warn once, here, at startup - not inside
+# run_group_with_timeout itself, since each per-app test invocation wraps
+# that whole function call with "...>output_raw 2>&1", so anything it
+# prints (even conditionally) would leak into every test's captured
+# output and corrupt the baseline comparison.
+have_timeout=1
+if ! command -v timeout >/dev/null 2>&1; then
+    have_timeout=0
+    if [ "$run_timeout" -ne 0 ]; then
+        echo "warning: 'timeout' not found; per-test timeouts are disabled on this platform" >&2
+    fi
+fi
 
 # Make the selected ma.sh absolute. Workers and ma.sh both enter other
 # directories, so no helper or native-tool path may remain relative.
@@ -240,7 +271,7 @@ trap cleanup EXIT
 
 run_group() {
     # Run a command in a fresh session/process group and return its status.
-    setsid "$@" &
+    setsid_cmd "$@" &
     active_pgid=$!
     wait "$active_pgid"
     local status=$?
@@ -251,7 +282,7 @@ run_group() {
 run_group_with_timeout() {
     local seconds=$1
     shift
-    if [ "$seconds" -eq 0 ]; then
+    if [ "$seconds" -eq 0 ] || [ "$have_timeout" -eq 0 ]; then
         run_group "$@"
         return $?
     fi
@@ -259,7 +290,7 @@ run_group_with_timeout() {
     # Put GNU timeout and the command it supervises in one fresh process
     # group. This avoids polling sleeps, leaked watchdogs, and up-to-one-second
     # delays before a worker notices that a test has finished.
-    setsid timeout \
+    setsid_cmd timeout \
         --foreground \
         --signal=TERM \
         --kill-after=2s \
@@ -453,7 +484,14 @@ $regex .= quotemeta(substr($expected, $cursor));
 exit($actual =~ /\A$regex\z/s ? 0 : 1);
 PERL
 }
-mapfile -t applications < <(find tests -maxdepth 1 -type f -name '*.c' -printf '%f\n' | sed 's/\.c$//' | sort)
+# mapfile/readarray needs bash 4+ (macOS ships 3.2); -printf is a GNU find
+# extension BSD find lacks. Both avoided here for portability: a plain
+# read loop builds the array, and stripping the directory with sed instead
+# of -printf works identically on GNU and BSD find.
+applications=()
+while IFS= read -r app_name; do
+    applications+=("$app_name")
+done < <(find tests -maxdepth 1 -type f -name '*.c' | sed 's#.*/##; s/\.c$//' | sort)
 if [ "${#applications[@]}" -eq 0 ]; then
     echo "no test applications found in tests" >&2
     exit 2
@@ -577,16 +615,16 @@ run_one_app() {
                 directory=$1; input=$2; shift 2
                 cd "$directory" || exit 1
                 exec "$@" <"$input"
-            ' bash "$app_dir" "$(basename -- "$stdin_file")" "$emulator" "${emulator_args[@]}" \
-                "$(basename -- "$com_file")" "${program_args[@]}" >"$output_raw" 2>&1
+            ' bash "$app_dir" "$(basename -- "$stdin_file")" "$emulator" "${emulator_args[@]+${emulator_args[@]}}" \
+                "$(basename -- "$com_file")" "${program_args[@]+${program_args[@]}}" >"$output_raw" 2>&1
             run_status=$?
         else
             run_group_with_timeout "$app_timeout" bash -c '
                 directory=$1; shift
                 cd "$directory" || exit 1
                 exec "$@"
-            ' bash "$app_dir" "$emulator" "${emulator_args[@]}" \
-                "$(basename -- "$com_file")" "${program_args[@]}" >"$output_raw" 2>&1
+            ' bash "$app_dir" "$emulator" "${emulator_args[@]+${emulator_args[@]}}" \
+                "$(basename -- "$com_file")" "${program_args[@]+${program_args[@]}}" >"$output_raw" 2>&1
             run_status=$?
         fi
 
@@ -649,7 +687,12 @@ for app in "${applications[@]}"; do
     while :; do
         reap_finished_workers
         [ "${#worker_pids[@]}" -lt "$jobs_count" ] && break
-        wait -n "${worker_pids[@]}" 2>/dev/null || true
+        # wait -n (block until any one job finishes) needs bash 4.3+; macOS
+        # ships 3.2. reap_finished_workers already does a kill -0 poll over
+        # worker_pids, so a short sleep between polls gets the same effect
+        # portably, just with up to ~0.1s latency instead of instant wakeup -
+        # negligible against multi-second test runs.
+        sleep 0.1
         reap_finished_workers
     done
 
@@ -677,7 +720,12 @@ done
 while [ "${#worker_pids[@]}" -gt 0 ]; do
     reap_finished_workers
     if [ "${#worker_pids[@]}" -gt 0 ]; then
-        wait -n "${worker_pids[@]}" 2>/dev/null || true
+        # wait -n (block until any one job finishes) needs bash 4.3+; macOS
+        # ships 3.2. reap_finished_workers already does a kill -0 poll over
+        # worker_pids, so a short sleep between polls gets the same effect
+        # portably, just with up to ~0.1s latency instead of instant wakeup -
+        # negligible against multi-second test runs.
+        sleep 0.1
     fi
 done
 
