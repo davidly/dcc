@@ -212,9 +212,19 @@ function Initialize-Msvc {
         }
     }
 
-    $clVersion = cl 2>&1 | Select-Object -First 1
+    # cl.exe with no input files prints its "usage:" complaint to stderr
+    # *before* its version/copyright banner to stdout (confirmed: that's
+    # cl's own output order, not a stream-merging artifact), so grabbing
+    # just the first line of merged output shows the usage line instead of
+    # the version banner this is meant to display. Pick out the banner line
+    # specifically instead of relying on line position.
+    $clOutput = cl 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "MSVC cl.exe not found in PATH after vcvars setup."
+    }
+    $clVersion = ($clOutput | Where-Object { $_ -match "Compiler Version" } | Select-Object -First 1)
+    if (-not $clVersion) {
+        $clVersion = $clOutput | Select-Object -First 1
     }
     Write-Host "MSVC cl.exe: $clVersion"
 }
@@ -234,6 +244,72 @@ function Remove-MisplacedArtifacts {
     }
 }
 
+function Get-BuildTargets {
+    param([string]$SrcRoot)
+
+    return @(
+        @{ Name = "dcc";         SourceDir = (Join-Path $SrcRoot "dcc") },
+        @{ Name = "dccpeep";     SourceDir = (Join-Path $SrcRoot "dccpeep") },
+        @{ Name = "dccrtlstrip"; SourceDir = (Join-Path $SrcRoot "dccrtlstrip") },
+        @{ Name = "dccmake";     SourceDir = (Join-Path $SrcRoot "dccmake") },
+        @{ Name = "m80c";        SourceDir = (Join-Path $SrcRoot "m80c") },
+        @{ Name = "l80c";        SourceDir = (Join-Path $SrcRoot "l80c") }
+    )
+}
+
+# Runs a batch of independent work items (one external-process invocation
+# each) across parallel runspaces, throttled to the machine's processor
+# count, then replays each item's output afterward in a stable order -- so
+# concurrent processes never interleave their output on the console, but
+# still all actually run at once. $ScriptBlock receives one item via $_ (as
+# usual for ForEach-Object) and must return a [PSCustomObject] with at least
+# Name/ExitCode/Output; GroupKey/SortKey are used only for result ordering.
+function Invoke-ParallelBatch {
+    param(
+        [Parameter(Mandatory)] [array]$Items,
+        [Parameter(Mandatory)] [scriptblock]$ScriptBlock,
+        [string]$GroupKey,
+        [string]$SortKey = "Name"
+    )
+
+    $throttle = [Environment]::ProcessorCount
+    $results = $Items | ForEach-Object -ThrottleLimit $throttle -Parallel $ScriptBlock
+
+    $ordered = if ($GroupKey) {
+        $results | Group-Object $GroupKey | ForEach-Object { $_.Group | Sort-Object $SortKey }
+    } else {
+        $results | Sort-Object $SortKey
+    }
+
+    foreach ($result in $ordered) {
+        Write-Host "  $($result.Name)"
+        if ($result.Output) {
+            Write-Host $result.Output.TrimEnd()
+        }
+        if ($result.ExitCode -ne 0) {
+            throw "$($result.Name) failed with exit code $($result.ExitCode)"
+        }
+    }
+
+    return $ordered
+}
+
+# Builds dcc, dccpeep, dccrtlstrip, dccmake, m80c, and l80c together instead
+# of one at a time: every source file across every target is compiled in one
+# flat parallel wave (so dcc's many files compile alongside dccpeep's, which
+# compile alongside the single-file tools, all sharing the machine's cores),
+# then all six targets are linked in a second parallel wave. This replaces
+# the previous approach of one `cl` invocation per target, run sequentially,
+# with all of a target's own sources passed to that single invocation --
+# which only ever used one core at a time, six times over.
+#
+# Splitting compile and link into two separate cl.exe invocations (needed to
+# flatten compilation across targets) loses two things cl normally infers
+# automatically when compiling and linking in one combined invocation, so
+# they're restored explicitly in $linkerFlags below: /LTCG (link-time
+# codegen for the /GL-compiled objects) and /DEBUG (linker-generated PDB for
+# the /Zi debug info already embedded in those objects). /FS makes /Zi safe
+# when multiple parallel cl.exe processes write into one target's shared PDB.
 function Build-WindowsMsvc {
     Initialize-Msvc
     Remove-MisplacedArtifacts
@@ -247,55 +323,57 @@ function Build-WindowsMsvc {
         "/Qpar",
         "/FAsc",
         "/Zi",
+        "/FS",
         "/std:c11"
     )
-    $linkerFlags = @("user32.lib", "ntdll.lib", "/OPT:REF")
+    $linkerFlags = @("user32.lib", "ntdll.lib", "/OPT:REF", "/LTCG", "/DEBUG")
 
-    $dccOut = Join-Path $repoRoot "dcc.exe"
-    $dccObjDir = Join-Path $outputRoot "dcc"
-    New-BuildDirectory $dccObjDir
-
-    Write-Host "`n=== Building dcc compiler ==="
-    Push-Location (Join-Path $repoRoot "src\dcc")
-    try {
-        $sources = Get-ChildItem -Path . -Filter "*.c" | ForEach-Object { $_.Name }
-        $arguments = @($cflags) + @(
-            "/I.",
-            "/Fo:$dccObjDir\",
-            "/Fa$dccObjDir\",
-            "/Fd:$dccObjDir\dcc.pdb",
-            "/Fe:$dccOut"
-        ) + $sources + @("/link") + $linkerFlags + @("/PDB:$dccObjDir\dcc-link.pdb")
-        Invoke-Checked "cl" $arguments "dcc compilation"
-    } finally {
-        Pop-Location
+    $targets = Get-BuildTargets (Join-Path $repoRoot "src")
+    foreach ($target in $targets) {
+        $target.ObjDir = Join-Path $outputRoot $target.Name
+        $target.Out = Join-Path $repoRoot "$($target.Name).exe"
+        $target.Sources = @(Get-ChildItem -Path $target.SourceDir -Filter "*.c" | Sort-Object Name)
+        New-BuildDirectory $target.ObjDir
     }
 
-    $tools = @(
-        @{ Name = "dccpeep"; Sources = @(Get-ChildItem (Join-Path $repoRoot "src\dccpeep") -Filter "*.c" | Sort-Object Name | ForEach-Object FullName) },
-        @{ Name = "dccrtlstrip"; Sources = @((Join-Path $repoRoot "src\dccrtlstrip\dccrtlstrip.c")) },
-        @{ Name = "dccmake"; Sources = @((Join-Path $repoRoot "src\dccmake\dccmake.c")) },
-        @{ Name = "m80c"; Sources = @((Join-Path $repoRoot "src\m80c\m80c.c")) },
-        @{ Name = "l80c"; Sources = @((Join-Path $repoRoot "src\l80c\l80c.c")) }
-    )
-
-    foreach ($tool in $tools) {
-        Write-Host "`n=== Building $($tool.Name) ==="
-        $toolObjDir = Join-Path $outputRoot $tool.Name
-        $toolOut = Join-Path $repoRoot "$($tool.Name).exe"
-        New-BuildDirectory $toolObjDir
-
-        $arguments = @($tool.Sources) + $cflags + @(
-            "/Fo:$toolObjDir\",
-            "/Fa$toolObjDir\",
-            "/Fd:$toolObjDir\$($tool.Name).pdb",
-            "/Fe:$toolOut",
-            "/link"
-        ) + $linkerFlags + @("/PDB:$toolObjDir\$($tool.Name)-link.pdb")
-        Invoke-Checked "cl" $arguments "$($tool.Name) compilation"
+    Write-Host "`n=== Compiling dcc, dccpeep, dccrtlstrip, dccmake, m80c, l80c in parallel ==="
+    $units = foreach ($target in $targets) {
+        foreach ($source in $target.Sources) {
+            [PSCustomObject]@{
+                Target = $target.Name
+                Name   = "$($target.Name)/$($source.Name)"
+                Object = Join-Path $target.ObjDir ([System.IO.Path]::ChangeExtension($source.Name, ".obj"))
+                Args   = @($cflags) + @(
+                    "/I$($target.SourceDir)",
+                    "/c", $source.FullName,
+                    "/Fo:$(Join-Path $target.ObjDir ([System.IO.Path]::ChangeExtension($source.Name, '.obj')))",
+                    "/Fa$($target.ObjDir)\",
+                    "/Fd:$($target.ObjDir)\$($target.Name).pdb"
+                )
+            }
+        }
     }
 
-    return @($dccOut, (Join-Path $repoRoot "dccpeep.exe"), (Join-Path $repoRoot "dccrtlstrip.exe"), (Join-Path $repoRoot "dccmake.exe"), (Join-Path $repoRoot "m80c.exe"), (Join-Path $repoRoot "l80c.exe"))
+    $compileResults = Invoke-ParallelBatch -Items $units -GroupKey "Target" -ScriptBlock {
+        $unit = $_
+        $output = & cl @($unit.Args) 2>&1
+        [PSCustomObject]@{ Target = $unit.Target; Name = $unit.Name; Object = $unit.Object; ExitCode = $LASTEXITCODE; Output = ($output | Out-String) }
+    }
+
+    foreach ($target in $targets) {
+        $target.Objects = @($compileResults | Where-Object Target -eq $target.Name | ForEach-Object Object)
+    }
+
+    Write-Host "`n=== Linking dcc, dccpeep, dccrtlstrip, dccmake, m80c, l80c in parallel ==="
+    Invoke-ParallelBatch -Items $targets -ScriptBlock {
+        $target = $_
+        $linkerFlags = $using:linkerFlags
+        $arguments = @("/nologo") + @($target.Objects) + @("/Fe:$($target.Out)", "/link") + $linkerFlags + @("/PDB:$($target.ObjDir)\$($target.Name)-link.pdb")
+        $output = & cl @arguments 2>&1
+        [PSCustomObject]@{ Name = $target.Name; ExitCode = $LASTEXITCODE; Output = ($output | Out-String) }
+    } | Out-Null
+
+    return @($targets | ForEach-Object Out)
 }
 
 function Get-UnixCompiler {
@@ -311,54 +389,10 @@ function Get-UnixCompiler {
     return "gcc"
 }
 
-# Compiles each source to its own object file in parallel runspaces (one
-# process invocation per file, no shared state between them), then returns
-# the object paths in stable source-name order for a deterministic link
-# command. The C compiler does not parallelize across multiple input files
-# within a single invocation, so compiling N files one at a time in this
-# loop previously ran effectively single-threaded even on a many-core
-# machine; each file is an independent compiler subprocess, so this is safe
-# to run concurrently up to the machine's processor count.
-function Invoke-ParallelCompileSources {
-    param(
-        [System.IO.FileInfo[]]$Sources,
-        [string]$Compiler,
-        [string[]]$BaseCflags,
-        [string]$ObjDir,
-        [string]$IncludeDir
-    )
-
-    $throttle = [Environment]::ProcessorCount
-    $results = $Sources | ForEach-Object -ThrottleLimit $throttle -Parallel {
-        $source = $_
-        $compiler = $using:Compiler
-        $baseCflags = $using:BaseCflags
-        $objDir = $using:ObjDir
-        $includeDir = $using:IncludeDir
-        $object = Join-Path $objDir ([System.IO.Path]::ChangeExtension($source.Name, ".o"))
-        $arguments = @($baseCflags) + @("-I", $includeDir, "-c", $source.FullName, "-o", $object)
-        $output = & $compiler @arguments 2>&1
-        [PSCustomObject]@{
-            Name     = $source.Name
-            Object   = $object
-            ExitCode = $LASTEXITCODE
-            Output   = ($output | Out-String)
-        }
-    }
-
-    foreach ($result in ($results | Sort-Object Name)) {
-        Write-Host "  compiling $($result.Name)"
-        if ($result.Output) {
-            Write-Host $result.Output.TrimEnd()
-        }
-        if ($result.ExitCode -ne 0) {
-            throw "compiling $($result.Name) failed with exit code $($result.ExitCode)"
-        }
-    }
-
-    return ($results | Sort-Object Name | ForEach-Object Object)
-}
-
+# Same idea as Build-WindowsMsvc above: compile every source file across all
+# six targets in one flat parallel wave, then link all six targets in a
+# second parallel wave, instead of building one target fully before starting
+# the next.
 function Build-UnixNative {
     Remove-MisplacedArtifacts
 
@@ -412,37 +446,50 @@ function Build-UnixNative {
         $linkFlags = @("-static")
     }
 
-    Write-Host "`n=== Building dcc compiler ==="
-    $dccObjDir = Join-Path $outputRoot "dcc"
-    $dccOut = Join-Path $repoRoot "dcc"
-    New-BuildDirectory $dccObjDir
-
-    $dccSources = Get-ChildItem -Path (Join-Path $repoRoot "src\dcc") -Filter "*.c" | Sort-Object Name
-    $dccObjects = Invoke-ParallelCompileSources -Sources $dccSources -Compiler $compiler `
-        -BaseCflags $baseCflags -ObjDir $dccObjDir -IncludeDir (Join-Path $repoRoot "src\dcc")
-    Invoke-Checked $compiler (@($baseCflags) + $dccObjects + $linkFlags + @("-o", $dccOut)) "linking dcc"
-
-    $tools = @(
-        @{ Name = "dccpeep"; Sources = @(Get-ChildItem (Join-Path $repoRoot "src/dccpeep") -Filter "*.c" | Sort-Object Name | ForEach-Object FullName) },
-        @{ Name = "dccrtlstrip"; Sources = @((Join-Path $repoRoot "src/dccrtlstrip/dccrtlstrip.c")) },
-        @{ Name = "dccmake"; Sources = @((Join-Path $repoRoot "src/dccmake/dccmake.c")) },
-        @{ Name = "m80c"; Sources = @((Join-Path $repoRoot "src/m80c/m80c.c")) },
-        @{ Name = "l80c"; Sources = @((Join-Path $repoRoot "src/l80c/l80c.c")) }
-    )
-
-    foreach ($tool in $tools) {
-        Write-Host "`n=== Building $($tool.Name) ==="
-        $toolObjDir = Join-Path $outputRoot $tool.Name
-        $toolOut = Join-Path $repoRoot $tool.Name
-        New-BuildDirectory $toolObjDir
-
-        $toolSources = $tool.Sources | ForEach-Object { Get-Item $_ }
-        $toolObjects = Invoke-ParallelCompileSources -Sources $toolSources -Compiler $compiler `
-            -BaseCflags $baseCflags -ObjDir $toolObjDir -IncludeDir (Split-Path $tool.Sources[0] -Parent)
-        Invoke-Checked $compiler (@($baseCflags) + $toolObjects + $linkFlags + @("-o", $toolOut)) "linking $($tool.Name)"
+    $targets = Get-BuildTargets (Join-Path $repoRoot "src")
+    foreach ($target in $targets) {
+        $target.ObjDir = Join-Path $outputRoot $target.Name
+        $target.Out = Join-Path $repoRoot $target.Name
+        $target.Sources = @(Get-ChildItem -Path $target.SourceDir -Filter "*.c" | Sort-Object Name)
+        New-BuildDirectory $target.ObjDir
     }
 
-    return @($dccOut, (Join-Path $repoRoot "dccpeep"), (Join-Path $repoRoot "dccrtlstrip"), (Join-Path $repoRoot "dccmake"), (Join-Path $repoRoot "m80c"), (Join-Path $repoRoot "l80c"))
+    Write-Host "`n=== Compiling dcc, dccpeep, dccrtlstrip, dccmake, m80c, l80c in parallel ==="
+    $units = foreach ($target in $targets) {
+        foreach ($source in $target.Sources) {
+            $object = Join-Path $target.ObjDir ([System.IO.Path]::ChangeExtension($source.Name, ".o"))
+            [PSCustomObject]@{
+                Target = $target.Name
+                Name   = "$($target.Name)/$($source.Name)"
+                Object = $object
+                Args   = @($baseCflags) + @("-I", $target.SourceDir, "-c", $source.FullName, "-o", $object)
+            }
+        }
+    }
+
+    $compileResults = Invoke-ParallelBatch -Items $units -GroupKey "Target" -ScriptBlock {
+        $unit = $_
+        $compiler = $using:compiler
+        $output = & $compiler @($unit.Args) 2>&1
+        [PSCustomObject]@{ Target = $unit.Target; Name = $unit.Name; Object = $unit.Object; ExitCode = $LASTEXITCODE; Output = ($output | Out-String) }
+    }
+
+    foreach ($target in $targets) {
+        $target.Objects = @($compileResults | Where-Object Target -eq $target.Name | ForEach-Object Object)
+    }
+
+    Write-Host "`n=== Linking dcc, dccpeep, dccrtlstrip, dccmake, m80c, l80c in parallel ==="
+    Invoke-ParallelBatch -Items $targets -ScriptBlock {
+        $target = $_
+        $compiler = $using:compiler
+        $baseCflags = $using:baseCflags
+        $linkFlags = $using:linkFlags
+        $arguments = @($baseCflags) + @($target.Objects) + @($linkFlags) + @("-o", $target.Out)
+        $output = & $compiler @arguments 2>&1
+        [PSCustomObject]@{ Name = $target.Name; ExitCode = $LASTEXITCODE; Output = ($output | Out-String) }
+    } | Out-Null
+
+    return @($targets | ForEach-Object Out)
 }
 
 function Build-DccDebugHost {
