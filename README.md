@@ -18,7 +18,9 @@ dccrtlstrip.c is an app that examines the code of your .c file and strips portio
 The complete host toolchain builds and runs on Windows, Linux, and macOS with
 `pwsh ./scripts/build-dcc.ps1`. It builds `dcc`, `dccpeep`, `dccrtlstrip`,
 `dccmake`, `m80c`, `l80c`, `dcc-debug-host`, and the example debugger I/O
-adapter. The host tools are too large to run on CP/M.
+adapter. The host tools are too large to run on CP/M. On Linux platforms
+without a PowerShell package (RISC-V64 boards, Raspberry Pi OS, etc.),
+`sh m-posix.sh` builds the same tools using only `/bin/sh` and a C compiler.
 
 Dcc has been built and had regression tests run on AMD64 (Linux and Windows), Arm64(Linux, Windows, MacOS), Arm32 (Linux), and RISC-V 64 (Linux).
 
@@ -241,8 +243,8 @@ git clone https://github.com/davidly/ntvcm.git
 
 ### Building dcc
 
-dcc compiles on Windows, Linux, and macOS. PowerShell 7 (`pwsh`) and CMake are
-required on every platform. Build the complete host toolchain with:
+dcc compiles on Windows, Linux, and macOS. The canonical build uses
+PowerShell 7 (`pwsh`) and CMake, and builds the complete host toolchain:
 
 ```powershell
 pwsh ./scripts/build-dcc.ps1
@@ -251,6 +253,18 @@ pwsh ./scripts/build-dcc.ps1
 This produces `dcc`, `dccpeep`, `dccrtlstrip`, `dccmake`, `m80c`, and `l80c` in
 the repository root, together with `dcc-debug-host` and the platform-specific
 example I/O adapter library.
+
+On Linux platforms without a PowerShell package - RISC-V64 boards, Raspberry
+Pi OS on a Pi 4, and similar - use `m-posix.sh` instead. It needs nothing
+beyond `/bin/sh` and a C compiler, and builds the same `dcc`, `dccpeep`,
+`dccrtlstrip`, `dccmake`, `m80c`, and `l80c` tools. It also attempts
+`dcc-debug-host` and its example adapter if `cmake` and a C++ compiler are
+available, skipping that step cleanly (with a clear message) otherwise, since
+the six C tools are what's needed to actually use dcc:
+
+```bash
+sh m-posix.sh
+```
 
 ### Building ntvcm
 

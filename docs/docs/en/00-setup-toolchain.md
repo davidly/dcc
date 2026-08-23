@@ -9,7 +9,9 @@ Setup flow:
 
 - Install the host prerequisites for Windows, macOS, or Linux.
 - Clone the DCC C Compiler (`dcc`) and `ntvcm` repositories.
-- Build the DCC C Compiler host tools with `pwsh ./scripts/build-dcc.ps1`.
+- Build the DCC C Compiler host tools with `pwsh ./scripts/build-dcc.ps1`
+  (or `sh m-posix.sh` on Linux platforms without a PowerShell package, e.g.
+  RISC-V64 boards or Raspberry Pi OS).
 - Build the ntvcm emulator.
 - Add the DCC C Compiler and ntvcm directories to your `PATH`.
 - Verify the setup with a sample CP/M program.
@@ -125,6 +127,25 @@ building DCC C Compiler or ntvcm.
 
         The `file` output should report `ARM aarch64`.
 
+=== "Linux without PowerShell (RISC-V64, etc.)"
+
+    Some platforms this project targets - RISC-V64 boards, for example - have
+    no PowerShell package and no official release tarball at all, unlike
+    ARM64 above. On any such Linux platform, skip installing PowerShell
+    entirely:
+
+    1. Install gcc, g++, make, and the usual build tools:
+
+        ```bash
+        sudo apt install build-essential
+        ```
+
+    2. Use `m-posix.sh` in place of `pwsh ./scripts/build-dcc.ps1` throughout
+       this guide - see [Build DCC C Compiler](#build-dcc-c-compiler) below.
+       It needs nothing beyond `/bin/sh` (tested under `dash`, what Raspberry
+       Pi OS/Debian actually use) and a C compiler, and builds the same
+       `dcc`, `dccpeep`, `dccrtlstrip`, `dccmake`, `m80c`, and `l80c` tools.
+
 === "Windows ARM64"
 
     1. Install Visual Studio Build Tools with the C++ workload and native ARM64
@@ -172,6 +193,14 @@ builds `dcc`, `dccpeep`, and `dccrtlstrip`, using MSVC on Windows, clang on
 macOS, and gcc on Linux by default:
 
     pwsh ./scripts/build-dcc.ps1
+
+On Linux platforms without a PowerShell package - RISC-V64 boards, Raspberry
+Pi OS on a Pi 4, and similar - use `m-posix.sh` at the repository root
+instead. It needs only `/bin/sh` and a C compiler, and builds the same
+`dcc`, `dccpeep`, `dccrtlstrip`, `dccmake`, `m80c`, and `l80c` tools (plus,
+best-effort, `dcc-debug-host` if `cmake` and a C++ compiler are available):
+
+    sh m-posix.sh
 
 ## Build ntvcm
 
