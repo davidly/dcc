@@ -75,8 +75,9 @@ pwsh ./scripts/build-dcc.ps1
 ```
 
 That build must produce `dcc-debug-host` and the example I/O adapter shared
-library as required outputs on macOS, Linux, and Windows. The example filename
-is `.dylib`, `.so`, or `.dll` according to platform.
+library as required outputs in the repository root on macOS, Linux, and
+Windows. The example filename is `.dylib`, `.so`, or `.dll` according to
+platform.
 
 CMake is the independent compiler build check:
 

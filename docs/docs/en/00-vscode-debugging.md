@@ -202,7 +202,7 @@ Build the debugger host and add it to the compound pre-launch task:
 {
   "label": "Build DCC debugger host",
   "type": "shell",
-  "command": "cmake -S src/dcc_debug_host -B build/dcc_debug_host && cmake --build build/dcc_debug_host --target dcc-debug-host",
+  "command": "pwsh ./scripts/build-dcc.ps1",
   "options": {
     "cwd": "${workspaceFolder}"
   },
@@ -221,9 +221,8 @@ Build the debugger host and add it to the compound pre-launch task:
 
 ## Add the launch configuration
 
-Create `.vscode/launch.json` with the following configuration. On Windows,
-`miDebuggerPath` normally ends in
-`build/dcc_debug_host/Release/dcc-debug-host.exe`.
+Create `.vscode/launch.json` with the following configuration. On Windows, use
+`${workspaceFolder}/dcc-debug-host.exe` for `miDebuggerPath`.
 
 ```json
 {
@@ -237,7 +236,7 @@ Create `.vscode/launch.json` with the following configuration. On Windows,
       "program": "${fileDirname}/${fileBasenameNoExtension}.COM",
       "cwd": "${fileDirname}",
       "MIMode": "gdb",
-      "miDebuggerPath": "${workspaceFolder}/build/dcc_debug_host/dcc-debug-host",
+      "miDebuggerPath": "${workspaceFolder}/dcc-debug-host",
       "miDebuggerArgs": "--interpreter=mi",
       "targetArchitecture": "x86",
       "launchCompleteCommand": "exec-continue",

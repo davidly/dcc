@@ -7,7 +7,8 @@ Build dcc, dccpeep, dccrtlstrip, dccmake, m80c, l80c, dcc-debug-host, and its ex
 Compiles the C host tools with the native compiler for the current platform:
 MSVC on Windows, clang on macOS, and gcc on Linux by default. The C++ debugger
 host and example adapter shared library are built with CMake. Build artifacts
-are placed under build/; final C commands are placed in the repository root.
+are placed under build/; all final tools and the example adapter are published
+in the repository root.
 On Linux, the C tools are linked -static by default (see -NoStatic); the CMake
 debugger build uses its platform defaults. macOS has no static libSystem to
 link against.
@@ -443,6 +444,18 @@ function Build-DccDebugHost {
     $buildDir = Join-Path $outputRoot "dcc_debug_host"
     New-BuildDirectory $buildDir
 
+    $executableName = if ($IsWindows) { "dcc-debug-host.exe" } else { "dcc-debug-host" }
+    $adapterName = if ($IsWindows) {
+        "dcc-debug-io-adapter-example.dll"
+    } elseif ($IsMacOS) {
+        "libdcc-debug-io-adapter-example.dylib"
+    } else {
+        "libdcc-debug-io-adapter-example.so"
+    }
+    $debugHostOut = Join-Path $repoRoot $executableName
+    $adapterOut = Join-Path $repoRoot $adapterName
+    Remove-Item -LiteralPath $debugHostOut, $adapterOut -Force -ErrorAction SilentlyContinue
+
     Write-Host "`n=== Building dcc-debug-host and example I/O adapter ==="
     Invoke-Checked $cmakeCommand.Source @(
         "-S", $sourceDir,
@@ -457,23 +470,15 @@ function Build-DccDebugHost {
         "--target", "dcc-debug-host", "dcc-debug-io-adapter-example"
     ) "debugger host and example adapter compilation"
 
-    $executableName = if ($IsWindows) { "dcc-debug-host.exe" } else { "dcc-debug-host" }
     $candidates = @(
         (Join-Path $buildDir $executableName),
         (Join-Path (Join-Path $buildDir "Release") $executableName)
     )
-    $debugHostOut = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-    if (-not $debugHostOut) {
+    $debugHostBuilt = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $debugHostBuilt) {
         throw "dcc-debug-host build completed but $executableName was not found under $buildDir"
     }
 
-    $adapterName = if ($IsWindows) {
-        "dcc-debug-io-adapter-example.dll"
-    } elseif ($IsMacOS) {
-        "libdcc-debug-io-adapter-example.dylib"
-    } else {
-        "libdcc-debug-io-adapter-example.so"
-    }
     $adapterDir = Join-Path (Join-Path $buildDir "examples") "io_adapter"
     $adapterCandidates = @(
         (Join-Path $adapterDir $adapterName),
@@ -481,9 +486,15 @@ function Build-DccDebugHost {
         (Join-Path $buildDir $adapterName),
         (Join-Path (Join-Path $buildDir "Release") $adapterName)
     )
-    $adapterOut = $adapterCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-    if (-not $adapterOut) {
+    $adapterBuilt = $adapterCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $adapterBuilt) {
         throw "example I/O adapter build completed but $adapterName was not found under $buildDir"
+    }
+
+    Copy-Item -LiteralPath $debugHostBuilt -Destination $debugHostOut -Force
+    Copy-Item -LiteralPath $adapterBuilt -Destination $adapterOut -Force
+    if (-not (Test-Path $debugHostOut) -or -not (Test-Path $adapterOut)) {
+        throw "debugger host artifacts were not published to the repository root"
     }
     return @($debugHostOut, $adapterOut)
 }
@@ -500,8 +511,8 @@ $executables = @($executables)
 $executables += Build-DccDebugHost
 
 Write-Host "`n=== Build complete ==="
-Write-Host "Commands:"
+Write-Host "Root outputs:"
 foreach ($executable in $executables) {
     Write-Host "  $executable"
 }
-Write-Host "Build artifacts: $outputPathDisplay"
+Write-Host "Intermediate build artifacts: $outputPathDisplay"

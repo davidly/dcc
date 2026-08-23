@@ -12,12 +12,13 @@ DCC build includes the host and example I/O adapter:
 pwsh ./scripts/build-dcc.ps1
 ```
 
-The script explicitly builds and verifies both targets. The example adapter is
-generated under `build/dcc_debug_host/examples/io_adapter/` as:
+The script explicitly builds, verifies, and publishes both targets in the
+repository root as:
 
+- `dcc-debug-host` on macOS/Linux or `dcc-debug-host.exe` on Windows; and
 - `libdcc-debug-io-adapter-example.dylib` on macOS;
 - `libdcc-debug-io-adapter-example.so` on Linux; or
-- `Release/dcc-debug-io-adapter-example.dll` on Windows.
+- `dcc-debug-io-adapter-example.dll` on Windows.
 
 DCC's normal CI runs this same build on Windows, Linux, and macOS. The release
 matrix additionally covers Windows ARM64 and Linux ARM64.
@@ -31,9 +32,8 @@ cmake --build build/dcc_debug_host_tests --parallel
 ctest --test-dir build/dcc_debug_host_tests --output-on-failure
 ```
 
-The executable is `build/dcc_debug_host/dcc-debug-host` on macOS/Linux and
-`build/dcc_debug_host/Release/dcc-debug-host.exe` on multi-configuration
-Windows builds.
+The direct CMake build keeps its executable in the selected CMake build tree;
+the normal cross-platform build publishes it to the repository root.
 
 ## Generic host boundary
 
@@ -50,7 +50,7 @@ versioned C ABI in `src/dcc_debug_host/include/dcc_debug_io_adapter.h`.
 Load one with:
 
 ```sh
-./build/dcc_debug_host/dcc-debug-host --interpreter=mi \
+./dcc-debug-host --interpreter=mi \
   --io-adapter /path/to/libdcc-debug-io-adapter.so \
   --env-file /path/to/debugger.env
 ```
@@ -153,9 +153,10 @@ ctest --test-dir build/dcc_debug_host_tests \
   -R dcc-debug-io-adapter-example --output-on-failure
 ```
 
-The library is generated under
-`build/dcc_debug_host/examples/io_adapter/`. The sample cursor control bytes
-are illustrative policy, not part of the ABI; replace them with the bytes your
+This standalone test build keeps the library under
+`build/dcc_debug_host_tests/examples/io_adapter/`; the normal cross-platform
+build publishes it to the repository root. The sample cursor control bytes are
+illustrative policy, not part of the ABI; replace them with the bytes your
 target expects.
 
 Set `DCC_DEBUG_HOST_BUILD_EXAMPLES=OFF` when configuring CMake to omit example
@@ -170,7 +171,7 @@ uses an authenticated loopback socket. Start it before the host:
 python3 src/dcc_debug_host/dcc_host_terminal_bridge.py \
   --endpoint-file build/dcc_debug_host/terminal.endpoint
 
-./build/dcc_debug_host/dcc-debug-host --interpreter=mi \
+./dcc-debug-host --interpreter=mi \
   --terminal-endpoint-file build/dcc_debug_host/terminal.endpoint
 ```
 

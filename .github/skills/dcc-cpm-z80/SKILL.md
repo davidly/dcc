@@ -280,7 +280,7 @@ Build an app with `dccmake -g` so the final `.COM` and `DCCDBG 2` `.DBG` files
 are generated together. Keep them adjacent with identical basenames and never
 mix outputs from different builds. Build the host with
 `pwsh ./scripts/build-dcc.ps1` or CMake under `src/dcc_debug_host`, then launch
-`build/dcc_debug_host/dcc-debug-host --interpreter=mi`. See
+`./dcc-debug-host --interpreter=mi`. See
 [references/debugging.md](./references/debugging.md) for VS Code launch details,
 terminal input, dynamic I/O adapters, and the complete fixture workflow.
 

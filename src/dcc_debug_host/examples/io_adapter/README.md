@@ -19,18 +19,15 @@ Callbacks must never return more bytes than `output_size`.
 From the DCC repository root:
 
 ```sh
-cmake -S src/dcc_debug_host -B build/dcc_debug_host
-cmake --build build/dcc_debug_host --target dcc-debug-io-adapter-example
-ctest --test-dir build/dcc_debug_host -R dcc-debug-io-adapter-example \
-  --output-on-failure
+pwsh ./scripts/build-dcc.ps1
 ```
 
-The shared library is generated under
-`build/dcc_debug_host/examples/io_adapter/`. Load it with:
+The shared library and debugger host are published in the repository root.
+Load the example with:
 
 ```sh
-./build/dcc_debug_host/dcc-debug-host --interpreter=mi \
-  --io-adapter ./build/dcc_debug_host/examples/io_adapter/libdcc-debug-io-adapter-example.dylib
+./dcc-debug-host --interpreter=mi \
+  --io-adapter ./libdcc-debug-io-adapter-example.dylib
 ```
 
 Use `.so` on Linux and `dcc-debug-io-adapter-example.dll` on Windows.

@@ -36,7 +36,7 @@
         {
             "label": "Build DCC debugger host",
             "type": "shell",
-            "command": "cmake -S src/dcc_debug_host -B build/dcc_debug_host && cmake --build build/dcc_debug_host --target dcc-debug-host",
+            "command": "pwsh ./scripts/build-dcc.ps1",
             "options": {
                 "cwd": "${workspaceFolder}"
             },

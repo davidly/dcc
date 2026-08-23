@@ -33,8 +33,8 @@ launch expects a different basename.
 
 The host path is normally:
 
-- macOS/Linux: `build/dcc_debug_host/dcc-debug-host`
-- Windows: `build/dcc_debug_host/Release/dcc-debug-host.exe`
+- macOS/Linux: `./dcc-debug-host`
+- Windows: `dcc-debug-host.exe`
 
 Launch it as the `cppdbg` `miDebuggerPath`, pass `--interpreter=mi`, and use
 `launchCompleteCommand: "exec-continue"`.

@@ -79,11 +79,10 @@ The normal DCC build also builds `dcc-debug-host` and the example I/O adapter:
 pwsh ./scripts/build-dcc.ps1
 ```
 
-The adapter is written to `build/dcc_debug_host/examples/io_adapter/` as
-`libdcc-debug-io-adapter-example.dylib` on macOS,
-`libdcc-debug-io-adapter-example.so` on Linux, or under that directory's
-`Release/` subdirectory as `dcc-debug-io-adapter-example.dll` on Windows.
-The build script treats both the host and example adapter as required outputs.
+The build script publishes `dcc-debug-host` and the example adapter in the
+repository root. The adapter is `libdcc-debug-io-adapter-example.dylib` on
+macOS, `libdcc-debug-io-adapter-example.so` on Linux, or
+`dcc-debug-io-adapter-example.dll` on Windows. Both are required outputs.
 Normal CI runs that script on macOS, Linux, and Windows; release builds also
 cover Windows ARM64 and Linux ARM64.
 
@@ -135,7 +134,7 @@ To include the installed VS Code C++ adapter in the test:
 
 ```sh
 python3 src/dcc_debug_host/tests/dcc_host_mi_test.py \
-  build/dcc_debug_host/dcc-debug-host \
+  build/dcc_debug_host-sanitize/dcc-debug-host \
   "$HOME/.vscode/extensions/ms-vscode.cpptools-*/debugAdapters/bin/OpenDebugAD7"
 ```
 
@@ -219,13 +218,13 @@ to an instruction-boundary stop without exposing the signal to CP/M.
 ## Direct use
 
 ```sh
-./build/dcc_debug_host/dcc-debug-host --interpreter=mi
+./dcc-debug-host --interpreter=mi
 ```
 
 To load an I/O adapter:
 
 ```sh
-./build/dcc_debug_host/dcc-debug-host --interpreter=mi \
+./dcc-debug-host --interpreter=mi \
   --io-adapter /path/to/libdcc-debug-io-adapter.dylib \
   --env-file /path/to/debugger.env
 ```
@@ -241,7 +240,7 @@ and pass its endpoint file to the host:
 python3 src/dcc_debug_host/dcc_host_terminal_bridge.py \
   --endpoint-file build/dcc_debug_host/terminal.endpoint
 
-./build/dcc_debug_host/dcc-debug-host --interpreter=mi \
+./dcc-debug-host --interpreter=mi \
   --terminal-endpoint-file build/dcc_debug_host/terminal.endpoint
 ```
 

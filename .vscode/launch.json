@@ -9,10 +9,10 @@
             "program": "${workspaceFolder}/build/DCCDEBUG.COM",
             "cwd": "${workspaceFolder}/build",
             "MIMode": "gdb",
-            "miDebuggerPath": "${workspaceFolder}/build/dcc_debug_host/dcc-debug-host",
+            "miDebuggerPath": "${workspaceFolder}/dcc-debug-host",
             "miDebuggerArgs": "--interpreter=mi",
             "windows": {
-                "miDebuggerPath": "${workspaceFolder}/build/dcc_debug_host/Release/dcc-debug-host.exe"
+                "miDebuggerPath": "${workspaceFolder}/dcc-debug-host.exe"
             },
             "targetArchitecture": "x86",
             "sourceFileMap": {

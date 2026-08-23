@@ -249,8 +249,8 @@ pwsh ./scripts/build-dcc.ps1
 ```
 
 This produces `dcc`, `dccpeep`, `dccrtlstrip`, `dccmake`, `m80c`, and `l80c` in
-the repository root, plus `dcc-debug-host` and the example I/O adapter under
-`build/dcc_debug_host/`.
+the repository root, together with `dcc-debug-host` and the platform-specific
+example I/O adapter library.
 
 ### Building ntvcm
 
