@@ -7889,36 +7889,53 @@ static int mir_values_interfere(const unsigned char *interference,
     return interference[(size_t)left * value_count + right] != 0;
 }
 
+/* Compacts a dense value_count-wide liveness bitmap into the list of live
+ * value indices, returning how many are live. Liveness sets are typically
+ * sparse relative to value_count, so every consumer below walks this list
+ * instead of re-scanning the full bitmap. */
+static int mir_compact_live_set(const unsigned char *live, int value_count,
+                                int *live_list)
+{
+    int i;
+    int count = 0;
+
+    for (i = 0; i < value_count; ++i)
+        if (live[i])
+            live_list[count++] = i;
+    return count;
+}
+
 static void mir_add_live_set_interference(unsigned char *interference,
                                           int value_count,
-                                          const unsigned char *live)
+                                          const int *live_list,
+                                          int live_count)
 {
     int left;
     int right;
 
-    for (left = 0; left < value_count; ++left) {
-        if (!live[left])
-            continue;
-        for (right = left + 1; right < value_count; ++right) {
-            if (!live[right])
-                continue;
-            interference[(size_t)left * value_count + right] = 1;
-            interference[(size_t)right * value_count + left] = 1;
+    for (left = 0; left < live_count; ++left) {
+        int lv = live_list[left];
+        for (right = left + 1; right < live_count; ++right) {
+            int rv = live_list[right];
+            interference[(size_t)lv * value_count + rv] = 1;
+            interference[(size_t)rv * value_count + lv] = 1;
         }
     }
 }
 
 static void mir_add_definition_live_out_interference(
     unsigned char *interference, int value_count,
-    const struct MirInsn *insn, const unsigned char *live_out)
+    const struct MirInsn *insn, const int *live_out_list, int live_out_count)
 {
-    int value;
+    int i;
 
     if (insn->dst < 0 || insn->dst >= value_count ||
         insn->opcode == MIR_NOP)
         return;
-    for (value = 0; value < value_count; ++value) {
-        if (value == insn->dst || !live_out[value])
+    for (i = 0; i < live_out_count; ++i) {
+        int value = live_out_list[i];
+
+        if (value == insn->dst)
             continue;
         interference[(size_t)insn->dst * value_count + value] = 1;
         interference[(size_t)value * value_count + insn->dst] = 1;
@@ -8069,6 +8086,8 @@ static void mir_allocate_registers_stable(
     int *fixed_color;
     int *preferences;
     unsigned char *register_value;
+    int *live_in_list;
+    int *live_out_list;
     int i;
 
     memset(summary, 0, sizeof(*summary));
@@ -8106,11 +8125,15 @@ static void mir_allocate_registers_stable(
     preferences = (int *)calloc((size_t)value_count * MIR_COLOR_COUNT,
                                 sizeof(*preferences));
     register_value = (unsigned char *)calloc((size_t)value_count, 1);
+    live_in_list = (int *)malloc((size_t)value_count * sizeof(*live_in_list));
+    live_out_list =
+        (int *)malloc((size_t)value_count * sizeof(*live_out_list));
     if (interference == NULL || cross_call == NULL ||
         cross_guarded_call == NULL || cross_opaque == NULL ||
         degree == NULL || order == NULL || color == NULL ||
         fixed_color == NULL || preferences == NULL ||
-        register_value == NULL)
+        register_value == NULL || live_in_list == NULL ||
+        live_out_list == NULL)
         fatal("out of memory simulating MIR allocation");
 
     for (i = 0; i < value_count; ++i)
@@ -8120,12 +8143,18 @@ static void mir_allocate_registers_stable(
     for (i = 0; i < mir.count; ++i) {
         const unsigned char *in = &live_in[(size_t)i * value_count];
         const unsigned char *out = &live_out[(size_t)i * value_count];
+        int in_count = mir_compact_live_set(in, value_count, live_in_list);
+        int out_count =
+            mir_compact_live_set(out, value_count, live_out_list);
         int value;
 
-        mir_add_live_set_interference(interference, value_count, in);
-        mir_add_live_set_interference(interference, value_count, out);
+        mir_add_live_set_interference(interference, value_count,
+                                      live_in_list, in_count);
+        mir_add_live_set_interference(interference, value_count,
+                                      live_out_list, out_count);
         mir_add_definition_live_out_interference(
-            interference, value_count, &mir.insns[i], out);
+            interference, value_count, &mir.insns[i], live_out_list,
+            out_count);
         if (mir_instruction_clobbers_caller_registers(&mir.insns[i]) ||
             mir.insns[i].opcode == MIR_OPAQUE) {
             for (value = 0; value < value_count; ++value) {
@@ -8382,6 +8411,8 @@ static void mir_allocate_registers_stable(
     free(cross_guarded_call);
     free(cross_call);
     free(interference);
+    free(live_in_list);
+    free(live_out_list);
 }
 
 static void mir_allocate_registers(

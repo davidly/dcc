@@ -13841,6 +13841,7 @@ static int mir_prepare_backend_slots(void)
     int *last;
     int *slot_end;
     char *fused_away = NULL;
+    char *fused_byte_comparison_component = NULL;
     int planned_narrow_cache_call = -1;
     int planned_wide_cache_call = -1;
     int slot_capacity;
@@ -13993,6 +13994,22 @@ static int mir_prepare_backend_slots(void)
         if (address_definition != NULL &&
             address_definition + 1 == &mir.insns[i])
             fused_away[incdec.address_value] = 2;
+    }
+    fused_byte_comparison_component =
+        (char *)calloc((size_t)mir.next_value, 1);
+    if (fused_byte_comparison_component == NULL)
+        fatal("out of memory computing MIR fused-byte-comparison set");
+    for (i = 3; i < mir.count; ++i) {
+        const struct MirInsn *binary = &mir.insns[i];
+        const struct MirInsn *widen;
+        int load_instruction;
+
+        if (!mir_fused_byte_constant_comparison(i, &load_instruction, NULL))
+            continue;
+        widen = mir_definition(binary->src1);
+        fused_byte_comparison_component[mir.insns[load_instruction].dst] = 1;
+        if (widen != NULL)
+            fused_byte_comparison_component[widen->dst] = 1;
     }
     for (value = 0; value < mir.next_value; ++value) {
         first[value] = mir.count;
@@ -14278,8 +14295,7 @@ static int mir_prepare_backend_slots(void)
                                             value) ||
                                         mir_wide_constant_is_signed_relational_immediate(
                                             value) ||
-                                        mir_value_is_fused_byte_comparison_component(
-                                            value) ||
+                                        fused_byte_comparison_component[value] ||
                                         mir_widened_param_is_single_call_argument(
                                             value, NULL, NULL) ||
                                         mir_value_is_wide_narrow_multiply_widen(
@@ -14530,6 +14546,7 @@ static int mir_prepare_backend_slots(void)
                         mir_value_use_count(value));
             }
     free(fused_away);
+    free(fused_byte_comparison_component);
     free(slot_end);
     free(last);
     free(first);
