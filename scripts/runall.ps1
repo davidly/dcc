@@ -1046,9 +1046,22 @@ function Invoke-ComRunAndCompare {
     # Strip the ntvcm performance block (and any blank separator before it).
     $output = [regex]::Replace($output, '(?s)\r?\n\s*elapsed milliseconds:.*$', '')
 
+    # ntvcm's self-reported "elapsed milliseconds" is the time it measured
+    # internally - it can never legitimately exceed the wall-clock time this
+    # script's own Stopwatch measured wrapping the entire process invocation
+    # (start, run, exit). If ntvcm ever misreports a garbage value here (seen
+    # intermittently - a huge number that dwarfs $runSw), an unguarded sum
+    # across all apps blows up the "ntvcm run" aggregate in the timing
+    # breakdown to something nonsensical (and cascades into zeroing out
+    # "ntvcm spawn"/"other script" via the Max(...,0) clamps downstream).
+    # Fall back to the reliably-measured PowerShell-side elapsed time instead
+    # of trusting an implausible self-report.
+    $ntvcmMsValid = $ntvcmMs -ne "" -and
+        [double]$ntvcmMs -le ($runSw.ElapsedMilliseconds + 1000)
+
     $result = [pscustomobject]@{
         Passed      = -not ($runTimedOut -or $runFailed)
-        Ms          = if ($ntvcmMs -ne "") { $ntvcmMs } else { $runSw.ElapsedMilliseconds }
+        Ms          = if ($ntvcmMsValid) { $ntvcmMs } else { $runSw.ElapsedMilliseconds }
         Cycles      = $ntvcmCycles
         ClockHz     = $ntvcmClockHz
         PsElapsedMs = $runSw.ElapsedMilliseconds
