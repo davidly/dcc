@@ -553,20 +553,26 @@ function Build-DccDebugHost {
     return @($debugHostOut, $adapterOut)
 }
 
-Write-Host "Build artifacts will go to: $outputPathDisplay"
-Write-Host "Commands will be placed in: $repoRoot"
+# Sentinel only for scripts/tests/test_msvc_toolchain_detection.ps1, which
+# dot-sources this file to reach Get-MsvcToolchain/Get-MsvcVarsPath without
+# triggering a real build. Never set by normal invocation - `pwsh
+# ./scripts/build-dcc.ps1` behaves exactly as before.
+if (-not $env:DCC_BUILD_DCC_SKIP_MAIN) {
+    Write-Host "Build artifacts will go to: $outputPathDisplay"
+    Write-Host "Commands will be placed in: $repoRoot"
 
-$executables = if ($IsWindows) {
-    Build-WindowsMsvc
-} else {
-    Build-UnixNative
-}
-$executables = @($executables)
-$executables += Build-DccDebugHost
+    $executables = if ($IsWindows) {
+        Build-WindowsMsvc
+    } else {
+        Build-UnixNative
+    }
+    $executables = @($executables)
+    $executables += Build-DccDebugHost
 
-Write-Host "`n=== Build complete ==="
-Write-Host "Root outputs:"
-foreach ($executable in $executables) {
-    Write-Host "  $executable"
+    Write-Host "`n=== Build complete ==="
+    Write-Host "Root outputs:"
+    foreach ($executable in $executables) {
+        Write-Host "  $executable"
+    }
+    Write-Host "Intermediate build artifacts: $outputPathDisplay"
 }
-Write-Host "Intermediate build artifacts: $outputPathDisplay"

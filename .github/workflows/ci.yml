@@ -36,6 +36,50 @@ jobs:
         shell: pwsh
         run: ./scripts/build-dcc.ps1
 
+  no-powershell-build:
+    name: Host build without PowerShell (m-posix.sh)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout dcc
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Checkout ntvcm emulator
+        uses: actions/checkout@v4
+        with:
+          repository: davidly/ntvcm
+          path: ntvcm
+
+      - name: Build ntvcm emulator
+        run: |
+          chmod +x ./m.sh
+          ./m.sh
+        working-directory: ntvcm
+
+      - name: Add tool directories to PATH
+        run: |
+          echo "$GITHUB_WORKSPACE" >> "$GITHUB_PATH"
+          echo "$GITHUB_WORKSPACE/ntvcm" >> "$GITHUB_PATH"
+
+      # /bin/sh on ubuntu-latest is dash, the same shell Raspberry Pi OS and
+      # Debian actually use - this validates the no-pwsh fallback build
+      # (RISC-V64 boards, Raspberry Pi OS on a Pi 4, etc.) without needing an
+      # exotic runner architecture, since m-posix.sh only relies on /bin/sh
+      # and a C compiler, not any x86/ARM-specific behavior.
+      - name: Build dcc host tools with m-posix.sh
+        run: sh m-posix.sh
+
+      # runall.sh is the unofficial, no-pwsh test runner for the same
+      # platforms; it drives ma.sh directly rather than dccmake, so it can't
+      # build multi-file apps (see scripts/runall.sh's own skip logic) - run
+      # in fast mode here since the pwsh-based `tests` job below already
+      # covers the full/extended suite via the primary build path.
+      - name: Run test suite with runall.sh
+        run: bash scripts/runall.sh -mode fast
+
   tests:
     name: Unit tests and extended suite
     runs-on: ubuntu-latest
@@ -46,6 +90,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      # Pure string/path-matching logic, so this runs fine here rather than
+      # needing a dedicated Windows ARM64 runner - see the test's own
+      # docstring for the regression it guards (Get-MsvcVarsPath missing
+      # Visual Studio Preview/RC installs).
+      - name: Test MSVC toolchain detection logic
+        shell: pwsh
+        run: ./scripts/tests/test_msvc_toolchain_detection.ps1
 
       - name: Checkout ntvcm emulator
         uses: actions/checkout@v4
