@@ -286,7 +286,9 @@ static uint8_t host_disk_read(void)
             }
         } else {
             fseek(disk->file, disk->disk_pointer, SEEK_SET);
-            fread(disk->sector_data, 1, HOST_SECTOR_SIZE, disk->file);
+            if (fread(disk->sector_data, 1, HOST_SECTOR_SIZE, disk->file) != HOST_SECTOR_SIZE) {
+                clearerr(disk->file);
+            }
         }
         disk->sector_pointer = 0;
         disk->have_sector_data = true;

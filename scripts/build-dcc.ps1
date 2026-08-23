@@ -69,7 +69,8 @@ function Invoke-Checked {
     param(
         [string]$FilePath,
         [string[]]$Arguments,
-        [string]$Description
+        [string]$Description,
+        [switch]$QuietOutput
     )
 
     if ($script:VerboseCommands) {
@@ -77,9 +78,19 @@ function Invoke-Checked {
     } elseif ($Description) {
         Write-Host "  $Description"
     }
-    & $FilePath @Arguments 2>&1 | ForEach-Object { Write-Host $_ }
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Description failed with exit code $LASTEXITCODE"
+
+    if ($QuietOutput -and -not $script:VerboseCommands) {
+        $commandOutput = @(& $FilePath @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
+            $commandOutput | ForEach-Object { Write-Host $_ }
+        }
+    } else {
+        & $FilePath @Arguments 2>&1 | ForEach-Object { Write-Host $_ }
+        $exitCode = $LASTEXITCODE
+    }
+    if ($exitCode -ne 0) {
+        throw "$Description failed with exit code $exitCode"
     }
 }
 
@@ -468,12 +479,12 @@ function Build-DccDebugHost {
     if (-not $IsWindows) {
         $configureArguments += "-DCMAKE_BUILD_TYPE=Release"
     }
-    Invoke-Checked $cmakeCommand.Source $configureArguments "debugger host configuration"
+    Invoke-Checked $cmakeCommand.Source $configureArguments "debugger host configuration" -QuietOutput
     Invoke-Checked $cmakeCommand.Source @(
         "--build", $buildDir,
         "--config", "Release",
         "--target", "dcc-debug-host", "dcc-debug-io-adapter-example"
-    ) "debugger host and example adapter compilation"
+    ) "debugger host and example adapter compilation" -QuietOutput
 
     if (-not (Test-Path $debugHostOut) -or -not (Test-Path $adapterOut)) {
         throw "debugger host artifacts were not built in the repository root"
