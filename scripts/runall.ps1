@@ -1829,6 +1829,74 @@ function Invoke-ExtendedSuite {
     }
 }
 
+# The parallel dispatch below splits "full" mode (fast + nopeep) into two
+# separate work items per app instead of one item running both sequentially,
+# so a single slow app's two builds can run concurrently on different cores
+# instead of back-to-back on one - this is what fixed the run's long tail
+# (a handful of apps like a1/cobint/adaint taking 7-13s each, sequentially
+# doubled, dwarfing everything else and leaving most cores idle while they
+# finished). That means a "full" mode run now produces up to two result
+# objects per app (streamed independently as each mode finishes), but
+# everything downstream - the pass/fail tally, the -FailFast skipped-apps
+# list, and Write-PerformanceReport's per-app CSV rows - expects exactly one
+# result per app. This folds those back into one combined object per app
+# before anything else sees $results. An app is only ever marked Skipped if
+# at least one of its constituent per-mode results was skipped (matching the
+# original all-or-nothing semantics of a fail-fast-skipped app - never
+# report a partially-completed app as a definitive pass or fail). A
+# single-mode run (fast-only or nopeep-only) never produces more than one
+# result per app to begin with, so this is a no-op reshape for those modes.
+function Merge-AppModeResults {
+    param([object[]]$Results)
+
+    $order = [System.Collections.Generic.List[string]]::new()
+    $byApp = @{}
+
+    foreach ($result in $Results) {
+        if (-not $byApp.ContainsKey($result.App)) {
+            $order.Add($result.App)
+            $byApp[$result.App] = [pscustomobject]@{
+                App     = $result.App
+                Passed  = $true
+                Skipped = $false
+                Elapsed = [TimeSpan]::Zero
+                Lines   = [System.Collections.Generic.List[string]]::new()
+                Metrics = @{}
+                Timing  = @{}
+            }
+        }
+        $merged = $byApp[$result.App]
+
+        if ($result.Skipped) {
+            $merged.Skipped = $true
+            continue
+        }
+
+        if (-not $result.Passed) { $merged.Passed = $false }
+        $merged.Elapsed += $result.Elapsed
+        foreach ($line in @($result.Lines)) { $merged.Lines.Add($line) }
+        if ($result.Metrics) {
+            foreach ($key in $result.Metrics.Keys) { $merged.Metrics[$key] = $result.Metrics[$key] }
+        }
+        if ($result.Timing) {
+            foreach ($key in $result.Timing.Keys) { $merged.Timing[$key] = $result.Timing[$key] }
+        }
+    }
+
+    return @($order | ForEach-Object {
+        $m = $byApp[$_]
+        [pscustomobject]@{
+            App     = $m.App
+            Passed  = $m.Passed
+            Skipped = $m.Skipped
+            Elapsed = $m.Elapsed
+            Lines   = $m.Lines.ToArray()
+            Metrics = $m.Metrics
+            Timing  = $m.Timing
+        }
+    })
+}
+
 $results = @()
 $totalToRun = $workItems.Count
 $mainSuiteSw = [System.Diagnostics.Stopwatch]::StartNew()
@@ -1855,6 +1923,42 @@ if ($Parallel) {
     $idmbDef      = ${function:Invoke-DccMakeBuild}.ToString()
     $stackCheckOn = [bool]$StackCheck
     $runArgs      = @($emulatorRunArgs)
+    $multiMode    = $modes.Count -gt 1
+
+    # In "full" mode (multiple $modes), flatten each app into one dispatch
+    # item per mode instead of one item covering both modes sequentially -
+    # Invoke-AppTest's own per-mode loop otherwise runs fast then nopeep
+    # back-to-back on a single core. For a handful of apps (a1, cobint,
+    # adaint, cint, ...) whose single-mode build already takes 7-13+ seconds
+    # against a median under half a second, that doubling was the entire
+    # tail of the run: once the ~400 fast apps finished, most cores sat idle
+    # waiting for these few giants' second mode to even start. Splitting lets
+    # both modes of the same slow app run concurrently on different cores
+    # instead. A single-mode run (fast-only or nopeep-only) produces exactly
+    # the same one-item-per-app dispatch as before - this only changes
+    # anything when $multiMode is true.
+    # A single-mode run's $modes already has exactly one element, so this
+    # flattening loop naturally produces the same one-item-per-app dispatch
+    # as before for that case - $multiMode only changes anything for "full".
+    # Named $buildModeKey rather than $mode: PowerShell variable names are
+    # case-insensitive, and this script's own -Mode parameter (a [string]
+    # with a ValidateSet restricting it to "fast"/"nopeep"/"full") lives in
+    # the same scope - a $mode loop variable here is the same variable as
+    # $Mode, and assigning a mode-key value like "peep" to it trips that
+    # parameter's validation attribute.
+    $dispatchItems = [System.Collections.Generic.List[object]]::new()
+    foreach ($item in $workItems) {
+        foreach ($buildModeKey in $modes) {
+            $dispatchItems.Add([pscustomobject]@{
+                App = $item.App; Mode = $buildModeKey
+                RunArgs = $item.RunArgs; RunStdin = $item.RunStdin
+                StackSize = $item.StackSize; DccArgs = $item.DccArgs
+                DccFloatio = $item.DccFloatio; DccLongio = $item.DccLongio
+                Fixtures = $item.Fixtures; ExtraScenarios = $item.ExtraScenarios
+            })
+        }
+    }
+    $totalToRun = $dispatchItems.Count
 
     # Shared abort signal for -FailFast: a synchronized hashtable is a
     # reference type, so every parallel runspace observes live mutations made
@@ -1862,20 +1966,22 @@ if ($Parallel) {
     # This cannot cancel work already dispatched (ForEach-Object -Parallel has
     # no built-in mid-run cancellation hook), but it stops the throttle pool
     # from starting any NEW app once triggered, bounding the extra work to
-    # whatever was already in flight (at most ThrottleLimit-1 apps).
+    # whatever was already in flight (at most ThrottleLimit-1 dispatch items).
     $failFastState = [hashtable]::Synchronized(@{ Triggered = $false })
 
     # ForEach-Object -Parallel streams each worker's result as it completes, so
-    # pipe straight into a loop that prints a live status line per app. Results
-    # arrive in completion order (not sorted); we collect them for the summary.
+    # pipe straight into a loop that prints a live status line per dispatch
+    # item. Results arrive in completion order (not sorted); we collect them
+    # for the summary, then Merge-AppModeResults folds per-mode results back
+    # into one object per app before anything else looks at $results.
     $done = 0
-    $workItems | ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel {
+    $dispatchItems | ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel {
         $item = $_
         if ($using:FailFast -and ($using:failFastState).Triggered) {
             # Abort already signalled before this item started: skip it
             # entirely rather than spending an emulator/build slot on it.
             return [pscustomobject]@{
-                App = $item.App; Passed = $true; Skipped = $true
+                App = $item.App; DispatchMode = $item.Mode; Passed = $true; Skipped = $true
                 Elapsed = [TimeSpan]::Zero; Lines = @(); Metrics = $null; Timing = $null
             }
         }
@@ -1892,8 +1998,18 @@ if ($Parallel) {
         ${function:Invoke-ComRunAndCompare} = $using:icrcDef
         ${function:Invoke-AppTest}       = $using:iatDef
 
-        $appBuildDir = Join-Path $using:BuildDir $item.App
-        Invoke-AppTest -AppName $item.App -Modes $using:modes -BuildDir $appBuildDir `
+        # Each mode of the same app gets its own build subdirectory only when
+        # modes were actually split (multi-mode): two concurrent builds of
+        # the same app writing DCCRTL.MAC/RTLMIN.MAC/the .COM to one shared
+        # directory would otherwise clobber each other. Single-mode runs keep
+        # the original build/<app> path unchanged, since only one mode ever
+        # touches it.
+        $appBuildDir = if ($using:multiMode) {
+            Join-Path (Join-Path $using:BuildDir $item.App) $item.Mode
+        } else {
+            Join-Path $using:BuildDir $item.App
+        }
+        $r = Invoke-AppTest -AppName $item.App -Modes @($item.Mode) -BuildDir $appBuildDir `
             -BaselineDir $using:BaselineDir -Emulator $using:Emulator `
             -Placeholders $using:Placeholders -RunArgs $item.RunArgs `
             -RunStdin $item.RunStdin `
@@ -1903,6 +2019,7 @@ if ($Parallel) {
             -EmulatorRunArgs $using:runArgs `
             -Fixtures $item.Fixtures -StageFixtures $true `
             -ExtraScenarios $item.ExtraScenarios -RunTimeout $using:RunTimeout
+        Add-Member -InputObject $r -NotePropertyName DispatchMode -NotePropertyValue $item.Mode -PassThru
     } | ForEach-Object {
         $result = $_
         $results += $result
@@ -1911,15 +2028,25 @@ if ($Parallel) {
         $elapsedStr = if ($elapsed.TotalSeconds -ge 60) { "{0:m\m\ s\.f\s}" -f $elapsed } else { "{0:0.00}s" -f $elapsed.TotalSeconds }
         $counter = "[{0,3}/{1}]" -f $done, $totalToRun
         $scTag = if ($StackCheck) { "Stack Check Enabled" } else { "No Stack Check" }
+        # Multi-mode runs dispatch two items per app, so annotate which mode
+        # each live status line refers to (matching Invoke-AppTest's own
+        # peep->"fast" display convention) - single-mode runs are unaffected
+        # (one line per app, same as before the split).
+        $displayApp = if ($multiMode -and $result.DispatchMode) {
+            $modeDisplay = if ($result.DispatchMode -eq "peep") { "fast" } else { $result.DispatchMode }
+            "$($result.App):$modeDisplay"
+        } else {
+            $result.App
+        }
         if ($result.Skipped) {
             if (-not $FailuresOnly) {
-                Write-Host ("{0} SKIP  {1,-12} (fail-fast: not started)" -f $counter, $result.App) -ForegroundColor DarkGray
+                Write-Host ("{0} SKIP  {1,-12} (fail-fast: not started)" -f $counter, $displayApp) -ForegroundColor DarkGray
             }
             return
         }
         $status = if ($result.Passed) { "PASS" } else { "FAIL" }
         # Columns: counter | status | app | time | run-wide stack-check tag
-        $line = "{0} {1}  {2,-12} {3,8} | {4}" -f $counter, $status, $result.App, $elapsedStr, $scTag
+        $line = "{0} {1}  {2,-12} {3,8} | {4}" -f $counter, $status, $displayApp, $elapsedStr, $scTag
         if ($result.Passed) {
             if (-not $FailuresOnly) {
                 Write-Host $line -ForegroundColor Green
@@ -2003,6 +2130,14 @@ else {
     }
 }
 $mainSuiteSw.Stop()
+
+# Full-mode parallel dispatch (see $dispatchItems above) may have produced
+# up to two result objects per app; fold them back into one per app before
+# the tally/-FailFast/report logic below, all of which expect exactly one
+# result per app. A no-op reshape for single-mode runs and the serial path,
+# which never produce more than one result per app to begin with.
+$results = Merge-AppModeResults -Results $results
+
 if ($FailFast) {
     $failFastSkippedApps = @($workItems.App | Where-Object { $_ -notin @($results.App) })
     if ($failFastSkippedApps.Count -gt 0) {
