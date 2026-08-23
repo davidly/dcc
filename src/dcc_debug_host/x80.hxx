@@ -7,6 +7,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "memory.h"
+
 #define DEBUGGER_X80_Z80_ONLY 1
 
 #define OPCODE_HOOK 0x64  // mov h, h. When executed, x80_invoke_hook is called
@@ -285,7 +287,6 @@ struct registers
     } //powerOn
 };
 
-extern uint8_t memory[ 65536 ];
 extern registers reg;
 
 enum x80_io_status : uint8_t

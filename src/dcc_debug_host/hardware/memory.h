@@ -3,6 +3,10 @@
 
 #include "types.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 extern uint8_t memory[64 * 1024];
 
 void loadDiskLoader(uint16_t address);
@@ -29,5 +33,9 @@ static inline void write16(uint16_t address, uint16_t val)
     memory[address] = val & 0xff;
     memory[address + 1] = (val >> 8) & 0xff;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif
