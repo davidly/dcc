@@ -19,6 +19,8 @@
 
 char *lines[MAX_LINES];
 char *user_asm_original[MAX_LINES];
+char *debug_metadata[MAX_LINES];
+static char *trailing_debug_metadata;
 int nlines;
 int input_is_dcc_generated;
 PeepContext peep_context;
@@ -38,9 +40,12 @@ static void peep_edit_discard_snapshot(PeepEditTransaction *transaction)
     for (i = 0; i < transaction->line_count; ++i) {
         free(transaction->lines[i]);
         free(transaction->user_asm_original[i]);
+        free(transaction->debug_metadata[i]);
     }
     free(transaction->lines);
     free(transaction->user_asm_original);
+    free(transaction->debug_metadata);
+    free(transaction->trailing_debug_metadata);
     memset(transaction, 0, sizeof(*transaction));
 }
 
@@ -52,7 +57,10 @@ void peep_edit_begin(PeepEditTransaction *transaction)
     transaction->lines = (char **)calloc((size_t)nlines, sizeof(char *));
     transaction->user_asm_original = (char **)calloc(
         (size_t)nlines, sizeof(char *));
-    if (nlines && (!transaction->lines || !transaction->user_asm_original)) {
+    transaction->debug_metadata = (char **)calloc(
+        (size_t)nlines, sizeof(char *));
+    if (nlines && (!transaction->lines || !transaction->user_asm_original ||
+                   !transaction->debug_metadata)) {
         fprintf(stderr, "out of memory\n");
         exit(1);
     }
@@ -64,7 +72,11 @@ void peep_edit_begin(PeepEditTransaction *transaction)
         transaction->lines[i] = xstrdup2(lines[i]);
         if (user_asm_original[i])
             transaction->user_asm_original[i] = xstrdup2(user_asm_original[i]);
+        if (debug_metadata[i])
+            transaction->debug_metadata[i] = xstrdup2(debug_metadata[i]);
     }
+    if (trailing_debug_metadata)
+        transaction->trailing_debug_metadata = xstrdup2(trailing_debug_metadata);
 }
 
 void peep_edit_commit(PeepEditTransaction *transaction)
@@ -82,16 +94,24 @@ void peep_edit_rollback(PeepEditTransaction *transaction)
     for (i = 0; i < nlines; ++i) {
         free(lines[i]);
         free(user_asm_original[i]);
+        free(debug_metadata[i]);
         lines[i] = NULL;
         user_asm_original[i] = NULL;
+        debug_metadata[i] = NULL;
     }
+    free(trailing_debug_metadata);
+    trailing_debug_metadata = NULL;
     nlines = transaction->line_count;
     for (i = 0; i < nlines; ++i) {
         lines[i] = transaction->lines[i];
         user_asm_original[i] = transaction->user_asm_original[i];
+        debug_metadata[i] = transaction->debug_metadata[i];
         transaction->lines[i] = NULL;
         transaction->user_asm_original[i] = NULL;
+        transaction->debug_metadata[i] = NULL;
     }
+    trailing_debug_metadata = transaction->trailing_debug_metadata;
+    transaction->trailing_debug_metadata = NULL;
     peep_context.program_version = transaction->version + 1;
     peep_context.stats = transaction->stats;
     peep_edit_discard_snapshot(transaction);
@@ -107,6 +127,48 @@ char *xstrdup2(const char *s)
     }
     strcpy(p, s);
     return p;
+}
+
+static char *join_debug_metadata(const char *first, const char *second)
+{
+    char *joined;
+    size_t first_length;
+    size_t second_length;
+
+    if (!first || !first[0])
+        return second && second[0] ? xstrdup2(second) : NULL;
+    if (!second || !second[0])
+        return xstrdup2(first);
+    first_length = strlen(first);
+    second_length = strlen(second);
+    joined = (char *)malloc(first_length + second_length + 2);
+    if (!joined) {
+        fprintf(stderr, "out of memory\n");
+        exit(1);
+    }
+    memcpy(joined, first, first_length);
+    joined[first_length] = '\n';
+    memcpy(joined + first_length + 1, second, second_length + 1);
+    return joined;
+}
+
+static void append_debug_metadata(char **destination, const char *text)
+{
+    char *joined;
+
+    if (!text || !text[0])
+        return;
+    joined = join_debug_metadata(*destination, text);
+    free(*destination);
+    *destination = joined;
+}
+
+static void write_debug_metadata(FILE *file, const char *metadata)
+{
+    if (!metadata || !metadata[0])
+        return;
+    fputs(metadata, file);
+    fputc('\n', file);
 }
 
 static void trim(char *s)
@@ -269,26 +331,42 @@ void replace1_tagged(int i, const char *s, const char *tag)
 void delete_n(int i, int count)
 {
     int j;
+    char *removed_metadata = NULL;
 
     for (j = 0; j < count; j++) {
         if (user_asm_original[i + j] != NULL) {
             fprintf(stderr, "internal error: attempted to delete user assembly\n");
             exit(1);
         }
+        append_debug_metadata(&removed_metadata, debug_metadata[i + j]);
         free(lines[i + j]);
+        free(debug_metadata[i + j]);
     }
 
     memmove(&lines[i], &lines[i + count],
             (size_t)(nlines - i - count) * sizeof(lines[0]));
     memmove(&user_asm_original[i], &user_asm_original[i + count],
             (size_t)(nlines - i - count) * sizeof(user_asm_original[0]));
+    memmove(&debug_metadata[i], &debug_metadata[i + count],
+            (size_t)(nlines - i - count) * sizeof(debug_metadata[0]));
 
     nlines -= count;
+    if (removed_metadata) {
+        if (i < nlines) {
+            char *joined = join_debug_metadata(removed_metadata, debug_metadata[i]);
+            free(debug_metadata[i]);
+            debug_metadata[i] = joined;
+        } else {
+            append_debug_metadata(&trailing_debug_metadata, removed_metadata);
+        }
+        free(removed_metadata);
+    }
     peep_context.stats.lines_deleted += (unsigned long)count;
     peep_context.program_version++;
     for (j = nlines; j < nlines + count; ++j) {
         lines[j] = NULL;
         user_asm_original[j] = NULL;
+        debug_metadata[j] = NULL;
     }
 }
 
@@ -303,9 +381,12 @@ void insert_line(int i, const char *s)
             (size_t)(nlines - i) * sizeof(lines[0]));
     memmove(&user_asm_original[i + 1], &user_asm_original[i],
             (size_t)(nlines - i) * sizeof(user_asm_original[0]));
+        memmove(&debug_metadata[i + 1], &debug_metadata[i],
+            (size_t)(nlines - i) * sizeof(debug_metadata[0]));
 
     lines[i] = xstrdup2(s);
     user_asm_original[i] = NULL;
+        debug_metadata[i] = NULL;
     nlines++;
     peep_context.stats.lines_inserted++;
     peep_context.program_version++;
@@ -357,6 +438,7 @@ void read_file(const char *name)
     char *buf;
     size_t cap;
     int user_asm_depth;
+    char *pending_debug_metadata;
 
     f = fopen(name, "r");
     if (!f) {
@@ -367,34 +449,49 @@ void read_file(const char *name)
     buf = NULL;
     cap = 0;
     user_asm_depth = 0;
+    pending_debug_metadata = NULL;
     while (read_physical_line(f, &buf, &cap)) {
         char placeholder[64];
 
         trim(buf);
         if (strcmp(buf, "; dcc stage-1d output") == 0)
             input_is_dcc_generated = 1;
+        if (user_asm_depth == 0 && strncmp(buf, ";@dcc-", 6) == 0) {
+            append_debug_metadata(&pending_debug_metadata, buf);
+            continue;
+        }
         if (nlines >= MAX_LINES) {
             fprintf(stderr, "too many lines\n");
             exit(1);
         }
         if (strcmp(buf, "; dcc user asm begin") == 0) {
             lines[nlines] = xstrdup2(buf);
-            user_asm_original[nlines++] = NULL;
+            user_asm_original[nlines] = NULL;
+            debug_metadata[nlines++] = pending_debug_metadata;
+            pending_debug_metadata = NULL;
             user_asm_depth++;
         } else if (strcmp(buf, "; dcc user asm end") == 0) {
             if (user_asm_depth > 0)
                 user_asm_depth--;
             lines[nlines] = xstrdup2(buf);
-            user_asm_original[nlines++] = NULL;
+            user_asm_original[nlines] = NULL;
+            debug_metadata[nlines++] = pending_debug_metadata;
+            pending_debug_metadata = NULL;
         } else if (user_asm_depth > 0) {
             sprintf(placeholder, "__dcc_user_asm_%d:", nlines);
             lines[nlines] = xstrdup2(placeholder);
-            user_asm_original[nlines++] = xstrdup2(buf);
+            user_asm_original[nlines] = xstrdup2(buf);
+            debug_metadata[nlines++] = pending_debug_metadata;
+            pending_debug_metadata = NULL;
         } else {
             lines[nlines] = xstrdup2(buf);
-            user_asm_original[nlines++] = NULL;
+            user_asm_original[nlines] = NULL;
+            debug_metadata[nlines++] = pending_debug_metadata;
+            pending_debug_metadata = NULL;
         }
     }
+    append_debug_metadata(&trailing_debug_metadata, pending_debug_metadata);
+    free(pending_debug_metadata);
 
     if (ferror(f)) {
         fprintf(stderr, "cannot read %s\n", name);
@@ -420,6 +517,7 @@ void write_file(const char *name)
     for (i = 0; i < nlines; i++) {
         const char *line = user_asm_original[i] != NULL
             ? user_asm_original[i] : lines[i];
+        write_debug_metadata(f, debug_metadata[i]);
         if (line[0] == 0)
             fprintf(f, "\n");
         else if (starts_label(line) || line[0] == ';')
@@ -427,6 +525,7 @@ void write_file(const char *name)
         else
             fprintf(f, "\t%s\n", line);
     }
+            write_debug_metadata(f, trailing_debug_metadata);
 
     if (ferror(f) || fclose(f) != 0) {
         fprintf(stderr, "cannot write %s\n", name);

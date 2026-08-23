@@ -10,9 +10,8 @@
 #   sh src/dcc/build-dcc.sh            # build ./dcc at the repo root
 #   sh src/dcc/build-dcc.sh -o out/dcc # build to a custom path
 #
-# The companion peephole/runtime tools are built by mmacos.sh / m.sh / m.bat
-# from src/dccpeep/dccpeep.c and src/dccrtlstrip/dccrtlstrip.c; this script
-# only builds the modular dcc front end.
+# The canonical `scripts/build-dcc.ps1` build owns the complete host toolchain;
+# this internal helper only builds the modular dcc front end.
 
 set -e
 

@@ -455,7 +455,7 @@ void ast_record_debug_location(const char *file, int line)
 {
     const char *p;
 
-    if (!opt_debug || scan_mode || line <= 0)
+    if (!DEBUG_METADATA_ENABLED || scan_mode || line <= 0)
         return;
     if (mir_capture_debug_location(file, line))
         return;

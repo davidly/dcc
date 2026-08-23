@@ -109,6 +109,7 @@ struct Config {
     int stack_check;
     int no_narrow;
     int debug;
+    int debug_lines;
     int stack_bytes;
     int use_emulated_m80;
     int use_emulated_l80;
@@ -608,17 +609,14 @@ static void init_config(struct Config *cfg)
     cfg->stack_check = getenv("DCC_FORCE_STACK_CHECK") && !strcmp(getenv("DCC_FORCE_STACK_CHECK"), "1");
     cfg->no_narrow = getenv("DCC_NO_NARROW") && !strcmp(getenv("DCC_NO_NARROW"), "1");
     cfg->debug = getenv("DCC_DEBUG") && !strcmp(getenv("DCC_DEBUG"), "1");
+    cfg->debug_lines = getenv("DCC_DEBUG_LINES") && !strcmp(getenv("DCC_DEBUG_LINES"), "1");
+    if (cfg->debug_lines)
+        cfg->debug = 0;
     cfg->stack_bytes = 512;
     cfg->peep = 1;
-    /* Off by default: debug builds normally skip dccpeep entirely so every
-     * "@dcc-line" source-line marker m80c records stays exactly where dcc
-     * put it (dccpeep's text-level passes have no concept of preserving
-     * those markers through a delete/move, so peephole + -g can misattribute
-     * source lines in the resulting .DBG). Opt in with dcc-peep-debug=true
-     * when you specifically need to debug a bug that only reproduces in an
-     * optimized binary; expect source-line stepping/breakpoints to be
-     * unreliable in that mode - fall back to disassembly/instruction
-     * stepping, which reflects the real optimized code correctly regardless. */
+    /* Full -g builds skip dccpeep by default. dcc-peep-debug=true opts that
+     * conservative codegen into assembly optimization; dcc-debug=lines is the
+     * release-identical mode for optimized source breakpoints and stepping. */
     cfg->peep_debug = getenv("DCC_PEEP_DEBUG") && !strcmp(getenv("DCC_PEEP_DEBUG"), "1");
     cfg->dccpeep_undoc = getenv("DCC_ALLOW_UNDOCUMENTED_Z80") && !strcmp(getenv("DCC_ALLOW_UNDOCUMENTED_Z80"), "1");
     /* Native m80c is the default assembler (no Z80 emulation needed); set
@@ -650,7 +648,13 @@ static void promote_debug_compiler_arg(struct Config *cfg)
     int kept = 0;
     for (i = 0; i < cfg->dcc_arg_count; i++) {
         if (!strcmp(cfg->dcc_args[i], "-g")) {
-            cfg->debug = 1;
+            if (!cfg->debug_lines)
+                cfg->debug = 1;
+            continue;
+        }
+        if (!strcmp(cfg->dcc_args[i], "-gline")) {
+            cfg->debug = 0;
+            cfg->debug_lines = 1;
             continue;
         }
         if (kept != i)
@@ -846,11 +850,17 @@ static int apply_setting(struct Config *cfg, const char *raw_key, const char *va
         return 1;
     }
     if (!strcmp(key, "dcc-debug")) {
+        if (!strcmp(value, "lines") || !strcmp(value, "line")) {
+            cfg->debug = 0;
+            cfg->debug_lines = 1;
+            return 1;
+        }
         if (!parse_bool(value, &b)) {
-            fprintf(stderr, "invalid boolean for %s: %s\n", raw_key, value);
+            fprintf(stderr, "invalid debug mode for %s: %s\n", raw_key, value);
             return 0;
         }
         cfg->debug = b;
+        cfg->debug_lines = 0;
         return 1;
     }
     if (!strcmp(key, "dcc-allow-undocumented-z80")) {
@@ -1042,7 +1052,8 @@ static void print_help(void)
     printf("  dcc-stack-bytes=512            pass -stack bytes to dcc; default 512\n");
     printf("  dcc-stack-check=false|true|1|0 pass -fstack-check to dcc\n");
     printf("  dcc-no-narrow=false|true|1|0   pass -fno-narrow to dcc (disable byte-narrowing passes)\n");
-    printf("  dcc-debug=false|true|1|0       emit final source debug metadata; requires native m80c\n");
+    printf("  dcc-debug=false|true|lines     full debug metadata, or optimized ranged locations;\n");
+    printf("                                 both require native m80c. Project 'lines' refines a CLI -g\n");
     printf("  dcc-include-directory=dir,...  include dirs; dcc-include is an alias\n");
     printf("  dcc-define=NAME[=value],...    pass -D values to dcc\n");
     printf("  dcc-undefine=NAME,...          pass -U values to dcc\n");
@@ -1050,13 +1061,9 @@ static void print_help(void)
     printf("                                 ignored with -g unless dcc-peep-debug=true,\n");
     printf("                                 to preserve debug locations by default\n");
     printf("  dcc-peep-debug=false|true|1|0  run dccpeep even with -g; default false.\n");
-    printf("                                 Use only to debug a bug that reproduces solely\n");
-    printf("                                 in an optimized binary: dccpeep's text-level\n");
-    printf("                                 passes don't preserve @dcc-line source markers,\n");
-    printf("                                 so source-line stepping/breakpoints become\n");
-    printf("                                 unreliable in the resulting build - rely on\n");
-    printf("                                 disassembly/instruction stepping instead, which\n");
-    printf("                                 always reflects the real optimized code\n");
+    printf("                                 Debug markers are retained/remapped, but full -g\n");
+    printf("                                 still uses conservative compiler codegen. Use\n");
+    printf("                                 dcc-debug=lines for release-identical optimized code\n");
     printf("  dcc-allow-undocumented-z80=false|true|1|0\n");
     printf("                                 pass -fundocumented-z80 to dccpeep; default false\n");
     printf("  dcc-build-dir=build            artifact directory; default build\n");
@@ -1085,6 +1092,7 @@ static void print_help(void)
     printf("  -fstack-check                  same as dcc-stack-check=true\n");
     printf("  -fno-narrow                    same as dcc-no-narrow=true\n");
     printf("  -g                             same as dcc-debug=true\n");
+    printf("  -gline                         same as dcc-debug=lines\n");
     printf("  -femulated-m80                 same as dcc-use-emulated-m80=true\n");
     printf("  -femulated-l80                 same as dcc-use-emulated-l80=true\n");
     printf("  -I <dir>, -Idir                add an include directory\n");
@@ -1181,7 +1189,13 @@ static int parse_args(struct Config *cfg, int argc, char **argv)
             continue;
         }
         if (!strcmp(arg, "-g")) {
-            cfg->debug = 1;
+            if (!cfg->debug_lines)
+                cfg->debug = 1;
+            continue;
+        }
+        if (!strcmp(arg, "-gline")) {
+            cfg->debug = 0;
+            cfg->debug_lines = 1;
             continue;
         }
         if (!strcmp(arg, "-femulated-m80")) {
@@ -1733,6 +1747,10 @@ static int append_absolute_debug(FILE *out, const char *path, long code_base, lo
             quoted = strchr(line, '"');
             if (quoted)
                 fprintf(out, "variable-end %04lX %s", (code_base + (long)offset) & 0xffffL, quoted);
+        } else if (sscanf(line, "location code %lx", &offset) == 1) {
+            quoted = strchr(line, '"');
+            if (quoted)
+                fprintf(out, "location %04lX %s", (code_base + (long)offset) & 0xffffL, quoted);
         } else if (sscanf(line, "global data %lx \"%127[^\"]\" \"%127[^\"]\" %d %n",
                           &offset, first_name, second_name, &type, &consumed) == 4) {
             fprintf(out, "global %04lX \"%s\" \"%s\" %d %s",
@@ -1793,7 +1811,7 @@ static int finalize_debug_file(const char *output_path, const char *rtl_link,
         return 0;
     }
     fprintf(out, "DCCDBG 2\n");
-    for (i = 0; i < count; i++) {
+    for (i = 1; i < count; i++) {
         if (!append_absolute_debug(out, debug_paths[i], code_base, data_base, &next_struct_id)) {
             fclose(out);
             remove(tmp);
@@ -1801,6 +1819,12 @@ static int finalize_debug_file(const char *output_path, const char *rtl_link,
         }
         code_base += code_sizes[i];
         data_base += data_sizes[i];
+    }
+    if (count > 0 &&
+        !append_absolute_debug(out, debug_paths[0], code_base, data_base, &next_struct_id)) {
+        fclose(out);
+        remove(tmp);
+        return 0;
     }
     if (fclose(out) != 0 || remove(output_path) != 0 || rename(tmp, output_path) != 0) {
         fprintf(stderr, "cannot replace final debug metadata: %s\n", output_path);
@@ -1831,6 +1855,7 @@ static int build_dcc_command(struct Config *cfg, int index, const char *input,
     if (cfg->stack_check && !cmd_arg(cmd, cmd_size, "-fstack-check")) return 0;
     if (cfg->no_narrow && !cmd_arg(cmd, cmd_size, "-fno-narrow")) return 0;
     if (cfg->debug && !cmd_arg(cmd, cmd_size, "-g")) return 0;
+    if (cfg->debug_lines && !cmd_arg(cmd, cmd_size, "-gline")) return 0;
     if (!cmd_arg(cmd, cmd_size, "-stack")) return 0;
     snprintf(stack_buf, sizeof(stack_buf), "%d", cfg->stack_bytes);
     if (!cmd_arg(cmd, cmd_size, stack_buf)) return 0;
@@ -1931,7 +1956,7 @@ static int run_build(struct Config *cfg)
     }
     if (!validate_cpm_83_name("dcc-output", cfg->output, 0))
         return 0;
-    if (cfg->debug && cfg->use_emulated_m80) {
+    if ((cfg->debug || cfg->debug_lines) && cfg->use_emulated_m80) {
         fprintf(stderr, "dcc debug metadata requires native m80c; disable dcc-use-emulated-m80\n");
         return 0;
     }
@@ -1972,10 +1997,9 @@ static int run_build(struct Config *cfg)
     if (cfg->debug && cfg->peep && cfg->peep_debug) {
         fprintf(stderr,
                 "warning: dcc-peep-debug=true - dccpeep will run on this -g build.\n"
-                "         Source-line stepping/breakpoints may land on the wrong line:\n"
-                "         dccpeep's passes don't preserve @dcc-line markers when they\n"
-                "         delete or move code. Disassembly/instruction stepping still\n"
-                "         reflects the real optimized code correctly.\n");
+                "         Debug markers are retained/remapped, but -g still uses\n"
+                "         conservative compiler codegen. Use dcc-debug=lines for\n"
+                "         release-identical optimized code with line/function tables.\n");
     }
 
     add_default_include(cfg);
@@ -2076,7 +2100,8 @@ static int run_build(struct Config *cfg)
         ms_asm += now_ms() - t0;
         if (!check_no_fatal_errors(prns[i]))
             return 0;
-        if (cfg->debug && (!file_exists(dbgs[i]) || !file_exists(links[i]))) {
+        if ((cfg->debug || cfg->debug_lines) &&
+            (!file_exists(dbgs[i]) || !file_exists(links[i]))) {
             fprintf(stderr, "debug metadata assembly failed for %s\n", macs[i]);
             return 0;
         }
@@ -2117,7 +2142,7 @@ static int run_build(struct Config *cfg)
     ms_asm += now_ms() - t0;
     if (!check_no_fatal_errors(rtl_prn))
         return 0;
-    if (cfg->debug && !file_exists(rtl_link)) {
+    if ((cfg->debug || cfg->debug_lines) && !file_exists(rtl_link)) {
         fprintf(stderr, "runtime link metadata was not produced: %s\n", rtl_link);
         return 0;
     }
@@ -2148,7 +2173,8 @@ static int run_build(struct Config *cfg)
     }
     ms_link += now_ms() - t0;
 
-    if (cfg->debug && !finalize_debug_file(app_dbg, rtl_link, dbgs, links, cfg->input_count))
+    if ((cfg->debug || cfg->debug_lines) &&
+        !finalize_debug_file(app_dbg, rtl_link, dbgs, links, cfg->input_count))
         return 0;
 
     if (strcmp(output_lower, output_upper) != 0 && !same_file(app_com, lower_com))

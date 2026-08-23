@@ -168,6 +168,20 @@ const char *sym_asm_name(struct Sym *s)
     return s ? s->name : "";
 }
 
+void debug_symbol_name(const struct Sym *s, char *name, size_t name_size)
+{
+    const char *internal = s ? s->name : "";
+    const char *suffix = strchr(internal, '#');
+    size_t length = suffix ? (size_t)(suffix - internal) : strlen(internal);
+
+    if (name_size == 0)
+        return;
+    if (length >= name_size)
+        length = name_size - 1;
+    memcpy(name, internal, length);
+    name[length] = 0;
+}
+
 /*
  * General lexical block scope.  The frame-sizing scan and codegen both bracket
  * every { } block with enter_scope/leave_scope, and both build the locals[]

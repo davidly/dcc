@@ -5,22 +5,20 @@
             "name": "DCC CP/M: Debug active C file",
             "type": "cppdbg",
             "request": "launch",
-            "preLaunchTask": "Build and stage active DCC C file for debugging",
+            "preLaunchTask": "Prepare active DCC C file for debugging",
             "program": "${workspaceFolder}/build/DCCDEBUG.COM",
             "cwd": "${workspaceFolder}/build",
             "MIMode": "gdb",
-            "miDebuggerPath": "/Users/dave/GitHub/ntvcm/ntvcm",
+            "miDebuggerPath": "${workspaceFolder}/build/dcc_debug_host/dcc-debug-host",
             "miDebuggerArgs": "--interpreter=mi",
+            "windows": {
+                "miDebuggerPath": "${workspaceFolder}/build/dcc_debug_host/Release/dcc-debug-host.exe"
+            },
             "targetArchitecture": "x86",
             "sourceFileMap": {
                 "tests": "${workspaceFolder}/tests"
             },
-            "customLaunchSetupCommands": [
-                {
-                    "text": "-file-exec-and-symbols \"${workspaceFolder}/build/DCCDEBUG.COM\""
-                }
-            ],
-            "launchCompleteCommand": "None",
+            "launchCompleteCommand": "exec-continue",
             "externalConsole": false
         }
     ]

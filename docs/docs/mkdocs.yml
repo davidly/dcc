@@ -16,6 +16,7 @@ nav:
   - Introduction: en/index.md
   - The toolchain: en/00-setup-toolchain.md
   - VS Code debugging: en/00-vscode-debugging.md
+  - Debugger host and I/O adapters: en/00-debug-host.md
   - Agentic skills: en/00-agent-skills.md
   - C conformance: en/01-c-conformance.md
   - Building and linking: en/02-build-and-link.md

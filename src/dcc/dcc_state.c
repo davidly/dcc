@@ -28,6 +28,7 @@ int opt_stack_size;  /* bytes reserved above heap for C stack */
 int opt_stack_check; /* -fstack-check: emit a stack-overflow guard at function entry */
 int opt_no_narrow;   /* -fno-narrow: disable every byte-narrowing pass */
 int opt_debug;       /* -g: emit source-level debug annotations */
+int opt_debug_lines; /* -gline: optimized code with line/function annotations only */
 int g_main_has_args; /* final app needs hidden runtime argv/command-tail BSS */
 
 /* ---- typedef table ----------------------------------------------------- */

@@ -1,6 +1,6 @@
 ---
 name: dcc-project
-description: 'Develop, build, test, and optimize the dcc host toolchain: dcc, dccpeep, dccrtlstrip, dccmake, m80c, l80c, and DCCRTL.MAC. Use for compiler, MIR backend, optimizer, runtime, regression-suite, or toolchain build work. Use dcc-cpm-z80 for ordinary target applications.'
+description: 'Develop, build, test, debug, and optimize the dcc host toolchain: dcc, dccpeep, dccrtlstrip, dccmake, m80c, l80c, dcc-debug-host, the debugger I/O adapter ABI/example, and DCCRTL.MAC. Use for compiler, MIR backend, optimizer, runtime, GDB/MI debugger, debug metadata/fixtures, regression-suite, or toolchain build work. Use dcc-cpm-z80 for ordinary target applications.'
 argument-hint: 'Describe the dcc toolchain task'
 ---
 
@@ -31,6 +31,8 @@ legacy register-allocation retries do not exist.
 | Peephole optimizer | `src/dccpeep/` |
 | Runtime stripper | `src/dccrtlstrip/` |
 | Z80 runtime | `DCCRTL.MAC` |
+| Full CP/M GDB/MI debugger | `src/dcc_debug_host/` |
+| Debugger I/O adapter ABI and example | `src/dcc_debug_host/include/`, `src/dcc_debug_host/examples/io_adapter/` |
 | Tests and checked performance | `tests/`, `tests/perf_baselines.csv` |
 
 Add exact schedules to the appropriate `dcc_mir_machine_<family>.c` module,
@@ -66,17 +68,15 @@ selected MIR candidates.
 
 ## Build
 
-Fast compiler-only build:
-
-```sh
-sh src/dcc/build-dcc.sh
-```
-
 Canonical all-tool build:
 
 ```pwsh
 pwsh ./scripts/build-dcc.ps1
 ```
+
+That build must produce `dcc-debug-host` and the example I/O adapter shared
+library as required outputs on macOS, Linux, and Windows. The example filename
+is `.dylib`, `.so`, or `.dll` according to platform.
 
 CMake is the independent compiler build check:
 
@@ -148,6 +148,55 @@ DCC_MIR_REQUIRE_COMPLETE=1 DCC_MIR_REQUIRE_EMIT=1 \
   to hide a compiler or optimizer regression.
 - `-Report` is a separate no-stack historical report, not a checked baseline.
 - Keep peep and nopeep both non-regressing.
+
+## Debugger host and fixture lifecycle
+
+`dcc-debug-host` is the sole source-debugging backend. ntvcm remains the normal
+regression/profiling emulator; do not add GDB/MI debugging behavior back to it.
+
+Every change to `dcc` or `dccpeep` must review its effect on debug symbols and
+source debugging, even when debugging is not the change's primary purpose.
+Check whether the edit affects source/statement boundaries, scopes, types,
+symbols, frame/register/constant locations, instruction addresses, or assembly
+line rewriting. Preserve full `-g` metadata and release-identical `-gline`
+metadata through both peep and nopeep pipelines, and run the focused debug
+metadata tests plus the debugger-host tests whenever one of those contracts may
+be affected.
+
+For host or debug-metadata changes:
+
+```sh
+cmake -S src/dcc_debug_host -B build/dcc_debug_host_tests \
+  -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Debug
+cmake --build build/dcc_debug_host_tests --parallel
+ctest --test-dir build/dcc_debug_host_tests --output-on-failure
+```
+
+The host consumes a matching adjacent `.COM`/`.DBG` pair produced by
+`dccmake -g`. Its B: drive is synthesized in memory from the selected program
+and fixtures. Fixture inputs are:
+
+- non-hidden regular files under `fixtures/` beside the selected `.COM`;
+- binary `--fixture FILE` arguments; and
+- CP/M-text `--text-fixture FILE` arguments, which convert LF to CRLF and append
+  Ctrl-Z.
+
+Names must be unique CP/M 8.3 basenames; automatic staging ignores
+subdirectories. Ordinary session writes are disposable. `--save-fixtures DIR`
+publishes final B: only after normal target exit, excludes the launched `.COM`,
+and atomically replaces the destination. Abort, halt, quit, or staging failure
+must leave an existing destination untouched. Extracted files retain CP/M
+128-byte record padding.
+
+Keep this separate from `tests/_test_overrides.json`, which owns normal
+regression-emulator arguments, stdin, and fixture staging. The checked-in VS
+Code task copies source-adjacent `*.WTS`, `*.IN`, and `*.DAT` files into
+`build/fixtures/` because its selected program is `build/DCCDEBUG.COM`.
+
+For ABI work, keep `src/dcc_debug_host/include/dcc_debug_io_adapter.h`, the
+generic host loader, and `examples/io_adapter` synchronized. Machine-specific
+port maps and terminal control-key policy belong in adapters. The generic host
+must pass terminal bytes through when terminal callbacks are absent.
 
 ## Performance investigation
 

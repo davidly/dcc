@@ -1,7 +1,7 @@
 ---
 name: dcc-cpm-z80
-description: 'Write, build, test, and debug C for dcc targeting CP/M 2.2 on the Z80 (run under the ntvcm Altair 8800 emulator). Use for .c/.h sources compiled with dcc, or tasks mentioning dcc, dccmake, C89, C99, C11, CP/M, Z80, ntvcm, DCCRTL, or VT100/ANSI terminal apps. Treat dcc as a C89-base compiler with documented selected C99/C11 features and Z80/CP/M deviations: no double or long long, 32-bit float as the only floating type, 16-bit int/short/pointer/size_t, 32-bit long, signed char, and a subset library/runtime. Full feature and library inventories are in the reference files.'
-argument-hint: 'Describe the dcc CP/M-Z80 task (write code, build, run under ntvcm, debug a failure)'
+description: 'Write, build, run, test, and source-debug C for dcc targeting CP/M 2.2 on the Z80. Use for .c/.h sources compiled with dcc, or tasks mentioning dcc, dccmake, dcc-debug-host, GDB/MI, debug fixtures, C89, C99, C11, CP/M, Z80, ntvcm, DCCRTL, or VT100/ANSI terminal apps. Run ordinary binaries under ntvcm; use dcc-debug-host for source debugging. Treat dcc as a C89-base compiler with documented selected C99/C11 features and Z80/CP/M deviations: no double or long long, 32-bit float as the only floating type, 16-bit int/short/pointer/size_t, 32-bit long, signed char, and a subset library/runtime. Full feature, library, debugging, and fixture workflows are in the reference files.'
+argument-hint: 'Describe the dcc CP/M-Z80 task (write, build, run/test, or source-debug with dcc-debug-host)'
 ---
 
 # dcc C for CP/M 2.2 / Z80
@@ -33,7 +33,9 @@ expectations.
 
 - Writing, porting, or reviewing C89-base code using dcc's documented C99/C11
   additions.
-- Building/running/debugging a dcc program (`dccmake`, `ntvcm`).
+- Building or running a dcc program (`dccmake`, `ntvcm`).
+- Source-debugging a dcc program with `dcc-debug-host`, including terminal I/O
+  and debugger fixture copy/save workflows.
 - CP/M file I/O, VT100/ANSI console UIs, or DCCRTL work.
 
 ## Deviations from standard C
@@ -80,11 +82,10 @@ Conversion tables in library.md.
 **No stack/heap guard.** Heap and stack share memory and can collide silently.
 Size the stack with `-stack N` (default 512); keep big buffers `static`/global.
 
-**Source filenames MUST be 8.3 and uppercase-safe** (≤ 8-char base, ≤ 3-char
-extension, no extra dots). `foo.c` → `FOO.COM`, run as `ntvcm FOO`. A source
-whose name violates 8.3 (e.g. `my_long_name.c`, `parse.test.c`) won't build —
-ntvcm reports `argument is not a valid CP/M 8.3 filename`; rename the file when
-you see that error.
+**Source and output filenames MUST be 8.3 and uppercase-safe** (≤ 8-char base,
+≤ 3-char extension, no extra dots). `foo.c` → `FOO.COM`, run as
+`ntvcm build/FOO.COM`. `dccmake` rejects nonconforming source and output names;
+rename them rather than treating the error as an emulator or debugger failure.
 
 **Missing `<...>` headers are silently ignored** — calls fall back to implicit
 `int` and still link via the runtime, with no type-checking. A missing
@@ -264,6 +265,45 @@ Notes: when `dcc-use-emulated-m80=true`, M80 needs CRLF (`dccmake` handles this)
 `RTLMIN.MAC` is generated per-app by `dccrtlstrip` during the build — don't
 hand-edit it.
 
+## Source debugging and fixtures
+
+`dcc-debug-host` is the sole DCC source-debugging backend. It boots full CP/M
+and exposes GDB/MI to VS Code; ntvcm remains useful for ordinary program runs,
+regression tests, and profiling but is not the source debugger.
+
+If diagnosing an application requires changes to `dcc` or `dccpeep`, switch to
+the `dcc-project` workflow and review the change's effect on debug symbols and
+source debugging. Compiler and peephole changes must preserve full `-g` metadata
+and optimized `-gline` metadata through both peep and nopeep pipelines.
+
+Build an app with `dccmake -g` so the final `.COM` and `DCCDBG 2` `.DBG` files
+are generated together. Keep them adjacent with identical basenames and never
+mix outputs from different builds. Build the host with
+`pwsh ./scripts/build-dcc.ps1` or CMake under `src/dcc_debug_host`, then launch
+`build/dcc_debug_host/dcc-debug-host --interpreter=mi`. See
+[references/debugging.md](./references/debugging.md) for VS Code launch details,
+terminal input, dynamic I/O adapters, and the complete fixture workflow.
+
+Debugger fixtures are not `tests/_test_overrides.json` fixtures:
+
+- A `fixtures/` directory beside the selected `.COM` is discovered
+  automatically. Every non-hidden regular file is copied byte-for-byte into
+  the session's synthetic B: drive; subdirectories are ignored.
+- `--fixture FILE` adds one binary file explicitly. `--text-fixture FILE`
+  converts LF to CP/M CRLF and appends Ctrl-Z.
+- Fixture basenames must be unique, valid CP/M 8.3 names. The program and
+  fixtures exist only in the in-memory B: image unless explicitly saved.
+- `--save-fixtures DIR` is for generator programs. After a normal target exit,
+  the host extracts final B:, excludes the launched `.COM`, and atomically
+  replaces `DIR`. Interrupt, debugger quit, CPU halt, or staging failure leaves
+  an existing destination unchanged. Saved lengths are CP/M records, so the
+  final record can include 128-byte padding.
+
+The checked-in DCC VS Code task copies source-adjacent `*.WTS`, `*.IN`, and
+`*.DAT` files to `build/fixtures/`, beside `build/DCCDEBUG.COM`, before launch.
+For another project, stage files into the `fixtures/` directory beside that
+project's actual `.COM`, not merely beside its source file.
+
 ## Top pitfalls
 
 The deviations above are the pitfalls. For worked examples (the `float` decimal
@@ -290,3 +330,7 @@ function inventory and `printf`/`scanf` conversion tables, see
 5. **Build and run**: `dccmake app.c dcc-output=APP dcc-peep=true && ntvcm build/APP.COM`;
   literal `%f` and long formats are detected automatically. Redirect stdin for
   interactive apps and compare against expected output.
+6. **Source-debug only with `dcc-debug-host`**: rebuild with `dccmake -g`, keep
+  the matching `.COM`/`.DBG` pair together, stage session fixtures beside the
+  `.COM`, and use `--save-fixtures` only when a normally exiting generator must
+  publish B: contents.

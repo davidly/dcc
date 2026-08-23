@@ -514,6 +514,8 @@ extern int opt_no_narrow;   /* -fno-narrow: disable every int-array/scalar/for-c
                               * output difference from any other cause - see
                               * scripts/runall.ps1 -NarrowDiff. */
 extern int opt_debug;       /* -g: emit source-level debug annotations */
+extern int opt_debug_lines; /* -gline: optimized code with line/function annotations only */
+#define DEBUG_METADATA_ENABLED (opt_debug || opt_debug_lines)
 extern int g_main_has_args; /* final app reserves hidden argc/argv startup BSS */
 
 /* typedef table */
@@ -1094,6 +1096,7 @@ void parse_param_list(void);
 void begin_function_mir(const char *name, int local_bytes);
 void emit_debug_variable(struct Sym *s);
 void emit_debug_variable_end(struct Sym *s);
+void debug_symbol_name(const struct Sym *s, char *name, size_t name_size);
 void emit_debug_types_once(void);
 void emit_debug_global(struct Sym *s);
 void maybe_reserve_addr_cache_for_array(struct Sym *s, const char *name);

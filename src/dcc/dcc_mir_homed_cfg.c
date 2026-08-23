@@ -2048,6 +2048,7 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
         int true_label;
         int preserve_hl;
 
+        mir_emit_debug_events(out, i);
         mir_emit_instruction_index = i;
         if (!mir_regional_before_instruction(out, i))
             goto done;
@@ -3291,6 +3292,7 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
             mir_emit_home_epilogue(out, uses_iy);
         }
     }
+    mir_emit_debug_events(out, mir.count);
     mir_homed_cfg_frameless = frameless;
     accepted = 1;
 done:

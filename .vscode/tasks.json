@@ -18,7 +18,7 @@
         {
             "label": "Stage debug data files",
             "type": "shell",
-            "command": "mkdir -p build && find \"${fileDirname}\" -maxdepth 1 -type f \\( -name '*.WTS' -o -name '*.IN' -o -name '*.DAT' \\) -exec cp -f {} build/ \\;",
+            "command": "mkdir -p build/fixtures && find \"${fileDirname}\" -maxdepth 1 -type f \\( -name '*.WTS' -o -name '*.IN' -o -name '*.DAT' \\) -exec cp -f {} build/fixtures/ \\;",
             "options": {
                 "cwd": "${workspaceFolder}"
             },
@@ -30,6 +30,26 @@
             "dependsOn": [
                 "Build active DCC C file for debugging",
                 "Stage debug data files"
+            ],
+            "problemMatcher": []
+        },
+        {
+            "label": "Build DCC debugger host",
+            "type": "shell",
+            "command": "cmake -S src/dcc_debug_host -B build/dcc_debug_host && cmake --build build/dcc_debug_host --target dcc-debug-host",
+            "options": {
+                "cwd": "${workspaceFolder}"
+            },
+            "problemMatcher": [
+                "$gcc"
+            ]
+        },
+        {
+            "label": "Prepare active DCC C file for debugging",
+            "dependsOrder": "sequence",
+            "dependsOn": [
+                "Build and stage active DCC C file for debugging",
+                "Build DCC debugger host"
             ],
             "problemMatcher": []
         }

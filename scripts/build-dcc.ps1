@@ -1,14 +1,16 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Build dcc, dccpeep, dccrtlstrip, dccmake, m80c, and l80c on Windows, macOS, and Linux.
+Build dcc, dccpeep, dccrtlstrip, dccmake, m80c, l80c, dcc-debug-host, and its example I/O adapter on Windows, macOS, and Linux.
 
 .DESCRIPTION
-Compiles the host tools with the native compiler for the current platform:
-MSVC on Windows, clang on macOS, and gcc on Linux by default. Build artifacts
-are placed under build/; final commands are placed in the repository root.
-On Linux, these tools are linked -static by default (see -NoStatic);
-macOS has no static libSystem to link against, so this never applies there.
+Compiles the C host tools with the native compiler for the current platform:
+MSVC on Windows, clang on macOS, and gcc on Linux by default. The C++ debugger
+host and example adapter shared library are built with CMake. Build artifacts
+are placed under build/; final C commands are placed in the repository root.
+On Linux, the C tools are linked -static by default (see -NoStatic); the CMake
+debugger build uses its platform defaults. macOS has no static libSystem to
+link against.
 
 .PARAMETER OutputPath
   Output directory for build artifacts. Defaults to ./build.
@@ -431,6 +433,61 @@ function Build-UnixNative {
     return @($dccOut, (Join-Path $repoRoot "dccpeep"), (Join-Path $repoRoot "dccrtlstrip"), (Join-Path $repoRoot "dccmake"), (Join-Path $repoRoot "m80c"), (Join-Path $repoRoot "l80c"))
 }
 
+function Build-DccDebugHost {
+    $cmakeCommand = Get-Command cmake -ErrorAction SilentlyContinue
+    if (-not $cmakeCommand) {
+        throw "CMake is required to build dcc-debug-host. Install CMake and ensure 'cmake' is in PATH."
+    }
+
+    $sourceDir = Join-Path $repoRoot "src\dcc_debug_host"
+    $buildDir = Join-Path $outputRoot "dcc_debug_host"
+    New-BuildDirectory $buildDir
+
+    Write-Host "`n=== Building dcc-debug-host and example I/O adapter ==="
+    Invoke-Checked $cmakeCommand.Source @(
+        "-S", $sourceDir,
+        "-B", $buildDir,
+        "-DBUILD_TESTING=OFF",
+        "-DDCC_DEBUG_HOST_BUILD_EXAMPLES=ON",
+        "-DCMAKE_BUILD_TYPE=Release"
+    ) "debugger host configuration"
+    Invoke-Checked $cmakeCommand.Source @(
+        "--build", $buildDir,
+        "--config", "Release",
+        "--target", "dcc-debug-host", "dcc-debug-io-adapter-example"
+    ) "debugger host and example adapter compilation"
+
+    $executableName = if ($IsWindows) { "dcc-debug-host.exe" } else { "dcc-debug-host" }
+    $candidates = @(
+        (Join-Path $buildDir $executableName),
+        (Join-Path (Join-Path $buildDir "Release") $executableName)
+    )
+    $debugHostOut = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $debugHostOut) {
+        throw "dcc-debug-host build completed but $executableName was not found under $buildDir"
+    }
+
+    $adapterName = if ($IsWindows) {
+        "dcc-debug-io-adapter-example.dll"
+    } elseif ($IsMacOS) {
+        "libdcc-debug-io-adapter-example.dylib"
+    } else {
+        "libdcc-debug-io-adapter-example.so"
+    }
+    $adapterDir = Join-Path (Join-Path $buildDir "examples") "io_adapter"
+    $adapterCandidates = @(
+        (Join-Path $adapterDir $adapterName),
+        (Join-Path (Join-Path $adapterDir "Release") $adapterName),
+        (Join-Path $buildDir $adapterName),
+        (Join-Path (Join-Path $buildDir "Release") $adapterName)
+    )
+    $adapterOut = $adapterCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+    if (-not $adapterOut) {
+        throw "example I/O adapter build completed but $adapterName was not found under $buildDir"
+    }
+    return @($debugHostOut, $adapterOut)
+}
+
 Write-Host "Build artifacts will go to: $outputPathDisplay"
 Write-Host "Commands will be placed in: $repoRoot"
 
@@ -439,6 +496,8 @@ $executables = if ($IsWindows) {
 } else {
     Build-UnixNative
 }
+$executables = @($executables)
+$executables += Build-DccDebugHost
 
 Write-Host "`n=== Build complete ==="
 Write-Host "Commands:"

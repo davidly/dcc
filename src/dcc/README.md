@@ -200,26 +200,14 @@ The arrows above show the dominant direction, not a hard layering restriction.
 
 From the repository root:
 
-```sh
-# Option A: the build script (writes ./dcc at the repo root)
-sh src/dcc/build-dcc.sh
-
-# Option B: CMake
-cmake -S src/dcc -B build/dcc
-cmake --build build/dcc      # also writes ./dcc at the repo root
+```powershell
+pwsh ./scripts/build-dcc.ps1
 ```
 
-Both compile every module (`dcc.c`, `dcc_state.c`, and the `dcc_*.c` files) as
-portable C11 and link them into `./dcc` at the repository root,
-matching the conventions the `ma.sh` / `runall.sh` harness expects. The
-companion tools `dccpeep` and `dccrtlstrip` are unchanged and are built by the
-existing root scripts (`mmacos.sh` / `m.sh`).
-
-Override the compiler or flags via environment variables:
-
-```sh
-CC=gcc CFLAGS="-std=c11 -O2" sh src/dcc/build-dcc.sh
-```
+The canonical cross-platform build compiles every compiler module (`dcc.c`,
+`dcc_state.c`, and the `dcc_*.c` files) as portable C11 and links `./dcc` at
+the repository root. It also builds the companion host tools, debugger host,
+and example debugger I/O adapter.
 
 > Note: linking may print `ld: warning: reducing alignment of section
 > __DATA,__common ...`. That is benign — it reflects the compiler's large

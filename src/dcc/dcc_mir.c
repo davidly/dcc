@@ -272,7 +272,7 @@ static int mir_capture_debug_text(const char *text)
     struct MirDebugEvent *event;
     size_t length;
 
-    if (!mir.active || !opt_debug || text == NULL)
+    if (!mir.active || !DEBUG_METADATA_ENABLED || text == NULL)
         return 0;
     if (mir.debug_event_count == mir.debug_event_capacity) {
         int capacity = mir.debug_event_capacity == 0
@@ -296,6 +296,10 @@ static int mir_capture_debug_text(const char *text)
     return 1;
 }
 
+static void mir_object_transfer(const struct MirInsn *insn,
+                                const int *input, int *output);
+static int mir_find_object(const char *name);
+
 int mir_capture_debug_location(const char *file, int line)
 {
     char text[512];
@@ -303,7 +307,7 @@ int mir_capture_debug_location(const char *file, int line)
         file != NULL ? file : input_name != NULL ? input_name : "<input>";
     size_t used = 0;
 
-    if (!mir.active || !opt_debug || line <= 0)
+    if (!mir.active || !DEBUG_METADATA_ENABLED || line <= 0)
         return 0;
     used += (size_t)snprintf(text + used, sizeof(text) - used,
                              ";@dcc-line \"");
@@ -320,21 +324,23 @@ int mir_capture_debug_variable(
     const char *function, const struct Sym *symbol, int end)
 {
     char text[1024];
+    char variable_name[64];
     size_t used;
     int dimension;
 
-    if (!mir.active || !opt_debug || function == NULL || symbol == NULL)
+    if (!mir.active || !DEBUG_METADATA_ENABLED || function == NULL || symbol == NULL)
         return 0;
+    debug_symbol_name(symbol, variable_name, sizeof(variable_name));
     if (end) {
         snprintf(text, sizeof(text),
                  ";@dcc-var-end \"%s\" \"%s\" %d\n",
-                 function, symbol->name, symbol->offset);
+                 function, variable_name, symbol->offset);
         return mir_capture_debug_text(text);
     }
     used = (size_t)snprintf(
         text, sizeof(text),
         ";@dcc-var \"%s\" \"%s\" %d %d %d %d %d %d %d %d \"",
-        function, symbol->name, symbol->type, symbol->storage,
+        function, variable_name, symbol->type, symbol->storage,
         symbol->offset, symbol->size, symbol->is_array, symbol->is_vla,
         symbol->elem_size, symbol->is_funcptr);
     for (dimension = 0;
@@ -352,7 +358,7 @@ int mir_capture_debug_function_end(
 {
     char text[256];
 
-    if (!mir.active || !opt_debug ||
+    if (!mir.active || !DEBUG_METADATA_ENABLED ||
         assembly_name == NULL || source_name == NULL)
         return 0;
     snprintf(text, sizeof(text),
@@ -365,11 +371,257 @@ void mir_emit_debug_events(MirStream *out, int point)
 {
     int event;
 
-    if (!opt_debug)
+    if (!DEBUG_METADATA_ENABLED)
         return;
     for (event = 0; event < mir.debug_event_count; ++event)
         if (mir.debug_events[event].point == point)
             mir_stream_puts(mir.debug_events[event].text, out);
+    if (opt_debug_lines)
+        mir_emit_debug_locations(out, point, 1);
+}
+
+void mir_emit_first_debug_location(MirStream *out)
+{
+    int event;
+
+    if (!DEBUG_METADATA_ENABLED)
+        return;
+    for (event = 0; event < mir.debug_event_count; ++event)
+        if (!strncmp(mir.debug_events[event].text, ";@dcc-line ", 11)) {
+            mir_stream_puts(mir.debug_events[event].text, out);
+            mir_emit_debug_locations(out, mir.debug_events[event].point, 0);
+            return;
+        }
+}
+
+void mir_prepare_debug_object_states(void)
+{
+    size_t state_count;
+    int *next_state;
+    int changed;
+    int instruction;
+    int object;
+
+    free(mir.debug_object_in);
+    free(mir.debug_object_out);
+    mir.debug_object_in = NULL;
+    mir.debug_object_out = NULL;
+    mir.debug_object_state_count = 0;
+    if (!opt_debug_lines || mir.count <= 0 || mir.object_count <= 0)
+        return;
+    state_count = (size_t)mir.count * mir.object_count;
+    mir.debug_object_in = (int *)malloc(state_count * sizeof(int));
+    mir.debug_object_out = (int *)malloc(state_count * sizeof(int));
+    next_state = (int *)malloc((size_t)mir.object_count * sizeof(int));
+    if (!mir.debug_object_in || !mir.debug_object_out || !next_state)
+        fatal("out of memory preparing debug object locations");
+    for (instruction = 0; instruction < (int)state_count; ++instruction) {
+        mir.debug_object_in[instruction] = MIR_OBJECT_UNREACHED;
+        mir.debug_object_out[instruction] = MIR_OBJECT_UNREACHED;
+    }
+    do {
+        changed = 0;
+        for (instruction = 0; instruction < mir.count; ++instruction) {
+            int *input = &mir.debug_object_in[
+                (size_t)instruction * mir.object_count];
+            int *output = &mir.debug_object_out[
+                (size_t)instruction * mir.object_count];
+            int predecessor_count = 0;
+            int predecessor;
+
+            if (instruction == 0) {
+                for (object = 0; object < mir.object_count; ++object)
+                    next_state[object] = MIR_OBJECT_UNDEFINED;
+            } else {
+                for (object = 0; object < mir.object_count; ++object)
+                    next_state[object] = MIR_OBJECT_UNREACHED;
+                for (predecessor = 0; predecessor < mir.count; ++predecessor) {
+                    int successor;
+                    for (successor = 0;
+                         successor < mir.insns[predecessor].successor_count;
+                         ++successor) {
+                        int *predecessor_out;
+                        if (mir.insns[predecessor].successors[successor] !=
+                            instruction)
+                            continue;
+                        predecessor_out = &mir.debug_object_out[
+                            (size_t)predecessor * mir.object_count];
+                        if (predecessor_count == 0) {
+                            memcpy(next_state, predecessor_out,
+                                   (size_t)mir.object_count * sizeof(int));
+                        } else {
+                            for (object = 0; object < mir.object_count; ++object)
+                                if (next_state[object] == MIR_OBJECT_UNREACHED)
+                                    next_state[object] = predecessor_out[object];
+                                else if (predecessor_out[object] ==
+                                         MIR_OBJECT_UNREACHED)
+                                    continue;
+                                else if (next_state[object] !=
+                                         predecessor_out[object])
+                                    next_state[object] = MIR_OBJECT_AMBIGUOUS;
+                        }
+                        ++predecessor_count;
+                        break;
+                    }
+                }
+                if (predecessor_count == 0)
+                    for (object = 0; object < mir.object_count; ++object)
+                        next_state[object] = MIR_OBJECT_UNDEFINED;
+            }
+            if (memcmp(input, next_state,
+                       (size_t)mir.object_count * sizeof(int)) != 0) {
+                memcpy(input, next_state,
+                       (size_t)mir.object_count * sizeof(int));
+                changed = 1;
+            }
+            mir_object_transfer(&mir.insns[instruction], input, next_state);
+            if (memcmp(output, next_state,
+                       (size_t)mir.object_count * sizeof(int)) != 0) {
+                memcpy(output, next_state,
+                       (size_t)mir.object_count * sizeof(int));
+                changed = 1;
+            }
+        }
+    } while (changed);
+    free(next_state);
+    mir.debug_object_state_count = (int)state_count;
+}
+
+static int mir_debug_value_is_live(int value, int point)
+{
+    if (value < 0 || value >= mir.next_value || mir.live_in == NULL ||
+        mir.live_out == NULL || mir.count <= 0)
+        return 0;
+    if (point >= mir.count)
+        return mir.live_out[
+            (size_t)(mir.count - 1) * mir.next_value + value] != 0;
+    if (point < 0)
+        return 0;
+    return mir.live_in[(size_t)point * mir.next_value + value] != 0;
+}
+
+static void mir_debug_declared_name(int declaration, char *name,
+                                    size_t name_size)
+{
+    const char *internal = mir.declared_names[declaration];
+    const char *suffix = strchr(internal, '#');
+    size_t length = suffix ? (size_t)(suffix - internal) : strlen(internal);
+
+    if (name_size == 0)
+        return;
+    if (length >= name_size)
+        length = name_size - 1;
+    memcpy(name, internal, length);
+    name[length] = 0;
+}
+
+static void mir_debug_emit_location(MirStream *out, int declaration,
+                                    const char *kind, long detail)
+{
+    char name[64];
+
+    mir_debug_declared_name(declaration, name, sizeof(name));
+    if (!name[0] || name[0] == '#')
+        return;
+    mir_stream_printf(out,
+        ";@dcc-loc \"%s\" \"%s\" %d %s %ld\n",
+        mir.debug_assembly_name, name, mir.declared_offsets[declaration],
+        kind, detail);
+}
+
+void mir_emit_debug_locations(MirStream *out, int point, int allow_registers)
+{
+    int declaration;
+
+    if (!opt_debug_lines || out == NULL)
+        return;
+    for (declaration = 0; declaration < mir.declared_count; ++declaration) {
+        const struct MirInsn *definition;
+        const struct MirRegionalSegment *segment = NULL;
+        int object;
+        int value;
+        int color;
+        int offset;
+        int stable_frame;
+        int state_index;
+
+        if (mir.declared_storage[declaration] != SC_LOCAL &&
+            mir.declared_storage[declaration] != SC_PARAM)
+            continue;
+        if (mir.declared_is_const[declaration]) {
+            mir_debug_emit_location(out, declaration, "const",
+                                    (long)mir.declared_const_values[declaration]);
+            continue;
+        }
+        if (!allow_registers) {
+            mir_debug_emit_location(out, declaration, "out", 0);
+            continue;
+        }
+        object = mir_find_object(mir.declared_names[declaration]);
+        stable_frame = object < 0 ||
+            mir.declared_storage[declaration] == SC_PARAM ||
+            mir.declared_is_array[declaration] ||
+            mir.declared_is_vla[declaration] ||
+            mir.declared_is_volatile[declaration] ||
+            (object >= 0 && !mir_object_is_fully_promoted(object));
+        if (stable_frame) {
+            offset = mir.declared_offsets[declaration];
+            if (mir.declared_storage[declaration] == SC_PARAM &&
+                mir_home_uses_iy())
+                offset += 2;
+            if (mir.declared_storage[declaration] == SC_PARAM || offset >= 0 ||
+                -offset <= mir_effective_local_bytes())
+                mir_debug_emit_location(out, declaration, "frame", offset);
+            else
+                mir_debug_emit_location(out, declaration, "out", 0);
+            continue;
+        }
+        if (object < 0 || mir.debug_object_in == NULL ||
+            mir.debug_object_state_count == 0) {
+            mir_debug_emit_location(out, declaration, "out", 0);
+            continue;
+        }
+        if (point >= mir.count)
+            state_index = (mir.count - 1) * mir.object_count + object;
+        else if (point >= 0)
+            state_index = point * mir.object_count + object;
+        else
+            state_index = -1;
+        value = state_index >= 0 && state_index < mir.debug_object_state_count ?
+            (point >= mir.count ? mir.debug_object_out[state_index] :
+                                  mir.debug_object_in[state_index]) :
+            MIR_OBJECT_UNDEFINED;
+        definition = value >= 0 ? mir_definition(value) : NULL;
+        if (definition != NULL &&
+            (definition->opcode == MIR_CONST ||
+             definition->opcode == MIR_FLOAT_CONST)) {
+            mir_debug_emit_location(out, declaration, "const",
+                                    definition->immediate);
+            continue;
+        }
+        if (!allow_registers || value < 0 ||
+            !mir_debug_value_is_live(value, point)) {
+            mir_debug_emit_location(out, declaration, "out", 0);
+            continue;
+        }
+        if (point >= 0 && point < mir.count)
+            segment = mir_regional_segment_for(value, point);
+        color = segment != NULL ? segment->color :
+                mir.allocation_colors != NULL ? mir.allocation_colors[value] : -1;
+        switch (color) {
+        case MIR_COLOR_HL: mir_debug_emit_location(out, declaration, "hl", 0); continue;
+        case MIR_COLOR_DE: mir_debug_emit_location(out, declaration, "de", 0); continue;
+        case MIR_COLOR_BC: mir_debug_emit_location(out, declaration, "bc", 0); continue;
+        case MIR_COLOR_IY: mir_debug_emit_location(out, declaration, "iy", 0); continue;
+        case MIR_COLOR_HL_DE: mir_debug_emit_location(out, declaration, "hl_de", 0); continue;
+        case MIR_COLOR_BC_IY: mir_debug_emit_location(out, declaration, "bc_iy", 0); continue;
+        default: break;
+        }
+        if (mir_home_spill_offset(value, &offset))
+            mir_debug_emit_location(out, declaration, "frame", offset);
+        else
+            mir_debug_emit_location(out, declaration, "out", 0);
+    }
 }
 
 static int mir_user_label(const char *name)
@@ -392,7 +644,7 @@ static int mir_user_label(const char *name)
 static int mir_object_eligible(const struct Sym *sym)
 {
     const char *separator;
-    if (sym == NULL)
+    if (sym == NULL || opt_debug)
         return 0;
     if (sym->storage != SC_LOCAL && sym->storage != SC_PARAM)
         return 0;
@@ -3088,6 +3340,7 @@ static void mir_lower_stmt(const struct AstNode *node)
 
     if (node == NULL)
         return;
+    mir_capture_debug_location(node->file, node->line);
     switch (node->kind) {
     case AST_EMPTY:
         return;
@@ -3356,7 +3609,8 @@ static void mir_lower_stmt(const struct AstNode *node)
     insn->immediate = node->kind;
 }
 
-void mir_begin_function(const char *name, int sink_purpose, int has_vla,
+void mir_begin_function(const char *name, const char *assembly_name,
+                        int sink_purpose, int has_vla,
                         int local_bytes, int implicit_zero_return)
 {
     struct Sym *function_symbol;
@@ -3421,6 +3675,7 @@ void mir_begin_function(const char *name, int sink_purpose, int has_vla,
     mir.opaque_count = 0;
     mir_extended_integer_constant_conversion_fold_count = 0;
     mir_copy_name(mir.name, name);
+    mir_copy_name(mir.debug_assembly_name, assembly_name);
     mir.active = 1;
     mir_emit_label(mir_new_label());
     {
@@ -3630,6 +3885,14 @@ void mir_end_declaration(void)
     memcpy(&mir.insns[mir.declaration_placeholder + 1], captured,
            (size_t)captured_count * sizeof(*captured));
     free(captured);
+    for (i = 0; i < mir.debug_event_count; ++i) {
+        int point = mir.debug_events[i].point;
+        if (point >= mir.declaration_capture_start)
+            mir.debug_events[i].point = mir.declaration_placeholder + 1 +
+                point - mir.declaration_capture_start;
+        else if (point > mir.declaration_placeholder)
+            mir.debug_events[i].point += captured_count;
+    }
     for (i = 0; i < mir.declaration_count; ++i)
         if (!mir.declaration_consumed[i] &&
             mir.declaration_placeholders[i] > mir.declaration_placeholder &&
@@ -7230,10 +7493,6 @@ int mir_value_use_count(int value)
     }
     return result;
 }
-
-#define MIR_OBJECT_UNDEFINED (-1)
-#define MIR_OBJECT_AMBIGUOUS (-2)
-#define MIR_OBJECT_UNREACHED (-3)
 
 static int mir_resolve_alias(const int *aliases, int value)
 {

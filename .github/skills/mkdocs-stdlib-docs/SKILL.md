@@ -197,8 +197,8 @@ Also check:
 - Generated tables render in `docs/site/...` when marker behavior changed.
 - User docs do not mention hook internals except where intentionally linked from
   `docs/docs/README.md`.
-- If compiler help or mappings changed, rebuild host tools with `./mmacos.sh` on
-  macOS or the platform-appropriate build script.
+- If compiler help or mappings changed, rebuild all host tools with
+  `pwsh ./scripts/build-dcc.ps1`.
 
 ## Files To Update Together
 

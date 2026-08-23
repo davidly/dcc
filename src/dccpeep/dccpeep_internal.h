@@ -237,6 +237,8 @@ typedef struct PeepContext {
 typedef struct PeepEditTransaction {
     char **lines;
     char **user_asm_original;
+    char **debug_metadata;
+    char *trailing_debug_metadata;
     int line_count;
     unsigned long version;
     PeepRunStats stats;
@@ -251,6 +253,7 @@ void peep_edit_rollback(PeepEditTransaction *transaction);
 
 extern char *lines[MAX_LINES];
 extern char *user_asm_original[MAX_LINES];
+extern char *debug_metadata[MAX_LINES];
 extern int nlines;
 extern int input_is_dcc_generated;
 

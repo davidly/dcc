@@ -1,10 +1,8 @@
-rm -f dcc dccpeep dccrtlstrip dccmake m80c
+#!/bin/sh
+# Compatibility alias for the canonical cross-platform host build.
 
-sh src/dcc/build-dcc.sh
-clang -std=c11 -Wall -Wextra -O2 -g -I src/dccpeep -o dccpeep src/dccpeep/*.c
-clang -std=c89 -Wall -Wextra -O2 -g -o dccrtlstrip src/dccrtlstrip/dccrtlstrip.c
-clang -std=c89 -Wall -Wextra -O2 -g -o dccmake src/dccmake/dccmake.c
-clang -std=c89 -Wall -Wextra -O2 -g -o m80c src/m80c/m80c.c
+set -eu
 
-chmod +x scripts/runall.sh
-chmod +x ma.sh
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+
+exec sh "$SCRIPT_DIR/m.sh" "$@"

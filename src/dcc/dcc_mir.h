@@ -19,7 +19,8 @@ struct AstNode;
 struct Sym;
 
 /* Function lifecycle. */
-void mir_begin_function(const char *name, int sink_purpose, int has_vla,
+void mir_begin_function(const char *name, const char *assembly_name,
+						int sink_purpose, int has_vla,
 						int local_bytes, int implicit_zero_return);
 int mir_is_active(void);
 
