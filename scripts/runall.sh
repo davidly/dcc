@@ -199,14 +199,78 @@ if ! perl -MJSON::PP -e 1 >/dev/null 2>&1; then
     echo "Perl JSON::PP is required to read $overrides" >&2
     exit 2
 fi
+
+# Parse the whole overrides file exactly once, here, rather than re-spawning
+# perl -MJSON::PP per app (json_object_for_app) and then again per field
+# (json_string/json_bool) on every single run_one_app call - that was up to
+# ~9 perl startups per app. Each app's fields come back as one NUL-terminated,
+# shell-eval-able block (first line = name, rest = quoted assignments);
+# load_app_config below does a pure-bash linear scan over override_app_names
+# and evals the matching block - no subprocess per lookup at all.
+override_app_names=()
+override_app_blocks=()
 if [ -f "$overrides" ]; then
-    if ! perl -MJSON::PP -0777 -e '
+    while IFS= read -r -d '' override_block; do
+        override_app_names+=("${override_block%%$'\n'*}")
+        override_app_blocks+=("$override_block")
+    done < <(perl -MJSON::PP -0777 -e '
         use strict;
         use warnings;
+
+        sub shquote {
+            my ($s) = @_;
+            $s = "" unless defined $s;
+            $s =~ s/'"'"'/'"'"'\\'"'"''"'"'/g;
+            return "'"'"'" . $s . "'"'"'";
+        }
+        sub scalar_str {
+            my ($v) = @_;
+            return "" unless defined $v;
+            return ref($v) ? "" : "$v";
+        }
+        sub bool_str {
+            my ($v, $default) = @_;
+            return $default ? "true" : "false" unless defined $v;
+            return ($v && ref($v) =~ /Boolean/ ? 1 : (!ref($v) ? $v : 0)) ? "true" : "false";
+        }
+
         my $text = <>;
         $text =~ s/^\x{EF}\x{BB}\x{BF}//;
-        decode_json($text);
-    ' "$overrides" >/dev/null 2>"/tmp/runall-json-error-$$"; then
+        my $root = decode_json($text);
+        exit 0 unless ref($root) eq "HASH" && ref($root->{apps}) eq "ARRAY";
+
+        for my $entry (@{$root->{apps}}) {
+            next unless ref($entry) eq "HASH";
+            next unless defined($entry->{name});
+            my @fix_lines;
+            if (ref($entry->{fixtures}) eq "ARRAY") {
+                for my $fixture (@{$entry->{fixtures}}) {
+                    my ($fname, $fsource) = ("", "");
+                    if (!ref($fixture)) { $fname = defined($fixture) ? "$fixture" : ""; }
+                    elsif (ref($fixture) eq "HASH") {
+                        $fname = defined($fixture->{name}) ? "$fixture->{name}" : "";
+                        $fsource = defined($fixture->{source}) ? "$fixture->{source}" : "";
+                    }
+                    $fname =~ s/[\t\r\n]/ /g;
+                    $fsource =~ s/[\t\r\n]/ /g;
+                    push @fix_lines, "$fname\t$fsource" if length($fname);
+                }
+            }
+            print "$entry->{name}\n";
+            print "ignore=" . shquote(bool_str($entry->{ignore}, 0)) . "\n";
+            print "app_timeout=" . shquote(scalar_str($entry->{run_timeout})) . "\n";
+            print "run_args=" . shquote(scalar_str($entry->{args})) . "\n";
+            print "run_stdin=" . shquote(scalar_str($entry->{stdin})) . "\n";
+            print "stack_size=" . shquote(scalar_str($entry->{stack_size})) . "\n";
+            print "dcc_args=" . shquote(scalar_str($entry->{dcc_args})) . "\n";
+            print "floatio=" . shquote(bool_str($entry->{dcc_floatio}, 1)) . "\n";
+            print "longio=" . shquote(bool_str($entry->{dcc_longio}, 1)) . "\n";
+            print "fixtures_tsv=" . shquote(join("\n", @fix_lines));
+            print "\0";
+        }
+    ' "$overrides" 2>"/tmp/runall-json-error-$$")
+    parse_status=$?
+    if [ "$parse_status" -ne 0 ]; then
         echo "cannot parse $overrides with Perl JSON::PP:" >&2
         cat "/tmp/runall-json-error-$$" >&2
         rm -f "/tmp/runall-json-error-$$"
@@ -214,6 +278,25 @@ if [ -f "$overrides" ]; then
     fi
     rm -f "/tmp/runall-json-error-$$"
 fi
+
+# Pure-bash lookup: linear scan over override_app_names, then eval the
+# matching pre-quoted block into the caller's already-local variables
+# (ignore/app_timeout/run_args/run_stdin/stack_size/dcc_args/floatio/
+# longio/fixtures_tsv). Returns 1 (all defaults) if the app has no entry -
+# same as json_object_for_app returning "{}" before.
+load_app_config() {
+    local wanted=$1 idx=0 name
+    ignore=false; app_timeout=''; run_args=''; run_stdin=''; stack_size=''
+    dcc_args=''; floatio=true; longio=true; fixtures_tsv=''
+    for name in "${override_app_names[@]+${override_app_names[@]}}"; do
+        if [ "$name" = "$wanted" ]; then
+            eval "${override_app_blocks[$idx]#*$'\n'}"
+            return 0
+        fi
+        idx=$((idx + 1))
+    done
+    return 1
+}
 
 run_dir="$build_root/run-$$"
 mkdir -p "$run_dir"
@@ -305,117 +388,13 @@ run_group_with_timeout() {
     return "$status"
 }
 
-json_object_for_app() {
-    local app=$1
-    if [ ! -f "$overrides" ]; then
-        printf '{}\n'
-        return
-    fi
-
-    # Select the first matching application exactly as the PowerShell runner
-    # and the previous jq expression did.
-    perl -MJSON::PP -0777 -e '
-        use strict;
-        use warnings;
-        my ($file, $wanted) = @ARGV;
-        open my $fh, "<:raw", $file or die "$file: $!";
-        local $/;
-        my $text = <$fh>;
-        $text =~ s/^\x{EF}\x{BB}\x{BF}//;
-        my $root = decode_json($text);
-        my $found = {};
-        if (ref($root) eq "HASH" && ref($root->{apps}) eq "ARRAY") {
-            for my $entry (@{$root->{apps}}) {
-                next unless ref($entry) eq "HASH";
-                next unless defined($entry->{name}) && $entry->{name} eq $wanted;
-                $found = $entry;
-                last;
-            }
-        }
-        print JSON::PP->new->canonical(1)->encode($found), "\n";
-    ' "$overrides" "$app"
-}
-
-json_string() {
-    local json=$1 key=$2 default=${3-}
-    JSON_TEXT=$json JSON_KEY=$key JSON_DEFAULT=$default perl -MJSON::PP -e '
-        use strict;
-        use warnings;
-        my $object = decode_json($ENV{JSON_TEXT});
-        my $key = $ENV{JSON_KEY};
-        my $default = $ENV{JSON_DEFAULT};
-        my $value = ref($object) eq "HASH" ? $object->{$key} : undef;
-        if (!defined($value)) {
-            print $default;
-        }
-        elsif (ref($value) && ref($value) =~ /Boolean\z/) {
-            print $value ? "true" : "false";
-        }
-        elsif (!ref($value)) {
-            print $value;
-        }
-        else {
-            print JSON::PP->new->canonical(1)->encode($value);
-        }
-        print "\n";
-    '
-}
-
-json_bool() {
-    local json=$1 key=$2 default=$3
-    JSON_TEXT=$json JSON_KEY=$key JSON_DEFAULT=$default perl -MJSON::PP -e '
-        use strict;
-        use warnings;
-        my $object = decode_json($ENV{JSON_TEXT});
-        my $key = $ENV{JSON_KEY};
-        my $default = $ENV{JSON_DEFAULT};
-        my $value = ref($object) eq "HASH" ? $object->{$key} : undef;
-        my $result = $default;
-
-        if (defined($value)) {
-            if (ref($value) && ref($value) =~ /Boolean\z/) {
-                $result = $value ? "true" : "false";
-            }
-            elsif (!ref($value)) {
-                my $text = lc("$value");
-                if ($text =~ /^(?:true|yes|1|on)$/) {
-                    $result = "true";
-                }
-                elsif ($text =~ /^(?:false|no|0|off|)$/) {
-                    $result = "false";
-                }
-                elsif ($text =~ /^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$/) {
-                    $result = ($text == 0) ? "false" : "true";
-                }
-            }
-        }
-        print "$result\n";
-    '
-}
-
 copy_fixtures() {
-    local app_json=$1 destination=$2
-    [ -f "$overrides" ] || return 0
+    # fixtures_tsv is pre-extracted by load_app_config (one "name<TAB>source"
+    # line per fixture) - no perl call needed here anymore.
+    local tsv=$1 destination=$2
+    [ -n "$tsv" ] || return 0
 
-    JSON_TEXT=$app_json perl -MJSON::PP -e '
-        use strict;
-        use warnings;
-        my $object = decode_json($ENV{JSON_TEXT});
-        exit 0 unless ref($object) eq "HASH" && ref($object->{fixtures}) eq "ARRAY";
-        for my $fixture (@{$object->{fixtures}}) {
-            my ($name, $source) = ("", "");
-            if (!ref($fixture)) {
-                $name = defined($fixture) ? "$fixture" : "";
-            }
-            elsif (ref($fixture) eq "HASH") {
-                $name = defined($fixture->{name}) ? "$fixture->{name}" : "";
-                $source = defined($fixture->{source}) ? "$fixture->{source}" : "";
-            }
-            $name =~ s/[\t\r\n]/ /g;
-            $source =~ s/[\t\r\n]/ /g;
-            print "$name\t$source\n";
-        }
-    ' |
+    printf '%s\n' "$tsv" |
     while IFS=$'\t' read -r fixture_name fixture_source; do
         [ -n "$fixture_name" ] || continue
         local source=''
@@ -506,18 +485,15 @@ esac
 run_one_app() {
     local app=$1
     local result_file=$2
-    local app_json app_ok app_timeout run_args run_stdin stack_size dcc_args floatio longio
+    local app_ok app_timeout run_args run_stdin stack_size dcc_args floatio longio
+    local ignore fixtures_tsv
     local build_mode app_dir build_log com_file output_raw output_clean run_status baseline stdin_file
     local multi_file_arg word
     local -a build_env program_args emulator_args
 
-    app_json=$(json_object_for_app "$app") || {
-        echo "FAIL  $app (invalid override JSON)"
-        printf 'FAIL\n' >"$result_file"
-        return 1
-    }
+    load_app_config "$app"
 
-    if [ "$(json_bool "$app_json" ignore false)" = true ]; then
+    if [ "$ignore" = true ]; then
         echo "SKIP  $app"
         printf 'SKIP\n' >"$result_file"
         return 0
@@ -525,13 +501,8 @@ run_one_app() {
 
     echo "Testing $app..."
     app_ok=1
-    app_timeout=$(json_string "$app_json" run_timeout "$run_timeout")
     case "$app_timeout" in ''|*[!0-9]*) app_timeout=$run_timeout ;; esac
-    run_args=$(json_string "$app_json" args '')
-    run_stdin=$(json_string "$app_json" stdin '')
-    stack_size=$(json_string "$app_json" stack_size '')
     if [ -n "$global_stack_size" ]; then stack_size=$global_stack_size; fi
-    dcc_args=$(json_string "$app_json" dcc_args '')
 
     # ma.sh (this script's build helper) invokes dcc directly, a single-file
     # compiler with no concept of extra positional .c files as additional
@@ -553,13 +524,10 @@ run_one_app() {
         return 0
     fi
 
-    floatio=$(json_bool "$app_json" dcc_floatio true)
-    longio=$(json_bool "$app_json" dcc_longio true)
-
     for build_mode in "${build_modes[@]}"; do
         app_dir="$run_dir/$app-$build_mode"
         mkdir -p "$app_dir"
-        copy_fixtures "$app_json" "$app_dir"
+        copy_fixtures "$fixtures_tsv" "$app_dir"
 
         if [ -n "$stack_size" ]; then
             echo "  Building $app ($build_mode, stack=$stack_size)..."
