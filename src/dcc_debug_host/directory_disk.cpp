@@ -123,7 +123,7 @@ bool add_file(std::vector<uint8_t> &logical, const DebugFixture &file,
 
         size_t entry_offset = kDirectoryOffset + directory_entry * 32;
         uint8_t *entry = logical.data() + entry_offset;
-        std::fill_n(entry, 32, 0);
+        std::fill_n(entry, 32, uint8_t{0});
         entry[0] = 0;
         std::fill_n(entry + 1, 8, static_cast<uint8_t>(' '));
         std::fill_n(entry + 9, 3, static_cast<uint8_t>(' '));
@@ -169,9 +169,9 @@ bool DirectoryDisk::build(const fs::path &raw_template,
     }
     std::fill(logical.begin() + static_cast<std::ptrdiff_t>(kDirectoryOffset),
               logical.begin() + static_cast<std::ptrdiff_t>(kDirectoryOffset + kDirectorySize),
-              0xe5);
+              uint8_t{0xe5});
     std::fill(logical.begin() + static_cast<std::ptrdiff_t>(kDirectoryOffset + kDirectorySize),
-              logical.end(), 0);
+              logical.end(), uint8_t{0});
 
     std::set<std::string> names;
     for (const DebugFixture &file : files)

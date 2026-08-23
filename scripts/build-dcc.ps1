@@ -457,44 +457,26 @@ function Build-DccDebugHost {
     Remove-Item -LiteralPath $debugHostOut, $adapterOut -Force -ErrorAction SilentlyContinue
 
     Write-Host "`n=== Building dcc-debug-host and example I/O adapter ==="
-    Invoke-Checked $cmakeCommand.Source @(
+    $configureArguments = @(
         "-S", $sourceDir,
         "-B", $buildDir,
         "-DBUILD_TESTING=OFF",
         "-DDCC_DEBUG_HOST_BUILD_EXAMPLES=ON",
-        "-DCMAKE_BUILD_TYPE=Release"
-    ) "debugger host configuration"
+        "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE=$repoRoot",
+        "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE=$repoRoot"
+    )
+    if (-not $IsWindows) {
+        $configureArguments += "-DCMAKE_BUILD_TYPE=Release"
+    }
+    Invoke-Checked $cmakeCommand.Source $configureArguments "debugger host configuration"
     Invoke-Checked $cmakeCommand.Source @(
         "--build", $buildDir,
         "--config", "Release",
         "--target", "dcc-debug-host", "dcc-debug-io-adapter-example"
     ) "debugger host and example adapter compilation"
 
-    $candidates = @(
-        (Join-Path $buildDir $executableName),
-        (Join-Path (Join-Path $buildDir "Release") $executableName)
-    )
-    $debugHostBuilt = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-    if (-not $debugHostBuilt) {
-        throw "dcc-debug-host build completed but $executableName was not found under $buildDir"
-    }
-
-    $adapterDir = Join-Path (Join-Path $buildDir "examples") "io_adapter"
-    $adapterCandidates = @(
-        (Join-Path $adapterDir $adapterName),
-        (Join-Path (Join-Path $adapterDir "Release") $adapterName),
-        (Join-Path $buildDir $adapterName),
-        (Join-Path (Join-Path $buildDir "Release") $adapterName)
-    )
-    $adapterBuilt = $adapterCandidates | Where-Object { Test-Path $_ } | Select-Object -First 1
-    if (-not $adapterBuilt) {
-        throw "example I/O adapter build completed but $adapterName was not found under $buildDir"
-    }
-
-    Copy-Item -LiteralPath $debugHostBuilt -Destination $debugHostOut -Force
-    Copy-Item -LiteralPath $adapterBuilt -Destination $adapterOut -Force
     if (-not (Test-Path $debugHostOut) -or -not (Test-Path $adapterOut)) {
-        throw "debugger host artifacts were not published to the repository root"
+        throw "debugger host artifacts were not built in the repository root"
     }
     return @($debugHostOut, $adapterOut)
 }

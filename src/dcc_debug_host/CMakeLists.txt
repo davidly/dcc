@@ -125,15 +125,17 @@ if(CMAKE_C_COMPILER_ID MATCHES "Clang|GNU")
         -Wno-missing-field-initializers
     )
 elseif(MSVC)
-    target_compile_options(dcc-debug-host PRIVATE /W4)
+    target_compile_options(dcc-debug-host PRIVATE /W4 /wd4201)
     target_compile_definitions(dcc-debug-host PRIVATE _CRT_SECURE_NO_WARNINGS)
 endif()
 
-set_source_files_properties(
-    x80.cxx
-    cpu_x80_adapter.cpp
-    PROPERTIES COMPILE_OPTIONS "-w"
-)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    set_source_files_properties(
+        x80.cxx
+        cpu_x80_adapter.cpp
+        PROPERTIES COMPILE_OPTIONS "-w"
+    )
+endif()
 
 if(MSVC)
     set_source_files_properties(
@@ -207,11 +209,6 @@ if(BUILD_TESTING)
         DCC_DEBUG_X80_HOST_TEST=1
         TRACK_Z80_R_REGISTER=1
         TRACK_Z80_MEMPTR=1
-    )
-    set_source_files_properties(
-        x80.cxx
-        cpu_x80_adapter.cpp
-        PROPERTIES COMPILE_OPTIONS "-w"
     )
     add_test(NAME debugger-z80-core COMMAND debugger-z80-core-test)
     add_executable(fixture-publish-test
