@@ -135,6 +135,13 @@ set_source_files_properties(
     PROPERTIES COMPILE_OPTIONS "-w"
 )
 
+if(MSVC)
+    set_source_files_properties(
+        ${HARDWARE_DIR}/interrupt_controller.c
+        PROPERTIES COMPILE_OPTIONS "/experimental:c11atomics"
+    )
+endif()
+
 include(CTest)
 
 function(dcc_enable_test_assertions TARGET_NAME)

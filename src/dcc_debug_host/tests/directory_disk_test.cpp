@@ -1,5 +1,6 @@
 #include "directory_disk.hpp"
 
+#include <algorithm>
 #include <cassert>
 #include <chrono>
 #include <filesystem>
