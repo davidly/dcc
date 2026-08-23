@@ -470,6 +470,7 @@ run_one_app() {
     local result_file=$2
     local app_json app_ok app_timeout run_args run_stdin stack_size dcc_args floatio longio
     local build_mode app_dir build_log com_file output_raw output_clean run_status baseline stdin_file
+    local multi_file_arg word
     local -a build_env program_args emulator_args
 
     app_json=$(json_object_for_app "$app") || {
@@ -493,6 +494,27 @@ run_one_app() {
     stack_size=$(json_string "$app_json" stack_size '')
     if [ -n "$global_stack_size" ]; then stack_size=$global_stack_size; fi
     dcc_args=$(json_string "$app_json" dcc_args '')
+
+    # ma.sh (this script's build helper) invokes dcc directly, a single-file
+    # compiler with no concept of extra positional .c files as additional
+    # -module inputs to link in - unlike dccmake, which runall.ps1 drives
+    # instead. An app whose dcc_args references another .c file (e.g. calc's
+    # "tests/calc1024.c tests/calcdoub.c") is a multi-file app that can only
+    # build correctly through dccmake, so skip it here rather than failing
+    # with a misleading "undefined symbol" from the linker.
+    multi_file_arg=""
+    for word in $dcc_args; do
+        case "$word" in
+            *.c|*.C) multi_file_arg=$word; break ;;
+        esac
+    done
+    if [ -n "$multi_file_arg" ]; then
+        echo "SKIP  $app (multi-file app: dcc_args references $multi_file_arg," \
+             "which ma.sh cannot link in - build via dccmake or runall.ps1 instead)"
+        printf 'SKIP\n' >"$result_file"
+        return 0
+    fi
+
     floatio=$(json_bool "$app_json" dcc_floatio true)
     longio=$(json_bool "$app_json" dcc_longio true)
 
