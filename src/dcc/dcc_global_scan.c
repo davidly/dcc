@@ -76,8 +76,8 @@ static struct GlobalScanEntry *find_or_add_scan_entry(const char *name)
         return NULL;
     }
 
-    strncpy(g_scan_entries[g_scan_nentries].name, name, 63);
-    g_scan_entries[g_scan_nentries].name[63] = 0;
+    snprintf(g_scan_entries[g_scan_nentries].name,
+             sizeof(g_scan_entries[g_scan_nentries].name), "%s", name);
     g_scan_entries[g_scan_nentries].write_count = 0;
     g_scan_entries[g_scan_nentries].addr_taken_count = 0;
     return &g_scan_entries[g_scan_nentries++];

@@ -25,7 +25,18 @@ if [ -z "$CC" ]; then
         *)      CC=gcc ;;
     esac
 fi
-CFLAGS=${CFLAGS:--std=c11 -Wall -Wextra -O2 -g}
+# -O3 -flto=auto measured ~3.8% faster dcc-compile throughput than -O2 on
+# gcc/Linux (non-overlapping across 3 interleaved A/B rounds via
+# scripts/runall.ps1 -TimingBreakdown), with build time itself unaffected
+# (=auto lets LTRANS parallelize across cores - plain -flto without a job
+# count falls back to serial LTRANS, which measured ~7x slower to build).
+# Only applied where validated (gcc); clang/MSVC keep the -O2 baseline this
+# script and build-dcc.ps1 have always used, since ThinLTO/MSVC's /GL+/LTCG
+# have different cost/benefit tradeoffs that haven't been measured here.
+case "$CC" in
+    *gcc*) CFLAGS=${CFLAGS:--std=c11 -Wall -Wextra -O3 -flto=auto -g} ;;
+    *)     CFLAGS=${CFLAGS:--std=c11 -Wall -Wextra -O2 -g} ;;
+esac
 
 # On macOS, clang can emit large tentative definitions into __DATA,__common
 # with very high alignment (for large objects), which triggers an ld warning

@@ -734,7 +734,8 @@ void ast_gen_global_char_index_branch(const struct AstNode *n, int label,
     struct Sym *s;
     int saved_dead;
 
-    ast_global_char_index_cond(n, &s);
+    if (!ast_global_char_index_cond(n, &s))
+        return;
     saved_dead = expr_result_dead;
     expr_result_dead = 0;
     ast_gen_expr(n->b);
@@ -1609,7 +1610,8 @@ void ast_gen_const_cmp_branch(const struct AstNode *n, int label,
     struct Sym *s;
     int op;
     long c;
-    ast_const_cmp_extract(n, &s, &op, &c);
+    if (!ast_const_cmp_extract(n, &s, &op, &c))
+        return;
     emit_cmp_const_branch_for_signed_local16(s, op, c, label, branch_when_true);
 }
 
@@ -1913,7 +1915,8 @@ void ast_gen_byte_eq_branch(const struct AstNode *n, int label,
     long cval;
     int branch_on_eq;
 
-    ast_is_byte_eq_cond(n, &sa, &sb, &cval);
+    if (!ast_is_byte_eq_cond(n, &sa, &sb, &cval))
+        return;
     emit_load_sym_byte_to_a(sa);
     if (sb == NULL) {
         fprintf(g_emit_sink.stream, "\tcp %ld\n", cval);
@@ -2020,7 +2023,8 @@ void ast_gen_global_char_index_eq_branch(const struct AstNode *n, int label,
     int saved_dead;
     int branch_on_eq;
 
-    ast_is_global_char_index_eq_cond(n, &s, &idx, &other, &cval);
+    if (!ast_is_global_char_index_eq_cond(n, &s, &idx, &other, &cval))
+        return;
     saved_dead = expr_result_dead;
     expr_result_dead = 0;
     ast_gen_expr(idx);

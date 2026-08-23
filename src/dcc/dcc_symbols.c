@@ -617,7 +617,7 @@ struct Sym *add_global(const char *name, int type, int storage)
 
     s = &globals[nglobals++];
     memset(s, 0, sizeof(*s));
-    strncpy(s->name, name, sizeof(s->name) - 1);
+    snprintf(s->name, sizeof(s->name), "%s", name);
     s->type = type;
     s->storage = storage;
     s->size = type_size(type);
@@ -634,7 +634,7 @@ struct Sym *add_local_known(const char *name, int type, int storage,
 
     s = &locals[g_frame.nlocals++];
     memset(s, 0, sizeof(*s));
-    strncpy(s->name, name, sizeof(s->name) - 1);
+    snprintf(s->name, sizeof(s->name), "%s", name);
     s->type = type;
     s->storage = storage;
     s->offset = offset;
