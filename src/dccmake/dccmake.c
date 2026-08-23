@@ -58,6 +58,7 @@
 #define LOCAL_L80C ".\\l80c"
 #else
 #include <unistd.h>
+#include <sys/wait.h>
 #define MKDIR(path) mkdir(path, 0777)
 #define CHDIR(path) chdir(path)
 #define GETCWD(buf, size) getcwd(buf, size)
@@ -1375,9 +1376,9 @@ static int cmd_arg(char *cmd, size_t cmd_size, const char *arg)
 #endif
 }
 
-#ifdef _WIN32
 #define RUN_CMD_MAX_ARGV 4096
 
+#ifdef _WIN32
 /* Parses a command string built entirely out of cmd_arg's Windows
  * convention above - every argument wrapped in "..." with any literal "
  * escaped as \" - back into an argv array, dequoting in place inside buf
@@ -1424,20 +1425,19 @@ static int parse_quoted_argv(char *buf, char **argv, int max_argv)
     return argc;
 }
 
-/* Bypasses cmd.exe entirely via _spawnvp (-> CreateProcess directly), the
- * one difference between this and the system()-based POSIX path below.
- * system() on Windows always shells out through "cmd.exe /c <cmd>", which
+/* Bypasses cmd.exe entirely via _spawnvp (-> CreateProcess directly). system()
+ * on Windows always shells out through "cmd.exe /c <cmd>", which
  * scripts/bench-pwsh-overhead.ps1 measured at ~7ms of pure shell-launch
- * overhead per call on native Windows (vs sub-1ms for an equivalent spawn
- * on Linux/macOS) - multiplied by the 6 run_cmd/run_cmd_in_dir calls in a
- * single app build, across a few hundred apps in the full suite, that's
- * tens of seconds of overhead with no relation to the actual work being
- * done. _spawnvp needs a plain argv array rather than a shell command
- * line, so parse_quoted_argv above recovers one from the exact quoting
- * convention cmd_arg always uses - every caller of run_cmd in this file
- * builds `cmd` that way, so this never needs to handle arbitrary shell
- * syntax (no `&&`, pipes, or redirection - run_cmd_in_dir above already
- * sidesteps needing any of that for the one caller that used to want it). */
+ * overhead per call on native Windows - multiplied by the 6 run_cmd/
+ * run_cmd_in_dir calls in a single app build, across a few hundred apps in
+ * the full suite, that's tens of seconds of overhead with no relation to
+ * the actual work being done. _spawnvp needs a plain argv array rather than
+ * a shell command line, so parse_quoted_argv above recovers one from the
+ * exact quoting convention cmd_arg always uses - every caller of run_cmd in
+ * this file builds `cmd` that way, so this never needs to handle arbitrary
+ * shell syntax (no `&&`, pipes, or redirection - run_cmd_in_dir above
+ * already sidesteps needing any of that for the one caller that used to
+ * want it). */
 static int run_cmd(const char *cmd)
 {
     char *buf;
@@ -1469,16 +1469,106 @@ static int run_cmd(const char *cmd)
     return 1;
 }
 #else
+/* Parses a command string built entirely out of cmd_arg's POSIX convention
+ * above - every argument wrapped in '...' with any literal ' represented as
+ * the four-byte sequence '\'' (close quote, backslash, literal quote,
+ * reopen quote - the standard shell-quoting idiom, since nothing can be
+ * escaped inside single quotes) - back into an argv array, dequoting in
+ * place inside buf (which the caller owns and must keep alive as long as
+ * argv is used). Returns the argument count, or -1 if buf isn't in that
+ * exact shape (defensive only: every caller in this file builds `cmd` via
+ * cmd_arg, so that should never happen). Unlike the Windows convention
+ * above, this has no ambiguous-trailing-backslash edge case: backslash has
+ * no meaning inside '...' at all, so the only sequence ever needing special
+ * handling is the exact 4-byte '\'' escape. */
+static int parse_quoted_argv_posix(char *buf, char **argv, int max_argv)
+{
+    char *p = buf;
+    char *w;
+    int argc = 0;
+
+    for (;;) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        if (*p != '\'' || argc >= max_argv - 1)
+            return -1;
+        p++; /* consume opening quote */
+        argv[argc++] = w = p;
+        for (;;) {
+            while (*p && *p != '\'')
+                *w++ = *p++;
+            if (*p != '\'')
+                return -1; /* unterminated quote */
+            p++; /* consume closing quote */
+            if (p[0] == '\\' && p[1] == '\'' && p[2] == '\'') {
+                *w++ = '\''; /* literal quote in the original argument */
+                p += 3;      /* consume \'' - the final ' reopens the span */
+                continue;
+            }
+            break; /* not another piece of this word: word ends here */
+        }
+        *w = 0;
+    }
+    argv[argc] = NULL;
+    return argc;
+}
+
+/* Bypasses the shell entirely via fork+execvp, matching the Windows
+ * _spawnvp path above rather than going through system() (which always
+ * forks+execs /bin/sh -c "<cmd>", which in turn forks+execs the real
+ * program - two process creations per call instead of one). Measured
+ * negligible on this platform even under the test suite's 32-way parallel
+ * load (see scripts/bench-posix-shell-overhead.sh), so this is about
+ * cutting needless process creation on principle and parity with the
+ * Windows path, not fixing a measured bottleneck here. */
 static int run_cmd(const char *cmd)
 {
-    int rc;
+    char *buf;
+    char *argv[RUN_CMD_MAX_ARGV];
+    int argc;
+    pid_t pid;
+    int status;
+
     printf("+ %s\n", cmd);
-    rc = system(cmd);
-    if (rc != 0) {
-        fprintf(stderr, "command failed: %s\n", cmd);
+    buf = strdup(cmd);
+    if (!buf) {
+        fprintf(stderr, "out of memory building command line\n");
         return 0;
     }
-    return 1;
+    argc = parse_quoted_argv_posix(buf, argv, RUN_CMD_MAX_ARGV);
+    if (argc <= 0) {
+        fprintf(stderr, "command failed: %s\n", cmd);
+        free(buf);
+        return 0;
+    }
+
+    pid = fork();
+    if (pid < 0) {
+        fprintf(stderr, "command failed: %s: %s\n", cmd, strerror(errno));
+        free(buf);
+        return 0;
+    }
+    if (pid == 0) {
+        execvp(argv[0], argv);
+        fprintf(stderr, "command failed: %s: %s\n", cmd, strerror(errno));
+        _exit(127);
+    }
+    free(buf);
+
+    for (;;) {
+        if (waitpid(pid, &status, 0) >= 0)
+            break;
+        if (errno != EINTR) {
+            fprintf(stderr, "command failed: %s: %s\n", cmd, strerror(errno));
+            return 0;
+        }
+    }
+
+    if (WIFEXITED(status) && WEXITSTATUS(status) == 0)
+        return 1;
+
+    fprintf(stderr, "command failed: %s\n", cmd);
+    return 0;
 }
 #endif
 
