@@ -184,7 +184,8 @@ void ast_process_stmt_metadata(const struct AstNode *node)
 
     if (node == NULL)
         return;
-    ast_record_debug_location(node->file, node->line);
+    if (!mir_is_active())
+        ast_record_debug_location(node->file, node->line);
 
     switch (node->kind) {
     case AST_EMPTY:

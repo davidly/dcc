@@ -21,6 +21,11 @@
 /m80c.exe
 /l80c
 /l80c.exe
+/dcc-debug-host
+/dcc-debug-host.exe
+/libdcc-debug-io-adapter-example.dylib
+/libdcc-debug-io-adapter-example.so
+/dcc-debug-io-adapter-example.dll
 /build
 /test_dcc.txt
 /test_dccu.txt

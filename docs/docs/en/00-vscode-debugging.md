@@ -1,39 +1,114 @@
 # VS Code debugging
 
 DCC source debugging is available in Visual Studio Code through the Microsoft
-C/C++ extension and ntvcm's GDB/MI interface. A debug build produces a CP/M
-`.COM` program and a matching `.DBG` metadata file. ntvcm runs the program and
-presents the source, stack, variables, memory, and Z80 instructions to VS Code.
+C/C++ extension and `dcc-debug-host`'s GDB/MI interface. A debug build produces
+a CP/M `.COM` program and a matching `.DBG` metadata file. `dcc-debug-host`
+boots CP/M, runs the program, and presents source, stack, variables, memory,
+and Z80 instructions to VS Code.
 
 For the most accurate source-level experience, use the default no-peep debug
 build. Optimized debug builds are also available for defects that reproduce
 only after peephole optimization, with the limitations described below.
 
+See [Debugger host and I/O adapters](00-debug-host.md) for the full-system
+architecture, target terminal, dynamic I/O adapter, and ABI v2 terminal
+pipeline.
+
 ![DCC source debugging in VS Code with a breakpoint, local variables, Z80 registers, call stack, and debug controls](images/source-debugging.png)
+
+## How debugging works
+
+The debugger uses four cooperating pieces:
+
+1. `dccmake -g` invokes DCC with debug metadata enabled for every C source in
+   the program. DCC writes source, function, variable, type, and scope markers
+   into the generated assembly.
+2. Native `m80c` assembles each module and records those markers as
+   segment-relative metadata in a per-module `.DBG` file.
+3. `dccmake` links the program and writes one final `DCCDBG 2` file whose
+   addresses match the linked `.COM` image.
+4. `dcc-debug-host` boots CP/M, loads the `.COM` and adjacent `.DBG`, exposes
+  them through GDB/MI, and the VS Code C/C++ extension presents that
+  information as source breakpoints, stepping, stack frames, variables,
+  watches, memory, and Z80 disassembly.
+
+The project does **not** need a hand-written `.DBG` file. It may need a
+`dccmake.txt` file to describe how the program is built; the debug metadata
+itself is generated automatically.
 
 ## Prerequisites
 
 Before configuring a project:
 
-1. [Build and configure the DCC toolchain](00-setup-toolchain.md), including a
-   current ntvcm with GDB/MI support.
+1. [Build and configure the DCC toolchain](00-setup-toolchain.md). The normal
+  `scripts/build-dcc.ps1` build includes `dcc-debug-host`.
 2. Install the [Microsoft C/C++ extensions for VS Code](https://marketplace.visualstudio.com/items?itemName=ms-vscode.cpp-devtools){: target="_blank" }.
 3. Make `dccmake` available on `PATH`, or use its absolute path in the build
    task.
 4. Make sure `dccmake` can find `dcc`, `dccpeep`, `dccrtlstrip`,
    [`m80c`](appendix/03-utilities.md#native-assembler-m80c),
-   `DCCRTL.MAC`, and ntvcm as described on [The toolchain](00-setup-toolchain.md)
-   page.
+   `DCCRTL.MAC`, and the configured linker as described on
+   [The toolchain](00-setup-toolchain.md).
 
 Debug metadata requires the native
 [`m80c`](appendix/03-utilities.md#native-assembler-m80c) assembler. Do not set
 `dcc-use-emulated-m80=true` for a debug build.
 
+Source and output names must also satisfy CP/M 8.3 naming rules. In particular,
+`dcc-output` is at most eight characters and has no extension.
+
+## Configure the project build
+
+`dccmake.txt` is optional for a standalone source file, but recommended for a
+real application. Use it whenever the debug build needs information that cannot
+be inferred from the active file, including:
+
+- more than one C translation unit;
+- an output name different from the source basename;
+- a non-default stack size;
+- compiler definitions, include directories, or floating-point I/O options;
+- explicit runtime or tool paths; or
+- other application-specific `dccmake` settings.
+
+`dccmake` reads `dccmake.txt` from its current working directory. A typical
+project file is:
+
+```text
+dcc-input=main.c,module.c
+dcc-output=PROGRAM
+dcc-build-dir=build
+dcc-stack-bytes=1024
+dcc-peep=true
+```
+
+`dcc-input` must list every C translation unit needed by the link. `dcc-output`
+controls the basename of both final artifacts:
+
+```text
+build/PROGRAM.COM
+build/PROGRAM.DBG
+```
+
+Command-line values override file values. The VS Code task passes `-g`; the
+project file does not need a separate debug setting. Although a normal build
+may set `dcc-peep=true`, `dccmake -g` skips `dccpeep` unless
+`dcc-peep-debug=true` is explicitly requested.
+
+For a program whose full no-peep debug image is too large, set:
+
+```text
+dcc-debug=lines
+```
+
+This project setting refines the generic `-g` supplied by the VS Code task. It
+uses normal optimized compiler and peephole output while emitting line and
+function tables. The resulting `.COM` is byte-identical to a release build;
+locals, globals, structures, and variable watches are intentionally omitted.
+
 ## Add the build task
 
-Create `.vscode/tasks.json` in the project. This task builds the C file active
-in the editor as `build/DCCDEBUG.COM` and writes the matching
-`build/DCCDEBUG.DBG` file:
+For a project with `dccmake.txt`, create `.vscode/tasks.json` and run
+`dccmake` from the active source directory so it finds that file:
 
 ```json
 {
@@ -43,13 +118,9 @@ in the editor as `build/DCCDEBUG.COM` and writes the matching
       "label": "Build active DCC C file for debugging",
       "type": "shell",
       "command": "dccmake",
-      "args": [
-        "-g",
-        "${file}",
-        "dcc-output=DCCDEBUG"
-      ],
+      "args": ["-g"],
       "options": {
-        "cwd": "${workspaceFolder}"
+        "cwd": "${fileDirname}"
       },
       "problemMatcher": []
     }
@@ -57,23 +128,101 @@ in the editor as `build/DCCDEBUG.COM` and writes the matching
 }
 ```
 
-Replace `dccmake` with an absolute path if it is not on `PATH`. For a program
-with several translation units, replace `${file}` with the source files or a
-single setting such as:
+Replace `dccmake` with an absolute path if it is not on `PATH`. For a standalone
+file with no `dccmake.txt`, pass the active source and output explicitly:
 
 ```json
-"dcc-input=main.c,module.c"
+"args": [
+  "-g",
+  "dcc-input=${file}",
+  "dcc-output=${fileBasenameNoExtension}",
+  "dcc-build-dir=build"
+]
 ```
 
-The `-g` option selects a debug build. Although `dccmake` normally enables
-`dccpeep`, it automatically skips the peephole optimizer for `-g` builds so
-source locations remain intact.
+The active editor file is not necessarily the program's main module. When a
+`dccmake.txt` file exists, its `dcc-input` list remains authoritative.
+
+## Keep the COM and DBG files paired
+
+`dcc-debug-host` derives the metadata filename from the program filename. If
+VS Code loads `PROGRAM.COM`, the host looks for `PROGRAM.DBG` in the same
+directory. The files must:
+
+- have identical basenames;
+- be adjacent;
+- come from the same debug build; and
+- not be mixed with stale output from an earlier link.
+
+The launch configuration may load the pair directly from the build directory.
+If a shared active-file launch configuration instead expects the source
+basename, copy or rename **both** files. For example, if `CHATC11.C` has
+`dcc-output=CHAT`:
+
+```sh
+cp build/CHAT.COM CHATC11.COM
+cp build/CHAT.DBG CHATC11.DBG
+```
+
+Copying only the `.COM`, or assuming that `dcc-output` always equals the active
+source basename, causes the pre-launch task or metadata load to fail.
+
+For the active-file launch configuration below, add a copy task and a compound
+pre-launch task. This macOS/Linux example assumes `dcc-output=PROGRAM`; use
+PowerShell `Copy-Item` commands for the equivalent Windows task:
+
+```json
+{
+  "label": "Copy DCC debug outputs beside source",
+  "type": "shell",
+  "command": "cp -f \"${fileDirname}/build/PROGRAM.COM\" \"${fileDirname}/${fileBasenameNoExtension}.COM\" && cp -f \"${fileDirname}/build/PROGRAM.DBG\" \"${fileDirname}/${fileBasenameNoExtension}.DBG\"",
+  "options": {
+    "cwd": "${fileDirname}"
+  },
+  "problemMatcher": []
+},
+{
+  "label": "Build and copy DCC program for debugging",
+  "dependsOrder": "sequence",
+  "dependsOn": [
+    "Build active DCC C file for debugging",
+    "Copy DCC debug outputs beside source"
+  ],
+  "problemMatcher": []
+}
+```
+
+Replace `PROGRAM` with the `dcc-output` value. In a workspace containing many
+applications, the copy task may read `dcc-output` from each directory's
+`dccmake.txt` instead of hard-coding it.
+
+Build the debugger host and add it to the compound pre-launch task:
+
+```json
+{
+  "label": "Build DCC debugger host",
+  "type": "shell",
+  "command": "pwsh ./scripts/build-dcc.ps1",
+  "options": {
+    "cwd": "${workspaceFolder}"
+  },
+  "problemMatcher": ["$gcc"]
+},
+{
+  "label": "Prepare active DCC program for debugging",
+  "dependsOrder": "sequence",
+  "dependsOn": [
+    "Build and copy DCC program for debugging",
+    "Build DCC debugger host"
+  ],
+  "problemMatcher": []
+}
+```
 
 ## Add the launch configuration
 
-Create `.vscode/launch.json` with the following configuration. Change
-`miDebuggerPath` to the ntvcm executable on the host system. On Windows, the
-path normally ends in `ntvcm.exe`.
+Create `.vscode/launch.json` with the following configuration. On Windows, use
+`${workspaceFolder}/dcc-debug-host.exe` for `miDebuggerPath`.
 
 ```json
 {
@@ -83,46 +232,113 @@ path normally ends in `ntvcm.exe`.
       "name": "DCC CP/M: Debug active C file",
       "type": "cppdbg",
       "request": "launch",
-      "preLaunchTask": "Build active DCC C file for debugging",
-      "program": "${workspaceFolder}/build/DCCDEBUG.COM",
-      "cwd": "${workspaceFolder}/build",
+      "preLaunchTask": "Prepare active DCC program for debugging",
+      "program": "${fileDirname}/${fileBasenameNoExtension}.COM",
+      "cwd": "${fileDirname}",
       "MIMode": "gdb",
-      "miDebuggerPath": "/path/to/ntvcm/ntvcm",
+      "miDebuggerPath": "${workspaceFolder}/dcc-debug-host",
       "miDebuggerArgs": "--interpreter=mi",
       "targetArchitecture": "x86",
-      "sourceFileMap": {
-        "tests": "${workspaceFolder}/tests"
-      },
-      "customLaunchSetupCommands": [
-        {
-          "text": "-file-exec-and-symbols \"${workspaceFolder}/build/DCCDEBUG.COM\""
-        }
-      ],
-      "launchCompleteCommand": "None",
+      "launchCompleteCommand": "exec-continue",
       "externalConsole": false
     }
   ]
 }
 ```
 
-`targetArchitecture` satisfies the C/C++ debug adapter's launch schema; ntvcm
-still executes Z80 code. The `customLaunchSetupCommands` entry tells ntvcm to
-load the CP/M program and its adjacent `.DBG` metadata. Keep the `.COM` and
-`.DBG` files together and give them the same base name.
+This example assumes the build task copies both final artifacts beside the
+active source under the active source basename, as described above. To launch
+directly from the build directory instead, replace both program paths with
+`${fileDirname}/build/PROGRAM.COM`, where `PROGRAM` is the uppercase
+`dcc-output` value, and map relative source paths from the build directory back
+to the source directory with `sourceFileMap`.
+
+`targetArchitecture` satisfies the C/C++ debug adapter's launch schema;
+`dcc-debug-host` still executes Z80 code. `exec-continue` resumes from the
+initial CP/M entry stop after VS Code has installed source breakpoints.
 
 Adjust `sourceFileMap` when metadata contains source paths that differ from the
 workspace layout. Add one entry for each source root that needs remapping, or
 remove the property when the recorded paths already resolve correctly.
+
+## Required debug metadata
+
+The final linked sidecar starts with `DCCDBG 2`. The supported record classes
+are:
+
+| Record | Purpose |
+| ------ | ------- |
+| `line` | Maps an executable C source line to a linked address. Required for source breakpoints and stepping. |
+| `function-begin`, `function-end` | Defines function ranges and source names for stack frames, function breakpoints, and stepping. |
+| `variable`, `variable-end` | Describes parameters and locals, including type, storage, frame offset, array/VLA shape, and lexical lifetime. |
+| `location` | Selects an optimized variable's frame, register, constant, or optimized-out location at a linked address. |
+| `global` | Describes linked global storage and types. |
+| `struct`, `field` | Describes structures, unions, arrays, and bit-fields used by locals, globals, and watches. |
+| `symbol` | Supplies linked assembly symbols used by disassembly and symbol lookup. |
+
+Users do not write these records. Missing or inconsistent records indicate a
+toolchain/build mismatch or a compiler/assembler defect. A minimal line-only
+file can support breakpoints, but variables, stack frames, structures, and
+watches require their corresponding records.
+
+Relative source paths are allowed. `dcc-debug-host` reports an absolute GDB/MI
+`fullname`; on Windows and macOS it also matches source filename case according
+to normal host filesystem behavior. Use `sourceFileMap` when a relative path
+is resolved from the build directory but the source lives in its parent or
+another source root.
 
 ## Start a debugging session
 
 1. Open the C source file to build.
 2. Set breakpoints in the editor gutter.
 3. Open **Run and Debug** and select **DCC CP/M: Debug active C file**.
-4. Press **F5**. VS Code runs the build task, launches ntvcm, and stops at the
-   first breakpoint.
+4. Press **F5**. VS Code runs the build task, launches `dcc-debug-host`, and
+  stops at the first breakpoint.
 5. Use **Step Over**, **Step Into**, **Step Out**, or **Continue** as with a
    native program.
+
+## Provide interactive CP/M input
+
+The VS Code Debug Console normally evaluates expressions and debugger commands;
+plain text typed there is not target stdin. `dcc-debug-host` provides an
+explicit line-input command for interactive CP/M applications.
+
+When the application requests keyboard input through a blocking BDOS read or a
+BDOS 6 polling loop, `dcc-debug-host` reports a debugger stop. At that stop:
+
+1. Select a frame in the **Call Stack** if VS Code has not selected one.
+2. Enter this in the **Debug Console**:
+
+  ```text
+  -exec input 10*3
+  ```
+
+`dcc-debug-host` queues the text plus a CP/M Return character, resumes the
+pending input request, and sends the application's echo and output back to the
+Debug Console. No separate **Continue** is required. For example, CALC receives
+`10*3`, runs until the next breakpoint or input request, and prints
+`Result: 30`. Use `-exec input` with no following text to submit a blank line.
+
+The command is line-oriented. It does not currently encode individual control
+keys or terminal escape sequences. Input can also be queued at an ordinary
+breakpoint before the application reaches its next keyboard read; the command
+resumes execution immediately.
+
+## Troubleshooting
+
+| Symptom | Check |
+| ------- | ----- |
+| The pre-launch task exits with code 1 | Open the task output and find the first failed stage. Confirm that `dccmake.txt` is in the task's working directory and that `dcc-input` lists every module. |
+| The build succeeds but the copy task fails | Compare `dcc-output` with the active source basename. Copy `build/<dcc-output>.COM` and `.DBG`, not files guessed from the source name. |
+| A breakpoint is unverified or reports no executable location | Confirm that the `.COM` and `.DBG` are from the same build, the source path matches the metadata, and the source line generates code. Plain declarations without initialization have no executable address. |
+| VS Code reports `SourceRequest not supported` | Rebuild `dcc-debug-host` from the current DCC source, or configure `sourceFileMap` for the recorded source root. |
+| Typing application text reports that the process is running | Wait for `dcc-debug-host`'s automatic input stop, then use `-exec input <text>` rather than entering plain text as a debugger expression. Select a call-stack frame if VS Code requests one. |
+| A breakpoint or step moves to a nearby line | The requested line may generate no instruction. For an optimized debug build, peephole transformations may also move or remove source markers. Rebuild with plain `dccmake -g`. |
+| Execution runs past a valid breakpoint | Check for a stale or mismatched `.DBG`, omitted translation units, or a final metadata file whose linked addresses do not match the `.COM`. |
+
+When diagnosing a copied active-file pair, compare timestamps and sizes for
+both the build-directory pair and copied pair. Rebuild and copy both files
+together before restarting the debug session.
 
 ## Use the disassembly view
 
@@ -165,14 +381,14 @@ Instruction stepping is especially useful for:
 - debugging a `dcc-peep-debug=true` build when optimized instructions no
   longer align exactly with source-line markers.
 
-The Disassembly View reflects the linked `.COM` image that ntvcm is executing,
-so addresses and instruction bytes are authoritative for both no-peep and peep
-debug builds.
+The Disassembly View reflects the linked `.COM` image that `dcc-debug-host` is
+executing, so addresses and instruction bytes are authoritative for both
+no-peep and peep debug builds.
 
 ## Debugger coverage
 
-The DCC metadata and ntvcm GDB/MI implementation support the main VS Code C/C++
-debugging workflows:
+The DCC metadata and `dcc-debug-host` GDB/MI implementation support the main
+VS Code C/C++ debugging workflows:
 
 - source breakpoints, temporary breakpoints, conditions, ignore counts, and
   repeated breakpoint hits;
@@ -214,7 +430,31 @@ the exact Z80 execution sequence.
 Use this mode unless the behavior being investigated occurs only in an
 optimized binary.
 
-## Peephole-optimized debug builds
+## Optimized debug builds
+
+Use `dcc-debug=lines` in `dccmake.txt` when the program must retain its normal
+optimized size or behavior:
+
+```text
+dcc-debug=lines
+```
+
+DCC emits line, function, type, scope, and ranged variable-location events
+without selecting conservative debug codegen. `dccpeep` carries those records separately from mutable assembly,
+moves records from deleted instructions to the next executable address, and
+re-emits them for `m80c`. Optimized emitters with instruction provenance retain
+statement-level mappings. Specialized kernels without such provenance expose
+their function-entry location rather than inventing inaccurate statement
+addresses.
+
+This mode supports source breakpoints, source stepping, function names, stack
+frames, locals, arguments, globals, structures, fields, registers, memory, and
+disassembly. Locations can be frame slots, Z80 register pairs, four-byte
+register pairs, constants, or explicitly optimized out. Top-frame register
+scalars are editable. Dead values and caller-frame register values that were
+not saved are shown as `<optimized out>` rather than guessed.
+
+## Full-debug peephole builds
 
 To debug a problem that appears only after peephole optimization, add
 `dcc-peep-debug=true` to the task arguments:
@@ -228,10 +468,10 @@ To debug a problem that appears only after peephole optimization, add
 ]
 ```
 
-This is an explicit opt-in. `dccpeep` works on assembly text and can delete,
-combine, or move instructions without moving the associated `;@dcc-line`
-markers in the same way. The resulting `.DBG` file can therefore associate an
-optimized instruction with a nearby source line rather than its original line.
+This is an explicit opt-in for conservative full-debug compiler output.
+`dccpeep` preserves metadata and remaps records from deleted instructions, but
+the compiler still uses its larger debug-oriented code generation. Use
+`dcc-debug=lines` when the executable must match release code or size.
 
 Typical minor source-level effects include a breakpoint moving to a neighboring
 executable line, a source line being skipped, or an extra/repeated source step
@@ -239,11 +479,11 @@ around optimized control flow. Variables, call stacks, memory, registers, and
 the generated program remain useful, but source-line attribution is less exact.
 
 For an optimized build, treat the Disassembly View and instruction stepping as
-authoritative: they always show the instructions ntvcm is actually executing.
-Set an initial source breakpoint near the area of interest, then switch to
-instruction stepping when source movement no longer matches the optimized
-control flow.
+authoritative: they always show the instructions `dcc-debug-host` is actually
+executing. Set an initial source breakpoint near the area of interest, then
+switch to instruction stepping when source movement no longer matches the
+optimized control flow.
 
-To return to strong source-level debugging, remove `dcc-peep-debug=true` and
+To return to no-peep full source debugging, remove `dcc-peep-debug=true` and
 start a new session. Setting only `dcc-peep=true` does not enable peephole
-optimization for a `-g` build.
+optimization for a full `-g` build.

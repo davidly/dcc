@@ -1,14 +1,17 @@
 #Requires -Version 7
 <#
 .SYNOPSIS
-Build dcc, dccpeep, dccrtlstrip, dccmake, m80c, and l80c on Windows, macOS, and Linux.
+Build dcc, dccpeep, dccrtlstrip, dccmake, m80c, l80c, dcc-debug-host, and its example I/O adapter on Windows, macOS, and Linux.
 
 .DESCRIPTION
-Compiles the host tools with the native compiler for the current platform:
-MSVC on Windows, clang on macOS, and gcc on Linux by default. Build artifacts
-are placed under build/; final commands are placed in the repository root.
-On Linux, these tools are linked -static by default (see -NoStatic);
-macOS has no static libSystem to link against, so this never applies there.
+Compiles the C host tools with the native compiler for the current platform:
+MSVC on Windows, clang on macOS, and gcc on Linux by default. The C++ debugger
+host and example adapter shared library are built with CMake. Build artifacts
+are placed under build/; all final tools and the example adapter are published
+in the repository root.
+On Linux, the C tools are linked -static by default (see -NoStatic); the CMake
+debugger build uses its platform defaults. macOS has no static libSystem to
+link against.
 
 .PARAMETER OutputPath
   Output directory for build artifacts. Defaults to ./build.
@@ -66,7 +69,8 @@ function Invoke-Checked {
     param(
         [string]$FilePath,
         [string[]]$Arguments,
-        [string]$Description
+        [string]$Description,
+        [switch]$QuietOutput
     )
 
     if ($script:VerboseCommands) {
@@ -74,9 +78,19 @@ function Invoke-Checked {
     } elseif ($Description) {
         Write-Host "  $Description"
     }
-    & $FilePath @Arguments 2>&1 | ForEach-Object { Write-Host $_ }
-    if ($LASTEXITCODE -ne 0) {
-        throw "$Description failed with exit code $LASTEXITCODE"
+
+    if ($QuietOutput -and -not $script:VerboseCommands) {
+        $commandOutput = @(& $FilePath @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+        if ($exitCode -ne 0) {
+            $commandOutput | ForEach-Object { Write-Host $_ }
+        }
+    } else {
+        & $FilePath @Arguments 2>&1 | ForEach-Object { Write-Host $_ }
+        $exitCode = $LASTEXITCODE
+    }
+    if ($exitCode -ne 0) {
+        throw "$Description failed with exit code $exitCode"
     }
 }
 
@@ -431,6 +445,53 @@ function Build-UnixNative {
     return @($dccOut, (Join-Path $repoRoot "dccpeep"), (Join-Path $repoRoot "dccrtlstrip"), (Join-Path $repoRoot "dccmake"), (Join-Path $repoRoot "m80c"), (Join-Path $repoRoot "l80c"))
 }
 
+function Build-DccDebugHost {
+    $cmakeCommand = Get-Command cmake -ErrorAction SilentlyContinue
+    if (-not $cmakeCommand) {
+        throw "CMake is required to build dcc-debug-host. Install CMake and ensure 'cmake' is in PATH."
+    }
+
+    $sourceDir = Join-Path $repoRoot "src\dcc_debug_host"
+    $buildDir = Join-Path $outputRoot "dcc_debug_host"
+    New-BuildDirectory $buildDir
+
+    $executableName = if ($IsWindows) { "dcc-debug-host.exe" } else { "dcc-debug-host" }
+    $adapterName = if ($IsWindows) {
+        "dcc-debug-io-adapter-example.dll"
+    } elseif ($IsMacOS) {
+        "libdcc-debug-io-adapter-example.dylib"
+    } else {
+        "libdcc-debug-io-adapter-example.so"
+    }
+    $debugHostOut = Join-Path $repoRoot $executableName
+    $adapterOut = Join-Path $repoRoot $adapterName
+    Remove-Item -LiteralPath $debugHostOut, $adapterOut -Force -ErrorAction SilentlyContinue
+
+    Write-Host "`n=== Building dcc-debug-host and example I/O adapter ==="
+    $configureArguments = @(
+        "-S", $sourceDir,
+        "-B", $buildDir,
+        "-DBUILD_TESTING=OFF",
+        "-DDCC_DEBUG_HOST_BUILD_EXAMPLES=ON",
+        "-DCMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE=$repoRoot",
+        "-DCMAKE_LIBRARY_OUTPUT_DIRECTORY_RELEASE=$repoRoot"
+    )
+    if (-not $IsWindows) {
+        $configureArguments += "-DCMAKE_BUILD_TYPE=Release"
+    }
+    Invoke-Checked $cmakeCommand.Source $configureArguments "debugger host configuration" -QuietOutput
+    Invoke-Checked $cmakeCommand.Source @(
+        "--build", $buildDir,
+        "--config", "Release",
+        "--target", "dcc-debug-host", "dcc-debug-io-adapter-example"
+    ) "debugger host and example adapter compilation" -QuietOutput
+
+    if (-not (Test-Path $debugHostOut) -or -not (Test-Path $adapterOut)) {
+        throw "debugger host artifacts were not built in the repository root"
+    }
+    return @($debugHostOut, $adapterOut)
+}
+
 Write-Host "Build artifacts will go to: $outputPathDisplay"
 Write-Host "Commands will be placed in: $repoRoot"
 
@@ -439,10 +500,12 @@ $executables = if ($IsWindows) {
 } else {
     Build-UnixNative
 }
+$executables = @($executables)
+$executables += Build-DccDebugHost
 
 Write-Host "`n=== Build complete ==="
-Write-Host "Commands:"
+Write-Host "Root outputs:"
 foreach ($executable in $executables) {
     Write-Host "  $executable"
 }
-Write-Host "Build artifacts: $outputPathDisplay"
+Write-Host "Intermediate build artifacts: $outputPathDisplay"

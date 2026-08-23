@@ -1383,6 +1383,9 @@ static void record_debug_info(Asm *a,const char *orig) {
     } else if(strncmp(p,";@dcc-var-end",13)==0 && isspace((unsigned char)p[13])) {
         kind=7;
         args=p+13;
+    } else if(strncmp(p,";@dcc-loc",9)==0 && isspace((unsigned char)p[9])) {
+        kind=8;
+        args=p+9;
     } else return;
     while(*args && isspace((unsigned char)*args)) args++;
     d=(DebugInfo*)calloc(1,sizeof(DebugInfo));
@@ -2055,6 +2058,8 @@ static void write_debug(Asm *a) {
             fprintf(f,"global %s %04lX %s",debug_segment_name(gs->type),gs->value&0xffff,di->args);
         } else if(di->kind==5 || di->kind==6) {
             fprintf(f,"%s %s",di->kind==5?"struct":"field",di->args);
+        } else if(di->kind==8) {
+            fprintf(f,"location %s %04lX %s",debug_segment_name(di->seg),di->off&0xffff,di->args);
         } else {
             kind=di->kind==1?"function-begin":(di->kind==2?"function-end":
                  (di->kind==7?"variable-end":"variable"));

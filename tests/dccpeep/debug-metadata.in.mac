@@ -1,0 +1,11 @@
+; dcc stage-1d output
+;@dcc-func-begin "_test" "test"
+_test:
+;@dcc-line "test.c" 1
+;@dcc-loc "_test" "value" -2 hl 0
+ld de,1
+;@dcc-line "test.c" 2
+add hl,de
+;@dcc-func-end "_test" "test"
+ret
+end

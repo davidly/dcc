@@ -1558,7 +1558,7 @@ void gen_local_decl_after_type(int base)
                     s->dims[pi] = (pi < g_ptr_array_dim_count) ? g_ptr_array_dims[pi] : 0;
             }
         }
-        if (freshly_allocated) {
+        if (freshly_allocated || (opt_debug_lines && s && s->is_const_value)) {
             mir_note_declared_symbol(s);
             mir_note_declared_alias(source_name, s);
             emit_debug_variable(s);

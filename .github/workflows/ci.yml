@@ -15,6 +15,27 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  cross-platform-host-build:
+    name: Host tools (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macos-latest
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout dcc
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Build dcc host tools and debugger adapter example
+        shell: pwsh
+        run: ./scripts/build-dcc.ps1
+
   tests:
     name: Unit tests and extended suite
     runs-on: ubuntu-latest
@@ -46,6 +67,13 @@ jobs:
       - name: Build dcc host tools
         shell: pwsh
         run: ./scripts/build-dcc.ps1
+
+      - name: Run debugger host and debug metadata tests
+        run: |
+          cmake -S src/dcc_debug_host -B build/dcc_debug_host_tests -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build/dcc_debug_host_tests --parallel
+          ctest --test-dir build/dcc_debug_host_tests --output-on-failure
+          python3 scripts/tests/test_line_debug.py
 
       - name: Run unit tests and extended suite
         shell: pwsh

@@ -1575,6 +1575,7 @@ void print_help(void)
     printf("  -fno-octio       -fno-floatio, but for %%o\n");
     printf("  -s, -stack <bytes>   reserve <bytes> for the C stack (default 512)\n");
     printf("  -g               emit source-level debug annotations\n");
+    printf("  -gline           emit optimized debug annotations and variable locations\n");
     printf("  -fstack-check    abort gracefully if the stack overflows its reserve\n");
     printf("  -fno-narrow      disable every int-array/scalar/for-counter byte-narrowing pass\n");
     printf("  -I<dir>          add <dir> to the include search path\n");
@@ -1596,6 +1597,7 @@ int main(int argc, char **argv)
     opt_stack_check = 0;
     opt_no_narrow = 0;
     opt_debug = 0;
+    opt_debug_lines = 0;
     g_main_has_args = 0;
     max_function_local_bytes = 0;
 
@@ -1625,6 +1627,10 @@ int main(int argc, char **argv)
             opt_no_narrow = 1;
         } else if (!strcmp(argv[i], "-g")) {
             opt_debug = 1;
+            opt_debug_lines = 0;
+        } else if (!strcmp(argv[i], "-gline")) {
+            opt_debug = 0;
+            opt_debug_lines = 1;
         } else if (!strcmp(argv[i], "-v") || !strcmp(argv[i], "--version")) {
             print_version();
             return 0;

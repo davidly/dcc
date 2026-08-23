@@ -179,9 +179,7 @@ ntvcm is a C++ project. Build it from its own directory.
 
 Use the `mr.bat` / `mrmac.sh` / `mr.sh` scripts below, not `m.bat` / `mmac.sh`
 / `m.sh`. The `r` versions build release configurations of the emulator with
-asserts compiled out, so the resulting `ntvcm` runs faster. The plain
-(non-`r`) scripts build debug configurations with asserts enabled, which are
-useful when debugging ntvcm itself but not for day-to-day CP/M app work.
+asserts compiled out, so the resulting `ntvcm` runs faster.
 
 === "Windows"
 

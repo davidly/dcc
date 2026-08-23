@@ -1440,7 +1440,9 @@ long mir_stream_size(MirStream *stream)
     if (size < 0 || mir_stream_seek(stream, 0, SEEK_SET) != 0)
         return -1;
     while (mir_stream_gets(line, sizeof(line), stream) != NULL)
-        if (strstr(line, ";@dcc.reg claim=iy ") == line &&
+        if (strstr(line, ";@dcc-") == line)
+            size -= (long)strlen(line);
+        else if (strstr(line, ";@dcc.reg claim=iy ") == line &&
             strstr(line, " kind=mir val=0") != NULL)
             /* Register-ownership metadata changes dccpeep policy but emits
              * no Z80 bytes. Do not let its symbol text choose a different
@@ -3515,6 +3517,7 @@ static int mir_try_generated_candidate(
 
     mir_end_all_spilled_fallback_optimizations();
     mir_end_strict_phi_fallthrough();
+    mir_prepare_debug_object_states();
 
     if (opt_debug) {
         *selector_name = "spilled-scalar-cfg";
@@ -3894,6 +3897,19 @@ void mir_end_function(void)
         mir_require_emitted_function(failure_reason);
         fatal("MIR emission is required");
     }
+    if (opt_debug_lines &&
+        (!strcmp(selector_name, "scheduled-machine-cfg") ||
+         !strcmp(selector_name, "general-rollout") ||
+         !strcmp(selector_name, "specialized"))) {
+        MirStream *annotated = mir_stream_open();
+
+        if (annotated == NULL)
+            fatal("cannot create line-debug annotation stream");
+        mir_emit_first_debug_location(annotated);
+        mir_stream_copy(generated, annotated);
+        mir_stream_close(generated);
+        generated = annotated;
+    }
     generated_size = mir_stream_size(generated);
     generated_instructions = mir_stream_instruction_count(generated);
     mir_mark_selected_inline_call_bodies_needed(generated);
@@ -3931,6 +3947,11 @@ void mir_end_function(void)
 
 finish:
     mir_clear_debug_events();
+    free(mir.debug_object_in);
+    free(mir.debug_object_out);
+    mir.debug_object_in = NULL;
+    mir.debug_object_out = NULL;
+    mir.debug_object_state_count = 0;
     free(mir.live_in);
     free(mir.live_out);
     mir.live_in = NULL;

@@ -15,7 +15,10 @@ DCCRTL.MAC is the dcc C Runtime Library. It's written in Z80 assembly for size a
 
 dccrtlstrip.c is an app that examines the code of your .c file and strips portions of the DCCRTL.MAC C runtime so only the parts needed are linked into the .COM file. It's not necessary to run this program for your app to work. But the resulting .COM file may be smaller if you do.
 
-The 3 compiler apps dcc, dccpeep, and dccrtlstrip all build and run on Windows, Linux, and MacOS. They are too big to run on CP/M. Use m.bat, m.sh, mmacos.sh to build these apps using msvc (Windows), gcc (Linux), or clang (MacOS) respectively. You may need to chmod 777 *.sh on Linux and MacOS prior to running dcc's scripts.
+The complete host toolchain builds and runs on Windows, Linux, and macOS with
+`pwsh ./scripts/build-dcc.ps1`. It builds `dcc`, `dccpeep`, `dccrtlstrip`,
+`dccmake`, `m80c`, `l80c`, `dcc-debug-host`, and the example debugger I/O
+adapter. The host tools are too large to run on CP/M.
 
 Dcc has been built and had regression tests run on AMD64 (Linux and Windows), Arm64(Linux, Windows, MacOS), Arm32 (Linux), and RISC-V 64 (Linux).
 
@@ -238,28 +241,16 @@ git clone https://github.com/davidly/ntvcm.git
 
 ### Building dcc
 
-dcc compiles on Windows, Linux, and macOS. The build scripts are in the root directory:
+dcc compiles on Windows, Linux, and macOS. PowerShell 7 (`pwsh`) and CMake are
+required on every platform. Build the complete host toolchain with:
 
-**macOS:**
-```bash
-chmod +x mmacos.sh
-./mmacos.sh
+```powershell
+pwsh ./scripts/build-dcc.ps1
 ```
-This produces `dcc`, `dccpeep`, `dccrtlstrip`, `dccmake`, and `m80c` in the dcc directory.
-Requires the clang compiler from the Xcode Command Line Tools (install with `xcode-select --install`).
 
-**Linux:**
-```bash
-chmod +x m.sh
-./m.sh
-```
-Requires gcc (install with `sudo apt install build-essential` on Debian/Ubuntu, or the equivalent for your distribution).
-
-**Windows:**
-```batch
-m.bat
-```
-Requires Visual Studio with C++ build tools installed.
+This produces `dcc`, `dccpeep`, `dccrtlstrip`, `dccmake`, `m80c`, and `l80c` in
+the repository root, together with `dcc-debug-host` and the platform-specific
+example I/O adapter library.
 
 ### Building ntvcm
 

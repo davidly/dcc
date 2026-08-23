@@ -337,12 +337,12 @@ dccmake dcc-peep=false
 | `dcc-stack-bytes` | `512` | Stack reserve passed to `dcc` with `-stack` |
 | `dcc-stack-check` | Environment/default | Pass `-fstack-check` to `dcc` |
 | `dcc-no-narrow` | `false` | Pass `-fno-narrow` to disable byte-narrowing passes |
-| `dcc-debug` | `false` | Emit source-level debug metadata; requires native [`m80c`](#native-assembler-m80c) |
+| `dcc-debug` | `false` | `true` emits full conservative debug metadata; `lines` emits release-identical optimized metadata with ranged variable locations. Both require native [`m80c`](#native-assembler-m80c) |
 | `dcc-include-directory` | Auto-adds `.` when standard headers are in the current directory | Comma-separated include directories; `dcc-include` is an alias |
 | `dcc-define` | none | Comma-separated `NAME[=value]` entries passed to `dcc` as `-D`; `dcc-defines` is an alias |
 | `dcc-undefine` | none | Comma-separated names passed to `dcc` as `-U`; `dcc-undefines` is an alias |
 | `dcc-peep` | `true` | Run `dccpeep` after compiling each `.MAC` file |
-| `dcc-peep-debug` | `false` | Run `dccpeep` even in a debug build; optimized source-line locations may be unreliable |
+| `dcc-peep-debug` | `false` | Run `dccpeep` over full conservative `-g` output; use `dcc-debug=lines` for release-identical optimized code |
 | `dcc-allow-undocumented-z80` | `false` | Pass `-fundocumented-z80` to `dccpeep` |
 | `dcc-build-dir` | `build` | Artifact directory |
 | `dcc-runtime` | `DCC_RUNTIME`, local `DCCRTL.MAC`, or `DCCRTL.MAC` | Runtime source passed to `dccrtlstrip` |
@@ -361,6 +361,7 @@ dccmake dcc-peep=false
 variables before reading `dccmake.txt`: `DCC_FLOATIO`, `DCC_NO_FLOATIO`,
 `DCC_LONGIO`, `DCC_NO_LONGIO`, `DCC_HEXIO`, `DCC_NO_HEXIO`, `DCC_OCTIO`,
 `DCC_NO_OCTIO`, `DCC_FORCE_STACK_CHECK`, `DCC_NO_NARROW`, `DCC_DEBUG`,
+`DCC_DEBUG_LINES`,
 `DCC_PEEP_DEBUG`, `DCC_ALLOW_UNDOCUMENTED_Z80`, `DCC_USE_EMULATED_M80`, and
 `DCC_USE_EMULATED_L80`. File settings and then command-line settings override
 those defaults.
@@ -391,6 +392,7 @@ characters is not.
 | `-fstack-check` | `dcc-stack-check=true` |
 | `-fno-narrow` | `dcc-no-narrow=true` |
 | `-g` | `dcc-debug=true` |
+| `-gline` | `dcc-debug=lines` |
 | `-femulated-m80` | `dcc-use-emulated-m80=true` |
 | `-femulated-l80` | `dcc-use-emulated-l80=true` |
 | `-I <dir>`, `-Idir` | Add an include directory |

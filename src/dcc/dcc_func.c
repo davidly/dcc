@@ -1579,7 +1579,7 @@ static void emit_debug_dims(const int *dims, int count)
 void emit_debug_types_once(void)
 {
     int i;
-    if (!opt_debug || scan_mode || debug_types_emitted)
+    if (!DEBUG_METADATA_ENABLED || scan_mode || debug_types_emitted)
         return;
     debug_types_emitted = 1;
     for (i = 0; i < nstruct_defs; ++i)
@@ -1600,7 +1600,7 @@ void emit_debug_types_once(void)
 
 void emit_debug_global(struct Sym *s)
 {
-    if (!opt_debug || scan_mode || s == NULL || s->storage == SC_FUNC ||
+    if (!DEBUG_METADATA_ENABLED || scan_mode || s == NULL || s->storage == SC_FUNC ||
         s->storage == SC_EXTERN || s->name[0] == '#')
         return;
     emit_debug_types_once();
@@ -1613,13 +1613,16 @@ void emit_debug_global(struct Sym *s)
 
 void emit_debug_variable(struct Sym *s)
 {
-    if (!opt_debug || scan_mode || current_debug_function[0] == 0 || s == NULL ||
-        s->name[0] == '#')
+    char variable_name[64];
+    if (!DEBUG_METADATA_ENABLED || scan_mode || current_debug_function[0] == 0 || s == NULL ||
+        (s->storage != SC_LOCAL && s->storage != SC_PARAM) ||
+        s->name[0] == '#' || (s->is_const_value && !opt_debug_lines))
         return;
     if (mir_capture_debug_variable(current_debug_function, s, 0))
         return;
+    debug_symbol_name(s, variable_name, sizeof(variable_name));
     fprintf(g_emit_sink.stream, ";@dcc-var \"%s\" \"%s\" %d %d %d %d %d %d %d %d ",
-            current_debug_function, s->name, s->type, s->storage,
+            current_debug_function, variable_name, s->type, s->storage,
             s->offset, s->size, s->is_array, s->is_vla, s->elem_size,
             s->is_funcptr);
     emit_debug_dims(s->dims, s->dim_count);
@@ -1628,13 +1631,16 @@ void emit_debug_variable(struct Sym *s)
 
 void emit_debug_variable_end(struct Sym *s)
 {
-    if (!opt_debug || scan_mode || current_debug_function[0] == 0 || s == NULL ||
-        s->name[0] == '#')
+    char variable_name[64];
+    if (!DEBUG_METADATA_ENABLED || scan_mode || current_debug_function[0] == 0 || s == NULL ||
+        (s->storage != SC_LOCAL && s->storage != SC_PARAM) ||
+        s->name[0] == '#' || (s->is_const_value && !opt_debug_lines))
         return;
     if (mir_capture_debug_variable(current_debug_function, s, 1))
         return;
+    debug_symbol_name(s, variable_name, sizeof(variable_name));
     fprintf(g_emit_sink.stream, ";@dcc-var-end \"%s\" \"%s\" %d\n",
-            current_debug_function, s->name, s->offset);
+            current_debug_function, variable_name, s->offset);
 }
 
 void begin_function_mir(const char *name, int local_bytes)
@@ -1656,7 +1662,7 @@ void begin_function_mir(const char *name, int local_bytes)
     strncpy(current_debug_function_source_name, name, sizeof(current_debug_function_source_name) - 1);
     current_debug_function_source_name[sizeof(current_debug_function_source_name) - 1] = 0;
 
-    if (opt_debug && !scan_mode)
+    if (DEBUG_METADATA_ENABLED && !scan_mode)
         fprintf(g_emit_sink.stream, ";@dcc-func-begin \"%s\" \"%s\"\n",
                 current_debug_function, current_debug_function_source_name);
 
@@ -1672,7 +1678,7 @@ void begin_function_mir(const char *name, int local_bytes)
 
     fprintf(g_emit_sink.stream, "%s:\n", aname);
     mir_begin_function(
-        name, g_emit_sink.purpose, current_function_has_vla, local_bytes,
+        name, aname, g_emit_sink.purpose, current_function_has_vla, local_bytes,
         strcmp(name, "main") == 0 &&
             (function_type & 15) == TYPE_INT &&
             type_ptr_depth(function_type) == 0);
@@ -1684,13 +1690,26 @@ void begin_function_mir(const char *name, int local_bytes)
 void finish_function_mir(int implicit_zero_return)
 {
     (void)implicit_zero_return;
+    if (opt_debug_lines) {
+        mir_end_function();
+        if (!scan_mode && g_func_close_line > 0)
+            ast_record_debug_location(g_func_close_file, g_func_close_line);
+        g_func_close_line = 0;
+        if (!scan_mode && current_debug_function[0])
+            fprintf(g_emit_sink.stream, ";@dcc-func-end \"%s\" \"%s\"\n",
+                    current_debug_function, current_debug_function_source_name);
+        current_debug_function[0] = 0;
+        current_debug_function_source_name[0] = 0;
+        flush_pending_asm();
+        return;
+    }
     /* Map the shared return label to the function's closing brace when the
      * body always exits, so an early `return` that jumps here shows the
      * closing brace instead of inheriting the previous statement's line. */
-    if (opt_debug && !scan_mode && g_func_close_line > 0)
+    if (DEBUG_METADATA_ENABLED && !scan_mode && g_func_close_line > 0)
         ast_record_debug_location(g_func_close_file, g_func_close_line);
     g_func_close_line = 0;
-    if (opt_debug && !scan_mode && current_debug_function[0] &&
+    if (DEBUG_METADATA_ENABLED && !scan_mode && current_debug_function[0] &&
         !mir_capture_debug_function_end(
             current_debug_function, current_debug_function_source_name))
         fprintf(g_emit_sink.stream, ";@dcc-func-end \"%s\" \"%s\"\n",

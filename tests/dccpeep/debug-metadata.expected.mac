@@ -1,0 +1,10 @@
+; dcc stage-1d output
+;@dcc-func-begin "_test" "test"
+_test:
+;@dcc-line "test.c" 1
+;@dcc-loc "_test" "value" -2 hl 0
+	inc hl ; peep: ld_de1_to_inc
+;@dcc-line "test.c" 2
+;@dcc-func-end "_test" "test"
+	ret
+	end

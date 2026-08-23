@@ -160,6 +160,10 @@ struct MirDebugEvent {
     char *text;
 };
 
+#define MIR_OBJECT_UNDEFINED (-1)
+#define MIR_OBJECT_AMBIGUOUS (-2)
+#define MIR_OBJECT_UNREACHED (-3)
+
 struct MirFunction {
     struct MirInsn *insns;
     int count;
@@ -261,6 +265,9 @@ struct MirFunction {
     struct MirDebugEvent *debug_events;
     int debug_event_count;
     int debug_event_capacity;
+    int *debug_object_in;
+    int *debug_object_out;
+    int debug_object_state_count;
     struct MirObject objects[256];
     int object_count;
     int has_declared_register_object;
@@ -292,6 +299,7 @@ struct MirFunction {
     char alias_internal_names[MAX_LOCALS][64];
     int alias_declaration_indices[MAX_LOCALS];
     int alias_count;
+    char debug_assembly_name[64];
     struct Sym *initializer_target;
     int initializer_capture_start;
     struct Sym *init_expression_target;
@@ -530,6 +538,9 @@ int mir_extrn_should_emit_name(const char *name);
 void mir_emit_runtime_call(MirStream *out, const char *name);
 void mir_clear_debug_events(void);
 void mir_emit_debug_events(MirStream *out, int point);
+void mir_emit_first_debug_location(MirStream *out);
+void mir_prepare_debug_object_states(void);
+void mir_emit_debug_locations(MirStream *out, int point, int allow_registers);
 void mir_emit_home_epilogue(MirStream *out, int uses_iy);
 void mir_emit_home_prologue(MirStream *out, int uses_iy);
 int mir_emit_home_push(MirStream *out, int value);
