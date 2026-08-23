@@ -170,7 +170,12 @@ function Get-MsvcVarsPath {
     $toolchain = Get-MsvcToolchain
     $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
     if (Test-Path $vswhere) {
-        $installPath = & $vswhere -latest -products * -requires $toolchain.Component -property installationPath
+        # -prerelease is required or vswhere silently excludes Preview/RC
+        # installs (e.g. "Visual Studio 2022 Preview") from consideration,
+        # even with -products * - that flag only broadens which editions
+        # (Community/Professional/.../BuildTools) are considered, not
+        # release channel.
+        $installPath = & $vswhere -latest -prerelease -products * -requires $toolchain.Component -property installationPath
         if ($installPath) {
             $candidate = Join-Path $installPath "VC\Auxiliary\Build\$($toolchain.VcVars)"
             if (Test-Path $candidate) {
@@ -180,7 +185,7 @@ function Get-MsvcVarsPath {
     }
 
     $versions = @("18", "2022", "2019", "17")
-    $editions = @("Community", "Professional", "Enterprise", "BuildTools")
+    $editions = @("Community", "Professional", "Enterprise", "BuildTools", "Preview")
     $roots = @($env:ProgramFiles, ${env:ProgramFiles(x86)}) | Where-Object { $_ }
 
     foreach ($root in $roots) {
