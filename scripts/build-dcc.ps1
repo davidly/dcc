@@ -495,7 +495,16 @@ function Build-UnixNative {
 function Build-DccDebugHost {
     $cmakeCommand = Get-Command cmake -ErrorAction SilentlyContinue
     if (-not $cmakeCommand) {
-        throw "CMake is required to build dcc-debug-host. Install CMake and ensure 'cmake' is in PATH."
+        $hint = if ($IsMacOS) {
+            "Install it with: brew install cmake"
+        } elseif ($IsLinux) {
+            "Install it with: sudo apt-get install -y cmake  (or your distro's equivalent, e.g. dnf/yum/pacman)"
+        } elseif ($IsWindows) {
+            "Install it with: winget install Kitware.CMake  (or see https://cmake.org/download/)"
+        } else {
+            "See https://cmake.org/download/ for install instructions."
+        }
+        throw "CMake is required to build dcc-debug-host. $hint"
     }
 
     $sourceDir = Join-Path $repoRoot "src\dcc_debug_host"
