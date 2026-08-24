@@ -40,7 +40,7 @@ Two reference documents in the [docs](docs) directory cover the runtime in depth
 ## Development machine for modifying dcc
 DCC is intended to be updated by app-writers to better optimize their apps. Typically a dev would point an AI at the code for their app and the code for dcc then ask the AI to profile the app and change dcc to generate better code for the app's scenario.
 
-The inner loop of iterating on improving performance is governed by the speed of your dev machine. Running the full regression suite to ensure nothing was broken can take seconds or minuted depending on your hardware and OS choice. Not surprisingly, more cores really help. And using Linux instead of Windows (which has slower process creation times, anti-virus scanning, indexing, and more) works much better.
+The inner loop of iterating on improving performance is governed by the speed of your dev machine. Running the full regression suite to ensure nothing was broken can take seconds or minutes depending on your hardware and OS choice. Not surprisingly, more cores really help. And using Linux instead of Windows (which has slower process creation times, anti-virus scanning, indexing, and more) works much better.
 
 <img alt="table" src="images/tests.jpg" />
 
