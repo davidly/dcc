@@ -4,12 +4,14 @@
  *
  * @par Role
  * Collapses adjacent labels, removes unreferenced labels when safe, folds
- * branch-over-jump shapes, threads and shortcuts jump targets, and replaces
- * jumps to plain returns.
+ * branch-over-jump shapes, threads and shortcuts jump targets, replaces
+ * jumps to plain returns, and turns a call immediately followed by a bare
+ * ret into a tail-call jump.
  *
  * @par Key entry points
  * pass_labels(), pass_branch_over_jump(), pass_jump_thread(),
- * pass_cond_skip_shortcut(), and pass_jp_to_plain_ret().
+ * pass_cond_skip_shortcut(), pass_jp_to_plain_ret(), and
+ * pass_call_to_tail_jp().
  *
  * @par Boundary
  * peep_control_flow.c owns shared label indexes and textual branch queries;
@@ -330,6 +332,74 @@ int pass_jp_to_plain_ret(void)
             continue;
 
         replace1_tagged(i, "ret", "jp_to_plain_ret");
+        changed = 1;
+    }
+
+    return changed;
+}
+
+/*
+ * Tail-call: replace a "call FUNC" immediately followed by "ret" with a
+ * plain "jp FUNC". The callee's own eventual ret pops exactly the return
+ * address our own ret would have popped, so control lands back in our
+ * caller as soon as the callee finishes - skipping the extra call/ret
+ * round trip through this function entirely.
+ *
+ * Safety: dcc's codegen only ever emits code between a call and this
+ * function's own return when the callee's return-value shape doesn't
+ * already match what this function needs to return (sign/zero extension
+ * widening a narrower callee, truncation narrowing a wider one, a
+ * struct-copy epilogue, and so on). Every case where the shapes already
+ * match - including same-width signed/unsigned mismatches, and void
+ * callers discarding any callee's return value - compiles to nothing at
+ * all between the call and the ret. So requiring these two lines be
+ * strictly adjacent, with nothing between them, already proves the
+ * rewrite is safe: dccpeep never has to know either function's C-level
+ * return type to make this call.
+ *
+ * Deliberately narrow for now: only fires when "ret" is the literal next
+ * line, not e.g. "ld sp,ix" / "pop ix" / "ret" (a framed function tearing
+ * its own IX frame down before returning). Folding a frame epilogue in
+ * ahead of the call is a real further optimization, but a bigger, riskier
+ * rewrite than this pass attempts - see the design notes this pass grew
+ * out of. That said, this narrower form still costs nothing in the
+ * debugger: dcc-debug-host's backtrace walks the IX-frame save chain (see
+ * MiServer::stack_frames), so a function with no IX frame - which is
+ * exactly what "ret" appearing with nothing before it implies - was
+ * already invisible to it before this pass ever ran.
+ *
+ * Conditional calls ("call z,FUNC" etc.) are out of scope for now: dcc's
+ * own codegen never emits one in this position, and excluding them keeps
+ * the label extraction below unambiguous (no comma to strip out first).
+ */
+int pass_call_to_tail_jp(void)
+{
+    int i;
+    int changed;
+    char tmp[MAX_LINE];
+    char next[MAX_LINE];
+    char label[128];
+    char new_jp[160];
+
+    changed = 0;
+
+    for (i = 0; i + 1 < nlines; ++i) {
+        strip_peep_comment_copy(tmp, lines[i]);
+        if (strncmp(tmp, "call ", 5) != 0)
+            continue;
+        if (strchr(tmp + 5, ',') != NULL)
+            continue;
+        strncpy(label, tmp + 5, sizeof(label) - 1);
+        label[sizeof(label) - 1] = 0;
+        if (label[0] == 0)
+            continue;
+
+        strip_peep_comment_copy(next, lines[i + 1]);
+        if (strcmp(next, "ret") != 0)
+            continue;
+
+        snprintf(new_jp, sizeof(new_jp), "jp %s", label);
+        replace1_tagged(i, new_jp, "call_to_tail_jp");
         changed = 1;
     }
 

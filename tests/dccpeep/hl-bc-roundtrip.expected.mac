@@ -21,8 +21,7 @@ _fastcall:
 	ld hl,789
 	ld c,l ; peep: hl_bc_hl_copyback
 	ld b,h
-	call __mhf
-	ret
+	jp __mhf ; peep: call_to_tail_jp
 
 _conditional:
 ;@dcc.mir inline-simple-store

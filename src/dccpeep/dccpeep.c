@@ -13144,6 +13144,7 @@ int main(int argc, char **argv)
         { "pass_global_board_const_offsets", pass_global_board_const_offsets, 0 },
         { "pass_posfunc_b_cache", pass_posfunc_b_cache, 0 },
         { "pass_jp_to_plain_ret", pass_jp_to_plain_ret, 0 },
+        { "pass_call_to_tail_jp", pass_call_to_tail_jp, 0 },
         { "pass_const_divmod_helpers", pass_const_divmod_helpers, 0 },
         { "pass_mulu_const", pass_mulu_const, 0 },
         { "pass_cache_noix_byte_param_reload", pass_cache_noix_byte_param_reload, 0 },
@@ -13364,9 +13365,16 @@ int main(int argc, char **argv)
      *
      * so the earlier main-loop pass correctly refuses to replace jp Lret with
      * ret.  pass_elim_ix_frame() can then collapse that label to a plain ret,
-     * creating exactly the pattern jp_to_plain_ret is meant to remove. */
+     * creating exactly the pattern jp_to_plain_ret is meant to remove.
+     *
+     * The same reasoning applies to pass_call_to_tail_jp(): a "call FUNC"
+     * that used to be followed by "ld sp,ix / pop ix / ret" can, once frame
+     * elimination proves that IX frame unnecessary and collapses the
+     * epilogue to a plain ret, become exactly the "call FUNC" / "ret"
+     * adjacency that pass turns into a tail call. */
     if (RUN_PASS(pass_elim_ix_frame)) {
         RUN_PASS(pass_jp_to_plain_ret);
+        RUN_PASS(pass_call_to_tail_jp);
         RUN_PASS(pass_labels);
     }
 

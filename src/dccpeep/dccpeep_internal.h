@@ -449,5 +449,6 @@ int pass_branch_over_jump(void);
 int pass_jump_thread(void);
 int pass_cond_skip_shortcut(void);
 int pass_jp_to_plain_ret(void);
+int pass_call_to_tail_jp(void);
 
 #endif
