@@ -83,9 +83,11 @@ flowchart LR
     AST --> LOWER["MIR lowering +<br/>metadata recording"]
     LOWER --> REPAIR["deferred metadata repair<br/>and canonicalization"]
     REPAIR --> VERIFY["CFG + verifier<br/>liveness + object promotion"]
-    VERIFY --> ALLOC["register homes + spills<br/>Z80 constraints"]
-    ALLOC --> SELECT["generated candidate<br/>selection + mir-v1 cost"]
-    SELECT --> ASM(["selected .MAC body"])
+    VERIFY --> ALLOC["baseline register homes<br/>+ spill slots"]
+    ALLOC --> SELECT["exact-schedule priority;<br/>generated candidate selection"]
+    SELECT -- exact match --> ASM
+    SELECT -- exact declines --> CALLOC["candidate-specific homes,<br/>spills + mir-v1 cost"]
+    CALLOC --> ASM(["selected .MAC body"])
 ```
 
 | Classic phase | DCC C Compiler implementation |
@@ -93,9 +95,9 @@ flowchart LR
 | Preprocessing / lexical analysis | Integrated macro engine and `next_token` lexer in `dcc_preproc.c`; `dcc_pp_expr.c` evaluates conditional directives |
 | Parsing | Recursive descent builds typed AST nodes against live symbol/type tables |
 | Intermediate representation | Persistent per-function MIR with virtual values, typed memory, calls, labels, branches, PHIs, VLA operations, and aggregate copies |
-| MIR analysis | Deferred metadata repair, CFG construction, verification, object promotion, liveness, target constraints, register homes, and spill-slot planning |
-| Instruction selection | Exact machine schedules plus general homed, hybrid/regional, and spilled CFG candidates |
-| Profitability | `mir-v1` compares generated candidates using machine instructions/bytes, helper/frame/spill costs, moves, branches, and loop weighting |
+| MIR analysis | Deferred metadata repair, CFG construction, verification, object promotion, liveness, baseline register homes, and spill-slot planning |
+| Instruction selection | Priority exact machine schedules, followed by general rollout, homed, hybrid/regional, and spilled CFG candidates |
+| Profitability | After exact scheduling declines, `mir-v1` compares generated alternatives using machine instructions/bytes, helper/frame/spill costs, moves, branches, and loop weighting |
 | Machine-dependent cleanup | Standalone `dccpeep` fixpoint optimization over the selected assembly |
 
 ### Transient AST, persistent MIR
@@ -145,16 +147,27 @@ Call-crossing ordinary values may use only IY. Fixed Z80 operand/result
 registers are boundary constraints, so the emitter inserts moves rather than
 precoloring a value for its whole lifetime.
 
+Verification computes a baseline allocation and retains its liveness matrices
+for selection. Candidate construction may then derive and measure a different
+allocation plan: lazy-parameter and regional candidates, for example, save the
+baseline homes and spills, recompute them for that candidate, and restore the
+baseline before the next attempt.
+
 ### Generated-only candidate selection
 
 Every candidate writes to its own temporary stream. A declining selector cannot
-leave partial text in the next candidate. Production then chooses among:
+leave partial text in the next candidate. Production first tries:
 
 - exact `scheduled-machine-cfg` kernels with complete structural proofs;
+- the compact `general-rollout` scalar DAG for eligible straight-line functions;
 - `homed-scalar-cfg`, including hybrid and regional-home variants;
 - the general `spilled-scalar-cfg` emitter.
 
-The `mir-v1` policy compares only generated MIR candidates.
+An accepted exact schedule has priority. When exact scheduling declines, the
+selector establishes a complete generated incumbent from the rollout or general
+CFG candidates, then `mir-v1` may compare that incumbent with homed,
+lazy-parameter, hybrid, regional, and spilled variants. The policy compares
+only generated MIR candidates.
 `DCC_MIR_REQUIRE_COMPLETE=1` and `DCC_MIR_REQUIRE_EMIT=1` are the strict
 semantic and generated-output boundaries.
 
@@ -251,12 +264,12 @@ graph TB
 
     subgraph MIR["Persistent function MIR"]
       CORE["dcc_mir.c<br/>lowering + repair + verifier"]
-      COMMON["dcc_mir_emit_common.c<br/>shared value emission"]
-      TARGET["dcc_mir_target.c / dcc_mir_schedule.c<br/>Z80 constraints + scheduling"]
+      SHADOW["dcc_mir_target.c / dcc_mir_schedule.c<br/>diagnostic shadow models"]
     end
 
     subgraph BACK["Generated back ends"]
-      SELECT["dcc_mir_select.c<br/>candidate transaction + mir-v1"]
+      SELECT["dcc_mir_select.c<br/>priority, rollout + mir-v1"]
+      COMMON["dcc_mir_emit_common.c<br/>scalar DAG + shared emission"]
       HOMED["dcc_mir_homed_cfg.c<br/>homed / hybrid / regional"]
       SPILLED["dcc_mir_spilled_cfg.c<br/>general spilled CFG"]
       MACHINE["dcc_mir_machine_*.c<br/>exact structural schedules"]
@@ -272,12 +285,15 @@ graph TB
     SEM --> BUILD
     NODES -.storage and typed nodes.-> BUILD
     META -.declarations / scopes / VLA events.-> CORE
-    CORE --> TARGET --> SELECT
-    COMMON --> HOMED
-    COMMON --> SPILLED
+    CORE --> SELECT
+    CORE -. diagnostic reports .-> SHADOW
+    SELECT --> COMMON
     SELECT --> HOMED
     SELECT --> SPILLED
     SELECT --> MACHINE
+    HOMED -. shared operations .-> COMMON
+    SPILLED -. shared operations .-> COMMON
+    COMMON --> ASM
     HOMED --> ASM
     SPILLED --> ASM
     MACHINE --> ASM
@@ -291,8 +307,9 @@ graph TB
 | Types / symbols | `dcc_types.c`, `dcc_symbols.c`, `dcc_constexpr.c`, `dcc_fold.c`, `dcc_asmname.c` | Type system, symbol tables, constant evaluation/folding, and M80-safe assembly-name mapping |
 | Typed AST / metadata | `dcc_ast.c`, `dcc_ast_build.c`, `dcc_ast_gen*.c`, `dcc_ast_metadata.c`, `dcc_ast_stmt_meta.c`, `dcc_licm.c` | Transient typed trees, semantic classifiers, and non-emitting LICM/CSE planning and declaration/scope replay |
 | Compatibility helpers | `dcc_expr.c`, `dcc_ops.c`, `dcc_cmp.c`, `dcc_assign.c`, `dcc_decl.c`, `dcc_stmt_fast.c`, `dcc_array_narrow.c` | Shared initializer/type behavior and conservative source proofs; not a production body emitter |
-| MIR core | `dcc_mir.c`, `dcc_mir_emit_common.c`, `dcc_mir_target.c`, `dcc_mir_schedule.c`, `dcc_mir_stream.c` | Persistent IR, metadata repair, CFG/verifier, liveness, target constraints, isolated candidate streams, and common emission |
-| MIR selection | `dcc_mir_select.c`, `dcc_mir_homed_cfg.c`, `dcc_mir_spilled_cfg.c` | Transactional generated candidates, homes/spills, and `mir-v1` selection |
+| MIR core | `dcc_mir.c`, `dcc_mir_stream.c` | Persistent IR, metadata repair, CFG/verifier, liveness, baseline allocation, and isolated candidate streams |
+| MIR emission / selection | `dcc_mir_select.c`, `dcc_mir_emit_common.c`, `dcc_mir_homed_cfg.c`, `dcc_mir_spilled_cfg.c` | Exact-schedule priority, scalar DAG rollout, transactional generated candidates, candidate-specific homes/spills, shared emission, and `mir-v1` selection |
+| Diagnostic shadow models | `dcc_mir_target.c`, `dcc_mir_schedule.c` | Optional Z80 constraint and sparse-schedule reports; these modules do not select production candidates or emit Z80 |
 | Machine schedules | `dcc_mir_machine_emit.c` (coordinator), `dcc_mir_machine_*.c` (families) | Exact structural matchers and specialized Z80 streams |
 | Top level / output | `dcc_func.c`, `dcc_global_init.c`, `dcc_data.c` | Function/frame parsing, one production metadata/MIR body walk, global initializer recording, deferred static-body placement, and data-section emission |
 
@@ -497,8 +514,9 @@ the runtime and rebuilding the docs is all that is needed to refresh them.
 - MIR owns CFG, PHIs, virtual values, object promotion, liveness, register
   homes, spills, target constraints, and generated candidate selection.
 - Production function assembly comes only from MIR.
-- Exact machine families and general homed/spilled CFG emitters compete under
-  the generated-only `mir-v1` cost policy.
+- Structurally proven exact machine schedules have priority. When they decline,
+  general rollout and homed/spilled CFG candidates are selected from generated
+  streams, with `mir-v1` arbitrating eligible alternatives.
 - Machine-dependent optimization is split out into **`dccpeep`**, a
   fixpoint peephole optimizer over the assembly text, with separate time (`-Ot`)
   and size (`-Os`) strategies.
