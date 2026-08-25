@@ -34,21 +34,20 @@ A single `.c` file becomes a CP/M `.COM` executable through a short pipeline.
 Each stage has one job and hands a text or object file to the next:
 
 ```mermaid
-flowchart LR
-    SRC([".c source"]) --> DCC["dcc<br/>C front end<br/>AST -> MIR -> Z80 asm"]
-    DCC --> MAC([".MAC assembly"])
-    MAC --> PEEP["dccpeep<br/>peephole optimizer"]
-    PEEP --> MAC2([".MAC optimized"])
-    MAC2 --> M80A["m80c<br/>assemble"]
-    RTL([" DCCRTL.MAC<br/>full runtime"]) --> STRIP["dccrtlstrip<br/>dead-block removal"]
-    MAC2 -. references .-> STRIP
-    STRIP --> RTLMIN([" RTLMIN.MAC<br/>used routines only"])
-    RTLMIN --> M80B["m80c<br/>assemble"]
-    M80A --> REL([" app.REL"])
-    M80B --> RRTL([" RTLMIN.REL"])
-    REL --> L80["l80c<br/>link"]
-    RRTL --> L80
-    L80 --> COM([".COM executable"])
+flowchart TB
+  SRC["C source"] --> DCC["dcc<br/>AST → MIR → Z80 assembly"]
+  DCC --> PEEP["dccpeep<br/>optional assembly optimization"]
+  PEEP --> APPASM["m80c<br/>assemble application"]
+  APPASM --> APPREL["app.REL"]
+
+  RTL["DCCRTL.MAC<br/>full runtime"] --> STRIP["dccrtlstrip<br/>keep referenced routines"]
+  PEEP -. runtime references .-> STRIP
+  STRIP --> RTLASM["m80c<br/>assemble reduced runtime"]
+  RTLASM --> RTLREL["RTLMIN.REL"]
+
+  APPREL --> LINK["l80c<br/>link application + runtime"]
+  RTLREL --> LINK
+  LINK --> COM["CP/M .COM executable"]
 ```
 
 | Stage | Tool | Input | Output | Role |
@@ -75,19 +74,18 @@ Top-level declarations, global initializers, strings, and data/BSS placement
 remain table-driven because they are not function-body instructions.
 
 ```mermaid
-flowchart LR
-    SRC([".c source"]) --> PP["preprocessor + lexer"]
-    PPX["dcc_pp_expr.c<br/>#if / #elif"] -. evaluates .-> PP
-    PP --> PARSE["recursive-descent parser"]
-    PARSE --> AST["typed statement AST<br/>(transient arena)"]
-    AST --> LOWER["MIR lowering +<br/>metadata recording"]
-    LOWER --> REPAIR["deferred metadata repair<br/>and canonicalization"]
-    REPAIR --> VERIFY["CFG + verifier<br/>liveness + object promotion"]
-    VERIFY --> ALLOC["baseline register homes<br/>+ spill slots"]
-    ALLOC --> SELECT["exact-schedule priority;<br/>generated candidate selection"]
-    SELECT -- exact match --> ASM
-    SELECT -- exact declines --> CALLOC["candidate-specific homes,<br/>spills + mir-v1 cost"]
-    CALLOC --> ASM(["selected .MAC body"])
+flowchart TB
+  SRC["C source"] --> FRONT["Front end<br/>preprocess, parse, build typed AST"]
+  FRONT --> MIR["Persistent MIR<br/>lower statements and record metadata"]
+  MIR --> ANALYZE["Analyze MIR<br/>repair, verify, build CFG, solve liveness,<br/>promote objects, plan baseline allocation"]
+  ANALYZE --> SELECT["Select generated Z80 candidate<br/>try exact structural schedules first"]
+
+  SELECT -- exact match --> ASM["Selected .MAC function body"]
+  SELECT -- exact declines --> GENERAL["Build generated alternatives<br/>rollout, homed, regional, spilled"]
+  GENERAL --> COST["Choose alternative<br/>candidate-specific allocation + mir-v1"]
+  COST --> ASM
+
+  ANALYZE -. optional reports .-> SHADOW["Diagnostic shadow models<br/>target constraints + sparse schedule"]
 ```
 
 | Classic phase | DCC C Compiler implementation |
