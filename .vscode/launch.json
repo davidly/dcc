@@ -20,6 +20,30 @@
             },
             "launchCompleteCommand": "exec-continue",
             "externalConsole": false
+        },
+        {
+            "name": "DCC CP/M: Debug active C file with example I/O adapter",
+            "type": "cppdbg",
+            "request": "launch",
+            "preLaunchTask": "Prepare active DCC C file for debugging",
+            "program": "${workspaceFolder}/build/DCCDEBUG.COM",
+            "cwd": "${workspaceFolder}/build",
+            "MIMode": "gdb",
+            "miDebuggerPath": "${workspaceFolder}/dcc-debug-host",
+            "miDebuggerArgs": "--interpreter=mi --io-adapter \"${workspaceFolder}/libdcc-debug-io-adapter-example.dylib\"",
+            "linux": {
+                "miDebuggerArgs": "--interpreter=mi --io-adapter \"${workspaceFolder}/libdcc-debug-io-adapter-example.so\""
+            },
+            "windows": {
+                "miDebuggerPath": "${workspaceFolder}/dcc-debug-host.exe",
+                "miDebuggerArgs": "--interpreter=mi --io-adapter \"${workspaceFolder}/dcc-debug-io-adapter-example.dll\""
+            },
+            "targetArchitecture": "x86",
+            "sourceFileMap": {
+                "tests": "${workspaceFolder}/tests"
+            },
+            "launchCompleteCommand": "exec-continue",
+            "externalConsole": false
         }
     ]
 }

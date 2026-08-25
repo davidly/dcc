@@ -2,8 +2,8 @@
 
 `dcc-debug-host` is DCC's full-system GDB/MI backend. It boots a real 63K
 CP/M 2.2 image and executes CCP, BDOS, BIOS, disk-controller, and Z80 code.
-Unlike a BDOS shim, it preserves the disk and console behavior seen by a
-program on the target runtime.
+It preserves the disk and console behavior seen by a program on the target
+runtime.
 
 The source project is under `src/dcc_debug_host`. The normal cross-platform
 DCC build includes the host and example I/O adapter:
@@ -87,9 +87,9 @@ Adapters that use interrupts register providers through the supplied host
 services. Optional poll functions execute on the emulator thread. The adapter
 does not link against debugger internals.
 
-## ABI v2 terminal pipeline
+## I/O adapter terminal pipeline
 
-ABI v2 adds two optional callbacks:
+The I/O adapter includes two optional callbacks:
 
 ```c
 size_t (*terminal_input)(
@@ -135,12 +135,24 @@ sequences, but target-specific translation remains adapter policy.
 example. It includes:
 
 - ABI and structure-size validation;
-- required no-op port callbacks;
+- three 16-bit millisecond timers on ports 24 through 29;
+- a one-byte seconds timer on port 30;
+- a periodic maskable-interrupt timer on port 52;
+- portable C11 timekeeping for Windows, Linux, and macOS;
 - a `close` callback;
 - ordinary-byte pass-through;
 - ANSI cursor parsing across split callback invocations;
 - sample cursor-to-CP/M-control-key translation; and
 - a 30 ms standalone-Escape timeout implemented with `terminal_poll`.
+
+The [timer-port client example](12-examples.md#waiting-for-an-io-adapter-timer)
+shows the CP/M side using `inp` and `outp`. Its source is included directly from
+the adapter example directory so the documentation stays synchronized with the
+buildable program.
+
+The [periodic-interrupt example](12-examples.md#handling-periodic-io-adapter-interrupts)
+uses port 52, installs a Z80 interrupt mode 1 assembly wrapper, and calls a
+minimal C handler for each tick.
 
 Build and test only the example:
 

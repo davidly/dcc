@@ -11,8 +11,7 @@ build. Optimized debug builds are also available for defects that reproduce
 only after peephole optimization, with the limitations described below.
 
 See [Debugger host and I/O adapters](00-debug-host.md) for the full-system
-architecture, target terminal, dynamic I/O adapter, and ABI v2 terminal
-pipeline.
+architecture, target terminal, dynamic I/O adapter, and terminal pipeline.
 
 ![DCC source debugging in VS Code with a breakpoint, local variables, Z80 registers, call stack, and debug controls](images/source-debugging.png)
 
@@ -56,6 +55,158 @@ Debug metadata requires the native
 
 Source and output names must also satisfy CP/M 8.3 naming rules. In particular,
 `dcc-output` is at most eight characters and has no extension.
+
+## Add debugging to a project
+
+A project needs three configuration files in addition to its C sources:
+
+```text
+my-project/
+├── .vscode/
+│   ├── launch.json
+│   └── tasks.json
+├── dccmake.txt
+├── main.c
+└── module.c
+```
+
+Build DCC once with `scripts/build-dcc.ps1`, then set `DCC_DIR` in the
+environment inherited by VS Code to the DCC repository directory. For example,
+on macOS or Linux:
+
+```sh
+export DCC_DIR="$HOME/GitHub/dcc"
+code my-project
+```
+
+In PowerShell on Windows:
+
+```powershell
+$env:DCC_DIR = "C:\GitHub\dcc"
+code my-project
+```
+
+### Add `dccmake.txt`
+
+This example builds two translation units as `build/PROGRAM.COM` and writes the
+matching metadata as `build/PROGRAM.DBG`:
+
+```text
+dcc-input=main.c,module.c
+dcc-output=PROGRAM
+dcc-build-dir=build
+dcc-stack-bytes=1024
+```
+
+Replace the source list, output name, and stack size with the project's actual
+values. The output name must fit CP/M's eight-character basename limit.
+
+### Add `.vscode/tasks.json`
+
+The build task runs `dccmake -g` from the project root. `dccmake` reads the
+adjacent `dccmake.txt` and generates both required debug artifacts:
+
+```json
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Build DCC program for debugging",
+      "type": "shell",
+      "command": "${env:DCC_DIR}/dccmake",
+      "args": ["-g"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    }
+  ]
+}
+```
+
+### Add `.vscode/launch.json`
+
+The launch configuration points VS Code at the `.COM` file and uses
+`dcc-debug-host` as its GDB/MI executable. Keep `program` synchronized with
+`dcc-output` in `dccmake.txt`:
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "DCC CP/M: Debug PROGRAM",
+      "type": "cppdbg",
+      "request": "launch",
+      "preLaunchTask": "Build DCC program for debugging",
+      "program": "${workspaceFolder}/build/PROGRAM.COM",
+      "cwd": "${workspaceFolder}/build",
+      "MIMode": "gdb",
+      "miDebuggerPath": "${env:DCC_DIR}/dcc-debug-host",
+      "miDebuggerArgs": "--interpreter=mi",
+      "windows": {
+        "miDebuggerPath": "${env:DCC_DIR}/dcc-debug-host.exe"
+      },
+      "targetArchitecture": "x86",
+      "sourceFileMap": {
+        "${workspaceFolder}/build": "${workspaceFolder}"
+      },
+      "launchCompleteCommand": "exec-continue",
+      "externalConsole": false
+    }
+  ]
+}
+```
+
+`sourceFileMap` maps paths reported relative to the `.COM` directory back to
+the project root. It also handles source subdirectories: a recorded `src/foo.c`
+resolves through `build/src/foo.c` and maps to `src/foo.c` in the project.
+
+Select **DCC CP/M: Debug PROGRAM** in **Run and Debug**, set a source
+breakpoint, and press **F5**.
+
+### What happens after F5
+
+1. VS Code runs the pre-launch task, and `dccmake -g` creates a matched `.COM`
+   and `.DBG` pair.
+2. The C/C++ extension starts `dcc-debug-host` and communicates with it using
+   GDB/MI. No separate GDB installation is used.
+3. The host boots its CP/M 2.2 system, stages the selected program on its
+   disposable B: drive, and launches it at the normal CP/M transient-program
+   address.
+4. The host translates VS Code breakpoints, stepping, variable requests,
+   memory access, and disassembly requests through the linked `.DBG` metadata.
+5. Program output appears in the Debug Console. On normal exit, the program
+   returns to CP/M and the debug session reports completion.
+
+The `.COM` contains the executable Z80 program; the `.DBG` sidecar is debugger
+metadata and is not copied to CP/M hardware. Both files must remain adjacent
+and come from the same build.
+
+### Use an I/O adapter
+
+An I/O adapter is optional. It supplies machine-specific ports, terminal
+translation, or interrupt sources that are not part of generic CP/M. The normal
+DCC build publishes an example adapter beside `dcc-debug-host`. Replace the
+launch configuration's `miDebuggerArgs` and Windows override with:
+
+```json
+"miDebuggerArgs": "--interpreter=mi --io-adapter \"${env:DCC_DIR}/libdcc-debug-io-adapter-example.dylib\"",
+"linux": {
+  "miDebuggerArgs": "--interpreter=mi --io-adapter \"${env:DCC_DIR}/libdcc-debug-io-adapter-example.so\""
+},
+"windows": {
+  "miDebuggerPath": "${env:DCC_DIR}/dcc-debug-host.exe",
+  "miDebuggerArgs": "--interpreter=mi --io-adapter \"${env:DCC_DIR}/dcc-debug-io-adapter-example.dll\""
+}
+```
+
+The example adapter provides polling timers and a periodic interrupt source;
+see the [timer](12-examples.md#waiting-for-an-io-adapter-timer) and
+[interrupt](12-examples.md#handling-periodic-io-adapter-interrupts) programs.
+For a custom adapter, substitute its shared-library path and add `--env-file`
+if that adapter consumes project configuration. See
+[Debugger host and I/O adapters](00-debug-host.md) for the adapter contract.
 
 ## Configure the project build
 

@@ -86,3 +86,54 @@ detaching it from the stream. This snippet is pulled verbatim from the
 `tests/tbufex.c` regression test, so the documented code is exactly what is
 built and run by the suite.
 
+## Waiting for an I/O-adapter timer
+
+The example debugger I/O adapter provides a 16-bit millisecond timer on ports
+24 and 25. Write the delay's high byte to port 24, then its low byte to port 25
+to start the timer. Reading either port returns 1 while it is running and 0
+after it expires.
+
+```c
+--8<-- "src/dcc_debug_host/examples/io_adapter/timer.c:example"
+```
+
+This program requires `dcc-debug-host` with the example I/O adapter loaded;
+ordinary emulators need an equivalent device on those ports. The source lives
+beside the adapter and builds with:
+
+```sh
+./dccmake src/dcc_debug_host/examples/io_adapter/timer.c dcc-output=TIMER
+```
+
+See [Direct port I/O](10-system-and-cpm.md#direct-port-io) for the `inp` and
+`outp` runtime contract.
+
+## Handling periodic I/O-adapter interrupts
+
+The example adapter also provides a periodic maskable-interrupt source on port
+52. Writing a value from 1 through 255 selects that many interrupts per second;
+writing zero disables the source and clears pending requests. Reading the port
+returns the configured rate.
+
+This example installs a Z80 interrupt mode 1 vector at `0038H`, waits with
+`HALT`, counts 50 interrupts at 10 Hz in a C function, then disables the source
+and restores CP/M's original vector:
+
+```c
+--8<-- "src/dcc_debug_host/examples/io_adapter/dccint.c:example"
+```
+
+The assembly wrapper preserves both Z80 register sets before calling C. The C
+handler only updates memory: interrupt code must not call BDOS, perform console
+I/O, allocate memory, or use other non-reentrant runtime services.
+
+Build the source with debug metadata using:
+
+```sh
+./dccmake -g src/dcc_debug_host/examples/io_adapter/dccint.c \
+  dcc-output=DCCINT
+```
+
+Run `DCCINT.COM` under `dcc-debug-host` with the example I/O adapter loaded.
+It counts for five seconds, prints `C handler count: 50`, restores the vector, and
+returns normally to CP/M.
