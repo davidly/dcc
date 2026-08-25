@@ -1139,7 +1139,7 @@ static int mir_match_constant_result_switch(
         branch = &mir.insns[cursor + 2];
         jump = &mir.insns[cursor + 3];
         if (constant->opcode != MIR_CONST ||
-            constant->immediate < 0 ||
+            constant->immediate < -32768 ||
             constant->immediate > 32767 ||
             binary->opcode != MIR_BINARY ||
             binary->immediate != TOK_EQ ||
