@@ -1,4 +1,12 @@
-/* Bit-exact modff mantissa-mask boundaries and special values. */
+/* Bit-exact modff mantissa-mask boundaries and special values.
+ *
+ * The "snan" case checks that modff() passes a signaling NaN through with
+ * its payload untouched, matching dcc's software-float RTL. Real host C
+ * libraries don't guarantee that: MSVC's /O2 CRT modf() and gcc's -O0 modff()
+ * both quiet the signaling bit, while gcc -O2 happens to preserve it. Since
+ * that's implementation/optimizer-dependent rather than a portable property,
+ * this test is host-skipped (see tests/_test_overrides.json) rather than
+ * validated against an arbitrary host compiler. */
 
 #include <math.h>
 #include <stdio.h>

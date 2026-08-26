@@ -122,6 +122,13 @@ static void oracle_sort(int *a, int n)
  * static-data address used by a CP/M .COM, subtracting that gap from record
  * zero wraps onto record five.  The extra pair is observable without touching
  * an invalid address, and the following walk is rejected by the comparator.
+ *
+ * This regression only exists at the low, 16-bit-wrapping static address a
+ * CP/M .COM loads at; on host, large_records sits in a 32/64-bit address
+ * space with no wraparound risk, so large_wrap_pairs there just reflects
+ * whichever pivot order the host libc's own qsort() happens to pick for
+ * this input - not a wraparound bug. Host-skipped for that reason (see
+ * tests/_test_overrides.json).
  */
 #define LARGE_COUNT 6
 #define LARGE_SIZE 8192U

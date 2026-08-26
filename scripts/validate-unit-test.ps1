@@ -366,8 +366,15 @@ You can also pass a compiler explicitly:
         $preludePath = Join-Path $RepoRoot "tests/host-validate-prelude.h"
 
         if ($Compiler.Kind -eq "msvc") {
+            # tests/msvc-shims holds headers (e.g. unistd.h) that dcc tests
+            # #include directly but MSVC's CRT doesn't ship; searched via /I
+            # so plain #include <unistd.h> in a test source resolves to the
+            # shim instead of failing to find the header at all. See that
+            # directory's unistd.h for what belongs here vs. in
+            # tests/_test_overrides.json's host/ignore flags.
+            $shimIncludeDir = Join-Path $RepoRoot "tests/msvc-shims"
             $objPath = Join-Path $WorkDir ([System.IO.Path]::GetFileNameWithoutExtension($ExePath) + ".obj")
-            $arguments = @("/nologo", "/w", "/O2", "/Zc:__STDC__", "/std:c11", "/FI", $preludePath, "/Fe:$ExePath", "/Fo:$objPath", $SourceFile)
+            $arguments = @("/nologo", "/w", "/O2", "/Zc:__STDC__", "/std:c11", "/I", $shimIncludeDir, "/FI", $preludePath, "/Fe:$ExePath", "/Fo:$objPath", $SourceFile)
             $output = & $Compiler.Command @arguments 2>&1
             return [pscustomobject]@{ Success = ($LASTEXITCODE -eq 0 -and (Test-Path $ExePath -PathType Leaf)); Output = ($output -join "`n") }
         }
