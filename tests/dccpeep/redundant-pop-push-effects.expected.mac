@@ -55,7 +55,7 @@ _alu_reads_hl:
 	pop hl
 	push hl
 	sbc hl,de
-	jp z,_alu_done
+	ret z ; peep: cond_jp_to_cond_ret
 _alu_done:
 	ret
 

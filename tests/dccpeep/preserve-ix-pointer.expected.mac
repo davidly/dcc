@@ -6,15 +6,14 @@ _accept:
 	ld d,(ix-1)
 	or a
 	sbc hl,de
-	jr c,L1 ; peep: jp_to_jr
-	jr z,L1 ; peep: jp_to_jr
+	ret c ; peep: cond_jp_to_cond_ret
+	ret z ; peep: cond_jp_to_cond_ret
 	ex de,hl
 	ld e,(hl)
 	inc hl
 	ld d,(hl)
 	ex de,hl
 	or a
-L1:
 	ret
 	public _decline
 _decline:
@@ -24,14 +23,13 @@ _decline:
 	ld d,(ix-3)
 	or a
 	sbc hl,de
-	jr nc,L2 ; peep: jp_to_jr
+	ret nc ; peep: cond_jp_to_cond_ret
 	ld l,(ix-2)
 	ld h,(ix-1)
 	ld e,(hl)
 	inc hl
 	ld d,(hl)
 	ex de,hl
-	jr c,L2 ; peep: jp_to_jr
-L2:
+	ret c ; peep: cond_jp_to_cond_ret
 	ret
 	end

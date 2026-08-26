@@ -20,11 +20,8 @@ _borrow:
 
 LIDEC:
 	dec (ix-5)
-	jp z,LIDEXIT
+	ret z ; peep: cond_jp_to_cond_ret
 	ld e,(ix-5)
 	ld d,0
 	call _external
 	jp LIDEC
-LIDEXIT:
-	ret
-	end

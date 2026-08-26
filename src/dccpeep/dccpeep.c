@@ -13292,6 +13292,40 @@ int main(int argc, char **argv)
 
     RUN_PASS(pass_cache_ix_long_param_reload);
     RUN_PASS(pass_preserve_ix_pointer_compare);
+
+    /* pass_cond_jp_to_cond_ret is deliberately not in the shared fixed-point
+     * table above, for the same reason documented on pass_cache_ix_local_
+     * word_reload and pass_small_const_incr_carry_skip just above: it fires
+     * on almost any "jp/jr cc,LABEL" whose target is a bare ret, so run in
+     * that shared loop it claims the pattern pass_preserve_ix_pointer_
+     * compare above needs (confirmed as a real, measured regression: it
+     * converted "jp nc,L1" straight to "ret nc" before preserve_ix_pointer_
+     * compare ever got a chance to see the original jump and swap the
+     * compare's operands so the IX-relative pointer survives the compare
+     * without a reload - a bigger win this pass would otherwise steal
+     * before it exists). Running it here, after every specialized pass in
+     * this section that depends on an original conditional-jump shape has
+     * already had its turn, still lets it clean up whatever those passes
+     * leave behind - including a fresh "jr cc,LABEL" that preserve_ix_
+     * pointer_compare's own rewrite just introduced. Unlike pass_labels
+     * elsewhere in this file (which only collapses an adjacent-label
+     * chain), a label this pass orphans is typically a lone return label
+     * with an ordinary instruction - not another label - right after it,
+     * so pass_remove_unreferenced_labels is what actually clears it; without
+     * that call the orphaned label lingers into a second dccpeep run,
+     * breaking the fixture suite's idempotency check even though this run's
+     * own output was already correct. Removing that label can also leave a
+     * now-unlabeled ret sitting directly after an unconditional jp/jr (the
+     * label used to separate them) - genuinely unreachable code that only
+     * pass_once's own try_unreachable_after_jump_at check deletes; without
+     * re-running it here too, that dead ret also lingers into a second run,
+     * the same idempotency problem one step further down. */
+    if (RUN_PASS(pass_cond_jp_to_cond_ret)) {
+        RUN_PASS(pass_remove_unreferenced_labels);
+        RUN_PASS(pass_once);
+        RUN_PASS(pass_labels);
+    }
+
     if (RUN_PASS(pass_ix_word_small_eq_chain))
         RUN_PASS(pass_labels);
 
@@ -13371,10 +13405,15 @@ int main(int argc, char **argv)
      * that used to be followed by "ld sp,ix / pop ix / ret" can, once frame
      * elimination proves that IX frame unnecessary and collapses the
      * epilogue to a plain ret, become exactly the "call FUNC" / "ret"
-     * adjacency that pass turns into a tail call. */
+     * adjacency that pass turns into a tail call. pass_cond_jp_to_cond_ret()
+     * is the same story once more: a conditional jump to that same
+     * newly-collapsed label only now looks like a plain "ret" to it. */
     if (RUN_PASS(pass_elim_ix_frame)) {
         RUN_PASS(pass_jp_to_plain_ret);
+        RUN_PASS(pass_cond_jp_to_cond_ret);
         RUN_PASS(pass_call_to_tail_jp);
+        RUN_PASS(pass_remove_unreferenced_labels);
+        RUN_PASS(pass_once);
         RUN_PASS(pass_labels);
     }
 

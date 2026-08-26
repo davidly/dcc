@@ -12,8 +12,7 @@ _ZC:
 	inc iy
 	inc iy
 	inc iy
-	jp c,LC
-LC:
+	ret c ; peep: cond_jp_to_cond_ret
 	ret
 ; static function resolved_backedge
 _ZR:

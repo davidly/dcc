@@ -48,7 +48,7 @@ _load_carry_live:
 	inc hl
 	ld h,(hl)
 	ld l,a
-	jp c,_carry_set
+	ret c ; peep: cond_jp_to_cond_ret
 	ret
 _carry_set:
 	ret

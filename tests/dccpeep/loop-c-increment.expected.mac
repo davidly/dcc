@@ -11,12 +11,9 @@ LCINC:
 LBOUND:
 	ld a,c ; peep: narrow_bc_loop_bound_to_reg_c
 	cp 4
-	jr nc,LBOUND_EXIT ; peep: jp_to_jr
+	ret nc ; peep: cond_jp_to_cond_ret
 	ld l,c
 	ld h,0
 	inc hl
 	ld c,l
-	jr LBOUND ; peep: jp_to_jr
-LBOUND_EXIT:
-	ret
-	end
+	jp LBOUND

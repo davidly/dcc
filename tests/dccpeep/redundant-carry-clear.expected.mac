@@ -102,9 +102,8 @@ L4:
 _notsbc:
 	xor a
 	or a
-	jr z,L5
+	ret z ; peep: cond_jp_to_cond_ret
 	ld hl,1
-L5:
 	ret
 
 	end

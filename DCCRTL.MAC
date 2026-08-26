@@ -322,7 +322,7 @@ co_one:
         call    __cob_put       ; append the character
         ld      a,(__cob_mode)
         or      a               ; 0 = _IOFBF: no per-char flush
-        jr      z,co_ret
+        ret     z
         dec     a               ; 1 = _IOLBF
         jr      z,co_line
         call    __cflush        ; 2 = _IONBF: flush every character
@@ -330,7 +330,7 @@ co_one:
 co_line:
         ld      a,e
         cp      0ah             ; flush the buffered line on newline
-        jr      nz,co_ret
+        ret     nz
         call    __cflush
 co_ret:
         ret
@@ -3925,7 +3925,7 @@ __pf_run:
 pf_loop:
         ld      a,(hl)
         or      a
-        jp      z,pf_done
+        ret     z
         inc     hl
         cp      '%'
         jr      z,pf_percent
@@ -3943,7 +3943,7 @@ pf_percent:
 pf_pct_next:
         ld      a,(hl)
         or      a
-        jp      z,pf_done
+        ret     z
         inc     hl
 
         cp      '%'
@@ -4023,7 +4023,7 @@ pf_pct_dot:
 pf_pct_prec_loop:
         ld      a,(hl)
         or      a
-        jp      z,pf_done
+        ret     z
         cp      '0'
         jr      c,pf_pct_prec_done
         cp      '9'+1
@@ -4062,7 +4062,7 @@ pf_acc_max:
 pf_pct_z:
         ld      a,(hl)
         or      a
-        jp      z,pf_done
+        ret     z
         inc     hl
         ; fall through into dispatch with A = conversion char after 'z'
 
@@ -6856,7 +6856,7 @@ atf_sign_bit:
 atf_apply_sign:
         ld      a,(__atf_neg)
         or      a
-        jr      z,atf_ret
+        ret     z
         ld      a,d
         or      80h
         ld      d,a                     ; set IEEE 754 sign bit
@@ -10725,11 +10725,11 @@ __ctu:
         ld      l,a             ; HL = c (full int)
         inc     h
         dec     h
-        jr      nz,toup_done
+        ret     nz
         cp      'a'             ; c < 'a' -> leave as-is
-        jr      c,toup_done
+        ret     c
         cp      'z'+1           ; c > 'z' -> leave as-is
-        jr      nc,toup_done
+        ret     nc
         sub     20h             ; lowercase -> uppercase
         ld      l,a
         ld      h,0
@@ -10952,11 +10952,11 @@ __ctl:
         ld      l,a             ; HL = c (full int)
         inc     h
         dec     h
-        jr      nz,tolo_done
+        ret     nz
         cp      'A'
-        jr      c,tolo_done
+        ret     c
         cp      'Z'+1
-        jr      nc,tolo_done
+        ret     nc
         add     a,20h
         ld      l,a
         ld      h,0
@@ -14634,12 +14634,10 @@ FFU_OK:
         inc     b
 FFUS1:
         dec     b
-        jr      z,FFUDN
+        ret     z
         srl     h
         rr      l
         jr      FFUS1
-FFUDN:
-        ret
 
         public  __ffi
 __ffi:
@@ -17550,11 +17548,11 @@ __fscale_pow2:
 
         ; zero/subnormal: preserve signed zero / treat subnormal as zero.
         or      a
-        jr      z,FSCL_RET
+        ret     z
 
         ; NaN/Inf: preserve input.
         cp      255
-        jr      z,FSCL_RET
+        ret     z
 
         ; Preserve original float bits before using DE/HL as integer scratch.
         push    de
@@ -17737,7 +17735,7 @@ FFUL2:
         ; H and L are already mantissa low bytes from input float.
         ld      a,c
         cp      150
-        jr      z,FFULD
+        ret     z
         jr      c,FFURS
         sub     150
         ld      b,a
@@ -23871,7 +23869,7 @@ CDL18:
         ld a,h ; peep: cmp0_or_hl
         or l
         ld hl,0 ; peep: bool_from_cmp
-        jr nz,CDL14 ; peep: jp_to_jr
+        ret nz ; manually applied cond_jp_to_cond_ret (dccpeep isn't run on this file)
         inc l
 CDL14:
         ret
