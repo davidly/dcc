@@ -413,25 +413,16 @@ int is_label_referenced(const char *label);
 /* Application-specific board/game passes (peep_pass_minmax.c). */
 int peep_in_function_range(const char *func, int *startp, int *endp);
 int peep_range_has_debug_annotations(int start, int end);
-int pass_posfunc_b_cache(void);
 int pass_minmax_pack_frame(void);
 int pass_minmax_pack_call(void);
-int pass_reuse_board_addr_for_zero_store(void);
 int pass_minmax_elim_label_reload(void);
 int pass_winner_check_dec_a(void);
-int pass_global_board_const_offsets(void);
 
 /* Loop-scoped registerization passes (peep_pass_loops.c). */
-int pass_byte_loop_counter_to_reg_c(void);
 int pass_word_loop_var_to_reg_bc(void);
 int pass_narrow_bc_loop_bound_to_reg_c(void);
 int pass_byte_loop_var_to_reg_c(void);
 int pass_byte_for_counter_to_reg_c(void);
-int pass_byte_for_counter_to_reg_e(void);
-
-/* Compiler-tagged temporary spill passes (peep_pass_inline_temp.c). */
-int pass_inline_temp_spill_to_stack(void);
-int pass_remove_inline_temp_markers(void);
 
 /* Label and branch rewrite passes (peep_pass_control_flow.c). */
 int pass_labels(void);

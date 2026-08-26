@@ -1,0 +1,27 @@
+	public _f
+_f:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld hl,_arr
+	ex de,hl ; peep: push_hl_load_pop_de_to_ex
+	ld l,(ix+4)
+	ld h,(ix+5)
+	add hl,hl
+	add hl,de
+	ld a,(hl)
+	inc hl
+	ld h,(hl)
+	ld l,a
+	ld c,l ; peep: global_array_word_cache_store
+	ld b,h
+	ld (_gx),hl
+	ld l,c ; peep: global_array_word_cache_load
+	ld h,b
+	ld (_gy),hl
+	pop ix
+	ret
+	_arr equ __bssb+0
+	_gx equ __bssb+40
+	_gy equ __bssb+42
+	end

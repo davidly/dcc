@@ -3,13 +3,12 @@
  * @brief Optimizes exact board-game and minimax assembly idioms.
  *
  * @par Role
- * Implements the bundled ttt/chess pattern family for position functions,
- * MinMax/FindSolution frames and calls, board-address reuse, winner checks,
- * byte returns, and register caches.
+ * Implements the bundled ttt/chess pattern family for MinMax/FindSolution
+ * frames and calls, label-reload elimination, and winner checks.
  *
  * @par Key entry points
- * pass_posfunc_b_cache(), the pass_minmax_*() family,
- * pass_winner_check_dec_a(), and pass_global_board_const_offsets().
+ * pass_minmax_pack_frame(), pass_minmax_pack_call(),
+ * pass_minmax_elim_label_reload(), and pass_winner_check_dec_a().
  *
  * @par Boundary
  * Rewrites require exact application symbols, function context, or narrowly
@@ -17,146 +16,6 @@
  * and local-pattern passes belong to their dedicated modules.
  */
 #include "dccpeep_internal.h"
-
-static int peep_is_pos_func_label(const char *s)
-{
-    if (s[0] == '_' &&
-        s[1] == 'p' &&
-        s[2] == 'o' &&
-        s[3] == 's' &&
-        strstr(s, "func:") != NULL)
-        return 1;
-
-    if (strcmp(s, "_LookForWinner:") == 0)
-        return 1;
-
-    return 0;
-}
-
-int pass_posfunc_b_cache(void)
-{
-    int i, j, end;
-    int changed;
-    int has_call;
-    int has_ix1_store_after_setup;
-    int setup_ld_a;
-    int setup_store;
-    int setup_kind;
-
-    changed = 0;
-
-    for (i = 0; i < nlines; i++) {
-        if (!peep_is_pos_func_label(lines[i]))
-            continue;
-
-        end = i + 1;
-        while (end < nlines && !peep_is_public_line(lines[end]))
-            end++;
-
-        /* line_clobbers_bc (not a bare "call " scan) so "call __stchk" -
-         * present in every function's prologue under the default
-         * -fstack-check build - doesn't block this pass on its own; see
-         * line_clobbers_bc's own comment for why that call specifically
-         * never touches B/C. Without this exemption, this pass could
-         * never fire on any stack-checked build at all. */
-        has_call = 0;
-        for (j = i + 1; j < end; j++) {
-            if (line_clobbers_bc(lines[j])) {
-                has_call = 1;
-                break;
-            }
-        }
-        if (has_call)
-            continue;
-
-        /* Two possible preambles land x = *(hl) into (ix-1): the classic
-         * "ld a,(hl); ld (ix-1),a" (2 lines, setup_kind 1), or the
-         * ix-direct declaration-initializer fast path's "ld l,(hl);
-         * ld h,0; ld (ix-1),l" (3 lines, setup_kind 2 - dcc_decl.c emits
-         * a 16-bit-typed load/store even for a byte-sized x, zero-
-         * extending into h - see pass_posfunc_collapse_b_setup's own
-         * comment on the same shape). Both just mean B ends up holding
-         * x's byte value once collapsed. */
-        setup_ld_a = -1;
-        setup_store = -1;
-        setup_kind = 0;
-
-        for (j = i + 1; j + 1 < end; j++) {
-            if (eq(j, "ld a,(hl)") && eq(j + 1, "ld (ix-1),a")) {
-                setup_ld_a = j;
-                setup_store = j + 1;
-                setup_kind = 1;
-                break;
-            }
-            if (j + 2 < end &&
-                eq(j, "ld l,(hl)") && eq(j + 1, "ld h,0") &&
-                eq(j + 2, "ld (ix-1),l")) {
-                setup_ld_a = j;
-                setup_store = j + 2;
-                setup_kind = 2;
-                break;
-            }
-        }
-
-        if (setup_ld_a < 0)
-            continue;
-
-        /* "cp (ix-1)" is a pure read (Z80's CP never writes its operand),
-         * exactly like "ld a,(ix-1)"/"ld l,(ix-1)" - x compared against a
-         * board byte loaded into A is at least as common a source order
-         * as x loaded into A first, once dcc's comparison codegen picks
-         * which operand to load first. */
-        has_ix1_store_after_setup = 0;
-        for (j = setup_store + 1; j < end; j++) {
-            if (strstr(lines[j], "(ix-1)") != NULL &&
-                strcmp(lines[j], "ld a,(ix-1)") != 0 &&
-                strcmp(lines[j], "ld l,(ix-1)") != 0 &&
-                strcmp(lines[j], "cp (ix-1)") != 0) {
-                has_ix1_store_after_setup = 1;
-                break;
-            }
-        }
-        if (has_ix1_store_after_setup)
-            continue;
-
-        /* Remove the one-byte local allocation if present in the prologue. */
-        for (j = i + 1; j < setup_ld_a; j++) {
-            if (eq(j, "dec sp")) {
-                delete_n(j, 1);
-                end--;
-                setup_ld_a--;
-                setup_store--;
-                changed = 1;
-                break;
-            }
-        }
-
-        replace1(setup_ld_a, "ld b,(hl)");
-        if (setup_kind == 1) {
-            delete_n(setup_store, 1);
-            end--;
-        } else {
-            delete_n(setup_ld_a + 1, 2);
-            end -= 2;
-        }
-        changed = 1;
-
-        for (j = setup_ld_a + 1; j < end; j++) {
-            if (eq(j, "ld a,(ix-1)")) {
-                replace1(j, "ld a,b");
-                changed = 1;
-            } else if (eq(j, "ld l,(ix-1)")) {
-                replace1(j, "ld l,b");
-                changed = 1;
-            } else if (eq(j, "cp (ix-1)")) {
-                replace1(j, "cp b");
-                changed = 1;
-            }
-        }
-    }
-
-    return changed;
-}
 
 int peep_in_function_range(const char *func, int *startp, int *endp)
 {
@@ -204,7 +63,6 @@ int peep_range_has_debug_annotations(int start, int end)
     return 0;
 }
 
-
 /* Helper: replace first occurrence of 'from' in 'buf' with 'to' (may differ in length). */
 static void pack_str_replace(char *buf, const char *from, const char *to)
 {
@@ -215,33 +73,6 @@ static void pack_str_replace(char *buf, const char *from, const char *to)
     memcpy(p, to, tl);
 }
 
-/* pass_minmax_pack_frame: Phase 1 only.
- * Translate ix+6→ix+5 (beta), ix+8→ix+6 (depth), ix+10→ix+7 (move)
- * within _MinMax to prepare for the packed 2-word calling convention.
- * Fires only while (ix+10) still exists.
- *
- * This guard alone is NOT sufficient to fire safely: it says nothing
- * about whether pass_minmax_pack_call can actually collapse either call
- * site (the recursive self-call, or FindSolution's call into _MinMax) to
- * match the new packed offsets this pass is about to commit the frame
- * to. If this pass translates the frame while pass_minmax_pack_call
- * can't complete both call sites, the callee ends up reading parameters
- * at the new packed offsets while a caller still pushes the old unpacked
- * layout - a real caller/callee ABI mismatch (every parameter read
- * inside MinMax then comes from the wrong stack slot). Confirmed via a
- * corrupted tests/ttt.c run (radically wrong move counts) caused by an
- * unrelated, individually-correct codegen change that merely inserted
- * one harmless instruction between the recursive call and its cleanup -
- * enough to break pass_minmax_pack_call's exact-adjacency match while
- * this pass's own looser guard still fired.
- *
- * Rather than duplicating pass_minmax_pack_call's shape-matching logic
- * here (which would just create a second place to keep in sync - the
- * same mistake that let this happen in the first place), this pass
- * applies its translation, then immediately tries pass_minmax_pack_call
- * for real. If that fails to change anything, the translation is
- * reverted line-for-line and this pass declines entirely, so the two
- * always commit or decline together. */
 int pass_minmax_pack_frame(void)
 {
     int start, end, i, changed = 0;
@@ -588,35 +419,6 @@ int pass_minmax_pack_call(void)
 }
 
 
-int pass_reuse_board_addr_for_zero_store(void)
-{
-    int i;
-    int changed;
-    char lab[128];
-
-    changed = 0;
-
-    for (i = 0; i + 13 < nlines; ++i) {
-        if (eq(i, "ld hl,_g_board") &&
-            eq(i + 1, "ld e,(ix-3)") &&
-            eq(i + 2, "ld d,0") &&
-            eq(i + 3, "add hl,de") &&
-            eq(i + 4, "ld a,(hl)") &&
-            (eq(i + 5, "or a") || eq(i + 5, "cp 0")) &&
-            peep_parse_jp_cond_label(lines[i + 6], "nz", lab) &&
-            eq(i + 7, "ld hl,_g_board") &&
-            eq(i + 8, "ld e,(ix-3)") &&
-            eq(i + 9, "ld d,0") &&
-            eq(i + 10, "add hl,de")) {
-            delete_n(i + 7, 4);
-            changed = 1;
-            if (i > 0) --i;
-        }
-    }
-
-    return changed;
-}
-
 /*
  * pass_minmax_elim_label_reload:
  *
@@ -833,115 +635,3 @@ int pass_winner_check_dec_a(void)
     return changed;
 }
 
-int pass_global_board_const_offsets(void)
-{
-    int i;
-    int changed;
-    int incs;
-    int k;
-    int imm;
-    char line[160];
-
-    changed = 0;
-
-    for (i = 0; i < nlines; ++i) {
-        /*
-         * Collapse constant-index global board addressing:
-         *
-         *     ld hl,_g_board
-         *     inc hl
-         *     inc hl
-         *     cp (hl)
-         *
-         * into:
-         *
-         *     ld hl,_g_board+2
-         *     cp (hl)
-         *
-         * and:
-         *
-         *     ld hl,_g_board
-         *     ld de,5
-         *     add hl,de
-         *
-         * into:
-         *
-         *     ld hl,_g_board+5
-         *
-         * This is safe because it only changes address formation; HL still
-         * contains the same address before the following memory operation.
-         */
-        if (eq(i, "ld hl,_g_board")) {
-            incs = 0;
-            k = i + 1;
-            while (k < nlines && eq(k, "inc hl")) {
-                ++incs;
-                ++k;
-            }
-
-            if (incs > 0) {
-                sprintf(line, "ld hl,_g_board+%d", incs);
-                replace1_tagged(i, line, "global_const_offset");
-                delete_n(i + 1, incs);
-                changed = 1;
-                if (i > 0)
-                    --i;
-                continue;
-            }
-
-            if (i + 2 < nlines &&
-                peep_parse_ld_de_0_to_255(lines[i + 1], &imm) &&
-                eq(i + 2, "add hl,de")) {
-                if (imm == 0)
-                    sprintf(line, "ld hl,_g_board");
-                else
-                    sprintf(line, "ld hl,_g_board+%d", imm);
-                replace1_tagged(i, line, "global_const_offset");
-                delete_n(i + 1, 2);
-                changed = 1;
-                if (i > 0)
-                    --i;
-                continue;
-            }
-        }
-
-        /*
-         * Same collapse, mirrored operand order - the constant index
-         * loaded into HL first, the board base into DE second:
-         *
-         *     ld hl,6
-         *     ld de,_g_board
-         *     add hl,de
-         *
-         * into:
-         *
-         *     ld hl,_g_board+6
-         *
-         * "add hl,de" is commutative (hl+de == de+hl), so this forms the
-         * identical address; only which operand the front-end happened to
-         * evaluate first differs. This is the shape a constant array
-         * index typically compiles to (index in HL, base loaded after and
-         * added) - the base-first form above is comparatively rare, so
-         * every occurrence of this mirrored form was previously left as
-         * the full 3-instruction computation instead of the one-line
-         * direct-address form.
-         */
-        if (peep_parse_ld_hl_0_to_255(lines[i], &imm) &&
-            i + 2 < nlines &&
-            eq(i + 1, "ld de,_g_board") &&
-            eq(i + 2, "add hl,de")) {
-            if (imm == 0)
-                sprintf(line, "ld hl,_g_board");
-            else
-                sprintf(line, "ld hl,_g_board+%d", imm);
-            replace1_tagged(i, line, "global_const_offset");
-            delete_n(i + 1, 2);
-            changed = 1;
-            if (i > 0)
-                --i;
-            continue;
-        }
-    }
-
-    return changed;
-}

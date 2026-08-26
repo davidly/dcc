@@ -1,0 +1,35 @@
+public _f
+_f:
+push ix
+ld ix,0
+add ix,sp
+ld hl,_arr
+push hl
+ld l,(ix+4)
+ld h,(ix+5)
+add hl,hl
+pop de
+add hl,de
+ld a,(hl)
+inc hl
+ld h,(hl)
+ld l,a
+ld (_gx),hl
+ld hl,_arr
+push hl
+ld l,(ix+4)
+ld h,(ix+5)
+add hl,hl
+pop de
+add hl,de
+ld a,(hl)
+inc hl
+ld h,(hl)
+ld l,a
+ld (_gy),hl
+pop ix
+ret
+_arr equ __bssb+0
+_gx equ __bssb+40
+_gy equ __bssb+42
+end
