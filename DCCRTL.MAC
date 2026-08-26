@@ -1222,8 +1222,8 @@ __bhf:
         ; colliding with __biosf's own truncated name. Same issue as
         ; __msf/__bhlf above.
 bioshl_core:
-        call    __bios_dispatch
-        ret
+        jp      __bios_dispatch         ; tail call: __bios_dispatch's own
+                                         ; ret returns straight to our caller
 
 ; __bios_dispatch: shared by bios_core/bioshl_core. Computes the jump-table
 ; entry address for fn (in C), loads dearg (in DE) into BC/DE/C, and jumps
@@ -8168,8 +8168,8 @@ apseek_write:
         ld      (hl),c
         inc     hl
         ld      (hl),b
-        call    __aplen
-        ret
+        jp      __aplen                 ; tail call: __aplen's own ret
+                                         ; returns straight to our caller
 
 apseek_setoff:
         call    __offp
@@ -8181,8 +8181,8 @@ apseek_setoff:
         ld      (hl),a
         inc     hl
         ld      (hl),a
-        call    __aplen
-        ret
+        jp      __aplen                 ; tail call: __aplen's own ret
+                                         ; returns straight to our caller
 
 ; Query BDOS fn 35 (compute file size) for __slot's FCB, convert the
 ; record count to a byte length, and store it in __fdlen[__slot]. Only
@@ -12783,8 +12783,8 @@ _scanf:
         inc     hl
         ld      d,(hl)                  ; DE = format
         ex      de,hl
-        call    __scan_run
-        ret
+        jp      __scan_run              ; tail call: __scan_run's own ret
+                                         ; returns straight to our caller
 
         public  _sscanf
 _sscanf:
@@ -12808,8 +12808,8 @@ _sscanf:
         inc     hl
         ld      d,(hl)                  ; DE = format
         ex      de,hl
-        call    __scan_run
-        ret
+        jp      __scan_run              ; tail call: __scan_run's own ret
+                                         ; returns straight to our caller
 
         public  _fscanf
         public  __scan_run
@@ -12835,8 +12835,8 @@ _fscanf:
         inc     hl
         ld      d,(hl)                  ; DE = format
         ex      de,hl
-        call    __scan_run
-        ret
+        jp      __scan_run              ; tail call: __scan_run's own ret
+                                         ; returns straight to our caller
 
 __scan_run:
         ld      (sc_fmt),hl
@@ -22459,8 +22459,8 @@ xsc_parse:
         call    __xwcp
         ld      de,006ch
         ld      hl,__xpbuf
-        call    __mkfcb
-        ret
+        jp      __mkfcb                 ; tail call: __mkfcb's own ret
+                                         ; returns straight to our caller
 
 ; __xclfb(DE=buf): zero 16 bytes at DE (for clearing default FCB slots)
 __xclfb:
