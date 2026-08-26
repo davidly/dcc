@@ -75,9 +75,6 @@ input lists.
 - `DCC_FORCE_STACK_CHECK` — Force `-fstack-check` on all builds
 - `DCC_FLOATIO` — Set to `1` to force `%f` support on every `printf`-family call
 - `DCC_LONGIO` — Set to `1` to force long-format support on every `printf`-family call
-- `DCC_ALLOW_UNDOCUMENTED_Z80` — Shell driver only: set to `1` to allow
-  dccpeep passes that use the Z80's undocumented IYH/IYL opcodes; with
-  `dccmake`, use `dcc-allow-undocumented-z80=true`
 - `DCC_USE_EMULATED_M80`, `DCC_USE_EMULATED_L80` — Set to `1` to select the
   real CP/M assembler or linker under `ntvcm`
 - `DCC_ARGS` — Extra whitespace-separated `dcc` options such as `-DNAME=1 -UOLD`
@@ -343,7 +340,6 @@ dccmake dcc-peep=false
 | `dcc-undefine` | none | Comma-separated names passed to `dcc` as `-U`; `dcc-undefines` is an alias |
 | `dcc-peep` | `true` | Run `dccpeep` after compiling each `.MAC` file |
 | `dcc-peep-debug` | `false` | Run `dccpeep` over full conservative `-g` output; use `dcc-debug=lines` for release-identical optimized code |
-| `dcc-allow-undocumented-z80` | `false` | Pass `-fundocumented-z80` to `dccpeep` |
 | `dcc-build-dir` | `build` | Artifact directory |
 | `dcc-runtime` | `DCC_RUNTIME`, local `DCCRTL.MAC`, or `DCCRTL.MAC` | Runtime source passed to `dccrtlstrip` |
 | `dcc-tool` | `DCC`, local `dcc`, or `dcc` | DCC compiler command |
@@ -362,7 +358,7 @@ variables before reading `dccmake.txt`: `DCC_FLOATIO`, `DCC_NO_FLOATIO`,
 `DCC_LONGIO`, `DCC_NO_LONGIO`, `DCC_HEXIO`, `DCC_NO_HEXIO`, `DCC_OCTIO`,
 `DCC_NO_OCTIO`, `DCC_FORCE_STACK_CHECK`, `DCC_NO_NARROW`, `DCC_DEBUG`,
 `DCC_DEBUG_LINES`,
-`DCC_PEEP_DEBUG`, `DCC_ALLOW_UNDOCUMENTED_Z80`, `DCC_USE_EMULATED_M80`, and
+`DCC_PEEP_DEBUG`, `DCC_USE_EMULATED_M80`, and
 `DCC_USE_EMULATED_L80`. File settings and then command-line settings override
 those defaults.
 
@@ -409,14 +405,13 @@ input order.
 invoked directly:
 
 ```sh
-dccpeep [-Ot|-Os] [-fundocumented-z80] [-fstats] input.mac output.mac
+dccpeep [-Ot|-Os] [-fstats] input.mac output.mac
 ```
 
 | Option | Purpose |
 | ------ | ------- |
 | `-Ot` | Optimize for execution time (default) |
 | `-Os` | Optimize for code size |
-| `-fundocumented-z80` | Allow passes that use undocumented Z80 opcodes |
 | `-fstats` | Print optimization statistics |
 
 ## Test Suite Runner (`runall.ps1`)

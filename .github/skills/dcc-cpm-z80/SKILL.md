@@ -196,8 +196,7 @@ build so you rarely call the stages directly (get each tool's own flags with
    faster code. `dccmake dcc-peep=true` (the default) runs it; `dcc-peep=false`
    skips it, giving a larger/slower `.COM`. dccpeep itself has `-Ot` (time,
    default) and `-Os` (size) modes, but `dccmake` always uses the default `-Ot`
-   — choose `-Os` only by running `dccpeep` by hand. `dcc-allow-undocumented-z80=true`
-   forwards `-fundocumented-z80`.
+   — choose `-Os` only by running `dccpeep` by hand.
 3. `dccrtlstrip` — the runtime stripper: reads the full runtime `DCCRTL.MAC` and
    writes a per-app `RTLMIN.MAC` with only the routines your program references,
    so the `.COM` isn't padded with the whole libc. It regenerates every build —

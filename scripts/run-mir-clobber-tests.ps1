@@ -239,107 +239,6 @@ function Assert-ForcedRegionalSafe(
     }
 }
 
-function Assert-IyModuleSafe(
-    [bool]$StackCheck,
-    [bool]$Peep
-) {
-    $configuration = @(
-        if ($StackCheck) { "stack" } else { "nostack" }
-        if ($Peep) { "peep" } else { "nopeep" }
-    ) -join "-"
-    $buildDir = Join-Path $tempRoot "iymodule-$configuration"
-    New-Item -ItemType Directory -Path $buildDir | Out-Null
-
-    $compileArguments = @("-stack", "512", "-I", ".")
-    if ($StackCheck) {
-        $compileArguments += "-fstack-check"
-    }
-    $compileArguments += @(
-        (Join-Path $fixtureRoot "iycaller.c"),
-        "-o",
-        (Join-Path $buildDir "CALLRAW.MAC")
-    )
-    $compile = Invoke-WithTimeout (Join-Path $repoRoot "dcc") `
-        $compileArguments $repoRoot 60
-    if ($compile.TimedOut -or $compile.ExitCode -ne 0) {
-        throw "iymodule caller failed to compile ($configuration):`n" +
-            $compile.Output
-    }
-    $callerRaw =
-        Get-Content -LiteralPath (Join-Path $buildDir "CALLRAW.MAC") -Raw
-    if (-not $callerRaw.Contains(";@dcc.reg claim=iy") -or
-        $callerRaw -notmatch '\bld\s+iy,5000\b') {
-        throw "iymodule caller did not keep 5000 in claimed IY " +
-            "($configuration)"
-    }
-
-    Copy-Item -LiteralPath (Join-Path $fixtureRoot "iycallee.mac") `
-        -Destination (Join-Path $buildDir "CALRAW.MAC")
-    if ($Peep) {
-        foreach ($module in @(
-            @("CALLRAW.MAC", "IYMOD.MAC"),
-            @("CALRAW.MAC", "IYCAL.MAC")
-        )) {
-            $optimize = Invoke-WithTimeout (
-                Join-Path $repoRoot "dccpeep") (
-                    @("-fundocumented-z80") + $module) $buildDir 60
-            if ($optimize.TimedOut -or $optimize.ExitCode -ne 0) {
-                throw "iymodule dccpeep failed ($configuration):`n" +
-                    $optimize.Output
-            }
-        }
-        $callee = Get-Content -LiteralPath (
-            Join-Path $buildDir "IYCAL.MAC") -Raw
-        if ($callee -notmatch 'byte_loop_counter_to_reg_iyl_abi' -or
-            $callee -notmatch 'push\s+iy' -or
-            $callee -notmatch 'pop\s+iy') {
-            throw "iymodule callee did not use the preserving IY rewrite " +
-                "($configuration)"
-        }
-    } else {
-        Copy-Item -LiteralPath (Join-Path $buildDir "CALLRAW.MAC") `
-            -Destination (Join-Path $buildDir "IYMOD.MAC")
-        Copy-Item -LiteralPath (Join-Path $buildDir "CALRAW.MAC") `
-            -Destination (Join-Path $buildDir "IYCAL.MAC")
-    }
-
-    $strip = Invoke-WithTimeout (Join-Path $repoRoot "dccrtlstrip") @(
-        "-r",
-        (Join-Path $repoRoot "DCCRTL.MAC"),
-        "-o",
-        (Join-Path $buildDir "RTLMIN.MAC"),
-        (Join-Path $buildDir "IYMOD.MAC"),
-        (Join-Path $buildDir "IYCAL.MAC")
-    ) $repoRoot 60
-    if ($strip.TimedOut -or $strip.ExitCode -ne 0) {
-        throw "iymodule runtime strip failed ($configuration):`n" +
-            $strip.Output
-    }
-    foreach ($module in @("RTLMIN", "IYCAL", "IYMOD")) {
-        $assemble = Invoke-WithTimeout (Join-Path $repoRoot "m80c") @(
-            "=$module.MAC", "/X", "/O", "/Z", "/L", "/C"
-        ) $buildDir 60
-        if ($assemble.TimedOut -or $assemble.ExitCode -ne 0) {
-            throw "iymodule $module assembly failed ($configuration):`n" +
-                $assemble.Output
-        }
-    }
-    $link = Invoke-WithTimeout (Join-Path $repoRoot "l80c") @(
-        "/P:100,RTLMIN,IYCAL,IYMOD,IYMOD/N/E/Y"
-    ) $buildDir 60
-    if ($link.TimedOut -or $link.ExitCode -ne 0) {
-        throw "iymodule link failed ($configuration):`n$($link.Output)"
-    }
-    $run = Invoke-WithTimeout $emulator @(
-        "-p", "-s:0", "IYMOD.COM"
-    ) $buildDir $RunTimeout
-    if ($run.TimedOut -or $run.ExitCode -ne 0 -or
-        -not $run.Output.Contains("iy-module=5018")) {
-        throw "iymodule emitted unsafe code ($configuration):`n" +
-            $run.Output
-    }
-}
-
 $fixtureRoot = Join-Path $repoRoot "tests/mir-clobber"
 $caseDefinitions = @(
     [pscustomobject]@{
@@ -539,14 +438,6 @@ try {
             }
         }
     }
-    if ($Cases.Count -eq 0 -or "iymodule" -in $Cases) {
-        foreach ($stackCheck in @($true, $false)) {
-            foreach ($peep in @($true, $false)) {
-                Assert-IyModuleSafe $stackCheck $peep
-            }
-        }
-    }
-
     Write-Host "MIR emission-clobber regressions passed" `
         -ForegroundColor Green
 } finally {

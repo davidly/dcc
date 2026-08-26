@@ -120,7 +120,6 @@ struct Config {
     int dcc_arg_count;
     int peep;
     int peep_debug;
-    int dccpeep_undoc;
     char build_dir[MAX_PATH_LEN];
     char dcc[MAX_PATH_LEN];
     char dccpeep[MAX_PATH_LEN];
@@ -619,7 +618,6 @@ static void init_config(struct Config *cfg)
      * conservative codegen into assembly optimization; dcc-debug=lines is the
      * release-identical mode for optimized source breakpoints and stepping. */
     cfg->peep_debug = getenv("DCC_PEEP_DEBUG") && !strcmp(getenv("DCC_PEEP_DEBUG"), "1");
-    cfg->dccpeep_undoc = getenv("DCC_ALLOW_UNDOCUMENTED_Z80") && !strcmp(getenv("DCC_ALLOW_UNDOCUMENTED_Z80"), "1");
     /* Native m80c is the default assembler (no Z80 emulation needed); set
      * DCC_USE_EMULATED_M80=1 to fall back to the real M80.COM under ntvcm,
      * e.g. to cross-check output or when m80c hasn't been built locally. */
@@ -864,14 +862,6 @@ static int apply_setting(struct Config *cfg, const char *raw_key, const char *va
         cfg->debug_lines = 0;
         return 1;
     }
-    if (!strcmp(key, "dcc-allow-undocumented-z80")) {
-        if (!parse_bool(value, &b)) {
-            fprintf(stderr, "invalid boolean for %s: %s\n", raw_key, value);
-            return 0;
-        }
-        cfg->dccpeep_undoc = b;
-        return 1;
-    }
     if (!strcmp(key, "dcc-build-dir")) {
         copy_text(cfg->build_dir, sizeof(cfg->build_dir), value);
         trim(cfg->build_dir);
@@ -1065,8 +1055,6 @@ static void print_help(void)
     printf("                                 Debug markers are retained/remapped, but full -g\n");
     printf("                                 still uses conservative compiler codegen. Use\n");
     printf("                                 dcc-debug=lines for release-identical optimized code\n");
-    printf("  dcc-allow-undocumented-z80=false|true|1|0\n");
-    printf("                                 pass -fundocumented-z80 to dccpeep; default false\n");
     printf("  dcc-build-dir=build            artifact directory; default build\n");
     printf("  dcc-use-emulated-m80=false|true|1|0\n");
     printf("                                 assemble with real M80.COM under ntvcm instead\n");
@@ -2159,9 +2147,6 @@ static int run_build(struct Config *cfg)
             }
             cmd_init(cmd, sizeof(cmd));
             if (!cmd_arg(cmd, sizeof(cmd), cfg->dccpeep)) return 0;
-            if (cfg->dccpeep_undoc) {
-                if (!cmd_arg(cmd, sizeof(cmd), "-fundocumented-z80")) return 0;
-            }
             if (!cmd_arg(cmd, sizeof(cmd), macs[i])) return 0;
             if (!cmd_arg(cmd, sizeof(cmd), tmp)) return 0;
             t0 = now_ms();

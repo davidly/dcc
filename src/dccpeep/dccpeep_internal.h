@@ -41,7 +41,6 @@
 
 typedef struct PeepOptions {
     int optimize_size;
-    int allow_undocumented_z80;
     int stats_enabled;
 } PeepOptions;
 
@@ -415,15 +414,8 @@ int is_label_referenced(const char *label);
 int peep_in_function_range(const char *func, int *startp, int *endp);
 int peep_range_has_debug_annotations(int start, int end);
 int pass_posfunc_b_cache(void);
-int pass_minmax_winner_result_no_temp(void);
-int pass_minmax_score_b_cache(void);
-int pass_minmax_loop_ctr_b(void);
-int pass_minmax_value_c(void);
-int pass_minmax_board_ptr_loop(void);
-int pass_minmax_byte_returns(void);
 int pass_minmax_pack_frame(void);
 int pass_minmax_pack_call(void);
-int pass_minmax_save_board_addr(void);
 int pass_reuse_board_addr_for_zero_store(void);
 int pass_minmax_elim_label_reload(void);
 int pass_winner_check_dec_a(void);
@@ -436,8 +428,6 @@ int pass_narrow_bc_loop_bound_to_reg_c(void);
 int pass_byte_loop_var_to_reg_c(void);
 int pass_byte_for_counter_to_reg_c(void);
 int pass_byte_for_counter_to_reg_e(void);
-int pass_byte_loop_counter_to_reg_iyl(void);
-int pass_byte_incr_loop_counter_to_reg_iyl(void);
 
 /* Compiler-tagged temporary spill passes (peep_pass_inline_temp.c). */
 int pass_inline_temp_spill_to_stack(void);

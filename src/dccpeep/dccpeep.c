@@ -34,8 +34,6 @@ typedef struct PeepPass {
     unsigned flags;
 } PeepPass;
 
-enum { PEEP_PASS_UNDOCUMENTED_Z80 = 1u << 0 };
-
 static int run_counted_pass(const char *name, int (*pass)(void))
 {
     int i;
@@ -76,18 +74,6 @@ static void report_stats(int iterations)
                 pass_stats[i].name, pass_stats[i].calls,
                 pass_stats[i].changes);
 }
-
-/* -fundocumented-z80: allow peephole passes that rely on undocumented Z80
- * opcodes (currently just the IYH/IYL half-register load/inc/dec forms
- * pass_byte_loop_counter_to_reg_iyl/pass_byte_incr_loop_counter_to_reg_iyl
- * use, wrapped in M80 macros since M80 has no native mnemonic for them -
- * see the macro prelude in main()). These opcodes are well-established
- * folklore on real NMOS Z80 silicon and its common clones, and verified
- * working under ntvcm, but are not part of the documented Z80 instruction
- * set, so they are opt-in and OFF by default. */
-
-
-
 
 
 /*
@@ -1417,14 +1403,14 @@ static int pass_ix_array_byte_addr(void)
 /*
  * IY is preserved by dcc-generated callees and the reviewed DCCRTL paths,
  * unlike BC which the codegen and runtime use constantly. That makes it a
- * second, near-unconditionally-safe register slot for
- * pass_byte_loop_counter_to_reg_iyl below - EXCEPT for
- * calls into another function in this SAME translation unit, which might
- * itself have one of its own loops promoted to IYL by this same pass and
- * would silently stomp this loop's live counter across the call. This scan
- * (run once, before the fixed-point pass loop) collects every function
- * entry-point label in the file so that pass can tell those calls apart
- * from RTL/library calls (whose reviewed paths preserve IY).
+ * near-unconditionally-safe register slot for a pass that wants to claim it
+ * across a call - EXCEPT for a call into another function in this SAME
+ * translation unit, which might itself have IY claimed by that same pass
+ * for its own, unrelated purpose and would silently stomp the caller's live
+ * value across the call. This scan (run once, before the fixed-point pass
+ * loop) collects every function entry-point label in the file so such a
+ * pass can tell those calls apart from RTL/library calls (whose reviewed
+ * paths preserve IY).
  *
  * Matches the two shapes dcc_func.c's emit_function_prologue emits:
  *   public NAME       (non-static)      ; static function ORIGNAME (static)
@@ -5141,68 +5127,6 @@ static int pass_call_hl_stack_roundtrip(void)
     }
 
     return changed;
-}
-
-static int pass_shrink_minmax_frame3_after_score_cache(void)
-{
-    int start;
-    int end;
-    int i;
-
-    if (!peep_in_function_range("_MinMax:", &start, &end))
-        return 0;
-    if (peep_range_has_debug_annotations(start, end))
-        return 0;
-
-    for (i = start; i < end; ++i) {
-        if (strstr(lines[i], "(ix-4)") != NULL)
-            return 0;
-    }
-
-    for (i = start; i + 2 < end; ++i) {
-        if (eq(i, "ld hl,-4") &&
-            eq(i + 1, "add hl,sp") &&
-            eq(i + 2, "ld sp,hl")) {
-            replace1_tagged(i, "ld hl,-3", "shrink_minmax_frame3");
-            return 1;
-        }
-    }
-
-    return 0;
-}
-
-
-/*
- * pass_shrink_minmax_frame2_after_loop_ctr_b:
- *
- * After pass_minmax_loop_ctr_b removes all (ix-3) references, the MinMax
- * frame only needs 2 bytes: (ix-1) = value, (ix-2) = pieceMove.
- * Shrink the allocation from ld hl,-3 to ld hl,-2.
- */
-static int pass_shrink_minmax_frame2_after_loop_ctr_b(void)
-{
-    int start, end, i;
-
-    if (!peep_in_function_range("_MinMax:", &start, &end))
-        return 0;
-    if (peep_range_has_debug_annotations(start, end))
-        return 0;
-
-    for (i = start; i < end; ++i) {
-        if (strstr(lines[i], "(ix-3)") != NULL)
-            return 0;
-    }
-
-    for (i = start; i + 2 < end; ++i) {
-        if (eq(i, "ld hl,-3") &&
-            eq(i + 1, "add hl,sp") &&
-            eq(i + 2, "ld sp,hl")) {
-            replace1_tagged(i, "ld hl,-2", "shrink_minmax_frame2");
-            return 1;
-        }
-    }
-
-    return 0;
 }
 
 /*
@@ -11742,26 +11666,16 @@ static int pass_walk_row_cached_float_index(void)
 
         /* IY is a single register: a call anywhere in this loop's body to
          * another function defined in this same file, which might itself
-         * have a loop promoted to IY (by this same pass or pass_byte_loop_
-         * counter_to_reg_iyl), would silently clobber this loop's live
-         * walking pointer across the call - the exact hazard scan_local_
-         * func_labels/is_local_func_label exist to catch (see
-         * pass_byte_loop_counter_to_reg_iyl's own identical check). An RTL
-         * call (e.g. __fmaf) is fine because reviewed DCCRTL paths preserve
-         * IY. */
+         * have a loop promoted to IY by this same pass, would silently
+         * clobber this loop's live walking pointer across the call - the
+         * exact hazard scan_local_func_labels/is_local_func_label exist to
+         * catch. An RTL call (e.g. __fmaf) is fine because reviewed DCCRTL
+         * paths preserve IY. */
         {
             int call_ok = 1;
             for (k = i + 1; k < loop_end && call_ok; ++k) {
                 char callee[128];
                 const char *p;
-                /* A nested loop already promoted to IYL (undocumented-Z80
-                 * mode only) inside this loop's own body is the same
-                 * collision one level down - same declines-outright
-                 * treatment pass_byte_loop_counter_to_reg_iyl gives it. */
-                if (strncmp(lines[k], "db 0FDh,", 8) == 0) {
-                    call_ok = 0;
-                    continue;
-                }
                 if (strncmp(lines[k], "call ", 5) != 0)
                     continue;
                 strip_peep_comment_copy(callee, lines[k]);
@@ -13012,8 +12926,6 @@ int main(int argc, char **argv)
             peep_context.options.optimize_size = 1;
         } else if (strcmp(argv[ai], "-Ot") == 0) {
             peep_context.options.optimize_size = 0;
-        } else if (strcmp(argv[ai], "-fundocumented-z80") == 0) {
-            peep_context.options.allow_undocumented_z80 = 1;
         } else if (strcmp(argv[ai], "-fstats") == 0) {
             peep_context.options.stats_enabled = 1;
         } else if (infile == NULL) {
@@ -13027,7 +12939,7 @@ int main(int argc, char **argv)
     }
     if (infile == NULL || outfile == NULL) {
         fprintf(stderr,
-            "usage: dccpeep [-Ot|-Os] [-fundocumented-z80] [-fstats] input.mac output.mac\n");
+            "usage: dccpeep [-Ot|-Os] [-fstats] input.mac output.mac\n");
         return 1;
     }
 
@@ -13035,12 +12947,10 @@ int main(int argc, char **argv)
     peep_report_register_directives();
     capture_original_extrns();
 
-    /* Needed by both pass_byte_loop_counter_to_reg_iyl (undocumented-Z80
-     * only, gated below) and pass_walk_row_cached_float_index (always on -
-     * it uses only standard, documented IY opcodes) - either way, a call to
-     * another function in this same file that itself gets a loop promoted
-     * to IY would silently stomp this one's live value if that collision
-     * were not checked; see scan_local_func_labels's own comment for the
+    /* Needed by pass_walk_row_cached_float_index: a call to another
+     * function in this same file that itself gets a loop promoted to IY
+     * would silently stomp this one's live value if that collision were
+     * not checked; see scan_local_func_labels's own comment for the
      * tests/too.c regression this exact check exists to prevent. */
     scan_local_func_labels();
 
@@ -13066,23 +12976,13 @@ int main(int argc, char **argv)
         { "pass_byte_cmp_push_pop_hl", pass_byte_cmp_push_pop_hl, 0 },
         { "pass_word_switch_cmp_avoid_push_pop", pass_word_switch_cmp_avoid_push_pop, 0 },
         { "pass_call_hl_stack_roundtrip", pass_call_hl_stack_roundtrip, 0 },
-        { "pass_minmax_winner_result_no_temp", pass_minmax_winner_result_no_temp, 0 },
-        { "pass_minmax_score_b_cache", pass_minmax_score_b_cache, 0 },
-        { "pass_minmax_save_board_addr", pass_minmax_save_board_addr, 0 },
         { "pass_elim_redundant_ld_a_reg", pass_elim_redundant_ld_a_reg, 0 },
         { "pass_dedup_ix_pair_reload_store", pass_dedup_ix_pair_reload_store, 0 },
         { "pass_minmax_elim_label_reload", pass_minmax_elim_label_reload, 0 },
         { "pass_elim_c_reload_after_store", pass_elim_c_reload_after_store, 0 },
         { "pass_and1_ix_to_bit", pass_and1_ix_to_bit, 0 },
         { "pass_winner_check_dec_a", pass_winner_check_dec_a, 0 },
-        { "pass_shrink_minmax_frame3_after_score_cache", pass_shrink_minmax_frame3_after_score_cache, 0 },
-        { "pass_minmax_loop_ctr_b", pass_minmax_loop_ctr_b, 0 },
-        { "pass_shrink_minmax_frame2_after_loop_ctr_b", pass_shrink_minmax_frame2_after_loop_ctr_b, 0 },
-        { "pass_minmax_value_c", pass_minmax_value_c, 0 },
-        { "pass_minmax_board_ptr_loop", pass_minmax_board_ptr_loop, 0 },
-        { "pass_minmax_byte_returns", pass_minmax_byte_returns, 0 },
         { "pass_minmax_pack_frame", pass_minmax_pack_frame, 0 },
-        { "pass_minmax_pack_call", pass_minmax_pack_call, 0 },
         { "pass_store_l_reload_a", pass_store_l_reload_a, 0 },
         { "pass_reuse_board_addr_for_zero_store", pass_reuse_board_addr_for_zero_store, 0 },
         { "pass_array_base_push_to_de", pass_array_base_push_to_de, 0 },
@@ -13120,8 +13020,6 @@ int main(int argc, char **argv)
         { "pass_cpir", pass_cpir, 0 },
         { "pass_byte_global_ptr_array_addr", pass_byte_global_ptr_array_addr, 0 },
         { "pass_byte_ix_predec_zero_test", pass_byte_ix_predec_zero_test, 0 },
-        { "pass_byte_loop_counter_to_reg_iyl", pass_byte_loop_counter_to_reg_iyl, PEEP_PASS_UNDOCUMENTED_Z80 },
-        { "pass_byte_incr_loop_counter_to_reg_iyl", pass_byte_incr_loop_counter_to_reg_iyl, PEEP_PASS_UNDOCUMENTED_Z80 },
         { "pass_ix_pair_load_to_de", pass_ix_pair_load_to_de, 0 },
         { "pass_bc_pair_load_to_de", pass_bc_pair_load_to_de, 0 },
         { "pass_ix_byte_load_to_de", pass_ix_byte_load_to_de, 0 },
@@ -13176,9 +13074,6 @@ int main(int argc, char **argv)
         changed = 0;
         for (pass_index = 0; pass_index < fixed_pass_count; ++pass_index) {
             const PeepPass *pass = &fixed_point_passes[pass_index];
-            if ((pass->flags & PEEP_PASS_UNDOCUMENTED_Z80) &&
-                !peep_context.options.allow_undocumented_z80)
-                continue;
             if (run_counted_pass(pass->name, pass->run))
                 changed = 1;
         }

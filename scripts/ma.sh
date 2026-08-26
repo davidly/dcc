@@ -53,15 +53,6 @@ dcc options controlled by this helper:
     -o <file>                   managed by dcc-ma
     input.c                     selected by name or --source-path
 
-dccpeep options controlled by this helper:
-    dccpeep option               how to set it
-    -fundocumented-z80            DCC_ALLOW_UNDOCUMENTED_Z80=1; off by default. Allows
-                                   peephole passes that rely on undocumented Z80 opcodes
-                                   (IYH/IYL register promotion for byte loop counters).
-                                   These are well-established on real NMOS Z80 silicon
-                                   and its common clones, and verified under ntvcm, but
-                                   are not part of the documented Z80 instruction set.
-
 dcc options not suitable for dcc-ma:
     -c, -module                 use a manual dcc/M80/L80 pipeline for multi-module builds
     -v, --version, -h, --help   run dcc directly
@@ -430,11 +421,7 @@ run_one() {
     "$(resolve_command "$DCC")" "${dcc_args[@]}"
 
     if [ "$use_peep" -eq 1 ]; then
-        local dccpeep_args=()
-        if [ "${DCC_ALLOW_UNDOCUMENTED_Z80:-0}" = "1" ]; then
-            dccpeep_args[${#dccpeep_args[@]}]="-fundocumented-z80"
-        fi
-        "$(resolve_command "$DCCPEEP")" "${dccpeep_args[@]+${dccpeep_args[@]}}" "$app_mac" "$peep_tmp"
+        "$(resolve_command "$DCCPEEP")" "$app_mac" "$peep_tmp"
         mv -f "$peep_tmp" "$app_mac"
     fi
 
