@@ -7762,6 +7762,13 @@ static int mir_is_profiled_boolean_reachable_join(void)
     return calls == 10;
 }
 
+static int mir_object_value_is_defined_at_or_after(int value, int instruction)
+{
+    const struct MirInsn *definition = mir_definition(value);
+
+    return definition != NULL && definition >= &mir.insns[instruction];
+}
+
 /* Promote scalar object loads when every CFG predecessor agrees on the same
  * virtual value. Ambiguous joins and values crossing an opaque barrier remain
  * explicit memory operations; this prototype deliberately does not insert
@@ -7890,6 +7897,13 @@ static int mir_promote_objects(void)
         if (insn->opcode != MIR_OBJECT_MERGE || insn->object < 0)
             continue;
         reaching = in_state[(size_t)i * mir.object_count + insn->object];
+        /* A value learned only from a loop backedge does not dominate an
+         * earlier use in the loop.  The entry path may still carry the object
+         * in memory even when the fixed-point state collapsed UNREACHED into
+         * the backedge value (GCC torture 961004-1). */
+        if (reaching >= 0 &&
+            mir_object_value_is_defined_at_or_after(reaching, i))
+            reaching = MIR_OBJECT_AMBIGUOUS;
         if (reaching == MIR_OBJECT_AMBIGUOUS &&
             mir_try_make_object_phi(
                 i, insn->object, out_state, reachable)) {
@@ -7909,6 +7923,9 @@ static int mir_promote_objects(void)
             if (insn->opcode != MIR_LOAD || insn->object < 0)
                 continue;
             reaching = in_state[(size_t)i * mir.object_count + insn->object];
+            if (reaching >= 0 &&
+                mir_object_value_is_defined_at_or_after(reaching, i))
+                reaching = MIR_OBJECT_AMBIGUOUS;
             if (reaching == MIR_OBJECT_AMBIGUOUS &&
                 mir_try_make_object_phi(
                     i, insn->object, out_state, reachable)) {

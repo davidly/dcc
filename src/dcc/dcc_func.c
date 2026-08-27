@@ -3394,6 +3394,38 @@ void parse_function_or_global(int base_type)
                 s->is_volatile = object_is_volatile;
                 s->pointee_is_volatile = pointee_is_volatile;
                 copy_funcptr_prototype_to_sym(s, direct_funcptr_decl);
+                /* Keep the same array-shape metadata as a definition.  The
+                 * expression parser needs it immediately for declarations
+                 * such as `extern fn_ptr dispatch[];`: without is_array and
+                 * elem_size, dispatch[i] is lowered as indexing the pointed-to
+                 * function's return type (void in particular has size zero),
+                 * rather than indexing a table of two-byte function pointers.
+                 * A later definition cannot repair functions already parsed. */
+                if (dim_count > 0 || arrlen || total_count == 0) {
+                    s->is_array = 1;
+                    s->array_len = arrlen;
+                    s->dim_count = dim_count;
+                    for (i = 0; i < MAX_ARRAY_DIMS; ++i)
+                        s->dims[i] = (i < dim_count) ? dims[i] : 0;
+
+                    if (dim_count > 1) {
+                        if (!target_size_multiply(inner_count, base_size,
+                                                  &s->elem_size))
+                            s->elem_size = 0;
+                    } else
+                        s->elem_size = base_size;
+                    if (s->elem_size <= 0)
+                        s->elem_size = 2;
+                } else if (g_ptr_array_dim_count > 0) {
+                    int pi;
+                    s->elem_size = g_ptr_array_elem_size;
+                    s->dim_count = g_ptr_array_dim_count;
+                    for (pi = 0; pi < MAX_ARRAY_DIMS; ++pi)
+                        s->dims[pi] = pi < g_ptr_array_dim_count
+                            ? g_ptr_array_dims[pi] : 0;
+                }
+                g_ptr_array_dim_count = 0;
+                g_ptr_array_elem_size = 0;
                 if (!already_declared && !asm_name_is_internal_public(name))
                     s->needs_extrn = 1;
                 else if (asm_name_is_internal_public(name))
