@@ -1,10 +1,9 @@
 /*
- * tcapmbr.c - KNOWN BUG, not yet fixed (tracked via "ignore" in
- * tests/_test_overrides.json - remove that flag and give this a real
- * baseline once fixed).
+ * tcapmbr.c - regression coverage for chained assignment through pointer
+ * struct members.
  *
  * A chained assignment through two dot-accessed pointer struct members
- * fails to compile with "error DCC-E1002: unsupported expression
+ * used to fail to compile with "error DCC-E1002: unsupported expression
  * statement" - plain int members or a single (non-chained) pointer
  * assignment both compile fine; it's specifically two pointer members of
  * the same struct instance assigned in one chained expression. Found via

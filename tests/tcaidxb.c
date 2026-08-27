@@ -1,10 +1,9 @@
 /*
- * tcaidxb.c - KNOWN BUG, not yet fixed (tracked via "ignore" in
- * tests/_test_overrides.json - remove that flag and give this a real
- * baseline once fixed).
+ * tcaidxb.c - regression coverage for compound assignment to a narrow
+ * array element.
  *
- * A compound-assignment operator on an unsigned char array element fails
- * to compile with "error DCC-E1002: unsupported expression statement" -
+ * A compound-assignment operator on an unsigned char array element used to
+ * fail to compile with "error DCC-E1002: unsupported expression statement" -
  * plain scalar variables and int arrays are both fine; it's specifically
  * a compound-assign target that is a narrow (char-sized) array element.
  * Reproduces with both |= and +=. Found via SDCC's regression test

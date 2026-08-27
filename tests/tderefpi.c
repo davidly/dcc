@@ -1,11 +1,11 @@
 /*
- * tderefpi.c - KNOWN BUG, not yet fixed (tracked via "ignore" in
- * tests/_test_overrides.json - remove that flag and give this a real
- * baseline once fixed).
+ * tderefpi.c - regression coverage for a dereferenced post-incremented
+ * double-indirect pointer.
  *
  * Dereferencing a post-incremented double-indirect pointer, when the
- * dereferenced VALUE is used, fails to compile with "error DCC-E1002:
- * unsupported return expression" (the specific wording depends on the
+ * dereferenced VALUE is used, used to fail to compile with
+ * "error DCC-E1002: unsupported return expression" (the specific wording
+ * depends on the
  * surrounding context - an assignment RHS reports "unsupported
  * expression statement" instead): `*(*x)++`. `(*x)++;` alone (side
  * effect only, value discarded) works, and a single-level `c = *p++;`

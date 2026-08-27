@@ -1,11 +1,10 @@
 /*
- * tfwdtag.c - KNOWN BUG, not yet fixed (tracked via "ignore" in
- * tests/_test_overrides.json - remove that flag and give this a real
- * baseline once fixed).
+ * tfwdtag.c - regression coverage for forward references between locally
+ * tagged structs in a nested block.
  *
  * Two locally-tagged structs, declared in a block nested one level
  * beyond function scope, with a forward-reference pointer from the
- * first tag to the second and a write through that pointer, crashes the
+ * first tag to the second and a write through that pointer, used to crash the
  * compiler with "dcc: fatal: MIR emission is required" - an internal
  * invariant failure, not a clean diagnostic. All three ingredients (the
  * extra block nesting, the two locally-tagged structs with a

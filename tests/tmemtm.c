@@ -1,10 +1,9 @@
 /*
- * tmemtm.c - KNOWN BUG, not yet fixed (tracked via "ignore" in
- * tests/_test_overrides.json - remove that flag and give this a real
- * baseline once fixed).
+ * tmemtm.c - regression coverage for narrowing assignment to a struct
+ * member through a pointer.
  *
  * Assigning a wider integer parameter into a narrower struct member
- * through a pointer dereference fails to compile with "error DCC-E1002:
+ * through a pointer dereference used to fail to compile with "error DCC-E1002:
  * unsupported expression statement" - not a size/complexity threshold of
  * the enclosing struct (a 2-field struct reproduces it identically);
  * matching types (both int, or both long) compile fine. Found via SDCC's

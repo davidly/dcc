@@ -1,17 +1,16 @@
 /*
- * twhcomma.c - KNOWN BUG, not yet fixed (tracked via "ignore" in
- * tests/_test_overrides.json - remove that flag and give this a real
- * baseline once fixed).
+ * twhcomma.c - regression coverage for large comma expressions in while
+ * loop bodies.
  *
  * A while loop whose body is a single expression statement built from
- * many comma-separated sub-expressions fails to compile with "error
- * DCC-E1002: unsupported while condition or body" once past a fixed
+ * many comma-separated sub-expressions used to fail to compile with
+ * "error DCC-E1002: unsupported while condition or body" once past a fixed
  * capacity in the while-body fast path. This reproduces SDCC's
  * regression test gcc-torture-execute-pr28982a.c's MULTI()-macro shape
  * directly (each of NVARS unrolled iterations contributes two
  * comma-joined sub-expressions - a float accumulate and a pointer
- * advance): NVARS=16 (32 comma terms) compiles, NVARS=17 (34 terms),
- * used here, fails.
+ * advance): NVARS=16 (32 comma terms) compiled, while NVARS=17 (34 terms),
+ * used here, failed.
  */
 #include <stdio.h>
 

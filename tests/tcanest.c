@@ -1,10 +1,9 @@
 /*
- * tcanest.c - KNOWN BUG, not yet fixed (tracked via "ignore" in
- * tests/_test_overrides.json - remove that flag and give this a real
- * baseline once fixed).
+ * tcanest.c - regression coverage for chained assignment through a
+ * struct-pointer member in a nested block.
  *
- * A chained assignment through a struct-pointer member fails to compile
- * with "error DCC-E0920: incompatible integer to pointer assignment"
+ * A chained assignment through a struct-pointer member used to fail to
+ * compile with "error DCC-E0920: incompatible integer to pointer assignment"
  * when the assignment target's intermediate variable is declared inside
  * a block nested one level deeper than the function body. The identical
  * code with that variable declared at function-top scope compiles fine -

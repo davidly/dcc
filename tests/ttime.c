@@ -11,20 +11,16 @@
  * the test executes under, not of the RTL implementation itself.
  *
  * Each area of coverage below lives in its own function partly for
- * readability, but mainly because this file is a known trigger for a real
- * dccpeep miscompilation: with peephole optimization on, one of the mktime()
- * normalization checks comes back wrong, and splitting the code into
- * separate functions (tried first) did NOT avoid it - the corruption
- * persists across function-call boundaries, not just within one function's
- * own code shape. tests/_test_overrides.json therefore forces this app to
- * build with dcc-peep=false ("ttime": "dcc_args": "dcc-peep=false").
+ * readability, but also to retain coverage for a former dccpeep
+ * miscompilation. With peephole optimization on, one of the mktime()
+ * normalization checks used to come back wrong; splitting the code into
+ * separate functions did not avoid it, showing that the corruption persisted
+ * across function-call boundaries rather than depending only on one
+ * function's code shape.
  *
- * Root cause: src/dccpeep/peep_pass_once.c's try_subtract_one_at() - see
- * the KNOWN BUG comment on that function for the full diagnosis. Already
- * fixed on the perf/unified-regalloc branch (confirmed empirically); once
- * that branch merges, drop the dcc-peep=false override above and confirm
- * this file passes with peephole enabled again. This affects any program
- * built normally (peephole on, the default), not just this test.
+ * The root cause was src/dccpeep/peep_pass_once.c's try_subtract_one_at().
+ * The test now passes with the default peephole optimization enabled, so no
+ * dcc-peep override is needed.
  *
  * Host validation of this whole file is skipped (tests/_test_overrides.json's
  * "host": true on "ttime"): dcc's RTL gmtime()/localtime()/asctime()/ctime()

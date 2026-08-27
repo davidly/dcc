@@ -1,10 +1,9 @@
 /*
- * tpostai.c - KNOWN BUG, not yet fixed (tracked via "ignore" in
- * tests/_test_overrides.json - remove that flag and give this a real
- * baseline once fixed).
+ * tpostai.c - regression coverage for using the value of a post-incremented
+ * pointer-array element.
  *
- * Using the VALUE of a post-increment on a pointer-array element fails
- * to compile with "error DCC-E1002: unsupported expression statement" -
+ * Using the VALUE of a post-increment on a pointer-array element used to
+ * fail to compile with "error DCC-E1002: unsupported expression statement" -
  * `(arr[i])++;` alone (for its side effect only, value discarded)
  * compiles fine; assigning that expression's value to something is what
  * trips it. No struct is needed to reproduce it. Found via SDCC's

@@ -1,11 +1,11 @@
 /*
- * tginitu.c - KNOWN BUG, not yet fixed (tracked via "ignore" in
- * tests/_test_overrides.json - remove that flag and give this a real
- * baseline once fixed).
+ * tginitu.c - regression coverage for leading unary operators in global
+ * scalar constant initializers.
  *
  * A global scalar initializer whose constant expression begins with '~'
- * or '!' fails to compile with "error DCC-E0902: constant initializer
- * expected" - '-' and '+' both work fine as a leading unary operator.
+ * or '!' used to fail to compile with
+ * "error DCC-E0902: constant initializer expected" - '-' and '+' both
+ * worked fine as a leading unary operator.
  * parse_global_init_atom's entry gate (dcc_global_init.c) only allows
  * {number, char literal, '-', '+', '(', sizeof} to start the constant-
  * expression path; '~'/'!' are simply missing from that list even though
