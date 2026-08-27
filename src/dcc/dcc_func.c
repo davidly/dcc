@@ -2431,6 +2431,35 @@ void scan_local_decl_after_type(int base)
         if (arrlen == 0 && g_typedef_array_len > 0) {
             arrlen = g_typedef_array_len;
             total_elems = g_typedef_array_len;
+        } else if (g_last_array_dim_count > 0 && g_typedef_array_len > 0 &&
+                   g_last_array_dim_count < MAX_ARRAY_DIMS) {
+            /* `ARR2 table[2]` composes the typedef's own array length as an
+             * extra trailing dimension - see the identical composition in
+             * parse_function_or_global (dcc_func.c) and
+             * gen_local_decl_after_type (dcc_decl.c), which must reach the
+             * same conclusion for the codegen pass. */
+            g_last_array_dims[g_last_array_dim_count++] = g_typedef_array_len;
+            if (target_size_multiply(arrlen, g_typedef_array_len, &arrlen))
+                total_elems = arrlen;
+            else
+                error_here("object size exceeds 16-bit address space");
+            /* current_field_array_elem_size (-> Sym.elem_size) was computed by
+             * parse_array_declarator_dims from only this declarator's OWN
+             * dims, before the typedef's dimension was appended above; redo
+             * it now as the stride across every dim past the first, or the
+             * first-dimension row stride stays too narrow (miscomputed as the
+             * bare element size instead of the whole row) even though
+             * dim_count/dims are now correct. */
+            {
+                int inner_stride = 1;
+                int elem_bytes = type_size(type);
+                int di;
+                if (elem_bytes <= 0) elem_bytes = 2;
+                for (di = 1; di < g_last_array_dim_count; ++di)
+                    if (g_last_array_dims[di] > 0)
+                        inner_stride *= g_last_array_dims[di];
+                current_field_array_elem_size = inner_stride * elem_bytes;
+            }
         }
 
         if (!g_decl.is_volatile &&
@@ -2602,6 +2631,29 @@ void scan_static_local_decl_after_type(int base)
         }
         if (arrlen == 0 && g_typedef_array_len > 0)
             arrlen = g_typedef_array_len;
+        else if (g_last_array_dim_count > 0 && g_typedef_array_len > 0 &&
+                 g_last_array_dim_count < MAX_ARRAY_DIMS) {
+            /* `ARR2 table[2]` composes the typedef's own array length as an
+             * extra trailing dimension - see the identical composition in
+             * parse_function_or_global and scan_local_decl_after_type. */
+            g_last_array_dims[g_last_array_dim_count++] = g_typedef_array_len;
+            if (!target_size_multiply(arrlen, g_typedef_array_len, &arrlen))
+                error_here("object size exceeds 16-bit address space");
+            /* current_field_array_elem_size (-> Sym.elem_size) reflected only
+             * this declarator's own dims; redo it as the stride across every
+             * dim past the first now that the typedef's dimension is appended
+             * - see the identical fixup in scan_local_decl_after_type. */
+            {
+                int inner_stride = 1;
+                int elem_bytes = type_size(type);
+                int di;
+                if (elem_bytes <= 0) elem_bytes = 2;
+                for (di = 1; di < g_last_array_dim_count; ++di)
+                    if (g_last_array_dims[di] > 0)
+                        inner_stride *= g_last_array_dims[di];
+                current_field_array_elem_size = inner_stride * elem_bytes;
+            }
+        }
 
         bytes = type_size(type);
         if (arrlen > 0)
@@ -3302,6 +3354,19 @@ void parse_function_or_global(int base_type)
                 total_count = g_typedef_array_len;
                 dim_count = 1;
                 dims[0] = g_typedef_array_len;
+            } else if (dim_count > 0 && g_typedef_array_len > 0 &&
+                       dim_count < MAX_ARRAY_DIMS) {
+                /* `ARR2 table[2]` where `typedef T ARR2[N]` composes the
+                 * typedef's own array length as an extra trailing dimension,
+                 * so the declaration behaves exactly like `T table[2][N]` (a
+                 * typedef name is just another spelling of its type - C89
+                 * 6.5.6).  Without this the typedef's dimension is silently
+                 * dropped and only this declarator's own `[2]` survives. */
+                dims[dim_count++] = g_typedef_array_len;
+                if (!target_size_multiply(total_count, g_typedef_array_len, &total_count)) {
+                    error_here("object size exceeds 16-bit address space");
+                    total_count = 0;
+                }
             }
 
             inner_count = 1;
