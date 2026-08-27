@@ -208,13 +208,6 @@
     { "name": "tc99apar", "requires-non-msvc-host-compiler": true },
     { "name": "tpfinf", "requires-non-msvc-host-compiler": true, "requires-non-macos-host-compiler": true },
     { "name": "ttrace", "ignore": true },
-    { "name": "tcanest", "ignore": true },
-    { "name": "tmemtm", "ignore": true },
-    { "name": "tcapmbr", "ignore": true },
-    { "name": "tcaidxb", "ignore": true },
-    { "name": "tcalsuf", "ignore": true },
-    { "name": "tpostai", "ignore": true },
-    { "name": "tderefpi", "ignore": true },
     { "name": "texecdp", "stack_size": 2048 },
     { "name": "texargs", "stack_size": 1024,
       "extra_scenarios": [

@@ -322,6 +322,10 @@ static int ast_expr_base_ident_unresolved(const struct AstNode *n)
         switch (n->kind) {
         case AST_INDEX:
         case AST_MEMBER:
+        case AST_ASSIGN:
+            /* A chained assignment `a = y->b2` yields a's value/type (see
+             * ast_value_is_plain_int's AST_ASSIGN case), so its base
+             * identifier is the assignment's own lhs. */
             n = n->a;
             break;
         case AST_UNARY:

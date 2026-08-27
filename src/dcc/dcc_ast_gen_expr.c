@@ -3131,6 +3131,31 @@ static void gen_assign_ident_compound_ast(const struct AstNode *n, struct Sym *s
         return;
     }
 
+    /* A byte-sized IX-direct bitwise compound-assign whose rhs is a constant
+     * integer literal loads the literal's value directly instead of routing
+     * it through ast_gen_expr/common_arith_type - an `L`-suffixed literal
+     * (e.g. `a |= 0xFFL;`) is TYPE_LONG, which would otherwise promote the
+     * combine to long arithmetic that the 16-bit HL/DE registers here
+     * cannot represent. Only the literal's value matters: &/|/^ truncate
+     * the same way regardless of the operand's nominal width. */
+    if (sym_can_ix_direct(s) && type_size(s->type) == 1 &&
+        n->b->kind == AST_INT_LIT &&
+        (n->op == TOK_ANDEQ || n->op == TOK_OREQ || n->op == TOK_XOREQ)) {
+        if (n->op == TOK_ANDEQ)
+            binop = '&';
+        else if (n->op == TOK_OREQ)
+            binop = '|';
+        else
+            binop = '^';
+        emit_load_sym_value_direct(s);
+        emit_ld_de_const(n->b->ival & 255);
+        gen_binop_typed(binop, s->type);
+        emit_store_hl_to_sym_direct(s);
+        g_expr.type = s->type;
+        g_expr.long_from16 = 0;
+        return;
+    }
+
     if (n->op == TOK_SHLEQ || n->op == TOK_SHREQ) {
         emit_load_sym_value_direct(s);
         emit("\tpush hl\n");
@@ -5323,6 +5348,16 @@ void gen_pointer_expr_ast(const struct AstNode *n, int *out_type,
         if (n->a->kind == AST_MEMBER) {
             int val_type;
             gen_member_addr_ast(n->a, &val_type);
+            gen_post_update_from_addr(val_type, n->op);
+            *out_type = val_type;
+        } else if (n->a->kind == AST_INDEX) {
+            int val_type;
+            gen_index_addr_ast(n->a, &val_type);
+            gen_post_update_from_addr(val_type, n->op);
+            *out_type = val_type;
+        } else if (n->a->kind == AST_UNARY && n->a->op == '*') {
+            int val_type;
+            gen_deref_addr_ast(n->a, &val_type);
             gen_post_update_from_addr(val_type, n->op);
             *out_type = val_type;
         } else {
