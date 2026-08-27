@@ -1219,6 +1219,26 @@ int ast_pointer_expr_type(const struct AstNode *n, int *out_type,
             *out_no_deref = 0;
             return 1;
         }
+        if (n->a->kind == AST_INDEX) {
+            int elem_type;
+            if (!ast_index_lvalue_elem_type(n->a, &elem_type))
+                return 0;
+            if (type_ptr_depth(elem_type) <= 0 || type_size(elem_type) != 2)
+                return 0;
+            *out_type = elem_type;
+            *out_no_deref = 0;
+            return 1;
+        }
+        if (n->a->kind == AST_UNARY && n->a->op == '*') {
+            int deref_type;
+            if (!ast_deref_lvalue_type(n->a, &deref_type))
+                return 0;
+            if (type_ptr_depth(deref_type) <= 0 || type_size(deref_type) != 2)
+                return 0;
+            *out_type = deref_type;
+            *out_no_deref = 0;
+            return 1;
+        }
         if (n->a->kind != AST_IDENT)
             return 0;
         s = find_sym(n->a->sval);

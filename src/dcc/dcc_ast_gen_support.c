@@ -563,7 +563,7 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                     return 0;
                 if (type_size(elem) == 1 && base->is_array &&
                     (base->storage == SC_GLOBAL || base->storage == SC_EXTERN))
-                    return expr_result_dead && n->op == '=';
+                    return expr_result_dead && (n->op == '=' || is_compound);
             } else if (n->a->a->kind == AST_MEMBER) {
                 if (ast_member_plain_array_field_elem_type(n->a->a, &elem)) {
                     if (!ast_value_is_plain_int(n->b))
@@ -631,8 +631,15 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                     return ast_value_is_plain_int(n->b);
                 return 0;
             }
-            if (!ast_value_is_plain_int(n->b))
-                return 0;
+            if (!ast_value_is_plain_int(n->b)) {
+                /* A long-word rhs narrows to a size-2 plain-int field by
+                 * storing only its low word - the same fallback the plain
+                 * identifier lvalue case below already applies. */
+                if (!(n->op == '=' && type_size(field_type) == 2 &&
+                      ast_value_is_long_word(n->b)))
+                    return 0;
+                return 1;
+            }
             if (type_size(field_type) == 1)
                 return 1;
             if (type_size(field_type) != 2)
@@ -811,6 +818,18 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
         }
         if (type_size(s->type) == 1 && n->op == '=' &&
             n->b->kind == AST_CALL && ast_value_is_long_word(n->b))
+            return 1;
+        /* A byte-sized ix-direct bitwise compound-assign with a constant
+         * integer literal rhs (e.g. `a |= 0xFFL;`) accepts the literal
+         * regardless of its own declared type - only its value matters
+         * since &/|/^ truncate the same way at 8, 16, or 32 bits, and
+         * gen_assign_ident_compound_ast loads the literal's value directly
+         * rather than through ast_gen_expr's normal (width-respecting)
+         * lowering.  An `L`-suffixed literal is TYPE_LONG, which
+         * ast_value_is_plain_int below always declines. */
+        if (sym_can_ix_direct(s) && type_size(s->type) == 1 &&
+            (n->op == TOK_ANDEQ || n->op == TOK_OREQ || n->op == TOK_XOREQ) &&
+            n->b->kind == AST_INT_LIT)
             return 1;
         if (!ast_value_is_plain_int(n->b))
             return 0;
@@ -1627,6 +1646,13 @@ int ast_value_is_pointer_word(const struct AstNode *n)
                (ast_index_2d_array_elem_type(n, &elem_type) &&
                 type_ptr_depth(elem_type) > 0);
     }
+    case AST_ASSIGN:
+        /* A chained assignment `p = q = expr` yields the value just stored
+         * into its own lhs - mirrors ast_value_is_plain_int's AST_ASSIGN
+         * case, which already does this for the plain-int sibling. Without
+         * this, an inner pointer-valued chained assignment (`p.next = p.end
+         * = y;`) has no way to be recognised as a pointer-word rhs. */
+        return ast_gen_supported(n) && ast_value_is_pointer_word(n->a);
     default:
         return 0;
     }
