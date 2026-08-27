@@ -11,6 +11,11 @@ extern "C"
 #include <cstdio>
 #include <cstring>
 
+#ifndef _WIN32
+#include <sys/wait.h>
+#include <unistd.h>
+#endif
+
 #if TRACK_Z80_R_REGISTER || TRACK_Z80_MEMPTR
 #include "x80.hxx"
 #endif
@@ -34,7 +39,6 @@ static void no_port_output(uint8_t port, uint8_t data)
     last_output_port = port;
     last_output_data = data;
 }
-
 static void raise_interrupt_on_poll(void *context)
 {
     interrupt_controller_raise(*static_cast<interrupt_provider_id_t *>(context));
@@ -379,6 +383,88 @@ int main(void)
     assert(cpu.registers.pc == 0x0786);
     assert(cpu.registers.sp == 0x8123);
 
+    // DD/FD-prefixed opcodes that don't reference H, L, or (HL) execute
+    // exactly as if unprefixed (the prefix is simply wasted). This was
+    // previously unimplemented and aborted the host process; regression
+    // covers the general fallback plus two related pre-existing mask bugs
+    // that were found and fixed alongside it.
+    reset_at(&cpu, 0x0790, 0xa000);
+    memory[0x0790] = 0xfd; // FD 15: DD/FD-prefixed DEC D (no H/L reference)
+    memory[0x0791] = 0x15;
+    cpu.registers.de = 0x0500;
+    z80_execute_instructions(&cpu, 1);
+    assert(cpu.registers.pc == 0x0792);
+    assert((cpu.registers.de >> 8) == 0x04);
+
+    // LXI B (0x01), PUSH BC, POP DE: none reference H/L
+    reset_at(&cpu, 0x07a0, 0xa000);
+    memory[0x07a0] = 0xdd; memory[0x07a1] = 0x01; memory[0x07a2] = 0x34; memory[0x07a3] = 0x12; // DD 01 34 12: LXI B,1234h
+    memory[0x07a4] = 0xdd; memory[0x07a5] = 0xc5; // DD C5: PUSH BC
+    memory[0x07a6] = 0xdd; memory[0x07a7] = 0xd1; // DD D1: POP DE
+    z80_execute_instructions(&cpu, 3);
+    assert(cpu.registers.pc == 0x07a8);
+    assert(cpu.registers.bc == 0x1234);
+    assert(cpu.registers.de == 0x1234);
+    assert(cpu.registers.sp == 0xa000);
+
+    // Conditional jump
+    reset_at(&cpu, 0x07b0, 0xa000);
+    cpu.registers.af = 0x0040; // Z flag set
+    memory[0x07b0] = 0xfd; memory[0x07b1] = 0xca; memory[0x07b2] = 0x00; memory[0x07b3] = 0x08; // FD CA 0000 0800: JZ 0800h
+    z80_execute_instructions(&cpu, 1);
+    assert(cpu.registers.pc == 0x0800);
+
+    // CALL/RET
+    reset_at(&cpu, 0x0810, 0xa000);
+    memory[0x0810] = 0xdd; memory[0x0811] = 0xcd; memory[0x0812] = 0x00; memory[0x0813] = 0x09; // DD CD 0000 0900: CALL 0900h
+    memory[0x0900] = 0xfd; memory[0x0901] = 0xc9; // FD C9: RET
+    z80_execute_instructions(&cpu, 2);
+    assert(cpu.registers.pc == 0x0814);
+    assert(cpu.registers.sp == 0xa000);
+
+    // ADI: previously misdecoded as "ld r,(i+d)" because the 0x46==(op2&0x47)
+    // mask omitted bit 7, wrongly also matching 0xc6/ce/d6/de/e6/ee/f6/fe.
+    reset_at(&cpu, 0x0820, 0xa000);
+    cpu.registers.a = 0x05;
+    memory[0x0820] = 0xdd; memory[0x0821] = 0xc6; memory[0x0822] = 0x03; // DD C6 03: ADI 3
+    z80_execute_instructions(&cpu, 1);
+    assert(cpu.registers.pc == 0x0823);
+    assert(cpu.registers.a == 0x08);
+
+    // ADD B: previously misdecoded as math on IXH/IXL because the
+    // 0x80==(op2&0xc2) mask omitted bit 2, wrongly also matching register
+    // B/C forms (which don't reference H/L at all).
+    reset_at(&cpu, 0x0850, 0xa000);
+    cpu.registers.a = 0x05;
+    cpu.registers.b = 0x03;
+    memory[0x0850] = 0xdd; memory[0x0851] = 0x80; // DD 80: ADD A,B
+    z80_execute_instructions(&cpu, 1);
+    assert(cpu.registers.pc == 0x0852);
+    assert(cpu.registers.a == 0x08);
+    assert(cpu.registers.b == 0x03); // unaffected
+
+    // JR and EXX: Z80-only opcodes with no H/L involvement are forwarded to
+    // the existing z80_emulate handler rather than reimplemented here.
+    reset_at(&cpu, 0x0830, 0xa000);
+    memory[0x0830] = 0xfd; memory[0x0831] = 0x18; memory[0x0832] = 0x05; // FD 18 05: JR +5
+    z80_execute_instructions(&cpu, 1);
+    assert(cpu.registers.pc == 0x0838);
+
+    reset_at(&cpu, 0x0860, 0xa000);
+    cpu.registers.bc = 0x1122;
+    memory[0x0860] = 0xdd; memory[0x0861] = 0xd9; // DD D9: EXX
+    z80_execute_instructions(&cpu, 1);
+    assert(cpu.registers.pc == 0x0862);
+    assert(cpu.registers.bc != 0x1122); // swapped with the (zeroed) shadow set
+
+    // NEG via ED: ED-prefixed instructions always ignore a preceding DD/FD.
+    reset_at(&cpu, 0x0840, 0xa000);
+    memory[0x0840] = 0xdd; memory[0x0841] = 0xed; memory[0x0842] = 0x44; // DD ED 44: NEG
+    cpu.registers.a = 0x01;
+    z80_execute_instructions(&cpu, 1);
+    assert(cpu.registers.pc == 0x0843);
+    assert(cpu.registers.a == 0xff);
+
     reset_at(&cpu, 0x0280, 0xe000);
     memory[0x0280] = 0xfb; // EI
     memory[0x0281] = 0x76; // HALT
@@ -440,6 +526,73 @@ int main(void)
     z80_execute_instructions(&cpu, 2);
     assert(interrupt_controller_service(&cpu));
     assert(cpu.registers.pc == 0x0038); // lower-priority request remained pending
+
+    // DD 76 / FD 76 (prefixed HALT) must still be routed to the
+    // not-implemented abort path (z80_ni -> x80_hard_exit -> exit(1)). On
+    // real Z80 hardware, DD 76 / FD 76 execute as plain, undisturbed HALT
+    // (0x76 is the reserved "hole" in the LD r,(HL)/LD (HL),r opcode grid,
+    // not an actual (HL) reference); this emulator cannot correctly stop its
+    // instruction-fetch loop mid-batch from within z80_emulate (a separate
+    // function from the loop that owns that control flow), so it
+    // deliberately treats prefixed HALT as an unimplemented, disclosed
+    // limitation rather than approximate it. 0x76 incidentally satisfies the
+    // "ld r,(i+d)" mask earlier in the 0xdd/0xfd dispatch chain purely by
+    // bit-pattern coincidence (0x76 & 0xc7 == 0x46), so this guards against
+    // silently reintroducing that dispatch-order bug, where it would be
+    // misinterpreted as a completely different instruction instead of ever
+    // reaching the exclusion check.
+#ifndef _WIN32
+    auto assert_prefixed_op_aborts = [](uint8_t prefix, uint8_t op2)
+    {
+        pid_t child = fork();
+        assert(child >= 0);
+        if (0 == child)
+        {
+            freopen("/dev/null", "w", stderr);
+            z80_t cpu;
+            memset(memory, 0, 65536);
+            z80_reset(&cpu, no_input, no_output, no_sense, &no_disk,
+                      no_port_input, no_port_output);
+            cpu.registers.sp = 0xf000;
+            z80_examine(&cpu, 0x0100);
+            memory[0x0100] = prefix;
+            memory[0x0101] = op2;
+            z80_execute_instructions(&cpu, 1);
+            _exit(0); // only reached if the abort did NOT happen -- a failure
+        }
+        int status = 0;
+        assert(child == waitpid(child, &status, 0));
+        assert(WIFEXITED(status) && 1 == WEXITSTATUS(status));
+    };
+
+    assert_prefixed_op_aborts(0xdd, 0x76); // DD 76
+    assert_prefixed_op_aborts(0xfd, 0x76); // FD 76
+#endif
+
+    // DD 64 / FD 64 (unprefixed 0x64 == MOV H,H, this codebase's own
+    // debug-hook opcode) must NOT be treated as a hook or aborted: on real
+    // Z80 hardware this is the genuine, if undocumented, self-assignment
+    // LD IXH,IXH / LD IYH,IYH, executed by the same pre-existing
+    // register-substitution logic that already handles other IXH/IXL/IYH/IYL
+    // forms. The debug-hook convention is deliberately unprefixed-opcode-only
+    // and has no bearing on the prefixed form. (IX/IY aren't exposed via the
+    // public registers_t, so verify indirectly: LD IX,nnnn, execute DD 64,
+    // then LD (addr),IX and confirm the stored value is unchanged.)
+    reset_at(&cpu, 0x0870, 0xa000);
+    memory[0x0870] = 0xdd; memory[0x0871] = 0x21; memory[0x0872] = 0x34; memory[0x0873] = 0x12; // DD 21 3412: LD IX,1234h
+    memory[0x0874] = 0xdd; memory[0x0875] = 0x64;                                               // DD 64: LD IXH,IXH
+    memory[0x0876] = 0xdd; memory[0x0877] = 0x22; memory[0x0878] = 0x00; memory[0x0879] = 0x50; // DD 22 0050: LD (5000h),IX
+    z80_execute_instructions(&cpu, 3);
+    assert(cpu.registers.pc == 0x087a);
+    assert(memory[0x5000] == 0x34 && memory[0x5001] == 0x12); // IX unchanged
+
+    reset_at(&cpu, 0x0880, 0xa000);
+    memory[0x0880] = 0xfd; memory[0x0881] = 0x21; memory[0x0882] = 0x78; memory[0x0883] = 0x56; // FD 21 7856: LD IY,5678h
+    memory[0x0884] = 0xfd; memory[0x0885] = 0x64;                                               // FD 64: LD IYH,IYH
+    memory[0x0886] = 0xfd; memory[0x0887] = 0x22; memory[0x0888] = 0x02; memory[0x0889] = 0x50; // FD 22 0250: LD (5002h),IY
+    z80_execute_instructions(&cpu, 3);
+    assert(cpu.registers.pc == 0x088a);
+    assert(memory[0x5002] == 0x78 && memory[0x5003] == 0x56); // IY unchanged
 
     puts("x80 interrupt tests passed");
     return 0;
