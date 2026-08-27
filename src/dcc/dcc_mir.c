@@ -6125,6 +6125,53 @@ static void mir_repair_divmod_types(void)
     }
 }
 
+/*
+ * Try to resolve one deferred (memory_flags & 8) MIR_MEMBER_ADDRESS
+ * instruction's field now: derive the base struct type either from a named
+ * object/declaration, or from the current type of the instruction that
+ * defines src1.  Returns 1 and fills in the field's offset/type/memory
+ * metadata on success, 0 (leaving insn untouched) if the base type still
+ * cannot be determined.
+ *
+ * For a chained pointer-member access (`a.p->c`), src1's definition is
+ * itself a deferred MIR_LOAD_INDIRECT whose own type is filled in by the
+ * indirect-load pointee-type inference below - so a single pass over
+ * member-address instructions run before that inference sees an
+ * unresolved (type 0) src1 for the second link in the chain.  The caller
+ * runs this twice, with the indirect-load inference in between, so a
+ * second link gets a base type resolved by the first pass before the
+ * retry.
+ */
+static int mir_try_resolve_deferred_member_address(struct MirInsn *insn)
+{
+    struct MirInsn *base_definition;
+    struct FieldDef *field;
+    int base_type = 0;
+    int object;
+
+    object = insn->base_name[0] != 0 ? mir_find_object(insn->base_name) : -1;
+    if (object >= 0)
+        base_type = mir.objects[object].type;
+    else if (insn->base_name[0] != 0)
+        base_type = mir_named_type(insn->base_name);
+    if (base_type == 0) {
+        base_definition = mir_mutable_definition(insn->src1);
+        if (base_definition != NULL)
+            base_type = base_definition->type;
+    }
+    if (type_ptr_depth(base_type) > 0)
+        base_type = type_decay_ptr(base_type);
+    field = find_field_def(base_struct_id_from_type(base_type), insn->name);
+    if (field == NULL)
+        field = ast_unique_field_by_name(insn->name);
+    if (field == NULL)
+        return 0;
+    insn->immediate = field->offset;
+    insn->type = type_add_ptr(field->type);
+    mir_set_field_memory(insn, field);
+    return 1;
+}
+
 void mir_resolve_deferred_metadata(void)
 {
 
@@ -6484,38 +6531,14 @@ void mir_resolve_deferred_metadata(void)
 
     for (i = 0; i < mir.count; ++i) {
         struct MirInsn *insn = &mir.insns[i];
-        struct MirInsn *base_definition;
-        struct FieldDef *field;
-        int base_type = 0;
-        int object;
-
         if (insn->opcode != MIR_MEMBER_ADDRESS ||
             (insn->memory_flags & 8) == 0)
             continue;
-        object = insn->base_name[0] != 0
-            ? mir_find_object(insn->base_name) : -1;
-        if (object >= 0)
-            base_type = mir.objects[object].type;
-        else if (insn->base_name[0] != 0)
-            base_type = mir_named_type(insn->base_name);
-        if (base_type == 0) {
-            base_definition = mir_mutable_definition(insn->src1);
-            if (base_definition != NULL)
-                base_type = base_definition->type;
-        }
-        if (type_ptr_depth(base_type) > 0)
-            base_type = type_decay_ptr(base_type);
-        field = find_field_def(base_struct_id_from_type(base_type), insn->name);
-        if (field == NULL)
-            field = ast_unique_field_by_name(insn->name);
-        if (field == NULL) {
-            insn->opcode = MIR_OPAQUE;
-            insn->immediate = AST_MEMBER;
-            continue;
-        }
-        insn->immediate = field->offset;
-        insn->type = type_add_ptr(field->type);
-        mir_set_field_memory(insn, field);
+        /* Leave an unresolved instruction as-is (still deferred) rather than
+         * giving up immediately: a chained pointer-member access needs the
+         * indirect-load pointee-type inference below to run first, and gets
+         * retried after it (see the second pass a few loops down). */
+        (void)mir_try_resolve_deferred_member_address(insn);
     }
 
     for (i = 0; i < mir.count; ++i) {
@@ -6685,6 +6708,22 @@ void mir_resolve_deferred_metadata(void)
         }
         insn->type = pointee_type;
         insn->memory_size = type_size(pointee_type);
+    }
+
+    /* Retry any MIR_MEMBER_ADDRESS still left deferred by the pass above: a
+     * chained access like `a.p->c` needs `a.p`'s MIR_LOAD_INDIRECT pointee
+     * type (just filled in by the loop directly above) to resolve `c`'s
+     * struct.  Whatever is still unresolved after this second attempt
+     * genuinely has no known base type, so it falls back to MIR_OPAQUE. */
+    for (i = 0; i < mir.count; ++i) {
+        struct MirInsn *insn = &mir.insns[i];
+        if (insn->opcode != MIR_MEMBER_ADDRESS ||
+            (insn->memory_flags & 8) == 0)
+            continue;
+        if (!mir_try_resolve_deferred_member_address(insn)) {
+            insn->opcode = MIR_OPAQUE;
+            insn->immediate = AST_MEMBER;
+        }
     }
 
     for (i = 0; i < mir.count; ++i)
