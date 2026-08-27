@@ -17,6 +17,7 @@
 
 struct AstNode;
 struct Sym;
+struct FieldDef;
 
 /* Function lifecycle. */
 void mir_begin_function(const char *name, const char *assembly_name,
@@ -32,6 +33,9 @@ void mir_set_initializer_target(struct Sym *symbol);
 void mir_set_vla_target(struct Sym *symbol);
 void mir_capture_initializer(const struct AstNode *expr);
 void mir_capture_struct_initializer(struct Sym *target,
+									const struct AstNode *expr);
+void mir_capture_bitfield_init_expr(struct Sym *symbol, int offset,
+									const struct FieldDef *field,
 									const struct AstNode *expr);
 void mir_capture_vla_save(int offset);
 void mir_capture_vla_restore(int offset);

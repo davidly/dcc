@@ -168,6 +168,30 @@ int parse_global_init_atom(long *val, char *label, int labelsz)
     sign = 1;
 
     /*
+     * A pointer cast of a string literal, e.g. `(char *) "Plain"`, names an
+     * address (the string's own label), not an arithmetic constant - the
+     * constant-expression evaluator the numeric branch below uses only folds
+     * numeric casts, and silently desyncs the lexer on a string operand
+     * (DCC-E1102 "expected ';'" at the string, immediately followed by
+     * DCC-E1101).  Detect this one shape up front and consume just the cast,
+     * so control falls through to the ordinary string-literal handling below
+     * as if the cast were never there - it only changes the static type, not
+     * which label the initializer resolves to.
+     */
+    if (g_lex.tok.kind == '(' && paren_starts_cast()) {
+        LexState _ls = lex_save();
+        int cast_type;
+        int cast_size;
+
+        next_token();
+        parse_type_name_decl(&cast_type, &cast_size);
+        expect(')');
+        if (!(type_ptr_depth(cast_type) > 0 &&
+              (g_lex.tok.kind == TOK_STR || g_lex.tok.kind == TOK_WSTR)))
+            lex_restore(&_ls);
+    }
+
+    /*
      * Numeric scalar initializers may be full C constant expressions, not just
      * a single token.  This handles forms used by lzpack such as:
      *
