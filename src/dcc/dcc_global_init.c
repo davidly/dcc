@@ -200,7 +200,8 @@ int parse_global_init_atom(long *val, char *label, int labelsz)
      * and array bounds using parenthesized macro expressions.
      */
     if (g_lex.tok.kind == TOK_NUM || g_lex.tok.kind == TOK_CHARLIT ||
-        g_lex.tok.kind == '-' || g_lex.tok.kind == '+' || g_lex.tok.kind == '(' ||
+        g_lex.tok.kind == '-' || g_lex.tok.kind == '+' || g_lex.tok.kind == '~' ||
+        g_lex.tok.kind == '!' || g_lex.tok.kind == '(' ||
         g_lex.tok.kind == TOK_SIZEOF) {
         val[0] = parse_typed_const_expr_long();
         if (label) label[0] = 0;

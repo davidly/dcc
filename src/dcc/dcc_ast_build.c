@@ -134,7 +134,14 @@ int ast_expr_type_for_sizeof(const struct AstNode *n)
     case AST_STR_LIT:
         return TYPE_CHAR | TYPE_PTR;
     case AST_IDENT:
-        s = find_sym(n->sval);
+        /* Prefer the symbol resolved at parse time (n->sym, set in p_primary)
+         * over a fresh name lookup: this function also runs during MIR
+         * lowering's AST-walk fallback, which happens after the whole
+         * function has been parsed - by then a nested block's locals are
+         * already out of scope (find_local truncates on block exit), so a
+         * name-based find_sym here would wrongly report "not found" for a
+         * still-live nested-block local and silently fall back to TYPE_INT. */
+        s = n->sym != NULL ? n->sym : find_sym(n->sval);
         if (s == NULL)
             return TYPE_INT;
         return s->type;

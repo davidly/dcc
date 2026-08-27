@@ -728,6 +728,15 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                     ast_is_plain_int_type(s->type) &&
                     (type_size(s->type) == 1 || type_size(s->type) == 2))
                     return ast_value_is_plain_int(n->b);
+                /* `ptr += n` / `ptr -= n` (dead result) with ptr itself out
+                 * of ix-direct range: mirrors the pointer-lhs case below
+                 * (search "Pointer lhs") - ast_gen_dead_expr always emits
+                 * this shape through the fully general ast_gen_expr(),
+                 * which does not need ptr to be ix-direct addressable, so
+                 * decline only when the rhs isn't a supported plain int. */
+                if ((n->op == TOK_ADDEQ || n->op == TOK_SUBEQ) &&
+                    expr_result_dead && type_ptr_depth(s->type) > 0)
+                    return ast_gen_supported(n->b) && ast_value_is_plain_int(n->b);
                 return 0;
             }
             if (type_ptr_depth(s->type) > 0)
@@ -755,6 +764,20 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
         if (expr_result_dead &&
             (n->op == TOK_ADDEQ || n->op == TOK_SUBEQ) &&
             !type_is_long(s->type) && !type_is_float(s->type)) {
+            /* Pointer lhs (`ptr += n` / `ptr -= n`) checked first, ahead of
+             * the per-rhs-kind fast-path checks below: those exist to admit
+             * only an ix-direct (or global-word) rhs into a compact codegen
+             * sequence, but the emitter for a dead-result compound pointer
+             * add (ast_gen_dead_expr) always falls through to the fully
+             * general ast_gen_expr() regardless of the rhs's addressing -
+             * there is no separate compact pointer-add sequence for this
+             * check to protect.  Requiring rhs ix-direct-ness here only
+             * rejected a plain-int rhs local once the frame grew past the
+             * (ix+d) +/-127 range (e.g. tests/twhcomma.c's 17th unrolled
+             * pointer, whose rhs 'inc16' local no longer fit), even though
+             * the general path handles any plain-int rhs. */
+            if (type_ptr_depth(s->type) > 0)
+                return ast_gen_supported(n->b) && ast_value_is_plain_int(n->b);
             if (n->b->kind == AST_INT_LIT)
                 return 1;
             if (n->b->kind == AST_IDENT) {
@@ -769,8 +792,6 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
                 return 1;
             if (n->b->kind == AST_MEMBER && ast_member_plain_int_read(n->b))
                 return 1;
-            if (type_ptr_depth(s->type) > 0)
-                return ast_gen_supported(n->b) && ast_value_is_plain_int(n->b);
         }
         if (type_ptr_depth(s->type) > 0) {
             if (n->op != '=' || type_size(s->type) != 2)
