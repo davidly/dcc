@@ -2059,8 +2059,15 @@ static int mir_lower_lvalue_address(const struct AstNode *node)
     }
     if (node->kind == AST_UNARY && node->op == '*' && node->a != NULL &&
         node->a->kind == AST_UNARY && node->a->op == '*')
+        /* The loaded value is node->a's own value (e.g. vp for **vpp), so its
+         * type must describe what IT points to (node->a->type, one pointer
+         * level) - not one level higher. type_add_ptr() here mislabeled the
+         * address as a pointer-to-pointer, which later fooled the generic
+         * MIR_LOAD_INDIRECT type/size repair pass (further down this file)
+         * into re-decaying it and widening a correctly-sized narrow load
+         * (e.g. char) back up to a 2-byte pointer load. */
         return mir_emit_pointer_word_load(
-            mir_lower_lvalue_address(node->a), type_add_ptr(node->a->type));
+            mir_lower_lvalue_address(node->a), node->a->type);
     if (node->kind == AST_UNARY && node->op == '*')
         return mir_lower_expr(node->a);
     if (node->kind == AST_INDEX) {
