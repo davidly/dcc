@@ -4414,6 +4414,61 @@ void mir_capture_struct_initializer(struct Sym *target,
     insn->memory_size = type_size(target->type);
 }
 
+/*
+ * Store a runtime-evaluated expression into a bit-field member of a local
+ * (automatic) struct.  C89 6.5.7's constant-only initializer rule applies
+ * only to objects with static storage duration, so unlike the global/static
+ * init path, an automatic struct's bit-field may be initialized from any
+ * expression.  That needs the same read-modify-write mask/shift/merge an
+ * ordinary `s.field = expr;` assignment statement's AST_ASSIGN/AST_MEMBER
+ * case already produces (mir_lower_expr's MIR_STORE_INDIRECT + bit_width),
+ * so this mirrors that exact instruction sequence rather than adding a
+ * second bit-field store scheme. offset is the field's byte offset from
+ * symbol's own base (baseoff + field->offset), already flattened by the
+ * caller for a nested/array context exactly like mir_capture_initializer's
+ * target offset is.
+ */
+void mir_capture_bitfield_init_expr(struct Sym *symbol, int offset,
+                                    const struct FieldDef *field,
+                                    const struct AstNode *expr)
+{
+    struct MirInsn *insn;
+    int base;
+    int address;
+    int value;
+
+    if (!mir.active || symbol == NULL || field == NULL || expr == NULL)
+        return;
+
+    base = mir_new_value();
+    insn = mir_emit(MIR_ADDRESS);
+    insn->dst = base;
+    insn->type = type_add_ptr(symbol->type);
+    insn->object = mir_get_object(symbol, symbol->name);
+    mir_copy_name(insn->name, symbol->name);
+
+    address = mir_new_value();
+    insn = mir_emit(MIR_MEMBER_ADDRESS);
+    insn->dst = address;
+    insn->src1 = base;
+    insn->type = type_add_ptr(field->type);
+    insn->immediate = offset;
+    mir_copy_name(insn->name, field->name);
+    mir_copy_name(insn->base_name, symbol->name);
+
+    value = mir_lower_expr(expr);
+    if (value < 0)
+        return;
+    value = mir_lower_conversion(value, field->type);
+
+    insn = mir_emit(MIR_STORE_INDIRECT);
+    insn->src1 = address;
+    insn->src2 = value;
+    insn->type = field->type;
+    mir_copy_name(insn->name, field->name);
+    mir_set_field_memory(insn, field);
+}
+
 struct MirInsn *mir_mutable_definition(int value)
 {
     int i;

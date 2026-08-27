@@ -1065,7 +1065,6 @@ unsigned int pack_struct_bitfield_unit(int sid, int i, struct FieldDef *fd,
                                        int *nunits, int cap,
                                        int *out_unit_off, int *out_k,
                                        int *out_stop);
-void emit_store_const_bitfield_unit_to_local(struct Sym *s, int off, unsigned int unit);
 void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type);
 void emit_init_auto_struct_from_list(struct Sym *s);
 void emit_init_auto_struct_array_from_list(struct Sym *s);
