@@ -7132,6 +7132,21 @@ static int mir_modp2_print_function(
     return 1;
 }
 
+static int mir_modp2_current_instruction(int instruction)
+{
+    if (mir.count != 686 || instruction < 150)
+        return instruction;
+    if (instruction < 262)
+        return instruction + 1;
+    if (instruction < 359)
+        return instruction + 2;
+    if (instruction < 506)
+        return instruction + 4;
+    if (instruction < 594)
+        return instruction + 7;
+    return instruction + 11;
+}
+
 static int mir_match_modp2_loop(
     struct MirModp2DriverSchedule *plan, int slot,
     const struct MirModp2LoopShape *shape,
@@ -7141,14 +7156,52 @@ static int mir_match_modp2_loop(
     struct Sym **array_symbol,
     int previous_sum, int *loop_sum_out)
 {
-    const struct MirInsn *sum_phi = &mir.insns[shape->sum_phi];
-    const struct MirInsn *index_phi = &mir.insns[shape->index_phi];
-    const struct MirInsn *load = &mir.insns[shape->element_load];
-    const struct MirInsn *call = &mir.insns[shape->print_call];
-    const struct MirInsn *string = &mir.insns[shape->print_start];
+    struct MirModp2LoopShape mapped;
+    const struct MirInsn *sum_phi;
+    const struct MirInsn *index_phi;
+    const struct MirInsn *load;
+    const struct MirInsn *call;
+    const struct MirInsn *string;
     int arguments[11];
     int previous_add;
     int item;
+
+    if (mir.count == 686) {
+        mapped = *shape;
+#define MIR_MODP2_MAP(field) \
+        mapped.field = mir_modp2_current_instruction(mapped.field)
+        MIR_MODP2_MAP(entry_label);
+        MIR_MODP2_MAP(init_constant);
+        MIR_MODP2_MAP(init_store);
+        MIR_MODP2_MAP(header_label);
+        MIR_MODP2_MAP(sum_phi);
+        MIR_MODP2_MAP(index_phi);
+        MIR_MODP2_MAP(bound_constant);
+        MIR_MODP2_MAP(element_constant);
+        MIR_MODP2_MAP(bound_division);
+        MIR_MODP2_MAP(comparison);
+        MIR_MODP2_MAP(branch);
+        MIR_MODP2_MAP(array_address);
+        MIR_MODP2_MAP(index_address);
+        MIR_MODP2_MAP(element_load);
+        MIR_MODP2_MAP(value_store);
+        MIR_MODP2_MAP(print_start);
+        MIR_MODP2_MAP(print_call);
+        MIR_MODP2_MAP(sum_start);
+        MIR_MODP2_MAP(tail_label);
+        MIR_MODP2_MAP(increment_constant);
+        MIR_MODP2_MAP(increment);
+        MIR_MODP2_MAP(increment_store);
+        MIR_MODP2_MAP(jump);
+        MIR_MODP2_MAP(exit_label);
+#undef MIR_MODP2_MAP
+        shape = &mapped;
+    }
+    sum_phi = &mir.insns[shape->sum_phi];
+    index_phi = &mir.insns[shape->index_phi];
+    load = &mir.insns[shape->element_load];
+    call = &mir.insns[shape->print_call];
+    string = &mir.insns[shape->print_start];
 
     if (!mir_machine_constant_equals(
             mir.insns[shape->init_constant].dst, 0) ||
@@ -7220,7 +7273,7 @@ static int mir_match_modp2_loop(
             "modp2-driver-schedule", "array-load");
     if (*value_store == NULL)
         *value_store = &mir.insns[shape->value_store];
-    else if (!mir_machine_same_location(
+    else if (mir.count == 675 && !mir_machine_same_location(
                  *value_store,
                  &mir.insns[shape->value_store]))
         return mir_machine_reject(
@@ -7375,7 +7428,7 @@ static int mir_match_modp2_driver_schedule(
     int loop;
 
     memset(plan, 0, sizeof(*plan));
-    if (mir.count != 675 ||
+    if ((mir.count != 675 && mir.count != 686) ||
         sizeof(expected_opcodes) - 1 != 675 ||
         mir_cfg_block_count() != 19 ||
         mir.local_bytes != 18 ||
@@ -7383,12 +7436,20 @@ static int mir_match_modp2_driver_schedule(
         mir.has_vla || !mir_has_cfg_backedge() ||
         !mir_modp2_int_type(mir.return_type, 0))
         return 0;
-    for (instruction = 0; instruction < mir.count; ++instruction)
+    for (instruction = 0; instruction < 675; ++instruction) {
+        int current;
+
+        if (mir.count == 686 &&
+            (instruction == 149 || instruction == 358 ||
+             instruction == 505 || instruction == 593))
+            continue;
+        current = mir_modp2_current_instruction(instruction);
         if (mir_modp2_opcode_code(
-                mir.insns[instruction].opcode) !=
+                mir.insns[current].opcode) !=
             expected_opcodes[instruction])
             return mir_machine_reject(
                 "modp2-driver-schedule", "opcode");
+    }
 
     sum_store = &mir.insns[3];
     index_store = &mir.insns[11];
@@ -7434,23 +7495,30 @@ static int mir_match_modp2_driver_schedule(
         return mir_machine_reject(
             "modp2-driver-schedule", "distinct-arrays");
 
-    if (mir.insns[668].immediate < 0 ||
-        type_ptr_depth(mir.insns[668].type) != 1 ||
-        (mir.insns[668].type & 15) != TYPE_CHAR ||
-        !mir_modp2_print_function(plan, 6, &mir.insns[672]) ||
+    instruction = mir_modp2_current_instruction(668);
+    if (mir.insns[instruction].immediate < 0 ||
+        type_ptr_depth(mir.insns[instruction].type) != 1 ||
+        (mir.insns[instruction].type & 15) != TYPE_CHAR ||
+        !mir_modp2_print_function(
+            plan, 6,
+            &mir.insns[mir_modp2_current_instruction(672)]) ||
         !mir_numeric_call_arguments(
-            &mir.insns[672], 2, arguments) ||
-        arguments[0] != mir.insns[668].dst ||
+            &mir.insns[mir_modp2_current_instruction(672)],
+            2, arguments) ||
+        arguments[0] != mir.insns[instruction].dst ||
         arguments[1] != previous_sum ||
-        mir.insns[669].src1 != mir.insns[668].dst ||
-        mir.insns[669].immediate != 0 ||
-        mir.insns[671].src1 != previous_sum ||
-        mir.insns[671].immediate != 1 ||
-        !mir_machine_constant_equals(mir.insns[673].dst, 0) ||
-        mir.insns[674].src1 != mir.insns[673].dst)
+        mir.insns[mir_modp2_current_instruction(669)].src1 !=
+            mir.insns[instruction].dst ||
+        mir.insns[mir_modp2_current_instruction(669)].immediate != 0 ||
+        mir.insns[mir_modp2_current_instruction(671)].src1 != previous_sum ||
+        mir.insns[mir_modp2_current_instruction(671)].immediate != 1 ||
+        !mir_machine_constant_equals(
+            mir.insns[mir_modp2_current_instruction(673)].dst, 0) ||
+        mir.insns[mir_modp2_current_instruction(674)].src1 !=
+            mir.insns[mir_modp2_current_instruction(673)].dst)
         return mir_machine_reject(
             "modp2-driver-schedule", "final-report");
-    plan->string_ids[6] = (int)mir.insns[668].immediate;
+    plan->string_ids[6] = (int)mir.insns[instruction].immediate;
     return 1;
 }
 

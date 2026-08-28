@@ -106,16 +106,15 @@ const char *enter_for_decl_rename(const char *name)
 
 const char *enter_block_decl_rename(const char *name)
 {
-    static char renamed[MAX_SCOPE_DEPTH][MAX_FOR_SCOPE_RENAMES][64];
+    static char renamed[MAX_SCOPE_DEPTH][MAX_BLOCK_SCOPE_RENAMES][64];
     int depth;
     int ordinal;
 
-    if (g_func_pass.scope_depth <= 0 || find_local_decl(name) != NULL ||
-        find_local(name) == NULL)
+    if (g_func_pass.scope_depth <= 1 || find_local_decl(name) != NULL)
         return name;
     depth = g_func_pass.scope_depth - 1;
     ordinal = block_scope_rename_counts[depth];
-    if (ordinal >= MAX_FOR_SCOPE_RENAMES)
+    if (ordinal >= MAX_BLOCK_SCOPE_RENAMES)
         fatal("too many block-scope shadow declarations");
     snprintf(renamed[depth][ordinal], sizeof(renamed[depth][ordinal]),
              "%s#b%d#%d", name, block_scope_ids[depth], ordinal);
@@ -127,7 +126,7 @@ const char *enter_block_decl_rename(const char *name)
 const char *enter_static_local_rename(const char *name,
                                       const char *backing_name)
 {
-    static char renamed[MAX_SCOPE_DEPTH][MAX_FOR_SCOPE_RENAMES][64];
+    static char renamed[MAX_SCOPE_DEPTH][MAX_BLOCK_SCOPE_RENAMES][64];
     int depth;
     int ordinal;
 
@@ -135,7 +134,7 @@ const char *enter_static_local_rename(const char *name,
         return name;
     depth = g_func_pass.scope_depth - 1;
     ordinal = block_scope_rename_counts[depth];
-    if (ordinal >= MAX_FOR_SCOPE_RENAMES)
+    if (ordinal >= MAX_BLOCK_SCOPE_RENAMES)
         fatal("too many block-scope shadow declarations");
     snprintf(renamed[depth][ordinal], sizeof(renamed[depth][ordinal]),
              "%s#%s", name, backing_name);
@@ -640,6 +639,24 @@ struct Sym *add_local_known(const char *name, int type, int storage,
     s->offset = offset;
     s->size = bytes;
     return s;
+}
+
+/* A block-scope extern introduces a lexical alias for an object with external
+ * linkage; it does not reserve automatic storage. */
+struct Sym *add_block_extern_alias(const char *name, const char *link_name,
+                                   int type, int bytes)
+{
+    struct Sym *global = find_global(link_name);
+    struct Sym *local;
+
+    if (global == NULL)
+        global = add_global(link_name, type, SC_EXTERN);
+    local = add_local_known(name, type, global->storage, 0, bytes);
+    strncpy(local->link_name, link_name, sizeof(local->link_name) - 1);
+    local->link_name[sizeof(local->link_name) - 1] = 0;
+    local->needs_extrn = global->needs_extrn;
+    local->is_defined = global->is_defined;
+    return local;
 }
 
 struct Sym *add_local_alloc(const char *name, int type, int bytes)

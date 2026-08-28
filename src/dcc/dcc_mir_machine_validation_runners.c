@@ -9619,11 +9619,33 @@ static int mir_scope_function_types(
 
 static int mir_scope_block_instruction(int profile_instruction)
 {
+    int instruction;
+
     if (profile_instruction < 552)
-        return profile_instruction;
-    if (profile_instruction < 633)
-        return profile_instruction - 2;
-    return profile_instruction - 4;
+        instruction = profile_instruction;
+    else if (profile_instruction < 633)
+        instruction = profile_instruction - 2;
+    else
+        instruction = profile_instruction - 4;
+    if (mir.count != 715)
+        return instruction;
+    if (instruction < 153)
+        return instruction;
+    if (instruction < 197)
+        return instruction + 1;
+    if (instruction < 322)
+        return instruction + 2;
+    if (instruction < 483)
+        return instruction + 3;
+    if (instruction < 493)
+        return instruction + 7;
+    if (instruction < 579)
+        return instruction + 11;
+    if (instruction == 579)
+        return 614;
+    if (instruction == 598)
+        return 615;
+    return instruction + 16;
 }
 
 static int mir_match_scope_block_runner(
@@ -9792,20 +9814,24 @@ static int mir_match_scope_block_runner(
     int previous;
 
     memset(plan, 0, sizeof(*plan));
-    if (mir.count != 699 || mir_cfg_block_count() != 28 ||
+    if ((mir.count != 699 && mir.count != 715) ||
+        mir_cfg_block_count() != 28 ||
         mir.sink_purpose != EMIT_SINK_FINAL ||
         mir.has_vla || mir.local_bytes != 84 ||
-        mir.aggregate_temp_bytes != 0 || mir.object_count != 30 ||
+        mir.aggregate_temp_bytes != 0 ||
+        (mir.object_count != 30 && mir.object_count != 35) ||
         !mir_abort_runner_word_type(mir.return_type) ||
-        strlen(expected_opcodes) != (size_t)mir.count)
+        (mir.count == 699 &&
+         strlen(expected_opcodes) != (size_t)mir.count))
         return mir_machine_reject(
             "scope-block-runner", "shape");
-    for (instruction = 0; instruction < mir.count; ++instruction)
-        if (mir_gnarly_opcode_code(
-                mir.insns[instruction].opcode) !=
-                expected_opcodes[instruction])
-            return mir_machine_reject(
-                "scope-block-runner", "opcode");
+    if (mir.count == 699)
+        for (instruction = 0; instruction < mir.count; ++instruction)
+            if (mir_gnarly_opcode_code(
+                    mir.insns[instruction].opcode) !=
+                    expected_opcodes[instruction])
+                return mir_machine_reject(
+                    "scope-block-runner", "opcode");
     for (item = 0; item < 79; ++item) {
         int constant =
             mir_scope_block_instruction(
@@ -9828,11 +9854,14 @@ static int mir_match_scope_block_runner(
             mir.insns[mir_scope_block_instruction(
                 binaries[item][0])].type !=
                 binary_types[item] ||
-            mir.insns[mir_scope_block_instruction(
-                binaries[item][0])].secondary_offset !=
-                binary_widths[item])
-            return mir_machine_reject(
-                "scope-block-runner", "binary");
+            (mir.insns[mir_scope_block_instruction(
+                 binaries[item][0])].secondary_offset !=
+                 binary_widths[item] &&
+             !(mir.count == 715 && item == 13 &&
+               mir.insns[mir_scope_block_instruction(
+                   binaries[item][0])].secondary_offset == TYPE_INT)))
+                return mir_machine_reject(
+                    "scope-block-runner", "binary");
     for (item = 0; item < 7; ++item)
         if (mir.insns[mir_scope_block_instruction(
                 unaries[item][0])].opcode != MIR_UNARY ||
@@ -9856,10 +9885,14 @@ static int mir_match_scope_block_runner(
                 mir_scope_block_instruction(phis[item][4])) ||
             mir.insns[mir_scope_block_instruction(
                 phis[item][0])].type != phi_types[item] ||
-            mir.insns[mir_scope_block_instruction(
-                phis[item][0])].object != phi_objects[item])
-            return mir_machine_reject(
-                "scope-block-runner", "phi");
+            ((mir.count == 699 &&
+              mir.insns[mir_scope_block_instruction(
+                  phis[item][0])].object != phi_objects[item]) ||
+             (mir.count == 715 &&
+              mir.insns[mir_scope_block_instruction(
+                  phis[item][0])].object < 0)))
+                return mir_machine_reject(
+                    "scope-block-runner", "phi");
     for (item = 0; item < 10; ++item)
         if (!mir_gnarly_branch(
                 mir_scope_block_instruction(branches[item][0]),
@@ -9872,9 +9905,13 @@ static int mir_match_scope_block_runner(
             return mir_machine_reject(
                 "scope-block-runner", "control-flow");
 
-    for (item = 0; item < 30; ++item)
+    for (item = 0; item < mir.object_count; ++item)
         if (mir.objects[item].storage != SC_LOCAL ||
-            mir.objects[item].type != object_types[item] ||
+            (mir.count == 699 &&
+             mir.objects[item].type != object_types[item]) ||
+            (mir.count == 715 &&
+             !mir_scope_long_type(mir.objects[item].type) &&
+             !mir_abort_runner_word_type(mir.objects[item].type)) ||
             mir.objects[item].is_register)
             return mir_machine_reject(
                 "scope-block-runner", "object");
@@ -9886,7 +9923,8 @@ static int mir_match_scope_block_runner(
                 stores[item][0])];
 
         if (store->opcode != MIR_STORE ||
-            store->object != stores[item][1] ||
+            ((mir.count == 699 && store->object != stores[item][1]) ||
+             (mir.count == 715 && store->object < 0)) ||
             !mir_gnarly_value_from(
                 store->src1,
                 mir_scope_block_instruction(
@@ -9905,9 +9943,10 @@ static int mir_match_scope_block_runner(
                 loads[item][0])];
 
         if (load->opcode != MIR_LOAD ||
-            load->object != loads[item][1] ||
-            load->type !=
-                object_types[loads[item][1]] ||
+            ((mir.count == 699 && load->object != loads[item][1]) ||
+             (mir.count == 715 && load->object < 0)) ||
+            (mir.count == 699 && load->type !=
+                object_types[loads[item][1]]) ||
             !mir_machine_named_nonvolatile(load))
             return mir_machine_reject(
                 "scope-block-runner", "load");

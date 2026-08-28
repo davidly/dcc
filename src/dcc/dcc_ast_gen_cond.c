@@ -1414,9 +1414,11 @@ int ast_stmt_supported(const struct AstNode *n)
             g_func_pass.for_decl_recording = 1;
             g_for_decl_saw_nonobject = 0;
             if (ok) {
-                if (mir_is_active())
+                if (mir_is_active()) {
+                    int checkpoint = mir_instruction_checkpoint();
                     ast_replay_decl_span(n->a);
-                else
+                    mir_neutralize_since(checkpoint);
+                } else
                     ast_scan_decl_span(n->a);
             }
             decl_object_count = g_func_pass.for_decl_rename_index;
@@ -1537,9 +1539,11 @@ int ast_stmt_supported(const struct AstNode *n)
             for (i = 0; i < n->list_len; ++i) {
                 struct AstNode *c = n->list[i];
                 if (c->kind == AST_DECL) {
-                    if (mir_is_active())
+                    if (mir_is_active()) {
+                        int checkpoint = mir_instruction_checkpoint();
                         ast_replay_decl_span(c);
-                    else
+                        mir_neutralize_since(checkpoint);
+                    } else
                         ast_scan_decl_span(c);
                 } else if (!ast_stmt_supported(c)) {
                     ok = 0;

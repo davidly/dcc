@@ -1455,6 +1455,9 @@ void parse_param_list(void)
     int direct_funcptr;
     char name[64];
     int unnamed_id;
+    int typedef_array_len;
+    int typedef_array_decay_depth;
+    int typedef_array_elem_size;
 
     g_frame.nlocals = 0;
     g_frame.local_size = 0;
@@ -1485,8 +1488,21 @@ void parse_param_list(void)
 
         type = parse_type();
         direct_funcptr = 0;
+        typedef_array_len = g_typedef_array_len;
+        {
+            int typedef_element_type = type;
+            typedef_array_decay_depth = type_ptr_depth(type) > 0;
+            while (type_ptr_depth(typedef_element_type) > 0)
+                typedef_element_type = type_decay_ptr(typedef_element_type);
+            typedef_array_elem_size = type_size(typedef_element_type);
+        }
         if (g_typedef_array_len > 0) {
-            type = type_add_ptr(type);
+            /* A declarator pointer over an array typedef is represented by
+             * that existing pointer plus row-dimension metadata.  Adding a
+             * second pointer here turns `A *p` into T ** and makes `(*p)[i]`
+             * load the first bytes of the row as another address. */
+            if (!typedef_array_decay_depth)
+                type = type_add_ptr(type);
             g_typedef_array_len = 0;
         }
         unnamed_id = 0;
@@ -1542,6 +1558,17 @@ void parse_param_list(void)
                 ps->is_register = g_decl.is_register;
                 ps->is_volatile = g_decl.is_volatile;
                 ps->pointee_is_volatile = g_decl.pointee_is_volatile;
+                /* A pointer declared on top of an array typedef preserves
+                 * the typedef's row shape: `typedef T A[N]; A *p` is a
+                 * pointer to an N-element row, not merely T **. */
+                if (g_ptr_array_dim_count == 0 && typedef_array_len > 0 &&
+                    typedef_array_decay_depth) {
+                    ps->dim_count = 1;
+                    ps->dims[0] = typedef_array_len;
+                    ps->elem_size = typedef_array_len *
+                        (typedef_array_elem_size > 0
+                            ? typedef_array_elem_size : 1);
+                }
             }
             copy_funcptr_prototype_to_sym(ps, direct_funcptr);
             if (ps && g_ptr_array_dim_count > 0) {
@@ -2462,8 +2489,8 @@ void scan_local_decl_after_type(int base)
             }
         }
 
-        if (!g_decl.is_volatile &&
-            try_narrow_local_int_array(name, type, arrlen, total_elems)) {
+        if (!g_decl.is_extern && !g_decl.is_volatile &&
+            try_narrow_local_int_array(source_name, type, arrlen, total_elems)) {
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
             /* first_stride_bytes (see parse_array_declarator_dims) was
              * computed from the pre-narrowing int element size and is still
@@ -2474,10 +2501,10 @@ void scan_local_decl_after_type(int base)
              * below fall through to type_size(type), matching the narrowed
              * type instead of silently keeping the stale, too-wide stride. */
             current_field_array_elem_size = 0;
-        } else if (!g_decl.is_volatile &&
+        } else if (!g_decl.is_extern && !g_decl.is_volatile &&
                    try_narrow_register_scalar(name, type, g_decl.is_register, arrlen, total_elems)) {
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
-        } else if (!g_decl.is_volatile &&
+        } else if (!g_decl.is_extern && !g_decl.is_volatile &&
                    try_narrow_for_counter(name, type, arrlen, total_elems)) {
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
         }
@@ -2505,7 +2532,9 @@ void scan_local_decl_after_type(int base)
         {
         int freshly_allocated = 0;
         if (!s) {
-            s = add_local_alloc(name, type, bytes);
+            s = g_decl.is_extern
+                ? add_block_extern_alias(name, source_name, type, bytes)
+                : add_local_alloc(name, type, bytes);
             copy_funcptr_prototype_to_sym(s, direct_funcptr);
             s->is_volatile = g_decl.is_volatile;
             s->pointee_is_volatile = g_decl.pointee_is_volatile;
