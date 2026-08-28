@@ -591,9 +591,10 @@ static struct AstNode *p_primary(struct AstArena *ar)
         }
         n = ast_new(ar, AST_IDENT);
         n->sval = cur_text(ar);
-        /* Freeze the declaration selected while its lexical rename is still
-         * active. */
-        n->sym = find_sym(g_lex.tok.text);
+        /* read-only resolution; both lookups only scan existing tables */
+        n->sym = find_local_decl(g_lex.tok.text);
+        if (n->sym == NULL)
+            n->sym = find_global(g_lex.tok.text);
         next_token();
         return n;
     case '(':
@@ -761,23 +762,6 @@ static int binop_level(int k)
     }
 }
 
-static int ast_promoted_binary_operand_type(const struct AstNode *n)
-{
-    int type = n != NULL && n->type != 0
-        ? n->type : ast_expr_type_for_sizeof(n);
-
-    if (n != NULL && n->kind == AST_MEMBER) {
-        struct FieldDef *field = ast_member_field_for_sizeof(n);
-        /* A signed bit-field, and an unsigned bit-field whose complete range
-         * fits in the target's 16-bit signed int, promotes to int.  An
-         * explicit cast is an AST_CAST and deliberately bypasses this rule. */
-        if (field != NULL && field->bit_width > 0 &&
-            (!(field->type & TYPE_UNSIGNED) || field->bit_width <= 15))
-            return TYPE_INT;
-    }
-    return promote_int_type(type);
-}
-
 static struct AstNode *p_binary(struct AstArena *ar, int min_level)
 {
     struct AstNode *lhs = p_unary(ar);
@@ -807,22 +791,16 @@ static struct AstNode *p_binary(struct AstArena *ar, int min_level)
         else if (k == TOK_OROR)
             lhs = ast_binary(ar, AST_LOGOR, k, lhs, rhs, 0);
         else {
-            int left_type;
-            int right_type;
             lhs = ast_binary(ar, AST_BINARY, k, lhs, rhs, 0);
             lhs->peek_type = peek;
             lhs->type = ast_expr_type_for_sizeof(lhs);
-            left_type = ast_promoted_binary_operand_type(lhs->a);
-            right_type = ast_promoted_binary_operand_type(lhs->b);
             if (k == TOK_SHL || k == TOK_SHR)
-                lhs->operand_type = left_type;
+                lhs->operand_type = promote_int_type(
+                    ast_expr_type_for_sizeof(lhs->a));
             else
-                lhs->operand_type = common_arith_type(left_type, right_type);
-            if (k != '<' && k != '>' && k != TOK_LE && k != TOK_GE &&
-                k != TOK_EQ && k != TOK_NE &&
-                type_ptr_depth(left_type) == 0 &&
-                type_ptr_depth(right_type) == 0)
-                lhs->type = lhs->operand_type;
+                lhs->operand_type = common_arith_type(
+                    ast_expr_type_for_sizeof(lhs->a),
+                    ast_expr_type_for_sizeof(lhs->b));
         }
     }
     return lhs;

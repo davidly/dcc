@@ -1,2 +1,0 @@
-tuaccmp start
-tuaccmp completed with great success

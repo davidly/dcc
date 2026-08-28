@@ -1734,8 +1734,8 @@ void gen_local_decl_after_type(int base)
          * frame-sizing pass - both independently re-run the same
          * speculative parse over the same source text, so they agree. */
         narrowed_as_counter = 0;
-        if (!g_decl.is_extern && !g_decl.is_volatile &&
-            try_narrow_local_int_array(source_name, type, arrlen, total_elems)) {
+        if (!g_decl.is_volatile &&
+            try_narrow_local_int_array(name, type, arrlen, total_elems)) {
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
             /* See the identical comment in scan_local_decl_after_type
              * (dcc_func.c): first_stride_bytes was computed from the
@@ -1743,10 +1743,10 @@ void gen_local_decl_after_type(int base)
              * here too or Sym.elem_size below keeps the stale, too-wide
              * stride even though Sym.type is now correctly narrowed. */
             current_field_array_elem_size = 0;
-        } else if (!g_decl.is_extern && !g_decl.is_volatile &&
+        } else if (!g_decl.is_volatile &&
                    try_narrow_register_scalar(name, type, g_decl.is_register, arrlen, total_elems)) {
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
-        } else if (!g_decl.is_extern && !g_decl.is_volatile &&
+        } else if (!g_decl.is_volatile &&
                    try_narrow_for_counter(name, type, arrlen, total_elems)) {
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
             narrowed_as_counter = 1;
@@ -1764,9 +1764,7 @@ void gen_local_decl_after_type(int base)
             else if (total_elems > 0)
                 bytes = object_array_size(type, total_elems);
 
-            s = g_decl.is_extern
-                ? add_block_extern_alias(name, source_name, type, bytes)
-                : add_local_alloc(name, type, bytes);
+            s = add_local_alloc(name, type, bytes);
             copy_funcptr_prototype_to_sym(s, direct_funcptr);
             s->is_volatile = g_decl.is_volatile;
             s->pointee_is_volatile = g_decl.pointee_is_volatile;

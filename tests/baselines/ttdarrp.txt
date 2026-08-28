@@ -1,2 +1,0 @@
-ttdarrp start
-ttdarrp completed with great success

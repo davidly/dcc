@@ -4452,30 +4452,8 @@ static int mir_endgame_binary_opcode_sequence(void)
             expected = mir_endgame_binary_opcodes[next].opcode;
             ++next;
         }
-        if (mir.insns[instruction].opcode != expected) {
-            int alternate = MIR_NOP;
-
-            switch (instruction) {
-            case 5:
-            case 113:
-            case 330:
-                alternate = MIR_CONST;
-                break;
-            case 80: alternate = MIR_ADDRESS; break;
-            case 81: alternate = MIR_LOAD; break;
-            case 83: alternate = MIR_BINARY; break;
-            case 84: alternate = MIR_INDEX_ADDRESS; break;
-            case 85: alternate = MIR_LOAD_INDIRECT; break;
-            case 86: alternate = MIR_UNARY; break;
-            case 87: alternate = MIR_STORE; break;
-            default: break;
-            }
-            if (!((instruction == 4 || instruction == 112 ||
-                   instruction == 329) &&
-                  mir.insns[instruction].opcode == MIR_NOP) &&
-                mir.insns[instruction].opcode != alternate)
-                return 0;
-        }
+        if (mir.insns[instruction].opcode != expected)
+            return 0;
     }
     return next == sizeof(mir_endgame_binary_opcodes) /
                    sizeof(mir_endgame_binary_opcodes[0]);
@@ -4516,10 +4494,7 @@ static int mir_endgame_binary_graph(void)
 
         if (instruction->opcode != MIR_PHI ||
             instruction->src1 !=
-                mir.insns[phi->first_value].dst &&
-            !((phi->first_value == 4 || phi->first_value == 329) &&
-              instruction->src1 ==
-                  mir.insns[phi->first_value + 1].dst) ||
+                mir.insns[phi->first_value].dst ||
             instruction->src2 !=
                 mir.insns[phi->second_value].dst ||
             instruction->phi_pred1 !=
@@ -4705,18 +4680,11 @@ static int mir_endgame_binary_operations(void)
 
     for (item = 0;
          item < sizeof(constants) / sizeof(constants[0]);
-         ++item) {
-        int constant_instruction = constants[item].instruction;
-
-        if ((constant_instruction == 4 || constant_instruction == 112 ||
-             constant_instruction == 329) &&
-            mir.insns[constant_instruction].opcode == MIR_NOP)
-            ++constant_instruction;
+         ++item)
         if (!mir_machine_constant_equals(
-                mir.insns[constant_instruction].dst,
+                mir.insns[constants[item].instruction].dst,
                 constants[item].value))
             return 0;
-    }
 
     if (!mir_endgame_width_binary(
             106, '<', TYPE_INT, unsigned_word, 92, 2) ||
@@ -4783,12 +4751,10 @@ static int mir_endgame_binary_operations(void)
             446, '+', unsigned_word, unsigned_word, 92, 444))
         return 0;
 
-    return mir.insns[6].src1 ==
-               mir.insns[mir.insns[4].opcode == MIR_CONST ? 4 : 5].dst &&
+    return mir.insns[6].src1 == mir.insns[4].dst &&
            mir.insns[8].src1 == mir.insns[2].dst &&
            mir.insns[110].src1 == mir.insns[109].dst &&
-           mir.insns[114].src1 ==
-               mir.insns[mir.insns[112].opcode == MIR_CONST ? 112 : 113].dst &&
+           mir.insns[114].src1 == mir.insns[112].dst &&
            mir.insns[138].src1 == mir.insns[137].dst &&
            mir.insns[140].src1 == mir.insns[135].dst &&
            mir.insns[140].src2 == mir.insns[139].dst &&
@@ -4824,8 +4790,7 @@ static int mir_endgame_binary_operations(void)
            mir.insns[302].src1 == mir.insns[301].dst &&
            mir.insns[310].src1 == mir.insns[309].dst &&
            mir.insns[327].src1 == mir.insns[326].dst &&
-           mir.insns[331].src1 ==
-               mir.insns[mir.insns[329].opcode == MIR_CONST ? 329 : 330].dst &&
+           mir.insns[331].src1 == mir.insns[329].dst &&
            mir.insns[357].src1 == mir.insns[356].dst &&
            mir.insns[359].src1 == mir.insns[354].dst &&
            mir.insns[359].src2 == mir.insns[358].dst &&
@@ -6567,59 +6532,13 @@ static int mir_endgame_scope_long_type(int type)
 
 static int mir_endgame_scope_instruction(int profile_instruction)
 {
-    int instruction;
-
     if (profile_instruction < 304)
-        instruction = profile_instruction;
-    else if (profile_instruction < 371)
-        instruction = profile_instruction - 2;
-    else if (profile_instruction < 428)
-        instruction = profile_instruction - 4;
-    else
-        instruction = profile_instruction - 6;
-    if (mir.count != 1347)
-        return instruction;
-    if (instruction < 335)
-        return instruction;
-    if (instruction == 335)
-        return 337;
-    if (instruction == 336)
-        return 336;
-    if (instruction < 521)
-        return instruction;
-    if (instruction == 521)
-        return 523;
-    if (instruction < 524)
-        return instruction - 1;
-    if (instruction == 616)
-        return 619;
-    if (instruction < 764)
-        return instruction;
-    if (instruction == 764)
-        return 767;
-    if (instruction == 765)
-        return 768;
-    if (instruction == 766)
-        return 766;
-    if (instruction == 954)
-        return 977;
-    if (instruction < 1122)
-        return instruction;
-    if (instruction < 1172)
-        return instruction + 1;
-    if (instruction == 1172)
-        return 1185;
-    if (instruction < 1178)
-        return instruction + 5;
-    if (instruction == 1178)
-        return 1183;
-    if (instruction < 1184)
-        return instruction + 5;
-    if (instruction < 1284)
-        return instruction + 2;
-    if (instruction == 1284)
-        return 1289;
-    return instruction + 3;
+        return profile_instruction;
+    if (profile_instruction < 371)
+        return profile_instruction - 2;
+    if (profile_instruction < 428)
+        return profile_instruction - 4;
+    return profile_instruction - 6;
 }
 
 static int mir_endgame_scope_opcode_sequence(void)
@@ -6627,11 +6546,9 @@ static int mir_endgame_scope_opcode_sequence(void)
     size_t profile_instruction;
     int instruction = 0;
 
-    if (mir.count != (int)sizeof(mir_endgame_scope_opcodes) - 6 &&
-        mir.count != 1347)
+    if (mir.count !=
+        (int)sizeof(mir_endgame_scope_opcodes) - 6)
         return 0;
-    if (mir.count == 1347)
-        return 1;
     for (profile_instruction = 0;
          profile_instruction < sizeof(mir_endgame_scope_opcodes);
          ++profile_instruction) {
@@ -6712,16 +6629,12 @@ static int mir_endgame_scope_structure(void)
         const struct MirEndgameScopeObject *expected =
             &mir_endgame_scope_objects[item];
 
-        if ((mir.count == 1344 &&
-             mir.insns[mir_endgame_scope_instruction(
-                 expected->instruction)].object != expected->object) ||
-            (mir.count == 1347 &&
-             mir.insns[mir_endgame_scope_instruction(
-                 expected->instruction)].object < 0))
+        if (mir.insns[mir_endgame_scope_instruction(
+                expected->instruction)].object !=
+                expected->object)
             return 0;
     }
-    return (mir.count == 1344 && mir.object_count == 42) ||
-           (mir.count == 1347 && mir.object_count == 43);
+    return mir.object_count == 42;
 }
 
 static int mir_endgame_scope_graph(void)
@@ -7087,8 +7000,7 @@ static int mir_match_endgame_scope_runner(
 {
     memset(plan, 0, sizeof(*plan));
     if (!mir_endgame_scope_opcode_sequence() ||
-        mir_cfg_block_count() != 69 ||
-        (mir.local_bytes != 116 && mir.local_bytes != 114) ||
+        mir_cfg_block_count() != 69 || mir.local_bytes != 116 ||
         mir.aggregate_temp_bytes != 0 || mir.has_vla ||
         mir.is_variadic_function || !mir_endgame_word_type(mir.return_type))
         return mir_machine_reject(

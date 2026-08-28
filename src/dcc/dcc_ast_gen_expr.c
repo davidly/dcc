@@ -4893,27 +4893,12 @@ void gen_struct_return_call_assign_ast(const struct AstNode *lhs,
         int have_want;
         int ptr_type;
         int no_deref;
-        struct Sym *arg_sym;
 
         have_want = expected_arg_type(fn_sym, i, &want_type);
         if (have_want && type_is_struct_object(want_type)) {
             gen_call_struct_arg_ast(rhs->list[i], want_type);
             arg_bytes += type_size(want_type);
             continue;
-        }
-        /* An old-style definition does not publish parameter types in the
-         * function symbol.  The argument expression still has aggregate
-         * type and must be copied by value; treating its address as an
-         * ordinary promoted word shifts the hidden struct-result parameter
-         * and makes the callee read pointer bytes as its object. */
-        if (!have_want && rhs->list[i]->kind == AST_IDENT) {
-            arg_sym = find_sym(rhs->list[i]->sval);
-            if (arg_sym != NULL && !arg_sym->is_array &&
-                type_is_struct_object(arg_sym->type)) {
-                gen_call_struct_arg_ast(rhs->list[i], arg_sym->type);
-                arg_bytes += type_size(arg_sym->type);
-                continue;
-            }
         }
 
         if (ast_pointer_expr_type(rhs->list[i], &ptr_type, &no_deref))

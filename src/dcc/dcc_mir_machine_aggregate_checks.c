@@ -3167,8 +3167,6 @@ static int mir_match_packed_record_runner(
     int count;
     int instruction;
     int item;
-    int first_zero;
-    int second_zero;
 
     memset(plan, 0, sizeof(*plan));
     if (mir.count != 319 || mir.next_value != 235 ||
@@ -3179,11 +3177,7 @@ static int mir_match_packed_record_runner(
         return mir_machine_reject("packed-record-runner", "shape");
     for (instruction = 0; instruction < mir.count; ++instruction)
         if (mir.insns[instruction].opcode !=
-                expected_opcodes[instruction] &&
-            !(((instruction == 27 || instruction == 122) &&
-               mir.insns[instruction].opcode == MIR_NOP) ||
-              ((instruction == 28 || instruction == 123) &&
-               mir.insns[instruction].opcode == MIR_CONST)))
+            expected_opcodes[instruction])
             return mir_machine_reject(
                 "packed-record-runner", "opcodes");
     for (item = 0; item < 13; ++item)
@@ -3195,8 +3189,7 @@ static int mir_match_packed_record_runner(
         !mir_packed_constant(6, 140, TYPE_INT, 0) ||
         !mir_packed_constant(13, 0, TYPE_INT, 0) ||
         !mir_packed_constant(15, 140, TYPE_INT, 0) ||
-        !(mir_packed_constant(27, 0, TYPE_INT, 0) ||
-          mir_packed_constant(28, 0, TYPE_INT, 1)) ||
+        !mir_packed_constant(27, 0, TYPE_INT, 0) ||
         !mir_packed_constant(33, 280, TYPE_INT, 0) ||
         !mir_packed_constant(34, 14, TYPE_INT, 0) ||
         !mir_packed_constant(52, 2, TYPE_INT, 0) ||
@@ -3208,8 +3201,7 @@ static int mir_match_packed_record_runner(
         !mir_packed_constant(101, 140, TYPE_INT, 0) ||
         !mir_packed_constant(108, 0, TYPE_INT, 0) ||
         !mir_packed_constant(110, 140, TYPE_INT, 0) ||
-        !(mir_packed_constant(122, 0, TYPE_INT, 0) ||
-          mir_packed_constant(123, 0, TYPE_INT, 1)) ||
+        !mir_packed_constant(122, 0, TYPE_INT, 0) ||
         !mir_packed_constant(129, 280, TYPE_INT, 0) ||
         !mir_packed_constant(130, 14, TYPE_INT, 0) ||
         !mir_packed_constant(166, 2, TYPE_INT, 0) ||
@@ -3271,8 +3263,6 @@ static int mir_match_packed_record_runner(
             memset_function = function;
     }
     plan->memset_function = memset_function;
-    first_zero = mir.insns[27].opcode == MIR_CONST ? 27 : 28;
-    second_zero = mir.insns[122].opcode == MIR_CONST ? 122 : 123;
 
     if (!mir_machine_same_location(
             &mir.insns[29], &mir.insns[31]) ||
@@ -3284,12 +3274,12 @@ static int mir_match_packed_record_runner(
             &mir.insns[124], &mir.insns[306]) ||
         mir_machine_same_location(
             &mir.insns[29], &mir.insns[124]) ||
-        mir.insns[29].src1 != mir.insns[first_zero].dst ||
+        mir.insns[29].src1 != mir.insns[27].dst ||
         mir.insns[93].src1 != mir.insns[92].dst ||
-        mir.insns[124].src1 != mir.insns[second_zero].dst ||
+        mir.insns[124].src1 != mir.insns[122].dst ||
         mir.insns[306].src1 != mir.insns[305].dst ||
-        !mir_packed_phi(31, first_zero, 92, 0, 89) ||
-        !mir_packed_phi(127, second_zero, 305, 95, 302) ||
+        !mir_packed_phi(31, 27, 92, 0, 89) ||
+        !mir_packed_phi(127, 122, 305, 95, 302) ||
         !mir_packed_binary(35, 33, 34, '/', TYPE_INT, 0) ||
         !mir_packed_binary(36, 31, 35, '<', TYPE_INT, 0) ||
         !mir_packed_branch(37, 36, 95) ||
@@ -3320,7 +3310,9 @@ static int mir_match_packed_record_runner(
         mir.insns[137].memory_size != plan->record_stride ||
         mir.insns[138].src1 != mir.insns[137].dst ||
         mir.insns[138].memory_size != 2 ||
-        mir.insns[138].memory_flags != 0)
+        mir.insns[138].memory_flags != 0 ||
+        !mir_machine_same_location(
+            &mir.insns[42], &mir.insns[138]))
         return mir_machine_reject(
             "packed-record-runner", "record-indexing");
     for (item = 0; item < 6; ++item) {

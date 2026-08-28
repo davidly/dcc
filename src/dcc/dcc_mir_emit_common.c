@@ -1520,12 +1520,6 @@ int mir_emit_cast(MirStream *out, int source_type, int target_type)
         }
         return 1;
     }
-    if (type_size(source_type) == 1 && type_size(target_type) >= 2) {
-        if ((source_type & TYPE_UNSIGNED) != 0 || type_is_bool(source_type))
-            mir_stream_puts("\tld h,0\n", out);
-        else
-            mir_stream_puts("\tld a,l\n\trlca\n\tsbc a,a\n\tld h,a\n", out);
-    }
     if (type_size(target_type) == 4 && type_size(source_type) <= 2) {
         if ((source_type & TYPE_UNSIGNED) != 0 ||
             type_ptr_depth(source_type) > 0)
@@ -2147,23 +2141,6 @@ static int mir_value_is_normalized_byte(int value, int type, int depth)
         return (bits & 0xff80UL) == 0 ||
                (bits & 0xff80UL) == 0xff80UL;
     }
-    /* Byte loads and explicit narrowing casts already establish the C value
-     * in HL.  Byte arithmetic is deliberately excluded: its high byte can
-     * retain carry/sign debris and must be normalized before promotion. */
-    if ((definition->opcode == MIR_LOAD ||
-         definition->opcode == MIR_LOAD_INDIRECT ||
-         definition->opcode == MIR_PARAM) &&
-        type_size(definition->type) == 1 &&
-        (((definition->type & TYPE_UNSIGNED) != 0 ||
-          type_is_bool(definition->type)) ==
-         (((type & TYPE_UNSIGNED) != 0) || type_is_bool(type))))
-        return 1;
-    if (definition->opcode == MIR_UNARY && definition->immediate == 0 &&
-        type_size(definition->type) == 1 &&
-        (((definition->type & TYPE_UNSIGNED) != 0 ||
-          type_is_bool(definition->type)) ==
-         (((type & TYPE_UNSIGNED) != 0) || type_is_bool(type))))
-        return 1;
     if (definition->opcode == MIR_PHI)
         return mir_value_is_normalized_byte(
                    definition->src1, type, depth + 1) &&
@@ -2343,6 +2320,7 @@ int mir_emit_homed_binary_instruction(MirStream *out,
     int preserve_hl_de;
     int preserve_hl;
     int preserve_de;
+    const struct MirInsn *left_definition;
     const struct MirInsn *right_definition;
     int comparison_unsigned;
     int biased_right_constant;
@@ -2367,9 +2345,13 @@ int mir_emit_homed_binary_instruction(MirStream *out,
             mir.allocation_colors[insn->dst] != MIR_COLOR_DE &&
             !(mir.allocation_colors[right] == MIR_COLOR_DE &&
               !mir_value_has_use_after(right, instruction));
+        left_definition = mir_definition(left);
         right_definition = mir_definition(right);
-        comparison_unsigned = mir_type_uses_unsigned_comparison(
-            insn->secondary_offset);
+        comparison_unsigned =
+            (left_definition != NULL &&
+             mir_type_uses_unsigned_comparison(left_definition->type)) ||
+            (right_definition != NULL &&
+             mir_type_uses_unsigned_comparison(right_definition->type));
         biased_right_constant = allow_comparison && !comparison_unsigned &&
                                 (insn->immediate == '<' ||
                                  insn->immediate == TOK_GE) &&
@@ -2553,6 +2535,7 @@ int mir_emit_homed_compare_false(MirStream *out,
 {    int left = compare->src1;    int right = compare->src2;
     int instruction = (int)(compare - mir.insns);
     int operation = (int)compare->immediate;
+    const struct MirInsn *left_definition;
     const struct MirInsn *right_definition;
     int preserve_hl_de;
     int preserve_hl;
@@ -2561,11 +2544,13 @@ int mir_emit_homed_compare_false(MirStream *out,
     int biased_right_constant;
 
     right_definition = mir_definition(right);
+    left_definition = mir_definition(left);
     if (right_definition != NULL && right_definition->opcode == MIR_CONST &&
         right_definition->immediate == 0 &&
         mir.allocation_colors[left] == MIR_COLOR_HL) {
-        is_unsigned = mir_type_uses_unsigned_comparison(
-            compare->secondary_offset);
+        is_unsigned =
+            left_definition != NULL &&
+            mir_type_uses_unsigned_comparison(left_definition->type);
         if (operation == '>') {
             if (is_unsigned) {
                 mir_stream_puts("\tld a,h\n\tor l\n", out);
@@ -2609,13 +2594,13 @@ int mir_emit_homed_compare_false(MirStream *out,
         right = temporary;
         operation = operation == '>' ? '<' : TOK_GE;
     }
+    left_definition = mir_definition(left);
     right_definition = mir_definition(right);
-    /* Use the common operand type recorded after integer promotions and
-     * usual arithmetic conversions.  Same-width casts do not create a new
-     * machine value, so the source definitions can retain the opposite
-     * signedness from the comparison required by C. */
-    is_unsigned = mir_type_uses_unsigned_comparison(
-        compare->secondary_offset);
+    is_unsigned =
+        (left_definition != NULL &&
+         mir_type_uses_unsigned_comparison(left_definition->type)) ||
+        (right_definition != NULL &&
+         mir_type_uses_unsigned_comparison(right_definition->type));
     biased_right_constant =
         !is_unsigned &&
         (operation == '<' || operation == TOK_GE) &&

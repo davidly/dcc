@@ -75,7 +75,6 @@
 #define MAX_FORREN     128
 /* General lexical block-scope nesting depth (C block scope, beyond for-init) */
 #define MAX_SCOPE_DEPTH 64
-#define MAX_BLOCK_SCOPE_RENAMES MAX_FORREN
 #define MAX_FLOW       128
 #define MAX_SNAPSHOT   256
 #define MAX_PROTO_PARAMS 16
@@ -888,8 +887,6 @@ void emit_global_char_index_addr(struct Sym *s);
 void emit_test_global_char_index_zero(struct Sym *s, int false_label);
 struct Sym *add_global(const char *name, int type, int storage);
 struct Sym *add_local_known(const char *name, int type, int storage, int offset, int bytes);
-struct Sym *add_block_extern_alias(const char *name, const char *link_name,
-                                   int type, int bytes);
 struct Sym *add_local_alloc(const char *name, int type, int bytes);
 struct Sym *add_compound_literal_local(int type);
 struct Sym *add_param_alloc(const char *name, int type);

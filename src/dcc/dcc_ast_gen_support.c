@@ -2621,8 +2621,6 @@ struct AstNode *ast_divmod_fuse_compound(const struct AstNode *n)
         struct Sym *quot_sym;
         struct Sym *rem_sym;
         struct AstNode *call_node;
-        struct AstNode *call_x;
-        struct AstNode *call_y;
         struct AstNode *quot_ident;
         struct AstNode *rem_ident;
         struct AstNode *new_s1_rhs;
@@ -2694,20 +2692,8 @@ struct AstNode *ast_divmod_fuse_compound(const struct AstNode *n)
         rem_sym = add_local_alloc(rname, is_signed ? TYPE_INT : (TYPE_INT | TYPE_UNSIGNED), 2);
 
         call_node = ast_new(&g_ast_arena, AST_DIVMOD_CALL);
-        /* The original identifier nodes retain source spelling and may point
-         * into a locals[] slot reused after their block closes.  Freeze the
-         * resolved internal names now so sibling blocks that reuse x/y do not
-         * make the synthesized divmod call bind to another declaration. */
-        call_x = ast_new(&g_ast_arena, AST_IDENT);
-        *call_x = *mod_node->a;
-        call_x->sval = ast_arena_strdup(&g_ast_arena, x_sym->name);
-        call_x->type = x_sym->type;
-        call_y = ast_new(&g_ast_arena, AST_IDENT);
-        *call_y = *mod_node->b;
-        call_y->sval = ast_arena_strdup(&g_ast_arena, y_sym->name);
-        call_y->type = y_sym->type;
-        call_node->a = call_x;
-        call_node->b = call_y;
+        call_node->a = (struct AstNode *)mod_node->a;
+        call_node->b = (struct AstNode *)mod_node->b;
         call_node->sym = quot_sym;
         call_node->sval = ast_arena_strdup(&g_ast_arena, rem_sym->name);
         call_node->ival = is_signed;

@@ -988,7 +988,7 @@ void parse_global_init_list(struct Sym *s)
         n = 0;
         while (g_lex.tok.kind == TOK_STR) {
             int si;
-            for (si = 0; si < g_lex.tok.text_len; ++si) {
+            for (si = 0; g_lex.tok.text[si]; ++si) {
                 grow_init_cap(s, n + 1);
                 sprintf(s->init_labels[n], "%u", (unsigned char)g_lex.tok.text[si]);
                 s->init_sizes[n] = 1;

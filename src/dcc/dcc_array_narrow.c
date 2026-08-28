@@ -948,27 +948,6 @@ static void narrow_collect_deps(const struct AstNode *n, struct NarrowGroup *kno
  * check (narrow_name_escapes): a bare, non-indexed occurrence of an array
  * name decays to a pointer and is an escape, but a bare occurrence of a
  * scalar name is an ordinary read/use, not an escape. */
-static int narrow_name_used_by_sizeof(const struct AstNode *n,
-                                      const char *name)
-{
-    int i;
-
-    if (n == NULL)
-        return 0;
-    if (n->kind == AST_SIZEOF_EXPR && n->a != NULL &&
-        n->a->kind == AST_IDENT && !strcmp(n->a->sval, name))
-        return 1;
-    if (narrow_name_used_by_sizeof(n->a, name) ||
-        narrow_name_used_by_sizeof(n->b, name) ||
-        narrow_name_used_by_sizeof(n->c, name) ||
-        narrow_name_used_by_sizeof(n->d, name))
-        return 1;
-    for (i = 0; i < n->list_len; ++i)
-        if (narrow_name_used_by_sizeof(n->list[i], name))
-            return 1;
-    return 0;
-}
-
 static int narrow_is_byte_safe_impl(const struct AstNode *scope, const char *name,
                                     int is_array)
 {
@@ -979,8 +958,6 @@ static int narrow_is_byte_safe_impl(const struct AstNode *scope, const char *nam
     int i;
 
     if (scope == NULL || scope->kind != AST_COMPOUND)
-        return 0;
-    if (is_array && narrow_name_used_by_sizeof(scope, name))
         return 0;
 
     group.n = 0;
