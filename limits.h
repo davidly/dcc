@@ -10,16 +10,16 @@
 /** Minimum value of signed short. */
 #define SHRT_MIN (-32767 - 1)
 /** Maximum value of unsigned short. */
-#define USHRT_MAX 65535
+#define USHRT_MAX 65535U
 /** Maximum value of unsigned int. */
-#define UINT_MAX 65535
+#define UINT_MAX 65535U
 
 /** Minimum value of signed long. */
 #define LONG_MIN (-2147483647L - 1L)
 /** Maximum value of signed long. */
-#define LONG_MAX 2147483647
+#define LONG_MAX 2147483647L
 /** Maximum value of unsigned long. */
-#define ULONG_MAX 4294967295
+#define ULONG_MAX 4294967295UL
 #ifndef UINT32_MAX
 /** Maximum value of uint32_t. */
 #define UINT32_MAX 4294967295UL

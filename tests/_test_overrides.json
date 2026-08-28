@@ -209,6 +209,17 @@
     { "name": "tpfinf", "requires-non-msvc-host-compiler": true, "requires-non-macos-host-compiler": true },
     { "name": "ttrace", "ignore": true },
     { "name": "texecdp", "stack_size": 2048 },
+    { "name": "tbfprom", "perf_ignore": true },
+    { "name": "tstrtri", "perf_ignore": true },
+    { "name": "ttdarrp", "perf_ignore": true },
+    { "name": "tloopcar", "perf_ignore": true },
+    { "name": "tfpcmp2", "perf_ignore": true },
+    { "name": "tptrcond", "perf_ignore": true },
+    { "name": "tscpext", "perf_ignore": true },
+    { "name": "tsibdecl", "perf_ignore": true },
+    { "name": "tnulstr", "perf_ignore": true },
+    { "name": "tprewrap", "perf_ignore": true },
+    { "name": "tuaccmp", "perf_ignore": true },
     { "name": "texargs", "stack_size": 1024,
       "extra_scenarios": [
         { "suffix": "direct", "args": "DIRECT A\"B C\\D" }

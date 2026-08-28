@@ -16,11 +16,12 @@ convention attributes.
 - SDCC `gcc-torture-execute-*.c`: 898 files; 704 compile as dcc modules and
   194 stop during compilation in the initial compatibility pass.
 
-The first pass is intentionally compile-oriented.  Passing compilation does
-not imply that the test's runtime assertions have been imported and executed
-under ntvcm yet.  Conversely, an initial compile failure is not automatically
-a dcc bug: the source may depend on an excluded feature or on the SDCC test
-harness's target-specific macros.
+The initial pass was compile-oriented.  A subsequent adapter pass built all
+898 GCC torture execute tests as CP/M programs and ran successful builds under
+ntvcm.  Before runtime fixes, 679 passed, 198 failed to build, and 21 built but
+failed at runtime.  This is a compatibility census rather than a claim that
+every failure is a dcc bug: sources can depend on unsupported features, a
+32-bit `int`, implementation-defined behavior, or SDCC harness assumptions.
 
 Of the 194 GCC-import compile failures, 127 are immediately accounted for by
 dcc's explicit diagnostics for unsupported `double`, `long double`, or `long
@@ -32,6 +33,32 @@ limit.  The remaining failures need semantic triage and minimization.
 ## Priority order
 
 ### P0: internal compiler failures or silent wrong-code risks
+
+- **Fixed: comparison signedness lost after same-width casts and the usual
+  arithmetic conversions.**  MIR records the converted operand type, but
+  spilled, homed, and fused comparison emitters re-inferred signedness from
+  the values' original definitions.  This miscompiled explicit
+  signed/unsigned casts and mixed `int`/`unsigned int` comparisons.  The fix
+  raises GCC torture runtime passes from 679 to 683 and removes failures in
+  `20080506-1`, `930916-1`, `compare-2`, and `pr28651`.  Covered by
+  `tests/tuaccmp.c`.
+
+- **Fixed: aggregate ABI and assignment metadata gaps.**  Old-style struct
+  arguments were passed as addresses instead of copied values; global struct
+  return destinations were mistaken for IX-relative locals; and stale AST
+  symbol slots could turn `*int **` assignment into an aggregate `LDIR`.
+  These fixes clear `931005-1` and `lto-tbaa-1`, with coverage in
+  `tests/tstrtri.c`.
+
+- **Fixed: pointer-to-array typedef parameters.**  `typedef T A[N]; A *p`
+  lost its row dimension and acquired an extra pointer level, so `(*p)[i]`
+  interpreted object bytes as an address.  This clears `20080519-1` and is
+  covered by `tests/ttdarrp.c`.
+
+- **Fixed: narrow unsigned bit-field promotion.**  Unsigned bit-fields whose
+  range fits in 16-bit signed `int` now promote to `int`, while an explicit
+  cast to `unsigned int` remains unsigned.  This clears `bf-sign-2` and
+  `bitfld-1`, covered by `tests/tbfprom.c`.
 
 - **Fixed: extern function-pointer array loses its array shape.** z88dk
   `testsuite/Issue_497_astroforce_compile.c` made dcc abort with `MIR emission
@@ -57,6 +84,64 @@ limit.  The remaining failures need semantic triage and minimization.
   normalized before promoting any of them to bugs.
 
 ### P1: standard-C compile gaps with useful Z80 coverage
+
+The runtime-failure queue is now empty.  Four final cases were resolved as
+three compiler defects and one exclusion: `20000227-1`, `pr37924`, and
+`pr81913` now pass, while `pr86714` explicitly tests implementation quality
+after an excess array initializer, whose behavior is undefined by C89.
+
+`920730-1` is now fixed: the target `<limits.h>` gives `USHRT_MAX` and
+`UINT_MAX` unsigned suffixes and gives the long limits their required long
+suffixes, so the usual arithmetic conversions no longer treat decimal 65535
+as a signed `long` in comparisons against `UINT_MAX`.
+
+`pr78675` is now fixed as well.  The spilled backend's linear slot intervals
+did not cover a value defined inside a loop but live across its backedge and
+used after exit, allowing loop-header temporaries to overwrite it.  Backedge
+intervals now use CFG liveness, with focused coverage in `tests/tloopcar.c`.
+
+`arith-rand` is now fixed.  Nested sibling blocks receive stable internal
+declaration names, deferred aliases cover the full lexical block rather than
+ending at its first conditional branch, and resolved operand types propagate
+through unary/conditional MIR.  Equal-width signedness conversions feeding a
+store are retained so object promotion cannot replace a signed local with its
+unsigned initializer value.  The adapted upstream test passes all 394 runtime
+assertions, with focused coverage in `tests/tsibdecl.c`.
+
+`pr37924` is fixed.  An equal-width cast from signed to unsigned was treated
+as a representation-only conversion even when it selected the semantics of a
+right shift, causing an arithmetic shift where C requires a logical shift.
+Such conversions are now retained for the left operand of `>>`, with focused
+coverage in `tests/tprewrap.c`.
+
+`pr81913` is fixed.  Prefix decrement of an unsigned byte wrapped its stored
+low byte correctly, but a later integer promotion reused the unnormalized
+16-bit intermediate (`0xffff` instead of 255).  Byte-to-word casts now always
+perform the required sign or zero extension; `tests/tprewrap.c` covers the
+original loop and constant values.
+
+`20000227-1` is fixed.  Global character-array initialization walked decoded
+string data as a NUL-terminated host string, so an embedded `\0` truncated
+the initializer and inferred array bound.  It now uses the lexer's recorded
+byte length.  `tests/tnulstr.c` covers the escaped form, and direct compilation
+of the original ISO-8859 source confirms that both `\377` and a literal
+0xff byte emit `{ 0, 255, 0 }`.
+
+`cmpsf-1` is fixed.  Its comparison helpers had correct float-typed MIR, but
+the lazy-parameter allocator admitted 4-byte parameters even though that path
+only reliably materialized 1/2-byte values.  A comparison could push the first
+float and then treat the second as already resident, effectively comparing
+against stale registers.  Wide parameters now use the established direct-home
+path, with focused two-float-parameter coverage in `tests/tfpcmp2.c`; the full
+upstream 8-by-8 table passes all 384 assertions.
+
+`doloop-1` and `doloop-2` now pass unchanged after the unsigned limit and
+promotion corrections above.  `pr86231` exposed a separate conditional bug:
+MIR tested only the base-type bits and mistook a `void *` result for a void
+expression, discarding the selected pointer before assignment.  Covered by
+`tests/tptrcond.c`.  `scope-1` is also fixed: a block-scope `extern` now creates
+a lexical alias to external storage rather than allocating an uninitialized
+automatic object.  Covered by `tests/tscpext.c`.
 
 These z88dk cases appear applicable after removing irrelevant harness details
 and should be minimized, host-validated, then turned into runnable dcc tests:
@@ -103,7 +188,8 @@ Do not spend compiler-fix effort on a test whose essential behavior requires:
 
 ## Validation for completed items
 
-The two minimized regressions pass under ntvcm in both optimized and
-unoptimized builds.  The complete dcc suite after the fixes reports 425
-passed, 0 failed, 12 skipped; the extended, diagnostics, dccpeep-fixture, and
-performance checks all pass.
+The focused regressions pass under ntvcm in both optimized and unoptimized
+builds.  The complete dcc correctness suite after the fixes has 433 runnable
+applications and 12 intentionally skipped; the extended, diagnostics, and
+dccpeep-fixture checks pass.  Performance baselines are refreshed when a
+corrected ABI or promotion path legitimately changes generated code.

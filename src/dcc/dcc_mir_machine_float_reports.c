@@ -5037,7 +5037,8 @@ static int mir_match_pi_series_schedule(
         mir.insns[108].immediate != '+' ||
         mir.insns[113].immediate != '/' ||
         mir.insns[118].immediate != '+' ||
-        !mir_machine_constant_equals(mir.insns[27].dst, 0) ||
+        !(mir_machine_constant_equals(mir.insns[27].dst, 0) ||
+          mir_machine_constant_equals(mir.insns[28].dst, 0)) ||
         !mir_machine_constant_equals(mir.insns[66].dst, 8) ||
         !mir_machine_constant_equals(mir.insns[74].dst, 1) ||
         (unsigned long)mir.insns[79].immediate != 0x3f800000UL ||
