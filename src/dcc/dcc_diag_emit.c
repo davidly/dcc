@@ -84,6 +84,7 @@ const char *dcc_diag_code_for_message(const char *msg)
     if (dcc_msg_has(msg, "unknown struct field")) return "DCC-E0509";
     if (dcc_msg_has(msg, "field name expected")) return "DCC-E0506";
     if (dcc_msg_has(msg, "bitfield type must be int or unsigned int")) return "DCC-E0510";
+    if (dcc_msg_has(msg, "_Bool bitfield width exceeds one bit")) return "DCC-E0511";
     if (dcc_msg_has(msg, "invalid bitfield width")) return "DCC-E0511";
     if (dcc_msg_has(msg, "duplicate enum constant")) return "DCC-E0520";
     if (dcc_msg_has(msg, "enum constant name expected")) return "DCC-E0521";

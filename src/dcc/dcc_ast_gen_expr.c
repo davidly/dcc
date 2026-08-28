@@ -57,6 +57,8 @@ void ast_gen_dead_expr(const struct AstNode *n)
             gen_deadincdec_addr_lvalue_ast(n, &type);
             if (current_field_bit_width > 0)
                 emit_pre_incdec_lvalue(type, n->op);
+            else if (type_ptr_depth(type) > 0)
+                gen_post_update_from_addr(type, n->op);
             else
                 emit_incdec_addr(type, n->op);
         }

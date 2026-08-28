@@ -962,6 +962,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz);
 int parse_abstract_funcptr_declarator(int *ptype);
 int char_array_string_initializer_size(int base_type);
 void parse_array_declarator_dims(int base_type, int *total_len, int *first_stride_bytes, int allow_empty_first);
+int parse_parenthesized_array_declarator(int base_type, char *name, int namesz,
+                                         int *total_len, int *first_stride_bytes);
 int array_dim_has_runtime_identifier(void);
 void skip_array_dim_to_close(void);
 int count_initializer_atoms_level(void);

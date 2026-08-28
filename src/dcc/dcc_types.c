@@ -528,10 +528,17 @@ void parse_struct_definition(int struct_id)
 
                 memset(&field_defs[nfield_defs], 0, sizeof(field_defs[nfield_defs]));
                 dcc_copy_str(field_defs[nfield_defs].name, sizeof(field_defs[nfield_defs].name), fname);
-                if ((ftype & 15) != TYPE_INT || type_ptr_depth(ftype) != 0)
+                if (((ftype & 15) != TYPE_INT && (ftype & 15) != TYPE_BOOL) ||
+                    type_ptr_depth(ftype) != 0)
                     error_here("bitfield type must be int or unsigned int");
-                field_defs[nfield_defs].type = ((ftype & TYPE_UNSIGNED) || g_parse_type_was_enum) ?
-                    (TYPE_UNSIGNED | TYPE_INT) : TYPE_INT;
+                if ((ftype & 15) == TYPE_BOOL && bw > 1)
+                    error_here("_Bool bitfield width exceeds one bit");
+                if ((ftype & 15) == TYPE_BOOL)
+                    field_defs[nfield_defs].type = TYPE_BOOL;
+                else
+                    field_defs[nfield_defs].type =
+                        ((ftype & TYPE_UNSIGNED) || g_parse_type_was_enum) ?
+                        (TYPE_UNSIGNED | TYPE_INT) : TYPE_INT;
                 field_defs[nfield_defs].is_volatile = g_decl.is_volatile;
                 field_defs[nfield_defs].parent_struct_id = struct_id;
                 field_defs[nfield_defs].offset = bit_unit_offset;
@@ -1042,4 +1049,3 @@ int parse_type_name_decl(int *typep, int *sizep)
 }
 
 int parse_sizeof_expr_operand(void);
-

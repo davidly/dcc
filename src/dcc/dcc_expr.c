@@ -862,6 +862,36 @@ void parse_array_declarator_dims(int base_type,
         g_last_array_dims[i] = dims[i];
 }
 
+/* Accept redundant grouping around an array direct-declarator, such as the
+ * standard-C spelling `int *(p[3])` (equivalent to `int *p[3]`).  Function
+ * pointer declarators also begin with `(`, so probe through the identifier and
+ * commit only when the following token is an array suffix. */
+int parse_parenthesized_array_declarator(int base_type, char *name, int namesz,
+                                         int *total_len,
+                                         int *first_stride_bytes)
+{
+    LexState saved;
+
+    if (g_lex.tok.kind != '(')
+        return 0;
+    saved = lex_save();
+    next_token();
+    if (g_lex.tok.kind != TOK_ID) {
+        lex_restore(&saved);
+        return 0;
+    }
+    strncpy(name, g_lex.tok.text, (size_t)namesz - 1);
+    name[namesz - 1] = 0;
+    next_token();
+    if (g_lex.tok.kind != '[') {
+        lex_restore(&saved);
+        return 0;
+    }
+    parse_array_declarator_dims(base_type, total_len, first_stride_bytes, 1);
+    expect(')');
+    return 1;
+}
+
 
 
 
@@ -1216,7 +1246,13 @@ void gen_post_update_from_addr(int type, int op)
     emit_load_from_hl(type);
     emit("\tpush hl\n");             /* old value */
 
-    if (op == TOK_INC) {
+    if (type_ptr_depth(type) > 0) {
+        int element_size = type_index_elem_size(type);
+
+        if (element_size <= 0)
+            element_size = 1;
+        emit_add_const_to_hl(op == TOK_INC ? element_size : -element_size);
+    } else if (op == TOK_INC) {
         emit("\tinc hl\n");
     } else {
         emit("\tdec hl\n");
@@ -1364,10 +1400,12 @@ void emit_extract_bitfield(void)
     int i;
     unsigned int mask;
     int out_type;
+    int source_is_bool;
 
     if (current_field_bit_width <= 0)
         return;
 
+    source_is_bool = type_is_bool(g_expr.type);
     out_type = (g_expr.type & TYPE_UNSIGNED) ? (TYPE_UNSIGNED | TYPE_INT) : TYPE_INT;
 
     for (i = 0; i < current_field_bit_shift; ++i)
@@ -1378,7 +1416,11 @@ void emit_extract_bitfield(void)
     emit("\tld a,l\n\tand e\n\tld l,a\n");
     emit("\tld a,h\n\tand d\n\tld h,a\n");
 
-    if (!(out_type & TYPE_UNSIGNED) && current_field_bit_width < 16) {
+    /* `_Bool : 1` has values 0 and 1 and promotes to signed int; unlike a
+     * signed one-bit int field, its set bit must therefore be zero-extended,
+     * not sign-extended to -1. */
+    if (!(out_type & TYPE_UNSIGNED) && !source_is_bool &&
+        current_field_bit_width < 16) {
         int lab;
         unsigned int signbit;
         unsigned int extend_mask;

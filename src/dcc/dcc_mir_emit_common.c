@@ -79,7 +79,8 @@ void mir_emit_bitfield_extract(MirStream *out, const struct MirInsn *insn)
     value_mask = insn->bit_width >= 16
         ? 0xffffU : (1U << insn->bit_width) - 1U;
     mir_emit_hl_and_const(out, value_mask);
-    if ((insn->type & TYPE_UNSIGNED) == 0 && insn->bit_width > 0 &&
+    if ((insn->type & TYPE_UNSIGNED) == 0 && !type_is_bool(insn->type) &&
+        insn->bit_width > 0 &&
         insn->bit_width < 16) {
         sign_label = new_label();
         if (insn->bit_width <= 8)

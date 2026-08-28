@@ -1079,7 +1079,7 @@ int ast_deadincdec_member_ok(const struct AstNode *e)
 int ast_incdec_addr_type_ok(int t)
 {
     if (type_ptr_depth(t) > 0)
-        return type_index_elem_size(t) == 1;
+        return type_index_elem_size(t) > 0;
     return ast_is_plain_int_type(t) || type_size(t) == 4;
 }
 

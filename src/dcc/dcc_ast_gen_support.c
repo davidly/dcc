@@ -655,8 +655,16 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
             if (!ast_deref_lvalue_type(n->a, &deref_type))
                 return 0;
             if (ast_is_plain_int_type(deref_type) &&
-                (type_size(deref_type) == 1 || type_size(deref_type) == 2))
+                (type_size(deref_type) == 1 || type_size(deref_type) == 2)) {
+                /* Plain assignment narrows a long rhs by storing its low byte
+                 * or word.  gen_assign_lvalue_expr_ast already emits exactly
+                 * that truncating tail; admit it here just as identifier
+                 * lvalues do.  This covers `*--p = '0' + value % 10`, where
+                 * value is unsigned long. */
+                if (n->op == '=' && ast_value_is_long_word(n->b))
+                    return 1;
                 return ast_value_is_plain_int(n->b);
+            }
             if (n->op != '=') {
                 if (type_is_long(deref_type) &&
                     (n->op == TOK_SHLEQ || n->op == TOK_SHREQ))
@@ -722,8 +730,8 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
             !(n->op == '=' && type_size(s->type) == 1 &&
                             (s->storage == SC_GLOBAL || s->storage == SC_EXTERN)) &&
                         !(expr_result_dead && type_size(s->type) == 1 &&
-                            (n->op == TOK_ANDEQ || n->op == TOK_OREQ ||
-                             n->op == TOK_XOREQ))) {
+                            (s->storage == SC_GLOBAL || s->storage == SC_EXTERN) &&
+                            is_compound)) {
             if (n->op != '=') {
                 if ((n->op == TOK_SHLEQ || n->op == TOK_SHREQ) &&
                     ast_is_plain_int_type(s->type) &&
@@ -857,10 +865,13 @@ static int ast_assign_supported_uncached(const struct AstNode *n)
         if (type_size(s->type) == 1) {
             long fv;
             if (n->op != '=') {
+                /* The general direct-symbol compound emitter handles every
+                 * arithmetic/bitwise operator for a global byte and narrows
+                 * the promoted result on store.  This used to admit only
+                 * &=/|=/^= even though *=, /=, %=, += and -= use the same
+                 * load/combine/store tail. */
                 if (expr_result_dead &&
-                    (s->storage == SC_GLOBAL || s->storage == SC_EXTERN) &&
-                    (n->op == TOK_ANDEQ || n->op == TOK_OREQ ||
-                     n->op == TOK_XOREQ))
+                    (s->storage == SC_GLOBAL || s->storage == SC_EXTERN))
                     return ast_value_is_plain_int(n->b);
                 return sym_can_ix_direct(s);
             }
@@ -949,7 +960,14 @@ static int ast_other_supported_uncached(const struct AstNode *n)
         return 1;
     }
     case AST_POSTFIX:
-        return ast_postfix_plain_int(n);
+        {
+            int pointer_type;
+            int no_deref;
+
+            return ast_postfix_plain_int(n) ||
+                   (ast_pointer_expr_type(n, &pointer_type, &no_deref) &&
+                    !no_deref);
+        }
     case AST_MEMBER:
         {
             int elem_type;

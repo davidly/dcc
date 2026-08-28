@@ -589,6 +589,25 @@ static struct AstNode *p_primary(struct AstArena *ar)
             long v = parse_offsetof_value();
             return ast_int_lit(ar, v, TYPE_INT);
         }
+        /* C99's predefined __func__ identifier behaves as though each
+         * function body began with a static character array initialized to
+         * that function's source name.  Dcc already interns string literals
+         * for the duration of the translation unit, so represent its value
+         * with the same AST node.  g_current_compiling_func is set before all
+         * scan and emission passes over the body and contains the source name
+         * (assembly-name truncation is applied separately). */
+        if (!strcmp(g_lex.tok.text, "__func__") &&
+            g_current_compiling_func[0] != 0) {
+            int len = (int)strlen(g_current_compiling_func);
+
+            n = ast_new(ar, AST_STR_LIT);
+            n->sval = ast_arena_memdup(ar, g_current_compiling_func, len);
+            n->ival = 0;
+            n->uval = (unsigned long)len;
+            n->type = TYPE_CHAR | TYPE_PTR;
+            next_token();
+            return n;
+        }
         n = ast_new(ar, AST_IDENT);
         n->sval = cur_text(ar);
         /* Freeze the declaration selected while its lexical rename is still

@@ -475,7 +475,12 @@ int ast_index_array_row_ptr_type(const struct AstNode *n, int *out_type)
     s = find_sym(root->sval);
     if (s == NULL || s->is_const_value || s->storage == SC_FUNC || !s->is_array)
         return 0;
-    if (s->dim_count != 2 || type_size(s->type) <= 0)
+    /* One subscript of any multidimensional array denotes an array row, which
+     * decays to the address of its first element in a value context.  This was
+     * unnecessarily limited to 2-D declarations, rejecting e.g. `cube[i]`
+     * when compared or passed as a pointer-to-row.  The N-D address emitter
+     * already derives the correct stride from the remaining dimensions. */
+    if (s->dim_count < 2 || type_size(s->type) <= 0)
         return 0;
     for (cur = n; cur != root; cur = cur->a) {
         if (cur == NULL || cur->kind != AST_INDEX || !ast_index_subscript_supported(cur->b))
@@ -1192,8 +1197,18 @@ int ast_pointer_expr_type(const struct AstNode *n, int *out_type,
 
     case AST_IDENT:
         s = find_sym(n->sval);
-        if (s == NULL || s->is_const_value || s->storage == SC_FUNC)
+        if (s == NULL || s->is_const_value)
             return 0;
+        /* A function designator decays to a function pointer in every value
+         * context except sizeof/address-of.  Treat it like the other pointer
+         * expressions here so conditional callees such as
+         * `(pick ? first : second)(arg)` can use the existing indirect-call
+         * lowering path. */
+        if (s->storage == SC_FUNC) {
+            *out_type = type_add_ptr(s->type);
+            *out_no_deref = 0;
+            return 1;
+        }
         if (s->is_array) {
             *out_type = type_add_ptr(s->type);
             *out_no_deref = 0;
@@ -1437,6 +1452,7 @@ int ast_pointer_expr_type(const struct AstNode *n, int *out_type,
         if (!ast_gen_supported(n->a))
             return 0;
         if (!ast_value_is_plain_int(n->a) &&
+            !ast_value_is_long_word(n->a) &&
             !ast_value_is_pointer_word(n->a))
             return 0;
         *out_type = n->type;
@@ -1496,7 +1512,7 @@ int ast_deref_lvalue_plain_int_type(const struct AstNode *n, int *out_type)
         s = find_sym(n->a->a->sval);
         if (s == NULL || s->is_const_value || s->storage == SC_FUNC || s->is_array)
             return 0;
-        if (type_ptr_depth(s->type) != 1)
+        if (type_ptr_depth(s->type) <= 0)
             return 0;
         base = type_decay_ptr(s->type);
         if ((base & 15) == TYPE_VOID)
@@ -1542,7 +1558,7 @@ int ast_deref_lvalue_type(const struct AstNode *n, int *out_type)
         s = find_sym(n->a->a->sval);
         if (s == NULL || s->is_const_value || s->storage == SC_FUNC || s->is_array)
             return 0;
-        if (type_ptr_depth(s->type) != 1)
+        if (type_ptr_depth(s->type) <= 0)
             return 0;
         base = type_decay_ptr(s->type);
         if ((base & 15) == TYPE_VOID)

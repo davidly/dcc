@@ -1,0 +1,4 @@
+<source>:2: error DCC-E0511: _Bool bitfield width exceeds one bit near ';'
+        _Bool invalid : 2;
+                         ^
+dcc: 1 error(s)

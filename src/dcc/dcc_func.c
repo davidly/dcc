@@ -2351,6 +2351,9 @@ void scan_local_decl_after_type(int base)
     int base_pointee_is_volatile;
     int total_elems;
     int direct_funcptr;
+    int parenthesized_array;
+    int parenthesized_total;
+    int parenthesized_stride;
     char name[64];
     char source_name[64];
     struct Sym *s;
@@ -2363,6 +2366,9 @@ void scan_local_decl_after_type(int base)
         g_decl.is_volatile = base_is_volatile;
         g_decl.pointee_is_volatile = base_pointee_is_volatile;
         direct_funcptr = 0;
+        parenthesized_array = 0;
+        parenthesized_total = 0;
+        parenthesized_stride = 0;
 
         while (accept('*')) {
             g_decl.pointee_is_volatile = g_decl.is_volatile;
@@ -2370,7 +2376,11 @@ void scan_local_decl_after_type(int base)
             type = type_add_ptr(type);
         }
 
-        if (parse_funcptr_declarator(&type, name, sizeof(name))) {
+        if (parse_parenthesized_array_declarator(type, name, sizeof(name),
+                                                 &parenthesized_total,
+                                                 &parenthesized_stride)) {
+            parenthesized_array = 1;
+        } else if (parse_funcptr_declarator(&type, name, sizeof(name))) {
             direct_funcptr = 1;
         } else {
             if (g_lex.tok.kind != TOK_ID) return;
@@ -2402,13 +2412,16 @@ void scan_local_decl_after_type(int base)
             name[sizeof(name) - 1] = 0;
         }
 
-        arrlen = g_funcptr_decl_array_len;
+        arrlen = parenthesized_array ? parenthesized_total
+                                     : g_funcptr_decl_array_len;
         g_funcptr_decl_array_len = 0;
         total_elems = arrlen;
         {
             int first_stride_bytes;
             first_stride_bytes = 0;
-            if (arrlen == 0)
+            if (parenthesized_array)
+                first_stride_bytes = parenthesized_stride;
+            else if (arrlen == 0)
                 parse_array_declarator_dims(type, &total_elems, &first_stride_bytes, 1);
             else
                 total_elems = arrlen;

@@ -76,12 +76,14 @@ limit.  The remaining failures need semantic triage and minimization.
   rejects a reaching value defined at or after its use.  Covered by
   `tests/tloopdef.c`.
 
-- **Next: audit remaining genuine fatals after harness exclusions.** The
-  initial GCC pass also reported `MIR emission is required` for the pr51581
-  cases, but those translation units had already hit unsupported SDCC inline
-  assembly in the selected configuration; they are not yet evidence of an
-  independent dcc defect.  Re-run all candidates with per-test target guards
-  normalized before promoting any of them to bugs.
+- **Closed: no remaining genuine fatal after harness normalization.**  The
+  initial GCC pass reported `MIR emission is required` for `pr51581-1` and
+  `pr51581-2`, but those translation units had already entered an SDCC-only
+  inline-assembly block.  With `PORT_HOST` defined, both original files
+  compile cleanly: their ordinary signed/unsigned division and remainder code
+  is valid on dcc's 16-bit target, while the strength-reduction functions are
+  correctly excluded by their 32-bit-int/64-bit-long-long target guard.  This
+  was a harness false positive rather than an independent dcc defect.
 
 ### P1: standard-C compile gaps with useful Z80 coverage
 
@@ -135,6 +137,95 @@ against stale registers.  Wide parameters now use the established direct-home
 path, with focused two-float-parameter coverage in `tests/tfpcmp2.c`; the full
 upstream 8-by-8 table passes all 384 assertions.
 
+`Issue_1167_choosing_which_function.c` is fixed.  Function designators now
+decay to function pointers in dcc's pointer-expression analysis, allowing the
+result of a conditional expression such as `(pick ? first : second)(arg)` to
+flow through the established indirect-call lowering path.  Covered by
+`tests/tfncond.c`.
+
+`Issue_2478_dropped_type_arith.c` is fixed.  Integer-to-pointer casts now
+accept long integer operands, which is required for decimal address constants
+above 32767 on dcc's 16-bit-int target.  Pointer arithmetic and dereference in
+local initializers, including commuted `integer + pointer`, then use the
+existing pointer-expression lowering path.  The same correction fixes
+`02_addr_ptr.c` and `const_cast_to_pointer.c`, including constant and variable
+indexing of byte and word pointers at absolute addresses.  Covered by
+`tests/tptarith.c`.
+
+`Issue_2523_global_init.c` is fixed.  The global-initializer parser now
+recognizes relocatable `symbol + offset` address constants behind optional
+pointer casts and parentheses instead of sending every leading-parenthesis
+form to the numeric constant folder.  Numeric grouping remains on its
+existing path.  Covered by `tests/tginaddr.c`.
+
+`Issue_1409_offset_pointer_initialisation.c` is fixed.  Relocatable
+`symbol +/- offset` initializers now consume a complete typed integer constant
+expression instead of one numeric token, and scale the result by the symbol's
+element size.  This covers pointer tables initialized with products and
+parenthesized arithmetic; the focused test uses compatible pointer base types
+rather than the upstream test's `uint16_t *`/`uint8_t[]` mismatch.  Covered by
+`tests/tginoffs.c`.
+
+`Issue_1054_initialisation.c` is fixed.  Global scalar initializer paths now
+unwrap optional brace levels recursively around array scalar elements,
+including string literals used for pointer elements.  Multidimensional character-array rows
+initialized by strings are copied inline with their terminating NUL and row
+padding instead of being recorded as string-address relocations.  Covered by
+`tests/tinitbr.c`.
+
+`Issue_493__func__.c` is fixed as a selected C99 addition.  Within a function
+body, the predefined `__func__` identifier now yields the function's complete
+source-level name as a character string, independently of M80 assembly-name
+shortening.  Covered by `tests/tfuncid.c`.
+
+GCC torture execute `20020503-1` is fixed.  Assignment through a dereference
+lvalue now accepts a long-valued right operand when the pointed-to object is a
+byte or word scalar.  The existing generic store already performs C's required
+low-byte/low-word narrowing; only the AST support gate had rejected the form.
+This restores the test's `*--p = '0' + value % 10` integer-formatting loop,
+covered by `tests/tldref.c`.
+
+GCC torture execute `20030128-1` is fixed.  Dead-result arithmetic compound
+assignment to a global byte now uses the same direct-symbol load/combine/store
+path that already handled global-byte bitwise compound assignment.  Operands
+undergo integer promotion and the result narrows back to the byte, including
+the upstream `unsigned char /= volatile short` case.  Covered by
+`tests/tgbcmp.c`.
+
+The applicable core of GCC torture execute `20030714-1` is fixed as a selected
+C99 addition.  Dcc now permits `_Bool` bit-fields with C99's required maximum
+width of one bit and preserves their boolean type for assignment
+normalization.  The original translation unit still needs its two colliding
+`Render...setStyle` public names shortened differently for M80, so focused
+mixed-field coverage is provided by `tests/tboolbf.c`.
+
+GCC torture execute `20060929-1` is fixed.  Pointer-valued postfix updates on
+dereference lvalues now pass the AST support gate at any pointer depth, and the
+shared address-based postfix emitter scales the stored pointer by its element
+size instead of always adding or subtracting one byte.  This covers the
+upstream `*(*p++)++ = *q++`, discarded-read, and discarded-update forms, with
+focused coverage in `tests/tnestpi.c`.
+
+GCC torture execute `20080424-1` is fixed.  A row selected from a
+multidimensional array now decays in pointer comparison operands for arrays of
+any rank, rather than only two-dimensional arrays.  Dynamic and postfix row
+indexes have focused coverage in `tests/trowcmp.c`.  Broader first-level
+partial-decay coverage across global and local 3-D arrays, byte/word/long
+elements, function parameters, `sizeof`, address equivalence, outer pointer
+arithmetic, and side-effecting indexes is provided by `tests/tnddecay.c`.
+
+GCC torture execute `921019-1` is fixed.  File-scope pointer initializers may
+now take the address of a constant-index element of a string literal, through
+optional grouping and a pointer cast.  The initializer records the literal's
+relocation plus the element offset; zero and nonzero offsets have focused
+coverage in `tests/tstraddr.c`.
+
+GCC torture execute `930526-1` is fixed.  Local array direct-declarators may
+now carry redundant grouping parentheses, including the upstream
+`int *(p[3])` array-of-pointers spelling.  Grouped scalar arrays and one- and
+two-dimensional byte, word, and long pointer arrays have focused coverage in
+`tests/tparrgrp.c`.
+
 `doloop-1` and `doloop-2` now pass unchanged after the unsigned limit and
 promotion corrections above.  `pr86231` exposed a separate conditional bug:
 MIR tested only the base-type bits and mistook a `void *` result for a void
@@ -143,27 +234,8 @@ expression, discarding the selected pointer before assignment.  Covered by
 a lexical alias to external storage rather than allocating an uninitialized
 automatic object.  Covered by `tests/tscpext.c`.
 
-These z88dk cases appear applicable after removing irrelevant harness details
-and should be minimized, host-validated, then turned into runnable dcc tests:
-
-- `02_addr_ptr.c` and `const_cast_to_pointer.c`: dereference/index an absolute
-  integer-to-pointer cast.
-- `Issue_1167_choosing_which_function.c`: call the result of a conditional
-  expression selecting between two function designators.
-- `Issue_2478_dropped_type_arith.c`: pointer arithmetic and dereference inside
-  a local initializer, including commuted `integer + pointer`.
-- `Issue_2523_global_init.c`: parenthesized/cast address constant expressions
-  such as `(char *)(array + 1)` in file-scope initializers.
-- `Issue_1409_offset_pointer_initialisation.c`: pointer arithmetic in
-  file-scope aggregate initializers (with the upstream incompatible base type
-  corrected in the minimized test).
-- `Issue_1054_initialisation.c`: extra brace levels around scalar/string
-  subobjects in aggregate initialization.
-
 ### P2: diagnostics and selected dialect additions
 
-- `Issue_493__func__.c`: `__func__` is C99 rather than C89; consider alongside
-  dcc's other selected C99 features, not as a base-language bug.
 - Classify the remaining GCC-import DCC-E1002/DCC-E1003 failures.  Prefer
   small integer, pointer, control-flow, aggregate, and function-pointer cases;
   reject tests whose essential premise is a deliberately unsupported type or
@@ -189,7 +261,7 @@ Do not spend compiler-fix effort on a test whose essential behavior requires:
 ## Validation for completed items
 
 The focused regressions pass under ntvcm in both optimized and unoptimized
-builds.  The complete dcc correctness suite after the fixes has 433 runnable
-applications and 12 intentionally skipped; the extended, diagnostics, and
+builds.  The complete dcc correctness suite after the fixes has 448 runnable
+applications and 14 intentionally skipped; the extended, diagnostics, and
 dccpeep-fixture checks pass.  Performance baselines are refreshed when a
 corrected ABI or promotion path legitimately changes generated code.
