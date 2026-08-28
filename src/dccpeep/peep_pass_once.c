@@ -1524,9 +1524,9 @@ static int function_has_inline_simple_store_marker(int line)
 static int try_hl_bc_hl_roundtrip_at(int i)
 {
     if (i + 3 >= nlines ||
-        !function_has_inline_simple_store_marker(i) ||
         !eq(i, "ld c,l") || !eq(i + 1, "ld b,h") ||
-        !eq(i + 2, "ld l,c") || !eq(i + 3, "ld h,b"))
+        !eq(i + 2, "ld l,c") || !eq(i + 3, "ld h,b") ||
+        !function_has_inline_simple_store_marker(i))
         return 0;
     if (peep_registers_dead_after(
             i + 3, PEEP_REG_B | PEEP_REG_C) ||

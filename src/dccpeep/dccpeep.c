@@ -10359,8 +10359,7 @@ static int pass_narrow_dead_h_constant(void)
         const char *tag;
         unsigned high_register;
 
-        if (!function_has_mir_byte_slots(i) ||
-            info == NULL || info->opcode != PEEP_OPCODE_LD ||
+        if (info == NULL || info->opcode != PEEP_OPCODE_LD ||
             info->left.kind != PEEP_OPERAND_REGISTER ||
             info->right.kind != PEEP_OPERAND_IMMEDIATE ||
             !info->right.immediate_valid)
@@ -10378,6 +10377,8 @@ static int pass_narrow_dead_h_constant(void)
             high_register = PEEP_REG_B;
             tag = "narrow_dead_b_const";
         } else
+            continue;
+        if (!function_has_mir_byte_slots(i))
             continue;
         if (!peep_registers_dead_after(i, high_register))
             continue;
