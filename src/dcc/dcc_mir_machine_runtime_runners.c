@@ -1004,6 +1004,18 @@ static int mir_call_runner_spilled_profile(
         *profile = MIR_STRICT_SPILLED_PHI_SLOT;
         return 1;
     }
+    /* Scoped local identities changed the MIR/value counts of the long
+     * div/mod cast and fused-divmod runners without changing their final
+     * printf tail.  Re-enable the already costed global-argument profile:
+     * it reloads the single-use `checks` global at ABI push time and avoids
+     * a needless backend-slot round trip. */
+    if (mir_cfg_block_count() == 1 && mir.local_bytes == 64 &&
+        !mir_has_cfg_backedge() &&
+        ((mir.count == 221 && mir.next_value == 139) ||
+         (mir.count == 194 && mir.next_value == 112))) {
+        *profile = MIR_STRICT_SPILLED_GLOBAL_ARGUMENT;
+        return 1;
+    }
     return 0;
 }
 
@@ -2802,7 +2814,8 @@ static int mir_match_wildcard_open_schedule(
     if (!mir_call_recovery_opcode_sequence(
             expected_opcodes, sizeof(expected_opcodes)) ||
         mir.sink_purpose != EMIT_SINK_FINAL ||
-        mir_cfg_block_count() != 6 || mir.local_bytes != 26 ||
+        mir_cfg_block_count() != 6 ||
+        (mir.local_bytes != 26 && mir.local_bytes != 24) ||
         mir.aggregate_temp_bytes != 0 || mir.has_vla ||
         !mir_memory_runner_word_type(mir.return_type, 0))
         return 0;

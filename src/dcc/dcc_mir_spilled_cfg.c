@@ -3906,7 +3906,7 @@ static int mir_dead_local_candidate(int object, int *store_instruction,
     int store = -1;
     int instruction;
 
-    if (candidate->storage != SC_LOCAL || (size != 2 && size != 4) ||
+    if (candidate->storage != SC_LOCAL || size <= 0 ||
         candidate->offset >= 0)
         return 0;
     for (instruction = 0; instruction < mir.count; ++instruction) {
@@ -3918,9 +3918,6 @@ static int mir_dead_local_candidate(int object, int *store_instruction,
             store = instruction;
         }
     }
-    if (store < 0 || type_size(mir.insns[store].type) != size ||
-        !mir_object_is_fully_promoted(object))
-        return 0;
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
         int memory_type;
@@ -3941,6 +3938,18 @@ static int mir_dead_local_candidate(int object, int *store_instruction,
             instruction != store)
             return 0;
     }
+    /* A declaration in unreachable source can reserve a frame slot without
+     * producing any MIR access at all.  That is an even stronger dead-local
+     * case than the promoted single-store form below. */
+    if (store < 0) {
+        *store_instruction = -1;
+        *source_value = -1;
+        return 1;
+    }
+    if ((size != 2 && size != 4) ||
+        type_size(mir.insns[store].type) != size ||
+        !mir_object_is_fully_promoted(object))
+        return 0;
     *source_value = mir.insns[store].src1;
     if (*source_value < 0)
         return 0;
@@ -3974,6 +3983,28 @@ static int mir_dead_local_suffix_allowed(void)
         }
     }
     return 1;
+}
+
+static int mir_vla_storage_is_used(const struct MirInsn *allocation)
+{
+    int instruction;
+
+    if (allocation == NULL || allocation->opcode != MIR_VLA_ALLOC ||
+        allocation->name[0] == 0)
+        return 1;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn == allocation || strcmp(insn->name, allocation->name) != 0)
+            continue;
+        if (insn->opcode == MIR_ADDRESS ||
+            insn->opcode == MIR_LOAD || insn->opcode == MIR_STORE ||
+            insn->opcode == MIR_LOAD_INDIRECT ||
+            insn->opcode == MIR_STORE_INDIRECT ||
+            insn->opcode == MIR_COPY_AGGREGATE)
+            return 1;
+    }
+    return 0;
 }
 
 static int mir_dead_local_range_is_unique(int candidate)
@@ -9057,7 +9088,11 @@ static int mir_match_forth_run(struct MirForthRun *plan)
           (first == 0x13c4bf453d4f65e4ULL &&
            second == 0xec59cda46ecc2c05ULL) ||
           (first == 0x295b678c297bd71fULL &&
-           second == 0xe798b5336aa2b1a1ULL)))
+           second == 0xe798b5336aa2b1a1ULL) ||
+          (first == 0xb28fb17cac25811fULL &&
+           second == 0xd26e127ac8d7dc8dULL) ||
+          (first == 0x9517e46c0d30aec4ULL &&
+           second == 0x15fb2915e373bcc5ULL)))
         return 0;
     /* Unique block-local temporaries retain 17 explicit operations before
        the dispatch body; all later structural landmarks move together. */
@@ -9395,8 +9430,10 @@ static int mir_match_float_sum(struct MirFloatSum *plan)
             (int)mir.insns[18].immediate;
         plan->element_size = (int)mir.insns[27].immediate;
     } else if (mir.count == 30 && mir_cfg_block_count() == 4 &&
-               first == 0x45e7159348c49401ULL &&
-               second == 0x9b58dbc0d14bf648ULL) {
+               ((first == 0x45e7159348c49401ULL &&
+                 second == 0x9b58dbc0d14bf648ULL) ||
+                (first == 0xe4d022dda95c6f86ULL &&
+                 second == 0x4292964fd3fca050ULL))) {
         array_instruction = 1;
         accumulator_instruction = 18;
         plan->count = (int)mir.insns[8].immediate;
@@ -9568,7 +9605,11 @@ static int mir_match_fortran_eval(struct MirFortranEval *plan)
           (first == 0x75708829c77e5e7eULL &&
            second == 0xccc039e68a359461ULL) ||
           (first == 0xa57e68b23840f3e2ULL &&
-           second == 0xa826c92afc076379ULL)))
+           second == 0xa826c92afc076379ULL) ||
+          (first == 0xbc94eb55d2dcc6b4ULL &&
+           second == 0x3944da5e21f0fe04ULL) ||
+          (first == 0x99ff9778dbce8e5cULL &&
+           second == 0xc9ac7eaed8dce00aULL)))
         return 0;
     if (!mir_scalar_memory_location(
             &mir.insns[1], &memory_type,
@@ -9799,7 +9840,11 @@ static int mir_match_visit_count(struct MirVisitCount *plan)
     if (!((first == 0x23615dd0a2405a69ULL &&
            second == 0x2b3026fb5c17cc54ULL) ||
           (first == 0x03ffdc9b6bd446c3ULL &&
-           second == 0x4dccdbd063637ad2ULL)))
+           second == 0x4dccdbd063637ad2ULL) ||
+          (first == 0x75ee6684d67d9b6dULL &&
+           second == 0xf02dfde414222c31ULL) ||
+          (first == 0x87fdd121d052abfcULL &&
+           second == 0xd17f7d10c13e784fULL)))
         return 0;
     if (!mir_scalar_memory_location(
             &mir.insns[1], &memory_type,
@@ -9870,7 +9915,9 @@ static int mir_match_vla_stable(struct MirVlaStable *plan)
          ((first == 0x66870004159feaa3ULL &&
            second == 0x4c802fcc0dd9d226ULL) ||
           (first == 0xdebda3a1a29353caULL &&
-           second == 0x27a7c66e646997dfULL)));
+           second == 0x27a7c66e646997dfULL) ||
+          (first == 0x9cca04852395c310ULL &&
+           second == 0x96e37a7925caa8e0ULL)));
     if (!shape_matches ||
         !mir_match_signed_word_parameter(1, &plan->iter_offset) ||
         !mir_match_signed_word_parameter(2, &plan->count_offset))
@@ -11643,8 +11690,12 @@ static int mir_match_ascii_piece_value(
         type_ptr_depth(mir.return_type) != 0)
         return 0;
     mir_numeric_shape_hash(&first, &second);
-    if (first != 0x59697afb13936103ULL ||
-        second != 0x851b7d36ba226c14ULL ||
+    /* Explicit secondary operand types on the six equality comparisons do
+     * not change this fully checked byte-to-value decision tree. */
+    if (!((first == 0x59697afb13936103ULL &&
+           second == 0x851b7d36ba226c14ULL) ||
+          (first == 0x0333b10499f0725bULL &&
+           second == 0x9b0d17d710ef9fceULL)) ||
         !mir_frameless_byte_parameter(
             &mir.insns[1], &plan->parameter_sp_offset))
         return 0;
@@ -23266,10 +23317,9 @@ static int mir_emit_scalar_operation(MirStream *out, const struct MirInsn *insn)
         return 1;
     case TOK_SHL: case TOK_SHR:
         {
-            const struct MirInsn *left = mir_definition(insn->src1);
             mir_emit_scalar_shift(out, (int)insn->immediate,
-                                  left != NULL &&
-                                  (left->type & TYPE_UNSIGNED) != 0,
+                                  (insn->secondary_offset &
+                                   TYPE_UNSIGNED) != 0,
                                   insn->src2);
         }
         return 1;
@@ -31783,6 +31833,8 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
         case MIR_VLA_ALLOC:
             mir_emit_virtual_load(out, insn->src1);
             mir_emit_frame_word_store(out, insn->secondary_offset);
+            if (!mir_vla_storage_is_used(insn))
+                break;
             mir_stream_puts("\tex de,hl\n\tld hl,0\n\tadd hl,sp\n"
                   "\tor a\n\tsbc hl,de\n\tld sp,hl\n", out);
             if (opt_stack_check)
@@ -31934,6 +31986,21 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
 
                 if (!((insn->type & 15) == TYPE_BOOL &&
                       comparison_result) &&
+                    !(source != NULL && type_size(source->type) == 1 &&
+                      type_size(insn->type) == 2 &&
+                      (source->opcode == MIR_PHI ||
+                       mir_value_is_normalized_byte(
+                           insn->src1, source->type, 0))) &&
+                    !(source != NULL && type_size(source->type) == 1 &&
+                      type_size(insn->type) == 4 &&
+                      mir_value_is_normalized_byte(
+                          insn->src1, source->type, 0) &&
+                      mir_emit_cast(
+                          out,
+                          ((source->type & TYPE_UNSIGNED) != 0 ||
+                           type_is_bool(source->type))
+                              ? (TYPE_INT | TYPE_UNSIGNED) : TYPE_INT,
+                          insn->type)) &&
                     !mir_emit_cast(
                         out, source != NULL ? source->type : 0,
                         insn->type))

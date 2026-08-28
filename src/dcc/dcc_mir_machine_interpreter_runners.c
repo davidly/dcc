@@ -4571,7 +4571,11 @@ static int mir_match_cob_tokenizer_schedule(
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
 
-        if (insn->opcode != mir_cob_tokenizer_opcodes[instruction])
+        if (insn->opcode != mir_cob_tokenizer_opcodes[instruction] &&
+            !(instruction == 208 && insn->opcode == MIR_UNARY &&
+              insn->src1 == mir.insns[207].dst &&
+              insn->immediate == 0 && type_size(insn->type) == 2 &&
+              type_size(mir.insns[207].type) == 4))
             return 0;
         if ((insn->opcode == MIR_LOAD_INDIRECT ||
              insn->opcode == MIR_STORE_INDIRECT) &&

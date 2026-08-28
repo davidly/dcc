@@ -96,7 +96,8 @@ int mir_machine_same_location(
                right, &right_type, &right_storage, &right_offset) &&
            left_storage == right_storage &&
            left_offset == right_offset &&
-           !strcmp(left->name, right->name) &&
+           (!strcmp(left->name, right->name) ||
+            (left->object >= 0 && left->object == right->object)) &&
            type_size(left_type) == type_size(right_type);
 }
 

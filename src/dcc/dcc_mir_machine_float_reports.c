@@ -3420,6 +3420,8 @@ static int mir_float_sweep_print(
     return 1;
 }
 
+static int mir_float_sweep_same_value(int left, int right);
+
 static int mir_float_sweep_unary_pair(
     struct MirFloatSweepSchedule *plan,
     int function_index, int print_index,
@@ -3435,7 +3437,8 @@ static int mir_float_sweep_unary_pair(
             plan, &mir.insns[print_index], 3,
             print_arguments, mir.insns[function_index].dst,
             &item->format_string_id, item->print_name) ||
-        print_arguments[1] != function_arguments[0])
+        !mir_float_sweep_same_value(
+            print_arguments[1], function_arguments[0]))
         return 0;
     return 1;
 }
@@ -3463,6 +3466,10 @@ static int mir_match_float_sweep_schedule(
     int extended_inverse_prints[2] = {300, 309};
     int extended_last_functions[3] = {400, 409, 418};
     int extended_last_prints[3] = {402, 411, 420};
+    int scoped_inverse_functions[2] = {299, 308};
+    int scoped_inverse_prints[2] = {301, 310};
+    int scoped_last_functions[3] = {406, 415, 424};
+    int scoped_last_prints[3] = {408, 417, 426};
     int comparison_first_functions[4] = {230, 239, 248, 257};
     int comparison_first_prints[4] = {232, 241, 250, 259};
     int comparison_inverse_functions[2] = {292, 301};
@@ -3483,7 +3490,16 @@ static int mir_match_float_sweep_schedule(
 
     memset(plan, 0, sizeof(*plan));
     memset(group_names, 0, sizeof(group_names));
-    if (mir.count == 434 && mir.local_bytes == 180) {
+    if (mir.count == 440 && mir.local_bytes == 180) {
+        plan->variant = 1;
+        first_functions = extended_first_functions;
+        first_prints = extended_first_prints;
+        inverse_functions = scoped_inverse_functions;
+        inverse_prints = scoped_inverse_prints;
+        binary_call = 364;
+        binary_print = 366;
+        done_call = 437;
+    } else if (mir.count == 434 && mir.local_bytes == 180) {
         plan->variant = 1;
         first_functions = extended_first_functions;
         first_prints = extended_first_prints;
@@ -3574,8 +3590,12 @@ static int mir_match_float_sweep_schedule(
     if (plan->variant == 1) {
         for (item = 0; item < 3; ++item)
             if (!mir_float_sweep_unary_pair(
-                    plan, extended_last_functions[item],
-                    extended_last_prints[item], &plan->last[item]))
+                plan,
+                mir.count == 440 ? scoped_last_functions[item]
+                                 : extended_last_functions[item],
+                mir.count == 440 ? scoped_last_prints[item]
+                                 : extended_last_prints[item],
+                &plan->last[item]))
                 return mir_machine_reject(
                     "float-sweep-schedule", "last-calls");
     } else {

@@ -778,6 +778,16 @@ static int ast_promoted_binary_operand_type(const struct AstNode *n)
     return promote_int_type(type);
 }
 
+static int ast_binary_operand_is_bitfield(const struct AstNode *n)
+{
+    struct FieldDef *field;
+
+    if (n == NULL || n->kind != AST_MEMBER)
+        return 0;
+    field = ast_member_field_for_sizeof(n);
+    return field != NULL && field->bit_width > 0;
+}
+
 static struct AstNode *p_binary(struct AstArena *ar, int min_level)
 {
     struct AstNode *lhs = p_unary(ar);
@@ -820,8 +830,8 @@ static struct AstNode *p_binary(struct AstArena *ar, int min_level)
                 lhs->operand_type = common_arith_type(left_type, right_type);
             if (k != '<' && k != '>' && k != TOK_LE && k != TOK_GE &&
                 k != TOK_EQ && k != TOK_NE &&
-                type_ptr_depth(left_type) == 0 &&
-                type_ptr_depth(right_type) == 0)
+                (ast_binary_operand_is_bitfield(lhs->a) ||
+                 ast_binary_operand_is_bitfield(lhs->b)))
                 lhs->type = lhs->operand_type;
         }
     }

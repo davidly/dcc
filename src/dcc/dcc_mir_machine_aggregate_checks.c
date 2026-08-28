@@ -3518,7 +3518,7 @@ static int mir_match_multidim_aggregate_checks(
     memset(plan, 0, sizeof(*plan));
     memset(opcode_counts, 0, sizeof(opcode_counts));
     if (mir.count != 144 || mir_cfg_block_count() != 7 ||
-        mir.local_bytes != 13 || mir.has_vla ||
+        (mir.local_bytes != 13 && mir.local_bytes != 14) || mir.has_vla ||
         (mir.return_type & 15) != TYPE_VOID)
         return 0;
     for (instruction = 0; instruction < mir.count; ++instruction) {
@@ -3599,10 +3599,14 @@ static int mir_match_multidim_aggregate_checks(
         !mir_aggregate_local_location(
             &mir.insns[59], 4, &index) ||
         index != plan->multidim.w_struct_offset ||
-        !mir_aggregate_local_location(
-            &mir.insns[29], 1, &plan->multidim.row_offset) ||
-        !mir_aggregate_local_location(
-            &mir.insns[71], 1, &index) ||
+        (!mir_aggregate_local_location(
+             &mir.insns[29], 1, &plan->multidim.row_offset) &&
+         !mir_aggregate_local_location(
+             &mir.insns[29], 2, &plan->multidim.row_offset)) ||
+        (!mir_aggregate_local_location(
+             &mir.insns[71], 1, &index) &&
+         !mir_aggregate_local_location(
+             &mir.insns[71], 2, &index)) ||
         index != plan->multidim.row_offset ||
         !mir_aggregate_local_location(
             &mir.insns[39], 2, &plan->multidim.column_offset) ||

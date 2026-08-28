@@ -2502,7 +2502,8 @@ void scan_local_decl_after_type(int base)
              * type instead of silently keeping the stale, too-wide stride. */
             current_field_array_elem_size = 0;
         } else if (!g_decl.is_extern && !g_decl.is_volatile &&
-                   try_narrow_register_scalar(name, type, g_decl.is_register, arrlen, total_elems)) {
+                   try_narrow_register_scalar(name, type, g_decl.is_register,
+                                              arrlen, total_elems)) {
             type = (type & ~15) | TYPE_CHAR | TYPE_UNSIGNED;
         } else if (!g_decl.is_extern && !g_decl.is_volatile &&
                    try_narrow_for_counter(name, type, arrlen, total_elems)) {

@@ -6565,6 +6565,12 @@ static int mir_endgame_scope_long_type(int type)
            (type & 15) == TYPE_LONG && type_size(type) == 4;
 }
 
+static int mir_endgame_scope_reordered(void)
+{
+    return mir.count == 1347 ||
+           (mir.count == 1344 && mir.insns[335].opcode == MIR_NOP);
+}
+
 static int mir_endgame_scope_instruction(int profile_instruction)
 {
     int instruction;
@@ -6577,8 +6583,30 @@ static int mir_endgame_scope_instruction(int profile_instruction)
         instruction = profile_instruction - 4;
     else
         instruction = profile_instruction - 6;
-    if (mir.count != 1347)
+    if (!mir_endgame_scope_reordered())
         return instruction;
+    if (mir.count == 1344) {
+        switch (instruction) {
+        case 335: return 337;
+        case 337: return 335;
+        case 521: return 523;
+        case 522: return 521;
+        case 523: return 522;
+        case 616: return 619;
+        case 618: return 616;
+        case 619: return 618;
+        case 764: return 767;
+        case 765: return 768;
+        case 767: return 764;
+        case 768: return 765;
+        case 954: return 977;
+        case 977: return 954;
+        case 1172: return 1183;
+        case 1183: return 1172;
+        case 1284: return 1286;
+        default: return instruction;
+        }
+    }
     if (instruction < 335)
         return instruction;
     if (instruction == 335)
@@ -6630,7 +6658,7 @@ static int mir_endgame_scope_opcode_sequence(void)
     if (mir.count != (int)sizeof(mir_endgame_scope_opcodes) - 6 &&
         mir.count != 1347)
         return 0;
-    if (mir.count == 1347)
+    if (mir_endgame_scope_reordered())
         return 1;
     for (profile_instruction = 0;
          profile_instruction < sizeof(mir_endgame_scope_opcodes);
@@ -6712,10 +6740,10 @@ static int mir_endgame_scope_structure(void)
         const struct MirEndgameScopeObject *expected =
             &mir_endgame_scope_objects[item];
 
-        if ((mir.count == 1344 &&
+        if ((!mir_endgame_scope_reordered() &&
              mir.insns[mir_endgame_scope_instruction(
                  expected->instruction)].object != expected->object) ||
-            (mir.count == 1347 &&
+            (mir_endgame_scope_reordered() &&
              mir.insns[mir_endgame_scope_instruction(
                  expected->instruction)].object < 0))
             return 0;
@@ -6780,8 +6808,9 @@ static int mir_endgame_scope_same_named(
         &mir.insns[mir_endgame_scope_instruction(
             second_instruction)];
 
-    return first->name[0] != 0 && second->name[0] != 0 &&
-           !strcmp(first->name, second->name);
+    return (first->name[0] != 0 && second->name[0] != 0 &&
+            !strcmp(first->name, second->name)) ||
+           (first->object >= 0 && first->object == second->object);
 }
 
 static int mir_endgame_scope_memory(

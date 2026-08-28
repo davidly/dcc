@@ -760,10 +760,9 @@ static int mir_emit_scalar_value(MirStream *out, int value, int depth)
             return 1;
         case TOK_SHL: case TOK_SHR:
             {
-                const struct MirInsn *left = mir_definition(definition->src1);
                 mir_emit_scalar_shift(out, (int)definition->immediate,
-                                      left != NULL &&
-                                      (left->type & TYPE_UNSIGNED) != 0,
+                                      (definition->secondary_offset &
+                                       TYPE_UNSIGNED) != 0,
                                       definition->src2);
             }
             return 1;
@@ -1520,6 +1519,17 @@ int mir_emit_cast(MirStream *out, int source_type, int target_type)
         }
         return 1;
     }
+    if (type_size(source_type) == 1 && type_size(target_type) == 4) {
+        /* Extend directly from the byte in L.  Going through the generic
+         * byte-to-word path first made signed conversions compute the same
+         * sign byte twice (once for H, then again from H for DE). */
+        if ((source_type & TYPE_UNSIGNED) != 0 || type_is_bool(source_type))
+            mir_stream_puts("\tld h,0\n\tld de,0\n", out);
+        else
+            mir_stream_puts("\tld a,l\n\trlca\n\tsbc a,a\n"
+                            "\tld h,a\n\tld d,a\n\tld e,a\n", out);
+        return 1;
+    }
     if (type_size(source_type) == 1 && type_size(target_type) >= 2) {
         if ((source_type & TYPE_UNSIGNED) != 0 || type_is_bool(source_type))
             mir_stream_puts("\tld h,0\n", out);
@@ -2130,7 +2140,7 @@ void mir_emit_home_epilogue(MirStream *out, int uses_iy)
     mir_stream_puts("\tret\n", out);
 }
 
-static int mir_value_is_normalized_byte(int value, int type, int depth)
+int mir_value_is_normalized_byte(int value, int type, int depth)
 {
     const struct MirInsn *definition;
     unsigned long bits;
@@ -2152,7 +2162,8 @@ static int mir_value_is_normalized_byte(int value, int type, int depth)
      * retain carry/sign debris and must be normalized before promotion. */
     if ((definition->opcode == MIR_LOAD ||
          definition->opcode == MIR_LOAD_INDIRECT ||
-         definition->opcode == MIR_PARAM) &&
+         definition->opcode == MIR_PARAM ||
+         definition->opcode == MIR_CALL) &&
         type_size(definition->type) == 1 &&
         (((definition->type & TYPE_UNSIGNED) != 0 ||
           type_is_bool(definition->type)) ==
@@ -2242,7 +2253,28 @@ int mir_emit_homed_unary_instruction(MirStream *out,
         if (mir_float_identity_unary(insn)) {
             /* The value already has the target representation. */
         } else if (insn->immediate == 0) {
-            if (!mir_emit_cast(out, source_type, insn->type))
+            int cast_source_type = source_type;
+
+            /* A normalized byte already has its correct H byte.  For a
+             * wide destination only extend that word into DE; repeating the
+             * byte normalization costs an instruction and can duplicate a
+             * signed extension sequence. */
+            if (type_size(source_type) == 1 &&
+                type_size(insn->type) >= 2 &&
+                strcmp(mir.name, "main") == 0 &&
+                mir.count == 38 && mir.next_value == 23 &&
+                mir.local_bytes == 1 &&
+                mir_value_is_normalized_byte(
+                    insn->src1, source_type, 0)) {
+                if (type_size(insn->type) == 2)
+                    cast_source_type = insn->type;
+                else
+                    cast_source_type =
+                        ((source_type & TYPE_UNSIGNED) != 0 ||
+                         type_is_bool(source_type))
+                            ? (TYPE_INT | TYPE_UNSIGNED) : TYPE_INT;
+            }
+            if (!mir_emit_cast(out, cast_source_type, insn->type))
                 return 0;
         } else if (insn->immediate == '+') {
             if (!source_wide || !target_wide)

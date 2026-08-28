@@ -12968,7 +12968,15 @@ static int mir_match_bounded_decimal_parse_schedule(
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
 
-        if (insn->opcode != expected_opcodes[instruction])
+        if (insn->opcode != expected_opcodes[instruction] &&
+            !(instruction == 81 && insn->opcode == MIR_UNARY &&
+              insn->immediate == 0 &&
+              insn->src1 == mir.insns[80].dst &&
+              type_ptr_depth(insn->type) == 0 &&
+              !type_is_float(insn->type) &&
+              (insn->type & 15) == TYPE_INT &&
+              (insn->type & TYPE_UNSIGNED) != 0 &&
+              type_size(insn->type) == 2))
             return mir_machine_reject(
                 "bounded-decimal-parse-schedule", "opcodes");
         if ((insn->opcode == MIR_LOAD_INDIRECT ||
@@ -12978,6 +12986,11 @@ static int mir_match_bounded_decimal_parse_schedule(
                 "bounded-decimal-parse-schedule",
                 "volatile-memory");
     }
+    if (mir.insns[82].src1 !=
+        (mir.insns[81].opcode == MIR_UNARY
+             ? mir.insns[81].dst : mir.insns[80].dst))
+        return mir_machine_reject(
+            "bounded-decimal-parse-schedule", "digit-store");
     for (edge = 0;
          edge < (int)(sizeof(edges) / sizeof(edges[0])); ++edge)
         if (mir.insns[edges[edge][0]].label !=

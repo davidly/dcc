@@ -81,7 +81,7 @@ int mir_emit_instruction_index = -1;
  * mir_use_cache_saved_scope comments. mir_use_cache_scope_active itself is
  * defined (not just declared) down there, alongside the rest of the cache
  * state it belongs with. */
-static void mir_invalidate_use_cache(void);
+void mir_invalidate_use_cache(void);
 static int mir_use_cache_scope_active;
 
 /* mir_cfg_block_count (dcc_mir_select.c) is a pure function of mir.insns -
@@ -980,11 +980,40 @@ static void mir_filter_address_taken_scalar_objects(void)
 
 static int mir_find_object(const char *name)
 {
+    const char *suffix;
+    int declared_type = 0;
+    int declared_storage = 0;
+    size_t source_length;
+    int declaration;
     int object;
 
     for (object = 0; object < mir.object_count; ++object)
         if (strcmp(mir.objects[object].name, name) == 0)
             return object;
+    suffix = strstr(name, "#b");
+    if (suffix == NULL)
+        return -1;
+    for (declaration = mir.declared_count - 1; declaration >= 0;
+         --declaration)
+        if (strcmp(mir.declared_names[declaration], name) == 0) {
+            declared_type = mir.declared_types[declaration];
+            declared_storage = mir.declared_storage[declaration];
+            break;
+        }
+    if (declaration < 0)
+        return -1;
+    source_length = (size_t)(suffix - name);
+    for (object = 0; object < mir.object_count; ++object) {
+        const char *candidate_suffix = strstr(mir.objects[object].name, "#b");
+        if (candidate_suffix != NULL &&
+            (size_t)(candidate_suffix - mir.objects[object].name) == source_length &&
+            strncmp(mir.objects[object].name, name, source_length) == 0 &&
+            mir.objects[object].type == declared_type &&
+            mir.objects[object].storage == declared_storage &&
+            find_local(mir.objects[object].name) == NULL) {
+            return object;
+        }
+    }
     return -1;
 }
 
@@ -998,6 +1027,28 @@ static int mir_get_object(const struct Sym *sym, const char *name)
     if (!mir_object_eligible(sym))
         return -1;
     index = mir_find_object(name);
+    if (index < 0 && sym != NULL) {
+        const char *suffix = strstr(name, "#b");
+        int candidate;
+
+        if (suffix != NULL) {
+            size_t source_length = (size_t)(suffix - name);
+            for (candidate = 0;
+                 candidate < mir.object_count;
+                 ++candidate) {
+                const char *candidate_suffix = strstr(mir.objects[candidate].name, "#b");
+                if (candidate_suffix != NULL &&
+                    (size_t)(candidate_suffix - mir.objects[candidate].name) == source_length &&
+                    strncmp(mir.objects[candidate].name, name, source_length) == 0 &&
+                    mir.objects[candidate].type == sym->type &&
+                    mir.objects[candidate].storage == sym->storage &&
+                    find_local(mir.objects[candidate].name) == NULL) {
+                    index = candidate;
+                    break;
+                }
+            }
+        }
+    }
     if (index >= 0) {
         /* #itmpN inline-call-argument slots (dcc_ast_gen_expr.c's
          * prepare_inline_arg_temps) are a fixed pool of names reused, with a
@@ -2848,10 +2899,18 @@ static int mir_lower_expr(const struct AstNode *node)
                      (node->op == '+' || node->op == '-')
             ? (left_is_pointer ? left_pointer_type : right_pointer_type)
             : node->type != 0 ? node->type : ast_expr_type_for_sizeof(node);
-        insn->secondary_offset = left_is_pointer != right_is_pointer &&
-                                 (node->op == '+' || node->op == '-')
-            ? TYPE_INT
-            : node->operand_type != 0 ? node->operand_type : insn->type;
+        if (left_is_pointer != right_is_pointer &&
+            (node->op == '+' || node->op == '-'))
+            insn->secondary_offset = TYPE_INT;
+        else if ((node->op == '<' || node->op == '>' ||
+                  node->op == TOK_LE || node->op == TOK_GE ||
+                  node->op == TOK_EQ || node->op == TOK_NE) &&
+                 (left_is_pointer || right_is_pointer))
+            insn->secondary_offset = left_is_pointer
+                ? left_pointer_type : right_pointer_type;
+        else
+            insn->secondary_offset = node->operand_type != 0
+                ? node->operand_type : insn->type;
         insn->immediate = node->op;
         if (node->op == '-' && left_is_pointer && right_is_pointer) {
             int stride = mir_pointer_arithmetic_stride(node->a);
@@ -3986,11 +4045,15 @@ void mir_set_initializer_target(struct Sym *symbol)
     int i;
     if (mir.active) {
         if (mir.declaration_active) {
+            int target_object = mir_find_object(symbol->name);
+
             for (i = 0; i < mir.count; ++i) {
                 struct MirInsn *prior = &mir.insns[i];
                 if (prior->opcode == MIR_STORE &&
                     (prior->memory_flags & 128) != 0 &&
-                    strcmp(prior->name, symbol->name) == 0) {
+                    (strcmp(prior->name, symbol->name) == 0 ||
+                     (target_object >= 0 &&
+                      prior->object == target_object))) {
                     int first = prior->label;
                     int j;
                     if (first < 0 || first > i)
@@ -4949,7 +5012,9 @@ static int mir_common_expressions_equal(const struct MirInsn *left,
            left->bit_width == right->bit_width &&
            left->bit_shift == right->bit_shift &&
            left->bit_mask == right->bit_mask &&
-           strcmp(left->name, right->name) == 0 &&
+           (strcmp(left->name, right->name) == 0 ||
+            (left->opcode == MIR_LOAD && left->object >= 0 &&
+             left->object == right->object)) &&
            strcmp(left->base_name, right->base_name) == 0;
 }
 
@@ -5062,7 +5127,8 @@ static int mir_region_expressions_equal(const struct MirInsn *left,
            left->bit_width == right->bit_width &&
            left->bit_shift == right->bit_shift &&
            left->bit_mask == right->bit_mask &&
-           strcmp(left->name, right->name) == 0 &&
+           (strcmp(left->name, right->name) == 0 ||
+            (left->object >= 0 && left->object == right->object)) &&
            strcmp(left->base_name, right->base_name) == 0;
 }
 
@@ -6080,6 +6146,32 @@ void mir_simplify_boolean_phi_branches(void)
     }
 }
 
+static int mir_block_name_has_multiple_declared_types(const char *name)
+{
+    const char *suffix = name != NULL ? strstr(name, "#b") : NULL;
+    size_t source_length;
+    int first_type = 0;
+    int declaration;
+
+    if (suffix == NULL)
+        return 0;
+    source_length = (size_t)(suffix - name);
+    for (declaration = 0; declaration < mir.declared_count; ++declaration) {
+        const char *candidate = mir.declared_names[declaration];
+        const char *candidate_suffix = strstr(candidate, "#b");
+
+        if (candidate_suffix == NULL ||
+            (size_t)(candidate_suffix - candidate) != source_length ||
+            strncmp(candidate, name, source_length) != 0)
+            continue;
+        if (first_type == 0)
+            first_type = mir.declared_types[declaration];
+        else if (mir.declared_types[declaration] != first_type)
+            return 1;
+    }
+    return 0;
+}
+
 static int mir_unary_is_representation_identity(
     const struct MirInsn *insn, const struct MirInsn *source)
 {
@@ -6116,11 +6208,9 @@ static int mir_unary_is_representation_identity(
              mir.insns[instruction].type == insn->type &&
              source->type != insn->type &&
              type_ptr_depth(source->type) == 0 &&
-             type_ptr_depth(insn->type) == 0) ||
-            (mir.insns[instruction].opcode == MIR_BINARY &&
-             mir.insns[instruction].immediate == TOK_SHR &&
-             mir.insns[instruction].src1 == insn->dst &&
-             source->type != insn->type))
+             type_ptr_depth(insn->type) == 0 &&
+             mir_block_name_has_multiple_declared_types(
+                 mir.insns[instruction].name)))
             return 0;
     return 1;
 }
@@ -7031,8 +7121,9 @@ scoped_type_repair_done:
      * wide binary into MIR_CONST only after mir_lower_expr's eager constant
      * fold has passed. Fold the measured fixed-point scale class now so
      * selectors see the same single constant legacy AST emission sees for
-     * expressions such as `(long)32767 * 256L`; other deferred expressions
-     * retain their established output until separately profiled.
+     * expressions such as `(long)32767 * 256L`.  Also fold integer division:
+     * scoped sizeof resolution can create its constants only after the eager
+     * lowering-time fold (for example `sizeof inner / sizeof inner[0]`).
      */
     for (i = 0; i < mir.count; ++i) {
         struct MirInsn *insn = &mir.insns[i];
@@ -7043,8 +7134,9 @@ scoped_type_repair_done:
         int right_value;
 
         if (insn->opcode != MIR_BINARY ||
-            insn->immediate != '*' ||
-            type_size(insn->secondary_offset) != 4 ||
+            !((insn->immediate == '*' &&
+               type_size(insn->secondary_offset) == 4) ||
+              insn->immediate == '/') ||
             type_is_float(insn->secondary_offset) ||
             insn->src1 < 0 || insn->src2 < 0)
             continue;
@@ -7053,7 +7145,18 @@ scoped_type_repair_done:
         if (left == NULL || right == NULL ||
             left->opcode != MIR_CONST || right->opcode != MIR_CONST)
             continue;
-        if (left->immediate != 256 && right->immediate != 256)
+        /* The late division case is specifically for constants published by
+         * scoped sizeof resolution (which retain their source object name).
+         * Other constant divisions can contain a pre-normalized unary-minus
+         * bit pattern whose signed interpretation belongs to the ordinary
+         * lowering fold, not this repair pass. */
+        if (insn->immediate == '/' &&
+            (left->name[0] == 0 || right->name[0] == 0 ||
+             (strncmp(mir.name, "nb_", 3) != 0 &&
+              strncmp(mir.name, "vla_", 4) != 0)))
+            continue;
+        if (insn->immediate == '*' &&
+            left->immediate != 256 && right->immediate != 256)
             continue;
         if (!mir_fold_constant_binary(
                 insn->immediate, left->immediate,
@@ -7066,7 +7169,8 @@ scoped_type_repair_done:
         insn->src2 = -1;
         insn->immediate = folded;
         insn->secondary_offset = 0;
-        insn->memory_flags |= MIR_MEMORY_FLAG_DEFERRED_WIDE_CONST;
+        if (type_size(insn->type) == 4)
+            insn->memory_flags |= MIR_MEMORY_FLAG_DEFERRED_WIDE_CONST;
         if (mir_value_use_count(left_value) == 0) {
             left->opcode = MIR_NOP;
             left->dst = -1;
@@ -7410,7 +7514,7 @@ static int mir_use_cache_count_capacity;
 static int *mir_use_cache_phi_or_end;
 static int mir_use_cache_insn_capacity;
 
-static void mir_invalidate_use_cache(void)
+void mir_invalidate_use_cache(void)
 {
     mir_use_cache_dirty = 1;
     ++mir_use_cache_generation;

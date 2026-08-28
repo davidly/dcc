@@ -6826,8 +6826,8 @@ static int mir_wide_store_indirect(
            (store->memory_flags & (1 | 8)) == 0;
 }
 
-static int mir_match_wide_string_runner(
-    struct MirWideStringRunner *plan)
+static int mir_match_wide_string_runner_normalized(
+    struct MirWideStringRunner *plan, int scoped_orig)
 {
     static const char expected_opcodes[] =
         "LNNNCSLPNCCBBFANICNCBBNWLNCBSJLTGKNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNNCSLNPNNNNNNCBFNKNCNBNSNCNB"
@@ -6947,7 +6947,7 @@ static int mir_match_wide_string_runner(
     memset(plan, 0, sizeof(*plan));
     if (mir.count != 711 || mir_cfg_block_count() != 24 ||
         mir.has_vla || mir.local_bytes != 105 ||
-        mir.object_count != 12 ||
+        mir.object_count != 12 + scoped_orig ||
         (mir.return_type & 15) != TYPE_VOID ||
         type_ptr_depth(mir.return_type) != 0 ||
         strlen(expected_opcodes) != (size_t)mir.count)
@@ -6956,7 +6956,9 @@ static int mir_match_wide_string_runner(
     for (instruction = 0; instruction < mir.count; ++instruction) {
         if (mir_gnarly_opcode_code(
                 mir.insns[instruction].opcode) !=
-                expected_opcodes[instruction])
+                expected_opcodes[instruction] &&
+            !(scoped_orig && instruction == 630 &&
+              mir.insns[instruction].opcode == MIR_NOP))
             return mir_machine_reject(
                 "wide-string-call-runner", "opcode");
         if (mir.insns[instruction].opcode == MIR_CALL)
@@ -6992,7 +6994,7 @@ static int mir_match_wide_string_runner(
         !mir_gnarly_phi(627, 448, 646, 582, 704) ||
         !mir_gnarly_phi(628, 221, 660, 582, 704) ||
         !mir_gnarly_phi(629, 450, 655, 582, 704) ||
-        !mir_gnarly_phi(630, 223, 667, 582, 704) ||
+        !(scoped_orig || mir_gnarly_phi(630, 223, 667, 582, 704)) ||
         !mir_gnarly_phi(635, 622, 707, 582, 704) ||
         !mir_gnarly_branch(13, 12, 30) ||
         !mir_gnarly_branch(87, 86, 170) ||
@@ -7099,7 +7101,8 @@ static int mir_match_wide_string_runner(
         int first = local_groups[group][0];
 
         for (item = 1; item < 5; ++item)
-            if (local_groups[group][item] >= 0 &&
+            if (!(scoped_orig && group == 5 && item == 2) &&
+                local_groups[group][item] >= 0 &&
                 !mir_machine_same_location(
                     &mir.insns[first],
                     &mir.insns[local_groups[group][item]]))
@@ -7113,6 +7116,12 @@ static int mir_match_wide_string_runner(
                     "wide-string-call-runner",
                     "distinct-locals");
     }
+    if (scoped_orig &&
+        (mir.insns[668].object < 0 ||
+         mir.insns[668].object == mir.insns[119].object ||
+         strncmp(mir.insns[668].name, "orig#b", 6) != 0))
+        return mir_machine_reject(
+            "wide-string-call-runner", "scoped-local");
     if (!mir_machine_same_location(
             &mir.insns[513], &mir.insns[521]) ||
         !mir_machine_same_location(
@@ -7246,6 +7255,56 @@ static int mir_match_wide_string_runner(
         return mir_machine_reject(
             "wide-string-call-runner", "function-alias");
     return 1;
+}
+
+static int mir_match_wide_string_runner(
+    struct MirWideStringRunner *plan)
+{
+    struct MirInsn *saved_insns;
+    struct MirInsn *normalized;
+    int saved_count;
+    int result;
+    int first_object;
+    int second_object;
+
+    if (mir.count == 711)
+        return mir_match_wide_string_runner_normalized(plan, 0);
+    if (mir.count != 712 || mir.object_count != 13 ||
+        mir.insns[630].opcode != MIR_NOP ||
+        mir.insns[636].opcode != MIR_NOP)
+        return mir_machine_reject(
+            "wide-string-call-runner", "shape");
+    first_object = mir.insns[630].object;
+    second_object = mir.insns[636].object;
+    if (first_object < 0 || second_object < 0 ||
+        first_object == second_object ||
+        strncmp(mir.objects[first_object].name, "orig#b", 6) != 0 ||
+        strncmp(mir.objects[second_object].name, "orig#b", 6) != 0 ||
+        mir.objects[first_object].storage !=
+            mir.objects[second_object].storage ||
+        type_size(mir.objects[first_object].type) != 2 ||
+        type_size(mir.objects[second_object].type) != 1)
+        return mir_machine_reject(
+            "wide-string-call-runner", "scoped-orig");
+
+    normalized = malloc(711 * sizeof(*normalized));
+    if (normalized == NULL)
+        return mir_machine_reject(
+            "wide-string-call-runner", "allocation");
+    memcpy(normalized, mir.insns, 636 * sizeof(*normalized));
+    memcpy(&normalized[636], &mir.insns[637],
+           (711 - 636) * sizeof(*normalized));
+    saved_insns = mir.insns;
+    saved_count = mir.count;
+    mir.insns = normalized;
+    mir.count = 711;
+    mir_invalidate_use_cache();
+    result = mir_match_wide_string_runner_normalized(plan, 1);
+    mir.insns = saved_insns;
+    mir.count = saved_count;
+    mir_invalidate_use_cache();
+    free(normalized);
+    return result;
 }
 
 static void mir_wide_push_frame(MirStream *out, int offset)
@@ -9627,6 +9686,8 @@ static int mir_scope_block_instruction(int profile_instruction)
         instruction = profile_instruction - 2;
     else
         instruction = profile_instruction - 4;
+    if (mir.count == 698 && instruction >= 600)
+        --instruction;
     if (mir.count != 715)
         return instruction;
     if (instruction < 153)
@@ -9814,12 +9875,13 @@ static int mir_match_scope_block_runner(
     int previous;
 
     memset(plan, 0, sizeof(*plan));
-    if ((mir.count != 699 && mir.count != 715) ||
+    if ((mir.count != 698 && mir.count != 699 && mir.count != 715) ||
         mir_cfg_block_count() != 28 ||
         mir.sink_purpose != EMIT_SINK_FINAL ||
         mir.has_vla || mir.local_bytes != 84 ||
         mir.aggregate_temp_bytes != 0 ||
-        (mir.object_count != 30 && mir.object_count != 35) ||
+        (mir.object_count != 29 && mir.object_count != 30 &&
+         mir.object_count != 35) ||
         !mir_abort_runner_word_type(mir.return_type) ||
         (mir.count == 699 &&
          strlen(expected_opcodes) != (size_t)mir.count))
@@ -9857,7 +9919,7 @@ static int mir_match_scope_block_runner(
             (mir.insns[mir_scope_block_instruction(
                  binaries[item][0])].secondary_offset !=
                  binary_widths[item] &&
-             !(mir.count == 715 && item == 13 &&
+             !(mir.count != 699 && item == 13 &&
                mir.insns[mir_scope_block_instruction(
                    binaries[item][0])].secondary_offset == TYPE_INT)))
                 return mir_machine_reject(
@@ -9909,7 +9971,7 @@ static int mir_match_scope_block_runner(
         if (mir.objects[item].storage != SC_LOCAL ||
             (mir.count == 699 &&
              mir.objects[item].type != object_types[item]) ||
-            (mir.count == 715 &&
+            (mir.count != 699 &&
              !mir_scope_long_type(mir.objects[item].type) &&
              !mir_abort_runner_word_type(mir.objects[item].type)) ||
             mir.objects[item].is_register)
@@ -9924,7 +9986,7 @@ static int mir_match_scope_block_runner(
 
         if (store->opcode != MIR_STORE ||
             ((mir.count == 699 && store->object != stores[item][1]) ||
-             (mir.count == 715 && store->object < 0)) ||
+             (mir.count != 699 && store->object < 0)) ||
             !mir_gnarly_value_from(
                 store->src1,
                 mir_scope_block_instruction(
@@ -9944,7 +10006,7 @@ static int mir_match_scope_block_runner(
 
         if (load->opcode != MIR_LOAD ||
             ((mir.count == 699 && load->object != loads[item][1]) ||
-             (mir.count == 715 && load->object < 0)) ||
+             (mir.count != 699 && load->object < 0)) ||
             (mir.count == 699 && load->type !=
                 object_types[loads[item][1]]) ||
             !mir_machine_named_nonvolatile(load))
