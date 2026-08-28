@@ -337,6 +337,9 @@ struct Sym {
     int elem_size; /* stride per first-dimension element */
     int dim_count; /* C array dimensions, e.g. a[2][3] -> 2 */
     int dims[MAX_ARRAY_DIMS];   /* dims[0] may be 0 until inferred for a[][N] */
+    int pointee_dim_count; /* dimensions retained by an array element pointer */
+    int pointee_dims[MAX_ARRAY_DIMS];
+    int pointee_elem_size; /* byte stride of the pointer's first target row */
     char runtime_stride_name[64]; /* parameter name for a runtime inner VLA bound */
     int needs_extrn; /* 1 = symbol has external linkage and may need EXTRN if referenced */
     int mir_extrn_attempt_stamp; /* last mir_extrn_begin_attempt() generation
@@ -431,6 +434,8 @@ struct TypeDef {
     int is_volatile;
     int pointee_is_volatile;
     int array_len; /* >0 when typedef is an array type, e.g. typedef int T[4] */
+    int dim_count;
+    int dims[MAX_ARRAY_DIMS];
     int is_func;   /* typedef names a function type, e.g. typedef int F(int); */
     int has_proto;
     int proto_nargs;
@@ -697,6 +702,9 @@ extern int  nenum_consts;
 
 /* communicates array length from array-typedef through parse_base_type */
 extern int g_typedef_array_len;
+extern int g_typedef_array_dim_count;
+extern int g_typedef_array_dims[MAX_ARRAY_DIMS];
+extern int g_typedef_base_type;
 extern int g_typedef_is_func;
 extern int g_typedef_has_proto;
 extern int g_typedef_proto_nargs;

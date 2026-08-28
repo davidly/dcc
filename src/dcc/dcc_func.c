@@ -1384,6 +1384,7 @@ void parse_old_style_param_declarations(void)
     int base_is_volatile;
     int base_pointee_is_volatile;
     int type;
+    int direct_funcptr;
     char name[64];
     struct Sym *s;
 
@@ -1395,6 +1396,7 @@ void parse_old_style_param_declarations(void)
 
         for (;;) {
             type = base;
+            direct_funcptr = 0;
             g_decl.is_volatile = base_is_volatile;
             g_decl.pointee_is_volatile = base_pointee_is_volatile;
             while (accept('*')) {
@@ -1403,16 +1405,18 @@ void parse_old_style_param_declarations(void)
                 type = type_add_ptr(type);
             }
 
-            if (g_lex.tok.kind != TOK_ID) {
+            if (parse_funcptr_declarator(&type, name, sizeof(name))) {
+                direct_funcptr = 1;
+            } else if (g_lex.tok.kind != TOK_ID) {
                 error_here("parameter declaration name expected");
                 while (g_lex.tok.kind != ';' && g_lex.tok.kind != TOK_EOF && g_lex.tok.kind != '{')
                     next_token();
                 break;
+            } else {
+                strncpy(name, g_lex.tok.text, sizeof(name) - 1);
+                name[sizeof(name) - 1] = 0;
+                next_token();
             }
-
-            strncpy(name, g_lex.tok.text, sizeof(name) - 1);
-            name[sizeof(name) - 1] = 0;
-            next_token();
 
             skip_prototype_array_suffixes(&type);
             if (g_lex.tok.kind == '(') {
@@ -1429,6 +1433,7 @@ void parse_old_style_param_declarations(void)
                 s->is_register = base_is_register;
                 s->is_volatile = g_decl.is_volatile;
                 s->pointee_is_volatile = g_decl.pointee_is_volatile;
+                copy_funcptr_prototype_to_sym(s, direct_funcptr);
                 if (g_ptr_array_dim_count > 0) {
                     s->elem_size = g_ptr_array_elem_size;
                     s->dim_count = g_ptr_array_dim_count;
@@ -2921,6 +2926,10 @@ void parse_typedef_decl(void)
     while (!done && g_lex.tok.kind != TOK_EOF) {
         int type;
         int typedef_array_len;
+        int typedef_dim_count;
+        int typedef_dims[MAX_ARRAY_DIMS];
+        int inherited_dim_count;
+        int inherited_dims[MAX_ARRAY_DIMS];
         int is_func;
         int is_volatile;
         int pointee_is_volatile;
@@ -2928,6 +2937,9 @@ void parse_typedef_decl(void)
 
         type = base_type;
         typedef_array_len = 0;
+        typedef_dim_count = 0;
+        inherited_dim_count = g_typedef_array_dim_count;
+        memcpy(inherited_dims, g_typedef_array_dims, sizeof(inherited_dims));
         is_func = 0;
         is_volatile = base_is_volatile;
         pointee_is_volatile = base_pointee_is_volatile;
@@ -2956,35 +2968,47 @@ void parse_typedef_decl(void)
         }
 
         if (g_lex.tok.kind == '[') {
-            next_token();
-            if (g_lex.tok.kind == ']') {
-                typedef_array_len = 0;
-                next_token();
-            } else {
-                typedef_array_len = parse_typed_array_bound_expr();
-                expect(']');
-            }
-            /* Multidimensional array typedefs (typedef T A[2][3]) collapse to a
-             * flat element count: fold every inner dimension into the total so
-             * sizeof(A) is element_size * product-of-dims, not just the first
-             * dimension.  A typedef tracks only a single total length, so the
-             * product is the correct flattened size. */
             while (g_lex.tok.kind == '[') {
+                int dimension;
                 next_token();
-                if (g_lex.tok.kind != ']') {
-                    int inner = parse_typed_array_bound_expr();
-                    if (typedef_array_len > 0 && inner > 0)
-                        typedef_array_len *= inner;
-                }
+                dimension = g_lex.tok.kind == ']' ? 0
+                    : parse_typed_array_bound_expr();
                 expect(']');
+                if (typedef_dim_count < MAX_ARRAY_DIMS)
+                    typedef_dims[typedef_dim_count++] = dimension;
+                else
+                    error_here("too many array dimensions");
             }
         } else if (g_lex.tok.kind == '(') {
             skip_prototype_function_suffix();
             is_func = (type_ptr_depth(type) == 0);
         }
 
-        add_typedef_name_ex(name, type, typedef_array_len, is_func,
+        {
+            int ti;
+            int product = 1;
+            int di;
+            for (di = 0; di < inherited_dim_count &&
+                         typedef_dim_count < MAX_ARRAY_DIMS; ++di)
+                typedef_dims[typedef_dim_count++] = inherited_dims[di];
+            for (di = 0; di < typedef_dim_count; ++di) {
+                if (typedef_dims[di] <= 0 ||
+                    !target_size_multiply(product, typedef_dims[di], &product)) {
+                    product = 0;
+                    break;
+                }
+            }
+            typedef_array_len = typedef_dim_count > 0 ? product : 0;
+            add_typedef_name_ex(name, type, typedef_array_len, is_func,
                     is_volatile, pointee_is_volatile);
+            ti = find_typedef(name);
+            if (ti >= 0) {
+                typedefs[ti].dim_count = typedef_dim_count;
+                for (di = 0; di < MAX_ARRAY_DIMS; ++di)
+                    typedefs[ti].dims[di] = di < typedef_dim_count
+                        ? typedef_dims[di] : 0;
+            }
+        }
 
         if (accept(','))
             continue;
@@ -3020,6 +3044,7 @@ void parse_function_or_global(int base_type)
         int base_is_func_typedef;
         int is_funcret_funcptr_decl;
         int direct_funcptr_decl;
+        int pointer_over_array_typedef;
         int object_is_volatile;
         int pointee_is_volatile;
 
@@ -3029,6 +3054,8 @@ void parse_function_or_global(int base_type)
         base_is_func_typedef = g_typedef_is_func;
         is_funcret_funcptr_decl = 0;
         direct_funcptr_decl = 0;
+        pointer_over_array_typedef = g_typedef_array_dim_count > 0 &&
+            type_ptr_depth(type) > type_ptr_depth(g_typedef_base_type);
         name[0] = 0;
         /* __fastcall is per-declarator (like MSVC placement, between the
          * return type/pointers and the function name), not a shared
@@ -3046,6 +3073,8 @@ void parse_function_or_global(int base_type)
             object_is_volatile = skip_type_qualifiers_volatile();
             type = type_add_ptr(type);
             base_is_func_typedef = 0;
+            if (g_typedef_array_dim_count > 0)
+                pointer_over_array_typedef = 1;
         }
 
         /* MSVC placement: RETTYPE __fastcall name(...), after any pointers
@@ -3391,13 +3420,20 @@ void parse_function_or_global(int base_type)
             }
 
             arrlen = first_dim;
-            if (arrlen == 0 && dim_count == 0 && g_typedef_array_len > 0) {
-                arrlen = g_typedef_array_len;
-                first_dim = g_typedef_array_len;
-                total_count = g_typedef_array_len;
-                dim_count = 1;
-                dims[0] = g_typedef_array_len;
+            if (arrlen == 0 && dim_count == 0 &&
+                g_typedef_array_dim_count > 0 && !pointer_over_array_typedef) {
+                total_count = 1;
+                for (i = 0; i < g_typedef_array_dim_count; ++i) {
+                    dims[dim_count++] = g_typedef_array_dims[i];
+                    if (!target_size_multiply(total_count,
+                                              g_typedef_array_dims[i],
+                                              &total_count))
+                        total_count = 0;
+                }
+                arrlen = dims[0];
+                first_dim = dims[0];
             } else if (dim_count > 0 && g_typedef_array_len > 0 &&
+                       !pointer_over_array_typedef &&
                        dim_count < MAX_ARRAY_DIMS) {
                 /* `ARR2 table[2]` where `typedef T ARR2[N]` composes the
                  * typedef's own array length as an extra trailing dimension,
@@ -3405,10 +3441,15 @@ void parse_function_or_global(int base_type)
                  * typedef name is just another spelling of its type - C89
                  * 6.5.6).  Without this the typedef's dimension is silently
                  * dropped and only this declarator's own `[2]` survives. */
-                dims[dim_count++] = g_typedef_array_len;
-                if (!target_size_multiply(total_count, g_typedef_array_len, &total_count)) {
-                    error_here("object size exceeds 16-bit address space");
-                    total_count = 0;
+                for (i = 0; i < g_typedef_array_dim_count &&
+                            dim_count < MAX_ARRAY_DIMS; ++i) {
+                    dims[dim_count++] = g_typedef_array_dims[i];
+                    if (!target_size_multiply(total_count,
+                                              g_typedef_array_dims[i],
+                                              &total_count)) {
+                        error_here("object size exceeds 16-bit address space");
+                        total_count = 0;
+                    }
                 }
             }
 
@@ -3459,6 +3500,37 @@ void parse_function_or_global(int base_type)
                         s->elem_size = base_size;
                     if (s->elem_size <= 0)
                         s->elem_size = 2;
+                    if (pointer_over_array_typedef &&
+                        g_typedef_array_dim_count > 0) {
+                        int pi;
+                        int stride = type_size(type_decay_ptr(type));
+                        if (stride <= 0) stride = 1;
+                        s->pointee_dim_count = g_typedef_array_dim_count;
+                        for (pi = 0; pi < MAX_ARRAY_DIMS; ++pi) {
+                            s->pointee_dims[pi] = pi < g_typedef_array_dim_count
+                                ? g_typedef_array_dims[pi] : 0;
+                            if (pi < g_typedef_array_dim_count &&
+                                !target_size_multiply(stride,
+                                                      g_typedef_array_dims[pi],
+                                                      &stride))
+                                stride = 0;
+                        }
+                        s->pointee_elem_size = stride;
+                    }
+                } else if (pointer_over_array_typedef &&
+                           g_typedef_array_dim_count > 0) {
+                    int pi;
+                    int stride = type_size(type_decay_ptr(type));
+                    if (stride <= 0) stride = 1;
+                    for (pi = 0; pi < g_typedef_array_dim_count; ++pi) {
+                        s->dims[pi] = g_typedef_array_dims[pi];
+                        if (!target_size_multiply(stride,
+                                                  g_typedef_array_dims[pi],
+                                                  &stride))
+                            stride = 0;
+                    }
+                    s->dim_count = g_typedef_array_dim_count;
+                    s->elem_size = stride;
                 } else if (g_ptr_array_dim_count > 0) {
                     int pi;
                     s->elem_size = g_ptr_array_elem_size;
@@ -3508,10 +3580,42 @@ void parse_function_or_global(int base_type)
                     s->elem_size = base_size;
                 if (s->elem_size <= 0) s->elem_size = 2;
 
+                if (pointer_over_array_typedef &&
+                    g_typedef_array_dim_count > 0) {
+                    int pi;
+                    int stride = type_size(type_decay_ptr(type));
+                    if (stride <= 0) stride = 1;
+                    s->pointee_dim_count = g_typedef_array_dim_count;
+                    for (pi = 0; pi < MAX_ARRAY_DIMS; ++pi) {
+                        s->pointee_dims[pi] = pi < g_typedef_array_dim_count
+                            ? g_typedef_array_dims[pi] : 0;
+                        if (pi < g_typedef_array_dim_count &&
+                            !target_size_multiply(stride,
+                                                  g_typedef_array_dims[pi],
+                                                  &stride))
+                            stride = 0;
+                    }
+                    s->pointee_elem_size = stride;
+                }
+
                 if (total_count > 0)
                     s->size = object_size;
                 else
                     s->size = 0;
+            } else if (pointer_over_array_typedef &&
+                       g_typedef_array_dim_count > 0) {
+                int pi;
+                int stride = type_size(type_decay_ptr(type));
+                if (stride <= 0) stride = 1;
+                for (pi = 0; pi < g_typedef_array_dim_count; ++pi) {
+                    s->dims[pi] = g_typedef_array_dims[pi];
+                    if (!target_size_multiply(stride,
+                                              g_typedef_array_dims[pi],
+                                              &stride))
+                        stride = 0;
+                }
+                s->dim_count = g_typedef_array_dim_count;
+                s->elem_size = stride;
             } else if (g_ptr_array_dim_count > 0) {
                 int pi;
                 s->elem_size = g_ptr_array_elem_size;

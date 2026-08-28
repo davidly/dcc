@@ -170,6 +170,9 @@ int  nenum_consts;
 
 /* Communicates array length from array-typedef through parse_base_type to declarators */
 int g_typedef_array_len;
+int g_typedef_array_dim_count;
+int g_typedef_array_dims[MAX_ARRAY_DIMS];
+int g_typedef_base_type;
 int g_typedef_is_func;
 int g_typedef_has_proto;
 int g_typedef_proto_nargs;

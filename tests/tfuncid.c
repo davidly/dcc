@@ -22,6 +22,7 @@ static void check(const char *name, const char *got, const char *expected)
 static const char *function_name_longer_than_six(void)
 {
     const char *me = __func__;
+    check("GNU alias", __FUNCTION__, "function_name_longer_than_six");
     return me;
 }
 
@@ -42,6 +43,11 @@ int main(void)
     if (sizeof __func__ != 5) {
         printf("FAIL sizeof __func__ got %u expected 5\n",
                (unsigned int)sizeof __func__);
+        ++fails;
+    }
+    if (sizeof __FUNCTION__ != 5) {
+        printf("FAIL sizeof __FUNCTION__ got %u expected 5\n",
+               (unsigned int)sizeof __FUNCTION__);
         ++fails;
     }
 

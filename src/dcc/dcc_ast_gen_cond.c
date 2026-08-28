@@ -69,19 +69,21 @@ int ast_return_stmt_supported(const struct AstNode *n)
     if (type_size(rt) == 1) {
         if (n->a == NULL)
             return 1;
-        if (n->a->kind == AST_IDENT) {
-            struct Sym *rs = find_sym(n->a->sval);
-            return sym_can_ix_direct(rs) && type_size(rs->type) == 1;
-        }
-        if (n->a->kind == AST_INT_LIT)
-            return n->a->ival >= 0 && n->a->ival <= 255;
-        return ast_gen_supported(n->a) && ast_value_is_plain_int(n->a);
+        /* Returning to a byte type performs the same narrowing conversion as
+         * assignment.  Do not require an identifier to already be byte-sized
+         * or a literal to fit before conversion: `signed char f(int x) {
+         * return x; }` and `return -1` are both ordinary C conversions. */
+        return ast_gen_supported(n->a) &&
+               (ast_value_is_plain_int(n->a) || ast_value_is_long_word(n->a) ||
+                ast_value_is_float_word(n->a));
     }
     if ((rt & 15) != TYPE_INT || type_size(rt) != 2)
         return 0;
 
     if (n->a != NULL) {
         if (ast_value_is_long_word(n->a))
+            return 1;
+        if (ast_value_is_float_word(n->a))
             return 1;
         if (!ast_gen_supported(n->a) || !ast_value_is_plain_int(n->a))
             return 0;

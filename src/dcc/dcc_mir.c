@@ -1915,6 +1915,30 @@ static struct Sym *mir_index_root(const struct AstNode *node, int *depth)
 static struct Sym *mir_pointer_array_root(const struct AstNode *node,
                                           int *dereference_depth);
 
+static int mir_pointer_array_dim_count(const struct Sym *symbol)
+{
+    return symbol != NULL && symbol->pointee_dim_count > 0
+        ? symbol->pointee_dim_count : (symbol != NULL ? symbol->dim_count : 0);
+}
+
+static int mir_pointer_array_stride(struct Sym *symbol, int depth)
+{
+    int elem;
+    int i;
+    int stride;
+
+    if (symbol != NULL && symbol->pointee_dim_count > 0) {
+        elem = type_size(type_decay_ptr(symbol->type));
+        if (elem <= 0) elem = 1;
+        stride = elem;
+        for (i = depth; i < symbol->pointee_dim_count; ++i)
+            if (symbol->pointee_dims[i] > 0)
+                stride *= symbol->pointee_dims[i];
+        return stride;
+    }
+    return sym_pointer_array_index_elem_size(symbol, symbol->type, depth);
+}
+
 static int mir_index_stride(const struct AstNode *node)
 {
     struct Sym *root;
@@ -1948,11 +1972,11 @@ static int mir_index_stride(const struct AstNode *node)
         struct Sym *pointer_array = mir_pointer_array_root(
             node != NULL ? node->a : NULL, &dereference_depth);
         if (pointer_array != NULL) {
-            if (dereference_depth >= pointer_array->dim_count)
+            if (dereference_depth >= mir_pointer_array_dim_count(pointer_array))
                 stride = type_size(type_decay_ptr(pointer_array->type));
             else
-                stride = sym_pointer_array_index_elem_size(
-                    pointer_array, pointer_array->type, dereference_depth);
+                stride = mir_pointer_array_stride(pointer_array,
+                                                  dereference_depth);
         } else
             stride = type_index_elem_size(ast_expr_type_for_sizeof(node->a));
     }
@@ -1973,13 +1997,25 @@ static struct Sym *mir_pointer_array_root(const struct AstNode *node,
         if (symbol != NULL &&
             ((symbol->is_array && symbol->dim_count > 1) ||
              (!symbol->is_array && type_ptr_depth(symbol->type) > 0 &&
-              symbol->dim_count > 0)))
+              symbol->dim_count > 0) || symbol->pointee_dim_count > 0))
             return symbol;
         return NULL;
     }
     if (node->kind == AST_UNARY && node->op == '*') {
         symbol = mir_pointer_array_root(node->a, dereference_depth);
         if (symbol != NULL)
+            ++*dereference_depth;
+        return symbol;
+    }
+    if (node->kind == AST_INDEX) {
+        /* `p[i]` is the subscript spelling of `*(p + i)`: it consumes one
+         * pointer-to-array dimension just like the explicit dereference form.
+         * Retaining that depth lets a remaining row decay through subsequent
+         * pointer arithmetic instead of being loaded as a scalar. */
+        symbol = mir_pointer_array_root(node->a, dereference_depth);
+        if (symbol != NULL && !(node->a->kind == AST_IDENT &&
+                                symbol->is_array &&
+                                symbol->pointee_dim_count > 0))
             ++*dereference_depth;
         return symbol;
     }
@@ -2003,10 +2039,10 @@ static int mir_pointer_arithmetic_stride(const struct AstNode *node)
         if (pointer_array->is_array && dereference_depth == 0)
             stride = pointer_array->elem_size;
         else
-            stride = dereference_depth >= pointer_array->dim_count
+            stride = dereference_depth >= mir_pointer_array_dim_count(pointer_array)
                 ? type_size(type_decay_ptr(pointer_array->type))
-                : sym_pointer_array_index_elem_size(
-                    pointer_array, pointer_array->type, dereference_depth);
+                : mir_pointer_array_stride(pointer_array,
+                                           dereference_depth);
         if (stride <= 0)
             stride = type_size(type_decay_ptr(pointer_array->type));
         if (stride > 0)
@@ -2049,7 +2085,7 @@ static int mir_index_result_is_array(const struct AstNode *node)
                                                         : type_ptr_depth(root->type) > 0 &&
                                                             root->dim_count >= depth)) ||
            (pointer_array != NULL &&
-            pointer_array->dim_count > dereference_depth) ||
+            mir_pointer_array_dim_count(pointer_array) > dereference_depth) ||
            (field != NULL && field->dim_count > depth);
 }
 
@@ -2187,7 +2223,7 @@ static int mir_lower_lvalue_address(const struct AstNode *node)
             if ((ast_pointer_expr_type(node->a, &pointer_type, &no_deref) &&
                  no_deref) ||
                 (pointer_array != NULL &&
-                 pointer_array->dim_count >= dereference_depth))
+                 mir_pointer_array_dim_count(pointer_array) >= dereference_depth))
                 base = mir_lower_expr(node->a);
             else
                 base = mir_emit_pointer_word_load(
@@ -2707,7 +2743,7 @@ static int mir_lower_expr(const struct AstNode *node)
             struct Sym *pointer_array = mir_pointer_array_root(
                 node->a, &dereference_depth);
             if (pointer_array != NULL &&
-                pointer_array->dim_count > dereference_depth) {
+                mir_pointer_array_dim_count(pointer_array) > dereference_depth) {
                 value = mir_lower_expr(node->a);
                 insn = mir_mutable_definition(value);
                 if (insn != NULL)

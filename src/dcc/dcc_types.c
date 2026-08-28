@@ -441,7 +441,11 @@ void parse_struct_definition(int struct_id)
             parse_static_assert_decl();
             continue;
         }
-        decl_type = parse_type();
+        /* Parse declaration specifiers only.  Pointer stars belong to each
+         * individual member declarator: in `int *p, n, *q, a[2]`, applying
+         * the first `*` to the shared declaration type incorrectly turns n
+         * and a into pointer-valued fields. */
+        decl_type = parse_base_type();
         field_base_is_volatile = g_decl.is_volatile;
         field_base_pointee_is_volatile = g_decl.pointee_is_volatile;
 
@@ -693,6 +697,9 @@ int parse_base_type(void)
     saw_bool = 0;
     storage_class_seen = 0;
     g_typedef_array_len = 0;
+    g_typedef_array_dim_count = 0;
+    memset(g_typedef_array_dims, 0, sizeof(g_typedef_array_dims));
+    g_typedef_base_type = 0;
     g_typedef_is_func = 0;
     g_typedef_has_proto = 0;
     g_typedef_proto_nargs = 0;
@@ -797,7 +804,11 @@ int parse_base_type(void)
             }
             t = make_struct_type(sid);
             saw_any = 1;
-            break;
+            /* Declaration specifiers are order-independent.  Keep scanning so
+             * standard forms such as `struct S static object` and
+             * `struct S const object` accept storage classes and qualifiers
+             * written after the aggregate type specifier. */
+            continue;
         }
 
         if (g_lex.tok.kind == TOK_ENUM) {
@@ -883,9 +894,13 @@ int parse_base_type(void)
 
         if (!saw_any && g_lex.tok.kind == TOK_ID && (td = find_typedef(g_lex.tok.text)) >= 0) {
             t = typedefs[td].type;
+            g_typedef_base_type = t;
             g_decl.is_volatile |= typedefs[td].is_volatile;
             g_decl.pointee_is_volatile = typedefs[td].pointee_is_volatile;
             g_typedef_array_len = typedefs[td].array_len;
+            g_typedef_array_dim_count = typedefs[td].dim_count;
+            memcpy(g_typedef_array_dims, typedefs[td].dims,
+                   sizeof(g_typedef_array_dims));
             g_typedef_is_func = typedefs[td].is_func;
                  g_typedef_has_proto = typedefs[td].has_proto;
                  g_typedef_proto_nargs = typedefs[td].proto_nargs;

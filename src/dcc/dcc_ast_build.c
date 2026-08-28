@@ -370,6 +370,16 @@ static int ast_expr_is_pointer_assignment_rhs(const struct AstNode *n)
      */
     if (ast_expr_base_ident_unresolved(n))
         return 1;
+    /* AST validation runs before nested-block declarations have entered the
+     * active symbol table.  Preserve that uncertainty through pointer
+     * arithmetic as well: `p[i] = local_ptr + 1` is otherwise inferred as
+     * integer arithmetic solely because local_ptr temporarily defaults to
+     * int here.  The later scoped build still diagnoses a genuinely
+     * undeclared identifier. */
+    if (n->kind == AST_BINARY && (n->op == '+' || n->op == '-') &&
+        (ast_expr_base_ident_unresolved(n->a) ||
+         (n->op == '+' && ast_expr_base_ident_unresolved(n->b))))
+        return 1;
     if (type_ptr_depth(ast_expr_type_for_sizeof(n)) > 0)
         return 1;
     if (ast_expr_is_array_decay(n) || ast_expr_is_array_row(n) ||
@@ -589,14 +599,16 @@ static struct AstNode *p_primary(struct AstArena *ar)
             long v = parse_offsetof_value();
             return ast_int_lit(ar, v, TYPE_INT);
         }
-        /* C99's predefined __func__ identifier behaves as though each
+        /* C99's predefined __func__ identifier (and GCC's older, widely used
+         * __FUNCTION__ spelling) behaves as though each
          * function body began with a static character array initialized to
          * that function's source name.  Dcc already interns string literals
          * for the duration of the translation unit, so represent its value
          * with the same AST node.  g_current_compiling_func is set before all
          * scan and emission passes over the body and contains the source name
          * (assembly-name truncation is applied separately). */
-        if (!strcmp(g_lex.tok.text, "__func__") &&
+        if ((!strcmp(g_lex.tok.text, "__func__") ||
+             !strcmp(g_lex.tok.text, "__FUNCTION__")) &&
             g_current_compiling_func[0] != 0) {
             int len = (int)strlen(g_current_compiling_func);
 
@@ -632,6 +644,24 @@ static struct AstNode *p_postfix_tail(struct AstArena *ar, struct AstNode *n)
         if (g_lex.tok.kind == '[') {
             struct AstNode *m = ast_new(ar, AST_INDEX);
             int base_type = ast_expr_type_for_sizeof(n);
+            /* `(*p)[i]` is exactly `p[0][i]` when p points to an array.
+             * Preserve that equivalence in the AST so every later lowering
+             * uses the established pointer-to-N-dimensional-array indexing
+             * path (and its row strides), rather than treating `*p` as a
+             * scalar pointer load. */
+            if (n != NULL && n->kind == AST_UNARY && n->op == '*' &&
+                n->a != NULL && n->a->kind == AST_IDENT) {
+                struct Sym *pointer_sym = find_sym(n->a->sval);
+                if (pointer_sym != NULL && !pointer_sym->is_array &&
+                    type_ptr_depth(pointer_sym->type) > 0 &&
+                    pointer_sym->dim_count > 0) {
+                    struct AstNode *zero_index = ast_new(ar, AST_INDEX);
+                    zero_index->a = n->a;
+                    zero_index->b = ast_int_lit(ar, 0, TYPE_INT);
+                    n = zero_index;
+                    base_type = ast_expr_type_for_sizeof(n);
+                }
+            }
             if (n != NULL && n->kind == AST_IDENT) {
                 struct Sym *base_sym = find_sym(n->sval);
                 if (base_sym != NULL && !base_sym->is_array && type_ptr_depth(base_type) == 0)

@@ -226,6 +226,152 @@ now carry redundant grouping parentheses, including the upstream
 two-dimensional byte, word, and long pointer arrays have focused coverage in
 `tests/tparrgrp.c`.
 
+GCC torture execute `950809-1` is fixed.  Pointer modifiers in a struct member
+declarator list now apply to each declarator independently, so a declaration
+such as `int *sp, scalar, *sc, values[2]` no longer makes every later member a
+pointer.  Mixed byte, word, long, pointer, scalar, and array fields have
+focused coverage in `tests/tflddecl.c`.
+
+GCC torture execute `960326-1` is fixed.  Aggregate type specifiers no longer
+prematurely end declaration-specifier parsing, so storage classes and
+qualifiers may follow tagged or anonymous struct/union specifiers, including
+the upstream `struct s static s1` ordering.  Focused initializer and zero-fill
+coverage is provided by `tests/taggordr.c`.
+
+GCC torture execute `const-addr-expr-1` is fixed.  File-scope address constants
+may now combine a grouped array-to-pointer base, scaled constant pointer
+arithmetic, and a following struct member suffix, such as
+`(int *)&((items + 1)->value)`.  Zero and nonzero element offsets and multiple
+member types have focused coverage in `tests/tmemaddr.c`.
+
+GCC torture execute `pr39240` is fixed.  A function returning `signed char` or
+`unsigned char` now accepts supported 16- and 32-bit integer expressions and
+applies the return type's narrowing conversion, rather than requiring an
+identifier to already have byte type or a literal to be nonnegative and below
+256.  Focused coverage is provided by `tests/tretnar.c`.
+
+GCC torture execute `pr44468` is fixed.  `sizeof(type)` nodes now participate
+in the shared scalar and strict constant folders, matching their existing
+classification as integer constant expressions.  This allows folded `&&` and
+`||` guards combining `sizeof` and `offsetof`; focused coverage is provided by
+`tests/tszlogic.c`.
+
+GCC torture execute `pr60017` is fixed.  File-scope struct initializers now
+preserve every dimension of array fields and compute the correct row stride,
+including multidimensional character arrays and arrays whose elements are
+structs.  Focused nested-brace and value coverage is provided by
+`tests/tnestini.c`.
+
+The portable compile gap exposed by GCC torture execute `20050826-2` is fixed.
+Pointer arithmetic rooted at a pointer declared inside a nested block now
+retains its not-yet-scoped pointer possibility during early AST validation,
+so an assignment such as `table[index] = item + 1` through a pointer-to-pointer
+parameter is not misdiagnosed as integer-to-pointer conversion.  Focused
+runtime coverage is provided by `tests/tppasgn.c`.
+
+GCC torture execute `pr66233` is fixed.  The generic indexed-lvalue assignment
+path now accepts float-valued right operands for byte and word integer elements
+and performs the required float-to-destination-integer conversion before the
+store.  Focused global-array loop coverage is provided by `tests/tfixarr.c`.
+
+GCC torture execute `pr67929_1` is fixed.  Integer-returning functions now
+admit supported float expressions and let MIR apply the function return type's
+float-to-integer conversion, including the truncation toward zero required by
+C.  Focused positive and negative conversion coverage is provided by
+`tests/tfret.c`.
+
+A false fallthrough diagnostic exposed while triaging GCC torture execute
+`20010409-1` is fixed.  Direct calls to the C library's non-returning
+`longjmp`, `exit`, and `abort` functions now terminate the enclosing statement
+path for function-end analysis, so a non-void wrapper ending in one does not
+warn that control reaches its closing brace.  Focused `setjmp`/`longjmp`
+runtime coverage is provided by `tests/tnoretrn.c`.
+
+The remaining GCC torture execute `20010409-1` expressions are fixed as well.
+A one-dimensional array of structs now undergoes array-to-pointer decay when
+used as the identifier base of `->`, rather than being rejected or loaded as
+though its first object bytes held a pointer.  This enables chained reads,
+assignments, calls, and postfix updates such as
+`holder->items[holder->index]->field++`.  The original module compiles
+unchanged, with focused runtime coverage in `tests/tchptr.c`.
+
+GCC torture execute `pr70127` is fixed.  Structure assignment chains are now
+lowered recursively instead of supporting only two destinations, preserving
+the assigned object value through expressions such as
+`dest = local = array[0] = source`.  The original module compiles unchanged,
+with focused loop, array-lvalue, local, and bit-field coverage in
+`tests/tstchain.c`.
+
+The portable declaration gap in GCC torture execute `930513-1` is fixed.
+Old-style (K&R) function definitions now accept function-pointer parameter
+declarations and retain their prototypes for indirect-call checking and
+lowering.  The original module compiles unchanged, with focused runtime
+coverage in `tests/tkrfnptr.c`.
+
+The multidimensional character-array initializer gap exposed by GCC torture
+execute `strlen-2` and `strlen-3` is fixed.  String literals now initialize
+complete innermost rows under standard aggregate brace elision, including both
+`{"1", "12"}` and nested three-dimensional forms.  Both upstream files now
+parse past their declarations; focused byte and zero-fill coverage is provided
+by `tests/tmdstr.c`.
+
+The nested-array-typedef portion of GCC torture execute `strlen-4` is fixed.
+Array typedefs now retain their complete dimension vector when composed through
+further typedefs, rather than collapsing each alias to one flat length.  This
+gives global initialization, indexing, row strides, and `sizeof` the original
+array shape.  The upstream initializer now parses successfully; focused
+runtime coverage is provided by `tests/ttdstr.c`.
+
+The following pointer-to-array-typedef declarations in `strlen-4` are fixed as
+well.  Adding a pointer declarator to an array typedef now produces a pointer
+object with the typedef's row-stride metadata, rather than misclassifying the
+object itself as another array.  Constant addresses such as `&values[1]` also
+scale their first subscript by the full multidimensional row size.  The
+upstream pointer initializers now compile, with address coverage added to
+`tests/ttdstr.c`.
+
+Explicit dereference-and-subscript expressions on those pointers are fixed:
+`(*p)[i][j]` is normalized to its C-equivalent `p[0][i][j]` in the AST, so it
+uses the established multidimensional pointer indexing path and preserves each
+typedef-defined stride.  Focused optimized and unoptimized value checks are
+included in `tests/ttdstr.c`.
+
+Pointer arithmetic on a dereferenced pointer-to-array is fixed as well.
+Row-decay metadata now survives binary `+`/`-`, so expressions such as
+`*((*p) + i)` scale by the typedef-defined row width and the selected row then
+decays correctly as a call argument.  The corresponding first group in
+`strlen-4` now compiles, with runtime call-argument coverage in
+`tests/ttdstr.c`.
+
+The equivalent subscript spelling in `strlen-4` is fixed too.  A first
+subscript of a pointer to a multidimensional array typedef, as in `p[0]`, now
+retains its array-row decay and stride rather than loading the row's first byte
+as a scalar.  Consequently `*(p[0] + i)` selects and passes the intended inner
+row.  Focused optimized and unoptimized coverage is included in
+`tests/ttdstr.c`.
+
+Partial multidimensional subscript chains through those pointers are fixed as
+well.  A form such as `(*p)[row]` (normalized internally to `p[0][row]`) now
+remains an array row and decays to `char *`, allowing the following byte offset
+in `(*p)[row] + offset`.  This clears the next `strlen-4` group, with focused
+zero and nonzero row/offset coverage in `tests/ttdstr.c`.
+
+The pointer-table group in `strlen-4` is fixed next.  For an object such as
+`Pair *table[2]`, dcc now records the table's own bound separately from the
+multidimensional array typedef targeted by each pointer.  The table therefore
+allocates and initializes two pointer elements, while expressions such as
+`*(*(table[index]) + row)` still retain the pointed-to row stride.  Focused
+forward, zero, and backward row selection, including a following byte offset,
+is covered by `tests/ttdstr.c`.  This completes the distinct standard-C
+expression groups in `strlen-4`; `strlen-5` through `strlen-7` intentionally
+exercise out-of-bounds string traversal and are excluded as undefined.
+
+GCC torture execute `20001011-1` is fixed as a selected dialect addition.
+The GNU `__FUNCTION__` predefined identifier now shares dcc's existing
+source-function-name implementation for standard `__func__`, including its
+array behavior under `sizeof` and independence from M80 name shortening.  The
+original module compiles unchanged, with focused coverage in `tests/tfuncid.c`.
+
 `doloop-1` and `doloop-2` now pass unchanged after the unsigned limit and
 promotion corrections above.  `pr86231` exposed a separate conditional bug:
 MIR tested only the base-type bits and mistook a `void *` result for a void
@@ -261,7 +407,7 @@ Do not spend compiler-fix effort on a test whose essential behavior requires:
 ## Validation for completed items
 
 The focused regressions pass under ntvcm in both optimized and unoptimized
-builds.  The complete dcc correctness suite after the fixes has 448 runnable
-applications and 14 intentionally skipped; the extended, diagnostics, and
+builds.  The complete dcc correctness suite after the fixes has 465 runnable
+applications and 12 intentionally skipped; the extended, diagnostics, and
 dccpeep-fixture checks pass.  Performance baselines are refreshed when a
 corrected ABI or promotion path legitimately changes generated code.

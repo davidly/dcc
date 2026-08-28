@@ -71,15 +71,14 @@ int ast_expr_yields_bool01(const struct AstNode *n)
 }
 
 /* RHS acceptable for storing into a plain-int (char/int) array or pointer
- * element via assignment `n`.  A plain-int RHS always works.  A long-typed RHS
- * is also accepted for a plain `=`: the element store path evaluates the RHS to
- * DE:HL and writes only the low word (int) or low byte (char), i.e. it
- * truncates to the element width - exactly the C conversion for `int_elem =
- * long_value`.  Compound ops are left to the plain-int-only path. */
+ * element via assignment `n`.  Plain-int, long, and float RHS values all use
+ * the generic address store; it narrows long values and converts float values
+ * to the destination integer type.  Compound ops remain plain-int-only. */
 static int ast_int_elem_assign_rhs_ok(const struct AstNode *n)
 {
     return ast_value_is_plain_int(n->b) ||
-           (n->op == '=' && ast_value_is_long_word(n->b));
+           (n->op == '=' && (ast_value_is_long_word(n->b) ||
+                             ast_value_is_float_word(n->b)));
 }
 
 int ast_gen_supported(const struct AstNode *n)
@@ -1920,6 +1919,9 @@ int ast_const_scalar_fold(const struct AstNode *n, long *out)
     case AST_INT_LIT:
         *out = n->ival;
         return 1;
+    case AST_SIZEOF_TYPE:
+        *out = n->ival;
+        return 1;
     case AST_IDENT:
         for (ei = 0; ei < nenum_consts; ++ei) {
             if (!strcmp(enum_const_names[ei], n->sval)) {
@@ -2024,6 +2026,9 @@ int ast_const_fold_strict(const struct AstNode *n, long *out)
         return 0;
     switch (n->kind) {
     case AST_INT_LIT:
+        *out = n->ival;
+        return 1;
+    case AST_SIZEOF_TYPE:
         *out = n->ival;
         return 1;
     case AST_IDENT:

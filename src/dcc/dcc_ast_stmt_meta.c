@@ -380,6 +380,16 @@ int ast_stmt_exits(const struct AstNode *n)
     case AST_CONTINUE:
     case AST_GOTO:
         return 1;
+    case AST_EXPR_STMT:
+        /* These C library functions do not return to their caller.  Treat a
+         * direct call used as the final statement like a return so valid
+         * wrappers around longjmp/exit/abort do not receive a false
+         * "control reaches end" warning. */
+        return n->a != NULL && n->a->kind == AST_CALL &&
+               n->a->a != NULL && n->a->a->kind == AST_IDENT &&
+               (!strcmp(n->a->a->sval, "longjmp") ||
+                !strcmp(n->a->a->sval, "exit") ||
+                !strcmp(n->a->a->sval, "abort"));
     case AST_SWITCH: {
         /* Exits only when every path through the body is forced to reach a
          * point that itself exits: a default case must exist (otherwise an

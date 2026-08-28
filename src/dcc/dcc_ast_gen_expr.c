@@ -668,7 +668,17 @@ void gen_unary_ast(const struct AstNode *n)
         }
         if (n->a->kind != AST_IDENT) {
             gen_pointer_expr_ast(n->a, &ptr_type, &no_deref);
-            base = no_deref ? ptr_type : type_decay_ptr(ptr_type);
+            /* A pointer-to-array row used as the operand has already decayed
+             * to the selected row's address.  In that case this `*` denotes
+             * the row array, which immediately decays again in this value
+             * context; loading through HL would incorrectly fetch its first
+             * scalar element. */
+            if (no_deref) {
+                g_expr.type = ptr_type;
+                g_expr.long_from16 = 0;
+                return;
+            }
+            base = type_decay_ptr(ptr_type);
             if ((base & 15) == TYPE_VOID)
                 base = TYPE_CHAR;
             if (!type_is_struct_object(base))
@@ -2309,6 +2319,8 @@ static void gen_assign_lvalue_expr_ast(const struct AstNode *n)
                 emit_bool_normalize_hl(g_expr.type);
                 rhs_bool01 = 1;
             }
+        } else if (ast_is_plain_int_type(val_type) && type_is_float(g_expr.type)) {
+            emit_convert_float_to_intlike(val_type);
         }
         if (type_size(val_type) == 4) {
             if (type_is_float(val_type)) {
@@ -5011,7 +5023,10 @@ void gen_struct_chain_copy_assign_ast(const struct AstNode *n)
     int lhs_type;
     int rhs_type;
 
-    gen_struct_copy_assign_ast(inner);
+    /* The inner assignment may itself be another link in the chain.  Lower
+     * it normally, then copy the value from its lhs, which is the object
+     * value yielded by a structure assignment. */
+    gen_assign_ast(inner);
     gen_struct_addr_expr_ast(n->a, &lhs_type);
     emit("\tpush hl\n");
     gen_struct_addr_expr_ast(inner->a, &rhs_type);
@@ -5163,7 +5178,10 @@ void gen_member_addr_ast(const struct AstNode *n, int *out_val_type)
          * local) instead of computing &s and then dereferencing it, which
          * is the correct-but-needlessly-expensive general path required
          * only when s has no direct load form at all. */
-        if (arrow && (sym_can_ix_direct(s) || is_global_word_sym(s))) {
+        if (arrow && s->is_array) {
+            emit_load_sym_addr(s);
+            cur_type = type_add_ptr(cur_type);
+        } else if (arrow && (sym_can_ix_direct(s) || is_global_word_sym(s))) {
             emit_load_sym_value_direct(s);
         } else {
             emit_load_sym_addr(s);
@@ -5588,6 +5606,14 @@ void gen_pointer_expr_ast(const struct AstNode *n, int *out_type,
             gen_index_addr_ast(n, &addr_type);
             if (!no_deref)
                 emit_load_from_hl(addr_type);
+            else if (n->a != NULL && n->a->kind == AST_IDENT) {
+                struct Sym *row_sym = find_sym(n->a->sval);
+                if (row_sym != NULL && row_sym->dim_count > 1)
+                    g_expr.decay_stride = row_sym->is_array
+                        ? sym_array_index_elem_size(row_sym, 1)
+                        : sym_pointer_array_index_elem_size(row_sym,
+                                                            row_sym->type, 1);
+            }
             g_expr.type = no_deref ? member_type : addr_type;
             g_expr.long_from16 = 0;
             *out_type = g_expr.type;
