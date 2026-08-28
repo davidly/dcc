@@ -3826,8 +3826,9 @@ void mir_end_function(void)
             mir_large_dense_switch_phi_candidate_is_eligible() ||
             strict_profile_valid ||
             (getenv("DCC_MIR_SELECT_CANDIDATE") != NULL &&
-             diagnostic_function != NULL &&
+                diagnostic_function != NULL &&
              !strcmp(diagnostic_function, mir.name));
+        int boolean_phi_changed;
         int use_alternative = 0;
 
         if (original_count > 0) {
@@ -3840,7 +3841,9 @@ void mir_end_function(void)
         }
         mir_reset_boolean_phi_branch_simplification_count();
         mir_simplify_boolean_phi_branches();
-        if (mir_boolean_phi_branch_simplification_count() > 0 &&
+        boolean_phi_changed =
+            mir_boolean_phi_branch_simplification_count() > 0;
+        if (boolean_phi_changed &&
             mir_verify_and_dump() &&
             mir_try_generated_candidate(
                 &alternative, &alternative_selector,
@@ -3871,12 +3874,14 @@ void mir_end_function(void)
         } else {
             if (alternative != NULL)
                 mir_stream_close(alternative);
-            mir.count = original_count;
-            if (original_count > 0)
-                memcpy(mir.insns, original_insns,
-                       (size_t)original_count * sizeof(*original_insns));
-            if (!mir_verify_and_dump())
-                fatal("restored MIR failed verification");
+            if (boolean_phi_changed) {
+                mir.count = original_count;
+                if (original_count > 0)
+                    memcpy(mir.insns, original_insns,
+                           (size_t)original_count * sizeof(*original_insns));
+                if (!mir_verify_and_dump())
+                    fatal("restored MIR failed verification");
+            }
             mir_compute_dead_local_suffix();
             label_id = selected_label_id;
         }

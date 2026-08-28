@@ -8026,6 +8026,8 @@ static int mir_promote_objects(void)
     int *out_state;
     int *next_state;
     int *aliases;
+    int *predecessor_offsets;
+    int *predecessors;
     unsigned char *reachable;
     int changed;
     int promoted = 0;
@@ -8039,10 +8041,44 @@ static int mir_promote_objects(void)
     out_state = (int *)malloc(state_count * sizeof(*out_state));
     next_state = (int *)malloc((size_t)mir.object_count * sizeof(*next_state));
     aliases = (int *)malloc((size_t)mir.next_value * sizeof(*aliases));
+    predecessor_offsets = (int *)calloc(
+        (size_t)(mir.count + 1), sizeof(*predecessor_offsets));
+    predecessors = NULL;
     reachable = (unsigned char *)calloc((size_t)mir.count, 1);
     if (in_state == NULL || out_state == NULL || next_state == NULL ||
-        aliases == NULL || reachable == NULL)
+        aliases == NULL || predecessor_offsets == NULL || reachable == NULL)
         fatal("out of memory promoting MIR objects");
+    for (i = 0; i < mir.count; ++i) {
+        int successor;
+        for (successor = 0; successor < mir.insns[i].successor_count;
+             ++successor) {
+            int target = mir.insns[i].successors[successor];
+            if (target >= 0 && target < mir.count)
+                ++predecessor_offsets[target + 1];
+        }
+    }
+    for (i = 1; i <= mir.count; ++i)
+        predecessor_offsets[i] += predecessor_offsets[i - 1];
+    if (predecessor_offsets[mir.count] != 0) {
+        int *next_predecessor = (int *)malloc(
+            (size_t)mir.count * sizeof(*next_predecessor));
+        predecessors = (int *)malloc(
+            (size_t)predecessor_offsets[mir.count] * sizeof(*predecessors));
+        if (next_predecessor == NULL || predecessors == NULL)
+            fatal("out of memory indexing MIR predecessors");
+        memcpy(next_predecessor, predecessor_offsets,
+               (size_t)mir.count * sizeof(*next_predecessor));
+        for (i = 0; i < mir.count; ++i) {
+            int successor;
+            for (successor = 0; successor < mir.insns[i].successor_count;
+                 ++successor) {
+                int target = mir.insns[i].successors[successor];
+                if (target >= 0 && target < mir.count)
+                    predecessors[next_predecessor[target]++] = i;
+            }
+        }
+        free(next_predecessor);
+    }
     if (mir_is_profiled_boolean_reachable_join()) {
         reachable[0] = 1;
         do {
@@ -8084,21 +8120,18 @@ static int mir_promote_objects(void)
                 continue;
             if (i > 0) {
                 int predecessor_count = 0;
-                int predecessor;
-                for (predecessor = 0; predecessor < mir.count; ++predecessor) {
-                    int successor;
+                int predecessor_index;
+                for (predecessor_index = predecessor_offsets[i];
+                     predecessor_index < predecessor_offsets[i + 1];
+                     ++predecessor_index) {
+                    int predecessor = predecessors[predecessor_index];
                     if (!reachable[predecessor])
                         continue;
-                    for (successor = 0;
-                         successor < mir.insns[predecessor].successor_count;
-                         ++successor) {
-                        if (mir.insns[predecessor].successors[successor] != i)
-                            continue;
-                        if (predecessor_count == 0) {
+                    if (predecessor_count == 0) {
                             memcpy(next_state,
                                    &out_state[(size_t)predecessor * mir.object_count],
                                    (size_t)mir.object_count * sizeof(*next_state));
-                        } else {
+                    } else {
                             int *predecessor_out =
                                 &out_state[(size_t)predecessor * mir.object_count];
                             for (object = 0; object < mir.object_count; ++object) {
@@ -8111,10 +8144,8 @@ static int mir_promote_objects(void)
                                          predecessor_out[object])
                                     next_state[object] = MIR_OBJECT_AMBIGUOUS;
                             }
-                        }
-                        ++predecessor_count;
-                        break;
                     }
+                    ++predecessor_count;
                 }
                 if (predecessor_count == 0)
                     for (object = 0; object < mir.object_count; ++object)
@@ -8201,6 +8232,8 @@ static int mir_promote_objects(void)
     }
 
     free(aliases);
+    free(predecessors);
+    free(predecessor_offsets);
     free(reachable);
     free(next_state);
     free(out_state);
@@ -8244,13 +8277,44 @@ static int mir_fixed_color_for_definition(const struct MirInsn *insn)
     }
 }
 
-static int mir_values_interfere(const unsigned char *interference,
-                                int value_count, int left, int right)
+struct MirInterferenceGraph {
+    int **neighbors;
+    int *counts;
+    int *capacities;
+};
+
+static void mir_add_interference_edge(struct MirInterferenceGraph *graph,
+                                      int left, int right)
 {
-    if (mir_lazy_allocation_active &&
-        (mir_is_lazy_parameter(left) || mir_is_lazy_parameter(right)))
-        return 0;
-    return interference[(size_t)left * value_count + right] != 0;
+    int side;
+
+    if (left == right)
+        return;
+    for (side = 0; side < graph->counts[left]; ++side)
+        if (graph->neighbors[left][side] == right)
+            return;
+    if (graph->counts[left] == graph->capacities[left]) {
+        int capacity = graph->capacities[left]
+            ? graph->capacities[left] * 2 : 4;
+        int *neighbors = (int *)realloc(
+            graph->neighbors[left], (size_t)capacity * sizeof(*neighbors));
+        if (neighbors == NULL)
+            fatal("out of memory growing MIR interference");
+        graph->neighbors[left] = neighbors;
+        graph->capacities[left] = capacity;
+    }
+    if (graph->counts[right] == graph->capacities[right]) {
+        int capacity = graph->capacities[right]
+            ? graph->capacities[right] * 2 : 4;
+        int *neighbors = (int *)realloc(
+            graph->neighbors[right], (size_t)capacity * sizeof(*neighbors));
+        if (neighbors == NULL)
+            fatal("out of memory growing MIR interference");
+        graph->neighbors[right] = neighbors;
+        graph->capacities[right] = capacity;
+    }
+    graph->neighbors[left][graph->counts[left]++] = right;
+    graph->neighbors[right][graph->counts[right]++] = left;
 }
 
 /* Compacts a dense value_count-wide liveness bitmap into the list of live
@@ -8269,8 +8333,7 @@ static int mir_compact_live_set(const unsigned char *live, int value_count,
     return count;
 }
 
-static void mir_add_live_set_interference(unsigned char *interference,
-                                          int value_count,
+static void mir_add_live_set_interference(struct MirInterferenceGraph *graph,
                                           const int *live_list,
                                           int live_count)
 {
@@ -8281,14 +8344,13 @@ static void mir_add_live_set_interference(unsigned char *interference,
         int lv = live_list[left];
         for (right = left + 1; right < live_count; ++right) {
             int rv = live_list[right];
-            interference[(size_t)lv * value_count + rv] = 1;
-            interference[(size_t)rv * value_count + lv] = 1;
+            mir_add_interference_edge(graph, lv, rv);
         }
     }
 }
 
 static void mir_add_definition_live_out_interference(
-    unsigned char *interference, int value_count,
+    struct MirInterferenceGraph *graph, int value_count,
     const struct MirInsn *insn, const int *live_out_list, int live_out_count)
 {
     int i;
@@ -8301,8 +8363,7 @@ static void mir_add_definition_live_out_interference(
 
         if (value == insn->dst)
             continue;
-        interference[(size_t)insn->dst * value_count + value] = 1;
-        interference[(size_t)value * value_count + insn->dst] = 1;
+        mir_add_interference_edge(graph, insn->dst, value);
     }
 }
 
@@ -8440,12 +8501,12 @@ static void mir_allocate_registers_stable(
     const int *stable_colors)
 {
     int value_count = mir.next_value;
-    unsigned char *interference;
+    struct MirInterferenceGraph interference;
     unsigned char *cross_call;
     unsigned char *cross_guarded_call;
     unsigned char *cross_opaque;
-    int *degree;
     int *order;
+    int *degree;
     int *color;
     int *fixed_color;
     int *preferences;
@@ -8476,14 +8537,18 @@ static void mir_allocate_registers_stable(
         mir.allocation_spills[i] = -1;
     }
     mir.allocation_spill_count = 0;
-    interference = (unsigned char *)calloc(
-        (size_t)value_count * value_count, 1);
+    interference.neighbors = (int **)calloc(
+        (size_t)value_count, sizeof(*interference.neighbors));
+    interference.counts = (int *)calloc(
+        (size_t)value_count, sizeof(*interference.counts));
+    interference.capacities = (int *)calloc(
+        (size_t)value_count, sizeof(*interference.capacities));
     cross_call = (unsigned char *)calloc((size_t)value_count, 1);
     cross_guarded_call =
         (unsigned char *)calloc((size_t)value_count, 1);
     cross_opaque = (unsigned char *)calloc((size_t)value_count, 1);
-    degree = (int *)calloc((size_t)value_count, sizeof(*degree));
     order = (int *)malloc((size_t)value_count * sizeof(*order));
+    degree = (int *)malloc((size_t)value_count * sizeof(*degree));
     color = (int *)malloc((size_t)value_count * sizeof(*color));
     fixed_color = (int *)malloc((size_t)value_count * sizeof(*fixed_color));
     preferences = (int *)calloc((size_t)value_count * MIR_COLOR_COUNT,
@@ -8492,9 +8557,10 @@ static void mir_allocate_registers_stable(
     live_in_list = (int *)malloc((size_t)value_count * sizeof(*live_in_list));
     live_out_list =
         (int *)malloc((size_t)value_count * sizeof(*live_out_list));
-    if (interference == NULL || cross_call == NULL ||
+    if (interference.neighbors == NULL || interference.counts == NULL ||
+        interference.capacities == NULL || cross_call == NULL ||
         cross_guarded_call == NULL || cross_opaque == NULL ||
-        degree == NULL || order == NULL || color == NULL ||
+        order == NULL || degree == NULL || color == NULL ||
         fixed_color == NULL || preferences == NULL ||
         register_value == NULL || live_in_list == NULL ||
         live_out_list == NULL)
@@ -8512,12 +8578,12 @@ static void mir_allocate_registers_stable(
             mir_compact_live_set(out, value_count, live_out_list);
         int value;
 
-        mir_add_live_set_interference(interference, value_count,
+        mir_add_live_set_interference(&interference,
                                       live_in_list, in_count);
-        mir_add_live_set_interference(interference, value_count,
+        mir_add_live_set_interference(&interference,
                                       live_out_list, out_count);
         mir_add_definition_live_out_interference(
-            interference, value_count, &mir.insns[i], live_out_list,
+            &interference, value_count, &mir.insns[i], live_out_list,
             out_count);
         if (mir_instruction_clobbers_caller_registers(&mir.insns[i]) ||
             mir.insns[i].opcode == MIR_OPAQUE) {
@@ -8535,13 +8601,16 @@ static void mir_allocate_registers_stable(
         }
     }
     for (i = 0; i < value_count; ++i) {
-        int other;
+        int neighbor;
         order[i] = i;
         color[i] = -1;
         fixed_color[i] = -1;
-        for (other = 0; other < value_count; ++other)
-            degree[i] += mir_values_interfere(interference, value_count,
-                                               i, other);
+        degree[i] = 0;
+        if (!mir_is_lazy_parameter(i))
+            for (neighbor = 0; neighbor < interference.counts[i]; ++neighbor)
+                if (!mir_is_lazy_parameter(
+                        interference.neighbors[i][neighbor]))
+                    ++degree[i];
     }
     for (i = 0; i < mir.count; ++i)
         if (mir.insns[i].dst >= 0) {
@@ -8586,7 +8655,8 @@ static void mir_allocate_registers_stable(
             preferences[(size_t)i * MIR_COLOR_COUNT + MIR_COLOR_BC] +=
                 mir.count + 1;
     }
-    /* Stable selection sort is plenty for the small per-function prototype. */
+    /* Preserve the allocator's historical selection order exactly. The
+     * sparse graph still avoids the former quadratic degree scan. */
     for (i = 0; i < value_count; ++i) {
         int best = i;
         int candidate;
@@ -8597,11 +8667,9 @@ static void mir_allocate_registers_stable(
                 prioritize_wide ? mir_definition(left) : NULL;
             const struct MirInsn *right_definition =
                 prioritize_wide ? mir_definition(right) : NULL;
-            int left_wide =
-                left_definition != NULL &&
+            int left_wide = left_definition != NULL &&
                 type_size(left_definition->type) == 4;
-            int right_wide =
-                right_definition != NULL &&
+            int right_wide = right_definition != NULL &&
                 type_size(right_definition->type) == 4;
             int left_register = register_value[left];
             int right_register = register_value[right];
@@ -8684,11 +8752,13 @@ static void mir_allocate_registers_stable(
                 int stability =
                     stable_colors != NULL &&
                     stable_colors[value] == candidate;
-                for (other = 0; other < value_count; ++other) {
-                    if (color[other] >= 0 &&
-                        mir_color_shares_slot(color[other], candidate) &&
-                        mir_values_interfere(interference, value_count,
-                                             value, other)) {
+                for (other = 0; other < interference.counts[value]; ++other) {
+                    int neighbor = interference.neighbors[value][other];
+                    if (color[neighbor] >= 0 &&
+                        mir_color_shares_slot(color[neighbor], candidate) &&
+                        !(mir_lazy_allocation_active &&
+                          (mir_is_lazy_parameter(value) ||
+                           mir_is_lazy_parameter(neighbor)))) {
                         available = 0;
                         break;
                     }
@@ -8774,7 +8844,11 @@ static void mir_allocate_registers_stable(
     free(cross_opaque);
     free(cross_guarded_call);
     free(cross_call);
-    free(interference);
+    for (i = 0; i < value_count; ++i)
+        free(interference.neighbors[i]);
+    free(interference.capacities);
+    free(interference.counts);
+    free(interference.neighbors);
     free(live_in_list);
     free(live_out_list);
 }
