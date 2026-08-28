@@ -827,6 +827,7 @@ void emit_init_auto_struct_array(struct Sym *s, int baseoff, int elem_type, int 
     int n;
     int maxn;
     int total_bytes;
+    int had_brace;
 
     if (elem_size <= 0) elem_size = type_size(elem_type);
     if (elem_size <= 0) elem_size = 2;
@@ -845,8 +846,11 @@ void emit_init_auto_struct_array(struct Sym *s, int baseoff, int elem_type, int 
         return;
     }
 
-    if (g_lex.tok.kind == '{')
+    had_brace = 0;
+    if (g_lex.tok.kind == '{') {
         next_token();
+        had_brace = 1;
+    }
 
     n = 0;
     maxn = 0;
@@ -870,10 +874,16 @@ void emit_init_auto_struct_array(struct Sym *s, int baseoff, int elem_type, int 
 
         n++;
         if (n > maxn) maxn = n;
+        /* With braces elided, exactly one array subobject belongs to this
+         * call.  Leave its following comma for the enclosing struct, whose
+         * next member must receive the next initializer. */
+        if (!had_brace && count > 0 && n >= count)
+            break;
         if (!accept(',')) break;
         if (g_lex.tok.kind == '}') break;
     }
-    expect('}');
+    if (had_brace)
+        expect('}');
 
     if (maxn > n) n = maxn;
     if (count > 0 && n < count) {
@@ -1333,6 +1343,10 @@ void emit_init_auto_struct_type(struct Sym *s, int baseoff, int type)
 
         end_used = fd->offset + fd->size;
         if (end_used > used) used = end_used;
+        /* A braceless struct element nested in an array must leave the comma
+         * after its final field for the enclosing array's element loop. */
+        if (!had_brace && next_parent_field_index(sid, i + 1) < 0)
+            break;
         if (!accept(',')) break;
         if (g_lex.tok.kind == '}') break;
         if (g_lex.tok.kind == '.') i = -1;

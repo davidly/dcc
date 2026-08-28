@@ -372,6 +372,15 @@ source-function-name implementation for standard `__func__`, including its
 array behavior under `sizeof` and independence from M80 name shortening.  The
 original module compiles unchanged, with focused coverage in `tests/tfuncid.c`.
 
+GCC torture execute `20021118-1` exposed missing C brace elision for an array
+member of a struct.  Both automatic and static initializer parsers consumed
+the comma following the array's last element as though it were still inside
+the array, instead of leaving it for the enclosing struct.  They now stop at
+the completed unbraced subobject; focused storage-duration and following-field
+coverage, including flat initialization of outer arrays of these structs, is
+provided by `tests/tbrelide.c`.  This also clears extended c-testsuite case
+`00205` in both optimized and unoptimized modes.
+
 `doloop-1` and `doloop-2` now pass unchanged after the unsigned limit and
 promotion corrections above.  `pr86231` exposed a separate conditional bug:
 MIR tested only the base-type bits and mistook a `void *` result for a void

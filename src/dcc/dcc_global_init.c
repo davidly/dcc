@@ -980,6 +980,11 @@ static void parse_global_init_field_array_at(struct Sym *s, struct FieldDef *fd,
         else
             parse_global_init_type_at(s, fd->elem_type, fd->elem_size, baseoff + n * stride);
         n++;
+        /* A braceless array member consumes only this subobject.  Preserve
+         * the comma after its last element for the enclosing struct so the
+         * following initializer is assigned to the following member. */
+        if (!had_brace && n >= count)
+            break;
         if (!accept(',')) break;
         if (had_brace && g_lex.tok.kind == '}') break;
     }
