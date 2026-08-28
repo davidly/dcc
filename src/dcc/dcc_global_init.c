@@ -419,8 +419,9 @@ int parse_global_init_atom(long *val, char *label, int labelsz)
                         element_size = 1;
                 }
                 delta *= element_size;
-                snprintf(label, (size_t)labelsz, "%s%c%ld",
-                         asm_name_for(lname), neg ? '-' : '+', delta);
+                if (neg) delta = -delta;
+                snprintf(label, (size_t)labelsz, delta >= 0 ? "%s+%ld" : "%s%ld",
+                         asm_name_for(lname), delta);
             }
         }
         return 2;       /* symbolic address */

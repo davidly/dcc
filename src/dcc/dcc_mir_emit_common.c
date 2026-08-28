@@ -747,17 +747,9 @@ static int mir_emit_scalar_value(MirStream *out, int value, int depth)
                 out, (definition->type & TYPE_UNSIGNED) != 0 ? "__modu" : "__mods");
             return 1;
         case TOK_EQ: case TOK_NE: case '<': case '>': case TOK_LE: case TOK_GE:
-            {
-                const struct MirInsn *left = mir_definition(definition->src1);
-                const struct MirInsn *right = mir_definition(definition->src2);
-                int is_unsigned =
-                    (left != NULL &&
-                     mir_type_uses_unsigned_comparison(left->type)) ||
-                    (right != NULL &&
-                     mir_type_uses_unsigned_comparison(right->type));
-                mir_emit_scalar_compare(out, (int)definition->immediate,
-                                        is_unsigned);
-            }
+            mir_emit_scalar_compare(out, (int)definition->immediate,
+                                    (definition->secondary_offset &
+                                     TYPE_UNSIGNED) != 0);
             return 1;
         case TOK_SHL: case TOK_SHR:
             {
@@ -2262,9 +2254,6 @@ int mir_emit_homed_unary_instruction(MirStream *out,
              * signed extension sequence. */
             if (type_size(source_type) == 1 &&
                 type_size(insn->type) >= 2 &&
-                strcmp(mir.name, "main") == 0 &&
-                mir.count == 38 && mir.next_value == 23 &&
-                mir.local_bytes == 1 &&
                 mir_value_is_normalized_byte(
                     insn->src1, source_type, 0)) {
                 if (type_size(insn->type) == 2)
