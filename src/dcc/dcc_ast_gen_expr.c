@@ -1811,6 +1811,26 @@ void ast_emit_init_expr(void)
     emit("\tld hl,0\n");
 }
 
+/* Parse and emit an expression whose value is discarded but whose side
+ * effects are required.  VLA parameter bounds use this at function entry. */
+void ast_emit_discarded_expr(void)
+{
+    struct AstNode *n = ast_build_assign_expr(&g_ast_init_arena);
+
+    if (n == NULL) {
+        ast_arena_reset(&g_ast_init_arena);
+        error_here("malformed discarded expression");
+        return;
+    }
+    ast_validate_expr_symbols(n);
+    if (mir_is_active())
+        mir_capture_discarded_expr(n);
+    else
+        ast_gen_dead_expr(n);
+    ast_process_expr_metadata(n);
+    ast_arena_reset(&g_ast_init_arena);
+}
+
 void ast_emit_struct_init_expr_assign(struct Sym *s)
 {
     struct AstNode *rhs;

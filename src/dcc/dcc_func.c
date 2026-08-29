@@ -1070,6 +1070,58 @@ int current_void_is_empty_param_list(void)
     return r;
 }
 
+/* Runtime array-parameter bounds are adjusted away from the parameter's type,
+ * but in a function definition their expressions are still evaluated on
+ * entry.  Keep their token positions until begin_function_mir(), where the
+ * parameter symbols and MIR function are both available. */
+static LexState param_vla_bound_states[MAX_ARRAY_DIMS];
+static int param_vla_bound_count;
+
+static int param_array_bound_has_side_effect(void)
+{
+    LexState saved = lex_save();
+    int paren_depth = 0;
+    int side_effect = 0;
+    int previous_was_id = 0;
+
+    while (g_lex.tok.kind != TOK_EOF &&
+           (g_lex.tok.kind != ']' || paren_depth > 0)) {
+        int kind = g_lex.tok.kind;
+        struct Sym *symbol = kind == TOK_ID ? find_sym(g_lex.tok.text) : NULL;
+
+        if (kind == TOK_INC || kind == TOK_DEC || kind == '=' ||
+            (kind >= TOK_ADDEQ && kind <= TOK_SHREQ) ||
+            (kind == '(' && previous_was_id) ||
+            (symbol != NULL && symbol->is_volatile)) {
+            side_effect = 1;
+            break;
+        }
+        if (kind == '(')
+            paren_depth++;
+        else if (kind == ')' && paren_depth > 0)
+            paren_depth--;
+        previous_was_id = kind == TOK_ID;
+        next_token();
+    }
+    lex_restore(&saved);
+    return side_effect;
+}
+
+static void emit_param_vla_bound_expressions(void)
+{
+    LexState body;
+    int i;
+
+    if (param_vla_bound_count <= 0)
+        return;
+    body = lex_save();
+    for (i = 0; i < param_vla_bound_count; ++i) {
+        lex_restore(&param_vla_bound_states[i]);
+        ast_emit_discarded_expr();
+    }
+    lex_restore(&body);
+}
+
 void skip_prototype_array_suffixes(int *ptype)
 {
     int dims[MAX_ARRAY_DIMS];
@@ -1113,6 +1165,9 @@ void skip_prototype_array_suffixes(int *ptype)
              * `T p[x][col]` shape (single inner bound, a lone identifier) can
              * be lowered, while any other runtime inner shape is rejected
              * below rather than silently miscompiled. */
+            if (param_array_bound_has_side_effect() &&
+                param_vla_bound_count < MAX_ARRAY_DIMS)
+                param_vla_bound_states[param_vla_bound_count++] = lex_save();
             if (ndims > 0) {
                 rt_count++;
                 if (rt_dim < 0) {
@@ -1468,6 +1523,7 @@ void parse_param_list(void)
     g_frame.local_size = 0;
     g_frame.param_offset = frame_first_param_offset();
     clear_parsed_prototype();
+    param_vla_bound_count = 0;
 
     if (current_void_is_empty_param_list()) {
         g_proto_has = 1;
@@ -1714,6 +1770,7 @@ void begin_function_mir(const char *name, int local_bytes)
         strcmp(name, "main") == 0 &&
             (function_type & 15) == TYPE_INT &&
             type_ptr_depth(function_type) == 0);
+    emit_param_vla_bound_expressions();
     for (i = 0; i < g_frame.nlocals; ++i)
         if (locals[i].storage == SC_PARAM)
             emit_debug_variable(&locals[i]);

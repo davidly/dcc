@@ -381,6 +381,48 @@ coverage, including flat initialization of outer arrays of these structs, is
 provided by `tests/tbrelide.c`.  This also clears extended c-testsuite case
 `00205` in both optimized and unoptimized modes.
 
+GCC torture execute `20060102-1` now compiles unchanged.  dcc predefines the
+widely used implementation macro `__CHAR_BIT__` as 8, matching the target's
+fixed byte width and `limits.h`'s `CHAR_BIT`.  Preprocessor and signed-shift
+expression coverage is provided by `tests/tcharbit.c`.
+
+dcc now also predefines `__SIZE_TYPE__` as `unsigned int`, the underlying type
+of its 16-bit target `size_t`.  This clears the otherwise-supported GCC torture
+execute modules `20031012-1`, `20041112-1`, `20050215-1`, `20050218-1`,
+`20050502-2`, `20050826-1`, and `20071219-1` unchanged.  Focused type width,
+unsigned conversion, `sizeof`, and prototype coverage is in `tests/tsizetyp.c`.
+
+GCC torture execute `930930-1` now parses fully after defining the matching
+signed 16-bit `__PTRDIFF_TYPE__` as `int` and accepting GCC's diagnostic-only
+`__extension__` marker as an empty predefined macro.  Focused positive and
+negative pointer subtraction and type-width coverage is in `tests/tptrmac.c`.
+
+GCC torture execute `970214-2` exposed token-insensitive function-like macro
+substitution.  A parameter named `L` was replaced inside the single wide
+character token `L'1'`; ordinary quoted replacement-list text could likewise
+be scanned for parameter names.  Macro expansion now copies narrow and wide
+quoted tokens atomically.  Focused coverage is in `tests/tmacwide.c`.
+
+GCC torture execute `pr30778` now compiles unchanged after mapping GCC/SDCC's
+`__builtin_offsetof` spelling to dcc's existing `__offsetof` constant-expression
+implementation.  `tests/tbuiltof.c` verifies the upstream use case by clearing
+only the struct prefix before a nonzero sentinel field.
+
+A wrong-code bug found while minimizing the SDCC follow-up cases is fixed in
+spilled-CFG phi copies.  Slot allocation can give a parameter and a phi result
+the same backend slot number, but parameter loads still read the parameter's
+named IX-relative home; treating that numerical match as an already-completed
+identity copy left the phi slot uninitialized.  Ternaries such as
+`condition ? parameter : fallback` could consequently return stale data.
+`tests/tphiarg.c` covers both CFG edges with parameter-valued arms.
+
+GCC torture execute `970217-1` exposed accepted-code wrong behavior for C99
+variable-length array parameters.  Array adjustment correctly changes
+`T parameter[bound]` to `T *parameter`, but dcc also discarded a runtime bound
+expression in a function definition, omitting required side effects such as
+`count++`.  Runtime parameter bounds are now evaluated on function entry;
+focused coverage is in `tests/tvpapar.c`.
+
 `doloop-1` and `doloop-2` now pass unchanged after the unsigned limit and
 promotion corrections above.  `pr86231` exposed a separate conditional bug:
 MIR tested only the base-type bits and mistook a `void *` result for a void

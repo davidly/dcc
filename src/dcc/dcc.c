@@ -1602,6 +1602,21 @@ int main(int argc, char **argv)
     max_function_local_bytes = 0;
 
     add_define("_DCC_", "1");
+    /* Common implementation macro used by GCC/SDCC-compatible sources.
+     * This target always has eight-bit bytes (the same value exposed as
+     * CHAR_BIT by limits.h), including during preprocessing before headers
+     * have been included. */
+    add_define("__CHAR_BIT__", "8");
+    /* Underlying type used by the target's size_t typedef.  Exposing the
+     * conventional implementation macro lets freestanding GCC/SDCC-derived
+     * sources declare library interfaces without including stddef.h. */
+    add_define("__SIZE_TYPE__", "unsigned int");
+    add_define("__PTRDIFF_TYPE__", "int");
+    add_define("__builtin_offsetof", "__offsetof");
+    /* GCC's __extension__ only suppresses pedantic diagnostics for the next
+     * construct.  dcc has no pedantic mode, so its compatible meaning is an
+     * empty token sequence. */
+    add_define("__extension__", "");
     ast_build_init();
 
     for (i = 1; i < argc; ++i) {

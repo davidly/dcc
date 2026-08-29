@@ -27972,6 +27972,13 @@ static int mir_phi_copy_is_slot_identity(int source, int destination)
     int source_base, source_width;
     int destination_base, destination_width;
 
+    /* A parameter/load with a stable named home is read from that IX-relative
+     * home even when force_slot assigned it a backend slot for phi planning.
+     * Sharing the slot number therefore does not mean the phi destination
+     * already contains the source value; the edge copy is still required. */
+    if (mir_value_has_direct_named_home(source))
+        return 0;
+
     return mir_phi_copy_value_slot_range(source, &source_base, &source_width) &&
            mir_phi_copy_value_slot_range(destination, &destination_base,
                                          &destination_width) &&

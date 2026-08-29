@@ -4551,6 +4551,12 @@ void mir_capture_initializer(const struct AstNode *expr)
     mir.initializer_target = NULL;
 }
 
+void mir_capture_discarded_expr(const struct AstNode *expr)
+{
+    if (mir.active && expr != NULL)
+        (void)mir_lower_expr(expr);
+}
+
 void mir_capture_struct_initializer(struct Sym *target,
                                     const struct AstNode *expr)
 {

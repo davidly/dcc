@@ -34,6 +34,7 @@ void mir_neutralize_since(int checkpoint);
 void mir_set_initializer_target(struct Sym *symbol);
 void mir_set_vla_target(struct Sym *symbol);
 void mir_capture_initializer(const struct AstNode *expr);
+void mir_capture_discarded_expr(const struct AstNode *expr);
 void mir_capture_struct_initializer(struct Sym *target,
 									const struct AstNode *expr);
 void mir_capture_bitfield_init_expr(struct Sym *symbol, int offset,

@@ -1486,6 +1486,45 @@ int read_macro_call_args_text(const char **pp, char args[MAX_MACRO_ARGS][MAX_MAC
     return 1;
 }
 
+/* Copy one string/character preprocessing token without interpreting any
+ * identifier-looking text inside it.  The L prefix is part of a wide literal
+ * token, so a macro parameter named L must not match it. */
+static int append_macro_quoted_token(const char **pp, char *out, int *oip,
+                                     int outsz)
+{
+    const char *p;
+    int oi;
+    int quote;
+
+    p = *pp;
+    oi = *oip;
+    if (p[0] == 'L' && (p[1] == '\'' || p[1] == '"')) {
+        if (oi < outsz - 1)
+            out[oi++] = *p;
+        p++;
+    } else if (*p != '\'' && *p != '"') {
+        return 0;
+    }
+
+    quote = (unsigned char)*p;
+    if (oi < outsz - 1)
+        out[oi++] = *p++;
+    while (*p && oi < outsz - 1) {
+        out[oi++] = *p;
+        if (*p == '\\' && p[1] && oi < outsz - 1) {
+            p++;
+            out[oi++] = *p++;
+            continue;
+        }
+        if ((unsigned char)*p++ == quote)
+            break;
+    }
+
+    *pp = p;
+    *oip = oi;
+    return 1;
+}
+
 void macro_expand_argument_text(const char *in, char *out, int outsz, int depth)
 {
     int oi;
@@ -1502,35 +1541,8 @@ void macro_expand_argument_text(const char *in, char *out, int outsz, int depth)
     oi = 0;
     p = in;
     while (*p && oi < outsz - 1) {
-        if (*p == '"') {
-            out[oi++] = *p++;
-            while (*p && oi < outsz - 1) {
-                out[oi++] = *p;
-                if (*p == '\\' && p[1] && oi < outsz - 1) {
-                    p++;
-                    out[oi++] = *p++;
-                    continue;
-                }
-                if (*p++ == '"')
-                    break;
-            }
+        if (append_macro_quoted_token(&p, out, &oi, outsz))
             continue;
-        }
-
-        if (*p == '\'') {
-            out[oi++] = *p++;
-            while (*p && oi < outsz - 1) {
-                out[oi++] = *p;
-                if (*p == '\\' && p[1] && oi < outsz - 1) {
-                    p++;
-                    out[oi++] = *p++;
-                    continue;
-                }
-                if (*p++ == '\'')
-                    break;
-            }
-            continue;
-        }
 
         if (is_ident_start((unsigned char)*p)) {
             char ident[64];
@@ -1700,6 +1712,9 @@ void expand_function_macro(int di, char args[MAX_MACRO_ARGS][MAX_MACRO_ARG_LEN],
     oi = 0;
 
     while (*v && oi < outsz - 1) {
+        if (append_macro_quoted_token(&v, out, &oi, outsz))
+            continue;
+
         /*
          * C89 macro stringification:
          *     #define S(x) #x
