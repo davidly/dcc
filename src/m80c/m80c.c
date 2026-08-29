@@ -17,10 +17,32 @@
  * layout and linking. This clean-room implementation deliberately covers the
  * M80 surface used by the dcc toolchain rather than every historical feature.
  */
+#ifndef _WIN32
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+/* Each source is read twice and the FILE is private to this process. Avoid
+ * stdio's per-line stream lock on POSIX hosts; MSVC has no fgets_unlocked. */
+#ifdef _WIN32
+#define host_fgets(buf, size, stream) fgets((buf), (size), (stream))
+#else
+static char *host_fgets(char *buf, int size, FILE *stream) {
+    int c, n = 0;
+    if (size <= 0) return NULL;
+    while (n < size - 1 && (c = getc_unlocked(stream)) != EOF) {
+        buf[n++] = (char)c;
+        if (c == '\n') break;
+    }
+    if (n == 0) return NULL;
+    buf[n] = 0;
+    return buf;
+}
+#endif
 #define MAXLINE 2048
 #define MAXNAME 128
 #define MAXARGS 512 /* RELFIX19: long DB/DW argument lists from compiler output */
@@ -1578,32 +1600,19 @@ static void conditional(Asm *a,char *op,char *args) {
     for(take=0;take<a->cond_sp;take++) if(!a->cond_stack[take]) a->skipping=1;
 }
 static int is_cond(const char *op) {
-    return streqi(op,"IF") || streqi(op,"IFE") || streqi(op,"IFDEF") ||
-        streqi(op,"IFNDEF") || streqi(op,"ELSE") || streqi(op,"ENDIF");
+    return !strcmp(op,"IF") || !strcmp(op,"IFE") || !strcmp(op,"IFDEF") ||
+        !strcmp(op,"IFNDEF") || !strcmp(op,"ELSE") || !strcmp(op,"ENDIF");
 }
-/* Case-insensitive ordering compare (streqi above only answers equal/not
- * equal, which bsearch needs an ordering from) - written by hand rather than
- * POSIX strcasecmp/MSVC _stricmp so it's portable across the three build
- * toolchains this project targets (MSVC/gcc/clang). */
-static int strcmp_order_ci(const char *a, const char *b) {
-    int ca, cb;
-    for (;;) {
-        ca = toupper((unsigned char)*a);
-        cb = toupper((unsigned char)*b);
-        if (ca != cb) return ca - cb;
-        if (ca == 0) return 0;
-        a++;
-        b++;
-    }
-}
+/* The full source line is already uppercase, so bytewise ordering is enough
+ * for the pseudo-op table lookup. */
 static int pseudo_name_cmp(const void *pa, const void *pb) {
     const char *a = *(const char * const *)pa;
     const char *b = *(const char * const *)pb;
-    return strcmp_order_ci(a, b);
+    return strcmp(a, b);
 }
 static int is_pseudo(const char *op) {
-    /* Sorted case-insensitively (verified by construction, matching
-     * strcmp_order_ci's ordering) so bsearch can find a match in ~5
+    /* Source lines are normalized to uppercase once in assemble_pass. The
+     * table is sorted in that same bytewise order, so bsearch finds a match in ~5
      * comparisons instead of the up to 25 streqi calls the previous
      * linear scan needed - is_pseudo alone was called ~39K times per
      * m80c invocation on a large app, profiled as a meaningful share of
@@ -1691,7 +1700,7 @@ static void parse_line(Asm *a,char *line,char *orig) {
     /* "SET" is ambiguous: label-less "SET b,r" is the Z80 bit-set opcode,
      * while "LABEL SET expr" is the redefinable-symbol pseudo-op. Only the
      * latter has a label by this point, so without one prefer the opcode. */
-    if(is_pseudo(op) && !(streqi(op,"SET") && !*label)) pseudo(a,(char*)label,op,args);
+    if(is_pseudo(op) && !(strcmp(op,"SET")==0 && !*label)) pseudo(a,(char*)label,op,args);
     else if(!assemble_op(a,op,args)) {
         if(!*label && (isdigit((unsigned char)op[0]) || op[0]=='$' || op[0]=='\'' || op[0]=='"')) {
             Expr ex=eval(a,op);
@@ -1724,7 +1733,7 @@ static int assemble_pass(Asm *a,int pass) {
             fclose(a->fp);
             return 0;
         }
-    } while(fgets(line,sizeof(line),a->fp)) {
+    } while(host_fgets(line,sizeof(line),a->fp)) {
         size_t len;
         a->lineno++;
         strcpy(orig,line);

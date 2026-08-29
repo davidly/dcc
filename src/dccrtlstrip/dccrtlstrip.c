@@ -16,10 +16,33 @@
  * assembles the selected runtime. It performs conservative textual
  * reachability analysis, not assembly or linking.
  */
+#ifndef _WIN32
+#ifndef _POSIX_C_SOURCE
+#define _POSIX_C_SOURCE 200809L
+#endif
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+
+/* Runtime and app streams are never shared between threads. On POSIX hosts,
+ * skip the otherwise repeated stdio lock/unlock around every source line. */
+#ifdef _WIN32
+#define host_fgets(buf, size, stream) fgets((buf), (size), (stream))
+#else
+static char *host_fgets(char *buf, int size, FILE *stream) {
+    int c, n = 0;
+    if (size <= 0) return NULL;
+    while (n < size - 1 && (c = getc_unlocked(stream)) != EOF) {
+        buf[n++] = (char)c;
+        if (c == '\n') break;
+    }
+    if (n == 0) return NULL;
+    buf[n] = 0;
+    return buf;
+}
+#endif
 
 #define MAX_LINES   60000
 #define MAX_BLOCKS   4096
@@ -477,7 +500,7 @@ static void read_runtime(const char *fn)
         exit(1);
     }
 
-    while (fgets(buf, sizeof(buf), f)) {
+    while (host_fgets(buf, sizeof(buf), f)) {
         if (nlines >= MAX_LINES) {
             fprintf(stderr, "too many runtime lines\n");
             exit(1);
@@ -971,7 +994,7 @@ static void scan_app(const char *fn)
         perror(fn);
         exit(1);
     }
-    while (fgets(buf, sizeof(buf), f)) {
+    while (host_fgets(buf, sizeof(buf), f)) {
         rtrim(buf);
         add_refs_from_line(buf);
         add_known_runtime_refs_from_line(buf);
