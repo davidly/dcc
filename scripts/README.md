@@ -414,6 +414,22 @@ powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 cobint -Mode fast 
 Run `dcc-ma -Help` on Windows or `dcc-ma --help` on Linux/macOS for the full option map, including which `dcc` options
 are owned by the helper pipeline.
 
+## `compiler-coverage.sh`
+
+Builds a separate Clang-instrumented `dcc`, runs the main suite and the C89,
+C99, and C11 extended tests in both optimization modes, and produces LLVM line
+and branch coverage reports. The instrumented executable and reports stay under
+`build/compiler-coverage/`; the normal `./dcc` binary is not replaced.
+
+```sh
+sh scripts/compiler-coverage.sh
+```
+
+The text summary is written to
+`build/compiler-coverage/report/summary.txt`, and the browsable report starts
+at `build/compiler-coverage/report/html/index.html`. Set `CC`, `PWSH`,
+`LLVM_COV`, or `LLVM_PROFDATA` to override tool discovery.
+
 ## `runall.ps1`
 
 Comprehensive test suite: builds and runs all main test applications with output

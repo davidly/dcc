@@ -13,6 +13,10 @@
 cmake_minimum_required(VERSION 3.10)
 project(dcc C)
 
+option(DCC_ENABLE_COVERAGE "Build dcc with Clang source coverage instrumentation" OFF)
+set(DCC_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/../.." CACHE PATH
+    "Directory in which to place the dcc executable")
+
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
 set(CMAKE_C_EXTENSIONS OFF)
@@ -87,11 +91,19 @@ add_executable(dcc ${DCC_SOURCES} dcc.h dcc_ast_gen_internal.h
                    dcc_mir_machine_internal.h)
 target_include_directories(dcc PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 
-if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
+if(DCC_ENABLE_COVERAGE)
+    if(NOT CMAKE_C_COMPILER_ID MATCHES "Clang|AppleClang")
+        message(FATAL_ERROR "DCC_ENABLE_COVERAGE currently requires Clang")
+    endif()
+    target_compile_options(dcc PRIVATE
+        -Wall -Wextra -O0 -g -fprofile-instr-generate -fcoverage-mapping)
+    set_property(TARGET dcc APPEND_STRING PROPERTY
+        LINK_FLAGS " -fprofile-instr-generate")
+elseif(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
     target_compile_options(dcc PRIVATE -Wall -Wextra -O2)
 endif()
 
 # Place the built binary at the repository root as ./dcc so the existing
 # ma.sh / runall.sh harness (which calls ./dcc) keeps working unchanged.
 set_target_properties(dcc PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/../..)
+    RUNTIME_OUTPUT_DIRECTORY ${DCC_RUNTIME_OUTPUT_DIRECTORY})

@@ -15,16 +15,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  cross-platform-host-build:
-    name: Host tools (${{ matrix.os }})
+  full-regressions:
+    name: Full regressions (${{ matrix.os }})
     strategy:
       fail-fast: false
+      max-parallel: 3
       matrix:
         os:
+          - ubuntu-latest
           - macos-latest
           - windows-latest
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 60
 
     steps:
       - name: Checkout dcc
@@ -32,9 +34,76 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Build dcc host tools and debugger adapter example
+      - name: Checkout ntvcm emulator
+        uses: actions/checkout@v4
+        with:
+          repository: davidly/ntvcm
+          path: ntvcm
+
+      - name: Build ntvcm emulator on Linux
+        if: runner.os == 'Linux'
+        run: |
+          chmod +x ./m.sh
+          ./m.sh
+        working-directory: ntvcm
+
+      - name: Build ntvcm emulator on macOS
+        if: runner.os == 'macOS'
+        run: |
+          chmod +x ./mmac.sh
+          ./mmac.sh
+        working-directory: ntvcm
+
+      - name: Build ntvcm emulator on Windows
+        if: runner.os == 'Windows'
+        shell: pwsh
+        working-directory: ntvcm
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $installPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $installPath) { throw 'Visual Studio C++ tools not found' }
+
+          $vcvars = Join-Path $installPath 'VC\Auxiliary\Build\vcvars64.bat'
+          $buildBat = Join-Path $env:RUNNER_TEMP 'build-ntvcm.bat'
+          @(
+            "call `"$vcvars`"",
+            'if errorlevel 1 exit /b %errorlevel%',
+            'cl /nologo ntvcm.cxx x80.cxx /I. /GS- /O2 /EHsc /link user32.lib /OUT:ntvcm.exe',
+            'exit /b %errorlevel%'
+          ) | Set-Content -LiteralPath $buildBat -Encoding ascii
+          & cmd /c "`"$buildBat`""
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Add tool directories to PATH
+        shell: pwsh
+        run: |
+          (Resolve-Path '.').ProviderPath | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          (Resolve-Path 'ntvcm').ProviderPath | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Test MSVC toolchain detection logic
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/tests/test_msvc_toolchain_detection.ps1
+
+      - name: Build dcc host tools
         shell: pwsh
         run: ./scripts/build-dcc.ps1
+
+      - name: Run debugger host and debug metadata tests
+        if: runner.os == 'Linux'
+        run: |
+          cmake -S src/dcc_debug_host -B build/dcc_debug_host_tests -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Debug
+          cmake --build build/dcc_debug_host_tests --parallel
+          ctest --test-dir build/dcc_debug_host_tests --output-on-failure
+          python3 scripts/tests/test_line_debug.py
+
+      - name: Run main regression suite in both optimization modes
+        shell: pwsh
+        run: ./scripts/runall.ps1 -Mode full -RunTimeout 30
+
+      - name: Run C89, C99, and C11 extended regressions in both optimization modes
+        shell: pwsh
+        run: ./scripts/runall-extended.ps1 -C11 -Mode full -RunTimeout 30
 
   no-powershell-build:
     name: Host build without PowerShell (m-posix.sh)
@@ -79,54 +148,3 @@ jobs:
       # covers the full/extended suite via the primary build path.
       - name: Run test suite with runall.sh
         run: bash scripts/runall.sh -mode fast
-
-  tests:
-    name: Unit tests and extended suite
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-
-    steps:
-      - name: Checkout dcc
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      # Pure string/path-matching logic, so this runs fine here rather than
-      # needing a dedicated Windows ARM64 runner - see the test's own
-      # docstring for the regression it guards (Get-MsvcVarsPath missing
-      # Visual Studio Preview/RC installs).
-      - name: Test MSVC toolchain detection logic
-        shell: pwsh
-        run: ./scripts/tests/test_msvc_toolchain_detection.ps1
-
-      - name: Checkout ntvcm emulator
-        uses: actions/checkout@v4
-        with:
-          repository: davidly/ntvcm
-          path: ntvcm
-
-      - name: Build ntvcm emulator
-        run: |
-          chmod +x ./m.sh
-          ./m.sh
-        working-directory: ntvcm
-
-      - name: Add tool directories to PATH
-        run: |
-          echo "$GITHUB_WORKSPACE" >> "$GITHUB_PATH"
-          echo "$GITHUB_WORKSPACE/ntvcm" >> "$GITHUB_PATH"
-
-      - name: Build dcc host tools
-        shell: pwsh
-        run: ./scripts/build-dcc.ps1
-
-      - name: Run debugger host and debug metadata tests
-        run: |
-          cmake -S src/dcc_debug_host -B build/dcc_debug_host_tests -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Debug
-          cmake --build build/dcc_debug_host_tests --parallel
-          ctest --test-dir build/dcc_debug_host_tests --output-on-failure
-          python3 scripts/tests/test_line_debug.py
-
-      - name: Run unit tests and extended suite
-        shell: pwsh
-        run: ./scripts/runall.ps1 -Mode full -Extended -RunTimeout 30
