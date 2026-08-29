@@ -98,22 +98,10 @@ void probe_one( int fd, long rec, char * buf )
         printf( "  record %ld (offset %ld): MISMATCH (stamp %ld)\n", rec, offset, get_stamp( buf ) );
 }
 
-int main( int argc, char * argv[] )
+void wseq( int fd, long lastrec, char * buf )
 {
-    long lastrec, rec, ok, bad, offset, seek_result;
-    int fd, result;
-    char buf[ RECSIZE ];
-
-    lastrec = LASTVALID;
-    if ( argc > 1 )
-        lastrec = str_to_long( argv[ 1 ] );
-
-    printf( "tbig: validating %ld records (%ld bytes)\n", lastrec + 1L, ( lastrec + 1L ) * (long) RECSIZE );
-
-    unlink( TBIG_FILE );
-    fd = open( TBIG_FILE, O_CREAT | O_RDWR | O_TRUNC, 0 );
-    if ( -1 == fd )
-        show_error( "unable to create data file" );
+    long rec;
+    int result;
 
     printf( "writing sequentially" );
     for ( rec = 0; rec <= lastrec; rec++ )
@@ -129,12 +117,12 @@ int main( int argc, char * argv[] )
             printf( "." );
     }
     printf( "\n" );
+}
 
-    close( fd );
-
-    fd = open( TBIG_FILE, O_RDONLY, 0 );
-    if ( -1 == fd )
-        show_error( "unable to reopen data file read only" );
+long vseq( int fd, long lastrec, char * buf )
+{
+    long rec, ok, bad;
+    int result;
 
     printf( "verifying sequentially" );
     ok = 0L;
@@ -165,6 +153,81 @@ int main( int argc, char * argv[] )
             printf( "." );
     }
     printf( "\nsequential verify: %ld ok, %ld bad\n", ok, bad );
+    return bad;
+}
+
+int plimit( long lastrec, char * buf )
+{
+    long offset, seek_result;
+    int fd, result, bad;
+
+    bad = 0;
+    if ( lastrec != LASTVALID )
+        return bad;
+    printf( "\nprobing one record past the documented 8mb / 65535 cp/m 2.2 limit...\n" );
+    fd = open( TBIG_FILE, O_RDWR, 0 );
+    if ( -1 == fd )
+        printf( "  can't reopen for the past-limit probe\n" );
+    else
+    {
+        offset = ( LASTVALID + 1L ) * (long) RECSIZE;
+        seek_result = lseek( fd, offset, 0 );
+        if ( seek_result != offset )
+            printf( "  lseek to record 65536 returned %ld, not %ld\n", seek_result, offset );
+        else
+        {
+            fill_record( LASTVALID + 1L, buf );
+            errno = 0;
+            result = write( fd, buf, RECSIZE );
+            if ( -1 == result && EFBIG == errno )
+                printf( "  write past 65535 failed with EFBIG as expected\n" );
+            else
+            {
+                printf( "  write past 65535 returned %d with errno %d, expected -1/EFBIG\n", result, errno );
+                bad++;
+            }
+
+            if ( 0L != lseek( fd, 0L, 0 ) ||
+                 RECSIZE != read( fd, buf, RECSIZE ) ||
+                 !check_record( 0L, buf ) )
+            {
+                printf( "  record 0 CORRUPTED by past-limit write\n" );
+                bad++;
+            }
+            else
+                printf( "  record 0 remains unchanged\n" );
+        }
+        close( fd );
+    }
+    return bad;
+}
+
+int main( int argc, char * argv[] )
+{
+    long lastrec, bad;
+    int fd;
+    char buf[ RECSIZE ];
+
+    lastrec = LASTVALID;
+    if ( argc > 1 )
+        lastrec = str_to_long( argv[ 1 ] );
+
+    printf( "tbig: validating %ld records (%ld bytes)\n", lastrec + 1L, ( lastrec + 1L ) * (long) RECSIZE );
+
+    unlink( TBIG_FILE );
+    fd = open( TBIG_FILE, O_CREAT | O_RDWR | O_TRUNC, 0 );
+    if ( -1 == fd )
+        show_error( "unable to create data file" );
+
+    wseq( fd, lastrec, buf );
+
+    close( fd );
+
+    fd = open( TBIG_FILE, O_RDONLY, 0 );
+    if ( -1 == fd )
+        show_error( "unable to reopen data file read only" );
+
+    bad = vseq( fd, lastrec, buf );
 
     close( fd );
 
@@ -182,44 +245,7 @@ int main( int argc, char * argv[] )
 
     close( fd );
 
-    if ( lastrec == LASTVALID )
-    {
-        printf( "\nprobing one record past the documented 8mb / 65535 cp/m 2.2 limit...\n" );
-        fd = open( TBIG_FILE, O_RDWR, 0 );
-        if ( -1 == fd )
-            printf( "  can't reopen for the past-limit probe\n" );
-        else
-        {
-            offset = ( LASTVALID + 1L ) * (long) RECSIZE;
-            seek_result = lseek( fd, offset, 0 );
-            if ( seek_result != offset )
-                printf( "  lseek to record 65536 returned %ld, not %ld\n", seek_result, offset );
-            else
-            {
-                fill_record( LASTVALID + 1L, buf );
-                errno = 0;
-                result = write( fd, buf, RECSIZE );
-                if ( -1 == result && EFBIG == errno )
-                    printf( "  write past 65535 failed with EFBIG as expected\n" );
-                else
-                {
-                    printf( "  write past 65535 returned %d with errno %d, expected -1/EFBIG\n", result, errno );
-                    bad++;
-                }
-
-                if ( 0L != lseek( fd, 0L, 0 ) ||
-                     RECSIZE != read( fd, buf, RECSIZE ) ||
-                     !check_record( 0L, buf ) )
-                {
-                    printf( "  record 0 CORRUPTED by past-limit write\n" );
-                    bad++;
-                }
-                else
-                    printf( "  record 0 remains unchanged\n" );
-            }
-            close( fd );
-        }
-    }
+    bad += plimit( lastrec, buf );
 
     unlink( TBIG_FILE );
 

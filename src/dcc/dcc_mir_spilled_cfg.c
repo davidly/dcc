@@ -24500,6 +24500,140 @@ static int mir_emit_fused_wide_comparison_branch(MirStream *out, const int *labe
         branch->label);
 }
 
+struct MirDirectWideLocation {
+    const char *base;
+    int bytes[4];
+};
+
+static int mir_direct_wide_location(int value,
+                                    struct MirDirectWideLocation *location)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    int storage;
+    int offset;
+    int iy_offset;
+    int byte;
+
+    if (definition == NULL)
+        return 0;
+    if (mir_value_has_direct_named_home(value) &&
+        mir_direct_named_home_location(definition, &storage, &offset)) {
+        iy_offset = offset + mir_effective_local_bytes() + mir.aggregate_temp_bytes;
+        if (mir_virtual_iy_base && iy_offset >= -128 && iy_offset + 3 <= 127) {
+            location->base = "iy";
+            offset = iy_offset;
+        } else if (offset >= -128 && offset + 3 <= 127) {
+            location->base = "ix";
+        } else {
+            return 0;
+        }
+        for (byte = 0; byte < 4; ++byte)
+            location->bytes[byte] = offset + byte;
+        return 1;
+    }
+    if (mir.backend_slots == NULL || value < 0 || value >= mir.next_value ||
+        mir.backend_slots[value] < 0)
+        return 0;
+    offset = mir_virtual_offset(value);
+    iy_offset = mir_virtual_iy_offset(value);
+    if (mir_virtual_iy_base && iy_offset - 2 >= -128 && iy_offset + 1 <= 127) {
+        location->base = "iy";
+        offset = iy_offset;
+    } else if (offset - 2 >= -128 && offset + 1 <= 127) {
+        location->base = "ix";
+    } else {
+        return 0;
+    }
+    location->bytes[0] = offset;
+    location->bytes[1] = offset + 1;
+    location->bytes[2] = offset - 2;
+    location->bytes[3] = offset - 1;
+    return 1;
+}
+
+/* Emit a relational comparison directly from two named 32-bit homes.  The
+ * generic wide path otherwise pushes both operands and calls __lts/__les/etc.
+ * For a fused branch (the overwhelmingly common loop-condition use), neither
+ * operand survives the comparison, so comparing the four bytes in place is
+ * both smaller and much faster.  Bias only the most-significant byte for a
+ * signed comparison; the remaining bytes are ordinary unsigned tie-breakers. */
+static int mir_emit_direct_wide_relational(MirStream *out,
+                                           const struct MirInsn *insn)
+{
+    struct MirDirectWideLocation left;
+    struct MirDirectWideLocation right;
+    int operation = (int)insn->immediate;
+    int is_unsigned = (insn->secondary_offset & TYPE_UNSIGNED) != 0;
+    int different_label;
+    int false_label;
+    int true_label;
+    int end_label;
+    int byte;
+    const struct MirInsn *left_definition = mir_definition(insn->src1);
+    const struct MirInsn *right_definition = mir_definition(insn->src2);
+
+    if ((operation != '<' && operation != '>' && operation != TOK_LE &&
+         operation != TOK_GE) || type_is_float(insn->secondary_offset) ||
+        (left_definition != NULL && left_definition->opcode == MIR_CONST) ||
+        (right_definition != NULL && right_definition->opcode == MIR_CONST) ||
+        !mir_direct_wide_location(insn->src1, &left) ||
+        !mir_direct_wide_location(insn->src2, &right))
+        return 0;
+
+    different_label = new_label();
+    false_label = new_label();
+    true_label = new_label();
+    end_label = new_label();
+    for (byte = 3; byte >= 0; --byte) {
+        mir_stream_printf(out, "\tld a,(%s%+d)\n", right.base,
+                          right.bytes[byte]);
+        if (byte == 3 && !is_unsigned)
+            mir_stream_puts("\txor 128\n", out);
+        mir_stream_puts("\tld c,a\n", out);
+        mir_stream_printf(out, "\tld a,(%s%+d)\n", left.base,
+                          left.bytes[byte]);
+        if (byte == 3 && !is_unsigned)
+            mir_stream_puts("\txor 128\n", out);
+        mir_stream_puts("\tcp c\n", out);
+        if (byte != 0)
+            mir_stream_printf(out, "\tjr nz,L%d\n", different_label);
+    }
+    mir_stream_printf(out, "L%d:\n", different_label);
+    if (operation == '<') {
+        mir_stream_printf(out, "\tjp c,L%d\n", true_label);
+    } else if (operation == TOK_LE) {
+        mir_stream_printf(out, "\tjp c,L%d\n\tjp z,L%d\n",
+                          true_label, true_label);
+    } else if (operation == '>') {
+        mir_stream_printf(out, "\tjp c,L%d\n\tjp z,L%d\n",
+                          false_label, false_label);
+        mir_stream_printf(out, "\tjp L%d\n", true_label);
+    } else {
+        mir_stream_printf(out, "\tjp nc,L%d\n", true_label);
+    }
+    mir_stream_printf(out, "L%d:\n\tld hl,0\n\tjp L%d\nL%d:\n\tld hl,1\nL%d:\n",
+                      false_label, end_label, true_label, end_label);
+    return 1;
+}
+
+static int mir_instruction_is_in_backedge_loop(int instruction)
+{
+    int edge;
+
+    for (edge = instruction; edge < mir.count; ++edge) {
+        const struct MirInsn *branch = &mir.insns[edge];
+        int target;
+
+        if (branch->opcode != MIR_JUMP &&
+            branch->opcode != MIR_BRANCH_FALSE)
+            continue;
+        target = mir_find_label(branch->label);
+        if (target >= 0 && target <= instruction)
+            return 1;
+    }
+    return 0;
+}
+
 /* Item T45 (mir-text-size-plan.md): ported directly from
  * emit_shift_const_long (dcc_ops.c, the legacy AST backend) - any wide
  * shift count 1..31 decomposes into a whole-byte register-move (0-3
@@ -32352,6 +32486,15 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                     break;
                 }
                 int fuse_skip = mir_binary_is_fusable_comparison(i);
+                if (fuse_skip > 0 && mir_instruction_is_in_backedge_loop(i) &&
+                    mir_emit_direct_wide_relational(out, insn)) {
+                    if (!mir_emit_fused_wide_comparison_branch(
+                            out, labels, i, fuse_skip - 1))
+                        goto done;
+                    ++mir_fuse_report_fused_count;
+                    i += fuse_skip;
+                    continue;
+                }
                 /* Item T395/follow-on: the signed-constant-relational
                  * fast path only consumes src2's literal value. A
                  * stack-forwarded src1 must first be restored to DE:HL;
