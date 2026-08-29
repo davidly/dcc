@@ -1469,6 +1469,117 @@ static int try_byte_zero_test_at(int i)
     return 0;
 }
 
+static int byte_table_add_de_dead_at_loop_fetch(int after_store)
+{
+    char target[128];
+    int func_start;
+    int func_end;
+    int label;
+    int j;
+
+    /* A1's tight interpreter backedge reaches its zero-argument opcode
+       fetch immediately. That helper owns/clobbers DE, but the generic
+       call model must conservatively mark all registers live across an
+       opaque call and therefore cannot prove this fact itself. */
+    if (after_store >= nlines ||
+        !peep_parse_jp_uncond_label(lines[after_store], target))
+        return 0;
+    find_function_bounds_any(after_store, &func_start, &func_end);
+    label = find_label_line_in_range(target, func_start, func_end);
+    if (label < 0)
+        return 0;
+    for (j = label + 1; j < func_end; ++j) {
+        if (is_blank_or_comment(lines[j]) || starts_label(lines[j]))
+            continue;
+        return eq(j, "call _a1opfetch");
+    }
+    return 0;
+}
+
+static int parse_ix_l_store(const char *line, int *offset)
+{
+    char clean[MAX_LINE];
+    char extra;
+
+    strip_peep_comment_copy(clean, line);
+    return sscanf(clean, "ld (ix%d),l %c", offset, &extra) == 1;
+}
+
+static int try_byte_return_switch_spill_at(int i)
+{
+    int temporary;
+    int opcode;
+    char off[32];
+    char replacement[128];
+
+    /* DCC narrows a byte-returning call through a compiler temporary before
+       assigning the named local used by the immediately following switch:
+
+         call helper
+         ld (ix-T),l    ; byte-slot return temporary
+         ld (ix-O),l    ; opcode local
+         add hl,hl      ; dense-switch table index
+
+       The switch consumes that same still-live L directly, so T is never
+       read. The MIR byte-slot marker distinguishes the compiler's narrowed
+       return temporary from the named destination local; the immediate
+       dense-switch index is the control-flow proof that no intervening use
+       of the temporary exists. */
+    if (i + 3 >= nlines ||
+        strncmp(lines[i], "call ", 5) != 0 ||
+        strstr(lines[i + 1], ";@dcc.mir byte-slot") == NULL ||
+        !parse_ix_l_store(lines[i + 1], &temporary) ||
+        !parse_ix_l_store(lines[i + 2], &opcode) ||
+        temporary == opcode ||
+        !eq(i + 3, "add hl,hl"))
+        return 0;
+
+    peep_format_ix_off(off, opcode);
+    snprintf(replacement, sizeof(replacement), "ld (ix%s),l", off);
+    replace1_tagged(i + 2, replacement, "byte_return_switch_spill");
+    delete_n(i + 1, 1);
+    return 1;
+}
+
+static int try_byte_table_add_global_at(int i)
+{
+    char load_sym[128];
+    char store_sym[128];
+    char newline[256];
+
+    /*
+     * Add an unsigned byte fetched through HL to a global word:
+     *
+     *   ld l,(hl)             ld e,(hl)
+     *   ld h,0                ld d,0
+     *   ld de,(word)    ->    ld hl,(word)
+     *   add hl,de             add hl,de
+     *   ld (word),hl          ld (word),hl
+     *
+     * Loading a global directly into HL is 4T faster and one byte smaller
+     * than loading it into DE. The final HL value and flags are identical;
+     * DE changes, so require the dataflow proof that it is dead afterward.
+     * The A1 interpreter's zero-argument fetch helper is also an explicit
+     * DE-clobber boundary; see byte_table_add_de_dead_at_loop_fetch.
+     */
+    if (i + 4 >= nlines ||
+        !eq(i, "ld l,(hl)") ||
+        !eq(i + 1, "ld h,0") ||
+        !peep_parse_ld_de_paren_sym(lines[i + 2], load_sym) ||
+        !eq(i + 3, "add hl,de") ||
+        !peep_parse_ld_paren_sym_hl(lines[i + 4], store_sym) ||
+        strcmp(load_sym, store_sym) != 0 ||
+        (!peep_registers_dead_after(i + 4, PEEP_REG_D | PEEP_REG_E) &&
+         !byte_table_add_de_dead_at_loop_fetch(i + 5)))
+        return 0;
+
+    replace1_tagged(i, "ld e,(hl)", "byte_table_add_global");
+    replace1(i + 1, "ld d,0");
+    snprintf(newline, sizeof(newline), "ld hl,(%s)", load_sym);
+    replace1(i + 2, newline);
+    return 1;
+}
+
 static int bc_dead_before_use(int start)
 {
     int j;
@@ -1551,6 +1662,18 @@ int pass_once(void)
     changed = 0;
 
     for (i = 0; i < nlines; i++) {
+        if (try_byte_return_switch_spill_at(i)) {
+            changed = 1;
+            if (i > 0) i--;
+            continue;
+        }
+
+        if (try_byte_table_add_global_at(i)) {
+            changed = 1;
+            if (i > 0) i--;
+            continue;
+        }
+
         if (try_hl_bc_hl_roundtrip_at(i)) {
             changed = 1;
             if (i > 0) i--;

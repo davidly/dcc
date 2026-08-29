@@ -1,0 +1,15 @@
+_highbit_bool:
+	ld h,0
+	ld a,l
+	and 128
+	ld l,a
+	ld a,h
+	or l
+	ld hl,0
+	jr z,Lzero
+	inc hl
+Lzero:
+	ld a,l
+	ld (_flag),a
+	xor a
+	ret

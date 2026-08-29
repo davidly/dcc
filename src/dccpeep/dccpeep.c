@@ -3148,6 +3148,27 @@ static int pass_narrow_byte_and_mask_to_bool(void)
          * safety instead of a liveness proof that routinely can't be made. */
         sprintf(and_line, "and %s", constant);
         sprintf(ld_line, "ld (%s),a", dest);
+
+        /* A single-bit high mask has an even cheaper strict-_Bool form:
+         * rotate bit 7 into bit 0, then mask it. Unlike the general NEG/
+         * ADC materialization this changes P/V, so use it only when the
+         * complete flag set is dead after the destination store. */
+        if ((!strcmp(constant, "128") || !strcmp(constant, "080h")) &&
+            peep_flags_dead_after(i + 11,
+                PEEP_FLAG_C | PEEP_FLAG_Z | PEEP_FLAG_S | PEEP_FLAG_PV)) {
+            replace1_tagged(i, "ld a,l", "narrow_byte_highbit_to_bool");
+            replace1(i + 1, "rlca");
+            replace1(i + 2, "and 1");
+            replace1(i + 3, "ld l,a");
+            replace1(i + 4, "ld h,0");
+            replace1(i + 5, ld_line);
+            delete_n(i + 6, 6);
+            changed = 1;
+            if (i > 0)
+                --i;
+            continue;
+        }
+
         replace1_tagged(i, "ld a,l", "narrow_byte_and_mask_to_bool");
         replace1(i + 1, and_line);
         replace1(i + 2, "neg");

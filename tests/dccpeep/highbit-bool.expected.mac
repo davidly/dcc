@@ -1,0 +1,9 @@
+_highbit_bool:
+	ld a,l ; peep: narrow_byte_highbit_to_bool
+	rlca
+	and 1
+	ld l,a
+	ld h,0
+	ld (_flag),a
+	xor a
+	ret

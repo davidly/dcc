@@ -1,0 +1,26 @@
+_byte_table_add_global:
+	ld e,(hl) ; peep: byte_table_add_global
+	ld d,0
+	ld hl,(_pc)
+	add hl,de
+	ld (_pc),hl
+	ld de,0
+	ret
+
+Lloop:
+	call _a1opfetch
+	ld e,(hl) ; peep: byte_table_add_global
+	ld d,0
+	ld hl,(_pc)
+	add hl,de
+	ld (_pc),hl
+	jp Lloop
+
+_byte_table_add_global_de_live:
+	ld l,(hl)
+	ld h,0
+	ld de,(_pc)
+	add hl,de
+	ld (_pc),hl
+	ld a,e
+	ret

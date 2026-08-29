@@ -430,6 +430,112 @@ uint8_t * get_mem( uint16_t address )
 }
 #endif
 
+#if defined( Z80_ASM_OPTS ) && defined( _DCC_ )
+/* Opcode fetch is the interpreter's hottest memory access. Most standalone
+   programs execute in low RAM, so bypass get_mem's full bank selection there.
+   Loading cpu.pc here also avoids setting up an argument for get_mem. */
+extern uint8_t a1opfetch( void );
+extern uint8_t a1argfetch( void );
+extern void a1opimm( void );
+#asm
+        public _a1opfetch
+_a1opfetch:
+        ld      hl,(_cpu+4)
+        ld      a,h
+        cp      040h
+        jr      nc,_fo_general
+        ld      de,_m_0000
+        add     hl,de
+        ld      l,(hl)
+        ld      h,0
+        ret
+_fo_general:
+        call    _get_mem
+        ld      l,(hl)
+        ld      h,0
+        ret
+
+        public _a1argfetch
+_a1argfetch:
+        ld      hl,(_cpu+4)
+        inc     hl
+        ld      a,h
+        cp      040h
+        jr      nc,_fob_general
+        ld      de,_m_0000
+        add     hl,de
+        ld      l,(hl)
+        ld      h,0
+        ret
+_fob_general:
+        call    _get_mem
+        ld      l,(hl)
+        ld      h,0
+        ret
+
+        public _a1opimm
+_a1opimm:
+        ld      hl,(_cpu+4)
+        ld      a,h
+        cp      040h
+        jr      nc,_omi_general
+        ld      de,_m_0000
+        add     hl,de
+        ld      a,(hl)          ; opcode
+        inc     hl
+        ld      e,(hl)          ; immediate operand
+        ld      d,0
+        ld      l,a
+        ld      h,0
+        jp      _op_math
+_omi_general:
+        call    _get_mem
+        ld      a,(hl)
+        push    af
+        ld      hl,(_cpu+4)
+        inc     hl
+        call    _get_mem
+        ld      e,(hl)
+        ld      d,0
+        pop     af
+        ld      l,a
+        ld      h,0
+        jp      _op_math
+#endasm
+#elif defined( Z80_ASM_OPTS ) && defined( SDCC )
+/* zsdcc requires hand-written assembly to be wrapped in a C function body.
+   With no arguments there is no calling-convention setup: the opcode is
+   returned zero-extended in HL, matching the normal zsdcc byte-return ABI.
+   Keep this instruction-for-instruction equivalent to DCC's fast path above
+   so the two compilers benchmark the same memory-fetch implementation. */
+uint8_t a1opfetch( void )
+{
+#asm
+        ld      hl,(_cpu+4)
+        ld      a,h
+        cp      040h
+        jr      nc,_sfo_general
+        ld      de,_m_0000
+        add     hl,de
+        ld      l,(hl)
+        ld      h,0
+        ret
+_sfo_general:
+        call    _get_mem
+        ld      l,(hl)
+        ld      h,0
+        ret
+#endasm
+}
+
+#define a1argfetch() get_byte( cpu.pc + 1 )
+#define a1opimm() op_math( op, get_byte( cpu.pc + 1 ) )
+#else
+#define a1opfetch() get_byte( cpu.pc )
+#define a1argfetch() get_byte( cpu.pc + 1 )
+#define a1opimm() op_math( op, get_byte( cpu.pc + 1 ) )
+#endif
+
 static inline void push( uint8_t x )
 {
     * ( (uint8_t *) m_0000 + 0x0100 + cpu.sp-- ) = x;
@@ -1080,7 +1186,7 @@ void emulate( void )
 
     for (;;) /* most efficient infinite loop for older compilers */
     {
-        op = get_byte( cpu.pc );
+        op = a1opfetch();
 
 #ifdef APPLE1_TRACE
         printf( "pc %04x, op %02x, a %02x, x %02x, y %02x, sp %02x, %s\n", cpu.pc, op, cpu.a, cpu.x, cpu.y, cpu.sp, render_flags() ); 
@@ -1098,47 +1204,47 @@ void emulate( void )
             }
             case 0x01: case 0x21: case 0x41: case 0x61: case 0xc1: case 0xe1:          /* ora/and/eor/adc/cmp/sbc (a8, x) */
             {
-                op_math( op, get_byte( get_word_pagewrap_zp( (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.x ) ) ) );
-                break;
+                op_math( op, get_byte( get_word_pagewrap_zp( (uint8_t) ( a1argfetch() + cpu.x ) ) ) );
+                goto _advance_2;
             }
             case 0x05: case 0x25: case 0x45: case 0x65: case 0xc5: case 0xe5:          /* ora/and/eor/adc/cmp/sbc a8 */
             {
-                op_math( op, get_zp_byte( get_byte( cpu.pc + 1 ) ) );
-                break;
+                op_math( op, get_zp_byte( a1argfetch() ) );
+                goto _advance_2;
             }
             case 0x09: case 0x29: case 0x49: case 0x69: case 0xc9: case 0xe9:          /* ora/and/eor/adc/cmp/sbc #d8 */
             {
-                op_math( op, get_byte( cpu.pc + 1 ) );
-                break;
+                a1opimm();
+                goto _advance_2;
             }
             case 0x0d: case 0x2d: case 0x4d: case 0x6d: case 0xcd: case 0xed:          /* ora/and/eor/adc/cmp/sbc a16 */
             {
                 op_math( op, get_byte( get_word( cpu.pc + 1 ) ) );
-                break;
+                goto _advance_3;
             }
             case 0x11: case 0x31: case 0x51: case 0x71: case 0xd1: case 0xf1:          /* ora/and/eor/adc/cmp/sbc (a8), y */
             {
-                op_math( op, get_byte( cpu.y + get_word_pagewrap_zp( get_byte( cpu.pc + 1 ) ) ) );
-                break;
+                op_math( op, get_byte( cpu.y + get_word_pagewrap_zp( a1argfetch() ) ) );
+                goto _advance_2;
             }
             case 0x15: case 0x35: case 0x55: case 0x75: case 0xd5: case 0xf5:          /* ora/and/eor/adc/cmp/sbc a8, x */
             {
-                op_math( op, get_zp_byte( cpu.x + get_byte( cpu.pc + 1 ) ) );
-                break;
+                op_math( op, get_zp_byte( cpu.x + a1argfetch() ) );
+                goto _advance_2;
             }
             case 0x19: case 0x39: case 0x59: case 0x79: case 0xd9: case 0xf9:          /* ora/and/eor/adc/cmp/sbc a16, y */
             {
                 op_math( op, get_byte( get_word( cpu.pc + 1 ) + cpu.y ) );
-                break;
+                goto _advance_3;
             }
             case 0x1d: case 0x3d: case 0x5d: case 0x7d: case 0xdd: case 0xfd:          /* ora/and/eor/adc/cmp/sbc a16, x */
             {
                 op_math( op, get_byte( cpu.x + get_word( cpu.pc + 1 ) ) );
-                break;
+                goto _advance_3;
             }
-            case 0x06: case 0x26: case 0x46: case 0x66: { address = get_byte( cpu.pc + 1 ); goto _rot_complete_zp; }             /* asl/rol/lsr/ror a8 */
+            case 0x06: case 0x26: case 0x46: case 0x66: { address = a1argfetch(); goto _rot_complete_zp; }             /* asl/rol/lsr/ror a8 */
             case 0x0e: case 0x2e: case 0x4e: case 0x6e: { address = get_word( cpu.pc + 1 ); goto _rot_complete; }             /* asl/rol/lsr/ror a16 */
-            case 0x16: case 0x36: case 0x56: case 0x76: { address = (uint8_t) ( cpu.x + get_byte( cpu.pc + 1 ) ); goto _rot_complete_zp; } /* asl/rol/lsr/ror a8, x */
+            case 0x16: case 0x36: case 0x56: case 0x76: { address = (uint8_t) ( cpu.x + a1argfetch() ); goto _rot_complete_zp; } /* asl/rol/lsr/ror a8, x */
             case 0x1e: case 0x3e: case 0x5e: case 0x7e:                                                                       /* asl/rol/lsr/ror a16, x */
             {
                 address = cpu.x + get_word( cpu.pc + 1 );
@@ -1151,7 +1257,7 @@ _rot_complete_zp:  /* page 0 target: index directly, no get_mem() call needed */
                 *pb = op_rotate( op, *pb );
                 break;
             }
-            case 0x08: { op_php(); break; }                                            /* php */
+            case 0x08: { op_php(); goto _advance_1; }                                  /* php */
             case OP_HOOK:                                                              /* hook */
             {
                 op = m_hook();
@@ -1159,33 +1265,33 @@ _rot_complete_zp:  /* page 0 target: index directly, no get_mem() call needed */
                     goto _gstate_set;
                 goto _op_rts;
             }                             
-            case 0x10: { if ( !cpu.fNegative ) goto _branch_complete; break; }         /* bpl */
-            case 0x30: { if ( cpu.fNegative ) goto _branch_complete; break; }          /* bmi */
-            case 0x50: { if ( !cpu.fOverflow ) goto _branch_complete; break; }         /* bvc */
-            case 0x70: { if ( cpu.fOverflow ) goto _branch_complete; break; }          /* bvs */
-            case 0x90: { if ( !cpu.fCarry ) goto _branch_complete; break; }            /* bcc */
-            case 0xb0: { if ( cpu.fCarry ) goto _branch_complete; break; }             /* bcs */
-            case 0xd0: { if ( !cpu.fZero ) goto _branch_complete; break; }             /* bne */
+            case 0x10: { if ( !cpu.fNegative ) goto _branch_complete; goto _advance_2; } /* bpl */
+            case 0x30: { if ( cpu.fNegative ) goto _branch_complete; goto _advance_2; }  /* bmi */
+            case 0x50: { if ( !cpu.fOverflow ) goto _branch_complete; goto _advance_2; } /* bvc */
+            case 0x70: { if ( cpu.fOverflow ) goto _branch_complete; goto _advance_2; }  /* bvs */
+            case 0x90: { if ( !cpu.fCarry ) goto _branch_complete; goto _advance_2; }    /* bcc */
+            case 0xb0: { if ( cpu.fCarry ) goto _branch_complete; goto _advance_2; }     /* bcs */
+            case 0xd0: { if ( !cpu.fZero ) goto _branch_complete; goto _advance_2; }     /* bne */
             case 0xf0:                                                                 /* beq */
             {
                 if ( !cpu.fZero )
-                    break;                                               
+                    goto _advance_2;
 _branch_complete:
                 /* casting to a larger signed type doesn't sign-extend on Aztec C, so do it manually */
-                cpu.pc += ( 2 + (int16_t) (int8_t) get_byte( cpu.pc + 1 ) );
+                cpu.pc += ( 2 + (int16_t) (int8_t) a1argfetch() );
                 continue;
             }
-            case 0x18: { cpu.fCarry = false; break; }                                  /* clc */
+            case 0x18: { cpu.fCarry = false; goto _advance_1; }                        /* clc */
             case 0x20:                                                                 /* jsr a16 */
             {
                 push_word( cpu.pc + 2 );
                 cpu.pc = get_word( cpu.pc + 1 );
                 continue;
             }
-            case 0x24: { op_bit( get_zp_byte( get_byte( cpu.pc + 1 ) ) ); break; }        /* bit a8 NVZ */
-            case 0x28: { op_pop_pf(); break; }                                         /* plp NZCIDV */
-            case 0x2c: { op_bit( get_byte( get_word( cpu.pc + 1 ) ) ); break; }        /* bit a16 NVZ */
-            case 0x38: { cpu.fCarry = true; break; }                                   /* sec */
+            case 0x24: { op_bit( get_zp_byte( a1argfetch() ) ); goto _advance_2; } /* bit a8 NVZ */
+            case 0x28: { op_pop_pf(); goto _advance_1; }                               /* plp NZCIDV */
+            case 0x2c: { op_bit( get_byte( get_word( cpu.pc + 1 ) ) ); goto _advance_3; } /* bit a16 NVZ */
+            case 0x38: { cpu.fCarry = true; goto _advance_1; }                         /* sec */
             case 0x40:                                                                 /* rti */
             {
                 op_pop_pf();
@@ -1193,9 +1299,9 @@ _branch_complete:
                 cpu.pc |= ( ( (uint16_t) pop() ) << 8 );
                 continue;
             }
-            case 0x48: { push( cpu.a ); break; }                                       /* pha */
+            case 0x48: { push( cpu.a ); goto _advance_1; }                             /* pha */
             case 0x4c: { cpu.pc = get_word( cpu.pc + 1 ); continue; }                  /* jmp a16 */
-            case 0x58: { cpu.fInterruptDisable = false; break; }                       /* cli */
+            case 0x58: { cpu.fInterruptDisable = false; goto _advance_1; }             /* cli */
             case 0x60:                                                                 /* rts */
             {
 _op_rts:
@@ -1203,16 +1309,16 @@ _op_rts:
                 cpu.pc = 1 + ( ( (uint16_t) pop() << 8 ) | cpu.pc );
                 continue;
             }
-            case 0x68: { cpu.a = pop(); set_nz( cpu.a ); break; }                                  /* pla NZ */
-            case 0x6a: case 0x4a: case 0x2a: case 0x0a: { cpu.a = op_rotate( op, cpu.a ); break; } /* asl, rol, lsr, ror */
+            case 0x68: { cpu.a = pop(); set_nz( cpu.a ); goto _advance_1; }                         /* pla NZ */
+            case 0x6a: case 0x4a: case 0x2a: case 0x0a: { cpu.a = op_rotate( op, cpu.a ); goto _advance_1; } /* asl, rol, lsr, ror */
             case 0x6c: { cpu.pc = get_word_pagewrap( get_word( cpu.pc + 1 ) ); continue; }         /* jmp (a16) */
-            case 0x78: { cpu.fInterruptDisable = true; break; }                                    /* sei */
-            case 0x81: { address = get_word_pagewrap_zp( (uint8_t) ( cpu.x + get_byte( cpu.pc + 1 ) ) ); goto _st_complete; } /* sta (a8, x) */
-            case 0x84: case 0x85: case 0x86: { address = get_byte( cpu.pc + 1 ); goto _st_complete_zp; }             /* sty/sta/stx a8 */
+            case 0x78: { cpu.fInterruptDisable = true; goto _advance_1; }                           /* sei */
+            case 0x81: { address = get_word_pagewrap_zp( (uint8_t) ( cpu.x + a1argfetch() ) ); goto _st_complete; } /* sta (a8, x) */
+            case 0x84: case 0x85: case 0x86: { address = a1argfetch(); goto _st_complete_zp; }             /* sty/sta/stx a8 */
             case 0x8c: case 0x8d: case 0x8e: { address = get_word( cpu.pc + 1 ); goto _st_complete; }             /* sty/sta/stx a16 */
-            case 0x91: { address = cpu.y + get_word_pagewrap_zp( get_byte( cpu.pc + 1 ) ); goto _st_complete; }      /* sta (a8), y */
-            case 0x94: case 0x95: { address = (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.x ); goto _st_complete_zp; }  /* sta/sty a8, x */
-            case 0x96: { address = (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.y ); goto _st_complete_zp; }             /* stx a8, y */
+            case 0x91: { address = cpu.y + get_word_pagewrap_zp( a1argfetch() ); goto _st_complete; }      /* sta (a8), y */
+            case 0x94: case 0x95: { address = (uint8_t) ( a1argfetch() + cpu.x ); goto _st_complete_zp; }  /* sta/sty a8, x */
+            case 0x96: { address = (uint8_t) ( a1argfetch() + cpu.y ); goto _st_complete_zp; }             /* stx a8, y */
             case 0x99: { address = get_word( cpu.pc + 1 ) + cpu.y; goto _st_complete; }                           /* sta a16, y */
             case 0x9d:                                                                                            /* sta a16, x */
             {
@@ -1226,17 +1332,17 @@ _st_complete_zp:  /* page 0 target: no I/O mapping possible, index directly */
                 set_zp_byte( address, ( op & 1 ) ? cpu.a : ( op & 2 ) ? cpu.x : cpu.y );
                 break;
             }
-            case 0x88: { cpu.y--; set_nz( cpu.y ); break; }                            /* dey */
-            case 0x8a: { cpu.a = cpu.x; set_nz( cpu.a ); break; }                      /* txa */
-            case 0x98: { cpu.a = cpu.y; set_nz( cpu.a ); break; }                      /* tya */
-            case 0x9a: { cpu.sp = cpu.x; break; }                                      /* txs no flags set */
+            case 0x88: { cpu.y--; set_nz( cpu.y ); goto _advance_1; }                  /* dey */
+            case 0x8a: { cpu.a = cpu.x; set_nz( cpu.a ); goto _advance_1; }            /* txa */
+            case 0x98: { cpu.a = cpu.y; set_nz( cpu.a ); goto _advance_1; }            /* tya */
+            case 0x9a: { cpu.sp = cpu.x; goto _advance_1; }                            /* txs no flags set */
             case 0xa0: case 0xa2: case 0xa9: { address = cpu.pc + 1; goto _ld_complete; }                         /* ldy/ldx/lda #d8 */
-            case 0xa1: { address = get_word_pagewrap_zp( (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.x ) ); goto _ld_complete; } /* lda (a8, x) */
-            case 0xa4 : case 0xa5: case  0xa6: { address = get_byte( cpu.pc + 1 ); goto _ld0_complete_zp; }          /* ldy/lda/ldx a8 */
+            case 0xa1: { address = get_word_pagewrap_zp( (uint8_t) ( a1argfetch() + cpu.x ) ); goto _ld_complete; } /* lda (a8, x) */
+            case 0xa4 : case 0xa5: case  0xa6: { address = a1argfetch(); goto _ld0_complete_zp; }          /* ldy/lda/ldx a8 */
             case 0xac: case 0xad: case 0xae:{ address = get_word( cpu.pc + 1 ); goto _ld_complete; }              /* ldy/lda/ldx a16 */
-            case 0xb1: { address = cpu.y + get_word_pagewrap_zp( (uint16_t) get_byte( cpu.pc + 1 ) ); goto _ld_complete; }    /* lda (a8), y */
-            case 0xb4: case 0xb5: { address = (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.x ); goto _ld0_complete_zp; } /* ldy/lda a8, x */
-            case 0xb6: { address = (uint8_t) ( get_byte( cpu.pc + 1 ) + cpu.y ); goto _ld0_complete_zp; }            /* ldx a8, y */
+            case 0xb1: { address = cpu.y + get_word_pagewrap_zp( (uint16_t) a1argfetch() ); goto _ld_complete; }    /* lda (a8), y */
+            case 0xb4: case 0xb5: { address = (uint8_t) ( a1argfetch() + cpu.x ); goto _ld0_complete_zp; } /* ldy/lda a8, x */
+            case 0xb6: { address = (uint8_t) ( a1argfetch() + cpu.y ); goto _ld0_complete_zp; }            /* ldx a8, y */
             case 0xb9 : case 0xbe: { address = get_word( cpu.pc + 1 ) + cpu.y; goto _ld_complete; }               /* lda/ldx a16, y */
             case 0xbc: case 0xbd:                                                                                 /* ldy/lda a16, x */
             {
@@ -1280,15 +1386,15 @@ _ld0_complete_zp:  /* page 0 source: index directly, no get_mem() call needed */
                     cpu.y = val;
                 break;
             }
-            case 0xa8: { cpu.y = cpu.a; set_nz( cpu.y ); break; }                      /* tay */
-            case 0xaa: { cpu.x = cpu.a; set_nz( cpu.x ); break; }                      /* tax */
-            case 0xb8: { cpu.fOverflow = false; break; }                               /* clv */
-            case 0xba: { cpu.x = cpu.sp; set_nz( cpu.x ); break; }                     /* tsx */
-            case 0xc0: { op_cmp( cpu.y, get_byte( cpu.pc + 1 ) ); break; }             /* cpy #d8 */
-            case 0xc4: { op_cmp( cpu.y, get_zp_byte( get_byte( cpu.pc + 1 ) ) ); break; } /* cpy a8 */
-            case 0xc6 : case 0xe6: { address = get_byte( cpu.pc + 1 ); goto _crement_complete_zp; }         /* inc/dec a8 */
+            case 0xa8: { cpu.y = cpu.a; set_nz( cpu.y ); goto _advance_1; }            /* tay */
+            case 0xaa: { cpu.x = cpu.a; set_nz( cpu.x ); goto _advance_1; }            /* tax */
+            case 0xb8: { cpu.fOverflow = false; goto _advance_1; }                     /* clv */
+            case 0xba: { cpu.x = cpu.sp; set_nz( cpu.x ); goto _advance_1; }           /* tsx */
+            case 0xc0: { op_cmp( cpu.y, a1argfetch() ); goto _advance_2; }   /* cpy #d8 */
+            case 0xc4: { op_cmp( cpu.y, get_zp_byte( a1argfetch() ) ); goto _advance_2; } /* cpy a8 */
+            case 0xc6 : case 0xe6: { address = a1argfetch(); goto _crement_complete_zp; }         /* inc/dec a8 */
             case 0xce : case 0xee: { address = get_word( cpu.pc + 1 ); goto _crement_complete; }         /* inc/dec a16 */
-            case 0xd6 : case 0xf6: { address = (uint8_t) ( cpu.x + get_byte( cpu.pc + 1 ) ); goto _crement_complete_zp; } /* inc/dec a8, x */
+            case 0xd6 : case 0xf6: { address = (uint8_t) ( cpu.x + a1argfetch() ); goto _crement_complete_zp; } /* inc/dec a8, x */
             case 0xde : case 0xfe:                                                                       /* inc/dec a16, x */
             {
                 address = cpu.x + get_word( cpu.pc + 1 );
@@ -1309,21 +1415,31 @@ _crement_complete_zp:  /* page 0 target: index directly, no get_mem() call neede
                 set_nz( *pb );
                 break;
             }
-            case 0xc8: { cpu.y++; set_nz( cpu.y ); break; }                            /* iny */
-            case 0xca: { cpu.x--; set_nz( cpu.x ); break; }                            /* dex */
-            case 0xcc: { op_cmp( cpu.y, get_byte( get_word( cpu.pc + 1 ) ) ); break; } /* cpy a16 */
-            case 0xd8: { cpu.fDecimal = false; break; }                                /* cld */
-            case 0xe0: { op_cmp( cpu.x, get_byte( cpu.pc + 1 ) ); break; }             /* cpx #d8 */
-            case 0xe4: { op_cmp( cpu.x, get_zp_byte( get_byte( cpu.pc + 1 ) ) ); break; } /* cpx a8 */
-            case 0xe8: { cpu.x++; set_nz( cpu.x ); break; }                            /* inx */
-            case 0xea: { break; }                                                      /* nop */
-            case 0xec: { op_cmp( cpu.x, get_byte( get_word( cpu.pc + 1 ) ) ); break; } /* cpx a16 */
-            case 0xf8: { cpu.fDecimal = true; break; }                                 /* sed */
+            case 0xc8: { cpu.y++; set_nz( cpu.y ); goto _advance_1; }                  /* iny */
+            case 0xca: { cpu.x--; set_nz( cpu.x ); goto _advance_1; }                  /* dex */
+            case 0xcc: { op_cmp( cpu.y, get_byte( get_word( cpu.pc + 1 ) ) ); goto _advance_3; } /* cpy a16 */
+            case 0xd8: { cpu.fDecimal = false; goto _advance_1; }                      /* cld */
+            case 0xe0: { op_cmp( cpu.x, a1argfetch() ); goto _advance_2; }   /* cpx #d8 */
+            case 0xe4: { op_cmp( cpu.x, get_zp_byte( a1argfetch() ) ); goto _advance_2; } /* cpx a8 */
+            case 0xe8: { cpu.x++; set_nz( cpu.x ); goto _advance_1; }                  /* inx */
+            case 0xea: { goto _advance_1; }                                            /* nop */
+            case 0xec: { op_cmp( cpu.x, get_byte( get_word( cpu.pc + 1 ) ) ); goto _advance_3; } /* cpx a16 */
+            case 0xf8: { cpu.fDecimal = true; goto _advance_1; }                       /* sed */
             case 0xff: { m_halt(); goto _all_done; }                                   /* halt */
             default: { printf( "unknown mos6502 opcode %02x\n", op ); m_hard_exit( "\n" ); }
         }
 
         cpu.pc += ins_len_6502[ op ];
+        continue;
+
+_advance_1:
+        cpu.pc++;
+        continue;
+_advance_2:
+        cpu.pc += 2;
+        continue;
+_advance_3:
+        cpu.pc += 3;
     }
 
 _all_done:

@@ -1,0 +1,29 @@
+_a1_opcode_return_spill:
+	call _a1opfetch
+	ld (ix-40),l ;@dcc.mir byte-slot
+	ld (ix-33),l
+	add hl,hl
+	jp (hl)
+
+_different_helper:
+	call _other_fetch
+	ld (ix-40),l ;@dcc.mir byte-slot
+	ld (ix-33),l
+	add hl,hl
+	jp (hl)
+
+_missing_byte_slot_contract:
+	call _a1opfetch
+	ld (ix-40),l
+	ld (ix-33),l
+	add hl,hl
+	jp (hl)
+
+_not_a_switch:
+	call _a1opfetch
+	ld (ix-40),l ;@dcc.mir byte-slot
+	ld (ix-33),l
+	inc hl
+	ld e,(ix-40)
+	ld d,(ix-33)
+	ret
