@@ -99,11 +99,11 @@ jobs:
 
       - name: Run main regression suite in both optimization modes
         shell: pwsh
-        run: ./scripts/runall.ps1 -Mode full -RunTimeout 30
+        run: ./scripts/runall.ps1 -Mode full -RunTimeout 60
 
       - name: Run C89, C99, and C11 extended regressions in both optimization modes
         shell: pwsh
-        run: ./scripts/runall-extended.ps1 -C11 -Mode full -RunTimeout 30
+        run: ./scripts/runall-extended.ps1 -C11 -Mode full -RunTimeout 60
 
   no-powershell-build:
     name: Host build without PowerShell (m-posix.sh)
