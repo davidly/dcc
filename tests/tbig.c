@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <errno.h>
 
 #define RECSIZE    128
 #define LASTVALID  65535L    /* highest legal cp/m 2.2 random record number (16-bit r0/r1) */
@@ -196,11 +197,25 @@ int main( int argc, char * argv[] )
             else
             {
                 fill_record( LASTVALID + 1L, buf );
+                errno = 0;
                 result = write( fd, buf, RECSIZE );
-                if ( RECSIZE == result )
-                    printf( "  write past 65535 SUCCEEDED (allowed here; real cp/m 2.2 documents this as out of range)\n" );
+                if ( -1 == result && EFBIG == errno )
+                    printf( "  write past 65535 failed with EFBIG as expected\n" );
                 else
-                    printf( "  write past 65535 failed (result %d)\n", result );
+                {
+                    printf( "  write past 65535 returned %d with errno %d, expected -1/EFBIG\n", result, errno );
+                    bad++;
+                }
+
+                if ( 0L != lseek( fd, 0L, 0 ) ||
+                     RECSIZE != read( fd, buf, RECSIZE ) ||
+                     !check_record( 0L, buf ) )
+                {
+                    printf( "  record 0 CORRUPTED by past-limit write\n" );
+                    bad++;
+                }
+                else
+                    printf( "  record 0 remains unchanged\n" );
             }
             close( fd );
         }

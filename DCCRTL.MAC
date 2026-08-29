@@ -7424,6 +7424,9 @@ rdloop:
         or      l
         jp      z,rddone
         call    __setrr
+        jr      nc,rdrr_ok
+        jp      rdeof           ; no CP/M 2.2 file can have data at >= 8 MiB
+rdrr_ok:
         call    __chunk
 
         ; Full aligned records can be read directly into the caller buffer.
@@ -7579,6 +7582,10 @@ wrloop:
         or      l
         jp      z,wrfdone
         call    __setrr
+        jr      nc,wrrr_ok
+        ld      a,6             ; do not let CP/M 2.2 ignore r2 and wrap
+        jp      wrerror         ; __rwerr maps status 6 to EFBIG
+wrrr_ok:
         call    __chunk
 
         ; Full aligned records can be written directly from the caller buffer.
@@ -8110,6 +8117,7 @@ __apseek:
         ld      (hl),b
 
         call    __setrr
+        jr      c,apseek_read_failed
 
         ld      de,__dma
         ld      c,26            ; set DMA
@@ -8133,6 +8141,7 @@ __apseek:
 
         ; Read failed: fall back to the full record-rounded length -
         ; never overwrites real data, just doesn't trim to the exact end.
+apseek_read_failed:
         pop     de
         pop     bc
         jr      apseek_write
@@ -8273,7 +8282,11 @@ __fcbp:
         ret
 
 ; Set FCB random record from 32-bit byte offset.
-; record = offset >> 7. remainder = offset & 127.
+; record = offset >> 7. remainder = offset & 127. CP/M 2.2 random I/O
+; consumes only r0:r1; it does not inspect r2, because some applications do
+; not reserve that optional 36th FCB byte. Reject a nonzero would-be r2 here
+; instead of letting an offset >= 8 MiB silently wrap to record zero.
+; Returns carry set when the record is out of range, clear on success.
 __setrr:
         call    __offp
         ld      e,(hl)          ; offset byte 0
@@ -8287,6 +8300,12 @@ __setrr:
         ld      a,e
         and     7fh
         ld      (__remdr),a
+
+        ld      a,c             ; offset byte 3 always contributes to r2
+        or      a
+        jr      nz,setrr_big
+        bit     7,b             ; offset byte 2 bit 7 is r2 bit 0
+        jr      nz,setrr_big
 
         ; r0 = (byte0 >> 7) | (byte1 << 1)
         ld      a,e
@@ -8331,6 +8350,10 @@ __setrr:
         ld      (hl),b
         inc     hl
         ld      (hl),e
+        or      a               ; success: explicitly clear carry
+        ret
+setrr_big:
+        scf
         ret
 ; Compute chunk = min(remaining, bytes-left-in-current-CP/M-record), stores __chnk.
 ; Each CP/M BDOS record is 128 bytes, so we cap at 128 bytes per call.

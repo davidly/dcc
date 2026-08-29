@@ -12,6 +12,7 @@ random access boundary probes:
   record 65535 (offset 8388480): OK
 
 probing one record past the documented 8mb / 65535 cp/m 2.2 limit...
-  write past 65535 SUCCEEDED (allowed here; real cp/m 2.2 documents this as out of range)
+  write past 65535 failed with EFBIG as expected
+  record 0 remains unchanged
 
 tbig completed with great success
