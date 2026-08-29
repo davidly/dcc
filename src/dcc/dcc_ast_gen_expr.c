@@ -4740,9 +4740,10 @@ void gen_call_ast(const struct AstNode *n)
         return;
     }
 
-    /* Fastcall stricmp(s1,s2): DCCRTL's __icf takes s1 in DE, s2 in HL
-     * directly - same shape as strstr above. */
-    if (n->list_len == 2 && !strcmp(name, "stricmp")) {
+    /* Fastcall strcmp/stricmp(s1,s2): DCCRTL's __smf/__icf entries take s1
+     * in DE and s2 in HL directly - the same shape as strstr above. */
+    if (n->list_len == 2 &&
+        (!strcmp(name, "strcmp") || !strcmp(name, "stricmp"))) {
         old_dead = expr_result_dead;
         expr_result_dead = 0;
         gen_fastcall_arg(n->list[0]);       /* HL = s1 */
@@ -4750,7 +4751,42 @@ void gen_call_ast(const struct AstNode *n)
         gen_fastcall_arg(n->list[1]);       /* HL = s2 */
         expr_result_dead = old_dead;
         emit("\tpop de\n");             /* DE = s1 */
-        emit_runtime_call("__icf");
+        emit_runtime_call(!strcmp(name, "strcmp") ? "__smf" : "__icf");
+        g_expr.type = fn_sym->type;
+        g_expr.long_from16 = 0;
+        return;
+    }
+
+    /* Fastcall strncmp(s1,s2,n): DCCRTL's __ncf takes s1 in DE, s2 in HL,
+     * and n in BC directly - the same register shape as memcmp. */
+    if (n->list_len == 3 && !strcmp(name, "strncmp")) {
+        old_dead = expr_result_dead;
+        expr_result_dead = 0;
+        gen_fastcall_arg(n->list[0]);       /* HL = s1 */
+        emit("\tpush hl\n");
+        gen_fastcall_arg(n->list[1]);       /* HL = s2 */
+        emit("\tpush hl\n");
+        gen_fastcall_arg(n->list[2]);       /* HL = n */
+        expr_result_dead = old_dead;
+        emit("\tld b,h\n\tld c,l\n"); /* BC = n */
+        emit("\tpop hl\n");            /* HL = s2 */
+        emit("\tpop de\n");            /* DE = s1 */
+        emit_runtime_call("__ncf");
+        g_expr.type = fn_sym->type;
+        g_expr.long_from16 = 0;
+        return;
+    }
+
+    /* malloc/free already have register-ABI runtime cores. Direct calls can
+     * enter those cores with their sole argument in HL; indirect calls keep
+     * using the public caller-cleanup wrappers. */
+    if (n->list_len == 1 &&
+        (!strcmp(name, "malloc") || !strcmp(name, "free"))) {
+        old_dead = expr_result_dead;
+        expr_result_dead = 0;
+        gen_fastcall_arg(n->list[0]);
+        expr_result_dead = old_dead;
+        emit_runtime_call(!strcmp(name, "malloc") ? "__mlh" : "__frcoal");
         g_expr.type = fn_sym->type;
         g_expr.long_from16 = 0;
         return;

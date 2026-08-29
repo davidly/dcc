@@ -1318,7 +1318,7 @@ int mir_extrn_should_emit(struct Sym *sym)
     return 1;
 }
 
-/* DCCRTL runtime helpers (__mulu, __sdivmod, __icf, __call_hl, and the
+/* DCCRTL runtime helpers (__mulu, __sdivmod, __icf, __smf, __call_hl, and the
  * float support entry points) have no struct Sym at all - they are plain
  * string literals threaded straight from each fastcall/instruction-
  * selection site to an "extrn NAME\ncall NAME\n" pair, unconditionally,
@@ -1692,7 +1692,7 @@ static void mir_cost_v1_split(
  * __icf, __lds, __ldu, __les, __leu, __lgs, __lgu, __lks, __lku,
  * __lms, __lmu, __lmul, __lts, __ltu, __m1mu, __m1s, __m1u, __mcf,
  * __mhf, __mods, __modu, __msf, __mulu, __pfehx, __pfeoc, __rcf,
- * __scf, __sdivmod, __slf, __ssf, __stchk, __udivmod. This
+ * __scf, __sdivmod, __slf, __smf, __ssf, __stchk, __udivmod. This
  * classification is deliberately coarse - divide/modulus and multiply
  * helpers are matched by name substring, "__f*" is float support, and
  * every other helper (fastcall ABI glue, comparisons, BDOS/BIOS trampo-

@@ -193,6 +193,10 @@ class DccRtlStripBlockTests(unittest.TestCase):
 
     def test_accepted_fastcall_entries_exclude_general_prologues(self):
         pairs = (
+            ("__mlh", "_malloc"),
+            ("__frcoal", "_free"),
+            ("__ncf", "__ncmp"),
+            ("__smf", "__scmp"),
             ("__scf", "__scpy"),
             ("__icf", "__sicm"),
             ("__mhf", "__mchr"),

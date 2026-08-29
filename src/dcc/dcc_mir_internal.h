@@ -496,7 +496,9 @@ int mir_call_is_de_hl_fastcall(int call_index, const char **rtl_name,
 int mir_call_is_memchr_fastcall(int call_index, int *s_value,
                                       int *c_value, int *n_value);
 int mir_call_is_memcmp_fastcall(int call_index, int *s1_value,
-                                       int *s2_value, int *n_value);
+                                int *s2_value, int *n_value);
+int mir_call_is_strncmp_fastcall(int call_index, int *s1_value,
+                                 int *s2_value, int *n_value);
 int mir_call_is_memcpy_fastcall(int call_index, int *dst_value,
                                       int *src_value, int *n_value);
 int mir_call_is_memset_fastcall(int call_index, int *dest_value,
@@ -504,6 +506,8 @@ int mir_call_is_memset_fastcall(int call_index, int *dest_value,
 int mir_call_is_strchr_fastcall(int call_index, int *s_value,
                                       int *c_value);
 int mir_call_is_strlen_fastcall(int call_index, int *s_value);
+int mir_call_is_heap_fastcall(int call_index, const char **rtl_name,
+                              int *argument_value);
 int mir_call_is_strrchr_fastcall(int call_index, int *s_value,
                                        int *c_value);
 int mir_call_is_user_fastcall(int call_index, struct Sym *callee,

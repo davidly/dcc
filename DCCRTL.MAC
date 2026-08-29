@@ -1432,6 +1432,14 @@ __scmp:
         ex      (sp),hl         ; HL = s2
         push    de              ; restore s1
         push    bc              ; restore return address
+DPSMF   equ     __smf           ; dccrtlstrip dependency; emits no bytes
+
+        public  __smf
+__smf:
+        ; fastcall int strcmp(const char *s1, const char *s2)
+        ; Entry: DE=s1, HL=s2 directly, matching __icf/__scf/__ssf.
+        ; Named __smf (string-match fastcall) to stay distinct from __scf,
+        ; the existing strcpy fastcall entry.
 sp1:
         ld      a,(de)
         cp      (hl)
@@ -1744,6 +1752,12 @@ __ncmp:
         push    hl              ; restore s2
         push    de              ; restore s1
         push    af              ; restore return address
+DPNCF   equ     __ncf           ; dccrtlstrip dependency; emits no bytes
+
+        public  __ncf
+__ncf:
+        ; fastcall int strncmp(const char *s1, const char *s2, size_t n)
+        ; Entry: DE=s1, HL=s2, BC=n directly, matching __cmpf.
 sncmp_loop:
         ld      a,b
         or      c
@@ -7854,9 +7868,9 @@ _fdatasync:
         ; fn 48 specifically, though - checked against ntvcm, x64os,
         ; RunCPM, zxcc, z88dk/cpm, and iz-cpm (both its default and --cpm3
         ; report modes):
-        ;   - ntvcm, x64os, RunCPM, zxcc all implement fn 48 and return
-        ;     cleanly (ntvcm's is a no-op stub; x64os/zxcc/RunCPM perform a
-        ;     real flush/sync).
+        ;   - ntvcm, x64os, RunCPM, zxcc all implement fn 48, perform a real
+        ;     host flush/sync, and return cleanly. ntvcm specifically flushes
+        ;     every open host stdio stream with fflush(NULL).
         ;   - z88dk/cpm doesn't implement it: its handler for ANY
         ;     unrecognized BDOS call is a register dump followed by exit(1).
         ;   - iz-cpm doesn't implement it in either report mode: it prints

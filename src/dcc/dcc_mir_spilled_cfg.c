@@ -3664,6 +3664,26 @@ int mir_call_is_strlen_fastcall(int call_index, int *s_value)
     return 1;
 }
 
+int mir_call_is_heap_fastcall(int call_index, const char **rtl_name,
+                              int *argument_value)
+{
+    static const struct { const char *name; const char *rtl; } family[] = {
+        { "malloc", "__mlh" }, { "free", "__frcoal" }
+    };
+    int values[1];
+    size_t member;
+
+    for (member = 0; member < sizeof(family) / sizeof(family[0]); ++member) {
+        if (!mir_call_matches_fastcall_shape(
+                call_index, family[member].name, 1, values))
+            continue;
+        *rtl_name = family[member].rtl;
+        *argument_value = values[0];
+        return 1;
+    }
+    return 0;
+}
+
 /* __fastcall for a user-declared function (as opposed to the hardcoded
  * strlen/strchr/memcmp/... cases above, which are each a specific
  * well-known DCCRTL entry point): matches whenever callee->is_fastcall is
@@ -3738,15 +3758,16 @@ int mir_call_is_memcpy_fastcall(int call_index, int *dst_value,
     return 1;
 }
 
-/* Item 18: strcpy(dst,src)->__scf, strstr(haystack,needle)->__ssf, and
- * stricmp(s1,s2)->__icf all share one 2-argument shape: arg1 ends up in
- * HL (the last-evaluated value needs no move) and arg0 is pushed then
- * popped into DE. */
+/* Item 18: strcpy(dst,src)->__scf, strstr(haystack,needle)->__ssf,
+ * strcmp(s1,s2)->__smf, and stricmp(s1,s2)->__icf all share one shape:
+ * arg1 ends up in HL (the last-evaluated value needs no move) and arg0 is
+ * pushed then popped into DE. */
 int mir_call_is_de_hl_fastcall(int call_index, const char **rtl_name,
                                      int *arg0_value, int *arg1_value)
 {
     static const struct { const char *name; const char *rtl; } family[] = {
-        { "strcpy", "__scf" }, { "strstr", "__ssf" }, { "stricmp", "__icf" }
+        { "strcpy", "__scf" }, { "strstr", "__ssf" },
+        { "strcmp", "__smf" }, { "stricmp", "__icf" }
     };
     size_t member;
     int values[2];
@@ -3769,6 +3790,18 @@ int mir_call_is_memcmp_fastcall(int call_index, int *s1_value,
 {
     int values[3];
     if (!mir_call_matches_fastcall_shape(call_index, "memcmp", 3, values))
+        return 0;
+    *s1_value = values[0];
+    *s2_value = values[1];
+    *n_value = values[2];
+    return 1;
+}
+
+int mir_call_is_strncmp_fastcall(int call_index, int *s1_value,
+                                 int *s2_value, int *n_value)
+{
+    int values[3];
+    if (!mir_call_matches_fastcall_shape(call_index, "strncmp", 3, values))
         return 0;
     *s1_value = values[0];
     *s2_value = values[1];
@@ -4435,10 +4468,12 @@ static int mir_call_uses_generic_stack_arguments(int instruction)
            !mir_call_uses_inline_typed_indexed_store(
                instruction, NULL, NULL) &&
            !mir_call_is_strlen_fastcall(instruction, &a) &&
+           !mir_call_is_heap_fastcall(instruction, &rtl_name, &a) &&
            !mir_call_is_strchr_fastcall(instruction, &a, &b) &&
            !mir_call_is_strrchr_fastcall(instruction, &a, &b) &&
            !mir_call_is_memchr_fastcall(instruction, &a, &b, &c) &&
            !mir_call_is_memcmp_fastcall(instruction, &a, &b, &c) &&
+           !mir_call_is_strncmp_fastcall(instruction, &a, &b, &c) &&
            !mir_call_is_memcpy_fastcall(instruction, &a, &b, &c) &&
            !mir_call_is_de_hl_fastcall(instruction, &rtl_name, &a, &b) &&
            !mir_call_is_bdos_family_fastcall(
@@ -17099,9 +17134,10 @@ static void mir_emit_exec_child(
             argc_ok,
             plan->child_argument_string,
             plan->argv_offset, plan->argv_offset + 1);
-    mir_emit_runtime_call(out, "__scmp");
+    mir_stream_puts("\tpop de\n", out);
+    mir_emit_runtime_call(out, "__smf");
     mir_stream_printf(out,
-            "\tpop bc\n\tpop bc\n\tld a,h\n\tor l\n"
+            "\tld a,h\n\tor l\n"
             "\tjp z, L%d\n"
             "\tld hl,S%d\n\tpush hl\n"
             "\tld l,(ix%+d)\n\tld h,(ix%+d)\n"
@@ -32923,6 +32959,15 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                     break;
                 }
                 if (!is_indirect &&
+                    mir_call_is_heap_fastcall(i, &rtl_name, &s_value)) {
+                    mir_emit_spilled_arg_to_hl(out, s_value);
+                    mir_emit_runtime_call(out, rtl_name);
+                    if (type_ptr_depth(insn->type) > 0 ||
+                        (insn->type & 15) != TYPE_VOID)
+                        mir_emit_virtual_store(out, insn->dst);
+                    break;
+                }
+                if (!is_indirect &&
                     mir_call_is_strchr_fastcall(i, &s_value, &c_value)) {
                     if (mir_take_forwarded_hl_call_argument(c_value)) {
                         mir_stream_puts("\tpush hl\n", out);
@@ -32995,6 +33040,31 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                               out);
                     }
                     mir_emit_runtime_call(out, "__cmpf");
+                    if (type_size(insn->type) == 4)
+                        mir_emit_virtual_store_wide(out, insn->dst);
+                    else
+                        mir_emit_virtual_store(out, insn->dst);
+                    break;
+                }
+                if (!is_indirect &&
+                    mir_call_is_strncmp_fastcall(i, &s1_value, &s2_value,
+                                                &n_value)) {
+                    if (mir_take_forwarded_hl_call_argument(n_value)) {
+                        mir_stream_puts("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, s1_value);
+                        mir_stream_puts("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, s2_value);
+                        mir_stream_puts("\tpop de\n\tpop bc\n", out);
+                    } else {
+                        mir_emit_spilled_arg_to_hl(out, s1_value);
+                        mir_stream_puts("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, s2_value);
+                        mir_stream_puts("\tpush hl\n", out);
+                        mir_emit_spilled_arg_to_hl(out, n_value);
+                        mir_stream_puts(
+                            "\tld b,h\n\tld c,l\n\tpop hl\n\tpop de\n", out);
+                    }
+                    mir_emit_runtime_call(out, "__ncf");
                     if (type_size(insn->type) == 4)
                         mir_emit_virtual_store_wide(out, insn->dst);
                     else

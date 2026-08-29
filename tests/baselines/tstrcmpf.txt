@@ -1,0 +1,5 @@
+direct 0 -1 1 -97 97
+indirect 0 -1 1 -97 97
+strncmp 1 1 1 1
+malloc ok
+indirect malloc fp

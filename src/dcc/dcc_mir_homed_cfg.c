@@ -1406,10 +1406,12 @@ int mir_homed_call_uses_guardable_stack_path(int instruction)
                instruction, &paired_byte_call) &&
            !mir_call_is_memset_fastcall(instruction, &a, &b, &c) &&
            !mir_call_is_strlen_fastcall(instruction, &a) &&
+           !mir_call_is_heap_fastcall(instruction, &rtl_name, &a) &&
            !mir_call_is_strchr_fastcall(instruction, &a, &b) &&
            !mir_call_is_strrchr_fastcall(instruction, &a, &b) &&
            !mir_call_is_memchr_fastcall(instruction, &a, &b, &c) &&
            !mir_call_is_memcmp_fastcall(instruction, &a, &b, &c) &&
+           !mir_call_is_strncmp_fastcall(instruction, &a, &b, &c) &&
            !mir_call_is_memcpy_fastcall(instruction, &a, &b, &c) &&
            !mir_call_is_de_hl_fastcall(
                instruction, &rtl_name, &a, &b) &&
@@ -3031,6 +3033,17 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
                         goto done;
                     break;
                 }
+                if (mir_call_is_heap_fastcall(i, &rtl_name, &s_value)) {
+                    if (!mir_emit_home_to_hl(out, s_value))
+                        goto done;
+                    mir_emit_runtime_call(out, rtl_name);
+                    if (type_ptr_depth(insn->type) > 0 ||
+                        (insn->type & 15) != TYPE_VOID) {
+                        if (!mir_emit_hl_to_home(out, insn->dst))
+                            goto done;
+                    }
+                    break;
+                }
                 if (mir_call_is_strchr_fastcall(i, &s_value, &c_value)) {
                     if (!mir_emit_home_push(out, s_value) ||
                         !mir_emit_home_push(out, c_value))
@@ -3071,6 +3084,18 @@ int mir_try_emit_homed_scalar_cfg(MirStream *out)
                         goto done;
                     mir_stream_puts("\tpop bc\n\tpop hl\n\tpop de\n", out);
                     mir_emit_runtime_call(out, "__cmpf");
+                    if (!mir_emit_hl_to_home(out, insn->dst))
+                        goto done;
+                    break;
+                }
+                if (mir_call_is_strncmp_fastcall(i, &s1_value, &s2_value,
+                                                &n_value)) {
+                    if (!mir_emit_home_push(out, s1_value) ||
+                        !mir_emit_home_push(out, s2_value) ||
+                        !mir_emit_home_push(out, n_value))
+                        goto done;
+                    mir_stream_puts("\tpop bc\n\tpop hl\n\tpop de\n", out);
+                    mir_emit_runtime_call(out, "__ncf");
                     if (!mir_emit_hl_to_home(out, insn->dst))
                         goto done;
                     break;
