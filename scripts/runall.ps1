@@ -189,9 +189,10 @@ speed:
         exclude the actual OS process-create/exec cost and PowerShell's own
         overhead capturing/merging their output via 2>&1 - comparing each
         against a PowerShell-side Stopwatch wrapping the same call splits
-        that out into its own "dccmake spawn" / "ntvcm spawn" bucket, with
-        whatever's left (fixture staging, baseline comparison, parallel
-        dispatch/collection) in a final "other script" bucket. This second
+        that out into its own "dccmake spawn" / "ntvcm spawn" bucket. Extra
+        scenario executions and their spawn overhead are reported separately;
+        whatever remains (fixture staging, baseline comparison, parallel
+        dispatch/collection) goes in a final "other script" bucket. This second
         section is normalized to the sum of all apps' work, NOT wall-clock
         time (parallel execution makes wall-clock time much smaller than
         that sum) - it answers "of all the work the suite did, what fraction
@@ -766,8 +767,9 @@ function Invoke-DccMakeBuild {
 
     $sourceFile = ""
     if ($SourcePath) {
-        if (Test-Path -LiteralPath $SourcePath -PathType Leaf) {
-            $sourceFile = (Resolve-Path -LiteralPath $SourcePath).ProviderPath
+        if ([System.IO.File]::Exists($SourcePath)) {
+            # Preserve the caller's spelling: dcc exposes it through __FILE__.
+            $sourceFile = $SourcePath
         }
     }
     else {
@@ -793,9 +795,7 @@ function Invoke-DccMakeBuild {
         return $false
     }
 
-    if (-not (Test-Path $BuildDir -PathType Container)) {
-        New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
-    }
+    [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetFullPath($BuildDir)) | Out-Null
 
     $dccmake = Get-DccMakeCommand
     $args = @(
@@ -869,7 +869,7 @@ function Invoke-DccMakeBuild {
     }
 
     $appCom = Join-Path $BuildDir "$upperBase.COM"
-    if (Test-Path -LiteralPath $appCom -PathType Leaf) {
+    if ([System.IO.File]::Exists($appCom)) {
         return $true
     }
 
@@ -907,21 +907,13 @@ function Copy-FixtureUpper {
     $source = if ($Fixture -is [string]) { $null } else { $Fixture.Source }
     if (-not $name) { return }
 
-    $dest = Join-Path $DestDir ($name.ToUpper())
-    if ($source -and (Test-Path $source -PathType Leaf)) {
-        Copy-Item -LiteralPath $source -Destination $dest -Force -ErrorAction SilentlyContinue
-        return
+    if (-not $source -or -not [System.IO.File]::Exists([string]$source)) { return }
+    try {
+        [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetFullPath($DestDir)) | Out-Null
+        $dest = [System.IO.Path]::Combine([System.IO.Path]::GetFullPath($DestDir), $name.ToUpperInvariant())
+        [System.IO.File]::Copy([string]$source, $dest, $true)
     }
-
-    foreach ($dir in @("tests", ".")) {
-        if (-not (Test-Path $dir -PathType Container)) { continue }
-        $src = Get-ChildItem -LiteralPath $dir -File -ErrorAction SilentlyContinue |
-            Where-Object { $_.Name -ieq $name } | Select-Object -First 1
-        if ($src) {
-            Copy-Item -LiteralPath $src.FullName -Destination $dest -Force -ErrorAction SilentlyContinue
-            return
-        }
-    }
+    catch { }
 }
 
 # Run one already-built COM once with a given set of args/stdin, strip the
@@ -1113,6 +1105,8 @@ function Invoke-AppTest {
         [string[]]$Modes,
         [string]$BuildDir,
         [string]$BaselineDir,
+        [object]$BaselineData,
+        [string]$SourcePath,
         [string]$Emulator,
         [System.Collections.IDictionary]$Placeholders,
         [string]$RunArgs,
@@ -1139,9 +1133,7 @@ function Invoke-AppTest {
     # (the primary fixtures plus every extra scenario's own fixtures - all
     # scenarios run against the same build, so everything must be staged
     # before any run happens).
-    if (-not (Test-Path $BuildDir -PathType Container)) {
-        New-Item -ItemType Directory -Path $BuildDir -Force | Out-Null
-    }
+    [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetFullPath($BuildDir)) | Out-Null
     if ($StageFixtures) {
         foreach ($f in $Fixtures) {
             Copy-FixtureUpper -Fixture $f -DestDir $BuildDir
@@ -1155,23 +1147,17 @@ function Invoke-AppTest {
 
     # Load and normalize this app baseline once; when running both modes we
     # compare twice against the same expected output.
-    $blPath = Join-Path $BaselineDir "$AppName.txt"
-    $hasBaseline = Test-Path $blPath -PathType Leaf
-    $expected = $null
-    if ($hasBaseline) {
-        $expected = ((((Get-Content -Path $blPath -Raw) -replace "`r`n", "`n") -replace "`r", "`n")).TrimEnd("`n")
-    }
+    $blPath = $BaselineData.Path
+    $hasBaseline = [bool]$BaselineData.HasBaseline
+    $expected = $BaselineData.Expected
 
     # Same, per extra scenario - each gets its own baseline file
     # (tests/baselines/<AppName>_<suffix>.txt).
     $scenarioBaselines = @{}
     foreach ($scenario in $ExtraScenarios) {
-        $sBlPath = Join-Path $BaselineDir "${AppName}_$($scenario.suffix).txt"
-        $sHasBaseline = Test-Path $sBlPath -PathType Leaf
-        $sExpected = $null
-        if ($sHasBaseline) {
-            $sExpected = ((((Get-Content -Path $sBlPath -Raw) -replace "`r`n", "`n") -replace "`r", "`n")).TrimEnd("`n")
-        }
+        $sBlPath = $scenario.BaselineData.Path
+        $sHasBaseline = [bool]$scenario.BaselineData.HasBaseline
+        $sExpected = $scenario.BaselineData.Expected
         $scenarioBaselines[$scenario.suffix] = [pscustomobject]@{
             Path        = $sBlPath
             HasBaseline = $sHasBaseline
@@ -1186,7 +1172,7 @@ function Invoke-AppTest {
         $ok = $false
         $modeTiming = $null
         try {
-            $ok = Invoke-DccMakeBuild -Name $AppName -Mode $buildMode -BuildDir $BuildDir -Emulator $Emulator -StackSize $stackSizeInt -DccArgs $DccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -UseEmulatedL80:$UseEmulatedL80 -Quiet -TimeoutSeconds $RunTimeout -TimingOut ([ref]$modeTiming)
+            $ok = Invoke-DccMakeBuild -Name $AppName -Mode $buildMode -BuildDir $BuildDir -Emulator $Emulator -SourcePath $SourcePath -StackSize $stackSizeInt -DccArgs $DccArgs -DccFloatio $DccFloatio -DccLongio $DccLongio -UseEmulatedM80:$UseEmulatedM80 -UseEmulatedL80:$UseEmulatedL80 -Quiet -TimeoutSeconds $RunTimeout -TimingOut ([ref]$modeTiming)
         }
         catch { $ok = $false }
         if ($modeTiming) { $buildTimingByMode[$buildMode] = $modeTiming }
@@ -1201,12 +1187,12 @@ function Invoke-AppTest {
         # Run from the build dir so interpreters find their staged data fixtures.
         $upper = $AppName.ToUpper()
         $comFile = Join-Path $BuildDir "$upper.COM"
-        if (-not (Test-Path $comFile)) {
+        if (-not [System.IO.File]::Exists($comFile)) {
             $lines.Add("    WARNING: $comFile not found, skipping execution")
             $appPassed = $false
             continue
         }
-        $comSize = (Get-Item $comFile).Length
+        $comSize = ([System.IO.FileInfo]::new($comFile)).Length
 
         $primaryResult = Invoke-ComRunAndCompare -BuildDir $BuildDir -ComFileName "$upper.COM" `
             -Emulator $Emulator -EmulatorRunArgs $EmulatorRunArgs -RunArgs $RunArgs -RunStdin $RunStdin `
@@ -1220,6 +1206,8 @@ function Invoke-AppTest {
             ClockHz     = $primaryResult.ClockHz
             Size        = $comSize
             PsRunMs     = $primaryResult.PsElapsedMs
+            ScenarioMs  = 0.0
+            ScenarioPsRunMs = 0.0
         }
         if (-not $primaryResult.Passed) { $appPassed = $false }
         if (-not $hasBaseline) { break }
@@ -1237,6 +1225,8 @@ function Invoke-AppTest {
                 -HasBaseline $sb.HasBaseline -Expected $sb.Expected -Placeholders $Placeholders `
                 -BaselinePath $sb.Path -DiffPrefix "[$($scenario.suffix)] " -Lines $lines `
                 -RunTimeout $RunTimeout
+            $modeMetrics[$buildMode].ScenarioMs += [double]$scenarioResult.Ms
+            $modeMetrics[$buildMode].ScenarioPsRunMs += [double]$scenarioResult.PsElapsedMs
             if (-not $scenarioResult.Passed) { $appPassed = $false }
         }
     }
@@ -1467,6 +1457,19 @@ function Test-MatchesBaseline {
     return ($Actual -cmatch ('^' + $sb.ToString() + '$'))
 }
 
+# Baselines are immutable during a run. Read and normalize them once in the
+# parent runspace instead of repeating filesystem cmdlets in both mode workers.
+function Get-NormalizedBaseline {
+    param([string]$Path)
+    $fullPath = [System.IO.Path]::GetFullPath($Path)
+    $exists = [System.IO.File]::Exists($fullPath)
+    $expected = $null
+    if ($exists) {
+        $expected = ([System.IO.File]::ReadAllText($fullPath) -replace "`r`n", "`n" -replace "`r", "`n").TrimEnd("`n")
+    }
+    return [pscustomobject]@{ Path = $Path; HasBaseline = $exists; Expected = $expected }
+}
+
 # Main build and run loop
 $passed = 0
 $failed = 0
@@ -1507,22 +1510,56 @@ if (Test-IsNtvcmEmulator $Emulator) {
 
 # Build the list of work items up front (resolving per-app args/stack in the
 # parent), so parallel workers don't need the $appOverrides table.
+$fixtureSourceIndex = @{}
+foreach ($fixtureDir in @((Join-Path $script:RepoRoot "tests"), $script:RepoRoot)) {
+    if (-not [System.IO.Directory]::Exists($fixtureDir)) { continue }
+    foreach ($fixturePath in [System.IO.Directory]::EnumerateFiles($fixtureDir, "*", [System.IO.SearchOption]::TopDirectoryOnly)) {
+        $fixtureName = [System.IO.Path]::GetFileName($fixturePath)
+        if (-not $fixtureSourceIndex.ContainsKey($fixtureName)) {
+            $fixtureSourceIndex[$fixtureName] = $fixturePath
+        }
+    }
+}
+function Resolve-FixtureSpec {
+    param([object]$Fixture)
+    $name = if ($Fixture -is [string]) { $Fixture } else { $Fixture.Name }
+    $explicitSource = if ($Fixture -is [string]) { $null } else { $Fixture.Source }
+    $source = if ($explicitSource -and [System.IO.File]::Exists([string]$explicitSource)) {
+        [System.IO.Path]::GetFullPath([string]$explicitSource)
+    } elseif ($name -and $fixtureSourceIndex.ContainsKey($name)) {
+        $fixtureSourceIndex[$name]
+    } else { $null }
+    return [pscustomobject]@{ Name = $name; Source = $source }
+}
+
 $workItems = [System.Collections.Generic.List[object]]::new()
 foreach ($app in $testFiles) {
     if (Get-IgnoreApp $app) {
         $skipped++
         continue
     }
+    $preparedScenarios = @(Get-AppExtraScenarios $app | ForEach-Object {
+        $scenario = $_
+        [pscustomobject]@{
+            suffix = $scenario.suffix
+            args = $scenario.args
+            stdin = $scenario.stdin
+            fixtures = @($scenario.fixtures | ForEach-Object { Resolve-FixtureSpec $_ })
+            BaselineData = Get-NormalizedBaseline (Join-Path $BaselineDir "${app}_$($scenario.suffix).txt")
+        }
+    })
     $workItems.Add([pscustomobject]@{
         App          = $app
+        SourcePath   = Join-Path $testDir "$app.c"
         RunArgs      = (Get-AppArgs $app)
         RunStdin     = (Get-AppStdin $app)
         StackSize    = (Get-StackSize $app)
         DccArgs      = (Get-DccArgs $app)
         DccFloatio   = (Get-DccFloatio $app)
         DccLongio    = (Get-DccLongio $app)
-        Fixtures     = (Get-AppFixtures $app)
-        ExtraScenarios = (Get-AppExtraScenarios $app)
+        Fixtures     = @(Get-AppFixtures $app | ForEach-Object { Resolve-FixtureSpec $_ })
+        ExtraScenarios = $preparedScenarios
+        BaselineData = Get-NormalizedBaseline (Join-Path $BaselineDir "$app.txt")
     })
 }
 
@@ -1964,10 +2001,12 @@ if ($Parallel) {
         foreach ($buildModeKey in $modes) {
             $dispatchItems.Add([pscustomobject]@{
                 App = $item.App; Mode = $buildModeKey
+                SourcePath = $item.SourcePath
                 RunArgs = $item.RunArgs; RunStdin = $item.RunStdin
                 StackSize = $item.StackSize; DccArgs = $item.DccArgs
                 DccFloatio = $item.DccFloatio; DccLongio = $item.DccLongio
                 Fixtures = $item.Fixtures; ExtraScenarios = $item.ExtraScenarios
+                BaselineData = $item.BaselineData
             })
         }
     }
@@ -2023,7 +2062,7 @@ if ($Parallel) {
             Join-Path $using:BuildDir $item.App
         }
         $r = Invoke-AppTest -AppName $item.App -Modes @($item.Mode) -BuildDir $appBuildDir `
-            -BaselineDir $using:BaselineDir -Emulator $using:Emulator `
+            -BaselineDir $using:BaselineDir -BaselineData $item.BaselineData -SourcePath $item.SourcePath -Emulator $using:Emulator `
             -Placeholders $using:Placeholders -RunArgs $item.RunArgs `
             -RunStdin $item.RunStdin `
             -StackSize $item.StackSize -DccArgs $item.DccArgs `
@@ -2109,7 +2148,7 @@ else {
     foreach ($item in $workItems) {
         $appBuildDir = Join-Path $BuildDir $item.App
         $result = Invoke-AppTest -AppName $item.App -Modes $modes -BuildDir $appBuildDir `
-            -BaselineDir $BaselineDir -Emulator $Emulator -Placeholders $Placeholders `
+            -BaselineDir $BaselineDir -BaselineData $item.BaselineData -SourcePath $item.SourcePath -Emulator $Emulator -Placeholders $Placeholders `
             -RunArgs $item.RunArgs -RunStdin $item.RunStdin `
             -StackSize $item.StackSize -DccArgs $item.DccArgs `
             -DccFloatio $item.DccFloatio -DccLongio $item.DccLongio `
@@ -2461,8 +2500,9 @@ if ($TimingBreakdown) {
     # modes. This is normalized to the SUM of per-app work, not wall time -
     # parallel execution makes wall time far smaller than that sum.
     $sumDcc = 0.0; $sumPeep = 0.0; $sumAsm = 0.0; $sumRtlstrip = 0.0; $sumLink = 0.0; $sumDccOther = 0.0
-    $sumRunMs = 0.0; $sumAppElapsedMs = 0.0
-    $sumDccmakeSelfTotal = 0.0; $sumDccmakePsInvoke = 0.0; $sumRunPs = 0.0
+    $sumRunMs = 0.0; $sumScenarioRunMs = 0.0; $sumAppElapsedMs = 0.0
+    $sumDccmakeSelfTotal = 0.0; $sumDccmakePsInvoke = 0.0
+    $sumRunPs = 0.0; $sumScenarioRunPs = 0.0
     $asmModes = @{}
     $linkModes = @{}
     foreach ($r in $results) {
@@ -2482,9 +2522,12 @@ if ($TimingBreakdown) {
             $m = $r.Metrics[$buildModeKey]
             if ($m.Ms) { $sumRunMs += [double]$m.Ms }
             if ($m.PsRunMs) { $sumRunPs += [double]$m.PsRunMs }
+            if ($m.ScenarioMs) { $sumScenarioRunMs += [double]$m.ScenarioMs }
+            if ($m.ScenarioPsRunMs) { $sumScenarioRunPs += [double]$m.ScenarioPsRunMs }
         }
     }
-    $accountedMs = $sumDcc + $sumPeep + $sumAsm + $sumRtlstrip + $sumLink + $sumDccOther + $sumRunMs
+    $accountedMs = $sumDcc + $sumPeep + $sumAsm + $sumRtlstrip + $sumLink +
+        $sumDccOther + $sumRunMs + $sumScenarioRunMs
     $scriptOverheadMs = [math]::Max($sumAppElapsedMs - $accountedMs, 0)
     $asmModeLabel = if ($asmModes.Count -eq 0) { "unknown" } elseif ($asmModes.Count -gt 1) { "MIXED: $($asmModes.Keys -join ', ')" } else { [string]$asmModes.Keys }
     $linkModeLabel = if ($linkModes.Count -eq 0) { "unknown" } elseif ($linkModes.Count -gt 1) { "MIXED: $($linkModes.Keys -join ', ')" } else { [string]$linkModes.Keys }
@@ -2492,14 +2535,16 @@ if ($TimingBreakdown) {
     # ntvcm's own "elapsed milliseconds") is measured from inside those
     # processes - it excludes the actual OS process-create/exec cost and
     # PowerShell's own overhead capturing/merging their output via `2>&1`.
-    # Comparing that self-reported figure against a PowerShell-side
+    # Comparing those self-reported figures against PowerShell-side
     # Stopwatch wrapping the SAME call splits the old undifferentiated
     # "script/spawn" bucket into what's actually process-invocation
-    # overhead for dccmake/ntvcm specifically vs. everything else
-    # (fixture staging, baseline comparison, parallel dispatch).
+    # overhead for dccmake/ntvcm (primary and extra-scenario runs) vs.
+    # everything else (fixture staging, comparison, parallel dispatch).
     $dccmakeInvokeOverheadMs = [math]::Max($sumDccmakePsInvoke - $sumDccmakeSelfTotal, 0)
     $ntvcmInvokeOverheadMs = [math]::Max($sumRunPs - $sumRunMs, 0)
-    $otherScriptOverheadMs = [math]::Max($scriptOverheadMs - $dccmakeInvokeOverheadMs - $ntvcmInvokeOverheadMs, 0)
+    $scenarioInvokeOverheadMs = [math]::Max($sumScenarioRunPs - $sumScenarioRunMs, 0)
+    $otherScriptOverheadMs = [math]::Max($scriptOverheadMs - $dccmakeInvokeOverheadMs -
+        $ntvcmInvokeOverheadMs - $scenarioInvokeOverheadMs, 0)
 
     Write-Host ""
     Write-Host "  Main suite build pipeline (% of aggregate per-app work across both" -ForegroundColor DarkGray
@@ -2513,8 +2558,10 @@ if ($TimingBreakdown) {
     Write-Host ("    {0,-16} {1}" -f "  l80 mode:", $linkModeLabel) -ForegroundColor $(if ($linkModeLabel -eq "native") { "DarkGray" } else { "Yellow" })
     Write-TimingRow "dccmake other" $sumDccOther $sumAppElapsedMs
     Write-TimingRow "ntvcm run" $sumRunMs $sumAppElapsedMs
+    if ($sumScenarioRunPs -gt 0) { Write-TimingRow "scenario runs" $sumScenarioRunMs $sumAppElapsedMs }
     Write-TimingRow "dccmake spawn" $dccmakeInvokeOverheadMs $sumAppElapsedMs
     Write-TimingRow "ntvcm spawn" $ntvcmInvokeOverheadMs $sumAppElapsedMs
+    if ($sumScenarioRunPs -gt 0) { Write-TimingRow "scenario spawn" $scenarioInvokeOverheadMs $sumAppElapsedMs }
     Write-TimingRow "other script" $otherScriptOverheadMs $sumAppElapsedMs
 }
 
