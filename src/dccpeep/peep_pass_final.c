@@ -310,6 +310,20 @@ static int likely_taken_e_counter_backedge(int branch, int target)
     int init;
     int k;
 
+    if (target < branch && branch >= 3 &&
+        parse_jp_nz_label(lines[branch], label) &&
+        strstr(lines[branch - 1], "affine_byte_") != NULL) {
+        strip_peep_comment_copy(clean, lines[branch - 1]);
+        if (strcmp(clean, "cp d") == 0) {
+            strip_peep_comment_copy(clean, lines[branch - 2]);
+            if (strcmp(clean, "ld a,e") == 0) {
+                strip_peep_comment_copy(clean, lines[branch - 3]);
+                if (strcmp(clean, "inc e") == 0)
+                    return 1;
+            }
+        }
+    }
+
     if (target >= branch || branch < 3 ||
         !parse_jp_c_label(lines[branch], label) ||
         !peep_parse_cp_const(lines[branch - 1], &bound))

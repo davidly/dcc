@@ -1,0 +1,19 @@
+	call __fmaf
+	pop bc
+	pop bc
+	pop bc
+	pop bc
+	push de
+	push hl
+	ld l,(ix-6)
+	ld h,(ix-5)
+	pop bc
+	ld (hl),c
+	inc hl
+	ld (hl),b
+	inc hl
+	pop bc
+	ld (hl),c
+	inc hl
+	ld (hl),b
+	ret

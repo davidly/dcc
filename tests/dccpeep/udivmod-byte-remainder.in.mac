@@ -1,0 +1,49 @@
+; dcc stage-1d output
+public _f
+_f:
+	call __udivmod
+	ld (ix-6),l
+	ld (ix-5),h
+	ex de,hl
+	ld (ix-10),l
+	ld (ix-9),h
+	ld l,c
+	ld h,b
+	ex de,hl
+	ld l,(ix-2)
+	ld h,(ix-1)
+	add hl,de
+	push hl
+	ld l,(ix-10)
+	ld h,(ix-9)
+	ld a,l
+	pop hl
+	ld (hl),a
+	ld l,(ix-6)
+	ld h,(ix-5)
+	ret
+
+public _guard_a_use
+_guard_a_use:
+	call __udivmod
+	ld (ix-6),l
+	ld (ix-5),h
+	ex de,hl
+	ld (ix-10),l
+	ld (ix-9),h
+	ld l,a
+	ld h,b
+	ex de,hl
+	ld l,(ix-2)
+	ld h,(ix-1)
+	add hl,de
+	push hl
+	ld l,(ix-10)
+	ld h,(ix-9)
+	ld a,l
+	pop hl
+	ld (hl),a
+	ld l,(ix-6)
+	ld h,(ix-5)
+	ret
+end

@@ -415,10 +415,13 @@ int peep_in_function_range(const char *func, int *startp, int *endp);
 int peep_range_has_debug_annotations(int start, int end);
 int pass_minmax_pack_frame(void);
 int pass_minmax_pack_call(void);
+int pass_minmax_return_score_in_a(void);
+int pass_minmax_reuse_dead_move_slot(void);
 int pass_minmax_elim_label_reload(void);
 int pass_winner_check_dec_a(void);
 
 /* Loop-scoped registerization passes (peep_pass_loops.c). */
+int pass_regional_word_loop_var_to_reg_bc(void);
 int pass_word_loop_var_to_reg_bc(void);
 int pass_narrow_bc_loop_bound_to_reg_c(void);
 int pass_byte_loop_var_to_reg_c(void);

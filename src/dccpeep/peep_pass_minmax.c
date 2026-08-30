@@ -63,6 +63,61 @@ int peep_range_has_debug_annotations(int start, int end)
     return 0;
 }
 
+/* Keep MinMax's byte return directly in A while restoring the packed-loop
+ * state.  POP BC, POP HL, the board clear, and BIT do not alter A, so the
+ * two branch-local reloads from E are redundant. */
+int pass_minmax_return_score_in_a(void)
+{
+    int start, end, i;
+
+    if (!peep_in_function_range("_MinMax:", &start, &end) ||
+        peep_range_has_debug_annotations(start, end))
+        return 0;
+
+    for (i = start; i + 7 < end; ++i) {
+        int j, label_line, refs;
+        char label[128], target[128], before[MAX_LINE];
+
+        if (!eq(i, "ld e,l") || !eq(i + 1, "pop bc") ||
+            !eq(i + 2, "pop hl") || !eq(i + 3, "ld (hl),0") ||
+            !eq(i + 4, "bit 0,(ix+6)"))
+            continue;
+        if (strncmp(lines[i + 5], "jr z,", 5) &&
+            strncmp(lines[i + 5], "jp z,", 5))
+            continue;
+        if (!jump_target_any(lines[i + 5], label) || !eq(i + 6, "ld a,e"))
+            continue;
+        label_line = find_label_line_in_range(label, i + 7, end);
+        if (label_line < 0 || label_line + 1 >= end ||
+            !eq(label_line + 1, "ld a,e"))
+            continue;
+
+        /* Only the depth split may enter the even branch, and the odd arm
+         * must not fall through into it after changing A. */
+        refs = 0;
+        for (j = start; j < end; ++j)
+            if (jump_target_any(lines[j], target) && !strcmp(target, label))
+                ++refs;
+        if (refs != 1 || label_line == 0)
+            continue;
+        strip_peep_comment_copy(before, lines[label_line - 1]);
+        if ((strncmp(before, "jr ", 3) && strncmp(before, "jp ", 3)) ||
+            strchr(before, ',') != NULL)
+            continue;
+        for (j = i + 6; j < label_line; ++j)
+            if (j != i + 6 && line_touches_de(lines[j]))
+                break;
+        if (j < label_line)
+            continue;
+
+        replace1_tagged(i, "ld a,l", "minmax_return_score_a");
+        delete_n(label_line + 1, 1);
+        delete_n(i + 6, 1);
+        return 1;
+    }
+    return 0;
+}
+
 /* Helper: replace first occurrence of 'from' in 'buf' with 'to' (may differ in length). */
 static void pack_str_replace(char *buf, const char *from, const char *to)
 {
@@ -71,6 +126,53 @@ static void pack_str_replace(char *buf, const char *from, const char *to)
     size_t fl = strlen(from), tl = strlen(to);
     memmove(p + tl, p + fl, strlen(p + fl) + 1);
     memcpy(p, to, tl);
+}
+
+/* After the winner dispatch, MinMax's incoming move byte is dead: recursive
+ * children use the loop counter B as their own move argument.  Reuse that
+ * packed parameter byte for pieceMove and remove the otherwise dedicated
+ * two-byte local frame. */
+int pass_minmax_reuse_dead_move_slot(void)
+{
+    int start, end, i, alloc = -1, last_move_read = -1, first_local = -1;
+    int local_refs = 0, move_refs_after = 0;
+    char rewritten[MAX_LINE];
+
+    if (!peep_in_function_range("_MinMax:", &start, &end) ||
+        peep_range_has_debug_annotations(start, end))
+        return 0;
+
+    for (i = start; i + 1 < end; ++i) {
+        if (eq(i, "dec sp") && eq(i + 1, "dec sp") && alloc < 0)
+            alloc = i;
+        if (strstr(lines[i], "(ix+7)"))
+            last_move_read = i;
+        if (strstr(lines[i], "(ix-2)")) {
+            if (first_local < 0)
+                first_local = i;
+            ++local_refs;
+            if (!eq(i, "ld (ix-2),a") && !eq(i, "ld a,(ix-2)"))
+                return 0;
+        }
+    }
+    if (alloc < 0 || last_move_read < 0 || first_local <= last_move_read ||
+        local_refs != 3)
+        return 0;
+    for (i = first_local; i < end; ++i)
+        if (strstr(lines[i], "(ix+7)"))
+            ++move_refs_after;
+    if (move_refs_after)
+        return 0;
+
+    for (i = start; i < end; ++i) {
+        if (!strstr(lines[i], "(ix-2)"))
+            continue;
+        strcpy(rewritten, lines[i]);
+        pack_str_replace(rewritten, "(ix-2)", "(ix+7)");
+        replace1_tagged(i, rewritten, "minmax_reuse_move_slot");
+    }
+    delete_n(alloc, 2);
+    return 1;
 }
 
 int pass_minmax_pack_frame(void)
@@ -634,4 +736,3 @@ int pass_winner_check_dec_a(void)
 
     return changed;
 }
-

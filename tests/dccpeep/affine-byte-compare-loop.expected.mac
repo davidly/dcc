@@ -1,0 +1,36 @@
+	public _check
+_check:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld c,(ix+8)
+	ld b,(ix+9)
+	ld hl,4
+	add hl,bc
+	ld b,h
+	ld c,l
+	ld e,4
+	ld a,(ix+4) ; peep: affine_byte_compare_loop
+	add a,e ; peep: affine_byte_compare_loop
+	ld h,a ; peep: affine_byte_compare_loop
+	add a,124 ; peep: affine_byte_compare_loop
+	ld d,a ; peep: affine_byte_compare_loop
+	ld e,h ; peep: affine_byte_compare_loop
+Lloop:
+	ld a,(bc) ; peep: affine_byte_compare_loop
+	cp e
+	inc bc
+	jp z, Lcontinue
+	ld hl,0
+	ld sp,ix
+	pop ix
+	ret
+Lcontinue:
+	inc e
+	ld a,e
+	cp d ; peep: affine_byte_compare_loop
+	jp nz, Lloop
+	ld hl,1
+	ld sp,ix
+	pop ix
+	ret

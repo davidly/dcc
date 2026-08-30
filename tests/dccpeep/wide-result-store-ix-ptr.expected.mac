@@ -1,0 +1,17 @@
+	call __fmaf
+	pop bc
+	pop bc
+	pop bc
+	pop bc
+	ld b,h ; peep: wide_result_store_ix_ptr
+	ld c,l
+	ld l,(ix-6)
+	ld h,(ix-5)
+	ld (hl),c
+	inc hl
+	ld (hl),b
+	inc hl
+	ld (hl),e
+	inc hl
+	ld (hl),d
+	ret

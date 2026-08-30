@@ -1,0 +1,28 @@
+; dcc stage-1d output
+	public _main
+_main:
+	push ix
+	ld ix,0
+	add ix,sp
+	dec sp
+	dec sp
+	dec sp
+	push iy ; peep: sieve_count_iy
+	ld iy,0 ; peep: sieve_count_iy
+	ld hl,_flags
+L21:
+	ld (hl),0
+	inc iy ; peep: sieve_count_iy
+	inc hl
+	jp c,L21
+	push iy ; peep: sieve_count_iy
+	pop hl
+	pop iy
+	push hl ; peep: sieve_count_iy
+	ld hl,S0
+	push hl
+	call _printf
+	ld sp,ix
+	pop ix
+	ret
+	end

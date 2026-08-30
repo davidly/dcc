@@ -1,0 +1,25 @@
+	public _fill
+_fill:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld c,(ix+8)
+	ld b,(ix+9)
+	ld hl,4
+	add hl,bc
+	ld b,h
+	ld c,l
+	ld e,4
+	ld h,a
+Lloop:
+	ld a,h
+	add a,e
+	ld (bc),a
+	inc bc
+	inc e
+	ld a,e
+	cp 128
+	jp c, Lloop
+	ld sp,ix
+	pop ix
+	ret

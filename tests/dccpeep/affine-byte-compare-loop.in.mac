@@ -1,0 +1,34 @@
+	public _check
+_check:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld c,(ix+8)
+	ld b,(ix+9)
+	ld hl,4
+	add hl,bc
+	ld b,h
+	ld c,l
+	ld e,4
+	ld h,(ix+4)
+Lloop:
+	ld a,h
+	add a,e
+	ld d,a
+	ld a,(bc)
+	cp d
+	inc bc
+	jp z, Lcontinue
+	ld hl,0
+	ld sp,ix
+	pop ix
+	ret
+Lcontinue:
+	inc e
+	ld a,e
+	cp 128
+	jp c, Lloop
+	ld hl,1
+	ld sp,ix
+	pop ix
+	ret

@@ -13,3 +13,21 @@ Lzero:
 	ld (_flag),a
 	xor a
 	ret
+
+_highbit_bool_compact:
+	ld l,a
+	ld h,0
+	ld (_value),a
+	ld a,(_value)
+	and 128
+	ld l,a
+	ld a,h
+	or l
+	ld hl,0
+	jr z,Lcompact_zero
+	inc hl
+Lcompact_zero:
+	ld a,l
+	ld (_compact_flag),a
+	xor a
+	ret

@@ -1,0 +1,25 @@
+; dcc stage-1d output
+	public _MinMax
+_MinMax:
+	call _MinMax
+	pop af
+	pop af
+	ld a,l ; peep: minmax_return_score_a
+	pop bc
+	pop hl
+	ld (hl),0
+	bit 0,(ix+6)
+	jr z,Leven
+	cp 6
+	jr nz,Lodd
+	ld l,6
+	jr Ldone
+Lodd:
+	cp c
+	jr Ldone
+Leven:
+	cp 4
+Ldone:
+	ld h,0
+	ret
+	end

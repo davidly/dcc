@@ -1,0 +1,31 @@
+; dcc stage-1d output
+public _main
+_main:
+	push ix
+	ld ix,0
+	add ix,sp
+	dec sp
+	dec sp
+	dec sp
+	ld (ix-2),0
+	ld (ix-1),0
+	ld hl,_flags
+L21:
+	ld (hl),0
+	inc (ix-2)
+	jr nz,L22
+	inc (ix-1)
+L22:
+	inc hl
+	jp c,L21
+L27:
+	ld l,(ix-2)
+	ld h,(ix-1)
+	push hl
+	ld hl,S0
+	push hl
+	call _printf
+	ld sp,ix
+	pop ix
+	ret
+end

@@ -8394,29 +8394,26 @@ ch_store:
 
 __advio:
         ld      a,(__chnk)
-        ld      e,a
-        ld      d,0
+        ld      c,a
+        ld      b,0
         ld      hl,(__rwbuf)
-        add     hl,de
+        add     hl,bc
         ld      (__rwbuf),hl
         ld      hl,(__rwcnt)
-        add     hl,de
+        add     hl,bc
         ld      (__rwcnt),hl
         ld      hl,(__rwrem)
         or      a
-        sbc     hl,de
+        sbc     hl,bc
         ld      (__rwrem),hl
         call    __offp
-        ; __offp clobbers DE, so reload the chunk before updating offset.
-        ld      a,(__chnk)
-        ld      e,a
-        ld      d,0
+        ; __offp preserves BC, so the chunk remains available here.
         ld      a,(hl)
-        add     a,e
+        add     a,c
         ld      (hl),a
         inc     hl
         ld      a,(hl)
-        adc     a,d
+        adc     a,b
         ld      (hl),a
         inc     hl
         ld      a,(hl)
@@ -9092,13 +9089,16 @@ __m1mu:
         ; result width, not either input operand or the full 32-bit product.
         or      a
         sbc     hl,bc            ; trial a - m (BC = m, straight from entry)
-        jr      nc,__mmu_r0_divide  ; a >= m (rare/never for the code this
+        jr      nc,__mmu_r0_jump    ; a >= m (rare/never for the code this
                                      ; exists for): needs a real division
         add     hl,bc            ; a < m (the common case): undo -> HL = a
 __mmu_r0_have:
         ld      (__mmu_a0),hl    ; a0 = a % m, fixed for the whole loop
         ld      (__mmu_m),bc
         ld      hl,0             ; acc = 0; HL stays pinned to acc from here on
+        bit     7,b
+        jr      z,__mmu_small_start
+__mmu_wide_start:
         ld      a,d
         or      a
         ld      a,16
@@ -9143,15 +9143,83 @@ __mmu_no_add:
 
         ret                      ; HL already = acc = (a * b) % m
 
+__mmu_r0_jump:
+        jp      __mmu_r0_divide  ; keep the common entry's conditional JR short
+
+; When m < 32768, both reduced operands are below m, so neither acc*2 nor
+; acc+a0 can overflow 16 bits.  pihex's moduli are all in this range; avoiding
+; the two impossible carry tests in every multiplier-bit iteration is a
+; substantial win while the path above retains the full-width behaviour.
+__mmu_small_start:
+        ld      a,d
+        or      a
+        jr      z,__mmu_small_lowbyte
+        cp      8
+        ld      a,16
+        jr      nc,__mmu_small_loop
+        ; D=1..7: the top five multiplier bits are empty.  Align the first
+        ; live bit with bit 15 and omit those five reduction iterations.
+        ex      de,hl             ; HL=multiplier, DE=zero accumulator
+        add     hl,hl
+        add     hl,hl
+        add     hl,hl
+        add     hl,hl
+        add     hl,hl
+        ld      a,11
+        bit     7,h
+        jr      nz,__mmu_small_aligned
+        add     hl,hl             ; D=1..3: skip a sixth empty bit
+        dec     a
+        bit     7,h
+        jr      nz,__mmu_small_aligned
+        add     hl,hl             ; D=1: skip a seventh empty bit
+        dec     a
+__mmu_small_aligned:
+        ex      de,hl             ; DE=aligned multiplier, HL=zero again
+        jr      __mmu_small_loop
+__mmu_small_lowbyte:
+        ld      d,e
+        ld      e,0
+        ld      a,8
+__mmu_small_loop:
+        add     hl,hl            ; m<32768 guarantees no carry
+        sbc     hl,bc
+        jr      nc,__mmu_small_dbl_done
+        add     hl,bc
+__mmu_small_dbl_done:
+        sla     e
+        rl      d
+        jr      nc,__mmu_small_no_add
+        ld      bc,(__mmu_a0)
+        add     hl,bc            ; both operands <m, so no carry
+        ld      bc,(__mmu_m)
+        sbc     hl,bc
+        jr      nc,__mmu_small_no_add
+        add     hl,bc
+__mmu_small_no_add:
+        dec     a
+        jr      nz,__mmu_small_loop
+        ret
+
 __mmu_r0_divide:
         ; Rare a>=m fallback; (a-m)%m == a%m.
+        ; m==0 reached this label too, but its low16(a*b) sentinel needs the
+        ; carry-aware wide loop rather than the small-modulus fast path.
+        ld      a,b
+        or      c
+        jr      nz,__mmu_r0_nonzero
+        ld      (__mmu_a0),hl
+        ld      (__mmu_m),bc
+        ld      hl,0
+        jp      __mmu_wide_start
+__mmu_r0_nonzero:
         push    de               ; save b
         ld      d,b
         ld      e,c              ; DE = m (divisor)
         call    __udivmod        ; HL = (a-m)/m (discarded), DE = a % m
         ex      de,hl            ; HL = a % m
         pop     de               ; DE = b (restored)
-        jr      __mmu_r0_have
+        jp      __mmu_r0_have
 
 __mmu_a0:
         dw      0
@@ -10537,21 +10605,24 @@ mh_rnd_ok:
 mh_sz_ok:
         ld      (__ml_need),hl
 
-        ; Walk free list from __hstart to __brk
-        ld      hl,__hstart
-        ld      (__ml_p),hl
+        ; Walk free list from __hstart to __brk. Keep the hot traversal
+        ; pointer in BC; materialize __ml_p only when a fitting block is
+        ; found (the split/write helpers then need BC for their own args).
+        ld      bc,__hstart
 
 mh_walk:
         ; Stop if walk pointer has reached (or passed) __brk
         ld      hl,(__brk)
-        ld      de,(__ml_p)
+        ld      d,b
+        ld      e,c
         or      a
         sbc     hl,de           ; HL = brk - p; carry if p > brk
         jp      z,mh_extend
         jp      c,mh_extend
 
-        ; Read the 2-byte packed header at __ml_p: DE = size|flag.
-        ld      hl,(__ml_p)
+        ; Read the 2-byte packed header at BC: DE = size|flag.
+        ld      h,b
+        ld      l,c
         ld      e,(hl)
         inc     hl
         ld      d,(hl)
@@ -10570,6 +10641,9 @@ mh_walk:
         or      a
         sbc     hl,de           ; HL = user_size - need; carry if too small
         jr      c,mh_skip_free
+
+        ; The fitting paths repurpose BC as __wr_hf's size argument.
+        ld      (__ml_p),bc
 
         ; Block fits. HL = remainder (even), DE = need. Split only if the
         ; remainder can hold a useful (>=2 byte) free block of its own,
@@ -10643,21 +10717,29 @@ mh_skip_free:
         ; Free but too small: advance by HDRSIZE + FTRSIZE + user_size
         add     hl,de           ; reconstruct user_size from remainder + need
         ex      de,hl
-        ld      hl,(__ml_p)
-        ld      bc,HDRSIZE+FTRSIZE
-        add     hl,bc
+        ld      h,b
+        ld      l,c
+        inc     hl
+        inc     hl
+        inc     hl
+        inc     hl              ; HDRSIZE+FTRSIZE
         add     hl,de
-        ld      (__ml_p),hl
+        ld      b,h
+        ld      c,l
         jp      mh_walk
 
 mh_used:
         ; Used block. DE = packed header value; flag bit is clear so DE is
         ; already the true user_size.
-        ld      hl,(__ml_p)
-        ld      bc,HDRSIZE+FTRSIZE
-        add     hl,bc
+        ld      h,b
+        ld      l,c
+        inc     hl
+        inc     hl
+        inc     hl
+        inc     hl              ; HDRSIZE+FTRSIZE
         add     hl,de
-        ld      (__ml_p),hl
+        ld      b,h
+        ld      c,l
         jp      mh_walk
 
 mh_extend:
@@ -16646,9 +16728,13 @@ FD_ANZ:
         ; control bank: Q = 0, RHI = 0, loop counter = 24
         ld      d,0             ; FQ2 = 0
         ld      hl,0            ; FQ1:FQ0 = 0
-        ld      c,0             ; RHI = 0
         ld      b,24            ; loop counter for DJNZ
+        or      a               ; initial RHI carry = 0
+        ex      af,af'          ; keep RHI in the shadow carry flag
 FDLUP:
+        ex      af,af'          ; restore prior shift's RHI carry
+        jr      c,FDFSUB_HI     ; RHI==1: R is unconditionally >= divisor
+
         ; Shift Q once at the top of the iteration.  The new low bit is
         ; initially zero; a successful subtraction sets it with INC L.
         ; Doing this here avoids duplicating the 24-bit shift in both the
@@ -16656,24 +16742,19 @@ FDLUP:
         add     hl,hl
         rl      d
 
-        ; --- check RHI (control bank active) ---
-        ld      a,c
-        or      a
-        jp      nz,FDFSUB       ; RHI==1: R is unconditionally >= divisor
-
         ; --- RHI==0: compare R against the divisor (arithmetic bank) ---
         exx
         ld      a,b
         cp      h               ; R2 - BM2
-        jp      c,FDNOSB        ; R < B
+        jr      c,FDNOSB        ; R < B
         jr      nz,FDDOSB       ; R > B
         ld      a,c
         cp      l               ; R1 - BM1
-        jp      c,FDNOSB
+        jr      c,FDNOSB
         jr      nz,FDDOSB
         ld      a,e
         cp      d               ; R0 - BM0
-        jp      c,FDNOSB        ; R < B; fall through if R >= B
+        jr      c,FDNOSB        ; R < B; fall through if R >= B
 FDDOSB:
         ld      a,e
         sub     d               ; R0 - BM0 (no borrow input)
@@ -16691,6 +16772,10 @@ FDNOSB:
         exx                     ; back to control bank
         jr      FDSHR           ; no subtraction: new quotient bit stays zero
 
+FDFSUB_HI:
+        ; The quotient shift must still precede setting its new low bit.
+        add     hl,hl
+        rl      d
 FDFSUB:
         ; RHI was 1, meaning R (conceptually RHI*2^24 + R-main) is
         ; unconditionally >= the 24-bit divisor.  R-main < divisor is
@@ -16698,8 +16783,7 @@ FDFSUB:
         ; keeps R < 2*divisor at all times, so RHI=1 implies
         ; R-main < 2*divisor - 2^24 <= divisor - 1), so the subtract always
         ; borrows and the new RHI is always 0 - true regardless of RHI's
-        ; incoming value, so clear it unconditionally before subtracting.
-        ld      c,0             ; RHI = 0
+        ; incoming value.  RHI is carried only in the shadow flags now.
         exx                     ; to arithmetic bank
         ld      a,e
         sub     d
@@ -16725,11 +16809,14 @@ FDSHR:
         rl      c
         rl      b
         exx                     ; back to control bank; EXX preserves carry
-        ; Materialize the carry-out directly as RHI = 0 or 1.
-        ld      a,0             ; LD preserves carry
+        ex      af,af'          ; save carry-out as next iteration's RHI
+        djnz    FDLUP
+
+        ; Materialize the final carry once for the rounding test below.
+        ex      af,af'
+        ld      a,0
         adc     a,a
         ld      c,a
-        djnz    FDLUP
 
         ; The final shift left leaves 2*remainder in the arithmetic
         ; bank and the quotient in the control bank.  Round directly from

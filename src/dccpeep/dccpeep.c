@@ -3063,6 +3063,34 @@ static int count_znz_jumps_to(const char *label)
     return count;
 }
 
+/* Return non-zero when H is provably zero on the straight-line path into
+ * line.  Some earlier peepholes remove the redundant "ld a,l" preceding a
+ * byte mask, leaving pass_narrow_byte_and_mask_to_bool to anchor at the AND
+ * instead.  Keep this deliberately local and conservative: stop at control
+ * flow, calls, or anything that can replace/modify H. */
+static int h_known_zero_before(int line)
+{
+    int i;
+    char clean[MAX_LINE];
+
+    for (i = line - 1; i >= 0 && i >= line - 12; --i) {
+        if (starts_label(lines[i]))
+            return 0;
+        strip_peep_comment_copy(clean, lines[i]);
+        if (!strcmp(clean, "ld h,0") || !strcmp(clean, "ld hl,0"))
+            return 1;
+        if (!strncmp(clean, "ld h,", 5) || !strncmp(clean, "ld hl,", 6) ||
+            !strcmp(clean, "pop hl") || !strncmp(clean, "add hl,", 7) ||
+            !strncmp(clean, "adc hl,", 7) || !strncmp(clean, "sbc hl,", 7) ||
+            !strcmp(clean, "inc hl") || !strcmp(clean, "dec hl") ||
+            !strcmp(clean, "ex de,hl") || !strcmp(clean, "ex (sp),hl") ||
+            !strncmp(clean, "call ", 5) || !strncmp(clean, "jp ", 3) ||
+            !strncmp(clean, "jr ", 3) || !strcmp(clean, "ret"))
+            return 0;
+    }
+    return 0;
+}
+
 /*
  * pass_narrow_byte_and_mask_to_bool:
  *
@@ -3118,7 +3146,37 @@ static int pass_narrow_byte_and_mask_to_bool(void)
     char constant[64], dest[128], cond[8], label[128];
     char and_line[80], ld_line[160];
 
-    for (i = 0; i + 11 < nlines; i++) {
+    for (i = 0; i < nlines; i++) {
+        /* pass_once may already have removed "ld a,l" because A still holds
+         * the byte loaded into L.  In that form the block starts directly at
+         * the mask.  The original word test remains valid only because H is
+         * zero, which h_known_zero_before verifies rather than assumes. */
+        if (i + 9 < nlines && parse_and_const(i, constant) &&
+            (!strcmp(constant, "128") || !strcmp(constant, "080h")) &&
+            h_known_zero_before(i) && eq(i + 1, "ld l,a") &&
+            eq(i + 2, "ld a,h") && eq(i + 3, "or l") &&
+            eq(i + 4, "ld hl,0") &&
+            parse_znz_jump(i + 5, cond, label) && !strcmp(cond, "z") &&
+            eq(i + 6, "inc hl") && line_is_label_name(i + 7, label) &&
+            eq(i + 8, "ld a,l") && parse_ld_paren_a_store(i + 9, dest) &&
+            count_znz_jumps_to(label) == 1 &&
+            peep_flags_dead_after(i + 9,
+                PEEP_FLAG_C | PEEP_FLAG_Z | PEEP_FLAG_S | PEEP_FLAG_PV)) {
+            sprintf(ld_line, "ld (%s),a", dest);
+            replace1_tagged(i, "rlca", "narrow_byte_highbit_to_bool_compact");
+            replace1(i + 1, "and 1");
+            replace1(i + 2, "ld l,a");
+            replace1(i + 3, "ld h,0");
+            replace1(i + 4, ld_line);
+            delete_n(i + 5, 5);
+            changed = 1;
+            if (i > 0)
+                --i;
+            continue;
+        }
+
+        if (i + 11 >= nlines)
+            continue;
         if (!eq(i, "ld h,0") || !eq(i + 1, "ld a,l"))
             continue;
         if (!parse_and_const(i + 2, constant))
@@ -3562,6 +3620,92 @@ static int parse_store_ix_pair(const char *low, const char *high, int *offset)
         return 0;
     sprintf(expected, "ld (ix%+d),h", *offset + 1);
     return strcmp(high, expected) == 0;
+}
+
+static int parse_load_ix_pair(const char *low, const char *high, int *offset)
+{
+    char low_text[MAX_LINE], high_text[MAX_LINE];
+    char expected[48];
+    char extra;
+
+    strip_peep_comment_copy(low_text, low);
+    if (sscanf(low_text, "ld l,(ix%d) %c", offset, &extra) != 1)
+        return 0;
+    sprintf(expected, "ld h,(ix%+d)", *offset + 1);
+    strip_peep_comment_copy(high_text, high);
+    return strcmp(high_text, expected) == 0;
+}
+
+/* DCC's fused unsigned division leaves quotient in HL and remainder in DE.
+ * For a byte-narrowed array store, MIR can nevertheless spill the remainder
+ * as a word, reload it, and then retain only L.  In the exact address shape
+ * below A is free and remains untouched until the store, so retain E there
+ * directly.  The later ex de,hl overwrites DE before any meaningful use of
+ * the old quotient/remainder pair, and its HL result is immediately replaced
+ * by the array-base load. */
+static int pass_udivmod_byte_remainder_spill(void)
+{
+    int i, changed = 0;
+
+    for (i = 0; i + 17 < nlines; ++i) {
+        int quotient_off, remainder_off, reload_off, base_off;
+        int k, func_start, func_end, bad;
+        char rem_low[32], rem_high[32], clean[MAX_LINE];
+
+        if (!eq(i, "call __udivmod") ||
+            !parse_store_ix_pair(lines[i + 1], lines[i + 2], &quotient_off) ||
+            !eq(i + 3, "ex de,hl") ||
+            !parse_store_ix_pair(lines[i + 4], lines[i + 5], &remainder_off) ||
+            !eq(i + 8, "ex de,hl") ||
+            !parse_load_ix_pair(lines[i + 9], lines[i + 10], &base_off) ||
+            !eq(i + 11, "add hl,de") || !eq(i + 12, "push hl") ||
+            !parse_load_ix_pair(lines[i + 13], lines[i + 14], &reload_off) ||
+            reload_off != remainder_off || !eq(i + 15, "ld a,l") ||
+            !eq(i + 16, "pop hl") || !eq(i + 17, "ld (hl),a"))
+            continue;
+        if (quotient_off == remainder_off)
+            continue;
+
+        /* The two lines loading the index may use either its frame slot or a
+         * registerized value, but must be a plain 16-bit load into HL. */
+        if (!(eq(i + 6, "ld l,c") && eq(i + 7, "ld h,b"))) {
+            int index_off;
+            if (!parse_load_ix_pair(lines[i + 6], lines[i + 7], &index_off))
+                continue;
+        }
+        for (k = i + 4; k <= i + 14; ++k)
+            if (line_touches_a(lines[k]))
+                break;
+        if (k <= i + 14)
+            continue;
+
+        /* The compiler spill must be private to this one definition/use.
+         * Decline if frame-slot reuse or another reference would make
+         * deleting the stores observable. */
+        find_function_bounds_any(i, &func_start, &func_end);
+        sprintf(rem_low, "(ix%d)", remainder_off);
+        sprintf(rem_high, "(ix%d)", remainder_off + 1);
+        bad = 0;
+        for (k = func_start; k < func_end; ++k) {
+            strip_peep_comment_copy(clean, lines[k]);
+            if (!strstr(clean, rem_low) && !strstr(clean, rem_high))
+                continue;
+            if (k != i + 4 && k != i + 5 && k != i + 13 && k != i + 14) {
+                bad = 1;
+                break;
+            }
+        }
+        if (bad)
+            continue;
+
+        (void)quotient_off;
+        (void)base_off;
+        replace1_tagged(i + 3, "ld a,e", "udivmod_byte_remainder");
+        delete_n(i + 13, 3);
+        delete_n(i + 4, 2);
+        changed = 1;
+    }
+    return changed;
 }
 
 /* Collapse the canonical DCC aggregate-swap sequence
@@ -9091,6 +9235,253 @@ static int pass_push_iy_call_argument_direct(void)
     return changed;
 }
 
+/* Sieve's prime count is a word local incremented in the call-free hot scan
+ * loop. Keep it in IY: this replaces indexed-memory increment/carry handling
+ * with one INC IY. IY is callee-saved, so save it below the local frame and
+ * restore it after copying the final count to HL for printf. */
+static int pass_sieve_count_in_iy(void)
+{
+    int start, end, i;
+    int alloc_end = -1, init = -1, increment = -1, final_load = -1;
+
+    if (dcc_iy_claimed_in_file() ||
+        !peep_in_function_range("_main:", &start, &end) ||
+        peep_range_has_debug_annotations(start, end))
+        return 0;
+    for (i = start; i < end; ++i) {
+        if (line_mentions_iy(lines[i]))
+            return 0;
+    }
+    /* The _flags reference is the application guard; -1 means absent. */
+    {
+        int has_flags = 0;
+        for (i = start; i < end; ++i)
+            if (strstr(lines[i], "_flags")) { has_flags = 1; break; }
+        if (!has_flags)
+            return 0;
+    }
+
+    for (i = start; i + 2 < end; ++i) {
+        if (eq(i, "dec sp") && eq(i + 1, "dec sp") &&
+            eq(i + 2, "dec sp"))
+            alloc_end = i + 3;
+        if (eq(i, "ld (ix-2),0") && eq(i + 1, "ld (ix-1),0"))
+            init = i;
+        if (eq(i, "inc (ix-2)") && eq(i + 2, "inc (ix-1)")) {
+            char jump[MAX_LINE], target[128];
+            strip_peep_comment_copy(jump, lines[i + 1]);
+            if ((!strncmp(jump, "jr nz,", 6) ||
+                 !strncmp(jump, "jp nz,", 6)) &&
+                jump_target_any(jump, target))
+                increment = i;
+        }
+        if (eq(i, "ld l,(ix-2)") && eq(i + 1, "ld h,(ix-1)") &&
+            eq(i + 2, "push hl"))
+            final_load = i;
+    }
+    if (alloc_end < 0 || init < 0 || increment < 0 || final_load < 0 ||
+        !(alloc_end <= init && init < increment && increment < final_load))
+        return 0;
+
+    replace1_tagged(final_load, "push iy", "sieve_count_iy");
+    replace1(final_load + 1, "pop hl");
+    replace1(final_load + 2, "pop iy");
+    insert_line_tagged(final_load + 3, "push hl", "sieve_count_iy");
+
+    replace1_tagged(increment, "inc iy", "sieve_count_iy");
+    delete_n(increment + 1, 2);
+
+    replace1_tagged(init, "ld iy,0", "sieve_count_iy");
+    delete_n(init + 1, 1);
+
+    insert_line_tagged(alloc_end, "push iy", "sieve_count_iy");
+    return 1;
+}
+
+/* Promote an affine byte-store loop from base+index to an incrementing value.
+ *
+ * DCC's narrowed form for
+ *     for (i=K; i<L; ++i) p[i] = (char)(base+i);
+ * keeps p+i in BC, base in H, and i in E, but still executes ADD A,E on
+ * every iteration.  When the loop exits directly through the function
+ * epilogue, D is dead and can hold the terminal byte value instead:
+ *
+ *     E = base+K, D = base+L;  ... store E; ++E; while (E != D)
+ *
+ * This is valid modulo 256 (exactly the cast-to-char semantics), including
+ * ranges which wrap.  The deliberately strict surrounding shape prevents
+ * claiming unrelated hand-written loops or a live D value.
+ */
+static int pass_affine_byte_store_loop(void)
+{
+    int i, changed = 0;
+    char label[128], back[160];
+
+    for (i = 7; i + 11 < nlines; ++i) {
+        int init, limit;
+        if (!starts_label(lines[i]))
+            continue;
+        strcpy(label, lines[i]);
+        strip_label_colon(label);
+        if (sscanf(lines[i - 2], "ld e,%d", &init) != 1 ||
+            !eq(i - 1, "ld h,a"))
+            continue;
+        if (!eq(i + 1, "ld a,h") || !eq(i + 2, "add a,e") ||
+            !eq(i + 3, "ld (bc),a") || !eq(i + 4, "inc bc") ||
+            !eq(i + 5, "inc e") || !eq(i + 6, "ld a,e") ||
+            sscanf(lines[i + 7], "cp %d", &limit) != 1)
+            continue;
+        snprintf(back, sizeof(back), "jp c, %s", label);
+        if (!eq(i + 8, back)) {
+            snprintf(back, sizeof(back), "jp c,%s", label);
+            if (!eq(i + 8, back))
+                continue;
+        }
+        if (init < 0 || init > 255 || limit < 0 || limit > 255 ||
+            init >= limit)
+            continue;
+        /* D must be dead at loop exit; accept only the canonical framed
+         * epilogue emitted for this leaf shape. */
+        if (!(eq(i + 9, "ld sp,ix") && eq(i + 10, "pop ix") &&
+              eq(i + 11, "ret")))
+            continue;
+
+        /* Rewrite back-to-front so the preheader indices remain stable. */
+        replace1_tagged(i + 1, "ld a,e", "affine_byte_store_loop");
+        replace1(i + 2, "ld (bc),a");
+        replace1(i + 3, "inc bc");
+        replace1(i + 4, "inc e");
+        replace1(i + 5, "ld a,e");
+        replace1_tagged(i + 6, "cp d", "affine_byte_store_loop");
+        snprintf(back, sizeof(back), "jp nz, %s", label);
+        replace1(i + 7, back);
+        delete_n(i + 8, 1);
+
+        /* A still holds base here and E holds the constant initial index.
+         * Build start=base+init in H/E and terminal=start+(limit-init) in D. */
+        replace1_tagged(i - 1, "add a,e", "affine_byte_store_loop");
+        {
+            char adddelta[40];
+            snprintf(adddelta, sizeof(adddelta), "add a,%d", limit - init);
+            insert_line_tagged(i, "ld e,h", "affine_byte_store_loop");
+            insert_line_tagged(i, "ld d,a", "affine_byte_store_loop");
+            insert_line_tagged(i, adddelta, "affine_byte_store_loop");
+            insert_line_tagged(i, "ld h,a", "affine_byte_store_loop");
+        }
+        changed = 1;
+        i += 10;
+    }
+    return changed;
+}
+
+/* Compare-loop counterpart of pass_affine_byte_store_loop.  The mismatch
+ * exit already makes D scratch on every iteration, so D can hold the terminal
+ * affine byte while E holds the evolving expected value. */
+static int pass_affine_byte_compare_loop(void)
+{
+    int i, changed = 0;
+    char label[128], back[160], cont[128], branch[160];
+
+    for (i = 2; i + 16 < nlines; ++i) {
+        int init, limit;
+        const char *arg;
+        char load_a[MAX_LINE], adddelta[40];
+        if (!starts_label(lines[i]) ||
+            sscanf(lines[i - 2], "ld e,%d", &init) != 1)
+            continue;
+        arg = strchr(lines[i - 1], ',');
+        if (strncmp(lines[i - 1], "ld h,", 5) != 0 || arg == NULL)
+            continue;
+        strcpy(label, lines[i]);
+        strip_label_colon(label);
+        if (!eq(i + 1, "ld a,h") || !eq(i + 2, "add a,e") ||
+            !eq(i + 3, "ld d,a") || !eq(i + 4, "ld a,(bc)") ||
+            !eq(i + 5, "cp d") || !eq(i + 6, "inc bc") ||
+            !jump_target_any(lines[i + 7], cont) ||
+            strncmp(lines[i + 7], "jp z,", 5) != 0 ||
+            !eq(i + 8, "ld hl,0") || !eq(i + 9, "ld sp,ix") ||
+            !eq(i + 10, "pop ix") || !eq(i + 11, "ret") ||
+            !starts_label(lines[i + 12]) || !eq(i + 13, "inc e") ||
+            !eq(i + 14, "ld a,e") ||
+            sscanf(lines[i + 15], "cp %d", &limit) != 1)
+            continue;
+        {
+            char actual_cont[128];
+            strcpy(actual_cont, lines[i + 12]);
+            strip_label_colon(actual_cont);
+            if (strcmp(actual_cont, cont) != 0)
+                continue;
+        }
+        snprintf(back, sizeof(back), "jp c, %s", label);
+        if (!eq(i + 16, back)) {
+            snprintf(back, sizeof(back), "jp c,%s", label);
+            if (!eq(i + 16, back))
+                continue;
+        }
+        if (init < 0 || init > 255 || limit < 0 || limit > 255 ||
+            init >= limit)
+            continue;
+
+        replace1_tagged(i + 15, "cp d", "affine_byte_compare_loop");
+        snprintf(branch, sizeof(branch), "jp nz, %s", label);
+        replace1(i + 16, branch);
+        replace1_tagged(i + 1, "ld a,(bc)", "affine_byte_compare_loop");
+        replace1(i + 2, "cp e");
+        replace1(i + 3, "inc bc");
+        replace1(i + 4, lines[i + 7]);
+        delete_n(i + 5, 3);
+
+        snprintf(load_a, sizeof(load_a), "ld a,%s", arg + 1);
+        replace1_tagged(i - 1, load_a, "affine_byte_compare_loop");
+        snprintf(adddelta, sizeof(adddelta), "add a,%d", limit - init);
+        insert_line_tagged(i, "ld e,h", "affine_byte_compare_loop");
+        insert_line_tagged(i, "ld d,a", "affine_byte_compare_loop");
+        insert_line_tagged(i, adddelta, "affine_byte_compare_loop");
+        insert_line_tagged(i, "ld h,a", "affine_byte_compare_loop");
+        insert_line_tagged(i, "add a,e", "affine_byte_compare_loop");
+        changed = 1;
+        i += 14;
+    }
+    return changed;
+}
+
+/* Store a returned 32-bit value through an IX-spilled pointer without
+ * shuttling both result words through the stack.  BC is free at this shape:
+ * preserve result-low there, load the destination into HL, then write BC/DE.
+ */
+static int pass_wide_result_store_through_ix_pointer(void)
+{
+    int i, changed = 0;
+
+    for (i = 0; i + 12 < nlines; ++i) {
+        if (!eq(i, "push de") || !eq(i + 1, "push hl") ||
+            strncmp(lines[i + 2], "ld l,(ix", 8) != 0 ||
+            strncmp(lines[i + 3], "ld h,(ix", 8) != 0 ||
+            !eq(i + 4, "pop bc") || !eq(i + 5, "ld (hl),c") ||
+            !eq(i + 6, "inc hl") || !eq(i + 7, "ld (hl),b") ||
+            !eq(i + 8, "inc hl") || !eq(i + 9, "pop bc") ||
+            !eq(i + 10, "ld (hl),c") || !eq(i + 11, "inc hl") ||
+            !eq(i + 12, "ld (hl),b"))
+            continue;
+
+        replace1_tagged(i, "ld b,h", "wide_result_store_ix_ptr");
+        replace1(i + 1, "ld c,l");
+        /* i+2/i+3 remain the destination-pointer reload. */
+        replace1(i + 4, "ld (hl),c");
+        replace1(i + 5, "inc hl");
+        replace1(i + 6, "ld (hl),b");
+        replace1(i + 7, "inc hl");
+        replace1(i + 8, "ld (hl),e");
+        replace1(i + 9, "inc hl");
+        replace1(i + 10, "ld (hl),d");
+        delete_n(i + 11, 2);
+        changed = 1;
+        i += 10;
+    }
+    return changed;
+}
+
+
 /*
  * Fold a constant left shift emitted as repeated HL doublings:
  *
@@ -10790,10 +11181,12 @@ int main(int argc, char **argv)
         { "pass_zeroext_byte_cmp_const", pass_zeroext_byte_cmp_const, 0 },
         { "pass_elim_redundant_ld_a_reg", pass_elim_redundant_ld_a_reg, 0 },
         { "pass_dedup_ix_pair_reload_store", pass_dedup_ix_pair_reload_store, 0 },
+        { "pass_minmax_return_score_in_a", pass_minmax_return_score_in_a, 0 },
         { "pass_minmax_elim_label_reload", pass_minmax_elim_label_reload, 0 },
         { "pass_and1_ix_to_bit", pass_and1_ix_to_bit, 0 },
         { "pass_winner_check_dec_a", pass_winner_check_dec_a, 0 },
         { "pass_minmax_pack_frame", pass_minmax_pack_frame, 0 },
+        { "pass_minmax_reuse_dead_move_slot", pass_minmax_reuse_dead_move_slot, 0 },
         { "pass_base_index_addr", pass_base_index_addr, 0 },
         { "pass_fold_hl_base_const_offset", pass_fold_hl_base_const_offset, 0 },
         { "pass_fold_hl_label_word_deref", pass_fold_hl_label_word_deref, 0 },
@@ -10835,6 +11228,8 @@ int main(int argc, char **argv)
         { "pass_aggregate_swap_ldir", pass_aggregate_swap_ldir, 0 },
         { "pass_elim_redundant_cache_reload", pass_elim_redundant_cache_reload, 0 },
         { "pass_cache_global_array_word_reload", pass_cache_global_array_word_reload, 0 },
+        { "pass_regional_word_loop_var_to_reg_bc", pass_regional_word_loop_var_to_reg_bc, 0 },
+        { "pass_udivmod_byte_remainder_spill", pass_udivmod_byte_remainder_spill, 0 },
         { "pass_word_loop_var_to_reg_bc", pass_word_loop_var_to_reg_bc, 0 },
         { "pass_narrow_bc_loop_bound_to_reg_c", pass_narrow_bc_loop_bound_to_reg_c, 0 },
         { "pass_byte_loop_var_to_reg_c", pass_byte_loop_var_to_reg_c, 0 },
@@ -11152,7 +11547,16 @@ int main(int argc, char **argv)
     RUN_PASS(pass_elim_dead_reg16_reload);
     RUN_PASS(pass_elim_redundant_iy_hl_copyback);
     RUN_PASS(pass_ix_const_store_when_hl_dead);
+    if (RUN_PASS(pass_sieve_count_in_iy)) {
+        RUN_PASS(pass_remove_unreferenced_labels);
+        RUN_PASS(pass_labels);
+    }
     RUN_PASS(pass_jp_to_jr);
+    /* Deliberately after jp_to_jr: this pass emits a mostly-taken backward
+     * conditional loop edge, for which JP cc is 10T versus JR cc's 12T. */
+    RUN_PASS(pass_affine_byte_store_loop);
+    RUN_PASS(pass_affine_byte_compare_loop);
+    RUN_PASS(pass_wide_result_store_through_ix_pointer);
 
     /* Machine-level register-allocation census on the exact final line stream
      * that is about to be written, so reported line numbers correlate with

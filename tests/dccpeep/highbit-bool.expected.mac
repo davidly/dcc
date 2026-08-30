@@ -7,3 +7,15 @@ _highbit_bool:
 	ld (_flag),a
 	xor a
 	ret
+
+_highbit_bool_compact:
+	ld l,a
+	ld h,0
+	ld (_value),a
+	ld a,(_value)
+	rlca ; peep: narrow_byte_highbit_to_bool_compact
+	and 1
+	ld l,a
+	ld (_compact_flag),a
+	xor a
+	ret

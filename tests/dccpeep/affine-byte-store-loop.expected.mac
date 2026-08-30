@@ -1,0 +1,28 @@
+	public _fill
+_fill:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld c,(ix+8)
+	ld b,(ix+9)
+	ld hl,4
+	add hl,bc
+	ld b,h
+	ld c,l
+	ld e,4
+	add a,e ; peep: affine_byte_store_loop
+	ld h,a ; peep: affine_byte_store_loop
+	add a,124 ; peep: affine_byte_store_loop
+	ld d,a ; peep: affine_byte_store_loop
+	ld e,h ; peep: affine_byte_store_loop
+Lloop:
+	ld a,e ; peep: affine_byte_store_loop
+	ld (bc),a
+	inc bc
+	inc e
+	ld a,e
+	cp d ; peep: affine_byte_store_loop
+	jp nz, Lloop
+	ld sp,ix
+	pop ix
+	ret

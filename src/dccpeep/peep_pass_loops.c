@@ -33,6 +33,160 @@ static enum CounterZeroExtendUse match_counter_zero_extend(
     return COUNTER_USE_NONE;
 }
 
+static int regional_word_slot_address_taken(int func_start, int func_end,
+                                             int off)
+{
+    int j;
+    char pat_addr_l[32], pat_addr_h[32];
+
+    sprintf(pat_addr_l, "ld de,%d", off);
+    sprintf(pat_addr_h, "ld de,%d", off + 1);
+    for (j = func_start; j + 3 < func_end; ++j) {
+        char t0[MAX_LINE], t1[MAX_LINE], t2[MAX_LINE], t3[MAX_LINE];
+        int addr_off, k;
+
+        strip_peep_comment_lower_copy(t0, lines[j]);
+        strip_peep_comment_lower_copy(t1, lines[j + 1]);
+        if (strcmp(t0, "push ix") != 0 || strcmp(t1, "pop hl") != 0)
+            continue;
+
+        addr_off = 0;
+        for (k = j + 2; k < func_end; ++k) {
+            strip_peep_comment_lower_copy(t2, lines[k]);
+            if (strcmp(t2, "inc hl") == 0)
+                ++addr_off;
+            else if (strcmp(t2, "dec hl") == 0)
+                --addr_off;
+            else
+                break;
+            if (addr_off == off || addr_off == off + 1)
+                return 1;
+        }
+
+        strip_peep_comment_lower_copy(t2, lines[j + 2]);
+        strip_peep_comment_lower_copy(t3, lines[j + 3]);
+        if (strcmp(t3, "add hl,de") == 0 &&
+            (!strcmp(t2, pat_addr_l) || !strcmp(t2, pat_addr_h)))
+            return 1;
+    }
+    return 0;
+}
+
+/* Keep a word local in BC for one structurally simple loop.  Unlike the
+ * whole-function pass below, this permits the known BC-preserving
+ * __udivmod helper and unrelated BC use outside the loop. */
+int pass_regional_word_loop_var_to_reg_bc(void)
+{
+    int i, j, changed = 0;
+
+    for (i = 0; i + 3 < nlines; ++i) {
+        int off, label_line = -1, backedge = -1, func_start, func_end;
+        int bad = 0, saw_udivmod = 0;
+        char t[MAX_LINE], label[128];
+        char pat_l[32], pat_h[32], pat_e[32], pat_d[32];
+        char pat_stl[32], pat_sth[32], pat_al[32], pat_ah[32];
+        char off_l[32], off_h[32];
+
+        strip_peep_comment_lower_copy(t, lines[i]);
+        if (strncmp(t, "ld (ix", 6) || sscanf(t + 6, "%d),l", &off) != 1 || off >= 0)
+            continue;
+        sprintf(pat_sth, "ld (ix%d),h", off + 1);
+        if (!eq(i + 1, pat_sth))
+            continue;
+
+        /* Permit only a short, straight-line gap between priming and top. */
+        for (j = i + 2; j <= i + 8 && j < nlines; ++j) {
+            if (starts_label(lines[j])) {
+                label_line = j;
+                break;
+            }
+            if (line_touches_bc(lines[j])) {
+                bad = 1;
+                break;
+            }
+        }
+        if (bad || label_line < 0 || !label_name_at(label_line, label))
+            continue;
+
+        find_function_bounds_any(i, &func_start, &func_end);
+        for (j = label_line + 1; j < func_end; ++j) {
+            char target[128];
+            if (jump_target_any(lines[j], target) && !strcmp(target, label))
+                backedge = j;
+        }
+        if (backedge < 0)
+            continue;
+        for (j = label_line + 1; j < backedge; ++j)
+            if (starts_label(lines[j])) {
+                bad = 1;
+                break;
+            }
+        if (bad || regional_word_slot_address_taken(func_start, func_end, off))
+            continue;
+
+        sprintf(pat_l, "ld l,(ix%d)", off);
+        sprintf(pat_h, "ld h,(ix%d)", off + 1);
+        sprintf(pat_e, "ld e,(ix%d)", off);
+        sprintf(pat_d, "ld d,(ix%d)", off + 1);
+        sprintf(pat_stl, "ld (ix%d),l", off);
+        sprintf(pat_al, "ld a,(ix%d)", off);
+        sprintf(pat_ah, "ld a,(ix%d)", off + 1);
+        sprintf(off_l, "(ix%d)", off);
+        sprintf(off_h, "(ix%d)", off + 1);
+
+        /* Every slot access must be understood, and the value must die at
+         * the back-edge.  Calls are rejected except for the runtime helper
+         * whose documented ABI saves and restores BC. */
+        for (j = func_start; j < func_end; ++j) {
+            strip_peep_comment_lower_copy(t, lines[j]);
+            if (j > backedge && (strstr(t, off_l) || strstr(t, off_h))) {
+                bad = 1;
+                break;
+            }
+            if (strstr(t, off_l) || strstr(t, off_h)) {
+                if (strcmp(t, pat_l) && strcmp(t, pat_h) &&
+                    strcmp(t, pat_e) && strcmp(t, pat_d) &&
+                    strcmp(t, pat_stl) && strcmp(t, pat_sth) &&
+                    strcmp(t, pat_al) && strcmp(t, pat_ah)) {
+                    bad = 1;
+                    break;
+                }
+            }
+            if (j >= label_line && j <= backedge) {
+                if (!strcmp(t, "call __udivmod"))
+                    saw_udivmod = 1;
+                if (!strncmp(t, "call ", 5) && strcmp(t, "call __udivmod")) {
+                    bad = 1;
+                    break;
+                }
+                if (line_touches_bc(t)) {
+                    bad = 1;
+                    break;
+                }
+            }
+        }
+        /* This regional form exists specifically to cross a call that the
+         * whole-function pass cannot cross.  Without that payoff, leave
+         * call-free loops to the older, more conservative pass. */
+        if (bad || !saw_udivmod)
+            continue;
+
+        for (j = i; j <= backedge; ++j) {
+            strip_peep_comment_lower_copy(t, lines[j]);
+            if (!strcmp(t, pat_l)) replace1_tagged(j, "ld l,c", "regional_word_loop_var_bc");
+            else if (!strcmp(t, pat_h)) replace1_tagged(j, "ld h,b", "regional_word_loop_var_bc");
+            else if (!strcmp(t, pat_e)) replace1_tagged(j, "ld e,c", "regional_word_loop_var_bc");
+            else if (!strcmp(t, pat_d)) replace1_tagged(j, "ld d,b", "regional_word_loop_var_bc");
+            else if (!strcmp(t, pat_stl)) replace1_tagged(j, "ld c,l", "regional_word_loop_var_bc");
+            else if (!strcmp(t, pat_sth)) replace1_tagged(j, "ld b,h", "regional_word_loop_var_bc");
+            else if (!strcmp(t, pat_al)) replace1_tagged(j, "ld a,c", "regional_word_loop_var_bc");
+            else if (!strcmp(t, pat_ah)) replace1_tagged(j, "ld a,b", "regional_word_loop_var_bc");
+        }
+        changed = 1;
+    }
+    return changed;
+}
+
 
 /*
  * pass_word_loop_var_to_reg_bc:
@@ -794,4 +948,3 @@ int pass_byte_for_counter_to_reg_c(void)
 
     return changed;
 }
-

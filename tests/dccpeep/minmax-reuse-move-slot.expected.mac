@@ -1,0 +1,16 @@
+; dcc stage-1d output
+	public _MinMax
+_MinMax:
+	push ix
+	ld ix,0
+	add ix,sp
+	ld l,(ix+7)
+	ld h,0
+	call __call_hl
+	ld (ix+7),a ; peep: minmax_reuse_move_slot
+	jr Lloop
+	ld (ix+7),a ; peep: minmax_reuse_move_slot
+Lloop:
+	ld a,(ix+7) ; peep: minmax_reuse_move_slot
+	ret
+	end

@@ -1,0 +1,52 @@
+; dcc stage-1d output
+public _safe
+_safe:
+	ld hl,20
+	ld (ix-8),l
+	ld (ix-7),h
+	dec hl
+	ld (ix-4),l
+	ld (ix-3),h
+Lsafe:
+	ld l,(ix-8)
+	ld h,(ix-7)
+	dec hl
+	ld (ix-8),l
+	ld (ix-7),h
+	ld e,(ix-8)
+	ld d,(ix-7)
+	call __udivmod
+	ld a,(ix-8)
+	or a
+	jp nz,Lsafe
+	ret
+
+public _clobbering_call
+_clobbering_call:
+	ld (ix-8),l
+	ld (ix-7),h
+Lcall:
+	ld l,(ix-8)
+	ld h,(ix-7)
+	call _unknown
+	ld (ix-8),l
+	ld (ix-7),h
+	jp Lcall
+	ret
+
+public _live_after
+_live_after:
+	ld (ix-8),l
+	ld (ix-7),h
+Llive:
+	ld l,(ix-8)
+	ld h,(ix-7)
+	dec hl
+	ld (ix-8),l
+	ld (ix-7),h
+	jp nz,Llive
+	ld l,(ix-8)
+	ld h,(ix-7)
+	ld b,a
+	ret
+end

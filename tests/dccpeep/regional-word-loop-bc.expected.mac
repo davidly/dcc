@@ -1,0 +1,51 @@
+; dcc stage-1d output
+	public _safe
+_safe:
+	ld hl,20
+	ld c,l ; peep: regional_word_loop_var_bc
+	ld b,h ; peep: regional_word_loop_var_bc
+	dec hl
+	ld (ix-4),l
+	ld (ix-3),h
+Lsafe:
+	ld l,c ; peep: regional_word_loop_var_bc
+	ld h,b ; peep: regional_word_loop_var_bc
+	dec hl
+	ld c,l ; peep: regional_word_loop_var_bc
+	ld b,h ; peep: regional_word_loop_var_bc
+	ld e,c ; peep: regional_word_loop_var_bc
+	ld d,b ; peep: regional_word_loop_var_bc
+	call __udivmod
+	ld a,c ; peep: regional_word_loop_var_bc
+	or a
+	jp nz,Lsafe
+	ret
+
+	public _clobbering_call
+_clobbering_call:
+	ld (ix-8),l
+	ld (ix-7),h
+Lcall:
+	ld l,(ix-8)
+	ld h,(ix-7)
+	call _unknown
+	ld (ix-8),l
+	ld (ix-7),h
+	jp Lcall
+
+	public _live_after
+_live_after:
+	ld (ix-8),l
+	ld (ix-7),h
+Llive:
+	ld l,(ix-8)
+	ld h,(ix-7)
+	dec hl
+	ld (ix-8),l
+	ld (ix-7),h
+	jp nz,Llive
+	ld l,(ix-8)
+	ld h,(ix-7)
+	ld b,a
+	ret
+	end
