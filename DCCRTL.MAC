@@ -23047,14 +23047,14 @@ _time:
         pop     bc
         pop     bc
         pop     bc
-        ld      (__time_acc_l),hl
-        ld      (__time_acc_h),de
+        push    de                      ; retain result without static scratch
+        push    hl
         jr      tim_store
 
 tim_unavailable:
         ld      hl,0ffffh
-        ld      (__time_acc_l),hl
-        ld      (__time_acc_h),hl
+        push    hl
+        push    hl
 
 tim_store:
         ; Store through tp if non-null, then return the value in DE:HL.
@@ -23062,26 +23062,24 @@ tim_store:
         ld      h,(ix+5)
         ld      a,h
         or      l
+        pop     bc                      ; result low word
+        pop     de                      ; result high word
         jr      z,tim_noptr
-        ld      de,(__time_acc_l)
-        ld      (hl),e
+        ld      (hl),c
         inc     hl
-        ld      (hl),d
+        ld      (hl),b
         inc     hl
-        ld      de,(__time_acc_h)
         ld      (hl),e
         inc     hl
         ld      (hl),d
 tim_noptr:
-        ld      hl,(__time_acc_l)
-        ld      de,(__time_acc_h)
+        ld      l,c
+        ld      h,b
         pop     ix
         ret
 
 __time_buf:     ds      4
 __time_sec_bcd: db      0
-__time_acc_l:   dw      0
-__time_acc_h:   dw      0
 
         public  __tmcv
 __tmcv:
@@ -23260,26 +23258,24 @@ dif_signed:
         ret
 
 ; ================= BEGIN calendar functions =================
-; gmtime and the shared CDZ calendar helpers were generated from calendar.c
-; and peephole-optimized; localtime is its ABI tail alias.  asctime and mktime
-; are now hand-maintained checked implementations, while ctime remains the
-; simple asctime(localtime(tp)) composition.  Generated CDL/CDZ names are kept
-; collision-free from the other embedded C-derived runtime blocks.
+; These are hand-maintained checked implementations; localtime is gmtime's ABI
+; tail alias, and ctime remains the simple asctime(localtime(tp)) composition.
+; The legacy CDZ names are kept collision-free from the other embedded
+; C-derived runtime blocks.
         public _gmtime
 _gmtime:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld l,(ix+4)
-        ld h,(ix+5)
+        ld hl,2
+        add hl,sp
+        ld e,(hl)
+        inc hl
+        ld d,(hl)
+        ex de,hl
         ld a,h
         or l
-        jr nz,CDL169 ; peep: jp_to_jr
+        jr nz,CDL169
         ld hl,0
-        jr CDL168 ; peep: jp_to_jr
+        ret
 CDL169:
-        ld l,(ix+4) ; peep: ix_frame_ptr_deadd
-        ld h,(ix+5)
         ld e,(hl)
         inc hl
         ld d,(hl)
@@ -23293,9 +23289,6 @@ CDL169:
         call CDZ0004
         pop bc
         pop bc
-CDL168:
-        ld sp,ix
-        pop ix
         ret
 
         public __ltim
@@ -23320,42 +23313,32 @@ _asctime:
         push hl
         pop ix                  ; IX = tp; original IX remains saved on stack
 
+        ; The first five fields are consecutive 16-bit values.  Validate their
+        ; high bytes and upper bounds with one small limit table.
+        push    ix
+        pop     de
+        ld      hl,asc_limits
+        ld      b,5
+asc_validate:
+        ld      c,(hl)
+        inc     hl
+        ld      a,(de)
+        inc     de
+        cp      c
+        jp      nc,asc_bad
+        ld      a,(de)
+        inc     de
+        or      a
+        jp      nz,asc_bad
+        djnz    asc_validate
+        ld      a,(ix+6)        ; tm_mday excludes zero
+        or      a
+        jp      z,asc_bad
         ld      a,(ix+13)       ; tm_wday: 0..6
         or      a
         jp      nz,asc_bad
         ld      a,(ix+12)
         cp      7
-        jp      nc,asc_bad
-        ld      a,(ix+9)        ; tm_mon: 0..11
-        or      a
-        jp      nz,asc_bad
-        ld      a,(ix+8)
-        cp      12
-        jp      nc,asc_bad
-        ld      a,(ix+7)        ; tm_mday: 1..31
-        or      a
-        jp      nz,asc_bad
-        ld      a,(ix+6)
-        dec     a
-        cp      31
-        jp      nc,asc_bad
-        ld      a,(ix+5)        ; tm_hour: 0..23
-        or      a
-        jp      nz,asc_bad
-        ld      a,(ix+4)
-        cp      24
-        jp      nc,asc_bad
-        ld      a,(ix+3)        ; tm_min: 0..59
-        or      a
-        jp      nz,asc_bad
-        ld      a,(ix+2)
-        cp      60
-        jp      nc,asc_bad
-        ld      a,(ix+1)        ; tm_sec: 0..60 (leap second accepted)
-        or      a
-        jp      nz,asc_bad
-        ld      a,(ix+0)
-        cp      61
         jp      nc,asc_bad
 
         ld      l,(ix+10)       ; actual year = tm_year + 1900
@@ -23459,6 +23442,9 @@ asc_bad:
         pop     ix
         ret
 
+asc_limits:
+        db      61,60,24,32,12
+
 ; A = 0..99, DE = output.  Emit two zero-padded decimal digits.
 asc_2d:
         ld      c,a
@@ -23498,18 +23484,18 @@ asc_digit_done:
 
         public _ctime
 _ctime:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld l,(ix+4)
-        ld h,(ix+5)
+        ld hl,2
+        add hl,sp
+        ld a,(hl)
+        inc hl
+        ld h,(hl)
+        ld l,a
         push hl
         call __ltim
         pop bc
         push hl
         call _asctime
-        ld sp,ix
-        pop ix
+        pop bc
         ret
 
         public _mktime
@@ -23960,394 +23946,227 @@ CDZ0001:
         inc hl
         ld h,(hl)
         ld l,a
-        ld e,3
-        call __r1p
-        ld a,h ; peep: cmp0_or_hl
-        or l
-        jr z,CDL15 ; peep: jp_to_jr
-        ld hl,0
-        ret ; peep: jp_to_plain_ret
-CDL15:
-        ld hl,2
-        add hl,sp
-        ld a,(hl)
-        inc hl
-        ld h,(hl)
-        ld l,a
-        ld e,100
-        call __r1s ; peep: const_divmod_helper
-        ld a,h ; peep: cmp0_or_hl
-        or l
-        jr z,CDL18 ; peep: jp_to_jr
-        ld hl,1
-        ret ; peep: jp_to_plain_ret
-CDL18:
-        ld hl,2
-        add hl,sp
-        ld a,(hl)
-        inc hl
-        ld h,(hl)
-        ld l,a
-        ld de,400
-        call __r2s ; peep: const_divmod_helper
-        ld a,h ; peep: cmp0_or_hl
-        or l
-        ld hl,0 ; peep: bool_from_cmp
-        ret nz ; manually applied cond_jp_to_cond_ret (dccpeep isn't run on this file)
-        inc l
-CDL14:
+        ld      a,l
+        and     3
+        jr      nz,cal_not_leap
+        ld      e,0             ; century count
+        ld      bc,100
+cal_century_loop:
+        or      a
+        sbc     hl,bc
+        jr      c,cal_century_done
+        inc     e
+        jr      cal_century_loop
+cal_century_done:
+        add     hl,bc
+        ld      a,h
+        or      l
+        jr      nz,cal_leap     ; divisible by 4, but not by 100
+        ld      a,e
+        and     3               ; century years must be divisible by 400
+        jr      nz,cal_not_leap
+cal_leap:
+        ld      hl,1
+        ret
+cal_not_leap:
+        ld      hl,0
         ret
 
 ; static function cal_days_in_month
 CDZ0002:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld l,(ix+6)
-        ld h,(ix+7)
-        ld de,1
-        sbc hl,de       ; C already clear: see _difftime's header comment
-        jr nz,CDL62 ; peep: jp_to_jr
-        ld l,(ix+4)
-        ld h,(ix+5)
+        ld      hl,4
+        add     hl,sp
+        ld      e,(hl)          ; month
+        inc     hl
+        ld      d,(hl)
+        ld      a,d
+        or      e
+        dec     a
+        jr      nz,cal_dim_lookup
+        ld      hl,2
+        add     hl,sp
+        ld      a,(hl)
+        inc     hl
+        ld      h,(hl)
+        ld      l,a
         push hl
         call CDZ0001
         pop bc
         ld a,h
         or l
-        jr z,CDL62 ; peep: jp_to_jr
-        ld hl,29
-        jr CDL61 ; peep: jp_to_jr
-CDL62:
-        ld l,(ix+6)
-        ld h,(ix+7)
-        add hl,hl
-        ld de,CDZ0003
-        add hl,de
-        ld e,(hl)
-        inc hl
-        ld d,(hl)
-        ex de,hl
-CDL61:
-        ld sp,ix
-        pop ix
+        ld      hl,28
+        ret     z
+        inc     hl
+        ret
+cal_dim_lookup:
+        ld      d,0
+        ld      hl,CDZ0003
+        add     hl,de
+        ld      l,(hl)
+        ld      h,0
         ret
 
 ; static function cal_breakdown
 CDZ0004:
-        push ix
-        ld ix,0
-        add ix,sp
-        ld hl,-18
-        add hl,sp
-        ld sp,hl
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        ld a,d
-        xor 80h
-        ld d,a
-        ld bc,0
-        sbc hl,bc
-        ex de,hl
-        ld bc,32768
-        sbc hl,bc
-        jr nc,CDL140 ; peep: jp_to_jr
-        ld hl,0
-        jp CDL139
-CDL140:
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        push de
-        push hl
-        ld hl,20864
-        ld de,1
-        call __lds
-        pop bc
-        pop bc
-        ld (ix-4),l
-        ld (ix-3),h
-        ld (ix-2),e
-        ld (ix-1),d
-        ld l,(ix+4)
-        ld h,(ix+5)
-        ld e,(ix+6)
-        ld d,(ix+7)
-        push de
-        push hl
-        ld hl,20864
-        ld de,1
-        call __lms
-        pop bc
-        pop bc
-        ld (ix-8),l
-        ld (ix-7),h
-        ld (ix-6),e
-        ld (ix-5),d
-        ld e,(ix-6)
-        ld d,(ix-5)
-        push de
-        push hl
-        ld hl,3600
-        ld de,0
-        call __lds
-        pop bc
-        pop bc
-        ld (CDZ0005+4),hl
-        ld l,(ix-8)
-        ld h,(ix-7)
-        ld e,(ix-6)
-        ld d,(ix-5)
-        push de
-        push hl
-        ld hl,3600
-        ld de,0
-        call __lms
-        pop bc
-        pop bc
-        ld (ix-8),l
-        ld (ix-7),h
-        ld (ix-6),e
-        ld (ix-5),d
-        ld e,(ix-6)
-        ld d,(ix-5)
-        push de
-        push hl
-        ld hl,60
-        ld de,0
-        call __lds
-        pop bc
-        pop bc
-        ld (CDZ0005+2),hl
-        ld l,(ix-8)
-        ld h,(ix-7)
-        ld e,(ix-6)
-        ld d,(ix-5)
-        push de
-        push hl
-        ld hl,60
-        ld de,0
-        call __lms
-        pop bc
-        pop bc
-        ld (CDZ0005),hl
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
-        push de
-        push hl
-        ld hl,4
-        ld de,0
-        pop bc
-        add hl,bc
-        ex de,hl
-        pop bc
-        adc hl,bc
-        ex de,hl
-        push de
-        push hl
-        ld hl,7
-        ld de,0
-        call __lms
-        pop bc
-        pop bc
-        ld (CDZ0005+12),hl
-        ld hl,1970
-        ld (ix-10),l
-        ld (ix-9),h
-CDL145:
-        ld l,(ix-10)
-        ld h,(ix-9)
-        push hl
-        call CDZ0001
-        pop bc
-        ld a,h
-        or l
-        jr z,CDL148 ; peep: jp_to_jr
-        ld hl,366
-        ld de,0
-        jr CDL149 ; peep: jp_to_jr
-CDL148:
-        ld hl,365
-        ld de,0
-CDL149:
-        ld (ix-16),l
-        ld (ix-15),h
-        ld (ix-14),e
-        ld (ix-13),d
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
-        push de
-        push hl
-        ld l,(ix-16)
-        ld h,(ix-15)
-        ld e,(ix-14)
-        ld d,(ix-13)
-        push de
-        push hl
-        call __lts
-        ex de,hl
-        ld hl,8
-        add hl,sp
-        ld sp,hl
-        ex de,hl
-        ld a,h
-        or l
-        jr nz,CDL147 ; peep: jp_to_jr
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
-        push de
-        push hl
-        ld l,(ix-16)
-        ld h,(ix-15)
-        ld e,(ix-14)
-        ld d,(ix-13)
-        ld b,h
-        ld c,l
-        pop hl
-        or a
-        sbc hl,bc
-        ld b,h
-        ld c,l
-        pop hl
-        sbc hl,de
-        ld d,b
-        ld e,c
-        ex de,hl
-        ld (ix-4),l
-        ld (ix-3),h
-        ld (ix-2),e
-        ld (ix-1),d
-        inc (ix-10)
-        jp nz, CDL145
-        inc (ix-9)
-        jp CDL145
-CDL147:
-        ld l,(ix-10)
-        ld h,(ix-9)
-        ld de,1900
-        or a
-        sbc hl,de
-        ld (CDZ0005+10),hl
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
-        ld (CDZ0005+14),hl
-        ld hl,0
-        ld (ix-12),l
-        ld (ix-11),h
-CDL152:
-        ld l,(ix-12)
-        ld h,(ix-11)
-        push hl
-        ld l,(ix-10)
-        ld h,(ix-9)
-        push hl
-        call CDZ0002
-        pop bc
-        pop bc
-        ld (ix-18),l
-        ld (ix-17),h
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
-        push de
-        push hl
-        ld l,(ix-18)
-        ld h,(ix-17)
-        ld a,h
-        rlca
-        sbc a,a
-        ld d,a
-        ld e,a
-        push de
-        push hl
-        call __lts
-        ex de,hl
-        ld hl,8
-        add hl,sp
-        ld sp,hl
-        ex de,hl
-        ld a,h
-        or l
-        jr nz,CDL154 ; peep: jp_to_jr
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
-        push de
-        push hl
-        ld l,(ix-18)
-        ld h,(ix-17)
-        ld a,h
-        rlca
-        sbc a,a
-        ld d,a
-        ld e,a
-        ld b,h
-        ld c,l
-        pop hl
-        or a
-        sbc hl,bc
-        ld b,h
-        ld c,l
-        pop hl
-        sbc hl,de
-        ld d,b
-        ld e,c
-        ex de,hl
-        ld (ix-4),l
-        ld (ix-3),h
-        ld (ix-2),e
-        ld (ix-1),d
-        inc (ix-12)
-        jp nz, CDL152
-        inc (ix-11)
-        jp CDL152
-CDL154:
-        ld l,(ix-12)
-        ld h,(ix-11)
-        ld (CDZ0005+8),hl
-        ld l,(ix-4)
-        ld h,(ix-3)
-        ld e,(ix-2)
-        ld d,(ix-1)
-        inc hl ; peep: ld_de1_to_inc
-        ld (CDZ0005+6),hl
-        ld hl,0
-        ld (CDZ0005+16),hl
-        ld hl,CDZ0005
-CDL139:
-        ld sp,ix
-        pop ix
+        ; Save the nonnegative time_t argument.  Only the initial day split
+        ; needs 32-bit arithmetic; every remaining value fits in 16 bits.
+        ld      hl,2
+        add     hl,sp
+        ld      c,(hl)
+        inc     hl
+        ld      b,(hl)
+        inc     hl
+        ld      e,(hl)
+        inc     hl
+        ld      d,(hl)
+        bit     7,d
+        jp      nz,cal_breakdown_bad
+        ld      (__cal_input),bc
+        ld      (__cal_input+2),de
+
+        push    de
+        push    bc
+        ld      hl,5180h        ; 86400
+        ld      de,1
+        call    __lds
+        pop     bc
+        pop     bc
+        ld      (CDZ0005+14),hl ; total days, later day of year
+
+        ld      hl,(__cal_input)
+        ld      de,(__cal_input+2)
+        push    de
+        push    hl
+        ld      hl,5180h
+        ld      de,1
+        call    __lms           ; DE:HL = seconds within day
+        pop     bc
+        pop     bc
+
+        ; Divide the at-most-17-bit remainder by 3600.  The bounded loop runs
+        ; no more than 23 times and leaves a sub-hour remainder in HL.
+        ld      b,0
+cal_hour_loop:
+        ld      a,d
+        or      e
+        jr      nz,cal_take_hour
+        ld      a,h
+        cp      0eh
+        jr      c,cal_hour_done
+        jr      nz,cal_take_hour
+        ld      a,l
+        cp      10h
+        jr      c,cal_hour_done
+cal_take_hour:
+        ld      a,l
+        sub     10h
+        ld      l,a
+        ld      a,h
+        sbc     a,0eh
+        ld      h,a
+        jr      nc,cal_hour_no_borrow
+        dec     de
+cal_hour_no_borrow:
+        inc     b
+        jr      cal_hour_loop
+cal_hour_done:
+        ld      a,b
+        ld      (CDZ0005+4),a
+        xor     a
+        ld      (CDZ0005+5),a
+
+        ld      b,0
+        ld      de,60
+cal_minute_loop:
+        or      a
+        sbc     hl,de
+        jr      c,cal_minute_done
+        inc     b
+        jr      cal_minute_loop
+cal_minute_done:
+        add     hl,de
+        ld      a,b
+        ld      (CDZ0005+2),a
+        xor     a
+        ld      (CDZ0005+3),a
+        ld      (CDZ0005),hl
+
+        ld      hl,(CDZ0005+14)
+        ld      de,4
+        add     hl,de
+        ld      de,7
+        call    __modu
+        ld      (CDZ0005+12),hl
+
+        ld      hl,1970
+        ld      (CDZ0005+10),hl
+cal_year_loop:
+        push    hl
+        call    CDZ0001
+        pop     bc
+        ld      a,h
+        or      l
+        ld      de,365
+        jr      z,cal_year_length
+        inc     de
+cal_year_length:
+        ld      hl,(CDZ0005+14)
+        or      a
+        sbc     hl,de
+        jr      c,cal_year_done
+        ld      (CDZ0005+14),hl
+        ld      hl,(CDZ0005+10)
+        inc     hl
+        ld      (CDZ0005+10),hl
+        jr      cal_year_loop
+cal_year_done:
+        ld      hl,(CDZ0005+10)
+        ld      de,1900
+        or      a
+        sbc     hl,de
+        ld      (CDZ0005+10),hl
+
+        ld      hl,0
+        ld      (CDZ0005+8),hl
+cal_month_loop:
+        push    hl              ; month
+        ld      hl,(CDZ0005+10)
+        ld      de,1900
+        add     hl,de           ; actual year
+        push    hl
+        call    CDZ0002
+        pop     bc
+        pop     bc
+        ex      de,hl           ; DE = month length
+        ld      hl,(CDZ0005+14)
+        or      a
+        sbc     hl,de
+        jr      c,cal_month_done
+        ld      (CDZ0005+14),hl
+        ld      hl,(CDZ0005+8)
+        inc     hl
+        ld      (CDZ0005+8),hl
+        jr      cal_month_loop
+cal_month_done:
+        add     hl,de
+        inc     hl
+        ld      (CDZ0005+6),hl
+        ld      hl,0
+        ld      (CDZ0005+16),hl
+        ld      hl,CDZ0005
+        ret
+
+cal_breakdown_bad:
+        ld      hl,0
         ret
 
 ; Calendar-only initialized and scratch data.
 CDZ0003:
-        dw 31
-        dw 28
-        dw 31
-        dw 30
-        dw 31
-        dw 30
-        dw 31
-        dw 31
-        dw 30
-        dw 31
-        dw 30
-        dw 31
+        db 31,28,31,30,31,30,31,31,30,31,30,31
 CDZ0005:
         ds 18
+__cal_input:
+        ds 4
 
         public __asc_data
 __asc_data:
