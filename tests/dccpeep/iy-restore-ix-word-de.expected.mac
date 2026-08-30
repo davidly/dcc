@@ -1,0 +1,19 @@
+; static function compare
+_ZC:
+	push iy ; peep: iy_restore_ix_word_direct_de
+	pop hl
+	ld e,(ix-6)
+	ld d,(ix-5)
+	or a
+	sbc hl,de
+	ret
+; static function user_asm
+; dcc user asm begin
+	push iy
+	ld l,(ix-6)
+	ld h,(ix-5)
+	ex de,hl
+	pop hl
+; dcc user asm end
+	ret
+	end

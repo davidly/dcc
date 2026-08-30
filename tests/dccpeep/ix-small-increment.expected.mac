@@ -1,9 +1,7 @@
 ; static function accept
 _ZA:
-	ld a,(ix-2) ; peep: small_const_incr_carry_skip
-	add a,1
-	ld (ix-2),a
-	jr nc,LI0 ; peep: jp_to_jr
+	inc (ix-2) ; peep: ix_word_inc_direct
+	jr nz,LI0 ; peep: jp_to_jr
 	inc (ix-1)
 LI0:
 	ld a,(iy+0)

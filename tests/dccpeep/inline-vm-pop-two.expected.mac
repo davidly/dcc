@@ -1,0 +1,47 @@
+; static function run
+_ZR:
+	ld c,(ix-4) ; peep: inline_vm_pop_two
+	ld b,(ix-3)
+	dec bc
+	dec bc
+	ld l,c
+	ld h,b
+	ld e,(hl)
+	inc hl
+	ld d,(hl)
+	push de
+	dec bc
+	dec bc
+	ld l,c
+	ld h,b
+	ld e,(hl)
+	inc hl
+	ld d,(hl)
+	ex de,hl
+	pop de
+	add hl,de
+	ld c,(ix-4) ; peep: inline_vm_pop_two
+	ld b,(ix-3)
+	dec bc
+	dec bc
+	ld l,c
+	ld h,b
+	ld e,(hl)
+	inc hl
+	ld d,(hl)
+	push de
+	dec bc
+	dec bc
+	ld l,c
+	ld h,b
+	ld e,(hl)
+	inc hl
+	ld d,(hl)
+	ex de,hl
+	pop de
+	sbc hl,de
+	jr L2 ; peep: jp_to_jr
+L2:
+	ld hl,0
+	ret
+	end

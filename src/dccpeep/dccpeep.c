@@ -8205,6 +8205,7 @@ static int pass_small_const_incr_carry_skip(void)
         int st_lo, st_hi;
         int inc_form;
         int store_at;
+        int direct_inc;
         char label[48];
         char line1[32], line2[32], line3[32], line4[64], line5[32];
 
@@ -8261,6 +8262,16 @@ static int pass_small_const_incr_carry_skip(void)
             continue;
         }
 
+        /* For +1, incrementing the low byte in memory is cheaper than
+         * loading it through A: 23+7 T-states on the usual no-wrap path
+         * versus 19+7+19+7.  INC leaves carry untouched whereas the
+         * original ADD HL,DE sets it, and its Z/S/PV result describes only
+         * the low byte, so use this form only when no flags escape the
+         * statement.  (The generic A form remains valid for other small
+         * constants and whenever its ADD/SUB flags must be retained.) */
+        direct_inc = k == 1 &&
+                     peep_flags_dead_after(store_at + 1, all_flags);
+
         /* Real M80 (unlike dcc's own m80c) only honors the first 6
          * significant characters of a symbol - see dcc_asmname.c's own
          * comment on the same constraint for PUBLIC symbols. A longer,
@@ -8270,6 +8281,21 @@ static int pass_small_const_incr_carry_skip(void)
          * up to 4 digits keeps every label at or under 6 characters, so
          * none can ever collide with another. */
         sprintf(label, "LI%d", label_counter++);
+        if (direct_inc) {
+            sprintf(line1, "inc (ix-%d)", lo);
+            sprintf(line2, "jp nz, %s", label);
+            sprintf(line3, "inc (ix-%d)", hi);
+            sprintf(line4, "%s:", label);
+            replace1_tagged(i, line1, "ix_word_inc_direct");
+            replace1(i + 1, line2);
+            replace1(i + 2, line3);
+            replace1(i + 3, line4);
+            delete_n(i + 4, store_at - i - 2);
+            changed = 1;
+            build_user_asm_mask();
+            continue;
+        }
+
         sprintf(line1, "ld a,(ix-%d)", lo);
         if (k > 0)
             sprintf(line2, "add a,%d", k);
@@ -8297,6 +8323,120 @@ static int pass_small_const_incr_carry_skip(void)
     }
 
     return changed;
+}
+
+/* Inline the exact shared two-word VM-stack pop helper emitted by DCC's MIR
+ * interpreter schedules.  The helper is deliberately shared to control code
+ * size, but under -Ot every invocation pays a 17T CALL and 10T RET around a
+ * short register-only sequence.  TTT executes it hundreds of thousands of
+ * times.  Match the complete helper body, require every reference to be an
+ * ordinary CALL, expand those calls from the end of the file backwards, and
+ * remove the now-unreferenced helper.  The call site enables this only for
+ * time optimization; -Os retains the compact shared form. */
+static int pass_inline_vm_pop_two_helper(void)
+{
+    int label_line;
+
+    for (label_line = 1; label_line + 20 < nlines; label_line++) {
+        char label[MAX_LINE];
+        char label_name[MAX_LINE];
+        char call_text[MAX_LINE];
+        char clean[MAX_LINE];
+        char lo_pat[32], hi_pat[32];
+        const char *colon;
+        int off;
+        int i, calls, first_inline;
+        int call_lines[128];
+        char body[19][MAX_LINE];
+
+        strip_peep_comment_copy(label, lines[label_line]);
+        colon = strchr(label, ':');
+        if (label[0] != 'L' || colon == NULL || colon[1] != 0)
+            continue;
+        for (i = 1; label[i] && label[i] != ':'; i++)
+            if (label[i] < '0' || label[i] > '9')
+                break;
+        if (label[i] != ':')
+            continue;
+
+        strip_peep_comment_copy(clean, lines[label_line + 1]);
+        if (sscanf(clean, "ld c,(ix%d)", &off) != 1)
+            continue;
+        sprintf(lo_pat, "ld c,(ix%+d)", off);
+        sprintf(hi_pat, "ld b,(ix%+d)", off + 1);
+        if (!eq(label_line + 1, lo_pat) || !eq(label_line + 2, hi_pat) ||
+            !eq(label_line + 3, "dec bc") ||
+            !eq(label_line + 4, "dec bc") ||
+            !eq(label_line + 5, "ld l,c") ||
+            !eq(label_line + 6, "ld h,b") ||
+            !eq(label_line + 7, "ld e,(hl)") ||
+            !eq(label_line + 8, "inc hl") ||
+            !eq(label_line + 9, "ld d,(hl)") ||
+            !eq(label_line + 10, "push de") ||
+            !eq(label_line + 11, "dec bc") ||
+            !eq(label_line + 12, "dec bc") ||
+            !eq(label_line + 13, "ld l,c") ||
+            !eq(label_line + 14, "ld h,b") ||
+            !eq(label_line + 15, "ld e,(hl)") ||
+            !eq(label_line + 16, "inc hl") ||
+            !eq(label_line + 17, "ld d,(hl)") ||
+            !eq(label_line + 18, "ex de,hl") ||
+            !eq(label_line + 19, "pop de") ||
+            !eq(label_line + 20, "ret") ||
+            mask_range_is_user_asm(label_line, label_line + 20))
+            continue;
+
+        /* The helper must not also be reachable by fallthrough. */
+        strip_peep_comment_copy(clean, lines[label_line - 1]);
+        if (strncmp(clean, "jp L", 4) != 0)
+            continue;
+
+        sprintf(label_name, "%.*s", (int)(colon - label), label);
+        sprintf(call_text, "call %s", label_name);
+        calls = 0;
+        for (i = 0; i < nlines; i++) {
+            char ref[MAX_LINE];
+            if (i >= label_line && i <= label_line + 20)
+                continue;
+            strip_peep_comment_copy(ref, lines[i]);
+            if (strcmp(ref, call_text) == 0) {
+                if (i >= label_line ||
+                    calls >= (int)(sizeof(call_lines) / sizeof(call_lines[0])))
+                    return 0;
+                call_lines[calls++] = i;
+            } else if (strstr(ref, label_name) != NULL) {
+                calls = 0;
+                break;
+            }
+        }
+        if (calls < 2)
+            continue;
+
+        for (i = 0; i < 19; i++)
+            strip_peep_comment_copy(body[i], lines[label_line + 1 + i]);
+
+        /* Fully expanding a large interpreter's 18 sites costs about 400
+         * bytes.  The later cases are its arithmetic/comparison handlers
+         * and dominate measured execution, so cap expansion at the final
+         * seven sites; earlier cold cases keep calling the shared helper. */
+        first_inline = calls > 7 ? calls - 7 : 0;
+        for (i = calls - 1; i >= first_inline; i--) {
+            int j;
+            int at = call_lines[i];
+            replace1_tagged(at, body[0], "inline_vm_pop_two");
+            for (j = 1; j < 19; j++)
+                insert_line(at + j, body[j]);
+        }
+
+        if (first_inline == 0) {
+            /* All expanded calls precede the helper in generated schedules,
+             * so account for their inserted lines before deleting it. */
+            label_line += calls * 18;
+            delete_n(label_line, 21);
+        }
+        return 1;
+    }
+    return 0;
 }
 
 /*
@@ -8982,6 +9122,49 @@ static int pass_ix_offset_word_load_direct(void)
             insert_line(i + 2, accumulator);
         if (preserve_de)
             insert_line(i + 2 + preserve_a, de);
+        changed = 1;
+    }
+    return changed;
+}
+
+/* Reorder an IY-to-HL transfer around an IX-local word load:
+ *
+ *   push iy
+ *   ld l,(ix-N) / ld h,(ix-(N-1))
+ *   ex de,hl
+ *   pop hl
+ *
+ * becomes:
+ *
+ *   push iy / pop hl
+ *   ld e,(ix-N) / ld d,(ix-(N-1))
+ *
+ * Both forms finish with HL=IY and DE=the local word. None of these
+ * instructions affects flags. This removes EX DE,HL (4T, one byte), and is
+ * particularly hot in pointer-carried interpreter loop bound comparisons. */
+static int pass_iy_restore_ix_word_direct_de(void)
+{
+    int i;
+    int changed = 0;
+
+    build_user_asm_mask();
+    for (i = 0; i + 4 < nlines; i++) {
+        int off;
+        char low[32], high[32];
+
+        if (!eq(i, "push iy") ||
+            !peep_parse_ld_hl_ix_pair(i + 1, &off) ||
+            !eq(i + 3, "ex de,hl") || !eq(i + 4, "pop hl") ||
+            mask_range_is_user_asm(i, i + 4))
+            continue;
+
+        snprintf(low, sizeof(low), "ld e,(ix-%d)", off);
+        snprintf(high, sizeof(high), "ld d,(ix-%d)", off - 1);
+        replace1_tagged(i, "push iy", "iy_restore_ix_word_direct_de");
+        replace1(i + 1, "pop hl");
+        replace1(i + 2, low);
+        replace1(i + 3, high);
+        delete_n(i + 4, 1);
         changed = 1;
     }
     return changed;
@@ -11241,6 +11424,7 @@ int main(int argc, char **argv)
         { "pass_push_hl_pop_de_to_ex", pass_push_hl_pop_de_to_ex, 0 },
         { "pass_combine_hl_constant_adds", pass_combine_hl_constant_adds, 0 },
         { "pass_ix_offset_word_load_direct", pass_ix_offset_word_load_direct, 0 },
+        { "pass_iy_restore_ix_word_direct_de", pass_iy_restore_ix_word_direct_de, 0 },
         { "pass_add_hl_immediate_direct_de", pass_add_hl_immediate_direct_de, 0 },
         { "pass_labels", pass_labels, 0 },
     };
@@ -11419,6 +11603,10 @@ int main(int argc, char **argv)
      * and never changes what any label anywhere else in the file targets;
      * pass_labels tidies up regardless. */
     if (RUN_PASS(pass_small_const_incr_carry_skip))
+        RUN_PASS(pass_labels);
+
+    if (!peep_context.options.optimize_size &&
+        RUN_PASS(pass_inline_vm_pop_two_helper))
         RUN_PASS(pass_labels);
 
     if (RUN_PASS(pass_promote_ix_pointer_to_iy)) {

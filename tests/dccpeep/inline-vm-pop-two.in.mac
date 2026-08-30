@@ -1,0 +1,33 @@
+; static function run
+_ZR:
+L1:
+call L9
+add hl,de
+call L9
+sbc hl,de
+jp L2
+L9:
+ld c,(ix-4)
+ld b,(ix-3)
+dec bc
+dec bc
+ld l,c
+ld h,b
+ld e,(hl)
+inc hl
+ld d,(hl)
+push de
+dec bc
+dec bc
+ld l,c
+ld h,b
+ld e,(hl)
+inc hl
+ld d,(hl)
+ex de,hl
+pop de
+ret
+L2:
+ld hl,0
+ret
+end

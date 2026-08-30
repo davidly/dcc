@@ -1,0 +1,21 @@
+; static function compare
+_ZC:
+push iy
+ld l,(ix-6)
+ld h,(ix-5)
+ex de,hl
+pop hl
+or a
+sbc hl,de
+ret
+; static function user_asm
+_ZU:
+; dcc user asm begin
+push iy
+ld l,(ix-6)
+ld h,(ix-5)
+ex de,hl
+pop hl
+; dcc user asm end
+ret
+end
