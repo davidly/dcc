@@ -10794,9 +10794,9 @@ static int mir_match_inline_nest_runner_schedule(
             "inline-nest-runner-schedule", "calls");
     if (!mir_machine_global_address_offset(
             mir.insns[10].dst, &buffer, &offset, 0) ||
-        buffer == NULL || offset != 0 ||
-        buffer->is_volatile || buffer->pointee_is_volatile ||
-        !buffer->is_array || buffer->elem_size != 2 ||
+        offset != 0 ||
+        !mir_machine_match_nonvolatile_array(
+            &mir.insns[10], 2, 0, &buffer) ||
         !mir_machine_global_address_offset(
             mir.insns[61].dst, &plan->buffer, &offset, 0) ||
         plan->buffer != buffer || offset != 0 ||

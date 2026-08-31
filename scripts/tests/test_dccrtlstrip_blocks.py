@@ -277,6 +277,9 @@ class DccRtlStripBlockTests(unittest.TestCase):
             "_tmpnam:",
             "__hypd:",
             "__cal_core:",
+            "__modu:",
+            "__dmcx:",
+            "__dmval:",
             "__scf:",
             "__udivmod:",
             "_qsort:",
@@ -291,7 +294,6 @@ class DccRtlStripBlockTests(unittest.TestCase):
             "_difftime:",
             "_mktime:",
             "__scpy:",
-            "__dmcx:",
             "_bsearch:",
         ):
             self.assertNotIn(marker, rtl)
