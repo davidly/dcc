@@ -396,6 +396,26 @@ int mir_machine_named_nonvolatile(const struct MirInsn *insn)
     return global != NULL && !global->is_volatile;
 }
 
+int mir_machine_match_nonvolatile_array(
+    const struct MirInsn *insn, int element_size, int minimum_elements,
+    struct Sym **result)
+{
+    struct Sym *symbol;
+
+    if (insn == NULL || insn->name[0] == 0 || element_size <= 0 ||
+        minimum_elements < 0 || result == NULL)
+        return 0;
+    symbol = find_global(insn->name);
+    if (symbol == NULL || !symbol->is_array ||
+        symbol->elem_size != element_size ||
+        symbol->array_len < minimum_elements || symbol->is_volatile ||
+        symbol->pointee_is_volatile ||
+        (symbol->storage != SC_GLOBAL && symbol->storage != SC_EXTERN))
+        return 0;
+    *result = symbol;
+    return 1;
+}
+
 int mir_machine_constant_equals(int value, long expected)
 {
     const struct MirInsn *constant = mir_definition(value);
@@ -445,6 +465,28 @@ void mir_machine_emit_global_address_de(
     else
         mir_stream_printf(out, "\tld de,%s%+d\n", name, offset);
 }
+
+    void mir_machine_emit_frame_block_copy(
+        MirStream *out, int destination_offset, int destination_adjust,
+        int source_offset, int source_adjust, int byte_count)
+    {
+        mir_stream_printf(out,
+            "\tld l,(ix%+d)\n\tld h,(ix%+d)\n",
+            source_offset, source_offset + 1);
+        if (source_adjust != 0)
+        mir_stream_printf(out,
+            "\tld de,%d\n\tadd hl,de\n", source_adjust);
+        mir_stream_printf(out,
+            "\tld e,(ix%+d)\n\tld d,(ix%+d)\n",
+            destination_offset, destination_offset + 1);
+        if (destination_adjust != 0) {
+        mir_stream_puts("\tpush hl\n\tex de,hl\n", out);
+        mir_stream_printf(out,
+            "\tld bc,%d\n\tadd hl,bc\n\tex de,hl\n\tpop hl\n",
+            destination_adjust);
+        }
+        mir_stream_printf(out, "\tld bc,%d\n\tldir\n", byte_count);
+    }
 
 void mir_machine_emit_global_word_store(
     MirStream *out, struct Sym *symbol, int offset)

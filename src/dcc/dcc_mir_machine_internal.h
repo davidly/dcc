@@ -25,6 +25,11 @@ struct MirStateMember;
 
 int mir_machine_reject(const char *template_name, const char *reason);
 int mir_machine_named_nonvolatile(const struct MirInsn *insn);
+/* Resolve a direct global/extern array and prove its element width, extent,
+ * and nonvolatile access contract. */
+int mir_machine_match_nonvolatile_array(
+    const struct MirInsn *insn, int element_size, int minimum_elements,
+    struct Sym **result);
 int mir_machine_constant_equals(int value, long expected);
 int mir_machine_evaluate_constant(int value, long *result, int depth);
 int mir_machine_same_location(const struct MirInsn *left,
@@ -43,6 +48,10 @@ int mir_match_buffered_declaration_buffer(
     int instruction, const struct MirInsn *first, int *offset_out);
 void mir_machine_emit_global_address_de(MirStream *out, struct Sym *symbol,
                                         int offset);
+/* Copy a fixed byte range between pointers held in IX-relative frame slots. */
+void mir_machine_emit_frame_block_copy(
+    MirStream *out, int destination_offset, int destination_adjust,
+    int source_offset, int source_adjust, int byte_count);
 void mir_machine_emit_hl_offset(MirStream *out, int offset, int preserve_bc);
 void mir_machine_emit_global_word(MirStream *out, struct Sym *symbol, int offset);
 void mir_machine_emit_global_word_store(

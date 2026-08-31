@@ -7120,6 +7120,27 @@ struct MirProjectAllQkv {
     int zero_elements;
 };
 
+struct MirProjectCachedQkv {
+    struct Sym *workspace;
+    struct Sym *embeddings;
+    struct Sym *tokens;
+    struct Sym *cache_root;
+    struct Sym *cache_valid;
+    struct Sym *query_weights;
+    struct Sym *key_weights;
+    struct Sym *value_weights;
+    struct Sym *q16_function;
+    struct Sym *clamp_function;
+    int cache_offset;
+    int rows;
+    int vocabulary;
+    int dimension;
+    int query_offset;
+    int key_offset;
+    int value_offset;
+    int zero_elements;
+};
+
 struct MirAssignPre {
     struct Sym *symbols;
     struct Sym *memory;
@@ -7690,24 +7711,6 @@ static int mir_match_q8_helper_pair(
         return 0;
     *q16_function = q16_symbol;
     *clamp_function = clamp_symbol;
-    return 1;
-}
-
-static int mir_match_nonvolatile_word_array(
-    const struct MirInsn *insn, int minimum_elements, struct Sym **result)
-{
-    struct Sym *symbol;
-
-    if (insn == NULL || insn->name[0] == 0)
-        return 0;
-    symbol = find_global(insn->name);
-    if (symbol == NULL || !symbol->is_array ||
-        symbol->elem_size != 2 ||
-        symbol->array_len < minimum_elements ||
-        symbol->is_volatile || symbol->pointee_is_volatile ||
-        (symbol->storage != SC_GLOBAL && symbol->storage != SC_EXTERN))
-        return 0;
-    *result = symbol;
     return 1;
 }
 
@@ -8905,20 +8908,20 @@ static int mir_match_project_all_qkv(
         mir.insns[13].immediate != 2 ||
         mir.insns[6].immediate != 0)
         return 0;
-    if (!mir_match_nonvolatile_word_array(
-            &mir.insns[1], plan->zero_elements,
+    if (!mir_machine_match_nonvolatile_array(
+            &mir.insns[1], 2, plan->zero_elements,
             &plan->workspace) ||
-        !mir_match_nonvolatile_word_array(
-            &mir.insns[19], plan->rows * plan->dimension,
+        !mir_machine_match_nonvolatile_array(
+            &mir.insns[19], 2, plan->rows * plan->dimension,
             &plan->embeddings) ||
-        !mir_match_nonvolatile_word_array(
-            &mir.insns[53], plan->dimension * plan->dimension,
+        !mir_machine_match_nonvolatile_array(
+            &mir.insns[53], 2, plan->dimension * plan->dimension,
             &plan->query_weights) ||
-        !mir_match_nonvolatile_word_array(
-            &mir.insns[56], plan->dimension * plan->dimension,
+        !mir_machine_match_nonvolatile_array(
+            &mir.insns[56], 2, plan->dimension * plan->dimension,
             &plan->key_weights) ||
-        !mir_match_nonvolatile_word_array(
-            &mir.insns[59], plan->dimension * plan->dimension,
+        !mir_machine_match_nonvolatile_array(
+            &mir.insns[59], 2, plan->dimension * plan->dimension,
             &plan->value_weights))
         return 0;
     for (item = 0;
@@ -8944,6 +8947,111 @@ static int mir_match_project_all_qkv(
                plan->key_offset + plan->rows * plan->dimension &&
            plan->zero_elements ==
                plan->value_offset + plan->rows * plan->dimension;
+}
+
+static int mir_match_project_cached_qkv(
+    struct MirProjectCachedQkv *plan)
+{
+    static const int q16_instruction[] = {193, 221, 249};
+    static const int clamp_instruction[] = {207, 235, 263};
+    static const int memcpy_instruction[] = {92, 109, 128, 293, 310, 329};
+    unsigned long long first;
+    unsigned long long second;
+    struct Sym *cache_root;
+    int memset_destination;
+    int memset_fill;
+    int memset_count;
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 367 || mir_cfg_block_count() != 13 || mir.has_vla ||
+        (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0x4807f37e7db62867ULL ||
+        second != 0xd1e4b29f292b6707ULL ||
+        !mir_call_is_memset_fastcall(
+            18, &memset_destination, &memset_fill, &memset_count) ||
+        !mir_match_q8_helper_pair(
+            193, 207, &plan->q16_function, &plan->clamp_function))
+        return 0;
+
+    plan->rows = (int)mir.insns[49].immediate;
+    plan->vocabulary = (int)mir.insns[54].immediate;
+    plan->dimension = (int)mir.insns[69].immediate;
+    plan->query_offset = (int)mir.insns[23].immediate;
+    plan->key_offset = (int)mir.insns[30].immediate;
+    plan->value_offset = (int)mir.insns[39].immediate;
+    plan->zero_elements = (int)mir.insns[12].immediate;
+    if (plan->rows <= 0 || plan->rows > 255 ||
+        plan->vocabulary <= 0 || plan->vocabulary > 255 ||
+        plan->dimension <= 0 || plan->dimension > 127 ||
+        plan->zero_elements <= 0 || plan->zero_elements * 2 > 65535 ||
+        memset_destination != mir.insns[3].dst ||
+        memset_fill != mir.insns[6].dst ||
+        memset_count != mir.insns[15].dst ||
+        mir.insns[6].immediate != 0 || mir.insns[13].immediate != 2 ||
+        plan->query_offset != 0 ||
+        plan->key_offset != plan->rows * plan->dimension ||
+        plan->value_offset != plan->key_offset + plan->rows * plan->dimension ||
+        plan->zero_elements !=
+            plan->value_offset + plan->rows * plan->dimension)
+        return 0;
+
+    if (!mir_machine_match_nonvolatile_array(
+            &mir.insns[1], 2, plan->zero_elements, &plan->workspace) ||
+        !mir_machine_match_nonvolatile_array(
+            &mir.insns[19], 2, plan->rows * plan->dimension,
+            &plan->embeddings) ||
+        !mir_machine_match_nonvolatile_array(
+            &mir.insns[57], 2, plan->rows, &plan->tokens) ||
+        !mir_machine_match_nonvolatile_array(
+            &mir.insns[74], 1, plan->rows * plan->vocabulary,
+            &plan->cache_valid) ||
+        !mir_machine_match_nonvolatile_array(
+            &mir.insns[139], 2, plan->dimension * plan->dimension,
+            &plan->query_weights) ||
+        !mir_machine_match_nonvolatile_array(
+            &mir.insns[142], 2, plan->dimension * plan->dimension,
+            &plan->key_weights) ||
+        !mir_machine_match_nonvolatile_array(
+            &mir.insns[145], 2, plan->dimension * plan->dimension,
+            &plan->value_weights))
+        return 0;
+
+    cache_root = find_global(mir.insns[64].name);
+    if (cache_root == NULL ||
+        (cache_root->storage != SC_GLOBAL && cache_root->storage != SC_EXTERN) ||
+        cache_root->is_volatile || cache_root->pointee_is_volatile ||
+        mir.insns[64].opcode != MIR_ADDRESS ||
+        mir.insns[65].opcode != MIR_MEMBER_ADDRESS ||
+        mir.insns[65].src1 != mir.insns[64].dst ||
+        mir.insns[65].memory_size !=
+            plan->rows * plan->vocabulary * 3 * plan->dimension * 2 ||
+        mir.insns[65].immediate < 0 || mir.insns[65].immediate > 32767)
+        return 0;
+    plan->cache_root = cache_root;
+    plan->cache_offset = (int)mir.insns[65].immediate;
+
+    for (item = 0;
+         item < (int)(sizeof(memcpy_instruction) /
+                      sizeof(memcpy_instruction[0]));
+         ++item) {
+        int destination;
+        int source;
+        int count;
+
+        if (!mir_call_is_memcpy_fastcall(
+                memcpy_instruction[item], &destination, &source, &count))
+            return 0;
+    }
+    for (item = 0; item < 3; ++item)
+        if (strcmp(mir.insns[q16_instruction[item]].name,
+                   plan->q16_function->name) != 0 ||
+            strcmp(mir.insns[clamp_instruction[item]].name,
+                   plan->clamp_function->name) != 0)
+            return 0;
+    return 1;
 }
 
 static int mir_match_assign_pre(struct MirAssignPre *plan)
@@ -19013,6 +19121,140 @@ static void mir_emit_project_all_qkv(
             "\tdec (ix%d)\n\tjp nz, L%d\n"
             "\tld sp,ix\n\tpop ix\n\tret\n",
             ROW_COUNT, row_loop);
+}
+
+static void mir_emit_project_cached_qkv(
+    MirStream *out, const struct MirProjectCachedQkv *plan)
+{
+    enum {
+        INPUT_POINTER = -2,
+        QUERY_OUTPUT = -4,
+        KEY_OUTPUT = -6,
+        VALUE_OUTPUT = -8,
+        QUERY_MATRIX = -10,
+        KEY_MATRIX = -12,
+        VALUE_MATRIX = -14,
+        SCALAR_VALUE = -16,
+        QUERY_CURSOR = -18,
+        KEY_CURSOR = -20,
+        VALUE_CURSOR = -22,
+        CACHE_POINTER = -24,
+        CACHE_INDEX = -26,
+        ROW_COUNT = -27,
+        INPUT_COUNT = -28,
+        OUTPUT_COUNT = -29
+    };
+    const char *workspace_name =
+        asm_name_for(sym_asm_name(plan->workspace));
+    const char *tokens_name = asm_name_for(sym_asm_name(plan->tokens));
+    const char *cache_name = asm_name_for(sym_asm_name(plan->cache_root));
+    const char *valid_name = asm_name_for(sym_asm_name(plan->cache_valid));
+    int row_loop = new_label();
+    int cache_miss = new_label();
+    int input_loop = new_label();
+    int output_loop = new_label();
+    int row_done = new_label();
+    int row_bytes = plan->dimension * 2;
+
+    mir_emit_symbol_extrn(out, plan->workspace);
+    mir_emit_symbol_extrn(out, plan->tokens);
+    mir_emit_symbol_extrn(out, plan->cache_root);
+    mir_emit_symbol_extrn(out, plan->cache_valid);
+    mir_stream_printf(out,
+            "\tld hl,%s\n\tld (hl),0\n\tld de,%s+1\n"
+            "\tld bc,%d\n\tldir\n",
+            workspace_name, workspace_name,
+            plan->zero_elements * 2 - 1);
+    mir_emit_symbol_address_to_frame(
+        out, plan->embeddings, 0, INPUT_POINTER);
+    mir_emit_symbol_address_to_frame(
+        out, plan->workspace, plan->query_offset * 2, QUERY_OUTPUT);
+    mir_emit_symbol_address_to_frame(
+        out, plan->workspace, plan->key_offset * 2, KEY_OUTPUT);
+    mir_emit_symbol_address_to_frame(
+        out, plan->workspace, plan->value_offset * 2, VALUE_OUTPUT);
+    mir_stream_printf(out,
+            "\tld (ix%d),0\n"
+            "L%d:\n"
+            "\tld a,(ix%d)\n\tld l,a\n\tld h,0\n\tld d,h\n\tld e,l\n"
+            "\tadd hl,hl\n\tadd hl,hl\n\tadd hl,de\n\tadd hl,hl\n\tpush hl\n"
+            "\tadd a,a\n\tld e,a\n\tld d,0\n\tld hl,%s\n\tadd hl,de\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpop hl\n\tadd hl,de\n"
+            "\tld (ix%d),l\n\tld (ix%d),h\n"
+            "\tadd hl,hl\n\tld d,h\n\tld e,l\n\tadd hl,hl\n\tadd hl,de\n"
+            "\tadd hl,hl\n\tadd hl,hl\n\tadd hl,hl\n\tadd hl,hl\n"
+            "\tld de,%s%+d\n\tadd hl,de\n"
+            "\tld (ix%d),l\n\tld (ix%d),h\n"
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n\tld de,%s\n\tadd hl,de\n"
+            "\tld a,(hl)\n\tor a\n\tjp z,L%d\n",
+            ROW_COUNT,
+            row_loop,
+            ROW_COUNT, tokens_name,
+            CACHE_INDEX, CACHE_INDEX + 1,
+            cache_name, plan->cache_offset,
+            CACHE_POINTER, CACHE_POINTER + 1,
+            CACHE_INDEX, CACHE_INDEX + 1, valid_name,
+            cache_miss);
+
+    mir_machine_emit_frame_block_copy(
+        out, QUERY_OUTPUT, 0, CACHE_POINTER, 0, row_bytes);
+    mir_machine_emit_frame_block_copy(
+        out, KEY_OUTPUT, 0, CACHE_POINTER, row_bytes, row_bytes);
+    mir_machine_emit_frame_block_copy(
+        out, VALUE_OUTPUT, 0, CACHE_POINTER, row_bytes * 2, row_bytes);
+    mir_emit_frame_pointer_adjust(out, INPUT_POINTER, row_bytes);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", row_done, cache_miss);
+
+    mir_emit_symbol_address_to_frame(
+        out, plan->query_weights, 0, QUERY_MATRIX);
+    mir_emit_symbol_address_to_frame(
+        out, plan->key_weights, 0, KEY_MATRIX);
+    mir_emit_symbol_address_to_frame(
+        out, plan->value_weights, 0, VALUE_MATRIX);
+    mir_stream_printf(out, "\tld (ix%d),%d\nL%d:\n",
+            INPUT_COUNT, plan->dimension, input_loop);
+    mir_emit_pointer_word_and_advance(out, INPUT_POINTER);
+    mir_stream_printf(out,
+            "\tld (ix%d),l\n\tld (ix%d),h\n",
+            SCALAR_VALUE, SCALAR_VALUE + 1);
+    mir_emit_copy_frame_word(out, QUERY_CURSOR, QUERY_OUTPUT);
+    mir_emit_copy_frame_word(out, KEY_CURSOR, KEY_OUTPUT);
+    mir_emit_copy_frame_word(out, VALUE_CURSOR, VALUE_OUTPUT);
+    mir_stream_printf(out, "\tld (ix%d),%d\nL%d:\n",
+            OUTPUT_COUNT, plan->dimension, output_loop);
+    mir_emit_q8_accumulate(
+        out, QUERY_MATRIX, SCALAR_VALUE, QUERY_CURSOR,
+        plan->q16_function, plan->clamp_function);
+    mir_emit_q8_accumulate(
+        out, KEY_MATRIX, SCALAR_VALUE, KEY_CURSOR,
+        plan->q16_function, plan->clamp_function);
+    mir_emit_q8_accumulate(
+        out, VALUE_MATRIX, SCALAR_VALUE, VALUE_CURSOR,
+        plan->q16_function, plan->clamp_function);
+    mir_stream_printf(out,
+            "\tdec (ix%d)\n\tjp nz,L%d\n"
+            "\tdec (ix%d)\n\tjp nz,L%d\n",
+            OUTPUT_COUNT, output_loop,
+            INPUT_COUNT, input_loop);
+    mir_machine_emit_frame_block_copy(
+        out, CACHE_POINTER, 0, QUERY_OUTPUT, 0, row_bytes);
+    mir_machine_emit_frame_block_copy(
+        out, CACHE_POINTER, row_bytes, KEY_OUTPUT, 0, row_bytes);
+    mir_machine_emit_frame_block_copy(
+        out, CACHE_POINTER, row_bytes * 2, VALUE_OUTPUT, 0, row_bytes);
+    mir_stream_printf(out,
+            "\tld l,(ix%d)\n\tld h,(ix%d)\n\tld de,%s\n\tadd hl,de\n"
+            "\tld (hl),1\n"
+            "L%d:\n",
+            CACHE_INDEX, CACHE_INDEX + 1, valid_name,
+            row_done);
+    mir_emit_frame_pointer_adjust(out, QUERY_OUTPUT, row_bytes);
+    mir_emit_frame_pointer_adjust(out, KEY_OUTPUT, row_bytes);
+    mir_emit_frame_pointer_adjust(out, VALUE_OUTPUT, row_bytes);
+    mir_stream_printf(out,
+            "\tinc (ix%d)\n\tld a,(ix%d)\n\tcp %d\n\tjp nz,L%d\n"
+            "\tld sp,ix\n\tpop ix\n\tret\n",
+            ROW_COUNT, ROW_COUNT, plan->rows, row_loop);
 }
 
 static void mir_emit_assign_pre_offset(
@@ -29801,6 +30043,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
     struct MirAttentionScore attention_score;
     struct MirFixedQ8Multiply fixed_q8_multiply;
     struct MirProjectAllQkv project_all_qkv;
+    struct MirProjectCachedQkv project_cached_qkv;
     struct MirAssignPre assign_pre;
     struct MirForthRun forth_run;
     struct MirGlobalByteVerify global_byte_verify;
@@ -30422,6 +30665,16 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_forth_run(out, &forth_run);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_project_cached_qkv(&project_cached_qkv)) {
+        mir_stream_puts("\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+              "\tld hl,-29\n\tadd hl,sp\n\tld sp,hl\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_project_cached_qkv(out, &project_cached_qkv);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
