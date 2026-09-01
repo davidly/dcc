@@ -20,6 +20,15 @@ objects in helper modules are omitted before assembly. Automatic local
 variables remain the compiler's responsibility, and primary-module BSS remains
 packed in the application's shared BSS layout.
 
+| Program element | Whole-program behavior |
+| --- | --- |
+| Uncalled functions | Removed, including functions defined in another source module |
+| Initialized globals and file-scope statics | Removed when no reachable code or initializer references them |
+| Uninitialized helper-module globals/statics | Removed from that module's ordinary `DS` storage when unreachable |
+| Primary-module uninitialized globals/statics | Retained because they share the packed `__bssb`/`__bssn` layout |
+| Automatic local variables | Not an LTO object; dead locals and stores are handled earlier by MIR analysis and instruction selection |
+| String literals | Retained in the first implementation to avoid address-layout performance changes that do not reduce the 128-byte-quantized `.COM` size |
+
 Use the normal multi-module build command; no source annotation is required:
 
 ```sh

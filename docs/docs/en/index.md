@@ -10,6 +10,15 @@ CP/M Z80 emulators run those programs, as do real Z80 CP/M 2.2 and 3.0 systems.
 
 ![DCC C Compiler banner](images/dcc-retro-banner.svg)
 
+!!! success "Whole-program dead-code elimination"
+  Normal `dccmake` builds enable LTO-style reachability analysis across every
+  C source module. Uncalled functions, unused initialized globals/statics, and
+  unused BSS objects in helper modules are removed before assembly; their
+  otherwise-unused runtime dependencies disappear as well. Automatic local
+  variables are optimized earlier by the compiler's MIR passes rather than by
+  this whole-program step. See
+  [Application and runtime optimization](appendix/01-dccrtlstrip.md).
+
 !!! tip "Integrated VS Code debugging"
   Debug DCC programs directly in Visual Studio Code with source breakpoints,
   source and instruction stepping, call stacks, variables and watches, memory
@@ -49,10 +58,9 @@ build path from C source to `.COM` file.
 - the supported C library routines,
 - integer and floating-point helpers used by generated code.
 
-Normal builds remove unreachable application functions and objects before
-assembly, then trim unused runtime routines before linking. The build steps are
-shown in [Building and linking](02-build-and-link.md); the reachability details
-are in the [`dccrtlstrip` appendix](appendix/01-dccrtlstrip.md).
+Normal builds also trim unused runtime routines before linking. The build steps
+are shown in [Building and linking](02-build-and-link.md); the reachability
+details are in the [`dccrtlstrip` appendix](appendix/01-dccrtlstrip.md).
 
 !!! note "Single source of truth"
     Functions that are declared in the standard headers but are **not** part of
