@@ -5232,6 +5232,537 @@ int mir_eliminate_common_region_expressions(void)
     return eliminated;
 }
 
+static int mir_dominated_load_pure_value_equal(
+    int left_value, int right_value, int depth)
+{
+    const struct MirInsn *left;
+    const struct MirInsn *right;
+
+    if (left_value == right_value)
+        return 1;
+    if (left_value < 0 || right_value < 0 || depth > 64)
+        return 0;
+    left = mir_definition(left_value);
+    right = mir_definition(right_value);
+    if (left == NULL || right == NULL || left->opcode != right->opcode)
+        return 0;
+    switch (left->opcode) {
+    case MIR_CONST:
+    case MIR_STRING_ADDRESS:
+        return left->immediate == right->immediate &&
+               left->type == right->type;
+    case MIR_ADDRESS:
+        return left->immediate == right->immediate &&
+               left->object == right->object &&
+               left->type == right->type &&
+               !strcmp(left->name, right->name) &&
+               !strcmp(left->base_name, right->base_name);
+    case MIR_UNARY:
+    case MIR_BINARY:
+    case MIR_INDEX_ADDRESS:
+        if (!mir_dominated_load_pure_value_equal(
+                left->src1, right->src1, depth + 1) ||
+            !mir_dominated_load_pure_value_equal(
+                left->src2, right->src2, depth + 1))
+            return 0;
+        return left->immediate == right->immediate &&
+               left->type == right->type &&
+               left->secondary_offset == right->secondary_offset &&
+               left->memory_size == right->memory_size &&
+               left->memory_flags == right->memory_flags &&
+               left->bit_width == right->bit_width &&
+               left->bit_shift == right->bit_shift &&
+               left->bit_mask == right->bit_mask;
+    case MIR_MEMBER_ADDRESS:
+        return mir_dominated_load_pure_value_equal(
+                   left->src1, right->src1, depth + 1) &&
+               left->immediate == right->immediate &&
+               left->type == right->type &&
+               left->secondary_offset == right->secondary_offset &&
+               left->memory_size == right->memory_size &&
+               left->memory_flags == right->memory_flags &&
+               left->bit_width == right->bit_width &&
+               left->bit_shift == right->bit_shift &&
+               left->bit_mask == right->bit_mask &&
+               !strcmp(left->name, right->name) &&
+               !strcmp(left->base_name, right->base_name);
+    default:
+        return 0;
+    }
+}
+
+static int mir_dominated_load_memory_barrier(const struct MirInsn *insn)
+{
+    switch (insn->opcode) {
+    case MIR_STORE:
+    case MIR_STORE_INDIRECT:
+    case MIR_COPY_AGGREGATE:
+    case MIR_CALL:
+    case MIR_CALL_AGGREGATE:
+    case MIR_VLA_SAVE:
+    case MIR_VLA_ALLOC:
+    case MIR_VLA_RESTORE:
+    case MIR_VA_START:
+    case MIR_VA_END:
+    case MIR_VA_ARG:
+    case MIR_OPAQUE:
+        return 1;
+    default:
+        return 0;
+    }
+}
+
+static int mir_indirect_load_pointee_is_volatile_value(int value, int depth)
+{
+    const struct MirInsn *definition;
+    int declared;
+
+    if (value < 0 || depth > 64)
+        return 0;
+    definition = mir_definition(value);
+    if (definition == NULL)
+        return 0;
+    if (definition->opcode == MIR_PARAM || definition->opcode == MIR_LOAD) {
+        for (declared = 0; declared < mir.declared_count; ++declared)
+            if (!strcmp(mir.declared_names[declared], definition->name))
+                return mir.declared_pointee_is_volatile[declared];
+        return 0;
+    }
+    if (definition->opcode == MIR_ADDRESS) {
+        for (declared = 0; declared < mir.declared_count; ++declared)
+            if (!strcmp(mir.declared_names[declared], definition->name))
+                return mir.declared_is_volatile[declared];
+        return 0;
+    }
+    if (definition->opcode == MIR_INDEX_ADDRESS ||
+        definition->opcode == MIR_MEMBER_ADDRESS ||
+        definition->opcode == MIR_UNARY)
+        return mir_indirect_load_pointee_is_volatile_value(
+            definition->src1, depth + 1);
+    if (definition->opcode == MIR_BINARY)
+        return mir_indirect_load_pointee_is_volatile_value(
+                   definition->src1, depth + 1) ||
+               mir_indirect_load_pointee_is_volatile_value(
+                   definition->src2, depth + 1);
+    return 0;
+}
+
+static int mir_indirect_load_pointee_is_volatile(
+    const struct MirInsn *load)
+{
+    return load == NULL || load->opcode != MIR_LOAD_INDIRECT ||
+           (load->memory_flags & 1) != 0 ||
+           mir_indirect_load_pointee_is_volatile_value(load->src1, 0);
+}
+
+static int mir_dominated_load_path_is_stable(
+    int candidate, int instruction, const int *predecessor_offsets,
+    const int *predecessors, unsigned char *visited, int *worklist)
+{
+    int work_count = 0;
+
+    memset(visited, 0, (size_t)mir.count);
+    worklist[work_count++] = instruction;
+    visited[instruction] = 1;
+    while (work_count > 0) {
+        int current = worklist[--work_count];
+        int predecessor_index;
+
+        for (predecessor_index = predecessor_offsets[current];
+             predecessor_index < predecessor_offsets[current + 1];
+             ++predecessor_index) {
+            int predecessor = predecessors[predecessor_index];
+
+            if (predecessor == candidate)
+                continue;
+            if (predecessor <= 0 ||
+                mir_dominated_load_memory_barrier(
+                    &mir.insns[predecessor]))
+                return 0;
+            if (!visited[predecessor]) {
+                visited[predecessor] = 1;
+                worklist[work_count++] = predecessor;
+            }
+        }
+    }
+    return 1;
+}
+
+static void mir_retire_dead_dominated_load_address(int value)
+{
+    struct MirInsn *definition;
+    int src1;
+    int src2;
+
+    if (value < 0 || mir_value_use_count(value) != 0)
+        return;
+    definition = mir_mutable_definition(value);
+    if (definition == NULL)
+        return;
+    switch (definition->opcode) {
+    case MIR_CONST:
+    case MIR_ADDRESS:
+    case MIR_STRING_ADDRESS:
+    case MIR_UNARY:
+    case MIR_BINARY:
+    case MIR_INDEX_ADDRESS:
+    case MIR_MEMBER_ADDRESS:
+        break;
+    default:
+        return;
+    }
+    src1 = definition->src1;
+    src2 = definition->src2;
+    definition->opcode = MIR_NOP;
+    definition->dst = -1;
+    definition->src1 = -1;
+    definition->src2 = -1;
+    mir_retire_dead_dominated_load_address(src1);
+    mir_retire_dead_dominated_load_address(src2);
+}
+
+static int mir_dominated_load_address_operation_count(int value, int depth)
+{
+    const struct MirInsn *definition;
+
+    if (value < 0 || depth > 64)
+        return 0;
+    definition = mir_definition(value);
+    if (definition == NULL)
+        return 0;
+    switch (definition->opcode) {
+    case MIR_INDEX_ADDRESS:
+    case MIR_MEMBER_ADDRESS:
+    case MIR_BINARY:
+        return 1 +
+            mir_dominated_load_address_operation_count(
+                definition->src1, depth + 1) +
+            mir_dominated_load_address_operation_count(
+                definition->src2, depth + 1);
+    case MIR_UNARY:
+        return mir_dominated_load_address_operation_count(
+            definition->src1, depth + 1);
+    default:
+        return 0;
+    }
+}
+
+/* Reuse a nonvolatile indirect load across branch-only CFG regions when its
+ * first occurrence dominates every replacement and no possible memory write
+ * lies in between.  Three occurrences and at least two address operations are
+ * required so removed rematerialization pays for the longer live range. */
+static int mir_eliminate_dominated_indirect_loads(void)
+{
+    int *predecessor_offsets;
+    int *predecessors;
+    int *next_predecessor;
+    int *worklist;
+    unsigned char *visited;
+    int eliminated = 0;
+    int candidate;
+    int instruction;
+    int mir_use_cache_saved_scope = mir_use_cache_scope_active;
+
+    if (mir.count <= 0)
+        return 0;
+    mir_use_cache_scope_active = 0;
+    predecessor_offsets = (int *)calloc(
+        (size_t)(mir.count + 1), sizeof(*predecessor_offsets));
+    next_predecessor = (int *)malloc(
+        (size_t)mir.count * sizeof(*next_predecessor));
+    worklist = (int *)malloc((size_t)mir.count * sizeof(*worklist));
+    visited = (unsigned char *)malloc((size_t)mir.count);
+    if (predecessor_offsets == NULL || next_predecessor == NULL ||
+        worklist == NULL || visited == NULL)
+        fatal("out of memory eliminating dominated MIR loads");
+
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        struct MirInsn *insn = &mir.insns[instruction];
+        int successor;
+
+        insn->successor_count = 0;
+        if (insn->opcode == MIR_JUMP ||
+            insn->opcode == MIR_BRANCH_FALSE) {
+            int target = mir_find_label(insn->label);
+            if (target >= 0)
+                insn->successors[insn->successor_count++] = target;
+        }
+        if (insn->opcode == MIR_BRANCH_FALSE && instruction + 1 < mir.count)
+            insn->successors[insn->successor_count++] = instruction + 1;
+        else if (insn->opcode != MIR_JUMP && insn->opcode != MIR_RETURN &&
+                 instruction + 1 < mir.count)
+            insn->successors[insn->successor_count++] = instruction + 1;
+        for (successor = 0; successor < insn->successor_count; ++successor)
+            ++predecessor_offsets[insn->successors[successor] + 1];
+    }
+    for (instruction = 1; instruction <= mir.count; ++instruction)
+        predecessor_offsets[instruction] +=
+            predecessor_offsets[instruction - 1];
+    predecessors = (int *)malloc(
+        (size_t)predecessor_offsets[mir.count] * sizeof(*predecessors));
+    if (predecessor_offsets[mir.count] != 0 && predecessors == NULL)
+        fatal("out of memory indexing dominated MIR loads");
+    memcpy(next_predecessor, predecessor_offsets,
+           (size_t)mir.count * sizeof(*next_predecessor));
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        int successor;
+        for (successor = 0;
+             successor < mir.insns[instruction].successor_count;
+             ++successor) {
+            int target = mir.insns[instruction].successors[successor];
+            predecessors[next_predecessor[target]++] = instruction;
+        }
+    }
+
+    for (candidate = 0; candidate < mir.count; ++candidate) {
+        struct MirInsn *first = &mir.insns[candidate];
+        int equivalent_count = 1;
+
+        if (first->opcode != MIR_LOAD_INDIRECT || first->memory_flags != 0 ||
+            mir_indirect_load_pointee_is_volatile(first) ||
+            first->bit_width != 0 || first->dst < 0 ||
+            mir_dominated_load_address_operation_count(
+                first->src1, 0) < 2)
+            continue;
+        for (instruction = candidate + 1;
+             instruction < mir.count; ++instruction) {
+            const struct MirInsn *next = &mir.insns[instruction];
+            int same_address;
+            int stable;
+
+            if (next->opcode != MIR_LOAD_INDIRECT ||
+                next->memory_flags != 0 || next->bit_width != 0 ||
+                mir_indirect_load_pointee_is_volatile(next) ||
+                next->type != first->type ||
+                next->memory_size != first->memory_size)
+                continue;
+            same_address = mir_dominated_load_pure_value_equal(
+                first->src1, next->src1, 0);
+            stable = mir_dominated_load_path_is_stable(
+                candidate, instruction, predecessor_offsets,
+                predecessors, visited, worklist);
+            if (same_address && stable)
+                ++equivalent_count;
+        }
+        if (equivalent_count < 3)
+            continue;
+        for (instruction = candidate + 1;
+             instruction < mir.count; ++instruction) {
+            struct MirInsn *next = &mir.insns[instruction];
+            int address;
+
+            if (next->opcode != MIR_LOAD_INDIRECT ||
+                next->memory_flags != 0 || next->bit_width != 0 ||
+                mir_indirect_load_pointee_is_volatile(next) ||
+                next->type != first->type ||
+                next->memory_size != first->memory_size ||
+                !mir_dominated_load_pure_value_equal(
+                    first->src1, next->src1, 0) ||
+                !mir_dominated_load_path_is_stable(
+                    candidate, instruction, predecessor_offsets,
+                    predecessors, visited, worklist))
+                continue;
+            address = next->src1;
+            mir_replace_value_uses(next->dst, first->dst);
+            next->opcode = MIR_NOP;
+            next->dst = -1;
+            next->src1 = -1;
+            next->src2 = -1;
+            mir_retire_dead_dominated_load_address(address);
+            ++eliminated;
+        }
+    }
+    if (eliminated != 0 && getenv("DCC_MIR_CSE_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR dominated-load-cse function=%s eliminated=%d\n",
+                mir.name, eliminated);
+    free(visited);
+    free(worklist);
+    free(next_predecessor);
+    free(predecessors);
+    free(predecessor_offsets);
+    mir_invalidate_use_cache();
+    mir_use_cache_scope_active = mir_use_cache_saved_scope;
+    return eliminated;
+}
+
+static const struct MirInsn *mir_unsigned_widened_byte_load(
+    int value, const struct MirInsn **conversion_out)
+{
+    const struct MirInsn *outer = mir_definition(value);
+    const struct MirInsn *inner;
+    const struct MirInsn *load;
+    int explicit_byte_conversion = 0;
+
+    if (outer == NULL || outer->opcode != MIR_UNARY ||
+        outer->immediate != 0 || type_size(outer->type) != 2 ||
+        (outer->type & TYPE_UNSIGNED) == 0)
+        return NULL;
+    inner = mir_definition(outer->src1);
+    if (inner != NULL && inner->opcode == MIR_LOAD_INDIRECT)
+        load = inner;
+    else if (inner != NULL && inner->opcode == MIR_UNARY &&
+             inner->immediate == 0 && type_size(inner->type) == 1 &&
+             (inner->type & TYPE_UNSIGNED) != 0) {
+        load = mir_definition(inner->src1);
+        explicit_byte_conversion = 1;
+    } else
+        return NULL;
+    if (load == NULL || load->opcode != MIR_LOAD_INDIRECT ||
+        load->memory_flags != 0 || load->bit_width != 0 ||
+        mir_indirect_load_pointee_is_volatile(load) ||
+        load->memory_size != 1 || type_size(load->type) != 1 ||
+        (!explicit_byte_conversion && (load->type & TYPE_UNSIGNED) == 0))
+        return NULL;
+    *conversion_out = outer;
+    return load;
+}
+
+static int mir_adjacent_little_endian_addresses(
+    const struct MirInsn *low_load, const struct MirInsn *high_load)
+{
+    const struct MirInsn *low_address = mir_definition(low_load->src1);
+    const struct MirInsn *high_address = mir_definition(high_load->src1);
+    const struct MirInsn *low_index;
+    const struct MirInsn *high_index;
+
+    if (low_address == NULL || high_address == NULL ||
+        low_address->opcode != MIR_INDEX_ADDRESS ||
+        high_address->opcode != MIR_INDEX_ADDRESS ||
+        low_address->immediate != 1 || high_address->immediate != 1 ||
+        !mir_dominated_load_pure_value_equal(
+            low_address->src1, high_address->src1, 0))
+        return 0;
+    low_index = mir_definition(low_address->src2);
+    high_index = mir_definition(high_address->src2);
+    return low_index != NULL && high_index != NULL &&
+           low_index->opcode == MIR_CONST &&
+           high_index->opcode == MIR_CONST &&
+           high_index->immediate == low_index->immediate + 1;
+}
+
+static void mir_retire_dead_endian_tree(int value)
+{
+    struct MirInsn *definition;
+    int src1;
+    int src2;
+
+    if (value < 0 || mir_value_use_count(value) != 0)
+        return;
+    definition = mir_mutable_definition(value);
+    if (definition == NULL)
+        return;
+    switch (definition->opcode) {
+    case MIR_CONST:
+    case MIR_ADDRESS:
+    case MIR_STRING_ADDRESS:
+    case MIR_UNARY:
+    case MIR_BINARY:
+    case MIR_INDEX_ADDRESS:
+    case MIR_MEMBER_ADDRESS:
+    case MIR_LOAD_INDIRECT:
+        break;
+    default:
+        return;
+    }
+    src1 = definition->src1;
+    src2 = definition->src2;
+    definition->opcode = MIR_NOP;
+    definition->dst = -1;
+    definition->src1 = -1;
+    definition->src2 = -1;
+    mir_retire_dead_endian_tree(src1);
+    mir_retire_dead_endian_tree(src2);
+}
+
+static int mir_endian_loads_are_straight_line(
+    const struct MirInsn *low_load, const struct MirInsn *high_load)
+{
+    int low = (int)(low_load - mir.insns);
+    int high = (int)(high_load - mir.insns);
+    int instruction;
+
+    if (low < 0 || high <= low || high >= mir.count)
+        return 0;
+    for (instruction = low + 1; instruction < high; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (mir_dominated_load_memory_barrier(insn) ||
+            insn->opcode == MIR_LABEL || insn->opcode == MIR_JUMP ||
+            insn->opcode == MIR_BRANCH_FALSE || insn->opcode == MIR_RETURN)
+            return 0;
+    }
+    return 1;
+}
+
+/* Fold unsigned `p[n] | (p[n + 1] << 8)` into one native little-endian
+ * 16-bit indirect load.  The ordinary load opcode already owns the target
+ * semantics; this pass only proves the source expression denotes adjacent
+ * nonvolatile bytes and retires the now-dead widening/shift tree. */
+static int mir_combine_little_endian_byte_loads(void)
+{
+    int mir_use_cache_saved_scope = mir_use_cache_scope_active;
+    int combined = 0;
+    int instruction;
+
+    mir_use_cache_scope_active = 0;
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        struct MirInsn *combine = &mir.insns[instruction];
+        const struct MirInsn *low_conversion;
+        const struct MirInsn *high_conversion;
+        const struct MirInsn *low_load;
+        const struct MirInsn *high_load;
+        struct MirInsn *shift;
+        struct MirInsn *shift_amount;
+        int combined_value;
+        int high_tree;
+
+        if (combine->opcode != MIR_BINARY || combine->immediate != '|' ||
+            type_size(combine->type) != 2 ||
+            (combine->type & TYPE_UNSIGNED) == 0)
+            continue;
+        low_load = mir_unsigned_widened_byte_load(
+            combine->src1, &low_conversion);
+        shift = mir_mutable_definition(combine->src2);
+        if (low_load == NULL || shift == NULL ||
+            shift->opcode != MIR_BINARY || shift->immediate != TOK_SHL ||
+            type_size(shift->type) != 2 ||
+            (shift->type & TYPE_UNSIGNED) == 0)
+            continue;
+        high_load = mir_unsigned_widened_byte_load(
+            shift->src1, &high_conversion);
+        shift_amount = mir_mutable_definition(shift->src2);
+        if (high_load == NULL || shift_amount == NULL ||
+            shift_amount->opcode != MIR_CONST ||
+            shift_amount->immediate != 8 ||
+            mir_value_use_count(low_load->dst) != 1 ||
+            mir_value_use_count(low_conversion->dst) != 1 ||
+            !mir_endian_loads_are_straight_line(low_load, high_load) ||
+            !mir_adjacent_little_endian_addresses(low_load, high_load))
+            continue;
+
+        combined_value = combine->dst;
+        high_tree = shift->dst;
+        mir_replace_value_uses(combined_value, low_load->dst);
+        ((struct MirInsn *)low_load)->type = TYPE_INT | TYPE_UNSIGNED;
+        ((struct MirInsn *)low_load)->memory_size = 2;
+        combine->opcode = MIR_NOP;
+        combine->dst = -1;
+        combine->src1 = -1;
+        combine->src2 = -1;
+        mir_retire_dead_endian_tree(high_tree);
+        mir_retire_dead_dominated_load_address(low_conversion->dst);
+        ++combined;
+    }
+    if (combined != 0 && getenv("DCC_MIR_CSE_REPORT") != NULL)
+        fprintf(stderr,
+                "; MIR little-endian-load function=%s combined=%d\n",
+                mir.name, combined);
+    mir_invalidate_use_cache();
+    mir_use_cache_scope_active = mir_use_cache_saved_scope;
+    return combined;
+}
+
 static int mir_named_type(const char *name)
 {
     struct Sym *global;
@@ -10838,6 +11369,8 @@ int mir_verify_and_dump(void)
      * conversions, so refresh div/mod signedness before selection/emission.
      */
     mir_repair_divmod_types();
+    mir_eliminate_dominated_indirect_loads();
+    mir_combine_little_endian_byte_loads();
 
     /* Object promotion rewrites uses and removes load definitions. Rebuild
      * the simple defined-value check from the transformed stream. */
