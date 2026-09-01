@@ -51,6 +51,30 @@ static void okf(const char *name, float got, float want)
     }
 }
 
+static unsigned long fbits(float value)
+{
+    union { float f; unsigned long u; } bits;
+    bits.f = value;
+    return bits.u;
+}
+
+static float frombits(unsigned long value)
+{
+    union { float f; unsigned long u; } bits;
+    bits.u = value;
+    return bits.f;
+}
+
+static void oknanbits(const char *name, float got)
+{
+    unsigned long bits = fbits(got);
+    checks++;
+    if (bits != 0x7fc00000UL) {
+        failures++;
+        printf("FAIL %s: got bits=%08lX want=7FC00000\n", name, bits);
+    }
+}
+
 /* Kept in its own function (not inlined at each call site) so the
  * "addend + x*y" shape dcc's optimizer fuses into a single __fmadd call
  * is unambiguous and reused identically across every check below. */
@@ -61,6 +85,8 @@ int main(void)
     float zero = 0.0f, negzero = -0.0f;
     float five = 5.0f, negfive = -5.0f, three = 3.0f;
     float pinf = INFINITY, ninf = -INFINITY, nan1 = NAN;
+    float negnan = frombits(0xffc12345UL);
+    float snan = frombits(0x7f800001UL);
 
     /* division: the three IEEE invalid-operation cases plus propagation */
     okb("0/0 isnan", isnan(zero / zero), 1);
@@ -87,6 +113,33 @@ int main(void)
     okf("5+3", five + three, 8.0f);
     okf("5-3", five - three, 2.0f);
     okf("5+(-5)", five + negfive, zero);
+
+    /* Exercise each operator's second-operand NaN path, which is distinct
+     * from the first-operand checks above in the hand-written RTL. Arithmetic
+     * deliberately canonicalizes every NaN result to positive quiet NaN. */
+    oknanbits("5+nan canonical", five + nan1);
+    oknanbits("5-nan canonical", five - nan1);
+    oknanbits("5*nan canonical", five * nan1);
+    oknanbits("5/nan canonical", five / nan1);
+
+    /* A negative NaN must still classify as NaN; its sign and payload are
+     * intentionally discarded by arithmetic on this runtime. Cover both
+     * operand positions across the four arithmetic implementations. */
+    oknanbits("-nan+5 canonical", negnan + five);
+    oknanbits("5+-nan canonical", five + negnan);
+    oknanbits("-nan-5 canonical", negnan - five);
+    oknanbits("5--nan canonical", five - negnan);
+    oknanbits("-nan*5 canonical", negnan * five);
+    oknanbits("5*-nan canonical", five * negnan);
+    oknanbits("-nan/5 canonical", negnan / five);
+    oknanbits("5/-nan canonical", five / negnan);
+
+    /* CP/M has no floating-point exception environment. A signaling NaN is
+     * therefore accepted as NaN and quietly canonicalized by every operator. */
+    oknanbits("snan+5 canonical", snan + five);
+    oknanbits("snan-5 canonical", snan - five);
+    oknanbits("snan*5 canonical", snan * five);
+    oknanbits("snan/5 canonical", snan / five);
 
     /* IEEE-754 6.3 zero-sum sign rule: same-signed zeros keep that sign,
      * opposite-signed zeros give +0 (round-to-nearest, the only rounding
