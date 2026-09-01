@@ -37,11 +37,12 @@ Each stage has one job and hands a text or object file to the next:
 flowchart TB
   SRC["C source"] --> DCC["dcc<br/>AST → MIR → Z80 assembly"]
   DCC --> PEEP["dccpeep<br/>optional assembly optimization"]
-  PEEP --> APPASM["m80c<br/>assemble application"]
+  PEEP --> APPSTRIP["dccrtlstrip<br/>remove unreachable app blocks"]
+  APPSTRIP --> APPASM["m80c<br/>assemble application"]
   APPASM --> APPREL["app.REL"]
 
   RTL["DCCRTL.MAC<br/>full runtime"] --> STRIP["dccrtlstrip<br/>keep referenced routines"]
-  PEEP -. runtime references .-> STRIP
+  APPSTRIP -. runtime references .-> STRIP
   STRIP --> RTLASM["m80c<br/>assemble reduced runtime"]
   RTLASM --> RTLREL["RTLMIN.REL"]
 
@@ -54,14 +55,15 @@ flowchart TB
 | --- | --- | --- | --- | --- |
 | Compile | `dcc` | `.c` | `.MAC` | Parse typed AST, lower and verify MIR, then select Z80/M80 assembly |
 | Optimize | `dccpeep` | `.MAC` | `.MAC` | Local peephole rewriting of the asm |
+| Reduce application | `dccrtlstrip` | All app `.MAC` files | Rewritten app `.MAC` files | Remove functions, initialized objects, and module BSS objects unreachable from the final program entry |
 | Reduce runtime | `dccrtlstrip` | `DCCRTL.MAC` + app `.MAC` | `RTLMIN.MAC` | Keep only the runtime routines the app references |
 | Assemble | [`m80c`](03-utilities.md#native-assembler-m80c) | `.MAC` | `.REL` | Object code (relocatable); `dccmake` uses native `m80c` by default |
 | Link | [`l80c`](03-utilities.md#native-linker-l80c) | `.REL` files | `.COM` | Resolve symbols into a CP/M executable; `dccmake` uses native `l80c` by default |
 
 The `dccpeep` stage is optional (`./scripts/ma.ps1 name -Mode nopeep` skips it
-when run from PowerShell in the DCC C Compiler checkout). `dccrtlstrip` runs against the
-*final* application assembly so it
-sees the real set of runtime symbols the program calls.
+when run from PowerShell in the DCC C Compiler checkout). `dccrtlstrip` first
+computes whole-program reachability across all final application assembly
+modules, then uses the reduced application to select runtime blocks.
 
 ## Compiler shape: front end, AST, and MIR
 

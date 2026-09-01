@@ -1,12 +1,60 @@
-# Appendix: runtime optimization
+# Appendix: application and runtime optimization
 
 `DCCRTL.MAC` is a single roughly 25,000-line runtime, but most programs use only a
-fraction of it. The normal DCC C Compiler build flow runs `dccrtlstrip` before the final
-L80 link to remove unreferenced routines. This appendix explains how it decides
-what to keep and what each library feature costs in code size once its
-transitive dependencies are linked.
+fraction of it. Application modules can also contain functions and objects that
+the final program never reaches. The normal DCC C Compiler build flow runs
+`dccrtlstrip` before assembly to remove unreachable application blocks, then
+uses the reduced application to select only the required runtime routines.
+This appendix explains both passes.
 
-## Direct usage
+## Whole-program application stripping
+
+`dccmake` enables whole-program stripping by default after `dccpeep` and before
+`m80c`. The pass analyzes every input module together, starting at the
+`__mrun` program entry, and follows direct calls, jumps, data addresses,
+function-pointer table entries, global initializers, internal labels, and
+cross-module `PUBLIC`/`EXTRN` references to a fixed point.
+
+Unreachable functions, initialized global/static objects, and uninitialized
+objects in helper modules are omitted before assembly. Automatic local
+variables remain the compiler's responsibility, and primary-module BSS remains
+packed in the application's shared BSS layout.
+
+| Program element | Whole-program behavior |
+| --- | --- |
+| Uncalled functions | Removed, including functions defined in another source module |
+| Initialized globals and file-scope statics | Removed when no reachable code or initializer references them |
+| Uninitialized helper-module globals/statics | Removed from that module's ordinary `DS` storage when unreachable |
+| Primary-module uninitialized globals/statics | Retained because they share the packed `__bssb`/`__bssn` layout |
+| Automatic local variables | Not an LTO object; dead locals and stores are handled earlier by MIR analysis and instruction selection |
+| String literals | Retained in the first implementation to avoid address-layout performance changes that do not reduce the 128-byte-quantized `.COM` size |
+
+Use the normal multi-module build command; no source annotation is required:
+
+```sh
+dccmake main.c module.c dcc-output=APP
+```
+
+Set `dcc-strip-unused=false` only when the output is intended to be consumed by
+a separate later link whose roots are not visible to the current `dccmake`
+invocation:
+
+```sh
+dccmake module.c dcc-output=MODULE dcc-strip-unused=false
+```
+
+The direct application-strip mode rewrites the listed dcc-generated `.MAC`
+files transactionally:
+
+```sh
+dccrtlstrip --strip-apps [-k root]... app.mac [module.mac ...]
+```
+
+`-k`/`-root` adds an explicit application root. `__mrun` is always rooted.
+Malformed structural markers or duplicate public definitions fail loudly
+before a partially analyzed module set is installed.
+
+## Runtime-strip direct usage
 
 The normal build helpers invoke `dccrtlstrip` automatically. To run it directly:
 
@@ -22,7 +70,7 @@ dccrtlstrip [-k symbol]... -r DCCRTL.MAC -o RTLMIN.MAC app.mac [app2.mac ...]
 | `-root <symbol>` | Alias for `-k` |
 | `app.mac ...` | One or more application assembly modules to scan for runtime references |
 
-## How `dccrtlstrip` decides what to keep
+## How runtime stripping decides what to keep
 
 Most library names in the standard headers are ordinary C identifiers. During
 code generation, DCC C Compiler maps well-known library calls to short internal assembler

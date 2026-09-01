@@ -120,6 +120,7 @@ struct Config {
     int dcc_arg_count;
     int peep;
     int peep_debug;
+    int strip_unused;
     char build_dir[MAX_PATH_LEN];
     char dcc[MAX_PATH_LEN];
     char dccpeep[MAX_PATH_LEN];
@@ -614,6 +615,7 @@ static void init_config(struct Config *cfg)
         cfg->debug = 0;
     cfg->stack_bytes = 512;
     cfg->peep = 1;
+    cfg->strip_unused = 1;
     /* Full -g builds skip dccpeep by default. dcc-peep-debug=true opts that
      * conservative codegen into assembly optimization; dcc-debug=lines is the
      * release-identical mode for optimized source breakpoints and stepping. */
@@ -848,6 +850,14 @@ static int apply_setting(struct Config *cfg, const char *raw_key, const char *va
         cfg->peep_debug = b;
         return 1;
     }
+    if (!strcmp(key, "dcc-strip-unused")) {
+        if (!parse_bool(value, &b)) {
+            fprintf(stderr, "invalid boolean for %s: %s\n", raw_key, value);
+            return 0;
+        }
+        cfg->strip_unused = b;
+        return 1;
+    }
     if (!strcmp(key, "dcc-debug")) {
         if (!strcmp(value, "lines") || !strcmp(value, "line")) {
             cfg->debug = 0;
@@ -1055,6 +1065,9 @@ static void print_help(void)
     printf("                                 Debug markers are retained/remapped, but full -g\n");
     printf("                                 still uses conservative compiler codegen. Use\n");
     printf("                                 dcc-debug=lines for release-identical optimized code\n");
+    printf("  dcc-strip-unused=true|false    remove unreachable app functions/objects across\n");
+    printf("                                 all input modules; default true. Disable for a\n");
+    printf("                                 module intended for a later, separate link\n");
     printf("  dcc-build-dir=build            artifact directory; default build\n");
     printf("  dcc-use-emulated-m80=false|true|1|0\n");
     printf("                                 assemble with real M80.COM under ntvcm instead\n");
@@ -2161,6 +2174,18 @@ static int run_build(struct Config *cfg)
         }
         if (!to_crlf(macs[i]))
             return 0;
+    }
+
+    if (cfg->strip_unused) {
+        cmd_init(cmd, sizeof(cmd));
+        if (!cmd_arg(cmd, sizeof(cmd), cfg->dccrtlstrip)) return 0;
+        if (!cmd_arg(cmd, sizeof(cmd), "--strip-apps")) return 0;
+        for (i = 0; i < cfg->input_count; ++i)
+            if (!cmd_arg(cmd, sizeof(cmd), macs[i])) return 0;
+        t0 = now_ms();
+        if (!run_cmd(cmd))
+            return 0;
+        ms_rtlstrip += now_ms() - t0;
     }
 
     for (i = 0; i < cfg->input_count; i++) {

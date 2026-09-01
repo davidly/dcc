@@ -222,6 +222,9 @@ void emit_data(void)
         /* skip BSS (uninitialized) globals — emitted separately below */
         if (!(s->has_init && s->init_count > 0) && !(s->has_init && !s->is_array)) continue;
 
+        emit_debug_types_once();
+        fprintf(g_emit_sink.stream, ";@dcc.lto begin %s\n",
+                asm_name_for(sym_asm_name(s)));
         if (!s->is_static) {
             asm_name_check_public_collision(sym_asm_name(s));
             fprintf(g_emit_sink.stream, "\tpublic %s\n", asm_name_for(sym_asm_name(s)));
@@ -254,6 +257,8 @@ void emit_data(void)
         } else {
             emit_init_numeric(s->init_value, type_size(s->type));
         }
+        fprintf(g_emit_sink.stream, ";@dcc.lto end %s\n",
+                asm_name_for(sym_asm_name(s)));
     }
 
     /* BSS: uninitialized globals.
@@ -286,6 +291,9 @@ void emit_data(void)
                 if ((s->has_init && s->init_count > 0) || (s->has_init && !s->is_array)) continue;
 
                 bss_size = s->size > 0 ? s->size : 2;
+                emit_debug_types_once();
+                fprintf(g_emit_sink.stream, ";@dcc.lto begin %s\n",
+                        asm_name_for(sym_asm_name(s)));
                 if (!s->is_static) {
                     asm_name_check_public_collision(sym_asm_name(s));
                     fprintf(g_emit_sink.stream, "\tpublic %s\n", asm_name_for(sym_asm_name(s)));
@@ -293,6 +301,8 @@ void emit_data(void)
                 emit_debug_global(s);
                 fprintf(g_emit_sink.stream, "%s:\n", asm_name_for(sym_asm_name(s)));
                 fprintf(g_emit_sink.stream, "\tds %d\n", bss_size);
+                fprintf(g_emit_sink.stream, ";@dcc.lto end %s\n",
+                        asm_name_for(sym_asm_name(s)));
             }
             return;
         }

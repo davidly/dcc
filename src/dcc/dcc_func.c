@@ -1651,7 +1651,7 @@ void parse_param_list(void)
     }
 }
 
-static char current_debug_function[64];
+static char current_debug_function[66];
 static char current_debug_function_source_name[64];
 static int debug_types_emitted;
 
@@ -1750,6 +1750,8 @@ void begin_function_mir(const char *name, int local_bytes)
     strncpy(current_debug_function_source_name, name, sizeof(current_debug_function_source_name) - 1);
     current_debug_function_source_name[sizeof(current_debug_function_source_name) - 1] = 0;
 
+    if (!scan_mode)
+        fprintf(g_emit_sink.stream, ";@dcc.lto begin %s\n", aname);
     if (DEBUG_METADATA_ENABLED && !scan_mode)
         fprintf(g_emit_sink.stream, ";@dcc-func-begin \"%s\" \"%s\"\n",
                 current_debug_function, current_debug_function_source_name);
@@ -1787,6 +1789,9 @@ void finish_function_mir(int implicit_zero_return)
         if (!scan_mode && current_debug_function[0])
             fprintf(g_emit_sink.stream, ";@dcc-func-end \"%s\" \"%s\"\n",
                     current_debug_function, current_debug_function_source_name);
+        if (!scan_mode && current_debug_function[0])
+            fprintf(g_emit_sink.stream, ";@dcc.lto end %s\n",
+                    current_debug_function);
         current_debug_function[0] = 0;
         current_debug_function_source_name[0] = 0;
         flush_pending_asm();
@@ -1804,6 +1809,9 @@ void finish_function_mir(int implicit_zero_return)
         fprintf(g_emit_sink.stream, ";@dcc-func-end \"%s\" \"%s\"\n",
                 current_debug_function, current_debug_function_source_name);
     mir_end_function();
+    if (!scan_mode && current_debug_function[0])
+        fprintf(g_emit_sink.stream, ";@dcc.lto end %s\n",
+                current_debug_function);
     current_debug_function[0] = 0;
     current_debug_function_source_name[0] = 0;
     flush_pending_asm();
@@ -3376,7 +3384,8 @@ void parse_function_or_global(int base_type)
                     int has_args = !((s->has_proto  && s->proto_nargs == 0) ||
                                      (!s->has_proto && pre_params_nlocals == 0));
                     g_main_has_args = has_args;
-                    fprintf(g_emit_sink.stream, "\n\tpublic __mrun\n");
+                    fprintf(g_emit_sink.stream,
+                            "\n;@dcc.lto begin __mrun\n\tpublic __mrun\n");
                     if (has_args) {
                         fprintf(g_emit_sink.stream, "\textrn __build_argv\n");
                         fprintf(g_emit_sink.stream, "\textrn __argc\n");
@@ -3394,6 +3403,8 @@ void parse_function_or_global(int base_type)
                         fprintf(g_emit_sink.stream, "\tcall _main\n");
                     }
                     fprintf(g_emit_sink.stream, "\tret\n");
+                    fprintf(g_emit_sink.stream,
+                            ";@dcc.lto end __mrun\n");
                 }
 
                 lex_restore(&_le);

@@ -36,9 +36,10 @@ powershell.exe -ExecutionPolicy Bypass -File .\scripts\ma.ps1 foo -Mode nopeep  
 
 This runs the compiler, the optional `dccpeep` peephole optimizer,
 `dccrtlstrip`, [`m80c`](appendix/03-utilities.md#native-assembler-m80c), and
-[`l80c`](appendix/03-utilities.md#native-linker-l80c). Runtime trimming is part
-of the normal build path because it keeps unused library routines out of the
-final `.COM` file. The script resolves each tool from your `PATH` or its
+[`l80c`](appendix/03-utilities.md#native-linker-l80c). Whole-program
+application stripping and runtime trimming are both part of the normal build
+path, keeping unreachable app functions/objects and unused library routines out
+of the final `.COM` file. The script resolves each tool from your `PATH` or its
 documented environment-variable override.
 
 The native linker normally uses `/P:100`, CP/M's standard `.COM` load address.
@@ -63,9 +64,10 @@ utility reference covers the CLI options, origin layouts, and limitations.
         Move-Item -Force _PEEPOUT.MAC FOO.MAC
         ```
 
-        Assemble the application:
+        Strip unreachable application blocks, then assemble:
 
         ```powershell
+        dccrtlstrip --strip-apps FOO.MAC
         m80c "=FOO.MAC" /X /O /Z /L
         ```
 
@@ -88,9 +90,11 @@ utility reference covers the CLI options, origin layouts, and limitations.
         mv _PEEPOUT.MAC FOO.MAC
         ```
 
-        Assemble the application, trim and assemble the runtime, then link:
+        Strip and assemble the application, trim and assemble the runtime,
+        then link:
 
         ```sh
+        dccrtlstrip --strip-apps FOO.MAC
         m80c "=FOO.MAC" /X /O /Z /L
         cp /path/to/dcc/DCCRTL.MAC DCCRTL.MAC
         dccrtlstrip -r DCCRTL.MAC -o RTLMIN.MAC FOO.MAC
