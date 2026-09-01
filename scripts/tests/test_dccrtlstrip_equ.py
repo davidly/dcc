@@ -7,6 +7,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE = REPO_ROOT / "src/dccrtlstrip/dccrtlstrip.c"
+APP_STRIP_SOURCE = REPO_ROOT / "src/dccrtlstrip/dcc_app_strip.c"
 BUILD_DIR = REPO_ROOT / "build"
 CC = shutil.which("clang") or shutil.which("gcc")
 
@@ -28,7 +29,15 @@ class DccRtlStripEquTests(unittest.TestCase):
             output = work / "RTLMIN.MAC"
 
             subprocess.run(
-                [CC, "-std=c89", "-O2", str(SOURCE), "-o", str(tool)],
+                [
+                    CC,
+                    "-std=c89",
+                    "-O2",
+                    str(SOURCE),
+                    str(APP_STRIP_SOURCE),
+                    "-o",
+                    str(tool),
+                ],
                 check=True,
                 cwd=REPO_ROOT,
             )

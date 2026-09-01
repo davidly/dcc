@@ -295,7 +295,7 @@ one, otherwise they look for the tool on your `PATH`. The relevant tools are:
 - [`dcc`](appendix/03-utilities.md#toolchain-commands) — compiler
 - [`dccmake`](appendix/03-utilities.md#build-pipeline-helper-dccmake) — build pipeline helper
 - [`dccpeep`](appendix/03-utilities.md#toolchain-commands) — peephole optimizer
-- [`dccrtlstrip`](appendix/03-utilities.md#toolchain-commands) — runtime stripper
+- [`dccrtlstrip`](appendix/03-utilities.md#toolchain-commands) — application/runtime stripper
 - [`ntvcm`](appendix/03-utilities.md#toolchain-commands) — CP/M emulator
 - [`m80`](appendix/03-utilities.md#toolchain-commands) / [`l80`](appendix/03-utilities.md#toolchain-commands) — assembler and linker
 

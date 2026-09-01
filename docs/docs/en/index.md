@@ -49,10 +49,10 @@ build path from C source to `.COM` file.
 - the supported C library routines,
 - integer and floating-point helpers used by generated code.
 
-Normal builds trim the runtime before linking. Unused routines are left out of
-the final `.COM` file. The build steps are shown in
-[Building and linking](02-build-and-link.md); the trimming details are in the
-[`dccrtlstrip` appendix](appendix/01-dccrtlstrip.md).
+Normal builds remove unreachable application functions and objects before
+assembly, then trim unused runtime routines before linking. The build steps are
+shown in [Building and linking](02-build-and-link.md); the reachability details
+are in the [`dccrtlstrip` appendix](appendix/01-dccrtlstrip.md).
 
 !!! note "Single source of truth"
     Functions that are declared in the standard headers but are **not** part of

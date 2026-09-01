@@ -7,6 +7,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SOURCE = REPO_ROOT / "src/dccrtlstrip/dccrtlstrip.c"
+APP_STRIP_SOURCE = REPO_ROOT / "src/dccrtlstrip/dcc_app_strip.c"
 RUNTIME = REPO_ROOT / "DCCRTL.MAC"
 
 
@@ -19,7 +20,14 @@ class DccRtlStripBlockTests(unittest.TestCase):
         cls.workspace.mkdir(parents=True, exist_ok=True)
         cls.tool = cls.workspace / "dccrtlstrip"
         subprocess.run(
-            ["cc", "-O2", str(SOURCE), "-o", str(cls.tool)],
+            [
+                "cc",
+                "-O2",
+                str(SOURCE),
+                str(APP_STRIP_SOURCE),
+                "-o",
+                str(cls.tool),
+            ],
             cwd=REPO_ROOT,
             check=True,
         )

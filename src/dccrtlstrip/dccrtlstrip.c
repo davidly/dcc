@@ -1,20 +1,20 @@
 /**
  * @file dccrtlstrip.c
- * @brief Produces a conservative per-application subset of DCCRTL.MAC.
+ * @brief Strips unreachable app blocks and selects a minimal DCCRTL.MAC.
  *
  * @par Role
- * Reads the full runtime, one or more application .MAC files, and optional
- * explicit roots; groups runtime text around PUBLIC entry points, follows
- * assembly references to a fixed point, and writes RTLMIN.MAC with required
- * preludes, aliases, data, and filtered PUBLIC directives.
+ * In app mode, delegates structural whole-program function/object stripping
+ * to dcc_app_strip.c. In runtime mode, reads DCCRTL.MAC plus application
+ * references, groups runtime text around PUBLIC entry points, follows
+ * references to a fixed point, and writes RTLMIN.MAC.
  *
  * @par Key entry points
  * main(), build_blocks(), scan_app(), mark_reachable(), and write_output().
  *
  * @par Boundary
- * Runs after dcc/dccpeep emit application assembly and before M80/m80c
- * assembles the selected runtime. It performs conservative textual
- * reachability analysis, not assembly or linking.
+ * Runs after dcc/dccpeep emit application assembly and before m80c assembles
+ * either the application or selected runtime. It performs conservative
+ * textual reachability analysis, not assembly or linking.
  */
 #ifndef _WIN32
 #ifndef _POSIX_C_SOURCE
@@ -25,6 +25,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
+#include "dcc_app_strip.h"
 
 /* Runtime and app streams are never shared between threads. On POSIX hosts,
  * skip the otherwise repeated stdio lock/unlock around every source line. */
@@ -1183,6 +1184,7 @@ static void write_output(const char *fn)
 static void usage(void)
 {
     fprintf(stderr, "usage: dccrtlstrip [-k symbol ...] -r dccrtl.mac -o rtlmin.mac app.mac [app2.mac ...]\n");
+    fprintf(stderr, "       dccrtlstrip --strip-apps [-k root ...] app.mac [app2.mac ...]\n");
     exit(1);
 }
 
@@ -1192,6 +1194,47 @@ int main(int argc, char **argv)
     const char *out = NULL;
     int i;
     int saw_app = 0;
+
+    if (argc > 1 && !strcmp(argv[1], "--strip-apps")) {
+        char **apps;
+        char **app_roots;
+        int app_count;
+        int app_root_count;
+
+        apps = (char **)malloc((size_t)argc * sizeof(*apps));
+        app_roots = (char **)malloc((size_t)argc * sizeof(*app_roots));
+        if (apps == NULL || app_roots == NULL) {
+            fprintf(stderr, "dccrtlstrip: out of memory\n");
+            free(apps);
+            free(app_roots);
+            return 1;
+        }
+        app_count = 0;
+        app_root_count = 0;
+        app_roots[app_root_count++] = "__mrun";
+        for (i = 2; i < argc; ++i) {
+            if ((!strcmp(argv[i], "-k") ||
+                 !strcmp(argv[i], "-root")) && i + 1 < argc) {
+                app_roots[app_root_count++] = argv[++i];
+            } else if (argv[i][0] == '-') {
+                free(apps);
+                free(app_roots);
+                usage();
+            } else {
+                apps[app_count++] = argv[i];
+            }
+        }
+        if (app_count == 0) {
+            free(apps);
+            free(app_roots);
+            usage();
+        }
+        i = dcc_strip_app_files(
+            app_count, apps, app_root_count, app_roots);
+        free(apps);
+        free(app_roots);
+        return i ? 0 : 1;
+    }
 
     for (i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "-r") && i + 1 < argc) {

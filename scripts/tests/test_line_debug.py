@@ -20,6 +20,46 @@ REQUIRED_TOOLS = [
     "built DCC tools are required",
 )
 class LineDebugTests(unittest.TestCase):
+    def test_maximum_identifier_lto_markers_match(self):
+        with tempfile.TemporaryDirectory(prefix="dcc-lto-name-") as directory:
+            root = Path(directory)
+            name = "f" * 63
+            source = root / "longname.c"
+            output = root / "LONGNAME.MAC"
+            source.write_text(
+                "int %s(void) { return 1; }\n"
+                "int main(void) { return %s() != 1; }\n" % (name, name),
+                encoding="ascii",
+            )
+
+            subprocess.run(
+                [
+                    str(REPO_ROOT / "dcc"),
+                    "-I",
+                    str(REPO_ROOT),
+                    str(source),
+                    "-o",
+                    str(output),
+                ],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            text = output.read_text(encoding="ascii")
+            starts = [
+                line for line in text.splitlines()
+                if line.startswith(";@dcc.lto begin ")
+            ]
+            ends = [
+                line for line in text.splitlines()
+                if line.startswith(";@dcc.lto end ")
+            ]
+            self.assertEqual(
+                [line[len(";@dcc.lto begin "):] for line in starts],
+                [line[len(";@dcc.lto end "):] for line in ends],
+            )
+
     def test_multimodule_line_debug_matches_release_code(self):
         with tempfile.TemporaryDirectory(prefix="dcc-line-debug-") as directory:
             root = Path(directory)
@@ -35,6 +75,10 @@ class LineDebugTests(unittest.TestCase):
                 "int helper(int value)\n"
                 "{\n"
                 "    return value + 1;\n"
+                "}\n"
+                "int unused_helper(int value)\n"
+                "{\n"
+                "    return value * 7;\n"
                 "}\n",
                 encoding="ascii",
             )
@@ -77,6 +121,7 @@ class LineDebugTests(unittest.TestCase):
             self.assertTrue(metadata.startswith("DCCDBG 2\n"))
             self.assertIn('"main.c"', metadata)
             self.assertIn('"module.c"', metadata)
+            self.assertNotIn("unused_helper", metadata)
             self.assertEqual(
                 metadata.count("function-begin "),
                 metadata.count("function-end "),

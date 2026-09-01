@@ -99,7 +99,7 @@ or environment variables first, then from the local checkout or `PATH`.
 | `dcc` | C compiler | Host command that translates C source to M80-compatible `.MAC` assembly |
 | `dccmake` | Build pipeline helper | Owns the normal compile, optimize, strip, assemble, and link pipeline; see [Build Pipeline Helper (`dccmake`)](#build-pipeline-helper-dccmake) |
 | `dccpeep` | Peephole optimizer | Host command that rewrites generated `.MAC` files when `dcc-peep=true` |
-| `dccrtlstrip` | Runtime stripper | Host command that scans app `.MAC` files and writes a reduced runtime; see [DCCRTL strip appendix](01-dccrtlstrip.md) |
+| `dccrtlstrip` | Application/runtime stripper | Host command that removes unreachable marked app blocks and writes a reduced runtime; see [DCCRTL strip appendix](01-dccrtlstrip.md) |
 | `DCCRTL.MAC` | Runtime source | Full CP/M runtime consumed by `dccrtlstrip` |
 | [`m80c`](#native-assembler-m80c) | Native assembler | Host command, LINK-80-`.REL`-compatible; default assembler, no `ntvcm` needed |
 | [`l80c`](#native-linker-l80c) | Native linker | Host command, consumes the same `.REL` format; default linker, no `ntvcm` needed |
@@ -221,7 +221,8 @@ executable.
 
 `dccmake` is the lower-level build helper used by the test runner and by
 repeatable local builds. It compiles one or more C source files, optionally runs
-`dccpeep`, strips the runtime with `dccrtlstrip`, then assembles and links with
+`dccpeep`, removes unreachable application functions and objects, strips the
+runtime with `dccrtlstrip`, then assembles and links with
 native [`m80c`](#native-assembler-m80c)/[`l80c`](#native-linker-l80c) by
 default (or the real M80/L80 under `ntvcm` when
 `dcc-use-emulated-m80`/`dcc-use-emulated-l80` is set - real L80 runs inside
@@ -340,11 +341,12 @@ dccmake dcc-peep=false
 | `dcc-undefine` | none | Comma-separated names passed to `dcc` as `-U`; `dcc-undefines` is an alias |
 | `dcc-peep` | `true` | Run `dccpeep` after compiling each `.MAC` file |
 | `dcc-peep-debug` | `false` | Run `dccpeep` over full conservative `-g` output; use `dcc-debug=lines` for release-identical optimized code |
+| `dcc-strip-unused` | `true` | Remove application functions and objects unreachable across all input modules. Set `false` when producing a module intended for a separate later link |
 | `dcc-build-dir` | `build` | Artifact directory |
 | `dcc-runtime` | `DCC_RUNTIME`, local `DCCRTL.MAC`, or `DCCRTL.MAC` | Runtime source passed to `dccrtlstrip` |
 | `dcc-tool` | `DCC`, local `dcc`, or `dcc` | DCC compiler command |
 | `dccpeep-tool` | `DCCPEEP`, local `dccpeep`, or `dccpeep` | Peephole optimizer command |
-| `dccrtlstrip-tool` | `DCCRTLSTRIP`, local `dccrtlstrip`, or `dccrtlstrip` | Runtime stripper command |
+| `dccrtlstrip-tool` | `DCCRTLSTRIP`, local `dccrtlstrip`, or `dccrtlstrip` | Application/runtime stripper command |
 | `ntvcm-tool` | `NTVCM` or `ntvcm` | Emulator command used to run M80/L80 (only when either is emulated) |
 | `m80-command` | `M80` or `m80` | CP/M assembler command passed to `ntvcm`; emulated-M80 path only |
 | `m80c-tool` | `M80C`, local `m80c`, or `m80c` | Native host assembler command (default, no `ntvcm`); see [`m80c`](#native-assembler-m80c) |
