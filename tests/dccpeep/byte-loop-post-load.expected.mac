@@ -1,0 +1,26 @@
+	cseg
+
+	public _checksum
+_checksum:
+	push ix
+	ld ix,0
+	add ix,sp
+	dec sp
+	jp nz,LALT
+	ld (ix-1),l
+LLOOP:
+	ld l,(ix-1)
+	ld h,0
+	inc hl
+	ld (ix-1),l
+	jp nc,LEXIT
+	jp LLOOP
+LALT:
+	ld (ix-1),l
+LEXIT:
+	ld l,(ix-1)
+	ld h,0
+	ld sp,ix
+	pop ix
+	ret
+	end

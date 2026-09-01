@@ -746,9 +746,10 @@ int pass_byte_loop_var_to_reg_c(void)
             strip_peep_comment_lower_copy(t, lines[j]);
             sprintf(off_txt, "(ix%d)", off);
             if (strstr(t, off_txt) != NULL) {
-                if (strncmp(t, "ld (ix", 6) != 0)
+                if (strncmp(t, "ld (ix", 6) != 0) {
                     bad = 1;
-                break;
+                    break;
+                }
             }
         }
         if (bad)
