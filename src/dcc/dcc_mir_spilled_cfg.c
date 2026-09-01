@@ -15161,7 +15161,7 @@ static int mir_compound_address_needs_frame_shift(
     if (insn->name[0] != '\0' &&
         mir_declared_location(insn->name, &type, &storage, &offset))
         return storage == SC_LOCAL;
-    return insn->name[0] == '\0' && insn->immediate < 0;
+    return insn->immediate < 0;
 }
 
 static void mir_shift_frame_for_iy_register(int begin)
