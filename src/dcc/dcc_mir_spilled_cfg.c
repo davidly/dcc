@@ -21617,16 +21617,17 @@ static void mir_emit_fortran_eval(
     mir_stream_puts("\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
           "\tld h,b\n\tld l,c\n", out);
     mir_emit_mul_hl_const(out, (unsigned long)plan->token_stride);
-    mir_stream_puts("\tpush iy\n\tpop de\n\tadd hl,de\n", out);
-    /* HL' is otherwise unused by this exact kernel (the IY increment uses
-     * only DE'), so retain the token-end pointer there for every dispatch. */
-    mir_stream_printf(out, "\texx\n\tld bc,%s\n", stack_name);
+    /* Keep the remaining token bytes in HL' and -sizeof(Token) in DE'.
+     * Testing/decrementing that counter is substantially cheaper than
+     * materializing IY and the end pointer on the machine stack for every
+     * dispatch.  The active BC remains the evaluation-stack pointer. */
+    mir_stream_printf(out, "\tld de,-%d\n\texx\n\tld bc,%s\n",
+            plan->token_stride, stack_name);
     mir_stream_printf(out,
-            "L%d:\n\tpush iy\n\tpop hl\n\texx\n\tpush hl\n\texx\n",
+            "L%d:\n\texx\n\tld a,h\n\tor l\n\texx\n",
             dispatch);
-    mir_stream_puts("\tpop de\n\tor a\n\tsbc hl,de\n", out);
     mir_stream_printf(out,
-            "\tjp nc, L%d\n"
+            "\tjp z, L%d\n"
             "\tld a,(iy%+d)\n\tor a\n\tjp nz, L%d\n"
             "\tld a,(iy%+d)\n\tdec a\n\tcp %d\n\tjp nc, L%d\n",
             done,
@@ -21765,6 +21766,7 @@ static void mir_emit_fortran_eval(
     mir_stream_printf(out, "L%d:\n", next);
     for (item = 0; item < plan->token_stride; ++item)
         mir_stream_puts("\tinc iy\n", out);
+    mir_stream_puts("\texx\n\tadd hl,de\n\texx\n", out);
     mir_stream_printf(out, "\tjp L%d\nL%d:\n", dispatch, done);
     mir_stream_printf(out,
             "\tld h,b\n\tld l,c\n\tld de,%s\n\tor a\n\tsbc hl,de\n"
@@ -22336,22 +22338,16 @@ static void mir_emit_pascal_global_store(MirStream *out, struct Sym *symbol)
             asm_name_for(sym_asm_name(symbol)));
 }
 
-static void mir_emit_pascal_push_hl(
-    MirStream *out, const struct MirPascalRun *plan)
+static void mir_emit_pascal_push_hl(MirStream *out)
 {
-    mir_stream_puts("\tex de,hl\n", out);
-    mir_emit_pascal_global_load(out, plan->stack_pointer);
-    mir_stream_puts("\tld (hl),e\n\tinc hl\n\tld (hl),d\n\tinc hl\n", out);
-    mir_emit_pascal_global_store(out, plan->stack_pointer);
+    mir_stream_puts("\tex de,hl\n\tld l,c\n\tld h,b\n"
+          "\tld (hl),e\n\tinc hl\n\tld (hl),d\n\tinc bc\n\tinc bc\n", out);
 }
 
-static void mir_emit_pascal_pop_hl(
-    MirStream *out, const struct MirPascalRun *plan)
+static void mir_emit_pascal_pop_hl(MirStream *out)
 {
-    mir_emit_pascal_global_load(out, plan->stack_pointer);
-    mir_stream_puts("\tdec hl\n\tdec hl\n", out);
-    mir_emit_pascal_global_store(out, plan->stack_pointer);
-    mir_stream_puts("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n", out);
+    mir_stream_puts("\tdec bc\n\tdec bc\n\tld l,c\n\tld h,b\n"
+          "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n", out);
 }
 
 static void mir_emit_pascal_instruction_word(MirStream *out, int offset)
@@ -22394,6 +22390,7 @@ static void mir_emit_pascal_run(
     mir_emit_pascal_global_store(out, plan->stack_pointer);
     mir_emit_pascal_global_load(out, plan->stack);
     mir_emit_pascal_global_store(out, plan->stack_pointer);
+    mir_stream_puts("\tld c,l\n\tld b,h\n", out);
     mir_emit_pascal_global_load(out, plan->frame_storage);
     mir_emit_pascal_global_store(out, plan->frame_memory);
 
@@ -22431,11 +22428,9 @@ static void mir_emit_pascal_run(
         mir_stream_printf(out, "L%d:\n", cases[item]);
         if (is_store && indexed) {
             mir_stream_printf(out, "\tcall L%d\n", pop_two);
-            mir_stream_puts("\tpush hl\n\tld l,c\n\tld h,b\n", out);
-            mir_emit_pascal_global_store(out, plan->stack_pointer);
-            mir_stream_puts("\tpop hl\n\tpush de\n", out);
+            mir_stream_puts("\tpush de\n", out);
         } else if (indexed || is_store) {
-            mir_emit_pascal_pop_hl(out, plan);
+            mir_emit_pascal_pop_hl(out);
             if (is_store)
                 mir_stream_puts("\tpush hl\n", out);
         }
@@ -22469,27 +22464,28 @@ static void mir_emit_pascal_run(
         int nonzero = new_label();
         int done = new_label();
         mir_stream_printf(out, "L%d:\n\tcall L%d\n", cases[item], pop_two);
-        mir_stream_puts("\tpush hl\n\tld l,c\n\tld h,b\n", out);
-        mir_emit_pascal_global_store(out, plan->stack_pointer);
-        mir_stream_puts("\tpop hl\n", out);
         if (item == 10)
             mir_stream_puts("\tadd hl,de\n", out);
         else if (item == 11)
             mir_stream_puts("\tor a\n\tsbc hl,de\n", out);
-        else if (item == 12)
+        else if (item == 12) {
+            mir_stream_puts("\tpush bc\n", out);
             mir_emit_runtime_call(out, "__mulu");
-        else {
+            mir_stream_puts("\tpop bc\n", out);
+        } else {
             mir_stream_printf(out,
                     "\tld a,d\n\tor e\n\tjp nz,L%d\n\tld hl,0\n"
                     "\tjp L%d\nL%d:\n", nonzero, done, nonzero);
+            mir_stream_puts("\tpush bc\n", out);
             mir_emit_runtime_call(out, item == 13 ? "__divs" : "__mods");
+            mir_stream_puts("\tpop bc\n", out);
             mir_stream_printf(out, "L%d:\n", done);
         }
         mir_stream_printf(out, "\tjp L%d\n", push_result);
     }
 
     mir_stream_printf(out, "L%d:\n", cases[15]);
-    mir_emit_pascal_pop_hl(out, plan);
+    mir_emit_pascal_pop_hl(out);
     mir_stream_puts("\txor a\n\tsub l\n\tld l,a\n\tld a,0\n\tsbc a,h\n\tld h,a\n", out);
     mir_stream_printf(out, "\tjp L%d\n", push_result);
 
@@ -22498,9 +22494,6 @@ static void mir_emit_pascal_run(
         int false_label = new_label();
         int done = new_label();
         mir_stream_printf(out, "L%d:\n\tcall L%d\n", cases[item], pop_two);
-        mir_stream_puts("\tpush hl\n\tld l,c\n\tld h,b\n", out);
-        mir_emit_pascal_global_store(out, plan->stack_pointer);
-        mir_stream_puts("\tpop hl\n", out);
         if (item == 16 || item == 17) {
             mir_stream_puts("\tor a\n\tsbc hl,de\n", out);
             mir_stream_printf(out, "\tjp %s,L%d\n\tjp L%d\n",
@@ -22508,6 +22501,7 @@ static void mir_emit_pascal_run(
         } else if (item >= 18 && item <= 21) {
             if (item == 19 || item == 20)
                 mir_stream_puts("\tex de,hl\n", out);
+            mir_stream_puts("\tpush bc\n", out);
             if (item == 18 || item == 20)
                 mir_emit_forth_signed_less_branch(out, true_label, false_label);
             else
@@ -22524,13 +22518,16 @@ static void mir_emit_pascal_run(
                     item == 22 ? true_label : false_label);
         }
         mir_stream_printf(out,
-                "L%d:\n\tld hl,1\n\tjp L%d\nL%d:\n\tld hl,0\n"
+                "L%d:\n%s\tld hl,1\n\tjp L%d\nL%d:\n%s\tld hl,0\n"
                 "L%d:\n\tjp L%d\n",
-                true_label, done, false_label, done, push_result);
+                true_label, item >= 18 && item <= 21 ? "\tpop bc\n" : "",
+                done, false_label,
+                item >= 18 && item <= 21 ? "\tpop bc\n" : "",
+                done, push_result);
     }
 
     mir_stream_printf(out, "L%d:\n", cases[24]);
-    mir_emit_pascal_pop_hl(out, plan);
+    mir_emit_pascal_pop_hl(out);
     {
         int zero = new_label();
         int done = new_label();
@@ -22541,15 +22538,14 @@ static void mir_emit_pascal_run(
     }
 
     mir_stream_printf(out, "L%d:\n\tcall L%d\n", cases[25], pop_two);
-    mir_stream_puts("\tpush hl\n\tld l,c\n\tld h,b\n", out);
-    mir_emit_pascal_global_store(out, plan->stack_pointer);
-    mir_stream_puts("\tpop hl\n\tld b,e\n\tld a,b\n\tor a\n", out);
+    mir_stream_puts("\tpush bc\n\tld b,e\n\tld a,b\n\tor a\n", out);
     {
         int shift = new_label();
         int shifted = new_label();
         mir_stream_printf(out, "\tjp z,L%d\nL%d:\n\tadd hl,hl\n\tdjnz L%d\nL%d:\n",
                 shifted, shift, shift, shifted);
     }
+    mir_stream_puts("\tpop bc\n", out);
     mir_stream_printf(out, "\tjp L%d\n", push_result);
 
     mir_stream_printf(out, "L%d:\n", cases[26]);
@@ -22563,7 +22559,7 @@ static void mir_emit_pascal_run(
     for (item = 27; item <= 28; ++item) {
         int fallthrough = new_label();
         mir_stream_printf(out, "L%d:\n", cases[item]);
-        mir_emit_pascal_pop_hl(out, plan);
+        mir_emit_pascal_pop_hl(out);
         mir_stream_puts("\tld a,h\n\tor l\n", out);
         mir_stream_printf(out, "\tjp %s,L%d\n",
                 item == 27 ? "nz" : "z", fallthrough);
@@ -22577,6 +22573,8 @@ static void mir_emit_pascal_run(
     }
 
     mir_stream_printf(out, "L%d:\n", cases[29]);
+    mir_stream_puts("\tld l,c\n\tld h,b\n", out);
+    mir_emit_pascal_global_store(out, plan->stack_pointer);
     mir_stream_puts("\tpush iy\n\tpop hl\n", out);
     mir_stream_printf(out, "\tld de,%d\n\tadd hl,de\n\tpush hl\n",
             plan->instruction_stride);
@@ -22584,6 +22582,8 @@ static void mir_emit_pascal_run(
     mir_stream_puts("\tpush hl\n", out);
     mir_emit_symbol_call(out, plan->call_function);
     mir_stream_puts("\tpop bc\n\tpop bc\n", out);
+    mir_emit_pascal_global_load(out, plan->stack_pointer);
+    mir_stream_puts("\tld c,l\n\tld b,h\n", out);
     mir_emit_pascal_instruction_word(out, plan->instruction_a_offset);
     mir_emit_mul_hl_const(out, (unsigned long)plan->procedure_stride);
     mir_stream_puts("\tex de,hl\n", out);
@@ -22608,7 +22608,7 @@ static void mir_emit_pascal_run(
         int no_value = new_label();
         int have_value = new_label();
         mir_stream_printf(out, "\tor a\n\tjp z,L%d\n", no_value);
-        mir_emit_pascal_pop_hl(out, plan);
+        mir_emit_pascal_pop_hl(out);
         mir_stream_printf(out, "\tjp L%d\nL%d:\n\tld hl,0\nL%d:\n",
                 have_value, no_value, have_value);
         mir_stream_puts("\tpush hl\n", out);
@@ -22629,52 +22629,60 @@ static void mir_emit_pascal_run(
     }
 
     mir_stream_printf(out, "L%d:\n", cases[31]);
-    mir_emit_pascal_pop_hl(out, plan);
+    mir_emit_pascal_pop_hl(out);
+    mir_stream_puts("\tpush bc\n", out);
     mir_stream_puts("\tpush hl\n", out);
     mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n",
             plan->integer_format_string);
     mir_emit_symbol_call(out, plan->print_function);
     mir_stream_puts("\tpop bc\n\tpop bc\n", out);
+    mir_stream_puts("\tpop bc\n", out);
     mir_stream_printf(out, "\tjp L%d\n", next);
     mir_stream_printf(out, "L%d:\n", cases[32]);
     mir_emit_pascal_instruction_word(out, plan->instruction_a_offset);
     mir_stream_puts("\tadd hl,hl\n\tex de,hl\n", out);
     mir_emit_pascal_global_load(out, plan->strings);
     mir_stream_puts("\tadd hl,de\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n", out);
+    mir_stream_puts("\tpop de\n\tpush bc\n\tpush de\n", out);
     mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n",
             plan->string_format_string);
     mir_emit_symbol_call(out, plan->print_function);
     mir_stream_puts("\tpop bc\n\tpop bc\n", out);
+    mir_stream_puts("\tpop bc\n", out);
     mir_stream_printf(out, "\tjp L%d\n", next);
-    mir_stream_printf(out, "L%d:\n\tld hl,S%d\n\tpush hl\n",
+    mir_stream_printf(out, "L%d:\n\tpush bc\n\tld hl,S%d\n\tpush hl\n",
             cases[33], plan->newline_string);
     mir_emit_symbol_call(out, plan->print_function);
     mir_stream_puts("\tpop bc\n", out);
+    mir_stream_puts("\tpop bc\n", out);
     mir_stream_printf(out, "\tjp L%d\n", next);
     mir_stream_printf(out, "L%d:\n", cases[34]);
-    mir_emit_pascal_pop_hl(out, plan);
+    mir_emit_pascal_pop_hl(out);
     mir_stream_puts("\tld h,0\n\tld a,l\n\tand 1\n\tld l,a\n", out);
     mir_stream_printf(out, "\tjp L%d\n", push_result);
 
     mir_stream_printf(out, "L%d:\n", pop_two);
     mir_stream_printf(out,
-            "\tld bc,(%s)\n\tdec bc\n\tdec bc\n\tld l,c\n\tld h,b\n"
+            "\tdec bc\n\tdec bc\n\tld l,c\n\tld h,b\n"
             "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n"
             "\tdec bc\n\tdec bc\n\tld l,c\n\tld h,b\n"
-            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n\tpop de\n\tret\n",
-            asm_name_for(sym_asm_name(plan->stack_pointer)));
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n\tpop de\n\tret\n");
     mir_stream_printf(out, "L%d:\n", push_result);
-    mir_emit_pascal_push_hl(out, plan);
+    mir_emit_pascal_push_hl(out);
     mir_stream_printf(out, "\tjp L%d\nL%d:\n", next, return_result);
-    mir_emit_pascal_push_hl(out, plan);
+    mir_emit_pascal_push_hl(out);
     mir_stream_printf(out, "\tjp L%d\n", dispatch);
     mir_stream_printf(out, "L%d:\n\tld de,%d\n\tadd iy,de\n\tjp L%d\n",
             next, plan->instruction_stride, dispatch);
     mir_stream_printf(out, "L%d:\n", bad_opcode);
+    mir_stream_puts("\tld l,c\n\tld h,b\n", out);
+    mir_emit_pascal_global_store(out, plan->stack_pointer);
     mir_stream_puts("\tld hl,1\n\tpush hl\n", out);
     mir_emit_symbol_call(out, plan->exit_function);
-    mir_stream_printf(out, "\tjp L%d\nL%d:\n\tpop ix\n\tpop iy\n\tret\n",
-            exit_label, exit_label);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", exit_label, exit_label);
+    mir_stream_puts("\tld l,c\n\tld h,b\n", out);
+    mir_emit_pascal_global_store(out, plan->stack_pointer);
+    mir_stream_puts("\tpop ix\n\tpop iy\n\tret\n", out);
 }
 
 enum MirAdaFrameOffset {
@@ -30931,6 +30939,79 @@ static int mir_match_indexed_stack_binary_reduction(
         }
     if (second_binary < 0)
         return 0;
+    /* Logical && and || lower to short-circuit CFGs rather than a
+     * MIR_BINARY.  Recognize the canonical two-pop/value-normalization
+     * shapes here so the interpreter stack operation can still be emitted
+     * as one compact reduction. */
+    {
+        const struct MirInsn *p = &mir.insns[second.load_instruction];
+        int remaining = mir.count - second.load_instruction;
+        int logical_call = -1;
+        int logical_argument = -1;
+        int logical_operation = 0;
+
+        if (remaining >= 16 &&
+            p[1].opcode == MIR_NOP && p[2].opcode == MIR_STORE &&
+            p[2].src1 == p[0].dst && p[3].opcode == MIR_NOP &&
+            p[4].opcode == MIR_BRANCH_FALSE && p[4].src1 == p[0].dst &&
+            p[5].opcode == MIR_NOP && p[6].opcode == MIR_BRANCH_FALSE &&
+            p[6].src1 == mir.insns[first.load_instruction].dst &&
+            p[6].label == p[4].label && p[7].opcode == MIR_LABEL &&
+            p[8].opcode == MIR_CONST && p[8].immediate == 1 &&
+            p[9].opcode == MIR_JUMP && p[10].opcode == MIR_LABEL &&
+            p[10].label == p[4].label && p[11].opcode == MIR_CONST &&
+            p[11].immediate == 0 && p[12].opcode == MIR_LABEL &&
+            p[12].label == p[9].label && p[13].opcode == MIR_PHI &&
+            p[14].opcode == MIR_ARG && p[14].src1 == p[13].dst &&
+            p[15].opcode == MIR_CALL) {
+            logical_operation = TOK_ANDAND;
+            logical_argument = second.load_instruction + 14;
+            logical_call = second.load_instruction + 15;
+        } else if (remaining >= 24 &&
+            p[1].opcode == MIR_NOP && p[2].opcode == MIR_STORE &&
+            p[2].src1 == p[0].dst && p[3].opcode == MIR_NOP &&
+            p[4].opcode == MIR_BRANCH_FALSE && p[4].src1 == p[0].dst &&
+            p[5].opcode == MIR_LABEL && p[6].opcode == MIR_CONST &&
+            p[6].immediate == 1 && p[7].opcode == MIR_JUMP &&
+            p[8].opcode == MIR_LABEL && p[8].label == p[4].label &&
+            p[9].opcode == MIR_NOP && p[10].opcode == MIR_BRANCH_FALSE &&
+            p[10].src1 == mir.insns[first.load_instruction].dst &&
+            p[11].opcode == MIR_LABEL && p[12].opcode == MIR_CONST &&
+            p[12].immediate == 1 && p[13].opcode == MIR_JUMP &&
+            p[14].opcode == MIR_LABEL && p[14].label == p[10].label &&
+            p[15].opcode == MIR_CONST && p[15].immediate == 0 &&
+            p[16].opcode == MIR_LABEL && p[16].label == p[13].label &&
+            p[17].opcode == MIR_PHI && p[18].opcode == MIR_LABEL &&
+            p[19].opcode == MIR_JUMP && p[20].opcode == MIR_LABEL &&
+            p[20].label == p[7].label && p[20].label == p[19].label &&
+            p[21].opcode == MIR_PHI && p[22].opcode == MIR_ARG &&
+            p[22].src1 == p[21].dst && p[23].opcode == MIR_CALL) {
+            logical_operation = TOK_OROR;
+            logical_argument = second.load_instruction + 22;
+            logical_call = second.load_instruction + 23;
+        }
+        if (logical_call >= 0 &&
+            mir_call_uses_inline_postincrement_store(
+                helper, logical_call, &argument, &continuation,
+                &continuation_label) &&
+            argument == mir.insns[logical_argument].src1) {
+            if (reduction != NULL) {
+                reduction->base = first.base;
+                reduction->index = first.index;
+                reduction->first_binary = first_binary;
+                reduction->second_binary = second_binary;
+                reduction->compare_instruction = logical_argument;
+                reduction->call_instruction = logical_call;
+                reduction->operation = logical_operation;
+                reduction->continuation_instruction = continuation;
+                reduction->continuation_label = continuation_label;
+                reduction->fast_continuation_label =
+                    mir_checked_dispatch_fast_continuation(
+                        continuation_label);
+            }
+            return 1;
+        }
+    }
     compare_at = -1;
     for (scan = second.load_instruction + 1;
          scan < mir.count && scan <= second.load_instruction + 12; ++scan) {
@@ -31480,6 +31561,33 @@ static void mir_emit_indexed_stack_binary_reduction(
          reduction->index->needs_extrn) &&
         mir_extrn_should_emit(reduction->index))
         mir_stream_printf(out, "\textrn %s\n", index_name);
+    if (reduction->operation == TOK_ANDAND ||
+        reduction->operation == TOK_OROR) {
+        int decisive = new_label();
+        /* Only the truth of each word matters.  Test both operands directly
+         * in the VM stack and leave HL at the surviving result slot; loading
+         * the second word into DE and saving that address on the machine
+         * stack costs more cycles and bytes. */
+        mir_stream_printf(out,
+                "\tld hl,(%s)\n\tdec l\n\tld (%s),hl\n"
+                "\tadd hl,hl\n\tld bc,%s\n\tadd hl,bc\n"
+                "\tld a,(hl)\n\tinc hl\n\tor (hl)\n"
+                "\tdec hl\n\tdec hl\n\tdec hl\n"
+                "\tjp %s,L%d\n"
+                "\tld a,(hl)\n\tinc hl\n\tor (hl)\n\tdec hl\n"
+                "\tld bc,0\n\tjp z,L%d\n\tinc bc\n\tjp L%d\n"
+                "L%d:\n\tld bc,%d\n"
+                "L%d:\n\tld (hl),c\n\tinc hl\n\tld (hl),b\n",
+                index_name, index_name, base_name,
+                reduction->operation == TOK_ANDAND ? "z" : "nz",
+                decisive, store, store, decisive,
+                reduction->operation == TOK_ANDAND ? 0 : 1, store);
+        mir_stream_printf(out, "\tjp L%d\n", labels[
+                reduction->fast_continuation_label >= 0
+                    ? reduction->fast_continuation_label
+                    : reduction->continuation_label]);
+        return;
+    }
     /* Two pops followed by one push have a net stack-depth change of -1.
      * Point at the old top item, load it into DE, then compare the preceding
      * word in place and overwrite that word with the boolean result. */
