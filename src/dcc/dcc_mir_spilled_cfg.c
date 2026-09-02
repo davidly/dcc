@@ -89,13 +89,26 @@ struct MirIndexedPredecrementLoad {
     int load_instruction;
     int stride;
 };
-struct MirIndexedStackEqualityReduction {
+struct MirIndexedStackBinaryReduction {
     struct Sym *base;
     struct Sym *index;
     int first_binary;
     int second_binary;
     int compare_instruction;
     int call_instruction;
+    int operation;
+    int continuation_instruction;
+    int continuation_label;
+    int fast_continuation_label;
+};
+struct MirIndexedStackUnaryReduction {
+    struct Sym *base;
+    struct Sym *index;
+    int operation;
+    int call_instruction;
+    int continuation_instruction;
+    int continuation_label;
+    int fast_continuation_label;
 };
 static int mir_binary_is_selfstore_global_indexed_predecrement_load(
     int index, struct MirIndexedPredecrementLoad *plan);
@@ -30837,9 +30850,56 @@ static int mir_binary_is_selfstore_global_indexed_predecrement_load(
     return 1;
 }
 
-static int mir_match_indexed_stack_equality_reduction(
+/* Locate the fall-through block of `flag1 || flag2` immediately following a
+ * dispatch case.  A fused stack-only operation cannot change either loaded
+ * location, and this loop shape reaches the next dispatch only through the
+ * same false path, so it may enter the increment block directly. */
+static int mir_checked_dispatch_fast_continuation(int continuation_label)
+{
+    int start = mir_find_label(continuation_label);
+    const struct MirInsn *p;
+
+    if (start < 0 || start + 27 >= mir.count)
+        return -1;
+    p = &mir.insns[start];
+    if (p[0].opcode != MIR_LABEL ||
+        p[1].opcode != MIR_ADDRESS ||
+        p[2].opcode != MIR_MEMBER_ADDRESS ||
+        p[3].opcode != MIR_LOAD_INDIRECT ||
+        p[4].opcode != MIR_BRANCH_FALSE ||
+        p[5].opcode != MIR_LABEL ||
+        p[6].opcode != MIR_CONST || p[6].immediate != 1 ||
+        p[7].opcode != MIR_JUMP ||
+        p[8].opcode != MIR_LABEL || p[8].label != p[4].label ||
+        p[9].opcode != MIR_ADDRESS ||
+        p[10].opcode != MIR_MEMBER_ADDRESS ||
+        p[11].opcode != MIR_LOAD_INDIRECT ||
+        p[12].opcode != MIR_BRANCH_FALSE ||
+        p[13].opcode != MIR_LABEL ||
+        p[14].opcode != MIR_CONST || p[14].immediate != 1 ||
+        p[15].opcode != MIR_JUMP ||
+        p[16].opcode != MIR_LABEL || p[16].label != p[12].label ||
+        p[17].opcode != MIR_CONST || p[17].immediate != 0 ||
+        p[18].opcode != MIR_LABEL || p[18].label != p[15].label ||
+        p[19].opcode != MIR_PHI ||
+        p[20].opcode != MIR_LABEL ||
+        p[21].opcode != MIR_JUMP ||
+        p[22].opcode != MIR_LABEL || p[22].label != p[7].label ||
+        p[22].label != p[21].label ||
+        p[23].opcode != MIR_PHI ||
+        p[24].opcode != MIR_BRANCH_FALSE ||
+        p[25].opcode != MIR_NOP ||
+        p[26].opcode != MIR_JUMP ||
+        p[27].opcode != MIR_LABEL || p[27].label != p[24].label ||
+        strcmp(p[1].name, p[9].name) != 0 ||
+        strcmp(p[2].name, p[10].name) == 0)
+        return -1;
+    return p[24].label;
+}
+
+static int mir_match_indexed_stack_binary_reduction(
     int first_binary, const struct MirInlinePostincrementStore *helper,
-    struct MirIndexedStackEqualityReduction *reduction)
+    struct MirIndexedStackBinaryReduction *reduction)
 {
     struct MirIndexedPredecrementLoad first;
     struct MirIndexedPredecrementLoad second;
@@ -30876,7 +30936,12 @@ static int mir_match_indexed_stack_equality_reduction(
          scan < mir.count && scan <= second.load_instruction + 12; ++scan) {
         const struct MirInsn *candidate = &mir.insns[scan];
         if (candidate->opcode == MIR_BINARY &&
-            candidate->immediate == TOK_EQ &&
+            (candidate->immediate == TOK_EQ ||
+             candidate->immediate == '<' ||
+             candidate->immediate == '>' ||
+             candidate->immediate == '+' ||
+             candidate->immediate == '-' ||
+             candidate->immediate == '*') &&
             ((candidate->src1 == mir.insns[first.load_instruction].dst &&
               candidate->src2 == mir.insns[second.load_instruction].dst) ||
              (candidate->src2 == mir.insns[first.load_instruction].dst &&
@@ -30933,6 +30998,82 @@ static int mir_match_indexed_stack_equality_reduction(
         reduction->second_binary = second_binary;
         reduction->compare_instruction = compare_at;
         reduction->call_instruction = call_at;
+        reduction->operation = (int)compare->immediate;
+        reduction->continuation_instruction = continuation;
+        reduction->continuation_label = continuation_label;
+        reduction->fast_continuation_label =
+            mir_checked_dispatch_fast_continuation(continuation_label);
+    }
+    return 1;
+}
+
+static int mir_match_indexed_stack_unary_reduction(
+    int first_binary, const struct MirInlinePostincrementStore *helper,
+    struct MirIndexedStackUnaryReduction *reduction)
+{
+    struct MirIndexedPredecrementLoad pop;
+    const struct MirInsn *unary = NULL;
+    int unary_at = -1;
+    int argument_at, call_at, argument, continuation, continuation_label;
+    int scan;
+
+    if (helper == NULL || !helper->enabled ||
+        helper->kind != MIR_INLINE_POSTINC_INDEXED_BASE ||
+        !mir_binary_is_selfstore_global_indexed_predecrement_load(
+            first_binary, &pop) || pop.base != helper->base ||
+        pop.index != helper->index || pop.base->array_len <= 0 ||
+        pop.base->array_len > 255)
+        return 0;
+    for (scan = pop.load_instruction + 1;
+         scan < mir.count && scan <= pop.load_instruction + 10; ++scan) {
+        const struct MirInsn *candidate = &mir.insns[scan];
+        if (candidate->opcode == MIR_UNARY &&
+            candidate->src1 == mir.insns[pop.load_instruction].dst &&
+            (candidate->immediate == '-' || candidate->immediate == '!')) {
+            unary_at = scan;
+            unary = candidate;
+            break;
+        }
+    }
+    if (unary_at < 0 || unary == NULL)
+        return 0;
+    argument_at = unary_at + 1;
+    while (argument_at < mir.count &&
+           mir.insns[argument_at].opcode == MIR_NOP)
+        ++argument_at;
+    call_at = argument_at + 1;
+    if (argument_at >= mir.count || call_at >= mir.count ||
+        mir.insns[argument_at].opcode != MIR_ARG ||
+        mir.insns[argument_at].src1 != unary->dst ||
+        mir.insns[call_at].opcode != MIR_CALL ||
+        !mir_call_uses_inline_postincrement_store(
+            helper, call_at, &argument, &continuation,
+            &continuation_label) || argument != unary->dst)
+        return 0;
+    for (scan = first_binary + 1; scan < call_at; ++scan) {
+        const struct MirInsn *insn = &mir.insns[scan];
+        int store_type, store_storage, store_offset;
+        if (scan == pop.store_instruction ||
+            scan == pop.index_instruction || scan == pop.load_instruction ||
+            scan == unary_at || scan == argument_at ||
+            insn->opcode == MIR_NOP || insn->opcode == MIR_ADDRESS ||
+            (insn->opcode == MIR_STORE && insn->memory_flags == 0 &&
+             insn->src1 == mir.insns[pop.load_instruction].dst &&
+             mir_scalar_memory_location(
+                 insn, &store_type, &store_storage, &store_offset) &&
+             (store_storage == SC_LOCAL || store_storage == SC_PARAM)))
+            continue;
+        return 0;
+    }
+    if (reduction != NULL) {
+        reduction->base = pop.base;
+        reduction->index = pop.index;
+        reduction->operation = (int)unary->immediate;
+        reduction->call_instruction = call_at;
+        reduction->continuation_instruction = continuation;
+        reduction->continuation_label = continuation_label;
+        reduction->fast_continuation_label =
+            mir_checked_dispatch_fast_continuation(continuation_label);
     }
     return 1;
 }
@@ -31322,12 +31463,13 @@ static void mir_emit_selfstore_global_indexed_predecrement_load(
     mir_emit_instruction_index = saved_instruction;
 }
 
-static void mir_emit_indexed_stack_equality_reduction(
-    MirStream *out, const struct MirIndexedStackEqualityReduction *reduction)
+static void mir_emit_indexed_stack_binary_reduction(
+    MirStream *out, const int *labels,
+    const struct MirIndexedStackBinaryReduction *reduction)
 {
     const char *base_name = asm_name_for(sym_asm_name(reduction->base));
     const char *index_name = asm_name_for(sym_asm_name(reduction->index));
-    int unequal = new_label();
+    int false_label = new_label();
     int store = new_label();
 
     if ((reduction->base->storage == SC_EXTERN ||
@@ -31345,14 +31487,92 @@ static void mir_emit_indexed_stack_equality_reduction(
             "\tld hl,(%s)\n\tdec l\n\tld (%s),hl\n"
             "\tadd hl,hl\n\tld bc,%s\n\tadd hl,bc\n"
             "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
-            "\tdec hl\n\tdec hl\n\tdec hl\n\tpush hl\n"
-            "\tld a,(hl)\n\tcp e\n\tjp nz,L%d\n"
-            "\tinc hl\n\tld a,(hl)\n\tcp d\n\tjp nz,L%d\n"
-            "\tld bc,1\n\tjp L%d\n"
-            "L%d:\n\tld bc,0\nL%d:\n\tpop hl\n"
-            "\tld (hl),c\n\tinc hl\n\tld (hl),b\n",
-            index_name, index_name, base_name,
-            unequal, unequal, store, unequal, store);
+            "\tdec hl\n\tdec hl\n\tdec hl\n\tpush hl\n",
+            index_name, index_name, base_name);
+    if (reduction->operation == '+' ||
+        reduction->operation == '-' ||
+        reduction->operation == '*') {
+        mir_stream_puts(
+                "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n",
+                out);
+        if (reduction->operation == '+')
+            mir_stream_puts("\tadd hl,de\n", out);
+        else if (reduction->operation == '-')
+            mir_stream_puts("\tor a\n\tsbc hl,de\n", out);
+        else
+            mir_emit_runtime_call(out, "__mulu");
+        mir_stream_puts("\tld c,l\n\tld b,h\n", out);
+    } else if (reduction->operation == TOK_EQ) {
+        mir_stream_printf(out,
+                "\tld a,(hl)\n\tcp e\n\tjp nz,L%d\n"
+                "\tinc hl\n\tld a,(hl)\n\tcp d\n\tjp nz,L%d\n"
+                "\tld bc,1\n\tjp L%d\n"
+                "L%d:\n\tld bc,0\n",
+                false_label, false_label, store, false_label);
+    } else {
+        mir_stream_puts(
+                "\tld c,(hl)\n\tinc hl\n\tld b,(hl)\n"
+                "\tld h,b\n\tld l,c\n"
+                "\tld a,h\n\txor 128\n\tld h,a\n"
+                "\tld a,d\n\txor 128\n\tld d,a\n"
+                "\tor a\n\tsbc hl,de\n\tld bc,0\n", out);
+        if (reduction->operation == '<')
+            mir_stream_printf(out,
+                    "\tjp nc,L%d\n\tinc bc\n", store);
+        else
+            mir_stream_printf(out,
+                    "\tjp c,L%d\n\tjp z,L%d\n\tinc bc\n",
+                    store, store);
+    }
+    mir_stream_printf(out,
+            "L%d:\n\tpop hl\n\tld (hl),c\n"
+            "\tinc hl\n\tld (hl),b\n", store);
+    mir_stream_printf(out, "\tjp L%d\n", labels[
+            reduction->fast_continuation_label >= 0
+                ? reduction->fast_continuation_label
+                : reduction->continuation_label]);
+}
+
+static void mir_emit_indexed_stack_unary_reduction(
+    MirStream *out, const int *labels,
+    const struct MirIndexedStackUnaryReduction *reduction)
+{
+    const char *base_name = asm_name_for(sym_asm_name(reduction->base));
+    const char *index_name = asm_name_for(sym_asm_name(reduction->index));
+    int store = new_label();
+
+    if ((reduction->base->storage == SC_EXTERN ||
+         reduction->base->needs_extrn) &&
+        mir_extrn_should_emit(reduction->base))
+        mir_stream_printf(out, "\textrn %s\n", base_name);
+    if ((reduction->index->storage == SC_EXTERN ||
+         reduction->index->needs_extrn) &&
+        mir_extrn_should_emit(reduction->index))
+        mir_stream_printf(out, "\textrn %s\n", index_name);
+    mir_stream_printf(out,
+            "\tld hl,(%s)\n\tdec l\n\tadd hl,hl\n"
+            "\tld bc,%s\n\tadd hl,bc\n",
+            index_name, base_name);
+    if (reduction->operation == '!') {
+        mir_stream_printf(out,
+                "\tld a,(hl)\n\tinc hl\n\tor (hl)\n"
+                "\tld bc,0\n\tjp nz,L%d\n\tinc bc\n"
+                "L%d:\n\tdec hl\n\tld (hl),c\n"
+                "\tinc hl\n\tld (hl),b\n",
+                store, store);
+    } else {
+        mir_stream_puts(
+                "\tpush hl\n\tld a,(hl)\n\tinc hl\n"
+                "\tld h,(hl)\n\tld l,a\n"
+                "\txor a\n\tsub l\n\tld l,a\n"
+                "\tsbc a,a\n\tsub h\n\tld h,a\n"
+                "\tpop de\n\tex de,hl\n"
+                "\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
+    }
+    mir_stream_printf(out, "\tjp L%d\n", labels[
+            reduction->fast_continuation_label >= 0
+                ? reduction->fast_continuation_label
+                : reduction->continuation_label]);
 }
 
 static int mir_scalar_cfg_preflight_reject(const char *reason, int instruction)
@@ -34099,7 +34319,8 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
             int selfstore_store_index;
             int predecrement_load_index;
             struct MirIndexedPredecrementLoad indexed_predecrement;
-            struct MirIndexedStackEqualityReduction stack_equality;
+            struct MirIndexedStackBinaryReduction stack_binary;
+            struct MirIndexedStackUnaryReduction stack_unary;
             int narrow_phi_source;
             int wide_phi_source;
             int wide_selfstore_offset;
@@ -34109,11 +34330,18 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
             int narrow_multiply_unsigned;
             int multiply_index;
             int addend_value;
-            if (mir_match_indexed_stack_equality_reduction(
-                    i, &inline_postincrement_helper, &stack_equality)) {
-                mir_emit_indexed_stack_equality_reduction(
-                    out, &stack_equality);
-                i = stack_equality.call_instruction;
+            if (mir_match_indexed_stack_unary_reduction(
+                    i, &inline_postincrement_helper, &stack_unary)) {
+                mir_emit_indexed_stack_unary_reduction(
+                    out, labels, &stack_unary);
+                i = stack_unary.continuation_instruction;
+                break;
+            }
+            if (mir_match_indexed_stack_binary_reduction(
+                    i, &inline_postincrement_helper, &stack_binary)) {
+                mir_emit_indexed_stack_binary_reduction(
+                    out, labels, &stack_binary);
+                i = stack_binary.continuation_instruction;
                 break;
             }
             if (mir_value_only_used_by_selfstore_adjust_amount(insn->dst))
