@@ -81,6 +81,24 @@ static int mir_binary_is_selfstore_small_adjust(
     int index, int *store_index, int *amount);
 static int mir_binary_is_selfstore_global_predecrement_load(
     int index, int *store_index, int *load_index, int *amount);
+struct MirIndexedPredecrementLoad {
+    struct Sym *base;
+    struct Sym *index;
+    int store_instruction;
+    int index_instruction;
+    int load_instruction;
+    int stride;
+};
+struct MirIndexedStackEqualityReduction {
+    struct Sym *base;
+    struct Sym *index;
+    int first_binary;
+    int second_binary;
+    int compare_instruction;
+    int call_instruction;
+};
+static int mir_binary_is_selfstore_global_indexed_predecrement_load(
+    int index, struct MirIndexedPredecrementLoad *plan);
 /* A loop-carried wide update can reuse the PHI's two-unit slot in place. */
 static int mir_binary_is_wide_phi_update(
     int index, int *phi_value, int *store_index);
@@ -28115,9 +28133,16 @@ static void mir_emit_inline_indexed_postincrement_store_body(
         mir_extrn_should_emit(helper->index))
         mir_stream_printf(out, "\textrn %s\n", index_name);
     mir_stream_printf(out,
-            "\tex de,hl\n\tld hl,(%s)\n\tinc hl\n"
-            "\tld (%s),hl\n",
-            index_name, index_name);
+            "\tex de,hl\n\tld hl,(%s)\n",
+            index_name);
+    /* For a real array with at most 255 elements, every defined access by
+     * base[index++] proves the old index is in [0,array_len-1].  Its high
+     * byte is therefore zero and the increment cannot carry out of L. */
+    mir_stream_puts(helper->base->is_array &&
+                    helper->base->array_len > 0 &&
+                    helper->base->array_len <= 255
+        ? "\tinc l\n" : "\tinc hl\n", out);
+    mir_stream_printf(out, "\tld (%s),hl\n", index_name);
     if (!helper->base->is_array)
         mir_stream_puts("\tdec hl\n", out);
     if (helper->width == 2)
@@ -30736,6 +30761,182 @@ static int mir_binary_is_selfstore_global_predecrement_load(
     return 1;
 }
 
+/* Fuse array[--global_index], retaining the updated index in HL through the
+ * address calculation instead of assigning it a temporary stack home. */
+static int mir_binary_is_selfstore_global_indexed_predecrement_load(
+    int index, struct MirIndexedPredecrementLoad *plan)
+{
+    const struct MirInsn *insn = &mir.insns[index];
+    const struct MirInsn *left = mir_definition(insn->src1);
+    const struct MirInsn *idx = NULL;
+    const struct MirInsn *base_def;
+    struct Sym *base;
+    long amount;
+    int memory_type, storage, offset;
+    int store = -1, index_at = -1, load = -1, scan;
+
+    if (insn->opcode != MIR_BINARY || insn->immediate != '-' ||
+        type_size(insn->secondary_offset) != 2 ||
+        !mir_integer_constant_expression(insn->src2, &amount, 0) ||
+        amount != 1 || left == NULL || left->memory_flags != 0 ||
+        !mir_scalar_memory_location(left, &memory_type, &storage, &offset) ||
+        (storage != SC_GLOBAL && storage != SC_EXTERN) ||
+        type_ptr_depth(memory_type) != 0 || type_size(memory_type) != 2)
+        return 0;
+    for (scan = 0; scan < mir.count; ++scan) {
+        const struct MirInsn *use = &mir.insns[scan];
+        if (use->src1 != insn->dst && use->src2 != insn->dst &&
+            !mir_call_uses_value(use, insn->dst))
+            continue;
+        if (use->opcode == MIR_STORE && use->src1 == insn->dst &&
+            use->memory_flags == 0 && store < 0 &&
+            mir_same_scalar_memory_location(left, use))
+            store = scan;
+        else if (use->opcode == MIR_INDEX_ADDRESS &&
+                 use->src2 == insn->dst && use->memory_flags == 0 &&
+                 index_at < 0 && (use->immediate == 1 || use->immediate == 2)) {
+            index_at = scan;
+            idx = use;
+        } else
+            return 0;
+    }
+    if (store <= index || index_at <= store || idx == NULL)
+        return 0;
+    base_def = mir_definition(idx->src1);
+    if (base_def == NULL || base_def->opcode != MIR_ADDRESS ||
+        base_def->name[0] == 0 || (base = find_global(base_def->name)) == NULL ||
+        !base->is_array || base->is_volatile || base->pointee_is_volatile)
+        return 0;
+    for (scan = 0; scan < mir.count; ++scan) {
+        const struct MirInsn *use = &mir.insns[scan];
+        if (use->src1 != idx->dst && use->src2 != idx->dst &&
+            !mir_call_uses_value(use, idx->dst))
+            continue;
+        if (use->opcode != MIR_LOAD_INDIRECT || use->src1 != idx->dst ||
+            load >= 0 || use->memory_flags != 0 || use->bit_width != 0 ||
+            type_size(use->type) != idx->immediate)
+            return 0;
+        load = scan;
+    }
+    if (load <= index_at)
+        return 0;
+    for (scan = index + 1; scan < load; ++scan)
+        if (scan != store && scan != index_at &&
+            mir.insns[scan].opcode != MIR_NOP)
+            return 0;
+    if (plan != NULL) {
+        plan->base = base;
+        plan->index = find_global(left->name);
+        if (plan->index == NULL)
+            return 0;
+        plan->store_instruction = store;
+        plan->index_instruction = index_at;
+        plan->load_instruction = load;
+        plan->stride = (int)idx->immediate;
+    }
+    return 1;
+}
+
+static int mir_match_indexed_stack_equality_reduction(
+    int first_binary, const struct MirInlinePostincrementStore *helper,
+    struct MirIndexedStackEqualityReduction *reduction)
+{
+    struct MirIndexedPredecrementLoad first;
+    struct MirIndexedPredecrementLoad second;
+    const struct MirInsn *compare = NULL;
+    int second_binary;
+    int compare_at;
+    int argument_at;
+    int call_at;
+    int argument;
+    int continuation;
+    int continuation_label;
+    int scan;
+
+    if (helper == NULL || !helper->enabled ||
+        helper->kind != MIR_INLINE_POSTINC_INDEXED_BASE ||
+        !mir_binary_is_selfstore_global_indexed_predecrement_load(
+            first_binary, &first) ||
+        first.base != helper->base || first.index != helper->index ||
+        first.base->array_len <= 0 || first.base->array_len > 255)
+        return 0;
+    second_binary = -1;
+    for (scan = first.load_instruction + 1;
+         scan < mir.count && scan <= first.load_instruction + 16; ++scan)
+        if (mir_binary_is_selfstore_global_indexed_predecrement_load(
+                scan, &second) && second.base == first.base &&
+            second.index == first.index) {
+            second_binary = scan;
+            break;
+        }
+    if (second_binary < 0)
+        return 0;
+    compare_at = -1;
+    for (scan = second.load_instruction + 1;
+         scan < mir.count && scan <= second.load_instruction + 12; ++scan) {
+        const struct MirInsn *candidate = &mir.insns[scan];
+        if (candidate->opcode == MIR_BINARY &&
+            candidate->immediate == TOK_EQ &&
+            ((candidate->src1 == mir.insns[first.load_instruction].dst &&
+              candidate->src2 == mir.insns[second.load_instruction].dst) ||
+             (candidate->src2 == mir.insns[first.load_instruction].dst &&
+              candidate->src1 == mir.insns[second.load_instruction].dst))) {
+            compare_at = scan;
+            compare = candidate;
+            break;
+        }
+    }
+    if (compare_at < 0 || compare == NULL)
+        return 0;
+    argument_at = compare_at + 1;
+    while (argument_at < mir.count &&
+           mir.insns[argument_at].opcode == MIR_NOP)
+        ++argument_at;
+    call_at = argument_at + 1;
+    if (argument_at >= mir.count || call_at >= mir.count ||
+        mir.insns[argument_at].opcode != MIR_ARG ||
+        mir.insns[argument_at].src1 != compare->dst ||
+        mir.insns[call_at].opcode != MIR_CALL ||
+        !mir_call_uses_inline_postincrement_store(
+            helper, call_at, &argument, &continuation,
+            &continuation_label) || argument != compare->dst)
+        return 0;
+    /* Everything skipped by the fused emitter must be straight-line and
+     * side-effect free apart from the two recognized index stores and
+     * harmless assignments of the popped values to scalar temporaries. */
+    for (scan = first_binary + 1; scan < call_at; ++scan) {
+        const struct MirInsn *insn = &mir.insns[scan];
+        int store_type, store_storage, store_offset;
+        if (scan == first.store_instruction ||
+            scan == first.index_instruction ||
+            scan == first.load_instruction ||
+            scan == second.store_instruction ||
+            scan == second.index_instruction ||
+            scan == second.load_instruction ||
+            scan == second_binary || scan == compare_at ||
+            scan == argument_at || insn->opcode == MIR_NOP ||
+            insn->opcode == MIR_ADDRESS || insn->opcode == MIR_CONST ||
+            (insn->opcode == MIR_LOAD && insn->memory_flags == 0) ||
+            (insn->opcode == MIR_STORE && insn->memory_flags == 0 &&
+             (insn->src1 == mir.insns[first.load_instruction].dst ||
+              insn->src1 == mir.insns[second.load_instruction].dst) &&
+             mir_scalar_memory_location(
+                 insn, &store_type, &store_storage, &store_offset) &&
+             (store_storage == SC_LOCAL || store_storage == SC_PARAM)))
+            continue;
+        return 0;
+    }
+    if (reduction != NULL) {
+        reduction->base = first.base;
+        reduction->index = first.index;
+        reduction->first_binary = first_binary;
+        reduction->second_binary = second_binary;
+        reduction->compare_instruction = compare_at;
+        reduction->call_instruction = call_at;
+    }
+    return 1;
+}
+
 static int mir_value_only_used_by_selfstore_adjust_amount(int value)
 {
     int instruction;
@@ -30747,6 +30948,7 @@ static int mir_value_only_used_by_selfstore_adjust_amount(int value)
     int phi_value;
     int store_index;
     int load_index;
+    struct MirIndexedPredecrementLoad indexed_load;
 
     for (instruction = 0; instruction < mir.count; ++instruction) {
         const struct MirInsn *insn = &mir.insns[instruction];
@@ -30769,7 +30971,9 @@ static int mir_value_only_used_by_selfstore_adjust_amount(int value)
             mir_binary_is_selfstore_small_adjust(
                 sole_user, &store_index, &amount) ||
             mir_binary_is_selfstore_global_predecrement_load(
-                sole_user, &store_index, &load_index, &amount));
+                sole_user, &store_index, &load_index, &amount) ||
+            mir_binary_is_selfstore_global_indexed_predecrement_load(
+                sole_user, &indexed_load));
 }
 
 /* Value-indexed wrapper around mir_binary_is_selfstore_incdec for slot-
@@ -30783,6 +30987,7 @@ int mir_value_is_selfstore_incdec(int value)
     int load_index;
     int memory_offset;
     int store_index;
+    struct MirIndexedPredecrementLoad indexed_load;
 
     if (definition == NULL || definition->opcode != MIR_BINARY)
         return 0;
@@ -30796,7 +31001,9 @@ int mir_value_is_selfstore_incdec(int value)
                &store_index, &amount) ||
            mir_binary_is_selfstore_global_predecrement_load(
                (int)(definition - mir.insns),
-               &store_index, &load_index, &amount);
+               &store_index, &load_index, &amount) ||
+           mir_binary_is_selfstore_global_indexed_predecrement_load(
+               (int)(definition - mir.insns), &indexed_load);
 }
 
 /* Item T36 (mir-text-size-plan.md): true iff `value`'s sole use anywhere
@@ -30841,6 +31048,7 @@ static int mir_value_is_selfstore_incdec_source(int value)
         int load_index;
         int memory_offset;
         int store_index;
+        struct MirIndexedPredecrementLoad indexed_load;
         return mir_binary_is_selfstore_incdec(
                    sole_user, &store_index) ||
                mir_binary_is_selfstore_wide_increment(
@@ -30848,7 +31056,9 @@ static int mir_value_is_selfstore_incdec_source(int value)
                mir_binary_is_selfstore_small_adjust(
                    sole_user, &store_index, &amount) ||
                mir_binary_is_selfstore_global_predecrement_load(
-                   sole_user, &store_index, &load_index, &amount);
+                   sole_user, &store_index, &load_index, &amount) ||
+               mir_binary_is_selfstore_global_indexed_predecrement_load(
+                   sole_user, &indexed_load);
     }
 }
 
@@ -31076,6 +31286,73 @@ static void mir_emit_selfstore_global_predecrement_load(
     mir_emit_instruction_index = load_instruction;
     mir_emit_virtual_store(out, mir.insns[load_instruction].dst);
     mir_emit_instruction_index = saved_instruction;
+}
+
+static void mir_emit_selfstore_global_indexed_predecrement_load(
+    MirStream *out, const struct MirInsn *definition, int storage,
+    const struct MirIndexedPredecrementLoad *plan)
+{
+    struct Sym *index_symbol = find_global(definition->name);
+    const char *index_name = asm_name_for(
+        index_symbol != NULL ? sym_asm_name(index_symbol)
+                             : mir_declared_link_name(definition->name));
+    const char *base_name = asm_name_for(sym_asm_name(plan->base));
+    int saved_instruction = mir_emit_instruction_index;
+
+    if (storage == SC_EXTERN && mir_extrn_should_emit(index_symbol))
+        mir_stream_printf(out, "\textrn %s\n", index_name);
+    if ((plan->base->storage == SC_EXTERN || plan->base->needs_extrn) &&
+        mir_extrn_should_emit(plan->base))
+        mir_stream_printf(out, "\textrn %s\n", base_name);
+    mir_stream_printf(out,
+            "\tld hl,(%s)\n",
+            index_name);
+    mir_stream_puts(plan->base->array_len > 0 &&
+                    plan->base->array_len <= 255
+        ? "\tdec l\n" : "\tdec hl\n", out);
+    mir_stream_printf(out, "\tld (%s),hl\n", index_name);
+    if (plan->stride == 2)
+        mir_stream_puts("\tadd hl,hl\n", out);
+    mir_stream_printf(out,
+            "\tld de,%s\n\tadd hl,de\n"
+            "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n",
+            base_name);
+    mir_emit_instruction_index = plan->load_instruction;
+    mir_emit_virtual_store(out, mir.insns[plan->load_instruction].dst);
+    mir_emit_instruction_index = saved_instruction;
+}
+
+static void mir_emit_indexed_stack_equality_reduction(
+    MirStream *out, const struct MirIndexedStackEqualityReduction *reduction)
+{
+    const char *base_name = asm_name_for(sym_asm_name(reduction->base));
+    const char *index_name = asm_name_for(sym_asm_name(reduction->index));
+    int unequal = new_label();
+    int store = new_label();
+
+    if ((reduction->base->storage == SC_EXTERN ||
+         reduction->base->needs_extrn) &&
+        mir_extrn_should_emit(reduction->base))
+        mir_stream_printf(out, "\textrn %s\n", base_name);
+    if ((reduction->index->storage == SC_EXTERN ||
+         reduction->index->needs_extrn) &&
+        mir_extrn_should_emit(reduction->index))
+        mir_stream_printf(out, "\textrn %s\n", index_name);
+    /* Two pops followed by one push have a net stack-depth change of -1.
+     * Point at the old top item, load it into DE, then compare the preceding
+     * word in place and overwrite that word with the boolean result. */
+    mir_stream_printf(out,
+            "\tld hl,(%s)\n\tdec l\n\tld (%s),hl\n"
+            "\tadd hl,hl\n\tld bc,%s\n\tadd hl,bc\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tdec hl\n\tdec hl\n\tdec hl\n\tpush hl\n"
+            "\tld a,(hl)\n\tcp e\n\tjp nz,L%d\n"
+            "\tinc hl\n\tld a,(hl)\n\tcp d\n\tjp nz,L%d\n"
+            "\tld bc,1\n\tjp L%d\n"
+            "L%d:\n\tld bc,0\nL%d:\n\tpop hl\n"
+            "\tld (hl),c\n\tinc hl\n\tld (hl),b\n",
+            index_name, index_name, base_name,
+            unequal, unequal, store, unequal, store);
 }
 
 static int mir_scalar_cfg_preflight_reject(const char *reason, int instruction)
@@ -33201,6 +33478,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 int wide_selfstore_offset;
                 int wide_selfstore_store_index;
                 int predecrement_load_index;
+                struct MirIndexedPredecrementLoad indexed_predecrement;
                 int small_add_amount;
                 int selfstore_store_index;
                 if ((mir_binary_is_narrow_phi_adjust(
@@ -33224,7 +33502,10 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                          producer_index, &selfstore_store_index,
                          &predecrement_load_index,
                          &small_add_amount)) &&
-                    selfstore_store_index == i))
+                    selfstore_store_index == i) ||
+                    (mir_binary_is_selfstore_global_indexed_predecrement_load(
+                         producer_index, &indexed_predecrement) &&
+                     indexed_predecrement.store_instruction == i))
                     break;
             }
             if (mir_object_is_fully_promoted(insn->object) ||
@@ -33817,6 +34098,8 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
             int small_add_amount;
             int selfstore_store_index;
             int predecrement_load_index;
+            struct MirIndexedPredecrementLoad indexed_predecrement;
+            struct MirIndexedStackEqualityReduction stack_equality;
             int narrow_phi_source;
             int wide_phi_source;
             int wide_selfstore_offset;
@@ -33826,6 +34109,13 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
             int narrow_multiply_unsigned;
             int multiply_index;
             int addend_value;
+            if (mir_match_indexed_stack_equality_reduction(
+                    i, &inline_postincrement_helper, &stack_equality)) {
+                mir_emit_indexed_stack_equality_reduction(
+                    out, &stack_equality);
+                i = stack_equality.call_instruction;
+                break;
+            }
             if (mir_value_only_used_by_selfstore_adjust_amount(insn->dst))
                 break;
             if (mir_float_multiply_is_fused(i))
@@ -33959,6 +34249,23 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                     out, definition, memory_storage,
                     small_add_amount,
                     predecrement_load_index);
+                break;
+            }
+            if (mir_binary_is_selfstore_global_indexed_predecrement_load(
+                    i, &indexed_predecrement)) {
+                int memory_type, memory_storage, memory_offset;
+                const struct MirInsn *definition =
+                    mir_definition(insn->src1);
+
+                if (definition == NULL ||
+                    !mir_scalar_memory_location(
+                        definition, &memory_type,
+                        &memory_storage, &memory_offset))
+                    goto done;
+                mir_emit_selfstore_global_indexed_predecrement_load(
+                    out, definition, memory_storage,
+                    &indexed_predecrement);
+                i = indexed_predecrement.load_instruction;
                 break;
             }
             if (mir_binary_is_selfstore_small_adjust(
