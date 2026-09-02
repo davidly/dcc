@@ -149,7 +149,9 @@ typedef struct PeepLineInfo {
 } PeepLineInfo;
 
 typedef struct PeepFlowLine {
-    int successors[2];
+    /* Conditional branches need two successors; a compiler-generated dense
+     * switch can have one successor for every byte value. */
+    int successors[256];
     int successor_count;
     int block;
     unsigned live_in;

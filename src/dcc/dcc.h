@@ -680,6 +680,8 @@ int global_text_addr_taken_count(const char *name);
 int global_text_written_in_function(const char *name, const char *func);
 int global_text_field_write_count(const char *base, const char *field);
 int global_text_field_addr_taken_count(const char *base, const char *field);
+int global_text_field_all_writes_byte_constants(
+    const char *base, const char *field);
 int global_text_field_written_in_function(
     const char *base, const char *field, const char *func);
 

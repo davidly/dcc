@@ -48,6 +48,7 @@ struct GlobalScanFieldEntry {
     char field[64];
     int write_count;
     int addr_taken_count;
+    int all_writes_byte_constants;
 };
 
 static struct GlobalScanFieldEntry g_scan_field_entries[MAX_GLOBAL_SCAN_FIELDS];
@@ -104,6 +105,7 @@ static struct GlobalScanFieldEntry *find_or_add_scan_field_entry(
     g_scan_field_entries[g_scan_nfield_entries].field[63] = 0;
     g_scan_field_entries[g_scan_nfield_entries].write_count = 0;
     g_scan_field_entries[g_scan_nfield_entries].addr_taken_count = 0;
+    g_scan_field_entries[g_scan_nfield_entries].all_writes_byte_constants = 1;
     return &g_scan_field_entries[g_scan_nfield_entries++];
 }
 
@@ -132,12 +134,15 @@ static void record_addr_taken(const char *name)
 }
 
 static void record_field_write(const char *base, const char *field,
-                               const char *func)
+                               const char *func, int byte_constant)
 {
     struct GlobalScanFieldEntry *e =
         find_or_add_scan_field_entry(base, field);
-    if (e != NULL)
+    if (e != NULL) {
         e->write_count++;
+        if (!byte_constant)
+            e->all_writes_byte_constants = 0;
+    }
 
     if (g_scan_nfield_writes >= MAX_GLOBAL_SCAN_FIELD_WRITES) {
         g_scan_overflowed = 1;
@@ -253,6 +258,8 @@ void scan_global_write_info(void)
             int next_kind;
             int field_kind = TOK_EOF;
             int field_next_kind = TOK_EOF;
+            int field_rhs_kind = TOK_EOF;
+            long field_rhs_value = 0;
             char field_name[64];
 
             strncpy(name, g_lex.tok.text, 63);
@@ -269,6 +276,11 @@ void scan_global_write_info(void)
                     field_name[63] = 0;
                     next_token();
                     field_next_kind = g_lex.tok.kind;
+                    if (field_next_kind == '=') {
+                        next_token();
+                        field_rhs_kind = g_lex.tok.kind;
+                        field_rhs_value = g_lex.tok.val;
+                    }
                 }
             }
 
@@ -295,10 +307,14 @@ void scan_global_write_info(void)
                     field_next_kind != '[') {
                     record_field_addr_taken(name, field_name);
                 } else if (prev_kind == TOK_INC || prev_kind == TOK_DEC) {
-                    record_field_write(name, field_name, func_at_depth0);
+                    record_field_write(name, field_name, func_at_depth0, 0);
                 } else if (token_starts_assignment_or_incdec(
                                field_next_kind)) {
-                    record_field_write(name, field_name, func_at_depth0);
+                    record_field_write(
+                        name, field_name, func_at_depth0,
+                        field_next_kind == '=' &&
+                        field_rhs_kind == TOK_NUM &&
+                        field_rhs_value >= 0 && field_rhs_value <= 255);
                 }
             }
 
@@ -430,6 +446,21 @@ int global_text_field_addr_taken_count(const char *base, const char *field)
         if (!strcmp(g_scan_field_entries[i].base, base) &&
             !strcmp(g_scan_field_entries[i].field, field))
             return g_scan_field_entries[i].addr_taken_count;
+    return 0;
+}
+
+int global_text_field_all_writes_byte_constants(
+    const char *base, const char *field)
+{
+    int i;
+
+    if (g_scan_overflowed)
+        return 0;
+    for (i = 0; i < g_scan_nfield_entries; ++i)
+        if (!strcmp(g_scan_field_entries[i].base, base) &&
+            !strcmp(g_scan_field_entries[i].field, field))
+            return g_scan_field_entries[i].write_count > 0 &&
+                   g_scan_field_entries[i].all_writes_byte_constants;
     return 0;
 }
 

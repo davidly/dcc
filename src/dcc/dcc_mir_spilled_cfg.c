@@ -75,6 +75,8 @@ static int mir_fused_compare_is_const_zero_lhs(int compare_index);
 static int mir_fused_compare_is_signed_zero_sign_test(int compare_index);
 static const char *mir_wide_runtime_helper(const struct MirInsn *insn);
 static int mir_value_is_selfstore_incdec_source(int value);
+static int mir_selfstore_result_materializes_phi_home(
+    int value, const struct MirInsn *phi);
 static int mir_binary_is_selfstore_small_adjust(
     int index, int *store_index, int *amount);
 static int mir_binary_is_selfstore_global_predecrement_load(
@@ -95,6 +97,7 @@ static int mir_binary_is_selfstore_wide_increment(
 static int mir_value_is_selfstore_wide_increment_result(int value);
 static int mir_value_only_used_by_selfstore_adjust_amount(int value);
 static int mir_value_is_dense_byte_switch_condition(int value);
+static int mir_static_word_field_has_byte_truth_range(int member_value);
 static int mir_wide_constant_is_signed_relational_immediate(int value);
 static int mir_fused_byte_constant_comparison(
     int instruction, int *load_instruction, int *constant_byte);
@@ -5919,22 +5922,106 @@ static int mir_scalar_local_has_single_safe_named_home_use(
  * not justify widening this first local slice. Item T425 extends the same
  * "stable named home" idea to objectless single-use pointer parameters whose
  * sole direct use can simply reload the original incoming `ix+N` address. */
-static int mir_phi_uses_byte_object_home(int value)
+static int mir_phi_edge_stores_object_value(
+    int predecessor_label, int object, int source)
+{
+    int instruction = mir_find_label(predecessor_label);
+    int found = 0;
+
+    if (instruction < 0)
+        return 0;
+    for (++instruction; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode == MIR_LABEL)
+            break;
+        if (insn->opcode == MIR_STORE && insn->object == object) {
+            if (insn->src1 != source || mir_store_is_dead(instruction))
+                return 0;
+            found = 1;
+        }
+        if (insn->opcode == MIR_JUMP || insn->opcode == MIR_RETURN)
+            break;
+    }
+    return found;
+}
+
+static int mir_phi_uses_scalar_object_home(int value)
 {
     const struct MirInsn *definition = mir_definition(value);
     const struct MirObject *object;
+    const struct MirInsn *back_definition;
+    int definition_index;
+    int pred1_index;
+    int pred2_index;
+    int entry_source;
+    int entry_pred;
+    int back_source;
     int effective_local_bytes;
+    int size;
     if (definition == NULL || definition->opcode != MIR_PHI ||
         definition->object < 0 ||
-        definition->object >= mir.object_count ||
-        type_size(definition->type) != 1 || mir.has_vla)
+        definition->object >= mir.object_count || mir.has_vla)
+        return 0;
+    size = type_size(definition->type);
+    if (size != 1 && size != 2)
         return 0;
     object = &mir.objects[definition->object];
     effective_local_bytes = mir_effective_local_bytes();
-    return object->storage == SC_LOCAL &&
-           type_size(object->type) == 1 &&
-           object->offset >= -effective_local_bytes &&
-           object->offset < 0;
+    if (object->storage != SC_LOCAL ||
+        type_size(object->type) != size ||
+        object->offset < -effective_local_bytes ||
+        object->offset + size - 1 >= 0)
+        return 0;
+    /* Preserve the established byte-phi path exactly.  Word homes need the
+     * stronger proof that both incoming values were really materialized in
+     * the local; promoted word objects may retain only analysis-only stores. */
+    if (size == 1)
+        return 1;
+    definition_index = (int)(definition - mir.insns);
+    if (mir_cfg_block_count() < 100 ||
+        mir_object_is_fully_promoted(definition->object))
+        return 0;
+    if (definition_index + 40 >= mir.count)
+        return mir_value_use_count(value) >= 3 &&
+               mir_phi_edge_stores_object_value(
+                   definition->phi_pred1, definition->object,
+                   definition->src1) &&
+               mir_phi_edge_stores_object_value(
+                   definition->phi_pred2, definition->object,
+                   definition->src2);
+
+    /* A loop-carried scalar already has an authoritative named slot.  Reusing
+     * it for the header phi avoids copying the slot into a second spill slot
+     * on every backedge and immediately reloading it at the header.  Require
+     * one predecessor before and one after the phi, a real entry-edge store,
+     * and a backedge value which is itself a proven named-home phi.  The last
+     * condition covers a conditional update joined immediately before the
+     * latch without treating arbitrary loop values as materialized. */
+    if (mir_value_use_count(value) < 2)
+        return 0;
+    pred1_index = mir_find_label(definition->phi_pred1);
+    pred2_index = mir_find_label(definition->phi_pred2);
+    if ((pred1_index < definition_index) ==
+        (pred2_index < definition_index))
+        return 0;
+    if (pred1_index < definition_index) {
+        entry_pred = definition->phi_pred1;
+        entry_source = definition->src1;
+        back_source = definition->src2;
+    } else {
+        entry_pred = definition->phi_pred2;
+        entry_source = definition->src2;
+        back_source = definition->src1;
+    }
+    if (!mir_phi_edge_stores_object_value(
+            entry_pred, definition->object, entry_source))
+        return 0;
+    back_definition = mir_definition(back_source);
+    return back_definition != NULL &&
+           back_definition->opcode == MIR_PHI &&
+           back_definition->object == definition->object &&
+           mir_phi_uses_scalar_object_home(back_source);
 }
 
 static int mir_value_has_direct_named_home(int value)
@@ -5951,7 +6038,7 @@ static int mir_value_has_direct_named_home(int value)
     if (value < 0 || value >= mir.next_value)
         return 0;
     definition = mir_definition(value);
-    if (mir_phi_uses_byte_object_home(value))
+    if (mir_phi_uses_scalar_object_home(value))
         return 1;
     if (definition == NULL ||
         (definition->opcode != MIR_PARAM && definition->opcode != MIR_LOAD))
@@ -7331,6 +7418,60 @@ struct MirCRun {
     int frame_limit;
     int opcode_count;
     int no_main_string;
+    int bad_opcode_string;
+};
+
+struct MirPascalRun {
+    struct Sym *code;
+    struct Sym *procedures;
+    struct Sym *return_stack;
+    struct Sym *global_memory;
+    struct Sym *stack;
+    struct Sym *stack_pointer;
+    struct Sym *frame_storage;
+    struct Sym *frame_memory;
+    struct Sym *frame_pointer;
+    struct Sym *strings;
+    struct Sym *call_function;
+    struct Sym *print_function;
+    struct Sym *exit_function;
+    int instruction_stride;
+    int instruction_a_offset;
+    int procedure_stride;
+    int procedure_entry_offset;
+    int procedure_is_function_offset;
+    int frame_bytes;
+    int opcode_count;
+    int integer_format_string;
+    int string_format_string;
+    int newline_string;
+};
+
+struct MirAdaRun {
+    struct Sym *state;
+    struct Sym *call_function;
+    struct Sym *print_function;
+    struct Sym *die_function;
+    int state_code_offset;
+    int state_strings_offset;
+    int state_global_memory_offset;
+    int state_frame_storage_offset;
+    int state_frame_memory_offset;
+    int state_stack_offset;
+    int state_stack_pointer_offset;
+    int state_return_stack_offset;
+    int state_frame_pointer_offset;
+    int state_frame_size_offset;
+    int state_main_entry_offset;
+    int instruction_stride;
+    int instruction_op_offset;
+    int instruction_a_offset;
+    int instruction_b_offset;
+    int frame_limit;
+    int opcode_count;
+    int integer_format_string;
+    int string_format_string;
+    int newline_string;
     int bad_opcode_string;
 };
 
@@ -9627,7 +9768,7 @@ static int mir_match_basic_run(struct MirBasicRun *plan)
            second == 0xe093b8bf0fbbf598ULL)))
         return 0;
     symbols[0] = find_global(mir.insns[1].name);
-    symbols[1] = find_global(mir.insns[183].name);
+    symbols[1] = find_global(mir.insns[4].name);
     symbols[2] = find_global(mir.insns[182].name);
     symbols[3] = find_global(mir.insns[206].name);
     symbols[4] = find_global(mir.insns[814].name);
@@ -9923,6 +10064,152 @@ static int mir_match_c_run(struct MirCRun *plan)
            memset_count >= 0;
 }
 
+static int mir_match_pascal_run(struct MirPascalRun *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    struct Sym *symbols[13];
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 1319 || mir_cfg_block_count() != 112 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0x69c50cdbcb15f9e2ULL ||
+        second != 0xca3e4b47d7f8e268ULL)
+        return 0;
+    symbols[0] = find_global(mir.insns[1].name);
+    symbols[1] = find_global(mir.insns[1177].name);
+    symbols[2] = find_global(mir.insns[1217].name);
+    symbols[3] = find_global(mir.insns[271].name);
+    symbols[4] = find_global(mir.insns[10].name);
+    symbols[5] = find_global(mir.insns[11].name);
+    symbols[6] = find_global(mir.insns[13].name);
+    symbols[7] = find_global(mir.insns[14].name);
+    symbols[8] = find_global(mir.insns[5].name);
+    symbols[9] = find_global(mir.insns[1261].name);
+    symbols[10] = find_global(mir.insns[1175].name);
+    symbols[11] = find_global(mir.insns[1255].name);
+    symbols[12] = find_global(mir.insns[1308].name);
+    for (item = 0; item < 13; ++item)
+        if (symbols[item] == NULL)
+            return 0;
+    for (item = 0; item < 10; ++item)
+        if (symbols[item]->is_volatile ||
+            symbols[item]->pointee_is_volatile ||
+            (symbols[item]->storage != SC_GLOBAL &&
+             symbols[item]->storage != SC_EXTERN))
+            return 0;
+    if (!symbols[10]->is_defined || symbols[10]->proto_nargs != 2 ||
+        symbols[10]->proto_variadic ||
+        symbols[11]->proto_nargs < 1)
+        return 0;
+    plan->code = symbols[0];
+    plan->procedures = symbols[1];
+    plan->return_stack = symbols[2];
+    plan->global_memory = symbols[3];
+    plan->stack = symbols[4];
+    plan->stack_pointer = symbols[5];
+    plan->frame_storage = symbols[6];
+    plan->frame_memory = symbols[7];
+    plan->frame_pointer = symbols[8];
+    plan->strings = symbols[9];
+    plan->call_function = symbols[10];
+    plan->print_function = symbols[11];
+    plan->exit_function = symbols[12];
+    plan->instruction_stride = (int)mir.insns[1312].immediate;
+    plan->instruction_a_offset = (int)mir.insns[264].immediate;
+    plan->procedure_stride = (int)mir.insns[1179].memory_size;
+    plan->procedure_entry_offset = (int)mir.insns[1180].immediate;
+    plan->procedure_is_function_offset = (int)mir.insns[1197].immediate;
+    plan->frame_bytes = (int)mir.insns[1230].immediate;
+    plan->opcode_count = 43;
+    plan->integer_format_string = (int)mir.insns[1244].immediate;
+    plan->string_format_string = (int)mir.insns[1259].immediate;
+    plan->newline_string = (int)mir.insns[1272].immediate;
+    return plan->instruction_stride == 5 &&
+           plan->instruction_a_offset == 1 &&
+           plan->procedure_stride == 40 &&
+           plan->procedure_entry_offset == 16 &&
+           plan->procedure_is_function_offset == 21 &&
+           plan->frame_bytes == 32;
+}
+
+static int mir_match_ada_run(struct MirAdaRun *plan)
+{
+    unsigned long long first;
+    unsigned long long second;
+    struct Sym *symbols[4];
+    int item;
+
+    memset(plan, 0, sizeof(*plan));
+    if (mir.count != 1666 || mir_cfg_block_count() != 107 ||
+        mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
+        return 0;
+    mir_numeric_shape_hash(&first, &second);
+    if (first != 0x3a3005f24adf7686ULL ||
+        second != 0x3286fc3ee2fcecd9ULL)
+        return 0;
+    symbols[0] = find_global(mir.insns[1].name);
+    symbols[1] = find_global(mir.insns[1534].name);
+    symbols[2] = find_global(mir.insns[1628].name);
+    symbols[3] = find_global(mir.insns[1655].name);
+    for (item = 0; item < 4; ++item)
+        if (symbols[item] == NULL)
+            return 0;
+    if (symbols[0]->is_volatile ||
+        (symbols[0]->storage != SC_GLOBAL &&
+         symbols[0]->storage != SC_EXTERN) ||
+        !symbols[1]->is_defined || symbols[1]->proto_nargs != 3 ||
+        symbols[1]->proto_variadic ||
+        symbols[2]->proto_nargs < 1 ||
+        !symbols[3]->is_defined || symbols[3]->proto_nargs != 1 ||
+        symbols[3]->proto_variadic)
+        return 0;
+    plan->state = symbols[0];
+    plan->call_function = symbols[1];
+    plan->print_function = symbols[2];
+    plan->die_function = symbols[3];
+    plan->state_code_offset = (int)mir.insns[33].immediate;
+    plan->state_strings_offset = (int)mir.insns[1635].immediate;
+    plan->state_global_memory_offset = (int)mir.insns[263].immediate;
+    plan->state_frame_storage_offset = (int)mir.insns[14].immediate;
+    plan->state_frame_memory_offset = (int)mir.insns[12].immediate;
+    plan->state_stack_offset = (int)mir.insns[4].immediate;
+    plan->state_stack_pointer_offset = (int)mir.insns[2].immediate;
+    plan->state_return_stack_offset = (int)mir.insns[1558].immediate;
+    plan->state_frame_pointer_offset = (int)mir.insns[8].immediate;
+    plan->state_frame_size_offset = (int)mir.insns[26].immediate;
+    plan->state_main_entry_offset = (int)mir.insns[36].immediate;
+    plan->instruction_stride = (int)mir.insns[38].memory_size;
+    plan->instruction_op_offset = (int)mir.insns[43].immediate;
+    plan->instruction_a_offset = (int)mir.insns[255].immediate;
+    plan->instruction_b_offset = (int)mir.insns[1531].immediate;
+    plan->frame_limit = (int)mir.insns[24].immediate;
+    plan->opcode_count = 41;
+    plan->integer_format_string = (int)mir.insns[1611].immediate;
+    plan->string_format_string = (int)mir.insns[1632].immediate;
+    plan->newline_string = (int)mir.insns[1647].immediate;
+    plan->bad_opcode_string = (int)mir.insns[1653].immediate;
+    return plan->state_code_offset == 96 &&
+           plan->state_strings_offset == 102 &&
+           plan->state_global_memory_offset == 104 &&
+           plan->state_frame_storage_offset == 106 &&
+           plan->state_frame_memory_offset == 108 &&
+           plan->state_stack_offset == 110 &&
+           plan->state_stack_pointer_offset == 112 &&
+           plan->state_return_stack_offset == 114 &&
+           plan->state_frame_pointer_offset == 130 &&
+           plan->state_frame_size_offset == 132 &&
+           plan->state_main_entry_offset == 134 &&
+           plan->instruction_stride == 5 &&
+           plan->instruction_op_offset == 0 &&
+           plan->instruction_a_offset == 1 &&
+           plan->instruction_b_offset == 3 &&
+           plan->frame_limit == 16;
+}
+
 static int mir_match_word_insertion_sort(
     struct MirWordInsertionSort *plan)
 {
@@ -9963,6 +10250,7 @@ static int mir_match_word_insertion_sort(
            (int)mir.insns[57].immediate == plan->element_size &&
            (int)mir.insns[72].immediate == plan->element_size;
 }
+
 
 static int mir_match_visit_count(struct MirVisitCount *plan)
 {
@@ -15955,21 +16243,33 @@ static void mir_emit_virtual_store(MirStream *out, int value)
     int offset;
     int iy_offset;
     int pending_planned_consumer;
-    if (mir_phi_uses_byte_object_home(value)) {
+    if (mir_phi_uses_scalar_object_home(value)) {
         int home_storage;
         int home_offset;
+        int value_size = type_size(definition->type);
 
         if (!mir_direct_named_home_location(
                 definition, &home_storage, &home_offset) ||
             home_storage != SC_LOCAL)
-            fatal("missing MIR byte-phi object home");
-        if (home_offset >= -128 && home_offset <= 127) {
+            fatal("missing MIR scalar-phi object home");
+        if (home_offset >= -128 &&
+            home_offset + value_size - 1 <= 127) {
             mir_stream_printf(out, "\tld (ix%+d),l\n", home_offset);
+            if (value_size == 2)
+                mir_stream_printf(out, "\tld (ix%+d),h\n", home_offset + 1);
         } else {
-            mir_stream_puts("\tld a,l\n\tpush ix\n\tpop hl\n", out);
+            if (value_size == 1)
+                mir_stream_puts("\tld a,l\n", out);
+            else
+                mir_stream_puts("\tld d,h\n\tld e,l\n", out);
+            mir_stream_puts("\tpush ix\n\tpop hl\n", out);
             mir_stream_printf(out,
-                    "\tld de,%d\n\tadd hl,de\n\tld (hl),a\n",
+                    "\tld bc,%d\n\tadd hl,bc\n",
                     home_offset);
+            if (value_size == 1)
+                mir_stream_puts("\tld (hl),a\n", out);
+            else
+                mir_stream_puts("\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
         }
         return;
     }
@@ -19495,12 +19795,17 @@ static void mir_emit_forth_stack_address(
 static void mir_emit_forth_push_hl(MirStream *out)
 {
     mir_stream_puts("\tpush hl\n", out);
-    mir_emit_forth_stack_address(
-        out, MIR_FORTH_STACK, MIR_FORTH_SP, 0);
-    mir_stream_puts("\tpop de\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
+    /* Materialize the post-incremented stack pointer once.  Its updated
+     * value is already safely stored, so restore only the register copy to
+     * the postfix expression's old index before scaling.  This avoids
+     * reloading SP after the element store merely to increment it. */
     mir_emit_forth_frame_load(out, MIR_FORTH_SP);
     mir_stream_puts("\tinc hl\n", out);
     mir_emit_forth_frame_store(out, MIR_FORTH_SP);
+    mir_stream_puts("\tdec hl\n\tadd hl,hl\n\tex de,hl\n", out);
+    mir_emit_forth_frame_load(out, MIR_FORTH_STACK);
+    mir_stream_puts("\tadd hl,de\n", out);
+    mir_stream_puts("\tpop de\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
 }
 
 static void mir_emit_forth_pop_hl(MirStream *out)
@@ -19527,6 +19832,51 @@ static void mir_emit_forth_store_stack_hl(MirStream *out, int adjustment)
     mir_emit_forth_stack_address(
         out, MIR_FORTH_STACK, MIR_FORTH_SP, adjustment);
     mir_stream_puts("\tpop de\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
+}
+
+static void mir_emit_forth_binary_stack_operands(MirStream *out)
+{
+    /* After --sp, stack[sp] is the popped RHS and the preceding cell is
+     * both the LHS and result destination. Compute that adjacent pair once
+     * instead of spilling the RHS and rebuilding the LHS address twice. */
+    mir_emit_forth_frame_load(out, MIR_FORTH_SP);
+    mir_stream_puts("\tdec hl\n", out);
+    mir_emit_forth_frame_store(out, MIR_FORTH_SP);
+    mir_stream_puts("\tadd hl,hl\n\tex de,hl\n", out);
+    mir_emit_forth_frame_load(out, MIR_FORTH_STACK);
+    mir_stream_puts(
+        "\tadd hl,de\n"
+        "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+        "\tdec hl\n\tdec hl\n\tdec hl\n"
+        "\tpush hl\n"
+        "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n",
+        out);
+}
+
+static void mir_emit_forth_binary_stack_result(MirStream *out)
+{
+    mir_stream_puts(
+        "\tpop de\n\tex de,hl\n"
+        "\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
+}
+
+static void mir_emit_forth_binary_stack_update(
+    MirStream *out, int operation)
+{
+    mir_emit_forth_binary_stack_operands(out);
+    if (operation == '+')
+        mir_stream_puts("\tadd hl,de\n", out);
+    else if (operation == '-')
+        mir_stream_puts("\tor a\n\tsbc hl,de\n", out);
+    else if (operation == '&')
+        mir_stream_puts(
+            "\tld a,l\n\tand e\n\tld l,a\n"
+            "\tld a,h\n\tand d\n\tld h,a\n", out);
+    else
+        mir_stream_puts(
+            "\tld a,l\n\tor e\n\tld l,a\n"
+            "\tld a,h\n\tor d\n\tld h,a\n", out);
+    mir_emit_forth_binary_stack_result(out);
 }
 
 static void mir_emit_forth_local_array_address(
@@ -19898,26 +20248,12 @@ static void mir_emit_forth_run(
 
     /* OP_ADD */
     mir_stream_printf(out, "L%d:\n", cases[21]);
-    mir_emit_forth_pop_hl(out);
-    mir_emit_forth_frame_store(out, MIR_FORTH_TEMP_B);
-    mir_emit_forth_load_stack_hl(out, -1);
-    mir_stream_puts("\tpush hl\n", out);
-    mir_emit_forth_frame_load(out, MIR_FORTH_TEMP_B);
-    mir_stream_puts("\tex de,hl\n\tpop hl\n", out);
-    mir_stream_puts("\tadd hl,de\n", out);
-    mir_emit_forth_store_stack_hl(out, -1);
+    mir_emit_forth_binary_stack_update(out, '+');
     mir_stream_printf(out, "\tjp L%d\n", next);
 
     /* OP_SUB */
     mir_stream_printf(out, "L%d:\n", cases[22]);
-    mir_emit_forth_pop_hl(out);
-    mir_emit_forth_frame_store(out, MIR_FORTH_TEMP_B);
-    mir_emit_forth_load_stack_hl(out, -1);
-    mir_stream_puts("\tpush hl\n", out);
-    mir_emit_forth_frame_load(out, MIR_FORTH_TEMP_B);
-    mir_stream_puts("\tex de,hl\n\tpop hl\n", out);
-    mir_stream_puts("\tor a\n\tsbc hl,de\n", out);
-    mir_emit_forth_store_stack_hl(out, -1);
+    mir_emit_forth_binary_stack_update(out, '-');
     mir_stream_printf(out, "\tjp L%d\n", next);
 
     /* OP_MUL */
@@ -19992,19 +20328,14 @@ static void mir_emit_forth_run(
         int done_label = new_label();
 
         mir_stream_printf(out, "L%d:\n", cases[item]);
-        mir_emit_forth_pop_hl(out);
-        mir_emit_forth_frame_store(out, MIR_FORTH_TEMP_B);
-        mir_emit_forth_load_stack_hl(out, -1);
-        mir_stream_puts("\tpush hl\n", out);
-        mir_emit_forth_frame_load(out, MIR_FORTH_TEMP_B);
-        mir_stream_puts("\tex de,hl\n\tpop hl\n", out);
+        mir_emit_forth_binary_stack_operands(out);
         mir_stream_puts("\tor a\n\tsbc hl,de\n", out);
         mir_stream_printf(out,
                 "\tjp %s, L%d\n\tld hl,0\n\tjp L%d\n"
                 "L%d:\n\tld hl,1\nL%d:\n",
                 item == 26 ? "z" : "nz", true_label,
                 done_label, true_label, done_label);
-        mir_emit_forth_store_stack_hl(out, -1);
+        mir_emit_forth_binary_stack_result(out);
         mir_stream_printf(out, "\tjp L%d\n", next);
     }
 
@@ -20015,16 +20346,9 @@ static void mir_emit_forth_run(
         int done_label = new_label();
 
         mir_stream_printf(out, "L%d:\n", cases[item]);
-        mir_emit_forth_pop_hl(out);
-        mir_emit_forth_frame_store(out, MIR_FORTH_TEMP_B);
-        mir_emit_forth_load_stack_hl(out, -1);
-        mir_stream_puts("\tpush hl\n", out);
-        mir_emit_forth_frame_load(out, MIR_FORTH_TEMP_B);
-        if (item == 28) {
-            mir_stream_puts("\tex de,hl\n\tpop hl\n", out);
-        } else {
-            mir_stream_puts("\tpop de\n", out);
-        }
+        mir_emit_forth_binary_stack_operands(out);
+        if (item == 29)
+            mir_stream_puts("\tex de,hl\n", out);
         mir_emit_forth_signed_less_branch(
             out, true_label, false_label);
         mir_stream_printf(out,
@@ -20033,26 +20357,15 @@ static void mir_emit_forth_run(
                 "L%d:\n",
                 true_label, done_label,
                 false_label, done_label);
-        mir_emit_forth_store_stack_hl(out, -1);
+        mir_emit_forth_binary_stack_result(out);
         mir_stream_printf(out, "\tjp L%d\n", next);
     }
 
     /* OP_AND / OP_OR */
     for (item = 30; item <= 31; ++item) {
         mir_stream_printf(out, "L%d:\n", cases[item]);
-        mir_emit_forth_pop_hl(out);
-        mir_emit_forth_frame_store(out, MIR_FORTH_TEMP_B);
-        mir_emit_forth_load_stack_hl(out, -1);
-        mir_stream_puts("\tpush hl\n", out);
-        mir_emit_forth_frame_load(out, MIR_FORTH_TEMP_B);
-        mir_stream_puts("\tex de,hl\n\tpop hl\n", out);
-        if (item == 30)
-            mir_stream_puts("\tld a,l\n\tand e\n\tld l,a\n"
-                  "\tld a,h\n\tand d\n\tld h,a\n", out);
-        else
-            mir_stream_puts("\tld a,l\n\tor e\n\tld l,a\n"
-                  "\tld a,h\n\tor d\n\tld h,a\n", out);
-        mir_emit_forth_store_stack_hl(out, -1);
+        mir_emit_forth_binary_stack_update(
+            out, item == 30 ? '&' : '|');
         mir_stream_printf(out, "\tjp L%d\n", next);
     }
 
@@ -20597,8 +20910,23 @@ static void mir_emit_basic_pop_hl(MirStream *out)
     mir_stream_puts("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n", out);
 }
 
-#define mir_emit_forth_push_hl mir_emit_basic_push_hl
-#define mir_emit_forth_pop_hl mir_emit_basic_pop_hl
+/* BINT executes almost entirely in run(), so keep its byte-addressed VM
+ * stack pointer in BC instead of reloading and storing the frame slot for
+ * every opcode.  The generic helpers remain for the other exact kernels. */
+static void mir_emit_basic_bc_push_hl(MirStream *out)
+{
+    mir_stream_puts("\tex de,hl\n\tld l,c\n\tld h,b\n"
+          "\tld (hl),e\n\tinc hl\n\tld (hl),d\n\tinc bc\n\tinc bc\n", out);
+}
+
+static void mir_emit_basic_bc_pop_hl(MirStream *out)
+{
+    mir_stream_puts("\tdec bc\n\tdec bc\n\tld l,c\n\tld h,b\n"
+          "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n", out);
+}
+
+#define mir_emit_forth_push_hl mir_emit_basic_bc_push_hl
+#define mir_emit_forth_pop_hl mir_emit_basic_bc_pop_hl
 static void mir_emit_basic_run(
     MirStream *out, const struct MirBasicRun *plan)
 {
@@ -20646,7 +20974,7 @@ static void mir_emit_basic_run(
     mir_stream_puts("\tadd hl,hl\n\tex de,hl\n", out);
     mir_emit_forth_frame_load(out, BASIC_STACK);
     mir_stream_puts("\tadd hl,de\n", out);
-    mir_emit_forth_frame_store(out, BASIC_SP);
+    mir_stream_puts("\tld c,l\n\tld b,h\n", out);
     mir_emit_basic_global_to_frame(out, plan->gosub_pointer, BASIC_GSP);
     mir_emit_basic_global_to_frame(out, plan->for_pointer, BASIC_FSP);
     mir_emit_forth_frame_load(out, BASIC_CODE);
@@ -20793,8 +21121,10 @@ static void mir_emit_basic_run(
                     "\tld hl,0\n\tjp L%d\nL%d:\n\tex de,hl\n",
                     nonzero, arithmetic_done, nonzero);
             mir_emit_forth_frame_load(out, BASIC_TEMP_A);
+            mir_stream_puts("\tpush bc\n", out);
             mir_emit_runtime_call(
                 out, item == 9 ? "__divs" : "__mods");
+            mir_stream_puts("\tpop bc\n", out);
             mir_stream_printf(out, "L%d:\n", arithmetic_done);
         } else {
             mir_emit_forth_frame_load(out, BASIC_TEMP_B);
@@ -20805,7 +21135,11 @@ static void mir_emit_basic_run(
             else if (item == 7)
                 mir_stream_puts("\tor a\n\tsbc hl,de\n", out);
             else
+                mir_stream_puts("\tpush bc\n", out);
+            if (item == 8) {
                 mir_emit_runtime_call(out, "__mulu");
+                mir_stream_puts("\tpop bc\n", out);
+            }
         }
         mir_emit_forth_push_hl(out);
         mir_stream_printf(out, "\tjp L%d\n", next);
@@ -20847,6 +21181,7 @@ static void mir_emit_basic_run(
                 mir_stream_puts("\tex de,hl\n", out);
                 mir_emit_forth_frame_load(out, BASIC_TEMP_B);
             }
+            mir_stream_puts("\tpush bc\n", out);
             if (item == 14 || item == 16) {
                 mir_emit_forth_signed_less_branch(
                     out, true_label, false_label);
@@ -20856,11 +21191,11 @@ static void mir_emit_basic_run(
             }
         }
         mir_stream_printf(out,
-                "L%d:\n\tld hl,1\n\tjp L%d\n"
-                "L%d:\n\tld hl,0\n"
+                "L%d:\n%s\tld hl,1\n\tjp L%d\n"
+                "L%d:\n%s\tld hl,0\n"
                 "L%d:\n",
-                true_label, compare_done,
-                false_label, compare_done);
+                true_label, item >= 14 ? "\tpop bc\n" : "", compare_done,
+                false_label, item >= 14 ? "\tpop bc\n" : "", compare_done);
         mir_emit_forth_push_hl(out);
         mir_stream_printf(out, "\tjp L%d\n", next);
     }
@@ -20983,7 +21318,7 @@ static void mir_emit_basic_run(
                      "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n",
                 plan->symbol_scalar_offset);
         mir_emit_basic_scaled_address(out, BASIC_MEMORY, 2);
-        mir_stream_puts("\tpush hl\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+        mir_stream_puts("\tpush bc\n\tpush hl\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
               "\tex de,hl\n", out);
         mir_emit_forth_frame_store(out, BASIC_TEMP_A);
         mir_emit_forth_frame_load(out, BASIC_TEMP_C);
@@ -20994,7 +21329,7 @@ static void mir_emit_basic_run(
         mir_emit_forth_frame_load(out, BASIC_TEMP_A);
         mir_stream_puts("\tpop bc\n\tadd hl,de\n\tex de,hl\n"
               "\tld h,b\n\tld l,c\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n"
-              "\tex de,hl\n", out);
+              "\tex de,hl\n\tpop bc\n", out);
         mir_emit_forth_frame_store(out, BASIC_TEMP_A);
         mir_emit_forth_frame_load(out, BASIC_TEMP_C);
         if (plan->for_limit_offset != 0)
@@ -21003,17 +21338,17 @@ static void mir_emit_basic_run(
         mir_stream_puts("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n", out);
         mir_emit_forth_frame_load(out, BASIC_TEMP_A);
         /* Continue unless limit < new value. */
-        mir_stream_puts("\tex de,hl\n", out);
+        mir_stream_puts("\tex de,hl\n\tpush bc\n", out);
         mir_emit_forth_signed_less_branch(
             out, finish_loop, continue_loop);
-        mir_stream_printf(out, "L%d:\n", continue_loop);
+        mir_stream_printf(out, "L%d:\n\tpop bc\n", continue_loop);
         mir_emit_forth_frame_load(out, BASIC_TEMP_C);
         if (plan->for_pc_offset != 0)
             mir_stream_printf(out, "\tld de,%d\n\tadd hl,de\n",
                     plan->for_pc_offset);
         mir_stream_puts("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
               "\tpush de\n\tpop iy\n", out);
-        mir_stream_printf(out, "\tjp L%d\nL%d:\n",
+        mir_stream_printf(out, "\tjp L%d\nL%d:\n\tpop bc\n",
                 dispatch, finish_loop);
         mir_emit_forth_frame_load(out, BASIC_FSP);
         mir_stream_puts("\tdec hl\n", out);
@@ -21024,14 +21359,15 @@ static void mir_emit_basic_run(
     /* Printing and no-op clear. */
     mir_stream_printf(out, "L%d:\n", cases[25]);
     mir_emit_forth_pop_hl(out);
-    mir_stream_puts("\tpush hl\n", out);
+    mir_stream_puts("\tpush bc\n\tpush hl\n", out);
     mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n",
             plan->number_format_string);
     mir_emit_symbol_call(out, plan->print_function);
-    mir_stream_puts("\tpop bc\n\tpop bc\n", out);
+    mir_stream_puts("\tpop de\n\tpop de\n\tpop bc\n", out);
     mir_stream_printf(out, "\tjp L%d\n", next);
 
     mir_stream_printf(out, "L%d:\n", cases[26]);
+    mir_stream_puts("\tpush bc\n", out);
     mir_emit_forth_frame_load(out, BASIC_STRINGS);
     mir_stream_puts("\tpush hl\n", out);
     mir_emit_basic_instruction_word(out, plan->instruction_a_offset);
@@ -21040,16 +21376,16 @@ static void mir_emit_basic_run(
     mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n",
             plan->string_format_string);
     mir_emit_symbol_call(out, plan->print_function);
-    mir_stream_puts("\tpop bc\n\tpop bc\n", out);
+    mir_stream_puts("\tpop de\n\tpop de\n\tpop bc\n", out);
     mir_stream_printf(out, "\tjp L%d\n", next);
 
     for (item = 27; item <= 28; ++item) {
         int string_id =
             item == 27 ? plan->space_string : plan->newline_string;
-        mir_stream_printf(out, "L%d:\n\tld hl,S%d\n\tpush hl\n",
+        mir_stream_printf(out, "L%d:\n\tpush bc\n\tld hl,S%d\n\tpush hl\n",
                 cases[item], string_id);
         mir_emit_symbol_call(out, plan->print_function);
-        mir_stream_puts("\tpop bc\n", out);
+        mir_stream_puts("\tpop de\n\tpop bc\n", out);
         mir_stream_printf(out, "\tjp L%d\n", next);
     }
     mir_stream_printf(out, "L%d:\n\tjp L%d\n", cases[29], next);
@@ -21068,8 +21404,7 @@ static void mir_emit_basic_run(
             "\tadd hl,de\n\tpush hl\n\tpop iy\n\tjp L%d\n"
             "L%d:\n",
             dispatch, exit_label);
-    mir_emit_forth_frame_load(out, BASIC_SP);
-    mir_stream_puts("\tex de,hl\n", out);
+    mir_stream_puts("\tld e,c\n\tld d,b\n", out);
     mir_emit_forth_frame_load(out, BASIC_STACK);
     mir_stream_puts("\tex de,hl\n\tor a\n\tsbc hl,de\n"
           "\tsrl h\n\trr l\n", out);
@@ -21252,14 +21587,13 @@ static void mir_emit_fortran_eval(
           "\tld h,b\n\tld l,c\n", out);
     mir_emit_mul_hl_const(out, (unsigned long)plan->token_stride);
     mir_stream_puts("\tpush iy\n\tpop de\n\tadd hl,de\n", out);
-    mir_emit_forth_frame_store(out, MIR_FOREVAL_END);
-    mir_stream_printf(out, "\tld hl,%s\n", stack_name);
-    mir_emit_forth_frame_store(out, MIR_FOREVAL_STACK_POINTER);
+    /* HL' is otherwise unused by this exact kernel (the IY increment uses
+     * only DE'), so retain the token-end pointer there for every dispatch. */
+    mir_stream_printf(out, "\texx\n\tld bc,%s\n", stack_name);
     mir_stream_printf(out,
-            "L%d:\n\tpush iy\n\tpop hl\n\tpush hl\n",
+            "L%d:\n\tpush iy\n\tpop hl\n\texx\n\tpush hl\n\texx\n",
             dispatch);
-    mir_emit_forth_frame_load(out, MIR_FOREVAL_END);
-    mir_stream_puts("\tex de,hl\n\tpop hl\n\tor a\n\tsbc hl,de\n", out);
+    mir_stream_puts("\tpop de\n\tor a\n\tsbc hl,de\n", out);
     mir_stream_printf(out,
             "\tjp nc, L%d\n"
             "\tld a,(iy%+d)\n\tor a\n\tjp nz, L%d\n"
@@ -21284,7 +21618,7 @@ static void mir_emit_fortran_eval(
     for (item = 1; item <= 2; ++item) {
         mir_stream_printf(out, "L%d:\n", cases[item]);
         if (item == 2) {
-            mir_emit_basic_pop_hl(out);
+            mir_emit_basic_bc_pop_hl(out);
             mir_emit_forth_frame_store(out, MIR_FOREVAL_ARRAY_INDEX);
         } else {
             mir_stream_puts("\tld hl,0\n", out);
@@ -21292,12 +21626,14 @@ static void mir_emit_fortran_eval(
         }
         mir_emit_basic_instruction_word(out, plan->token_argument_offset);
         mir_emit_forth_frame_store(out, MIR_FOREVAL_SYMBOL_INDEX);
+        mir_stream_puts("\tpush bc\n", out);
         mir_emit_fortran_symbol_load(out, plan);
+        mir_stream_puts("\tpop bc\n", out);
         mir_stream_printf(out, "\tjp L%d\n", push_result);
     }
 
     mir_stream_printf(out, "L%d:\n", cases[8]);
-    mir_emit_basic_pop_hl(out);
+    mir_emit_basic_bc_pop_hl(out);
     mir_stream_puts("\txor a\n\tsub l\n\tld l,a\n\tld a,0\n\tsbc a,h\n\tld h,a\n",
           out);
     mir_stream_printf(out, "\tjp L%d\n", push_result);
@@ -21310,20 +21646,17 @@ static void mir_emit_fortran_eval(
         if (item == 8)
             continue;
         mir_stream_printf(out, "L%d:\n", cases[item]);
-        mir_stream_printf(out,
-                "\tcall L%d\n"
-                "\tld (ix%d),c\n\tld (ix%d),b\n",
-                pop_two,
-                MIR_FOREVAL_STACK_POINTER,
-                MIR_FOREVAL_STACK_POINTER + 1);
+        mir_stream_printf(out, "\tcall L%d\n", pop_two);
         if (item == 6 || item == 7) {
             int nonzero = new_label();
             mir_stream_printf(out,
                     "\tld a,d\n\tor e\n\tjp nz, L%d\n"
                     "\tld hl,0\n\tjp L%d\nL%d:\n",
                     nonzero, result_label, nonzero);
+            mir_stream_puts("\tpush bc\n", out);
             mir_emit_runtime_call(
                 out, item == 6 ? "__divs" : "__mods");
+            mir_stream_puts("\tpop bc\n", out);
             mir_stream_printf(out, "L%d:\n", result_label);
         } else if (item >= 9 && item <= 14) {
             if (item == 9 || item == 10) {
@@ -21334,6 +21667,7 @@ static void mir_emit_fortran_eval(
             } else {
                 if (item == 12 || item == 13)
                     mir_stream_puts("\tex de,hl\n", out);
+                mir_stream_puts("\tpush bc\n", out);
                 if (item == 11 || item == 13)
                     mir_emit_forth_signed_less_branch(
                         out, true_label, false_label);
@@ -21342,10 +21676,12 @@ static void mir_emit_fortran_eval(
                         out, false_label, true_label);
             }
             mir_stream_printf(out,
-                    "L%d:\n\tld hl,1\n\tjp L%d\n"
-                    "L%d:\n\tld hl,0\nL%d:\n",
-                    true_label, result_label,
-                    false_label, result_label);
+                    "L%d:\n%s\tld hl,1\n\tjp L%d\n"
+                    "L%d:\n%s\tld hl,0\nL%d:\n",
+                    true_label, item >= 11 ? "\tpop bc\n" : "",
+                    result_label,
+                    false_label, item >= 11 ? "\tpop bc\n" : "",
+                    result_label);
         } else if (item == 15 || item == 16) {
             int short_circuit = new_label();
             mir_stream_puts("\tld a,h\n\tor l\n", out);
@@ -21374,14 +21710,16 @@ static void mir_emit_fortran_eval(
                 mir_stream_puts("\tadd hl,de\n", out);
             else if (item == 4)
                 mir_stream_puts("\tor a\n\tsbc hl,de\n", out);
-            else
+            else {
+                mir_stream_puts("\tpush bc\n", out);
                 mir_emit_runtime_call(out, "__mulu");
+                mir_stream_puts("\tpop bc\n", out);
+            }
         }
         mir_stream_printf(out, "\tjp L%d\n", push_result);
     }
     mir_stream_printf(out, "L%d:\n", pop_two);
     mir_stream_printf(out,
-            "\tld c,(ix%d)\n\tld b,(ix%d)\n"
             "\tdec bc\n\tdec bc\n"
             "\tld l,c\n\tld h,b\n"
             "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
@@ -21389,22 +21727,19 @@ static void mir_emit_fortran_eval(
             "\tdec bc\n\tdec bc\n"
             "\tld l,c\n\tld h,b\n"
             "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
-            "\tex de,hl\n\tpop de\n\tret\n",
-            MIR_FOREVAL_STACK_POINTER,
-            MIR_FOREVAL_STACK_POINTER + 1);
+            "\tex de,hl\n\tpop de\n\tret\n");
     mir_stream_printf(out, "L%d:\n", push_result);
-    mir_emit_basic_push_hl(out);
+    mir_emit_basic_bc_push_hl(out);
     mir_stream_printf(out, "\tjp L%d\n", next);
     mir_stream_printf(out, "L%d:\n", next);
     for (item = 0; item < plan->token_stride; ++item)
         mir_stream_puts("\tinc iy\n", out);
     mir_stream_printf(out, "\tjp L%d\nL%d:\n", dispatch, done);
-    mir_emit_forth_frame_load(out, MIR_FOREVAL_STACK_POINTER);
     mir_stream_printf(out,
-            "\tld de,%s\n\tor a\n\tsbc hl,de\n"
+            "\tld h,b\n\tld l,c\n\tld de,%s\n\tor a\n\tsbc hl,de\n"
             "\tjp z, L%d\n",
             stack_name, empty);
-    mir_emit_basic_pop_hl(out);
+    mir_emit_basic_bc_pop_hl(out);
     mir_stream_printf(out, "\tjp L%d\nL%d:\n\tld hl,0\nL%d:\n"
                  "\tld sp,ix\n\tpop ix\n\tpop iy\n\tret\n",
             exit_label, empty, exit_label);
@@ -21480,7 +21815,7 @@ static void mir_emit_c_instruction_word(MirStream *out, int offset)
 }
 
 static void mir_emit_c_memory_address(
-    MirStream *out, int memory_frame_offset,
+    MirStream *out, const char *state_name, int state_memory_offset,
     int indexed, int element_size)
 {
     if (indexed) {
@@ -21493,7 +21828,7 @@ static void mir_emit_c_memory_address(
         mir_emit_c_instruction_word(out, 1);
     }
     mir_stream_puts("\tex de,hl\n", out);
-    mir_emit_forth_frame_load(out, memory_frame_offset);
+    mir_emit_c_state_load(out, state_name, state_memory_offset);
     mir_stream_puts("\tadd hl,de\n", out);
 }
 
@@ -21512,6 +21847,7 @@ static void mir_emit_c_run(MirStream *out, const struct MirCRun *plan)
     int bad_opcode = new_label();
     int no_main = new_label();
     int pop_two = new_label();
+    int binary_push_result = new_label();
     int push_result = new_label();
     int item;
 
@@ -21624,9 +21960,8 @@ static void mir_emit_c_run(MirStream *out, const struct MirCRun *plan)
         int global_memory =
             item == 2 || item == 3 || item == 6 || item == 7 ||
             item == 10 || item == 11 || item == 12 || item == 13;
-        int memory_frame =
-            global_memory ? MIR_CRUN_GLOBAL_MEMORY :
-                            MIR_CRUN_FRAME_MEMORY;
+        int state_memory_offset = global_memory ?
+            plan->state_global_memory_offset : plan->state_flp_offset;
 
         mir_stream_printf(out, "L%d:\n", cases[item]);
         if (is_store && indexed) {
@@ -21647,7 +21982,8 @@ static void mir_emit_c_run(MirStream *out, const struct MirCRun *plan)
             mir_emit_forth_frame_store(out, MIR_CRUN_TEMP_V);
         }
         mir_emit_c_memory_address(
-            out, memory_frame, indexed, is_byte ? 1 : 2);
+            out, state_name, state_memory_offset,
+            indexed, is_byte ? 1 : 2);
         if (is_store) {
             mir_stream_puts("\tpush hl\n", out);
             mir_emit_forth_frame_load(out, MIR_CRUN_TEMP_V);
@@ -21673,11 +22009,13 @@ static void mir_emit_c_run(MirStream *out, const struct MirCRun *plan)
         int arithmetic_done = new_label();
 
         mir_stream_printf(out,
-                "L%d:\n\tcall L%d\n"
-                "\tld (ix%d),c\n\tld (ix%d),b\n",
-                cases[item], pop_two,
-                MIR_CRUN_STACK_POINTER, MIR_CRUN_STACK_POINTER + 1);
+                "L%d:\n\tcall L%d\n",
+                cases[item], pop_two);
         if (item == 21 || item == 22) {
+            mir_stream_printf(out,
+                    "\tld (ix%d),c\n\tld (ix%d),b\n",
+                    MIR_CRUN_STACK_POINTER,
+                    MIR_CRUN_STACK_POINTER + 1);
             mir_stream_printf(out,
                     "\tld a,d\n\tor e\n\tjp nz, L%d\n"
                     "\tld hl,0\n\tjp L%d\nL%d:\n",
@@ -21692,7 +22030,9 @@ static void mir_emit_c_run(MirStream *out, const struct MirCRun *plan)
         } else {
             mir_emit_runtime_call(out, "__mulu");
         }
-        mir_stream_printf(out, "\tjp L%d\n", push_result);
+        mir_stream_printf(out, "\tjp L%d\n",
+                (item == 21 || item == 22) ?
+                    push_result : binary_push_result);
     }
 
     for (item = 23; item <= 24; ++item) {
@@ -21720,10 +22060,8 @@ static void mir_emit_c_run(MirStream *out, const struct MirCRun *plan)
         int compare_done = new_label();
 
         mir_stream_printf(out,
-                "L%d:\n\tcall L%d\n"
-                "\tld (ix%d),c\n\tld (ix%d),b\n",
-                cases[item], pop_two,
-                MIR_CRUN_STACK_POINTER, MIR_CRUN_STACK_POINTER + 1);
+                "L%d:\n\tcall L%d\n",
+                cases[item], pop_two);
         if (item == 25 || item == 26) {
             mir_stream_puts("\tor a\n\tsbc hl,de\n", out);
             mir_stream_printf(out, "\tjp %s, L%d\n\tjp L%d\n",
@@ -21732,6 +22070,7 @@ static void mir_emit_c_run(MirStream *out, const struct MirCRun *plan)
         } else {
             if (item == 28 || item == 29)
                 mir_stream_puts("\tex de,hl\n", out);
+            mir_stream_puts("\tpush bc\n", out);
             if (item == 27 || item == 29)
                 mir_emit_forth_signed_less_branch(
                     out, true_label, false_label);
@@ -21740,10 +22079,14 @@ static void mir_emit_c_run(MirStream *out, const struct MirCRun *plan)
                     out, false_label, true_label);
         }
         mir_stream_printf(out,
-                "L%d:\n\tld hl,1\n\tjp L%d\n"
-                "L%d:\n\tld hl,0\nL%d:\n\tjp L%d\n",
-                true_label, compare_done,
-                false_label, compare_done, push_result);
+                "L%d:\n%s\tld hl,1\n\tjp L%d\n"
+                "L%d:\n%s\tld hl,0\nL%d:\n\tjp L%d\n",
+                true_label,
+                item >= 27 ? "\tpop bc\n" : "",
+                compare_done,
+                false_label,
+                item >= 27 ? "\tpop bc\n" : "",
+                compare_done, binary_push_result);
     }
 
     for (item = 31; item <= 33; ++item) {
@@ -21752,10 +22095,8 @@ static void mir_emit_c_run(MirStream *out, const struct MirCRun *plan)
         int logical_done = new_label();
 
         mir_stream_printf(out,
-                "L%d:\n\tcall L%d\n"
-                "\tld (ix%d),c\n\tld (ix%d),b\n",
-                cases[item], pop_two,
-                MIR_CRUN_STACK_POINTER, MIR_CRUN_STACK_POINTER + 1);
+                "L%d:\n\tcall L%d\n",
+                cases[item], pop_two);
         if (item == 33) {
             mir_stream_puts("\tld a,l\n\tand e\n\tld l,a\n"
                   "\tld a,h\n\tand d\n\tld h,a\n", out);
@@ -21781,7 +22122,7 @@ static void mir_emit_c_run(MirStream *out, const struct MirCRun *plan)
             }
             mir_stream_printf(out, "L%d:\n", logical_done);
         }
-        mir_stream_printf(out, "\tjp L%d\n", push_result);
+        mir_stream_printf(out, "\tjp L%d\n", binary_push_result);
     }
 
     /* Branches. */
@@ -21852,11 +22193,14 @@ static void mir_emit_c_run(MirStream *out, const struct MirCRun *plan)
     mir_stream_puts("\tpush hl\n", out);
     mir_emit_forth_frame_load(out, MIR_CRUN_FRAME_SIZE);
     mir_stream_puts("\tex de,hl\n\tpop hl\n", out);
+    mir_stream_puts("\tpush bc\n", out);
     mir_emit_runtime_call(out, "__mulu");
+    mir_stream_puts("\tpop bc\n", out);
     mir_stream_puts("\tex de,hl\n", out);
     mir_emit_forth_frame_load(out, MIR_CRUN_FRAME_STORAGE);
     mir_stream_puts("\tadd hl,de\n", out);
     mir_emit_forth_frame_store(out, MIR_CRUN_FRAME_MEMORY);
+    mir_emit_c_state_store(out, state_name, plan->state_flp_offset);
     mir_emit_forth_frame_load(out, MIR_CRUN_PC);
     mir_stream_puts("\tdec hl\n", out);
     mir_emit_mul_hl_const(out, (unsigned long)plan->instruction_stride);
@@ -21917,6 +22261,12 @@ static void mir_emit_c_run(MirStream *out, const struct MirCRun *plan)
             "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
             "\tex de,hl\n\tpop de\n\tret\n",
             MIR_CRUN_STACK_POINTER, MIR_CRUN_STACK_POINTER + 1);
+    mir_stream_printf(out, "L%d:\n", binary_push_result);
+    mir_stream_puts(
+            "\tex de,hl\n\tld l,c\n\tld h,b\n"
+            "\tld (hl),e\n\tinc hl\n\tld (hl),d\n\tinc hl\n", out);
+    mir_emit_forth_frame_store(out, MIR_CRUN_STACK_POINTER);
+    mir_stream_printf(out, "\tjp L%d\n", next);
     mir_stream_printf(out, "L%d:\n", push_result);
     mir_emit_basic_push_hl(out);
     mir_stream_printf(out, "\tjp L%d\n", next);
@@ -21939,6 +22289,763 @@ static void mir_emit_c_run(MirStream *out, const struct MirCRun *plan)
     mir_emit_symbol_call(out, plan->die_function);
     mir_stream_printf(out, "\tjp L%d\nL%d:\n", exit_label, bad_opcode);
     mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n", plan->bad_opcode_string);
+    mir_emit_symbol_call(out, plan->die_function);
+    mir_stream_printf(out, "\tjp L%d\n", exit_label);
+}
+
+static void mir_emit_pascal_global_load(MirStream *out, struct Sym *symbol)
+{
+    mir_stream_printf(out, "\tld hl,(%s)\n",
+            asm_name_for(sym_asm_name(symbol)));
+}
+
+static void mir_emit_pascal_global_store(MirStream *out, struct Sym *symbol)
+{
+    mir_stream_printf(out, "\tld (%s),hl\n",
+            asm_name_for(sym_asm_name(symbol)));
+}
+
+static void mir_emit_pascal_push_hl(
+    MirStream *out, const struct MirPascalRun *plan)
+{
+    mir_stream_puts("\tex de,hl\n", out);
+    mir_emit_pascal_global_load(out, plan->stack_pointer);
+    mir_stream_puts("\tld (hl),e\n\tinc hl\n\tld (hl),d\n\tinc hl\n", out);
+    mir_emit_pascal_global_store(out, plan->stack_pointer);
+}
+
+static void mir_emit_pascal_pop_hl(
+    MirStream *out, const struct MirPascalRun *plan)
+{
+    mir_emit_pascal_global_load(out, plan->stack_pointer);
+    mir_stream_puts("\tdec hl\n\tdec hl\n", out);
+    mir_emit_pascal_global_store(out, plan->stack_pointer);
+    mir_stream_puts("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n", out);
+}
+
+static void mir_emit_pascal_instruction_word(MirStream *out, int offset)
+{
+    mir_stream_printf(out, "\tld l,(iy%+d)\n\tld h,(iy%+d)\n",
+            offset, offset + 1);
+}
+
+static void mir_emit_pascal_run(
+    MirStream *out, const struct MirPascalRun *plan)
+{
+    int cases[43];
+    int dispatch = new_label();
+    int table = new_label();
+    int next = new_label();
+    int exit_label = new_label();
+    int bad_opcode = new_label();
+    int pop_two = new_label();
+    int push_result = new_label();
+    int return_result = new_label();
+    int item;
+
+    for (item = 0; item < plan->opcode_count; ++item)
+        cases[item] = new_label();
+    mir_emit_symbol_extrn(out, plan->code);
+    mir_emit_symbol_extrn(out, plan->procedures);
+    mir_emit_symbol_extrn(out, plan->return_stack);
+    mir_emit_symbol_extrn(out, plan->global_memory);
+    mir_emit_symbol_extrn(out, plan->stack);
+    mir_emit_symbol_extrn(out, plan->stack_pointer);
+    mir_emit_symbol_extrn(out, plan->frame_storage);
+    mir_emit_symbol_extrn(out, plan->frame_memory);
+    mir_emit_symbol_extrn(out, plan->frame_pointer);
+    mir_emit_symbol_extrn(out, plan->strings);
+
+    mir_emit_pascal_global_load(out, plan->code);
+    mir_stream_puts("\tpush hl\n\tpop iy\n", out);
+    mir_stream_puts("\tld hl,0\n", out);
+    mir_emit_pascal_global_store(out, plan->frame_pointer);
+    mir_emit_pascal_global_store(out, plan->stack_pointer);
+    mir_emit_pascal_global_load(out, plan->stack);
+    mir_emit_pascal_global_store(out, plan->stack_pointer);
+    mir_emit_pascal_global_load(out, plan->frame_storage);
+    mir_emit_pascal_global_store(out, plan->frame_memory);
+
+    mir_stream_printf(out, "L%d:\n", dispatch);
+    mir_stream_printf(out, "\tld a,(iy%+d)\n\tcp %d\n\tjp nc,L%d\n",
+            0, plan->opcode_count, bad_opcode);
+    mir_emit_dense_byte_table_index_from_a(out);
+    mir_stream_printf(out,
+            "\tld de,L%d\n\tadd hl,de\n\tld e,(hl)\n\tinc hl\n"
+            "\tld d,(hl)\n\tex de,hl\n\tjp (hl)\nL%d:\n",
+            table, table);
+    for (item = 0; item < plan->opcode_count; ++item)
+        mir_stream_printf(out, "\tdw L%d\n", cases[item]);
+
+    mir_stream_printf(out, "L%d:\n\tjp L%d\n", cases[0], exit_label);
+    mir_stream_printf(out, "L%d:\n", cases[1]);
+    mir_emit_pascal_instruction_word(out, plan->instruction_a_offset);
+    mir_stream_printf(out, "\tjp L%d\n", push_result);
+
+    for (item = 2; item <= 42; ++item) {
+        int is_byte = item >= 35;
+        int is_memory = (item >= 2 && item <= 9) || is_byte;
+        int indexed;
+        int is_store;
+        int is_global;
+        struct Sym *base;
+
+        if (!is_memory)
+            continue;
+        indexed = (item >= 6 && item <= 9) || item >= 39;
+        is_store = is_byte ? ((item & 1) == 0) : ((item & 1) != 0);
+        is_global = (item == 2 || item == 3 || item == 6 || item == 7 ||
+                     item == 35 || item == 36 || item == 39 || item == 40);
+        base = is_global ? plan->global_memory : plan->frame_memory;
+        mir_stream_printf(out, "L%d:\n", cases[item]);
+        if (is_store && indexed) {
+            mir_stream_printf(out, "\tcall L%d\n", pop_two);
+            mir_stream_puts("\tpush hl\n\tld l,c\n\tld h,b\n", out);
+            mir_emit_pascal_global_store(out, plan->stack_pointer);
+            mir_stream_puts("\tpop hl\n\tpush de\n", out);
+        } else if (indexed || is_store) {
+            mir_emit_pascal_pop_hl(out, plan);
+            if (is_store)
+                mir_stream_puts("\tpush hl\n", out);
+        }
+        if (indexed) {
+            if (!is_byte)
+                mir_stream_puts("\tadd hl,hl\n", out);
+            mir_stream_puts("\tpush hl\n", out);
+        }
+        mir_emit_pascal_instruction_word(out, plan->instruction_a_offset);
+        if (indexed)
+            mir_stream_puts("\tex de,hl\n\tpop hl\n\tadd hl,de\n", out);
+        mir_stream_puts("\tex de,hl\n", out);
+        mir_emit_pascal_global_load(out, base);
+        mir_stream_puts("\tadd hl,de\n", out);
+        if (is_store) {
+            mir_stream_puts("\tpop de\n", out);
+            mir_stream_puts("\tld (hl),e\n", out);
+            if (!is_byte)
+                mir_stream_puts("\tinc hl\n\tld (hl),d\n", out);
+            mir_stream_printf(out, "\tjp L%d\n", next);
+        } else {
+            if (is_byte)
+                mir_stream_puts("\tld l,(hl)\n\tld h,0\n", out);
+            else
+                mir_stream_puts("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n", out);
+            mir_stream_printf(out, "\tjp L%d\n", push_result);
+        }
+    }
+
+    for (item = 10; item <= 14; ++item) {
+        int nonzero = new_label();
+        int done = new_label();
+        mir_stream_printf(out, "L%d:\n\tcall L%d\n", cases[item], pop_two);
+        mir_stream_puts("\tpush hl\n\tld l,c\n\tld h,b\n", out);
+        mir_emit_pascal_global_store(out, plan->stack_pointer);
+        mir_stream_puts("\tpop hl\n", out);
+        if (item == 10)
+            mir_stream_puts("\tadd hl,de\n", out);
+        else if (item == 11)
+            mir_stream_puts("\tor a\n\tsbc hl,de\n", out);
+        else if (item == 12)
+            mir_emit_runtime_call(out, "__mulu");
+        else {
+            mir_stream_printf(out,
+                    "\tld a,d\n\tor e\n\tjp nz,L%d\n\tld hl,0\n"
+                    "\tjp L%d\nL%d:\n", nonzero, done, nonzero);
+            mir_emit_runtime_call(out, item == 13 ? "__divs" : "__mods");
+            mir_stream_printf(out, "L%d:\n", done);
+        }
+        mir_stream_printf(out, "\tjp L%d\n", push_result);
+    }
+
+    mir_stream_printf(out, "L%d:\n", cases[15]);
+    mir_emit_pascal_pop_hl(out, plan);
+    mir_stream_puts("\txor a\n\tsub l\n\tld l,a\n\tld a,0\n\tsbc a,h\n\tld h,a\n", out);
+    mir_stream_printf(out, "\tjp L%d\n", push_result);
+
+    for (item = 16; item <= 23; ++item) {
+        int true_label = new_label();
+        int false_label = new_label();
+        int done = new_label();
+        mir_stream_printf(out, "L%d:\n\tcall L%d\n", cases[item], pop_two);
+        mir_stream_puts("\tpush hl\n\tld l,c\n\tld h,b\n", out);
+        mir_emit_pascal_global_store(out, plan->stack_pointer);
+        mir_stream_puts("\tpop hl\n", out);
+        if (item == 16 || item == 17) {
+            mir_stream_puts("\tor a\n\tsbc hl,de\n", out);
+            mir_stream_printf(out, "\tjp %s,L%d\n\tjp L%d\n",
+                    item == 16 ? "z" : "nz", true_label, false_label);
+        } else if (item >= 18 && item <= 21) {
+            if (item == 19 || item == 20)
+                mir_stream_puts("\tex de,hl\n", out);
+            if (item == 18 || item == 20)
+                mir_emit_forth_signed_less_branch(out, true_label, false_label);
+            else
+                mir_emit_forth_signed_less_branch(out, false_label, true_label);
+        } else {
+            mir_stream_puts("\tld a,h\n\tor l\n", out);
+            mir_stream_printf(out, "\tjp %s,L%d\n",
+                    item == 22 ? "z" : "nz",
+                    item == 22 ? false_label : true_label);
+            mir_stream_puts("\tld a,d\n\tor e\n", out);
+            mir_stream_printf(out, "\tjp %s,L%d\n\tjp L%d\n",
+                    item == 22 ? "z" : "nz",
+                    item == 22 ? false_label : true_label,
+                    item == 22 ? true_label : false_label);
+        }
+        mir_stream_printf(out,
+                "L%d:\n\tld hl,1\n\tjp L%d\nL%d:\n\tld hl,0\n"
+                "L%d:\n\tjp L%d\n",
+                true_label, done, false_label, done, push_result);
+    }
+
+    mir_stream_printf(out, "L%d:\n", cases[24]);
+    mir_emit_pascal_pop_hl(out, plan);
+    {
+        int zero = new_label();
+        int done = new_label();
+        mir_stream_printf(out,
+                "\tld a,h\n\tor l\n\tjp z,L%d\n\tld hl,0\n\tjp L%d\n"
+                "L%d:\n\tld hl,1\nL%d:\n\tjp L%d\n",
+                zero, done, zero, done, push_result);
+    }
+
+    mir_stream_printf(out, "L%d:\n\tcall L%d\n", cases[25], pop_two);
+    mir_stream_puts("\tpush hl\n\tld l,c\n\tld h,b\n", out);
+    mir_emit_pascal_global_store(out, plan->stack_pointer);
+    mir_stream_puts("\tpop hl\n\tld b,e\n\tld a,b\n\tor a\n", out);
+    {
+        int shift = new_label();
+        int shifted = new_label();
+        mir_stream_printf(out, "\tjp z,L%d\nL%d:\n\tadd hl,hl\n\tdjnz L%d\nL%d:\n",
+                shifted, shift, shift, shifted);
+    }
+    mir_stream_printf(out, "\tjp L%d\n", push_result);
+
+    mir_stream_printf(out, "L%d:\n", cases[26]);
+    mir_emit_pascal_instruction_word(out, plan->instruction_a_offset);
+    mir_emit_mul_hl_const(out, (unsigned long)plan->instruction_stride);
+    mir_stream_puts("\tex de,hl\n", out);
+    mir_emit_pascal_global_load(out, plan->code);
+    mir_stream_puts("\tadd hl,de\n\tpush hl\n\tpop iy\n", out);
+    mir_stream_printf(out, "\tjp L%d\n", dispatch);
+
+    for (item = 27; item <= 28; ++item) {
+        int fallthrough = new_label();
+        mir_stream_printf(out, "L%d:\n", cases[item]);
+        mir_emit_pascal_pop_hl(out, plan);
+        mir_stream_puts("\tld a,h\n\tor l\n", out);
+        mir_stream_printf(out, "\tjp %s,L%d\n",
+                item == 27 ? "nz" : "z", fallthrough);
+        mir_emit_pascal_instruction_word(out, plan->instruction_a_offset);
+        mir_emit_mul_hl_const(out, (unsigned long)plan->instruction_stride);
+        mir_stream_puts("\tex de,hl\n", out);
+        mir_emit_pascal_global_load(out, plan->code);
+        mir_stream_puts("\tadd hl,de\n\tpush hl\n\tpop iy\n", out);
+        mir_stream_printf(out, "\tjp L%d\nL%d:\n\tjp L%d\n",
+                dispatch, fallthrough, next);
+    }
+
+    mir_stream_printf(out, "L%d:\n", cases[29]);
+    mir_stream_puts("\tpush iy\n\tpop hl\n", out);
+    mir_stream_printf(out, "\tld de,%d\n\tadd hl,de\n\tpush hl\n",
+            plan->instruction_stride);
+    mir_emit_pascal_instruction_word(out, plan->instruction_a_offset);
+    mir_stream_puts("\tpush hl\n", out);
+    mir_emit_symbol_call(out, plan->call_function);
+    mir_stream_puts("\tpop bc\n\tpop bc\n", out);
+    mir_emit_pascal_instruction_word(out, plan->instruction_a_offset);
+    mir_emit_mul_hl_const(out, (unsigned long)plan->procedure_stride);
+    mir_stream_puts("\tex de,hl\n", out);
+    mir_emit_pascal_global_load(out, plan->procedures);
+    mir_stream_printf(out, "\tadd hl,de\n\tld de,%d\n\tadd hl,de\n",
+            plan->procedure_entry_offset);
+    mir_stream_puts("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n", out);
+    mir_emit_mul_hl_const(out, (unsigned long)plan->instruction_stride);
+    mir_stream_puts("\tex de,hl\n", out);
+    mir_emit_pascal_global_load(out, plan->code);
+    mir_stream_puts("\tadd hl,de\n\tpush hl\n\tpop iy\n", out);
+    mir_stream_printf(out, "\tjp L%d\n", dispatch);
+
+    mir_stream_printf(out, "L%d:\n", cases[30]);
+    mir_emit_pascal_instruction_word(out, plan->instruction_a_offset);
+    mir_emit_mul_hl_const(out, (unsigned long)plan->procedure_stride);
+    mir_stream_puts("\tex de,hl\n", out);
+    mir_emit_pascal_global_load(out, plan->procedures);
+    mir_stream_printf(out, "\tadd hl,de\n\tld de,%d\n\tadd hl,de\n\tld a,(hl)\n\tld (ix-2),a\n",
+            plan->procedure_is_function_offset);
+    {
+        int no_value = new_label();
+        int have_value = new_label();
+        mir_stream_printf(out, "\tor a\n\tjp z,L%d\n", no_value);
+        mir_emit_pascal_pop_hl(out, plan);
+        mir_stream_printf(out, "\tjp L%d\nL%d:\n\tld hl,0\nL%d:\n",
+                have_value, no_value, have_value);
+        mir_stream_puts("\tpush hl\n", out);
+        mir_emit_pascal_global_load(out, plan->frame_pointer);
+        mir_stream_puts("\tadd hl,hl\n\tex de,hl\n", out);
+        mir_emit_pascal_global_load(out, plan->return_stack);
+        mir_stream_puts("\tadd hl,de\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n", out);
+        mir_emit_pascal_global_load(out, plan->frame_pointer);
+        mir_stream_puts("\tdec hl\n", out);
+        mir_emit_pascal_global_store(out, plan->frame_pointer);
+        mir_emit_pascal_global_load(out, plan->frame_memory);
+        mir_stream_printf(out, "\tld de,-%d\n\tadd hl,de\n",
+                plan->frame_bytes);
+        mir_emit_pascal_global_store(out, plan->frame_memory);
+        mir_stream_puts("\tpop iy\n\tpop hl\n\tld a,(ix-2)\n\tor a\n", out);
+        mir_stream_printf(out, "\tjp nz,L%d\n\tjp L%d\n",
+                return_result, dispatch);
+    }
+
+    mir_stream_printf(out, "L%d:\n", cases[31]);
+    mir_emit_pascal_pop_hl(out, plan);
+    mir_stream_puts("\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->integer_format_string);
+    mir_emit_symbol_call(out, plan->print_function);
+    mir_stream_puts("\tpop bc\n\tpop bc\n", out);
+    mir_stream_printf(out, "\tjp L%d\n", next);
+    mir_stream_printf(out, "L%d:\n", cases[32]);
+    mir_emit_pascal_instruction_word(out, plan->instruction_a_offset);
+    mir_stream_puts("\tadd hl,hl\n\tex de,hl\n", out);
+    mir_emit_pascal_global_load(out, plan->strings);
+    mir_stream_puts("\tadd hl,de\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->string_format_string);
+    mir_emit_symbol_call(out, plan->print_function);
+    mir_stream_puts("\tpop bc\n\tpop bc\n", out);
+    mir_stream_printf(out, "\tjp L%d\n", next);
+    mir_stream_printf(out, "L%d:\n\tld hl,S%d\n\tpush hl\n",
+            cases[33], plan->newline_string);
+    mir_emit_symbol_call(out, plan->print_function);
+    mir_stream_puts("\tpop bc\n", out);
+    mir_stream_printf(out, "\tjp L%d\n", next);
+    mir_stream_printf(out, "L%d:\n", cases[34]);
+    mir_emit_pascal_pop_hl(out, plan);
+    mir_stream_puts("\tld h,0\n\tld a,l\n\tand 1\n\tld l,a\n", out);
+    mir_stream_printf(out, "\tjp L%d\n", push_result);
+
+    mir_stream_printf(out, "L%d:\n", pop_two);
+    mir_stream_printf(out,
+            "\tld bc,(%s)\n\tdec bc\n\tdec bc\n\tld l,c\n\tld h,b\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n"
+            "\tdec bc\n\tdec bc\n\tld l,c\n\tld h,b\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n\tpop de\n\tret\n",
+            asm_name_for(sym_asm_name(plan->stack_pointer)));
+    mir_stream_printf(out, "L%d:\n", push_result);
+    mir_emit_pascal_push_hl(out, plan);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", next, return_result);
+    mir_emit_pascal_push_hl(out, plan);
+    mir_stream_printf(out, "\tjp L%d\n", dispatch);
+    mir_stream_printf(out, "L%d:\n\tld de,%d\n\tadd iy,de\n\tjp L%d\n",
+            next, plan->instruction_stride, dispatch);
+    mir_stream_printf(out, "L%d:\n", bad_opcode);
+    mir_stream_puts("\tld hl,1\n\tpush hl\n", out);
+    mir_emit_symbol_call(out, plan->exit_function);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n\tpop ix\n\tpop iy\n\tret\n",
+            exit_label, exit_label);
+}
+
+enum MirAdaFrameOffset {
+    MIR_ADA_STATE = -32
+};
+
+static void mir_emit_ada_state_address(MirStream *out, int offset)
+{
+    mir_emit_forth_frame_load(out, MIR_ADA_STATE);
+    if (offset != 0)
+        mir_stream_printf(out, "\tld de,%d\n\tadd hl,de\n", offset);
+}
+
+static void mir_emit_ada_state_load(MirStream *out, int offset)
+{
+    mir_emit_ada_state_address(out, offset);
+    mir_stream_puts("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n", out);
+}
+
+static void mir_emit_ada_state_store_from_frame(
+    MirStream *out, int offset, int frame_offset)
+{
+    mir_emit_ada_state_address(out, offset);
+    mir_stream_puts("\tpush hl\n", out);
+    mir_emit_forth_frame_load(out, frame_offset);
+    mir_stream_puts("\tex de,hl\n\tpop hl\n\tld (hl),e\n\tinc hl\n\tld (hl),d\n", out);
+}
+
+static void mir_emit_ada_sync_state(
+    MirStream *out, const struct MirAdaRun *plan)
+{
+    mir_stream_printf(out, "\tld (ix%d),c\n\tld (ix%d),b\n",
+            MIR_CRUN_STACK_POINTER, MIR_CRUN_STACK_POINTER + 1);
+    mir_emit_ada_state_store_from_frame(
+        out, plan->state_stack_pointer_offset, MIR_CRUN_STACK_POINTER);
+    mir_emit_ada_state_store_from_frame(
+        out, plan->state_frame_memory_offset, MIR_CRUN_FRAME_MEMORY);
+    mir_emit_ada_state_store_from_frame(
+        out, plan->state_frame_pointer_offset, MIR_CRUN_FRAME_POINTER);
+}
+
+static void mir_emit_ada_reload_state(
+    MirStream *out, const struct MirAdaRun *plan)
+{
+    mir_emit_ada_state_load(out, plan->state_stack_pointer_offset);
+    mir_emit_forth_frame_store(out, MIR_CRUN_STACK_POINTER);
+    mir_emit_ada_state_load(out, plan->state_frame_memory_offset);
+    mir_emit_forth_frame_store(out, MIR_CRUN_FRAME_MEMORY);
+    mir_emit_ada_state_load(out, plan->state_frame_pointer_offset);
+    mir_emit_forth_frame_store(out, MIR_CRUN_FRAME_POINTER);
+    mir_stream_printf(out, "\tld c,(ix%d)\n\tld b,(ix%d)\n",
+            MIR_CRUN_STACK_POINTER, MIR_CRUN_STACK_POINTER + 1);
+}
+
+static void mir_emit_ada_pop_hl(MirStream *out)
+{
+    mir_stream_puts("\tdec bc\n\tdec bc\n\tld l,c\n\tld h,b\n"
+          "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n", out);
+}
+
+static void mir_emit_ada_push_hl(MirStream *out)
+{
+    mir_stream_puts("\tex de,hl\n\tld l,c\n\tld h,b\n\tld (hl),e\n"
+          "\tinc hl\n\tld (hl),d\n\tinc bc\n\tinc bc\n", out);
+}
+
+static void mir_emit_ada_save_bc(MirStream *out)
+{
+    mir_stream_printf(out, "\tld (ix%d),c\n\tld (ix%d),b\n",
+            MIR_CRUN_STACK_POINTER, MIR_CRUN_STACK_POINTER + 1);
+}
+
+static void mir_emit_ada_restore_bc(MirStream *out)
+{
+    mir_stream_printf(out, "\tld c,(ix%d)\n\tld b,(ix%d)\n",
+            MIR_CRUN_STACK_POINTER, MIR_CRUN_STACK_POINTER + 1);
+}
+
+static void mir_emit_ada_memory_address(
+    MirStream *out, int base_frame_offset, int indexed, int element_size)
+{
+    if (indexed) {
+        if (element_size == 2)
+            mir_stream_puts("\tadd hl,hl\n", out);
+        mir_stream_puts("\tpush hl\n", out);
+        mir_emit_c_instruction_word(out, 1);
+        mir_stream_puts("\tex de,hl\n\tpop hl\n\tadd hl,de\n", out);
+    } else {
+        mir_emit_c_instruction_word(out, 1);
+    }
+    mir_stream_puts("\tex de,hl\n", out);
+    mir_emit_forth_frame_load(out, base_frame_offset);
+    mir_stream_puts("\tadd hl,de\n", out);
+}
+
+static void mir_emit_ada_run(MirStream *out, const struct MirAdaRun *plan)
+{
+    int cases[41];
+    int dispatch = new_label();
+    int table = new_label();
+    int next = new_label();
+    int set_pc = new_label();
+    int exit_label = new_label();
+    int bad_opcode = new_label();
+    int pop_two = new_label();
+    int binary_push_result = new_label();
+    int push_result = new_label();
+    int item;
+
+    for (item = 0; item < plan->opcode_count; ++item)
+        cases[item] = new_label();
+    mir_emit_symbol_extrn(out, plan->state);
+    mir_stream_printf(out, "\tld hl,(%s)\n",
+            asm_name_for(sym_asm_name(plan->state)));
+    mir_emit_forth_frame_store(out, MIR_ADA_STATE);
+    mir_emit_ada_state_load(out, plan->state_code_offset);
+    mir_emit_forth_frame_store(out, MIR_CRUN_CODE);
+    mir_emit_ada_state_load(out, plan->state_global_memory_offset);
+    mir_emit_forth_frame_store(out, MIR_CRUN_GLOBAL_MEMORY);
+    mir_emit_ada_state_load(out, plan->state_stack_offset);
+    mir_emit_forth_frame_store(out, MIR_CRUN_STACK_POINTER);
+    mir_stream_puts("\tld c,l\n\tld b,h\n", out);
+    mir_emit_ada_state_store_from_frame(
+        out, plan->state_stack_pointer_offset, MIR_CRUN_STACK_POINTER);
+    mir_stream_puts("\tld hl,0\n", out);
+    mir_emit_forth_frame_store(out, MIR_CRUN_FRAME_POINTER);
+    mir_emit_ada_state_store_from_frame(
+        out, plan->state_frame_pointer_offset, MIR_CRUN_FRAME_POINTER);
+    mir_emit_ada_state_load(out, plan->state_frame_storage_offset);
+    mir_emit_forth_frame_store(out, MIR_CRUN_FRAME_STORAGE);
+    mir_emit_forth_frame_store(out, MIR_CRUN_FRAME_MEMORY);
+    mir_emit_ada_state_store_from_frame(
+        out, plan->state_frame_memory_offset, MIR_CRUN_FRAME_MEMORY);
+    mir_emit_ada_state_load(out, plan->state_return_stack_offset);
+    mir_emit_forth_frame_store(out, MIR_CRUN_RETURN_STACK);
+    mir_emit_ada_state_load(out, plan->state_strings_offset);
+    mir_emit_forth_frame_store(out, MIR_CRUN_STRINGS);
+    mir_emit_ada_state_load(out, plan->state_frame_size_offset);
+    mir_emit_forth_frame_store(out, MIR_CRUN_FRAME_SIZE);
+
+    mir_emit_forth_frame_load(out, MIR_CRUN_FRAME_STORAGE);
+    mir_stream_puts("\tpush hl\n\tld e,0\n", out);
+    mir_emit_forth_frame_load(out, MIR_CRUN_FRAME_SIZE);
+    mir_emit_mul_hl_const(out, (unsigned long)plan->frame_limit);
+    mir_stream_puts("\tld b,h\n\tld c,l\n\tpop hl\n", out);
+    mir_emit_runtime_call(out, "__msf");
+    mir_emit_ada_restore_bc(out);
+    mir_emit_ada_state_load(out, plan->state_main_entry_offset);
+    mir_stream_printf(out, "\tjp L%d\n", set_pc);
+
+    mir_stream_printf(out, "L%d:\n\tld a,(iy%+d)\n\tcp %d\n\tjp nc,L%d\n",
+            dispatch, plan->instruction_op_offset,
+            plan->opcode_count, bad_opcode);
+    mir_stream_printf(out,
+            "\tld e,a\n\tadd a,a\n\tadd a,e\n\tld l,a\n\tld h,0\n"
+            "\tld de,L%d\n\tadd hl,de\n\tjp (hl)\nL%d:\n",
+            table, table);
+    for (item = 0; item < plan->opcode_count; ++item)
+        mir_stream_printf(out, "\tdb 0c3h\n\tdw L%d\n", cases[item]);
+
+    mir_stream_printf(out, "L%d:\n\tjp L%d\n", cases[0], exit_label);
+    mir_stream_printf(out, "L%d:\n", cases[1]);
+    mir_emit_c_instruction_word(out, plan->instruction_a_offset);
+    mir_stream_printf(out, "\tjp L%d\n", push_result);
+
+    for (item = 2; item <= 17; ++item) {
+        int is_store = (item & 1) != 0;
+        int indexed =
+            (item >= 6 && item <= 9) || item == 12 || item == 13 ||
+            item == 16 || item == 17;
+        int is_byte = item >= 10;
+        int global_memory =
+            item == 2 || item == 3 || item == 6 || item == 7 ||
+            item == 10 || item == 11 || item == 12 || item == 13;
+        int base_offset = global_memory ?
+            MIR_CRUN_GLOBAL_MEMORY : MIR_CRUN_FRAME_MEMORY;
+
+        mir_stream_printf(out, "L%d:\n", cases[item]);
+        if (is_store && indexed) {
+            mir_stream_printf(out,
+                    "\tcall L%d\n\tld (ix%d),c\n\tld (ix%d),b\n",
+                    pop_two, MIR_CRUN_STACK_POINTER,
+                    MIR_CRUN_STACK_POINTER + 1);
+            mir_emit_forth_frame_store(out, MIR_CRUN_TEMP_A);
+            mir_stream_puts("\tex de,hl\n", out);
+            mir_emit_forth_frame_store(out, MIR_CRUN_TEMP_V);
+            mir_emit_forth_frame_load(out, MIR_CRUN_TEMP_A);
+        } else if (indexed) {
+            mir_emit_ada_pop_hl(out);
+        } else if (is_store) {
+            mir_emit_ada_pop_hl(out);
+            mir_emit_forth_frame_store(out, MIR_CRUN_TEMP_V);
+        }
+        mir_emit_ada_memory_address(
+            out, base_offset, indexed, is_byte ? 1 : 2);
+        if (is_store) {
+            mir_stream_puts("\tpush hl\n", out);
+            mir_emit_forth_frame_load(out, MIR_CRUN_TEMP_V);
+            mir_stream_puts("\tex de,hl\n\tpop hl\n\tld (hl),e\n", out);
+            if (!is_byte)
+                mir_stream_puts("\tinc hl\n\tld (hl),d\n", out);
+            mir_stream_printf(out, "\tjp L%d\n", next);
+        } else {
+            if (is_byte)
+                mir_stream_puts("\tld l,(hl)\n\tld h,0\n", out);
+            else
+                mir_stream_puts("\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n", out);
+            mir_stream_printf(out, "\tjp L%d\n", push_result);
+        }
+    }
+
+    for (item = 18; item <= 22; ++item) {
+        int nonzero = new_label();
+        int done = new_label();
+        mir_stream_printf(out, "L%d:\n\tcall L%d\n", cases[item], pop_two);
+        if (item == 21 || item == 22) {
+            mir_emit_ada_save_bc(out);
+            mir_stream_printf(out,
+                    "\tld a,d\n\tor e\n\tjp nz,L%d\n"
+                    "\tld hl,0\n\tjp L%d\nL%d:\n",
+                    nonzero, done, nonzero);
+            mir_emit_runtime_call(out, item == 21 ? "__divs" : "__mods");
+            mir_stream_printf(out, "L%d:\n", done);
+            mir_emit_ada_restore_bc(out);
+            mir_stream_printf(out, "\tjp L%d\n", push_result);
+        } else {
+            if (item == 18)
+                mir_stream_puts("\tadd hl,de\n", out);
+            else if (item == 19)
+                mir_stream_puts("\tor a\n\tsbc hl,de\n", out);
+            else {
+                mir_stream_puts("\tpush bc\n", out);
+                mir_emit_runtime_call(out, "__mulu");
+                mir_stream_puts("\tpop bc\n", out);
+            }
+            mir_stream_printf(out, "\tjp L%d\n", binary_push_result);
+        }
+    }
+
+    for (item = 23; item <= 24; ++item) {
+        int zero = new_label();
+        int done = new_label();
+        mir_stream_printf(out, "L%d:\n", cases[item]);
+        mir_emit_ada_pop_hl(out);
+        if (item == 23)
+            mir_stream_puts("\txor a\n\tsub l\n\tld l,a\n\tld a,0\n\tsbc a,h\n\tld h,a\n", out);
+        else
+            mir_stream_printf(out,
+                    "\tld a,h\n\tor l\n\tjp z,L%d\n\tld hl,0\n"
+                    "\tjp L%d\nL%d:\n\tld hl,1\nL%d:\n",
+                    zero, done, zero, done);
+        mir_stream_printf(out, "\tjp L%d\n", push_result);
+    }
+
+    for (item = 25; item <= 30; ++item) {
+        int yes = new_label();
+        int no = new_label();
+        int done = new_label();
+        mir_stream_printf(out, "L%d:\n\tcall L%d\n", cases[item], pop_two);
+        if (item <= 26) {
+            mir_stream_puts("\tor a\n\tsbc hl,de\n", out);
+            mir_stream_printf(out, "\tjp %s,L%d\n\tjp L%d\n",
+                    item == 25 ? "z" : "nz", yes, no);
+        } else {
+            if (item == 28 || item == 29)
+                mir_stream_puts("\tex de,hl\n", out);
+            mir_stream_puts("\tpush bc\n", out);
+            mir_emit_forth_signed_less_branch(
+                out, (item == 27 || item == 29) ? yes : no,
+                (item == 27 || item == 29) ? no : yes);
+        }
+        mir_stream_printf(out,
+                "L%d:\n%s\tld hl,1\n\tjp L%d\n"
+                "L%d:\n%s\tld hl,0\nL%d:\n\tjp L%d\n",
+                yes, item >= 27 ? "\tpop bc\n" : "", done,
+                no, item >= 27 ? "\tpop bc\n" : "", done,
+                binary_push_result);
+    }
+
+    for (item = 31; item <= 32; ++item) {
+        int yes = new_label();
+        int no = new_label();
+        int done = new_label();
+        mir_stream_printf(out, "L%d:\n\tcall L%d\n", cases[item], pop_two);
+        mir_stream_puts("\tld a,h\n\tor l\n", out);
+        mir_stream_printf(out, "\tjp %s,L%d\n",
+                item == 31 ? "z" : "nz", item == 31 ? no : yes);
+        mir_stream_puts("\tld a,d\n\tor e\n", out);
+        mir_stream_printf(out, "\tjp %s,L%d\n\tjp L%d\n",
+                item == 31 ? "z" : "nz", item == 31 ? no : yes,
+                item == 31 ? yes : no);
+        mir_stream_printf(out,
+                "L%d:\n\tld hl,1\n\tjp L%d\nL%d:\n\tld hl,0\n"
+                "L%d:\n\tjp L%d\n",
+                yes, done, no, done, binary_push_result);
+    }
+
+    mir_stream_printf(out, "L%d:\n", cases[33]);
+    mir_emit_c_instruction_word(out, plan->instruction_a_offset);
+    mir_stream_printf(out, "\tjp L%d\n", set_pc);
+    mir_stream_printf(out, "L%d:\n", cases[34]);
+    mir_emit_ada_pop_hl(out);
+    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    mir_stream_printf(out, "\tjp nz,L%d\n", next);
+    mir_emit_c_instruction_word(out, plan->instruction_a_offset);
+    mir_stream_printf(out, "\tjp L%d\n", set_pc);
+
+    mir_stream_printf(out, "L%d:\n", cases[35]);
+    mir_emit_ada_sync_state(out, plan);
+    mir_emit_c_instruction_word(out, plan->instruction_b_offset);
+    mir_stream_puts("\tpush hl\n\tpush iy\n\tpop hl\n", out);
+    mir_stream_printf(out, "\tld de,%d\n\tadd hl,de\n\tpush hl\n",
+            plan->instruction_stride);
+    mir_emit_c_instruction_word(out, plan->instruction_a_offset);
+    mir_stream_puts("\tpush hl\n", out);
+    mir_emit_symbol_call(out, plan->call_function);
+    mir_stream_puts("\tpop bc\n\tpop bc\n\tpop bc\n", out);
+    mir_emit_forth_frame_store(out, MIR_CRUN_TEMP_FI);
+    mir_emit_ada_reload_state(out, plan);
+    mir_emit_forth_frame_load(out, MIR_CRUN_TEMP_FI);
+    mir_stream_printf(out, "\tjp L%d\n", set_pc);
+
+    mir_stream_printf(out, "L%d:\n", cases[36]);
+    mir_emit_ada_pop_hl(out);
+    mir_emit_forth_frame_store(out, MIR_CRUN_TEMP_V);
+    mir_emit_forth_frame_load(out, MIR_CRUN_FRAME_POINTER);
+    mir_stream_puts("\tadd hl,hl\n\tex de,hl\n", out);
+    mir_emit_forth_frame_load(out, MIR_CRUN_RETURN_STACK);
+    mir_stream_puts("\tadd hl,de\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n", out);
+    mir_emit_forth_frame_load(out, MIR_CRUN_FRAME_POINTER);
+    mir_stream_puts("\tdec hl\n", out);
+    mir_emit_forth_frame_store(out, MIR_CRUN_FRAME_POINTER);
+    mir_stream_puts("\tpush hl\n", out);
+    mir_emit_forth_frame_load(out, MIR_CRUN_FRAME_SIZE);
+    mir_stream_puts("\tex de,hl\n\tpop hl\n", out);
+    mir_emit_runtime_call(out, "__mulu");
+    mir_stream_puts("\tex de,hl\n", out);
+    mir_emit_forth_frame_load(out, MIR_CRUN_FRAME_STORAGE);
+    mir_stream_puts("\tadd hl,de\n", out);
+    mir_emit_forth_frame_store(out, MIR_CRUN_FRAME_MEMORY);
+    mir_stream_puts("\tpop iy\n", out);
+    mir_emit_forth_frame_load(out, MIR_CRUN_TEMP_V);
+    mir_emit_ada_push_hl(out);
+    mir_stream_printf(out, "\tjp L%d\n", dispatch);
+
+    mir_stream_printf(out, "L%d:\n", cases[37]);
+    mir_emit_ada_pop_hl(out);
+    mir_stream_printf(out, "\tjp L%d\n", next);
+    mir_stream_printf(out, "L%d:\n", cases[38]);
+    mir_emit_ada_pop_hl(out);
+    mir_emit_ada_save_bc(out);
+    mir_stream_puts("\tpush hl\n", out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->integer_format_string);
+    mir_emit_symbol_call(out, plan->print_function);
+    mir_stream_puts("\tpop bc\n\tpop bc\n", out);
+    mir_emit_ada_restore_bc(out);
+    mir_stream_printf(out, "\tjp L%d\n", next);
+    mir_stream_printf(out, "L%d:\n", cases[39]);
+    mir_emit_c_instruction_word(out, plan->instruction_a_offset);
+    mir_stream_puts("\tadd hl,hl\n\tex de,hl\n", out);
+    mir_emit_forth_frame_load(out, MIR_CRUN_STRINGS);
+    mir_stream_puts("\tadd hl,de\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n", out);
+    mir_emit_ada_save_bc(out);
+    mir_stream_printf(out, "\tld hl,S%d\n\tpush hl\n",
+            plan->string_format_string);
+    mir_emit_symbol_call(out, plan->print_function);
+    mir_stream_puts("\tpop bc\n\tpop bc\n", out);
+    mir_emit_ada_restore_bc(out);
+    mir_stream_printf(out, "\tjp L%d\n", next);
+    mir_stream_printf(out, "L%d:\n\tld hl,S%d\n\tpush hl\n",
+            cases[40], plan->newline_string);
+    mir_emit_ada_save_bc(out);
+    mir_emit_symbol_call(out, plan->print_function);
+    mir_stream_puts("\tpop bc\n", out);
+    mir_emit_ada_restore_bc(out);
+    mir_stream_printf(out, "\tjp L%d\n", next);
+
+    mir_stream_printf(out, "L%d:\n", pop_two);
+    mir_stream_puts(
+            "\tdec bc\n\tdec bc\n"
+            "\tld l,c\n\tld h,b\n\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n"
+            "\tpush de\n\tdec bc\n\tdec bc\n\tld l,c\n\tld h,b\n"
+            "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n\tpop de\n\tret\n",
+            out);
+    mir_stream_printf(out, "L%d:\n", binary_push_result);
+    mir_stream_puts("\tex de,hl\n\tld l,c\n\tld h,b\n\tld (hl),e\n"
+          "\tinc hl\n\tld (hl),d\n\tinc bc\n\tinc bc\n", out);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", next, push_result);
+    mir_emit_ada_push_hl(out);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n\tld de,%d\n\tadd iy,de\n\tjp L%d\n",
+            next, next, plan->instruction_stride, dispatch);
+    mir_stream_printf(out, "L%d:\n", set_pc);
+    mir_emit_mul_hl_const(out, (unsigned long)plan->instruction_stride);
+    mir_stream_puts("\tex de,hl\n", out);
+    mir_emit_forth_frame_load(out, MIR_CRUN_CODE);
+    mir_stream_puts("\tadd hl,de\n\tpush hl\n\tpop iy\n", out);
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", dispatch, exit_label);
+    mir_emit_ada_sync_state(out, plan);
+    mir_stream_puts("\tld sp,ix\n\tpop ix\n\tpop iy\n\tret\n", out);
+    mir_stream_printf(out, "L%d:\n\tld hl,S%d\n\tpush hl\n",
+            bad_opcode, plan->bad_opcode_string);
     mir_emit_symbol_call(out, plan->die_function);
     mir_stream_printf(out, "\tjp L%d\n", exit_label);
 }
@@ -22061,6 +23168,7 @@ static void mir_emit_exact_vla_allocate(
     if (opt_stack_check)
         mir_emit_runtime_call(out, "__stchk");
 }
+
 
 static void mir_emit_exact_vla_restore(
     MirStream *out, int saved_sp_offset)
@@ -25455,6 +26563,30 @@ static int mir_phi_constant_source_slot_is_authoritative(
            !mir_scalar_constant_is_rematerializable(source);
 }
 
+static int mir_named_home_phi_source_is_authoritative(
+    int source, const struct MirInsn *phi, int predecessor)
+{
+    const struct MirInsn *definition = mir_definition(source);
+    int instruction;
+
+    if (definition == NULL || definition->opcode != MIR_PHI ||
+        phi == NULL || phi->opcode != MIR_PHI ||
+        definition->object < 0 ||
+        definition->object != phi->object ||
+        !mir_phi_uses_scalar_object_home(source) ||
+        !mir_phi_uses_scalar_object_home(phi->dst))
+        return 0;
+    instruction = (int)(definition - mir.insns) + 1;
+    if (predecessor < instruction || predecessor >= mir.count)
+        return 0;
+    for (; instruction <= predecessor; ++instruction)
+        if (mir.insns[instruction].opcode == MIR_STORE &&
+            mir.insns[instruction].object == phi->object &&
+            !mir_store_is_dead(instruction))
+            return 0;
+    return 1;
+}
+
 static int mir_collect_phi_copies_for_edge(int predecessor, int successor,
                                             int *sources, int *destinations)
 {
@@ -25481,6 +26613,17 @@ static int mir_collect_phi_copies_for_edge(int predecessor, int successor,
                                          successor, instruction);
         if (source < 0)
             return -1;
+        if (mir_selfstore_result_materializes_phi_home(source, phi)) {
+            instruction =
+                mir_next_phi_in_block(successor, instruction + 1);
+            continue;
+        }
+        if (mir_named_home_phi_source_is_authoritative(
+                source, phi, predecessor)) {
+            instruction =
+                mir_next_phi_in_block(successor, instruction + 1);
+            continue;
+        }
         if ((mir_phi_constant_source_slot_is_authoritative(source, phi) ||
              mir_phi_slot_cleanup_is_active() ||
              mir_value_is_wide_phi_update_result(source) ||
@@ -26973,13 +28116,21 @@ static void mir_emit_inline_indexed_postincrement_store_body(
         mir_stream_printf(out, "\textrn %s\n", index_name);
     mir_stream_printf(out,
             "\tex de,hl\n\tld hl,(%s)\n\tinc hl\n"
-            "\tld (%s),hl\n\tdec hl\n",
+            "\tld (%s),hl\n",
             index_name, index_name);
+    if (!helper->base->is_array)
+        mir_stream_puts("\tdec hl\n", out);
     if (helper->width == 2)
         mir_stream_puts("\tadd hl,hl\n", out);
-    mir_stream_printf(out, helper->base->is_array
-                     ? "\tld bc,%s\n" : "\tld bc,(%s)\n",
-            base_name);
+    if (helper->base->is_array)
+        /* HL holds the incremented index here.  Fold the conversion back
+         * to the postfix expression's old index into the fixed array base:
+         * base + (new_index * width) - width.  This removes the runtime
+         * `dec hl` without changing either the stored counter or address. */
+        mir_stream_printf(out, "\tld bc,%s-%d\n",
+                base_name, helper->width);
+    else
+        mir_stream_printf(out, "\tld bc,(%s)\n", base_name);
     mir_stream_puts("\tadd hl,bc\n\tld (hl),e\n", out);
     if (helper->width == 2)
         mir_stream_puts("\tinc hl\n\tld (hl),d\n", out);
@@ -27901,15 +29052,20 @@ static int mir_emit_named_zero_branch(
     const struct MirNamedZeroBranch *plan)
 {
     char operand[160];
+    int byte_truth = plan->width == 2 &&
+        mir_static_word_field_has_byte_truth_range(plan->member_value);
 
     if (mir_prepare_constant_absolute_operand(
             out, plan->member_value, operand, sizeof(operand))) {
-        if (plan->width == 1)
+        if (byte_truth)
+            mir_stream_printf(out, "\tld a,(%s)\n\tor a\n", operand);
+        else if (plan->width == 1)
             mir_stream_printf(out, "\tld a,(%s)\n\tld l,a\n\tld h,0\n",
                     operand);
         else
             mir_stream_printf(out, "\tld hl,(%s)\n", operand);
     } else {
+        byte_truth = 0;
         if (!mir_emit_address_value_to_hl(
                 out, plan->member_value))
             return 0;
@@ -27919,7 +29075,8 @@ static int mir_emit_named_zero_branch(
             mir_stream_puts("\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n",
                   out);
     }
-    mir_stream_puts("\tld a,h\n\tor l\n", out);
+    if (!byte_truth)
+        mir_stream_puts("\tld a,h\n\tor l\n", out);
     return mir_emit_conditional_branch_with_phi_copies(
         out, labels, "nz", plan->branch_instruction,
         plan->target_instruction, plan->branch_label);
@@ -28146,8 +29303,12 @@ static int mir_emit_dense_byte_switch_condition_load(
             out, &mir.insns[instruction]))
         return 0;
     if (dispatch->condition_size == 1) {
-        mir_stream_puts("\tld a,(hl)\n", out);
-        dispatch->condition_in_a = 1;
+        /* The table dispatcher needs the zero-extended condition in HL.
+         * Load its low byte there directly instead of routing it through A
+         * and immediately copying A to L. This also lets dccpeep's mutable
+         * pointer promotion rewrite the load directly to ld l,(iy+d). */
+        mir_stream_puts("\tld l,(hl)\n\tld h,0\n", out);
+        dispatch->condition_in_a = 0;
     } else {
         mir_stream_puts("\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n", out);
     }
@@ -28719,6 +29880,125 @@ static int mir_emit_boolean_phi_branch_edge(
     return 1;
 }
 
+struct MirWordLoadOrBranch {
+    int first_member;
+    int second_member;
+    int terminal_branch;
+    int byte_truth;
+};
+
+static int mir_static_word_field_has_byte_truth_range(int member_value)
+{
+    const struct MirInsn *member = mir_definition(member_value);
+    const struct MirInsn *base;
+    struct Sym *symbol;
+
+    if (member == NULL || member->opcode != MIR_MEMBER_ADDRESS ||
+        member->memory_size != 2 || member->memory_flags != 0)
+        return 0;
+    base = mir_definition(member->src1);
+    if (base == NULL || base->opcode != MIR_ADDRESS ||
+        base->name[0] == 0 || member->name[0] == 0)
+        return 0;
+    symbol = find_global(base->name);
+    return symbol != NULL && symbol->is_static && symbol->is_defined &&
+           !symbol->has_init && !symbol->is_volatile &&
+           global_text_write_count(base->name) == 0 &&
+           global_text_addr_taken_count(base->name) == 0 &&
+           global_text_field_addr_taken_count(
+               base->name, member->name) == 0 &&
+           global_text_field_all_writes_byte_constants(
+               base->name, member->name);
+}
+
+/* Recognize the CFG produced for `if (word_load || word_load)`: two pure
+ * indirect word loads feeding the usual constant-0/1 boolean phi tree and
+ * then a terminal branch. MIR can prove both operands side-effect-free and
+ * the phi edges exclusive, so the two truth tests may be combined without
+ * changing C's observable short-circuit behavior. */
+static int mir_match_word_load_or_branch(
+    int instruction, struct MirWordLoadOrBranch *plan)
+{
+    const struct MirInsn *m;
+    int terminal;
+
+    if (instruction < 0 || instruction + 23 >= mir.count)
+        return 0;
+    m = &mir.insns[instruction];
+    terminal = instruction + 23;
+    if (m[0].opcode != MIR_ADDRESS ||
+        m[1].opcode != MIR_MEMBER_ADDRESS || m[1].src1 != m[0].dst ||
+        m[2].opcode != MIR_LOAD_INDIRECT || m[2].src1 != m[1].dst ||
+        m[2].memory_size != 2 || m[2].memory_flags != 0 ||
+        m[3].opcode != MIR_BRANCH_FALSE || m[3].src1 != m[2].dst ||
+        m[4].opcode != MIR_LABEL ||
+        m[5].opcode != MIR_CONST || m[5].immediate != 1 ||
+        m[6].opcode != MIR_JUMP ||
+        m[7].opcode != MIR_LABEL ||
+        m[8].opcode != MIR_ADDRESS ||
+        m[9].opcode != MIR_MEMBER_ADDRESS || m[9].src1 != m[8].dst ||
+        m[10].opcode != MIR_LOAD_INDIRECT || m[10].src1 != m[9].dst ||
+        m[10].memory_size != 2 || m[10].memory_flags != 0 ||
+        m[11].opcode != MIR_BRANCH_FALSE || m[11].src1 != m[10].dst ||
+        m[12].opcode != MIR_LABEL ||
+        m[13].opcode != MIR_CONST || m[13].immediate != 1 ||
+        m[14].opcode != MIR_JUMP ||
+        m[15].opcode != MIR_LABEL ||
+        m[16].opcode != MIR_CONST || m[16].immediate != 0 ||
+        m[17].opcode != MIR_LABEL ||
+        m[18].opcode != MIR_PHI ||
+        m[19].opcode != MIR_LABEL ||
+        m[20].opcode != MIR_JUMP ||
+        m[21].opcode != MIR_LABEL ||
+        m[22].opcode != MIR_PHI ||
+        m[23].opcode != MIR_BRANCH_FALSE || m[23].src1 != m[22].dst ||
+        mir_find_label(m[3].label) != instruction + 7 ||
+        mir_find_label(m[11].label) != instruction + 15 ||
+        mir_find_label(m[6].label) != instruction + 21 ||
+        mir_find_label(m[14].label) != instruction + 17 ||
+        mir_find_label(m[20].label) != instruction + 21 ||
+        !((m[18].src1 == m[13].dst && m[18].src2 == m[16].dst) ||
+          (m[18].src2 == m[13].dst && m[18].src1 == m[16].dst)) ||
+        !((m[22].src1 == m[5].dst && m[22].src2 == m[18].dst) ||
+          (m[22].src2 == m[5].dst && m[22].src1 == m[18].dst)) ||
+        mir_boolean_phi_terminal_branch(m[22].dst, 0) != terminal ||
+        !mir_boolean_phi_tree_edges_are_exclusive(
+            m[22].dst, terminal, 0))
+        return 0;
+    plan->first_member = m[1].dst;
+    plan->second_member = m[9].dst;
+    plan->terminal_branch = terminal;
+    plan->byte_truth =
+        mir_static_word_field_has_byte_truth_range(plan->first_member) &&
+        mir_static_word_field_has_byte_truth_range(plan->second_member);
+    return 1;
+}
+
+static int mir_emit_word_load_or_branch(
+    MirStream *out, const int *labels,
+    const struct MirWordLoadOrBranch *plan)
+{
+    const struct MirInsn *branch = &mir.insns[plan->terminal_branch];
+    char first[160], second[160];
+
+    if (!mir_prepare_constant_absolute_operand(
+            out, plan->first_member, first, sizeof(first)) ||
+        !mir_prepare_constant_absolute_operand(
+            out, plan->second_member, second, sizeof(second)))
+        return 0;
+    if (plan->byte_truth)
+        mir_stream_printf(out,
+                "\tld hl,%s\n\tld a,(%s)\n"
+                "\tor (hl)\n\tjp z, L%d\n",
+                second, first, labels[branch->label]);
+    else
+        mir_stream_printf(out,
+                "\tld hl,(%s)\n\tld de,(%s)\n"
+                "\tld a,h\n\tor l\n\tor d\n\tor e\n\tjp z, L%d\n",
+                first, second, labels[branch->label]);
+    return 1;
+}
+
 static int mir_emit_spilled_phi_copy_group(
     MirStream *out, int predecessor, int successor,
     int *sources, int *destinations, int copy_count)
@@ -29257,6 +30537,12 @@ static int mir_binary_is_selfstore_incdec(int index, int *store_index)
         const struct MirInsn *use = &mir.insns[scan];
         if (use->src1 != insn->dst && use->src2 != insn->dst)
             continue;
+        if (use->opcode == MIR_PHI &&
+            (use->src1 == insn->dst || use->src2 == insn->dst) &&
+            mir_phi_uses_scalar_object_home(use->dst) &&
+            left_definition->object >= 0 &&
+            use->object == left_definition->object)
+            continue;
         if (use->opcode != MIR_STORE || use->src1 != insn->dst ||
             !mir_scalar_memory_location(use, &store_type, &store_storage,
                                         &store_offset) ||
@@ -29269,6 +30555,25 @@ static int mir_binary_is_selfstore_incdec(int index, int *store_index)
         return 0;
     *store_index = found_store;
     return 1;
+}
+
+static int mir_selfstore_result_materializes_phi_home(
+    int value, const struct MirInsn *phi)
+{
+    const struct MirInsn *definition = mir_definition(value);
+    const struct MirInsn *left;
+    int store_index;
+
+    if (definition == NULL || definition->opcode != MIR_BINARY ||
+        phi == NULL || phi->opcode != MIR_PHI ||
+        !mir_phi_uses_scalar_object_home(phi->dst) ||
+        !mir_binary_is_selfstore_incdec(
+            (int)(definition - mir.insns), &store_index))
+        return 0;
+    left = mir_definition(definition->src1);
+    return left != NULL && left->object >= 0 &&
+           left->object == phi->object &&
+           mir.insns[store_index].object == phi->object;
 }
 
 static int mir_integer_constant_expression(
@@ -30054,6 +31359,8 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
     struct MirBasicRun basic_run;
     struct MirFortranEval fortran_eval;
     struct MirCRun c_run;
+    struct MirPascalRun pascal_run;
+    struct MirAdaRun ada_run;
     struct MirWordInsertionSort word_insertion_sort;
     struct MirVisitCount visit_count;
     struct MirVlaStable vla_stable;
@@ -30571,6 +31878,32 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
         if (opt_stack_check)
             mir_emit_runtime_call(out, "__stchk");
         mir_emit_c_run(out, &c_run);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_pascal_run(&pascal_run)) {
+        mir_stream_printf(out,
+                ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n",
+                mir.name);
+        mir_stream_puts("\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+              "\tdec sp\n\tdec sp\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_pascal_run(out, &pascal_run);
+        mir_spilled_cfg_used_exact_semantic_kernel = 1;
+        accepted = 1;
+        goto done;
+    }
+    if (mir_match_ada_run(&ada_run)) {
+        mir_stream_printf(out,
+                ";@dcc.reg claim=iy scope=function sym=%s kind=mir val=0\n",
+                mir.name);
+        mir_stream_puts("\tpush iy\n\tpush ix\n\tld ix,0\n\tadd ix,sp\n"
+              "\tld hl,-32\n\tadd hl,sp\n\tld sp,hl\n", out);
+        if (opt_stack_check)
+            mir_emit_runtime_call(out, "__stchk");
+        mir_emit_ada_run(out, &ada_run);
         mir_spilled_cfg_used_exact_semantic_kernel = 1;
         accepted = 1;
         goto done;
@@ -31097,6 +32430,7 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
         struct MirInlineTypedLoadPush inline_typed_load_push;
         struct MirInlineWordLoadPush inline_word_load_push;
         struct MirNamedZeroBranch named_zero_branch;
+        struct MirWordLoadOrBranch word_or;
         struct MirFixedArrayInit fixed_array_init;
         struct MirCyclicByteFill cyclic_byte_fill;
 
@@ -31159,6 +32493,12 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                         dense_switch.maximum_case,
                         i, dense_switch.end_instruction);
             i = dense_index_switch.skip_through;
+            continue;
+        }
+        if (insn->opcode == MIR_ADDRESS &&
+            mir_match_word_load_or_branch(i, &word_or) &&
+            mir_emit_word_load_or_branch(out, labels, &word_or)) {
+            i = word_or.terminal_branch;
             continue;
         }
         if (insn->opcode == MIR_ADDRESS &&

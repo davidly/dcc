@@ -7979,7 +7979,25 @@ static int pass_cache_mutable_ix_pointer_in_iy(void)
                 char tail[MAX_LINE];
                 if (direct_tail)
                     strcpy(tail, lines[k + 5]);
-                if (amount >= 4 && !function_uses_exx(k)) {
+                if (amount >= 4 &&
+                    peep_registers_dead_after(
+                        k + 4, PEEP_REG_D | PEEP_REG_E)) {
+                    sprintf(increment, "ld de,%d", amount);
+                    replace1_tagged(k, increment,
+                                    "mutable_ix_pointer_to_iy");
+                    replace1_tagged(k + 1, "add iy,de",
+                                    "mutable_ix_pointer_to_iy");
+                    replacement_count = 2;
+                } else if (amount >= 4 &&
+                    peep_registers_dead_after(
+                        k + 4, PEEP_REG_B | PEEP_REG_C)) {
+                    sprintf(increment, "ld bc,%d", amount);
+                    replace1_tagged(k, increment,
+                                    "mutable_ix_pointer_to_iy");
+                    replace1_tagged(k + 1, "add iy,bc",
+                                    "mutable_ix_pointer_to_iy");
+                    replacement_count = 2;
+                } else if (amount >= 4 && !function_uses_exx(k)) {
                     replace1_tagged(k, "exx",
                                     "mutable_ix_pointer_to_iy");
                     sprintf(increment, "ld de,%d", amount);
@@ -8991,6 +9009,13 @@ static int pass_push_hl_pop_de_to_ex(void)
             continue;
 
         strip_peep_comment_copy(clean2, lines[i + 2]);
+        if (strncmp(clean2, "ld hl,", 6) == 0 &&
+            !line_touches_reg_pair(clean2 + 6, "h", "l", "hl")) {
+            replace1_tagged(i, "ex de,hl", "push_hl_pop_de_to_ex");
+            delete_n(i + 1, 1);
+            changed = 1;
+            continue;
+        }
         strip_peep_comment_copy(clean3, lines[i + 3]);
         if (strncmp(clean2, "ld l,", 5) != 0 || strncmp(clean3, "ld h,", 5) != 0)
             continue;
@@ -11302,6 +11327,99 @@ static int pass_dup_ix_load_to_reg_copy(void)
     return changed;
 }
 
+/* Preserve a frame word across the first half of a short-circuit range
+ * check. MIR's signed comparison destroys HL, so the second comparison
+ * otherwise reloads the identical local through two indexed loads. Save the
+ * word on the stack, balancing the rare taken edge explicitly; the common
+ * fallthrough replaces a 38-cycle IX reload with push/branch/pop costing 28.
+ * Requiring the second load immediately after the carry branch limits this
+ * to the normal `x < low || x > high` lowering. */
+static int pass_preserve_ix_word_across_signed_range(void)
+{
+    int i;
+    int changed = 0;
+    static int label_counter;
+
+    for (i = 1; i + 8 < nlines; ++i) {
+        char mnemonic[8], cond[8], target[128];
+        int offset;
+        int second_offset;
+        int branch = -1;
+        int second_branch = -1;
+        int scan;
+
+        if (!peep_parse_ld_hl_ix_pair(i, &offset))
+            continue;
+        for (scan = i + 2; scan < nlines && scan <= i + 14; ++scan) {
+            if (scan > i + 2 && eq(scan - 1, "sbc hl,de") &&
+                parse_carry_branch(lines[scan], mnemonic, cond, target) &&
+                !strcmp(cond, "c")) {
+                branch = scan;
+                break;
+            }
+            if (starts_label(lines[scan]) || line_is_call_or_rst(lines[scan]) ||
+                line_clobbers_bc(lines[scan]))
+                break;
+        }
+        if (branch < 0 || branch + 2 >= nlines ||
+            !peep_parse_ld_hl_ix_pair(branch + 1, &second_offset) ||
+            second_offset != offset)
+            continue;
+        for (scan = branch + 3;
+             scan < nlines && scan <= branch + 16; ++scan) {
+            char second_mnemonic[8], second_cond[8], second_target[128];
+
+            if (scan > branch + 3 && eq(scan - 1, "sbc hl,de") &&
+                parse_carry_branch(lines[scan], second_mnemonic,
+                                   second_cond, second_target) &&
+                (!strcmp(second_cond, "c") ||
+                 !strcmp(second_cond, "nc"))) {
+                int same_exit = !strcmp(second_cond, "c") &&
+                                !strcmp(second_target, target);
+                int complementary_fallthrough = 0;
+
+                if (!strcmp(second_cond, "nc") && scan + 1 < nlines) {
+                    char exit_label[160];
+
+                    sprintf(exit_label, "%s:", target);
+                    complementary_fallthrough = eq(scan + 1, exit_label);
+                }
+                if (same_exit || complementary_fallthrough) {
+                    second_branch = scan;
+                    break;
+                }
+            }
+            if (starts_label(lines[scan]) ||
+                line_is_call_or_rst(lines[scan]))
+                break;
+        }
+        if (second_branch < 0)
+            continue;
+        {
+            char local_label[32];
+            char branch_line[64];
+            char target_line[160];
+
+            sprintf(local_label, "LR%d", label_counter++);
+            sprintf(branch_line, "jp nc,%s", local_label);
+            sprintf(target_line, "jp %s", target);
+            replace1_tagged(branch, branch_line,
+                            "preserve_ix_word_signed_range");
+            replace1(branch + 1, "pop hl");
+            replace1(branch + 2, target_line);
+            strcat(local_label, ":");
+            insert_line(branch + 3, local_label);
+            insert_line_tagged(branch + 4, "pop hl",
+                               "preserve_ix_word_signed_range");
+            insert_line_tagged(i + 2, "push hl",
+                               "preserve_ix_word_signed_range");
+        }
+        changed = 1;
+        i += 5;
+    }
+    return changed;
+}
+
 int main(int argc, char **argv)
 {
     int changed;
@@ -11506,8 +11624,10 @@ int main(int argc, char **argv)
      * help that pass find a segment it would have found anyway, never hurt
      * it. Purely local (no control flow change, and it only ever removes
      * instructions), so a single pass suffices; pass_labels tidies up. */
-    if (RUN_PASS(pass_defer_global_push_reload))
+    if (RUN_PASS(pass_defer_global_push_reload)) {
+        RUN_PASS(pass_push_hl_pop_de_to_ex);
         RUN_PASS(pass_labels);
+    }
 
     /* pass_cache_ix_local_word_reload runs once here, after the main loop
      * converges, for the same reason pass_signed_cmp_const_bias_fold does
@@ -11715,6 +11835,7 @@ int main(int argc, char **argv)
      * it shrinks code and can bring more branches into jr range. */
     RUN_PASS(pass_elim_dup_iy_field_capture);
     RUN_PASS(pass_dup_ix_load_to_reg_copy);
+    RUN_PASS(pass_preserve_ix_word_across_signed_range);
     RUN_PASS(pass_fold_const_sign_extend);
     RUN_PASS(pass_narrow_dead_h_constant);
     RUN_PASS(pass_narrow_indirect_byte_store);
