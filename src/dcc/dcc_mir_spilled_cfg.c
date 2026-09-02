@@ -22394,6 +22394,14 @@ static void mir_emit_pascal_run(
     mir_emit_pascal_global_load(out, plan->frame_storage);
     mir_emit_pascal_global_store(out, plan->frame_memory);
 
+    /* Put the two overwhelmingly hot shared continuations immediately ahead
+     * of dispatch.  Result-producing opcodes then push and fall through to
+     * the PC advance, and ordinary opcodes advance and fall through to the
+     * next dispatch, avoiding one jump on each path. */
+    mir_stream_printf(out, "\tjp L%d\nL%d:\n", dispatch, push_result);
+    mir_emit_pascal_push_hl(out);
+    mir_stream_printf(out, "L%d:\n\tld de,%d\n\tadd iy,de\n",
+            next, plan->instruction_stride);
     mir_stream_printf(out, "L%d:\n", dispatch);
     mir_stream_printf(out, "\tld a,(iy%+d)\n\tcp %d\n\tjp nc,L%d\n",
             0, plan->opcode_count, bad_opcode);
@@ -22667,13 +22675,9 @@ static void mir_emit_pascal_run(
             "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tpush de\n"
             "\tdec bc\n\tdec bc\n\tld l,c\n\tld h,b\n"
             "\tld e,(hl)\n\tinc hl\n\tld d,(hl)\n\tex de,hl\n\tpop de\n\tret\n");
-    mir_stream_printf(out, "L%d:\n", push_result);
-    mir_emit_pascal_push_hl(out);
-    mir_stream_printf(out, "\tjp L%d\nL%d:\n", next, return_result);
+    mir_stream_printf(out, "L%d:\n", return_result);
     mir_emit_pascal_push_hl(out);
     mir_stream_printf(out, "\tjp L%d\n", dispatch);
-    mir_stream_printf(out, "L%d:\n\tld de,%d\n\tadd iy,de\n\tjp L%d\n",
-            next, plan->instruction_stride, dispatch);
     mir_stream_printf(out, "L%d:\n", bad_opcode);
     mir_stream_puts("\tld l,c\n\tld h,b\n", out);
     mir_emit_pascal_global_store(out, plan->stack_pointer);
