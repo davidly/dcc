@@ -97,6 +97,7 @@ struct MirIndexedStackBinaryReduction {
     int compare_instruction;
     int call_instruction;
     int operation;
+    int first_operand_is_left;
     int continuation_instruction;
     int continuation_label;
     int fast_continuation_label;
@@ -31007,6 +31008,7 @@ static int mir_match_indexed_stack_binary_reduction(
                 reduction->compare_instruction = logical_argument;
                 reduction->call_instruction = logical_call;
                 reduction->operation = logical_operation;
+                reduction->first_operand_is_left = 0;
                 reduction->continuation_instruction = continuation;
                 reduction->continuation_label = continuation_label;
                 reduction->fast_continuation_label =
@@ -31084,6 +31086,8 @@ static int mir_match_indexed_stack_binary_reduction(
         reduction->compare_instruction = compare_at;
         reduction->call_instruction = call_at;
         reduction->operation = (int)compare->immediate;
+        reduction->first_operand_is_left =
+            compare->src1 == mir.insns[first.load_instruction].dst;
         reduction->continuation_instruction = continuation;
         reduction->continuation_label = continuation_label;
         reduction->fast_continuation_label =
@@ -31556,6 +31560,7 @@ static void mir_emit_indexed_stack_binary_reduction(
     const char *index_name = asm_name_for(sym_asm_name(reduction->index));
     int false_label = new_label();
     int store = new_label();
+    int operation = reduction->operation;
 
     if ((reduction->base->storage == SC_EXTERN ||
          reduction->base->needs_extrn) &&
@@ -31609,9 +31614,11 @@ static void mir_emit_indexed_stack_binary_reduction(
                 out);
         if (reduction->operation == '+')
             mir_stream_puts("\tadd hl,de\n", out);
-        else if (reduction->operation == '-')
+        else if (reduction->operation == '-') {
+            if (reduction->first_operand_is_left)
+                mir_stream_puts("\tex de,hl\n", out);
             mir_stream_puts("\tor a\n\tsbc hl,de\n", out);
-        else
+        } else
             mir_emit_runtime_call(out, "__mulu");
         mir_stream_puts("\tld c,l\n\tld b,h\n", out);
     } else if (reduction->operation == TOK_EQ) {
@@ -31628,7 +31635,9 @@ static void mir_emit_indexed_stack_binary_reduction(
                 "\tld a,h\n\txor 128\n\tld h,a\n"
                 "\tld a,d\n\txor 128\n\tld d,a\n"
                 "\tor a\n\tsbc hl,de\n\tld bc,0\n", out);
-        if (reduction->operation == '<')
+        if (reduction->first_operand_is_left)
+            operation = operation == '<' ? '>' : '<';
+        if (operation == '<')
             mir_stream_printf(out,
                     "\tjp nc,L%d\n\tinc bc\n", store);
         else

@@ -101,32 +101,11 @@ static int add_local_jump_table_successors(
     PeepFlowLine *flow, int line, int start, int end,
     unsigned char *leaders)
 {
-    char clean[MAX_LINE], table[128], definition[136];
+    char clean[MAX_LINE];
     int scan;
-    int found_load = 0;
     int entries = 0;
 
-    strip_peep_comment_copy(clean, lines[line]);
-    if (strcmp(clean, "jp (hl)") != 0 || line + 2 >= end ||
-        !starts_label(lines[line + 1]))
-        return 0;
-    strip_peep_comment_copy(definition, lines[line + 1]);
-    if (strlen(definition) < 2 ||
-        definition[strlen(definition) - 1] != ':')
-        return 0;
-    strcpy(table, definition);
-    table[strlen(table) - 1] = 0;
-    for (scan = line - 1; scan >= start && scan >= line - 16; --scan) {
-        char expected[160];
-        sprintf(expected, "ld de,%s", table);
-        if (eq(scan, expected)) {
-            found_load = 1;
-            break;
-        }
-        if (starts_label(lines[scan]))
-            break;
-    }
-    if (!found_load)
+    if (!peep_local_jump_table_dispatch(line, start, end))
         return 0;
     for (scan = line + 2; scan < end; ++scan) {
         char target[128];

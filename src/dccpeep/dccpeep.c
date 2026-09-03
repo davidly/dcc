@@ -7065,8 +7065,6 @@ static int pass_cache_ix_long_param_reload(void)
     return changed;
 }
 
-static int local_jump_table_dispatch(int line, int func_start, int func_end);
-
 /* A jump into a recognized dense-switch table (`jp (hl)` fed by the
  * canonical table-dispatch idiom) always lands at compiler-generated case
  * code, which never assumes an incoming flag state - C has no way to
@@ -7082,7 +7080,7 @@ static int all_compare_flags_dead_from_bounded(int start, int func_start,
     for (i = start; i < start + 20 && i < nlines; ++i) {
         strip_peep_comment_copy(clean, lines[i]);
         if (eq(i, "jp (hl)") &&
-            local_jump_table_dispatch(i, func_start, func_end))
+            peep_local_jump_table_dispatch(i, func_start, func_end))
             return 1;
         if (starts_label(clean) || !strncmp(clean, "jp ", 3) ||
             !strncmp(clean, "jr ", 3) || !strncmp(clean, "ret", 3) ||
@@ -7720,7 +7718,7 @@ static int early_block_requires_initialized_pointer(int line, int func_start,
     return incoming > 0;
 }
 
-static int local_jump_table_dispatch(int line, int func_start, int func_end)
+int peep_local_jump_table_dispatch(int line, int func_start, int func_end)
 {
     char table[128], expected[160], clean[MAX_LINE];
     int entry;
@@ -7884,7 +7882,7 @@ static int pass_cache_mutable_ix_pointer_in_iy(void)
                     safe = 0;
                 if (jump_target_any(clean, target) &&
                     ((target[0] == '(' &&
-                      !local_jump_table_dispatch(
+                      !peep_local_jump_table_dispatch(
                           k, func_start, func_end)) ||
                      (target[0] != '(' &&
                       find_label_line_in_range(

@@ -179,6 +179,12 @@ static int token_starts_assignment_or_incdec(int kind)
     }
 }
 
+static int token_ends_simple_assignment_rhs(int kind)
+{
+    return kind == ';' || kind == ',' || kind == ')' ||
+           kind == ']' || kind == ':';
+}
+
 /* One-time whole-file lexical scan (see file header). Must run before any
  * real parsing begins: it fully rewinds the lexer position and the macro
  * table afterward, but does NOT rewind file-scope tables that only grow
@@ -259,6 +265,7 @@ void scan_global_write_info(void)
             int field_kind = TOK_EOF;
             int field_next_kind = TOK_EOF;
             int field_rhs_kind = TOK_EOF;
+            int field_rhs_end_kind = TOK_EOF;
             long field_rhs_value = 0;
             char field_name[64];
 
@@ -280,6 +287,8 @@ void scan_global_write_info(void)
                         next_token();
                         field_rhs_kind = g_lex.tok.kind;
                         field_rhs_value = g_lex.tok.val;
+                        next_token();
+                        field_rhs_end_kind = g_lex.tok.kind;
                     }
                 }
             }
@@ -314,7 +323,9 @@ void scan_global_write_info(void)
                         name, field_name, func_at_depth0,
                         field_next_kind == '=' &&
                         field_rhs_kind == TOK_NUM &&
-                        field_rhs_value >= 0 && field_rhs_value <= 255);
+                        field_rhs_value >= 0 && field_rhs_value <= 255 &&
+                        token_ends_simple_assignment_rhs(
+                            field_rhs_end_kind));
                 }
             }
 

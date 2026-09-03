@@ -85,6 +85,13 @@ static int and_chain_spilled(a, b, c) int a; int b; int c;
     return x4 + x5 + x6 - (a + b) - (b + c) - (a + c);
 }
 
+struct WordFlags {
+    int first;
+    int second;
+};
+
+static struct WordFlags word_flags;
+
 int main()
 {
     check("seq eq", seq(5, 5), 1);
@@ -142,6 +149,13 @@ int main()
     check("and_chain lt-lt", and_chain_spilled(1, 2, 3), 1);
     check("and_chain lt-ge", and_chain_spilled(1, 2, 1), 0);
     check("and_chain ge-lt", and_chain_spilled(2, 1, 3), 0);
+
+    word_flags.first = 1 + 255;
+    word_flags.second = 0;
+    if (word_flags.first || word_flags.second)
+        check("compound field truth", 1, 1);
+    else
+        check("compound field truth", 0, 1);
 
     if (failures) {
         printf("tmirfuse: %d failure(s)\n", failures);

@@ -337,6 +337,7 @@ const PeepBasicBlock *peep_basic_block(int block);
 int peep_basic_block_count(void);
 int peep_registers_dead_after(int line, unsigned registers);
 int peep_flags_dead_after(int line, unsigned flags);
+int peep_local_jump_table_dispatch(int line, int func_start, int func_end);
 
 /* Analysis-only frame-slot register-allocation census. Runs after structural
  * convergence under -fstats; changes no program text. */

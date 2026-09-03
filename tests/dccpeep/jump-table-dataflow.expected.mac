@@ -1,0 +1,14 @@
+_test:
+;@dcc.mir byte-slot
+	ld bc,4660
+	ld de,LTABLE
+	ld hl,LREAL
+	jp (hl)
+LTABLE:
+	dw LCASE
+LCASE:
+	ld bc,0
+	ret
+LREAL:
+	ld a,b
+	ret
