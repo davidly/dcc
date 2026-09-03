@@ -924,7 +924,7 @@ static int run_bc(struct Ins *start)
             b = vpop(); a = vpop(); vpush(a < b);
             break;
         case OP_GT:
-            b = vpop(); a = vpop(); vpush(a > b);
+            b = vpop(); a = vpop(); vpush(b < a);
             break;
         case OP_NOT:
             a = vpop();
@@ -1043,7 +1043,7 @@ static void exec_range(int start, int end)
                 b = vpop(); a = vpop(); vpush(a < b);
                 break;
             case OP_GT:
-                b = vpop(); a = vpop(); vpush(a > b);
+                b = vpop(); a = vpop(); vpush(b < a);
                 break;
             case OP_NOT:
                 a = vpop();
