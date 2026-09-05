@@ -26,8 +26,9 @@ CP/M Z80 emulators run those programs, as do real Z80 CP/M 2.2 and 3.0 systems.
   I/O, allocation, strings, and single-precision math. Formatted-output support
   is selected per call; [CP/M services](10-system-and-cpm.md) provide access to
   the underlying operating system.
-- **Source-level debugging:** use VS Code breakpoints, watches, call stacks,
-  memory, and Z80 disassembly. Full debug builds favor inspectability;
+- **Source-level debugging for VS Code and AI agents:** both can use the debugger
+  to investigate issues with breakpoints, watches, call stacks, memory inspection,
+  and Z80 disassembly. Full debug builds favor inspectability;
   [optimized debug builds](00-vscode-debugging.md) retain release code generation.
 - **Optional stack checks:** enable `dcc-stack-check=true` to detect stack
   reserve overflow, including supported VLA allocations.
