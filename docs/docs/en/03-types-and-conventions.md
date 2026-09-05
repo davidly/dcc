@@ -9,6 +9,7 @@ overflow and precision surprises.
 | --- | --- | --- |
 | `char` | 8 bits | signed by default; range -128..127 |
 | `unsigned char` | 8 bits | range 0..255; useful for raw bytes and table indexes |
+| `_Bool`, `bool` | 8 bits | stores normalize to 0 or 1; include `stdbool.h` for `bool` |
 | `int`, `short` | 16 bits | signed range -32768..32767; `int` is 16-bit, so watch for overflow |
 | `unsigned int`, `unsigned short` | 16 bits | range 0..65535; use `%u` / `%x` / `%X` for formatted output |
 | `long` | 32 bits | signed range -2147483648..2147483647; use `%ld` and the `l` length modifier |

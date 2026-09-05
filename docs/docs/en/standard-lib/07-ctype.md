@@ -27,6 +27,6 @@ void uppercase(char *s)
     char *p;
 
     for (p = s; *p; ++p)
-        *p = toupper(*p);
+        *p = (char)toupper((unsigned char)*p);
 }
 ```

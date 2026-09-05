@@ -15,7 +15,8 @@ process control, and pseudo-random numbers.
 ## Runtime model
 
 The standard functions in this header are runtime-backed. DCC C Compiler also declares a
-small set of CP/M and Z80 extensions here (`bdos`, `inp`, and `outp`); those are
+small set of CP/M and Z80 extensions here (BDOS/BIOS wrappers, port I/O, and
+program replacement); those are
 documented with the CP/M services rather than treated as portable C APIs.
 
 ## Dynamic memory
@@ -30,18 +31,41 @@ this space is bounded by the program's TPA: code, data, runtime support, heap,
 and stack all share the same transient program area.
 
 ```c
-char *p = malloc(256);
-if (!p) { fputs("out of memory\n", stderr); exit(EXIT_FAILURE); }
-p = realloc(p, 512);        /* old contents preserved */
-free(p);
+#include <stdio.h>
+#include <stdlib.h>
+
+int main(void)
+{
+    char *buffer = malloc(256);
+    char *resized;
+
+    if (!buffer)
+        return EXIT_FAILURE;
+    resized = realloc(buffer, 512);
+    if (!resized) {
+        free(buffer);
+        return EXIT_FAILURE;
+    }
+    buffer = resized;
+    free(buffer);
+    return EXIT_SUCCESS;
+}
 ```
 
 `realloc` follows the standard rules: `realloc(NULL, n)` behaves like
 `malloc(n)`, and `realloc(p, 0)` frees `p` and returns `NULL`.
 
+Allocation failure returns `NULL`; a failed nonzero `realloc` leaves the
+original block valid. Do not overwrite your only pointer before checking the
+result. `free(NULL)` does nothing. Zero-byte `malloc` requests use the minimum
+allocation size and can still fail. `calloc` rejects a product that exceeds
+16-bit `size_t`; check multiplication before calling `malloc(count * size)`,
+where the expression itself can already have wrapped. Allocation failure does
+not guarantee that `errno` is set.
+
 !!! note "Size cost"
-    `malloc`/`calloc` link integer multiply/divide/modulo helpers for size
-    arithmetic, and `strdup` inherits the whole `malloc` chain. See the
+    `calloc` uses checked size multiplication and zero-filling in addition to
+    allocation. `strdup` also requires the allocator. See the
     [appendix](../appendix/01-dccrtlstrip.md).
 
 ## Conversion
@@ -70,6 +94,20 @@ long  v = strtol("  -0x1Ag", &end, 0);            /* v = -26, *end = 'g'  */
 unsigned long u = strtoul("4294967295", NULL, 10); /* ULONG_MAX */
 ```
 
+`atof` is available as a DCC C Compiler extension: it is declared as `float atof(const char *nptr)`
+and returns IEEE 754 single precision. C89 `atof` normally returns `double`, which DCC C Compiler
+does not have. It accepts ordinary decimal text with an optional exponent, plus the case-insensitive
+spellings `nan`, `inf`, and `infinity`. Overflow returns signed infinity; underflow returns signed zero.
+`strtod` uses the same parser and reports the first unconsumed byte through
+`endptr`. Numeric overflow and underflow set `errno` to `ERANGE`; explicit
+infinity/NaN spellings and an exact zero with a large exponent are not range
+errors.
+
+For checked input, prefer `strtol`/`strtoul`/`strtod` to `atoi`/`atol`/`atof`.
+Set `errno = 0` before conversion, check whether `endptr` advanced, inspect any
+unconsumed suffix, and check `ERANGE`. A zero result alone cannot distinguish
+valid zero from failed conversion.
+
 ## Multibyte and wide characters
 
 DCC uses a fixed single-byte execution encoding (`MB_CUR_MAX == 1`).
@@ -79,15 +117,6 @@ truncated byte, and `wcstombs` returns `(size_t)-1` at the offending element.
 `wcstombs` may already have stored a representable prefix, as permitted by C,
 but never stores the truncated offending value. With `n == 0`, it examines and
 writes no elements and returns zero.
-
-`atof` is available as a DCC C Compiler extension: it is declared as `float atof(const char *nptr)`
-and returns IEEE 754 single precision. C89 `atof` normally returns `double`, which DCC C Compiler
-does not have. It accepts ordinary decimal text with an optional exponent, plus the case-insensitive
-spellings `nan`, `inf`, and `infinity`. Overflow returns signed infinity; underflow returns signed zero.
-`strtod` uses the same parser and reports the first unconsumed byte through
-`endptr`. Numeric overflow and underflow set `errno` to `ERANGE`; explicit
-infinity/NaN spellings and an exact zero with a large exponent are not range
-errors.
 
 ## Integer arithmetic helpers
 
@@ -109,6 +138,18 @@ to be sorted by the same comparator. See [Worked examples](../12-examples.md) fo
 complete programs.
 
 ## Process control
+
+`exit(status)` and returning from `main` run registered `atexit` functions in
+reverse registration order, clean up temporary files, and flush console output.
+`atexit` returns zero on success and nonzero when its 32-entry table is full.
+Close ordinary files explicitly before exiting. `abort` flushes console output
+and warm-boots without running handlers or temporary-file cleanup; it does not
+set an exit status.
+
+CP/M has no environment-variable service: `getenv` always returns `NULL`.
+There is no supported returning shell-command service: `system(NULL)` returns
+zero and `system(command)` returns `-1`. Use the DCC-specific `exec` functions
+below only when replacing the current program is intended.
 
 The exit code is surfaced through CP/M 3.0 BDOS call 108, which emulators such
 as ntvcm reflect in their own process exit code. Returning a value from `main`

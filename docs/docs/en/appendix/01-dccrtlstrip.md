@@ -1,6 +1,6 @@
 # Appendix: application and runtime optimization
 
-`DCCRTL.MAC` is a single roughly 25,000-line runtime, but most programs use only a
+`DCCRTL.MAC` is a single assembly runtime, but most programs use only a
 fraction of it. Application modules can also contain functions and objects that
 the final program never reaches. The normal DCC C Compiler build flow runs
 `dccrtlstrip` before assembly to remove unreachable application blocks, then
@@ -35,13 +35,16 @@ Use the normal multi-module build command; no source annotation is required:
 dccmake main.c module.c dcc-output=APP
 ```
 
-Set `dcc-strip-unused=false` only when the output is intended to be consumed by
-a separate later link whose roots are not visible to the current `dccmake`
-invocation:
+For a helper module intended for a separate later link, compile it directly
+with `-module` and do not application-strip it before the final roots are known:
 
 ```sh
-dccmake module.c dcc-output=MODULE dcc-strip-unused=false
+dcc -module -I /path/to/dcc module.c -o MODULE.MAC
+m80c "=MODULE.MAC" /X /O /Z /L
 ```
+
+`dccmake` always attempts a complete application link; `dcc-strip-unused=false`
+disables its stripping pass but does not turn it into a compile-only driver.
 
 The direct application-strip mode rewrites the listed dcc-generated `.MAC`
 files transactionally:
@@ -120,8 +123,8 @@ reported with three figures:
 
 - **self** = source lines in the function's own block.
 - **marginal** = self + every *additional* reachable block that is not already
-  in the always-present baseline. This is the true incremental cost of using
-  that function in a program that otherwise wouldn't need it.
+  in the always-present baseline. This estimates incremental source volume,
+  not linked bytes or execution time.
 - **pulls in** = the extra runtime blocks added beyond the baseline.
 
 The rest of this page explains the *structure* the numbers reflect — the
@@ -135,15 +138,15 @@ forced root:
 
 | Block | Role |
 | --- | --- |
-| `start` | entry, heap init, BSS zeroing, calls `_main` |
-| `__build_argv` (+ `__conout`, `__argbuf`, `argv`) | command-tail argv builder; **also holds `__conout`**, the console writer |
+| `start` | entry, heap init, BSS zeroing, calls the application's `__mrun` main shim |
 | `__brk`, `__hlimit` | heap state words |
-| `_exit` (+ `__cpm_set_retcode`) | reached from `start` after `_main` returns |
+| `_exit` and its dependencies | normal termination, console flushing, and exit status |
 
-Because `__conout` lives inside the `__build_argv` block, **console output costs
-nothing extra** — `putchar`/`puts` call already-present code. (See
-[*Runtime function sizes*](02-runtime-sizes.md) for the exact baseline line
-count.)
+The command-tail builder and console writer have separate public blocks.
+Application references, including those from `__mrun`, can retain additional
+startup support beyond the table hook's `start`-only baseline. Console output
+is small, but its wrappers and dependencies are not literally free. See
+[*Runtime function sizes*](02-runtime-sizes.md) for current source-line counts.
 
 ## The shared cores
 
@@ -158,12 +161,11 @@ nearly free. This is why the `marginal` column on the
     the whole low-level file-I/O core. For console-only output prefer
     `putchar`/`puts`/`printf`.
 
-- **Formatted I/O.** Integer `printf` is a self-contained monolith; a
-  `printf`-family call whose format needs `%f` links the entire float stack on
-  top of it. Literal formats are analyzed automatically; non-literal formats
-  conservatively select all optional paths.
-  `sprintf`/`vprintf`/`vsprintf` reuse the formatter for free, while
-  `fprintf`/`vfprintf` carry the file-I/O core.
+- **Formatted I/O.** The `printf` family shares a base engine with optional
+  float, long, hexadecimal, and octal paths. Literal formats select those
+  paths per call; non-literal formats conservatively select all of them.
+  String and `va_list` wrappers reuse the engine but add their own code;
+  `fprintf`/`vfprintf` also require file-I/O support.
 - **`scanf` family.** `scanf`/`sscanf` are tiny stubs that jump into the shared
   `fscanf` core, so using any one links all three plus the read path.
 - **Low-level file I/O.** `open`/`read`/`write`/`close`/`lseek`/`unlink`/
@@ -174,11 +176,9 @@ nearly free. This is why the `marginal` column on the
   helpers (`__lmd`, `__lmu`, …); the compare operators are self-contained.
 - **Float.** A single `float` operator links the shared normalise/round core.
 
-!!! tip "`frexpf` / `ldexpf` are the cheap float functions"
-    They manipulate IEEE-754 bits directly (no arithmetic core), so they only
-    link a couple of classify helpers. Everything else requires the full float
-    arithmetic stack, and the `exp`/`log`/`pow` and hyperbolic group is the most
-    expensive group to link: budget ~2,000–3,300 lines for any one of them.
+Bit-oriented float operations can cost much less than transcendental math.
+Consult the generated table for their current dependency estimates; do not
+assume every float function pulls in the same arithmetic support.
 
 String and ctype routines are the exception: almost all are self-contained and
 link nothing beyond themselves. `strdup` is the notable outlier: it allocates,
@@ -186,22 +186,17 @@ so it inherits the whole `malloc` chain.
 
 ## Optimisation takeaways
 
-1. **Console-only output is cheap.** `putchar`, `puts`, and integer `printf`
-   only touch already-present code or are self-contained. Avoid
-   `fputc`/`fputs`/`fprintf` for console work — they link the file-I/O core.
-2. **`printf` is an 842-line monolith** but links nothing else. **A `%f`
-  formatted-output call roughly triples that** by linking the entire float stack.
-   `vprintf`/`vsprintf` reuse that engine for free; `vfprintf` carries the
-   file-I/O core like `fprintf`.
-3. **Any single low-level file call links the whole FCB/DMA core (~470 lines).**
-   The first file function is expensive; additional ones are nearly free.
-4. **`scanf`/`sscanf` are not small** — they share the 697-line `fscanf` core.
-5. **Float is the biggest lever.** A single `float` operator links ~700+ lines;
-   `sqrtf`/`fmodf` exceed 1,300 lines, and the `expf`/`logf`/`powf` and
-   hyperbolic group runs ~2,000–3,300 lines.
-6. **`malloc`/`calloc` link integer mul/div/mod helpers** for size arithmetic;
-   `strdup` inherits the whole `malloc` chain.
-7. **String/ctype routines are individually cheap** — they link only themselves.
+1. Prefer console-specific functions for console-only output.
+2. Keep format strings literal when practical so per-call format selection can
+  omit unused paths.
+3. Budget for the shared support introduced by the first file, formatted-input,
+  allocation, or floating-point operation.
+4. Distinguish allocation from checked size arithmetic: `calloc` adds
+  multiplication checks and zero-filling; `malloc` does not inherently need
+  the same chain.
+5. Measure the actual `.COM` and inspect assembler listings for byte costs.
+  Source-line counts include comments and blank lines and are not a byte-size
+  or performance guarantee. CP/M file sizes are rounded to 128-byte records.
 
 The practical rule: every call either stays cheap or links a substantial amount
 of support code. Use the console functions, integer-only `printf`, and the

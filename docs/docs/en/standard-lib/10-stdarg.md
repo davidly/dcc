@@ -42,8 +42,8 @@ int sum(int count, ...)
 A `va_list` can be forwarded straight to `vprintf`, `vfprintf`, or `vsprintf`
 to build `printf`-style wrappers without re-parsing the arguments. See
 [Console and file I/O](05-stdio.md#printf-family-output) for the supported
-formatted-output subset and the compiler options required for long or float
-formatting.
+formatted-output subset and automatic long/float runtime selection. The
+formatting options are force overrides, not required opt-ins.
 
 ```c
 #include <stdarg.h>

@@ -1,7 +1,15 @@
 # Worked examples
 
 Short, self-contained programs suitable for adding to a project, building with
-`scripts/ma.ps1`, and running under an emulator such as ntvcm. See
+`dccmake`, and running under an emulator such as ntvcm. For example, from the
+DCC checkout:
+
+```sh
+dccmake tests/texsort.c dcc-output=TEXSORT
+ntvcm build/TEXSORT.COM
+```
+
+See
 [Building and linking](02-build-and-link.md) for build options and the manual
 pipeline.
 

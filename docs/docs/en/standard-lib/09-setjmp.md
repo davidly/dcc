@@ -40,18 +40,22 @@ void fail(void)
 
 int main(void)
 {
-    int code;
-
-    code = setjmp(env);
-    if (code == 0) {
+    if (setjmp(env) == 0) {
         fail();
     } else {
-        return code;
+        return 7;
     }
     return 0;
 }
 ```
 
-After a `longjmp`, automatic variables in the restored function have the same
-practical caveats as C89: values changed after `setjmp` should not be relied on
-unless they are `volatile`.
+The function that called `setjmp` must still be active when `longjmp` runs;
+keeping `env` global does not extend that function's lifetime. For portable C,
+use `setjmp` in a permitted context such as the controlling comparison above,
+not an assignment initializer.
+
+After a `longjmp`, do not rely on changed non-volatile automatic variables in
+the restored function. DCC does not promise full standard `volatile`
+semantics; use static or caller-owned state when recovery depends on a value.
+A non-local jump performs no resource cleanup: release allocations and close
+files explicitly on the recovery path.

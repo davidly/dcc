@@ -6,21 +6,22 @@
     MkDocs hook. They never go out of step with the runtime source, so prefer
     these numbers over any quoted elsewhere.
 
-This page quantifies what each runtime library feature costs in code size once
-its transitive dependencies are linked. For *how* `dccrtlstrip` decides what
+This page estimates the source volume associated with selected runtime features
+and their transitive dependencies. For *how* `dccrtlstrip` decides what
 to keep — and the optimisation takeaways for keeping a program small — see
 [*Runtime optimization*](01-dccrtlstrip.md).
 
 ## How to read the numbers
 
 The numbers are **relative source-line counts**, not exact bytes (blocks contain
-comments and blank lines). Use them to compare features and spot the
-heavyweights.
+comments and blank lines). They help locate large source/dependency groups,
+but cannot establish binary-size or performance rankings. Measure the linked
+`.COM` and assembler listings for those decisions.
 
 - **self** — source lines in the function's own block.
 - **marginal** — `self` plus every *additional* reachable block that is not
-  already in the always-present baseline. This is the true incremental cost of
-  using that function in a program that otherwise wouldn't need it.
+  already in the `start`-rooted baseline. Actual application references may
+  already retain some of these blocks, reducing the incremental cost.
 - **pulls in** — the extra runtime blocks added beyond the baseline.
 
 !!! note "Symbols are internal runtime labels"

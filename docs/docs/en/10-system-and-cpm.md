@@ -97,8 +97,8 @@ closedir(d);
 The standard-library reference now has dedicated pages for
 [error reporting](standard-lib/02-errno.md) and
 [assertions](standard-lib/01-assert.md). The CP/M file runtime uses `errno` for
-file-related failures, and `assert` writes its diagnostic through `stderr` before
-terminating with `exit(1)`.
+file-related failures, and `assert` writes its diagnostic to the console before
+terminating with `abort()`.
 
 ## File I/O and CP/M BDOS conventions
 
@@ -119,10 +119,10 @@ CP/M has no byte-granular length field; a directory entry only knows how many
 last record — the padding between the real data and the record boundary — is
 written as Ctrl-Z (0x1A) bytes when that record is first created (there's no
 "old data" to merge a partial write with). That padding is genuine, readable,
-on-disk data: `fread()` isn't bounded by the tracked length the way a POSIX
-`read()` would be, so a large-enough `fread()` on a short file can return the
-trailing 0x1A padding right along with the real bytes, even though `ftell()`
-reports the shorter, record-rounded length. This is deliberately left as
+on-disk data: a large-enough `fread()` on a short file can return the trailing
+0x1A padding right along with the real bytes. `ftell()` reports the current
+byte position, not the file length. Seeking to the end of an ordinary reopened
+file uses its record-rounded directory length. This is deliberately left as
 documented behavior rather than "fixed" by trimming the tracked length at the
 runtime level — doing that breaks the classic CP/M convention (used by real
 programs, and by this repo's own `fileops.c` test) of writing a single
@@ -147,10 +147,12 @@ Practical implications:
 
 ### Record-count overflow at exactly 8 MB
 
-BDOS function 35 (compute file size) returns the record count in a 16-bit
-register pair. CP/M 2.2's own maximum file size, 8 MB, is exactly 65536
-records — one past what a 16-bit count can represent — so an exactly-8-MB file
-reports a record count of 0, which looks like an empty file if read naively.
+BDOS function 35 (compute file size) writes the record count to the FCB's
+three-byte random-record field. DCC's ordinary file-length initialization
+currently reads only its low 16 bits. CP/M 2.2's maximum file size, 8 MB, is
+exactly 65536 records, so that truncated count is zero and can look like an
+empty file. This is a runtime accounting limitation, not a 16-bit BDOS return
+contract.
 DCCRTL treats this as the one legitimate reason `__fdlen` can be genuinely
 larger than what a raw record-count register pair reported; see `tests/tbig.c`
 for sequential and random I/O across that boundary.
@@ -291,12 +293,15 @@ declared in `stdlib.h`:
 
 ```c
 int bdos(int fn, int dearg);
+int bdoshl(int fn, int dearg);
 ```
 
 `fn` is the BDOS function number and `dearg` is the value passed in `DE`; the
 byte result comes back in the low byte of the returned `int`. Calls whose useful
 result is an FCB/DMA region (directory and file operations) return their data
-through the memory `dearg` points at, not in the return value.
+through the memory `dearg` points at, not in the return value. Use `bdoshl`
+when the BDOS function returns a full word in `HL`, such as function 12
+(version), instead of the byte result from `A`.
 
 The BIOS jump table is also available when an application genuinely needs
 machine-specific services:

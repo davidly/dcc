@@ -73,3 +73,8 @@ view the local documentation site. Keep the virtual environment active while
 serving the site. As you edit the documentation files, MkDocs rebuilds the site
 and refreshes the browser automatically. When you are done, press `Ctrl+C` to
 stop `mkdocs serve`.
+
+Before publishing, run `mkdocs build --strict` from `docs/docs`. This validates
+generated header tables, local page links, and section anchors. The working
+directory matters because source snippets use paths relative to it. The output
+is `docs/site`; do not edit those generated files.

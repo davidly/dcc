@@ -19,7 +19,7 @@ These limits apply at every language level.
 | `long` | 32 bits |
 | `float` | 32 bits |
 | `_Bool` | 8 bits, normalized to `0` or `1` |
-| `double`, `long double` | not distinct types; use `float` |
+| `double`, `long double` | Rejected; use `float` |
 | `long long` | not supported |
 | hosted environment | outside the CP/M 2.2 target model |
 | processes, threads, asynchronous signals, locale databases | outside the CP/M 2.2 target model; C89 signal/locale APIs provide documented CP/M stubs/defaults |
@@ -75,8 +75,8 @@ Taking the address of a register-qualified object is a constraint violation:
 ```c
 void example(void)
 {
-	register int value;
-	int *pointer = &value; /* error DCC-E0921 */
+    register int value;
+    int *pointer = &value; /* error DCC-E0921 */
 }
 ```
 
@@ -110,6 +110,7 @@ retaining these language semantics.
 | Array parameters adjusted to pointers | Supported |
 | C99 array parameter qualifiers: `int a[const 5]`, `int a[static 5]`, `int a[volatile 5]`, `int a[restrict 5]`, `int a[const *]` | Accepted as syntax compatibility; array parameters still decay to pointers |
 | Variable-length arrays (local) | Supported when the only variable dimension is the outermost, with constant inner dimensions (`a[n]`, `a[n][3]`). The array decays to a pointer to stack-allocated storage and is reclaimed at ordinary block-scope exit, including loop iterations, `break`, `continue`, `return`, and a `goto` that leaves the scope (forward or backward, across any number of nested VLA scopes) |
+| `sizeof` applied to a whole VLA | Supported for DCC's VLA subset; produces the VLA's run-time byte size |
 | Function-typed parameters adjusted to pointers | Supported |
 | `restrict` qualifier | Accepted as source compatibility; no alias-analysis optimization semantics are provided |
 | Variadic macros and `__VA_ARGS__` | Supported |
@@ -128,7 +129,6 @@ retaining these language semantics.
 | `long long` and 64-bit integer types | Not supported |
 | Variable-length arrays with a variable inner dimension (`a[n][m]`) | Not supported; the runtime row stride is not modelled (variable outermost dimension is supported, above) |
 | `goto`/`case` entry into VLA scopes | Not supported; a jump that would bypass a VLA's allocation is rejected. Jumps that *leave* VLA scopes — `break`, `continue`, `return`, and forward or backward `goto` — are fully supported and reclaim the stack correctly |
-| `sizeof` applied to a whole VLA | Supported for DCC's VLA subset; produces the VLA's run-time byte size |
 | `_Complex` and complex arithmetic | Not supported |
 | Full C99 compound literal value semantics | Partly supported only |
 | Flexible array member initialization | Not supported |
@@ -148,6 +148,7 @@ and recursion, and worked examples — see
 | Anonymous `union` members | Supported |
 | Initialization through anonymous aggregate members | Supported |
 | `_Static_assert` declarations | Supported at file, block, and `struct`/`union` member scope; `<assert.h>` also defines `static_assert` |
+| `_Noreturn` function specifier | Supported; used by the runtime declarations for `exit` and `abort` |
 
 ## Missing from C11
 
