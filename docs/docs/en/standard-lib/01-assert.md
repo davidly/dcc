@@ -43,10 +43,10 @@ layout. Its first operand must be an integer constant expression.
 
 ## Runtime model
 
-`assert` is implemented in the header, not by a separate debug runtime. When
+`assert` is a header macro backed by a small runtime failure helper. When
 `NDEBUG` is not defined, `assert(expression)` evaluates `expression`. If it is
-false, the header's helper prints a diagnostic to `stderr` with `fprintf`,
-flushes `stderr`, and terminates the program with `exit(1)`.
+false, the helper prints a diagnostic to the console and calls `abort()`.
+This does not require the formatted-I/O engine.
 
 When `NDEBUG` is defined before including `assert.h`, `assert(expression)`
 expands to `((void)0)` and does not evaluate `expression`.
@@ -66,5 +66,5 @@ void use_buffer(char *buf, int len)
 ```
 
 The diagnostic includes the failed expression, source file, and line number.
-Because failed assertions call `exit`, normal exit-time flushing and cleanup
-still run.
+Failed assertions flush console output through `abort`, but do not run
+`atexit` handlers, remove temporary files, or set a process exit status.

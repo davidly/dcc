@@ -96,10 +96,20 @@ dcc-input=main.c,module.c
 dcc-output=PROGRAM
 dcc-build-dir=build
 dcc-stack-bytes=1024
+dcc-runtime=${DCC_DIR}/DCCRTL.MAC
+dcc-include-directory=${DCC_DIR}
+dcc-tool=${DCC_DIR}/dcc
+dccpeep-tool=${DCC_DIR}/dccpeep
+dccrtlstrip-tool=${DCC_DIR}/dccrtlstrip
+m80c-tool=${DCC_DIR}/m80c
+l80c-tool=${DCC_DIR}/l80c
 ```
 
 Replace the source list, output name, and stack size with the project's actual
-values. The output name must fit CP/M's eight-character basename limit.
+values. The output name must fit CP/M's eight-character basename limit. On
+Windows, append `.exe` to the five host-tool paths. These paths make an
+external project independent of the shell's tool search path; setting only
+the task's `dccmake` path does not locate the runtime or headers.
 
 ### Add `.vscode/tasks.json`
 
@@ -252,9 +262,11 @@ dcc-debug=lines
 ```
 
 This project setting refines the generic `-g` supplied by the VS Code task. It
-uses normal optimized compiler and peephole output while emitting line and
-function tables. The resulting `.COM` is byte-identical to a release build;
-locals, globals, structures, and variable watches are intentionally omitted.
+uses normal optimized compiler and peephole output while emitting line,
+function, type, scope, global, and ranged variable-location metadata. The
+resulting `.COM` is byte-identical to the corresponding release build. Values
+that cannot be recovered are shown as `<optimized out>`; see
+[Optimized debug builds](#optimized-debug-builds) for the available locations.
 
 ## Add the build task
 
@@ -447,6 +459,26 @@ another source root.
   stops at the first breakpoint.
 5. Use **Step Over**, **Step Into**, **Step Out**, or **Continue** as with a
    native program.
+
+## Provide data files
+
+The debugger starts with a disposable, memory-backed B: drive. Place data files
+in `fixtures/` beside the selected `.COM`, for example
+`build/fixtures/DATA.DAT` for `build/PROGRAM.COM`. Every non-hidden regular
+file is staged before boot; subdirectories are ignored and filenames must be
+unique CP/M 8.3 names. The host does not expose the working directory as a live
+filesystem.
+
+Add `--fixture FILE` to `miDebuggerArgs` for an explicit binary input, or
+`--text-fixture FILE` to convert host LF text to CRLF and append Ctrl-Z.
+These are debugger inputs, independent of the regression runner's
+`tests/_test_overrides.json`.
+
+Writes are discarded by default. A generator can use `--save-fixtures DIR` to
+publish final B: contents after normal target exit, excluding the launched
+`.COM`. This **replaces the destination directory**, so use a dedicated output
+directory. Abort, debugger quit, CPU halt, or staging failure leaves an existing
+destination unchanged. Saved files retain CP/M 128-byte record padding.
 
 ## Provide interactive CP/M input
 

@@ -7,20 +7,42 @@ CP/M / Z80 C apps anywhere, not just inside the DCC C Compiler repo. As long as 
 are on your `PATH` (see [Setting up the toolchain](00-setup-toolchain.md)), the
 commands below work from any folder that holds your `.c` sources.
 
-## The build script
+## Build with dccmake
 
-The primary installed build command is `dcc-ma`. It compiles, optimizes,
-strips the runtime, assembles, and links in one step.
-
-With an installed package, use the common wrapper command on Windows, macOS, and
-Linux:
+`dccmake` is the native build driver. With the tools on `PATH` and the DCC
+headers and runtime configured for your project, it builds one or more sources:
 
 ```sh
-dcc-ma foo --mode fast       # builds foo.c -> FOO.COM
-dcc-ma foo --mode nopeep     # skip the dccpeep optimizer
+dccmake main.c dcc-output=MAIN
+dccmake main.c helper.c dcc-output=MAIN dcc-stack-check=true
+ntvcm build/MAIN.COM
 ```
 
-From a source checkout, run the implementation script directly:
+The first source is the application translation unit; subsequent sources are
+compiled with `-module`. Outputs go to `build/` by default. Source basenames
+and the output name must be CP/M 8.3-compatible (at most eight characters before
+the extension, and three after it). Host directory paths can be longer.
+
+For repeatable builds, put settings in `dccmake.txt` in the working directory:
+
+```ini
+dcc-input=main.c,helper.c
+dcc-output=MAIN
+dcc-stack-bytes=1024
+dcc-stack-check=true
+dcc-peep=true
+```
+
+Run `dccmake` without source arguments to use that configuration. For projects
+outside the checkout, also configure `dcc-include-directory` and
+`dcc-runtime` as described in the [dccmake reference](appendix/03-utilities.md#build-pipeline-helper-dccmake).
+That reference covers tool overrides, configuration precedence, debug modes,
+and the optional emulated assembler/linker paths.
+
+## The build script
+
+Use `dccmake` for application projects. The source checkout also provides
+optional single-app helper scripts. From the checkout on Linux/macOS, run:
 
 ```sh
 ./scripts/ma.sh foo --mode fast
@@ -48,6 +70,7 @@ For fixed-address, overlay, or relocating system programs,
 nonstandard origins and generates the required CP/M entry jump/bootstrap. Its
 utility reference covers the CLI options, origin layouts, and limitations.
 
+<!-- markdownlint-disable MD046 -->
 ??? note "The manual pipeline (click to expand)"
 
     For manual builds or custom build systems, the full pipeline for `foo.c` is
@@ -102,15 +125,17 @@ utility reference covers the CLI options, origin layouts, and limitations.
         l80c "/P:100,RTLMIN,FOO,FOO/N/E/Y"
         ```
 
-    Replace `/path/to/dcc` (or `C:\path\to\dcc`) with the checkout or install
+    Replace `/path/to/dcc` (or `C:\path\to\dcc`) with the checkout
     directory containing the standard headers and `DCCRTL.MAC`. Native
     [`m80c`](appendix/03-utilities.md#native-assembler-m80c) accepts normal host
     line endings; no CP/M text conversion is needed.
 
     To cross-check compatibility with the original Microsoft tools, use
-    `dcc-ma --emulated-m80 --emulated-l80` instead. That optional path stages
+    `dccmake foo.c dcc-output=FOO dcc-use-emulated-m80=true dcc-use-emulated-l80=true`
+    with the project's headers, runtime, and emulated tools configured. That optional path stages
     `M80.COM`/`L80.COM`, converts text to CP/M CRLF, and runs them under
     `ntvcm`.
+<!-- markdownlint-enable MD046 -->
 
 ## The compiler invocation
 
@@ -127,7 +152,12 @@ Common options:
 | `-f`, `-ffloatio` | Force `%f` support on every `printf`-family call. |
 | `-fl`, `-flongio` | Force 32-bit `long` formats on every `printf`-family call. |
 | `-fno-floatio`, `-fno-longio` | Force the corresponding format paths off, overriding automatic detection. |
-| `-fstack-check` | Emit a lightweight stack-overflow guard in each function prologue. |
+| `-fhexio`, `-fno-hexio` | Force hexadecimal output support on or off. |
+| `-foctio`, `-fno-octio` | Force octal output support on or off. |
+| `-g` | Emit full source-debug metadata with conservative code generation. |
+| `-gline` | Emit optimized debug metadata while retaining release code generation. |
+| `-fstack-check` | Guard function prologues and VLA allocations against stack reserve overflow. |
+| `-fno-narrow` | Disable integer-array, scalar, and loop-counter byte-narrowing optimizations. |
 | `-s bytes`, `-stack bytes`, `--stack bytes` | Reserve stack bytes; default is 512. |
 | `-s=bytes`, `-stack=bytes`, `--stack=bytes` | Equivalent attached forms for the stack size. |
 | `-I dir`, `-Idir` | Add an include search directory. |
@@ -135,6 +165,11 @@ Common options:
 | `-U name`, `-Uname` | Undefine a preprocessor macro. |
 | `-v`, `--version` | Print the compiler version and exit. |
 | `-h`, `--help` | Print compiler help and exit. |
+
+There is no `-std=c89`, `-std=c99`, or `-std=c11` mode selector: the
+[documented language subset](01-c-conformance.md) is always in effect. Unknown
+compiler options are currently ignored, so an accepted command line does not
+prove that a familiar desktop-compiler flag took effect.
 
 ## Options that affect the runtime
 
@@ -178,6 +213,7 @@ forced on and sweeps the `-stack` reserve upward until it runs without tripping
 the guard, then prints the minimum and a recommended value with headroom. Run it
 against an app/test name (and pass any program arguments after `--`):
 
+<!-- markdownlint-disable MD046 -->
 === "Windows"
 
     ```bat
@@ -227,6 +263,7 @@ against an app/test name (and pass any program arguments after `--`):
     rem app that needs a data-file argument
     scripts\stacksize.bat cobint -- e.cob
     ```
+<!-- markdownlint-enable MD046 -->
 
 Both honour the same `START` / `STEP` / `MAX` / `MODE` / `EMU` environment
 variables; see [`scripts/README.md`](https://github.com/davidly/dcc/blob/main/scripts/README.md)
@@ -241,6 +278,20 @@ Include the standard headers as usual:
 #include <stdlib.h>
 #include <string.h>
 ```
+
+DCC searches the name as given (including the working directory), then the
+including file's directory, then each `-I` directory in command-line order.
+The bundled headers live beside `DCCRTL.MAC` at the root of the source checkout.
+For an external `dccmake` project, set `dcc-include-directory=/path/to/dcc`
+and `dcc-runtime=/path/to/dcc/DCCRTL.MAC`, replacing `/path/to/dcc` with that
+checkout's path. When invoking the compiler directly, use `-I /path/to/dcc`.
+
+!!! warning "Missing system headers are silently ignored"
+    An unresolved `<header.h>` include is skipped; an unresolved
+    `"header.h"` include is an error. Successful compilation therefore does
+    not prove that a system header was found. Missing prototypes can produce
+    wrong calls, especially for pointer, `long`, or `float` results. Use DCC's
+    headers, not your host compiler's standard-library headers.
 
 ## Multi-module symbol names
 
@@ -264,6 +315,7 @@ assembler name and the 6-character rule does not apply to it.
 
 ### How a collision shows up
 
+<!-- markdownlint-disable MD046 -->
 - **Within one file**, DCC C Compiler catches it at compile time and stops with an error
   naming both symbols, for example:
 
@@ -271,6 +323,7 @@ assembler name and the 6-character rule does not apply to it.
     global names 'i_idxins' and 'i_idxbld' are not distinguishable in M80's
     6 significant character public symbols (both become '_I_IDX'); rename one
     ```
+<!-- markdownlint-enable MD046 -->
 
 - **Across different files**, DCC C Compiler cannot see the clash.
   [`l80c`](appendix/03-utilities.md#native-linker-l80c) reports a multiply

@@ -21,6 +21,12 @@ time conversion, and fixed-C-locale formatting.
 otherwise returns `(time_t)-1`. The result is the BDOS wall-clock reading
 encoded as a signed Unix timestamp.
 
+This is an epoch-based encoding of the BDOS clock fields, not a guarantee that
+the clock is set to UTC. There is no timezone correction. The checked upper
+limit is `2038-01-19 03:14:07`; later timestamps or invalid clock fields return
+`(time_t)-1`. If a non-NULL output pointer is supplied to `time`, the result,
+including the failure value, is stored there too.
+
 There is no timezone database. `localtime()` is therefore identical to
 `gmtime()`, and `%Z` in `strftime()` expands to an empty string. `asctime()` and
 the broken-down-time conversion functions use internal static storage. A later

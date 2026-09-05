@@ -2,17 +2,18 @@
 
 Developer scripts for building and testing DCC C Compiler programs.
 
-Run these scripts from the DCC C Compiler checkout or from an installed package. Linux and
-macOS packages include a native shell build driver, so normal package users do
-not need PowerShell to build a single app.
+Use the source-built [`dccmake`](#build-pipeline-helper-dccmake) tools for
+application projects. Run the optional scripts below from the DCC C Compiler
+checkout. The Linux/macOS single-app shell helper does not require PowerShell.
 
-## Build Driver (`dcc-ma`, `ma.sh` / `ma.ps1`)
+## Build Driver (`ma.sh` / `ma.ps1`)
 
 The build driver compiles one app, optionally runs `dccpeep`, strips the
 runtime, assembles, and links a `.COM` executable.
 
-- Installed packages: use `dcc-ma` on Windows, macOS, and Linux.
-- Source checkout: use `scripts/ma.sh` on Linux/macOS, or `scripts/ma.ps1` with Windows PowerShell 5.1 or PowerShell 7+.
+Use `scripts/ma.sh` on Linux/macOS, or `scripts/ma.ps1` with Windows PowerShell
+5.1 or PowerShell 7+. These are optional checkout helpers; use `dccmake`
+directly for project builds.
 
 ### Build Driver Usage
 
@@ -21,16 +22,12 @@ runtime, assembles, and links a `.COM` executable.
 ```
 
 ```sh
-dcc-ma <name> [mode] [options]
-```
-
-```sh
 ./scripts/ma.sh <name> [mode] [options]
 ```
 
 - `<name>` — Test app name (e.g., `triangle`, `sieve`, `ttt`)
 - `[mode]` — Build mode: `full` (both builds), `fast` (optimized), or `nopeep`
-  (unoptimized). The shell driver defaults to `fast`; the PowerShell driver
+  (without the additional peephole pass). The shell driver defaults to `fast`; the PowerShell driver
   defaults to `full`.
 
 ### Build Driver Examples
@@ -39,12 +36,6 @@ dcc-ma <name> [mode] [options]
 ./scripts/ma.ps1 triangle
 ./scripts/ma.ps1 sieve nopeep
 ./scripts/ma.ps1 cobint -Mode fast -BuildDir mybuild
-```
-
-```sh
-dcc-ma triangle
-dcc-ma sieve nopeep
-dcc-ma cobint --mode fast --build-dir mybuild
 ```
 
 ```sh
@@ -79,13 +70,13 @@ input lists.
   real CP/M assembler or linker under `ntvcm`
 - `DCC_ARGS` — Extra whitespace-separated `dcc` options such as `-DNAME=1 -UOLD`
 - `NTVCM_ARGS` — Extra whitespace-separated `ntvcm` options such as `-p -s:4000000`
-- `DCC_HOME` — DCC C Compiler package/install root; used to find `include/`, `lib/`, and CP/M tools
+- `DCC_HOME` — optional toolchain asset root; used to find `include/`, `lib/`, and CP/M tools
 - `DCC_INCLUDE` — extra include directories, separated by the host path separator
 - `DCC_LIB` — extra runtime/tool asset roots, separated by the host path separator
 - `DCC_RUNTIME` — explicit path to `DCCRTL.MAC`
 - `DCC`, `DCCPEEP`, `DCCRTLSTRIP`, `NTVCM`, `M80`, `M80C`, `L80`, `L80C` — Tool paths
 
-Run `dcc-ma -Help` on Windows or `dcc-ma --help` on Linux/macOS for the full option map, including which
+Run `./scripts/ma.ps1 -Help` on Windows or `./scripts/ma.sh --help` on Linux/macOS for the full option map, including which
 `dcc` options are owned by the helper pipeline.
 
 ## Toolchain Commands
@@ -287,29 +278,32 @@ dcc-include-directory=${DCC_DIR}
 dcc-tool=${DCC_DIR}/dcc
 dccpeep-tool=${DCC_DIR}/dccpeep
 dccrtlstrip-tool=${DCC_DIR}/dccrtlstrip
-ntvcm-tool=${NTVCM_DIR}/ntvcm
-m80-command=${DCC_DIR}/m80.com
-l80-command=${DCC_DIR}/l80.com
+m80c-tool=${DCC_DIR}/m80c
+l80c-tool=${DCC_DIR}/l80c
 ```
 
 With that file in place, set the tool roots and build the app:
 
 ```sh
-export DCC_DIR=$HOME/GitHub/dcc
-export NTVCM_DIR=$HOME/GitHub/ntvcm
+export DCC_DIR="$HOME/GitHub/dcc"
 
 dccmake
 ```
 
+On Windows, set `DCC_DIR` in PowerShell and append `.exe` to the five host-tool
+paths. Emulator paths are unnecessary for the default native build pipeline.
+
 The generated CP/M executable lands in the configured build directory, for
-example `build/ATTNC99.COM`. If you want the `.COM` beside your source file and
-do not need to keep the intermediate `.MAC`, `.REL`, `.PRN`, and stripped
-runtime files, copy it back and remove the build directory:
+example `build/ATTNC99.COM`. To place that executable beside your source,
+copy just the selected output:
 
 ```sh
-mv -f build/*.COM .
-rm -rf build
+cp build/ATTNC99.COM .
 ```
+
+For source debugging, keep its matching `.DBG` alongside it. Preserve the
+build directory when it contains other applications, fixtures, or outputs you
+still need.
 
 Command-line values override the file, so this builds the same app without the
 peephole optimizer:
@@ -452,7 +446,7 @@ Runs in parallel by default:
 ```
 
 With no options, the suite runs in parallel, enables `-fstack-check`, and uses
-`-Mode fast`. Use `-Mode full` to run both optimized and unoptimized builds.
+`-Mode fast`. Use `-Mode full` to run builds with and without `dccpeep`.
 
 ### Test Runner Examples
 
@@ -464,7 +458,7 @@ With no options, the suite runs in parallel, enables `-fstack-check`, and uses
 ./scripts/runall.ps1 -ThrottleLimit 8      # cap concurrency
 ./scripts/runall.ps1 -Emulator altair
 ./scripts/runall.ps1 -Mode fast            # optimized build only
-./scripts/runall.ps1 -Mode nopeep          # unoptimized build only
+./scripts/runall.ps1 -Mode nopeep          # build without dccpeep only
 ./scripts/runall.ps1 -Apps tprintf,tlong   # selected apps only
 ./scripts/runall.ps1 -FailFast             # stop dispatching after a failure
 ./scripts/runall.ps1 -FailuresOnly:$false  # include PASS lines
@@ -481,8 +475,8 @@ The `-Mode` parameter selects which optimization pass(es) to build and verify.
 
 - **`fast`** — optimized: runs the `dccpeep` peephole optimizer after compiling.
   This produces the optimized CP/M Z80 binary.
-- **`nopeep`** — unoptimized: skips `dccpeep`. This produces the unoptimized
-  CP/M Z80 binary.
+- **`nopeep`** — skips `dccpeep`. Compiler MIR optimizations and application
+  stripping still run; this is not an `-O0` build.
 - **`full`** — builds and verifies each app **twice**, once in each mode,
   against the same baseline. This catches optimizer bugs that change a program's
   output.
@@ -498,7 +492,7 @@ The `-Mode` parameter selects which optimization pass(es) to build and verify.
 | `-BuildDir` | `build` | Build directory for artifacts |
 | `-NoRamDisk` | (off) | On Linux, disable the automatic `/dev/shm/dcc-runall` build root |
 | `-BaselineDir` | `tests/baselines` | Directory of per-app `<app>.txt` baselines |
-| `-Mode` | `fast` | Build mode: `fast` (optimized), `nopeep` (unoptimized), or `full` |
+| `-Mode` | `fast` | Build mode: `fast` (with dccpeep), `nopeep` (without dccpeep), or `full` (both) |
 | `-Apps` | all tests | Comma-separated app names to run |
 | `-RunTimeout` | `60` | Per-build and per-emulator-run timeout in seconds |
 | `-Help` | (off) | Show help text and exit without building or running tests |
@@ -747,9 +741,9 @@ z80-lab,macOS,2026-08-18T12:00:00Z,sieve,0.75,300000,2176,,,,400000000
 - `peep_ms` — Clock-normalized milliseconds for the optimized build
 - `peep_cycles` — Z80 cycles reported for the optimized build
 - `peep_size` — Binary size in bytes (optimized)
-- `nopeep_ms` — Clock-normalized milliseconds for the unoptimized build
-- `nopeep_cycles` — Z80 cycles reported for the unoptimized build
-- `nopeep_size` — Binary size in bytes (unoptimized)
+- `nopeep_ms` — Clock-normalized milliseconds for the build without dccpeep
+- `nopeep_cycles` — Z80 cycles reported for the build without dccpeep
+- `nopeep_size` — Binary size in bytes (without dccpeep)
 - `clock_hz` — Nominal `ReportClockHz` used for the millisecond calculation
 
 The `-ReportFile` parameter controls the output path. The `-Mode` parameter

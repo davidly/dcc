@@ -206,7 +206,7 @@ lock these messages and carets against exact baselines.
 | Array and pointer constraints | `DCC-E0601`-`DCC-E0605` | unsupported variable inner dimensions, invalid bounds/object sizes, scalar subscripting |
 | Statement control flow | `DCC-E0701`-`DCC-E0706` | `break`/`continue` outside valid contexts, stray `case`/`default`, duplicate or undefined labels |
 | Functions and declarations | `DCC-E0801`-`DCC-E0806` | parameter declaration errors, redefinitions, too few or too many function-call arguments |
-| Initializers and assignment compatibility | `DCC-E0901`-`DCC-E0920` | invalid address initializers, non-constant initializers, string/array/struct initializer errors, integer-to-pointer assignment |
+| Initializers and assignment compatibility | `DCC-E0901`-`DCC-E0921` | invalid initializers, integer-to-pointer assignment, taking the address of a register-qualified object |
 | Unsupported or malformed constructs | `DCC-E1001`-`DCC-E1005` | unsupported AST forms, malformed syntax, oversized string literals, unsupported `sizeof` expressions |
 | General syntax and top-level parsing | `DCC-E1101`-`DCC-E1107` | expected tokens such as `;`, `)`, `]`, `=`, or an external declaration |
 | CP/M/Z80 target-model limits | `DCC-E1201`-`DCC-E1203` | unsupported `double`, `long long`, and 64-bit integer typedef names |
@@ -235,6 +235,10 @@ knowledge:
   dead-block elimination over `DCCRTL.MAC`: it roots symbols referenced by the
   app, follows runtime-to-runtime references to a fixpoint, and writes
   `RTLMIN.MAC` containing only reachable runtime blocks.
+- **Dead application blocks.** Before runtime selection, `dccrtlstrip` follows
+  reachability across the final application's marked assembly modules and
+  removes unreferenced functions and eligible objects. This is link-time
+  reachability, not a whole-program C statement analysis.
 
 This split keeps the compiler simple while still attacking the biggest sources
 of wasted code: unused expression values, local assembly redundancies, unused
@@ -423,14 +427,15 @@ Key design points:
 
 ## The runtime: a block-structured library sized for stripping
 
-The runtime `DCCRTL.MAC` is a single roughly 25,000-line assembly source, but its
+The runtime `DCCRTL.MAC` is a single assembly source, but its
 *architecture* is what makes the toolchain's "pay only for what you use"
 property possible. Rather than one monolithic blob, the runtime is written as
 hundreds of parsed blocks around `public` entry points and shared preludes. A
 program never links the whole library — `dccrtlstrip` keeps only the blocks the
 application actually references (the mark-and-sweep details are in the companion
 appendix [*Runtime optimization*](01-dccrtlstrip.md)). The architectural
-consequence is that **every routine has a well-defined, measurable size cost**.
+consequence is that routine dependencies can be inspected and their linked
+cost measured for a particular application.
 
 ```mermaid
 flowchart TB
@@ -457,8 +462,8 @@ the build-time size hook (`docs/docs/hooks/runtime_sizes.py`) measures directly:
 
 - **self** — the source lines in the routine's own block.
 - **marginal** — self *plus* every additional block it transitively links
-  beyond the always-present baseline. This is the real incremental cost of
-  using a routine in a program that otherwise wouldn't need it.
+  beyond the always-present baseline. This estimates source volume, not
+  assembled bytes or execution cycles.
 
 The gap between the two is the whole story of the runtime's size architecture: a
 small `self` with a large `marginal` means the routine sits on top of a big
@@ -466,11 +471,11 @@ shared substrate (the file-I/O core, or the float arithmetic core).
 
 ### The always-present baseline
 
-Seven blocks are always linked because they are reachable from the forced
-`start` root: program entry and heap/BSS setup, the command-tail `argv` builder
-(which also contains the console writer `__conout`), the heap-state words, and
-`exit`. Console output therefore costs essentially nothing extra — `putchar`
-and `puts` call into code that is already present.
+The forced `start` root retains entry, heap/BSS setup, heap-state words, exit,
+and their dependencies. Command-tail construction and console output have
+separate public blocks; the application main shim can retain additional
+support. Use the generated table for the current baseline rather than a fixed
+block count. `putchar` and `puts` are small wrappers, not zero-cost operations.
 
 ### What the feature groups cost
 

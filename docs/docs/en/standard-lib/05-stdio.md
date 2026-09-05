@@ -15,9 +15,11 @@ Include [`stdio.h`](05-stdio.md). The predefined streams `stdin`, `stdout`, and
 
 `stdin`, `stdout`, and `stderr` are console pseudo-streams. They are available
 for portable-looking code, but they do not consume real file slots. Real file
-streams are opened by `fopen`. `FOPEN_MAX` is 8 because C89 counts the three
-standard streams too; on this CP/M runtime that means the three console
-pseudo-streams plus five concurrent real file streams.
+streams are opened by `fopen`. The header advertises `FOPEN_MAX == 8`, the
+minimum guaranteed stream count, while the current runtime has eight real-file
+slots in addition to the three console pseudo-streams. Low-level `open` calls
+and `fopen` share those slots. `FILE *` values encode handles; do not
+dereference them or allocate your own `FILE` objects.
 
 !!! tip "Console output is cheap"
     `putchar`, `puts`, and integer `printf` write through the console routine
@@ -30,11 +32,23 @@ pseudo-streams plus five concurrent real file streams.
 
 ## File streams
 
-`fopen` looks at the first mode character: `"r"` opens an existing file, `"w"`
-creates/truncates a file, and `"a"` opens the file if it exists (preserving its
-content) or creates it if not, and positions the stream at the true end of the
-existing data before the first write — same as C89 requires. The optional
-`"+"` and `"b"` characters are accepted but do not change the runtime behavior.
+`fopen` returns a stream on success or `NULL` on failure, with `errno` set.
+The first mode character selects the file operation:
+
+| Mode | Operation |
+| --- | --- |
+| `"r"` | Open an existing file for reading. |
+| `"w"` | Create or truncate a file for writing. |
+| `"a"` | Open or create a file for writing at its tracked logical end. |
+
+Add `+` for both reading and writing (`"r+"`, `"w+"`, `"a+"`). Access modes
+are enforced. Add `b` for binary mode, including `"rb+"` or `"r+b"`;
+`fgets` then treats Ctrl-Z as data rather than text EOF. Invalid modes,
+including duplicate `+` or `b`, fail with `EINVAL`.
+
+`fread` and character-at-a-time file reads transfer raw bytes in either mode;
+do not assume every input function applies the `fgets` text-EOF convention.
+Binary mode does not remove CP/M record padding or turn append into atomic I/O.
 CP/M has no atomic append operation, so programs that share or alternate writes
 to the same file must coordinate at a higher level. See
 [File I/O and CP/M BDOS conventions](../10-system-and-cpm.md#file-io-and-cpm-bdos-conventions)
@@ -121,6 +135,26 @@ implemented. `%f` is supported across `printf`, `sprintf`, `fprintf`, their
 `v...` variants, `snprintf`, and `vsnprintf`. Use fixed widths and precisions in
 the format string.
 
+### Bounded string output
+
+Prefer `snprintf` to `sprintf` when the destination has a fixed capacity.
+`snprintf` and `vsnprintf` write at most `n - 1` characters and a terminating
+NUL when `n > 0`. With `n == 0`, they write nothing and the destination may
+be `NULL`. The return value counts the characters that would have been
+written, excluding NUL, so a result at least as large as the capacity means
+truncation:
+
+```c
+char line[32];
+int count = snprintf(line, sizeof line, "%ld bytes", 123456L);
+if (count < 0 || (size_t)count >= sizeof line)
+  puts("formatted output did not fit");
+```
+
+The count uses DCC's 16-bit `int`; keep the total formatted length within
+`INT_MAX`, even when the destination itself is small. The runtime count is
+not a wider host-sized integer.
+
 ### scanf-family input
 
 `scanf`, `sscanf`, and `fscanf` share a separate, non-floating C89 subset. A
@@ -156,9 +190,14 @@ int  value;
 char word[16];
 long big;
 
-sscanf("-12 hello 0x2a", "%d %s %i", &value, word, &value);
+sscanf("-12 hello 0x2a", "%d %15s %i", &value, word, &value);
 sscanf("123456", "%ld", &big);
 ```
+
+The return value is the number of assignments completed, or `EOF` when input
+fails before any assignment. Check it before using the destinations. Always
+bound `%s` to one less than the destination capacity; unlike `%s`, `%c` does
+not append NUL.
 
 For a complete, tested program, see the worked
 [`sscanf` parsing example](../12-examples.md#parsing-input-with-sscanf).
@@ -218,7 +257,11 @@ prompt printed just before them is always visible first.
 ## Block I/O
 
 `fread` and `fwrite` transfer `nmemb` elements of `size` bytes and return the
-number of complete elements transferred. A zero element size returns zero.
+number of complete elements transferred. A zero size or count returns zero.
+If `size * nmemb` exceeds 16-bit `size_t`, they return zero without transferring
+data. A short transfer can indicate EOF or an error; inspect `feof` and
+`ferror` after the operation. Raw file reads can include trailing record
+padding, even on a text stream.
 
 File-stream writes are write-through. Console writes through `stdout` or
 `stderr` use the console output buffer described below.
@@ -226,9 +269,19 @@ File-stream writes are write-through. Console writes through `stdout` or
 ## Positioning and status
 
 `fseek` repositions a real file stream using `SEEK_SET`, `SEEK_CUR`, or
-`SEEK_END`. `ftell` reports the current stream position, and `rewind` seeks to
-the beginning and clears the EOF flag. `feof`, `ferror`, and `clearerr` inspect
-or reset the per-file status flags.
+`SEEK_END`; it returns zero on success and nonzero on failure. `ftell` reports
+the current 32-bit byte offset, or `-1L` on failure, not the file's length.
+`fgetpos`/`fsetpos` save and restore that offset through `fpos_t`. A successful
+seek clears EOF and discards pushback. `rewind` seeks to the beginning and
+clears status. `feof`, `ferror`, and `clearerr` inspect or reset the status
+flags; `feof` does not predict whether the next read will succeed.
+
+`ungetc` provides one character of pushback per stream. Check for `EOF` on
+failure; a successful pushback clears EOF. `tmpfile` creates a temporary update
+stream removed on `fclose` or normal exit. Prefer it to generating a name with
+`tmpnam` and opening that name separately. Explicitly close ordinary files and
+check `fclose` for failure: write-through data does not mean CP/M directory
+metadata is finalized before close.
 
 `fflush(NULL)`, `fflush(stdout)`, and `fflush(stderr)` all flush the console.
 Calling `fflush` on a real file stream is accepted; file writes are already

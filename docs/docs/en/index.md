@@ -10,6 +10,35 @@ CP/M Z80 emulators run those programs, as do real Z80 CP/M 2.2 and 3.0 systems.
 
 ![DCC C Compiler banner](images/dcc-retro-banner.svg)
 
+## Key Features
+
+- **Cross-platform toolchain:** build CP/M `.COM` programs on Windows, macOS,
+  or Linux with a single [dccmake command](02-build-and-link.md).
+- **C89-based language with selected C99/C11 additions:** use Boolean types,
+  designated initializers, variadic macros, static assertions, and a supported
+  subset of variable-length arrays. The [conformance guide](01-c-conformance.md)
+  distinguishes supported features from partial support and target exceptions.
+- **Optimizing Z80 code generation:** MIR-based optimization, a separate
+  peephole pass, and whole-program reachability analysis remove unnecessary
+  code and runtime routines. See [compiler architecture](appendix/00-architecture.md)
+  and [runtime optimization](appendix/01-dccrtlstrip.md).
+- **Small, tailored runtime:** standard-library headers cover file and console
+  I/O, allocation, strings, and single-precision math. Formatted-output support
+  is selected per call; [CP/M services](10-system-and-cpm.md) provide access to
+  the underlying operating system.
+- **Source-level debugging:** use VS Code breakpoints, watches, call stacks,
+  memory, and Z80 disassembly. Full debug builds favor inspectability;
+  [optimized debug builds](00-vscode-debugging.md) retain release code generation.
+- **Optional stack checks:** enable `dcc-stack-check=true` to detect stack
+  reserve overflow, including supported VLA allocations.
+
+!!! warning "A small-machine C implementation"
+    DCC is not a fully conforming hosted C99/C11 implementation. Integers and
+    pointers are 16-bit, `long` is 32-bit, and `float` is the only floating
+    type. CP/M file semantics and library subsets differ from desktop C;
+    start with [Types and conventions](03-types-and-conventions.md) and
+    [Limitations](11-limitations.md) when porting code.
+
 !!! success "Whole-program dead-code elimination"
   Normal `dccmake` builds enable LTO-style reachability analysis across every
   C source module. Uncalled functions, unused initialized globals/statics, and
@@ -38,11 +67,13 @@ build path from C source to `.COM` file.
 - Use the library reference for [assert.h](standard-lib/01-assert.md),
   [ctype.h](standard-lib/07-ctype.md), [errno.h](standard-lib/02-errno.md),
   [float.h](standard-lib/03-float.md), [limits.h](standard-lib/04-limits.md),
+  [locale.h](standard-lib/17-locale.md),
   [math.h](standard-lib/08-math.md), [setjmp.h](standard-lib/09-setjmp.md),
+  [signal.h](standard-lib/16-signal.md),
   [stdarg.h](standard-lib/10-stdarg.md), [stdbool.h](standard-lib/11-stdbool.md),
   [stddef.h](standard-lib/12-stddef.md), [stdint.h](standard-lib/13-stdint.md),
   [stdio.h](standard-lib/05-stdio.md), [stdlib.h](standard-lib/06-stdlib.md),
-  [string.h](standard-lib/14-string.md), and
+  [string.h](standard-lib/14-string.md), [time.h](standard-lib/15-time.md), and
   [system / CP/M services](10-system-and-cpm.md).
 - Read [Limitations](11-limitations.md) before depending on hosted-C behavior.
 - Try the [worked examples](12-examples.md) when you want complete programs.
@@ -62,11 +93,9 @@ Normal builds also trim unused runtime routines before linking. The build steps
 are shown in [Building and linking](02-build-and-link.md); the reachability
 details are in the [`dccrtlstrip` appendix](appendix/01-dccrtlstrip.md).
 
-!!! note "Single source of truth"
-    Functions that are declared in the standard headers but are **not** part of
-    the linked runtime are called out explicitly in
-    [Limitations](11-limitations.md) so a missing function never surprises you
-    at link time.
+The library reference lists the shipped declarations and explains their target
+behavior. A familiar C or POSIX function name does not imply desktop semantics;
+check its reference page and [Limitations](11-limitations.md) before porting code.
 
 ## Performance Snapshot
 

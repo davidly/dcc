@@ -6,6 +6,11 @@ site_description: >-
 docs_dir: en
 site_dir: ../site
 
+validation:
+  links:
+    anchors: warn
+    unrecognized_links: warn
+
 repo_name: DCC C Compiler
 repo_url: https://github.com/davidly/dcc
 
@@ -48,7 +53,6 @@ nav:
       - Runtime optimization: en/appendix/01-dccrtlstrip.md
       - Runtime function sizes: en/appendix/02-runtime-sizes.md
       - Utilities: en/appendix/03-utilities.md
-      - Package testing: en/appendix/04-package-testing.md
       - Building project docs: en/appendix/05-building-project-docs.md
 
 plugins:
