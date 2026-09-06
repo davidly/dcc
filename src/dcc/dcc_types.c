@@ -423,6 +423,7 @@ void parse_struct_definition(int struct_id)
     int decl_type;
     int field_base_is_volatile;
     int field_base_pointee_is_volatile;
+    unsigned int field_base_volatile_mask;
 
     sd = &struct_defs[struct_id - 1];
 
@@ -448,6 +449,7 @@ void parse_struct_definition(int struct_id)
         decl_type = parse_base_type();
         field_base_is_volatile = g_decl.is_volatile;
         field_base_pointee_is_volatile = g_decl.pointee_is_volatile;
+        field_base_volatile_mask = g_decl.pointee_volatile_mask;
 
         for (;;) {
             int is_funcptr_field;
@@ -457,9 +459,9 @@ void parse_struct_definition(int struct_id)
             ftype = decl_type;
             g_decl.is_volatile = field_base_is_volatile;
             g_decl.pointee_is_volatile = field_base_pointee_is_volatile;
+            g_decl.pointee_volatile_mask = field_base_volatile_mask;
             while (accept('*')) {
-                g_decl.pointee_is_volatile = g_decl.is_volatile;
-                g_decl.is_volatile = skip_type_qualifiers_volatile();
+                advance_pointer_qualifiers();
                 ftype = type_add_ptr(ftype);
             }
 
@@ -570,6 +572,9 @@ void parse_struct_definition(int struct_id)
             dcc_copy_str(field_defs[nfield_defs].name, sizeof(field_defs[nfield_defs].name), fname);
             field_defs[nfield_defs].type = ftype;
             field_defs[nfield_defs].is_volatile = g_decl.is_volatile;
+            field_defs[nfield_defs].pointee_volatile_mask =
+                g_decl.pointee_volatile_mask |
+                (unsigned int)(g_decl.pointee_is_volatile != 0);
             field_defs[nfield_defs].parent_struct_id = struct_id;
             /* union: all fields at offset 0; struct: cumulative */
             field_defs[nfield_defs].offset = sd->is_union ? 0 : sd->size;
@@ -656,6 +661,7 @@ void add_typedef_name_ex(const char *name, int type, int array_len, int is_func,
     typedefs[i].type = type;
     typedefs[i].is_volatile = is_volatile;
     typedefs[i].pointee_is_volatile = pointee_is_volatile;
+    typedefs[i].pointee_volatile_mask = (unsigned int)(pointee_is_volatile != 0);
     typedefs[i].array_len = array_len;
     typedefs[i].is_func = is_func;
     typedefs[i].has_proto = g_funcptr_has_proto;
@@ -709,6 +715,7 @@ int parse_base_type(void)
     g_decl.is_const = 0;
     g_decl.is_volatile = 0;
     g_decl.pointee_is_volatile = 0;
+    g_decl.pointee_volatile_mask = 0;
     g_decl.is_inline = 0;
     g_decl.is_noreturn = 0;
     g_decl.is_fastcall = 0;
@@ -778,10 +785,12 @@ int parse_base_type(void)
             int sid;
             int struct_is_volatile;
             int struct_pointee_is_volatile;
+            unsigned int struct_volatile_mask;
             char sname[64];
             int is_union_kw;
             struct_is_volatile = g_decl.is_volatile;
             struct_pointee_is_volatile = g_decl.pointee_is_volatile;
+            struct_volatile_mask = g_decl.pointee_volatile_mask;
             is_union_kw = (g_lex.tok.kind == TOK_UNION);
             next_token();
             if (g_lex.tok.kind == TOK_ID) {
@@ -801,6 +810,7 @@ int parse_base_type(void)
                 parse_struct_definition(sid);
                 g_decl.is_volatile = struct_is_volatile;
                 g_decl.pointee_is_volatile = struct_pointee_is_volatile;
+                g_decl.pointee_volatile_mask = struct_volatile_mask;
             }
             t = make_struct_type(sid);
             saw_any = 1;
@@ -897,6 +907,7 @@ int parse_base_type(void)
             g_typedef_base_type = t;
             g_decl.is_volatile |= typedefs[td].is_volatile;
             g_decl.pointee_is_volatile = typedefs[td].pointee_is_volatile;
+            g_decl.pointee_volatile_mask = typedefs[td].pointee_volatile_mask;
             g_typedef_array_len = typedefs[td].array_len;
             g_typedef_array_dim_count = typedefs[td].dim_count;
             memcpy(g_typedef_array_dims, typedefs[td].dims,
@@ -937,13 +948,22 @@ int parse_base_type(void)
     return t;
 }
 
+void advance_pointer_qualifiers(void)
+{
+    g_decl.pointee_volatile_mask =
+        ((g_decl.pointee_volatile_mask |
+          (unsigned int)(g_decl.pointee_is_volatile != 0)) << 1) |
+        (unsigned int)(g_decl.is_volatile != 0);
+    g_decl.pointee_is_volatile = g_decl.is_volatile;
+    g_decl.is_volatile = skip_type_qualifiers_volatile();
+}
+
 int parse_type(void)
 {
     int t;
     t = parse_base_type();
     while (accept('*')) {
-        g_decl.pointee_is_volatile = g_decl.is_volatile;
-        g_decl.is_volatile = skip_type_qualifiers_volatile();
+        advance_pointer_qualifiers();
         t = type_add_ptr(t);
     }
     return t;

@@ -60,7 +60,19 @@ and volatile flags, including stores. Nonvolatile controls must still reuse
 repeated loads and combine adjacent little-endian bytes. Runtime output alone
 cannot detect a removed volatile read when the backing memory stays unchanged.
 
-The member-address fix does not establish complete qualifier propagation
-through arbitrary pointer indirection. Double-indirection cases in the fixture
-are execution smoke tests, not assertions that every access has complete
-qualifier metadata.
+Pointer qualifier regressions cover direct and typedef-based parameters,
+old-style parameters, globals, block locals, static locals, and pointer fields.
+They distinguish volatile byte reads from volatile intermediate pointer reads,
+including a pointer to a volatile pointer to volatile bytes. Nonvolatile
+controls detect qualifier leakage. A block-local double-pointer case also
+checks deferred pointer-word type repair and byte-index scaling.
+
+Declaration, symbol, typedef, and field metadata retain a
+`pointee_volatile_mask`: bit zero describes the immediate pointee, bit one the
+next pointee, and so on. Adding a pointer shifts existing levels and records
+the previous object's qualifier. MIR loads shift the address mask back one
+level; member addresses combine the field's own qualifier with its pointee
+mask. This preserves the distinction between a volatile pointer and volatile
+data without replacing the existing type encoding or debug metadata format.
+These tests do not claim complete qualifier handling for every cast or
+function-return expression.

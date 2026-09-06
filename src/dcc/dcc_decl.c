@@ -1586,6 +1586,7 @@ void gen_local_decl_after_type(int base)
     int type, bytes, arrlen;
     int base_is_volatile;
     int base_pointee_is_volatile;
+    unsigned int base_volatile_mask;
     int total_elems;
     int direct_funcptr;
     int parenthesized_array;
@@ -1599,19 +1600,20 @@ void gen_local_decl_after_type(int base)
 
     base_is_volatile = g_decl.is_volatile;
     base_pointee_is_volatile = g_decl.pointee_is_volatile;
+    base_volatile_mask = g_decl.pointee_volatile_mask;
 
     for (;;) {
         type = base;
         g_decl.is_volatile = base_is_volatile;
         g_decl.pointee_is_volatile = base_pointee_is_volatile;
+        g_decl.pointee_volatile_mask = base_volatile_mask;
         direct_funcptr = 0;
         parenthesized_array = 0;
         parenthesized_total = 0;
         parenthesized_stride = 0;
 
         while (accept('*')) {
-            g_decl.pointee_is_volatile = g_decl.is_volatile;
-            g_decl.is_volatile = skip_type_qualifiers_volatile();
+            advance_pointer_qualifiers();
             type = type_add_ptr(type);
         }
 
@@ -1797,6 +1799,7 @@ void gen_local_decl_after_type(int base)
             copy_funcptr_prototype_to_sym(s, direct_funcptr);
             s->is_volatile = g_decl.is_volatile;
             s->pointee_is_volatile = g_decl.pointee_is_volatile;
+            s->pointee_volatile_mask = g_decl.pointee_volatile_mask;
             s->is_register = g_decl.is_register;
             freshly_allocated = 1;
             if (arrlen > 0 || g_last_array_dim_count > 0) {

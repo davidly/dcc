@@ -281,6 +281,7 @@ typedef struct DeclState {
     int is_const;
     int is_volatile;
     int pointee_is_volatile;
+    unsigned int pointee_volatile_mask;
     int is_register;
 } DeclState;
 
@@ -353,6 +354,7 @@ struct Sym {
     int is_volatile; /* object declared with the volatile qualifier: access-
                       * contracting fast paths must decline for it */
     int pointee_is_volatile; /* immediate pointed-to type is volatile */
+    unsigned int pointee_volatile_mask;
     int is_register; /* object declared with the register qualifier: an MIR
                       * allocation hint copied onto MirObject and consulted by
                       * mir_allocate_registers to bias profitable
@@ -433,6 +435,7 @@ struct TypeDef {
     int type;
     int is_volatile;
     int pointee_is_volatile;
+    unsigned int pointee_volatile_mask;
     int array_len; /* >0 when typedef is an array type, e.g. typedef int T[4] */
     int dim_count;
     int dims[MAX_ARRAY_DIMS];
@@ -447,6 +450,7 @@ struct FieldDef {
     char name[64];
     int type;
     int is_volatile;
+    unsigned int pointee_volatile_mask;
     int offset;
     int size;
     int is_array;
@@ -876,6 +880,7 @@ void add_typedef_name(const char *name, int type, int array_len);
 int parse_base_type(void);
 int is_unsupported_target_type_name(const char *name);
 int parse_type(void);
+void advance_pointer_qualifiers(void);
 void skip_type_name_param_list(void);
 int parse_type_name_decl(int *typep, int *sizep);
 

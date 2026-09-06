@@ -442,6 +442,18 @@ try {
                 @{ Function = "vmember"; Loads = 3; Volatile = 3; Width = 1 },
                 @{ Function = "vmword"; Loads = 2; Volatile = 2; Width = 1 },
                 @{ Function = "vnested"; Loads = 3; Volatile = 3; Width = 1 },
+                @{ Function = "vindirect"; Loads = 6; Volatile = 3; ByteVolatile = 3 },
+                @{ Function = "vtypedef"; Loads = 6; Volatile = 3; ByteVolatile = 3 },
+                @{ Function = "vold"; Loads = 6; Volatile = 3; ByteVolatile = 3 },
+                @{ Function = "vglobal"; Loads = 6; Volatile = 3; ByteVolatile = 3 },
+                @{ Function = "vlocal"; Loads = 6; Volatile = 3; ByteVolatile = 3 },
+                @{ Function = "vpfield"; Loads = 6; Volatile = 3; ByteVolatile = 3 },
+                @{ Function = "vdfield"; Loads = 9; Volatile = 3; ByteVolatile = 3 },
+                @{ Function = "vchange"; Loads = 6; Volatile = 3; ByteVolatile = 0 },
+                @{ Function = "vboth"; Loads = 6; Volatile = 6; ByteVolatile = 3 },
+                @{ Function = "vstatic"; Loads = 6; Volatile = 3; ByteVolatile = 3 },
+                @{ Function = "nlocal"; Loads = 2; Volatile = 0 },
+                @{ Function = "nindirect"; Loads = 6; Volatile = 0 },
                 @{ Function = "nmember"; Loads = 1; Volatile = 0; Width = 1 },
                 @{ Function = "nmword"; Loads = 1; Volatile = 0; Width = 2 },
                 @{ Function = "vmstore"; Loads = 2; Volatile = 2; Width = 1; Opcode = "storeind" }
@@ -480,10 +492,19 @@ try {
                 throw "$function has $volatileLoads volatile MIR loads, " +
                     "expected $($expectation.Volatile):`n$($body.Value)"
             }
-            $correctWidth = [regex]::Matches($body.Value,
-                "\b$opcode\b[^\r\n]*\bmem=$($expectation.Width)v?\b").Count
-            if ($correctWidth -ne $loads) {
-                throw "$function has an incorrect memory access width:`n$($body.Value)"
+            if ($expectation.Width) {
+                $correctWidth = [regex]::Matches($body.Value,
+                    "\b$opcode\b[^\r\n]*\bmem=$($expectation.Width)v?\b").Count
+                if ($correctWidth -ne $loads) {
+                    throw "$function has an incorrect memory access width:`n$($body.Value)"
+                }
+            }
+            if ($expectation.ContainsKey("ByteVolatile")) {
+                $volatileBytes = [regex]::Matches($body.Value,
+                    "\b$opcode\b[^\r\n]*\bmem=1v\b").Count
+                if ($volatileBytes -ne $expectation.ByteVolatile) {
+                    throw "$function has incorrect pointer-level volatility:`n$($body.Value)"
+                }
             }
         }
     }
