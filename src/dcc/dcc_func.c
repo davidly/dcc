@@ -1438,6 +1438,7 @@ void parse_old_style_param_declarations(void)
     int base_is_register;
     int base_is_volatile;
     int base_pointee_is_volatile;
+    unsigned int base_volatile_mask;
     int type;
     int direct_funcptr;
     char name[64];
@@ -1448,15 +1449,16 @@ void parse_old_style_param_declarations(void)
         base_is_register = g_decl.is_register;
         base_is_volatile = g_decl.is_volatile;
         base_pointee_is_volatile = g_decl.pointee_is_volatile;
+        base_volatile_mask = g_decl.pointee_volatile_mask;
 
         for (;;) {
             type = base;
             direct_funcptr = 0;
             g_decl.is_volatile = base_is_volatile;
             g_decl.pointee_is_volatile = base_pointee_is_volatile;
+            g_decl.pointee_volatile_mask = base_volatile_mask;
             while (accept('*')) {
-                g_decl.pointee_is_volatile = g_decl.is_volatile;
-                g_decl.is_volatile = skip_type_qualifiers_volatile();
+                advance_pointer_qualifiers();
                 type = type_add_ptr(type);
             }
 
@@ -1488,6 +1490,7 @@ void parse_old_style_param_declarations(void)
                 s->is_register = base_is_register;
                 s->is_volatile = g_decl.is_volatile;
                 s->pointee_is_volatile = g_decl.pointee_is_volatile;
+                s->pointee_volatile_mask = g_decl.pointee_volatile_mask;
                 copy_funcptr_prototype_to_sym(s, direct_funcptr);
                 if (g_ptr_array_dim_count > 0) {
                     s->elem_size = g_ptr_array_elem_size;
@@ -1569,8 +1572,7 @@ void parse_param_list(void)
         unnamed_id = 0;
 
         while (accept('*')) {
-            g_decl.pointee_is_volatile = g_decl.is_volatile;
-            g_decl.is_volatile = skip_type_qualifiers_volatile();
+            advance_pointer_qualifiers();
             type = type_add_ptr(type);
         }
         skip_type_qualifiers();
@@ -1619,6 +1621,7 @@ void parse_param_list(void)
                 ps->is_register = g_decl.is_register;
                 ps->is_volatile = g_decl.is_volatile;
                 ps->pointee_is_volatile = g_decl.pointee_is_volatile;
+                ps->pointee_volatile_mask = g_decl.pointee_volatile_mask;
                 /* A pointer declared on top of an array typedef preserves
                  * the typedef's row shape: `typedef T A[N]; A *p` is a
                  * pointer to an N-element row, not merely T **. */
@@ -2188,6 +2191,7 @@ typedef struct SpecParseState {
     int licm_seq;
     int decl_is_volatile;
     int decl_pointee_is_volatile;
+    unsigned int decl_volatile_mask;
 } SpecParseState;
 
 static SpecParseState spec_parse_save(void)
@@ -2205,6 +2209,7 @@ static SpecParseState spec_parse_save(void)
     s.licm_seq = g_func_pass.licm_seq;
     s.decl_is_volatile = g_decl.is_volatile;
     s.decl_pointee_is_volatile = g_decl.pointee_is_volatile;
+    s.decl_volatile_mask = g_decl.pointee_volatile_mask;
     return s;
 }
 
@@ -2222,6 +2227,7 @@ static void spec_parse_restore(const SpecParseState *s)
     g_func_pass.licm_seq = s->licm_seq;
     g_decl.is_volatile = s->decl_is_volatile;
     g_decl.pointee_is_volatile = s->decl_pointee_is_volatile;
+    g_decl.pointee_volatile_mask = s->decl_volatile_mask;
 }
 
 /* Speculatively parses the rest of the enclosing block (from the current
@@ -2419,6 +2425,7 @@ void scan_local_decl_after_type(int base)
     int type, bytes, arrlen;
     int base_is_volatile;
     int base_pointee_is_volatile;
+    unsigned int base_volatile_mask;
     int total_elems;
     int direct_funcptr;
     int parenthesized_array;
@@ -2430,19 +2437,20 @@ void scan_local_decl_after_type(int base)
 
     base_is_volatile = g_decl.is_volatile;
     base_pointee_is_volatile = g_decl.pointee_is_volatile;
+    base_volatile_mask = g_decl.pointee_volatile_mask;
 
     for (;;) {
         type = base;
         g_decl.is_volatile = base_is_volatile;
         g_decl.pointee_is_volatile = base_pointee_is_volatile;
+        g_decl.pointee_volatile_mask = base_volatile_mask;
         direct_funcptr = 0;
         parenthesized_array = 0;
         parenthesized_total = 0;
         parenthesized_stride = 0;
 
         while (accept('*')) {
-            g_decl.pointee_is_volatile = g_decl.is_volatile;
-            g_decl.is_volatile = skip_type_qualifiers_volatile();
+            advance_pointer_qualifiers();
             type = type_add_ptr(type);
         }
 
@@ -2622,6 +2630,7 @@ void scan_local_decl_after_type(int base)
             copy_funcptr_prototype_to_sym(s, direct_funcptr);
             s->is_volatile = g_decl.is_volatile;
             s->pointee_is_volatile = g_decl.pointee_is_volatile;
+            s->pointee_volatile_mask = g_decl.pointee_volatile_mask;
             freshly_allocated = 1;
             if (arrlen > 0 || g_last_array_dim_count > 0) {
                 s->is_array = 1;
@@ -2696,6 +2705,7 @@ void scan_static_local_decl_after_type(int base)
     int type, bytes, arrlen;
     int base_is_volatile;
     int base_pointee_is_volatile;
+    unsigned int base_volatile_mask;
     char name[64];
     char source_name[64];
     char backing_name[64];
@@ -2704,15 +2714,16 @@ void scan_static_local_decl_after_type(int base)
 
     base_is_volatile = g_decl.is_volatile;
     base_pointee_is_volatile = g_decl.pointee_is_volatile;
+    base_volatile_mask = g_decl.pointee_volatile_mask;
 
     for (;;) {
         type = base;
         g_decl.is_volatile = base_is_volatile;
         g_decl.pointee_is_volatile = base_pointee_is_volatile;
+        g_decl.pointee_volatile_mask = base_volatile_mask;
 
         while (accept('*')) {
-            g_decl.pointee_is_volatile = g_decl.is_volatile;
-            g_decl.is_volatile = skip_type_qualifiers_volatile();
+            advance_pointer_qualifiers();
             type = type_add_ptr(type);
         }
 
@@ -2799,6 +2810,7 @@ void scan_static_local_decl_after_type(int base)
         g->is_static = 1;
         g->is_volatile = g_decl.is_volatile;
         g->pointee_is_volatile = g_decl.pointee_is_volatile;
+        g->pointee_volatile_mask = g_decl.pointee_volatile_mask;
         g->size = bytes;
         if (arrlen != 0 || g_last_array_dim_count > 0) {
             g->is_array = 1;
@@ -2812,6 +2824,7 @@ void scan_static_local_decl_after_type(int base)
             l = add_local_known(name, type, SC_GLOBAL, 0, bytes);
             l->is_volatile = g_decl.is_volatile;
             l->pointee_is_volatile = g_decl.pointee_is_volatile;
+            l->pointee_volatile_mask = g_decl.pointee_volatile_mask;
             strncpy(l->link_name, backing_name, sizeof(l->link_name) - 1);
             l->link_name[sizeof(l->link_name) - 1] = 0;
             if (arrlen != 0 || g_last_array_dim_count > 0) {
@@ -2974,6 +2987,7 @@ void parse_typedef_decl(void)
     int base_type;
     int base_is_volatile;
     int base_pointee_is_volatile;
+    unsigned int base_volatile_mask;
     int done;
 
     expect(TOK_TYPEDEF);
@@ -2986,6 +3000,7 @@ void parse_typedef_decl(void)
     base_type = parse_base_type();
     base_is_volatile = g_decl.is_volatile;
     base_pointee_is_volatile = g_decl.pointee_is_volatile;
+    base_volatile_mask = g_decl.pointee_volatile_mask;
     done = 0;
 
     while (!done && g_lex.tok.kind != TOK_EOF) {
@@ -2998,6 +3013,7 @@ void parse_typedef_decl(void)
         int is_func;
         int is_volatile;
         int pointee_is_volatile;
+        unsigned int volatile_mask;
         char name[64];
 
         type = base_type;
@@ -3008,9 +3024,13 @@ void parse_typedef_decl(void)
         is_func = 0;
         is_volatile = base_is_volatile;
         pointee_is_volatile = base_pointee_is_volatile;
+        volatile_mask = base_volatile_mask;
         name[0] = 0;
 
         while (accept('*')) {
+            volatile_mask = ((volatile_mask |
+                (unsigned int)(pointee_is_volatile != 0)) << 1) |
+                (unsigned int)(is_volatile != 0);
             pointee_is_volatile = is_volatile;
             is_volatile = skip_type_qualifiers_volatile();
             type = type_add_ptr(type);
@@ -3020,6 +3040,7 @@ void parse_typedef_decl(void)
             /* Parenthesized function-pointer typedef. */
             is_volatile = g_decl.is_volatile;
             pointee_is_volatile = g_decl.pointee_is_volatile;
+            volatile_mask = g_decl.pointee_volatile_mask;
         } else {
             if (g_lex.tok.kind != TOK_ID) {
                 error_here("identifier expected in typedef");
@@ -3068,6 +3089,7 @@ void parse_typedef_decl(void)
                     is_volatile, pointee_is_volatile);
             ti = find_typedef(name);
             if (ti >= 0) {
+                typedefs[ti].pointee_volatile_mask = volatile_mask;
                 typedefs[ti].dim_count = typedef_dim_count;
                 for (di = 0; di < MAX_ARRAY_DIMS; ++di)
                     typedefs[ti].dims[di] = di < typedef_dim_count
@@ -3087,10 +3109,12 @@ void parse_function_or_global(int base_type)
     int done;
     int base_is_volatile;
     int base_pointee_is_volatile;
+    unsigned int base_volatile_mask;
 
     done = 0;
     base_is_volatile = g_decl.is_volatile;
     base_pointee_is_volatile = g_decl.pointee_is_volatile;
+    base_volatile_mask = g_decl.pointee_volatile_mask;
 
     while (!done && g_lex.tok.kind != TOK_EOF) {
         int type;
@@ -3112,10 +3136,12 @@ void parse_function_or_global(int base_type)
         int pointer_over_array_typedef;
         int object_is_volatile;
         int pointee_is_volatile;
+        unsigned int volatile_mask;
 
         type = base_type;
         object_is_volatile = base_is_volatile;
         pointee_is_volatile = base_pointee_is_volatile;
+        volatile_mask = base_volatile_mask;
         base_is_func_typedef = g_typedef_is_func;
         is_funcret_funcptr_decl = 0;
         direct_funcptr_decl = 0;
@@ -3134,6 +3160,9 @@ void parse_function_or_global(int base_type)
          *     int *a, b, c[10];
          * where only a is a pointer. */
         while (accept('*')) {
+            volatile_mask = ((volatile_mask |
+                (unsigned int)(pointee_is_volatile != 0)) << 1) |
+                (unsigned int)(object_is_volatile != 0);
             pointee_is_volatile = object_is_volatile;
             object_is_volatile = skip_type_qualifiers_volatile();
             type = type_add_ptr(type);
@@ -3154,6 +3183,7 @@ void parse_function_or_global(int base_type)
             direct_funcptr_decl = 1;
             object_is_volatile = g_decl.is_volatile;
             pointee_is_volatile = g_decl.pointee_is_volatile;
+            volatile_mask = g_decl.pointee_volatile_mask;
         } else {
             if (g_lex.tok.kind != TOK_ID) {
                 error_here("identifier expected");
@@ -3545,6 +3575,7 @@ void parse_function_or_global(int base_type)
                 s = add_global(name, type, SC_EXTERN);
                 s->is_volatile = object_is_volatile;
                 s->pointee_is_volatile = pointee_is_volatile;
+                s->pointee_volatile_mask = volatile_mask;
                 copy_funcptr_prototype_to_sym(s, direct_funcptr_decl);
                 /* Keep the same array-shape metadata as a definition.  The
                  * expression parser needs it immediately for declarations
@@ -3631,6 +3662,7 @@ void parse_function_or_global(int base_type)
             s->needs_extrn = 0;
             s->is_volatile = object_is_volatile;
             s->pointee_is_volatile = pointee_is_volatile;
+            s->pointee_volatile_mask = volatile_mask;
             if (g_decl.is_static)
                 s->is_static = 1;
 

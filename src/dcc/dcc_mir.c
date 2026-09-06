@@ -1886,6 +1886,10 @@ static void mir_set_field_memory(struct MirInsn *insn,
 {
     insn->memory_size = field->size > 0 ? field->size : type_size(field->type);
     insn->memory_flags = field->is_volatile ? 1 : 0;
+        insn->pointee_volatile_mask = insn->opcode == MIR_MEMBER_ADDRESS
+                ? (field->pointee_volatile_mask << 1) |
+                    (unsigned int)(field->is_volatile != 0)
+                : field->pointee_volatile_mask;
     if (field->is_array)
         insn->memory_flags |= 2;
     if (type_is_struct_object(field->type))
@@ -3944,6 +3948,9 @@ void mir_note_declared_symbol(struct Sym *symbol)
     mir.declared_is_volatile[i] = symbol->is_volatile;
     mir.declared_pointee_is_volatile[i] =
         symbol->pointee_is_volatile;
+    mir.declared_pointee_volatile_masks[i] =
+        symbol->pointee_volatile_mask |
+        (unsigned int)(symbol->pointee_is_volatile != 0);
     mir.declared_dynamic_strides[i] = symbol->runtime_stride_name[0] != 0;
     mir_copy_name(mir.declared_runtime_stride_names[i],
                   symbol->runtime_stride_name);
@@ -5313,14 +5320,14 @@ static int mir_dominated_load_memory_barrier(const struct MirInsn *insn)
     }
 }
 
-static int mir_indirect_load_pointee_is_volatile_value(int value, int depth)
+static unsigned int mir_pointer_volatile_mask(int value, int depth)
 {
     const struct MirInsn *definition;
     const struct Sym *symbol;
     int declared;
 
     if (depth > 64)
-        return 1;
+        return ~0U;
     if (value < 0)
         return 0;
     definition = mir_definition(value);
@@ -5329,29 +5336,44 @@ static int mir_indirect_load_pointee_is_volatile_value(int value, int depth)
     if (definition->opcode == MIR_PARAM || definition->opcode == MIR_LOAD) {
         for (declared = 0; declared < mir.declared_count; ++declared)
             if (!strcmp(mir.declared_names[declared], definition->name))
-                return mir.declared_pointee_is_volatile[declared];
+                return mir.declared_pointee_volatile_masks[declared];
         symbol = find_global(definition->name);
-        return symbol != NULL && symbol->pointee_is_volatile;
+        return symbol != NULL ? symbol->pointee_volatile_mask |
+            (unsigned int)(symbol->pointee_is_volatile != 0) : 0;
     }
     if (definition->opcode == MIR_ADDRESS) {
         for (declared = 0; declared < mir.declared_count; ++declared)
             if (!strcmp(mir.declared_names[declared], definition->name))
-                return mir.declared_is_volatile[declared];
+                                return (mir.declared_pointee_volatile_masks[declared] << 1) |
+                                             (unsigned int)(mir.declared_is_volatile[declared] != 0);
         symbol = find_global(definition->name);
-        return (definition->memory_flags & 1) != 0 ||
-               (symbol != NULL && symbol->is_volatile);
+                return (unsigned int)((definition->memory_flags & 1) != 0) |
+                             (symbol != NULL ?
+                                ((symbol->pointee_volatile_mask |
+                                    (unsigned int)(symbol->pointee_is_volatile != 0)) << 1) |
+                                (unsigned int)(symbol->is_volatile != 0) : 0);
     }
+        if (definition->opcode == MIR_LOAD_INDIRECT)
+                return definition->pointee_volatile_mask |
+                             (mir_pointer_volatile_mask(definition->src1, depth + 1) >> 1);
+        if (definition->opcode == MIR_MEMBER_ADDRESS)
+                return definition->pointee_volatile_mask |
+                             (unsigned int)((definition->memory_flags & MIR_MEMORY_FLAG_VOLATILE) != 0) |
+                             (mir_pointer_volatile_mask(definition->src1, depth + 1) & 1U);
     if (definition->opcode == MIR_INDEX_ADDRESS ||
-        definition->opcode == MIR_MEMBER_ADDRESS ||
         definition->opcode == MIR_UNARY)
-        return mir_indirect_load_pointee_is_volatile_value(
-            definition->src1, depth + 1);
+            return mir_pointer_volatile_mask(definition->src1, depth + 1);
     if (definition->opcode == MIR_BINARY || definition->opcode == MIR_PHI)
-        return mir_indirect_load_pointee_is_volatile_value(
-                   definition->src1, depth + 1) ||
-               mir_indirect_load_pointee_is_volatile_value(
+        return mir_pointer_volatile_mask(
+                   definition->src1, depth + 1) |
+               mir_pointer_volatile_mask(
                    definition->src2, depth + 1);
     return 0;
+}
+
+static int mir_indirect_load_pointee_is_volatile_value(int value, int depth)
+{
+    return (mir_pointer_volatile_mask(value, depth) & 1U) != 0;
 }
 
 static int mir_indirect_load_pointee_is_volatile(
@@ -7526,6 +7548,16 @@ scoped_type_repair_done:
         struct MirInsn *insn = &mir.insns[i];
         struct MirInsn *address;
         int pointee_type;
+        if (insn->opcode == MIR_INDEX_ADDRESS && insn->src1 >= 0) {
+            struct MirInsn *base = mir_mutable_definition(insn->src1);
+            if (base != NULL && base->opcode == MIR_LOAD_INDIRECT &&
+                (base->memory_flags & 256) != 0 &&
+                type_ptr_depth(base->type) > 0) {
+                insn->type = base->type;
+                insn->memory_size = type_size(type_decay_ptr(base->type));
+                insn->immediate = type_index_elem_size(base->type);
+            }
+        }
         if ((insn->opcode != MIR_LOAD_INDIRECT &&
              insn->opcode != MIR_STORE_INDIRECT) ||
             insn->bit_width > 0 || insn->src1 < 0)
@@ -7542,8 +7574,12 @@ scoped_type_repair_done:
             insn->dst = -1;
             continue;
         }
-        if ((insn->memory_flags & 256) != 0)
+        if ((insn->memory_flags & 256) != 0) {
+            if (type_ptr_depth(insn->type) == 0 &&
+                type_ptr_depth(address->type) == 2)
+                insn->type = type_decay_ptr(address->type);
             continue;
+        }
         pointee_type = type_decay_ptr(address->type);
         if (type_size(pointee_type) <= 0)
             continue;
