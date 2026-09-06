@@ -13,6 +13,7 @@
  * mir_finish_translation_unit().
  *
  * @par Boundary
+ * dcc_mir_verify.c owns independent CFG dominance verification.
  * dcc_mir_select.c owns candidate ordering and final output commit; emitter
  * modules consume the verified state declared in dcc_mir_internal.h.
  */
@@ -8665,10 +8666,8 @@ static int mir_object_value_is_defined_at_or_after(int value, int instruction)
     return definition != NULL && definition >= &mir.insns[instruction];
 }
 
-/* Promote scalar object loads when every CFG predecessor agrees on the same
- * virtual value. Ambiguous joins and values crossing an opaque barrier remain
- * explicit memory operations; this prototype deliberately does not insert
- * object phis yet. Returns the number of loads folded into persistent values. */
+/* Promote agreeing reaching definitions or construct a two-predecessor PHI.
+ * Undefined entry values and unresolved joins remain memory operations. */
 static int mir_promote_objects(void)
 {
     size_t state_count;
@@ -8756,6 +8755,8 @@ static int mir_promote_objects(void)
         in_state[i] = MIR_OBJECT_UNREACHED;
         out_state[i] = MIR_OBJECT_UNREACHED;
     }
+    for (i = 0; i < mir.object_count; ++i)
+        in_state[i] = MIR_OBJECT_UNDEFINED;
     for (i = 0; i < mir.next_value; ++i)
         aliases[i] = -1;
 
@@ -11619,25 +11620,9 @@ int mir_verify_and_dump(void)
         return 0;
     }
 
-    /* Object promotion rewrites uses and removes load definitions. Rebuild
-     * the simple defined-value check from the transformed stream. */
     memset(defined, 0, (size_t)mir.next_value);
     for (i = 0; i < mir.count; ++i) {
         struct MirInsn *insn = &mir.insns[i];
-        if (insn->opcode != MIR_PHI &&
-            insn->src1 >= 0 && !defined[insn->src1]) {
-            if (mir.report_mode)
-                fprintf(stderr, "; MIR %s: instruction %d uses undefined v%d\n",
-                        mir.name, i, insn->src1);
-            ++errors;
-        }
-        if (insn->opcode != MIR_PHI &&
-            insn->src2 >= 0 && !defined[insn->src2]) {
-            if (mir.report_mode)
-                fprintf(stderr, "; MIR %s: instruction %d uses undefined v%d\n",
-                        mir.name, i, insn->src2);
-            ++errors;
-        }
         if (insn->dst >= 0) {
             if (defined[insn->dst]) {
                 if (mir.report_mode)
@@ -11649,7 +11634,7 @@ int mir_verify_and_dump(void)
         }
     }
 
-    if (errors != 0) {
+    if (errors != 0 || !mir_verify_dominance()) {
         free(defined);
         free(live_in);
         free(live_out);

@@ -37,6 +37,7 @@ Use `dcc-project` for build, test, runtime, and baseline conventions.
 | Surface | Location |
 | --- | --- |
 | Lowering, metadata repair, verifier, CFG/liveness | `src/dcc/dcc_mir.c` |
+| Independent reachable CFG dominance verification | `dcc_mir_verify.c` |
 | Public/internal MIR contracts | `dcc_mir.h`, `dcc_mir_internal.h` |
 | Candidate selection and `mir-v1` policy | `dcc_mir_select.c` |
 | Shared emission and homes | `dcc_mir_emit_common.c`, `dcc_mir_homed_cfg.c` |
