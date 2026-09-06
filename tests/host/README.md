@@ -47,7 +47,20 @@ Target loop execution and volatile access-count/flag assertions are covered by:
 ```sh
 pwsh ./scripts/run-mir-clobber-tests.ps1 -Cases semantics
 pwsh ./scripts/run-mir-clobber-tests.ps1 -Cases domloop
+pwsh ./scripts/run-mir-clobber-tests.ps1 -Cases aliasmem
 ```
 
-Both fixtures run in release, full debug, and line-debug modes, with and
+These fixtures run in release, full debug, and line-debug modes, with and
 without peephole optimization and stack checks.
+
+`aliasmem` checks writes through identical and distinct pointers, conditional
+alias writes, mutating calls, and `memcpy`. Its MIR assertions require volatile
+array-member and nested-member accesses to retain their count, byte width,
+and volatile flags, including stores. Nonvolatile controls must still reuse
+repeated loads and combine adjacent little-endian bytes. Runtime output alone
+cannot detect a removed volatile read when the backing memory stays unchanged.
+
+The member-address fix does not establish complete qualifier propagation
+through arbitrary pointer indirection. Double-indirection cases in the fixture
+are execution smoke tests, not assertions that every access has complete
+qualifier metadata.

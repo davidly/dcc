@@ -255,6 +255,14 @@ function Assert-ForcedRegionalSafe(
 $fixtureRoot = Join-Path $repoRoot "tests/mir-clobber"
 $caseDefinitions = @(
     [pscustomobject]@{
+        Name = "aliasmem"
+        Sources = @(Join-Path $fixtureRoot "aliasmem.c")
+        Defines = @()
+        Expected = @("MIR alias failures=0")
+        Exit = 0
+        DebugModes = @("true", "lines")
+    },
+    [pscustomobject]@{
         Name = "domloop"
         Sources = @(Join-Path $fixtureRoot "domloop.c")
         Defines = @()
@@ -419,11 +427,34 @@ try {
     Set-ProcessEnvironment "DCC_MIR_MACHINE_REPORT" "1"
     Set-ProcessEnvironment "DCC_MIR_SELECT_REPORT" "1"
 
-    if ($Cases.Count -eq 0 -or "semantics" -in $Cases) {
+    foreach ($proofCase in @(
+        @{
+            Name = "semantics"; Source = "semfix.c"
+            Expectations = @(
+                @{ Function = "vread"; Loads = 3; Volatile = 3; Width = 1 },
+                @{ Function = "vword"; Loads = 2; Volatile = 2; Width = 1 },
+                @{ Function = "nread"; Loads = 1; Volatile = 0; Width = 1 }
+            )
+        },
+        @{
+            Name = "aliasmem"; Source = "aliasmem.c"
+            Expectations = @(
+                @{ Function = "vmember"; Loads = 3; Volatile = 3; Width = 1 },
+                @{ Function = "vmword"; Loads = 2; Volatile = 2; Width = 1 },
+                @{ Function = "vnested"; Loads = 3; Volatile = 3; Width = 1 },
+                @{ Function = "nmember"; Loads = 1; Volatile = 0; Width = 1 },
+                @{ Function = "nmword"; Loads = 1; Volatile = 0; Width = 2 },
+                @{ Function = "vmstore"; Loads = 2; Volatile = 2; Width = 1; Opcode = "storeind" }
+            )
+        }
+    )) {
+        if ($Cases.Count -gt 0 -and $proofCase.Name -notin $Cases) {
+            continue
+        }
         Set-ProcessEnvironment "DCC_MIR_REPORT" "1"
         try {
             $proof = Invoke-WithTimeout (Join-Path $repoRoot "dcc") @(
-                "-c", (Join-Path $fixtureRoot "semfix.c"),
+                "-c", (Join-Path $fixtureRoot $proofCase.Source),
                 "-o", (Join-Path $tempRoot "SEMANTIC.MAC")
             ) $repoRoot 60
         } finally {
@@ -431,26 +462,28 @@ try {
                 $savedEnvironment["DCC_MIR_REPORT"], "Process")
         }
         if ($proof.TimedOut -or $proof.ExitCode -ne 0) {
-            throw "MIR semantics proof failed:`n$($proof.Output)"
+            throw "MIR $($proofCase.Name) proof failed:`n$($proof.Output)"
         }
-        foreach ($expectation in @(
-            @{ Function = "vread"; Loads = 3; Volatile = 3 },
-            @{ Function = "vword"; Loads = 2; Volatile = 2 },
-            @{ Function = "nread"; Loads = 1; Volatile = 0 }
-        )) {
+        foreach ($expectation in $proofCase.Expectations) {
             $function = $expectation.Function
+            $opcode = if ($expectation.Opcode) { $expectation.Opcode } else { "loadind" }
             $body = [regex]::Match($proof.Output,
                 "(?s); MIR function=$function .*?; MIR summary function=$function ")
-            $loads = [regex]::Matches($body.Value, '\bloadind\b').Count
+            $loads = [regex]::Matches($body.Value, "\b$opcode\b").Count
             if (-not $body.Success -or $loads -ne $expectation.Loads) {
                 throw "$function has $loads MIR loads, expected " +
                     "$($expectation.Loads):`n$($body.Value)"
             }
             $volatileLoads = [regex]::Matches(
-                $body.Value, '\bloadind\b[^\r\n]*\bmem=\d+v\b').Count
+                $body.Value, "\b$opcode\b[^\r\n]*\bmem=\d+v\b").Count
             if ($volatileLoads -ne $expectation.Volatile) {
                 throw "$function has $volatileLoads volatile MIR loads, " +
                     "expected $($expectation.Volatile):`n$($body.Value)"
+            }
+            $correctWidth = [regex]::Matches($body.Value,
+                "\b$opcode\b[^\r\n]*\bmem=$($expectation.Width)v?\b").Count
+            if ($correctWidth -ne $loads) {
+                throw "$function has an incorrect memory access width:`n$($body.Value)"
             }
         }
     }

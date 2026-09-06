@@ -5344,8 +5344,10 @@ static int mir_indirect_load_pointee_is_volatile_value(int value, int depth)
     if (definition->opcode == MIR_INDEX_ADDRESS ||
         definition->opcode == MIR_MEMBER_ADDRESS ||
         definition->opcode == MIR_UNARY)
-        return mir_indirect_load_pointee_is_volatile_value(
-            definition->src1, depth + 1);
+        return (definition->opcode == MIR_MEMBER_ADDRESS &&
+                (definition->memory_flags & MIR_MEMORY_FLAG_VOLATILE) != 0) ||
+               mir_indirect_load_pointee_is_volatile_value(
+                   definition->src1, depth + 1);
     if (definition->opcode == MIR_BINARY || definition->opcode == MIR_PHI)
         return mir_indirect_load_pointee_is_volatile_value(
                    definition->src1, depth + 1) ||
