@@ -8532,7 +8532,7 @@ static int mir_match_value_literal_checks(struct MirValueLiteralChecks *plan)
     memset(plan, 0, sizeof(*plan));
     if (mir.count != 192 || mir_cfg_block_count() != 1 || mir.has_vla ||
         (mir.return_type & 15) != TYPE_VOID)
-        return 0;
+        return mir_machine_reject("value-literal-checks", "shape");
     for (i = 0; i < 13; ++i) {
         const struct MirInsn *string;
         int a3[3], a4[4], string_value;

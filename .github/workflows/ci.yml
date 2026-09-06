@@ -89,6 +89,20 @@ jobs:
         shell: pwsh
         run: ./scripts/build-dcc.ps1
 
+      - name: Run MIR host verifier tests
+        shell: pwsh
+        run: |
+          cmake -S src/dcc -B build/mir-tests -DDCC_BUILD_MIR_TESTS=ON -DCMAKE_BUILD_TYPE=Release
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake --build build/mir-tests --target mir-verify-test --config Release --parallel
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir build/mir-tests -C Release --output-on-failure
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Run MIR emission-clobber regressions
+        shell: pwsh
+        run: ./scripts/run-mir-clobber-tests.ps1
+
       - name: Run debugger host and debug metadata tests
         if: runner.os == 'Linux'
         run: |

@@ -31528,6 +31528,7 @@ static void mir_emit_selfstore_global_indexed_predecrement_load(
                              : mir_declared_link_name(definition->name));
     const char *base_name = asm_name_for(sym_asm_name(plan->base));
     int saved_instruction = mir_emit_instruction_index;
+    int base_value = mir.insns[plan->index_instruction].src1;
 
     if (storage == SC_EXTERN && mir_extrn_should_emit(index_symbol))
         mir_stream_printf(out, "\textrn %s\n", index_name);
@@ -31543,10 +31544,25 @@ static void mir_emit_selfstore_global_indexed_predecrement_load(
     mir_stream_printf(out, "\tld (%s),hl\n", index_name);
     if (plan->stride == 2)
         mir_stream_puts("\tadd hl,hl\n", out);
-    mir_stream_printf(out,
-            "\tld de,%s\n\tadd hl,de\n"
-            "\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n",
-            base_name);
+    if (mir_planned_stack_matches_consumer(
+            base_value, plan->index_instruction) &&
+        mir_planned_stack_is_emitted(base_value)) {
+        if (!mir_consume_planned_stack(
+                out, base_value, plan->index_instruction, "de"))
+            mir_planned_stack_invalid = 1;
+    } else if (mir_forwarded_stack_value == base_value &&
+               mir_forwarded_stack_target_instruction ==
+                   plan->index_instruction) {
+        mir_stream_puts("\tpop de\n", out);
+        mir_forwarded_stack_value = -1;
+        mir_forwarded_stack_instruction = -1;
+        mir_forwarded_stack_target_instruction = -1;
+    } else {
+        mir_stream_printf(out, "\tld de,%s\n", base_name);
+    }
+    mir_stream_puts(
+            "\tadd hl,de\n\tld a,(hl)\n\tinc hl\n\tld h,(hl)\n\tld l,a\n",
+            out);
     mir_emit_instruction_index = plan->load_instruction;
     mir_emit_virtual_store(out, mir.insns[plan->load_instruction].dst);
     mir_emit_instruction_index = saved_instruction;

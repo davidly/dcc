@@ -14,6 +14,7 @@ $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
 $environmentNames = @(
     "DCC_MIR_COST_REPORT",
     "DCC_MIR_MACHINE_REPORT",
+    "DCC_MIR_REPORT",
     "DCC_MIR_REQUIRE_COMPLETE",
     "DCC_MIR_REQUIRE_EMIT",
     "DCC_MIR_SELECT_CANDIDATE",
@@ -79,12 +80,16 @@ function Assert-RunCase(
     [string]$ExactFunction = "",
     [bool]$RequireExact = $false,
     [string[]]$AssemblyPatterns = @(),
-    [bool]$OddUpperRuntime = $false
+    [bool]$OddUpperRuntime = $false,
+    [string]$DebugMode = ""
 ) {
     $configuration = @(
         if ($StackCheck) { "stack" } else { "nostack" }
         if ($Peep) { "peep" } else { "nopeep" }
     ) -join "-"
+    if ($DebugMode) {
+        $configuration += "-debug-$DebugMode"
+    }
     $buildDir = Join-Path $tempRoot "$Name-$configuration"
     $outputBase = ($Name -replace '[^A-Za-z0-9]', '').ToUpperInvariant()
     if ($outputBase.Length -gt 8) {
@@ -98,6 +103,9 @@ function Assert-RunCase(
         "dcc-stack-check=$([string]$StackCheck)",
         "dcc-stack-bytes=512"
     )
+    if ($DebugMode) {
+        $arguments += "dcc-debug=$DebugMode"
+    }
     if ($OddUpperRuntime) {
         $runtime = Get-Content -LiteralPath (
             Join-Path $repoRoot "DCCRTL.MAC") -Raw
@@ -142,6 +150,11 @@ __ctu:
     if ($ExactTemplate) {
         $templatePattern =
             "template=$([regex]::Escape($ExactTemplate)) reject="
+        if ($ExactFunction) {
+            $templatePattern =
+                "MIR machine function=$([regex]::Escape($ExactFunction)) " +
+                $templatePattern
+        }
         $rejected = $build.Output -match $templatePattern
         $selectionPattern =
             "MIR selection function=$([regex]::Escape($ExactFunction)) " +
@@ -242,6 +255,14 @@ function Assert-ForcedRegionalSafe(
 $fixtureRoot = Join-Path $repoRoot "tests/mir-clobber"
 $caseDefinitions = @(
     [pscustomobject]@{
+        Name = "semantics"
+        Sources = @(Join-Path $fixtureRoot "semfix.c")
+        Defines = @()
+        Expected = @("MIR semantics failures=0")
+        Exit = 0
+        DebugModes = @("true", "lines")
+    },
+    [pscustomobject]@{
         Name = "cacheq"
         Sources = @(Join-Path $fixtureRoot "cacheq.c")
         Defines = @()
@@ -321,7 +342,10 @@ $caseDefinitions = @(
         Name = "iyexact"
         Sources = @(Join-Path $fixtureRoot "iyexact.c")
         Defines = @()
-        Expected = @("step 1 value 102", "step 4 value 0", "GIY done")
+        Expected = @(
+            "step 1 value 102", "step 2 value 100",
+            "step 3 value 309", "step 4 value 0", "GIY done"
+        )
         Exit = 0
         ExactTemplate = "word-table-runner-schedule"
         ExactFunction = "main"
@@ -387,6 +411,42 @@ try {
     Set-ProcessEnvironment "DCC_MIR_MACHINE_REPORT" "1"
     Set-ProcessEnvironment "DCC_MIR_SELECT_REPORT" "1"
 
+    if ($Cases.Count -eq 0 -or "semantics" -in $Cases) {
+        Set-ProcessEnvironment "DCC_MIR_REPORT" "1"
+        try {
+            $proof = Invoke-WithTimeout (Join-Path $repoRoot "dcc") @(
+                "-c", (Join-Path $fixtureRoot "semfix.c"),
+                "-o", (Join-Path $tempRoot "SEMANTIC.MAC")
+            ) $repoRoot 60
+        } finally {
+            [Environment]::SetEnvironmentVariable("DCC_MIR_REPORT",
+                $savedEnvironment["DCC_MIR_REPORT"], "Process")
+        }
+        if ($proof.TimedOut -or $proof.ExitCode -ne 0) {
+            throw "MIR semantics proof failed:`n$($proof.Output)"
+        }
+        foreach ($expectation in @(
+            @{ Function = "vread"; Loads = 3; Volatile = 3 },
+            @{ Function = "vword"; Loads = 2; Volatile = 2 },
+            @{ Function = "nread"; Loads = 1; Volatile = 0 }
+        )) {
+            $function = $expectation.Function
+            $body = [regex]::Match($proof.Output,
+                "(?s); MIR function=$function .*?; MIR summary function=$function ")
+            $loads = [regex]::Matches($body.Value, '\bloadind\b').Count
+            if (-not $body.Success -or $loads -ne $expectation.Loads) {
+                throw "$function has $loads MIR loads, expected " +
+                    "$($expectation.Loads):`n$($body.Value)"
+            }
+            $volatileLoads = [regex]::Matches(
+                $body.Value, '\bloadind\b[^\r\n]*\bmem=\d+v\b').Count
+            if ($volatileLoads -ne $expectation.Volatile) {
+                throw "$function has $volatileLoads volatile MIR loads, " +
+                    "expected $($expectation.Volatile):`n$($body.Value)"
+            }
+        }
+    }
+
     foreach ($case in $caseDefinitions) {
         if ($Cases.Count -gt 0 -and $case.Name -notin $Cases) {
             continue
@@ -401,6 +461,12 @@ try {
                     -RequireExact ([bool]$case.RequireExact) `
                     -AssemblyPatterns $case.AssemblyPatterns `
                     -OddUpperRuntime ([bool]$case.OddUpperRuntime)
+                foreach ($debugMode in $case.DebugModes) {
+                    Assert-RunCase -Name $case.Name -Sources $case.Sources `
+                        -Defines $case.Defines -Expected $case.Expected `
+                        -ExpectedExit $case.Exit -StackCheck $stackCheck `
+                        -Peep $peep -DebugMode $debugMode
+                }
             }
         }
     }

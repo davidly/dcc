@@ -107,3 +107,14 @@ endif()
 # ma.sh / runall.sh harness (which calls ./dcc) keeps working unchanged.
 set_target_properties(dcc PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${DCC_RUNTIME_OUTPUT_DIRECTORY})
+
+option(DCC_BUILD_MIR_TESTS "Build host-side MIR verifier regressions" OFF)
+if(DCC_BUILD_MIR_TESTS)
+    enable_testing()
+    set(DCC_MIR_TEST_SOURCES ${DCC_SOURCES})
+    list(REMOVE_ITEM DCC_MIR_TEST_SOURCES dcc.c)
+    add_executable(mir-verify-test
+        ../../tests/host/mir_verify.c ${DCC_MIR_TEST_SOURCES})
+    target_include_directories(mir-verify-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+    add_test(NAME mir-verify COMMAND mir-verify-test)
+endif()

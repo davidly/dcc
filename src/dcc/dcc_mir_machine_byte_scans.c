@@ -4834,7 +4834,7 @@ static int mir_match_mixed_scalar_call_report(
             if (plan->callback == NULL)
                 return mir_machine_reject(
                     "mixed-scalar-call-report", "callback-missing");
-            if ((mir.insns[30].memory_flags & (1 | 8)) != 0)
+            if ((mir.insns[30].memory_flags & 8) != 0)
                 return mir_machine_reject(
                     "mixed-scalar-call-report", "callback-symbol");
             continue;

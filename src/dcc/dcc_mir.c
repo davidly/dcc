@@ -5315,9 +5315,12 @@ static int mir_dominated_load_memory_barrier(const struct MirInsn *insn)
 static int mir_indirect_load_pointee_is_volatile_value(int value, int depth)
 {
     const struct MirInsn *definition;
+    const struct Sym *symbol;
     int declared;
 
-    if (value < 0 || depth > 64)
+    if (depth > 64)
+        return 1;
+    if (value < 0)
         return 0;
     definition = mir_definition(value);
     if (definition == NULL)
@@ -5326,20 +5329,23 @@ static int mir_indirect_load_pointee_is_volatile_value(int value, int depth)
         for (declared = 0; declared < mir.declared_count; ++declared)
             if (!strcmp(mir.declared_names[declared], definition->name))
                 return mir.declared_pointee_is_volatile[declared];
-        return 0;
+        symbol = find_global(definition->name);
+        return symbol != NULL && symbol->pointee_is_volatile;
     }
     if (definition->opcode == MIR_ADDRESS) {
         for (declared = 0; declared < mir.declared_count; ++declared)
             if (!strcmp(mir.declared_names[declared], definition->name))
                 return mir.declared_is_volatile[declared];
-        return 0;
+        symbol = find_global(definition->name);
+        return (definition->memory_flags & 1) != 0 ||
+               (symbol != NULL && symbol->is_volatile);
     }
     if (definition->opcode == MIR_INDEX_ADDRESS ||
         definition->opcode == MIR_MEMBER_ADDRESS ||
         definition->opcode == MIR_UNARY)
         return mir_indirect_load_pointee_is_volatile_value(
             definition->src1, depth + 1);
-    if (definition->opcode == MIR_BINARY)
+    if (definition->opcode == MIR_BINARY || definition->opcode == MIR_PHI)
         return mir_indirect_load_pointee_is_volatile_value(
                    definition->src1, depth + 1) ||
                mir_indirect_load_pointee_is_volatile_value(
@@ -5979,6 +5985,7 @@ static int mir_declared_index(const char *name)
 static struct MirInsn *mir_insert_instruction_before(int index, int opcode)
 {
     struct MirInsn inserted;
+    int event;
 
     if (index < 0 || index > mir.count)
         return NULL;
@@ -5986,6 +5993,9 @@ static struct MirInsn *mir_insert_instruction_before(int index, int opcode)
     memmove(&mir.insns[index + 1], &mir.insns[index],
             (size_t)(mir.count - index - 1) * sizeof(*mir.insns));
     mir.insns[index] = inserted;
+    for (event = 0; event < mir.debug_event_count; ++event)
+        if (mir.debug_events[event].point >= index)
+            ++mir.debug_events[event].point;
     return &mir.insns[index];
 }
 
@@ -7114,16 +7124,37 @@ scoped_type_repair_done:
         mir_copy_name(call->name, "<indirect>");
         if (declaration >= 0 && mir.declared_has_proto[declaration]) {
             int argument;
+            int call_id = call->secondary_offset;
             for (argument = 0; argument < mir.count; ++argument)
                 if (mir.insns[argument].opcode == MIR_ARG &&
-                    mir.insns[argument].secondary_offset ==
-                        call->secondary_offset &&
+                    mir.insns[argument].secondary_offset == call_id &&
                     mir.insns[argument].immediate >= 0 &&
                     mir.insns[argument].immediate <
-                        mir.declared_proto_nargs[declaration])
-                    mir.insns[argument].type =
+                        mir.declared_proto_nargs[declaration]) {
+                    int argument_type =
                         mir.declared_proto_types[declaration]
                                                 [mir.insns[argument].immediate];
+                    int source_value = mir.insns[argument].src1;
+                    const struct MirInsn *source =
+                        mir_definition(source_value);
+
+                    if (!type_is_struct_object(argument_type) &&
+                        source != NULL && source->type != 0 &&
+                        source->type != argument_type) {
+                        int converted_value = mir_new_value();
+                        struct MirInsn *conversion =
+                            mir_insert_instruction_before(argument, MIR_UNARY);
+
+                        conversion->dst = converted_value;
+                        conversion->src1 = source_value;
+                        conversion->type = argument_type;
+                        conversion->immediate = 0;
+                        ++argument;
+                        ++i;
+                        mir.insns[argument].src1 = converted_value;
+                    }
+                    mir.insns[argument].type = argument_type;
+                }
         }
         ++i;
     }
@@ -7430,13 +7461,36 @@ scoped_type_repair_done:
                 pointer = right;
                 offset = left;
             }
-            if (pointer != NULL && offset != NULL &&
-                offset->opcode == MIR_CONST &&
-                mir_value_use_count(offset->dst) == 1) {
+            if (pointer != NULL && offset != NULL) {
                 int stride = type_index_elem_size(pointer->type);
-                if (stride > 1)
+                int pointer_type = pointer->type;
+                int pointer_value = pointer->dst;
+                int offset_value = offset->dst;
+
+                if (stride > 1 && offset->opcode == MIR_CONST &&
+                    mir_value_use_count(offset_value) == 1) {
                     offset->immediate *= stride;
-                mir.insns[i].type = pointer->type;
+                } else if (stride > 1) {
+                    int scale_value = mir_new_value();
+                    int scaled_value = mir_new_value();
+                    struct MirInsn *inserted =
+                        mir_insert_instruction_before(i++, MIR_CONST);
+
+                    inserted->dst = scale_value;
+                    inserted->type = TYPE_INT;
+                    inserted->immediate = stride;
+                    inserted = mir_insert_instruction_before(i++, MIR_BINARY);
+                    inserted->dst = scaled_value;
+                    inserted->src1 = offset_value;
+                    inserted->src2 = scale_value;
+                    inserted->type = TYPE_INT;
+                    inserted->secondary_offset = TYPE_INT;
+                    inserted->immediate = '*';
+                    offset_value = scaled_value;
+                }
+                mir.insns[i].src1 = pointer_value;
+                mir.insns[i].src2 = offset_value;
+                mir.insns[i].type = pointer_type;
                 mir.insns[i].secondary_offset = TYPE_INT;
             }
         }
@@ -7814,6 +7868,29 @@ scoped_type_repair_done:
             mir.insns[i].src1 = -1;
             mir.insns[i].src2 = -1;
         }
+    for (i = 0; i < mir.count; ++i) {
+        struct MirInsn *insn = &mir.insns[i];
+        int is_volatile = 0;
+
+        if (insn->opcode == MIR_LOAD || insn->opcode == MIR_STORE ||
+            insn->opcode == MIR_ADDRESS || insn->opcode == MIR_PARAM) {
+            int declared = mir_declared_index(insn->name);
+            const struct Sym *symbol = find_global(insn->name);
+
+            is_volatile = declared >= 0 ? mir.declared_is_volatile[declared] :
+                          symbol != NULL && symbol->is_volatile;
+        } else if (insn->opcode == MIR_LOAD_INDIRECT ||
+                   insn->opcode == MIR_STORE_INDIRECT ||
+                   insn->opcode == MIR_COPY_AGGREGATE) {
+            is_volatile = mir_indirect_load_pointee_is_volatile_value(
+                insn->src1, 0);
+            if (insn->opcode == MIR_COPY_AGGREGATE)
+                is_volatile |= mir_indirect_load_pointee_is_volatile_value(
+                    insn->src2, 0);
+        }
+        if (is_volatile)
+            insn->memory_flags |= MIR_MEMORY_FLAG_VOLATILE;
+    }
     mir_invalidate_use_cache();
     mir_use_cache_scope_active = mir_use_cache_saved_scope;
 }
@@ -11288,6 +11365,181 @@ int mir_probe_wide_colors_for_homed(
     return ok;
 }
 
+static int mir_verify_structure(void)
+{
+    unsigned char *labels;
+    unsigned char *definitions;
+    unsigned char *calls;
+    int instruction;
+    int valid = 1;
+
+    if (mir.count < 0 || mir.count > mir.capacity || mir.next_value < 0 ||
+        mir.next_label < 0 || mir.next_call_id < 0 ||
+        mir.object_count < 0 ||
+        mir.object_count > (int)(sizeof(mir.objects) / sizeof(mir.objects[0])) ||
+        (mir.next_value > 0 &&
+         (size_t)mir.count > (size_t)-1 / (size_t)mir.next_value) ||
+        (mir.count > 0 && mir.insns == NULL)) {
+        fprintf(stderr, "; MIR %s: invalid function dimensions\n", mir.name);
+        return 0;
+    }
+    labels = (unsigned char *)calloc((size_t)mir.next_label, 1);
+    definitions = (unsigned char *)calloc((size_t)mir.next_value, 1);
+    calls = (unsigned char *)calloc((size_t)mir.next_call_id, 1);
+    if ((mir.next_label > 0 && labels == NULL) ||
+        (mir.next_value > 0 && definitions == NULL) ||
+        (mir.next_call_id > 0 && calls == NULL))
+        fatal("out of memory verifying MIR structure");
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if (insn->opcode < MIR_NOP || insn->opcode > MIR_OPAQUE ||
+            insn->src1 < -1 || insn->src1 >= mir.next_value ||
+            insn->src2 < -1 || insn->src2 >= mir.next_value ||
+            insn->dst < -1 || insn->dst >= mir.next_value ||
+            insn->object < -1 || insn->object >= mir.object_count) {
+            fprintf(stderr, "; MIR %s: instruction %d has invalid operands\n",
+                    mir.name, instruction);
+            valid = 0;
+        }
+        if (insn->dst >= 0 && insn->dst < mir.next_value)
+            definitions[insn->dst] = 1;
+        if ((insn->opcode == MIR_BINARY || insn->opcode == MIR_PHI ||
+             insn->opcode == MIR_INDEX_ADDRESS ||
+             insn->opcode == MIR_STORE_INDIRECT ||
+             insn->opcode == MIR_COPY_AGGREGATE) &&
+            (insn->src1 < 0 || insn->src2 < 0)) {
+            fprintf(stderr, "; MIR %s: instruction %d is missing operands\n",
+                    mir.name, instruction);
+            valid = 0;
+        }
+        if ((insn->opcode == MIR_UNARY || insn->opcode == MIR_BRANCH_FALSE ||
+             insn->opcode == MIR_LOAD_INDIRECT || insn->opcode == MIR_STORE ||
+             insn->opcode == MIR_ARG) && insn->src1 < 0) {
+            fprintf(stderr, "; MIR %s: instruction %d is missing its operand\n",
+                    mir.name, instruction);
+            valid = 0;
+        }
+        if (insn->opcode == MIR_CALL || insn->opcode == MIR_CALL_AGGREGATE) {
+            if (insn->secondary_offset < 0 ||
+                insn->secondary_offset >= mir.next_call_id ||
+                calls[insn->secondary_offset]) {
+                fprintf(stderr, "; MIR %s: instruction %d has invalid call ID\n",
+                        mir.name, instruction);
+                valid = 0;
+            } else {
+                calls[insn->secondary_offset] = 1;
+            }
+        }
+        if (insn->opcode == MIR_LABEL) {
+            if (insn->label < 0 || insn->label >= mir.next_label ||
+                labels[insn->label]) {
+                fprintf(stderr, "; MIR %s: instruction %d has invalid label\n",
+                        mir.name, instruction);
+                valid = 0;
+            } else {
+                labels[insn->label] = 1;
+            }
+        }
+    }
+    for (instruction = 0; instruction < mir.count; ++instruction) {
+        const struct MirInsn *insn = &mir.insns[instruction];
+
+        if ((insn->opcode == MIR_JUMP || insn->opcode == MIR_BRANCH_FALSE) &&
+            (insn->label < 0 || insn->label >= mir.next_label ||
+             !labels[insn->label])) {
+            fprintf(stderr, "; MIR %s: instruction %d has missing branch target\n",
+                    mir.name, instruction);
+            valid = 0;
+        }
+        if (insn->opcode == MIR_PHI &&
+            (insn->src1 < 0 || insn->src1 >= mir.next_value ||
+             insn->src2 < 0 || insn->src2 >= mir.next_value ||
+             !definitions[insn->src1] || !definitions[insn->src2] ||
+             insn->phi_pred1 < 0 || insn->phi_pred1 >= mir.next_label ||
+             insn->phi_pred2 < 0 || insn->phi_pred2 >= mir.next_label ||
+             !labels[insn->phi_pred1] || !labels[insn->phi_pred2] ||
+             insn->phi_pred1 == insn->phi_pred2)) {
+            fprintf(stderr, "; MIR %s: instruction %d has invalid PHI references\n",
+                    mir.name, instruction);
+            valid = 0;
+        }
+        if (insn->opcode == MIR_ARG &&
+            (insn->secondary_offset < 0 ||
+             insn->secondary_offset >= mir.next_call_id ||
+             !calls[insn->secondary_offset] || insn->immediate < 0)) {
+            fprintf(stderr, "; MIR %s: instruction %d has invalid argument ID\n",
+                    mir.name, instruction);
+            valid = 0;
+        }
+        if (insn->opcode == MIR_ARG) {
+            int prior;
+
+            for (prior = 0; prior < instruction; ++prior) {
+                const struct MirInsn *other = &mir.insns[prior];
+                if (other->secondary_offset == insn->secondary_offset &&
+                    ((other->opcode == MIR_ARG &&
+                      other->immediate == insn->immediate) ||
+                     other->opcode == MIR_CALL ||
+                     other->opcode == MIR_CALL_AGGREGATE)) {
+                    fprintf(stderr,
+                            "; MIR %s: instruction %d has duplicate or late argument\n",
+                            mir.name, instruction);
+                    valid = 0;
+                }
+            }
+            for (prior = instruction + 1; prior < mir.count; ++prior) {
+                const struct MirInsn *call = &mir.insns[prior];
+                const struct Sym *callee;
+                int target_type = 0;
+
+                if ((call->opcode != MIR_CALL &&
+                     call->opcode != MIR_CALL_AGGREGATE) ||
+                    call->secondary_offset != insn->secondary_offset)
+                    continue;
+                callee = find_global(call->name);
+                if (callee != NULL && callee->has_proto &&
+                    insn->immediate >= 0 && insn->immediate < callee->proto_nargs)
+                    target_type = callee->proto_types[insn->immediate];
+                else if (!strcmp(call->name, "<indirect>") && call->src1 >= 0) {
+                    int definition;
+                    for (definition = 0; definition < prior; ++definition) {
+                        const struct MirInsn *source = &mir.insns[definition];
+                        int declared;
+                        if (source->dst != call->src1 ||
+                            (source->opcode != MIR_LOAD &&
+                             source->opcode != MIR_PARAM))
+                            continue;
+                        declared = mir_declared_index(source->name);
+                        callee = find_global(source->name);
+                        if (declared >= 0 && mir.declared_has_proto[declared] &&
+                            insn->immediate >= 0 &&
+                            insn->immediate < mir.declared_proto_nargs[declared])
+                            target_type = mir.declared_proto_types[declared]
+                                                                 [insn->immediate];
+                        else if (callee != NULL && callee->has_proto &&
+                                 insn->immediate >= 0 &&
+                                 insn->immediate < callee->proto_nargs)
+                            target_type = callee->proto_types[insn->immediate];
+                        break;
+                    }
+                }
+                if (target_type != 0 && insn->type != target_type) {
+                    fprintf(stderr,
+                            "; MIR %s: instruction %d has incorrect argument ABI type\n",
+                            mir.name, instruction);
+                    valid = 0;
+                }
+                break;
+            }
+        }
+    }
+    free(calls);
+    free(definitions);
+    free(labels);
+    return valid;
+}
+
 int mir_verify_and_dump(void)
 {
     unsigned char *defined;
@@ -11303,11 +11555,8 @@ int mir_verify_and_dump(void)
     int changed;
     int i;
 
-    if (mir.next_value < 0) {
-        fprintf(stderr, "; MIR %s: invalid virtual value count (%d)\n",
-                mir.name, mir.next_value);
+    if (!mir_verify_structure())
         return 0;
-    }
     defined = (unsigned char *)calloc((size_t)mir.next_value, 1);
     live_in = (unsigned char *)calloc((size_t)mir.count * mir.next_value, 1);
     live_out = (unsigned char *)calloc((size_t)mir.count * mir.next_value, 1);
@@ -11320,15 +11569,6 @@ int mir_verify_and_dump(void)
         int target;
 
         insn->successor_count = 0;
-        if (insn->src1 >= 0 && !defined[insn->src1])
-            ++errors;
-        if (insn->src2 >= 0 && !defined[insn->src2])
-            ++errors;
-        if (insn->dst >= 0) {
-            if (defined[insn->dst])
-                ++errors;
-            defined[insn->dst] = 1;
-        }
         if (insn->opcode == MIR_JUMP || insn->opcode == MIR_BRANCH_FALSE) {
             target = mir_find_label(insn->label);
             if (target < 0)
@@ -11372,10 +11612,16 @@ int mir_verify_and_dump(void)
     mir_eliminate_dominated_indirect_loads();
     mir_combine_little_endian_byte_loads();
 
+    if (!mir_verify_structure()) {
+        free(defined);
+        free(live_in);
+        free(live_out);
+        return 0;
+    }
+
     /* Object promotion rewrites uses and removes load definitions. Rebuild
      * the simple defined-value check from the transformed stream. */
     memset(defined, 0, (size_t)mir.next_value);
-    errors = 0;
     for (i = 0; i < mir.count; ++i) {
         struct MirInsn *insn = &mir.insns[i];
         if (insn->opcode != MIR_PHI &&
@@ -11401,6 +11647,13 @@ int mir_verify_and_dump(void)
             }
             defined[insn->dst] = 1;
         }
+    }
+
+    if (errors != 0) {
+        free(defined);
+        free(live_in);
+        free(live_out);
+        return 0;
     }
 
     /* This loop only reads mir.insns (opcodes, src1/src2, successors) - it
