@@ -1937,7 +1937,7 @@ static int mir_match_backward_pass_schedule(
         "BSJLCNSLPNNNNNCBFANNCIGANCBIGANCBIGNCGNCGKLNCBSJLCNSLNNPNNNCBFCNSLNNNNNR"
         "CBFARIARCBNBIDTLRCBSJLACIGAGANCBIGNCGNCGKNLNCBSJLANGANGNNCCNBNGKCNSLPNNN"
         "NNCBFNCBNSAGANIGANIGNCGNCGKAGANIGANIGNCGNCGKAGANIGANIGNCGNCGKAGANIGANIGN"
-        "CGNCGKAGANIGANIGNCGNCGKAGANIGANIGNCGNCGKNLNCBSJLCNSLPNNNNPNCBFNCBNSANIDN"
+        "CGNCGKAGANIGANIGNCGNCGKAGANIGANIGNCGNCGKNLNCBSJLCNSLPNNNNNNCBFNCBNSANIDN"
         "SCNSLNNNNNNNRCBFANRBIDSANCBRBISRRDURUBGKTANRBIDSANCBRBISRRDURUBGKTNLRCBS"
         "JLNLNCBSJL";
     static const long expected_constants[101] = {
@@ -2034,15 +2034,14 @@ static int mir_match_backward_pass_schedule(
         int source2;
         int predecessor1;
         int predecessor2;
-    } expected_phis[8] = {
+    } expected_phis[7] = {
         {19, 15, 131, 0, 128},
         {153, 149, 242, 134, 239},
         {250, 246, 360, 245, 357},
         {368, 364, 405, 363, 402},
         {415, 409, 477, 408, 474},
         {500, 496, 620, 480, 617},
-        {628, 624, 726, 623, 723},
-        {633, 511, 640, 623, 723}
+        {628, 624, 726, 623, 723}
     };
     int constant = 0;
     int binary = 0;
@@ -2183,7 +2182,7 @@ static int mir_match_backward_pass_schedule(
             instructions[expected_jumps[edge].label]->label)
             return mir_machine_reject(
                 "backward-pass-schedule", "jumps");
-    for (edge = 0; edge < 8; ++edge) {
+    for (edge = 0; edge < 7; ++edge) {
         const struct MirInsn *phi =
             instructions[expected_phis[edge].instruction];
 

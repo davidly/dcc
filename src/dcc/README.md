@@ -88,6 +88,10 @@ Local declarations remain captured lexer spans, but explicit scan/replay APIs
 now own their frame and initializer side effects. Production function assembly
 comes only from a selected generated MIR candidate.
 
+[`dcc_mir_verify.c`](dcc_mir_verify.c) independently checks reachable value,
+PHI-edge, and call-argument dominance after promotion and before allocation.
+See [host verifier tests](../../tests/host/README.md) for the regression gate.
+
 ---
 
 ## Module architecture

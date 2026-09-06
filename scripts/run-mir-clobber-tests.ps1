@@ -255,6 +255,14 @@ function Assert-ForcedRegionalSafe(
 $fixtureRoot = Join-Path $repoRoot "tests/mir-clobber"
 $caseDefinitions = @(
     [pscustomobject]@{
+        Name = "domloop"
+        Sources = @(Join-Path $fixtureRoot "domloop.c")
+        Defines = @()
+        Expected = @("MIR dominance failures=0")
+        Exit = 0
+        DebugModes = @("true", "lines")
+    },
+    [pscustomobject]@{
         Name = "semantics"
         Sources = @(Join-Path $fixtureRoot "semfix.c")
         Defines = @()

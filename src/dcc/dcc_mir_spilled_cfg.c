@@ -10666,8 +10666,8 @@ static int mir_match_fixed_long_mul_div(
         mir.has_vla || (mir.return_type & 15) != TYPE_VOID)
         return 0;
     mir_numeric_shape_hash(&first, &second);
-    if (!((first == 0xc30709100963e52bULL &&
-           second == 0x671af59e92df8930ULL) ||
+        if (!((first == 0xd9be98fcacad7a0eULL &&
+            second == 0x16d1071520cb6f01ULL) ||
           (first == 0xdbc048a5672f25a4ULL &&
            second == 0x039c1602bee84200ULL)) ||
         !mir_match_pointer_parameter(1, &plan->array_offset) ||

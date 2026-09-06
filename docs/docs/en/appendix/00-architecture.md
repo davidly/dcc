@@ -79,15 +79,17 @@ remain table-driven because they are not function-body instructions.
 flowchart TB
   SRC["C source"] --> FRONT["Front end<br/>preprocess, parse, build typed AST"]
   FRONT --> MIR["Persistent MIR<br/>lower statements and record metadata"]
-  MIR --> ANALYZE["Analyze MIR<br/>repair, verify, build CFG, solve liveness,<br/>promote objects, plan baseline allocation"]
-  ANALYZE --> SELECT["Select generated Z80 candidate<br/>try exact structural schedules first"]
+  MIR --> ANALYZE["Prepare MIR<br/>repair metadata, check structure,<br/>build CFG, promote objects, transform values"]
+  ANALYZE --> VERIFY["Verify dominance<br/>independent reachable CFG + PHI-edge checks"]
+  VERIFY --> ALLOCATE["Plan baseline allocation<br/>solve liveness, assign homes and spills"]
+  ALLOCATE --> SELECT["Select generated Z80 candidate<br/>try exact structural schedules first"]
 
   SELECT -- exact match --> ASM["Selected .MAC function body"]
   SELECT -- exact declines --> GENERAL["Build generated alternatives<br/>rollout, homed, regional, spilled"]
   GENERAL --> COST["Choose alternative<br/>candidate-specific allocation + mir-v1"]
   COST --> ASM
 
-  ANALYZE -. optional reports .-> SHADOW["Diagnostic shadow models<br/>target constraints + sparse schedule"]
+  ALLOCATE -. optional reports .-> SHADOW["Diagnostic shadow models<br/>target constraints + sparse schedule"]
 ```
 
 | Classic phase | DCC C Compiler implementation |
@@ -95,7 +97,7 @@ flowchart TB
 | Preprocessing / lexical analysis | Integrated macro engine and `next_token` lexer in `dcc_preproc.c`; `dcc_pp_expr.c` evaluates conditional directives |
 | Parsing | Recursive descent builds typed AST nodes against live symbol/type tables |
 | Intermediate representation | Persistent per-function MIR with virtual values, typed memory, calls, labels, branches, PHIs, VLA operations, and aggregate copies |
-| MIR analysis | Deferred metadata repair, CFG construction, verification, object promotion, liveness, baseline register homes, and spill-slot planning |
+| MIR analysis | Deferred metadata repair, structural checks, CFG construction, object promotion, independent dominance verification, liveness, baseline register homes, and spill-slot planning |
 | Instruction selection | Priority exact machine schedules, followed by general rollout, homed, hybrid/regional, and spilled CFG candidates |
 | Profitability | After exact scheduling declines, `mir-v1` compares generated alternatives using machine instructions/bytes, helper/frame/spill costs, moves, branches, and loop weighting |
 | Machine-dependent cleanup | Standalone `dccpeep` fixpoint optimization over the selected assembly |
@@ -132,14 +134,33 @@ This separation is load-bearing:
 
 ### Verification, promotion, and allocation
 
-The verifier resolves labels, constructs instruction successors, rejects
-undefined or multiply defined virtual values, and solves backwards liveness.
-PHI operands are uses on their incoming CFG edges; call arguments remain live
-through the matching call-site ID.
+Structural verification checks operand/object bounds, labels, definitions,
+PHI references, call identities, and known argument ABI types. After object
+promotion and semantic transformations, `dcc_mir_verify.c` independently
+reconstructs the instruction CFG and computes an immediate-dominator tree in
+reverse postorder, using storage linear in the MIR size.
 
-Conservative object promotion removes local/parameter loads only when every
-reachable predecessor agrees on the value. Unknown aliases, volatile accesses,
-opaque user assembly, calls, or ambiguous joins stop the proof.
+Every ordinary value use on a reachable path must be dominated by its
+definition: execution cannot reach the use without first passing the
+definition. PHIs define their results at the logical block entry, even when
+they appear later in the instruction array; each input must dominate its
+corresponding incoming edge. Argument records and their values must dominate
+the matching call. Unreachable paths impose no dominance requirement, but
+their IDs and references still undergo structural checks. This non-mutating
+check runs before allocation and candidate emission and cannot be disabled
+through an environment setting.
+
+Object promotion reuses agreeing reaching definitions or constructs a valid
+two-predecessor PHI. It distinguishes an **undefined entry value** from an
+**unreached dataflow state**: a definition discovered only on a loop backedge
+cannot supply the function-entry path. Undefined values and unresolved joins
+remain memory operations. This does not make reading an uninitialized C local
+defined behavior; it prevents that read from being represented by an invalid
+SSA value. Exact schedules account for the corrected NOP positions where
+unnecessary loop merges no longer produce PHIs.
+
+After verification, backwards liveness treats PHI operands as incoming-edge
+uses and keeps call arguments live through the matching call-site ID.
 
 Allocation assigns lifetime homes in HL, DE, BC, or callee-saved IY, with
 deterministic spill slots when pressure or ABI constraints require them.
@@ -147,7 +168,7 @@ Call-crossing ordinary values may use only IY. Fixed Z80 operand/result
 registers are boundary constraints, so the emitter inserts moves rather than
 precoloring a value for its whole lifetime.
 
-Verification computes a baseline allocation and retains its liveness matrices
+The MIR analysis pipeline computes a baseline allocation and retains its liveness matrices
 for selection. Candidate construction may then derive and measure a different
 allocation plan: lazy-parameter and regional candidates, for example, save the
 baseline homes and spills, recompute them for that candidate, and restore the
@@ -267,7 +288,9 @@ graph TB
     end
 
     subgraph MIR["Persistent function MIR"]
-      CORE["dcc_mir.c<br/>lowering + repair + verifier"]
+      CORE["dcc_mir.c<br/>lowering + repair + promotion"]
+      VERIFY["dcc_mir_verify.c<br/>independent dominance verification"]
+      ALLOCATE["dcc_mir.c<br/>liveness + baseline allocation"]
       SHADOW["dcc_mir_target.c / dcc_mir_schedule.c<br/>diagnostic shadow models"]
     end
 
@@ -289,8 +312,8 @@ graph TB
     SEM --> BUILD
     NODES -.storage and typed nodes.-> BUILD
     META -.declarations / scopes / VLA events.-> CORE
-    CORE --> SELECT
-    CORE -. diagnostic reports .-> SHADOW
+    CORE --> VERIFY --> ALLOCATE --> SELECT
+    ALLOCATE -. diagnostic reports .-> SHADOW
     SELECT --> COMMON
     SELECT --> HOMED
     SELECT --> SPILLED
@@ -312,6 +335,7 @@ graph TB
 | Typed AST / metadata | `dcc_ast.c`, `dcc_ast_build.c`, `dcc_ast_gen*.c`, `dcc_ast_metadata.c`, `dcc_ast_stmt_meta.c`, `dcc_licm.c` | Transient typed trees, semantic classifiers, and non-emitting LICM/CSE planning and declaration/scope replay |
 | Compatibility helpers | `dcc_expr.c`, `dcc_ops.c`, `dcc_cmp.c`, `dcc_assign.c`, `dcc_decl.c`, `dcc_stmt_fast.c`, `dcc_array_narrow.c` | Shared initializer/type behavior and conservative source proofs; not a production body emitter |
 | MIR core | `dcc_mir.c`, `dcc_mir_stream.c` | Persistent IR, metadata repair, CFG/verifier, liveness, baseline allocation, and isolated candidate streams |
+| MIR dominance verification | `dcc_mir_verify.c` | Independent reachable CFG, immediate dominators, ordinary-value and PHI-edge checks, and call-argument dominance; no IR rewriting or allocation |
 | MIR emission / selection | `dcc_mir_select.c`, `dcc_mir_emit_common.c`, `dcc_mir_homed_cfg.c`, `dcc_mir_spilled_cfg.c` | Exact-schedule priority, scalar DAG rollout, transactional generated candidates, candidate-specific homes/spills, shared emission, and `mir-v1` selection |
 | Diagnostic shadow models | `dcc_mir_target.c`, `dcc_mir_schedule.c` | Optional Z80 constraint and sparse-schedule reports; these modules do not select production candidates or emit Z80 |
 | Machine schedules | `dcc_mir_machine_emit.c` (coordinator), `dcc_mir_machine_*.c` (families) | Exact structural matchers and specialized Z80 streams |

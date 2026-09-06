@@ -10,6 +10,7 @@
  *
  * @par Module map
  * - dcc_mir.c: lowering, metadata repair, CFG/dataflow, allocation, verifier.
+ * - dcc_mir_verify.c: independent CFG dominance and PHI-edge verification.
  * - dcc_mir_select.c: candidate orchestration, cost policy, output commit.
  * - dcc_mir_emit_common.c: shared scalar/home emission and DAG candidates,
  *   plus a handful of exact-schedule proof helpers shared by more than one
@@ -806,6 +807,7 @@ int mir_value_has_use(int value);
 int mir_value_has_use_after(int value, int instruction);
 int mir_value_use_count(int value);
 int mir_verify_and_dump(void);
+int mir_verify_dominance(void);
 int mir_target_constraint_for_insn(
     const struct MirInsn *insn, struct MirTargetConstraint *out);
 void mir_target_report_shadow_plan(void);

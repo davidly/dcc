@@ -60,6 +60,7 @@ set(DCC_SOURCES
     dcc_ast_gen_cond.c      # AST condition and branch emitters
     dcc_ast_stmt_meta.c     # AST statement parsing/sizing metadata
     dcc_mir.c               # analysis-only virtual-register MIR prototype
+    dcc_mir_verify.c
     dcc_mir_emit_common.c
     dcc_mir_homed_cfg.c
     dcc_mir_machine_emit.c # scheduled Z80 machine-template emission

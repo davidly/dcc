@@ -522,6 +522,54 @@ Reports:
 - Optional CSV performance report when `-Report` is passed
 - Exit code 0 on success, 1 on failure
 
+## MIR Verifier and Loop Regressions
+
+The host MIR verifier tests construct valid and deliberately malformed MIR
+directly against the compiler implementation. Unlike the native C validator
+below, they test compiler-internal contracts rather than application output.
+They cover structural and ABI checks, reachable-value dominance, PHI edges,
+call-argument dominance, loop-entry promotion, and irreducible control flow.
+
+From the repository root, with CMake and a host C compiler installed:
+
+```sh
+cmake -S src/dcc -B build/mir-tests -DDCC_BUILD_MIR_TESTS=ON -DCMAKE_BUILD_TYPE=Release
+cmake --build build/mir-tests --target mir-verify-test --config Release --parallel
+ctest --test-dir build/mir-tests -C Release --output-on-failure
+```
+
+`DCC_BUILD_MIR_TESTS` is an opt-in build option, not a switch for compiler
+verification. Production dominance verification is always enabled. CI builds
+and runs this host test target on Linux, macOS, and Windows.
+
+For Clang/GCC sanitizer testing, configure a separate build directory:
+
+```sh
+cmake -S src/dcc -B build/mir-tests-sanitize -DDCC_BUILD_MIR_TESTS=ON -DCMAKE_BUILD_TYPE=Debug -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer"
+cmake --build build/mir-tests-sanitize --target mir-verify-test --parallel
+ASAN_OPTIONS=detect_leaks=0 UBSAN_OPTIONS=halt_on_error=1 ctest --test-dir build/mir-tests-sanitize --output-on-failure
+```
+
+Target execution tests use the built DCC toolchain, PowerShell 7, and `ntvcm`
+on `PATH`:
+
+```pwsh
+pwsh ./scripts/run-mir-clobber-tests.ps1 -Cases domloop
+pwsh ./scripts/run-mir-clobber-tests.ps1 -Cases semantics
+```
+
+`domloop` checks zero-, one-, and multi-iteration loops, initialized and
+body-defined values, successive scopes, and branch-dependent loop updates.
+The body-defined cases enter the loop before using the value; they do not
+assert a result for an uninitialized C read. `semantics` checks pointer
+scaling, call conversions, and volatile access counts and flags in MIR.
+Both fixtures run in release, full-debug, and line-debug modes, with and
+without peephole optimization and stack checks. The complete clobber suite
+runs in CI and can be invoked by omitting `-Cases`.
+
+See [verification, promotion, and allocation](00-architecture.md#verification-promotion-and-allocation)
+for the compiler pipeline these tests exercise.
+
 ## Host Unit Test Validator (`validate-unit-test.ps1`)
 
 Compiles each `tests/*.c` program with a native host C compiler, runs the host

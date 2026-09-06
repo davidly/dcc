@@ -73,6 +73,44 @@ static void diamond(void)
     mir.insns[10].src1 = 3;
 }
 
+static void promotion_loop(int initialized)
+{
+    setup(12, 3, 4);
+    mir.local_bytes = 2;
+    mir.object_count = 1;
+    memset(&mir.objects[0], 0, sizeof(mir.objects[0]));
+    strcpy(mir.objects[0].name, "loop_value");
+    mir.objects[0].type = TYPE_INT;
+    mir.objects[0].storage = SC_LOCAL;
+    mir.objects[0].offset = -2;
+    mir.objects[0].entry_value = -1;
+    if (initialized) {
+        mir.insns[2].opcode = MIR_STORE;
+        mir.insns[2].src1 = 0;
+        mir.insns[2].object = 0;
+    }
+    mir.insns[3].opcode = MIR_LABEL;
+    mir.insns[3].label = 1;
+    mir.insns[4].opcode = MIR_BRANCH_FALSE;
+    mir.insns[4].src1 = 0;
+    mir.insns[4].label = 3;
+    mir.insns[5].opcode = MIR_CONST;
+    mir.insns[5].dst = 1;
+    mir.insns[6].opcode = MIR_STORE;
+    mir.insns[6].src1 = 1;
+    mir.insns[6].object = 0;
+    mir.insns[7].opcode = MIR_LABEL;
+    mir.insns[7].label = 2;
+    mir.insns[8].opcode = MIR_JUMP;
+    mir.insns[8].label = 1;
+    mir.insns[9].opcode = MIR_LABEL;
+    mir.insns[9].label = 3;
+    mir.insns[10].opcode = MIR_LOAD;
+    mir.insns[10].dst = 2;
+    mir.insns[10].object = 0;
+    mir.insns[11].src1 = 2;
+}
+
 int main(void)
 {
     struct Sym *callee;
@@ -120,6 +158,19 @@ int main(void)
     diamond();
     expect_verification("valid diamond PHI", 1);
     diamond();
+    mir.insns[10].src1 = 1;
+    expect_verification("branch value cannot escape join", 0);
+    diamond();
+    mir.insns[9].src1 = 2;
+    mir.insns[9].src2 = 1;
+    expect_verification("PHI operands must dominate their own edges", 0);
+    diamond();
+    mir.insns[9].phi_pred1 = 0;
+    expect_verification("PHI label must identify an incoming edge", 0);
+    diamond();
+    mir.insns[4].opcode = MIR_NOP;
+    expect_verification("NOP cannot define a live PHI operand", 0);
+    diamond();
     mir.next_value = 5;
     mir.insns[9].src2 = 4;
     expect_verification("undefined PHI input", 0);
@@ -152,6 +203,81 @@ int main(void)
     mir.insns[6].label = 2;
     mir.insns[7].src1 = 2;
     expect_verification("valid backedge PHI", 1);
+    mir.insns[3].src1 = 2;
+    expect_verification("backedge value cannot supply loop entry", 0);
+    setup(9, 2, 3);
+    mir.insns[2].opcode = MIR_JUMP;
+    mir.insns[2].label = 1;
+    mir.insns[3].opcode = MIR_LABEL;
+    mir.insns[3].label = 2;
+    mir.insns[4].opcode = MIR_RETURN;
+    mir.insns[4].src1 = 1;
+    mir.insns[5].opcode = MIR_LABEL;
+    mir.insns[5].label = 1;
+    mir.insns[6].opcode = MIR_CONST;
+    mir.insns[6].dst = 1;
+    mir.insns[7].opcode = MIR_JUMP;
+    mir.insns[7].label = 2;
+    expect_verification("CFG definition may follow use textually", 1);
+    setup(4, 1, 1);
+    mir.insns[1].opcode = MIR_UNARY;
+    mir.insns[1].src1 = 0;
+    expect_verification("ordinary definition cannot use itself", 0);
+    diamond();
+    mir.insns[10].opcode = MIR_CALL;
+    mir.insns[10].src1 = -1;
+    mir.next_call_id = 1;
+    mir.insns[4].opcode = MIR_ARG;
+    mir.insns[4].dst = -1;
+    mir.insns[4].src1 = 0;
+    mir.insns[9].opcode = MIR_NOP;
+    mir.insns[9].src1 = -1;
+    mir.insns[9].src2 = -1;
+    expect_verification("argument must execute on every call path", 0);
+    diamond();
+    mir.insns[2].opcode = MIR_JUMP;
+    mir.insns[2].label = 1;
+    mir.insns[9].src2 = 1;
+    expect_verification("unreachable PHI predecessor does not constrain dominance", 1);
+    setup(8, 2, 3);
+    mir.insns[2].opcode = MIR_BRANCH_FALSE;
+    mir.insns[2].src1 = 0;
+    mir.insns[2].label = 2;
+    mir.insns[3].opcode = MIR_LABEL;
+    mir.insns[3].label = 1;
+    mir.insns[4].opcode = MIR_CONST;
+    mir.insns[4].dst = 1;
+    mir.insns[5].opcode = MIR_LABEL;
+    mir.insns[5].label = 2;
+    mir.insns[6].opcode = MIR_BRANCH_FALSE;
+    mir.insns[6].src1 = 0;
+    mir.insns[6].label = 1;
+    expect_verification("irreducible CFG with entry-dominating value", 1);
+    mir.insns[7].src1 = 1;
+    expect_verification("irreducible CFG rejects one-entry definition", 0);
+    setup(5, 2, 2);
+    mir.insns[1].opcode = MIR_PHI;
+    mir.insns[1].dst = 0;
+    mir.insns[1].src1 = 1;
+    mir.insns[1].src2 = 1;
+    mir.insns[1].phi_pred1 = 0;
+    mir.insns[1].phi_pred2 = 1;
+    mir.insns[2].opcode = MIR_LABEL;
+    mir.insns[2].label = 1;
+    mir.insns[3].opcode = MIR_CONST;
+    mir.insns[3].dst = 1;
+    mir.insns[4].opcode = MIR_JUMP;
+    mir.insns[4].src1 = -1;
+    mir.insns[4].label = 0;
+    expect_verification("entry PHI cannot manufacture an initial value", 0);
+    promotion_loop(0);
+    expect_verification("undefined entry retains memory value", 1);
+    if (mir.insns[10].opcode != MIR_LOAD || mir.insns[11].src1 != 2) {
+        fprintf(stderr, "FAIL loop backedge invented an entry definition\n");
+        ++failures;
+    }
+    promotion_loop(1);
+    expect_verification("initialized entry remains valid through loop", 1);
     setup(4, 1, 1);
     mir.next_call_id = 1;
     mir.insns[2].opcode = MIR_ARG;

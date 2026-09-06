@@ -24,6 +24,7 @@ legacy register-allocation retries do not exist.
 | Function-local AST | `dcc_ast.c`, `dcc_ast.h`, `dcc_ast_build.c`, `dcc_ast_gen*.c` |
 | Non-emitting AST metadata | `dcc_ast_metadata.c`, `dcc_ast_stmt_meta.c` |
 | MIR lowering and verification | `dcc_mir.c`, `dcc_mir.h` |
+| Independent MIR dominance verification | `dcc_mir_verify.c` |
 | MIR selection and cost policy | `dcc_mir_select.c` |
 | General homed/spilled emitters | `dcc_mir_homed_cfg.c`, `dcc_mir_spilled_cfg.c` |
 | Shared MIR emission | `dcc_mir_emit_common.c`, `dcc_mir_target.c`, `dcc_mir_schedule.c` |
