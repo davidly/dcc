@@ -1,0 +1,207 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
+    <url>
+        <loc>None./</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="None"/>
+    </url>
+    <url>
+        <loc>None00-agent-skills/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="None00-agent-skills/"/>
+    </url>
+    <url>
+        <loc>None00-debug-host/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="None00-debug-host/"/>
+    </url>
+    <url>
+        <loc>None00-setup-toolchain/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="None00-setup-toolchain/"/>
+    </url>
+    <url>
+        <loc>None00-vscode-debugging/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="None00-vscode-debugging/"/>
+    </url>
+    <url>
+        <loc>None01-c-conformance/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="None01-c-conformance/"/>
+    </url>
+    <url>
+        <loc>None02-build-and-link/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="None02-build-and-link/"/>
+    </url>
+    <url>
+        <loc>None03-types-and-conventions/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="None03-types-and-conventions/"/>
+    </url>
+    <url>
+        <loc>None04-operators/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="None04-operators/"/>
+    </url>
+    <url>
+        <loc>None10-system-and-cpm/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="None10-system-and-cpm/"/>
+    </url>
+    <url>
+        <loc>None11-limitations/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="None11-limitations/"/>
+    </url>
+    <url>
+        <loc>None12-examples/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="None12-examples/"/>
+    </url>
+    <url>
+        <loc>Noneappendix/00-architecture/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="Noneappendix/00-architecture/"/>
+    </url>
+    <url>
+        <loc>Noneappendix/01-dccrtlstrip/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="Noneappendix/01-dccrtlstrip/"/>
+    </url>
+    <url>
+        <loc>Noneappendix/02-runtime-sizes/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="Noneappendix/02-runtime-sizes/"/>
+    </url>
+    <url>
+        <loc>Noneappendix/03-utilities/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="Noneappendix/03-utilities/"/>
+    </url>
+    <url>
+        <loc>Noneappendix/05-building-project-docs/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="Noneappendix/05-building-project-docs/"/>
+    </url>
+    <url>
+        <loc>Nonestandard-lib/01-assert/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="Nonestandard-lib/01-assert/"/>
+    </url>
+    <url>
+        <loc>Nonestandard-lib/02-errno/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="Nonestandard-lib/02-errno/"/>
+    </url>
+    <url>
+        <loc>Nonestandard-lib/03-float/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="Nonestandard-lib/03-float/"/>
+    </url>
+    <url>
+        <loc>Nonestandard-lib/04-limits/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="Nonestandard-lib/04-limits/"/>
+    </url>
+    <url>
+        <loc>Nonestandard-lib/05-stdio/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="Nonestandard-lib/05-stdio/"/>
+    </url>
+    <url>
+        <loc>Nonestandard-lib/06-stdlib/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="Nonestandard-lib/06-stdlib/"/>
+    </url>
+    <url>
+        <loc>Nonestandard-lib/07-ctype/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="Nonestandard-lib/07-ctype/"/>
+    </url>
+    <url>
+        <loc>Nonestandard-lib/08-math/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="Nonestandard-lib/08-math/"/>
+    </url>
+    <url>
+        <loc>Nonestandard-lib/09-setjmp/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="Nonestandard-lib/09-setjmp/"/>
+    </url>
+    <url>
+        <loc>Nonestandard-lib/10-stdarg/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="Nonestandard-lib/10-stdarg/"/>
+    </url>
+    <url>
+        <loc>Nonestandard-lib/11-stdbool/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="Nonestandard-lib/11-stdbool/"/>
+    </url>
+    <url>
+        <loc>Nonestandard-lib/12-stddef/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="Nonestandard-lib/12-stddef/"/>
+    </url>
+    <url>
+        <loc>Nonestandard-lib/13-stdint/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="Nonestandard-lib/13-stdint/"/>
+    </url>
+    <url>
+        <loc>Nonestandard-lib/14-string/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="Nonestandard-lib/14-string/"/>
+    </url>
+    <url>
+        <loc>Nonestandard-lib/15-time/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="Nonestandard-lib/15-time/"/>
+    </url>
+    <url>
+        <loc>Nonestandard-lib/16-signal/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="Nonestandard-lib/16-signal/"/>
+    </url>
+    <url>
+        <loc>Nonestandard-lib/17-locale/</loc>
+        <lastmod>2026-09-06</lastmod>
+        <changefreq>daily</changefreq>
+        <xhtml:link rel="alternate" hreflang="en" href="Nonestandard-lib/17-locale/"/>
+    </url>
+</urlset>
