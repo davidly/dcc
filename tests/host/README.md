@@ -77,6 +77,32 @@ level; member addresses combine the field's own qualifier with its pointee
 mask. This preserves the distinction between a volatile pointer and volatile
 data without replacing the existing type encoding or debug metadata format.
 
+## Generic MinMax Regression
+
+The clobber runner's `minimax` case forces baseline, all-optimization, and
+address-rematerializing spilled candidates for `tests/ttt.c:MinMax`. It asserts
+spilled selection and 6,493 moves for the standalone default single iteration,
+in both stack configurations, both peephole modes, and release/full-debug/line-debug
+builds. Explicit `DCC_MIR_SELECT_CANDIDATE` diagnostics can override an exact
+incumbent; ordinary production selection is unchanged.
+
+This exposed a peephole interaction hidden by the exact schedule: byte zero-test
+rewrites discarded a live zero/sign-extended `HL` result after a subsequent
+`ld h,0` had been removed as redundant. The rewrite now requires `HL` dead;
+the signed form also requires `A` and parity dead. Small assembly fixtures cover
+live-result preservation and the still-valid unsigned dead-result rewrite.
+
+The signed rule tracks the differing `A`/parity values with a 512-visit CFG
+budget. Z/NZ branches observe equivalent flags; `or a` preserves the differing
+byte until it is overwritten. Pair increment/decrement and 16-bit addition
+do not kill parity. Unresolved branches, user assembly, and unknown instructions
+or calls reject the proof. Local callees must overwrite the incoming values
+before using them. Reviewed DCCRTL entries (`__fpc`, printf variants, `__ssf`,
+`__scat`, `_atoi`) discard those incoming values; `__stchk` only kills the flag
+difference and preserves `A`. At a generated C return, `A` and parity are not
+result channels. These refinements retain the existing performance baseline
+without weakening the required `HL` deadness proof.
+
 ## Qualifier Expression Matrix
 
 `qualexpr.c` checks explicit and typedef casts, adding/removing/restoring
