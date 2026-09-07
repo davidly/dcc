@@ -93,6 +93,19 @@ elimination must preserve this distinction. Function symbols retain return
 qualifiers, and inline expansion preserves both cast metadata and the declared
 pointer-result contract.
 
+Indirect-return cases cover parameter and deferred block-local function
+pointers, a global function-pointer typedef, explicit `(*getter)()` calls,
+and byte/word access widths. A volatile function-pointer object returning
+ordinary bytes, with a volatile-pointer parameter in its prototype, checks
+that neither qualifier leaks into the returned data. Prototype parsing must
+preserve the enclosing declarator's qualifiers. The function-pointer level
+shifts the return mask left; MIR indirect calls recover it by shifting the
+callee value's mask right. Deferred call type repair also updates subscript
+element types and widths before indirect memory operations are finalized.
+
+These cases do not establish complete support for arbitrary abstract
+function-pointer casts or deeper function-return declarator combinations.
+
 ## Generated Differential Matrix
 
 `qualgen` generates a deterministic C program in the runner's temporary build

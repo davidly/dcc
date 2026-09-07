@@ -3036,6 +3036,9 @@ void parse_typedef_decl(void)
             type = type_add_ptr(type);
         }
 
+        g_decl.is_volatile = is_volatile;
+        g_decl.pointee_is_volatile = pointee_is_volatile;
+        g_decl.pointee_volatile_mask = volatile_mask;
         if (parse_funcptr_declarator(&type, name, sizeof(name))) {
             /* Parenthesized function-pointer typedef. */
             is_volatile = g_decl.is_volatile;
@@ -3179,6 +3182,9 @@ void parse_function_or_global(int base_type)
             next_token();
         }
 
+        g_decl.is_volatile = object_is_volatile;
+        g_decl.pointee_is_volatile = pointee_is_volatile;
+        g_decl.pointee_volatile_mask = volatile_mask;
         if (parse_funcptr_declarator(&type, name, sizeof(name))) {
             direct_funcptr_decl = 1;
             object_is_volatile = g_decl.is_volatile;
