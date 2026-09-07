@@ -779,13 +779,19 @@ static struct AstNode *p_unary(struct AstArena *ar)
         struct AstNode *operand;
         int cty;
         int csz;
+        unsigned int volatile_mask;
+        struct AstNode *cast;
         next_token();                    /* consume '(' */
         parse_type_name_decl(&cty, &csz); /* parse ( type-name */
+        volatile_mask = g_decl.pointee_volatile_mask |
+            (unsigned int)(g_decl.pointee_is_volatile != 0);
         expect(')');
         if (g_lex.tok.kind == '{')
             return p_postfix_tail(ar, ast_build_compound_literal(ar, cty));
         operand = p_unary(ar);
-        return ast_cast(ar, cty, operand);
+        cast = ast_cast(ar, cty, operand);
+        cast->pointee_volatile_mask = volatile_mask;
+        return cast;
     }
 
     return p_postfix(ar);

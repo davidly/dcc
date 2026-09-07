@@ -130,6 +130,7 @@ struct MirInsn {
     int memory_size;
     int memory_flags;
     unsigned int pointee_volatile_mask;
+    int has_pointer_qualifiers;
     int bit_width;
     int bit_shift;
     unsigned int bit_mask;

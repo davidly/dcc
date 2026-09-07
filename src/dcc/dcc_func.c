@@ -3209,6 +3209,8 @@ void parse_function_or_global(int base_type)
          * fn_t *fp have already cleared base_is_func_typedef above. */
         if (base_is_func_typedef && g_funcptr_decl_array_len == 0) {
             s = add_global(name, type, SC_FUNC);
+            s->pointee_is_volatile = pointee_is_volatile;
+            s->pointee_volatile_mask = volatile_mask;
             s->is_inline |= g_decl.is_inline;
             s->is_noreturn |= g_decl.is_noreturn;
             parse_function_return_type = type;
@@ -3226,6 +3228,8 @@ void parse_function_or_global(int base_type)
         /* Function declarator or definition. */
         if (is_funcret_funcptr_decl || (g_funcptr_decl_array_len == 0 && accept('('))) {
             s = add_global(name, type, SC_FUNC);
+            s->pointee_is_volatile = pointee_is_volatile;
+            s->pointee_volatile_mask = volatile_mask;
             /* Unlike is_inline (an optimization hint dcc tolerates picking up
              * from any one declaration), a __fastcall mismatch between
              * declarations is a real ABI disagreement between call sites

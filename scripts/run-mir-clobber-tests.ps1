@@ -255,6 +255,22 @@ function Assert-ForcedRegionalSafe(
 $fixtureRoot = Join-Path $repoRoot "tests/mir-clobber"
 $caseDefinitions = @(
     [pscustomobject]@{
+        Name = "qualgen"
+        Sources = @(Join-Path $tempRoot "qualgen.c")
+        Defines = @()
+        Expected = @("MIR generated qualifier checks=576 failures=0")
+        Exit = 0
+        DebugModes = @("true", "lines")
+    },
+    [pscustomobject]@{
+        Name = "qualexpr"
+        Sources = @(Join-Path $fixtureRoot "qualexpr.c")
+        Defines = @()
+        Expected = @("MIR qualifier expressions failures=0")
+        Exit = 0
+        DebugModes = @("true", "lines")
+    },
+    [pscustomobject]@{
         Name = "aliasmem"
         Sources = @(Join-Path $fixtureRoot "aliasmem.c")
         Defines = @()
@@ -427,7 +443,82 @@ try {
     Set-ProcessEnvironment "DCC_MIR_MACHINE_REPORT" "1"
     Set-ProcessEnvironment "DCC_MIR_SELECT_REPORT" "1"
 
+    if ($Cases.Count -eq 0 -or "qualgen" -in $Cases) {
+        $seeds = @(0, 1, 127, 255, 256, 32767, 32768, 65535)
+        $variants = @("plain", "cast", "typedef", "return", "conditional", "roundtrip")
+        $source = [System.Text.StringBuilder]::new()
+        [void]$source.AppendLine('#include <stdio.h>')
+        $expected = [System.Collections.Generic.List[int]]::new()
+        $functionNames = [System.Collections.Generic.List[string]]::new()
+        foreach ($width in @(8, 16)) {
+            $element = if ($width -eq 8) { "unsigned char" } else { "unsigned int" }
+            [void]$source.AppendLine("typedef volatile $element *Q$width;")
+            [void]$source.AppendLine("volatile $element *r$width($element *pointer) { return pointer; }")
+            foreach ($variant in $variants) {
+                $name = "q$($functionNames.Count)"
+                $functionNames.Add($name)
+                $expression = switch ($variant) {
+                    "plain" { "plain" }
+                    "cast" { "((volatile $element *)plain)" }
+                    "typedef" { "((Q$width)plain)" }
+                    "return" { "r$width(plain)" }
+                    "conditional" { "(flag ? plain : observed)" }
+                    "roundtrip" { "(($element *)(volatile $element *)plain)" }
+                }
+                [void]$source.AppendLine("unsigned int $name(unsigned int seed, int index, int flag) {")
+                [void]$source.AppendLine("$element data[4], other[4]; int slot;")
+                [void]$source.AppendLine("$element *plain = data; volatile $element *observed = other;")
+                [void]$source.AppendLine("for (slot = 0; slot < 4; ++slot) { data[slot] = ($element)(seed + (unsigned int)slot * 257U); other[slot] = ($element)(seed + (unsigned int)slot * 257U + 19U); }")
+                [void]$source.AppendLine("return (unsigned int)((unsigned int)$expression[index] + seed) ^ (unsigned int)((unsigned int)$expression[index + 1] * 257U); }")
+            }
+        }
+        foreach ($seed in $seeds) {
+            foreach ($index in 0..2) {
+                foreach ($flag in 0..1) {
+                    foreach ($width in @(8, 16)) {
+                        $mask = if ($width -eq 8) { 255 } else { 65535 }
+                        foreach ($variant in $variants) {
+                            $bias = if ($variant -eq "conditional" -and $flag -eq 0) { 19 } else { 0 }
+                            $left = ($seed + $index * 257 + $bias) -band $mask
+                            $right = ($seed + ($index + 1) * 257 + $bias) -band $mask
+                            $expected.Add((($left + $seed) -band 65535) -bxor (($right * 257) -band 65535))
+                        }
+                    }
+                }
+            }
+        }
+        [void]$source.AppendLine("static unsigned int seeds[8] = { $($seeds -join ',') };")
+        [void]$source.AppendLine("static unsigned int expected[576] = { $($expected -join ',') };")
+        [void]$source.AppendLine('static int checks, failures;')
+        [void]$source.AppendLine('static void check(unsigned int actual) { if (actual != expected[checks]) { printf("FAIL generated %d got=%u expected=%u\n", checks, actual, expected[checks]); ++failures; } ++checks; }')
+        [void]$source.AppendLine('int main(void) { int sample, index, flag; for (sample = 0; sample < 8; ++sample) for (index = 0; index < 3; ++index) for (flag = 0; flag < 2; ++flag) {')
+        foreach ($name in $functionNames) {
+            [void]$source.AppendLine("check($name(seeds[sample], index, flag));")
+        }
+        [void]$source.AppendLine('} printf("MIR generated qualifier checks=%d failures=%d\n", checks, failures); return failures != 0; }')
+        [System.IO.File]::WriteAllText((Join-Path $tempRoot "qualgen.c"),
+            $source.ToString(), [System.Text.Encoding]::ASCII)
+    }
+
     foreach ($proofCase in @(
+        @{
+            Name = "qualexpr"; Source = "qualexpr.c"
+            Expectations = @(
+                @{ Function = "castadd"; Loads = 3; Volatile = 3; Width = 1 },
+                @{ Function = "casttype"; Loads = 3; Volatile = 3; Width = 1 },
+                @{ Function = "castdrop"; Loads = 1; Volatile = 0; Width = 1 },
+                @{ Function = "nested"; Loads = 1; Volatile = 1; Width = 1 },
+                @{ Function = "voidcast"; Loads = 1; Volatile = 1; Width = 1 },
+                @{ Function = "deepcast"; Loads = 2; Volatile = 1; ByteVolatile = 1 },
+                @{ Function = "retread"; Loads = 1; Volatile = 1; Width = 1 },
+                @{ Function = "retdeep"; Loads = 2; Volatile = 1; ByteVolatile = 1 },
+                @{ Function = "inclone"; Loads = 1; Volatile = 1; Width = 1 },
+                @{ Function = "recast"; Loads = 1; Volatile = 1; Width = 1 },
+                @{ Function = "plainret"; Loads = 1; Volatile = 0; Width = 1 },
+                @{ Function = "inread"; Loads = 1; Volatile = 1; Width = 1 },
+                @{ Function = "choose"; Loads = 1; Volatile = 1; Width = 1 }
+            )
+        },
         @{
             Name = "semantics"; Source = "semfix.c"
             Expectations = @(

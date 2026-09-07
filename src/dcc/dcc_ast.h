@@ -106,6 +106,7 @@ enum AstKind {
 struct AstNode {
     int kind;               /* enum AstKind                                */
     int type;               /* dcc type code of an expression's result     */
+    unsigned int pointee_volatile_mask;
     int op;                 /* operator token kind (unary/binary/assign)   */
     long ival;              /* integer/char literal, case value, label id  */
     unsigned long uval;     /* float bits or other unsigned payload        */
