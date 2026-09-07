@@ -1451,7 +1451,7 @@ static int try_byte_zero_test_at(int i)
      *   or l
      * The above loads a byte from (HL) as an unsigned 16-bit value in HL,
      * then OR-reduces HL into A to test for zero.  Since H is forced to 0,
-     * A ends up equal to the byte.  Equivalent, and 11T faster:
+    * A ends up equal to the byte.  When HL is dead, equivalent and 11T faster:
      *   ld a,(hl)
      *   or a
      */
@@ -1459,7 +1459,8 @@ static int try_byte_zero_test_at(int i)
         eq(i,     "ld l,(hl)") &&
         eq(i + 1, "ld h,0") &&
         eq(i + 2, "ld a,h") &&
-        eq(i + 3, "or l")) {
+        eq(i + 3, "or l") &&
+        peep_registers_dead_after(i + 3, PEEP_REG_HL)) {
         replace1_tagged(i, "ld a,(hl)", "byte_zero_test");
         replace1(i + 1, "or a");
         delete_n(i + 2, 2);
@@ -1971,7 +1972,8 @@ int pass_once(void)
          *
          * The sign-extension is irrelevant for a zero/nonzero branch.  Test
          * the byte directly, leaving HL untouched; only apply when the next
-         * consumer is a Z/NZ branch so no signed flags are being preserved.
+         * consumer is a Z/NZ branch and the changed HL, A, and parity results
+         * are dead.
          */
         if (i + 7 < nlines &&
             eq(i,     "ld l,(hl)") &&
@@ -1984,7 +1986,9 @@ int pass_once(void)
             (strncmp(lines[i + 7], "jp z,", 5) == 0 ||
              strncmp(lines[i + 7], "jp nz,", 6) == 0 ||
              strncmp(lines[i + 7], "jr z,", 5) == 0 ||
-             strncmp(lines[i + 7], "jr nz,", 6) == 0)) {
+             strncmp(lines[i + 7], "jr nz,", 6) == 0) &&
+            peep_registers_dead_after(i + 6, PEEP_REG_HL | PEEP_REG_A) &&
+            peep_flags_dead_after(i + 6, PEEP_FLAG_PV)) {
             replace1_tagged(i, "ld a,(hl)", "byte_signed_zero_test");
             replace1(i + 1, "or a");
             delete_n(i + 2, 5);

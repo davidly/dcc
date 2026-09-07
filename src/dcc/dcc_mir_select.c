@@ -3508,6 +3508,10 @@ static int mir_try_generated_candidate(
 {
     const char *emit_filter = getenv("DCC_MIR_EMIT_FUNCTION");
     const char *general_filter = getenv("DCC_MIR_GENERAL_FUNCTION");
+    const char *diagnostic_candidate = getenv("DCC_MIR_SELECT_CANDIDATE");
+    const char *diagnostic_function = getenv("DCC_MIR_SELECT_FUNCTION");
+    int force_diagnostic = diagnostic_candidate != NULL &&
+        (diagnostic_function == NULL || !strcmp(diagnostic_function, mir.name));
     MirStream *generated = mir_stream_open();
     int emitted = 0;
     int default_policy = 0;
@@ -3665,8 +3669,9 @@ static int mir_try_generated_candidate(
     *candidate_name = !strcmp(*selector_name, "scheduled-machine-cfg")
         ? "exact-scheduled" : "incumbent";
     if (default_policy &&
-        strcmp(*selector_name, "scheduled-machine-cfg") != 0 &&
-        !mir_stream_contains_text(generated, MIR_EXACT_KERNEL_MARKER))
+        (force_diagnostic ||
+         (strcmp(*selector_name, "scheduled-machine-cfg") != 0 &&
+          !mir_stream_contains_text(generated, MIR_EXACT_KERNEL_MARKER))))
         mir_apply_mir_v1_policy(
             &generated, selector_name, candidate_name,
             selected_label_id, label_base,

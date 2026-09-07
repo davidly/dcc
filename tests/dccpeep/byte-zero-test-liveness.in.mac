@@ -1,0 +1,54 @@
+; dcc stage-1d output
+_unsigned_live:
+ld l,(hl)
+ld h,0
+ld a,h
+or l
+ld (_result),hl
+ret
+_unsigned_dead:
+ld l,(hl)
+ld h,0
+ld a,h
+or l
+ld hl,7
+ret
+_signed_live:
+ld l,(hl)
+ld a,l
+rlca
+sbc a,a
+ld h,a
+ld a,h
+or l
+jp nz,_signed_sink
+ld (_result),hl
+_signed_sink:
+ret
+_signed_live_a:
+ld l,(hl)
+ld a,l
+rlca
+sbc a,a
+ld h,a
+ld a,h
+or l
+jp z,_a_zero
+ld (_byte),a
+_a_zero:
+ld hl,7
+ret
+_signed_dead:
+ld l,(hl)
+ld a,l
+rlca
+sbc a,a
+ld h,a
+ld a,h
+or l
+jp nz,L9001
+L9001:
+ld hl,7
+xor a
+ret
+end

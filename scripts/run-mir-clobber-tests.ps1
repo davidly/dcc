@@ -147,6 +147,10 @@ __ctu:
         throw "$Name build did not create $assemblyPath ($configuration)"
     }
     $assembly = Get-Content -LiteralPath $assemblyPath -Raw
+    if ($Name.StartsWith("minimax-") -and $build.Output -notmatch
+        'MIR selection function=MinMax selector=spilled-scalar-cfg') {
+        throw "$Name did not use the required generic emitter:`n$($build.Output)"
+    }
     if ($ExactTemplate) {
         $templatePattern =
             "template=$([regex]::Escape($ExactTemplate)) reject="
@@ -645,6 +649,27 @@ try {
         }
     }
 
+    if ($Cases.Count -eq 0 -or "minimax" -in $Cases) {
+        Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" "MinMax"
+        try {
+            foreach ($candidate in @("spilled-baseline", "spilled-all", "spilled-address-remat")) {
+                Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" $candidate
+                foreach ($stackCheck in @($true, $false)) {
+                    foreach ($peep in @($true, $false)) {
+                        foreach ($debugMode in @("", "true", "lines")) {
+                            Assert-RunCase -Name "minimax-$candidate" `
+                                -Sources @(Join-Path $repoRoot "tests/ttt.c") -Defines @() `
+                                -Expected @("6493 moves", "1 iterations") -ExpectedExit 0 `
+                                -StackCheck $stackCheck -Peep $peep -DebugMode $debugMode
+                        }
+                    }
+                }
+            }
+        } finally {
+            Set-ProcessEnvironment "DCC_MIR_SELECT_FUNCTION" $savedEnvironment["DCC_MIR_SELECT_FUNCTION"]
+            Set-ProcessEnvironment "DCC_MIR_SELECT_CANDIDATE" $savedEnvironment["DCC_MIR_SELECT_CANDIDATE"]
+        }
+    }
     if ($Cases.Count -eq 0 -or "vlaend" -in $Cases) {
         foreach ($peep in @($true, $false)) {
             Assert-RunCase -Name "vlaend" `
