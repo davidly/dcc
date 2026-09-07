@@ -45,6 +45,25 @@ classification. Diagnostics, defensive checks, and unused helpers within
 included modules remain in the denominator. Legacy codegen is not a target
 for coverage-driven test additions.
 
+`scripts/ast-mir-coverage.tsv` is the versioned module classification: 28
+active-owner modules, four mixed modules pending function-level classification,
+and two optional diagnostic modules. Each row includes its rationale. The
+coverage runner validates it before building: missing files, duplicate entries,
+invalid categories, and newly added unclassified AST/MIR modules fail rather
+than silently changing the denominator. No classification is based on whether
+the current tests happened to execute a function.
+
+Validate the classification independently with:
+
+```sh
+sh scripts/coverage-sources.sh
+sh scripts/test-coverage-sources.sh
+```
+
+Function-level separation of production, diagnostic, and unreachable code is
+still pending inside mixed modules. Do not relabel those files as legacy or
+include them wholesale merely to claim a complete production denominator.
+
 Measured on macOS with Apple Clang 21, on 2026-09-07, using compiler revision
 `9ad4775e` plus the coverage-routing and host-test changes documented here:
 

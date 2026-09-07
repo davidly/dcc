@@ -41,6 +41,8 @@ if [ -z "$llvm_cov" ] || [ -z "$llvm_profdata" ]; then
     exit 1
 fi
 
+coverage_sources=$(sh "$repo_root/scripts/coverage-sources.sh")
+
 cmake -S "$repo_root/src/dcc" -B "$build_dir/cmake" \
     -DCMAKE_BUILD_TYPE=Debug \
     -DCMAKE_C_COMPILER="$clang_cmd" \
@@ -74,17 +76,12 @@ fi
     -object "$build_dir/cmake/mir-verify-test" \
     -instr-profile="$build_dir/dcc.profdata" \
     "$repo_root"/src/dcc/*.c >"$report_dir/summary.txt"
-set -- \
-    "$repo_root/src/dcc/dcc_ast.c" \
-    "$repo_root/src/dcc/dcc_ast_build.c" \
-    "$repo_root/src/dcc/dcc_ast_metadata.c" \
-    "$repo_root/src/dcc/dcc_ast_stmt_meta.c"
-for source in "$repo_root"/src/dcc/dcc_mir*.c; do
-    case "$source" in
-        */dcc_mir_schedule.c|*/dcc_mir_target.c) continue ;;
-    esac
+set --
+while IFS= read -r source; do
     set -- "$@" "$source"
-done
+done <<EOF
+$coverage_sources
+EOF
 printf '%s\n' "$@" >"$report_dir/ast-mir-sources.txt"
 "$llvm_cov" report "$binary_dir/dcc" \
     -object "$build_dir/cmake/mir-verify-test" \

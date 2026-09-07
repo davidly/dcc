@@ -1,0 +1,35 @@
+category	source	reason
+active-owner	src/dcc/dcc_ast.c	AST arena and node construction
+active-owner	src/dcc/dcc_ast_build.c	Function expression and statement parsing
+mixed-pending	src/dcc/dcc_ast_gen.c	Classifiers require function-level separation from compatibility helpers
+mixed-pending	src/dcc/dcc_ast_gen_cond.c	Active condition proofs and retained compatibility paths
+mixed-pending	src/dcc/dcc_ast_gen_expr.c	Active initializer metadata mixed with retained expression emission
+mixed-pending	src/dcc/dcc_ast_gen_support.c	Active semantic proofs and retained compatibility paths
+active-owner	src/dcc/dcc_ast_metadata.c	Non-emitting declaration scope and debug metadata
+active-owner	src/dcc/dcc_ast_stmt_meta.c	Statement capture and metadata planning
+active-owner	src/dcc/dcc_mir.c	Lowering metadata repair CFG promotion and allocation
+active-owner	src/dcc/dcc_mir_emit_common.c	Shared production MIR emission
+active-owner	src/dcc/dcc_mir_homed_cfg.c	Production fixed and regional home emission
+active-owner	src/dcc/dcc_mir_machine_aggregate_checks.c	Production aggregate schedules
+active-owner	src/dcc/dcc_mir_machine_attention.c	Production attention schedules
+active-owner	src/dcc/dcc_mir_machine_byte_scans.c	Production byte and row schedules
+active-owner	src/dcc/dcc_mir_machine_call_runners.c	Production call schedules
+active-owner	src/dcc/dcc_mir_machine_constant_folding.c	Production constant and result schedules
+active-owner	src/dcc/dcc_mir_machine_containers.c	Production container schedules
+active-owner	src/dcc/dcc_mir_machine_emit.c	Production schedule coordination
+active-owner	src/dcc/dcc_mir_machine_endgame.c	Production late schedule families
+active-owner	src/dcc/dcc_mir_machine_float_recursion.c	Production float and recursion schedules
+active-owner	src/dcc/dcc_mir_machine_float_reports.c	Production floating point schedules
+active-owner	src/dcc/dcc_mir_machine_interpreter_runners.c	Production interpreter schedules
+active-owner	src/dcc/dcc_mir_machine_numeric.c	Production numeric schedules
+active-owner	src/dcc/dcc_mir_machine_runtime_runners.c	Production runtime call schedules
+active-owner	src/dcc/dcc_mir_machine_scanners.c	Production scanner schedules
+active-owner	src/dcc/dcc_mir_machine_structural_checks.c	Production structural schedules
+active-owner	src/dcc/dcc_mir_machine_validation_runners.c	Production validation runner schedules
+active-owner	src/dcc/dcc_mir_machine_wide_records.c	Production wide value schedules
+optional-diagnostic	src/dcc/dcc_mir_schedule.c	Shadow scheduler not used for production selection
+active-owner	src/dcc/dcc_mir_select.c	Production candidate selection and cost policy
+active-owner	src/dcc/dcc_mir_spilled_cfg.c	Production spilled CFG emission
+active-owner	src/dcc/dcc_mir_stream.c	Transactional production streams
+optional-diagnostic	src/dcc/dcc_mir_target.c	Shadow target model not used for production selection
+active-owner	src/dcc/dcc_mir_verify.c	Production dominance verification
