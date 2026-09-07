@@ -42,6 +42,7 @@ if [ -z "$llvm_cov" ] || [ -z "$llvm_profdata" ]; then
 fi
 
 coverage_sources=$(sh "$repo_root/scripts/coverage-sources.sh")
+python3 "$repo_root/scripts/ast-function-coverage.py" --clang "$clang_cmd"
 
 cmake -S "$repo_root/src/dcc" -B "$build_dir/cmake" \
     -DCMAKE_BUILD_TYPE=Debug \
@@ -91,6 +92,19 @@ printf '%s\n' "$@" >"$report_dir/ast-mir-sources.txt"
     -object "$build_dir/cmake/mir-verify-test" \
     -instr-profile="$build_dir/dcc.profdata" \
     "$@" >"$report_dir/ast-mir-coverage.json"
+python3 "$repo_root/scripts/ast-function-coverage.py" --clang "$clang_cmd" \
+    --coverage "$report_dir/ast-mir-coverage.json" \
+    --allowlist "$report_dir/ast-mir-functions.txt"
+"$llvm_cov" report "$binary_dir/dcc" \
+    -object "$build_dir/cmake/mir-verify-test" \
+    -instr-profile="$build_dir/dcc.profdata" \
+    -name-allowlist="$report_dir/ast-mir-functions.txt" -show-functions \
+    "$@" "$repo_root"/src/dcc/dcc_ast_gen*.c >"$report_dir/ast-mir-function-detail.txt"
+python3 "$repo_root/scripts/ast-function-coverage.py" --clang "$clang_cmd" \
+    --coverage "$report_dir/ast-mir-coverage.json" \
+    --allowlist "$report_dir/ast-mir-functions.txt" \
+    --native-report "$report_dir/ast-mir-function-detail.txt" \
+    --summary "$report_dir/ast-mir-function-coverage.json" >"$report_dir/ast-mir-function-summary.txt"
 "$llvm_cov" show "$binary_dir/dcc" \
     -object "$build_dir/cmake/mir-verify-test" \
     -instr-profile="$build_dir/dcc.profdata" \
@@ -103,4 +117,5 @@ echo "Unfiltered collection summary (not a target): $report_dir/summary.txt"
 echo "Legacy-excluded AST/MIR summary: $report_dir/ast-mir-summary.txt"
 echo "AST/MIR source manifest:   $report_dir/ast-mir-sources.txt"
 echo "AST/MIR coverage data:     $report_dir/ast-mir-coverage.json"
+echo "Function-scoped AST/MIR summary: $report_dir/ast-mir-function-summary.txt"
 echo "Compiler coverage HTML:    $report_dir/html/index.html"

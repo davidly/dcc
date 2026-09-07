@@ -11,7 +11,7 @@ NR == 1 {
 }
 {
     if (NF != 3 || $3 == "" ||
-        $1 !~ /^(active-owner|mixed-pending|optional-diagnostic|legacy)$/ ||
+        $1 !~ /^(active-owner|mixed-classified|optional-diagnostic|legacy)$/ ||
         $2 !~ /^src\/dcc\/dcc_(ast|mir)[a-z_]*\.c$/ || seen[$2]++) {
         print "Invalid coverage classification at row " NR > "/dev/stderr"
         failed = 1
