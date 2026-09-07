@@ -1441,6 +1441,113 @@ static int try_ix_predec_inc_at(int i)
     return 0;
 }
 
+static int byte_test_auxiliary_dead(int line, unsigned registers,
+                                    unsigned flags, int *budget, int c_return)
+{
+    const PeepLineInfo *info;
+    const PeepFlowLine *flow;
+    char clean[MAX_LINE];
+    unsigned flags_read;
+    unsigned reads;
+    unsigned writes;
+    unsigned flags_written;
+    int successor;
+
+    if ((registers | flags) == 0)
+        return 1;
+    if (line < 0 || line >= nlines || --*budget < 0 || user_asm_original[line] != NULL)
+        return 0;
+    strip_peep_comment_copy(clean, lines[line]);
+    if (!strcmp(clean, "ex de,hl"))
+        return byte_test_auxiliary_dead(line + 1, registers, flags, budget, c_return);
+    if (!strcmp(clean, "bit 7,h"))
+        return byte_test_auxiliary_dead(line + 1, registers, 0, budget, c_return);
+    if (registers == 0 && (!strcmp(clean, "rlca") || !strcmp(clean, "rrca") ||
+                           !strcmp(clean, "rla") || !strcmp(clean, "rra")))
+        return byte_test_auxiliary_dead(line + 1, registers, flags, budget, c_return);
+    if (!strcmp(clean, "call __stchk"))
+        return byte_test_auxiliary_dead(line + 1, registers, 0, budget, c_return);
+    if (!strcmp(clean, "call __fpc") || !strcmp(clean, "call _pflng") ||
+        !strcmp(clean, "call _pflio") || !strcmp(clean, "call _pffio") ||
+        !strcmp(clean, "call _printf") ||
+        !strcmp(clean, "call __ssf") || !strcmp(clean, "call __scat") ||
+        !strcmp(clean, "call _atoi"))
+        return 1;
+    if (!strncmp(clean, "call ", 5) && is_local_func_label(clean + 5)) {
+        int target = find_label_line_in_range(clean + 5, 0, nlines);
+        if (target >= 0 && byte_test_auxiliary_dead(target, registers, flags, budget, 0))
+            return 1;
+    }
+    info = peep_line_info(line);
+    if (info == NULL || info->effects.unknown)
+        return 0;
+    if (!strcmp(clean, "ret") && c_return)
+        return 1;
+    flags_read = info->effects.flags_read;
+    reads = info->effects.reads;
+    writes = info->effects.writes;
+    flags_written = info->effects.flags_written;
+    if ((!strcmp(info->mnemonic, "add") || !strcmp(info->mnemonic, "inc") ||
+         !strcmp(info->mnemonic, "dec")) &&
+        info->left.kind == PEEP_OPERAND_REGISTER &&
+        (info->left.registers == PEEP_REG_HL || info->left.registers == PEEP_REG_DE ||
+         info->left.registers == PEEP_REG_BC || info->left.registers == PEEP_REG_IX ||
+         info->left.registers == PEEP_REG_IY || info->left.registers == PEEP_REG_SP))
+        flags_written &= ~PEEP_FLAG_PV;
+    if (info->opcode == PEEP_OPCODE_JP || info->opcode == PEEP_OPCODE_JR) {
+        char target[128];
+        int start;
+        int end;
+        find_function_bounds_any(line, &start, &end);
+        if (!jump_target_any(clean, target) ||
+            find_label_line_in_range(target, start, end) < 0)
+            return 0;
+    }
+    if (!strcmp(clean, "or a")) {
+        reads &= ~PEEP_REG_A;
+        writes &= ~PEEP_REG_A;
+        flags_written &= ~PEEP_FLAG_PV;
+    } else if (!strcmp(clean, "xor a") || !strcmp(clean, "sbc a,a")) {
+        reads &= ~PEEP_REG_A;
+    }
+    if (!strncmp(clean, "jp z,", 5) || !strncmp(clean, "jp nz,", 6) ||
+        !strncmp(clean, "jr z,", 5) || !strncmp(clean, "jr nz,", 6))
+        flags_read = PEEP_FLAG_Z;
+    if ((info->opcode == PEEP_OPCODE_JP || info->opcode == PEEP_OPCODE_JR) &&
+        strchr(clean, ',') == NULL)
+        flags_read = 0;
+    if ((reads & registers) != 0 || (flags_read & flags) != 0)
+        return 0;
+    registers &= ~writes;
+    flags &= ~flags_written;
+    if ((registers | flags) == 0)
+        return 1;
+    flow = peep_flow_line(line);
+    if (flow == NULL || flow->successor_count == 0)
+        return 0;
+    for (successor = 0; successor < flow->successor_count; ++successor)
+        if (!byte_test_auxiliary_dead(flow->successors[successor], registers,
+                                     flags, budget, c_return))
+            return 0;
+    return 1;
+}
+
+static int signed_byte_test_auxiliary_dead(int line)
+{
+    int start;
+    int end;
+    int scan;
+    int c_return = 0;
+    int budget = 512;
+
+    find_function_bounds_any(line, &start, &end);
+    for (scan = start; scan < end; ++scan)
+        if (strstr(lines[scan], ";@dcc.mir ") != NULL ||
+            strstr(lines[scan], ";@dcc.lto end ") != NULL)
+            c_return = 1;
+    return byte_test_auxiliary_dead(line + 1, PEEP_REG_A, PEEP_FLAG_PV, &budget, c_return);
+}
+
 static int try_byte_zero_test_at(int i)
 {
     /*
@@ -1987,8 +2094,8 @@ int pass_once(void)
              strncmp(lines[i + 7], "jp nz,", 6) == 0 ||
              strncmp(lines[i + 7], "jr z,", 5) == 0 ||
              strncmp(lines[i + 7], "jr nz,", 6) == 0) &&
-            peep_registers_dead_after(i + 6, PEEP_REG_HL | PEEP_REG_A) &&
-            peep_flags_dead_after(i + 6, PEEP_FLAG_PV)) {
+            peep_registers_dead_after(i + 6, PEEP_REG_HL) &&
+            signed_byte_test_auxiliary_dead(i + 6)) {
             replace1_tagged(i, "ld a,(hl)", "byte_signed_zero_test");
             replace1(i + 1, "or a");
             delete_n(i + 2, 5);

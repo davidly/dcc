@@ -51,4 +51,35 @@ L9001:
 ld hl,7
 xor a
 ret
+_signed_parity:
+ld l,(hl)
+ld a,l
+rlca
+sbc a,a
+ld h,a
+ld a,h
+or l
+jp z,L9010
+L9010:
+ld hl,7
+inc hl
+jp pe,L9011
+ld hl,9
+L9011:
+xor a
+ret
+_signed_unknown_call:
+ld l,(hl)
+ld a,l
+rlca
+sbc a,a
+ld h,a
+ld a,h
+or l
+jp z,L9020
+L9020:
+ld hl,7
+call _opaque
+xor a
+ret
 end
