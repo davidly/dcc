@@ -3,13 +3,15 @@
  * @brief Houses shared declarator, expression, and target-value utilities.
  *
  * @par Role
- * Parses sizeof operands and function-pointer/array declarators, counts
+ * Parses sizeof operands and named/abstract function-pointer/array declarators,
+ * preserves nested callable return and argument signatures, counts
  * initializer shapes, tracks user labels, and implements common memory,
  * aggregate, conversion, bitfield, call-cleanup, and increment/decrement
  * primitives.
  *
  * @par Key entry points
  * parse_sizeof_expr_operand(), parse_funcptr_declarator(),
+ * parse_abstract_funcptr_declarator(), parse_funcptr_prototype_suffix(),
  * parse_array_declarator_dims(), emit_load_from_hl(),
  * emit_store_de_to_addr_hl(), and define_user_label().
  *
@@ -258,13 +260,16 @@ static void clear_funcptr_prototype(void)
  * declarator.  Function pointers use the ordinary stack ABI, so retaining
  * these types is essential: an int actual passed to a long formal must be
  * widened and pushed as four bytes even though the call is indirect. */
-static void parse_funcptr_prototype_suffix(void)
+void parse_funcptr_prototype_suffix(void)
 {
     int types[MAX_PROTO_PARAMS];
     int nargs;
     int variadic;
     int has_proto;
     int i;
+    DeclState saved_decl = g_decl;
+    int saved_array_len = g_funcptr_decl_array_len;
+    int saved_funcret = g_funcptr_is_funcret_decl;
 
     nargs = 0;
     variadic = 0;
@@ -298,9 +303,8 @@ static void parse_funcptr_prototype_suffix(void)
         }
         skip_type_qualifiers();
 
-        /* Parameter names are optional in prototypes.  The common scalar and
-         * pointer forms need no declarator object, only the ABI type. */
-        if (g_lex.tok.kind == TOK_ID && find_typedef(g_lex.tok.text) < 0)
+        if (g_lex.tok.kind == '(' && parse_abstract_funcptr_declarator(&type)) {
+        } else if (g_lex.tok.kind == TOK_ID && find_typedef(g_lex.tok.text) < 0)
             next_token();
         skip_prototype_array_suffixes(&type);
 
@@ -324,20 +328,28 @@ static void parse_funcptr_prototype_suffix(void)
     g_funcptr_proto_variadic = variadic;
     for (i = 0; i < MAX_PROTO_PARAMS; ++i)
         g_funcptr_proto_types[i] = types[i];
+    g_decl = saved_decl;
+    g_funcptr_decl_array_len = saved_array_len;
+    g_funcptr_is_funcret_decl = saved_funcret;
 }
 
 int parse_funcptr_declarator(int *ptype, char *name, int namesz)
 {
     int type;
+    int return_type = *ptype;
+    struct Sym *result_prototype = capture_funcptr_prototype(*ptype, 0);
     int save_decl_is_volatile;
     int save_decl_pointee_is_volatile;
     unsigned int save_decl_volatile_mask;
     int object_is_volatile;
     int pointee_is_volatile;
+    int function_suffix = 0;
     LexState _ls;
 
     g_funcptr_decl_array_len = 0;
     g_funcptr_is_funcret_decl = 0;
+    g_funcptr_return_type = 0;
+    g_funcptr_result_prototype = NULL;
     clear_funcptr_prototype();
     g_ptr_array_dim_count = 0;
     g_ptr_array_elem_size = 0;
@@ -363,17 +375,29 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
     object_is_volatile = skip_type_qualifiers_volatile();
 
     if (g_lex.tok.kind == '(') {
-        int depth;
+        struct Sym outer_prototype;
+        struct Sym *returned_prototype;
+        int callee_is_volatile;
+        memset(&outer_prototype, 0, sizeof(outer_prototype));
         next_token();
-        if (!accept('*') || g_lex.tok.kind != TOK_ID) {
+        if (!accept('*')) {
             lex_restore(&_ls);
             g_decl.is_volatile = save_decl_is_volatile;
             g_decl.pointee_is_volatile = save_decl_pointee_is_volatile;
             return 0;
         }
-        strncpy(name, g_lex.tok.text, namesz - 1);
-        name[namesz - 1] = 0;
-        next_token();
+        callee_is_volatile = skip_type_qualifiers_volatile();
+        if (g_lex.tok.kind != TOK_ID && !(name == NULL && g_lex.tok.kind == ')')) {
+            lex_restore(&_ls);
+            return 0;
+        }
+        if (g_lex.tok.kind == TOK_ID) {
+            if (name != NULL) {
+                strncpy(name, g_lex.tok.text, namesz - 1);
+                name[namesz - 1] = 0;
+            }
+            next_token();
+        }
         if (!accept(')')) {
             lex_restore(&_ls);
             g_decl.is_volatile = save_decl_is_volatile;
@@ -381,13 +405,12 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
             return 0;
         }
         if (accept('(')) {
-            depth = 1;
-            while (g_lex.tok.kind != TOK_EOF && depth > 0) {
-                if (g_lex.tok.kind == '(') depth++;
-                else if (g_lex.tok.kind == ')') depth--;
-                next_token();
-            }
+            parse_funcptr_prototype_suffix();
         }
+        outer_prototype.has_proto = g_funcptr_has_proto;
+        outer_prototype.proto_nargs = g_funcptr_proto_nargs;
+        outer_prototype.proto_variadic = g_funcptr_proto_variadic;
+        memcpy(outer_prototype.proto_types, g_funcptr_proto_types, sizeof(g_funcptr_proto_types));
         if (!accept(')')) {
             lex_restore(&_ls);
             g_decl.is_volatile = save_decl_is_volatile;
@@ -395,32 +418,44 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
             return 0;
         }
         if (accept('(')) {
-            depth = 1;
-            while (g_lex.tok.kind != TOK_EOF && depth > 0) {
-                if (g_lex.tok.kind == '(') depth++;
-                else if (g_lex.tok.kind == ')') depth--;
-                next_token();
-            }
+            parse_funcptr_prototype_suffix();
         }
-        type = type_add_ptr(ptype[0]);
-        ptype[0] = type;
         g_decl.is_volatile = object_is_volatile;
         g_decl.pointee_is_volatile = pointee_is_volatile;
         g_decl.pointee_volatile_mask = (save_decl_volatile_mask << 1) |
             (unsigned int)(pointee_is_volatile != 0);
+        g_funcptr_return_type = return_type;
+        g_funcptr_result_prototype = result_prototype;
+        type = type_add_ptr(return_type);
+        returned_prototype = capture_funcptr_prototype(type, 1);
+        ptype[0] = type_add_ptr(type);
+        g_decl.pointee_volatile_mask = (g_decl.pointee_volatile_mask << 1) |
+            (unsigned int)(object_is_volatile != 0);
+        g_decl.is_volatile = callee_is_volatile;
+        g_decl.pointee_is_volatile = object_is_volatile;
+        g_funcptr_return_type = type;
+        g_funcptr_result_prototype = returned_prototype;
+        g_funcptr_has_proto = outer_prototype.has_proto;
+        g_funcptr_proto_nargs = outer_prototype.proto_nargs;
+        g_funcptr_proto_variadic = outer_prototype.proto_variadic;
+        memcpy(g_funcptr_proto_types, outer_prototype.proto_types, sizeof(g_funcptr_proto_types));
         return 1;
     }
 
-    if (g_lex.tok.kind != TOK_ID) {
+    if (g_lex.tok.kind != TOK_ID && !(name == NULL && g_lex.tok.kind == ')')) {
         lex_restore(&_ls);
         g_decl.is_volatile = save_decl_is_volatile;
         g_decl.pointee_is_volatile = save_decl_pointee_is_volatile;
         return 0;
     }
 
-    strncpy(name, g_lex.tok.text, namesz - 1);
-    name[namesz - 1] = 0;
-    next_token();
+    if (g_lex.tok.kind == TOK_ID) {
+        if (name != NULL) {
+            strncpy(name, g_lex.tok.text, namesz - 1);
+            name[namesz - 1] = 0;
+        }
+        next_token();
+    }
 
     if (accept('[')) {
         if (g_lex.tok.kind == ']') {
@@ -437,7 +472,6 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
          * A function declaration whose return type is a pointer to function.
          * The (*name has already been consumed; tok is now '(' (the param list). */
         if (g_lex.tok.kind == '(') {
-            int depth;
             next_token(); /* consume opening '(' of param list */
             parse_param_list();
             if (g_lex.tok.kind != ')') {
@@ -463,14 +497,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
                 g_decl.pointee_volatile_mask = save_decl_volatile_mask;
                 return 0;
             }
-            /* Skip the trailing (...) describing the pointed-to function's params */
             if (accept('(')) {
-                depth = 1;
-                while (g_lex.tok.kind != TOK_EOF && depth > 0) {
-                    if (g_lex.tok.kind == '(') depth++;
-                    else if (g_lex.tok.kind == ')') depth--;
-                    next_token();
-                }
+                parse_funcptr_prototype_suffix();
             } else if (g_lex.tok.kind == '[') {
                 parse_pointer_array_suffixes(ptype[0]);
             }
@@ -481,6 +509,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
             g_decl.pointee_is_volatile = pointee_is_volatile;
             g_decl.pointee_volatile_mask = (save_decl_volatile_mask << 1) |
                 (unsigned int)(pointee_is_volatile != 0);
+            g_funcptr_return_type = return_type;
+            g_funcptr_result_prototype = result_prototype;
             return 1;
         }
 
@@ -497,6 +527,7 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
     type = type_add_ptr(ptype[0]);
 
     if (accept('(')) {
+        function_suffix = 1;
         parse_funcptr_prototype_suffix();
     } else if (g_lex.tok.kind == '[') {
         parse_pointer_array_suffixes(ptype[0]);
@@ -507,51 +538,15 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
     g_decl.pointee_is_volatile = pointee_is_volatile;
     g_decl.pointee_volatile_mask = (save_decl_volatile_mask << 1) |
         (unsigned int)(pointee_is_volatile != 0);
+    g_funcptr_return_type = function_suffix ? return_type : 0;
+    g_funcptr_result_prototype = function_suffix ? result_prototype : NULL;
     return 1;
 }
 
 
 int parse_abstract_funcptr_declarator(int *ptype)
 {
-    LexState _ls;
-    int type;
-
-    if (g_lex.tok.kind != '(')
-        return 0;
-
-    _ls = lex_save();
-
-    next_token();
-    if (!accept('*')) {
-        lex_restore(&_ls);
-        return 0;
-    }
-
-    if (!accept(')')) {
-        lex_restore(&_ls);
-        return 0;
-    }
-
-    type = type_add_ptr(ptype[0]);
-
-    if (accept('(')) {
-        while (g_lex.tok.kind != ')' && g_lex.tok.kind != TOK_EOF)
-            next_token();
-        expect(')');
-    } else if (g_lex.tok.kind == '[') {
-        while (accept('[')) {
-            skip_parameter_array_qualifiers();
-            if (g_lex.tok.kind != ']')
-                (void)parse_typed_array_bound_expr();
-            expect(']');
-        }
-    } else {
-        lex_restore(&_ls);
-        return 0;
-    }
-
-    ptype[0] = type;
-    return 1;
+    return parse_funcptr_declarator(ptype, NULL, 0);
 }
 
 int char_array_string_initializer_size(int base_type)

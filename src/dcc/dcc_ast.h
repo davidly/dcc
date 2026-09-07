@@ -249,6 +249,8 @@ int ast_byte_pair_word_write_match(const struct AstNode *s1, const struct AstNod
  * node's result type is needed before/without running its codegen (e.g.
  * deciding whether a multiply subexpression is float-valued for fusion). */
 int ast_expr_type_for_sizeof(const struct AstNode *n);
+int ast_call_result_type(const struct AstNode *n);
+struct Sym *ast_indirect_call_proto_sym(const struct AstNode *n);
 
 /* Compute the constant byte size of a `sizeof expr` operand, and (separately)
  * detect when that operand is a whole variable-length array.  Both resolve

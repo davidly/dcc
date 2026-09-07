@@ -571,6 +571,7 @@ void parse_struct_definition(int struct_id)
             memset(&field_defs[nfield_defs], 0, sizeof(field_defs[nfield_defs]));
             dcc_copy_str(field_defs[nfield_defs].name, sizeof(field_defs[nfield_defs].name), fname);
             field_defs[nfield_defs].type = ftype;
+            field_defs[nfield_defs].funcptr_prototype = capture_funcptr_prototype(ftype, is_funcptr_field);
             field_defs[nfield_defs].is_volatile = g_decl.is_volatile;
             field_defs[nfield_defs].pointee_volatile_mask =
                 g_decl.pointee_volatile_mask |
@@ -665,10 +666,20 @@ void add_typedef_name_ex(const char *name, int type, int array_len, int is_func,
     typedefs[i].array_len = array_len;
     typedefs[i].is_func = is_func;
     typedefs[i].has_proto = g_funcptr_has_proto;
+    typedefs[i].funcptr_return_type = g_funcptr_return_type;
+    typedefs[i].funcptr_result_prototype = g_funcptr_result_prototype;
     typedefs[i].proto_nargs = g_funcptr_proto_nargs;
     typedefs[i].proto_variadic = g_funcptr_proto_variadic;
     for (pi = 0; pi < MAX_PROTO_PARAMS; ++pi)
         typedefs[i].proto_types[pi] = g_funcptr_proto_types[pi];
+    if (g_funcptr_return_type == 0 && g_typedef_funcptr_return_type != 0) {
+        typedefs[i].funcptr_return_type = g_typedef_funcptr_return_type;
+        typedefs[i].funcptr_result_prototype = g_typedef_funcptr_result_prototype;
+        typedefs[i].has_proto = g_typedef_has_proto;
+        typedefs[i].proto_nargs = g_typedef_proto_nargs;
+        typedefs[i].proto_variadic = g_typedef_proto_variadic;
+        memcpy(typedefs[i].proto_types, g_typedef_proto_types, sizeof(g_typedef_proto_types));
+    }
 }
 
 void add_typedef_name(const char *name, int type, int array_len)
@@ -708,6 +719,8 @@ int parse_base_type(void)
     g_typedef_base_type = 0;
     g_typedef_is_func = 0;
     g_typedef_has_proto = 0;
+    g_typedef_funcptr_return_type = 0;
+    g_typedef_funcptr_result_prototype = NULL;
     g_typedef_proto_nargs = 0;
     g_typedef_proto_variadic = 0;
     memset(g_typedef_proto_types, 0, sizeof(g_typedef_proto_types));
@@ -914,6 +927,8 @@ int parse_base_type(void)
                    sizeof(g_typedef_array_dims));
             g_typedef_is_func = typedefs[td].is_func;
                  g_typedef_has_proto = typedefs[td].has_proto;
+                 g_typedef_funcptr_return_type = typedefs[td].funcptr_return_type;
+                 g_typedef_funcptr_result_prototype = typedefs[td].funcptr_result_prototype;
                  g_typedef_proto_nargs = typedefs[td].proto_nargs;
                  g_typedef_proto_variadic = typedefs[td].proto_variadic;
                  memcpy(g_typedef_proto_types, typedefs[td].proto_types,
@@ -991,8 +1006,13 @@ int parse_type_name_decl(int *typep, int *sizep)
     int n;
     int saw_paren_ptr;
     int size_is_pointer_object;
+    int return_type;
+    struct Sym *result_prototype;
 
     t = parse_base_type();
+    g_funcptr_return_type = 0;
+    g_funcptr_result_prototype = NULL;
+    saw_paren_ptr = 0;
     size_is_pointer_object = 0;
     sz = type_size(t);
     if (g_typedef_array_len > 0)
@@ -1006,6 +1026,13 @@ int parse_type_name_decl(int *typep, int *sizep)
         sz = 2;
     }
 
+    return_type = t;
+    result_prototype = capture_funcptr_prototype(t, 0);
+    if (g_lex.tok.kind == '(' && parse_abstract_funcptr_declarator(&t)) {
+        typep[0] = t;
+        sizep[0] = 2;
+        return 1;
+    }
     if (g_lex.tok.kind == '(') {
         next_token();
         skip_type_qualifiers();
@@ -1068,7 +1095,16 @@ int parse_type_name_decl(int *typep, int *sizep)
              * Plain sizeof(function type) is invalid C; keep a small, safe
              * size so DCC can continue after the diagnostic-free parse.
              */
-            skip_type_name_param_list();
+            if (saw_paren_ptr) {
+                DeclState saved_decl = g_decl;
+                next_token();
+                parse_funcptr_prototype_suffix();
+                g_decl = saved_decl;
+                g_funcptr_return_type = return_type;
+                g_funcptr_result_prototype = result_prototype;
+            } else {
+                skip_type_name_param_list();
+            }
             if (t & (TYPE_PTR | TYPE_PTR2))
                 sz = 2;
             else if (sz <= 0)

@@ -25945,6 +25945,32 @@ static int mir_direct_wide_location(int value,
     return 1;
 }
 
+static int mir_emit_direct_wide_add(MirStream *out, const struct MirInsn *insn)
+{
+    struct MirDirectWideLocation left;
+    struct MirDirectWideLocation right;
+    const struct MirInsn *left_definition = mir_definition(insn->src1);
+    const struct MirInsn *right_definition = mir_definition(insn->src2);
+    int byte;
+
+    if (insn->immediate != '+' || !type_is_long(insn->type) ||
+        left_definition == NULL || right_definition == NULL ||
+        !type_is_long(left_definition->type) || !type_is_long(right_definition->type) ||
+        left_definition->opcode == MIR_CONST || right_definition->opcode == MIR_CONST ||
+        (left_definition->memory_flags & MIR_MEMORY_FLAG_VOLATILE) != 0 ||
+        (right_definition->memory_flags & MIR_MEMORY_FLAG_VOLATILE) != 0 ||
+        mir_forwarded_wide_value == insn->src1 || mir_forwarded_wide_value == insn->src2 ||
+        !mir_direct_wide_location(insn->src1, &left) ||
+        !mir_direct_wide_location(insn->src2, &right))
+        return 0;
+    for (byte = 0; byte < 4; ++byte)
+        mir_stream_printf(out, "\tld a,(%s%+d)\n\t%s a,(%s%+d)\n\tld %c,a\n",
+                          left.base, left.bytes[byte], byte == 0 ? "add" : "adc",
+                          right.base, right.bytes[byte], "lhed"[byte]);
+    mir_emit_virtual_store_wide(out, insn->dst);
+    return 1;
+}
+
 /* Emit a relational comparison directly from two named 32-bit homes.  The
  * generic wide path otherwise pushes both operands and calls __lts/__les/etc.
  * For a fused branch (the overwhelmingly common loop-condition use), neither
@@ -34666,6 +34692,9 @@ static int mir_emit_spilled_scalar_cfg_candidate(MirStream *out)
                 int stack_forwarded_right =
                     mir_forwarded_wide_stack_value == insn->src2 &&
                     mir_forwarded_wide_stack_consumer == i;
+                if (!stack_forwarded_left && !stack_forwarded_right &&
+                    mir_emit_direct_wide_add(out, insn))
+                    break;
                 if (stack_forwarded_right &&
                     (insn->immediate == TOK_EQ ||
                      insn->immediate == TOK_NE ||

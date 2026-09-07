@@ -296,6 +296,7 @@ struct MirFunction {
     int declared_is_const[MAX_LOCALS];
     unsigned long declared_const_values[MAX_LOCALS];
     int declared_is_funcptr[MAX_LOCALS];
+    int declared_funcptr_return_types[MAX_LOCALS];
     int declared_has_proto[MAX_LOCALS];
     int declared_proto_nargs[MAX_LOCALS];
     int declared_proto_types[MAX_LOCALS][MAX_PROTO_PARAMS];

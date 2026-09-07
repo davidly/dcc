@@ -9462,7 +9462,7 @@ static int mir_match_recursive_byte_minimax_schedule(
         MIR_LABEL, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_PARAM, MIR_LOAD,
         MIR_CONST, MIR_BINARY, MIR_STORE, MIR_NOP, MIR_CONST, MIR_UNARY,
         MIR_BINARY, MIR_BRANCH_FALSE, MIR_ADDRESS, MIR_NOP,
-        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_CALL, MIR_UNARY,
+        MIR_INDEX_ADDRESS, MIR_LOAD_INDIRECT, MIR_CALL, MIR_NOP,
         MIR_STORE, MIR_CONST, MIR_NOP, MIR_UNARY, MIR_BINARY,
         MIR_BRANCH_FALSE, MIR_CONST, MIR_NOP, MIR_UNARY, MIR_BINARY,
         MIR_BRANCH_FALSE, MIR_NOP, MIR_CONST, MIR_RETURN, MIR_LABEL,
@@ -9767,7 +9767,8 @@ static int mir_match_recursive_byte_minimax_schedule(
             "recursive-byte-minimax-schedule",
             "winner-load");
     if (strcmp(mir.insns[18].name, "<indirect>") != 0 ||
-        mir.insns[18].src1 != mir.insns[17].dst)
+        mir.insns[18].src1 != mir.insns[17].dst ||
+        !mir_minimax_unsigned_byte_type(mir.insns[18].type))
         return mir_machine_reject(
             "recursive-byte-minimax-schedule",
             "winner-call");
@@ -9777,10 +9778,9 @@ static int mir_match_recursive_byte_minimax_schedule(
             "recursive-byte-minimax-schedule",
             "winner-arguments");
     if (
-        !mir_minimax_byte_unary(19, 18) ||
-        !mir_minimax_word_unary(23, 19) ||
+        !mir_minimax_word_unary(23, 18) ||
         !mir_minimax_word_binary(24, 21, 23, TOK_NE) ||
-        !mir_minimax_word_unary(28, 19) ||
+        !mir_minimax_word_unary(28, 18) ||
         !mir_minimax_word_binary(29, 26, 28, TOK_EQ) ||
         mir.insns[33].src1 != mir.insns[32].dst ||
         mir.insns[37].src1 != mir.insns[36].dst)

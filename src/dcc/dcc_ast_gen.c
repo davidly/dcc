@@ -1433,21 +1433,9 @@ int ast_pointer_expr_type(const struct AstNode *n, int *out_type,
     case AST_CALL:
         if (!ast_gen_supported(n) || n->a == NULL)
             return 0;
-        if (n->a->kind == AST_IDENT) {
-            s = n->a->sym != NULL ? n->a->sym : find_sym(n->a->sval);
-            if (s == NULL || type_ptr_depth(s->type) <= 0 || type_size(s->type) != 2)
-                return 0;
-            *out_type = s->is_funcptr ? type_decay_ptr(s->type) : s->type;
-            if (type_ptr_depth(*out_type) <= 0)
-                return 0;
-            *out_no_deref = 0;
-            return 1;
-        }
-        if (n->a->kind == AST_INDEX)
+        *out_type = ast_call_result_type(n);
+        if (type_ptr_depth(*out_type) == 0)
             return 0;
-        if (!ast_call_indirect_supported(n) && !ast_call_star_indirect_supported(n))
-            return 0;
-        *out_type = TYPE_INT | TYPE_PTR;
         *out_no_deref = 0;
         return 1;
 

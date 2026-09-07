@@ -103,8 +103,35 @@ shifts the return mask left; MIR indirect calls recover it by shifting the
 callee value's mask right. Deferred call type repair also updates subscript
 element types and widths before indirect memory operations are finalized.
 
-These cases do not establish complete support for arbitrary abstract
-function-pointer casts or deeper function-return declarator combinations.
+The abstract/deep matrix additionally covers:
+
+- Explicit and typedef abstract casts, including functions returning `T **`.
+- Function-pointer typedef aliases, arrays, struct fields, and deferred locals.
+- Factories returning function pointers, through named, raw, and abstract forms.
+- Distinct factory/returned-function prototypes (`int` versus `long` arguments).
+- Nested callback parameters in abstract prototypes.
+- Full-width indirect `long` results, high-word preservation across another call,
+  and defined unsigned carries at 15-, 16-, 31-, and 32-bit boundaries.
+
+Named and abstract function pointers share declarator parsing. Prototype suffix
+parsing preserves the enclosing declaration state. `funcptr_return_type` retains
+the actual return type separately from the saturated two-level pointer encoding;
+`funcptr_result_prototype` retains the signature when that result is callable.
+Anonymous prototype records live in a translation-unit arena, not a temporary
+statement arena, so field metadata and retained inline ASTs cannot outlive them.
+The active AST classifier and MIR lowering share `ast_call_result_type()`.
+
+The additional metadata does not expand the target's ordinary data-pointer
+encoding or claim exhaustive C declarator coverage. It preserves both supported
+data-pointer levels when a function-pointer declarator would otherwise consume
+one, and keeps callable layers and their argument ABIs distinct.
+
+Preserving scalar return types also exposed a previously truncated vtable
+`long` result. The full-width path is retained. Materialized frame-based long
+addition now uses a byte carry chain into `DE:HL`, then the existing result
+forwarding machinery, avoiding stack shuffles. The byte minimax exact schedule
+checks the explicit byte return after identity-conversion elimination. Both
+stack configurations and peephole modes remain within checked baselines.
 
 ## Generated Differential Matrix
 
