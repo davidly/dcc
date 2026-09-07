@@ -1,0 +1,145 @@
+{
+  "reasons": {
+    "production": "Reachable from MIR lowering, statement gating, initializer capture, or inline metadata; include the entire function including diagnostics and guarded legacy branches.",
+    "legacy": "Retained AST emission or a proof referenced only by retained emitters; no generated-only production entry path. See docs/compiler-coverage.md for roots and guards."
+  },
+  "guarded_edges": [
+    ["ast_emit_init_expr", "ast_gen_expr", "mir_is_active captures and returns before emission"],
+    ["ast_emit_init_expr", "gen_pointer_expr_ast", "mir_is_active captures and returns before emission"],
+    ["ast_emit_discarded_expr", "ast_gen_dead_expr", "only the !mir_is_active branch emits"],
+    ["ast_emit_struct_init_expr_assign", "gen_struct_addr_expr_ast", "MIR initializer capture returns before emission"],
+    ["ast_emit_struct_init_expr_assign", "gen_struct_return_call_assign_ast", "MIR initializer capture returns before emission"],
+    ["prepare_inline_arg_temps", "emit_inline_arg_temp_store", "ast_process_inline_call_metadata passes emit_values=0"],
+    ["prepare_inline_local_temp", "emit_inline_arg_temp_store", "ast_process_inline_call_metadata passes emit_values=0"]
+  ],
+  "sources": {
+    "src/dcc/dcc_ast_gen.c": {
+      "production": [
+        "ident_supported", "is_cmp_op", "is_shift_op", "is_float_arith_op",
+        "is_supported_binary_op", "ast_is_plain_int_type", "ast_ident_is_const",
+        "ast_value_is_plain_int", "ast_node_is_const", "ast_index_composite_elem_type",
+        "ast_index_plain_int_read", "ast_index_scalar_array_elem_type",
+        "ast_index_long_read", "ast_index_float_read", "ast_index_array_row_ptr_type",
+        "ast_index_struct_object_type", "ast_index_struct_object_subscript_supported",
+        "ast_index_subscript_binary_literal", "ast_index_subscript_supported",
+        "ast_index_2d_addressable_addr", "ast_index_symbol_nd_collect",
+        "ast_index_symbol_nd_elem_type", "ast_index_symbol_nd_addressable_addr",
+        "ast_index_deref_pointer_array_collect", "ast_deref_pointer_array_decay",
+        "ast_is_pointer_array_ident", "ast_deref_pointer_array_chain_collect",
+        "ast_index_member_array_nd_collect", "ast_index_2d_array_elem_type",
+        "ast_index_addressable_addr", "ast_index_pointer_expr_elem_type",
+        "ast_index_reversed_pointer_expr_elem_type", "ast_index_pointer_array_elem_type",
+        "ast_index_member_pointer_elem_type", "ast_index_scalar_pointer_elem_type",
+        "ast_pointer_expr_type", "ast_deref_lvalue_plain_int_type", "ast_deref_lvalue_type",
+        "ast_member_base_type", "ast_member_array_field_elem_type",
+        "ast_member_plain_array_field_elem_type", "ast_member_pointer_array_field_elem_type",
+        "ast_member_plain_int_read", "ast_member_bitfield_read", "ast_member_bitfield_lvalue_type",
+        "ast_member_long_read", "ast_member_float_read", "ast_member_pointer_read",
+        "ast_member_lvalue_type", "ast_unique_field_by_name", "ast_deref_plain_int_read",
+        "ast_va_arg_deref_type", "ast_long_va_arg_self_assign_supported",
+        "ast_deref_pointer_word_read", "ast_deref_long_read", "ast_deref_float_read",
+        "ast_preincdec_plain_int", "ast_preincdec_pointer_word", "ast_preincdec_pointer_type",
+        "ast_postfix_plain_int", "ast_address_of_supported", "ast_address_of_value_type",
+        "ast_numeric_value_supported", "ast_cond_numeric_supported",
+        "ast_cond_result_is_float", "ast_cond_result_is_long", "ast_void_expr_supported",
+        "ast_cond_void_supported", "ast_index_cmp_cond_supported", "ast_logical_operand_ok",
+        "ast_null_pointer_const", "ast_pointer_cmp_operand_ok", "ast_pointer_cmp_supported",
+        "ast_pointer_diff_supported", "ast_long_cmp_supported", "ast_long_arith_supported",
+        "ast_mixed_long_rhs_arith_supported", "ast_const_plain_int_binary_supported",
+        "ast_struct_return_call_assign_supported", "ast_struct_deref_copy_assign_supported",
+        "ast_struct_member_copy_assign_supported", "ast_struct_addr_expr_supported",
+        "ast_struct_copy_assign_supported", "ast_struct_assign_tree_type",
+        "ast_struct_chain_copy_assign_supported", "ast_is_const_zero_condition",
+        "ast_is_const_nonzero_condition"
+      ],
+      "legacy": [
+        "ast_field_array_index_stride", "ast_mul_const_value_ok", "gen_va_arg_deref_ast",
+        "gen_long_va_arg_self_assign_ast", "ast_zero_arg_inline_body",
+        "ast_is_byte_addr_lvalue", "ast_is_byte_addr_copy_assign"
+      ]
+    },
+    "src/dcc/dcc_ast_gen_cond.c": {
+      "production": [
+        "ast_return_stmt_supported", "ast_cmp_operand_ok", "ast_is_simple_cmp_cond",
+        "ast_const_cmp_extract", "ast_is_const_cmp_cond", "ast_is_const_plain_int_cmp_cond",
+        "ast_strip_byte_cast_mask_cond", "ast_low_byte_sum_operand_cond", "ast_byte_operand",
+        "ast_is_byte_cmp_cond", "ast_is_direct_byte_bitand_cond", "ast_is_direct_wide_bitand_cond",
+        "ast_is_direct_long_const_eq_cond", "ast_global_char_index_cond", "ast_is_float_cmp_cond",
+        "ast_cond_not_indexed_scalar", "ast_cond_indexed_array_row_operand",
+        "ast_cond_not_indexed_array_row", "ast_cond_generic", "ast_is_local_self_add_stmt",
+        "ast_deadincdec_sym_direct", "ast_deadincdec_member_ok", "ast_incdec_addr_type_ok",
+        "ast_index_lvalue_elem_type", "ast_deadincdec_addr_lvalue_type", "ast_dead_expr_supported",
+        "ast_for_init_expr_supported", "ast_expr_stmt_supported", "ast_stmt_supported"
+      ],
+      "legacy": [
+        "ast_operand_is_ptr_ident", "ast_is_general_const_cmp_cond", "ast_range_extract_lower",
+        "ast_range_extract_upper", "ast_is_range_check_cond", "ast_gen_global_char_index_branch",
+        "ast_emit_local_self_add_stmt", "gen_deadincdec_addr_lvalue_ast", "ast_gen_cmp_branch",
+        "ast_gen_const_cmp_branch", "ast_gen_byte_cmp_branch", "ast_gen_direct_byte_bitand_branch",
+        "ast_gen_direct_wide_bitand_branch", "ast_gen_range_check_branch", "ast_cond_is_abs_idiom",
+        "ast_gen_abs_idiom_value", "ast_is_byte_eq_cond", "ast_gen_byte_eq_branch",
+        "ast_is_global_char_index_eq_cond", "ast_gen_global_char_index_eq_branch",
+        "ast_gen_direct_long_const_eq_branch", "ast_gen_float_cmp_branch", "ast_gen_long_cmp_branch",
+        "ast_is_pure_bool_valued", "ast_gen_cond_branch", "ast_switch_find_case", "ast_switch_table_ok"
+      ]
+    },
+    "src/dcc/dcc_ast_gen_expr.c": {
+      "production": [
+        "ast_emit_init_expr", "ast_emit_discarded_expr", "ast_emit_struct_init_expr_assign",
+        "inline_arg_reusable", "inline_param_index_for_call", "inline_temp_name_for_call",
+        "inline_substitution_body", "inline_arg_is_body_independent", "inline_arg_needs_temp",
+        "prepare_inline_arg_temps", "clone_inline_expr", "prepare_inline_local_temp",
+        "ast_process_inline_call_metadata", "ast_member_field_value_type"
+      ],
+      "legacy": [
+        "ast_gen_dead_expr", "ast_masked_byte_operand", "ast_long_byte_extract",
+        "emit_long_byte_from_reg", "emit_long_one_byte_from_a", "emit_long_byte_shift_to_reg",
+        "emit_low_byte_expr_to_a", "emit_long_oreq_byte_lane", "gen_int_lit", "gen_cast_ast",
+        "gen_str_lit", "gen_ident", "gen_unary_ast", "gen_compound_literal_ast",
+        "gen_compound_literal_value_ast", "gen_pointer_cmp_operand_ast", "gen_sizeof_expr_ast",
+        "gen_pointer_cmp_ast", "gen_pointer_diff_ast", "emit_signed_long_const_cmp_ast",
+        "gen_long_cmp_ast", "ast_strip_u16_widen_cast", "ast_is_plain_u16_source",
+        "ast_const_int_operand_value", "ast_same_plain_u16_source", "gen_long_arith_ast",
+        "gen_binop32_promote_16lhs_ast", "gen_binary_try_fast_preeval", "gen_binary_ast",
+        "gen_shift_ast", "gen_index_subscript_expr_ast", "ast_bool_bitand_const_rhs",
+        "emit_store_bool_masked_hl_to_addr_on_stack", "ast_is_float_madd_rhs",
+        "emit_float_compound_rhs", "emit_store_long_edcb_via_hl", "gen_assign_ast",
+        "ast_ident_plus_const_rhs", "emit_store_ident_plus_const_to_addr_hl",
+        "gen_assign_lvalue_expr_ast", "gen_assign_ident_ast", "gen_assign_ident_plain_ast",
+        "gen_assign_ident_compound_ast", "emit_array_symbase_index", "emit_runtime_pointer_array_stride",
+        "emit_pointer_symbase_index", "gen_index_addr_ast", "gen_index_ast", "gen_call_star_indirect_ast",
+        "emit_inline_arg_temp_store", "try_gen_inline_call_ast", "gen_fastcall_arg", "gen_call_ast",
+        "gen_struct_return_call_assign_ast", "gen_struct_addr_expr_ast", "gen_struct_copy_assign_ast",
+        "gen_struct_chain_copy_assign_ast", "gen_struct_deref_copy_assign_ast",
+        "gen_struct_member_copy_assign_ast", "gen_byte_lvalue_addr_ast", "gen_byte_addr_copy_assign_ast",
+        "gen_member_addr_ast", "ast_member_global_word_field", "emit_load_global_field_word_direct",
+        "emit_store_global_field_word_direct", "gen_member_ast", "ast_const_ptr_array_base",
+        "gen_pointer_expr_ast", "gen_deref_addr_ast", "gen_logical_ast", "gen_cond_ast",
+        "gen_postfix_ast", "ast_gen_expr"
+      ]
+    },
+    "src/dcc/dcc_ast_gen_support.c": {
+      "production": [
+        "ast_support_cache_begin", "ast_expr_yields_bool01", "ast_int_elem_assign_rhs_ok",
+        "ast_gen_supported", "ast_scalar_binary_supported_uncached", "ast_assign_supported_uncached",
+        "ast_other_supported_uncached", "ast_gen_supported_uncached", "ast_call_arg_word_supported",
+        "ast_call_struct_arg_supported", "ast_update_lvalue_long_type", "ast_value_is_long_word",
+        "ast_long_word_type", "ast_call_arg_supported", "ast_va_builtin_supported",
+        "ast_call_named_args_supported", "ast_call_star_indirect_base", "ast_indirect_call_proto_sym",
+        "ast_call_star_indirect_supported", "ast_call_indirect_supported", "ast_value_is_float_word",
+        "ast_value_is_pointer_word", "ast_pointer_assign_rhs_supported", "ast_unary_int_const_fold",
+        "ast_int_const_cast_fold", "ast_unary_long_const_fold", "ast_fold_binary_target",
+        "ast_const_scalar_fold", "ast_const_apply_int_cast", "ast_const_condition_fold",
+        "ast_global_byte_array_const_store", "ast_global_byte_array_fast_store", "ast_for_mod_fill_supported",
+        "ast_expr_references_ident", "ast_expr_has_side_effects", "ast_find_unconditional_divmod_op",
+        "ast_replace_subtree", "ast_divmod_fuse_compound", "ast_for_hoist_lvalue_addr_supported",
+        "ast_for_rhs_hoist_scan_supported", "ast_for_hoist_global_member_value_supported"
+      ],
+      "legacy": [
+        "gen_call_struct_arg_ast", "gen_struct_return_call_arg_ast", "ast_unary_float_const_fold",
+        "ast_const_fold_strict", "ast_index_exprs_structurally_equal", "ast_index_expr_is_plus_one",
+        "ast_byte_pair_word_read_match", "ast_byte_pair_word_write_match"
+      ]
+    }
+  }
+}

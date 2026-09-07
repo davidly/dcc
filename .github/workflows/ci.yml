@@ -103,6 +103,13 @@ jobs:
         shell: pwsh
         run: ./scripts/run-mir-clobber-tests.ps1
 
+      - name: Validate AST coverage classifications
+        if: runner.os == 'Linux'
+        run: |
+          sh scripts/test-coverage-sources.sh
+          python3 -m unittest discover -s scripts/tests -p 'test_ast_function_coverage.py'
+          python3 scripts/ast-function-coverage.py
+
       - name: Run debugger host and debug metadata tests
         if: runner.os == 'Linux'
         run: |

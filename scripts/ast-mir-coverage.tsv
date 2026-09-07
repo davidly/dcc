@@ -1,10 +1,10 @@
 category	source	reason
 active-owner	src/dcc/dcc_ast.c	AST arena and node construction
 active-owner	src/dcc/dcc_ast_build.c	Function expression and statement parsing
-mixed-pending	src/dcc/dcc_ast_gen.c	Classifiers require function-level separation from compatibility helpers
-mixed-pending	src/dcc/dcc_ast_gen_cond.c	Active condition proofs and retained compatibility paths
-mixed-pending	src/dcc/dcc_ast_gen_expr.c	Active initializer metadata mixed with retained expression emission
-mixed-pending	src/dcc/dcc_ast_gen_support.c	Active semantic proofs and retained compatibility paths
+mixed-classified	src/dcc/dcc_ast_gen.c	Per-function roles in ast-function-coverage.json
+mixed-classified	src/dcc/dcc_ast_gen_cond.c	Per-function roles in ast-function-coverage.json
+mixed-classified	src/dcc/dcc_ast_gen_expr.c	Per-function roles in ast-function-coverage.json
+mixed-classified	src/dcc/dcc_ast_gen_support.c	Per-function roles in ast-function-coverage.json
 active-owner	src/dcc/dcc_ast_metadata.c	Non-emitting declaration scope and debug metadata
 active-owner	src/dcc/dcc_ast_stmt_meta.c	Statement capture and metadata planning
 active-owner	src/dcc/dcc_mir.c	Lowering metadata repair CFG promotion and allocation
