@@ -1317,6 +1317,7 @@ static struct AstNode *mir_clone_inline_expr(struct AstArena *arena,
 
     dst = ast_new(arena, src->kind);
     dst->type = src->type;
+    dst->pointee_volatile_mask = src->pointee_volatile_mask;
     dst->op = src->op;
     dst->ival = src->ival;
     dst->uval = src->uval;
@@ -1605,6 +1606,18 @@ static int mir_try_lower_inline_call_expr(const struct AstNode *call,
         return 0;
     }
     *out_value = mir_lower_expr(expr);
+    if (fn_sym != NULL && type_ptr_depth(fn_sym->type) > 0 &&
+        (fn_sym->pointee_volatile_mask != 0 || fn_sym->pointee_is_volatile)) {
+        int result = mir_new_value();
+        struct MirInsn *conversion = mir_emit(MIR_UNARY);
+        conversion->dst = result;
+        conversion->src1 = *out_value;
+        conversion->type = fn_sym->type;
+        conversion->has_pointer_qualifiers = 1;
+        conversion->pointee_volatile_mask = fn_sym->pointee_volatile_mask |
+            (unsigned int)(fn_sym->pointee_is_volatile != 0);
+        *out_value = result;
+    }
     mir_end_inline_call_scope(&scope);
     return 1;
 }
@@ -2783,6 +2796,10 @@ static int mir_lower_expr(const struct AstNode *node)
         insn->src1 = left;
         insn->type = node->type;
         insn->immediate = node->op;
+        if (node->kind == AST_CAST && type_ptr_depth(node->type) > 0) {
+            insn->has_pointer_qualifiers = 1;
+            insn->pointee_volatile_mask = node->pointee_volatile_mask;
+        }
         return value;
     case AST_POSTFIX:
         if (node->op == TOK_INC || node->op == TOK_DEC) {
@@ -5333,6 +5350,13 @@ static unsigned int mir_pointer_volatile_mask(int value, int depth)
     definition = mir_definition(value);
     if (definition == NULL)
         return 0;
+    if (definition->has_pointer_qualifiers)
+        return definition->pointee_volatile_mask;
+    if (definition->opcode == MIR_CALL) {
+        symbol = find_global(definition->name);
+        return symbol != NULL ? symbol->pointee_volatile_mask |
+            (unsigned int)(symbol->pointee_is_volatile != 0) : 0;
+    }
     if (definition->opcode == MIR_PARAM || definition->opcode == MIR_LOAD) {
         for (declared = 0; declared < mir.declared_count; ++declared)
             if (!strcmp(mir.declared_names[declared], definition->name))
@@ -6792,6 +6816,9 @@ static int mir_unary_is_representation_identity(
         return 0;
     source_size = type_size(source->type);
     target_size = type_size(insn->type);
+    if (insn->has_pointer_qualifiers &&
+        insn->pointee_volatile_mask != mir_pointer_volatile_mask(insn->src1, 0))
+        return 0;
     if (source->type == insn->type)
         return source_size == 1 || source_size == 2 || source_size == 4;
     if (source_size != target_size ||

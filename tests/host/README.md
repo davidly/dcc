@@ -48,6 +48,8 @@ Target loop execution and volatile access-count/flag assertions are covered by:
 pwsh ./scripts/run-mir-clobber-tests.ps1 -Cases semantics
 pwsh ./scripts/run-mir-clobber-tests.ps1 -Cases domloop
 pwsh ./scripts/run-mir-clobber-tests.ps1 -Cases aliasmem
+pwsh ./scripts/run-mir-clobber-tests.ps1 -Cases qualexpr
+pwsh ./scripts/run-mir-clobber-tests.ps1 -Cases qualgen
 ```
 
 These fixtures run in release, full debug, and line-debug modes, with and
@@ -74,5 +76,41 @@ the previous object's qualifier. MIR loads shift the address mask back one
 level; member addresses combine the field's own qualifier with its pointee
 mask. This preserves the distinction between a volatile pointer and volatile
 data without replacing the existing type encoding or debug metadata format.
-These tests do not claim complete qualifier handling for every cast or
-function-return expression.
+
+## Qualifier Expression Matrix
+
+`qualexpr.c` checks explicit and typedef casts, adding/removing/restoring
+volatile qualifiers, void-pointer casts, deep pointer casts, conditional
+qualifier merging, direct and inline pointer returns, deep pointer returns,
+and nonvolatile prototype-return controls. MIR assertions check access counts,
+widths, and which pointer level is volatile separately from runtime output.
+Qualifier-removal tests use objects originally declared nonvolatile; they do
+not read a volatile-defined object through an unqualified lvalue.
+
+Pointer casts carry their target qualifier mask in the AST and MIR. An
+explicit zero mask overrides the source qualifiers. Identity conversion
+elimination must preserve this distinction. Function symbols retain return
+qualifiers, and inline expansion preserves both cast metadata and the declared
+pointer-result contract.
+
+## Generated Differential Matrix
+
+`qualgen` generates a deterministic C program in the runner's temporary build
+directory and compares target results with a host-computed reference table.
+It covers 576 combinations: two element widths (8/16 bits), six expression
+forms (plain, explicit cast, typedef cast, direct return, conditional, and
+qualifier round trip), eight seeds (0, 1, 127, 255, 256, 32767, 32768, 65535),
+three indices, and both conditional outcomes.
+
+The reference calculation uses host integers and explicitly masks element
+values to 8 or 16 bits and arithmetic results to 16 bits. It does not assume
+that the host C compiler has dcc's integer widths. All pointer indexing stays
+within four-element arrays, with no numeric-address comparison or dependence
+on host pointer size. The unsigned arithmetic is defined, including wrapping;
+there is no signed overflow or unsequenced mutation. Each generated check has
+a stable index reported on failure. The full clobber CI gate runs both matrices
+in all twelve release/debug configurations, for 6,912 generated target checks.
+
+This is a bounded differential matrix, not exhaustive C testing or randomized
+fuzzing. In particular, it does not establish complete return-qualifier
+transport for arbitrary indirect function calls or every abstract declarator.

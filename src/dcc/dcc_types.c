@@ -1001,7 +1001,7 @@ int parse_type_name_decl(int *typep, int *sizep)
         sz = 1;
 
     while (accept('*')) {
-        skip_type_qualifiers();
+        advance_pointer_qualifiers();
         t = type_add_ptr(t);
         sz = 2;
     }
@@ -1011,7 +1011,7 @@ int parse_type_name_decl(int *typep, int *sizep)
         skip_type_qualifiers();
         saw_paren_ptr = 0;
         while (accept('*')) {
-            skip_type_qualifiers();
+            advance_pointer_qualifiers();
             saw_paren_ptr = 1;
         }
         if (g_lex.tok.kind == TOK_ID)
