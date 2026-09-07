@@ -4,14 +4,14 @@
  *
  * @par Role
  * Implements recursive-descent expression parsing, statement/block parsing,
- * declaration-span capture/replay, sizeof typing, arena initialization, and
+ * declaration-span capture/replay, sizeof and callable-result typing, arena initialization, and
  * diagnostic AST dumps. Building may reserve compiler-generated locals, so
  * speculative callers must restore lexer and frame state when discarding a
  * tree.
  *
  * @par Key entry points
  * ast_build_expr(), ast_build_assign_expr(), ast_build_stmt(),
- * ast_replay_decl_span(), ast_scan_decl_span(), and ast_build_init().
+ * ast_replay_decl_span(), ast_scan_decl_span(), ast_call_result_type(), and ast_build_init().
  *
  * @par Boundary
  * This module emits no target code. MIR capture, metadata replay, and retained
@@ -114,6 +114,19 @@ static struct FieldDef *ast_member_field_for_sizeof(const struct AstNode *n)
 static int ast_index_root_and_count(const struct AstNode *n,
                                     const struct AstNode **root);
 static int ast_expr_is_array_row(const struct AstNode *n);
+
+int ast_call_result_type(const struct AstNode *n)
+{
+    const struct Sym *prototype = ast_indirect_call_proto_sym(n);
+    if (prototype != NULL) {
+        if (prototype->storage == SC_FUNC)
+            return prototype->type;
+        if (prototype->funcptr_return_type != 0)
+            return prototype->funcptr_return_type;
+        return type_decay_ptr(prototype->type);
+    }
+    return n != NULL && n->type != 0 ? n->type : TYPE_INT;
+}
 
 int ast_expr_type_for_sizeof(const struct AstNode *n)
 {
@@ -256,12 +269,7 @@ int ast_expr_type_for_sizeof(const struct AstNode *n)
     case AST_COMMA:
         return ast_expr_type_for_sizeof(n->b);
     case AST_CALL:
-        if (n->a != NULL && n->a->kind == AST_IDENT) {
-            s = find_sym(n->a->sval);
-            if (s != NULL)
-                return s->type;
-        }
-        return TYPE_INT;
+        return ast_call_result_type(n);
     case AST_SIZEOF_EXPR:
     case AST_SIZEOF_TYPE:
         return TYPE_INT;
@@ -781,16 +789,19 @@ static struct AstNode *p_unary(struct AstArena *ar)
         int csz;
         unsigned int volatile_mask;
         struct AstNode *cast;
+        struct Sym *prototype = NULL;
         next_token();                    /* consume '(' */
         parse_type_name_decl(&cty, &csz); /* parse ( type-name */
         volatile_mask = g_decl.pointee_volatile_mask |
             (unsigned int)(g_decl.pointee_is_volatile != 0);
+        prototype = capture_funcptr_prototype(cty, g_funcptr_return_type != 0);
         expect(')');
         if (g_lex.tok.kind == '{')
             return p_postfix_tail(ar, ast_build_compound_literal(ar, cty));
         operand = p_unary(ar);
         cast = ast_cast(ar, cty, operand);
         cast->pointee_volatile_mask = volatile_mask;
+        cast->sym = prototype;
         return cast;
     }
 

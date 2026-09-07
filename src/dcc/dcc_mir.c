@@ -3320,8 +3320,7 @@ static int mir_lower_expr(const struct AstNode *node)
             while (callee != NULL && callee->kind == AST_UNARY &&
                    callee->op == '*')
                 callee = callee->a;
-            if (callee != NULL && callee->kind == AST_IDENT)
-                call_prototype = mir_ident_symbol(callee);
+            call_prototype = ast_indirect_call_proto_sym(node);
             callee_value = mir_lower_expr(callee);
         }
         if (function_symbol != NULL && node->list_len >= 3) {
@@ -3428,9 +3427,7 @@ static int mir_lower_expr(const struct AstNode *node)
         insn = mir_emit(MIR_CALL);
         insn->dst = value;
         insn->src1 = callee_value;
-        insn->type = function_symbol != NULL ? function_symbol->type
-            : call_prototype != NULL ? type_decay_ptr(call_prototype->type)
-            : node->type;
+        insn->type = ast_call_result_type(node);
         mir_copy_name(insn->name, call_name);
         insn->secondary_offset = call_id;
         if ((function_symbol != NULL && function_symbol->proto_variadic) ||
@@ -3973,6 +3970,7 @@ void mir_note_declared_symbol(struct Sym *symbol)
                   symbol->runtime_stride_name);
     mir.declared_is_const[i] = symbol->is_const_value;
     mir.declared_const_values[i] = symbol->const_value;
+    mir.declared_funcptr_return_types[i] = symbol->funcptr_return_type;
     mir.declared_is_funcptr[i] = symbol->is_funcptr ||
         (symbol->storage != SC_FUNC && symbol->has_proto &&
          type_ptr_depth(symbol->type) > 0);
@@ -7172,7 +7170,8 @@ scoped_type_repair_done:
         mir_copy_name(load->name, callee_name);
         call = &mir.insns[i + 1];
         call->src1 = callee_value;
-        call->type = type_decay_ptr(callee_type);
+        call->type = declaration >= 0 && mir.declared_funcptr_return_types[declaration] != 0
+            ? mir.declared_funcptr_return_types[declaration] : type_decay_ptr(callee_type);
         mir_copy_name(call->name, "<indirect>");
         if (declaration >= 0 && mir.declared_has_proto[declaration]) {
             int argument;

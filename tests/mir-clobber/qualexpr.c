@@ -75,6 +75,146 @@ int indstar(ByteGetter getter)
     return (*getter)()[1];
 }
 
+int abstr(ByteGetter getter)
+{
+    return ((volatile unsigned char *(*)(void))getter)()[1];
+}
+
+int deepind(VDeep (*getter)(void))
+{
+    return (*getter())[1];
+}
+
+typedef VDeep (*DeepGetter)(void);
+typedef DeepGetter DeepAlias;
+static DeepAlias deep_getter = getdeep;
+static ByteGetter getters[2] = { getbyte, getbyte };
+
+struct Readers {
+    ByteGetter byte;
+    DeepGetter deep;
+};
+
+int deepabs(DeepGetter getter)
+{
+    return (*((VDeep (*)(void))getter)())[1];
+}
+
+int deepglob(void)
+{
+    return (*deep_getter())[1];
+}
+
+int deeploc(void)
+{
+    {
+        VDeep (*getter)(void) = getdeep;
+        return (*getter())[1];
+    }
+}
+
+int arrcall(int index)
+{
+    return getters[index]()[1];
+}
+
+int fldcall(struct Readers *reader)
+{
+    return reader->byte()[1];
+}
+
+int flddeep(struct Readers *reader)
+{
+    return (*reader->deep())[1];
+}
+
+VByte getarg(long index)
+{
+    return bytes + (int)index;
+}
+
+int castabi(VByte (*getter)(long), int index)
+{
+    return ((VByte (*)(long))getter)(index)[1];
+}
+
+ByteGetter getfn(void)
+{
+    return getbyte;
+}
+
+int chainret(void)
+{
+    return getfn()()[1];
+}
+
+typedef VByte (*LongGetter)(long);
+
+LongGetter factory(int flag)
+{
+    (void)flag;
+    return getarg;
+}
+
+int nestcast(LongGetter (*provider)(int))
+{
+    return ((LongGetter (*)(int))provider)(1)(1)[1];
+}
+
+VByte (*rawfn(int flag))(long)
+{
+    (void)flag;
+    return getarg;
+}
+
+int rawcall(void)
+{
+    return rawfn(1)(1)[1];
+}
+
+int rawparam(VByte (*(*provider)(int))(long))
+{
+    return provider(1)(1)[1];
+}
+
+int rawabs(LongGetter (*provider)(int))
+{
+    return ((VByte (*(*)(int))(long))provider)(1)(1)[1];
+}
+
+VByte callcb(VByte (*getter)(long), long index)
+{
+    return getter(index);
+}
+
+int abscb(VByte (*caller)(VByte (*)(long), long), LongGetter getter)
+{
+    return ((VByte (*)(VByte (*)(long), long))caller)(getter, 1)[1];
+}
+
+struct WideReader {
+    long (*value)(long);
+};
+static volatile int observed;
+
+long longval(long value)
+{
+    return value;
+}
+
+void observe(void)
+{
+    ++observed;
+}
+
+unsigned long widecall(struct WideReader *reader, long left, long right)
+{
+    long first = reader->value(left);
+    long second = reader->value(right);
+    observe();
+    return (unsigned long)first + (unsigned long)second;
+}
+
 volatile unsigned int *getword(int index)
 {
     return words + index;
@@ -157,7 +297,13 @@ int main(void)
     int failures = 0;
     int argument = 0;
     unsigned char *pointer = bytes;
+    struct Readers reader;
+    struct WideReader wide_reader;
     bytes[1] = 7;
+    bytes[2] = 19;
+    reader.byte = getbyte;
+    reader.deep = getdeep;
+    wide_reader.value = longval;
     words[1] = 65535U;
     failures += castadd(bytes, 0) != 21;
     failures += casttype(bytes, 0) != 21;
@@ -177,6 +323,26 @@ int main(void)
     failures += indlocal() != 7;
     failures += indglobal() != 7;
     failures += indstar(getbyte) != 7;
+    failures += abstr(getbyte) != 7;
+    failures += deepind(getdeep) != 7;
+    failures += deepabs(getdeep) != 7;
+    failures += deepglob() != 7;
+    failures += deeploc() != 7;
+    failures += arrcall(1) != 7;
+    failures += fldcall(&reader) != 7;
+    failures += flddeep(&reader) != 7;
+    failures += castabi(getarg, 1) != 19;
+    failures += chainret() != 7;
+    failures += nestcast(factory) != 19;
+    failures += rawcall() != 19;
+    failures += rawparam(factory) != 19;
+    failures += rawabs(factory) != 19;
+    failures += abscb(callcb, getarg) != 19;
+    failures += widecall(&wide_reader, 32767L, 1L) != 32768UL;
+    failures += widecall(&wide_reader, 65535L, 1L) != 65536UL;
+    failures += widecall(&wide_reader, 2147483647L, 1L) != 2147483648UL;
+    failures += widecall(&wide_reader, -1L, 1L) != 0UL;
+    failures += widecall(&wide_reader, 65536L, 65536L) != 131072UL;
     failures += indword(getword, 0) != 65535U;
     failures += indplain(getraw, &argument) != 7;
     printf("MIR qualifier expressions failures=%d\n", failures);

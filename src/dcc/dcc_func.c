@@ -5,12 +5,13 @@
  * @par Role
  * Handles prototype and K&R parameter lists, typedefs, top-level declaration
  * dispatch, frame-sizing scans, inline and narrowing metadata, debug records,
- * deferred static bodies, and the begin/end lifecycle for each MIR function.
+ * translation-unit-lifetime callable prototypes, deferred static bodies, and
+ * the begin/end lifecycle for each MIR function.
  *
  * @par Key entry points
  * parse_translation_unit(), parse_function_or_global(), scan_function_body(),
  * begin_function_mir(), finish_function_mir(), and
- * emit_needed_deferred_bodies().
+ * emit_needed_deferred_bodies(), and capture_funcptr_prototype().
  *
  * @par Boundary
  * dcc_stmt.c traverses compound bodies and dcc_global_init.c records file-scope
@@ -1330,20 +1331,47 @@ void copy_funcptr_prototype_to_sym(struct Sym *s, int direct_declarator)
 
     if (s == NULL || type_ptr_depth(s->type) <= 0)
         return;
-    s->is_funcptr = direct_declarator || g_typedef_has_proto;
+    s->is_funcptr = direct_declarator || g_typedef_has_proto ||
+        g_typedef_funcptr_return_type != 0;
     if (direct_declarator) {
+        s->funcptr_return_type = g_funcptr_return_type;
+        s->funcptr_result_prototype = g_funcptr_result_prototype;
         s->has_proto = g_funcptr_has_proto;
         s->proto_nargs = g_funcptr_proto_nargs;
         s->proto_variadic = g_funcptr_proto_variadic;
         for (i = 0; i < MAX_PROTO_PARAMS; ++i)
             s->proto_types[i] = g_funcptr_proto_types[i];
-    } else if (g_typedef_has_proto) {
+    } else if (g_typedef_has_proto || g_typedef_funcptr_return_type != 0) {
+        s->funcptr_return_type = g_typedef_funcptr_return_type;
+        s->funcptr_result_prototype = g_typedef_funcptr_result_prototype;
         s->has_proto = g_typedef_has_proto;
         s->proto_nargs = g_typedef_proto_nargs;
         s->proto_variadic = g_typedef_proto_variadic;
         for (i = 0; i < MAX_PROTO_PARAMS; ++i)
             s->proto_types[i] = g_typedef_proto_types[i];
     }
+}
+
+struct Sym *capture_funcptr_prototype(int type, int direct_declarator)
+{
+    static struct AstArena prototype_arena;
+    static int initialized;
+    struct Sym *prototype;
+
+    if (type_ptr_depth(type) == 0 ||
+        (direct_declarator ? g_funcptr_return_type == 0 : g_typedef_funcptr_return_type == 0))
+        return NULL;
+    if (!initialized) {
+        ast_arena_init(&prototype_arena);
+        initialized = 1;
+    }
+    prototype = (struct Sym *)ast_arena_alloc(&prototype_arena, sizeof(*prototype));
+    memset(prototype, 0, sizeof(*prototype));
+    prototype->type = type;
+    prototype->pointee_volatile_mask = g_decl.pointee_volatile_mask |
+        (unsigned int)(g_decl.pointee_is_volatile != 0);
+    copy_funcptr_prototype_to_sym(prototype, direct_declarator);
+    return prototype;
 }
 
 void remember_proto_param_type(int type)
@@ -3236,6 +3264,7 @@ void parse_function_or_global(int base_type)
             s = add_global(name, type, SC_FUNC);
             s->pointee_is_volatile = pointee_is_volatile;
             s->pointee_volatile_mask = volatile_mask;
+            s->funcptr_result_prototype = capture_funcptr_prototype(type, is_funcret_funcptr_decl);
             /* Unlike is_inline (an optimization hint dcc tolerates picking up
              * from any one declaration), a __fastcall mismatch between
              * declarations is a real ABI disagreement between call sites

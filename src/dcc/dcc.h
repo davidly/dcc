@@ -406,6 +406,8 @@ struct Sym {
     int proto_variadic;
     int proto_types[MAX_PROTO_PARAMS];
     int is_funcptr;           /* object has function-pointer declarator type */
+    int funcptr_return_type;
+        struct Sym *funcptr_result_prototype;
     int is_const_value;        /* local const scalar folded as immediate */
     unsigned long const_value; /* raw integer bits or IEEE float bits */
     int has_addr_cache;    /* this local array's address is materialized once
@@ -444,11 +446,14 @@ struct TypeDef {
     int proto_nargs;
     int proto_variadic;
     int proto_types[MAX_PROTO_PARAMS];
+    int funcptr_return_type;
+    struct Sym *funcptr_result_prototype;
 };
 
 struct FieldDef {
     char name[64];
     int type;
+    struct Sym *funcptr_prototype;
     int is_volatile;
     unsigned int pointee_volatile_mask;
     int offset;
@@ -713,6 +718,8 @@ extern int g_typedef_array_dims[MAX_ARRAY_DIMS];
 extern int g_typedef_base_type;
 extern int g_typedef_is_func;
 extern int g_typedef_has_proto;
+extern int g_typedef_funcptr_return_type;
+extern struct Sym *g_typedef_funcptr_result_prototype;
 extern int g_typedef_proto_nargs;
 extern int g_typedef_proto_variadic;
 extern int g_typedef_proto_types[MAX_PROTO_PARAMS];
@@ -728,6 +735,8 @@ extern int g_proto_types[MAX_PROTO_PARAMS];
 extern int g_funcptr_decl_array_len;
 extern int g_funcptr_is_funcret_decl;
 extern int g_funcptr_has_proto;
+extern int g_funcptr_return_type;
+extern struct Sym *g_funcptr_result_prototype;
 extern int g_funcptr_proto_nargs;
 extern int g_funcptr_proto_variadic;
 extern int g_funcptr_proto_types[MAX_PROTO_PARAMS];
@@ -974,6 +983,7 @@ void emit_copy_de_to_hl_bytes(int n);
 void emit_push_struct_arg_from_hl(int n);
 void emit_load_hl_from_sp_offset(int off);
 int parse_funcptr_declarator(int *ptype, char *name, int namesz);
+void parse_funcptr_prototype_suffix(void);
 int parse_abstract_funcptr_declarator(int *ptype);
 int char_array_string_initializer_size(int base_type);
 void parse_array_declarator_dims(int base_type, int *total_len, int *first_stride_bytes, int allow_empty_first);
@@ -1107,6 +1117,7 @@ void clear_parsed_prototype(void);
 void copy_parsed_prototype_to_sym(struct Sym *s);
 void validate_fastcall_prototype(struct Sym *s);
 void copy_funcptr_prototype_to_sym(struct Sym *s, int direct_declarator);
+struct Sym *capture_funcptr_prototype(int type, int direct_declarator);
 void remember_proto_param_type(int type);
 int old_style_param_list_starts(void);
 void parse_old_style_param_id_list(void);

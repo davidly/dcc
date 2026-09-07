@@ -1498,6 +1498,17 @@ struct Sym *ast_indirect_call_proto_sym(const struct AstNode *n)
         callee = callee->a;
     while (callee != NULL && callee->kind == AST_INDEX)
         callee = callee->a;
+    if (callee != NULL && callee->kind == AST_CAST)
+        return callee->sym;
+    if (callee != NULL && callee->kind == AST_CALL) {
+        struct Sym *producer = ast_indirect_call_proto_sym(callee);
+        return producer != NULL ? producer->funcptr_result_prototype : NULL;
+    }
+    if (callee != NULL && callee->kind == AST_MEMBER) {
+        int base_type = ast_expr_type_for_sizeof(callee->a);
+        struct FieldDef *field = find_field_def(type_struct_id(base_type), callee->sval);
+        return field != NULL ? field->funcptr_prototype : NULL;
+    }
     if (callee != NULL && callee->kind == AST_IDENT)
         return callee->sym != NULL ? callee->sym : find_sym(callee->sval);
     return NULL;
