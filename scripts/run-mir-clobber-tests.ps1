@@ -8,6 +8,7 @@ param(
 $ErrorActionPreference = "Stop"
 $repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).ProviderPath
 $dccmake = Join-Path $repoRoot "dccmake"
+$dccCommand = if ($env:DCC) { $env:DCC } else { Join-Path $repoRoot "dcc" }
 $emulator = (Get-Command $Emulator -ErrorAction Stop).Source
 $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) (
     "dcc-mir-clobber-tests-" + [guid]::NewGuid())
@@ -556,7 +557,7 @@ try {
         }
         Set-ProcessEnvironment "DCC_MIR_REPORT" "1"
         try {
-            $proof = Invoke-WithTimeout (Join-Path $repoRoot "dcc") @(
+            $proof = Invoke-WithTimeout $dccCommand @(
                 "-c", (Join-Path $fixtureRoot $proofCase.Source),
                 "-o", (Join-Path $tempRoot "SEMANTIC.MAC")
             ) $repoRoot 60

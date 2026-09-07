@@ -45,6 +45,7 @@ cmake -S "$repo_root/src/dcc" -B "$build_dir/cmake" \
     -DCMAKE_BUILD_TYPE=Debug \
     -DCMAKE_C_COMPILER="$clang_cmd" \
     -DDCC_ENABLE_COVERAGE=ON \
+    -DDCC_BUILD_MIR_TESTS=ON \
     -DDCC_RUNTIME_OUTPUT_DIRECTORY="$binary_dir"
 cmake --build "$build_dir/cmake" --parallel
 
@@ -52,11 +53,16 @@ mkdir -p "$raw_dir" "$report_dir"
 find "$raw_dir" -type f -name '*.profraw' -delete
 
 export DCC="$binary_dir/dcc"
-export LLVM_PROFILE_FILE="$raw_dir/dcc-%p.profraw"
+export LLVM_PROFILE_FILE="$raw_dir/dcc-%p-%m.profraw"
 
 cd "$repo_root"
 "$pwsh_cmd" -NoProfile -File scripts/runall.ps1 -Mode full
+"$pwsh_cmd" -NoProfile -File scripts/runall.ps1 -Mode full -NoStackCheck
 "$pwsh_cmd" -NoProfile -File scripts/runall-extended.ps1 -C11 -Mode full
+"$pwsh_cmd" -NoProfile -File scripts/run-mir-clobber-tests.ps1
+"$pwsh_cmd" -NoProfile -File scripts/run-mir-lifetime-tests.ps1
+"$pwsh_cmd" -NoProfile -File scripts/test-mir-require-emit.ps1 -Dcc "$DCC"
+ctest --test-dir "$build_dir/cmake" --output-on-failure
 
 set -- "$raw_dir"/*.profraw
 if [ ! -e "$1" ]; then
@@ -65,14 +71,39 @@ if [ ! -e "$1" ]; then
 fi
 "$llvm_profdata" merge -sparse "$raw_dir"/*.profraw -o "$build_dir/dcc.profdata"
 "$llvm_cov" report "$binary_dir/dcc" \
+    -object "$build_dir/cmake/mir-verify-test" \
     -instr-profile="$build_dir/dcc.profdata" \
     "$repo_root"/src/dcc/*.c >"$report_dir/summary.txt"
+set -- \
+    "$repo_root/src/dcc/dcc_ast.c" \
+    "$repo_root/src/dcc/dcc_ast_build.c" \
+    "$repo_root/src/dcc/dcc_ast_metadata.c" \
+    "$repo_root/src/dcc/dcc_ast_stmt_meta.c"
+for source in "$repo_root"/src/dcc/dcc_mir*.c; do
+    case "$source" in
+        */dcc_mir_schedule.c|*/dcc_mir_target.c) continue ;;
+    esac
+    set -- "$@" "$source"
+done
+printf '%s\n' "$@" >"$report_dir/ast-mir-sources.txt"
+"$llvm_cov" report "$binary_dir/dcc" \
+    -object "$build_dir/cmake/mir-verify-test" \
+    -instr-profile="$build_dir/dcc.profdata" \
+    "$@" >"$report_dir/ast-mir-summary.txt"
+"$llvm_cov" export "$binary_dir/dcc" \
+    -object "$build_dir/cmake/mir-verify-test" \
+    -instr-profile="$build_dir/dcc.profdata" \
+    "$@" >"$report_dir/ast-mir-coverage.json"
 "$llvm_cov" show "$binary_dir/dcc" \
+    -object "$build_dir/cmake/mir-verify-test" \
     -instr-profile="$build_dir/dcc.profdata" \
     -format=html \
     -output-dir="$report_dir/html" \
     -show-branches=count \
     "$repo_root"/src/dcc/*.c
 
-echo "Compiler coverage summary: $report_dir/summary.txt"
+echo "Unfiltered collection summary (not a target): $report_dir/summary.txt"
+echo "Legacy-excluded AST/MIR summary: $report_dir/ast-mir-summary.txt"
+echo "AST/MIR source manifest:   $report_dir/ast-mir-sources.txt"
+echo "AST/MIR coverage data:     $report_dir/ast-mir-coverage.json"
 echo "Compiler coverage HTML:    $report_dir/html/index.html"
