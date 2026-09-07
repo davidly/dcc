@@ -5353,6 +5353,8 @@ static unsigned int mir_pointer_volatile_mask(int value, int depth)
     if (definition->has_pointer_qualifiers)
         return definition->pointee_volatile_mask;
     if (definition->opcode == MIR_CALL) {
+        if (!strcmp(definition->name, "<indirect>"))
+            return mir_pointer_volatile_mask(definition->src1, depth + 1) >> 1;
         symbol = find_global(definition->name);
         return symbol != NULL ? symbol->pointee_volatile_mask |
             (unsigned int)(symbol->pointee_is_volatile != 0) : 0;
@@ -7577,8 +7579,10 @@ scoped_type_repair_done:
         int pointee_type;
         if (insn->opcode == MIR_INDEX_ADDRESS && insn->src1 >= 0) {
             struct MirInsn *base = mir_mutable_definition(insn->src1);
-            if (base != NULL && base->opcode == MIR_LOAD_INDIRECT &&
-                (base->memory_flags & 256) != 0 &&
+            if (base != NULL &&
+                (base->opcode == MIR_CALL ||
+                 (base->opcode == MIR_LOAD_INDIRECT &&
+                  (base->memory_flags & 256) != 0)) &&
                 type_ptr_depth(base->type) > 0) {
                 insn->type = base->type;
                 insn->memory_size = type_size(type_decay_ptr(base->type));

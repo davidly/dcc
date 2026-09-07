@@ -48,6 +48,55 @@ volatile unsigned char *getbyte(void)
     return bytes;
 }
 
+int indread(volatile unsigned char *(*getter)(void))
+{
+    return getter()[1];
+}
+
+int indlocal(void)
+{
+    {
+        volatile unsigned char *(*getter)(void) = getbyte;
+        return getter()[1];
+    }
+}
+
+typedef volatile unsigned char *(*ByteGetter)(void);
+static ByteGetter byte_getter = getbyte;
+static unsigned int words[2];
+
+int indglobal(void)
+{
+    return byte_getter()[1];
+}
+
+int indstar(ByteGetter getter)
+{
+    return (*getter)()[1];
+}
+
+volatile unsigned int *getword(int index)
+{
+    return words + index;
+}
+
+unsigned int indword(volatile unsigned int *(*getter)(int), int index)
+{
+    return getter(index)[1];
+}
+
+unsigned char *getraw(volatile int *argument)
+{
+    (void)argument;
+    return bytes;
+}
+
+int indplain(unsigned char *(* volatile getter)(volatile int *),
+             volatile int *argument)
+{
+    return getter(argument)[1];
+}
+
 static inline volatile unsigned char *inbyte(unsigned char *pointer)
 {
     return pointer;
@@ -106,8 +155,10 @@ int choose(unsigned char *plain, volatile unsigned char *observed, int flag)
 int main(void)
 {
     int failures = 0;
+    int argument = 0;
     unsigned char *pointer = bytes;
     bytes[1] = 7;
+    words[1] = 65535U;
     failures += castadd(bytes, 0) != 21;
     failures += casttype(bytes, 0) != 21;
     failures += retread(0) != 7;
@@ -122,6 +173,12 @@ int main(void)
     failures += inclone(bytes) != 7;
     failures += recast(bytes) != 7;
     failures += plainret() != 7;
+    failures += indread(getbyte) != 7;
+    failures += indlocal() != 7;
+    failures += indglobal() != 7;
+    failures += indstar(getbyte) != 7;
+    failures += indword(getword, 0) != 65535U;
+    failures += indplain(getraw, &argument) != 7;
     printf("MIR qualifier expressions failures=%d\n", failures);
     return failures != 0;
 }

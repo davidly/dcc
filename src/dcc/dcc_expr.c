@@ -331,6 +331,7 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
     int type;
     int save_decl_is_volatile;
     int save_decl_pointee_is_volatile;
+    unsigned int save_decl_volatile_mask;
     int object_is_volatile;
     int pointee_is_volatile;
     LexState _ls;
@@ -348,6 +349,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
     _ls = lex_save();
     save_decl_is_volatile = g_decl.is_volatile;
     save_decl_pointee_is_volatile = g_decl.pointee_is_volatile;
+    save_decl_volatile_mask = g_decl.pointee_volatile_mask |
+        (unsigned int)(save_decl_pointee_is_volatile != 0);
 
     next_token();
     if (!accept('*')) {
@@ -403,6 +406,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
         ptype[0] = type;
         g_decl.is_volatile = object_is_volatile;
         g_decl.pointee_is_volatile = pointee_is_volatile;
+        g_decl.pointee_volatile_mask = (save_decl_volatile_mask << 1) |
+            (unsigned int)(pointee_is_volatile != 0);
         return 1;
     }
 
@@ -443,6 +448,7 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
                 memset(g_ptr_array_dims, 0, sizeof(g_ptr_array_dims));
                 g_decl.is_volatile = save_decl_is_volatile;
                 g_decl.pointee_is_volatile = save_decl_pointee_is_volatile;
+                g_decl.pointee_volatile_mask = save_decl_volatile_mask;
                 return 0;
             }
             next_token(); /* consume ')' of name(...) */
@@ -454,6 +460,7 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
                 memset(g_ptr_array_dims, 0, sizeof(g_ptr_array_dims));
                 g_decl.is_volatile = save_decl_is_volatile;
                 g_decl.pointee_is_volatile = save_decl_pointee_is_volatile;
+                g_decl.pointee_volatile_mask = save_decl_volatile_mask;
                 return 0;
             }
             /* Skip the trailing (...) describing the pointed-to function's params */
@@ -472,6 +479,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
             g_funcptr_is_funcret_decl = 1;
             g_decl.is_volatile = object_is_volatile;
             g_decl.pointee_is_volatile = pointee_is_volatile;
+            g_decl.pointee_volatile_mask = (save_decl_volatile_mask << 1) |
+                (unsigned int)(pointee_is_volatile != 0);
             return 1;
         }
 
@@ -496,6 +505,8 @@ int parse_funcptr_declarator(int *ptype, char *name, int namesz)
     ptype[0] = type;
     g_decl.is_volatile = object_is_volatile;
     g_decl.pointee_is_volatile = pointee_is_volatile;
+    g_decl.pointee_volatile_mask = (save_decl_volatile_mask << 1) |
+        (unsigned int)(pointee_is_volatile != 0);
     return 1;
 }
 

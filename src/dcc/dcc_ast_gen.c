@@ -1434,10 +1434,12 @@ int ast_pointer_expr_type(const struct AstNode *n, int *out_type,
         if (!ast_gen_supported(n) || n->a == NULL)
             return 0;
         if (n->a->kind == AST_IDENT) {
-            s = find_global(n->a->sval);
+            s = n->a->sym != NULL ? n->a->sym : find_sym(n->a->sval);
             if (s == NULL || type_ptr_depth(s->type) <= 0 || type_size(s->type) != 2)
                 return 0;
-            *out_type = s->type;
+            *out_type = s->is_funcptr ? type_decay_ptr(s->type) : s->type;
+            if (type_ptr_depth(*out_type) <= 0)
+                return 0;
             *out_no_deref = 0;
             return 1;
         }
